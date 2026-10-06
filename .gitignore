@@ -4,3 +4,7 @@ __pycache__/
 node_modules/
 data/
 chroma_data/
+
+# 기사 수집 실행 결과와 검토 파일
+**/news_outputs/
+**/shortnews_outputs/
