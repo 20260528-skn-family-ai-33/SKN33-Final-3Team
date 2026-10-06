@@ -1,3 +1,4 @@
+```
 SKN33-Final-3Team/
 ├── .github/                      GitHub 설정
 │   ├── ISSUE_TEMPLATE/           이슈 템플릿 (bug_report, feature---task)
@@ -37,3 +38,5 @@ SKN33-Final-3Team/
 │
 ├── notebooks/                    데이터 탐색, ML 실험, 골든셋으로 LLM 비교
 └── docs/                         프로젝트 문서 (아키텍처, 흐름도, API 명세 등)
+
+```
