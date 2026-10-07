@@ -7,6 +7,7 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 import requests
 from dotenv import dotenv_values
@@ -54,7 +55,7 @@ def load_key(env_path):
     key = (values.get(ENV_KEY) or "").strip()
     if not key:
         raise SystemExit(f"{env_path}에 {ENV_KEY} 인증키가 없습니다.")
-    return key
+    return unquote(key)  # Encoding 키도 Decoding 키로 바꿔 사용 (requests가 다시 인코딩함)
 
 
 # XML 응답의 오류를 확인하고 품목 목록을 원본 값 그대로 추출합니다.

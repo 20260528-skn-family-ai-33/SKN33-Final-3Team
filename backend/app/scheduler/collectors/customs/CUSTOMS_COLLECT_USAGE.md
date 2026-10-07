@@ -21,14 +21,28 @@ cd "C:\your_folder\SKN33-Final-3Team"
 python -m pip install requests python-dotenv
 ```
 
-저장소 루트 `.env`에 공공데이터포털에서 발급받은 인증키를 추가합니다.
-기존 `.env`가 있으면 덮어쓰지 말고 다음 항목만 추가합니다.
+인증키는 공공데이터포털에서 받습니다.
+
+1. [공공데이터포털](https://www.data.go.kr) 로그인 → `관세청_품목별 국가별 수출입실적(GW)` 검색 → **활용신청**
+2. 마이페이지 > 데이터활용 > Open API > 활용신청 현황에서 **일반 인증키**를 복사합니다.
+   Encoding·Decoding 키 어느 것이든 사용할 수 있습니다.
+
+`.env`가 없다면 저장소 루트의 예시 파일을 복사합니다.
+
+```powershell
+if (-not (Test-Path -LiteralPath ".env")) {
+    Copy-Item -LiteralPath ".env.sample" -Destination ".env"
+}
+```
+
+`.env`의 예시 값을 복사한 인증키로 바꾸고 저장합니다.
+기존 `.env`가 있으면 덮어쓰지 말고 다음 항목만 추가합니다. 키 이름은 대소문자를 구분하지 않습니다.
 
 ```dotenv
 customs=YOUR_CUSTOMS_API_KEY
 ```
 
-실제 인증키가 들어 있는 `.env`는 공유하지 않습니다.
+실제 인증키가 들어 있는 `.env`는 공유하지 않습니다. 팀원에게는 `.env.sample`을 전달합니다.
 
 ## 실행 방법
 
