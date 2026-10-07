@@ -20,7 +20,7 @@ API 안내: https://www.data.go.kr/data/15034831/openapi.do
 
 수집 코드는 `backend/app/scheduler/collectors/news/`, `.env.sample`은 저장소 루트에 있습니다.
 Python과 공공데이터포털에서 발급받은 해당 API의 인증키가 필요합니다.
-`news_pipeline.py`, MySQL 관련 코드와 패키지는 필요하지 않습니다.
+설치 패키지는 requests와 python-dotenv입니다.
 
 ## 실행 방법
 
@@ -110,7 +110,7 @@ python backend/app/scheduler/collectors/news/news_collect.py --env "C:\your_fold
 
 - `api_total`: 마지막 페이지 조회 시 API가 알려준 전체 기사 수
 - `collected`: 이번 실행에서 수집한 기사 수
-- `collection_complete`: 수집 건수가 API 전체 건수 이상이면 true, 아니면 false
+- `collection_complete`: 아래 완료 판정 조건을 모두 만족할 때만 true
 
 XML을 선택해도 기사 목록은 JSON 파일로 변환해 저장합니다. 원본 XML 응답 전문을 저장하는
 기능은 포함되어 있지 않습니다.
@@ -131,16 +131,12 @@ XML을 선택해도 기사 목록은 JSON 파일로 변환해 저장합니다. �
 통합 `.env.sample`을 복사해 필요한 예시 값을 실제 값으로 바꾸되, 실제 `.env`는 커밋하지 않습니다.
 실행 결과는 각 수집 코드 폴더의 실행시각별 결과 폴더에 저장되고 Git 커밋에서 제외됩니다.
 
-## 전처리·MySQL 적재 코드 실행
+## 완료 판정과 출력 경로
 
-요청된 MySQL 적재 코드의 의존성으로 `news_pipeline.py`와 `news_requirements.txt`를 함께 포함합니다.
-원본 수집 기능과 별도로 실행합니다. 전체 수집·실제 MySQL 서버 적재는 미검증입니다.
-
-```powershell
-python -m pip install -r backend/app/scheduler/collectors/news/news_requirements.txt
-python backend/app/scheduler/collectors/news/news_pipeline.py --raw-csv "원본CSV경로"
-python backend/app/scheduler/collectors/news/news_load_mysql.py --csv "전처리CSV경로"
-```
-
-MySQL 서버에서 `news_db`를 먼저 만들고 루트 `.env`의 MYSQL 설정을 실제 값으로 변경합니다.
-기존 값은 새 CSV 값이 비어 있으면 유지하며, 원본 JSON과 중복 식별 정보는 병합합니다.
+기사 ID로 중복을 제외합니다. 원본 값의 HTML과 공백은 정리하지 않습니다.
+전체 건수가 수집 중 동일하고, ID 없는 기사가 없으며, 고유 기사 수가 전체 건수와 정확히
+일치할 때만 collection_complete가 true입니다. 전체 건수가 변하거나 고유 기사 수가 부족하면
+false와 경고를 기록합니다. 목록 변동이 전체 건수에 나타나지 않는 경우까지 검출하지는 못합니다.
+통계에는 received, unique_articles, duplicates_removed, missing_ids, total_changed, warnings도 포함됩니다.
+중복 기사는 처음 받은 값을 유지하며 같은 ID의 이후 응답은 제외합니다.
+인증키와 출력 경로를 확인한 뒤 폴더를 만듭니다. 출력 폴더가 이미 있으면 새 경로를 안내하고 종료합니다.
