@@ -4,3 +4,6 @@ __pycache__/
 node_modules/
 data/
 chroma_data/
+
+# 관세청 수집 실행 결과
+**/customs_outputs/
