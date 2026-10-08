@@ -8,3 +8,5 @@ chroma_data/
 # 기사 수집 실행 결과와 검토 파일
 **/news_outputs/
 **/shortnews_outputs/
+# 관세청 수집 실행 결과
+**/customs_outputs/
