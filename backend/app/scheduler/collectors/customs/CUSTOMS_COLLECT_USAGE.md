@@ -1,10 +1,10 @@
 # 관세청 수출입실적 API 수집 코드 사용 안내
 
-`customs_collect.py`는 관세청 품목별 국가별 수출입실적 API로 **지정한 연도 1년 치(1~12월, 전체 국가)**를 수집하고
+`customs_collect.py`는 관세청 품목별 국가별 수출입실적 API로 **지정한 기간(1년·한 달·12개월 이내 구간, 전체 국가)**을 수집하고
 원본 CSV와 수집 통계를 저장하는 독립 실행 코드입니다.
 
 1. `.env`의 `customs` 인증키를 읽습니다.
-2. 국가마다 API를 1번 호출해 해당 연도 1~12월의 HS 10단위 품목별 실적을 받습니다.
+2. 국가마다 API를 1번 호출해 지정한 기간의 HS 10단위 품목별 월별 실적을 받습니다.
 3. 국가별 원본을 저장한 뒤 하나의 원본 CSV로 합치고, 수집 통계와 실행 로그를 저장합니다.
 
 응답 필드명과 값은 바꾸지 않으며, API가 함께 보내는 `총계` 행도 그대로 보존합니다.
@@ -65,6 +65,24 @@ python backend/app/scheduler/collectors/customs/customs_collect.py --year 2024
 foreach ($y in 2022..2025) { python backend/app/scheduler/collectors/customs/customs_collect.py --year $y }
 ```
 
+한 달이나 원하는 구간만 받을 수 있습니다. 기간은 `YYYYMM` 형식이며 API 제한에 따라 12개월 이내입니다.
+새 달 통계가 공개되면 그 달만 받는 데 사용합니다.
+
+```powershell
+python backend/app/scheduler/collectors/customs/customs_collect.py --month 202503
+python backend/app/scheduler/collectors/customs/customs_collect.py --start 202501 --end 202506
+python backend/app/scheduler/collectors/customs/customs_collect.py --start 202507 --end 202606
+```
+
+| 옵션 | 조회 기간 | 결과 폴더 |
+|---|---|---|
+| `--year 2025` (기본) | 202501 ~ 202512 | `2025` |
+| `--month 202503` | 202503 한 달 | `202503` |
+| `--start 202501 --end 202506` | 202501 ~ 202506 | `202501_202506` |
+
+`--month`나 `--start`·`--end`를 주면 `--year`보다 우선합니다.
+형식이 틀리거나, 시작이 끝보다 늦거나, 12개월을 넘으면 수집 전에 오류로 멈춥니다.
+
 인증키 파일 위치나 결과 폴더를 지정할 수 있습니다.
 
 ```powershell
@@ -74,14 +92,14 @@ python backend/app/scheduler/collectors/customs/customs_collect.py --output-dir 
 
 ## 저장 결과
 
-기본 저장 위치는 코드가 있는 폴더의 `customs_outputs\연도\`입니다.
+기본 저장 위치는 코드가 있는 폴더의 `customs_outputs\기간\`입니다. 기간 이름은 위 표의 결과 폴더와 같습니다.
 
 | 파일 | 내용 |
 |---|---|
-| `customs_raw_연도.csv` | 원본 필드명의 실적 표 (국가별로 받은 순서, 총계 행 포함). 한글 UTF-8 BOM |
-| `customs_collection_연도.json` | 요청 국가 수, 실패 국가, 전체·데이터·총계 행 수, 국가·품목 수, 월 목록, 키 중복, 수출입 합계, 수집 완료 여부 |
+| `customs_raw_기간.csv` | 원본 필드명의 실적 표 (국가별로 받은 순서, 총계 행 포함). 한글 UTF-8 BOM |
+| `customs_collection_기간.json` | 조회 기간, 요청 국가 수, 실패 국가, 전체·데이터·총계 행 수, 국가·품목 수, 월 목록, 데이터가 없는 달, 키 중복, 기간 밖 행, 수출입 합계, 수집 완료 여부 |
 | `_cache\국가코드.csv` | 국가별 원본. 중단 후 다시 실행하면 받은 국가는 건너뛰고 이어받습니다 |
-| `logs\customs_연도_실행시각.log` | 화면 출력과 같은 실행 로그 |
+| `logs\customs_기간_실행시각.log` | 화면 출력과 같은 실행 로그 |
 
 컬럼은 `year`, `statCd`, `statCdCntnKor1`, `hsCd`, `statKor`, `expDlr`, `expWgt`, `impDlr`, `impWgt`,
 `balPayments`이며 추가 응답 필드가 있으면 뒤에 저장합니다.
@@ -99,7 +117,7 @@ python backend/app/scheduler/collectors/customs/customs_collect.py --output-dir 
 
 ## 읽을 때 주의
 
-- 전체 연도는 160만 행이 넘어 엑셀 최대 행 수를 넘습니다. 파이썬으로 읽습니다.
+- 1년 치 전체는 160만 행이 넘어 엑셀 최대 행 수를 넘습니다. 파이썬으로 읽습니다.
 - `hsCd`는 앞자리 0을, `statCd`는 나미비아 `NA`를 보존하도록 문자열로 읽습니다.
 - 일부 `statKor` 값 끝에 원본 줄바꿈이 있어 CSV 셀 안에 줄바꿈으로 저장됩니다(따옴표로 감싸져 있음).
 - 분석할 때는 `year == "총계"` 행을 제외합니다.
@@ -115,6 +133,6 @@ data = df[df["year"] != "총계"]
 
 - 호출 실패나 오류 응답은 3번까지 다시 시도하고, 계속 실패한 국가는 통계의 `failed_countries`에 기록합니다.
 - `collection_complete`는 실패 국가가 없으면 true입니다.
-- 거래가 없는 국가는 빈 원본 파일로 남겨 다시 호출하지 않습니다.
-- 공개 중인 연도(예: 당해 연도)는 공개된 달까지만 수집됩니다.
+- 0행인 국가(거래 없음, 아직 공개되지 않은 달)는 저장하지 않아 다음 실행 때 다시 조회합니다.
+- 공개 전인 달은 통계의 `missing_months`와 화면의 "데이터가 없는 달"로 표시됩니다. 공개 후 다시 실행하면 받아집니다.
 - 결과 폴더 `customs_outputs/`는 Git 커밋에서 제외됩니다.

@@ -51,12 +51,28 @@ class CustomsCollectTest(unittest.TestCase):
             rows = cc.merge(["US", "NA"], cache, cache / "raw.csv")
             self.assertEqual(cc.read_csv(cache / "raw.csv"), rows)
             self.assertEqual(rows[0]["statKor"], "립스틱\n")
-            stats = cc.summarize(rows, 2025, ["US", "NA"], [])
+            stats = cc.summarize(rows, "202501", "202503", ["US", "NA"], [])
         self.assertEqual((stats["rows_total"], stats["rows_data"], stats["rows_total_line"]), (3, 2, 1))
         self.assertEqual(stats["months"], ["2025.01", "2025.02"])
-        self.assertEqual((stats["duplicate_keys"], stats["out_of_year_rows"]), (0, 0))
+        self.assertEqual((stats["duplicate_keys"], stats["out_of_period_rows"]), (0, 0))
+        self.assertEqual(stats["missing_months"], ["2025.03"])
+        self.assertEqual(stats["period"], {"start": "202501", "end": "202503"})
         self.assertEqual((stats["export_usd"], stats["import_usd"]), (807248, 305294))
         self.assertTrue(stats["collection_complete"])
+
+    def test_period_options(self):
+        self.assertEqual(cc.resolve_period(year=2025), ("202501", "202512", "2025"))
+        self.assertEqual(cc.resolve_period(year=2025, month="202503"), ("202503", "202503", "202503"))
+        self.assertEqual(cc.resolve_period(year=2025, start="202501", end="202506"),
+                         ("202501", "202506", "202501_202506"))
+        self.assertEqual(cc.resolve_period(start="202507", end="202606"), ("202507", "202606", "202507_202606"))
+        self.assertEqual(cc.month_range("202511", "202602"), ["2025.11", "2025.12", "2026.01", "2026.02"])
+
+    def test_period_errors(self):
+        for kwargs in [dict(month="2025-03"), dict(month="202513"), dict(start="202501"),
+                       dict(start="202506", end="202501"), dict(start="202501", end="202601")]:
+            with self.subTest(**kwargs), self.assertRaises(SystemExit):
+                cc.resolve_period(year=2025, **kwargs)
 
 
 if __name__ == "__main__":
