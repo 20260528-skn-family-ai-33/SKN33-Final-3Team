@@ -1,21 +1,42 @@
 """hs_code_build.py가 만든 hs_code_mst.csv를 검증한 뒤 MySQL hs_code_mst 테이블에 적재(upsert)합니다.
 
 실행 (저장소 루트에서): python -m backend.app.scheduler.jobs.hs_code_load [--csv 경로]
-- 테이블이 없으면 만듭니다. 같은 hs_code가 있으면 name_ko·source_edition·hs_ver를 갱신합니다.
+- 테이블은 만들지 않습니다. hs_code_mst 테이블이 없으면 오류 로그를 남기고 종료합니다.
+- 같은 hs_code가 있으면 name_ko·source_edition·hs_ver를 갱신합니다.
+- 로그는 화면과 CSV 폴더의 logs/hs_code_load_<시각>.log에 함께 남깁니다.
 - depth는 DB가 hs_code 길이로 계산하므로 CSV 값은 검증에만 씁니다.
 - 검증 오류가 하나라도 있으면 아무것도 적재하지 않고 종료합니다.
 """
 import argparse
 import csv
+import logging
+from datetime import datetime
 from pathlib import Path
+
+from sqlalchemy import inspect
 
 from backend.app.db.crud import CRUD
 from backend.app.db.session import make_engine, session_scope
-from backend.app.models.base import Base
 from backend.app.models.hs_code import HsCodeMst
 
 DEFAULT_CSV = (Path(__file__).resolve().parents[1] / "collectors" / "hscode" / "hscode_outputs" / "hs_code_mst.csv")
 COLUMNS = ["hs_code", "depth", "name_ko", "source_edition", "hs_ver"]
+log = logging.getLogger("hs_code_load")
+
+
+class TableMissingError(RuntimeError):
+    pass
+
+
+def setup_log(log_dir):
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_dir / f"hs_code_load_{datetime.now():%Y%m%d_%H%M%S}.log"
+    log.setLevel(logging.INFO)
+    fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%Y-%m-%d %H:%M:%S")
+    for h in (logging.StreamHandler(), logging.FileHandler(path, encoding="utf-8")):
+        h.setFormatter(fmt)
+        log.addHandler(h)
+    return path
 
 
 def read_rows(path):
@@ -49,7 +70,10 @@ def validate(rows):
 
 
 def load(engine, rows):
-    Base.metadata.create_all(engine, tables=[HsCodeMst.__table__])  # 이미 있으면 건너뜀
+    table = HsCodeMst.__tablename__
+    if not inspect(engine).has_table(table):
+        raise TableMissingError(f"{engine.url.render_as_string(hide_password=True)}에 {table} 테이블이 없습니다. "
+                                "테이블을 먼저 생성한 뒤 다시 실행하세요.")
     hs = CRUD(HsCodeMst)
     payload = [{**r, "source_edition": r["source_edition"] or None, "hs_ver": r["hs_ver"] or None} for r in rows]
     with session_scope(engine) as s:
@@ -64,15 +88,22 @@ def main():
     parser.add_argument("--db-url", help="SQLAlchemy DB URL (기본: .env의 MYSQL_* 값)")
     args = parser.parse_args()
 
+    log_path = setup_log(args.csv.parent / "logs")
     rows = read_rows(args.csv)
     errors = validate(rows)
-    print(f"CSV {args.csv} | {len(rows):,}행 | 검증 오류 {len(errors)}건")
+    log.info(f"CSV {args.csv} | {len(rows):,}행 | 검증 오류 {len(errors)}건")
     if errors:
-        print("\n".join(errors[:20]))
-        raise SystemExit("검증 오류가 있어 적재하지 않았습니다.")
+        for e in errors[:20]:
+            log.error(e)
+        log.error(f"검증 오류가 있어 적재하지 않았습니다. 로그: {log_path}")
+        raise SystemExit(1)
 
-    total = load(make_engine(args.db_url), rows)
-    print(f"적재 완료: {len(rows):,}행 upsert | 테이블 전체 {total:,}행")
+    try:
+        total = load(make_engine(args.db_url), rows)
+    except TableMissingError as e:
+        log.error(f"{e} 로그: {log_path}")
+        raise SystemExit(1)
+    log.info(f"적재 완료: {len(rows):,}행 upsert | 테이블 전체 {total:,}행 | 로그: {log_path}")
 
 
 if __name__ == "__main__":

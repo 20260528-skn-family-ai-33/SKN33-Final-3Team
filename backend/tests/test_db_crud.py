@@ -69,6 +69,9 @@ class HsCodeLoadTest(unittest.TestCase):
                 writer.writeheader()
                 writer.writerows(ROWS)
             engine = make_engine("sqlite://")
+            with self.assertRaises(hs_code_load.TableMissingError):  # 테이블은 만들지 않음
+                hs_code_load.load(engine, hs_code_load.read_rows(path))
+            Base.metadata.create_all(engine)
             self.assertEqual(hs_code_load.load(engine, hs_code_load.read_rows(path)), 3)
             with session_scope(engine) as s:
                 self.assertEqual(CRUD(HsCodeMst).get(s, "010121").depth, 6)
