@@ -5,7 +5,8 @@
 
 1. 공공데이터포털 '관세청_HS부호 단위별 품목명'(15130660)의 최신 xlsx를 받아 reference/hs_names_YYYYMMDD.xlsx로 저장
 2. 파일 판 날짜의 HS 판이 실행일 기준 HS 판과 다르면(새 판이 아직 안 올라옴) NOT_READY로 끝냄 → 스케줄러가 다음 날 재시도
-3. DB에 그 판이 이미 있으면 ALREADY_LOADED로 끝냄 (LLM 비용이 드는 재생성 방지)
+3. xlsx로 만들 코드(2·4·6·10단위)가 DB에 그 판으로 모두 있으면 ALREADY_LOADED로 끝냄 (LLM 비용이 드는 재생성 방지)
+   일부만 있으면 계속 진행합니다 (요약 캐시가 있으면 API를 거의 부르지 않음)
 4. hs_code_build로 CSV 생성 → 요약 누락이 없으면 hs_code_load로 적재
 결과 상태: DONE · NOT_READY · ALREADY_LOADED · FAILED. 진행과 오류는 hscode_outputs/logs/hs_code_refresh_<시각>.log에 남깁니다.
 실행할 때마다 batch_run에 한 건 기록합니다 (job HS_CODE_REFRESH, 대상 hs_code, 기간 = 기대 HS 판의 적용 기간).
@@ -21,6 +22,8 @@ from zoneinfo import ZoneInfo
 import requests
 
 from backend.app.db.batch_log import track_batch
+from sqlalchemy import select
+
 from backend.app.db.crud import CRUD
 from backend.app.db.session import make_engine, session_scope
 from backend.app.models.hs_code import HsCodeMst
@@ -103,7 +106,24 @@ def loaded_count(hs_ver, engine=None):
         engine.dispose()
 
 
-def run_refresh(today=None, download=download_latest, build=hb.run, load=hs_code_load.run, count=loaded_count,
+def loaded_codes(hs_ver, engine=None):
+    """DB에 그 판으로 들어 있는 hs_code 집합."""
+    engine = engine or make_engine()
+    try:
+        with session_scope(engine) as s:
+            return set(s.scalars(select(HsCodeMst.hs_code).where(HsCodeMst.hs_ver == hs_ver)))
+    finally:
+        engine.dispose()
+
+
+def expected_codes(xlsx):
+    """xlsx로 만들 2·4·6·10단위 코드 집합 (LLM 요약 없이 계산)."""
+    levels = hb.codes_by_level(hb.load_names(xlsx))
+    return {code for codes in levels.values() for code in codes}
+
+
+def run_refresh(today=None, download=download_latest, build=hb.run, load=hs_code_load.run, loaded=loaded_codes,
+                expected_of=expected_codes,
                 log_dir=hb.OUTPUT_DIR / "logs", batch_engine=None):
     """한 번 실행하고 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED)를 돌려줍니다. 단계 함수는 테스트에서 바꿔 넣습니다."""
     today = today or datetime.now(KST).date()
@@ -111,22 +131,28 @@ def run_refresh(today=None, download=download_latest, build=hb.run, load=hs_code
     expected = hb.hs_ver_for(today.strftime("%Y%m%d"))
     log.info(f"HS 판 갱신 시작 | 기준일 {today} | 기대 판 {expected}")
     with track_batch(SOURCE, JOB_NAME, "hs_code", *hb.hs_period(expected), engine=batch_engine, logger=log) as run:
-        status = _refresh(expected, run, log_path, download, build, load, count)
+        status = _refresh(expected, run, log_path, download, build, load, loaded, expected_of)
         if status == "FAILED":
             run.fail()
     return status
 
 
-def _refresh(expected, run, log_path, download, build, load, count):
+def _refresh(expected, run, log_path, download, build, load, loaded, expected_of):
     try:
         xlsx = download(run=run)
         file_ver = hb.hs_ver_for(hb.edition_date(xlsx))
         if file_ver != expected:
             log.warning(f"NOT_READY: 최신 파일 {xlsx.name}은 {file_ver} 판입니다. {expected} 판이 아직 올라오지 않았습니다. | 로그: {log_path}")
             return "NOT_READY"
-        if (n := count(expected)) > 0:
-            log.info(f"ALREADY_LOADED: DB에 {expected} {n:,}행이 이미 있습니다. 다시 만들려면 수동 실행하세요. | 로그: {log_path}")
+        need, have = expected_of(xlsx), loaded(expected)
+        if have and need <= have:
+            log.info(f"ALREADY_LOADED: DB에 {expected} 코드 {len(need):,}개가 모두 있습니다 (DB {len(have):,}개). "
+                     f"다시 만들려면 수동 실행하세요. | 로그: {log_path}")
             return "ALREADY_LOADED"
+        if have:
+            missing = sorted(need - have)
+            log.warning(f"DB에 {expected} 코드가 일부만 있습니다: {len(have):,}개 있음, {len(missing):,}개 없음 "
+                        f"(예: {', '.join(missing[:5])}). 전체를 다시 생성·적재합니다.")
         result = build(xlsx, expected, output_dir=hb.OUTPUT_DIR / expected)
         run.request_count += result["requests"]
         run.received_count = result["received"]

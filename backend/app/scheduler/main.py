@@ -5,7 +5,9 @@
 등록된 잡
 - hs_code_refresh: 2028년부터 5년마다 1월 1일 00:15(KST)에 HS 판 갱신(다운로드 → CSV → 적재).
   새 판 파일이 아직 안 올라왔거나(NOT_READY) 실패하면(FAILED) 다음 날 00:15에 다시 시도합니다 (최대 RETRY_DAYS일).
-  스케줄러가 꺼져 있어 놓친 경우를 위해, 켤 때 이번 판이 DB에 없으면 바로 한 번 실행합니다 (2028년 이후).
+  스케줄러가 꺼져 있어 놓쳤거나 일부만 적재된 경우를 위해, 2028년 이후에는 켤 때마다 바로 한 번 실행합니다.
+  완료 여부는 갱신 작업 안에서 xlsx 코드와 DB 코드를 비교해 판단하므로(이미 모두 있으면 ALREADY_LOADED, LLM 호출 없음)
+  여기서 따로 판단하지 않습니다.
 """
 from datetime import datetime, timedelta
 
@@ -32,15 +34,9 @@ def hs_refresh_job(scheduler, attempt=1):
     return status
 
 
-def needs_catch_up(now=None, count=refresh.loaded_count):
-    """2028년 이후 켰는데 이번 판이 DB에 없으면 True (DB 확인 실패도 True로 보고 실행해서 로그를 남김)."""
-    now = now or datetime.now(KST)
-    if now.year < 2028:
-        return False
-    try:
-        return count(refresh.hb.hs_ver_for(now.strftime("%Y%m%d"))) == 0
-    except Exception:
-        return True
+def needs_catch_up(now=None):
+    """2028년 이후면 켤 때마다 True. 일부만 적재된 경우까지 놓치지 않도록 완료 판단은 갱신 작업(_refresh)에 맡깁니다."""
+    return (now or datetime.now(KST)).year >= 2028
 
 
 def build_scheduler():

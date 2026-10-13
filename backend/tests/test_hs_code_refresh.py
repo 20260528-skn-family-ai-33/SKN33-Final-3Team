@@ -19,7 +19,10 @@ from backend.app.scheduler.jobs import hs_code_refresh as refresh  # noqa: E402
 KST = refresh.KST
 
 
-def fake_steps(file_date="20280101", loaded=0, missing=0, load_rc=0, calls=None):
+NEED = {"01", "0101", "010121", "0101211000"}  # xlsx로 만들 코드 (가짜)
+
+
+def fake_steps(file_date="20280101", loaded=frozenset(), missing=0, load_rc=0, calls=None):
     calls = calls if calls is not None else []
 
     def download(run):
@@ -36,7 +39,8 @@ def fake_steps(file_date="20280101", loaded=0, missing=0, load_rc=0, calls=None)
         calls.append(("load", track))
         return load_rc
 
-    return {"download": download, "build": build, "load": load, "count": lambda ver: loaded, "log_dir": LOG_DIR}
+    return {"download": download, "build": build, "load": load, "loaded": lambda ver: set(loaded),
+            "expected_of": lambda xlsx: set(NEED), "log_dir": LOG_DIR}
 
 
 def close_logs():
@@ -81,7 +85,7 @@ class RefreshFlowTest(unittest.TestCase):
             self.assertEqual((src.option_type, src.enabled), ("SOURCE", True))
 
     def test_every_run_is_recorded(self):
-        for kw in ({"file_date": "20260101"}, {"loaded": 17000}, {"missing": 3}):  # NOT_READY, ALREADY_LOADED, FAILED
+        for kw in ({"file_date": "20260101"}, {"loaded": NEED}, {"missing": 3}):  # NOT_READY, ALREADY_LOADED, FAILED
             self.run_with((2028, 1, 1), **kw)
         self.assertEqual([(r[4], r[5], r[6]) for r in self.batch_rows()],
                          [("SUCCESS", 4, 0), ("SUCCESS", 4, 0), ("FAILED", 154, 17072)])
@@ -91,8 +95,13 @@ class RefreshFlowTest(unittest.TestCase):
         self.assertEqual((status, calls), ("NOT_READY", ["download"]))
 
     def test_already_loaded_skips_llm(self):
-        status, calls = self.run_with((2028, 3, 1), loaded=17000)
+        status, calls = self.run_with((2028, 3, 1), loaded=NEED)
         self.assertEqual((status, calls), ("ALREADY_LOADED", ["download"]))
+
+    def test_partial_load_is_rebuilt(self):
+        status, calls = self.run_with((2028, 3, 1), loaded={"01"})  # 1행만 있으면 완료로 보지 않음
+        self.assertEqual(status, "DONE")
+        self.assertIn(("load", False), calls)
 
     def test_failures(self):
         self.assertEqual(self.run_with((2028, 1, 1), missing=3)[0], "FAILED")      # 요약 누락 → 적재 안 함
@@ -151,10 +160,11 @@ class SchedulerTest(unittest.TestCase):
             refresh.run_refresh = original
             close_logs()
 
-    def test_catch_up_only_after_2028_when_missing(self):
-        self.assertFalse(sched.needs_catch_up(datetime(2027, 6, 1, tzinfo=KST), count=lambda v: 0))
-        self.assertTrue(sched.needs_catch_up(datetime(2028, 2, 1, tzinfo=KST), count=lambda v: 0))
-        self.assertFalse(sched.needs_catch_up(datetime(2028, 2, 1, tzinfo=KST), count=lambda v: 100))
+    def test_catch_up_every_start_after_2028(self):
+        # 일부만 적재된 채 재시작해도 갱신 작업이 실행되어야 함 (완료 판단은 작업 안에서)
+        self.assertFalse(sched.needs_catch_up(datetime(2027, 6, 1, tzinfo=KST)))
+        self.assertTrue(sched.needs_catch_up(datetime(2028, 2, 1, tzinfo=KST)))
+        self.assertTrue(sched.needs_catch_up(datetime(2033, 7, 1, tzinfo=KST)))
 
 
 def tearDownModule():
