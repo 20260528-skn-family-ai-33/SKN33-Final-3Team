@@ -6,11 +6,14 @@
 - 같은 (hs_code, hs_ver)가 있으면 name_ko·original_name_ko·source_edition을 갱신합니다.
 - 실행 결과와 오류(검증·파일·DB 연결·적재 실패)를 화면과 hscode_outputs/logs/hs_code_load_<시각>.log에 남깁니다.
   예상하지 못한 오류는 traceback까지 기록하고, 적재 중 실패하면 전체 롤백되어 아무것도 반영되지 않습니다.
+- 실행할 때마다 batch_run에 한 건 기록합니다 (job HS_CODE_LOAD, 대상 hs_code, 수신 = CSV 행 수, API 호출 0).
+  기간은 CSV의 hs_ver 적용 기간입니다. hs_code_refresh 안에서 부를 때는 그쪽 기록에 포함되므로 따로 남기지 않습니다.
 - depth는 DB가 hs_code 길이로 계산하므로 CSV 값은 검증에만 씁니다.
 - 검증 오류가 하나라도 있으면 아무것도 적재하지 않고 종료합니다.
 """
 import argparse
 import csv
+import importlib.util
 import logging
 import re
 from datetime import datetime
@@ -19,15 +22,32 @@ from pathlib import Path
 from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
 
+from backend.app.db.batch_log import Source, track_batch
 from backend.app.db.crud import CRUD
 from backend.app.db.session import make_engine, session_scope
 from backend.app.models.hs_code import HsCodeMst
 
+BUILD_PATH = Path(__file__).resolve().parents[1] / "collectors" / "hscode" / "hs_code_build.py"
+
+
+def _load_build():
+    """collectors/hscode/hs_code_build.py (패키지가 아닌 독립 실행 스크립트)를 모듈로 불러옵니다."""
+    spec = importlib.util.spec_from_file_location("hs_code_build", BUILD_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+hb = _load_build()  # HS 판 규칙(hs_ver_for·hs_period)을 한 곳에서만 관리
 DEFAULT_CSV = (Path(__file__).resolve().parents[1] / "collectors" / "hscode" / "hscode_outputs" / "hs_code_mst.csv")
 LOG_DIR = DEFAULT_CSV.parent / "logs"
 COLUMNS = ["hs_code", "depth", "name_ko", "source_edition", "hs_ver"]
 SEP = "|"  # hs_code_build.py의 6단위 '요약|원문' 구분기호
 log = logging.getLogger("hs_code_load")
+JOB_NAME = "HS_CODE_LOAD"
+SOURCE = Source("KCS_HS_NAMES", "관세청 HS부호 단위별 품목명",
+                {"provider": "관세청", "url": "https://www.data.go.kr/data/15130660/fileData.do", "dataset_id": "15130660",
+                 "format": "xlsx"})
 
 
 class TableMissingError(RuntimeError):
@@ -122,14 +142,42 @@ def main():
     raise SystemExit(run(args.csv, args.db_url))
 
 
-def run(csv_path, db_url=None, log_dir=LOG_DIR):
-    """적재를 실행하고 결과·오류를 로그에 남깁니다. 성공 0, 실패 1을 돌려줍니다."""
-    started = datetime.now()
+def hs_period_of(rows, fallback="HS2022"):
+    """CSV에 든 hs_ver들의 적용 기간 (여러 판이면 가장 이른 시작 ~ 가장 늦은 끝)."""
+    periods = [hb.hs_period(v) for v in {r["hs_ver"] for r in rows if re.fullmatch(r"HS\d{4}", r["hs_ver"])}]
+    periods = periods or [hb.hs_period(fallback)]
+    return min(p[0] for p in periods), max(p[1] for p in periods)
+
+
+def run(csv_path, db_url=None, log_dir=LOG_DIR, track=True):
+    """적재를 실행하고 결과·오류를 로그에 남깁니다. 성공 0, 실패 1을 돌려줍니다. track=False면 batch_run 기록을 생략합니다."""
     log_path = setup_log(log_dir)
     log.info(f"HS 코드 적재 시작 | CSV {csv_path}")
+    if not track:
+        return _run(csv_path, db_url, log_path, None)
+    try:
+        period = hs_period_of(read_rows(csv_path))
+    except Exception:
+        period = hb.hs_period("HS2022")  # 파일을 못 읽어도 실패 기록은 남김 (원인은 아래 _run에서 로그)
+    batch_engine = make_engine(db_url) if db_url else None  # None이면 track_batch가 .env의 MySQL에 연결
+    try:
+        with track_batch(SOURCE, JOB_NAME, "hs_code", *period, engine=batch_engine, logger=log) as batch:
+            rc = _run(csv_path, db_url, log_path, batch)
+            if rc != 0:
+                batch.fail()
+    finally:
+        if batch_engine is not None:
+            batch_engine.dispose()
+    return rc
+
+
+def _run(csv_path, db_url, log_path, batch):
+    started = datetime.now()
     engine = None
     try:
         rows = read_rows(csv_path)
+        if batch is not None:
+            batch.received_count = len(rows)
         errors = validate(rows)
         log.info(f"CSV {len(rows):,}행 | 검증 오류 {len(errors)}건")
         if errors:

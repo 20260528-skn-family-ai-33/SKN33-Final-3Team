@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from backend.app.db.crud import CRUD  # noqa: E402
 from backend.app.db.session import make_engine, session_scope  # noqa: E402
 from backend.app.models.base import Base  # noqa: E402
+from backend.app.models.batch import BatchRun  # noqa: E402
 from backend.app.models.hs_code import HsCodeMst  # noqa: E402
 from backend.app.scheduler.jobs import hs_code_load  # noqa: E402
 
@@ -125,6 +126,14 @@ class HsCodeLoadTest(unittest.TestCase):
             engine.dispose()
             self.assertEqual(hs_code_load.run(good, db, tmp / "logs_ok"), 0)
             self.assertIn("적재 완료: 3행", next((tmp / "logs_ok").glob("*.log")).read_text(encoding="utf-8"))
+            self.assertEqual(hs_code_load.run(bad, db, tmp / "logs_bad"), 1)  # 검증 오류도 FAILED로 기록
+            engine = make_engine(db)
+            with session_scope(engine) as s:  # 단독 실행은 실행마다 batch_run 한 건 (HS2022 기간)
+                runs = [(r.job_name, str(r.period_start), str(r.period_end), r.status, r.received_count, r.request_count)
+                        for r in s.query(BatchRun).order_by(BatchRun.run_id)]
+            engine.dispose()
+            self.assertEqual(runs, [("HS_CODE_LOAD", "2022-01-01", "2027-12-31", "SUCCESS", 3, 0),
+                                    ("HS_CODE_LOAD", "2022-01-01", "2027-12-31", "FAILED", 1, 0)])
             for h in logging.getLogger("hs_code_load").handlers:  # 임시 폴더를 지우기 전에 로그 파일 닫기
                 h.close()
 
