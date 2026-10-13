@@ -55,19 +55,30 @@ class CRUD:
         return obj is not None
 
     def upsert_many(self, session, rows, batch=1000):
-        """rows(dict 목록)를 기본키 기준으로 넣고, 이미 있으면 나머지 컬럼을 갱신합니다. MySQL·SQLite 지원."""
+        """rows(dict 목록)를 기본키 기준으로 넣고, 이미 있으면 그 행에 있는 컬럼만 갱신합니다. MySQL·SQLite 지원.
+
+        행마다 컬럼 구성이 다를 수 있어, 같은 컬럼 구성끼리 묶어 따로 실행합니다.
+        (한 INSERT에 섞으면 빠진 컬럼이 NULL로 덮이거나 CompileError가 납니다.)
+        """
         rows = [{k: r[k] for k in self.writable if k in r} for r in rows]
+        groups = {}
+        for r in rows:
+            groups.setdefault(tuple(r), []).append(r)
         dialect = session.get_bind().dialect.name
-        for i in range(0, len(rows), batch):
-            chunk = rows[i:i + batch]
-            if dialect == "mysql":
-                stmt = mysql.insert(self.table).values(chunk)
-                stmt = stmt.on_duplicate_key_update({k: stmt.inserted[k] for k in chunk[0] if k not in self.pk})
-            elif dialect == "sqlite":
-                stmt = sqlite.insert(self.table).values(chunk)
-                stmt = stmt.on_conflict_do_update(index_elements=self.pk,
-                                                  set_={k: stmt.excluded[k] for k in chunk[0] if k not in self.pk})
-            else:
-                raise NotImplementedError(f"upsert 미지원 DB: {dialect}")
-            session.execute(stmt)
+        for cols, group in groups.items():
+            update = [k for k in cols if k not in self.pk]
+            for i in range(0, len(group), batch):
+                chunk = group[i:i + batch]
+                if dialect == "mysql":
+                    stmt = mysql.insert(self.table).values(chunk)
+                    stmt = (stmt.on_duplicate_key_update({k: stmt.inserted[k] for k in update}) if update
+                            else stmt.prefix_with("IGNORE"))
+                elif dialect == "sqlite":
+                    stmt = sqlite.insert(self.table).values(chunk)
+                    stmt = (stmt.on_conflict_do_update(index_elements=self.pk,
+                                                       set_={k: stmt.excluded[k] for k in update}) if update
+                            else stmt.on_conflict_do_nothing(index_elements=self.pk))
+                else:
+                    raise NotImplementedError(f"upsert 미지원 DB: {dialect}")
+                session.execute(stmt)
         return len(rows)

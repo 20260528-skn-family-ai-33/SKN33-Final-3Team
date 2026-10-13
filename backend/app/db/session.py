@@ -14,7 +14,7 @@ def mysql_url(env_path=ENV_PATH):
     values = {**dotenv_values(env_path), **os.environ}
     missing = [k for k in ("MYSQL_HOST", "MYSQL_USER", "MYSQL_PASSWORD", "MYSQL_DATABASE") if not values.get(k)]
     if missing:
-        raise SystemExit(f"{env_path}에 {', '.join(missing)} 값이 없습니다.")
+        raise ValueError(f"{env_path}에 {', '.join(missing)} 값이 없습니다.")
     return URL.create(
         "mysql+pymysql",
         username=values["MYSQL_USER"], password=values["MYSQL_PASSWORD"],  # 특수문자 비밀번호도 안전하게 처리
