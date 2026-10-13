@@ -71,6 +71,12 @@ python -m backend.app.scheduler.jobs.hs_code_refresh
   처음부터 다시 요약하려면 이 캐시 파일을 지웁니다.
 - 6단위 5,600여 개를 처음 요약할 때는 OpenAI API를 140번 정도 호출합니다(약 20~30분).
 
+## 적재 동작
+
+- `(hs_code, hs_ver)`가 같으면 새 값으로 갱신(upsert)합니다. 같은 키가 여러 번 들어오면 마지막 입력이 남습니다.
+  (HS 코드 CSV는 같은 키가 두 번 나오면 검증 오류로 막습니다.)
+- 적재와 결과 행 수 확인을 한 트랜잭션에서 처리합니다. 어느 단계에서 실패해도 전체가 롤백되어, 로그의 "롤백되어 반영되지 않았습니다"가 실제 결과와 같습니다.
+
 ## 자동 갱신 (스케줄러)
 
 ```powershell
@@ -89,12 +95,13 @@ python -m backend.app.scheduler.main
 |---|---|---|
 | `DONE` | 새 판 다운로드·CSV 생성·적재 완료 | 다음 주기(5년 뒤)까지 대기 |
 | `NOT_READY` | 포털 최신 파일이 아직 이전 판 (예: 2028-01-01에 20260101판만 있음) | 다음 날 00:15에 재시도 |
-| `ALREADY_LOADED` | DB에 그 판이 이미 있음 (LLM 비용이 드는 재생성 방지) | 대기 |
+| `ALREADY_LOADED` | xlsx로 만들 코드가 DB에 그 판으로 모두 있음 (LLM 비용이 드는 재생성 방지). 일부만 있으면 다시 생성·적재 | 대기 |
 | `FAILED` | 다운로드·요약·적재 중 오류 | 다음 날 00:15에 재시도 |
 
 - 재시도는 최대 90일입니다. 새 판 파일은 1월 1일 당일보다 늦게 올라오는 경우가 많아서 매일 다시 확인합니다.
-- 1월 1일 00:15에 스케줄러가 꺼져 있었어도 6시간 안에 켜지면 실행합니다. 그보다 늦게 켜도, 2028년 이후이고 이번 판이 DB에 없으면 켜자마자 한 번 실행합니다.
-- 재시도 예약은 메모리에만 있어서, 재시도 중에 스케줄러를 껐다 켜면 위의 "켜자마자 실행"으로 이어집니다.
+- 1월 1일 00:15에 스케줄러가 꺼져 있었어도 6시간 안에 켜지면 실행합니다. 또 2028년 이후에는 켤 때마다 한 번 실행해서,
+  놓쳤거나 일부만 적재된 판을 채웁니다. 이미 모두 적재돼 있으면 `ALREADY_LOADED`로 바로 끝나고(LLM 호출 없음) `batch_run`에 SUCCESS 한 건이 남습니다.
+- 재시도 예약은 메모리에만 있어서, 재시도 중에 스케줄러를 껐다 켜면 위의 "켤 때마다 실행"으로 이어집니다.
 
 ## 실행 기록 (batch_run)
 
@@ -127,6 +134,20 @@ with track_batch(SOURCE, "EXPORT_COLLECTION", "export_monthly", start, end, logg
         run.fail()              # 예외 없이 실패로 끝낼 때 (예외가 나면 자동으로 FAILED)
 ```
 
+## 테스트
+
+MySQL·OpenAI·포털 없이 메모리 SQLite와 가짜 단계 함수로 확인합니다.
+
+```powershell
+python -m unittest discover backend/tests
+```
+
+| 파일 | 확인하는 것 |
+|---|---|
+| `test_hs_code_build.py` | 6단위 이름 찾는 순서, 요약\|원문 형식, 수동 요약 파일, HS 판 결정 |
+| `test_db_crud.py` | 공통 CRUD, 같은 키 마지막 입력 보존, 적재 검증·롤백, 실행 로그, `batch_run` 기록 |
+| `test_hs_code_refresh.py` | 자동 갱신 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED), 일부만 적재된 판 재적재, 5년 주기·재시도·재시작 시 실행 |
+
 ## 로그
 
 모두 `backend/app/scheduler/collectors/hscode/hscode_outputs/logs/`에 남습니다(이 폴더는 git에 올라가지 않음).
@@ -148,4 +169,4 @@ with track_batch(SOURCE, "EXPORT_COLLECTION", "export_monthly", start, end, logg
   포털이 자동입력방지(캡차)를 요구하면 우회하지 않고 멈춥니다. 이때는 포털에서 직접 받아 `reference/hs_names_YYYYMMDD.xlsx`로 넣고 `hs_code_refresh`를 수동 실행합니다.
 - 관세청 원본에도 오류가 있습니다. 예: 4단위 `7804`의 품목명이 6단위 `780411`과 같게 들어가 있습니다. 공식 원문을 그대로 쓰므로 보정하지 않았습니다.
 - 새 판의 요약은 자동으로 들어갑니다. 적재 후 요약 중복·누락 로그를 확인하고, 필요하면 `hs6_summary_overrides_<새 판>.csv`를 만들어 수동 실행으로 다시 적재합니다.
-  (DB에 그 판이 이미 있으면 자동 갱신은 `ALREADY_LOADED`로 건너뛰지만, `hs_code_build` → `hs_code_load` 수동 실행은 같은 키를 갱신합니다.)
+  (DB에 그 판 코드가 모두 있으면 자동 갱신은 `ALREADY_LOADED`로 건너뛰지만, `hs_code_build` → `hs_code_load` 수동 실행은 같은 키를 갱신합니다.)
