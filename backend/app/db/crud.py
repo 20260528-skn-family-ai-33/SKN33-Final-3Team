@@ -6,6 +6,8 @@
         hs.list(s, depth=6, limit=50)
         hs.upsert_many(s, rows)
 """
+from itertools import groupby
+
 from sqlalchemy import func, select
 from sqlalchemy.dialects import mysql, sqlite
 
@@ -57,15 +59,14 @@ class CRUD:
     def upsert_many(self, session, rows, batch=1000):
         """rows(dict 목록)를 기본키 기준으로 넣고, 이미 있으면 그 행에 있는 컬럼만 갱신합니다. MySQL·SQLite 지원.
 
-        행마다 컬럼 구성이 다를 수 있어, 같은 컬럼 구성끼리 묶어 따로 실행합니다.
-        (한 INSERT에 섞으면 빠진 컬럼이 NULL로 덮이거나 CompileError가 납니다.)
+        행마다 컬럼 구성이 다를 수 있어, 입력 순서를 지킨 채 컬럼 구성이 바뀌는 곳에서 끊어 따로 실행합니다.
+        (한 INSERT에 섞으면 빠진 컬럼이 NULL로 덮이거나 CompileError가 나고,
+         구성별로 모으면 실행 순서가 바뀌어 같은 키의 마지막 입력이 남지 않습니다.)
         """
         rows = [{k: r[k] for k in self.writable if k in r} for r in rows]
-        groups = {}
-        for r in rows:
-            groups.setdefault(tuple(r), []).append(r)
         dialect = session.get_bind().dialect.name
-        for cols, group in groups.items():
+        for cols, group in groupby(rows, key=tuple):  # 연속한 같은 구성끼리만 묶음
+            group = list(group)
             update = [k for k in cols if k not in self.pk]
             for i in range(0, len(group), batch):
                 chunk = group[i:i + batch]

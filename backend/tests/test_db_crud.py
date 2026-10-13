@@ -8,6 +8,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from sqlalchemy.exc import OperationalError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -69,6 +72,15 @@ class CrudTest(unittest.TestCase):
                        self.hs.get(s, ("010121", "HS2022")).original_name_ko)
                 self.assertEqual(got, (None, "번식용"))
 
+    def test_upsert_keeps_last_input_for_same_key(self):
+        # 컬럼 구성이 first·last와 middle이 다름 → 순서가 바뀌면 middle이 남던 문제
+        k = {"hs_code": "0101211000", "hs_ver": "HS2022", "source_edition": "s"}
+        with session_scope(self.engine) as s:
+            self.hs.upsert_many(s, [{**k, "name_ko": "first", "original_name_ko": None}, {**k, "name_ko": "middle"},
+                                    {**k, "name_ko": "last", "original_name_ko": None}])
+        with session_scope(self.engine) as s:
+            self.assertEqual(self.hs.get(s, ("0101211000", "HS2022")).name_ko, "last")
+
 
 class HsCodeLoadTest(unittest.TestCase):
     def test_validate_catches_bad_rows(self):
@@ -100,6 +112,17 @@ class HsCodeLoadTest(unittest.TestCase):
                 obj = CRUD(HsCodeMst).get(s, ("010121", "HS2022"))
                 self.assertEqual((obj.depth, obj.name_ko, obj.original_name_ko), (6, "번식용 말", "번식용"))
                 self.assertIsNone(CRUD(HsCodeMst).get(s, ("0101", "HS2022")).original_name_ko)
+
+    def test_load_rolls_back_when_count_fails(self):
+        # 행 수 세기가 실패하면 '롤백' 안내와 실제 결과가 같아야 함 (저장된 채 남으면 안 됨)
+        engine = make_engine("sqlite://")
+        Base.metadata.create_all(engine)
+        with mock.patch.object(CRUD, "count", side_effect=OperationalError("SELECT", {}, Exception("x"))):
+            with self.assertRaises(OperationalError):
+                hs_code_load.load(engine, ROWS)
+        with session_scope(engine) as s:
+            self.assertEqual(s.query(HsCodeMst).count(), 0)
+        engine.dispose()
 
     def test_run_logs_result_and_errors(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -127,9 +127,8 @@ def load(engine, rows):
         raise TableMissingError(f"{engine.url.render_as_string(hide_password=True)}에 {table} 테이블이 없습니다. "
                                 "테이블을 먼저 생성한 뒤 다시 실행하세요.")
     hs = CRUD(HsCodeMst)
-    with session_scope(engine) as s:
+    with session_scope(engine) as s:  # 행 수도 커밋 전에 같은 트랜잭션에서 셈: 어느 단계든 실패하면 전체 롤백
         hs.upsert_many(s, [to_db_row(r) for r in rows])
-    with session_scope(engine) as s:
         return hs.count(s)
 
 
