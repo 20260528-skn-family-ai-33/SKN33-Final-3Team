@@ -55,9 +55,17 @@ class HsCodeBuildTest(unittest.TestCase):
         self.assertEqual(hb.db_name("살아 있는 말"), "살아 있는 말")
 
     def test_overrides_file(self):
-        overrides = hb.load_overrides()
+        overrides = hb.load_overrides(hb.overrides_path("HS2022"))
         self.assertEqual(overrides["610323"], "남성용 합성섬유 편물 앙상블")
         self.assertEqual(len(set(overrides.values())), len(overrides))
+
+    def test_hs_ver_for_edition_date(self):
+        cases = {"20210101": "HS2017", "20220101": "HS2022", "20271231": "HS2022", "20280101": "HS2028",
+                 "20321231": "HS2028", "20330101": "HS2033", "20380115": "HS2038"}
+        for date, ver in cases.items():
+            self.assertEqual(hb.hs_ver_for(date), ver, date)
+        self.assertEqual(hb.edition_date("관세청_HS부호 단위별 품목명_20280101.xlsx"), "20280101")
+        self.assertIsNone(hb.edition_date("hs.xlsx"))
 
 
 if __name__ == "__main__":

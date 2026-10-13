@@ -7,7 +7,8 @@
   요약은 4·5·6단위 이름을 모두 LLM에 넣어 만들므로 '기타' 같은 6단위명도 뜻이 통하게 됩니다.
   5단어를 넘는 요약은 '최대한 짧게'로 한 번 더 요청하고, 그래도 넘으면 그 결과를 그대로 저장합니다.
 - 관세청 특수코드 2424·242400(이사화물)은 4단위 시트에 없어 직접 추가합니다.
-- reference/hs6_summary_overrides.csv의 요약은 LLM 요약보다 우선합니다(요약이 겹치는 코드 등 수동 수정분).
+- reference/hs6_summary_overrides_<hs_ver>.csv의 요약은 LLM 요약보다 우선합니다(요약이 겹치는 코드 등 수동 수정분).
+- hs_ver를 주지 않으면 xlsx 파일명의 판 날짜(YYYYMMDD)로 정합니다(hs_ver_for). 요약 캐시·수동 요약은 hs_ver별로 따로 둡니다.
 - 6단위 원본은 DB에서 original_name_ko(TEXT)로 나뉘어 들어가므로 줄이지 않고 관세청 원문 그대로 둡니다.
   NAME_MAX(500자) 검사는 DB name_ko에 들어가는 값(6단위 요약, 2·4·10단위 이름)에만 적용합니다.
 - 진행 상황은 화면과 결과 폴더의 logs/에 함께 기록합니다.
@@ -18,7 +19,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -33,8 +34,9 @@ ENV_KEY = "openai_api_key"
 FIELDS = ["hs_code", "depth", "name_ko", "source_edition", "hs_ver"]
 SEP = "|"  # 관세청 품목명·요약에 쓰이지 않는 기호 ('::'는 '[예: ...]'의 콜론과 헷갈려 바꿈)
 KR_SPECIAL = {"2424": "이사화물", "242400": "이사화물"}
-OVERRIDES_PATH = REFERENCE_DIR / "hs6_summary_overrides.csv"
 NAME_MAX = 500  # DB name_ko VARCHAR(500). 6단위는 요약 부분만 해당
+OUTPUT_DIR = BASE / "hscode_outputs"
+DEFAULT_MODEL = "gpt-4.1-mini"
 BATCH = 40
 RETRIES = 3
 PROMPT = """너는 관세 품목 분류 전문가다. 각 HS 6단위 품목의 상위 분류명과 품목명을 보고,
@@ -47,10 +49,47 @@ RETRY_PROMPT = """너는 관세 품목 분류 전문가다. 아래 HS 6단위 �
 log = logging.getLogger("hs_code_build")
 
 
+def edition_date(path):
+    """관세청 xlsx 파일명의 판 날짜(YYYYMMDD). 예: hs_names_20260101.xlsx → '20260101'"""
+    found = re.search(r"(\d{8})", Path(path).stem)
+    return found.group(1) if found else None
+
+
+def hs_ver_for(date):
+    """날짜(YYYYMMDD 문자열이나 date)에 적용되는 HS 판.
+    HS2017(2017~2021) → HS2022(2022~2027) → HS2028(2028~) 이후 5년 주기(HS2033, HS2038 …)로 봅니다.
+    ponytail: HS2033 이후 주기는 가정값. WCO가 다른 연도로 발표하면 여기만 고치면 됩니다."""
+    year = int(str(date)[:4])
+    if year >= 2028:
+        return f"HS{2028 + (year - 2028) // 5 * 5}"
+    return "HS2022" if year >= 2022 else "HS2017"
+
+
+def hs_period(hs_ver):
+    """HS 판이 적용되는 기간(양끝 포함). HS2017: 2017~2021, HS2022: 2022~2027, HS2028부터 5년씩 (hs_ver_for와 같은 가정)."""
+    year = int(hs_ver[2:])
+    end = {2017: 2021, 2022: 2027}.get(year, year + 4)
+    return date(year, 1, 1), date(end, 12, 31)
+
+
+def latest_reference():
+    found = sorted(REFERENCE_DIR.glob("hs_names_*.xlsx"))
+    if not found:
+        raise FileNotFoundError(f"{REFERENCE_DIR}에 hs_names_YYYYMMDD.xlsx가 없습니다.")
+    return found[-1]
+
+
+def overrides_path(hs_ver):
+    return REFERENCE_DIR / f"hs6_summary_overrides_{hs_ver}.csv"
+
+
 def setup_log(log_dir):
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / f"hs_code_build_{datetime.now():%Y%m%d_%H%M%S}.log"
     log.setLevel(logging.INFO)
+    for h in log.handlers:  # 스케줄러처럼 한 프로세스에서 여러 번 실행해도 로그가 겹치지 않게
+        h.close()
+    log.handlers.clear()
     fmt = logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S")
     for h in (logging.StreamHandler(), logging.FileHandler(path, encoding="utf-8")):
         h.setFormatter(fmt)
@@ -89,7 +128,7 @@ def codes_by_level(names):
             10: ten}
 
 
-def summarize(items, prompt, model, api_key, cache_path, label):
+def summarize(items, prompt, model, api_key, cache_path, label, stats=None):
     """{코드: 입력문}을 BATCH개씩 LLM에 보내 {코드: 요약}을 받습니다. 결과는 캐시해 재실행 시 이어서 합니다."""
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
     todo = [c for c in items if c not in cache]
@@ -99,6 +138,8 @@ def summarize(items, prompt, model, api_key, cache_path, label):
     for i in range(0, len(todo), BATCH):
         chunk = {c: items[c] for c in todo[i:i + BATCH]}
         for attempt in range(1, RETRIES + 1):
+            if stats is not None:
+                stats["requests"] = stats.get("requests", 0) + 1  # 재시도 호출도 셈 (batch_run.request_count)
             try:
                 res = client.chat.completions.create(
                     model=model, temperature=0, response_format={"type": "json_object"},
@@ -117,7 +158,7 @@ def summarize(items, prompt, model, api_key, cache_path, label):
     return {c: cache[c] for c in items if c in cache}
 
 
-def load_overrides(path=OVERRIDES_PATH):
+def load_overrides(path):
     if not path.exists():
         return {}
     with open(path, encoding="utf-8-sig", newline="") as f:
@@ -141,45 +182,39 @@ def build(names, summaries, source, hs_ver):
     return rows
 
 
-def main():
-    parser = argparse.ArgumentParser(description="관세청 xlsx + LLM 요약으로 HS 코드 마스터 CSV 생성")
-    parser.add_argument("--customs-xlsx", type=Path, help="관세청 HS부호 단위별품목명 xlsx (기본: reference/의 최신 hs_names_YYYYMMDD.xlsx)")
-    parser.add_argument("--hs-ver", default="HS2022", help="HS 개정 버전 (기본 HS2022)")
-    parser.add_argument("--model", default="gpt-4.1-mini", help="요약에 쓸 OpenAI 모델")
-    parser.add_argument("--env", type=Path, default=ENV_PATH, help="OPENAI_API_KEY가 있는 .env 경로 (기본: 저장소 루트)")
-    parser.add_argument("--output-dir", type=Path, default=BASE / "hscode_outputs", help="결과 폴더")
-    args = parser.parse_args()
-
-    if not args.customs_xlsx:
-        found = sorted(REFERENCE_DIR.glob("hs_names_*.xlsx"))
-        if not found:
-            raise SystemExit(f"{REFERENCE_DIR}에 hs_names_YYYYMMDD.xlsx가 없습니다.")
-        args.customs_xlsx = found[-1]
-    key = {k.lower(): v for k, v in dotenv_values(args.env).items()}.get(ENV_KEY, "").strip()
+def run(customs_xlsx=None, hs_ver=None, model=DEFAULT_MODEL, env=ENV_PATH, output_dir=OUTPUT_DIR, cache_dir=OUTPUT_DIR):
+    """CSV를 만들고 결과를 돌려줍니다: {"csv": 경로, "hs_ver": 판, "rows": 행 수, "missing": 요약 누락 수, ...}
+    요약 캐시는 output_dir과 상관없이 cache_dir(기본 hscode_outputs/)에 판별 파일명으로 둡니다.
+    결과 폴더를 바꿔도(자동 갱신의 hscode_outputs/<판>/) 이미 요약한 코드를 다시 요청하지 않게 하기 위해서입니다."""
+    customs_xlsx = Path(customs_xlsx) if customs_xlsx else latest_reference()
+    output_dir = Path(output_dir)
+    key = {k.lower(): v for k, v in dotenv_values(env).items()}.get(ENV_KEY, "").strip()
     if not key:
-        raise SystemExit(f"{args.env}에 OPENAI_API_KEY가 없습니다.")
-    date = re.search(r"(\d{8})", args.customs_xlsx.stem)
-    source = f"관세청 HS부호 단위별품목명 {date.group(1) if date else args.customs_xlsx.stem}"
+        raise ValueError(f"{env}에 OPENAI_API_KEY가 없습니다.")
+    date = edition_date(customs_xlsx)
+    hs_ver = hs_ver or (hs_ver_for(date) if date else "HS2022")
+    source = f"관세청 HS부호 단위별품목명 {date or customs_xlsx.stem}"
 
-    log_path = setup_log(args.output_dir / "logs")
+    log_path = setup_log(output_dir / "logs")
     started = datetime.now()
-    log.info(f"HS 코드 마스터 생성 시작 | {source} | {args.hs_ver} | 모델 {args.model}")
-    names = load_names(args.customs_xlsx)
+    log.info(f"HS 코드 마스터 생성 시작 | {source} | {hs_ver} | 모델 {model}")
+    names = load_names(customs_xlsx)
     items = {c: " > ".join(six_parts(c, names)) for c in codes_by_level(names)[6]}
     log.info(f"관세청 xlsx 로드 완료 | 6단위 {len(items):,}개")
 
-    summaries = summarize(items, PROMPT, args.model, key,
-                          args.output_dir / f"hs6_summary_cache_{args.model}.json", "1차 요약")
+    stats = {"requests": 0}
+    summaries = summarize(items, PROMPT, model, key,
+                          Path(cache_dir) / f"hs6_summary_cache_{hs_ver}_{model}.json", "1차 요약", stats)
     long_items = {c: f"{items[c]} (기존 요약: {summaries[c]})" for c in summaries if word_count(summaries[c]) > 5}
-    retried = summarize(long_items, RETRY_PROMPT, args.model, key,
-                        args.output_dir / f"hs6_summary_retry_cache_{args.model}.json", "5단어 초과 재요약")
+    retried = summarize(long_items, RETRY_PROMPT, model, key,
+                        Path(cache_dir) / f"hs6_summary_retry_cache_{hs_ver}_{model}.json", "5단어 초과 재요약", stats)
     summaries |= retried  # 재요약도 5단어를 넘으면 그 결과를 그대로 씁니다
-    overrides = load_overrides()
-    summaries |= overrides
-    log.info(f"수동 요약 {len(overrides)}개 적용 ({OVERRIDES_PATH.name})")
-    rows = build(names, summaries, source, args.hs_ver)
+    overrides = load_overrides(overrides_path(hs_ver))
+    summaries |= {c: v for c, v in overrides.items() if c in items}
+    log.info(f"수동 요약 {len(overrides)}개 적용 ({overrides_path(hs_ver).name})")
+    rows = build(names, summaries, source, hs_ver)
 
-    out_path = args.output_dir / "hs_code_mst.csv"
+    out_path = output_dir / "hs_code_mst.csv"
     with open(out_path, "w", encoding="utf-8-sig", newline="") as f:  # 엑셀에서 한글이 깨지지 않도록 BOM 포함
         writer = csv.DictWriter(f, fieldnames=FIELDS)
         writer.writeheader()
@@ -201,6 +236,24 @@ def main():
     log.info(f"요약 중복 {len(dup)}개: {', '.join(f'{c}={v}' for c, v in dup.sort_values().head(10).items()) or '-'}")
     log.info(f"DB name_ko(6단위는 요약) {NAME_MAX}자 초과 {len(too_long)}개: {', '.join(too_long[:10]) or '-'}")
     log.info(f"결과: {out_path} | 소요 {str(datetime.now() - started).split('.')[0]} | 로그: {log_path}")
+    # received: xlsx에서 읽은 코드 수 (직접 추가한 관세청 특수코드 제외), requests: OpenAI 호출 수
+    return {"csv": out_path, "hs_ver": hs_ver, "rows": len(rows), "missing": len(missing),
+            "received": len(set(names) - set(KR_SPECIAL)), "requests": stats["requests"]}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="관세청 xlsx + LLM 요약으로 HS 코드 마스터 CSV 생성")
+    parser.add_argument("--customs-xlsx", type=Path, help="관세청 HS부호 단위별품목명 xlsx (기본: reference/의 최신 hs_names_YYYYMMDD.xlsx)")
+    parser.add_argument("--hs-ver", help="HS 판 (기본: xlsx 파일명의 판 날짜로 결정, 예: 20260101 → HS2022)")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="요약에 쓸 OpenAI 모델")
+    parser.add_argument("--env", type=Path, default=ENV_PATH, help="OPENAI_API_KEY가 있는 .env 경로 (기본: 저장소 루트)")
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR, help="결과 폴더 (CSV·로그)")
+    parser.add_argument("--cache-dir", type=Path, default=OUTPUT_DIR, help="요약 캐시 폴더 (기본: hscode_outputs/)")
+    args = parser.parse_args()
+    try:
+        run(args.customs_xlsx, args.hs_ver, args.model, args.env, args.output_dir, args.cache_dir)
+    except (FileNotFoundError, ValueError) as e:
+        raise SystemExit(str(e))
 
 
 if __name__ == "__main__":
