@@ -7,6 +7,9 @@
   요약은 4·5·6단위 이름을 모두 LLM에 넣어 만들므로 '기타' 같은 6단위명도 뜻이 통하게 됩니다.
   5단어를 넘는 요약은 '최대한 짧게'로 한 번 더 요청하고, 그래도 넘으면 그 결과를 그대로 저장합니다.
 - 관세청 특수코드 2424·242400(이사화물)은 4단위 시트에 없어 직접 추가합니다.
+- reference/hs6_summary_overrides.csv의 요약은 LLM 요약보다 우선합니다(요약이 겹치는 코드 등 수동 수정분).
+- 6단위 원본은 DB에서 original_name_ko(TEXT)로 나뉘어 들어가므로 줄이지 않고 관세청 원문 그대로 둡니다.
+  NAME_MAX(500자) 검사는 DB name_ko에 들어가는 값(6단위 요약, 2·4·10단위 이름)에만 적용합니다.
 - 진행 상황은 화면과 결과 폴더의 logs/에 함께 기록합니다.
 """
 import argparse
@@ -30,6 +33,8 @@ ENV_KEY = "openai_api_key"
 FIELDS = ["hs_code", "depth", "name_ko", "source_edition", "hs_ver"]
 SEP = "|"  # 관세청 품목명·요약에 쓰이지 않는 기호 ('::'는 '[예: ...]'의 콜론과 헷갈려 바꿈)
 KR_SPECIAL = {"2424": "이사화물", "242400": "이사화물"}
+OVERRIDES_PATH = REFERENCE_DIR / "hs6_summary_overrides.csv"
+NAME_MAX = 500  # DB name_ko VARCHAR(500). 6단위는 요약 부분만 해당
 BATCH = 40
 RETRIES = 3
 PROMPT = """너는 관세 품목 분류 전문가다. 각 HS 6단위 품목의 상위 분류명과 품목명을 보고,
@@ -66,10 +71,14 @@ def load_names(xlsx):
     return names | KR_SPECIAL
 
 
+def six_name(code, names):
+    """6단위명: 6단위 시트 → 10단위 XXXXXX0000 → (XXXX00이면) 4단위명 순으로 찾습니다."""
+    return names.get(code) or names.get(code + "0000") or (names.get(code[:4], "") if code.endswith("00") else "")
+
+
 def six_parts(code, names):
-    """6단위의 [4단위명, 5단위명, 6단위명]. 빈 이름과 중복(XXXX00은 4단위명=6단위명)은 뺍니다. 마지막 값이 6단위명입니다."""
-    six = names.get(code) or names.get(code + "0000") or (names.get(code[:4], "") if code.endswith("00") else "")
-    return list(dict.fromkeys(p for p in (names.get(code[:4], ""), names.get(code[:5], ""), six) if p))
+    """LLM 입력용 [4단위명, 5단위명, 6단위명]. 빈 이름과 중복(XXXX00은 4단위명=6단위명)은 뺍니다."""
+    return list(dict.fromkeys(p for p in (names.get(code[:4], ""), names.get(code[:5], ""), six_name(code, names)) if p))
 
 
 def codes_by_level(names):
@@ -108,12 +117,24 @@ def summarize(items, prompt, model, api_key, cache_path, label):
     return {c: cache[c] for c in items if c in cache}
 
 
+def load_overrides(path=OVERRIDES_PATH):
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        return {r["hs_code"].strip(): r["summary"].strip() for r in csv.DictReader(f)}
+
+
+def db_name(name_ko):
+    """DB name_ko 컬럼에 들어가는 값. 6단위 '요약|원본'은 요약 부분입니다."""
+    return name_ko.split(SEP, 1)[0]
+
+
 def build(names, summaries, source, hs_ver):
     rows = []
     for level, codes in codes_by_level(names).items():
         for code in codes:
             if level == 6:
-                name = summaries.get(code, "") + SEP + six_parts(code, names)[-1]
+                name = summaries.get(code, "") + SEP + six_name(code, names)
             else:
                 name = names[code]
             rows.append({"hs_code": code, "depth": level, "name_ko": name, "source_edition": source, "hs_ver": hs_ver})
@@ -153,6 +174,9 @@ def main():
     retried = summarize(long_items, RETRY_PROMPT, args.model, key,
                         args.output_dir / f"hs6_summary_retry_cache_{args.model}.json", "5단어 초과 재요약")
     summaries |= retried  # 재요약도 5단어를 넘으면 그 결과를 그대로 씁니다
+    overrides = load_overrides()
+    summaries |= overrides
+    log.info(f"수동 요약 {len(overrides)}개 적용 ({OVERRIDES_PATH.name})")
     rows = build(names, summaries, source, args.hs_ver)
 
     out_path = args.output_dir / "hs_code_mst.csv"
@@ -165,7 +189,8 @@ def main():
     missing = [c for c in items if c not in summaries]
     over = [c for c in summaries if word_count(summaries[c]) > 5]
     under = [c for c in summaries if word_count(summaries[c]) < 3]
-    too_long = [r["hs_code"] for r in rows if len(r["name_ko"]) > 500]
+    too_long = [r["hs_code"] for r in rows if len(db_name(r["name_ko"])) > NAME_MAX]
+    dup = pd.Series(summaries).loc[lambda x: x.duplicated(keep=False)]
     bad_sep = [r["hs_code"] for r in rows if r["name_ko"].count(SEP) != (r["depth"] == 6)]
     log.info(f"단위별 행 수 {levels} | 전체 {len(rows):,}행")
     log.info(f"요약 누락 {len(missing)}개{' → 다시 실행하면 누락분만 요청' if missing else ''}")
@@ -173,7 +198,8 @@ def main():
              f"{': ' + ', '.join(f'{c}={summaries[c]}' for c in over[:10]) if over else ''}")
     log.info(f"3단어 미만 요약 {len(under)}개 (그대로 저장)")
     log.info(f"구분기호 '{SEP}' 개수 이상 {len(bad_sep)}개 (6단위 1개, 그 외 0개여야 함): {', '.join(bad_sep[:10]) or '-'}")
-    log.info(f"name_ko 500자 초과 {len(too_long)}개: {', '.join(too_long[:10]) or '-'}")
+    log.info(f"요약 중복 {len(dup)}개: {', '.join(f'{c}={v}' for c, v in dup.sort_values().head(10).items()) or '-'}")
+    log.info(f"DB name_ko(6단위는 요약) {NAME_MAX}자 초과 {len(too_long)}개: {', '.join(too_long[:10]) or '-'}")
     log.info(f"결과: {out_path} | 소요 {str(datetime.now() - started).split('.')[0]} | 로그: {log_path}")
 
 

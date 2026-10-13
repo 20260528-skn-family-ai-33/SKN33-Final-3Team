@@ -38,6 +38,27 @@ class HsCodeBuildTest(unittest.TestCase):
         self.assertEqual(rows["010130"]["name_ko"], "|당나귀")  # 요약 누락이면 앞이 비어 있음
         self.assertEqual(set(rows["01"]), set(hb.FIELDS))
 
+    def test_six_name_kept_when_same_as_four_digit_name(self):
+        # 관세청 xlsx의 7804처럼 4단위명이 6단위명과 같아도 5단위명이 아니라 6단위명을 저장해야 합니다.
+        names = {"7804": "시트[0.2밀리미터 이하]", "78041": "판ㆍ시트", "780411": "시트[0.2밀리미터 이하]",
+                 "7804111000": "시트"}
+        rows = {r["hs_code"]: r for r in hb.build(names, {"780411": "납 시트"}, "src", "HS2022")}
+        self.assertEqual(rows["780411"]["name_ko"], "납 시트|시트[0.2밀리미터 이하]")
+
+    def test_six_digit_original_kept_full(self):
+        # 원본은 DB original_name_ko(TEXT)로 가므로 길어도 줄이지 않고, 500자 검사는 요약 부분만 봅니다.
+        long = "청어[클루페아 하렌구스(Clupea harengus)]" * 30
+        names = {"0305": "건조 어류", "030554": long, "0305541000": "청어"}  # 6단위 목록은 10단위에서 만듦
+        rows = {r["hs_code"]: r for r in hb.build(names, {"030554": "건조 청어"}, "src", "HS2022")}
+        self.assertEqual(rows["030554"]["name_ko"], "건조 청어|" + long)
+        self.assertEqual(hb.db_name(rows["030554"]["name_ko"]), "건조 청어")
+        self.assertEqual(hb.db_name("살아 있는 말"), "살아 있는 말")
+
+    def test_overrides_file(self):
+        overrides = hb.load_overrides()
+        self.assertEqual(overrides["610323"], "남성용 합성섬유 편물 앙상블")
+        self.assertEqual(len(set(overrides.values())), len(overrides))
+
 
 if __name__ == "__main__":
     unittest.main()
