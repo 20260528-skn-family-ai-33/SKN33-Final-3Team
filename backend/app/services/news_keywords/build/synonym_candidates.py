@@ -9,6 +9,8 @@
 - 1차 의견(규칙): 반대말 쌍(OPP) → "주의: 반대 뜻" / 짧은 말 + 접미사(SUFFIX) → "주의: 범위가 다를 수 있음"
   / 한쪽이 다른 쪽을 포함 → "주의: 한쪽이 다른 쪽을 포함" / 나머지 → "같은 뜻 후보"
 - 표기·대표어 후보: 두 말 중 기사 수가 많은 쪽을 대표어 후보로
+- 자동 O (팀 결정 2026-10-14): 근거가 임베딩(동시 등장 제외)이고 유사도 AUTO_O_SIM(0.96) 이상인 미반영 후보는
+  "팀 확인(O/X)"를 O로 미리 채움 (의견 칸에 표시). 나머지 미반영 후보만 사람이 O/X
 
 후보는 판단이 아니라 "볼 목록"입니다. 팀이 O를 준 것만 build_synonyms.py의 GROUPS에 넣습니다.
 필요: sentence-transformers, intfloat/multilingual-e5-base (llm_env)
@@ -39,6 +41,17 @@ OPP = [("수출", "수입"), ("해외", "외국인"), ("금지", "허용"), ("�
        ("온라인", "오프라인"), ("구직", "구인"), ("천연", "인조"), ("탄산", "수산화"), ("화력", "수력"), ("재사용", "재활용")]
 SUFFIX = ("시장", "산업", "법", "율", "률", "정책", "기업", "업", "화", "성", "처리", "용품", "서비스", "기술", "관리", "인상")
 PENDING = "미반영 (검수 후 반영)"
+AUTO_O_SIM = 0.96  # 임베딩 후보 자동 O 기준 (동시 등장 후보는 적용 안 함)
+AUTO_O_NOTE = f"자동 O: 임베딩 유사도 {AUTO_O_SIM} 이상"
+
+
+def auto_mark(df):
+    """임베딩 후보 중 유사도 AUTO_O_SIM 이상인 미반영 줄에 O를 미리 채웁니다."""
+    sim = pd.to_numeric(df["임베딩 유사도"], errors="coerce")
+    hit = (df["현재 상태"] == PENDING) & (df["근거"] == "임베딩") & (sim >= AUTO_O_SIM)
+    df.loc[hit, "팀 확인(O/X)"] = "O"
+    df.loc[hit, "의견"] = AUTO_O_NOTE
+    return df
 
 
 def opinion(a, b):
@@ -109,7 +122,7 @@ def build(encode, clean_csv=DATA / "news_keywords_clean.csv", synonyms_csv=NK / 
     for a, b, c, rate, s in sorted([x for x in co if x[4] >= CO_EMB_THRESHOLD], key=lambda x: -x[4]):
         op = opinion(a, b)
         rows.append(cand(a, b, f"동시 등장 ({c}건, {rate:.0%})", s, "확인: 같은 뜻인지, 함께 쓰는 관련어인지" if op == "같은 뜻 후보" else op))
-    return pd.DataFrame(rows)
+    return auto_mark(pd.DataFrame(rows))
 
 
 def e5_encoder():

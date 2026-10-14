@@ -308,5 +308,16 @@ class BuildTest(unittest.TestCase):
         self.assertTrue(all(bc.rule(w) is None for w in llm))
         self.assertEqual(bc.assign("한국", fixes, llm)[2], "검수 필요")
 
+    def test_synonym_auto_o(self):
+        """동의어 후보: 임베딩 유사도 0.96 이상 미반영 후보만 자동 O (동시 등장·0.96 미만·이미 반영은 그대로)"""
+        import importlib.util as iu
+        import pandas as pd
+        spec = iu.spec_from_file_location("sc", kc.BASE / "build" / "synonym_candidates.py")
+        sc = iu.module_from_spec(spec); spec.loader.exec_module(sc)
+        P = sc.PENDING
+        df = pd.DataFrame({"근거": ["임베딩", "임베딩", "동시 등장 (5건, 60%)", "같은 뜻"], "임베딩 유사도": ["0.97", "0.95", "0.98", ""],
+                           "현재 상태": [P, P, P, "1차 반영"], "팀 확인(O/X)": "", "의견": ""})
+        self.assertEqual(sc.auto_mark(df)["팀 확인(O/X)"].tolist(), ["O", "", "", ""])
+
 if __name__ == "__main__":
     unittest.main()

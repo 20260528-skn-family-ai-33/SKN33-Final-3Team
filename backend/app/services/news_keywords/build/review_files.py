@@ -1,6 +1,7 @@
 """팀에 나눠 주는 검수 파일을 만듭니다 (나눠 준 파일 = 이 코드의 결과).
 
 - 동의어_검수용.xlsx: 동의어_검수용.csv(synonym_candidates.py 결과)를 칸 너비·O/X 드롭다운이 있는 엑셀로
+- 동의어_나머지_검수용.xlsx: 미반영 후보 중 자동 O(임베딩 0.96 이상)를 뺀 나머지 — 사람이 O/X 할 줄만
 - 동의어_랜덤100_검수용.xlsx: 미반영 후보에서 무작위 100개 (시드 고정 → 다시 뽑아도 같은 100개)
   · 회의 결정: 100개를 확인해 문제가 없으면 "임베딩 기준 이상 → 자동 동의어" 규칙으로 처리
 - 대중분류_검수용.xlsx: topic_categories.csv 중 사람이 볼 줄(검수 필요 · 규칙(포함) · 규칙 수정 · LLM 판단) + 왜 붙었나 + 예시 기사 제목
@@ -69,10 +70,18 @@ def synonym_files(out_dir):
     rv = read_synonym_review()
     wb = Workbook(); write_sheet(wb.active, rv, SYN_WIDTHS, "팀 확인(O/X)"); wb.active.title = "동의어 검수"
     wb.save(out_dir / "동의어_검수용.xlsx")
+    rest = remaining(rv)
+    wb = Workbook(); write_sheet(wb.active, rest, SYN_WIDTHS, "팀 확인(O/X)"); wb.active.title = "나머지 검수"
+    wb.save(out_dir / "동의어_나머지_검수용.xlsx")
     s100 = random100(rv)
     wb = Workbook(); write_sheet(wb.active, s100, SYN_WIDTHS, "팀 확인(O/X)"); wb.active.title = "랜덤100"
     wb.save(out_dir / "동의어_랜덤100_검수용.xlsx")
     return rv, s100
+
+
+def remaining(rv):
+    """미반영 후보 중 아직 O/X가 비어 있는 줄 (자동 O 제외)."""
+    return rv[rv["현재 상태"].str.startswith("미반영") & (rv["팀 확인(O/X)"] == "")]
 
 
 def random100(rv):
