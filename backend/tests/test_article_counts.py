@@ -14,9 +14,9 @@ ac = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ac)
 
 
-def art(i, date, keys, country="US", hs4=""):
-    return {"bbstxSn": str(i), "othbcDt": date, "country_all": country, "kw_spike": "|".join(keys), "hs4": hs4,
-            "infoCl": "", "natn": ""}
+def art(i, date, keys, country="US", hs6=""):
+    return {"bbstxSn": str(i), "othbcDt": date, "country_all": country, "kw_spike": "|".join(keys),
+            "hs6": hs6, "hs4": hs6[:4], "infoCl": "", "natn": ""}
 
 
 class CountsTest(unittest.TestCase):
@@ -57,6 +57,26 @@ class SpikeTest(unittest.TestCase):
         r = ac.interest_spike(counts, "2026-10-14", "CN", "전기차")
         self.assertEqual((r["yesterday"], r["ratio"], r["spike"]), (3, 3.0, True))
         self.assertFalse(ac.interest_spike(counts, "2026-10-14", "US", "전기차")["spike"])
+
+
+class InterestTest(unittest.TestCase):
+    def test_product_counts_units(self):
+        """품목 집계: HS 6단위(기본)와 4단위를 unit 칸으로 함께 저장"""
+        df = pd.DataFrame([art(1, "2026-10-13", [], hs6="850760"), art(2, "2026-10-13", [], hs6="850780")])
+        pc = ac.product_counts(df).set_index(["unit", "key"]).articles
+        self.assertEqual((pc[("hs6", "850760")], pc[("hs6", "850780")], pc[("hs4", "8507")]), (1, 1, 2))
+
+    def test_interest_alerts_fr203(self):
+        """FR-203: 관심 국가 × 관심 품목(6단위·4단위)·키워드 중 급증한 것만 알림"""
+        rows = [art(i, "2026-10-13", ["배터리"], country="US", hs6="850760") for i in range(3)]
+        rows.append(art(9, "2026-10-13", ["화장품"], country="US", hs6="330499"))
+        df = pd.DataFrame(rows)
+        r = ac.interest_alerts(ac.build_counts(df, "kw_spike"), ac.product_counts(df), "2026-10-14", ["US"],
+                               products=["850760", "8507", "330499"], keywords=["배터리", "화장품"])
+        self.assertEqual(sorted((x["type"], x["key"]) for x in r),
+                         [("키워드", "배터리"), ("품목(HS4)", "8507"), ("품목(HS6)", "850760")])
+        self.assertEqual(ac.interest_alerts(ac.build_counts(df, "kw_spike"), ac.product_counts(df), "2026-10-14",
+                                            ["CN"], products=["850760"]), [])
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
 | `kw_spike` | **급증 계산용 주제어**: `kw_topic`에서 불용어(넓은 말)를 뺀 것 | `이모빌리티\|전기차\|EV\|…` |
 | `kw_category` | ⑥ 분야 (대분류>중분류) | `산업·품목>품목 (→ HS 코드로 연결)` |
 | `kw_year` | 키워드에 나온 연도 (언급 연도) | |
-| `hs4` / `industry` / `product_source` | ③ 품목: HS 4단위 / 산업분류 / 채운 단계 | |
+| `hs6` / `hs4` / `industry` / `product_source` | ③ 품목: HS 6단위(요구사항 기본) / 4단위 / 산업분류 / 채운 단계 | |
 | `natn_code` | 기사 국가(`natn`)의 국가코드 | `ID` |
 | `geo_country` | 키워드에서 찾은 국가코드 (참고용) | `ID` |
 | `geo_city` / `geo_region` | 키워드에서 찾은 도시 / 권역 | |
@@ -138,8 +138,8 @@ python backend/app/services/news_keywords/keyword_clean.py --check "우크라이
 
 | 순서 | 출처 | 결과 칸 | 상태 |
 |---|---|---|---|
-| 1 | KOTRA HS 칸(`hsCdNm`) → HS 4단위 | `hs4` | 완료 (3,105건) |
-| 2 | 키워드·제목의 품목어 → HS 사전 | `hs4` | **HS 사전 완료 후** |
+| 1 | KOTRA HS 칸(`hsCdNm`) → HS 6단위·4단위 (4자리만 있는 코드는 4단위만) | `hs6`, `hs4` | 완료 (3,105건, 6단위 2,249건) |
+| 2 | 키워드·제목의 품목어 → HS 사전 | `hs6`, `hs4` | **HS 사전 완료 후** |
 | 3 | KOTRA 산업분류(`indstCl`) → 큰 범위 (기타·산업일반 제외) | `industry` | 완료 (HS 없는 기사 중 7,497건) |
 
 `product_source` 칸에 어느 단계로 채워졌는지(KOTRA HS / 산업분류) 남습니다.
@@ -153,20 +153,21 @@ python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
 | 결과 파일 (`data/news_keywords/`) | 내용 |
 |---|---|
 | `keyword_daily_counts.csv` | 날짜 × 국가 × 키워드(kw_spike) 기사 수 |
-| `product_daily_counts.csv` | 날짜 × 국가 × 품목(hs4) 기사 수 (지금은 1단계 HS만) |
+| `product_daily_counts.csv` | 날짜 × 국가 × 품목 기사 수, `unit` 칸으로 HS 6단위(기본)·4단위 구분 (지금은 1단계 HS만) |
 | `major_issues_판정일.csv` | FR-204 주요 이슈 (키워드·품목 각각, 최근 7일 ÷ 직전 8주 주평균 ≥ 3) |
 
-- FR-203 관심 급증은 `interest_spike(counts, 판정일, 국가, 키)` 함수로 계산합니다 (어제 ÷ 이틀 전까지 7일 일평균 ≥ 2.5).
+- FR-203 급증 기사 알림은 `interest_alerts(키워드 집계, 품목 집계, 판정일, 관심 국가, products=관심 품목, keywords=관심 키워드)`로 계산합니다 (어제 ÷ 이틀 전까지 7일 일평균 ≥ 2.5, 관심 품목은 6단위면 6단위 집계, 4단위면 4단위 집계). 요구사항대로 품목과 키워드를 모두 봅니다.
+- FR-204 품목 판정은 6단위·4단위 각각 계산합니다 (`type` 칸: 키워드 / 품목(HS6) / 품목(HS4)).
 - 한 기사는 같은 키워드·품목을 1건으로 셉니다. 전체 기준 판정(FR-204)은 나라가 여러 개인 기사도 1건으로 셉니다.
 - DB 적재·스케줄러 연결은 팀 확인 후 붙입니다.
 
 ## 테스트
 
 ```powershell
-python -m unittest backend/tests/test_news_keywords.py
+python -m unittest backend/tests/test_news_keywords.py backend/tests/test_article_counts.py
 ```
 
-예상 결과: `Ran 37 tests ... OK` (집계·급증 판정 테스트는 `backend/tests/test_article_counts.py`, 5개) (`-v`를 붙이면 테스트마다 한국어 설명이 나옵니다)
+예상 결과: `Ran 45 tests ... OK` (키워드 정리 38개 + 집계·급증 판정 7개) (`-v`를 붙이면 테스트마다 한국어 설명이 나옵니다)
 
 ## 실제 데이터 결과 (2022.01.03~2026.10.13, 14,607건)
 

@@ -2,9 +2,11 @@
 
 입력: keyword_clean.py 결과(news_keywords_clean.csv)
 - 키워드별 집계: 날짜 × 국가 × 키워드(kw_spike, 불용어 제외) 기사 수
-- 품목별 집계: 날짜 × 국가 × 품목(hs4, 지금은 KOTRA HS 칸만 — HS 사전 완료 후 키워드·제목 연결분 추가)
+- 품목별 집계: 날짜 × 국가 × 품목, 단위(unit) 칸으로 HS 6단위(요구사항 기본)와 4단위를 함께 저장
+  (지금은 KOTRA HS 칸만 — HS 사전 완료 후 키워드·제목 연결분 추가)
 - FR-204 주요 이슈: 최근 7일 기사 수 ÷ 직전 8주 주평균 ≥ 3 (평균 0이면 1), 키워드·품목 각각 + KOTRA 통상·규제 기사
-- FR-203 급증: 어제 기사 수 ÷ 최근 7일(이틀 전까지) 일평균 ≥ 2.5 (평균 0이면 1), 관심 국가 × 품목·키워드
+- FR-203 급증 기사 알림: 어제 기사 수 ÷ 최근 7일(이틀 전까지) 일평균 ≥ 2.5 (평균 0이면 1),
+  사용자 관심 범위(관심 국가 × 관심 품목·키워드) — interest_alerts()
 한 기사는 같은 키워드·품목을 1건으로만 셉니다.
 
 실행: python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
@@ -77,6 +79,26 @@ def interest_spike(counts, run_date, country, key, ratio=2.5):
             "ratio": round(r, 2), "spike": bool(r >= ratio)}
 
 
+def product_counts(df):
+    """품목별 집계: HS 6단위(요구사항 기본)와 4단위를 한 표에 unit 칸으로 구분해 저장."""
+    parts = [build_counts(df, c).assign(unit=c) for c in ("hs6", "hs4") if c in df.columns]
+    return pd.concat(parts, ignore_index=True)
+
+
+def interest_alerts(kw_counts, prod_counts, run_date, countries, products=(), keywords=(), ratio=2.5):
+    """FR-203: 사용자 관심 범위(관심 국가 × 관심 품목·키워드)에서 급증한 것만 돌려줍니다.
+    관심 품목은 6단위면 6단위 집계, 4단위면 4단위 집계로 셉니다."""
+    out = []
+    for c in countries:
+        for code in products:
+            unit = "hs6" if len(code) >= 6 else "hs4"
+            r = interest_spike(prod_counts[prod_counts.unit == unit], run_date, c, code, ratio)
+            out.append({**r, "type": f"품목({unit.upper()})"})
+        for k in keywords:
+            out.append({**interest_spike(kw_counts, run_date, c, k, ratio), "type": "키워드"})
+    return [r for r in out if r["spike"]]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--input", type=Path, default=DATA / "news_keywords_clean.csv")
@@ -88,16 +110,18 @@ def main():
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
     kc = build_counts(df, "kw_spike")
-    pc = build_counts(df, "hs4")
+    pc = product_counts(df)
     kc.to_csv(out / "keyword_daily_counts.csv", index=False, encoding="utf-8-sig")
     pc.to_csv(out / "product_daily_counts.csv", index=False, encoding="utf-8-sig")
     mk = major_issues(df, "kw_spike", run_date).assign(type="키워드")
+    mp6 = major_issues(df, "hs6", run_date).assign(type="품목(HS6)") if "hs6" in df.columns else pd.DataFrame()
     mp = major_issues(df, "hs4", run_date).assign(type="품목(HS4)")
-    issues = pd.concat([mk, mp], ignore_index=True)
+    issues = pd.concat([mk, mp6, mp], ignore_index=True)
     issues.to_csv(out / f"major_issues_{run_date}.csv", index=False, encoding="utf-8-sig")
     print(f"판정일 {run_date}")
     print(f"키워드별 집계 {len(kc):,}행 / 품목별 집계 {len(pc):,}행")
-    print(f"FR-204 주요 이슈: 키워드 {len(mk)}개 {mk.key.head(8).tolist()} / 품목 {len(mp)}개 {mp.key.head(8).tolist()}")
+    print(f"FR-204 주요 이슈: 키워드 {len(mk)}개 {mk.key.head(8).tolist()}")
+    print(f"                  품목 6단위 {len(mp6)}개 {mp6.key.head(8).tolist() if len(mp6) else []} / 4단위 {len(mp)}개 {mp.key.head(8).tolist()}")
     if "infoCl" in df.columns:
         tr = trade_regulation_articles(df, run_date)
         print(f"FR-204 통상·규제 기사(전날): {len(tr)}건")

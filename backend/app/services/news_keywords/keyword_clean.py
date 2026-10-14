@@ -9,7 +9,7 @@
 ④ 동의어: synonyms.csv로 같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (EV·전기자동차 → 전기차, 인공지능 → AI).
 ⑤ 불용어: stopwords.csv의 넓은 말(수출·경제·동향 등)을 뺀 급증 계산용 주제어(kw_spike)를 따로 만듭니다.
 ⑥ 대/중분류: topic_categories.csv(주제어 → 대분류·중분류)로 기사에 분야 칸(kw_category)을 붙입니다.
-③ 품목 연결(1·3단계): KOTRA HS 칸(hsCdNm)을 HS 4단위(hs4)로, 없으면 KOTRA 산업분류(indstCl)로 큰 범위만 남깁니다.
+③ 품목 연결(1·3단계): KOTRA HS 칸(hsCdNm)을 HS 6단위(hs6, 요구사항 기본 단위)·4단위(hs4)로, 없으면 KOTRA 산업분류(indstCl)로 큰 범위만 남깁니다.
    2단계(키워드·제목의 품목어 → HS 사전)는 HS 사전 완료 후 추가합니다.
    검색용 주제어(kw_topic)는 그대로 둡니다.
 원본 kwrd는 그대로 두고 결과 칸을 새로 추가합니다.
@@ -133,6 +133,12 @@ def hs4_codes(hs_field):
     """KOTRA HS 칸 값(예: '330499', '1004,1404,1905', '8443313010')을 HS 4단위 코드 목록으로 바꿉니다."""
     codes = re.findall(r"\d{4,10}", hs_field or "")
     return list(dict.fromkeys(c[:4] for c in codes))
+
+
+def hs6_codes(hs_field):
+    """KOTRA HS 칸 값을 HS 6단위 코드 목록으로 바꿉니다 (요구사항 기본 단위). 4자리만 있는 코드는 6단위를 알 수 없어 뺍니다."""
+    codes = re.findall(r"\d{4,10}", hs_field or "")
+    return list(dict.fromkeys(c[:6] for c in codes if len(c) >= 6))
 
 
 def product_link(hs_field, industry):
@@ -278,6 +284,7 @@ def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exception
     cols = [c for c in ["bbstxSn", "othbcDt", "natn", "infoCl", "newsTitl", "kwrd"] if c in df.columns]
     out = df[cols].copy()
     links = [product_link(h, i) for h, i in zip(df.get("hsCdNm", [""] * len(df)), df.get("indstCl", [""] * len(df)))]
+    out["hs6"] = ["|".join(hs6_codes(h)) for h in df.get("hsCdNm", [""] * len(df))]
     out["hs4"] = ["|".join(x[0]) for x in links]
     out["industry"] = ["|".join(x[1]) for x in links]
     out["product_source"] = [x[2] for x in links]
@@ -288,7 +295,8 @@ def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exception
     out.to_csv(output_dir / "news_keywords_clean.csv", index=False, encoding="utf-8-sig")
     report = summarize(df, results)
     src = Counter(x[2] for x in links)
-    report["product"] = {"KOTRA HS": src["KOTRA HS"], "산업분류만": src["산업분류"], "없음": src[""],
+    report["product"] = {"KOTRA HS": src["KOTRA HS"], "HS 6단위": int((out["hs6"] != "").sum()),
+                         "산업분류만": src["산업분류"], "없음": src[""],
                          "hs4_top": Counter(c for x in links for c in x[0]).most_common(20),
                          "note": "2단계(키워드·제목 품목어 → HS 사전)는 HS 사전 완료 후"}
     (output_dir / "news_keywords_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -359,7 +367,7 @@ def main():
     print(f"급증 계산용 주제어: {sp['kinds']:,}종 (불용어로 뺀 언급 {sp['stopword_mentions']:,}건)")
     print(f"분야가 붙은 기사: {report['category']['articles_with_category']:,}건 / {report['articles']:,}건")
     pr = report["product"]
-    print(f"품목 연결(1·3단계): KOTRA HS {pr['KOTRA HS']:,}건 / 산업분류만 {pr['산업분류만']:,}건 / 없음 {pr['없음']:,}건")
+    print(f"품목 연결(1·3단계): KOTRA HS {pr['KOTRA HS']:,}건 (6단위 {pr['HS 6단위']:,}건) / 산업분류만 {pr['산업분류만']:,}건 / 없음 {pr['없음']:,}건")
     print(f"결과: {Path(args.output_dir) / 'news_keywords_clean.csv'}")
 
 

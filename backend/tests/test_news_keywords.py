@@ -276,6 +276,12 @@ class ProductTest(unittest.TestCase):
         self.assertEqual(kc.hs4_codes("8443313010"), ["8443"])
         self.assertEqual(kc.hs4_codes(""), [])
 
+    def test_hs_field_to_hs6(self):
+        """품목: HS 6단위(요구사항 기본) — 10단위는 앞 6자리, 4자리만 있는 코드는 6단위를 알 수 없어 뺌"""
+        self.assertEqual(kc.hs6_codes("8443313010"), ["844331"])
+        self.assertEqual(kc.hs6_codes("8415,330499,847960"), ["330499", "847960"])
+        self.assertEqual(kc.hs6_codes("8542"), [])
+
     def test_order(self):
         """품목: HS 칸이 있으면 HS, 없으면 산업분류(큰 범위), 기타·산업일반은 범위로 안 씀"""
         self.assertEqual(kc.product_link("220300", "농림수산식품"), (["2203"], ["농림수산식품"], "KOTRA HS"))
