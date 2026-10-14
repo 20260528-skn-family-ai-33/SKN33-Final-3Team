@@ -7,7 +7,7 @@
    예외: 나라를 떼고 남는 말이 split_exceptions.csv의 말로 끝나면(…사태·…선거·…무역관·…엑스포 등) 나누지 않고 통째로 남깁니다.
 ③ 연도 분리: '2024', '2026년'처럼 연도만 있는 키워드는 지우지 않고 언급 연도(kw_year) 칸으로 옮깁니다.
 ④ 동의어: synonyms.csv로 같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (EV·전기자동차 → 전기차, 인공지능 → AI).
-⑤ 불용어: stopwords.csv의 넓은 말(수출·경제·동향 등)을 뺀 급증 계산용 주제어(kw_spike)를 따로 만듭니다.
+⑤ 불용어(블락 목록): 회의 결정으로 기본 목록은 비어 있습니다(사용자 키워드 블락으로 대체). stopwords.csv에 넣은 말만 급증 계산용 주제어(kw_spike)에서 뺍니다(관리자 블락용).
 ⑥ 대/중분류: topic_categories.csv(주제어 → 대분류·중분류)로 기사에 분야 칸(kw_category)을 붙입니다.
 ③ 품목 연결(1·3단계): KOTRA HS 칸(hsCdNm)을 HS 6단위(hs6, 요구사항 기본 단위)·4단위(hs4)로, 없으면 KOTRA 산업분류(indstCl)로 큰 범위만 남깁니다.
    2단계(키워드·제목의 품목어 → HS 사전)는 HS 사전 완료 후 추가합니다.
@@ -192,7 +192,7 @@ def process_article(kwrd, natn, geo, keep=frozenset(), stop=frozenset(), syn=Non
     return {
         "kw_clean": words,
         "kw_topic": list(dict.fromkeys(topics)),
-        # 급증 계산용: 검색용 주제어에서 불용어(넓은 말)만 뺍니다.
+        # 급증 계산용: 검색용 주제어에서 블락 목록(stopwords.csv, 기본은 비어 있음)만 뺍니다.
         "kw_spike": [t for t in dict.fromkeys(topics) if t not in stop],
         # 분야: 주제어마다 정해 둔 대분류>중분류 (한 기사에 여러 개 가능)
         "kw_category": list(dict.fromkeys((cat or {})[t] for t in topics if t in (cat or {}))),

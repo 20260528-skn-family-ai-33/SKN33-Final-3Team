@@ -172,33 +172,35 @@ class ExceptionTest(unittest.TestCase):
 
 
 class StopwordTest(unittest.TestCase):
-    """④ 불용어"""
+    """⑤ 불용어 — 회의 결정으로 기본 불용어는 없음 (사용자 키워드 블락으로 대체). 목록 기능은 관리자 블락용으로 유지"""
     STOP = kc.load_stopwords()
 
-    def test_stopwords_removed_only_from_spike(self):
-        """불용어: 넓은 말은 급증 계산용(kw_spike)에서만 빠지고 검색용(kw_topic)에는 남음"""
+    def test_no_default_stopwords(self):
+        """불용어: 기본 목록은 비어 있어 급증용(kw_spike) = 검색용(kw_topic)"""
+        self.assertEqual(self.STOP, frozenset())
         r = kc.process_article("수출,경제,동향,전기차,공급망", "미국", GEO, frozenset(), self.STOP)
-        self.assertEqual(r["kw_topic"], ["수출", "경제", "동향", "전기차", "공급망"])
+        self.assertEqual(r["kw_spike"], r["kw_topic"])
+
+    def test_block_list_removed_only_from_spike(self):
+        """불용어: 목록에 넣은 말(관리자 블락)은 급증용에서만 빠지고 검색용에는 남음"""
+        r = kc.process_article("수출,경제,전기차,공급망", "미국", GEO, frozenset(), frozenset({"수출", "경제"}))
+        self.assertEqual(r["kw_topic"], ["수출", "경제", "전기차", "공급망"])
         self.assertEqual(r["kw_spike"], ["전기차", "공급망"])
 
-    def test_frequent_but_meaningful_kept(self):
-        """불용어: 자주 나와도 이슈가 되는 말은 유지 (AI, 공급망, ESG, 규제, FTA)"""
-        r = kc.process_article("AI,공급망,ESG,규제,FTA", "", GEO, frozenset(), self.STOP)
-        self.assertEqual(r["kw_spike"], ["AI", "공급망", "ESG", "규제", "FTA"])
-
-    def test_stopword_after_geo_split(self):
-        """불용어: 나라를 떼고 남은 말에도 적용 (중국경제 → 경제 → 급증 계산 제외)"""
-        r = kc.process_article("중국경제,중국전기차", "중국", GEO, frozenset(), self.STOP)
+    def test_block_after_geo_split(self):
+        """불용어: 나라를 떼고 남은 말에도 적용 (중국경제 → 경제 → 블락이면 급증 계산 제외)"""
+        r = kc.process_article("중국경제,중국전기차", "중국", GEO, frozenset(), frozenset({"경제"}))
         self.assertEqual(r["kw_topic"], ["경제", "전기차"])
         self.assertEqual(r["kw_spike"], ["전기차"])
 
     def test_stopword_file(self):
-        """불용어: 목록 파일에 유형·기사수·이유가 모두 있음"""
+        """불용어: 목록 파일은 칸(단어·유형·이유 등)만 남아 있음"""
         import csv
         with open(kc.STOPWORDS_PATH, encoding="utf-8-sig") as fh:
-            rows = list(csv.DictReader(fh))
-        self.assertGreater(len(rows), 30)
-        self.assertTrue(all(r["유형"] and r["이유"] and r["기사수"].isdigit() for r in rows))
+            reader = csv.DictReader(fh)
+            rows = list(reader)
+        self.assertEqual(rows, [])
+        self.assertIn("단어", reader.fieldnames)
 
 
 class SynonymTest(unittest.TestCase):
@@ -250,9 +252,9 @@ class CategoryTest(unittest.TestCase):
         """분류: 동의어로 바뀐 대표어 기준 (인공지능 → AI → AI·소프트웨어)"""
         self.assertEqual(self.run_one("인공지능")["kw_category"], ["기술·디지털>AI·소프트웨어"])
 
-    def test_stopwords_not_categorized(self):
-        """분류: 불용어는 분야를 붙이지 않음 (수출·경제)"""
-        self.assertEqual(self.run_one("수출,경제")["kw_category"], [])
+    def test_former_stopwords_categorized(self):
+        """분류: 예전 불용어에도 분야 (수출 → 수출입 일반, 전시회 → 전시회·행사), 너무 넓은 말(한국)은 미분류"""
+        self.assertEqual(self.run_one("수출,전시회,한국")["kw_category"], ["무역·통상>수출입 일반", "기업·투자·진출>전시회·행사"])
 
     def test_partial_match_fixed(self):
         """분류: 일부만 겹쳐 잘못 붙던 말 바로잡음 (관광산업 ≠ 광산, 현지진출 ≠ 지진)"""
