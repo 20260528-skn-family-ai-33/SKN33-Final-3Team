@@ -8,6 +8,11 @@
 
 원본 `kwrd`는 바꾸지 않고 결과 칸을 새로 추가합니다. 원본은 보관용이고, 정리 결과는 아래 칸들에 있습니다.
 
+## 분류 기준과 사전 만드는 코드
+
+동의어·대/중분류·예외·지역·불용어를 **어떤 기준으로 누가 정했는지**는 [`CLASSIFICATION_RULES.md`](CLASSIFICATION_RULES.md)에 있습니다.
+사전 csv는 `build/` 폴더의 코드로 다시 만들 수 있고, `build/verify.py`로 저장된 파일·나눠 준 검수 파일이 코드 결과와 같은지 확인합니다.
+
 ## 실행
 
 저장소 루트에서 실행합니다. `pandas`가 필요하고, `.parquet`을 읽으려면 `pyarrow`도 필요합니다.
@@ -162,7 +167,7 @@ python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
 python -m unittest backend/tests/test_news_keywords.py backend/tests/test_article_counts.py
 ```
 
-예상 결과: `Ran 45 tests ... OK` (키워드 정리 38개 + 집계·급증 판정 7개) (`-v`를 붙이면 테스트마다 한국어 설명이 나옵니다)
+예상 결과: `Ran 46 tests ... OK` (키워드 정리 39개 + 집계·급증 판정 7개) (`-v`를 붙이면 테스트마다 한국어 설명이 나옵니다)
 
 ## 실제 데이터 결과 (2022.01.03~2026.10.13, 14,607건)
 

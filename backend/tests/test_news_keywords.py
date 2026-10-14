@@ -291,5 +291,20 @@ class ProductTest(unittest.TestCase):
         self.assertEqual(kc.product_link("", "산업일반,기타"), ([], [], ""))
 
 
+class BuildTest(unittest.TestCase):
+    """사전 생성 코드 (build/)"""
+
+    def test_category_assign_order(self):
+        """분류 생성: 직접 배정 → 규칙(일치) → 규칙(포함) → 검수 필요 순서"""
+        import importlib.util as iu
+        spec = iu.spec_from_file_location("bc", kc.BASE / "build" / "build_categories.py")
+        bc = iu.module_from_spec(spec); spec.loader.exec_module(bc)
+        manual = bc.load_manual()
+        self.assertEqual(bc.assign("관광산업", manual)[2], "직접")           # 포함 규칙('광산') 대신 직접 배정
+        self.assertEqual(bc.assign("반덤핑", manual), ("무역·통상", "관세·무역규제", "규칙(일치)"))
+        self.assertEqual(bc.assign("태양광발전소", manual)[2], "규칙(포함)")
+        self.assertEqual(bc.assign("한국", manual), ("미분류", "미분류", "검수 필요"))
+
+
 if __name__ == "__main__":
     unittest.main()
