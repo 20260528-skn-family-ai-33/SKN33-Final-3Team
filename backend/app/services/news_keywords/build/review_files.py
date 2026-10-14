@@ -1,4 +1,5 @@
 """팀에 나눠 주는 검수 파일을 만듭니다 (나눠 준 파일 = 이 코드의 결과).
+팀 확인 칸: O(맞음) / X(틀림) / △(애매 — 반영하지 않고 회의에서 결정)
 
 - 동의어_검수용.xlsx: 동의어_검수용.csv(synonym_candidates.py 결과)를 칸 너비·O/X 드롭다운이 있는 엑셀로
 - 동의어_나머지_검수용.xlsx: 미반영 후보 중 자동 O(임베딩 0.96 이상)를 뺀 나머지 — 사람이 O/X 할 줄만
@@ -46,7 +47,7 @@ def write_sheet(ws, df, widths, ox_col=None, wrap_cols=()):
         ws.column_dimensions[get_column_letter(i)].width = w
     if ox_col:
         col = get_column_letter(list(df.columns).index(ox_col) + 1)
-        dv = DataValidation(type="list", formula1='"O,X"', allow_blank=True); ws.add_data_validation(dv)
+        dv = DataValidation(type="list", formula1='"O,X,△"', allow_blank=True); ws.add_data_validation(dv)
         dv.add(f"{col}2:{col}{ws.max_row}")
         for r in range(2, ws.max_row + 1):
             ws[f"{col}{r}"].fill = TEAM
@@ -128,7 +129,7 @@ def category_file(out_dir, res):
     n_need, n_inc, n_fix, n_llm = [(rv.배정방법 == k).sum() for k in ("검수 필요", "규칙(포함)", "규칙 수정", "LLM 판단")]
     guide = pd.DataFrame([
         ("이 파일은?", f"대/중분류(topic_categories.csv) 중 사람이 확인해야 하는 {len(rv)}줄. 규칙(일치)은 확실해서 제외."),
-        ("무엇을 하나", "지금 분류가 맞으면 '팀 확인'에 O, 틀리면 X + '맞는 분류'를 드롭다운에서 선택"),
+        ("무엇을 하나", "지금 분류가 맞으면 '팀 확인'에 O, 틀리면 X + '맞는 분류'를 드롭다운에서 선택, 애매하면 △ (반영하지 않고 회의에서 결정)"),
         ("판단 기준", "이 주제어가 들어간 기사가 주로 어떤 분야 이야기인가? ('예시 기사 제목' 참고)"),
         (f"검수 필요 ({n_need}줄)", "분야를 못 정한 말. 맞는 분류를 고르거나 '미분류로 둠' (미분류_예시기사.xlsx 참고)"),
         (f"규칙(포함) ({n_inc}줄)", "분류 키워드를 글자로 포함해 자동으로 붙은 것. 글자만 겹친 실수가 있을 수 있음"),

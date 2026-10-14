@@ -134,4 +134,6 @@ python backend/app/services/news_keywords/build/synonym_candidates.py
 python backend/app/services/news_keywords/build/verify.py --candidates
 ```
 
+검수 표시: **O** 맞음 / **X** 틀림 / **△** 애매 — △는 반영하지 않고 회의에서 결정.
+
 검수 결과 반영: 동의어 O → `build_synonyms.py`의 GROUPS에 추가 · 분류 X → 규칙이 틀린 것은 `category_rule_fixes.csv`, LLM 판단이 틀린 것은 `category_llm.csv` 수정 → 위 순서로 다시 실행 → `verify.py`
