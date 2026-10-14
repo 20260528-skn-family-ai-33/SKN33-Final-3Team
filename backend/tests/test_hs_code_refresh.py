@@ -22,7 +22,11 @@ KST = refresh.KST
 NEED = {"01", "0101", "010121", "0101211000"}  # xlsx로 만들 코드 (가짜)
 
 
-def fake_steps(file_date="20280101", loaded=frozenset(), missing=0, load_rc=0, calls=None):
+def loaded_as(codes, edition="20280101"):
+    return {c: refresh.hb.source_for(edition) for c in codes}
+
+
+def fake_steps(file_date="20280101", loaded=None, missing=0, load_rc=0, calls=None):
     calls = calls if calls is not None else []
 
     def download(run):
@@ -39,7 +43,7 @@ def fake_steps(file_date="20280101", loaded=frozenset(), missing=0, load_rc=0, c
         calls.append(("load", track))
         return load_rc
 
-    return {"download": download, "build": build, "load": load, "loaded": lambda ver: set(loaded),
+    return {"download": download, "build": build, "load": load, "loaded": lambda ver: dict(loaded or {}),
             "expected_of": lambda xlsx: set(NEED), "log_dir": LOG_DIR}
 
 
@@ -78,14 +82,14 @@ class RefreshFlowTest(unittest.TestCase):
         self.assertEqual(status, "DONE")
         # 적재는 갱신 실행 기록에 포함되므로 load는 track=False로 부름
         self.assertEqual(calls, ["download", ("build", "hs_names_20280101.xlsx", "HS2028"), ("load", False)])
-        self.assertEqual(self.batch_rows(),
-                         [("HS_CODE_REFRESH", "hs_code", "2028-01-01", "2032-12-31", "SUCCESS", 154, 17072, True)])
+        self.assertEqual(self.batch_rows(),  # 기간 = 기준일이 속한 해
+                         [("HS_CODE_REFRESH", "hs_code", "2028-01-01", "2028-12-31", "SUCCESS", 154, 17072, True)])
         with session_scope(self.engine) as s:  # 출처가 없으면 SOURCE 행으로 등록
             src = s.get(ServiceOption, "KCS_HS_NAMES")
             self.assertEqual((src.option_type, src.enabled), ("SOURCE", True))
 
     def test_every_run_is_recorded(self):
-        for kw in ({"file_date": "20260101"}, {"loaded": NEED}, {"missing": 3}):  # NOT_READY, ALREADY_LOADED, FAILED
+        for kw in ({"file_date": "20260101"}, {"loaded": loaded_as(NEED)}, {"missing": 3}):  # NOT_READY, ALREADY_LOADED, FAILED
             self.run_with((2028, 1, 1), **kw)
         self.assertEqual([(r[4], r[5], r[6]) for r in self.batch_rows()],
                          [("SUCCESS", 4, 0), ("SUCCESS", 4, 0), ("FAILED", 154, 17072)])
@@ -93,13 +97,25 @@ class RefreshFlowTest(unittest.TestCase):
     def test_old_edition_means_not_ready(self):
         status, calls = self.run_with((2028, 1, 1), file_date="20260101")  # 포털에 아직 HS2022 판만 있음
         self.assertEqual((status, calls), ("NOT_READY", ["download"]))
+        status, calls = self.run_with((2027, 1, 1), file_date="20260101")  # 같은 HS 판이라도 올해 판이 아니면 대기
+        self.assertEqual((status, calls), ("NOT_READY", ["download"]))
+        status, calls = self.run_with((2026, 12, 20), file_date="20270101")  # 내년 판이 미리 올라와도 적용일 전엔 대기
+        self.assertEqual((status, calls), ("NOT_READY", ["download"]))
+
+    def test_new_yearly_edition_is_loaded(self):
+        # 2027년 판이 올라오면: DB가 2026년 판으로 다 있어도 새 판으로 다시 적재 (새 10단위 추가·이름 갱신)
+        status, calls = self.run_with((2027, 1, 5), file_date="20270101", loaded=loaded_as(NEED, "20260101"))
+        self.assertEqual(status, "DONE")
+        self.assertIn(("build", "hs_names_20270101.xlsx", "HS2022"), calls)
+        status, calls = self.run_with((2027, 2, 1), file_date="20270101", loaded=loaded_as(NEED, "20270101"))
+        self.assertEqual((status, calls), ("ALREADY_LOADED", ["download"]))
 
     def test_already_loaded_skips_llm(self):
-        status, calls = self.run_with((2028, 3, 1), loaded=NEED)
+        status, calls = self.run_with((2028, 3, 1), loaded=loaded_as(NEED))
         self.assertEqual((status, calls), ("ALREADY_LOADED", ["download"]))
 
     def test_partial_load_is_rebuilt(self):
-        status, calls = self.run_with((2028, 3, 1), loaded={"01"})  # 1행만 있으면 완료로 보지 않음
+        status, calls = self.run_with((2028, 3, 1), loaded=loaded_as({"01"}))  # 1행만 있으면 완료로 보지 않음
         self.assertEqual(status, "DONE")
         self.assertIn(("load", False), calls)
 
@@ -124,14 +140,14 @@ class RefreshFlowTest(unittest.TestCase):
 
 
 class SchedulerTest(unittest.TestCase):
-    def test_trigger_every_five_years_from_2028(self):
+    def test_trigger_every_year(self):
         now, fires = datetime(2026, 10, 13, tzinfo=KST), []
         prev = None
         for _ in range(3):
             prev = sched.HS_REFRESH_TRIGGER.get_next_fire_time(prev, now)
             fires.append(prev.strftime("%Y-%m-%d %H:%M %z"))
             now = prev.replace(second=1)
-        self.assertEqual(fires, ["2028-01-01 00:15 +0900", "2033-01-01 00:15 +0900", "2038-01-01 00:15 +0900"])
+        self.assertEqual(fires, ["2027-01-01 00:15 +0900", "2028-01-01 00:15 +0900", "2029-01-01 00:15 +0900"])
 
     def test_retry_next_day_when_not_ready(self):
         class FakeScheduler:
@@ -160,11 +176,10 @@ class SchedulerTest(unittest.TestCase):
             refresh.run_refresh = original
             close_logs()
 
-    def test_catch_up_every_start_after_2028(self):
+    def test_check_runs_on_every_start(self):
         # 일부만 적재된 채 재시작해도 갱신 작업이 실행되어야 함 (완료 판단은 작업 안에서)
-        self.assertFalse(sched.needs_catch_up(datetime(2027, 6, 1, tzinfo=KST)))
-        self.assertTrue(sched.needs_catch_up(datetime(2028, 2, 1, tzinfo=KST)))
-        self.assertTrue(sched.needs_catch_up(datetime(2033, 7, 1, tzinfo=KST)))
+        jobs = {j.id for j in sched.build_scheduler().get_jobs()}
+        self.assertEqual(jobs, {"hs_code_refresh", sched.RETRY_JOB_ID})
 
 
 def tearDownModule():

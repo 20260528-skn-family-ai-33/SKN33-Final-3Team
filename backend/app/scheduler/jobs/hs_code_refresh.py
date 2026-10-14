@@ -1,21 +1,24 @@
-"""HS 판 갱신 자동화: 관세청 xlsx 다운로드 → HS 코드 CSV 생성(LLM 요약) → MySQL hs_code 적재.
+"""HS 코드 연간 갱신 자동화: 관세청 xlsx 다운로드 → HS 코드 CSV 생성(LLM 요약) → MySQL hs_code 적재.
 
 실행 (저장소 루트에서): python -m backend.app.scheduler.jobs.hs_code_refresh [--date YYYYMMDD]
-스케줄: backend/app/scheduler/main.py가 2028년부터 5년마다 1월 1일 00:15(KST)에 실행합니다.
+스케줄: backend/app/scheduler/main.py가 매년 1월 1일 00:15(KST)에 실행합니다.
+관세청 10단위(HSK)는 매년 개정되고, 6단위 HS 판(HS2022 → HS2028 …)은 몇 년마다 바뀝니다. 매년 실행에서 둘 다 처리합니다.
 
 1. 공공데이터포털 '관세청_HS부호 단위별 품목명'(15130660)의 최신 xlsx를 받아 reference/hs_names_YYYYMMDD.xlsx로 저장
-2. 파일 판 날짜의 HS 판이 실행일 기준 HS 판과 다르면(새 판이 아직 안 올라옴) NOT_READY로 끝냄 → 스케줄러가 다음 날 재시도
-3. xlsx로 만들 코드(2·4·6·10단위)가 DB에 그 판으로 모두 있으면 ALREADY_LOADED로 끝냄 (LLM 비용이 드는 재생성 방지)
-   일부만 있으면 계속 진행합니다 (요약 캐시가 있으면 API를 거의 부르지 않음)
+2. 파일 판 날짜가 올해가 아니면 NOT_READY로 끝냄 → 스케줄러가 다음 날 재시도
+   과거 연도(올해 판이 아직 안 올라옴)뿐 아니라 미래 연도(내년 판이 연말에 미리 올라옴, 적용일 전)도 반영하지 않음
+3. xlsx로 만들 코드(2·4·6·10단위)가 DB에 모두 있고 이 판(source_edition)으로 적재돼 있으면 ALREADY_LOADED로 끝냄
+   새 코드가 있거나 이전 판으로 적재돼 있으면 계속 진행합니다 (요약 캐시가 있으면 새 6단위만 API 요청)
+   새 판에서 빠진 이전 코드는 지우지 않습니다 (과거 수출입 데이터 연결용). upsert라 새 코드는 추가, 기존 코드는 이름·판 갱신
 4. hs_code_build로 CSV 생성 → 요약 누락이 없으면 hs_code_load로 적재
 결과 상태: DONE · NOT_READY · ALREADY_LOADED · FAILED. 진행과 오류는 hscode_outputs/logs/hs_code_refresh_<시각>.log에 남깁니다.
-실행할 때마다 batch_run에 한 건 기록합니다 (job HS_CODE_REFRESH, 대상 hs_code, 기간 = 기대 HS 판의 적용 기간).
+실행할 때마다 batch_run에 한 건 기록합니다 (job HS_CODE_REFRESH, 대상 hs_code, 기간 = 기준일이 속한 해 1/1~12/31).
 DONE·NOT_READY·ALREADY_LOADED는 SUCCESS(작업이 정상적으로 확인·처리됨), FAILED는 FAILED입니다.
 """
 import argparse
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -107,11 +110,12 @@ def loaded_count(hs_ver, engine=None):
 
 
 def loaded_codes(hs_ver, engine=None):
-    """DB에 그 판으로 들어 있는 hs_code 집합."""
+    """DB에 그 HS 판으로 들어 있는 {hs_code: source_edition}."""
     engine = engine or make_engine()
     try:
         with session_scope(engine) as s:
-            return set(s.scalars(select(HsCodeMst.hs_code).where(HsCodeMst.hs_ver == hs_ver)))
+            stmt = select(HsCodeMst.hs_code, HsCodeMst.source_edition).where(HsCodeMst.hs_ver == hs_ver)
+            return dict(s.execute(stmt).all())
     finally:
         engine.dispose()
 
@@ -130,29 +134,41 @@ def run_refresh(today=None, download=download_latest, build=hb.run, load=hs_code
     log_path = setup_log(log_dir)
     expected = hb.hs_ver_for(today.strftime("%Y%m%d"))
     log.info(f"HS 판 갱신 시작 | 기준일 {today} | 기대 판 {expected}")
-    with track_batch(SOURCE, JOB_NAME, "hs_code", *hb.hs_period(expected), engine=batch_engine, logger=log) as run:
-        status = _refresh(expected, run, log_path, download, build, load, loaded, expected_of)
+    year = (date(today.year, 1, 1), date(today.year, 12, 31))
+    with track_batch(SOURCE, JOB_NAME, "hs_code", *year, engine=batch_engine, logger=log) as run:
+        status = _refresh(today, expected, run, log_path, download, build, load, loaded, expected_of)
         if status == "FAILED":
             run.fail()
     return status
 
 
-def _refresh(expected, run, log_path, download, build, load, loaded, expected_of):
+def _refresh(today, expected, run, log_path, download, build, load, loaded, expected_of):
     try:
         xlsx = download(run=run)
-        file_ver = hb.hs_ver_for(hb.edition_date(xlsx))
-        if file_ver != expected:
-            log.warning(f"NOT_READY: 최신 파일 {xlsx.name}은 {file_ver} 판입니다. {expected} 판이 아직 올라오지 않았습니다. | 로그: {log_path}")
+        edition = hb.edition_date(xlsx)
+        file_ver = hb.hs_ver_for(edition)
+        if int(edition[:4]) > today.year:  # 내년 판이 연말에 미리 올라온 경우: 적용일(1월 1일) 전에는 반영하지 않음
+            log.warning(f"NOT_READY: 최신 파일 {xlsx.name}({file_ver})은 {edition[:4]}년 판으로 아직 적용 전입니다. "
+                        f"{edition[:4]}년 1월 1일 이후 실행에서 반영합니다. | 로그: {log_path}")
             return "NOT_READY"
+        if int(edition[:4]) < today.year or file_ver != expected:
+            log.warning(f"NOT_READY: 최신 파일 {xlsx.name}({file_ver})은 {today.year}년 판이 아닙니다. "
+                        f"{today.year}년 판({expected})이 아직 올라오지 않았습니다. | 로그: {log_path}")
+            return "NOT_READY"
+        source = hb.source_for(edition)
         need, have = expected_of(xlsx), loaded(expected)
-        if have and need <= have:
-            log.info(f"ALREADY_LOADED: DB에 {expected} 코드 {len(need):,}개가 모두 있습니다 (DB {len(have):,}개). "
+        added = sorted(need - set(have))
+        stale = sorted(c for c in need & set(have) if c not in hb.UN_STATS and have[c] != source)
+        kept = sorted(c for c in set(have) - need if len(c) == 10)
+        if not added and not stale:
+            log.info(f"ALREADY_LOADED: DB에 {expected} 코드 {len(need):,}개가 {edition}판으로 모두 있습니다. "
                      f"다시 만들려면 수동 실행하세요. | 로그: {log_path}")
             return "ALREADY_LOADED"
-        if have:
-            missing = sorted(need - have)
-            log.warning(f"DB에 {expected} 코드가 일부만 있습니다: {len(have):,}개 있음, {len(missing):,}개 없음 "
-                        f"(예: {', '.join(missing[:5])}). 전체를 다시 생성·적재합니다.")
+        log.info(f"{edition}판 반영: 새 코드 {len(added):,}개, 이전 판으로 적재된 코드 {len(stale):,}개 갱신"
+                 f"{' (새 코드 예: ' + ', '.join(added[:5]) + ')' if added else ''}")
+        if kept:
+            log.info(f"새 판에 없는 이전 10단위 코드 {len(kept):,}개는 과거 데이터 연결을 위해 그대로 둡니다 "
+                     f"(예: {', '.join(kept[:5])})")
         result = build(xlsx, expected, output_dir=hb.OUTPUT_DIR / expected)
         run.request_count += result["requests"]
         run.received_count = result["received"]

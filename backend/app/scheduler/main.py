@@ -3,11 +3,11 @@
 실행 (저장소 루트에서): python -m backend.app.scheduler.main
 
 등록된 잡
-- hs_code_refresh: 2028년부터 5년마다 1월 1일 00:15(KST)에 HS 판 갱신(다운로드 → CSV → 적재).
-  새 판 파일이 아직 안 올라왔거나(NOT_READY) 실패하면(FAILED) 다음 날 00:15에 다시 시도합니다 (최대 RETRY_DAYS일).
-  스케줄러가 꺼져 있어 놓쳤거나 일부만 적재된 경우를 위해, 2028년 이후에는 켤 때마다 바로 한 번 실행합니다.
-  완료 여부는 갱신 작업 안에서 xlsx 코드와 DB 코드를 비교해 판단하므로(이미 모두 있으면 ALREADY_LOADED, LLM 호출 없음)
-  여기서 따로 판단하지 않습니다.
+- hs_code_refresh: 매년 1월 1일 00:15(KST)에 HS 코드 연간 갱신(다운로드 → CSV → 적재).
+  관세청 10단위는 매년, 6단위 HS 판은 몇 년마다(HS2028 …) 바뀌며 둘 다 이 실행에서 처리합니다.
+  올해 판 파일이 아직 안 올라왔거나(NOT_READY) 실패하면(FAILED) 다음 날 00:15에 다시 시도합니다 (최대 RETRY_DAYS일).
+  스케줄러가 꺼져 있어 놓쳤거나 일부만 적재된 경우를 위해 켤 때마다 바로 한 번 실행합니다.
+  완료 여부는 갱신 작업 안에서 판단하므로(이미 올해 판으로 모두 있으면 ALREADY_LOADED, LLM 호출 없음) 여기서 따로 보지 않습니다.
 """
 from datetime import datetime, timedelta
 
@@ -17,7 +17,7 @@ from apscheduler.triggers.cron import CronTrigger
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
 
 KST = refresh.KST
-HS_REFRESH_TRIGGER = CronTrigger(year="2028-2099/5", month=1, day=1, hour=0, minute=15, timezone=KST)
+HS_REFRESH_TRIGGER = CronTrigger(month=1, day=1, hour=0, minute=15, timezone=KST)  # 매년
 RETRY_DAYS = 90
 RETRY_JOB_ID = "hs_code_refresh_retry"
 
@@ -34,19 +34,14 @@ def hs_refresh_job(scheduler, attempt=1):
     return status
 
 
-def needs_catch_up(now=None):
-    """2028년 이후면 켤 때마다 True. 일부만 적재된 경우까지 놓치지 않도록 완료 판단은 갱신 작업(_refresh)에 맡깁니다."""
-    return (now or datetime.now(KST)).year >= 2028
-
-
 def build_scheduler():
     scheduler = BlockingScheduler(timezone=KST)
     # misfire_grace_time: 00:15에 잠깐 멈춰 있어도 6시간 안에 켜지면 실행
     scheduler.add_job(hs_refresh_job, HS_REFRESH_TRIGGER, args=[scheduler], id="hs_code_refresh",
                       coalesce=True, misfire_grace_time=6 * 3600, replace_existing=True)
-    if needs_catch_up():
-        scheduler.add_job(hs_refresh_job, "date", run_date=datetime.now(KST) + timedelta(seconds=10),
-                          args=[scheduler], id=RETRY_JOB_ID, replace_existing=True)
+    # 켤 때마다 점검 실행: 놓친 연간 갱신·일부만 적재된 상태를 채움 (이미 완료면 포털 조회 후 바로 끝남)
+    scheduler.add_job(hs_refresh_job, "date", run_date=datetime.now(KST) + timedelta(seconds=10),
+                      args=[scheduler], id=RETRY_JOB_ID, replace_existing=True)
     return scheduler
 
 
