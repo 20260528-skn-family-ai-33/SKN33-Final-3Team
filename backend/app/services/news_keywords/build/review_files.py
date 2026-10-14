@@ -2,7 +2,7 @@
 팀 확인 칸: O(맞음) / X(틀림) / △(애매 — 반영하지 않고 회의에서 결정)
 
 - 동의어_검수용.xlsx: 동의어_검수용.csv(synonym_candidates.py 결과)를 칸 너비·O/X 드롭다운이 있는 엑셀로
-- 동의어_나머지_검수용.xlsx: 미반영 후보 전체에서 랜덤 100개를 뺀 나머지 (자동 O 줄도 포함, 하나씩 확인)
+- 동의어_미반영_검수용.xlsx: 미반영 후보 303쌍 전체 (자동 O 줄도 포함, 하나씩 O/X/△)
 - 동의어_랜덤100_검수용.xlsx: 미반영 후보에서 무작위 100개 (시드 고정 → 다시 뽑아도 같은 100개)
   · 회의 결정: 100개를 확인해 문제가 없으면 "임베딩 기준 이상 → 자동 동의어" 규칙으로 처리
 - 대중분류_검수용.xlsx: topic_categories.csv 중 사람이 볼 줄(검수 필요 · 규칙(포함) · 규칙 수정 · LLM 판단) + 왜 붙었나 + 예시 기사 제목
@@ -72,8 +72,8 @@ def synonym_files(out_dir):
     wb = Workbook(); write_sheet(wb.active, rv, SYN_WIDTHS, "팀 확인(O/X)"); wb.active.title = "동의어 검수"
     wb.save(out_dir / "동의어_검수용.xlsx")
     rest = remaining(rv)
-    wb = Workbook(); write_sheet(wb.active, rest, SYN_WIDTHS, "팀 확인(O/X)"); wb.active.title = "나머지 검수"
-    wb.save(out_dir / "동의어_나머지_검수용.xlsx")
+    wb = Workbook(); write_sheet(wb.active, rest, SYN_WIDTHS, "팀 확인(O/X)"); wb.active.title = "미반영 검수"
+    wb.save(out_dir / "동의어_미반영_검수용.xlsx")
     s100 = random100(rv)
     wb = Workbook(); write_sheet(wb.active, s100, SYN_WIDTHS, "팀 확인(O/X)"); wb.active.title = "랜덤100"
     wb.save(out_dir / "동의어_랜덤100_검수용.xlsx")
@@ -81,9 +81,8 @@ def synonym_files(out_dir):
 
 
 def remaining(rv):
-    """미반영 후보 중 랜덤 100개(따로 검수)를 뺀 나머지."""
-    pend = rv[rv["현재 상태"].str.startswith("미반영")]
-    return pend.drop(random100(rv).index)
+    """미반영 후보 전체."""
+    return rv[rv["현재 상태"].str.startswith("미반영")]
 
 
 def random100(rv):
