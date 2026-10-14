@@ -13,7 +13,7 @@ spec.loader.exec_module(hb)
 
 NAMES = {"01": "제1류 살아 있는 동물", "0101": "살아 있는 말", "01012": "말", "010121": "번식용",
          "0101211000": "농가 사육용", "0101290000": "기타", "0101300000": "당나귀",
-         "8605": "철도용 객차", "8605001000": "객차"} | hb.KR_SPECIAL
+         "8605": "철도용 객차", "8605001000": "객차"} | hb.KR_SPECIAL | hb.UN_STATS
 
 
 class HsCodeBuildTest(unittest.TestCase):
@@ -25,8 +25,9 @@ class HsCodeBuildTest(unittest.TestCase):
 
     def test_codes_include_all_levels_and_specials(self):
         levels = hb.codes_by_level(NAMES)
-        self.assertEqual(levels[4], ["0101", "2424", "8605"])
-        self.assertEqual(levels[6], ["010121", "010129", "010130", "242400", "860500"])
+        self.assertEqual(levels[2], ["01", "99"])
+        self.assertEqual(levels[4], ["0101", "2424", "8605", "9999"])
+        self.assertEqual(levels[6], ["010121", "010129", "010130", "242400", "860500", "999999"])
         self.assertNotIn("01012", sum(levels.values(), []))  # 5단위는 행으로 넣지 않음
 
     def test_build_name_ko(self):
@@ -66,6 +67,13 @@ class HsCodeBuildTest(unittest.TestCase):
             self.assertEqual(hb.hs_ver_for(date), ver, date)
         self.assertEqual(hb.edition_date("관세청_HS부호 단위별 품목명_20280101.xlsx"), "20280101")
         self.assertIsNone(hb.edition_date("hs.xlsx"))
+
+    def test_un_statistical_codes_fixed(self):
+        rows = {r["hs_code"]: r for r in hb.build(NAMES, {"999999": hb.UN_STATS_NAME}, "관세청", "HS2022")}
+        self.assertEqual(rows["999999"]["name_ko"], "품목 미지정(UN 통계용)|Commodities not specified according to kind")
+        self.assertEqual((rows["99"]["name_ko"], rows["9999"]["name_ko"]), (hb.UN_STATS_NAME, hb.UN_STATS_NAME))
+        self.assertEqual({rows[c]["source_edition"] for c in ("99", "9999", "999999")}, {hb.UN_STATS_SOURCE})
+        self.assertEqual(rows["0101"]["source_edition"], "관세청")
 
 
 if __name__ == "__main__":

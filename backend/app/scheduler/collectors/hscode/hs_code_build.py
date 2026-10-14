@@ -7,6 +7,8 @@
   요약은 4·5·6단위 이름을 모두 LLM에 넣어 만들므로 '기타' 같은 6단위명도 뜻이 통하게 됩니다.
   5단어를 넘는 요약은 '최대한 짧게'로 한 번 더 요청하고, 그래도 넘으면 그 결과를 그대로 저장합니다.
 - 관세청 특수코드 2424·242400(이사화물)은 4단위 시트에 없어 직접 추가합니다.
+- UN 통계용 코드 99·9999·999999(품목 미지정)는 관세율표에 없어 고정값으로 추가합니다.
+  한국어 공식 명칭이 없어 이름은 팀 번역, 6단위 원문은 UN 영문 원문이고 source_edition에 출처를 따로 적습니다.
 - reference/hs6_summary_overrides_<hs_ver>.csv의 요약은 LLM 요약보다 우선합니다(요약이 겹치는 코드 등 수동 수정분).
 - hs_ver를 주지 않으면 xlsx 파일명의 판 날짜(YYYYMMDD)로 정합니다(hs_ver_for). 요약 캐시·수동 요약은 hs_ver별로 따로 둡니다.
 - 6단위 원본은 DB에서 original_name_ko(TEXT)로 나뉘어 들어가므로 줄이지 않고 관세청 원문 그대로 둡니다.
@@ -34,6 +36,10 @@ ENV_KEY = "openai_api_key"
 FIELDS = ["hs_code", "depth", "name_ko", "source_edition", "hs_ver"]
 SEP = "|"  # 관세청 품목명·요약에 쓰이지 않는 기호 ('::'는 '[예: ...]'의 콜론과 헷갈려 바꿈)
 KR_SPECIAL = {"2424": "이사화물", "242400": "이사화물"}
+# UN Comtrade 통계용 코드 (WCO HS·관세율표에 없음). 6단위 값은 원문 자리에 들어갈 UN 영문 원문입니다.
+UN_STATS_NAME = "품목 미지정(UN 통계용)"
+UN_STATS = {"99": UN_STATS_NAME, "9999": UN_STATS_NAME, "999999": "Commodities not specified according to kind"}
+UN_STATS_SOURCE = "UN Comtrade 통계용 코드 (한국어 명칭은 팀 번역)"
 NAME_MAX = 500  # DB name_ko VARCHAR(500). 6단위는 요약 부분만 해당
 OUTPUT_DIR = BASE / "hscode_outputs"
 DEFAULT_MODEL = "gpt-4.1-mini"
@@ -53,6 +59,11 @@ def edition_date(path):
     """관세청 xlsx 파일명의 판 날짜(YYYYMMDD). 예: hs_names_20260101.xlsx → '20260101'"""
     found = re.search(r"(\d{8})", Path(path).stem)
     return found.group(1) if found else None
+
+
+def source_for(date):
+    """source_edition 값. 매년 판 날짜가 들어가므로 DB에서 어느 판으로 적재됐는지 구분하는 데도 씁니다."""
+    return f"관세청 HS부호 단위별품목명 {date}"
 
 
 def hs_ver_for(date):
@@ -107,7 +118,7 @@ def load_names(xlsx):
     for df in pd.read_excel(xlsx, sheet_name=None, dtype=str).values():
         for code, name in df.iloc[:, :2].dropna().itertuples(index=False):
             names[code.strip()] = name.strip()
-    return names | KR_SPECIAL
+    return names | KR_SPECIAL | UN_STATS
 
 
 def six_name(code, names):
@@ -124,7 +135,7 @@ def codes_by_level(names):
     ten = sorted(c for c in names if len(c) == 10)
     return {2: sorted(c for c in names if len(c) == 2),
             4: sorted(c for c in names if len(c) == 4),
-            6: sorted({c[:6] for c in ten} | {c for c in KR_SPECIAL if len(c) == 6}),
+            6: sorted({c[:6] for c in ten} | {c for c in (*KR_SPECIAL, *UN_STATS) if len(c) == 6}),
             10: ten}
 
 
@@ -178,7 +189,8 @@ def build(names, summaries, source, hs_ver):
                 name = summaries.get(code, "") + SEP + six_name(code, names)
             else:
                 name = names[code]
-            rows.append({"hs_code": code, "depth": level, "name_ko": name, "source_edition": source, "hs_ver": hs_ver})
+            rows.append({"hs_code": code, "depth": level, "name_ko": name, "hs_ver": hs_ver,
+                         "source_edition": UN_STATS_SOURCE if code in UN_STATS else source})
     return rows
 
 
@@ -193,13 +205,13 @@ def run(customs_xlsx=None, hs_ver=None, model=DEFAULT_MODEL, env=ENV_PATH, outpu
         raise ValueError(f"{env}에 OPENAI_API_KEY가 없습니다.")
     date = edition_date(customs_xlsx)
     hs_ver = hs_ver or (hs_ver_for(date) if date else "HS2022")
-    source = f"관세청 HS부호 단위별품목명 {date or customs_xlsx.stem}"
+    source = source_for(date or customs_xlsx.stem)
 
     log_path = setup_log(output_dir / "logs")
     started = datetime.now()
     log.info(f"HS 코드 마스터 생성 시작 | {source} | {hs_ver} | 모델 {model}")
     names = load_names(customs_xlsx)
-    items = {c: " > ".join(six_parts(c, names)) for c in codes_by_level(names)[6]}
+    items = {c: " > ".join(six_parts(c, names)) for c in codes_by_level(names)[6] if c not in UN_STATS}  # 고정값은 요약 안 함
     log.info(f"관세청 xlsx 로드 완료 | 6단위 {len(items):,}개")
 
     stats = {"requests": 0}
@@ -211,6 +223,7 @@ def run(customs_xlsx=None, hs_ver=None, model=DEFAULT_MODEL, env=ENV_PATH, outpu
     summaries |= retried  # 재요약도 5단어를 넘으면 그 결과를 그대로 씁니다
     overrides = load_overrides(overrides_path(hs_ver))
     summaries |= {c: v for c, v in overrides.items() if c in items}
+    summaries |= {c: UN_STATS_NAME for c in UN_STATS if len(c) == 6}
     log.info(f"수동 요약 {len(overrides)}개 적용 ({overrides_path(hs_ver).name})")
     rows = build(names, summaries, source, hs_ver)
 
@@ -238,7 +251,7 @@ def run(customs_xlsx=None, hs_ver=None, model=DEFAULT_MODEL, env=ENV_PATH, outpu
     log.info(f"결과: {out_path} | 소요 {str(datetime.now() - started).split('.')[0]} | 로그: {log_path}")
     # received: xlsx에서 읽은 코드 수 (직접 추가한 관세청 특수코드 제외), requests: OpenAI 호출 수
     return {"csv": out_path, "hs_ver": hs_ver, "rows": len(rows), "missing": len(missing),
-            "received": len(set(names) - set(KR_SPECIAL)), "requests": stats["requests"]}
+            "received": len(set(names) - set(KR_SPECIAL) - set(UN_STATS)), "requests": stats["requests"]}
 
 
 def main():
