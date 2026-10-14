@@ -8,7 +8,8 @@ HS 판(HS2022 → HS2028 …)이 바뀌면 파일 다운로드부터 적재까�
 | ① 다운로드 | `scheduler/jobs/hs_code_refresh.py` | 공공데이터포털에서 최신 xlsx를 받아 `reference/hs_names_YYYYMMDD.xlsx`로 저장 |
 | ② CSV 생성 | `scheduler/collectors/hscode/hs_code_build.py` | 6단위 품목명을 OpenAI로 요약해 `hs_code_mst.csv` 생성 |
 | ③ 적재 | `scheduler/jobs/hs_code_load.py` | CSV를 검증한 뒤 `hs_code` 테이블에 upsert |
-| 자동 실행 | `scheduler/main.py` | 2028년부터 5년마다 1월 1일 00:15(KST)에 ①→②→③ 실행 |
+| UN 대조 | `scheduler/collectors/hscode/hs_code_un_check.py` | UN Comtrade HS 목록을 받아 CSV 2·4·6단위 코드와 대조 |
+| 자동 실행 | `scheduler/main.py` | 매년 1월 1일 00:15(KST)에 ①→②→③ 실행 (10단위 연간 개정 + HS 판 개정) |
 
 원본 데이터: [관세청_HS부호 단위별 품목명 (공공데이터포털)](https://www.data.go.kr/data/15130660/fileData.do)
 
@@ -40,14 +41,16 @@ MYSQL_DATABASE=...
 
 | 단위 | 행 수(20260101판) | name_ko |
 |---|---|---|
-| 2단위 | 97 | 관세청 공식 품목명 |
-| 4단위 | 1,229 | 관세청 공식 품목명 (`2424` 이사화물 포함) |
-| 6단위 | 5,613 | `요약\|6단위 원문` |
+| 2단위 | 98 | 관세청 공식 품목명 (UN 통계용 `99` 포함) |
+| 4단위 | 1,230 | 관세청 공식 품목명 (`2424` 이사화물, UN 통계용 `9999` 포함) |
+| 6단위 | 5,614 | `요약\|6단위 원문` (`242400`, UN 통계용 `999999` 포함) |
 | 10단위 | 11,327 | 관세청 공식 품목명 |
 
 - 6단위 목록은 xlsx 6단위 시트가 아니라 **10단위 코드 앞 6자리**로 만듭니다. 6단위 시트에는 6단위가 일부만 있기 때문입니다.
 - 6단위 원문은 6단위 시트 → 10단위 `XXXXXX0000` 행 → (`XXXX00`이면) 4단위 이름 순으로 찾습니다.
 - 요약은 4·5·6단위 이름을 함께 LLM에 넣어 3~5단어로 만듭니다. 5단어를 넘으면 한 번 더 요청하고, 그래도 넘으면 그대로 둡니다.
+- UN 통계용 코드 `99`·`9999`·`999999`(품목 미지정)는 관세율표에 없어 고정값으로 넣습니다. 이름은 "품목 미지정(UN 통계용)"(팀 번역),
+  6단위 원문은 UN 영문 원문, `source_edition`은 "UN Comtrade 통계용 코드 (한국어 명칭은 팀 번역)"입니다.
 - `reference/hs6_summary_overrides_<hs_ver>.csv`의 수동 요약이 LLM 요약보다 우선합니다. 요약이 겹치거나 틀린 코드는 이 파일에 `hs_code,summary`로 추가합니다.
 - `hs_ver`는 xlsx 파일명의 판 날짜로 정합니다: 2017~2021 → HS2017, 2022~2027 → HS2022, 2028년부터 5년 단위(HS2028, HS2033 …).
 - 적재할 때 6단위 `name_ko`는 `|`로 나눠 `name_ko`(요약)와 `original_name_ko`(원문)에 들어갑니다. 다른 단위의 `original_name_ko`는 NULL입니다.
@@ -71,6 +74,35 @@ python -m backend.app.scheduler.jobs.hs_code_refresh
   처음부터 다시 요약하려면 이 캐시 파일을 지웁니다.
 - 6단위 5,600여 개를 처음 요약할 때는 OpenAI API를 140번 정도 호출합니다(약 20~30분).
 
+## UN 코드 대조
+
+6단위까지는 국제 공통이므로, 새 판 CSV를 만들면 UN Comtrade 목록과 코드를 대조합니다.
+
+```powershell
+# 수동으로 만든 CSV (hscode_outputs/hs_code_mst.csv)
+python backend/app/scheduler/collectors/hscode/hs_code_un_check.py
+
+# 자동 갱신으로 만든 CSV는 판별 폴더에 있으므로 --csv로 지정 (예: HS2028)
+python backend/app/scheduler/collectors/hscode/hs_code_un_check.py --csv backend/app/scheduler/collectors/hscode/hscode_outputs/HS2028/hs_code_mst.csv
+```
+
+- 기본은 `hscode_outputs/hs_code_mst.csv`입니다. 자동 갱신 결과(`hscode_outputs/<HS판>/hs_code_mst.csv`)를 검사할 때는 꼭 `--csv`로 지정하세요.
+- CSV의 `hs_ver`로 UN 분류를 정합니다 (HS2017 → `H5`, HS2022 → `H6`, HS2028 → `H7` 예상). `--un-class`로 직접 지정할 수 있습니다.
+- UN 목록은 `hscode_outputs/un/<분류>.json`에 저장하고, 있으면 다시 받지 않습니다 (`--refresh`로 다시 받기).
+- 차이는 이유가 확인된 **알려진 예외**와 **확인 필요**로 나눠 로그와 `hscode_outputs/un/un_check_<판>_<분류>.csv`에 남깁니다.
+- 종료 코드: 0 확인 필요 없음, 1 확인 필요 있음, 2 대조 불가 — UN에 그 판 목록이 아직 없음(2026-10 기준 `H7` 미게시),
+  다운로드 실패, 받은 UN 목록 형식 오류(HTML 오류 화면 등, 이때 캐시는 교체하지 않음), CSV 파일 없음·판 혼재
+
+HS2022(20260101판) 대조 결과: UN 2단위 97, 4단위 1,229, 6단위 5,613개가 모두 CSV에 있고, CSV에만 있는 3개는 알려진 예외
+
+| 단위 | CSV에만 | UN에만 |
+|---|---|---|
+| 2단위 | `77` 관세청 표의 유보 류 | 없음 |
+| 4단위 | `2424` 관세청 특수코드 이사화물 | 없음 |
+| 6단위 | `242400` 관세청 특수코드 이사화물 | 없음 |
+
+UN 통계용 `99`·`9999`·`999999`는 고정값으로 CSV에 넣으므로 UN에만 있는 코드가 없습니다.
+
 ## 적재 동작
 
 - `(hs_code, hs_ver)`가 같으면 새 값으로 갱신(upsert)합니다. 같은 키가 여러 번 들어오면 마지막 입력이 남습니다.
@@ -84,22 +116,26 @@ python -m backend.app.scheduler.main
 ```
 
 계속 켜 두는 프로세스입니다. 켜면 등록된 잡과 다음 실행 시각이 출력됩니다.
+관세청 10단위(HSK)는 매년 1월 1일 개정되고, 6단위 HS 판은 몇 년마다(HS2028 …) 바뀝니다. 매년 실행에서 둘 다 처리합니다.
 
 ```
-등록: hs_code_refresh | 다음 실행 2028-01-01 00:15:00+09:00
+등록: hs_code_refresh | 다음 실행 2027-01-01 00:15:00+09:00
+등록: hs_code_refresh_retry | 다음 실행 (켠 직후 점검 1회)
 ```
 
 실행 결과는 상태로 남습니다.
 
 | 상태 | 뜻 | 다음 동작 |
 |---|---|---|
-| `DONE` | 새 판 다운로드·CSV 생성·적재 완료 | 다음 주기(5년 뒤)까지 대기 |
-| `NOT_READY` | 포털 최신 파일이 아직 이전 판 (예: 2028-01-01에 20260101판만 있음) | 다음 날 00:15에 재시도 |
-| `ALREADY_LOADED` | xlsx로 만들 코드가 DB에 그 판으로 모두 있음 (LLM 비용이 드는 재생성 방지). 일부만 있으면 다시 생성·적재 | 대기 |
+| `DONE` | 올해 판 다운로드·CSV 생성·적재 완료 (새 10단위 추가, 기존 코드 이름·판 갱신) | 내년 1월 1일까지 대기 |
+| `NOT_READY` | 포털 최신 파일이 올해 판이 아님: 아직 작년 판(예: 2027-01-01에 20260101판만 있음)이거나, 내년 판이 연말에 미리 올라와 적용일 전(예: 2026-12-20에 20270101판) | 다음 날 00:15에 재시도 |
+| `ALREADY_LOADED` | xlsx로 만들 코드가 DB에 모두 있고 올해 판(`source_edition`)으로 적재돼 있음 (LLM 비용이 드는 재생성 방지). 새 코드가 있거나 이전 판으로 적재돼 있으면 다시 생성·적재 | 대기 |
 | `FAILED` | 다운로드·요약·적재 중 오류 | 다음 날 00:15에 재시도 |
 
 - 재시도는 최대 90일입니다. 새 판 파일은 1월 1일 당일보다 늦게 올라오는 경우가 많아서 매일 다시 확인합니다.
-- 1월 1일 00:15에 스케줄러가 꺼져 있었어도 6시간 안에 켜지면 실행합니다. 또 2028년 이후에는 켤 때마다 한 번 실행해서,
+- 새 판에서 빠진 이전 10단위 코드는 지우지 않습니다 (과거 수출입 데이터 연결용). 빠진 개수는 로그에 남습니다.
+- 새 6단위가 생긴 경우에만 OpenAI 요약을 요청합니다. 기존 6단위는 요약 캐시를 씁니다.
+- 1월 1일 00:15에 스케줄러가 꺼져 있었어도 6시간 안에 켜지면 실행합니다. 또 켤 때마다(연도 제한 없음) 한 번 실행해서,
   놓쳤거나 일부만 적재된 판을 채웁니다. 이미 모두 적재돼 있으면 `ALREADY_LOADED`로 바로 끝나고(LLM 호출 없음) `batch_run`에 SUCCESS 한 건이 남습니다.
 - 재시도 예약은 메모리에만 있어서, 재시도 중에 스케줄러를 껐다 켜면 위의 "켤 때마다 실행"으로 이어집니다.
 
@@ -111,7 +147,7 @@ python -m backend.app.scheduler.main
 |---|---|---|
 | `source_code` | `KCS_HS_NAMES` | `KCS_HS_NAMES` |
 | `target_table` | `hs_code` | `hs_code` |
-| 기간 | 기대 HS 판의 적용 기간 (예: HS2028 → 2028-01-01~2032-12-31) | CSV `hs_ver`의 적용 기간 (HS2022 → 2022-01-01~2027-12-31) |
+| 기간 | 기준일이 속한 해 (예: 2027-01-01~2027-12-31) | CSV `hs_ver`의 적용 기간 (HS2022 → 2022-01-01~2027-12-31) |
 | `status` | `DONE`·`NOT_READY`·`ALREADY_LOADED` → SUCCESS, `FAILED` → FAILED | 성공 SUCCESS, 실패 FAILED |
 | `request_count` | 포털 요청 수 + OpenAI 호출 수 (재시도 포함) | 0 |
 | `received_count` | xlsx에서 읽은 코드 수 (확인만 하고 끝난 실행은 0) | CSV 행 수 |
@@ -146,7 +182,8 @@ python -m unittest discover backend/tests
 |---|---|
 | `test_hs_code_build.py` | 6단위 이름 찾는 순서, 요약\|원문 형식, 수동 요약 파일, HS 판 결정 |
 | `test_db_crud.py` | 공통 CRUD, 같은 키 마지막 입력 보존, 적재 검증·롤백, 실행 로그, `batch_run` 기록 |
-| `test_hs_code_refresh.py` | 자동 갱신 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED), 일부만 적재된 판 재적재, 5년 주기·재시도·재시작 시 실행 |
+| `test_hs_code_un_check.py` | UN 대조의 알려진 예외·확인 필요 구분, 보고서, 종료 코드 |
+| `test_hs_code_refresh.py` | 자동 갱신 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED), 연간 새 판 재적재, 일부만 적재된 판 재적재, 매년 실행·재시도·재시작 시 실행 |
 
 ## 로그
 
@@ -164,7 +201,7 @@ python -m unittest discover backend/tests
 ## 주의
 
 - **HS2033 이후 주기는 가정값입니다.** HS 판은 HS2017 → HS2022(5년) → HS2028(6년)처럼 간격이 일정하지 않았습니다.
-  세계관세기구(WCO)가 다른 연도로 발표하면 `hs_code_build.py`의 `hs_ver_for()`와 `scheduler/main.py`의 `HS_REFRESH_TRIGGER`를 고칩니다.
+  세계관세기구(WCO)가 다른 연도로 발표하면 `hs_code_build.py`의 `hs_ver_for()`·`hs_period()`를 고칩니다 (스케줄은 매년이라 그대로).
 - 다운로드는 포털 화면의 다운로드 버튼과 같은 요청을 보냅니다. 포털 화면 구조가 바뀌면 `FAILED`와 함께 원인이 로그에 남습니다.
   포털이 자동입력방지(캡차)를 요구하면 우회하지 않고 멈춥니다. 이때는 포털에서 직접 받아 `reference/hs_names_YYYYMMDD.xlsx`로 넣고 `hs_code_refresh`를 수동 실행합니다.
 - 관세청 원본에도 오류가 있습니다. 예: 4단위 `7804`의 품목명이 6단위 `780411`과 같게 들어가 있습니다. 공식 원문을 그대로 쓰므로 보정하지 않았습니다.

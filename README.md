@@ -25,9 +25,9 @@ SKN33-Final-3Team/
 │   │   │   │   ├── customs/      관세청 수출입실적 API (CUSTOMS_COLLECT_USAGE.md)
 │   │   │   │   ├── news/         KOTRA 해외시장뉴스 (NEWS_COLLECT_USAGE.md)
 │   │   │   │   ├── shortnews/    KOTRA 단신속보 (SHORTNEWS_COLLECT_USAGE.md)
-│   │   │   │   └── hscode/       HS 코드 마스터 CSV 생성 (HSCODE_USAGE.md)
+│   │   │   │   └── hscode/       HS 코드 마스터 CSV 생성·UN 코드 대조 (HSCODE_USAGE.md)
 │   │   │   └── jobs/             수집 → 검증 → 적재 → 알림 순서 실행
-│   │   │                            hs_code_load.py(적재), hs_code_refresh.py(HS 판 자동 갱신)
+│   │   │                            hs_code_load.py(적재), hs_code_refresh.py(연간 자동 갱신)
 │   │   ├── db/                   ④ MySQL 연결(session.py), 공통 CRUD(crud.py), 실행 기록(batch_log.py → batch_run)
 │   │   ├── models/               SQLAlchemy 테이블 정의 (hs_code, service_option, batch_run …)
 │   │   ├── schemas/              API 요청·응답 형식 (Pydantic)
