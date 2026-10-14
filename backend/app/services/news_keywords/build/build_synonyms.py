@@ -4,8 +4,12 @@
 - 아래 GROUPS의 묶음 = 같은 뜻으로 확정한 표기들. 근거:
   · 괄호 표기 — 원본 키워드에 "전기차(EV)"처럼 괄호로 함께 적힌 쌍 (기자가 같은 뜻이라고 적은 것)
   · 표기 유사 — 기호·띄어쓰기·대소문자·한글/영문 표기만 다른 것 (K-뷰티 · K뷰티 · K-BEAUTY)
-  · 같은 뜻 — 글자는 다르지만 뜻이 같다고 판단한 것 (판단 주체: Claude, 팀 검수 대상)
+  · 같은 뜻 — 글자는 다르지만 뜻이 같다고 판단한 것 (LLM 판단, 팀 검수 대상 — CLASSIFICATION_RULES.md)
 - 대표어 = 묶음 안에서 기사 수가 가장 많은 표기 (동의어 적용 전 주제어 기준)
+- 판정 칸 (규칙으로 확인되는지 코드가 직접 검사):
+  · 규칙: 괄호 — 원본 키워드에 "A(B)"로 실제로 함께 적힌 쌍
+  · 규칙: 표기 — 기호·띄어쓰기·대소문자를 지우면 같은 글자 (K뷰티 = K-뷰티, CHAT GPT = 챗GPT)
+  · LLM 판단 — 위 규칙으로 확인되지 않아 뜻으로 묶은 것 (번역어·약어·같은 뜻 다른 말: K-BEAUTY = K-뷰티, 인공지능 = AI)
 - 데이터에 실제로 있는 표기만 남기고, 두 개 미만이면 묶음을 건너뜀
 - 임베딩·동시 등장 후보는 여기 넣지 않음 → synonym_candidates.py로 뽑아 팀 O/X 후 GROUPS에 추가
 
@@ -14,6 +18,7 @@
 import argparse
 import csv
 import importlib.util
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -83,13 +88,32 @@ GROUPS = [
 
 
 def topic_counts(raw_csv=RAW):
-    """동의어를 적용하기 전 주제어별 기사 수 (정제·지역 분리·예외까지 적용)."""
+    """동의어를 적용하기 전 주제어별 기사 수 (정제·지역 분리·예외까지 적용)와, 원본에 "A(B)"로 함께 적힌 쌍."""
     df = kc.read_input(raw_csv)
     geo, keep = kc.load_geo(), kc.load_exceptions()
-    docs = Counter()
+    docs, paren = Counter(), set()
     for k, n in zip(df["kwrd"], df["natn"]):
         docs.update(set(kc.process_article(k, n, geo, keep)["kw_topic"]))
+        for a, b in re.findall(r"([^,()]+)\(([^()]+)\)", k or ""):
+            a, b = kc.normalize(a.strip().lstrip("#")), kc.normalize(b.strip())
+            if a and b:
+                paren.add(frozenset((a, b)))
+    docs.paren = paren
     return docs
+
+
+def skeleton(word):
+    """기호·띄어쓰기·대소문자를 지운 글자 골격 (케이 → K, 챗 → CHAT, 지피티 → GPT 표기 차이 포함)."""
+    w = kc.normalize(word).upper().replace("케이", "K").replace("챗", "CHAT").replace("지피티", "GPT")
+    return re.sub(r"[\s\-·_./&]", "", w)
+
+
+def check(form, rep, paren):
+    if frozenset((form, rep)) in paren:
+        return "규칙: 괄호"
+    if skeleton(form) == skeleton(rep):
+        return "규칙: 표기"
+    return "LLM 판단"
 
 
 def build(docs):
@@ -100,8 +124,8 @@ def build(docs):
         if len(present) < 2:
             skipped.append(forms[0]); continue
         rep = max(present, key=lambda f: docs[f])
-        rows += [{"표기": f, "대표어": rep, "근거": basis, "표기_기사수": docs[f], "대표어_기사수": docs[rep]}
-                 for f in present if f != rep]
+        rows += [{"표기": f, "대표어": rep, "근거": basis, "판정": check(f, rep, getattr(docs, "paren", set())),
+                  "표기_기사수": docs[f], "대표어_기사수": docs[rep]} for f in present if f != rep]
     return pd.DataFrame(rows), skipped
 
 
@@ -113,6 +137,7 @@ def main():
     df, skipped = build(topic_counts(args.input))
     df.to_csv(args.output, index=False, encoding="utf-8-sig")
     print(f"규칙 {len(df)}개 (대표어 {df.대표어.nunique()}개) → {args.output} / 데이터에 없어 건너뛴 묶음 {skipped}")
+    print("판정:", df.판정.value_counts().to_dict())
 
 
 if __name__ == "__main__":

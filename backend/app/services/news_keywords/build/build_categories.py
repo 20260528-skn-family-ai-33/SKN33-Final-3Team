@@ -1,16 +1,14 @@
 """⑥ 대/중분류 표(topic_categories.csv)를 다시 만듭니다.
 
-기준
-- 대상: 정리된 주제어(kw_topic) 중 기사 10건 이상
-- 분류 틀: 대분류 8 · 중분류 23 (아래 TAX). 중분류마다 그 분류를 대표하는 키워드 목록
-- 배정 순서 (먼저 맞는 것)
-  1) 직접 배정 목록(category_manual.csv) — 규칙으로 안 되는 말을 뜻으로 정한 것 (판단 주체·이유 기록)
-  2) 규칙(일치): 주제어가 대표 키워드와 정확히 같음
-  3) 규칙(포함): 주제어가 대표 키워드(2글자 이상)를 포함함 — TAX 위에서부터 먼저 맞는 분류
-  4) 어디에도 안 맞으면 "검수 필요"(미분류)
-- 품목어(전기차·화장품 …)는 "산업·품목"으로 두고 HS 코드로 연결
+순서 (규칙을 먼저 모두 대조하고, 규칙으로 안 되는 것만 LLM 판단을 씀)
+  1) 규칙(일치): 주제어가 분류 틀(TAX)의 대표 키워드와 정확히 같음
+  2) 규칙(포함): 주제어가 대표 키워드(2글자 이상)를 포함 — TAX 위에서부터 먼저 맞는 분류
+  3) 규칙 수정: 규칙 결과가 글자만 겹쳐 틀린 경우 바로잡은 목록(category_rule_fixes.csv, 규칙 결과·이유 기록)
+  4) LLM 판단: 규칙에 하나도 안 걸린 말의 분야를 LLM이 뜻으로 정한 목록(category_llm.csv)
+  5) 검수 필요: 위 어디에도 없거나 LLM이 "너무 넓어 정하지 않음"(미분류)으로 둔 말
+대상: 정리된 주제어(kw_topic) 중 기사 MIN_ARTICLES(10)건 이상. 기준·과정 설명은 CLASSIFICATION_RULES.md
 
-실행: python backend/app/services/news_keywords/build/build_categories.py [--output 경로]
+실행: python backend/app/services/news_keywords/build/build_categories.py [--output 경로] [--min-articles 10]
 """
 import argparse
 import csv
@@ -56,16 +54,19 @@ TAX = [
 ]
 
 
-def load_manual(path=NK / "category_manual.csv"):
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        return {r["주제어"]: (r["대분류"], r["중분류"]) for r in csv.DictReader(fh)}
+def _read(name):
+    with open(NK / name, encoding="utf-8-sig", newline="") as fh:
+        return list(csv.DictReader(fh))
 
 
-def assign(word, manual):
-    """주제어 하나 → (대분류, 중분류, 배정방법)."""
-    if word in manual:
-        big, mid = manual[word]
-        return (big, mid, "검수 필요") if big == "미분류" else (big, mid, "직접")
+def load_lists():
+    fixes = {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read("category_rule_fixes.csv")}
+    llm = {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read("category_llm.csv")}
+    return fixes, llm
+
+
+def rule(word):
+    """규칙만으로 낸 결과 (대분류, 중분류, 방법) — 안 걸리면 None."""
     u = word.upper()
     for big, mid, keys in TAX:
         if any(u == k.upper() for k in keys.split()):
@@ -73,27 +74,42 @@ def assign(word, manual):
     for big, mid, keys in TAX:
         if any(len(k) >= 2 and k.upper() in u for k in keys.split()):
             return big, mid, "규칙(포함)"
-    return "미분류", "미분류", "검수 필요"
+    return None
 
 
-def build(clean_csv=DATA / "news_keywords_clean.csv"):
+def assign(word, fixes=None, llm=None):
+    """주제어 하나 → (대분류, 중분류, 배정방법, 규칙 결과)."""
+    fixes, llm = fixes or {}, llm or {}
+    r = rule(word)
+    rule_txt = f"{r[0]} > {r[1]}" if r else ""
+    if r and word in fixes:
+        return (*fixes[word], "규칙 수정", rule_txt) if fixes[word][0] != "미분류" else ("미분류", "미분류", "검수 필요", rule_txt)
+    if r:
+        return (*r, rule_txt)
+    if word in llm and llm[word][0] != "미분류":
+        return (*llm[word], "LLM 판단", "")
+    return "미분류", "미분류", "검수 필요", ""
+
+
+def build(clean_csv=DATA / "news_keywords_clean.csv", min_articles=MIN_ARTICLES):
     res = pd.read_csv(clean_csv, dtype=str, keep_default_na=False, usecols=["kw_topic"])
     docs = Counter(w for s in res.kw_topic for w in set(s.split("|")) if w)
-    manual = load_manual()
+    fixes, llm = load_lists()
     rows = []
-    for w, n in docs.most_common():
-        if n < MIN_ARTICLES:
-            break
-        big, mid, how = assign(w, manual)
-        rows.append({"주제어": w, "대분류": big, "중분류": mid, "배정방법": how, "기사수": n})
-    return pd.DataFrame(rows).sort_values(["기사수", "주제어"], ascending=[False, True], key=lambda s: s.astype(int) if s.name == "기사수" else s).reset_index(drop=True)
+    for w, n in docs.items():
+        if n >= min_articles:
+            big, mid, how, rule_txt = assign(w, fixes, llm)
+            rows.append({"주제어": w, "대분류": big, "중분류": mid, "배정방법": how, "규칙 결과": rule_txt, "기사수": n})
+    df = pd.DataFrame(rows)
+    return df.sort_values(["기사수", "주제어"], ascending=[False, True]).reset_index(drop=True).astype({"기사수": int})
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--output", type=Path, default=NK / "topic_categories.csv")
+    ap.add_argument("--min-articles", type=int, default=MIN_ARTICLES)
     args = ap.parse_args()
-    df = build()
+    df = build(min_articles=args.min_articles)
     df.to_csv(args.output, index=False, encoding="utf-8-sig")
     print(f"{len(df)}개 → {args.output}")
     print(df.배정방법.value_counts().to_dict())

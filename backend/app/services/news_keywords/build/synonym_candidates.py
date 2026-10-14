@@ -90,7 +90,7 @@ def build(encode, clean_csv=DATA / "news_keywords_clean.csv", synonyms_csv=NK / 
     docs = Counter(w for t in topic_lists for w in set(t) if w)
     syn = pd.read_csv(synonyms_csv, dtype=str, keep_default_na=False)
     rows = [{"표기": r.표기, "대표어 후보": r.대표어, "근거": r.근거, "임베딩 유사도": "", "표기 기사수": r.표기_기사수,
-             "대표어 기사수": r.대표어_기사수, "현재 상태": "1차 반영", "1차 의견": "같은 뜻", "팀 확인(O/X)": "", "의견": ""}
+             "대표어 기사수": r.대표어_기사수, "현재 상태": "1차 반영", "1차 의견": r.판정, "팀 확인(O/X)": "", "의견": ""}
             for r in syn.itertuples()]
 
     def cand(a, b, basis, sim, op):

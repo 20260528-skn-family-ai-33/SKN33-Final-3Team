@@ -295,16 +295,18 @@ class BuildTest(unittest.TestCase):
     """사전 생성 코드 (build/)"""
 
     def test_category_assign_order(self):
-        """분류 생성: 직접 배정 → 규칙(일치) → 규칙(포함) → 검수 필요 순서"""
+        """분류 생성: 규칙(일치·포함)을 먼저 대조 → 틀린 규칙 결과는 수정 목록 → 규칙에 안 걸린 말만 LLM 판단 → 나머지 검수 필요"""
         import importlib.util as iu
         spec = iu.spec_from_file_location("bc", kc.BASE / "build" / "build_categories.py")
         bc = iu.module_from_spec(spec); spec.loader.exec_module(bc)
-        manual = bc.load_manual()
-        self.assertEqual(bc.assign("관광산업", manual)[2], "직접")           # 포함 규칙('광산') 대신 직접 배정
-        self.assertEqual(bc.assign("반덤핑", manual), ("무역·통상", "관세·무역규제", "규칙(일치)"))
-        self.assertEqual(bc.assign("태양광발전소", manual)[2], "규칙(포함)")
-        self.assertEqual(bc.assign("한국", manual), ("미분류", "미분류", "검수 필요"))
-
+        fixes, llm = bc.load_lists()
+        self.assertEqual(bc.assign("반덤핑", fixes, llm)[:3], ("무역·통상", "관세·무역규제", "규칙(일치)"))
+        self.assertEqual(bc.assign("태양광발전소", fixes, llm)[2], "규칙(포함)")
+        self.assertEqual(bc.assign("관광산업", fixes, llm), ("산업·품목", "품목 (→ HS 코드로 연결)", "규칙 수정", "에너지·환경 > 화석연료·자원"))
+        self.assertEqual(bc.assign("제조업", fixes, llm)[2], "LLM 판단")
+        self.assertIsNone(bc.rule("제조업"))                       # LLM 판단은 규칙에 안 걸린 말에만
+        self.assertTrue(all(bc.rule(w) is None for w in llm))
+        self.assertEqual(bc.assign("한국", fixes, llm)[2], "검수 필요")
 
 if __name__ == "__main__":
     unittest.main()

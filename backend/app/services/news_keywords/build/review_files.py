@@ -3,7 +3,7 @@
 - 동의어_검수용.xlsx: 동의어_검수용.csv(synonym_candidates.py 결과)를 칸 너비·O/X 드롭다운이 있는 엑셀로
 - 동의어_랜덤100_검수용.xlsx: 미반영 후보에서 무작위 100개 (시드 고정 → 다시 뽑아도 같은 100개)
   · 회의 결정: 100개를 확인해 문제가 없으면 "임베딩 기준 이상 → 자동 동의어" 규칙으로 처리
-- 대중분류_검수용.xlsx: topic_categories.csv 중 사람이 볼 줄(검수 필요 · 규칙(포함) · 직접) + 왜 붙었나 + 예시 기사 제목
+- 대중분류_검수용.xlsx: topic_categories.csv 중 사람이 볼 줄(검수 필요 · 규칙(포함) · 규칙 수정 · LLM 판단) + 왜 붙었나 + 예시 기사 제목
 - 미분류_예시기사.xlsx: 미분류 단어마다 최신 기사 10건 (회의 결정: 예시 기사를 보고 분야를 정함)
 
 실행: python backend/app/services/news_keywords/build/review_files.py [--out-dir 폴더]
@@ -90,21 +90,25 @@ def recent_titles(res, n=2):
 
 def category_rows():
     cat = pd.read_csv(NK / "topic_categories.csv", dtype=str, keep_default_na=False)
-    with open(NK / "category_manual.csv", encoding="utf-8-sig", newline="") as fh:
-        reason = {r["주제어"]: f'{r["판단"]} 판단: {r["이유"]}' for r in csv.DictReader(fh)}
-    order = {"검수 필요": 0, "규칙(포함)": 1, "직접": 2}
+    with open(NK / "category_rule_fixes.csv", encoding="utf-8-sig", newline="") as fh:
+        fix_why = {r["주제어"]: r["이유"] for r in csv.DictReader(fh)}
+    order = {"검수 필요": 0, "규칙(포함)": 1, "규칙 수정": 2, "LLM 판단": 3}
     rv = cat[cat.배정방법.isin(order)].copy()
     rv["_o"] = rv.배정방법.map(order); rv["_n"] = rv.기사수.astype(int)
     rv = rv.sort_values(["_o", "_n", "주제어"], ascending=[True, False, True])
 
-    def why(w, how):
+    def why(w, how, rule_txt):
         if how == "규칙(포함)":
             for big, mid, keys in bc.TAX:
                 hit = [k for k in keys.split() if len(k) >= 2 and k.upper() in w.upper()]
                 if hit:
                     return f'"{hit[0]}"을(를) 포함해서 → {mid}'
-        return reason.get(w, "규칙에 맞는 분류 키워드가 없음")
-    rv["왜"] = [why(w, h) for w, h in zip(rv.주제어, rv.배정방법)]
+        if w in fix_why:
+            return f"규칙 결과({rule_txt}) 수정: {fix_why[w]}"
+        if how == "LLM 판단":
+            return "규칙에 안 걸려 LLM이 뜻으로 배정"
+        return "규칙에도 안 걸리고 뜻이 넓어 분야를 정하지 못함"
+    rv["왜"] = [why(w, h, t) for w, h, t in zip(rv.주제어, rv.배정방법, rv["규칙 결과"])]
     return rv
 
 
@@ -112,15 +116,16 @@ def category_file(out_dir, res):
     rv = category_rows()
     titles = recent_titles(res)
     frame = [f"{b} > {m}" for b, m, _ in bc.TAX] + ["미분류로 둠"]
-    n_need, n_inc, n_dir = [(rv.배정방법 == k).sum() for k in ("검수 필요", "규칙(포함)", "직접")]
+    n_need, n_inc, n_fix, n_llm = [(rv.배정방법 == k).sum() for k in ("검수 필요", "규칙(포함)", "규칙 수정", "LLM 판단")]
     guide = pd.DataFrame([
         ("이 파일은?", f"대/중분류(topic_categories.csv) 중 사람이 확인해야 하는 {len(rv)}줄. 규칙(일치)은 확실해서 제외."),
         ("무엇을 하나", "지금 분류가 맞으면 '팀 확인'에 O, 틀리면 X + '맞는 분류'를 드롭다운에서 선택"),
         ("판단 기준", "이 주제어가 들어간 기사가 주로 어떤 분야 이야기인가? ('예시 기사 제목' 참고)"),
         (f"검수 필요 ({n_need}줄)", "분야를 못 정한 말. 맞는 분류를 고르거나 '미분류로 둠' (미분류_예시기사.xlsx 참고)"),
         (f"규칙(포함) ({n_inc}줄)", "분류 키워드를 글자로 포함해 자동으로 붙은 것. 글자만 겹친 실수가 있을 수 있음"),
-        (f"직접 ({n_dir}줄)", "규칙으로 안 잡혀 Claude(작업을 도운 AI)가 뜻으로 배정 — 이유는 category_manual.csv"),
-        ("끝나면", "X 줄을 category_manual.csv에 반영하고 build_categories.py 실행"),
+        (f"규칙 수정 ({n_fix}줄)", "규칙 결과가 글자만 겹쳐 틀려서 바로잡은 것 (category_rule_fixes.csv)"),
+        (f"LLM 판단 ({n_llm}줄)", "규칙에 하나도 안 걸려 LLM이 뜻으로 배정한 것 (category_llm.csv)"),
+        ("끝나면", "포함 규칙이 틀리면 category_rule_fixes.csv, LLM 판단이 틀리면 category_llm.csv를 고치고 build_categories.py 실행"),
     ], columns=["항목", "내용"])
     df = pd.DataFrame({"주제어": rv.주제어, "기사수": rv._n, "배정방법": rv.배정방법, "지금 대분류": rv.대분류, "지금 중분류": rv.중분류,
                        "왜 이렇게 붙었나": rv.왜, "예시 기사 제목 (최근 2건)": ["\n".join(titles.get(w, [])) for w in rv.주제어],
@@ -130,7 +135,7 @@ def category_file(out_dir, res):
     ws = wb.create_sheet("검수"); write_sheet(ws, df, [16, 8, 11, 15, 22, 40, 70, 11, 34, 25], "팀 확인(O/X)", ["예시 기사 제목 (최근 2건)"])
     dv = DataValidation(type="list", formula1=f"=분류틀!$C$2:$C${len(frame) + 1}", allow_blank=True); ws.add_data_validation(dv)
     dv.add(f"I2:I{ws.max_row}")
-    fills = {"검수 필요": "FDE2E2", "규칙(포함)": "FEF3C7", "직접": "E0F2FE"}
+    fills = {"검수 필요": "FDE2E2", "규칙(포함)": "FEF3C7", "규칙 수정": "FFEDD5", "LLM 판단": "E0F2FE"}
     for r in range(2, ws.max_row + 1):
         ws.cell(r, 3).fill = PatternFill("solid", fgColor=fills[ws.cell(r, 3).value])
     fr = pd.DataFrame([(b, m, f"{b} > {m}", " ".join(k.split()[:8])) for b, m, k in bc.TAX] + [("", "", "미분류로 둠", "분야를 정하기 어려운 넓은 말")],
