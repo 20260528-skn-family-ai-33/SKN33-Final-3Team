@@ -9,6 +9,7 @@ HS 판(HS2022 → HS2028 …)이 바뀌면 파일 다운로드부터 적재까�
 | ② CSV 생성 | `scheduler/collectors/hscode/hs_code_build.py` | 6단위 품목명을 OpenAI로 요약해 `hs_code_mst.csv` 생성 |
 | ③ 적재 | `scheduler/jobs/hs_code_load.py` | CSV를 검증한 뒤 `hs_code` 테이블에 upsert |
 | UN 대조 | `scheduler/collectors/hscode/hs_code_un_check.py` | UN Comtrade HS 목록을 받아 CSV 2·4·6단위 코드와 대조 |
+| 판 간 대응표 | `scheduler/jobs/hs_correlation_load.py` | UNSD HS 판 간 대응표를 받아 `hs_code_correlation`에 적재 (판이 바뀔 때 수동 실행) |
 | 자동 실행 | `scheduler/main.py` | 매년 1월 1일 00:15(KST)에 ①→②→③ 실행 (10단위 연간 개정 + HS 판 개정) |
 
 원본 데이터: [관세청_HS부호 단위별 품목명 (공공데이터포털)](https://www.data.go.kr/data/15130660/fileData.do)
@@ -129,6 +130,34 @@ python -m backend.app.scheduler.jobs.hs_code_load --csv backend/app/scheduler/co
 - 보류(적재 안 함): `9999999290`(품목명 `-`, 상위 `9999`·`999999`는 UN 통계용 코드), `621142900`(9자리).
 - HS2022 보완분은 실적 적재(`customs_load`)의 미등록 코드 처리(`fail`·`hold`)를 시험한 뒤 적재합니다.
 
+## HS 판 간 대응표 (hs_code_correlation)
+
+HS 판이 바뀌면(HS2017→HS2022→HS2028 …) 같은 품목의 6단위 코드가 나뉘거나 합쳐집니다. 판을 넘어 실적 추이를 이어 보려면 대응표가 필요합니다.
+원천은 [UN 통계국 HS 대응표](https://unstats.un.org/unsd/classifications/Econ)(xlsx)입니다. WCO 대응표(Table I·II)를 바탕으로 만든 표이며,
+[WCO 원본](https://www.wcoomd.org/en/topics/nomenclature/instrument-and-tools/hs-nomenclature-2022-edition/correlation-tables-hs-2017-2022.aspx)은 PDF로만 제공됩니다.
+
+```powershell
+# 테이블 생성 (한 번만, batch_run.target_table에 hs_code_correlation 추가 포함)
+mysql -u <user> -p --default-character-set=utf8mb4 <database> -e "source db/mysql/init/02_hs_code_correlation.sql"
+
+# 다운로드 → 적재 (새 판이 나오면 --new HS2028 --old HS2022)
+python -m backend.app.scheduler.jobs.hs_correlation_load --new HS2022 --old HS2017
+```
+
+| 컬럼 | 내용 |
+|---|---|
+| `new_ver`·`new_code` / `old_ver`·`old_code` | 새 판·이전 판 6단위 코드 (기본키는 네 컬럼) |
+| `relation` | 새 판:이전 판 관계 `1:1`·`1:n`·`n:1`·`n:n` (예: HS2017 `150910` → HS2022 `150920`·`150930`·`150940`은 `n:1`) |
+| `group_code` | 대응으로 이어진 코드 묶음의 대표(가장 작은 새 판 코드). 판을 넘는 집계는 이 값으로 묶습니다 |
+
+- 받은 파일은 `hscode_outputs/correlation/<new>to<old>.xlsx`에 두고 다시 받지 않습니다(`--refresh`로 다시 받기, `--xlsx`로 직접 지정).
+- 같은 판 쌍의 기존 행을 지우고 새로 넣습니다(한 트랜잭션). 다른 판 쌍은 건드리지 않습니다.
+- HS2022의 신설 호 `8549`(전자 폐기물)·`8524`(평판 디스플레이 모듈) 등은 이전 코드 수백~천여 개와 이어져 있어, 그대로 묶으면 85류 대부분이
+  그룹 하나(1,167개)가 됩니다. 이전 코드 100개(`HUB_FANOUT`) 넘게와 이어진 코드 15개는 묶지 않고 자기 코드를 그룹으로 씁니다.
+- HS2022↔HS2017 결과: 대응 15,657쌍(`n:n` 10,114, `1:1` 4,097, `n:1` 1,392, `1:n` 54), 비교 그룹 5,246개(최대 38개 묶음).
+- `hs_code`를 FK로 참조하지 않습니다. 이전 판 코드는 `hs_code`에 일부만 있어도(실적에 남은 HS2017 등) 대응표는 전체가 필요합니다.
+- 6단위 대응만 다룹니다. HSK 10단위의 연간 신구 대응은 포함하지 않습니다.
+
 ## 적재 동작
 
 - `(hs_code, hs_ver)`가 같으면 새 값으로 갱신(upsert)합니다. 같은 키가 여러 번 들어오면 마지막 입력이 남습니다.
@@ -210,6 +239,7 @@ python -m unittest discover backend/tests
 | `test_db_crud.py` | 공통 CRUD, 같은 키 마지막 입력 보존, 적재 검증·롤백, 실행 로그, `batch_run` 기록 |
 | `test_hs_code_un_check.py` | UN 대조의 알려진 예외·확인 필요 구분, 보고서, 종료 코드 |
 | `test_hs_code_refresh.py` | 자동 갱신 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED), 연간 새 판 재적재, 일부만 적재된 판 재적재, 매년 실행·재시도·재시작 시 실행 |
+| `test_hs_correlation_load.py` | 대응표 파싱·형식 오류 검출, 비교 그룹(허브 제외), 같은 판 쌍 교체 적재, 테이블 없음 오류 |
 
 ## 로그
 
