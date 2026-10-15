@@ -151,6 +151,7 @@ python -m backend.app.scheduler.jobs.hs_correlation_load --new HS2022 --old HS20
 | `group_code` | 대응으로 이어진 코드 묶음의 대표(가장 작은 새 판 코드). 판을 넘는 집계는 이 값으로 묶습니다 |
 
 - 받은 파일은 `hscode_outputs/correlation/<new>to<old>.xlsx`에 두고 다시 받지 않습니다(`--refresh`로 다시 받기, `--xlsx`로 직접 지정).
+  새로 받은 파일은 파싱 검증을 통과해야만 캐시로 교체하고, 받아 둔 파일을 읽을 수 없으면(손상·형식 오류) 다시 받습니다.
 - 같은 판 쌍의 기존 행을 지우고 새로 넣습니다(한 트랜잭션). 다른 판 쌍은 건드리지 않습니다.
 - 자동 갱신(`hs_code_refresh`)은 `DONE`·`ALREADY_LOADED` 뒤에 올해 판과 직전 판(HS2028이면 HS2022)의 대응표가 DB에 있는지 보고,
   없으면 이 적재를 실행합니다. 새 판이 처음 적재되는 해에 들어가고, 이후에는 확인만 합니다. 실패하면(UNSD에 아직 없음 등)

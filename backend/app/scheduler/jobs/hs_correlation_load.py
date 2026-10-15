@@ -5,6 +5,7 @@
   WCO는 원본을 PDF로만 제공해서 같은 내용을 표로 주는 UNSD 파일을 씁니다.
   새 판(HS2028 등) 대응표가 UNSD에 올라오면 같은 명령에 --new HS2028 --old HS2022로 실행합니다.
 - 받은 파일은 hscode_outputs/correlation/<new>to<old>.xlsx에 두고, 있으면 다시 받지 않습니다 (--refresh로 다시 받기).
+  새로 받은 파일은 파싱 검증을 통과해야만 이 캐시로 교체하고, 받아 둔 파일을 읽을 수 없으면(손상·형식 오류) 다시 받습니다.
 - 'Correlations' 시트의 (새 코드, 이전 코드, 관계)를 읽고, 대응으로 이어진 코드 묶음마다 비교 그룹(group_code)을 붙입니다.
   group_code는 묶음 안 가장 작은 새 판 코드라서, 같은 파일이면 실행할 때마다 같은 값이 나옵니다.
 - 같은 판 쌍(new_ver, old_ver)의 기존 행을 지우고 새로 넣습니다 (원천에서 빠진 대응이 남지 않게). 한 트랜잭션이라 실패하면 전체 롤백됩니다.
@@ -54,29 +55,45 @@ def setup_log(log_dir):
     return path
 
 
-def download(new, old, save_dir=SAVE_DIR, refresh=False):
+def fetch_pairs(new, old, save_dir=SAVE_DIR, refresh=False):
+    """(대응 쌍, 새로 받았는지)를 돌려줍니다. 받아 둔 파일을 먼저 쓰고, 읽을 수 없으면 다시 받습니다.
+    받은 내용은 임시 파일에서 파싱 검증을 통과해야만 캐시로 교체합니다 (손상 파일이 캐시에 남지 않게)."""
     path = Path(save_dir) / f"{new}to{old}.xlsx"
     if path.exists() and not refresh:
-        log.info(f"이미 받은 대응표: {path}")
-        return path
+        try:
+            pairs = parse(path, new, old)
+            log.info(f"이미 받은 대응표: {path}")
+            return pairs, False
+        except ValueError as e:
+            log.warning(f"받아 둔 대응표를 읽을 수 없어 다시 받습니다: {e}")
     res = requests.get(URL.format(new=new, old=old), timeout=TIMEOUT)
     if res.status_code == 404:
         raise FileNotFoundError(f"UNSD에 {new}→{old} 대응표가 아직 없습니다 ({URL.format(new=new, old=old)}).")
     res.raise_for_status()
-    if not res.content.startswith(b"PK"):  # xlsx(zip)가 아니면 오류 화면 등
-        raise ValueError(f"받은 파일이 xlsx가 아닙니다 (Content-Type {res.headers.get('Content-Type')}).")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(res.content)
+    tmp = path.with_name(f"{path.stem}.tmp.xlsx")
+    tmp.write_bytes(res.content)
+    try:
+        pairs = parse(tmp, new, old)
+    except ValueError:
+        tmp.unlink()
+        raise
+    tmp.replace(path)
     log.info(f"대응표 다운로드: {path.name} ({len(res.content):,} bytes)")
-    return path
+    return pairs, True
 
 
 def parse(path, new, old):
     """Correlations 시트를 [(새 코드, 이전 코드, 관계)]로 읽습니다. 시트·머리글·값 형식이 다르면 ValueError."""
-    sheets = pd.read_excel(path, sheet_name=None, dtype=str, header=None)
+    try:
+        sheets = pd.read_excel(path, sheet_name=None, dtype=str, header=None)
+    except Exception as e:  # zip 손상·HTML 오류 화면 등 (openpyxl·zipfile 예외 종류가 다양함)
+        raise ValueError(f"{Path(path).name}을 xlsx로 읽지 못했습니다: {type(e).__name__}: {e}") from e
     sheet = next((df for name, df in sheets.items() if "correlation" in name.lower()), None)
     if sheet is None:
         raise ValueError(f"{path.name}에 Correlations 시트가 없습니다: {list(sheets)}")
+    if sheet.shape[1] < 3:  # 새 코드·이전 코드·관계. 없으면 아래 sheet[1]에서 KeyError가 나 캐시 복구(ValueError)를 못 탐
+        raise ValueError(f"{path.name}의 Correlations 시트 열이 {sheet.shape[1]}개입니다 (새 코드·이전 코드·관계 3개 필요).")
     head = sheet.index[(sheet[0].str.strip() == new) & (sheet[1].str.strip() == old)]
     if head.empty:
         raise ValueError(f"{path.name}에서 '{new} | {old}' 머리글 행을 찾지 못했습니다 (파일 형식 변경 가능성).")
@@ -159,16 +176,14 @@ def _run(new, old, xlsx, db_url, refresh, save_dir, log_path, batch):
     engine = None
     try:
         if xlsx:
-            path = Path(xlsx)
+            name, pairs = Path(xlsx).name, parse(Path(xlsx), new, old)
         else:
-            cached = (Path(save_dir) / f"{new}to{old}.xlsx").exists() and not refresh
-            path = download(new, old, save_dir, refresh)
-            if batch is not None and not cached:
+            name, (pairs, downloaded) = f"{new}to{old}.xlsx", fetch_pairs(new, old, save_dir, refresh)
+            if batch is not None and downloaded:
                 batch.request_count += 1
-        pairs = parse(path, new, old)
         if batch is not None:
             batch.received_count = len(pairs)
-        rows = to_rows(pairs, new, old, f"UNSD {new}to{old} Correlations ({path.name})")
+        rows = to_rows(pairs, new, old, f"UNSD {new}to{old} Correlations ({name})")
         counts = pd.Series([r["relation"] for r in rows]).value_counts().to_dict()
         log.info(f"대응 {len(rows):,}쌍 {counts} | 비교 그룹 {len({r['group_code'] for r in rows}):,}개")
         engine = make_engine(db_url)

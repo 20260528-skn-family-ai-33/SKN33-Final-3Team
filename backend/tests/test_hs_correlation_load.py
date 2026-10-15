@@ -65,6 +65,11 @@ class HsCorrelationLoadTest(unittest.TestCase):
             hc.parse(bad, "HS2022", "HS2017")
         with self.assertRaisesRegex(ValueError, "머리글"):
             hc.parse(self.xlsx, "HS2028", "HS2022")
+        for cols in (1, 2):  # 열이 모자라면 KeyError가 아니라 ValueError (캐시 복구 분기가 받도록)
+            short = self.dir / f"short{cols}.xlsx"
+            write_xlsx(short, [row[:cols] for row in CORR])
+            with self.assertRaisesRegex(ValueError, "3개 필요"):
+                hc.parse(short, "HS2022", "HS2017")
 
     def test_run_replaces_pairs_of_same_versions(self):
         db = f"sqlite:///{(self.dir / 'hs.db').as_posix()}"
@@ -84,6 +89,28 @@ class HsCorrelationLoadTest(unittest.TestCase):
             self.assertIsNotNone(corr.get(s, ("HS2017", "150910", "HS2012", "150910")))  # 다른 판 쌍은 그대로
             self.assertEqual(corr.get(s, ("HS2022", "150930", "HS2017", "150910")).group_code, "150920")
         engine.dispose()
+
+    def test_bad_download_not_cached_and_bad_cache_redownloaded(self):
+        class Res:
+            def __init__(self, content):
+                self.status_code, self.content, self.headers = 200, content, {}
+
+            def raise_for_status(self):
+                pass
+
+        save = self.dir / "corr"
+        good = self.xlsx.read_bytes()
+        with mock.patch.object(hc.requests, "get", side_effect=[Res(b"PKbroken"), Res(good)]) as get:
+            with self.assertRaisesRegex(ValueError, "xlsx로 읽지 못했습니다"):
+                hc.fetch_pairs("HS2022", "HS2017", save)
+            self.assertEqual(list(save.iterdir()), [])  # 손상 파일은 캐시에 남지 않음
+            pairs, downloaded = hc.fetch_pairs("HS2022", "HS2017", save)  # 다음 실행에서 다시 받음
+            self.assertEqual((len(pairs), downloaded, get.call_count), (7, True, 2))
+        (save / "HS2022toHS2017.xlsx").write_bytes(b"PKbroken")  # 받아 둔 파일이 손상된 경우
+        with mock.patch.object(hc.requests, "get", return_value=Res(good)) as get:
+            self.assertEqual(hc.fetch_pairs("HS2022", "HS2017", save)[1], True)
+            self.assertEqual(hc.fetch_pairs("HS2022", "HS2017", save)[1], False)  # 고친 캐시는 다시 받지 않음
+            self.assertEqual(get.call_count, 1)
 
     def test_run_fails_without_table(self):
         db = f"sqlite:///{(self.dir / 'empty.db').as_posix()}"
