@@ -257,9 +257,9 @@ class CategoryTest(unittest.TestCase):
         self.assertEqual(self.run_one("수출,전시회,한국")["kw_category"], ["무역·통상>수출입 일반", "기업·투자·진출>전시회·행사"])
 
     def test_partial_match_fixed(self):
-        """분류: 일부만 겹쳐 잘못 붙던 말 바로잡음 (리튬이온배터리 ≠ 리튬 광물, 현지진출 ≠ 지진)"""
+        """분류: 일부만 겹쳐 잘못 붙던 말 바로잡음 (리튬이온배터리 ≠ 리튬 광물, 파리협정 ≠ 통상 협정)"""
         self.assertEqual(self.CAT["리튬이온배터리"], "산업·품목>품목 (→ HS 코드로 연결)")
-        self.assertEqual(self.CAT["현지진출"], "기업·투자·진출>진출·마케팅")
+        self.assertEqual(self.CAT["파리협정"], "에너지·환경>친환경·ESG·기후")
 
     def test_framework(self):
         """분류: 분류 틀은 대분류 8개 · 중분류 23개"""
