@@ -185,6 +185,92 @@ class RefreshFlowTest(unittest.TestCase):
         self.assertEqual(status, "DONE")
 
 
+def xlsx_bytes(rows):
+    import io
+    import pandas as pd
+    buf = io.BytesIO()
+    pd.DataFrame(rows, columns=["코드", "품목명"]).to_excel(buf, index=False)
+    return buf.getvalue()
+
+
+GOOD_XLSX = xlsx_bytes([("01", "살아 있는 동물"), ("0101", "말"), ("0101211000", "농가 사육용")])
+
+
+class FakePortal:
+    """공공데이터포털 다운로드 순서(데이터셋 화면 → 파일 정보 → 다운로드 제한 → 파일)를 흉내 냅니다. 파일 응답을 차례로 돌려줍니다."""
+
+    def __init__(self, *contents):
+        self.contents, self.downloads = list(contents), 0
+
+    def Session(self):
+        portal = self
+
+        class Res:
+            def __init__(self, text="", data=None, content=b""):
+                self.text, self.data, self.content, self.headers = text, data, content, {}
+
+            def json(self):
+                return self.data
+
+            def raise_for_status(self):
+                pass
+
+        class Session:
+            headers, hooks = {}, {"response": []}
+
+            def get(self, url, **kw):
+                if "fileData.do" in url:
+                    return Res(text="<title>관세청_HS부호 단위별 품목명_20270101 | 공공데이터포털</title>"
+                                    "fn_fileDataDown('15130660', 'uddi:x', '','1', '3')")
+                portal.downloads += 1
+                return Res(content=portal.contents.pop(0))
+
+            def post(self, url, **kw):
+                if "selectFileDataDownload" in url:
+                    return Res(data={"status": True, "atchFileId": "a", "fileDetailSn": "1",
+                                     "dataSetFileDetailInfo": {"dataNm": "hs"}})
+                return Res(data={"needCaptcha": False})
+
+        return Session()
+
+
+class DownloadTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def download(self, portal):
+        from unittest import mock
+        with mock.patch.object(refresh, "requests", portal):
+            return refresh.download_latest(self.dir)
+
+    def test_broken_xlsx_is_not_cached(self):
+        portal = FakePortal(b"PKbroken", GOOD_XLSX)  # PK로 시작하지만 엑셀이 아닌 응답
+        with self.assertRaisesRegex(refresh.DownloadError, "읽지 못했습니다"):
+            self.download(portal)
+        self.assertEqual(list(self.dir.iterdir()), [])  # 손상 파일·임시 파일이 남지 않음
+        path = self.download(portal)  # 다음 실행에서 다시 받아 정상 저장
+        self.assertEqual((path.name, portal.downloads), ("hs_names_20270101.xlsx", 2))
+        self.assertEqual(self.download(portal), path)  # 정상 캐시는 다시 받지 않음
+        self.assertEqual(portal.downloads, 2)
+
+    def test_unreadable_cache_is_downloaded_again(self):
+        (self.dir / "hs_names_20270101.xlsx").write_bytes(b"PKbroken")  # 이전에 저장된 손상 파일
+        portal = FakePortal(GOOD_XLSX)
+        path = self.download(portal)
+        self.assertEqual(portal.downloads, 1)
+        refresh.check_xlsx(path)  # 교체된 파일은 읽힘
+
+    def test_xlsx_without_ten_digit_codes_is_rejected(self):
+        portal = FakePortal(xlsx_bytes([("01", "살아 있는 동물")]))  # 엑셀이지만 10단위 코드가 없음
+        with self.assertRaisesRegex(refresh.DownloadError, "10단위"):
+            self.download(portal)
+        self.assertEqual(list(self.dir.iterdir()), [])
+
+
 class SchedulerTest(unittest.TestCase):
     def test_trigger_every_year(self):
         now, fires = datetime(2026, 10, 13, tzinfo=KST), []

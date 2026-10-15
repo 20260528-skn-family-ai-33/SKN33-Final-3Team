@@ -66,9 +66,22 @@ def setup_log(log_dir):
     return path
 
 
+def check_xlsx(path):
+    """관세청 HS xlsx로 읽히고 10단위 코드가 있는지 확인합니다. 아니면 DownloadError.
+    'PK'로 시작해도 zip이 깨졌거나 시트 형식이 다르면 여기서 걸러, 손상 파일이 캐시로 남지 않게 합니다."""
+    try:
+        ten = hb.codes_by_level(hb.load_names(path))[10]
+    except Exception as e:  # zip 손상·시트 형식 오류 등 (openpyxl·zipfile·pandas 예외 종류가 다양함)
+        raise DownloadError(f"{Path(path).name}을 관세청 HS xlsx로 읽지 못했습니다: {type(e).__name__}: {e}") from e
+    if not ten:
+        raise DownloadError(f"{Path(path).name}에 10단위 코드가 없습니다.")
+
+
 def download_latest(dest_dir=hb.REFERENCE_DIR, run=None):
     """포털 화면의 다운로드 버튼과 같은 순서(파일 정보 조회 → 다운로드 제한 확인 → 다운로드)로 최신 xlsx를 받습니다.
-    이미 같은 판 파일이 있으면 다시 받지 않습니다. 자동입력방지(캡차)를 요구하면 우회하지 않고 오류로 끝냅니다."""
+    이미 같은 판 파일이 있고 읽을 수 있으면 다시 받지 않습니다 (읽을 수 없으면 다시 받음).
+    받은 내용은 임시 파일에서 check_xlsx를 통과해야만 hs_names_YYYYMMDD.xlsx로 교체합니다.
+    자동입력방지(캡차)를 요구하면 우회하지 않고 오류로 끝냅니다."""
     s = requests.Session()
     s.headers["User-Agent"] = "Mozilla/5.0"
     if run is not None:  # 포털에 보낸 요청 수를 batch_run.request_count에 셈
@@ -83,8 +96,12 @@ def download_latest(dest_dir=hb.REFERENCE_DIR, run=None):
         raise DownloadError(f"데이터셋 제목에서 판 날짜(YYYYMMDD)를 찾지 못했습니다: {title.group(1).strip()}")
     dest = Path(dest_dir) / f"hs_names_{date}.xlsx"
     if dest.exists():
-        log.info(f"이미 받은 판입니다: {dest.name}")
-        return dest
+        try:
+            check_xlsx(dest)
+            log.info(f"이미 받은 판입니다: {dest.name}")
+            return dest
+        except DownloadError as e:
+            log.warning(f"받아 둔 파일을 읽을 수 없어 다시 받습니다: {e}")
 
     info = s.post(f"{PORTAL}/tcs/dss/selectFileDataDownload.do", timeout=TIMEOUT, data={
         "publicDataPk": args[1], "publicDataDetailPk": args[2], "atchFileId": args[3],
@@ -99,7 +116,15 @@ def download_latest(dest_dir=hb.REFERENCE_DIR, run=None):
     res.raise_for_status()
     if not res.content.startswith(b"PK"):  # xlsx(zip)가 아니면 오류 화면 등
         raise DownloadError(f"받은 파일이 xlsx가 아닙니다 (Content-Type {res.headers.get('Content-Type')}).")
-    dest.write_bytes(res.content)
+    # 임시 파일 이름은 hs_names_*로 시작하지 않게 (중간에 멈춰도 latest_reference()가 고르지 않음)
+    tmp = dest.with_name(f"_download_{dest.name}")
+    tmp.write_bytes(res.content)
+    try:
+        check_xlsx(tmp)
+    except DownloadError:
+        tmp.unlink()
+        raise
+    tmp.replace(dest)
     log.info(f"다운로드 완료: {dest.name} ({len(res.content):,} bytes)")
     return dest
 
