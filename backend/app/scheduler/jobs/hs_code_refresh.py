@@ -11,6 +11,9 @@
    새 코드가 있거나 이전 판으로 적재돼 있으면 계속 진행합니다 (요약 캐시가 있으면 새 6단위만 API 요청)
    새 판에서 빠진 이전 코드는 지우지 않습니다 (과거 수출입 데이터 연결용). upsert라 새 코드는 추가, 기존 코드는 이름·판 갱신
 4. hs_code_build로 CSV 생성 → 요약 누락이 없으면 hs_code_load로 적재
+5. DONE·ALREADY_LOADED이면 올해 판과 직전 판(예: HS2028 ↔ HS2022)의 대응표가 hs_code_correlation에 있는지 보고,
+   없으면 hs_correlation_load로 받아 적재합니다. 새 판이 처음 적재된 해에 들어가고, 이미 있으면 확인만 합니다.
+   대응표 적재가 실패하면(UNSD에 아직 없음 등) FAILED로 끝내 다음 날 재시도합니다 (hs_code는 이미 적재된 상태로 남음).
 결과 상태: DONE · NOT_READY · ALREADY_LOADED · FAILED. 진행과 오류는 hscode_outputs/logs/hs_code_refresh_<시각>.log에 남깁니다.
 실행할 때마다 batch_run에 한 건 기록합니다 (job HS_CODE_REFRESH, 대상 hs_code, 기간 = 기준일이 속한 해 1/1~12/31).
 DONE·NOT_READY·ALREADY_LOADED는 SUCCESS(작업이 정상적으로 확인·처리됨), FAILED는 FAILED입니다.
@@ -18,7 +21,7 @@ DONE·NOT_READY·ALREADY_LOADED는 SUCCESS(작업이 정상적으로 확인·처
 import argparse
 import logging
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -30,7 +33,8 @@ from sqlalchemy import select
 from backend.app.db.crud import CRUD
 from backend.app.db.session import make_engine, session_scope
 from backend.app.models.hs_code import HsCodeMst
-from backend.app.scheduler.jobs import hs_code_load
+from backend.app.models.hs_code_correlation import HsCodeCorrelation
+from backend.app.scheduler.jobs import hs_code_load, hs_correlation_load
 
 KST = ZoneInfo("Asia/Seoul")
 PORTAL = "https://www.data.go.kr"
@@ -126,8 +130,31 @@ def expected_codes(xlsx):
     return {code for codes in levels.values() for code in codes}
 
 
+def previous_ver(hs_ver):
+    """직전 HS 판: 그 판이 시작되기 전날에 적용되던 판 (HS2028 → HS2022). 더 이전 판이 없으면(HS2017) 자기 자신."""
+    return hb.hs_ver_for(hb.hs_period(hs_ver)[0] - timedelta(days=1))
+
+
+def ensure_correlation(new, engine=None):
+    """new와 직전 판의 대응표가 DB에 없으면 받아 적재합니다. 0 성공(이미 있음 포함), 1 실패."""
+    old = previous_ver(new)
+    if old == new:
+        return 0
+    engine = engine or make_engine()
+    try:
+        with session_scope(engine) as s:
+            have = CRUD(HsCodeCorrelation).count(s, new_ver=new, old_ver=old)
+    finally:
+        engine.dispose()
+    if have:
+        log.info(f"대응표 {new}↔{old} {have:,}행이 이미 있습니다.")
+        return 0
+    log.info(f"대응표 {new}↔{old}가 없어 받아 적재합니다 (hs_correlation_load).")
+    return hs_correlation_load.run(new, old, track=False)  # 이 실행의 batch_run 한 건에 포함
+
+
 def run_refresh(today=None, download=download_latest, build=hb.run, load=hs_code_load.run, loaded=loaded_codes,
-                expected_of=expected_codes,
+                expected_of=expected_codes, correlate=ensure_correlation,
                 log_dir=hb.OUTPUT_DIR / "logs", batch_engine=None):
     """한 번 실행하고 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED)를 돌려줍니다. 단계 함수는 테스트에서 바꿔 넣습니다."""
     today = today or datetime.now(KST).date()
@@ -137,9 +164,22 @@ def run_refresh(today=None, download=download_latest, build=hb.run, load=hs_code
     year = (date(today.year, 1, 1), date(today.year, 12, 31))
     with track_batch(SOURCE, JOB_NAME, "hs_code", *year, engine=batch_engine, logger=log) as run:
         status = _refresh(today, expected, run, log_path, download, build, load, loaded, expected_of)
+        if status in ("DONE", "ALREADY_LOADED") and _correlate(correlate, expected, log_path) != 0:
+            status = "FAILED"
         if status == "FAILED":
             run.fail()
     return status
+
+
+def _correlate(correlate, hs_ver, log_path):
+    try:
+        rc = correlate(hs_ver)
+    except Exception:  # hs_code_correlation 테이블 없음·DB 연결 실패 등
+        log.exception(f"FAILED: 대응표 확인·적재 중 오류 | 로그: {log_path}")
+        return 1
+    if rc != 0:
+        log.error(f"FAILED: 대응표 적재 실패. hs_correlation_load 로그를 확인하세요 (hs_code 적재는 유지). | 로그: {log_path}")
+    return rc
 
 
 def _refresh(today, expected, run, log_path, download, build, load, loaded, expected_of):

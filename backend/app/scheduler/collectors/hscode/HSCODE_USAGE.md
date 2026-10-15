@@ -9,8 +9,8 @@ HS 판(HS2022 → HS2028 …)이 바뀌면 파일 다운로드부터 적재까�
 | ② CSV 생성 | `scheduler/collectors/hscode/hs_code_build.py` | 6단위 품목명을 OpenAI로 요약해 `hs_code_mst.csv` 생성 |
 | ③ 적재 | `scheduler/jobs/hs_code_load.py` | CSV를 검증한 뒤 `hs_code` 테이블에 upsert |
 | UN 대조 | `scheduler/collectors/hscode/hs_code_un_check.py` | UN Comtrade HS 목록을 받아 CSV 2·4·6단위 코드와 대조 |
-| 판 간 대응표 | `scheduler/jobs/hs_correlation_load.py` | UNSD HS 판 간 대응표를 받아 `hs_code_correlation`에 적재 (판이 바뀔 때 수동 실행) |
-| 자동 실행 | `scheduler/main.py` | 매년 1월 1일 00:15(KST)에 ①→②→③ 실행 (10단위 연간 개정 + HS 판 개정) |
+| 판 간 대응표 | `scheduler/jobs/hs_correlation_load.py` | UNSD HS 판 간 대응표를 받아 `hs_code_correlation`에 적재 (자동 갱신이 없을 때 실행, 수동 실행도 가능) |
+| 자동 실행 | `scheduler/main.py` | 매년 1월 1일 00:15(KST)에 ①→②→③ 실행 (10단위 연간 개정 + HS 판 개정), 이어서 대응표가 없으면 적재 |
 
 원본 데이터: [관세청_HS부호 단위별 품목명 (공공데이터포털)](https://www.data.go.kr/data/15130660/fileData.do)
 
@@ -152,6 +152,9 @@ python -m backend.app.scheduler.jobs.hs_correlation_load --new HS2022 --old HS20
 
 - 받은 파일은 `hscode_outputs/correlation/<new>to<old>.xlsx`에 두고 다시 받지 않습니다(`--refresh`로 다시 받기, `--xlsx`로 직접 지정).
 - 같은 판 쌍의 기존 행을 지우고 새로 넣습니다(한 트랜잭션). 다른 판 쌍은 건드리지 않습니다.
+- 자동 갱신(`hs_code_refresh`)은 `DONE`·`ALREADY_LOADED` 뒤에 올해 판과 직전 판(HS2028이면 HS2022)의 대응표가 DB에 있는지 보고,
+  없으면 이 적재를 실행합니다. 새 판이 처음 적재되는 해에 들어가고, 이후에는 확인만 합니다. 실패하면(UNSD에 아직 없음 등)
+  갱신 결과가 `FAILED`가 되어 다음 날 재시도하며, 이때 hs_code는 `ALREADY_LOADED`로 건너뛰고 대응표만 다시 시도합니다.
 - HS2022의 신설 호 `8549`(전자 폐기물)·`8524`(평판 디스플레이 모듈) 등은 이전 코드 수백~천여 개와 이어져 있어, 그대로 묶으면 85류 대부분이
   그룹 하나(1,167개)가 됩니다. 이전 코드 100개(`HUB_FANOUT`) 넘게와 이어진 코드 15개는 묶지 않고 자기 코드를 그룹으로 씁니다.
 - HS2022↔HS2017 결과: 대응 15,657쌍(`n:n` 10,114, `1:1` 4,097, `n:1` 1,392, `1:n` 54), 비교 그룹 5,246개(최대 38개 묶음).
@@ -185,7 +188,7 @@ python -m backend.app.scheduler.main
 | `DONE` | 올해 판 다운로드·CSV 생성·적재 완료 (새 10단위 추가, 기존 코드 이름·판 갱신) | 내년 1월 1일까지 대기 |
 | `NOT_READY` | 포털 최신 파일이 올해 판이 아님: 아직 작년 판(예: 2027-01-01에 20260101판만 있음)이거나, 내년 판이 연말에 미리 올라와 적용일 전(예: 2026-12-20에 20270101판) | 다음 날 00:15에 재시도 |
 | `ALREADY_LOADED` | xlsx로 만들 코드가 DB에 모두 있고 올해 판(`source_edition`)으로 적재돼 있음 (LLM 비용이 드는 재생성 방지). 새 코드가 있거나 이전 판으로 적재돼 있으면 다시 생성·적재 | 대기 |
-| `FAILED` | 다운로드·요약·적재 중 오류 | 다음 날 00:15에 재시도 |
+| `FAILED` | 다운로드·요약·적재 중 오류, 또는 대응표 적재 실패 | 다음 날 00:15에 재시도 |
 
 - 재시도는 최대 90일입니다. 새 판 파일은 1월 1일 당일보다 늦게 올라오는 경우가 많아서 매일 다시 확인합니다.
 - 새 판에서 빠진 이전 10단위 코드는 지우지 않습니다 (과거 수출입 데이터 연결용). 빠진 개수는 로그에 남습니다.
@@ -238,7 +241,7 @@ python -m unittest discover backend/tests
 | `test_hs_code_build.py` | 6단위 이름 찾는 순서, 요약\|원문 형식, 수동 요약 파일, HS 판 결정, LLM 응답 검증·캐시 폴더 생성 |
 | `test_db_crud.py` | 공통 CRUD, 같은 키 마지막 입력 보존, 적재 검증·롤백, 실행 로그, `batch_run` 기록 |
 | `test_hs_code_un_check.py` | UN 대조의 알려진 예외·확인 필요 구분, 보고서, 종료 코드 |
-| `test_hs_code_refresh.py` | 자동 갱신 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED), 연간 새 판 재적재, 일부만 적재된 판 재적재, 매년 실행·재시도·재시작 시 실행 |
+| `test_hs_code_refresh.py` | 자동 갱신 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED), 연간 새 판 재적재, 일부만 적재된 판 재적재, 매년 실행·재시도·재시작 시 실행, 판 갱신 뒤 대응표 확인·적재·실패 시 재시도 |
 | `test_hs_correlation_load.py` | 대응표 파싱·형식 오류 검출, 비교 그룹(허브 제외), 같은 판 쌍 교체 적재, 테이블 없음 오류 |
 
 ## 로그

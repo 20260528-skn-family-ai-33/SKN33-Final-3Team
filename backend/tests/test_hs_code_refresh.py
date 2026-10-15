@@ -26,7 +26,7 @@ def loaded_as(codes, edition="20280101"):
     return {c: refresh.hb.source_for(edition) for c in codes}
 
 
-def fake_steps(file_date="20280101", loaded=None, missing=0, load_rc=0, calls=None):
+def fake_steps(file_date="20280101", loaded=None, missing=0, load_rc=0, corr_rc=0, calls=None):
     calls = calls if calls is not None else []
 
     def download(run):
@@ -43,7 +43,11 @@ def fake_steps(file_date="20280101", loaded=None, missing=0, load_rc=0, calls=No
         calls.append(("load", track))
         return load_rc
 
-    return {"download": download, "build": build, "load": load, "loaded": lambda ver: dict(loaded or {}),
+    def correlate(hs_ver):
+        calls.append(("correlate", hs_ver))
+        return corr_rc
+
+    return {"download": download, "build": build, "load": load, "loaded": lambda ver: dict(loaded or {}), "correlate": correlate,
             "expected_of": lambda xlsx: set(NEED), "log_dir": LOG_DIR}
 
 
@@ -81,7 +85,9 @@ class RefreshFlowTest(unittest.TestCase):
         status, calls = self.run_with((2028, 1, 1))
         self.assertEqual(status, "DONE")
         # 적재는 갱신 실행 기록에 포함되므로 load는 track=False로 부름
-        self.assertEqual(calls, ["download", ("build", "hs_names_20280101.xlsx", "HS2028"), ("load", False)])
+        # 적재 후 HS2028 ↔ 직전 판 대응표 확인·적재
+        self.assertEqual(calls, ["download", ("build", "hs_names_20280101.xlsx", "HS2028"), ("load", False),
+                                 ("correlate", "HS2028")])
         self.assertEqual(self.batch_rows(),  # 기간 = 기준일이 속한 해
                          [("HS_CODE_REFRESH", "hs_code", "2028-01-01", "2028-12-31", "SUCCESS", 154, 17072, True)])
         with session_scope(self.engine) as s:  # 출처가 없으면 SOURCE 행으로 등록
@@ -108,11 +114,40 @@ class RefreshFlowTest(unittest.TestCase):
         self.assertEqual(status, "DONE")
         self.assertIn(("build", "hs_names_20270101.xlsx", "HS2022"), calls)
         status, calls = self.run_with((2027, 2, 1), file_date="20270101", loaded=loaded_as(NEED, "20270101"))
-        self.assertEqual((status, calls), ("ALREADY_LOADED", ["download"]))
+        self.assertEqual((status, calls), ("ALREADY_LOADED", ["download", ("correlate", "HS2022")]))
 
     def test_already_loaded_skips_llm(self):
         status, calls = self.run_with((2028, 3, 1), loaded=loaded_as(NEED))
-        self.assertEqual((status, calls), ("ALREADY_LOADED", ["download"]))
+        # 대응표가 빠져 있으면 채우도록 ALREADY_LOADED에서도 확인 (이미 있으면 확인만)
+        self.assertEqual((status, calls), ("ALREADY_LOADED", ["download", ("correlate", "HS2028")]))
+
+    def test_correlation_failure_retries(self):
+        # 대응표 적재가 실패하면(UNSD에 아직 없음 등) FAILED → 다음 날 재시도. 재시도에서는 hs_code는 ALREADY_LOADED
+        status, calls = self.run_with((2028, 1, 1), corr_rc=1)
+        self.assertEqual((status, calls[-2:]), ("FAILED", [("load", False), ("correlate", "HS2028")]))
+        status, _ = self.run_with((2028, 1, 2), loaded=loaded_as(NEED), corr_rc=1)
+        self.assertEqual(status, "FAILED")
+        status, calls = self.run_with((2028, 1, 1), file_date="20260101")  # NOT_READY면 대응표는 보지 않음
+        self.assertNotIn(("correlate", "HS2028"), calls)
+
+    def test_previous_ver(self):
+        self.assertEqual([refresh.previous_ver(v) for v in ("HS2017", "HS2022", "HS2028", "HS2033")],
+                         ["HS2017", "HS2017", "HS2022", "HS2028"])
+
+    def test_ensure_correlation(self):
+        from unittest import mock
+        from backend.app.db.crud import CRUD
+        from backend.app.models.hs_code_correlation import HsCodeCorrelation
+        with mock.patch.object(refresh.hs_correlation_load, "run", return_value=0) as load,                 mock.patch.object(self.engine, "dispose"):  # 메모리 SQLite를 테스트에서 계속 쓰도록
+            self.assertEqual(refresh.ensure_correlation("HS2017", self.engine), 0)  # 직전 판 없음 → 건너뜀
+            self.assertEqual(refresh.ensure_correlation("HS2022", self.engine), 0)  # 없음 → 적재
+            load.assert_called_once_with("HS2022", "HS2017", track=False)
+            with session_scope(self.engine) as s:
+                CRUD(HsCodeCorrelation).upsert_many(s, [{"new_ver": "HS2022", "new_code": "150920", "old_ver": "HS2017",
+                                                         "old_code": "150910", "relation": "n:1", "group_code": "150920",
+                                                         "source_edition": "t"}])
+            self.assertEqual(refresh.ensure_correlation("HS2022", self.engine), 0)  # 있음 → 확인만
+            load.assert_called_once()
 
     def test_partial_load_is_rebuilt(self):
         status, calls = self.run_with((2028, 3, 1), loaded=loaded_as({"01"}))  # 1행만 있으면 완료로 보지 않음
