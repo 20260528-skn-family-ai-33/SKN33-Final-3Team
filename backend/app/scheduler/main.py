@@ -9,16 +9,20 @@
   올해 판 파일이 아직 안 올라왔거나(NOT_READY) 실패하면(FAILED) 다음 날 00:15에 다시 시도합니다 (최대 RETRY_DAYS일).
   스케줄러가 꺼져 있어 놓쳤거나 일부만 적재된 경우를 위해 켤 때마다 바로 한 번 실행합니다.
   완료 여부는 갱신 작업 안에서 판단하므로(이미 올해 판으로 모두 있으면 ALREADY_LOADED, LLM 호출 없음) 여기서 따로 보지 않습니다.
+- hs_code_embed: 매일 01:00(KST)에 hs_code 테이블에 있지만 Chroma hs_code 컬렉션에 없는 코드만 임베딩해 추가.
+  연간 갱신(00:15)이나 실적 적재가 추가한 코드가 그날 밤 vector DB에 들어갑니다. 새 코드가 없으면 OpenAI를 부르지 않습니다.
 """
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
 
 KST = refresh.KST
 HS_REFRESH_TRIGGER = CronTrigger(month=1, day=1, hour=0, minute=15, timezone=KST)  # 매년
+HS_EMBED_TRIGGER = CronTrigger(hour=1, minute=0, timezone=KST)  # 매일
 RETRY_DAYS = 90
 RETRY_JOB_ID = "hs_code_refresh_retry"
 
@@ -43,6 +47,9 @@ def build_scheduler():
     # 켤 때마다 점검 실행: 놓친 연간 갱신·일부만 적재된 상태를 채움 (이미 완료면 포털 조회 후 바로 끝남)
     scheduler.add_job(hs_refresh_job, "date", run_date=datetime.now(KST) + timedelta(seconds=10),
                       args=[scheduler], id=RETRY_JOB_ID, replace_existing=True)
+    # 매일 미등록 코드 임베딩: 실패한 코드는 컬렉션에 없으므로 다음 날 다시 추가됨 (따로 재시도하지 않음)
+    scheduler.add_job(embed.run, HS_EMBED_TRIGGER, id="hs_code_embed", coalesce=True, misfire_grace_time=6 * 3600,
+                      replace_existing=True)
     return scheduler
 
 

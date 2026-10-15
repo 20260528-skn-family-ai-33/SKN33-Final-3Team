@@ -11,7 +11,7 @@ HS 판(HS2022 → HS2028 …)이 바뀌면 파일 다운로드부터 적재까�
 | UN 대조 | `scheduler/collectors/hscode/hs_code_un_check.py` | UN Comtrade HS 목록을 받아 CSV 2·4·6단위 코드와 대조 |
 | 판 간 대응표 | `scheduler/jobs/hs_correlation_load.py` | UNSD HS 판 간 대응표를 받아 `hs_code_correlation`에 적재 (자동 갱신이 없을 때 실행, 수동 실행도 가능) |
 | 임베딩 | `scheduler/jobs/hs_code_embed.py` | `hs_code` 테이블에 있지만 Chroma `hs_code` 컬렉션에 없는 코드만 OpenAI로 임베딩해 추가 |
-| 자동 실행 | `scheduler/main.py` | 매년 1월 1일 00:15(KST)에 ①→②→③ 실행 (10단위 연간 개정 + HS 판 개정), 이어서 대응표가 없으면 적재 |
+| 자동 실행 | `scheduler/main.py` | 매년 1월 1일 00:15(KST)에 ①→②→③ 실행 (10단위 연간 개정 + HS 판 개정), 이어서 대응표가 없으면 적재. 매일 01:00 미등록 코드 임베딩 |
 
 원본 데이터: [관세청_HS부호 단위별 품목명 (공공데이터포털)](https://www.data.go.kr/data/15130660/fileData.do)
 
@@ -181,6 +181,8 @@ python -m backend.app.scheduler.jobs.hs_code_embed
 python -m backend.app.scheduler.jobs.hs_code_embed --rebuild
 ```
 
+- 스케줄러가 매일 01:00(KST)에 실행합니다. 연간 갱신(00:15)·실적 적재·보완 CSV 등 어느 경로로 코드가 추가돼도 그날 밤 들어갑니다.
+  새 코드가 검색에 반영되기까지 최대 하루가 걸릴 수 있습니다(일 단위 반영). 바로 반영하려면 위 명령을 수동 실행합니다.
 - 모델: `text-embedding-3-large`(3,072차원). 한국어 품목명 검색 품질을 기준으로 골랐습니다. 전체 1.8만여 개 첫 임베딩 비용은 약 0.2달러입니다.
 - 문서에는 코드와 상위 분류명 경로(류 → 호 → 소호 → 품목)를 함께 넣습니다. 10단위 `신차`·`기타`처럼 이름만으로 뜻이 없는 코드도
   상위 이름으로 검색됩니다 (예: "전기자동차" → `8703801000` 신차, 상위 소호가 전기 모터 차량).
