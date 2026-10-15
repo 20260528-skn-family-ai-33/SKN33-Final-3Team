@@ -72,6 +72,8 @@ python -m backend.app.scheduler.jobs.hs_code_refresh
 
 - 요약은 `hscode_outputs/hs6_summary_cache_<hs_ver>_<모델>.json`에 저장됩니다. 다시 실행하면 캐시에 없는 코드만 API로 요청합니다.
   처음부터 다시 요약하려면 이 캐시 파일을 지웁니다.
+- LLM 응답은 비어 있지 않은 문자열이고 `|`가 없으며 500자 이하일 때만 캐시에 저장합니다. 캐시를 읽을 때도 같은 검사를 해서,
+  유효하지 않은 값(이전 버전이 남긴 `None` 등)은 버리고 다시 요청합니다. 캐시 폴더는 API 호출 전에 만듭니다(`--cache-dir`).
 - 6단위 5,600여 개를 처음 요약할 때는 OpenAI API를 140번 정도 호출합니다(약 20~30분).
 
 ## UN 코드 대조
@@ -180,7 +182,7 @@ python -m unittest discover backend/tests
 
 | 파일 | 확인하는 것 |
 |---|---|
-| `test_hs_code_build.py` | 6단위 이름 찾는 순서, 요약\|원문 형식, 수동 요약 파일, HS 판 결정 |
+| `test_hs_code_build.py` | 6단위 이름 찾는 순서, 요약\|원문 형식, 수동 요약 파일, HS 판 결정, LLM 응답 검증·캐시 폴더 생성 |
 | `test_db_crud.py` | 공통 CRUD, 같은 키 마지막 입력 보존, 적재 검증·롤백, 실행 로그, `batch_run` 기록 |
 | `test_hs_code_un_check.py` | UN 대조의 알려진 예외·확인 필요 구분, 보고서, 종료 코드 |
 | `test_hs_code_refresh.py` | 자동 갱신 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED), 연간 새 판 재적재, 일부만 적재된 판 재적재, 매년 실행·재시도·재시작 시 실행 |

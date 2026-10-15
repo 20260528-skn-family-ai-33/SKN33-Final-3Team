@@ -139,11 +139,26 @@ def codes_by_level(names):
             10: ten}
 
 
+def valid_summary(value):
+    """DB name_ko에 넣을 수 있는 요약인지: 비어 있지 않은 문자열, 구분기호 없음, NAME_MAX자 이하.
+    LLM이 null·숫자·목록을 주면 str()로 'None' 같은 값이 저장되므로 문자열만 받고,
+    이전 버전이 캐시에 남긴 'None' 문자열도 거릅니다."""
+    return (isinstance(value, str) and value.strip() not in ("", "None") and SEP not in value
+            and len(value.strip()) <= NAME_MAX)
+
+
 def summarize(items, prompt, model, api_key, cache_path, label, stats=None):
-    """{코드: 입력문}을 BATCH개씩 LLM에 보내 {코드: 요약}을 받습니다. 결과는 캐시해 재실행 시 이어서 합니다."""
+    """{코드: 입력문}을 BATCH개씩 LLM에 보내 {코드: 요약}을 받습니다. 결과는 캐시해 재실행 시 이어서 합니다.
+    캐시에 유효하지 않은 요약이 있으면(이전 버전에서 저장된 'None' 등) 버리고 다시 요청합니다."""
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
+    bad = [c for c, v in cache.items() if not valid_summary(v)]
+    for c in bad:
+        del cache[c]
+    if bad:
+        log.info(f"[{label}] 캐시의 유효하지 않은 요약 {len(bad)}개 제외 → 재요청: {', '.join(bad[:10])}")
     todo = [c for c in items if c not in cache]
     log.info(f"[{label}] 대상 {len(items):,}개 | 캐시 완료 {len(items) - len(todo):,}개 | 요청 {len(todo):,}개")
+    cache_path.parent.mkdir(parents=True, exist_ok=True)  # API 비용을 쓴 뒤 저장 실패하지 않도록 먼저 만듦
     client = OpenAI(api_key=api_key)
     started = time.time()
     for i in range(0, len(todo), BATCH):
@@ -157,7 +172,7 @@ def summarize(items, prompt, model, api_key, cache_path, label, stats=None):
                     messages=[{"role": "system", "content": prompt},
                               {"role": "user", "content": json.dumps(chunk, ensure_ascii=False)}])
                 got = json.loads(res.choices[0].message.content)
-                cache |= {c: str(got[c]).strip() for c in chunk if str(got.get(c, "")).strip()}
+                cache |= {c: got[c].strip() for c in chunk if valid_summary(got.get(c))}  # 유효하지 않으면 다음 실행에서 재요청
                 break
             except Exception as e:  # 네트워크·형식 오류는 재시도, 끝내 실패한 코드는 다음 실행에서 다시 요청
                 log.info(f"[{label}] 요청 실패 {i + 1}~{i + len(chunk)} ({attempt}/{RETRIES}): {e}")

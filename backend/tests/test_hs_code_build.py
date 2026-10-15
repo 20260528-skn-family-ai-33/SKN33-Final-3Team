@@ -3,8 +3,12 @@
 실행: python -m unittest backend/tests/test_hs_code_build.py
 """
 import importlib.util
+import json
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "app/scheduler/collectors/hscode/hs_code_build.py"
 spec = importlib.util.spec_from_file_location("hs_code_build", SRC)
@@ -74,6 +78,33 @@ class HsCodeBuildTest(unittest.TestCase):
         self.assertEqual((rows["99"]["name_ko"], rows["9999"]["name_ko"]), (hb.UN_STATS_NAME, hb.UN_STATS_NAME))
         self.assertEqual({rows[c]["source_edition"] for c in ("99", "9999", "999999")}, {hb.UN_STATS_SOURCE})
         self.assertEqual(rows["0101"]["source_edition"], "관세청")
+
+    def test_summarize_validates_and_creates_cache_dir(self):
+        # LLM이 null·'|' 포함·너무 긴 값을 주면 캐시에 넣지 않고, 기존 캐시의 'None'도 재요청합니다.
+        replies = {"a": None, "b": "x|y", "c": "가" * (hb.NAME_MAX + 1), "d": " 살아 있는 말 ", "e": "당나귀"}
+        sent = []
+
+        class FakeOpenAI:
+            def __init__(self, api_key):
+                self.chat = self.completions = self
+
+            def create(self, messages, **_):
+                chunk = json.loads(messages[1]["content"])
+                sent.append(sorted(chunk))
+                content = json.dumps({c: replies[c] for c in chunk}, ensure_ascii=False)
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(hb, "OpenAI", FakeOpenAI):
+            cache_path = Path(tmp) / "없는" / "폴더" / "cache.json"  # 아직 없는 폴더
+            got = hb.summarize(dict.fromkeys("abcd", "입력"), "p", "m", "k", cache_path, "t")
+            self.assertEqual(got, {"d": "살아 있는 말"})
+            self.assertEqual(json.loads(cache_path.read_text(encoding="utf-8")), {"d": "살아 있는 말"})
+
+            cache_path.write_text(json.dumps({"d": "살아 있는 말", "e": "None"}), encoding="utf-8")
+            sent.clear()
+            got = hb.summarize(dict.fromkeys("de", "입력"), "p", "m", "k", cache_path, "t")
+            self.assertEqual(sent, [["e"]])  # 유효한 d는 재요청하지 않음
+            self.assertEqual(got, {"d": "살아 있는 말", "e": "당나귀"})
 
 
 if __name__ == "__main__":
