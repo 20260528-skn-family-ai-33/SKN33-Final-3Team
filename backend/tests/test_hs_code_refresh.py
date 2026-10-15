@@ -138,16 +138,27 @@ class RefreshFlowTest(unittest.TestCase):
         from unittest import mock
         from backend.app.db.crud import CRUD
         from backend.app.models.hs_code_correlation import HsCodeCorrelation
-        with mock.patch.object(refresh.hs_correlation_load, "run", return_value=0) as load,                 mock.patch.object(self.engine, "dispose"):  # 메모리 SQLite를 테스트에서 계속 쓰도록
+        src = [("150920", "150910", "n:1"), ("150930", "150910", "n:1")]
+
+        def put(*pairs):
+            with session_scope(self.engine) as s:
+                CRUD(HsCodeCorrelation).upsert_many(s, [{"new_ver": "HS2022", "new_code": n, "old_ver": "HS2017",
+                                                         "old_code": o, "relation": "n:1", "group_code": "150920",
+                                                         "source_edition": "t"} for n, o in pairs])
+
+        corr = refresh.hs_correlation_load
+        with mock.patch.object(corr, "fetch_pairs", return_value=(src, False)),                 mock.patch.object(corr, "run", return_value=0) as load,                 mock.patch.object(self.engine, "dispose"):  # 메모리 SQLite를 테스트에서 계속 쓰도록
             self.assertEqual(refresh.ensure_correlation("HS2017", self.engine), 0)  # 직전 판 없음 → 건너뜀
             self.assertEqual(refresh.ensure_correlation("HS2022", self.engine), 0)  # 없음 → 적재
-            load.assert_called_once_with("HS2022", "HS2017", track=False)
-            with session_scope(self.engine) as s:
-                CRUD(HsCodeCorrelation).upsert_many(s, [{"new_ver": "HS2022", "new_code": "150920", "old_ver": "HS2017",
-                                                         "old_code": "150910", "relation": "n:1", "group_code": "150920",
-                                                         "source_edition": "t"}])
-            self.assertEqual(refresh.ensure_correlation("HS2022", self.engine), 0)  # 있음 → 확인만
-            load.assert_called_once()
+            put(("150920", "150910"))  # 일부만 있음 → 다시 적재
+            self.assertEqual(refresh.ensure_correlation("HS2022", self.engine), 0)
+            self.assertEqual(load.call_count, 2)
+            load.assert_called_with("HS2022", "HS2017", track=False)
+            put(("150930", "150910"))  # 원천과 같음 → 확인만
+            self.assertEqual(refresh.ensure_correlation("HS2022", self.engine), 0)
+            self.assertEqual(load.call_count, 2)
+        with mock.patch.object(corr, "fetch_pairs", side_effect=FileNotFoundError("UNSD에 없음")):
+            self.assertEqual(refresh.ensure_correlation("HS2028", self.engine), 1)  # 원천 확인 실패 → FAILED로 재시도
 
     def test_partial_load_is_rebuilt(self):
         status, calls = self.run_with((2028, 3, 1), loaded=loaded_as({"01"}))  # 1행만 있으면 완료로 보지 않음

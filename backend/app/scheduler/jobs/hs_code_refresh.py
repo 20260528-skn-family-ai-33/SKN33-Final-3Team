@@ -11,8 +11,8 @@
    새 코드가 있거나 이전 판으로 적재돼 있으면 계속 진행합니다 (요약 캐시가 있으면 새 6단위만 API 요청)
    새 판에서 빠진 이전 코드는 지우지 않습니다 (과거 수출입 데이터 연결용). upsert라 새 코드는 추가, 기존 코드는 이름·판 갱신
 4. hs_code_build로 CSV 생성 → 요약 누락이 없으면 hs_code_load로 적재
-5. DONE·ALREADY_LOADED이면 올해 판과 직전 판(예: HS2028 ↔ HS2022)의 대응표가 hs_code_correlation에 있는지 보고,
-   없으면 hs_correlation_load로 받아 적재합니다. 새 판이 처음 적재된 해에 들어가고, 이미 있으면 확인만 합니다.
+5. DONE·ALREADY_LOADED이면 올해 판과 직전 판(예: HS2028 ↔ HS2022)의 대응 쌍이 원천과 hs_code_correlation에서 모두 같은지 보고,
+   다르면(없음·일부만 있음·원천 변경) hs_correlation_load로 다시 적재합니다. 같으면 확인만 합니다.
    대응표 적재가 실패하면(UNSD에 아직 없음 등) FAILED로 끝내 다음 날 재시도합니다 (hs_code는 이미 적재된 상태로 남음).
 결과 상태: DONE · NOT_READY · ALREADY_LOADED · FAILED. 진행과 오류는 hscode_outputs/logs/hs_code_refresh_<시각>.log에 남깁니다.
 실행할 때마다 batch_run에 한 건 기록합니다 (job HS_CODE_REFRESH, 대상 hs_code, 기간 = 기준일이 속한 해 1/1~12/31).
@@ -136,20 +136,28 @@ def previous_ver(hs_ver):
 
 
 def ensure_correlation(new, engine=None):
-    """new와 직전 판의 대응표가 DB에 없으면 받아 적재합니다. 0 성공(이미 있음 포함), 1 실패."""
+    """new와 직전 판의 대응표가 원천(UNSD 파일)의 대응 쌍과 DB에서 모두 같은지 보고, 다르면 다시 적재합니다.
+    행이 하나라도 있다고 완료로 보지 않습니다 (일부만 들어간 경우·원천 파일이 바뀐 경우도 다시 적재). 0 성공, 1 실패."""
     old = previous_ver(new)
     if old == new:
         return 0
+    try:  # 받아 둔 파일이 있으면 다시 받지 않음 (읽을 수 없으면 다시 받음)
+        need = {(n, o) for n, o, _ in hs_correlation_load.fetch_pairs(new, old)[0]}
+    except (FileNotFoundError, ValueError, requests.RequestException) as e:
+        log.error(f"대응표 {new}↔{old} 원천을 확인하지 못했습니다: {e}")
+        return 1
     engine = engine or make_engine()
     try:
         with session_scope(engine) as s:
-            have = CRUD(HsCodeCorrelation).count(s, new_ver=new, old_ver=old)
+            have = set(s.execute(select(HsCodeCorrelation.new_code, HsCodeCorrelation.old_code).where(
+                HsCodeCorrelation.new_ver == new, HsCodeCorrelation.old_ver == old)).all())
     finally:
         engine.dispose()
-    if have:
-        log.info(f"대응표 {new}↔{old} {have:,}행이 이미 있습니다.")
+    if have == need:
+        log.info(f"대응표 {new}↔{old} {len(have):,}쌍이 원천과 같습니다.")
         return 0
-    log.info(f"대응표 {new}↔{old}가 없어 받아 적재합니다 (hs_correlation_load).")
+    log.info(f"대응표 {new}↔{old}가 원천과 달라 다시 적재합니다 (DB {len(have):,}쌍, 원천 {len(need):,}쌍, "
+             f"빠짐 {len(need - have):,}, 원천에 없음 {len(have - need):,}).")
     return hs_correlation_load.run(new, old, track=False)  # 이 실행의 batch_run 한 건에 포함
 
 
