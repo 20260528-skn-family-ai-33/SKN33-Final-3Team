@@ -10,3 +10,5 @@ chroma_data/
 **/shortnews_outputs/
 # 관세청 수집 실행 결과
 **/customs_outputs/
+# HS 코드 마스터 생성 결과
+**/hscode_outputs/
