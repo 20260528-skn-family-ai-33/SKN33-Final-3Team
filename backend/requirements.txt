@@ -8,3 +8,4 @@ SQLAlchemy>=2.0,<2.1     # DB 모델·CRUD (db, models)
 PyMySQL>=1.1             # MySQL 드라이버
 APScheduler>=3.10,<4     # 배치 스케줄러 (scheduler/main.py). 4.x는 API가 달라 3.x로 고정
 tzdata>=2024.1           # Windows에서 Asia/Seoul 시간대 정보
+chromadb>=1.5,<2         # vector DB (HS 코드 임베딩, hs_code_embed)

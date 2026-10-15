@@ -10,6 +10,7 @@ HS 판(HS2022 → HS2028 …)이 바뀌면 파일 다운로드부터 적재까�
 | ③ 적재 | `scheduler/jobs/hs_code_load.py` | CSV를 검증한 뒤 `hs_code` 테이블에 upsert |
 | UN 대조 | `scheduler/collectors/hscode/hs_code_un_check.py` | UN Comtrade HS 목록을 받아 CSV 2·4·6단위 코드와 대조 |
 | 판 간 대응표 | `scheduler/jobs/hs_correlation_load.py` | UNSD HS 판 간 대응표를 받아 `hs_code_correlation`에 적재 (자동 갱신이 없을 때 실행, 수동 실행도 가능) |
+| 임베딩 | `scheduler/jobs/hs_code_embed.py` | `hs_code` 테이블에 있지만 Chroma `hs_code` 컬렉션에 없는 코드만 OpenAI로 임베딩해 추가 |
 | 자동 실행 | `scheduler/main.py` | 매년 1월 1일 00:15(KST)에 ①→②→③ 실행 (10단위 연간 개정 + HS 판 개정), 이어서 대응표가 없으면 적재 |
 
 원본 데이터: [관세청_HS부호 단위별 품목명 (공공데이터포털)](https://www.data.go.kr/data/15130660/fileData.do)
@@ -166,6 +167,30 @@ python -m backend.app.scheduler.jobs.hs_correlation_load --new HS2022 --old HS20
   파일을 직접 받아 `--xlsx <파일>`로 수동 적재합니다. 검증을 통과한 수동 파일은 캐시(`hscode_outputs/correlation/`)로 복사되어,
   UNSD 주소가 계속 실패해도 이후 자동 점검이 이 파일로 대응표를 확인합니다.
 
+## HS 코드 임베딩 (vector DB)
+
+`hs_code` 테이블의 코드를 임베딩해 Chroma(`chroma_data/`, git 제외)의 `hs_code` 컬렉션에 넣습니다.
+상담·RAG 에이전트가 "전기자동차", "올리브유 수출" 같은 말로 HS 코드를 찾는 데 씁니다.
+**MySQL에는 있지만 컬렉션에 아직 없는 id만 임베딩해 추가합니다.**
+
+```powershell
+# 수동 실행 (처음 한 번은 전체, 이후에는 미등록 코드만)
+python -m backend.app.scheduler.jobs.hs_code_embed
+
+# 임베딩 모델을 바꿨을 때: 컬렉션을 지우고 전부 다시 임베딩
+python -m backend.app.scheduler.jobs.hs_code_embed --rebuild
+```
+
+- 모델: `text-embedding-3-large`(3,072차원). 한국어 품목명 검색 품질을 기준으로 골랐습니다. 전체 1.8만여 개 첫 임베딩 비용은 약 0.2달러입니다.
+- 문서에는 코드와 상위 분류명 경로(류 → 호 → 소호 → 품목)를 함께 넣습니다. 10단위 `신차`·`기타`처럼 이름만으로 뜻이 없는 코드도
+  상위 이름으로 검색됩니다 (예: "전기자동차" → `8703801000` 신차, 상위 소호가 전기 모터 차량).
+- id는 `<hs_ver>:<hs_code>`, 메타데이터는 `hs_code`·`hs_ver`·`depth`·`hs2`·`hs4`·`hs6`·`name_ko`입니다. 출처(`source_edition`)는 저장하지 않습니다.
+- 이미 있는 id는 품목명·상위 이름·출처가 바뀌어도 다시 임베딩하지 않습니다. MySQL에서 지워진 코드도 컬렉션에서 지우지 않습니다.
+  최신 이름으로 다시 만들려면 `--rebuild`를 실행합니다.
+- 실패하면 이미 추가한 배치는 남고, 실패한 코드는 컬렉션에 없으므로 다음 실행에서 다시 추가됩니다.
+  `batch_run`에는 기록하지 않습니다(대상이 MySQL 테이블이 아님). 로그는 `hscode_outputs/logs/hs_code_embed_<시각>.log`입니다.
+- 검색: `hs_code_embed.search("올리브유", n=5, hs_ver="HS2022", depth=10)` → `[(id, 거리, 메타데이터)]` (거리가 작을수록 가까움, cosine).
+
 ## 적재 동작
 
 - `(hs_code, hs_ver)`가 같으면 새 값으로 갱신(upsert)합니다. 같은 키가 여러 번 들어오면 마지막 입력이 남습니다.
@@ -247,6 +272,7 @@ python -m unittest discover backend/tests
 | `test_db_crud.py` | 공통 CRUD, 같은 키 마지막 입력 보존, 적재 검증·롤백, 실행 로그, `batch_run` 기록 |
 | `test_hs_code_un_check.py` | UN 대조의 알려진 예외·확인 필요 구분, 보고서, 종료 코드 |
 | `test_hs_code_refresh.py` | 자동 갱신 상태(DONE·NOT_READY·ALREADY_LOADED·FAILED), 연간 새 판 재적재, 일부만 적재된 판 재적재, 매년 실행·재시도·재시작 시 실행, 판 갱신 뒤 대응표 확인·적재·실패 시 재시도 |
+| `test_hs_code_embed.py` | 임베딩 문서(상위 경로) 형식, 미등록 id만 추가(기존 id는 이름이 바뀌어도 그대로), 실패 코드 재처리, 검색 필터, 모델 변경 시 --rebuild |
 | `test_hs_correlation_load.py` | 대응표 파싱·형식 오류 검출, 비교 그룹(허브 제외), 같은 판 쌍 교체 적재, 테이블 없음 오류 |
 
 ## 로그
