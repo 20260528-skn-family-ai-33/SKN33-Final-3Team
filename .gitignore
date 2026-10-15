@@ -9,13 +9,7 @@ node_modules/
 !/data/un_data/scope.json
 !/data/un_data/required_country.csv
 !/data/un_data/required_hs.csv
-chroma_/data/*
-!/data/un_data/
-/data/un_data/*
-!/data/un_data/un_data.csv
-!/data/un_data/scope.json
-!/data/un_data/required_country.csv
-!/data/un_data/required_hs.csv
+chroma_data/
 
 # 기사 수집 실행 결과와 검토 파일
 **/news_outputs/

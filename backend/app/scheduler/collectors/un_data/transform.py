@@ -39,4 +39,3 @@ def transform(raw,cfg):
         if k and korea is not None and korea!=value(k[0]['primaryValue']):adjustments.append(list(key)+[basis,k[0]['primaryValue'],korea,korea-value(k[0]['primaryValue'])])
         for partner,(r,i) in pair.items():lineage.append(list(key)+[partner,i,r['primaryValue'],r['cifvalue'],r['fobvalue'],basis])
     return result,lineage,adjustments,problems
-
