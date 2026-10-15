@@ -257,8 +257,8 @@ class CategoryTest(unittest.TestCase):
         self.assertEqual(self.run_one("수출,전시회,한국")["kw_category"], ["무역·통상>수출입 일반", "기업·투자·진출>전시회·행사"])
 
     def test_partial_match_fixed(self):
-        """분류: 일부만 겹쳐 잘못 붙던 말 바로잡음 (관광산업 ≠ 광산, 현지진출 ≠ 지진)"""
-        self.assertEqual(self.CAT["관광산업"], "산업·품목>품목 (→ HS 코드로 연결)")
+        """분류: 일부만 겹쳐 잘못 붙던 말 바로잡음 (리튬이온배터리 ≠ 리튬 광물, 현지진출 ≠ 지진)"""
+        self.assertEqual(self.CAT["리튬이온배터리"], "산업·품목>품목 (→ HS 코드로 연결)")
         self.assertEqual(self.CAT["현지진출"], "기업·투자·진출>진출·마케팅")
 
     def test_framework(self):
@@ -318,6 +318,28 @@ class BuildTest(unittest.TestCase):
         df = pd.DataFrame({"근거": ["임베딩", "임베딩", "동시 등장 (5건, 60%)", "같은 뜻"], "임베딩 유사도": ["0.97", "0.95", "0.98", ""],
                            "현재 상태": [P, P, P, "1차 반영"], "팀 확인(O/X)": "", "의견": ""})
         self.assertEqual(sc.auto_mark(df)["팀 확인(O/X)"].tolist(), ["O", "", "", ""])
+
+    def test_suffix_rule(self):
+        """동의어 접미사 규칙: OO산업·OO시장·OO업 → OO (기본 단어가 있고 예외가 아닐 때), 팀 X는 규칙보다 우선"""
+        import importlib.util as iu
+        import pandas as pd
+        from collections import Counter
+        spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
+        bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
+        docs = Counter({"화장품": 400, "화장품시장": 38, "화장품산업": 10, "뷰티": 200, "뷰티시장": 19, "미래": 9,
+                        "미래산업": 14, "서비스": 40, "서비스업": 11, "물": 30, "물산업": 3, "건설": 140, "건설업": 11})
+        pairs = {(w, b) for w, b, _ in bs.suffix_pairs(docs)}
+        self.assertEqual(pairs, {("화장품시장", "화장품"), ("화장품산업", "화장품"), ("뷰티시장", "뷰티"), ("건설업", "건설")})
+        bs.GROUPS, keep = [], bs.GROUPS
+        try:
+            dec = pd.DataFrame({"표기": ["건설업"], "대표어 후보": ["건설"], "판정": ["X"]})
+            df, _ = bs.build(docs, dec)
+        finally:
+            bs.GROUPS = keep
+        m = dict(zip(df.표기, df.대표어))
+        self.assertEqual(m.get("화장품시장"), "화장품")
+        self.assertNotIn("건설업", m)                          # 팀이 X로 정한 쌍은 규칙으로도 안 묶음
+        self.assertFalse(set(m.values()) & set(m))            # 사슬 없음
 
 if __name__ == "__main__":
     unittest.main()

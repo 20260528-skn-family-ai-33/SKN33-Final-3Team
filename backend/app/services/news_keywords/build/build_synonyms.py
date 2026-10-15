@@ -11,7 +11,9 @@
   · 규칙: 표기 — 기호·띄어쓰기·대소문자를 지우면 같은 글자 (K뷰티 = K-뷰티, CHAT GPT = 챗GPT)
   · LLM 판단 — 위 규칙으로 확인되지 않아 뜻으로 묶은 것 (번역어·약어·같은 뜻 다른 말: K-BEAUTY = K-뷰티, 인공지능 = AI)
 - 데이터에 실제로 있는 표기만 남기고, 두 개 미만이면 묶음을 건너뜀
-- 임베딩·동시 등장 후보는 여기 넣지 않음 → synonym_candidates.py로 뽑아 팀 O/X 후 GROUPS에 추가
+- 팀 검수 결과(synonym_decisions.csv)의 O는 묶고, X·△는 규칙으로도 묶지 않음
+- 접미사 규칙: OO산업 · OO시장 · OO업 → OO (기본 단어가 주제어로 있고, 예외 목록에 없을 때) — 판정 "규칙: 접미사"
+- 사슬(A→B→C)은 마지막 대표어로 정리 (keyword_clean.py는 한 번만 바꾸므로)
 
 실행: python backend/app/services/news_keywords/build/build_synonyms.py [--output 경로]
 """
@@ -116,17 +118,76 @@ def check(form, rep, paren):
     return "LLM 판단"
 
 
-def build(docs):
-    rows, skipped = [], []
+# ── 접미사 규칙: OO산업 · OO시장 · OO업 → OO ─────────────────────────────
+# 같은 대상을 범위만 다르게 부른 말이라 기본 단어 하나로 모읍니다 (검색 누락 · 급증 건수 쪼개짐 방지, HS 연결도 기본 품목어로).
+SUFFIXES = ("산업", "시장", "업")
+SUFFIX_MIN_BASE = 5          # 기본 단어(OO)가 주제어로 5건 이상 있을 때만
+SUFFIX_EXCLUDE_BASE = {      # 기본 단어가 너무 넓거나(형용사·범위어) 다른 뜻이라 묶으면 안 되는 것
+    "서비스", "미래", "유망", "혁신", "전략", "고급", "고부가가치", "해외", "지원", "선물", "투자",
+    "규슈",                  # 지명
+    "노동",                  # 노동(노동법·노조 포함) ≠ 노동시장 — 노동시장은 고용시장과 묶음(팀 검수)
+}
+DECISIONS = NK / "synonym_decisions.csv"   # 팀 검수 결과 (import_synonym_review.py가 만듦): 표기, 대표어 후보, 판정(O/X/△)
+
+
+def load_decisions(path=DECISIONS):
+    if not Path(path).exists():
+        return pd.DataFrame(columns=["표기", "대표어 후보", "판정"])
+    return pd.read_csv(path, dtype=str, keep_default_na=False)
+
+
+def suffix_pairs(docs):
+    """OO산업 · OO시장 · OO업 → OO (OO가 2글자 이상, 기사 SUFFIX_MIN_BASE건 이상, 예외 아님)."""
+    out = []
+    for w in docs:
+        for suf in SUFFIXES:
+            base = w[: -len(suf)]
+            if w.endswith(suf) and len(base) >= 2 and docs.get(base, 0) >= SUFFIX_MIN_BASE and base not in SUFFIX_EXCLUDE_BASE:
+                out.append((w, base, suf))
+                break
+    return out
+
+
+def build(docs, decisions=None):
+    """순서: ① GROUPS(확정 묶음) → ② 팀 검수 O → ③ 접미사 규칙 → 사슬(A→B→C)은 마지막 대표어로 정리.
+    팀이 X·△로 표시한 쌍은 규칙으로도 묶지 않습니다."""
+    decisions = load_decisions() if decisions is None else decisions
+    paren = getattr(docs, "paren", set())
+    rows, skipped = {}, []
+
+    def add(form, rep, basis, judge):
+        if form != rep and form not in rows:
+            rows[form] = {"표기": form, "대표어": rep, "근거": basis, "판정": judge}
+
     for basis, forms in GROUPS:
         forms = list(dict.fromkeys(kc.normalize(f) for f in forms))
         present = [f for f in forms if docs[f] > 0]
         if len(present) < 2:
             skipped.append(forms[0]); continue
         rep = max(present, key=lambda f: docs[f])
-        rows += [{"표기": f, "대표어": rep, "근거": basis, "판정": check(f, rep, getattr(docs, "paren", set())),
-                  "표기_기사수": docs[f], "대표어_기사수": docs[rep]} for f in present if f != rep]
-    return pd.DataFrame(rows), skipped
+        for f in present:
+            add(f, rep, basis, check(f, rep, paren))
+    blocked = set()
+    for r in decisions.itertuples(index=False):
+        form, rep, d = kc.normalize(r[0]), kc.normalize(r[1]), r[2]
+        if d == "O" and docs[form] > 0 and docs[rep] > 0:
+            add(form, rep, "팀 검수", "팀 O")
+        elif d in ("X", "△"):
+            blocked.add((form, rep))
+    for form, base, suf in suffix_pairs(docs):
+        if (form, base) not in blocked:
+            add(form, base, f"접미사({suf})", "규칙: 접미사")
+
+    def final(w, seen=()):
+        r = rows.get(w)
+        return w if r is None or w in seen else final(r["대표어"], seen + (w,))
+    out = []
+    for form, r in rows.items():
+        rep = final(r["대표어"], (form,))
+        if rep != form:                      # 사슬이 돌아오면(A→B→A) 묶지 않음
+            out.append({**r, "대표어": rep, "표기_기사수": docs[form], "대표어_기사수": docs[rep]})
+    df = pd.DataFrame(out, columns=["표기", "대표어", "근거", "판정", "표기_기사수", "대표어_기사수"])
+    return df, skipped
 
 
 def main():

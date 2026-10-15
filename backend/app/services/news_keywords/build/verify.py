@@ -63,7 +63,7 @@ def main():
         code_cols = lambda df: df[[c for c in df.columns if c not in filled and not c.startswith("예시 기사")]]
         rv = rf.read_synonym_review()
         checks = [("동의어_검수용.xlsx", None, rv, ["표기", "대표어 후보"]),
-                  ("동의어_랜덤100_검수용.xlsx", None, rf.random100(rv), ["표기", "대표어 후보"])]
+                  ("동의어_미반영_검수용.xlsx", None, rf.remaining(rv), ["표기", "대표어 후보"])]
         cat = rf.category_rows()
         checks.append(("대중분류_검수용.xlsx", "검수", pd.DataFrame({"주제어": cat.주제어, "배정방법": cat.배정방법,
                        "지금 대분류": cat.대분류, "지금 중분류": cat.중분류}), ["주제어"]))
