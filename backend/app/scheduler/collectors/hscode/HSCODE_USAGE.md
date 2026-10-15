@@ -70,6 +70,8 @@ python -m backend.app.scheduler.jobs.hs_code_load
 python -m backend.app.scheduler.jobs.hs_code_refresh
 ```
 
+- `hs_code_refresh`는 DB에 올해 판 코드가 모두 있으면 `ALREADY_LOADED`로 끝나 CSV를 만들지 않습니다. CSV만 다시 만들 때는 ②를 실행합니다.
+
 - 요약은 `hscode_outputs/hs6_summary_cache_<hs_ver>_<모델>.json`에 저장됩니다. 다시 실행하면 캐시에 없는 코드만 API로 요청합니다.
   처음부터 다시 요약하려면 이 캐시 파일을 지웁니다.
 - LLM 응답은 비어 있지 않은 문자열이고 `|`가 없으며 500자 이하일 때만 캐시에 저장합니다. 캐시를 읽을 때도 같은 검사를 해서,
@@ -104,6 +106,28 @@ HS2022(20260101판) 대조 결과: UN 2단위 97, 4단위 1,229, 6단위 5,613�
 | 6단위 | `242400` 관세청 특수코드 이사화물 | 없음 |
 
 UN 통계용 `99`·`9999`·`999999`는 고정값으로 CSV에 넣으므로 UN에만 있는 코드가 없습니다.
+
+## 과거 HS10 보완 (일회성 CSV)
+
+HS10은 매년 추가·삭제되고, DB는 최신 사전(20260101판)으로 처음 적재되므로 그 전에 삭제된 코드는 사전에 없습니다.
+2022~2026(9월) 관세청 수출입실적에 나오는 미등록 HS10을 일회성으로 CSV로 만들어 두었습니다 (`hscode_outputs/`, git 제외).
+앞으로 새로 생기는 HS10은 연간 자동 갱신으로 들어오므로 이 보완은 과거분 한 번만 필요합니다.
+
+| 파일 | 내용 | 행 |
+|---|---|---|
+| `hscode_outputs/HS2022/hs_code_hs2022_supplement.csv` | HS4·HS6는 현재 판에 있고 HS10만 없는 코드 (HSK 연간 개정으로 삭제) | 10단위 395 |
+| `hscode_outputs/HS2017/hs_code_hs2017.csv` | HS6가 UN HS2017(H5)에만 있는 코드 (2022년 초 실적에 남은 HS2017 코드)와 FK용 상위 행 | 10단위 145, 6단위 81, 4단위 43, 2단위 25 |
+
+```powershell
+python -m backend.app.scheduler.jobs.hs_code_load --csv backend/app/scheduler/collectors/hscode/hscode_outputs/HS2017/hs_code_hs2017.csv
+python -m backend.app.scheduler.jobs.hs_code_load --csv backend/app/scheduler/collectors/hscode/hscode_outputs/HS2022/hs_code_hs2022_supplement.csv
+```
+
+- 10단위 이름은 실적의 품목명, `source_edition`은 `관세청 수출입실적 YYYY년 M월`(처음 나온 달)입니다.
+- 관세청 HS2017 한글 사전은 포털에 없어(과거 판은 `관세청_HS부호_20250101`뿐) HS2017 상위 행은 이렇게 채웠습니다.
+  2·4단위는 현재 판 한글명 재사용(없으면 UN 영문명), 6단위는 `LLM 한글 번역|UN 영문 원문`입니다.
+- 보류(적재 안 함): `9999999290`(품목명 `-`, 상위 `9999`·`999999`는 UN 통계용 코드), `621142900`(9자리).
+- HS2022 보완분은 실적 적재(`customs_load`)의 미등록 코드 처리(`fail`·`hold`)를 시험한 뒤 적재합니다.
 
 ## 적재 동작
 
