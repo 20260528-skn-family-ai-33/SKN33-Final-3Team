@@ -112,6 +112,23 @@ class HsCorrelationLoadTest(unittest.TestCase):
             self.assertEqual(hc.fetch_pairs("HS2022", "HS2017", save)[1], False)  # 고친 캐시는 다시 받지 않음
             self.assertEqual(get.call_count, 1)
 
+    def test_manual_xlsx_is_cached_for_auto_check(self):
+        # UNSD 주소가 실패해도 --xlsx로 적재한 파일을 캐시로 복사해 다음 자동 점검이 다시 받지 않게 합니다.
+        db = f"sqlite:///{(self.dir / 'hs.db').as_posix()}"
+        engine = make_engine(db)
+        Base.metadata.create_all(engine)
+        engine.dispose()
+        save = self.dir / "corr"
+        self.assertEqual(hc.run("HS2022", "HS2017", xlsx=self.xlsx, db_url=db, log_dir=self.dir, save_dir=save, track=False), 0)
+        with mock.patch.object(hc.requests, "get", side_effect=hc.requests.ConnectionError("URL 실패")) as get:
+            pairs, downloaded = hc.fetch_pairs("HS2022", "HS2017", save)
+        self.assertEqual((len(pairs), downloaded, get.call_count), (7, False, 0))
+        bad = self.dir / "bad.xlsx"  # 검증에 실패한 수동 파일은 캐시로 복사하지 않음
+        bad.write_bytes(b"PKbroken")
+        before = (save / "HS2022toHS2017.xlsx").read_bytes()
+        self.assertEqual(hc.run("HS2022", "HS2017", xlsx=bad, db_url=db, log_dir=self.dir, save_dir=save, track=False), 1)
+        self.assertEqual((save / "HS2022toHS2017.xlsx").read_bytes(), before)
+
     def test_run_fails_without_table(self):
         db = f"sqlite:///{(self.dir / 'empty.db').as_posix()}"
         self.assertEqual(hc.run("HS2022", "HS2017", xlsx=self.xlsx, db_url=db, log_dir=self.dir, track=False), 1)

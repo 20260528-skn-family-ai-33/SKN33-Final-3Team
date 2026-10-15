@@ -6,6 +6,7 @@
   새 판(HS2028 등) 대응표가 UNSD에 올라오면 같은 명령에 --new HS2028 --old HS2022로 실행합니다.
 - 받은 파일은 hscode_outputs/correlation/<new>to<old>.xlsx에 두고, 있으면 다시 받지 않습니다 (--refresh로 다시 받기).
   새로 받은 파일은 파싱 검증을 통과해야만 이 캐시로 교체하고, 받아 둔 파일을 읽을 수 없으면(손상·형식 오류) 다시 받습니다.
+  --xlsx로 직접 준 파일도 검증을 통과하면 이 캐시로 복사합니다 (UNSD 주소가 계속 실패해도 자동 갱신의 대응표 점검이 이 파일을 씀).
 - 'Correlations' 시트의 (새 코드, 이전 코드, 관계)를 읽고, 대응으로 이어진 코드 묶음마다 비교 그룹(group_code)을 붙입니다.
   group_code는 묶음 안 가장 작은 새 판 코드라서, 같은 파일이면 실행할 때마다 같은 값이 나옵니다.
 - 같은 판 쌍(new_ver, old_ver)의 기존 행을 지우고 새로 넣습니다 (원천에서 빠진 대응이 남지 않게). 한 트랜잭션이라 실패하면 전체 롤백됩니다.
@@ -14,6 +15,7 @@
 import argparse
 import logging
 import re
+import shutil
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -177,6 +179,11 @@ def _run(new, old, xlsx, db_url, refresh, save_dir, log_path, batch):
     try:
         if xlsx:
             name, pairs = Path(xlsx).name, parse(Path(xlsx), new, old)
+            cache = Path(save_dir) / f"{new}to{old}.xlsx"
+            if Path(xlsx).resolve() != cache.resolve():  # 검증된 파일만 캐시로 (자동 점검이 다시 받지 않게)
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(xlsx, cache)
+                log.info(f"수동 파일을 대응표 캐시로 복사: {cache}")
         else:
             name, (pairs, downloaded) = f"{new}to{old}.xlsx", fetch_pairs(new, old, save_dir, refresh)
             if batch is not None and downloaded:

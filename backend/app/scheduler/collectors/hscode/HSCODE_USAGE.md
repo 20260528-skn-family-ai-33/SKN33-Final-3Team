@@ -163,7 +163,8 @@ python -m backend.app.scheduler.jobs.hs_correlation_load --new HS2022 --old HS20
 - 6단위 대응만 다룹니다. HSK 10단위의 연간 신구 대응은 포함하지 않습니다.
 - 새 판(HS2028) 대응표는 UNSD 파일 이름이 `HS2028toHS2022ConversionAndCorrelationTables.xlsx` 규칙이라고 가정합니다.
   게시 후 이름이 다르면 `hs_correlation_load.py`의 `URL`을 고치고, 90일 재시도 안에 게시되지 않으면
-  파일을 직접 받아 `--xlsx <파일>`로 수동 적재합니다.
+  파일을 직접 받아 `--xlsx <파일>`로 수동 적재합니다. 검증을 통과한 수동 파일은 캐시(`hscode_outputs/correlation/`)로 복사되어,
+  UNSD 주소가 계속 실패해도 이후 자동 점검이 이 파일로 대응표를 확인합니다.
 
 ## 적재 동작
 
