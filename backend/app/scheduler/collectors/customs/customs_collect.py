@@ -24,14 +24,26 @@ RETRIES = 3
 RETRY_WAIT = 5
 TIMEOUT = 300
 
-# ISO 3166-1 alpha-2 국가 코드 (관세청 국가코드와 같은 체계). 1회 호출 = 국가 1개 × 1년.
-COUNTRIES = """AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS
-BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET
-FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO
-IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH
-MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM
-PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG
-TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW""".split()
+def resolve_countries(env_path, selection=None):
+    """수집 대상은 SQL로 준비된 DB 국가 사전에서만 가져온다."""
+    from backend.app.db.session import make_engine, mysql_url
+    from backend.app.services.customs_reference import load_country_references
+    from backend.app.services.customs_stage import ValidationError
+    engine = make_engine(mysql_url(env_path))
+    try:
+        with engine.connect() as connection:
+            available = load_country_references(connection)
+    finally:
+        engine.dispose()
+    if selection is None:
+        return list(available)
+    requested = [code.strip().upper() for code in selection.split(",")]
+    if not requested or any(not code for code in requested):
+        raise ValidationError("국가 코드는 빈 값 없이 쉼표로 구분해야 함")
+    unknown = sorted(set(requested) - available.keys())
+    if unknown:
+        raise ValidationError("DB 국가 사전에 없는 수집 대상: " + ", ".join(unknown))
+    return list(dict.fromkeys(requested))
 
 
 class Tee:
@@ -197,12 +209,18 @@ def main():
     parser.add_argument("--month", help="한 달만 수집 (YYYYMM, 예: 202503)")
     parser.add_argument("--start", help="구간 시작 월 (YYYYMM, --end와 함께)")
     parser.add_argument("--end", help="구간 끝 월 (YYYYMM, 시작부터 12개월 이내)")
-    parser.add_argument("--countries", help="쉼표로 구분한 국가 코드 (기본: 전체 249개)")
+    parser.add_argument("--countries", help="쉼표로 구분한 국가 코드 (기본: DB 국가 사전의 COUNTRY·SPECIAL 전체)")
     parser.add_argument("--env", type=Path, default=ENV_PATH, help="인증키 .env 경로 (기본: 저장소 루트)")
     parser.add_argument("--output-dir", type=Path, default=BASE / "customs_outputs", help="결과 상위 폴더")
     args = parser.parse_args()
-    countries = [c.strip().upper() for c in args.countries.split(",")] if args.countries else COUNTRIES
     start, end, label = resolve_period(args.year, args.month, args.start, args.end)
+    try:
+        countries = resolve_countries(args.env, args.countries)
+    except ValueError as error:
+        from backend.app.services.customs_stage import ValidationError
+        parser.error(str(error) if isinstance(error, ValidationError) else "국가 사전 조회 실패; MYSQL_* 설정과 기준정보 SQL 확인")
+    except Exception as error:
+        parser.error(f"국가 사전 조회 실패 ({type(error).__name__}); MYSQL_* 설정과 기준정보 SQL 확인")
 
     out_dir = args.output_dir / label
     cache_dir = out_dir / "_cache"
@@ -239,4 +257,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if not __package__:
+        sys.path.insert(0, str(ENV_PATH.parent))
     main()

@@ -11,6 +11,8 @@
   완료 여부는 갱신 작업 안에서 판단하므로(이미 올해 판으로 모두 있으면 ALREADY_LOADED, LLM 호출 없음) 여기서 따로 보지 않습니다.
 - hs_code_embed: 매일 01:00(KST)에 hs_code 테이블에 있지만 Chroma hs_code 컬렉션에 없는 코드만 임베딩해 추가.
   연간 갱신(00:15)이나 실적 적재가 추가한 코드가 그날 밤 vector DB에 들어갑니다. 새 코드가 없으면 OpenAI를 부르지 않습니다.
+- customs_monthly: 매월 10일 03:00(KST)에 전월 수출입 수집·검증·적재·계산을 실행합니다.
+  시작 시에는 복구 범위의 누락·실패 월도 점검합니다. 운영 시작 월은 CUSTOMS_START_MONTH로 지정합니다.
 """
 from datetime import datetime, timedelta
 
@@ -19,6 +21,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
+from backend.app.scheduler.jobs import customs_monthly
 
 KST = refresh.KST
 HS_REFRESH_TRIGGER = CronTrigger(month=1, day=1, hour=0, minute=15, timezone=KST)  # 매년
@@ -50,6 +53,7 @@ def build_scheduler():
     # 매일 미등록 코드 임베딩: 실패한 코드는 컬렉션에 없으므로 다음 날 다시 추가됨 (따로 재시도하지 않음)
     scheduler.add_job(embed.run, HS_EMBED_TRIGGER, id="hs_code_embed", coalesce=True, misfire_grace_time=6 * 3600,
                       replace_existing=True)
+    customs_monthly.register_jobs(scheduler)
     return scheduler
 
 
