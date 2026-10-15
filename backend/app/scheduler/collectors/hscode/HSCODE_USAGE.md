@@ -134,7 +134,7 @@ python -m backend.app.scheduler.jobs.hs_code_load --csv backend/app/scheduler/co
 
 HS 판이 바뀌면(HS2017→HS2022→HS2028 …) 같은 품목의 6단위 코드가 나뉘거나 합쳐집니다. 판을 넘어 실적 추이를 이어 보려면 대응표가 필요합니다.
 원천은 [UN 통계국 HS 대응표](https://unstats.un.org/unsd/classifications/Econ)(xlsx)입니다. WCO 대응표(Table I·II)를 바탕으로 만든 표이며,
-[WCO 원본](https://www.wcoomd.org/en/topics/nomenclature/instrument-and-tools/hs-nomenclature-2022-edition/correlation-tables-hs-2017-2022.aspx)은 PDF로만 제공됩니다.
+[WCO 원본](https://www.wcoomd.org/en/topics/nomenclature/instrument-and-tools/hs-nomenclature-2022-edition/correlation-tables-hs-2017-2022.aspx)은 PDF로만 제공됩니다. 팀 요구사항의 'WCO 6단위 매핑표'는 이 UNSD 표로 충족하기로 정했습니다(WCO PDF 직접 추출은 범위 밖).
 
 ```powershell
 # 테이블 생성 (한 번만, batch_run.target_table에 hs_code_correlation 추가 포함)
@@ -161,6 +161,9 @@ python -m backend.app.scheduler.jobs.hs_correlation_load --new HS2022 --old HS20
 - HS2022↔HS2017 결과: 대응 15,657쌍(`n:n` 10,114, `1:1` 4,097, `n:1` 1,392, `1:n` 54), 비교 그룹 5,246개(최대 38개 묶음).
 - `hs_code`를 FK로 참조하지 않습니다. 이전 판 코드는 `hs_code`에 일부만 있어도(실적에 남은 HS2017 등) 대응표는 전체가 필요합니다.
 - 6단위 대응만 다룹니다. HSK 10단위의 연간 신구 대응은 포함하지 않습니다.
+- 새 판(HS2028) 대응표는 UNSD 파일 이름이 `HS2028toHS2022ConversionAndCorrelationTables.xlsx` 규칙이라고 가정합니다.
+  게시 후 이름이 다르면 `hs_correlation_load.py`의 `URL`을 고치고, 90일 재시도 안에 게시되지 않으면
+  파일을 직접 받아 `--xlsx <파일>`로 수동 적재합니다.
 
 ## 적재 동작
 
