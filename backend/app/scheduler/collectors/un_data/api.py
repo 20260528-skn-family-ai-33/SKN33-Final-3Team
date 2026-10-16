@@ -10,6 +10,7 @@ from backend.app.scheduler.collectors.un_data.pipeline import require, VER
 from backend.app.scheduler.collectors.un_data.transform import scalar
 
 
+# 국가·품목·주기와 수입/파트너 설정이 지원 범위에 맞는지 확인합니다.
 def validate_config(cfg):
     require(cfg['start_year']==2022,'start_year must be 2022')
     require(set(cfg['reporters'])=={'M','A'},'M/A scopes required')
@@ -24,6 +25,7 @@ def validate_config(cfg):
     require(cfg['partners']==[0,410] and cfg['flow']=='M','only import world/Korea supported')
 
 
+# UN API 요청 간격·재시도·응답 검증과 원본 응답 파일 저장을 담당합니다.
 class Client:
     def __init__(self, api_key=None, session=None, interval=1.1):
         self.api_key=api_key
@@ -32,6 +34,7 @@ class Client:
         self.last=0.0
         self.request_count=0
 
+    # 네트워크·서버 오류는 제한적으로 재시도하고, 인증·할당량 오류는 즉시 알립니다.
     def get(self,path,params,out):
         base='https://comtradeapi.un.org/'+('data' if self.api_key else 'public')+'/v1/'
         headers={'Ocp-Apim-Subscription-Key':self.api_key} if self.api_key else {}
@@ -49,11 +52,12 @@ class Client:
             payload=json.loads(response.text,parse_float=Decimal)
             require(isinstance(payload.get('data'),list) and payload.get('count')==len(payload['data']) and not payload.get('error'),'invalid API envelope')
             out=Path(out);out.parent.mkdir(parents=True,exist_ok=True)
-            out.write_text(json.dumps({'path':path,'params':params,'response':payload},ensure_ascii=False,default=str))
+            out.write_text(json.dumps({'path':path,'params':params,'response':payload},ensure_ascii=False,default=str),encoding='utf-8')
             return payload['data']
         raise RuntimeError('API retry exhausted')
 
 
+# 발표일 범위로 M/A 목록을 조회하고, 대상 국가의 2022년 이후 데이터셋을 고릅니다.
 def discover(client,cfg,start,end,run_dir):
     require(start<=end,'publication range reversed');validate_config(cfg)
     datasets={}
@@ -78,6 +82,7 @@ def discover(client,cfg,start,end,run_dir):
     return [datasets[k] for k in sorted(datasets)]
 
 
+# 선택한 데이터셋의 세계·한국 수입 RAW를 수집하며, 응답 범위·판본·중복을 검사합니다.
 def collect(client,cfg,datasets,run_dir):
     catalog={(r['freqCode'],str(r['period']),str(r['reporterCode'])):r for r in datasets}
     pairs={tuple(p) for p in cfg['target_pairs']};raw=[];seen=set();request_no=0

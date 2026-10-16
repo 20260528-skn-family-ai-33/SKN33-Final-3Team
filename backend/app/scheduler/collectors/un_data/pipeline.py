@@ -1,4 +1,4 @@
-"""UN 최종 CSV 검증. 원천 변환 코드는 별도 과거 참고 자료에 보관합니다."""
+"""UN CSV·변환 결과의 공통 검증 및 비중 계산."""
 import csv, re
 from pathlib import Path
 from decimal import Decimal, ROUND_HALF_UP
@@ -17,6 +17,7 @@ def read_rows(path):
         yield from csv.DictReader(f)
 
 
+# 빈 금액은 NULL로 유지하고, 음수·비정상 값·DB 소수 정밀도 초과를 차단합니다.
 def amount(value):
     if value in ('', None): return None
     n=Decimal(str(value))
@@ -25,12 +26,14 @@ def amount(value):
     require(n < Decimal(10)**21, 'DECIMAL(24,3) 초과')
     return n
 
+# 세계 수입액이 양수이고 한국 금액이 있을 때만 비중을 계산해 소수 6자리로 반올림합니다.
 def share(world, korea):
     return (korea*100/world).quantize(Decimal('.000001'), rounding=ROUND_HALF_UP) if world is not None and world>0 and korea is not None else None
 
 
 
 
+# 9컬럼 구조·복합 키·기간·코드·금액·비중을 공통 규칙으로 검증합니다.
 def validate_records(records, allow_empty=False):
     rows=[]; seen=set()
     for r in records:
@@ -50,5 +53,6 @@ def validate_records(records, allow_empty=False):
     return rows
 
 
+# 최종 CSV를 읽어 공통 검증을 적용합니다. 기본적으로 빈 파일은 허용하지 않습니다.
 def validate_csv(path):
     return validate_records(read_rows(path))

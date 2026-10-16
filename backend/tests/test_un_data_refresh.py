@@ -128,7 +128,8 @@ class MonthlyRefreshTest(unittest.TestCase):
             with mock.patch.object(client,'get',return_value=response):
                 with self.assertRaises(ValueError):api.collect(client,CFG,[catalog()],self.path)
     def test_monthly_trigger(self):
-        trigger=job.build_scheduler(lambda:None).get_job('un_data_monthly').trigger
+        from backend.app.scheduler import main as scheduler
+        trigger=scheduler.build_scheduler().get_job('un_data_monthly').trigger
         self.assertEqual(trigger.get_next_fire_time(None,datetime(2026,10,15,tzinfo=job.KST)).isoformat(),'2026-11-01T03:00:00+09:00')
     def test_http_retry_and_key_not_saved(self):
         session=mock.Mock();session.get.side_effect=[mock.Mock(status_code=503),mock.Mock(status_code=200,text='{"count":0,"data":[]}')]
