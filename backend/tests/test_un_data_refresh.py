@@ -92,7 +92,7 @@ class MonthlyRefreshTest(unittest.TestCase):
         self.assertFalse(any('batch_run' in s or 'service_option' in s for s in statements))
     def test_api_failure_preserves_state(self):
         self.run_job();old=self.snapshot();checkpoint=self.checkpoint();client=FakeClient()
-        with mock.patch.object(client,'get',side_effect=RuntimeError('HTTP 429')):
+        with mock.patch.object(client,'get',side_effect=job.ApiRequestError('HTTP 429',kind='http',status_code=429)):
             with self.assertRaises(RuntimeError):self.run_job(client,date(2024,3,1))
         self.assertEqual(old,self.snapshot());self.assertEqual(checkpoint,self.checkpoint())
     def test_invalid_raw_preserves_state(self):

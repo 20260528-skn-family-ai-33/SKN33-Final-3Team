@@ -9,6 +9,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
 from backend.app.scheduler import main as scheduler
 from backend.app.scheduler.jobs import un_data_refresh as job
+from backend.app.scheduler.jobs import un_data_resume as resume
 
 
 class SchedulerIntegrationTest(unittest.TestCase):
@@ -23,7 +24,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         before=datetime.now(scheduler.KST)
         s=scheduler.build_scheduler(self.state,Path('custom-scope'),Path('custom-env'))
         jobs={j.id:j for j in s.get_jobs()}
-        self.assertEqual(len(jobs),5)
+        self.assertEqual(len(jobs),6)
         start=jobs['un_data_startup'].trigger.run_date
         self.assertTrue(before+timedelta(seconds=9)<=start<=datetime.now(scheduler.KST)+timedelta(seconds=11))
         j=jobs['un_data_monthly'];self.assertEqual(j.max_instances,1)
@@ -88,13 +89,13 @@ class SchedulerIntegrationTest(unittest.TestCase):
 
     def test_execute_once_reads_env_and_closes_resources(self):
         env=self.state/'sample.env';env.write_text('UN_COMTRADE_API_KEY=test-un-key\n',encoding='utf-8')
-        with mock.patch.dict(job.os.environ,{},clear=True),mock.patch.object(job,'make_engine') as make,mock.patch.object(job,'Client') as client,mock.patch.object(job,'run',return_value={'status':'DB_VERIFIED'}) as run:
+        with mock.patch.dict(job.os.environ,{},clear=True),mock.patch.object(job,'make_engine') as make,mock.patch.object(job,'Client') as client,mock.patch.object(resume,'run_resumable',return_value={'status':'DB_VERIFIED'}) as run:
             job.execute_once('scope',self.state,env)
             client.assert_called_once_with('test-un-key')
-            run.assert_called_once_with(make.return_value,client.return_value,'scope',self.state)
+            run.assert_called_once_with(make.return_value,client.return_value,'scope',self.state,resume_now=False)
             client.return_value.session.close.assert_called_once();make.return_value.dispose.assert_called_once()
 
     def test_execute_once_failure_closes_resources(self):
-        with mock.patch.object(job,'make_engine') as make,mock.patch.object(job,'Client') as client,mock.patch.object(job,'run',side_effect=RuntimeError('failure')):
+        with mock.patch.object(job,'make_engine') as make,mock.patch.object(job,'Client') as client,mock.patch.object(resume,'run_resumable',side_effect=RuntimeError('failure')):
             with self.assertRaises(RuntimeError):job.execute_once(state_dir=self.state)
             client.return_value.session.close.assert_called_once();make.return_value.dispose.assert_called_once()

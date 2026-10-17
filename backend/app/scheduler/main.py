@@ -64,13 +64,31 @@ def un_refresh_job(state_dir=UN_STATE, scope_path=UN_SCOPE, api_env=UN_ENV):
             return 'NOT_INITIALIZED'
         # UN의 의존성·설정 오류도 기존 HS 작업 등록/실행을 막지 않도록 여기서 import.
         from backend.app.scheduler.jobs.un_data_refresh import execute_once
-        execute_once(scope_path, state_dir, api_env)
+        result=execute_once(scope_path, state_dir, api_env)
+        if isinstance(result,dict) and result.get('status') in ('WAITING','DEFERRED','RETRY_EXHAUSTED','FAILED'):
+            log.warning('UN 재개 상태: %s, 다음 실행: %s',result['status'],result.get('next_attempt_at'))
+            return result['status']
         return 'SUCCESS'
     except Exception:
         log.exception('UN 점검 실패: 다른 배치 작업은 계속 실행됩니다. 정상 점검일 유지 여부를 확인하고 재시도하세요.')
         return 'FAILED'
     finally:
         UN_RUN_LOCK.release()
+
+
+# 매분 영속 상태의 기한만 확인합니다. 대기 중에는 API/DB 연결을 만들지 않습니다.
+def un_resume_job(state_dir=UN_STATE,scope_path=UN_SCOPE,api_env=UN_ENV):
+    from backend.app.scheduler.jobs.un_data_resume import read_state
+    try:
+        state=read_state(state_dir)
+        if not state or state['status']!='WAITING' or not state.get('next_attempt_at'):
+            return 'NO_RETRY'
+        if datetime.now(KST)<datetime.fromisoformat(state['next_attempt_at']):
+            return 'DEFERRED'
+        return un_refresh_job(state_dir,scope_path,api_env)
+    except Exception:
+        log.exception('UN 자동 재개 상태 확인 실패')
+        return 'FAILED'
 
 
 # 기존 HS 작업에 UN 시작 점검과 매월 1일 03:00 KST 작업을 함께 등록합니다.
@@ -91,6 +109,8 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV)
     scheduler.add_job(un_refresh_job, 'date', run_date=datetime.now(KST) + timedelta(seconds=10),
                       args=un_args, id='un_data_startup', max_instances=1,
                       coalesce=True, misfire_grace_time=86400, replace_existing=True)
+    scheduler.add_job(un_resume_job,'interval',minutes=1,args=un_args,id='un_data_resume',
+                      max_instances=1,coalesce=True,replace_existing=True)
     return scheduler
 
 

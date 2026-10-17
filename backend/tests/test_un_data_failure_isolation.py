@@ -39,7 +39,7 @@ class FailureIsolationTest(unittest.TestCase):
 
     def test_retry_and_new_dataset_and_latest_edition(self):
         self.partial()
-        client=fixture.FakeClient([fixture.catalog('A',2023,40,'H2'),fixture.catalog(period=202402)],
+        client=fixture.FakeClient([fixture.catalog('A',2023,40,'H2',released='2024-02-02'),fixture.catalog(period=202402)],
             [fixture.raw('A','2023',40,edition='H2'),fixture.raw(period='202402')])
         self.run_job(client)
         self.assertEqual(len(self.snapshot()),3)
@@ -61,7 +61,7 @@ class FailureIsolationTest(unittest.TestCase):
 
     def test_auth_quota_stops_all_scopes(self):
         checkpoint=self.checkpoint()
-        with mock.patch.object(job,'process_dataset',side_effect=RuntimeError('HTTP 429')) as process:
+        with mock.patch.object(job,'process_dataset',side_effect=job.ApiRequestError('HTTP 429',kind='http',status_code=429)) as process:
             with self.assertRaises(RuntimeError):self.run_job()
         self.assertEqual(process.call_count,1)
         self.assertEqual(len(self.pending()['datasets']),2)

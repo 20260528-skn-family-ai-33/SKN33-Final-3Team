@@ -1,6 +1,5 @@
 """UN 전용 잠금. 잠금 소유 연결에서만 적재 트랜잭션을 수행합니다."""
 import logging
-import sys
 from contextlib import contextmanager
 from sqlalchemy import text
 from backend.app.db.session import session_scope
@@ -80,7 +79,11 @@ def db_lock(engine):
         return
     connection = engine.connect()
     acquired = False
+    failed = False
     try:
+        # advisory lock 전용 연결은 잠금 획득 전에 풀에서 분리합니다.
+        # invalidate가 취소돼도 close가 풀 반환 대신 물리 연결을 종료하도록 보장합니다.
+        connection.detach()
         owner = connection.scalar(text('SELECT CONNECTION_ID()'))
         acquired = connection.scalar(text('SELECT GET_LOCK(:name, 0)'), {'name': LOCK_NAME}) == 1
         if not acquired:
@@ -88,25 +91,47 @@ def db_lock(engine):
         guard = Guard(engine, connection, owner)
         guard.check()
         yield guard
+    except BaseException:
+        # 바깥 except의 예외가 아니라, 잠금 획득·검사·본문에서 나온 실패만 구분합니다.
+        # 취소도 원래 예외를 유지하면서 finally에서 연결 정리를 수행합니다.
+        failed = True
+        raise
     finally:
-        failed = sys.exc_info()[0] is not None
-        cleanup_error = None
+        cleanup_errors = []
+
+        # 정리 중 취소도 잠시 보관해 남은 정리를 시도합니다. 무조건 삼키지는 않습니다.
+        def invalidate_connection():
+            try:
+                connection.invalidate()
+            except BaseException as error:
+                cleanup_errors.append(error)
+                log.exception('UN 잠금 연결 폐기 실패')
+
         try:
             if acquired and not connection.invalidated and not connection.closed:
                 result = connection.scalar(text('SELECT RELEASE_LOCK(:name)'), {'name': LOCK_NAME})
                 if result != 1:
                     raise RuntimeError('UN DB 잠금 해제 시 소유권 유실')
-        except Exception as error:
-            cleanup_error = error
-            try:
-                connection.invalidate()
-            except Exception:
-                log.exception('UN 잠금 연결 폐기 실패')
+        except BaseException as error:
+            cleanup_errors.append(error)
             log.exception('UN 잠금 정리 실패')
-        try:
-            connection.close()
-        except Exception as error:
-            cleanup_error = cleanup_error or error
-            log.exception('UN 잠금 연결 종료 실패')
-        if cleanup_error is not None and not failed:
-            raise cleanup_error
+            invalidate_connection()
+        finally:
+            # 해제·폐기 중 취소가 발생해도 연결 종료를 시도합니다.
+            try:
+                connection.close()
+            except BaseException as error:
+                cleanup_errors.append(error)
+                log.exception('UN 잠금 연결 종료 실패')
+                invalidate_connection()
+                # 종료 자체가 중단됐다면 폐기 후 한 번만 다시 시도합니다.
+                try:
+                    connection.close()
+                except BaseException as retry_error:
+                    cleanup_errors.append(retry_error)
+                    log.exception('UN 잠금 연결 종료 재시도 실패')
+        if cleanup_errors and not failed:
+            # 작업 오류가 없으면 취소를 우선 전달하고, 그 외에는 첫 정리 오류를 전달합니다.
+            cancellation = next((error for error in cleanup_errors
+                                 if not isinstance(error, Exception)), None)
+            raise cancellation if cancellation is not None else cleanup_errors[0]

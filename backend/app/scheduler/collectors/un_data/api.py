@@ -2,7 +2,9 @@
 import json
 import time
 import re
-from datetime import date
+import logging
+from email.utils import parsedate_to_datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 import requests
@@ -25,42 +27,134 @@ def validate_config(cfg):
     require(cfg['partners']==[0,410] and cfg['flow']=='M','only import world/Korea supported')
 
 
+# 여러 범위에 영향을 줄 수 있는 통신·HTTP·응답 형식 장애입니다.
+# 원문 응답이나 인증 키 대신 분류·상태 코드·시도 횟수만 전달합니다.
+class ApiRequestError(RuntimeError):
+    def __init__(self, message, *, kind, status_code=None, attempts=1, retry_info=None):
+        super().__init__(message)
+        self.kind=kind
+        self.status_code=status_code
+        self.attempts=attempts
+        self.retry_info=retry_info or {}
+
+
+# 서버의 대기 안내는 초 또는 HTTP 날짜로 읽고, 긴 대기는 줄여서 재호출하지 않습니다.
+def retry_details(response):
+    headers=response.headers
+    raw=headers.get('Retry-After')
+    seconds=None
+    if isinstance(raw,str):
+        if re.fullmatch(r'[0-9]+',raw.strip()):
+            seconds=int(raw.strip())
+        else:
+            try:
+                stamp=parsedate_to_datetime(raw)
+                if stamp.tzinfo is not None:
+                    seconds=max(0,(stamp-datetime.now(timezone.utc)).total_seconds())
+            except (ValueError,TypeError,OverflowError):
+                pass
+    info={'retry_after_seconds':seconds}
+    for name in ('x-ratelimit-limit','x-ratelimit-remaining',
+                 'x-ratelimit-operation-limit','x-ratelimit-operation-remaining'):
+        value=headers.get(name)
+        if isinstance(value,str) and re.fullmatch(r'[0-9]{1,12}',value):info[name]=int(value)
+    return info
+
+
 # UN API 요청 간격·재시도·응답 검증과 원본 응답 파일 저장을 담당합니다.
 class Client:
-    def __init__(self, api_key=None, session=None, interval=1.1):
+    def __init__(self, api_key=None, session=None, interval=2.0):
         self.api_key=api_key
         self.session=session or requests.Session()
         self.interval=interval
         self.last=0.0
         self.request_count=0
+        self.request_limit=None
 
-    # 네트워크·서버 오류는 제한적으로 재시도하고, 인증·할당량 오류는 즉시 알립니다.
+    # 네트워크·서버 오류와 429는 제한적으로 재시도하고, 인증 오류는 즉시 중단합니다.
     def get(self,path,params,out):
         base='https://comtradeapi.un.org/'+('data' if self.api_key else 'public')+'/v1/'
         headers={'Ocp-Apim-Subscription-Key':self.api_key} if self.api_key else {}
+        last_error=None
         for attempt in range(3):
+            # 재시도도 실제 HTTP 호출 예산에 포함합니다. 캐시 재사용은 여기로 오지 않습니다.
+            if self.request_limit is not None and self.request_count>=self.request_limit:
+                # 재시도 중 예산이 끝나면 API 장애와 대기 정책을 보존합니다.
+                if last_error is not None:
+                    raise last_error
+                from backend.app.scheduler.collectors.un_data.continuation import RequestBudgetExceeded
+                raise RequestBudgetExceeded()
             time.sleep(max(0,self.last+self.interval-time.monotonic()))
             self.last=time.monotonic();self.request_count+=1
             try:
                 response=self.session.get(base+path,params=params,headers=headers,timeout=(10,60))
             except requests.RequestException:
-                if attempt==2:raise RuntimeError('UN API 네트워크 실패') from None
+                last_error=ApiRequestError('UN API 네트워크 실패: 미처리 범위를 보존하고 중단합니다',
+                                           kind='network',attempts=attempt+1)
+                if attempt==2:raise last_error from None
                 continue
-            if response.status_code in (401,403,429):raise RuntimeError(f'UN API HTTP {response.status_code}: 인증/할당량 확인 후 재실행')
-            if response.status_code>=500 and attempt<2:continue
-            if response.status_code!=200:raise RuntimeError(f'UN API HTTP {response.status_code}')
-            payload=json.loads(response.text,parse_float=Decimal)
-            require(isinstance(payload.get('data'),list) and payload.get('count')==len(payload['data']) and not payload.get('error'),'invalid API envelope')
+            status=response.status_code
+            if status==429:
+                info=retry_details(response)
+                delay=max(self.interval,(info['retry_after_seconds'] if info['retry_after_seconds'] is not None else 2**(attempt+1))+1)
+                info.update(attempt=attempt+1,wait_seconds=delay,will_retry=attempt<2 and delay<=60)
+                logging.getLogger(__name__).warning('UN API 429: %s',info)
+                # 응답 원문·요청 헤더·인증 키는 기록하지 않습니다. 복구 성공 후에도 진단을 남깁니다.
+                diagnostic=Path(str(out)+'.retry.jsonl')
+                try:
+                    diagnostic.parent.mkdir(parents=True,exist_ok=True)
+                    with diagnostic.open('a',encoding='utf-8') as handle:
+                        handle.write(json.dumps(info,ensure_ascii=False)+'\n')
+                except OSError:
+                    logging.getLogger(__name__).exception('UN API 재시도 진단 저장 실패')
+                    raise ApiRequestError('UN API 429 및 진단 저장 실패: 중단합니다',kind='storage',
+                                          status_code=429,attempts=attempt+1,retry_info=info)
+                last_error=ApiRequestError('UN API HTTP 429: 재시도 한도 또는 호출 예산 도달',kind='http',
+                                           status_code=429,attempts=attempt+1,retry_info=info)
+                if info['will_retry']:
+                    time.sleep(delay)
+                    continue
+                raise ApiRequestError('UN API HTTP 429: 재시도 한도 또는 대기 한도 초과',kind='http',
+                                      status_code=429,attempts=attempt+1,retry_info=info)
+            # 요청 하나에서만 최대 3회 재시도합니다. 계속 실패하면 다음 범위를 호출하지 않습니다.
+            if (status==408 or 500<=status<=599) and attempt<2:
+                last_error=ApiRequestError(f'UN API HTTP {status}: 미처리 범위를 보존하고 중단합니다',
+                                           kind='http',status_code=status,attempts=attempt+1)
+                continue
+            if status!=200:
+                raise ApiRequestError(f'UN API HTTP {status}: 미처리 범위를 보존하고 중단합니다',
+                                      kind='http',status_code=status,attempts=attempt+1)
+            try:
+                payload=json.loads(response.text,parse_float=Decimal)
+            except (ValueError,TypeError):
+                raise ApiRequestError('UN API 응답 JSON 오류: 실행을 중단합니다',
+                                      kind='response',status_code=status,attempts=attempt+1) from None
+            if not (isinstance(payload,dict) and isinstance(payload.get('data'),list)
+                    and payload.get('count')==len(payload['data']) and not payload.get('error')):
+                raise ApiRequestError('UN API 응답 구조 오류: 실행을 중단합니다',
+                                      kind='response',status_code=status,attempts=attempt+1)
             out=Path(out);out.parent.mkdir(parents=True,exist_ok=True)
             out.write_text(json.dumps({'path':path,'params':params,'response':payload},ensure_ascii=False,default=str),encoding='utf-8')
             return payload['data']
-        raise RuntimeError('API retry exhausted')
+        raise ApiRequestError('UN API 재시도 소진',kind='network',attempts=3)
 
 
-# 발표일 범위로 M/A 목록을 조회하고, 대상 국가의 2022년 이후 데이터셋을 고릅니다.
-def discover(client,cfg,start,end,run_dir):
+# 오류 항목도 국가·주기·기간을 안전하게 식별할 수 있어야 개별 보류할 수 있습니다.
+def discovery_scope_key(row,cfg,end):
+    freq=row['freqCode'];period=str(row['period']);reporter=str(row['reporterCode'])
+    require(freq in ('M','A'),'availability frequency invalid')
+    require(re.fullmatch(r'[0-9]{6}' if freq=='M' else r'[0-9]{4}',period),'availability period invalid')
+    start=date(int(period[:4]),int(period[4:]) if freq=='M' else 1,1)
+    require(2022<=start.year and start<=end,'availability period out of range')
+    require(reporter in cfg['reporters'][freq],'availability reporter out of scope')
+    return f'{freq}_{period}_{reporter}'
+
+
+# 발표 목록의 범위별 오류는 별도 반환하고, 식별 불가·조회 장애는 전체 중단합니다.
+# errors를 생략한 독립 호출은 오류 발생 시 예외를 유지해 조용한 누락을 막습니다.
+def discover(client,cfg,start,end,run_dir,errors=None):
     require(start<=end,'publication range reversed');validate_config(cfg)
-    datasets={}
+    datasets={};failures={};released_times={}
     for freq in ('M','A'):
         periods=([f'{y}{m:02d}' for y in range(2022,end.year+1) for m in range(1,13) if (y,m)<=(end.year,end.month)]
                  if freq=='M' else [str(y) for y in range(2022,end.year+1)])
@@ -70,16 +164,35 @@ def discover(client,cfg,start,end,run_dir):
             rows=client.get(f'getDa/C/{freq}/HS',params,Path(run_dir)/'availability'/f'{freq}_{i}.json')
             require(len(rows)<10000,'availability cap reached')
             for row in rows:
+                require(isinstance(row,dict),'availability row invalid')
                 require(row['freqCode']==freq and str(row['period']) in chunk,'availability query mismatch')
                 reporter=str(row['reporterCode'])
-                if reporter not in cfg['reporters'][freq] or row['isOriginalClassification'] is not True:continue
-                released=date.fromisoformat(row['lastReleased'][:10])
-                if not start<=released<=end:continue
-                require(row['classificationCode'] in VER,'unknown HS edition')
-                key=(freq,str(row['period']),reporter)
-                if key in datasets:require(datasets[key]['classificationCode']==row['classificationCode'],'conflicting original classifications')
-                datasets[key]=row
-    return [datasets[k] for k in sorted(datasets)]
+                if reporter not in cfg['reporters'][freq]:continue
+                key=discovery_scope_key(row,cfg,end)
+                try:
+                    original=row['isOriginalClassification']
+                    require(isinstance(original,bool),'original classification flag invalid')
+                    if not original:continue
+                    released=datetime.fromisoformat(row['lastReleased'].replace('Z','+00:00'))
+                    if not start<=released.date()<=end:continue
+                    require(row['classificationCode'] in VER,'unknown HS edition')
+                    if key in datasets:
+                        require(datasets[key]['classificationCode']==row['classificationCode'],
+                                'conflicting original classifications')
+                    # 같은 판본의 중복 발표는 응답 순서와 무관하게 가장 최근 시각을 선택합니다.
+                    stamp=released.replace(tzinfo=timezone.utc) if released.tzinfo is None else released
+                    if key not in released_times or stamp>released_times[key]:
+                        datasets[key]=row;released_times[key]=stamp
+                except (KeyError,TypeError,ValueError,AttributeError) as error:
+                    record=failures.setdefault(key,{'scope':{'freqCode':freq,'period':str(row['period']),
+                                                           'reporterCode':reporter},'errors':[]})
+                    record['errors'].append({'error_type':type(error).__name__,'error':str(error)})
+    # 충돌 범위는 정상처럼 보이는 다른 항목이 있어도 선택하지 않습니다.
+    if errors is None:
+        require(not failures,'발표 목록 범위 오류: '+', '.join(sorted(failures)))
+    else:
+        errors.extend(failures[key] for key in sorted(failures))
+    return [datasets[key] for key in sorted(datasets) if key not in failures]
 
 
 # 선택한 데이터셋의 세계·한국 수입 RAW를 수집하며, 응답 범위·판본·중복을 검사합니다.

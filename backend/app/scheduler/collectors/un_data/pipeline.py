@@ -10,13 +10,6 @@ VER = {'H2':'HS2002','H3':'HS2007','H4':'HS2012','H5':'HS2017','H6':'HS2022'}
 def require(condition, message):
     if not condition: raise ValueError(message)
 
-def read_rows(path):
-    path = Path(path)
-    require(path.suffix.lower() == '.csv', '최종 CSV 파일만 지원합니다')
-    with path.open(encoding='utf-8-sig', newline='') as f:
-        yield from csv.DictReader(f)
-
-
 # 빈 금액은 NULL로 유지하고, 음수·비정상 값·DB 소수 정밀도 초과를 차단합니다.
 def amount(value):
     if value in ('', None): return None
@@ -55,4 +48,9 @@ def validate_records(records, allow_empty=False):
 
 # 최종 CSV를 읽어 공통 검증을 적용합니다. 기본적으로 빈 파일은 허용하지 않습니다.
 def validate_csv(path):
-    return validate_records(read_rows(path))
+    path=Path(path)
+    require(path.suffix.lower()=='.csv', '최종 CSV 파일만 지원합니다')
+    # 검증 예외의 traceback이 보관되어도 with를 벗어날 때 즉시 파일을 닫습니다.
+    # 중간 RAW 목록을 만들지 않고 DictReader를 검증기에 직접 전달합니다.
+    with path.open(encoding='utf-8-sig',newline='') as source:
+        return validate_records(csv.DictReader(source))
