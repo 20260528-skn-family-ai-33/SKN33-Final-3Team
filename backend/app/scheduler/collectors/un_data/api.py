@@ -220,8 +220,15 @@ def discover(client,cfg,start,end,run_dir,errors=None,excluded=None):
         row=datasets[key]
         if row['classificationCode']!='H6':
             if excluded is not None:
+                # 발표 목록은 국가·주기·기간 단위입니다. 품목은 설정 대상이며 RAW 존재 증거가 아닙니다.
+                reporter=str(row['reporterCode']);period=str(row['period'])
                 excluded.append({'dataset':row,'scope':key,'classificationCode':row['classificationCode'],
-                                 'lastReleased':row['lastReleased'],'reason':'HS2022_ONLY'})
+                                 'lastReleased':row['lastReleased'],'reason':'HS2022_ONLY',
+                                 'country_code':cfg['country_map'][reporter], 'freq_code':row['freqCode'],
+                                 'period_start':date(int(period[:4]),int(period[4:]) if row['freqCode']=='M' else 1,1).isoformat(),
+                                 'source_hs_ver':VER[row['classificationCode']],
+                                 'target_hs6_codes':sorted({hs for r,hs in cfg['target_pairs'] if r==reporter}),
+                                 'evidence_level':'DATASET_ANNOUNCEMENT_ONLY'})
             continue
         selected.append(row)
     return selected

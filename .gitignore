@@ -9,6 +9,8 @@ node_modules/
 !/data/un_data/scope.json
 !/data/un_data/required_country.csv
 !/data/un_data/required_hs.csv
+!/data/un_data/hs2022_exclusions.csv
+!/data/un_data/hs2022_exclusions_summary.json
 chroma_data/
 
 # 기사 수집 실행 결과와 검토 파일
