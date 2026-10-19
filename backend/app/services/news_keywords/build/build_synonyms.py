@@ -148,15 +148,33 @@ def suffix_pairs(docs):
     return out
 
 
+class SynonymConflict(ValueError):
+    """팀 검수 판정과 최종 사전이 맞지 않음 (X·△ 쌍이 합쳐지거나, O 쌍이 서로 다른 대표어로 갈라짐) — 판정을 정리해야 함."""
+
+
+def conflicts(rows, blocked, joined=()):
+    """최종 사전 {표기: (대표어, 판정)}을 팀 판정과 대조합니다. 반대 판정이 남은 줄의 설명 목록.
+    - X·△ 쌍(blocked)은 최종 대표어가 달라야 함 (다른 연결을 거쳐 합쳐지면 안 됨)
+    - O 쌍(joined)은 최종 대표어가 같아야 함 (한 표기에 O가 여럿이어도 모두 같은 대표어로 모이면 됨)"""
+    rep = lambda w: rows[w][0] if w in rows else w
+    how = lambda w: f"{w} → {rows[w][0]} ({rows[w][1]})" if w in rows else f"{w} (대표어)"
+    pairs = lambda s: (sorted(p) for p in sorted(s, key=sorted))
+    out = [f"{a} ≠ {b} (X·△)인데 둘 다 '{rep(a)}'로 합쳐짐: {how(a)} / {how(b)}" for a, b in pairs(blocked) if rep(a) == rep(b)]
+    out += [f"{a} = {b} (O)인데 대표어가 갈라짐: {how(a)} / {how(b)}" for a, b in pairs(joined) if rep(a) != rep(b)]
+    return out
+
+
 def build(docs, decisions=None):
     """순서: ① GROUPS(확정 묶음) → ② 팀 검수 O → ③ 접미사 규칙 → 사슬(A→B→C)은 마지막 대표어로 정리.
-    팀이 X·△로 표시한 쌍은 규칙으로도 묶지 않습니다."""
+    팀이 X·△로 표시한 쌍은 방향과 상관없이(A→B, B→A 모두) 규칙으로 묶지 않습니다.
+    최종 대표어로 정리한 뒤 X·△ 쌍이 같은 대표어가 되거나 O 쌍이 다른 대표어로 갈라지면 SynonymConflict로 멈춥니다."""
     decisions = load_decisions() if decisions is None else decisions
     paren = getattr(docs, "paren", set())
     rows, skipped = {}, []
 
     def add(form, rep, basis, judge):
-        if form != rep and form not in rows:
+        # 이미 반대 방향(rep → form)이 있으면 넣지 않음 — 먼저 정한 쪽(확정 묶음 > 팀 O > 규칙)이 대표어를 정함 (순환 방지)
+        if form != rep and form not in rows and rows.get(rep, {}).get("대표어") != form:
             rows[form] = {"표기": form, "대표어": rep, "근거": basis, "판정": judge}
 
     for basis, forms in GROUPS:
@@ -167,15 +185,16 @@ def build(docs, decisions=None):
         rep = max(present, key=lambda f: docs[f])
         for f in present:
             add(f, rep, basis, check(f, rep, paren))
-    blocked = set()
+    blocked, joined = set(), set()
     for r in decisions.itertuples(index=False):
         form, rep, d = kc.normalize(r[0]), kc.normalize(r[1]), r[2]
         if d == "O" and docs[form] > 0 and docs[rep] > 0:
             add(form, rep, "팀 검수", "팀 O")
+            joined.add(frozenset((form, rep)))
         elif d in ("X", "△"):
-            blocked.add((form, rep))
+            blocked.add(frozenset((form, rep)))   # 방향 없음: 제조→제조업 X면 제조업→제조도 막음
     for form, base, suf in suffix_pairs(docs):
-        if (form, base) not in blocked:
+        if frozenset((form, base)) not in blocked:
             add(form, base, f"접미사({suf})", "규칙: 접미사")
 
     def final(w, seen=()):
@@ -187,6 +206,10 @@ def build(docs, decisions=None):
         if rep != form:                      # 사슬이 돌아오면(A→B→A) 묶지 않음
             out.append({**r, "대표어": rep, "표기_기사수": docs[form], "대표어_기사수": docs[rep]})
     df = pd.DataFrame(out, columns=["표기", "대표어", "근거", "판정", "표기_기사수", "대표어_기사수"])
+    bad = conflicts({r.표기: (r.대표어, r.판정) for r in df.itertuples(index=False)}, blocked, joined)
+    if bad:
+        raise SynonymConflict(f"팀 검수 판정과 맞지 않는 쌍 {len(bad)}개. synonym_decisions.csv에서 O/X를 하나로 정리한 뒤 "
+                              "다시 실행하세요.\n" + "\n".join(f"  {x}" for x in bad))
     return df, skipped
 
 

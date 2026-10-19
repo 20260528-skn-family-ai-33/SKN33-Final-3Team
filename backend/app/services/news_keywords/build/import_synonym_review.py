@@ -2,7 +2,9 @@
 
 - 여러 사람이 나눠 채운 파일을 함께 넣을 수 있음: --file 파일 --rows 2-150 --file 파일 --rows 151-304
   (rows는 엑셀 행 번호, 생략하면 전체)
-- 같은 쌍을 두 사람이 다르게 표시했거나, 한 표기에 O가 두 개면 알려 주고 멈춤 (먼저 정리해야 함)
+- 같은 쌍을 두 사람이 다르게 표시했으면 알려 주고 멈춤 (먼저 정리해야 함)
+- 한 표기에 O가 여러 개면 알려만 줌. 그 대표어들이 결국 같은 대표어로 모이는지(O 쌍은 합쳐지고 X 쌍은 갈라지는지)는
+  build_synonyms.py가 최종 사전에서 확인하고, 맞지 않으면 멈춤
 - 시트는 "팀 확인(O/X)" 칸이 있는 첫 시트를 읽음 (통합본처럼 앞에 설명 시트가 있어도 됨)
 
 실행: python backend/app/services/news_keywords/build/import_synonym_review.py --file A.xlsx --rows 2-150 --file B.xlsx --rows 151-304
@@ -42,8 +44,9 @@ def main():
         print("같은 쌍을 다르게 표시:", k, df[(df.표기 == k[0]) & (df["대표어 후보"] == k[1])][[COL, "파일", "행"]].values.tolist()); bad = True
     o = df[df[COL] == "O"]
     for w, g in o.groupby("표기"):
-        if g["대표어 후보"].nunique() > 1:
-            print("한 표기에 O가 두 개:", w, g[["대표어 후보", "파일", "행"]].values.tolist()); bad = True
+        if g["대표어 후보"].nunique() > 1:  # 괜찮은지는 build_synonyms.py가 확인 (O 대표어들이 결국 같은 대표어로 모여야 함)
+            print("참고 — 한 표기에 O가 여러 개 (모두 같은 대표어로 모이는지 build_synonyms.py에서 확인):",
+                  w, g[["대표어 후보", "파일", "행"]].values.tolist())
     if bad:
         sys.exit("위 항목을 엑셀에서 정리한 뒤 다시 실행하세요.")
     out = df.drop_duplicates(["표기", "대표어 후보"]).rename(columns={COL: "판정"})[["표기", "대표어 후보", "판정", "의견"]]

@@ -6,8 +6,8 @@
 - 동의어_랜덤100_검수용.xlsx: 미반영 후보에서 무작위 100개 (시드 고정 → 다시 뽑아도 같은 100개)
   · 회의 결정: 100개를 확인해 문제가 없으면 "임베딩 기준 이상 → 자동 동의어" 규칙으로 처리
 - 대중분류_검수용.xlsx: topic_categories.csv 중 사람이 볼 줄(검수 필요 · 규칙(포함) · 규칙 수정 · LLM 판단) + 왜 붙었나 + 예시 기사 제목
-- 미분류_예시기사.xlsx: 아직 팀이 정하지 않은 미분류 단어(배정방법 "검수 필요")마다 최신 기사 10건 (회의 결정: 예시 기사를 보고 분야를 정함)
-  · 2026-10-19 팀 검수로 모두 정해져 지금은 0개. 기사가 쌓여 새 주제어가 10건을 넘으면 다시 생김
+- 미분류_예시기사.xlsx: 분야를 정하지 못한 주제어 전체(keyword_clean.py가 만든 unclassified_topics.csv, 기사 수 많은 순)와
+  단어마다 최신 기사 최대 10건 (회의 결정: 예시 기사를 보고 분야를 정함). 빈도로 빼지 않고 "전체 기사 수"로 걸러 봄
 
 실행: python backend/app/services/news_keywords/build/review_files.py [--out-dir 폴더]
 """
@@ -174,23 +174,31 @@ def category_file(out_dir, res):
     return df
 
 
+def unclassified_rows(path=DATA / "unclassified_topics.csv"):
+    """keyword_clean.py가 만든 미분류 주제어 전체 목록 (기사 수 많은 순, 빈도로 빼지 않음)."""
+    return pd.read_csv(path, dtype=str, keep_default_na=False)
+
+
 def unclassified_file(out_dir, res):
-    cat = pd.read_csv(NK / "topic_categories.csv", dtype=str, keep_default_na=False)
-    words = cat[cat.배정방법 == "검수 필요"].sort_values("기사수", key=lambda s: s.astype(int), ascending=False).주제어.tolist()
+    un = unclassified_rows()
     raw = pd.read_csv(RAW, usecols=["bbstxSn", "indstCl"], dtype=str, keep_default_na=False).drop_duplicates("bbstxSn")
-    res = res.merge(raw, on="bbstxSn", how="left")
-    topics = res.kw_topic.str.split("|")
-    rows, summ = [], []
-    for w in words:
-        hit = res[topics.apply(lambda x: w in x)].sort_values(["othbcDt", "bbstxSn"], ascending=False)
-        summ.append({"단어": w, "전체 기사 수": len(hit), "정한 분류 (대 > 중)": "", "의견": ""})
-        for i, r in enumerate(hit.head(EXAMPLES).itertuples(), 1):
+    res = res.merge(raw, on="bbstxSn", how="left").sort_values(["othbcDt", "bbstxSn"], ascending=False)
+    by_word = defaultdict(list)
+    for r in res.itertuples():
+        for t in set(r.kw_topic.split("|")):
+            if t and len(by_word[t]) < EXAMPLES:
+                by_word[t].append(r)
+    rows = []
+    for w in un.주제어:
+        for i, r in enumerate(by_word.get(w, []), 1):
             rows.append({"단어": w, "번호": i, "게시일": r.othbcDt[:10], "국가": r.natn, "제목": r.newsTitl, "원본 키워드": r.kwrd,
                          "같이 나온 주제어": r.kw_topic.replace("|", ", "), "다른 주제어의 분야": r.kw_category.replace("|", ", "),
                          "KOTRA 산업분류": r.indstCl, "기사ID": r.bbstxSn})
+    summ = pd.DataFrame({"단어": un.주제어, "전체 기사 수": un.기사수.astype(int), "미분류 이유": un["미분류 이유"],
+                         "정한 분류 (대 > 중)": "", "의견": ""})
     wb = Workbook()
-    write_sheet(wb.active, pd.DataFrame(summ, columns=["단어", "전체 기사 수", "정한 분류 (대 > 중)", "의견"]), [14, 12, 34, 40])
-    wb.active.title = f"단어 {len(words)}개"
+    write_sheet(wb.active, summ, [14, 12, 40, 34, 40])
+    wb.active.title = f"단어 {len(summ)}개"
     art = pd.DataFrame(rows, columns=["단어", "번호", "게시일", "국가", "제목", "원본 키워드", "같이 나온 주제어", "다른 주제어의 분야",
                                       "KOTRA 산업분류", "기사ID"])
     write_sheet(wb.create_sheet("예시 기사"), art, [10, 6, 11, 10, 50, 45, 45, 45, 18, 12])

@@ -8,7 +8,9 @@
 ③ 연도 분리: '2024', '2026년'처럼 연도만 있는 키워드는 지우지 않고 언급 연도(kw_year) 칸으로 옮깁니다.
 ④ 동의어: synonyms.csv로 같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (EV·전기자동차 → 전기차, 인공지능 → AI).
    결과 주제어(kw_topic)를 검색·집계·급증 판정에 모두 씁니다.
-⑤ 대/중분류: topic_categories.csv(주제어 → 대분류·중분류)로 기사에 분야 칸(kw_category)을 붙입니다.
+⑤ 대/중분류: 기사에 분야 칸(kw_category)을 붙입니다. 확정 분류표(topic_categories.csv)를 먼저 쓰고,
+   표에 없는 주제어는 같은 분류 규칙(category_rules.py)을 적용합니다. 그래도 못 정한 말만 미분류로 남기고,
+   미분류 주제어 전체를 이유·고유 기사 수·예시 기사와 함께 unclassified_topics.csv에 저장합니다.
    분야는 주제어 단위라 검색에서는 순위 보조 가점으로만 씁니다 (최종 관련도는 검색 단계에서 기사 문맥으로 판단).
 ⑥ 품목 연결(1·3단계): KOTRA HS 칸(hsCdNm)을 HS 6단위(hs6, 요구사항 기본 단위)·4단위(hs4)로, 없으면 KOTRA 산업분류(indstCl)로 큰 범위만 남깁니다.
    2단계(키워드·제목의 품목어 → HS 사전)는 HS 사전 완료 후 추가합니다.
@@ -21,15 +23,18 @@
 import argparse
 import csv
 import html
+import importlib.util
 import json
 import re
 import unicodedata
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import pandas as pd
 
 BASE = Path(__file__).resolve().parent
+_spec = importlib.util.spec_from_file_location("category_rules", BASE / "category_rules.py")
+cr = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(cr)
 GEO_PATH = BASE / "geo_dict.csv"
 EXCEPTIONS_PATH = BASE / "split_exceptions.csv"
 SYNONYMS_PATH = BASE / "synonyms.csv"
@@ -87,12 +92,16 @@ def split_geo(word, geo):
     if word in names:
         return [names[word]], None
     for prefix in prefixes:
+        if not word.startswith(prefix):
+            continue
         # 러시아-우크라이나처럼 이어 붙인 기호는 떼고 봅니다.
         rest = word[len(prefix):].lstrip("-–+&")
-        # 남는 말이 한 글자면(중국산, 미국내) 나누지 않습니다.
-        if word.startswith(prefix) and len(rest) >= 2:
-            places, topic = split_geo(rest, geo)
-            return [names[prefix], *places], topic
+        # 남는 말이 한 글자면(중국산, 미국내) 나누지 않습니다. 가장 긴 지명에서 멈추고 더 짧은 지명으로 다시 자르지 않습니다
+        # (인도네시아산 → 인도 + 네시아산 ✗, 유럽연합법 → 유럽 + 연합법 ✗).
+        if len(rest) < 2:
+            return [], word
+        places, topic = split_geo(rest, geo)
+        return [names[prefix], *places], topic
     return [], word
 
 
@@ -112,13 +121,55 @@ def load_synonyms(path=SYNONYMS_PATH):
         return {normalize(r["표기"]): normalize(r["대표어"]) for r in csv.DictReader(fh) if r.get("표기") and r.get("대표어")}
 
 
-def load_categories(path=CATEGORIES_PATH):
-    """주제어 → "대분류>중분류" 표를 읽습니다. 미분류는 넣지 않습니다."""
+class Categories(dict):
+    """확정 분류표: 주제어 → "대분류>중분류" (미분류는 넣지 않음).
+    표에 없는 주제어는 lookup()이 같은 분류 규칙(category_rules.assign)으로 정합니다. 표에서 미분류로 정한 말은 그대로 미분류."""
+
+    def __init__(self, table=(), listed=(), rules=True):
+        super().__init__(table)
+        self.listed = set(listed) | set(self)   # 표에 있는 주제어 (미분류 포함)
+        self.rules = rules
+        self._lists = cr.load_lists() if rules else ({}, {})
+        self._team = cr.load_decisions() if rules else {}
+        self._cache = {}
+
+    def judge(self, word):
+        """(분야 "대분류>중분류" 또는 None, 미분류 이유 또는 "")."""
+        if word in self:
+            return self[word], ""
+        if word not in self._cache:
+            fixes, llm = self._lists
+            big, mid, how, rule_txt = cr.assign(word, fixes, llm, self._team)
+            if not self.rules:
+                self._cache[word] = (None, "분류표에 없음 (규칙 적용 안 함)")
+            elif big == "미분류":
+                self._cache[word] = (None, cr.unclassified_reason(word, how, rule_txt, llm))
+            elif word in self.listed:              # 분류표에서 미분류로 둔 말은 규칙 결과로 덮지 않음
+                self._cache[word] = (None, "분류표에서 미분류로 둠")
+            else:
+                self._cache[word] = (f"{big}>{mid}", "")
+        return self._cache[word]
+
+    def lookup(self, word):
+        return self.judge(word)[0]
+
+
+def load_categories(path=CATEGORIES_PATH, rules=True):
+    """확정 분류표를 읽습니다. rules=True면 표에 없는 주제어에 공통 분류 규칙을 적용합니다."""
     if not Path(path).exists():
-        return {}
+        return Categories(rules=rules)
     with open(path, encoding="utf-8-sig", newline="") as fh:
-        return {normalize(r["주제어"]): f'{r["대분류"]}>{r["중분류"]}' for r in csv.DictReader(fh)
-                if r.get("주제어") and r.get("대분류") not in ("", "미분류")}
+        rows = [r for r in csv.DictReader(fh) if r.get("주제어")]
+    table = {normalize(r["주제어"]): f'{r["대분류"]}>{r["중분류"]}' for r in rows if r.get("대분류") not in ("", "미분류")}
+    return Categories(table, (normalize(r["주제어"]) for r in rows), rules)
+
+
+def category_of(word, cat):
+    """주제어 하나의 분야 ("대분류>중분류") 또는 None. cat이 일반 dict면 표에 있는 말만.
+    Categories는 표가 비어 있어도(파일 없음) 규칙을 적용해야 하므로 비었는지(not cat)로 판단하지 않습니다."""
+    if isinstance(cat, Categories):
+        return cat.lookup(word)
+    return (cat or {}).get(word)
 
 
 def hs4_codes(hs_field):
@@ -184,8 +235,8 @@ def process_article(kwrd, natn, geo, keep=frozenset(), syn=None, cat=None):
     return {
         "kw_clean": words,
         "kw_topic": list(dict.fromkeys(topics)),
-        # 분야: 주제어마다 정해 둔 대분류>중분류 (한 기사에 여러 개 가능)
-        "kw_category": list(dict.fromkeys((cat or {})[t] for t in topics if t in (cat or {}))),
+        # 분야: 주제어마다 대분류>중분류 (분류표 먼저, 표에 없으면 공통 규칙 — 한 기사에 여러 개 가능)
+        "kw_category": list(dict.fromkeys(c for c in (category_of(t, cat) for t in topics) if c)),
         "kw_year": list(dict.fromkeys(years)),
         "natn_code": natn_code,
         "geo_country": kw_countries,
@@ -258,6 +309,30 @@ def summarize(df, results):
     }
 
 
+UNCLASSIFIED_COLUMNS = ["주제어", "기사수", "미분류 이유", "최근 기사"]
+
+
+def unclassified_topics(df, results, cat, examples=3):
+    """분야를 정하지 못한 주제어 전체 (중복 없이). 기사수 = 그 주제어가 나온 고유 기사 수.
+    빈도로 빼지 않고 많은 순으로 정렬만 합니다 (관리자가 기사수로 걸러 보면 됨)."""
+    arts = defaultdict(list)
+    for i, r in enumerate(results):
+        for t in r["kw_topic"]:
+            arts[t].append(i)
+    col = lambda name: df[name].astype(str).tolist() if name in df.columns else [""] * len(df)
+    dates, titles, ids = col("othbcDt"), col("newsTitl"), col("bbstxSn")
+    rows = []
+    for t, idx in arts.items():
+        c, why = cat.judge(t) if isinstance(cat, Categories) else (category_of(t, cat), "분류표에 없음")
+        if c:
+            continue
+        recent = sorted(idx, key=lambda i: (dates[i], ids[i]), reverse=True)[:examples]
+        rows.append({"주제어": t, "기사수": len(idx), "미분류 이유": why,
+                     "최근 기사": " / ".join(f"[{dates[i][:10]}] {titles[i]} ({ids[i]})" for i in recent)})
+    out = pd.DataFrame(rows, columns=UNCLASSIFIED_COLUMNS)
+    return out.sort_values(["기사수", "주제어"], ascending=[False, True]).reset_index(drop=True)
+
+
 def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exceptions_path=EXCEPTIONS_PATH,
         synonyms_path=SYNONYMS_PATH, categories_path=CATEGORIES_PATH):
     df = read_input(input_path, since)
@@ -278,7 +353,11 @@ def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exception
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     out.to_csv(output_dir / "news_keywords_clean.csv", index=False, encoding="utf-8-sig")
+    un = unclassified_topics(df, results, cat)
+    un.to_csv(output_dir / "unclassified_topics.csv", index=False, encoding="utf-8-sig")
     report = summarize(df, results)
+    report["category"]["unclassified_topics"] = len(un)
+    report["category"]["unclassified_reasons"] = un["미분류 이유"].value_counts().to_dict()
     src = Counter(x[2] for x in links)
     report["product"] = {"KOTRA HS": src["KOTRA HS"], "HS 6단위": int((out["hs6"] != "").sum()),
                          "산업분류만": src["산업분류"], "없음": src[""],
@@ -346,6 +425,7 @@ def main():
     g = report["geo"]
     print(f"복합어 분리 {g['compound_split_kinds']:,}종 / 예외로 통째 유지 {g['kept_whole_kinds']:,}종 / 기사 국가 반복 {g['natn_repeated_rate']:.0%}")
     print(f"분야가 붙은 기사: {report['category']['articles_with_category']:,}건 / {report['articles']:,}건")
+    print(f"미분류 주제어: {report['category']['unclassified_topics']:,}종 → {Path(args.output_dir) / 'unclassified_topics.csv'}")
     pr = report["product"]
     print(f"품목 연결(1·3단계): KOTRA HS {pr['KOTRA HS']:,}건 (6단위 {pr['HS 6단위']:,}건) / 산업분류만 {pr['산업분류만']:,}건 / 없음 {pr['없음']:,}건")
     print(f"결과: {Path(args.output_dir) / 'news_keywords_clean.csv'}")

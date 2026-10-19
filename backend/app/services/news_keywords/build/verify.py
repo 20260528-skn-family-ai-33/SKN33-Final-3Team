@@ -51,8 +51,11 @@ def main():
     cat_file = pd.read_csv(NK / "topic_categories.csv", dtype=str, keep_default_na=False)
     ok &= same("대/중분류 topic_categories.csv", cat_file, cat_code, ["주제어"])
     bs = load("build_synonyms")
-    syn_code, _ = bs.build(bs.topic_counts())
-    ok &= same("동의어 synonyms.csv", pd.read_csv(NK / "synonyms.csv", dtype=str, keep_default_na=False), syn_code, ["표기"])
+    try:
+        syn_code, _ = bs.build(bs.topic_counts())
+        ok &= same("동의어 synonyms.csv", pd.read_csv(NK / "synonyms.csv", dtype=str, keep_default_na=False), syn_code, ["표기"])
+    except bs.SynonymConflict as e:
+        print(f"[판정 모순] 동의어 synonyms.csv: {e}"); ok = False
     rv_file = pd.read_csv(DATA / "동의어_검수용.csv", dtype=str, keep_default_na=False)
     if args.candidates:
         sc = load("synonym_candidates")
@@ -67,7 +70,7 @@ def main():
         cat = rf.category_rows()
         checks.append(("대중분류_검수용.xlsx", "검수", pd.DataFrame({"주제어": cat.주제어, "배정방법": cat.배정방법,
                        "지금 대분류": cat.대분류, "지금 중분류": cat.중분류}), ["주제어"]))
-        un = cat_file[cat_file.배정방법 == "검수 필요"][["주제어"]].rename(columns={"주제어": "단어"})
+        un = rf.unclassified_rows()[["주제어", "미분류 이유"]].rename(columns={"주제어": "단어"})
         checks.append(("미분류_예시기사.xlsx", 0, un, ["단어"]))
         for name, sheet, code, key in checks:
             p = args.shared / name

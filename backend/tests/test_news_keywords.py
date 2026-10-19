@@ -70,6 +70,13 @@ class GeoTest(unittest.TestCase):
         self.assertEqual(self.split("인도네시아경제"), (["ID"], "경제"))
         self.assertEqual(self.split("동남아시아전기차"), (["아세안"], "전기차"))
 
+    def test_longest_name_stops(self):
+        """② 지역: 가장 긴 지명이 맞았는데 남는 말이 한 글자면 원문 유지, 더 짧은 지명으로 자르지 않음 (인도네시아산 ≠ 인도 + 네시아산)"""
+        self.assertEqual(self.split("인도네시아산"), ([], "인도네시아산"))
+        self.assertEqual(self.split("유럽연합법"), ([], "유럽연합법"))
+        r = kc.process_article("인도네시아산,전기차", "KOTRA 본사", GEO)
+        self.assertEqual(r["country_all"], [])  # 잘못된 국가(IN)가 국가 필터에 들어가지 않음
+
     def test_no_wrong_split(self):
         """② 지역: 잘못 자르지 않기 (피지컬AI, EUDR, 중국산, 파리바게뜨)"""
         self.assertEqual(self.split("피지컬AI"), ([], "피지컬AI"))  # 피지(Fiji)는 단독일 때만
@@ -250,6 +257,36 @@ class CategoryTest(unittest.TestCase):
         """분류: 넓은 말도 뜻이 분명하면 분야 (수출 → 수출입 일반, 전시회 → 전시회·행사), 너무 넓은 말(한국)은 미분류"""
         self.assertEqual(self.run_one("수출,전시회,한국")["kw_category"], ["무역·통상>수출입 일반", "기업·투자·진출>전시회·행사"])
 
+    def test_new_word_uses_rules(self):
+        """분류: 분류표에 없는 새 주제어도 같은 규칙으로 분야 (반덤핑신규분석 → 관세·무역규제), 분류표가 먼저"""
+        self.assertNotIn("반덤핑신규분석", self.CAT)
+        self.assertEqual(self.run_one("반덤핑신규분석")["kw_category"], ["무역·통상>관세·무역규제"])
+        self.assertEqual(self.run_one("반덤핑")["kw_category"], ["무역·통상>관세·무역규제"])
+
+    def test_rules_without_table(self):
+        """분류: 분류표 파일이 없어도(빈 표) 기사 처리에서 규칙은 적용됨"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cat = kc.load_categories(Path(tmp) / "없음.csv")
+        r = kc.process_article("반덤핑신규분석", "", GEO, kc.load_exceptions(), kc.load_synonyms(), cat)
+        self.assertEqual(r["kw_category"], ["무역·통상>관세·무역규제"])
+
+    def test_team_unclassified_stays(self):
+        """분류: 분류표에서 팀이 미분류로 정한 말(상반기·한국)은 규칙으로 덮지 않고 미분류, 이유가 남음"""
+        self.assertEqual(self.run_one("상반기,한국")["kw_category"], [])
+        self.assertEqual(self.CAT.judge("상반기"), (None, "팀 검수에서 미분류로 정함"))
+
+    def test_unclassified_list(self):
+        """미분류 목록: 분야를 못 정한 주제어 전체를 중복 없이, 고유 기사 수·이유·예시 기사와 함께 (빈도로 빼지 않음)"""
+        df = pd.DataFrame({"bbstxSn": ["1", "2", "3"], "othbcDt": ["2026-10-01", "2026-10-02", "2026-10-03"],
+                           "newsTitl": ["가", "나", "다"], "natn": ["미국"] * 3,
+                           "kwrd": ["상반기,반덤핑", "상반기,상반기,ZZ희귀어", "반덤핑신규분석"]})
+        res = [kc.process_article(k, n, GEO, kc.load_exceptions(), kc.load_synonyms(), self.CAT) for k, n in zip(df.kwrd, df.natn)]
+        un = kc.unclassified_topics(df, res, self.CAT)
+        self.assertEqual(un.주제어.tolist(), ["상반기", "ZZ희귀어"])        # 분류된 반덤핑·반덤핑신규분석은 없음, 기사 수 많은 순
+        self.assertEqual(un.기사수.tolist(), [2, 1])                        # 한 기사에 두 번 나와도 1건
+        self.assertEqual(un["미분류 이유"].tolist(), ["팀 검수에서 미분류로 정함", "분류 규칙에 해당하는 말이 없음"])
+        self.assertIn("(2)", un.loc[0, "최근 기사"])
+
     def test_partial_match_fixed(self):
         """분류: 일부만 겹쳐 잘못 붙던 말 바로잡음 (리튬이온배터리 ≠ 리튬 광물, 파리협정 ≠ 통상 협정)"""
         self.assertEqual(self.CAT["리튬이온배터리"], "산업·품목>품목 (→ HS 코드로 연결)")
@@ -312,6 +349,61 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(bc.assign("관광", fixes, llm, team)[:3], ("경제·시장", "시장·소비 동향", "팀 검수"))
         self.assertEqual(bc.assign("상반기", fixes, llm, team)[:3], ("미분류", "미분류", "팀 검수"))
         self.assertEqual(bc.assign("반덤핑", fixes, llm, team)[2], "규칙(일치)")   # 팀이 O로 확인한 분류는 원래 방법 그대로
+
+    def test_category_build_empty(self):
+        """분류 생성: 대상(기사 10건 이상)이 없어도 오류 없이 같은 칸의 빈 표"""
+        import importlib.util as iu
+        spec = iu.spec_from_file_location("bc", kc.BASE / "build" / "build_categories.py")
+        bc = iu.module_from_spec(spec); spec.loader.exec_module(bc)
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "clean.csv"
+            pd.DataFrame({"kw_topic": ["전기차"]}).to_csv(p, index=False)
+            df = bc.build(p)
+        self.assertTrue(df.empty)
+        self.assertEqual(list(df.columns), bc.COLUMNS)
+
+    def test_synonym_blocked_both_ways(self):
+        """동의어: X는 방향과 상관없이 막음 (제조→제조업 X면 접미사 규칙 제조업→제조도 안 묶음)"""
+        import importlib.util as iu
+        from collections import Counter
+        spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
+        bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
+        bs.GROUPS, keep = [], bs.GROUPS
+        try:
+            dec = pd.DataFrame({"표기": ["제조"], "대표어 후보": ["제조업"], "판정": ["X"]})
+            df, _ = bs.build(Counter({"제조": 48, "제조업": 162}), dec)
+        finally:
+            bs.GROUPS = keep
+        self.assertNotIn("제조업", set(df.표기))
+
+    def test_synonym_no_cycle_with_rule(self):
+        """동의어: 팀 O(제조→제조업)와 반대 방향 접미사 규칙(제조업→제조)이 겹치면 팀 방향만 남겨 순환 없이 하나로"""
+        import importlib.util as iu
+        from collections import Counter
+        spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
+        bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
+        bs.GROUPS, keep = [], bs.GROUPS
+        try:
+            dec = pd.DataFrame({"표기": ["제조"], "대표어 후보": ["제조업"], "판정": ["O"]})
+            df, _ = bs.build(Counter({"제조": 53, "제조업": 162}), dec)
+        finally:
+            bs.GROUPS = keep
+        self.assertEqual(dict(zip(df.표기, df.대표어)), {"제조": "제조업"})
+
+    def test_synonym_conflict_stops(self):
+        """동의어: X 쌍이 다른 연결을 거쳐 같은 대표어가 되면(푸드→식품 O, 음식→식품 O, 푸드≠음식 X) 멈추고 알려 줌"""
+        import importlib.util as iu
+        from collections import Counter
+        spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
+        bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
+        bs.GROUPS, keep = [], bs.GROUPS
+        try:
+            dec = pd.DataFrame({"표기": ["푸드", "음식", "푸드"], "대표어 후보": ["식품", "식품", "음식"], "판정": ["O", "O", "X"]})
+            with self.assertRaises(bs.SynonymConflict) as e:
+                bs.build(Counter({"식품": 300, "푸드": 20, "음식": 40}), dec)
+        finally:
+            bs.GROUPS = keep
+        self.assertIn("음식 ≠ 푸드", str(e.exception))
 
     def test_synonym_auto_o(self):
         """동의어 후보: 임베딩 유사도 0.96 이상 미반영 후보만 자동 O (동시 등장·0.96 미만·이미 반영은 그대로)"""
