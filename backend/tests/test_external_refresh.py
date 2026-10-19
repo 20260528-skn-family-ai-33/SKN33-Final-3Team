@@ -63,6 +63,14 @@ class ExternalRefreshTest(unittest.TestCase):
         self.assertEqual(len(failures), 1)
         self.assertIn("| WDI | 2022~2026 | ConnectionError: WDI 응답 없음", failures[0])
 
+    def test_comtrade_limited_to_last_two_years_without_baci(self):
+        with mock.patch.object(ec, "download_baci", return_value=False), \
+                mock.patch.object(ec, "collect_wdi", return_value={}), \
+                mock.patch.object(ec, "collect_comtrade", return_value={}) as comtrade, \
+                mock.patch.object(job, "dotenv_values", return_value={ec.ENV_KEY: "test"}):
+            job.run(date(2027, 2, 1), engine=self.engine)
+        self.assertEqual([c.args[0] for c in comtrade.call_args_list], [2025, 2026])  # 2022~2024는 받지 않음
+
     def test_baci_not_ready_then_already(self):
         with mock.patch.object(ec, "download_baci", return_value=False) as download:
             self.assertEqual(job.refresh_baci(date(2027, 1, 1)), {"status": "NOT_READY", "requests": 3})

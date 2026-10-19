@@ -6,7 +6,7 @@
 1. BACI: 올해 판(BACI_HS22_V{올해}01.zip, 수정판 V{올해}01b·c 포함)이 없으면 CEPII에서 받아 2022년 이후를 집계합니다.
    아직 공개 전(404)이면 NOT_READY로 끝내고 다음 달에 다시 시도합니다. 이미 받아 집계했으면 ALREADY입니다.
 2. WDI: 2022년~작년 지표를 다시 받습니다 (World Bank가 과거 값도 수정하므로 매번 덮어씀).
-3. Comtrade: BACI에 아직 없는 연도(BACI 마지막 연도+1 ~ 작년)를 다시 받습니다. .env에 COMTRADE_API_KEY가 없으면 건너뜁니다.
+3. Comtrade: BACI에 아직 없는 연도(BACI 마지막 연도+1 ~ 작년, 최대 최근 2년)를 받습니다. .env에 COMTRADE_API_KEY가 없으면 건너뜁니다.
 
 단계마다 batch_run에 한 건씩 기록합니다 (대상 external_csv, job EXTERNAL_BACI·EXTERNAL_WDI·EXTERNAL_COMTRADE).
 진행 로그는 data/external/logs/external_refresh_<시각>.log, 다운로드·수집 실패는 download_failures.log에 따로 쌓습니다.
@@ -117,7 +117,9 @@ def run(today=None, engine=None):
     if not dotenv_values(ec.ROOT / ".env").get(ec.ENV_KEY):
         log.warning(f"COMTRADE 건너뜀: .env에 {ec.ENV_KEY}가 없음")
     else:
-        for year in range(baci_last_year() + 1, last + 1):
+        # BACI는 보통 2년 늦게 나오니 Comtrade는 최근 2년까지만 받는다. BACI 집계본이 아직 없어도
+        # 2022년부터 전부 받으면 무료 키 한도(하루 500회)를 넘는다.
+        for year in range(max(baci_last_year() + 1, last - 1), last + 1):
             statuses[f"COMTRADE_{year}"] = step("COMTRADE", str(year), date(year, 1, 1), date(year, 12, 31),
                                                 lambda year=year: ec.collect_comtrade(year), engine)
     log.info(f"외부 데이터 갱신 끝 | {statuses}")
