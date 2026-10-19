@@ -16,6 +16,7 @@ from backend.app.db.session import make_engine
 from backend.app.db.crud import CRUD
 from backend.app.scheduler.collectors.un_data.locking import db_lock
 from backend.app.scheduler.collectors.un_data.identity import bind_target
+from backend.app.scheduler.collectors.un_data.paths import validate_state_path
 from backend.app.models.un_data import UnData
 from backend.app.scheduler.collectors.un_data.api import ApiRequestError,Client,discover,collect,validate_config,discovery_scope_key
 from backend.app.scheduler.collectors.un_data.transform import transform
@@ -76,6 +77,7 @@ SNAPSHOT = {
 def initialize_csv(engine, csv_path=DEFAULT_CSV, scope_path=DEFAULT_SCOPE,
                    state_dir=DEFAULT_STATE, today=None):
     """검증된 전달 스냅샷 적재 후 대상 DB 전용 초기 체크포인트 생성."""
+    validate_state_path(state_dir)
     today = today or datetime.now(KST).date()
     require(date.fromisoformat(SNAPSHOT['last_successful_check_date']) <= today,
             '스냅샷 정상 점검일보다 이전에는 초기화할 수 없습니다')
@@ -166,6 +168,7 @@ def process_dataset(engine, client, cfg, dataset, folder, guard):
 
 # 발표 목록과 미해결 대상을 합쳐 범위별로 처리하고, 모두 해결된 경우에만 정상 점검일을 전진합니다.
 def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=None,collection_factory=None):
+    validate_state_path(state_dir)
     today=today or datetime.now(KST).date()
     state_dir=Path(state_dir);state_dir.mkdir(parents=True,exist_ok=True)
     with FileLock(str(state_dir/'refresh.lock'),timeout=0),db_lock(engine) as guard:

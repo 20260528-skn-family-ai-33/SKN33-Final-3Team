@@ -11,6 +11,7 @@ from backend.app.scheduler.collectors.un_data.api import ApiRequestError
 from backend.app.scheduler.collectors.un_data.continuation import CachedClient,BatchedClient,RequestBudgetExceeded
 from backend.app.scheduler.collectors.un_data.pipeline import require
 from backend.app.scheduler.collectors.un_data.identity import bind_target
+from backend.app.scheduler.collectors.un_data.paths import validate_state_path
 
 CALL_BUDGET=300
 BUDGET_DELAY=300
@@ -136,6 +137,7 @@ def run_resumable(engine,client,scope_path,state_dir,today=None,*,budget=CALL_BU
     now=now or datetime.now(timezone.utc)
     require(now.tzinfo is not None,'재개 시각에는 시간대가 필요합니다')
     today=today or now.astimezone(job.KST).date()
+    validate_state_path(state_dir)
     state_dir=Path(state_dir);state_dir.mkdir(parents=True,exist_ok=True)
     # 수동·시작·월별·자동 재개 모두 같은 상태 파일을 직렬화합니다.
     with continuation_lock(state_dir) as attempt:
@@ -190,8 +192,7 @@ def run_resumable(engine,client,scope_path,state_dir,today=None,*,budget=CALL_BU
         audit=journal.get('exclusion_audit', [])
         generation=hashlib.sha256(json.dumps(audit,sort_keys=True).encode()).hexdigest() if audit else None
         requests_folder=folder/'requests'
-        if generation:requests_folder=requests_folder/generation
-        cached=CachedClient(client,requests_folder,job.save)
+        cached=CachedClient(client,requests_folder,job.save,generation=generation)
         # 예산은 이 실행의 실제 HTTP 시도 수입니다. 캐시 읽기는 포함하지 않습니다.
         initial_count=client.request_count
         old_limit=client.request_limit
