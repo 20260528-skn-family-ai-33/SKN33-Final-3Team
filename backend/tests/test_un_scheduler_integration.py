@@ -24,7 +24,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         before=datetime.now(scheduler.KST)
         s=scheduler.build_scheduler(self.state,Path('custom-scope'),Path('custom-env'))
         jobs={j.id:j for j in s.get_jobs()}
-        self.assertEqual(len(jobs),6)
+        self.assertEqual(len(jobs),8)
         start=jobs['un_data_startup'].trigger.run_date
         self.assertTrue(before+timedelta(seconds=9)<=start<=datetime.now(scheduler.KST)+timedelta(seconds=11))
         j=jobs['un_data_monthly'];self.assertEqual(j.max_instances,1)
