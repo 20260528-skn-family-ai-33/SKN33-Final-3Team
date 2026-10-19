@@ -6,6 +6,8 @@
   3) 규칙 수정: 규칙 결과가 글자만 겹쳐 틀린 경우 바로잡은 목록(category_rule_fixes.csv, 규칙 결과·이유 기록)
   4) LLM 판단: 규칙에 하나도 안 걸린 말의 분야를 LLM이 뜻으로 정한 목록(category_llm.csv)
   5) 검수 필요: 위 어디에도 없거나 LLM이 "너무 넓어 정하지 않음"(미분류)으로 둔 말
+  ※ 팀 검수(category_decisions.csv)에서 X로 고친 말은 위 결과보다 우선 — 배정방법 "팀 검수"
+     (O는 지금 결과를 확인한 것이라 그대로 둠)
 대상: 정리된 주제어(kw_topic) 중 기사 MIN_ARTICLES(10)건 이상. 기준·과정 설명은 CLASSIFICATION_RULES.md
 
 실행: python backend/app/services/news_keywords/build/build_categories.py [--output 경로] [--min-articles 10]
@@ -77,11 +79,20 @@ def rule(word):
     return None
 
 
-def assign(word, fixes=None, llm=None):
+def load_decisions(path=NK / "category_decisions.csv"):
+    """팀 검수에서 X로 고친 말: 주제어 → (대분류, 중분류). 없으면 빈 표."""
+    if not Path(path).exists():
+        return {}
+    return {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read(path.name) if r.get("판정") == "X"}
+
+
+def assign(word, fixes=None, llm=None, team=None):
     """주제어 하나 → (대분류, 중분류, 배정방법, 규칙 결과)."""
-    fixes, llm = fixes or {}, llm or {}
+    fixes, llm, team = fixes or {}, llm or {}, team or {}
     r = rule(word)
     rule_txt = f"{r[0]} > {r[1]}" if r else ""
+    if word in team:
+        return (*team[word], "팀 검수", rule_txt)
     if r and word in fixes:
         return (*fixes[word], "규칙 수정", rule_txt) if fixes[word][0] != "미분류" else ("미분류", "미분류", "검수 필요", rule_txt)
     if r:
@@ -95,10 +106,11 @@ def build(clean_csv=DATA / "news_keywords_clean.csv", min_articles=MIN_ARTICLES)
     res = pd.read_csv(clean_csv, dtype=str, keep_default_na=False, usecols=["kw_topic"])
     docs = Counter(w for s in res.kw_topic for w in set(s.split("|")) if w)
     fixes, llm = load_lists()
+    team = load_decisions()
     rows = []
     for w, n in docs.items():
         if n >= min_articles:
-            big, mid, how, rule_txt = assign(w, fixes, llm)
+            big, mid, how, rule_txt = assign(w, fixes, llm, team)
             rows.append({"주제어": w, "대분류": big, "중분류": mid, "배정방법": how, "규칙 결과": rule_txt, "기사수": n})
     df = pd.DataFrame(rows)
     return df.sort_values(["기사수", "주제어"], ascending=[False, True]).reset_index(drop=True).astype({"기사수": int})

@@ -59,7 +59,7 @@ def main():
         ok &= same("동의어 후보 동의어_검수용.csv", rv_file, sc.build(sc.e5_encoder()), ["표기", "대표어 후보"])
     if args.shared:
         rf = load("review_files")
-        filled = ["팀 확인(O/X)", "의견", "맞는 분류 (X일 때 선택)", "정한 분류 (대 > 중)"]
+        filled = ["팀 확인(O/X)", "의견", "맞는 분류 (X일 때 선택)", "정한 분류 (대 > 중)", "검수 상태"]
         code_cols = lambda df: df[[c for c in df.columns if c not in filled and not c.startswith("예시 기사")]]
         rv = rf.read_synonym_review()
         checks = [("동의어_검수용.xlsx", None, rv, ["표기", "대표어 후보"]),
@@ -67,7 +67,7 @@ def main():
         cat = rf.category_rows()
         checks.append(("대중분류_검수용.xlsx", "검수", pd.DataFrame({"주제어": cat.주제어, "배정방법": cat.배정방법,
                        "지금 대분류": cat.대분류, "지금 중분류": cat.중분류}), ["주제어"]))
-        un = cat_file[cat_file.대분류 == "미분류"][["주제어"]].rename(columns={"주제어": "단어"})
+        un = cat_file[cat_file.배정방법 == "검수 필요"][["주제어"]].rename(columns={"주제어": "단어"})
         checks.append(("미분류_예시기사.xlsx", 0, un, ["단어"]))
         for name, sheet, code, key in checks:
             p = args.shared / name
