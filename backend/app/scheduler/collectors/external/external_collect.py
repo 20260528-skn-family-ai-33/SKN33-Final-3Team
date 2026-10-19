@@ -249,7 +249,7 @@ def check_baci(df):
 
 def check_db(baci, compare=("VN", "US", "CN"), tolerance=0.2):
     """DB의 HS2022 사전과 export_summary 연간 합계로 BACI를 교차 검증한다."""
-    from sqlalchemy import text
+    from sqlalchemy import bindparam, text
     sys.path.insert(0, str(ROOT))
     from backend.app.db.session import make_engine
     engine = make_engine()
@@ -260,7 +260,8 @@ def check_db(baci, compare=("VN", "US", "CN"), tolerance=0.2):
             sums = conn.execute(text(
                 "SELECT YEAR(trade_month), country_code, SUM(amount_usd) FROM export_summary"
                 " WHERE country_code IN :c GROUP BY 1, 2"
-                " HAVING COUNT(DISTINCT trade_month) = 12").bindparams(c=tuple(compare))).all()  # 연간 비교라 12개월이 다 있는 해만
+                " HAVING COUNT(DISTINCT trade_month) = 12").bindparams(
+                    bindparam("c", list(compare), expanding=True))).all()  # 연간 비교라 12개월이 다 있는 해만
     finally:
         engine.dispose()
     problems = []
