@@ -3,8 +3,8 @@
 `customs_collect.py`는 관세청 품목별 국가별 수출입실적 API로 **지정한 기간(1년·한 달·12개월 이내 구간, 전체 국가)**을 수집하고
 원본 CSV와 수집 통계를 저장하는 독립 실행 코드입니다.
 
-1. `.env`의 `customs` 인증키를 읽습니다.
-2. 국가마다 API를 1번 호출해 지정한 기간의 HS 10단위 품목별 월별 실적을 받습니다.
+1. `.env`의 MySQL 접속 정보로 DB 국가 사전에서 수집 대상을 읽고, `customs` 인증키를 읽습니다.
+2. 국가마다 API를 호출해 지정한 기간의 HS 10단위 품목별 월별 실적을 받습니다.
 3. 국가별 원본을 저장한 뒤 하나의 원본 CSV로 합치고, 수집 통계와 실행 로그를 저장합니다.
 
 응답 필드명과 값은 바꾸지 않으며, API가 함께 보내는 `총계` 행도 그대로 보존합니다.
@@ -18,7 +18,7 @@ API 안내: https://www.data.go.kr/data/15100475/openapi.do
 
 ```powershell
 cd "C:\your_folder\SKN33-Final-3Team"
-python -m pip install requests python-dotenv
+python -m pip install -r backend/requirements.txt
 ```
 
 인증키는 공공데이터포털에서 받습니다.
@@ -40,9 +40,33 @@ if (-not (Test-Path -LiteralPath ".env")) {
 
 ```dotenv
 customs=YOUR_CUSTOMS_API_KEY
+MYSQL_HOST=localhost
+MYSQL_PORT=3307
+MYSQL_USER=YOUR_MYSQL_USER
+MYSQL_PASSWORD="YOUR_MYSQL_PASSWORD"
+MYSQL_DATABASE=trade_agent
 ```
 
+MySQL 값은 실제 접속할 로컬 DB에 맞춥니다. 위 포트 `3307`은 이번 테스트 환경의 예시이며, 다른 환경은 해당 서버의 포트를 사용합니다.
+DB 접속에는 공통 모듈 `backend/app/db/session.py`를 사용하며, 같은 이름의 환경변수가 있으면 `.env`보다 우선합니다.
+
 실제 인증키가 들어 있는 `.env`는 공유하지 않습니다. 팀원에게는 `.env.sample`을 전달합니다.
+
+## 국가·지역 사전 준비
+
+수집 전에 대상 DB와 테이블이 준비되어 있어야 합니다. 새 DB라면 `db/mysql/init/01_schema.sql`로 테이블을 생성한 뒤,
+같은 DB에서 다음 파일을 순서대로 실행합니다. 기존 테이블이 있는 DB에 스키마 생성 SQL을 다시 실행할 필요는 없습니다.
+
+1. `db/mysql/init/03_market_region_seed.sql`: 대륙·하위 지역 사전
+2. `db/mysql/init/04_country_seed.sql`: 국가 코드·국가명·역할·지역 연결
+
+PyCharm의 대상 DB 쿼리 콘솔에서 위 SQL 파일 내용을 순서대로 실행해도 됩니다.
+이 두 파일은 전달받은 SQL의 데이터만 반영하며 DB 전환이나 테이블 삭제를 하지 않습니다.
+재실행할 수 있고, 입력값이 NULL인 지역·통화 연결은 기존 값을 유지합니다.
+
+수집 대상은 DB `country`의 `country_role`이 `COUNTRY` 또는 `SPECIAL`인 코드입니다. `TOTAL`은 제외합니다.
+지역·통화 정보도 `market_region`·`currency`에서 읽으며, 원본 SQL에 없는 통화 연결은 추정해서 채우지 않습니다.
+`--countries`로 지정한 코드도 DB 사전에 있어야 합니다. 사전에 없는 코드는 자동 추가하지 않고 수집 전에 오류로 알립니다.
 
 ## 실행 방법
 
@@ -52,7 +76,7 @@ customs=YOUR_CUSTOMS_API_KEY
 python backend/app/scheduler/collectors/customs/customs_collect.py --year 2025 --countries US,VN
 ```
 
-2025년 전체 국가(249개)를 수집합니다. 약 250회 호출, 6분 정도 걸립니다.
+2025년 DB 국가 사전의 전체 수집 대상을 수집합니다. 대상 수는 사전 내용에 따라 달라집니다.
 
 ```powershell
 python backend/app/scheduler/collectors/customs/customs_collect.py --year 2025
@@ -136,3 +160,103 @@ data = df[df["year"] != "총계"]
 - 0행인 국가(거래 없음, 아직 공개되지 않은 달)는 저장하지 않아 다음 실행 때 다시 조회합니다.
 - 공개 전인 달은 통계의 `missing_months`와 화면의 "데이터가 없는 달"로 표시됩니다. 공개 후 다시 실행하면 받아집니다.
 - 결과 폴더 `customs_outputs/`는 Git 커밋에서 제외됩니다.
+
+## 수집한 실적의 DB 적재와 미등록 HS10 보완
+
+수집기 자체는 CSV를 저장합니다. 다음 적재 작업은 CSV 전체를 검증한 후 월별로 MySQL에 반영합니다.
+기본 입력 파일은 `data/raw/customs/customs_raw_<연도>.csv`이며 `--csv`로 한 달 파일도 지정할 수 있습니다.
+
+```powershell
+# DB에 쓰지 않고 사전 연결과 신규 HS10 보완 계획까지 확인
+python -m backend.app.scheduler.jobs.customs_load --year 2025 --mode check --hs-ver auto
+# 검증 결과를 확인한 뒤 실제 적재
+python -m backend.app.scheduler.jobs.customs_load --year 2025 --mode load --hs-ver auto
+```
+
+- 기존 `(HS10, 판본)`은 이름·출처를 수정하지 않고 사용합니다.
+- 미등록 HS10은 같은 판의 상위 HS2·HS4·HS6가 모두 있는 경우에만 추가합니다.
+  `auto`에서 후보 판이 여러 개이면 임의로 고르지 않습니다. 원천 판이 확인된 경우에만 `--hs-ver HS2022` 등으로 명시합니다.
+- 신규 `name_ko`는 실적 CSV의 유효한 `statKor`를 사용합니다. 빈 값·`-` 등 무효 이름이나 서로 충돌하는 이름은 보류/오류로 분리합니다.
+- 신규 `original_name_ko`는 NULL, `depth`는 DB가 10으로 자동 생성하며,
+  `source_edition`은 `관세청 수출입실적 2023년 2월`처럼 원천 월을 기록합니다.
+- 신규 HS10 추가와 그 월의 수출·수입 원본 및 HS6 집계는 같은 트랜잭션입니다. 월별 적재 실패 시 사전 추가도 롤백됩니다.
+  중복 키가 발생해도 기존 사전의 품목명·출처를 덮어쓰지 않습니다.
+- `check`는 쓰지 않고 보완 계획을 보고하며, `load`에서만 사전을 추가합니다.
+- 판본 불명확·상위 코드 누락·품목명 무효는 기본 중단입니다. `--unmapped-policy hold`를 주면 원문과 사유를
+  `data/customs_load_outputs/<실행시각>/held_rows.csv`에 보존하고 나머지를 처리합니다.
+  9자리 등 형식 오류는 `--invalid-policy hold`로 별도 보존할 수 있습니다. 중복 키·깨진 CSV 구조는 항상 중단합니다.
+- 보류 사유를 해결한 뒤 보류 파일 자체를 `--csv`로 지정해 재실행할 수 있습니다.
+  자동으로 연도를 판본으로 간주하거나 코드 자릿수를 보정하지 않습니다.
+
+새 DB는 `01_schema.sql`에 실행 기록용 `hs_code_correlation` ENUM이 포함됩니다.
+기존 DB는 수출입 작업 전용 `05_customs_batch_target.sql`을 실행하면 기존 ENUM 값을 보존하며 누락된 값만 추가합니다.
+이미 대응표 테이블이 있으면 다른 담당자의 `02_hs_code_correlation.sql`을 다시 실행할 필요는 없습니다.
+
+## 월별 자동 파이프라인
+
+```powershell
+# HS 갱신·임베딩과 수출입 작업을 공용 스케줄러에서 함께 실행
+python -m backend.app.scheduler.main
+# 특정 월을 즉시 실행하거나 실패 단계에서 재시작
+python -m backend.app.scheduler.jobs.customs_monthly --month 202509
+# 해당 월을 새 API 캐시에서 다시 수집하고 이후 단계도 다시 실행
+python -m backend.app.scheduler.jobs.customs_monthly --month 202509 --refresh
+```
+
+기본 실행은 **매월 10일 03:00 Asia/Seoul**, 대상은 전월입니다. 스케줄러 프로세스를 계속 실행해야 합니다.
+공용 `scheduler/main.py`가 `customs_monthly.register_jobs(scheduler)`로 수출입 작업을 등록합니다.
+수출입 전용 스케줄러와 `--schedule` 옵션은 제거했으며, 특정 월의 수동 실행은 `--month`를 사용합니다.
+시작 약 20초 뒤에도 복구 범위의 누락·실패 월을 점검하며, 실패한 작업은 같은 대상 월로 다음 날 재시도합니다(최대 30회).
+`CUSTOMS_START_MONTH`를 지정하면 해당 월부터 전월까지만 복구합니다. 생략하면 기존 월 폴더 중 최초 월부터,
+월 폴더도 없으면 전월부터 시작합니다. 공용 스케줄러를 켜기 전에 운영 시작 월을 설정해 복구 범위를 정하세요.
+한 달의 동시 실행은 OS 파일 잠금으로 막고, 체크포인트는 `data/customs_load_outputs/monthly/<YYYYMM>/state.json`에 저장합니다.
+성공한 수집·적재·계산 단계를 재사용하고 실패 단계부터 재실행합니다. CSV가 변경됐으면 자동 재사용하지 않고 `--refresh`를 요구합니다.
+캐시 버전 변경만으로 완료된 과거 월을 자동 재실행하지 않습니다. 미완료 월의 수집을 다시 점검해도
+CSV 내용과 DB 대상·원천 HS 판본이 같으면 완료된 적재·계산 단계를 유지합니다.
+
+### 0건 국가와 공개 확인
+
+정상 응답에 실적 행이 없는 국가는 `failed`가 아닌 `unconfirmed_empty_countries`로 기록합니다.
+데이터가 있는 국가는 먼저 적재·계산하고, 월 작업은 **WAITING_FOR_PUBLICATION** 상태로 남겨 미확인 국가만 다시 조회합니다.
+같은 CSV이면 적재·계산을 반복하지 않습니다. 이후 데이터가 공개되어 CSV가 달라지면 해당 월을 다시 적재·집계·계산합니다.
+아직 전체 국가의 공개 여부가 확인되지 않은 월은 완료로 표시하지 않고 ML 실행도 기다립니다.
+
+0건 응답만으로 무거래를 확정하지 않습니다. [관세청 공식 API 설명](https://www.data.go.kr/data/15100475/openapi.do)은
+매월 15일경 자료 현행화를 안내하지만, 날짜가 지났다는 사실이나 다른 국가의 공개만으로 특정 국가의 무거래를 추정하지 않습니다.
+원천 자료 등으로 해당 월의 무거래를 별도로 확인한 국가만 다음처럼 명시합니다. 확인 사실은 해당 월의 체크포인트와 수집 보고서에 남습니다.
+확인 목록을 변경해도 정상 국가의 캐시와 같은 CSV의 적재·계산 결과를 재사용합니다.
+
+```powershell
+python -m backend.app.scheduler.jobs.customs_monthly --month 202509 --confirmed-empty-country VN
+```
+
+### 자동 재시도와 원천 HS 판본
+
+일시적인 API·DB 연결 장애, 작업 잠금 등은 `retryable: true`로 기록하여 재시도합니다.
+판 모호성·품목명 충돌·상위 코드 누락·잘못된 설정 등 검증 오류는 **FAILED / retryable: false / action_required: true**로 남깁니다.
+이 경우 매일 반복 실행하거나 시작 시 자동 복구하지 않습니다. 보고서의 원인을 수정한 뒤 해당 월을 `--month`로 직접 재실행합니다.
+공개 확인 대기는 `WAITING_FOR_PUBLICATION / retryable: true`이며, 실패 상태와 구분합니다.
+
+기본 판본은 실행 대상 월을 공용 `hs_code_build.hs_ver_for()`에 전달해 정합니다.
+예를 들어 2028년 1월에 전월인 2027년 12월을 처리하면 HS2022, 2028년 1월 자료를 처리하면 HS2028을 사용합니다.
+과거 누락 월도 실행하는 날이 아닌 해당 실적 월의 규칙을 적용하며, 공용 판본 함수 자체는 변경하지 않습니다.
+우선순위는 **명시한 `--hs-ver` → 강제 지정용 `CUSTOMS_HS_VER` → 대상 월의 공용 판본 규칙**입니다.
+평소에는 `CUSTOMS_HS_VER`를 설정하지 않습니다. 재분류된 원천 등 공용 날짜 규칙과 다른 판본을 써야 할 때만 지정하고 작업 후 해제하세요.
+명시적으로 `--hs-ver auto`를 사용한 경우에는 기존 사전 검증처럼 복수 후보를 임의 선택하지 않고 중단합니다.
+
+`.env`에서 운영 설정을 바꿀 수 있습니다.
+
+```dotenv
+CUSTOMS_MONTHLY_DAY=10
+CUSTOMS_MONTHLY_HOUR=3
+CUSTOMS_MONTHLY_MINUTE=0
+# 운영 시작 월 예시: 2026년 1월부터 복구 (실제 운영 범위에 맞게 지정)
+CUSTOMS_START_MONTH=202601
+CUSTOMS_ML_ENTRYPOINT=backend.app.ml.<팀_ML_모듈>:<실행함수>
+```
+
+월별 순서는 수집 → 검증·사전 보완·적재·집계 → 이력·이상 판정 → ML 연결입니다.
+ML 함수는 `run(trade_month="2025-09-01", engine=engine)` 형태의 인자를 받고 `{"status": "SUCCESS", ...}`를 반환해야 합니다.
+실패 재실행에 대비해 대상 월을 기준으로 중복 처리를 방지하는 것은 해당 ML 함수에서 처리합니다.
+현재 저장소의 ML 구현은 비어 있으므로 실제 함수가 준비되지 않았으면 설정을 비워 둡니다.
+이 경우 수출입 적재·계산 후 **WAITING_FOR_ML**로 남으며 ML까지 완료했다고 표시하지 않습니다.
