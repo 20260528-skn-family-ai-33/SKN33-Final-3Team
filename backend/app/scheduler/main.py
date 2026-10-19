@@ -27,7 +27,6 @@ from apscheduler.triggers.cron import CronTrigger
 
 from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
-from backend.app.scheduler.jobs import customs_monthly
 
 ROOT = Path(__file__).resolve().parents[3]
 UN_STATE = ROOT / "data/un_data/runtime"
@@ -68,7 +67,7 @@ def un_refresh_job(state_dir=UN_STATE, scope_path=UN_SCOPE, api_env=UN_ENV):
         # UN의 의존성·설정 오류도 기존 HS 작업 등록/실행을 막지 않도록 여기서 import.
         from backend.app.scheduler.jobs.un_data_refresh import execute_once
         result=execute_once(scope_path, state_dir, api_env)
-        if isinstance(result,dict) and result.get('status') in ('WAITING','DEFERRED','RETRY_EXHAUSTED','FAILED'):
+        if isinstance(result,dict) and result.get('status') in ('WAITING','DEFERRED','RETRY_EXHAUSTED','FAILED','CANCELLED','RECOVERY_REQUIRED'):
             log.warning('UN 재개 상태: %s, 다음 실행: %s',result['status'],result.get('next_attempt_at'))
             return result['status']
         return 'SUCCESS'
@@ -81,9 +80,24 @@ def un_refresh_job(state_dir=UN_STATE, scope_path=UN_SCOPE, api_env=UN_ENV):
 
 # 매분 영속 상태의 기한만 확인합니다. 대기 중에는 API/DB 연결을 만들지 않습니다.
 def un_resume_job(state_dir=UN_STATE,scope_path=UN_SCOPE,api_env=UN_ENV):
-    from backend.app.scheduler.jobs.un_data_resume import read_state
+    from backend.app.scheduler.jobs.un_data_resume import read_state,active_is_idle,recovery_blocked
     try:
+        if recovery_blocked(state_dir):
+            from filelock import FileLock,Timeout
+            try:
+                with FileLock(str(Path(state_dir)/'continuation.lock'),timeout=0):
+                    if not recovery_blocked(state_dir):
+                        return 'DEFERRED'
+            except Timeout:
+                return 'ALREADY_RUNNING'
+            log.warning('UN 미확정 종료 표식: 자동 재개 차단, --resume-now로 수동 확인 필요')
+            return 'RECOVERY_REQUIRED'
         state=read_state(state_dir)
+        if state and state['status']=='ACTIVE':
+            if not active_is_idle(state_dir):
+                return 'ALREADY_RUNNING'
+            # 실행 진입점에서 잠금을 다시 획득하고 상태를 재확인하므로 경쟁 실행도 겹치지 않습니다.
+            return un_refresh_job(state_dir,scope_path,api_env)
         if not state or state['status']!='WAITING' or not state.get('next_attempt_at'):
             return 'NO_RETRY'
         if datetime.now(KST)<datetime.fromisoformat(state['next_attempt_at']):
@@ -114,6 +128,7 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV)
                       coalesce=True, misfire_grace_time=86400, replace_existing=True)
     scheduler.add_job(un_resume_job,'interval',minutes=1,args=un_args,id='un_data_resume',
                       max_instances=1,coalesce=True,replace_existing=True)
+    from backend.app.scheduler.jobs import customs_monthly
     customs_monthly.register_jobs(scheduler)
     return scheduler
 

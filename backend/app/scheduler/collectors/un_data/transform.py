@@ -16,7 +16,7 @@ def transform(raw,cfg,missing=None):
         require(f in ['M','A'] and len(p)==(6 if f=='M' else 4),'period/frequency')
         dt=date(int(p[:4]),int(p[4:]) if f=='M' else 1,1).isoformat()
         require(r['refYear']==p[:4] and int(r['refMonth'])==(int(p[4:]) if f=='M' else 52) and r['refPeriodId']==dt.replace('-',''),'period fields')
-        require(bool(re.fullmatch('[0-9]{6}', hs)) and r['classificationCode'] in VER,'classification')
+        require(bool(re.fullmatch('[0-9]{6}', hs)) and r['classificationCode']=='H6','HS2022-only classification')
         require(int(p[:4]) >= cfg['start_year'], 'period before start_year')
         require((reporter, hs) in target_pairs, 'country/product scope')
         require(reporter in cfg['country_map'] and reporter in cfg['reporters'][f],'reporter scope')

@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from datetime import date
 
 HEAD = 'freq_code period_start country_code hs6_code hs_ver total_import_usd korea_import_usd korea_share_pct valuation_basis'.split()
-VER = {'H2':'HS2002','H3':'HS2007','H4':'HS2012','H5':'HS2017','H6':'HS2022'}
+VER = {'H0':'HS1992','H1':'HS1996','H2':'HS2002','H3':'HS2007','H4':'HS2012','H5':'HS2017','H6':'HS2022'}
 
 def require(condition, message):
     if not condition: raise ValueError(message)
@@ -34,7 +34,7 @@ def validate_records(records, allow_empty=False):
         key=tuple(r[h] for h in HEAD[:5]); require(key not in seen,'CSV PK 중복'); seen.add(key)
         f,p,c,h,v=key; d=date.fromisoformat(p)
         require(f in ('M','A') and d.day==1 and (f=='M' or d.month==1),'CSV 기간 오류')
-        require(bool(re.fullmatch('[A-Z]{2}',c)) and bool(re.fullmatch(r'[0-9]{6}',h)) and v in VER.values(),'CSV 코드 오류')
+        require(bool(re.fullmatch('[A-Z]{2}',c)) and bool(re.fullmatch(r'[0-9]{6}',h)) and v == 'HS2022','CSV 코드 오류: HS2022만 허용')
         w=amount(r[HEAD[5]]); k=amount(r[HEAD[6]])
         require(w is not None or k is not None,'양쪽 NULL')
         require(w is None or k is None or k<=w,'부분집합 위반')

@@ -44,12 +44,13 @@ class VersionOrderTest(unittest.TestCase):
         self.assertEqual(versions,['2024-02-03T12:00:00'])
         self.assertEqual(result['skipped_stale'],1)
 
-    def test_newer_edition_still_updates(self):
+    def test_newer_old_edition_is_excluded(self):
         self.initial_partial()
         result=self.run_at(fixture.FakeClient([fixture.catalog('A',2023,40,'H2',released='2024-02-04')],
                            [fixture.raw('A','2023',40,amount='400',edition='H2'),fixture.raw()]))
-        self.assertEqual(result['succeeded'],2)
-        annual=next(r for r in self.snapshot() if r[0]=='A');self.assertEqual((annual[4],annual[5]),('HS2002',400))
+        self.assertEqual(result['succeeded'],1)
+        self.assertEqual(result['excluded_hs_policy'],1)
+        annual=next(r for r in self.snapshot() if r[0]=='A');self.assertEqual((annual[4],annual[5]),('HS2022',300))
 
     def test_equal_time_different_edition_blocks_without_changing_db(self):
         self.initial_partial();before=self.checkpoint()

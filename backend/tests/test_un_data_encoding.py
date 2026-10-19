@@ -22,7 +22,11 @@ def cp949_default():
             encoding = 'cp949'
         return original(file, mode, buffering, encoding, errors, newline, closefd, opener)
 
-    with mock.patch('io.open', side_effect=open_cp949):
+    original_text_encoding = io.text_encoding
+    def simulated_text_encoding(encoding, stacklevel=2):
+        return 'locale' if encoding is None else original_text_encoding(encoding, stacklevel)
+
+    with mock.patch('io.open', side_effect=open_cp949), mock.patch('io.text_encoding', side_effect=simulated_text_encoding):
         yield
 
 

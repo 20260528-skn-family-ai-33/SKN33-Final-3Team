@@ -56,7 +56,7 @@ class ReleaseVersionsTest(unittest.TestCase):
         self.assertTrue(all(path.startswith('getDa') for path,_ in client.calls))
         self.assertEqual(before,self.snapshot())
 
-    def test_new_time_same_date_and_new_edition_are_reprocessed(self):
+    def test_new_time_updates_but_old_edition_is_excluded(self):
         self.run_job();dataset=fixture.catalog(released='2024-02-02')
         dataset['lastReleased']='2024-02-02T13:00:00'
         result=self.run_job(fixture.FakeClient([dataset],[fixture.raw(amount='200')]))
@@ -64,8 +64,8 @@ class ReleaseVersionsTest(unittest.TestCase):
         dataset=dict(dataset,lastReleased='2024-02-02T14:00:00')
         self.assertEqual(self.run_job(fixture.FakeClient([dataset],[fixture.raw(amount='300')]))['succeeded'],1)
         dataset=dict(dataset,classificationCode='H2',lastReleased='2024-02-02T15:00:00')
-        self.assertEqual(self.run_job(fixture.FakeClient([dataset],[fixture.raw(edition='H2')]))['succeeded'],1)
-        self.assertEqual(next(r[4] for r in self.snapshot() if r[0]=='M'),'HS2002')
+        self.assertEqual(self.run_job(fixture.FakeClient([dataset],[fixture.raw(edition='H2')]))['succeeded'],0)
+        self.assertEqual(next(r[4] for r in self.snapshot() if r[0]=='M'),'HS2022')
 
     def test_success_state_write_failure_replays_committed_scope(self):
         before=self.checkpoint();save=job.save

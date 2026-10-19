@@ -44,6 +44,19 @@ class ResumeTest(unittest.TestCase):
         self.assertEqual(len(self.snapshot()),3)
         self.assertEqual(sum(counts),8)  # 목록 4 + 품목 4, 완료 요청 반복 없음
 
+    def test_resume_extends_saved_plan_for_newly_discovered_scope(self):
+        now=datetime(2024,2,2,tzinfo=timezone.utc)
+        first=self.run_resume(self.client(),now=now,budget=5)
+        self.assertEqual(first['status'],'WAITING')
+        plan=next(self.state.glob('continuations/*/batch_plan.json'))
+        saved=json.loads(plan.read_text(encoding='utf-8'))
+        # 이전 조회 정책으로 만든 계획에 월별 범위가 없던 상황을 재현합니다.
+        plan.write_text(json.dumps([d for d in saved if d['freqCode']=='A']),encoding='utf-8')
+        result=self.run_resume(self.client(),now=now+timedelta(minutes=5))
+        self.assertEqual(result['status'],'DB_VERIFIED')
+        self.assertEqual(len(self.snapshot()),3)
+        self.assertEqual({d['freqCode'] for d in json.loads(plan.read_text(encoding='utf-8'))},{'M','A'})
+
     def test_batch_reduces_calls_and_preserves_country_transactions(self):
         cfg=json.loads(self.scope.read_text());cfg['reporters']={'M':['8','40'],'A':[]}
         self.scope.write_text(json.dumps(cfg),encoding='utf-8')

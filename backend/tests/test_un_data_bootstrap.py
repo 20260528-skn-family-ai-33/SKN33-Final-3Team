@@ -29,7 +29,7 @@ class BootstrapTest(unittest.TestCase):
         self.prepare();self.initialize();self.assertEqual(len(self.snapshot()),1)
         client=fixtures.FakeClient([],[])
         job.run(self.engine,client,self.scope,self.state,date(2024,3,1))
-        self.assertEqual({p['publishedDateFrom'] for _,p in client.calls},{'2024-02-01'})
+        self.assertEqual({p['publishedDateFrom'] for _,p in client.calls},{'2024-01-30'})
         self.assertEqual({path.split('/')[2] for path,_ in client.calls},{'M','A'})
         self.assertEqual(json.loads((self.state/'checkpoint.json').read_text())['last_successful_check_date'],'2024-03-01')
         with self.assertRaisesRegex(ValueError,'이미 존재'):self.initialize()

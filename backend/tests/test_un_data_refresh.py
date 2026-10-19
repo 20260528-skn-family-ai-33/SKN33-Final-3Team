@@ -62,15 +62,15 @@ class MonthlyRefreshTest(unittest.TestCase):
         self.run_job();baseline=self.snapshot()
         client=FakeClient([catalog(released='2024-02-03')],[raw(amount='200'),raw(partner=410,amount='50')])
         self.run_job(client,date(2024,2,4))
-        self.assertTrue(all(p['publishedDateFrom']=='2024-02-02' and p['publishedDateTo']=='2024-02-04' for path,p in client.calls if path.startswith('getDa')))
+        self.assertTrue(all(p['publishedDateFrom']=='2024-01-31' and p['publishedDateTo']=='2024-02-04' for path,p in client.calls if path.startswith('getDa')))
         self.assertEqual({p.split('/')[2] for p,_ in client.calls if p.startswith('getDa')},{'M','A'})
         now=self.snapshot();self.assertEqual(len(now),2)
         self.assertEqual([r for r in baseline if r[0]=='A'],[r for r in now if r[0]=='A'])
         self.assertEqual(next(r for r in now if r[0]=='M')[5:8],(Decimal('200'),Decimal('50'),Decimal('25')))
         self.run_job(client,date(2024,2,4));self.assertEqual(now,self.snapshot())
-    def test_edition_change_removes_old_key(self):
+    def test_non_hs2022_edition_does_not_replace_current_rows(self):
         self.run_job();self.run_job(FakeClient([catalog(edition='H2',released='2024-02-03')],[raw(edition='H2')]),date(2024,2,4))
-        self.assertEqual([r[4] for r in self.snapshot() if r[0]=='M'],['HS2002'])
+        self.assertEqual([r[4] for r in self.snapshot() if r[0]=='M'],['HS2022','HS2022'])
     def test_filters(self):
         self.run_job();old=self.snapshot()
         client=FakeClient([catalog(released='2024-01-01'),catalog(reporter=999,released='2024-02-03')],[])

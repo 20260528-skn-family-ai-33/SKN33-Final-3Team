@@ -15,6 +15,7 @@ from dotenv import dotenv_values
 from backend.app.db.session import make_engine
 from backend.app.db.crud import CRUD
 from backend.app.scheduler.collectors.un_data.locking import db_lock
+from backend.app.scheduler.collectors.un_data.identity import bind_target
 from backend.app.models.un_data import UnData
 from backend.app.scheduler.collectors.un_data.api import ApiRequestError,Client,discover,collect,validate_config,discovery_scope_key
 from backend.app.scheduler.collectors.un_data.transform import transform
@@ -62,10 +63,12 @@ def write_csv(path,head,rows):
 # matching delivered CSV and scope SHA256. Never derive this date from CSV periods.
 SNAPSHOT = {
     'last_successful_check_date': '2026-10-15',
-    'source_run': 'initial_20261015',
-    'csv_sha256': '485985a82ca11825140bcbf12bad7a7a55f5fc69c21d894211384105b4ea621a',
-    'scope_sha256': '71e1c9f769a3effa7d29d603eaecc48e78f2da1d26aa7b05e30c9d041213517a',
-    'rows': 76191,
+    'source_run': 'initial_20261015_HS2022_filtered',
+    'parent_csv_sha256': '485985a82ca11825140bcbf12bad7a7a55f5fc69c21d894211384105b4ea621a',
+    'classification_policy': 'HS2022_original_only',
+    'csv_sha256': '5f697829dd1f0f6e14281b6ff785ff30d53277907c68518d22bf0862a7d84389',
+    'scope_sha256': 'b1103b65fc0a44ea9ea123229a0f40c7c112376fa31a93701133ae6f22c8cab8',
+    'rows': 67550,
 }
 
 
@@ -88,6 +91,7 @@ def initialize_csv(engine, csv_path=DEFAULT_CSV, scope_path=DEFAULT_SCOPE,
         checkpoint_path = state_dir/'checkpoint.json'
         require(not checkpoint_path.exists(), '체크포인트가 이미 존재합니다. 초기 적재 대신 갱신을 실행하세요')
         preflight(engine)
+        binding = bind_target(engine, connection=guard.connection)
         with guard.transaction() as session:
             parents(session, engine, rows)
             count = session.scalar(select(func.count()).select_from(UnData))
@@ -97,8 +101,7 @@ def initialize_csv(engine, csv_path=DEFAULT_CSV, scope_path=DEFAULT_SCOPE,
                 # Allows recovery after DB commit / checkpoint write failure, without stale overwrites.
                 require(count == len(rows), '기존 un_data가 스냅샷과 다릅니다. 초기 적재 중단')
             verify(session, rows)
-        target_hash = hashlib.sha256(engine.url.render_as_string(hide_password=True).encode()).hexdigest()
-        checkpoint = dict(SNAPSHOT, scope_sha256=scope_hash, target_sha256=target_hash,
+        checkpoint = dict(SNAPSHOT, scope_sha256=scope_hash, **binding,
                           initialization='CSV_DB_VERIFIED')
         guard.check()
         save(checkpoint_path, checkpoint)
@@ -117,7 +120,7 @@ def dataset_key(dataset, cfg, today):
     start=date(int(period[:4]),int(period[4:]) if freq=='M' else 1,1)
     require(2022<=start.year and start<=today, '재시도 기간 범위 오류')
     require(reporter in cfg['reporters'][freq], '재시도 국가 범위 오류')
-    require(dataset['classificationCode'] in VER and dataset['isOriginalClassification'] is True,
+    require(dataset['classificationCode']=='H6' and dataset['isOriginalClassification'] is True,
             '재시도 HS 판본 오류')
     return f'{freq}_{period}_{reporter}'
 
@@ -169,12 +172,16 @@ def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=Non
         preflight(engine)
         cfg=json.loads(Path(scope_path).read_text(encoding='utf-8'));validate_config(cfg)
         scope_hash=hashlib.sha256(Path(scope_path).read_bytes()).hexdigest()
-        target_hash=hashlib.sha256(engine.url.render_as_string(hide_password=True).encode()).hexdigest()
         checkpoint_path=state_dir/'checkpoint.json'
         checkpoint=json.loads(checkpoint_path.read_text(encoding='utf-8')) if checkpoint_path.exists() else None
         require(checkpoint is not None, '초기 체크포인트가 없습니다. --initialize-csv를 먼저 실행하세요')
         require(checkpoint['scope_sha256']==scope_hash,'대상 범위 변경: 별도 초기 재수집 필요')
-        require(checkpoint['target_sha256']==target_hash,'다른 DB의 체크포인트 사용 금지')
+        binding=bind_target(engine,checkpoint,guard.connection)
+        target_hash=binding['target_sha256']
+        if binding.get('database_identity') != checkpoint.get('database_identity'):
+            checkpoint.update(binding)
+            guard.check()
+            save(checkpoint_path,checkpoint)
         start=date.fromisoformat(checkpoint['last_successful_check_date'])
         require(start<=today,'실행일이 마지막 정상 점검일보다 이전입니다')
         pending_path=state_dir/'pending_datasets.json'
@@ -190,6 +197,13 @@ def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=Non
                 require(pending['published_from']==str(start),'점검일과 재시도 기준일 불일치: 상태 복구 필요')
             for key,entry in pending['datasets'].items():
                 require(key==dataset_key(entry['dataset'],cfg,today),'재시도 대상 키 불일치')
+        approved=pending.get('approved_exclusions', {})
+        require(isinstance(approved,dict), '잘못된 제외 승인 상태')
+        for key,record in approved.items():
+            require(key==dataset_key(record['dataset'],cfg,today), '제외 승인 범위 불일치')
+            require(record['version']==release_version(record['dataset']), '제외 승인 버전 불일치')
+            require(all(isinstance(record.get(f),str) and record[f].strip()
+                        for f in ('approver','reason','approved_at')), '제외 승인 근거 누락')
         # 기존 상태 파일에는 성공 버전이 없으므로 첫 실행은 안전하게 재처리합니다.
         completed=pending.setdefault('completed_versions',{})
         require(isinstance(completed,dict),'잘못된 성공 발표 버전 상태')
@@ -221,8 +235,10 @@ def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=Non
         save(run_dir/'manifest.json',manifest)
         try:
             client=guard.watch(client)
-            discovered_errors=[]
-            datasets=discover(client,cfg,start,today,run_dir,errors=discovered_errors)
+            discovered_errors=[];policy_excluded=[]
+            datasets=discover(client,cfg,start,today,run_dir,errors=discovered_errors,excluded=policy_excluded)
+            manifest['excluded_hs_policy']=len(policy_excluded)
+            save(run_dir/'excluded_hs_policy.json',policy_excluded)
             for record in discovered_errors:
                 key=discovery_scope_key(record['scope'],cfg,today)
                 catalog_errors[key]=record
@@ -230,8 +246,8 @@ def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=Non
                 pending['datasets'].pop(key,None);completed.pop(key,None)
                 log.warning('UN 발표 목록 범위 보류 (%s): %s',key,record['errors'])
             # 재시도 대상이 이번 발표 조회에 없어도 유지. 새 발표가 있으면 최신 판본으로 교체.
-            for dataset in datasets:
-                key=dataset_key(dataset,cfg,today)
+            for dataset in datasets+[record['dataset'] for record in policy_excluded]:
+                key=discovery_scope_key(dataset,cfg,today)
                 incoming=release_version(dataset)
                 previous=known.get(key)
                 if previous is not None:
@@ -246,6 +262,10 @@ def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=Non
                         continue
                 known[key]=incoming
                 catalog_errors.pop(key,None)
+                if dataset['classificationCode']!='H6':
+                    # 최신 발표가 정책 밖이면 구판을 재수집하지 않고 대기 범위를 명시적으로 제외합니다.
+                    pending['datasets'].pop(key,None)
+                    continue
                 pending['datasets'][key]={'dataset':dataset,'status':'PENDING'}
             for key in catalog_errors:
                 pending['datasets'].pop(key,None);completed.pop(key,None)
@@ -255,6 +275,16 @@ def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=Non
                 if success is not None and success[0]==incoming[0] and version_time(success)==version_time(incoming):
                     del pending['datasets'][key]
                     manifest['skipped']+=1
+            # 승인은 성공과 구분하고 정확히 같은 발표 버전에만 적용합니다.
+            from backend.app.scheduler.jobs.un_data_exclusions import matches
+            approved = pending.get('approved_exclusions', {})
+            excluded = []
+            for key in list(pending['datasets']):
+                if key in approved and matches(approved[key], pending['datasets'][key]['dataset']):
+                    excluded.append({'scope': key, **approved[key]})
+                    del pending['datasets'][key]
+            manifest['excluded_approved'] = len(excluded)
+            save(run_dir/'excluded_approved.json', excluded)
             save(pending_path,pending)  # 어떤 DB 변경보다 먼저 재시도 의도를 영속화
             save(run_dir/'datasets.json',[entry['dataset'] for entry in pending['datasets'].values()])
             save(run_dir/'catalog_errors.json',catalog_errors)
@@ -314,7 +344,7 @@ def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=Non
             require(not pending['datasets'] and not catalog_errors,'미해결 재시도/발표 오류 존재: 점검일 전진 금지')
             guard.check()
             save(checkpoint_path,{'last_successful_check_date':str(today),'run_dir':run_dir.name,
-                                 'scope_sha256':scope_hash,'target_sha256':target_hash})
+                                 'scope_sha256':scope_hash,**binding})
             log.info('UN 갱신 완료: 범위 %d, RAW %d행, un_data %d행',manifest['succeeded'],manifest['raw_rows'],manifest['un_data_rows'])
             return manifest
         except Exception as error:
@@ -364,7 +394,7 @@ def main():
     else:
         result=execute_once(args.scope,args.state_dir,args.api_env,resume_now=args.resume_now)
         log.info("UN 실행 결과: %s",result)
-        if result.get("status") in ("FAILED","RETRY_EXHAUSTED"):
+        if result.get("status") in ("FAILED","RETRY_EXHAUSTED","CANCELLED","RECOVERY_REQUIRED"):
             parser.exit(1,"UN 실행 중단: 재개 상태와 오류 기록을 확인하세요.\n")
 
 if __name__=='__main__':main()

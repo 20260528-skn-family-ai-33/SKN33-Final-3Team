@@ -37,13 +37,13 @@ class FailureIsolationTest(unittest.TestCase):
         self.assertEqual(self.pending()['datasets'],{})
         self.assertEqual(json.loads(self.checkpoint())['last_successful_check_date'],'2024-02-02')
 
-    def test_retry_and_new_dataset_and_latest_edition(self):
+    def test_retry_reclassified_as_old_edition_is_excluded(self):
         self.partial()
         client=fixture.FakeClient([fixture.catalog('A',2023,40,'H2',released='2024-02-02'),fixture.catalog(period=202402)],
             [fixture.raw('A','2023',40,edition='H2'),fixture.raw(period='202402')])
         self.run_job(client)
-        self.assertEqual(len(self.snapshot()),3)
-        self.assertEqual(next(r[4] for r in self.snapshot() if r[0]=='A'),'HS2002')
+        self.assertEqual(len(self.snapshot()),2)
+        self.assertFalse(any(r[0]=='A' for r in self.snapshot()))
         self.assertEqual(self.pending()['datasets'],{})
 
     def test_db_verification_failure_rolls_back_only_one_scope(self):

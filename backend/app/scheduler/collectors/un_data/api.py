@@ -4,7 +4,7 @@ import time
 import re
 import logging
 from email.utils import parsedate_to_datetime
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
 from pathlib import Path
 import requests
@@ -14,6 +14,7 @@ from backend.app.scheduler.collectors.un_data.transform import scalar
 
 # 국가·품목·주기와 수입/파트너 설정이 지원 범위에 맞는지 확인합니다.
 def validate_config(cfg):
+    require(cfg.get('classification_policy','HS2022_original_only')=='HS2022_original_only','HS2022-only policy required')
     require(cfg['start_year']==2022,'start_year must be 2022')
     require(set(cfg['reporters'])=={'M','A'},'M/A scopes required')
     require(set(cfg['reporters']['M']).isdisjoint(cfg['reporters']['A']),'reporter frequency overlap')
@@ -45,6 +46,8 @@ def retry_details(response):
     seconds=None
     if isinstance(raw,str):
         if re.fullmatch(r'[0-9]+',raw.strip()):
+            if len(raw.strip()) > 12:
+                raise ApiRequestError('UN API Retry-After 범위 초과: 수동 확인 필요', kind='response', status_code=response.status_code)
             seconds=int(raw.strip())
         else:
             try:
@@ -59,6 +62,22 @@ def retry_details(response):
         value=headers.get(name)
         if isinstance(value,str) and re.fullmatch(r'[0-9]{1,12}',value):info[name]=int(value)
     return info
+
+
+# APIM quota는 403일 수 있습니다. 헤더만으로 인증 오류를 quota로 바꾸지 않습니다.
+def quota_response(response):
+    if response.status_code != 403:
+        return False
+    try:
+        body = json.loads(response.text)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(body, dict):
+        return False
+    message = body.get('message', '')
+    return (body.get('statusCode') in (403, '403') and isinstance(message, str)
+            and re.fullmatch(r'(?i)Out of call volume quota\. Quota will be replenished in [0-9:. ]+\.?', message.strip()) is not None
+            and retry_details(response)['retry_after_seconds'] is not None)
 
 
 # UN API 요청 간격·재시도·응답 검증과 원본 응답 파일 저장을 담당합니다.
@@ -94,11 +113,12 @@ class Client:
                 if attempt==2:raise last_error from None
                 continue
             status=response.status_code
-            if status==429:
+            quota = quota_response(response)
+            if status==429 or quota:
                 info=retry_details(response)
                 delay=max(self.interval,(info['retry_after_seconds'] if info['retry_after_seconds'] is not None else 2**(attempt+1))+1)
                 info.update(attempt=attempt+1,wait_seconds=delay,will_retry=attempt<2 and delay<=60)
-                logging.getLogger(__name__).warning('UN API 429: %s',info)
+                logging.getLogger(__name__).warning('UN API quota/rate limit: %s',info)
                 # 응답 원문·요청 헤더·인증 키는 기록하지 않습니다. 복구 성공 후에도 진단을 남깁니다.
                 diagnostic=Path(str(out)+'.retry.jsonl')
                 try:
@@ -107,15 +127,15 @@ class Client:
                         handle.write(json.dumps(info,ensure_ascii=False)+'\n')
                 except OSError:
                     logging.getLogger(__name__).exception('UN API 재시도 진단 저장 실패')
-                    raise ApiRequestError('UN API 429 및 진단 저장 실패: 중단합니다',kind='storage',
-                                          status_code=429,attempts=attempt+1,retry_info=info)
-                last_error=ApiRequestError('UN API HTTP 429: 재시도 한도 또는 호출 예산 도달',kind='http',
-                                           status_code=429,attempts=attempt+1,retry_info=info)
+                    raise ApiRequestError('UN API 호출 한도 및 진단 저장 실패: 중단합니다',kind='storage',
+                                          status_code=status,attempts=attempt+1,retry_info=info)
+                last_error=ApiRequestError('UN API 호출 한도: 재시도 한도 또는 호출 예산 도달',kind='quota' if quota else 'http',
+                                           status_code=status,attempts=attempt+1,retry_info=info)
                 if info['will_retry']:
                     time.sleep(delay)
                     continue
-                raise ApiRequestError('UN API HTTP 429: 재시도 한도 또는 대기 한도 초과',kind='http',
-                                      status_code=429,attempts=attempt+1,retry_info=info)
+                raise ApiRequestError('UN API 호출 한도: 재시도 한도 또는 대기 한도 초과',kind='quota' if quota else 'http',
+                                      status_code=status,attempts=attempt+1,retry_info=info)
             # 요청 하나에서만 최대 3회 재시도합니다. 계속 실패하면 다음 범위를 호출하지 않습니다.
             if (status==408 or 500<=status<=599) and attempt<2:
                 last_error=ApiRequestError(f'UN API HTTP {status}: 미처리 범위를 보존하고 중단합니다',
@@ -152,15 +172,17 @@ def discovery_scope_key(row,cfg,end):
 
 # 발표 목록의 범위별 오류는 별도 반환하고, 식별 불가·조회 장애는 전체 중단합니다.
 # errors를 생략한 독립 호출은 오류 발생 시 예외를 유지해 조용한 누락을 막습니다.
-def discover(client,cfg,start,end,run_dir,errors=None):
+def discover(client,cfg,start,end,run_dir,errors=None,excluded=None):
     require(start<=end,'publication range reversed');validate_config(cfg)
+    # KST 점검일과 UTC 발표일 경계에서 빠진 발표를 다음 실행이 다시 확인합니다.
+    query_start=max(date(2022,1,1),start-timedelta(days=2))
     datasets={};failures={};released_times={}
     for freq in ('M','A'):
         periods=([f'{y}{m:02d}' for y in range(2022,end.year+1) for m in range(1,13) if (y,m)<=(end.year,end.month)]
                  if freq=='M' else [str(y) for y in range(2022,end.year+1)])
         for i in range(0,len(periods),12):
             chunk=periods[i:i+12]
-            params={'period':','.join(chunk),'publishedDateFrom':start.isoformat(),'publishedDateTo':end.isoformat()}
+            params={'period':','.join(chunk),'publishedDateFrom':query_start.isoformat(),'publishedDateTo':end.isoformat()}
             rows=client.get(f'getDa/C/{freq}/HS',params,Path(run_dir)/'availability'/f'{freq}_{i}.json')
             require(len(rows)<10000,'availability cap reached')
             for row in rows:
@@ -174,7 +196,7 @@ def discover(client,cfg,start,end,run_dir,errors=None):
                     require(isinstance(original,bool),'original classification flag invalid')
                     if not original:continue
                     released=datetime.fromisoformat(row['lastReleased'].replace('Z','+00:00'))
-                    if not start<=released.date()<=end:continue
+                    if not query_start<=released.date()<=end:continue
                     require(row['classificationCode'] in VER,'unknown HS edition')
                     if key in datasets:
                         require(datasets[key]['classificationCode']==row['classificationCode'],
@@ -192,7 +214,17 @@ def discover(client,cfg,start,end,run_dir,errors=None):
         require(not failures,'발표 목록 범위 오류: '+', '.join(sorted(failures)))
     else:
         errors.extend(failures[key] for key in sorted(failures))
-    return [datasets[key] for key in sorted(datasets) if key not in failures]
+    selected=[]
+    for key in sorted(datasets):
+        if key in failures:continue
+        row=datasets[key]
+        if row['classificationCode']!='H6':
+            if excluded is not None:
+                excluded.append({'dataset':row,'scope':key,'classificationCode':row['classificationCode'],
+                                 'lastReleased':row['lastReleased'],'reason':'HS2022_ONLY'})
+            continue
+        selected.append(row)
+    return selected
 
 
 # 선택한 데이터셋의 세계·한국 수입 RAW를 수집하며, 응답 범위·판본·중복을 검사합니다.
