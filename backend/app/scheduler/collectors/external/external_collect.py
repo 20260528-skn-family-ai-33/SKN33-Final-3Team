@@ -141,12 +141,12 @@ def collect_baci(zip_path, from_year):
 
 def comtrade_get(path, key, **params):
     """Comtrade 호출. 429(호출 한도)·5xx는 잠시 쉬고 3번까지 다시 시도한다."""
-    for attempt in range(3):
+    for wait in (10, 20, None):  # 마지막 시도 뒤에는 쉬지 않고 바로 실패 처리
         res = requests.get(f"{COMTRADE_URL}/{path}", params=params, timeout=TIMEOUT * 2,
                            headers={"Ocp-Apim-Subscription-Key": key})
-        if res.status_code != 429 and res.status_code < 500:
+        if res.status_code != 429 and res.status_code < 500 or wait is None:
             break
-        time.sleep(10 * (attempt + 1))
+        time.sleep(wait)
     res.raise_for_status()
     body = res.json()
     if body.get("error"):
