@@ -5,6 +5,8 @@
 - 반환값은 (기준일, 환율) 목록입니다. 기준일은 응답의 TIME(원천 영업일)이며 실행한 날짜가 아닙니다.
 - 환율은 Decimal 그대로 돌려줍니다. JPY처럼 100단위 통화도 나누지 않습니다 (currency.quote_unit이 단위를 뜻함).
 - 조회 기간에 자료가 없으면(주말·휴일만 조회, INFO-200) 빈 목록입니다. 인증·요청 오류는 EcosError로 알립니다.
+- 금액 단위도 행마다 확인합니다. 단위(UNIT_NAME)가 '원'이 아니거나, 항목명(ITEM_NAME1)의 기준 수량(예: '원/일본엔(100엔)'의 100)이
+  호출한 쪽이 준 quote_unit(currency.quote_unit)과 다르면 EcosError로 멈춥니다 (잘못된 단위의 값을 저장하지 않게).
 - 인증키가 들어간 URL은 로그·예외 메시지에 남기지 않습니다.
 """
 import argparse
@@ -23,6 +25,7 @@ ENV_PATH = Path(__file__).resolve().parents[5] / ".env"
 ENV_KEYS = ("ecos", "ecos_api_key")
 API_BASE = "https://ecos.bok.or.kr/api"
 STAT_CODE = "731Y001"  # 주요국 통화의 대원화환율 (매매기준율)
+UNIT_NAME = "원"  # 731Y001 값의 금액 단위. 응답 단위가 다르면 저장하지 않음
 CYCLE = "D"
 PAGE_SIZE = 1000
 RETRIES = 3
@@ -54,13 +57,20 @@ def mask(text, key):
     return str(text).replace(key, "***") if key else str(text)
 
 
+def quote_unit_of(item_name):
+    """항목명 괄호 안의 기준 외화 수량. '원/일본엔(100엔)' → 100, 수량이 없으면('원/유로') 1."""
+    found = re.search(r"\(([0-9][0-9,]*)", item_name or "")
+    return int(found.group(1).replace(",", "")) if found else 1
+
+
 def page_url(key, item_code, start, end, first, last):
     return (f"{API_BASE}/StatisticSearch/{key}/json/kr/{first}/{last}/{STAT_CODE}/{CYCLE}/"
             f"{start:%Y%m%d}/{end:%Y%m%d}/{item_code}")
 
 
-def parse_page(payload, item_code):
-    """한 페이지 응답을 (전체 건수, [(기준일, 환율)])로 바꿉니다. 자료 없음은 (0, [])입니다."""
+def parse_page(payload, item_code, quote_unit=None):
+    """한 페이지 응답을 (전체 건수, [(기준일, 환율)])로 바꿉니다. 자료 없음은 (0, [])입니다.
+    quote_unit을 주면 행마다 금액 단위('원')와 기준 수량이 그 값과 같은지 확인합니다."""
     if not isinstance(payload, dict):
         raise EcosError("ECOS 응답이 JSON 객체가 아닙니다.")
     if "RESULT" in payload:
@@ -75,6 +85,10 @@ def parse_page(payload, item_code):
     for row in body["row"]:
         if row.get("ITEM_CODE1") != item_code:
             raise EcosError(f"요청하지 않은 항목이 응답에 있습니다: {row.get('ITEM_CODE1')} (요청 {item_code})")
+        if row.get("UNIT_NAME") != UNIT_NAME:
+            raise EcosError(f"금액 단위가 '{UNIT_NAME}'이 아닙니다: {item_code} {row.get('UNIT_NAME')!r}")
+        if quote_unit is not None and quote_unit_of(row.get("ITEM_NAME1")) != quote_unit:
+            raise EcosError(f"기준 수량이 currency.quote_unit({quote_unit})과 다릅니다: {item_code} {row.get('ITEM_NAME1')!r}")
         raw_time, raw_value = str(row.get("TIME", "")), str(row.get("DATA_VALUE", "")).replace(",", "").strip()
         if not re.fullmatch(r"[0-9]{8}", raw_time):
             raise EcosError(f"기준일 형식 오류: {item_code} {raw_time!r}")
@@ -115,15 +129,16 @@ def get_json(url, key):
     raise last
 
 
-def fetch_daily(key, item_code, start, end):
-    """item_code 통화의 start~end(양끝 포함) 일별 환율. ([(기준일, 환율)], API 호출 횟수)를 돌려줍니다."""
+def fetch_daily(key, item_code, start, end, quote_unit=None):
+    """item_code 통화의 start~end(양끝 포함) 일별 환율. ([(기준일, 환율)], API 호출 횟수)를 돌려줍니다.
+    quote_unit(예: JPY 100)을 주면 응답의 금액 단위·기준 수량이 다를 때 EcosError로 멈춥니다."""
     if start > end:
         raise EcosError(f"시작일이 종료일보다 늦습니다: {start} > {end}")
     rows, requests_made, first = [], 0, 1
     while True:
         payload, calls = get_json(page_url(key, item_code, start, end, first, first + PAGE_SIZE - 1), key)
         requests_made += calls
-        total, page = parse_page(payload, item_code)
+        total, page = parse_page(payload, item_code, quote_unit)
         rows += page
         first += PAGE_SIZE
         if not page or first > total:

@@ -12,11 +12,13 @@ import requests
 from backend.app.scheduler.collectors.ecos import ecos_collect as ec
 
 KEY = "SECRETKEY123"
+NAMES = {"0000001": "원/미국달러(매매기준율)", "0000002": "원/일본엔(100엔)", "0000003": "원/유로"}
 
 
-def ok(rows, total=None):
+def ok(rows, total=None, unit="원"):
     return {"StatisticSearch": {"list_total_count": len(rows) if total is None else total, "row": [
-        {"STAT_CODE": "731Y001", "ITEM_CODE1": item, "TIME": time, "DATA_VALUE": value, "UNIT_NAME": "원"}
+        {"STAT_CODE": "731Y001", "ITEM_CODE1": item, "ITEM_NAME1": NAMES.get(item, ""), "TIME": time,
+         "DATA_VALUE": value, "UNIT_NAME": unit}
         for item, time, value in rows]}}
 
 
@@ -56,6 +58,18 @@ class ParseTest(unittest.TestCase):
             ec.parse_page(ok([("0000001", "2026-10-01", "1390")]), "0000001")
         with self.assertRaises(ec.EcosError):  # 다른 통화가 섞이면 저장하면 안 됨
             ec.parse_page(ok([("0000003", "20261001", "1600")]), "0000001")
+
+    def test_quote_unit_from_item_name(self):
+        self.assertEqual([ec.quote_unit_of(n) for n in (*NAMES.values(), "원/인도네시아루피아(100루피아)", None)],
+                         [1, 100, 1, 100, 1])
+
+    def test_unit_is_checked(self):
+        payload = ok([("0000002", "20261001", "850.24")])
+        self.assertEqual(ec.parse_page(payload, "0000002", quote_unit=100)[0], 1)  # 100엔당 원: 통과
+        with self.assertRaises(ec.EcosError):  # currency에는 1인데 ECOS는 100엔 기준
+            ec.parse_page(payload, "0000002", quote_unit=1)
+        with self.assertRaises(ec.EcosError):  # 금액 단위가 원이 아님
+            ec.parse_page(ok([("0000001", "20261001", "1.2")], unit="달러"), "0000001")
 
 
 @patch.object(ec, "RETRY_WAIT", 0)
