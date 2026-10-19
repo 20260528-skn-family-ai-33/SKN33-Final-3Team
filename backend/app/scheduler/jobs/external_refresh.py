@@ -4,7 +4,8 @@
 스케줄: backend/app/scheduler/main.py가 매월 1일 04:00(KST)에 실행합니다.
 
 1. BACI: 올해 판(BACI_HS22_V{올해}01.zip, 수정판 V{올해}01b·c 포함)이 없으면 CEPII에서 받아 2022년 이후를 집계합니다.
-   아직 공개 전(404)이면 NOT_READY로 끝내고 다음 달에 다시 시도합니다. 이미 받아 집계했으면 ALREADY입니다.
+   아직 공개 전(404)이면 NOT_READY로 끝내고 다음 달에 다시 시도합니다. 이미 받아 집계했으면 ALREADY이고
+   batch_run에 남기지 않습니다.
 2. WDI: 2022년~작년 지표를 다시 받습니다 (World Bank가 과거 값도 수정하므로 매번 덮어씀).
 3. Comtrade: BACI에 아직 없는 연도(BACI 마지막 연도+1 ~ 작년, 최대 최근 2년)를 받습니다. .env에 COMTRADE_API_KEY가 없으면 건너뜁니다.
 
@@ -69,7 +70,8 @@ def step(name, detail, start, end, work, engine=None):
         run.request_count += stats.get("requests", 0)
         run.received_count += stats.get("rows", 0)
     status = stats.get("status", "DONE")
-    log.info(f"{name} {status}: {detail}")
+    # NOT_READY는 batch_run에 수신 0건 SUCCESS로 남는다. 받은 게 있는 실행과는 received_count로 구분한다.
+    (log.warning if status == "NOT_READY" else log.info)(f"{name} {status}: {detail}")
     return status
 
 
@@ -79,11 +81,15 @@ def baci_zip(today):
     return zips[-1] if zips else None
 
 
-def refresh_baci(today):
+def baci_done(today):
+    """올해 판을 이미 받아 집계했는지. 집계본이 zip보다 나중에 만들어졌으면 끝난 것으로 본다."""
     zip_path = baci_zip(today)
     csv_path = ec.OUT_DIR / "baci" / "baci_imports_hs22.csv"
-    if zip_path and csv_path.exists() and csv_path.stat().st_mtime >= zip_path.stat().st_mtime:
-        return {"status": "ALREADY"}
+    return bool(zip_path and csv_path.exists() and csv_path.stat().st_mtime >= zip_path.stat().st_mtime)
+
+
+def refresh_baci(today):
+    zip_path = baci_zip(today)
     requests = 0
     if zip_path is None:
         # CEPII는 같은 해에 수정판을 V{올해}01b처럼 내기도 한다. 최신 수정판부터 찾는다.
@@ -110,8 +116,12 @@ def run(today=None, engine=None):
     log_path = setup_log()
     last = today.year - 1
     log.info(f"외부 데이터 갱신 시작 | 기준일 {today} | 로그 {log_path}")
-    statuses = {"BACI": step("BACI", f"BACI_HS22_V{today.year}01", date(START_YEAR, 1, 1), date(last, 12, 31),
-                             lambda: refresh_baci(today), engine)}
+    if baci_done(today):  # 할 일이 없는 달은 batch_run에 남기지 않는다
+        statuses = {"BACI": "ALREADY"}
+        log.info(f"BACI ALREADY: {baci_zip(today).name}")
+    else:
+        statuses = {"BACI": step("BACI", f"BACI_HS22_V{today.year}01", date(START_YEAR, 1, 1),
+                                 date(last, 12, 31), lambda: refresh_baci(today), engine)}
     statuses["WDI"] = step("WDI", f"{START_YEAR}~{last}", date(START_YEAR, 1, 1), date(last, 12, 31),
                            lambda: ec.collect_wdi(START_YEAR, last), engine)
     if not dotenv_values(ec.ROOT / ".env").get(ec.ENV_KEY):

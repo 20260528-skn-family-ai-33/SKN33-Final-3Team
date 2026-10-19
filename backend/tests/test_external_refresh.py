@@ -79,7 +79,11 @@ class ExternalRefreshTest(unittest.TestCase):
         baci.mkdir()
         (baci / "BACI_HS22_V202701b.zip").write_bytes(b"zip")  # 수정판만 있어도 찾는다
         (baci / "baci_imports_hs22.csv").write_text("year\n2025\n")  # zip보다 나중에 만든 집계본
-        self.assertEqual(job.refresh_baci(date(2027, 3, 1)), {"status": "ALREADY"})
+        self.assertTrue(job.baci_done(date(2027, 3, 1)))
+        with mock.patch.object(ec, "collect_wdi", return_value={}), \
+                mock.patch.object(job, "dotenv_values", return_value={}):
+            self.assertEqual(job.run(date(2027, 3, 1), engine=self.engine)["BACI"], "ALREADY")
+        self.assertEqual([r[0] for r in self.runs()], ["EXTERNAL_WDI"])  # ALREADY는 batch_run에 남기지 않음
 
     def test_registered_monthly(self):
         jobs = {j.id: j for j in sched.build_scheduler().get_jobs()}
