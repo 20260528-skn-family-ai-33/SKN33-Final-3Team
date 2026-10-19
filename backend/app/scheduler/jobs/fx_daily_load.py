@@ -7,8 +7,11 @@
 
 - 수집 대상은 currency에서 ecos_item_code가 있는 통화입니다 (db/mysql/init/08_currency_seed.sql로 등록).
   통화를 늘리려면 seed에 한 줄을 추가해 실행하면 되고 이 코드는 바꾸지 않습니다.
-- 기간을 주지 않으면 오늘(KST) 포함 최근 RECENT_DAYS일을 다시 받습니다. 주말·휴일·짧은 중단으로 빠진 날이 겹쳐 받으며 채워집니다.
-  fx_daily의 마지막 기준일이 그보다 오래됐으면 그날부터 받고, fx_daily가 비어 있으면 .env의 FX_START_DATE(YYYY-MM-DD)부터 받습니다.
+- 기간을 주지 않으면 오늘(KST) 포함 최근 RECENT_DAYS일(2일)을 받습니다. fx_daily의 마지막 기준일이 그보다 오래됐으면
+  그날부터 받으므로 주말·휴일·중단으로 빠진 날도 채워집니다. fx_daily가 비어 있으면 .env의 FX_START_DATE(YYYY-MM-DD)부터 받습니다.
+- 통화마다 ECOS 응답의 금액 단위('원')와 기준 수량(예: 100엔)이 currency.quote_unit과 같은지 확인하고, 다르면 저장하지 않습니다.
+  rate_krw는 quote_unit만큼의 외화를 원으로 나타낸 값입니다 (JPY 850.24 = 100엔당 850.24원).
+- 전일 대비 등락 금액·등락률은 저장하지 않습니다. 조회할 때 같은 통화의 직전 영업일 행과 비교해 계산합니다 (LAG).
 - (기준일, 통화)가 이미 있으면 환율만 갱신합니다 (원천 정정 반영, 재실행해도 중복 없음).
   통화 하나라도 수집·검증에 실패하면 아무것도 저장하지 않습니다 (한 트랜잭션). 기존 환율은 지우거나 0으로 바꾸지 않습니다.
 - 실행할 때마다 batch_run에 한 건 기록합니다 (job FX_DAILY_LOAD, 대상 fx_daily, 기간 = 조회 기간).
@@ -31,7 +34,7 @@ from backend.app.scheduler.collectors.ecos import ecos_collect as ecos
 
 KST = ZoneInfo("Asia/Seoul")
 LOG_DIR = ENV_PATH.parent / "data/ecos_outputs/logs"
-RECENT_DAYS = 14
+RECENT_DAYS = 2
 JOB_NAME = "FX_DAILY_LOAD"
 TARGET = FxDaily.__tablename__
 SOURCE = Source("ECOS", "한국은행 ECOS 주요국 통화의 대원화환율",
@@ -54,8 +57,8 @@ def setup_log(log_dir=LOG_DIR):
 
 
 def load_targets(session):
-    """ECOS 항목 코드가 있는 통화만 [(통화 코드, 항목 코드)]로 돌려줍니다."""
-    stmt = (select(Currency.currency_code, Currency.ecos_item_code)
+    """ECOS 항목 코드가 있는 통화만 [(통화 코드, 항목 코드, 기준 수량)]으로 돌려줍니다."""
+    stmt = (select(Currency.currency_code, Currency.ecos_item_code, Currency.quote_unit)
             .where(Currency.ecos_item_code.is_not(None)).order_by(Currency.currency_code))
     return [tuple(row) for row in session.execute(stmt)]
 
@@ -66,7 +69,7 @@ def start_date_setting(env_path=ENV_PATH):
 
 
 def recent_period(session, today, days=RECENT_DAYS, start_date=None):
-    """최근 days일. 마지막 적재일이 더 오래됐으면 그날부터, 비어 있으면 start_date부터 받습니다."""
+    """최근 days일. 마지막 적재일이 더 오래됐으면 그날부터(주말·휴일·중단 뒤), 비어 있으면 start_date부터 받습니다."""
     start = today - timedelta(days=days - 1)
     latest = session.scalar(select(func.max(FxDaily.base_date)))
     if latest is None and start_date is not None:
@@ -79,12 +82,12 @@ def recent_period(session, today, days=RECENT_DAYS, start_date=None):
 def collect(key, targets, start, end, batch=None):
     """모든 대상 통화를 받아 fx_daily 행 목록으로 만듭니다. 하나라도 실패하면 예외가 그대로 올라갑니다."""
     rows = []
-    for currency_code, item_code in targets:
-        fetched, calls = ecos.fetch_daily(key, item_code, start, end)
+    for currency_code, item_code, quote_unit in targets:
+        fetched, calls = ecos.fetch_daily(key, item_code, start, end, quote_unit=quote_unit)
         if batch is not None:
             batch.request_count += calls
             batch.received_count += len(fetched)
-        log.info(f"{currency_code}({item_code}): {len(fetched)}일 | API 호출 {calls}회")
+        log.info(f"{currency_code}({item_code}, {quote_unit} {currency_code}당 {ecos.UNIT_NAME}): {len(fetched)}일 | API 호출 {calls}회")
         rows += [{"base_date": d, "currency_code": currency_code, "rate_krw": rate} for d, rate in fetched]
     return rows
 
@@ -102,7 +105,7 @@ def run(start=None, end=None, db_url=None, log_dir=LOG_DIR, env_path=ENV_PATH, t
         end = end or datetime.now(KST).date()
         if start > end:
             raise ValueError(f"시작일이 종료일보다 늦습니다: {start} > {end}")
-        log.info(f"환율 적재 시작 | {start} ~ {end} | 대상 {', '.join(c for c, _ in targets) or '없음'}")
+        log.info(f"환율 적재 시작 | {start} ~ {end} | 대상 {', '.join(c for c, *_ in targets) or '없음'}")
         if not track:
             return _run(engine, targets, start, end, env_path, log_path, None)
         with track_batch(SOURCE, JOB_NAME, TARGET, start, end, engine=engine, logger=log) as batch:

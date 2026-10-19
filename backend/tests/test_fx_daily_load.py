@@ -22,7 +22,7 @@ RATES = {"0000001": [(D1, Decimal("1390.5")), (D2, Decimal("1391"))],
 
 
 def fake_fetch(rates):
-    def fetch(key, item_code, start, end):
+    def fetch(key, item_code, start, end, quote_unit=None):
         if isinstance(rates.get(item_code), Exception):
             raise rates[item_code]
         return [(d, v) for d, v in rates[item_code] if start <= d <= end], 1
@@ -72,7 +72,9 @@ class FxDailyLoadTest(unittest.TestCase):
         rc, fetch = self.run_load(RATES)
         rows, runs = self.table()
         self.assertEqual(rc, 0)
-        self.assertEqual({c.args[1] for c in fetch.call_args_list}, {"0000001", "0000002"})  # XXX(코드 없음) 제외
+        # XXX(코드 없음)는 제외하고, 통화마다 currency의 기준 수량을 넘겨 단위를 확인하게 함
+        self.assertEqual({(c.args[1], c.kwargs["quote_unit"]) for c in fetch.call_args_list},
+                         {("0000001", 1), ("0000002", 100)})
         self.assertEqual(len(rows), 4)
         self.assertEqual(rows[(D1, "JPY")], Decimal("925.31"))  # 100엔 기준 값 그대로
         self.assertEqual(runs, [("FX_DAILY_LOAD", "fx_daily", "SUCCESS", 2, 4)])
@@ -104,7 +106,7 @@ class FxDailyLoadTest(unittest.TestCase):
         today = date(2026, 10, 19)
         engine = make_engine(self.url)
         with session_scope(engine) as s:
-            self.assertEqual(fx.recent_period(s, today), (date(2026, 10, 6), today))  # 비어 있고 시작일 설정 없음
+            self.assertEqual(fx.recent_period(s, today), (date(2026, 10, 18), today))  # 비어 있고 시작일 설정 없음: 최근 2일
             self.assertEqual(fx.recent_period(s, today, start_date=date(2025, 1, 1)), (date(2025, 1, 1), today))
             CRUD(FxDaily).upsert_many(s, [{"base_date": date(2026, 9, 1), "currency_code": "USD",
                                            "rate_krw": Decimal("1300")}])
@@ -112,8 +114,12 @@ class FxDailyLoadTest(unittest.TestCase):
             self.assertEqual(fx.recent_period(s, today, start_date=date(2025, 1, 1)), (date(2026, 9, 1), today))
             CRUD(FxDaily).upsert_many(s, [{"base_date": date(2026, 10, 16), "currency_code": "USD",
                                            "rate_krw": Decimal("1340")}])
+        with session_scope(engine) as s:  # 월요일 실행, 마지막 적재가 금요일이면 금요일부터 (주말 건너뛴 전일 비교 가능)
+            self.assertEqual(fx.recent_period(s, today), (date(2026, 10, 16), today))
+            CRUD(FxDaily).upsert_many(s, [{"base_date": date(2026, 10, 19), "currency_code": "USD",
+                                           "rate_krw": Decimal("1342.4")}])
         with session_scope(engine) as s:
-            self.assertEqual(fx.recent_period(s, today), (date(2026, 10, 6), today))
+            self.assertEqual(fx.recent_period(s, today), (date(2026, 10, 18), today))
         engine.dispose()
 
 
