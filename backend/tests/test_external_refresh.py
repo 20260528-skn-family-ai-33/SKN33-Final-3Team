@@ -64,11 +64,12 @@ class ExternalRefreshTest(unittest.TestCase):
         self.assertIn("| WDI | 2022~2026 | ConnectionError: WDI 응답 없음", failures[0])
 
     def test_baci_not_ready_then_already(self):
-        with mock.patch.object(ec, "download_baci", return_value=False):
-            self.assertEqual(job.refresh_baci(date(2027, 1, 1)), {"status": "NOT_READY", "requests": 1})
+        with mock.patch.object(ec, "download_baci", return_value=False) as download:
+            self.assertEqual(job.refresh_baci(date(2027, 1, 1)), {"status": "NOT_READY", "requests": 3})
+        self.assertEqual([c.args[0] for c in download.call_args_list], ["V202701c", "V202701b", "V202701"])
         baci = self.tmp / "baci"
         baci.mkdir()
-        (baci / "BACI_HS22_V202701.zip").write_bytes(b"zip")
+        (baci / "BACI_HS22_V202701b.zip").write_bytes(b"zip")  # 수정판만 있어도 찾는다
         (baci / "baci_imports_hs22.csv").write_text("year\n2025\n")  # zip보다 나중에 만든 집계본
         self.assertEqual(job.refresh_baci(date(2027, 3, 1)), {"status": "ALREADY"})
 

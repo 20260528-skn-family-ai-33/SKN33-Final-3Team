@@ -3,7 +3,7 @@
 실행 (저장소 루트에서): python -m backend.app.scheduler.jobs.external_refresh [--date YYYY-MM-DD]
 스케줄: backend/app/scheduler/main.py가 매월 1일 04:00(KST)에 실행합니다.
 
-1. BACI: 올해 판(BACI_HS22_V{올해}01.zip)이 없으면 CEPII에서 받아 2022년 이후를 집계합니다.
+1. BACI: 올해 판(BACI_HS22_V{올해}01.zip, 수정판 V{올해}01b·c 포함)이 없으면 CEPII에서 받아 2022년 이후를 집계합니다.
    아직 공개 전(404)이면 NOT_READY로 끝내고 다음 달에 다시 시도합니다. 이미 받아 집계했으면 ALREADY입니다.
 2. WDI: 2022년~작년 지표를 다시 받습니다 (World Bank가 과거 값도 수정하므로 매번 덮어씀).
 3. Comtrade: BACI에 아직 없는 연도(BACI 마지막 연도+1 ~ 작년)를 다시 받습니다. .env에 COMTRADE_API_KEY가 없으면 건너뜁니다.
@@ -73,15 +73,30 @@ def step(name, detail, start, end, work, engine=None):
     return status
 
 
+def baci_zip(today):
+    """이미 받아 둔 올해 판 zip. 접미사가 붙은 수정판(V202401b 등)이 있으면 그것을 고른다."""
+    zips = sorted((ec.OUT_DIR / "baci").glob(f"BACI_HS22_V{today.year}01*.zip"))
+    return zips[-1] if zips else None
+
+
 def refresh_baci(today):
-    version = f"V{today.year}01"
-    zip_path = ec.OUT_DIR / "baci" / f"BACI_HS22_{version}.zip"
+    zip_path = baci_zip(today)
     csv_path = ec.OUT_DIR / "baci" / "baci_imports_hs22.csv"
-    if zip_path.exists() and csv_path.exists() and csv_path.stat().st_mtime >= zip_path.stat().st_mtime:
+    if zip_path and csv_path.exists() and csv_path.stat().st_mtime >= zip_path.stat().st_mtime:
         return {"status": "ALREADY"}
-    if not zip_path.exists() and not ec.download_baci(version, zip_path):
-        return {"status": "NOT_READY", "requests": 1}
-    return {"requests": 1, **ec.collect_baci(zip_path, START_YEAR)}
+    requests = 0
+    if zip_path is None:
+        # CEPII는 같은 해에 수정판을 V{올해}01b처럼 내기도 한다. 최신 수정판부터 찾는다.
+        # ponytail: 기본판을 받은 뒤 나온 수정판은 다시 받지 않음. 필요하면 zip을 지우고 실행
+        for version in (f"V{today.year}01{s}" for s in ("c", "b", "")):
+            requests += 1
+            path = ec.OUT_DIR / "baci" / f"BACI_HS22_{version}.zip"
+            if ec.download_baci(version, path):
+                zip_path = path
+                break
+        else:
+            return {"status": "NOT_READY", "requests": requests}
+    return {"requests": requests, **ec.collect_baci(zip_path, START_YEAR)}
 
 
 def baci_last_year():

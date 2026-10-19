@@ -16,6 +16,7 @@ ML 피처(유망 품목·국가 예측, 시장 유형 분류)에 쓰는 외부 �
 `backend/app/scheduler/main.py`가 **매월 1일 04:00(KST)** 에 `scheduler/jobs/external_refresh.py`를 실행합니다.
 
 1. BACI: 올해 판 `BACI_HS22_V{올해}01.zip`이 없으면 CEPII에서 받아(로그인 불필요) 집계합니다.
+   수정판(`V{올해}01c`, `V{올해}01b`)이 있으면 그것을 먼저 받습니다.
    아직 공개 전(404)이면 `NOT_READY`로 끝내고 다음 달에 다시 확인합니다. 이미 받아 집계했으면 `ALREADY`입니다.
 2. WDI: 2022년~작년 지표를 다시 받습니다 (과거 값도 수정되므로 덮어씀).
 3. Comtrade: BACI 마지막 연도 다음 해 ~ 작년을 받습니다. `.env`에 `COMTRADE_API_KEY`가 없으면 건너뜁니다.
