@@ -46,6 +46,11 @@ class ExternalRefreshTest(unittest.TestCase):
             (zip_path.parent / "baci_imports_hs22.csv").write_text("year\n2022\n2025\n")
             return {"rows": 300}
 
+        comtrade_dir = self.tmp / "comtrade"
+        for year in (2025, 2026):
+            (comtrade_dir / "raw" / str(year)).mkdir(parents=True)
+            (comtrade_dir / f"comtrade_imports_{year}.csv").write_text("year\n")
+
         with mock.patch.object(ec, "download_baci", side_effect=fake_download), \
                 mock.patch.object(ec, "collect_baci", side_effect=fake_baci), \
                 mock.patch.object(ec, "collect_wdi", side_effect=ConnectionError("WDI 응답 없음")), \
@@ -55,6 +60,8 @@ class ExternalRefreshTest(unittest.TestCase):
 
         self.assertEqual(statuses, {"BACI": "DONE", "WDI": "FAILED", "COMTRADE_2026": "DONE"})
         comtrade.assert_called_once_with(2026)  # BACI가 2025년까지 있으니 2026년만
+        self.assertEqual(sorted(p.name for p in comtrade_dir.rglob("*")),  # BACI가 덮은 2025년은 지움
+                         ["2026", "comtrade_imports_2026.csv", "raw"])
         self.assertEqual(self.runs(), [
             ("EXTERNAL_BACI", "external_csv", "SUCCESS", date(2022, 1, 1), 1, 300),
             ("EXTERNAL_WDI", "external_csv", "FAILED", date(2022, 1, 1), 0, 0),

@@ -8,12 +8,14 @@
    batch_run에 남기지 않습니다.
 2. WDI: 2022년~작년 지표를 다시 받습니다 (World Bank가 과거 값도 수정하므로 매번 덮어씀).
 3. Comtrade: BACI에 아직 없는 연도(BACI 마지막 연도+1 ~ 작년, 최대 최근 2년)를 받습니다. .env에 COMTRADE_API_KEY가 없으면 건너뜁니다.
+   BACI가 따라잡은 연도의 Comtrade 파일은 지웁니다.
 
 단계마다 batch_run에 한 건씩 기록합니다 (대상 external_csv, job EXTERNAL_BACI·EXTERNAL_WDI·EXTERNAL_COMTRADE).
 진행 로그는 data/external/logs/external_refresh_<시각>.log, 다운로드·수집 실패는 download_failures.log에 따로 쌓습니다.
 """
 import argparse
 import logging
+import shutil
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -110,6 +112,15 @@ def baci_last_year():
     return int(pd.read_csv(path, usecols=["year"]).year.max()) if path.exists() else START_YEAR - 1
 
 
+def drop_covered_comtrade(baci_last):
+    """BACI가 따라잡은 연도의 Comtrade CSV·원본 응답을 지운다. 같은 연도가 두 출처에 겹쳐 남지 않게."""
+    folder = ec.OUT_DIR / "comtrade"
+    for path in [*folder.glob("comtrade_imports_*.csv"), *(folder / "raw").glob("[0-9]*")]:
+        if int(path.stem[-4:]) <= baci_last:
+            shutil.rmtree(path) if path.is_dir() else path.unlink()
+            log.info(f"COMTRADE 정리: BACI에 {baci_last}년까지 있어 {path.name} 삭제")
+
+
 def run(today=None, engine=None):
     """engine: batch_run 기록용 DB. 테스트에서 SQLite를 넘긴다."""
     today = today or datetime.now(KST).date()
@@ -124,12 +135,14 @@ def run(today=None, engine=None):
                                  date(last, 12, 31), lambda: refresh_baci(today), engine)}
     statuses["WDI"] = step("WDI", f"{START_YEAR}~{last}", date(START_YEAR, 1, 1), date(last, 12, 31),
                            lambda: ec.collect_wdi(START_YEAR, last), engine)
+    baci_last = baci_last_year()
+    drop_covered_comtrade(baci_last)
     if not dotenv_values(ec.ROOT / ".env").get(ec.ENV_KEY):
         log.warning(f"COMTRADE 건너뜀: .env에 {ec.ENV_KEY}가 없음")
     else:
         # BACI는 보통 2년 늦게 나오니 Comtrade는 최근 2년까지만 받는다. BACI 집계본이 아직 없어도
         # 2022년부터 전부 받으면 무료 키 한도(하루 500회)를 넘는다.
-        for year in range(max(baci_last_year() + 1, last - 1), last + 1):
+        for year in range(max(baci_last + 1, last - 1), last + 1):
             statuses[f"COMTRADE_{year}"] = step("COMTRADE", str(year), date(year, 1, 1), date(year, 12, 31),
                                                 lambda year=year: ec.collect_comtrade(year), engine)
     log.info(f"외부 데이터 갱신 끝 | {statuses}")
