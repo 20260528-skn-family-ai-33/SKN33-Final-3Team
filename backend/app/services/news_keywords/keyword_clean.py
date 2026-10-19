@@ -7,12 +7,13 @@
    예외: 나라를 떼고 남는 말이 split_exceptions.csv의 말로 끝나면(…사태·…선거·…무역관·…엑스포 등) 나누지 않고 통째로 남깁니다.
 ③ 연도 분리: '2024', '2026년'처럼 연도만 있는 키워드는 지우지 않고 언급 연도(kw_year) 칸으로 옮깁니다.
 ④ 동의어: synonyms.csv로 같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (EV·전기자동차 → 전기차, 인공지능 → AI).
-⑤ 불용어(블락 목록): 회의 결정으로 기본 목록은 비어 있습니다(사용자 키워드 블락으로 대체). stopwords.csv에 넣은 말만 급증 계산용 주제어(kw_spike)에서 뺍니다(관리자 블락용).
-⑥ 대/중분류: topic_categories.csv(주제어 → 대분류·중분류)로 기사에 분야 칸(kw_category)을 붙입니다.
-③ 품목 연결(1·3단계): KOTRA HS 칸(hsCdNm)을 HS 6단위(hs6, 요구사항 기본 단위)·4단위(hs4)로, 없으면 KOTRA 산업분류(indstCl)로 큰 범위만 남깁니다.
+   결과 주제어(kw_topic)를 검색·집계·급증 판정에 모두 씁니다.
+⑤ 대/중분류: topic_categories.csv(주제어 → 대분류·중분류)로 기사에 분야 칸(kw_category)을 붙입니다.
+   분야는 주제어 단위라 검색에서는 순위 보조 가점으로만 씁니다 (최종 관련도는 검색 단계에서 기사 문맥으로 판단).
+⑥ 품목 연결(1·3단계): KOTRA HS 칸(hsCdNm)을 HS 6단위(hs6, 요구사항 기본 단위)·4단위(hs4)로, 없으면 KOTRA 산업분류(indstCl)로 큰 범위만 남깁니다.
    2단계(키워드·제목의 품목어 → HS 사전)는 HS 사전 완료 후 추가합니다.
-   검색용 주제어(kw_topic)는 그대로 둡니다.
 원본 kwrd는 그대로 두고 결과 칸을 새로 추가합니다.
+불용어는 회의 결정(2026-10-14)으로 없앴습니다. 보기 싫은 키워드는 사용자 키워드 블락으로 조회할 때 거릅니다 (keyword_block.py).
 
 실행: python backend/app/services/news_keywords/keyword_clean.py --input <news_raw.csv 또는 .parquet>
 확인: python backend/app/services/news_keywords/keyword_clean.py --check "우크라이나사태,중국경제" --natn 중국
@@ -31,7 +32,6 @@ import pandas as pd
 BASE = Path(__file__).resolve().parent
 GEO_PATH = BASE / "geo_dict.csv"
 EXCEPTIONS_PATH = BASE / "split_exceptions.csv"
-STOPWORDS_PATH = BASE / "stopwords.csv"
 SYNONYMS_PATH = BASE / "synonyms.csv"
 CATEGORIES_PATH = BASE / "topic_categories.csv"
 # 결과는 저장소 루트의 data/news_keywords/에 저장합니다 (git 제외 폴더).
@@ -104,14 +104,6 @@ def load_exceptions(path=EXCEPTIONS_PATH):
         return frozenset(normalize(r["남는말"]) for r in csv.DictReader(fh) if r.get("남는말"))
 
 
-def load_stopwords(path=STOPWORDS_PATH):
-    """급증 계산에서 뺄 넓은 말 목록(stopwords.csv의 단어 컬럼)을 읽습니다."""
-    if not Path(path).exists():
-        return frozenset()
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        return frozenset(normalize(r["단어"]) for r in csv.DictReader(fh) if r.get("단어"))
-
-
 def load_synonyms(path=SYNONYMS_PATH):
     """같은 뜻 표기 → 대표어 표(synonyms.csv의 표기·대표어 컬럼)를 읽습니다."""
     if not Path(path).exists():
@@ -121,12 +113,12 @@ def load_synonyms(path=SYNONYMS_PATH):
 
 
 def load_categories(path=CATEGORIES_PATH):
-    """주제어 → "대분류>중분류" 표를 읽습니다. 불용어(제외)·미분류는 넣지 않습니다."""
+    """주제어 → "대분류>중분류" 표를 읽습니다. 미분류는 넣지 않습니다."""
     if not Path(path).exists():
         return {}
     with open(path, encoding="utf-8-sig", newline="") as fh:
         return {normalize(r["주제어"]): f'{r["대분류"]}>{r["중분류"]}' for r in csv.DictReader(fh)
-                if r.get("주제어") and r.get("대분류") not in ("", "제외", "미분류")}
+                if r.get("주제어") and r.get("대분류") not in ("", "미분류")}
 
 
 def hs4_codes(hs_field):
@@ -157,7 +149,7 @@ def is_exception(word, topic, keep):
     return word in keep or bool(topic) and any(topic.endswith(e) for e in keep)
 
 
-def process_article(kwrd, natn, geo, keep=frozenset(), stop=frozenset(), syn=None, cat=None):
+def process_article(kwrd, natn, geo, keep=frozenset(), syn=None, cat=None):
     """기사 한 건의 키워드를 정제하고 지역 칸을 채운 결과를 돌려줍니다.
 
     keep: 나라를 떼고 남는 말이 이 안에 있으면 키워드를 나누지 않고 통째로 주제어에 남깁니다.
@@ -192,8 +184,6 @@ def process_article(kwrd, natn, geo, keep=frozenset(), stop=frozenset(), syn=Non
     return {
         "kw_clean": words,
         "kw_topic": list(dict.fromkeys(topics)),
-        # 급증 계산용: 검색용 주제어에서 블락 목록(stopwords.csv, 기본은 비어 있음)만 뺍니다.
-        "kw_spike": [t for t in dict.fromkeys(topics) if t not in stop],
         # 분야: 주제어마다 정해 둔 대분류>중분류 (한 기사에 여러 개 가능)
         "kw_category": list(dict.fromkeys((cat or {})[t] for t in topics if t in (cat or {}))),
         "kw_year": list(dict.fromkeys(years)),
@@ -233,8 +223,6 @@ def summarize(df, results):
     topic = [w for r in results for w in r["kw_topic"]]
     compounds = Counter(w for r in results for w in r["compounds"])
     kept = Counter(w for r in results for w in r["kept"])
-    spike = [w for r in results for w in r["kw_spike"]]
-    stopped = Counter(w for r in results for w in r["kw_topic"] if w not in r["kw_spike"])
     has_natn = [r for r in results if r["natn_code"]]
     unmatched_natn = sorted({str(n) for n, r in zip(df["natn"], results) if n and not r["natn_code"]})
     return {
@@ -245,8 +233,6 @@ def summarize(df, results):
         "topic_only": {"mentions": len(topic), "kinds": len(set(topic))},
         "category": {"articles_with_category": sum(1 for r in results if r["kw_category"]),
                      "top": Counter(c for r in results for c in r["kw_category"]).most_common(25)},
-        "spike_topic": {"mentions": len(spike), "kinds": len(set(spike)),
-                        "stopword_mentions": sum(stopped.values()), "stopword_top": stopped.most_common(20)},
         "split_rules": {
             "html_entity": sum("&" in k and ";" in k for k in raw),
             "hashtag": sum("#" in k for k in raw),
@@ -273,14 +259,13 @@ def summarize(df, results):
 
 
 def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exceptions_path=EXCEPTIONS_PATH,
-        stopwords_path=STOPWORDS_PATH, synonyms_path=SYNONYMS_PATH, categories_path=CATEGORIES_PATH):
+        synonyms_path=SYNONYMS_PATH, categories_path=CATEGORIES_PATH):
     df = read_input(input_path, since)
     geo = load_geo(geo_path)
     keep = load_exceptions(exceptions_path)
-    stop = load_stopwords(stopwords_path)
     syn = load_synonyms(synonyms_path)
     cat = load_categories(categories_path)
-    results = [process_article(k, n, geo, keep, stop, syn, cat) for k, n in zip(df["kwrd"], df["natn"])]
+    results = [process_article(k, n, geo, keep, syn, cat) for k, n in zip(df["kwrd"], df["natn"])]
     cols = [c for c in ["bbstxSn", "othbcDt", "natn", "infoCl", "newsTitl", "kwrd"] if c in df.columns]
     out = df[cols].copy()
     links = [product_link(h, i) for h, i in zip(df.get("hsCdNm", [""] * len(df)), df.get("indstCl", [""] * len(df)))]
@@ -288,7 +273,7 @@ def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exception
     out["hs4"] = ["|".join(x[0]) for x in links]
     out["industry"] = ["|".join(x[1]) for x in links]
     out["product_source"] = [x[2] for x in links]
-    for col in ["kw_clean", "kw_topic", "kw_spike", "kw_category", "kw_year", "natn_code", "geo_country", "geo_city", "geo_region", "country_all"]:
+    for col in ["kw_clean", "kw_topic", "kw_category", "kw_year", "natn_code", "geo_country", "geo_city", "geo_region", "country_all"]:
         out[col] = [r[col] if isinstance(r[col], str) else "|".join(r[col]) for r in results]
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -303,7 +288,7 @@ def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exception
     return out, report
 
 
-def explain(kwrd, natn, geo, keep, stop=frozenset(), syn=None, cat=None):
+def explain(kwrd, natn, geo, keep, syn=None, cat=None):
     """키워드 하나하나가 어디로 갔는지 사람이 읽기 쉬운 표로 출력합니다 (--check)."""
     print(f"기사 국가 칸(natn): {natn or '(없음)'}")
     print(f"원본 키워드: {kwrd}" + chr(10))
@@ -321,20 +306,18 @@ def explain(kwrd, natn, geo, keep, stop=frozenset(), syn=None, cat=None):
             print(f"{word:<22}{'예외유지':<10}→ 주제어 '{word}' 통째로 + {where} (예외 목록 '{hit}')")
         elif places and topic:
             t2 = (syn or {}).get(topic, topic)
-            note = (f" → 동의어 '{t2}'" if t2 != topic else "") + (" (불용어: 급증 계산 제외)" if t2 in stop else "")
+            note = f" → 동의어 '{t2}'" if t2 != topic else ""
             print(f"{word:<22}{'분리':<10}→ {where} + 주제어 '{topic}'" + note)
         elif places:
             print(f"{word:<22}{'지역':<10}→ {where}")
         else:
             if word in (syn or {}):
-                print(f"{word:<22}{'동의어':<10}→ 대표어 '{syn[word]}'로 통일" + (" (불용어: 급증 계산 제외)" if syn[word] in stop else ""))
-            elif word in stop:
-                print(f"{word:<22}{'불용어':<10}→ 주제어 '{word}' (검색엔 쓰고 급증 계산에서는 제외)")
+                print(f"{word:<22}{'동의어':<10}→ 대표어 '{syn[word]}'로 통일")
             else:
                 print(f"{word:<22}{'주제어':<10}→ 주제어 '{word}'")
-    r = process_article(kwrd, natn, geo, keep, stop, syn, cat)
+    r = process_article(kwrd, natn, geo, keep, syn, cat)
     print("-" * 70)
-    for col in ["kw_topic", "kw_spike", "kw_category", "kw_year", "natn_code", "country_all", "geo_country", "geo_city", "geo_region"]:
+    for col in ["kw_topic", "kw_category", "kw_year", "natn_code", "country_all", "geo_country", "geo_city", "geo_region"]:
         print(f"{col:<14}{' | '.join(r[col]) if isinstance(r[col], list) else r[col]}")
 
 
@@ -344,7 +327,6 @@ def main():
     parser.add_argument("--check", help="키워드 문자열 하나를 넣어 처리 과정을 표로 확인 (예: \"우크라이나사태,중국경제\")")
     parser.add_argument("--natn", default="", help="--check와 함께 쓸 기사 국가 칸 값 (예: 중국)")
     parser.add_argument("--exceptions", type=Path, default=EXCEPTIONS_PATH)
-    parser.add_argument("--stopwords", type=Path, default=STOPWORDS_PATH)
     parser.add_argument("--synonyms", type=Path, default=SYNONYMS_PATH)
     parser.add_argument("--categories", type=Path, default=CATEGORIES_PATH)
     parser.add_argument("--since", help="이 날짜 이후 기사만 (예: 2022-01-01)")
@@ -352,19 +334,17 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=OUT_DIR)
     args = parser.parse_args()
     if args.check is not None:
-        explain(args.check, args.natn, load_geo(args.geo), load_exceptions(args.exceptions), load_stopwords(args.stopwords),
+        explain(args.check, args.natn, load_geo(args.geo), load_exceptions(args.exceptions),
                 load_synonyms(args.synonyms), load_categories(args.categories))
         return
     if not args.input:
         parser.error("--input 또는 --check 중 하나가 필요합니다")
-    _, report = run(args.input, args.output_dir, args.since, args.geo, args.exceptions, args.stopwords, args.synonyms,
+    _, report = run(args.input, args.output_dir, args.since, args.geo, args.exceptions, args.synonyms,
                     args.categories)
     print(f"기사 {report['articles']:,}건")
     print(f"키워드 종류: 원본 {report['raw']['kinds']:,} → 정제 {report['clean']['kinds']:,} → 지역 분리 후 주제어 {report['topic_only']['kinds']:,}")
     g = report["geo"]
     print(f"복합어 분리 {g['compound_split_kinds']:,}종 / 예외로 통째 유지 {g['kept_whole_kinds']:,}종 / 기사 국가 반복 {g['natn_repeated_rate']:.0%}")
-    sp = report["spike_topic"]
-    print(f"급증 계산용 주제어: {sp['kinds']:,}종 (불용어로 뺀 언급 {sp['stopword_mentions']:,}건)")
     print(f"분야가 붙은 기사: {report['category']['articles_with_category']:,}건 / {report['articles']:,}건")
     pr = report["product"]
     print(f"품목 연결(1·3단계): KOTRA HS {pr['KOTRA HS']:,}건 (6단위 {pr['HS 6단위']:,}건) / 산업분류만 {pr['산업분류만']:,}건 / 없음 {pr['없음']:,}건")

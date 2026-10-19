@@ -1,4 +1,4 @@
-"""⑥ 대/중분류 표(topic_categories.csv)를 다시 만듭니다.
+"""⑤ 대/중분류 표(topic_categories.csv)를 다시 만듭니다.
 
 순서 (규칙을 먼저 모두 대조하고, 규칙으로 안 되는 것만 LLM 판단을 씀)
   1) 규칙(일치): 주제어가 분류 틀(TAX)의 대표 키워드와 정확히 같음
@@ -6,8 +6,9 @@
   3) 규칙 수정: 규칙 결과가 글자만 겹쳐 틀린 경우 바로잡은 목록(category_rule_fixes.csv, 규칙 결과·이유 기록)
   4) LLM 판단: 규칙에 하나도 안 걸린 말의 분야를 LLM이 뜻으로 정한 목록(category_llm.csv)
   5) 검수 필요: 위 어디에도 없거나 LLM이 "너무 넓어 정하지 않음"(미분류)으로 둔 말
-  ※ 팀 검수(category_decisions.csv)에서 X로 고친 말은 위 결과보다 우선 — 배정방법 "팀 검수"
-     (O는 지금 결과를 확인한 것이라 그대로 둠)
+  ※ 팀 검수(category_decisions.csv)가 위 결과보다 우선 — 배정방법 "팀 검수"
+     X: 팀이 고른 분류(또는 "미분류로 둠") / 못 정한 말을 O로 확인: 미분류 확정 (검수 필요에서 빠짐)
+     그 밖의 O는 지금 결과를 확인한 것이라 원래 배정방법 그대로 둠
 대상: 정리된 주제어(kw_topic) 중 기사 MIN_ARTICLES(10)건 이상. 기준·과정 설명은 CLASSIFICATION_RULES.md
 
 실행: python backend/app/services/news_keywords/build/build_categories.py [--output 경로] [--min-articles 10]
@@ -80,10 +81,10 @@ def rule(word):
 
 
 def load_decisions(path=NK / "category_decisions.csv"):
-    """팀 검수에서 X로 고친 말: 주제어 → (대분류, 중분류). 없으면 빈 표."""
+    """팀이 정한 말: 주제어 → (대분류, 중분류). X(분류 변경)와, 못 정한 말을 미분류로 확인한 O. 없으면 빈 표."""
     if not Path(path).exists():
         return {}
-    return {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read(path.name) if r.get("판정") == "X"}
+    return {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read(path.name) if r.get("판정") == "X" or (r.get("판정") == "O" and r.get("대분류") == "미분류")}
 
 
 def assign(word, fixes=None, llm=None, team=None):

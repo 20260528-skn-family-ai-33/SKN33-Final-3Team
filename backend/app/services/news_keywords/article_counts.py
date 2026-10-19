@@ -1,7 +1,8 @@
 """해외시장뉴스 키워드·품목 기사 집계 테이블(FR-906)과 급증 판정(FR-203·204)을 만듭니다.
 
 입력: keyword_clean.py 결과(news_keywords_clean.csv)
-- 키워드별 집계: 날짜 × 국가 × 키워드(kw_spike, 불용어 제외) 기사 수
+- 키워드별 집계: 날짜 × 국가 × 키워드(kw_topic, 동의어 정리 후 주제어) 기사 수
+  (불용어는 없앰. 사용자 키워드 블락은 집계를 바꾸지 않고 보여 줄 때 거름 — keyword_block.py)
 - 품목별 집계: 날짜 × 국가 × 품목, 단위(unit) 칸으로 HS 6단위(요구사항 기본)와 4단위를 함께 저장
   (지금은 KOTRA HS 칸만 — HS 사전 완료 후 키워드·제목 연결분 추가)
 - FR-204 주요 이슈: 최근 7일 기사 수 ÷ 직전 8주 주평균 ≥ 3 (평균 0이면 1), 키워드·품목 각각 + KOTRA 통상·규제 기사
@@ -109,11 +110,11 @@ def main():
     run_date = args.date or (pd.to_datetime(df.othbcDt.str[:10]).max() + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     out = args.output_dir
     out.mkdir(parents=True, exist_ok=True)
-    kc = build_counts(df, "kw_spike")
+    kc = build_counts(df, "kw_topic")
     pc = product_counts(df)
     kc.to_csv(out / "keyword_daily_counts.csv", index=False, encoding="utf-8-sig")
     pc.to_csv(out / "product_daily_counts.csv", index=False, encoding="utf-8-sig")
-    mk = major_issues(df, "kw_spike", run_date).assign(type="키워드")
+    mk = major_issues(df, "kw_topic", run_date).assign(type="키워드")
     mp6 = major_issues(df, "hs6", run_date).assign(type="품목(HS6)") if "hs6" in df.columns else pd.DataFrame()
     mp = major_issues(df, "hs4", run_date).assign(type="품목(HS4)")
     issues = pd.concat([mk, mp6, mp], ignore_index=True)

@@ -6,7 +6,8 @@
 - 동의어_랜덤100_검수용.xlsx: 미반영 후보에서 무작위 100개 (시드 고정 → 다시 뽑아도 같은 100개)
   · 회의 결정: 100개를 확인해 문제가 없으면 "임베딩 기준 이상 → 자동 동의어" 규칙으로 처리
 - 대중분류_검수용.xlsx: topic_categories.csv 중 사람이 볼 줄(검수 필요 · 규칙(포함) · 규칙 수정 · LLM 판단) + 왜 붙었나 + 예시 기사 제목
-- 미분류_예시기사.xlsx: 미분류 단어마다 최신 기사 10건 (회의 결정: 예시 기사를 보고 분야를 정함)
+- 미분류_예시기사.xlsx: 아직 팀이 정하지 않은 미분류 단어(배정방법 "검수 필요")마다 최신 기사 10건 (회의 결정: 예시 기사를 보고 분야를 정함)
+  · 2026-10-19 팀 검수로 모두 정해져 지금은 0개. 기사가 쌓여 새 주제어가 10건을 넘으면 다시 생김
 
 실행: python backend/app/services/news_keywords/build/review_files.py [--out-dir 폴더]
 """
@@ -118,7 +119,8 @@ def category_rows():
         if how == "LLM 판단":
             return "규칙에 안 걸려 LLM이 뜻으로 배정"
         if how == "팀 검수":
-            return "팀 검수에서 바꾼 분류" + (f" (원래 규칙 결과: {rule_txt})" if rule_txt else "")
+            head = "팀 검수에서 미분류로 확정" if w in bc.load_decisions() and bc.load_decisions()[w][0] == "미분류" else "팀 검수에서 바꾼 분류"
+            return head + (f" (원래 규칙 결과: {rule_txt})" if rule_txt else "")
         return "규칙에도 안 걸리고 뜻이 넓어 분야를 정하지 못함"
     rv["왜"] = [why(w, h, t) for w, h, t in zip(rv.주제어, rv.배정방법, rv["규칙 결과"])]
     return rv
@@ -146,9 +148,9 @@ def category_file(out_dir, res):
         (f"규칙(포함) ({n_inc}줄)", "분류 키워드를 글자로 포함해 자동으로 붙은 것. 글자만 겹친 실수가 있을 수 있음"),
         (f"규칙 수정 ({n_fix}줄)", "규칙 결과가 글자만 겹쳐 틀려서 바로잡은 것 (category_rule_fixes.csv)"),
         (f"LLM 판단 ({n_llm}줄)", "규칙에 하나도 안 걸려 LLM이 뜻으로 배정한 것 (category_llm.csv)"),
-        (f"팀 검수 ({n_team}줄)", "팀 검수에서 X로 바꾼 분류가 반영된 것 (category_decisions.csv)"),
+        (f"팀 검수 ({n_team}줄)", "팀이 정한 분류가 반영된 것: X로 바꾼 분류 + 미분류로 확인한 말 (category_decisions.csv)"),
         ("검수 상태 칸", "이미 팀이 본 줄은 O/X·맞는 분류·의견이 채워져 있음 → 빈 줄(새로 생긴 주제어)만 검수하면 됨"),
-        ("끝나면", "포함 규칙이 틀리면 category_rule_fixes.csv, LLM 판단이 틀리면 category_llm.csv를 고치고 build_categories.py 실행"),
+        ("끝나면", "import_category_review.py --file 이 파일 → category_decisions.csv → build_categories.py 실행 (팀 검수가 규칙·LLM 판단보다 우선)"),
     ], columns=["항목", "내용"])
     df = pd.DataFrame({"주제어": rv.주제어, "기사수": rv._n, "배정방법": rv.배정방법, "지금 대분류": rv.대분류, "지금 중분류": rv.중분류,
                        "왜 이렇게 붙었나": rv.왜, "예시 기사 제목 (최근 2건)": ["\n".join(titles.get(w, [])) for w in rv.주제어],
@@ -187,8 +189,10 @@ def unclassified_file(out_dir, res):
                          "같이 나온 주제어": r.kw_topic.replace("|", ", "), "다른 주제어의 분야": r.kw_category.replace("|", ", "),
                          "KOTRA 산업분류": r.indstCl, "기사ID": r.bbstxSn})
     wb = Workbook()
-    write_sheet(wb.active, pd.DataFrame(summ), [14, 12, 34, 40]); wb.active.title = f"단어 {len(words)}개"
-    art = pd.DataFrame(rows)
+    write_sheet(wb.active, pd.DataFrame(summ, columns=["단어", "전체 기사 수", "정한 분류 (대 > 중)", "의견"]), [14, 12, 34, 40])
+    wb.active.title = f"단어 {len(words)}개"
+    art = pd.DataFrame(rows, columns=["단어", "번호", "게시일", "국가", "제목", "원본 키워드", "같이 나온 주제어", "다른 주제어의 분야",
+                                      "KOTRA 산업분류", "기사ID"])
     write_sheet(wb.create_sheet("예시 기사"), art, [10, 6, 11, 10, 50, 45, 45, 45, 18, 12])
     wb.save(out_dir / "미분류_예시기사.xlsx")
     return art

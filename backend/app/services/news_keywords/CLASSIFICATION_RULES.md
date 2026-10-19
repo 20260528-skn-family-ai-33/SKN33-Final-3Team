@@ -17,15 +17,17 @@
 
 ```
 data/news/news_raw_*.csv (KOTRA 원본)
-  └─ keyword_clean.py ─────────────── ① 정제 · ② 지역 분리 · 예외 · 연도 · ④ 동의어 · ⑥ 분야 · ③ 품목
-        사전: geo_dict.csv · split_exceptions.csv · synonyms.csv · topic_categories.csv · stopwords.csv(비어 있음)
+  └─ keyword_clean.py ─────────────── ① 정제 · ② 지역 분리(+예외) · ③ 연도 · ④ 동의어 · ⑤ 분야 · ⑥ 품목
+        사전: geo_dict.csv · split_exceptions.csv · synonyms.csv · topic_categories.csv
         → data/news_keywords/news_keywords_clean.csv (기사 1건 = 1줄)
-  └─ article_counts.py ────────────── 집계(FR-906) · 주요 이슈(FR-204) · 급증(FR-203)
+  └─ article_counts.py ────────────── 집계(FR-906) · 주요 이슈(FR-204) · 급증(FR-203) — 키워드는 kw_topic 기준
+  └─ keyword_block.py ─────────────── 사용자 키워드 블락 (불용어 대신, 보여 줄 때만 거름)
 
 사전 만들기 (build/)
   build_synonyms.py     GROUPS + 팀 검수 O + 접미사 규칙 → synonyms.csv       (판정 칸: 규칙: 괄호 / 규칙: 표기 / 규칙: 접미사 / LLM 판단 / 팀 O)
   import_synonym_review.py  검수 엑셀(O/X/△)          → synonym_decisions.csv
-  build_categories.py   TAX(분류 틀) + 규칙 수정 + LLM → topic_categories.csv  (배정방법 칸: 규칙(일치) / 규칙(포함) / 규칙 수정 / LLM 판단 / 검수 필요)
+  import_category_review.py 분류 검수 엑셀(O/X)      → category_decisions.csv
+  build_categories.py   팀 검수 + TAX(분류 틀) + 규칙 수정 + LLM → topic_categories.csv  (배정방법 칸: 팀 검수 / 규칙(일치) / 규칙(포함) / 규칙 수정 / LLM 판단 / 검수 필요)
   synonym_candidates.py 임베딩 · 동시 등장 후보         → 동의어_검수용.csv
   review_files.py       팀 검수 엑셀 4개                → data/news_keywords/review/
   verify.py             저장 파일 · 나눠 준 파일 = 코드 결과?
@@ -35,10 +37,10 @@ data/news/news_raw_*.csv (KOTRA 원본)
 |---|---|---|---|
 | 동의어 `synonyms.csv` (519) | 371개 — 원본 괄호 쌍 20, 표기 골격 같음 13, **접미사 규칙 338** (`판정` 칸) | 61개 — 번역어·약어·같은 뜻 다른 말 (`build_synonyms.py`의 GROUPS, `판정 = LLM 판단`) | **팀 검수 O 87** (`synonym_decisions.csv`) |
 | 동의어 후보 (303) | 임베딩 유사도 · 동시 등장 · 1차 의견 규칙 | 없음 | O/X로 확정 |
-| 대/중분류 `topic_categories.csv` (906) | 일치 386 · 포함 138 | 분류 틀·대표 키워드(`TAX`) · 규칙 수정 7 · 규칙에 안 걸린 말 260 · 못 정한 말 표시 | **팀 검수 546줄 반영 (X 94 → 분류 변경 84)** (`category_decisions.csv`) |
+| 대/중분류 `topic_categories.csv` (906) | 일치 386 · 포함 138 | 분류 틀·대표 키워드(`TAX`) · 규칙 수정 7 · 규칙에 안 걸린 말 258 | **팀 최종 검수 520줄 (O 427 · X 93) → "팀 검수" 117개** (`category_decisions.csv`) |
 | 예외 `split_exceptions.csv` (73) | "남는 말이 목록의 말로 끝나면 통째로" | 어떤 말을 목록에 넣을지 (유형·이유 칸) | 검수 |
 | 지역 `geo_dict.csv` (346) | "키워드 앞부분이 지명이면 분리" | 지명·종류·코드·권역 묶음·단독 전용 여부 | 검수 |
-| 불용어 `stopwords.csv` (0) | 목록의 말은 급증 계산에서만 제외 | — (회의 결정으로 없앰) | 관리자 블락 |
+| ~~불용어~~ → 사용자 키워드 블락 (`keyword_block.py`) | 블락한 대표어가 있는 기사·이슈·알림을 보여 줄 때 숨김 | — | 사용자가 직접 |
 
 ## 2. 정제 (규칙, `keyword_clean.py`)
 - HTML 문자(`&#39;`)·해시태그(`#`)·따옴표 제거, 영문은 대문자로 (ai → AI, 원본은 보관)
@@ -77,8 +79,9 @@ data/news/news_raw_*.csv (KOTRA 원본)
 - 같은 쌍을 다르게 표시했거나 한 표기에 O가 두 개면 알려 주고 멈춤 → 엑셀에서 정리 후 다시 실행
 - O는 동의어로, X·△는 반영 안 함 (규칙으로도 안 묶음). 의견 칸(대표어 변경 등)은 따로 출력해 사람이 반영
 
-### 팀 검수 결과 (2026-10-15 반영)
-- 미반영 후보 303쌍 최종 O 87 · X 216 · △ 0 (2026-10-19, 혜진·허유나 최종 검수) → `synonym_decisions.csv`
+### 팀 검수 결과 (최종본: `동의어_검수결과_최종.xlsx`)
+- 미반영 후보 303쌍 최종 O 87 · X 216 · △ 0 (2026-10-19, 혜진·허유나 최종 검수로 확정) → `synonym_decisions.csv`
+  - 통합본에서 일자리→취업(38행)이 O였지만 일자리→고용(168행) O와 한 표기에 O가 둘이라, 의견 칸("X")대로 X로 확정
 - 1차(10/15) O 79 · X 205 · △ 19 → △ 19쌍을 최종 검수에서 O/X로 결정 (일자리→취업은 일자리→고용 O와 충돌해 X)
 - 기능 기준으로 재검토해 O로 조정 (같은 대상인데 두 키워드가 같은 기사에 거의 같이 붙지 않아, 따로 두면 검색에서 빠지는 기사): 풍력발전 → 풍력(19건), 상표권 → 상표(23건), 참관 → 참관기(12건), 의약 → 의약품(11건), 태양광발전 → 태양광(5건) · 기능성식품 → 건강기능식품은 △
 - 종류·세부는 구분: 신차 ≠ 자동차(완성차 = 자동차), 스킨케어·기초화장품 ≠ 화장품, 탄산리튬 ≠ 리튬, 전기차보조금 ≠ 전기차, 화장품규제 ≠ 화장품
@@ -117,37 +120,57 @@ data/news/news_raw_*.csv (KOTRA 원본)
 ### 배정 순서 (`배정방법` 칸)
 | 순서 | 배정방법 | 기준 | 개수 | 남긴 곳 |
 |---|---|---|---|---|
+| 0 | **팀 검수** | 팀이 고친 분류(X) · 못 정한 말을 미분류로 확인(O) — 규칙·LLM보다 우선 | 117 (그중 미분류 71) | `category_decisions.csv` |
 | 1 | 규칙(일치) | 주제어가 대표 키워드와 정확히 같음 | 386 | 코드 |
 | 2 | 규칙(포함) | 대표 키워드(2글자 이상)를 포함 — 틀 위에서부터 먼저 맞는 분류 | 138 | 코드 |
 | 3 | 규칙 수정 | 규칙 결과가 글자만 겹쳐 틀린 경우 바로잡음 (`규칙 결과` 칸에 원래 결과) | 7 | `category_rule_fixes.csv` (이유 포함) |
-| 4 | LLM 판단 | **규칙에 하나도 안 걸린 말만** 뜻으로 배정 | 260 | `category_llm.csv` |
-| 5 | 검수 필요 | 규칙·LLM 모두 못 정함 (뜻이 너무 넓음: 한국·산업·기술·여름 …) | 31 | — (미분류_예시기사.xlsx로 팀이 결정) |
+| 4 | LLM 판단 | **규칙에 하나도 안 걸린 말만** 뜻으로 배정 | 258 | `category_llm.csv` |
+| 5 | 검수 필요 | 규칙·LLM·팀 모두 아직 안 정함 | **0** (새 주제어가 10건을 넘으면 생김) | — (미분류_예시기사.xlsx로 팀이 결정) |
 
-- **팀 검수 (최우선, `category_decisions.csv`):** 팀이 X로 고친 분류는 규칙·LLM 판단보다 먼저 적용 (배정방법 "팀 검수", 84개). O는 지금 분류를 확인한 것
-  - 엑셀 → `build/import_category_review.py --file 대중분류_검수용.xlsx` → `category_decisions.csv` → `build_categories.py`
-  - 2026-10-19 반영: 팀원(혜진) 검수 546줄 (O 452 · X 94). 예전 버전(544줄)으로 검수했으나 주제어 기준으로 옮김
-  - 동의어로 합쳐진 말의 팀 결정이 한쪽으로 모이면 대표어에도 적용: 관광산업·관광업·여행 → 관광 = 시장·소비 동향, 실버산업·실버경제 → 실버 = 시장·소비 동향
-  - 팀이 "미분류로 둠"으로 정한 말은 미분류로 확정 (검수 필요 목록에서 빠짐)
+- **팀 검수 (최우선, `category_decisions.csv`):** 엑셀 → `build/import_category_review.py --file 대중분류_최종통합본.xlsx` → `category_decisions.csv` → `build_categories.py`
+  - X: "맞는 분류"로 바꿈("미분류로 둠"이면 미분류) / O: 지금 분류가 맞음. 지금이 미분류(검수 필요)인 말을 O로 확인하면 미분류로 확정되어 검수 필요에서 빠짐
+  - **최종(2026-10-19):** 혜진·허유나 검수 520줄 O 427 · X 93 (`대중분류_최종통합본.xlsx`)
+    - 두 사람이 다르게 고른 10줄은 ver3(팀원) 값 사용: 건강·건강관리·에이전트·딥테크·운동·식량안보·인프라프로젝트 → 미분류, 법인 → 인물·기관·기업, 영유아 → 인구·노동, 나프타 → 품목 유지
+    - 반영 형식 정리 (뜻은 그대로, 엑셀 "병합 기록" 시트): "→"를 ">"로 · O와 분류가 함께 적힌 줄은 X + 그 분류(기술·동향·혁신·발전·생산·리스크·현황) · 분류틀에 없는 "국가·지역 정보"(한국·글로벌)는 미분류(나라는 국가 칸) · 빈칸 + "미분류로 둠"은 O
+    - 이전: 1차 팀원(혜진) 검수 546줄(예전 544줄 버전, 주제어 기준으로 옮김). 동의어로 합쳐진 말의 결정은 대표어에 적용(관광산업·관광업·여행 → 관광, 실버산업·실버경제 → 실버 = 시장·소비 동향)
 - 규칙 수정 예: 관광산업("광산" 포함 → 화석연료·자원 ✗ → 품목), 현지진출("지진" ✗ → 진출·마케팅), 리튬이온배터리("리튬" ✗ → 품목), 파리협정("협정" ✗ → 친환경·ESG·기후), 발전(에너지 "발전"과 같은 글자지만 기사에서는 "경제 발전" 뜻이 많아 정하지 않음)
 - LLM 판단 기준: "이 주제어가 들어간 기사가 주로 어떤 분야 이야기인가" — 품목·상품이면 산업·품목, 행사면 전시회·행사 …
-- 예전 불용어 43개(회의 결정으로 불용어 없앰)도 같은 순서로 처리: 규칙 2개(정책·진출전략), 규칙 수정 1개(소비자), LLM 판단 25개(수출 → 수출입 일반, 전시회 → 전시회·행사 …), 못 정함 15개(발전 포함)
+- 넓은 말(예전 불용어 43개)도 같은 순서로 처리: 규칙 2개(정책·진출전략), 규칙 수정 1개(소비자), LLM 판단 25개(수출 → 수출입 일반, 전시회 → 전시회·행사 …), 나머지는 팀 검수로 결정
 - 기사에는 `kw_category` 칸으로 **주제어마다** 분야를 붙임 (한 기사에 여러 개 가능)
 
-### 대상: 기사 10건 이상 주제어 (912개, 접미사 규칙·팀 검수 동의어로 합쳐진 뒤) — 괜찮은가?
+### 분류 검수 기준 (사람이 O/X 할 때)
+- 근거: 그 주제어가 나온 **최근 기사 10건**의 제목·같이 나온 주제어 (`미분류_예시기사.xlsx`, 검수 엑셀의 예시 기사 칸). 전체 기사 비율은 참고
+- **뜻이 하나로 분명한 말만 분야를 붙임.** 애매하면 미분류. 미분류여도 그 기사에는 다른 구체적인 주제어로 분야가 붙음(대부분 90~100%)
+  - 미분류 예: 범위어(사회) · 꾸밈말(천연: 품목은 HS 코드로 이어지는 물건이어야 함) · 대상에 따라 뜻이 갈리는 말(인상: 임금·관세·수수료, 에이전트: 상업 대리인·AI) · 시기어(상반기·여름)
+  - 분야 예: 대상이 분명한 말(실업률 = 경제 지표, 의료관광 = 서비스 시장)
+- 서비스·사람 대상(관광·호텔·의료관광)은 HS 품목이 아니라 시장·소비 동향
+- 최종 판정은 팀 검수 결과를 따름 (동향·현황·기술처럼 팀이 분야를 붙인 넓은 말도 있음)
+
+### 분야의 쓰임과 한계
+- 분야는 **단어 단위**: 드럭스토어 = 시장·소비 동향이면 "드럭스토어 화재" 기사에도 붙음 (기사 내용은 보지 않음)
+- 그래서 분야는 확정 분류가 아니라 **검색의 보조 정보**로 씀 (팀이 정한 검색 흐름): ① 국가·기간·품목 필터 + 키워드(kw_topic, 질문에도 동의어 적용)·의미 검색으로 후보 → ② 사용자 블락 적용 → ③ 1차 점수(키워드·의미 유사도 중심, 분야 일치는 가점) → ④ 상위 20건을 LLM이 질문과 기사 문맥으로 비교해 직접/간접/관련 낮음 판정·재순위 → 요약 제시
+- 시기어(상반기·여름 등)를 언급 연도처럼 별도 칸(`kw_period`)으로 뺄지는 팀 논의 중. 지금은 미분류 주제어로 남음
+
+### 대상: 기사 10건 이상 주제어 (906개, 동의어로 합쳐진 뒤) — 괜찮은가?
 | 기준 | 주제어 수 | 전체 언급 중 | 분야가 하나라도 붙을 수 있는 기사 |
 |---|---|---|---|
-| **10건 이상 (지금)** | 912 | 50% | 86% |
+| **10건 이상 (지금)** | 906 | 50% | 86% |
 | 5건 이상 | 2,133 (+1,149) | 60% | 90% |
 | 3건 이상 | 4,006 | 68% | 93% |
 
-- 주제어 종류(24,233)의 대부분은 몇 번만 나오는 말이라, 10건 이상 주제어만으로 **기사의 86%(12,638건)에 분야가 붙습니다.** 분야는 화면 필터·이슈 묶음용 보조 기능이라 충분하다고 판단했습니다.
+- 주제어 종류(24,225)의 대부분은 몇 번만 나오는 말이라, 10건 이상 주제어만으로 **기사의 86%(12,562건)에 분야가 붙습니다.** 분야는 검색 보조·화면 필터용이라 충분하다고 판단했습니다. (5건·3건 줄은 10/15 계산)
 - 5건 이상으로 내리면 기사 기준 +4%p인데, 늘어나는 1,149개 중 규칙으로 되는 건 422개뿐이고 727개는 LLM 판단·검수가 필요합니다. 기준은 `--min-articles`로 바꿀 수 있습니다.
 - 표에 없는 드문 주제어는 분야가 비고(미분류), 검색은 임베딩이 보완합니다.
 
-## 7. 불용어 (`stopwords.csv`)
-- 회의 결정(2026-10-14): 넓은 말을 미리 정하는 기준이 애매해 **기본 불용어를 없앰** → 사용자가 보기 싫은 키워드를 직접 블락
-- 파일·코드는 **관리자 블락 목록**으로 유지: 넣은 말은 급증 계산(`kw_spike`)에서만 빠지고 검색(`kw_topic`)에는 남음
-- 예전 44개와 고른 근거(기사 비율 · 산업분야 고름 · 52주 급증 판정 + 의미 기준)는 git 기록(커밋 1cbc83c)
+## 7. 불용어 없음 → 사용자 키워드 블락 (`keyword_block.py`)
+- 회의 결정(2026-10-14): 넓은 말을 미리 정하는 기준이 애매해 **불용어를 없앰** (`stopwords.csv`·`kw_spike` 칸 삭제, 집계·판정은 `kw_topic` 기준)
+- 사용자가 보기 싫은 키워드를 직접 블락: 정리·집계·판정 결과는 그대로 두고 **보여 줄 때만** 거름
+  - 저장: 입력한 말을 동의어 대표어로 (`to_block_word`: ev → 전기차) → 동의어 표기 기사까지 함께 숨김
+  - 기사 목록·검색: kw_topic에 블락 대표어가 하나라도 있으면 숨김 (`hide_articles`, 검색 흐름에서는 LLM 재순위 전)
+  - 주요 이슈·급증 알림: 블락 키워드 줄을 뺌 (`hide_keys`)
+  - 나라 이름은 국가 칸(country_all)에 있어 블락 대상 아님 (관심 국가 설정으로)
+- 서비스에서는 `user_keyword_block(user_id, keyword)` 테이블 (설계: 키워드블락_검토.md, FR·DB 설계서 추가 필요)
+- 영향: 최근 52주 주요 이슈(키워드) 판정 136 → 159건, 10/14 판정에 `투자진출` 추가. 예전 44개와 근거는 git 기록(커밋 1cbc83c)
 
 ## 8. 품목 · 집계 (규칙)
 - 품목: KOTRA HS 칸 → HS 6단위(요구사항 기본) · 4단위, 없으면 KOTRA 산업분류. 키워드·제목 → HS 사전 연결은 HS 사전 완료 후
@@ -157,11 +180,17 @@ data/news/news_raw_*.csv (KOTRA 원본)
 ## 9. 실행
 
 ```powershell
-python backend/app/services/news_keywords/keyword_clean.py --input data/news/news_raw_20220101_20261013.csv
+# 검수 결과 반영 (바꿨을 때만)
+python backend/app/services/news_keywords/build/import_synonym_review.py --file 동의어_검수결과_최종.xlsx
+python backend/app/services/news_keywords/build/import_category_review.py --file 대중분류_최종통합본.xlsx
+# 동의어 → 키워드 정리 → 분류표 → 키워드 정리(분야 반영) → 집계
 python backend/app/services/news_keywords/build/build_synonyms.py      # synonyms.csv
+python backend/app/services/news_keywords/keyword_clean.py --input data/news/news_raw_20220101_20261013.csv
 python backend/app/services/news_keywords/build/build_categories.py    # topic_categories.csv
+python backend/app/services/news_keywords/keyword_clean.py --input data/news/news_raw_20220101_20261013.csv
+python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
 python backend/app/services/news_keywords/build/review_files.py        # 검수용 엑셀
-python backend/app/services/news_keywords/build/verify.py --shared "나눠 준 폴더"   # 일치 확인
+python backend/app/services/news_keywords/build/verify.py --shared data/news_keywords/review   # 일치 확인
 # 동의어 후보(임베딩)는 sentence-transformers가 있는 환경(llm_env)에서
 python backend/app/services/news_keywords/build/synonym_candidates.py
 python backend/app/services/news_keywords/build/verify.py --candidates
@@ -169,4 +198,4 @@ python backend/app/services/news_keywords/build/verify.py --candidates
 
 검수 표시: **O** 맞음 / **X** 틀림 / **△** 애매 — △는 반영하지 않고 회의에서 결정.
 
-검수 결과 반영: 동의어 엑셀 → `import_synonym_review.py`로 `synonym_decisions.csv` 만들기 → `build_synonyms.py` · 분류 X → 규칙이 틀린 것은 `category_rule_fixes.csv`, LLM 판단이 틀린 것은 `category_llm.csv` 수정 → 위 순서로 다시 실행 → `verify.py`
+검수 결과 반영: 동의어 엑셀 → `import_synonym_review.py` → `synonym_decisions.csv` · 분류 엑셀 → `import_category_review.py` → `category_decisions.csv` (팀 결정이 규칙·LLM보다 우선이라 규칙·LLM 목록은 고치지 않아도 됨) → 위 순서로 다시 실행 → `verify.py`

@@ -1,4 +1,4 @@
-"""해외시장뉴스 키워드 정제(①)·지역 분리(②)를 실제 데이터에서 나온 예시로 확인합니다.
+"""해외시장뉴스 키워드 정리(① 정제 · ② 지역 · ③ 연도 · ④ 동의어 · ⑤ 분야 · ⑥ 품목)와 블락·사전 생성 코드를 실제 데이터에서 나온 예시로 확인합니다.
 
 실행: python -m unittest backend/tests/test_news_keywords.py
 """
@@ -171,45 +171,39 @@ class ExceptionTest(unittest.TestCase):
         self.assertEqual(r["kw_topic"], ["사태"])
 
 
-class StopwordTest(unittest.TestCase):
-    """⑤ 불용어 — 회의 결정으로 기본 불용어는 없음 (사용자 키워드 블락으로 대체). 목록 기능은 관리자 블락용으로 유지"""
-    STOP = kc.load_stopwords()
+class BlockTest(unittest.TestCase):
+    """사용자 키워드 블락 — 불용어 대신 (회의 결정 2026-10-14). 정리 결과는 그대로 두고 보여 줄 때만 거름"""
+    spec = importlib.util.spec_from_file_location("keyword_block", kc.BASE / "keyword_block.py")
+    kb = importlib.util.module_from_spec(spec); spec.loader.exec_module(kb)
 
-    def test_no_default_stopwords(self):
-        """불용어: 기본 목록은 비어 있어 급증용(kw_spike) = 검색용(kw_topic)"""
-        self.assertEqual(self.STOP, frozenset())
-        r = kc.process_article("수출,경제,동향,전기차,공급망", "미국", GEO, frozenset(), self.STOP)
-        self.assertEqual(r["kw_spike"], r["kw_topic"])
+    def test_no_stopwords(self):
+        """블락: 불용어 없음 — 넓은 말(수출·경제)도 주제어에 그대로 남음"""
+        r = kc.process_article("수출,경제,동향,전기차,공급망", "미국", GEO)
+        self.assertEqual(r["kw_topic"], ["수출", "경제", "동향", "전기차", "공급망"])
+        self.assertFalse((kc.BASE / "stopwords.csv").exists())
 
-    def test_block_list_removed_only_from_spike(self):
-        """불용어: 목록에 넣은 말(관리자 블락)은 급증용에서만 빠지고 검색용에는 남음"""
-        r = kc.process_article("수출,경제,전기차,공급망", "미국", GEO, frozenset(), frozenset({"수출", "경제"}))
-        self.assertEqual(r["kw_topic"], ["수출", "경제", "전기차", "공급망"])
-        self.assertEqual(r["kw_spike"], ["전기차", "공급망"])
+    def test_block_word_is_representative(self):
+        """블락: 입력한 말을 대표어로 저장 (ev → 전기차, 화장품시장 → 화장품)"""
+        syn = kc.load_synonyms()
+        self.assertEqual(self.kb.to_block_word("ev", syn), "전기차")
+        self.assertEqual(self.kb.to_block_word("화장품시장", syn), "화장품")
 
-    def test_block_after_geo_split(self):
-        """불용어: 나라를 떼고 남은 말에도 적용 (중국경제 → 경제 → 블락이면 급증 계산 제외)"""
-        r = kc.process_article("중국경제,중국전기차", "중국", GEO, frozenset(), frozenset({"경제"}))
-        self.assertEqual(r["kw_topic"], ["경제", "전기차"])
-        self.assertEqual(r["kw_spike"], ["전기차"])
-
-    def test_stopword_file(self):
-        """불용어: 목록 파일은 칸(단어·유형·이유 등)만 남아 있음"""
-        import csv
-        with open(kc.STOPWORDS_PATH, encoding="utf-8-sig") as fh:
-            reader = csv.DictReader(fh)
-            rows = list(reader)
-        self.assertEqual(rows, [])
-        self.assertIn("단어", reader.fieldnames)
+    def test_hide_articles_and_issues(self):
+        """블락: 블락한 키워드가 있는 기사·이슈·알림은 숨김, 다른 기사는 그대로"""
+        df = pd.DataFrame({"bbstxSn": ["1", "2", "3"], "kw_topic": ["박람회|화장품", "화장품", ""]})
+        self.assertEqual(self.kb.hide_articles(df, {"박람회"}).bbstxSn.tolist(), ["2", "3"])
+        self.assertEqual(len(self.kb.hide_articles(df, set())), 3)
+        issues = pd.DataFrame({"key": ["관세", "박람회", "330499"], "type": ["키워드", "키워드", "품목(HS6)"]})
+        self.assertEqual(self.kb.hide_keys(issues, {"박람회"}).key.tolist(), ["관세", "330499"])
+        self.assertEqual(self.kb.hide_keys([{"key": "박람회"}, {"key": "관세"}], {"박람회"}), [{"key": "관세"}])
 
 
 class SynonymTest(unittest.TestCase):
     """④ 동의어"""
     SYN = kc.load_synonyms()
-    STOP = kc.load_stopwords()
 
     def topic(self, kwrd, natn=""):
-        return kc.process_article(kwrd, natn, GEO, kc.load_exceptions(), self.STOP, self.SYN)
+        return kc.process_article(kwrd, natn, GEO, kc.load_exceptions(), self.SYN)
 
     def test_same_meaning_merged(self):
         """동의어: 같은 뜻 다른 표기를 대표어 하나로 (EV·전기자동차 → 전기차, 인공지능 → AI)"""
@@ -237,11 +231,11 @@ class SynonymTest(unittest.TestCase):
 
 
 class CategoryTest(unittest.TestCase):
-    """⑥ 대/중분류"""
+    """⑤ 대/중분류"""
     CAT = kc.load_categories()
 
     def run_one(self, kwrd, natn=""):
-        return kc.process_article(kwrd, natn, GEO, kc.load_exceptions(), kc.load_stopwords(), kc.load_synonyms(), self.CAT)
+        return kc.process_article(kwrd, natn, GEO, kc.load_exceptions(), kc.load_synonyms(), self.CAT)
 
     def test_article_gets_categories(self):
         """분류: 주제어마다 분야가 붙고 한 기사에 여러 분야 가능 (반덤핑 → 관세·무역규제, 태양광 → 에너지 전환)"""
@@ -252,8 +246,8 @@ class CategoryTest(unittest.TestCase):
         """분류: 동의어로 바뀐 대표어 기준 (인공지능 → AI → AI·소프트웨어)"""
         self.assertEqual(self.run_one("인공지능")["kw_category"], ["기술·디지털>AI·소프트웨어"])
 
-    def test_former_stopwords_categorized(self):
-        """분류: 예전 불용어에도 분야 (수출 → 수출입 일반, 전시회 → 전시회·행사), 너무 넓은 말(한국)은 미분류"""
+    def test_broad_words_categorized(self):
+        """분류: 넓은 말도 뜻이 분명하면 분야 (수출 → 수출입 일반, 전시회 → 전시회·행사), 너무 넓은 말(한국)은 미분류"""
         self.assertEqual(self.run_one("수출,전시회,한국")["kw_category"], ["무역·통상>수출입 일반", "기업·투자·진출>전시회·행사"])
 
     def test_partial_match_fixed(self):
@@ -269,7 +263,7 @@ class CategoryTest(unittest.TestCase):
 
 
 class ProductTest(unittest.TestCase):
-    """③ 품목 연결 (1·3단계)"""
+    """⑥ 품목 연결 (1·3단계)"""
 
     def test_hs_field_to_hs4(self):
         """품목: KOTRA HS 칸을 HS 4단위로 (330499 → 3304, 여러 개·10단위도 처리)"""
@@ -307,6 +301,17 @@ class BuildTest(unittest.TestCase):
         self.assertIsNone(bc.rule("제조업"))                       # LLM 판단은 규칙에 안 걸린 말에만
         self.assertTrue(all(bc.rule(w) is None for w in llm))
         self.assertEqual(bc.assign("한국", fixes, llm)[2], "검수 필요")
+
+    def test_category_team_decisions(self):
+        """분류 생성: 팀 검수가 최우선 — X는 고른 분류로, 못 정한 말을 O(미분류 유지)로 확인하면 검수 필요에서 빠짐"""
+        import importlib.util as iu
+        spec = iu.spec_from_file_location("bc", kc.BASE / "build" / "build_categories.py")
+        bc = iu.module_from_spec(spec); spec.loader.exec_module(bc)
+        fixes, llm = bc.load_lists()
+        team = bc.load_decisions()
+        self.assertEqual(bc.assign("관광", fixes, llm, team)[:3], ("경제·시장", "시장·소비 동향", "팀 검수"))
+        self.assertEqual(bc.assign("상반기", fixes, llm, team)[:3], ("미분류", "미분류", "팀 검수"))
+        self.assertEqual(bc.assign("반덤핑", fixes, llm, team)[2], "규칙(일치)")   # 팀이 O로 확인한 분류는 원래 방법 그대로
 
     def test_synonym_auto_o(self):
         """동의어 후보: 임베딩 유사도 0.96 이상 미반영 후보만 자동 O (동시 등장·0.96 미만·이미 반영은 그대로)"""

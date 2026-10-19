@@ -3,6 +3,7 @@
 - 여러 사람이 나눠 채운 파일을 함께 넣을 수 있음: --file 파일 --rows 2-150 --file 파일 --rows 151-304
   (rows는 엑셀 행 번호, 생략하면 전체)
 - 같은 쌍을 두 사람이 다르게 표시했거나, 한 표기에 O가 두 개면 알려 주고 멈춤 (먼저 정리해야 함)
+- 시트는 "팀 확인(O/X)" 칸이 있는 첫 시트를 읽음 (통합본처럼 앞에 설명 시트가 있어도 됨)
 
 실행: python backend/app/services/news_keywords/build/import_synonym_review.py --file A.xlsx --rows 2-150 --file B.xlsx --rows 151-304
 """
@@ -18,7 +19,8 @@ COL = "팀 확인(O/X)"
 
 
 def read(path, rows=None):
-    df = pd.read_excel(path, dtype=str, keep_default_na=False)
+    sheets = pd.read_excel(path, sheet_name=None, dtype=str, keep_default_na=False)
+    df = next(d for d in sheets.values() if COL in d.columns)
     df["행"] = df.index + 2
     if rows:
         lo, hi = map(int, rows.split("-"))
