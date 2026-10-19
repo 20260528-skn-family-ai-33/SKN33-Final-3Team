@@ -13,6 +13,9 @@
   연간 갱신(00:15)이나 실적 적재가 추가한 코드가 그날 밤 vector DB에 들어갑니다. 새 코드가 없으면 OpenAI를 부르지 않습니다.
 - customs_monthly: 매월 10일 03:00(KST)에 전월 수출입 수집·검증·적재·계산을 실행합니다.
   시작 시에는 복구 범위의 누락·실패 월도 점검합니다. 운영 시작 월은 CUSTOMS_START_MONTH로 지정합니다.
+- fx_daily_load: 매일 06:00(KST)에 ECOS 일별 환율(currency의 ECOS 코드가 있는 통화)을 최근 2일 받아 fx_daily에 반영합니다.
+  새벽에는 당일 환율이 아직 없으므로 전 영업일까지 반영됩니다. 마지막 적재일이 더 오래됐으면 그날부터 받아
+  주말·휴일·중단으로 빠진 날도 채웁니다. 켤 때도 한 번 실행합니다 (fx_daily가 비어 있으면 .env의 FX_START_DATE부터).
 """
 from datetime import datetime, timedelta
 
@@ -22,10 +25,12 @@ from apscheduler.triggers.cron import CronTrigger
 from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
 from backend.app.scheduler.jobs import customs_monthly
+from backend.app.scheduler.jobs import fx_daily_load
 
 KST = refresh.KST
 HS_REFRESH_TRIGGER = CronTrigger(month=1, day=1, hour=0, minute=15, timezone=KST)  # 매년
 HS_EMBED_TRIGGER = CronTrigger(hour=1, minute=0, timezone=KST)  # 매일
+FX_DAILY_TRIGGER = CronTrigger(hour=6, minute=0, timezone=KST)  # 매일 (새벽이라 전 영업일 환율까지)
 RETRY_DAYS = 90
 RETRY_JOB_ID = "hs_code_refresh_retry"
 
@@ -54,6 +59,12 @@ def build_scheduler():
     scheduler.add_job(embed.run, HS_EMBED_TRIGGER, id="hs_code_embed", coalesce=True, misfire_grace_time=6 * 3600,
                       replace_existing=True)
     customs_monthly.register_jobs(scheduler)
+    # 매일 환율 갱신: 실패해도 다음 실행이 마지막 적재일부터 다시 받으므로 따로 재시도하지 않음
+    scheduler.add_job(fx_daily_load.run, FX_DAILY_TRIGGER, id="fx_daily_load", coalesce=True, max_instances=1,
+                      misfire_grace_time=6 * 3600, replace_existing=True)
+    # 켤 때마다 한 번: 꺼져 있던 동안 빠진 환율을 마지막 적재일부터 채움
+    scheduler.add_job(fx_daily_load.run, "date", run_date=datetime.now(KST) + timedelta(seconds=30),
+                      id="fx_daily_startup", replace_existing=True)
     return scheduler
 
 
