@@ -1,7 +1,8 @@
 -- 집계 테이블(export_summary·import_summary·news_product_daily·news_keyword_daily) 갱신 프로시저와 매일 03:00 스케줄입니다.
 -- 원본 적재 작업이 batch_run에 SUCCESS로 남긴 기간만 골라 다시 집계합니다. 원본 적재 작업은 반드시 batch_run을 남겨야 합니다.
---   수출입 집계 ← export_monthly / import_monthly 실행 기록
 --   기사 집계   ← article / article_tag 실행 기록 (시장뉴스·단신속보 모두 포함)
+--   수출입 집계는 관세 적재(customs_load.merge_summary)가 월 적재와 같은 트랜잭션에서 이미 갱신·검증하므로 스케줄에서 뺐습니다.
+--   sp_refresh_trade_summary는 집계가 어긋났을 때 수동 복구용으로만 남깁니다.
 -- 적용: mysql -u root -p <DB이름> < db/mysql/init/03_summary_refresh.sql   (다시 실행해도 됩니다. 데이터는 건드리지 않습니다)
 -- 수동 실행: CALL sp_refresh_trade_summary('export_summary', '2025-01-01', '2025-12-01');
 --            CALL sp_refresh_news_daily('news_keyword_daily', '2026-10-01', '2026-10-14');
@@ -157,8 +158,9 @@ END$$
 CREATE PROCEDURE sp_refresh_pending_summaries()
 BEGIN
   IF GET_LOCK('refresh_summaries', 0) = 1 THEN
-    CALL sp_refresh_pending('export_monthly', 'export_summary');
-    CALL sp_refresh_pending('import_monthly', 'import_summary');
+    -- 수출입 집계는 관세 적재가 이미 갱신하므로 스케줄에서 뺍니다 (위 머리 주석 참고).
+    -- CALL sp_refresh_pending('export_monthly', 'export_summary');
+    -- CALL sp_refresh_pending('import_monthly', 'import_summary');
     CALL sp_refresh_pending('article,article_tag', 'news_product_daily');
     CALL sp_refresh_pending('article,article_tag', 'news_keyword_daily');
     DO RELEASE_LOCK('refresh_summaries');
@@ -171,5 +173,5 @@ DELIMITER ;
 CREATE EVENT ev_refresh_summaries
   ON SCHEDULE EVERY 1 DAY STARTS (CURRENT_DATE + INTERVAL 1 DAY + INTERVAL 3 HOUR)
   ON COMPLETION PRESERVE
-  COMMENT '원본 적재 이후 밀린 수출입·기사 집계를 갱신합니다'
+  COMMENT '원본 적재 이후 밀린 기사 집계를 갱신합니다'
   DO CALL sp_refresh_pending_summaries();
