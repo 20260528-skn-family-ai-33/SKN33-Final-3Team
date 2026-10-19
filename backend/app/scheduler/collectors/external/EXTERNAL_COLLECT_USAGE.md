@@ -11,6 +11,47 @@ ML 피처(유망 품목·국가 예측, 시장 유형 분류)에 쓰는 외부 �
 
 국가 키 `country_code`는 관세청 `country.country_code`와 같은 **ISO2**라서 별도 매핑표가 필요 없습니다.
 
+## 한 번에 받기
+
+처음 받을 때와 수동으로 최신화할 때 모두 아래 명령 하나면 됩니다. 스케줄러가 매월 실행하는 작업과 같습니다.
+
+**준비 (처음 한 번)**
+
+```powershell
+cd "C:\your_folder\SKN33-Final-3Team"
+python -m pip install -r backend/requirements.txt
+```
+
+저장소 루트 `.env`에 아래 값을 넣습니다. 없으면 `.env.sample`을 복사해 만듭니다.
+
+```
+COMTRADE_API_KEY=...   # comtradeplus.un.org 무료 키. 없으면 Comtrade만 건너뜀
+MYSQL_HOST=...         # batch_run 기록용. 연결이 안 돼도 수집은 계속됨
+```
+
+**실행**
+
+```powershell
+python -m backend.app.scheduler.jobs.external_refresh
+python backend/app/scheduler/collectors/external/external_collect.py check --db
+```
+
+첫 줄이 BACI zip 다운로드(약 300MB)·집계 → WDI → Comtrade 순서로 받고, 둘째 줄이 결과를 검사합니다 (`모든 검사 통과`가 나오면 끝).
+처음에는 10~20분 걸립니다 (BACI 다운로드·집계 수 분, Comtrade 신고국당 1초 이상).
+다시 실행하면 이미 받은 BACI 판은 건너뛰고(`ALREADY`), Comtrade는 못 받은 나라만 받습니다.
+
+**결과**
+
+```
+data/external/
+├─ baci/BACI_HS22_V202601.zip        원본 zip
+├─ baci/baci_imports_hs22.csv        2022~2024
+├─ wdi/wdi_2022_2025.csv
+├─ comtrade/comtrade_imports_2025.csv
+├─ comtrade/raw/2025/*.json          신고국별 원본 응답 (이어받기용)
+└─ logs/                             실행 로그·download_failures.log
+```
+
 ## 자동 갱신 (스케줄러)
 
 `backend/app/scheduler/main.py`가 **매월 1일 04:00(KST)** 에 `scheduler/jobs/external_refresh.py`를 실행합니다.
