@@ -9,7 +9,8 @@
 
 전처리와 MySQL 적재는 포함하지 않습니다. `news_collect.py`가 없어도 실행할 수 있습니다.
 해외시장뉴스의 본문 조회 옵션 `search8=Y`는 사용하지 않습니다.
-API가 제공하는 개요내용 `smmarCn`과 원문 링크를 보존하며 원문 사이트 본문을 추가 수집하지 않습니다.
+API가 제공하는 본문 `nttCn`(HTML)과 원문 링크를 보존하며 원문 사이트 본문을 추가 수집하지 않습니다.
+수집 결과는 `SHORTNEWS_LOAD_USAGE.md`의 적재 코드가 그대로 읽습니다.
 
 API 안내: https://www.data.go.kr/data/15122662/openapi.do
 
@@ -88,7 +89,7 @@ python backend/app/scheduler/collectors/shortnews/shortnews_collect.py --env "C:
 | `shortnews_raw.json` | 파싱한 원본 기사 객체 목록 |
 | `shortnews_collection.json` | 데이터 종류, API 전체 건수, 수집 건수, 수집 완료 여부 |
 
-기본 컬럼은 `kbc`, `nttSn`, `nttSj`, `smmarCn`, `regn`, `nat`, `othbcDt`,
+기본 컬럼은 `kbc`, `nttSn`, `nttSj`, `nttCn`, `regn`, `nat`, `othbcDt`,
 `kotraNewsUrl`, `realAtfileInfoList`이며 추가 응답 필드도 저장합니다.
 첨부파일 중첩 정보는 CSV 셀에 JSON 문자열로, JSON 파일에는 중첩 구조로 보존합니다.
 HTML은 제거하지 않습니다. CSV의 null과 빈 문자열은 모두 빈칸으로 표시되므로 JSON으로 구분합니다.
@@ -105,6 +106,9 @@ XML 응답도 기사 객체를 JSON으로 변환해 저장하며 원본 XML 전�
 분리 전 동일한 수집 로직으로 실제 단신속보뉴스 JSON 5건 수집·원본 저장을 확인했습니다.
 분리된 코드의 독립 실행 구성과 페이지별 수집, 원본 보존, XML 첨부파일 파싱은 테스트로 확인합니다.
 전체 수집과 실제 XML API 호출은 아직 실행하지 않았습니다.
+
+API가 특정 기사를 응답에 담지 못하면 JSON 대신 HTML 오류 페이지를 줍니다 (2026-10 기준 전체 11,939번째 기사, 2024-04-02 발행분).
+이런 페이지는 1건씩 다시 받아 문제 기사만 건너뛰고 `warnings`에 위치를 남깁니다. 이때 `collection_complete`는 false입니다.
 
 현재는 수집 완료 후 파일을 저장합니다. 수집 도중 실패하면 그동안 받은 기사도 저장되지 않으며
 자동 재개 기능은 없습니다. 수집 중 API 목록이 갱신될 수 있어 고정 시점 스냅샷은 보장하지 않습니다.

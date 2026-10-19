@@ -19,7 +19,7 @@ BASE = Path(__file__).resolve().parent
 ENV_PATH = Path(__file__).resolve().parents[5] / ".env"
 API_URL = "https://apis.data.go.kr/B410001/shortBreakingNews/shortBreakingNews"
 # 응답 필드명을 유지한 단신속보뉴스 원본 CSV의 기본 컬럼입니다.
-RAW_FIELDS = ["kbc", "nttSn", "nttSj", "smmarCn", "regn", "nat",
+RAW_FIELDS = ["kbc", "nttSn", "nttSj", "nttCn", "regn", "nat",
               "othbcDt", "kotraNewsUrl", "realAtfileInfoList"]
 
 
@@ -112,7 +112,29 @@ def fetch_page(session, params, api_url=API_URL):
         try:
             return parse_response(response.content)
         except (json.JSONDecodeError, ET.ParseError):
-            raise RuntimeError("API response was not valid JSON/XML") from None
+            raise InvalidResponse("API response was not valid JSON/XML") from None
+
+
+class InvalidResponse(RuntimeError):
+    pass
+
+
+# 특정 기사가 들어간 페이지는 API가 JSON 대신 HTML 오류 페이지를 줍니다 (예: 2024-04-02 기사 하나는 1건 조회도 항상 실패).
+# 그 페이지만 1건씩 다시 받아 문제 기사만 건너뜁니다. 반환: (기사 목록, 전체 건수, 건너뛴 위치 목록)
+def fetch_rows(session, params, page, page_size):
+    items, total, skipped = [], None, []
+    for position in range((page - 1) * page_size + 1, page * page_size + 1):
+        try:
+            got, total = fetch_page(session, {**params, "numOfRows": 1, "pageNo": position})
+        except InvalidResponse:
+            skipped.append(position)
+            continue
+        if not got:  # 마지막 페이지가 page_size보다 짧은 경우
+            break
+        items += got
+    if total is None:
+        raise InvalidResponse("API response was not valid JSON/XML (1건씩 다시 받아도 모두 실패)")
+    return items, total, skipped
 
 
 # 한글을 지원하는 UTF-8 BOM 형식으로 CSV를 저장합니다.
@@ -144,7 +166,12 @@ def collect(args, directory, key=None):
         page = 1
         while True:
             params["pageNo"] = page
-            items, total = fetch_page(session, params)
+            try:
+                items, total = fetch_page(session, params)
+            except InvalidResponse:
+                print(f"페이지 {page}: 응답 오류 → 1건씩 다시 받습니다")
+                items, total, skipped = fetch_rows(session, params, page, args.page_size)
+                warnings += [f"{p}번째 기사는 API가 응답하지 못해 건너뛰었습니다" for p in skipped]
             totals.append(total)
             if total < 0:
                 raise ValueError("API 전체 건수가 음수입니다")
