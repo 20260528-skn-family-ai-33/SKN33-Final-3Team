@@ -13,6 +13,8 @@
   연간 갱신(00:15)이나 실적 적재가 추가한 코드가 그날 밤 vector DB에 들어갑니다. 새 코드가 없으면 OpenAI를 부르지 않습니다.
 - customs_monthly: 매월 10일 03:00(KST)에 전월 수출입 수집·검증·적재·계산을 실행합니다.
   시작 시에는 복구 범위의 누락·실패 월도 점검합니다. 운영 시작 월은 CUSTOMS_START_MONTH로 지정합니다.
+- external_refresh: 매월 1일 04:00(KST)에 ML 피처용 외부 데이터(BACI·WDI·Comtrade)를 data/external/ CSV로 갱신합니다.
+  BACI 새 판이 아직 없으면(NOT_READY) 다음 달에 다시 확인합니다. 켤 때는 실행하지 않습니다 (Comtrade 호출 한도).
 """
 from datetime import datetime, timedelta
 
@@ -22,10 +24,12 @@ from apscheduler.triggers.cron import CronTrigger
 from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
 from backend.app.scheduler.jobs import customs_monthly
+from backend.app.scheduler.jobs import external_refresh
 
 KST = refresh.KST
 HS_REFRESH_TRIGGER = CronTrigger(month=1, day=1, hour=0, minute=15, timezone=KST)  # 매년
 HS_EMBED_TRIGGER = CronTrigger(hour=1, minute=0, timezone=KST)  # 매일
+EXTERNAL_TRIGGER = CronTrigger(day=1, hour=4, minute=0, timezone=KST)  # 매월
 RETRY_DAYS = 90
 RETRY_JOB_ID = "hs_code_refresh_retry"
 
@@ -54,6 +58,8 @@ def build_scheduler():
     scheduler.add_job(embed.run, HS_EMBED_TRIGGER, id="hs_code_embed", coalesce=True, misfire_grace_time=6 * 3600,
                       replace_existing=True)
     customs_monthly.register_jobs(scheduler)
+    scheduler.add_job(external_refresh.run, EXTERNAL_TRIGGER, id="external_refresh", coalesce=True,
+                      max_instances=1, misfire_grace_time=24 * 3600, replace_existing=True)
     return scheduler
 
 
