@@ -71,6 +71,14 @@ class ComtradeTest(unittest.TestCase):
         self.assertEqual(out.loc["850760", ["import_world_usd", "import_from_kor_usd"]].tolist(), [100.0, 30.0])
         self.assertEqual(out.loc["010110", "import_from_kor_usd"], 0.0)
 
+    def test_empty_or_filtered_out_records(self):
+        h5 = {"refYear": 2025, "reporterCode": 842, "partnerCode": 0, "cmdCode": "850760",
+              "primaryValue": 1.0, "classificationCode": "H5"}
+        for records in ([], [h5]):
+            out = ec.comtrade_imports(records, {842: "US"})
+            self.assertTrue(out.empty)
+            self.assertEqual(list(out.columns)[:3], ["year", "country_code", "hs6"])
+
 
 class ComtradeCollectTest(unittest.TestCase):
     def test_resumes_from_cached_reporters(self):

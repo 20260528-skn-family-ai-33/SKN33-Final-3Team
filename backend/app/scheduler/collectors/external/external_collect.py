@@ -162,13 +162,16 @@ def comtrade_get(path, key, **params):
 
 def comtrade_imports(records, iso2_by_code):
     """수입국·HS6별 전세계(partner 0)와 한국발(partner 410) 수입액. HS2022(H6)로 신고한 행만 쓴다."""
+    columns = ["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd"]
     df = pd.DataFrame(records)
+    if df.empty:
+        return pd.DataFrame(columns=columns)
     df = df[(df.classificationCode == "H6") & df.partnerCode.isin([0, COMTRADE_KOREA])]
     df = df.assign(country_code=df.reporterCode.map(iso2_by_code)).dropna(subset=["country_code"])
     out = df.pivot_table(index=["refYear", "country_code", "cmdCode"], columns="partnerCode",
                          values="primaryValue", aggfunc="sum").reindex(columns=[0, COMTRADE_KOREA])
     out = out.fillna({COMTRADE_KOREA: 0}).dropna(subset=[0]).reset_index()
-    out.columns = ["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd"]
+    out.columns = columns
     return out
 
 
