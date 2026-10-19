@@ -5,6 +5,7 @@
 import importlib.util
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "app/scheduler/collectors/customs/customs_collect.py"
@@ -67,6 +68,26 @@ class CustomsCollectTest(unittest.TestCase):
                          ("202501", "202506", "202501_202506"))
         self.assertEqual(cc.resolve_period(start="202507", end="202606"), ("202507", "202606", "202507_202606"))
         self.assertEqual(cc.month_range("202511", "202602"), ["2025.11", "2025.12", "2026.01", "2026.02"])
+
+    def test_country_selection_uses_database_and_deduplicates(self):
+        engine = MagicMock()
+        with patch("backend.app.db.session.mysql_url", return_value="unused"), \
+                patch("backend.app.db.session.make_engine", return_value=engine), \
+                patch("backend.app.services.customs_reference.load_country_references",
+                      return_value={"NA": {}, "US": {}, "ZZ": {}}):
+            self.assertEqual(cc.resolve_countries(Path("unused.env")), ["NA", "US", "ZZ"])
+            self.assertEqual(cc.resolve_countries(Path("unused.env"), "us,NA,us"), ["US", "NA"])
+        self.assertEqual(engine.dispose.call_count, 2)
+
+    def test_country_selection_does_not_fall_back_to_fixed_list(self):
+        from backend.app.services.customs_stage import ValidationError
+        engine = MagicMock()
+        with patch("backend.app.db.session.mysql_url", return_value="unused"), \
+                patch("backend.app.db.session.make_engine", return_value=engine), \
+                patch("backend.app.services.customs_reference.load_country_references", return_value={"US": {}}):
+            for selection in ("NA", "US,", ""):
+                with self.subTest(selection=selection), self.assertRaises(ValidationError):
+                    cc.resolve_countries(Path("unused.env"), selection)
 
     def test_period_errors(self):
         for kwargs in [dict(month="2025-03"), dict(month="202513"), dict(start="202501"),
