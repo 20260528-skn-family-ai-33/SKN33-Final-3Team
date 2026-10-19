@@ -17,6 +17,7 @@
   시작 시에는 복구 범위의 누락·실패 월도 점검합니다. 운영 시작 월은 CUSTOMS_START_MONTH로 지정합니다.
 """
 import argparse
+import hashlib
 import logging
 import threading
 from pathlib import Path
@@ -33,6 +34,9 @@ UN_STATE = ROOT / "data/un_data/runtime"
 UN_SCOPE = ROOT / "data/un_data/scope.json"
 UN_ENV = ROOT / ".env"
 UN_RUN_LOCK = threading.Lock()
+# 알림 중복 억제만 메모리에서 관리합니다. 영속 취소 표식·재개 판단에는 사용하지 않습니다.
+UN_NOTICE_LOCK = threading.Lock()
+UN_STOP_NOTICES = {}
 log = logging.getLogger(__name__)
 KST = refresh.KST
 UN_TRIGGER = CronTrigger(day=1, hour=3, minute=0, timezone=KST)
@@ -40,6 +44,52 @@ HS_REFRESH_TRIGGER = CronTrigger(month=1, day=1, hour=0, minute=15, timezone=KST
 HS_EMBED_TRIGGER = CronTrigger(hour=1, minute=0, timezone=KST)  # 매일
 RETRY_DAYS = 90
 RETRY_JOB_ID = "hs_code_refresh_retry"
+
+
+def report_un_status(state_dir):
+    """실행 잠금 안에서 최신 디스크 상태를 확인하고 중단·복구 알림을 직렬화합니다."""
+    from filelock import FileLock, Timeout
+    from backend.app.scheduler.jobs.un_data_resume import (
+        read_state, recovery_blocked, RECOVERY_FENCE, RECOVERY_GUARD)
+    try:
+        folder=Path(state_dir).resolve()
+        # 다른 실행이 진행 중이면 과거 점검 결과로 중단/복구를 알리지 않습니다.
+        # 호출자는 이 잠금을 먼저 잡지 않아야 합니다(별도 FileLock 객체의 중첩 획득 방지).
+        with FileLock(str(folder/'continuation.lock'),timeout=0):
+            try:state=read_state(folder)
+            except (OSError,ValueError):state=None
+            status=state.get('status') if isinstance(state,dict) else None
+            blocked=recovery_blocked(folder)
+            if not blocked and status!='CANCELLED':
+                if status in ('ACTIVE','WAITING','COMPLETE','FAILED','RETRY_EXHAUSTED'):
+                    with UN_NOTICE_LOCK:
+                        if folder in UN_STOP_NOTICES:
+                            log.info('UN 차단 해제 확인 | 상태 경로: %s | 현재 상태: %s '
+                                     '(갱신 성공 여부는 실행 결과에서 별도 확인)',folder,status)
+                            del UN_STOP_NOTICES[folder]
+                return 'UNBLOCKED'
+            status='CANCELLED' if status=='CANCELLED' else 'RECOVERY_REQUIRED'
+            fingerprints=[]
+            for name in (RECOVERY_FENCE,RECOVERY_GUARD):
+                try:fingerprints.append(hashlib.sha256((folder/name).read_bytes()).hexdigest())
+                except FileNotFoundError:fingerprints.append('missing')
+                except OSError as error:fingerprints.append(type(error).__name__)
+            signature=(status,*fingerprints)
+            reason='사용자 취소' if status=='CANCELLED' else '종료 결과 미확정(취소 기록 저장 실패 가능)'
+            # 잠금 순서는 continuation → 알림 메모리입니다. 파일은 변경하지 않습니다.
+            with UN_NOTICE_LOCK:
+                if UN_STOP_NOTICES.get(folder)!=signature:
+                    log.warning('UN 갱신 중단 [%s]: %s | 상태 경로: %s | 자동 재개 차단 유지. '
+                                '원인·저장 상태 확인 후 동일 설정과 --state-dir로 --resume-now 실행. '
+                                '같은 상태의 반복 경고는 생략합니다.',status,reason,folder)
+                    UN_STOP_NOTICES[folder]=signature
+            return status
+    except Timeout:
+        return 'ALREADY_RUNNING'
+    except (OSError,ValueError):
+        # 알림용 조회 실패로 작업 결과를 바꾸거나 복구됐다고 간주하지 않습니다.
+        log.debug('UN 알림 상태 확인 실패: 다음 점검에서 재확인',exc_info=True)
+        return 'UNKNOWN'
 
 
 def hs_refresh_job(scheduler, attempt=1):
@@ -67,7 +117,10 @@ def un_refresh_job(state_dir=UN_STATE, scope_path=UN_SCOPE, api_env=UN_ENV):
         # UN의 의존성·설정 오류도 기존 HS 작업 등록/실행을 막지 않도록 여기서 import.
         from backend.app.scheduler.jobs.un_data_refresh import execute_once
         result=execute_once(scope_path, state_dir, api_env)
-        if isinstance(result,dict) and result.get('status') in ('WAITING','DEFERRED','RETRY_EXHAUSTED','FAILED','CANCELLED','RECOVERY_REQUIRED'):
+        report_un_status(state_dir)
+        if isinstance(result,dict) and result.get('status') in ('CANCELLED','RECOVERY_REQUIRED'):
+            return result['status']
+        if isinstance(result,dict) and result.get('status') in ('WAITING','DEFERRED','RETRY_EXHAUSTED','FAILED'):
             log.warning('UN 재개 상태: %s, 다음 실행: %s',result['status'],result.get('next_attempt_at'))
             return result['status']
         return 'SUCCESS'
@@ -83,21 +136,20 @@ def un_resume_job(state_dir=UN_STATE,scope_path=UN_SCOPE,api_env=UN_ENV):
     from backend.app.scheduler.jobs.un_data_resume import read_state,active_is_idle,recovery_blocked
     try:
         if recovery_blocked(state_dir):
-            from filelock import FileLock,Timeout
-            try:
-                with FileLock(str(Path(state_dir)/'continuation.lock'),timeout=0):
-                    if not recovery_blocked(state_dir):
-                        return 'DEFERRED'
-            except Timeout:
-                return 'ALREADY_RUNNING'
-            log.warning('UN 미확정 종료 표식: 자동 재개 차단, --resume-now로 수동 확인 필요')
+            observed=report_un_status(state_dir)
+            if observed=='ALREADY_RUNNING':return 'ALREADY_RUNNING'
+            if observed=='UNBLOCKED':return 'DEFERRED'
             return 'RECOVERY_REQUIRED'
         state=read_state(state_dir)
+        if isinstance(state,dict) and state.get('status')=='CANCELLED':
+            report_un_status(state_dir)
+            return 'NO_RETRY'
         if state and state['status']=='ACTIVE':
             if not active_is_idle(state_dir):
                 return 'ALREADY_RUNNING'
             # 실행 진입점에서 잠금을 다시 획득하고 상태를 재확인하므로 경쟁 실행도 겹치지 않습니다.
             return un_refresh_job(state_dir,scope_path,api_env)
+        report_un_status(state_dir)
         if not state or state['status']!='WAITING' or not state.get('next_attempt_at'):
             return 'NO_RETRY'
         if datetime.now(KST)<datetime.fromisoformat(state['next_attempt_at']):
