@@ -5,6 +5,7 @@ DB에 적재하지 않습니다. 연 1회 갱신하는 정적 입력이라 학�
 """
 import argparse
 import io
+import json
 import re
 import sys
 import time
@@ -140,12 +141,17 @@ def collect_baci(zip_path, from_year):
 
 
 def comtrade_get(path, key, **params):
-    """Comtrade 호출. 429(호출 한도)·5xx는 잠시 쉬고 3번까지 다시 시도한다."""
+    """Comtrade 호출. 429(호출 한도)·5xx·연결 오류는 잠시 쉬고 3번까지 다시 시도한다."""
     for wait in (10, 20, None):  # 마지막 시도 뒤에는 쉬지 않고 바로 실패 처리
-        res = requests.get(f"{COMTRADE_URL}/{path}", params=params, timeout=TIMEOUT * 2,
-                           headers={"Ocp-Apim-Subscription-Key": key})
-        if res.status_code != 429 and res.status_code < 500 or wait is None:
-            break
+        try:
+            res = requests.get(f"{COMTRADE_URL}/{path}", params=params, timeout=TIMEOUT * 2,
+                               headers={"Ocp-Apim-Subscription-Key": key})
+        except (requests.ConnectionError, requests.Timeout):
+            if wait is None:
+                raise
+        else:
+            if res.status_code != 429 and res.status_code < 500 or wait is None:
+                break
         time.sleep(wait)
     res.raise_for_status()
     body = res.json()
@@ -179,20 +185,31 @@ def collect_comtrade(year):
     print(f"Comtrade {year}: 신고 국가 {len(codes)}개 (EU 등 묶음 제외)")
     if not codes:
         return {"requests": 2, "rows": 0}
-    records = []
+    # 신고국별 응답을 파일로 남겨, 한도 초과·오류로 끊겨도 다음 실행은 못 받은 나라만 받는다.
+    # ponytail: 한 번 받은 나라는 다시 받지 않음. 수정 신고까지 반영하려면 raw/<연도>/를 지우고 실행
+    raw = OUT_DIR / "comtrade" / "raw" / str(year)
+    raw.mkdir(parents=True, exist_ok=True)
+    records, fetched = [], 0
     for n, code in enumerate(codes, 1):
-        records += comtrade_get("data/v1/get/C/A/HS", key, reporterCode=code, period=year,
+        cache = raw / f"{code}.json"
+        if not cache.exists():
+            data = comtrade_get("data/v1/get/C/A/HS", key, reporterCode=code, period=year,
                                 partnerCode=f"0,{COMTRADE_KOREA}", flowCode="M", cmdCode="AG6",
                                 customsCode="C00", motCode="0", partner2Code="0", includeDesc="false")
+            part = cache.with_suffix(".part")
+            part.write_text(json.dumps(data), "utf-8")
+            part.replace(cache)
+            fetched += 1
+            time.sleep(1)  # ponytail: 고정 1초 간격, 무료 키 한도(하루 500회)를 넘기면 다음 날 이어서 실행
+        records += json.loads(cache.read_text("utf-8"))
         print(f"  {n}/{len(codes)} {iso2_by_code[code]}", end="\r")
-        time.sleep(1)  # ponytail: 고정 1초 간격, 무료 키 한도(하루 500회)를 넘기면 다음 날 다시 실행
     df = comtrade_imports(records, iso2_by_code)
     path = OUT_DIR / "comtrade" / f"comtrade_imports_{year}.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
     print()
     print(f"Comtrade 저장: {path} ({len(df):,}행, 국가 {df.country_code.nunique()}개)")
-    return {"requests": 2 + len(codes), "rows": len(records)}
+    return {"requests": 2 + fetched, "rows": len(records)}
 
 
 def seed_countries():

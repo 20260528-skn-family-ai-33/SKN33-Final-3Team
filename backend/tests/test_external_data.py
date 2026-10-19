@@ -3,8 +3,11 @@
 실행: python -m unittest backend/tests/test_external_data.py
 """
 import importlib.util
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
@@ -67,6 +70,42 @@ class ComtradeTest(unittest.TestCase):
         self.assertEqual(sorted(out.index), ["010110", "850760"])
         self.assertEqual(out.loc["850760", ["import_world_usd", "import_from_kor_usd"]].tolist(), [100.0, 30.0])
         self.assertEqual(out.loc["010110", "import_from_kor_usd"], 0.0)
+
+
+class ComtradeCollectTest(unittest.TestCase):
+    def test_resumes_from_cached_reporters(self):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        reporters = mock.Mock(**{"json.return_value": {"results": [
+            {"reporterCode": 842, "reporterCodeIsoAlpha2": "US"},
+            {"reporterCode": 704, "reporterCodeIsoAlpha2": "VN"}]}})
+        rec = {"refYear": 2025, "partnerCode": 0, "cmdCode": "850760", "primaryValue": 1.0,
+               "classificationCode": "H6"}
+        calls = []
+
+        def fake_get(path, key, **params):
+            if "getDA" in path:
+                return [{"reporterCode": 842}, {"reporterCode": 704}]
+            calls.append(params["reporterCode"])
+            if params["reporterCode"] == 842 and calls.count(842) == 1:
+                raise ConnectionError("한도 초과")
+            return [{**rec, "reporterCode": params["reporterCode"]}]
+
+        with mock.patch.object(ec, "OUT_DIR", tmp), mock.patch.object(ec, "comtrade_get", side_effect=fake_get), \
+                mock.patch.object(ec, "dotenv_values", return_value={ec.ENV_KEY: "k"}), \
+                mock.patch.object(ec.requests, "get", return_value=reporters), \
+                mock.patch.object(ec.time, "sleep"):
+            with self.assertRaises(ConnectionError):
+                ec.collect_comtrade(2025)  # VN(704)은 받아 두고 US(842)에서 끊김
+            stats = ec.collect_comtrade(2025)
+        self.assertEqual(calls, [704, 842, 842])  # 두 번째 실행은 못 받은 US만 다시 호출
+        self.assertEqual(stats, {"requests": 3, "rows": 2})
+
+    def test_retries_connection_error(self):
+        ok = mock.Mock(status_code=200, **{"json.return_value": {"data": [1]}})
+        with mock.patch.object(ec.requests, "get", side_effect=[ec.requests.ConnectionError(), ok]), \
+                mock.patch.object(ec.time, "sleep"):
+            self.assertEqual(ec.comtrade_get("x", "k"), [1])
 
 
 class CheckTest(unittest.TestCase):
