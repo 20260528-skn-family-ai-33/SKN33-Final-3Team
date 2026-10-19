@@ -179,8 +179,9 @@ def collect_comtrade(year):
     key = dotenv_values(ROOT / ".env").get(ENV_KEY)
     if not key:
         raise RuntimeError(f".env에 {ENV_KEY} 값이 없음")
-    reporters = requests.get(f"{COMTRADE_URL}/files/v1/app/reference/Reporters.json",
-                             timeout=TIMEOUT).json()["results"]
+    res = requests.get(f"{COMTRADE_URL}/files/v1/app/reference/Reporters.json", timeout=TIMEOUT)
+    res.raise_for_status()
+    reporters = res.json()["results"]
     iso2_by_code = {r["reporterCode"]: r["reporterCodeIsoAlpha2"] for r in reporters
                     if not r.get("isGroup") and r.get("reporterCodeIsoAlpha2")}
     available = comtrade_get("data/v1/getDA/C/A/HS", key, period=year)
