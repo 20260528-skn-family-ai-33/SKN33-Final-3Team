@@ -282,7 +282,7 @@ def check_db(baci, compare=("VN", "US", "CN"), tolerance=0.2):
 def check(with_db):
     countries = seed_countries()
     problems = []
-    wdi_files = sorted((OUT_DIR / "wdi").glob("wdi_*.csv"))
+    wdi_files = sorted((OUT_DIR / "wdi").glob("wdi_*.csv"), key=lambda p: p.stat().st_mtime)
     baci_path = OUT_DIR / "baci" / "baci_imports_hs22.csv"
     for path in wdi_files[-1:]:
         print(f"[WDI] {path.name}")

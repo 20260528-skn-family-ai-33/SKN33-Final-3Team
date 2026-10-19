@@ -104,7 +104,23 @@ def refresh_baci(today):
                 break
         else:
             return {"status": "NOT_READY", "requests": requests}
-    return {"requests": requests, **ec.collect_baci(zip_path, START_YEAR)}
+    stats = ec.collect_baci(zip_path, START_YEAR)
+    keep_only(zip_path, "BACI_HS22_*.zip")  # 지난 판 zip(수 GB)은 집계를 마친 뒤 지운다
+    return {"requests": requests, **stats}
+
+
+def refresh_wdi(last):
+    stats = ec.collect_wdi(START_YEAR, last)
+    keep_only(ec.OUT_DIR / "wdi" / f"wdi_{START_YEAR}_{last}.csv", "wdi_*.csv")
+    return stats
+
+
+def keep_only(keep, pattern):
+    """keep과 같은 폴더에서 pattern에 맞는 다른 파일을 지운다."""
+    for path in keep.parent.glob(pattern):
+        if path != keep:
+            path.unlink()
+            log.info(f"이전 파일 삭제: {path.name}")
 
 
 def baci_last_year():
@@ -134,7 +150,7 @@ def run(today=None, engine=None):
         statuses = {"BACI": step("BACI", f"BACI_HS22_V{today.year}01", date(START_YEAR, 1, 1),
                                  date(last, 12, 31), lambda: refresh_baci(today), engine)}
     statuses["WDI"] = step("WDI", f"{START_YEAR}~{last}", date(START_YEAR, 1, 1), date(last, 12, 31),
-                           lambda: ec.collect_wdi(START_YEAR, last), engine)
+                           lambda: refresh_wdi(last), engine)
     baci_last = baci_last_year()
     drop_covered_comtrade(baci_last)
     if not dotenv_values(ec.ROOT / ".env").get(ec.ENV_KEY):
