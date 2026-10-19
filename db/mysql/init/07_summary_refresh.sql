@@ -3,10 +3,12 @@
 --   기사 집계   ← article / article_tag 실행 기록 (시장뉴스·단신속보 모두 포함)
 --   수출입 집계는 관세 적재(customs_load.merge_summary)가 월 적재와 같은 트랜잭션에서 이미 갱신·검증하므로 스케줄에서 뺐습니다.
 --   sp_refresh_trade_summary는 집계가 어긋났을 때 수동 복구용으로만 남깁니다.
--- 적용: mysql -u root -p <DB이름> < db/mysql/init/03_summary_refresh.sql   (다시 실행해도 됩니다. 데이터는 건드리지 않습니다)
+-- 적용: mysql -u root -p <DB이름> < db/mysql/init/07_summary_refresh.sql   (다시 실행해도 됩니다. 데이터는 건드리지 않습니다)
 -- 수동 실행: CALL sp_refresh_trade_summary('export_summary', '2025-01-01', '2025-12-01');
 --            CALL sp_refresh_news_daily('news_keyword_daily', '2026-10-01', '2026-10-14');
 --   수동 실행도 성공 기록이 남으므로, 그 실행 시작 전에 끝난 원본 적재는 스케줄이 다시 집계하지 않습니다. 기간을 넉넉히 주세요.
+-- 적용 전 시간대 확인: SELECT @@global.time_zone, NOW();  (한국 시각이 아니면 my.cnf에 default-time-zone='+09:00'을 넣고 재시작하세요.
+--   UTC 그대로면 03:00 스케줄이 한국 시각 12:00에 돌고, CURRENT_DATE 기준 날짜도 하루 어긋날 수 있습니다)
 -- 스케줄 확인: SELECT @@event_scheduler;  (ON이어야 실행됩니다. MySQL 8.4 기본값은 ON)
 --             SHOW EVENTS;  실행 기록은 SELECT * FROM batch_run WHERE source_code = 'INTERNAL_AGG' ORDER BY run_id DESC;
 
@@ -169,7 +171,7 @@ END$$
 
 DELIMITER ;
 
--- 매일 03:00(DB 서버 시간대 기준, Asia/Seoul로 맞춰 두세요)에 밀린 집계를 갱신합니다. 첫 실행은 적용한 다음 날 03:00입니다.
+-- 매일 03:00(DB 서버 시간대 기준, 머리 주석의 시간대 확인 참고)에 밀린 집계를 갱신합니다. 첫 실행은 적용한 다음 날 03:00입니다.
 CREATE EVENT ev_refresh_summaries
   ON SCHEDULE EVERY 1 DAY STARTS (CURRENT_DATE + INTERVAL 1 DAY + INTERVAL 3 HOUR)
   ON COMPLETION PRESERVE

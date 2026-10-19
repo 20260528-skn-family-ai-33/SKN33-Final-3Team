@@ -1,5 +1,5 @@
 -- 이미 적재된 원본으로 기사 집계 테이블 2개를 처음부터 다시 채웁니다. 한 번만 실행하면 됩니다 (다시 실행해도 같은 결과로 덮어씁니다).
--- 순서: db/mysql/init/03_summary_refresh.sql 적용(INTERNAL_AGG 출처 등록) → 이 파일 실행
+-- 순서: db/mysql/init/07_summary_refresh.sql 적용(INTERNAL_AGG 출처 등록) → 이 파일 실행
 -- 실행: mysql -u root -p <DB이름> < db/mysql/summary_backfill.sql
 -- 테이블마다 한 트랜잭션으로 전체를 지우고 다시 넣습니다. 중간에 실패하면 그 테이블은 이전 상태로 돌아갑니다.
 -- 끝나면 batch_run에 SUCCESS를 남겨, 매일 스케줄이 이미 집계한 원본 기간을 다시 집계하지 않게 합니다.
