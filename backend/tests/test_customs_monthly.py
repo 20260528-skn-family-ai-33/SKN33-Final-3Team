@@ -478,7 +478,8 @@ class MonthlyScheduleTest(unittest.TestCase):
             scheduler = shared.build_scheduler()
         jobs = {job.id: job for job in scheduler.get_jobs()}
         self.assertEqual(set(jobs), {"hs_code_refresh", "hs_code_refresh_retry", "hs_code_embed",
-                                    "customs_monthly", "customs_monthly_startup"})
+                                    "customs_monthly", "customs_monthly_startup",
+                                    "un_data_monthly", "un_data_startup", "un_data_resume"})
         self.assertIs(jobs["customs_monthly"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly_startup"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly"].args[0], scheduler)
