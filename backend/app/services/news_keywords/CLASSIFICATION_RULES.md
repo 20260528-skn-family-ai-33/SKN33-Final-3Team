@@ -22,6 +22,8 @@ data/news/news_raw_*.csv (KOTRA 원본)
         → data/news_keywords/news_keywords_clean.csv (기사 1건 = 1줄)
   └─ article_counts.py ────────────── 집계(FR-906) · 주요 이슈(FR-204) · 급증(FR-203) — 키워드는 kw_topic 기준
   └─ keyword_block.py ─────────────── 사용자 키워드 블락 (불용어 대신, 보여 줄 때만 거름)
+  └─ keyword_dict.py ──────────────── 사전 DB(keyword_category·keyword_topic) ↔ csv 맞추기 · 관리자 분류·새 분류·동의어
+        관리자 결정과 새로 나온 말은 topic_additions.csv (팀 검수 사전보다 먼저 씀, build/ 결과는 그대로)
 
 사전 만들기 (build/)
   build_synonyms.py     GROUPS + 팀 검수 O + 접미사 규칙 → synonyms.csv       (판정 칸: 규칙: 괄호 / 규칙: 표기 / 규칙: 접미사 / LLM 판단 / 팀 O)

@@ -166,6 +166,39 @@ python backend/app/services/news_keywords/keyword_clean.py --check "우크라이
 - 품목어(전기차·화장품 …)는 "산업·품목" 대분류로 두고 HS 코드로 연결합니다. 서비스(관광·의료관광·호텔)는 시장·소비 동향입니다.
 - 분야는 검색 순위의 보조 가점으로 씁니다 (위 "검색에서 이 결과를 쓰는 방법").
 
+## 키워드 사전 DB와 관리자 분류 (`keyword_dict.py`)
+
+키워드 사전을 **DB와 csv 양쪽에 두고, 둘 다 원본**으로 씁니다. 한쪽을 고치면 sync가 다른 쪽에 반영합니다.
+
+| 원본 | 내용 |
+|---|---|
+| DB `keyword_category` ↔ `keyword_categories.csv` | 분류 틀 (대분류·중분류). TAX의 23개 + 관리자가 만든 분류 |
+| DB `keyword_topic` ↔ `topic_categories.csv`·`synonyms.csv` + `topic_additions.csv` | 주제어마다 상태: `CLASSIFIED` 분야 있음 / `UNCLASSIFIED` 분야 없음으로 확정 / `PENDING` 검수 대기 / `SYNONYM` 동의어(대표어 칸) |
+
+- `topic_categories.csv`·`synonyms.csv`는 `build/`가 만드는 팀 검수 사전이라 손대지 않습니다 (`build/verify.py`가 코드 결과와 같은지 봄).
+- 그 밖에 더한 말은 `topic_additions.csv`에 둡니다. `상태` 칸: **신규**(단신속보 등에서 새로 나온 말, 분야는 규칙으로 판정) / **분류·미분류·동의어**(관리자 결정).
+  기사 처리(`keyword_clean.py`)가 관리자 결정을 팀 검수 사전보다 먼저 씁니다.
+- 같은 말을 양쪽에서 동시에 고쳤으면 DB 쪽이 이깁니다. DB에서 행을 지우면 다음 sync에 csv 값으로 다시 생기니, 지울 때는 `topic_additions.csv`에서 지웁니다.
+
+테이블은 `db/mysql/init/10_keyword_dictionary.sql`로 만듭니다 (기존 DB에도 그대로 실행 가능). 행은 첫 sync가 채웁니다.
+
+```powershell
+mysql --default-character-set=utf8mb4 -u root -p 82people -e "source db/mysql/init/10_keyword_dictionary.sql"
+python -m backend.app.services.news_keywords.keyword_dict sync
+```
+
+관리자 기능 (나중에 관리자 화면 API가 같은 함수를 부릅니다):
+
+| 명령 | 하는 일 |
+|---|---|
+| `keyword_dict pending --limit 50` | 검수 대기 주제어와 붙은 기사 수 (많은 순) |
+| `keyword_dict classify 양자컴퓨터 "기술·디지털>AI·소프트웨어"` | 분야 지정. `"미분류"`면 분야 없음으로 확정 |
+| `keyword_dict category 기술·디지털 양자기술` | 새 분류 만들기 (그다음 classify로 지정) |
+| `keyword_dict synonym 퀀텀컴퓨터 양자컴퓨터` | 동의어로 합치기. 이미 붙은 기사 태그(`article_tag`)도 대표어로 바꿈 |
+
+명령은 모두 `python -m backend.app.services.news_keywords.keyword_dict ...`로 실행하고, 끝나면 바로 sync해 csv에도 씁니다.
+스케줄러가 10분마다 sync를 실행하므로 csv나 DB를 직접 고쳐도 10분 안에 다른 쪽에 반영됩니다. 단신속보 적재도 시작할 때 sync합니다.
+
 ## ⑥ 품목 연결 (1·3단계)
 
 | 순서 | 출처 | 결과 칸 | 상태 |

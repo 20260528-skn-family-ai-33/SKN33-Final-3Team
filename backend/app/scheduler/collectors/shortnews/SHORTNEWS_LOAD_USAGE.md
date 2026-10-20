@@ -9,7 +9,7 @@ HS 6단위 코드를 붙인 뒤 MySQL(`article`, `article_tag`)과 Chroma(`short
 |---|---|
 | 패키지 | `python -m pip install -r backend/requirements.txt` |
 | `.env` (저장소 루트) | `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`, `OPENAI_API_KEY` |
-| MySQL | `article`, `article_tag`, `hs_code`, `service_option`, `batch_run` 테이블. `hs_code`는 적재돼 있어야 합니다 |
+| MySQL | `article`, `article_tag`, `hs_code`, `service_option`, `batch_run`, `keyword_category`, `keyword_topic` 테이블. `hs_code`는 적재돼 있어야 합니다. 키워드 사전 테이블은 `db/mysql/init/10_keyword_dictionary.sql`로 만듭니다 |
 | Chroma | 저장소 루트 `chroma_data/`에 `hs_code` 컬렉션 (`python -m backend.app.scheduler.jobs.hs_code_embed`로 생성) |
 | 출처 코드 | `service_option`의 `KOTRA_SHORT_NEWS` 행. 없으면 첫 실행 때 자동으로 추가됩니다 |
 
@@ -51,6 +51,7 @@ python -m backend.app.scheduler.jobs.short_news_load --csv "C:\경로\short_news
 | `--limit N` | CSV 앞쪽 N건만 처리 (시험용) |
 | `--workers N` | 동시에 분석하는 기사 수 (기본 16). 아래 "소요 시간과 병렬 실행" 참고 |
 | `--db-url` | SQLAlchemy DB URL (기본: `.env`의 `MYSQL_*`) |
+| `--retag` | 이미 넣은 기사의 키워드 태그도 지금 사전 기준 주제어로 다시 넣음 (키워드 사전을 바꾼 뒤) |
 
 중간에 멈추거나(Ctrl+C 포함) 일부 기사가 실패해도 **같은 명령을 다시 실행**하면 남은 기사만 이어서 처리합니다.
 분석이 실패한 기사가 남아 있으면 종료 코드 1, `batch_run`은 FAILED로 기록되니 다시 실행하면 됩니다.
@@ -108,20 +109,28 @@ LLM 호출을 기사당 1번으로 합치지 않는 이유: HS 후보는 1차 �
 결과는 `shortnews_outputs/short_news_analysis.jsonl`에 기사마다 한 줄씩 쌓입니다. 다시 실행하면 이 파일에 있는 기사는 LLM을 부르지 않습니다.
 3회 재시도 후에도 실패한 기사는 파일에 남지 않아 다음 실행에서 다시 분석합니다.
 
-### 3. MySQL 적재
+### 3. 키워드 분류 → 주제어
+- LLM 키워드를 해외시장뉴스와 **같은 사전**으로 정리합니다: 정제 → 지역 분리 → 연도 분리 → 동의어 대표어 (`keyword_dict.py`, `NEWS_KEYWORDS_USAGE.md`).
+  예: `LNG 수입` → `LNG수입`, `전기자동차` → `전기차`, `중국경제` → `경제`.
+- 시작할 때 키워드 사전 sync를 먼저 해서 csv·DB 어느 쪽에서 고친 것이든 반영합니다.
+- 사전에 없던 주제어는 `keyword_topic`과 `topic_additions.csv`(상태 신규)에 넣습니다. 규칙으로 분야가 정해지면 `CLASSIFIED`,
+  못 정하면 `PENDING`(검수 대기)으로 남아 관리자가 분류합니다 (`keyword_dict pending` / `classify` / `category` / `synonym`).
+- 캐시(`short_news_analysis.jsonl`)에는 LLM 원래 키워드를 두고, 적재할 때마다 지금 사전으로 바꿉니다.
+
+### 4. MySQL 적재
 - `article`에 없는 기사(`source_code='KOTRA_SHORT_NEWS'` + `external_id=nttSn`)만 넣습니다.
   `category`는 `short_news`, `title`·`published_date`·`source_url`·`body_masked`는 1단계 값입니다.
-- 같은 트랜잭션에서 `article_tag`에 키워드 행(`keyword_text`)과 HS 행(`hs_code`, `hs_ver`)을 넣습니다. 한 행에는 하나만 채웁니다.
+- 같은 트랜잭션에서 `article_tag`에 주제어 행(`keyword_text`)과 HS 행(`hs_code`, `hs_ver`)을 넣습니다. 한 행에는 하나만 채웁니다.
 - 500건마다 커밋합니다. 국가 태그는 `country` 테이블이 채워진 뒤 따로 추가합니다.
 
-### 4. Chroma 적재 (`short_news` 컬렉션)
+### 5. Chroma 적재 (`short_news` 컬렉션)
 - DB에 있지만 컬렉션에 없는 기사만 추가합니다. id는 `KOTRA_SHORT_NEWS:<nttSn>`입니다.
 - 임베딩: 제목 + 요약 + 키워드 (`text-embedding-3-large`)
 - 문서: 마스킹한 본문 원문
 - 메타데이터: `article_id`, `external_id`, `title`, `published_date`, `published_ymd`(정수, 기간 필터용), `source_url`,
-  `nat`, `regn`, `kbc`, `summary`, `keywords`, `hs_codes`, `hs_ver`
+  `nat`, `regn`, `kbc`, `summary`, `keywords`(주제어), `hs_codes`, `hs_ver`
 
-### 5. 실행 기록
+### 6. 실행 기록
 `batch_run`에 한 건 남깁니다 (job `SHORT_NEWS_LOAD`, 대상 `article`, 기간 = 기사 발행일 범위, 수신 = 기사 수, 요청 = OpenAI 호출 수).
 
 ## 결과 확인
@@ -172,10 +181,11 @@ Remove-Item "backend\app\scheduler\collectors\shortnews\shortnews_outputs\short_
 
 ## 테스트
 
-OpenAI·MySQL 없이 가짜 LLM·SQLite·메모리 Chroma로 정제·마스킹, 적재, 재실행, 실패 후 재시도를 확인합니다.
+OpenAI·MySQL 없이 가짜 LLM·SQLite·메모리 Chroma로 정제·마스킹, 적재, 재실행, 실패 후 재시도, 키워드 분류·다시 태깅을 확인합니다.
+키워드 사전 DB ↔ csv 맞추기와 관리자 기능은 `test_keyword_dict.py`에서 확인합니다 (임시 csv에 씀).
 
 ```powershell
-python -m unittest backend/tests/test_short_news_load.py
+python -m unittest backend/tests/test_short_news_load.py backend/tests/test_keyword_dict.py
 ```
 
 ## 알려진 한계
@@ -183,5 +193,6 @@ python -m unittest backend/tests/test_short_news_load.py
 - HS 태깅 오탐이 일부 남습니다 (예: 물가 기사에 석탄, 전력 인프라 기사에 전기에너지 271600).
   기준을 바꾸려면 `short_news_load.py`의 `EXTRACT_PROMPT`·`PICK_PROMPT`를 고친 뒤 처음부터 다시 적재합니다.
 - 키워드는 범용 규칙(명사형, 국가명·일반어 제외)으로 뽑습니다. 팀 분류 조건이 정해지면 `EXTRACT_PROMPT`의 keywords 항목을 바꿉니다.
+- `--retag`는 DB 태그만 바꿉니다. 이미 넣은 Chroma 메타데이터의 `keywords`는 그대로라, 바꾸려면 컬렉션을 지우고 다시 적재합니다.
 - HS 판은 `hs_code` 테이블의 가장 큰 `hs_ver`(현재 HS2022)를 씁니다.
 - 국가 태그는 아직 넣지 않습니다 (`country` 테이블이 비어 있음).
