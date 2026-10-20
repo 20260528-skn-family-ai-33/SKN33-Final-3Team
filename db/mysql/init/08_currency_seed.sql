@@ -3,6 +3,7 @@
 -- currency_code는 ISO 4217 코드, quote_unit은 ECOS 항목명의 기준 수량(예: 원/인도네시아루피아(100루피아) → 100).
 -- 대상 DB를 선택한 뒤 실행합니다. 기존 환율(fx_daily)은 삭제하지 않습니다.
 -- quote_unit은 기존 환율 값의 의미(1단위·100단위)를 바꾸므로 재실행 때 갱신하지 않습니다.
+SET NAMES utf8mb4;  -- 클라이언트 기본 문자셋과 관계없이 한글이 깨지지 않게 (01_schema.sql과 같음)
 INSERT INTO currency (currency_code,name_ko,ecos_item_code,quote_unit) VALUES
 ('USD','미국 달러','0000001',1),
 ('JPY','일본 엔','0000002',100),
