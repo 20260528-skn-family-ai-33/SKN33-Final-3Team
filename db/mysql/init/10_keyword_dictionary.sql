@@ -1,6 +1,6 @@
 -- 키워드 사전(분류 틀·주제어) 테이블. 원본은 이 테이블과 backend/app/services/news_keywords/의 csv 둘 다이고,
 -- keyword_dict.py sync가 한쪽 변경을 다른 쪽에 반영한다. 행은 sync가 채우므로 여기서는 테이블만 만든다.
--- 기존 DB에도 그대로 실행할 수 있다 (이미 있으면 아무것도 하지 않음).
+-- 새 DB는 01_schema.sql이 같은 정의로 만든다. 이 파일은 01을 이미 실행한 기존 DB용이다 (이미 있으면 아무것도 하지 않음).
 CREATE TABLE IF NOT EXISTS keyword_category (
   category_id INT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '분류 틀 한 쌍(대분류 > 중분류)의 번호다.',
   major_name VARCHAR(40) NOT NULL COMMENT '대분류 이름이다. 예: 무역·통상.',
