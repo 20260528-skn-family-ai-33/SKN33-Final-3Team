@@ -40,6 +40,9 @@ GEO_PATH = BASE / "geo_dict.csv"
 EXCEPTIONS_PATH = BASE / "split_exceptions.csv"
 SYNONYMS_PATH = BASE / "synonyms.csv"
 CATEGORIES_PATH = BASE / "topic_categories.csv"
+# 사전 생성(build/) 밖에서 더한 주제어: 새로 나온 말(신규)과 관리자 결정(분류·미분류·동의어). keyword_dict.py가 DB와 맞춥니다.
+ADDITIONS_PATH = BASE / "topic_additions.csv"
+ADDITION_COLUMNS = ["주제어", "상태", "대표어", "대분류", "중분류", "수정일"]
 # 결과는 저장소 루트의 data/news_keywords/에 저장합니다 (git 제외 폴더).
 OUT_DIR = Path(__file__).resolve().parents[4] / "data" / "news_keywords"
 
@@ -114,12 +117,35 @@ def load_exceptions(path=EXCEPTIONS_PATH):
         return frozenset(normalize(r["남는말"]) for r in csv.DictReader(fh) if r.get("남는말"))
 
 
-def load_synonyms(path=SYNONYMS_PATH):
-    """같은 뜻 표기 → 대표어 표(synonyms.csv의 표기·대표어 컬럼)를 읽습니다."""
+def load_additions(path=ADDITIONS_PATH):
+    """topic_additions.csv: 주제어 → 행. 상태 칸이 분류·미분류·동의어인 행은 관리자 결정이라 팀 검수 사전보다 먼저 씁니다."""
     if not Path(path).exists():
         return {}
     with open(path, encoding="utf-8-sig", newline="") as fh:
-        return {normalize(r["표기"]): normalize(r["대표어"]) for r in csv.DictReader(fh) if r.get("표기") and r.get("대표어")}
+        return {normalize(r["주제어"]): r for r in csv.DictReader(fh) if r.get("주제어")}
+
+
+def load_synonyms(path=SYNONYMS_PATH, additions=ADDITIONS_PATH):
+    """같은 뜻 표기 → 대표어 표(synonyms.csv의 표기·대표어 컬럼)를 읽고 관리자 결정(topic_additions.csv)을 덮어씁니다.
+    관리자가 분류·미분류로 정한 말은 동의어에서 빼고, A→B→C처럼 이어진 것은 마지막 대표어로 정리합니다."""
+    syn = {}
+    if Path(path).exists():
+        with open(path, encoding="utf-8-sig", newline="") as fh:
+            syn = {normalize(r["표기"]): normalize(r["대표어"]) for r in csv.DictReader(fh) if r.get("표기") and r.get("대표어")}
+    for word, r in load_additions(additions).items():
+        if r.get("상태") == "동의어" and r.get("대표어"):
+            syn[word] = normalize(r["대표어"])
+        elif r.get("상태") in ("분류", "미분류"):
+            syn.pop(word, None)
+    final = {}
+    for word, rep in syn.items():
+        seen = {word}
+        while rep in syn and rep not in seen:  # 순환(A→B→A)이면 그 말은 동의어로 쓰지 않음
+            seen.add(rep)
+            rep = syn[rep]
+        if rep != word:
+            final[word] = rep
+    return final
 
 
 class Categories(dict):
@@ -161,19 +187,34 @@ class Categories(dict):
     def lookup(self, word):
         return self.judge(word)[0]
 
+    def settled(self, word):
+        """분야가 없는 말이 정해진 결과인지 (팀·관리자가 미분류로 정함, 규칙 수정으로 미분류). False면 검수 대기."""
+        why = self.judge(word)[1]
+        return why in ("팀 검수에서 미분류로 정함", "분류표에서 미분류로 둠") or why.startswith("규칙 결과(")
 
-def load_categories(path=CATEGORIES_PATH, rules=True):
+
+def load_categories(path=CATEGORIES_PATH, rules=True, additions=ADDITIONS_PATH):
     """확정 분류표를 읽습니다. rules=True면 표에 없는 주제어에 공통 분류 규칙을 적용합니다.
-    표의 규칙(포함)·LLM 판단 줄도 팀 검수 여부를 다시 확인합니다 (이 수정 전에 만든 분류표를 읽어도 검수 전 추정은 확정하지 않음)."""
-    if not Path(path).exists():
-        return Categories(rules=rules)
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        rows = [r for r in csv.DictReader(fh) if r.get("주제어")]
+    표의 규칙(포함)·LLM 판단 줄도 팀 검수 여부를 다시 확인합니다 (이 수정 전에 만든 분류표를 읽어도 검수 전 추정은 확정하지 않음).
+    관리자 결정(topic_additions.csv의 분류·미분류)은 분류표보다 먼저 씁니다."""
+    rows = []
+    if Path(path).exists():
+        with open(path, encoding="utf-8-sig", newline="") as fh:
+            rows = [r for r in csv.DictReader(fh) if r.get("주제어")]
     reviewed = cr.load_reviewed() if rules else None
     confirmed = lambda r: r.get("대분류") not in ("", "미분류") and not (
         reviewed is not None and r.get("배정방법") in cr.ESTIMATED and reviewed.get(r["주제어"]) != (r["대분류"], r["중분류"]))
     table = {normalize(r["주제어"]): f'{r["대분류"]}>{r["중분류"]}' for r in rows if confirmed(r)}
-    return Categories(table, (normalize(r["주제어"]) for r in rows), rules)
+    cat = Categories(table, (normalize(r["주제어"]) for r in rows), rules)
+    for word, r in load_additions(additions).items():
+        if r.get("상태") == "분류":
+            cat[word] = f'{r["대분류"]}>{r["중분류"]}'
+            cat.listed.add(word)
+        elif r.get("상태") == "미분류":  # 팀 검수에서 미분류로 정한 말과 같게 다룸
+            cat.pop(word, None)
+            cat.listed.add(word)
+            cat._team[word] = ("미분류", "미분류")
+    return cat
 
 
 def category_of(word, cat):
