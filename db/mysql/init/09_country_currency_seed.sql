@@ -7,8 +7,8 @@
 UPDATE country SET currency_code='USD' WHERE country_code IN ('AS','BQ','EC','FM','GU','IO','MH','MP','PR','PW','SV','TC','TL','UM','US','VG','VI','ZW');
 -- JPY: 일본
 UPDATE country SET currency_code='JPY' WHERE country_code IN ('JP');
--- EUR: 안도라, 오스트리아, 벨기에, 불가리아, 세인트 바르탤르미, 사이프러스, 독일, 에스토니아, 스페인, 핀란드, 프랑스, 불령 가이아나, 과델로프, 그리스, 크로아티아, 아일랜드, 이탈리아, 리투아니아, 룩셈부르그, 라트비아, 모나코, 몬테네그로, 세인트 마틴, 마티니크, 몰타, 네덜란드, 포루투갈, 불령 리유니온 코모도 제도, 슬로베니아, 슬로바키아, 산마리노, 불령 남부지역, 교황청, 메요트
-UPDATE country SET currency_code='EUR' WHERE country_code IN ('AD','AT','BE','BG','BL','CY','DE','EE','ES','FI','FR','GF','GP','GR','HR','IE','IT','LT','LU','LV','MC','ME','MF','MQ','MT','NL','PT','RE','SI','SK','SM','TF','VA','YT');
+-- EUR: 안도라, 오스트리아, 알랜드 군도, 벨기에, 불가리아, 세인트 바르탤르미, 사이프러스, 독일, 에스토니아, 스페인, 핀란드, 프랑스, 불령 가이아나, 과델로프, 그리스, 크로아티아, 아일랜드, 이탈리아, 리투아니아, 룩셈부르그, 라트비아, 모나코, 몬테네그로, 세인트 마틴, 마티니크, 몰타, 네덜란드, 세인트 피레 미켈론, 포루투갈, 불령 리유니온 코모도 제도, 슬로베니아, 슬로바키아, 산마리노, 불령 남부지역, 교황청, 코소보, 메요트
+UPDATE country SET currency_code='EUR' WHERE country_code IN ('AD','AT','AX','BE','BG','BL','CY','DE','EE','ES','FI','FR','GF','GP','GR','HR','IE','IT','LT','LU','LV','MC','ME','MF','MQ','MT','NL','PM','PT','RE','SI','SK','SM','TF','VA','XK','YT');
 -- CNY: 중국
 UPDATE country SET currency_code='CNY' WHERE country_code IN ('CN');
 -- GBP: 영국, 건지, 남조지아 & 남샌드위치 군도, 맨섬, 저어지
@@ -25,8 +25,8 @@ UPDATE country SET currency_code='SEK' WHERE country_code IN ('SE');
 UPDATE country SET currency_code='AUD' WHERE country_code IN ('AU','CC','CX','HM','KI','NF','NR','TV');
 -- DKK: 덴마크, 파로에 군도, 그린랜드
 UPDATE country SET currency_code='DKK' WHERE country_code IN ('DK','FO','GL');
--- NOK: 노르웨이, 스발비드 군도
-UPDATE country SET currency_code='NOK' WHERE country_code IN ('NO','SJ');
+-- NOK: 보빗군도, 노르웨이, 스발비드 군도
+UPDATE country SET currency_code='NOK' WHERE country_code IN ('BV','NO','SJ');
 -- SAR: 사우디아라비아
 UPDATE country SET currency_code='SAR' WHERE country_code IN ('SA');
 -- KWD: 쿠웨이트
