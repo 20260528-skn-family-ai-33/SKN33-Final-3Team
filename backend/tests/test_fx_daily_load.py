@@ -97,6 +97,18 @@ class FxDailyLoadTest(unittest.TestCase):
         self.assertEqual(rows[(D1, "USD")], Decimal("1390.5"))  # 한 통화가 실패하면 다른 통화도 저장하지 않음
         self.assertEqual([r[2] for r in runs], ["SUCCESS", "FAILED"])
 
+    def test_start_after_end_fails_before_touching_db_or_ecos(self):
+        with mock.patch.object(fx, "make_engine") as engine:
+            rc, fetch = self.run_load(RATES, D2, D1)
+        rows, runs = self.table()
+        self.assertEqual((rc, rows, runs), (1, {}, []))
+        engine.assert_not_called()
+        fetch.assert_not_called()
+
+    def test_log_is_not_duplicated_by_root_logger(self):
+        self.run_load(RATES)
+        self.assertFalse(fx.log.propagate)  # 공용 스케줄러의 logging.basicConfig와 겹쳐 두 번 찍히지 않음
+
     def test_no_data_period_is_success(self):
         rc, _ = self.run_load(RATES, date(2026, 10, 3), date(2026, 10, 4))
         rows, runs = self.table()

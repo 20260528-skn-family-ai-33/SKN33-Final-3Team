@@ -20,7 +20,7 @@
 import argparse
 import logging
 import os
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from dotenv import dotenv_values
@@ -46,6 +46,7 @@ def setup_log(log_dir=LOG_DIR):
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / f"fx_daily_load_{datetime.now(KST):%Y%m%d_%H%M%S}.log"
     log.setLevel(logging.INFO)
+    log.propagate = False  # 공용 스케줄러의 logging.basicConfig와 겹쳐 콘솔에 두 번 출력되지 않게
     for h in log.handlers:
         h.close()
     log.handlers.clear()
@@ -95,6 +96,9 @@ def collect(key, targets, start, end, batch=None):
 def run(start=None, end=None, db_url=None, log_dir=LOG_DIR, env_path=ENV_PATH, track=True):
     """성공 0, 실패 1을 돌려줍니다. start를 주지 않으면 최근 기간을 갱신합니다. track=False면 batch_run 기록을 생략합니다."""
     log_path = setup_log(log_dir)
+    if start is not None and end is not None and start > end:
+        log.error(f"환율 적재 실패: 시작일이 종료일보다 늦습니다 ({start} > {end}) | 로그: {log_path}")
+        return 1
     engine = None
     try:
         engine = make_engine(db_url)
@@ -103,8 +107,9 @@ def run(start=None, end=None, db_url=None, log_dir=LOG_DIR, env_path=ENV_PATH, t
                 start, end = recent_period(s, datetime.now(KST).date(), start_date=start_date_setting(env_path))
             targets = load_targets(s)
         end = end or datetime.now(KST).date()
-        if start > end:
-            raise ValueError(f"시작일이 종료일보다 늦습니다: {start} > {end}")
+        if start > end:  # --start만 주고 오늘보다 늦은 날짜를 준 경우
+            log.error(f"환율 적재 실패: 시작일이 종료일보다 늦습니다 ({start} > {end}) | 로그: {log_path}")
+            return 1
         log.info(f"환율 적재 시작 | {start} ~ {end} | 대상 {', '.join(c for c, *_ in targets) or '없음'}")
         if not track:
             return _run(engine, targets, start, end, env_path, log_path, None)
@@ -114,7 +119,7 @@ def run(start=None, end=None, db_url=None, log_dir=LOG_DIR, env_path=ENV_PATH, t
                 batch.fail()
         return rc
     except Exception:
-        log.exception(f"환율 적재 실패: 대상 통화·기간을 정하지 못함 | 로그: {log_path}")
+        log.exception(f"환율 적재 실패: DB 연결 또는 대상 통화·기간 조회 중 오류 | 로그: {log_path}")
         return 1
     finally:
         if engine is not None:
@@ -152,6 +157,8 @@ def main():
     args = parser.parse_args()
     if args.end and not args.start:
         parser.error("--end는 --start와 함께 지정합니다.")
+    if args.start and args.end and args.start > args.end:
+        parser.error(f"--start({args.start})가 --end({args.end})보다 늦습니다.")
     raise SystemExit(run(args.start, args.end, args.db_url))
 
 
