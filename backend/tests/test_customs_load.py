@@ -281,11 +281,14 @@ class MySQLLoadTest(unittest.TestCase):
         if not database.startswith("customs_test_") or not database.replace("_", "").isalnum():
             raise ValueError("CUSTOMS_TEST_DATABASE는 customs_test_ 접두사 필수")
         cls.created_database = False
+        # TCP를 열지 않은 로컬 임시 MySQL도 동일한 통합 테스트로 검증합니다.
+        socket = os.environ.get("CUSTOMS_TEST_SOCKET")
         url = URL.create("mysql+pymysql",
             host=os.environ.get("CUSTOMS_TEST_HOST", "127.0.0.1"),
             port=int(os.environ.get("CUSTOMS_TEST_PORT", "3307")),
             username=os.environ.get("CUSTOMS_TEST_USER", "root"),
-            password=os.environ.get("CUSTOMS_TEST_PASSWORD", ""))
+            password=os.environ.get("CUSTOMS_TEST_PASSWORD", ""),
+            query={"unix_socket": socket} if socket else {})
         admin = make_engine(url)
         try:
             with admin.connect() as connection:
