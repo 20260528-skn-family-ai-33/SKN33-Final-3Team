@@ -3,6 +3,7 @@
 실행: python -m unittest backend/tests/test_fx_daily_load.py
 """
 import tempfile
+import threading
 import unittest
 from datetime import date
 from decimal import Decimal
@@ -114,25 +115,89 @@ class FxDailyLoadTest(unittest.TestCase):
         rows, runs = self.table()
         self.assertEqual((rc, len(rows), runs[0][2:]), (0, 0, ("SUCCESS", 2, 0)))
 
-    def test_recent_period(self):
-        today = date(2026, 10, 19)
+    def add_rates(self, rows):
         engine = make_engine(self.url)
         with session_scope(engine) as s:
-            self.assertEqual(fx.recent_period(s, today), (date(2026, 10, 18), today))  # 비어 있고 시작일 설정 없음: 최근 2일
-            self.assertEqual(fx.recent_period(s, today, start_date=date(2025, 1, 1)), (date(2025, 1, 1), today))
-            CRUD(FxDaily).upsert_many(s, [{"base_date": date(2026, 9, 1), "currency_code": "USD",
-                                           "rate_krw": Decimal("1300")}])
-        with session_scope(engine) as s:  # 마지막 적재일이 14일보다 오래됐으면 그날부터
-            self.assertEqual(fx.recent_period(s, today, start_date=date(2025, 1, 1)), (date(2026, 9, 1), today))
-            CRUD(FxDaily).upsert_many(s, [{"base_date": date(2026, 10, 16), "currency_code": "USD",
-                                           "rate_krw": Decimal("1340")}])
-        with session_scope(engine) as s:  # 월요일 실행, 마지막 적재가 금요일이면 금요일부터 (주말 건너뛴 전일 비교 가능)
-            self.assertEqual(fx.recent_period(s, today), (date(2026, 10, 16), today))
-            CRUD(FxDaily).upsert_many(s, [{"base_date": date(2026, 10, 19), "currency_code": "USD",
-                                           "rate_krw": Decimal("1342.4")}])
-        with session_scope(engine) as s:
-            self.assertEqual(fx.recent_period(s, today), (date(2026, 10, 18), today))
+            CRUD(FxDaily).upsert_many(s, [{"base_date": d, "currency_code": c, "rate_krw": Decimal(v)} for d, c, v in rows])
         engine.dispose()
+
+    def starts(self, today, start_date=None):
+        engine = make_engine(self.url)
+        with session_scope(engine) as s:
+            result = fx.recent_starts(s, fx.load_targets(s), today, start_date=start_date)
+        engine.dispose()
+        return result
+
+    def test_recent_starts_per_currency(self):
+        today = date(2026, 10, 19)
+        # 비어 있으면 최근 2일, FX_START_DATE가 있으면 그날부터
+        self.assertEqual(self.starts(today), {"JPY": date(2026, 10, 18), "USD": date(2026, 10, 18)})
+        self.assertEqual(self.starts(today, date(2026, 1, 1)), {"JPY": date(2026, 1, 1), "USD": date(2026, 1, 1)})
+        # 월요일 실행: 금요일까지 있으면 금요일부터 (주말 건너뛴 전일 비교)
+        self.add_rates([(date(2026, 10, 16), "USD", "1348.5"), (date(2026, 10, 16), "JPY", "853.02")])
+        self.assertEqual(self.starts(today), {"JPY": date(2026, 10, 16), "USD": date(2026, 10, 16)})
+        # 최신이면 최근 2일만
+        self.add_rates([(date(2026, 10, 19), "USD", "1342.4"), (date(2026, 10, 19), "JPY", "850.24")])
+        self.assertEqual(self.starts(today), {"JPY": date(2026, 10, 18), "USD": date(2026, 10, 18)})
+
+    def test_one_currency_gap_is_not_hidden_by_another_currency(self):
+        # USD는 10/19까지, JPY는 10/1까지만 있음 → JPY는 10/1부터 다시 받아야 함 (전체 MAX로 계산하면 놓침)
+        self.add_rates([(date(2026, 10, 19), "USD", "1342.4"), (date(2026, 10, 1), "JPY", "925.31")])
+        self.assertEqual(self.starts(date(2026, 10, 19)), {"JPY": date(2026, 10, 1), "USD": date(2026, 10, 18)})
+
+    def test_new_currency_without_rows_starts_from_start_date(self):
+        self.add_rates([(date(2026, 10, 19), "USD", "1342.4")])  # JPY는 새로 추가된 통화처럼 0건
+        self.assertEqual(self.starts(date(2026, 10, 19), date(2026, 1, 1)),
+                         {"JPY": date(2026, 1, 1), "USD": date(2026, 10, 18)})
+
+    def test_recent_run_fetches_each_currency_from_its_own_start(self):
+        today = fx.datetime.now(fx.KST).date()
+        self.add_rates([(today, "USD", "1342.4"), (date(2026, 10, 1), "JPY", "925.31")])
+        with mock.patch.object(fx.ecos, "fetch_daily", return_value=([], 1)) as fetch:
+            rc = fx.run(None, None, self.url, log_dir=self.dir / "logs", env_path=self.env)
+        self.assertEqual(rc, 0)
+        self.assertEqual({c.args[1]: (c.args[2], c.args[3]) for c in fetch.call_args_list},
+                         {"0000001": (today - fx.timedelta(days=1), today), "0000002": (date(2026, 10, 1), today)})
+        _, runs = self.table()
+        self.assertEqual(runs[-1][2], "SUCCESS")
+
+    def test_second_run_while_first_is_running_is_skipped(self):
+        # 정기 작업과 시작 작업이 겹친 경우: 늦게 시작한 실행은 아무것도 하지 않음 (오래된 값이 최신 값을 덮지 않게)
+        self.assertTrue(fx.RUN_LOCK.acquire(blocking=False))
+        try:
+            rc, fetch = self.run_load(RATES)
+        finally:
+            fx.RUN_LOCK.release()
+        rows, runs = self.table()
+        self.assertEqual((rc, rows, runs), (0, {}, []))
+        fetch.assert_not_called()
+        rc, _ = self.run_load(RATES)  # 잠금이 풀리면 정상 실행
+        self.assertEqual((rc, len(self.table()[0])), (0, 4))
+
+
+class SingleRunCleanupTest(unittest.TestCase):
+    def test_cleanup_failure_releases_process_lock(self):
+        for failure in ("release", "close"):
+            with self.subTest(failure=failure):
+                engine = mock.MagicMock()
+                engine.dialect.name = "mysql"
+                conn = engine.connect.return_value
+                conn.execute.return_value.scalar.return_value = 1
+                if failure == "release":
+                    conn.execute.side_effect = [conn.execute.return_value, RuntimeError("release failed")]
+                else:
+                    conn.close.side_effect = RuntimeError("close failed")
+                with mock.patch.object(fx, "RUN_LOCK", threading.Lock()):
+                    with self.assertRaisesRegex(RuntimeError, f"{failure} failed"):
+                        with fx.single_run(engine) as acquired:
+                            self.assertTrue(acquired)
+                    conn.close.assert_called_once()
+                    self.assertFalse(fx.RUN_LOCK.locked())
+                    conn.execute.side_effect = None
+                    conn.close.side_effect = None
+                    with fx.single_run(engine) as acquired:
+                        self.assertTrue(acquired)  # 정리 실패 후에도 다음 실행 가능
+                    self.assertFalse(fx.RUN_LOCK.locked())
 
 
 if __name__ == "__main__":
