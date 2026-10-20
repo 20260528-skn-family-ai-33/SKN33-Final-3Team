@@ -6,7 +6,7 @@ DB·CSV 읽기(load_data)와 계산(build_dataset)을 나눠, 계산은 가상 �
 import numpy as np
 import pandas as pd
 
-from backend.app.scheduler.collectors.external import external_collect as ec
+from backend.app.ml import preprocess as pp
 
 MIN_EXPORT_USD = 100_000  # 최근 12개월 수출이 이보다 작은 쌍은 노이즈라 뺀다
 HISTORY = 24  # growth_12m(최근 12개월 vs 직전 12개월)에 필요한 과거 월 수
@@ -42,7 +42,6 @@ def load_data(engine=None, external_dir=None):
     """DB 실적·기준정보와 data/external CSV를 build_dataset 입력 형식으로 읽는다."""
     from sqlalchemy import text
     from backend.app.db.session import make_engine
-    external_dir = external_dir or ec.OUT_DIR
     engine = engine or make_engine()
     with engine.connect() as conn:
         read = lambda sql: pd.read_sql(text(sql), conn)  # noqa: E731
@@ -67,35 +66,8 @@ def load_data(engine=None, external_dir=None):
     mapping = hs_key_map(corr)
     exports = apply_hs_key(exports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
     news = apply_hs_key(news, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
-    market = read_market(external_dir)
-    market = apply_hs_key(market.assign(hs_ver="HS2022"), mapping).groupby(
-        ["year", "country_code", "hs6"], as_index=False).sum()
-    return {"exports": exports, "countries": countries, "fx": fx, "news": news,
-            "market": market, "wdi": read_wdi(external_dir)}
-
-
-def read_csv(path, **kw):
-    return pd.read_csv(path, keep_default_na=False, na_values=[""], **kw)  # 나미비아 NA 보존
-
-
-def read_market(external_dir):
-    """BACI 집계본 + BACI 이후 연도의 Comtrade. 같은 연도는 BACI를 쓴다."""
-    frames = []
-    baci = external_dir / "baci" / "baci_imports_hs22.csv"
-    if baci.exists():
-        frames.append(read_csv(baci, dtype={"hs6": str}))
-    last = frames[0].year.max() if frames else 0
-    for path in sorted((external_dir / "comtrade").glob("comtrade_imports_*.csv")):
-        df = read_csv(path, dtype={"hs6": str})
-        frames.append(df[df.year > last])
-    columns = ["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd"]
-    return pd.concat(frames, ignore_index=True)[columns] if frames else pd.DataFrame(columns=columns)
-
-
-def read_wdi(external_dir):
-    files = sorted((external_dir / "wdi").glob("wdi_*.csv"))
-    columns = ["year", "country_code", "gdp_usd", "gdp_growth_pct", "population", "gdp_per_capita_usd"]
-    return read_csv(files[-1]) if files else pd.DataFrame(columns=columns)
+    external = pp.load_external(external_dir, set(countries.country_code), mapping)
+    return {"exports": exports, "countries": countries, "fx": fx, "news": news, **external}
 
 
 def _month_index(series, months):
@@ -178,8 +150,8 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     ds["hs2"] = ds.hs6.str[:2].astype(int)
     ds = ds.merge(data["countries"][["country_code", "region_id"]], on="country_code", how="left")
     ds = _add_fx(ds, data["fx"], data["countries"])
-    ds = _add_wdi(ds, data["wdi"])
-    ds = _add_market(ds, data["market"])
+    ds = _add_wdi(ds, data["wdi_yearly"])
+    ds = _add_market(ds, data["market_yearly"])
     return _add_news(ds, data["news"])
 
 
@@ -203,39 +175,21 @@ def _add_fx(ds, fx, countries):
               .drop(columns=["currency_code", "month"]))
 
 
-def _add_wdi(ds, wdi):
-    w = pd.DataFrame({"year": wdi.year, "country_code": wdi.country_code,
-                      "log_gdp": np.log(wdi.gdp_usd.astype(float)),
-                      "gdp_growth": wdi.gdp_growth_pct.astype(float),
-                      "log_population": np.log(wdi.population.astype(float)),
-                      "log_gdp_pc": np.log(wdi.gdp_per_capita_usd.astype(float))})
+def _add_wdi(ds, wdi_yearly):
+    w = wdi_yearly.drop(columns="filled")
     return ds.assign(year=_year(ds)).merge(w, on=["year", "country_code"], how="left").drop(columns="year")
 
 
-def _market_year(market, year_col):
-    m = market.assign(share=_ratio(market.import_from_kor_usd.to_numpy(float), market.import_world_usd.to_numpy(float)))
-    return m.rename(columns={"year": year_col})[[year_col, "country_code", "hs6", "import_world_usd", "share"]]
-
-
-def _add_market(ds, market):
-    """t-1년 시장 규모·성장·한국 점유율(피처)과, 라벨용 미래 연도 시장 성장·점유율."""
-    keys = ["country_code", "hs6"]
-    now, before = _market_year(market, "y0"), _market_year(market, "y1")
-    ds = ds.assign(y0=_year(ds), y1=_year(ds) - 1)
-    ds = ds.merge(now, on=["y0", *keys], how="left").merge(before, on=["y1", *keys], how="left", suffixes=("", "_prev"))
-    ds["mkt_log_import"] = np.log1p(ds.import_world_usd)
-    ds["mkt_growth"] = _growth(ds.import_world_usd, ds.import_world_usd_prev)
-    ds["kor_share"] = ds.share
-    ds["kor_share_change"] = ds.share - ds.share_prev
-    ds = ds.drop(columns=["y0", "y1", "import_world_usd", "share", "import_world_usd_prev", "share_prev"])
+def _add_market(ds, market_yearly):
+    """t-1년 시장 피처와, 라벨용 미래 연도 시장 성장·점유율. 계산은 preprocess.market_yearly에서 한다."""
+    keys = ["year", *pp.MARKET_KEYS]
+    feat = market_yearly[[*keys, "mkt_log_import", "mkt_growth", "kor_share", "kor_share_change"]]
+    ds = ds.assign(year=_year(ds)).merge(feat, on=keys, how="left")
     # ponytail: 미래 12개월을 연 단위로 근사 (기준월+6개월이 속한 해 vs 그 전해). 월별 시장 데이터가 생기면 바꾼다.
-    fy = (ds.anchor + pd.DateOffset(months=6)).dt.year
-    ds = ds.assign(f0=fy, f1=fy - 1)
-    ds = (ds.merge(_market_year(market, "f0"), on=["f0", *keys], how="left")
-            .merge(_market_year(market, "f1"), on=["f1", *keys], how="left", suffixes=("", "_prev")))
-    ds["future_mkt_growth"] = _growth(ds.import_world_usd, ds.import_world_usd_prev)
-    ds["future_share"] = ds.share
-    return ds.drop(columns=["f0", "f1", "import_world_usd", "share", "import_world_usd_prev", "share_prev"])
+    future = market_yearly[[*keys, "mkt_growth", "kor_share"]].rename(
+        columns={"mkt_growth": "future_mkt_growth", "kor_share": "future_share"})
+    ds["year"] = (ds.anchor + pd.DateOffset(months=6)).dt.year
+    return ds.merge(future, on=keys, how="left").drop(columns="year")
 
 
 def _add_news(ds, news):

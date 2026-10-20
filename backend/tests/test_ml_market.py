@@ -4,6 +4,7 @@
 """
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ import pandas as pd
 
 from backend.app.ml import features as F
 from backend.app.ml import market_model as M
+from backend.app.ml import preprocess as pp
 
 COUNTRIES = ["VN", "US", "CN", "DE"]
 PRODUCTS = [f"{h:02d}{i:04d}" for h, i in zip(range(1, 16), range(100, 115))]
@@ -38,12 +40,12 @@ def fake_data(months=50, seed=0):
                         columns=["month", "country_code", "hs6", "count"])
     wdi = pd.DataFrame([(y, c, 1e12, 2.5, 5e7, 2e4) for y in range(2021, 2026) for c in COUNTRIES],
                        columns=["year", "country_code", "gdp_usd", "gdp_growth_pct", "population", "gdp_per_capita_usd"])
+    market = pd.DataFrame(market, columns=["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd"])
     return {"exports": exports,
             "countries": pd.DataFrame({"country_code": COUNTRIES, "region_id": [35, 21, 30, 155],
                                        "currency_code": [None, "USD", None, None]}),
-            "fx": fx, "news": news, "wdi": wdi,
-            "market": pd.DataFrame(market, columns=["year", "country_code", "hs6", "import_world_usd",
-                                                    "import_from_kor_usd"])}
+            "fx": fx, "news": news, "wdi_yearly": pp.wdi_yearly(wdi),
+            "market_yearly": pp.market_yearly(market.assign(source="BACI"))}
 
 
 class FeatureTest(unittest.TestCase):
@@ -83,6 +85,58 @@ class FeatureTest(unittest.TestCase):
                             cv=[0.1, 0.1, 0.1, 0.1, 0.9, 0.1, 0.1], th=th)
         np.testing.assert_array_equal(got[:6], [0, 1, 2, 3, 4, 2])
         self.assertTrue(np.isnan(got[6]))
+
+
+class PreprocessTest(unittest.TestCase):
+    def test_market_yearly(self):
+        raw = pd.DataFrame([
+            (2022, "VN", "850760", 100.0, 10.0), (2023, "VN", "850760", 200.0, 30.0),
+            (2025, "VN", "850760", 400.0, 40.0),  # 2024년이 없어 성장률을 만들지 않음
+            (2023, "VN", "850760", 100.0, 10.0),  # HS 묶음 통일로 생긴 같은 키는 합침
+            (2023, "US", "010110", 0.0, 0.0),  # 시장 없음
+            (2023, "XX", "010110", 50.0, 5.0),  # 대상 국가 아님
+        ], columns=["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd"]).assign(source="BACI")
+        with unittest.mock.patch.object(pp, "CLIP_Q", (0.0, 1.0)):  # 행이 적어 자르기는 끔
+            m = pp.market_yearly(raw, countries={"VN", "US"}).set_index("year")
+        self.assertEqual(m.index.tolist(), [2022, 2023, 2025])
+        self.assertEqual(m.loc[2023, "import_world_usd"], 300.0)
+        self.assertAlmostEqual(m.loc[2023, "kor_share"], 40 / 300)
+        self.assertAlmostEqual(m.loc[2023, "mkt_growth"], np.log1p(300) - np.log1p(100))
+        self.assertAlmostEqual(m.loc[2023, "kor_share_change"], 40 / 300 - 0.1)
+        self.assertTrue(np.isnan(m.loc[2025, "mkt_growth"]))
+        self.assertTrue(np.isnan(m.loc[2022, "mkt_growth"]))
+
+    def test_wdi_fills_late_indicators_from_previous_year(self):
+        wdi = pd.DataFrame([(2023, "VN", 4e11, 5.0, 1e8, 4000.0), (2024, "VN", 4.5e11, 6.0, 1.01e8, 4400.0),
+                            (2025, "VN", None, None, 1.02e8, None),  # GDP만 아직 발표 전
+                            (2023, "TW", None, None, None, None), (2024, "TW", None, None, 2.3e7, None)],
+                           columns=["year", "country_code", "gdp_usd", "gdp_growth_pct", "population",
+                                    "gdp_per_capita_usd"])
+        with unittest.mock.patch.object(pp, "CLIP_Q", (0.0, 1.0)):
+            w = pp.wdi_yearly(wdi).set_index(["country_code", "year"])
+        self.assertAlmostEqual(w.loc[("VN", 2025), "log_gdp"], np.log(4.5e11))  # 2024년 값
+        self.assertAlmostEqual(w.loc[("VN", 2025), "log_population"], np.log(1.02e8))  # 발표된 값은 그대로
+        self.assertTrue(w.loc[("VN", 2025), "filled"])
+        self.assertFalse(w.loc[("VN", 2024), "filled"])
+        self.assertTrue(np.isnan(w.loc[("TW", 2024), "log_gdp"]))  # 이을 과거 값이 없음
+        self.assertNotIn(("TW", 2023), w.index)  # 값이 전혀 없던 해는 만들지 않음
+
+    def test_comtrade_only_after_baci_years(self):
+        tmp = Path(tempfile.mkdtemp())
+        (tmp / "baci").mkdir()
+        (tmp / "comtrade").mkdir()
+        cols = "year,country_code,hs6,import_world_usd,import_from_kor_usd\n"
+        (tmp / "baci" / "baci_imports_hs22.csv").write_text(cols + "2024,NA,010110,10,1\n")
+        (tmp / "comtrade" / "comtrade_imports_2024.csv").write_text(cols + "2024,NA,010110,99,9\n")
+        (tmp / "comtrade" / "comtrade_imports_2025.csv").write_text(cols + "2025,NA,010110,20,2\n")
+        m = pp.read_market(tmp)
+        self.assertEqual(m[["year", "country_code", "source"]].values.tolist(),
+                         [[2024, "NA", "BACI"], [2025, "NA", "COMTRADE"]])  # 나미비아 NA 보존
+
+    def test_seed_countries_include_extra_seed(self):
+        countries = pp.seed_countries()
+        self.assertIn("KP", countries)  # 07_country_extra_seed.sql
+        self.assertNotIn("KR", countries)  # SPECIAL
 
 
 class ModelTest(unittest.TestCase):
