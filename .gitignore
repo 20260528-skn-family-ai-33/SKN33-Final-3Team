@@ -2,7 +2,15 @@
 .env
 __pycache__/
 node_modules/
-data/
+/data/*
+!/data/un_data/
+/data/un_data/*
+!/data/un_data/un_data.csv
+!/data/un_data/scope.json
+!/data/un_data/required_country.csv
+!/data/un_data/required_hs.csv
+!/data/un_data/hs2022_exclusions.csv
+!/data/un_data/hs2022_exclusions_summary.json
 chroma_data/
 
 # 기사 수집 실행 결과와 검토 파일
@@ -10,9 +18,14 @@ chroma_data/
 **/shortnews_outputs/
 # 관세청 수집 실행 결과
 **/customs_outputs/
-# 적재 검증 중간 파일과 실행 결과 (원본 데이터 포함)
+# HS 코드 마스터 생성 결과
+**/hscode_outputs/
+
+# Local credentials and Finder metadata
+env
+.DS_Store
+
+# Team customs runtime outputs
 tmp/
 **/customs_load_outputs/
 .venv/
-# HS 코드 마스터 생성 결과
-**/hscode_outputs/

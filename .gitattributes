@@ -1,0 +1,3 @@
+# Preserve snapshot bytes: initialization verifies SHA256 on every platform.
+/data/un_data/*.csv -text whitespace=cr-at-eol
+/data/un_data/scope.json -text
