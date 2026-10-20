@@ -9,8 +9,9 @@
 ④ 동의어: synonyms.csv로 같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (EV·전기자동차 → 전기차, 인공지능 → AI).
    결과 주제어(kw_topic)를 검색·집계·급증 판정에 모두 씁니다.
 ⑤ 대/중분류: 기사에 분야 칸(kw_category)을 붙입니다. 확정 분류표(topic_categories.csv)를 먼저 쓰고,
-   표에 없는 주제어는 같은 분류 규칙(category_rules.py)을 적용합니다. 그래도 못 정한 말만 미분류로 남기고,
-   미분류 주제어 전체를 이유·고유 기사 수·예시 기사와 함께 unclassified_topics.csv에 저장합니다.
+   표에 없는 주제어는 같은 분류 규칙(category_rules.py)을 적용하되 정확히 같은 말(일치)·검수된 목록만 확정합니다.
+   글자 포함으로 추정한 결과는 확정하지 않고, 미분류 주제어 전체와 함께 이유·후보 분야·고유 기사 수·예시 기사를
+   unclassified_topics.csv에 저장합니다 (관리자 검수 대상).
    분야는 주제어 단위라 검색에서는 순위 보조 가점으로만 씁니다 (최종 관련도는 검색 단계에서 기사 문맥으로 판단).
 ⑥ 품목 연결(1·3단계): KOTRA HS 칸(hsCdNm)을 HS 6단위(hs6, 요구사항 기본 단위)·4단위(hs4)로, 없으면 KOTRA 산업분류(indstCl)로 큰 범위만 남깁니다.
    2단계(키워드·제목의 품목어 → HS 사전)는 HS 사전 완료 후 추가합니다.
@@ -123,7 +124,9 @@ def load_synonyms(path=SYNONYMS_PATH):
 
 class Categories(dict):
     """확정 분류표: 주제어 → "대분류>중분류" (미분류는 넣지 않음).
-    표에 없는 주제어는 lookup()이 같은 분류 규칙(category_rules.assign)으로 정합니다. 표에서 미분류로 정한 말은 그대로 미분류."""
+    표에 없는 주제어는 lookup()이 같은 분류 규칙(category_rules.assign)으로 정합니다. 표에서 미분류로 정한 말은 그대로 미분류.
+    - 자동 확정: 팀 검수 · 규칙(일치) · 규칙 수정 목록 · LLM 판단 목록 (모두 정확히 같은 말이거나 사람이 본 목록)
+    - 규칙(포함)은 글자만 겹쳐 틀리기 쉬워(은행나무 → '은행' → 거시경제) 확정하지 않고, 후보 분야로 미분류 목록에 남깁니다."""
 
     def __init__(self, table=(), listed=(), rules=True):
         super().__init__(table)
@@ -134,20 +137,22 @@ class Categories(dict):
         self._cache = {}
 
     def judge(self, word):
-        """(분야 "대분류>중분류" 또는 None, 미분류 이유 또는 "")."""
+        """(분야 "대분류>중분류" 또는 None, 미분류 이유 또는 "", 후보 분야 또는 "")."""
         if word in self:
-            return self[word], ""
+            return self[word], "", ""
         if word not in self._cache:
             fixes, llm = self._lists
             big, mid, how, rule_txt = cr.assign(word, fixes, llm, self._team)
             if not self.rules:
-                self._cache[word] = (None, "분류표에 없음 (규칙 적용 안 함)")
+                self._cache[word] = (None, "분류표에 없음 (규칙 적용 안 함)", "")
             elif big == "미분류":
-                self._cache[word] = (None, cr.unclassified_reason(word, how, rule_txt, llm))
+                self._cache[word] = (None, cr.unclassified_reason(word, how, rule_txt, llm), "")
             elif word in self.listed:              # 분류표에서 미분류로 둔 말은 규칙 결과로 덮지 않음
-                self._cache[word] = (None, "분류표에서 미분류로 둠")
+                self._cache[word] = (None, "분류표에서 미분류로 둠", "")
+            elif how == "규칙(포함)":              # 글자 겹침 추정 — 확정하지 않고 검수 대상으로
+                self._cache[word] = (None, f"규칙(포함) 후보, 검수 전 ('{cr.contains_hit(word)}' 포함)", f"{big}>{mid}")
             else:
-                self._cache[word] = (f"{big}>{mid}", "")
+                self._cache[word] = (f"{big}>{mid}", "", "")
         return self._cache[word]
 
     def lookup(self, word):
@@ -309,25 +314,26 @@ def summarize(df, results):
     }
 
 
-UNCLASSIFIED_COLUMNS = ["주제어", "기사수", "미분류 이유", "최근 기사"]
+UNCLASSIFIED_COLUMNS = ["주제어", "기사수", "미분류 이유", "후보 분야", "최근 기사"]
 
 
 def unclassified_topics(df, results, cat, examples=3):
-    """분야를 정하지 못한 주제어 전체 (중복 없이). 기사수 = 그 주제어가 나온 고유 기사 수.
-    빈도로 빼지 않고 많은 순으로 정렬만 합니다 (관리자가 기사수로 걸러 보면 됨)."""
-    arts = defaultdict(list)
-    for i, r in enumerate(results):
-        for t in r["kw_topic"]:
-            arts[t].append(i)
+    """분야를 정하지 못한 주제어 전체 (중복 없이). 기사수 = 그 주제어가 나온 고유 기사 수 (같은 기사 ID가 여러 줄이어도 1건).
+    규칙(포함)으로 추정만 된 말은 후보 분야와 함께 넣습니다. 빈도로 빼지 않고 많은 순으로 정렬만 합니다."""
     col = lambda name: df[name].astype(str).tolist() if name in df.columns else [""] * len(df)
     dates, titles, ids = col("othbcDt"), col("newsTitl"), col("bbstxSn")
+    arts = defaultdict(dict)                 # 주제어 → {기사 ID: 행 번호} — 같은 기사는 한 번만
+    for i, r in enumerate(results):
+        key = ids[i] or f"#{i}"               # 기사 ID가 없으면 행 번호로 구분
+        for t in r["kw_topic"]:
+            arts[t].setdefault(key, i)
     rows = []
-    for t, idx in arts.items():
-        c, why = cat.judge(t) if isinstance(cat, Categories) else (category_of(t, cat), "분류표에 없음")
+    for t, by_id in arts.items():
+        c, why, cand = cat.judge(t) if isinstance(cat, Categories) else (category_of(t, cat), "분류표에 없음", "")
         if c:
             continue
-        recent = sorted(idx, key=lambda i: (dates[i], ids[i]), reverse=True)[:examples]
-        rows.append({"주제어": t, "기사수": len(idx), "미분류 이유": why,
+        recent = sorted(by_id.values(), key=lambda i: (dates[i], ids[i]), reverse=True)[:examples]
+        rows.append({"주제어": t, "기사수": len(by_id), "미분류 이유": why, "후보 분야": cand,
                      "최근 기사": " / ".join(f"[{dates[i][:10]}] {titles[i]} ({ids[i]})" for i in recent)})
     out = pd.DataFrame(rows, columns=UNCLASSIFIED_COLUMNS)
     return out.sort_values(["기사수", "주제어"], ascending=[False, True]).reset_index(drop=True)

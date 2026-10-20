@@ -257,35 +257,53 @@ class CategoryTest(unittest.TestCase):
         """분류: 넓은 말도 뜻이 분명하면 분야 (수출 → 수출입 일반, 전시회 → 전시회·행사), 너무 넓은 말(한국)은 미분류"""
         self.assertEqual(self.run_one("수출,전시회,한국")["kw_category"], ["무역·통상>수출입 일반", "기업·투자·진출>전시회·행사"])
 
-    def test_new_word_uses_rules(self):
-        """분류: 분류표에 없는 새 주제어도 같은 규칙으로 분야 (반덤핑신규분석 → 관세·무역규제), 분류표가 먼저"""
-        self.assertNotIn("반덤핑신규분석", self.CAT)
-        self.assertEqual(self.run_one("반덤핑신규분석")["kw_category"], ["무역·통상>관세·무역규제"])
+    def test_new_word_exact_rule_confirmed(self):
+        """분류: 분류표에 없는 새 주제어도 규칙(일치)이면 바로 분야 (쿼터 → 관세·무역규제), 분류표가 먼저"""
+        self.assertNotIn("쿼터", self.CAT.listed)
+        self.assertEqual(self.run_one("쿼터")["kw_category"], ["무역·통상>관세·무역규제"])
         self.assertEqual(self.run_one("반덤핑")["kw_category"], ["무역·통상>관세·무역규제"])
 
+    def test_new_word_contains_rule_is_candidate(self):
+        """분류: 규칙(포함)은 글자 겹침 추정이라 확정하지 않고 후보로만 (은행나무 ≠ 거시경제, 반덤핑신규분석도 검수 대상)"""
+        for word, cand, hit in [("은행나무", "경제·시장>거시경제", "은행"), ("소금물", "산업·품목>품목 (→ HS 코드로 연결)", "소금"),
+                                ("반덤핑신규분석", "무역·통상>관세·무역규제", "반덤핑")]:
+            self.assertEqual(self.run_one(word)["kw_category"], [])
+            self.assertEqual(self.CAT.judge(word), (None, f"규칙(포함) 후보, 검수 전 ('{hit}' 포함)", cand))
+
     def test_rules_without_table(self):
-        """분류: 분류표 파일이 없어도(빈 표) 기사 처리에서 규칙은 적용됨"""
+        """분류: 분류표 파일이 없어도(빈 표) 기사 처리에서 규칙(일치)은 적용됨"""
         with tempfile.TemporaryDirectory() as tmp:
             cat = kc.load_categories(Path(tmp) / "없음.csv")
-        r = kc.process_article("반덤핑신규분석", "", GEO, kc.load_exceptions(), kc.load_synonyms(), cat)
+        r = kc.process_article("쿼터,은행나무", "", GEO, kc.load_exceptions(), kc.load_synonyms(), cat)
         self.assertEqual(r["kw_category"], ["무역·통상>관세·무역규제"])
 
     def test_team_unclassified_stays(self):
         """분류: 분류표에서 팀이 미분류로 정한 말(상반기·한국)은 규칙으로 덮지 않고 미분류, 이유가 남음"""
         self.assertEqual(self.run_one("상반기,한국")["kw_category"], [])
-        self.assertEqual(self.CAT.judge("상반기"), (None, "팀 검수에서 미분류로 정함"))
+        self.assertEqual(self.CAT.judge("상반기"), (None, "팀 검수에서 미분류로 정함", ""))
 
     def test_unclassified_list(self):
-        """미분류 목록: 분야를 못 정한 주제어 전체를 중복 없이, 고유 기사 수·이유·예시 기사와 함께 (빈도로 빼지 않음)"""
+        """미분류 목록: 분야를 못 정한 주제어 전체를 중복 없이, 고유 기사 수·이유·후보 분야·예시 기사와 함께 (빈도로 빼지 않음)"""
         df = pd.DataFrame({"bbstxSn": ["1", "2", "3"], "othbcDt": ["2026-10-01", "2026-10-02", "2026-10-03"],
                            "newsTitl": ["가", "나", "다"], "natn": ["미국"] * 3,
-                           "kwrd": ["상반기,반덤핑", "상반기,상반기,ZZ희귀어", "반덤핑신규분석"]})
+                           "kwrd": ["상반기,반덤핑", "상반기,상반기,ZZ희귀어", "은행나무"]})
         res = [kc.process_article(k, n, GEO, kc.load_exceptions(), kc.load_synonyms(), self.CAT) for k, n in zip(df.kwrd, df.natn)]
         un = kc.unclassified_topics(df, res, self.CAT)
-        self.assertEqual(un.주제어.tolist(), ["상반기", "ZZ희귀어"])        # 분류된 반덤핑·반덤핑신규분석은 없음, 기사 수 많은 순
-        self.assertEqual(un.기사수.tolist(), [2, 1])                        # 한 기사에 두 번 나와도 1건
-        self.assertEqual(un["미분류 이유"].tolist(), ["팀 검수에서 미분류로 정함", "분류 규칙에 해당하는 말이 없음"])
+        self.assertEqual(un.주제어.tolist(), ["상반기", "ZZ희귀어", "은행나무"])  # 분류된 반덤핑은 없음, 기사 수 많은 순
+        self.assertEqual(un.기사수.tolist(), [2, 1, 1])                     # 한 기사에 두 번 나와도 1건
+        self.assertEqual(un["미분류 이유"].tolist(), ["팀 검수에서 미분류로 정함", "분류 규칙에 해당하는 말이 없음",
+                                                "규칙(포함) 후보, 검수 전 ('은행' 포함)"])
+        self.assertEqual(un["후보 분야"].tolist(), ["", "", "경제·시장>거시경제"])
         self.assertIn("(2)", un.loc[0, "최근 기사"])
+
+    def test_unclassified_same_article_counted_once(self):
+        """미분류 목록: 같은 기사 ID가 두 줄로 들어와도 기사 수 1건, 예시도 한 번만"""
+        df = pd.DataFrame({"bbstxSn": ["1", "1"], "othbcDt": ["2026-10-01"] * 2, "newsTitl": ["가"] * 2,
+                           "natn": ["미국"] * 2, "kwrd": ["ZZ희귀어"] * 2})
+        res = [kc.process_article(k, n, GEO, kc.load_exceptions(), kc.load_synonyms(), self.CAT) for k, n in zip(df.kwrd, df.natn)]
+        un = kc.unclassified_topics(df, res, self.CAT)
+        self.assertEqual(un.기사수.tolist(), [1])
+        self.assertEqual(un.loc[0, "최근 기사"], "[2026-10-01] 가 (1)")
 
     def test_partial_match_fixed(self):
         """분류: 일부만 겹쳐 잘못 붙던 말 바로잡음 (리튬이온배터리 ≠ 리튬 광물, 파리협정 ≠ 통상 협정)"""

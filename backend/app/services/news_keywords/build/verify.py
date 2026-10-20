@@ -70,7 +70,8 @@ def main():
         cat = rf.category_rows()
         checks.append(("대중분류_검수용.xlsx", "검수", pd.DataFrame({"주제어": cat.주제어, "배정방법": cat.배정방법,
                        "지금 대분류": cat.대분류, "지금 중분류": cat.중분류}), ["주제어"]))
-        un = rf.unclassified_rows()[["주제어", "미분류 이유"]].rename(columns={"주제어": "단어"})
+        un = rf.unclassified_rows()[["주제어", "미분류 이유", "후보 분야"]].rename(
+            columns={"주제어": "단어", "후보 분야": "후보 분야 (규칙 포함 추정)"})
         checks.append(("미분류_예시기사.xlsx", 0, un, ["단어"]))
         for name, sheet, code, key in checks:
             p = args.shared / name

@@ -8,6 +8,7 @@
 - 대중분류_검수용.xlsx: topic_categories.csv 중 사람이 볼 줄(검수 필요 · 규칙(포함) · 규칙 수정 · LLM 판단) + 왜 붙었나 + 예시 기사 제목
 - 미분류_예시기사.xlsx: 분야를 정하지 못한 주제어 전체(keyword_clean.py가 만든 unclassified_topics.csv, 기사 수 많은 순)와
   단어마다 최신 기사 최대 10건 (회의 결정: 예시 기사를 보고 분야를 정함). 빈도로 빼지 않고 "전체 기사 수"로 걸러 봄
+  · 규칙(포함)으로 추정만 된 말은 "후보 분야"가 채워져 있음 → 맞으면 그 분류, 틀리면 다른 분류나 "미분류로 둠"
 
 실행: python backend/app/services/news_keywords/build/review_files.py [--out-dir 폴더]
 """
@@ -182,7 +183,8 @@ def unclassified_rows(path=DATA / "unclassified_topics.csv"):
 def unclassified_file(out_dir, res):
     un = unclassified_rows()
     raw = pd.read_csv(RAW, usecols=["bbstxSn", "indstCl"], dtype=str, keep_default_na=False).drop_duplicates("bbstxSn")
-    res = res.merge(raw, on="bbstxSn", how="left").sort_values(["othbcDt", "bbstxSn"], ascending=False)
+    res = (res.drop_duplicates("bbstxSn").merge(raw, on="bbstxSn", how="left")   # 같은 기사는 예시에 한 번만
+              .sort_values(["othbcDt", "bbstxSn"], ascending=False))
     by_word = defaultdict(list)
     for r in res.itertuples():
         for t in set(r.kw_topic.split("|")):
@@ -195,9 +197,9 @@ def unclassified_file(out_dir, res):
                          "같이 나온 주제어": r.kw_topic.replace("|", ", "), "다른 주제어의 분야": r.kw_category.replace("|", ", "),
                          "KOTRA 산업분류": r.indstCl, "기사ID": r.bbstxSn})
     summ = pd.DataFrame({"단어": un.주제어, "전체 기사 수": un.기사수.astype(int), "미분류 이유": un["미분류 이유"],
-                         "정한 분류 (대 > 중)": "", "의견": ""})
+                         "후보 분야 (규칙 포함 추정)": un["후보 분야"], "정한 분류 (대 > 중)": "", "의견": ""})
     wb = Workbook()
-    write_sheet(wb.active, summ, [14, 12, 40, 34, 40])
+    write_sheet(wb.active, summ, [14, 12, 40, 34, 34, 40])
     wb.active.title = f"단어 {len(summ)}개"
     art = pd.DataFrame(rows, columns=["단어", "번호", "게시일", "국가", "제목", "원본 키워드", "같이 나온 주제어", "다른 주제어의 분야",
                                       "KOTRA 산업분류", "기사ID"])

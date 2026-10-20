@@ -80,6 +80,16 @@ def rule(word):
     return None
 
 
+def contains_hit(word):
+    """규칙(포함)에 걸린 대표 키워드 (예: 은행나무 → '은행'). 안 걸리면 ""."""
+    u = word.upper()
+    for _, _, keys in TAX:
+        for k in keys.split():
+            if len(k) >= 2 and k.upper() in u:
+                return k
+    return ""
+
+
 def assign(word, fixes=None, llm=None, team=None):
     """주제어 하나 → (대분류, 중분류, 배정방법, 규칙 결과)."""
     fixes, llm, team = fixes or {}, llm or {}, team or {}
