@@ -138,17 +138,21 @@ def collect(key, targets, starts, end, batch=None):
 def run(start=None, end=None, db_url=None, log_dir=LOG_DIR, env_path=ENV_PATH, track=True):
     """성공 0, 실패 1을 돌려줍니다. 다른 실행이 진행 중이라 건너뛰면 0입니다.
     start를 주지 않으면 통화별로 최근 기간을 정합니다. track=False면 batch_run 기록을 생략합니다."""
-    log_path = setup_log(log_dir)
+    # 로그 파일은 실행 잠금을 잡은 뒤에만 엽니다. 잠금 전에 setup_log()를 부르면 건너뛰는 실행이
+    # 진행 중인 실행의 로그 핸들러를 닫고 바꿔 버려, 진행 중인 실행의 나머지 로그가 엉뚱한 파일로 갑니다.
+    # 잠금 전 메시지는 기존 핸들러를 그대로 쓰고, 핸들러가 없으면 표준 오류로 나갑니다.
+    log_path = None
     if start is not None and end is not None and start > end:
-        log.error(f"환율 적재 실패: 시작일이 종료일보다 늦습니다 ({start} > {end}) | 로그: {log_path}")
+        log.error(f"환율 적재 실패: 시작일이 종료일보다 늦습니다 ({start} > {end})")
         return 1
     engine = None
     try:
         engine = make_engine(db_url)
         with single_run(engine) as acquired:
             if not acquired:
-                log.warning(f"환율 적재가 이미 실행 중이라 이번 실행은 건너뜁니다 | 로그: {log_path}")
+                log.warning("환율 적재가 이미 실행 중이라 이번 실행은 건너뜁니다 (진행 중인 실행의 로그 설정은 바꾸지 않음)")
                 return 0
+            log_path = setup_log(log_dir)
             with session_scope(engine) as s:
                 targets = load_targets(s)
                 if start is None:

@@ -174,6 +174,32 @@ class FxDailyLoadTest(unittest.TestCase):
         rc, _ = self.run_load(RATES)  # 잠금이 풀리면 정상 실행
         self.assertEqual((rc, len(self.table()[0])), (0, 4))
 
+    def test_skipped_run_does_not_touch_running_job_logs(self):
+        # 진행 중인 실행의 로그 핸들러를 건너뛰는 실행이 닫거나 바꾸면, 진행 중인 실행의 나머지 로그가 엉뚱한 파일로 감
+        running_log = fx.setup_log(self.dir / "running")
+        handlers = list(fx.log.handlers)
+        self.assertTrue(fx.RUN_LOCK.acquire(blocking=False))
+        try:
+            rc, fetch = self.run_load(RATES)
+            fx.log.info("진행 중인 실행의 다음 로그")
+        finally:
+            fx.RUN_LOCK.release()
+        self.assertEqual(rc, 0)
+        fetch.assert_not_called()
+        self.assertEqual(fx.log.handlers, handlers)  # 같은 핸들러 객체 그대로
+        self.assertFalse((self.dir / "logs").exists())  # 건너뛴 실행은 새 로그 파일을 만들지 않음
+        for h in handlers:
+            h.flush()
+        text = running_log.read_text(encoding="utf-8")
+        self.assertIn("이미 실행 중이라 이번 실행은 건너뜁니다", text)
+        self.assertIn("진행 중인 실행의 다음 로그", text)  # 진행 중인 실행은 원래 파일에 계속 기록
+
+    def test_failed_run_releases_process_lock(self):
+        with mock.patch.object(fx, "make_engine", side_effect=RuntimeError("DB down")):
+            rc = fx.run(D1, D2, self.url, log_dir=self.dir / "logs", env_path=self.env)
+        self.assertEqual(rc, 1)
+        self.assertFalse(fx.RUN_LOCK.locked())
+
 
 class SingleRunCleanupTest(unittest.TestCase):
     def test_cleanup_failure_releases_process_lock(self):
