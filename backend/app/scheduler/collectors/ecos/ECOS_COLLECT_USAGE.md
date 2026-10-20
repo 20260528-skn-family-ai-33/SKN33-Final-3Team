@@ -26,7 +26,7 @@ ECOS Open API 사이트에서 로그인한 뒤 인증키를 신청합니다. 발
 
 ```dotenv
 ECOS_API_KEY=YOUR_ECOS_API_KEY   # 키 이름은 ecos도 가능 (대소문자 구분 없음). 서버 환경변수가 있으면 .env보다 우선
-FX_START_DATE=2026-01-01         # fx_daily가 비어 있을 때 처음 채우기 시작할 날짜
+FX_START_DATE=2026-01-01         # 처음 적재(통화에 환율이 한 건도 없을 때) 시작 날짜. 비우면 최근 2일만 받음
 MYSQL_HOST=localhost
 MYSQL_PORT=3306
 MYSQL_USER=YOUR_MYSQL_USER
@@ -79,6 +79,7 @@ python -m backend.app.scheduler.jobs.fx_daily_load
 | 기본 | 오늘(KST) 포함 최근 2일 |
 | 그 통화의 마지막 기준일이 그보다 오래됨 (주말·휴일·중단 뒤, 한 통화만 비어 있던 날) | 그 통화의 마지막 기준일부터 오늘까지 |
 | 그 통화가 아직 한 건도 없음 (처음 적재, 새로 추가한 통화) | `.env`의 `FX_START_DATE`부터 오늘까지 |
+| 그 통화가 아직 한 건도 없고 `FX_START_DATE`도 비어 있음 | 기본과 같이 최근 2일만 (과거는 `--start/--end`로 받음) |
 
 기간은 **통화마다 따로** 정합니다. 한 통화의 최신 날짜가 다른 통화의 빈 날짜를 가리지 않습니다.
 
