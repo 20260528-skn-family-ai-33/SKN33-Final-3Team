@@ -480,7 +480,7 @@ class MonthlyScheduleTest(unittest.TestCase):
         self.assertEqual(set(jobs), {"hs_code_refresh", "hs_code_refresh_retry", "hs_code_embed",
                                     "customs_monthly", "customs_monthly_startup",
                                     "un_data_monthly", "un_data_startup", "un_data_resume",
-                                    "fx_daily_load", "fx_daily_startup"})
+                                    "fx_daily_load", "fx_daily_startup", "keyword_dict_sync"})
         self.assertIs(jobs["customs_monthly"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly_startup"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly"].args[0], scheduler)
