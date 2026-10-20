@@ -4,6 +4,7 @@
 
 | 파일 | 하는 일 |
 |---|---|
+| `preprocess.py` | 외부 CSV(BACI·Comtrade·WDI)를 연 단위 시장·국가 피처 표로 전처리 |
 | `features.py` | DB 실적·기준정보와 `data/external/` CSV를 읽어 (국가, HS6, 기준월) 학습 테이블을 만듦 |
 | `market_model.py` | 모델 A(유망도)·B(시장 유형) 평가·학습, 최신 기준월 예측 저장, 조회 함수 |
 
@@ -14,6 +15,30 @@
    24개월 미만이면 `학습 행이 없음`, 48개월 미만이면 `학습 기간 부족` 오류로 멈춥니다.
 3. 외부 데이터: `python -m backend.app.scheduler.jobs.external_refresh` ([EXTERNAL_COLLECT_USAGE.md](../scheduler/collectors/external/EXTERNAL_COLLECT_USAGE.md)).
    없어도 학습은 되지만 시장 피처가 비고, 모델 B는 라벨을 못 만들어 규칙 기준선으로 대신합니다.
+
+## 외부 CSV 전처리만 따로 보기
+
+관세청 실적 없이도 지금 있는 외부 CSV만으로 실행됩니다. `train`도 내부에서 같은 함수를 쓰므로, 이 명령은 결과를 눈으로 확인할 때 씁니다.
+
+```powershell
+python -m backend.app.ml.preprocess          # CSV만 (국가 = 시드 SQL의 COUNTRY, HS 묶음 통일 없음)
+python -m backend.app.ml.preprocess --db     # DB의 country·hs_code_correlation 사용 (train과 같은 결과)
+```
+
+| 결과 | 키 | 컬럼 |
+|---|---|---|
+| `data/ml/market_yearly.csv` | 연도·국가·HS6 | `import_world_usd`, `import_from_kor_usd`, `source`(BACI·COMTRADE), `kor_share`, `mkt_log_import`, `mkt_growth`, `kor_share_change` |
+| `data/ml/wdi_yearly.csv` | 연도·국가 | `log_gdp`, `gdp_growth`, `log_population`, `log_gdp_pc`, `filled` |
+
+전처리 규칙:
+
+- 국가: `country_role='COUNTRY'`만 남김 (KR·JG 같은 SPECIAL 제외)
+- 시장: 같은 연도는 BACI 우선, BACI 이후 연도만 Comtrade. 전세계 수입액 0 이하 행 제외, HS 묶음 통일 뒤 같은 키는 합침
+- 성장률 `log1p(올해) − log1p(전해)`, 점유율 변화는 **바로 전해 값이 있을 때만** 계산 (2022년과 새로 생긴 쌍은 결측)
+- 증가율·점유율 변화·GDP 성장률은 1%·99%에서 자름, 점유율은 0~1로 제한
+- WDI: GDP처럼 늦게 발표되는 지표는 직전 해 값을 1년까지 이어 쓰고 `filled=True`로 표시
+
+2026-10-20 실행 결과 (`--db`): 시장 3,005,509행(2022~2025, 225개국), WDI 860행(215개국, GDP 결측 5.2%)
 
 ## 실행
 
