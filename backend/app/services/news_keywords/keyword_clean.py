@@ -9,8 +9,8 @@
 ④ 동의어: synonyms.csv로 같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (EV·전기자동차 → 전기차, 인공지능 → AI).
    결과 주제어(kw_topic)를 검색·집계·급증 판정에 모두 씁니다.
 ⑤ 대/중분류: 기사에 분야 칸(kw_category)을 붙입니다. 확정 분류표(topic_categories.csv)를 먼저 쓰고,
-   표에 없는 주제어는 같은 분류 규칙(category_rules.py)을 적용하되 정확히 같은 말(일치)·검수된 목록만 확정합니다.
-   글자 포함으로 추정한 결과는 확정하지 않고, 미분류 주제어 전체와 함께 이유·후보 분야·고유 기사 수·예시 기사를
+   표에 없는 주제어는 분류표 생성과 같은 판정(category_rules.classify)을 적용합니다. 규칙(포함)·LLM 판단은 추정이라
+   팀이 검수한 말만 확정하고, 검수 전이면 확정하지 않고 미분류 주제어 전체와 함께 이유·후보 분야·고유 기사 수·예시 기사를
    unclassified_topics.csv에 저장합니다 (관리자 검수 대상).
    분야는 주제어 단위라 검색에서는 순위 보조 가점으로만 씁니다 (최종 관련도는 검색 단계에서 기사 문맥으로 판단).
 ⑥ 품목 연결(1·3단계): KOTRA HS 칸(hsCdNm)을 HS 6단위(hs6, 요구사항 기본 단위)·4단위(hs4)로, 없으면 KOTRA 산업분류(indstCl)로 큰 범위만 남깁니다.
@@ -123,17 +123,20 @@ def load_synonyms(path=SYNONYMS_PATH):
 
 
 class Categories(dict):
-    """확정 분류표: 주제어 → "대분류>중분류" (미분류는 넣지 않음).
-    표에 없는 주제어는 lookup()이 같은 분류 규칙(category_rules.assign)으로 정합니다. 표에서 미분류로 정한 말은 그대로 미분류.
-    - 자동 확정: 팀 검수 · 규칙(일치) · 규칙 수정 목록 · LLM 판단 목록 (모두 정확히 같은 말이거나 사람이 본 목록)
-    - 규칙(포함)은 글자만 겹쳐 틀리기 쉬워(은행나무 → '은행' → 거시경제) 확정하지 않고, 후보 분야로 미분류 목록에 남깁니다."""
+    """확정 분류표: 주제어 → "대분류>중분류" (미분류·검수 전 후보는 넣지 않음).
+    표에 없는 주제어는 lookup()이 분류표 생성과 같은 판정(category_rules.classify)으로 정합니다.
+    - 바로 확정: 팀 검수 · 규칙(일치) · 규칙 수정 목록
+    - 규칙(포함) · LLM 판단은 추정이라 팀이 검수한 말만 확정. 검수 전이면 분야를 붙이지 않고 후보 분야로 미분류 목록에
+      (은행나무 → '은행' 포함 → 후보 거시경제). 분류표를 다시 만들어도, 예전 분류표를 읽어도 같은 기준
+    - 표에서 미분류로 정한 말은 규칙 결과로 덮지 않음"""
 
     def __init__(self, table=(), listed=(), rules=True):
         super().__init__(table)
-        self.listed = set(listed) | set(self)   # 표에 있는 주제어 (미분류 포함)
+        self.listed = set(listed) | set(self)   # 표에 있는 주제어 (미분류·후보 포함)
         self.rules = rules
         self._lists = cr.load_lists() if rules else ({}, {})
         self._team = cr.load_decisions() if rules else {}
+        self._reviewed = cr.load_reviewed() if rules else {}
         self._cache = {}
 
     def judge(self, word):
@@ -142,15 +145,15 @@ class Categories(dict):
             return self[word], "", ""
         if word not in self._cache:
             fixes, llm = self._lists
-            big, mid, how, rule_txt = cr.assign(word, fixes, llm, self._team)
+            big, mid, how, rule_txt, cand, cand_how = cr.classify(word, fixes, llm, self._team, self._reviewed)
             if not self.rules:
                 self._cache[word] = (None, "분류표에 없음 (규칙 적용 안 함)", "")
+            elif cand:                             # 규칙(포함)·LLM 판단 추정, 검수 전
+                self._cache[word] = (None, cr.candidate_reason(word, cand_how), cand)
             elif big == "미분류":
                 self._cache[word] = (None, cr.unclassified_reason(word, how, rule_txt, llm), "")
             elif word in self.listed:              # 분류표에서 미분류로 둔 말은 규칙 결과로 덮지 않음
                 self._cache[word] = (None, "분류표에서 미분류로 둠", "")
-            elif how == "규칙(포함)":              # 글자 겹침 추정 — 확정하지 않고 검수 대상으로
-                self._cache[word] = (None, f"규칙(포함) 후보, 검수 전 ('{cr.contains_hit(word)}' 포함)", f"{big}>{mid}")
             else:
                 self._cache[word] = (f"{big}>{mid}", "", "")
         return self._cache[word]
@@ -160,12 +163,16 @@ class Categories(dict):
 
 
 def load_categories(path=CATEGORIES_PATH, rules=True):
-    """확정 분류표를 읽습니다. rules=True면 표에 없는 주제어에 공통 분류 규칙을 적용합니다."""
+    """확정 분류표를 읽습니다. rules=True면 표에 없는 주제어에 공통 분류 규칙을 적용합니다.
+    표의 규칙(포함)·LLM 판단 줄도 팀 검수 여부를 다시 확인합니다 (이 수정 전에 만든 분류표를 읽어도 검수 전 추정은 확정하지 않음)."""
     if not Path(path).exists():
         return Categories(rules=rules)
     with open(path, encoding="utf-8-sig", newline="") as fh:
         rows = [r for r in csv.DictReader(fh) if r.get("주제어")]
-    table = {normalize(r["주제어"]): f'{r["대분류"]}>{r["중분류"]}' for r in rows if r.get("대분류") not in ("", "미분류")}
+    reviewed = cr.load_reviewed() if rules else None
+    confirmed = lambda r: r.get("대분류") not in ("", "미분류") and not (
+        reviewed is not None and r.get("배정방법") in cr.ESTIMATED and reviewed.get(r["주제어"]) != (r["대분류"], r["중분류"]))
+    table = {normalize(r["주제어"]): f'{r["대분류"]}>{r["중분류"]}' for r in rows if confirmed(r)}
     return Categories(table, (normalize(r["주제어"]) for r in rows), rules)
 
 

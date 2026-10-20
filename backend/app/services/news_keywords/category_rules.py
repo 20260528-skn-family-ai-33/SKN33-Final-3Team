@@ -7,6 +7,9 @@
   3) 규칙 수정: 규칙 결과가 글자만 겹쳐 틀린 경우 바로잡은 목록(category_rule_fixes.csv, 규칙 결과·이유 기록)
   4) LLM 판단: 규칙에 하나도 안 걸린 말의 분야를 LLM이 뜻으로 정한 목록(category_llm.csv)
   5) 검수 필요: 위 어디에도 없거나 "미분류"로 둔 말
+확정 기준 (classify): 팀 검수 · 규칙(일치) · 규칙 수정은 바로 확정. 규칙(포함) · LLM 판단은 추정이라
+팀이 그 분류를 O로 확인한 경우(category_decisions.csv)만 확정하고, 나머지는 "검수 필요" + 후보 분야로 남깁니다.
+분류표를 다시 만들어도, 기사를 다시 처리해도 같은 함수로 판정하므로 결과가 같습니다.
 기준·과정 설명은 CLASSIFICATION_RULES.md
 """
 import csv
@@ -104,6 +107,32 @@ def assign(word, fixes=None, llm=None, team=None):
     if word in llm and llm[word][0] != "미분류":
         return (*llm[word], "LLM 판단", "")
     return "미분류", "미분류", "검수 필요", ""
+
+
+ESTIMATED = ("규칙(포함)", "LLM 판단")   # 추정 결과 — 팀 검수를 거쳐야 확정
+
+
+def load_reviewed(name="category_decisions.csv"):
+    """팀이 O로 확인한 분류: 주제어 → (대분류, 중분류). 규칙(포함)·LLM 판단 결과가 이 분류와 같으면 사람이 확인한 것.
+    (X는 팀이 고른 분류가 assign에서 '팀 검수'로 먼저 적용되므로 여기 넣지 않음)"""
+    return {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read(name) if r.get("판정") == "O"}
+
+
+def classify(word, fixes=None, llm=None, team=None, reviewed=None):
+    """분류표 생성과 기사 처리가 함께 쓰는 단일 판정 → (대분류, 중분류, 배정방법, 규칙 결과, 후보 분야, 후보 근거).
+    규칙(포함)·LLM 판단은 추정이라, 팀이 그 분류를 O로 확인한 경우(reviewed)만 확정하고, 아니면 "검수 필요" + 후보 분야로 돌려줍니다.
+    규칙이 바뀌어 예전에 확인한 분류와 결과가 달라져도 다시 검수 대상이 됩니다. reviewed=None이면 검수 여부를 보지 않음 (assign과 같음)."""
+    big, mid, how, rule_txt = assign(word, fixes, llm, team)
+    if reviewed is not None and how in ESTIMATED and reviewed.get(word) != (big, mid):
+        return "미분류", "미분류", "검수 필요", rule_txt, f"{big}>{mid}", how
+    return big, mid, how, rule_txt, "", ""
+
+
+def candidate_reason(word, cand_how):
+    """후보 분야만 있는 말의 미분류 이유. 후보는 추정일 뿐이라 틀릴 수 있음을 그대로 적습니다."""
+    if cand_how == "규칙(포함)":
+        return f"'{contains_hit(word)}' 글자가 들어 있어 추정만 함, 확정 안 함 (검수 전)"
+    return f"{cand_how}으로 추정만 함, 확정 안 함 (검수 전)"
 
 
 def unclassified_reason(word, how, rule_txt, llm=None):

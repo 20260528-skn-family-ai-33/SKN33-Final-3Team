@@ -8,7 +8,8 @@
 - 대중분류_검수용.xlsx: topic_categories.csv 중 사람이 볼 줄(검수 필요 · 규칙(포함) · 규칙 수정 · LLM 판단) + 왜 붙었나 + 예시 기사 제목
 - 미분류_예시기사.xlsx: 분야를 정하지 못한 주제어 전체(keyword_clean.py가 만든 unclassified_topics.csv, 기사 수 많은 순)와
   단어마다 최신 기사 최대 10건 (회의 결정: 예시 기사를 보고 분야를 정함). 빈도로 빼지 않고 "전체 기사 수"로 걸러 봄
-  · 규칙(포함)으로 추정만 된 말은 "후보 분야"가 채워져 있음 → 맞으면 그 분류, 틀리면 다른 분류나 "미분류로 둠"
+  · 글자 겹침(규칙 포함)·LLM 판단으로 추정만 된 말은 "후보 분야"가 채워져 있음 (틀릴 수 있음: 은행나무 → '은행' → 거시경제)
+    → 맞으면 그 분류, 틀리면 다른 분류나 "미분류로 둠"
 
 실행: python backend/app/services/news_keywords/build/review_files.py [--out-dir 폴더]
 """
@@ -109,7 +110,12 @@ def category_rows():
     rv["_o"] = rv.배정방법.map(order); rv["_n"] = rv.기사수.astype(int)
     rv = rv.sort_values(["_o", "_n", "주제어"], ascending=[True, False, True])
 
+    cands = dict(zip(rv.주제어, rv.get("후보 분야", pd.Series([""] * len(rv), index=rv.index))))
+
     def why(w, how, rule_txt):
+        if how == "검수 필요" and cands.get(w):
+            src = f"'{bc.cr.contains_hit(w)}' 글자가 들어 있어 추정" if rule_txt else "LLM 판단으로 추정"
+            return f"후보: {cands[w].replace('>', ' > ')} ({src}, 틀릴 수 있음), 확정 안 함 — 맞으면 X + 그 분류, 아니면 O(미분류 유지)"
         if how == "규칙(포함)":
             for big, mid, keys in bc.TAX:
                 hit = [k for k in keys.split() if len(k) >= 2 and k.upper() in w.upper()]
@@ -145,7 +151,7 @@ def category_file(out_dir, res):
         ("이 파일은?", f"대/중분류(topic_categories.csv) 중 사람이 확인해야 하는 {len(rv)}줄. 규칙(일치)은 확실해서 제외."),
         ("무엇을 하나", "지금 분류가 맞으면 '팀 확인'에 O, 틀리면 X + '맞는 분류'를 드롭다운에서 선택, 애매하면 △ (반영하지 않고 회의에서 결정)"),
         ("판단 기준", "이 주제어가 들어간 기사가 주로 어떤 분야 이야기인가? ('예시 기사 제목' 참고)"),
-        (f"검수 필요 ({n_need}줄)", "분야를 못 정한 말. 맞는 분류를 고르거나 '미분류로 둠' (미분류_예시기사.xlsx 참고)"),
+        (f"검수 필요 ({n_need}줄)", "분야를 못 정한 말, 또는 규칙(포함)·LLM 판단 후보만 있고 검수 전인 말('왜' 칸에 후보). 맞는 분류를 X로 고르거나 O(미분류 유지)"),
         (f"규칙(포함) ({n_inc}줄)", "분류 키워드를 글자로 포함해 자동으로 붙은 것. 글자만 겹친 실수가 있을 수 있음"),
         (f"규칙 수정 ({n_fix}줄)", "규칙 결과가 글자만 겹쳐 틀려서 바로잡은 것 (category_rule_fixes.csv)"),
         (f"LLM 판단 ({n_llm}줄)", "규칙에 하나도 안 걸려 LLM이 뜻으로 배정한 것 (category_llm.csv)"),
@@ -197,7 +203,7 @@ def unclassified_file(out_dir, res):
                          "같이 나온 주제어": r.kw_topic.replace("|", ", "), "다른 주제어의 분야": r.kw_category.replace("|", ", "),
                          "KOTRA 산업분류": r.indstCl, "기사ID": r.bbstxSn})
     summ = pd.DataFrame({"단어": un.주제어, "전체 기사 수": un.기사수.astype(int), "미분류 이유": un["미분류 이유"],
-                         "후보 분야 (규칙 포함 추정)": un["후보 분야"], "정한 분류 (대 > 중)": "", "의견": ""})
+                         "후보 분야 (글자 겹침·LLM 추정, 틀릴 수 있음)": un["후보 분야"], "정한 분류 (대 > 중)": "", "의견": ""})
     wb = Workbook()
     write_sheet(wb.active, summ, [14, 12, 40, 34, 34, 40])
     wb.active.title = f"단어 {len(summ)}개"

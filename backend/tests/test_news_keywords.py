@@ -268,7 +268,7 @@ class CategoryTest(unittest.TestCase):
         for word, cand, hit in [("은행나무", "경제·시장>거시경제", "은행"), ("소금물", "산업·품목>품목 (→ HS 코드로 연결)", "소금"),
                                 ("반덤핑신규분석", "무역·통상>관세·무역규제", "반덤핑")]:
             self.assertEqual(self.run_one(word)["kw_category"], [])
-            self.assertEqual(self.CAT.judge(word), (None, f"규칙(포함) 후보, 검수 전 ('{hit}' 포함)", cand))
+            self.assertEqual(self.CAT.judge(word), (None, f"'{hit}' 글자가 들어 있어 추정만 함, 확정 안 함 (검수 전)", cand))
 
     def test_rules_without_table(self):
         """분류: 분류표 파일이 없어도(빈 표) 기사 처리에서 규칙(일치)은 적용됨"""
@@ -292,9 +292,72 @@ class CategoryTest(unittest.TestCase):
         self.assertEqual(un.주제어.tolist(), ["상반기", "ZZ희귀어", "은행나무"])  # 분류된 반덤핑은 없음, 기사 수 많은 순
         self.assertEqual(un.기사수.tolist(), [2, 1, 1])                     # 한 기사에 두 번 나와도 1건
         self.assertEqual(un["미분류 이유"].tolist(), ["팀 검수에서 미분류로 정함", "분류 규칙에 해당하는 말이 없음",
-                                                "규칙(포함) 후보, 검수 전 ('은행' 포함)"])
+                                                "'은행' 글자가 들어 있어 추정만 함, 확정 안 함 (검수 전)"])
         self.assertEqual(un["후보 분야"].tolist(), ["", "", "경제·시장>거시경제"])
         self.assertIn("(2)", un.loc[0, "최근 기사"])
+
+    def test_estimates_need_review(self):
+        """분류: 규칙(포함)·LLM 판단은 팀이 검수한 말만 확정 (지속가능성·경제 유지), 검수 전이면 후보 (은행나무·제조업)"""
+        fixes, llm = kc.cr.load_lists()
+        team, reviewed = kc.cr.load_decisions(), kc.cr.load_reviewed()
+        c = lambda w: kc.cr.classify(w, fixes, llm, team, reviewed)
+        self.assertEqual(c("지속가능성")[:3], ("에너지·환경", "친환경·ESG·기후", "규칙(포함)"))   # 검수된 포함
+        self.assertEqual(c("경제")[:3], ("경제·시장", "거시경제", "LLM 판단"))                    # 검수된 LLM 판단
+        self.assertEqual(c("은행나무")[2:], ("검수 필요", "경제·시장 > 거시경제", "경제·시장>거시경제", "규칙(포함)"))
+        self.assertEqual(c("제조업")[2], "검수 필요")                                            # 검수 전 LLM 판단
+        self.assertEqual(c("제조업")[5], "LLM 판단")
+        self.assertEqual(self.run_one("지속가능성,제조업")["kw_category"], ["에너지·환경>친환경·ESG·기후"])
+        self.assertEqual(self.CAT.judge("제조업")[1:], ("LLM 판단으로 추정만 함, 확정 안 함 (검수 전)", "산업·품목>품목 (→ HS 코드로 연결)"))
+
+    def test_pipeline_rebuild_keeps_candidates(self):
+        """운영 순서 전체: 키워드 정리 → 분류표 생성 → 키워드 재처리를 해도 검수 전 추정(은행나무·소재지·소금물)은 확정되지 않음.
+        규칙(일치) 새 단어(쿼터)와 검수된 포함(지속가능성)은 확정. 두 번 돌려도 결과가 같음"""
+        import importlib.util as iu
+        spec = iu.spec_from_file_location("bc", kc.BASE / "build" / "build_categories.py")
+        bc = iu.module_from_spec(spec); spec.loader.exec_module(bc)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            pd.DataFrame({"bbstxSn": [str(i) for i in range(10)], "othbcDt": ["2026-10-01"] * 10, "natn": ["미국"] * 10,
+                          "newsTitl": ["가"] * 10, "kwrd": ["은행나무,소재지,소금물,쿼터,지속가능성"] * 10}
+                         ).to_csv(tmp / "raw.csv", index=False, encoding="utf-8-sig")
+            kc.run(tmp / "raw.csv", tmp / "o1", categories_path=tmp / "없음.csv")         # ① 정리 (분류표 없음)
+            table = bc.build(tmp / "o1" / "news_keywords_clean.csv")                          # ② 분류표 생성
+            table.to_csv(tmp / "tc.csv", index=False, encoding="utf-8-sig")
+            t = table.set_index("주제어")
+            self.assertEqual(t.loc["은행나무", "배정방법"], "검수 필요")
+            self.assertEqual(t.loc["은행나무", "후보 분야"], "경제·시장>거시경제")
+            self.assertEqual(t.loc["쿼터", "배정방법"], "규칙(일치)")
+            self.assertEqual(t.loc["지속가능성", "배정방법"], "규칙(포함)")
+            outs = []
+            for n in ("o2", "o3"):                                                             # ③ 재처리 (두 번)
+                out, _ = kc.run(tmp / "raw.csv", tmp / n, categories_path=tmp / "tc.csv")
+                outs.append((out.kw_category[0], pd.read_csv(tmp / n / "unclassified_topics.csv", dtype=str, keep_default_na=False)))
+            cats, un = outs[0]
+            self.assertEqual(set(cats.split("|")), {"무역·통상>관세·무역규제", "에너지·환경>친환경·ESG·기후"})
+            self.assertEqual(set(un.주제어), {"은행나무", "소재지", "소금물"})
+            self.assertTrue((un["후보 분야"] != "").all() and un["미분류 이유"].str.contains("검수 전").all())
+            self.assertEqual(outs[0][0], outs[1][0])
+            self.assertTrue(outs[0][1].equals(outs[1][1]))
+
+    def test_reviewed_means_same_category(self):
+        """분류: 팀이 O로 확인한 분류와 지금 규칙 결과가 다르면(규칙이 바뀜) 다시 검수 대상"""
+        fixes, llm = kc.cr.load_lists()
+        team = kc.cr.load_decisions()
+        same = kc.cr.classify("지속가능성", fixes, llm, team, {"지속가능성": ("에너지·환경", "친환경·ESG·기후")})
+        moved = kc.cr.classify("지속가능성", fixes, llm, team, {"지속가능성": ("경제·시장", "거시경제")})
+        self.assertEqual(same[2], "규칙(포함)")
+        self.assertEqual(moved[2:5], ("검수 필요", "에너지·환경 > 친환경·ESG·기후", "에너지·환경>친환경·ESG·기후"))
+
+    def test_old_table_estimates_not_confirmed(self):
+        """분류: 이 수정 전에 만든 분류표(검수 전 포함·LLM 판단이 확정으로 저장됨)를 읽어도 확정하지 않음"""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / "old.csv"
+            pd.DataFrame({"주제어": ["은행나무", "제조업", "지속가능성"], "대분류": ["경제·시장", "산업·품목", "에너지·환경"],
+                          "중분류": ["거시경제", "품목 (→ HS 코드로 연결)", "친환경·ESG·기후"],
+                          "배정방법": ["규칙(포함)", "LLM 판단", "규칙(포함)"]}).to_csv(p, index=False, encoding="utf-8-sig")
+            cat = kc.load_categories(p)
+        self.assertEqual(dict(cat), {"지속가능성": "에너지·환경>친환경·ESG·기후"})
+        self.assertEqual(cat.judge("은행나무")[2], "경제·시장>거시경제")
 
     def test_unclassified_same_article_counted_once(self):
         """미분류 목록: 같은 기사 ID가 두 줄로 들어와도 기사 수 1건, 예시도 한 번만"""
