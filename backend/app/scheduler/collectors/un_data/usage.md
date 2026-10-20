@@ -12,7 +12,7 @@ python -m pip install -r backend/requirements.txt
 python -m backend.app.scheduler.jobs.un_data_load --validate-only
 ```
 
-`.env.un.sample`의 필요한 설정을 기존 루트 `.env`에 병합합니다.
+루트 `.env.sample`의 `UN 데이터 적재 설정`과 MySQL 항목을 참고해 루트 `.env`에 설정합니다.
 `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`, `UN_COMTRADE_API_KEY`를 설정합니다.
 실제 키·비밀번호는 커밋하지 않습니다. 환경변수가 `.env`보다 우선합니다.
 
