@@ -1,7 +1,9 @@
 """한국은행 ECOS 일별 환율(731Y001 주요국 통화의 대원화환율)을 조회합니다. 호출과 파싱·검증만 담당하고 DB에는 쓰지 않습니다.
 
 실행 (저장소 루트에서): python -m backend.app.scheduler.collectors.ecos.ecos_collect --start 2026-10-01 --end 2026-10-07 [--items 0000001,0000002]
-- 인증키는 저장소 루트 .env의 ecos 또는 ECOS_API_KEY 값을 씁니다 (대소문자 구분 없음, 환경변수가 있으면 우선).
+- 인증키는 ecos 또는 ECOS_API_KEY 값을 씁니다 (대소문자 구분 없음). 환경변수를 먼저 보고, 없을 때만 저장소 루트 .env를 봅니다.
+- 여러 페이지로 받을 때 첫 페이지의 전체 건수(list_total_count)와 실제로 받은 건수가 다르거나
+  중간 페이지가 비어 있으면 EcosError로 멈춥니다 (일부만 받은 기간을 정상 수집으로 저장하지 않게).
 - 반환값은 (기준일, 환율) 목록입니다. 기준일은 응답의 TIME(원천 영업일)이며 실행한 날짜가 아닙니다.
 - 환율은 Decimal 그대로 돌려줍니다. JPY처럼 100단위 통화도 나누지 않습니다 (currency.quote_unit이 단위를 뜻함).
 - 조회 기간에 자료가 없으면(주말·휴일만 조회, INFO-200) 빈 목록입니다. 인증·요청 오류는 EcosError로 알립니다.
@@ -46,11 +48,14 @@ class EcosError(Exception):
 
 
 def load_key(env_path=ENV_PATH):
-    values = {k.lower(): v for k, v in {**dotenv_values(env_path), **os.environ}.items() if v}
-    key = next((values[name].strip() for name in ENV_KEYS if values.get(name, "").strip()), "")
-    if not key:
-        raise EcosError(f"{env_path}에 ECOS 인증키(ecos 또는 ECOS_API_KEY)가 없습니다.")
-    return key
+    """환경변수에서 두 별칭(ecos·ECOS_API_KEY)을 먼저 찾고, 없을 때만 .env에서 찾습니다.
+    (.env의 ecos가 서버 환경변수 ECOS_API_KEY를 이기면 키를 교체해도 옛 키를 계속 쓰게 됨)"""
+    for source in (os.environ, dotenv_values(env_path)):
+        values = {k.lower(): (v or "").strip() for k, v in source.items()}
+        key = next((values[name] for name in ENV_KEYS if values.get(name)), "")
+        if key:
+            return key
+    raise EcosError(f"환경변수와 {env_path}에 ECOS 인증키(ecos 또는 ECOS_API_KEY)가 없습니다.")
 
 
 def mask(text, key):
@@ -134,15 +139,25 @@ def fetch_daily(key, item_code, start, end, quote_unit=None):
     quote_unit(예: JPY 100)을 주면 응답의 금액 단위·기준 수량이 다를 때 EcosError로 멈춥니다."""
     if start > end:
         raise EcosError(f"시작일이 종료일보다 늦습니다: {start} > {end}")
-    rows, requests_made, first = [], 0, 1
+    rows, requests_made, first, expected = [], 0, 1, None
     while True:
         payload, calls = get_json(page_url(key, item_code, start, end, first, first + PAGE_SIZE - 1), key)
         requests_made += calls
         total, page = parse_page(payload, item_code, quote_unit)
+        if expected is None:
+            expected = total  # 첫 페이지가 알려준 전체 건수. 자료 없음(INFO-200)이면 0
+        if not page:
+            if rows:  # 앞 페이지는 받았는데 다음 페이지가 비어 있음: 일부 누락이므로 저장하지 않음
+                raise EcosError(f"다음 페이지가 비어 있습니다: {item_code} {len(rows)}/{expected}건", retryable=True)
+            break
+        if total != expected:  # 받는 도중 원천 건수가 바뀜
+            raise EcosError(f"페이지마다 전체 건수가 다릅니다: {item_code} {expected} → {total}건", retryable=True)
         rows += page
         first += PAGE_SIZE
-        if not page or first > total:
+        if first > expected:
             break
+    if len(rows) != expected:
+        raise EcosError(f"받은 건수가 전체 건수와 다릅니다: {item_code} {len(rows)}/{expected}건", retryable=True)
     dates = [d for d, _ in rows]
     if len(dates) != len(set(dates)):
         raise EcosError(f"같은 기준일이 중복된 응답: {item_code}")

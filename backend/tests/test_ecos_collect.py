@@ -84,6 +84,28 @@ class FetchTest(unittest.TestCase):
         self.assertIn("/1/1/731Y001/D/20261001/20261002/0000001", get.call_args_list[0].args[0])
         self.assertIn("/2/2/", get.call_args_list[1].args[0])
 
+    def test_empty_next_page_is_error_not_partial_success(self):
+        # 전체 2건이라고 한 뒤 다음 페이지가 자료 없음(INFO-200): 1건만 받고 성공 처리하면 안 됨
+        pages = [ok([("0000001", "20261001", "1390")], total=2), result("INFO-200")]
+        with patch.object(ec, "PAGE_SIZE", 1), patch.object(ec.requests, "get", side_effect=[response(p) for p in pages]):
+            with self.assertRaises(ec.EcosError) as caught:
+                ec.fetch_daily(KEY, "0000001", date(2026, 10, 1), date(2026, 10, 2))
+        self.assertIn("1/2", str(caught.exception))
+
+    def test_received_count_must_match_total(self):
+        # 페이지 크기보다 적게 와서 전체 건수를 못 채운 경우
+        pages = [ok([("0000001", "20261001", "1390")], total=3), ok([("0000001", "20261002", "1391")], total=3)]
+        with patch.object(ec, "PAGE_SIZE", 2), patch.object(ec.requests, "get", side_effect=[response(p) for p in pages]):
+            with self.assertRaises(ec.EcosError) as caught:
+                ec.fetch_daily(KEY, "0000001", date(2026, 10, 1), date(2026, 10, 3))
+        self.assertIn("2/3", str(caught.exception))
+
+    def test_total_changing_between_pages_is_error(self):
+        pages = [ok([("0000001", "20261001", "1390")], total=2), ok([("0000001", "20261002", "1391")], total=3)]
+        with patch.object(ec, "PAGE_SIZE", 1), patch.object(ec.requests, "get", side_effect=[response(p) for p in pages]):
+            with self.assertRaises(ec.EcosError):
+                ec.fetch_daily(KEY, "0000001", date(2026, 10, 1), date(2026, 10, 2))
+
     def test_weekend_only_returns_empty(self):
         with patch.object(ec.requests, "get", return_value=response(result("INFO-200"))):
             self.assertEqual(ec.fetch_daily(KEY, "0000001", date(2026, 10, 3), date(2026, 10, 4)), ([], 1))
@@ -123,6 +145,18 @@ class KeyTest(unittest.TestCase):
             with self.subTest(name=name), patch.object(ec, "dotenv_values", return_value={name: " abc "}), \
                     patch.dict(ec.os.environ, {}, clear=True):
                 self.assertEqual(ec.load_key(), "abc")
+
+    def test_environment_variable_wins_even_with_other_alias(self):
+        # .env에는 옛 키(ecos), 서버 환경변수에는 새 키(ECOS_API_KEY): 환경변수의 새 키를 써야 함
+        with patch.object(ec, "dotenv_values", return_value={"ecos": "OLD"}), \
+                patch.dict(ec.os.environ, {"ECOS_API_KEY": "NEW"}, clear=True):
+            self.assertEqual(ec.load_key(), "NEW")
+        with patch.object(ec, "dotenv_values", return_value={"ECOS_API_KEY": "OLD"}), \
+                patch.dict(ec.os.environ, {"ecos": "NEW"}, clear=True):
+            self.assertEqual(ec.load_key(), "NEW")
+        with patch.object(ec, "dotenv_values", return_value={"ecos": "FROM_DOTENV"}), \
+                patch.dict(ec.os.environ, {"ECOS_API_KEY": "  "}, clear=True):  # 빈 환경변수는 없는 것으로 봄
+            self.assertEqual(ec.load_key(), "FROM_DOTENV")
 
     def test_missing_key(self):
         with patch.object(ec, "dotenv_values", return_value={}), patch.dict(ec.os.environ, {}, clear=True):
