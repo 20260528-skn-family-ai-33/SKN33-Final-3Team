@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "snapshot_date": "2026-10-15",
+  "policy": "HS2022_original_only",
+  "reason_codes": {
+    "HS2022_ONLY": "팀의 HS2022 전용 정책에 따라 구판 관측 행을 초기 적재 대상에서 제외함. 금액 0 또는 UN의 영구 미제공을 뜻하지 않음."
+  },
+  "source": {
+    "git_commit": "ba30185003272a002024415d2e0c9ff2529accf3",
+    "path": "data/un_data/un_data.csv",
+    "sha256": "485985a82ca11825140bcbf12bad7a7a55f5fc69c21d894211384105b4ea621a",
+    "rows": 76191
+  },
+  "included": {
+    "path": "data/un_data/un_data.csv",
+    "sha256": "5f697829dd1f0f6e14281b6ff785ff30d53277907c68518d22bf0862a7d84389",
+    "rows": 67550,
+    "country_count": 137
+  },
+  "excluded": {
+    "path": "data/un_data/hs2022_exclusions.csv",
+    "sha256": "805bf750f8c0d7386140ac2efeec47b84bf7924a3c6dc8acb647ad7a9189a02e",
+    "rows": 8641,
+    "fully_excluded_countries": [
+      "AG",
+      "CV",
+      "DZ",
+      "FO",
+      "GD",
+      "GY",
+      "IQ",
+      "KY",
+      "LB",
+      "MS",
+      "PF",
+      "PS",
+      "SR",
+      "TO",
+      "WS",
+      "YE"
+    ],
+    "partially_excluded_countries": [
+      "AO",
+      "AR",
+      "AZ",
+      "BB",
+      "BF",
+      "BH",
+      "BI",
+      "BM",
+      "BN",
+      "BR",
+      "BS",
+      "BZ",
+      "CD",
+      "CF",
+      "CG",
+      "DO",
+      "EC",
+      "EG",
+      "FJ",
+      "GH",
+      "GT",
+      "ID",
+      "IN",
+      "KI",
+      "LK",
+      "LR",
+      "LS",
+      "MD",
+      "ML",
+      "MM",
+      "MR",
+      "MX",
+      "MZ",
+      "NG",
+      "PH",
+      "PK",
+      "RW",
+      "SC",
+      "ST",
+      "TG",
+      "TN",
+      "TT",
+      "UA",
+      "UZ",
+      "ZW"
+    ],
+    "rows_by_source_hs_ver": {
+      "HS2002": 16,
+      "HS2007": 904,
+      "HS2012": 1300,
+      "HS2017": 6421
+    },
+    "rows_by_year": {
+      "2022": 3965,
+      "2023": 2206,
+      "2024": 1517,
+      "2025": 665,
+      "2026": 288
+    }
+  },
+  "included_value_counts": {
+    "total_import_usd": {
+      "null_or_blank": 1,
+      "zero_value": 0
+    },
+    "korea_import_usd": {
+      "null_or_blank": 17124,
+      "zero_value": 0
+    },
+    "korea_share_pct": {
+      "null_or_blank": 17125,
+      "zero_value": 1
+    }
+  },
+  "interpretation": "초기 스냅샷의 과거 제외 이력이며 현재 조회 결과의 상태 코드가 아님. 이후 같은 국가·품목·주기에 HS2022 실적이 적재되면 실제 조회 결과를 우선함. NULL 상세 원인은 최초 RAW 증거 없이 추정하지 않음."
+}
