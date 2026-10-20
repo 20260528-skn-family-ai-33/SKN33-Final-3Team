@@ -7,6 +7,10 @@
 - 반환값은 (기준일, 환율) 목록입니다. 기준일은 응답의 TIME(원천 영업일)이며 실행한 날짜가 아닙니다.
 - 환율은 Decimal 그대로 돌려줍니다. JPY처럼 100단위 통화도 나누지 않습니다 (currency.quote_unit이 단위를 뜻함).
 - 조회 기간에 자료가 없으면(주말·휴일만 조회, INFO-200) 빈 목록입니다. 인증·요청 오류는 EcosError로 알립니다.
+- 타임아웃·접속 오류·5xx·ECOS 서버 오류와 함께, HTTP 200인데 JSON이 아닌 응답(점검·안내 HTML 페이지 등)도 일시 오류로 보고
+  RETRIES번까지 다시 부릅니다. 인증키 오류·4xx처럼 다시 불러도 같은 오류는 바로 멈춥니다.
+- stats(dict)를 넘기면 실제로 보낸 요청 수(requests)와 응답에 들어 있던 원본 행 수(received)를 누적합니다.
+  중간에 실패해도 그때까지의 값이 남으므로 batch_run에 실제 호출 횟수를 기록할 수 있습니다.
 - 금액 단위도 행마다 확인합니다. 단위(UNIT_NAME)가 '원'이 아니거나, 항목명(ITEM_NAME1)의 기준 수량(예: '원/일본엔(100엔)'의 100)이
   호출한 쪽이 준 quote_unit(currency.quote_unit)과 다르면 EcosError로 멈춥니다 (잘못된 단위의 값을 저장하지 않게).
 - 인증키가 들어간 URL은 로그·예외 메시지에 남기지 않습니다.
@@ -108,15 +112,21 @@ def parse_page(payload, item_code, quote_unit=None):
     return int(body.get("list_total_count", len(rows))), rows
 
 
-def get_json(url, key):
-    """일시 오류(타임아웃·접속 오류·5xx·ECOS 서버 오류)만 RETRIES번까지 다시 부릅니다. (응답, 호출 횟수)를 돌려줍니다."""
+def get_json(url, key, stats=None):
+    """일시 오류(타임아웃·접속 오류·5xx·ECOS 서버 오류·JSON이 아닌 안내 페이지)만 RETRIES번까지 다시 부릅니다.
+    (응답, 호출 횟수)를 돌려줍니다. stats를 주면 요청을 보낼 때마다 stats["requests"]를 1 늘립니다 (실패해도 남음)."""
     for attempt in range(1, RETRIES + 1):
+        if stats is not None:
+            stats["requests"] = stats.get("requests", 0) + 1
         try:
             response = requests.get(url, timeout=TIMEOUT)
             if response.status_code >= 500:
                 raise EcosError(f"ECOS HTTP {response.status_code}", retryable=True)
             response.raise_for_status()
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError:  # HTTP 200인데 JSON이 아님: 점검·안내 페이지 등 일시적인 비정상 응답
+                raise EcosError("ECOS 응답이 JSON이 아닙니다 (점검·안내 페이지 등)", retryable=True) from None
             if isinstance(payload, dict) and payload.get("RESULT", {}).get("CODE") in RETRY_CODES:
                 raise EcosError(f"ECOS 오류 {payload['RESULT']['CODE']}", payload["RESULT"]["CODE"], True)
             return payload, attempt
@@ -134,15 +144,20 @@ def get_json(url, key):
     raise last
 
 
-def fetch_daily(key, item_code, start, end, quote_unit=None):
+def fetch_daily(key, item_code, start, end, quote_unit=None, stats=None):
     """item_code 통화의 start~end(양끝 포함) 일별 환율. ([(기준일, 환율)], API 호출 횟수)를 돌려줍니다.
-    quote_unit(예: JPY 100)을 주면 응답의 금액 단위·기준 수량이 다를 때 EcosError로 멈춥니다."""
+    quote_unit(예: JPY 100)을 주면 응답의 금액 단위·기준 수량이 다를 때 EcosError로 멈춥니다.
+    stats(dict)를 주면 요청 수(requests)와 응답의 원본 행 수(received)를 누적합니다. 예외로 끝나도 그때까지 값이 남습니다."""
     if start > end:
         raise EcosError(f"시작일이 종료일보다 늦습니다: {start} > {end}")
     rows, requests_made, first, expected = [], 0, 1, None
     while True:
-        payload, calls = get_json(page_url(key, item_code, start, end, first, first + PAGE_SIZE - 1), key)
+        payload, calls = get_json(page_url(key, item_code, start, end, first, first + PAGE_SIZE - 1), key, stats)
         requests_made += calls
+        if stats is not None:  # 검증 전에 응답에 들어 있던 행 수 (DB 반영 건수와 다름)
+            body = payload.get("StatisticSearch") if isinstance(payload, dict) else None
+            raw = body.get("row") if isinstance(body, dict) else None
+            stats["received"] = stats.get("received", 0) + (len(raw) if isinstance(raw, list) else 0)
         total, page = parse_page(payload, item_code, quote_unit)
         if expected is None:
             expected = total  # 첫 페이지가 알려준 전체 건수. 자료 없음(INFO-200)이면 0

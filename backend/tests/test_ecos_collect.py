@@ -22,6 +22,14 @@ def ok(rows, total=None, unit="원"):
         for item, time, value in rows]}}
 
 
+def html_page(error=ValueError):
+    """HTTP 200인데 JSON 대신 점검 안내 HTML을 준 응답."""
+    res = MagicMock(status_code=200)
+    res.json.side_effect = error("Expecting value: line 1 column 1 (char 0)")
+    res.raise_for_status.return_value = None
+    return res
+
+
 def result(code, message="메시지"):
     return {"RESULT": {"CODE": code, "MESSAGE": message}}
 
@@ -124,6 +132,46 @@ class FetchTest(unittest.TestCase):
         self.assertTrue(caught.exception.retryable)
         self.assertNotIn(KEY, str(caught.exception))
 
+    def test_html_notice_page_is_retried(self):
+        # 데이터 대신 안내 페이지(HTML)를 주면 일시 오류로 보고 다시 부름 (requests의 JSONDecodeError도 ValueError)
+        for error in (ValueError, requests.exceptions.JSONDecodeError):
+            replies = [html_page(error) if error is ValueError else _json_decode_page(), html_page(),
+                       response(ok([("0000001", "20261001", "1390")]))]
+            with self.subTest(error=error.__name__), patch.object(ec.requests, "get", side_effect=replies) as get:
+                rows, calls = ec.fetch_daily(KEY, "0000001", date(2026, 10, 1), date(2026, 10, 1))
+                self.assertEqual((len(rows), calls, get.call_count), (1, 3, 3))
+
+    def test_html_notice_page_until_limit_is_retryable_error(self):
+        with patch.object(ec.requests, "get", side_effect=[html_page() for _ in range(ec.RETRIES)]) as get:
+            with self.assertRaises(ec.EcosError) as caught:
+                ec.fetch_daily(KEY, "0000001", date(2026, 10, 1), date(2026, 10, 1))
+        self.assertEqual(get.call_count, ec.RETRIES)
+        self.assertTrue(caught.exception.retryable)
+        self.assertIn("JSON", str(caught.exception))
+
+    def test_stats_keep_requests_when_all_retries_fail(self):
+        stats = {"requests": 0, "received": 0}
+        with patch.object(ec.requests, "get", side_effect=requests.ConnectionError("x")):
+            with self.assertRaises(ec.EcosError):
+                ec.fetch_daily(KEY, "0000001", date(2026, 10, 1), date(2026, 10, 1), stats=stats)
+        self.assertEqual(stats, {"requests": ec.RETRIES, "received": 0})  # 실패해도 실제로 보낸 3번이 남음
+
+    def test_stats_keep_rows_received_before_failure(self):
+        # 1페이지(1건)는 받고 2페이지가 비어 실패: 요청 2번, 원본 1건이 남아야 함
+        stats = {"requests": 0, "received": 0}
+        pages = [ok([("0000001", "20261001", "1390")], total=2), result("INFO-200")]
+        with patch.object(ec, "PAGE_SIZE", 1), patch.object(ec.requests, "get", side_effect=[response(p) for p in pages]):
+            with self.assertRaises(ec.EcosError):
+                ec.fetch_daily(KEY, "0000001", date(2026, 10, 1), date(2026, 10, 2), stats=stats)
+        self.assertEqual(stats, {"requests": 2, "received": 1})
+
+    def test_stats_on_success_match_return_value(self):
+        stats = {"requests": 0, "received": 0}
+        replies = [requests.Timeout("t"), response(ok([("0000001", "20261001", "1390"), ("0000001", "20261002", "1391")]))]
+        with patch.object(ec.requests, "get", side_effect=replies):
+            rows, calls = ec.fetch_daily(KEY, "0000001", date(2026, 10, 1), date(2026, 10, 2), stats=stats)
+        self.assertEqual(stats, {"requests": calls, "received": len(rows)})
+
     def test_client_error_is_not_retried_and_key_is_masked(self):
         with patch.object(ec.requests, "get", return_value=response({}, 404)) as get:
             with self.assertRaises(ec.EcosError) as caught:
@@ -137,6 +185,10 @@ class FetchTest(unittest.TestCase):
             with self.subTest(rows=rows), patch.object(ec.requests, "get", return_value=response(ok(rows))):
                 with self.assertRaises(ec.EcosError):
                     ec.fetch_daily(KEY, "0000001", date(2026, 10, 1), date(2026, 10, 2))
+
+
+def _json_decode_page():
+    return html_page(lambda message: requests.exceptions.JSONDecodeError(message, "<html>", 0))
 
 
 class KeyTest(unittest.TestCase):

@@ -23,10 +23,15 @@ RATES = {"0000001": [(D1, Decimal("1390.5")), (D2, Decimal("1391"))],
 
 
 def fake_fetch(rates):
-    def fetch(key, item_code, start, end, quote_unit=None):
+    def fetch(key, item_code, start, end, quote_unit=None, stats=None):
+        if stats is not None:
+            stats["requests"] += 1
         if isinstance(rates.get(item_code), Exception):
             raise rates[item_code]
-        return [(d, v) for d, v in rates[item_code] if start <= d <= end], 1
+        rows = [(d, v) for d, v in rates[item_code] if start <= d <= end]
+        if stats is not None:
+            stats["received"] += len(rows)
+        return rows, 1
     return fetch
 
 
@@ -130,8 +135,8 @@ class FxDailyLoadTest(unittest.TestCase):
 
     def test_recent_starts_per_currency(self):
         today = date(2026, 10, 19)
-        # 비어 있으면 최근 2일, FX_START_DATE가 있으면 그날부터
-        self.assertEqual(self.starts(today), {"JPY": date(2026, 10, 18), "USD": date(2026, 10, 18)})
+        # 비어 있으면 최근 14일(월요일 첫 실행도 직전 금·목 포함), FX_START_DATE가 있으면 그날부터
+        self.assertEqual(self.starts(today), {"JPY": date(2026, 10, 6), "USD": date(2026, 10, 6)})
         self.assertEqual(self.starts(today, date(2026, 1, 1)), {"JPY": date(2026, 1, 1), "USD": date(2026, 1, 1)})
         # 월요일 실행: 금요일까지 있으면 금요일부터 (주말 건너뛴 전일 비교)
         self.add_rates([(date(2026, 10, 16), "USD", "1348.5"), (date(2026, 10, 16), "JPY", "853.02")])
@@ -139,6 +144,35 @@ class FxDailyLoadTest(unittest.TestCase):
         # 최신이면 최근 2일만
         self.add_rates([(date(2026, 10, 19), "USD", "1342.4"), (date(2026, 10, 19), "JPY", "850.24")])
         self.assertEqual(self.starts(today), {"JPY": date(2026, 10, 18), "USD": date(2026, 10, 18)})
+
+    def test_failed_currency_still_records_actual_requests(self):
+        # 첫 통화(JPY)가 재시도까지 모두 실패: 실제로 보낸 요청 수가 batch_run에 남아야 함 (0이면 안 됨)
+        with mock.patch.object(fx.ecos, "RETRY_WAIT", 0), \
+                mock.patch.object(fx.ecos.requests, "get", side_effect=fx.ecos.requests.ConnectionError("x")) as get:
+            rc = fx.run(D1, D2, self.url, log_dir=self.dir / "logs", env_path=self.env)
+        rows, runs = self.table()
+        self.assertEqual((rc, rows), (1, {}))
+        self.assertEqual(runs, [("FX_DAILY_LOAD", "fx_daily", "FAILED", fx.ecos.RETRIES, 0)])
+        self.assertEqual(get.call_count, fx.ecos.RETRIES)
+
+    def test_failure_after_first_currency_keeps_counts_of_both(self):
+        broken = {"0000001": fx.ecos.EcosError("ECOS 오류", retryable=True), "0000002": RATES["0000002"]}
+        rc, _ = self.run_load(broken)  # JPY(2건) 성공 후 USD 실패
+        _, runs = self.table()
+        self.assertEqual((rc, runs[-1][2:]), (1, ("FAILED", 2, 2)))
+
+    def test_warns_when_currency_has_fewer_than_two_dates(self):
+        rc, _ = self.run_load({"0000001": RATES["0000001"], "0000002": RATES["0000002"][:1]})
+        text = next((self.dir / "logs").glob("*.log")).read_text(encoding="utf-8")
+        self.assertEqual(rc, 0)
+        self.assertIn("2개 미만", text)
+        self.assertIn("JPY", text.split("2개 미만")[1].splitlines()[0])
+        self.assertNotIn("USD", text.split("2개 미만")[1].splitlines()[0])
+
+    def test_no_warning_when_every_currency_has_two_dates(self):
+        self.run_load(RATES)
+        text = next((self.dir / "logs").glob("*.log")).read_text(encoding="utf-8")
+        self.assertNotIn("2개 미만", text)
 
     def test_one_currency_gap_is_not_hidden_by_another_currency(self):
         # USD는 10/19까지, JPY는 10/1까지만 있음 → JPY는 10/1부터 다시 받아야 함 (전체 MAX로 계산하면 놓침)
