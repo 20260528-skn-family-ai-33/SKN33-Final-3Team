@@ -237,6 +237,48 @@ class SynonymTest(unittest.TestCase):
         self.assertFalse(set(self.SYN.values()) & set(self.SYN))
 
 
+class HypernymTest(unittest.TestCase):
+    """④-2 상위어: 동의어 다음에 하위어를 상위어로 (팀 결정 2026-10-21)"""
+    SYN = kc.load_synonyms()
+    HYP = kc.load_hypernyms()
+
+    def run_one(self, kwrd, natn="", syn=None, hyp=None, cat=None):
+        return kc.process_article(kwrd, natn, GEO, frozenset(), self.SYN if syn is None else syn,
+                                  cat, self.HYP if hyp is None else hyp)
+
+    def test_hyponym_becomes_hypernym_and_sub_is_kept(self):
+        """상위어: 전기차보조금·전기차충전소 → 전기차, 바꾸기 전 말은 kw_sub에"""
+        r = self.run_one("전기차보조금,전기차충전소,EV")
+        self.assertEqual(r["kw_topic"], ["전기차"])
+        self.assertEqual(r["kw_sub"], ["전기차보조금", "전기차충전소", "전기차"])
+
+    def test_synonym_then_hypernym(self):
+        """상위어: 동의어를 먼저 적용한 뒤 상위어 (K뷰티 → K-뷰티 → 뷰티)"""
+        self.assertEqual(self.run_one("K뷰티")["kw_topic"], ["뷰티"])
+
+    def test_team_separated_words_stay(self):
+        """상위어: 팀이 각각 상위어로 정한 말은 바꾸지 않음 (뷰티≠화장품, 전기차≠전기, 리튬이온배터리≠리튬 …)"""
+        for word in ("뷰티", "전기차", "온라인", "물가", "현대화", "리튬이온배터리", "석유화학", "스마트폰"):
+            self.assertNotIn(word, self.HYP, word)
+        self.assertEqual(self.HYP.get("온라인시장"), "온라인쇼핑")   # 팀 지정 (동의어 X로 온라인과 분리)
+        self.assertEqual(self.HYP.get("의료미용시장"), "의료")
+
+    def test_one_step_is_enough(self):
+        """상위어: 사전의 상위어는 다시 바뀌지 않음 (사슬은 맨 위까지 정리됨)"""
+        self.assertFalse(set(self.HYP.values()) & set(self.HYP), "상위어가 다시 하위어로 있음")
+
+    def test_category_kept_from_sub(self):
+        """상위어: 넓은 상위어가 미분류여도 하위어의 분야는 남음 (건강기능식품 → 건강)"""
+        cat = {"건강기능식품": "산업·품목>품목"}
+        r = self.run_one("건강기능식품", syn={}, hyp={"건강기능식품": "건강"}, cat=cat)
+        self.assertEqual((r["kw_topic"], r["kw_category"]), (["건강"], ["산업·품목>품목"]))
+
+    def test_no_dictionary_means_no_change(self):
+        """상위어: 사전이 없으면 지금과 같음 (kw_sub = kw_topic)"""
+        r = self.run_one("전기차보조금", hyp={})
+        self.assertEqual(r["kw_topic"], r["kw_sub"])
+
+
 class CategoryTest(unittest.TestCase):
     """⑤ 대/중분류"""
     CAT = kc.load_categories()
@@ -370,8 +412,9 @@ class CategoryTest(unittest.TestCase):
 
     def test_partial_match_fixed(self):
         """분류: 일부만 겹쳐 잘못 붙던 말 바로잡음 (리튬이온배터리 ≠ 리튬 광물, 파리협정 ≠ 통상 협정)"""
-        self.assertEqual(self.CAT["리튬이온배터리"], "산업·품목>품목 (→ HS 코드로 연결)")
-        self.assertEqual(self.CAT["파리협정"], "에너지·환경>친환경·ESG·기후")
+        # 하위어는 상위어로 바뀌어 분류표에 없을 수 있음 → 표에 없는 말도 같은 판정(lookup)으로 확인
+        self.assertEqual(self.CAT.lookup("리튬이온배터리"), "산업·품목>품목 (→ HS 코드로 연결)")
+        self.assertEqual(self.CAT.lookup("파리협정"), "에너지·환경>친환경·ESG·기후")
 
     def test_framework(self):
         """분류: 분류 틀은 대분류 8개 · 중분류 23개"""

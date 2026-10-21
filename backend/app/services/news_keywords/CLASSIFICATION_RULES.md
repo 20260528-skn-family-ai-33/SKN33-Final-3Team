@@ -17,14 +17,16 @@
 
 ```
 data/news/news_raw_*.csv (KOTRA 원본)
-  └─ keyword_clean.py ─────────────── ① 정제 · ② 지역 분리(+예외) · ③ 연도 · ④ 동의어 · ⑤ 분야 · ⑥ 품목
-        사전: geo_dict.csv · split_exceptions.csv · synonyms.csv · topic_categories.csv
+  └─ keyword_clean.py ─────────────── ① 정제 · ② 지역 분리(+예외) · ③ 연도 · ④ 동의어 · ④-2 상위어 · ⑤ 분야 · ⑥ 품목
+        사전: geo_dict.csv · split_exceptions.csv · synonyms.csv · hypernyms.csv · topic_categories.csv
         → data/news_keywords/news_keywords_clean.csv (기사 1건 = 1줄)
   └─ article_counts.py ────────────── 집계(FR-906) · 주요 이슈(FR-204) · 급증(FR-203) — 키워드는 kw_topic 기준
   └─ keyword_block.py ─────────────── 사용자 키워드 블락 (불용어 대신, 보여 줄 때만 거름)
 
 사전 만들기 (build/)
   build_synonyms.py     GROUPS + 팀 검수 O + 접미사 규칙 → synonyms.csv       (판정 칸: 규칙: 괄호 / 규칙: 표기 / 규칙: 접미사 / LLM 판단 / 팀 O)
+  hierarchy_candidates.py 동의어 목록 전체 → 상위어·하위어 판정 + 팀 지정  → review/상하위어_분류.xlsx
+  build_hypernyms.py    상하위 판정 → 하위어 → 상위어                   → hypernyms.csv, review/상위어사전.xlsx
   import_synonym_review.py  검수 엑셀(O/X/△)          → synonym_decisions.csv
   import_category_review.py 분류 검수 엑셀(O/X)      → category_decisions.csv
   category_rules.py     분류 틀(TAX)·규칙·배정 순서 — 분류표 생성과 기사 처리가 함께 씀
@@ -36,8 +38,9 @@ data/news/news_raw_*.csv (KOTRA 원본)
 
 | 사전 | 규칙(코드)으로 한 것 | LLM 판단 (남긴 곳) | 사람 |
 |---|---|---|---|
-| 동의어 `synonyms.csv` (518) | 370개 — 원본 괄호 쌍 20, 표기 골격 같음 13, **접미사 규칙 337** (`판정` 칸) | 61개 — 번역어·약어·같은 뜻 다른 말 (`build_synonyms.py`의 GROUPS, `판정 = LLM 판단`) | **팀 검수 O 87** (`synonym_decisions.csv`) |
-| 동의어 후보 (303) | 임베딩 유사도 · 동시 등장 · 1차 의견 규칙 | 없음 | O/X로 확정 |
+| 동의어 `synonyms.csv` (516) | 368개 — 원본 괄호 쌍 20, 표기 골격 같음 13, **접미사 규칙 335** (`판정` 칸) | 61개 — 번역어·약어·같은 뜻 다른 말 (`build_synonyms.py`의 GROUPS, `판정 = LLM 판단`) | **팀 검수 O 87** (`synonym_decisions.csv`) |
+| 동의어 후보 (303) | 임베딩 유사도 · 동시 등장 · 1차 의견 규칙 | 없음 | O/X로 확정 (2026-10-21 상위어 팀 지정으로 X 2쌍 추가) |
+| 상위어 `hypernyms.csv` (171) | 글자 포함(범위·접두사·세부 주제) · 동시 등장 쏠림 (`hierarchy_candidates.py`) | 없음 | **팀 지정** 하위어 7묶음 · 각각 상위어 15쌍 (`MANUAL_CHILDREN` · `MANUAL_SEPARATE`) |
 | 대/중분류 `topic_categories.csv` (907) | 일치 386 · 포함 138 | 분류 틀·대표 키워드(`TAX`) · 규칙 수정 7 · 규칙에 안 걸린 말 257 · 검수 전 후보 2 | **팀 최종 검수 520줄 (O 427 · X 93) → "팀 검수" 117개** (`category_decisions.csv`) |
 | 예외 `split_exceptions.csv` (73) | "남는 말이 목록의 말로 끝나면 통째로" | 어떤 말을 목록에 넣을지 (유형·이유 칸) | 검수 |
 | 지역 `geo_dict.csv` (346) | "키워드 앞부분이 지명이면 분리" | 지명·종류·코드·권역 묶음·단독 전용 여부 | 검수 |
@@ -106,6 +109,21 @@ data/news/news_raw_*.csv (KOTRA 원본)
 - 1차 의견(규칙): 반대말 쌍 → "주의: 반대 뜻" / 짧은 말 + 접미사(시장·산업·법·화…) → "주의: 범위가 다를 수 있음" / 한쪽이 다른 쪽을 포함 → "주의: 포함" / 나머지 → "같은 뜻 후보"
 - **자동 O (팀 결정 2026-10-14):** 근거가 임베딩(동시 등장 제외)이고 유사도 **0.96 이상**인 미반영 후보 23쌍은 "팀 확인(O/X)"을 O로 미리 채움(`AUTO_O_SIM`, 의견 칸에 "자동 O" 표시). 미반영 303쌍 전체는 `동의어_미반영_검수용.xlsx`에서 하나씩 O/X/△ (자동 O 줄도 확인)
 - 회의 결정: 미반영 후보에서 **랜덤 100개**(시드 20261014)를 확인해 문제가 없으면 "임베딩 기준 이상 → 자동 동의어" 규칙으로 처리. 새 키워드는 관리자가 확인 후 처리
+
+## 5-2. 상위어 (`hypernyms.csv`, `build/hierarchy_candidates.py` → `build/build_hypernyms.py`) — 팀 결정 2026-10-21
+- 동의어 자동 검수(임베딩 0.96) 대신 **하위어를 상위어로 바꿔** 키워드로 씀. 동의어 다음 단계, 바꾸기 전 말은 `kw_sub` 칸에 남김
+- 대상: 동의어 사전 + 동의어 검수 목록 + 모델 비교 새 후보의 모든 쌍 (895쌍)
+- 판정 순서 (위가 우선)
+  1. 반대·짝: 반대말 쌍(OPP: 수출↔수입, 구직↔구인 …) — 상하위 아님
+  2. 글자 포함: 짧은 말 = 상위어. 뒤에 산업·시장·업 = 범위 / 앞에만 붙음 = 종류(접두사: 화장품 ⊃ 기초화장품) / 뒤에 다른 말 = 세부 주제(전기차 ⊃ 전기차보조금)
+     · 뒤에 성·품·률·율·회·케어만 붙으면 같은 대상(의약 = 의약품) — 상하위 아님
+  3. 같은 뜻 묶음(GROUPS): 같은 수준 (EV = 전기차)
+  4. 동시 등장: 글자가 안 겹치면 P(넓은 말|좁은 말) ≥ 0.3 · P(좁은 말|넓은 말) ≤ 0.1 · 넓은 말 기사 3배 이상 → 좁은 말 = 하위어 (자동차 ⊃ 완성차)
+  5. 그 밖: 판단 보류 (사전에 넣지 않음)
+- 팀 지정이 마지막에 덮어씀: 하위어 지정(미용·온라인쇼핑·의료·의약품·전기차·카페·반려동물) · 각각 상위어(물가·발전소·서비스업·신소재·전기차·소비트렌드·온라인쇼핑·화장품·현대화·리튬이온배터리·석유화학·스마트폰)
+- 사전: 상위어가 둘 이상이면 기사 많은 쪽 · 사슬은 맨 위까지 · 동의어 대표어 기준으로 다시 맞춤 · 각각 상위어로 정한 쌍이 합쳐지면 멈춤
+- 분야(⑤)는 상위어와 하위어 모두로 붙임 (경제성장률 → 성장이어도 거시경제 유지)
+- 영향: 상위어가 커지면 FR-204 배수가 낮아짐 (10/14: 식품·건강·투자진출이 3배 밑으로). 세부 판정은 `kw_sub`로 다시 계산 가능
 
 ## 6. 대/중분류 (`topic_categories.csv`, `build/build_categories.py`)
 
@@ -196,6 +214,8 @@ python backend/app/services/news_keywords/build/import_synonym_review.py --file 
 python backend/app/services/news_keywords/build/import_category_review.py --file 대중분류_최종통합본.xlsx
 # 동의어 → 키워드 정리 → 분류표 → 키워드 정리(분야 반영) → 집계
 python backend/app/services/news_keywords/build/build_synonyms.py      # synonyms.csv
+python backend/app/services/news_keywords/build/hierarchy_candidates.py # review/상하위어_분류.xlsx
+python backend/app/services/news_keywords/build/build_hypernyms.py     # hypernyms.csv
 python backend/app/services/news_keywords/keyword_clean.py --input data/news/news_raw_20220101_20261013.csv
 python backend/app/services/news_keywords/build/build_categories.py    # topic_categories.csv
 python backend/app/services/news_keywords/keyword_clean.py --input data/news/news_raw_20220101_20261013.csv
