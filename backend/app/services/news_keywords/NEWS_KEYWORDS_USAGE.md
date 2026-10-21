@@ -122,7 +122,7 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
 
 | 단계 | 코드 | 결과 파일 |
 |---|---|---|
-| ① 상하위 판정 | `build/hierarchy_candidates.py` — 동의어 목록 전체(사전 + 검수 목록 + 모델 비교 새 후보, 895쌍)를 규칙으로 나눔 | `data/news_keywords/review/상하위어_분류.xlsx` |
+| ① 상하위 판정 | `build/hierarchy_candidates.py` — 동의어 목록 전체(사전 + 검수 목록 `data/news_keywords/동의어_검수용.csv` + 모델 비교 새 후보 `hierarchy_extra_pairs.csv`, 895쌍)를 규칙으로 나눔 | `data/news_keywords/review/상하위어_분류.xlsx` |
 | ② 상위어 사전 | `build/build_hypernyms.py` — ①의 상하위 쌍 → 하위어 → 상위어 | `hypernyms.csv` (171줄, 상위어 92개) · `data/news_keywords/review/상위어사전.xlsx` |
 
 - 판정 규칙(위가 우선): 반대말 쌍 제외 → 글자 포함(짧은 말 = 상위어: 범위 산업·시장·업 / 종류 앞 수식어 / 세부 주제 뒤에 붙음) → 같은 뜻 묶음은 같은 수준

@@ -15,6 +15,7 @@ node_modules/
 !/data/news_keywords/
 /data/news_keywords/*
 !/data/news_keywords/keyword_topic.csv
+!/data/news_keywords/동의어_검수용.csv
 !/data/news_keywords/review/
 /data/news_keywords/review/*
 !/data/news_keywords/review/키워드_미분류_PENDING.xlsx

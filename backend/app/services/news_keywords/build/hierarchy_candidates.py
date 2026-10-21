@@ -1,6 +1,6 @@
 """동의어 목록 전체를 상위어·하위어 관계로 다시 나눈 검토표(상하위어_분류.xlsx)를 만듭니다. (실험용, 사전은 바꾸지 않음)
 
-대상 쌍: synonyms.csv(사전) + 동의어_검수용.csv(1차 묶음·미반영 후보) + review/동의어_모델비교.xlsx의 새 후보(있으면)
+대상 쌍: synonyms.csv(사전) + 동의어_검수용.csv(1차 묶음·미반영 후보) + hierarchy_extra_pairs.csv(임베딩 모델 비교 새 후보 136쌍)
 관계 판정 순서 (코드 규칙, 위가 우선)
   1. 반대·짝      OPP 반대말 쌍 (수출↔수입, 구직↔구인 …) — 상하위 아님
   2. 글자 포함    짧은 말이 긴 말 안에 그대로 있으면 짧은 말 = 상위어
@@ -28,6 +28,7 @@ HERE = Path(__file__).resolve().parent
 NK = HERE.parent
 DATA = Path(__file__).resolve().parents[5] / "data" / "news_keywords"
 OUT = DATA / "review" / "상하위어_분류.xlsx"
+EXTRA_PAIRS = NK / "hierarchy_extra_pairs.csv"   # 표기, 대표어 후보, 출처(KURE/OpenAI), 유사도
 
 
 def _load(name):
@@ -88,14 +89,10 @@ def source_pairs():
     rv = pd.read_csv(DATA / "동의어_검수용.csv", dtype=str, keep_default_na=False)
     rows += [(a, b, "검수 목록(" + ("1차 묶음" if s.startswith("1차") else "미반영 후보") + ")")
              for a, b, s in zip(rv["표기"], rv["대표어 후보"], rv["현재 상태"])]
-    cmp_path = DATA / "review" / "동의어_모델비교.xlsx"
-    if cmp_path.exists():
-        for sheet in ("KURE 새 후보", "OpenAI 새 후보"):
-            try:
-                d = pd.read_excel(cmp_path, sheet_name=sheet, dtype=str)
-            except ValueError:
-                continue
-            rows += [(a, b, f"새 후보({sheet.split()[0]})") for a, b in zip(d["표기"], d["대표어 후보"])]
+    # 임베딩 모델 비교(2026-10-21, KURE-v1 · OpenAI text-embedding-3-large)에서 새로 찾은 후보. 저장소에 고정해 누구나 같은 결과
+    extra = pd.read_csv(EXTRA_PAIRS, dtype=str, keep_default_na=False) if EXTRA_PAIRS.exists() else pd.DataFrame(
+        columns=["표기", "대표어 후보", "출처"])
+    rows += [(a, b, f"새 후보({src})") for a, b, src in zip(extra["표기"], extra["대표어 후보"], extra["출처"])]
     return [(a, b, src, dec.get(frozenset((a, b)), "")) for a, b, src in rows if a and b and a != b]
 
 

@@ -1,7 +1,8 @@
 """article 테이블에 있지만 Chroma(vector DB)의 kotra_article 컬렉션에 없는 기사만 조각으로 나눠 임베딩해 추가합니다.
 news_keyword 컬렉션에는 article_tag의 키워드(주제어)를 추가합니다 (비슷한 키워드 찾기용).
 
-실행 (저장소 루트에서): python -m backend.app.scheduler.jobs.news_embed [--rebuild] [--dry-run]
+실행 (저장소 루트에서): python -m backend.app.scheduler.jobs.news_embed [--rebuild] [--dry-run] [--keywords-only]
+--keywords-only는 news_keyword 컬렉션(키워드)만 넣고 기사 본문 조각(kotra_article)은 건드리지 않습니다 (비용 거의 없음).
 먼저 news_load로 MySQL에 기사를 넣어야 합니다. --dry-run은 OpenAI를 부르지 않고 새로 넣을 조각 수·글자 수만 셉니다.
 
 - 조각: 본문(body_masked, 이메일·전화번호 가림)을 문단 단위로 약 CHUNK자씩, 앞 조각 끝 OVERLAP자를 겹쳐 나눕니다.
@@ -213,18 +214,23 @@ def search_keywords(query, n=10, client=None, embed=None):
     return [(i, d, m["article_count"]) for i, d, m in zip(res["ids"][0], res["distances"][0], res["metadatas"][0])]
 
 
-def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_dir=LOG_DIR):
-    """성공 0, 실패 1. client·embed는 테스트에서 바꿔 넣습니다."""
+def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_dir=LOG_DIR, keywords_only=False):
+    """성공 0, 실패 1. client·embed는 테스트에서 바꿔 넣습니다. keywords_only면 키워드 컬렉션만."""
     log_path = setup_log(log_dir)
-    log.info(f"기사 임베딩(미등록 기사 추가) 시작 | 모델 {MODEL} | Chroma {CHROMA_PATH if client is None else '(주입)'}"
+    what = "키워드 임베딩(--keywords-only)" if keywords_only else "기사·키워드 임베딩"
+    log.info(f"{what}(미등록 항목 추가) 시작 | 모델 {MODEL} | Chroma {CHROMA_PATH if client is None else '(주입)'}"
              f"{' | 미리 보기(--dry-run)' if dry_run else ''}")
     engine = None
     try:
         engine = make_engine(db_url)
         rows = read_rows(engine)
         client = client or chromadb.PersistentClient(path=str(CHROMA_PATH))
-        articles = get_collection(client, ARTICLE_COLLECTION, rebuild)
+        articles = None if keywords_only else get_collection(client, ARTICLE_COLLECTION, rebuild)
         keywords = get_collection(client, KEYWORD_COLLECTION, rebuild)
+        if dry_run and keywords_only:
+            new_kw = set(keyword_counts(rows)) - set(keywords.get(include=[])["ids"])
+            log.info(f"미리 보기(키워드만): 키워드 {len(new_kw):,}개 | 글자 {sum(map(len, new_kw)):,}자 | 로그: {log_path}")
+            return 0
         if dry_run:
             todo, stale, same = plan(rows, articles)
             new_kw = set(keyword_counts(rows)) - set(keywords.get(include=[])["ids"])
@@ -233,7 +239,7 @@ def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_
                      f"조각 {len(todo):,}개 · 키워드 {len(new_kw):,}개 | 글자 {chars:,}자 | 로그: {log_path}")
             return 0
         embed = embed or openai_embed()
-        result = sync(rows, articles, embed)
+        result = None if keywords_only else sync(rows, articles, embed)
         kw = sync_keywords(rows, keywords, embed)
     except Exception:
         log.exception(f"실패: 임베딩 중 오류 (이미 추가한 배치는 남고 다음 실행에서 나머지를 추가함) | 로그: {log_path}")
@@ -241,6 +247,10 @@ def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_
     finally:
         if engine is not None:
             engine.dispose()
+    if keywords_only:
+        log.info(f"완료(키워드만): 키워드 추가 {kw['added']:,} · 기사 수 갱신 {kw['count_updated']:,} "
+                 f"(컬렉션 {keywords.count():,}개) | 로그: {log_path}")
+        return 0
     log.info(f"완료: DB 기사 {len(rows):,}건 | 새 기사 {result['articles']:,} · 변경 {result['changed']:,} · "
              f"그대로 {result['existing']:,} | 조각 추가 {result['added']:,} (컬렉션 {articles.count():,}개) | "
              f"키워드 추가 {kw['added']:,} · 기사 수 갱신 {kw['count_updated']:,} (컬렉션 {keywords.count():,}개) | 로그: {log_path}")
@@ -252,8 +262,9 @@ def main():
     parser.add_argument("--db-url", help="SQLAlchemy DB URL (기본: .env의 MYSQL_* 값)")
     parser.add_argument("--rebuild", action="store_true", help="컬렉션을 지우고 전부 다시 임베딩 (모델 변경 시)")
     parser.add_argument("--dry-run", action="store_true", help="OpenAI를 부르지 않고 새로 넣을 조각 수·글자 수만 출력")
+    parser.add_argument("--keywords-only", action="store_true", help="키워드(news_keyword)만 임베딩, 기사 본문은 건드리지 않음")
     args = parser.parse_args()
-    raise SystemExit(run(args.db_url, args.rebuild, args.dry_run))
+    raise SystemExit(run(args.db_url, args.rebuild, args.dry_run, keywords_only=args.keywords_only))
 
 
 if __name__ == "__main__":

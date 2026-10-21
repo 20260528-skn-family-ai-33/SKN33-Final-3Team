@@ -32,18 +32,20 @@ EV = "산업·품목>품목 (→ HS 코드로 연결)"
 
 class BuildRowsTest(unittest.TestCase):
     def rows(self):
-        counts = Counter({"AI": 50, "전기차": 40, "은행나무": 1, "건강": 30, "로보택시": 9, "호두": 1})
-        cat = FakeCategories({"AI": AI, "전기차": EV}, {"은행나무": "경제·시장>거시경제"}, listed=["건강"])
+        counts = Counter({"AI": 50, "전기차": 40, "은행나무": 1, "건강": 30, "산업": 20, "로보택시": 9, "호두": 1})
+        cat = FakeCategories({"AI": AI, "전기차": EV}, {"은행나무": "경제·시장>거시경제"}, listed=["건강", "산업"])
         syn = {"인공지능": "AI", "K뷰티": "K-뷰티"}
         hyp = {"K-뷰티": "뷰티", "전기차보조금": "전기차"}
-        return {r["keyword_text"]: r for r in job.build_rows(counts, cat, syn, hyp)}
+        rule = lambda w: (EV, "LLM 판단") if w == "건강" else (None, "")   # 팀 미분류 말의 규칙 결과
+        return {r["keyword_text"]: r for r in job.build_rows(counts, cat, syn, hyp, rule=rule)}
 
     def test_statuses(self):
         r = self.rows()
         self.assertEqual({k: v["status"] for k, v in r.items() if v["status"] != "SYNONYM"},
-                         {"AI": "CLASSIFIED", "전기차": "CLASSIFIED", "은행나무": "CLASSIFIED", "건강": "UNCLASSIFIED",
-                          "로보택시": "PENDING", "호두": "UNCLASSIFIED"})
+                         {"AI": "CLASSIFIED", "전기차": "CLASSIFIED", "은행나무": "CLASSIFIED", "건강": "CLASSIFIED",
+                          "산업": "PENDING", "로보택시": "PENDING", "호두": "UNCLASSIFIED"})
         self.assertEqual(r["은행나무"]["field"], "경제·시장>거시경제")   # 규칙(포함) 추정도 확정 (팀 결정)
+        self.assertEqual(r["건강"]["field"], EV)   # 팀이 미분류로 정한 말도 규칙 결과로 (팀 결정 2026-10-21)
 
     def test_synonym_rows_point_to_final_keyword(self):
         r = self.rows()

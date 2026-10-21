@@ -127,6 +127,12 @@ class NewsEmbedTest(unittest.TestCase):
         got = self.client.get_collection(ne.KEYWORD_COLLECTION).get(ids=["공급망"], include=["metadatas"])
         self.assertEqual(got["metadatas"][0]["article_count"], 2)
 
+    def test_keywords_only_leaves_articles_untouched(self):
+        embed = FakeEmbed()
+        self.assertEqual(self.run_sync(embed, keywords_only=True), 0)
+        self.assertEqual(sorted(embed.texts), ["공급망", "배터리", "화장품"])   # 키워드만 임베딩
+        self.assertNotIn(ne.ARTICLE_COLLECTION, [c.name for c in self.client.list_collections()])
+
     def test_dry_run_does_not_embed(self):
         embed = FakeEmbed()
         self.assertEqual(self.run_sync(embed, dry_run=True), 0)
