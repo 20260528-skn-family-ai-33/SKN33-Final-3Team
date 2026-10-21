@@ -132,7 +132,7 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
   의약품 ⊃ 의약·의약산업·의약품시장·의약품산업 / 전기차 ⊃ 전기차인프라·전기차충전 / 카페 ⊃ 카페시장·커피머신·커피머신시장 /
   반려동물 ⊃ 펫용품·펫용품시장·펫케어·펫케어시장 · 각각 상위어: 물·물가, 발전·발전소, 서비스·서비스업, 소재·신소재, 전기·전기차, 트렌드·소비트렌드,
   온라인·온라인쇼핑, 뷰티·화장품, 현대·현대화, 리튬·리튬이온배터리, 석유·석유화학, 스마트·스마트폰
-- 상위어가 둘 이상이면 기사 많은 쪽. 각각 상위어로 정한 쌍이 사슬로 합쳐지면 사전 생성이 멈춥니다(`HypernymConflict`).
+- 상위어가 둘 이상이면 기사 많은 쪽. 각각 상위어로 정한 쌍이 사슬로 합쳐지거나 사슬이 돌아오면(A → B → A) 사전 생성이 멈춥니다(`HypernymConflict`).
   팀 지정 하위어를 동의어 사전이 먼저 바꾸면 `상위어사전.xlsx`의 "팀 지정 확인" 시트에 남깁니다 (지금은 12개 모두 같음).
 - 하위어가 상위어보다 기사가 많은 줄(탄소중립 → 탄소, 법인세 → 법인 등 21줄)은 "확인 필요" 시트에 모아 두었고, 팀 결정으로 유지합니다.
 - 결과: 바뀐 언급 4,930번(기사 4,031건) · 뷰티 234 → 430, 의료 161 → 371, 탄소 34 → 317건 · FR-204(10/14)에서 식품·건강·투자진출이
@@ -227,7 +227,7 @@ python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
 python -m unittest backend/tests/test_news_keywords.py backend/tests/test_article_counts.py
 ```
 
-예상 결과: `Ran 69 tests ... OK` (`test_news_keywords.py` 62개: 키워드 정리·블락·동의어·상위어·사전 생성 + `test_article_counts.py` 7개: 집계·급증 판정)
+예상 결과: `Ran 70 tests ... OK` (`test_news_keywords.py` 63개: 키워드 정리·블락·동의어·상위어·사전 생성 + `test_article_counts.py` 7개: 집계·급증 판정)
 (`-v`를 붙이면 테스트마다 한국어 설명이 나옵니다)
 
 ## 다시 만들기 (사전·분류표·결과 파일 전체)

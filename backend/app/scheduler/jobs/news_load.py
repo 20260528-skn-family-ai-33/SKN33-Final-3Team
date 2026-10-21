@@ -19,10 +19,11 @@ import argparse
 import csv
 import logging
 import sys
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 
-from sqlalchemy import delete, inspect, select
+from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.dialects import mysql, sqlite
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -123,6 +124,16 @@ def article_ids(session, external_ids):
         out |= dict(session.execute(select(Article.external_id, Article.article_id).where(
             Article.source_code == nl.SOURCE_CODE, Article.external_id.in_(chunk))).all())
     return out
+
+
+def keyword_article_counts(engine):
+    """article_tag 키워드별 고유 기사 수 {키워드: 기사 수} (누적, 출처 무관). 테이블이 없으면 빈 Counter."""
+    if ArticleTag.__tablename__ not in inspect(engine).get_table_names():
+        return Counter()
+    with session_scope(engine) as s:
+        q = (select(ArticleTag.keyword_text, func.count(func.distinct(ArticleTag.article_id)))
+             .where(ArticleTag.keyword_text.isnot(None)).group_by(ArticleTag.keyword_text))
+        return Counter(dict(s.execute(q).all()))
 
 
 def old_dates(session, external_ids):

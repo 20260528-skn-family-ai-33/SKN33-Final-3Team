@@ -100,6 +100,34 @@ class LoadTest(unittest.TestCase):
         self.assertEqual(out["skipped_db_edits"], ["로보택시"])
         self.assertEqual(self.table()["로보택시"][0], "CLASSIFIED")
 
+    def test_rows_missing_from_new_result_are_deleted_but_admin_edits_kept(self):
+        job.load(self.engine, self.ROWS)
+        with session_scope(self.engine) as s:   # 관리자가 로보택시를 DB에서 바꿈
+            s.execute(update(KeywordTopic).where(KeywordTopic.keyword_text == "로보택시")
+                      .values(updated_at=datetime(2999, 1, 1)))
+        out = job.load(self.engine, self.ROWS[:1])   # 이번 결과에는 AI만 있음
+        self.assertEqual(set(self.table()), {"AI", "로보택시"})   # 인공지능은 지움, 관리자가 바꾼 로보택시는 남김
+        self.assertEqual((out["deleted"], out["kept_db_edits"]), (1, ["로보택시"]))
+
+    def test_db_is_loaded_even_if_result_file_is_locked(self):
+        orig = (job.counts_from, job.build_rows, job.export, job.make_engine)
+        url = str(self.engine.url)
+        job.counts_from = lambda *a: Counter()
+        job.build_rows = lambda *a, **k: self.ROWS
+        job.make_engine = lambda db_url=None: orig[3](url)
+
+        def locked(rows):
+            raise PermissionError("엑셀에 열려 있음")
+        job.export = locked
+        try:
+            self.assertEqual(job.run(db_url=url, log_dir=Path(self.tmp.name) / "logs"), 0)
+        finally:
+            job.counts_from, job.build_rows, job.export, job.make_engine = orig
+            for h in job.log.handlers:
+                h.close()
+            job.log.handlers.clear()
+        self.assertEqual(set(self.table()), {"AI", "인공지능", "로보택시"})
+
     def test_unknown_category_fails_without_writing(self):
         bad = [{"keyword_text": "X", "canonical_text": None, "field": "없는>분야", "status": "CLASSIFIED"}]
         with self.assertRaises(ValueError):

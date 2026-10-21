@@ -150,6 +150,11 @@ class NewsLoadTest(unittest.TestCase):
                                       [clean("10", "2026-10-01", "AI")]), 0)
         self.assertEqual(self.rows(Article, "title"), [("뒤",)])
 
+    def test_keyword_article_counts_are_distinct_articles_from_db(self):
+        self.run_job([raw("10", "2026-10-01"), raw("11", "2026-10-02")],
+                     [clean("10", "2026-10-01", "AI|반도체", "US"), clean("11", "2026-10-02", "AI")])
+        self.assertEqual(dict(job.keyword_article_counts(self.engine)), {"AI": 2, "반도체": 1})
+
     def test_article_without_keyword_result_is_loaded_without_tags(self):
         self.assertEqual(self.run_job([raw("10", "2026-10-01"), raw("11", "2026-10-01")],
                                       [clean("10", "2026-10-01", "AI")]), 0)

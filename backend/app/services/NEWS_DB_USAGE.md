@@ -50,7 +50,7 @@ python -m backend.app.scheduler.jobs.keyword_topic_load --dry-run
 python -m backend.app.scheduler.jobs.keyword_topic_load
 ```
 
-정상이면 마지막에 `적재 완료: 분류 틀 23쌍 | 키워드 24,744행`이 나옵니다. 확인 SQL:
+정상이면 마지막에 `적재 완료: 분류 틀 23쌍 | 키워드 24,744행 · 지운 행 0`이 나옵니다. 확인 SQL:
 
 ```sql
 SELECT status, COUNT(*) FROM keyword_topic GROUP BY status;   -- CLASSIFIED 9166 · PENDING 1948 · UNCLASSIFIED 12943 · SYNONYM 687
@@ -70,7 +70,10 @@ WHERE t.keyword_text IN ('AI', '인공지능', 'K뷰티', '전기차보조금', 
 
 - 팀이 분류표에서 미분류로 정한 말(65)도 규칙을 적용합니다 (팀 결정 2026-10-21). 기사 분야(`kw_category`)는 팀 결정을 그대로 따릅니다.
 - `keyword_category`: 분류 틀 23쌍 (`category_rules.TAX`). 이미 있으면 번호를 그대로 둡니다.
+- PENDING 기준 기사 수는 **DB `article_tag`의 키워드별 고유 기사 수(누적)**로 셉니다 (`--counts db`, 기본). `article_tag`가 비어 있으면 키워드 결과 CSV로 셉니다 (`--counts csv`).
 - 관리자가 DB에서 바꾼 행(`synced_at`이 NULL이거나 `updated_at`보다 이름)은 덮어쓰지 않고 건너뜁니다 (경고 로그). csv에 먼저 반영하세요.
+- 이번 결과에 없는 키워드(사전·데이터 변경으로 사라진 말)는 지웁니다. 관리자가 DB에서 바꾼 행은 남기고 경고합니다.
+- DB 적재를 먼저 하고 결과 파일을 씁니다. 결과 엑셀이 열려 있어 저장하지 못해도 DB 적재는 그대로이고 경고만 남깁니다.
 - 적재한 행은 `updated_at` = `synced_at` = 실행 시각. 전체를 한 트랜잭션으로 넣고 실패하면 롤백합니다.
 - `batch_run`에는 기록하지 않습니다 (`target_table` 목록에 키워드 테이블이 없음).
 
@@ -200,13 +203,13 @@ search_keywords("배터리", n=10)
 python -m unittest backend/tests/test_news_load.py backend/tests/test_news_embed.py backend/tests/test_keyword_topic_load.py
 ```
 
-예상 결과: `Ran 32 tests ... OK` (`test_news_load.py` 14 · `test_news_embed.py` 12 · `test_keyword_topic_load.py` 6, MySQL·OpenAI 없이 SQLite·가짜 임베딩·메모리 Chroma로 실행).
+예상 결과: `Ran 35 tests ... OK` (`test_news_load.py` 15 · `test_news_embed.py` 12 · `test_keyword_topic_load.py` 8, MySQL·OpenAI 없이 SQLite·가짜 임베딩·메모리 Chroma로 실행).
 중간의 `ERROR`·`WARNING` 로그는 실패 상황(테이블 없음, 없는 국가 코드, OpenAI 일시 오류, 모델 불일치)을 일부러 만든 테스트의 로그입니다.
 
 | 테스트 파일 | 확인하는 것 |
 |---|---|
 | `test_news_load.py` | 최신 원본 파일 고르기, HTML 벗기기·이메일·전화번호 가림(HS 범위·프로그램 이름 제외), 빈 본문 대체, 국가·전체 고유 기사 수, 기사·태그·집계·출처·batch_run 적재, 재실행 시 갱신·옛 태그 교체, 발행일 변경, 중복 ID, 키워드 결과 없는 기사, 테이블 없음, 롤백 |
-| `test_keyword_topic_load.py` | 상태 판정(분류·규칙(포함) 확정·팀 미분류·3건 기준 PENDING), 동의어·하위어 → 최종 키워드, 분류 틀 23쌍·번호 유지, 재실행 갱신, 관리자 DB 수정 보존, 없는 분야면 롤백 |
+| `test_keyword_topic_load.py` | 상태 판정(분류·규칙(포함) 확정·팀 미분류·3건 기준 PENDING), 동의어·하위어 → 최종 키워드, 분류 틀 23쌍·번호 유지, 재실행 갱신, 관리자 DB 수정 보존, 사라진 키워드 삭제(관리자 행은 보존), 결과 파일이 잠겨도 DB 적재, 없는 분야면 롤백 |
 | `test_news_embed.py` | 조각 나누기(문단·겹침·긴 문단·빈 본문), 메타데이터, 재실행 시 추가 없음·바뀐 기사만 교체, 키워드 기사 수 갱신, 키워드만(--keywords-only), dry-run, 국가·키워드·기간 검색, 모델 불일치 시 --rebuild, 실패 배치 재처리 |
 
 ## 실제 데이터 결과 (2022.01.03~2026.10.13, 14,607건)

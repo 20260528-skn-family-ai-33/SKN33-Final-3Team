@@ -30,6 +30,7 @@ from sqlalchemy import select
 
 from backend.app.db.session import ENV_PATH, make_engine, session_scope
 from backend.app.models.news import Article, ArticleTag
+from backend.app.scheduler.jobs.news_load import keyword_article_counts
 
 MODEL = "text-embedding-3-large"
 ARTICLE_COLLECTION = "kotra_article"
@@ -176,10 +177,9 @@ def keyword_counts(rows):
     return out
 
 
-def sync_keywords(rows, col, embed):
+def sync_keywords(counts, col, embed):
     """컬렉션에 없는 키워드만 추가합니다. id·문서 모두 키워드 글자 그대로, 메타데이터는 keyword·article_count.
     DB에서 사라진 키워드는 지우지 않습니다 (hs_code_embed와 같음, 최신으로 다시 만들려면 --rebuild)."""
-    counts = keyword_counts(rows)
     got = col.get(include=["metadatas"])
     have = dict(zip(got["ids"], got["metadatas"]))
     todo = [k for k in sorted(counts) if k not in have]
@@ -223,24 +223,26 @@ def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_
     engine = None
     try:
         engine = make_engine(db_url)
-        rows = read_rows(engine)
+        # 키워드만이면 본문(body_masked)은 읽지 않고 article_tag의 키워드별 기사 수만
+        rows = None if keywords_only else read_rows(engine)
+        counts = keyword_article_counts(engine) if keywords_only else keyword_counts(rows)
         client = client or chromadb.PersistentClient(path=str(CHROMA_PATH))
         articles = None if keywords_only else get_collection(client, ARTICLE_COLLECTION, rebuild)
         keywords = get_collection(client, KEYWORD_COLLECTION, rebuild)
         if dry_run and keywords_only:
-            new_kw = set(keyword_counts(rows)) - set(keywords.get(include=[])["ids"])
+            new_kw = set(counts) - set(keywords.get(include=[])["ids"])
             log.info(f"미리 보기(키워드만): 키워드 {len(new_kw):,}개 | 글자 {sum(map(len, new_kw)):,}자 | 로그: {log_path}")
             return 0
         if dry_run:
             todo, stale, same = plan(rows, articles)
-            new_kw = set(keyword_counts(rows)) - set(keywords.get(include=[])["ids"])
+            new_kw = set(counts) - set(keywords.get(include=[])["ids"])
             chars = sum(len(d) for d, _ in todo.values()) + sum(map(len, new_kw))
             log.info(f"미리 보기: 기사 {len(rows):,}건 중 새로/다시 넣을 기사 {len(rows) - same:,}건 (변경 {len(stale):,}) | "
                      f"조각 {len(todo):,}개 · 키워드 {len(new_kw):,}개 | 글자 {chars:,}자 | 로그: {log_path}")
             return 0
         embed = embed or openai_embed()
         result = None if keywords_only else sync(rows, articles, embed)
-        kw = sync_keywords(rows, keywords, embed)
+        kw = sync_keywords(counts, keywords, embed)
     except Exception:
         log.exception(f"실패: 임베딩 중 오류 (이미 추가한 배치는 남고 다음 실행에서 나머지를 추가함) | 로그: {log_path}")
         return 1

@@ -6,7 +6,7 @@
   (동의어·같은 대상·반대·판단 보류·별개(팀 지정)·다른 상위어로 이동은 넣지 않음)
 - 동의어 사전 다음에 적용하므로 하위어·상위어 모두 동의어 대표어로 바꿔서 봄 (같아지면 뺌)
 - 상위어가 둘 이상이면: 팀 지정이 있으면 그것, 없으면 기사 많은 상위어 (주제어 kw_topic 기준 기사 수)
-- 사슬(진단기기 → 의료기기 → 의료)은 맨 위 상위어로 정리 (한 번만 바꾸면 되게). 고리가 생기면 거기서 멈춤
+- 사슬(진단기기 → 의료기기 → 의료)은 맨 위 상위어로 정리 (한 번만 바꾸면 되게). 고리(A → B → A)가 생기면 멈추고 알림
 - 팀이 각각 상위어로 정한 쌍(MANUAL_SEPARATE)은 사슬을 거쳐서도 같은 상위어가 되면 안 됨 → 멈추고 알림
 - 팀 지정 하위어를 동의어 사전이 먼저 다른 말로 바꾸면(온라인시장 → 온라인) 그 말의 상위어를 따르고,
   팀 지정과 결과가 다르면 '팀 지정 확인' 시트에 남김 (동의어 사전에서 그 쌍을 X로 막아야 팀 지정대로 됨)
@@ -65,14 +65,18 @@ def build(pairs, counts, syn):
         parent[down] = team[0] if team else max(ups, key=lambda u: (counts.get(u, 0), u))
 
     def final(w, seen=()):
+        """맨 위 상위어. 사슬이 돌아오면(A → B → A, A → B → C → A) 어느 쪽이 상위어인지 정할 수 없어 멈춤."""
         p = parent.get(w)
-        return w if p is None or p in seen + (w,) else final(p, seen + (w,))
+        if p is None:
+            return w
+        if p in seen + (w,):
+            raise HypernymConflict("상위어 사슬이 돌아옴: " + " → ".join(seen + (w, p))
+                                   + " (hierarchy_candidates.py의 MANUAL_SEPARATE나 MANUAL_CHILDREN으로 한쪽을 정하세요)")
+        return final(p, seen + (w,))
 
     rows = []
     for down, up in parent.items():
         top = final(down)
-        if top == down:          # 고리(A → B → A)면 바꾸지 않음
-            continue
         rel, why = cands[down][up]
         others = [u for u in cands[down] if u != up]
         rows.append({"하위어": down, "상위어": top, "바로 위 상위어": up, "관계": rel, "근거": why,

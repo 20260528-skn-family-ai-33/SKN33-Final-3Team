@@ -273,6 +273,17 @@ class HypernymTest(unittest.TestCase):
         r = self.run_one("건강기능식품", syn={}, hyp={"건강기능식품": "건강"}, cat=cat)
         self.assertEqual((r["kw_topic"], r["kw_category"]), (["건강"], ["산업·품목>품목"]))
 
+    def test_cycle_in_hierarchy_stops_build(self):
+        """상위어: 사슬이 돌아오면(A → B → A) 사전을 만들지 않고 멈춤"""
+        import importlib.util as iu
+        spec = iu.spec_from_file_location("bh", kc.BASE / "build" / "build_hypernyms.py")
+        bh = iu.module_from_spec(spec); spec.loader.exec_module(bh)
+        rel = "세부 주제(뒤에 붙음)"
+        pairs = pd.DataFrame([{"상위어": "가가", "하위어": "나나", "관계": rel, "근거": ""},
+                              {"상위어": "나나", "하위어": "가가", "관계": rel, "근거": ""}])
+        with self.assertRaises(bh.HypernymConflict):
+            bh.build(pairs, {}, {})
+
     def test_no_dictionary_means_no_change(self):
         """상위어: 사전이 없으면 지금과 같음 (kw_sub = kw_topic)"""
         r = self.run_one("전기차보조금", hyp={})

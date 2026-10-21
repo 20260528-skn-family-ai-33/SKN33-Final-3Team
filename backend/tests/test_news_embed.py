@@ -129,7 +129,12 @@ class NewsEmbedTest(unittest.TestCase):
 
     def test_keywords_only_leaves_articles_untouched(self):
         embed = FakeEmbed()
-        self.assertEqual(self.run_sync(embed, keywords_only=True), 0)
+        orig = ne.read_rows
+        ne.read_rows = lambda engine: (_ for _ in ()).throw(AssertionError("본문을 읽으면 안 됨"))
+        try:
+            self.assertEqual(self.run_sync(embed, keywords_only=True), 0)
+        finally:
+            ne.read_rows = orig
         self.assertEqual(sorted(embed.texts), ["공급망", "배터리", "화장품"])   # 키워드만 임베딩
         self.assertNotIn(ne.ARTICLE_COLLECTION, [c.name for c in self.client.list_collections()])
 

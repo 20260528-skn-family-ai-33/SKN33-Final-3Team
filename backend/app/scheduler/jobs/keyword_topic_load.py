@@ -1,6 +1,6 @@
 """키워드 분류 결과를 MySQL keyword_category · keyword_topic에 적재합니다 (상위어를 키워드로 넣는 방식).
 
-실행 (저장소 루트에서): python -m backend.app.scheduler.jobs.keyword_topic_load [--clean 경로] [--dry-run]
+실행 (저장소 루트에서): python -m backend.app.scheduler.jobs.keyword_topic_load [--clean 경로] [--counts db|csv] [--dry-run]
 - 입력: services/news_keywords의 분류 틀(category_rules.TAX)·분류표·동의어 사전·상위어 사전 + data/news_keywords/news_keywords_clean.csv
 - keyword_category: 분류 틀 23쌍 (대분류 > 중분류). 이미 있으면 번호 유지.
 - keyword_topic 상태 (팀 결정 2026-10-21)
@@ -11,8 +11,12 @@
     없으면 아래 기사 수 기준 (keyword_clean의 기사 분야 kw_category는 팀 미분류를 그대로 따름)
   · UNCLASSIFIED 어떤 규칙에도 안 걸리고 기사 PENDING_MIN(3)건 미만인 말
   · PENDING      어떤 규칙에도 안 걸리고 기사 PENDING_MIN건 이상인 말 (관리자 분류 대상)
+- 기사 수(PENDING 기준)는 DB article_tag의 키워드별 고유 기사 수(누적)로 셉니다 (--counts db, 기본).
+  article_tag에 키워드가 없으면 키워드 결과 CSV로 셉니다 (--counts csv와 같음, CSV가 전체 기사일 때만 누적과 같음).
 - 관리자가 DB에서 바꾼 행(synced_at이 NULL이거나 updated_at보다 이름)은 덮어쓰지 않고 건너뜁니다 (csv에 먼저 반영할 것).
+- 이번 결과에 없는 키워드(사전·데이터가 바뀌어 사라진 말)는 지웁니다. 단, 관리자가 DB에서 바꾼 행은 남기고 경고합니다.
 - 적재한 행은 updated_at = synced_at = 실행 시각으로 맞춥니다. 전체를 한 트랜잭션으로 넣고, 실패하면 모두 롤백합니다.
+- DB 적재를 먼저 하고 결과 파일을 씁니다. 결과 파일이 엑셀에 열려 있어 저장하지 못해도 DB 적재는 그대로이고 경고만 남깁니다.
 - 결과 표: data/news_keywords/keyword_topic.csv (적재한 값과 같은 내용), 미분류 검토 파일: review/키워드_미분류_PENDING.xlsx
   (시트: 개수 · 팀 미분류 재분류 · PENDING · UNCLASSIFIED)
 - batch_run에는 기록하지 않습니다 (target_table 목록에 키워드 테이블이 없음, news_embed와 같음).
@@ -25,11 +29,12 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import Workbook
-from sqlalchemy import inspect, select
+from sqlalchemy import delete, inspect, select
 from sqlalchemy.dialects import mysql, sqlite
 
 from backend.app.db.session import make_engine, session_scope
 from backend.app.models.keyword import KeywordCategory, KeywordTopic
+from backend.app.scheduler.jobs.news_load import keyword_article_counts
 from backend.app.services.news_keywords import keyword_clean as kc
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -134,7 +139,8 @@ def _upsert(session, table, rows, keys, size=1000):
 
 
 def load(engine, rows, now=None):
-    """적재 결과 {"categories", "written", "skipped_db_edits"}. 관리자가 DB에서 바꾼 행은 건너뜀."""
+    """적재 결과 {"categories", "written", "deleted", "skipped_db_edits", "kept_db_edits"}.
+    관리자가 DB에서 바꾼 행은 건너뛰고, 이번 결과에 없는 행은 지움 (관리자가 바꾼 행은 남김)."""
     check_tables(engine)
     now = (now or datetime.now()).replace(microsecond=0)
     with session_scope(engine) as s:
@@ -152,7 +158,13 @@ def load(engine, rows, now=None):
                 "category_id": ids[r["field"]] if r["field"] else None, "status": r["status"],
                 "updated_at": now, "synced_at": now} for r in rows if r["keyword_text"] not in edited]
         _upsert(s, KeywordTopic.__table__, out, ["keyword_text"])
-    return {"categories": len(ids), "written": len(out), "skipped_db_edits": sorted(edited & {r["keyword_text"] for r in rows})}
+        current = {r["keyword_text"] for r in rows}
+        existing = set(s.scalars(select(KeywordTopic.keyword_text)))
+        gone = sorted(existing - current - edited)
+        for i in range(0, len(gone), 1000):
+            s.execute(delete(KeywordTopic).where(KeywordTopic.keyword_text.in_(gone[i:i + 1000])))
+    return {"categories": len(ids), "written": len(out), "deleted": len(gone),
+            "skipped_db_edits": sorted(edited & current), "kept_db_edits": sorted(edited - current)}
 
 
 def export(rows, data_dir=DATA, unclassified_csv=None):
@@ -188,28 +200,48 @@ def export(rows, data_dir=DATA, unclassified_csv=None):
     return path
 
 
-def run(clean_path=DEFAULT_CLEAN, db_url=None, dry_run=False, log_dir=LOG_DIR):
+def counts_from(source, engine, clean_path):
+    """키워드별 고유 기사 수. source="db"면 article_tag(누적), 비어 있으면 CSV로 대신 셈."""
+    if source == "db":
+        counts = keyword_article_counts(engine)
+        if counts:
+            log.info(f"기사 수: DB article_tag 기준 (키워드 {len(counts):,}개)")
+            return counts
+        log.warning("article_tag에 키워드가 없어 키워드 결과 CSV로 기사 수를 셉니다 (CSV가 전체 기사여야 누적과 같음)")
+    log.info(f"기사 수: {Path(clean_path).name} 기준")
+    return topic_counts(clean_path)
+
+
+def run(clean_path=DEFAULT_CLEAN, db_url=None, dry_run=False, log_dir=LOG_DIR, counts="db"):
     log_path = setup_log(log_dir)
+    engine = None
     try:
-        rows = build_rows(topic_counts(clean_path), kc.load_categories(), kc.load_synonyms(), kc.load_hypernyms())
+        engine = make_engine(db_url) if (counts == "db" or not dry_run) else None
+        rows = build_rows(counts_from(counts, engine, clean_path), kc.load_categories(), kc.load_synonyms(),
+                          kc.load_hypernyms())
         status = Counter(r["status"] for r in rows)
         log.info("상태별: " + " · ".join(f"{k} {v:,}" for k, v in sorted(status.items())) + f" | 합계 {len(rows):,}")
-        log.info(f"검토 파일: {export(rows)}")
-        if dry_run:
-            log.info(f"미리 보기(--dry-run): DB에 넣지 않음 | 로그: {log_path}")
-            return 0
-        engine = make_engine(db_url)
-        try:
-            out = load(engine, rows)
-        finally:
-            engine.dispose()
+        out = None if dry_run else load(engine, rows)
     except Exception:
         log.exception(f"적재 실패 (롤백되어 반영되지 않음) | 로그: {log_path}")
         return 1
+    finally:
+        if engine is not None:
+            engine.dispose()
+    try:   # 결과 파일은 DB 적재 뒤에: 엑셀이 열려 있어 저장하지 못해도 DB 적재는 그대로
+        log.info(f"검토 파일: {export(rows)}")
+    except OSError as e:
+        log.warning(f"결과 파일을 저장하지 못했습니다 (엑셀에 열려 있으면 닫고 --dry-run으로 다시 만드세요): {e}")
+    if dry_run:
+        log.info(f"미리 보기(--dry-run): DB에 넣지 않음 | 로그: {log_path}")
+        return 0
+    if out["kept_db_edits"]:
+        log.warning(f"이번 결과에 없지만 관리자가 DB에서 바꾼 행 {len(out['kept_db_edits']):,}개는 남김: "
+                    f"{', '.join(out['kept_db_edits'][:20])}")
     if out["skipped_db_edits"]:
         log.warning(f"DB에서 바꾼 뒤 csv에 반영하지 않은 행 {len(out['skipped_db_edits']):,}개는 건너뜀: "
                     f"{', '.join(out['skipped_db_edits'][:20])}")
-    log.info(f"적재 완료: 분류 틀 {out['categories']}쌍 | 키워드 {out['written']:,}행 | 로그: {log_path}")
+    log.info(f"적재 완료: 분류 틀 {out['categories']}쌍 | 키워드 {out['written']:,}행 · 지운 행 {out['deleted']:,} | 로그: {log_path}")
     return 0
 
 
@@ -218,8 +250,10 @@ def main():
     parser.add_argument("--clean", type=Path, default=DEFAULT_CLEAN, help="키워드 결과 CSV (기본: news_keywords_clean.csv)")
     parser.add_argument("--db-url", help="SQLAlchemy DB URL (기본: .env의 MYSQL_* 값)")
     parser.add_argument("--dry-run", action="store_true", help="DB에 넣지 않고 상태별 개수와 검토 파일만")
+    parser.add_argument("--counts", choices=("db", "csv"), default="db",
+                        help="PENDING 기준 기사 수: db = article_tag 누적(기본), csv = 키워드 결과 CSV")
     args = parser.parse_args()
-    raise SystemExit(run(args.clean, args.db_url, args.dry_run))
+    raise SystemExit(run(args.clean, args.db_url, args.dry_run, counts=args.counts))
 
 
 if __name__ == "__main__":
