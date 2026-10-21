@@ -128,17 +128,29 @@ class PreprocessTest(unittest.TestCase):
         self.assertTrue(np.isnan(w.loc[("TW", 2024), "log_gdp"]))  # 이을 과거 값이 없음
         self.assertNotIn(("TW", 2023), w.index)  # 값이 전혀 없던 해는 만들지 않음
 
-    def test_comtrade_only_after_baci_years(self):
+    def test_growth_after_baci_compares_comtrade_with_comtrade(self):
         tmp = Path(tempfile.mkdtemp())
         (tmp / "baci").mkdir()
         (tmp / "comtrade").mkdir()
         cols = "year,country_code,hs6,import_world_usd,import_from_kor_usd\n"
-        (tmp / "baci" / "baci_imports_hs22.csv").write_text(cols + "2024,NA,010110,10,1\n")
-        (tmp / "comtrade" / "comtrade_imports_2024.csv").write_text(cols + "2024,NA,010110,99,9\n")
-        (tmp / "comtrade" / "comtrade_imports_2025.csv").write_text(cols + "2025,NA,010110,20,2\n")
-        m = pp.read_market(tmp)
-        self.assertEqual(m[["year", "country_code", "source"]].values.tolist(),
-                         [[2024, "NA", "BACI"], [2025, "NA", "COMTRADE"]])  # 나미비아 NA 보존
+        (tmp / "baci" / "baci_imports_hs22.csv").write_text(cols + "2023,NA,010110,90,9\n2024,NA,010110,100,10\n")
+        (tmp / "comtrade" / "comtrade_imports_2024.csv").write_text(cols + "2024,NA,010110,105,10\n")  # 연결 연도 (CIF)
+        (tmp / "comtrade" / "comtrade_imports_2025.csv").write_text(cols + "2025,NA,010110,210,20\n")
+        raw = pp.read_market(tmp)
+        self.assertEqual(sorted(raw.source), ["BACI", "BACI", "COMTRADE", "COMTRADE"])
+        with unittest.mock.patch.object(pp, "CLIP_Q", (0.0, 1.0)):
+            m = pp.market_yearly(raw).set_index("year")
+        self.assertEqual(m.index.tolist(), [2023, 2024, 2025])  # 2024년은 BACI 한 행만 (연결 연도 행은 빠짐)
+        self.assertEqual(m.loc[2024, "source"], "BACI")
+        self.assertAlmostEqual(m.loc[2024, "mkt_growth"], np.log1p(100) - np.log1p(90))  # BACI끼리
+        self.assertAlmostEqual(m.loc[2025, "mkt_growth"], np.log1p(210) - np.log1p(105))  # Comtrade끼리
+        self.assertEqual(m.loc[2025, "country_code"], "NA")  # 나미비아 NA 보존
+
+    def test_growth_missing_without_same_source_previous_year(self):
+        raw = pd.DataFrame([(2024, "VN", "010110", 100.0, 10.0, "BACI"), (2025, "VN", "010110", 210.0, 20.0, "COMTRADE")],
+                           columns=["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd", "source"])
+        m = pp.market_yearly(raw).set_index("year")
+        self.assertTrue(np.isnan(m.loc[2025, "mkt_growth"]))  # 2024년 Comtrade가 없으면 BACI와 섞어 비교하지 않음
 
     def test_seed_countries_include_extra_seed(self):
         countries = pp.seed_countries()

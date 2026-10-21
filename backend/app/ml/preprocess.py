@@ -27,15 +27,13 @@ def read_csv(path, **kw):
 
 
 def read_market(external_dir):
-    """BACI 집계본 + BACI 이후 연도의 Comtrade. 같은 연도는 BACI를 쓰고 출처를 source에 남긴다."""
+    """BACI 집계본과 Comtrade 파일 전부. 출처를 source에 남긴다 (어느 출처를 쓸지는 market_yearly가 고른다)."""
     frames = []
     baci = external_dir / "baci" / "baci_imports_hs22.csv"
     if baci.exists():
         frames.append(read_csv(baci, dtype={"hs6": str}).assign(source="BACI"))
-    last = frames[0].year.max() if frames else 0
     for path in sorted((external_dir / "comtrade").glob("comtrade_imports_*.csv")):
-        df = read_csv(path, dtype={"hs6": str})
-        frames.append(df[df.year > last].assign(source="COMTRADE"))
+        frames.append(read_csv(path, dtype={"hs6": str}).assign(source="COMTRADE"))
     columns = ["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd", "source"]
     return pd.concat(frames, ignore_index=True)[columns] if frames else pd.DataFrame(columns=columns)
 
@@ -65,17 +63,22 @@ def market_yearly(market, countries=None):
     """연도·국가·HS6별 시장 규모·성장·한국 점유율. market의 hs6는 이미 비교용 코드(HS2022)여야 한다.
 
     - 대상 국가(countries)만 남기고, 전세계 수입액이 0 이하인 행은 시장이 없는 것으로 보고 뺀다.
-    - 같은 (국가, HS6)이 여러 출처·코드에서 오면 합친다 (HS 묶음 통일 뒤 생기는 중복).
-    - 성장·점유율 변화는 바로 전해 값이 있을 때만 계산한다. 자르기는 모델 학습 단계에서 수행한다.
+    - 같은 (국가, HS6)이 여러 코드에서 오면 합친다 (HS 묶음 통일 뒤 생기는 중복).
+    - BACI가 있는 해는 BACI, 그 뒤 해는 Comtrade를 쓴다.
+    - 성장·점유율 변화는 **같은 출처의** 바로 전해 값과 비교한다. BACI는 FOB, Comtrade 수입은 CIF라
+      섞어 비교하면 운임·보험료만큼 성장률이 부풀기 때문이다. 그래서 BACI 다음 해의 성장률은
+      BACI 마지막 해에 받아 둔 Comtrade(연결 연도)와 비교한다. 같은 출처 전해 값이 없으면 결측.
+    - 자르기는 모델 학습 단계에서 수행한다.
     """
     m = market if countries is None else market[market.country_code.isin(countries)]
     m = (m[m.import_world_usd > 0]
-         .groupby(["year", *MARKET_KEYS], as_index=False)
-         .agg(import_world_usd=("import_world_usd", "sum"), import_from_kor_usd=("import_from_kor_usd", "sum"),
-              source=("source", "first")))
+         .groupby(["year", *MARKET_KEYS, "source"], as_index=False)
+         .agg(import_world_usd=("import_world_usd", "sum"), import_from_kor_usd=("import_from_kor_usd", "sum")))
     m["kor_share"] = (m.import_from_kor_usd / m.import_world_usd).clip(0, 1)
-    prev = m[["year", *MARKET_KEYS, "import_world_usd", "kor_share"]].assign(year=m.year + 1)
-    m = m.merge(prev, on=["year", *MARKET_KEYS], how="left", suffixes=("", "_prev"))
+    prev = m[["year", *MARKET_KEYS, "source", "import_world_usd", "kor_share"]].assign(year=m.year + 1)
+    m = m.merge(prev, on=["year", *MARKET_KEYS, "source"], how="left", suffixes=("", "_prev"))
+    baci_years = set(m.loc[m.source == "BACI", "year"])
+    m = m[m.source == np.where(m.year.isin(baci_years), "BACI", "COMTRADE")]  # 연결 연도 Comtrade 행은 비교에만 쓰고 뺀다
     m["mkt_log_import"] = np.log1p(m.import_world_usd)
     # 분할 이전에는 원래 값을 유지한다. 분위수 경계는 모델의 학습 행에서만 추정한다.
     m["mkt_growth"] = _growth(m.import_world_usd, m.import_world_usd_prev)
