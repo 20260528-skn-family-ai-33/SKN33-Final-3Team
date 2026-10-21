@@ -62,10 +62,11 @@ data/external/
    `NOT_READY`는 batch_run에 수신 0건 SUCCESS로 남고 실행 로그에는 WARNING으로 찍힙니다.
    새 판을 집계하면 지난 판 zip은 지웁니다.
 2. WDI: 2022년~작년 지표를 다시 받습니다 (과거 값도 수정되므로 덮어씀). 이전 기간의 `wdi_*.csv`는 지웁니다.
-3. Comtrade: BACI 마지막 연도 다음 해 ~ 작년을 받습니다. 호출 한도 때문에 최대 최근 2년(재작년·작년)만 받습니다. `.env`에 `COMTRADE_API_KEY`가 없으면 건너뜁니다.
+3. Comtrade: BACI 마지막 연도(연결 연도) ~ 작년을 받습니다. 연결 연도는 BACI 다음 해의 성장률을 같은 Comtrade끼리 비교하는 데만 씁니다.
+   BACI가 없거나 3년 넘게 늦으면 호출 한도 때문에 최근 2년만 받습니다. `.env`에 `COMTRADE_API_KEY`가 없으면 건너뜁니다.
    신고국별 응답을 `data/external/comtrade/raw/<연도>/<국가코드>.json`에 남겨, 한도 초과로 끊겨도 다음 실행은 못 받은 나라만 받습니다.
    이미 받은 나라의 수정 신고까지 반영하려면 그 연도의 `raw/<연도>/`를 지우고 실행합니다.
-   BACI 새 판이 그 연도까지 덮으면 해당 연도의 `comtrade_imports_<연도>.csv`와 `raw/<연도>/`를 지웁니다.
+   BACI 새 판이 나오면 연결 연도보다 앞선 해의 `comtrade_imports_<연도>.csv`와 `raw/<연도>/`를 지웁니다.
 
 | 기록 | 위치 |
 |---|---|
@@ -107,7 +108,9 @@ python backend/app/scheduler/collectors/external/external_collect.py check --db
 - **나미비아 코드가 `NA`입니다.** pandas로 읽을 때 `keep_default_na=False, na_values=[""]`를 줘야 결측으로 바뀌지 않습니다.
 - 국가 매핑률 검사 기준: WDI 85%(대만·소규모 속령 미발표), BACI 90%(레위니옹·푸에르토리코 등은 프랑스·미국에 합산), Comtrade는 기준 없음(신고 마친 국가만).
 - BACI 국가 파일은 대만(490 "Other Asia, nes")과 나미비아의 ISO2가 빈칸이라 코드에서 `TW`·`NA`로 채웁니다. 나머지 빈칸(지역 묶음)은 버립니다.
-- BACI는 수출입 신고를 조정한 FOB 기준이며 관세청 수출액과도 신고·집계·조정 차이로 정확히 같지 않습니다. [CEPII 방법론](https://www.cepii.fr/pdf_pub/wp/2010/wp2010-23.pdf). 교차 검증은 `export_summary`에 12개월이 모두 있는 해만, ±20%로 봅니다.
+- 금액 기준: BACI는 수출입 신고를 조정한 **FOB** 값이고, Comtrade 수입액(`primaryValue`)은 운임·보험료를 포함한 **CIF** 값입니다. [CEPII 방법론](https://www.cepii.fr/pdf_pub/wp/2010/wp2010-23.pdf)
+  그래서 두 출처를 섞어 성장률을 계산하지 않습니다. BACI 마지막 해는 Comtrade로도 받아 두고(연결 연도), BACI 다음 해의 성장률은 Comtrade끼리 비교합니다.
+- BACI와 관세청 수출액은 둘 다 FOB지만 신고·집계·조정 차이로 정확히 같지 않습니다. 교차 검증은 `export_summary`에 12개월이 모두 있는 해만, ±20%로 봅니다.
 - Comtrade는 보정 전 신고값이고 HS2022(H6)로 신고한 행만 씁니다. 같은 연도 BACI가 나오면 BACI를 우선합니다.
 
 ## 테스트
