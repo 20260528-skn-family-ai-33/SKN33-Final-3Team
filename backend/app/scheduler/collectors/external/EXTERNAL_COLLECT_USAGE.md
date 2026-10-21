@@ -1,7 +1,7 @@
 # 외부 데이터(WDI·BACI·Comtrade) 수집 사용 안내
 
 ML 피처(유망 품목·국가 예측, 시장 유형 분류)에 쓰는 외부 데이터를 받아 `data/external/`에 CSV로 저장합니다.
-학습·배치 예측에서만 읽는 정적 입력이라 **DB에 적재하지 않습니다.** `data/`는 `.gitignore` 대상이라 커밋되지 않습니다.
+학습·배치 예측에서 읽는 외부 입력은 **DB에 적재하지 않습니다.** 이번 코드·문서 변경에는 `data/external/`의 수집 결과를 포함하지 않습니다.
 
 | 데이터 | 한 줄 요약 | 범위 | 저장 파일 |
 |---|---|---|---|
@@ -9,7 +9,7 @@ ML 피처(유망 품목·국가 예측, 시장 유형 분류)에 쓰는 외부 �
 | CEPII BACI (HS22) | 보정된 국가×국가×HS6 연간 교역액을 수입국·HS6별로 집계 | 2022~2024 (V202601) | `data/external/baci/baci_imports_hs22.csv` |
 | UN Comtrade | 각국이 신고한 HS6별 수입액. BACI에 아직 없는 최신 연도 보충 | 2025 (신고 마친 국가만) | `data/external/comtrade/comtrade_imports_<연도>.csv` |
 
-국가 키 `country_code`는 관세청 `country.country_code`와 같은 **ISO2**라서 별도 매핑표가 필요 없습니다.
+국가 키 `country_code`는 관세청 `country.country_code`와 같은 **ISO2**입니다. 국가 시드에 없는 국가·지역은 별도로 연결 상태를 확인해야 합니다.
 
 ## 한 번에 받기
 
@@ -36,7 +36,7 @@ python -m backend.app.scheduler.jobs.external_refresh
 python backend/app/scheduler/collectors/external/external_collect.py check --db
 ```
 
-첫 줄이 BACI zip 다운로드(약 300MB)·집계 → WDI → Comtrade 순서로 받고, 둘째 줄이 결과를 검사합니다 (`모든 검사 통과`가 나오면 끝).
+첫 줄이 BACI zip 다운로드(약 300MB)·집계 → WDI → Comtrade 순서로 받고, 둘째 줄이 결과를 검사합니다 (`발견된 CSV의 검사 통과`는 존재하는 파일에 대한 검사 결과입니다. 전체 수집 완료와 구분하세요).
 처음에는 10~20분 걸립니다 (BACI 다운로드·집계 수 분, Comtrade 신고국당 1초 이상).
 다시 실행하면 이미 받은 BACI 판은 건너뛰고(`ALREADY`), Comtrade는 못 받은 나라만 받습니다.
 
@@ -107,7 +107,7 @@ python backend/app/scheduler/collectors/external/external_collect.py check --db
 - **나미비아 코드가 `NA`입니다.** pandas로 읽을 때 `keep_default_na=False, na_values=[""]`를 줘야 결측으로 바뀌지 않습니다.
 - 국가 매핑률 검사 기준: WDI 85%(대만·소규모 속령 미발표), BACI 90%(레위니옹·푸에르토리코 등은 프랑스·미국에 합산), Comtrade는 기준 없음(신고 마친 국가만).
 - BACI 국가 파일은 대만(490 "Other Asia, nes")과 나미비아의 ISO2가 빈칸이라 코드에서 `TW`·`NA`로 채웁니다. 나머지 빈칸(지역 묶음)은 버립니다.
-- BACI는 수입국 신고 기준(CIF)이라 관세청 수출액(FOB)과 정확히 같지 않습니다. 교차 검증은 `export_summary`에 12개월이 모두 있는 해만, ±20%로 봅니다.
+- BACI는 수출입 신고를 조정한 FOB 기준이며 관세청 수출액과도 신고·집계·조정 차이로 정확히 같지 않습니다. [CEPII 방법론](https://www.cepii.fr/pdf_pub/wp/2010/wp2010-23.pdf). 교차 검증은 `export_summary`에 12개월이 모두 있는 해만, ±20%로 봅니다.
 - Comtrade는 보정 전 신고값이고 HS2022(H6)로 신고한 행만 씁니다. 같은 연도 BACI가 나오면 BACI를 우선합니다.
 
 ## 테스트
@@ -115,3 +115,8 @@ python backend/app/scheduler/collectors/external/external_collect.py check --db
 ```powershell
 python -m unittest backend/tests/test_external_data.py backend/tests/test_external_refresh.py
 ```
+
+
+검사 제한: 빈 디렉터리, 무역 코드·금액 결측은 오류로 처리합니다. 모든 예상 연도·국가의 완전 수집, HS 사전과의 일치, 행 부재가 실제 0인지 여부는 이 검사 통과만으로 보장되지 않습니다. 수집 범위와 원본 보관 정책은 이번 수정으로 변경하지 않았습니다.
+
+Comtrade 대상 응답 행의 `primaryValue`는 집계 전에 검사합니다. 원본 null·비수치·무한대가 있으면 중단하므로 `sum`이 null을 0으로 숨기지 못합니다. 명시적인 0 금액은 정상 입력입니다. 한국 파트너 행 자체가 없는 경우를 0으로 채우는 기존 동작은 별개이며, 이 0을 미진출 판정 근거로 바로 사용하면 안 됩니다.
