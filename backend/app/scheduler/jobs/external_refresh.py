@@ -7,8 +7,9 @@
    아직 공개 전(404)이면 NOT_READY로 끝내고 다음 달에 다시 시도합니다. 이미 받아 집계했으면 ALREADY이고
    batch_run에 남기지 않습니다.
 2. WDI: 2022년~작년 지표를 다시 받습니다 (World Bank가 과거 값도 수정하므로 매번 덮어씀).
-3. Comtrade: BACI에 아직 없는 연도(BACI 마지막 연도+1 ~ 작년, 최대 최근 2년)를 받습니다. .env에 COMTRADE_API_KEY가 없으면 건너뜁니다.
-   BACI가 따라잡은 연도의 Comtrade 파일은 지웁니다.
+3. Comtrade: BACI 마지막 연도(연결 연도) ~ 작년을 받습니다. .env에 COMTRADE_API_KEY가 없으면 건너뜁니다.
+   연결 연도는 BACI 다음 해의 성장률을 같은 Comtrade끼리 비교하려고 받습니다 (BACI는 FOB, Comtrade 수입은 CIF).
+   BACI가 따라잡아 연결 연도보다 앞선 해의 Comtrade 파일은 지웁니다.
 
 단계마다 batch_run에 한 건씩 기록합니다 (대상 external_csv, job EXTERNAL_BACI·EXTERNAL_WDI·EXTERNAL_COMTRADE).
 진행 로그는 data/external/logs/external_refresh_<시각>.log, 다운로드·수집 실패는 download_failures.log에 따로 쌓습니다.
@@ -129,10 +130,10 @@ def baci_last_year():
 
 
 def drop_covered_comtrade(baci_last):
-    """BACI가 따라잡은 연도의 Comtrade CSV·원본 응답을 지운다. 같은 연도가 두 출처에 겹쳐 남지 않게."""
+    """BACI가 따라잡은 연도의 Comtrade CSV·원본 응답을 지운다. BACI 마지막 해는 연결 연도라 남긴다."""
     folder = ec.OUT_DIR / "comtrade"
     for path in [*folder.glob("comtrade_imports_*.csv"), *(folder / "raw").glob("[0-9]*")]:
-        if int(path.stem[-4:]) <= baci_last:
+        if int(path.stem[-4:]) < baci_last:
             shutil.rmtree(path) if path.is_dir() else path.unlink()
             log.info(f"COMTRADE 정리: BACI에 {baci_last}년까지 있어 {path.name} 삭제")
 
@@ -156,9 +157,10 @@ def run(today=None, engine=None):
     if not dotenv_values(ec.ROOT / ".env").get(ec.ENV_KEY):
         log.warning(f"COMTRADE 건너뜀: .env에 {ec.ENV_KEY}가 없음")
     else:
-        # BACI는 보통 2년 늦게 나오니 Comtrade는 최근 2년까지만 받는다. BACI 집계본이 아직 없어도
+        # BACI 마지막 해(연결 연도)부터 작년까지. BACI가 너무 오래됐거나 없으면 최근 2년만 받는다:
         # 2022년부터 전부 받으면 무료 키 한도(하루 500회)를 넘는다.
-        for year in range(max(baci_last + 1, last - 1), last + 1):
+        first = baci_last if baci_last >= last - 2 else last - 1
+        for year in range(first, last + 1):
             statuses[f"COMTRADE_{year}"] = step("COMTRADE", str(year), date(year, 1, 1), date(year, 12, 31),
                                                 lambda year=year: ec.collect_comtrade(year), engine)
     log.info(f"외부 데이터 갱신 끝 | {statuses}")

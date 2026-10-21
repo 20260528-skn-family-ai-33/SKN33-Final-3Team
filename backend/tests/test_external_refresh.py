@@ -49,7 +49,7 @@ class ExternalRefreshTest(unittest.TestCase):
         (self.tmp / "baci").mkdir()
         (self.tmp / "baci" / "BACI_HS22_V202601.zip").write_bytes(b"old")  # 지난 판
         comtrade_dir = self.tmp / "comtrade"
-        for year in (2025, 2026):
+        for year in (2024, 2025, 2026):
             (comtrade_dir / "raw" / str(year)).mkdir(parents=True)
             (comtrade_dir / f"comtrade_imports_{year}.csv").write_text("year\n")
 
@@ -60,14 +60,16 @@ class ExternalRefreshTest(unittest.TestCase):
                 mock.patch.object(job, "dotenv_values", return_value={ec.ENV_KEY: "test"}):
             statuses = job.run(date(2027, 2, 1), engine=self.engine)
 
-        self.assertEqual(statuses, {"BACI": "DONE", "WDI": "FAILED", "COMTRADE_2026": "DONE"})
-        comtrade.assert_called_once_with(2026)  # BACI가 2025년까지 있으니 2026년만
+        self.assertEqual(statuses, {"BACI": "DONE", "WDI": "FAILED", "COMTRADE_2025": "DONE", "COMTRADE_2026": "DONE"})
+        # BACI가 2025년까지 있으니 2025년(연결 연도)과 2026년
+        self.assertEqual([c.args[0] for c in comtrade.call_args_list], [2025, 2026])
         self.assertEqual([p.name for p in (self.tmp / "baci").glob("*.zip")], ["BACI_HS22_V202701c.zip"])
-        self.assertEqual(sorted(p.name for p in comtrade_dir.rglob("*")),  # BACI가 덮은 2025년은 지움
-                         ["2026", "comtrade_imports_2026.csv", "raw"])
+        self.assertEqual(sorted(p.name for p in comtrade_dir.rglob("*")),  # 연결 연도 2025년은 남기고 2024년만 지움
+                         ["2025", "2026", "comtrade_imports_2025.csv", "comtrade_imports_2026.csv", "raw"])
         self.assertEqual(self.runs(), [
             ("EXTERNAL_BACI", "external_csv", "SUCCESS", date(2022, 1, 1), 1, 300),
             ("EXTERNAL_WDI", "external_csv", "FAILED", date(2022, 1, 1), 0, 0),
+            ("EXTERNAL_COMTRADE", "external_csv", "SUCCESS", date(2025, 1, 1), 5, 9),
             ("EXTERNAL_COMTRADE", "external_csv", "SUCCESS", date(2026, 1, 1), 5, 9)])
         failures = self.failure_log.read_text("utf-8").splitlines()
         self.assertEqual(len(failures), 1)
