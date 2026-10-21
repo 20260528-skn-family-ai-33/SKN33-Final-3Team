@@ -7,11 +7,11 @@ import numpy as np
 import pandas as pd
 
 from backend.app.ml import preprocess as pp
+from backend.app.ml.temporal import dated_external, join_known
 
 MIN_EXPORT_USD = 100_000  # 최근 12개월 수출이 이보다 작은 쌍은 노이즈라 뺀다
 HISTORY = 24  # growth_12m(최근 12개월 vs 직전 12개월)에 필요한 과거 월 수
 HORIZON = 12  # y를 보는 미래 월 수
-EXTERNAL_LAG_YEARS = 1  # t년 기준월에는 t-1년 외부 데이터까지만 공개됐다고 본다
 CATEGORICAL = ["region_id", "hs2"]
 FEATURES = [
     "log_exp_12m", "growth_12m", "growth_3m", "active_months", "cv_12m", "anomaly_ratio", "unit_trend",
@@ -45,11 +45,13 @@ def load_data(engine=None, external_dir=None):
     engine = engine or make_engine()
     with engine.connect() as conn:
         read = lambda sql: pd.read_sql(text(sql), conn)  # noqa: E731
-        # R1(일시 급증) 월은 과거 평균(baseline)으로 바꿔 일회성 거래가 "유망"으로 잡히지 않게 한다.
+        # R1은 다음 달 자료가 필요하다. 원금액과 보정량을 분리하고 기준월별로 적용한다.
         exports = read("""
             SELECT m.trade_month AS month, m.country_code, m.hs6_code AS hs6, m.hs_ver,
+                   SUM(m.amount_usd) AS amount,
                    SUM(CASE WHEN m.anomaly_code LIKE 'R1%' AND m.baseline_amount_usd IS NOT NULL
-                            THEN m.baseline_amount_usd ELSE m.amount_usd END) AS amount,
+                            THEN m.baseline_amount_usd - m.amount_usd ELSE 0 END) AS r1_adjustment,
+                   SUM(CASE WHEN m.anomaly_code = 'R1' THEN m.amount_usd ELSE 0 END) AS r1_only_amount,
                    SUM(CASE WHEN m.anomaly_code NOT IN ('NONE') THEN m.amount_usd ELSE 0 END) AS anomaly_amount,
                    SUM(m.weight_kg) AS weight
             FROM export_monthly m JOIN country c ON c.country_code = m.country_code
@@ -64,7 +66,8 @@ def load_data(engine=None, external_dir=None):
                               SUM(day_count) AS count
                        FROM news_product_daily WHERE CHAR_LENGTH(hs_code) = 6 GROUP BY 1, 2, 3, 4""")
     mapping = hs_key_map(corr)
-    exports = apply_hs_key(exports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
+    exports = apply_hs_key(exports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).agg(
+        lambda values: values.sum(skipna=False))
     news = apply_hs_key(news, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
     external = pp.load_external(external_dir, set(countries.country_code), mapping)
     return {"exports": exports, "countries": countries, "fx": fx, "news": news, **external}
@@ -75,11 +78,20 @@ def _month_index(series, months):
 
 
 def _matrix(df, value, rows, months):
-    """(국가, HS6) × 월 행렬. 실적이 없는 월은 0."""
-    out = np.zeros((len(rows), len(months)), dtype=np.float64)
+    """(국가, HS6) × 월 행렬. 행 부재·원본 결측은 미관측(NaN)으로 보존한다."""
+    out = np.full((len(rows), len(months)), np.nan, dtype=np.float64)
     r = rows.get_indexer(pd.MultiIndex.from_arrays([df.country_code, df.hs6]))
-    out[r, _month_index(df.month, months)] = df[value].fillna(0).to_numpy()
+    out[r, _month_index(df.month, months)] = pd.to_numeric(df[value], errors="raise").to_numpy(dtype=float)
     return out
+
+
+def _require_observed(matrix, rows, months, column):
+    """누락을 무역 없음으로 바꾸거나 일부 후보를 조용히 제외하지 않는다."""
+    missing = np.argwhere(~np.isfinite(matrix))
+    if len(missing):
+        examples = ", ".join(f"{rows[r][0]}/{rows[r][1]}/{months[m]}" for r, m in missing[:5])
+        raise ValueError(f"수출 실적 미관측 또는 비유한 값: {column} {len(missing)}건 ({examples}). "
+                         "수집 범위·완료 여부를 확인하세요. 확인된 무역 없음만 명시적인 0 행으로 제공해야 합니다.")
 
 
 def _window(a, end, length):
@@ -103,22 +115,37 @@ def _group_sum(values, groups):
 
 
 def build_dataset(data, min_export=MIN_EXPORT_USD):
-    """기준월마다 (국가, HS6) 행을 만든다. 미래 12개월이 없는 최근 기준월은 y가 NaN이다(예측 대상)."""
+    """관측 범위 내부 누락은 오류. 범위 이후의 미래 실적이 없는 최근 기준월은 y=NaN(예측 대상)."""
     exports = data["exports"]
+    if exports.empty:
+        raise ValueError("수출 실적이 없습니다")
+    monthly_keys = exports[["country_code", "hs6"]].assign(
+        month=pd.to_datetime(exports.month).dt.to_period("M"))
+    if monthly_keys.isna().any().any() or monthly_keys.duplicated().any():
+        raise ValueError("수출 실적의 국가·HS6·월 키에 결측 또는 중복이 있습니다")
     months = pd.period_range(pd.to_datetime(exports.month).min(), pd.to_datetime(exports.month).max(), freq="M")
     rows = pd.MultiIndex.from_frame(exports[["country_code", "hs6"]].drop_duplicates())
     amount, anomaly, weight = (_matrix(exports, col, rows, months) for col in ("amount", "anomaly_amount", "weight"))
+    _require_observed(amount, rows, months, "amount")
+    adjustment = _matrix(exports, "r1_adjustment", rows, months) if "r1_adjustment" in exports else np.zeros_like(amount)
+    if "r1_adjustment" in exports:
+        _require_observed(adjustment, rows, months, "r1_adjustment")
+    r1_only = _matrix(exports, "r1_only_amount", rows, months) if "r1_only_amount" in exports else np.zeros_like(amount)
+    corrected = amount + adjustment
     country = rows.get_level_values(0).to_numpy()
     hs6 = rows.get_level_values(1).to_numpy()
     frames = []
     for t in range(HISTORY - 1, len(months)):
-        s12, p12 = _window(amount, t, 12), _window(amount, t - 12, 12)
+        # t월 R1은 t+1월에야 확정된다. t 이전 월만 보정하고 t월은 원금액을 쓴다.
+        s12 = _window(corrected, t, 12) - adjustment[:, t]
+        p12 = _window(corrected, t - 12, 12)
         keep = s12 >= min_export
         if not keep.any():
             continue
-        last12 = amount[:, t - 11:t + 1]
-        a6, w6 = _window(amount, t, 6), _window(weight, t, 6)
-        pa6, pw6 = _window(amount, t - 6, 6), _window(weight, t - 6, 6)
+        last12 = corrected[:, t - 11:t + 1].copy()
+        last12[:, -1] = amount[:, t]
+        a6, w6 = _window(corrected, t, 6) - adjustment[:, t], _window(weight, t, 6)
+        pa6, pw6 = _window(corrected, t - 6, 6), _window(weight, t - 6, 6)
         c12, cp12 = _group_sum(s12, country), _group_sum(p12, country)
         h12, hp12 = _group_sum(s12, hs6), _group_sum(p12, hs6)
         frame = pd.DataFrame({
@@ -126,10 +153,10 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
             "exp_12m": s12,
             "log_exp_12m": np.log1p(s12),
             "growth_12m": _growth(s12, p12),
-            "growth_3m": _growth(_window(amount, t, 3), _window(amount, t - 3, 3)),
+            "growth_3m": _growth(_window(corrected, t, 3) - adjustment[:, t], _window(corrected, t - 3, 3)),
             "active_months": (last12 > 0).sum(axis=1),
             "cv_12m": _ratio(last12.std(axis=1), last12.mean(axis=1)),
-            "anomaly_ratio": _ratio(_window(anomaly, t, 12), s12),
+            "anomaly_ratio": _ratio(_window(anomaly, t, 12) - r1_only[:, t], s12),
             "unit_trend": np.log(_ratio(_ratio(a6, w6), _ratio(pa6, pw6))),
             "share_in_country": _ratio(s12, c12),
             "share_in_product": _ratio(s12, h12),
@@ -138,7 +165,9 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
             "product_countries": _group_sum((s12 > 0).astype(float), hs6),
         })
         if t + HORIZON < len(months):
-            future = amount[:, t + 1:t + 1 + HORIZON]
+            future = corrected[:, t + 1:t + 1 + HORIZON].copy()
+            # 정답도 미래 12개월의 마지막 월 당시 확정 가능한 R1까지만 보정한다.
+            future[:, -1] = amount[:, t + HORIZON]
             frame["y_growth"] = _growth(future.sum(axis=1), s12)
             frame["future_cv"] = _ratio(future.std(axis=1), future.mean(axis=1))
         else:
@@ -150,13 +179,9 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     ds["hs2"] = ds.hs6.str[:2].astype(int)
     ds = ds.merge(data["countries"][["country_code", "region_id"]], on="country_code", how="left")
     ds = _add_fx(ds, data["fx"], data["countries"])
-    ds = _add_wdi(ds, data["wdi_yearly"])
-    ds = _add_market(ds, data["market_yearly"])
+    ds = _add_wdi(ds, data["wdi_yearly"], data.get("availability"))
+    ds = _add_market(ds, data["market_yearly"], data.get("availability"))
     return _add_news(ds, data["news"])
-
-
-def _year(ds, lag=EXTERNAL_LAG_YEARS):
-    return ds.anchor.dt.year - lag
 
 
 def _add_fx(ds, fx, countries):
@@ -175,19 +200,20 @@ def _add_fx(ds, fx, countries):
               .drop(columns=["currency_code", "month"]))
 
 
-def _add_wdi(ds, wdi_yearly):
-    w = wdi_yearly.drop(columns="filled")
-    return ds.assign(year=_year(ds)).merge(w, on=["year", "country_code"], how="left").drop(columns="year")
+def _add_wdi(ds, wdi_yearly, availability=None):
+    w = dated_external(wdi_yearly, availability, "wdi")
+    return join_known(ds, w, ["country_code"], ["log_gdp", "gdp_growth", "log_population", "log_gdp_pc"])
 
 
-def _add_market(ds, market_yearly):
-    """t-1년 시장 피처와, 라벨용 미래 연도 시장 성장·점유율. 계산은 preprocess.market_yearly에서 한다."""
+def _add_market(ds, market_yearly, availability=None):
+    """공개된 시장 피처와 미래 정답을 구분한다. 미래 정답의 사용 가능일도 보존한다."""
     keys = ["year", *pp.MARKET_KEYS]
-    feat = market_yearly[[*keys, "mkt_log_import", "mkt_growth", "kor_share", "kor_share_change"]]
-    ds = ds.assign(year=_year(ds)).merge(feat, on=keys, how="left")
+    dated = dated_external(market_yearly, availability, "market")
+    ds = join_known(ds, dated, pp.MARKET_KEYS, ["mkt_log_import", "mkt_growth", "kor_share", "kor_share_change"])
     # ponytail: 미래 12개월을 연 단위로 근사 (기준월+6개월이 속한 해 vs 그 전해). 월별 시장 데이터가 생기면 바꾼다.
-    future = market_yearly[[*keys, "mkt_growth", "kor_share"]].rename(
-        columns={"mkt_growth": "future_mkt_growth", "kor_share": "future_share"})
+    future = dated[[*keys, "mkt_growth", "kor_share", "available_from"]].rename(
+        columns={"mkt_growth": "future_mkt_growth", "kor_share": "future_share",
+                 "available_from": "type_available_from"})
     ds["year"] = (ds.anchor + pd.DateOffset(months=6)).dt.year
     return ds.merge(future, on=keys, how="left").drop(columns="year")
 
@@ -197,7 +223,10 @@ def _add_news(ds, news):
     if news.empty:
         return ds.assign(news_3m=0.0, news_all_3m=0.0, news_change=0.0)
     n = news.assign(month=pd.to_datetime(news.month)).pivot_table(
-        index="month", columns=["country_code", "hs6"], values="count", aggfunc="sum").asfreq("MS").fillna(0)
+        index="month", columns=["country_code", "hs6"], values="count", aggfunc="sum")
+    # 마지막 기사 이후에도 기준월까지 0개월을 이어야 최근/직전 3개월 창이 유지된다.
+    start = min(n.index.min(), pd.Timestamp(ds.anchor.min()) - pd.DateOffset(months=5))
+    n = n.reindex(pd.date_range(start, ds.anchor.max(), freq="MS", name="month")).fillna(0)
     now, before = n.rolling(3, min_periods=1).sum(), n.shift(3).rolling(3, min_periods=1).sum()
     long = lambda df, name: df.stack(["country_code", "hs6"], future_stack=True).rename(name).reset_index()  # noqa: E731
     feat = long(now, "news_3m").merge(long(before, "news_prev_3m"), on=["month", "country_code", "hs6"])
@@ -222,6 +251,8 @@ def type_thresholds(rows):
 def market_type(kor_growth, mkt_growth, share, cv, th):
     """docs/ML_PLAN.md 7장 규칙. 입력에 NaN이 있으면 NaN(라벨 없음)."""
     kor_growth, mkt_growth, share, cv = (np.asarray(v, dtype=float) for v in (kor_growth, mkt_growth, share, cv))
+    if not all(np.isfinite(v) for v in th.values()):
+        return np.full(kor_growth.shape, np.nan)
     label = np.select(
         [cv >= th["cv_hi"],
          (mkt_growth >= th["mkt_growth_hi"]) & (share >= th["share_hi"]),
@@ -240,3 +271,4 @@ def future_type(ds, th):
 def past_type(ds, th):
     """기준선: 같은 규칙을 지난 12개월 실적에 적용한 유형 (모델 없이 지금 상태로 판단)."""
     return market_type(ds.growth_12m, ds.mkt_growth, ds.kor_share, ds.cv_12m, th)
+

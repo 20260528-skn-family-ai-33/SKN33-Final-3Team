@@ -19,8 +19,10 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.metrics import confusion_matrix, f1_score, ndcg_score
+from sklearn.pipeline import make_pipeline
 
 from backend.app.ml import features as F
+from backend.app.ml.transforms import TrainingClipper
 
 OUT_DIR = Path(__file__).resolve().parents[3] / "data" / "ml"
 TOP_N = 5
@@ -29,13 +31,14 @@ GAP_MONTHS = F.HORIZON  # 학습 마지막 기준월과 평가 기준월 사이 
 
 
 def regressor():
-    return HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, categorical_features=F.CATEGORICAL,
-                                         random_state=0)
+    return make_pipeline(TrainingClipper(), HistGradientBoostingRegressor(
+        max_iter=300, learning_rate=0.05, categorical_features=F.CATEGORICAL, random_state=0))
 
 
 def classifier():
-    return HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05, categorical_features=F.CATEGORICAL,
-                                          class_weight="balanced", random_state=0)
+    return make_pipeline(TrainingClipper(), HistGradientBoostingClassifier(
+        max_iter=300, learning_rate=0.05, categorical_features=F.CATEGORICAL,
+        class_weight="balanced", random_state=0))
 
 
 def clip_y(y, low, high):
@@ -51,18 +54,29 @@ def split(labeled):
     return train, labeled[labeled.anchor == test_anchor]
 
 
-def rank_metrics(test, score):
-    """국가별 Precision@5·NDCG@5 평균. 정답은 실제 y_growth 상위 5개 품목."""
+def rank_metrics(test, score, direction="country"):
+    """국가별 품목 또는 품목별 국가 순위. 기존 최소 후보 수 기준은 그대로 적용한다."""
+    group, item = ("country_code", "hs6") if direction == "country" else ("hs6", "country_code")
     precision, ndcg = [], []
-    for _, g in test.assign(score=score).groupby("country_code"):
+    for _, g in test.assign(score=score).groupby(group):
         if len(g) < MIN_CANDIDATES:
             continue
-        actual = set(g.nlargest(TOP_N, "y_growth").hs6)
-        precision.append(len(actual & set(g.nlargest(TOP_N, "score").hs6)) / TOP_N)
+        actual = set(g.nlargest(TOP_N, "y_growth")[item])
+        precision.append(len(actual & set(g.nlargest(TOP_N, "score")[item])) / TOP_N)
         relevance = g.y_growth.rank(pct=True).to_numpy()[None, :]
         ndcg.append(ndcg_score(relevance, g.score.to_numpy()[None, :], k=TOP_N))
     return {"precision_at_5": float(np.mean(precision)) if precision else None,
-            "ndcg_at_5": float(np.mean(ndcg)) if ndcg else None, "countries": len(precision)}
+            "ndcg_at_5": float(np.mean(ndcg)) if ndcg else None,
+            "countries" if direction == "country" else "products": len(precision)}
+
+
+def available_b(rows, cutoff):
+    """해당 학습 시점까지 공개된 미래 시장 정답만 사용한다."""
+    if "type_available_from" not in rows:
+        raise ValueError("시장 유형 정답의 사용 가능일(type_available_from)이 없습니다")
+    cutoff = pd.Timestamp(cutoff) + pd.offsets.MonthEnd(0)
+    return rows[pd.to_datetime(rows.type_available_from) <= cutoff].dropna(
+        subset=["y_growth", "future_cv", "future_mkt_growth", "future_share"])
 
 
 def fit_a(rows):
@@ -84,31 +98,69 @@ def evaluate(ds):
     model_a = fit_a(train)
     report["model_a"] = rank_metrics(test, model_a.predict(test[F.FEATURES]))
     report["baseline_a"] = rank_metrics(test, test.growth_12m.to_numpy())  # 작년 성장률 상위 5개
-    th = F.type_thresholds(train)
-    x_tr, y_tr = labeled_b(train, th)
-    x_te, y_te = labeled_b(test, th)
+    report["model_a_product"] = rank_metrics(test, model_a.predict(test[F.FEATURES]), "product")
+    report["baseline_a_product"] = rank_metrics(test, test.growth_12m.to_numpy(), "product")
+    known_train = available_b(train, test.anchor.max())
+    th = F.type_thresholds(known_train)
+    x_tr, y_tr = labeled_b(known_train, th)
+    x_te, y_te = labeled_b(available_b(test, ds.anchor.max()), th)
     if len(np.unique(y_tr)) < 2 or x_te.empty:
         report["model_b"] = "라벨 부족 (외부 시장 데이터가 없는 연도)"
         return report
     pred = classifier().fit(x_tr[F.FEATURES], y_tr).predict(x_te[F.FEATURES])
     base = F.past_type(x_te, th)
     ok = ~np.isnan(base)
-    report["model_b"] = {"macro_f1": float(f1_score(y_te, pred, average="macro")),
+    labels = list(F.TYPE_NAMES)
+    report["model_b_all"] = {"macro_f1": float(f1_score(y_te, pred, labels=labels, average="macro", zero_division=0)),
                          "confusion": confusion_matrix(y_te, pred, labels=list(F.TYPE_NAMES)).tolist(),
                          "rows": len(y_te)}
-    report["baseline_b"] = {"macro_f1": float(f1_score(y_te[ok], base[ok].astype(int), average="macro")),
+    report["model_b"] = {"macro_f1": float(f1_score(y_te[ok], pred[ok], labels=labels, average="macro", zero_division=0)) if ok.any() else None,
+                         "rows": int(ok.sum())}
+    report["baseline_b"] = {"macro_f1": float(f1_score(y_te[ok], base[ok].astype(int), labels=labels, average="macro", zero_division=0)) if ok.any() else None,
                             "rows": int(ok.sum())}
     return report
 
 
-def train(ds, out_dir=OUT_DIR):
+PROMOTION_METRICS = {
+    f"{direction}_{metric}": ("model_a" + suffix, "baseline_a" + suffix, metric)
+    for direction, suffix in (("country", ""), ("product", "_product"))
+    for metric in ("precision_at_5", "ndcg_at_5")
+}
+
+
+class PromotionRejected(ValueError):
+    def __init__(self, message, report):
+        super().__init__(message)
+        self.report = report
+
+
+def require_promotion(report, promotion_metric):
+    if promotion_metric not in PROMOTION_METRICS:
+        raise PromotionRejected("팀에서 채택 지표를 정한 뒤 promotion_metric을 지정하세요", report)
+    model_key, base_key, metric = PROMOTION_METRICS[promotion_metric]
+    model, base = report[model_key][metric], report[base_key][metric]
+    if model is None or base is None or not np.isfinite([model, base]).all() or model < base:
+        raise PromotionRejected(f"모델 저장 중단: {promotion_metric} 미평가 또는 기준선 미달", report)
+
+
+def use_classifier(report):
+    model, base = report.get("model_b"), report.get("baseline_b")
+    return (isinstance(model, dict) and isinstance(base, dict)
+            and model["macro_f1"] is not None and base["macro_f1"] is not None
+            and np.isfinite([model["macro_f1"], base["macro_f1"]]).all()
+            and model["macro_f1"] >= base["macro_f1"])
+
+
+def train(ds, out_dir=OUT_DIR, promotion_metric=None):
     """평가 → 전체 기간으로 다시 학습 → 마지막 기준월 예측을 저장한다."""
     report = evaluate(ds)
+    require_promotion(report, promotion_metric)  # 저장 전 검사: 기존 산출물을 덮어쓰지 않는다.
     labeled = ds[ds.y_growth.notna()]
     model_a = fit_a(labeled)
-    th = F.type_thresholds(labeled)
-    x_b, y_b = labeled_b(labeled, th)
-    model_b = classifier().fit(x_b[F.FEATURES], y_b) if len(np.unique(y_b)) >= 2 else None
+    known = available_b(labeled, ds.anchor.max())
+    th = F.type_thresholds(known)
+    x_b, y_b = labeled_b(known, th)
+    model_b = classifier().fit(x_b[F.FEATURES], y_b) if use_classifier(report) and len(np.unique(y_b)) >= 2 else None
     latest = ds[ds.anchor == ds.anchor.max()]
     pred = latest[["country_code", "hs6"]].assign(score=model_a.predict(latest[F.FEATURES]))
     pred["rank_in_country"] = pred.groupby("country_code").score.rank(ascending=False, method="first").astype(int)
@@ -119,8 +171,10 @@ def train(ds, out_dir=OUT_DIR):
     pred.to_csv(out_dir / "predictions.csv", index=False)
     joblib.dump({"model_a": model_a, "model_b": model_b}, out_dir / "models.joblib")
     meta = {"trained_at": datetime.now().isoformat(timespec="seconds"), "predict_anchor": str(latest.anchor.max().date()),
-            "features": F.FEATURES, "thresholds": th, "min_export_usd": F.MIN_EXPORT_USD,
-            "model_b": "classifier" if model_b else "rule (라벨 부족)", "evaluation": report}
+            "features": F.FEATURES, "thresholds": {k: v if np.isfinite(v) else None for k, v in th.items()},
+            "min_export_usd": F.MIN_EXPORT_USD,
+            "model_b": "classifier" if model_b else "rule (라벨·비교 평가 부족 또는 기준선 미달)",
+            "promotion_metric": promotion_metric, "evaluation": report}
     (out_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return meta
 
@@ -145,23 +199,28 @@ def market_type_of(country_code, hs6, out_dir=OUT_DIR):
     """기능 ③: 국가·품목 시장 유형. 최근 12개월 수출이 기준 미만이라 예측 대상이 아니면 None."""
     p = load_predictions(out_dir)
     row = p[(p.country_code == country_code) & (p.hs6 == hs6)]
-    return None if row.empty else row.iloc[0].market_type_name
+    return None if row.empty or pd.isna(row.iloc[0].market_type_name) else row.iloc[0].market_type_name
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("train", help="DB·외부 CSV로 학습·평가하고 예측을 data/ml/에 저장")
+    t = sub.add_parser("train", help="DB·외부 CSV로 학습·평가하고 예측을 data/ml/에 저장")
+    t.add_argument("--promotion-metric", required=True, choices=list(PROMOTION_METRICS), help="팀이 채택한 모델 A 비교 지표")
     q = sub.add_parser("query", help="저장된 예측 조회")
     q.add_argument("--country")
     q.add_argument("--hs6")
     args = parser.parse_args()
     if args.cmd == "train":
-        meta = train(F.build_dataset(F.load_data()))
+        try:
+            meta = train(F.build_dataset(F.load_data()), promotion_metric=args.promotion_metric)
+        except PromotionRejected as exc:
+            print(json.dumps(exc.report, ensure_ascii=False, indent=2))
+            parser.exit(1, str(exc) + "\n")
         print(json.dumps(meta["evaluation"], ensure_ascii=False, indent=2))
         print(f"저장: {OUT_DIR} (예측 기준월 {meta['predict_anchor']})")
     elif args.country and args.hs6:
-        print(market_type_of(args.country, args.hs6) or "예측 대상 아님 (최근 12개월 수출이 기준 미만)")
+        print(market_type_of(args.country, args.hs6) or "시장 유형 미판정 또는 예측 대상 아님")
     elif args.country:
         print(top_products(args.country).to_string(index=False))
     elif args.hs6:
@@ -172,3 +231,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -168,6 +168,15 @@ def comtrade_imports(records, iso2_by_code):
         return pd.DataFrame(columns=columns)
     df = df[(df.classificationCode == "H6") & df.partnerCode.isin([0, COMTRADE_KOREA])]
     df = df.assign(country_code=df.reporterCode.map(iso2_by_code)).dropna(subset=["country_code"])
+    if df.empty:
+        return pd.DataFrame(columns=columns)
+    # sum은 원본 null을 0으로 바꾼다. 집계 전에 실제 응답 행의 금액을 검증한다.
+    values = pd.to_numeric(df["primaryValue"], errors="coerce")
+    invalid = values.isna() | values.isin([float("inf"), float("-inf")])
+    if invalid.any():
+        keys = df.loc[invalid, ["refYear", "reporterCode", "partnerCode", "cmdCode"]].head(5).to_dict("records")
+        raise ValueError(f"Comtrade primaryValue 결측·비수치·비유한 값 {int(invalid.sum())}건: {keys}")
+    df = df.assign(primaryValue=values)
     out = df.pivot_table(index=["refYear", "country_code", "cmdCode"], columns="partnerCode",
                          values="primaryValue", aggfunc="sum").reindex(columns=[0, COMTRADE_KOREA])
     out = out.fillna({COMTRADE_KOREA: 0}).dropna(subset=[0]).reset_index()
@@ -224,6 +233,13 @@ def seed_countries():
 def check_frame(df, countries, keys, money, min_year, coverage=0.95):
     """CSV 하나의 연도·키 중복·국가 매핑률·금액 범위를 검사해 문제 목록을 돌려준다."""
     problems = []
+    missing = set(keys + money) - set(df.columns)
+    if missing:
+        return [f"필수 컬럼 누락: {sorted(missing)}"]
+    if df.empty:
+        return ["CSV가 비어 있음"]
+    if df[keys].isna().any().any():
+        problems.append("키 결측")
     if df.year.min() != min_year:
         problems.append(f"시작 연도 {df.year.min()} != {min_year}")
     if df.duplicated(keys).any():
@@ -240,6 +256,11 @@ def check_frame(df, countries, keys, money, min_year, coverage=0.95):
 
 def check_baci(df):
     problems = []
+    required = {"hs6", "import_world_usd", "import_from_kor_usd"}
+    if not required <= set(df.columns):
+        return [f"무역 컬럼 누락: {sorted(required - set(df.columns))}"]
+    if df[list(required)].isna().any().any():
+        problems.append("무역 코드·금액 결측 (0과 구분 필요)")
     if not df.hs6.str.fullmatch(r"\d{6}").all():
         problems.append("6자리 숫자가 아닌 hs6")
     if (df.import_from_kor_usd > df.import_world_usd).any():
@@ -285,6 +306,10 @@ def check(with_db):
     problems = []
     wdi_files = sorted((OUT_DIR / "wdi").glob("wdi_*.csv"), key=lambda p: p.stat().st_mtime)
     baci_path = OUT_DIR / "baci" / "baci_imports_hs22.csv"
+    comtrade_files = sorted((OUT_DIR / "comtrade").glob("comtrade_imports_*.csv"))
+    if not wdi_files and not baci_path.exists() and not comtrade_files:
+        print("실패: 검사할 CSV가 없음")
+        return False
     for path in wdi_files[-1:]:
         print(f"[WDI] {path.name}")
         df = pd.read_csv(path, keep_default_na=False, na_values=[""])
@@ -299,7 +324,7 @@ def check(with_db):
         problems += check_baci(df)
         if with_db:
             problems += check_db(df)
-    for path in sorted((OUT_DIR / "comtrade").glob("comtrade_imports_*.csv")):
+    for path in comtrade_files:
         print(f"[Comtrade] {path.name}")
         df = pd.read_csv(path, dtype={"hs6": str}, keep_default_na=False, na_values=[""])
         money = ["import_world_usd", "import_from_kor_usd"]
@@ -307,7 +332,7 @@ def check(with_db):
         problems += check_frame(df, countries, ["year", "country_code", "hs6"], money,
                                 int(path.stem[-4:]), coverage=0)
         problems += check_baci(df)
-    print("\n".join(f"실패: {p}" for p in problems) or "모든 검사 통과")
+    print("\n".join(f"실패: {p}" for p in problems) or "발견된 CSV의 검사 통과 (전체 수집 완료를 뜻하지 않음)")
     return not problems
 
 
@@ -337,3 +362,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

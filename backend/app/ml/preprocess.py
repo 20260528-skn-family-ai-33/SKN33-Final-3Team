@@ -66,7 +66,7 @@ def market_yearly(market, countries=None):
 
     - 대상 국가(countries)만 남기고, 전세계 수입액이 0 이하인 행은 시장이 없는 것으로 보고 뺀다.
     - 같은 (국가, HS6)이 여러 출처·코드에서 오면 합친다 (HS 묶음 통일 뒤 생기는 중복).
-    - 성장·점유율 변화는 바로 전해 값이 있을 때만 계산하고 1%·99%에서 자른다.
+    - 성장·점유율 변화는 바로 전해 값이 있을 때만 계산한다. 자르기는 모델 학습 단계에서 수행한다.
     """
     m = market if countries is None else market[market.country_code.isin(countries)]
     m = (m[m.import_world_usd > 0]
@@ -77,8 +77,9 @@ def market_yearly(market, countries=None):
     prev = m[["year", *MARKET_KEYS, "import_world_usd", "kor_share"]].assign(year=m.year + 1)
     m = m.merge(prev, on=["year", *MARKET_KEYS], how="left", suffixes=("", "_prev"))
     m["mkt_log_import"] = np.log1p(m.import_world_usd)
-    m["mkt_growth"] = clip(_growth(m.import_world_usd, m.import_world_usd_prev))
-    m["kor_share_change"] = clip(m.kor_share - m.kor_share_prev)
+    # 분할 이전에는 원래 값을 유지한다. 분위수 경계는 모델의 학습 행에서만 추정한다.
+    m["mkt_growth"] = _growth(m.import_world_usd, m.import_world_usd_prev)
+    m["kor_share_change"] = m.kor_share - m.kor_share_prev
     return m.drop(columns=["import_world_usd_prev", "kor_share_prev"]).sort_values(["year", *MARKET_KEYS],
                                                                                    ignore_index=True)
 
@@ -93,7 +94,7 @@ def wdi_yearly(wdi, countries=None):
     with np.errstate(divide="ignore"):
         w = pd.DataFrame({"year": w.year.astype(int), "country_code": w.country_code,
                           "log_gdp": np.log(w.gdp_usd.astype(float)),
-                          "gdp_growth": clip(w.gdp_growth_pct.astype(float)),
+                          "gdp_growth": w.gdp_growth_pct.astype(float),
                           "log_population": np.log(w.population.astype(float)),
                           "log_gdp_pc": np.log(w.gdp_per_capita_usd.astype(float))})
     values = ["log_gdp", "gdp_growth", "log_population", "log_gdp_pc"]
@@ -112,7 +113,11 @@ def load_external(external_dir=None, countries=None, hs_mapping=None):
     market = read_market(external_dir)
     if hs_mapping:
         market = market.assign(hs6=[hs_mapping.get(("HS2022", c), c) for c in market.hs6])
-    return {"market_yearly": market_yearly(market, countries), "wdi_yearly": wdi_yearly(read_wdi(external_dir), countries)}
+    availability_path = external_dir / "availability.csv"
+    availability = read_csv(availability_path) if availability_path.exists() else None
+    return {"market_yearly": market_yearly(market, countries),
+            "wdi_yearly": wdi_yearly(read_wdi(external_dir), countries),
+            "availability": availability}
 
 
 def summarize(name, df, keys):
@@ -146,3 +151,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import joblib
 
 from backend.app.ml import features as F
 from backend.app.ml import market_model as M
@@ -42,6 +43,12 @@ def fake_data(months=50, seed=0):
                        columns=["year", "country_code", "gdp_usd", "gdp_growth_pct", "population", "gdp_per_capita_usd"])
     market = pd.DataFrame(market, columns=["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd"])
     return {"exports": exports,
+            # 테스트용 가상 공개일. 실제 CSV에 이 날짜를 적용해서는 안 된다.
+            "availability": pd.DataFrame([
+                (dataset, source, y, f"{y + 1}-01-01")
+                for dataset, source in (("market", "BACI"), ("wdi", "WDI"))
+                for y in range(2021, 2027)
+            ], columns=["dataset", "source", "year", "available_from"]),
             "countries": pd.DataFrame({"country_code": COUNTRIES, "region_id": [35, 21, 30, 155],
                                        "currency_code": [None, "USD", None, None]}),
             "fx": fx, "news": news, "wdi_yearly": pp.wdi_yearly(wdi),
@@ -142,7 +149,12 @@ class PreprocessTest(unittest.TestCase):
 class ModelTest(unittest.TestCase):
     def test_train_predict_and_query(self):
         out = Path(tempfile.mkdtemp())
-        meta = M.train(F.build_dataset(fake_data()), out_dir=out)
+        ds = F.build_dataset(fake_data())
+        report = M.evaluate(ds)
+        # 저장·조회 계약 검증을 위한 통과 보고서. 실제 성능 우수성을 주장하는 테스트가 아니다.
+        report["model_a"]["ndcg_at_5"] = report["baseline_a"]["ndcg_at_5"]
+        with unittest.mock.patch.object(M, "evaluate", return_value=report):
+            meta = M.train(ds, out_dir=out, promotion_metric="country_ndcg_at_5")
         ev = meta["evaluation"]
         self.assertEqual(ev["model_a"]["countries"], len(COUNTRIES))
         self.assertIsNotNone(ev["baseline_a"]["precision_at_5"])
@@ -158,7 +170,11 @@ class ModelTest(unittest.TestCase):
         self.assertIn(M.market_type_of("VN", PRODUCTS[0], out_dir=out), F.TYPE_NAMES.values())
         self.assertIsNone(M.market_type_of("VN", "999999", out_dir=out))
         self.assertTrue((out / "models.joblib").exists())
+        loaded = joblib.load(out / "models.joblib")
+        latest = ds[ds.anchor == ds.anchor.max()]
+        np.testing.assert_allclose(loaded["model_a"].predict(latest[F.FEATURES]), M.load_predictions(out).score)
 
 
 if __name__ == "__main__":
     unittest.main()
+
