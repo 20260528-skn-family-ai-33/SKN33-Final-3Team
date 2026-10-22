@@ -1,12 +1,11 @@
-"""사전·검수 파일이 코드로 다시 만든 결과와 같은지 확인합니다 (회의: "나눠준 거랑 코드 실행했을 때 일치하는지").
+"""data/news_keywords/의 사전이 지금 코드로 다시 만든 결과와 같은지 확인합니다 (사전을 손으로 고치지 않았는지, 코드를 바꾼 뒤 다시 만들었는지).
 
 확인하는 것
-1. topic_categories.csv  = build_categories.py 결과
-2. synonyms.csv          = build_synonyms.py 결과
-3. (--candidates) 동의어_검수용.csv = synonym_candidates.py 결과   ※ sentence-transformers 필요 (llm_env)
-4. (--shared 폴더) 나눠 준 엑셀의 "코드가 채운 칸"이 지금 코드 결과와 같은지 (팀이 채운 O/X·의견 칸은 비교하지 않음)
+1. topic_categories.csv = build_categories.py 결과
+2. synonyms.csv         = build_synonyms.py 결과
+3. (--hypernyms) hypernyms.csv = build_hypernyms.py 결과   ※ 임베딩 저장(word_vectors.npz)이 없으면 OpenAI 호출
 
-실행: python backend/app/services/news_keywords/build/verify.py [--candidates] [--shared "C:/.../최종 프로젝트"]
+실행: python backend/app/services/news_keywords/build/verify.py [--hypernyms]
 """
 import argparse
 import importlib.util
@@ -16,7 +15,6 @@ from pathlib import Path
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
-NK = HERE.parent
 DATA = Path(__file__).resolve().parents[5] / "data" / "news_keywords"
 
 
@@ -41,48 +39,34 @@ def same(label, a, b, key):
     return bad.empty
 
 
+def read(name):
+    p = DATA / name
+    if not p.exists():
+        print(f"[없음] {p} — 먼저 만드세요")
+        return None
+    return pd.read_csv(p, dtype=str, keep_default_na=False)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--candidates", action="store_true", help="동의어 후보(임베딩)까지 다시 계산")
-    ap.add_argument("--shared", type=Path, help="팀에 나눠 준 검수 파일이 있는 폴더")
+    ap.add_argument("--hypernyms", action="store_true", help="상위어 사전까지 다시 계산")
     args = ap.parse_args()
     ok = True
-    cat_code = load("build_categories").build()
-    cat_file = pd.read_csv(NK / "topic_categories.csv", dtype=str, keep_default_na=False)
-    ok &= same("대/중분류 topic_categories.csv", cat_file, cat_code, ["주제어"])
+    cat_file = read("topic_categories.csv")
+    ok &= cat_file is not None and same("대/중분류 topic_categories.csv", cat_file, load("build_categories").build(), ["주제어"])
     bs = load("build_synonyms")
+    syn_file = read("synonyms.csv")
     try:
         syn_code, _ = bs.build(bs.topic_counts())
-        ok &= same("동의어 synonyms.csv", pd.read_csv(NK / "synonyms.csv", dtype=str, keep_default_na=False), syn_code, ["표기"])
+        ok &= syn_file is not None and same("동의어 synonyms.csv", syn_file, syn_code, ["표기"])
     except bs.SynonymConflict as e:
-        print(f"[판정 모순] 동의어 synonyms.csv: {e}"); ok = False
-    rv_file = pd.read_csv(DATA / "동의어_검수용.csv", dtype=str, keep_default_na=False)
-    if args.candidates:
-        sc = load("synonym_candidates")
-        ok &= same("동의어 후보 동의어_검수용.csv", rv_file, sc.build(sc.e5_encoder()), ["표기", "대표어 후보"])
-    if args.shared:
-        rf = load("review_files")
-        filled = ["팀 확인(O/X)", "의견", "맞는 분류 (X일 때 선택)", "정한 분류 (대 > 중)", "검수 상태"]
-        code_cols = lambda df: df[[c for c in df.columns if c not in filled and not c.startswith("예시 기사")]]
-        rv = rf.read_synonym_review()
-        checks = [("동의어_검수용.xlsx", None, rv, ["표기", "대표어 후보"]),
-                  ("동의어_미반영_검수용.xlsx", None, rf.remaining(rv), ["표기", "대표어 후보"])]
-        cat = rf.category_rows()
-        checks.append(("대중분류_검수용.xlsx", "검수", pd.DataFrame({"주제어": cat.주제어, "배정방법": cat.배정방법,
-                       "지금 대분류": cat.대분류, "지금 중분류": cat.중분류}), ["주제어"]))
-        un = rf.unclassified_rows()[["주제어", "미분류 이유", "후보 분야"]].rename(
-            columns={"주제어": "단어", "후보 분야": "후보 분야 (글자 겹침·LLM 추정, 틀릴 수 있음)"})
-        checks.append(("미분류_예시기사.xlsx", 0, un, ["단어"]))
-        for name, sheet, code, key in checks:
-            p = args.shared / name
-            if not p.exists():
-                print(f"[없음] {name}"); ok = False; continue
-            try:
-                f = pd.read_excel(p, sheet_name=sheet if sheet is not None else 0, dtype=str, keep_default_na=False)
-            except PermissionError:
-                print(f"[확인 못 함] {name}: 엑셀에서 열려 있음 — 닫고 다시 실행"); ok = False; continue
-            cols = [c for c in code_cols(code).columns if c in f.columns]
-            ok &= same(f"나눠 준 {name}", f[cols], code[cols], key)
+        print(f"[예외 목록 모순] 동의어 synonyms.csv: {e}"); ok = False
+    if args.hypernyms:
+        bh = load("build_hypernyms")
+        hyp_file = read("hypernyms.csv")
+        pairs, _ = bh.hc.build()
+        hyp_code, _ = bh.build(pairs, bh.topic_counts(), bh.kc.load_synonyms())
+        ok &= hyp_file is not None and same("상위어 hypernyms.csv", hyp_file, hyp_code, ["하위어"])
     print("결과:", "모두 일치" if ok else "다른 곳 있음 (위 목록 확인)")
     sys.exit(0 if ok else 1)
 

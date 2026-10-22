@@ -1,6 +1,6 @@
 """상위어 사전(hypernyms.csv: 하위어 → 상위어)을 만듭니다. 키워드를 상위어로 바꿔 적재하는 데 씁니다.
 
-입력: hierarchy_candidates.py의 상하위 판정(규칙 + 팀 지정 MANUAL_CHILDREN·MANUAL_SEPARATE)
+입력: hierarchy_candidates.py의 상하위 판정(규칙 + 코드 안 예외 MANUAL_CHILDREN·MANUAL_SEPARATE)
 규칙
 - 대상 관계: 범위(산업·시장·업) · 종류(앞에 수식어) · 세부 주제(뒤에 붙음·앞뒤 붙음) · 포함(동시 등장) · 팀 지정
   (동의어·같은 대상·반대·판단 보류·별개(팀 지정)·다른 상위어로 이동은 넣지 않음)
@@ -9,10 +9,10 @@
 - 사슬(진단기기 → 의료기기 → 의료)은 맨 위 상위어로 정리 (한 번만 바꾸면 되게). 고리(A → B → A)가 생기면 멈추고 알림
 - 팀이 각각 상위어로 정한 쌍(MANUAL_SEPARATE)은 사슬을 거쳐서도 같은 상위어가 되면 안 됨 → 멈추고 알림
 - 팀 지정 하위어를 동의어 사전이 먼저 다른 말로 바꾸면(온라인시장 → 온라인) 그 말의 상위어를 따르고,
-  팀 지정과 결과가 다르면 '팀 지정 확인' 시트에 남김 (동의어 사전에서 그 쌍을 X로 막아야 팀 지정대로 됨)
+  팀 지정과 결과가 다르면 '팀 지정 확인' 시트에 남김 (build_synonyms.SYNONYM_BLOCK에 그 쌍을 넣어야 팀 지정대로 됨)
 
-출력: hypernyms.csv (하위어, 상위어, 바로 위 상위어, 관계, 근거, 하위어_기사수, 상위어_기사수, 다른 상위어 후보)
-      review/상위어사전.xlsx (사전 · 상위어별 하위어 목록)
+출력: data/news_keywords/hypernyms.csv (하위어, 상위어, 바로 위 상위어, 관계, 근거, 하위어_기사수, 상위어_기사수, 다른 상위어 후보)
+      data/news_keywords/review/hypernym_review.xlsx (사전 · 상위어별 하위어 목록)
 
 실행: python backend/app/services/news_keywords/build/build_hypernyms.py
 """
@@ -26,11 +26,11 @@ from openpyxl import Workbook
 
 HERE = Path(__file__).resolve().parent
 NK = HERE.parent
-OUT = NK / "hypernyms.csv"
 spec = importlib.util.spec_from_file_location("hierarchy_candidates", HERE / "hierarchy_candidates.py")
 hc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(hc)
 kc = hc.bs.kc   # keyword_clean (동의어 사전 읽기·표기 정규화)
+OUT = kc.HYPERNYMS_PATH   # data/news_keywords/hypernyms.csv (git 제외, 이 코드로 다시 만듦)
 COLUMNS = ["하위어", "상위어", "바로 위 상위어", "관계", "근거", "하위어_기사수", "상위어_기사수", "다른 상위어 후보"]
 
 
@@ -91,7 +91,7 @@ def build(pairs, counts, syn):
     check = pd.DataFrame([{"팀 지정 하위어": raw, "동의어 사전 결과": syn_rep, "최종 상위어": top_of(syn_rep),
                            "팀이 정한 상위어": team_up,
                            "결과": "같음 (괜찮음)" if top_of(syn_rep) == team_up else
-                                   "다름 → 동의어 사전에서 이 쌍을 X로 막아야 팀 지정대로 됨"}
+                                   "다름 → build_synonyms.SYNONYM_BLOCK에 이 쌍을 넣어야 팀 지정대로 됨"}
                           for raw, syn_rep, team_up in team_moved],
                          columns=["팀 지정 하위어", "동의어 사전 결과", "최종 상위어", "팀이 정한 상위어", "결과"])
     return df.reset_index(drop=True), check
@@ -107,12 +107,12 @@ def write_review(df, check, path):
     by_top["하위어 예시 10개"] = by_top["상위어"].map(examples)
     by_top = by_top.drop(columns=["하위어"])
     wb = Workbook()
-    hc.rf.write_sheet(wb.active, by_top, [16, 12, 11, 14, 100]); wb.active.title = "상위어별"
-    hc.rf.write_sheet(wb.create_sheet("사전 (하위어 → 상위어)"), df, [18, 16, 16, 20, 40, 11, 11, 30])
-    hc.rf.write_sheet(wb.create_sheet("팀 지정 확인"), check, [18, 18, 16, 16, 50])
+    hc.xu.write_sheet(wb.active, by_top, [16, 12, 11, 14, 100]); wb.active.title = "상위어별"
+    hc.xu.write_sheet(wb.create_sheet("사전 (하위어 → 상위어)"), df, [18, 16, 16, 20, 40, 11, 11, 30])
+    hc.xu.write_sheet(wb.create_sheet("팀 지정 확인"), check, [18, 18, 16, 16, 50])
     # 하위어가 상위어보다 기사가 많으면 대체 뒤 더 넓고 덜 쓰이는 말로 바뀜 (법인세 → 법인, 현대화 → 현대) → 사람이 확인
     bigger = df[df["하위어_기사수"] > df["상위어_기사수"]].sort_values("하위어_기사수", ascending=False)
-    hc.rf.write_sheet(wb.create_sheet("확인 필요 (하위어가 더 많음)"), bigger, [18, 16, 16, 20, 40, 11, 11, 30])
+    hc.xu.write_sheet(wb.create_sheet("확인 필요 (하위어가 더 많음)"), bigger, [18, 16, 16, 20, 40, 11, 11, 30])
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
     return by_top
@@ -121,10 +121,11 @@ def write_review(df, check, path):
 def main():
     parser = argparse.ArgumentParser(description="상위어 사전(hypernyms.csv) 만들기")
     parser.add_argument("--output", type=Path, default=OUT)
-    parser.add_argument("--review", type=Path, default=hc.DATA / "review" / "상위어사전.xlsx")
+    parser.add_argument("--review", type=Path, default=hc.DATA / "review" / "hypernym_review.xlsx")
     args = parser.parse_args()
     pairs, _ = hc.build()
     df, check = build(pairs, topic_counts(), kc.load_synonyms())
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.output, index=False, encoding="utf-8-sig")
     by_top = write_review(df, check, args.review)
     moved = df["하위어_기사수"].sum()

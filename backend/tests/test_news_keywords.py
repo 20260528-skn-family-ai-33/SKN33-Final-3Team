@@ -14,6 +14,9 @@ spec = importlib.util.spec_from_file_location("keyword_clean", SRC)
 kc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(kc)
 GEO = kc.load_geo()
+# 동의어·상위어 사전은 build/ 코드가 data/news_keywords/에 만듦 (git 제외). 없으면 그 사전으로 확인하는 테스트는 건너뜀
+NEED_DICTS = unittest.skipUnless(kc.SYNONYMS_PATH.exists() and kc.HYPERNYMS_PATH.exists(),
+                                 "data/news_keywords/ 사전 없음 — NEWS_KEYWORDS_USAGE.md '다시 만들기'를 먼저 실행")
 
 
 class CleanTest(unittest.TestCase):
@@ -189,6 +192,7 @@ class BlockTest(unittest.TestCase):
         self.assertEqual(r["kw_topic"], ["수출", "경제", "동향", "전기차", "공급망"])
         self.assertFalse((kc.BASE / "stopwords.csv").exists())
 
+    @NEED_DICTS
     def test_block_word_is_representative(self):
         """블락: 입력한 말을 대표어로 저장 (ev → 전기차, 화장품시장 → 화장품)"""
         syn = kc.load_synonyms()
@@ -212,21 +216,25 @@ class SynonymTest(unittest.TestCase):
     def topic(self, kwrd, natn=""):
         return kc.process_article(kwrd, natn, GEO, kc.load_exceptions(), self.SYN)
 
+    @NEED_DICTS
     def test_same_meaning_merged(self):
         """동의어: 같은 뜻 다른 표기를 대표어 하나로 (EV·전기자동차 → 전기차, 인공지능 → AI)"""
         r = self.topic("전기차,EV,전기자동차,인공지능,K뷰티,K-BEAUTY")
         self.assertEqual(r["kw_topic"], ["전기차", "AI", "K-뷰티"])
 
+    @NEED_DICTS
     def test_after_geo_split(self):
         """동의어: 나라를 뗀 뒤에도 적용 (베트남EV → VN + 전기차)"""
         r = self.topic("베트남EV,중국인공지능", "베트남")
         self.assertEqual(r["kw_topic"], ["전기차", "AI"])
 
+    @NEED_DICTS
     def test_exception_kept_then_merged(self):
         """동의어: 통째로 남긴 사건 이름도 대표어로 (러-우사태, 러시아-우크라이나사태 → 우크라이나사태)"""
         r = self.topic("러-우사태,러시아-우크라이나사태,우크라이나사태")
         self.assertEqual(r["kw_topic"], ["우크라이나사태"])
 
+    @NEED_DICTS
     def test_not_merged_related_words(self):
         """동의어: 관련 있지만 다른 말은 합치지 않음 (배터리 ≠ 이차전지, 냉장고 ≠ 세탁기)"""
         r = self.topic("배터리,이차전지,2차전지,냉장고,세탁기")
@@ -246,16 +254,19 @@ class HypernymTest(unittest.TestCase):
         return kc.process_article(kwrd, natn, GEO, frozenset(), self.SYN if syn is None else syn,
                                   cat, self.HYP if hyp is None else hyp)
 
+    @NEED_DICTS
     def test_hyponym_becomes_hypernym_and_sub_is_kept(self):
         """상위어: 전기차보조금·전기차충전소 → 전기차, 바꾸기 전 말은 kw_sub에"""
         r = self.run_one("전기차보조금,전기차충전소,EV")
         self.assertEqual(r["kw_topic"], ["전기차"])
         self.assertEqual(r["kw_sub"], ["전기차보조금", "전기차충전소", "전기차"])
 
+    @NEED_DICTS
     def test_synonym_then_hypernym(self):
         """상위어: 동의어를 먼저 적용한 뒤 상위어 (K뷰티 → K-뷰티 → 뷰티)"""
         self.assertEqual(self.run_one("K뷰티")["kw_topic"], ["뷰티"])
 
+    @NEED_DICTS
     def test_team_separated_words_stay(self):
         """상위어: 팀이 각각 상위어로 정한 말은 바꾸지 않음 (뷰티≠화장품, 전기차≠전기, 리튬이온배터리≠리튬 …)"""
         for word in ("뷰티", "전기차", "온라인", "물가", "현대화", "리튬이온배터리", "석유화학", "스마트폰"):
@@ -302,6 +313,7 @@ class CategoryTest(unittest.TestCase):
         r = self.run_one("미국,반덤핑,관세,태양광")
         self.assertEqual(r["kw_category"], ["무역·통상>관세·무역규제", "에너지·환경>에너지 전환"])
 
+    @NEED_DICTS
     def test_synonym_then_category(self):
         """분류: 동의어로 바뀐 대표어 기준 (인공지능 → AI → AI·소프트웨어)"""
         self.assertEqual(self.run_one("인공지능")["kw_category"], ["기술·디지털>AI·소프트웨어"])
@@ -316,101 +328,110 @@ class CategoryTest(unittest.TestCase):
         self.assertEqual(self.run_one("쿼터")["kw_category"], ["무역·통상>관세·무역규제"])
         self.assertEqual(self.run_one("반덤핑")["kw_category"], ["무역·통상>관세·무역규제"])
 
-    def test_new_word_contains_rule_is_candidate(self):
-        """분류: 규칙(포함)은 글자 겹침 추정이라 확정하지 않고 후보로만 (은행나무 ≠ 거시경제, 반덤핑신규분석도 검수 대상)"""
-        for word, cand, hit in [("은행나무", "경제·시장>거시경제", "은행"), ("소금물", "산업·품목>품목 (→ HS 코드로 연결)", "소금"),
-                                ("반덤핑신규분석", "무역·통상>관세·무역규제", "반덤핑")]:
-            self.assertEqual(self.run_one(word)["kw_category"], [])
-            self.assertEqual(self.CAT.judge(word), (None, f"'{hit}' 글자가 들어 있어 추정만 함, 확정 안 함 (검수 전)", cand))
+    def test_new_word_contains_rule_confirmed(self):
+        """분류: 규칙(포함) 추정도 확정 (팀 결정 2026-10-22: 은행나무 → '은행' → 거시경제, 반덤핑신규분석 → 관세·무역규제)"""
+        for word, field in [("은행나무", "경제·시장>거시경제"), ("반덤핑신규분석", "무역·통상>관세·무역규제")]:
+            self.assertEqual(self.run_one(word)["kw_category"], [field])
+            self.assertEqual(self.CAT.judge(word), (field, "", ""))
 
     def test_rules_without_table(self):
-        """분류: 분류표 파일이 없어도(빈 표) 기사 처리에서 규칙(일치)은 적용됨"""
+        """분류: 분류표 파일이 없어도(빈 표) 기사 처리에서 같은 규칙이 적용됨"""
         with tempfile.TemporaryDirectory() as tmp:
             cat = kc.load_categories(Path(tmp) / "없음.csv")
         r = kc.process_article("쿼터,은행나무", "", GEO, kc.load_exceptions(), kc.load_synonyms(), cat)
-        self.assertEqual(r["kw_category"], ["무역·통상>관세·무역규제"])
+        self.assertEqual(r["kw_category"], ["무역·통상>관세·무역규제", "경제·시장>거시경제"])
 
-    def test_team_unclassified_stays(self):
-        """분류: 분류표에서 팀이 미분류로 정한 말(상반기·한국)은 규칙으로 덮지 않고 미분류, 이유가 남음"""
+    def test_no_rule_stays_unclassified(self):
+        """분류: 어떤 규칙에도 안 걸리는 말(상반기·한국)은 미분류, 이유가 남음"""
         self.assertEqual(self.run_one("상반기,한국")["kw_category"], [])
-        self.assertEqual(self.CAT.judge("상반기"), (None, "팀 검수에서 미분류로 정함", ""))
+        self.assertIsNone(self.CAT.judge("상반기")[0])
+        self.assertEqual(self.CAT.judge("ZZ희귀어"), (None, "분류 규칙에 해당하는 말이 없음", ""))
 
     def test_unclassified_list(self):
-        """미분류 목록: 분야를 못 정한 주제어 전체를 중복 없이, 고유 기사 수·이유·후보 분야·예시 기사와 함께 (빈도로 빼지 않음)"""
+        """미분류 목록: 분야를 못 정한 주제어 전체를 중복 없이, 고유 기사 수·이유·예시 기사와 함께 (빈도로 빼지 않음)"""
         df = pd.DataFrame({"bbstxSn": ["1", "2", "3"], "othbcDt": ["2026-10-01", "2026-10-02", "2026-10-03"],
                            "newsTitl": ["가", "나", "다"], "natn": ["미국"] * 3,
                            "kwrd": ["상반기,반덤핑", "상반기,상반기,ZZ희귀어", "은행나무"]})
         res = [kc.process_article(k, n, GEO, kc.load_exceptions(), kc.load_synonyms(), self.CAT) for k, n in zip(df.kwrd, df.natn)]
         un = kc.unclassified_topics(df, res, self.CAT)
-        self.assertEqual(un.주제어.tolist(), ["상반기", "ZZ희귀어", "은행나무"])  # 분류된 반덤핑은 없음, 기사 수 많은 순
-        self.assertEqual(un.기사수.tolist(), [2, 1, 1])                     # 한 기사에 두 번 나와도 1건
-        self.assertEqual(un["미분류 이유"].tolist(), ["팀 검수에서 미분류로 정함", "분류 규칙에 해당하는 말이 없음",
-                                                "'은행' 글자가 들어 있어 추정만 함, 확정 안 함 (검수 전)"])
-        self.assertEqual(un["후보 분야"].tolist(), ["", "", "경제·시장>거시경제"])
+        self.assertEqual(un.주제어.tolist(), ["상반기", "ZZ희귀어"])   # 분류된 반덤핑·은행나무는 없음, 기사 수 많은 순
+        self.assertEqual(un.기사수.tolist(), [2, 1])                 # 한 기사에 두 번 나와도 1건
+        self.assertEqual(un["후보 분야"].tolist(), ["", ""])
         self.assertIn("(2)", un.loc[0, "최근 기사"])
 
-    def test_estimates_need_review(self):
-        """분류: 규칙(포함)·LLM 판단은 팀이 검수한 말만 확정 (지속가능성·경제 유지), 검수 전이면 후보 (은행나무·제조업)"""
+    def test_estimates_confirmed(self):
+        """분류: 규칙(포함)·LLM 판단 같은 추정도 확정 (지속가능성 · 경제 · 은행나무 · 제조업)"""
         fixes, llm = kc.cr.load_lists()
-        team, reviewed = kc.cr.load_decisions(), kc.cr.load_reviewed()
-        c = lambda w: kc.cr.classify(w, fixes, llm, team, reviewed)
-        self.assertEqual(c("지속가능성")[:3], ("에너지·환경", "친환경·ESG·기후", "규칙(포함)"))   # 검수된 포함
-        self.assertEqual(c("경제")[:3], ("경제·시장", "거시경제", "LLM 판단"))                    # 검수된 LLM 판단
-        self.assertEqual(c("은행나무")[2:], ("검수 필요", "경제·시장 > 거시경제", "경제·시장>거시경제", "규칙(포함)"))
-        self.assertEqual(c("제조업")[2], "검수 필요")                                            # 검수 전 LLM 판단
-        self.assertEqual(c("제조업")[5], "LLM 판단")
-        self.assertEqual(self.run_one("지속가능성,제조업")["kw_category"], ["에너지·환경>친환경·ESG·기후"])
-        self.assertEqual(self.CAT.judge("제조업")[1:], ("LLM 판단으로 추정만 함, 확정 안 함 (검수 전)", "산업·품목>품목 (→ HS 코드로 연결)"))
+        c = lambda w: kc.cr.classify(w, fixes, llm)
+        self.assertEqual(c("지속가능성")[:3], ("에너지·환경", "친환경·ESG·기후", "규칙(포함)"))
+        self.assertEqual(c("경제")[:3], ("경제·시장", "거시경제", "LLM 판단"))
+        self.assertEqual(c("은행나무")[2:], ("규칙(포함)", "경제·시장 > 거시경제"))
+        self.assertEqual(c("제조업")[2], "LLM 판단")
+        self.assertEqual(self.run_one("지속가능성,제조업")["kw_category"],
+                         ["에너지·환경>친환경·ESG·기후", "산업·품목>품목 (→ HS 코드로 연결)"])
 
-    def test_pipeline_rebuild_keeps_candidates(self):
-        """운영 순서 전체: 키워드 정리 → 분류표 생성 → 키워드 재처리를 해도 검수 전 추정(은행나무·소재지·소금물)은 확정되지 않음.
-        규칙(일치) 새 단어(쿼터)와 검수된 포함(지속가능성)은 확정. 두 번 돌려도 결과가 같음"""
+    def test_team_exception_first(self):
+        """분류: 규칙으로 못 옮긴 팀 분류(rule_data.CATEGORY_TEAM)가 모든 규칙보다 먼저 (실업률 → 인구·노동, 기술 → 로봇·자동화·스마트)"""
+        fixes, llm = kc.cr.load_lists()
+        self.assertEqual(kc.cr.classify("실업률", fixes, llm), ("경제·시장", "인구·노동", "예외: 팀 분류", "경제·시장 > 거시경제"))
+        self.assertEqual(kc.cr.classify("기술", fixes, llm)[:3], ("기술·디지털", "로봇·자동화·스마트", "예외: 팀 분류"))
+
+    def test_english_contains_whole_word(self):
+        """분류: 영문 대표 키워드는 긴 영단어 안에 든 것은 안 맞음 (CITYSCAPE ≠ IT, EXPORT ≠ EXPO, DUBAI ≠ AI), 한글에 붙은 것과 약어 예외는 맞음"""
+        fixes, llm = kc.cr.load_lists()
+        c = lambda w: kc.cr.classify(w, fixes, llm)[1]
+        for w in ("CITYSCAPE", "EXPORT PROCESSING ZONE", "OPC", "뉴욕IP-DESK", "DUBAI", "ACCESS ABILITIES"):
+            self.assertEqual(c(w), "미분류", w)
+        self.assertEqual(c("AI가전"), "AI·소프트웨어")
+        self.assertEqual(c("AKFTA"), "협정·통상정책")
+        self.assertEqual(c("FOODEXPO"), "전시회·행사")
+        self.assertEqual(c("EXPOKOREA"), "전시회·행사")
+
+    def test_head_suffix_rule(self):
+        """분류: 합성어는 끝말이 핵심어 (식품전시회 → 전시회·행사, 반도체법 → 정책, 의료관광 → 시장·소비 동향)"""
+        fixes, llm = kc.cr.load_lists()
+        c = lambda w: kc.cr.classify(w, fixes, llm)[:3]
+        self.assertEqual(c("식품전시회"), ("기업·투자·진출", "전시회·행사", "규칙(끝말)"))
+        self.assertEqual(c("반도체법"), ("정책·제도", "정부 정책·지원", "규칙(끝말)"))
+        self.assertEqual(c("의료관광"), ("경제·시장", "시장·소비 동향", "규칙(끝말)"))
+
+    def test_pipeline_rebuild_same(self):
+        """운영 순서 전체: 키워드 정리 → 분류표 생성 → 키워드 재처리. 규칙 결과가 확정되고, 두 번 돌려도 결과가 같음"""
         import importlib.util as iu
         spec = iu.spec_from_file_location("bc", kc.BASE / "build" / "build_categories.py")
         bc = iu.module_from_spec(spec); spec.loader.exec_module(bc)
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             pd.DataFrame({"bbstxSn": [str(i) for i in range(10)], "othbcDt": ["2026-10-01"] * 10, "natn": ["미국"] * 10,
-                          "newsTitl": ["가"] * 10, "kwrd": ["은행나무,소재지,소금물,쿼터,지속가능성"] * 10}
+                          "newsTitl": ["가"] * 10, "kwrd": ["은행나무,ZZ희귀어,쿼터,지속가능성"] * 10}
                          ).to_csv(tmp / "raw.csv", index=False, encoding="utf-8-sig")
             kc.run(tmp / "raw.csv", tmp / "o1", categories_path=tmp / "없음.csv")         # ① 정리 (분류표 없음)
             table = bc.build(tmp / "o1" / "news_keywords_clean.csv")                          # ② 분류표 생성
             table.to_csv(tmp / "tc.csv", index=False, encoding="utf-8-sig")
             t = table.set_index("주제어")
-            self.assertEqual(t.loc["은행나무", "배정방법"], "검수 필요")
-            self.assertEqual(t.loc["은행나무", "후보 분야"], "경제·시장>거시경제")
+            self.assertEqual(t.loc["은행나무", "배정방법"], "규칙(포함)")
             self.assertEqual(t.loc["쿼터", "배정방법"], "규칙(일치)")
-            self.assertEqual(t.loc["지속가능성", "배정방법"], "규칙(포함)")
+            self.assertEqual(t.loc["ZZ희귀어", "배정방법"], "검수 필요")
             outs = []
             for n in ("o2", "o3"):                                                             # ③ 재처리 (두 번)
                 out, _ = kc.run(tmp / "raw.csv", tmp / n, categories_path=tmp / "tc.csv")
                 outs.append((out.kw_category[0], pd.read_csv(tmp / n / "unclassified_topics.csv", dtype=str, keep_default_na=False)))
             cats, un = outs[0]
-            self.assertEqual(set(cats.split("|")), {"무역·통상>관세·무역규제", "에너지·환경>친환경·ESG·기후"})
-            self.assertEqual(set(un.주제어), {"은행나무", "소재지", "소금물"})
-            self.assertTrue((un["후보 분야"] != "").all() and un["미분류 이유"].str.contains("검수 전").all())
+            self.assertEqual(set(cats.split("|")), {"무역·통상>관세·무역규제", "에너지·환경>친환경·ESG·기후", "경제·시장>거시경제"})
+            self.assertEqual(set(un.주제어), {"ZZ희귀어"})
             self.assertEqual(outs[0][0], outs[1][0])
             self.assertTrue(outs[0][1].equals(outs[1][1]))
 
-    def test_reviewed_means_same_category(self):
-        """분류: 팀이 O로 확인한 분류와 지금 규칙 결과가 다르면(규칙이 바뀜) 다시 검수 대상"""
-        fixes, llm = kc.cr.load_lists()
-        team = kc.cr.load_decisions()
-        same = kc.cr.classify("지속가능성", fixes, llm, team, {"지속가능성": ("에너지·환경", "친환경·ESG·기후")})
-        moved = kc.cr.classify("지속가능성", fixes, llm, team, {"지속가능성": ("경제·시장", "거시경제")})
-        self.assertEqual(same[2], "규칙(포함)")
-        self.assertEqual(moved[2:5], ("검수 필요", "에너지·환경 > 친환경·ESG·기후", "에너지·환경>친환경·ESG·기후"))
-
-    def test_old_table_estimates_not_confirmed(self):
-        """분류: 이 수정 전에 만든 분류표(검수 전 포함·LLM 판단이 확정으로 저장됨)를 읽어도 확정하지 않음"""
+    def test_table_rows_confirmed(self):
+        """분류: 분류표에서 미분류가 아닌 줄은 그대로 확정 (추정 줄 포함), 미분류 줄은 규칙으로 다시 판정"""
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "old.csv"
-            pd.DataFrame({"주제어": ["은행나무", "제조업", "지속가능성"], "대분류": ["경제·시장", "산업·품목", "에너지·환경"],
-                          "중분류": ["거시경제", "품목 (→ HS 코드로 연결)", "친환경·ESG·기후"],
-                          "배정방법": ["규칙(포함)", "LLM 판단", "규칙(포함)"]}).to_csv(p, index=False, encoding="utf-8-sig")
+            pd.DataFrame({"주제어": ["은행나무", "제조업", "상반기"], "대분류": ["경제·시장", "산업·품목", "미분류"],
+                          "중분류": ["거시경제", "품목 (→ HS 코드로 연결)", "미분류"],
+                          "배정방법": ["규칙(포함)", "LLM 판단", "검수 필요"]}).to_csv(p, index=False, encoding="utf-8-sig")
             cat = kc.load_categories(p)
-        self.assertEqual(dict(cat), {"지속가능성": "에너지·환경>친환경·ESG·기후"})
-        self.assertEqual(cat.judge("은행나무")[2], "경제·시장>거시경제")
+        self.assertEqual(dict(cat), {"은행나무": "경제·시장>거시경제", "제조업": "산업·품목>품목 (→ HS 코드로 연결)"})
+        self.assertIn("상반기", cat.listed)
 
     def test_unclassified_same_article_counted_once(self):
         """미분류 목록: 같은 기사 ID가 두 줄로 들어와도 기사 수 1건, 예시도 한 번만"""
@@ -429,9 +450,8 @@ class CategoryTest(unittest.TestCase):
 
     def test_framework(self):
         """분류: 분류 틀은 대분류 8개 · 중분류 23개"""
-        pairs = {v.split(">") [0] for v in self.CAT.values()}, set(self.CAT.values())
-        self.assertEqual(len(pairs[0]), 8)
-        self.assertEqual(len(pairs[1]), 23)
+        self.assertEqual(len({big for big, _, _ in kc.cr.TAX}), 8)
+        self.assertEqual(len({(big, mid) for big, mid, _ in kc.cr.TAX}), 23)
 
 
 class ProductTest(unittest.TestCase):
@@ -468,22 +488,11 @@ class BuildTest(unittest.TestCase):
         fixes, llm = bc.load_lists()
         self.assertEqual(bc.assign("반덤핑", fixes, llm)[:3], ("무역·통상", "관세·무역규제", "규칙(일치)"))
         self.assertEqual(bc.assign("태양광발전소", fixes, llm)[2], "규칙(포함)")
-        self.assertEqual(bc.assign("관광산업", fixes, llm), ("산업·품목", "품목 (→ HS 코드로 연결)", "규칙 수정", "에너지·환경 > 화석연료·자원"))
+        self.assertEqual(bc.assign("관광산업", fixes, llm), ("산업·품목", "품목 (→ HS 코드로 연결)", "규칙 수정", "경제·시장 > 시장·소비 동향"))
         self.assertEqual(bc.assign("제조업", fixes, llm)[2], "LLM 판단")
         self.assertIsNone(bc.rule("제조업"))                       # LLM 판단은 규칙에 안 걸린 말에만
-        self.assertTrue(all(bc.rule(w) is None for w in llm))
+        self.assertEqual(bc.assign("카페", fixes, llm)[2], "규칙(일치)")   # 규칙에 걸리면 LLM 판단 목록보다 규칙이 먼저
         self.assertEqual(bc.assign("한국", fixes, llm)[2], "검수 필요")
-
-    def test_category_team_decisions(self):
-        """분류 생성: 팀 검수가 최우선 — X는 고른 분류로, 못 정한 말을 O(미분류 유지)로 확인하면 검수 필요에서 빠짐"""
-        import importlib.util as iu
-        spec = iu.spec_from_file_location("bc", kc.BASE / "build" / "build_categories.py")
-        bc = iu.module_from_spec(spec); spec.loader.exec_module(bc)
-        fixes, llm = bc.load_lists()
-        team = bc.load_decisions()
-        self.assertEqual(bc.assign("관광", fixes, llm, team)[:3], ("경제·시장", "시장·소비 동향", "팀 검수"))
-        self.assertEqual(bc.assign("상반기", fixes, llm, team)[:3], ("미분류", "미분류", "팀 검수"))
-        self.assertEqual(bc.assign("반덤핑", fixes, llm, team)[2], "규칙(일치)")   # 팀이 O로 확인한 분류는 원래 방법 그대로
 
     def test_category_build_empty(self):
         """분류 생성: 대상(기사 10건 이상)이 없어도 오류 없이 같은 칸의 빈 표"""
@@ -498,63 +507,73 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(list(df.columns), bc.COLUMNS)
 
     def test_synonym_blocked_both_ways(self):
-        """동의어: X는 방향과 상관없이 막음 (제조→제조업 X면 접미사 규칙 제조업→제조도 안 묶음)"""
+        """동의어: 묶지 않을 쌍(SYNONYM_BLOCK)은 방향과 상관없이 막음 (제조≠제조업이면 접미사 규칙 제조업→제조도 안 묶음)"""
         import importlib.util as iu
         from collections import Counter
         spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
         bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
         bs.GROUPS, keep = [], bs.GROUPS
         try:
-            dec = pd.DataFrame({"표기": ["제조"], "대표어 후보": ["제조업"], "판정": ["X"]})
-            df, _ = bs.build(Counter({"제조": 48, "제조업": 162}), dec)
+            df, _ = bs.build(Counter({"제조": 48, "제조업": 162}), extra=[], block=[("제조", "제조업")])
         finally:
             bs.GROUPS = keep
         self.assertNotIn("제조업", set(df.표기))
 
     def test_synonym_no_cycle_with_rule(self):
-        """동의어: 팀 O(제조→제조업)와 반대 방향 접미사 규칙(제조업→제조)이 겹치면 팀 방향만 남겨 순환 없이 하나로"""
+        """동의어: 예외 같은 말(제조→제조업)과 반대 방향 접미사 규칙(제조업→제조)이 겹치면 예외 방향만 남겨 순환 없이 하나로"""
         import importlib.util as iu
         from collections import Counter
         spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
         bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
         bs.GROUPS, keep = [], bs.GROUPS
         try:
-            dec = pd.DataFrame({"표기": ["제조"], "대표어 후보": ["제조업"], "판정": ["O"]})
-            df, _ = bs.build(Counter({"제조": 53, "제조업": 162}), dec)
+            df, _ = bs.build(Counter({"제조": 53, "제조업": 162}), extra=[("제조", "제조업")], block=[])
         finally:
             bs.GROUPS = keep
         self.assertEqual(dict(zip(df.표기, df.대표어)), {"제조": "제조업"})
 
-    def test_synonym_conflict_stops(self):
-        """동의어: X 쌍이 다른 연결을 거쳐 같은 대표어가 되면(푸드→식품 O, 음식→식품 O, 푸드≠음식 X) 멈추고 알려 줌"""
+    def test_synonym_opposites_never_joined(self):
+        """동의어: 반대말(rule_data.SYNONYM_OPPOSITES)은 묶지 않음. 예외 같은 말에 넣으면 모순이라 멈추고 알려 줌 (수출시장 ≠ 수입시장)"""
         import importlib.util as iu
         from collections import Counter
         spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
         bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
         bs.GROUPS, keep = [], bs.GROUPS
         try:
-            dec = pd.DataFrame({"표기": ["푸드", "음식", "푸드"], "대표어 후보": ["식품", "식품", "음식"], "판정": ["O", "O", "X"]})
+            with self.assertRaises(bs.SynonymConflict):
+                bs.build(Counter({"수출시장": 20, "수입시장": 10}), extra=[("수입시장", "수출시장")], block=[])
+            df, _ = bs.build(Counter({"수출시장": 20, "수입시장": 10}), extra=[], block=[])
+        finally:
+            bs.GROUPS = keep
+        self.assertTrue(df.empty)
+
+    def test_synonym_conflict_stops(self):
+        """동의어: 묶지 않을 쌍이 다른 연결을 거쳐 같은 대표어가 되면(푸드→식품, 음식→식품, 푸드≠음식) 멈추고 알려 줌"""
+        import importlib.util as iu
+        from collections import Counter
+        spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
+        bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
+        bs.GROUPS, keep = [], bs.GROUPS
+        try:
             with self.assertRaises(bs.SynonymConflict) as e:
-                bs.build(Counter({"식품": 300, "푸드": 20, "음식": 40}), dec)
+                bs.build(Counter({"식품": 300, "푸드": 20, "음식": 40}), extra=[("푸드", "식품"), ("음식", "식품")],
+                         block=[("푸드", "음식")])
         finally:
             bs.GROUPS = keep
         self.assertIn("음식 ≠ 푸드", str(e.exception))
 
-    def test_synonym_auto_o(self):
-        """동의어 후보: 임베딩 유사도 0.96 이상 미반영 후보만 자동 O (동시 등장·0.96 미만·이미 반영은 그대로)"""
+    def test_same_base_rule(self):
+        """동의어 같은 기본어 규칙: 기본 단어가 적어도 OO산업·OO시장·OO업끼리는 같은 말 (관광업 = 관광산업), 제외 목록(신흥)은 안 묶음"""
         import importlib.util as iu
-        import pandas as pd
-        spec = iu.spec_from_file_location("sc", kc.BASE / "build" / "synonym_candidates.py")
-        sc = iu.module_from_spec(spec); spec.loader.exec_module(sc)
-        P = sc.PENDING
-        df = pd.DataFrame({"근거": ["임베딩", "임베딩", "동시 등장 (5건, 60%)", "같은 뜻"], "임베딩 유사도": ["0.97", "0.95", "0.98", ""],
-                           "현재 상태": [P, P, P, "1차 반영"], "팀 확인(O/X)": "", "의견": ""})
-        self.assertEqual(sc.auto_mark(df)["팀 확인(O/X)"].tolist(), ["O", "", "", ""])
+        from collections import Counter
+        spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
+        bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
+        pairs = bs.same_base_pairs(Counter({"관광업": 3, "관광산업": 9, "신흥산업": 3, "신흥시장": 4}))
+        self.assertEqual(pairs, [("관광업", "관광산업", "관광")])
 
     def test_suffix_rule(self):
-        """동의어 접미사 규칙: OO산업·OO시장·OO업 → OO (기본 단어가 있고 예외가 아닐 때), 팀 X는 규칙보다 우선"""
+        """동의어 접미사 규칙: OO산업·OO시장·OO업 → OO (기본 단어가 있고 예외가 아닐 때), 묶지 않을 쌍은 규칙보다 우선"""
         import importlib.util as iu
-        import pandas as pd
         from collections import Counter
         spec = iu.spec_from_file_location("bs", kc.BASE / "build" / "build_synonyms.py")
         bs = iu.module_from_spec(spec); spec.loader.exec_module(bs)
@@ -564,13 +583,12 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(pairs, {("화장품시장", "화장품"), ("화장품산업", "화장품"), ("뷰티시장", "뷰티"), ("건설업", "건설")})
         bs.GROUPS, keep = [], bs.GROUPS
         try:
-            dec = pd.DataFrame({"표기": ["건설업"], "대표어 후보": ["건설"], "판정": ["X"]})
-            df, _ = bs.build(docs, dec)
+            df, _ = bs.build(docs, extra=[], block=[("건설업", "건설")])
         finally:
             bs.GROUPS = keep
         m = dict(zip(df.표기, df.대표어))
         self.assertEqual(m.get("화장품시장"), "화장품")
-        self.assertNotIn("건설업", m)                          # 팀이 X로 정한 쌍은 규칙으로도 안 묶음
+        self.assertNotIn("건설업", m)                          # 묶지 않을 쌍은 규칙으로도 안 묶음
         self.assertFalse(set(m.values()) & set(m))            # 사슬 없음
 
 if __name__ == "__main__":

@@ -53,7 +53,7 @@ python -m backend.app.scheduler.jobs.keyword_topic_load
 정상이면 마지막에 `적재 완료: 분류 틀 23쌍 | 키워드 24,744행 · 지운 행 0`이 나옵니다. 확인 SQL:
 
 ```sql
-SELECT status, COUNT(*) FROM keyword_topic GROUP BY status;   -- CLASSIFIED 9166 · PENDING 1948 · UNCLASSIFIED 12943 · SYNONYM 687
+SELECT status, COUNT(*) FROM keyword_topic GROUP BY status;   -- CLASSIFIED 9099 · PENDING 1952 · UNCLASSIFIED 12986 · SYNONYM 707
 SELECT t.keyword_text, t.status, t.canonical_text, c.major_name, c.minor_name
 FROM keyword_topic t LEFT JOIN keyword_category c ON c.category_id = t.category_id
 WHERE t.keyword_text IN ('AI', '인공지능', 'K뷰티', '전기차보조금', '건강', '로보택시');
@@ -63,10 +63,10 @@ WHERE t.keyword_text IN ('AI', '인공지능', 'K뷰티', '전기차보조금', 
 
 | status | 기준 | 개수 |
 |---|---|---|
-| `SYNONYM` | 동의어 표기(`synonyms.csv`)와 하위어(`hypernyms.csv`). `canonical_text` = 최종 키워드 (K뷰티 → 뷰티, 전기차보조금 → 전기차) | 687 |
-| `CLASSIFIED` | 최종 주제어 중 분야가 정해진 말 (분류표·규칙(일치)·규칙 수정·팀 검수) + **규칙(포함) 추정도 확정** (팀 검수 정확도 약 89%)<br>+ 팀이 미분류로 정한 말 중 규칙 결과가 있는 41개 (LLM 판단 40 · 규칙 수정 1) | 9,166 |
-| `UNCLASSIFIED` | 어떤 규칙에도 안 걸리고 기사 3건 미만 | 12,943 |
-| `PENDING` | 어떤 규칙에도 안 걸리고 기사 3건 이상 (관리자 분류 대상, 팀 미분류 중 규칙 없는 24개 포함) | 1,948 |
+| `SYNONYM` | 동의어 표기(`synonyms.csv`)와 하위어(`hypernyms.csv`). `canonical_text` = 최종 키워드 (K뷰티 → 뷰티, 전기차보조금 → 전기차) | 707 |
+| `CLASSIFIED` | 최종 주제어 중 분야가 정해진 말 — 코드 안 규칙(`category_rules.classify`: 팀 분류 예외 · 규칙(일치·끝말·포함) · 규칙 수정 · LLM 판단). **추정도 확정** (팀 결정 2026-10-22) | 9,099 |
+| `UNCLASSIFIED` | 어떤 규칙에도 안 걸리고 기사 3건 미만 | 12,986 |
+| `PENDING` | 어떤 규칙·예외 목록에도 안 걸리고 기사 3건 이상 (관리자 분류 대상) | 1,952 |
 
 - 팀이 분류표에서 미분류로 정한 말(65)도 규칙을 적용합니다 (팀 결정 2026-10-21). 기사 분야(`kw_category`)는 팀 결정을 그대로 따릅니다.
 - `keyword_category`: 분류 틀 23쌍 (`category_rules.TAX`). 이미 있으면 번호를 그대로 둡니다.
@@ -82,7 +82,7 @@ WHERE t.keyword_text IN ('AI', '인공지능', 'K뷰티', '전기차보조금', 
 | 파일 | 내용 |
 |---|---|
 | `data/news_keywords/keyword_topic.csv` | 적재한 값 전체 (keyword_text · status · canonical_text · 대분류 · 중분류 · 기사수 · 이유) |
-| `data/news_keywords/review/키워드_미분류_PENDING.xlsx` | 시트 `개수` · `팀 미분류 재분류`(65: 바뀐 상태·분야·이유) · `PENDING`(1,948) · `UNCLASSIFIED`(12,943): 키워드 · 기사수 · 이유 · 최근 기사 3건 · 관리자 분류 칸 |
+| `data/news_keywords/review/keyword_pending_review.xlsx` | 시트 `개수` · `PENDING` · `UNCLASSIFIED`: 키워드 · 기사수 · 이유 · 최근 기사 3건 · 관리자 분류 칸 |
 | `data/news_keywords/logs/keyword_topic_load_<시각>.log` | 실행 로그 |
 
 ## ③ MySQL 적재 (`news_load`)
@@ -209,19 +209,19 @@ python -m unittest backend/tests/test_news_load.py backend/tests/test_news_embed
 | 테스트 파일 | 확인하는 것 |
 |---|---|
 | `test_news_load.py` | 최신 원본 파일 고르기, HTML 벗기기·이메일·전화번호 가림(HS 범위·프로그램 이름 제외), 빈 본문 대체, 국가·전체 고유 기사 수, 기사·태그·집계·출처·batch_run 적재, 재실행 시 갱신·옛 태그 교체, 발행일 변경, 중복 ID, 키워드 결과 없는 기사, 테이블 없음, 롤백 |
-| `test_keyword_topic_load.py` | 상태 판정(분류·규칙(포함) 확정·팀 미분류·3건 기준 PENDING), 동의어·하위어 → 최종 키워드, 분류 틀 23쌍·번호 유지, 재실행 갱신, 관리자 DB 수정 보존, 사라진 키워드 삭제(관리자 행은 보존), 결과 파일이 잠겨도 DB 적재, 없는 분야면 롤백 |
+| `test_keyword_topic_load.py` | 상태 판정(분류·규칙(포함) 확정·3건 기준 PENDING), 동의어·하위어 → 최종 키워드, 분류 틀 23쌍·번호 유지, 재실행 갱신, 관리자 DB 수정 보존, 사라진 키워드 삭제(관리자 행은 보존), 결과 파일이 잠겨도 DB 적재, 없는 분야면 롤백 |
 | `test_news_embed.py` | 조각 나누기(문단·겹침·긴 문단·빈 본문), 메타데이터, 재실행 시 추가 없음·바뀐 기사만 교체, 키워드 기사 수 갱신, 키워드만(--keywords-only), dry-run, 국가·키워드·기간 검색, 모델 불일치 시 --rebuild, 실패 배치 재처리 |
 
 ## 실제 데이터 결과 (2022.01.03~2026.10.13, 14,607건)
 
-`keyword_topic`(2026-10-21, 상위어 적용 후): 24,744행 = CLASSIFIED 9,166 · PENDING 1,948 · UNCLASSIFIED 12,943 · SYNONYM 687, `keyword_category` 23행.
+`keyword_topic`(2026-10-22, 규칙·예외를 코드로 옮긴 사전): 24,744행 = CLASSIFIED 9,099 · PENDING 1,952 · UNCLASSIFIED 12,986 · SYNONYM 707, `keyword_category` 23행.
 아래 `article`·`article_tag`·`news_keyword_daily`는 상위어 적용 후 재적재(2026-10-21) 결과입니다. 키워드 태그 24,057종이 모두 `keyword_topic`에 있고, SYNONYM 말은 태그에 남지 않습니다.
 
 | 항목 | 결과 |
 |---|---|
 | `article` | 14,607건 (본문 최대 35,843자, 원본 HTML 최대 11MB) |
-| `article_tag` | 86,244건 = 키워드 71,672 (CLASSIFIED 47,659 · UNCLASSIFIED 14,776 · PENDING 9,237) + 국가 14,572 + 품목 0 (`hs_code` 적재 전) |
-| `news_keyword_daily` | 138,894행 = 국가별 71,045 + 전체 67,849. `article_counts.py`의 CSV 집계와 행·숫자 모두 일치 (상위어 적용 전: 142,209행) |
+| `article_tag` | 86,109건 = 키워드 71,537 (CLASSIFIED 47,482 · UNCLASSIFIED 14,815 · PENDING 9,240) + 국가 14,572 + 품목 0 (`hs_code` 적재 전) |
+| `news_keyword_daily` | 138,747행 = 국가별 70,923 + 전체 67,824. `article_counts.py`의 CSV 집계와 행·숫자 모두 일치 (상위어 적용 전: 142,209행) |
 | `country` 에 없는 국가 코드 | 0개 |
 | 재실행 | 기사 번호·행 수·집계 합계가 그대로 (batch_run만 1건씩 늘어남) |
 | 소요 | 약 3분 (본문 HTML 정리가 대부분) |

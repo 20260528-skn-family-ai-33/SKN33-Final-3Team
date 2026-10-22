@@ -5,10 +5,8 @@
 - keyword_category: 분류 틀 23쌍 (대분류 > 중분류). 이미 있으면 번호 유지.
 - keyword_topic 상태 (팀 결정 2026-10-21)
   · SYNONYM      동의어 표기(synonyms.csv)와 하위어(hypernyms.csv). canonical_text = 최종 키워드 (K뷰티 → 뷰티, 전기차보조금 → 전기차)
-  · CLASSIFIED   최종 주제어(kw_topic) 중 분야가 정해진 말 — 분류표 · 규칙(일치) · 규칙 수정 · 팀 검수
-                 + 규칙(포함) 추정도 확정 (팀 검수 정확도 약 89%, 관리자가 DB에서 고칠 수 있음)
-  · 팀이 분류표에서 미분류로 정한 말도 규칙을 적용 (팀 결정 2026-10-21): 규칙 결과(LLM 판단·규칙 수정 등)가 있으면 CLASSIFIED,
-    없으면 아래 기사 수 기준 (keyword_clean의 기사 분야 kw_category는 팀 미분류를 그대로 따름)
+  · CLASSIFIED   최종 주제어(kw_topic) 중 분야가 정해진 말 — 코드 안 규칙(category_rules.classify)과 같은 판정
+                 규칙(포함)·LLM 판단 추정도 확정 (팀 결정 2026-10-22, 관리자가 DB에서 고칠 수 있음)
   · UNCLASSIFIED 어떤 규칙에도 안 걸리고 기사 PENDING_MIN(3)건 미만인 말
   · PENDING      어떤 규칙에도 안 걸리고 기사 PENDING_MIN건 이상인 말 (관리자 분류 대상)
 - 기사 수(PENDING 기준)는 DB article_tag의 키워드별 고유 기사 수(누적)로 셉니다 (--counts db, 기본).
@@ -17,8 +15,8 @@
 - 이번 결과에 없는 키워드(사전·데이터가 바뀌어 사라진 말)는 지웁니다. 단, 관리자가 DB에서 바꾼 행은 남기고 경고합니다.
 - 적재한 행은 updated_at = synced_at = 실행 시각으로 맞춥니다. 전체를 한 트랜잭션으로 넣고, 실패하면 모두 롤백합니다.
 - DB 적재를 먼저 하고 결과 파일을 씁니다. 결과 파일이 엑셀에 열려 있어 저장하지 못해도 DB 적재는 그대로이고 경고만 남깁니다.
-- 결과 표: data/news_keywords/keyword_topic.csv (적재한 값과 같은 내용), 미분류 검토 파일: review/키워드_미분류_PENDING.xlsx
-  (시트: 개수 · 팀 미분류 재분류 · PENDING · UNCLASSIFIED)
+- 결과 표: data/news_keywords/keyword_topic.csv (적재한 값과 같은 내용), 미분류 확인 파일: review/keyword_pending_review.xlsx
+  (시트: 개수 · PENDING · UNCLASSIFIED)
 - batch_run에는 기록하지 않습니다 (target_table 목록에 키워드 테이블이 없음, news_embed와 같음).
 """
 import argparse
@@ -73,19 +71,8 @@ def topic_counts(clean_path):
     return Counter({w: len(s) for w, s in arts.items()})
 
 
-def rule_field(word, lists=None):
-    """팀 판정을 빼고 규칙만으로 본 분야 ("대>중", 방법) 또는 (None, "")."""
-    fixes, llm = lists or kc.cr.load_lists()
-    big, mid, how, _ = kc.cr.assign(word, fixes, llm, None)
-    return (f"{big}>{mid}", how) if big != "미분류" else (None, "")
-
-
-def build_rows(counts, cat, syn, hyp, pending_min=PENDING_MIN, rule=None):
-    """keyword_topic 행 목록 [{keyword_text, canonical_text, field("대>중"|None), status, 기사수, 이유}].
-    rule(word) → (분야|None, 방법): 팀이 미분류로 정한 말에 쓸 규칙 결과 (기본: rule_field)."""
-    if rule is None:
-        lists = kc.cr.load_lists()
-        rule = lambda w: rule_field(w, lists)
+def build_rows(counts, cat, syn, hyp, pending_min=PENDING_MIN):
+    """keyword_topic 행 목록 [{keyword_text, canonical_text, field("대>중"|None), status, 기사수, 이유}]."""
     final = lambda w: hyp.get(syn.get(w, w), syn.get(w, w))
     rows = []
     for form in sorted(set(syn) | set(hyp)):
@@ -95,22 +82,14 @@ def build_rows(counts, cat, syn, hyp, pending_min=PENDING_MIN, rule=None):
     for w, n in counts.items():
         if w in replaced:
             continue
-        field, why, cand = cat.judge(w)
-        team_field, team_how = rule(w) if not field and not cand and w in cat.listed else (None, "")
+        field, _, _ = cat.judge(w)
         if field:
-            status, field, why = "CLASSIFIED", field, "분류표·규칙"
-        elif cand:
-            status, field, why = "CLASSIFIED", cand, "규칙(포함) 추정 확정"
-        elif team_field:
-            status, field, why = "CLASSIFIED", team_field, f"팀 미분류 → 규칙 적용 ({team_how})"
+            status, why = "CLASSIFIED", "분류표·규칙"
         elif n >= pending_min:
             status, why = "PENDING", f"규칙 없음, 기사 {pending_min}건 이상"
         else:
             status, why = "UNCLASSIFIED", f"규칙 없음, 기사 {pending_min}건 미만"
-        if w in cat.listed and not field and not cand and not team_field:
-            why = "팀 미분류 → " + why
-        rows.append({"keyword_text": w, "canonical_text": None, "field": field if status == "CLASSIFIED" else None,
-                     "status": status, "기사수": n, "이유": why})
+        rows.append({"keyword_text": w, "canonical_text": None, "field": field, "status": status, "기사수": n, "이유": why})
     too_long = [r["keyword_text"] for r in rows if len(r["keyword_text"]) > 120]
     if too_long:
         raise ValueError(f"120자를 넘는 키워드: {too_long[:5]}")
@@ -184,17 +163,12 @@ def export(rows, data_dir=DATA, unclassified_csv=None):
                                        "최근 기사": part["keyword_text"].map(recent).fillna(""),
                                        "관리자 분류 (대분류>중분류)": ""})
     count = df["status"].value_counts().rename_axis("status").reset_index(name="개수")
-    team = df[df["이유"].str.startswith("팀 미분류")].sort_values(["status", "기사수"], ascending=[True, False])
-    team = pd.DataFrame({"키워드": team["keyword_text"], "바뀐 상태": team["status"], "대분류": team["대분류"],
-                         "중분류": team["중분류"], "기사수": team["기사수"], "이유": team["이유"],
-                         "최근 기사": team["keyword_text"].map(recent).fillna("")})
-    from backend.app.services.news_keywords.build import review_files as rf   # noqa: E402 (엑셀 서식 공용)
+    from backend.app.services.news_keywords.build import xlsx_util as xu   # noqa: E402 (엑셀 서식 공용)
     wb = Workbook()
-    rf.write_sheet(wb.active, count, [16, 10]); wb.active.title = "개수"
-    rf.write_sheet(wb.create_sheet("팀 미분류 재분류"), team, [16, 12, 16, 26, 8, 34, 90], wrap_cols=("최근 기사",))
+    xu.write_sheet(wb.active, count, [16, 10]); wb.active.title = "개수"
     for status, d in sheets.items():
-        rf.write_sheet(wb.create_sheet(status), d, [22, 8, 26, 90, 26], wrap_cols=("최근 기사",))
-    path = data_dir / "review" / "키워드_미분류_PENDING.xlsx"
+        xu.write_sheet(wb.create_sheet(status), d, [22, 8, 26, 90, 26], wrap_cols=("최근 기사",))
+    path = data_dir / "review" / "keyword_pending_review.xlsx"
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
     return path
