@@ -1,0 +1,3 @@
+# 실제 MySQL 적재 시 별도 설치 후 버전을 고정하세요.
+mysql-connector-python
+python-dotenv>=1.0
