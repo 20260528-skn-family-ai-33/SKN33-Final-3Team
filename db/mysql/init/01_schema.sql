@@ -136,8 +136,8 @@ CREATE TABLE fx_daily (
 
 CREATE TABLE article (
   article_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '우리 DB 안에서 기사 한 건을 구분하는 자동 번호다.',
-  source_code VARCHAR(40) NOT NULL COMMENT '시장뉴스 또는 단신속보를 구분하는 출처 코드다.',
-  external_id VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '원천 API가 부여한 기사 ID다. 내부 article_id와 다른 값이다.',
+  source_code VARCHAR(40) NOT NULL COMMENT '기사 제공 기관·언론사를 구분하는 출처 코드다. service_option의 SOURCE를 참조한다.',
+  external_id VARCHAR(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '기사 제공 API 또는 언론사가 부여한 기사 ID다. 내부 article_id와 다른 값이다.',
   title VARCHAR(600) NOT NULL COMMENT '원천 기사의 제목이다.',
   published_date DATE NOT NULL COMMENT '원천에 표시된 기사 발행일이다. 수집 실행일이 아니다.',
   source_url VARCHAR(2048) NOT NULL COMMENT '원문 기사 페이지로 이동할 링크다.',
@@ -399,8 +399,8 @@ CREATE VIEW v_import_region_month AS SELECT s.trade_month,c.region_id,SUM(s.amou
 
 CREATE VIEW v_import_continent_month AS SELECT v.trade_month,r.parent_id AS continent_id,SUM(v.amount_usd) AS amount_usd FROM v_import_region_month v JOIN market_region r ON r.region_id=v.region_id GROUP BY v.trade_month,r.parent_id;
 
-CREATE VIEW v_article_country_day AS SELECT a.published_date,t.country_code,COUNT(DISTINCT a.article_id) AS article_count FROM article a JOIN article_tag t ON t.article_id=a.article_id WHERE a.source_code='KOTRA_MARKET' AND t.country_code IS NOT NULL GROUP BY a.published_date,t.country_code;
+CREATE VIEW v_article_country_day AS SELECT a.published_date,t.country_code,COUNT(DISTINCT a.article_id) AS article_count FROM article a JOIN article_tag t ON t.article_id=a.article_id WHERE a.source_code IN ('KOTRA_MARKET','HANKYUNG','FNNEWS') AND t.country_code IS NOT NULL GROUP BY a.published_date,t.country_code;
 
-CREATE VIEW v_article_day AS SELECT published_date,COUNT(DISTINCT article_id) AS article_count FROM article WHERE source_code='KOTRA_MARKET' GROUP BY published_date;
+CREATE VIEW v_article_day AS SELECT published_date,COUNT(DISTINCT article_id) AS article_count FROM article WHERE source_code IN ('KOTRA_MARKET','HANKYUNG','FNNEWS') GROUP BY published_date;
 
 CREATE VIEW v_country_cluster AS SELECT m.model_run_id,m.train_start,m.train_end,m.model_name,m.created_at,j.country_code,j.growth_class,j.growth_rate,j.amount_usd,j.volatility FROM model_run m JOIN JSON_TABLE(m.country_results_json,'$[*]' COLUMNS(country_code VARCHAR(12) PATH '$.country_code',growth_class VARCHAR(20) PATH '$.growth_class',growth_rate DECIMAL(18,6) PATH '$.growth_rate' NULL ON EMPTY,amount_usd DECIMAL(24,2) PATH '$.amount_usd',volatility DECIMAL(18,6) PATH '$.volatility' NULL ON EMPTY)) AS j WHERE m.status='SUCCESS';

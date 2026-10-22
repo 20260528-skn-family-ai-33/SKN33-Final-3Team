@@ -1,88 +1,133 @@
-"""기본은 적재 계획만 확인합니다. --apply를 지정해야 프로젝트 MySQL에 연결·적재합니다."""
+"""기본은 적재 계획. --apply에서만 MySQL 적재하며 일일 작업은 날짜·출처를 지정합니다."""
 import argparse
 import json
-import os
 import sqlite3
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from filelock import FileLock
-from news.project_articles import prepared_articles
+from news.project_articles import select_prepared_articles
 from news.mysql_store import MySQLArticleStore
 
+def make_project_engine():
+    """단독 CLI에서도 팀 공통 SQLAlchemy+PyMySQL 연결 설정을 사용합니다."""
+    import sys
+    repository = Path(__file__).resolve().parents[5]
+    if str(repository) not in sys.path:
+        sys.path.insert(0, str(repository))
+    from backend.app.db.session import make_engine
+    return make_engine()
 
-# 기존 백엔드와 동일하게 저장소 루트 .env를 사용합니다. 실행 환경변수가 우선합니다.
-ENV_PATH = Path(__file__).resolve().parents[5] / '.env'
+
+def atomic_result(path, result):
+    if path is None:
+        return
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + '.tmp')
+    tmp.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+    tmp.replace(path)
 
 
-def connection_options(env_path=ENV_PATH):
-    # 실제 적재를 선택한 경우에만 .env 의존성과 접속 설정을 읽습니다.
-    from dotenv import dotenv_values
-
-    values = {**dotenv_values(env_path), **os.environ}
-    names = {'host':'MYSQL_HOST','user':'MYSQL_USER','password':'MYSQL_PASSWORD','database':'MYSQL_DATABASE'}
-    missing = [name for name in names.values() if not values.get(name)]
-    if missing:
-        raise ValueError('필수 환경변수 누락: '+', '.join(missing))
-    options = {key:values[name] for key,name in names.items()}
-    options['port'] = int(values.get('MYSQL_PORT') or 3306)
-    if not 1 <= options['port'] <= 65535:
-        raise ValueError('MYSQL_PORT 범위 오류')
-    return {**options,'connection_timeout':10,'autocommit':False,'charset':'utf8mb4'}
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--data-dir', type=Path, required=True, help='검증된 articles.sqlite3와 prepared.sqlite3가 있는 폴더')
-    parser.add_argument('--source-map', type=Path, required=True, help='크롤러 출처→프로젝트에 등록한 SOURCE 코드 JSON')
-    parser.add_argument('--include-tags', action='store_true', help='선택: article_tag도 함께 적재. 기본은 article만 저장')
-    parser.add_argument('--apply', action='store_true', help='명시한 프로젝트 DB에 실제 저장')
-    args = parser.parse_args()
-    mapping = json.loads(args.source_map.read_text(encoding='utf-8'))
-    if not isinstance(mapping,dict) or not mapping or any(not isinstance(v,str) or not v.strip() or len(v)>40 for v in mapping.values()):
-        parser.error('SOURCE 매핑은 비어 있지 않은 코드 문자열 객체여야 합니다')
-    root = args.data_dir.resolve()
-    source = sqlite3.connect((root/'articles.sqlite3').as_uri()+'?mode=ro',uri=True)
-    source.row_factory = sqlite3.Row
-    prepared = None
-    connection = None
+def execute(args, engine_factory=None):
+    """적재·동일 데이터·실패를 구분합니다. 일일 실행에서도 원문은 읽기 전용입니다."""
+    result = {'mode': 'applied' if args.apply else 'plan_only', 'status': 'running',
+              'target_date': args.target_date.isoformat() if args.target_date else None,
+              'sites': args.sites, 'mysql_connected': False, 'include_tags': args.include_tags,
+              'articles_to_store': 0, 'inserted': 0, 'existing': 0, 'failed': 0,
+              'unprocessed': 0, 'rejected': [], 'unscoped_errors': [], 'article_results': []}
+    source = prepared = connection = engine = None
     try:
-        prepared = sqlite3.connect((root/'prepared.sqlite3').as_uri()+'?mode=ro',uri=True)
-        store = SimpleNamespace(db=source,root=root)
-        with FileLock(str(root/'crawler.lock'),timeout=0):
-            articles = prepared_articles(store,prepared)
-        sites = {row['source_code'] for row in articles}
-        if sites-mapping.keys():
-            parser.error('SOURCE 매핑에 누락된 출처: '+', '.join(sorted(sites-mapping.keys())))
+        atomic_result(args.result_file, result)
+        mapping = json.loads(args.source_map.read_text(encoding='utf-8'))
+        if (not isinstance(mapping, dict) or not mapping
+                or any(not isinstance(v, str) or not v.strip() or len(v)>40 for v in mapping.values())):
+            raise ValueError('SOURCE 매핑 형식 오류')
         if len(set(mapping.values())) != len(mapping):
-            parser.error('서로 다른 언론사에 같은 SOURCE 코드를 지정할 수 없습니다')
-        if not args.apply:
-            print(json.dumps({'mode':'plan_only','mysql_connected':False,
-                              'articles_to_store':len(articles),
-                              'include_tags':args.include_tags,
-                              'source_mapping':mapping,
-                              'notice':'SOURCE 등록·사전 FK·서버 SQL 검증은 실제 연결 전까지 미확인'},ensure_ascii=False,indent=2))
-            return
-        options = connection_options()
-        try:
-            import mysql.connector
-        except ImportError:
-            parser.error('실제 적재에는 mysql-connector-python 설치가 필요합니다')
-        # 자동 연결·예약은 없습니다. 이 분기는 --apply 명시 실행에만 도달합니다.
-        connection = mysql.connector.connect(**options)
-        loader=MySQLArticleStore(connection,mapping,include_tags=args.include_tags)
-        with FileLock(str(root/'crawler.lock'),timeout=0):
-            ids=[loader.save(article) for article in prepared_articles(store,prepared)]
-        print(json.dumps({'mode':'applied','stored_articles':len(ids)},ensure_ascii=False,indent=2))
+            raise ValueError('서로 다른 언론사에 같은 SOURCE 코드를 지정할 수 없습니다')
+        root = args.data_dir.resolve()
+        # 수집·수동 적재와 같은 잠금을 사용합니다. 조회부터 적재까지 스냅샷이 바뀌지 않습니다.
+        with FileLock(str(root/'crawler.lock'), timeout=0):
+            source = sqlite3.connect((root/'articles.sqlite3').as_uri()+'?mode=ro', uri=True)
+            source.row_factory = sqlite3.Row
+            prepared = sqlite3.connect((root/'prepared.sqlite3').as_uri()+'?mode=ro', uri=True)
+            selection = select_prepared_articles(SimpleNamespace(db=source, root=root), prepared,
+                                                 args.target_date, args.sites)
+            articles = selection.pop('articles')
+            result.update(selection)
+            result['articles_to_store'] = len(articles)
+            result['unprocessed'] = len(articles)
+            if {row['source_code'] for row in articles} - mapping.keys():
+                raise ValueError('SOURCE 매핑에 누락된 출처가 있습니다')
+            result['source_mapping'] = mapping
+            # 기존 전체 적재 명령은 오류가 있으면 중단합니다. 일일 범위에서는 정상 기사만 처리합니다.
+            if args.target_date is None and (result['rejected'] or result['unscoped_errors']):
+                raise ValueError('적재 대상 검증 실패')
+            if not args.apply:
+                result['status'] = 'plan_only'
+                result['notice'] = '실제 SOURCE 등록·외래 키·서버 SQL은 연결 전까지 미확인'
+            elif not articles:
+                result['status'] = 'partial' if result['rejected'] or result['unscoped_errors'] else 'complete'
+            else:
+                engine = (engine_factory or make_project_engine)()
+                connection = engine.connect()
+                result['mysql_connected'] = True
+                loader = MySQLArticleStore(connection, mapping, include_tags=args.include_tags)
+                for article in articles:
+                    identity = {k: article[k] for k in ('source_code','external_id','source_url')}
+                    try:
+                        outcome = loader.save(article, return_result=True)
+                    except Exception as exc:
+                        result['failed'] += 1
+                        result['unprocessed'] -= 1
+                        result['article_results'].append({**identity, 'status':'failed', 'error_type':type(exc).__name__})
+                        # 충돌·연결 오류 뒤에 계속 쓰지 않습니다. 앞서 커밋한 행은 보존합니다.
+                        raise
+                    result[outcome['status']] += 1
+                    result['unprocessed'] -= 1
+                    result['article_results'].append({**identity, **outcome})
+                    atomic_result(args.result_file, result)
+                result['status'] = 'partial' if result['rejected'] or result['unscoped_errors'] else 'complete'
+    except Exception as exc:
+        result['status'] = 'failed'
+        # 드라이버 오류 원문에는 접속 정보가 들어갈 수 있어 종류만 기록합니다.
+        result['error_type'] = type(exc).__name__
     finally:
-        if connection is not None:
-            connection.close()
-        if prepared is not None:
-            prepared.close()
-        source.close()
+        for resource in (connection, prepared, source):
+            if resource is not None:
+                try:
+                    resource.close()
+                except Exception as exc:
+                    result['status'] = 'failed'
+                    result['close_error_type'] = type(exc).__name__
+        if engine is not None:
+            try:
+                engine.dispose()
+            except Exception as exc:
+                result['status'] = 'failed'
+                result['close_error_type'] = type(exc).__name__
+        result['stored_articles'] = result['inserted'] + result['existing']
+        atomic_result(args.result_file, result)
+    return result
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--data-dir', type=Path, required=True)
+    parser.add_argument('--source-map', type=Path, required=True)
+    parser.add_argument('--target-date', type=date.fromisoformat, help='일일 적재 대상 게시 날짜')
+    parser.add_argument('--sites', nargs='+', help='적재할 크롤러 출처 코드')
+    parser.add_argument('--result-file', type=Path, help='이번 적재 결과 JSON')
+    parser.add_argument('--include-tags', action='store_true')
+    parser.add_argument('--apply', action='store_true')
+    args = parser.parse_args(argv)
+    result = execute(args)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if result['status'] in ('plan_only','complete') else 1
 
 
 if __name__ == '__main__':
     try:
-        main()
+        raise SystemExit(main())
     except Exception as exc:
-        # 접속 드라이버의 오류 메시지에는 서버·계정 정보가 포함될 수 있어 출력하지 않습니다.
-        raise SystemExit(f'적재 처리 중단 ({type(exc).__name__}). 원인 해결 후 재실행하세요. 원문은 유지되며 같은 식별자로 재실행할 수 있습니다.') from None
+        raise SystemExit(f'적재 처리 중단 ({type(exc).__name__}). 원문은 유지됩니다.') from None

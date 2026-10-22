@@ -1,3 +1,4 @@
-# 실제 MySQL 적재 시 별도 설치 후 버전을 고정하세요.
-mysql-connector-python
+# 팀 공통 DB 연결과 동일한 의존성 범위
+SQLAlchemy>=2.0,<2.1
+PyMySQL>=1.1
 python-dotenv>=1.0
