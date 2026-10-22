@@ -1,17 +1,20 @@
 """해외시장뉴스 키워드(kwrd)를 정제하고 국가·도시·권역을 별도 칸으로 분리합니다.
 
 ① 정제: HTML 문자·해시태그·따옴표·공백·대소문자를 정리하고 붙어 있는 키워드를 나눕니다.
-② 지역 분리: geo_dict.csv로 국가·도시·권역을 찾아 별도 칸으로 옮기고, 중국경제 → 중국 + 경제처럼 복합어를 나눕니다.
+② 지역 분리: 지역 사전(rule_data.GEO_DICT)으로 국가·도시·권역을 찾아 별도 칸으로 옮기고, 중국경제 → 중국 + 경제처럼 복합어를 나눕니다.
    국가 필터(country_all)는 KOTRA 국가 칸(natn)을 기준으로 하고, natn이 특정 나라가 아닐 때(KOTRA 본사·전세계)만
    키워드 속 나라로 보충합니다. 도시는 국가 필터에 넣지 않습니다(예: '두바이초콜릿'은 UAE 기사가 아님).
-   예외: 나라를 떼고 남는 말이 split_exceptions.csv의 말로 끝나면(…사태·…선거·…무역관·…엑스포 등) 나누지 않고 통째로 남깁니다.
+   예외: 나라를 떼고 남는 말이 나누지 않을 끝말(rule_data.SPLIT_EXCEPTIONS)로 끝나면(…사태·…선거·…무역관·…엑스포 등) 나누지 않고 통째로 남깁니다.
 ③ 연도 분리: '2024', '2026년'처럼 연도만 있는 키워드는 지우지 않고 언급 연도(kw_year) 칸으로 옮깁니다.
-④ 동의어: synonyms.csv로 같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (EV·전기자동차 → 전기차, 인공지능 → AI).
-   결과 주제어(kw_topic)를 검색·집계·급증 판정에 모두 씁니다.
-⑤ 대/중분류: 기사에 분야 칸(kw_category)을 붙입니다. 확정 분류표(topic_categories.csv)를 먼저 쓰고,
-   표에 없는 주제어는 분류표 생성과 같은 판정(category_rules.classify)을 적용합니다. 규칙(포함)·LLM 판단은 추정이라
-   팀이 검수한 말만 확정하고, 검수 전이면 확정하지 않고 미분류 주제어 전체와 함께 이유·후보 분야·고유 기사 수·예시 기사를
-   unclassified_topics.csv에 저장합니다 (관리자 검수 대상).
+④ 동의어: 동의어 사전(build/build_synonyms.py가 규칙으로 만든 data/news_keywords/synonyms.csv)으로 같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (EV·전기자동차 → 전기차, 인공지능 → AI).
+④-2 상위어: 상위어 사전(build/build_hypernyms.py가 규칙으로 만든 data/news_keywords/hypernyms.csv)으로 하위어를 상위어로 바꿉니다 (전기차보조금·전기차충전소 → 전기차, 진단기기 → 의료).
+   팀 결정(2026-10-21)으로 동의어 자동 검수 대신 상위어로 묶습니다. 바꾸기 전 주제어는 kw_sub 칸에 남깁니다
+   (품목 HS 연결 등 세부 단어가 필요한 곳용). 결과 주제어(kw_topic)를 검색·집계·급증 판정에 모두 씁니다.
+   분야(⑤)는 상위어와 바꾸기 전 하위어 모두로 붙입니다 (경제성장률 → 성장이어도 거시경제 분야 유지).
+⑤ 대/중분류: 기사에 분야 칸(kw_category)을 붙입니다. 분류표(data/news_keywords/topic_categories.csv)를 먼저 쓰고,
+   표에 없는 주제어는 분류표 생성과 같은 판정(category_rules.classify, 코드 안 규칙)을 적용합니다. 규칙(포함)·LLM 판단 같은
+   추정도 확정하고(팀 결정 2026-10-22), 규칙이 없는 말은 이유·고유 기사 수·예시 기사와 함께 unclassified_topics.csv에 저장합니다.
+   검수 파일은 읽지 않습니다 — 규칙과 예외는 모두 코드(rule_data.py · category_rules.py · build/*.py)에 있습니다.
    분야는 주제어 단위라 검색에서는 순위 보조 가점으로만 씁니다 (최종 관련도는 검색 단계에서 기사 문맥으로 판단).
 ⑥ 품목 연결(1·3단계): KOTRA HS 칸(hsCdNm)을 HS 6단위(hs6, 요구사항 기본 단위)·4단위(hs4)로, 없으면 KOTRA 산업분류(indstCl)로 큰 범위만 남깁니다.
    2단계(키워드·제목의 품목어 → HS 사전)는 HS 사전 완료 후 추가합니다.
@@ -36,12 +39,28 @@ import pandas as pd
 BASE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("category_rules", BASE / "category_rules.py")
 cr = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(cr)
-GEO_PATH = BASE / "geo_dict.csv"
-EXCEPTIONS_PATH = BASE / "split_exceptions.csv"
-SYNONYMS_PATH = BASE / "synonyms.csv"
-CATEGORIES_PATH = BASE / "topic_categories.csv"
-# 결과는 저장소 루트의 data/news_keywords/에 저장합니다 (git 제외 폴더).
+rd = cr.rd   # 규칙 데이터 (rule_data.py: 지역 사전 · 나누지 않을 끝말 · 분야 LLM 판단 · 규칙 수정)
+# 결과와 규칙으로 만든 사전은 저장소 루트의 data/news_keywords/에 저장합니다 (git 제외 폴더).
 OUT_DIR = Path(__file__).resolve().parents[4] / "data" / "news_keywords"
+SYNONYMS_PATH = OUT_DIR / "synonyms.csv"
+HYPERNYMS_PATH = OUT_DIR / "hypernyms.csv"
+CATEGORIES_PATH = OUT_DIR / "topic_categories.csv"
+SKIP = "none"   # 처음 사전을 만드는 단계에서만: --hypernyms none처럼 그 사전을 일부러 빼고 실행
+
+
+class DictionaryMissing(FileNotFoundError):
+    """사전 파일이 없음 — 빈 사전으로 조용히 진행하면 EV가 그대로 남고, 이어서 적재하면 DB 동의어 행이 지워질 수 있음."""
+
+
+def require_dict(path, label, option):
+    """사전 경로를 확인합니다. "none"이면 None(일부러 생략), 파일이 없으면 DictionaryMissing으로 멈춤."""
+    if str(path).strip().lower() == SKIP:
+        return None
+    if not Path(path).exists():
+        raise DictionaryMissing(f"{label} 사전이 없습니다: {path}\n"
+                                f"  NEWS_KEYWORDS_USAGE.md의 '다시 만들기' 순서로 먼저 만드세요 "
+                                f"(사전을 처음 만드는 단계에서만 --{option} none으로 생략)")
+    return Path(path)
 
 # 쉼표 외에 실제 데이터에서 키워드 구분자로 쓰인 것: 해시태그(#), 두 칸 이상 공백, 가운뎃점(·)
 SPLIT = re.compile(r"[,、#·・]|\s{2,}")
@@ -77,10 +96,11 @@ def clean_keywords(raw):
     return list(dict.fromkeys(words))
 
 
-def load_geo(path=GEO_PATH):
-    """지역 사전을 읽어 (이름 → 항목, 복합어 분리에 쓸 이름 목록)을 돌려줍니다."""
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        rows = list(csv.DictReader(fh))
+def load_geo(rows=None):
+    """지역 사전(rule_data.GEO_DICT)을 (이름 → 항목, 복합어 분리에 쓸 이름 목록)으로 돌려줍니다.
+    rows: [(이름, 종류, 코드, 대표 이름, 분리 Y/N)] — 테스트에서 바꿔 넣습니다."""
+    cols = ("name", "type", "code", "canonical", "split")
+    rows = [dict(zip(cols, r)) for r in (rd.GEO_DICT if rows is None else rows)]
     names = {normalize(r["name"]): r for r in rows}
     # 긴 이름부터 확인해야 인도네시아가 인도 + 네시아로 잘리지 않습니다.
     prefixes = sorted((n for n, r in names.items() if r["split"] == "Y"), key=len, reverse=True)
@@ -106,54 +126,50 @@ def split_geo(word, geo):
     return [], word
 
 
-def load_exceptions(path=EXCEPTIONS_PATH):
-    """나누지 않을 목록(split_exceptions.csv의 남는말 컬럼)을 읽습니다. 남는 말(사태) 또는 단어 전체(두바이초콜릿)."""
-    if not Path(path).exists():
-        return frozenset()
+def load_exceptions(words=None):
+    """나누지 않을 끝말(rule_data.SPLIT_EXCEPTIONS의 첫 칸). 남는 말(사태) 또는 단어 전체(두바이초콜릿)."""
+    return frozenset(normalize(w) for w in (words if words is not None else (r[0] for r in rd.SPLIT_EXCEPTIONS)) if w)
+
+
+def load_hypernyms(path=HYPERNYMS_PATH):
+    """하위어 → 상위어 표(hypernyms.csv의 하위어·상위어 컬럼, build/build_hypernyms.py가 만듦)를 읽습니다. None·없는 파일이면 빈 표."""
+    if path is None or not Path(path).exists():
+        return {}
     with open(path, encoding="utf-8-sig", newline="") as fh:
-        return frozenset(normalize(r["남는말"]) for r in csv.DictReader(fh) if r.get("남는말"))
+        return {normalize(r["하위어"]): normalize(r["상위어"]) for r in csv.DictReader(fh) if r.get("하위어") and r.get("상위어")}
 
 
 def load_synonyms(path=SYNONYMS_PATH):
-    """같은 뜻 표기 → 대표어 표(synonyms.csv의 표기·대표어 컬럼)를 읽습니다."""
-    if not Path(path).exists():
+    """같은 뜻 표기 → 대표어 표(synonyms.csv의 표기·대표어 컬럼)를 읽습니다. None·없는 파일이면 빈 표."""
+    if path is None or not Path(path).exists():
         return {}
     with open(path, encoding="utf-8-sig", newline="") as fh:
         return {normalize(r["표기"]): normalize(r["대표어"]) for r in csv.DictReader(fh) if r.get("표기") and r.get("대표어")}
 
 
 class Categories(dict):
-    """확정 분류표: 주제어 → "대분류>중분류" (미분류·검수 전 후보는 넣지 않음).
-    표에 없는 주제어는 lookup()이 분류표 생성과 같은 판정(category_rules.classify)으로 정합니다.
-    - 바로 확정: 팀 검수 · 규칙(일치) · 규칙 수정 목록
-    - 규칙(포함) · LLM 판단은 추정이라 팀이 검수한 말만 확정. 검수 전이면 분야를 붙이지 않고 후보 분야로 미분류 목록에
-      (은행나무 → '은행' 포함 → 후보 거시경제). 분류표를 다시 만들어도, 예전 분류표를 읽어도 같은 기준
-    - 표에서 미분류로 정한 말은 규칙 결과로 덮지 않음"""
+    """분류표: 주제어 → "대분류>중분류" (미분류는 넣지 않음).
+    표에 없는 주제어는 lookup()이 분류표 생성과 같은 판정(category_rules.classify, 코드 안 규칙)으로 정합니다.
+    규칙(포함)·LLM 판단 같은 추정도 확정합니다 (팀 결정 2026-10-22). 분류표를 다시 만들어도 같은 기준입니다."""
 
     def __init__(self, table=(), listed=(), rules=True):
         super().__init__(table)
-        self.listed = set(listed) | set(self)   # 표에 있는 주제어 (미분류·후보 포함)
+        self.listed = set(listed) | set(self)   # 표에 있는 주제어 (미분류 포함)
         self.rules = rules
         self._lists = cr.load_lists() if rules else ({}, {})
-        self._team = cr.load_decisions() if rules else {}
-        self._reviewed = cr.load_reviewed() if rules else {}
         self._cache = {}
 
     def judge(self, word):
-        """(분야 "대분류>중분류" 또는 None, 미분류 이유 또는 "", 후보 분야 또는 "")."""
+        """(분야 "대분류>중분류" 또는 None, 미분류 이유 또는 "", 후보 분야 — 추정도 확정하므로 항상 "")."""
         if word in self:
             return self[word], "", ""
         if word not in self._cache:
             fixes, llm = self._lists
-            big, mid, how, rule_txt, cand, cand_how = cr.classify(word, fixes, llm, self._team, self._reviewed)
+            big, mid, how, rule_txt = cr.classify(word, fixes, llm)
             if not self.rules:
                 self._cache[word] = (None, "분류표에 없음 (규칙 적용 안 함)", "")
-            elif cand:                             # 규칙(포함)·LLM 판단 추정, 검수 전
-                self._cache[word] = (None, cr.candidate_reason(word, cand_how), cand)
             elif big == "미분류":
                 self._cache[word] = (None, cr.unclassified_reason(word, how, rule_txt, llm), "")
-            elif word in self.listed:              # 분류표에서 미분류로 둔 말은 규칙 결과로 덮지 않음
-                self._cache[word] = (None, "분류표에서 미분류로 둠", "")
             else:
                 self._cache[word] = (f"{big}>{mid}", "", "")
         return self._cache[word]
@@ -163,15 +179,13 @@ class Categories(dict):
 
 
 def load_categories(path=CATEGORIES_PATH, rules=True):
-    """확정 분류표를 읽습니다. rules=True면 표에 없는 주제어에 공통 분류 규칙을 적용합니다.
-    표의 규칙(포함)·LLM 판단 줄도 팀 검수 여부를 다시 확인합니다 (이 수정 전에 만든 분류표를 읽어도 검수 전 추정은 확정하지 않음)."""
-    if not Path(path).exists():
+    """분류표(build_categories.py 결과)를 읽습니다. rules=True면 표에 없는 주제어에 공통 분류 규칙을 적용합니다.
+    None·없는 파일이면 빈 표 (규칙은 그대로 적용)."""
+    if path is None or not Path(path).exists():
         return Categories(rules=rules)
     with open(path, encoding="utf-8-sig", newline="") as fh:
         rows = [r for r in csv.DictReader(fh) if r.get("주제어")]
-    reviewed = cr.load_reviewed() if rules else None
-    confirmed = lambda r: r.get("대분류") not in ("", "미분류") and not (
-        reviewed is not None and r.get("배정방법") in cr.ESTIMATED and reviewed.get(r["주제어"]) != (r["대분류"], r["중분류"]))
+    confirmed = lambda r: r.get("대분류") not in ("", "미분류")
     table = {normalize(r["주제어"]): f'{r["대분류"]}>{r["중분류"]}' for r in rows if confirmed(r)}
     return Categories(table, (normalize(r["주제어"]) for r in rows), rules)
 
@@ -212,14 +226,14 @@ def is_exception(word, topic, keep):
     return word in keep or bool(topic) and any(topic.endswith(e) for e in keep)
 
 
-def process_article(kwrd, natn, geo, keep=frozenset(), syn=None, cat=None):
+def process_article(kwrd, natn, geo, keep=frozenset(), syn=None, cat=None, hyp=None):
     """기사 한 건의 키워드를 정제하고 지역 칸을 채운 결과를 돌려줍니다.
 
     keep: 나라를 떼고 남는 말이 이 안에 있으면 키워드를 나누지 않고 통째로 주제어에 남깁니다.
     """
     words = clean_keywords(kwrd)
     found = {"country": [], "city": [], "region": []}
-    topics, compounds, years, kept = [], [], [], []
+    topics, subs, compounds, years, kept = [], [], [], [], []
     for word in words:
         year = YEAR.fullmatch(word)
         if year:
@@ -236,7 +250,9 @@ def process_article(kwrd, natn, geo, keep=frozenset(), syn=None, cat=None):
         elif places and topic:
             compounds.append(word)
         if topic:
-            topics.append((syn or {}).get(topic, topic))  # 동의어는 대표어로 (EV → 전기차)
+            sub = (syn or {}).get(topic, topic)            # 동의어는 대표어로 (EV → 전기차)
+            subs.append(sub)
+            topics.append((hyp or {}).get(sub, sub))       # 하위어는 상위어로 (전기차보조금 → 전기차)
     natn_place = geo[0].get(normalize(natn or ""))
     natn_code = natn_place["code"] if natn_place and natn_place["type"] == "국가" else ""
     kw_countries = list(dict.fromkeys(p["code"] for p in found["country"]))
@@ -247,8 +263,10 @@ def process_article(kwrd, natn, geo, keep=frozenset(), syn=None, cat=None):
     return {
         "kw_clean": words,
         "kw_topic": list(dict.fromkeys(topics)),
+        "kw_sub": list(dict.fromkeys(subs)),           # 상위어로 바꾸기 전 주제어 (동의어만 적용)
         # 분야: 주제어마다 대분류>중분류 (분류표 먼저, 표에 없으면 공통 규칙 — 한 기사에 여러 개 가능)
-        "kw_category": list(dict.fromkeys(c for c in (category_of(t, cat) for t in topics) if c)),
+        # 상위어로 바꾸기 전 하위어의 분야도 붙임: 건강기능식품 → 건강(팀이 미분류로 둔 넓은 말)이어도 품목 분야는 남게
+        "kw_category": list(dict.fromkeys(c for c in (category_of(t, cat) for t in topics + subs) if c)),
         "kw_year": list(dict.fromkeys(years)),
         "natn_code": natn_code,
         "geo_country": kw_countries,
@@ -346,14 +364,16 @@ def unclassified_topics(df, results, cat, examples=3):
     return out.sort_values(["기사수", "주제어"], ascending=[False, True]).reset_index(drop=True)
 
 
-def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exceptions_path=EXCEPTIONS_PATH,
-        synonyms_path=SYNONYMS_PATH, categories_path=CATEGORIES_PATH):
+def run(input_path, output_dir=OUT_DIR, since=None, synonyms_path=SYNONYMS_PATH, categories_path=CATEGORIES_PATH,
+        hypernyms_path=HYPERNYMS_PATH):
+    """사전 경로가 "none"이면 그 사전 없이, 파일이 없으면 DictionaryMissing으로 멈춤 (빈 사전으로 조용히 진행하지 않음)."""
+    syn = load_synonyms(require_dict(synonyms_path, "동의어", "synonyms"))
+    cat = load_categories(require_dict(categories_path, "분류표", "categories"))
+    hyp = load_hypernyms(require_dict(hypernyms_path, "상위어", "hypernyms"))
     df = read_input(input_path, since)
-    geo = load_geo(geo_path)
-    keep = load_exceptions(exceptions_path)
-    syn = load_synonyms(synonyms_path)
-    cat = load_categories(categories_path)
-    results = [process_article(k, n, geo, keep, syn, cat) for k, n in zip(df["kwrd"], df["natn"])]
+    geo = load_geo()
+    keep = load_exceptions()
+    results = [process_article(k, n, geo, keep, syn, cat, hyp) for k, n in zip(df["kwrd"], df["natn"])]
     cols = [c for c in ["bbstxSn", "othbcDt", "natn", "infoCl", "newsTitl", "kwrd"] if c in df.columns]
     out = df[cols].copy()
     links = [product_link(h, i) for h, i in zip(df.get("hsCdNm", [""] * len(df)), df.get("indstCl", [""] * len(df)))]
@@ -361,7 +381,7 @@ def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exception
     out["hs4"] = ["|".join(x[0]) for x in links]
     out["industry"] = ["|".join(x[1]) for x in links]
     out["product_source"] = [x[2] for x in links]
-    for col in ["kw_clean", "kw_topic", "kw_category", "kw_year", "natn_code", "geo_country", "geo_city", "geo_region", "country_all"]:
+    for col in ["kw_clean", "kw_topic", "kw_sub", "kw_category", "kw_year", "natn_code", "geo_country", "geo_city", "geo_region", "country_all"]:
         out[col] = [r[col] if isinstance(r[col], str) else "|".join(r[col]) for r in results]
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -369,6 +389,10 @@ def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exception
     un = unclassified_topics(df, results, cat)
     un.to_csv(output_dir / "unclassified_topics.csv", index=False, encoding="utf-8-sig")
     report = summarize(df, results)
+    changed = Counter(f"{s} → {hyp[s]}" for r in results for s in r["kw_sub"] if s in hyp)
+    report["hypernym"] = {"rules": len(hyp), "replaced_mentions": sum(changed.values()), "replaced_kinds": len(changed),
+                          "articles_changed": sum(1 for r in results if any(s in hyp for s in r["kw_sub"])),
+                          "top": changed.most_common(30)}
     report["category"]["unclassified_topics"] = len(un)
     report["category"]["unclassified_reasons"] = un["미분류 이유"].value_counts().to_dict()
     src = Counter(x[2] for x in links)
@@ -380,7 +404,7 @@ def run(input_path, output_dir=OUT_DIR, since=None, geo_path=GEO_PATH, exception
     return out, report
 
 
-def explain(kwrd, natn, geo, keep, syn=None, cat=None):
+def explain(kwrd, natn, geo, keep, syn=None, cat=None, hyp=None):
     """키워드 하나하나가 어디로 갔는지 사람이 읽기 쉬운 표로 출력합니다 (--check)."""
     print(f"기사 국가 칸(natn): {natn or '(없음)'}")
     print(f"원본 키워드: {kwrd}" + chr(10))
@@ -398,18 +422,23 @@ def explain(kwrd, natn, geo, keep, syn=None, cat=None):
             print(f"{word:<22}{'예외유지':<10}→ 주제어 '{word}' 통째로 + {where} (예외 목록 '{hit}')")
         elif places and topic:
             t2 = (syn or {}).get(topic, topic)
-            note = f" → 동의어 '{t2}'" if t2 != topic else ""
+            t3 = (hyp or {}).get(t2, t2)
+            note = (f" → 동의어 '{t2}'" if t2 != topic else "") + (f" → 상위어 '{t3}'" if t3 != t2 else "")
             print(f"{word:<22}{'분리':<10}→ {where} + 주제어 '{topic}'" + note)
         elif places:
             print(f"{word:<22}{'지역':<10}→ {where}")
         else:
-            if word in (syn or {}):
+            t2 = (syn or {}).get(word, word)
+            t3 = (hyp or {}).get(t2, t2)
+            if t3 != t2:
+                print(f"{word:<22}{'상위어':<10}→ " + (f"대표어 '{t2}' → " if t2 != word else "") + f"상위어 '{t3}'로")
+            elif word in (syn or {}):
                 print(f"{word:<22}{'동의어':<10}→ 대표어 '{syn[word]}'로 통일")
             else:
                 print(f"{word:<22}{'주제어':<10}→ 주제어 '{word}'")
-    r = process_article(kwrd, natn, geo, keep, syn, cat)
+    r = process_article(kwrd, natn, geo, keep, syn, cat, hyp)
     print("-" * 70)
-    for col in ["kw_topic", "kw_category", "kw_year", "natn_code", "country_all", "geo_country", "geo_city", "geo_region"]:
+    for col in ["kw_topic", "kw_sub", "kw_category", "kw_year", "natn_code", "country_all", "geo_country", "geo_city", "geo_region"]:
         print(f"{col:<14}{' | '.join(r[col]) if isinstance(r[col], list) else r[col]}")
 
 
@@ -418,21 +447,24 @@ def main():
     parser.add_argument("--input", type=Path, help="news_raw.csv 또는 .parquet")
     parser.add_argument("--check", help="키워드 문자열 하나를 넣어 처리 과정을 표로 확인 (예: \"우크라이나사태,중국경제\")")
     parser.add_argument("--natn", default="", help="--check와 함께 쓸 기사 국가 칸 값 (예: 중국)")
-    parser.add_argument("--exceptions", type=Path, default=EXCEPTIONS_PATH)
-    parser.add_argument("--synonyms", type=Path, default=SYNONYMS_PATH)
-    parser.add_argument("--categories", type=Path, default=CATEGORIES_PATH)
+    parser.add_argument("--synonyms", type=Path, default=SYNONYMS_PATH, help="동의어 사전 (none = 생략, 사전을 처음 만들 때만)")
+    parser.add_argument("--categories", type=Path, default=CATEGORIES_PATH, help="분류표 (none = 생략)")
+    parser.add_argument("--hypernyms", type=Path, default=HYPERNYMS_PATH, help="상위어 사전 (none = 생략)")
     parser.add_argument("--since", help="이 날짜 이후 기사만 (예: 2022-01-01)")
-    parser.add_argument("--geo", type=Path, default=GEO_PATH)
     parser.add_argument("--output-dir", type=Path, default=OUT_DIR)
     args = parser.parse_args()
-    if args.check is not None:
-        explain(args.check, args.natn, load_geo(args.geo), load_exceptions(args.exceptions),
-                load_synonyms(args.synonyms), load_categories(args.categories))
-        return
-    if not args.input:
-        parser.error("--input 또는 --check 중 하나가 필요합니다")
-    _, report = run(args.input, args.output_dir, args.since, args.geo, args.exceptions, args.synonyms,
-                    args.categories)
+    try:
+        if args.check is not None:
+            explain(args.check, args.natn, load_geo(), load_exceptions(),
+                    load_synonyms(require_dict(args.synonyms, "동의어", "synonyms")),
+                    load_categories(require_dict(args.categories, "분류표", "categories")),
+                    load_hypernyms(require_dict(args.hypernyms, "상위어", "hypernyms")))
+            return
+        if not args.input:
+            parser.error("--input 또는 --check 중 하나가 필요합니다")
+        _, report = run(args.input, args.output_dir, args.since, args.synonyms, args.categories, args.hypernyms)
+    except DictionaryMissing as e:
+        parser.exit(1, f"오류: {e}\n")
     print(f"기사 {report['articles']:,}건")
     print(f"키워드 종류: 원본 {report['raw']['kinds']:,} → 정제 {report['clean']['kinds']:,} → 지역 분리 후 주제어 {report['topic_only']['kinds']:,}")
     g = report["geo"]
