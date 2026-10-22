@@ -10,8 +10,10 @@
 | HS 품목명 | collectors/hscode/reference/hs_names_*.xlsx (관세청 원본) |
 | 국가·지역·통화 | db/mysql/init/*country*seed*.sql (저장소의 국가 기준 파일) |
 | 키워드 대분류 | data/news_keywords/keyword_dictionary_view.csv |
+| 환율 (예외: DB) | fx_daily, country.currency_code — ECOS 수집기가 CSV를 남기지 않아 DB에서 읽는다 |
 """
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -28,6 +30,25 @@ KEYWORD_CSV = ROOT / "data" / "news_keywords" / "keyword_dictionary_view.csv"
 SEED_ROW = re.compile(r"^\('([A-Z0-9]+)','([^']*)','(COUNTRY|SPECIAL|TOTAL)',(\d+|NULL),(?:'([A-Z0-9]+)'|NULL)\)", re.M)
 
 
+log = logging.getLogger("ml.sources")
+
+
+def fx_from_db(engine=None):
+    """환율만 DB에서 읽는다: (월평균 환율 month·currency_code·rate, 국가별 대표 통화 country_code·currency_code).
+    DB에 접속하지 못하면 경고만 남기고 빈 표를 돌려준다 (환율 피처만 결측, 학습은 계속)."""
+    empty = (pd.DataFrame(columns=["month", "currency_code", "rate"]), pd.DataFrame(columns=["country_code", "currency_code"]))
+    try:
+        from sqlalchemy import text
+        from backend.app.db.session import make_engine
+        engine = engine or make_engine()
+        with engine.connect() as conn:
+            fx = pd.read_sql(text("""SELECT DATE_FORMAT(base_date, '%Y-%m-01') AS month, currency_code, AVG(rate_krw) AS rate
+                                     FROM fx_daily GROUP BY 1, 2"""), conn)
+            currencies = pd.read_sql(text("SELECT country_code, currency_code FROM country WHERE currency_code IS NOT NULL"), conn)
+        return fx, currencies
+    except Exception as exc:  # 접속 정보 없음·DB 중단 등: 환율은 보조 피처라 멈추지 않는다
+        log.warning(f"환율을 DB에서 읽지 못해 비워 둡니다: {type(exc).__name__}: {exc}")
+        return empty
 
 
 def countries():

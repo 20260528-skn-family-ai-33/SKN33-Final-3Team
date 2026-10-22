@@ -60,7 +60,9 @@ def load_data(external_dir=None, customs_dirs=None):
     exports, imports, complete = S.customs(customs_dirs or S.CUSTOMS_DIRS, set(countries.country_code), S.hs2017_codes())
     exports = apply_hs_key(exports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
     imports = apply_hs_key(imports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
-    fx = pd.DataFrame(columns=["month", "currency_code", "rate"])
+    # 환율만 예외로 DB(fx_daily, country.currency_code)에서 읽는다. ECOS 수집기가 CSV를 남기지 않기 때문이다.
+    fx, currencies = S.fx_from_db()
+    countries = countries.drop(columns="currency_code").merge(currencies, on="country_code", how="left")
     news, news_topics, news_start = load_shortnews(SHORTNEWS_DIR, country_table[["country_code", "name_ko"]],
                                                    S.topic_majors())
     external = pp.load_external(external_dir, set(countries.country_code), mapping)

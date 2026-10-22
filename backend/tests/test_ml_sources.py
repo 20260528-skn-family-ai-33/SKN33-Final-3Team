@@ -68,5 +68,14 @@ class CsvSourceTest(unittest.TestCase):
 
 
 
+class NumericSafetyTest(unittest.TestCase):
+    def test_fx_db_failure_leaves_fx_empty(self):
+        from unittest import mock
+        with mock.patch("backend.app.db.session.make_engine", side_effect=ValueError("접속 정보 없음")):
+            fx, currencies = S.fx_from_db()
+        self.assertTrue(fx.empty and currencies.empty)
+
+
+
 if __name__ == "__main__":
     unittest.main()
