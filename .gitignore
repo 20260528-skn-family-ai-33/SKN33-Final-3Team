@@ -29,3 +29,6 @@ env
 tmp/
 **/customs_load_outputs/
 .venv/
+
+# Generated ML PDF reports and executed notebooks
+/output/pdf/

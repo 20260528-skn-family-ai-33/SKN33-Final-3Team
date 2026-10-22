@@ -149,3 +149,36 @@ python -m backend.app.ml.market_model query --country VN --hs6 850760
 python -m unittest backend/tests/test_ml_market.py backend/tests/test_ml_sources.py backend/tests/test_external_data.py backend/tests/test_ml_temporal.py
 ```
 
+## 검증 노트북과 PDF 자동 보고서
+
+저장소 루트에서 다음 명령을 실행합니다. 보고서용 의존성은 기존 환경에 추가로 설치합니다.
+
+```powershell
+python -m pip install -r backend/requirements-ml-report.txt
+
+# 저장된 학습 결과 검증 → ML 관련 단위 테스트 → 필요 시 시간 K-fold → PDF 자동 생성
+python -m backend.app.ml.report_workflow
+
+# 수집 원본부터 피처 생성·학습한 뒤 위 검증과 보고서까지 한 번에 실행
+python -m backend.app.ml.report_workflow --train
+
+# 이미 생성된 검증 JSON으로 PDF만 다시 생성
+python -m backend.app.ml.reporting
+```
+
+실제 테스트와 보고서 생성 절차는 [`notebooks/ml_validation_report.ipynb`](../../../notebooks/ml_validation_report.ipynb)에 있습니다. Jupyter에서 셀 전체 실행도 가능합니다. 자동 실행은 현재 Python의 임시 커널을 사용하며 전역 커널 설정을 바꾸지 않습니다. 기존 `market_model train`·`unittest` 단독 실행에는 PDF 생성이 연결되지 않으므로, 자동 보고서가 필요하면 위 `report_workflow` 명령을 사용합니다.
+
+| 생성 파일 | 내용 |
+|---|---|
+| `output/pdf/ml_market_report.pdf` | 전체 흐름, 입력 형식·실제 기간, 전처리·정답, 출력 스키마, 평가 방법·점수, 테스트·한계 |
+| `output/pdf/ml_report_validation.json` | 단위 테스트, 산출물 검사, 시간 K-fold, 모델·CSV·피처 캐시 SHA-256 |
+| `output/pdf/ml_validation_report.executed.ipynb` | 실제 셀 실행 로그와 결과 |
+
+기존 결과 검증에는 `data/ml/features_snapshot.pkl`이 필요합니다. 없으면 `--train`으로 생성합니다. pickle과 joblib은 직접 생성한 신뢰할 수 있는 파일만 사용합니다. 경로 변경은 `--data-dir`, `--feature-cache`, `--output-dir`로 지정합니다. PDF·실행 노트북은 Git에서 제외하며 원본 노트북과 생성 코드는 버전 관리합니다.
+
+`--cv auto`가 기본입니다. 단일 평가의 **학습 기준월이 12개 미만** 또는 **학습 행이 1,000개 미만**이면 시간 순서 K-fold를 실행합니다. 현재는 학습 기준월 10개여서 3-fold가 적용됩니다. `--cv on --folds 3`으로 강제할 수 있고 `--cv off`는 생략 사실을 기록합니다. 이 기준은 운영 설정이며 통계적 충분성을 보장하는 검정은 아닙니다.
+
+한 fold의 검증은 같은 기준월의 모든 국가·품목을 포함합니다. 학습은 검증 기준월보다 12개월 이상 앞선 기준월만 사용하여 학습 정답이 검증 시점을 넘지 않도록 하고, 변환기를 매번 다시 학습합니다. 최소 학습 기준월 3개·1,000행을 확보한 검증 시점이 2개 미만이면 이력 부족으로 기록합니다. 무작위 K-fold로 바꾸지 않습니다. **저장 모델의 선택된 피처 구성에 대한 후향적 보조 검증**이며, fold 간 정답 기간이 겹칠 수 있어 평균·표준편차는 기술 통계입니다. 독립 최종 Holdout을 대체하지 않습니다.
+
+테스트·산출물 검사 실패 시에도 실패 항목을 담은 새 PDF와 실행 노트북을 남긴 뒤 종료 코드 1을 반환합니다. `--train`의 새 모델 채택이 거부되어 기존 모델이 남아 있는 경우에도 최신 학습 시도 실패로 표시합니다. 한글 TTF가 없는 환경에서는 `ML_REPORT_FONT`와 선택적 `ML_REPORT_FONT_BOLD`에 폰트 경로를 지정합니다.
+
