@@ -1,8 +1,8 @@
 """외부 CSV(BACI·Comtrade·WDI) 전처리 → 연 단위 시장·국가 피처 표 (docs/ML_PLAN.md 4장).
 
 실행 (저장소 루트에서):
-    python -m backend.app.ml.preprocess          # CSV만으로 실행 (국가 = 시드 SQL의 COUNTRY, HS 묶음 통일 없음)
-    python -m backend.app.ml.preprocess --db     # DB의 country·hs_code_correlation으로 국가 필터·HS 묶음 통일
+    python -m backend.app.ml.preprocess
+    수집 CSV만 읽는다 (DB 미사용). 국가 = 국가 시드의 COUNTRY, HS 묶음 통일 = UNSD 대응표 원본(ml/sources.py).
 
 결과: data/ml/market_yearly.csv (연도·국가·HS6), data/ml/wdi_yearly.csv (연도·국가)
 features.build_dataset도 같은 함수(market_yearly·wdi_yearly)로 만든 표를 쓴다.
@@ -138,20 +138,13 @@ def summarize(name, df, keys):
 
 
 def main():
+    from backend.app.ml import sources as S
+    from backend.app.ml.features import hs_key_map
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--db", action="store_true", help="DB의 country·hs_code_correlation 사용")
     parser.add_argument("--external-dir", type=Path, default=ec.OUT_DIR)
     args = parser.parse_args()
-    countries, mapping = seed_countries(), None
-    if args.db:
-        from sqlalchemy import text
-        from backend.app.db.session import make_engine
-        from backend.app.ml.features import hs_key_map
-        with make_engine().connect() as conn:
-            countries = set(conn.execute(text("SELECT country_code FROM country WHERE country_role='COUNTRY'")).scalars())
-            mapping = hs_key_map(pd.read_sql(text("SELECT new_code, old_code, group_code FROM hs_code_correlation"
-                                                  " WHERE new_ver='HS2022' AND old_ver='HS2017'"), conn))
-    out = load_external(args.external_dir, countries, mapping)
+    c = S.countries()
+    out = load_external(args.external_dir, set(c.country_code[c.country_role == "COUNTRY"]), hs_key_map(S.hs_correlation()))
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     for name, keys in (("market_yearly", ["year", *MARKET_KEYS]), ("wdi_yearly", ["year", "country_code"])):
         out[name].to_csv(OUT_DIR / f"{name}.csv", index=False)

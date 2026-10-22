@@ -51,48 +51,21 @@ def apply_hs_key(df, mapping, ver_col="hs_ver", code_col="hs6"):
     return df.assign(**{code_col: keys}).drop(columns=ver_col)
 
 
-def load_data(engine=None, external_dir=None):
-    """DB 실적·기준정보와 data/external CSV를 build_dataset 입력 형식으로 읽는다."""
-    from sqlalchemy import text
-    from backend.app.db.session import make_engine
-    engine = engine or make_engine()
-    with engine.connect() as conn:
-        read = lambda sql: pd.read_sql(text(sql), conn)  # noqa: E731
-        # R1은 다음 달 자료가 필요하다. 원금액과 보정량을 분리하고 기준월별로 적용한다.
-        exports = read("""
-            SELECT m.trade_month AS month, m.country_code, m.hs6_code AS hs6, m.hs_ver,
-                   SUM(m.amount_usd) AS amount,
-                   SUM(CASE WHEN m.anomaly_code LIKE 'R1%' AND m.baseline_amount_usd IS NOT NULL
-                            THEN m.baseline_amount_usd - m.amount_usd ELSE 0 END) AS r1_adjustment,
-                   SUM(CASE WHEN m.anomaly_code = 'R1' THEN m.amount_usd ELSE 0 END) AS r1_only_amount,
-                   SUM(CASE WHEN m.anomaly_code NOT IN ('NONE') THEN m.amount_usd ELSE 0 END) AS anomaly_amount,
-                   SUM(m.weight_kg) AS weight
-            FROM export_monthly m JOIN country c ON c.country_code = m.country_code
-            WHERE c.country_role = 'COUNTRY'
-            GROUP BY 1, 2, 3, 4""")
-        corr = read("SELECT new_code, old_code, group_code FROM hs_code_correlation"
-                    " WHERE new_ver = 'HS2022' AND old_ver = 'HS2017'")
-        # 관련 품목 피처용 한국 수입 (같은 관세청 원본에서 적재된다)
-        imports = read("""
-            SELECT m.trade_month AS month, m.country_code, m.hs6_code AS hs6, m.hs_ver, SUM(m.amount_usd) AS amount
-            FROM import_monthly m JOIN country c ON c.country_code = m.country_code
-            WHERE c.country_role = 'COUNTRY'
-            GROUP BY 1, 2, 3, 4""")
-        countries = read("SELECT country_code, region_id, currency_code FROM country WHERE country_role = 'COUNTRY'")
-        country_names = read("SELECT country_code, name_ko FROM country")
-        fx = read("""SELECT DATE_FORMAT(base_date, '%Y-%m-01') AS month, currency_code, AVG(rate_krw) AS rate
-                     FROM fx_daily GROUP BY 1, 2""")
-        topic_major = read("""
-            SELECT kt.keyword_text AS topic, kc.major_name AS major
-            FROM keyword_topic kt LEFT JOIN keyword_topic canon ON canon.keyword_text = kt.canonical_text
-            JOIN keyword_category kc ON kc.category_id = COALESCE(kt.category_id, canon.category_id)""")
-    mapping = hs_key_map(corr)
-    exports = apply_hs_key(exports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).agg(
-        lambda values: values.sum(skipna=False))
+def load_data(external_dir=None, customs_dirs=None):
+    """수집기가 내려받은 CSV만 읽어 build_dataset 입력을 만든다 (DB를 읽지 않는다). 파일 위치는 ml/sources.py."""
+    from backend.app.ml import sources as S
+    country_table = S.countries()
+    countries = country_table[country_table.country_role == "COUNTRY"][["country_code", "region_id", "currency_code"]]
+    mapping = hs_key_map(S.hs_correlation())
+    exports, imports, complete = S.customs(customs_dirs or S.CUSTOMS_DIRS, set(countries.country_code), S.hs2017_codes())
+    exports = apply_hs_key(exports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
     imports = apply_hs_key(imports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
-    news, news_topics, news_start = load_shortnews(SHORTNEWS_DIR, country_names, topic_major)
+    fx = pd.DataFrame(columns=["month", "currency_code", "rate"])
+    news, news_topics, news_start = load_shortnews(SHORTNEWS_DIR, country_table[["country_code", "name_ko"]],
+                                                   S.topic_majors())
     external = pp.load_external(external_dir, set(countries.country_code), mapping)
     return {"exports": exports, "imports": imports, "countries": countries, "fx": fx,
+            "complete_months": complete,
             "news": news, "news_topics": news_topics, "news_start": news_start, **external}
 
 
@@ -224,6 +197,10 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     months = pd.period_range(pd.to_datetime(exports.month).min(), pd.to_datetime(exports.month).max(), freq="M")
     rows = pd.MultiIndex.from_frame(exports[["country_code", "hs6"]].drop_duplicates())
     amount, anomaly, weight = (_matrix(exports, col, rows, months) for col in ("amount", "anomaly_amount", "weight"))
+    # 수집 완료가 기록된 달(관세청 수집 통계)에 행이 없는 쌍은 확인된 무역 없음이다. 그 달만 0으로 채운다.
+    complete = [i for i, m in enumerate(months) if m.to_timestamp() in data.get("complete_months", set())]
+    for matrix in (amount, anomaly, weight):
+        matrix[:, complete] = np.nan_to_num(matrix[:, complete], nan=0.0)
     _require_observed(amount, rows, months, "amount")
     adjustment = _matrix(exports, "r1_adjustment", rows, months) if "r1_adjustment" in exports else np.zeros_like(amount)
     if "r1_adjustment" in exports:
