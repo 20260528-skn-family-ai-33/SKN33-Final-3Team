@@ -1,9 +1,9 @@
-"""⑤ 대/중분류 표(topic_categories.csv)를 다시 만듭니다.
+"""⑤ 대/중분류 표(data/news_keywords/topic_categories.csv)를 다시 만듭니다.
 
 배정 순서와 분류 틀(TAX)은 공통 모듈 category_rules.py에 있습니다 (기사 처리 keyword_clean.py도 같은 classify()를 씀).
-  0) 팀 검수 → 1) 규칙(일치) → 2) 규칙(포함) → 3) 규칙 수정 → 4) LLM 판단 → 5) 검수 필요
-  규칙(포함)·LLM 판단은 팀이 그 분류를 O로 확인한 경우(category_decisions.csv)만 확정하고, 아니면 "검수 필요" + 후보 분야 칸
-대상: 정리된 주제어(kw_topic) 중 기사 MIN_ARTICLES(10)건 이상 — 사람이 검수하는 확정 분류표.
+  1) 규칙(일치) → 2) 규칙(끝말) → 3) 규칙(포함) → 4) 규칙 수정 → 5) LLM 판단 → 6) 검수 필요
+  추정(규칙(포함)·LLM 판단)도 확정합니다 (팀 결정 2026-10-22). 검수 파일은 읽지 않습니다.
+대상: 정리된 주제어(kw_topic) 중 기사 MIN_ARTICLES(10)건 이상.
 표에 없는 드문 주제어는 기사 처리 때 같은 규칙으로 분류하고, 그래도 못 정한 말은 미분류 목록(unclassified_topics.csv)에 남습니다.
 기준·과정 설명은 CLASSIFICATION_RULES.md
 
@@ -18,35 +18,34 @@ import pandas as pd
 
 NK = Path(__file__).resolve().parents[1]
 DATA = Path(__file__).resolve().parents[5] / "data" / "news_keywords"
+OUT = DATA / "topic_categories.csv"
 MIN_ARTICLES = 10
-COLUMNS = ["주제어", "대분류", "중분류", "배정방법", "규칙 결과", "기사수", "후보 분야"]
+COLUMNS = ["주제어", "대분류", "중분류", "배정방법", "규칙 결과", "기사수"]
 _spec = importlib.util.spec_from_file_location("category_rules", NK / "category_rules.py")
 cr = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(cr)
-TAX, rule, assign, load_lists, load_decisions = cr.TAX, cr.rule, cr.assign, cr.load_lists, cr.load_decisions
+TAX, rule, assign, load_lists = cr.TAX, cr.rule, cr.assign, cr.load_lists
 
 
 def build(clean_csv=DATA / "news_keywords_clean.csv", min_articles=MIN_ARTICLES):
-    """규칙(포함)·LLM 판단 결과는 팀이 검수한 말만 확정. 검수 전이면 미분류("검수 필요") + 후보 분야 칸에 남김."""
     res = pd.read_csv(clean_csv, dtype=str, keep_default_na=False, usecols=["kw_topic"])
     docs = Counter(w for s in res.kw_topic for w in set(s.split("|")) if w)
     fixes, llm = load_lists()
-    team, reviewed = load_decisions(), cr.load_reviewed()
     rows = []
     for w, n in docs.items():
         if n >= min_articles:
-            big, mid, how, rule_txt, cand, _ = cr.classify(w, fixes, llm, team, reviewed)
-            rows.append({"주제어": w, "대분류": big, "중분류": mid, "배정방법": how, "규칙 결과": rule_txt, "기사수": n,
-                         "후보 분야": cand})
+            big, mid, how, rule_txt = cr.classify(w, fixes, llm)
+            rows.append({"주제어": w, "대분류": big, "중분류": mid, "배정방법": how, "규칙 결과": rule_txt, "기사수": n})
     df = pd.DataFrame(rows, columns=COLUMNS)  # 대상이 없어도 같은 칸의 빈 표
     return df.sort_values(["기사수", "주제어"], ascending=[False, True]).reset_index(drop=True).astype({"기사수": int})
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--output", type=Path, default=NK / "topic_categories.csv")
+    ap.add_argument("--output", type=Path, default=OUT)
     ap.add_argument("--min-articles", type=int, default=MIN_ARTICLES)
     args = ap.parse_args()
     df = build(min_articles=args.min_articles)
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.output, index=False, encoding="utf-8-sig")
     print(f"{len(df)}개 → {args.output}")
     print(df.배정방법.value_counts().to_dict())

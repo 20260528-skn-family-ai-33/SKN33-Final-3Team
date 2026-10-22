@@ -11,6 +11,16 @@ node_modules/
 !/data/un_data/required_hs.csv
 !/data/un_data/hs2022_exclusions.csv
 !/data/un_data/hs2022_exclusions_summary.json
+# 키워드 분류 결과 (팀 공유용, 다시 만들기: NEWS_KEYWORDS_USAGE.md · NEWS_DB_USAGE.md)
+!/data/news_keywords/
+/data/news_keywords/*
+!/data/news_keywords/keyword_topic.csv
+!/data/news_keywords/동의어_검수용.csv
+!/data/news_keywords/review/
+/data/news_keywords/review/*
+!/data/news_keywords/review/키워드_미분류_PENDING.xlsx
+!/data/news_keywords/review/상위어사전.xlsx
+!/data/news_keywords/review/상하위어_분류.xlsx
 chroma_data/
 
 # 기사 수집 실행 결과와 검토 파일

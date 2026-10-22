@@ -3,11 +3,12 @@
 `keyword_clean.py`는 해외시장뉴스 수집 결과(`news_raw.csv` 또는 `.parquet`)의 키워드(`kwrd`)를 검색·집계에 쓸 수 있게 정리합니다.
 
 1. **정제(①)**: HTML 문자(`&#39;`), 해시태그(`#`), 따옴표, 공백, 영문 대소문자를 통일하고 붙어 있는 키워드를 나눕니다.
-2. **지역 분리(②)**: `geo_dict.csv`로 국가·도시·권역을 찾아 별도 칸으로 옮기고 `중국경제 → 중국 + 경제`처럼 복합어를 나눕니다. (예외 목록의 말은 통째로)
+2. **지역 분리(②)**: 지역 사전(`rule_data.GEO_DICT`)으로 국가·도시·권역을 찾아 별도 칸으로 옮기고 `중국경제 → 중국 + 경제`처럼 복합어를 나눕니다. (예외 목록의 말은 통째로)
 3. **연도 분리(③)**: `2024`, `2026년`처럼 연도만 있는 키워드는 지우지 않고 언급 연도 칸(`kw_year`)으로 옮깁니다. (`2026년 전망` 기사는 작성일과 다루는 연도가 다를 수 있음)
 4. **동의어(④)**: 같은 뜻 표기를 대표어로 (EV → 전기차, 화장품시장 → 화장품)
-5. **분야(⑤)**: 주제어마다 대분류>중분류 (검색 보조 정보)
-6. **품목(⑥)**: KOTRA HS 칸 → HS 6·4단위, 없으면 산업분류
+5. **상위어(④-2)**: 하위어를 상위어로 (전기차보조금·전기차충전소 → 전기차, 진단기기 → 의료) — 팀 결정 2026-10-21, 아래 "상위어 사전"
+6. **분야(⑤)**: 주제어마다 대분류>중분류 (검색 보조 정보, 상위어로 바뀌기 전 하위어의 분야도 붙임)
+7. **품목(⑥)**: KOTRA HS 칸 → HS 6·4단위, 없으면 산업분류
 
 원본 `kwrd`는 바꾸지 않고 결과 칸을 새로 추가합니다. 원본은 보관용이고, 정리 결과는 아래 칸들에 있습니다.
 불용어는 회의 결정으로 없앴고, 보기 싫은 키워드는 **사용자 키워드 블락**으로 보여 줄 때 거릅니다 (아래 "키워드 블락").
@@ -15,7 +16,19 @@
 ## 분류 기준과 사전 만드는 코드
 
 동의어·대/중분류·예외·지역을 **어떤 기준으로 누가 정했는지**는 [`CLASSIFICATION_RULES.md`](CLASSIFICATION_RULES.md)에 있습니다.
-사전 csv는 `build/` 폴더의 코드로 다시 만들 수 있고, `build/verify.py`로 저장된 파일·나눠 준 검수 파일이 코드 결과와 같은지 확인합니다.
+
+**규칙과 예외는 모두 코드에 있습니다 (2026-10-22).** 검수 파일·규칙 csv는 읽지 않습니다.
+
+| 어디 | 무엇 |
+|---|---|
+| `rule_data.py` | 지역 사전 `GEO_DICT` · 나누지 않을 끝말 `SPLIT_EXCEPTIONS` · 분야 LLM 판단 `CATEGORY_LLM` · 규칙 수정 `CATEGORY_RULE_FIXES` · 팀 분류 예외 `CATEGORY_TEAM` · 끝말 규칙 `CATEGORY_HEAD_SUFFIXES` · 반대말 `SYNONYM_OPPOSITES` · 넓은 말 `BROAD_WORDS` |
+| `build/build_synonyms.py` | 동의어 규칙 + 예외 같은 말 `SYNONYM_EXTRA` · 묶지 않을 쌍 `SYNONYM_BLOCK` · 규칙 제외 기본어 `SUFFIX_EXCLUDE_BASE` |
+| `build/hierarchy_candidates.py` | 상위어 규칙 + 팀 지정 `MANUAL_CHILDREN` · `MANUAL_SEPARATE` · 기존 사전 유지 `KEPT_CHILDREN` |
+| `category_rules.py` | 분류 틀 `TAX`와 배정 순서 |
+
+동의어·상위어·분류표 csv는 이 코드가 만든 결과라 저장소가 아니라 `data/news_keywords/`(git 제외)에 둡니다 (아래 "다시 만들기").
+규칙으로도 예외 목록으로도 못 정한 말은 DB `keyword_topic`에 `PENDING`(관리자 분류 대상)으로 들어갑니다.
+`build/verify.py`로 저장된 사전이 지금 코드 결과와 같은지 확인합니다.
 
 ## 실행
 
@@ -38,7 +51,6 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
 |---|---|
 | `--input` | 필수. 해외시장뉴스 수집 결과 `news_raw.csv` 또는 `.parquet` (`kwrd`, `natn` 컬럼 필요) |
 | `--since` | 이 날짜 이후 기사만 처리 (`othbcDt` 기준, 예: `2022-01-01`) |
-| `--geo` | 지역 사전 경로 (기본: 같은 폴더의 `geo_dict.csv`) |
 | `--output-dir` | 결과 폴더 (기본: 저장소 루트 `data/news_keywords/`, git 제외) |
 
 ## 결과 파일
@@ -49,8 +61,9 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
 |---|---|---|
 | `kwrd` | 원본 키워드 | `인도네시아,이모빌리티,전기차,ev,electric vehicle,emobility` |
 | `kw_clean` | ① 정제 후 키워드 | `인도네시아\|이모빌리티\|전기차\|EV\|ELECTRIC VEHICLE\|EMOBILITY` |
-| `kw_topic` | **주제어**: 지역·연도를 빼고 동의어를 대표어로 바꾼 것. 검색·집계·급증 판정·블락에 모두 씀 | `이모빌리티\|전기차` |
-| `kw_category` | ⑤ 분야 (대분류>중분류) | `산업·품목>품목 (→ HS 코드로 연결)` |
+| `kw_topic` | **주제어**: 지역·연도를 빼고 동의어를 대표어로, 하위어를 상위어로 바꾼 것. 검색·집계·급증 판정·블락·DB(`article_tag`, `keyword_topic`)에 모두 씀 | `이모빌리티\|전기차` |
+| `kw_sub` | 상위어로 바꾸기 전 주제어 (동의어만 적용). 품목 HS 연결 등 세부 단어가 필요한 곳용 | `이모빌리티\|전기차` |
+| `kw_category` | ⑤ 분야 (대분류>중분류). 상위어와 바꾸기 전 하위어 모두로 붙임 | `산업·품목>품목 (→ HS 코드로 연결)` |
 | `kw_year` | ③ 키워드에 나온 연도 (언급 연도) | |
 | `hs6` / `hs4` / `industry` / `product_source` | ⑥ 품목: HS 6단위(요구사항 기본) / 4단위 / 산업분류 / 채운 단계 | |
 | `natn_code` | 기사 국가(`natn`)의 국가코드 | `ID` |
@@ -74,9 +87,9 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
 | 연도만 있는 키워드 → 언급 연도 칸 | `2026년` → `kw_year=2026` (`비전2030` 같은 이름은 그대로) |
 | 국가·도시·권역 + 주제 복합어 분리 (긴 이름 먼저, 긴 이름에서 멈춤) | `인도네시아경제` → `ID` + `경제`, `인도네시아산`은 그대로 (인도 + 네시아산 ✗) |
 
-## 지역 사전 (`geo_dict.csv`)
+## 지역 사전 (`rule_data.GEO_DICT`)
 
-`name, type(국가/도시/권역), code, canonical, split` 5개 컬럼입니다. 이름을 추가하거나 고칠 때는 이 파일만 수정합니다.
+`(name, type(국가/도시/권역), code, canonical, split)` 5칸 튜플 목록입니다. 이름을 추가하거나 고칠 때는 이 목록만 수정합니다.
 
 - `code`: 국가는 ISO 2자리, 도시는 소속 국가(참고용, 국가 필터에는 넣지 않음), 권역은 권역 이름입니다.
 - `split=N`: 단독 키워드일 때만 지역으로 봅니다. 앞부분만 같은 다른 단어가 잘리지 않게 할 때 사용합니다.
@@ -85,7 +98,7 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
   - `파리`, `리마` 등 두 글자 도시: `파리바게뜨` 같은 상호 보호
   - `미`, `러`, `중미`, `수단`: 다른 뜻이 있음
 
-## 예외 목록 (`split_exceptions.csv`)
+## 예외 목록 (`rule_data.SPLIT_EXCEPTIONS`)
 
 나라를 떼고 **남는 말이 목록의 말로 끝나면** 나누지 않고 통째로 주제어에 남깁니다 (국가 정보는 `geo_country`에 그대로 기록).
 예: 목록에 `선거`가 있으면 `체코대통령선거`, `인도네시아국회의원선거`도 통째로 유지됩니다.
@@ -98,19 +111,51 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
 | 엑스포, 박람회, 모터쇼, 페어, 포럼 … | 행사 | 오사카엑스포, 베이징모터쇼 |
 | 두바이초콜릿 (단어 전체) | 고유명사 | 디저트 이름이라 두바이와 무관 |
 
-`남는말` 칸에는 끝나는 말(사태) 또는 단어 전체(두바이초콜릿)를 적습니다. 목록은 이 파일만 고치면 됩니다.
+첫 칸에는 끝나는 말(사태) 또는 단어 전체(두바이초콜릿)를 적습니다. 목록은 이 목록만 고치면 됩니다.
 `전시회`는 일반 주제(전시회 기사)로 세는 게 의미 있어 넣지 않았습니다. `센터`는 `데이터센터`까지 걸려서 넣지 않았습니다.
 
-## 동의어 사전 (`synonyms.csv`)
+## 동의어 사전 (`data/news_keywords/synonyms.csv`)
 
-같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (주제어 `kw_topic`, 검색할 때는 사용자 질문에도 같은 사전을 적용). 칸: 표기 · 대표어 · 근거 · 표기_기사수 · 대표어_기사수.
-518개 규칙 = 확정 묶음 94 + 팀 검수 O 87 + 접미사 규칙(OO산업·OO시장·OO업 → OO) 337 (팀 최종 검수 2026-10-19: 미반영 후보 303쌍 O 93 · X 210, PR 리뷰로 모순 판정 8쌍 정리).
-팀이 X로 정한 쌍은 방향과 상관없이 묶지 않고, 최종 사전이 팀 판정과 어긋나면(X 쌍이 합쳐지거나 O 쌍이 갈라짐) 사전 생성이 멈춥니다.
+같은 뜻의 다른 표기를 대표어 하나로 바꿉니다 (주제어 `kw_topic`, 검색할 때는 사용자 질문에도 같은 사전을 적용). 칸: 표기 · 대표어 · 근거 · 판정 · 표기_기사수 · 대표어_기사수.
+`build/build_synonyms.py`가 규칙과 코드 안 예외 목록으로 만듭니다: 522개 (대표어 329개)
 
-- 후보: ① 원본 괄호 표기(전기차(EV)) ② 표기 유사(K뷰티 · K-BEAUTY) ③ 같은 기사 동시 등장(원자력 · 원전) → 사람이 확인
-- 대표어 = 묶음 안에서 기사 수가 가장 많은 표기 (인공지능 254 → AI 532)
-- 걸러 낸 것: 식품(ML)·화장품(NA)(단위·코드), FORD·GM·냉장고·세탁기(같이 나오지만 다른 말), 배터리·이차전지(넓이가 다름)
-- 추가할 때는 한 줄씩 `표기,대표어,근거,,` 형식으로 넣으면 됩니다. 대표어가 다른 줄의 표기가 되면 안 됩니다(테스트로 확인).
+| 판정 | 개수 | 내용 |
+|---|---|---|
+| 규칙: 접미사 | 363 | OO산업 · OO시장 · OO업 → OO (기본 단어가 5건 이상, `SUFFIX_EXCLUDE_BASE`(미래·유망·신흥 …) 제외) |
+| LLM 판단 · 규칙: 괄호 · 규칙: 표기 | 61 · 20 · 13 | 확정 묶음 `GROUPS` (원본 괄호 표기 전기차(EV), 표기 유사 K뷰티 · K-BEAUTY, LLM이 같은 뜻으로 본 묶음) |
+| 예외: 같은 말 | 58 | 규칙으로 못 옮기지만 팀이 같은 말로 정한 쌍 `SYNONYM_EXTRA` (경제성장 = 경제성장률, 푸드 = 식품 …, 팀 검수 2026-10-19) |
+| 규칙: 같은 기본어 | 7 | 기본 단어가 적어도 OO산업 · OO시장 · OO업끼리는 같은 말 (수산산업 = 수산업) |
+
+- 막는 것: 반대말 `SYNONYM_OPPOSITES`(수출 ↔ 수입, 재사용 ↔ 재활용 …)와 묶지 않을 쌍 `SYNONYM_BLOCK`(온라인시장 ≠ 온라인 …)은 어떤 규칙으로도 묶지 않습니다.
+  최종 사전에서 막을 쌍이 합쳐지거나 예외 같은 말이 갈라지면 사전 생성이 멈춥니다 (`SynonymConflict`).
+- 끝에 률·율·화·성·품이 붙은 말은 규칙으로 묶지 않습니다 (화장 ≠ 화장품, 현대 ≠ 현대화, 쓰촨성 ≠ 쓰촨처럼 틀리는 경우가 많음). 팀이 같은 말로 정한 것만 예외 목록에 있습니다.
+- 대표어 = 기사 수가 많은 표기 (인공지능 254 → AI 532). 예외 목록은 적은 표기 → 대표어 방향으로 적습니다.
+- 이전 사전(팀 검수 파일로 만든 516개)과 비교: 515개 같음 · 빠짐 1(재사용 → 재활용: 반대말 목록과 부딪쳐 따로 둠) · 새로 7(수산산업 = 수산업 등 같은 기본어 규칙)
+
+## 상위어 사전 (`data/news_keywords/hypernyms.csv`) — 팀 결정 2026-10-21
+
+동의어 자동 검수 대신 **하위어를 상위어로 바꿔** 적재합니다. 동의어 다음 단계라 하위어·상위어 모두 동의어 대표어 기준입니다.
+칸: 하위어 · 상위어(바꿀 말, 사슬은 맨 위까지) · 바로 위 상위어 · 관계 · 근거 · 하위어_기사수 · 상위어_기사수 · 다른 상위어 후보.
+
+| 단계 | 코드 | 결과 파일 |
+|---|---|---|
+| ① 후보·관계 판정 | `build/hierarchy_candidates.py` — 후보: 동의어 사전 + 임베딩 이웃(기사 10건 이상 주제어, OpenAI `text-embedding-3-large`, 말마다 가까운 3개 → 상위 232쌍) + 동시 등장(넓은 말 빼고 5건 이상 · 50% 이상 → 유사도 상위 71쌍). 임베딩은 `data/news_keywords/word_vectors.npz`에 저장해 다시 씀 | `data/news_keywords/review/hierarchy_review.xlsx` |
+| ② 상위어 사전 | `build/build_hypernyms.py` — ①의 상하위 쌍 → 하위어 → 상위어 | `hypernyms.csv` (185줄, 상위어 92개) · `data/news_keywords/review/hypernym_review.xlsx` |
+
+- 판정 규칙(위가 우선): 반대말 쌍 제외 → 글자 포함(짧은 말 = 상위어: 범위 산업·시장·업 / 종류 앞 수식어 / 세부 주제 뒤에 붙음) → 같은 뜻 묶음은 같은 수준
+  → 글자가 안 겹치면 기사 동시 등장 쏠림(P(넓은 말|좁은 말) ≥ 0.3, 반대 ≤ 0.1, 넓은 말 기사 3배 이상) → 그 밖은 판단 보류(사전에 안 넣음)
+  → **상위어가 넓은 말(`BROAD_WORDS`: 수출·투자·경제·진출 …)이거나 한 글자면 제외** (투자진출 → 투자, 소비재 → 소비 같은 연결은 이제 안 함)
+- 코드 안 예외가 규칙보다 우선 (`hierarchy_candidates.py`):
+  - `MANUAL_CHILDREN` 팀 지정(2026-10-21): 미용 ⊃ 미용기기·미용의료기기 / 온라인쇼핑 ⊃ 온라인쇼핑시장·온라인시장 / 의료 ⊃ 의료시장·의료관광·의료장비·의료기기산업·의료미용시장·의료장비시장 /
+    의약품 ⊃ 의약·의약산업·의약품시장·의약품산업 / 전기차 ⊃ 전기차인프라·전기차충전 / 카페 ⊃ 카페시장·커피머신·커피머신시장 / 반려동물 ⊃ 펫용품·펫용품시장·펫케어·펫케어시장
+  - `KEPT_CHILDREN` 규칙 후보에 안 나오지만 기존 사전(팀 적용 2026-10-21)에 있던 연결 51개 (의료 ⊃ 의료기기·보건·진단기기, 의약품 ⊃ 제약, 화장품 ⊃ 코스메틱 …)
+  - `MANUAL_SEPARATE` 각각 상위어: 물·물가, 발전·발전소, 서비스·서비스업, 소재·신소재, 전기·전기차, 트렌드·소비트렌드,
+    온라인·온라인쇼핑, 뷰티·화장품, 현대·현대화, 리튬·리튬이온배터리, 석유·석유화학, 스마트·스마트폰, 쇼핑·온라인쇼핑,
+    바이오·바이오매스, 외국인·외국인투자, 그린·그린딜, 스마트·스마트그리드, 데이터·데이터센터, 전기차·미래차 (2026-10-22)
+- 상위어가 둘 이상이면 예외 → 기사 많은 쪽. 각각 상위어로 정한 쌍이 사슬로 합쳐지거나 사슬이 돌아오면(A → B → A) 사전 생성이 멈춥니다(`HypernymConflict`).
+  팀 지정 하위어를 동의어 사전이 먼저 바꾸면 `hypernym_review.xlsx`의 "팀 지정 확인" 시트에 남깁니다 (지금은 모두 같음).
+- 이전 사전(171줄)과 비교: 146줄 같음 · 상위어가 좁아짐 6(서비스로봇 → 서비스 대신 로봇 등) · 넓은 상위어라 빠짐 19 · 규칙으로 새로 생김 33 (틀려 보인 6개 — 바이오매스·외국인투자·그린딜·스마트그리드·데이터센터·미래차 — 는 각각 상위어로 분리, 팀 결정 2026-10-22)
+- 결과: 바뀐 언급 4,596번(기사 3,748건) · 뷰티 233 → 435, 의료 161 → 372, 탄소 34 → 317건
 
 ## 키워드 블락 (`keyword_block.py`) — 불용어 대신
 
@@ -121,7 +166,7 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
 
 ```
 [매일 배치, 모든 사용자 공통] 수집 → 키워드 정리 → DB 저장 → 집계 → FR-204/203 판정
-[사용자가 블락]               입력한 말 → 대표어로 바꿔 저장 (to_block_word: ev → 전기차) → user_keyword_block
+[사용자가 블락]               입력한 말 → 대표어 → 상위어로 바꿔 저장 (to_block_word: ev → 전기차, 전기차보조금 → 전기차) → user_keyword_block
 [화면 조회]                   저장된 결과 → 그 사용자의 블락으로 거름 → 표시
 ```
 
@@ -152,17 +197,21 @@ python backend/app/services/news_keywords/keyword_clean.py --input data/news/new
 python backend/app/services/news_keywords/keyword_clean.py --check "우크라이나사태,#중국경제,태국투자청,2026년" --natn 중국
 ```
 
-키워드마다 `분리 / 예외유지 / 지역 / 언급연도 / 동의어 / 주제어` 중 어디로 갔는지 표로 보여 줍니다.
+키워드마다 `분리 / 예외유지 / 지역 / 언급연도 / 동의어 / 상위어 / 주제어` 중 어디로 갔는지 표로 보여 줍니다 (`K뷰티 → 대표어 'K-뷰티' → 상위어 '뷰티'`).
 
-## ⑤ 대/중분류 (`topic_categories.csv`)
+## ⑤ 대/중분류 (`data/news_keywords/topic_categories.csv`)
 
-정리된 주제어(10건 이상, 907개)에 분류 틀(대분류 8 · 중분류 23)을 붙인 표입니다. 기사에는 `kw_category` 칸(대분류>중분류, 여러 개 가능)으로 붙습니다.
-표에 없는 주제어는 기사 처리 때 분류표 생성과 **같은 판정(`category_rules.classify`)**을 적용합니다. 팀 검수 · 규칙(일치) · 규칙 수정은 확정하고, **규칙(포함)·LLM 판단은 팀이 검수한 말만 확정**합니다 (은행나무 → '은행' 포함 → 후보 거시경제, 확정 안 함). 확정되지 않은 말은 `data/news_keywords/unclassified_topics.csv`(주제어 · 고유 기사 수 · 미분류 이유 · 후보 분야 · 최근 기사)에 전부 남깁니다. 분류표에도 `후보 분야` 칸이 있어 다시 만들어도 같은 기준입니다.
+정리된 주제어(10건 이상, 상위어 적용 후 748개)에 분류 틀(대분류 8 · 중분류 23)을 붙인 표입니다. 기사에는 `kw_category` 칸(대분류>중분류, 여러 개 가능)으로 붙습니다.
+표에 없는 주제어는 기사 처리 때 분류표 생성과 **같은 판정(`category_rules.classify`)**을 적용합니다. **규칙(포함)·LLM 판단 같은 추정도 확정합니다** (팀 결정 2026-10-22).
+어떤 규칙에도 안 걸린 말은 `data/news_keywords/unclassified_topics.csv`(주제어 · 고유 기사 수 · 미분류 이유 · 최근 기사)에 전부 남깁니다.
 
-- 배정: ⓪ 팀 검수(최우선) ① 규칙(정확히 같은 말 → 포함하는 말) ② 글자만 겹쳐 틀린 규칙 결과는 수정 목록 ③ 규칙에 안 걸린 말만 LLM 판단 ④ 그래도 못 정하면 "검수 필요" — 자세한 기준은 CLASSIFICATION_RULES.md
-- **팀 최종 검수(2026-10-19):** 520줄 O 427 · X 93 반영 → 배정방법 "팀 검수" 117개(그중 미분류로 확정 71개), 검수 필요 0개
+- 배정: ⓪ 예외: 팀 분류(`CATEGORY_TEAM`, 규칙으로 못 옮긴 팀 X 판정 28개) ① 규칙(일치) ② 규칙(끝말: 식품전시회 → 전시회·행사, 반도체법 → 정책, 의료관광 → 시장·소비 동향)
+  ③ 규칙(포함) ④ 글자만 겹쳐 틀린 규칙 결과는 수정 목록 ⑤ 규칙에 안 걸린 말만 LLM 판단 ⑥ 그래도 못 정하면 "검수 필요" — 자세한 기준은 CLASSIFICATION_RULES.md
+- 팀이 미분류로 정한 말도 규칙을 적용합니다 (팀 결정 2026-10-21). 이전 분류표와 비교하면 미분류였던 40개가 규칙으로 분야를 얻었고, 나머지는 모두 같습니다.
 - 일부만 겹쳐 잘못 붙던 말은 직접 고침 (관광산업 ≠ 광산, 현지진출 ≠ 지진, 스마트홈 ≠ 마트, 해상풍력 ≠ 해상물류)
-- 결과: 분류표의 미분류 71개(모두 팀이 정함) · 표에 없는 말은 규칙 일치만 적용 → 분야가 붙은 기사 12,619 / 14,607건 (86%) · 미분류 목록 23,232종 (검수 전 후보 8,291종 포함)
+- 결과: 분류표 748개 (규칙(일치) 356 · LLM 판단 281 · 규칙(포함) 50 · 검수 필요 24 · 예외: 팀 분류 24 · 규칙 수정 8 · 규칙(끝말) 5)
+  → 분야가 붙은 기사 13,806 / 14,607건 (95%) · 미분류 목록 14,938종
+- DB `keyword_topic`에서는 분야가 정해진 말 CLASSIFIED, 못 정한 말은 기사 3건 이상이면 PENDING · 미만이면 UNCLASSIFIED ([`NEWS_DB_USAGE.md`](../NEWS_DB_USAGE.md))
 - 품목어(전기차·화장품 …)는 "산업·품목" 대분류로 두고 HS 코드로 연결합니다. 서비스(관광·의료관광·호텔)는 시장·소비 동향입니다.
 - 분야는 검색 순위의 보조 가점으로 씁니다 (위 "검색에서 이 결과를 쓰는 방법").
 
@@ -191,7 +240,7 @@ python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
 - FR-203 급증 기사 알림은 `interest_alerts(키워드 집계, 품목 집계, 판정일, 관심 국가, products=관심 품목, keywords=관심 키워드)`로 계산합니다 (어제 ÷ 이틀 전까지 7일 일평균 ≥ 2.5, 관심 품목은 6단위면 6단위 집계, 4단위면 4단위 집계). 요구사항대로 품목과 키워드를 모두 봅니다.
 - FR-204 품목 판정은 6단위·4단위 각각 계산합니다 (`type` 칸: 키워드 / 품목(HS6) / 품목(HS4)).
 - 한 기사는 같은 키워드·품목을 1건으로 셉니다. 전체 기준 판정(FR-204)은 나라가 여러 개인 기사도 1건으로 셉니다.
-- DB 적재·스케줄러 연결은 팀 확인 후 붙입니다.
+- DB 적재(`news_keyword_daily`·`news_product_daily`)는 [`NEWS_DB_USAGE.md`](../NEWS_DB_USAGE.md)의 `news_load`가 같은 규칙으로 계산합니다. 스케줄러 연결은 수집과 함께 붙입니다.
 
 ## 테스트
 
@@ -199,19 +248,53 @@ python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
 python -m unittest backend/tests/test_news_keywords.py backend/tests/test_article_counts.py
 ```
 
-예상 결과: `Ran 62 tests ... OK` (키워드 정리·블락·사전 생성 55개 + 집계·급증 판정 7개) (`-v`를 붙이면 테스트마다 한국어 설명이 나옵니다)
+예상 결과: `Ran 73 tests ... OK` (`test_news_keywords.py` 66개: 키워드 정리·블락·동의어·상위어·사전 생성 + `test_article_counts.py` 7개: 집계·급증 판정)
+`test_news_keywords.py`의 동의어·상위어 테스트 9개는 `data/news_keywords/`의 사전으로 확인하므로, 사전이 없으면 건너뜁니다(`skipped=9`). 아래 "다시 만들기"를 먼저 실행하면 모두 돌아갑니다.
+(`-v`를 붙이면 테스트마다 한국어 설명이 나옵니다)
+
+## 다시 만들기 (사전·분류표·결과 파일 전체)
+
+순서대로 실행합니다. 상위어 단계는 `.env`의 `OPENAI_API_KEY`로 주제어 약 1,500개를 임베딩합니다 (처음 한 번, 1센트 미만. 이후 `word_vectors.npz`를 다시 씀).
+키워드 정리(`keyword_clean.py`)와 분류 적재(`keyword_topic_load`)는 사전 파일이 없으면 멈춥니다 (빈 사전으로 조용히 진행하면 EV가 그대로 남고 DB 동의어 행이 지워지기 때문).
+`none`은 사전을 처음 만드는 아래 2·4번째 줄처럼 그 사전이 아직 없을 때만 씁니다.
+
+```powershell
+$IN = "data/news/news_raw_20220101_20261013.csv"
+python backend/app/services/news_keywords/build/build_synonyms.py                                  # synonyms.csv
+python backend/app/services/news_keywords/keyword_clean.py --input $IN --hypernyms none --categories none
+python backend/app/services/news_keywords/build/build_hypernyms.py                                 # hypernyms.csv
+python backend/app/services/news_keywords/keyword_clean.py --input $IN --categories none           # 상위어 반영
+python backend/app/services/news_keywords/build/build_categories.py                                # topic_categories.csv
+python backend/app/services/news_keywords/keyword_clean.py --input $IN                             # 분야 반영
+python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
+python backend/app/services/news_keywords/build/verify.py                                          # "결과: 모두 일치"
+# DB·Chroma 적재 (NEWS_DB_USAGE.md): 기사·태그 → 키워드 분류 → 키워드 임베딩
+python -m backend.app.scheduler.jobs.news_load
+python -m backend.app.scheduler.jobs.keyword_topic_load
+python -m backend.app.scheduler.jobs.news_embed --keywords-only
+```
+
+| 결과 파일 | 위치 | 내용 |
+|---|---|---|
+| `synonyms.csv` · `hypernyms.csv` · `topic_categories.csv` | `data/news_keywords/` | 동의어 사전 · 상위어 사전 · 분류표 (코드로 만든 결과) |
+| `word_vectors.npz` | `data/news_keywords/` | 상위어 후보용 주제어 임베딩 저장 |
+| `news_keywords_clean.csv` · `unclassified_topics.csv` · `news_keywords_report.json` | `data/news_keywords/` | 기사별 결과 · 미분류 주제어 · 실행 보고 |
+| `keyword_daily_counts.csv` · `product_daily_counts.csv` · `major_issues_2026-10-14.csv` | `data/news_keywords/` | 집계 · 주요 이슈 |
+| `hierarchy_review.xlsx` · `hypernym_review.xlsx` | `data/news_keywords/review/` | 상하위 판정표 · 상위어 사전 확인 |
+| `keyword_topic.csv` · `keyword_pending_review.xlsx` | `data/news_keywords/` · `data/news_keywords/review/` | DB `keyword_topic` 적재 값 · PENDING·UNCLASSIFIED 목록 (`keyword_topic_load`가 만듦) |
 
 ## 실제 데이터 결과 (2022.01.03~2026.10.13, 14,607건)
 
 | 항목 | 결과 |
 |---|---|
-| 키워드 종류 | 원본 30,002 → 정제 27,948 → 지역·연도 분리·동의어 통합 후 주제어 24,226 |
-| 동의어 통합 | 518개 규칙 — 확정 묶음 94 + 팀 검수 O 87 + 접미사 규칙(OO산업·OO시장·OO업 → OO) 337 · 검색 전기차 435 → 517건, AI 523 → 619건, K-뷰티 136 → 259건 |
+| 키워드 종류 | 원본 30,002 → 정제 27,948 → 지역·연도 분리·동의어 통합 24,222 → 상위어 적용 후 주제어 24,037 |
+| 동의어 통합 | 522개 (규칙 370 · 확정 묶음 94 · 예외 같은 말 58) · AI 620건, K-뷰티 259건 |
+| 상위어 | 185개 (상위어 92개) · 바뀐 언급 4,596번(기사 3,748건) · 전기차 524 → 589, 뷰티 233 → 435, 의료 161 → 372건 |
 | 예외로 통째 유지 | 267종 (워싱턴무역관 56, 우크라이나사태 25, 태국투자청 21, 중동전쟁 15 …) |
-| 대/중분류 | 분류표 907개 주제어 (팀 검수 117 · 규칙 531 · LLM 판단 257 · 검수 전 후보 2) + 표에 없는 말은 같은 판정 → 분야가 붙은 기사 12,619건 (86%), 미분류 목록 23,232종 (검수 전 후보 8,291) |
+| 대/중분류 | 분류표 748개 주제어 (상위어 적용 후) + 표에 없는 말은 같은 판정 → 분야가 붙은 기사 13,806건 (95%), 미분류 목록 14,938종 |
 | 불용어 | 없음 (회의 결정, 사용자 키워드 블락으로 대체) · 예전 44개를 빼던 때보다 최근 52주 주요 이슈 판정 +23건 |
-| FR-204 (판정일 10/14) | 키워드: 웰니스 · 식품 · 관세 · 건강 · 투자진출 · 핵심광물 / 품목 4단위 3개 |
-| 복합어 분리 | 4,100종 (중국경제, 미국진출, 일본취업 등) |
+| FR-204 (판정일 10/14) | 키워드: 웰니스 · 관세 · 투자진출 · 핵심광물 / 품목 4단위 3개 (투자진출은 넓은 상위어 '투자'로 바꾸지 않게 되어 다시 잡힘) |
+| 복합어 분리 | 4,099종 (중국경제, 미국진출, 일본취업 등) |
 | 키워드에 기사 국가가 반복된 기사 | 66% (복합어 포함) → 지역 칸으로 이동 |
 
 ## 알려진 한계
