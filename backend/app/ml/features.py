@@ -22,6 +22,8 @@ FEATURES = [
     # 관련 품목: 같은 품목군 수출(자기 품목 제외)과 한국의 수입
     "grp4_c_growth_12m", "grp4_c_growth_3m", "grp4_world_growth_12m", "grp2_c_growth_12m", "hs4_unit_trend",
     "imp_hs6_world_growth", "imp_hs4_world_growth", "imp_hs4_from_c_growth", "imp_exp_ratio_hs4",
+    # 관련 품목 묶음표(ml/reference/related_hs4.csv): 다른 장(chapter)의 장비·소재·연관 품목까지
+    "rel_exp_c_growth_12m", "rel_exp_world_growth_12m", "rel_input_imp_growth_12m", "rel_input_imp_growth_3m",
     "fx_change_12m", "fx_vol_12m",
     "log_gdp", "gdp_growth", "log_population", "log_gdp_pc",
     "mkt_log_import", "mkt_growth", "kor_share", "kor_share_change", "mkt_hs4_growth",
@@ -66,8 +68,10 @@ def load_data(external_dir=None, customs_dirs=None):
     news, news_topics, news_start = load_shortnews(SHORTNEWS_DIR, country_table[["country_code", "name_ko"]],
                                                    S.topic_majors())
     external = pp.load_external(external_dir, set(countries.country_code), mapping)
+    from backend.app.ml import related_groups
     return {"exports": exports, "imports": imports, "countries": countries, "fx": fx,
             "complete_months": complete,
+            "related": related_groups.load_groups(),
             "news": news, "news_topics": news_topics, "news_start": news_start, **external}
 
 
@@ -156,6 +160,8 @@ def _growth(now, before):
     return np.log1p(now) - np.log1p(before)
 
 
+
+
 def _group_sum(values, groups):
     """같은 그룹(국가 또는 품목)끼리 더한 값을 각 행에 돌려준다."""
     codes, inverse = np.unique(groups, return_inverse=True)
@@ -179,6 +185,18 @@ def _key_matrix(df, keys, months):
     seen = set(_month_index(df.month, months)) if len(df) else set()
     out[:, [i for i in range(len(months)) if i not in seen]] = np.nan
     return index, out
+
+
+def _related_sets(related):
+    """묶음표 → [(묶음, 수출 비교 HS4 집합(product+related), 투입 HS4 집합)]와 HS4 → 그 HS4가 product인 묶음."""
+    if related is None or related.empty:
+        return [], {}
+    sets, product_of = [], {}
+    for group, rows in related.groupby("group", sort=False):
+        products = set(rows.hs4[rows.role == "product"])
+        sets.append((group, products | set(rows.hs4[rows.role == "related"]), set(rows.hs4[rows.role == "input"])))
+        product_of.update({h: group for h in products})
+    return sets, product_of
 
 
 def _lookup(index, values, keys):
@@ -221,6 +239,9 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     imp_hs6_index, imp_hs6 = _key_matrix(imports, ["hs6"], months)
     imp_hs4_index, imp_hs4 = _key_matrix(imports, ["hs4"], months)
     imp_c4_index, imp_c4 = _key_matrix(imports, ["country_code", "hs4"], months)
+    rel_sets, product_of = _related_sets(data.get("related"))
+    row_group = np.array([product_of.get(h, "") for h in hs4])
+    imp_hs4_codes = imp_hs4_index.get_level_values(0) if len(imp_hs4_index) else pd.Index([])
     frames = []
     for t in range(HISTORY - 1, len(months)):
         # t월 R1은 t+1월에야 확정된다. t 이전 월만 보정하고 t월은 원금액을 쓴다.
@@ -251,7 +272,10 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
         i6, pi6 = imp(imp_hs6_index, imp_hs6, [hs6])
         i4, pi4 = imp(imp_hs4_index, imp_hs4, [hs4])
         ic4, pic4 = imp(imp_c4_index, imp_c4, [country, hs4])
+        rel = _related_features(rel_sets, row_group, hs4, country, s12, p12, w4, imp_window_ok,
+                                imp_hs4_codes, imp_hs4, t)
         frame = pd.DataFrame({
+            **rel,
             "anchor": months[t].to_timestamp(), "country_code": country, "hs6": hs6,
             "exp_12m": s12,
             "log_exp_12m": np.log1p(s12),
@@ -294,6 +318,30 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     ds = _add_wdi(ds, data["wdi_yearly"], data.get("availability"))
     ds = _add_market(ds, data["market_yearly"], data.get("availability"))
     return _add_news(ds, data["news"], data.get("news_topics"), data.get("news_start"))
+
+
+def _related_features(rel_sets, row_group, hs4, country, s12, p12, w4, imp_ok, imp_codes, imp_hs4, t):
+    """묶음표의 product 품목 행에만 묶음 피처를 채운다. 자기 HS4는 빼서 같은 품목군 피처와 겹치지 않게 한다."""
+    out = {c: np.full(len(hs4), np.nan) for c in ("rel_exp_c_growth_12m", "rel_exp_world_growth_12m",
+                                                  "rel_input_imp_growth_12m", "rel_input_imp_growth_3m")}
+    own_c_now = _group_sum(s12, np.char.add(country.astype(str), np.char.add("|", hs4)))
+    own_c_prev = _group_sum(p12, np.char.add(country.astype(str), np.char.add("|", hs4)))
+    for group, exp_set, inputs in rel_sets:
+        rows = row_group == group
+        if not rows.any():
+            continue
+        member = np.isin(hs4, list(exp_set))
+        now, prev = np.where(member, s12, 0.0), np.where(member, p12, 0.0)
+        c_now, c_prev = _group_sum(now, country) - own_c_now, _group_sum(prev, country) - own_c_prev
+        out["rel_exp_c_growth_12m"][rows] = _growth(c_now, c_prev)[rows]
+        w_now, w_prev = now.sum() - w4(s12), prev.sum() - w4(p12)
+        out["rel_exp_world_growth_12m"][rows] = _growth(w_now, w_prev)[rows]
+        if imp_ok and inputs:
+            sel = np.asarray(imp_codes.isin(list(inputs)))
+            for name, length in (("rel_input_imp_growth_12m", 12), ("rel_input_imp_growth_3m", 3)):
+                i_now, i_prev = _window(imp_hs4[sel], t, length).sum(), _window(imp_hs4[sel], t - length, length).sum()
+                out[name][rows] = _growth(i_now, i_prev)
+    return out
 
 
 def _add_fx(ds, fx, countries):

@@ -11,10 +11,13 @@ import numpy as np
 import pandas as pd
 
 from backend.app.ml import features as F
+from backend.app.ml import related_groups as R
 from backend.app.ml import sources as S
 from backend.tests.test_ml_market import fake_data
 
 MONTHS = pd.date_range("2022-01-01", periods=26, freq="MS")
+GROUPS = pd.DataFrame([("반도체", "8542", "product"), ("반도체", "8486", "input"), ("반도체", "8523", "related")],
+                      columns=["group", "hs4", "role"]).assign(source="curated", note="")[R.COLUMNS]
 
 
 class CsvSourceTest(unittest.TestCase):
@@ -74,6 +77,69 @@ class NumericSafetyTest(unittest.TestCase):
         with mock.patch("backend.app.db.session.make_engine", side_effect=ValueError("접속 정보 없음")):
             fx, currencies = S.fx_from_db()
         self.assertTrue(fx.empty and currencies.empty)
+
+
+
+class RelatedGroupTest(unittest.TestCase):
+    def data(self):
+        rows, imps = [], []
+        for i, m in enumerate(MONTHS):
+            for hs6 in ("854232", "852351", "848620", "010110"):
+                amt = 1e6 * (3 if hs6 == "852351" and i >= 12 else 1)
+                rows.append((m, "VN", hs6, amt, 0.0, 1e4))
+            imps.append((m, "JP", "848620", 1e6 * (2 if i >= 12 else 1)))
+        data = fake_data(months=26)
+        data["exports"] = pd.DataFrame(rows, columns=["month", "country_code", "hs6", "amount", "anomaly_amount", "weight"])
+        data["imports"] = pd.DataFrame(imps, columns=["month", "country_code", "hs6", "amount"])
+        data["related"] = GROUPS
+        return data
+
+    def test_cross_chapter_items_reach_product_rows(self):
+        ds = F.build_dataset(self.data())
+        at = ds[ds.anchor == pd.Timestamp("2023-12-01")].set_index("hs6")
+        chip = at.loc["854232"]
+        # 8523(저장장치, 85장)과 8486(장비, 84장)이 반도체 행에 반영된다
+        self.assertAlmostEqual(chip.rel_exp_c_growth_12m, np.log1p(36e6) - np.log1p(12e6))  # 8523 3배, 8542 자신 제외
+        self.assertAlmostEqual(chip.rel_input_imp_growth_12m, np.log1p(24e6) - np.log1p(12e6))  # 장비 수입 2배
+        self.assertAlmostEqual(chip.grp4_c_growth_12m, 0.0)  # 같은 HS4에는 다른 품목이 없어 HS4 피처로는 안 보임
+        self.assertTrue(np.isnan(at.loc["010110"].rel_exp_c_growth_12m))  # 묶음 product가 아닌 품목은 결측
+        self.assertTrue(np.isnan(at.loc["848620"].rel_exp_c_growth_12m))  # input 역할만 있는 품목도 결측
+
+    def test_curated_table_is_valid(self):
+        self.assertEqual(R.validate(R.load_groups()), [])
+
+    def test_validate_catches_problems(self):
+        bad = pd.concat([GROUPS, GROUPS.assign(group="디스플레이").iloc[:1],
+                         pd.DataFrame([("반도체", "85x", "foo", "curated", "")], columns=R.COLUMNS)], ignore_index=True)
+        problems = " ".join(R.validate(bad, hs4_names={"8542": "", "8486": "", "8523": ""}))
+        for word in ("4자리 숫자가 아닌", "알 수 없는 역할", "여러 묶음의 product", "사전에 없는"):
+            self.assertIn(word, problems)
+
+    def test_suggest_finds_leading_import_and_apply_is_strict(self):
+        months = pd.date_range("2022-01-01", periods=45, freq="MS")
+        rng = np.random.default_rng(1)
+        wave = np.sin(np.arange(51) / 4) + 0.02 * rng.normal(size=51)
+        rows = []
+        for i, m in enumerate(months):
+            rows.append((m, "export", "8542", 1e9 * np.exp(0.5 * wave[i])))  # 제품
+            rows.append((m, "import", "9999", 1e9 * np.exp(0.5 * wave[i + 6])))  # 6개월 선행 수입
+            rows.append((m, "import", "1111", 1e9 * np.exp(0.5 * rng.normal())))  # 무관
+            rows.append((m, "export", "7777", 1e11))  # 한국 전체 수출·수입의 대부분 (경기 기준)
+            rows.append((m, "import", "6666", 1e11))
+        series = pd.DataFrame(rows, columns=["month", "flow", "hs4", "amount"])
+        cand = R.suggest(series, GROUPS, "2025-09-01").set_index("hs4")
+        self.assertEqual(cand.loc["9999", "role"], "input")
+        self.assertEqual(cand.loc["9999", "lag"], 6)
+        self.assertGreater(cand.loc["9999", "corr"], 0.8)
+        merged = R.apply_candidates(GROUPS, cand.reset_index(), "2025-09")
+        added = merged.iloc[len(GROUPS):]
+        self.assertEqual(added.hs4.tolist(), ["9999"])  # 무관 품목은 기준 미달
+        self.assertEqual(added.source.tolist(), ["data"])
+
+    def test_suggest_ignores_months_after_until(self):
+        series = pd.DataFrame([(m, "export", "8542", 1.0) for m in pd.date_range("2022-01-01", periods=30, freq="MS")],
+                              columns=["month", "flow", "hs4", "amount"])
+        self.assertTrue(R.suggest(series, GROUPS, "2022-06-01").empty)
 
 
 

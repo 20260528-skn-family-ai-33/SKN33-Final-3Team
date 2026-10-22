@@ -1,0 +1,101 @@
+group,hs4,role,source,note
+반도체,8541,product,curated,반도체 디바이스
+반도체,8542,product,curated,전자집적회로(메모리·시스템 반도체)
+반도체,8486,input,curated,반도체·디스플레이 제조용 장비
+반도체,3818,input,curated,전자공업용 도프처리 원소(웨이퍼)
+반도체,2804,input,curated,공정용 특수가스·실리콘
+반도체,3707,input,curated,감광액 등 사진용 화학조제품
+반도체,2811,input,curated,불화수소 등 무기산
+반도체,8523,related,curated,SSD 등 저장장치
+반도체,8473,related,curated,컴퓨터 부분품(메모리 모듈 포함)
+반도체,8471,related,curated,컴퓨터·서버(반도체 수요처)
+디스플레이,8524,product,curated,평판디스플레이 모듈
+디스플레이,9013,product,curated,액정 디바이스 등 광학기기
+디스플레이,8486,input,curated,디스플레이 제조용 장비
+디스플레이,3920,input,curated,광학용 플라스틱 필름
+디스플레이,3707,input,curated,감광액
+디스플레이,8528,related,curated,모니터·TV(수요처)
+디스플레이,8517,related,curated,휴대전화(수요처)
+통신기기,8517,product,curated,휴대전화·통신장비
+통신기기,8542,input,curated,집적회로
+통신기기,8524,input,curated,디스플레이 모듈
+통신기기,8507,input,curated,배터리
+통신기기,8471,related,curated,컴퓨터
+이차전지,8507,product,curated,축전지(리튬이온 배터리)
+이차전지,2825,input,curated,수산화리튬 등 금속수산화물
+이차전지,2833,input,curated,황산니켈 등 황산염(전구체 원료)
+이차전지,2836,input,curated,탄산리튬 등 탄산염
+이차전지,3801,input,curated,인조흑연(음극재)
+이차전지,8703,related,curated,전기차(수요처)
+이차전지,8504,related,curated,변환기·ESS 전력장치
+자동차,8703,product,curated,승용차
+자동차,8704,product,curated,화물자동차
+자동차,8708,product,curated,자동차 부품
+자동차,8407,input,curated,가솔린 엔진
+자동차,8408,input,curated,디젤 엔진
+자동차,8409,input,curated,엔진 부분품
+자동차,4011,input,curated,타이어
+자동차,7208,input,curated,열연강판
+자동차,7209,input,curated,냉연강판
+자동차,7210,input,curated,도금강판
+자동차,8544,input,curated,와이어링 하네스·전선
+자동차,8507,input,curated,배터리
+석유제품,2710,product,curated,석유제품(휘발유·경유·나프타)
+석유제품,2709,input,curated,원유
+석유제품,2711,related,curated,석유가스·LNG
+석유화학,2901,product,curated,에틸렌 등 비환식탄화수소
+석유화학,2902,product,curated,벤젠·파라자일렌 등 환식탄화수소
+석유화학,3901,product,curated,폴리에틸렌
+석유화학,3902,product,curated,폴리프로필렌
+석유화학,3903,product,curated,폴리스티렌·ABS
+석유화학,3907,product,curated,폴리카보네이트·PET 등
+석유화학,2710,input,curated,나프타
+석유화학,2709,input,curated,원유
+석유화학,2711,input,curated,LPG·에탄
+석유화학,3920,related,curated,플라스틱 필름(다운스트림)
+석유화학,5402,related,curated,합성필라멘트사(다운스트림)
+석유화학,5503,related,curated,합성스테이플섬유(다운스트림)
+철강,7208,product,curated,열연강판
+철강,7209,product,curated,냉연강판
+철강,7210,product,curated,도금강판
+철강,7219,product,curated,스테인리스 판재
+철강,7225,product,curated,합금강 판재
+철강,7304,product,curated,무계목 강관
+철강,7306,product,curated,용접 강관
+철강,2601,input,curated,철광석
+철강,2701,input,curated,석탄(원료탄)
+철강,7204,input,curated,철 스크랩
+철강,8901,related,curated,선박(후판 수요처)
+철강,8708,related,curated,자동차 부품(강판 수요처)
+조선,8901,product,curated,화물선·유조선·LNG선
+조선,8905,product,curated,특수선·해양플랜트
+조선,7208,input,curated,후판(열연강판)
+조선,7225,input,curated,합금강 판재
+조선,8408,input,curated,선박용 디젤 엔진
+조선,8406,input,curated,증기터빈
+조선,2711,related,curated,LNG(선박 발주 수요)
+건설기계,8429,product,curated,굴착기·불도저
+건설기계,8431,product,curated,건설기계 부분품
+건설기계,8408,input,curated,디젤 엔진
+건설기계,8409,input,curated,엔진 부분품
+건설기계,7208,input,curated,열연강판
+전력기기,8501,product,curated,전동기·발전기
+전력기기,8504,product,curated,변압기·변환기
+전력기기,8536,product,curated,개폐·보호 기기
+전력기기,8537,product,curated,배전반·제어반
+전력기기,8544,product,curated,전선·케이블
+전력기기,8541,input,curated,전력 반도체
+전력기기,7601,input,curated,알루미늄 괴
+화장품,3304,product,curated,기초·색조 화장품
+화장품,3307,product,curated,기타 화장품·위생용품
+화장품,3401,product,curated,비누·세정제
+화장품,3302,input,curated,향료 혼합물
+의약품,3002,product,curated,백신·혈액제제·바이오의약품
+의약품,3004,product,curated,완제 의약품
+의약품,2933,input,curated,질소 헤테로고리 화합물(원료의약품)
+의약품,2941,input,curated,항생물질
+섬유,5402,product,curated,합성필라멘트사
+섬유,5407,product,curated,합성섬유 직물
+섬유,6006,product,curated,편물
+섬유,5503,product,curated,합성스테이플섬유
+섬유,2902,input,curated,파라자일렌 등(폴리에스터 원료)
