@@ -59,6 +59,66 @@ class CsvSourceTest(unittest.TestCase):
         self.assertEqual(c.loc["KR", "country_role"], "SPECIAL")  # 07 시드가 추가
         self.assertEqual(c.loc["VN", "region_id"], 35)
 
+    def test_monthly_checkpoint_selects_active_nested_collection(self):
+        root = Path(tempfile.mkdtemp())
+        month = root / "202202"
+        active = month / "collection_20261001_030000_000001"
+        self.raw(active, "customs_raw_202202.csv", [("2022.02", "VN", "8542321000", 130, 1, 0)])
+        self.raw(month / "collection_20261022_030000_000001", "customs_raw_202202.csv",
+                 [("2022.02", "VN", "8542321000", 999, 1, 0)])  # 이름이 더 최신이어도 체크포인트가 선택하지 않은 수집본
+        self.raw(month, "customs_raw_202202.csv", [("2022.02", "VN", "8542321000", 100, 1, 0)])
+        (month / "state.json").write_text(json.dumps(
+            {"collection_dir": active.name, "completed": ["collect"]}), encoding="utf-8")
+        (active / "collection.json").write_text(json.dumps(
+            {"collection_complete": True, "months": ["2022.02"]}), encoding="utf-8")
+        exports, _, complete = S.customs([root], {"VN"})
+        self.assertEqual(exports.amount.tolist(), [130])
+        self.assertEqual(complete, {pd.Timestamp("2022-02-01")})
+
+    def test_unfinished_or_missing_selected_collection_does_not_fall_back(self):
+        root = Path(tempfile.mkdtemp())
+        month = root / "202202"
+        self.raw(month, "customs_raw_202202.csv", [("2022.02", "VN", "8542321000", 100, 1, 0)])
+        for state in ({"collection_dir": "collection_new", "completed": []},
+                      {"collection_dir": "collection_new", "completed": ["collect"]},
+                      {"collection_dir": "../other", "completed": ["collect"]}):
+            with self.subTest(state=state):
+                (month / "state.json").write_text(json.dumps(state), encoding="utf-8")
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    S.customs([root], {"VN"})
+
+    def test_raw_money_missing_or_infinite_is_rejected_before_sum(self):
+        root = Path(tempfile.mkdtemp())
+        for column in (3, 5):
+            for value in (np.nan, np.inf, -np.inf):
+                with self.subTest(column=column, value=value):
+                    row = ["2022.01", "VN", "8542321000", 100, 1, 0]
+                    row[column] = value
+                    self.raw(root / "2022", "customs_raw_2022.csv", [row])
+                    with self.assertRaisesRegex(ValueError, "금액 결측 또는 비유한"):
+                        S.customs([root], {"VN"})
+
+    def test_missing_weight_is_not_a_zero_or_partial_total(self):
+        root = Path(tempfile.mkdtemp())
+        self.raw(root / "2022", "customs_raw_2022.csv",
+                 [("2022.01", "VN", "8542321000", 100, np.nan, 0),
+                  ("2022.01", "VN", "8542322000", 200, 2, 0)])
+        exports, _, _ = S.customs([root], {"VN"})
+        self.assertEqual(exports.amount.tolist(), [300])
+        self.assertTrue(exports.weight.isna().all())
+
+    def test_missing_availability_is_checked_before_customs_loading(self):
+        from unittest import mock
+        external = {"market_yearly": pd.DataFrame({"year": [2024]}),
+                    "wdi_yearly": pd.DataFrame(), "availability": None}
+        with mock.patch.object(S, "countries", return_value=S.countries()), \
+             mock.patch.object(S, "hs_correlation", return_value=pd.DataFrame(columns=["new_code", "old_code", "group_code"])), \
+             mock.patch.object(F.pp, "load_external", return_value=external), \
+             mock.patch.object(S, "customs") as customs:
+            with self.assertRaisesRegex(ValueError, "availability.csv"):
+                F.load_data()
+        customs.assert_not_called()
+
     def test_missing_pair_month_is_zero_only_in_completed_months(self):
         data = fake_data(months=26)
         e = data["exports"]
@@ -68,6 +128,25 @@ class CsvSourceTest(unittest.TestCase):
         data["complete_months"] = set(MONTHS)
         ds = F.build_dataset(data)  # 완료 기록이 있으면 확인된 무역 없음(0)
         self.assertFalse(ds.empty)
+
+    def test_completion_does_not_hide_observed_missing_or_infinite_amount(self):
+        for value in (np.nan, np.inf, -np.inf):
+            with self.subTest(value=value):
+                data = fake_data(months=26)
+                data["exports"].loc[0, "amount"] = value
+                data["complete_months"] = set(MONTHS)
+                with self.assertRaisesRegex(ValueError, "미관측 또는 비유한"):
+                    F.build_dataset(data)
+
+    def test_completion_preserves_unknown_observed_weight(self):
+        data = fake_data(months=26)
+        e = data["exports"]
+        chosen = (e.country_code == "VN") & (e.hs6 == e.hs6.iloc[0]) & (e.month == MONTHS[23])
+        e.loc[chosen, "weight"] = np.nan
+        data["complete_months"] = set(MONTHS)
+        ds = F.build_dataset(data)
+        row = ds[(ds.country_code == "VN") & (ds.hs6 == e.hs6.iloc[0]) & (ds.anchor == MONTHS[23])].iloc[0]
+        self.assertTrue(np.isnan(row.unit_trend))
 
 
 class NumericSafetyTest(unittest.TestCase):

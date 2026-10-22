@@ -1,9 +1,10 @@
-"""ML 입력을 수집기가 내려받은 CSV(·xlsx)에서 읽는다. ML 전처리는 DB를 읽지 않는다.
+"""ML 입력을 수집기가 내려받은 CSV(·xlsx)에서 읽는다. 환율만 DB에서 읽는다.
 
 | 입력 | 파일 |
 |---|---|
 | 관세청 수출·수입 | 연도별 일괄 수집 collectors/customs/customs_outputs/*/customs_raw_*.csv (+ customs_collection_*.json) |
-|  | 매월 정기 수집 data/customs_load_outputs/monthly/<YYYYMM>/customs_raw_<YYYYMM>.csv (+ collection.json) |
+|  | 매월 정기 수집 data/customs_load_outputs/monthly/<YYYYMM>/<collection_dir>/customs_raw_<YYYYMM>.csv (+ collection.json) |
+|  | state.json의 collection_dir가 가리키는 수집본만 사용한다 |
 |  | 같은 달이 두 곳에 있으면 정기 수집본(뒤 폴더)을 쓴다 |
 | HS2017 잔존 코드 | collectors/hscode/hscode_outputs/HS2017/hs_code_hs2017.csv |
 | HS 판 대응표 | collectors/hscode/hscode_outputs/correlation/HS2022toHS2017.xlsx (UNSD 원본) |
@@ -17,6 +18,7 @@ import logging
 import re
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -99,13 +101,39 @@ def _is_complete(stats):
                 and not stats.get("missing_months") and not stats.get("unconfirmed_empty_countries"))
 
 
+def _customs_files(folder):
+    """연도별·구형 월별 CSV와 체크포인트가 선택한 정기 수집본. 과거 재수집 폴더는 섞지 않는다."""
+    folder = Path(folder)
+    files = list(folder.glob("*/customs_raw_*.csv"))
+    for month_dir in sorted(folder.glob("*")):
+        if not month_dir.is_dir() or not re.fullmatch(r"\d{6}", month_dir.name):
+            continue
+        state_path = month_dir / "state.json"
+        if not state_path.exists():
+            if any(month_dir.glob("collection_*/customs_raw_*.csv")):
+                raise ValueError(f"정기 수집본을 선택할 state.json이 없습니다: {month_dir}")
+            continue  # 이전 형식: 월 폴더 바로 아래의 CSV
+        state = json.loads(state_path.read_text("utf-8"))
+        collection_dir = state.get("collection_dir") if isinstance(state, dict) else None
+        if not isinstance(collection_dir, str) or not re.fullmatch(r"collection_[A-Za-z0-9_]+", collection_dir):
+            raise ValueError(f"정기 수집 체크포인트의 collection_dir가 잘못됐습니다: {state_path}")
+        if not isinstance(state.get("completed"), list) or "collect" not in state["completed"]:
+            raise ValueError(f"정기 수집이 아직 완료되지 않았습니다: {state_path}")
+        selected = month_dir / collection_dir / f"customs_raw_{month_dir.name}.csv"
+        if not selected.is_file():
+            raise FileNotFoundError(f"체크포인트가 가리키는 관세청 CSV가 없습니다: {selected}")
+        files = [path for path in files if path.parent != month_dir]
+        files.append(selected)
+    return sorted(files)
+
+
 def raw_customs(folders=CUSTOMS_DIRS):
     """관세청 수집 원본 행(총계·형식 오류 행 제외)과 수집 완료가 기록된 달.
 
     같은 달이 여러 파일에 있으면 뒤 폴더·뒤 파일(최신 수집)의 행만 쓴다. 같은 달을 두 번 더하지 않게 하기 위해서다.
     완료 여부도 실제로 쓴 그 파일의 기록으로만 판단한다.
     """
-    files = [f for folder in folders for f in sorted(Path(folder).glob("*/customs_raw_*.csv"))]
+    files = [f for folder in folders for f in _customs_files(folder)]
     frames = []
     for priority, path in enumerate(files):
         d = pd.read_csv(path, usecols=["year", "statCd", "hsCd", "expDlr", "expWgt", "impDlr"],
@@ -114,6 +142,10 @@ def raw_customs(folders=CUSTOMS_DIRS):
         d = d[d.year.str.fullmatch(r"\d{4}\.\d{2}", na=False) & d.hsCd.str.fullmatch(r"\d{10}", na=False)]
         for col in ("expDlr", "expWgt", "impDlr"):
             d[col] = pd.to_numeric(d[col], errors="raise")
+        bad = ~np.isfinite(d[["expDlr", "impDlr"]].to_numpy(dtype=float)).all(axis=1)
+        if bad.any():
+            examples = d.loc[bad, ["year", "statCd", "hsCd"]].head(5).to_dict("records")
+            raise ValueError(f"관세청 수출입 금액 결측 또는 비유한 값: {path} ({examples})")
         frames.append(d.assign(month=pd.to_datetime(d.year.str.replace(".", "-", regex=False) + "-01"),
                                _priority=priority))
     if not frames:
@@ -147,5 +179,8 @@ def customs(folders=CUSTOMS_DIRS, country_codes=None, hs2017=None):
                      hs_ver=raw.hsCd.isin(hs2017).map({True: "HS2017", False: "HS2022"}))
     keys = ["month", "country_code", "hs6", "hs_ver"]
     exports = raw.groupby(keys, as_index=False).agg(amount=("expDlr", "sum"), weight=("expWgt", "sum"))
+    unknown_weight = pd.MultiIndex.from_frame(raw.loc[raw.expWgt.isna(), keys])
+    if len(unknown_weight):
+        exports.loc[pd.MultiIndex.from_frame(exports[keys]).isin(unknown_weight), "weight"] = np.nan
     imports = raw[raw.impDlr != 0].groupby(keys, as_index=False).agg(amount=("impDlr", "sum"))
     return exports.assign(anomaly_amount=0.0), imports, complete

@@ -54,20 +54,27 @@ def apply_hs_key(df, mapping, ver_col="hs_ver", code_col="hs6"):
 
 
 def load_data(external_dir=None, customs_dirs=None):
-    """수집기가 내려받은 CSV만 읽어 build_dataset 입력을 만든다 (DB를 읽지 않는다). 파일 위치는 ml/sources.py."""
+    """수집 파일로 build_dataset 입력을 만든다. 환율만 DB 조회, 파일 위치는 ml/sources.py."""
     from backend.app.ml import sources as S
     country_table = S.countries()
     countries = country_table[country_table.country_role == "COUNTRY"][["country_code", "region_id", "currency_code"]]
     mapping = hs_key_map(S.hs_correlation())
+    external = pp.load_external(external_dir, set(countries.country_code), mapping)
+    if external["availability"] is None and any(len(external[key]) for key in ("market_yearly", "wdi_yearly")):
+        raise ValueError("외부 자료의 공개·버전 시점 정보가 필요합니다: data/external/availability.csv")
     exports, imports, complete = S.customs(customs_dirs or S.CUSTOMS_DIRS, set(countries.country_code), S.hs2017_codes())
-    exports = apply_hs_key(exports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
+    exports = apply_hs_key(exports, mapping)
+    keys = ["month", "country_code", "hs6"]
+    unknown_weight = pd.MultiIndex.from_frame(exports.loc[exports.weight.isna(), keys])
+    exports = exports.groupby(keys, as_index=False).sum(min_count=1)
+    if len(unknown_weight):
+        exports.loc[pd.MultiIndex.from_frame(exports[keys]).isin(unknown_weight), "weight"] = np.nan
     imports = apply_hs_key(imports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
     # 환율만 예외로 DB(fx_daily, country.currency_code)에서 읽는다. ECOS 수집기가 CSV를 남기지 않기 때문이다.
     fx, currencies = S.fx_from_db()
     countries = countries.drop(columns="currency_code").merge(currencies, on="country_code", how="left")
     news, news_topics, news_start = load_shortnews(SHORTNEWS_DIR, country_table[["country_code", "name_ko"]],
                                                    S.topic_majors())
-    external = pp.load_external(external_dir, set(countries.country_code), mapping)
     from backend.app.ml import related_groups
     return {"exports": exports, "imports": imports, "countries": countries, "fx": fx,
             "complete_months": complete,
@@ -222,8 +229,14 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     amount, anomaly, weight = (_matrix(exports, col, rows, months) for col in ("amount", "anomaly_amount", "weight"))
     # 수집 완료가 기록된 달(관세청 수집 통계)에 행이 없는 쌍은 확인된 무역 없음이다. 그 달만 0으로 채운다.
     complete = [i for i, m in enumerate(months) if m.to_timestamp() in data.get("complete_months", set())]
-    for matrix in (amount, anomaly, weight):
-        matrix[:, complete] = np.nan_to_num(matrix[:, complete], nan=0.0)
+    if complete:
+        observed = np.zeros(amount.shape, dtype=bool)
+        observed[rows.get_indexer(pd.MultiIndex.from_frame(exports[["country_code", "hs6"]])),
+                 _month_index(exports.month, months)] = True
+        for i in complete:
+            for matrix in (amount, anomaly, weight):
+                matrix[~observed[:, i], i] = 0.0
+        del observed
     _require_observed(amount, rows, months, "amount")
     adjustment = _matrix(exports, "r1_adjustment", rows, months) if "r1_adjustment" in exports else np.zeros_like(amount)
     if "r1_adjustment" in exports:
