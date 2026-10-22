@@ -77,6 +77,13 @@ def market_yearly(market, countries=None):
     m["kor_share"] = (m.import_from_kor_usd / m.import_world_usd).clip(0, 1)
     prev = m[["year", *MARKET_KEYS, "source", "import_world_usd", "kor_share"]].assign(year=m.year + 1)
     m = m.merge(prev, on=["year", *MARKET_KEYS, "source"], how="left", suffixes=("", "_prev"))
+    # 상대국의 같은 HS4 수입 성장(관련 품목 수요). 연결 연도 행을 빼기 전에 계산해 같은 출처끼리 비교한다.
+    g4_keys = ["year", "country_code", "hs4", "source"]
+    g4 = m.assign(hs4=m.hs6.str[:4]).groupby(g4_keys, as_index=False).import_world_usd.sum()
+    g4 = g4.merge(g4.assign(year=g4.year + 1), on=g4_keys, how="left", suffixes=("", "_prev"))
+    g4["mkt_hs4_growth"] = _growth(g4.import_world_usd, g4.import_world_usd_prev)
+    m = (m.assign(hs4=m.hs6.str[:4]).merge(g4[[*g4_keys, "mkt_hs4_growth"]], on=g4_keys, how="left")
+          .drop(columns="hs4"))
     baci_years = set(m.loc[m.source == "BACI", "year"])
     m = m[m.source == np.where(m.year.isin(baci_years), "BACI", "COMTRADE")]  # 연결 연도 Comtrade 행은 비교에만 쓰고 뺀다
     m["mkt_log_import"] = np.log1p(m.import_world_usd)

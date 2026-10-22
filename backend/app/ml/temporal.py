@@ -28,13 +28,18 @@ def dated_external(frame, availability, dataset):
     out = values.merge(dates[[*keys, "available_from"]], on=keys, how="left", validate="many_to_one")
     if out.available_from.isna().any():
         raise ValueError(f"{dataset} 일부 연도·출처의 사용 가능일 누락")
-    # 전년 대비 변화와 WDI 전년값 보충은 전년 자료의 버전 시점에도 의존한다.
-    row_keys = ["country_code", "hs6"] if dataset == "market" else ["country_code"]
-    previous = out[["year", *row_keys, "available_from"]].copy()
-    previous["year"] += 1
-    previous = previous.rename(columns={"available_from": "previous_available_from"})
-    out = out.merge(previous, on=["year", *row_keys], how="left", validate="one_to_one")
-    needs_previous = out.mkt_growth.notna() if dataset == "market" else out.filled
+    # 전년 대비 변화와 WDI 전년값 보충은 같은 출처 전년 자료의 버전 시점에도 의존한다.
+    # 행이 아니라 (출처, 전년)으로 찾는다: 연결 연도 Comtrade처럼 최종 표에서 빠진 전년 자료와,
+    # 쌍은 새로 생겼지만 HS4 성장은 있는 행도 전년 시점을 반영하기 위해서다.
+    previous = dates[[*keys, "available_from"]].assign(year=dates.year + 1).rename(
+        columns={"available_from": "previous_available_from"})
+    out = out.merge(previous, on=keys, how="left", validate="many_to_one")
+    if dataset == "market":
+        needs_previous = out.mkt_growth.notna()
+        if "mkt_hs4_growth" in out:
+            needs_previous |= out.mkt_hs4_growth.notna()
+    else:
+        needs_previous = out.filled.astype(bool)
     if (needs_previous & out.previous_available_from.isna()).any():
         raise ValueError(f"{dataset} 전년 파생값의 사용 가능일 누락")
     out.loc[needs_previous, "available_from"] = out.loc[
