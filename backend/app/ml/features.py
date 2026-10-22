@@ -3,6 +3,9 @@
 한 행 = (국가, HS6, 기준월 t). 피처는 t 시점에 알 수 있는 값만 쓰고, y는 t+1~t+12 실적으로 만든다.
 DB·CSV 읽기(load_data)와 계산(build_dataset)을 나눠, 계산은 가상 데이터로 테스트한다.
 """
+import ast
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -16,12 +19,22 @@ CATEGORICAL = ["region_id", "hs2"]
 FEATURES = [
     "log_exp_12m", "growth_12m", "growth_3m", "active_months", "cv_12m", "anomaly_ratio", "unit_trend",
     "share_in_country", "share_in_product", "country_growth", "product_growth", "product_countries",
+    # 관련 품목: 같은 품목군 수출(자기 품목 제외)과 한국의 수입
+    "grp4_c_growth_12m", "grp4_c_growth_3m", "grp4_world_growth_12m", "grp2_c_growth_12m", "hs4_unit_trend",
+    "imp_hs6_world_growth", "imp_hs4_world_growth", "imp_hs4_from_c_growth", "imp_exp_ratio_hs4",
     "fx_change_12m", "fx_vol_12m",
     "log_gdp", "gdp_growth", "log_population", "log_gdp_pc",
-    "mkt_log_import", "mkt_growth", "kor_share", "kor_share_change",
+    "mkt_log_import", "mkt_growth", "kor_share", "kor_share_change", "mkt_hs4_growth",
     "news_3m", "news_all_3m", "news_change",
+    "news_country_3m", "news_trade_3m", "news_market_3m", "news_invest_3m",
     *CATEGORICAL,
 ]
+SHORTNEWS_DIR = Path(__file__).resolve().parents[1] / "scheduler" / "collectors" / "shortnews" / "shortnews_outputs"
+# 단신속보 국가명 중 country.name_ko와 표기가 다른 것
+NEWS_COUNTRY_ALIASES = {"도미니카공화국": "DO", "러시아연방": "RU", "보스니아 헤르체고비나": "BA", "부르키나파소": "BF",
+                        "아랍에미리트": "AE", "에콰도르": "EC", "체코": "CZ", "포르투갈": "PT"}
+# 국가별로 세는 기사 토픽 대분류 (keyword_category.major_name) → 피처 이름
+NEWS_TOPIC_FEATURES = {"무역·통상": "news_trade_3m", "경제·시장": "news_market_3m", "기업·투자·진출": "news_invest_3m"}
 TYPE_NAMES = {0: "고성장·선점형", 1: "고성장·진입형", 2: "성숙·유지형", 3: "정체·축소형", 4: "변동·일회성형"}
 
 
@@ -59,18 +72,78 @@ def load_data(engine=None, external_dir=None):
             GROUP BY 1, 2, 3, 4""")
         corr = read("SELECT new_code, old_code, group_code FROM hs_code_correlation"
                     " WHERE new_ver = 'HS2022' AND old_ver = 'HS2017'")
+        # 관련 품목 피처용 한국 수입 (같은 관세청 원본에서 적재된다)
+        imports = read("""
+            SELECT m.trade_month AS month, m.country_code, m.hs6_code AS hs6, m.hs_ver, SUM(m.amount_usd) AS amount
+            FROM import_monthly m JOIN country c ON c.country_code = m.country_code
+            WHERE c.country_role = 'COUNTRY'
+            GROUP BY 1, 2, 3, 4""")
         countries = read("SELECT country_code, region_id, currency_code FROM country WHERE country_role = 'COUNTRY'")
+        country_names = read("SELECT country_code, name_ko FROM country")
         fx = read("""SELECT DATE_FORMAT(base_date, '%Y-%m-01') AS month, currency_code, AVG(rate_krw) AS rate
                      FROM fx_daily GROUP BY 1, 2""")
-        news = read("""SELECT DATE_FORMAT(metric_date, '%Y-%m-01') AS month, hs_code AS hs6, hs_ver, country_key AS country_code,
-                              SUM(day_count) AS count
-                       FROM news_product_daily WHERE CHAR_LENGTH(hs_code) = 6 GROUP BY 1, 2, 3, 4""")
+        topic_major = read("""
+            SELECT kt.keyword_text AS topic, kc.major_name AS major
+            FROM keyword_topic kt LEFT JOIN keyword_topic canon ON canon.keyword_text = kt.canonical_text
+            JOIN keyword_category kc ON kc.category_id = COALESCE(kt.category_id, canon.category_id)""")
     mapping = hs_key_map(corr)
     exports = apply_hs_key(exports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).agg(
         lambda values: values.sum(skipna=False))
-    news = apply_hs_key(news, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
+    imports = apply_hs_key(imports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
+    news, news_topics, news_start = load_shortnews(SHORTNEWS_DIR, country_names, topic_major)
     external = pp.load_external(external_dir, set(countries.country_code), mapping)
-    return {"exports": exports, "countries": countries, "fx": fx, "news": news, **external}
+    return {"exports": exports, "imports": imports, "countries": countries, "fx": fx,
+            "news": news, "news_topics": news_topics, "news_start": news_start, **external}
+
+
+def _as_list(value):
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = ast.literal_eval(value) if isinstance(value, str) and value else []
+    except (ValueError, SyntaxError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def load_shortnews(folder, country_names, topic_major):
+    """단신속보 수집 결과(원본 CSV·HS 태깅·토픽)를 월별 기사 수로 센다. DB 적재를 기다리지 않는다.
+
+    news: month, country_code('*'는 전체 국가), hs4, count — 기사에 태깅된 HS4별 고유 기사 수
+    news_topics: month, country_code, major, count — 국가별 토픽 대분류 기사 수 ('*' 대분류는 전체 기사)
+    news_start: 수집한 기사의 첫 게시 월. 이보다 앞선 달이 창에 들어가는 기준월은 기사 피처를 결측으로 둔다.
+    """
+    empty = (pd.DataFrame(columns=["month", "country_code", "hs4", "count"]),
+             pd.DataFrame(columns=["month", "country_code", "major", "count"]), None)
+    raws = sorted(Path(folder).glob("*/shortnews_raw.csv"))
+    if not raws:
+        return empty
+    raw = pd.read_csv(raws[-1], usecols=["nttSn", "nat", "othbcDt"], dtype=str, keep_default_na=False, na_values=[""])
+    to_code = {**dict(zip(country_names.name_ko, country_names.country_code)), **NEWS_COUNTRY_ALIASES}
+    articles = pd.DataFrame({"id": raw.nttSn, "country_code": raw.nat.map(to_code),
+                             "month": pd.to_datetime(raw.othbcDt, errors="coerce").dt.to_period("M").dt.to_timestamp()})
+    articles = articles.dropna(subset=["month"]).drop_duplicates("id")
+    news = empty[0]
+    analysis = Path(folder) / "short_news_analysis.jsonl"
+    if analysis.exists():
+        an = pd.read_json(analysis, lines=True, dtype={"external_id": str})
+        tags = an.assign(hs4=an.hs_codes.map(lambda v: sorted({str(h)[:4] for h in _as_list(v)})))[["external_id", "hs4"]]
+        tags = tags.explode("hs4").dropna().merge(articles, left_on="external_id", right_on="id")
+        per_country = tags.dropna(subset=["country_code"]).groupby(["month", "country_code", "hs4"]).id.nunique()
+        everywhere = tags.groupby(["month", "hs4"]).id.nunique()
+        news = pd.concat([per_country.rename("count").reset_index(),
+                          everywhere.rename("count").reset_index().assign(country_code="*")], ignore_index=True)
+    topics_file = Path(folder) / "short_news_topics.jsonl"
+    by_country = articles.dropna(subset=["country_code"])
+    news_topics = by_country.groupby(["month", "country_code"]).id.nunique().rename("count").reset_index().assign(major="*")
+    if topics_file.exists():
+        tp = pd.read_json(topics_file, lines=True, dtype={"external_id": str})
+        majors = dict(zip(topic_major.topic, topic_major.major))
+        tp = tp.assign(major=tp.picked.map(lambda v: sorted({majors[t] for t in _as_list(v) if t in majors})))
+        tp = tp[["external_id", "major"]].explode("major").dropna().merge(by_country, left_on="external_id", right_on="id")
+        news_topics = pd.concat([news_topics, tp.groupby(["month", "country_code", "major"]).id.nunique()
+                                 .rename("count").reset_index()], ignore_index=True)
+    return news, news_topics, articles.month.min()
 
 
 def _month_index(series, months):
@@ -114,6 +187,31 @@ def _group_sum(values, groups):
     return np.bincount(inverse, weights=values, minlength=len(codes))[inverse]
 
 
+def _key_matrix(df, keys, months):
+    """수입처럼 피처에만 쓰는 실적을 키 × 월 합계 행렬로 만든다.
+
+    행이 하나도 없는 달은 수집되지 않은 달로 보고 NaN, 수집된 달에 그 키의 행이 없으면 무역 없음(0)으로 본다.
+    """
+    index = pd.MultiIndex.from_frame(df[keys].drop_duplicates()) if len(df) else pd.MultiIndex.from_tuples([], names=keys)
+    out = np.zeros((len(index), len(months)), dtype=np.float64)
+    if len(df):
+        g = df.groupby([*keys, "month"]).amount.sum()
+        # 키가 하나여도 MultiIndex로 맞춘다 (단일 Index로 찾으면 모두 -1이 되어 마지막 행에 잘못 쓰인다)
+        r = index.get_indexer(pd.MultiIndex.from_frame(g.index.to_frame(index=False)[keys]))
+        if (r < 0).any():
+            raise ValueError("수입 키 행렬 구성 오류")
+        out[r, _month_index(g.index.get_level_values("month"), months)] = g.to_numpy(dtype=float)
+    seen = set(_month_index(df.month, months)) if len(df) else set()
+    out[:, [i for i in range(len(months)) if i not in seen]] = np.nan
+    return index, out
+
+
+def _lookup(index, values, keys):
+    """키 행렬의 값을 학습 행 순서로 가져온다. 한 번도 나오지 않은 키는 그 기간 내내 무역 없음(0)."""
+    pos = index.get_indexer(pd.MultiIndex.from_arrays(keys)) if len(index) else np.full(len(keys[0]), -1)
+    return np.where(pos >= 0, values[np.clip(pos, 0, None)] if len(index) else 0.0, 0.0)
+
+
 def build_dataset(data, min_export=MIN_EXPORT_USD):
     """관측 범위 내부 누락은 오류. 범위 이후의 미래 실적이 없는 최근 기준월은 y=NaN(예측 대상)."""
     exports = data["exports"]
@@ -134,6 +232,16 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     corrected = amount + adjustment
     country = rows.get_level_values(0).to_numpy()
     hs6 = rows.get_level_values(1).to_numpy()
+    hs4 = np.array([h[:4] for h in hs6])
+    country_hs4 = np.char.add(country.astype(str), np.char.add("|", hs4))
+    country_hs2 = np.char.add(country.astype(str), np.char.add("|", np.array([h[:2] for h in hs6])))
+    imports = data.get("imports")
+    if imports is None:
+        imports = pd.DataFrame(columns=["month", "country_code", "hs6", "amount"])
+    imports = imports.assign(month=pd.to_datetime(imports.month), hs4=imports.hs6.str[:4])
+    imp_hs6_index, imp_hs6 = _key_matrix(imports, ["hs6"], months)
+    imp_hs4_index, imp_hs4 = _key_matrix(imports, ["hs4"], months)
+    imp_c4_index, imp_c4 = _key_matrix(imports, ["country_code", "hs4"], months)
     frames = []
     for t in range(HISTORY - 1, len(months)):
         # t월 R1은 t+1월에야 확정된다. t 이전 월만 보정하고 t월은 원금액을 쓴다.
@@ -148,12 +256,28 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
         pa6, pw6 = _window(corrected, t - 6, 6), _window(weight, t - 6, 6)
         c12, cp12 = _group_sum(s12, country), _group_sum(p12, country)
         h12, hp12 = _group_sum(s12, hs6), _group_sum(p12, hs6)
+        s3, p3 = _window(corrected, t, 3) - adjustment[:, t], _window(corrected, t - 3, 3)
+        # 같은 품목군 수출: 자기 품목(행)을 빼서 쌍 실적 피처와 같은 정보를 두 번 넣지 않는다.
+        g4c = lambda v: _group_sum(v, country_hs4) - v  # noqa: E731
+        g2c = lambda v: _group_sum(v, country_hs2) - v  # noqa: E731
+        w4 = lambda v: _group_sum(v, hs4)  # noqa: E731
+        unit_ok = np.isfinite(w6) & np.isfinite(pw6) & (w6 > 0) & (pw6 > 0)
+        u_a, u_w = np.where(unit_ok, a6, 0.0), np.where(unit_ok, w6, 0.0)
+        u_pa, u_pw = np.where(unit_ok, pa6, 0.0), np.where(unit_ok, pw6, 0.0)
+        # 창 안에 수입이 수집되지 않은 달이 있으면, 한 번도 나오지 않은 품목도 0이 아니라 결측이다.
+        imp_window_ok = not np.isnan(imp_hs6[:, t - 23:t + 1]).any() if len(imp_hs6_index) else False
+        imp = lambda index, mat, keys: tuple(  # noqa: E731
+            _lookup(index, _window(mat, end, 12), keys) if imp_window_ok else np.full(len(keys[0]), np.nan)
+            for end in (t, t - 12))
+        i6, pi6 = imp(imp_hs6_index, imp_hs6, [hs6])
+        i4, pi4 = imp(imp_hs4_index, imp_hs4, [hs4])
+        ic4, pic4 = imp(imp_c4_index, imp_c4, [country, hs4])
         frame = pd.DataFrame({
             "anchor": months[t].to_timestamp(), "country_code": country, "hs6": hs6,
             "exp_12m": s12,
             "log_exp_12m": np.log1p(s12),
             "growth_12m": _growth(s12, p12),
-            "growth_3m": _growth(_window(corrected, t, 3) - adjustment[:, t], _window(corrected, t - 3, 3)),
+            "growth_3m": _growth(s3, p3),
             "active_months": (last12 > 0).sum(axis=1),
             "cv_12m": _ratio(last12.std(axis=1), last12.mean(axis=1)),
             "anomaly_ratio": _ratio(_window(anomaly, t, 12) - r1_only[:, t], s12),
@@ -163,6 +287,15 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
             "country_growth": _growth(c12, cp12),
             "product_growth": _growth(h12, hp12),
             "product_countries": _group_sum((s12 > 0).astype(float), hs6),
+            "grp4_c_growth_12m": _growth(g4c(s12), g4c(p12)),
+            "grp4_c_growth_3m": _growth(g4c(s3), g4c(p3)),
+            "grp4_world_growth_12m": _growth(w4(s12) - h12, w4(p12) - hp12),
+            "grp2_c_growth_12m": _growth(g2c(s12), g2c(p12)),
+            "hs4_unit_trend": np.log(_ratio(_ratio(w4(u_a), w4(u_w)), _ratio(w4(u_pa), w4(u_pw)))),
+            "imp_hs6_world_growth": _growth(i6, pi6),
+            "imp_hs4_world_growth": _growth(i4, pi4),
+            "imp_hs4_from_c_growth": _growth(ic4, pic4),
+            "imp_exp_ratio_hs4": np.log1p(i4) - np.log1p(w4(s12)),
         })
         if t + HORIZON < len(months):
             future = corrected[:, t + 1:t + 1 + HORIZON].copy()
@@ -181,7 +314,7 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     ds = _add_fx(ds, data["fx"], data["countries"])
     ds = _add_wdi(ds, data["wdi_yearly"], data.get("availability"))
     ds = _add_market(ds, data["market_yearly"], data.get("availability"))
-    return _add_news(ds, data["news"])
+    return _add_news(ds, data["news"], data.get("news_topics"), data.get("news_start"))
 
 
 def _add_fx(ds, fx, countries):
@@ -209,7 +342,10 @@ def _add_market(ds, market_yearly, availability=None):
     """공개된 시장 피처와 미래 정답을 구분한다. 미래 정답의 사용 가능일도 보존한다."""
     keys = ["year", *pp.MARKET_KEYS]
     dated = dated_external(market_yearly, availability, "market")
-    ds = join_known(ds, dated, pp.MARKET_KEYS, ["mkt_log_import", "mkt_growth", "kor_share", "kor_share_change"])
+    columns = ["mkt_log_import", "mkt_growth", "kor_share", "kor_share_change"]
+    if "mkt_hs4_growth" not in dated:
+        dated = dated.assign(mkt_hs4_growth=np.nan)
+    ds = join_known(ds, dated, pp.MARKET_KEYS, [*columns, "mkt_hs4_growth"])
     # ponytail: 미래 12개월을 연 단위로 근사 (기준월+6개월이 속한 해 vs 그 전해). 월별 시장 데이터가 생기면 바꾼다.
     future = dated[[*keys, "mkt_growth", "kor_share", "available_from"]].rename(
         columns={"mkt_growth": "future_mkt_growth", "kor_share": "future_share",
@@ -218,27 +354,60 @@ def _add_market(ds, market_yearly, availability=None):
     return ds.merge(future, on=keys, how="left").drop(columns="year")
 
 
-def _add_news(ds, news):
-    """최근 3개월(≈90일) 기사 수: 국가·품목별, 품목 전체(*), 직전 3개월 대비 증감."""
-    if news.empty:
-        return ds.assign(news_3m=0.0, news_all_3m=0.0, news_change=0.0)
-    n = news.assign(month=pd.to_datetime(news.month)).pivot_table(
-        index="month", columns=["country_code", "hs6"], values="count", aggfunc="sum")
+NEWS_COLUMNS = ["news_3m", "news_all_3m", "news_change", "news_country_3m", *NEWS_TOPIC_FEATURES.values()]
+
+
+def _rolling_counts(df, keys, anchors):
+    """키별 월 기사 수를 기준월까지의 최근 3개월·직전 3개월 합계로 바꾼다 (월·키 long 형태)."""
+    n = df.assign(month=pd.to_datetime(df.month)).pivot_table(index="month", columns=keys, values="count", aggfunc="sum")
     # 마지막 기사 이후에도 기준월까지 0개월을 이어야 최근/직전 3개월 창이 유지된다.
-    start = min(n.index.min(), pd.Timestamp(ds.anchor.min()) - pd.DateOffset(months=5))
-    n = n.reindex(pd.date_range(start, ds.anchor.max(), freq="MS", name="month")).fillna(0)
+    start = min(n.index.min(), anchors.min() - pd.DateOffset(months=5))
+    n = n.reindex(pd.date_range(start, anchors.max(), freq="MS", name="month")).fillna(0)
     now, before = n.rolling(3, min_periods=1).sum(), n.shift(3).rolling(3, min_periods=1).sum()
-    long = lambda df, name: df.stack(["country_code", "hs6"], future_stack=True).rename(name).reset_index()  # noqa: E731
-    feat = long(now, "news_3m").merge(long(before, "news_prev_3m"), on=["month", "country_code", "hs6"])
-    pair = feat[feat.country_code != "*"]
-    allc = feat[feat.country_code == "*"].drop(columns=["country_code", "news_prev_3m"]).rename(
-        columns={"news_3m": "news_all_3m"})
-    ds = (ds.merge(pair, left_on=["anchor", "country_code", "hs6"], right_on=["month", "country_code", "hs6"], how="left")
-            .drop(columns="month")
-            .merge(allc, left_on=["anchor", "hs6"], right_on=["month", "hs6"], how="left").drop(columns="month"))
-    ds[["news_3m", "news_prev_3m", "news_all_3m"]] = ds[["news_3m", "news_prev_3m", "news_all_3m"]].fillna(0)
-    ds["news_change"] = _growth(ds.news_3m, ds.news_prev_3m)
-    return ds.drop(columns="news_prev_3m")
+    long = lambda x, name: x.stack(keys, future_stack=True).rename(name).reset_index()  # noqa: E731
+    return long(now, "now").merge(long(before, "before"), on=["month", *keys])
+
+
+def _add_news(ds, news, topics=None, start=None):
+    """단신속보 기사 수 피처 (최근 3개월 ≈ 90일).
+
+    - news_3m·news_all_3m·news_change: 같은 HS4 기사 수 (그 국가 / 전체 국가), 직전 3개월 대비 증감
+    - news_country_3m·news_trade_3m 등: 그 국가 기사 수 전체와 토픽 대분류별 수
+    기사 자료가 없거나, 수집 시작 월(start) 전 달이 창에 들어가는 기준월은 0이 아니라 결측이다.
+    """
+    topics = topics if topics is not None else pd.DataFrame(columns=["month", "country_code", "major", "count"])
+    if news.empty and topics.empty:
+        return ds.assign(**{c: np.nan for c in NEWS_COLUMNS})
+    anchors = pd.to_datetime(ds.anchor)
+    if "hs4" not in news and "hs6" in news:  # DB news_product_daily 형식(HS6)도 HS4로 묶어 받는다
+        news = news.assign(hs4=news.hs6.str[:4])
+    news = news.groupby(["month", "country_code", "hs4"], as_index=False)["count"].sum()
+    ds = ds.assign(hs4=ds.hs6.str[:4])
+    if len(news):
+        feat = _rolling_counts(news, ["country_code", "hs4"], anchors)
+        pair = feat[feat.country_code != "*"].rename(columns={"month": "anchor", "now": "news_3m", "before": "news_prev_3m"})
+        allc = feat[feat.country_code == "*"].drop(columns=["country_code", "before"]).rename(
+            columns={"month": "anchor", "now": "news_all_3m"})
+        ds = ds.merge(pair, on=["anchor", "country_code", "hs4"], how="left").merge(allc, on=["anchor", "hs4"], how="left")
+        ds[["news_3m", "news_prev_3m", "news_all_3m"]] = ds[["news_3m", "news_prev_3m", "news_all_3m"]].fillna(0)
+        ds["news_change"] = _growth(ds.news_3m, ds.news_prev_3m)
+        ds = ds.drop(columns="news_prev_3m")
+    else:
+        ds = ds.assign(news_3m=np.nan, news_all_3m=np.nan, news_change=np.nan)
+    names = {"*": "news_country_3m", **NEWS_TOPIC_FEATURES}
+    topics = topics[topics.major.isin(names)]
+    if len(topics):
+        feat = _rolling_counts(topics, ["country_code", "major"], anchors)
+        wide = feat.pivot_table(index=["month", "country_code"], columns="major", values="now").rename(columns=names)
+        wide = wide.reindex(columns=list(names.values())).reset_index().rename(columns={"month": "anchor"})
+        ds = ds.merge(wide, on=["anchor", "country_code"], how="left")
+        ds[list(names.values())] = ds[list(names.values())].fillna(0)
+    else:
+        ds = ds.assign(**{c: np.nan for c in names.values()})
+    if start is not None:
+        too_early = (pd.to_datetime(ds.anchor) - pd.DateOffset(months=5) < pd.Timestamp(start)).to_numpy()
+        ds.loc[too_early, NEWS_COLUMNS] = np.nan
+    return ds.drop(columns="hs4")
 
 
 def type_thresholds(rows):

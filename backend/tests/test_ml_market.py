@@ -158,6 +158,100 @@ class PreprocessTest(unittest.TestCase):
         self.assertNotIn("KR", countries)  # SPECIAL
 
 
+class RelatedFeatureTest(unittest.TestCase):
+    """같은 품목군 수출·한국 수입·상대국 HS4 수요·단신속보 피처."""
+
+    def data(self, months=26):
+        """VN에 같은 HS4(8507)인 두 품목과 다른 품목 하나. 850720만 2023년에 두 배가 된다."""
+        month_list = pd.date_range("2022-01-01", periods=months, freq="MS")
+        rows = []
+        for i, m in enumerate(month_list):
+            for hs6, amt in (("850710", 1e5), ("850720", 1e5 * (2 if i >= 12 else 1)), ("010110", 1e5)):
+                rows.append((m, "VN", hs6, amt, 0.0, amt / 10))
+        data = fake_data(months=months)
+        data["exports"] = pd.DataFrame(rows, columns=["month", "country_code", "hs6", "amount", "anomaly_amount", "weight"])
+        imports = [(m, "VN", "850710", 50.0 * (3 if i >= 12 else 1)) for i, m in enumerate(month_list)]
+        imports += [(m, "CN", "850790", 10.0) for m in month_list]
+        data["imports"] = pd.DataFrame(imports, columns=["month", "country_code", "hs6", "amount"])
+        return data
+
+    def row(self, ds, hs6):
+        """첫 기준월 2023-12: 최근 12개월 = 2023년, 직전 12개월 = 2022년."""
+        return ds[(ds.hs6 == hs6) & (ds.anchor == pd.Timestamp("2023-12-01"))].iloc[0]
+
+    def test_same_group_exports_exclude_own_product(self):
+        ds = F.build_dataset(self.data())
+        a, b = self.row(ds, "850710"), self.row(ds, "850720")
+        self.assertAlmostEqual(a.grp4_c_growth_12m, np.log1p(24e5) - np.log1p(12e5))  # 850720만 보고 두 배
+        self.assertAlmostEqual(b.grp4_c_growth_12m, 0.0)  # 850710은 변화 없음
+        self.assertAlmostEqual(self.row(ds, "010110").grp4_c_growth_12m, 0.0)  # 같은 HS4에 다른 품목 없음
+        self.assertAlmostEqual(a.grp2_c_growth_12m, np.log1p(24e5) - np.log1p(12e5))  # 85장에서도 자신 제외
+
+    def test_korea_imports_by_product_group_and_partner(self):
+        ds = F.build_dataset(self.data())
+        a = self.row(ds, "850710")
+        three_x = np.log1p(50 * 3 * 12) - np.log1p(50 * 12)
+        self.assertAlmostEqual(a.imp_hs6_world_growth, three_x)
+        self.assertAlmostEqual(a.imp_hs4_world_growth, np.log1p(1800 + 120) - np.log1p(600 + 120))  # CN 850790 포함
+        self.assertAlmostEqual(a.imp_hs4_from_c_growth, three_x)  # VN에서 들어온 8507만
+        self.assertAlmostEqual(self.row(ds, "010110").imp_hs6_world_growth, 0.0)  # 수입한 적 없는 품목은 0
+
+    def test_month_without_import_collection_is_missing_not_zero(self):
+        data = self.data()
+        data["imports"] = data["imports"][pd.to_datetime(data["imports"].month) != pd.Timestamp("2023-06-01")]
+        ds = F.build_dataset(data)
+        self.assertTrue(np.isnan(self.row(ds, "010110").imp_hs6_world_growth))  # 창 안에 미수집 달
+        data["imports"] = data["imports"].iloc[0:0]
+        self.assertTrue(F.build_dataset(data)[["imp_hs6_world_growth", "imp_exp_ratio_hs4"]].isna().all().all())
+
+    def test_destination_hs4_growth_compares_same_source(self):
+        raw = pd.DataFrame([(2024, "VN", "850710", 100.0, 1.0, "BACI"), (2024, "VN", "850720", 100.0, 1.0, "BACI"),
+                            (2024, "VN", "850710", 110.0, 1.0, "COMTRADE"), (2024, "VN", "850720", 110.0, 1.0, "COMTRADE"),
+                            (2025, "VN", "850710", 440.0, 1.0, "COMTRADE")],  # 850720은 2025년 신규 없음
+                           columns=["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd", "source"])
+        m = pp.market_yearly(raw).set_index(["year", "hs6"])
+        self.assertAlmostEqual(m.loc[(2025, "850710"), "mkt_hs4_growth"], np.log1p(440) - np.log1p(220))  # Comtrade끼리
+        self.assertTrue(np.isnan(m.loc[(2024, "850710"), "mkt_hs4_growth"]))  # 2023년 BACI 없음
+
+    def test_previous_year_availability_looked_up_by_source(self):
+        raw = pd.DataFrame([(2024, "VN", "850710", 100.0, 1.0, "BACI"), (2024, "VN", "850710", 105.0, 1.0, "COMTRADE"),
+                            (2025, "VN", "850710", 210.0, 1.0, "COMTRADE")],
+                           columns=["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd", "source"])
+        avail = pd.DataFrame([("market", "BACI", 2024, "2026-01-22"), ("market", "COMTRADE", 2025, "2026-10-19")],
+                             columns=["dataset", "source", "year", "available_from"])
+        with self.assertRaises(ValueError):  # 2025년 성장률은 연결 연도 Comtrade 2024의 공개일도 필요
+            F.dated_external(pp.market_yearly(raw), avail, "market")
+        avail.loc[len(avail)] = ("market", "COMTRADE", 2024, "2026-10-21")
+        dated = F.dated_external(pp.market_yearly(raw), avail, "market").set_index("year")
+        self.assertEqual(dated.loc[2025, "available_from"], pd.Timestamp("2026-10-21"))
+
+    def test_shortnews_files_counted_by_hs4_country_and_topic(self):
+        folder = Path(tempfile.mkdtemp())
+        (folder / "run").mkdir()
+        pd.DataFrame({"nttSn": ["1", "2", "3"], "nat": ["러시아연방", "베트남", "베트남"],
+                      "othbcDt": ["2024-03-02", "2024-03-20", "2024-04-01"]}).to_csv(folder / "run" / "shortnews_raw.csv", index=False)
+        pd.DataFrame({"external_id": ["1", "2", "3"], "hs_codes": [["850710", "850720"], ["850710"], []]}).to_json(
+            folder / "short_news_analysis.jsonl", orient="records", lines=True, force_ascii=False)
+        pd.DataFrame({"external_id": ["2", "3"], "picked": [["관세"], ["관세", "없는토픽"]]}).to_json(
+            folder / "short_news_topics.jsonl", orient="records", lines=True, force_ascii=False)
+        names = pd.DataFrame({"country_code": ["VN", "RU"], "name_ko": ["베트남", "러시아 연방"]})
+        majors = pd.DataFrame({"topic": ["관세"], "major": ["무역·통상"]})
+        news, topics, start = F.load_shortnews(folder, names, majors)
+        counts = news.set_index(["month", "country_code", "hs4"])["count"]
+        self.assertEqual(counts[(pd.Timestamp("2024-03-01"), "RU", "8507")], 1)  # 별칭으로 RU, 한 기사 = 1건
+        self.assertEqual(counts[(pd.Timestamp("2024-03-01"), "*", "8507")], 2)
+        t = topics.set_index(["month", "country_code", "major"])["count"]
+        self.assertEqual(t[(pd.Timestamp("2024-04-01"), "VN", "무역·통상")], 1)
+        self.assertEqual(t[(pd.Timestamp("2024-03-01"), "VN", "*")], 1)
+        self.assertEqual(start, pd.Timestamp("2024-03-01"))
+        ds = pd.DataFrame({"anchor": pd.to_datetime(["2024-04-01", "2024-05-01"]), "country_code": "VN", "hs6": "850710"})
+        out = F._add_news(ds, news, topics, start)
+        self.assertTrue(np.isnan(out.news_3m).all())  # 수집 시작 전 달이 창에 들어감
+        out = F._add_news(ds, news, topics)
+        self.assertEqual(out.news_trade_3m.tolist(), [2, 2])  # 베트남 기사 2건 모두 '관세' 토픽
+        self.assertEqual(out.news_country_3m.tolist(), [2, 2])
+
+
 class ModelTest(unittest.TestCase):
     def test_train_predict_and_query(self):
         out = Path(tempfile.mkdtemp())

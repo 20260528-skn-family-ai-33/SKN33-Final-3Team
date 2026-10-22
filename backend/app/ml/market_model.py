@@ -22,7 +22,7 @@ from sklearn.metrics import confusion_matrix, f1_score, ndcg_score
 from sklearn.pipeline import make_pipeline
 
 from backend.app.ml import features as F
-from backend.app.ml.transforms import TrainingClipper
+from backend.app.ml.transforms import DropEmptyColumns, TrainingClipper
 
 OUT_DIR = Path(__file__).resolve().parents[3] / "data" / "ml"
 TOP_N = 5
@@ -31,12 +31,12 @@ GAP_MONTHS = F.HORIZON  # 학습 마지막 기준월과 평가 기준월 사이 
 
 
 def regressor():
-    return make_pipeline(TrainingClipper(), HistGradientBoostingRegressor(
+    return make_pipeline(DropEmptyColumns(), TrainingClipper(), HistGradientBoostingRegressor(
         max_iter=300, learning_rate=0.05, categorical_features=F.CATEGORICAL, random_state=0))
 
 
 def classifier():
-    return make_pipeline(TrainingClipper(), HistGradientBoostingClassifier(
+    return make_pipeline(DropEmptyColumns(), TrainingClipper(), HistGradientBoostingClassifier(
         max_iter=300, learning_rate=0.05, categorical_features=F.CATEGORICAL,
         class_weight="balanced", random_state=0))
 
@@ -171,7 +171,7 @@ def train(ds, out_dir=OUT_DIR, promotion_metric=None):
     pred.to_csv(out_dir / "predictions.csv", index=False)
     joblib.dump({"model_a": model_a, "model_b": model_b}, out_dir / "models.joblib")
     meta = {"trained_at": datetime.now().isoformat(timespec="seconds"), "predict_anchor": str(latest.anchor.max().date()),
-            "features": F.FEATURES, "thresholds": {k: v if np.isfinite(v) else None for k, v in th.items()},
+            "features": F.FEATURES, "features_used": model_a[0].keep_, "thresholds": {k: v if np.isfinite(v) else None for k, v in th.items()},
             "min_export_usd": F.MIN_EXPORT_USD,
             "model_b": "classifier" if model_b else "rule (라벨·비교 평가 부족 또는 기준선 미달)",
             "promotion_metric": promotion_metric, "evaluation": report}
