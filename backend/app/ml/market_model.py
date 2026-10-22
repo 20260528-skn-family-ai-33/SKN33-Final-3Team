@@ -4,13 +4,14 @@
 - 모델 B (시장 유형): 미래 12개월 실적으로 만든 5개 유형 분류. 기능 ③.
 
 실행 (저장소 루트에서):
-    python -m backend.app.ml.market_model train            # DB·외부 CSV로 학습·평가 후 data/ml/에 저장
+    python -m backend.app.ml.market_model train --promotion-metric country_ndcg_at_5
     python -m backend.app.ml.market_model query --country VN
     python -m backend.app.ml.market_model query --hs6 850760
     python -m backend.app.ml.market_model query --country VN --hs6 850760
 """
 import argparse
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +29,7 @@ OUT_DIR = Path(__file__).resolve().parents[3] / "data" / "ml"
 TOP_N = 5
 MIN_CANDIDATES = 10  # 국가별 순위 평가에 쓰는 최소 후보 품목 수
 GAP_MONTHS = F.HORIZON  # 학습 마지막 기준월과 평가 기준월 사이 간격 (y가 12개월 앞을 봐서 겹치지 않게)
+log = logging.getLogger(__name__)
 
 
 def regressor():
@@ -79,9 +81,12 @@ def available_b(rows, cutoff):
         subset=["y_growth", "future_cv", "future_mkt_growth", "future_share"])
 
 
-def fit_a(rows):
+def fit_a(rows, features=None):
+    features = F.FEATURES if features is None else features
+    log.info("모델 A 학습 시작: %s행, 후보 피처 %s개", f"{len(rows):,}", len(features))
     low, high = rows.y_growth.quantile([0.01, 0.99])  # 극단 성장률은 1%·99%에서 자른다
-    model = regressor().fit(rows[F.FEATURES], clip_y(rows.y_growth, low, high))
+    model = regressor().fit(rows[features], clip_y(rows.y_growth, low, high))
+    log.info("모델 A 학습 완료: 사용 피처 %s개", len(model[0].keep_))
     return model
 
 
@@ -96,10 +101,33 @@ def evaluate(ds):
     report = {"train_anchors": [str(train.anchor.min().date()), str(train.anchor.max().date())],
               "test_anchor": str(test.anchor.max().date()), "train_rows": len(train), "test_rows": len(test)}
     model_a = fit_a(train)
-    report["model_a"] = rank_metrics(test, model_a.predict(test[F.FEATURES]))
+    score = model_a.predict(test[F.FEATURES])
+    report["features_used"] = model_a[0].keep_
+    report["missing_training_features"] = [c for c in F.FEATURES if c not in model_a[0].keep_]
+    report["model_a"] = rank_metrics(test, score)
     report["baseline_a"] = rank_metrics(test, test.growth_12m.to_numpy())  # 작년 성장률 상위 5개
-    report["model_a_product"] = rank_metrics(test, model_a.predict(test[F.FEATURES]), "product")
+    report["model_a_product"] = rank_metrics(test, score, "product")
     report["baseline_a_product"] = rank_metrics(test, test.growth_12m.to_numpy(), "product")
+    without_score = None
+    if set(F.RELATED_FEATURES) & set(report["features_used"]):
+        without = fit_a(train, [c for c in F.FEATURES if c not in F.RELATED_FEATURES])
+        without_score = without.predict(test[F.FEATURES])
+        report["without_related"] = {"model_a": rank_metrics(test, without_score),
+            "model_a_product": rank_metrics(test, without_score, "product"),
+            "features_used": without[0].keep_}
+    semiconductor = test.hs6.str[:4].isin(["8541", "8542"]).to_numpy()
+    report["segments"] = {}
+    for name, mask in (("semiconductor", semiconductor), ("other", ~semiconductor)):
+        rows = test.loc[mask]
+        report["segments"][name] = {"rows": len(rows),
+            "model_a": rank_metrics(rows, score[mask]),
+            "baseline_a": rank_metrics(rows, rows.growth_12m.to_numpy()),
+            "model_a_product": rank_metrics(rows, score[mask], "product"),
+            "baseline_a_product": rank_metrics(rows, rows.growth_12m.to_numpy(), "product")}
+        if without_score is not None:
+            report["segments"][name]["without_related"] = {
+                "model_a": rank_metrics(rows, without_score[mask]),
+                "model_a_product": rank_metrics(rows, without_score[mask], "product")}
     known_train = available_b(train, test.anchor.max())
     th = F.type_thresholds(known_train)
     x_tr, y_tr = labeled_b(known_train, th)
@@ -143,6 +171,29 @@ def require_promotion(report, promotion_metric):
         raise PromotionRejected(f"모델 저장 중단: {promotion_metric} 미평가 또는 기준선 미달", report)
 
 
+def select_a_features(report, promotion_metric):
+    """같은 평가 행에서 관련 품목 피처를 뺀 모델이 채택 지표를 더 잘 맞히면 그 모델을 쓴다."""
+    report["model_a_variant"] = "with_related"
+    comparison = report.get("without_related")
+    if promotion_metric not in PROMOTION_METRICS or not comparison:
+        return F.FEATURES
+    model_key, _, metric = PROMOTION_METRICS[promotion_metric]
+    full, reduced = report[model_key][metric], comparison[model_key][metric]
+    if reduced is None or not np.isfinite(reduced):
+        return F.FEATURES
+    if full is not None and np.isfinite(full) and reduced <= full:
+        return F.FEATURES
+    report["with_related"] = {key: report[key] for key in ("model_a", "model_a_product", "features_used")}
+    for key in ("model_a", "model_a_product", "features_used"):
+        report[key] = comparison[key]
+    report["missing_training_features"] = [c for c in F.FEATURES if c not in report["features_used"]]
+    for segment in report.get("segments", {}).values():
+        segment["with_related"] = {key: segment[key] for key in ("model_a", "model_a_product")}
+        segment.update(segment["without_related"])
+    report["model_a_variant"] = "without_related"
+    return [c for c in F.FEATURES if c not in F.RELATED_FEATURES]
+
+
 def use_classifier(report):
     model, base = report.get("model_b"), report.get("baseline_b")
     return (isinstance(model, dict) and isinstance(base, dict)
@@ -154,9 +205,10 @@ def use_classifier(report):
 def train(ds, out_dir=OUT_DIR, promotion_metric=None):
     """평가 → 전체 기간으로 다시 학습 → 마지막 기준월 예측을 저장한다."""
     report = evaluate(ds)
+    features = select_a_features(report, promotion_metric)
     require_promotion(report, promotion_metric)  # 저장 전 검사: 기존 산출물을 덮어쓰지 않는다.
     labeled = ds[ds.y_growth.notna()]
-    model_a = fit_a(labeled)
+    model_a = fit_a(labeled, features)
     known = available_b(labeled, ds.anchor.max())
     th = F.type_thresholds(known)
     x_b, y_b = labeled_b(known, th)
@@ -174,6 +226,7 @@ def train(ds, out_dir=OUT_DIR, promotion_metric=None):
             "features": F.FEATURES, "features_used": model_a[0].keep_, "thresholds": {k: v if np.isfinite(v) else None for k, v in th.items()},
             "min_export_usd": F.MIN_EXPORT_USD,
             "model_b": "classifier" if model_b else "rule (라벨·비교 평가 부족 또는 기준선 미달)",
+            "model_a_variant": report["model_a_variant"],
             "promotion_metric": promotion_metric, "evaluation": report}
     (out_dir / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return meta
@@ -203,9 +256,10 @@ def market_type_of(country_code, hs6, out_dir=OUT_DIR):
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
-    t = sub.add_parser("train", help="DB·외부 CSV로 학습·평가하고 예측을 data/ml/에 저장")
+    t = sub.add_parser("train", help="수집 파일과 환율 DB로 학습·평가하고 예측을 data/ml/에 저장")
     t.add_argument("--promotion-metric", required=True, choices=list(PROMOTION_METRICS), help="팀이 채택한 모델 A 비교 지표")
     q = sub.add_parser("query", help="저장된 예측 조회")
     q.add_argument("--country")

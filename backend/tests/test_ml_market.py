@@ -253,6 +253,35 @@ class RelatedFeatureTest(unittest.TestCase):
 
 
 class ModelTest(unittest.TestCase):
+    def test_related_features_are_selected_by_the_requested_direction_and_metric(self):
+        def report():
+            return {"model_a": {"ndcg_at_5": .7}, "model_a_product": {"ndcg_at_5": .9},
+                    "features_used": F.FEATURES,
+                    "without_related": {"model_a": {"ndcg_at_5": .8},
+                        "model_a_product": {"ndcg_at_5": .6}, "features_used": ["growth_12m"]}}
+        country = report()
+        kept = M.select_a_features(country, "country_ndcg_at_5")
+        self.assertEqual(country["model_a_variant"], "without_related")
+        self.assertEqual(country["model_a"]["ndcg_at_5"], .8)
+        self.assertEqual(country["with_related"]["model_a"]["ndcg_at_5"], .7)
+        self.assertFalse(set(kept) & set(F.RELATED_FEATURES))
+        product = report()
+        self.assertEqual(M.select_a_features(product, "product_ndcg_at_5"), F.FEATURES)
+        self.assertEqual(product["model_a_variant"], "with_related")
+
+    def test_semiconductor_evaluation_reports_sparse_groups_without_inventing_scores(self):
+        ds = F.build_dataset(fake_data())
+        ds.loc[ds.hs6 == PRODUCTS[0], "hs6"] = "854232"
+        report = M.evaluate(ds)
+        chip, other = report["segments"]["semiconductor"], report["segments"]["other"]
+        self.assertEqual(chip["rows"], len(COUNTRIES))
+        self.assertEqual(chip["rows"] + other["rows"], report["test_rows"])
+        self.assertEqual(chip["model_a"]["countries"], 0)
+        self.assertIsNone(chip["model_a"]["ndcg_at_5"])
+        self.assertEqual(other["model_a"]["countries"], len(COUNTRIES))
+        self.assertIn("fx_change_12m", report["features_used"])
+        self.assertFalse(set(report["without_related"]["features_used"]) & set(F.RELATED_FEATURES))
+
     def test_train_predict_and_query(self):
         out = Path(tempfile.mkdtemp())
         ds = F.build_dataset(fake_data())

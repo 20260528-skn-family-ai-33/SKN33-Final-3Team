@@ -31,6 +31,8 @@ FEATURES = [
     "news_country_3m", "news_trade_3m", "news_market_3m", "news_invest_3m",
     *CATEGORICAL,
 ]
+RELATED_FEATURES = [c for c in FEATURES if c.startswith(("grp", "imp_", "rel_"))
+                    or c in ("hs4_unit_trend", "mkt_hs4_growth")]
 SHORTNEWS_DIR = Path(__file__).resolve().parents[1] / "scheduler" / "collectors" / "shortnews" / "shortnews_outputs"
 # 단신속보 국가명 중 country.name_ko와 표기가 다른 것
 NEWS_COUNTRY_ALIASES = {"도미니카공화국": "DO", "러시아연방": "RU", "보스니아 헤르체고비나": "BA", "부르키나파소": "BF",
