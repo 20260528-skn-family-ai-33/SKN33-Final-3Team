@@ -160,6 +160,9 @@ def _growth(now, before):
     return np.log1p(now) - np.log1p(before)
 
 
+def _minus(total, part):
+    """합계에서 일부를 뺀 값. 합산 순서가 달라 생기는 소수점 오차(수천억 달러 규모에서 -몇 달러)를 0으로 맞춘다."""
+    return np.maximum(total - part, 0.0)
 
 
 def _group_sum(values, groups):
@@ -258,8 +261,8 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
         h12, hp12 = _group_sum(s12, hs6), _group_sum(p12, hs6)
         s3, p3 = _window(corrected, t, 3) - adjustment[:, t], _window(corrected, t - 3, 3)
         # 같은 품목군 수출: 자기 품목(행)을 빼서 쌍 실적 피처와 같은 정보를 두 번 넣지 않는다.
-        g4c = lambda v: _group_sum(v, country_hs4) - v  # noqa: E731
-        g2c = lambda v: _group_sum(v, country_hs2) - v  # noqa: E731
+        g4c = lambda v: _minus(_group_sum(v, country_hs4), v)  # noqa: E731
+        g2c = lambda v: _minus(_group_sum(v, country_hs2), v)  # noqa: E731
         w4 = lambda v: _group_sum(v, hs4)  # noqa: E731
         unit_ok = np.isfinite(w6) & np.isfinite(pw6) & (w6 > 0) & (pw6 > 0)
         u_a, u_w = np.where(unit_ok, a6, 0.0), np.where(unit_ok, w6, 0.0)
@@ -292,7 +295,7 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
             "product_countries": _group_sum((s12 > 0).astype(float), hs6),
             "grp4_c_growth_12m": _growth(g4c(s12), g4c(p12)),
             "grp4_c_growth_3m": _growth(g4c(s3), g4c(p3)),
-            "grp4_world_growth_12m": _growth(w4(s12) - h12, w4(p12) - hp12),
+            "grp4_world_growth_12m": _growth(_minus(w4(s12), h12), _minus(w4(p12), hp12)),
             "grp2_c_growth_12m": _growth(g2c(s12), g2c(p12)),
             "hs4_unit_trend": np.log(_ratio(_ratio(w4(u_a), w4(u_w)), _ratio(w4(u_pa), w4(u_pw)))),
             "imp_hs6_world_growth": _growth(i6, pi6),
@@ -317,7 +320,11 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     ds = _add_fx(ds, data["fx"], data["countries"])
     ds = _add_wdi(ds, data["wdi_yearly"], data.get("availability"))
     ds = _add_market(ds, data["market_yearly"], data.get("availability"))
-    return _add_news(ds, data["news"], data.get("news_topics"), data.get("news_start"))
+    ds = _add_news(ds, data["news"], data.get("news_topics"), data.get("news_start"))
+    # 금액 0·중량 있음의 단가 로그처럼 계산상 무한대가 된 값은 결측으로 둔다 (학습기는 무한대를 받지 않는다).
+    numeric = ds[[c for c in FEATURES if c in ds]].select_dtypes("number").columns
+    ds[numeric] = ds[numeric].mask(np.isinf(ds[numeric].to_numpy(dtype=float)))
+    return ds
 
 
 def _related_features(rel_sets, row_group, hs4, country, s12, p12, w4, imp_ok, imp_codes, imp_hs4, t):
@@ -332,9 +339,9 @@ def _related_features(rel_sets, row_group, hs4, country, s12, p12, w4, imp_ok, i
             continue
         member = np.isin(hs4, list(exp_set))
         now, prev = np.where(member, s12, 0.0), np.where(member, p12, 0.0)
-        c_now, c_prev = _group_sum(now, country) - own_c_now, _group_sum(prev, country) - own_c_prev
+        c_now, c_prev = _minus(_group_sum(now, country), own_c_now), _minus(_group_sum(prev, country), own_c_prev)
         out["rel_exp_c_growth_12m"][rows] = _growth(c_now, c_prev)[rows]
-        w_now, w_prev = now.sum() - w4(s12), prev.sum() - w4(p12)
+        w_now, w_prev = _minus(now.sum(), w4(s12)), _minus(prev.sum(), w4(p12))
         out["rel_exp_world_growth_12m"][rows] = _growth(w_now, w_prev)[rows]
         if imp_ok and inputs:
             sel = np.asarray(imp_codes.isin(list(inputs)))

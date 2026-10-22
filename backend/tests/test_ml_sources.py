@@ -70,14 +70,24 @@ class CsvSourceTest(unittest.TestCase):
         self.assertFalse(ds.empty)
 
 
-
 class NumericSafetyTest(unittest.TestCase):
+    def test_rounding_below_zero_is_clipped(self):
+        np.testing.assert_array_equal(F._minus(np.array([1e11, 5.0]), np.array([1e11 + 3, 2.0])), [0.0, 3.0])
+
+    def test_infinite_feature_values_become_missing(self):
+        data = fake_data(months=26)
+        e = data["exports"]
+        last6 = (e.country_code == "VN") & (e.hs6 == e.hs6.iloc[0]) & (e.month >= MONTHS[18])
+        data["exports"] = e.assign(amount=np.where(last6, 0.0, e.amount))  # 금액 0·중량 있음 → 단가 로그 -무한대
+        ds = F.build_dataset(data)
+        values = ds[[c for c in F.FEATURES if c in ds]].select_dtypes("number").to_numpy()
+        self.assertFalse(np.isinf(values).any())
+
     def test_fx_db_failure_leaves_fx_empty(self):
         from unittest import mock
         with mock.patch("backend.app.db.session.make_engine", side_effect=ValueError("접속 정보 없음")):
             fx, currencies = S.fx_from_db()
         self.assertTrue(fx.empty and currencies.empty)
-
 
 
 class RelatedGroupTest(unittest.TestCase):
@@ -140,7 +150,6 @@ class RelatedGroupTest(unittest.TestCase):
         series = pd.DataFrame([(m, "export", "8542", 1.0) for m in pd.date_range("2022-01-01", periods=30, freq="MS")],
                               columns=["month", "flow", "hs4", "amount"])
         self.assertTrue(R.suggest(series, GROUPS, "2022-06-01").empty)
-
 
 
 if __name__ == "__main__":
