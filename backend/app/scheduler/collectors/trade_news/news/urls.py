@@ -2,18 +2,16 @@
 import re
 from urllib.parse import urlsplit, urlunsplit
 
-HOSTS = {"www.hankyung.com": "hankyung", "www.mk.co.kr": "mk", "www.fnnews.com": "fnnews", "fnnews.com": "fnnews"}
+HOSTS = {"www.hankyung.com": "hankyung", "www.fnnews.com": "fnnews", "fnnews.com": "fnnews"}
 DAILY_SITES = ("hankyung", "fnnews")
 
 PATTERNS = {
     "fnnews": r"/news/(\d+)$",
     "hankyung": r"/article/(\d{12}[0-9A-Za-z])$",
-    "mk": r"/news/[a-zA-Z0-9_-]+/(\d+)$",
 }
 FEEDS = {
     "fnnews": "https://www.fnnews.com/sitemap/news/latest.xml",
     "hankyung": "https://www.hankyung.com/sitemap/latest-article.xml",
-    "mk": "https://www.mk.co.kr/rss/40300001/",
 }
 
 

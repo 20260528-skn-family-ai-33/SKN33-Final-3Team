@@ -10,7 +10,8 @@ from news.save import KST
 LABELS = {'waiting':'대기', 'failed':'실패', 'blocked':'차단'}
 FAILURES = {'parse_failed':'본문 추출 실패', 'validation_failed':'필수값 검증 실패',
             'request_failed':'HTTP/요청 실패', 'download_failed':'네트워크 요청 실패',
-            'storage_failed':'저장 처리 실패', 'pipeline_failed':'정제·검증·저장 파이프라인 오류'}
+            'storage_failed':'저장 처리 실패', 'pipeline_failed':'정제·검증·저장 파이프라인 오류',
+            'feed_structure_failed':'목록 XML 구조 검증 실패'}
 
 
 def _events(path):

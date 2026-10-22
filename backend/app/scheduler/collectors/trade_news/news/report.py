@@ -1,22 +1,14 @@
 """보고서 링크를 별도로 입력하지 않고 검증된 DB 원문 URL로 생성합니다."""
 import json
-import re
 from news.dates import publication_date
 from pathlib import Path
-from news.validate import validate_article, validate_fields
+from news.validate import validate_article
 
 
 def validate_report_row(row):
-    """기존 네이버 저장 기록도 읽되 신규 수집 허용 범위는 변경하지 않습니다."""
+    """운영 대상의 URL·출처·기사 ID와 저장 식별자가 일치하는지 확인합니다."""
     article = json.loads(row['payload'])
-    validate_fields(article)
-    if article['source_code'] == 'naver':
-        # 저장 당시 사용한 네이버 정규 URL과 언론사번호_기사번호를 대조합니다.
-        match = re.fullmatch(r'https://n\.news\.naver\.com/mnews/article/(\d{3})/(\d+)', article['source_url'])
-        if not match or article['source_article_id'] != '_'.join(match.groups()):
-            raise ValueError('저장된 네이버 URL과 기사 ID가 일치하지 않습니다.')
-    else:
-        validate_article(article)
+    validate_article(article)
     if (row['url'], row['site'], row['article_id']) != (
             article['source_url'], article['source_code'], article['source_article_id']):
         raise ValueError('DB 식별자와 기사 출처가 달라 보고서 생성을 중단합니다.')

@@ -3,6 +3,7 @@ from datetime import date, datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urldefrag, urlsplit
 import scrapy
+from lxml import etree
 from bs4 import BeautifulSoup
 from scrapy.exceptions import IgnoreRequest
 from scrapy.spidermiddlewares.httperror import HttpError
@@ -13,7 +14,7 @@ from news.save import KST
 
 class ArticleSpider(scrapy.Spider):
     name = "articles"
-    allowed_domains = ["www.hankyung.com", "www.mk.co.kr", "www.fnnews.com", "fnnews.com"]
+    allowed_domains = ["www.hankyung.com", "www.fnnews.com", "fnnews.com"]
 
     def __init__(self, store, sites, urls=None, discover=False, since=None, until=None, feed_urls=None, input_only=False, daily_target=None, **kwargs):
         super().__init__(**kwargs)
@@ -145,11 +146,11 @@ class ArticleSpider(scrapy.Spider):
         return scrapy.Request(url, callback=self.parse_feed, errback=self.on_error,
                               meta={'site':site,'request_role':'list'})
 
-    def finish_feed(self, response):
+    def finish_feed(self, response, status='processed'):
         if self.daily_target:
             with self.store.db:
-                self.store.db.execute("UPDATE discovery_queue SET status='processed' WHERE target=? AND url=?",
-                    (self.daily_target.isoformat(),response.request.url))
+                self.store.db.execute("UPDATE discovery_queue SET status=? WHERE target=? AND url=?",
+                    (status,self.daily_target.isoformat(),response.request.url))
 
     def parse_feed(self, response):
         # 일일 모드에서는 공식 HTML 목록도 같은 병합 경로로 처리합니다.
@@ -191,6 +192,22 @@ class ArticleSpider(scrapy.Spider):
                 if request:
                     yield request
             self.finish_feed(response)
+            return
+        # 200 안내 HTML이나 깨진 XML을 '기사 0건'으로 처리하지 않습니다.
+        # 정상적으로 빈 urlset/RSS와 전날 기사가 없는 정상 목록은 그대로 허용합니다.
+        try:
+            root = etree.fromstring(response.body, parser=etree.XMLParser(
+                recover=False, resolve_entities=False, no_network=True))
+            if etree.QName(root).localname not in ('urlset', 'sitemapindex', 'rss', 'RDF'):
+                raise ValueError('지원하는 사이트맵·RSS 구조가 아닙니다')
+        except (etree.XMLSyntaxError, ValueError):
+            site = response.meta['site']
+            self.store.event('feed_structure_failed', site=site, url=response.request.url,
+                target_date=self.daily_target.isoformat() if self.daily_target else None,
+                error='사이트맵·RSS XML 형식 또는 루트 구조 오류')
+            self.crawler.stats.inc_value('feed_structure_errors')
+            self.crawler.stats.inc_value(f'discovery/{site}/feed_structure_errors')
+            self.finish_feed(response, 'failed')
             return
         # XML 네임스페이스를 제거해 RSS와 뉴스 사이트맵을 공통 처리함
         selector = scrapy.Selector(response, type="xml")

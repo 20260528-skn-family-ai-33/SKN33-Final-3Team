@@ -6,7 +6,8 @@ from news.save import KST
 
 def summarize_run(store, sites, before, stats, daily_limit, target=0, discover=False, target_date=None, list_urls=None):
     # 엔진 종료만으로 성공이라고 판단하지 않습니다. 오류와 목표 수치는 별도로 표시합니다.
-    error_keys = ('spider_exceptions/count', 'item_error_count', 'log_count/ERROR', 'log_count/CRITICAL')
+    error_keys = ('spider_exceptions/count', 'item_error_count', 'log_count/ERROR', 'log_count/CRITICAL',
+                  'feed_structure_errors')
     errors = {key: stats[key] for key in error_keys if stats.get(key)}
     finish = stats.get('finish_reason')
     healthy = not errors and finish == 'finished'

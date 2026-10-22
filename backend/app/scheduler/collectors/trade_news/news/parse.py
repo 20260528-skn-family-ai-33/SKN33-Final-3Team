@@ -11,7 +11,6 @@ SELECTORS = {
     "fnnews": ("h1.article-view__title", ".article-view__body"),
     # 일반 기사와 article-body 클래스만 사용하는 기사 본문을 모두 찾습니다.
     "hankyung": ("h1.headline", "#articletxt, .article-body"),
-    "mk": (".news_ttl_sec .news_ttl, .news_ttl_sec h2, h1.view_head_title, h1.top_title", ".news_cnt_detail_wrap, #article_body"),
 }
 
 
@@ -44,8 +43,7 @@ def parse_article(html, url, keywords):
     metadata = next(article_json(soup), {})
     # 로그인·유료 장벽의 일부 본문을 전체 기사로 잘못 저장하지 않음
     if metadata.get("isAccessibleForFree") in (False, "False", "false"):
-        error = PaidArticleError if site in ('hankyung', 'fnnews') else ValueError
-        raise error("유료 또는 접근 제한 기사입니다.")
+        raise PaidArticleError("유료 또는 접근 제한 기사입니다.")
     title_selector, body_selector = SELECTORS[site]
     title = soup.select_one(title_selector)
     body = soup.select_one(body_selector)

@@ -2,7 +2,7 @@
 import re
 from news.relevance import assess_relevance, TRADE
 
-VERSION = 'focus-v7.1'
+VERSION = 'focus-v7.2.1'
 
 # 이전 평가 도구용 진단 함수입니다. 최종 판정에서는 호출하지 않습니다.
 def broad_economic_overview(article, body):
@@ -22,6 +22,31 @@ def broad_economic_overview(article, body):
 
 
 
+# 본문은 변경하지 않고 판정용 복사 문자열에서만 소득 의미의 수입을 구분합니다.
+# 개인 소득 주체와 기간 표현이 직접 연결된 경우도 소득으로 판별합니다.
+# 수입액·달러 자체는 의미를 결정하지 않습니다. 같은 문단의 별도 교역 근거는 유지합니다.
+PERIOD = r'(?:월평균|연평균|월간|연간|하루|매달|매월|매년|월|연)'
+INCOME = re.compile(
+    r'(?<![가-힣A-Za-z])(?:'
+    r'(?:임대|월세|급여|근로|이자|배당|광고|구독|수수료|가계)(?:의)?\s*'
+    r'|(?:개인|직장인|근로자)(?:의)?\s*(?:' + PERIOD + r'\s*)?'
+    # 가구는 가구 제품 수입과 구분하기 위해 소유·기간이 함께 있는 표현만 추가합니다.
+    r'|가구의\s*' + PERIOD + r'\s*'
+    r')수입(?!\s*(?:품|량|규제|통제|금지|허가|통관))'
+    r'|수입(?=\s*(?:은|이|을|으로)?\s*(?:월급|급여|임대료|월세|소득))'
+)
+
+PERIOD_INCOME = re.compile(r'(?:월|연|하루|매달|매월|매년)\s*수입(?=\s*(?:은|이|액은)?\s*\d[\d,.]*\s*(?:억|만|천)?\s*원)')
+IMPORT_CONTEXT = re.compile(r'통관|수입액|수입량|수입품|품목|반도체|자동차|철강|배터리|원유|농산물|달러')
+
+
+def trade_evidence_text(paragraph):
+    result = INCOME.sub(lambda m: '.'+m.group().replace('수입', '소득'), paragraph)
+    # 월 수입액·연간 수입량 같은 실제 교역 통계는 그대로 검사합니다.
+    return '.'.join(PERIOD_INCOME.sub(lambda m: '.'+m.group().replace('수입','소득'), part)
+                    if not IMPORT_CONTEXT.search(part) else part for part in result.split('.'))
+
+
 def concrete_trade_evidence(body):
     """키워드 비율 대신 본문의 구체적 사실·품목·영향을 함께 확인합니다."""
     paragraphs = [p.strip() for p in body.splitlines() if p.strip()]
@@ -29,6 +54,8 @@ def concrete_trade_evidence(body):
     goods = r'반도체|전기차|자동차|철강|배터리|전해액|소재|화장품|소비재|농산물|원유|선박|기계|첨단기술'
     rows = []
     for index, paragraph in enumerate(paragraphs):
+        original = paragraph
+        paragraph = trade_evidence_text(paragraph)
         kinds = []
         # 수출과 무관한 매출·주가 숫자가 같은 문단에 있다는 이유로 근거로 세지 않습니다.
         if re.search(r'(?:수출|수입|무역흑자|무역적자|무역수지)[^.。\n]{0,45}?(?:\d[\d,.]*|수십|수백|수천)(?:\s*(?:억|조|만|천))*\s*(?:%|달러|원)', paragraph):
@@ -49,7 +76,7 @@ def concrete_trade_evidence(body):
                 and re.search(r'면제|무관세|우회|회피|피하|피하기|장벽.{0,12}(?:넘|대응)|관세.{0,12}부담 없이', paragraph)):
             kinds.append('관세 대응 생산·공급망')
         if kinds:
-            rows.append({'paragraph':index+1,'kinds':kinds,'text':paragraph})
+            rows.append({'paragraph':index+1,'kinds':kinds,'text':original})
     types = {kind for row in rows for kind in row['kinds']}
     # 한 문단이어도 독립된 근거 유형이 함께 있으면 인정합니다. 문단 개수는 조건이 아닙니다.
     sufficient = ('관세 대응 생산·공급망' in types or (len(types) >= 2
@@ -86,7 +113,8 @@ def activity_evidence(body):
     for index,paragraph in enumerate(body.splitlines(),1):
         if not paragraph.strip():
             continue
-        kinds=[kind for kind,pattern in patterns.items() if re.search(pattern,paragraph,re.I)]
+        evidence_text = trade_evidence_text(paragraph)
+        kinds=[kind for kind,pattern in patterns.items() if re.search(pattern,evidence_text,re.I)]
         if kinds:
             rows.append({'paragraph':index,'kinds':kinds,'text':paragraph})
     return rows
