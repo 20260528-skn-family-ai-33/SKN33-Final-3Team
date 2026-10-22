@@ -7,7 +7,7 @@
 | 파일 | 하는 일 |
 |---|---|
 | `preprocess.py` | 외부 CSV(BACI·Comtrade·WDI)를 연 단위 시장·국가 피처 표로 전처리 |
-| `features.py` | DB 실적·기준정보와 `data/external/` CSV를 읽어 (국가, HS6, 기준월) 학습 테이블을 만듦 |
+| `features.py` | DB 실적(수출·**수입**)·기준정보, `data/external/` CSV, 단신속보 수집 결과 파일을 읽어 (국가, HS6, 기준월) 학습 테이블을 만듦 |
 | `market_model.py` | 모델 A(유망도)·B(시장 유형) 평가·학습, 최신 기준월 예측 저장, 조회 함수 |
 
 ## 준비
@@ -19,6 +19,10 @@
    이 검사는 입력 범위 내부의 누락을 찾습니다. 전체 국가·품목 누락, 잘려 나간 시작·종료 기간, 값이 있는 월의 부분 수집까지 증명하지는 못하므로 별도의 수집 완료 기록이 필요합니다. 아직 도래하지 않은 미래 구간은 기존처럼 정답 결측으로 남깁니다.
 3. 외부 데이터: `python -m backend.app.scheduler.jobs.external_refresh` ([EXTERNAL_COLLECT_USAGE.md](../scheduler/collectors/external/EXTERNAL_COLLECT_USAGE.md)).
    파일이 있으면 해당 값·버전의 사용 가능일 메타정보가 필요합니다. 파일 자체가 없으면 외부 피처·유형 라벨이 비며, 유형 임계값도 구하지 못하면 미판정합니다.
+4. 관련 품목·뉴스 피처 입력 (없으면 해당 피처만 결측이 되고 학습은 진행됩니다)
+   - 관세청 **수입**: `import_monthly`. 관세청 적재 때 수출과 함께 들어갑니다. 수입이 수집되지 않은 달이 12개월 창에 있으면 수입 피처는 결측입니다.
+   - 단신속보: `backend/app/scheduler/collectors/shortnews/shortnews_outputs/`의 최신 `*/shortnews_raw.csv`, `short_news_analysis.jsonl`(HS 태깅), `short_news_topics.jsonl`(토픽). 토픽 대분류는 DB `keyword_topic`·`keyword_category`로 연결합니다. 국가명 표기가 `country.name_ko`와 다르면 `features.NEWS_COUNTRY_ALIASES`에 추가합니다.
+   - 학습 행에서 전부 결측인 피처 열(예: 환율)은 학습에서 빠지며, 실제로 쓴 열은 `metadata.json`의 `features_used`에 남습니다.
 
 ## 외부 CSV 전처리만 따로 보기
 
