@@ -182,8 +182,9 @@ python -m backend.app.scheduler.jobs.news_embed --rebuild
 - `kotra_article`: id는 `<article_id>:<조각 번호>`, 메타데이터는 `article_id`·`external_id`·`source_code`·`title`·`published_date`·
   `published_ymd`(정수, 기간 필터)·`category`·`countries`·`keywords`(목록, `$contains` 필터)·`chunk`·`body_hash`입니다.
 - `news_keyword`: id·문서는 키워드 글자 그대로, 메타데이터는 `keyword`·`article_count`(그 키워드가 붙은 기사 수)입니다.
-- 이미 있는 기사는 다시 임베딩하지 않습니다. 제목·본문이 바뀐 기사(`body_hash`가 다름)와 조각이 일부만 들어간 기사(중간에 멈춘 실행)만
-  그 기사의 조각을 지우고 다시 넣습니다. 국가·키워드·발행일만 바뀐 기사는 메타데이터만 갱신합니다 (OpenAI 호출 없음).
+- 이미 있는 기사는 다시 임베딩하지 않습니다. 조각 문서가 바뀐 기사(제목·본문, 또는 머리줄의 발행일·국가·분류)와 조각이 일부만 들어간
+  기사(중간에 멈춘 실행)만 그 기사의 조각을 지우고 다시 넣습니다 — 임베딩이 머리줄까지 포함한 문서로 계산되므로, 검색 결과 문서와 필터가
+  같은 정보가 되게. 키워드만 바뀐 기사는 메타데이터만 갱신하고(OpenAI 호출 없음), 마지막 키워드를 지운 기사는 메타데이터에서도 지웁니다.
 - 키워드는 DB와 맞춥니다: 기사 수만 바뀌면 메타데이터만 갱신하고, DB에서 사라진 키워드(사전이 바뀌어 동의어·하위어가 된 말)는 지웁니다.
   DB 키워드가 하나도 없으면 지우지 않습니다.
 - MySQL에서 지워진 기사는 컬렉션에서 지우지 않습니다 (`hs_code_embed`와 같음). 최신으로 다시 만들려면 `--rebuild`를 실행합니다.
@@ -212,14 +213,14 @@ search_keywords("배터리", n=10)
 python -m unittest backend/tests/test_news_load.py backend/tests/test_news_embed.py backend/tests/test_keyword_topic_load.py
 ```
 
-예상 결과: `Ran 42 tests ... OK` (`test_news_load.py` 16 · `test_news_embed.py` 16 · `test_keyword_topic_load.py` 10, MySQL·OpenAI 없이 SQLite·가짜 임베딩·메모리 Chroma로 실행).
+예상 결과: `Ran 44 tests ... OK` (`test_news_load.py` 16 · `test_news_embed.py` 18 · `test_keyword_topic_load.py` 10, MySQL·OpenAI 없이 SQLite·가짜 임베딩·메모리 Chroma로 실행).
 중간의 `ERROR`·`WARNING` 로그는 실패 상황(테이블 없음, 없는 국가 코드, OpenAI 일시 오류, 모델 불일치)을 일부러 만든 테스트의 로그입니다.
 
 | 테스트 파일 | 확인하는 것 |
 |---|---|
 | `test_news_load.py` | 최신 원본 파일 고르기, HTML 벗기기·이메일·전화번호 가림(HS 범위·프로그램 이름 제외), 빈 본문 대체, 국가·전체 고유 기사 수, 기사·태그·집계·출처·batch_run 적재, 재실행 시 갱신·옛 태그 교체, 발행일 변경, 중복 ID, 키워드 결과 없는 기사, 일부 기간 결과여도 나머지 기사 태그 유지, 테이블 없음, 롤백 |
 | `test_keyword_topic_load.py` | 상태 판정(분류·규칙(포함) 확정·3건 기준 PENDING), 동의어·하위어 → 최종 키워드, 분류 틀 23쌍·번호 유지, 재실행 갱신, 관리자 DB 수정 보존, 사라진 키워드 삭제(관리자 행은 보존), 결과 파일이 잠겨도 DB 적재, 사전이 없으면 적재 안 함, CSV에만 있는 키워드 포함, 없는 분야면 롤백 |
-| `test_news_embed.py` | 조각 나누기(문단·겹침·긴 문단·빈 본문), 메타데이터, 재실행 시 추가 없음·바뀐 기사만 교체, 키워드 기사 수 갱신, 키워드만(--keywords-only), dry-run(--rebuild여도 안 지움), 사라진 키워드 삭제, 메타데이터만 갱신, 일부만 들어간 기사 다시 넣기, 국가·키워드·기간 검색, 모델 불일치 시 --rebuild, 실패 배치 재처리 |
+| `test_news_embed.py` | 조각 나누기(문단·겹침·긴 문단·빈 본문), 메타데이터, 재실행 시 추가 없음·바뀐 기사만 교체, 키워드 기사 수 갱신, 키워드만(--keywords-only), dry-run(--rebuild여도 안 지움), 사라진 키워드 삭제, 키워드만 바뀌면 메타데이터만 갱신·마지막 키워드 삭제 반영, 국가·발행일이 바뀌면 다시 임베딩, 일부만 들어간 기사 다시 넣기, 국가·키워드·기간 검색, 모델 불일치 시 --rebuild, 실패 배치 재처리 |
 
 ## 실제 데이터 결과 (2022.01.03~2026.10.13, 14,607건)
 

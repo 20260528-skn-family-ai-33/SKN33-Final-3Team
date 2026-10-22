@@ -11,8 +11,10 @@ news_keyword 컬렉션에는 article_tag의 키워드(주제어)를 추가합니
     필자는 2010년부터 체코에서 …
 - id는 '<article_id>:<조각 번호>', 메타데이터는 article_id·external_id·source_code·title·published_date(YYYY-MM-DD)·
   published_ymd(정수, 기간 필터용)·category·countries·keywords(목록, $contains 필터용)·chunk·body_hash입니다.
-- 이미 있는 기사는 다시 임베딩하지 않습니다. 본문·제목이 바뀐 기사(body_hash가 다름)와 조각이 일부만 들어간 기사만
-  그 기사의 조각을 지우고 다시 넣습니다. 국가·키워드·발행일 등 메타데이터만 바뀐 기사는 임베딩 없이 메타데이터만 갱신합니다.
+- 이미 있는 기사는 다시 임베딩하지 않습니다. 조각 문서가 바뀐 기사(본문·제목, 또는 머리줄의 발행일·국가·분류)와
+  조각이 일부만 들어간 기사만 그 기사의 조각을 지우고 다시 넣습니다 (임베딩이 머리줄까지 포함한 문서로 계산되므로).
+  문서는 같고 키워드 등 메타데이터만 바뀐 기사는 임베딩 없이 메타데이터만 갱신합니다. 빈 목록이 된 키(마지막 키워드를 지움)는
+  None으로 보내 지웁니다 (Chroma update는 넘기지 않은 키를 그대로 남김).
   실패한 배치는 컬렉션에 들어가지 않으므로 다음 실행에서 다시 처리됩니다.
 - 키워드 컬렉션은 DB 키워드와 맞춥니다: 새 키워드 추가 · 기사 수 갱신 · DB에서 사라진 키워드(사전이 바뀌어 동의어·하위어가 된 말) 삭제.
 - --rebuild --dry-run은 컬렉션을 지우지 않고, 지운 뒤 새로 넣을 개수만 셉니다.
@@ -142,13 +144,14 @@ def get_collection(client, name, rebuild=False):
 def plan(rows, col):
     """(새로 넣을 {id: (문서, 메타데이터)}, 지울 article_id 목록, 그대로 둘 기사 수, 메타데이터만 바꿀 {id: 메타데이터}).
     col이 None이면 빈 컬렉션으로 봄 (--rebuild --dry-run).
-    - 본문·제목이 바뀌었거나 조각이 일부만 있는 기사(중간에 멈춘 실행)는 지우고 다시 넣음
-    - 본문은 같고 국가·키워드·발행일 등만 바뀐 기사는 임베딩 없이 메타데이터만 갱신"""
+    - 조각 문서가 바뀌었거나(본문·제목·머리줄의 발행일·국가·분류) 조각이 일부만 있는 기사(중간에 멈춘 실행)는 지우고 다시 넣음
+      — 임베딩은 머리줄까지 포함한 문서로 계산하므로 문서만 바꾸면 검색 벡터와 내용이 어긋남
+    - 문서는 같고 키워드 등만 바뀐 기사는 임베딩 없이 메타데이터만 갱신. 없어진 키는 None으로 지움"""
     have = {}
     if col is not None:
-        got = col.get(include=["metadatas"])
-        for i, m in zip(got["ids"], got["metadatas"]):
-            have.setdefault(m["article_id"], {})[i] = m
+        got = col.get(include=["metadatas", "documents"])
+        for i, m, d in zip(got["ids"], got["metadatas"], got["documents"]):
+            have.setdefault(m["article_id"], {})[i] = (d, m)
     todo, stale, same, meta = {}, [], 0, {}
     for r in rows:
         old = have.get(r["article_id"])
@@ -156,13 +159,16 @@ def plan(rows, col):
         if old is None:
             todo |= docs
             continue
-        new = {i: m for i, (_, m) in docs.items()}
-        if set(new) != set(old) or any(m.get("body_hash") != body_hash(r) for m in old.values()):
+        if set(docs) != set(old) or any(old[i][0] != docs[i][0] or old[i][1].get("body_hash") != body_hash(r)
+                                        for i in docs):
             stale.append(r["article_id"])
             todo |= docs
             continue
         same += 1
-        meta |= {i: m for i, m in new.items() if m != old[i]}
+        for i, (_, m) in docs.items():
+            prev = old[i][1]
+            if m != prev:   # 빈 목록이 되어 빠진 키(countries·keywords·category)는 None으로 보내야 지워짐
+                meta[i] = m | {k: None for k in prev if k not in m}
     return todo, stale, same, meta
 
 

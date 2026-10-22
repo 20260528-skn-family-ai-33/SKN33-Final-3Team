@@ -164,19 +164,49 @@ class NewsEmbedTest(unittest.TestCase):
         self.assertEqual(embed.texts, [])
         self.assertEqual(sorted(self.client.get_collection(ne.KEYWORD_COLLECTION).get()["ids"]), ["배터리", "화장품"])
 
-    def test_metadata_change_updates_without_embedding(self):
-        """본문은 같고 키워드·국가만 바뀌면 다시 임베딩하지 않고 메타데이터만 갱신 → 새 키워드로 검색됨"""
+    def test_keyword_change_updates_metadata_without_embedding(self):
+        """본문·머리줄은 같고 키워드만 바뀌면 다시 임베딩하지 않고 메타데이터만 갱신 → 새 키워드로 검색됨"""
         self.run_sync(FakeEmbed())
         with session_scope(self.engine) as s:
             s.add(ArticleTag(article_id=2, keyword_text="공급망"))
-            s.add(ArticleTag(article_id=2, country_code="US"))
         embed = FakeEmbed()
         self.assertEqual(self.run_sync(embed), 0)
-        self.assertEqual([t for t in embed.texts if ":" in t or "\n" in t], [])   # 기사 조각은 다시 임베딩 안 함
+        self.assertEqual(embed.texts, [])   # 기사 조각·키워드 모두 다시 임베딩 안 함
         meta = self.articles().get(ids=["2:0"], include=["metadatas"])["metadatas"][0]
-        self.assertEqual((meta["keywords"], meta["countries"]), (["화장품", "배터리", "공급망"], ["JP", "US"]))
-        hits = ne.search("화장품", n=5, keyword="공급망", country="US", client=self.client, embed=embed)
+        self.assertEqual(meta["keywords"], ["화장품", "배터리", "공급망"])
+        hits = ne.search("화장품", n=5, keyword="공급망", client=self.client, embed=embed)
         self.assertIn("2:0", [h[0] for h in hits])
+
+    def test_last_tag_removed_is_cleared(self):
+        """기사의 키워드를 모두 지우면 메타데이터에서도 키워드가 사라져 예전 키워드로 검색되지 않음"""
+        self.run_sync(FakeEmbed())
+        with session_scope(self.engine) as s:
+            s.execute(ArticleTag.__table__.delete().where(ArticleTag.article_id == 2, ArticleTag.keyword_text.isnot(None)))
+        embed = FakeEmbed()
+        self.assertEqual(self.run_sync(embed), 0)
+        self.assertEqual(embed.texts, [])   # 머리줄에는 키워드가 없어 다시 임베딩 안 함
+        meta = self.articles().get(ids=["2:0"], include=["metadatas"])["metadatas"][0]
+        self.assertNotIn("keywords", meta)
+        self.assertEqual(meta["countries"], ["JP"])
+        hits = ne.search("화장품", n=5, keyword="화장품", client=self.client, embed=embed)
+        self.assertNotIn("2:0", [h[0] for h in hits])
+
+    def test_header_change_re_embeds_article(self):
+        """국가·발행일이 바뀌면 머리줄(문서)이 바뀌므로 그 기사만 다시 임베딩 → 검색 결과 문서와 필터가 같은 정보"""
+        self.run_sync(FakeEmbed())
+        with session_scope(self.engine) as s:
+            s.execute(ArticleTag.__table__.delete().where(ArticleTag.article_id == 2, ArticleTag.country_code.isnot(None)))
+            s.add(ArticleTag(article_id=2, country_code="US"))
+            s.execute(update(Article).where(Article.article_id == 2).values(published_date=date(2026, 10, 6)))
+        embed = FakeEmbed()
+        self.assertEqual(self.run_sync(embed), 0)
+        self.assertEqual(len(embed.texts), 1)   # 2번 기사 조각 1개만
+        got = self.articles().get(ids=["2:0"], include=["documents", "metadatas"])
+        self.assertTrue(got["documents"][0].startswith("[2026-10-06 | US] 일본 화장품"))
+        self.assertEqual((got["metadatas"][0]["countries"], got["metadatas"][0]["published_date"]), (["US"], "2026-10-06"))
+        hits = ne.search("화장품", n=5, country="US", date_from="2026-10-06", client=self.client, embed=embed)
+        self.assertEqual([h[0] for h in hits], ["2:0"])
+        self.assertTrue(hits[0][2].startswith("[2026-10-06 | US]"))
 
     def test_partly_embedded_article_is_redone(self):
         """중간에 멈춰 조각이 일부만 들어간 기사는 다음 실행에서 그 기사만 다시 넣음"""
