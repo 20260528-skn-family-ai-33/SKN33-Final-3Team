@@ -15,11 +15,13 @@ from news.urls import article_url, site_of
 from news.run_summary import summarize_run
 from news.dictionary import load_dictionary
 from news.daily import yesterday
+from news.run_lifecycle import new_run, begin_run, publish_run, atomic_json
+from types import SimpleNamespace
 
 
 def main():
-    parser = argparse.ArgumentParser(description="한국경제·매일경제 보수적 기사 수집")
-    parser.add_argument("--sites", nargs="+", choices=["hankyung", "mk", "fnnews"], default=["hankyung"])
+    parser = argparse.ArgumentParser(description="한국경제·파이낸셜뉴스 보수적 기사 수집")
+    parser.add_argument("--sites", nargs="+", choices=["hankyung", "fnnews"], default=["hankyung"])
     parser.add_argument("--urls-file", type=Path, help="기사 URL을 한 줄에 하나씩 기록한 UTF-8 파일")
     parser.add_argument("--input-only", action="store_true", help="기존 대기열은 보존하고 이번 URL 파일만 처리")
     parser.add_argument("--discover", action="store_true", help="공식 사이트맵·RSS에서 신규 후보 발견")
@@ -32,7 +34,7 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=Path(defaults.DATA_DIR))
     parser.add_argument("--exclude-data-dir", type=Path, action="append", default=[], help="기존 기사 DB: 같은 원문 URL·식별자의 본문 재요청 방지용")
     parser.add_argument("--status", action="store_true", help="상태만 조회; 네트워크 요청 없음")
-    parser.add_argument("--resume-site", choices=["hankyung", "mk", "fnnews"], help="원인 해결 후 수동 중단 해제")
+    parser.add_argument("--resume-site", choices=["hankyung", "fnnews"], help="원인 해결 후 수동 중단 해제")
     parser.add_argument("--requeue-url", help="파서 수정 후 실패 URL 한 건을 다시 대기열에 등록")
     parser.add_argument('--daily-target', type=date.fromisoformat, help='일일 처리 대상 날짜를 실행 전체에 고정')
     args = parser.parse_args()
@@ -88,11 +90,16 @@ def main():
     lock = FileLock(str(args.data_dir / "crawler.lock"))
     try:
         with lock.acquire(timeout=0):
-            store = Store(args.data_dir)
-            store.event_target = args.daily_target.isoformat() if args.daily_target else None
+            store = None
             stage='initialization'
             started_at=datetime.now(KST).isoformat()
+            run = new_run(args.daily_target.isoformat() if args.daily_target else None,
+                          args.sites, started_at) if not admin else None
             try:
+                if run:
+                    begin_run(args.data_dir, run)
+                store = Store(args.data_dir)
+                store.event_target = args.daily_target.isoformat() if args.daily_target else None
                 if args.status:
                     for site in args.sites:
                         print(json.dumps({"site": site, "used_today": store.used(site),
@@ -153,33 +160,32 @@ def main():
                 from news.date_index import data_issues
                 summary['data_issues']=data_issues(store.db)
                 summary['pending_json_exports']=store.db.execute('SELECT COUNT(*) FROM export_pending').fetchone()[0]
-                (args.data_dir / 'run_summary.json').write_text(
-                    json.dumps(summary, ensure_ascii=False, indent=2), encoding='utf-8')
+                report = None
                 if args.daily_target:
                     stage='daily_report'
                     report = daily_summary(store, args.daily_target.isoformat(), args.sites, history_before, summary, event_offset)
                     report_dir = args.data_dir / 'daily_runs' / args.daily_target.isoformat()
                     report_dir.mkdir(parents=True, exist_ok=True)
-                    encoded = json.dumps(report, ensure_ascii=False, indent=2)
-                    (report_dir / 'latest.json').write_text(encoded, encoding='utf-8')
                     from news.unfinished import render_text
-                    (report_dir / 'unfinished.json').write_text(
-                        json.dumps(report['unfinished'],ensure_ascii=False,indent=2),encoding='utf-8')
+                    atomic_json(report_dir / 'unfinished.json', report['unfinished'])
                     (report_dir / 'unfinished.txt').write_text(render_text(report['unfinished']),encoding='utf-8')
-                    (report_dir / (datetime.now(KST).strftime('%Y%m%dT%H%M%S%f') + '.json')).write_text(encoded, encoding='utf-8')
+                stage='publish_report'
+                reports_ready = publish_run(args.data_dir, run, summary, report)
                 print("수집 작업 종료. 결과·중단 사유:", args.data_dir)
                 # 배치 호출자가 내부 저장·검증 오류를 성공 실행으로 오인하지 않게 합니다.
-                if not summary["execution_healthy"]:
+                if not summary["execution_healthy"] or not reports_ready:
                     raise SystemExit(1)
             except Exception as exc:
                 # 엔진 종료 뒤 저장/집계 실패도 이번 실행의 실패로 남깁니다.
                 # 이전 성공 보고서를 최신 결과로 오인하지 않도록 별도 최소 보고서를 씁니다.
                 from news.failure_report import write_failure_report
-                write_failure_report(store, args, stage, exc, started_at)
+                write_failure_report(store or SimpleNamespace(root=args.data_dir),
+                                     args, stage, exc, started_at, run=run)
                 raise
             finally:
                 # 정상 경로의 내보내기를 반복하지 않습니다. 저장된 export_pending은 다음 실행에서 복구합니다.
-                store.close()
+                if store is not None:
+                    store.close()
     except Timeout:
         raise SystemExit("같은 데이터 폴더를 사용하는 수집기가 이미 실행 중입니다.")
 
