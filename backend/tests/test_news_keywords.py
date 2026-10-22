@@ -125,12 +125,26 @@ class ArticleTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "news_raw.csv"
             df.to_csv(src, index=False, encoding="utf-8-sig")
-            out, report = kc.run(src, Path(tmp) / "out", since="2022-01-01")
+            out, report = kc.run(src, Path(tmp) / "out", since="2022-01-01", synonyms_path=kc.SKIP,
+                                 categories_path=kc.SKIP, hypernyms_path=kc.SKIP)
             self.assertEqual(len(out), 1)  # 기준일 이전 기사 제외
             self.assertEqual(out.loc[0, "kwrd"], "NA,광업")  # 원본 보존
             self.assertEqual(out.loc[0, "natn_code"], "NA")  # 나미비아 NA가 빈 값으로 바뀌지 않음
             self.assertEqual(report["articles"], 1)
             self.assertTrue((Path(tmp) / "out" / "news_keywords_report.json").exists())
+
+    def test_missing_dictionary_stops(self):
+        """사전 파일이 없으면 빈 사전으로 조용히 진행하지 않고 멈춤 (none으로 적은 사전만 생략)"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "news_raw.csv"
+            pd.DataFrame({"bbstxSn": ["1"], "othbcDt": ["2024-01-01"], "natn": ["미국"], "kwrd": ["EV"]}).to_csv(
+                src, index=False, encoding="utf-8-sig")
+            with self.assertRaises(kc.DictionaryMissing):
+                kc.run(src, Path(tmp) / "out", synonyms_path=Path(tmp) / "없음.csv", categories_path=kc.SKIP,
+                       hypernyms_path=kc.SKIP)
+            self.assertFalse((Path(tmp) / "out" / "news_keywords_clean.csv").exists())   # 결과 파일도 안 씀
+            out, _ = kc.run(src, Path(tmp) / "out", synonyms_path="NONE", categories_path=kc.SKIP, hypernyms_path=kc.SKIP)
+            self.assertEqual(out.loc[0, "kw_topic"], "EV")   # 일부러 생략하면 그대로
 
 
 class ExceptionTest(unittest.TestCase):
@@ -405,7 +419,8 @@ class CategoryTest(unittest.TestCase):
             pd.DataFrame({"bbstxSn": [str(i) for i in range(10)], "othbcDt": ["2026-10-01"] * 10, "natn": ["미국"] * 10,
                           "newsTitl": ["가"] * 10, "kwrd": ["은행나무,ZZ희귀어,쿼터,지속가능성"] * 10}
                          ).to_csv(tmp / "raw.csv", index=False, encoding="utf-8-sig")
-            kc.run(tmp / "raw.csv", tmp / "o1", categories_path=tmp / "없음.csv")         # ① 정리 (분류표 없음)
+            none = dict(synonyms_path=kc.SKIP, hypernyms_path=kc.SKIP)
+            kc.run(tmp / "raw.csv", tmp / "o1", categories_path=kc.SKIP, **none)           # ① 정리 (분류표 없음)
             table = bc.build(tmp / "o1" / "news_keywords_clean.csv")                          # ② 분류표 생성
             table.to_csv(tmp / "tc.csv", index=False, encoding="utf-8-sig")
             t = table.set_index("주제어")
@@ -414,7 +429,7 @@ class CategoryTest(unittest.TestCase):
             self.assertEqual(t.loc["ZZ희귀어", "배정방법"], "검수 필요")
             outs = []
             for n in ("o2", "o3"):                                                             # ③ 재처리 (두 번)
-                out, _ = kc.run(tmp / "raw.csv", tmp / n, categories_path=tmp / "tc.csv")
+                out, _ = kc.run(tmp / "raw.csv", tmp / n, categories_path=tmp / "tc.csv", **none)
                 outs.append((out.kw_category[0], pd.read_csv(tmp / n / "unclassified_topics.csv", dtype=str, keep_default_na=False)))
             cats, un = outs[0]
             self.assertEqual(set(cats.split("|")), {"무역·통상>관세·무역규제", "에너지·환경>친환경·ESG·기후", "경제·시장>거시경제"})

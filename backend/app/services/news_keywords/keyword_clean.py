@@ -45,6 +45,22 @@ OUT_DIR = Path(__file__).resolve().parents[4] / "data" / "news_keywords"
 SYNONYMS_PATH = OUT_DIR / "synonyms.csv"
 HYPERNYMS_PATH = OUT_DIR / "hypernyms.csv"
 CATEGORIES_PATH = OUT_DIR / "topic_categories.csv"
+SKIP = "none"   # 처음 사전을 만드는 단계에서만: --hypernyms none처럼 그 사전을 일부러 빼고 실행
+
+
+class DictionaryMissing(FileNotFoundError):
+    """사전 파일이 없음 — 빈 사전으로 조용히 진행하면 EV가 그대로 남고, 이어서 적재하면 DB 동의어 행이 지워질 수 있음."""
+
+
+def require_dict(path, label, option):
+    """사전 경로를 확인합니다. "none"이면 None(일부러 생략), 파일이 없으면 DictionaryMissing으로 멈춤."""
+    if str(path).strip().lower() == SKIP:
+        return None
+    if not Path(path).exists():
+        raise DictionaryMissing(f"{label} 사전이 없습니다: {path}\n"
+                                f"  NEWS_KEYWORDS_USAGE.md의 '다시 만들기' 순서로 먼저 만드세요 "
+                                f"(사전을 처음 만드는 단계에서만 --{option} none으로 생략)")
+    return Path(path)
 
 # 쉼표 외에 실제 데이터에서 키워드 구분자로 쓰인 것: 해시태그(#), 두 칸 이상 공백, 가운뎃점(·)
 SPLIT = re.compile(r"[,、#·・]|\s{2,}")
@@ -116,16 +132,16 @@ def load_exceptions(words=None):
 
 
 def load_hypernyms(path=HYPERNYMS_PATH):
-    """하위어 → 상위어 표(hypernyms.csv의 하위어·상위어 컬럼, build/build_hypernyms.py가 만듦)를 읽습니다."""
-    if not Path(path).exists():
+    """하위어 → 상위어 표(hypernyms.csv의 하위어·상위어 컬럼, build/build_hypernyms.py가 만듦)를 읽습니다. None·없는 파일이면 빈 표."""
+    if path is None or not Path(path).exists():
         return {}
     with open(path, encoding="utf-8-sig", newline="") as fh:
         return {normalize(r["하위어"]): normalize(r["상위어"]) for r in csv.DictReader(fh) if r.get("하위어") and r.get("상위어")}
 
 
 def load_synonyms(path=SYNONYMS_PATH):
-    """같은 뜻 표기 → 대표어 표(synonyms.csv의 표기·대표어 컬럼)를 읽습니다."""
-    if not Path(path).exists():
+    """같은 뜻 표기 → 대표어 표(synonyms.csv의 표기·대표어 컬럼)를 읽습니다. None·없는 파일이면 빈 표."""
+    if path is None or not Path(path).exists():
         return {}
     with open(path, encoding="utf-8-sig", newline="") as fh:
         return {normalize(r["표기"]): normalize(r["대표어"]) for r in csv.DictReader(fh) if r.get("표기") and r.get("대표어")}
@@ -163,8 +179,9 @@ class Categories(dict):
 
 
 def load_categories(path=CATEGORIES_PATH, rules=True):
-    """분류표(build_categories.py 결과)를 읽습니다. rules=True면 표에 없는 주제어에 공통 분류 규칙을 적용합니다."""
-    if not Path(path).exists():
+    """분류표(build_categories.py 결과)를 읽습니다. rules=True면 표에 없는 주제어에 공통 분류 규칙을 적용합니다.
+    None·없는 파일이면 빈 표 (규칙은 그대로 적용)."""
+    if path is None or not Path(path).exists():
         return Categories(rules=rules)
     with open(path, encoding="utf-8-sig", newline="") as fh:
         rows = [r for r in csv.DictReader(fh) if r.get("주제어")]
@@ -349,12 +366,13 @@ def unclassified_topics(df, results, cat, examples=3):
 
 def run(input_path, output_dir=OUT_DIR, since=None, synonyms_path=SYNONYMS_PATH, categories_path=CATEGORIES_PATH,
         hypernyms_path=HYPERNYMS_PATH):
+    """사전 경로가 "none"이면 그 사전 없이, 파일이 없으면 DictionaryMissing으로 멈춤 (빈 사전으로 조용히 진행하지 않음)."""
+    syn = load_synonyms(require_dict(synonyms_path, "동의어", "synonyms"))
+    cat = load_categories(require_dict(categories_path, "분류표", "categories"))
+    hyp = load_hypernyms(require_dict(hypernyms_path, "상위어", "hypernyms"))
     df = read_input(input_path, since)
     geo = load_geo()
     keep = load_exceptions()
-    syn = load_synonyms(synonyms_path)
-    cat = load_categories(categories_path)
-    hyp = load_hypernyms(hypernyms_path)
     results = [process_article(k, n, geo, keep, syn, cat, hyp) for k, n in zip(df["kwrd"], df["natn"])]
     cols = [c for c in ["bbstxSn", "othbcDt", "natn", "infoCl", "newsTitl", "kwrd"] if c in df.columns]
     out = df[cols].copy()
@@ -429,19 +447,24 @@ def main():
     parser.add_argument("--input", type=Path, help="news_raw.csv 또는 .parquet")
     parser.add_argument("--check", help="키워드 문자열 하나를 넣어 처리 과정을 표로 확인 (예: \"우크라이나사태,중국경제\")")
     parser.add_argument("--natn", default="", help="--check와 함께 쓸 기사 국가 칸 값 (예: 중국)")
-    parser.add_argument("--synonyms", type=Path, default=SYNONYMS_PATH)
-    parser.add_argument("--categories", type=Path, default=CATEGORIES_PATH)
-    parser.add_argument("--hypernyms", type=Path, default=HYPERNYMS_PATH)
+    parser.add_argument("--synonyms", type=Path, default=SYNONYMS_PATH, help="동의어 사전 (none = 생략, 사전을 처음 만들 때만)")
+    parser.add_argument("--categories", type=Path, default=CATEGORIES_PATH, help="분류표 (none = 생략)")
+    parser.add_argument("--hypernyms", type=Path, default=HYPERNYMS_PATH, help="상위어 사전 (none = 생략)")
     parser.add_argument("--since", help="이 날짜 이후 기사만 (예: 2022-01-01)")
     parser.add_argument("--output-dir", type=Path, default=OUT_DIR)
     args = parser.parse_args()
-    if args.check is not None:
-        explain(args.check, args.natn, load_geo(), load_exceptions(),
-                load_synonyms(args.synonyms), load_categories(args.categories), load_hypernyms(args.hypernyms))
-        return
-    if not args.input:
-        parser.error("--input 또는 --check 중 하나가 필요합니다")
-    _, report = run(args.input, args.output_dir, args.since, args.synonyms, args.categories, args.hypernyms)
+    try:
+        if args.check is not None:
+            explain(args.check, args.natn, load_geo(), load_exceptions(),
+                    load_synonyms(require_dict(args.synonyms, "동의어", "synonyms")),
+                    load_categories(require_dict(args.categories, "분류표", "categories")),
+                    load_hypernyms(require_dict(args.hypernyms, "상위어", "hypernyms")))
+            return
+        if not args.input:
+            parser.error("--input 또는 --check 중 하나가 필요합니다")
+        _, report = run(args.input, args.output_dir, args.since, args.synonyms, args.categories, args.hypernyms)
+    except DictionaryMissing as e:
+        parser.exit(1, f"오류: {e}\n")
     print(f"기사 {report['articles']:,}건")
     print(f"키워드 종류: 원본 {report['raw']['kinds']:,} → 정제 {report['clean']['kinds']:,} → 지역 분리 후 주제어 {report['topic_only']['kinds']:,}")
     g = report["geo"]

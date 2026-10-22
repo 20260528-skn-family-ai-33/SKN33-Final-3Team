@@ -2,12 +2,13 @@
 
 실행 (저장소 루트에서): python -m backend.app.scheduler.jobs.news_load [--raw 경로] [--clean 경로]
 - 입력: data/news의 news_raw_YYYYMMDD_YYYYMMDD.csv(끝 날짜가 가장 늦은 파일) + data/news_keywords/news_keywords_clean.csv.
-  키워드 결과가 없는 기사도 article에는 넣고 태그만 비웁니다.
+  키워드 결과가 없는 기사도 article에는 넣고, 그 기사의 기존 태그는 건드리지 않습니다 (새 기사면 태그 없음).
 - 테이블은 만들지 않습니다. 테이블이 없으면 오류 로그를 남기고 종료합니다 (db/mysql/init/01_schema.sql 먼저 실행).
 - 출처 KOTRA_MARKET은 service_option에 없으면 batch_run 기록 때 자동으로 등록됩니다 (batch_log.ensure_source).
 - 같은 (source_code, external_id) 기사가 있으면 제목·발행일·URL·본문·분류를 갱신합니다 (article_id 유지).
   원본에 같은 기사 ID가 두 번 있으면 마지막 행을 씁니다.
-- 입력 기사들의 태그는 지우고 새로 넣습니다: 동의어·분야 사전이 바뀌어도 이전 태그가 남지 않게.
+- 키워드 결과가 있는 기사의 태그는 지우고 새로 넣습니다: 동의어·분야 사전이 바뀌어도 이전 태그가 남지 않게.
+  원본은 전체인데 키워드 결과가 일부 기간뿐이어도(--since) 나머지 기사의 태그·집계는 그대로 남습니다.
 - 일별 집계는 입력 기사의 발행일(발행일이 바뀐 기사는 예전 날짜도)만 지우고 DB 전체 기사(다른 출처 포함)에서 다시 셉니다
   (DISTINCT article_id).
 - 품목 태그는 hs_code 테이블에 있는 코드만 넣습니다. hs_code가 비어 있으면 품목 태그·집계 0건으로 넘어가고 경고만 남깁니다.
@@ -196,13 +197,13 @@ def load(engine, raws, cleans):
         days = {r["published_date"] for r in articles} | old_dates(s, [r["external_id"] for r in articles])
         upsert_articles(s, articles)
         ids = article_ids(s, [r["external_id"] for r in articles])
-        for chunk in _in_chunks(ids.values()):
+        # 태그는 키워드 결과가 있는 기사만 다시 넣음 (결과가 없는 기사의 기존 태그를 지우지 않게)
+        tagged = [r for r in articles if r["external_id"] in by_id]
+        for chunk in _in_chunks([ids[r["external_id"]] for r in tagged]):
             s.execute(delete(ArticleTag).where(ArticleTag.article_id.in_(chunk)))
         tags, unknown = [], set()
-        for r in articles:
-            clean = by_id.get(r["external_id"])
-            if clean is None:
-                continue
+        for r in tagged:
+            clean = by_id[r["external_id"]]
             tags += nl.tag_rows(clean, ids[r["external_id"]], countries, hs_codes, hb.hs_ver_for(r["published_date"]))
             unknown |= set(nl.split_values(clean.get("country_all"))) - countries
         _insert(s, ArticleTag, tags)
@@ -262,7 +263,8 @@ def _run(raws, cleans, db_url, log_path):
         if engine is not None:
             engine.dispose()
     if out["no_keyword_result"]:
-        log.warning(f"키워드 결과가 없는 기사 {out['no_keyword_result']:,}건은 태그 없이 넣었습니다 (keyword_clean.py 재실행 필요)")
+        log.warning(f"키워드 결과가 없는 기사 {out['no_keyword_result']:,}건은 기존 태그를 그대로 두었습니다 "
+                    f"(새 기사면 태그 없음, keyword_clean.py로 그 기간을 정리한 뒤 다시 실행)")
     if out["unknown_countries"]:
         log.warning(f"country 테이블에 없는 국가 코드 {', '.join(out['unknown_countries'])}는 태그에서 뺐습니다")
     if not out["hs_dictionary"]:

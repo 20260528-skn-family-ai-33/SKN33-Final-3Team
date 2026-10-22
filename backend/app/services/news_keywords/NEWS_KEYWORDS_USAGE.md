@@ -248,13 +248,15 @@ python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
 python -m unittest backend/tests/test_news_keywords.py backend/tests/test_article_counts.py
 ```
 
-예상 결과: `Ran 72 tests ... OK` (`test_news_keywords.py` 65개: 키워드 정리·블락·동의어·상위어·사전 생성 + `test_article_counts.py` 7개: 집계·급증 판정)
+예상 결과: `Ran 73 tests ... OK` (`test_news_keywords.py` 66개: 키워드 정리·블락·동의어·상위어·사전 생성 + `test_article_counts.py` 7개: 집계·급증 판정)
 `test_news_keywords.py`의 동의어·상위어 테스트 9개는 `data/news_keywords/`의 사전으로 확인하므로, 사전이 없으면 건너뜁니다(`skipped=9`). 아래 "다시 만들기"를 먼저 실행하면 모두 돌아갑니다.
 (`-v`를 붙이면 테스트마다 한국어 설명이 나옵니다)
 
 ## 다시 만들기 (사전·분류표·결과 파일 전체)
 
 순서대로 실행합니다. 상위어 단계는 `.env`의 `OPENAI_API_KEY`로 주제어 약 1,500개를 임베딩합니다 (처음 한 번, 1센트 미만. 이후 `word_vectors.npz`를 다시 씀).
+키워드 정리(`keyword_clean.py`)와 분류 적재(`keyword_topic_load`)는 사전 파일이 없으면 멈춥니다 (빈 사전으로 조용히 진행하면 EV가 그대로 남고 DB 동의어 행이 지워지기 때문).
+`none`은 사전을 처음 만드는 아래 2·4번째 줄처럼 그 사전이 아직 없을 때만 씁니다.
 
 ```powershell
 $IN = "data/news/news_raw_20220101_20261013.csv"
@@ -266,6 +268,10 @@ python backend/app/services/news_keywords/build/build_categories.py             
 python backend/app/services/news_keywords/keyword_clean.py --input $IN                             # 분야 반영
 python backend/app/services/news_keywords/article_counts.py --date 2026-10-14
 python backend/app/services/news_keywords/build/verify.py                                          # "결과: 모두 일치"
+# DB·Chroma 적재 (NEWS_DB_USAGE.md): 기사·태그 → 키워드 분류 → 키워드 임베딩
+python -m backend.app.scheduler.jobs.news_load
+python -m backend.app.scheduler.jobs.keyword_topic_load
+python -m backend.app.scheduler.jobs.news_embed --keywords-only
 ```
 
 | 결과 파일 | 위치 | 내용 |

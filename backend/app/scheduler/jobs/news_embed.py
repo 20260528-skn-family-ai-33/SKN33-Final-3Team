@@ -11,8 +11,11 @@ news_keyword 컬렉션에는 article_tag의 키워드(주제어)를 추가합니
     필자는 2010년부터 체코에서 …
 - id는 '<article_id>:<조각 번호>', 메타데이터는 article_id·external_id·source_code·title·published_date(YYYY-MM-DD)·
   published_ymd(정수, 기간 필터용)·category·countries·keywords(목록, $contains 필터용)·chunk·body_hash입니다.
-- 이미 있는 기사는 다시 임베딩하지 않습니다. 본문·제목이 바뀐 기사(body_hash가 다름)만 그 기사의 조각을 지우고 다시 넣습니다.
+- 이미 있는 기사는 다시 임베딩하지 않습니다. 본문·제목이 바뀐 기사(body_hash가 다름)와 조각이 일부만 들어간 기사만
+  그 기사의 조각을 지우고 다시 넣습니다. 국가·키워드·발행일 등 메타데이터만 바뀐 기사는 임베딩 없이 메타데이터만 갱신합니다.
   실패한 배치는 컬렉션에 들어가지 않으므로 다음 실행에서 다시 처리됩니다.
+- 키워드 컬렉션은 DB 키워드와 맞춥니다: 새 키워드 추가 · 기사 수 갱신 · DB에서 사라진 키워드(사전이 바뀌어 동의어·하위어가 된 말) 삭제.
+- --rebuild --dry-run은 컬렉션을 지우지 않고, 지운 뒤 새로 넣을 개수만 셉니다.
 - 임베딩 모델: text-embedding-3-large (hs_code_embed와 같은 모델, 3,072차원).
   모델을 바꾸면 차원이 달라지므로 --rebuild로 컬렉션을 새로 만듭니다.
 - 저장 위치: 저장소 루트 chroma_data/ (git 제외, hs_code 컬렉션과 같은 폴더). 검색은 search()·search_keywords()를 씁니다.
@@ -137,27 +140,41 @@ def get_collection(client, name, rebuild=False):
 
 
 def plan(rows, col):
-    """(새로 넣을 {id: (문서, 메타)}, 지울 article_id 목록, 그대로 둘 기사 수)."""
+    """(새로 넣을 {id: (문서, 메타데이터)}, 지울 article_id 목록, 그대로 둘 기사 수, 메타데이터만 바꿀 {id: 메타데이터}).
+    col이 None이면 빈 컬렉션으로 봄 (--rebuild --dry-run).
+    - 본문·제목이 바뀌었거나 조각이 일부만 있는 기사(중간에 멈춘 실행)는 지우고 다시 넣음
+    - 본문은 같고 국가·키워드·발행일 등만 바뀐 기사는 임베딩 없이 메타데이터만 갱신"""
     have = {}
-    for m in col.get(include=["metadatas"])["metadatas"]:
-        have[m["article_id"]] = m["body_hash"]
-    todo, stale, same = {}, [], 0
+    if col is not None:
+        got = col.get(include=["metadatas"])
+        for i, m in zip(got["ids"], got["metadatas"]):
+            have.setdefault(m["article_id"], {})[i] = m
+    todo, stale, same, meta = {}, [], 0, {}
     for r in rows:
         old = have.get(r["article_id"])
-        if old == body_hash(r):
-            same += 1
+        docs = build_docs(r)
+        if old is None:
+            todo |= docs
             continue
-        if old is not None:
+        new = {i: m for i, (_, m) in docs.items()}
+        if set(new) != set(old) or any(m.get("body_hash") != body_hash(r) for m in old.values()):
             stale.append(r["article_id"])
-        todo |= build_docs(r)
-    return todo, stale, same
+            todo |= docs
+            continue
+        same += 1
+        meta |= {i: m for i, m in new.items() if m != old[i]}
+    return todo, stale, same, meta
 
 
 def sync(rows, col, embed):
-    """{"added": 추가 조각, "articles": 새로 넣은 기사, "changed": 다시 넣은 기사, "existing": 그대로 둔 기사}"""
-    todo, stale, same = plan(rows, col)
+    """{"added": 추가 조각, "articles": 새로 넣은 기사, "changed": 다시 넣은 기사, "existing": 그대로 둔 기사,
+    "meta_updated": 메타데이터만 갱신한 조각}"""
+    todo, stale, same, meta = plan(rows, col)
     for article_id in stale:
         col.delete(where={"article_id": article_id})
+    ids = list(meta)
+    for i in range(0, len(ids), KEYWORD_BATCH):   # 임베딩 없이 메타데이터만 (OpenAI 호출 없음)
+        col.update(ids=ids[i:i + KEYWORD_BATCH], metadatas=[meta[x] for x in ids[i:i + KEYWORD_BATCH]])
     ids = list(todo)
     for i in range(0, len(ids), BATCH):
         part = ids[i:i + BATCH]
@@ -165,7 +182,7 @@ def sync(rows, col, embed):
         col.add(ids=part, documents=texts, metadatas=[todo[x][1] for x in part], embeddings=embed(texts))
         log.info(f"기사 조각 임베딩 {min(i + BATCH, len(ids)):,}/{len(ids):,}")
     return {"added": len(ids), "articles": len({todo[x][1]["article_id"] for x in ids}) - len(stale),
-            "changed": len(stale), "existing": same}
+            "changed": len(stale), "existing": same, "meta_updated": len(meta)}
 
 
 def keyword_counts(rows):
@@ -178,10 +195,14 @@ def keyword_counts(rows):
 
 
 def sync_keywords(counts, col, embed):
-    """컬렉션에 없는 키워드만 추가합니다. id·문서 모두 키워드 글자 그대로, 메타데이터는 keyword·article_count.
-    DB에서 사라진 키워드는 지우지 않습니다 (hs_code_embed와 같음, 최신으로 다시 만들려면 --rebuild)."""
+    """컬렉션을 DB 키워드와 맞춥니다. 없는 키워드만 임베딩해 추가하고, 기사 수가 바뀐 키워드는 메타데이터만 갱신하고,
+    DB에서 사라진 키워드(사전이 바뀌어 동의어·하위어가 된 말)는 지웁니다 (추천에 예전 키워드가 남지 않게).
+    id·문서 모두 키워드 글자 그대로, 메타데이터는 keyword·article_count. DB 키워드가 하나도 없으면 지우지 않습니다."""
     got = col.get(include=["metadatas"])
     have = dict(zip(got["ids"], got["metadatas"]))
+    gone = sorted(set(have) - set(counts)) if counts else []
+    for i in range(0, len(gone), KEYWORD_BATCH):
+        col.delete(ids=gone[i:i + KEYWORD_BATCH])
     todo = [k for k in sorted(counts) if k not in have]
     # 이미 있는 키워드는 다시 임베딩하지 않고 기사 수만 최신으로 (메타데이터만 바꾸므로 OpenAI 호출 없음)
     changed = [k for k in sorted(counts) if k in have and have[k].get("article_count") != counts[k]]
@@ -193,7 +214,7 @@ def sync_keywords(counts, col, embed):
         col.add(ids=part, documents=part, metadatas=[{"keyword": k, "article_count": counts[k]} for k in part],
                 embeddings=embed(part))
         log.info(f"키워드 임베딩 {min(i + KEYWORD_BATCH, len(todo)):,}/{len(todo):,}")
-    return {"added": len(todo), "existing": len(counts) - len(todo), "count_updated": len(changed)}
+    return {"added": len(todo), "existing": len(counts) - len(todo), "count_updated": len(changed), "deleted": len(gone)}
 
 
 def search(query, n=5, country=None, keyword=None, date_from=None, date_to=None, client=None, embed=None):
@@ -227,18 +248,21 @@ def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_
         rows = None if keywords_only else read_rows(engine)
         counts = keyword_article_counts(engine) if keywords_only else keyword_counts(rows)
         client = client or chromadb.PersistentClient(path=str(CHROMA_PATH))
-        articles = None if keywords_only else get_collection(client, ARTICLE_COLLECTION, rebuild)
-        keywords = get_collection(client, KEYWORD_COLLECTION, rebuild)
-        if dry_run and keywords_only:
-            new_kw = set(counts) - set(keywords.get(include=[])["ids"])
-            log.info(f"미리 보기(키워드만): 키워드 {len(new_kw):,}개 | 글자 {sum(map(len, new_kw)):,}자 | 로그: {log_path}")
-            return 0
+        # --rebuild --dry-run: 컬렉션을 지우지 않고, 지운 뒤(빈 컬렉션)를 가정해 셈
+        fresh = rebuild and dry_run
+        articles = None if keywords_only or fresh else get_collection(client, ARTICLE_COLLECTION, rebuild)
+        keywords = None if fresh else get_collection(client, KEYWORD_COLLECTION, rebuild)
         if dry_run:
-            todo, stale, same = plan(rows, articles)
-            new_kw = set(counts) - set(keywords.get(include=[])["ids"])
+            have_kw = set() if keywords is None else set(keywords.get(include=[])["ids"])
+            new_kw, gone_kw = set(counts) - have_kw, (have_kw - set(counts)) if counts else set()
+            kw_txt = f"키워드 {len(new_kw):,}개 추가 · {len(gone_kw):,}개 삭제"
+            if keywords_only:
+                log.info(f"미리 보기(키워드만): {kw_txt} | 글자 {sum(map(len, new_kw)):,}자 | 로그: {log_path}")
+                return 0
+            todo, stale, same, meta = plan(rows, articles)
             chars = sum(len(d) for d, _ in todo.values()) + sum(map(len, new_kw))
             log.info(f"미리 보기: 기사 {len(rows):,}건 중 새로/다시 넣을 기사 {len(rows) - same:,}건 (변경 {len(stale):,}) | "
-                     f"조각 {len(todo):,}개 · 키워드 {len(new_kw):,}개 | 글자 {chars:,}자 | 로그: {log_path}")
+                     f"조각 {len(todo):,}개 · 메타데이터만 갱신 {len(meta):,}개 · {kw_txt} | 글자 {chars:,}자 | 로그: {log_path}")
             return 0
         embed = embed or openai_embed()
         result = None if keywords_only else sync(rows, articles, embed)
@@ -250,12 +274,13 @@ def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_
         if engine is not None:
             engine.dispose()
     if keywords_only:
-        log.info(f"완료(키워드만): 키워드 추가 {kw['added']:,} · 기사 수 갱신 {kw['count_updated']:,} "
+        log.info(f"완료(키워드만): 키워드 추가 {kw['added']:,} · 기사 수 갱신 {kw['count_updated']:,} · 삭제 {kw['deleted']:,} "
                  f"(컬렉션 {keywords.count():,}개) | 로그: {log_path}")
         return 0
     log.info(f"완료: DB 기사 {len(rows):,}건 | 새 기사 {result['articles']:,} · 변경 {result['changed']:,} · "
-             f"그대로 {result['existing']:,} | 조각 추가 {result['added']:,} (컬렉션 {articles.count():,}개) | "
-             f"키워드 추가 {kw['added']:,} · 기사 수 갱신 {kw['count_updated']:,} (컬렉션 {keywords.count():,}개) | 로그: {log_path}")
+             f"그대로 {result['existing']:,} | 조각 추가 {result['added']:,} · 메타데이터 갱신 {result['meta_updated']:,} "
+             f"(컬렉션 {articles.count():,}개) | 키워드 추가 {kw['added']:,} · 기사 수 갱신 {kw['count_updated']:,} · "
+             f"삭제 {kw['deleted']:,} (컬렉션 {keywords.count():,}개) | 로그: {log_path}")
     return 0
 
 

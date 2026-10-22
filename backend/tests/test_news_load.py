@@ -161,6 +161,17 @@ class NewsLoadTest(unittest.TestCase):
         self.assertEqual(len(self.rows(Article, "article_id")), 2)
         self.assertEqual(self.rows(ArticleTag, "keyword_text"), [("AI",)])  # 키워드 결과 없는 11번은 태그 0건
 
+    def test_partial_keyword_result_keeps_other_articles_tags(self):
+        """원본은 전체, 키워드 결과는 일부 기간(--since)만이어도 나머지 기사의 태그·일별 집계는 그대로"""
+        raws = [raw("10", "2026-10-01"), raw("11", "2026-10-05")]
+        self.run_job(raws, [clean("10", "2026-10-01", "AI", "US"), clean("11", "2026-10-05", "반도체")])
+        self.assertEqual(self.run_job(raws, [clean("11", "2026-10-05", "배터리")]), 0)   # 10번 결과 없음
+        tags = self.rows(ArticleTag, "keyword_text", "country_code")
+        self.assertEqual(sorted(t for t in tags if t[0]), [("AI", None), ("배터리", None)])   # 10번 AI 유지, 11번만 바뀜
+        self.assertIn((None, "US"), tags)
+        self.assertEqual(self.rows(NewsKeywordDaily, "metric_date", "keyword_text", "country_key"),
+                         [(date(2026, 10, 1), "AI", "*"), (date(2026, 10, 1), "AI", "US"), (date(2026, 10, 5), "배터리", "*")])
+
     def test_missing_table_fails_without_writing(self):
         with session_scope(self.engine) as s:
             s.execute(NewsProductDaily.__table__.delete())

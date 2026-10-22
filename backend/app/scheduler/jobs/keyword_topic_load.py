@@ -10,7 +10,9 @@
   · UNCLASSIFIED 어떤 규칙에도 안 걸리고 기사 PENDING_MIN(3)건 미만인 말
   · PENDING      어떤 규칙에도 안 걸리고 기사 PENDING_MIN건 이상인 말 (관리자 분류 대상)
 - 기사 수(PENDING 기준)는 DB article_tag의 키워드별 고유 기사 수(누적)로 셉니다 (--counts db, 기본).
-  article_tag에 키워드가 없으면 키워드 결과 CSV로 셉니다 (--counts csv와 같음, CSV가 전체 기사일 때만 누적과 같음).
+  키워드 결과 CSV에만 있는 키워드(news_load 전에 실행했거나 사전이 바뀐 경우)도 빠지지 않게 CSV 키워드를 더하고,
+  둘 다 있으면 큰 값을 씁니다. article_tag가 비어 있으면 CSV로만 셉니다 (--counts csv와 같음).
+- 실행 순서: news_load(기사·태그) → keyword_topic_load. 사전(동의어·상위어·분류표)이 없으면 적재하지 않고 멈춥니다.
 - 관리자가 DB에서 바꾼 행(synced_at이 NULL이거나 updated_at보다 이름)은 덮어쓰지 않고 건너뜁니다 (csv에 먼저 반영할 것).
 - 이번 결과에 없는 키워드(사전·데이터가 바뀌어 사라진 말)는 지웁니다. 단, 관리자가 DB에서 바꾼 행은 남기고 경고합니다.
 - 적재한 행은 updated_at = synced_at = 실행 시각으로 맞춥니다. 전체를 한 트랜잭션으로 넣고, 실패하면 모두 롤백합니다.
@@ -175,27 +177,45 @@ def export(rows, data_dir=DATA, unclassified_csv=None):
 
 
 def counts_from(source, engine, clean_path):
-    """키워드별 고유 기사 수. source="db"면 article_tag(누적), 비어 있으면 CSV로 대신 셈."""
+    """키워드별 고유 기사 수. source="db"면 article_tag(누적) + 키워드 결과 CSV의 키워드 (둘 다 있으면 큰 값).
+    DB만 보면 news_load 전에 실행했을 때 새 키워드가 빠지고 그 행이 지워지므로 CSV 키워드를 더합니다.
+    article_tag가 비어 있으면 CSV로만 셈."""
     if source == "db":
         counts = keyword_article_counts(engine)
         if counts:
-            log.info(f"기사 수: DB article_tag 기준 (키워드 {len(counts):,}개)")
-            return counts
+            csv_counts = topic_counts(clean_path) if Path(clean_path).exists() else Counter()
+            only_csv = set(csv_counts) - set(counts)
+            if only_csv:
+                log.warning(f"키워드 결과 CSV에만 있는 키워드 {len(only_csv):,}개는 CSV 기사 수로 넣습니다 "
+                            f"(news_load로 기사를 먼저 적재하면 누적 기준이 됨)")
+            log.info(f"기사 수: DB article_tag 기준 (키워드 {len(counts):,}개) + CSV에만 있는 키워드 {len(only_csv):,}개")
+            return Counter({k: max(counts.get(k, 0), csv_counts.get(k, 0)) for k in set(counts) | set(csv_counts)})
         log.warning("article_tag에 키워드가 없어 키워드 결과 CSV로 기사 수를 셉니다 (CSV가 전체 기사여야 누적과 같음)")
     log.info(f"기사 수: {Path(clean_path).name} 기준")
     return topic_counts(clean_path)
+
+
+def dictionaries():
+    """(분류표, 동의어 사전, 상위어 사전). 하나라도 없으면 kc.DictionaryMissing으로 멈춤 —
+    빈 사전으로 적재하면 DB의 동의어(SYNONYM) 행이 '사라진 키워드'로 지워짐."""
+    return (kc.load_categories(kc.require_dict(kc.CATEGORIES_PATH, "분류표", "categories")),
+            kc.load_synonyms(kc.require_dict(kc.SYNONYMS_PATH, "동의어", "synonyms")),
+            kc.load_hypernyms(kc.require_dict(kc.HYPERNYMS_PATH, "상위어", "hypernyms")))
 
 
 def run(clean_path=DEFAULT_CLEAN, db_url=None, dry_run=False, log_dir=LOG_DIR, counts="db"):
     log_path = setup_log(log_dir)
     engine = None
     try:
+        cat, syn, hyp = dictionaries()
         engine = make_engine(db_url) if (counts == "db" or not dry_run) else None
-        rows = build_rows(counts_from(counts, engine, clean_path), kc.load_categories(), kc.load_synonyms(),
-                          kc.load_hypernyms())
+        rows = build_rows(counts_from(counts, engine, clean_path), cat, syn, hyp)
         status = Counter(r["status"] for r in rows)
         log.info("상태별: " + " · ".join(f"{k} {v:,}" for k, v in sorted(status.items())) + f" | 합계 {len(rows):,}")
         out = None if dry_run else load(engine, rows)
+    except kc.DictionaryMissing as e:
+        log.error(f"적재 안 함: {e} | 로그: {log_path}")
+        return 1
     except Exception:
         log.exception(f"적재 실패 (롤백되어 반영되지 않음) | 로그: {log_path}")
         return 1

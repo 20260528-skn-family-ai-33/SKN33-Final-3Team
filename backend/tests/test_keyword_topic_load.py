@@ -109,8 +109,9 @@ class LoadTest(unittest.TestCase):
         self.assertEqual((out["deleted"], out["kept_db_edits"]), (1, ["로보택시"]))
 
     def test_db_is_loaded_even_if_result_file_is_locked(self):
-        orig = (job.counts_from, job.build_rows, job.export, job.make_engine)
+        orig = (job.counts_from, job.build_rows, job.export, job.make_engine, job.dictionaries)
         url = str(self.engine.url)
+        job.dictionaries = lambda: (None, {}, {})
         job.counts_from = lambda *a: Counter()
         job.build_rows = lambda *a, **k: self.ROWS
         job.make_engine = lambda db_url=None: orig[3](url)
@@ -121,11 +122,37 @@ class LoadTest(unittest.TestCase):
         try:
             self.assertEqual(job.run(db_url=url, log_dir=Path(self.tmp.name) / "logs"), 0)
         finally:
-            job.counts_from, job.build_rows, job.export, job.make_engine = orig
+            job.counts_from, job.build_rows, job.export, job.make_engine, job.dictionaries = orig
             for h in job.log.handlers:
                 h.close()
             job.log.handlers.clear()
         self.assertEqual(set(self.table()), {"AI", "인공지능", "로보택시"})
+
+    def test_missing_dictionary_stops_without_touching_db(self):
+        """사전이 없으면 적재하지 않음 — 빈 사전으로 넣으면 DB의 동의어(SYNONYM) 행이 '사라진 키워드'로 지워지기 때문"""
+        job.load(self.engine, self.ROWS)
+        orig = job.kc.SYNONYMS_PATH
+        job.kc.SYNONYMS_PATH = Path(self.tmp.name) / "없음.csv"
+        try:
+            self.assertEqual(job.run(db_url=str(self.engine.url), dry_run=False, log_dir=Path(self.tmp.name) / "logs"), 1)
+        finally:
+            job.kc.SYNONYMS_PATH = orig
+            for h in job.log.handlers:
+                h.close()
+            job.log.handlers.clear()
+        self.assertEqual(set(self.table()), {"AI", "인공지능", "로보택시"})   # 그대로
+
+    def test_counts_include_keywords_only_in_csv(self):
+        """기사 적재 전에 돌려도 새 CSV의 키워드가 빠지지 않음: DB 기사 수 + CSV에만 있는 키워드 (둘 다 있으면 큰 값)"""
+        clean = Path(self.tmp.name) / "clean.csv"
+        clean.write_text("bbstxSn,kw_topic\n1,AI|새키워드\n2,새키워드\n3,AI\n", encoding="utf-8-sig")
+        orig = job.keyword_article_counts
+        job.keyword_article_counts = lambda engine: Counter({"AI": 5, "옛키워드": 2})
+        try:
+            counts = job.counts_from("db", None, clean)
+        finally:
+            job.keyword_article_counts = orig
+        self.assertEqual(dict(counts), {"AI": 5, "옛키워드": 2, "새키워드": 2})
 
     def test_unknown_category_fails_without_writing(self):
         bad = [{"keyword_text": "X", "canonical_text": None, "field": "없는>분야", "status": "CLASSIFIED"}]

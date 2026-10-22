@@ -144,6 +144,49 @@ class NewsEmbedTest(unittest.TestCase):
         self.assertEqual(embed.texts, [])
         self.assertEqual(self.articles().count(), 0)
 
+    def test_rebuild_dry_run_deletes_nothing(self):
+        """--rebuild --dry-run은 미리 보기라 컬렉션을 지우지 않음 (키워드만이어도)"""
+        self.run_sync(FakeEmbed())
+        for kw in ({}, {"keywords_only": True}):
+            embed = FakeEmbed()
+            self.assertEqual(self.run_sync(embed, rebuild=True, dry_run=True, **kw), 0)
+            self.assertEqual(embed.texts, [])
+            self.assertEqual(self.articles().count(), 3)
+            self.assertEqual(self.client.get_collection(ne.KEYWORD_COLLECTION).count(), 3)
+
+    def test_keyword_gone_from_db_is_deleted(self):
+        """DB에서 사라진 키워드(사전이 바뀌어 동의어·하위어가 됨)는 추천에 남지 않게 지움, 임베딩은 다시 안 함"""
+        self.run_sync(FakeEmbed())
+        with session_scope(self.engine) as s:
+            s.execute(ArticleTag.__table__.delete().where(ArticleTag.keyword_text == "공급망"))
+        embed = FakeEmbed()
+        self.assertEqual(self.run_sync(embed, keywords_only=True), 0)
+        self.assertEqual(embed.texts, [])
+        self.assertEqual(sorted(self.client.get_collection(ne.KEYWORD_COLLECTION).get()["ids"]), ["배터리", "화장품"])
+
+    def test_metadata_change_updates_without_embedding(self):
+        """본문은 같고 키워드·국가만 바뀌면 다시 임베딩하지 않고 메타데이터만 갱신 → 새 키워드로 검색됨"""
+        self.run_sync(FakeEmbed())
+        with session_scope(self.engine) as s:
+            s.add(ArticleTag(article_id=2, keyword_text="공급망"))
+            s.add(ArticleTag(article_id=2, country_code="US"))
+        embed = FakeEmbed()
+        self.assertEqual(self.run_sync(embed), 0)
+        self.assertEqual([t for t in embed.texts if ":" in t or "\n" in t], [])   # 기사 조각은 다시 임베딩 안 함
+        meta = self.articles().get(ids=["2:0"], include=["metadatas"])["metadatas"][0]
+        self.assertEqual((meta["keywords"], meta["countries"]), (["화장품", "배터리", "공급망"], ["JP", "US"]))
+        hits = ne.search("화장품", n=5, keyword="공급망", country="US", client=self.client, embed=embed)
+        self.assertIn("2:0", [h[0] for h in hits])
+
+    def test_partly_embedded_article_is_redone(self):
+        """중간에 멈춰 조각이 일부만 들어간 기사는 다음 실행에서 그 기사만 다시 넣음"""
+        self.run_sync(FakeEmbed())
+        self.articles().delete(ids=["1:1"])
+        embed = FakeEmbed()
+        self.assertEqual(self.run_sync(embed), 0)
+        self.assertEqual(len(embed.texts), 2)   # 1번 기사 조각 2개만
+        self.assertEqual(sorted(self.articles().get()["ids"]), ["1:0", "1:1", "2:0"])
+
     def test_search_filters_by_country_keyword_and_date(self):
         embed = FakeEmbed()
         self.run_sync(embed)
