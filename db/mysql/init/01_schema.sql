@@ -399,8 +399,8 @@ CREATE VIEW v_import_region_month AS SELECT s.trade_month,c.region_id,SUM(s.amou
 
 CREATE VIEW v_import_continent_month AS SELECT v.trade_month,r.parent_id AS continent_id,SUM(v.amount_usd) AS amount_usd FROM v_import_region_month v JOIN market_region r ON r.region_id=v.region_id GROUP BY v.trade_month,r.parent_id;
 
-CREATE VIEW v_article_country_day AS SELECT a.published_date,t.country_code,COUNT(DISTINCT a.article_id) AS article_count FROM article a JOIN article_tag t ON t.article_id=a.article_id WHERE a.source_code='KOTRA_MARKET' AND t.country_code IS NOT NULL GROUP BY a.published_date,t.country_code;
+CREATE VIEW v_article_country_day AS SELECT a.published_date,t.country_code,COUNT(DISTINCT a.article_id) AS article_count FROM article a JOIN article_tag t ON t.article_id=a.article_id WHERE a.source_code IN ('KOTRA_MARKET','HANKYUNG','FNNEWS','KOTRA_SHORT_NEWS') AND t.country_code IS NOT NULL GROUP BY a.published_date,t.country_code;
 
-CREATE VIEW v_article_day AS SELECT published_date,COUNT(DISTINCT article_id) AS article_count FROM article WHERE source_code='KOTRA_MARKET' GROUP BY published_date;
+CREATE VIEW v_article_day AS SELECT published_date,COUNT(DISTINCT article_id) AS article_count FROM article WHERE source_code IN ('KOTRA_MARKET','HANKYUNG','FNNEWS','KOTRA_SHORT_NEWS') GROUP BY published_date;
 
 CREATE VIEW v_country_cluster AS SELECT m.model_run_id,m.train_start,m.train_end,m.model_name,m.created_at,j.country_code,j.growth_class,j.growth_rate,j.amount_usd,j.volatility FROM model_run m JOIN JSON_TABLE(m.country_results_json,'$[*]' COLUMNS(country_code VARCHAR(12) PATH '$.country_code',growth_class VARCHAR(20) PATH '$.growth_class',growth_rate DECIMAL(18,6) PATH '$.growth_rate' NULL ON EMPTY,amount_usd DECIMAL(24,2) PATH '$.amount_usd',volatility DECIMAL(18,6) PATH '$.volatility' NULL ON EMPTY)) AS j WHERE m.status='SUCCESS';
