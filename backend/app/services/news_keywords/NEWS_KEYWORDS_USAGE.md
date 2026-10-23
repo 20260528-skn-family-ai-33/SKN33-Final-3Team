@@ -274,6 +274,8 @@ python -m backend.app.scheduler.jobs.keyword_topic_load
 python -m backend.app.scheduler.jobs.news_embed --keywords-only
 ```
 
+아래 결과 파일은 모두 코드로 다시 만들 수 있어 git에서 제외합니다(`data/` 전체 제외). 저장소에는 코드만 올립니다.
+
 | 결과 파일 | 위치 | 내용 |
 |---|---|---|
 | `synonyms.csv` · `hypernyms.csv` · `topic_categories.csv` | `data/news_keywords/` | 동의어 사전 · 상위어 사전 · 분류표 (코드로 만든 결과) |

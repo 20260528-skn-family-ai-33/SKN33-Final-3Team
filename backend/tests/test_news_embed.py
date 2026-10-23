@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import chromadb
 from sqlalchemy import update
@@ -54,6 +56,38 @@ class ChunkTest(unittest.TestCase):
         doc, meta = docs["1:0"]
         self.assertEqual(doc, "[2026-01-02] 제목\n제목")
         self.assertNotIn("countries", meta)  # 빈 목록은 메타데이터에 넣지 않음
+
+
+class UsageTest(unittest.TestCase):
+    def test_openai_tokens_are_summed_with_cost(self):
+        res = lambda n, k: SimpleNamespace(data=[SimpleNamespace(embedding=[0.1])] * k,
+                                           usage=SimpleNamespace(total_tokens=n))
+        client = mock.Mock()
+        client.embeddings.create.side_effect = [res(600_000, 2), res(400_000, 1)]
+        with mock.patch.object(ne, "OpenAI", return_value=client), \
+                mock.patch.object(ne, "dotenv_values", return_value={"OPENAI_API_KEY": "test"}):
+            embed = ne.openai_embed()
+            embed(["a", "b"])
+            embed(["c"])
+        self.assertEqual(embed.usage["tokens"], 1_000_000)
+        self.assertEqual(ne.usage_text(embed), " | 토큰 1,000,000 (약 $0.13)")
+
+    def test_get_all_reads_every_page(self):
+        client = chromadb.EphemeralClient()
+        if "paging" in [c.name for c in client.list_collections()]:
+            client.delete_collection("paging")
+        col = client.create_collection("paging", embedding_function=None)
+        col.add(ids=[f"{i}" for i in range(7)], documents=[f"d{i}" for i in range(7)],
+                metadatas=[{"n": i} for i in range(7)], embeddings=[[float(i), 1.0] for i in range(7)])
+        got = ne.get_all(col, ["metadatas", "documents"], page=3)   # 3 + 3 + 1
+        self.assertEqual(sorted(got["ids"], key=int), [f"{i}" for i in range(7)])
+        self.assertEqual(sorted(m["n"] for m in got["metadatas"]), list(range(7)))
+        self.assertEqual(len(got["documents"]), 7)
+        self.assertEqual(len(ne.get_all(col, [], page=7)["ids"]), 7)   # 딱 맞아떨어지는 경우 (7 + 0)
+
+    def test_fake_embed_has_no_usage_text(self):
+        self.assertEqual(ne.usage_text(FakeEmbed()), "")
+        self.assertEqual(ne.usage_text(None), "")
 
 
 class NewsEmbedTest(unittest.TestCase):
