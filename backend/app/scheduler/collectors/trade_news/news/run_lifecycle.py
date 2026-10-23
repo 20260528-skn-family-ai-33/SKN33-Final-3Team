@@ -6,7 +6,9 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
-from news.save import KST
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
 
 GLOBAL = '_global'
 
@@ -30,6 +32,17 @@ def read_record(path):
     except (ValueError, UnicodeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def require_current_job(root, stage):
+    """crawler.lock 안에서 호출. 교체되거나 끝난 예약의 늦은 자식은 요청·DB 쓰기 전에 중단합니다."""
+    expected = os.environ.get('TRADE_NEWS_JOB_RUN_ID')
+    if not expected:
+        return  # 수동 CLI는 기존 동작을 유지합니다.
+    current = read_record(Path(root) / 'current_job.json') or {}
+    if (current.get('run_id') != expected or current.get('status') != 'running'
+            or current.get('stage') != stage):
+        raise ValueError('현재 일일 작업이 아닌 자식 실행입니다')
 
 
 def new_run(target, sites, started_at):

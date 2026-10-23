@@ -77,6 +77,29 @@ if __name__ == "__main__":
             await real_sleep(0)
         save.time = traffic.time = SimpleNamespace(time=lambda: clock[0])
         traffic.asyncio = SimpleNamespace(sleep=advance)
+    if os.environ.get('OFFLINE_BATCH_DB'):
+        # 시험 전용 SQLite만 주입. 운영 명령이나 접속 설정은 변경하지 않습니다.
+        from sqlalchemy import create_engine
+        import news.batch_history as history
+        history.make_history_engine = lambda: create_engine('sqlite:///' + os.environ['OFFLINE_BATCH_DB'])
+        from backend.app.services import news_schema
+        # 관리자 ERD 스냅샷도 시험 폴더에만 씁니다. 실제 정책·데이터 폴더는 사용하지 않습니다.
+        news_schema.ROOT = ROOT / 'policy'
+        news_schema.SNAPSHOT_DIR = ROOT / 'snapshots'
+    if os.environ.get('OFFLINE_PAUSE_STAGE'):
+        # 부모만 종료되는 시험: 자식은 crawler.lock을 가진 채 대기하고 해제 파일로 종료시킵니다.
+        import news.run_lifecycle as lifecycle
+        original_guard = lifecycle.require_current_job
+        def paused_guard(root, stage):
+            if stage == os.environ['OFFLINE_PAUSE_STAGE']:
+                (ROOT / 'child_started.json').write_text(json.dumps({'pid': os.getpid(), 'stage': stage}))
+                deadline = time.monotonic() + 25
+                while not (ROOT / 'release_child').exists():
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('시험 자식 대기 시간 초과')
+                    time.sleep(0.02)
+            return original_guard(root, stage)
+        lifecycle.require_current_job = paused_guard
     from news import settings
     settings.DOWNLOAD_HANDLERS = {
         "http": "offline_runner.OfflineHandler",
@@ -93,7 +116,14 @@ if __name__ == "__main__":
         SavePipeline.process_item = fail_save
     # 강제 종료 시험은 별도 시험 프로세스만 종료합니다. 실제 DB·네트워크를 사용하지 않습니다.
     mode = os.environ.get('OFFLINE_FAULT_MODE')
-    if mode == 'after_db_commit':
+    if mode == 'after_article_commit':
+        from news.mysql_store import MySQLArticleStore
+        original_article_save = MySQLArticleStore.save
+        def crash_after_article_commit(self, *args, **kwargs):
+            original_article_save(self, *args, **kwargs)
+            os._exit(77)
+        MySQLArticleStore.save = crash_after_article_commit
+    elif mode == 'after_db_commit':
         from news.save import Store
         original_save = Store.save_article
         def crash_after_commit(self, article):
@@ -133,7 +163,7 @@ if __name__ == "__main__":
     import sys
     from types import SimpleNamespace
     entry = os.environ.get("OFFLINE_ENTRYPOINT", "crawl")
-    if entry in ("collect", "daily_collect"):
+    if entry == "collect":
         import collect
         real_run = collect.subprocess.run
         def offline_child(args, cwd, check):
@@ -148,6 +178,17 @@ if __name__ == "__main__":
         # 실행 명령 생성은 실제 래퍼를 사용하고, 자식 실행만 가상 HTTP 환경에서 수행.
         collect.subprocess.run = offline_child
         runpy.run_path(str(Path(collect.__file__).with_name(entry + ".py")), run_name="__main__")
+    elif entry == 'daily_collect':
+        # 운영과 같이 수집기는 현재 시험 프로세스에서 직접 실행됩니다.
+        import daily_collect
+        runpy.run_path(daily_collect.__file__, run_name='__main__')
+    elif entry == 'load_project':
+        # 실제 적재 CLI에도 시험용 SQLite만 주입합니다.
+        import load_project
+        if not os.environ.get('OFFLINE_BATCH_DB'):
+            raise AssertionError('시험용 SQLite 경로 필요')
+        load_project.make_project_engine = history.make_history_engine
+        raise SystemExit(load_project.main())
     else:
         from crawl import main
         main()

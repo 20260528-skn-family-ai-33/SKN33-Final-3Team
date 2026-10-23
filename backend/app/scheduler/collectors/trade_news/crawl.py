@@ -15,7 +15,7 @@ from news.urls import article_url, site_of
 from news.run_summary import summarize_run
 from news.dictionary import load_dictionary
 from news.daily import yesterday
-from news.run_lifecycle import new_run, begin_run, publish_run, atomic_json
+from news.run_lifecycle import new_run, begin_run, publish_run, atomic_json, require_current_job
 from types import SimpleNamespace
 
 
@@ -37,6 +37,7 @@ def main():
     parser.add_argument("--resume-site", choices=["hankyung", "fnnews"], help="원인 해결 후 수동 중단 해제")
     parser.add_argument("--requeue-url", help="파서 수정 후 실패 URL 한 건을 다시 대기열에 등록")
     parser.add_argument('--daily-target', type=date.fromisoformat, help='일일 처리 대상 날짜를 실행 전체에 고정')
+    parser.add_argument("--record-batch-run", action="store_true", help="공통 DB에 실행 이력 기록 (기사 MySQL 적재는 하지 않음)")
     args = parser.parse_args()
     # 날짜 없는 탐색은 일일 실행으로 맞춰 과거 대기열까지 처리하지 않습니다.
     # 명시한 날짜·사이트·목록은 수동 작업 범위로 유지합니다.
@@ -90,7 +91,10 @@ def main():
     lock = FileLock(str(args.data_dir / "crawler.lock"))
     try:
         with lock.acquire(timeout=0):
+            if not admin:
+                require_current_job(args.data_dir, 'collection')
             store = None
+            batch = None
             stage='initialization'
             started_at=datetime.now(KST).isoformat()
             run = new_run(args.daily_target.isoformat() if args.daily_target else None,
@@ -98,7 +102,12 @@ def main():
             try:
                 if run:
                     begin_run(args.data_dir, run)
+                    if args.record_batch_run:
+                        from news.batch_history import BatchHistory
+                        batch = BatchHistory(args.data_dir, 'COLLECT', args.sites, since, args.until,
+                                             attempt=run['attempt_id'], started_at=started_at).start()
                 store = Store(args.data_dir)
+                store.batch_history = batch
                 store.event_target = args.daily_target.isoformat() if args.daily_target else None
                 if args.status:
                     for site in args.sites:
@@ -184,8 +193,12 @@ def main():
                 raise
             finally:
                 # 정상 경로의 내보내기를 반복하지 않습니다. 저장된 export_pending은 다음 실행에서 복구합니다.
-                if store is not None:
-                    store.close()
+                try:
+                    if store is not None:
+                        store.close()
+                finally:
+                    if batch is not None:
+                        print('batch_run:', json.dumps(batch.finish(), ensure_ascii=False))
     except Timeout:
         raise SystemExit("같은 데이터 폴더를 사용하는 수집기가 이미 실행 중입니다.")
 

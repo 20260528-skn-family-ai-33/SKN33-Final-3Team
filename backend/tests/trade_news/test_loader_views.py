@@ -62,7 +62,7 @@ def test_views_include_real_sources_and_distinct_country(tmp_path):
         assert set(c.execute(text('SELECT source_code FROM article')).scalars())=={'KOTRA_MARKET','HANKYUNG','FNNEWS','OTHER'}
     db.dispose()
 
-def test_seed_mapping_migration_and_no_scheduler_registration():
+def test_seed_mapping_migration_and_scheduler_registration():
     b=ROOT/'backend/app/scheduler/collectors/trade_news'
     mapping=json.loads((b/'source_map.sample.json').read_text())
     seed=(ROOT/'db/mysql/init/06_service_option_seed.sql').read_text()
@@ -71,7 +71,7 @@ def test_seed_mapping_migration_and_no_scheduler_registration():
         assert f"('{code}', 'SOURCE'" in seed and f"('{code}', 'SOURCE'" in migration
     schema=(ROOT/'db/mysql/init/01_schema.sql').read_text()
     for v in re.findall(r'CREATE VIEW v_article_.*?;',schema):assert v.replace('CREATE VIEW','CREATE OR REPLACE VIEW') in migration
-    assert 'trade_news_daily' not in (ROOT/'backend/app/scheduler/main.py').read_text()
+    assert 'trade_news_daily.register_jobs(scheduler)' in (ROOT/'backend/app/scheduler/main.py').read_text()
     assert '/backend/app/scheduler/collectors/trade_news/data/' in (ROOT/'.gitignore').read_text()
 
 

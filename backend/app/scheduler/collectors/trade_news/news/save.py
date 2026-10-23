@@ -86,6 +86,9 @@ class Store:
             record.setdefault('target_date', self.event_target)
         with (self.root / "events.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        history = getattr(self, 'batch_history', None)
+        if history is not None:
+            history.event(record)
 
     def count_articles(self, site):
         return self.db.execute("SELECT COUNT(*) FROM articles WHERE site=?", (site,)).fetchone()[0]

@@ -3,6 +3,8 @@
 실행 (저장소 루트에서): python -m backend.app.scheduler.main
 
 등록된 잡
+- trade_news_daily: 매일 03:00(KST) 전날 기사 수집·검수 후 article 적재.
+  기본 일시중지이며 NEWS_DAILY_ENABLED=true일 때만 예약 활성화. 시작 즉시 실행하지 않습니다.
 - un_data_monthly: 매월 1일 03:00(KST) UN 변경분 갱신, 시작 10초 후에도 1회 점검.
   초기 CSV 적재가 필요하며, 체크포인트가 없으면 안내 후 UN 작업만 건너뜁니다.
 - hs_code_refresh: 매년 1월 1일 00:15(KST)에 HS 코드 연간 갱신(다운로드 → CSV → 적재).
@@ -194,6 +196,8 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV)
     # 켤 때마다 한 번: 꺼져 있던 동안 빠진 환율을 마지막 적재일부터 채움
     scheduler.add_job(fx_daily_load.run, "date", run_date=datetime.now(KST) + timedelta(seconds=30),
                       id="fx_daily_startup", replace_existing=True)
+    from backend.app.scheduler.jobs import trade_news_daily
+    trade_news_daily.register_jobs(scheduler)
     return scheduler
 
 
@@ -207,7 +211,9 @@ def main():
     logging.basicConfig(level=logging.INFO)
     scheduler = build_scheduler(args.un_state_dir, args.un_scope, args.un_api_env)
     for job in scheduler.get_jobs():
-        print(f"등록: {job.id} | 다음 실행 {job.trigger.get_next_fire_time(None, datetime.now(KST))}")
+        next_time = (getattr(job, "next_run_time", "pending"))
+        when = "일시중지" if next_time is None else job.trigger.get_next_fire_time(None, datetime.now(KST))
+        print(f"등록: {job.id} | 다음 실행 {when}")
     scheduler.start()
 
 

@@ -300,6 +300,8 @@ class ArticleSpider(scrapy.Spider):
             self.store.event("parse_failed", url=original, error=str(exc))
             self.finish_article(response)
             return
+        # 수신 건수는 추출 성공 기준이며 날짜·주제 검수 통과 건수와 구분합니다.
+        self.store.event('article_parsed', site=article['source_code'])
         # 키워드는 참고값입니다. 빈 배열이어도 본문 검수로 전달합니다.
         if not self.in_period(article["published_at"], response.meta.get('queue_period')):
             self.store.mark(original, "filtered")
