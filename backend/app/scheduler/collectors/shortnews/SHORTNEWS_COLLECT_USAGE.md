@@ -7,9 +7,14 @@
 2. 단신속보뉴스 API를 페이지별로 호출합니다.
 3. 원본 CSV, 원본 기사 객체 JSON, 수집 통계를 저장합니다.
 
-전처리와 MySQL 적재는 포함하지 않습니다. `news_collect.py`가 없어도 실행할 수 있습니다.
+이 수집 코드 자체에는 전처리와 MySQL 적재가 포함되지 않습니다. `news_collect.py`가 없어도 실행할 수 있습니다.
+저장한 원본의 MySQL 적재는 별도 `scheduler/jobs/shortnews_load.py`로 실행합니다.
+매핑·실행법은 [SHORTNEWS_DB_USAGE.md](../../../services/SHORTNEWS_DB_USAGE.md)를 참고합니다.
+매일 자동 실행은 통합 스케줄러의 `shortnews_daily`가 담당합니다. 오전 3시(KST)에 전날 전체 페이지를
+수집한 뒤 MySQL에 적재하며, 아래 독립 수집 명령의 기본 전체 기간 조회 동작은 유지합니다.
 해외시장뉴스의 본문 조회 옵션 `search8=Y`는 사용하지 않습니다.
-API가 제공하는 개요내용 `smmarCn`과 원문 링크를 보존하며 원문 사이트 본문을 추가 수집하지 않습니다.
+API가 제공하는 본문 HTML `nttCn`과 원문 링크를 보존하며 원문 사이트 본문을 추가 수집하지 않습니다.
+응답에 `body`, `smmarCn` 등 추가 필드가 있으면 원본 CSV·JSON에 함께 보존합니다.
 
 API 안내: https://www.data.go.kr/data/15122662/openapi.do
 
@@ -88,7 +93,7 @@ python backend/app/scheduler/collectors/shortnews/shortnews_collect.py --env "C:
 | `shortnews_raw.json` | 파싱한 원본 기사 객체 목록 |
 | `shortnews_collection.json` | 데이터 종류, API 전체 건수, 수집 건수, 수집 완료 여부 |
 
-기본 컬럼은 `kbc`, `nttSn`, `nttSj`, `smmarCn`, `regn`, `nat`, `othbcDt`,
+기본 컬럼은 `kbc`, `nttSn`, `nttSj`, `nttCn`, `regn`, `nat`, `othbcDt`,
 `kotraNewsUrl`, `realAtfileInfoList`이며 추가 응답 필드도 저장합니다.
 첨부파일 중첩 정보는 CSV 셀에 JSON 문자열로, JSON 파일에는 중첩 구조로 보존합니다.
 HTML은 제거하지 않습니다. CSV의 null과 빈 문자열은 모두 빈칸으로 표시되므로 JSON으로 구분합니다.
@@ -107,7 +112,10 @@ XML 응답도 기사 객체를 JSON으로 변환해 저장하며 원본 XML 전�
 전체 수집과 실제 XML API 호출은 아직 실행하지 않았습니다.
 
 현재는 수집 완료 후 파일을 저장합니다. 수집 도중 실패하면 그동안 받은 기사도 저장되지 않으며
-자동 재개 기능은 없습니다. 수집 중 API 목록이 갱신될 수 있어 고정 시점 스냅샷은 보장하지 않습니다.
+독립 수집 명령에는 자동 재개 기능이 없습니다. 통합 스케줄러의 `shortnews_daily`는 별도 날짜별 상태로
+실패·미완료·중단 기간을 다음 정기 실행 또는 재시작 때 처음 페이지부터 다시 수집합니다.
+이전에 받은 기사 ID 묶음이 다시 나타나면 페이지 순환으로 중단하고 미완료로 기록합니다.
+수집 중 API 목록이 갱신될 수 있어 고정 시점 스냅샷은 보장하지 않습니다.
 
 ## 저장소 배치 안내
 

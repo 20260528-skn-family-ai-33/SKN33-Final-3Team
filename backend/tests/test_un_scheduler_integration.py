@@ -24,7 +24,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         before=datetime.now(scheduler.KST)
         s=scheduler.build_scheduler(self.state,Path('custom-scope'),Path('custom-env'))
         jobs={j.id:j for j in s.get_jobs()}
-        self.assertEqual(len(jobs),10)  # HS 3 + UN 3 + 수출입 2 + 환율(fx_daily_load·fx_daily_startup) 2
+        self.assertEqual(len(jobs),12)  # 기존 10개 + 단신속보 정기·시작 복구
         start=jobs['un_data_startup'].trigger.run_date
         self.assertTrue(before+timedelta(seconds=9)<=start<=datetime.now(scheduler.KST)+timedelta(seconds=11))
         j=jobs['un_data_monthly'];self.assertEqual(j.max_instances,1)
@@ -73,7 +73,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         with mock.patch.object(scheduler,'BlockingScheduler',BackgroundScheduler), mock.patch.object(job,'execute_once',side_effect=RuntimeError('API down')), mock.patch.object(scheduler.embed,'run',return_value='HS_OK'):
             s=scheduler.build_scheduler(self.state)
             s.add_listener(listener,EVENT_JOB_EXECUTED|EVENT_JOB_ERROR)
-            for name in ['hs_code_refresh',scheduler.RETRY_JOB_ID,'un_data_monthly']:s.remove_job(name)
+            for name in [j.id for j in s.get_jobs() if j.id not in ('un_data_startup','hs_code_embed')]:s.remove_job(name)
             for name in ['un_data_startup','hs_code_embed']:s.reschedule_job(name,trigger='date',run_date=datetime.now(scheduler.KST))
             s.start()
             try:self.assertTrue(done.wait(4))
