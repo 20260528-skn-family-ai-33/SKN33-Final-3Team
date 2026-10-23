@@ -56,6 +56,10 @@ class MaskTest(unittest.TestCase):
         r["cntntSumar"] = ""
         self.assertEqual(nl.article_row(r)["body_masked"], "제목")
 
+    def test_title_html_entities_are_unescaped(self):
+        row = nl.article_row(raw("1", "2026-01-01", title="AI&middot;데이터로 &lsquo;소비&rsquo; 바뀐 &amp;#39;K&#39; 시장&hellip;"))
+        self.assertEqual(row["title"], "AI·데이터로 ‘소비’ 바뀐 'K' 시장…")
+
 
 class LatestRawTest(unittest.TestCase):
     def test_latest_end_date_then_longest_period(self):

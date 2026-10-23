@@ -7,12 +7,14 @@
 규칙
 - body_masked: HTML 태그·스크립트를 벗겨 글만 남기고 이메일·전화번호를 [이메일]·[전화번호]로 가립니다.
   본문이 비면 요약(cntntSumar), 그것도 없으면 제목을 넣습니다 (NOT NULL 컬럼).
+- title: 원본 제목의 HTML 문자(&#39;·&middot;·&lsquo; 등, 약 2,400건)를 글자로 바꿔 넣습니다.
 - 키워드 태그: kw_topic(동의어 정리 후 주제어). 사용자 블락은 저장값을 바꾸지 않고 보여 줄 때 거릅니다 (keyword_block.py).
 - 국가 태그: country_all 중 country 테이블에 있는 코드만. 품목 태그: hs6 중 hs_code 테이블에 있는 (코드, 판)만.
   hs_ver는 발행일에 적용되는 판입니다 (hs_code_build.hs_ver_for: 2022~2027 → HS2022).
 - 일별 집계: 한 기사는 같은 날 같은 키워드·품목을 1건으로 셉니다 (DISTINCT article_id).
   국가별 행과 국가 조건 없는 전체 행(country_code NULL)을 함께 만듭니다. 품목은 HS6 태그와 그 앞 4자리 HS4를 셉니다.
 """
+import html
 import re
 from collections import defaultdict
 from html.parser import HTMLParser
@@ -84,12 +86,20 @@ def _cut(value, column):
     return str(value or "").strip()[:LIMITS[column]]
 
 
+def plain_title(value):
+    """제목의 HTML 문자(&#39;·&middot;·&lsquo; …)를 글자로 바꿉니다. &amp;#39;처럼 두 번 감싼 것까지 풉니다."""
+    text = str(value or "")
+    for _ in range(2):
+        text = html.unescape(text)
+    return _cut(re.sub(r"\s+", " ", text), "title")
+
+
 def article_row(raw):
     """원본 CSV 한 행(dict) → article 행."""
-    body = mask(html_to_text(raw.get("newsBdt"))) or mask(str(raw.get("cntntSumar") or "").strip()) \
-        or _cut(raw.get("newsTitl"), "title")
+    title = plain_title(raw.get("newsTitl"))
+    body = mask(html_to_text(raw.get("newsBdt"))) or mask(html_to_text(raw.get("cntntSumar"))) or title
     return {"source_code": SOURCE_CODE, "external_id": str(raw["bbstxSn"]).strip(),
-            "title": _cut(raw.get("newsTitl"), "title"), "published_date": str(raw["othbcDt"])[:10],
+            "title": title, "published_date": str(raw["othbcDt"])[:10],
             "source_url": _cut(raw.get("kotraNewsUrl"), "source_url"), "body_masked": body,
             "category": _cut(raw.get("infoCl"), "category") or None}
 

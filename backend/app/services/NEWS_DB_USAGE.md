@@ -59,8 +59,8 @@ python -m backend.app.scheduler.jobs.news_load --raw data/news/news_raw_20220101
 | 테이블 | 컬럼 ← 원본 | 규칙 |
 |---|---|---|
 | `article` | `source_code` ← `KOTRA_MARKET` | 출처가 `service_option`에 없으면 처음 실행 때 SOURCE 행으로 자동 등록 (`batch_log.ensure_source`) |
-| | `external_id` ← `bbstxSn`, `title` ← `newsTitl`, `published_date` ← `othbcDt` 앞 10자리, `source_url` ← `kotraNewsUrl`, `category` ← `infoCl` | 제목 600자·URL 2,048자·분류 120자까지 |
-| | `body_masked` ← `newsBdt` | HTML 태그·스크립트를 벗기고 이메일·전화번호를 `[이메일]`·`[전화번호]`로 가림. 본문이 비면 요약(`cntntSumar`), 그것도 없으면 제목 |
+| | `external_id` ← `bbstxSn`, `title` ← `newsTitl`, `published_date` ← `othbcDt` 앞 10자리, `source_url` ← `kotraNewsUrl`, `category` ← `infoCl` | 제목 600자·URL 2,048자·분류 120자까지. 제목의 HTML 문자(`&#39;`·`&middot;`·`&lsquo;` 등, 2,431건)는 글자로 바꿈 (두 번 감싼 `&amp;#39;`까지) |
+| | `body_masked` ← `newsBdt` | HTML 태그·스크립트를 벗기고 이메일·전화번호를 `[이메일]`·`[전화번호]`로 가림. 본문이 비면 요약(`cntntSumar`, 같은 방식으로 정리), 그것도 없으면 제목 |
 | `article_tag` | `keyword_text` ← `kw_topic` | 동의어 정리 후 주제어. 사용자 블락은 저장값을 바꾸지 않고 보여 줄 때 거름 (`keyword_block.py`) |
 | | `country_code` ← `country_all` | `country` 테이블에 있는 코드만 (없는 코드는 빼고 경고) |
 | | `hs_code`·`hs_ver` ← `hs6` | `hs_code` 테이블에 있는 (코드, 판)만. 판은 발행일 기준 (`hs_ver_for`: 2022~2027 → HS2022) |
@@ -79,7 +79,8 @@ python -m backend.app.scheduler.jobs.news_load --raw data/news/news_raw_20220101
 - 키워드 결과가 있는 기사의 태그를 교체합니다. 관리자 ERD의 수동 지정 플래그가 켜진 국가·HS 태그는 보존합니다.
 - 일별 집계는 입력 기사의 발행일(발행일이 바뀐 기사는 예전 날짜도)만 지우고, 그날 DB에 있는 **모든 출처** 기사로 다시 셉니다.
   나중에 단신속보가 같은 테이블에 들어와도 함께 셉니다.
-- 키워드 결과가 없는 기사(①과 ②의 입력이 다를 때)는 기사만 넣고 기존 태그를 보존합니다 (신규 기사는 태그 없음; 경고).
+- 키워드 결과가 없는 기사(①과 ②의 입력이 다를 때, ②를 일부 기간만 돌렸을 때)는 기사만 갱신하고 기존 태그는 그대로 둡니다
+  (새 기사면 태그 없음, 경고).
 - `hs_code` 테이블이 비어 있으면 품목 태그·집계 0건으로 넘어갑니다 (경고). `hs_code_load` 후 다시 실행하면 채워집니다.
 - 전체를 한 트랜잭션으로 넣습니다. 중간에 실패하면 모두 롤백되어 아무것도 반영되지 않습니다.
 - 같은 저장소 경로·DB를 쓰는 해외시장뉴스/단신속보 적재기는 `data/news/load_locks/`의 공용 잠금으로
@@ -158,6 +159,8 @@ WHERE t.keyword_text IN ('AI', '인공지능', 'K뷰티', '전기차보조금', 
 
 ### 결과 파일
 
+실행할 때마다 만들어지는 확인용 파일입니다. 코드는 이 파일들을 읽지 않고(기준은 DB), 모두 git에서 제외합니다.
+
 | 파일 | 내용 |
 |---|---|
 | `data/news_keywords/keyword_topic.csv` | 적재한 값 전체 (keyword_text · status · canonical_text · 대분류 · 중분류 · 기사수 · 이유) |
@@ -187,8 +190,9 @@ python -m backend.app.scheduler.jobs.news_embed --rebuild
 ```
 
 - 모델: `text-embedding-3-large`(3,072차원). `hs_code_embed`와 같은 모델이라 검색 질의 임베딩을 하나로 씁니다.
-- 처음 전체 (2022.01~2026.10, 14,607건): 조각 105,272개 + 키워드 24,226개, 약 9,550만 자. 첫 임베딩 비용은 약 9~15달러(추정),
-  요청 1,053번이라 OpenAI 계정의 분당 한도에 따라 30분~2시간 걸립니다. 이후 매일은 새 기사만이라 비용이 거의 없습니다.
+- 처음 전체 (2022.01~2026.10, 14,607건): 조각 105,272개(조각당 평균 약 843토큰) + 키워드 24,037개. 실제 사용량은
+  약 8,890만 토큰 · **약 $11.5**, 실행 시간은 약 50분이었습니다(배치 100조각에 2초 안팎, 2026-10-22). 이후 매일은 새 기사만이라
+  하루 약 30건 · 215조각 기준 약 $0.02입니다.
 - 조각: 본문을 문단(줄) 단위로 약 1,000자씩, 앞 조각의 끝 150자를 겹쳐 나눕니다. 조각마다 머리줄을 붙입니다.
   ```
   [2022-01-03 | CZ | 외부전문가 기고] [기고] 체코에서 거주용 부동산 구매정보
@@ -206,6 +210,10 @@ python -m backend.app.scheduler.jobs.news_embed --rebuild
 - `--dry-run`은 무엇도 지우거나 넣지 않습니다 (`--rebuild --dry-run`은 지운 뒤 새로 넣을 개수만 셈).
 - 실패하면 이미 추가한 배치는 남고, 실패한 조각은 컬렉션에 없으므로 다음 실행에서 다시 추가됩니다. 분당 한도(429)는 자동으로 기다렸다 재시도합니다.
 - `batch_run`에는 기록하지 않습니다(대상이 MySQL 테이블이 아님, `hs_code_embed`와 같음). 로그는 `data/news/logs/news_embed_<시각>.log`입니다.
+- 로그에는 배치마다 OpenAI가 센 누적 토큰과 예상 비용(`PRICE_PER_M` = 100만 토큰당 $0.13)이 남습니다.
+  예: `기사 조각 임베딩 10,000/58,755 | 토큰 8,331,144 (약 $1.08)`. OpenAI 가격이 바뀌면 `PRICE_PER_M`만 고칩니다.
+- 컬렉션은 5,000개씩 나눠 읽습니다(`get_all`). Chroma(SQLite)는 한 번에 약 3만 2천 개를 넘게 읽으면
+  `too many SQL variables`로 실패합니다. 검색에서 `article_id` 목록으로 거를 때도 한 번에 1,000개 이하로 넘깁니다.
 
 ### 검색
 
@@ -228,14 +236,14 @@ search_keywords("배터리", n=10)
 python -m unittest backend/tests/test_news_load.py backend/tests/test_news_embed.py backend/tests/test_keyword_topic_load.py
 ```
 
-예상 결과: `Ran 44 tests ... OK` (`test_news_load.py` 16 · `test_news_embed.py` 18 · `test_keyword_topic_load.py` 10, MySQL·OpenAI 없이 SQLite·가짜 임베딩·메모리 Chroma로 실행).
+예상 결과: `Ran 48 tests ... OK` (`test_news_load.py` 17 · `test_news_embed.py` 21 · `test_keyword_topic_load.py` 10, MySQL·OpenAI 없이 SQLite·가짜 임베딩·메모리 Chroma로 실행).
 중간의 `ERROR`·`WARNING` 로그는 실패 상황(테이블 없음, 없는 국가 코드, OpenAI 일시 오류, 모델 불일치)을 일부러 만든 테스트의 로그입니다.
 
 | 테스트 파일 | 확인하는 것 |
 |---|---|
-| `test_news_load.py` | 최신 원본 파일 고르기, HTML 벗기기·이메일·전화번호 가림(HS 범위·프로그램 이름 제외), 빈 본문 대체, 국가·전체 고유 기사 수, 기사·태그·집계·출처·batch_run 적재, 재실행 시 갱신·옛 태그 교체, 발행일 변경, 중복 ID, 키워드 결과 없는 기사, 일부 기간 결과여도 나머지 기사 태그 유지, 테이블 없음, 롤백 |
+| `test_news_load.py` | 최신 원본 파일 고르기, HTML 벗기기·이메일·전화번호 가림(HS 범위·프로그램 이름 제외), 제목 HTML 문자 정리, 빈 본문 대체, 국가·전체 고유 기사 수, 기사·태그·집계·출처·batch_run 적재, 재실행 시 갱신·옛 태그 교체, 발행일 변경, 중복 ID, 키워드 결과 없는 기사, 일부 기간 결과여도 나머지 기사 태그 유지, 테이블 없음, 롤백 |
 | `test_keyword_topic_load.py` | 상태 판정(분류·규칙(포함) 확정·3건 기준 PENDING), 동의어·하위어 → 최종 키워드, 분류 틀 23쌍·번호 유지, 재실행 갱신, 관리자 DB 수정 보존, 사라진 키워드 삭제(관리자 행은 보존), 결과 파일이 잠겨도 DB 적재, 사전이 없으면 적재 안 함, CSV에만 있는 키워드 포함, 없는 분야면 롤백 |
-| `test_news_embed.py` | 조각 나누기(문단·겹침·긴 문단·빈 본문), 메타데이터, 재실행 시 추가 없음·바뀐 기사만 교체, 키워드 기사 수 갱신, 키워드만(--keywords-only), dry-run(--rebuild여도 안 지움), 사라진 키워드 삭제, 키워드만 바뀌면 메타데이터만 갱신·마지막 키워드 삭제 반영, 국가·발행일이 바뀌면 다시 임베딩, 일부만 들어간 기사 다시 넣기, 국가·키워드·기간 검색, 모델 불일치 시 --rebuild, 실패 배치 재처리 |
+| `test_news_embed.py` | 조각 나누기(문단·겹침·긴 문단·빈 본문), 메타데이터, 재실행 시 추가 없음·바뀐 기사만 교체, 키워드 기사 수 갱신, 키워드만(--keywords-only), dry-run(--rebuild여도 안 지움), 사라진 키워드 삭제, 키워드만 바뀌면 메타데이터만 갱신·마지막 키워드 삭제 반영, 국가·발행일이 바뀌면 다시 임베딩, 일부만 들어간 기사 다시 넣기, 국가·키워드·기간 검색, 모델 불일치 시 --rebuild, 실패 배치 재처리, OpenAI 토큰·비용 집계, 컬렉션 나눠 읽기 |
 
 ## 실제 데이터 결과 (2022.01.03~2026.10.13, 14,607건)
 
@@ -250,6 +258,64 @@ python -m unittest backend/tests/test_news_load.py backend/tests/test_news_embed
 | `country` 에 없는 국가 코드 | 0개 |
 | 재실행 | 기사 번호·행 수·집계 합계가 그대로 (batch_run만 1건씩 늘어남) |
 | 소요 | 약 3분 (본문 HTML 정리가 대부분) |
+| 원본과 전수 대조 (2026-10-22) | 기사·제목·발행일·URL·본문·분류, 기사별 키워드·국가 태그, 일별 집계, 키워드 분류 연결 24개 항목 모두 일치. 제목 HTML 문자 0건, 본문에 남은 이메일·전화번호 0건(가린 기사 594건 · 105건) |
+| 국가가 없는 기사 | 55건 (모두 `KOTRA 본사`·`전세계` 등 국가가 정해지지 않은 기획리포트) |
+
+Chroma (2026-10-22, `news_embed` 완료 후):
+
+| 항목 | 결과 |
+|---|---|
+| `kotra_article` | 105,272조각 = 기사 14,607건 전부 (2022 22,690 · 2023 20,663 · 2024 20,551 · 2025 22,600 · 2026 18,768) |
+| `news_keyword` | 24,037개 |
+| 구조 점검 | id 형식 오류 0, 조각 번호 빠진 기사 0, 필수 메타데이터 없는 조각 0, 벡터 3,072차원·길이 1 |
+| `--dry-run` | 새로/다시 넣을 기사 0건 (Chroma 문서·메타데이터가 MySQL과 같음) |
+| 사용량 | 약 8,890만 토큰 · 약 $11.5 |
+
+### 확인 명령 (Chroma)
+
+저장소 루트에서 `python -c`로 실행합니다. PowerShell 5.1은 인자 안의 큰따옴표를 지우므로 코드에는 작은따옴표만 씁니다.
+
+```powershell
+# 1. 컬렉션 개수·설정 → kotra_article 105272 · news_keyword 24037, text-embedding-3-large · cosine
+$code = @'
+import chromadb
+c = chromadb.PersistentClient(path='chroma_data')
+for x in c.list_collections():
+    print(x.name, x.count(), x.metadata)
+'@
+python -c $code
+
+# 2. MySQL 기사와 Chroma 기사 비교 → 빠진 기사 0 · MySQL에 없는 기사 0
+$code = @'
+import chromadb
+from sqlalchemy import text
+from backend.app.db.session import make_engine
+from backend.app.scheduler.jobs.news_embed import get_all
+col = chromadb.PersistentClient(path='chroma_data').get_collection('kotra_article')
+ids_chroma = {m['article_id'] for m in get_all(col, ['metadatas'])['metadatas']}
+with make_engine().connect() as c:
+    ids_db = set(c.execute(text('select article_id from article')).scalars())
+print('MySQL', len(ids_db), '| Chroma', len(ids_chroma), '| 빠진 기사', len(ids_db - ids_chroma), '| MySQL에 없는 기사', len(ids_chroma - ids_db))
+'@
+python -c $code
+
+# 3. 검색 (질문 하나만 임베딩, 비용 거의 없음) → 모두 VN · 2025-01-01 이후, 베트남 화장품·소비재 규제 기사
+$code = @'
+from backend.app.scheduler.jobs.news_embed import search
+for id_, dist, doc, m in search('베트남 화장품 수입 규제가 강화되고 있다', n=5, country='VN', date_from='2025-01-01'):
+    print(round(dist, 3), m['published_date'], m.get('countries'), m['title'][:45])
+'@
+python -c $code
+
+# 4. 정확한 단어가 든 조각 → CBAM이 든 조각 299개 · 기사 99건
+$code = @'
+import chromadb
+col = chromadb.PersistentClient(path='chroma_data').get_collection('kotra_article')
+g = col.get(where_document={'$contains': 'CBAM'}, include=['metadatas'], limit=2000)
+print('조각', len(g['ids']), '| 기사', len({m['article_id'] for m in g['metadatas']}))
+'@
+python -c $code
+```
 
 ## 알려진 한계
 
