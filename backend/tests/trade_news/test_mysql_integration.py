@@ -1,41 +1,28 @@
-"""실제 MySQL용 회귀 테스트. 기본 실행에서는 연결조차 하지 않습니다."""
-import os,re
-from pathlib import Path
+"""기존 ERD의 실제 MySQL 회귀 시험. 기본 실행에서는 연결하지 않습니다."""
+import re
 import pytest
-from sqlalchemy import create_engine,inspect,text,event
-from sqlalchemy.engine import make_url
-from news.mysql_store import MySQLArticleStore,ArticleConflict
+from sqlalchemy import text, event
+from news.mysql_store import MySQLArticleStore, ArticleConflict
 from .helpers import prepared
-ROOT=Path(__file__).resolve().parents[3]
-pytestmark=pytest.mark.mysql_integration
+from .mysql_test_support import ROOT, empty_schema
+
+pytestmark = pytest.mark.mysql_integration
+
 
 @pytest.fixture
-def mysql(request):
-    if not request.config.getoption('--trade-news-mysql'):
-        pytest.skip('실제 MySQL 검증 미승인: --trade-news-mysql 필요')
-    url=make_url(os.environ['TRADE_NEWS_TEST_MYSQL_URL'])
-    if url.drivername!='mysql+pymysql' or not (url.database or '').startswith('test_'):
-        pytest.fail('mysql+pymysql 및 test_ 접두사의 전용 빈 DB 필요')
-    db=create_engine(url)
-    created=[]
-    try:
-        with db.connect() as c:
-            if inspect(c).get_table_names() or inspect(c).get_view_names():pytest.fail('빈 테스트 DB만 사용 가능')
-            c.rollback()
-            schema=(ROOT/'db/mysql/init/01_schema.sql').read_text()
-            # 실제 ERD DDL을 사용합니다. 국가·HS는 태그 FK 의존 테이블입니다.
-            for name in ('service_option','market_region','currency','country','hs_code','article','article_tag'):
-                ddl=re.search(r'CREATE TABLE '+name+r' \(.*?;(?=\s|$)',schema,re.S)
-                assert ddl is not None,name
-                c.execute(text(ddl.group()));created.append(name);c.commit()
-            c.execute(text("INSERT INTO service_option (option_code,option_type,label_ko,value_json,sort_order,enabled) VALUES ('HANKYUNG','SOURCE','test','{}',1,1)"));c.commit()
+def mysql(mysql_test_url):
+    schema = (ROOT/'db/mysql/init/01_schema.sql').read_text(encoding='utf-8')
+    statements = []
+    # 기존 회귀 시험과 동일한 실제 ERD 및 FK 의존 테이블을 사용합니다.
+    for name in ('service_option','market_region','currency','country','hs_code','article','article_tag'):
+        ddl = re.search(r'CREATE TABLE '+name+r' \(.*?;(?=\s|$)', schema, re.S)
+        assert ddl is not None, name
+        statements.append(ddl.group())
+    with empty_schema(mysql_test_url, statements) as db:
+        with db.begin() as conn:
+            conn.execute(text("INSERT INTO service_option (option_code,option_type,label_ko,value_json,sort_order,enabled) VALUES ('HANKYUNG','SOURCE','test','{}',1,1)"))
         yield db
-    finally:
-        if created:
-            with db.connect() as c:
-                for name in reversed(created):c.execute(text('DROP TABLE '+name))
-                c.commit()
-        db.dispose()
+
 
 def test_mysql_transaction_repeat_conflict_and_tags(mysql):
     starts=[]
