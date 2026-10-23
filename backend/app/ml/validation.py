@@ -7,11 +7,12 @@ import logging
 import platform
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 
 from backend.app.ml import features as F, market_model as M, sources as S
+from backend.app.ml.runtime import (ArtifactEnvironmentError, ensure_artifact_runtime, environment_message,
+                                    expected_runtime, runtime_versions)
 
 ROOT = Path(__file__).resolve().parents[3]
 log = logging.getLogger(__name__)
@@ -29,11 +30,36 @@ def file_sha256(path):
 
 def feature_summary(ds, complete_months=None):
     labeled = ds[ds.y_growth.notna()]
-    return {"rows": len(ds), "anchors": int(ds.anchor.nunique()),
+    return {"runtime": runtime_versions(), "rows": len(ds), "anchors": int(ds.anchor.nunique()),
             "first_anchor": str(ds.anchor.min().date()), "last_anchor": str(ds.anchor.max().date()),
             "labeled_rows": len(labeled), "labeled_anchors": int(labeled.anchor.nunique()),
             "customs_complete_months": complete_months,
             "feature_nonmissing": {c: int(ds[c].notna().sum()) for c in F.FEATURES}}
+
+
+def read_feature_cache(path, data_dir):
+    """버전이 다른 pickle을 읽기 전에 원인과 복구 방법을 안내한다."""
+    ensure_artifact_runtime(data_dir)
+    try:
+        return pd.read_pickle(path)
+    except ImportError as exc:
+        raise ArtifactEnvironmentError(environment_message(expected_runtime(data_dir), runtime_versions(),
+            f"피처 캐시 읽기 실패: {type(exc).__name__}: {exc}")) from exc
+
+
+def require_validation_success(payload):
+    """PDF 구조 검사와 전체 검증을 구분하고 마지막에도 실제 실패 원인을 표시한다."""
+    problems = list(payload.get("errors", []))
+    checks = payload.get("checks", [])
+    problems += [f"{c['name']}: {c['detail']}" for c in checks if not c["passed"]]
+    if not checks:
+        problems.append("산출물 검사가 실행되지 않았습니다.")
+    if not payload.get("unit_tests", {}).get("passed"):
+        problems.append("단위 테스트 실패 또는 미실행")
+    if not payload.get("pdf_check", {}).get("passed"):
+        problems.append("PDF 구조 검사 실패 또는 미실행")
+    if problems:
+        raise RuntimeError("검증 실패 (PDF 생성 성공과 별도):\n" + "\n".join(problems))
 
 
 def load_context(data_dir, external_dir=None):
@@ -153,13 +179,15 @@ def validate_saved_outputs(context, ds):
         merged = latest.merge(pred[["country_code", "hs6", "score"]], on=["country_code", "hs6"],
                               validate="one_to_one", how="inner")
         assert len(merged) == len(latest) == len(pred), "예측 대상 쌍 불일치"
-        model = joblib.load(data_dir / "models.joblib")["model_a"]
+        model = M.load_models(data_dir)["model_a"]
         values = model.predict(merged[F.FEATURES])
         np.testing.assert_allclose(values, merged.score.to_numpy(), rtol=1e-10, atol=1e-10)
         return f"저장 모델 재로딩 점수와 CSV {len(merged):,}행 일치"
 
     def promotion():
-        assert context["run_status"] == "accepted", "최신 학습 시도가 채택되지 않음"
+        assert context["run_status"] == "accepted", (
+            f"최근 학습 시도 상태: {context['run_status']}. 완료·채택 여부를 확인할 수 없습니다. "
+            f"현재 저장 모델 학습 시각: {meta.get('trained_at', '미확인')}")
         M.require_promotion(context["evaluation"], meta["promotion_metric"])
         return f"{meta['promotion_metric']}: 기준선 이상"
 

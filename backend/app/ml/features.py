@@ -14,7 +14,10 @@ from backend.app.ml.temporal import dated_external, join_known
 
 MIN_EXPORT_USD = 100_000  # 최근 12개월 수출이 이보다 작은 쌍은 노이즈라 뺀다
 HISTORY = 24  # growth_12m(최근 12개월 vs 직전 12개월)에 필요한 과거 월 수
-HORIZON = 12  # y를 보는 미래 월 수
+HORIZON = 12  # y를 보는 미래 월 수 (모델 B와 기본 모델 A)
+# 모델 A 정답 기간(개월) → (정답 열, 기준선 열). 6개월 정답의 비교 대상(1년 전 같은 6개월)은 기준월에 이미 지난 값이라,
+# 기준선도 "최근 6개월 수준이 이어진다"는 단순 지속 규칙(naive_6m)이어야 모델의 실제 기여를 잴 수 있다.
+A_TARGETS = {12: ("y_growth", "growth_12m"), 6: ("y_growth_6m", "naive_6m")}
 CATEGORICAL = ["region_id", "hs2"]
 FEATURES = [
     "log_exp_12m", "growth_12m", "growth_3m", "active_months", "cv_12m", "anomaly_ratio", "unit_trend",
@@ -217,7 +220,7 @@ def _lookup(index, values, keys):
     return np.where(pos >= 0, values[np.clip(pos, 0, None)] if len(index) else 0.0, 0.0)
 
 
-def build_dataset(data, min_export=MIN_EXPORT_USD):
+def build_dataset(data, min_export=MIN_EXPORT_USD, anchors=None):
     """관측 범위 내부 누락은 오류. 범위 이후의 미래 실적이 없는 최근 기준월은 y=NaN(예측 대상)."""
     exports = data["exports"]
     if exports.empty:
@@ -260,8 +263,11 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
     rel_sets, product_of = _related_sets(data.get("related"))
     row_group = np.array([product_of.get(h, "") for h in hs4])
     imp_hs4_codes = imp_hs4_index.get_level_values(0) if len(imp_hs4_index) else pd.Index([])
+    selected = None if anchors is None else {pd.Timestamp(a).to_period("M") for a in anchors}
     frames = []
     for t in range(HISTORY - 1, len(months)):
+        if selected is not None and months[t] not in selected:
+            continue
         # t월 R1은 t+1월에야 확정된다. t 이전 월만 보정하고 t월은 원금액을 쓴다.
         s12 = _window(corrected, t, 12) - adjustment[:, t]
         p12 = _window(corrected, t - 12, 12)
@@ -317,6 +323,7 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
             "imp_hs4_world_growth": _growth(i4, pi4),
             "imp_hs4_from_c_growth": _growth(ic4, pic4),
             "imp_exp_ratio_hs4": np.log1p(i4) - np.log1p(w4(s12)),
+            "naive_6m": _growth(a6, pa6),  # 6개월 정답 기준선 (피처 아님)
         })
         if t + HORIZON < len(months):
             future = corrected[:, t + 1:t + 1 + HORIZON].copy()
@@ -326,6 +333,13 @@ def build_dataset(data, min_export=MIN_EXPORT_USD):
             frame["future_cv"] = _ratio(future.std(axis=1), future.mean(axis=1))
         else:
             frame["y_growth"] = frame["future_cv"] = np.nan
+        if t + 6 < len(months):
+            # 6개월 정답은 계절 효과가 섞이지 않게 1년 전 같은 6개월(t-11~t-6)과 비교한다.
+            future6 = corrected[:, t + 1:t + 7].copy()
+            future6[:, -1] = amount[:, t + 6]
+            frame["y_growth_6m"] = _growth(future6.sum(axis=1), _window(corrected, t - 6, 6))
+        else:
+            frame["y_growth_6m"] = np.nan
         frames.append(frame[keep])
     if not frames:
         raise ValueError(f"학습 행이 없음: 실적이 최소 {HISTORY}개월 필요 (현재 {len(months)}개월)")

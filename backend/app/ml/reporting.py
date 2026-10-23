@@ -10,6 +10,29 @@ from backend.app.ml import features as F
 from backend.app.ml.validation import ROOT, file_sha256, load_context, read_json
 
 DEFAULT_PDF = ROOT / "output/pdf/ml_market_report.pdf"
+# 평가지표 상세 표 (evaluation["detail"]의 묶음, 키, 구분, 지표명). 보고용이며 채택 판단에는 쓰지 않는다.
+DETAIL_ROWS = [
+    *[(section, key, group, name)
+      for section, group in (("country", "국가별 품목 순위"), ("product", "품목별 국가 순위"))
+      for key, name in (("hit_at_5", "Hit@5"), ("top20_precision_at_5", "상위 20% Precision@5"),
+                        ("top20_recall_at_5", "상위 20% Recall@5"), ("top20_f1_at_5", "상위 20% F1@5"),
+                        ("grew_share_at_5", "추천 5개 중 실제 증가 비율"), ("ndcg_at_10", "NDCG@10"),
+                        ("spearman", "Spearman 순위상관"))],
+    *[("growth_direction", key, "증가 여부 분류", name)
+      for key, name in (("accuracy", "Accuracy"), ("precision", "Precision"), ("recall", "Recall"),
+                        ("f1", "F1 score"), ("roc_auc", "ROC-AUC"))],
+    *[("regression", key, "성장률 회귀", name)
+      for key, name in (("mae", "MAE (낮을수록 좋음)"), ("rmse", "RMSE (낮을수록 좋음)"), ("r2", "R²"),
+                        ("spearman", "Spearman 상관"))],
+]
+DETAIL_DEFINITIONS = [
+    ["Hit@5", "추천 5개 중 실제 성장 Top 5가 하나라도 있는 그룹의 비율"],
+    ["상위 20% P·R·F1@5", "정답 = 그룹 안 실제 성장 상위 20%. Precision은 추천 5개 중 정답 비율, Recall은 정답 중 추천 5개에 든 비율, F1은 둘의 조화평균"],
+    ["추천 5개 중 실제 증가 비율", "추천 5개 중 다음 12개월 수출이 실제로 늘어난(y>0) 비율"],
+    ["NDCG@10 · Spearman", "Top 10까지의 순서 품질과, 그룹 안 전체 순위가 실제 순위와 같은 정도(1이면 완전 일치)"],
+    ["증가 여부 분류", "전체 평가 행에서 '수출이 늘어난다(y>0)'를 점수>0으로 판정한 Accuracy·Precision·Recall·F1, 임계값 없이 본 ROC-AUC(0.5=무작위)"],
+    ["성장률 회귀", "예측 로그 성장값 자체의 오차. MAE·RMSE는 낮을수록, R²는 1에 가까울수록 좋고 0 이하는 전체 평균으로 찍는 것보다 못함"],
+]
 
 
 def _fonts():
@@ -261,6 +284,8 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
         ["관련 피처 비교", "같은 학습·평가 행에서 전체 피처 모델과 관련 품목 피처를 뺀 모델을 비교. 선택한 채택 지표가 높은 쪽을 사용, 동률이면 전체 유지"],
         ["저장 조건", "명시한 채택 지표가 기준선 이상이고 유한 값일 때 저장. 미평가 또는 기준선 미달이면 기존 산출물을 유지"],
         ["분포 변화", "반도체(HS4 8541·8542)와 나머지 품목군의 점수·평가 행·그룹 수를 별도로 기록"]], [100, width - 100])
+    add("보고용 추가 지표 (채택 판단에는 쓰지 않음)", "h2")
+    table([["지표", "정의"], *DETAIL_DEFINITIONS], [100, width - 100])
     add("NDCG는 순서의 품질을 나타내며 Top 5의 직접 일치율은 Precision@5로 확인한다. 모델 점수는 로그 성장 예측값으로, 진출 성공 확률을 뜻하지 않는다.")
     add("모델 B는 미래 실적의 5개 시장 유형을 분류하고 동일 행·5개 클래스의 macro-F1으로 과거 규칙 기준선과 비교하도록 설계됐다. 현재는 공개 시점을 만족하는 시장 정답·임계값이 없어 B 점수와 유형을 미판정으로 남겼다.", "small")
     add("현재 단일 평가월은 관련 피처 선택에도 사용됐다. 새로운 데이터 구간 또는 별도 최종 Holdout에서 재검증하기 전에는 독립 최종 성능으로 해석하지 않는다.", "small")
@@ -279,6 +304,16 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
     table(result_rows, [103, 92, 104, 98, width - 397])
     story.append(chart([c[0] for c in comparisons], [("국가별 NDCG@5",
         [c[1].get("model_a", {}).get("ndcg_at_5") for c in comparisons], teal)]))
+    add("평가지표 상세 (선택 모델 vs 기준선)", "h2")
+    detail = ev.get("detail", {})
+    detail_rows = [["구분", "지표", "모델", "기준선"]]
+    for section, key, group, name in DETAIL_ROWS:
+        detail_rows.append([group, name, *(num(detail.get(who, {}).get(section, {}).get(key))
+                                           for who in ("model_a", "baseline_a"))])
+    table(detail_rows, [120, 170, 90, width - 380], compact=True)
+    rate = detail.get("model_a", {}).get("growth_direction", {}).get("actual_rate")
+    add(f"평가 행 중 실제로 수출이 늘어난 비율은 {num(rate, 3)}이다. 증가 여부 분류의 Accuracy는 이 비율과 함께 읽는다. "
+        "미평가는 이 지표가 추가되기 전에 학습한 결과라는 뜻이다.", "small")
     add("선택 모델의 품목군별 점수", "h2")
     segment_rows = [["품목군", "행 / 평가 국가", "모델 NDCG@5", "기준선 NDCG@5"]]
     for key, label in (("semiconductor", "반도체"), ("other", "그 외")):

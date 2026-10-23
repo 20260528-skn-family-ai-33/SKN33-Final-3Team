@@ -26,14 +26,14 @@ def write_json(path, value):
 
 
 def train_for_report(data_dir, feature_cache, promotion_metric):
-    from backend.app.ml import features as F, market_model as M
+    from backend.app.ml import market_model as M
+    from backend.app.ml.artifacts import load_training_data
     from backend.app.ml.validation import feature_summary, file_sha256
     attempt_path = data_dir / "report_training_attempt.json"
     attempt = {"started_at": now(), "status": "running"}
     write_json(attempt_path, attempt)
     try:
-        data = F.load_data()
-        ds = F.build_dataset(data)
+        ds, data, data_info = load_training_data()
         summary = feature_summary(ds, len(data["complete_months"]))
         summary["source_sha256"] = {str(p.relative_to(ROOT)).replace("\\", "/"): file_sha256(p)
             for p in (ROOT / "backend/app/ml/features.py", ROOT / "backend/app/ml/sources.py")}
@@ -42,7 +42,7 @@ def train_for_report(data_dir, feature_cache, promotion_metric):
         write_json(data_dir / "features_snapshot_summary.json", summary)
         del data
         gc.collect()
-        metadata = M.train(ds, data_dir, promotion_metric=promotion_metric)
+        metadata = M.train(ds, data_dir, promotion_metric=promotion_metric, data_info=data_info)
         attempt.update(status="accepted", trained_at=metadata["trained_at"], evaluation=metadata["evaluation"])
     except M.PromotionRejected as exc:
         attempt.update(status="rejected", error=str(exc), evaluation=exc.report)
@@ -137,6 +137,9 @@ def main(argv=None):
     config = {"run_id": str(uuid.uuid4()), "data_dir": str(args.data_dir), "feature_cache": str(feature_cache),
               "output_dir": str(args.output_dir), "cv": args.cv, "folds": args.folds}
     try:
+        if not args.train:
+            from backend.app.ml.runtime import ensure_artifact_runtime
+            ensure_artifact_runtime(args.data_dir)
         executed = execute_notebook(config, timeout=args.timeout)
     except Exception as exc:
         failure_report(config, exc)

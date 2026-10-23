@@ -77,6 +77,13 @@ class FeatureTest(unittest.TestCase):
         self.assertEqual(row.region_id, 35)
         self.assertTrue(np.isnan(ds[ds.anchor == ds.anchor.max()].y_growth).all())  # 최근 기준월은 예측 대상
         self.assertEqual(ds.anchor.min(), pd.Timestamp("2023-12-01"))  # 24개월 이력부터
+        # 6개월 정답: 다음 6개월 vs 1년 전 같은 6개월
+        self.assertAlmostEqual(row.y_growth_6m, np.log1p(amt["2024-01":"2024-06"].sum())
+                               - np.log1p(amt["2023-01":"2023-06"].sum()))
+        self.assertAlmostEqual(row.naive_6m, np.log1p(amt["2023-07":"2023-12"].sum())
+                               - np.log1p(amt["2023-01":"2023-06"].sum()))  # 기준선: 최근 6개월이 이어진다고 가정
+        self.assertTrue(ds[ds.anchor == pd.Timestamp("2024-06-01")].y_growth_6m.notna().all())
+        self.assertTrue(ds[ds.anchor == pd.Timestamp("2024-07-01")].y_growth_6m.isna().all())
 
     def test_small_pairs_dropped_and_short_history_rejected(self):
         with self.assertRaises(ValueError):
@@ -282,6 +289,33 @@ class ModelTest(unittest.TestCase):
         self.assertIn("fx_change_12m", report["features_used"])
         self.assertFalse(set(report["without_related"]["features_used"]) & set(F.RELATED_FEATURES))
 
+    def test_detail_metrics_for_perfect_score(self):
+        test = pd.DataFrame({"country_code": "VN", "hs6": [f"{i:06d}" for i in range(10)],
+                             "y_growth": np.arange(10) - 4.5})  # 10개 중 5개 증가
+        d = M.detail_metrics(test, test.y_growth.to_numpy())
+        c = d["country"]
+        # 상위 20% = 2개. 추천 5개에 둘 다 들어 Recall 1, Precision 2/5
+        self.assertEqual((c["groups"], c["hit_at_5"], c["top20_recall_at_5"], c["top20_precision_at_5"]), (1, 1., 1., .4))
+        self.assertAlmostEqual(c["top20_f1_at_5"], 2 * .4 / 1.4)
+        self.assertEqual((c["grew_share_at_5"], c["ndcg_at_10"]), (1., 1.))
+        self.assertAlmostEqual(c["spearman"], 1.)
+        self.assertEqual(d["product"], {"groups": 0})  # 품목당 국가 1개라 평가 안 함
+        self.assertEqual({k: d["growth_direction"][k] for k in ("accuracy", "f1", "roc_auc", "actual_rate")},
+                         {"accuracy": 1., "f1": 1., "roc_auc": 1., "actual_rate": .5})
+        self.assertEqual((d["regression"]["mae"], d["regression"]["r2"]), (0., 1.))
+        report = M.evaluate(F.build_dataset(fake_data()))
+        self.assertEqual(set(report["detail"]), {"model_a", "baseline_a"})
+        self.assertIn("detail", report["without_related"])
+
+    def test_six_month_horizon_moves_only_model_a_split(self):
+        ds = F.build_dataset(fake_data())  # 2022-01~2026-02
+        six, twelve = M.evaluate(ds, 6), M.evaluate(ds)
+        self.assertEqual(six["test_anchor"], "2025-08-01")
+        self.assertEqual(six["train_anchors"][1], "2025-02-01")  # 정답 6개월이 평가 정답 기간과 겹치지 않게
+        self.assertEqual(twelve["test_anchor"], "2025-02-01")
+        self.assertEqual((six["baseline_rule"], twelve["baseline_rule"]), ("naive_6m", "growth_12m"))
+        self.assertEqual(six["model_b"], twelve["model_b"])  # 모델 B는 12개월 그대로
+
     def test_train_predict_and_query(self):
         out = Path(tempfile.mkdtemp())
         ds = F.build_dataset(fake_data())
@@ -289,7 +323,7 @@ class ModelTest(unittest.TestCase):
         # 저장·조회 계약 검증을 위한 통과 보고서. 실제 성능 우수성을 주장하는 테스트가 아니다.
         report["model_a"]["ndcg_at_5"] = report["baseline_a"]["ndcg_at_5"]
         with unittest.mock.patch.object(M, "evaluate", return_value=report):
-            meta = M.train(ds, out_dir=out, promotion_metric="country_ndcg_at_5")
+            meta = M.train(ds, out_dir=out, promotion_metric="country_ndcg_at_5", register=False)
         ev = meta["evaluation"]
         self.assertEqual(ev["model_a"]["countries"], len(COUNTRIES))
         self.assertIsNotNone(ev["baseline_a"]["precision_at_5"])
