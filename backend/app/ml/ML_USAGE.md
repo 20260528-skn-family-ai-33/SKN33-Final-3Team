@@ -11,6 +11,7 @@
 | `features.py` | 관세청 수출·수입, 외부 표, 단신속보, 관련 품목 묶음표로 (국가, HS6, 기준월) 학습 테이블을 만듦 |
 | `related_groups.py` | 관련 품목 묶음표 검증과 데이터 기반 후보 찾기 |
 | `market_model.py` | 모델 A(유망도)·B(시장 유형) 평가·학습, 최신 기준월 예측 저장, 조회 함수 |
+| `artifacts.py` / `model_registry.py` | A·B별 날짜 버전 파일·학습 데이터 계보 저장, DB 이력 기록·재전송 |
 
 ## 준비
 
@@ -138,6 +139,89 @@ python -m backend.app.ml.market_model query --country VN --hs6 850760
 - `segments`: 반도체(HS4 8541·8542)와 나머지 품목군의 점수·행 수입니다. 국가·품목별 후보가 10개 미만이면 점수를 만들지 않고 평가 그룹 수 0과 결측 점수를 남깁니다. `missing_training_features`는 학습 행에서 전부 결측인 피처입니다.
 - `model_b` vs `baseline_b`: 공통 행 및 동일 5개 유형의 macro-F1. `model_b_all`은 모델 전체 행 점수와 혼동행렬입니다. 비교 불가·미달 시 B 분류기를 채택하지 않습니다.
 
+## 모델 A·B 날짜 버전과 DB 이력
+
+다음 학습부터 A·B를 각각 `data/ml/versions/<버전 ID>/model_a_<버전 ID>.joblib`, `model_b_<버전 ID>.joblib`로 저장합니다. 버전 ID는 **KST 생성 날짜_시간_마이크로초_충돌방지 ID**입니다. 예: `20261022_143012_123456_a1b2c3d4`. 각 파일은 해당 모델의 피처 변환기를 포함하는 파이프라인입니다.
+
+모델 B가 라벨·비교 평가 부족 또는 기준선 미달로 생성되지 않으면 B 파일은 만들지 않고, 같은 형식의 DB 이력에 **SKIPPED·실제 학습 0행·사유**를 기록합니다. A는 READY로 기록합니다. 두 기록은 한 DB 트랜잭션으로 저장합니다.
+
+기존 MySQL에는 [`db/mysql/init/10_ml_model_version.sql`](../../../db/mysql/init/10_ml_model_version.sql)을 한 번 적용해 `ml_model_version` 테이블을 준비합니다. 접속은 기존 `.env`의 `MYSQL_*` 설정을 사용합니다. 국가 군집용 `model_run` 테이블은 별도입니다. 코드 추가 시 실제 DB 변경·학습·기존 모델 재저장은 실행하지 않았습니다.
+
+DB에는 다음 항목을 모델별로 기록합니다.
+
+- 모델명·버전·생성 시각(KST)·상태·파일 경로와 SHA-256·직전 로컬 버전 ID.
+- 실제 학습 기준월의 시작·종료·행 수·국가 및 품목 수, 모델 B의 학습 가능 행 수.
+- 입력 CSV·완료 기록·체크포인트·기준 파일의 경로와 해시, 원본 기간·완료 월, 환율/국가 매핑 스냅샷 해시, 코드·라이브러리 버전.
+- 이전 버전 대비 **추가 기준월과 해당 행 수**, 내용이 변경된 기존 기준월, 추가·변경·제외 파일, 전체 학습 행 수 차이.
+
+기존 HistGradientBoosting 계열은 **전체 재학습(`FULL_RETRAIN`)**입니다. 아래 SGD 계열은 최초 `INITIAL_FIT` 이후 `PARTIAL_FIT`을 사용합니다. 신규 기준월 행 수는 기존 월에서 새로 생긴 국가·품목 쌍의 수를 포함하지 않으며, 순증 행 수를 신규 행 수로 간주하지 않습니다. 최초 버전이나 이전 입력 기록이 없는 경우 비교 정보는 미확인으로 남깁니다. `train(ds, data_info=...)`를 직접 호출할 때 원본 정보를 생략하면 피처 테이블 기준 정보만 기록됩니다. 일반 학습 CLI와 `report_workflow --train`은 원본 계보를 자동 수집합니다.
+
+버전 폴더에는 모델 묶음·예측·메타정보·DB 등록용 `registry.json`도 보존합니다. 날짜 없는 기존 파일은 최신 호환 복사본이고, `metadata.json`이 현재 버전 폴더를 가리킵니다. 첫 전환에서는 기존 날짜 없는 모델도 `versions/legacy_<ID>/`로 보관합니다. 조회는 일관된 버전 폴더를 사용하는 다음 함수를 권장합니다.
+
+```python
+from backend.app.ml.market_model import load_models, load_predictions
+models = load_models()  # 최신 버전; 기존 날짜 없는 모델도 지원
+models = load_models(version_id="20261022_143012_123456_a1b2c3d4")
+predictions = load_predictions(version_id="20261022_143012_123456_a1b2c3d4")
+```
+
+DB 장애·테이블 미준비 시 모델 파일은 보존하고 해당 버전의 `registry_sync.json`에 **PENDING**을 남깁니다. DB를 준비한 뒤 아래 명령으로 학습 없이 재등록합니다. 같은 기록을 여러 번 보내도 행이 중복되지 않고 기존 이력의 다른 내용으로 덮어쓰지도 않습니다.
+
+```powershell
+python -m backend.app.ml.model_registry sync
+```
+
+등록 성공은 SYNCED로 표시합니다. ML 입력 전처리는 계속 수집 파일을 사용하며, 환율 조회와 모델 메타정보 기록은 별도 DB 용도입니다. S3 전환은 보류 상태입니다.
+
+## 월별 캐시와 SGD 추가학습 A·B
+
+기존 HGB와 독립된 실험 계열을 `incremental.py`에 추가했습니다. **기존 HGB 가중치를 SGD로 변환하는 기능은 아닙니다.** 최초 한 번 SGD 모델을 생성한 뒤 저장된 계수·학습 카운터·전처리 통계·학습 완료 행 기록을 불러와 새 정답 행에만 `partial_fit`을 적용합니다. A는 `SGDRegressor(loss="huber")`, B는 `SGDClassifier(loss="log_loss")`이며, 두 모델 모두 날짜 버전과 DB 이력을 남깁니다.
+
+실데이터 명령은 아직 실행하지 않았습니다. 아래 명령은 실행하면 전처리·학습을 시작합니다.
+
+```powershell
+# 최초 한 번: 별도 SGD 계열 생성 (원본 CSV -> 피처 캐시 -> 초기 학습·평가·저장)
+python -m backend.app.ml.incremental bootstrap
+
+# 월별 수집 완료 후: 영향 구간만 피처 갱신 -> 기존 SGD에 새 정답 행만 추가학습
+python -m backend.app.ml.incremental update
+
+# 전체 재학습 모델도 전처리 캐시를 사용할 수 있음
+python -m backend.app.ml.market_model train --promotion-metric country_ndcg_at_5 --feature-cache-dir data/ml/monthly_feature_cache
+```
+
+- 원본 CSV 파싱·정규화·해시 확인은 매번 수행합니다. 시간이 큰 기준월별 피처 계산을 캐시로 줄이며, 전체 원본 읽기를 없앤 구현은 아닙니다. 캐시가 없으면 최초 전처리가 필요합니다. 기존 보고서용 `features_snapshot.pkl`은 월별 입력 해시가 없어 자동 전환하지 않습니다.
+- 월이 하나 추가되면 보통 **최근 13개 기준월**을 계산합니다. 예를 들어 2026-10이 추가되면 2025-10의 12개월 미래 정답이 새로 확정되고 2026-10 피처가 새로 생깁니다. 나머지 과거 기준월은 재사용합니다. 과거 데이터 수정은 해당 월의 12개월 전부터, 외부 기준정보·코드 변경은 전체 피처를 다시 계산합니다.
+- SGD의 결측 대체값·표준화·범주 인코딩·A 정답 클립·B 유형 임계값을 초기 학습 이후 고정합니다. 표준화를 매월 다시 맞춰 기존 계수의 의미가 달라지는 것을 막습니다. 새 범주는 현재 인코딩에서 무시되므로 범주/분포 변화가 크면 새 계열 초기화와 재비교가 필요합니다.
+- 이미 학습한 `(기준월, 국가, HS6)`의 피처·정답 수정 또는 삭제는 중단합니다. 수정한 행을 다시 추가해서 기존 학습을 취소할 수 없기 때문입니다. **새 `--data-dir` 폴더에 bootstrap**하여 이력을 보존합니다. 처음 보는 키는 같은 기준월에 추가돼도 새 행으로 학습할 수 있습니다. 같은 입력을 다시 실행하면 중복 학습·중복 버전을 만들지 않습니다.
+- 평가는 운영 모델과 별도로 보존한 SGD 체크포인트를 사용합니다. 평가 기준월보다 **12개월 이상 앞선 기준월**까지만 학습하고, 전처리도 그 초기 학습 구간에서만 추정합니다. 운영 모델은 더 최근 정답을 이미 배웠기 때문에 그대로 과거 평가에 쓰지 않습니다. 이는 단일 시간 분할이며 독립 최종 Holdout/시간 K-fold를 대체하지 않습니다.
+- A는 국가별 NDCG@5가 성장률 기준선 이상이어야 새 버전을 저장합니다. B는 공개 시점과 2개 이상 학습 클래스·평가 라벨이 확보되고 macro-F1 비교를 통과할 때만 생성/갱신합니다. B가 미평가·미달이면 기존 B는 그대로 보존하고 `UNCHANGED`, 기존 B가 없으면 `SKIPPED`입니다. A의 월별 갱신에 새로운 BACI 수집본이 필수인 것은 아닙니다.
+
+산출물은 `data/ml/incremental/versions/<ID>/`의 A·B joblib, 예측 CSV, 평가를 담은 `metadata.json`, 재개용 `incremental_state.joblib`입니다. DB의 `data_info.model_family=sgd_incremental`과 `training_mode`로 계열·학습 방식을 구분합니다. `train_rows`는 누적 학습 행 수, `data_info.updated_rows`는 이번 실제 추가학습 행 수입니다. `PARTIAL_FIT`의 `parent_version_id`는 실제 학습 상태를 이어받은 직전 버전입니다. 새 버전이 저장되어도 HGB 최신 모델 포인터는 바뀌지 않습니다.
+
+```python
+from backend.app.ml.market_model import load_models, load_predictions
+models = load_models(out_dir="data/ml/incremental")
+predictions = load_predictions(out_dir="data/ml/incremental")
+```
+
+DB 기록 재시도는 `python -m backend.app.ml.model_registry sync --data-dir data/ml/incremental`입니다. 자동 월별 스케줄 연결은 아직 하지 않았으며, 기존 PDF 노트북은 HGB 검증용입니다. SGD 결과는 해당 버전의 평가 JSON을 확인합니다. 실제 시간·추천 성능은 미측정이고 기존 HGB보다 좋다고 주장하지 않습니다.
+
+### 모델 선택 근거와 비교할 대안
+
+HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처리하면서 기존 scikit-learn 환경에서 사용할 수 있어 첫 기준 모델로 선택했습니다. 현재 실데이터 검증은 성장률 기준선과 관련 피처 유무 비교이며 **다른 부스팅을 모두 비교한 최적 모델 선정은 아닙니다.** SGD 선택은 월별 작은 배치에 대한 명시적 `partial_fit`, 별도 의존성 없이 A·B에 같은 재개 구조를 적용할 수 있다는 구현상 판단입니다. 선형 회귀·분류여서 비선형 상호작용 표현력이 제한되고, 순서·학습률·분포 변화에 민감합니다.
+
+| 후보 | 월별 갱신 방식 | 이 작업의 판단 |
+|---|---|---|
+| HistGradientBoosting | 전체 재학습. `warm_start`는 같은 데이터에서 부스팅 반복을 늘리는 용도 | 현재 검증된 기준 모델 유지. 피처 캐시만으로도 전처리 비용을 줄일 수 있음 |
+| SGD 회귀·분류 | 저장된 계수와 학습 상태에 `partial_fit` | 가벼운 추가학습 비교 모델. 추천 성능 우위는 미확인 |
+| LightGBM | `init_model`로 기존 부스터에서 학습 계속 | 비선형 관계를 유지하는 비교 후보. 추가 트리 누적·최근 데이터 과적합·과거 성능 저하를 검증해야 함 |
+| XGBoost | `xgb_model`로 기존 부스터에서 학습 계속 | 동일한 비교 후보. 새 월만 사용할지 과거 표본을 섞을지 평가 설계 필요 |
+
+성능 비교 시 입력/정답/공개 시점/12개월 gap/평가 국가·품목을 맞추고 국가별 NDCG@5를 주 지표로 사용합니다. 기존 HGB 점수와 다른 평가월의 SGD 점수를 단순 비교하지 않습니다. 학습·전처리 시간, Precision@5, 품목군별 성능, 반복 업데이트 후 과거 성능 유지도 함께 기록해야 합니다. 현재 코드는 SGD 초기 후보를 만들기 위한 것이며 최종 모델 우열은 실제 비교 전까지 미정입니다.
+
+공식 근거: [HGB warm_start 제약](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html), [SGDRegressor partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDRegressor.html), [SGDClassifier partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDClassifier.html), [LightGBM init_model](https://lightgbm.readthedocs.io/en/stable/pythonapi/lightgbm.train.html), [XGBoost 학습 재개 예제](https://xgboost.readthedocs.io/en/stable/python/examples/continuation.html).
+
 ## 주의
 
 - 예측 대상은 최근 12개월 수출이 $100k 이상인 쌍뿐입니다. 그보다 작은 쌍은 `query`에서 "예측 대상 아님"으로 나옵니다.
@@ -150,6 +234,25 @@ python -m unittest backend/tests/test_ml_market.py backend/tests/test_ml_sources
 ```
 
 ## 검증 노트북과 PDF 자동 보고서
+
+### 저장 환경과 실행 환경 일치
+
+현재 제공된 `features_snapshot.pkl`·`models.joblib`은 Python 3.12.14, NumPy 2.5.4, pandas 3.0.1, scikit-learn 1.9.1, joblib 1.6.0 환경에서 생성했습니다. SciPy 1.18.1을 포함한 재현 버전은 `backend/requirements-ml-runtime-20261022.txt`로 고정합니다. 기존 환경을 변경하기보다 Python 3.12의 별도 환경에서 보고서를 실행하세요.
+
+```powershell
+# Python 3.12가 설치되어 있어야 합니다. 저장소 루트에서 실행합니다.
+py -3.12 -m venv .venv-ml
+.\.venv-ml\Scripts\python.exe -m pip install -r backend/requirements-ml-report.txt -c backend/requirements-ml-runtime-20261022.txt
+.\.venv-ml\Scripts\python.exe -m backend.app.ml.runtime check
+```
+
+Jupyter에서 직접 실행하면 설치 후 커널을 재시작하고 같은 `.venv-ml` Python을 선택합니다. CLI는 실행한 Python으로 커널을 생성합니다. `runtime check`는 버전만 확인하며 피처 생성·모델 로드·학습을 하지 않습니다. 이후 모델은 버전별 `metadata.json`과 `runtime-requirements.txt`에 실제 저장 환경을 남깁니다.
+
+위 날짜 고정 버전은 최초 제공 모델을 위한 것입니다. 다른 환경에서 새로 학습한 버전은 그 버전의 `runtime-requirements.txt`를 `-c`에 지정합니다. 최근 학습 시도 기록이 `running`이면 완료 여부를 아직 확인할 수 없으므로, 파일을 삭제하거나 성공으로 바꿔 검사를 통과시키지 않습니다.
+
+`No module named 'numpy._core'`는 저장된 캐시와 현재 NumPy 환경이 맞지 않을 때 발생할 수 있습니다. 이 경우 PDF가 생성되어도 산출물 검사가 실행되지 않아 전체 검증은 실패합니다. `pdf_check.passed=true`는 PDF 구조만 정상이라는 뜻입니다. 버전을 맞추는 문제를 재학습으로 해결하거나 import 이름을 임의로 바꿔 우회하지 않습니다.
+
+### 실행
 
 저장소 루트에서 다음 명령을 실행합니다. 보고서용 의존성은 기존 환경에 추가로 설치합니다.
 
