@@ -7,8 +7,7 @@ import unittest
 from sqlalchemy import select
 
 from backend.app.db.session import make_engine, session_scope
-from backend.app.models.base import Base
-from backend.app.models.region import Country, MarketRegion
+from backend.app.models.region import Country, MarketRegion, RegionBase
 from backend.app.scheduler.jobs import country_region_load as cr
 from backend.app.services import country_region as ref
 
@@ -29,7 +28,7 @@ class CountryRegionLoadTest(unittest.TestCase):
 
     def test_load_sqlite(self):
         engine = make_engine("sqlite://")
-        Base.metadata.create_all(engine, tables=[MarketRegion.__table__, Country.__table__])
+        RegionBase.metadata.create_all(engine)
         with session_scope(engine) as s:
             s.add_all([Country(country_code="VN", name_ko="베트남"), Country(country_code="AQ", name_ko="남극")])
         regions, mapping, _ = ref.load_reference()

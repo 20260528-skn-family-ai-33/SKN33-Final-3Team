@@ -19,8 +19,6 @@
   새벽에는 당일 환율이 아직 없으므로 전 영업일까지 반영됩니다. 통화마다 마지막 적재일이 더 오래됐으면 그날부터 받아
   주말·휴일·중단으로 빠진 날도 채웁니다 (아직 한 건도 없는 통화는 .env의 FX_START_DATE부터, 없으면 최근 14일).
   켤 때도 한 번 실행합니다. 정기·시작 작업이 겹치면 늦게 시작한 쪽은 건너뜁니다.
-- keyword_dict_sync: 10분마다 키워드 사전 csv(news_keywords/)와 DB(keyword_category·keyword_topic)를 맞춥니다.
-  DB에서 고친 행은 csv에, csv에서 고친 것은 DB에 반영합니다 (같은 말을 양쪽에서 고쳤으면 DB 쪽).
 """
 import argparse
 import hashlib
@@ -196,10 +194,6 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV)
     # 켤 때마다 한 번: 꺼져 있던 동안 빠진 환율을 마지막 적재일부터 채움
     scheduler.add_job(fx_daily_load.run, "date", run_date=datetime.now(KST) + timedelta(seconds=30),
                       id="fx_daily_startup", replace_existing=True)
-    from backend.app.services.news_keywords import keyword_dict
-    # 키워드 사전 csv ↔ DB: 한쪽에서 고친 것을 10분 안에 다른 쪽에 반영 (켤 때 첫 실행은 10분 뒤)
-    scheduler.add_job(keyword_dict.scheduled_sync, "interval", minutes=10, id="keyword_dict_sync", coalesce=True,
-                      max_instances=1, replace_existing=True)
     return scheduler
 
 

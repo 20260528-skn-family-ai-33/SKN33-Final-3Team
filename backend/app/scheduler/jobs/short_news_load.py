@@ -15,8 +15,8 @@
      + Chroma hs_code 컬렉션 유사도 상위 5개 (6단위)
    - 2차: LLM이 후보 안에서만 최대 3개를 고릅니다. 후보에 없는 코드는 버립니다 (LLM이 코드를 만들지 않음, FR-904-03).
    - 기사 단위로 --workers개(기본 16)를 동시에 처리합니다. 실패한 기사는 캐시에 남지 않아 다음 실행에서 다시 분석합니다.
-3. 키워드 분류: LLM 키워드를 해외시장뉴스와 같은 사전(keyword_dict.py)으로 정제·지역 분리·동의어 처리해 주제어로 바꿉니다.
-   사전에 없던 주제어는 keyword_topic·topic_additions.csv에 넣고, 규칙으로 분야를 못 정하면 검수 대기(PENDING)로 남깁니다.
+3. 키워드 정리: LLM 키워드를 해외시장뉴스와 같은 규칙(keyword_clean.process_article: 정제·지역 분리·동의어·상위어)으로
+   주제어로 바꿉니다. 사전 파일(data/news_keywords/synonyms.csv 등)이 없으면 정제·지역 분리만 합니다.
    MySQL: article(category='short_news')에 없는 기사만 넣고, 같은 트랜잭션으로 article_tag에 주제어·HS 행을 넣습니다.
    --retag면 이미 넣은 기사의 키워드 태그도 지금 사전 기준으로 다시 넣습니다 (사전을 바꾼 뒤).
    국가 태그는 country 테이블이 채워진 뒤 따로 추가합니다. 500건마다 커밋하므로 중간에 멈춰도 다시 실행하면 이어집니다.
@@ -44,10 +44,10 @@ from sqlalchemy import delete, func, insert, select
 
 from backend.app.db.batch_log import Source, track_batch
 from backend.app.db.session import ENV_PATH, make_engine, session_scope
-from backend.app.models.article import Article, ArticleTag
+from backend.app.models.news import Article, ArticleTag
 from backend.app.models.hs_code import HsCodeMst
 from backend.app.scheduler.jobs import hs_code_embed as he
-from backend.app.services.news_keywords import keyword_dict as kd
+from backend.app.services.news_keywords import keyword_clean as kc
 
 SOURCE = Source("KOTRA_SHORT_NEWS", "KOTRA 단신속보뉴스",
                 {"provider": "KOTRA", "url": "https://www.data.go.kr/data/15122662/openapi.do", "dataset_id": "15122662",
@@ -339,13 +339,15 @@ def load_db(engine, articles, results):
     return {"inserted": len(new), "tags": tags, "existing": len(have)}
 
 
-def classify_keywords(engine, results):
-    """LLM 키워드 → 사전 기준 주제어(results의 "topics"). 사전에 없던 주제어는 keyword_topic에 넣습니다. 새 주제어 수."""
-    kd.sync(engine)  # csv·DB 어느 쪽을 고쳤어도 최신 사전으로 분류
-    rules = kd.load_rules()
+def classify_keywords(results):
+    """LLM 키워드 → 해외시장뉴스와 같은 규칙의 주제어(results의 "topics"). 주제어 종류 수."""
+    for path in (kc.SYNONYMS_PATH, kc.HYPERNYMS_PATH):
+        if not path.exists():
+            log.warning(f"{path.name}이 없어 동의어·상위어 없이 정리합니다 (NEWS_KEYWORDS_USAGE.md로 사전을 만들면 반영)")
+    geo, keep, syn, cat, hyp = kc.load_geo(), kc.load_exceptions(), kc.load_synonyms(), kc.load_categories(), kc.load_hypernyms()
     for r in results.values():
-        r["topics"] = kd.topics(r["keywords"], rules)
-    return kd.register_topics(engine, {t for r in results.values() for t in r["topics"]})
+        r["topics"] = kc.process_article(",".join(r["keywords"]), "", geo, keep, syn, cat, hyp)["kw_topic"]
+    return len({t for r in results.values() for t in r["topics"]})
 
 
 def retag_keywords(engine, results):
@@ -424,7 +426,7 @@ def run(csv_path=None, db_url=None, limit=None, client=None, ask=None, embed=Non
             batch.received_count = len(articles)
             matcher = HsMatcher(engine, he.get_collection(client), embed)
             results, calls = analyze_all(articles, ask or openai_chat(), matcher, cache_path, workers)
-            new_topics = classify_keywords(engine, results)
+            topics = classify_keywords(results)
             db = load_db(engine, articles, results)
             if retag:
                 log.info(f"키워드 태그 다시 넣음: 기사 {retag_keywords(engine, results):,}건")
@@ -440,7 +442,7 @@ def run(csv_path=None, db_url=None, limit=None, client=None, ask=None, embed=Non
         if engine is not None:
             engine.dispose()
     log.info(f"완료: 기사 {len(articles):,}건 | 분석 누락 {missing:,} | DB 신규 {db['inserted']:,}·기존 {db['existing']:,}"
-             f"·태그 {db['tags']:,} | 새 주제어 {new_topics:,} | Chroma 추가 {added:,} | 로그: {log_path}")
+             f"·태그 {db['tags']:,} | 주제어 {topics:,}종 | Chroma 추가 {added:,} | 로그: {log_path}")
     return 1 if missing else 0
 
 

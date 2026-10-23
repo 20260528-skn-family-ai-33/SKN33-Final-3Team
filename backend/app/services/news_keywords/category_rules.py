@@ -1,21 +1,24 @@
 """⑤ 대/중분류 공통 규칙. 분류표를 만드는 코드(build/build_categories.py)와 기사 처리(keyword_clean.py)가 함께 씁니다.
 
-배정 순서 (규칙을 먼저 모두 대조하고, 규칙으로 안 되는 것만 LLM 판단을 씀)
-  0) 팀 검수: category_decisions.csv의 X(팀이 고른 분류)와, 못 정한 말을 O로 확인한 미분류
+배정 순서 (규칙을 먼저 모두 대조하고, 규칙으로 안 되는 것만 LLM 판단을 씀). 검수 파일은 읽지 않고 코드 안 규칙만 씁니다.
+  0) 예외: 팀 분류: 팀이 분야를 바꾼 말(rule_data.CATEGORY_TEAM) — 규칙으로 옮길 수 없는 것만
   1) 규칙(일치): 주제어가 분류 틀(TAX)의 대표 키워드와 정확히 같음
-  2) 규칙(포함): 주제어가 대표 키워드(2글자 이상)를 포함 — TAX 위에서부터 먼저 맞는 분류
-  3) 규칙 수정: 규칙 결과가 글자만 겹쳐 틀린 경우 바로잡은 목록(category_rule_fixes.csv, 규칙 결과·이유 기록)
-  4) LLM 판단: 규칙에 하나도 안 걸린 말의 분야를 LLM이 뜻으로 정한 목록(category_llm.csv)
-  5) 검수 필요: 위 어디에도 없거나 "미분류"로 둔 말
-확정 기준 (classify): 팀 검수 · 규칙(일치) · 규칙 수정은 바로 확정. 규칙(포함) · LLM 판단은 추정이라
-팀이 그 분류를 O로 확인한 경우(category_decisions.csv)만 확정하고, 나머지는 "검수 필요" + 후보 분야로 남깁니다.
+  2) 규칙(끝말): 주제어가 끝말 규칙(rule_data.CATEGORY_HEAD_SUFFIXES)의 말로 끝남 — 합성어는 끝말이 핵심어 (식품전시회 → 전시회·행사)
+  3) 규칙(포함): 주제어가 대표 키워드(2글자 이상)를 포함 — TAX 위에서부터 먼저 맞는 분류
+  4) 규칙 수정: 규칙 결과가 글자만 겹쳐 틀린 경우 바로잡은 목록(rule_data.CATEGORY_RULE_FIXES, 규칙 결과·이유 기록)
+  5) LLM 판단: 규칙에 하나도 안 걸린 말의 분야를 LLM이 뜻으로 정한 목록(rule_data.CATEGORY_LLM)
+  6) 검수 필요: 위 어디에도 없거나 "미분류"로 둔 말 → 관리자 분류 대상
+확정 기준 (팀 결정 2026-10-22): 규칙(포함)·LLM 판단 같은 추정도 확정합니다 (팀 검수 기준 정확도 약 89%·80%).
 분류표를 다시 만들어도, 기사를 다시 처리해도 같은 함수로 판정하므로 결과가 같습니다.
 기준·과정 설명은 CLASSIFICATION_RULES.md
 """
-import csv
+import importlib.util
+import re
 from pathlib import Path
 
 NK = Path(__file__).resolve().parent
+_spec = importlib.util.spec_from_file_location("rule_data", NK / "rule_data.py")
+rd = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(rd)
 
 # (대분류, 중분류, 그 분류를 대표하는 키워드 — 띄어쓰기로 구분)
 TAX = [
@@ -25,7 +28,7 @@ TAX = [
  ("무역·통상", "공급망·물류", "공급망 GVC 물류 해운 운송 리쇼어링 니어쇼어링 프렌드쇼어링 배송 항만 콜드체인 철도 항공 해상 화물 컨테이너 운임 창고 풀필먼트 택배 라스트마일 홍해"),
  ("무역·통상", "수출입 일반", "바이어 조달 입찰 정부조달 수출상담 무역사절단 수출입동향 교역동향 수입시장"),
  ("경제·시장", "거시경제", "GDP 경제성장 성장률 경기 인플레이션 물가 고물가 금리 기준금리 환율 재정 예산 실업 경상수지 국가신용 IMF 경기침체 디플레이션 통화 외환 부채 국채 금융 은행 증시 주식 부동산 세금 법인세 부가세 관세청"),
- ("경제·시장", "시장·소비 동향", "소비트렌드 MZ Z세대 소비심리 구매력 중산층 소매 유통 리테일 쇼핑 온라인쇼핑 편의점 대형마트 백화점 할인 명품 가성비 프리미엄 구독 라이브커머스 소셜커머스 SNS 인플루언서 틱톡 아마존 쿠팡 테무 쉬인 알리익스프레스 라자다 쇼피"),
+ ("경제·시장", "시장·소비 동향", "소비트렌드 MZ Z세대 소비심리 구매력 중산층 소매 유통 리테일 쇼핑 온라인쇼핑 편의점 대형마트 백화점 할인 명품 가성비 프리미엄 구독 라이브커머스 소셜커머스 SNS 인플루언서 틱톡 아마존 쿠팡 테무 쉬인 알리익스프레스 라자다 쇼피 " + rd.CATEGORY_SERVICE_WORDS),
  ("경제·시장", "인구·노동", "고령화 인구 청년 노동 임금 최저임금 노동법 일자리 고용 저출산 도시화 이민 비자 외국인근로자 근로자 노동자 인력 인재 노조 파업"),
  ("기업·투자·진출", "투자·M&A", "FDI 투자유치 외국인투자 인수 합병 M&A 벤처캐피탈 VC 투자환경 투자인센티브 경제특구 산업단지 공단 특구 자유무역지대 법인설립 합작"),
  ("기업·투자·진출", "진출·마케팅", "현지화 마케팅 브랜드 유통망 파트너 판로 홍보 프랜차이즈 진출전략 시장조사 바이어발굴 PB 수출바우처 해외지사 현지법인"),
@@ -41,7 +44,7 @@ TAX = [
  ("에너지·환경", "친환경·ESG·기후", "친환경 ESG 탄소 탄소중립 넷제로 탈탄소 기후 기후변화 재활용 순환경제 지속가능 녹색 그린 환경 폐기물 플라스틱 CBAM 탄소배출 온실가스 EPR 생물다양성 물 수자원 대기오염"),
  ("산업·품목", "품목 (→ HS 코드로 연결)", "자동차 전기차 배터리 이차전지 반도체 디스플레이 화장품 뷰티 스킨케어 메이크업 식품 음료 커피 차 농업 농산물 농식품 수산 축산 육류 의료 의약 제약 바이오 헬스케어 "
   "의료기기 건설 인프라 플랜트 철강 화학 석유화학 섬유 의류 패션 기계 부품 소재 장비 조선 선박 방산 방위산업 가전 전자 소비재 반려동물 펫 완구 가구 "
-  "인테리어 주류 와인 맥주 할랄 비건 K-FOOD K-뷰티 K-POP 한식 건강기능식품 미용 웰니스 관광 콘텐츠 교육 스포츠 문화 한류 생활용품 유아용품 신발 "
+  "인테리어 주류 와인 맥주 할랄 비건 K-FOOD K-뷰티 K-POP 한식 건강기능식품 미용 웰니스 콘텐츠 교육 스포츠 문화 한류 생활용품 유아용품 신발 "
   "가방 주얼리 시계 안경 문구 생수 과자 라면 간편식 냉동식품 유제품 우유 과일 채소 곡물 쌀 밀 대두 옥수수 설탕 소금 향신료 담배 의약품 백신 진단 치과 임플란트 "
   "건축 건자재 시멘트 타이어 플라스틱제품 포장 포장재 종이 목재 유리 세라믹 공구 농기계 공작기계 산업용로봇 엘리베이터 에어컨 냉장고 세탁기 TV 스마트폰 노트북 "
   "태블릿 PC 카메라 조명 LED 케이블 변압기 전선 모터 펌프 밸브 엔진 항공기 열차 버스 트럭 오토바이 자전거 전동킥보드 충전 충전기 충전소 수소차 신에너지차 하이브리드 내연기관 중고차"),
@@ -50,25 +53,32 @@ TAX = [
 ]
 
 
-def _read(name):
-    path = NK / name
-    if not path.exists():
-        return []
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        return list(csv.DictReader(fh))
+TEAM = {w: (big, mid) for w, big, mid in rd.CATEGORY_TEAM}
 
 
 def load_lists():
-    """(규칙 수정 목록, LLM 판단 목록): 주제어 → (대분류, 중분류)."""
-    fixes = {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read("category_rule_fixes.csv")}
-    llm = {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read("category_llm.csv")}
-    return fixes, llm
+    """(규칙 수정 목록, LLM 판단 목록): 주제어 → (대분류, 중분류). 코드 안 목록(rule_data)에서 읽습니다."""
+    fixes = {w: (big, mid) for w, _, big, mid, _ in rd.CATEGORY_RULE_FIXES}
+    return fixes, dict(rd.CATEGORY_LLM)
 
 
-def load_decisions(name="category_decisions.csv"):
-    """팀이 정한 말: 주제어 → (대분류, 중분류). X(분류 변경)와, 못 정한 말을 미분류로 확인한 O. 없으면 빈 표."""
-    return {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read(name)
-            if r.get("판정") == "X" or (r.get("판정") == "O" and r.get("대분류") == "미분류")}
+def contains(u, key):
+    """규칙(포함): 대표 키워드(2글자 이상)가 주제어 안에 있음. 영문 대표 키워드는 앞뒤가 영문자가 아닐 때만
+    (CITYSCAPE ≠ IT, EXPORT ≠ EXPO, DESK ≠ SK, OPC ≠ PC — AI가전 · K-뷰티처럼 한글·기호와 붙은 것은 맞음).
+    영문 약어에 붙여 쓰는 말만 예외: 앞에 영문자가 붙어도 됨 FTA·EPA·CEPA·TV·EXPO·LED (AKFTA, CCTV, FOODEXPO, OLED) /
+    뒤에 붙어도 됨 EXPO (EXPOKOREA, 단 EXPORT는 아님)."""
+    k = key.upper()
+    if len(k) < 2:
+        return False
+    if not re.fullmatch(r"[A-Z0-9&\-]+", k):
+        return k in u
+    before = "" if k in ENGLISH_PREFIX_OK else "(?<![A-Z])"
+    after = ENGLISH_SUFFIX_OK.get(k, "(?![A-Z])")
+    return re.search(rf"{before}{re.escape(k)}{after}", u) is not None
+
+
+ENGLISH_PREFIX_OK = {"FTA", "EPA", "CEPA", "TV", "EXPO", "LED"}   # 앞에 영문자가 붙어도 맞음 (FOODEXPO, OLED)
+ENGLISH_SUFFIX_OK = {"EXPO": "(?!RT)"}             # 뒤에 영문자가 붙어도 맞음 (EXPORT 제외)
 
 
 def rule(word):
@@ -77,8 +87,11 @@ def rule(word):
     for big, mid, keys in TAX:
         if any(u == k.upper() for k in keys.split()):
             return big, mid, "규칙(일치)"
+    for suf, big, mid in rd.CATEGORY_HEAD_SUFFIXES:       # 합성어는 끝말이 핵심어
+        if len(u) > len(suf) and u.endswith(suf.upper()):
+            return big, mid, "규칙(끝말)"
     for big, mid, keys in TAX:
-        if any(len(k) >= 2 and k.upper() in u for k in keys.split()):
+        if any(contains(u, k) for k in keys.split()):
             return big, mid, "규칙(포함)"
     return None
 
@@ -88,18 +101,18 @@ def contains_hit(word):
     u = word.upper()
     for _, _, keys in TAX:
         for k in keys.split():
-            if len(k) >= 2 and k.upper() in u:
+            if contains(u, k):
                 return k
     return ""
 
 
-def assign(word, fixes=None, llm=None, team=None):
+def assign(word, fixes=None, llm=None):
     """주제어 하나 → (대분류, 중분류, 배정방법, 규칙 결과)."""
-    fixes, llm, team = fixes or {}, llm or {}, team or {}
+    fixes, llm = fixes or {}, llm or {}
     r = rule(word)
     rule_txt = f"{r[0]} > {r[1]}" if r else ""
-    if word in team:
-        return (*team[word], "팀 검수", rule_txt)
+    if word in TEAM:
+        return (*TEAM[word], "예외: 팀 분류", rule_txt)
     if r and word in fixes:
         return (*fixes[word], "규칙 수정", rule_txt) if fixes[word][0] != "미분류" else ("미분류", "미분류", "검수 필요", rule_txt)
     if r:
@@ -109,36 +122,14 @@ def assign(word, fixes=None, llm=None, team=None):
     return "미분류", "미분류", "검수 필요", ""
 
 
-ESTIMATED = ("규칙(포함)", "LLM 판단")   # 추정 결과 — 팀 검수를 거쳐야 확정
-
-
-def load_reviewed(name="category_decisions.csv"):
-    """팀이 O로 확인한 분류: 주제어 → (대분류, 중분류). 규칙(포함)·LLM 판단 결과가 이 분류와 같으면 사람이 확인한 것.
-    (X는 팀이 고른 분류가 assign에서 '팀 검수'로 먼저 적용되므로 여기 넣지 않음)"""
-    return {r["주제어"]: (r["대분류"], r["중분류"]) for r in _read(name) if r.get("판정") == "O"}
-
-
-def classify(word, fixes=None, llm=None, team=None, reviewed=None):
-    """분류표 생성과 기사 처리가 함께 쓰는 단일 판정 → (대분류, 중분류, 배정방법, 규칙 결과, 후보 분야, 후보 근거).
-    규칙(포함)·LLM 판단은 추정이라, 팀이 그 분류를 O로 확인한 경우(reviewed)만 확정하고, 아니면 "검수 필요" + 후보 분야로 돌려줍니다.
-    규칙이 바뀌어 예전에 확인한 분류와 결과가 달라져도 다시 검수 대상이 됩니다. reviewed=None이면 검수 여부를 보지 않음 (assign과 같음)."""
-    big, mid, how, rule_txt = assign(word, fixes, llm, team)
-    if reviewed is not None and how in ESTIMATED and reviewed.get(word) != (big, mid):
-        return "미분류", "미분류", "검수 필요", rule_txt, f"{big}>{mid}", how
-    return big, mid, how, rule_txt, "", ""
-
-
-def candidate_reason(word, cand_how):
-    """후보 분야만 있는 말의 미분류 이유. 후보는 추정일 뿐이라 틀릴 수 있음을 그대로 적습니다."""
-    if cand_how == "규칙(포함)":
-        return f"'{contains_hit(word)}' 글자가 들어 있어 추정만 함, 확정 안 함 (검수 전)"
-    return f"{cand_how}으로 추정만 함, 확정 안 함 (검수 전)"
+def classify(word, fixes=None, llm=None):
+    """분류표 생성과 기사 처리가 함께 쓰는 단일 판정 → (대분류, 중분류, 배정방법, 규칙 결과).
+    규칙(포함)·LLM 판단 같은 추정도 확정합니다 (팀 결정 2026-10-22)."""
+    return assign(word, fixes, llm)
 
 
 def unclassified_reason(word, how, rule_txt, llm=None):
     """미분류로 남은 이유 (미분류 목록의 '미분류 이유' 칸)."""
-    if how == "팀 검수":
-        return "팀 검수에서 미분류로 정함"
     if rule_txt:
         return f"규칙 결과({rule_txt})가 글자만 겹쳐 미분류로 고침"
     if word in (llm or {}):

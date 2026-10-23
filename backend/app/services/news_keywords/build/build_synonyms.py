@@ -11,8 +11,12 @@
   · 규칙: 표기 — 기호·띄어쓰기·대소문자를 지우면 같은 글자 (K뷰티 = K-뷰티, CHAT GPT = 챗GPT)
   · LLM 판단 — 위 규칙으로 확인되지 않아 뜻으로 묶은 것 (번역어·약어·같은 뜻 다른 말: K-BEAUTY = K-뷰티, 인공지능 = AI)
 - 데이터에 실제로 있는 표기만 남기고, 두 개 미만이면 묶음을 건너뜀
-- 팀 검수 결과(synonym_decisions.csv)의 O는 묶고, X·△는 규칙으로도 묶지 않음
+- 검수 파일은 읽지 않습니다. 팀 검수 결과에서 규칙으로 옮길 수 없는 같은 말만 코드 안 예외 목록(SYNONYM_EXTRA)에 둡니다 — 판정 "예외: 같은 말"
 - 접미사 규칙: OO산업 · OO시장 · OO업 → OO (기본 단어가 주제어로 있고, 예외 목록에 없을 때) — 판정 "규칙: 접미사"
+- 같은 기본어 규칙: 기본 단어가 없거나 적어도 OO산업 · OO시장 · OO업끼리는 같은 말 (관광업 = 관광산업) — 판정 "규칙: 같은 기본어"
+- 범용 접미사(률·율·화·성·품)는 규칙으로 쓰지 않음: 운동화 ≠ 운동, 현대화 ≠ 현대, 화장 ≠ 화장품처럼 틀리는 경우가 많아
+  팀이 같은 말로 정한 것(경제성장 = 경제성장률, 디지털 = 디지털화 등)만 예외 목록에 둠
+- 반대말(rule_data.SYNONYM_OPPOSITES: 수출 ↔ 수입 …)과 묶지 않을 쌍(SYNONYM_BLOCK)은 어떤 규칙으로도 묶지 않음
 - 사슬(A→B→C)은 마지막 대표어로 정리 (keyword_clean.py는 한 번만 바꾸므로)
 
 실행: python backend/app/services/news_keywords/build/build_synonyms.py [--output 경로]
@@ -30,6 +34,8 @@ NK = Path(__file__).resolve().parents[1]
 RAW = Path(__file__).resolve().parents[5] / "data" / "news" / "news_raw_20220101_20261013.csv"
 spec = importlib.util.spec_from_file_location("keyword_clean", NK / "keyword_clean.py")
 kc = importlib.util.module_from_spec(spec); spec.loader.exec_module(kc)
+rd = kc.rd   # 규칙 데이터 (반대말 SYNONYM_OPPOSITES)
+OUT = kc.SYNONYMS_PATH   # data/news_keywords/synonyms.csv (git 제외, 이 코드로 다시 만듦)
 
 # (근거, [같은 뜻 표기들]) — 첫 번째 원소는 이름표일 뿐, 대표어는 기사 수로 정함
 GROUPS = [
@@ -123,17 +129,33 @@ def check(form, rep, paren):
 SUFFIXES = ("산업", "시장", "업")
 SUFFIX_MIN_BASE = 5          # 기본 단어(OO)가 주제어로 5건 이상 있을 때만
 SUFFIX_EXCLUDE_BASE = {      # 기본 단어가 너무 넓거나(형용사·범위어) 다른 뜻이라 묶으면 안 되는 것
-    "서비스", "미래", "유망", "혁신", "전략", "고급", "고부가가치", "해외", "지원", "선물", "투자",
+    "서비스", "미래", "유망", "혁신", "전략", "고급", "고부가가치", "해외", "지원", "선물", "투자", "신흥",
     "규슈",                  # 지명
     "노동",                  # 노동(노동법·노조 포함) ≠ 노동시장 — 노동시장은 고용시장과 묶음(팀 검수)
 }
-DECISIONS = NK / "synonym_decisions.csv"   # 팀 검수 결과 (import_synonym_review.py가 만듦): 표기, 대표어 후보, 판정(O/X/△)
+
+# 예외: 규칙으로 옮길 수 없지만 팀이 같은 말로 정한 쌍 (팀 동의어 검수 2026-10-19 · O). (표기, 대표어 후보)
+SYNONYM_EXTRA = [
+    ("제조", "제조업"),   # 대표어는 제조업 (접미사 규칙만 쓰면 제조로 뒤집힘)
+    ("신에너지자동차", "신에너지차"), ("리튬배터리", "리튬이온배터리"), ("지속가능", "지속가능성"), ("건설자재", "건축자재"), ("물가상승률", "물가상승"),
+    ("실버경제", "실버산업"), ("의약", "의약품"), ("태양광발전", "태양광"), ("경제성장", "경제성장률"), ("보건의료", "보건"), ("디지털헬스", "디지털헬스케어"),
+    ("관세율", "관세"), ("스마트농업", "스마트팜"), ("푸드", "식품"), ("탈탄소화", "탈탄소"), ("음식", "식품"), ("건강식품", "건강기능식품"),
+    ("인력부족", "노동력부족"), ("친환경에너지", "그린에너지"), ("원격진료", "원격의료"), ("현지진출", "해외진출"), ("참관", "참관기"), ("노동자", "근로자"),
+    ("수출금지", "수출통제"), ("상표권", "상표"), ("고용시장", "노동시장"), ("의료미용", "미용의료"), ("기능성식품", "건강기능식품"), ("지적재산권", "지식재산권"),
+    ("여행", "관광"), ("푸드", "음식"), ("일자리", "채용"), ("특별경제구역", "경제특구"), ("풍력발전", "풍력"), ("채용", "고용"), ("디지털화", "디지털"),
+    ("바이오테크", "바이오"), ("일자리", "고용"), ("중부지역", "중부"), ("스마트화", "스마트"), ("웰빙", "웰니스"), ("애완동물", "반려동물"), ("창업", "스타트업"),
+    ("피부", "피부관리"), ("펫테크", "펫케어"), ("헤어", "헤어케어"), ("성장률", "성장"), ("건강보조식품", "건강기능식품"), ("스타트업생태계", "스타트업"),
+    ("한국화장품", "화장품"), ("화장품수출", "화장품"), ("디자이너패션", "패션"), ("노동", "고용"), ("두피케어", "헤어케어"), ("대체에너지", "재생에너지"),
+    ("식품가공", "식품"), ("벤처", "스타트업"), ("식품수출", "식품"), ("완성차", "자동차"),
+]
+
+# 예외: 규칙이 묶지만 팀이 같은 말이 아니라고 정한 쌍 (팀 동의어 검수 · X). 방향 없음
+SYNONYM_BLOCK = [("온라인시장", "온라인"), ("의료미용시장", "의료미용")]
 
 
-def load_decisions(path=DECISIONS):
-    if not Path(path).exists():
-        return pd.DataFrame(columns=["표기", "대표어 후보", "판정"])
-    return pd.read_csv(path, dtype=str, keep_default_na=False)
+def opposite(a, b):
+    """반대말 쌍이면 True (수출금지 ↔ 수입금지, 구직 ↔ 구인)."""
+    return any((x in a and y in b) or (y in a and x in b) for x, y in rd.SYNONYM_OPPOSITES)
 
 
 def suffix_pairs(docs):
@@ -148,32 +170,52 @@ def suffix_pairs(docs):
     return out
 
 
-class SynonymConflict(ValueError):
-    """팀 검수 판정과 최종 사전이 맞지 않음 (X·△ 쌍이 합쳐지거나, O 쌍이 서로 다른 대표어로 갈라짐) — 판정을 정리해야 함."""
-
-
-def conflicts(rows, blocked, joined=()):
-    """최종 사전 {표기: (대표어, 판정)}을 팀 판정과 대조합니다. 반대 판정이 남은 줄의 설명 목록.
-    - X·△ 쌍(blocked)은 최종 대표어가 달라야 함 (다른 연결을 거쳐 합쳐지면 안 됨)
-    - O 쌍(joined)은 최종 대표어가 같아야 함 (한 표기에 O가 여럿이어도 모두 같은 대표어로 모이면 됨)"""
-    rep = lambda w: rows[w][0] if w in rows else w
-    how = lambda w: f"{w} → {rows[w][0]} ({rows[w][1]})" if w in rows else f"{w} (대표어)"
-    pairs = lambda s: (sorted(p) for p in sorted(s, key=sorted))
-    out = [f"{a} ≠ {b} (X·△)인데 둘 다 '{rep(a)}'로 합쳐짐: {how(a)} / {how(b)}" for a, b in pairs(blocked) if rep(a) == rep(b)]
-    out += [f"{a} = {b} (O)인데 대표어가 갈라짐: {how(a)} / {how(b)}" for a, b in pairs(joined) if rep(a) != rep(b)]
+def same_base_pairs(docs):
+    """같은 기본어의 OO산업 · OO시장 · OO업끼리 → 기사 많은 쪽 (기본 단어 OO가 접미사 규칙 조건을 못 채울 때: 관광업 = 관광산업)."""
+    groups = {}
+    for w in docs:
+        for suf in SUFFIXES:
+            if w.endswith(suf) and len(w) - len(suf) >= 2:
+                groups.setdefault(w[: -len(suf)], []).append(w)
+                break
+    out = []
+    for base, forms in groups.items():
+        if len(forms) < 2 or base in SUFFIX_EXCLUDE_BASE or docs.get(base, 0) >= SUFFIX_MIN_BASE:
+            continue
+        rep = max(forms, key=lambda f: (docs[f], f))
+        out += [(f, rep, base) for f in forms if f != rep]
     return out
 
 
-def build(docs, decisions=None):
-    """순서: ① GROUPS(확정 묶음) → ② 팀 검수 O → ③ 접미사 규칙 → 사슬(A→B→C)은 마지막 대표어로 정리.
-    팀이 X·△로 표시한 쌍은 방향과 상관없이(A→B, B→A 모두) 규칙으로 묶지 않습니다.
-    최종 대표어로 정리한 뒤 X·△ 쌍이 같은 대표어가 되거나 O 쌍이 다른 대표어로 갈라지면 SynonymConflict로 멈춥니다."""
-    decisions = load_decisions() if decisions is None else decisions
+class SynonymConflict(ValueError):
+    """규칙·예외로 만든 사전이 막아야 할 쌍(반대말·SYNONYM_BLOCK)을 합치거나 예외 같은 말(SYNONYM_EXTRA)을 가름 — 목록을 정리해야 함."""
+
+
+def conflicts(rows, blocked, joined=()):
+    """최종 사전 {표기: (대표어, 판정)}을 막을 쌍·묶을 쌍과 대조합니다. 어긋난 줄의 설명 목록.
+    - 막을 쌍(blocked: SYNONYM_BLOCK)은 최종 대표어가 달라야 함 (다른 연결을 거쳐 합쳐지면 안 됨). 반대말은 따로 검사
+    - 묶을 쌍(joined: SYNONYM_EXTRA)은 최종 대표어가 같아야 함"""
+    rep = lambda w: rows[w][0] if w in rows else w
+    how = lambda w: f"{w} → {rows[w][0]} ({rows[w][1]})" if w in rows else f"{w} (대표어)"
+    pairs = lambda s: (sorted(p) for p in sorted(s, key=sorted))
+    out = [f"{a} ≠ {b} (묶지 않음)인데 둘 다 '{rep(a)}'로 합쳐짐: {how(a)} / {how(b)}" for a, b in pairs(blocked) if rep(a) == rep(b)]
+    out += [f"{a} = {b} (같은 말)인데 대표어가 갈라짐: {how(a)} / {how(b)}" for a, b in pairs(joined) if rep(a) != rep(b)]
+    return out
+
+
+def build(docs, extra=None, block=None):
+    """순서: ① GROUPS(확정 묶음) → ② 예외 같은 말(SYNONYM_EXTRA) → ③ 접미사 규칙 → ④ 같은 기본어 규칙
+    → 사슬(A→B→C)은 마지막 대표어로 정리. 반대말과 묶지 않을 쌍(SYNONYM_BLOCK)은 어떤 규칙으로도 묶지 않습니다.
+    최종 사전에서 반대말·막을 쌍이 같은 대표어가 되거나 예외 같은 말이 갈라지면 SynonymConflict로 멈춥니다."""
+    extra = SYNONYM_EXTRA if extra is None else extra
+    blocked = {frozenset((kc.normalize(a), kc.normalize(b))) for a, b in (SYNONYM_BLOCK if block is None else block)}
     paren = getattr(docs, "paren", set())
     rows, skipped = {}, []
 
     def add(form, rep, basis, judge):
-        # 이미 반대 방향(rep → form)이 있으면 넣지 않음 — 먼저 정한 쪽(확정 묶음 > 팀 O > 규칙)이 대표어를 정함 (순환 방지)
+        # 반대말·막을 쌍은 묶지 않음. 이미 반대 방향(rep → form)이 있으면 넣지 않음 — 먼저 정한 쪽이 대표어 (순환 방지)
+        if opposite(form, rep) or frozenset((form, rep)) in blocked:
+            return
         if form != rep and form not in rows and rows.get(rep, {}).get("대표어") != form:
             rows[form] = {"표기": form, "대표어": rep, "근거": basis, "판정": judge}
 
@@ -185,17 +227,16 @@ def build(docs, decisions=None):
         rep = max(present, key=lambda f: docs[f])
         for f in present:
             add(f, rep, basis, check(f, rep, paren))
-    blocked, joined = set(), set()
-    for r in decisions.itertuples(index=False):
-        form, rep, d = kc.normalize(r[0]), kc.normalize(r[1]), r[2]
-        if d == "O" and docs[form] > 0 and docs[rep] > 0:
-            add(form, rep, "팀 검수", "팀 O")
+    joined = set()
+    for a, b in extra:
+        form, rep = kc.normalize(a), kc.normalize(b)
+        if docs[form] > 0 and docs[rep] > 0:
+            add(form, rep, "팀 검수 (규칙 아님)", "예외: 같은 말")
             joined.add(frozenset((form, rep)))
-        elif d in ("X", "△"):
-            blocked.add(frozenset((form, rep)))   # 방향 없음: 제조→제조업 X면 제조업→제조도 막음
     for form, base, suf in suffix_pairs(docs):
-        if frozenset((form, base)) not in blocked:
-            add(form, base, f"접미사({suf})", "규칙: 접미사")
+        add(form, base, f"접미사({suf})", "규칙: 접미사")
+    for form, rep, base in same_base_pairs(docs):
+        add(form, rep, f"같은 기본어({base})", "규칙: 같은 기본어")
 
     def final(w, seen=()):
         r = rows.get(w)
@@ -203,22 +244,23 @@ def build(docs, decisions=None):
     out = []
     for form, r in rows.items():
         rep = final(r["대표어"], (form,))
-        if rep != form:                      # 사슬이 돌아오면(A→B→A) 묶지 않음
+        if rep != form and not opposite(form, rep):          # 사슬이 돌아오면(A→B→A) · 사슬 끝이 반대말이면 묶지 않음
             out.append({**r, "대표어": rep, "표기_기사수": docs[form], "대표어_기사수": docs[rep]})
     df = pd.DataFrame(out, columns=["표기", "대표어", "근거", "판정", "표기_기사수", "대표어_기사수"])
     bad = conflicts({r.표기: (r.대표어, r.판정) for r in df.itertuples(index=False)}, blocked, joined)
     if bad:
-        raise SynonymConflict(f"팀 검수 판정과 맞지 않는 쌍 {len(bad)}개. synonym_decisions.csv에서 O/X를 하나로 정리한 뒤 "
-                              "다시 실행하세요.\n" + "\n".join(f"  {x}" for x in bad))
+        raise SynonymConflict(f"막을 쌍·같은 말 예외와 맞지 않는 쌍 {len(bad)}개. build_synonyms.py의 SYNONYM_EXTRA·SYNONYM_BLOCK을 "
+                              "정리한 뒤 다시 실행하세요.\n" + "\n".join(f"  {x}" for x in bad))
     return df, skipped
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", type=Path, default=RAW)
-    ap.add_argument("--output", type=Path, default=NK / "synonyms.csv")
+    ap.add_argument("--output", type=Path, default=OUT)
     args = ap.parse_args()
     df, skipped = build(topic_counts(args.input))
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(args.output, index=False, encoding="utf-8-sig")
     print(f"규칙 {len(df)}개 (대표어 {df.대표어.nunique()}개) → {args.output} / 데이터에 없어 건너뛴 묶음 {skipped}")
     print("판정:", df.판정.value_counts().to_dict())

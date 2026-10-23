@@ -1,14 +1,18 @@
 """대륙·하위 지역(market_region)과 국가(country). 실제 MySQL 테이블에 맞춘 정의로, 테이블은 DB에서 관리합니다.
 
-country.currency_code의 currency FK는 currency 모델이 아직 없어 옮기지 않았습니다 (MySQL에는 있음)."""
+country.currency_code의 currency FK는 currency 모델이 아직 없어 옮기지 않았습니다 (MySQL에는 있음).
+공용 Base에는 models/news.py·tests/__init__.py가 FK 확인용 country(country_code만)를 등록해 두므로,
+같은 이름의 전체 정의가 부딪히지 않게 별도 메타데이터(RegionBase)를 씁니다."""
 from sqlalchemy import CheckConstraint, Enum, ForeignKey, SmallInteger, String
 from sqlalchemy.dialects.mysql import TINYINT
-from sqlalchemy.orm import Mapped, mapped_column
-
-from backend.app.models.base import Base
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
-class MarketRegion(Base):
+class RegionBase(DeclarativeBase):
+    pass
+
+
+class MarketRegion(RegionBase):
     __tablename__ = "market_region"
     __table_args__ = (
         CheckConstraint("(region_level = 1 AND parent_id IS NULL) OR "
@@ -24,7 +28,7 @@ class MarketRegion(Base):
     name_ko: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, comment="화면 표시용 지역 이름")
 
 
-class Country(Base):
+class Country(RegionBase):
     __tablename__ = "country"
 
     country_code: Mapped[str] = mapped_column(String(12), primary_key=True, comment="관세청 기준 국가 식별 코드")

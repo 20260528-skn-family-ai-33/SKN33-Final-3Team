@@ -3,7 +3,6 @@
 실행: python -m unittest backend/tests/test_short_news_load.py
 """
 import csv
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,13 +13,12 @@ from sqlalchemy import select
 
 from backend.app.db.crud import CRUD
 from backend.app.db.session import make_engine, session_scope
-from backend.app.models.article import Article, ArticleTag
 from backend.app.models.base import Base
+from backend.app.models.news import Article, ArticleTag
 from backend.app.models.hs_code import HsCodeMst
 from backend.app.scheduler.jobs import hs_code_embed as he
 from backend.app.scheduler.jobs import short_news_load as sn
-from backend.app.models.keyword import KeywordTopic
-from backend.app.services.news_keywords import keyword_dict as kd
+from backend.app.services.news_keywords import keyword_clean as kc
 from backend.tests.test_hs_code_embed import FakeEmbed
 
 HS = [("27", "제27류 광물성 연료", None), ("2711", "석유가스와 그 밖의 가스상 탄화수소", None),
@@ -59,9 +57,8 @@ class ShortNewsLoadTest(unittest.TestCase):
         self.db = f"sqlite:///{(self.dir / 'news.db').as_posix()}"
         self.engine = make_engine(self.db)
         Base.metadata.create_all(self.engine)
-        for name, path in (("CATEGORY_PATH", kd.CATEGORY_PATH), ("ADDITIONS_PATH", kd.ADDITIONS_PATH)):
-            shutil.copy(path, self.dir / path.name)  # 키워드 사전 csv는 임시 복사본에 씀
-            patcher = mock.patch.object(kd, name, self.dir / path.name)
+        for name in ("load_synonyms", "load_hypernyms", "load_categories"):  # 저장소 사전 파일과 무관하게 빈 사전으로 시험
+            patcher = mock.patch.object(kc, name, return_value={})
             patcher.start()
             self.addCleanup(patcher.stop)
         with session_scope(self.engine) as s:
@@ -131,9 +128,6 @@ class ShortNewsLoadTest(unittest.TestCase):
         self.assertIn((1, None, "271111"), tags)  # 후보 밖 999999는 버림
         self.assertEqual(len(tags), 3)  # LNG: 키워드 1(중복·공백 제거) + HS 1, 외환: 키워드 1
         self.assertIn((1, "LNG수입", None), tags)  # 해외시장뉴스와 같은 정제 (한글이 있으면 공백 제거)
-        with session_scope(self.engine) as s:  # 사전에 없던 주제어는 키워드 사전에 검수 대기로 들어감
-            self.assertEqual(s.get(KeywordTopic, "LNG수입").status, "PENDING")
-        self.assertEqual(self.additions()["LNG수입"]["상태"], "신규")
         col = sn.get_news_collection(self.client)
         self.assertEqual(col.count(), 2)
         hit = sn.search("LNG", n=1, where={"nat": "러시아연방"}, client=self.client, embed=self.embed)[0]
@@ -147,16 +141,10 @@ class ShortNewsLoadTest(unittest.TestCase):
             self.assertEqual(CRUD(ArticleTag).count(s), 3)
         self.assertEqual(col.count(), 2)
 
-    def additions(self):
-        return {r["주제어"]: r for r in kd.read_csv(kd.ADDITIONS_PATH)}
-
     def test_retag_after_dictionary_change(self):
-        """관리자가 동의어로 합친 뒤 --retag로 다시 실행하면 이미 넣은 기사 태그도 대표어로"""
+        """동의어 사전이 바뀐 뒤 --retag로 다시 실행하면 이미 넣은 기사 태그도 대표어로"""
         self.assertEqual(self.run_load(FakeChat()), 0)
-        kd.register_topics(self.engine, ["LNG"])
-        kd.merge_synonym(self.engine, "LNG수입", "LNG")
-        with session_scope(self.engine) as s:  # merge가 바꾼 태그를 되돌려 사전 변경 전 상태를 만듦
-            s.query(ArticleTag).filter(ArticleTag.keyword_text == "LNG").update({"keyword_text": "LNG수입"})
+        kc.load_synonyms.return_value = {"LNG수입": "LNG"}
         self.assertEqual(sn.run(self.csv, self.db, client=self.client, ask=FakeChat(), embed=self.embed, log_dir=self.dir,
                                 cache_path=self.dir / "cache.jsonl", workers=2, retag=True), 0)
         with session_scope(self.engine) as s:
