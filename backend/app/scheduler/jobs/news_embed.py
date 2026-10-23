@@ -16,6 +16,7 @@ news_keyword 컬렉션에는 article_tag의 키워드(주제어)를 추가합니
   문서는 같고 키워드 등 메타데이터만 바뀐 기사는 임베딩 없이 메타데이터만 갱신합니다. 빈 목록이 된 키(마지막 키워드를 지움)는
   None으로 보내 지웁니다 (Chroma update는 넘기지 않은 키를 그대로 남김).
   실패한 배치는 컬렉션에 들어가지 않으므로 다음 실행에서 다시 처리됩니다.
+- 배치마다 OpenAI가 센 누적 토큰 수와 예상 비용(PRICE_PER_M 기준)을 로그에 남깁니다.
 - 키워드 컬렉션은 DB 키워드와 맞춥니다: 새 키워드 추가 · 기사 수 갱신 · DB에서 사라진 키워드(사전이 바뀌어 동의어·하위어가 된 말) 삭제.
 - --rebuild --dry-run은 컬렉션을 지우지 않고, 지운 뒤 새로 넣을 개수만 셉니다.
 - 임베딩 모델: text-embedding-3-large (hs_code_embed와 같은 모델, 3,072차원).
@@ -44,7 +45,9 @@ CHROMA_PATH = Path(__file__).resolve().parents[4] / "chroma_data"
 LOG_DIR = Path(__file__).resolve().parents[4] / "data" / "news" / "logs"
 BATCH = 100  # 조각 하나가 최대 약 1천 토큰이라 한 요청이 OpenAI 요청당 토큰 한도(30만)를 넘지 않게
 KEYWORD_BATCH = 500
+GET_PAGE = 5000  # 컬렉션을 읽을 때 한 번에 가져오는 개수 (get_all)
 CHUNK, OVERLAP = 1000, 150
+PRICE_PER_M = 0.13  # text-embedding-3-large 달러/100만 토큰 (비용 로그용 — OpenAI 가격이 바뀌면 고칠 것)
 log = logging.getLogger("news_embed")
 
 
@@ -126,7 +129,21 @@ def openai_embed(env=ENV_PATH):
     if not key:
         raise ValueError(f"{env}에 OPENAI_API_KEY가 없습니다.")
     client = OpenAI(api_key=key, max_retries=8)  # 처음 전체 임베딩은 요청이 많아 분당 한도(429)에 걸리면 기다렸다 재시도
-    return lambda texts: [d.embedding for d in client.embeddings.create(model=MODEL, input=texts).data]
+
+    def embed(texts):
+        res = client.embeddings.create(model=MODEL, input=texts)
+        embed.usage["tokens"] += res.usage.total_tokens   # OpenAI가 청구 기준으로 센 토큰 수
+        return [d.embedding for d in res.data]
+    embed.usage = {"tokens": 0}
+    return embed
+
+
+def usage_text(embed):
+    """지금까지 쓴 토큰과 예상 비용 (openai_embed만 셈, 테스트용 embed는 빈 문자열)."""
+    usage = getattr(embed, "usage", None)
+    if usage is None:
+        return ""
+    return f" | 토큰 {usage['tokens']:,} (약 ${usage['tokens'] / 1e6 * PRICE_PER_M:.2f})"
 
 
 def get_collection(client, name, rebuild=False):
@@ -141,6 +158,18 @@ def get_collection(client, name, rebuild=False):
     return col
 
 
+def get_all(col, include, page=GET_PAGE):
+    """컬렉션 전체를 page개씩 나눠 읽습니다. 한 번에 읽으면 Chroma(SQLite)가 약 3만 2천 개부터
+    'too many SQL variables'로 실패합니다 (kotra_article은 조각이 10만 개 넘게 들어감)."""
+    out = {"ids": [], **{k: [] for k in include}}
+    while True:
+        got = col.get(include=include, limit=page, offset=len(out["ids"]))
+        for k in out:
+            out[k] += got[k]
+        if len(got["ids"]) < page:
+            return out
+
+
 def plan(rows, col):
     """(새로 넣을 {id: (문서, 메타데이터)}, 지울 article_id 목록, 그대로 둘 기사 수, 메타데이터만 바꿀 {id: 메타데이터}).
     col이 None이면 빈 컬렉션으로 봄 (--rebuild --dry-run).
@@ -149,7 +178,7 @@ def plan(rows, col):
     - 문서는 같고 키워드 등만 바뀐 기사는 임베딩 없이 메타데이터만 갱신. 없어진 키는 None으로 지움"""
     have = {}
     if col is not None:
-        got = col.get(include=["metadatas", "documents"])
+        got = get_all(col, ["metadatas", "documents"])
         for i, m, d in zip(got["ids"], got["metadatas"], got["documents"]):
             have.setdefault(m["article_id"], {})[i] = (d, m)
     todo, stale, same, meta = {}, [], 0, {}
@@ -186,7 +215,7 @@ def sync(rows, col, embed):
         part = ids[i:i + BATCH]
         texts = [todo[x][0] for x in part]
         col.add(ids=part, documents=texts, metadatas=[todo[x][1] for x in part], embeddings=embed(texts))
-        log.info(f"기사 조각 임베딩 {min(i + BATCH, len(ids)):,}/{len(ids):,}")
+        log.info(f"기사 조각 임베딩 {min(i + BATCH, len(ids)):,}/{len(ids):,}{usage_text(embed)}")
     return {"added": len(ids), "articles": len({todo[x][1]["article_id"] for x in ids}) - len(stale),
             "changed": len(stale), "existing": same, "meta_updated": len(meta)}
 
@@ -204,7 +233,7 @@ def sync_keywords(counts, col, embed):
     """컬렉션을 DB 키워드와 맞춥니다. 없는 키워드만 임베딩해 추가하고, 기사 수가 바뀐 키워드는 메타데이터만 갱신하고,
     DB에서 사라진 키워드(사전이 바뀌어 동의어·하위어가 된 말)는 지웁니다 (추천에 예전 키워드가 남지 않게).
     id·문서 모두 키워드 글자 그대로, 메타데이터는 keyword·article_count. DB 키워드가 하나도 없으면 지우지 않습니다."""
-    got = col.get(include=["metadatas"])
+    got = get_all(col, ["metadatas"])
     have = dict(zip(got["ids"], got["metadatas"]))
     gone = sorted(set(have) - set(counts)) if counts else []
     for i in range(0, len(gone), KEYWORD_BATCH):
@@ -219,7 +248,7 @@ def sync_keywords(counts, col, embed):
         part = todo[i:i + KEYWORD_BATCH]
         col.add(ids=part, documents=part, metadatas=[{"keyword": k, "article_count": counts[k]} for k in part],
                 embeddings=embed(part))
-        log.info(f"키워드 임베딩 {min(i + KEYWORD_BATCH, len(todo)):,}/{len(todo):,}")
+        log.info(f"키워드 임베딩 {min(i + KEYWORD_BATCH, len(todo)):,}/{len(todo):,}{usage_text(embed)}")
     return {"added": len(todo), "existing": len(counts) - len(todo), "count_updated": len(changed), "deleted": len(gone)}
 
 
@@ -259,7 +288,7 @@ def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_
         articles = None if keywords_only or fresh else get_collection(client, ARTICLE_COLLECTION, rebuild)
         keywords = None if fresh else get_collection(client, KEYWORD_COLLECTION, rebuild)
         if dry_run:
-            have_kw = set() if keywords is None else set(keywords.get(include=[])["ids"])
+            have_kw = set() if keywords is None else set(get_all(keywords, [])["ids"])
             new_kw, gone_kw = set(counts) - have_kw, (have_kw - set(counts)) if counts else set()
             kw_txt = f"키워드 {len(new_kw):,}개 추가 · {len(gone_kw):,}개 삭제"
             if keywords_only:
@@ -274,19 +303,20 @@ def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_
         result = None if keywords_only else sync(rows, articles, embed)
         kw = sync_keywords(counts, keywords, embed)
     except Exception:
-        log.exception(f"실패: 임베딩 중 오류 (이미 추가한 배치는 남고 다음 실행에서 나머지를 추가함) | 로그: {log_path}")
+        log.exception(f"실패: 임베딩 중 오류 (이미 추가한 배치는 남고 다음 실행에서 나머지를 추가함)"
+                      f"{usage_text(embed)} | 로그: {log_path}")
         return 1
     finally:
         if engine is not None:
             engine.dispose()
     if keywords_only:
         log.info(f"완료(키워드만): 키워드 추가 {kw['added']:,} · 기사 수 갱신 {kw['count_updated']:,} · 삭제 {kw['deleted']:,} "
-                 f"(컬렉션 {keywords.count():,}개) | 로그: {log_path}")
+                 f"(컬렉션 {keywords.count():,}개){usage_text(embed)} | 로그: {log_path}")
         return 0
     log.info(f"완료: DB 기사 {len(rows):,}건 | 새 기사 {result['articles']:,} · 변경 {result['changed']:,} · "
              f"그대로 {result['existing']:,} | 조각 추가 {result['added']:,} · 메타데이터 갱신 {result['meta_updated']:,} "
              f"(컬렉션 {articles.count():,}개) | 키워드 추가 {kw['added']:,} · 기사 수 갱신 {kw['count_updated']:,} · "
-             f"삭제 {kw['deleted']:,} (컬렉션 {keywords.count():,}개) | 로그: {log_path}")
+             f"삭제 {kw['deleted']:,} (컬렉션 {keywords.count():,}개){usage_text(embed)} | 로그: {log_path}")
     return 0
 
 
