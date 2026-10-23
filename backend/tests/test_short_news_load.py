@@ -15,15 +15,10 @@ from backend.app.db.crud import CRUD
 from backend.app.db.session import make_engine, session_scope
 from backend.app.models.base import Base
 from backend.app.models.news import Article, ArticleTag
-from backend.app.models.hs_code import HsCodeMst
-from backend.app.scheduler.jobs import hs_code_embed as he
 from backend.app.scheduler.jobs import short_news_load as sn
 from backend.app.services.news_keywords import keyword_clean as kc
 from backend.tests.test_hs_code_embed import FakeEmbed
 
-HS = [("27", "제27류 광물성 연료", None), ("2711", "석유가스와 그 밖의 가스상 탄화수소", None),
-      ("271111", "액화 석유가스 천연가스", "천연가스"), ("8112", "베릴륨ㆍ갈륨ㆍ게르마늄과 이것으로 만든 제품", None),
-      ("811292", "기타괴웨이스트가루제품", "괴, 웨이스트와 스크랩, 가루")]
 CSV_ROWS = [
     {"nat": "러시아연방", "nttSj": "[러시아] 한국, 러시아산 LNG 수입 증가", "kotraNewsUrl": "https://k/1", "othbcDt": "2025-02-05",
      "nttSn": "1", "kbc": "모스크바무역관", "regn": "유럽",
@@ -36,18 +31,15 @@ CSV_ROWS = [
 
 
 class FakeChat:
-    """1차는 LNG 기사에만 품목을 주고, 2차는 후보 코드 하나와 후보에 없는 코드 하나를 고릅니다."""
+    """기사마다 요약 한 문장과 키워드를 줍니다 (LNG 기사는 중복·공백 키워드 포함)."""
 
     def __init__(self):
         self.calls = 0
 
     def __call__(self, system, user):
         self.calls += 1
-        if system == sn.PICK_PROMPT:
-            return {"hs_codes": ["271111", "999999"]}
         lng = "LNG" in user
-        return {"summary": "요약 문장.", "keywords": ["LNG 수입", "LNG 수입", " "] if lng else ["외환보유액"],
-                "products": ["액화천연가스"] if lng else []}
+        return {"summary": "요약 문장.", "keywords": ["LNG 수입", "LNG 수입", " "] if lng else ["외환보유액"]}
 
 
 class ShortNewsLoadTest(unittest.TestCase):
@@ -61,15 +53,10 @@ class ShortNewsLoadTest(unittest.TestCase):
             patcher = mock.patch.object(kc, name, return_value={})
             patcher.start()
             self.addCleanup(patcher.stop)
-        with session_scope(self.engine) as s:
-            CRUD(HsCodeMst).upsert_many(s, [{"hs_code": c, "hs_ver": "HS2022", "name_ko": n, "original_name_ko": o,
-                                             "source_edition": "t"} for c, n, o in HS])
         self.client = chromadb.EphemeralClient()
-        for name in (he.COLLECTION, sn.COLLECTION):  # 메모리 클라이언트는 프로세스에서 공유됨
-            if name in [c.name for c in self.client.list_collections()]:
-                self.client.delete_collection(name)
+        if sn.COLLECTION in [c.name for c in self.client.list_collections()]:  # 메모리 클라이언트는 프로세스에서 공유됨
+            self.client.delete_collection(sn.COLLECTION)
         self.embed = FakeEmbed()
-        he.run(self.db, client=self.client, embed=self.embed, log_dir=self.dir)
         self.csv = self.dir / "short_news.csv"
         with open(self.csv, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(CSV_ROWS[0]))
@@ -78,7 +65,7 @@ class ShortNewsLoadTest(unittest.TestCase):
 
     def tearDown(self):
         self.engine.dispose()
-        for lg in (he.log, sn.log):
+        for lg in (sn.log,):
             for h in lg.handlers:
                 h.close()
             lg.handlers.clear()
@@ -119,26 +106,26 @@ class ShortNewsLoadTest(unittest.TestCase):
     def test_load_and_rerun(self):
         chat = FakeChat()
         self.assertEqual(self.run_load(chat), 0)
-        self.assertEqual(chat.calls, 3)  # LNG 기사 2회(추출·선택), 외환 기사 1회(품목 없음)
+        self.assertEqual(chat.calls, 2)  # 기사당 1회 (HS 선택 호출 없음)
         with session_scope(self.engine) as s:
             arts = {a.external_id: (a.category, a.body_masked) for a in s.scalars(select(Article))}
             tags = {(t.article_id, t.keyword_text, t.hs_code) for t in s.scalars(select(ArticleTag))}
         self.assertEqual(set(arts), {"1", "2"})  # 날짜 오류 행 제외
         self.assertEqual(arts["2"], ("short_news", "외환보유액 증가. 대표번호 [전화번호]"))
-        self.assertIn((1, None, "271111"), tags)  # 후보 밖 999999는 버림
-        self.assertEqual(len(tags), 3)  # LNG: 키워드 1(중복·공백 제거) + HS 1, 외환: 키워드 1
-        self.assertIn((1, "LNG수입", None), tags)  # 해외시장뉴스와 같은 정제 (한글이 있으면 공백 제거)
+        # 키워드 1개씩(중복·공백 제거), HS 태그 없음. 해외시장뉴스와 같은 정제 (한글이 있으면 공백 제거)
+        self.assertEqual(tags, {(1, "LNG수입", None), (2, "외환보유액", None)})
         col = sn.get_news_collection(self.client)
         self.assertEqual(col.count(), 2)
         hit = sn.search("LNG", n=1, where={"nat": "러시아연방"}, client=self.client, embed=self.embed)[0]
-        self.assertEqual((hit[2]["external_id"], hit[2]["hs_codes"]), ("1", "271111"))
+        self.assertEqual((hit[2]["external_id"], hit[2]["keywords"]), ("1", "LNG수입"))
+        self.assertNotIn("hs_codes", hit[2])
         self.assertIn("[연락처]", col.get(ids=[hit[0]])["documents"][0])  # 문서는 마스킹한 본문
 
         again = FakeChat()  # 재실행: 캐시·DB·컬렉션 모두 이미 있어 아무것도 다시 하지 않음
         self.assertEqual(self.run_load(again), 0)
         self.assertEqual(again.calls, 0)
         with session_scope(self.engine) as s:
-            self.assertEqual(CRUD(ArticleTag).count(s), 3)
+            self.assertEqual(CRUD(ArticleTag).count(s), 2)
         self.assertEqual(col.count(), 2)
 
     def test_retag_after_dictionary_change(self):
