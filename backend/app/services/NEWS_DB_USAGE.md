@@ -33,6 +33,9 @@ OPENAI_API_KEY=sk-...          # ④ 임베딩
 
 테이블은 미리 만들어 두어야 합니다. 적재 코드는 테이블을 만들지 않고, 없으면 오류 로그를 남기고 끝납니다.
 빈 DB라면 `db/mysql/init/`의 SQL을 `01_schema.sql`부터 번호 순서대로 대상 DB에서 실행합니다.
+기사·배치 관리자 ERD와 단신속보 포함 집계 뷰를 적용할 때는
+[SHORTNEWS_DB_USAGE.md의 마이그레이션 절차](SHORTNEWS_DB_USAGE.md#기사배치-관리자-스키마-적용)를 따릅니다.
+기존 뉴스 적재기는 신규 기사의 필수 관리자 JSON을 공급하고 재적재 시 관리자 값을 보존합니다.
 
 ## ③ MySQL 적재 (`news_load`)
 
@@ -73,14 +76,26 @@ python -m backend.app.scheduler.jobs.news_load --raw data/news/news_raw_20220101
 ### 적재 동작
 
 - 같은 `(source_code, external_id)` 기사가 있으면 제목·발행일·URL·본문·분류를 갱신합니다 (`article_id` 유지). 원본에 같은 ID가 두 번 있으면 마지막 행.
-- 입력 기사들의 태그는 지우고 새로 넣습니다. 동의어·분야 사전이 바뀌어 ②를 다시 돌려도 이전 태그가 남지 않습니다.
+- 키워드 결과가 있는 기사의 태그를 교체합니다. 관리자 ERD의 수동 지정 플래그가 켜진 국가·HS 태그는 보존합니다.
 - 일별 집계는 입력 기사의 발행일(발행일이 바뀐 기사는 예전 날짜도)만 지우고, 그날 DB에 있는 **모든 출처** 기사로 다시 셉니다.
   나중에 단신속보가 같은 테이블에 들어와도 함께 셉니다.
-- 키워드 결과가 없는 기사(①과 ②의 입력이 다를 때)는 기사만 넣고 태그는 비웁니다 (경고).
+- 키워드 결과가 없는 기사(①과 ②의 입력이 다를 때)는 기사만 넣고 기존 태그를 보존합니다 (신규 기사는 태그 없음; 경고).
 - `hs_code` 테이블이 비어 있으면 품목 태그·집계 0건으로 넘어갑니다 (경고). `hs_code_load` 후 다시 실행하면 채워집니다.
 - 전체를 한 트랜잭션으로 넣습니다. 중간에 실패하면 모두 롤백되어 아무것도 반영되지 않습니다.
+- 같은 저장소 경로·DB를 쓰는 해외시장뉴스/단신속보 적재기는 `data/news/load_locks/`의 공용 잠금으로
+  트랜잭션을 차례로 실행합니다. 앞 작업의 커밋/롤백 후에 조회하므로 공용 일별 집계가 서로 덮어써지지 않습니다.
+  다른 서버·별도 저장소 사본까지 조정하는 분산 잠금은 아닙니다.
 - 실행할 때마다 `batch_run`에 한 건 기록합니다 (job `NEWS_LOAD`, 대상 `article`, 기간 = 원본 기사 발행일 범위, 수신 = 원본 기사 수, API 호출 0).
 - 로그: 화면과 `data/news/logs/news_load_<시각>.log`.
+
+### 관리자 ERD 호환
+
+관리자 ERD 컬럼이 있으면 신규 기사에 `visibility_status=VISIBLE`, `first_ingested_at`,
+필수 `admin_meta_json`을 넣고, 공통 배치 기록에 `detail_json={"schema_version":1}`을 넣습니다.
+구형 스키마에서는 이 추가 컬럼을 사용하지 않습니다. 재적재는 기존 관리자 JSON·공개 상태·최초 시각을 유지합니다.
+`classification_input`은 적재 시점의 정책 코드·CSV 사전·DB 정책을 저장한 파일 경로와 SHA-256이며,
+초기 분류 상태는 PENDING/revision 0입니다. 스냅샷은 `data/news/classification_snapshots/`에 보관하므로
+DB와 함께 백업해야 합니다. 상세 보존·실패 규칙은 [단신속보 사용 안내](SHORTNEWS_DB_USAGE.md#관리자-erd-호환)와 같습니다.
 
 ### 확인 (MySQL)
 
@@ -241,4 +256,4 @@ python -m unittest backend/tests/test_news_load.py backend/tests/test_news_embed
 - 품목 태그·집계는 `hs_code` 적재 후 채워집니다. 지금은 KOTRA HS 칸(`hs6`)만 쓰고, 키워드·제목으로 찾은 품목은 HS 사전 완료 후 추가합니다.
 - 이름·회사명 같은 개인정보는 가리지 않습니다 (규칙으로 구분하기 어려움). 이메일·전화번호만 가립니다.
 - 매일 자동 실행(스케줄러)은 ① 수집·② 키워드 정리와 함께 연결할 때 등록합니다. 지금은 수동 실행입니다.
-- 단신속보(`collectors/shortnews`)는 출처 코드를 정한 뒤 같은 테이블에 넣습니다. 일별 집계는 이미 모든 출처를 함께 셉니다.
+- 단신속보(`collectors/shortnews`)는 `scheduler/jobs/shortnews_load.py`로 `KOTRA_SHORTNEWS` 출처의 같은 테이블에 적재합니다. [SHORTNEWS_DB_USAGE.md](SHORTNEWS_DB_USAGE.md)를 참고하세요. 일별 집계는 모든 출처를 함께 셉니다.

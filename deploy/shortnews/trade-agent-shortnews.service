@@ -1,0 +1,25 @@
+# 경로와 실행 계정은 실제 AWS 서버 배치 위치에 맞게 지정합니다.
+[Unit]
+Description=Trade agent daily short news worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=trade-agent
+Group=trade-agent
+WorkingDirectory=/opt/trade-agent
+ExecStart=/opt/trade-agent/.venv/bin/python -m backend.app.scheduler.shortnews_worker
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Asia/Seoul
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=300
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/trade-agent/data /opt/trade-agent/chroma_data
+
+[Install]
+WantedBy=multi-user.target
