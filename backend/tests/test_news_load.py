@@ -7,10 +7,12 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from sqlalchemy import select
 
 from backend.app.db.session import make_engine, session_scope
+from backend.app.db import news_lock
 from backend.app.models.base import Base
 from backend.app.models.batch import BatchRun, ServiceOption
 from backend.app.models.hs_code import HsCodeMst
@@ -75,6 +77,9 @@ class CountTest(unittest.TestCase):
 class NewsLoadTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        load_lock_patch = patch.object(news_lock, "LOAD_LOCK_DIR", Path(self.tmp.name) / "load_locks")
+        load_lock_patch.start()
+        self.addCleanup(load_lock_patch.stop)
         self.url = f"sqlite:///{(Path(self.tmp.name) / 'news.db').as_posix()}"
         self.engine = make_engine(self.url)
         Base.metadata.create_all(self.engine)

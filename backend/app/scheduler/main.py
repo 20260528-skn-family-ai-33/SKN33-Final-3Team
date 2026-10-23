@@ -3,6 +3,8 @@
 실행 (저장소 루트에서): python -m backend.app.scheduler.main
 
 등록된 잡
+- shortnews_daily: 매일 03:00(KST) 전날 단신속보 전체 페이지 수집 후 MySQL·Chroma 적재.
+  시작 10초 후에도 복구 점검하며 실패·미완료·중단 기간을 날짜별로 재처리합니다.
 - un_data_monthly: 매월 1일 03:00(KST) UN 변경분 갱신, 시작 10초 후에도 1회 점검.
   초기 CSV 적재가 필요하며, 체크포인트가 없으면 안내 후 UN 작업만 건너뜁니다.
 - hs_code_refresh: 매년 1월 1일 00:15(KST)에 HS 코드 연간 갱신(다운로드 → CSV → 적재).
@@ -194,6 +196,8 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV)
     # 켤 때마다 한 번: 꺼져 있던 동안 빠진 환율을 마지막 적재일부터 채움
     scheduler.add_job(fx_daily_load.run, "date", run_date=datetime.now(KST) + timedelta(seconds=30),
                       id="fx_daily_startup", replace_existing=True)
+    from backend.app.scheduler.jobs import shortnews_daily
+    shortnews_daily.register_jobs(scheduler)
     return scheduler
 
 

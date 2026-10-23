@@ -480,7 +480,7 @@ class MonthlyScheduleTest(unittest.TestCase):
         self.assertEqual(set(jobs), {"hs_code_refresh", "hs_code_refresh_retry", "hs_code_embed",
                                     "customs_monthly", "customs_monthly_startup",
                                     "un_data_monthly", "un_data_startup", "un_data_resume",
-                                    "fx_daily_load", "fx_daily_startup"})
+                                    "fx_daily_load", "fx_daily_startup", "shortnews_daily", "shortnews_startup"})
         self.assertIs(jobs["customs_monthly"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly_startup"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly"].args[0], scheduler)
@@ -518,7 +518,8 @@ class MonthlyScheduleTest(unittest.TestCase):
             frozen = MagicMock()
             frozen.now.return_value = datetime(2026, 3, 1, tzinfo=monthly.KST)
             scheduler = MagicMock()
-            with patch.object(monthly, "datetime", frozen), patch.object(monthly, "run_month",
+            with patch.dict("os.environ", {}, clear=True), patch.object(monthly, "dotenv_values", return_value={}), \
+                    patch.object(monthly, "datetime", frozen), patch.object(monthly, "run_month",
                     side_effect=[{"status":"SUCCESS"}, {"status":"FAILED", "retryable":True}, {"status":"SUCCESS"}]) as run:
                 monthly.startup_job(scheduler, output=root)
             self.assertEqual([call.args[0] for call in run.call_args_list], ["202512", "202601", "202602"])
