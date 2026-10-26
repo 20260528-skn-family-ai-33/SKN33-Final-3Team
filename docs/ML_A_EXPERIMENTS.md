@@ -20,20 +20,57 @@
 
 ## 2. 환경 준비
 
-저장된 피처 스냅샷(`data/ml/features_snapshot.pkl`)은 Python 3.12 · pandas 3 · NumPy 2로 만들어져, 이 PC의 기본 Python 3.11로는 읽지 못한다.
+이 PC 기본 Python(3.11.9, numpy 1.24.3, pandas 2.2.3, scikit-learn 1.9.1)으로 실행한다. 저장된 운영 모델도 같은 환경에서 만들었다. `py` 런처와 Python 3.12는 없어도 된다.
 
 ```powershell
-py -3.12 -m venv .venv-ml-experiments
-.\.venv-ml-experiments\Scripts\python.exe -m pip install -r backend/requirements-ml-experiments.txt -c backend/requirements-ml-runtime-20261022.txt
-.\.venv-ml-experiments\Scripts\python.exe -m pip install -r backend/requirements-ml-experiments-optional.txt -c backend/requirements-ml-runtime-20261022.txt  # LightGBM·XGBoost 쓸 때만
-.\.venv-ml-experiments\Scripts\python.exe -m jupyterlab
+python -m pip install jupyterlab "numpy==1.24.3" "pandas==2.2.3" "scikit-learn==1.9.1"
+python -m pip install lightgbm xgboost "numpy==1.24.3" "pandas==2.2.3" "scikit-learn==1.9.1"  # LightGBM·XGBoost 쓸 때만
+python -m jupyterlab notebooks/ml_model_a_experiments.ipynb
 ```
+
+피처 스냅샷은 만든 환경과 같은 numpy·pandas 주 버전에서만 읽힌다.
+
+| 파일 | 만든 환경 | 용도 |
+|---|---|---|
+| `data/ml/features_snapshot_py311.pkl` | 이 PC Python 3.11 (numpy 1.24) | 실험 노트북 기본값. 12개월·6개월 정답 포함 |
+| `data/ml/features_snapshot.pkl` | numpy 2·pandas 3 | 검증 보고서(report_workflow)용. 이 PC 기본 Python으로는 읽히지 않음 |
+
+스냅샷이 없으면 노트북에서 `DATA_SOURCE="raw"`로 원본부터 만든다(수 분, 메모리 많이 씀).
 
 코드가 맞는지만 빠르게 볼 때 (가상 데이터, 실데이터 학습 없음):
 
 ```powershell
-.\.venv-ml-experiments\Scripts\python.exe -m unittest backend.tests.test_ml_experiments
+python -m unittest backend.tests.test_ml_experiments
 ```
+
+### 2.1 한 번에 실행 (명령줄)
+
+노트북과 같은 함수로 데이터 로드 → (민감도 시나리오) → Dev 비교 → 리포트 → (Holdout)까지 한 번에 돈다. 진행 상황은 터미널에 출력된다.
+
+```powershell
+# 기본: HGB·Ridge·Extra Trees × 피처 묶음 2개, Dev 2개 기준월, HTML·PDF 리포트
+python -m backend.app.ml.experiments
+
+# 전체: 8개 모델 + 민감도 시나리오 + Dev 1위 후보로 Holdout까지
+python -m backend.app.ml.experiments --models hgb ridge elasticnet sgd random_forest extra_trees lightgbm xgboost --sensitivity --holdout
+
+# 시간부터 재 보기: 학습 행 10만 개로 제한
+python -m backend.app.ml.experiments --max-train-rows 100000
+```
+
+| 옵션 | 뜻 |
+|---|---|
+| `--models` | 비교할 모델. 기준선 3종은 자동 포함. LightGBM·XGBoost는 미설치면 skipped로 기록 |
+| `--feature-sets` | 피처 묶음 (`all`, `without_related`, `without_news`, `core`, `core_related`, `without_external_fx`) |
+| `--sensitivity` | 추정 공개일로 시장·WDI를 붙인 시나리오 추가. Holdout 후보에서는 빠짐 |
+| `--holdout` | Dev 국가별 NDCG@5 1위 학습 모델(original 시나리오, 모든 fold 완료) 하나로 2025-09 Holdout 실행 |
+| `--horizon 6` | 6개월 정답(간격 6개월, Dev 2025-08·2025-11, Holdout 2026-03). 기준선은 단순 지속 규칙 |
+| `--max-train-rows` | 학습 행 상한 (평가 행은 그대로) |
+| `--snapshot` | 피처 스냅샷 경로 (기본 `data/ml/features_snapshot_py311.pkl`) |
+| `--no-pdf` | PDF 없이 HTML·CSV만 |
+| `--save-models` | 학습한 모델을 실행 폴더에 `<조합 이름>.joblib`으로 저장 (Holdout 모델 포함, 기준선 제외). Random Forest·Extra Trees는 파일 하나가 수백 MB일 수 있음 |
+
+끝나면 리포트 경로(`data/ml/experiments/<실행ID>/report.html`, `report.pdf`)를 출력한다.
 
 ## 3. 제외된 11개 피처를 되살리는 방법
 

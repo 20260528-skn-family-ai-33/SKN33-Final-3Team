@@ -469,3 +469,67 @@ def run_experiments(scenarios, specs, feature_sets=None, config=None):
             _write(run_dir / "report_error.json", {"error": f"{type(exc).__name__}: {exc}"})
             print(f"리포트 생성 실패 (결과 JSON 보존): {exc}", flush=True)
     return run_dir
+
+
+def best_candidate(run_dir):
+    """Dev 주 지표 1위 학습 모델. 모든 fold를 마친 original 시나리오 후보만 (기준선·민감도 제외)."""
+    board = leaderboard(run_dir)
+    primary = json.loads((Path(run_dir) / "manifest.json").read_text("utf-8"))["config"]["primary_metric"]
+    if board.empty or primary + "_mean" not in board:
+        raise ValueError("Holdout 후보를 고를 Dev 결과가 없습니다")
+    ok = (board.complete & ~board.model.isin(BASELINES) & (board.scenario == "original")
+          & (board[primary + "_valid_runs"] == board.expected_runs))
+    if not ok.any():
+        raise ValueError("모든 Dev fold를 마친 학습 모델 후보가 없습니다")
+    return board[ok].sort_values(primary + "_mean", ascending=False).iloc[0]
+
+
+def main():
+    """노트북과 같은 함수로 데이터 로드 → (민감도) → Dev 비교·리포트 → (Holdout)을 한 번에 실행한다."""
+    import argparse
+    parser = argparse.ArgumentParser(description=main.__doc__)
+    parser.add_argument("--snapshot", type=Path, default=ROOT / "data/ml/features_snapshot_py311.pkl",
+                        help="피처 스냅샷 (기본: 이 PC Python 3.11용)")
+    parser.add_argument("--models", nargs="+", default=["hgb", "ridge", "extra_trees"],
+                        choices=sorted(KINDS - set(BASELINES)), help="비교할 모델 (기준선 3종은 자동 포함)")
+    parser.add_argument("--feature-sets", nargs="+", default=["all", "without_related"], choices=sorted(FEATURE_SETS))
+    parser.add_argument("--sensitivity", action="store_true",
+                        help="추정 공개일로 시장·WDI를 붙인 민감도 시나리오 추가 (Holdout 후보에서는 제외)")
+    parser.add_argument("--horizon", type=int, default=F.HORIZON, choices=sorted(F.A_TARGETS))
+    parser.add_argument("--max-train-rows", type=int, help="학습 행 상한 (시간 측정용, 평가 행은 그대로)")
+    parser.add_argument("--n-jobs", type=int, default=2)
+    parser.add_argument("--holdout", action="store_true", help="Dev 주 지표 1위 후보 하나로 Holdout까지 실행")
+    parser.add_argument("--no-pdf", action="store_true", help="PDF 없이 HTML·CSV만")
+    parser.add_argument("--save-models", action="store_true",
+                        help="학습한 모델을 실행 폴더에 <조합 이름>.joblib으로 저장 (Holdout 모델 포함, 기준선 제외)")
+    args = parser.parse_args()
+
+    if args.horizon == 6:  # 정답 6개월: 간격 6개월, 정답 있는 마지막 기준월 2026-03을 Holdout으로
+        anchors, holdout, gap = ("2025-08-01", "2025-11-01"), "2026-03-01", 6
+    else:
+        anchors, holdout, gap = ExperimentConfig.validation_anchors, ExperimentConfig.holdout_anchor, 12
+    config = ExperimentConfig(validation_anchors=anchors, holdout_anchor=holdout, horizon=args.horizon, gap_months=gap,
+                              max_train_rows=args.max_train_rows, n_jobs=args.n_jobs, make_pdf=not args.no_pdf,
+                              save_models=args.save_models)
+    print(f"스냅샷 읽는 중: {args.snapshot}", flush=True)
+    frame = load_snapshot(args.snapshot)
+    scenarios = {"original": frame}
+    if args.sensitivity:
+        from backend.app.ml.feature_recovery import recover_external
+        estimate = ROOT / "backend/app/ml/reference/experiments/availability_release_estimate.csv"
+        scenarios["sensitivity_release_estimate"], audit = recover_external(frame, availability=estimate)
+        print(audit[["feature", "observed_before", "observed_after"]].to_string(index=False), flush=True)
+    specs = [ModelSpec(kind, kind) for kind in args.models]
+    dev = run_experiments(scenarios, specs, {name: FEATURE_SETS[name] for name in args.feature_sets}, config)
+    print(f"\nDev 리포트: {dev / 'report.html'}" + ("" if args.no_pdf else f"\n           {dev / 'report.pdf'}"))
+    if args.holdout:
+        best = best_candidate(dev)
+        print(f"\nHoldout 후보: {best.scenario} / {best.feature_set} / {best.model} "
+              f"({config.primary_metric} Dev 평균 {best[config.primary_metric + '_mean']:.4f})", flush=True)
+        hold_config, hold_specs, hold_features = holdout_configuration(dev, best.scenario, best.feature_set, best.model)
+        hold = run_experiments({best.scenario: scenarios[best.scenario]}, hold_specs, hold_features, hold_config)
+        print(f"Holdout 리포트: {hold / 'report.html'}")
+
+
+if __name__ == "__main__":
+    main()
