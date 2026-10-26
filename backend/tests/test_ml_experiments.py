@@ -80,6 +80,76 @@ class NdcgTest(unittest.TestCase):
                 self.assertAlmostEqual(_ndcg(relevance, score, k), ndcg_score(relevance, score, k=k))
 
 
+def groupby_details(rows, score, ks, min_candidates):
+    """배열 방식으로 바꾸기 전 groupby 구현. 새 구현과 값이 같은지 비교하는 기준."""
+    import numpy as np
+    from backend.app.ml.experiment_metrics import finite
+    from sklearn.metrics import ndcg_score
+    details = []
+    for direction, group, item in [("country", "country_code", "hs6"), ("product", "hs6", "country_code")]:
+        for value, g in rows.assign(score=score).groupby(group, sort=True):
+            g = g.sort_values(item, kind="stable")
+            actual = g.sort_values("y_growth", ascending=False, kind="stable")
+            predicted = g.sort_values("score", ascending=False, kind="stable")
+            relevance = g.y_growth.rank(pct=True).to_numpy()[None, :]
+            correlation = finite(g.y_growth.corr(g.score, method="spearman"))
+            for k in ks:
+                if len(g) < max(min_candidates, k):
+                    continue
+                picked, top_k = set(predicted.head(k)[item]), set(actual.head(k)[item])
+                top20 = set(actual.head(max(1, int(np.ceil(len(g) * .2))))[item])
+                hits = len(picked & top20)
+                p, r = hits / k, hits / len(top20)
+                details.append({"direction": direction, "group": str(value), "k": k, "candidates": len(g),
+                                "precision_at_k": len(picked & top_k) / k, "hit_at_k": float(bool(picked & top_k)),
+                                "ndcg_at_k": float(ndcg_score(relevance, g.score.to_numpy()[None, :], k=k)),
+                                "top20_precision_at_k": p, "top20_recall_at_k": r,
+                                "top20_f1_at_k": 2*p*r/(p+r) if p+r else 0.0,
+                                "grew_share_at_k": float((predicted.head(k).y_growth > 0).mean()),
+                                "mean_actual_growth_at_k": float(predicted.head(k).y_growth.mean()),
+                                "spearman": correlation})
+    return pd.DataFrame(details)
+
+
+class RankingMetricTest(unittest.TestCase):
+    def test_array_version_matches_groupby_version(self):
+        import numpy as np
+        from backend.app.ml.experiment_metrics import evaluate_predictions
+        rng = np.random.default_rng(0)
+        countries = [f"C{i}" for i in range(6)]
+        products = [f"{i:06d}" for i in rng.choice(999999, 40, replace=False)]
+        rows = pd.DataFrame([(c, p) for c in countries for p in products], columns=["country_code", "hs6"])
+        rows = rows.sample(frac=.7, random_state=0)  # 그룹 크기를 다르게 (일부는 K보다 작음)
+        rows["y_growth"] = rng.integers(-3, 4, len(rows)) / 2  # 정답 동점
+        score = rng.integers(0, 5, len(rows)).astype(float)  # 점수 동점
+        score[rows.country_code.eq("C0").to_numpy()] = 1.0  # 점수 상수 그룹 → Spearman 미평가
+        _, details = evaluate_predictions(rows, score, ks=(5, 10), min_candidates=5)
+        pd.testing.assert_frame_equal(details, groupby_details(rows, score, (5, 10), 5), check_dtype=False)
+
+
+class BestCandidateTest(unittest.TestCase):
+    def test_skips_baselines_and_sensitivity(self):
+        run = Path(tempfile.mkdtemp())
+        manifest = {"status": "completed",
+                    "config": {"validation_anchors": ["2025-01-01"], "seeds": [0], "primary_metric": "country_ndcg_at_5"},
+                    "scenarios": {"base": {"provenance": {}}, "recovered": {"provenance": {"recovery": [{"policy": "x"}]}},
+                                  "sens": {"provenance": {"recovery": [{"policy": "x; sensitivity_current_values"}]}}}}
+        results = [{"scenario": s, "feature_set": "all", "model": m, "kind": m, "status": "ok",
+                    "metrics": {"country_ndcg_at_5": v}}
+                   for s, m, v in [("base", "baseline_growth", .9), ("sens", "hgb", .8), ("recovered", "hgb", .6),
+                                   ("base", "ridge", .5)]]
+        (run / "manifest.json").write_text(json.dumps(manifest), "utf-8")
+        (run / "results.json").write_text(json.dumps(results), "utf-8")
+        best = E.best_candidate(run)
+        self.assertEqual((best.scenario, best.model), ("recovered", "hgb"))
+
+    def test_cli_refuses_sampled_holdout(self):
+        from unittest import mock
+        with mock.patch("sys.argv", ["experiments", "--holdout", "--max-train-rows", "100"]), \
+                mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            E.main()
+
+
 class ReportTableTest(unittest.TestCase):
     def test_metric_matrix_picks_best_in_right_direction(self):
         board = pd.DataFrame({"scenario": ["s", "s"], "feature_set": ["all", "all"], "model": ["a", "b"],
