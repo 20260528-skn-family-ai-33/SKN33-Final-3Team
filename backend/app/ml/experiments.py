@@ -480,12 +480,16 @@ def run_experiments(scenarios, specs, feature_sets=None, config=None):
 
 
 def best_candidate(run_dir):
-    """Dev 주 지표 1위 학습 모델. 모든 fold를 마친 original 시나리오 후보만 (기준선·민감도 제외)."""
+    """Dev 주 지표 1위 학습 모델. 모든 fold를 마친 후보만 (기준선·추정 공개일 민감도 시나리오 제외)."""
     board = leaderboard(run_dir)
-    primary = json.loads((Path(run_dir) / "manifest.json").read_text("utf-8"))["config"]["primary_metric"]
+    manifest = json.loads((Path(run_dir) / "manifest.json").read_text("utf-8"))
+    primary = manifest["config"]["primary_metric"]
     if board.empty or primary + "_mean" not in board:
         raise ValueError("Holdout 후보를 고를 Dev 결과가 없습니다")
-    ok = (board.complete & ~board.model.isin(BASELINES) & (board.scenario == "original")
+    # run_experiments의 Holdout 차단과 같은 기준
+    sensitivity = [name for name, s in manifest["scenarios"].items()
+                   if "sensitivity" in str(s["provenance"].get("recovery", ""))]
+    ok = (board.complete & ~board.model.isin(BASELINES) & ~board.scenario.isin(sensitivity)
           & (board[primary + "_valid_runs"] == board.expected_runs))
     if not ok.any():
         raise ValueError("모든 Dev fold를 마친 학습 모델 후보가 없습니다")
