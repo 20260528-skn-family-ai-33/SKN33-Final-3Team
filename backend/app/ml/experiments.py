@@ -372,6 +372,8 @@ def run_experiments(scenarios, specs, feature_sets=None, config=None):
                           "ML 입력은 현재 제공 스냅샷. 원천 공표 지연/뉴스 태깅 버전의 완전성은 별도 검증 필요"]}
     for name, frame in frames.items():
         manifest["scenarios"][name] = {"rows": len(frame), "provenance": frame.attrs,
+                                       # 2: 키 순서로 정렬한 표의 열 단위 해시. 1(행 단위)로 만든 예전 값과는 비교하지 않는다
+                                       "data_hash_version": 2,
                                        "data_sha256": _frame_hash(frame, ["anchor", "country_code", "hs6", "y_growth", baseline, *F.FEATURES])}
     _write(run_dir / "manifest.json", manifest)
     results = []
