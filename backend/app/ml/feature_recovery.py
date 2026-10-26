@@ -86,7 +86,7 @@ def _join(frame, values, keys, columns):
               else pd.DataFrame(np.nan, index=np.arange(len(frame)), columns=columns))
     result = frame.copy(deep=False)
     for col in columns:
-        result[col] = joined[col].to_numpy(dtype=float)
+        result[col] = joined[col].array  # merge 결과 dtype 유지 (숫자 검사는 _history·dated_external에서)
     result.attrs = dict(frame.attrs)
     return result
 
