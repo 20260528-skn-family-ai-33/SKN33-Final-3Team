@@ -56,6 +56,30 @@ class ExperimentRunTest(unittest.TestCase):
             E.run_experiments({"sensitivity": frame}, [E.ModelSpec("ridge", "ridge")], {"all": E.FEATURE_SETS["all"]}, holdout)
 
 
+class ScenarioOrderTest(unittest.TestCase):
+    def test_row_order_does_not_change_prepared_frame(self):
+        frame = dataset()
+        shuffled = frame.sample(frac=1, random_state=1)
+        before = shuffled.index.copy()
+        prepared = E.prepare_scenarios({"a": frame, "b": shuffled}, 12)
+        pd.testing.assert_frame_equal(prepared["a"], prepared["b"])
+        self.assertTrue(prepared["b"].index.equals(pd.RangeIndex(len(frame))))
+        self.assertTrue(shuffled.index.equals(before))  # 입력 표는 그대로
+
+
+class NdcgTest(unittest.TestCase):
+    def test_fast_ndcg_matches_public_function(self):
+        import numpy as np
+        from sklearn.metrics import ndcg_score
+        from backend.app.ml.experiment_metrics import _ndcg
+        rng = np.random.default_rng(0)
+        for _ in range(20):
+            relevance = rng.random((1, 15))
+            score = rng.integers(0, 4, (1, 15)).astype(float)  # 동점 포함
+            for k in (5, 10):
+                self.assertAlmostEqual(_ndcg(relevance, score, k), ndcg_score(relevance, score, k=k))
+
+
 class ReportTableTest(unittest.TestCase):
     def test_metric_matrix_picks_best_in_right_direction(self):
         board = pd.DataFrame({"scenario": ["s", "s"], "feature_set": ["all", "all"], "model": ["a", "b"],
