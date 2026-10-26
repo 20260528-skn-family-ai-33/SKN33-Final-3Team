@@ -71,21 +71,22 @@ def _history(path, columns, keys):
 
 
 def _join(frame, values, keys, columns):
-    """입력 행 순서/키/정답을 보존한다. 그 시점 최신 통계 연도와 최신 버전을 선택."""
-    base = frame.drop(columns=columns, errors="ignore").copy()
-    if "_recovery_order" in base:
-        raise ValueError("예약 열 _recovery_order가 존재합니다")
-    base["_recovery_order"] = np.arange(len(base))
+    """입력 행 순서/키/정답을 보존한다. 그 시점 최신 통계 연도와 최신 버전을 선택.
+
+    173만 행 표를 통째로 복사하면 8GB PC에서 메모리가 모자라므로, 키 열만으로 값을 찾아 얕은 사본에 열만 바꿔 넣는다.
+    """
+    small = frame[["anchor", *keys]].assign(_pos=np.arange(len(frame)))
     pieces = []
-    for anchor, rows in base.groupby("anchor", sort=False):
+    for anchor, rows in small.groupby("anchor", sort=False):
         cutoff = pd.Timestamp(anchor) + pd.offsets.MonthEnd(0)
         eligible = values[(values.available_from <= cutoff) & (values.year <= cutoff.year)]
         latest = eligible.sort_values(["year", "available_from"]).drop_duplicates(keys, keep="last")
-        pieces.append(rows.merge(latest[[*keys, *columns]], on=keys, how="left", validate="many_to_one"))
-    if not pieces:
-        return base.drop(columns="_recovery_order").assign(**{c: np.nan for c in columns})
-    result = pd.concat(pieces).sort_values("_recovery_order").drop(columns="_recovery_order")
-    result.index = frame.index
+        pieces.append(rows.merge(latest[[*keys, *columns]], on=keys, how="left", validate="many_to_one")[["_pos", *columns]])
+    joined = (pd.concat(pieces).set_index("_pos").reindex(np.arange(len(frame))) if pieces
+              else pd.DataFrame(np.nan, index=np.arange(len(frame)), columns=columns))
+    result = frame.copy(deep=False)
+    for col in columns:
+        result[col] = joined[col].to_numpy(dtype=float)
     result.attrs = dict(frame.attrs)
     return result
 
@@ -132,7 +133,7 @@ def recover_external(frame, external_dir=None, market_history=None, wdi_history=
         paths += [S.HSCODE_DIR / "correlation/HS2022toHS2017.xlsx"]
         paths += list(S.SEED_DIR.glob("*country*seed*.sql"))
         inputs += [file_info(p) for p in paths if p.is_file()]
-    result = frame.copy()
+    joins = []
     for name, columns, keys, history in [("market", MARKET, ["country_code", "hs6"], market_history),
                                          ("wdi", WDI, ["country_code"], wdi_history)]:
         if history is not None:
@@ -140,6 +141,10 @@ def recover_external(frame, external_dir=None, market_history=None, wdi_history=
             inputs.append(file_info(history))
         else:
             values = dated_external(external[name + "_yearly"], external["availability"], name)
+        joins.append((values, keys, columns))
+    external = None  # 원본 외부 표는 여기서 놓아 메모리를 돌려준다
+    result = frame
+    for values, keys, columns in joins:
         result = _join(result, values, keys, columns)
     audit = before.merge(coverage(result, MARKET + WDI), on="feature", suffixes=("_before", "_after"))
     audit["observed_delta"] = audit.observed_after - audit.observed_before

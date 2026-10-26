@@ -185,7 +185,8 @@ def prepare_scenarios(scenarios, horizon):
         missing = required - set(original)
         if missing:
             raise ValueError(f"{name} 스냅샷 열 누락 {sorted(missing)}. 특히 6개월 실험은 원본부터 새 스냅샷이 필요합니다")
-        frame = original.copy()
+        # 얕은 사본에 바뀌는 열만 새로 넣는다. 173만 행 전체를 복사·정렬하면 8GB PC에서 메모리가 모자란다.
+        frame = original.copy(deep=False)
         frame["anchor"] = pd.to_datetime(frame.anchor, errors="raise")
         keys = ["anchor", "country_code", "hs6"]
         if frame[keys].isna().any().any() or frame.duplicated(keys).any():
@@ -198,9 +199,8 @@ def prepare_scenarios(scenarios, horizon):
         frame["y_growth"] = pd.to_numeric(frame[target], errors="raise")
         if np.isinf(frame.y_growth.to_numpy(dtype=float)).any():
             raise ValueError("정답에 무한대가 있습니다")
-        frame = frame.sort_values(keys).reset_index(drop=True)
-        # 복구 실험은 X만 변경. 동일 후보/정답/기준선을 보장한다.
-        comparison = frame[[*keys, "y_growth", baseline]]
+        # 복구 실험은 X만 변경. 동일 후보/정답/기준선을 보장한다 (비교용 작은 표만 정렬).
+        comparison = frame[[*keys, "y_growth", baseline]].sort_values(keys).reset_index(drop=True)
         if reference is not None and not reference.equals(comparison):
             raise ValueError("자료 시나리오의 행 키·정답·기준선이 다릅니다. 같은 평가 대상을 사용하세요")
         reference = comparison if reference is None else reference
@@ -209,13 +209,20 @@ def prepare_scenarios(scenarios, horizon):
     return normalized
 
 
-def split_rows(frame, anchor, config):
+def _split_masks(frame, anchor, config):
     anchor = _anchor(anchor)
-    labeled = frame[frame.y_growth.notna()]
-    train = labeled[labeled.anchor <= anchor - pd.DateOffset(months=config.gap_months)]
-    test = labeled[labeled.anchor == anchor]
-    if len(train) < 2 or test.empty:
+    labeled = frame.y_growth.notna()
+    train = labeled & (frame.anchor <= anchor - pd.DateOffset(months=config.gap_months))
+    test = labeled & (frame.anchor == anchor)
+    if train.sum() < 2 or not test.any():
         raise ValueError(f"{anchor.date()}: 학습/평가 행 부족")
+    return train, test
+
+
+def split_rows(frame, anchor, config):
+    # 정답 있는 행 전체를 중간 사본으로 만들지 않고 train·test만 바로 뽑는다.
+    train_mask, test_mask = _split_masks(frame, anchor, config)
+    train, test = frame[train_mask], frame[test_mask]
     if config.max_train_rows is not None and len(train) > config.max_train_rows:
         train = train.sample(config.max_train_rows, random_state=config.sampling_seed).sort_index()
     return train, test
@@ -274,9 +281,13 @@ def build_model(spec, columns, seed, n_jobs):
     return Pipeline([("clip", TrainingClipper()), ("preprocess", preprocess), ("model", estimator)]), categorical_indices
 
 
-def _frame_hash(frame):
-    values = pd.util.hash_pandas_object(frame, index=False).to_numpy(dtype=np.uint64)
-    return hashlib.sha256(values.astype("<u8").tobytes()).hexdigest()
+def _frame_hash(frame, columns):
+    """열 단위로 해시해 큰 표의 부분 사본을 만들지 않는다."""
+    digest = hashlib.sha256()
+    for col in dict.fromkeys(columns):
+        digest.update(col.encode("utf-8"))
+        digest.update(pd.util.hash_pandas_object(frame[col], index=False).to_numpy(dtype=np.uint64).astype("<u8").tobytes())
+    return digest.hexdigest()
 
 
 def leaderboard(run_dir):
@@ -339,7 +350,7 @@ def run_experiments(scenarios, specs, feature_sets=None, config=None):
     frames = prepare_scenarios(scenarios, config.horizon)
     for frame in frames.values():
         for anchor in config.validation_anchors:
-            split_rows(frame, anchor, config)
+            _split_masks(frame, anchor, config)  # 행 부족이면 실행 폴더를 만들기 전에 멈춘다
     run_id = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:8]
     run_dir = Path(config.output_root).resolve() / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -355,7 +366,7 @@ def run_experiments(scenarios, specs, feature_sets=None, config=None):
                           "ML 입력은 현재 제공 스냅샷. 원천 공표 지연/뉴스 태깅 버전의 완전성은 별도 검증 필요"]}
     for name, frame in frames.items():
         manifest["scenarios"][name] = {"rows": len(frame), "provenance": frame.attrs,
-                                       "data_sha256": _frame_hash(frame[["anchor", "country_code", "hs6", "y_growth", baseline, *F.FEATURES]].loc[:, lambda x: ~x.columns.duplicated()])}
+                                       "data_sha256": _frame_hash(frame, ["anchor", "country_code", "hs6", "y_growth", baseline, *F.FEATURES])}
     _write(run_dir / "manifest.json", manifest)
     results = []
     _write(run_dir / "results.json", results)
