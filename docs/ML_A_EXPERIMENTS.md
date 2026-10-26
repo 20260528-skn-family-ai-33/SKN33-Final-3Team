@@ -63,7 +63,7 @@ python -m backend.app.ml.experiments --max-train-rows 100000
 | `--models` | 비교할 모델. 기준선 3종은 자동 포함. LightGBM·XGBoost는 미설치면 skipped로 기록 |
 | `--feature-sets` | 피처 묶음 (`all`, `without_related`, `without_news`, `core`, `core_related`, `without_external_fx`) |
 | `--sensitivity` | 추정 공개일로 시장·WDI를 붙인 시나리오 추가. Holdout 후보에서는 빠짐 |
-| `--holdout` | Dev 국가별 NDCG@5 1위 학습 모델(original 시나리오, 모든 fold 완료) 하나로 2025-09 Holdout 실행 |
+| `--holdout` | Dev 국가별 NDCG@5 1위 학습 모델(민감도 시나리오 제외, 모든 fold 완료) 하나로 2025-09 Holdout 실행. `--max-train-rows`와 함께 쓸 수 없음 |
 | `--horizon 6` | 6개월 정답(간격 6개월, Dev 2025-08·2025-11, Holdout 2026-03). 기준선은 단순 지속 규칙 |
 | `--max-train-rows` | 학습 행 상한 (평가 행은 그대로) |
 | `--snapshot` | 피처 스냅샷 경로 (기본 `data/ml/features_snapshot_py311.pkl`) |

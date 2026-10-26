@@ -515,6 +515,9 @@ def main():
     parser.add_argument("--save-models", action="store_true",
                         help="학습한 모델을 실행 폴더에 <조합 이름>.joblib으로 저장 (Holdout 모델 포함, 기준선 제외)")
     args = parser.parse_args()
+    if args.holdout and args.max_train_rows is not None:
+        # Holdout은 Dev 설정을 그대로 복사하므로 표본 학습이 최종 점수로 남는다
+        parser.error("--max-train-rows는 시간 측정용입니다. --holdout과 함께 쓰지 마세요")
 
     if args.horizon == 6:  # 정답 6개월: 간격 6개월, 정답 있는 마지막 기준월 2026-03을 Holdout으로
         anchors, holdout, gap = ("2025-08-01", "2025-11-01"), "2026-03-01", 6
