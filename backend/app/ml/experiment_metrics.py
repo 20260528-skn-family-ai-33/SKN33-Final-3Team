@@ -1,6 +1,9 @@
 """모델 A 비교 지표. 회귀 점수를 확률로 취급하지 않는다."""
+import warnings
+
 import numpy as np
 import pandas as pd
+from scipy.stats import ConstantInputWarning, rankdata, spearmanr
 from sklearn.metrics import (accuracy_score, average_precision_score, balanced_accuracy_score,
                              confusion_matrix, explained_variance_score, f1_score,
                              matthews_corrcoef, mean_absolute_error, mean_squared_error,
@@ -10,6 +13,24 @@ from sklearn.metrics import (accuracy_score, average_precision_score, balanced_a
 
 def finite(value):
     return float(value) if value is not None and np.isfinite(value) else None
+
+
+try:  # ndcg_score에서 입력 검사만 뺀 같은 계산. 그룹 수천 개를 채점할 때 검사가 시간의 대부분이다.
+    from sklearn.metrics._ranking import _ndcg_sample_scores
+
+    def _ndcg(relevance, score, k):
+        return float(np.average(_ndcg_sample_scores(relevance, score, k=k, ignore_ties=False)))
+except ImportError:  # 내부 함수가 없는 scikit-learn 버전이면 공개 함수를 쓴다
+    def _ndcg(relevance, score, k):
+        return float(ndcg_score(relevance, score, k=k))
+
+
+def _spearman(a, b):
+    """pandas Series.corr(method="spearman")가 내부에서 쓰는 scipy spearmanr와 같은 값.
+    점수나 정답이 모두 같으면 정의되지 않아 미평가(None)로 두고, 그때 나는 경고는 숨긴다."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", ConstantInputWarning)
+        return finite(spearmanr(a, b)[0])
 
 
 def evaluate_predictions(rows, score, ks=(5, 10), min_candidates=10, threshold=0.0):
@@ -28,7 +49,7 @@ def evaluate_predictions(rows, score, ks=(5, 10), min_candidates=10, threshold=0
         "r2": finite(r2_score(y, score, force_finite=False)) if len(y) > 1 else None,
         "explained_variance": finite(explained_variance_score(y, score, force_finite=False)) if len(y) > 1 else None,
         "pearson": finite(pd.Series(y).corr(pd.Series(score))),
-        "spearman": finite(pd.Series(y).corr(pd.Series(score), method="spearman")),
+        "spearman": _spearman(y, score),
         "actual_growth_rate": float(grew.mean()), "predicted_growth_rate": float(called.mean()),
         "direction_threshold": threshold, "accuracy": float(accuracy_score(grew, called)),
         "balanced_accuracy": float(balanced_accuracy_score(grew, called)) if both else None,
@@ -41,30 +62,42 @@ def evaluate_predictions(rows, score, ks=(5, 10), min_candidates=10, threshold=0
         "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
     }
     details = []
+    min_size = max(min_candidates, min(ks))
     for direction, group, item in [("country", "country_code", "hs6"), ("product", "hs6", "country_code")]:
-        for value, g in rows.assign(score=score).groupby(group, sort=True):
-            # 동점은 식별자 순서. 모든 모델/기준선에 동일하게 적용한다.
-            g = g.sort_values(item, kind="stable")
-            actual = g.sort_values("y_growth", ascending=False, kind="stable")
-            predicted = g.sort_values("score", ascending=False, kind="stable")
-            relevance = g.y_growth.rank(pct=True).to_numpy()[None, :]
-            correlation = finite(g.y_growth.corr(g.score, method="spearman"))
+        # 그룹마다 DataFrame을 만들고 정렬하던 방식(조합당 1분 이상)을 배열 한 번 정렬로 바꾼다. 결과는 같다.
+        # 순서: 그룹 키 오름차순(groupby sort=True와 같음), 그룹 안에서는 식별자 오름차순.
+        g_codes, g_names = pd.factorize(rows[group].to_numpy(), sort=True)
+        i_codes = pd.factorize(rows[item].to_numpy(), sort=True)[0]
+        order = np.lexsort((i_codes, g_codes))
+        ys, ss, items = y[order], score[order], rows[item].to_numpy()[order]
+        codes, starts, counts = np.unique(g_codes[order], return_index=True, return_counts=True)
+        for code, start, n in zip(codes, starts, counts):
+            # 결측 키(-1)는 groupby처럼 빼고, 모든 K에서 미평가인 작은 그룹은 계산하지 않는다
+            if code < 0 or n < min_size:
+                continue
+            yy, sc, it = ys[start:start + n], ss[start:start + n], items[start:start + n]
+            # 동점은 식별자 순서. 내림차순 안정 정렬은 pandas sort_values(ascending=False, kind="stable")와 같다.
+            actual = np.argsort(-yy, kind="stable")
+            predicted = np.argsort(-sc, kind="stable")
+            relevance = (rankdata(yy) / n)[None, :]  # pandas rank(pct=True): 평균 순위 / 개수
+            correlation = _spearman(yy, sc)
             for k in ks:
-                if len(g) < max(min_candidates, k):
+                if n < max(min_candidates, k):
                     continue
-                picked = set(predicted.head(k)[item])
-                top_k = set(actual.head(k)[item])
-                top20 = set(actual.head(max(1, int(np.ceil(len(g) * .2))))[item])
+                top = predicted[:k]
+                picked = set(it[top])
+                top_k = set(it[actual[:k]])
+                top20 = set(it[actual[:max(1, int(np.ceil(n * .2)))]])
                 hits = len(picked & top20)
                 p, r = hits / k, hits / len(top20)
-                details.append({"direction": direction, "group": str(value), "k": k, "candidates": len(g),
+                details.append({"direction": direction, "group": str(g_names[code]), "k": k, "candidates": int(n),
                                 "precision_at_k": len(picked & top_k) / k,
                                 "hit_at_k": float(bool(picked & top_k)),
-                                "ndcg_at_k": float(ndcg_score(relevance, g.score.to_numpy()[None, :], k=k)),
+                                "ndcg_at_k": _ndcg(relevance, sc[None, :], k),
                                 "top20_precision_at_k": p, "top20_recall_at_k": r,
                                 "top20_f1_at_k": 2*p*r/(p+r) if p+r else 0.0,
-                                "grew_share_at_k": float((predicted.head(k).y_growth > 0).mean()),
-                                "mean_actual_growth_at_k": float(predicted.head(k).y_growth.mean()),
+                                "grew_share_at_k": float((yy[top] > 0).mean()),
+                                "mean_actual_growth_at_k": float(yy[top].mean()),
                                 "spearman": correlation})
         for k in ks:
             selected = [d for d in details if d["direction"] == direction and d["k"] == k]

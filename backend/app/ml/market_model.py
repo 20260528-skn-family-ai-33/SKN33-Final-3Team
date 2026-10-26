@@ -14,6 +14,7 @@
 import argparse
 import json
 import logging
+import warnings
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -21,6 +22,7 @@ from zoneinfo import ZoneInfo
 import joblib
 import numpy as np
 import pandas as pd
+from scipy.stats import ConstantInputWarning
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score, mean_absolute_error, mean_squared_error,
                              ndcg_score, precision_score, r2_score, recall_score, roc_auc_score)
@@ -89,6 +91,13 @@ def detail_metrics(test, score):
     - 증가 여부 분류(전체 행): 실제 y>0을 점수>0으로 맞혔는지. Accuracy·Precision·Recall·F1·ROC-AUC
     - 회귀(전체 행): 로그 성장 예측값 자체의 MAE·RMSE·R²·Spearman
     """
+    with warnings.catch_warnings():
+        # 점수나 정답이 모두 같은 그룹의 Spearman은 정의되지 않아 미평가(None)로 남는다. 그때 나는 경고만 숨긴다.
+        warnings.simplefilter("ignore", ConstantInputWarning)
+        return _detail_metrics(test, score)
+
+
+def _detail_metrics(test, score):
     t = test.assign(score=score)
     y, s = t.y_growth.to_numpy(), t.score.to_numpy()
     grew, called = y > 0, s > 0
