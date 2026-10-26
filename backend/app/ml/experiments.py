@@ -199,8 +199,14 @@ def prepare_scenarios(scenarios, horizon):
         frame["y_growth"] = pd.to_numeric(frame[target], errors="raise")
         if np.isinf(frame.y_growth.to_numpy(dtype=float)).any():
             raise ValueError("정답에 무한대가 있습니다")
-        # 복구 실험은 X만 변경. 동일 후보/정답/기준선을 보장한다 (비교용 작은 표만 정렬).
-        comparison = frame[[*keys, "y_growth", baseline]].sort_values(keys).reset_index(drop=True)
+        # 학습 순서·표본 추출이 입력 순서에 좌우되지 않게 키 순서로 맞춘다.
+        # 키 열만으로 순서를 구하고, 이미 정렬된 입력(스냅샷·복구 결과)이면 전체 사본을 만들지 않는다.
+        order = frame[keys].reset_index(drop=True).sort_values(keys).index.to_numpy()
+        if (order != np.arange(len(order))).any():
+            frame = frame.iloc[order]
+        frame.index = pd.RangeIndex(len(frame))
+        # 복구 실험은 X만 변경. 동일 후보/정답/기준선을 보장한다.
+        comparison = frame[[*keys, "y_growth", baseline]]
         if reference is not None and not reference.equals(comparison):
             raise ValueError("자료 시나리오의 행 키·정답·기준선이 다릅니다. 같은 평가 대상을 사용하세요")
         reference = comparison if reference is None else reference
