@@ -1,0 +1,818 @@
+{
+  "version": "20261022_144737_145087_e8ba400c",
+  "runtime_inspection": {
+    "python": "3.12.14",
+    "numpy": "2.5.4",
+    "pandas": "3.0.1",
+    "sklearn": "1.9.1",
+    "joblib": "1.6.0"
+  },
+  "files": [
+    {
+      "path": "backend/app/ml/reference/related_hs4.csv",
+      "bytes": 5476,
+      "sha256": "180cefc3d155e15917986be921c3c93ce3f62723560a6a232b899800bf084981",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/2022/customs_collection_2022.json",
+      "bytes": 703,
+      "sha256": "3d5a28dacd7e135c56910ebffca359d7f104f78f6a68976e6e55b0ab82b46bf3",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/2022/customs_raw_2022.csv",
+      "bytes": 129728972,
+      "sha256": "a2e321a04ae965ac1980c25f0b3f912cf6ffd302a8257aff1cd051088a2c6d11",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/2023/customs_collection_2023.json",
+      "bytes": 703,
+      "sha256": "69e8edcdb2dae436e344d2f4d4bf3910a45305d912432c6dab502b3deeceabad",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/2023/customs_raw_2023.csv",
+      "bytes": 130711360,
+      "sha256": "735485b1e8533512f16da901e6f21c3df8c15d6a272e6f20a4db34e0836945a6",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/2024/customs_collection_2024.json",
+      "bytes": 703,
+      "sha256": "92f828705490e96893d931132a09d1d894366127a332e3528aa487d36a6df43e",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/2024/customs_raw_2024.csv",
+      "bytes": 133898883,
+      "sha256": "a9c2586df5ca0f59cb5f27038d65428ab0d837f6c467b5a491d1acf6b0d09651",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/2025/customs_collection_2025.json",
+      "bytes": 703,
+      "sha256": "526b205c4a008fb48477c535dd6074b9a688d39216c83672466099dc651baaa6",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/2025/customs_raw_2025.csv",
+      "bytes": 135735355,
+      "sha256": "4439925242a51b3a8a8f1295da306f828ac162b4638e7995974070089c4759df",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/202601_202609/customs_collection_202601_202609.json",
+      "bytes": 655,
+      "sha256": "94563a5cb8359cfe553d82f6d623ee3578a01fb035a94a74c7f7efdd53a5673a",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/customs/customs_outputs/202601_202609/customs_raw_202601_202609.csv",
+      "bytes": 101977048,
+      "sha256": "a84fc4ae06222c22b31b40ccd350e20d8796945badd1a2c3c4ab795cb4b1f572",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/hscode/hscode_outputs/correlation/HS2022toHS2017.xlsx",
+      "bytes": 5519,
+      "sha256": "99fe7908bf0d23fff93894b7a3deedf61f81ae1502076147de711ac06801d43b",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/hscode/hscode_outputs/HS2017/hs_code_hs2017.csv",
+      "bytes": 55662,
+      "sha256": "f696674dbb86b750b402b55d419d889ac1713c9f5c0b2f359e9042bf06ef61dd",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/hscode/reference/hs_names_20260101.xlsx",
+      "bytes": 801696,
+      "sha256": "94b35c86e4d77520730d79e5d56ab8c7aef8249da5115b6a600a4a83cd885098",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/shortnews/shortnews_outputs/20261015_161111_065302/shortnews_raw.csv",
+      "bytes": 109347523,
+      "sha256": "43c4e529f5a55829c615eb3e8ad7cf73be4c6be97d5a818017f4316886c835ce",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/shortnews/shortnews_outputs/short_news_analysis.jsonl",
+      "bytes": 11350089,
+      "sha256": "1b282a3671ac52e614deed0db83fdd53d6e52b06d44d9d82b75f3066cc076163",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "backend/app/scheduler/collectors/shortnews/shortnews_outputs/short_news_topics.jsonl",
+      "bytes": 1059643,
+      "sha256": "ab64c914bd357d996950631b0a7ede8271920b65d463ff71569c54f6f7836720",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "data/external/availability.csv",
+      "bytes": 289,
+      "sha256": "83c9edfa03a8b429bd48079f5c16dbf7bff63b344a678b1fb0156df77fa57248",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "data/external/availability_snapshot.json",
+      "bytes": 1285,
+      "sha256": "6717ad099ad29fecfb16f6d65c272819c0051ef061dc734ff6f346d7982df104",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "data/external/baci/baci_imports_hs22.csv",
+      "bytes": 79829530,
+      "sha256": "3fc909b64ab83c23306413b309690676332579f828611ad01a21997c39a3d20d",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "data/external/comtrade/comtrade_imports_2024.csv",
+      "bytes": 19112705,
+      "sha256": "e71c68e9b285910f40d798c1027e371107ee7d94119f8d7612cc1133e22fc31a",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "data/external/comtrade/comtrade_imports_2025.csv",
+      "bytes": 16828077,
+      "sha256": "211648a2d7b5c5afeba4f8c5551fa72d135046c419db9036e46537b592dd7516",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "data/external/wdi/wdi_2022_2025.csv",
+      "bytes": 57246,
+      "sha256": "f60d0132ceb4a555dac4fdc83c52f1c768edce45d0d7f7cab20b0c9817fc7746",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "data/news_keywords/keyword_dictionary_view.csv",
+      "bytes": 94299,
+      "sha256": "a296d4de9e725062cd1c6678586a9704a785528bc22c75cd8cbfdc11d6fcffd3",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "db/mysql/init/04_country_seed.sql",
+      "bytes": 11097,
+      "sha256": "52555c67eb555c004a86bedeb2d3acf3bf978415ef6277b4db5d052fd4367234",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "db/mysql/init/07_country_extra_seed.sql",
+      "bytes": 809,
+      "sha256": "d91753b88c2f0ddf54801a6c9966aa6def76ae6d491c8cd50ada04cd4ffce443",
+      "exists": true,
+      "hash_matches": true
+    },
+    {
+      "path": "db/mysql/init/09_country_currency_seed.sql",
+      "bytes": 6375,
+      "sha256": "417a2899946d431aa70bea0290e1450f7b29532521d1de265b5c20551af438d6",
+      "exists": true,
+      "hash_matches": true
+    }
+  ],
+  "sources": {
+    "backend/app/ml/features.py": false,
+    "backend/app/ml/sources.py": true,
+    "backend/app/ml/preprocess.py": true,
+    "backend/app/ml/temporal.py": true,
+    "backend/app/ml/related_groups.py": true,
+    "backend/app/ml/market_model.py": false,
+    "backend/app/ml/transforms.py": true
+  },
+  "model_hash_matches": true,
+  "model": {
+    "class": "HistGradientBoostingRegressor",
+    "params": {
+      "categorical_features": [
+        "region_id",
+        "hs2"
+      ],
+      "early_stopping": "auto",
+      "interaction_cst": null,
+      "l2_regularization": 0.0,
+      "learning_rate": 0.05,
+      "loss": "squared_error",
+      "max_bins": 255,
+      "max_depth": null,
+      "max_features": 1.0,
+      "max_iter": 300,
+      "max_leaf_nodes": 31,
+      "min_samples_leaf": 20,
+      "monotonic_cst": null,
+      "n_iter_no_change": 10,
+      "quantile": null,
+      "random_state": 0,
+      "scoring": "loss",
+      "tol": 1e-07,
+      "validation_fraction": 0.1,
+      "verbose": 0,
+      "warm_start": false
+    },
+    "n_iter": 300,
+    "early_stopping": true,
+    "clip_bounds": {},
+    "features": [
+      "log_exp_12m",
+      "growth_12m",
+      "growth_3m",
+      "active_months",
+      "cv_12m",
+      "anomaly_ratio",
+      "unit_trend",
+      "share_in_country",
+      "share_in_product",
+      "country_growth",
+      "product_growth",
+      "product_countries",
+      "grp4_c_growth_12m",
+      "grp4_c_growth_3m",
+      "grp4_world_growth_12m",
+      "grp2_c_growth_12m",
+      "hs4_unit_trend",
+      "imp_hs6_world_growth",
+      "imp_hs4_world_growth",
+      "imp_hs4_from_c_growth",
+      "imp_exp_ratio_hs4",
+      "rel_exp_c_growth_12m",
+      "rel_exp_world_growth_12m",
+      "rel_input_imp_growth_12m",
+      "rel_input_imp_growth_3m",
+      "news_3m",
+      "news_all_3m",
+      "news_change",
+      "news_country_3m",
+      "news_trade_3m",
+      "news_market_3m",
+      "news_invest_3m",
+      "region_id",
+      "hs2"
+    ]
+  },
+  "dataset": {
+    "rows": 1737598,
+    "columns": [
+      "rel_exp_c_growth_12m",
+      "rel_exp_world_growth_12m",
+      "rel_input_imp_growth_12m",
+      "rel_input_imp_growth_3m",
+      "anchor",
+      "country_code",
+      "hs6",
+      "exp_12m",
+      "log_exp_12m",
+      "growth_12m",
+      "growth_3m",
+      "active_months",
+      "cv_12m",
+      "anomaly_ratio",
+      "unit_trend",
+      "share_in_country",
+      "share_in_product",
+      "country_growth",
+      "product_growth",
+      "product_countries",
+      "grp4_c_growth_12m",
+      "grp4_c_growth_3m",
+      "grp4_world_growth_12m",
+      "grp2_c_growth_12m",
+      "hs4_unit_trend",
+      "imp_hs6_world_growth",
+      "imp_hs4_world_growth",
+      "imp_hs4_from_c_growth",
+      "imp_exp_ratio_hs4",
+      "y_growth",
+      "future_cv",
+      "hs2",
+      "region_id",
+      "fx_change_12m",
+      "fx_vol_12m",
+      "log_gdp",
+      "gdp_growth",
+      "log_population",
+      "log_gdp_pc",
+      "mkt_log_import",
+      "mkt_growth",
+      "kor_share",
+      "kor_share_change",
+      "mkt_hs4_growth",
+      "future_mkt_growth",
+      "future_share",
+      "type_available_from",
+      "news_3m",
+      "news_all_3m",
+      "news_change",
+      "news_country_3m",
+      "news_trade_3m",
+      "news_market_3m",
+      "news_invest_3m"
+    ],
+    "labeled": 1122200,
+    "latest": 51153,
+    "train": 511413,
+    "test": 51406,
+    "duplicate_keys": 0,
+    "feature_stats": {
+      "log_exp_12m": {
+        "missing_pct": 0.0,
+        "nunique": 1133246,
+        "min": 11.51293546492023,
+        "max": 25.33711259016244
+      },
+      "growth_12m": {
+        "missing_pct": 0.0,
+        "nunique": 1565345,
+        "min": -7.337055570100681,
+        "max": 21.7038116001537
+      },
+      "growth_3m": {
+        "missing_pct": 0.0,
+        "nunique": 1555568,
+        "min": -21.6256242841056,
+        "max": 21.6256242841056
+      },
+      "active_months": {
+        "missing_pct": 0.0,
+        "nunique": 12,
+        "min": 1.0,
+        "max": 12.0
+      },
+      "cv_12m": {
+        "missing_pct": 0.0,
+        "nunique": 1507303,
+        "min": 0.0,
+        "max": 3.316624790355401
+      },
+      "anomaly_ratio": {
+        "missing_pct": 0.0,
+        "nunique": 1,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "unit_trend": {
+        "missing_pct": 7.490973171009635,
+        "nunique": 1525612,
+        "min": -14.868044613346212,
+        "max": 12.150330940720481
+      },
+      "share_in_country": {
+        "missing_pct": 0.0,
+        "nunique": 1736900,
+        "min": 4.810528365629591e-07,
+        "max": 1.0
+      },
+      "share_in_product": {
+        "missing_pct": 0.0,
+        "nunique": 1732696,
+        "min": 4.4393635823436985e-07,
+        "max": 1.0
+      },
+      "country_growth": {
+        "missing_pct": 0.0,
+        "nunique": 7321,
+        "min": -4.619257711426094,
+        "max": 12.644595282560337
+      },
+      "product_growth": {
+        "missing_pct": 0.0,
+        "nunique": 127051,
+        "min": -6.373606540078304,
+        "max": 19.0442417413365
+      },
+      "product_countries": {
+        "missing_pct": 0.0,
+        "nunique": 204,
+        "min": 1.0,
+        "max": 204.0
+      },
+      "grp4_c_growth_12m": {
+        "missing_pct": 0.0,
+        "nunique": 1424717,
+        "min": -21.103745635632666,
+        "max": 21.13145392836823
+      },
+      "grp4_c_growth_3m": {
+        "missing_pct": 0.0,
+        "nunique": 1385383,
+        "min": -20.75669641573177,
+        "max": 20.283969927935534
+      },
+      "grp4_world_growth_12m": {
+        "missing_pct": 0.0,
+        "nunique": 120755,
+        "min": -18.271476357687618,
+        "max": 18.94305000086825
+      },
+      "grp2_c_growth_12m": {
+        "missing_pct": 0.0,
+        "nunique": 1713694,
+        "min": -21.103745635632666,
+        "max": 21.103745635632666
+      },
+      "hs4_unit_trend": {
+        "missing_pct": 0.02883290611522343,
+        "nunique": 35518,
+        "min": -8.913937231396579,
+        "max": 4.57167228388624
+      },
+      "imp_hs6_world_growth": {
+        "missing_pct": 0.0,
+        "nunique": 126943,
+        "min": -17.39047304977022,
+        "max": 17.39047304977022
+      },
+      "imp_hs4_world_growth": {
+        "missing_pct": 0.0,
+        "nunique": 35792,
+        "min": -15.23551939492892,
+        "max": 15.23551939492892
+      },
+      "imp_hs4_from_c_growth": {
+        "missing_pct": 0.0,
+        "nunique": 490846,
+        "min": -20.318780911302422,
+        "max": 19.68626325274147
+      },
+      "imp_exp_ratio_hs4": {
+        "missing_pct": 0.0,
+        "nunique": 35964,
+        "min": -18.76415730719045,
+        "max": 9.455644806297444
+      },
+      "rel_exp_c_growth_12m": {
+        "missing_pct": 80.31857771475336,
+        "nunique": 107065,
+        "min": -20.098596066779503,
+        "max": 20.098596066779503
+      },
+      "rel_exp_world_growth_12m": {
+        "missing_pct": 80.31857771475336,
+        "nunique": 1394,
+        "min": -0.9808702299872394,
+        "max": 1.2213990358403812
+      },
+      "rel_input_imp_growth_12m": {
+        "missing_pct": 80.31857771475336,
+        "nunique": 476,
+        "min": -0.9167250673605238,
+        "max": 0.33303409389610295
+      },
+      "rel_input_imp_growth_3m": {
+        "missing_pct": 80.31857771475336,
+        "nunique": 476,
+        "min": -0.41553062493380466,
+        "max": 0.3636364652660191
+      },
+      "fx_change_12m": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "fx_vol_12m": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "log_gdp": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "gdp_growth": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "log_population": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "log_gdp_pc": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "mkt_log_import": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "mkt_growth": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "kor_share": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "kor_share_change": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "mkt_hs4_growth": {
+        "missing_pct": 100.0,
+        "nunique": 0,
+        "min": null,
+        "max": null
+      },
+      "news_3m": {
+        "missing_pct": 0.0,
+        "nunique": 41,
+        "min": 0.0,
+        "max": 46.0
+      },
+      "news_all_3m": {
+        "missing_pct": 0.0,
+        "nunique": 77,
+        "min": 0.0,
+        "max": 98.0
+      },
+      "news_change": {
+        "missing_pct": 0.0,
+        "nunique": 203,
+        "min": -2.9444389791664403,
+        "max": 3.4965075614664802
+      },
+      "news_country_3m": {
+        "missing_pct": 0.0,
+        "nunique": 198,
+        "min": 0.0,
+        "max": 624.0
+      },
+      "news_trade_3m": {
+        "missing_pct": 0.0,
+        "nunique": 84,
+        "min": 0.0,
+        "max": 159.0
+      },
+      "news_market_3m": {
+        "missing_pct": 0.0,
+        "nunique": 106,
+        "min": 0.0,
+        "max": 201.0
+      },
+      "news_invest_3m": {
+        "missing_pct": 0.0,
+        "nunique": 58,
+        "min": 0.0,
+        "max": 73.0
+      },
+      "region_id": {
+        "missing_pct": 0.011452591450957011,
+        "nunique": 22,
+        "min": 5.0,
+        "max": 155.0
+      },
+      "hs2": {
+        "missing_pct": 0.0,
+        "nunique": 96,
+        "min": 1.0,
+        "max": 97.0
+      }
+    },
+    "target_quantiles": {
+      "0.0": -21.103745635632666,
+      "0.01": -13.619496890582589,
+      "0.25": -0.6347045174492791,
+      "0.5": -0.09598926628231386,
+      "0.75": 0.24006559019381024,
+      "0.99": 1.9836360401577542,
+      "1.0": 7.453434383584225
+    },
+    "target_zero_future_rate": 0.045593477098556406
+  },
+  "prediction": {
+    "rows": 51153,
+    "countries": 217,
+    "products": 3802,
+    "max_absolute_difference": 1.7763568394002505e-15,
+    "vn_top5": [
+      {
+        "country_code": "VN",
+        "hs6": "750620",
+        "score": 0.6725624514513514,
+        "rank_in_country": 1,
+        "rank_in_product": 1,
+        "market_type": "",
+        "market_type_name": ""
+      },
+      {
+        "country_code": "VN",
+        "hs6": "950639",
+        "score": 0.4179219511337476,
+        "rank_in_country": 2,
+        "rank_in_product": 2,
+        "market_type": "",
+        "market_type_name": ""
+      },
+      {
+        "country_code": "VN",
+        "hs6": "190120",
+        "score": 0.3625422482606008,
+        "rank_in_country": 3,
+        "rank_in_product": 1,
+        "market_type": "",
+        "market_type_name": ""
+      },
+      {
+        "country_code": "VN",
+        "hs6": "843890",
+        "score": 0.3525806523769113,
+        "rank_in_country": 4,
+        "rank_in_product": 2,
+        "market_type": "",
+        "market_type_name": ""
+      },
+      {
+        "country_code": "VN",
+        "hs6": "901920",
+        "score": 0.3292303365251675,
+        "rank_in_country": 5,
+        "rank_in_product": 1,
+        "market_type": "",
+        "market_type_name": ""
+      }
+    ],
+    "score_quantiles": {
+      "0.0": -13.16101859709097,
+      "0.25": -0.674112886950205,
+      "0.5": -0.1497623508134208,
+      "0.75": -0.0082791971604048,
+      "1.0": 0.7242009325416952
+    }
+  },
+  "example": [
+    {
+      "rel_exp_c_growth_12m": "",
+      "rel_exp_world_growth_12m": "",
+      "rel_input_imp_growth_12m": "",
+      "rel_input_imp_growth_3m": "",
+      "anchor": "2025-09-01 00:00:00",
+      "country_code": "VN",
+      "hs6": "750620",
+      "exp_12m": 263486.0,
+      "log_exp_12m": 12.481759309883122,
+      "growth_12m": -1.9112462461038113,
+      "growth_3m": -2.0742241751868455,
+      "active_months": 12,
+      "cv_12m": 0.8847632150475095,
+      "anomaly_ratio": 0.0,
+      "unit_trend": -0.5612938337242865,
+      "share_in_country": 4.29889953951709e-06,
+      "share_in_product": 0.010516649159273955,
+      "country_growth": 0.0658065071954681,
+      "product_growth": 0.31913745856654785,
+      "product_countries": 17.0,
+      "grp4_c_growth_12m": -0.27619372213949767,
+      "grp4_c_growth_3m": 0.0385616013546386,
+      "grp4_world_growth_12m": -0.24336758717963036,
+      "grp2_c_growth_12m": 0.07825750766701134,
+      "hs4_unit_trend": 0.5875721713525061,
+      "imp_hs6_world_growth": -0.31586314407805816,
+      "imp_hs4_world_growth": -0.2158307676579021,
+      "imp_hs4_from_c_growth": 0.13922789696860782,
+      "imp_exp_ratio_hs4": 1.0668561874299058,
+      "y_growth": -0.8500912697618102,
+      "future_cv": 1.3332157982633992,
+      "hs2": 75,
+      "region_id": 35.0,
+      "fx_change_12m": "",
+      "fx_vol_12m": "",
+      "log_gdp": "",
+      "gdp_growth": "",
+      "log_population": "",
+      "log_gdp_pc": "",
+      "mkt_log_import": "",
+      "mkt_growth": "",
+      "kor_share": "",
+      "kor_share_change": "",
+      "mkt_hs4_growth": "",
+      "future_mkt_growth": "",
+      "future_share": "",
+      "type_available_from": "NaT",
+      "news_3m": 0.0,
+      "news_all_3m": 0.0,
+      "news_change": 0.0,
+      "news_country_3m": 48.0,
+      "news_trade_3m": 21.0,
+      "news_market_3m": 15.0,
+      "news_invest_3m": 20.0
+    }
+  ],
+  "registry_sync": {
+    "status": "PENDING",
+    "error_type": "ProgrammingError"
+  },
+  "raw_example": {
+    "country": "VN",
+    "hs6": "750620",
+    "original_hs6_codes": [
+      "750620"
+    ],
+    "past_12m": 263486.0,
+    "future_12m": 112607.0,
+    "y_recomputed": -0.8500912697618102,
+    "percent_growth": -57.26262495920087,
+    "monthly": {
+      "2022.01": 8302,
+      "2022.02": 1412,
+      "2022.03": 2950,
+      "2022.04": 67259,
+      "2022.06": 23344,
+      "2022.07": 2950,
+      "2022.09": 0,
+      "2023.01": 114165,
+      "2023.02": 193908,
+      "2023.03": 282888,
+      "2023.04": 96879,
+      "2023.05": 237253,
+      "2023.06": 76759,
+      "2023.07": 163450,
+      "2023.08": 277061,
+      "2023.09": 459838,
+      "2023.10": 473452,
+      "2023.11": 273078,
+      "2023.12": 162038,
+      "2024.01": 188911,
+      "2024.02": 49468,
+      "2024.03": 104024,
+      "2024.04": 111610,
+      "2024.05": 201164,
+      "2024.06": 54374,
+      "2024.07": 63051,
+      "2024.08": 63313,
+      "2024.09": 37086,
+      "2024.10": 45257,
+      "2024.11": 52725,
+      "2024.12": 12522,
+      "2025.01": 4058,
+      "2025.02": 9894,
+      "2025.03": 5830,
+      "2025.04": 51906,
+      "2025.05": 41709,
+      "2025.06": 24717,
+      "2025.07": 1224,
+      "2025.08": 2261,
+      "2025.09": 11383,
+      "2025.10": 12695,
+      "2025.11": 47031,
+      "2025.12": 2686,
+      "2026.01": 3199,
+      "2026.02": 1328,
+      "2026.03": 17521,
+      "2026.04": 4114,
+      "2026.05": 2749,
+      "2026.06": 890,
+      "2026.07": 3590,
+      "2026.08": 13708,
+      "2026.09": 3096
+    }
+  },
+  "matching_historical_sources": {
+    "backend/app/ml/features.py": [
+      "013bc747eb6b9e3fe7766aba151ba17237285c23"
+    ],
+    "backend/app/ml/market_model.py": []
+  }
+}
