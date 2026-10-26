@@ -20,7 +20,12 @@ try:  # ndcg_score에서 입력 검사만 뺀 같은 계산. 그룹 수천 개�
 
     def _ndcg(relevance, score, k):
         return float(np.average(_ndcg_sample_scores(relevance, score, k=k, ignore_ties=False)))
-except ImportError:  # 내부 함수가 없는 scikit-learn 버전이면 공개 함수를 쓴다
+
+    # 내부 함수는 버전마다 바뀔 수 있다. 동점이 있는 예제에서 공개 함수와 값이 같을 때만 쓴다.
+    _example = np.array([[.2, .6, 1., .4]]), np.array([[3., 1., 3., 0.]])
+    if not np.isclose(_ndcg(*_example, 2), ndcg_score(*_example, k=2)):
+        raise ImportError("_ndcg_sample_scores 결과가 ndcg_score와 다릅니다")
+except Exception:  # 내부 함수가 없거나 바뀐 scikit-learn 버전이면 공개 함수를 쓴다
     def _ndcg(relevance, score, k):
         return float(ndcg_score(relevance, score, k=k))
 
