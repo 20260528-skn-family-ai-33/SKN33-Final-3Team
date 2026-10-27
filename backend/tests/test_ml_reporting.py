@@ -85,7 +85,8 @@ class TestPdfReport(unittest.TestCase):
             path = generate_report(context, {}, Path(directory) / "report.pdf")
             text = re.sub(r"\s+", "", "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages))
         for statement in ("모델 B는 평가하지 못했다: 라벨 부족 (외부 시장 데이터가 없는 연도)",
-                          "외부 자료 사용 가능일 2026-10-22이 마지막 기준월 2026-09보다 늦어"):
+                          "외부 자료 사용 가능일 2026-10-22이 마지막 기준월 2026-09보다 늦어",
+                          "유일한 DB 입력 예외. 모델 A 사용 피처 0/2개"):
             self.assertIn(re.sub(r"\s+", "", statement), text)
 
     def test_pdf_describes_actual_feature_usage_and_market_type_results(self):

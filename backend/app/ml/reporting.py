@@ -135,16 +135,16 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
         values = inventory.get("external", {}).get(kind, {}).get("years", [])
         return ", ".join(str(y) for y in values) if values else "미확인"
 
-    def feature_usage(label, columns):
+    def feature_usage(columns):
         used = meta.get("features_used")
         if used is None:
-            return f"{label}: 모델 A 사용 여부 미확인"
-        selected = set(columns) & set(used)
-        return f"{label}: 모델 A 사용 피처 {len(selected)}/{len(columns)}개"
+            return "모델 A 사용 여부 미확인"
+        return f"모델 A 사용 피처 {len(set(columns) & set(used))}/{len(columns)}개"
 
-    market_usage = feature_usage("시장", FEATURE_GROUPS["market"])
-    wdi_usage = feature_usage("WDI", FEATURE_GROUPS["wdi"])
-    fx_usage = feature_usage("환율", FEATURE_GROUPS["fx"])
+    market_usage = "시장: " + feature_usage(FEATURE_GROUPS["market"])
+    wdi_usage = "WDI: " + feature_usage(FEATURE_GROUPS["wdi"])
+    fx_note = feature_usage(FEATURE_GROUPS["fx"])  # 입력 표의 '환율' 행에는 라벨 없이 쓴다
+    fx_usage = "환율: " + fx_note
     # 외부 자료가 0개로 나올 때 수집 실패와 시점 정책을 구분할 수 있게 원인을 적는다
     available, anchor = context.get("snapshot", {}).get("available_from"), meta.get("predict_anchor")
     availability_note = (f"외부 자료 사용 가능일 {available}이 마지막 기준월 {anchor[:7]}보다 늦어 "
@@ -277,7 +277,7 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
         ["HS·국가 기준", "HS2017 코드 CSV, HS2022toHS2017.xlsx, 품목명 xlsx, 국가 시드 SQL", "HS 판 통일·국가 역할·지역 분류"],
         ["산업 묶음표", "CSV: group, hs4, role, source, note", f"{count(inventory.get('related_groups'))}개 산업 / {count(inventory.get('related_rows'))}행; product·input·related 역할"],
         ["단신속보", "원본 CSV: nttSn, nat, othbcDt\n분석 JSONL: external_id, hs_codes\n토픽 JSONL: external_id, picked", f"{inventory.get('news', {}).get('first', '미확인')} ~ {inventory.get('news', {}).get('last', '미확인')}\n{count(inventory.get('news', {}).get('rows'))}건"],
-        ["환율", "DB: fx_daily(base_date, currency_code, rate_krw), country.currency_code", fx_usage],
+        ["환율", "DB: fx_daily(base_date, currency_code, rate_krw), country.currency_code", f"유일한 DB 입력 예외. {fx_note}"],
         ["UN 보조 자료", "CSV: freq_code, period_start, country_code, hs6_code, total_import_usd 등", f"월별 자료 마지막 {inventory.get('un', {}).get('last', '미확인')}. 피처에 사용하지 않음"]], [82, 240, width - 322])
     add("BACI는 FOB, Comtrade 수입은 CIF이므로 서로 다른 출처의 수준을 섞어 성장률을 계산하지 않는다. BACI 이후 해는 연결 연도의 Comtrade와 비교한다. 원본·완료 기록·버전 날짜표를 함께 보관해야 한다.", "small")
 
