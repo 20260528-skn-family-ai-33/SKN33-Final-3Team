@@ -37,10 +37,8 @@ def input_manifest():
     paths.update(raw_news[-1:])
     paths.update([F.SHORTNEWS_DIR / "short_news_analysis.jsonl", F.SHORTNEWS_DIR / "short_news_topics.jsonl"])
     external = ROOT / "data/external"
-    paths.update([external / "baci/baci_imports_hs22.csv", external / "availability.csv",
-                  external / "availability_snapshot.json"])
-    paths.update((external / "comtrade").glob("comtrade_imports_*.csv"))
-    paths.update(sorted((external / "wdi").glob("wdi_*.csv"))[-1:])
+    paths.update([external / "availability.csv", external / "availability_snapshot.json"])
+    paths.update(p for files in F.pp.external_files(external).values() for p in files)
     return [{"path": p.resolve().relative_to(ROOT).as_posix(), "bytes": p.stat().st_size, "sha256": sha256(p)}
             for p in sorted(paths) if p.is_file()]
 

@@ -28,20 +28,26 @@ def read_csv(path, **kw):
     return pd.read_csv(path, keep_default_na=False, na_values=[""], **kw)  # 나미비아 NA 보존
 
 
+def external_files(external_dir):
+    """전처리가 읽는 외부 CSV (BACI 집계본, Comtrade 전부, 가장 최근 WDI 하나). 버전 검사·입력 기록도 이 목록을 쓴다."""
+    external_dir = Path(external_dir)
+    baci = [p for p in [external_dir / "baci" / "baci_imports_hs22.csv"] if p.exists()]
+    comtrade = sorted((external_dir / "comtrade").glob("comtrade_imports_*.csv"))
+    wdi = sorted((external_dir / "wdi").glob("wdi_*.csv"))[-1:]
+    return {"BACI": baci, "COMTRADE": comtrade, "WDI": wdi}
+
+
 def read_market(external_dir):
     """BACI 집계본과 Comtrade 파일 전부. 출처를 source에 남긴다 (어느 출처를 쓸지는 market_yearly가 고른다)."""
-    frames = []
-    baci = external_dir / "baci" / "baci_imports_hs22.csv"
-    if baci.exists():
-        frames.append(read_csv(baci, dtype={"hs6": str}).assign(source="BACI"))
-    for path in sorted((external_dir / "comtrade").glob("comtrade_imports_*.csv")):
-        frames.append(read_csv(path, dtype={"hs6": str}).assign(source="COMTRADE"))
+    files = external_files(external_dir)
+    frames = [read_csv(path, dtype={"hs6": str}).assign(source=source)
+              for source in ("BACI", "COMTRADE") for path in files[source]]
     columns = ["year", "country_code", "hs6", "import_world_usd", "import_from_kor_usd", "source"]
     return pd.concat(frames, ignore_index=True)[columns] if frames else pd.DataFrame(columns=columns)
 
 
 def read_wdi(external_dir):
-    files = sorted((external_dir / "wdi").glob("wdi_*.csv"))
+    files = external_files(external_dir)["WDI"]
     columns = ["year", "country_code", "gdp_usd", "gdp_growth_pct", "population", "gdp_per_capita_usd"]
     return read_csv(files[-1]) if files else pd.DataFrame(columns=columns)
 
@@ -122,9 +128,7 @@ def wdi_yearly(wdi, countries=None):
 def check_versions(external_dir):
     """availability.csv의 날짜는 availability_snapshot.json에 해시를 남긴 파일 버전에만 맞다.
     원본을 다시 받아 내용이 바뀌었거나 기록에 없는 파일이 생기면, 새 값에 옛 사용 가능일이 붙지 않게 멈춘다."""
-    used = [p for p in [external_dir / "baci" / "baci_imports_hs22.csv"] if p.exists()]  # read_market·read_wdi가 읽는 파일
-    used += sorted((external_dir / "comtrade").glob("comtrade_imports_*.csv"))
-    used += sorted((external_dir / "wdi").glob("wdi_*.csv"))[-1:]
+    used = [p for paths in external_files(external_dir).values() for p in paths]
     if not used:
         return
     path = external_dir / "availability_snapshot.json"
