@@ -1,6 +1,6 @@
 # 백엔드 실행에 필요한 라이브러리. 설치: pip install -r backend/requirements.txt
-pydantic>=2,<3           # shared article/index data contracts
 requests>=2.32           # 관세청·KOTRA API 호출 (collectors)
+pydantic>=2,<3           # 공통 기사·색인 데이터 계약
 python-dotenv>=1.0       # .env 인증키·DB 접속 정보
 pandas>=2.2              # 관세청 xlsx·CSV 처리 (hs_code_build)
 openpyxl>=3.1            # pandas의 xlsx 읽기

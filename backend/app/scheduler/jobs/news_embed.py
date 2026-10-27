@@ -5,7 +5,7 @@ python -m backend.app.scheduler.jobs.news_embed [--rebuild] [--dry-run] [--keywo
 --keywords-only는 기존 전체 기사 태그 범위의 news_keyword 동기화를 유지합니다.
 아래 구형 청크·동기화 함수와 명시적 client 주입 경로는 기준선 재구성과 호환 검증에 사용합니다.
 본문 모델은 text-embedding-3-large, 3072차원이며 청킹은 1000자·150자 겹침입니다.
-자세한 실행·검증 방법은 docs/rag/README.md를 따릅니다.
+자세한 실행·검증 방법은 docs/SHORTNEWS_INGEST_HANDOFF.md를 따릅니다.
 """
 import argparse
 from backend.app.services.rag.resources import close_owned

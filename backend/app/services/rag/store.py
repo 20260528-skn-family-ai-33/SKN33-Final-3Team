@@ -86,6 +86,16 @@ def persistent_client(path):
     return chromadb.PersistentClient(path=str(path), settings=Settings(anonymized_telemetry=False))
 
 
+def collection_distance(collection):
+    """Read the immutable index metric without requesting a metric change on modify."""
+    meta = collection.metadata or {}
+    configuration = getattr(collection, 'configuration', None) or {}
+    hnsw = configuration.get('hnsw') or {}
+    values = [value for value in (meta.get('hnsw:space'), meta.get('distance_metric'), hnsw.get('space'))
+              if value is not None]
+    return values[0] if values and all(value == values[0] for value in values) else None
+
+
 def read_all(collection, include):
     output = {'ids': [], **{key: [] for key in include}}
     for offset in range(0, collection.count(), 500):
@@ -109,7 +119,7 @@ class IndexSnapshot:
         meta = col.metadata or {}
         validate_document_contract(meta)
         if (meta.get('embedding_model') != MODEL or meta.get('dimensions') != self.dimensions
-                or meta.get('hnsw:space') != 'cosine'):
+                or collection_distance(col) != 'cosine'):
             raise ValueError('incompatible_article_embedding')
         return col
 
@@ -213,6 +223,26 @@ class GenerationStore:
                     old_rows = read_all(old.collection(name), ['documents', 'metadatas', 'embeddings']) if old else None
                     reuse = {i: (doc, meta, vector) for i, doc, meta, vector in zip(
                         old_rows['ids'], old_rows['documents'], old_rows['metadatas'], old_rows['embeddings'])} if old_rows else {}
+                    # Only explicitly migrated, internally consistent legacy IDs are reusable.
+                    legacy_keys = {}
+                    for old_key, (old_text, old_meta, _) in reuse.items():
+                        if old_meta.get('migration_legacy_id') is not True:
+                            continue
+                        number = old_meta.get('chunk')
+                        article_id = old_meta.get('article_id')
+                        identity = old_meta.get('article_key')
+                        text_hash = hashlib.sha256(old_text.encode()).hexdigest()
+                        if (type(number) is not int or number < 0 or type(article_id) is not int
+                                or old_key != f'{article_id}:{number}' or old_meta.get('legacy_record_id') != old_key
+                                or old_meta.get('text_hash') != text_hash):
+                            raise ValueError('invalid_migrated_record_identity')
+                        identity_parts = json.loads(identity)
+                        if identity_parts != [old_meta.get('source_code'), old_meta.get('external_id')]:
+                            raise ValueError('invalid_migrated_record_identity')
+                        canonical_key = hashlib.sha256((identity + ':' + str(number) + ':' + text_hash).encode()).hexdigest()
+                        if canonical_key in legacy_keys:
+                            raise ValueError('duplicate_migrated_record_identity')
+                        legacy_keys[canonical_key] = old_key
                     col = client.create_collection(name, embedding_function=None,
                         metadata={'embedding_model': MODEL, 'dimensions': self.dimensions, 'hnsw:space': 'cosine', **document_contract()})
                     expected = {}
@@ -230,7 +260,26 @@ class GenerationStore:
                                 'countries':article.countries, 'category':article.category}, chunk)
                             digest = hashlib.sha256(text.encode()).hexdigest()
                             key = hashlib.sha256((article.identity + ':' + str(number) + ':' + digest).encode()).hexdigest()
-                            expected[key] = (text, article.metadata(number, digest), text)
+                            metadata = article.metadata(number, digest)
+                            old_key = legacy_keys.get(key)
+                            if old_key is not None:
+                                old_text, old_meta, _ = reuse[old_key]
+                                if (old_text == text and old_meta['article_id'] == article.article_id
+                                        and old_meta['source_code'] == article.source_code.value
+                                        and old_meta['article_key'] == article.identity and old_meta['chunk'] == number):
+                                    key = old_key
+                                    # Retain custom legacy fields, but do not retain removed canonical tags.
+                                    reserved = set(metadata) | {'countries', 'keywords', 'hs_keys', 'body_hash', 'category'}
+                                    extra = {k:v for k,v in old_meta.items() if k not in reserved}
+                                    if 'body_hash' in old_meta:
+                                        from backend.app.scheduler.jobs.news_embed import body_hash
+                                        extra['body_hash'] = body_hash({'title':article.title, 'body_masked':article.body})
+                                    if article.category is not None:
+                                        extra['category'] = article.category
+                                    metadata = extra | metadata
+                            if key in expected:
+                                raise ValueError('duplicate_article_record_id')
+                            expected[key] = (text, metadata, text)
                     keys = list(expected)
                     for start in range(0, len(keys), 64):
                         report.update(stage='embedding', current_collection=name, batch_offset=start)

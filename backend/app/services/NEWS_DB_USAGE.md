@@ -33,6 +33,9 @@ OPENAI_API_KEY=sk-...          # ④ 임베딩
 
 테이블은 미리 만들어 두어야 합니다. 적재 코드는 테이블을 만들지 않고, 없으면 오류 로그를 남기고 끝납니다.
 빈 DB라면 `db/mysql/init/`의 SQL을 `01_schema.sql`부터 번호 순서대로 대상 DB에서 실행합니다.
+기사·배치 관리자 ERD와 출처별·통합 집계 뷰를 적용할 때는
+[SHORTNEWS_DB_USAGE.md의 마이그레이션 절차](SHORTNEWS_DB_USAGE.md#기사배치-관리자-스키마-적용)를 따릅니다.
+기존 뉴스 적재기는 신규 기사의 필수 관리자 JSON을 공급하고 재적재 시 관리자 값을 보존합니다.
 
 ## ③ MySQL 적재 (`news_load`)
 
@@ -73,15 +76,26 @@ python -m backend.app.scheduler.jobs.news_load --raw data/news/news_raw_20220101
 ### 적재 동작
 
 - 같은 `(source_code, external_id)` 기사가 있으면 제목·발행일·URL·본문·분류를 갱신합니다 (`article_id` 유지). 원본에 같은 ID가 두 번 있으면 마지막 행.
-- 키워드 결과가 있는 기사의 태그는 지우고 새로 넣습니다. 동의어·분야 사전이 바뀌어 ②를 다시 돌려도 이전 태그가 남지 않습니다.
-- 일별 집계는 입력 기사의 발행일(발행일이 바뀐 기사는 예전 날짜도)만 지우고, 그날 DB에 있는 **모든 출처** 기사로 다시 셉니다.
-  나중에 단신속보가 같은 테이블에 들어와도 함께 셉니다.
+- 키워드 결과가 있는 기사의 태그를 교체합니다. 동의어·분야 사전이 바뀌어 ②를 다시 돌려도 이전 자동 태그가 남지 않습니다. 관리자 ERD의 수동 지정 플래그가 켜진 국가·HS 태그는 보존합니다.
+- 일별 집계는 입력 기사의 발행일(발행일이 바뀐 기사는 예전 날짜도)만 재계산합니다. `news_keyword_daily`는 시장뉴스+단신(구형 별칭 포함), `news_product_daily`는 시장뉴스만 셉니다. 신문 출처는 이 두 물리 집계에 포함하지 않습니다.
 - 키워드 결과가 없는 기사(①과 ②의 입력이 다를 때, ②를 일부 기간만 돌렸을 때)는 기사만 갱신하고 기존 태그는 그대로 둡니다
   (새 기사면 태그 없음, 경고).
 - `hs_code` 테이블이 비어 있으면 품목 태그·집계 0건으로 넘어갑니다 (경고). `hs_code_load` 후 다시 실행하면 채워집니다.
 - 전체를 한 트랜잭션으로 넣습니다. 중간에 실패하면 모두 롤백되어 아무것도 반영되지 않습니다.
+- 같은 저장소 경로·DB를 쓰는 해외시장뉴스/단신속보 적재기는 `data/news/load_locks/`의 공용 잠금으로
+  트랜잭션을 차례로 실행합니다. 앞 작업의 커밋/롤백 후에 조회하므로 공용 일별 집계가 서로 덮어써지지 않습니다.
+  다른 서버·별도 저장소 사본까지 조정하는 분산 잠금은 아닙니다.
 - 실행할 때마다 `batch_run`에 한 건 기록합니다 (job `NEWS_LOAD`, 대상 `article`, 기간 = 원본 기사 발행일 범위, 수신 = 원본 기사 수, API 호출 0).
 - 로그: 화면과 `data/news/logs/news_load_<시각>.log`.
+
+### 관리자 ERD 호환
+
+관리자 ERD 컬럼이 있으면 신규 기사에 `visibility_status=VISIBLE`, `first_ingested_at`,
+필수 `admin_meta_json`을 넣고, 공통 배치 기록에 `detail_json={"schema_version":1}`을 넣습니다.
+구형 스키마에서는 이 추가 컬럼을 사용하지 않습니다. 재적재는 기존 관리자 JSON·공개 상태·최초 시각을 유지합니다.
+`classification_input`은 적재 시점의 정책 코드·CSV 사전·DB 정책을 저장한 파일 경로와 SHA-256이며,
+초기 분류 상태는 PENDING/revision 0입니다. 스냅샷은 `data/news/classification_snapshots/`에 보관하므로
+DB와 함께 백업해야 합니다. 상세 보존·실패 규칙은 [단신속보 사용 안내](SHORTNEWS_DB_USAGE.md#관리자-erd-호환)와 같습니다.
 
 ### 확인 (MySQL)
 
@@ -154,7 +168,7 @@ WHERE t.keyword_text IN ('AI', '인공지능', 'K뷰티', '전기차보조금', 
 
 ## ④ 임베딩 (`news_embed`)
 
-`article`의 본문을 조각으로 나눠 Chroma(`chroma_data/`, git 제외)의 `kotra_article` 컬렉션에, 키워드(주제어)를 `news_keyword` 컬렉션에 넣습니다.
+`article`의 본문은 `NEWS_VECTOR_ROOT`(기본 `data/rag/index`)의 활성 세대 안 `kotra_article` 컬렉션에, 키워드(주제어)는 같은 root의 `keywords/news_keyword`에 넣습니다. `chroma_data` 직접 접근 예시는 아래에 남긴 과거 검증 기록에만 해당합니다.
 관련 기사 찾기(RAG)와 비슷한 키워드 추천에 씁니다. **MySQL에는 있지만 컬렉션에 아직 없는 기사만 임베딩해 추가합니다.**
 
 ```powershell
@@ -307,4 +321,32 @@ python -c $code
 - 품목 태그·집계는 `hs_code` 적재 후 채워집니다. 지금은 KOTRA HS 칸(`hs6`)만 쓰고, 키워드·제목으로 찾은 품목은 HS 사전 완료 후 추가합니다.
 - 이름·회사명 같은 개인정보는 가리지 않습니다 (규칙으로 구분하기 어려움). 이메일·전화번호만 가립니다.
 - 매일 자동 실행(스케줄러)은 ① 수집·② 키워드 정리와 함께 연결할 때 등록합니다. 지금은 수동 실행입니다.
-- 단신속보(`collectors/shortnews`)는 출처 코드를 정한 뒤 같은 테이블에 넣습니다. 일별 집계는 이미 모든 출처를 함께 셉니다.
+- 단신속보(`collectors/shortnews`)는 `scheduler/jobs/shortnews_load.py`로 `KOTRA_SHORT_NEWS` 출처의 같은 테이블에 적재합니다. [SHORTNEWS_DB_USAGE.md](SHORTNEWS_DB_USAGE.md)를 참고하세요. 키워드 일별 집계는 시장뉴스와 단신만, 품목 일별 집계는 시장뉴스만 셉니다. 신문 출처는 출처별 조회 뷰에서 따로 셉니다.
+
+
+### 공통 색인·집계 계약 보완 (2026-10-25)
+
+공통 `news_embed.run_sources`와 예약 경로는 검증을 마친 본문 세대만 원자적으로 게시합니다. 위 구형 직접-client 예시와 달리 기본 본문은 단일 `kotra_article`을 검증 후 게시하며, 지정 출처의 숨김·삭제를 다음 세대에 반영하고 다른 출처는 보존합니다. 문서와 임베딩 입력은 동일한 발행일·국가·분류·제목 헤더+본문 청크(1000자/150자 겹침)입니다. 메타데이터만 달라지면 벡터를 재사용합니다. 키워드 전역 조회가 실패하면 기존 후보 삭제를 수행하지 않습니다.
+
+기존 KOTRA 전용 두 뷰는 유지하고 출처별 뷰와 시장뉴스+단신 통합 뷰를 분리합니다. `news_keyword_daily`는 시장뉴스+단신(구형 출처 별칭 포함), `news_product_daily`는 시장뉴스만 집계하며 신문을 자동 편입하지 않습니다. 단신의 기존 수동 HS 태그는 SQL에 보존하지만 HS 집계·본문 벡터에 넣지 않습니다. 실패 기간을 0건으로 채우지 않으며 수집 상태는 실행 이력과 함께 해석해야 합니다.
+
+집계 뷰 전환은 `db/mysql/migrations/20261023_admin_news_erd.sql`의 관리자 마이그레이션으로 적용합니다. 여섯 뷰 정의와 갱신된 SQL 지문을 함께 반영합니다. 이번 로컬 작업에서는 실제 MySQL에 적용하지 않았습니다.
+
+
+### 통합 실행 계약 (2026-10-26)
+
+기본 `news_embed.run`은 공통 세대를 게시하고 공통 키워드를 갱신합니다. 위 `chroma_data` 직접 클라이언트 예시는 구형 명시 주입 호환 경로입니다. 운영 기본·CLI `--keywords-only`·`run_sources`·`search_keywords`는 모두 `NEWS_VECTOR_ROOT` 또는 `data/rag/index` 아래 `keywords/news_keyword`를 사용합니다. 본문과 키워드의 root를 함께 보존해야 합니다.
+
+root의 `database.json`에는 접속 자격 증명을 제외한 DB 식별 해시만 저장합니다. 다른 DB로 같은 root를 사용하면 `source_database_mismatch`, 이미 색인이 있지만 식별 기록이 없으면 `source_database_unbound`로 중단하며 자동 합치거나 초기화하지 않습니다. 기존 색인의 이관은 별도 검토 대상입니다.
+
+신문·단신의 DB 확정 대표어는 파일 사전으로 다시 바꾸지 않습니다. 색인 작업은 사용한 snapshot을 성공·실패 시 모두 닫습니다. 생성한 OpenAI 제공자는 작업이 닫고, 명시 주입한 제공자는 호출자가 닫습니다.
+
+사용량은 응답 검증 전에 기록합니다. `reported_responses`와 `unreported_calls`를 구분하며, 보고되지 않은 토큰 수를 확인된 0토큰·0원으로 간주하지 않습니다. 알려진 토큰의 비용은 추정치입니다. 단신 전체 사용량의 본문·키워드 단계와 `chroma_result.usage`는 같은 사용량이므로 합산하지 않습니다.
+
+## 기존 본문 색인 이관
+
+기본 본문은 `NEWS_VECTOR_ROOT` 또는 `data/rag/index`의 활성 세대 `kotra_article`, 공통 키워드는 같은 root의 `keywords/news_keyword`입니다. `chroma_data`는 단신 분류 후보와 명시적 구형 클라이언트 경로이며, 구형 본문을 자동 삭제·이관하지 않습니다.
+
+`legacy_direct_index_migration_required`가 발생하면 [기존 본문 색인 이관 안내](../../../docs/NEWS_INDEX_MIGRATION.md)의 원본 writer 중지·검증 카탈로그 준비·dry-run·`--apply` 순서를 따릅니다. `python -m backend.app.scheduler.jobs.news_index_migrate --help`로 인자를 확인할 수 있습니다. 원본 파일은 읽기만 하고 임시 복제본에서 벡터를 배치 복사합니다. 모델 호출은 없으며 기존 ID·문서·벡터와 타 출처를 보존합니다. 형식·모델·카탈로그가 맞지 않으면 게시하지 않습니다.
+
+실제 MySQL/RDS·운영 Chroma 이관 및 Windows 실행은 이번 검증에 포함되지 않습니다. 최초 수신 시각과 당시 분류 입력의 근거가 없는 기존 행은 현재 값으로 backfill하지 않습니다. 자세한 필드 의미·복구·제약도 위 안내에 기록했습니다.

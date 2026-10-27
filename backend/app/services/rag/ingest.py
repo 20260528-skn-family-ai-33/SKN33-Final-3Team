@@ -26,7 +26,8 @@ def read_articles(engine, sources, *, vocabulary=None, supplements=None):
             query = query.where(article.c.visibility_status == 'VISIBLE')
         rows = [dict(r) for r in conn.execute(query).mappings()]
         tags = list(conn.execute(select(ArticleTag.__table__).join(Article, Article.article_id == ArticleTag.article_id)
-                                .where(Article.source_code.in_(sources))).mappings())
+                                .where(Article.source_code.in_(sources))
+                                .order_by(ArticleTag.article_id, ArticleTag.tag_id)).mappings())
     vocabulary = vocabulary or Vocabulary.load()
     vocabulary.products = {ver + ':' + code: [name] for (code, ver), name in hs.items() if len(code) in (4, 6)}
     from backend.app.services.news_keywords.keyword_clean import load_geo
@@ -55,6 +56,13 @@ def read_articles(engine, sources, *, vocabulary=None, supplements=None):
         extra = next((item for item in candidates if item.get('body_masked') == row['body_masked']), {})
         if candidates and not extra:
             missing.append('stale_keyword_supplement')
+        # A current CSV with no full body must not erase a previously verified
+        # summary of exactly the same stored text. Keep current keyword evidence.
+        if (row['source_code'] == 'KOTRA_MARKET' and extra.get('body_available') is False
+                and not extra.get('summary_fallback') and any(
+                    item.get('body_masked') == row['body_masked'] and item.get('summary_fallback') is True
+                    for item in candidates)):
+            extra = {**extra, 'summary_fallback': True}
         original_keywords = extra.get('keywords')
         if row['source_code'] in ('HANKYUNG', 'FNNEWS'):
             original_keywords = keywords
@@ -81,7 +89,13 @@ def read_articles(engine, sources, *, vocabulary=None, supplements=None):
         if row['source_code'] == 'KOTRA_MARKET' and 'body_available' not in extra:
             # 기존 적재 함수는 본문 누락 시 요약/제목을 저장하므로 길이로 추정하지 않습니다.
             missing.append('body_origin')
-        if extra.get('body_available') is False or body.strip() == row['title'].strip():
+        summary_fallback = (row['source_code'] == 'KOTRA_MARKET'
+                            and extra.get('summary_fallback') is True
+                            and extra.get('body_available') is False and bool(body.strip()))
+        if summary_fallback:
+            missing.append('body')
+            provenance.append('body:summary_fallback')
+        elif extra.get('body_available') is False or body.strip() == row['title'].strip():
             body = ''
             missing.append('body')
         if not country:
@@ -103,14 +117,23 @@ def read_articles(engine, sources, *, vocabulary=None, supplements=None):
     return documents, vocabulary
 
 
-def market_supplements(path):
+def market_supplements(path, *, preserve_candidates=False):
     output = {}
     csv.field_size_limit(2**31-1)
     with Path(path).open(encoding='utf-8-sig', newline='') as stream:
         for raw in csv.DictReader(stream):
             row = market.article_row(raw)
             body = market.mask(market.html_to_text(raw.get('newsBdt')))
-            output[(row['source_code'], row['external_id'])] = {
-                'body_masked': row['body_masked'], 'body_available': bool(body),
-                'keywords': [raw.get('kwrd', '')]}
+            key = (row['source_code'], row['external_id'])
+            value = {'body_masked': row['body_masked'], 'body_available': bool(body),
+                     'keywords': [raw.get('kwrd', '')]}
+            if preserve_candidates:
+                summary = market.mask(market.html_to_text(raw.get('cntntSumar')))
+                if not body and summary and row['body_masked'] == summary:
+                    value['summary_fallback'] = True
+                if 'kwrd' not in raw:
+                    value.pop('keywords')  # Unknown original keywords are not known-empty.
+                output.setdefault(key, []).append(value)
+            else:
+                output[key] = value  # Keep the existing scheduler adapter contract.
     return output

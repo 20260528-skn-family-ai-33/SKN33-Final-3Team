@@ -5,6 +5,9 @@
 등록된 잡
 - trade_news_daily: 매일 03:00(KST) 전날 기사 수집·검수 후 article 적재.
   기본 일시중지이며 NEWS_DAILY_ENABLED=true일 때만 예약 활성화. 시작 즉시 실행하지 않습니다.
+- shortnews_daily (SHORTNEWS_DAILY_ENABLED=true일 때만): 매일 03:00(KST) 전날 단신속보 전체 페이지 수집 후 MySQL 적재.
+  시작 10초 후에도 복구 점검하며, 실패·미완료·중단 기간은 날짜별 상태를 읽어 재처리합니다.
+  수집·적재 결과는 data/shortnews/daily에 기록합니다.
 - un_data_monthly: 매월 1일 03:00(KST) UN 변경분 갱신, 시작 10초 후에도 1회 점검.
   초기 CSV 적재가 필요하며, 체크포인트가 없으면 안내 후 UN 작업만 건너뜁니다.
 - hs_code_refresh: 매년 1월 1일 00:15(KST)에 HS 코드 연간 갱신(다운로드 → CSV → 적재).
@@ -25,12 +28,14 @@
 import argparse
 import hashlib
 import logging
+import os
 import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from dotenv import dotenv_values
 
 from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
@@ -198,6 +203,11 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV,
                       id="fx_daily_startup", replace_existing=True)
     from backend.app.scheduler.jobs import trade_news_daily
     trade_news_daily.register_jobs(scheduler, env_path=env_path)
+    # 통합 실행에서는 단신 정기·10초 복구 작업 모두 명시적으로 켭니다. 전용 worker는 독립입니다.
+    values = {**dotenv_values(env_path), **os.environ}
+    if str(values.get("SHORTNEWS_DAILY_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}:
+        from backend.app.scheduler.jobs import shortnews_daily
+        shortnews_daily.register_jobs(scheduler)
     return scheduler
 
 

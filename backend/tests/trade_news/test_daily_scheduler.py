@@ -403,3 +403,29 @@ def test_daily_entry_runs_crawler_in_same_process(local,monkeypatch):
     assert sys.argv[sys.argv.index('--daily-limit')+1]=='100'
     assert '--record-batch-run' in sys.argv
     child.assert_not_called()
+
+
+@pytest.mark.parametrize('trade_enabled,short_enabled', [(False, False), (True, False), (False, True), (True, True)])
+def test_integrated_source_switches_are_independent(local, monkeypatch, trade_enabled, short_enabled):
+    """두 수집 설정은 독립이며 등록만으로 예약·수집을 실행하지 않습니다."""
+    from apscheduler.schedulers.base import BaseScheduler
+    from backend.app.scheduler import main
+    from backend.app.scheduler.jobs import shortnews_daily
+    monkeypatch.delenv('SHORTNEWS_DAILY_ENABLED', raising=False)
+    local.env.write_text(f'NEWS_DAILY_ENABLED={str(trade_enabled).lower()}\n'
+                         f'SHORTNEWS_DAILY_ENABLED={str(short_enabled).lower()}\n')
+    execute = Mock(side_effect=AssertionError('예약/수집 실행 금지'))
+    monkeypatch.setattr(BaseScheduler, 'start', execute)
+    monkeypatch.setattr(job, 'run_with_rag', execute)
+    monkeypatch.setattr(shortnews_daily, 'run', execute)
+    scheduler = main.build_scheduler(local.tmp/'un', local.tmp/'scope', local.env, env_path=local.env)
+    jobs = {item.id: item for item in scheduler.get_jobs()}
+    assert len(jobs) == 11 + (2 if short_enabled else 0)
+    assert ('shortnews_daily' in jobs) is short_enabled
+    assert ('shortnews_startup' in jobs) is short_enabled
+    trade = jobs['trade_news_daily']
+    assert (getattr(trade, 'next_run_time', 'pending') is None) is (not trade_enabled)
+    assert trade.kwargs['env_path'] == local.env
+    assert trade.trigger.get_next_fire_time(None, NOW) == NOW
+    assert not scheduler.running
+    execute.assert_not_called()

@@ -19,7 +19,7 @@ BASE = Path(__file__).resolve().parent
 ENV_PATH = Path(__file__).resolve().parents[5] / ".env"
 API_URL = "https://apis.data.go.kr/B410001/shortBreakingNews/shortBreakingNews"
 # 응답 필드명을 유지한 단신속보뉴스 원본 CSV의 기본 컬럼입니다.
-RAW_FIELDS = ["kbc", "nttSn", "nttSj", "smmarCn", "regn", "nat",
+RAW_FIELDS = ["kbc", "nttSn", "nttSj", "nttCn", "regn", "nat",
               "othbcDt", "kotraNewsUrl", "realAtfileInfoList"]
 
 
@@ -139,7 +139,7 @@ def collect(args, directory, key=None):
     params["search2"] = args.date or ""
     records, seen_ids, totals, warnings = [], set(), [], []
     received = duplicates = missing_ids = 0
-    previous_page = None
+    seen_pages = set()
     with requests.Session() as session:
         page = 1
         while True:
@@ -150,11 +150,10 @@ def collect(args, directory, key=None):
                 raise ValueError("API 전체 건수가 음수입니다")
             if total != totals[0] and "수집 중 API 전체 건수가 변경되었습니다" not in warnings:
                 warnings.append("수집 중 API 전체 건수가 변경되었습니다")
-            signature = hash_key(json.dumps(items, sort_keys=True, ensure_ascii=False))
-            if items and signature == previous_page:
-                warnings.append("같은 페이지가 반복되어 수집을 중단했습니다")
-                break
-            previous_page = signature
+            # 내용·순서가 달라져도 같은 기사 ID 묶음이 재등장하면 페이지 순환입니다.
+            signature = frozenset("" if item.get("nttSn") is None else str(item["nttSn"]).strip() for item in items)
+            repeated = bool(items) and signature in seen_pages
+            seen_pages.add(signature)
             received += len(items)
             for item in items:
                 value = item.get("nttSn")
@@ -168,6 +167,10 @@ def collect(args, directory, key=None):
                     seen_ids.add(article_id)
                     records.append(item)
             print(f"페이지 {page}: 수신 {received}건, 고유 ID {len(seen_ids)}건 / 전체 {total}건")
+            # A→B→A 순환도 잡되, 일부 중복이 있거나 처음 보는 ID 조합인 페이지는 계속 받습니다.
+            if repeated:
+                warnings.append("이미 받은 기사 ID 묶음의 페이지가 반복되어 수집을 중단했습니다")
+                break
             # 중복을 포함한 수신 행 수로 종료하지 않고 고유 기사 수를 확인합니다.
             if not items or len(seen_ids) >= max(totals):
                 break
