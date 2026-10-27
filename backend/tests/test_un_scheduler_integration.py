@@ -30,7 +30,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         j=jobs['un_data_monthly'];self.assertEqual(j.max_instances,1)
         self.assertEqual(j.args,(self.state,Path('custom-scope'),Path('custom-env')))
         now=datetime(2026,10,16,tzinfo=scheduler.KST)
-        self.assertEqual(j.trigger.get_next_fire_time(None,now).isoformat(),'2026-11-01T03:00:00+09:00')
+        self.assertEqual(j.trigger.get_next_fire_time(None,now).isoformat(),'2026-11-10T03:00:00+09:00')
         self.assertEqual(jobs['hs_code_embed'].func,scheduler.embed.run)
         self.assertEqual(jobs['hs_code_refresh'].func,scheduler.hs_refresh_job)
 
