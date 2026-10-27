@@ -1,9 +1,6 @@
-"""채팅 메시지 JSON과 report 행/지속 실행 로그를 사용하는 작업 처리기."""
-import json
-import os
-import tempfile
+"""기존 chat_message/report의 JSON에 실행 상태를 원자적으로 저장한다."""
 from datetime import datetime, timedelta
-from sqlalchemy import select, update
+from sqlalchemy import select, update, and_, or_
 from backend.app.api.common import now, digest, require, clean
 
 EXECUTION = '_execution'
@@ -29,37 +26,27 @@ def _save_chat(store, job):
         result_json=clean({'schema_version':1,EXECUTION:payload})))
 
 
-def _log_path(store, report_id):
-    return store.db.job_logs / f'{int(report_id)}.json'
-
-
 def report_execution(store, record):
-    path=_log_path(store,record['report_id'])
-    if not path.exists(): return None
-    state=json.loads(path.read_text(encoding='utf-8'))
+    state=(record['content_json'] or {}).get(EXECUTION)
+    if not state:
+        # 파일 기반 구버전의 미완료 행도 로그 파일 없이 재개한다.
+        state=_initial(record['user_id'],'API_REPORT',record['report_id'],
+                       {'report_id':str(record['report_id'])},record['generation_key'])
+        prior_attempt=record['status'] in ('RUNNING','DELAYED') or record['retry_count']>0
+        state.update(generation_key=record['generation_key'],attempt_no=record['retry_count']+int(prior_attempt),
+                     lease_expires_at=now().isoformat() if record['status']=='RUNNING' else None)
+        if record['status']=='READY': state['result_json']={'step':'DONE'}
     if state.get('version')!=1 or state.get('generation_key')!=record['generation_key']: return None
-    # DB가 업무 상태의 기준이다. READY는 로그 상태와 무관하게 다시 실행하지 않는다.
     status={'READY':'SUCCEEDED','DELAYED':'QUEUED'}.get(record['status'],record['status'])
     return {**state,'job_id':record['report_id'],'status':status}
 
 
 def _save_report(store, job):
-    path=_log_path(store,job['job_id']); path.parent.mkdir(parents=True,exist_ok=True)
-    temporary=None
-    try:
-        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,delete=False) as f:
-            temporary=f.name
-            json.dump(clean(job),f,ensure_ascii=False)
-            f.flush(); os.fsync(f.fileno())
-        os.replace(temporary,path)
-        event={k:job.get(k) for k in ('generation_key','job_id','claim_token','attempt_no','round_attempt',
-                                      'status','available_at','result_json')}
-        event['recorded_at']=now().isoformat()
-        with path.with_suffix('.jsonl').open('a',encoding='utf-8') as log:
-            log.write(json.dumps(clean(event),ensure_ascii=False)+'\n')
-            log.flush(); os.fsync(log.fileno())
-    finally:
-        if temporary and os.path.exists(temporary): os.unlink(temporary)
+    t=store.t('report')
+    record=store.owned('report','report_id',job['job_id'],job['subject_user_id'],lock=True)
+    content=dict(record['content_json'] or {})
+    content[EXECUTION]=clean(job)
+    store.c.execute(update(t).where(t.c.report_id==job['job_id']).values(content_json=content))
 
 
 def find_chat(store, uid, key):
@@ -128,26 +115,59 @@ def _due(job):
 
 def claim(store):
     m,s,r=store.t('chat_message'),store.t('chat_session'),store.t('report')
-    pending=store.rows(select(m.c.message_id,m.c.session_id,m.c.created_at).where(m.c.role=='USER',
-        m.c.result_json[EXECUTION]['status'].as_string().in_(['QUEUED','RUNNING'])).order_by(m.c.message_id))
-    reports=store.rows(select(r.c.report_id,r.c.created_at).where(r.c.status.in_(['QUEUED','DELAYED','RUNNING'])))
+    # 완료 이력을 LIMIT에 포함하지 않는다. 실행 가능한 행에만 키셋/상한을 적용한다.
+    moment=now().isoformat()
+    cursors=getattr(store.db,'job_scan_cursors',{})
+    size=getattr(store.db,'job_scan_size',100)
+    state=m.c.result_json[EXECUTION]
+    pending_stmt=select(m.c.message_id,m.c.session_id,m.c.created_at).where(m.c.role=='USER',
+        state['version'].as_integer()==1,or_(
+            and_(state['status'].as_string()=='QUEUED',state['available_at'].as_string()<=moment),
+            and_(state['status'].as_string()=='RUNNING',state['lease_expires_at'].as_string()<moment)))
+    execution=r.c.content_json[EXECUTION]
+    legacy=execution['version'].as_integer().is_(None)
+    report_stmt=select(r.c.report_id,r.c.created_at).where(
+        or_(legacy,and_(execution['version'].as_integer()==1,execution['generation_key'].as_string()==r.c.generation_key)),
+        or_(and_(r.c.status.in_(['QUEUED','DELAYED']),or_(legacy,execution['available_at'].as_string()<=moment)),
+            and_(r.c.status=='RUNNING',or_(legacy,execution['lease_expires_at'].as_string()<moment))))
+
+    def window(stmt,pk,kind):
+        cursor=cursors.get(kind,0)
+        rows=store.rows(stmt.where(pk>cursor).order_by(pk).limit(size))
+        if not rows and cursor:
+            cursors[kind]=0
+            rows=store.rows(stmt.order_by(pk).limit(size))
+        return rows
+
+    pending=window(pending_stmt,m.c.message_id,'CHAT')
+    reports=window(report_stmt,r.c.report_id,'REPORT')
+    store.db.job_scan_cursors=cursors
     candidates=[(x['created_at'],'CHAT',x['message_id'],x) for x in pending]
     candidates += [(x['created_at'],'REPORT',x['report_id'],x) for x in reports]
     for _,kind,identity,candidate in sorted(candidates,key=lambda x:x[:3]):
+        # 잠긴 후보가 상한만큼 있어도 다음 호출은 그 뒤의 작업을 확인한다.
+        cursors[kind]=identity
         if kind=='CHAT':
             session=store.one(select(s).where(s.c.session_id==candidate['session_id']).with_for_update(skip_locked=True))
             if not session: continue
             row=store.one(select(m).where(m.c.message_id==identity).with_for_update(skip_locked=True))
             job=_chat_job(row) if row else None
             if job and _due(job):
+                cursors[kind]=0  # 새로 만료/재시도 가능해진 오래된 작업도 다음 호출에 확인한다.
                 job=_claimed(job); _save_chat(store,job); return job
             continue
         row=store.one(select(r).where(r.c.report_id==identity).with_for_update(skip_locked=True))
         if not row: continue
         job=report_execution(store,row)
         if job and _due(job):
+            if job['attempt_no']>=getattr(store.db,'report_max_attempts',3):
+                job.update(status='FAILED',result_json={'step':'FAILED','error':{
+                    'code':'RETRY_EXHAUSTED','message':'리포트 최대 시도 횟수를 초과했습니다.','retryable':False}})
+                _save_report(store,job)
+                store.c.execute(update(r).where(r.c.report_id==identity).values(status='FAILED'))
+                continue
+            cursors[kind]=0
             job=_claimed(job)
-            # 로그를 먼저 원자적으로 보관한다. DB 갱신 실패 후에도 토큰은 증가한다.
             _save_report(store,job)
             store.c.execute(update(r).where(r.c.report_id==identity).values(status='RUNNING',
                 retry_count=row['retry_count']+(1 if job['attempt_no']>1 else 0)))
@@ -189,6 +209,9 @@ def finish(store,job,result,status='SUCCEEDED'):
 
 
 def retry_report(store,job,error,step,delay_seconds):
+    if job['attempt_no']>=getattr(store.db,'report_max_attempts',3):
+        finish(store,job,{'step':step,'error':{**error,'retryable':False}},'FAILED')
+        return
     immediate=job['round_attempt']==1
     state={**job,'status':'QUEUED','available_at':(now()+timedelta(seconds=0 if immediate else delay_seconds)).isoformat(),
            'round_attempt':job['round_attempt'] if immediate else 0,'result_json':{'step':step,'error':error}}

@@ -405,7 +405,9 @@ class BackendApiTest(unittest.TestCase):
             self.assertTrue(run_once(self.app.state.database,self.settings))
         self.assertEqual(self.client.get(f'/api/v1/reports/{rid}/status').json()['job']['status'],'READY')
         self.assertFalse(run_once(self.app.state.database,self.settings))
-        self.assertTrue((self.app.state.database.job_logs/f'{rid}.jsonl').is_file())
+        with self.engine.connect() as c:
+            record=c.execute(select(self.meta.tables['report']).where(self.meta.tables['report'].c.report_id==int(rid))).mappings().one()
+            self.assertEqual(record['content_json']['_execution']['status'],'SUCCEEDED')
 
     def test_older_report_is_not_starved_by_chat(self):
         self.signup(); rid=self.queued_report('older-report')
@@ -555,6 +557,16 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(hs_mentions('HS 1901 2001 2100 330499 수출 2024년 1000만 달러 100000 USD'),['1901','2001','2100','330499'])
         self.assertEqual(hs_mentions('2024-01 1000달러 $2000 1,000,000원'),[])
 
+    def test_worker_retries_loop_after_database_failure(self):
+        from backend.app.api.worker import run_loop
+        from sqlalchemy.exc import OperationalError
+        with patch('backend.app.api.subscriptions.enqueue_due',side_effect=[OperationalError('query',{},Exception()),0]) as schedule, \
+             patch('backend.app.api.worker.run_once',return_value=False) as run, \
+             patch('backend.app.api.worker.time.monotonic',side_effect=[0,0,5,5]), \
+             patch('backend.app.api.worker.time.sleep',side_effect=[None,KeyboardInterrupt]):
+            with self.assertRaises(KeyboardInterrupt): run_loop(self.app.state.database,self.settings)
+        self.assertEqual(schedule.call_count,2); self.assertEqual(run.call_count,2)
+
     def test_hs_codes_next_to_country_names_and_comma_lists(self):
         from backend.app.api.chat import hs_mentions
         for question,expected in [
@@ -567,5 +579,147 @@ class BackendApiTest(unittest.TestCase):
             ('1,000,000원 1000.50달러 $2000 1000만 달러 2024-01',[]),
         ]:
             with self.subTest(question=question): self.assertEqual(hs_mentions(question),expected)
+
+    def test_scheduler_failure_does_not_block_real_chat_job(self):
+        from backend.app.api.worker import run_loop
+        self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        jid=self.post(f'chat/sessions/{sid}/messages',{'question':'2025년 12월 전체 품목 수출','client_message_id':'scheduler-failure'}).json()['job']['job_id']
+        with patch('backend.app.api.subscriptions.enqueue_due',side_effect=RuntimeError('scheduler failure')) as schedule, \
+             patch('backend.app.api.worker.time.monotonic',side_effect=[0,0,1]), \
+             patch('backend.app.api.worker.time.sleep',side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt): run_loop(self.app.state.database,self.settings)
+        self.assertEqual(schedule.call_count,1)  # 5초 재시도 시각 전에는 예약만 건너뛴다.
+        self.assertEqual(self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']['status'],'SUCCEEDED')
+
+    def test_worker_continues_during_persistent_scheduler_failure(self):
+        from backend.app.api.worker import run_loop
+        with patch('backend.app.api.subscriptions.enqueue_due',side_effect=RuntimeError('scheduler failure')) as schedule, \
+             patch('backend.app.api.worker.run_once',return_value=False) as run, \
+             patch('backend.app.api.worker.time.monotonic',side_effect=[0,0,5,5,10,10]), \
+             patch('backend.app.api.worker.time.sleep',side_effect=[None,None,KeyboardInterrupt]):
+            with self.assertRaises(KeyboardInterrupt): run_loop(self.app.state.database,self.settings)
+        self.assertEqual(schedule.call_count,3); self.assertEqual(run.call_count,3)
+
+    def test_worker_once_processes_queue_and_reports_scheduler_failure(self):
+        from backend.app.api.worker import run_loop
+        with patch('backend.app.api.subscriptions.enqueue_due',side_effect=RuntimeError('scheduler failure')), \
+             patch('backend.app.api.worker.run_once',return_value=False) as run:
+            with self.assertRaisesRegex(RuntimeError,'scheduler failure'):
+                run_loop(self.app.state.database,self.settings,once=True)
+        run.assert_called_once()
+
+    def test_worker_recovers_from_queue_failure_independently(self):
+        from backend.app.api.worker import run_loop
+        with patch('backend.app.api.subscriptions.enqueue_due',return_value=0) as schedule, \
+             patch('backend.app.api.worker.run_once',side_effect=[OSError('DB failure'),False]) as run, \
+             patch('backend.app.api.worker.time.monotonic',side_effect=[0,0,5]), \
+             patch('backend.app.api.worker.time.sleep',side_effect=[None,KeyboardInterrupt]):
+            with self.assertRaises(KeyboardInterrupt): run_loop(self.app.state.database,self.settings)
+        self.assertEqual(schedule.call_count,1); self.assertEqual(run.call_count,2)
+
+    def test_worker_connection_failure_before_store_does_not_mask_error(self):
+        from contextlib import contextmanager
+        self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        jid=self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':'db-failure'}).json()['job']['job_id']
+        original=self.engine.begin; count=0
+        @contextmanager
+        def flaky():
+            nonlocal count
+            count+=1
+            if count==2: raise OSError('temporary connection failure')
+            with original() as c: yield c
+        with patch.object(self.engine,'begin',side_effect=flaky):
+            self.assertTrue(run_once(self.app.state.database,self.settings))
+        state=self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
+        self.assertEqual(state['status'],'FAILED'); self.assertEqual(state['error']['code'],'JOB_FAILED')
+
+    def test_not_found_inside_existing_job_is_terminal(self):
+        from backend.app.api.common import ApiError
+        self.signup(); rid=self.queued_report('missing-reference')
+        with patch('backend.app.api.worker.reports.generate',side_effect=ApiError(404,'NOT_FOUND','자료 없음')):
+            self.assertTrue(run_once(self.app.state.database,self.settings))
+        self.assertEqual(self.client.get(f'/api/v1/reports/{rid}/status').json()['job']['status'],'FAILED')
+        with patch('backend.app.api.jobs.now',return_value=now()+timedelta(minutes=11)):
+            self.assertFalse(run_once(self.app.state.database,self.settings))
+
+    def test_report_retry_budget_and_separate_execution_directories(self):
+        from backend.app.api.database import Database
+        self.signup(); rid=self.queued_report('bounded-retry')
+        other=Settings(values={**self.settings.values,'API_REPORT_DIRECTORY':self.directory.name+'/worker'})
+        db=Database(self.engine)
+        with patch('backend.app.api.worker.reports.generate',side_effect=OSError('permanent failure')):
+            run_once(db,other); run_once(db,other)
+            with patch('backend.app.api.jobs.now',return_value=now()+timedelta(minutes=6)): run_once(db,other)
+        state=self.client.get(f'/api/v1/reports/{rid}/status').json()['job']
+        self.assertEqual(state['status'],'FAILED'); self.assertEqual(state['retry_count'],2)
+        self.assertFalse(state['error']['retryable'])
+        with patch('backend.app.api.jobs.now',return_value=now()+timedelta(days=1)):
+            self.assertFalse(run_once(db,other))
+
+    def test_queued_report_without_file_or_execution_json_is_claimed(self):
+        self.signup(); rid=self.queued_report('legacy-queued')
+        from sqlalchemy import null
+        with self.engine.begin() as c:
+            c.execute(update(self.meta.tables['report']).where(self.meta.tables['report'].c.report_id==int(rid)).values(content_json=null()))
+        self.assertTrue(run_once(self.app.state.database,self.settings))
+        self.assertEqual(self.client.get(f'/api/v1/reports/{rid}/status').json()['job']['status'],'READY')
+
+    def test_worker_claims_new_chat_immediately_after_history(self):
+        uid=self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['chat_message'].insert(),[{'session_id':int(sid),'role':'USER','content_masked':'old','created_at':now(),'result_json':{}} for _ in range(1000)])
+        jid=self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':'after-history'}).json()['job']['job_id']
+        self.app.state.database.job_scan_size=100
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            self.assertEqual(str(jobs.claim(store)['job_id']),jid)
+        sid2=self.post('chat/sessions',{}).json()['session']['session_id']
+        jid2=self.post(f'chat/sessions/{sid2}/messages',{'question':'전체 품목 수출','client_message_id':'after-first-claim'}).json()['job']['job_id']
+        with self.engine.begin() as c:
+            self.assertEqual(str(jobs.claim(Store(self.app.state.database,c))['job_id']),jid2)
+
+    def test_worker_claims_report_past_history_and_future_retries(self):
+        self.signup(); rid=self.queued_report('history-report')
+        t=self.meta.tables['report']
+        with self.engine.begin() as c:
+            original=dict(c.execute(select(t).where(t.c.report_id==int(rid))).mappings().one())
+            original.pop('report_id')
+            c.execute(update(t).where(t.c.report_id==int(rid)).values(status='READY'))
+            records=[]
+            for i in range(1000):
+                state={**original['content_json']['_execution'],'available_at':(now()+timedelta(days=1)).isoformat()}
+                key=f'review-{i:058}'
+                state['generation_key']=key
+                records.append({**original,'generation_key':key,'status':'READY' if i<900 else 'DELAYED','content_json':{'_execution':state}})
+            c.execute(t.insert(),records)
+        ready=self.queued_report('ready-after-history')
+        self.app.state.database.job_scan_size=5
+        with self.engine.begin() as c:
+            job=jobs.claim(Store(self.app.state.database,c))
+            self.assertEqual(job['job_type'],'API_REPORT'); self.assertEqual(str(job['job_id']),ready)
+
+    def test_worker_rotates_past_locked_candidates_and_revisits_old_jobs(self):
+        self.signup(); ids=[]
+        for i in range(3):
+            sid=self.post('chat/sessions',{}).json()['session']['session_id']
+            ids.append(self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':f'locked-{i}'}).json()['job']['job_id'])
+        self.app.state.database.job_scan_size=2
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            with patch.object(store,'one',return_value=None): self.assertIsNone(jobs.claim(store))
+            self.assertEqual(str(jobs.claim(store)['job_id']),ids[2])
+            self.assertEqual(str(jobs.claim(store)['job_id']),ids[0])
+
+    def test_worker_revisits_expired_jobs_before_new_arrivals(self):
+        self.signup(); ids=[]
+        for i in range(3):
+            sid=self.post('chat/sessions',{}).json()['session']['session_id']
+            ids.append(self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':f'expired-{i}'}).json()['job']['job_id'])
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            self.assertEqual(str(jobs.claim(store)['job_id']),ids[0])
+            self.assertEqual(str(jobs.claim(store)['job_id']),ids[1])
+            with patch('backend.app.api.jobs.now',return_value=now()+timedelta(minutes=11)):
+                self.assertEqual(str(jobs.claim(store)['job_id']),ids[0])
 
 if __name__=='__main__': unittest.main()

@@ -188,7 +188,8 @@ def generate(store,job,settings):
         store.c.execute(delete(files).where(files.c.report_id==rid,files.c.format==fmt))
         store.insert('api_report_file',report_id=int(rid),format=fmt,storage_path=str(path),sha256=hashlib.sha256(content).hexdigest(),created_at=now())
     t=store.t('report')
-    store.c.execute(update(t).where(t.c.report_id==rid).values(status='READY',content_json=doc,pdf_uri=str(archive),completed_at=now()))
+    store.c.execute(update(t).where(t.c.report_id==rid).values(status='READY',
+        content_json={**doc,jobs.EXECUTION:clean(job)},pdf_uri=str(archive),completed_at=now()))
     if record['subscription_id']:
         from backend.app.api.notifications import settings as notification_settings
         conf=notification_settings(store,uid)
