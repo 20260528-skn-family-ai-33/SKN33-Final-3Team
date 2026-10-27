@@ -18,11 +18,12 @@ from backend.tests.test_ml_experiments import dataset
 
 
 FILES = [{"path": "data/customs/a.csv", "bytes": 1, "sha256": "a"}]
+DB = {"fx": {"rows": 10, "sha256": "f"}, "country_mapping_sha256": "c"}
 
 
-def loaded(end="2026-02-01", files=FILES):
+def loaded(end="2026-02-01", files=FILES, db=DB):
     """load_training_data 대역. 가상 원본은 2022-01~2026-02."""
-    return dataset(), {}, {"raw_period_end": end, "files": files}
+    return dataset(), {}, {"raw_period_end": end, "files": files, **db}
 
 
 class MonthlyRunTest(unittest.TestCase):
@@ -36,9 +37,17 @@ class MonthlyRunTest(unittest.TestCase):
         self.engine.dispose()
         self.temp.cleanup()
 
-    def run_month(self, month="2026-02-01", files=FILES):
-        with patch.object(C.artifacts, "input_manifest", return_value=files):
+    def run_month(self, month="2026-02-01", files=FILES, db=DB):
+        with patch.object(C.artifacts, "input_manifest", return_value=files), \
+                patch.object(C.artifacts, "db_inputs", return_value=db):
             return C.run(month, self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)
+
+    def first_then(self, files=FILES, db=DB):
+        """기본 입력으로 한 번 학습한 뒤 바뀐 입력으로 다시 실행한 모델 이름."""
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            self.run_month()
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded(files=files, db=db)):
+            return self.run_month(files=files, db=db)["model_name"]
 
     def records(self):
         with session_scope(self.engine) as session:
@@ -70,6 +79,14 @@ class MonthlyRunTest(unittest.TestCase):
             self.assertEqual(self.run_month(files=corrected)["model_name"], "lightgbm_202602_r2")
         self.assertEqual(sorted(r[0] for r in self.records()), ["lightgbm_202602", "lightgbm_202602_r2"])
         self.assertEqual(C.read_json(self.out / "lightgbm_202602_r2.registry.json")["parent_version_id"], "lightgbm_202602")
+
+    def test_db_fx_correction_trains_new_revision(self):
+        self.assertEqual(self.first_then(db={**DB, "fx": {"rows": 10, "sha256": "g"}}), "lightgbm_202602_r2")
+
+    def test_db_outage_is_not_a_correction(self):
+        outage = {"fx": {"rows": 0, "sha256": "empty"}, "country_mapping_sha256": "no currency"}
+        self.assertEqual(self.first_then(db=outage), "lightgbm_202602")
+        self.assertEqual(len(self.records()), 1)
 
     def test_refuses_month_missing_from_data(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-01-01")):
