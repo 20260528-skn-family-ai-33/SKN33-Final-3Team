@@ -21,7 +21,7 @@ class BackendApiTest(unittest.TestCase):
         Path('tmp/backend_build').mkdir(parents=True,exist_ok=True)
         self.directory=tempfile.TemporaryDirectory(dir='tmp/backend_build',ignore_cleanup_errors=True)
         self.engine,self.meta=test_engine(); reference_data(self.engine,self.meta)
-        self.settings=Settings(values={'API_COOKIE_SECURE':'false','API_REPORT_DIRECTORY':self.directory.name})
+        self.settings=Settings(values={'API_COOKIE_SECURE':'false','API_REPORT_DIRECTORY':self.directory.name,'API_HS_VECTOR_ENABLED':'false'})
         self.app=create_app(self.settings,self.engine); self.client=TestClient(self.app)
         self.csrf=None
 
@@ -763,6 +763,19 @@ class BackendApiTest(unittest.TestCase):
             out=notifications.read_all(store,uid,'2099-01-01T00:00:00Z','ALL')
             self.assertEqual(out['updated_count'],60); self.assertEqual(out['unread_count'],0)
 
+    def test_hs_exact_vector_fallback_and_database_verification(self):
+        self.settings.values['API_HS_VECTOR_ENABLED']='true'
+        with patch('backend.app.api.hs_vectors.candidates',return_value=[('9999',0.1),('3304',0.2)]) as search:
+            self.assertEqual(self.client.get('/api/v1/reference/hs-codes?q=화장품').json()['match_type'],'EXACT')
+            search.assert_not_called()
+            result=self.client.get('/api/v1/reference/hs-codes?q=스킨케어')
+            self.assertEqual(result.status_code,200,result.text)
+            self.assertEqual([x['hs_code'] for x in result.json()['items']],['3304'])
+        with patch('backend.app.api.hs_vectors.candidates',side_effect=RuntimeError('offline')):
+            result=self.client.get('/api/v1/reference/hs-codes?q=화장')
+            self.assertEqual(result.json()['items'][0]['hs_code'],'3304')
+            self.assertTrue(result.json()['warnings'])
+
     def test_notification_sql_visibility_matches_article_and_array_rules(self):
         from backend.app.api import notifications
         uid=int(self.signup()); m=self.meta.tables
@@ -784,6 +797,12 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(notifications.unread_count(store,uid),3)
             views=notifications.notification_views(store,rows,uid)
             self.assertTrue(all([a['article_id'] for a in x['issue']['articles']]==['1'] for x in views))
+
+    def test_hs_vector_threshold_rejects_unrelated_results(self):
+        self.settings.values['API_HS_VECTOR_ENABLED']='true'
+        with patch('backend.app.api.hs_vectors.candidates',return_value=[('3304',0.99)]):
+            result=self.client.get('/api/v1/reference/hs-codes?q=전혀다른검색어').json()
+            self.assertEqual(result['match_type'],'NONE'); self.assertEqual(result['items'],[])
 
     def test_fx_loaded_rates_units_previous_business_day_and_empty_currency(self):
         from sqlalchemy import event
