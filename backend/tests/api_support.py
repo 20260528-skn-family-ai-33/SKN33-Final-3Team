@@ -15,6 +15,7 @@ def test_engine():
     schema = json.loads(Path(__file__).with_name('fixtures').joinpath('api_schema.json').read_text(encoding='utf-8'))
     meta = MetaData()
     for name, columns in schema.items():
+        if name == 'async_job': continue  # 사용 보류 테이블이 없어도 API 전체가 동작해야 한다.
         defs = []
         for c in columns:
             kind = c['type']; typ = String()

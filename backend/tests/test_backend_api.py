@@ -1,10 +1,11 @@
 import io
 import tempfile
 import unittest
-from datetime import date
+from unittest.mock import patch
+from datetime import date, timedelta
 from pathlib import Path
 from fastapi.testclient import TestClient
-from sqlalchemy import select, update, delete, text
+from sqlalchemy import select, update, delete, text, inspect
 from backend.tests.api_support import test_engine, reference_data
 from backend.app.api.application import create_app
 from backend.app.api.config import Settings
@@ -152,7 +153,7 @@ class BackendApiTest(unittest.TestCase):
                  'category':'경제·무역','visibility_status':'VISIBLE','admin_meta_json':{}}
                 for i,day in enumerate(days,1)])
 
-    def test_clarification_resumes_with_sql_null(self):
+    def test_clarification_resumes_without_job_table_or_duplicate_question(self):
         self.signup()
         sid=self.post('chat/sessions',{}).json()['session']['session_id']
         jid=self.post(f'chat/sessions/{sid}/messages',{'question':'2025년 12월 화장품 수출','client_message_id':'null-check'}).json()['job']['job_id']
@@ -160,20 +161,21 @@ class BackendApiTest(unittest.TestCase):
         job=self.client.get('/api/v1/chat/jobs/'+jid).json()['job']
         self.assertEqual(job['status'],'NEEDS_INPUT')
         with self.engine.begin() as c:
-            # MySQL ck_job_result와 같은 NULL/object 제한을 SQLite에서도 검사한다.
-            c.execute(text("""CREATE TRIGGER enforce_job_result BEFORE UPDATE OF result_json ON async_job
+            c.execute(text("""CREATE TRIGGER enforce_message_result BEFORE UPDATE OF result_json ON chat_message
                 WHEN NEW.result_json IS NOT NULL AND json_type(NEW.result_json) != 'object'
-                BEGIN SELECT RAISE(ABORT, 'ck_job_result'); END"""))
+                BEGIN SELECT RAISE(ABORT, 'message_result_object'); END"""))
         response=self.post(f'chat/jobs/{jid}/clarifications',{
             'clarification_id':job['clarification']['clarification_id'],'choice_ids':['3304']})
         self.assertEqual(response.status_code,202,response.text)
         with self.engine.connect() as c:
-            t=self.meta.tables['async_job']
-            self.assertTrue(c.scalar(select(t.c.result_json.is_(None)).where(t.c.job_id==int(jid))))
+            self.assertNotIn('async_job',inspect(c).get_table_names())
+            t=self.meta.tables['chat_message']
+            self.assertEqual(len(c.execute(select(t).where(t.c.session_id==int(sid))).all()),1)
         run_once(self.app.state.database,self.settings)
         job=self.client.get('/api/v1/chat/jobs/'+jid).json()['job']
         self.assertEqual(job['status'],'SUCCEEDED',job)
         self.assertEqual(job['answer']['conditions']['hs_items'],[{'hs_code':'3304','hs_ver':'HS2022'}])
+        self.assertEqual(len(self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['items']),2)
 
     def test_chat_articles_respect_period_boundaries(self):
         self.signup(); self.seed_review_articles()
@@ -219,7 +221,7 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual([r['conditions_json']['period'] for r in records],[
                 {'start':'2025-04-01','end':'2025-06-30'}, {'start':'2025-07-01','end':'2025-09-30'}])
             self.assertEqual(records[1]['conditions_json']['compare_period'],{'start':'2024-07-01','end':'2024-09-30'})
-            self.assertEqual(store.count(select(store.t('async_job'))),2)
+            self.assertTrue(all(jobs.report_execution(store,r)['status']=='QUEUED' for r in records))
 
     def test_quarterly_reports_wait_for_all_three_months(self):
         from backend.app.api.subscriptions import enqueue_due
@@ -307,7 +309,7 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/admin/notification-events/999/diagnosis?user_id='+uid).status_code,404)
 
     def test_worker_fencing_and_duplicate_message_after_context_change(self):
-        self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        uid=self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
         body={'question':'2025년 12월 전체 품목 수출 추이','client_message_id':'same'}
         job=self.post(f'chat/sessions/{sid}/messages',body).json()['job']['job_id']
         run_once(self.app.state.database,self.settings)
@@ -316,7 +318,101 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.post(f'chat/sessions/{sid2}/messages',body).status_code,409)
         from backend.app.api.common import ApiError
         with self.engine.begin() as c:
-            with self.assertRaises(ApiError): jobs.finish(Store(self.app.state.database,c),{'job_id':int(job),'claim_token':0},{})
+            store=Store(self.app.state.database,c)
+            old=jobs.owned_job(store,int(uid),job)
+            with self.assertRaises(ApiError): jobs.finish(store,{**old,'claim_token':0},{})
+
+    def test_chat_claim_recovery_and_stale_worker_rejection(self):
+        from backend.app.api import chat
+        from backend.app.api.common import ApiError
+        uid=self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        self.post(f'chat/sessions/{sid}/messages',{'question':'2025년 12월 전체 품목 수출','client_message_id':'recover-chat'})
+        with self.engine.begin() as c: old=jobs.claim(Store(self.app.state.database,c))
+        with patch('backend.app.api.jobs.now',return_value=now()+timedelta(minutes=11)):
+            with self.engine.begin() as c: recovered=jobs.claim(Store(self.app.state.database,c))
+        self.assertEqual(old['job_id'],recovered['job_id'])
+        self.assertGreater(recovered['claim_token'],old['claim_token'])
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            with self.assertRaises(ApiError): jobs.finish(store,old,{})
+            result=chat.execute(store,recovered); jobs.finish(store,recovered,result)
+        self.assertFalse(run_once(self.app.state.database,self.settings))
+        self.assertEqual(len(self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['items']),2)
+
+    def test_deleted_pending_chat_is_not_executed(self):
+        self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        jid=self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':'delete-queued'}).json()['job']['job_id']
+        self.assertEqual(self.client.delete('/api/v1/chat/sessions/'+sid,headers={'X-CSRF-Token':self.csrf}).status_code,204)
+        self.assertFalse(run_once(self.app.state.database,self.settings))
+        self.assertEqual(self.client.get('/api/v1/chat/jobs/'+jid).status_code,404)
+
+    def queued_report(self, key):
+        preview=self.post('reports/preview',{'conditions':{'period':{'start':'2025-12-01','end':'2025-12-31'}}})
+        self.assertEqual(preview.status_code,200,preview.text)
+        response=self.post('reports',{'preview_id':preview.json()['preview_id'],'confirm_conditions':True,
+            'sections':['KPI'],'formats':['PDF']},**{'Idempotency-Key':key})
+        self.assertEqual(response.status_code,202,response.text)
+        return response.json()['job']['report_id']
+
+    def test_report_retry_round_and_restart_without_job_table(self):
+        from backend.app.api.database import Database
+        self.signup(); rid=self.queued_report('retry-report')
+        with patch('backend.app.api.worker.reports.generate',side_effect=OSError('test failure')):
+            self.assertTrue(run_once(self.app.state.database,self.settings))
+            self.assertTrue(run_once(self.app.state.database,self.settings))
+        status=self.client.get(f'/api/v1/reports/{rid}/status').json()['job']
+        self.assertEqual(status['status'],'DELAYED'); self.assertEqual(status['retry_count'],1)
+        self.assertEqual(status['error']['code'],'JOB_FAILED')
+        restarted=Database(self.engine)
+        self.assertFalse(run_once(restarted,self.settings))
+        with patch('backend.app.api.jobs.now',return_value=now()+timedelta(minutes=6)):
+            self.assertTrue(run_once(restarted,self.settings))
+        status=self.client.get(f'/api/v1/reports/{rid}/status').json()['job']
+        self.assertEqual(status['status'],'READY'); self.assertEqual(status['retry_count'],2)
+        self.assertIsNone(status['error'])
+        self.assertFalse(run_once(restarted,self.settings))
+
+    def test_report_expired_claim_recovers_after_restart(self):
+        from backend.app.api.database import Database
+        self.signup(); rid=self.queued_report('recover-report')
+        with self.engine.begin() as c: old=jobs.claim(Store(self.app.state.database,c))
+        restarted=Database(self.engine)
+        with patch('backend.app.api.jobs.now',return_value=now()+timedelta(minutes=11)):
+            self.assertTrue(run_once(restarted,self.settings))
+        status=self.client.get(f'/api/v1/reports/{rid}/status').json()['job']
+        self.assertEqual(status['status'],'READY'); self.assertEqual(status['retry_count'],1)
+        with self.engine.begin() as c:
+            from backend.app.api.common import ApiError
+            with self.assertRaises(ApiError): jobs.finish(Store(restarted,c),old,{})
+
+    def test_report_recovers_when_db_commit_fails_after_file_log(self):
+        from backend.app.api import reports
+        self.signup(); rid=self.queued_report('rollback-report')
+        with self.engine.begin() as c: job=jobs.claim(Store(self.app.state.database,c))
+        with self.assertRaisesRegex(RuntimeError,'simulated rollback'):
+            with self.engine.begin() as c:
+                store=Store(self.app.state.database,c)
+                result=reports.generate(store,job,self.settings)
+                jobs.finish(store,job,result)
+                raise RuntimeError('simulated rollback')
+        self.assertEqual(self.client.get(f'/api/v1/reports/{rid}/status').json()['job']['status'],'RUNNING')
+        with patch('backend.app.api.jobs.now',return_value=now()+timedelta(minutes=11)):
+            self.assertTrue(run_once(self.app.state.database,self.settings))
+        self.assertEqual(self.client.get(f'/api/v1/reports/{rid}/status').json()['job']['status'],'READY')
+        self.assertFalse(run_once(self.app.state.database,self.settings))
+        self.assertTrue((self.app.state.database.job_logs/f'{rid}.jsonl').is_file())
+
+    def test_older_report_is_not_starved_by_chat(self):
+        self.signup(); rid=self.queued_report('older-report')
+        with self.engine.begin() as c:
+            t=self.meta.tables['report']
+            c.execute(update(t).where(t.c.report_id==int(rid)).values(created_at=now()-timedelta(minutes=1)))
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':'later-chat'})
+        with self.engine.begin() as c:
+            job=jobs.claim(Store(self.app.state.database,c))
+            self.assertEqual(job['job_type'],'API_REPORT')
+            self.assertEqual(str(job['job_id']),rid)
 
     def test_report_preview_conflicts_and_ml_gate(self):
         self.signup(); conditions={'period':{'start':'2025-12-01','end':'2025-12-31'}}
