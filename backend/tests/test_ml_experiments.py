@@ -57,6 +57,11 @@ class ExperimentRunTest(unittest.TestCase):
 
 
 class ScenarioOrderTest(unittest.TestCase):
+    def test_build_dataset_is_already_key_sorted(self):
+        # 정렬돼 있어야 prepare_scenarios가 큰 표를 복사하지 않는다
+        keys = dataset()[["anchor", "country_code", "hs6"]].reset_index(drop=True)
+        pd.testing.assert_frame_equal(keys, keys.sort_values(list(keys)).reset_index(drop=True))
+
     def test_row_order_does_not_change_prepared_frame(self):
         frame = dataset()
         shuffled = frame.sample(frac=1, random_state=1)

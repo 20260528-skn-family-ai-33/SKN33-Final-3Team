@@ -236,7 +236,8 @@ def build_dataset(data, min_export=MIN_EXPORT_USD, anchors=None):
     if monthly_keys.isna().any().any() or monthly_keys.duplicated().any():
         raise ValueError("수출 실적의 국가·HS6·월 키에 결측 또는 중복이 있습니다")
     months = pd.period_range(pd.to_datetime(exports.month).min(), pd.to_datetime(exports.month).max(), freq="M")
-    rows = pd.MultiIndex.from_frame(exports[["country_code", "hs6"]].drop_duplicates())
+    # 쌍을 정렬해 두면 결과가 (기준월, 국가, HS6) 순서가 되어, 실험·월별 학습이 큰 표를 다시 정렬·복사하지 않는다
+    rows = pd.MultiIndex.from_frame(exports[["country_code", "hs6"]].drop_duplicates()).sort_values()
     amount, anomaly, weight = (_matrix(exports, col, rows, months) for col in ("amount", "anomaly_amount", "weight"))
     # 수집 완료가 기록된 달(관세청 수집 통계)에 행이 없는 쌍은 확인된 무역 없음이다. 그 달만 0으로 채운다.
     complete = [i for i, m in enumerate(months) if m.to_timestamp() in data.get("complete_months", set())]
