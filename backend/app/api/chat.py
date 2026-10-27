@@ -2,7 +2,7 @@
 import re
 import uuid
 from datetime import date
-from sqlalchemy import select, update, delete, null, func
+from sqlalchemy import select, update, delete, func
 from backend.app.api.common import require, now, clean, mask_text, page_info, period, shift_month, ApiError, digest
 from backend.app.api import jobs, trade, news
 from backend.app.api.accounts import validate_scope, interests
@@ -51,12 +51,13 @@ def view_job(row):
 
 
 def submit(store,uid,identity,data):
+    u=store.t('users')
+    store.c.execute(select(u.c.user_id).where(u.c.user_id==uid).with_for_update()).first()
     session=store.owned('chat_session','session_id',identity,uid,lock=True)
     question=mask_text(data['question'].strip())
     require(0<len(question)<=4000,'질문은 1~4,000자로 입력하세요.')
     require(bool(data.get('client_message_id')),'client_message_id가 필요합니다.')
-    t=store.t('async_job')
-    old=store.one(select(t).where(t.c.request_key==digest([uid,'API_CHAT',data['client_message_id']])))
+    old=jobs.find_chat(store,uid,data['client_message_id'])
     if old:
         require(old['target_key']==str(identity) and old['payload_json']['question']==question,'다른 메시지에 사용한 client_message_id입니다.','IDEMPOTENCY_CONFLICT',409)
         return {'job':view_job(old)}
@@ -66,7 +67,7 @@ def submit(store,uid,identity,data):
 
 
 def clarification(store,uid,identity,data):
-    row=jobs.owned_job(store,uid,identity); result=row['result_json'] or {}; prompt=result.get('clarification') or {}
+    row=jobs.owned_job(store,uid,identity,lock=True); result=row['result_json'] or {}; prompt=result.get('clarification') or {}
     require(result.get('status')=='NEEDS_INPUT' and prompt.get('clarification_id')==data['clarification_id'],
         '현재 되묻기 요청과 일치하지 않습니다.','CLARIFICATION_CONFLICT',409)
     choices={x['choice_id']:x for x in prompt['choices']}
@@ -77,10 +78,7 @@ def clarification(store,uid,identity,data):
         conditions['hs_items']=list({x['hs_code']:x for key in data['choice_ids'] for x in choices[key]['value']['hs_items']}.values())
     else:
         for key in data['choice_ids']: conditions.update(choices[key]['value'])
-    t=store.t('async_job')
-    store.c.execute(update(t).where(t.c.job_id==identity,t.c.status=='SUCCEEDED').values(status='QUEUED',
-        payload_json={**row['payload_json'],'conditions':conditions,'clarified':True},result_json=null(),finished_at=None,available_at=now()))
-    return {'job':view_job(jobs.owned_job(store,uid,identity))}
+    return {'job':view_job(jobs.requeue_chat(store,row,conditions))}
 
 
 def parse(store,question,previous,article_mode=False):
@@ -181,7 +179,7 @@ def execute(store,job):
 
 
 def save_answer(store,uid,sid,question,answer):
-    store.insert('chat_message',session_id=int(sid),role='USER',content_masked=question,created_at=now())
+    # 질문은 접수 시 저장한다. 되묻기와 재시도에서도 같은 USER 행을 유지한다.
     store.insert('chat_message',session_id=int(sid),role='ASSISTANT',content_masked=answer['text'],
         intent_json=clean({'conditions':answer['conditions'],'intent':answer['intent']}),result_json=clean({'schema_version':1,'answer':answer}),created_at=now())
     t=store.t('chat_session'); row=store.owned('chat_session','session_id',sid,uid)

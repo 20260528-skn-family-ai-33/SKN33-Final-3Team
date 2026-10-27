@@ -78,8 +78,7 @@ def formats(store,rid):
 
 
 def status_view(store,r):
-    t=store.t('async_job')
-    job=store.one(select(t).where(t.c.job_type=='API_REPORT',t.c.target_key==str(r['report_id'])).order_by(t.c.job_id.desc()).limit(1))
+    job=jobs.report_execution(store,r)
     info=(job or {}).get('result_json') or {}
     return {'report_id':str(r['report_id']),'status':r['status'],'step':info.get('step','DONE' if r['status']=='READY' else 'QUERY'),
         'retry_count':r['retry_count'],'retry_after_seconds':0 if r['status'] in ('READY','FAILED') else 2,
@@ -173,17 +172,17 @@ def build_document(store,uid,record):
 
 
 def generate(store,job,settings):
-    store.step='QUERY'
+    jobs.report_step(store,job,'QUERY')
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
     directory=settings.files/str(uid)/str(rid)/str(job['claim_token']); directory.mkdir(parents=True,exist_ok=True)
     files=store.t('api_report_file'); selected=record['conditions_json'].get('formats',['PDF'])
     # 기존 report_chk_1을 유지하기 위해 PDF를 보관용 원본으로 생성한다. 공개 다운로드는 선택 양식만.
-    store.step='PDF'
+    jobs.report_step(store,job,'PDF')
     pdf=report_pdf(doc,settings); archive=directory/'report.pdf'; archive.write_bytes(pdf)
     for fmt in selected:
-        store.step=fmt
+        jobs.report_step(store,job,fmt)
         content=pdf if fmt=='PDF' else report_docx(doc,settings)
         path=directory/('report.'+fmt.lower()); path.write_bytes(content)
         store.c.execute(delete(files).where(files.c.report_id==rid,files.c.format==fmt))

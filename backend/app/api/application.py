@@ -115,6 +115,7 @@ def openapi_fields(contract):
 def create_app(settings=None, engine=None):
     settings = settings or Settings()
     db = Database(engine or settings.engine())
+    db.job_logs = settings.files / '_execution' / 'reports'
     app = FastAPI(title='Borderless Sellers API', version='0.18.0')
     app.state.database = db; app.state.settings = settings
     app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=True,

@@ -126,7 +126,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
             require(0<len(body['title'].strip())<=160,'대화 제목은 1~160자입니다.')
             store.c.execute(update(t).where(t.c.session_id==sid).values(title=body['title'].strip(),updated_at=now()))
             return {'session_id':str(sid),'title':body['title'].strip()}
-        j=store.t('async_job'); store.c.execute(update(j).where(j.c.job_type=='API_CHAT',j.c.target_key==str(sid),j.c.subject_user_id==uid,j.c.status.in_(['QUEUED','RUNNING'])).values(status='CANCELLED',finished_at=now()))
+        # 실행 상태도 메시지에 속하므로 세션 잠금 아래 메시지 삭제로 함께 제거한다.
         m=store.t('chat_message'); snapshots=store.t('api_snapshot')
         records=store.rows(select(m.c.result_json).where(m.c.session_id==sid,m.c.result_json.is_not(None)))
         ids={table['result_id'] for record in records for table in (record['result_json'].get('answer') or {}).get('tables',[]) if table.get('result_id')}
