@@ -52,3 +52,5 @@ python -B backend/tests/shortnews_offline/run_tests.py --repo .
 합성 입력·가상 API/모델·임시 SQLite/Chroma로 수집·적재·색인·사용량·캐시·부분 실패 복구와 기존 스케줄러 등록을 확인합니다. 실제 MySQL/RDS·운영 API·Windows·서비스 설치·네이티브 프로세스는 별도 검증 항목입니다.
 
 구형 본문 컬렉션이 남아 있으면 먼저 [본문 색인 이관 안내](NEWS_INDEX_MIGRATION.md)를 확인합니다. 기본은 dry-run이며 운영 이관·관리자 필드 backfill은 이번 로컬 검증에서 실행하지 않습니다.
+
+구형 본문 색인의 이관 카탈로그는 `python -m backend.app.scheduler.jobs.news_index_catalog`로 DB와 수집 CSV에서 생성할 수 있습니다. 출처·원본·사전 지정과 국가 순서 보존 규칙은 [본문 색인 이관 안내](NEWS_INDEX_MIGRATION.md)를 따릅니다. 이 명령은 DB 조회와 JSON 작성만 수행합니다.

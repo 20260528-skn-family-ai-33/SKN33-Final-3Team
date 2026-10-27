@@ -26,7 +26,8 @@ def read_articles(engine, sources, *, vocabulary=None, supplements=None):
             query = query.where(article.c.visibility_status == 'VISIBLE')
         rows = [dict(r) for r in conn.execute(query).mappings()]
         tags = list(conn.execute(select(ArticleTag.__table__).join(Article, Article.article_id == ArticleTag.article_id)
-                                .where(Article.source_code.in_(sources))).mappings())
+                                .where(Article.source_code.in_(sources))
+                                .order_by(ArticleTag.article_id, ArticleTag.tag_id)).mappings())
     vocabulary = vocabulary or Vocabulary.load()
     vocabulary.products = {ver + ':' + code: [name] for (code, ver), name in hs.items() if len(code) in (4, 6)}
     from backend.app.services.news_keywords.keyword_clean import load_geo
@@ -103,14 +104,20 @@ def read_articles(engine, sources, *, vocabulary=None, supplements=None):
     return documents, vocabulary
 
 
-def market_supplements(path):
+def market_supplements(path, *, preserve_candidates=False):
     output = {}
     csv.field_size_limit(2**31-1)
     with Path(path).open(encoding='utf-8-sig', newline='') as stream:
         for raw in csv.DictReader(stream):
             row = market.article_row(raw)
             body = market.mask(market.html_to_text(raw.get('newsBdt')))
-            output[(row['source_code'], row['external_id'])] = {
-                'body_masked': row['body_masked'], 'body_available': bool(body),
-                'keywords': [raw.get('kwrd', '')]}
+            key = (row['source_code'], row['external_id'])
+            value = {'body_masked': row['body_masked'], 'body_available': bool(body),
+                     'keywords': [raw.get('kwrd', '')]}
+            if preserve_candidates:
+                if 'kwrd' not in raw:
+                    value.pop('keywords')  # Unknown original keywords are not known-empty.
+                output.setdefault(key, []).append(value)
+            else:
+                output[key] = value  # Keep the existing scheduler adapter contract.
     return output

@@ -76,9 +76,12 @@ def readonly_clone(source, factory, *, forbidden_root=None):
 
 
 def load_catalog(path, database_id):
+    return validate_catalog(json.loads(Path(path).read_text(encoding='utf-8')), database_id)
+
+
+def validate_catalog(data, database_id):
     if not re.fullmatch(r'[0-9a-f]{64}', database_id):
         raise ValueError('invalid_source_database_identity')
-    data = json.loads(Path(path).read_text(encoding='utf-8'))
     if data.get('version') != 1 or data.get('database_id') != database_id:
         raise ValueError('migration_catalog_database_mismatch')
     vocabulary = data.get('vocabulary')
@@ -115,6 +118,44 @@ def expected_records(documents):
             meta = article.metadata(number, hashlib.sha256(text.encode()).hexdigest())
             expected[key] = (text, meta, article)
     return expected
+
+
+
+def preserve_legacy_country_order(collection, articles, batch_size, expected):
+    """국가의 구성은 엄격히 검증하고, 저장 문서와 일치하는 순서만 카탈로그에 보존합니다."""
+    seen, adapted, records = set(), {}, {}
+    for offset in range(0, collection.count(), batch_size):
+        page = collection.get(limit=batch_size, offset=offset, include=['documents', 'metadatas'])
+        ids = page['ids']
+        if not ids or len(ids) != len(set(ids)) or seen.intersection(ids):
+            raise ValueError('migration_duplicate_or_missing_page')
+        if any(len(page[field]) != len(ids) for field in ('documents', 'metadatas')):
+            raise ValueError('migration_page_length_mismatch')
+        for key, text, metadata in zip(ids, page['documents'], page['metadatas']):
+            if key not in expected:
+                raise ValueError('migration_record_not_in_catalog')
+            if not isinstance(metadata, dict):
+                raise ValueError('migration_metadata_missing')
+            article = expected[key][2]
+            countries = metadata.get('countries', list(article.countries))
+            if (not isinstance(countries, list) or any(not isinstance(c, str) for c in countries)
+                    or len(countries) != len(set(countries))
+                    or len(countries) != len(article.countries) or set(countries) != set(article.countries)):
+                raise ValueError('migration_catalog_metadata_mismatch')
+            if article.article_id not in adapted:
+                legacy = article.model_copy(update={'countries': tuple(countries)})
+                adapted[article.article_id] = legacy
+                records[article.article_id] = expected_records([legacy])
+            elif tuple(countries) != adapted[article.article_id].countries:
+                raise ValueError('migration_inconsistent_article_country_order')
+            # Reconstruct the complete expected document. Only country order can differ;
+            # date, title, category, body, chunk boundaries and every country stay exact.
+            if text != records[article.article_id][key][0]:
+                raise ValueError('migration_legacy_document_mismatch')
+        seen.update(ids)
+    if seen != set(expected):
+        raise ValueError('migration_catalog_coverage_mismatch')
+    return [adapted[article.article_id] for article in articles]
 
 
 def validate_row(key, document, metadata, vector, expected, dimensions):
@@ -182,6 +223,12 @@ def migrate(source, root, catalog, database_id, *, apply=False, source_stopped=F
                 raise ValueError('migration_model_or_metric_provenance_required')
             if info.get('dimensions', dimensions) != dimensions or col.count() != len(expected):
                 raise ValueError('migration_dimension_or_count_mismatch')
+            original_orders = {a.article_id: a.countries for a in articles}
+            articles = preserve_legacy_country_order(col, articles, batch_size, expected)
+            expected = expected_records(articles)
+            country_order_changes = sum(a.countries != original_orders[a.article_id] for a in articles)
+            # Hash, payload, content_version and persisted catalog all describe the
+            # actual legacy text. Other sources keep it until their SQL refresh.
             migration_id = digest({'source_files':source_files,'articles':[a.model_dump(mode='json') for a in articles],
                                    'vocabulary':vocabulary,'database_id':database_id,'model':model,'dimensions':dimensions})
             active = root/'active.json'
@@ -207,6 +254,7 @@ def migrate(source, root, catalog, database_id, *, apply=False, source_stopped=F
             report = {'generation':generation, 'migration_id':migration_id, 'status':'building',
                       'dimensions':dimensions, 'sources':sorted({a.source_code.value for a in articles}),
                       'articles':len(articles), 'chunks':len(expected), 'embedded':0, 'reused':len(expected),
+                      'country_order_preserved_articles':country_order_changes,
                       'collections':{COLLECTION:len(expected)}, **document_contract()}
             writer = None
             try:
