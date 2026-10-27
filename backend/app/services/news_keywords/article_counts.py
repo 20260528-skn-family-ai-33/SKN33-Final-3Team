@@ -58,7 +58,7 @@ def major_issues(df, col, run_date, ratio=3.0):
     recent = a[(a.date >= d - pd.Timedelta(days=7)) & (a.date < d)].groupby("key").bbstxSn.nunique()
     prev = a[(a.date >= d - pd.Timedelta(days=63)) & (a.date < d - pd.Timedelta(days=7))].groupby("key").bbstxSn.nunique() / 8
     out = pd.DataFrame({"recent_7d": recent}).join(prev.rename("prev_weekly_avg")).fillna(0)
-    out["ratio"] = out.recent_7d / out.prev_weekly_avg.clip(lower=1)
+    out["ratio"] = out.recent_7d / out.prev_weekly_avg.mask(out.prev_weekly_avg == 0, 1)
     return out[out.ratio >= ratio].sort_values(["ratio", "recent_7d"], ascending=False).reset_index()
 
 
@@ -75,7 +75,7 @@ def interest_spike(counts, run_date, country, key, ratio=2.5):
     c["date"] = pd.to_datetime(c["date"])
     yesterday = c[c.date == d - pd.Timedelta(days=1)].articles.sum()
     week_avg = c[(c.date >= d - pd.Timedelta(days=8)) & (c.date <= d - pd.Timedelta(days=2))].articles.sum() / 7
-    r = yesterday / max(week_avg, 1)
+    r = yesterday / (1 if week_avg == 0 else week_avg)
     return {"country": country, "key": key, "yesterday": int(yesterday), "week_avg": round(week_avg, 2),
             "ratio": round(r, 2), "spike": bool(r >= ratio)}
 
