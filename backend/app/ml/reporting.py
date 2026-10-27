@@ -7,6 +7,7 @@ from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
 
 from backend.app.ml import features as F
+from backend.app.ml.feature_recovery import GROUPS as FEATURE_GROUPS
 from backend.app.ml.validation import ROOT, file_sha256, load_context, read_json
 
 DEFAULT_PDF = ROOT / "output/pdf/ml_market_report.pdf"
@@ -141,10 +142,9 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
         selected = set(columns) & set(used)
         return f"{label}: 모델 A 사용 피처 {len(selected)}/{len(columns)}개"
 
-    market_usage = feature_usage("시장", ("mkt_log_import", "mkt_growth", "kor_share",
-                                         "kor_share_change", "mkt_hs4_growth"))
-    wdi_usage = feature_usage("WDI", ("log_gdp", "gdp_growth", "log_population", "log_gdp_pc"))
-    fx_usage = feature_usage("환율", ("fx_change_12m", "fx_vol_12m"))
+    market_usage = feature_usage("시장", FEATURE_GROUPS["market"])
+    wdi_usage = feature_usage("WDI", FEATURE_GROUPS["wdi"])
+    fx_usage = feature_usage("환율", FEATURE_GROUPS["fx"])
     # 외부 자료가 0개로 나올 때 수집 실패와 시점 정책을 구분할 수 있게 원인을 적는다
     available, anchor = context.get("snapshot", {}).get("available_from"), meta.get("predict_anchor")
     availability_note = (f"외부 자료 사용 가능일 {available}이 마지막 기준월 {anchor[:7]}보다 늦어 "
