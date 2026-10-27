@@ -785,4 +785,20 @@ class BackendApiTest(unittest.TestCase):
             views=notifications.notification_views(store,rows,uid)
             self.assertTrue(all([a['article_id'] for a in x['issue']['articles']]==['1'] for x in views))
 
+    def test_fx_loaded_rates_units_previous_business_day_and_empty_currency(self):
+        from sqlalchemy import event
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['currency'].insert(),[
+                {'currency_code':code,'name_ko':code,'quote_unit':unit} for code,unit in [('USD',1),('JPY',100),('EUR',1)]])
+            c.execute(self.meta.tables['fx_daily'].insert(),[
+                {'currency_code':code,'base_date':day,'rate_krw':rate} for code,day,rate in
+                [('USD',date(2026,10,23),1300),('USD',date(2026,10,26),1313),('JPY',date(2026,10,23),900),('JPY',date(2026,10,26),891)]])
+        response=self.client.get('/api/v1/exchange-rates?currency_codes=USD&currency_codes=JPY&currency_codes=EUR')
+        self.assertEqual(response.status_code,200,response.text)
+        usd,jpy,eur=response.json()['items']
+        self.assertEqual(usd['previous_base_date'],'2026-10-23'); self.assertEqual(usd['change_pct'],1)
+        self.assertEqual(jpy['quote_unit'],100); self.assertEqual(jpy['rate_krw'],891); self.assertEqual(jpy['change_pct'],-1)
+        self.assertEqual(eur['availability'],'UNAVAILABLE'); self.assertIsNone(eur['rate_krw'])
+
+
 if __name__=='__main__': unittest.main()

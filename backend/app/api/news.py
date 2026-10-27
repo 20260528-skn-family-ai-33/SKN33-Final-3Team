@@ -142,11 +142,16 @@ def exchange_rates(store,uid=None,scope='GLOBAL',codes=None):
         if codes: require(set(codes)<=allowed,'관심 국가 통화만 조회할 수 있습니다.')
         codes=sorted(set(codes or allowed))
     else: codes=list(dict.fromkeys(codes or ['USD','EUR','CNY','JPY','GBP']))[:5]
+    currencies={row['currency_code']:row for row in store.rows(select(c).where(c.c.currency_code.in_(codes)))}
+    require(all(code in currencies for code in codes),'통화 코드를 확인하세요.')
+    ranked=select(f,func.row_number().over(partition_by=f.c.currency_code,order_by=f.c.base_date.desc()).label('position')).where(f.c.currency_code.in_(codes)).subquery()
+    rates={code:[] for code in codes}
+    for row in store.rows(select(ranked).where(ranked.c.position<=2).order_by(ranked.c.currency_code,ranked.c.base_date.desc())):
+        rates[row['currency_code']].append(row)
     result=[]; latest=None
     for code in codes:
-        currency=store.one(select(c).where(c.c.currency_code==code))
-        require(currency is not None,'통화 코드를 확인하세요.')
-        rows=store.rows(select(f).where(f.c.currency_code==code).order_by(f.c.base_date.desc()).limit(2))
+        currency=currencies[code]
+        rows=rates[code]
         first=rows[0] if rows else None; old=rows[1] if len(rows)>1 else None
         if first: latest=max(latest or first['base_date'],first['base_date'])
         result.append({'currency_code':code,'quote_unit':currency['quote_unit'],'rate_krw':first['rate_krw'] if first else None,
