@@ -1,5 +1,55 @@
 # 백엔드 검수 기록
 
+## 2026-10-27 최종 재검수 및 기능별 커밋 정리
+
+기존 PR 코멘트 대응을 중심으로 HS6 우선 검색, 국가명·숫자 HS 검증, 실패 검색 결과 캐시 제외, 신규·중단 거래 비교, 구독의 불필요한 분기를 정리했다. 이후 재검수에서 뉴스 급증의 평균 0 보정, HS4 기사 적재·집계 누락, 주요 이슈 표시 불일치, 리포트의 0 거래 처리·비교 기간·결과표 재사용 문제를 추가로 수정했다.
+
+현재 변경은 채팅/HS 검색, 무역 변화, 뉴스 급증, HS4 기사 적재, 주요 이슈 표시, 리포트, 검수 문서로 나누어 로컬 커밋한다. 프론트·ML/RAG·HS 벡터 적재 담당 작업은 변경하지 않았고, async_job·추가 DB 구조·운영 데이터 적재도 적용하지 않았다. 원격 푸시는 실행하지 않는다.
+
+최종 회귀 검증 명령:
+
+```powershell
+python -m unittest backend.tests.test_article_counts backend.tests.test_news_load backend.tests.test_news_keywords backend.tests.test_news_embed backend.tests.test_keyword_topic_load backend.tests.test_backend_api backend.tests.test_pr_search_changes backend.tests.test_report_news_regressions backend.tests.test_report_input_paths backend.tests.test_intent_search backend.tests.test_chat_review_regressions backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load backend.tests.test_un_scheduler_integration
+```
+
+- 총 298개: 289개 통과, 사전 파일이 필요한 기존 테스트 9개 건너뜀, 실패 0개(71.564초).
+- 별도 입력 경로 검증 57개 통과: 직접 입력/저장 결과/이전 형식 결과 54개 및 실제 문서 KPI 3개. 원본 스냅샷이 변경되지 않는 것도 확인했다.
+- 직접 MOM 요청의 KPI는 전월 기준 0.819672%로 확인했다. NONE은 비교 계산을 생략하고 CUSTOM은 명시 비교 기간을 검증한다. BOTH 결과는 임의로 수출로 바꾸지 않고 422 안내를 반환한다.
+- 채팅·KPI·추이·순위·변화 분석·시장 비중·리포트 내부 결과표 재사용, 기본 24개월 추이, 윤년/연도 경계, 소유권·만료·종류 검사를 검증했다.
+- PDF·DOCX·XLSX 생성/다운로드, py_compile 및 git diff --check 통과.
+- 최종 로그: tmp/backend_build/final-input-review-regression.log, final-input-matrix.log(커밋 제외).
+
+실제 RDS·프론트 E2E·다중 워커·실제 LLM/운영 Chroma 정확도는 이번 회귀 검증 범위에 포함하지 않았다. 문서 시각 검수도 별도이며, 기존 맑은 고딕의 마이너스 기호 글리프 경고가 남아 있다. 보류한 실행기 전체 조회 및 관리자 기사 목록의 리포트 전체 조회는 변경하지 않았다. 아래 기록은 각 작업 시점의 결과이며 현재 최종 검증 범위와 커밋 상태는 이 절을 따른다.
+
+## 2026-10-27 HS6 우선 검색 및 후속 PR 5건 수정
+
+| 파일 | 수정 이유 |
+|---|---|
+| backend/app/api/reference.py | 화면 HS4 검색을 유지하고 채팅 HS6 우선 검색 분리. HS6가 모호하면 HS4 확인. 실패 결과 캐시 제외 |
+| backend/app/api/hs_vectors.py | 같은 컬렉션의 depth=4/6 검색 및 질의 임베딩 재사용 |
+| backend/app/api/chat.py | 새 채팅 검색 경로와 HS4 확인 안내 연결 |
+| backend/app/api/chat_slots.py | 정규화 국가명·유일 부분 일치, 모호한 국가 재입력, 접두어 없는 사전 등록 HS4/HS6 허용. 연도/금액 오인 방지 |
+| backend/app/api/intent.py | 접두어 없는 코드 원문도 슬롯으로 추출하도록 명시 |
+| backend/app/api/search_cache.py | cache_if 조건으로 warnings 결과를 저장하지 않음 |
+| backend/app/api/routes.py | 수집 완료된 현재/비교 월의 거래 합집합 비교. 신규 진출 및 거래 중단 누락 수정 |
+| backend/app/api/reports.py | 실행 불가능한 구독 분기를 제거하고 저장 관심을 항상 사용 |
+| backend/tests/test_pr_search_changes.py | 신규 15개 회귀: MOM/YOY 신규·중단, 미수집/임계값, 국가명, 숫자 코드, HS6/HS4 선택, 캐시 복구, 구독, 실제 임시 Chroma 필터 |
+| docs/BACKEND_API.md / 본 문서 | 검색·누락 거래 규칙과 실행 결과·제약 명시 |
+
+검증 명령과 결과:
+
+```powershell
+python -m unittest backend.tests.test_pr_search_changes backend.tests.test_intent_search backend.tests.test_chat_review_regressions
+# 43개 통과, 31.703초
+python -m unittest backend.tests.test_backend_api backend.tests.test_intent_search backend.tests.test_chat_review_regressions backend.tests.test_pr_search_changes backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load backend.tests.test_un_data_refresh backend.tests.test_un_scheduler_integration
+# 168개 통과, 74.047초 (기존 153개 + 신규 15개)
+python -m compileall -q backend/app/api backend/tests/test_pr_search_changes.py
+git diff --check
+# 둘 다 통과. Git의 LF→CRLF 변환 안내는 있음.
+```
+
+실행은 번들 Python과 tmp의 검증 의존성으로 수행했다. SQLite·고정 의도 응답·모의 OpenAI 및 임시 Chroma를 사용했다. 로그는 tmp/backend_build/hs6-pr-targeted.log와 hs6-pr-full.log에 보관한다. 실제 RDS 쓰기, 실제 LLM의 별칭/숫자 슬롯 추출 정확도, 운영 Chroma HS6 적재 여부·전체 품목 검색 정답률, 프론트 E2E는 검증하지 않았다. HS6 의미 검색용 벡터는 기존 HS 담당 적재 작업으로 준비해야 한다. 운영 재적재·DDL·신규 테이블·async_job 도입은 하지 않았다. 보류한 실행기 폴링·관리자 기사 목록의 전체 리포트 조회는 변경하지 않았다. 이번 수정은 커밋/푸시하지 않았다.
+
 ## 2026-10-27 추가 재검수 5건 수정
 
 - 대화 조건 보존: NO_DATA/OUT_OF_SCOPE와 모델 연결 대기 안내는 마지막 성공 조건을 유지한다. 국가·품목 전체 범위 지정과 컨텍스트 해제는 별도 기존 동작으로 유지한다.
