@@ -408,3 +408,56 @@ def test_cli_catalog_database_id_mismatch_is_rejected_without_state_changes(lega
         assert migration.fingerprint(source)==source_before
         assert migration.fingerprint(root)==target_before
         assert catalog.read_bytes()==catalog_before
+
+
+def test_persisted_non_axis_vectors_are_copied_exactly_without_reinsertion(tmp_path, monkeypatch):
+    import numpy as np
+    source=tmp_path/'non_axis_legacy';root=tmp_path/'target';catalog=tmp_path/'catalog.json'
+    docs=[article(i+1,'KOTRA_MARKET').model_copy(update={'body':'합성 원문 '+str(i),'kw_topic':()}) for i in range(1001)]
+    expected=migration.expected_records(docs)
+    vectors=np.random.default_rng(27).normal(size=(len(expected),3072)).astype('float32')
+    vectors/=np.linalg.norm(vectors,axis=1)[:,None]
+    client=persistent_client(source)
+    col=client.create_collection('kotra_article',embedding_function=None,
+        metadata={'embedding_model':MODEL,'hnsw:space':'cosine'})
+    ids=list(expected)
+    col.add(ids=ids,documents=[expected[k][0] for k in ids],
+            metadatas=[{'article_id':expected[k][2].article_id,'chunk':0,'keywords':['2027년']} for k in ids],
+            embeddings=vectors.tolist())
+    other=client.create_collection('news_keyword',embedding_function=None)
+    other.add(ids=['kept'],documents=['다른 컬렉션'],metadatas=[{'kept':True}],embeddings=[[1.,0.]])
+    client.close()
+    before=migration.fingerprint(source)
+    catalog.write_text(json.dumps({'version':1,'database_id':DB_ID,'vocabulary':VOCAB,
+        'articles':[d.model_dump(mode='json')|{'visibility_status':'VISIBLE'} for d in docs]},ensure_ascii=False),encoding='utf-8')
+    # Explicitly forbid vector/document insertion on the owned migration target.
+    class TargetCollection:
+        def __init__(self,col):self.col=col
+        def __getattr__(self,name):return getattr(self.col,name)
+        def add(self,**kw):raise AssertionError('vector reinsertion forbidden')
+        def update(self,**kw):
+            assert set(kw)=={'ids','metadatas'}
+            return self.col.update(**kw)
+    class Client:
+        def __init__(self,path):self.client=persistent_client(path);self.target='generations' in Path(path).parts
+        def __getattr__(self,name):return getattr(self.client,name)
+        def get_collection(self,*args,**kw):
+            col=self.client.get_collection(*args,**kw)
+            return TargetCollection(col) if self.target else col
+    out=migration.migrate(source,root,catalog,DB_ID,apply=True,source_stopped=True,client_factory=Client,batch_size=256)
+    assert out['status']=='ready' and out['embedded']==0 and out['keyword_changed_chunks']==1001
+    assert migration.fingerprint(source)==before
+    with migration.readonly_clone(source,persistent_client) as (reader,_):
+        old=read_all(reader.get_collection('kotra_article',embedding_function=None),['documents','embeddings'])
+    new=rows(root)
+    original={k:(d,list(v)) for k,d,v in zip(old['ids'],old['documents'],old['embeddings'])}
+    assert set(original)==set(new['ids'])
+    for key,document,meta,vector in zip(new['ids'],new['documents'],new['metadatas'],new['embeddings']):
+        assert (document,list(vector))==original[key]
+        assert 'keywords' not in meta and json.loads(meta['payload'])['kw_topic']==[]
+    snap=GenerationStore(root).snapshot()
+    try:assert [c.name for c in snap.client.list_collections()]==['kotra_article']
+    finally:snap.client.close()
+    target_before=migration.fingerprint(root)
+    assert migration.migrate(source,root,catalog,DB_ID,apply=True,source_stopped=True)['status']=='already_complete'
+    assert migration.fingerprint(root)==target_before and migration.fingerprint(source)==before

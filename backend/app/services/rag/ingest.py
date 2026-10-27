@@ -56,6 +56,13 @@ def read_articles(engine, sources, *, vocabulary=None, supplements=None):
         extra = next((item for item in candidates if item.get('body_masked') == row['body_masked']), {})
         if candidates and not extra:
             missing.append('stale_keyword_supplement')
+        # A current CSV with no full body must not erase a previously verified
+        # summary of exactly the same stored text. Keep current keyword evidence.
+        if (row['source_code'] == 'KOTRA_MARKET' and extra.get('body_available') is False
+                and not extra.get('summary_fallback') and any(
+                    item.get('body_masked') == row['body_masked'] and item.get('summary_fallback') is True
+                    for item in candidates)):
+            extra = {**extra, 'summary_fallback': True}
         original_keywords = extra.get('keywords')
         if row['source_code'] in ('HANKYUNG', 'FNNEWS'):
             original_keywords = keywords
@@ -82,7 +89,13 @@ def read_articles(engine, sources, *, vocabulary=None, supplements=None):
         if row['source_code'] == 'KOTRA_MARKET' and 'body_available' not in extra:
             # 기존 적재 함수는 본문 누락 시 요약/제목을 저장하므로 길이로 추정하지 않습니다.
             missing.append('body_origin')
-        if extra.get('body_available') is False or body.strip() == row['title'].strip():
+        summary_fallback = (row['source_code'] == 'KOTRA_MARKET'
+                            and extra.get('summary_fallback') is True
+                            and extra.get('body_available') is False and bool(body.strip()))
+        if summary_fallback:
+            missing.append('body')
+            provenance.append('body:summary_fallback')
+        elif extra.get('body_available') is False or body.strip() == row['title'].strip():
             body = ''
             missing.append('body')
         if not country:
@@ -115,6 +128,9 @@ def market_supplements(path, *, preserve_candidates=False):
             value = {'body_masked': row['body_masked'], 'body_available': bool(body),
                      'keywords': [raw.get('kwrd', '')]}
             if preserve_candidates:
+                summary = market.mask(market.html_to_text(raw.get('cntntSumar')))
+                if not body and summary and row['body_masked'] == summary:
+                    value['summary_fallback'] = True
                 if 'kwrd' not in raw:
                     value.pop('keywords')  # Unknown original keywords are not known-empty.
                 output.setdefault(key, []).append(value)

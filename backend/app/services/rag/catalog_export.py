@@ -72,7 +72,8 @@ def export_catalog(engine, output, *, raw_paths=(), sources=('KOTRA_MARKET',), d
                 key = (row['source_code'], row['external_id'])
                 matches = []
                 for candidate in candidates.get(key, []):
-                    if candidate['body_masked'] == row['body_masked'] and candidate['body_available']:
+                    if candidate['body_masked'] == row['body_masked'] and (
+                            candidate['body_available'] or candidate.get('summary_fallback') is True):
                         if candidate not in matches:
                             matches.append(candidate)
                 if not matches:
@@ -95,5 +96,7 @@ def export_catalog(engine, output, *, raw_paths=(), sources=('KOTRA_MARKET',), d
     if any(file_hash(path) != value for path, value in fingerprints.items()):
         raise ValueError('catalog_input_changed_during_export')
     atomic_json(output, data)
-    return {'status': 'exported', 'database_id': identity, 'articles': len(documents),
+    fallback_ids = sorted(doc.article_id for doc in documents if 'body:summary_fallback' in doc.provenance)
+    return {'status': 'exported', 'summary_fallback_articles': len(fallback_ids),
+            'summary_fallback_article_ids': fallback_ids, 'database_id': identity, 'articles': len(documents),
             'sources': list(sources), 'raw_files': len(raw_paths), 'output': str(output)}

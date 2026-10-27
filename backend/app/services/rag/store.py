@@ -86,6 +86,16 @@ def persistent_client(path):
     return chromadb.PersistentClient(path=str(path), settings=Settings(anonymized_telemetry=False))
 
 
+def collection_distance(collection):
+    """Read the immutable index metric without requesting a metric change on modify."""
+    meta = collection.metadata or {}
+    configuration = getattr(collection, 'configuration', None) or {}
+    hnsw = configuration.get('hnsw') or {}
+    values = [value for value in (meta.get('hnsw:space'), meta.get('distance_metric'), hnsw.get('space'))
+              if value is not None]
+    return values[0] if values and all(value == values[0] for value in values) else None
+
+
 def read_all(collection, include):
     output = {'ids': [], **{key: [] for key in include}}
     for offset in range(0, collection.count(), 500):
@@ -109,7 +119,7 @@ class IndexSnapshot:
         meta = col.metadata or {}
         validate_document_contract(meta)
         if (meta.get('embedding_model') != MODEL or meta.get('dimensions') != self.dimensions
-                or meta.get('hnsw:space') != 'cosine'):
+                or collection_distance(col) != 'cosine'):
             raise ValueError('incompatible_article_embedding')
         return col
 

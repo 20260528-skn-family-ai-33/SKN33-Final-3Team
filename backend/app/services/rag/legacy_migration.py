@@ -15,7 +15,7 @@ from backend.app.services.rag.documents import ArticleDocument
 from backend.app.services.rag.resources import close_owned
 from backend.app.services.rag.store import (
     GenerationStore, MODEL, DIMENSIONS, atomic_json, document_contract,
-    persistent_client, validate_generation_contract,
+    persistent_client, validate_generation_contract, collection_distance,
 )
 
 COLLECTION = 'kotra_article'
@@ -97,6 +97,10 @@ def validate_catalog(data, database_id):
         article = ArticleDocument.model_validate({k:v for k,v in row.items() if k != 'visibility_status'})
         if not article.body.strip() or 'body_origin' in article.metadata_missing:
             raise ValueError('migration_verified_body_required')
+        fallback = 'body:summary_fallback' in article.provenance
+        if (('body' in article.metadata_missing) != fallback
+                or (fallback and article.source_code.value != 'KOTRA_MARKET')):
+            raise ValueError('migration_invalid_summary_fallback')
         if not article.source_url and 'source_url' not in article.metadata_missing:
             raise ValueError('migration_missing_url_must_be_declared')
         if article.source_code.value == 'KOTRA_SHORT_NEWS' and article.products:
@@ -158,7 +162,7 @@ def preserve_legacy_country_order(collection, articles, batch_size, expected):
     return [adapted[article.article_id] for article in articles]
 
 
-def validate_row(key, document, metadata, vector, expected, dimensions):
+def validate_row(key, document, metadata, vector, expected, dimensions, *, keyword_changes=None):
     if key not in expected:
         raise ValueError('migration_record_not_in_catalog')
     text, canonical, article = expected[key]
@@ -175,12 +179,23 @@ def validate_row(key, document, metadata, vector, expected, dimensions):
                   'title':article.title, 'published_date':article.published_date.isoformat(),
                   'countries':list(article.countries), 'keywords':list(article.kw_topic),
                   'category':article.category, **canonical}
+    # Keywords are derived metadata, not part of the embedded document. Their
+    # explicit transition must not weaken identity/text/model/vector validation.
+    comparable.pop('keywords', None)
+    before = metadata.get('keywords', [])
+    if not isinstance(before, list) or any(not isinstance(value, str) for value in before):
+        raise ValueError('migration_invalid_keyword_metadata')
     if any(k in metadata and metadata[k] != v for k,v in comparable.items()):
         raise ValueError('migration_catalog_metadata_mismatch')
     if vector is None or len(vector) != dimensions or not all(math.isfinite(float(v)) for v in vector) or not any(float(v) for v in vector):
         raise ValueError('migration_invalid_embedding')
-    # Preserve every legacy key; fill only fields backed by the explicit verified catalog.
-    return {**metadata, **canonical, 'migration_legacy_id':True, 'legacy_record_id':key}
+    after = list(article.kw_topic)
+    if before != after and keyword_changes is not None:
+        keyword_changes.append({'article_id': article.article_id, 'record_id': key,
+                                'before': before, 'after': after})
+    # Omitted canonical keywords mean an empty set, not permission to retain old tags.
+    preserved = {name: value for name, value in metadata.items() if name != 'keywords'}
+    return {**preserved, **canonical, 'migration_legacy_id':True, 'legacy_record_id':key}
 
 
 def verify_page(collection, ids, documents, metadatas, embeddings):
@@ -219,7 +234,7 @@ def migrate(source, root, catalog, database_id, *, apply=False, source_stopped=F
             col = reader.get_collection(COLLECTION, embedding_function=None)
             info = col.metadata or {}
             model = info.get('embedding_model', legacy_model)
-            if model != MODEL or (legacy_model is not None and legacy_model != MODEL) or info.get('hnsw:space') != 'cosine':
+            if model != MODEL or (legacy_model is not None and legacy_model != MODEL) or collection_distance(col) != 'cosine':
                 raise ValueError('migration_model_or_metric_provenance_required')
             if info.get('dimensions', dimensions) != dimensions or col.count() != len(expected):
                 raise ValueError('migration_dimension_or_count_mismatch')
@@ -256,20 +271,37 @@ def migrate(source, root, catalog, database_id, *, apply=False, source_stopped=F
                       'articles':len(articles), 'chunks':len(expected), 'embedded':0, 'reused':len(expected),
                       'country_order_preserved_articles':country_order_changes,
                       'collections':{COLLECTION:len(expected)}, **document_contract()}
+            fallback_ids = sorted(a.article_id for a in articles if 'body:summary_fallback' in a.provenance)
+            report.update(summary_fallback_articles=len(fallback_ids), summary_fallback_article_ids=fallback_ids,
+                          summary_fallback_chunks=sum('body:summary_fallback' in a.provenance for _, _, a in expected.values()),
+                          keyword_changes=[], keyword_changed_articles=0, keyword_changed_chunks=0)
             writer = None
             try:
                 if apply and not existing:
                     folder.mkdir(parents=True)
                     atomic_json(folder/'status.json', report)
+                    # Re-adding cosine vectors can normalize their float32 values again.
+                    # Clone the stopped database, then change metadata only: keep the
+                    # original persisted vectors and documents bit-for-bit.
+                    shutil.copytree(source, folder/'chroma', symlinks=True)
+                    if fingerprint(folder/'chroma') != source_files or fingerprint(source) != source_files:
+                        raise ValueError('migration_source_changed_during_copy')
                     writer = client_factory(folder/'chroma')
-                    target = writer.create_collection(COLLECTION, embedding_function=None,
-                        metadata={'embedding_model':MODEL,'dimensions':dimensions,'hnsw:space':'cosine',**document_contract()})
+                    for collection in writer.list_collections():
+                        if collection.name != COLLECTION:
+                            writer.delete_collection(collection.name)  # Owned target copy only.
+                    target = writer.get_collection(COLLECTION, embedding_function=None)
+                    target.modify(metadata={**{key: value for key, value in info.items() if key != 'hnsw:space'},
+                                            'embedding_model':MODEL,'dimensions':dimensions,
+                                            'distance_metric':'cosine',**document_contract()})
+                    if collection_distance(target) != 'cosine':
+                        raise ValueError('migration_copied_metric_mismatch')
                 with (readonly_clone(folder/'chroma',client_factory, forbidden_root=root) if existing else nullcontext(None)) as old:
                     target_read = old[0].get_collection(COLLECTION,embedding_function=None) if old else None
                     if target_read is not None:
                         target_info = target_read.metadata or {}
                         if (target_read.count() != len(expected) or target_info.get('embedding_model') != MODEL
-                                or target_info.get('dimensions') != dimensions or target_info.get('hnsw:space') != 'cosine'
+                                or target_info.get('dimensions') != dimensions or collection_distance(target_read) != 'cosine'
                                 or any(target_info.get(k) != v for k,v in document_contract().items())):
                             raise ValueError('migration_existing_collection_mismatch')
                     seen = set()
@@ -280,17 +312,22 @@ def migrate(source, root, catalog, database_id, *, apply=False, source_stopped=F
                             raise ValueError('migration_duplicate_or_missing_page')
                         if any(len(page[k]) != len(ids) for k in ['documents','metadatas','embeddings']):
                             raise ValueError('migration_page_length_mismatch')
-                        metas = [validate_row(key,doc,meta,vec,expected,dimensions) for key,doc,meta,vec in
+                        metas = [validate_row(key,doc,meta,vec,expected,dimensions,keyword_changes=report['keyword_changes']) for key,doc,meta,vec in
                                  zip(ids,page['documents'],page['metadatas'],page['embeddings'])]
                         seen.update(ids)
                         if writer:
-                            target.add(ids=ids,documents=page['documents'],metadatas=metas,embeddings=page['embeddings'])
+                            updates = [meta | {key: None for key in old_meta if key not in meta}
+                                       for meta, old_meta in zip(metas, page['metadatas'])]
+                            target.update(ids=ids, metadatas=updates)
                             verify_page(target,ids,page['documents'],metas,page['embeddings'])
                             hook('batch_written')
                         if target_read is not None:
                             verify_page(target_read,ids,page['documents'],metas,page['embeddings'])
                     if seen != set(expected):
                         raise ValueError('migration_catalog_coverage_mismatch')
+                report['keyword_changed_chunks'] = len(report['keyword_changes'])
+                report['keyword_changed_articles'] = len({change['article_id'] for change in report['keyword_changes']})
+                report['keyword_changes'].sort(key=lambda change: (change['article_id'], change['record_id']))
                 if fingerprint(source) != source_files:
                     raise ValueError('migration_source_changed_during_copy')
                 if writer:

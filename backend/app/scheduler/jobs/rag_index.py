@@ -53,7 +53,12 @@ def _refresh(engine, sources, *, store, embed, supplements, raw_market, dry_run)
         for line in (store.root/'generations'/previous.generation/'articles.jsonl').read_text(encoding='utf-8').splitlines():
             doc = ArticleDocument.model_validate_json(line)
             if 'body_origin' not in doc.metadata_missing:
-                extra = {'body_masked':doc.body, 'body_available':bool(doc.body)}
+                fallback = 'body:summary_fallback' in doc.provenance
+                extra = {'body_masked':doc.body, 'body_available':bool(doc.body) and not fallback}
+                if fallback:
+                    if doc.source_code != ArticleSource.KOTRA_MARKET or 'body' not in doc.metadata_missing or not doc.body.strip():
+                        raise ValueError('invalid_summary_fallback_catalog')
+                    extra['summary_fallback'] = True
                 if doc.raw_keywords is not None and 'original_kw_sub' not in doc.metadata_missing:
                     extra['keywords'] = doc.raw_keywords
                 previous_supplements[doc.key] = extra

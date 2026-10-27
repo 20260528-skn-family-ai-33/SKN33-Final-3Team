@@ -241,7 +241,7 @@ def test_conflicting_same_body_keywords_fail_without_replacing_catalog(dataset):
     assert dataset['catalog'].read_bytes() == before
 
 
-@pytest.mark.parametrize('change', ['no_raw', 'missing_body', 'summary_only', 'wrong_body', 'missing_dictionary', 'no_visibility'])
+@pytest.mark.parametrize('change', ['no_raw', 'missing_body', 'wrong_body', 'missing_dictionary', 'no_visibility'])
 def test_unverified_export_inputs_fail_without_output(dataset, change):
     kwargs = {}
     if change == 'no_raw': kwargs['raw_paths'] = []
@@ -251,7 +251,6 @@ def test_unverified_export_inputs_fail_without_output(dataset, change):
     else:
         records = dataset['records'][:]
         records[0] = records[0] | {'newsBdt': '' if change != 'wrong_body' else '불일치'}
-        if change == 'summary_only': records[0]['cntntSumar'] = dataset['records'][0]['newsBdt']
         write_raw(dataset['raw'], records)
     with pytest.raises(ValueError): export(dataset, **kwargs)
     assert not dataset['catalog'].exists()
@@ -349,6 +348,12 @@ def test_newspaper_sources_and_db_rows_survive_migration_and_shortnews_refresh(d
             conn.execute(reflect(dataset['engine'], 'article_tag').insert(), [
                 {'article_id': aid, 'country_code': 'US', 'keyword_text': None},
                 {'article_id': aid, 'country_code': None, 'keyword_text': 'AI'}])
+    records = [dict(row) for row in dataset['records']]
+    records[1]['cntntSumar'], records[1]['newsBdt'] = records[1]['newsBdt'], ''
+    write_raw(dataset['raw'], records)
+    tags = reflect(dataset['engine'], 'article_tag')
+    with dataset['engine'].begin() as conn:
+        conn.execute(tags.insert(), {'article_id':201, 'keyword_text':'2027년'})
     db_before = {name: dataset['case'].db.rows(name) for name in ('article', 'article_tag', 'batch_run')}
     export(dataset, sources=[*SOURCES, 'HANKYUNG', 'FNNEWS'])
     source, original = seed_legacy(dataset)
@@ -366,3 +371,203 @@ def test_newspaper_sources_and_db_rows_survive_migration_and_shortnews_refresh(d
     assert protected == {'301:0', '302:0'}
     assert all(after[key] == before[key] for key in protected)
     assert {name: dataset['case'].db.rows(name) for name in db_before} == db_before
+
+
+@pytest.mark.parametrize('summary_id', [201, 202])
+def test_summary_and_keyword_transition_full_migration_and_refresh(dataset, summary_id):
+    from backend.app.scheduler.jobs import rag_index
+    from sqlalchemy import delete
+    records = [dict(row) for row in dataset['records']]
+    summary = next(row for row in records if row['bbstxSn'] == str(summary_id))
+    summary['cntntSumar'], summary['newsBdt'] = summary['newsBdt'], ''
+    write_raw(dataset['raw'], records)
+    tags = reflect(dataset['engine'], 'article_tag')
+    with dataset['engine'].begin() as conn:
+        conn.execute(tags.insert(), {'article_id':201, 'keyword_text':'2027년'})
+        conn.execute(delete(tags).where(tags.c.article_id == 202, tags.c.keyword_text.is_not(None)))
+        conn.execute(tags.insert(), {'article_id':202, 'keyword_text':'2027년'})
+    db_before = {name: dataset['case'].db.rows(name) for name in ('article','article_tag','batch_run')}
+    result = export(dataset)
+    assert result['summary_fallback_article_ids'] == [summary_id]
+    catalog = json.loads(dataset['catalog'].read_text())
+    fallback = next(a for a in catalog['articles'] if a['article_id'] == summary_id)
+    assert fallback['body'] == summary['cntntSumar']
+    assert 'body' in fallback['metadata_missing'] and 'body_origin' not in fallback['metadata_missing']
+    assert 'body:summary_fallback' in fallback['provenance']
+    assert next(a for a in catalog['articles'] if a['article_id'] == 201)['kw_topic'] == ['AI']
+    assert next(a for a in catalog['articles'] if a['article_id'] == 202)['kw_topic'] == []
+    source, original = seed_legacy(dataset)
+    before_source = migration.fingerprint(source)
+    before_catalog = dataset['catalog'].read_bytes()
+    root = dataset['root'] / 'summary_migration'
+    plan = migrate(dataset, source, root)
+    assert plan['status'] == 'planned' and plan['embedded'] == 0 and not root.exists()
+    assert plan['summary_fallback_article_ids'] == [summary_id]
+    assert plan['summary_fallback_chunks'] == sum(k.startswith(str(summary_id)+':') for k in original)
+    assert plan['keyword_changed_articles'] == 2 and plan['keyword_changed_chunks'] == 3
+    assert {x['record_id'] for x in plan['keyword_changes']} == {'201:0','201:1','202:0'}
+    assert next(x for x in plan['keyword_changes'] if x['record_id']=='202:0') == {
+        'article_id':202,'record_id':'202:0','before':['2027년'],'after':[]}
+    applied = migrate(dataset, source, root, apply=True)
+    assert applied['status'] == 'ready' and applied['embedded'] == 0
+    for key in ('summary_fallback_article_ids','summary_fallback_chunks','keyword_changes'):
+        assert applied[key] == plan[key]
+    status = json.loads((root/'generations'/applied['generation']/'status.json').read_text())
+    assert status['keyword_changes'] == plan['keyword_changes']
+    after = collection_rows(root)
+    assert set(after) == set(original)
+    for key,(text,meta,vector) in after.items():
+        assert (text,vector) == (original[key][0], original[key][2])
+        assert meta.get('keywords',[]) == json.loads(meta['payload'])['kw_topic']
+    assert 'keywords' not in after['202:0'][1]
+    target_fingerprint = migration.fingerprint(root)
+    repeat = migrate(dataset, source, root, apply=True)
+    assert repeat['status'] == 'already_complete' and repeat['keyword_changes'] == plan['keyword_changes']
+    assert migration.fingerprint(root) == target_fingerprint
+    provider = Mock(side_effect=encode, usage={})
+    short = news_embed.run_sources(['KOTRA_SHORT_NEWS'], db_url=dataset['case'].db.url, root=root, embed=provider)
+    assert short['status'] == 'complete' and short['body']['embedded'] == 0
+    assert collection_rows(root) == after
+    market = news_embed.run_sources(['KOTRA_MARKET'], db_url=dataset['case'].db.url, root=root, embed=provider)
+    assert market['status'] == 'complete' and market['body']['embedded'] == 2
+    stable = collection_rows(root)
+    provider.reset_mock()
+    # Current raw CSV's body_available=False must not hide persisted summary evidence.
+    refreshed = rag_index.refresh(dataset['engine'], ['KOTRA_MARKET'], store=GenerationStore(root),
+                                  embed=provider, raw_market=dataset['raw'])
+    assert refreshed['embedded'] == 0 and collection_rows(root) == stable
+    provider.assert_not_called()
+    planned = rag_index.refresh(dataset['engine'], ['KOTRA_MARKET'], store=GenerationStore(root),
+                                embed=provider, raw_market=False, dry_run=True)
+    assert planned['missing_body'] == 0
+    for _,meta,_ in stable.values():
+        if meta['article_id'] == summary_id:
+            payload = json.loads(meta['payload'])
+            assert 'body' in payload['metadata_missing'] and 'body:summary_fallback' in payload['provenance']
+    assert {name: dataset['case'].db.rows(name) for name in db_before} == db_before
+    assert migration.fingerprint(source) == before_source and dataset['catalog'].read_bytes() == before_catalog
+
+
+@pytest.mark.parametrize('change', ['full_body', 'changed_without_evidence', 'hidden', 'deleted'])
+def test_summary_refresh_follows_current_db_without_restoring_stale_text(dataset, change):
+    from backend.app.scheduler.jobs import rag_index
+    records = [dict(row) for row in dataset['records']]
+    records[1]['cntntSumar'], records[1]['newsBdt'] = records[1]['newsBdt'], ''
+    write_raw(dataset['raw'], records)
+    export(dataset)
+    source, _ = seed_legacy(dataset)
+    root = dataset['root']/'summary_transition'
+    migrate(dataset, source, root, apply=True)
+    provider = Mock(side_effect=encode)
+    table = reflect(dataset['engine'], 'article')
+    changes = {'visibility_status':'HIDDEN'} if change == 'hidden' else {'body_masked':'새로 확인한 실제 전체 본문'}
+    with dataset['engine'].begin() as conn:
+        if change == 'deleted':
+            tags = reflect(dataset['engine'], 'article_tag')
+            conn.execute(tags.delete().where(tags.c.article_id==202))
+            conn.execute(table.delete().where(table.c.article_id==202))
+        else:
+            conn.execute(table.update().where(table.c.article_id==202).values(**changes))
+    if change == 'full_body':
+        records[1]['newsBdt'] = changes['body_masked']
+        write_raw(dataset['raw'],records)
+    result = rag_index.refresh(dataset['engine'],['KOTRA_MARKET'],store=GenerationStore(root),
+                               embed=provider,raw_market=dataset['raw'])
+    assert result['status']=='ready'
+    affected = [(text,meta) for text,meta,_ in collection_rows(root).values() if meta['article_id']==202]
+    if change in ('hidden', 'deleted'): assert not affected
+    elif change == 'changed_without_evidence':
+        assert len(affected)==1 and affected[0][1]['record_type']=='missing_body' and affected[0][0]==''
+    else:
+        assert len(affected)==1 and affected[0][0].endswith(changes['body_masked'])
+        payload=json.loads(affected[0][1]['payload'])
+        assert 'body' not in payload['metadata_missing'] and 'body:summary_fallback' not in payload['provenance']
+
+
+@pytest.mark.parametrize('change', ['empty_summary','wrong_summary','title_only','conflicting_full_body'])
+def test_unverified_summary_never_overwrites_export(dataset, change):
+    export(dataset)
+    before=dataset['catalog'].read_bytes()
+    records=[dict(row) for row in dataset['records']]
+    fallback=records[1]
+    fallback['cntntSumar'],fallback['newsBdt']=fallback['newsBdt'],''
+    if change=='empty_summary':fallback['cntntSumar']=''
+    elif change=='wrong_summary':fallback['cntntSumar']='다른 요약'
+    elif change=='title_only':
+        fallback['cntntSumar']=''
+        table=reflect(dataset['engine'],'article')
+        with dataset['engine'].begin() as conn:
+            conn.execute(table.update().where(table.c.article_id==202).values(body_masked=fallback['newsTitl']))
+    else:records.append(dict(dataset['records'][1]))
+    write_raw(dataset['raw'],records)
+    with pytest.raises(ValueError):export(dataset)
+    assert dataset['catalog'].read_bytes()==before
+
+
+@pytest.mark.parametrize('before,after', [(['2027년'],[]),(['2027년','AI'],['AI']),(['AI'],['AI','수출']),([],['AI']),(['AI','AI'],['AI'])])
+def test_keyword_transition_replaces_derived_field_only(before, after):
+    from backend.app.services.rag.documents import ArticleDocument
+    doc=ArticleDocument(article_id=5,source_code='KOTRA_MARKET',external_id='synthetic-5',title='합성',
+        published_date='2026-10-01',source_url='https://example.org/5',body='합성 본문',kw_topic=after)
+    expected=migration.expected_records([doc]);text,_,_=expected['5:0']
+    meta={'article_id':5,'chunk':0,'custom_note':'kept'}
+    if before:meta['keywords']=before
+    changes=[]
+    result=migration.validate_row('5:0',text,meta,[1.0,0.0],expected,2,keyword_changes=changes)
+    assert result.get('keywords',[])==after and result['custom_note']=='kept'
+    assert json.loads(result['payload'])['kw_topic']==after
+    assert len(changes)==(before!=after)
+    if not after:assert 'keywords' not in result
+
+
+@pytest.mark.parametrize('change', ['text','id','source','hash','payload','vector','keyword_type'])
+def test_keyword_exception_keeps_all_other_validation(change):
+    from backend.app.services.rag.documents import ArticleDocument
+    doc=ArticleDocument(article_id=5,source_code='KOTRA_MARKET',external_id='synthetic-5',title='합성',
+        published_date='2026-10-01',source_url='https://example.org/5',body='합성 본문',kw_topic=['AI'])
+    expected=migration.expected_records([doc]);text,_,_=expected['5:0']
+    meta={'article_id':5,'chunk':0,'keywords':['2027년']};vector=[1.0,0.0]
+    if change=='text':text+='다름'
+    elif change=='id':meta['article_id']=6
+    elif change=='source':meta['source_code']='FNNEWS'
+    elif change=='hash':meta['text_hash']='bad'
+    elif change=='payload':meta['payload']='{}'
+    elif change=='vector':vector=[float('nan'),0.0]
+    else:meta['keywords']='2027년'
+    changes=[]
+    with pytest.raises(ValueError):migration.validate_row('5:0',text,meta,vector,expected,2,keyword_changes=changes)
+    assert changes==[]
+
+
+@pytest.mark.parametrize('change', ['missing_marker','missing_flag','other_source','unknown_origin','empty_text'])
+def test_summary_catalog_requires_consistent_provenance(dataset, change):
+    export(dataset)
+    data=json.loads(dataset['catalog'].read_text())
+    row=next(item for item in data['articles'] if item['article_id']==202)
+    row['metadata_missing'].append('body')
+    row['provenance'].append('body:summary_fallback')
+    if change=='missing_marker':row['provenance'].remove('body:summary_fallback')
+    elif change=='missing_flag':row['metadata_missing'].remove('body')
+    elif change=='other_source':row['source_code']='FNNEWS'
+    elif change=='unknown_origin':row['metadata_missing'].append('body_origin')
+    else:row['body']=''
+    with pytest.raises(ValueError):migration.validate_catalog(data,engine_identity(dataset['engine']))
+
+
+def test_summary_transition_report_is_identical_across_batch_sizes(dataset):
+    records=[dict(row) for row in dataset['records']]
+    records[0]['cntntSumar'],records[0]['newsBdt']=records[0]['newsBdt'],''
+    write_raw(dataset['raw'],records)
+    tags=reflect(dataset['engine'],'article_tag')
+    with dataset['engine'].begin() as conn:
+        conn.execute(tags.insert(),{'article_id':201,'keyword_text':'2027년'})
+    export(dataset)
+    source,original=seed_legacy(dataset)
+    before=migration.fingerprint(source)
+    small=migrate(dataset,source,dataset['root']/'small')
+    large=migration.migrate(source,dataset['root']/'large',dataset['catalog'],engine_identity(dataset['engine']),
+                            source_stopped=True,batch_size=1000)
+    keys=['migration_id','articles','chunks','embedded','reused','keyword_changes','keyword_changed_articles',
+          'keyword_changed_chunks','summary_fallback_article_ids','summary_fallback_chunks']
+    assert {k:small[k] for k in keys}=={k:large[k] for k in keys}
+    assert small['chunks']==len(original) and migration.fingerprint(source)==before
