@@ -32,7 +32,7 @@ from backend.app.ml.experiment_metrics import evaluate_predictions
 from backend.app.ml.experiments import (BASELINES, FEATURE_SETS, KINDS, OPTIONAL, ROOT, ExperimentConfig, ModelSpec,
                                         build_model, load_snapshot, prepare_scenarios)
 from backend.app.ml.feature_recovery import coverage
-from backend.app.ml.model_registry import read_json, register_records, sha256, write_json
+from backend.app.ml.model_registry import read_json, register_records, registered_versions, sha256, write_json
 from backend.app.ml.runtime import runtime_versions
 
 OUT_DIR = ROOT / "data/ml/candidates"
@@ -191,6 +191,12 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
         if matched is not None:
             revision, name, artifact, record_path, record = matched
         if record is None:
+            # 부모는 DB에 기록된 직전 버전. 학습 전에 정해 DB에 못 닿으면 학습하기 전에 멈춘다.
+            current = (f"{month:%Y%m}", revision)
+            earlier = sorted((key, read_json(p)["version_id"]) for p in out_dir.glob(f"{kind}_*.registry.json")
+                             if (key := _version_key(p, kind)) is not None and key < current)
+            in_db = registered_versions([version for _, version in earlier], "model_a", engine)
+            parent = next((version for _, version in reversed(earlier) if version in in_db), None)
             rows = prepare_rows(_month_frame(month, cache_dir))
             evaluation = holdout_check(rows, kind, n_jobs)
             bundle = train_full(rows["x"], rows["y"], kind, n_jobs)
@@ -201,13 +207,10 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
             temporary = artifact.with_suffix(".joblib.tmp")
             joblib.dump(bundle, temporary)
             temporary.replace(artifact)
-            current = (f"{month:%Y%m}", revision)
-            previous = sorted((key, p) for p in out_dir.glob(f"{kind}_*.registry.json")
-                              if (key := _version_key(p, kind)) is not None and key < current)
             record = {"version_id": name, "model_key": "model_a", "model_name": name,
                       "created_at": created.isoformat(timespec="microseconds"), "status": "READY",
                       "artifact_path": artifact.name, "artifact_sha256": sha256(artifact),
-                      "parent_version_id": read_json(previous[-1][1])["version_id"] if previous else None,
+                      "parent_version_id": parent,
                       "training_mode": "FULL_RETRAIN", "train_start": rows["info"]["train_start"],
                       "train_end": rows["info"]["train_end"], "train_rows": rows["info"]["train_rows"],
                       "data_info": _finite({"model_family": f"{kind}_full", "trade_month": str(month.date()),

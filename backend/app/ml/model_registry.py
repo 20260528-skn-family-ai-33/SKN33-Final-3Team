@@ -29,6 +29,24 @@ def sha256(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def registered_versions(version_ids, model_key, engine=None):
+    """주어진 버전 ID 중 DB에 기록된 것. 로컬 기록 JSON만 있고 DB 기록에 실패한 버전을 걸러낸다."""
+    from sqlalchemy import select
+    from backend.app.db.session import make_engine, session_scope
+    from backend.app.models.ml_model_version import MlModelVersion
+    if not version_ids:
+        return set()
+    own_engine = engine is None
+    engine = engine if engine is not None else make_engine()
+    try:
+        with session_scope(engine) as session:
+            return set(session.scalars(select(MlModelVersion.version_id).where(
+                MlModelVersion.model_key == model_key, MlModelVersion.version_id.in_(list(version_ids)))))
+    finally:
+        if own_engine:
+            engine.dispose()
+
+
 def register_records(records, engine=None):
     """두 모델을 한 트랜잭션으로 기록. 같은 내용 재전송은 허용하되 기존 이력은 덮어쓰지 않는다."""
     from backend.app.db.session import make_engine, session_scope

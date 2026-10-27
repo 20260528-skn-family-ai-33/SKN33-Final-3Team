@@ -100,12 +100,31 @@ class MonthlyRunTest(unittest.TestCase):
             self.assertEqual(self.run_month(db=outage)["model_name"], "lightgbm_202602_r2")  # 정정 전 판이 아님
         self.assertEqual(len(self.records()), 2)
 
-    def test_parent_is_latest_revision_by_number(self):
-        for name in ("lightgbm_202602", "lightgbm_202602_r2", "lightgbm_202602_r10"):
-            (self.out / f"{name}.registry.json").write_text(json.dumps({"version_id": name}), "utf-8")
+    def saved_version(self, name, registered=True):
+        """이전 달 버전의 로컬 기록 JSON. registered=False는 학습 뒤 DB 기록에 실패한 버전."""
+        record = {"version_id": name, "model_key": "model_a", "model_name": name,
+                  "created_at": "2026-02-01T00:00:00+09:00", "status": "READY", "artifact_path": f"{name}.joblib",
+                  "artifact_sha256": "0" * 64, "parent_version_id": None, "training_mode": "FULL_RETRAIN",
+                  "train_start": None, "train_end": None, "train_rows": 0, "data_info": {}, "evaluation": {},
+                  "skip_reason": None}
+        (self.out / f"{name}.registry.json").write_text(json.dumps(record), "utf-8")
+        if registered:
+            C.register_records([record], self.engine)
+
+    def parent_of_next_month(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-03-01")):
             self.run_month("2026-03-01")
-        self.assertEqual(C.read_json(self.out / "lightgbm_202603.registry.json")["parent_version_id"], "lightgbm_202602_r10")
+        return C.read_json(self.out / "lightgbm_202603.registry.json")["parent_version_id"]
+
+    def test_parent_is_latest_revision_by_number(self):
+        for name in ("lightgbm_202602", "lightgbm_202602_r2", "lightgbm_202602_r10"):
+            self.saved_version(name)
+        self.assertEqual(self.parent_of_next_month(), "lightgbm_202602_r10")
+
+    def test_parent_skips_version_missing_from_db(self):
+        self.saved_version("lightgbm_202602")
+        self.saved_version("lightgbm_202602_r2", registered=False)
+        self.assertEqual(self.parent_of_next_month(), "lightgbm_202602")
 
     def test_refuses_month_missing_from_data(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-01-01")):
