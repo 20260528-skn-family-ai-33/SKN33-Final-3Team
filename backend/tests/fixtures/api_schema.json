@@ -1,0 +1,1856 @@
+{
+  "alert_event": [
+    {
+      "name": "event_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "event_type",
+      "type": "enum('PRODUCT_SPIKE','KEYWORD_SPIKE','MAJOR_ISSUE','REPORT')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "article_id",
+      "type": "bigint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "report_id",
+      "type": "bigint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "event_key",
+      "type": "char(64)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "payload_json",
+      "type": "json",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "article": [
+    {
+      "name": "article_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "source_code",
+      "type": "varchar(40)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "external_id",
+      "type": "varchar(100)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "title",
+      "type": "varchar(600)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "published_date",
+      "type": "date",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "source_url",
+      "type": "varchar(2048)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "body_masked",
+      "type": "longtext",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "category",
+      "type": "varchar(120)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "visibility_status",
+      "type": "enum('VISIBLE','HIDDEN')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'VISIBLE'"
+    },
+    {
+      "name": "first_ingested_at",
+      "type": "datetime",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "admin_meta_json",
+      "type": "json",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "article_classification": [
+    {
+      "name": "classification_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "article_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "category_id",
+      "type": "int",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "source_kind",
+      "type": "enum('TOPIC','BASE')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "keyword_text",
+      "type": "varchar(120)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "basis_revision",
+      "type": "int",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "representative_term",
+      "type": "varchar(120)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "basis_key",
+      "type": "char(64)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "applied_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "job_id",
+      "type": "bigint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    }
+  ],
+  "article_tag": [
+    {
+      "name": "tag_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "article_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "hs_code",
+      "type": "varchar(10)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "hs_ver",
+      "type": "varchar(10)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "keyword_text",
+      "type": "varchar(120)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    }
+  ],
+  "async_job": [
+    {
+      "name": "job_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "job_type",
+      "type": "varchar(60)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "target_key",
+      "type": "varchar(160)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "requested_by",
+      "type": "bigint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "subject_user_id",
+      "type": "bigint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "status",
+      "type": "enum('QUEUED','RUNNING','SUCCEEDED','FAILED','CANCELLED')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'QUEUED'"
+    },
+    {
+      "name": "payload_json",
+      "type": "json",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "result_json",
+      "type": "json",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "request_key",
+      "type": "char(64)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "lock_key",
+      "type": "char(64)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "active_lock_key",
+      "type": "char(64)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "attempt_no",
+      "type": "int",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'0'"
+    },
+    {
+      "name": "claim_token",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'0'"
+    },
+    {
+      "name": "lease_expires_at",
+      "type": "datetime",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "name": "started_at",
+      "type": "datetime",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "finished_at",
+      "type": "datetime",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "available_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "batch_run": [
+    {
+      "name": "run_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "source_code",
+      "type": "varchar(40)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "job_name",
+      "type": "varchar(60)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "target_table",
+      "type": "enum('hs_code','export_monthly','import_monthly','export_summary','import_summary','fx_daily','article','article_tag','news_product_daily','news_keyword_daily','model_run','report','hs_code_correlation')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "period_start",
+      "type": "date",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "period_end",
+      "type": "date",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "status",
+      "type": "enum('RUNNING','SUCCESS','FAILED')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'RUNNING'"
+    },
+    {
+      "name": "started_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "name": "finished_at",
+      "type": "datetime",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "request_count",
+      "type": "int",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'0'"
+    },
+    {
+      "name": "received_count",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'0'"
+    },
+    {
+      "name": "job_id",
+      "type": "bigint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "retry_of_run_id",
+      "type": "bigint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "detail_json",
+      "type": "json",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "chat_message": [
+    {
+      "name": "message_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "session_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "role",
+      "type": "enum('USER','ASSISTANT')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "content_masked",
+      "type": "longtext",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "intent_json",
+      "type": "json",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "result_json",
+      "type": "json",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "chat_session": [
+    {
+      "name": "session_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "user_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "title",
+      "type": "varchar(160)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "context_json",
+      "type": "json",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "country": [
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "name_ko",
+      "type": "varchar(120)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_role",
+      "type": "enum('COUNTRY','SPECIAL','TOTAL')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'COUNTRY'"
+    },
+    {
+      "name": "region_id",
+      "type": "smallint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "currency_code",
+      "type": "varchar(12)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    }
+  ],
+  "currency": [
+    {
+      "name": "currency_code",
+      "type": "varchar(12)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "name_ko",
+      "type": "varchar(80)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "ecos_item_code",
+      "type": "varchar(20)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "quote_unit",
+      "type": "smallint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "export_monthly": [
+    {
+      "name": "trade_month",
+      "type": "date",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs10_code",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs_ver",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs4_code",
+      "type": "varchar(4)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs6_code",
+      "type": "varchar(6)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "amount_usd",
+      "type": "decimal(22,2)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "weight_kg",
+      "type": "decimal(22,3)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "history_months",
+      "type": "tinyint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "baseline_amount_usd",
+      "type": "decimal(22,2)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "median_unit_usd_kg",
+      "type": "decimal(24,6)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "anomaly_code",
+      "type": "enum('NONE','R1','R2','R3','R1_R2','R1_R3','R2_R3','R1_R2_R3')",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    }
+  ],
+  "export_summary": [
+    {
+      "name": "trade_month",
+      "type": "date",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs6_code",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs_ver",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "amount_usd",
+      "type": "decimal(24,2)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "fx_daily": [
+    {
+      "name": "base_date",
+      "type": "date",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "currency_code",
+      "type": "varchar(12)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "rate_krw",
+      "type": "decimal(20,6)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "hs_code": [
+    {
+      "name": "hs_code",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "depth",
+      "type": "tinyint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs_ver",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "name_ko",
+      "type": "varchar(500)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "original_name_ko",
+      "type": "text",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "source_edition",
+      "type": "varchar(80)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "import_monthly": [
+    {
+      "name": "trade_month",
+      "type": "date",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs10_code",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs_ver",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs4_code",
+      "type": "varchar(4)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs6_code",
+      "type": "varchar(6)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "amount_usd",
+      "type": "decimal(22,2)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "weight_kg",
+      "type": "decimal(22,3)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "history_months",
+      "type": "tinyint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "baseline_amount_usd",
+      "type": "decimal(22,2)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "median_unit_usd_kg",
+      "type": "decimal(24,6)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "anomaly_code",
+      "type": "enum('NONE','R1','R2','R3','R1_R2','R1_R3','R2_R3','R1_R2_R3')",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    }
+  ],
+  "import_summary": [
+    {
+      "name": "trade_month",
+      "type": "date",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs6_code",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs_ver",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "amount_usd",
+      "type": "decimal(24,2)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "keyword_category": [
+    {
+      "name": "category_id",
+      "type": "int",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "major_name",
+      "type": "varchar(40)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "minor_name",
+      "type": "varchar(60)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "updated_at",
+      "type": "datetime(6)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "name": "synced_at",
+      "type": "datetime(6)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    }
+  ],
+  "keyword_topic": [
+    {
+      "name": "keyword_text",
+      "type": "varchar(120)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "canonical_text",
+      "type": "varchar(120)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "category_id",
+      "type": "int",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "status",
+      "type": "enum('PENDING','CLASSIFIED','UNCLASSIFIED','SYNONYM')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "updated_at",
+      "type": "datetime(6)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "name": "synced_at",
+      "type": "datetime(6)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    }
+  ],
+  "market_region": [
+    {
+      "name": "region_id",
+      "type": "smallint",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "parent_id",
+      "type": "smallint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "region_level",
+      "type": "tinyint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "name_ko",
+      "type": "varchar(80)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "model_run": [
+    {
+      "name": "model_run_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "train_start",
+      "type": "date",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "train_end",
+      "type": "date",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "model_name",
+      "type": "varchar(120)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "status",
+      "type": "enum('RUNNING','SUCCESS','FAILED')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'RUNNING'"
+    },
+    {
+      "name": "metadata_json",
+      "type": "json",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_results_json",
+      "type": "json",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "news_keyword_daily": [
+    {
+      "name": "metric_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "metric_date",
+      "type": "date",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "keyword_text",
+      "type": "varchar(120)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "country_key",
+      "type": "varchar(12)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "day_count",
+      "type": "int",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "news_product_daily": [
+    {
+      "name": "metric_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "metric_date",
+      "type": "date",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs_code",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs_ver",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "country_key",
+      "type": "varchar(12)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "day_count",
+      "type": "int",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "notification_setting": [
+    {
+      "name": "user_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "notifications_enabled",
+      "type": "tinyint(1)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'0'"
+    },
+    {
+      "name": "report_popup",
+      "type": "tinyint(1)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'1'"
+    },
+    {
+      "name": "major_issue_popup",
+      "type": "tinyint(1)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'1'"
+    },
+    {
+      "name": "spike_popup",
+      "type": "tinyint(1)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'1'"
+    }
+  ],
+  "report": [
+    {
+      "name": "report_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "user_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "subscription_id",
+      "type": "bigint",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "report_type",
+      "type": "varchar(40)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "generation_key",
+      "type": "char(64)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "conditions_json",
+      "type": "json",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "status",
+      "type": "enum('QUEUED','RUNNING','DELAYED','READY','FAILED')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'QUEUED'"
+    },
+    {
+      "name": "retry_count",
+      "type": "smallint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'0'"
+    },
+    {
+      "name": "content_json",
+      "type": "json",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "pdf_uri",
+      "type": "varchar(1024)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    },
+    {
+      "name": "completed_at",
+      "type": "datetime",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    }
+  ],
+  "report_subscription": [
+    {
+      "name": "subscription_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "user_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "period_code",
+      "type": "varchar(40)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "filters_json",
+      "type": "json",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "enabled",
+      "type": "tinyint(1)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'1'"
+    }
+  ],
+  "service_option": [
+    {
+      "name": "option_code",
+      "type": "varchar(40)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "option_type",
+      "type": "enum('SOURCE','REPORT_PERIOD','REPORT_TYPE','RULE','NOTIFICATION_TERMS')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "label_ko",
+      "type": "varchar(120)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "value_json",
+      "type": "json",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "sort_order",
+      "type": "smallint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'0'"
+    },
+    {
+      "name": "enabled",
+      "type": "tinyint(1)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'1'"
+    }
+  ],
+  "un_data": [
+    {
+      "name": "freq_code",
+      "type": "char(1)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "period_start",
+      "type": "date",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs6_code",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs_ver",
+      "type": "varchar(10)",
+      "nullable": false,
+      "pk": true,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "total_import_usd",
+      "type": "decimal(24,3)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "korea_import_usd",
+      "type": "decimal(24,3)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "korea_share_pct",
+      "type": "decimal(12,6)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "valuation_basis",
+      "type": "enum('CIF','FOB')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    }
+  ],
+  "user_alert": [
+    {
+      "name": "user_alert_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "user_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "event_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "is_interest_match",
+      "type": "tinyint(1)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'0'"
+    },
+    {
+      "name": "read_at",
+      "type": "datetime",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "popup_shown_at",
+      "type": "datetime",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "user_consent": [
+    {
+      "name": "consent_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "user_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "terms_version",
+      "type": "varchar(40)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "action",
+      "type": "enum('AGREE','DECLINE','REVOKE')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "acted_at",
+      "type": "datetime",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "user_interest": [
+    {
+      "name": "interest_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "user_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "hs_code",
+      "type": "varchar(10)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "hs_ver",
+      "type": "varchar(10)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    },
+    {
+      "name": "country_code",
+      "type": "varchar(12)",
+      "nullable": true,
+      "pk": false,
+      "auto": false,
+      "default": "NULL"
+    }
+  ],
+  "users": [
+    {
+      "name": "user_id",
+      "type": "bigint",
+      "nullable": false,
+      "pk": true,
+      "auto": true,
+      "default": null
+    },
+    {
+      "name": "email",
+      "type": "varchar(254)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "password_hash",
+      "type": "varchar(255)",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": null
+    },
+    {
+      "name": "landing_page",
+      "type": "enum('GLOBAL','INTERESTED')",
+      "nullable": false,
+      "pk": false,
+      "auto": false,
+      "default": "'INTERESTED'"
+    }
+  ]
+}
