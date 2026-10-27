@@ -50,6 +50,13 @@ def save_blocks(store,uid,keywords,expected):
     return blocks(store,uid)
 
 
+def major_issue_condition(store):
+    """목록 필터와 표시값에서 동일한 주요 이슈 판정을 사용한다."""
+    a,e=store.t('article'),store.t('alert_event')
+    return or_(and_(a.c.source_code=='KOTRA_MARKET',a.c.category.in_(['통상·규제','통상규제'])),
+               exists(select(e.c.event_id).where(e.c.article_id==a.c.article_id,e.c.event_type=='MAJOR_ISSUE')))
+
+
 def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope='GLOBAL',countries=None,hs=None,mode='BROWSE',category_boost=None):
     a,t,k=store.t('article'),store.t('article_tag'),store.t('keyword_topic')
     require(tab in ('ALL','BREAKING','MAJOR_ISSUE') and scope in ('GLOBAL','INTERESTED'),'기사 탭·범위를 확인하세요.')
@@ -79,9 +86,7 @@ def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope=
     if tab=='MARKET': stmt=stmt.where(a.c.source_code=='KOTRA_MARKET')
     if tab=='BREAKING': stmt=stmt.where(a.c.source_code=='KOTRA_SHORT_NEWS')
     if tab=='MAJOR_ISSUE':
-        e=store.t('alert_event')
-        stmt=stmt.where(or_(and_(a.c.source_code=='KOTRA_MARKET',a.c.category.in_(['통상·규제','통상규제'])),
-                           exists(select(e.c.event_id).where(e.c.article_id==a.c.article_id,e.c.event_type=='MAJOR_ISSUE'))))
+        stmt=stmt.where(major_issue_condition(store))
     if start: stmt=stmt.where(a.c.published_date>=start)
     if end: stmt=stmt.where(a.c.published_date<=end)
     if q:
@@ -99,6 +104,8 @@ def article_views(store,rows,uid=None):
     if not rows: return []
     t=store.t('article_tag'); ids=[r['article_id'] for r in rows]
     tags=store.rows(select(t).where(t.c.article_id.in_(ids)))
+    a=store.t('article')
+    major_ids=set(store.c.execute(select(a.c.article_id).where(a.c.article_id.in_(ids),major_issue_condition(store))).scalars())
     by_id={i:[] for i in ids}
     for tag in tags: by_id[tag['article_id']].append(tag)
     saved=interests(store,uid) if uid else {'hs_items':[],'country_codes':[]}
@@ -111,7 +118,7 @@ def article_views(store,rows,uid=None):
         result.append({'article_id':str(row['article_id']),'source_code':row['source_code'],'title':row['title'],
             'published_date':row['published_date'],'country_codes':countries,'hs_items':hs,
             'summary':mask_text(row['body_masked'])[:400],'source_url':row['source_url'],
-            'is_major_issue':row['source_code']=='KOTRA_MARKET' and row['category'] in ('통상·규제','통상규제'), 'matched_interest':matched})
+            'is_major_issue':row['article_id'] in major_ids, 'matched_interest':matched})
     return result
 
 
