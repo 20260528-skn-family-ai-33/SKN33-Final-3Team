@@ -10,6 +10,8 @@ class Database:
         self.engine = engine
         self.metadata = MetaData()
         self.lock = RLock()
+        from backend.app.api.search_cache import SearchCache
+        self.hs_search_cache = SearchCache()
 
     def table(self, name, connection=None):
         with self.lock:

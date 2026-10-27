@@ -17,7 +17,7 @@ from starlette.exceptions import HTTPException
 from backend.app.api.config import Settings
 from backend.app.api.database import Database, Store
 from backend.app.api.common import ApiError, clean, require
-from backend.app.api.security import authenticate, administrator, limit_auth_request, hash_token
+from backend.app.api.security import authenticate, administrator, limit_auth_request, limit_public, client_ip, hash_token
 from backend.app.api.routes import dispatch, PENDING
 from backend.app.api.schemas import Conditions, HsItem
 
@@ -196,6 +196,9 @@ def create_app(settings=None, engine=None):
                 require(request.headers.get('sec-fetch-site') != 'cross-site' or origin in settings.origins,'교차 사이트 요청을 허용하지 않습니다.','ORIGIN_FORBIDDEN',403)
             def execute():
                 identity = contract['id']; auth = contract['auth']
+                if identity==11:
+                    limit_public(db,hash_token(f'HS_SEARCH:ip:{client_ip(request,settings)}'),
+                        maximum=int(settings.get('API_HS_IP_LIMIT',60)))
                 if identity in (1,2,69,72,73,74,128,129,130) and identity not in PENDING:
                     limit_auth_request(db,request,settings,identity,body)
                 with db.engine.begin() as connection:

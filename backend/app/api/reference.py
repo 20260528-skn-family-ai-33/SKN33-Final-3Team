@@ -1,46 +1,76 @@
 from sqlalchemy import select, func, or_, case
 import logging
+import unicodedata
 from backend.app.api.common import require, unavailable, page_info
 
 
 def hs_search(store,q,depth=4,limit=5):
-    q=q.strip()
-    require(bool(q.strip()) and depth==4 and 1<=limit<=5,'검색어·HS4·최대 5개 조건을 확인하세요.')
+    q=' '.join(unicodedata.normalize('NFKC',q).split()).casefold()
+    require(len(q)<=120 and depth==4 and 1<=limit<=5,'검색어 120자 이하·HS4·최대 5개 조건을 확인하세요.')
+    if len(q)<2:
+        return {'items':[],'match_type':'NONE','confidence':'LOW','message':'2글자 이상 입력하세요.',**browse_hint()}
+    from backend.app.api.config import Settings
+    settings=getattr(store.db,'settings',None) or Settings()
+    key=(q,depth,limit,*(settings.get(k) for k in ('API_HS_VECTOR_ENABLED','API_HS_CHROMA_PATH',
+        'API_HS_MAX_DISTANCE','API_HS_CONFIDENT_DISTANCE','API_HS_MIN_MARGIN','API_HS_CACHE_VERSION')))
+    return store.db.hs_search_cache.get_or_load(key,lambda:_hs_search(store,q,limit,settings))
+
+
+def browse_hint():
+    return {'requires_selection':True,'browse':{'label':'분류에서 직접 선택',
+        'url':'/api/v1/reference/hs-codes/ROOT/children?hs_ver=HS2022','levels':[2,4,6]}}
+
+
+def _hs_search(store,q,limit,settings):
     store.require_data('hs_code')
     t=store.t('hs_code')
     exact=or_(t.c.hs_code==q,t.c.name_ko==q,t.c.original_name_ko==q) if q.isascii() else or_(t.c.name_ko==q,t.c.original_name_ko==q)
     match=or_(t.c.hs_code.startswith(q,autoescape=True),t.c.name_ko.contains(q,autoescape=True)) if q.isascii() else t.c.name_ko.contains(q,autoescape=True)
     base=select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth).where(t.c.hs_ver=='HS2022',t.c.depth==4)
     rows=store.rows(base.where(exact).order_by(t.c.hs_code).limit(limit))
-    if rows: return {'items':rows,'match_type':'EXACT'}
-    from backend.app.api.config import Settings
+    if rows: return {'items':rows,'match_type':'EXACT','confidence':'EXACT',**browse_hint()}
     from backend.app.api.hs_vectors import candidates
-    settings=getattr(store.db,'settings',None) or Settings()
     ranked=[]; warnings=[]
     if settings.get('API_HS_VECTOR_ENABLED','true').lower()=='true':
         try:
-            ranked=candidates(q,settings,limit)
+            ranked=candidates(q,settings,limit+1)
         except Exception as error:
             logging.getLogger(__name__).warning('hs_vector_unavailable type=%s',type(error).__name__)
             warnings.append('품목 임베딩 검색 연결을 확인하세요. 등록 품목명 검색 결과만 제공합니다.')
     threshold=float(settings.get('API_HS_MAX_DISTANCE',0.70))
-    codes=[code for code,distance in ranked if distance<=threshold]
+    ranked=sorted(ranked,key=lambda item:item[1])
+    codes=[code for code,distance in ranked if 0<=distance<=threshold]
     verified={r['hs_code']:r for r in store.rows(base.where(t.c.hs_code.in_(codes)))} if codes else {}
     rows=[verified[code] for code in dict.fromkeys(codes) if code in verified]
     # 근거 없는 후보는 채택하지 않는다. 벡터 실패/낮은 유사도에는 등록명 부분 일치 추천.
     if len(rows)<limit:
         seen={r['hs_code'] for r in rows}
         rows.extend(r for r in store.rows(base.where(match).order_by(t.c.hs_code).limit(limit)) if r['hs_code'] not in seen)
-    result={'items':rows[:limit],'match_type':'SIMILAR' if rows else 'NONE'}
+    # Confidence belongs to the candidates actually returned, not stale/missing vector IDs.
+    valid_distances={}
+    for code,distance in ranked:
+        if code in verified and 0<=distance<=threshold:
+            valid_distances.setdefault(code,distance)  # ranked is ascending; keep the best per code.
+    distances=list(valid_distances.values())
+    best=distances[0] if distances else None
+    margin=distances[1]-best if len(distances)>1 else None
+    confident=best is not None and margin is not None and best<=float(settings.get('API_HS_CONFIDENT_DISTANCE',0.45)) and margin>=float(settings.get('API_HS_MIN_MARGIN',0.08))
+    result={'items':rows[:limit],'match_type':'SIMILAR' if rows else 'NONE',
+        'confidence':'MEDIUM' if confident and rows else 'LOW',
+        'message':'비슷한 후보입니다. 품목 설명을 확인하거나 분류에서 직접 선택하세요.',**browse_hint()}
     if warnings: result['warnings']=warnings
     return result
 
 
 def children(store,code,version):
-    require(len(code)==4 and code.isdigit() and version=='HS2022','HS4와 HS2022가 필요합니다.')
+    require(version=='HS2022' and (code=='ROOT' or (len(code) in (2,4) and code.isascii() and code.isdigit())),
+            'ROOT 또는 HS2/HS4와 HS2022가 필요합니다.')
     t=store.t('hs_code')
+    if code=='ROOT':
+        return {'items':store.rows(select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth)
+            .where(t.c.depth==2,t.c.hs_ver==version).order_by(t.c.hs_code))}
     require(store.c.scalar(select(t.c.hs_code).where(t.c.hs_code==code,t.c.hs_ver==version)) is not None,'품목을 찾을 수 없습니다.','NOT_FOUND',404)
-    return {'items':store.rows(select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth).where(t.c.hs_code.startswith(code),t.c.depth==6,t.c.hs_ver==version).order_by(t.c.hs_code))}
+    return {'items':store.rows(select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth).where(t.c.hs_code.startswith(code),t.c.depth==len(code)+2,t.c.hs_ver==version).order_by(t.c.hs_code))}
 
 
 def countries(store,q=None,region_id=None):
