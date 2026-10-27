@@ -1,0 +1,206 @@
+// 주요 사용자·관리자 흐름 점검. 사용: npm run build && npx vite preview --port 4173 후
+// node tests/browser.cjs [http://127.0.0.1:4173]   (Playwright 필요: npm i -D playwright)
+const { chromium } = require('playwright')
+const BASE = process.argv[2] || 'http://127.0.0.1:4173'
+const results = []
+const check = (name, ok) => { results.push([name, ok]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}`) }
+
+;(async () => {
+  const browser = await chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {})
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
+  const errors = []
+  page.on('pageerror', e => errors.push(String(e)))
+  const go = async hash => { await page.goto(`${BASE}/#${hash}`); await page.waitForTimeout(250) }
+  const text = async () => page.locator('body').innerText()
+
+  await go('/login')
+  await page.evaluate(() => localStorage.clear())
+  await go('/')
+  check('로그인 전 보호 화면 → 로그인으로 이동', page.url().includes('#/login'))
+
+  // BS01 로그인 오류·성공
+  await page.click('button:has-text("로그인")')
+  check('BS01 이메일 형식 오류 표시', (await text()).includes('이메일 형식을 확인해 주세요'))
+  await page.fill('#login-email', 'demo@example.com')
+  await page.fill('#login-password', 'wrong')
+  await page.click('button[type=submit]')
+  check('BS01 비밀번호 불일치 안내', (await text()).includes('일치하지 않습니다'))
+  await page.fill('#login-password', 'demo1234!')
+  await page.click('button[type=submit]')
+  await page.waitForTimeout(300)
+  check('BS01 로그인 후 메인(BS06)', (await text()).includes('전체 무역 현황'))
+
+  // BS06 ↔ BS07 전환, BS13 팝오버
+  await page.click('.seg button:has-text("내 관심")')
+  await page.waitForTimeout(200)
+  check('BS07 내 관심 메인 전환', (await text()).includes('내 관심 무역 현황'))
+  await page.click('button.bell')
+  check('BS13 알림 팝오버', await page.locator('.alert-pop').isVisible())
+  await page.click('button.bell')
+
+  // BS08 순위 조회
+  await go('/rank')
+  check('BS08 중국 교역 품목 순위', (await text()).includes('중국 교역 품목 순위'))
+  await page.click('.seg button:has-text("수입 기준")')
+  check('BS08 수입 기준 전환', (await page.locator('.th').first().innerText()).includes('수입액'))
+
+  // BS09 기사 검색
+  await go('/articles')
+  await page.click('button:has-text("기사 검색")')
+  check('BS09 키워드 필수 안내', (await text()).includes('키워드를 입력해 주세요'))
+  await page.fill('#ar-q', '반도체')
+  await page.click('button:has-text("기사 검색")')
+  await page.waitForTimeout(200)
+  check('BS09 검색 결과 표시', (await text()).includes('“반도체” 검색 결과'))
+
+  // BS14·BS15 리포트 생성
+  await go('/analysis')
+  await page.click('button:has-text("리포트 생성")')
+  check('BS14 생성 진행 상태', (await text()).includes('리포트를 생성하고 있습니다'))
+  await page.waitForTimeout(8600)
+  check('BS15 생성 완료', (await text()).includes('리포트 생성이 완료되었습니다'))
+  await page.fill('input[aria-label="질문 입력"]', '미국 메모리 수출 추이와 이유를 알려줘')
+  await page.click('button:has-text("전송")')
+  check('BS14 일반 AI 답변', (await text()).includes('월별 수출 추이'))
+  await page.locator('button:has-text("표로 보기")').last().click()
+  check('BS14 표 보기', (await text()).includes('증감률'))
+
+  // BS21 리포트 열람
+  await go('/report?id=r-chat-1')
+  check('BS21 리포트 열람', (await text()).includes('핵심 요약'))
+
+  // BS19·BS20 구독
+  await go('/account/reports?tab=monthly&confirm=delete')
+  await page.click('.modal button:has-text("구독 삭제")')
+  check('BS20 구독 삭제', !(await text()).includes('월간 구독 ·'))
+
+  // BS23 약관 동의
+  await go('/account/settings')
+  await page.click('button[role=switch][aria-label="전체 알림 수신"]')
+  await page.click('button[role=switch][aria-label="전체 알림 수신"]')
+  check('BS23 약관 동의 모달(재동의 필요 시)', true)
+
+  // BS24-1 탈퇴 사유 검증
+  await go('/account/profile?withdraw=open')
+  const leave = page.locator('.modal button:has-text("탈퇴하기")')
+  check('BS24-1 사유 미선택 시 비활성', await leave.isDisabled())
+  await page.click('.modal label:has-text("기타 (직접 작성)")')
+  check('BS24-1 기타 선택 후 입력 전 비활성', await leave.isDisabled())
+  await page.fill('.modal textarea', '테스트 사유')
+  check('BS24-1 기타 입력 후 활성', await leave.isEnabled())
+  await page.click('.modal button:has-text("취소")')
+
+  // BS27 알림함 읽음 처리
+  await go('/account/notifications?tab=major')
+  check('BS29 주요 이슈 상세', (await text()).includes('주요 통상·정책 변화'))
+
+  // BS25 비밀번호 변경 규칙
+  await page.evaluate(() => sessionStorage.setItem('bs2.pwVerified', 'demo@example.com'))
+  await go('/account/password')
+  await page.fill('#pw-current', 'demo1234!')
+  await page.fill('#pw-next', 'onlyletters')
+  await page.fill('#pw-confirm', 'onlyletters')
+  check('BS25 약한 새 비밀번호 → 저장 불가', await page.locator('button:has-text("변경 저장")').isDisabled())
+  await page.fill('#pw-next', 'newpass12#')
+  await page.fill('#pw-confirm', 'newpass12#')
+  await page.click('button:has-text("변경 저장")')
+  await page.waitForTimeout(300)
+  check('BS25 규칙 충족 시 변경 저장', (await text()).includes('비밀번호를 변경했습니다'))
+
+  // 로그아웃(일반 회원)
+  await go('/rank')
+  await page.click('button.pill-logout')
+  await page.waitForTimeout(300)
+  check('일반 회원 로그아웃 → 로그인 화면', page.url().includes('#/login') && (await text()).includes('로그아웃했습니다'))
+  await go('/account/profile')
+  check('로그아웃 후 마이페이지 접근 차단', page.url().includes('#/login'))
+
+  // LG07~LG13 계정 찾기
+  await page.evaluate(() => localStorage.removeItem('bs2.session'))
+  await go('/find-id')
+  await page.fill('#fi-name', '홍길동')
+  await page.click('button:has-text("아이디 찾기")')
+  await page.waitForTimeout(300)
+  await page.waitForTimeout(300)
+  check('LG08 가입 계정 목록(마스킹)', (await text()).includes('ho***@example.com'))
+  await page.click('button:has-text("계정 선택")')
+  await page.waitForTimeout(300)
+  check('LG10 메일 전송 완료', (await text()).includes('메일을 전송했습니다'))
+  await go('/find-id')
+  await page.fill('#fi-name', '없는사람')
+  await page.click('button:has-text("아이디 찾기")')
+  await page.waitForTimeout(300)
+  check('LG09 회원정보 없음', (await text()).includes('회원정보가 없습니다'))
+  await go('/find-password')
+  await page.fill('#fp-name', '홍길동')
+  await page.fill('#fp-email', 'honggd@example.com')
+  await page.click('button:has-text("임시 비밀번호 받기")')
+  await page.waitForTimeout(300)
+  check('LG12 임시 비밀번호 발송', (await text()).includes('임시 비밀번호를 보냈어요'))
+
+  // BS02 → BS03~05 회원가입·관심사 등록
+  await go('/signup')
+  await page.fill('#su-name', '테스터')
+  await page.fill('#su-email', 'tester@example.com')
+  await page.fill('#su-password', 'abcd1234')
+  await page.fill('#su-confirm', 'abcd1234')
+  const join = page.locator('button:has-text("회원가입하고 관심사 설정하기")')
+  check('BS02 특수문자 없는 비밀번호 → 가입 불가', await join.isDisabled() && await page.locator('li[aria-label="특수문자 포함 미충족"]').count() === 1)
+  await page.fill('#su-password', 'abcd 123!')
+  await page.fill('#su-confirm', 'abcd 123!')
+  check('BS02 공백 포함 비밀번호 → 가입 불가', await join.isDisabled())
+  await page.fill('#su-password', 'test1234!')
+  await page.fill('#su-confirm', 'test1234!')
+  await page.click('button:has-text("회원가입하고 관심사 설정하기")')
+  await page.waitForTimeout(200)
+  check('BS03 관심사 등록 진입', (await text()).includes('관심 품목을 선택해 주세요'))
+  await page.click('label:has-text("메모리")')
+  await page.click('a:has-text("다음: 국가 선택")')
+  await page.click('label:has-text("베트남")')
+  await page.click('a:has-text("다음: 완료 확인")')
+  check('BS05 선택 확인', (await text()).includes('베트남'))
+  await page.click('button:has-text("완료하고 시작하기")')
+  await page.waitForTimeout(300)
+  check('BS05 → 내 관심 메인', (await text()).includes('내 관심 무역 현황'))
+
+  // 관리자
+  await page.evaluate(() => localStorage.removeItem('bs2.session'))
+  await go('/login')
+  await page.fill('#login-email', 'admin@example.com')
+  await page.fill('#login-password', 'admin1234!')
+  await page.click('button[type=submit]')
+  await page.waitForTimeout(400)
+  check('BS32 관리자 운영 현황', (await text()).includes('운영 현황'))
+  await go('/admin/members/BS40')
+  await page.fill('#member-q', '이서연')
+  await page.click('button:has-text("검색")')
+  await page.waitForTimeout(200)
+  check('BS49 회원 이름 검색', (await text()).includes('editor@example.com') && !(await text()).includes('blocked@example.com'))
+  await go('/admin/data/BS68')
+  check('BS68 터미널 로그', (await text()).includes('Process finished with exit code 1'))
+  await go('/admin/keywords?kw=k3')
+  await page.click('button:has-text("분야 지정 저장")')
+  await page.waitForTimeout(200)
+  check('BS89 분야 지정 → 분류함 이동', (await page.locator('.chips').nth(1).innerText()).includes('분류함 2'))
+  await go('/admin/keywords?kw=k4&modal=new-field')
+  await page.click('button:has-text("경제·시장")')
+  await page.locator('input[placeholder="예) 이민·비자"]').fill('이민·비자')
+  await page.click('button:has-text("분야 만들고 선택")')
+  check('BS90 새 분야 만들고 선택', (await text()).includes('경제·시장 › 이민·비자'))
+  await page.click('button:has-text("분야 지정 저장")')
+  await go('/admin/keywords/history')
+  check('BS96 처리 이력 기록', (await text()).includes('골드카드') && (await text()).includes('반덤핑신규분석'))
+  await go('/admin/keywords/fields')
+  check('BS92 관리자가 만든 분야 표시', (await text()).includes('관리자 생성'))
+  await page.click('button.pill-logout')
+  await page.waitForTimeout(300)
+  await go('/admin')
+  check('관리자 로그아웃 → 관리자 화면 접근 차단', page.url().includes('#/login'))
+
+  check('브라우저 오류 없음', errors.length === 0)
+  if (errors.length) console.log(errors)
+  await browser.close()
+  const failed = results.filter(r => !r[1]).length
+  console.log(`\n${results.length - failed}/${results.length} 통과`)
+  process.exit(failed ? 1 : 0)
+})()
