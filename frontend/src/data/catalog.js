@@ -10,7 +10,7 @@ export const hs4Groups = [
 ]
 
 export const products = hs4Groups.flatMap(g => g.items.map(([id, name]) => ({ id, name, hs4: g.code })))
-export const productName = id => products.find(p => p.id === id)?.name || id
+export const productName = id => products.find(p => p.id === id)?.name || id || '전체 품목'
 
 // 기사 제목에서 품목을 찾을 때 쓰는 대표어
 const KEYWORDS = { 854232: '메모리', 854231: '반도체', 854239: '반도체', 854233: '반도체', 330499: '화장품', 330410: '화장품', 330420: '화장품', 330491: '화장품', 870323: '승용차', 870322: '승용차', 870380: '전기차', 271019: '석유', 271012: '석유', 850760: '배터리', 850780: '배터리' }

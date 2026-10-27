@@ -122,7 +122,7 @@ React·Vite 외 추가 런타임 패키지는 없습니다.
 ```bash
 npm run build
 npm run lint
-npm test                 # 데이터·계산·비밀번호 규칙·소셜 로그인 토큰 교환 단위 테스트 11개
+npm test                 # 데이터·계산·비밀번호 규칙·소셜 로그인 토큰 교환 단위 테스트 14개
 ```
 
 브라우저 흐름 검사(43개 항목)는 Playwright가 있는 환경에서 실행합니다.
@@ -135,8 +135,15 @@ npm run test:e2e -- http://127.0.0.1:4173
 
 소셜 로그인 흐름 검사(12개 항목, 실제 제공자 대신 가짜 응답)는 `tests/oauth-browser.cjs` 맨 위 안내대로 테스트용 키로 빌드한 뒤 실행합니다.
 
-이전 버전(PATCH-001)은 같은 상위 폴더의 `borderless-frontend-backup-*` 폴더에 보관되어 있습니다.
+PR #34 검토 반영: 단일 속보 알림과 자동 연결 국가 설정을 제거하고, 순위 화면의 조회 조건을 AI 질문에 전달합니다. 월별 보기의 엑셀은 월을 첫 열로 내보냅니다.
 
 ### 관리자 알림함 회귀 검사
 
 `npm run build` 후 `npm run preview`로 실행하고, Playwright를 사용할 수 있는 환경에서 `node tests/admin-inbox.cjs http://127.0.0.1:4173`을 실행합니다. 설치된 Chrome을 사용할 때는 `CHROMIUM`에 실행 파일 경로를 지정합니다.
+
+
+### PR #34 코멘트 회귀 검사
+
+빌드·미리보기 서버 실행 후 `node tests/pr34-review.cjs http://127.0.0.1:4173`을 실행합니다(Playwright 필요).
+기존 속보 알림·설정 정리, 남은 알림의 읽음 상태 보존, 약관·탭, 관리자 관심 범위, 순위 조건의 AI 전달, 월별 엑셀의 머리글과 실제 월 값을 검사합니다.
+설치된 Chrome으로 실행하려면 `CHROMIUM`에 실행 파일 경로를 지정합니다.

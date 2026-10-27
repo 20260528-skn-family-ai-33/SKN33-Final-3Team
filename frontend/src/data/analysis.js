@@ -22,14 +22,18 @@ export const range = (a, b) => (a === b ? dot(a) : `${dot(a)}~${a.slice(0, 4) ==
 
 /** 자연어 질문 → { country, product, preset, from, to, compareFrom, compareTo, wantsReport } */
 export function parseQuestion(text, previous = {}) {
-  const country = countries.find(c => text.includes(c.name))?.name ?? previous.country ?? ''
+  const country = text.includes('전체 국가') ? '' : countries.find(c => text.includes(c.name))?.name ?? previous.country ?? ''
   const code = text.match(/\b(\d{6})\b/)?.[1]
   const alias = Object.keys(ALIASES).find(k => text.includes(k))
-  const product = (code && products.some(p => p.id === code) ? code : null) || products.find(p => text.includes(p.name))?.id || (alias && ALIASES[alias]) || previous.product || '854232'
-  const presetKey = text.includes('12개월') ? '12m' : text.includes('6개월') ? '6m' : text.includes('1개월') ? '1m' : text.includes('올해') ? 'ytd' : text.includes('작년') ? 'last' : previous.preset || '3m'
-  const [, , [from, to]] = PERIOD_PRESETS.find(p => p[0] === presetKey)
+  const product = text.includes('전체 품목') ? '' : ((code && products.some(p => p.id === code) ? code : null) || products.find(p => text.includes(p.name))?.id || (alias && ALIASES[alias]) || previous.product) ?? '854232'
+  const presetKey = text.includes('12개월') ? '12m' : text.includes('6개월') ? '6m' : text.includes('1개월') ? '1m' : text.includes('올해') ? 'ytd' : text.includes('작년') ? 'last' : null
+  const explicitPeriod = text.match(/\b(\d{4}-(?:0[1-9]|1[0-2]))~(\d{4}-(?:0[1-9]|1[0-2]))\b/)
+  const validPeriod = explicitPeriod && explicitPeriod[1] <= explicitPeriod[2]
+  const [from, to] = validPeriod ? explicitPeriod.slice(1)
+    : !presetKey && previous.from && previous.to ? [previous.from, previous.to]
+      : (PERIOD_PRESETS.find(p => p[0] === (presetKey || previous.preset)) || PERIOD_PRESETS[1])[2]
   return {
-    country, product, preset: presetKey, from, to, compareFrom: shift(from, -1), compareTo: shift(to, -1),
+    country, product, preset: validPeriod ? 'custom' : presetKey || previous.preset || '3m', from, to, compareFrom: shift(from, -1), compareTo: shift(to, -1),
     sections: ALL_SECTIONS, wantsReport: /리포트|보고서|PDF|pdf/.test(text),
   }
 }
@@ -77,7 +81,7 @@ export function reportParagraphs(report) {
   const f = figures(o)
   const lines = [
     `${report.title} · Borderless Sellers ${report.kind === 'chat' ? '요청형' : '정기'} 리포트 (화면 시연용 예시 수치)`,
-    `대상: ${o.country || '전체 국가'} / ${productName(o.product)} (HS ${o.product})`,
+    `대상: ${o.country || '전체 국가'} / ${productName(o.product)}${o.product ? ` (HS ${o.product})` : ''}`,
     `분석 기간 ${range(o.from, o.to)} · 비교 기간 ${range(o.compareFrom, o.compareTo)} · 생성일 ${report.created}`,
     `01 핵심 요약: 선택 기간 ${o.country || '전체'}향 ${productName(o.product)} 수출액은 ${f.total}억 USD로 전년 동기 대비 ${f.growthText}입니다.`,
   ]

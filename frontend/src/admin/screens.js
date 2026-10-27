@@ -940,7 +940,7 @@ export const adminScreens = {
       tabs: [{ label: '기본 정보', to: '/admin/members/BS50' }, { label: '관심사·맞춤 서비스', to: '/admin/members/BS63', on: true }]
     },
     blocks: [
-      { type: 'banner', tone: 'info', text: '회원의 관심사를 임의로 변경하지 않고, 저장된 조건과 연결 결과를 점검합니다.' },
+      { type: 'banner', tone: 'info', text: '회원의 관심사를 임의로 변경하지 않고, 직접 등록한 조건과 노출 결과를 점검합니다.' },
       {
         type: 'kv',
         cols: 2,
@@ -950,8 +950,7 @@ export const adminScreens = {
           { k: '기사 노출 예시', v: '반도체 수출 정책 · 베트남 화장품 인증' }
         ]
       },
-      { type: 'note', text: '직접 선택한 관심 국가에 관심 HS6의 최근 12개월 수출 상위 5개 연결 국가를 포함합니다.' },
-      { type: 'note', text: '연결 국가는 관심 변경·새 월 통계 공개 때 다시 계산합니다. 개인별 범위 선택과 관리자 편집은 제공하지 않습니다.' },
+      { type: 'note', text: '회원이 직접 등록한 관심만 대조합니다.' },
       { type: 'buttons', items: [{ label: '노출 기사 확인', to: '/admin/data/BS77' }] }
     ]
   },

@@ -4,18 +4,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { navigate } from './router'
 import {
-  initialChats, initialConsents, initialNotifications, initialProfile, initialReports, initialSettings,
+  currentSettings, currentNotifications, initialChats, initialConsents, initialNotifications, initialProfile, initialReports, initialSettings,
   initialSubscription, seedAccounts,
 } from './data/seed'
 import { productName } from './data/catalog'
 import { isStrongPassword } from './utils/validate'
 import { canChangeAdminRole } from './auth/roles'
 
-export function useStored(key, initial) {
+export function useStored(key, initial, normalize = value => value) {
   const [value, setValue] = useState(() => {
     try {
       const raw = localStorage.getItem(key)
-      return raw ? JSON.parse(raw) : initial
+      return normalize(raw ? JSON.parse(raw) : initial)
     } catch {
       return initial
     }
@@ -47,10 +47,10 @@ export function AppProvider({ children }) {
   const sessionAccount = accounts.find(a => a.email === storedSession?.email)
   const session = useMemo(() => storedSession && sessionAccount ? { ...storedSession, role: sessionAccount.role } : null, [storedSession, sessionAccount])
   const [profile, setProfile] = useStored('bs2.profile', initialProfile)
-  const [settings, setSettings] = useStored('bs2.settings', initialSettings)
+  const [settings, setSettings] = useStored('bs2.settings', initialSettings, currentSettings)
   const [consents, setConsents] = useStored('bs2.consents', initialConsents)
   const [subscription, setSubscription] = useStored('bs2.subscription', initialSubscription)
-  const [notifications, setNotifications] = useStored('bs2.notifications', initialNotifications)
+  const [notifications, setNotifications] = useStored('bs2.notifications', initialNotifications, currentNotifications)
   const [chats, setChats] = useStored('bs2.chats', initialChats)
   const [reports, setReports] = useStored('bs2.reports', initialReports)
   const [mainView, setMainView] = useStored('bs2.mainView', null)

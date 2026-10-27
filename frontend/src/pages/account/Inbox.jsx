@@ -6,7 +6,7 @@ import { Btn, Check, Chip } from '../../components/ui'
 import { notificationTypes } from '../../data/seed'
 import { articleById } from '../../data/articles'
 
-const TABS = [['all', '전체'], ['breaking', '속보'], ['surge', '급증 기사'], ['major', '주요 이슈'], ['report', '리포트 발행']]
+const TABS = [['all', '전체'], ['surge', '급증 기사'], ['major', '주요 이슈'], ['report', '리포트 발행']]
 
 function Detail({ n }) {
   const t = notificationTypes[n.type]
@@ -43,10 +43,10 @@ function Detail({ n }) {
           </div>
         </div>
       )}
-      {(n.type === 'major' || n.type === 'breaking') && (
+      {n.type === 'major' && (
         <p className="muted" style={{ marginTop: 8, fontSize: 15, lineHeight: 1.8 }}>
           원문의 발행일·출처와 기사 요약을 함께 확인합니다.<br />
-          {n.type === 'major' ? '전체 사용자 대상 주요 이슈로 전달되었습니다.' : `${article?.country || '관심 국가'} 관련 단신속보입니다.`}
+          전체 사용자 대상 주요 이슈로 전달되었습니다.
         </p>
       )}
       {n.type !== 'report' && <div style={{ marginTop: 24 }}><Btn kind="ink" size="md" iconRight="external" to={articleLink}>기사 원문 보기</Btn></div>}
@@ -61,7 +61,7 @@ function Detail({ n }) {
 
 export default function Inbox({ route }) {
   const { notifications, setNotifications } = useApp()
-  const tab = route.query.get('tab') || 'all'
+  const tab = TABS.some(([key]) => key === route.query.get('tab')) ? route.query.get('tab') : 'all'
   const unreadOnly = route.query.get('unread') === '1'
   const list = notifications.filter(n => (tab === 'all' || n.type === tab) && (!unreadOnly || !n.read || n.id === route.query.get('id')))
   const selected = list.find(n => n.id === route.query.get('id')) || list[0]

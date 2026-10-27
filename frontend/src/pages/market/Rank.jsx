@@ -47,7 +47,7 @@ export default function Rank({ route }) {
     setApplied(draft)
   }
   const exportExcel = () => downloadExcel(
-    [['순위', ...(showHs ? ['HS6'] : []), firstCol, '수출액(억 USD)', '수입액(억 USD)'], ...rows.map(r => [r.rank, ...(showHs ? [r.hs] : []), r.name, r.exp, r.imp])],
+    [[...(byMonth ? [] : ['순위']), ...(showHs ? ['HS6'] : []), firstCol, '수출액(억 USD)', '수입액(억 USD)'], ...rows.map(r => [...(byMonth ? [] : [r.rank]), ...(showHs ? [r.hs] : []), r.name, r.exp, r.imp])],
     `수출입순위_${title.replaceAll(' ', '')}`,
   )
 
@@ -71,7 +71,7 @@ export default function Rank({ route }) {
             <div className="between">
               <div>
                 <h2 className="t2">{title}</h2>
-                <p className="muted" style={{ marginTop: 6 }}>{PERIOD_LABEL[applied.period]} 누계 · 억 USD · 시연 데이터</p>
+                <p className="muted" style={{ marginTop: 6 }}>{PERIOD_LABEL[applied.period]} {byMonth ? '월별' : '누계'} · 억 USD · 시연 데이터</p>
               </div>
               <div className="seg" role="group" aria-label="순위 기준">
                 <button type="button" className={'reset' + (basis === 'exp' ? ' on' : '')} aria-pressed={basis === 'exp'} onClick={() => setBasis('exp')}>수출 기준</button>
@@ -101,7 +101,7 @@ export default function Rank({ route }) {
             </div>
           </div>
         </div>
-        <ChatFab />
+        <ChatFab ask={`${applied.country || '전체 국가'} · ${applied.product ? `${productName(applied.product)}(HS ${applied.product})` : '전체 품목'} · ${applied.period} 수출입을 분석해줘`} />
       </main>
     </>
   )

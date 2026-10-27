@@ -116,6 +116,6 @@ export function FooterSmall() {
 }
 
 /** 화면 오른쪽 아래에 떠 있는 AI 분석 바로가기 */
-export function ChatFab() {
-  return <Link to="/analysis" className="btn btn-red btn-lg fab"><Icon name="chat" size={18} />AI 분석 채팅 열기</Link>
+export function ChatFab({ ask = '' }) {
+  return <Link to={ask ? `/analysis?ask=${encodeURIComponent(ask)}` : '/analysis'} className="btn btn-red btn-lg fab"><Icon name="chat" size={18} />AI 분석 채팅 열기</Link>
 }

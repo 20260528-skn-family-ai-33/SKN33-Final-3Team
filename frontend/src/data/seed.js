@@ -22,8 +22,12 @@ export const initialProfile = {
 }
 
 export const initialSettings = {
-  all: true, surge: true, major: true, report: true, breaking: 'all', scope: 'interest', termsAgreed: true, termsVersion: 'v1.2',
+  all: true, surge: true, major: true, report: true, termsAgreed: true, termsVersion: 'v1.2',
 }
+
+// 기존 브라우저의 나머지 설정과 알림 이력은 보존합니다.
+export const currentSettings = settings => Object.fromEntries(Object.entries(settings).filter(([key]) => key !== 'breaking' && key !== 'scope'))
+export const currentNotifications = notifications => notifications.filter(n => n.type !== 'breaking')
 
 export const initialConsents = { service: true, privacy: true, optional: false }
 
@@ -60,7 +64,6 @@ export const initialReports = [
 ]
 
 export const notificationTypes = {
-  breaking: { label: '속보', tone: 'red', tab: 'breaking' },
   surge: { label: '급증 기사', tone: 'amber', tab: 'surge' },
   major: { label: '주요 이슈', tone: 'plum', tab: 'major' },
   report: { label: '리포트 발행', tone: 'plum', tab: 'report' },
@@ -69,8 +72,6 @@ export const notificationTypes = {
 export const initialNotifications = [
   { id: 'n1', type: 'report', title: '월간 구독 리포트 발행 완료', time: '10.08 09:20', received: '2026.10.08 09:20', read: false,
     body: '관심정보 기준 월간 리포트가 발행되었습니다.', target: '중국 · 메모리(HS 854232)', period: '2025.12', cycle: '월간 구독', reportId: 'r-monthly-1' },
-  { id: 'n2', type: 'breaking', title: '관심 국가 단신속보', time: '10.08 09:00', received: '2026.10.08 09:00', read: false,
-    body: '관심 국가의 단신속보가 등록되었습니다.', articleId: 's1' },
   { id: 'n3', type: 'major', title: '주요 교역국 통상 이슈', time: '10.08 08:40', received: '2026.10.08 08:40', read: false,
     body: '주요 통상·정책 변화에 대한 알림입니다.', articleId: 'a9' },
   { id: 'n4', type: 'surge', title: '반도체 기사 언급량 급증', time: '10.07 17:10', received: '2026.10.07 17:10', read: true,

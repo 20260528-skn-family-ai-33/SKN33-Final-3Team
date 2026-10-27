@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { Link, navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Check, Modal, Radio, Toggle } from '../../components/ui'
+import { Btn, Check, Modal, Toggle } from '../../components/ui'
 import { productName } from '../../data/catalog'
 
 const ROWS = [
@@ -57,22 +57,6 @@ export default function NotificationSettings({ route }) {
           </div>
         ))}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 22 }} className="resp-stack">
-        <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '18px 20px' }}>
-          <p style={{ fontSize: 15, fontWeight: 800 }}>속보 팝업</p>
-          <div style={{ display: 'flex', gap: 18, marginTop: 12 }} role="radiogroup" aria-label="속보 팝업">
-            {[['all', '전체 받기(기본)'], ['interest', '관심 속보만'], ['off', '끄기']].map(([v, l]) => <Radio key={v} name="breaking" checked={draft.breaking === v} onChange={() => set({ breaking: v })}>{l}</Radio>)}
-          </div>
-          <p className="note" style={{ marginTop: 10 }}>팝업에만 적용하며, 알림함 등록·전체 메인 속보 카드에는 적용하지 않습니다.</p>
-        </div>
-        <div style={{ background: 'var(--bg)', borderRadius: 14, padding: '18px 20px' }}>
-          <p style={{ fontSize: 15, fontWeight: 800 }}>알림 범위</p>
-          <div style={{ display: 'flex', gap: 18, marginTop: 12 }} role="radiogroup" aria-label="알림 범위">
-            {[['interest', '내 관심'], ['linked', '관심 연결 포함']].map(([v, l]) => <Radio key={v} name="scope" checked={draft.scope === v} onChange={() => set({ scope: v })}>{l}</Radio>)}
-          </div>
-          <p className="note" style={{ marginTop: 10 }}>관심 연결: 관심 품목의 최근 1년 수출액 상위 5개국 · 관심정보 변경·새 월 통계 적재 시 다시 계산합니다.</p>
-        </div>
-      </div>
       <div className="between" style={{ marginTop: 18, border: '1px solid var(--line)', borderRadius: 14, padding: '16px 20px' }}>
         <span><span className="muted">관심정보</span> <b style={{ marginLeft: 8 }}>{interestText}</b></span>
         <Link to="/account/interests" className="more">관심정보 수정 →</Link>
@@ -93,7 +77,7 @@ export default function NotificationSettings({ route }) {
           </div>
           <div style={{ padding: 18, height: 150, overflowY: 'auto', fontSize: 14, color: '#444B57', lineHeight: 1.8 }}>
             [현재 버전의 알림 수신 약관 본문]<br />
-            <span className="note">수신 항목: 급증 기사 · 주요 이슈 · 리포트 발행 · 속보 / 수신 방법: 서비스 내 팝업·알림함<br />약관 내용을 확인한 후 동의 여부를 선택하세요.</span>
+            <span className="note">수신 항목: 급증 기사 · 주요 이슈 · 리포트 발행 / 수신 방법: 서비스 내 팝업·알림함<br />약관 내용을 확인한 후 동의 여부를 선택하세요.</span>
           </div>
         </div>
         <Check checked={agree} onChange={setAgree} style={{ marginTop: 16 }}>위 알림 수신 약관을 확인했으며 동의합니다.</Check>

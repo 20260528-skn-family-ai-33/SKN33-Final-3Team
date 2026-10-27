@@ -52,7 +52,7 @@ function ConditionCard({ message, onChange, onGenerate }) {
     return (
       <AiBlock>
         <p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인했습니다.</p>
-        <p style={{ marginTop: 8, fontSize: 15 }}>국가: {o.country || '전체'} · 품목: {productName(o.product)}({o.product}) · 분석: {range(o.from, o.to)}</p>
+        <p style={{ marginTop: 8, fontSize: 15 }}>국가: {o.country || '전체'} · 품목: {productName(o.product)}{o.product && `(${o.product})`} · 분석: {range(o.from, o.to)}</p>
         <p className="muted" style={{ marginTop: 4 }}>비교: {range(o.compareFrom, o.compareTo)} · 포함: {o.sections.map(s => s.replace('(KPI)', '').replace(' 기사', '').replace(' 시장', '')).join(' / ')}</p>
       </AiBlock>
     )
@@ -65,7 +65,7 @@ function ConditionCard({ message, onChange, onGenerate }) {
   return (
     <AiBlock>
       <p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인해 주세요.</p>
-      <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>품목: {productName(o.product)}({o.product}) · 국가: {o.country || '전체'} (국가 선택 생략 가능)</p>
+      <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>품목: {productName(o.product)}{o.product && `(${o.product})`} · 국가: {o.country || '전체'} (국가 선택 생략 가능)</p>
       <div className="chips" style={{ marginTop: 16 }} role="group" aria-label="기간 빠른 선택">
         {PERIOD_PRESETS.map(([key, label]) => (
           <button key={key} type="button" className={'chip sm' + (message.preset === key ? ' on' : '')} aria-pressed={message.preset === key}
@@ -126,7 +126,7 @@ function DoneCard({ report }) {
   return (
     <AiBlock>
       <p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인했습니다.</p>
-      <p style={{ marginTop: 8, fontSize: 15 }}>국가: {o.country || '전체'} · 품목: {productName(o.product)}({o.product}) · 분석: {range(o.from, o.to)}</p>
+      <p style={{ marginTop: 8, fontSize: 15 }}>국가: {o.country || '전체'} · 품목: {productName(o.product)}{o.product && `(${o.product})`} · 분석: {range(o.from, o.to)}</p>
       <p className="muted" style={{ marginTop: 4 }}>비교: {range(o.compareFrom, o.compareTo)} · 포함: {o.sections.map(s => s.replace('(KPI)', 'KPI').replace('주요 지표KPI', 'KPI').replace(' 기사', '').replace(' 시장', '')).join(' / ')}</p>
       <div style={{ marginTop: 18, borderRadius: 16, background: '#fff', border: '1px solid #F1A9B4', padding: '20px 22px', boxShadow: 'inset 4px 0 0 var(--red)' }}>
         <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
@@ -164,7 +164,7 @@ function AnswerCard({ message, onSaveReport, onInterest }) {
   const article = f.news[0]
   return (
     <AiBlock>
-      <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · HS {o.product} / {o.country || '전체 국가'}</p>
+      <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {o.product ? `HS ${o.product}` : '전체 품목'} / {o.country || '전체 국가'}</p>
       <p className="note">{range(o.from, o.to)} / 비교 {range(o.compareFrom, o.compareTo)} · 단위 억 USD · 관세청</p>
       <div style={{ display: 'flex', gap: 14, marginTop: 16 }}>
         {[[`${f.labels.length}개월 수출액`, `${f.total}억 USD`, '#15181E'], ['전년 동기 대비', f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1'], ['월별 흐름', f.flow, '#15181E']].map(([l, v, c]) => (
@@ -263,8 +263,8 @@ export default function Analysis({ route }) {
     messages: [...c.messages, { role: 'user', text: '이 분석을 리포트로 만들어줘.' }, { role: 'ai', kind: 'condition', preset: 'custom', options: { ...options, sections: ALL_SECTIONS } }],
   }))
   const addInterest = o => {
-    setProfile(p => ({ ...p, products: [...new Set([...p.products, o.product])], countries: o.country ? [...new Set([...p.countries, o.country])] : p.countries }))
-    notify(`관심 목록에 ${o.country ? o.country + ' · ' : ''}${productName(o.product)}을(를) 추가했습니다.`)
+    setProfile(p => ({ ...p, products: o.product ? [...new Set([...p.products, o.product])] : p.products, countries: o.country ? [...new Set([...p.countries, o.country])] : p.countries }))
+    notify(`관심 목록에 ${[o.country, o.product && productName(o.product)].filter(Boolean).join(' · ')}을(를) 추가했습니다.`)
   }
   const removeChat = () => {
     const rest = chats.filter(c => c.id !== active.id)
