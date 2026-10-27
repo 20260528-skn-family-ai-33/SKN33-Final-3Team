@@ -188,7 +188,8 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
                 if db["fx"]["rows"] > 0:
                     break
         else:
-            raise ValueError(f"{base}: 같은 달 재학습 기록이 너무 많습니다")
+            if matched is None:
+                raise ValueError(f"{base}: 같은 달 재학습 기록이 너무 많습니다")
         if matched is not None:
             revision, name, artifact, record_path, record = matched
         if record is None:
