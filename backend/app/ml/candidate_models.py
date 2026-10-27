@@ -136,6 +136,11 @@ def _runtime(kind):
     return runtime
 
 
+def _fx_unavailable(db):
+    """환율 표가 비면 DB 장애로 본다 (fx_from_db는 실패해도 빈 표를 돌려준다)."""
+    return db["fx"]["rows"] == 0
+
+
 def _same_inputs(snapshot, files, db):
     """저장된 학습 계보(input_snapshot)와 지금 입력이 같은 원본인지.
 
@@ -147,7 +152,7 @@ def _same_inputs(snapshot, files, db):
         return [f for f in rows if not f["path"].endswith("/state.json")]
     if data(snapshot["files"]) != data(files):
         return False
-    if db["fx"]["rows"] == 0 and snapshot["fx"]["rows"] > 0:
+    if _fx_unavailable(db) and snapshot["fx"]["rows"] > 0:
         return True
     return snapshot["fx"] == db["fx"] and snapshot["country_mapping_sha256"] == db["country_mapping_sha256"]
 
@@ -185,7 +190,7 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
             if _same_inputs(record["data_info"]["input_snapshot"], files, db):
                 matched = revision, name, artifact, record_path, record
                 # 환율을 못 읽으면 파일만 비교하므로 정정 전·후 리비전이 모두 맞는다. 그때는 끝까지 보고 가장 최신을 고른다.
-                if db["fx"]["rows"] > 0:
+                if not _fx_unavailable(db):
                     break
         else:
             if matched is None:
