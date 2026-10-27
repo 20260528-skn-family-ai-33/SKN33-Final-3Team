@@ -4,8 +4,16 @@
 
 ```sh
 python -m pip install -r backend/requirements.txt pytest
-python -m pytest backend/tests/trade_news -q
+python backend/tests/trade_news/offline_checks/run.py --smoke all
+python backend/tests/trade_news/offline_checks/run.py
 ```
+
+위 실행 도구는 검토한 크롤링·SQL 적재·공통 본문 색인 회귀만 선택합니다. 실행 결과는 출력된 `RUN_EVIDENCE` 임시 폴더에 기록하며 저장소에 DB·로그를 만들지 않습니다. `--smoke all`은 각 진입점을 별도 Python 프로세스에서 import하고, 도움말·중단 상태 등록·가짜 SDK의 사용량 기록까지 확인합니다. 프로젝트 내부 모듈을 가짜 모듈로 바꾸지 않습니다.
+
+실제 설정·네트워크·운영 DB를 차단하고 임시 SQLite·Chroma·합성 HTTP·가짜 임베딩을 사용합니다. native 감시 프로세스 시험은 수집 단계에서 제외하고 남은 항목이 0인지 확인합니다. 실제 MySQL 시험 15개는 이 명령에서 건너뜁니다. 지정한 합성 executor 시험 외 스케줄러 시작은 금지합니다. 별도 MySQL 실행은 아래 절차를 따릅니다.
+
+`20261022_trade_news_sources.sql`과 `20261025_news_source_views.sql`은 관리자 ERD가 적용되어 `visibility_status`가 존재하는 상태를 전제로 합니다. 역순·반복 적용의 집계 의미는 합성 SQLite로 확인하며, 이것은 실제 MySQL 전체 DDL 실행 검증을 뜻하지 않습니다. 기존 화면은 `KOTRA_MARKET + VISIBLE`, 출처별 집계는 전체 출처, 통합 집계는 `KOTRA_MARKET + KOTRA_SHORT_NEWS`의 기존 모집단을 유지합니다.
+
 
 기본 시험은 DNS/TCP 차단, 합성 기사, 실제 SQLAlchemy+SQLite, 가상 HTTP 기반 Scrapy 엔진을 사용합니다. 원문과 정제 본문 보존·소득 오탐·정상 교역 유지·요청 예산/403 재시작·적재 계획·트랜잭션·집계 뷰·재실행을 확인합니다. 실제 사이트와 MySQL은 연결하지 않습니다.
 

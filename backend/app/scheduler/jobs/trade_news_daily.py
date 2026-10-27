@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 from backend.app.scheduler.collectors.trade_news.news.run_lifecycle import atomic_json
+from backend.app.scheduler.jobs.news_process import run_bounded
 
 ROOT = Path(__file__).resolve().parents[4]
 ENV_PATH = ROOT / '.env'
@@ -22,6 +23,24 @@ SITES = ('hankyung', 'fnnews')
 SOURCE_CODES = {'hankyung': 'HANKYUNG', 'fnnews': 'FNNEWS'}
 JOB_ID = 'trade_news_daily'
 log = logging.getLogger(__name__)
+# 두 사이트의 100회 × (최대 간격 300초 + 요청 제한 60초)에 여유 2시간을 둡니다.
+DEFAULT_COLLECTION_TIMEOUT = 22 * 3600
+DEFAULT_LOAD_TIMEOUT = 3600
+
+
+def time_limits(values):
+    limits = {}
+    for stage, key, default in (
+        ('collection', 'NEWS_COLLECTION_TIMEOUT_SECONDS', DEFAULT_COLLECTION_TIMEOUT),
+        ('mysql', 'NEWS_LOAD_TIMEOUT_SECONDS', DEFAULT_LOAD_TIMEOUT),
+        ('dictionary', 'NEWS_DICTIONARY_TIMEOUT_SECONDS', DEFAULT_LOAD_TIMEOUT),
+        ('vector', 'NEWS_VECTOR_TIMEOUT_SECONDS', DEFAULT_LOAD_TIMEOUT),
+    ):
+        value = str(values.get(key, default)).strip()
+        if not value.isascii() or not value.isdecimal() or int(value) <= 0:
+            raise ValueError(f'{key}: 양의 정수 초 단위 필요')
+        limits[stage] = int(value)
+    return limits
 
 
 def settings(env_path=ENV_PATH):
@@ -34,9 +53,14 @@ def register_jobs(scheduler, *, env_path=ENV_PATH):
     from apscheduler.triggers.cron import CronTrigger
     enabled = str(settings(env_path).get('NEWS_DAILY_ENABLED', 'false')).strip().lower() in ('true', '1', 'yes')
     options = {} if enabled else {'next_run_time': None}
-    scheduler.add_job(run, CronTrigger(hour=3, minute=0, second=0, timezone=KST),
+    scheduler.add_job(run_with_rag, CronTrigger(hour=3, minute=0, second=0, timezone=KST),
                       id=JOB_ID, kwargs={'env_path': env_path}, max_instances=1, coalesce=True,
                       misfire_grace_time=6 * 3600, replace_existing=True, **options)
+
+
+def run_with_rag(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_PATH):
+    """예약 진입점: 동일 실행 잠금 안에서 수집·SQL·벡터를 단계별 제한 시간으로 실행합니다."""
+    return run(data_dir, source_map, now=now, runner=runner, env_path=env_path, include_vector=True)
 
 
 def absolute_path(value):
@@ -98,6 +122,9 @@ def recover_previous(root):
     if previous['status'] == 'running':
         previous.update(status='interrupted', finished_at=datetime.now(KST).isoformat(),
                         interruption_detected=True)
+        stage = previous.get('stage')
+        if stage in ('collection', 'mysql', 'dictionary', 'vector') and previous.get(stage, {}).get('status') == 'running':
+            previous[stage]['status'] = 'interrupted'
     persist(root, previous)
 
 
@@ -131,10 +158,10 @@ def collection_status(report, returncode):
     return 'complete'
 
 
-def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_PATH):
+def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_PATH, include_vector=False):
     """날짜는 시작 시 한 번 고정합니다. 실제 예약 실행은 scheduler.start() 이후에만 가능합니다."""
     from filelock import FileLock, Timeout
-    runner = runner or subprocess.run
+    runner = runner or run_bounded
     started = now or datetime.now(KST)
     if started.tzinfo is None:
         raise ValueError('실행 시각의 시간대 필요')
@@ -142,7 +169,8 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
     run_id = uuid4().hex
     result = {'run_id': run_id, 'target_date': target, 'sites': list(SITES), 'timezone': 'Asia/Seoul',
               'started_at': started.astimezone(KST).isoformat(), 'status': 'running', 'stage': 'configuration',
-              'collection': {'status': 'not_started'}, 'mysql': {'status': 'not_started'}}
+              'collection': {'status': 'not_started'}, 'mysql': {'status': 'not_started'},
+              'dictionary': {'status':'not_started'}, 'vector': {'status':'not_started'}, 'usage':{k:{'tokens':0,'estimated_usd':0.0,'model_calls':0} for k in ('dictionary','collection','mysql')}}
     try:
         root, values = data_settings(data_dir, env_path)
     except Exception as exc:
@@ -164,18 +192,37 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
             try:
                 # 경로가 확인된 뒤의 매핑 오류도 이번 실행의 실패로 남깁니다.
                 mapping = mapping_settings(source_map, values)
+                limits = time_limits(values)
+                result['timeouts_seconds'] = limits
                 directory = root / 'daily_runs' / target
                 env = {k: str(v) for k, v in values.items() if v is not None}
                 env['TRADE_NEWS_RUN_ID'] = run_id
                 env['TRADE_NEWS_JOB_RUN_ID'] = run_id
                 # 현재 공용 스케줄러의 Python을 사용하고 Scrapy reactor는 자식에만 설치합니다.
                 with (directory / ('job_' + run_id + '.log')).open('a', encoding='utf-8') as stream:
+                    dictionary_args = []
+                    if include_vector:
+                        result['stage'] = 'dictionary'
+                        result['dictionary'] = {'status':'running'}
+                        persist(root, result)
+                        dictionary_path = directory / ('tag_dictionary_' + run_id + '.json')
+                        exported = runner([sys.executable, str(COLLECTOR / 'load_project.py'),
+                            '--data-dir', str(root), '--source-map', str(mapping), '--apply',
+                            '--export-tag-dictionary', str(dictionary_path)], cwd=COLLECTOR, env=env,
+                            stdout=stream, stderr=subprocess.STDOUT, check=False, timeout=limits['dictionary'])
+                        if exported.returncode or not dictionary_path.is_file():
+                            raise ValueError('project_dictionary_export_failed')
+                        dictionary_args = ['--tag-dictionary', str(dictionary_path)]
+                        result['dictionary'] = {'status':'complete', 'file':str(dictionary_path.relative_to(root))}
+                    elif values.get('NEWS_TAG_DICTIONARY'):
+                        dictionary_args = ['--tag-dictionary', str(absolute_path(values['NEWS_TAG_DICTIONARY']))]
                     result['stage'] = 'collection'
                     result['collection'] = {'status': 'running'}
                     persist(root, result)
                     collected = runner([sys.executable, str(COLLECTOR / 'daily_collect.py'), '--data-dir', str(root),
-                                        '--target-date', target, '--sites', *SITES, '--record-batch-run'],
-                                       cwd=COLLECTOR, env=env, stdout=stream, stderr=subprocess.STDOUT, check=False)
+                                        '--target-date', target, '--sites', *SITES, '--record-batch-run', *dictionary_args],
+                                       cwd=COLLECTOR, env=env, stdout=stream, stderr=subprocess.STDOUT, check=False,
+                                       timeout=limits['collection'])
                     report, reference = collection_result(root, run_id, target)
                     # 상세 목록·기사·오류는 확정 보고서 한 곳에 두고 상위 결과에는 요약과 참조만 보관합니다.
                     result['collection'] = {'status': collection_status(report, collected.returncode),
@@ -191,8 +238,10 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
                     output = directory / ('mysql_' + run_id + '.json')
                     loaded = runner([sys.executable, str(COLLECTOR / 'load_project.py'), '--data-dir', str(root),
                                      '--source-map', str(mapping), '--target-date', target, '--sites', *SITES,
-                                     '--result-file', str(output), '--apply', '--record-batch-run'],
-                                    cwd=COLLECTOR, env=env, stdout=stream, stderr=subprocess.STDOUT, check=False)
+                                     '--result-file', str(output), '--apply', '--record-batch-run',
+                                     '--include-tags', '--generate-tags'],
+                                    cwd=COLLECTOR, env=env, stdout=stream, stderr=subprocess.STDOUT, check=False,
+                                    timeout=limits['mysql'])
                     mysql = json.loads(output.read_text(encoding='utf-8'))
                     if (mysql.get('run_id') != run_id or mysql.get('target_date') != target
                             or mysql.get('sites') != list(SITES) or mysql.get('mode') != 'applied'
@@ -200,7 +249,8 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
                         raise ValueError('이번 적재 결과 식별자·상태 불일치')
                     summary_keys = ('run_id', 'status', 'target_date', 'sites', 'mode', 'mysql_connected',
                                     'articles_to_store', 'inserted', 'existing', 'failed', 'unprocessed',
-                                    'stored_articles', 'batch_run', 'error_type', 'close_error_type')
+                                    'stored_articles', 'batch_run', 'error_type', 'close_error_type',
+                                    'include_tags', 'generate_tags', 'tag_generation')
                     result['mysql'] = {**{k: mysql[k] for k in summary_keys if k in mysql},
                                        'returncode': loaded.returncode, 'result_file': str(output.relative_to(root)),
                                        'rejected_count': len(mysql.get('rejected', [])),
@@ -209,11 +259,46 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
                     result['status'] = ('failed' if 'failed' in statuses or loaded.returncode not in (0, 1)
                                         else 'partial' if 'partial' in statuses or loaded.returncode
                                         else 'complete')
+                    if include_vector and mysql['status'] in ('complete', 'partial') and loaded.returncode in (0, 1):
+                        before_vector = result['status']
+                        result.update(status='running', stage='vector')
+                        result['vector'] = {'status':'running', 'sources':list(SOURCE_CODES.values())}
+                        persist(root, result)
+                        vector_output = directory / ('vector_' + run_id + '.json')
+                        vector_args = []
+                        if values.get('NEWS_VECTOR_ROOT'):
+                            vector_args = ['--root', str(absolute_path(values['NEWS_VECTOR_ROOT']))]
+                        indexed = runner([sys.executable, str(Path(__file__).with_name('news_vector.py')),
+                            '--data-dir', str(root), '--target-date', target, '--result-file', str(vector_output),
+                            *vector_args], cwd=ROOT, env=env, stdout=stream, stderr=subprocess.STDOUT,
+                            check=False, timeout=limits['vector'])
+                        vector = json.loads(vector_output.read_text())
+                        if (vector.get('run_id') != run_id or vector.get('target_date') != target
+                                or vector.get('sources') != list(SOURCE_CODES.values())
+                                or vector.get('status') not in ('complete','partial','failed')):
+                            raise ValueError('vector_result_identity_mismatch')
+                        result['vector'] = {**vector, 'returncode':indexed.returncode,
+                                            'result_file':str(vector_output.relative_to(root))}
+                        result['usage']['vector'] = vector.get('usage', {})
+                        result['status'] = before_vector
+                        if indexed.returncode or vector['status'] != 'complete':
+                            result['status'] = 'partial' if result['status'] != 'failed' else 'failed'
                     result['stage'] = 'finished'
             except Exception as exc:
-                result.update(status='failed', error_type=type(exc).__name__)
-                if result['stage'] in ('collection', 'mysql'):
+                result.update(status='partial' if result['stage']=='vector' and result['mysql'].get('status') in ('complete','partial') and result['collection'].get('status') != 'failed' else 'failed', error_type=type(exc).__name__)
+                if result['stage'] in ('collection', 'mysql', 'dictionary', 'vector'):
                     result[result['stage']]['status'] = 'failed'
+                    if result['stage'] == 'vector':
+                        # 강제 종료 전 자식이 확정한 단계·사용량만 보존합니다. 이전 실행 파일은 읽지 않습니다.
+                        try:
+                            partial = json.loads(vector_output.read_text())
+                            if partial.get('run_id') == run_id and partial.get('target_date') == target:
+                                result['vector'].update(partial, status='failed', error_code=type(exc).__name__)
+                                result['usage']['vector'] = partial.get('usage', {})
+                        except (OSError, ValueError):
+                            pass
+                    if isinstance(exc, subprocess.TimeoutExpired):
+                        result[result['stage']].update(reason='timeout', timeout_seconds=exc.timeout)
                 log.error('기사 일일 작업 실패: 단계=%s, 오류=%s', result['stage'], type(exc).__name__)
             finally:
                 result['finished_at'] = datetime.now(KST).isoformat()

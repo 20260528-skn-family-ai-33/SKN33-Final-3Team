@@ -33,5 +33,12 @@ def no_network(monkeypatch, request):
     block_external_io(monkeypatch, url)
 
 
+@pytest.fixture(autouse=True)
+def isolated_article_locks(monkeypatch, tmp_path):
+    # 합성 SQLite 시험은 저장소의 업무용 data/ 아래에 잠금 파일도 남기지 않습니다.
+    from backend.app.db import news_lock
+    monkeypatch.setattr(news_lock, 'LOAD_LOCK_DIR', tmp_path / 'article_load_locks')
+
+
 def pytest_configure(config):
     config.addinivalue_line('markers', 'mysql_integration: 명시 옵션과 로컬 빈 시험 DB가 필요한 회귀 시험')

@@ -1,4 +1,5 @@
 import json,re,sqlite3
+import pytest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,19 +48,27 @@ def test_old_bad_data_does_not_block_current_day(tmp_path):
     r=load_project.execute(args)
     assert r['status']=='plan_only' and r['articles_to_store']==1
 
-def test_views_include_real_sources_and_distinct_country(tmp_path):
+@pytest.mark.parametrize('admin', [False, True])
+def test_views_include_real_sources_and_distinct_country(tmp_path, admin):
     db=engine(tmp_path/'project.sqlite3')
-    sql=(ROOT/'db/mysql/init/01_schema.sql').read_text()
-    views=re.findall(r'CREATE VIEW v_article_.*?;',sql)
-    assert len(views)==2
+    path = 'db/mysql/migrations/20261025_news_source_views.sql' if admin else 'db/mysql/init/01_schema.sql'
+    sql=(ROOT/path).read_text()
+    views=re.findall(r'CREATE(?: OR REPLACE)? VIEW v_article_.*?;',sql)
+    assert len(views)==6
     with db.begin() as c:
-        for v in views:c.execute(text(v))
-        for i,src in enumerate(['KOTRA_MARKET','HANKYUNG','FNNEWS','OTHER'],1):
-            c.execute(text("INSERT INTO article VALUES (:id,:src,:ext,'test','2026-10-21','https://example.test','clean',NULL)"),dict(id=i,src=src,ext=str(i)))
-        for i in (1,2,2,4):c.execute(text("INSERT INTO article_tag (article_id,country_code) VALUES (:id,'KR')"),dict(id=i))
-        assert c.execute(text('SELECT article_count FROM v_article_day')).scalar()==3
-        assert c.execute(text('SELECT article_count FROM v_article_country_day')).scalar()==2
-        assert set(c.execute(text('SELECT source_code FROM article')).scalars())=={'KOTRA_MARKET','HANKYUNG','FNNEWS','OTHER'}
+        c.execute(text("INSERT INTO service_option VALUES ('KOTRA_SHORT_NEWS','SOURCE',1)"))
+        if admin:
+            c.execute(text("ALTER TABLE article ADD COLUMN visibility_status TEXT NOT NULL DEFAULT 'VISIBLE'"))
+        for v in views:c.execute(text(v.replace('CREATE OR REPLACE VIEW', 'CREATE VIEW')))
+        for i,src in enumerate(['KOTRA_MARKET','HANKYUNG','FNNEWS','KOTRA_SHORT_NEWS','OTHER'],1):
+            c.execute(text("INSERT INTO article(article_id,source_code,external_id,title,published_date,source_url,body_masked,category) VALUES (:id,:src,:ext,'test','2026-10-21','https://example.test','clean',NULL)"),dict(id=i,src=src,ext=str(i)))
+        for i in (1,2,2,4,5):c.execute(text("INSERT INTO article_tag (article_id,country_code) VALUES (:id,'KR')"),dict(id=i))
+        if admin:
+            c.execute(text("INSERT INTO article VALUES (6,'KOTRA_SHORT_NEWS','hidden','test','2026-10-21','https://example.test','clean',NULL,'HIDDEN')"))
+            c.execute(text("INSERT INTO article_tag (article_id,country_code) VALUES (6,'KR')"))
+        assert c.execute(text('SELECT article_count FROM v_article_day')).scalar()==1
+        assert c.execute(text('SELECT article_count FROM v_article_country_day')).scalar()==1
+        assert set(c.execute(text('SELECT source_code FROM article')).scalars())=={'KOTRA_MARKET','HANKYUNG','FNNEWS','KOTRA_SHORT_NEWS','OTHER'}
     db.dispose()
 
 def test_seed_mapping_migration_and_scheduler_registration():
@@ -69,9 +78,8 @@ def test_seed_mapping_migration_and_scheduler_registration():
     migration=(ROOT/'db/mysql/migrations/20261022_trade_news_sources.sql').read_text()
     for code in mapping.values():
         assert f"('{code}', 'SOURCE'" in seed and f"('{code}', 'SOURCE'" in migration
-    schema=(ROOT/'db/mysql/init/01_schema.sql').read_text()
-    for v in re.findall(r'CREATE VIEW v_article_.*?;',schema):assert v.replace('CREATE VIEW','CREATE OR REPLACE VIEW') in migration
-    assert 'trade_news_daily.register_jobs(scheduler)' in (ROOT/'backend/app/scheduler/main.py').read_text()
+    # 집계 뷰는 이후 관리자 마이그레이션으로 확장됩니다. 위 행동 시험에서 초기/최종 정의를 각각 검증합니다.
+    assert 'trade_news_daily.register_jobs(scheduler, env_path=env_path)' in (ROOT/'backend/app/scheduler/main.py').read_text()
     assert '/backend/app/scheduler/collectors/trade_news/data/' in (ROOT/'.gitignore').read_text()
 
 

@@ -7,6 +7,11 @@ import time
 from pathlib import Path
 
 ROOT = Path(os.environ["OFFLINE_DIR"])
+os.chdir(ROOT)  # Chroma 등 SDK의 기본 .env 탐색도 시험 디렉터리로 제한합니다.
+
+# 별도 시험 자식도 업무용 data/news/load_locks를 사용하지 않습니다.
+from backend.app.db import news_lock
+news_lock.LOAD_LOCK_DIR = ROOT / 'article_load_locks'
 
 def deny(*args, **kwargs):
     with (ROOT / "network_attempts.log").open("a") as f:
@@ -116,11 +121,14 @@ if __name__ == "__main__":
         SavePipeline.process_item = fail_save
     # 강제 종료 시험은 별도 시험 프로세스만 종료합니다. 실제 DB·네트워크를 사용하지 않습니다.
     mode = os.environ.get('OFFLINE_FAULT_MODE')
-    if mode == 'after_article_commit':
+    if mode in ('after_article_commit', 'pause_after_article_commit'):
         from news.mysql_store import MySQLArticleStore
         original_article_save = MySQLArticleStore.save
         def crash_after_article_commit(self, *args, **kwargs):
             original_article_save(self, *args, **kwargs)
+            if mode == 'pause_after_article_commit':
+                (ROOT / 'article_committed').touch()
+                time.sleep(60)
             os._exit(77)
         MySQLArticleStore.save = crash_after_article_commit
     elif mode == 'after_db_commit':
@@ -182,6 +190,27 @@ if __name__ == "__main__":
         # 운영과 같이 수집기는 현재 시험 프로세스에서 직접 실행됩니다.
         import daily_collect
         runpy.run_path(daily_collect.__file__, run_name='__main__')
+    elif entry == 'news_vector':
+        from backend.app.scheduler.jobs import news_vector, news_embed, rag_index
+        from backend.app.services.rag.vocabulary import Vocabulary
+        from backend.app.services.news_keywords.keyword_clean import Categories
+        news_embed.make_engine = lambda url=None: history.make_history_engine()
+        rag_index.Vocabulary.load = lambda: Vocabulary(categories=Categories(rules=False))
+        def fake_embed(texts):
+            return [[1.0]+[0.0]*3071 for _ in texts]
+        original_index = news_embed.run_sources
+        def isolated(sources, **options):
+            options['root'] = ROOT / 'vectors'
+            options['db_url'] = 'isolated'
+            options['embed'] = fake_embed
+            if os.environ.get('OFFLINE_VECTOR_FAULT') == 'pause':
+                (ROOT/'vector_started').touch()
+                time.sleep(60)
+            if os.environ.get('OFFLINE_VECTOR_FAULT') == 'exit124':
+                raise SystemExit(124)
+            return original_index(sources, **options)
+        news_embed.run_sources = isolated
+        raise SystemExit(news_vector.main())
     elif entry == 'load_project':
         # 실제 적재 CLI에도 시험용 SQLite만 주입합니다.
         import load_project

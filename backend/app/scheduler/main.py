@@ -168,7 +168,7 @@ def un_resume_job(state_dir=UN_STATE,scope_path=UN_SCOPE,api_env=UN_ENV):
 
 
 # 기존 HS 작업에 UN 시작 점검과 매월 1일 03:00 KST 작업을 함께 등록합니다.
-def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV):
+def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV, *, env_path=ROOT / ".env"):
     scheduler = BlockingScheduler(timezone=KST)
     # misfire_grace_time: 00:15에 잠깐 멈춰 있어도 6시간 안에 켜지면 실행
     scheduler.add_job(hs_refresh_job, HS_REFRESH_TRIGGER, args=[scheduler], id="hs_code_refresh",
@@ -197,7 +197,7 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV)
     scheduler.add_job(fx_daily_load.run, "date", run_date=datetime.now(KST) + timedelta(seconds=30),
                       id="fx_daily_startup", replace_existing=True)
     from backend.app.scheduler.jobs import trade_news_daily
-    trade_news_daily.register_jobs(scheduler)
+    trade_news_daily.register_jobs(scheduler, env_path=env_path)
     return scheduler
 
 

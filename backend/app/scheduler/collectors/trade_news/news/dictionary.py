@@ -6,8 +6,8 @@ from pathlib import Path
 
 
 def validate_dictionary(data):
-    if not isinstance(data, dict) or set(data) - {'countries', 'products'}:
-        raise ValueError('태그 사전은 countries/products 배열을 갖는 객체여야 합니다')
+    if not isinstance(data, dict) or set(data) - {'countries', 'products', 'keywords'}:
+        raise ValueError('태그 사전은 countries/products/keywords 배열을 갖는 객체여야 합니다')
     for kind in ('countries', 'products'):
         rows = data.get(kind, [])
         if not isinstance(rows, list):
@@ -45,6 +45,18 @@ def validate_dictionary(data):
             if identity in seen:
                 raise ValueError(f'{label}: 중복 코드 행')
             seen.add(identity)
+    keywords = data.get('keywords', [])
+    if not isinstance(keywords, list):
+        raise ValueError('keywords: 배열이 필요합니다')
+    seen = set()
+    for row in keywords:
+        if not isinstance(row, dict) or set(row) != {'term', 'canonical'}:
+            raise ValueError('keywords: term/canonical 필요')
+        if any(not isinstance(v, str) or not v.strip() or v != v.strip() or len(v) > 120 for v in row.values()):
+            raise ValueError('keywords: 유효한 대표어·별칭 필요')
+        if row['term'] in seen:
+            raise ValueError('keywords: 중복 표현')
+        seen.add(row['term'])
     return data
 
 

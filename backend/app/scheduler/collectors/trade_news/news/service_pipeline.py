@@ -25,7 +25,7 @@ class ServicePreparationPipeline:
 
     def process_item(self, item, spider):
         raw = {k: v for k, v in item.items() if not k.startswith('_')}
-        prepared = prepare_article(raw, self.dictionary.get('countries', []), self.dictionary.get('products', []))
+        prepared = prepare_article(raw, self.dictionary.get('countries', []), self.dictionary.get('products', []), self.dictionary.get('keywords', []))
         self.store.save(raw, prepared)
         if not prepared['eligible']:
             original = item.get('_queue_url', item['source_url'])

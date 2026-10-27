@@ -95,9 +95,10 @@ class BatchHistory:
     def _write_rows(self, record):
         from sqlalchemy import MetaData, Table, select
         from backend.app.db.session import session_scope
+        from backend.app.db.news_lock import article_load_lock
         from backend.app.models.batch import ServiceOption
         run_ids = {}
-        with session_scope(self.engine) as session:
+        with article_load_lock(self.engine), session_scope(self.engine) as session:
             batch = Table('batch_run', MetaData(), autoload_with=session.connection(), resolve_fks=False)
             for row in record['sources'].values():
                 option = session.get(ServiceOption, row['source_code'])

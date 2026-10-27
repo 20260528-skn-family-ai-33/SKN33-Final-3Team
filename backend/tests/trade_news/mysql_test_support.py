@@ -121,7 +121,8 @@ def empty_schema(url, statements):
                     for statement in statements:
                         conn.exec_driver_sql(statement)
                         match = re.match(r'CREATE(?: OR REPLACE)? (TABLE|VIEW) (\w+)\b', statement, re.I)
-                        if match:
+                        if match and match.groups() not in created:
+                            # CREATE OR REPLACE로 다시 정의한 객체도 정리할 때 한 번만 삭제합니다.
                             created.append(match.groups())
                 yield engine
             finally:

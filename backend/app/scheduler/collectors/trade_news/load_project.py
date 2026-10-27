@@ -31,12 +31,15 @@ def execute(args, engine_factory=None):
     result = {'run_id': os.environ.get('TRADE_NEWS_RUN_ID'), 'mode': 'applied' if args.apply else 'plan_only', 'status': 'running',
               'target_date': args.target_date.isoformat() if args.target_date else None,
               'sites': args.sites, 'mysql_connected': False, 'include_tags': args.include_tags,
+              'generate_tags': getattr(args, 'generate_tags', False),
               'articles_to_store': 0, 'inserted': 0, 'existing': 0, 'failed': 0,
               'unprocessed': 0, 'rejected': [], 'unscoped_errors': [], 'article_results': []}
     source = prepared = connection = engine = None
     lock = batch = None
     try:
         atomic_result(args.result_file, result)
+        if result['generate_tags'] and not args.include_tags:
+            raise ValueError('--generate-tags는 --include-tags와 함께 사용해야 합니다')
         mapping = json.loads(args.source_map.read_text(encoding='utf-8'))
         if (not isinstance(mapping, dict) or not mapping
                 or any(not isinstance(v, str) or not v.strip() or len(v)>40 for v in mapping.values())):
@@ -80,10 +83,17 @@ def execute(args, engine_factory=None):
             engine = (engine_factory or make_project_engine)()
             connection = engine.connect()
             result['mysql_connected'] = True
+            dictionary = None
+            if result['generate_tags']:
+                from news.project_tags import read_project_dictionary, dictionary_summary, tag_for_load
+                dictionary = read_project_dictionary(connection)
+                result['tag_generation'] = dictionary_summary(dictionary)
             loader = MySQLArticleStore(connection, mapping, include_tags=args.include_tags)
             for article in articles:
                 identity = {k: article[k] for k in ('source_code','external_id','source_url')}
                 try:
+                    if dictionary is not None:
+                        article = tag_for_load(article, dictionary)
                     outcome = loader.save(article, return_result=True)
                 except Exception as exc:
                     result['failed'] += 1
@@ -93,7 +103,11 @@ def execute(args, engine_factory=None):
                     raise
                 result[outcome['status']] += 1
                 result['unprocessed'] -= 1
-                result['article_results'].append({**identity, **outcome})
+                detail = {**identity, **outcome}
+                if dictionary is not None:
+                    # 생성 근거는 적재 실행 결과에 남깁니다. 저장된 원문·기존 prepared 결과는 바꾸지 않습니다.
+                    detail['generated_tagging'] = article['tagging']
+                result['article_results'].append(detail)
                 atomic_result(args.result_file, result)
             result['status'] = 'partial' if result['rejected'] or result['unscoped_errors'] else 'complete'
     except Exception as exc:
@@ -134,10 +148,28 @@ def main(argv=None):
     parser.add_argument('--sites', nargs='+', help='적재할 크롤러 출처 코드')
     parser.add_argument('--result-file', type=Path, help='이번 적재 결과 JSON')
     parser.add_argument('--include-tags', action='store_true')
+    parser.add_argument('--generate-tags', action='store_true',
+                        help='--apply --include-tags에서 적재 DB 국가·HS 사전으로 태그 생성. 계획 조회는 DB 연결 없음')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--record-batch-run', action='store_true', help='--apply 실행 이력을 공통 DB에 기록. 계획 조회는 DB 연결 없음')
+    parser.add_argument('--export-tag-dictionary', type=Path, help='DB 사전을 읽어 수집용 JSON으로 내보냄; 기사 적재 없음')
     args = parser.parse_args(argv)
-    result = execute(args)
+    if args.export_tag_dictionary:
+        if not args.apply:
+            parser.error('--export-tag-dictionary requires --apply (read-only DB export)')
+        from news.project_tags import read_project_dictionary, dictionary_summary
+        with FileLock(str(args.data_dir / 'crawler.lock')):
+            require_current_job(args.data_dir, 'dictionary')
+            engine = make_project_engine()
+            try:
+                with engine.connect() as connection:
+                    dictionary = read_project_dictionary(connection)
+                atomic_json(args.export_tag_dictionary, dictionary)
+                result = {'status':'complete', **dictionary_summary(dictionary)}
+            finally:
+                engine.dispose()
+    else:
+        result = execute(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result['status'] in ('plan_only','complete') else 1
 

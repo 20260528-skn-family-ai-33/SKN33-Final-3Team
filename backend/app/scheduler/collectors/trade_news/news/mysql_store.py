@@ -40,7 +40,8 @@ class MySQLArticleStore:
             raise ValueError('이미 트랜잭션이 진행 중인 연결은 사용할 수 없습니다')
         # 메타데이터 SELECT보다 먼저 시작합니다. 조회의 autobegin과 중복 시작하지 않습니다.
         # 예외가 발생하면 정보 조회/INSERT/태그 전체가 이 문맥에서 rollback됩니다.
-        with self.db.begin():
+        from backend.app.db.news_lock import article_load_lock
+        with article_load_lock(self.db.engine), self.db.begin():
             from backend.app.services.news_schema import reflect, article_insert_rows
             require_tables(self.db,self.include_tags)
             # 실제 컬럼을 읽어 구형 ERD와 관리자 ERD를 함께 지원합니다. DDL은 실행하지 않습니다.

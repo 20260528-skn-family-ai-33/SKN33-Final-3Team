@@ -62,10 +62,18 @@ def test_common_scheduler_wires_paused_job_without_invoking_jobs(local, monkeypa
         setattr(module, attribute, Mock(side_effect=AssertionError('외부 서비스 사용 금지')))
         monkeypatch.setitem(sys.modules, name, module)
     from backend.app.scheduler import main
+    # 다른 등록 함수도 실제 .env 대신 같은 시험 설정만 읽게 합니다.
+    from dotenv.main import DotEnv
+    read_config = DotEnv.dict
+    def isolated_config(config):
+        if str(config.dotenv_path) == str(ROOT / '.env'):
+            config = DotEnv(local.env)
+        return read_config(config)
+    monkeypatch.setattr(DotEnv, 'dict', isolated_config)
     monkeypatch.setattr(job, 'settings', lambda _: {'NEWS_DAILY_ENABLED': 'false'})
-    scheduler = main.build_scheduler(local.tmp / 'un', local.tmp / 'scope', local.env)
+    scheduler = main.build_scheduler(local.tmp / 'un', local.tmp / 'scope', local.env, env_path=local.env)
     scheduled = scheduler.get_job(job.JOB_ID)
-    assert scheduled.func is job.run and scheduled.next_run_time is None
+    assert scheduled.func is job.run_with_rag and scheduled.next_run_time is None
     assert len(scheduler.get_jobs()) == 11
     assert not any(j.id == 'trade_news_startup' for j in scheduler.get_jobs())
 
@@ -92,20 +100,22 @@ def fixtures(local, body_status=200, empty=False):
     (local.tmp / 'responses.json').write_text(json.dumps(spec))
 
 
-def offline_runner(local, calls, fault=None):
+def offline_runner(local, calls, fault=None, bounded=False):
     def run(command, **options):
         calls.append(command)
+        timeout = min(options.pop('timeout', 40), 40)
         entry = Path(command[1]).stem
         env = {**options.pop('env'), 'OFFLINE_DIR': str(local.tmp), 'OFFLINE_ENTRYPOINT': entry,
                'OFFLINE_BATCH_DB': str(local.tmp / 'project.sqlite3'), 'OFFLINE_VIRTUAL_CLOCK': '1',
                'OFFLINE_RUN_AT': NOW.isoformat(), 'PYTHONDONTWRITEBYTECODE': '1',
                'PYTHONPATH': os.pathsep.join([str(ROOT), str(TESTS), str(COLLECTOR), os.environ.get('PYTHONPATH', '')])}
         env.pop('OFFLINE_FAULT_MODE', None)
-        fault_entry = 'load_project' if fault == 'after_article_commit' else 'daily_collect'
+        fault_entry = 'load_project' if fault in ('after_article_commit', 'pause_after_article_commit') else 'daily_collect'
         if fault and entry == fault_entry:
             env['OFFLINE_FAULT_MODE'] = fault
-        return subprocess.run([command[0], str(TESTS / 'offline_runner.py'), *command[2:]],
-                              env=env, timeout=40, **options)
+        execute = job.run_bounded if bounded else subprocess.run
+        return execute([command[0], str(TESTS / 'offline_runner.py'), *command[2:]],
+                       env=env, timeout=timeout, **options)
     return run
 
 
@@ -138,7 +148,7 @@ def test_full_chain_same_date_source_clean_body_history_and_repeat(local):
         schema = (ROOT/'db/mysql/init/01_schema.sql').read_text()
         import re
         for view in re.findall(r'CREATE VIEW v_article_.*?;',schema):c.execute(text(view))
-        assert c.execute(text('SELECT article_count FROM v_article_day')).scalar() == 2
+        assert c.execute(text('SELECT SUM(article_count) FROM v_article_source_day')).scalar() == 2
     assert len(rows(local.db)) == 8 and all(r['status']=='SUCCESS' for r in rows(local.db))
     downloads = [json.loads(line)['url'] for line in (local.tmp/'downloads.jsonl').read_text().splitlines()]
     assert sum('/article/' in url or '/news/2026' in url for url in downloads) == 2

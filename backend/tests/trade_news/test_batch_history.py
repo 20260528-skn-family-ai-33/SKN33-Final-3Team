@@ -36,6 +36,12 @@ def database(path):
     with engine.begin() as connection:
         for sql in DDL[1:]:
             connection.execute(text(sql))
+        connection.execute(text('CREATE TABLE country (country_code TEXT PRIMARY KEY,name_ko TEXT NOT NULL,country_role TEXT NOT NULL)'))
+        connection.execute(text("INSERT INTO country VALUES ('KR','한국','COUNTRY'),('US','미국','COUNTRY')"))
+        connection.execute(text('CREATE TABLE hs_code (hs_code TEXT,hs_ver TEXT,name_ko TEXT NOT NULL,PRIMARY KEY(hs_code,hs_ver))'))
+        connection.execute(text("INSERT INTO hs_code VALUES ('854200','HS2022','시험용 반도체')"))
+        connection.execute(text('CREATE TABLE keyword_topic(keyword_text TEXT PRIMARY KEY,status TEXT,canonical_text TEXT)'))
+        connection.execute(text("INSERT INTO keyword_topic VALUES ('수출','UNCLASSIFIED',NULL),('무역협정','CLASSIFIED',NULL),('자유무역협정','SYNONYM','무역협정'),('농업','CLASSIFIED',NULL),('농산물','SYNONYM','농업')"))
     return engine
 
 

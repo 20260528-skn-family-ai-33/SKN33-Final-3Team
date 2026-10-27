@@ -27,8 +27,10 @@ pytestmark = pytest.mark.mysql_integration
 def local_db(mysql_test_url, tmp_path, monkeypatch):
     schema = Path(__file__).with_name('fixtures') / 'mysql_admin_schema.sql'
     migration = ROOT / 'db/mysql/migrations/20261022_trade_news_sources.sql'
+    final_views = ROOT / 'db/mysql/migrations/20261025_news_source_views.sql'
     statements = [*sql_statements(schema.read_text(encoding='utf-8')),
-                  *sql_statements(migration.read_text(encoding='utf-8'))]
+                  *sql_statements(migration.read_text(encoding='utf-8')),
+                  *sql_statements(final_views.read_text(encoding='utf-8'))]
     with empty_schema(mysql_test_url, statements) as db:
         with db.begin() as conn:
             for country in ('KR', 'US'):
@@ -92,7 +94,10 @@ def test_load_project_report_views_and_repeat(local_db):
     second = load_project.execute(args, lambda:local_db.db)
     assert second['existing']==2 and second['inserted']==0 and not second['batch_run']['sync_pending'], second
     with local_db.db.connect() as conn:
-        assert conn.execute(text('SELECT article_count FROM v_article_day')).scalar_one()==2
+        # 합성 두 기사는 HANKYUNG입니다. 시장뉴스·KOTRA 통합 화면에는 포함하지 않습니다.
+        assert conn.execute(text('SELECT COALESCE(SUM(article_count),0) FROM v_article_day')).scalar_one()==0
+        assert conn.execute(text('SELECT COALESCE(SUM(article_count),0) FROM v_article_integrated_day')).scalar_one()==0
+        assert conn.execute(text('SELECT source_code,article_count FROM v_article_source_day')).all()==[('HANKYUNG',2)]
         assert conn.execute(text('SELECT COUNT(*) FROM article')).scalar_one()==2
     assert [r['status'] for r in rows(local_db.db)] == ['SUCCESS','SUCCESS']
     assert source_bytes=={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in args.data_dir.glob('*.sqlite3')}

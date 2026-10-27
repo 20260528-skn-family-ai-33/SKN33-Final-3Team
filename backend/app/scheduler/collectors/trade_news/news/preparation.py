@@ -8,13 +8,15 @@ from news.tagging import extract_tags
 from news.dictionary import dictionary_fingerprint
 
 
-def prepare_article(article, countries=(), products=()):
+def prepare_article(article, countries=(), products=(), keywords=()):
     validate_article(article)
     cleaned = clean_body(article['body'])
     body_quality = quality(article['title'], cleaned)
     focus = assess_focus(article, cleaned['body_masked'])
-    tags = extract_tags(article['title'], cleaned['body_masked'], countries, products)
-    tags['dictionary_sha256'] = dictionary_fingerprint({'countries':list(countries), 'products':list(products)})
+    from backend.app.services.news_keywords.rule_data import GEO_DICT
+    tags = extract_tags(article['title'], cleaned['body_masked'], countries, products, country_rules=GEO_DICT,
+                        keywords=keywords, published_date=publication_date(article['published_at']))
+    tags['dictionary_sha256'] = dictionary_fingerprint({'countries':list(countries), 'products':list(products), 'keywords':list(keywords)})
     # 품질 문제와 주제 제외는 별도 이유로 기록합니다. 원문 삭제 사유로 사용하지 않습니다.
     eligible = body_quality['usable_body'] and focus['accepted']
     return {'source_code': article['source_code'], 'external_id': article['source_article_id'],
