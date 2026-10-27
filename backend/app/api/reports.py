@@ -6,7 +6,7 @@ from sqlalchemy import select, update, delete
 from backend.app.api.common import require, unavailable, now, digest, period, percentage, clean, page_info, shift_month, month_end
 from backend.app.api import trade, news, jobs
 from backend.app.api.accounts import interests, validate_scope
-from backend.app.api.results import read_snapshot, save_snapshot, result_table
+from backend.app.api.results import read_snapshot, save_snapshot, result_table, analysis_conditions
 from backend.app.api.files import report_pdf, report_docx
 
 TITLES=json.loads((Path(__file__).resolve().parents[1]/'templates/reports/layout.json').read_text(encoding='utf-8'))['sections']
@@ -18,11 +18,41 @@ def display_title(record):
     return f"{labels.get(record['report_type'],record['report_type'])} 리포트 · {p.get('start','')} ~ {p.get('end','')}"
 
 
+def resolve_comparison(conditions, adjustments):
+    """Validate comparison semantics against the final, month-aligned analysis period."""
+    mode=conditions['compare']; supplied=conditions['compare_period']; p=conditions['period']
+    if mode=='NONE':
+        require(supplied is None,'비교 없음에는 비교 기간을 지정할 수 없습니다.')
+        return None
+    if supplied:
+        aligned=period(date.fromisoformat(supplied['start']).replace(day=1),date.fromisoformat(supplied['end']))
+        if aligned!=supplied: adjustments.append('비교 기간을 월초·월말로 조정')
+        supplied=aligned
+    if mode=='CUSTOM':
+        require(supplied is not None,'사용자 지정 비교에는 compare_period가 필요합니다.')
+        require(supplied['end']<p['start'],'사용자 지정 비교 기간은 분석 기간보다 앞서야 합니다.')
+        return supplied
+    start,end=date.fromisoformat(p['start']),date.fromisoformat(p['end'])
+    if mode=='MOM':
+        require(start.replace(day=1)==end.replace(day=1),
+                '전월 비교는 한 달을 선택하세요. 여러 달 비교는 사용자 지정 비교를 사용하세요.',
+                'UNSUPPORTED_COMPARISON',422)
+    offset=-1 if mode=='MOM' else -12
+    expected=period(shift_month(start,offset),shift_month(end,offset))
+    # A long YOY_PERIOD may overlap the analysis period; it is still shifted by one year.
+    require(supplied is None or supplied==expected,
+            '비교 기간이 전월·전년 기준과 일치하지 않습니다. 다른 기간은 CUSTOM으로 지정하세요.')
+    return expected
+
+
 def preview(store,uid,data):
     require(bool(data.get('conditions')) != bool(data.get('result_id')),'conditions와 result_id 중 하나만 지정하세요.')
     require(not data.get('period_preset'),'기간 프리셋 입력 예외 계약 DEC-28 확정이 필요합니다.','FEATURE_NOT_READY',503)
     if data.get('result_id'):
-        conditions=read_snapshot(store,uid,data['result_id'],'RESULT')['conditions']
+        conditions=analysis_conditions(read_snapshot(store,uid,data['result_id'],'RESULT')['conditions'])
+        require(conditions.get('trade_flow')!='BOTH',
+                '리포트는 수출 분석만 지원합니다. 수출만 선택해 다시 조회한 결과를 사용하세요.',
+                'UNSUPPORTED_TRADE_FLOW',422)
     else:
         conditions=data.get('conditions',{})
     require(bool(conditions),'분석 조건 또는 result_id가 필요합니다.')
@@ -36,13 +66,12 @@ def preview(store,uid,data):
         p['start']=date.fromisoformat(p['start']).replace(day=1).isoformat()
         p['end']=month_end(date.fromisoformat(p['end'])).isoformat()
         adjustments.append('월별 통계 기준으로 시작일·종료일을 월초·월말로 조정')
-    if date.fromisoformat(p['end'])>month_end(latest): p['end']=month_end(latest).isoformat()
+    if date.fromisoformat(p['end'])>month_end(latest):
+        p['end']=month_end(latest).isoformat()
+        adjustments.append('종료일을 최신 공개 월의 말일로 조정')
     require(p['start']<=p['end'],'현재 공개 데이터 범위로 조정할 수 없습니다.','PERIOD_NOT_AVAILABLE',422)
     trade.resolve_period(store,p['start'][:7],p['end'][:7])
-    if not conditions['compare_period']:
-        s=shift_month(date.fromisoformat(p['start']),-12); e=shift_month(date.fromisoformat(p['end']),-12)
-        conditions['compare_period']=period(s,e)
-    require(conditions['compare_period']['end']<p['start'],'비교 기간은 분석 기간보다 앞서야 합니다.')
+    conditions['compare_period']=resolve_comparison(conditions,adjustments)
     conditions['applied_defaults']=adjustments; conditions['expanded_regions']=[]
     identity=save_snapshot(store,uid,'PREVIEW',{'conditions':conditions},600)
     return {'preview_id':identity,'conditions':conditions,'needs_confirmation':True,
@@ -127,29 +156,36 @@ def build_document(store,uid,record):
         start,end=trade.resolve_period(store,p['start'][:7],p['end'][:7])
         meta=trade.metadata(store,start,end)
         rows=trade.aggregate(store,'export_summary',start,end,hs,countries)
-        if not rows: unavailable('리포트 조건에 맞는 수출 통계가 없습니다.')
+        # resolve_period가 검증한 월의 누락 거래는 미수집이 아니라 0이다.
         total=sum(r['amount_usd'] for r in rows)
-        prev=c.get('compare_period'); old=None
+        comparison=c.get('compare','YOY_PERIOD')
+        prev=c.get('compare_period') if comparison!='NONE' else None; old=None
         if prev:
             try:
                 old_s,old_e=trade.resolve_period(store,prev['start'][:7],prev['end'][:7])
                 previous=trade.aggregate(store,'export_summary',old_s,old_e,hs,countries)
-                if previous: old=sum(r['amount_usd'] for r in previous)
+                old=sum(r['amount_usd'] for r in previous)
             except Exception as exc:
                 from backend.app.api.common import ApiError
                 if not isinstance(exc,ApiError) or exc.code not in ('DATA_NOT_READY','PERIOD_NOT_AVAILABLE'): raise
                 meta['warnings'].append('비교 기간 데이터 미준비: 증감률은 null')
                 meta['freshness']='STALE'
         growth=percentage(total,old); count=sum(r['amount_usd']>0 for r in rows)
-        kpi={'amount_usd':total,'mom_pct':None,'yoy_pct':growth,'export_country_count':count,
+        kpi={'amount_usd':total,'mom_pct':growth if comparison=='MOM' else None,
+             'yoy_pct':growth if comparison in ('YOY','YOY_PERIOD') else None,'export_country_count':count,
              'top_country_share_pct':max(r['amount_usd'] for r in rows)*100/total if total else None}
         text=f'분석 기간 수출액은 {total:,.2f} USD입니다. 수출 실적이 있는 국가는 {count}개국입니다. '
-        text+=f'이전 비교 기간 대비 증감률은 {growth:,.2f}%입니다.' if growth is not None else '이전 비교 기간 증감률은 계산할 수 없습니다.'
+        if comparison!='NONE':
+            text+=f'이전 비교 기간 대비 증감률은 {growth:,.2f}%입니다.' if growth is not None else '이전 비교 기간 증감률은 계산할 수 없습니다.'
         sections=[section('SUMMARY',text)]
         selected=c.get('sections',list(TITLES)[1:5])
         if 'KPI' in selected:
             table=result_table(store,uid,[kpi],meta,c,store.queries)
-            monthly=[{'month':r['trade_month'].strftime('%Y-%m'),'amount_usd':r['amount_usd']} for r in trade.aggregate(store,'export_summary',start,end,hs,countries,'MONTH')]
+            observed={r['trade_month']:r['amount_usd'] for r in trade.aggregate(store,'export_summary',start,end,hs,countries,'MONTH')}
+            monthly=[]; cursor=start
+            while cursor<=end:
+                monthly.append({'month':cursor.strftime('%Y-%m'),'amount_usd':observed.get(cursor,0)})
+                cursor=shift_month(cursor,1)
             trend=result_table(store,uid,monthly,meta,c,store.queries)
             block=section('KPI',text,[table,trend],kpi=clean(kpi))
             block['charts']=[{'chart_type':'LINE','result_id':trend['result_id'],'x_key':'month','series_keys':['amount_usd'],'title':'월별 수출 추이 (USD)','positive_color':'#16A34A','negative_color':'#DC2626'}]
@@ -223,7 +259,7 @@ def save_subscriptions(store,uid,data):
     o=store.t('service_option')
     allowed=set(store.c.execute(select(o.c.option_code).where(o.c.option_type=='REPORT_PERIOD',o.c.enabled==True)).scalars())
     require(selected<=allowed,'비활성 또는 미등록 구독 주기입니다.','FEATURE_NOT_AVAILABLE',422)
-    scope=interests(store,uid) if data.get('use_saved_interests',True) else data
+    scope=interests(store,uid)
     hs=scope.get('hs_items',[]); countries=scope.get('country_codes',[]); validate_scope(store,hs,countries,6)
     require(hs or countries,'구독하려면 관심 등록이 필요합니다.','INTERESTS_REQUIRED',409)
     try: last_month=trade.bounds(store)[-1].strftime('%Y-%m')

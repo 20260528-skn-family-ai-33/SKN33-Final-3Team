@@ -27,12 +27,19 @@ def read_snapshot(store, uid, identity, kind=None):
     return row['payload_json']
 
 
+def analysis_conditions(conditions):
+    """Keep public analysis fields separate from report/execution metadata in stored results."""
+    from backend.app.api.schemas import Conditions
+    require(isinstance(conditions,dict),'저장된 분석 조건 형식을 확인하세요.')
+    return {key:value for key,value in conditions.items() if key in Conditions.model_fields}
+
+
 def result_table(store, uid, rows, meta, conditions=None, sql=None, columns=None):
     rows=clean(rows)
     keys=list(rows[0]) if rows else []
     columns=columns or [{'key':k,'label':LABELS.get(k,k),'type':'number' if isinstance(rows[0][k],(int,float)) or k.endswith(('_usd','_pct')) else 'string',
                         'unit':'USD' if k.endswith('_usd') else '%' if k.endswith('_pct') else None} for k in keys]
-    payload={'columns':columns,'rows':rows,'meta':clean(meta),'conditions':clean(conditions or {}),'sql':sql or [],'total_rows':len(rows)}
+    payload={'columns':columns,'rows':rows,'meta':clean(meta),'conditions':clean(analysis_conditions(conditions or {})),'sql':sql or [],'total_rows':len(rows)}
     identity=save_snapshot(store,uid,'RESULT',payload)
     return {'result_id':identity,'columns':columns,'rows':rows,'total_rows':len(rows),
             'page':page_info(1,max(1,len(rows)),len(rows)),'meta':meta}
