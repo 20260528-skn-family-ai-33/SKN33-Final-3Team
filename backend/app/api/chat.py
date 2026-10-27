@@ -81,24 +81,77 @@ def clarification(store,uid,identity,data):
     return {'job':view_job(jobs.requeue_chat(store,row,conditions))}
 
 
+def country_mentions(question, countries):
+    used=set(); found=set()
+    for row in sorted(countries,key=lambda r:len(r['name_ko']),reverse=True):
+        for match in re.finditer(re.escape(row['name_ko']),question):
+            span=set(range(*match.span()))
+            if not used.intersection(span):
+                found.add(row['country_code']); used.update(span)
+    # 두 글자 업종/기술 약어는 국가로 추정하지 않는다. 명시적 '국가코드 IT'는 허용.
+    ambiguous={'AI','IT','IN','IS','AS','AT','BE','BY','DO','NO','SO','TO','AM','ID'}
+    for row in countries:
+        code=row['country_code']
+        pattern=(r'(?:국가\s*코드|country\s*code)\s*[:=]?\s*'+re.escape(code)+r'(?![A-Za-z])'
+                 if code in ambiguous else r'(?<![A-Za-z])'+re.escape(code)+r'(?![A-Za-z])')
+        if re.search(pattern,question): found.add(code)
+    return sorted(found)
+
+
+def hs_mentions(question):
+    codes=[]
+    # 천 단위 금액/소수 전체를 제외하되 '1901,2100' 같은 코드 목록은 허용한다.
+    numbers=list(re.finditer(r'(?<!\d)\d{1,3}(?:,\d{3})+(?:\.\d+)?(?!\d)|(?<!\d)\d+\.\d+(?!\d)',question))
+    unit=(r'\s*(?:[십백천만억조]*(?:달러|원|엔|유로|USD|KRW)|[십백천만억조]+|년도|년|월|일|대|개국|개|건|명|톤|kg|%)'
+          r'(?:부터|까지|보다|으로|당|의|을|를|에|은|는|이|가|로)?(?![가-힣A-Za-z])')
+    for match in re.finditer(r'(?<!\d)(\d{6}|\d{4})(?!\d)',question):
+        if any(number.start()<match.end() and match.start()<number.end() for number in numbers): continue
+        suffix=question[match.end():]
+        if re.match(unit,suffix,re.I): continue
+        if re.match(r'[-/]\d{1,2}(?!\d)',suffix): continue  # ISO 연월의 연도
+        if question[:match.start()].rstrip().endswith(('$','₩','€','¥')): continue
+        codes.append(match[1])
+    return sorted(set(codes))
+
+
+def question_period(question, previous):
+    # 월은 명시적으로 적어야 하며 ISO 연월은 별도 문법으로 처리한다.
+    matches=list(re.finditer(r'(?<!\d)(20\d{2})년\s*(1[0-2]|0?[1-9])\s*월',question))
+    matches+=list(re.finditer(r'(?<!\d)(20\d{2})[./-](1[0-2]|0?[1-9])(?!\d)',question))
+    matches.sort(key=lambda m:m.start())
+    if matches:
+        starts=[date(int(m[1]),int(m[2]),1) for m in matches]
+        tail=question[matches[-1].end():]
+        end_match=re.match(r'\s*(?:부터|에서|~|〜|–|-)\s*(1[0-2]|0?[1-9])\s*월',tail)
+        if end_match: starts.append(date(starts[-1].year,int(end_match[1]),1))
+        require(starts[0]<=starts[-1],'시작 월이 종료 월보다 늦습니다.')
+        return period(starts[0],starts[-1])
+    years=re.findall(r'(?<!\d)(20\d{2})\s*년',question)
+    if years:
+        require(int(years[0])<=int(years[-1]),'시작 연도가 종료 연도보다 늦습니다.')
+        return period(date(int(years[0]),1,1),date(int(years[-1]),12,1))
+    short=re.search(r'(?<!\d)(1[0-2]|0?[1-9])\s*월\s*(?:부터|에서|~|〜|–|-)\s*(1[0-2]|0?[1-9])\s*월',question)
+    if short:
+        require(bool(previous.get('period')),'월 범위에 연도를 함께 입력하세요.')
+        year=date.fromisoformat(previous['period']['start']).year
+        require(int(short[1])<=int(short[2]),'연도를 포함한 기간을 입력하세요.')
+        return period(date(year,int(short[1]),1),date(year,int(short[2]),1))
+    return None
+
+
 def parse(store,question,previous,article_mode=False):
     conditions=dict(previous)
     countries=store.rows(select(store.t('country')).where(store.t('country').c.country_role=='COUNTRY'))
-    found=[r['country_code'] for r in countries if r['name_ko'] in question or re.search(r'(?<![A-Za-z])'+re.escape(r['country_code'])+r'(?![A-Za-z])',question)]
+    found=country_mentions(question,countries)
     if found: conditions['country_codes']=sorted(set(found))
     if '전체 국가' in question or '전 세계' in question: conditions['country_codes']=[]
-    codes=re.findall(r'(?<!\d)(\d{6}|\d{4})(?!\d)',question)
-    codes=[x for x in codes if not (len(x)==4 and 1900<=int(x)<=2100)]
+    codes=hs_mentions(question)
     if codes: conditions['hs_items']=[{'hs_code':c,'hs_ver':'HS2022'} for c in sorted(set(codes))]
     if '전체 품목' in question: conditions['hs_items']=[]
     conditions.setdefault('hs_items',[]); conditions.setdefault('country_codes',[])
-    matches=re.findall(r'(20\d{2})[년.\-/ ]+\s*(1[0-2]|0?[1-9])\s*월?',question)
-    if matches:
-        starts=[date(int(y),int(m),1) for y,m in matches]
-        conditions['period']=period(starts[0],starts[-1])
-    elif re.search(r'20\d{2}년',question):
-        year=int(re.search(r'(20\d{2})년',question)[1])
-        conditions['period']=period(date(year,1,1),date(year,12,1))
+    selected_period=question_period(question,previous)
+    if selected_period:
+        conditions['period']=selected_period
     elif 'period' not in conditions or '최근' in question:
         if article_mode:
             a=store.t('article')
@@ -138,11 +191,11 @@ def execute(store,job):
                        {'choice_id':'GLOBAL','label':'전체 범위','value':{'hs_items':[],'country_codes':[]}}]},'answer':None}
     # 품목명을 코드로 임의 추정하지 않는다. 등록 사전 후보를 확인받는다.
     if not conditions['hs_items'] and '전체 품목' not in question and not job['payload_json'].get('clarified'):
-        hs=store.t('hs_code')
+        from backend.app.api.reference import hs_search
         words=[w for w in re.findall(r'[가-힣]{2,}',question) if w not in ('수출','수입','통계','추이','알려줘','미국','중국','일본','분석','시장','최근','순위')]
         candidates=[]
-        for word in words:
-            candidates+=store.rows(select(hs.c.hs_code,hs.c.hs_ver,hs.c.name_ko).where(hs.c.depth==4,hs.c.hs_ver=='HS2022',hs.c.name_ko.contains(word,autoescape=True)).limit(5))
+        for word in words[:3]:
+            candidates+=hs_search(store,word)['items']
         if candidates:
             candidates=list({r['hs_code']:r for r in candidates}.values())[:5]
             return {'status':'NEEDS_INPUT','step':'CONTEXT','clarification':{'clarification_id':uuid.uuid4().hex,

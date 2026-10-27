@@ -541,4 +541,31 @@ class BackendApiTest(unittest.TestCase):
             c.execute(self.meta.tables['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION','target_table':'export_summary','period_start':date(2025,12,1),'period_end':date(2025,12,31),'status':'FAILED','detail_json':{}})
         self.assertNotEqual(self.client.get('/api/v1/trade/trends?period_start=2025-12&period_end=2025-12').status_code,200)
 
+    def test_chat_country_period_and_hs_ambiguities(self):
+        from backend.app.api.chat import country_mentions, question_period, hs_mentions
+        countries=[{'country_code':code,'name_ko':name} for code,name in [('IN','인도'),('ID','인도네시아'),('AI','앵귈라'),('IT','이탈리아'),('US','미국')]]
+        self.assertEqual(country_mentions('인도네시아 AI IT 수출',countries),['ID'])
+        self.assertEqual(country_mentions('인도와 인도네시아 US 수출',countries),['ID','IN','US'])
+        self.assertEqual(country_mentions('국가코드 IT 수출',countries),['IT'])
+        self.assertEqual(question_period('2024년 10대 수출',{})['end'],'2024-12-31')
+        self.assertEqual(question_period('2023년 2024년',{}),{'start':'2023-01-01','end':'2024-12-31'})
+        self.assertEqual(question_period('2024년 1월부터 10월',{}),{'start':'2024-01-01','end':'2024-10-31'})
+        self.assertEqual(question_period('2024-01 ~ 2024-10',{})['end'],'2024-10-31')
+        self.assertEqual(question_period('1월부터 3월',{'period':{'start':'2024-01-01'}})['end'],'2024-03-31')
+        self.assertEqual(hs_mentions('HS 1901 2001 2100 330499 수출 2024년 1000만 달러 100000 USD'),['1901','2001','2100','330499'])
+        self.assertEqual(hs_mentions('2024-01 1000달러 $2000 1,000,000원'),[])
+
+    def test_hs_codes_next_to_country_names_and_comma_lists(self):
+        from backend.app.api.chat import hs_mentions
+        for question,expected in [
+            ('HS 3304 일본 수출',['3304']),
+            ('330499 일본 수출',['330499']),
+            ('HS코드: 1901,2100 일본 수출',['1901','2100']),
+            ('HS 3304,330499 원자재 수입',['3304','330499']),
+            ('HS 1901 2001 2100 수출',['1901','2001','2100']),
+            ('2024년도 1000만원의 수출 100000 USD 1000개국',[]),
+            ('1,000,000원 1000.50달러 $2000 1000만 달러 2024-01',[]),
+        ]:
+            with self.subTest(question=question): self.assertEqual(hs_mentions(question),expected)
+
 if __name__=='__main__': unittest.main()
