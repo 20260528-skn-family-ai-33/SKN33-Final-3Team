@@ -138,10 +138,13 @@ def _runtime(kind):
 def _same_inputs(snapshot, files, db):
     """저장된 학습 계보(input_snapshot)와 지금 입력이 같은 원본인지.
 
-    수집 파일과 DB 환율·통화 매핑을 비교한다. 환율을 못 읽은 빈 표(DB 장애)는 정정으로 보지 않는다.
-    그때 다시 학습하면 환율 피처 없는 모델이 새 버전으로 남는다.
+    state.json은 실행 단계·ML 결과가 실행마다 바뀌는 체크포인트라 뺀다. 데이터를 정하는 collection_dir는
+    선택된 CSV의 경로·해시로 이미 비교된다. DB 환율·통화 매핑도 비교하되, 환율을 못 읽은 빈 표(DB 장애)는
+    정정으로 보지 않는다. 그때 다시 학습하면 환율 피처 없는 모델이 새 버전으로 남는다.
     """
-    if snapshot["files"] != files:
+    def data(rows):
+        return [f for f in rows if not f["path"].endswith("/state.json")]
+    if data(snapshot["files"]) != data(files):
         return False
     if db["fx"]["rows"] == 0 and snapshot["fx"]["rows"] > 0:
         return True

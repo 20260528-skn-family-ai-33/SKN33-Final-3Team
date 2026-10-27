@@ -17,7 +17,8 @@ from backend.app.models.ml_model_version import MlModelVersion
 from backend.tests.test_ml_experiments import dataset
 
 
-FILES = [{"path": "data/customs/a.csv", "bytes": 1, "sha256": "a"}]
+FILES = [{"path": "data/customs/a.csv", "bytes": 1, "sha256": "a"},
+         {"path": "data/customs_load_outputs/monthly/202602/state.json", "bytes": 1, "sha256": "s"}]
 DB = {"fx": {"rows": 10, "sha256": "f"}, "country_mapping_sha256": "c"}
 
 
@@ -83,7 +84,9 @@ class MonthlyRunTest(unittest.TestCase):
     def test_db_fx_correction_trains_new_revision(self):
         self.assertEqual(self.first_then(db={**DB, "fx": {"rows": 10, "sha256": "g"}}), "lightgbm_202602_r2")
 
-    def test_db_outage_is_not_a_correction(self):
+    def test_run_state_or_db_outage_is_not_a_correction(self):
+        state_changed = [FILES[0], {**FILES[1], "sha256": "WAITING_FOR_ML 뒤 ML 결과 기록"}]
+        self.assertEqual(self.first_then(files=state_changed), "lightgbm_202602")
         outage = {"fx": {"rows": 0, "sha256": "empty"}, "country_mapping_sha256": "no currency"}
         self.assertEqual(self.first_then(db=outage), "lightgbm_202602")
         self.assertEqual(len(self.records()), 1)
