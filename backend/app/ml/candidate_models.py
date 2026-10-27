@@ -246,6 +246,10 @@ def main():
         if path.exists():
             try:
                 joblib.load(path)
+            except (ImportError, AttributeError) as exc:
+                # 다른 패키지 버전으로 만든 정상 파일일 수 있다. 손상으로 보고 덮어쓰지 않는다
+                parser.error(f"{kind}: {path}를 이 환경에서 읽을 수 없습니다 ({type(exc).__name__}: {exc}). "
+                             "패키지 버전을 맞추거나, 손상된 파일이면 지운 뒤 다시 실행하세요")
             except Exception as exc:  # 예전 실행이 저장 중 끊긴 파일. 건너뛰지 않고 다시 학습한다
                 print(f"{kind}: 기존 파일을 읽을 수 없어 다시 학습 → {path} ({type(exc).__name__})", flush=True)
                 continue

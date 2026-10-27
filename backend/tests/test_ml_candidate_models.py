@@ -145,6 +145,17 @@ class SnapshotCandidateTest(unittest.TestCase):
         self.assertTrue(np.isfinite(bundle["pipeline"].predict(dataset()[bundle["features"]].head())).all())
         self.assertEqual(list(out.glob("*.tmp")), [])
 
+    def test_file_from_other_environment_is_not_overwritten(self):
+        out = Path(tempfile.mkdtemp())
+        (out / "ridge_v1.joblib").write_bytes(b"made with other sklearn")
+        argv = ["candidate_models", "--models", "ridge", "--out-dir", str(out), "--n-jobs", "1"]
+        with patch("sys.argv", argv), patch("sys.stderr"), \
+                patch.object(C.joblib, "load", side_effect=ModuleNotFoundError("No module named 'sklearn._x'")), \
+                patch.object(C, "_snapshot_frame", side_effect=AssertionError("학습하지 않아야 함")), \
+                self.assertRaises(SystemExit):
+            C.main()
+        self.assertEqual((out / "ridge_v1.joblib").read_bytes(), b"made with other sklearn")
+
 
 if __name__ == "__main__":
     unittest.main()
