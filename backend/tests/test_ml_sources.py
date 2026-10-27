@@ -231,5 +231,23 @@ class RelatedGroupTest(unittest.TestCase):
         self.assertTrue(R.suggest(series, GROUPS, "2022-06-01").empty)
 
 
+class FxFromDbTest(unittest.TestCase):
+    def test_own_engine_is_disposed_even_when_query_fails(self):
+        from unittest import mock
+        engine = mock.Mock()
+        engine.connect.side_effect = OSError("DB 중단")
+        with mock.patch("backend.app.db.session.make_engine", return_value=engine):
+            fx, currencies = S.fx_from_db()
+        self.assertTrue(fx.empty and currencies.empty)
+        engine.dispose.assert_called_once()
+
+    def test_given_engine_is_left_to_caller(self):
+        from unittest import mock
+        engine = mock.Mock()
+        engine.connect.side_effect = OSError("DB 중단")
+        S.fx_from_db(engine)
+        engine.dispose.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

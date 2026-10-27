@@ -82,9 +82,9 @@ def _snapshot_frame(path):
     return frame
 
 
-def _month_frame(month, cache_dir):
+def _month_frame(month, cache_dir, engine=None):
     """수집 원본으로 전체 피처를 만든다. 이번 수집 월이 학습 자료에 없으면 멈춘다."""
-    ds, data, source = artifacts.load_training_data(cache_dir=cache_dir)
+    ds, data, source = artifacts.load_training_data(cache_dir=cache_dir, engine=engine)
     del data
     if pd.Timestamp(source["raw_period_end"]) < month:
         raise ValueError(f"수집 원본이 {source['raw_period_end']}까지만 있어 {month.date()} 수집분으로 학습할 수 없습니다")
@@ -172,7 +172,7 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     with FileLock(str(out_dir / f".{base}.lock")):
-        files, db = artifacts.input_manifest(), artifacts.db_inputs()
+        files, db = artifacts.input_manifest(), artifacts.db_inputs(engine)  # 학습·기록과 같은 DB
         # 환율을 못 읽으면 파일만 비교하므로 정정 전·후 리비전이 모두 맞는다. 그때는 끝까지 보고 가장 최신을 고른다.
         fx_missing = db["fx"]["rows"] == 0
         matched = None
@@ -197,7 +197,7 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
                              if (key := _version_key(p, kind)) is not None and key < current)
             in_db = registered_versions([version for _, version in earlier], "model_a", engine)
             parent = next((version for _, version in reversed(earlier) if version in in_db), None)
-            rows = prepare_rows(_month_frame(month, cache_dir))
+            rows = prepare_rows(_month_frame(month, cache_dir, engine))
             evaluation = holdout_check(rows, kind, n_jobs)
             bundle = train_full(rows["x"], rows["y"], kind, n_jobs)
             created = datetime.now(KST)

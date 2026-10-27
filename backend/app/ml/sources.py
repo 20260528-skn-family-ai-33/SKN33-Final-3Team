@@ -42,11 +42,16 @@ def fx_from_db(engine=None):
     try:
         from sqlalchemy import text
         from backend.app.db.session import make_engine
+        own_engine = engine is None
         engine = engine or make_engine()
-        with engine.connect() as conn:
-            fx = pd.read_sql(text("""SELECT DATE_FORMAT(base_date, '%Y-%m-01') AS month, currency_code, AVG(rate_krw) AS rate
-                                     FROM fx_daily GROUP BY 1, 2"""), conn)
-            currencies = pd.read_sql(text("SELECT country_code, currency_code FROM country WHERE currency_code IS NOT NULL"), conn)
+        try:
+            with engine.connect() as conn:
+                fx = pd.read_sql(text("""SELECT DATE_FORMAT(base_date, '%Y-%m-01') AS month, currency_code, AVG(rate_krw) AS rate
+                                         FROM fx_daily GROUP BY 1, 2"""), conn)
+                currencies = pd.read_sql(text("SELECT country_code, currency_code FROM country WHERE currency_code IS NOT NULL"), conn)
+        finally:
+            if own_engine:  # 직접 만든 접속 풀은 닫는다. 넘겨받은 engine은 호출한 쪽이 닫는다
+                engine.dispose()
         return fx, currencies
     except Exception as exc:  # 접속 정보 없음·DB 중단 등: 환율은 보조 피처라 멈추지 않는다
         log.warning(f"환율을 DB에서 읽지 못해 비워 둡니다: {type(exc).__name__}: {exc}")

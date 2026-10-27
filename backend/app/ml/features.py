@@ -64,8 +64,8 @@ def model_countries(country_table, currencies):
     return countries.merge(currencies, on="country_code", how="left")
 
 
-def load_data(external_dir=None, customs_dirs=None):
-    """수집 파일로 build_dataset 입력을 만든다. 환율만 DB 조회, 파일 위치는 ml/sources.py."""
+def load_data(external_dir=None, customs_dirs=None, engine=None):
+    """수집 파일로 build_dataset 입력을 만든다. 환율만 DB 조회(engine 생략 시 기본 접속), 파일 위치는 ml/sources.py."""
     from backend.app.ml import sources as S
     country_table = S.countries()
     codes = set(country_table.country_code[country_table.country_role == "COUNTRY"])
@@ -82,7 +82,7 @@ def load_data(external_dir=None, customs_dirs=None):
         exports.loc[pd.MultiIndex.from_frame(exports[keys]).isin(unknown_weight), "weight"] = np.nan
     imports = apply_hs_key(imports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
     # 환율만 예외로 DB(fx_daily, country.currency_code)에서 읽는다. ECOS 수집기가 CSV를 남기지 않기 때문이다.
-    fx, currencies = S.fx_from_db()
+    fx, currencies = S.fx_from_db(engine)
     countries = model_countries(country_table, currencies)
     news, news_topics, news_start = load_shortnews(SHORTNEWS_DIR, country_table[["country_code", "name_ko"]],
                                                    S.topic_majors())

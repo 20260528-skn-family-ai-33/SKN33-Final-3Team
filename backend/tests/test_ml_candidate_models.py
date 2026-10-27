@@ -6,7 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import joblib
 import numpy as np
@@ -125,6 +125,14 @@ class MonthlyRunTest(unittest.TestCase):
         self.saved_version("lightgbm_202602")
         self.saved_version("lightgbm_202602_r2", registered=False)
         self.assertEqual(self.parent_of_next_month(), "lightgbm_202602")
+
+    def test_db_reads_use_job_engine(self):
+        db = Mock(return_value=DB)
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()) as load, \
+                patch.object(C.artifacts, "input_manifest", return_value=FILES), patch.object(C.artifacts, "db_inputs", db):
+            C.run("2026-02-01", self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)
+        db.assert_called_once_with(self.engine)
+        self.assertIs(load.call_args.kwargs["engine"], self.engine)
 
     def test_refuses_month_missing_from_data(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-01-01")):
