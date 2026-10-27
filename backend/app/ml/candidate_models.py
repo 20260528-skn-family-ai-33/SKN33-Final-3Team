@@ -138,18 +138,27 @@ def _runtime(kind):
 def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=2):
     """customs_monthly ML 단계: 전체 재학습 → <모델>_<YYYYMM>.joblib → ml_model_version(model_a) 기록.
 
-    같은 달을 다시 실행하면 재학습하지 않고 저장해 둔 기록만 DB에 다시 보낸다(같은 내용이면 그대로 둔다).
+    같은 달을 입력 파일 그대로 다시 실행하면 재학습하지 않고 저장해 둔 기록만 DB에 다시 보낸다(같은 내용이면 그대로 둔다).
     DB 기록이 실패해도 모델 파일과 기록 JSON은 남아 다음 재시도에서 기록만 다시 보낸다.
+    같은 달 원본이 정정돼 입력 파일이 바뀌었으면 <모델>_<YYYYMM>_r2, _r3 …으로 새로 학습한다 (DB 이력은 덮어쓰지 않는다).
     """
     month = pd.Timestamp(trade_month)
     if month != month.to_period("M").to_timestamp():
         raise ValueError("trade_month는 월 초(YYYY-MM-01)여야 합니다")
-    name = f"{kind}_{month:%Y%m}"
+    base = f"{kind}_{month:%Y%m}"
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    artifact, record_path = out_dir / f"{name}.joblib", out_dir / f"{name}.registry.json"
-    with FileLock(str(out_dir / f".{name}.lock")):
-        record = read_json(record_path)
+    with FileLock(str(out_dir / f".{base}.lock")):
+        inputs = artifacts.input_manifest()
+        # ponytail: 정정 횟수 10회 이상(_r10)이면 파일 이름 정렬로 고르는 parent_version_id가 어긋난다
+        for revision in range(1, 100):
+            name = base if revision == 1 else f"{base}_r{revision}"
+            artifact, record_path = out_dir / f"{name}.joblib", out_dir / f"{name}.registry.json"
+            record = read_json(record_path)
+            if record is None or record["data_info"]["input_snapshot"]["files"] == inputs:
+                break
+        else:
+            raise ValueError(f"{base}: 같은 달 재학습 기록이 너무 많습니다")
         if record is None:
             rows = prepare_rows(_month_frame(month, cache_dir))
             evaluation = holdout_check(rows, kind, n_jobs)
