@@ -19,7 +19,7 @@
 | `backend/app/api/event_delivery.py` | 확정 알림 사건의 동의·관심·차단 검증 및 중복 없는 전달 |
 | `backend/app/api/files.py` | 저장 결과의 PDF·DOCX·XLSX와 차트 생성 |
 | `backend/app/api/integrations.py` | ML/RAG/의도 추출 담당자용 인터페이스 |
-| `backend/app/api/jobs.py` | 비동기 작업 멱등성·작업 잠금·실행권 토큰 |
+| `backend/app/api/jobs.py` | 기존 채팅 메시지·리포트와 지속 로그를 이용한 멱등성·잠금·재시작 복구(async_job 미사용) |
 | `backend/app/api/news.py` | 기사 검색·노출 필터·차단 키워드·환율 조회 |
 | `backend/app/api/notifications.py` | 약관·수신 설정·알림함·미확인 수·팝업 확인 |
 | `backend/app/api/reference.py` | HS·국가·지역·키워드 기준정보 조회 |
@@ -60,7 +60,7 @@
 | openpyxl / python-docx / pypdf로 첨부 문서 추출 | API 계약·요구사항·화면·템플릿 대조 |
 | `pip install --target tmp/backend_build/deps ...` | 전역 Python을 바꾸지 않고 API/차트 검증 의존성 설치 |
 | `python -m backend.scripts.check_api_schema` | RDS TLS 인증 연결 성공; 한글 HS 2건·국가 249개·무역 최신월 2026-08·기사 조회 성공; 빈 환율은 UNAVAILABLE |
-| `python -m unittest backend.tests.test_backend_api -v` | 26개 통과(기존 20개 + 회귀 테스트 6개) |
+| `python -m unittest backend.tests.test_backend_api -v` | 32개 통과; async_job 없는 SQLite DB에서 실행 |
 | `python -m compileall -q ...` | 새 Python 모듈 컴파일 성공 |
 | `git diff --check` | 공백 오류 없음 |
 | `pdftoppm ... report-test.pdf ...` | 생성 PDF 6쪽 렌더링·육안 확인 |
@@ -68,7 +68,7 @@
 
 초기 테스트에서 발견한 가입 인자 충돌, 공개 인증의 CSRF 처리, RDS 한글 HS 검색 collation 충돌을 수정했다. Windows 샌드박스에서 TestClient 이벤트 루프의 로컬 소켓이 막혀 동일한 SQLite 테스트를 권한 확장 실행했다.
 
-추가 검수에서 되묻기 재개 시 JSON null 대신 SQL NULL 저장, 채팅 기사 조회의 요청 기간 필터 적용, 기사 조회의 무역 통계 의존성 제거, 다음 달 적재 후 미발행 분기 복구를 수정했다. 회귀 테스트 6개는 수정 전 실패와 수정 후 통과를 확인했다. 분기 복구는 중복 발행 방지·3개월 데이터 준비 여부·구독 시작 기준도 검증한다. MySQL의 result_json NULL/object 제한은 SQLite 트리거로 재현했으며 실제 RDS 쓰기 테스트를 대체하지 않는다.
+추가 검수에서 채팅 기사 기간 필터, 기사 조회의 무역 통계 의존성, 미발행 분기 복구를 수정했다. 이전 async_job 기반 되묻기 NULL 오류는 해당 테이블 의존성을 제거하는 방식으로 대체했다. 테스트는 질문 중복 없이 되묻기 재개, 생성 시점 순서, 삭제된 질문 미실행, 재시작·만료 실행권 복구, 이전 워커의 결과 저장 거부, 회차별 즉시 재시도/DELAYED, 완료 로그 직후 DB 롤백 복구를 포함한다. 실제 RDS 쓰기·동시 워커 검증을 대체하지 않는다.
 
 ## 테스트하지 못한 부분
 

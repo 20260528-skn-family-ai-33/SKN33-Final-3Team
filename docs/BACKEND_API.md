@@ -9,6 +9,7 @@
 - **현재 코드 실행에는 앱 저장소 보완이 필요하다.** `api_user_profile`, `api_auth_session`, `api_snapshot`, `api_keyword_block`, `api_audit_event`, `api_rate_limit`, `api_report_file` 7개가 현재 RDS에 없다. `backend/migrations/036_backend_api.sql`은 현재 구현에 대응하는 제안이며 확정 DB 계약이 아니다. 기존 테이블 통합 대안은 아래 DB 재검수 항목에 정리했다. 통합안을 선택하면 코드와 마이그레이션을 함께 변경해야 한다. 이 SQL은 기존 테이블 변경·데이터 시드·수집을 포함하지 않으며 시작/요청 시 자동 DDL은 없다.
 - 활성 `REPORT_PERIOD`, `REPORT_TYPE` 및 승인된 `NOTIFICATION_TERMS`는 운영/데이터 담당자가 준비한다. 없는 옵션이나 약관을 가짜 값으로 생성하지 않는다. API-09에서 지원 주기를 확인한다. 요청형은 `RPT_ON_DEMAND`, 구독형은 `RPT_WEEKLY`, `RPT_MONTHLY`, `RPT_QUARTERLY` 옵션이 필요하다.
 - ML 학습/예측, RAG 임베딩·검색·생성·문장 검증은 담당자에게 남겼다. `integrations.py`는 인터페이스 정의이며 현재 자동으로 플러그인을 로드하거나 모델을 호출하지 않는다. 기사 `summary` 필드는 현재 마스킹한 본문의 앞부분 발췌다. 자연어 채팅은 등록된 코드·국가·기간을 처리하는 제한적 규칙 파서이다.
+- `async_job`은 팀의 사용 보류 결정에 따라 API·워커에서 사용하지 않는다. 채팅 실행은 기존 chat_message, 리포트 실행은 기존 report와 지속 실행 로그를 사용한다. 이를 위한 신규 테이블·컬럼은 추가하지 않는다. 다른 기능의 api_ 저장소 보완안과는 별개다.
 
 ## 설치와 실행
 
@@ -52,6 +53,27 @@ python -m backend.app.api.worker
 
 ## DB 및 담당자 연결 계약
 
+### async_job 없는 채팅·리포트 실행
+
+첨부 DB 설계서 UN 통합본과 JSON 작성 가이드의 report.status/generation_key/retry_count, chat_message의 조건·결과 저장 구조를 재사용한다. report.conditions_json은 생성 조건, content_json은 완성 결과로 유지하며 실행 단계·오류·회차별 시도는 이 JSON에 섞지 않는다.
+
+| 기능 | 저장·처리 위치 |
+|---|---|
+| 채팅 접수·상태 조회 | 질문 USER 행을 접수 시 chat_message에 한 번 저장한다. API의 job_id는 해당 message_id다. 사용자 소유권은 chat_session과의 연결로 확인한다. |
+| 대기·되묻기·재시작 | USER result_json의 `_execution`(version=1)에 요청 키, 확정 전 조건, 상태, 되묻기, 실행 토큰·유효 시각을 보관한다. 이 실행 메타데이터는 이번 구현의 JSON 확장이며 원문에 이미 정의된 필드라고 취급하지 않는다. 프론트에는 기존 Job 응답으로 변환하고 내부 메타데이터를 그대로 노출하지 않는다. |
+| 완료 답변 | ASSISTANT content_masked/intent_json/result_json에 답변·확정 조건·결과를 저장한다. 같은 질문의 재시도·되묻기는 USER 행을 추가하지 않는다. |
+| 리포트 작업 등록 | report의 QUEUED 행과 generation_key UNIQUE를 사용한다. 기존 요청형·구독형 리포트 ID를 그대로 사용한다. |
+| 리포트 전체 상태 | report.status/retry_count가 기준이다. READY 결과는 재실행하지 않는다. |
+| 리포트 실행 로그 | API_REPORT_DIRECTORY 아래 `_execution/reports/{report_id}.json`은 최신 실행 상태, `.jsonl`은 회차·단계·오류 이력이다. report_id와 generation_key로 DB 행에 연결하고, 최신 상태 파일은 임시 파일+fsync+원자적 교체로 보관한다. 로그에는 인증 비밀값을 넣지 않는다. |
+
+API와 모든 worker는 같은 지속 파일 볼륨을 사용해야 한다. 실행 로그는 임시 디렉터리가 아니며 DB와 함께 보존해야 한다. 로그가 없는 기존 리포트는 자동 실행 대상으로 추정하지 않는다. 파일 로그만 새로 만들어 과거 실패 사유를 복원하지 않는다. 앱의 JSON/로그 버전 계약이 없는 과거 채팅·리포트는 자동 작업으로 처리하지 않는다.
+
+중복 질문은 사용자 행 잠금과 요청 키 조회로, 동시 채팅 처리는 대화방→메시지 순서의 잠금으로 막는다. 워커는 오래된 요청부터 선점하고 SKIP LOCKED를 사용한다. 실행 유효 시각은 10분이며, 실행 중에는 실제 대상 행 잠금도 유지한다. 워커 종료 후 유효 시각이 지나면 같은 대상에서 새 토큰으로 재개하고 이전 토큰의 결과 저장은 거부한다. 대화방 삭제는 같은 잠금 순서에서 메시지와 실행 상태를 함께 제거한다.
+
+리포트의 재시도 가능한 실패는 회차당 1회 즉시 재시도하고 다시 실패하면 DELAYED로 전환한다. 후속 회차 대기 시간은 API_REPORT_RETRY_DELAY_SECONDS(기본 300초)이며 운영 주기에 맞춰 확정할 설정값이다. retry_count는 실제 재실행 시 누적한다. 재시도 불가 오류는 FAILED로 종료한다. 파일 로그와 DB는 하나의 분산 트랜잭션이 아니므로 DB 업무 상태와 세대 키를 우선하고, 완료 로그 직후 DB 롤백 및 만료 실행권 복구를 테스트한다. 실제 MySQL 동시 워커/공유 볼륨 장애 검증은 별도로 필요하다.
+
+이전 async_job 기반 코드를 운영했다면 자동 이전은 제공하지 않는다. 기존 미완료 작업을 확인하고 별도 이관 기준을 정해야 한다. 이번 작업에서는 실제 RDS에 작업을 등록하거나 데이터를 이관하지 않았다.
+
 통계는 HS2022와 `country_role=COUNTRY`만 합산한다. 월별 데이터가 존재하고 그 월 전체를 덮는 가장 최근 `batch_run`이 SUCCESS인 경우 공개한다. 실패/진행 중인 최신 실행이 있으면 그 기간을 제외한다. 수출·수입 공통 가용 범위를 메인 공개 기간으로 사용한다. 없는 관측은 0으로 추정하지 않는다. UN은 월/연과 CIF/FOB를 분리하고 누락 범위를 warnings에 표시한다.
 
 앱이 생성하는 datetime은 UTC이다. 원천 `DATE`는 통계월/기사일이다. 기존 적재 코드가 저장한 naive `DATETIME`의 시간대는 데이터 담당자가 확인해야 한다. 프론트 표시 시간대는 Asia/Seoul로 통일한다.
@@ -75,7 +97,7 @@ python -m backend.app.api.worker
 | 개인 키워드 차단 | user_interest는 국가/HS6 관심 전용이고 keyword_topic은 공용 사전이다. 사용자별 대표어·선택 표현을 보관할 api_keyword_block 또는 별도 사용자 설정 확장이 필요하다. |
 | 관리자 감사 이력 | article.admin_meta_json의 현재 상태, alert_event의 회원 알림, batch_run의 수집 이력과 다르다. 처리자·대상·사유·변경 전후·시각·결과를 보존하는 감사 저장소가 필요하다. |
 | 요청 제한 | api_rate_limit은 현재 코드의 DB 기반 선택이다. Redis/게이트웨이를 사용하면 DB 테이블은 생략할 수 있으나 요청 제한 구현을 함께 교체해야 한다. |
-| 기존 구조 재사용 | async_job, report_subscription.filters_json, notification_setting, user_consent, user_alert, article.visibility_status/admin_meta_json, article_classification, batch_run, service_option은 기존 구조를 사용한다. JSON 컬럼 존재만으로 과거 데이터/미기록 정보가 복원되지는 않는다. |
+| 기존 구조 재사용 | chat_session/chat_message, report/report_subscription, notification_setting, user_consent, user_alert, article.visibility_status/admin_meta_json, article_classification, batch_run, service_option은 기존 구조를 사용한다. async_job은 사용하지 않는다. JSON 컬럼 존재만으로 과거 데이터/미기록 정보가 복원되지는 않는다. |
 
 전체 요구사항에는 추가 미확정 사항도 있다. 소셜 provider+subject 연결과 password_hash NOT NULL 정합성 및 일반 동의 종류(DEC-34), 복구 토큰/임시값 만료/메일 결과(DEC-44), 탈퇴 사유·삭제 정책(DEC-46), 키워드 수동 처리 출처·보류/분야 생성 출처(DEC-32), 과거 분류 표시 보존(DEC-49), 월말 회원 통계·당시 알림 전달 제외 사유(DEC-37), 범위별 실패·재처리 기록(DEC-42)은 별도 합의가 필요하다. 기사별 분류 적용 기록은 기존 article_classification을 활용하되 이름 변경·삭제 후 과거 표시 보존까지 해결됐다고 간주하지 않는다. ML/RAG 및 원천 적재 설계는 담당자 범위로 남긴다.
 
@@ -100,6 +122,6 @@ python -m compileall -q backend/app/api backend/main.py backend/scripts
 git diff --check
 ```
 
-테스트 DB는 SQLite이며 `backend/tests/fixtures/api_schema.json`은 실제 RDS에서 읽은 컬럼 구조의 검증용 사본이다. 테스트 데이터는 메모리 DB에만 만든다. MySQL의 JSON CHECK·generated column·인덱스 잠금·동시 worker 경합은 SQLite가 재현하지 않으므로 배포 전 MySQL 통합 검증이 필요하다.
+테스트 DB는 SQLite이며 `backend/tests/fixtures/api_schema.json`은 실제 RDS에서 읽은 컬럼 구조의 검증용 사본이다. 테스트 DB 생성 시 async_job은 제외하고 전체 API 테스트를 실행한다. 테스트 데이터는 메모리 DB에만 만든다. MySQL의 JSON CHECK·generated column·인덱스 잠금·동시 worker 경합은 SQLite가 재현하지 않으므로 배포 전 MySQL 통합 검증이 필요하다.
 
 RDS에서 읽기 전용으로 연결/테이블 준비 상태/한글 HS 검색/국가/통계 공개기간/기사/환율 미준비 응답을 확인했다. 실제 회원 가입·파일 생성·관리자 변경은 RDS에서 실행하지 않았다. PR #34 프론트 전체 화면 연결·브라우저 E2E, SMTP/OAuth, ML/RAG는 테스트하지 않았다. DOCX 생성·표/치환/ZIP 검증은 했지만 LibreOffice가 없어 페이지 렌더링 검수는 못 했다. PDF는 렌더링해 확인했다.
