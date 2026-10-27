@@ -75,6 +75,19 @@ class TestTemporalReport(unittest.TestCase):
 @unittest.skipUnless(importlib.util.find_spec("reportlab") and importlib.util.find_spec("pypdf"),
                      "PDF 검사 의존성: backend/requirements-ml-report.txt")
 class TestPdfReport(unittest.TestCase):
+    def test_pdf_explains_unevaluated_b_and_late_external_data(self):
+        from backend.app.ml.reporting import generate_report
+        from pypdf import PdfReader
+        context = {"metadata": {"features_used": [], "predict_anchor": "2026-09-01"},
+                   "evaluation": {"model_b": "라벨 부족 (외부 시장 데이터가 없는 연도)"},
+                   "snapshot": {"available_from": "2026-10-22"}, "predictions_summary": {"rows": 10}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = generate_report(context, {}, Path(directory) / "report.pdf")
+            text = re.sub(r"\s+", "", "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages))
+        for statement in ("모델 B는 평가하지 못했다: 라벨 부족 (외부 시장 데이터가 없는 연도)",
+                          "외부 자료 사용 가능일 2026-10-22이 마지막 기준월 2026-09보다 늦어"):
+            self.assertIn(re.sub(r"\s+", "", statement), text)
+
     def test_pdf_describes_actual_feature_usage_and_market_type_results(self):
         from backend.app.ml.reporting import generate_report
         from pypdf import PdfReader

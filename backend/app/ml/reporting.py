@@ -145,6 +145,15 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
                                          "kor_share_change", "mkt_hs4_growth"))
     wdi_usage = feature_usage("WDI", ("log_gdp", "gdp_growth", "log_population", "log_gdp_pc"))
     fx_usage = feature_usage("환율", ("fx_change_12m", "fx_vol_12m"))
+    # 외부 자료가 0개로 나올 때 수집 실패와 시점 정책을 구분할 수 있게 원인을 적는다
+    available, anchor = context.get("snapshot", {}).get("available_from"), meta.get("predict_anchor")
+    availability_note = (f"외부 자료 사용 가능일 {available}이 마지막 기준월 {anchor[:7]}보다 늦어 "
+                         "시장·WDI 값은 학습·예측 구간에 연결되지 않았다."
+                         if available and anchor and available[:7] > anchor[:7] else "")
+    b_eval = ev.get("model_b")
+    b_result = (f"모델 B는 평가하지 못했다: {b_eval}." if isinstance(b_eval, str) else
+                f"저장된 평가의 macro-F1은 모델 B {num(metric('model_b', 'macro_f1'))}, "
+                f"기준선 {num(metric('baseline_b', 'macro_f1'))}이다.")
     known_types = predictions.get("types_known")
     type_status = ("시장 유형 예측 건수는 미확인이다." if known_types is None else
                    f"시장 유형이 있는 예측은 {count(known_types)}행이다.")
@@ -219,7 +228,7 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
     add("수집 파일 형식·기간, 정합성 검증, 피처와 미래 정답 생성, 시간 분할, 기준선 비교, "
         "시간 순서 K-fold, 출력 스키마와 재실행 방법을 함께 기록한다. 미진출 시장 모델 C의 검증은 별도 과제다.")
     add("현재 사용 상태와 제한", "h2")
-    add(f"{market_usage}. {wdi_usage}. {fx_usage}. {type_status}")
+    add(f"{market_usage}. {wdi_usage}. {fx_usage}. {availability_note} {type_status}")
     add("사용 피처 수는 저장 모델의 메타데이터 기준이며, 미사용만으로 원본 데이터 결측을 뜻하지 않는다. "
         "단일 평가월과 후향적 시간 교차검증은 독립 최종 Holdout을 대체하지 않는다.")
     if validation.get("errors") or context.get("error"):
@@ -305,8 +314,7 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
     table([["지표", "정의"], *DETAIL_DEFINITIONS], [100, width - 100])
     add("NDCG는 순서의 품질을 나타내며 Top 5의 직접 일치율은 Precision@5로 확인한다. 모델 점수는 로그 성장 예측값으로, 진출 성공 확률을 뜻하지 않는다.")
     add("모델 B는 미래 실적의 5개 시장 유형을 분류하고 동일 행·5개 클래스의 macro-F1으로 과거 규칙 기준선과 비교하도록 설계됐다. "
-        f"저장된 평가의 macro-F1은 모델 B {num(metric('model_b', 'macro_f1'))}, "
-        f"기준선 {num(metric('baseline_b', 'macro_f1'))}이다. {type_status}", "small")
+        f"{b_result} {type_status}", "small")
     add("현재 단일 평가월은 관련 피처 선택에도 사용됐다. 새로운 데이터 구간 또는 별도 최종 Holdout에서 재검증하기 전에는 독립 최종 성능으로 해석하지 않는다.", "small")
 
     # 7. Saved results
