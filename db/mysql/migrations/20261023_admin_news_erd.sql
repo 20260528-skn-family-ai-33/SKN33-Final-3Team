@@ -143,7 +143,17 @@ BEGIN
 END;
 
 -- @step view v_article_country_day -
-CREATE OR REPLACE VIEW v_article_country_day AS SELECT a.published_date,t.country_code,COUNT(DISTINCT a.article_id) AS article_count FROM article a JOIN article_tag t ON t.article_id=a.article_id WHERE a.source_code IN ('KOTRA_MARKET','HANKYUNG','FNNEWS','KOTRA_SHORT_NEWS') AND a.visibility_status='VISIBLE' AND t.country_code IS NOT NULL GROUP BY a.published_date,t.country_code;
+CREATE OR REPLACE VIEW v_article_country_day AS SELECT a.published_date,t.country_code,COUNT(DISTINCT a.article_id) AS article_count FROM article a JOIN article_tag t ON t.article_id=a.article_id WHERE a.source_code='KOTRA_MARKET' AND a.visibility_status='VISIBLE' AND t.country_code IS NOT NULL GROUP BY a.published_date,t.country_code;
 
 -- @step view v_article_day -
-CREATE OR REPLACE VIEW v_article_day AS SELECT published_date,COUNT(DISTINCT article_id) AS article_count FROM article WHERE source_code IN ('KOTRA_MARKET','HANKYUNG','FNNEWS','KOTRA_SHORT_NEWS') AND visibility_status='VISIBLE' GROUP BY published_date;
+CREATE OR REPLACE VIEW v_article_day AS SELECT published_date,COUNT(DISTINCT article_id) AS article_count FROM article WHERE source_code='KOTRA_MARKET' AND visibility_status='VISIBLE' GROUP BY published_date;
+
+-- 관리자 ERD 재적용에도 출처별/통합 뷰의 모집단을 유지합니다.
+-- @step view v_article_source_day -
+CREATE OR REPLACE VIEW v_article_source_day AS SELECT published_date,source_code,COUNT(DISTINCT article_id) AS article_count FROM article GROUP BY published_date,source_code;
+-- @step view v_article_source_country_day -
+CREATE OR REPLACE VIEW v_article_source_country_day AS SELECT a.published_date,a.source_code,t.country_code,COUNT(DISTINCT a.article_id) AS article_count FROM article a JOIN article_tag t ON t.article_id=a.article_id WHERE t.country_code IS NOT NULL GROUP BY a.published_date,a.source_code,t.country_code;
+-- @step view v_article_integrated_day -
+CREATE OR REPLACE VIEW v_article_integrated_day AS SELECT published_date,COUNT(DISTINCT article_id) AS article_count FROM article WHERE source_code IN ('KOTRA_MARKET','KOTRA_SHORT_NEWS') GROUP BY published_date;
+-- @step view v_article_integrated_country_day -
+CREATE OR REPLACE VIEW v_article_integrated_country_day AS SELECT a.published_date,t.country_code,COUNT(DISTINCT a.article_id) AS article_count FROM article a JOIN article_tag t ON t.article_id=a.article_id WHERE a.source_code IN ('KOTRA_MARKET','KOTRA_SHORT_NEWS') AND t.country_code IS NOT NULL GROUP BY a.published_date,t.country_code;

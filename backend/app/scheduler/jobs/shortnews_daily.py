@@ -17,7 +17,7 @@ LOCK_DIR = ROOT / "data/shortnews/locks"
 KST = ZoneInfo("Asia/Seoul")
 JOB_ID = "shortnews_daily"
 # DB 주소가 같아도 출처·본문 처리 계약이 달라지면 과거 완료 기록을 다시 검증합니다.
-PIPELINE_REVISION = "KOTRA_SHORT_NEWS:full-body-db-candidates-mysql-chroma:v2"
+PIPELINE_REVISION = "KOTRA_SHORT_NEWS:full-body-db-candidates-mysql-chroma:v4-common-body-no-hs"
 log = logging.getLogger(__name__)
 
 
@@ -160,7 +160,7 @@ def run_day(target, root, started, env_path, db_url, database_id):
         result["pipeline"] = processed
         result["mysql"] = processed["mysql"]
         result["chroma"] = processed["chroma"]
-        result["status"] = "FAILED" if processed["status"] != "SUCCESS" else "SUCCESS" if report["collection_complete"] else "PARTIAL"
+        result["status"] = processed["status"] if processed["status"] != "SUCCESS" else "SUCCESS" if report["collection_complete"] else "PARTIAL"
         result["stage"] = "finished"
     except Exception as exc:
         result.update(status="FAILED", error_type=type(exc).__name__)

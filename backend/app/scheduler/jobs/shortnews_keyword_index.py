@@ -4,12 +4,12 @@ import json
 import logging
 import os
 from pathlib import Path
+from uuid import uuid4
 
 from dotenv import dotenv_values
-from filelock import FileLock
 
 from backend.app.db.session import mysql_url, make_engine
-from backend.app.services import shortnews_keywords as keywords
+from backend.app.services import shortnews_keywords as keywords, shortnews_analysis as analysis
 
 ROOT = Path(__file__).resolve().parents[4]
 log = logging.getLogger(__name__)
@@ -21,32 +21,51 @@ def run(*, env_path=ROOT / '.env', chroma_path=ROOT / 'chroma_data'):
 
     values = {**dotenv_values(env_path), **os.environ}
     engine = make_engine(mysql_url(env_path))
-    path = Path(chroma_path)
-    path.mkdir(parents=True, exist_ok=True)
+    client = None
+    usage = {'tokens':0, 'model_calls':0, 'reported_responses':0, 'unreported_calls':0}
+    report = {'run_id':uuid4().hex, 'status':'RUNNING', 'usage':usage}
+    report_path = Path(chroma_path) / 'candidate_index_run.json'
     try:
-        with FileLock(str(path / 'short_news_keywords.lock'), timeout=0):
+        path = Path(chroma_path)
+        path.mkdir(parents=True, exist_ok=True)
+        client = chromadb.PersistentClient(path=str(path))
+        with keywords.index_lock(client):
             snapshot = keywords.read_catalog(engine)
-            client = chromadb.PersistentClient(path=str(path))
-            with OpenAI(api_key=values.get('OPENAI_API_KEY'), timeout=60) as api:
+            with OpenAI(api_key=values.get('OPENAI_API_KEY'), timeout=60, max_retries=0) as api:
                 completed = 0
 
                 def embed(words):
                     nonlocal completed
-                    result = api.embeddings.create(model=keywords.MODEL, input=words,
-                                                   dimensions=keywords.DIMENSIONS)
-                    ordered = sorted(result.data, key=lambda item: item.index)
-                    if [item.index for item in ordered] != list(range(len(words))):
-                        raise ValueError('임베딩 응답 순번 불일치')
+                    def counted(value):
+                        usage['model_calls'] += 1
+                        usage['tokens'] += value['tokens'] or 0
+                        usage['reported_responses' if value['reported'] else 'unreported_calls'] += 1
+                        analysis.atomic_json(report_path, report)
+                    vectors = analysis.embed(api, words, usage_sink=counted)
                     completed += len(words)
                     log.info('이번 실행 키워드 임베딩 %d건 / 분류 전체 %d건', completed, len(snapshot.rows))
-                    return [item.embedding for item in ordered]
+                    return vectors
 
                 _, result = keywords.sync_index(snapshot, client, embed)
             if keywords.read_catalog(engine).revision != snapshot.revision:
                 raise ValueError('색인 중 DB 분류가 변경되었습니다. 다시 실행해야 합니다')
-            return result
+            result['removed_keyword_indexes'] = keywords.cleanup_indexes(snapshot, client)
+            report.update(result, status='SUCCESS')
+            return report
+    except Exception as exc:
+        report.update(status='FAILED', error_type=type(exc).__name__)
+        raise
     finally:
-        engine.dispose()
+        try:
+            try:
+                if client is not None: client.close()
+            finally:
+                engine.dispose()
+        except Exception as exc:
+            report.update(status='FAILED', cleanup_error_type=type(exc).__name__)
+            raise
+        finally:
+            analysis.atomic_json(report_path, report)
 
 
 def main():

@@ -33,7 +33,7 @@ class RecoveryBoundaryTest(unittest.TestCase):
         return other
 
     def saved_state(self):
-        return json.loads((self.c.output / "state.json").read_text())
+        return json.loads((self.c.output / "state.json").read_text(encoding="utf-8"))
 
     def seed_failed(self):
         self.c.fetch.side_effect = RuntimeError("synthetic outage")
@@ -77,7 +77,7 @@ class RecoveryBoundaryTest(unittest.TestCase):
         other = self.other_database()
         self.c.output.mkdir()
         (self.c.output / "state.json").write_text(json.dumps({
-            "schema_version": 1, "start_date": "2026-10-20", "days": {"2026-10-20": "SUCCESS"}}))
+            "schema_version": 1, "start_date": "2026-10-20", "days": {"2026-10-20": "SUCCESS"}}), encoding="utf-8")
         with patch.object(session, "mysql_url", side_effect=[self.c.db.url, other.url]) as resolve:
             result = job.run(env_path=self.c.env, output_dir=self.c.output, now=daily.NOW)
         self.assertEqual(result["status"], "SUCCESS")
@@ -88,7 +88,7 @@ class RecoveryBoundaryTest(unittest.TestCase):
     def test_v1_checkpoint_is_revalidated_without_duplicate_rows(self):
         self.run_job()
         (self.c.output / "state.json").write_text(json.dumps({
-            "schema_version": 1, "start_date": "2026-10-21", "days": {"2026-10-22": "SUCCESS"}}))
+            "schema_version": 1, "start_date": "2026-10-21", "days": {"2026-10-22": "SUCCESS"}}), encoding="utf-8")
         self.c.requests.clear()
         self.assertEqual(self.run_job()["status"], "SUCCESS")
         self.assertEqual([p["search2"] for p in self.c.requests], ["20261021", "20261022"])
@@ -259,7 +259,7 @@ class RecoveryBoundaryTest(unittest.TestCase):
         state = self.saved_state()
         state["databases"][job.database_identity(self.c.db.url)]["days"]["2026-10-22"] = "UNKNOWN"
         path = self.c.output / "state.json"
-        path.write_text(json.dumps(state))
+        path.write_text(json.dumps(state), encoding="utf-8")
         before = path.read_bytes()
         self.c.fetch.reset_mock()
         self.assertEqual(self.run_job()["status"], "FAILED")
@@ -269,7 +269,7 @@ class RecoveryBoundaryTest(unittest.TestCase):
     def test_legacy_unreadable_report_does_not_block_date_recovery(self):
         folder = self.c.output / "2026-10-20" / "old"
         folder.mkdir(parents=True)
-        (folder / "job_result.json").write_text("unreadable old content")
+        (folder / "job_result.json").write_text("unreadable old content", encoding="utf-8")
         read = Path.read_text
         def fail_old(path, *args, **kwargs):
             if path.parent == folder:

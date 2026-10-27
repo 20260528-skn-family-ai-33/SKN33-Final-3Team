@@ -55,6 +55,7 @@ class KeywordIndexTest(KeywordCatalogTest):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.client = chromadb.PersistentClient(path=self.temp.name)
+        self.addCleanup(self.client.close)
         self.embed = Mock(side_effect=lambda words: [[1.0] + [0.0] * (sk.DIMENSIONS - 1) for _ in words])
 
     def test_repeat_has_no_api_calls_and_uses_separate_collection(self):
@@ -89,6 +90,31 @@ class KeywordIndexTest(KeywordCatalogTest):
         self.assertNotEqual(old.name, new.name)
         self.assertEqual(old.get(ids=['EV'])['metadatas'][0]['minor'], '품목')
         self.assertEqual(new.get(ids=['EV'])['metadatas'][0]['minor'], '자동차')
+
+    def test_cleanup_only_removes_owned_old_versions_after_valid_replacement(self):
+        old, _ = sk.sync_index(self.snapshot(), self.client, self.embed)
+        untouched = ['news_keyword', 'short_news', 'short_news_keywords_backup',
+                     'short_news_keywords_' + 'f' * 32]
+        for name in untouched:
+            self.client.get_or_create_collection(name, embedding_function=None)
+        self.categories[0]['minor_name'] = '자동차'
+        snapshot = self.snapshot()
+        sk.sync_index(snapshot, self.client, self.embed)
+        with sk.index_lock(self.client):
+            self.assertEqual(sk.cleanup_indexes(snapshot, self.client), [old.name])
+            self.assertEqual(sk.cleanup_indexes(snapshot, self.client), [])
+        self.assertEqual({c.name for c in self.client.list_collections()},
+                         set(untouched) | {sk.collection_name(snapshot)})
+
+    def test_partial_new_index_never_allows_old_index_deletion(self):
+        old, _ = sk.sync_index(self.snapshot(), self.client, self.embed)
+        self.categories[0]['minor_name'] = '자동차'
+        snapshot = self.snapshot()
+        with self.assertRaises(RuntimeError):
+            sk.sync_index(snapshot, self.client, Mock(side_effect=RuntimeError('network')))
+        with sk.index_lock(self.client), self.assertRaises(ValueError):
+            sk.cleanup_indexes(snapshot, self.client)
+        self.assertEqual(old.count(), 4)
 
 
 if __name__ == '__main__': unittest.main()

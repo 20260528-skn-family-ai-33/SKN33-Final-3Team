@@ -9,7 +9,7 @@
   원본에 같은 기사 ID가 두 번 있으면 마지막 행을 씁니다.
 - 키워드 결과가 있는 기사의 태그는 지우고 새로 넣되, 관리자가 수동 지정한 국가·HS 태그는 보존합니다.
   원본은 전체인데 키워드 결과가 일부 기간뿐이어도(--since) 나머지 기사의 태그·집계는 그대로 남습니다.
-- 일별 집계는 입력 기사의 발행일(발행일이 바뀐 기사는 예전 날짜도)만 지우고 DB 전체 기사(다른 출처 포함)에서 다시 셉니다
+- 일별 집계는 입력 기사의 발행일(발행일이 바뀐 기사는 예전 날짜도)만 지우고 시장뉴스·단신속보 기사에서 다시 셉니다
   (DISTINCT article_id).
 - 품목 태그는 hs_code 테이블에 있는 코드만 넣습니다. hs_code가 비어 있으면 품목 태그·집계 0건으로 넘어가고 경고만 남깁니다.
 - 전체를 한 트랜잭션으로 넣습니다. 중간에 실패하면 모두 롤백되어 아무것도 반영되지 않습니다.
@@ -130,9 +130,11 @@ def article_ids(session, external_ids, source_code=nl.SOURCE_CODE):
     return out
 
 
-def keyword_article_counts(engine):
+def keyword_article_counts(engine, *, require_schema=False):
     """article_tag 키워드별 고유 기사 수 {키워드: 기사 수} (누적, 출처 무관). 테이블이 없으면 빈 Counter."""
     if ArticleTag.__tablename__ not in inspect(engine).get_table_names():
+        if require_schema:
+            raise ValueError('keyword_tables_missing')
         return Counter()
     with session_scope(engine) as s:
         q = (select(ArticleTag.keyword_text, func.count(func.distinct(ArticleTag.article_id)))
@@ -150,20 +152,20 @@ def old_dates(session, external_ids, source_code=nl.SOURCE_CODE):
 
 
 def rebuild_daily(session, days):
-    """발행일이 days인 DB 전체 기사(출처 무관)로 두 집계 테이블의 그날 행을 다시 만듭니다."""
+    """MARKET·단신 키워드, MARKET만 HS 집계. 단신의 기존 수동 HS 태그는 그대로 보존합니다."""
     days = sorted(days)
     a, t = Article.__table__, ArticleTag.__table__
     dates, keywords, countries, hs_tags = {}, [], {}, []
     for chunk in _in_chunks(days):
-        q = select(t.c.article_id, a.c.published_date, t.c.keyword_text, t.c.country_code, t.c.hs_code, t.c.hs_ver) \
-            .join(a, a.c.article_id == t.c.article_id).where(a.c.published_date.in_(chunk))
-        for article_id, day, kw, country, hs, ver in session.execute(q):
+        q = select(t.c.article_id, a.c.published_date, t.c.keyword_text, t.c.country_code, t.c.hs_code, t.c.hs_ver, a.c.source_code) \
+            .join(a, a.c.article_id == t.c.article_id).where(a.c.published_date.in_(chunk), a.c.source_code.in_(('KOTRA_MARKET','KOTRA_SHORT_NEWS','KOTRA_SHORTNEWS')))
+        for article_id, day, kw, country, hs, ver, source in session.execute(q):
             dates[article_id] = day
             if kw is not None:
                 keywords.append((article_id, kw))
             elif country is not None:
                 countries.setdefault(article_id, set()).add(country)
-            elif len(hs) == 6:
+            elif hs and len(hs) == 6 and source == "KOTRA_MARKET":
                 hs_tags.append((article_id, hs, ver))
     hs_codes = {tuple(r) for r in session.execute(select(HsCodeMst.hs_code, HsCodeMst.hs_ver).where(
         HsCodeMst.hs_code.in_({h[:4] for _, h, _ in hs_tags})))} if hs_tags else set()

@@ -7,12 +7,16 @@
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
+from pathlib import Path
 
+from filelock import FileLock
 from sqlalchemy import text
 
 MODEL = "text-embedding-3-large"
 DIMENSIONS = 3072
+PAGE_SIZE = 5000
 STATUSES = {"PENDING", "CLASSIFIED", "UNCLASSIFIED", "SYNONYM"}
 
 
@@ -73,6 +77,66 @@ def collection_name(snapshot):
     return "short_news_keywords_" + snapshot.revision[:32]
 
 
+def read_index(collection):
+    """후보 전체를 5,000개씩 읽으며 누락·중복·조회 중 크기 변경을 검증합니다."""
+    total = collection.count()
+    rows, offset = {}, 0
+    while offset < total:
+        limit = min(PAGE_SIZE, total - offset)
+        got = collection.get(include=['documents', 'metadatas'], limit=limit, offset=offset)
+        ids, docs, metas = got['ids'], got['documents'], got['metadatas']
+        if not ids or len(ids) > limit or len(ids) != len(docs) or len(ids) != len(metas):
+            raise ValueError('키워드 인덱스 페이지 응답 오류')
+        for key, doc, meta in zip(ids, docs, metas):
+            if key in rows:
+                raise ValueError('키워드 인덱스 페이지 중복')
+            rows[key] = (doc, meta)
+        offset += len(ids)
+    if offset != total or collection.count() != total:
+        raise ValueError('조회 중 키워드 인덱스 개수 변경')
+    return rows
+
+
+def index_lock(client):
+    """실제 Chroma 저장 경로를 공유하는 색인 작성·조회·정리를 직렬화합니다.
+
+    호출자는 sync_index부터 모든 후보 조회 및 cleanup_indexes까지 잠금을 유지해야 합니다.
+    경로를 지정하는 CLI와 파이프라인이 같은 파일을 사용하며 다른 서버의 별도 저장소는 조정하지 않습니다.
+    """
+    path = Path(client.get_settings().persist_directory).resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    return FileLock(str(path / 'short_news_keywords.lock'), timeout=0)
+
+
+def cleanup_indexes(snapshot, client):
+    """공용 index_lock 안에서 전체 작업·최신 분류 검증 성공 후에만 호출합니다."""
+    current = collection_name(snapshot)
+    # 잘못된 호출로 완성된 대체 인덱스 없이 기존 데이터를 지우지 않습니다.
+    col = client.get_collection(current, embedding_function=None)
+    metadata = col.metadata or {}
+    if (metadata.get('classification_revision') != snapshot.revision or
+            metadata.get('embedding_model') != MODEL or metadata.get('dimensions') != DIMENSIONS):
+        raise ValueError('정리 대상의 현재 인덱스 메타데이터 불일치')
+    actual = read_index(col)
+    if actual != {r['keyword']: (r['keyword'], r) for r in snapshot.rows}:
+        raise ValueError('미완성 인덱스로 이전 버전을 정리할 수 없습니다')
+    removed = []
+    for item in client.list_collections():
+        name = item if isinstance(item, str) else item.name
+        if name == current or not re.fullmatch(r'short_news_keywords_[0-9a-f]{32}', name):
+            continue
+        old = client.get_collection(name, embedding_function=None)
+        meta = old.metadata or {}
+        revision = meta.get('classification_revision', '')
+        if (not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{64}', revision) or
+                name != 'short_news_keywords_' + revision[:32] or
+                meta.get('embedding_model') != MODEL or meta.get('dimensions') != DIMENSIONS):
+            continue
+        client.delete_collection(name)
+        removed.append(name)
+    return sorted(removed)
+
+
 def sync_index(snapshot, client, embed, *, batch_size=128):
     """미완료 배치부터 재개합니다. 성공 시에만 완성된 후보 인덱스를 반환합니다."""
     if not 1 <= batch_size <= 128:
@@ -83,10 +147,10 @@ def sync_index(snapshot, client, embed, *, batch_size=128):
     if any((col.metadata or {}).get(k) != v for k, v in metadata.items()):
         raise ValueError("키워드 인덱스의 모델·분류 버전 불일치")
     expected = {r["keyword"]: r for r in snapshot.rows}
-    got = col.get(include=["documents", "metadatas"])
-    if set(got["ids"]) - set(expected):
+    got = read_index(col)
+    if set(got) - set(expected):
         raise ValueError("분류 버전에 없는 키워드가 인덱스에 있습니다")
-    have = {key for key, doc, meta in zip(got["ids"], got["documents"], got["metadatas"])
+    have = {key for key, (doc, meta) in got.items()
             if doc == key and meta == expected[key]}
     todo = sorted(set(expected) - have)
     for start in range(0, len(todo), batch_size):
@@ -97,8 +161,7 @@ def sync_index(snapshot, client, embed, *, batch_size=128):
             raise ValueError("키워드 임베딩 응답 개수·차원·수치 오류")
         col.upsert(ids=words, documents=words, metadatas=[expected[w] for w in words], embeddings=vectors)
     # 일부분만 들어간 상태를 성공으로 반환하지 않습니다.
-    saved = col.get(include=["documents", "metadatas"])
-    actual = {key: (doc, meta) for key, doc, meta in zip(saved["ids"], saved["documents"], saved["metadatas"])}
+    actual = read_index(col)
     if actual != {key: (key, value) for key, value in expected.items()}:
         raise ValueError("키워드 인덱스 검증 실패")
     return col, {"total": len(expected), "embedded": len(todo), "existing": len(have),

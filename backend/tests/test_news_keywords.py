@@ -1,4 +1,4 @@
-"""해외시장뉴스 키워드 정리(① 정제 · ② 지역 · ③ 연도 · ④ 동의어 · ⑤ 분야 · ⑥ 품목)와 블락·사전 생성 코드를 실제 데이터에서 나온 예시로 확인합니다.
+"""해외시장뉴스 키워드 정리(① 정제 · ② 지역 · ③ 연도 · ④ 동의어 · ⑤ 분야 · ⑥ 품목)와 블락·사전 생성 코드를 고정 합성 사전과 시험 예시로 확인합니다. 운영 사전은 읽지 않습니다.
 
 실행: python -m unittest backend/tests/test_news_keywords.py
 """
@@ -13,10 +13,45 @@ SRC = Path(__file__).resolve().parents[1] / "app/services/news_keywords/keyword_
 spec = importlib.util.spec_from_file_location("keyword_clean", SRC)
 kc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(kc)
-GEO = kc.load_geo()
-# 동의어·상위어 사전은 build/ 코드가 data/news_keywords/에 만듦 (git 제외). 없으면 그 사전으로 확인하는 테스트는 건너뜀
-NEED_DICTS = unittest.skipUnless(kc.SYNONYMS_PATH.exists() and kc.HYPERNYMS_PATH.exists(),
-                                 "data/news_keywords/ 사전 없음 — NEWS_KEYWORDS_USAGE.md '다시 만들기'를 먼저 실행")
+# 생성된 운영 CSV를 import/collection 단계에서 읽지 않습니다.
+# 아래 사전은 기존 시험의 입력·기대값으로 직접 만든 최소 합성 fixture입니다.
+GEO = None
+SYNONYMS = HYPERNYMS = CATEGORIES = None
+
+
+def setUpModule():
+    global GEO, SYNONYMS, HYPERNYMS, CATEGORIES
+    temporary = tempfile.TemporaryDirectory(prefix="synthetic-news-keywords-")
+    unittest.addModuleCleanup(temporary.cleanup)
+    root = Path(temporary.name)
+    SYNONYMS, HYPERNYMS, CATEGORIES = (root/name for name in ("synonyms.csv", "hypernyms.csv", "categories.csv"))
+    pd.DataFrame([
+        ("EV", "전기차"), ("전기자동차", "전기차"), ("인공지능", "AI"),
+        ("K뷰티", "K-뷰티"), ("K-BEAUTY", "K-뷰티"), ("화장품시장", "화장품"),
+        ("러-우사태", "우크라이나사태"), ("러시아-우크라이나사태", "우크라이나사태"),
+        ("2차전지", "이차전지"),
+    ], columns=["표기", "대표어"]).to_csv(SYNONYMS, index=False, encoding="utf-8-sig")
+    pd.DataFrame([
+        ("전기차보조금", "전기차"), ("전기차충전소", "전기차"), ("K-뷰티", "뷰티"),
+        ("온라인시장", "온라인쇼핑"), ("의료미용시장", "의료"),
+    ], columns=["하위어", "상위어"]).to_csv(HYPERNYMS, index=False, encoding="utf-8-sig")
+    pd.DataFrame([
+        ("반덤핑", "무역·통상", "관세·무역규제"),
+        ("리튬이온배터리", "산업·품목", "품목 (→ HS 코드로 연결)"),
+        ("파리협정", "에너지·환경", "친환경·ESG·기후"),
+    ], columns=["주제어", "대분류", "중분류"]).to_csv(CATEGORIES, index=False, encoding="utf-8-sig")
+    countries = [("베트남","VN"),("미국","US"),("중국","CN"),("인도","IN"),
+        ("러시아","RU"),("우크라이나","UA"),("인도네시아","ID"),("인니","ID"),
+        ("UAE","AE"),("피지","FJ"),("사우디아라비아","SA"),("나미비아","NA"),("NA","NA"),
+        ("태국","TH"),("이란","IR"),("이스라엘","IL"),("체코","CZ"),("예멘","YE"),
+        ("독일","DE"),("캐나다","CA"),("한국","KR")]
+    rows = [(name,"국가",code,name,"N" if name in {"피지","UAE","NA"} else "Y") for name,code in countries]
+    rows += [("두바이","도시","AE","두바이","Y"),("벵갈루루","도시","IN","벵갈루루","Y"),
+        ("자카르타","도시","ID","자카르타","Y"),("파리","도시","FR","파리","N"),
+        ("워싱턴","도시","US","워싱턴","Y"),("오사카","도시","JP","오사카","Y"),
+        ("중동","권역","중동","중동","Y"),("동남아시아","권역","아세안","아세안","Y"),
+        ("유럽연합","권역","EU","유럽연합","Y"),("유럽","권역","유럽","유럽","Y")]
+    GEO = kc.load_geo(rows)
 
 
 class CleanTest(unittest.TestCase):
@@ -200,16 +235,23 @@ class BlockTest(unittest.TestCase):
     spec = importlib.util.spec_from_file_location("keyword_block", kc.BASE / "keyword_block.py")
     kb = importlib.util.module_from_spec(spec); spec.loader.exec_module(kb)
 
+    @classmethod
+    def setUpClass(cls):
+        from unittest.mock import patch
+        # 별도 import한 블락 모듈의 기본 상위어도 같은 합성 fixture로 주입합니다.
+        fixture = patch.object(cls.kb.kc, "load_hypernyms", return_value=kc.load_hypernyms(HYPERNYMS))
+        fixture.start()
+        cls.addClassCleanup(fixture.stop)
+
     def test_no_stopwords(self):
         """블락: 불용어 없음 — 넓은 말(수출·경제)도 주제어에 그대로 남음"""
         r = kc.process_article("수출,경제,동향,전기차,공급망", "미국", GEO)
         self.assertEqual(r["kw_topic"], ["수출", "경제", "동향", "전기차", "공급망"])
         self.assertFalse((kc.BASE / "stopwords.csv").exists())
 
-    @NEED_DICTS
     def test_block_word_is_representative(self):
         """블락: 입력한 말을 대표어로 저장 (ev → 전기차, 화장품시장 → 화장품)"""
-        syn = kc.load_synonyms()
+        syn = kc.load_synonyms(SYNONYMS)
         self.assertEqual(self.kb.to_block_word("ev", syn), "전기차")
         self.assertEqual(self.kb.to_block_word("화장품시장", syn), "화장품")
 
@@ -225,30 +267,28 @@ class BlockTest(unittest.TestCase):
 
 class SynonymTest(unittest.TestCase):
     """④ 동의어"""
-    SYN = kc.load_synonyms()
+    @classmethod
+    def setUpClass(cls):
+        cls.SYN = kc.load_synonyms(SYNONYMS)
 
     def topic(self, kwrd, natn=""):
         return kc.process_article(kwrd, natn, GEO, kc.load_exceptions(), self.SYN)
 
-    @NEED_DICTS
     def test_same_meaning_merged(self):
         """동의어: 같은 뜻 다른 표기를 대표어 하나로 (EV·전기자동차 → 전기차, 인공지능 → AI)"""
         r = self.topic("전기차,EV,전기자동차,인공지능,K뷰티,K-BEAUTY")
         self.assertEqual(r["kw_topic"], ["전기차", "AI", "K-뷰티"])
 
-    @NEED_DICTS
     def test_after_geo_split(self):
         """동의어: 나라를 뗀 뒤에도 적용 (베트남EV → VN + 전기차)"""
         r = self.topic("베트남EV,중국인공지능", "베트남")
         self.assertEqual(r["kw_topic"], ["전기차", "AI"])
 
-    @NEED_DICTS
     def test_exception_kept_then_merged(self):
         """동의어: 통째로 남긴 사건 이름도 대표어로 (러-우사태, 러시아-우크라이나사태 → 우크라이나사태)"""
         r = self.topic("러-우사태,러시아-우크라이나사태,우크라이나사태")
         self.assertEqual(r["kw_topic"], ["우크라이나사태"])
 
-    @NEED_DICTS
     def test_not_merged_related_words(self):
         """동의어: 관련 있지만 다른 말은 합치지 않음 (배터리 ≠ 이차전지, 냉장고 ≠ 세탁기)"""
         r = self.topic("배터리,이차전지,2차전지,냉장고,세탁기")
@@ -261,26 +301,25 @@ class SynonymTest(unittest.TestCase):
 
 class HypernymTest(unittest.TestCase):
     """④-2 상위어: 동의어 다음에 하위어를 상위어로 (팀 결정 2026-10-21)"""
-    SYN = kc.load_synonyms()
-    HYP = kc.load_hypernyms()
+    @classmethod
+    def setUpClass(cls):
+        cls.SYN = kc.load_synonyms(SYNONYMS)
+        cls.HYP = kc.load_hypernyms(HYPERNYMS)
 
     def run_one(self, kwrd, natn="", syn=None, hyp=None, cat=None):
         return kc.process_article(kwrd, natn, GEO, frozenset(), self.SYN if syn is None else syn,
                                   cat, self.HYP if hyp is None else hyp)
 
-    @NEED_DICTS
     def test_hyponym_becomes_hypernym_and_sub_is_kept(self):
         """상위어: 전기차보조금·전기차충전소 → 전기차, 바꾸기 전 말은 kw_sub에"""
         r = self.run_one("전기차보조금,전기차충전소,EV")
         self.assertEqual(r["kw_topic"], ["전기차"])
         self.assertEqual(r["kw_sub"], ["전기차보조금", "전기차충전소", "전기차"])
 
-    @NEED_DICTS
     def test_synonym_then_hypernym(self):
         """상위어: 동의어를 먼저 적용한 뒤 상위어 (K뷰티 → K-뷰티 → 뷰티)"""
         self.assertEqual(self.run_one("K뷰티")["kw_topic"], ["뷰티"])
 
-    @NEED_DICTS
     def test_team_separated_words_stay(self):
         """상위어: 팀이 각각 상위어로 정한 말은 바꾸지 않음 (뷰티≠화장품, 전기차≠전기, 리튬이온배터리≠리튬 …)"""
         for word in ("뷰티", "전기차", "온라인", "물가", "현대화", "리튬이온배터리", "석유화학", "스마트폰"):
@@ -317,17 +356,18 @@ class HypernymTest(unittest.TestCase):
 
 class CategoryTest(unittest.TestCase):
     """⑤ 대/중분류"""
-    CAT = kc.load_categories()
+    @classmethod
+    def setUpClass(cls):
+        cls.CAT = kc.load_categories(CATEGORIES)
 
     def run_one(self, kwrd, natn=""):
-        return kc.process_article(kwrd, natn, GEO, kc.load_exceptions(), kc.load_synonyms(), self.CAT)
+        return kc.process_article(kwrd, natn, GEO, kc.load_exceptions(), kc.load_synonyms(SYNONYMS), self.CAT)
 
     def test_article_gets_categories(self):
         """분류: 주제어마다 분야가 붙고 한 기사에 여러 분야 가능 (반덤핑 → 관세·무역규제, 태양광 → 에너지 전환)"""
         r = self.run_one("미국,반덤핑,관세,태양광")
         self.assertEqual(r["kw_category"], ["무역·통상>관세·무역규제", "에너지·환경>에너지 전환"])
 
-    @NEED_DICTS
     def test_synonym_then_category(self):
         """분류: 동의어로 바뀐 대표어 기준 (인공지능 → AI → AI·소프트웨어)"""
         self.assertEqual(self.run_one("인공지능")["kw_category"], ["기술·디지털>AI·소프트웨어"])
@@ -352,7 +392,7 @@ class CategoryTest(unittest.TestCase):
         """분류: 분류표 파일이 없어도(빈 표) 기사 처리에서 같은 규칙이 적용됨"""
         with tempfile.TemporaryDirectory() as tmp:
             cat = kc.load_categories(Path(tmp) / "없음.csv")
-        r = kc.process_article("쿼터,은행나무", "", GEO, kc.load_exceptions(), kc.load_synonyms(), cat)
+        r = kc.process_article("쿼터,은행나무", "", GEO, kc.load_exceptions(), kc.load_synonyms(SYNONYMS), cat)
         self.assertEqual(r["kw_category"], ["무역·통상>관세·무역규제", "경제·시장>거시경제"])
 
     def test_no_rule_stays_unclassified(self):
@@ -366,7 +406,7 @@ class CategoryTest(unittest.TestCase):
         df = pd.DataFrame({"bbstxSn": ["1", "2", "3"], "othbcDt": ["2026-10-01", "2026-10-02", "2026-10-03"],
                            "newsTitl": ["가", "나", "다"], "natn": ["미국"] * 3,
                            "kwrd": ["상반기,반덤핑", "상반기,상반기,ZZ희귀어", "은행나무"]})
-        res = [kc.process_article(k, n, GEO, kc.load_exceptions(), kc.load_synonyms(), self.CAT) for k, n in zip(df.kwrd, df.natn)]
+        res = [kc.process_article(k, n, GEO, kc.load_exceptions(), kc.load_synonyms(SYNONYMS), self.CAT) for k, n in zip(df.kwrd, df.natn)]
         un = kc.unclassified_topics(df, res, self.CAT)
         self.assertEqual(un.주제어.tolist(), ["상반기", "ZZ희귀어"])   # 분류된 반덤핑·은행나무는 없음, 기사 수 많은 순
         self.assertEqual(un.기사수.tolist(), [2, 1])                 # 한 기사에 두 번 나와도 1건
@@ -452,7 +492,7 @@ class CategoryTest(unittest.TestCase):
         """미분류 목록: 같은 기사 ID가 두 줄로 들어와도 기사 수 1건, 예시도 한 번만"""
         df = pd.DataFrame({"bbstxSn": ["1", "1"], "othbcDt": ["2026-10-01"] * 2, "newsTitl": ["가"] * 2,
                            "natn": ["미국"] * 2, "kwrd": ["ZZ희귀어"] * 2})
-        res = [kc.process_article(k, n, GEO, kc.load_exceptions(), kc.load_synonyms(), self.CAT) for k, n in zip(df.kwrd, df.natn)]
+        res = [kc.process_article(k, n, GEO, kc.load_exceptions(), kc.load_synonyms(SYNONYMS), self.CAT) for k, n in zip(df.kwrd, df.natn)]
         un = kc.unclassified_topics(df, res, self.CAT)
         self.assertEqual(un.기사수.tolist(), [1])
         self.assertEqual(un.loc[0, "최근 기사"], "[2026-10-01] 가 (1)")

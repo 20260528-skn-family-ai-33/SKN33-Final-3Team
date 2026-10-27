@@ -1,18 +1,19 @@
 """단신속보 원본을 공통 article 행으로 변환합니다. DB 연결·기사 선별은 하지 않습니다."""
 import csv
+import html
 import json
 import re
 import sys
 from datetime import date
 from pathlib import Path
 
-from backend.app.services.news_load import html_to_text, mask
+from backend.app.services.news_load import html_to_text, mask, plain_title
 from backend.app.services.news_keywords.rule_data import GEO_DICT
 
 SOURCE_CODE = "KOTRA_SHORT_NEWS"
 RAW_COLUMNS = ("nttSn", "nttSj", "nttCn", "body", "othbcDt", "kotraNewsUrl", "nat")
 REQUIRED_RAW_COLUMNS = ("nttSn", "othbcDt")
-CLEAN_COLUMNS = ("nttSn", "kw_topic", "country_all", "hs6")
+CLEAN_COLUMNS = ("nttSn", "kw_topic", "country_all")
 
 
 def read_records(path, columns=RAW_COLUMNS):
@@ -61,7 +62,12 @@ def published_date(value):
 
 
 def article_row(raw):
-    title, url = text(raw.get("nttSj")), text(raw.get("kotraNewsUrl"))
+    # plain_title은 600자로 자르므로 정제 후 길이는 먼저 별도로 검증합니다.
+    original_title = text(raw.get("nttSj"))
+    normalized_title = re.sub(r"\s+", " ", html.unescape(html.unescape(original_title))).strip()
+    if len(normalized_title) > 600:
+        raise ValueError("nttSj은 600자를 초과할 수 없습니다")
+    title, url = plain_title(original_title), text(raw.get("kotraNewsUrl"))
     # 팀원 적재기와 동일하게 이미 텍스트인 body를 우선하고, 없으면 nttCn HTML을 변환합니다.
     body = text(raw.get("body")) or html_to_text(raw.get("nttCn"))
     if not body:

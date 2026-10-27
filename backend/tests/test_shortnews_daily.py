@@ -1,5 +1,6 @@
-"""실제 수집·적재 흐름을 합성 API 응답과 임시 SQLite로 검증. 예약 프로세스는 시작하지 않습니다."""
+"""합성 API·임시 SQLite 검증. executor 시험만 합성 작업의 BackgroundScheduler를 시작합니다."""
 import json
+import os
 import unittest
 import threading
 from datetime import date, datetime, timedelta
@@ -8,7 +9,7 @@ from unittest.mock import patch
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.events import EVENT_JOB_EXECUTED
+from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
 from filelock import FileLock
 
 from backend.app.scheduler.collectors.shortnews import shortnews_collect as collector
@@ -54,7 +55,18 @@ class ShortnewsDailyTest(unittest.TestCase):
         return job.run(env_path=self.env, output_dir=self.output, db_url=self.db.url, now=NOW, **kwargs)
 
     def saved(self, result):
-        return json.loads((Path(result["output_dir"]) / "job_result.json").read_text())
+        return json.loads((Path(result["output_dir"]) / "job_result.json").read_text(encoding="utf-8"))
+
+    def test_mysql_success_vector_partial_remains_retryable(self):
+        self.pipeline_mock.side_effect=None
+        self.pipeline_mock.return_value={'status':'PARTIAL','mysql':'SUCCESS','chroma':'PARTIAL'}
+        out=self.run_job()
+        self.assertEqual((out['status'],out['mysql']),('PARTIAL','SUCCESS'))
+        self.assertEqual(self.state()['days']['2026-10-22'],'PARTIAL')
+        self.pipeline_mock.return_value={'status':'SUCCESS','mysql':'SUCCESS','chroma':'SUCCESS'}
+        fixed=self.run_job()
+        self.assertEqual(fixed['status'],'SUCCESS')
+        self.assertEqual(self.pipeline_mock.call_count,2)
 
     def test_schedule_is_active_at_three_kst_and_registration_does_not_run(self):
         scheduler = BlockingScheduler(timezone=job.KST)
@@ -76,7 +88,8 @@ class ShortnewsDailyTest(unittest.TestCase):
         with patch.object(job, "register_jobs"):
             before = {j.id: j for j in main.build_scheduler().get_jobs()}
         started = datetime.now(job.KST)
-        after = {j.id: j for j in main.build_scheduler().get_jobs()}
+        with patch.dict(os.environ, {'SHORTNEWS_DAILY_ENABLED': 'true'}):
+            after = {j.id: j for j in main.build_scheduler().get_jobs()}
         self.assertEqual(set(after) - set(before), {"shortnews_daily", "shortnews_startup"})
         for key, original in before.items():
             updated = after[key]
@@ -97,24 +110,40 @@ class ShortnewsDailyTest(unittest.TestCase):
         self.fetch.side_effect = RuntimeError("synthetic failure")
         scheduler = BackgroundScheduler(timezone=job.KST)
         done, outcomes = threading.Event(), {}
+        def fake_shortnews_failure():
+            return self.run_job()  # 수집 API는 setUp의 fake이며 실패 후 적재는 호출하지 않습니다.
+        def fake_other_job():
+            return "OTHER_JOB_OK"
+        def fake_executor_failure():
+            raise RuntimeError("synthetic executor failure")
         def listener(event):
-            outcomes[event.job_id] = event.retval
-            if len(outcomes) == 2:
+            outcomes[event.job_id] = event
+            if len(outcomes) == 3:
                 done.set()
-        scheduler.add_listener(listener, EVENT_JOB_EXECUTED)
-        scheduler.add_job(self.run_job, "date", id="shortnews")
-        scheduler.add_job(lambda: "OTHER_JOB_OK", "date", id="other")
+        scheduler.add_listener(listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
+        scheduler.add_job(fake_shortnews_failure, "date", id="shortnews")
+        scheduler.add_job(fake_other_job, "date", id="other")
+        scheduler.add_job(fake_executor_failure, "date", id="synthetic_executor_failure")
         scheduler.start()
+        scheduler_thread = scheduler._thread
+        executor = scheduler._executors["default"]
         try:
             self.assertTrue(done.wait(4))
         finally:
             scheduler.shutdown(wait=True)
-        self.assertEqual(outcomes["shortnews"]["status"], "FAILED")
-        self.assertEqual(outcomes["other"], "OTHER_JOB_OK")
+        self.assertEqual(outcomes["shortnews"].retval["status"], "FAILED")
+        self.assertEqual(outcomes["other"].retval, "OTHER_JOB_OK")
+        self.assertIsInstance(outcomes["synthetic_executor_failure"].exception, RuntimeError)
+        self.assertIsNone(outcomes["shortnews"].exception)
+        self.assertIsNone(outcomes["other"].exception)
+        self.pipeline_mock.assert_not_called()
+        self.assertFalse(scheduler.running)
+        self.assertFalse(scheduler_thread.is_alive())
+        self.assertTrue(all(not thread.is_alive() for thread in executor._pool._threads))
 
     def test_common_scheduler_preserves_existing_jobs(self):
         from backend.app.scheduler import main
-        with patch.object(job, "run") as run:
+        with patch.object(job, "run") as run, patch.dict(os.environ, {"SHORTNEWS_DAILY_ENABLED": "true"}):
             scheduler = main.build_scheduler()
             jobs = {scheduled.id: scheduled for scheduled in scheduler.get_jobs()}
             self.assertEqual(set(jobs), {"hs_code_refresh", "hs_code_refresh_retry", "hs_code_embed",
@@ -144,7 +173,7 @@ class ShortnewsDailyTest(unittest.TestCase):
                                     nttCn="<p>대체 본문</p>", smmarCn="선택하지 않을 개요")], 1)]
         first = self.run_job()
         self.assertEqual(first["status"], "SUCCESS")
-        raw = json.loads((Path(first["output_dir"]) / "shortnews_raw.json").read_text())[0]
+        raw = json.loads((Path(first["output_dir"]) / "shortnews_raw.json").read_text(encoding="utf-8"))[0]
         self.assertEqual(raw["smmarCn"], "선택하지 않을 개요")
         article = self.db.rows("article")[0]
         self.assertEqual(article["source_code"], "KOTRA_SHORT_NEWS")
@@ -192,7 +221,7 @@ class ShortnewsDailyTest(unittest.TestCase):
         self.pipeline_mock.return_value = {"status": "FAILED", "mysql": "SUCCESS", "chroma": "NOT_STARTED"}
         result = self.run_job()
         self.assertEqual((result['status'], result['mysql']), ('FAILED', 'SUCCESS'))
-        state = json.loads((self.output / 'state.json').read_text())
+        state = json.loads((self.output / 'state.json').read_text(encoding="utf-8"))
         self.assertEqual(state['databases'][result['database_id']]['days']['2026-10-22'], 'FAILED')
         self.pipeline_mock.return_value = {"status": "SUCCESS", "mysql": "SUCCESS", "chroma": "SUCCESS"}
         result = self.run_job()
@@ -238,7 +267,7 @@ class ShortnewsDailyTest(unittest.TestCase):
         url.assert_called_once_with(self.env)
 
     def state(self):
-        state = json.loads((self.output / "state.json").read_text())
+        state = json.loads((self.output / "state.json").read_text(encoding="utf-8"))
         return state["databases"][job.database_identity(self.db.url)]
 
     def fetch_each_day(self, session, params):
@@ -250,9 +279,9 @@ class ShortnewsDailyTest(unittest.TestCase):
         result = self.run_job()
         self.assertEqual((result["status"], result["mysql"]), ("FAILED", "NOT_STARTED"))
         self.assertEqual(self.db.rows("article"), [])
-        errors = json.loads((Path(result["output_dir"]) / "date_errors.json").read_text())
+        errors = json.loads((Path(result["output_dir"]) / "date_errors.json").read_text(encoding="utf-8"))
         self.assertEqual(errors["errors"][0]["nttSn"], "2")
-        self.assertEqual(len(json.loads((Path(result["output_dir"]) / "shortnews_raw.json").read_text())), 2)
+        self.assertEqual(len(json.loads((Path(result["output_dir"]) / "shortnews_raw.json").read_text(encoding="utf-8"))), 2)
         self.assertEqual(self.state()["days"]["2026-10-22"], "FAILED")
         self.pages = [([fixture.raw("1", "2026-10-22"), fixture.raw("2", "2026-10-22")], 2)]
         self.assertEqual(self.run_job()["status"], "SUCCESS")
@@ -360,17 +389,17 @@ class ShortnewsDailyTest(unittest.TestCase):
     def test_legacy_run_history_recovers_missing_dates(self):
         old = self.output / "2026-10-20" / "old"
         old.mkdir(parents=True)
-        (old / "job_result.json").write_text(json.dumps({"target_date": "2026-10-20", "status": "SUCCESS"}))
+        (old / "job_result.json").write_text(json.dumps({"target_date": "2026-10-20", "status": "SUCCESS"}), encoding="utf-8")
         self.fetch.side_effect = self.fetch_each_day
         self.assertEqual(self.run_job()["status"], "SUCCESS")
         self.assertEqual([p["search2"] for p in self.requests], ["20261020", "20261021", "20261022"])
 
     def test_corrupt_state_is_not_silently_reset(self):
         self.output.mkdir()
-        (self.output / "state.json").write_text("broken")
+        (self.output / "state.json").write_text("broken", encoding="utf-8")
         self.assertEqual(self.run_job()["status"], "FAILED")
         self.fetch.assert_not_called()
-        self.assertEqual((self.output / "state.json").read_text(), "broken")
+        self.assertEqual((self.output / "state.json").read_text(encoding="utf-8"), "broken")
 
 
 if __name__ == "__main__":

@@ -12,7 +12,6 @@ from backend.app.db.batch_log import Source, ensure_source
 from backend.app.db.session import make_engine, mysql_url, session_scope
 from backend.app.db.news_lock import article_load_lock
 from backend.app.models.batch import ServiceOption
-from backend.app.models.hs_code import HsCodeMst
 from backend.app.models.news import ArticleTag
 from backend.app.scheduler.jobs import news_load as news_job
 from backend.app.services import news_load as news, shortnews_load as sn
@@ -83,7 +82,8 @@ def load(engine, raws, cleans=()):
     """기사·태그·일별 집계를 단일 트랜잭션으로 적재합니다. 실행 이력은 run()에서 기록합니다."""
     articles, originals, cleaned = prepare(raws, cleans)
     external_ids = [r["external_id"] for r in articles]
-    unknown_countries, unknown_hs = set(), set()
+    unknown_countries = set()
+    hs_ignored = sum(bool(news.split_values(c.get('hs6'))) for c in cleaned.values())
     tag_count = manual_kept = 0
     with article_load_lock(engine), session_scope(engine) as session:
         # 마이그레이션 잠금 대기 중 바뀐 스키마를 사용하지 않도록 획득 후 조회합니다.
@@ -94,8 +94,6 @@ def load(engine, raws, cleans=()):
         countries = list(session.execute(select(country)).mappings())
         country_set = {r["country_code"] for r in countries}
         lookup = sn.country_lookup(countries)
-        hs_codes = {tuple(r) for r in session.execute(select(HsCodeMst.hs_code, HsCodeMst.hs_ver).where(
-            HsCodeMst.hs_code.like("______")))}
         days = migrated_days | {r["published_date"] for r in articles} | news_job.old_dates(session, external_ids, SOURCE.code)
         # 공용 upsert는 기사 내용만 UPDATE하므로 기존 공개 상태·최초 적재 시각·관리자 JSON은 유지됩니다.
         news_job.upsert_articles(session, articles, table=table)
@@ -103,22 +101,21 @@ def load(engine, raws, cleans=()):
         metadata = news_schema.article_metadata(session, table, ids.values())
         tags = []
         for row in articles:
-            key, day = row["external_id"], row["published_date"]
+            key = row["external_id"]
             article_id = ids[key]
             meta = metadata.get(article_id) or {}
             clean = cleaned.get(key)
             # 정제 결과가 없으면 국가만 갱신하고 기존 키워드·HS 태그는 보존합니다.
             values = dict(clean) if clean is not None else {"kw_topic": "", "hs6": ""}
+            # 과거 정제 파일의 추가 hs6 컬럼도 적재하지 않습니다. 기존 HS 태그는 건드리지 않습니다.
+            values["hs6"] = ""
             if clean is None:
                 codes, unknown = sn.country_codes(originals[key].get("nat"), lookup)
                 values["country_all"] = "|".join(codes)
             else:
                 unknown = set(news.split_values(values["country_all"])) - country_set
             unknown_countries.update(unknown)
-            hs_ver = news_job.hb.hs_ver_for(day) if news.split_values(values["hs6"]) else None
-            if hs_ver:
-                unknown_hs.update(h for h in news.split_values(values["hs6"]) if (h, hs_ver) not in hs_codes)
-            candidates = news.tag_rows(values, article_id, country_set, hs_codes, hs_ver)
+            candidates = news.tag_rows(values, article_id, country_set, set(), None)
             replace = []
             if not meta.get("country_tags_manual", False):
                 replace.append("country_code")
@@ -126,10 +123,6 @@ def load(engine, raws, cleans=()):
                 manual_kept += 1
             if clean is not None:
                 replace.append("keyword_text")
-                if not meta.get("hs_tags_manual", False):
-                    replace.append("hs_code")
-                else:
-                    manual_kept += 1
             for column in replace:
                 session.execute(delete(ArticleTag).where(ArticleTag.article_id == article_id,
                                                         getattr(ArticleTag, column).isnot(None)))
@@ -140,7 +133,7 @@ def load(engine, raws, cleans=()):
     return {"articles": len(articles), "received": len(raws), "duplicates": len(raws) - len(articles),
             "tags_written": tag_count, "manual_tag_groups_preserved": manual_kept,
             "without_clean": sum(r["external_id"] not in cleaned for r in articles),
-            "unknown_countries": sorted(unknown_countries), "unknown_hs": sorted(unknown_hs),
+            "unknown_countries": sorted(unknown_countries), "ignored_hs_rows": hs_ignored,
             "keyword_daily": keyword_rows, "product_daily": product_rows}
 
 
@@ -207,8 +200,10 @@ def run(raw_path, clean_path=None, db_url=None, log_dir=LOG_DIR, *, period=None)
         log.info("적재 완료: 기사 %s건, 중복 입력 %s건, 태그 %s행, 키워드 집계 %s행, 품목 집계 %s행",
                  result["articles"], result["duplicates"], result["tags_written"],
                  result["keyword_daily"], result["product_daily"])
-        if result["unknown_countries"] or result["unknown_hs"]:
-            log.warning("미매핑 태그(기사는 적재): 국가 %s / HS %s", result["unknown_countries"], result["unknown_hs"])
+        if result["unknown_countries"]:
+            log.warning("미매핑 국가(기사는 적재): %s", result["unknown_countries"])
+        if result["ignored_hs_rows"]:
+            log.warning("단신속보는 HS 적재·집계 미지원: 정제 결과 %s행의 HS 입력 무시", result["ignored_hs_rows"])
         return 0
     except (ValueError, OSError) as exc:
         log.error("적재 실패: %s", exc)
@@ -225,7 +220,7 @@ def run(raw_path, clean_path=None, db_url=None, log_dir=LOG_DIR, *, period=None)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw", type=Path, required=True, help="shortnews_raw.csv 또는 shortnews_raw.json")
-    parser.add_argument("--clean", type=Path, help="선택: nttSn, kw_topic, country_all, hs6 정제 결과 CSV/JSON")
+    parser.add_argument("--clean", type=Path, help="선택: nttSn, kw_topic, country_all 정제 결과 CSV/JSON (HS 미지원)")
     parser.add_argument("--db-url", help="SQLAlchemy URL. 생략하면 저장소 루트 .env 및 환경변수의 MYSQL_* 사용")
     parser.add_argument("--log-dir", type=Path, default=LOG_DIR)
     args = parser.parse_args()

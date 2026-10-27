@@ -75,19 +75,23 @@ class SharedLoadLockTest(unittest.TestCase):
         self.assertEqual(set(errors), {"first"} if fail_first else set())
         self.assertIn("second", results)
         count = 1 if fail_first else 2
+        market_count = int(not fail_first or second is news)
         self.assertEqual(len(self.db.rows("article")), count)
-        self.assertEqual(len(self.db.rows("article_tag")), count * 3)
-        for table in ("news_keyword_daily", "news_product_daily"):
-            rows = self.db.rows(table)
-            self.assertTrue(rows)
-            self.assertTrue(all(row["day_count"] == count for row in rows))
+        self.assertEqual(len(self.db.rows("article_tag")), count * 2 + market_count)
+        keywords = self.db.rows("news_keyword_daily")
+        self.assertTrue(keywords)
+        self.assertTrue(all(row["day_count"] == count for row in keywords))
+        products = self.db.rows("news_product_daily")
+        self.assertEqual(len(products), market_count * 4)  # 기존 뉴스의 HS4·HS6 × 전체·국가
+        self.assertTrue(all(row["day_count"] == market_count for row in products))
         # 두 출처 모두 재적재해도 기사·태그·집계는 증가하지 않습니다.
         if not fail_first:
             self.load(first)
             self.load(second)
             self.assertEqual(len(self.db.rows("article")), 2)
-            self.assertEqual(len(self.db.rows("article_tag")), 6)
+            self.assertEqual(len(self.db.rows("article_tag")), 5)
             self.assertTrue(all(r["day_count"] == 2 for r in self.db.rows("news_keyword_daily")))
+            self.assertTrue(all(r["day_count"] == 1 for r in self.db.rows("news_product_daily")))
 
     def test_news_then_shortnews_waits_before_transaction_and_preserves_both_counts(self):
         self.exercise_overlap(news, short)
@@ -97,6 +101,9 @@ class SharedLoadLockTest(unittest.TestCase):
 
     def test_rollback_releases_lock_and_other_loader_can_commit(self):
         self.exercise_overlap(news, short, fail_first=True)
+
+    def test_shortnews_rollback_keeps_news_hs_and_keyword_counts(self):
+        self.exercise_overlap(short, news, fail_first=True)
 
     def test_separate_process_lock_blocks_then_releases(self):
         news_lock.LOAD_LOCK_DIR.mkdir()

@@ -5,16 +5,65 @@
 기존 해외시장뉴스의 HTML 정제·연락처 마스킹·upsert·태그 생성·일별 집계를 재사용합니다.
 기사 내용이나 제목으로 대상을 선별하지 않고 지정한 파일의 모든 행을 처리합니다.
 
+## 2026-10-25 리뷰 반영과 공통 본문 색인 인계
+
+- 제목은 기존 뉴스의 `plain_title` 경로로 HTML 엔티티와 공백을 정리합니다.
+  이 공용 함수는 600자로 자르므로 단신 적재기는 정제 후 600자 초과를 먼저 검증하여 조용히 잘린 제목을 적재하지 않습니다.
+  본문 HTML 정제와 제목 엔티티 정제는 별개이며 CSV/JSON에 같은 규칙을 적용합니다.
+- 분석 캐시와 테스트 파일은 UTF-8을 명시합니다. 원자 저장 실패 시 임시 파일을 닫은 뒤 삭제합니다.
+  작업이 생성한 OpenAI·Chroma 클라이언트와 DB 엔진은 종료하고, 주입된 클라이언트는 호출자가 종료합니다.
+  프로세스 테스트는 임시 폴더와 로컬 작업만 사용합니다. Windows의 `terminate()`는 SIGTERM 핸들러를
+  호출하지 않으므로 해당 POSIX 신호 시험은 Windows에서 제외하고 동일 종료 핸들러의 완료 대기를 별도로 검증합니다.
+  Mac의 통과 결과가 Windows 실행 결과를 의미하지는 않습니다.
+- `news_keyword`는 실제 `article_tag`에 등장한 키워드와 기사 수를 제공하는 인덱스입니다.
+  `keyword_topic` 전체 후보와 범위·메타데이터가 달라 후보 인덱스로 대체하지 않습니다.
+  별도 후보 인덱스의 기존·완료·정리 전 검증은 5,000개 페이지로 읽고 모델·차원·분류 버전을 확인합니다.
+
+단신 파이프라인은 `shortnews_vectors.sync_body`에서 공통
+`news_embed.run_sources(['KOTRA_SHORT_NEWS'], db_url=..., root=..., embed=..., progress=...)`를 호출합니다.
+본문은 검증 후 원자 게시하는 세대별 단일 `kotra_article`에 저장하며, 문서와 임베딩 입력 모두
+발행일·국가·원천 분류·제목 헤더 + 정제 본문 청크(1000자/150자 겹침)를 사용합니다.
+다른 출처는 보존하며 단신은 HS 태그를 새로 만들거나 본문 메타데이터에 넣지 않습니다.
+DB에서 확정한 단신 대표어는 파일 사전으로 다시 바꾸지 않고 목록형 `keywords`로 저장합니다.
+국가는 목록형 `countries`입니다. 기존 `short_news` 본문 컬렉션에는 새로 쓰지 않습니다.
+
+요약은 분석 캐시의 `analysis.summary_sentences`와 실행 로그 폴더의
+`shortnews_analysis_results.json`에 출처·기사 ID·분류 버전·본문 해시와 함께 보존합니다.
+공통 본문 컬렉션의 메타데이터에는 요약을 넣지 않습니다.
+`news_keyword`는 전체 DB 기사 태그를 기준으로 동기화하며 분류 후보 인덱스와 구분합니다.
+기존 뉴스 실행 경로와 공통 실행 경로는 같은 키워드 저장소 잠금을 사용합니다.
+
+본문 기본 경로는 `NEWS_VECTOR_ROOT` 또는 `data/rag/index`, 공통 키워드는 같은 본문 root의 `keywords` 아래입니다.
+`--vector-root`를 명시하면 본문 세대와 공통 키워드(`root/keywords`)를 함께 격리합니다.
+`--chroma-path`는 단신 분류 후보 인덱스 경로입니다. 기본 `news_embed.run()`은 공통 본문 세대를 게시하고 같은 root의 공통 키워드를 갱신합니다. 공개 `search()`는 그 활성 세대를 읽습니다. 명시적으로 주입한 구형 클라이언트만 호환 경로로 남습니다.
+구형 직접 색인 또는 호환되지 않는 기존 세대는 전환 필요 오류로 실패하며 자동 이관·삭제하지 않습니다.
+운영 저장소 이관은 별도 검증이 필요합니다.
+
+공개 검색 예: `news_embed.search(query, root=vector_root, source_codes=['KOTRA_SHORT_NEWS'])`.
+저장과 같은 root를 사용하고, source 필터는 top-k 이전에 적용합니다. `ALL`은 준비된 출처만 검색하며
+명시 요청한 출처가 아직 준비되지 않았으면 `requested_source_not_ready`로 실패합니다.
+국가·키워드·발행일 필터와 본문 레코드만 조회하는 필터를 적용하며 HS 태그 유무로 단신을 제외하지 않습니다.
+이 helper는 기사 단위가 아닌 가까운 본문 조각을 반환합니다. 관련 단신의 상위 노출은 합성 벡터로 검증했지만,
+관련성 임계값을 임의로 추가하지 않았으므로 n을 늘리면 무관 기사도 반환될 수 있습니다.
+관리자 HIDDEN은 색인 재생성 후 제외됩니다. 검색 직전 실시간 DB 노출 조회는 구현하지 않았습니다.
+명시 client 주입은 기존 뉴스 컬렉션 시험·호환 경로이며, 기본 검색은 구형 컬렉션에 자동 폴백하거나 빈 컬렉션을 만들지 않습니다.
+
+공통 반환의 `complete/planned/partial/failed`를 검증합니다. MySQL 성공 후 벡터 실패는 일일 결과
+`PARTIAL`로 남기고 완료 날짜로 기록하지 않아 재시도합니다. progress 값은 복사해 기록하며 최종 반환값을 기준으로 완료를 판단합니다.
+
+
 ## 실행
 
 ### 매일 자동 수집·적재
 
-기존 통합 스케줄러에 `shortnews_daily` 작업을 등록했습니다.
+기존 통합 스케줄러는 `SHORTNEWS_DAILY_ENABLED=true`일 때만 `shortnews_daily`와 시작 복구 작업을 등록합니다.
+기본값은 꺼짐입니다. 루트 `.env` 또는 프로세스 환경변수에 설정하며, 환경변수가 우선합니다.
+`true`, `1`, `yes`, `on`(대소문자 무관)만 활성화 값이고 그 외에는 등록하지 않습니다.
 **매일 오전 3시(Asia/Seoul)에 전날 단신속보의 전체 페이지를 수집하고 전체 본문 요약·최신 DB 키워드 선택 후 MySQL·Chroma에 적재**합니다.
 루트 `.env`에 `shortnews`, `OPENAI_API_KEY`, `MYSQL_*` 설정과 DB 테이블을 준비한 뒤 실행합니다.
 
 ```bash
-python -m backend.app.scheduler.main
+SHORTNEWS_DAILY_ENABLED=true python -m backend.app.scheduler.main
 ```
 
 - 스케줄러 프로세스가 계속 실행 중이어야 합니다. 등록/import 시 API·DB를 호출하지 않으며,
@@ -25,19 +74,21 @@ python -m backend.app.scheduler.main
   본문 전체의 모든 구간으로 최신 DB 분류 후보를 조회하고, 본문 전체를 LLM에 전달합니다.
   팀원과 같은 `gpt-4.1-mini`로 최대 3문장 요약·최대 5개 후보 대표어를 선택합니다.
   후보 밖 단어·중복·잘린 응답은 실패 처리하며 기사를 제외하지 않습니다.
-  요약은 Chroma 메타데이터, 선택 키워드는 MySQL `article_tag` 및 Chroma 메타데이터에 저장합니다.
+  요약은 분석 캐시와 실행별 JSON, 선택 키워드는 MySQL `article_tag` 및 공통 본문 Chroma 메타데이터에 저장합니다.
   분석 캐시는 본문·제목·분류 내용·모델·처리 규칙으로 구분하므로 원문이나 분류가 바뀌면 재분석합니다.
 - 원본의 `othbcDt`를 조회 날짜와 대조합니다. 날짜 불일치·누락·잘못된 날짜가 하나라도 있으면
   그 날짜의 적재 전체를 중단하고 원본과 `date_errors.json`을 보존합니다. 오류 행을 조용히 제외하지 않습니다.
+- 출처·기사 ID의 유일성과 upsert로 기사 행의 중복 생성을 막습니다. 별도 실행 환경에서는 같은 기사의
+  반복 수집·분석·갱신이 가능하며, 분석 캐시가 공유되지 않으면 LLM 비용도 반복 발생할 수 있습니다.
 - 동일 출력 루트 잠금, DB별 `data/shortnews/locks/<DB 식별값>.lock`, `max_instances=1`로 중복 실행을 막습니다.
   같은 저장소 경로에서 같은 DB로 실행하면 출력 폴더를 달리 지정해도 동시에 적재하지 않습니다.
   다른 서버나 별도 저장소 사본까지 조정하는 분산 잠금은 아닙니다.
 - 해외시장뉴스와 단신속보의 적재기는 `data/news/load_locks/<DB 식별값>.lock`도 공유합니다.
   같은 DB의 기사·태그·공용 일별 집계 트랜잭션은 앞 작업의 커밋/롤백 후에 시작합니다.
-  따라서 같은 날짜를 동시에 적재할 때 오래된 조회 결과로 상대 출처의 집계를 덮어쓰지 않습니다.
+  같은 저장소의 공유 잠금을 사용하는 작업끼리는 오래된 조회 결과로 상대 출처의 집계를 덮어쓰지 않습니다.
   수집은 이 공용 잠금 밖에서 수행하며 기존 예약 시간은 변경하지 않습니다.
 - 결과는 `data/shortnews/daily/<대상 날짜>/<실행 ID>/`에 원본·수집 통계·`job_result.json`·적재 로그로 남습니다.
-- 수집 완료+MySQL·Chroma 저장 성공은 `SUCCESS`, 수집 미완료+저장된 기사 처리 성공은 `PARTIAL`, 처리 오류는 `FAILED`입니다.
+- 수집 완료+MySQL·Chroma 저장 성공은 `SUCCESS`, 수집 미완료 또는 MySQL 성공 후 벡터·후속 처리 실패는 `PARTIAL`, MySQL 완료 전 오류는 `FAILED`입니다.
   DB 커밋 후 Chroma 실패도 날짜 완료로 기록하지 않으며 다음 실행에서 같은 기사 ID로 복구합니다.
   `pipeline_result.json`에는 분석·MySQL·Chroma 단계별 결과를 남깁니다.
   API 수집 예외나 수집 통계 누락 시 이전 실행 파일을 대신 적재하지 않습니다. 0건이어도 조회 날짜로 적재 이력을 남깁니다.
@@ -45,6 +96,8 @@ python -m backend.app.scheduler.main
   사용자명·비밀번호·접속 URL을 저장하지 않습니다. 한 번의 복구 실행은 시작할 때 확정한 DB를 계속 사용합니다.
   DB가 바뀌면 기존 운영 시작일부터 새 DB로 재처리하고, 원래 DB로 돌아오면 그 DB의 진행 상태를 사용합니다.
   버전 1·2 기록 또는 출처·본문 처리 규칙 버전이 다른 완료 기록은 한 번 재처리하여 새 형식으로 전환합니다.
+  현재 `v4-common-body-no-hs` 규칙으로 전환 시 기존 운영 범위의 완료 날짜도 한 번 재처리하여 과거 단신속보의 HS 집계 기여분을 제외합니다.
+  이때 기사·기존 HS 태그는 삭제하지 않고 유효한 분석 캐시를 재사용합니다. 운영 범위 밖 날짜는 자동 재처리하지 않습니다.
   새 규칙으로 검증된 완료 기록은 다음 실행에 유지합니다. 이후 출처·본문 계약을 변경하면 `PIPELINE_REVISION`도 갱신해야 합니다.
   정기 실행·재시작 때 실패/미완료/RUNNING 상태와
   운영 시작일 이후 빠진 날짜를 모두 다시 처리합니다. 특정 날짜가 실패해도 나머지 날짜는 계속 처리합니다.
@@ -94,10 +147,12 @@ mkdir -p data/shortnews chroma_data
 ```
 
 `shortnews_worker`는 기존 `shortnews_daily.register_jobs`를 사용해 정기·시작 복구 작업을 등록합니다.
+전용 워커와 수동 실행은 `SHORTNEWS_DAILY_ENABLED`의 영향을 받지 않습니다.
+활성화 스위치와 파일 잠금은 여러 서버의 동시 실행을 조정하는 분산 잠금이 아닙니다.
 통합 스케줄러를 운영할 경우에는 기존 `backend.app.scheduler.main`을 사용합니다.
 템플릿은 오류 종료 시 재시작하며, 종료 신호를 받으면 진행 작업을 기다립니다.
-로컬의 실제 자식 프로세스 테스트로 종료 신호 수신 후 작업 완료 대기, 중복 프로세스 차단,
-강제 종료 뒤 재시작을 확인했습니다. 이는 AWS의 systemd 설치·재부팅 검증을 대신하지 않습니다.
+이번 로컬 검증은 합성 입력과 가상 작업으로 종료 핸들러의 완료 대기·잠금 해제를 확인합니다.
+실제 자식 프로세스 시험과 AWS의 systemd 설치·재부팅 검증은 실행하지 않습니다.
 실제 서버 준비 후 서비스 설치·시작·재시작과 전날 작업 결과를 확인해야 운영 검증이 완료됩니다.
 상태는 `systemctl status trade-agent-shortnews`와 `journalctl -u trade-agent-shortnews`,
 `data/shortnews/daily/latest_run.json`에서 확인합니다.
@@ -108,7 +163,7 @@ mkdir -p data/shortnews chroma_data
 .venv/bin/python -m backend.app.scheduler.jobs.shortnews_pipeline --raw "<수집실행폴더>/shortnews_raw.csv"
 ```
 
-현재 DB 분류로 다시 선택하고 DB 키워드·Chroma 문서 및 메타데이터를 함께 갱신합니다.
+현재 DB 분류로 다시 선택하고 DB 키워드·공통 본문 Chroma 문서 및 메타데이터를 함께 갱신합니다.
 입력·분류가 같으면 분석을 재사용하고, Chroma 내용도 같으면 재임베딩하지 않습니다.
 MySQL 단독 적재는 아래 `shortnews_load` 명령을 사용합니다.
 
@@ -142,6 +197,15 @@ python -m backend.app.scheduler.jobs.shortnews_load --raw "data/shortnews/shortn
 ## 원본 → DB 매핑
 
 ### 최신 분류 후보 인덱스 준비
+
+일일 파이프라인과 인덱스 준비 명령은 실제 Chroma 저장 폴더의 `short_news_keywords.lock`을 공유합니다.
+인덱스 작성부터 후보 조회·MySQL·Chroma 저장·최신 분류 재확인·정리까지 잠금을 유지합니다.
+다른 작업이 사용 중이면 실패로 반환하며 일일 작업은 다음 실행에서 재시도합니다.
+전체 처리 성공 후에만 이전 `short_news_keywords_<버전>` 컬렉션을 정리합니다.
+인덱스 단독 준비 명령은 색인 완료와 DB 분류 재확인 후 정리합니다.
+이름·모델·차원·분류 버전이 단신속보 인덱스 계약과 일치하는 컬렉션만 삭제하며,
+`short_news`, `news_keyword` 및 식별되지 않은 컬렉션은 보존합니다.
+실패·미완성 색인은 기존 버전을 삭제하지 않습니다. 정리는 Chroma 컬렉션 삭제이며 디스크 파일의 즉시 축소를 보장하지 않습니다.
 
 ```bash
 python -m backend.app.scheduler.jobs.shortnews_keyword_index
@@ -186,25 +250,31 @@ CSV는 UTF-8/UTF-8 BOM, JSON은 수집기에서 생성한 기사 객체 목록�
 
 ## 선택 정제 결과
 
-`--clean`의 필수 컬럼은 `nttSn, kw_topic, country_all, hs6`입니다.
-국가·키워드·품목의 여러 값은 기존 뉴스와 같이 `|`로 구분합니다.
+`--clean`의 필수 컬럼은 `nttSn, kw_topic, country_all`입니다.
+국가·키워드의 여러 값은 기존 뉴스와 같이 `|`로 구분합니다.
 예시는 실제 기사 원문이 아닌 입력 형식 설명입니다.
 
 ```csv
-nttSn,kw_topic,country_all,hs6
-001,AI|반도체,US|CN,854143
+nttSn,kw_topic,country_all
+001,AI|반도체,US|CN
 ```
 
-- MySQL 단독 적재기 `shortnews_load`는 원본에 없는 키워드·HS를 자동 추출하거나 추정하지 않습니다.
-  일일 `shortnews_pipeline`에서는 최신 DB 후보에서 키워드를 선택하며 HS는 자동 추출하지 않습니다.
-- 정제 행이 있으면 키워드·국가·HS 태그를 그 결과로 교체합니다. 빈 값은 해당 종류의 태그를 제거합니다.
-- 정제 행이 없는 기사는 원본 `nat`로 국가만 갱신하고 기존 키워드·HS 태그는 보존합니다.
-- 국가 코드는 실제 `country`, HS는 발행일 판본의 `hs_code`에 있는 **6자리 코드**만 연결합니다.
-  HS4 등 다른 자리수는 미매핑으로 보고하며, HS4 집계는 연결된 HS6에서 파생합니다.
-  미매핑 국가·HS는 경고와 결과에 기록하며 기사 자체는 적재합니다.
-- HS 판본은 기존 `hs_code_build.hs_ver_for` 규칙을 사용합니다.
-- 일별 집계는 입력 기사의 기존 발행일과 새 발행일에 대해 모든 출처의 고유 기사를 다시 셉니다.
-  키워드·품목 태그가 없는 기사는 해당 지표에 숫자를 만들지 않습니다.
+**단신속보는 HS 태그 적재 및 HS 기반 품목 집계를 제공하지 않습니다.**
+일일 파이프라인과 수동 정제 파일 적재에 동일하게 적용합니다.
+과거 파일의 추가 `hs6` 컬럼은 무시하며, 값이 있으면 경고와 `ignored_hs_rows`에 기록합니다.
+기사·국가·키워드 적재는 계속 진행합니다.
+
+- MySQL 단독 적재기 `shortnews_load`는 키워드를 자동 추출하지 않습니다.
+  일일 `shortnews_pipeline`에서 최신 DB 후보 중 키워드를 선택합니다.
+- 정제 행이 있으면 키워드·국가 태그를 교체합니다. 빈 값은 해당 종류의 태그를 제거합니다.
+- 정제 행이 없는 기사는 원본 `nat`로 국가만 갱신하고 기존 키워드를 보존합니다.
+- 국가 코드는 실제 `country`에 존재하는 코드만 연결합니다. 미매핑은 기록하며 기사 자체는 적재합니다.
+- 기존 단신속보 HS 태그와 관리자 정보는 삭제·변경하지 않습니다. 보존된 HS 태그도 품목 집계에는 포함하지 않습니다.
+- 일별 키워드 집계는 MARKET·단신의 고유 기사만 다시 셉니다(신문 자동 포함 없음). 품목 집계에서는 단신속보의 현재·구형 출처를 제외하고
+  MARKET 출처만 계산합니다. 발행일이 바뀌면 이전 날짜와 새 날짜를 모두 재계산합니다.
+  결과의 `product_daily`는 해당 날짜에 재계산한 **KOTRA 시장뉴스의 공용 집계 행 수**이며 단신속보 품목 수가 아닙니다.
+- 변경 코드만 배포해도 과거 모든 집계가 즉시 바뀌지는 않습니다. 운영 범위는 처리 규칙 전환으로 재처리하며,
+  범위 밖 과거 집계는 필요한 날짜를 명시적으로 재처리해야 합니다.
 
 ## 관리자 ERD 호환
 
@@ -219,8 +289,8 @@ nttSn,kw_topic,country_all,hs6
 | `article.admin_meta_json` | 신규 기사에 schema_version·visibility·수동 태그 플래그·classification_input·classification_state 초기값 저장; 기존 JSON 유지 |
 | `batch_run.detail_json` | schema_version=1과 성공 결과 또는 실패 예외 종류 기록 |
 
-`admin_meta_json.country_tags_manual=true`이면 국가 태그,
-`hs_tags_manual=true`이면 HS 태그를 원본/정제 결과로 덮어쓰지 않습니다.
+`admin_meta_json.country_tags_manual=true`이면 국가 태그를 덮어쓰지 않습니다.
+기존 HS 태그는 수동 여부와 관계없이 보존하되 단신속보 집계에서는 제외합니다.
 MySQL 단독 적재기의 초기 관리자 분류 상태는 PENDING/revision 0입니다.
 일일 파이프라인은 요약·키워드 선택과 태그 갱신을 수행하지만 관리자 분류 상태·이력 테이블은 변경하지 않습니다.
 `classification_input`에는 적재 시점의 정책 코드·기본 CSV 사전·DB의 `keyword_category`와
@@ -233,14 +303,14 @@ MySQL 단독 적재기의 초기 관리자 분류 상태는 PENDING/revision 0�
 관리자 분류 근거(`article_classification`)와 다른 관리자 테이블은 이 적재 작업에서 변경하지 않습니다.
 `news_keyword_daily`·`news_product_daily` 적재 규칙은 기존과 같습니다.
 조회용 `v_article_day`·`v_article_country_day`는 아래 관리자 마이그레이션 적용 후
-공개 기사(`VISIBLE`)만 집계하며 `KOTRA_SHORT_NEWS`를 포함합니다.
+공개 KOTRA 시장뉴스(`KOTRA_MARKET`, `VISIBLE`)만 집계합니다. 단신 포함 두 KOTRA 집계는 `v_article_integrated_*`, 출처별 조회는 `v_article_source_*`로 분리합니다.
 
 ### 기사·배치 관리자 스키마 적용
 
 기준은 `관리자_ERD_SQL_기존배치유지_20261022`입니다.
 `db/mysql/migrations/20261023_admin_news_erd.sql`은 기사 관리 컬럼 3개,
 `batch_run`의 `detail_json`·작업/재시도 연결, `article_classification`,
-외래키 대상 `async_job`, 관련 트리거 3개와 기사 집계 뷰 2개를 적용합니다.
+외래키 대상 `async_job`, 관련 트리거 3개와 기사 집계 뷰 6개를 적용합니다.
 회원·채팅·리포트 등 다른 관리자 기능의 스키마 변경은 포함하지 않습니다.
 기존 기사에 알 수 없는 최초 적재 시각·분류 스냅샷을 만들어 넣지 않습니다.
 
@@ -304,34 +374,22 @@ ADMIN_NEWS_MYSQL_TEST=1 .venv/bin/python -m unittest backend.tests.test_admin_ne
 - 배치 종료 이력 갱신만 실패하면 기사 처리 결과와 별도로 경고를 남깁니다.
 - API 수집 완료 여부는 적재 성공과 별개입니다. 이 코드는 지정한 파일 전체를 적재하며 수집 범위를 판단하지 않습니다.
 
-## 검증
+## 로컬 검증
 
 ```bash
-python -m unittest backend.tests.test_shortnews_daily backend.tests.test_shortnews_recovery backend.tests.test_shortnews_transition backend.tests.test_shortnews_load backend.tests.test_news_load backend.tests.test_news_load_lock backend.tests.test_news_erd_compat
+python -B backend/tests/shortnews_offline/run_tests.py --repo .
 ```
 
-SQLite FK 검사를 켠 기존/관리자 확장 스키마에서 중복 갱신, 출처별 ID 분리, 관리자 설정·수동 태그 보존,
-국가·발행일 변경, 부분 정제 결과, 트랜잭션 롤백, 배치 성공/실패 기록과 MySQL upsert SQL 생성을 확인합니다.
-신규 INSERT의 최초 수신 시각·스냅샷 필수 트리거를 SQLite로 재현하고, 스냅샷 실파일의 해시·보존도 검증합니다.
-DB 전환·구버전 상태 이전, 날짜별 파일 오류, DB 저장 전후 체크포인트 오류, 실행 중단·재개,
-동시 실행 잠금과 재시도 후 기사·태그 중복 여부, 기존 스케줄 등록·실행의 독립성도 검증합니다.
-2026-10-23 실검증에서는 2026-10-22 API 전체 5건을 실제 RDS 및 로컬 Chroma에 적재했습니다.
-원본·DB·Chroma의 본문 및 기사 ID와 키워드 21개가 일치했고, 재실행 후 기사·태그·집계 중복이 없었습니다.
-동일 입력 재실행의 LLM 요청·기사 재임베딩은 각각 0건이었습니다.
-최신 main에서 분리한 브랜치는 아래 회귀 명령으로 다시 검증합니다. 생성 사전이 없는 깨끗한
-체크아웃에서는 사전 의존 시험 9개와 구형 ERD의 관리자 전용 시험 1개가 제외됩니다.
-AWS 서버가 아직 없어 상시 운영은 미검증입니다.
+2026-10-27 PR32 독립 후보본에서 347건 통과, 9건 건너뜀, 네이티브 프로세스 시험 4건 제외를 확인했습니다. 하위 검증 23건도 통과했습니다. 건너뛴 시험은 실제 MySQL 전용 8건과 구형 스키마의 관리자 전용 1건입니다. 새 프로세스에서 진입점·스케줄러 구성·공통 사용량 함수·CLI·requirements 참조 11건을 별도로 확인했습니다.
 
-```bash
-python -m unittest backend.tests.test_shortnews_analysis backend.tests.test_shortnews_pipeline backend.tests.test_shortnews_keywords backend.tests.test_shortnews_worker
-```
+SQLite의 기존/관리자 확장 스키마에서 중복 갱신, 출처별 ID 분리, 관리자 설정·수동 태그 보존, 부분 실패 롤백과 재시도를 검증합니다. 합성 본문·사전·임베딩으로 MySQL 적재 로직→공통 본문 색인, 사용량·캐시 재사용, 부분 실패 후 복구를 확인합니다. 테스트가 읽은 애플리케이션 모듈은 모두 해당 독립 후보본의 실제 소스였습니다.
 
-### 독립 브랜치 회귀 검증
+기존 작업 10개를 유지하며 단신 정기·시작 복구 작업 2개는 `SHORTNEWS_DAILY_ENABLED=true`일 때만 등록합니다. 등록 확인은 예약을 시작하지 않습니다. 실제 실행기 시작은 지정된 가상 작업 시험 2건만 허용하며 종료를 확인합니다. worker 종료는 가상 스케줄러로 완료 대기·잠금 해제를 확인했습니다.
 
-```bash
-python -m unittest backend.tests.test_admin_news_migration backend.tests.test_admin_news_views backend.tests.test_db_tls backend.tests.test_shortnews_transition backend.tests.test_shortnews_recovery backend.tests.test_shortnews_daily backend.tests.test_shortnews_load backend.tests.test_news_load backend.tests.test_news_load_lock backend.tests.test_news_erd_compat backend.tests.test_hs_code_refresh backend.tests.test_customs_monthly backend.tests.test_un_scheduler_integration backend.tests.test_news_keywords backend.tests.test_keyword_topic_load backend.tests.test_shortnews_keywords backend.tests.test_shortnews_analysis backend.tests.test_shortnews_pipeline backend.tests.test_shortnews_worker
-```
+실제 API·모델·MySQL/RDS·Windows·AWS·새 환경 의존성 설치는 이번 검증에서 실행하지 않았습니다. 설치된 로컬 런타임에서 확인한 결과입니다.
 
-이 브랜치는 기존 main의 스케줄 작업 10개를 유지하고 단신속보 정기·복구 작업 2개를 추가합니다.
-미병합 언론사 크롤러·스케줄러는 포함하지 않습니다. 해당 작업을 나중에 병합할 때에는
-공용 적재 잠금 적용과 스케줄러 등록 목록 시험을 함께 확인해야 합니다.
+### 사용량과 저장소 확인
+
+분류 색인·후보 질의·LLM 분석·본문 색인·전역 키워드 단계를 `pipeline_result.json`의 `usage`에 따로 기록합니다. 실행별 `run_id`가 다르며, 캐시 적중은 현재 실행 호출·토큰을 증가시키지 않습니다. 잘못된 모델 응답도 이미 보고된 usage는 보존합니다. 응답이나 usage가 없으면 `unreported_calls`로 구분하며 전체 사용량을 확정하지 않습니다. 실패와 PARTIAL에서도 보고된 사용량을 남깁니다. 독립 분류 색인 명령도 `candidate_index_run.json`에 이번 실행 사용량과 실패 상태를 기록합니다.
+
+공통 `root/database.json`은 DB 식별 해시만 저장하며 다른 DB 자료가 기존 출처와 섞이는 것을 막습니다. DB가 다르거나 기존 색인의 출처 DB가 확인되지 않으면 자동 게시하지 않습니다. 본문·전역 키워드 root와 별도 분류 후보 경로를 함께 확인합니다.

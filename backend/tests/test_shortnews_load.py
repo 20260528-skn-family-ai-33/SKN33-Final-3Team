@@ -70,7 +70,7 @@ class ConversionTest(unittest.TestCase):
                 writer.writeheader()
                 writer.writerow(raw())
             self.assertEqual(sn.read_records(p / "raw.csv"), sn.read_records(p / "raw.json"))
-            (p / "bad.json").write_text('{"nttSn": "001"}')
+            (p / "bad.json").write_text('{"nttSn": "001"}', encoding="utf-8")
             with self.assertRaises(ValueError):
                 sn.read_records(p / "bad.json")
             (p / "bad.csv").write_text("nttSn,nttSj\n001,제목", encoding="utf-8")
@@ -181,7 +181,7 @@ class ShortnewsLoadTest(unittest.TestCase):
         self.assertEqual(after["title"], "뒤")
         self.assertEqual(result["duplicates"], 1)
         self.assertTrue(any(t["keyword_text"] == "AI" for t in self.rows("article_tag")))
-        self.assertTrue(any(t["hs_code"] == "854143" for t in self.rows("article_tag")))
+        self.assertFalse(any(t["hs_code"] for t in self.rows("article_tag")))
         if self.extended:
             self.assertEqual(after["first_ingested_at"], before["first_ingested_at"])
 
@@ -191,7 +191,7 @@ class ShortnewsLoadTest(unittest.TestCase):
         counts = self.rows("news_keyword_daily")
         self.assertEqual({r["metric_date"] for r in counts}, {date(2026, 10, 3)})
         self.assertEqual({r["country_key"] for r in counts}, {"*", "CN"})
-        self.assertEqual({r["hs_code"] for r in self.rows("news_product_daily")}, {"8541", "854143"})
+        self.assertEqual(self.rows("news_product_daily"), [])
 
     def test_partial_clean_does_not_clear_other_keywords(self):
         raws = [raw(), raw("002")]
@@ -223,6 +223,8 @@ class ShortnewsLoadTest(unittest.TestCase):
             self.skipTest("관리자 컬럼은 신규 ERD에만 존재")
         job.load(self.engine, [raw()], [clean()])
         table = job.reflect(self.engine, "article")
+        with session_scope(self.engine) as session:
+            session.add(ArticleTag(article_id=self.rows("article")[0]["article_id"], hs_code="854143", hs_ver="HS2022"))
         meta = self.rows("article")[0]["admin_meta_json"]
         meta.update(country_tags_manual=True, hs_tags_manual=True)
         meta["visibility"]["reason"] = "관리자 숨김"
@@ -265,15 +267,15 @@ class ShortnewsLoadTest(unittest.TestCase):
         self.assertEqual(self.rows("article_tag")[0]["country_code"], "CZ")
         result = job.load(self.engine, [raw()], [clean(countries="US|ZZ", hs="854143|000000")])
         self.assertEqual(result["unknown_countries"], ["ZZ"])
-        self.assertEqual(result["unknown_hs"], ["000000"])
+        self.assertEqual(result["ignored_hs_rows"], 1)
         self.assertEqual(len(self.rows("article")), 1)
-        self.assertEqual(len(self.rows("article_tag")), 3)
+        self.assertEqual(len(self.rows("article_tag")), 2)
 
-    def test_non_hs6_is_reported_not_stored_or_counted(self):
+    def test_all_hs_input_is_ignored_not_stored_or_counted(self):
         result = job.load(self.engine, [raw()], [clean(hs="8541|854143")])
-        self.assertEqual(result["unknown_hs"], ["8541"])
-        self.assertEqual([r["hs_code"] for r in self.rows("article_tag") if r["hs_code"]], ["854143"])
-        self.assertEqual({r["hs_code"] for r in self.rows("news_product_daily")}, {"8541", "854143"})
+        self.assertEqual(result["ignored_hs_rows"], 1)
+        self.assertEqual([r["hs_code"] for r in self.rows("article_tag") if r["hs_code"]], [])
+        self.assertEqual(self.rows("news_product_daily"), [])
 
     def test_missing_json_country_can_be_loaded(self):
         row = raw()

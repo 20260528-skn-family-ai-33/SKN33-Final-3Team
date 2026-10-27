@@ -105,10 +105,10 @@ class SourceTransitionTest(unittest.TestCase):
         self.assertEqual(self.c.run_job()["status"], "SUCCESS")
         self.make_legacy()
         path = self.c.output / "state.json"
-        state = json.loads(path.read_text())
+        state = json.loads(path.read_text(encoding="utf-8"))
         state["schema_version"] = 2
         state.pop("pipeline_revision")
-        path.write_text(json.dumps(state))
+        path.write_text(json.dumps(state), encoding="utf-8")
         self.c.requests.clear()
         now = datetime.fromisoformat("2026-10-24T03:00:00+09:00")
         result = daily.run(env_path=self.c.env, output_dir=self.c.output, db_url=self.db.url, now=now)
@@ -124,11 +124,11 @@ class SourceTransitionTest(unittest.TestCase):
     def test_revision_mismatch_invalidates_every_database_namespace(self):
         self.c.run_job()
         path = self.c.output / "state.json"
-        state = json.loads(path.read_text())
+        state = json.loads(path.read_text(encoding="utf-8"))
         progress = next(iter(state["databases"].values()))
         state["databases"]["0" * 64] = json.loads(json.dumps(progress))
         state["pipeline_revision"] = "old-contract"
-        path.write_text(json.dumps(state))
+        path.write_text(json.dumps(state), encoding="utf-8")
         state = daily.read_state(self.c.output, datetime.fromisoformat("2026-10-24").date(),
                                  daily.database_identity(self.db.url))
         self.assertEqual(state["pipeline_revision"], daily.PIPELINE_REVISION)

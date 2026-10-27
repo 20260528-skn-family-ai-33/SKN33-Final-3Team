@@ -472,7 +472,7 @@ class MonthlyScheduleTest(unittest.TestCase):
 
     def test_shared_scheduler_registers_all_jobs_without_executing_them(self):
         from backend.app.scheduler import main as shared
-        with patch.dict("os.environ", {}, clear=True), patch.object(monthly, "dotenv_values", return_value={}), \
+        with patch.dict("os.environ", {"SHORTNEWS_DAILY_ENABLED": "false"}, clear=True), patch.object(monthly, "dotenv_values", return_value={}), \
                 patch.object(monthly, "run_month") as run_month, \
                 patch.object(shared.refresh, "run_refresh") as refresh, patch.object(shared.embed, "run") as embed:
             scheduler = shared.build_scheduler()
@@ -480,7 +480,7 @@ class MonthlyScheduleTest(unittest.TestCase):
         self.assertEqual(set(jobs), {"hs_code_refresh", "hs_code_refresh_retry", "hs_code_embed",
                                     "customs_monthly", "customs_monthly_startup",
                                     "un_data_monthly", "un_data_startup", "un_data_resume",
-                                    "fx_daily_load", "fx_daily_startup", "shortnews_daily", "shortnews_startup"})
+                                    "fx_daily_load", "fx_daily_startup"})
         self.assertIs(jobs["customs_monthly"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly_startup"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly"].args[0], scheduler)

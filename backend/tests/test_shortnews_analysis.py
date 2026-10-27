@@ -56,7 +56,7 @@ class AnalysisTest(unittest.TestCase):
     def test_corrupted_cache_fails_instead_of_succeeding(self):
         self.analyze()
         path = next(Path(self.tmp.name).glob('*.json'))
-        path.write_text('{broken')
+        path.write_text('{broken', encoding="utf-8")
         with self.assertRaises(json.JSONDecodeError): self.analyze()
 
 

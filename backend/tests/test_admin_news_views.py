@@ -12,7 +12,7 @@ class ArticleViewsTest(unittest.TestCase):
         path = ('db/mysql/migrations/20261023_admin_news_erd.sql' if admin
                 else 'db/mysql/init/01_schema.sql')
         views = re.findall(r'CREATE(?: OR REPLACE)? VIEW v_article_.*?;', (ROOT / path).read_text())
-        self.assertEqual(len(views), 2)
+        self.assertEqual(len(views), 6)
         db = sqlite3.connect(':memory:')
         self.addCleanup(db.close)
         db.executescript('''
@@ -29,8 +29,8 @@ class ArticleViewsTest(unittest.TestCase):
         if admin:
             db.execute("INSERT INTO article VALUES (6,'KOTRA_SHORT_NEWS','2026-10-21','HIDDEN')")
             db.execute("INSERT INTO article_tag VALUES (6,'KR')")
-        self.assertEqual(db.execute('SELECT * FROM v_article_day').fetchall(), [('2026-10-21', 4)])
-        self.assertEqual(db.execute('SELECT * FROM v_article_country_day').fetchall(), [('2026-10-21', 'KR', 3)])
+        self.assertEqual(db.execute('SELECT * FROM v_article_day').fetchall(), [('2026-10-21', 1)])
+        self.assertEqual(db.execute('SELECT * FROM v_article_country_day').fetchall(), [('2026-10-21', 'KR', 1)])
 
     def test_initial_views(self):
         self.check_views(False)

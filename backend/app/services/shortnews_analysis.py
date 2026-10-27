@@ -19,23 +19,39 @@ keywords: 본문 주제를 정확히 나타내는 후보 대표어를 최대 5�
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as stream:
-        temporary = Path(stream.name)
-        try:
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
             json.dump(value, stream, ensure_ascii=False, default=str)
             stream.flush()
             os.fsync(stream.fileno())
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
-    try:
         temporary.replace(path)
     finally:
-        temporary.unlink(missing_ok=True)
+        # Windows는 열린 파일을 삭제할 수 없으므로 with 종료 뒤 정리합니다.
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
-def embed(api, texts):
-    result = api.embeddings.create(model=MODEL, input=texts, dimensions=DIMENSIONS)
+def record_usage(sink, model, response):
+    """응답 검증 전에 보고된 사용량을 기록합니다. 실패·usage 미제공을 0원으로 확정하지 않습니다."""
+    if sink is None:
+        return
+    usage = getattr(response, 'usage', None)
+    def count(name):
+        value = getattr(usage, name, None)
+        return value if type(value) is int and value >= 0 else None
+    tokens = count('total_tokens')
+    sink({'model':model, 'tokens':tokens, 'input_tokens':count('prompt_tokens'),
+          'output_tokens':count('completion_tokens'), 'reported':tokens is not None})
+
+
+def embed(api, texts, *, usage_sink=None):
+    result = None
+    try:
+        result = api.embeddings.create(model=MODEL, input=texts, dimensions=DIMENSIONS)
+    finally:
+        record_usage(usage_sink, MODEL, result)
     ordered = sorted(result.data, key=lambda row: row.index)
     if [r.index for r in ordered] != list(range(len(texts))):
         raise ValueError('임베딩 응답 순번 불일치')
@@ -80,7 +96,7 @@ def validate(result, allowed):
     return {'summary_sentences': [s.strip() for s in sentences], 'keywords': words}
 
 
-def ask(api, article, choices):
+def ask(api, article, choices, *, usage_sink=None):
     allowed = [c['keyword'] for c in choices]
     schema = {'type': 'object', 'additionalProperties': False,
               'properties': {'summary_sentences': {'type': 'array', 'items': {'type': 'string'},
@@ -88,10 +104,14 @@ def ask(api, article, choices):
                              'keywords': {'type': 'array', 'items': {'type': 'string', 'enum': allowed},
                                           'maxItems': 5}},
               'required': ['summary_sentences', 'keywords']}
-    result = api.chat.completions.create(model=CHAT_MODEL, temperature=0, max_tokens=1500,
-        response_format={'type': 'json_schema', 'json_schema': {'name': 'shortnews_analysis', 'strict': True, 'schema': schema}},
-        messages=[{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps(
-            {'title': article['title'], 'body': article['body_masked'], 'candidates': choices}, ensure_ascii=False)}])
+    result = None
+    try:
+        result = api.chat.completions.create(model=CHAT_MODEL, temperature=0, max_tokens=1500,
+            response_format={'type': 'json_schema', 'json_schema': {'name': 'shortnews_analysis', 'strict': True, 'schema': schema}},
+            messages=[{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps(
+                {'title': article['title'], 'body': article['body_masked'], 'candidates': choices}, ensure_ascii=False)}])
+    finally:
+        record_usage(usage_sink, CHAT_MODEL, result)
     choice = result.choices[0]
     if choice.finish_reason != 'stop' or choice.message.refusal:
         raise ValueError('LLM 응답 미완료')
@@ -104,7 +124,7 @@ def analyze(article, snapshot, collection, encode, request, cache_dir):
     path = Path(cache_dir) / (key + '.json')
     all_canonical = {r['canonical'] for r in snapshot.rows}
     if path.exists():
-        stored = json.loads(path.read_text())
+        stored = json.loads(path.read_text(encoding='utf-8'))
         if stored.get('input_hash') != key:
             raise ValueError('분석 캐시 입력 버전 불일치')
         return validate(stored['analysis'], all_canonical), True

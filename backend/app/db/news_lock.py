@@ -4,6 +4,7 @@ import json
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
+from weakref import WeakKeyDictionary
 
 ROOT = Path(__file__).resolve().parents[3]
 LOAD_LOCK_DIR = ROOT / "data/news/load_locks"
@@ -25,6 +26,17 @@ def database_identity(value):
                     "database": url.database, "socket": url.query.get("unix_socket")}
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
+
+def engine_identity(engine):
+    """같은 메모리 DB Engine의 재실행은 식별하되 서로 다른 Engine은 구분합니다."""
+    if engine.url.get_backend_name() == 'sqlite' and engine.url.database in (None, '', ':memory:'):
+        if engine not in _MEMORY_IDENTITIES:
+            _MEMORY_IDENTITIES[engine] = database_identity(engine.url)
+        return _MEMORY_IDENTITIES[engine]
+    return database_identity(engine.url)
+
+
+_MEMORY_IDENTITIES = WeakKeyDictionary()
 
 
 @contextmanager
