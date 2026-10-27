@@ -1,0 +1,16 @@
+# HTTP API/worker only. Existing ingestion dependencies remain in requirements.txt.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+SQLAlchemy>=2.0,<2.1
+PyMySQL[rsa]>=1.1,<2
+python-dotenv>=1,<2
+bcrypt>=4.2,<6
+email-validator>=2.2,<3
+openpyxl>=3.1,<4
+python-docx>=1.1,<2
+reportlab>=4.2,<5
+matplotlib>=3.9,<4
+tzdata>=2025.1
+# TestClient and artifact verification
+httpx>=0.27,<1
+pypdf>=5,<7
