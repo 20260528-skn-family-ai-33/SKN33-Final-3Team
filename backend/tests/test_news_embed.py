@@ -60,7 +60,7 @@ class ChunkTest(unittest.TestCase):
 
 class UsageTest(unittest.TestCase):
     def test_openai_tokens_are_summed_with_cost(self):
-        res = lambda n, k: SimpleNamespace(data=[SimpleNamespace(embedding=[0.1])] * k,
+        res = lambda n, k: SimpleNamespace(data=[SimpleNamespace(index=i,embedding=[0.1]) for i in range(k)],
                                            usage=SimpleNamespace(total_tokens=n))
         client = mock.Mock()
         client.embeddings.create.side_effect = [res(600_000, 2), res(400_000, 1)]

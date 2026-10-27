@@ -22,9 +22,10 @@ class SchedulerIntegrationTest(unittest.TestCase):
 
     def test_registered_jobs_and_times(self):
         before=datetime.now(scheduler.KST)
-        s=scheduler.build_scheduler(self.state,Path('custom-scope'),Path('custom-env'))
+        with mock.patch.dict('os.environ', {'SHORTNEWS_DAILY_ENABLED': 'false'}):
+            s=scheduler.build_scheduler(self.state,Path('custom-scope'),Path('custom-env'))
         jobs={j.id:j for j in s.get_jobs()}
-        self.assertEqual(len(jobs),10)  # HS 3 + UN 3 + 수출입 2 + 환율(fx_daily_load·fx_daily_startup) 2
+        self.assertEqual(len(jobs),10)  # 단신속보는 명시적으로 활성화한 경우만 등록
         start=jobs['un_data_startup'].trigger.run_date
         self.assertTrue(before+timedelta(seconds=9)<=start<=datetime.now(scheduler.KST)+timedelta(seconds=11))
         j=jobs['un_data_monthly'];self.assertEqual(j.max_instances,1)
@@ -67,20 +68,34 @@ class SchedulerIntegrationTest(unittest.TestCase):
 
     def test_real_scheduler_keeps_other_job_after_un_failure(self):
         self.initialized();done=threading.Event();events={}
+        def fake_un_failure():
+            return scheduler.un_refresh_job(self.state)
+        def fake_other_job():
+            return 'HS_OK'
+        def fake_executor_failure():
+            raise RuntimeError('synthetic executor failure')
         def listener(event):
             events[event.job_id]=event
-            if {'un_data_startup','hs_code_embed'}<=events.keys():done.set()
-        with mock.patch.object(scheduler,'BlockingScheduler',BackgroundScheduler), mock.patch.object(job,'execute_once',side_effect=RuntimeError('API down')), mock.patch.object(scheduler.embed,'run',return_value='HS_OK'):
-            s=scheduler.build_scheduler(self.state)
+            if {'un_data_startup','hs_code_embed','synthetic_executor_failure'}<=events.keys():done.set()
+        with mock.patch.object(job,'execute_once',side_effect=RuntimeError('synthetic API failure')) as execute:
+            # 공용 운영 스케줄은 등록하지 않습니다. 처리 wrapper 아래 I/O는 fake입니다.
+            s=BackgroundScheduler(timezone=scheduler.KST)
             s.add_listener(listener,EVENT_JOB_EXECUTED|EVENT_JOB_ERROR)
-            for name in ['hs_code_refresh',scheduler.RETRY_JOB_ID,'un_data_monthly']:s.remove_job(name)
-            for name in ['un_data_startup','hs_code_embed']:s.reschedule_job(name,trigger='date',run_date=datetime.now(scheduler.KST))
+            s.add_job(fake_un_failure,'date',id='un_data_startup')
+            s.add_job(fake_other_job,'date',id='hs_code_embed')
+            s.add_job(fake_executor_failure,'date',id='synthetic_executor_failure')
             s.start()
+            scheduler_thread=s._thread;executor=s._executors['default']
             try:self.assertTrue(done.wait(4))
             finally:s.shutdown(wait=True)
+            execute.assert_called_once()
         self.assertEqual(events['un_data_startup'].retval,'FAILED')
         self.assertEqual(events['hs_code_embed'].retval,'HS_OK')
-        self.assertTrue(all(not e.exception for e in events.values()))
+        self.assertIsInstance(events['synthetic_executor_failure'].exception,RuntimeError)
+        self.assertTrue(all(events[name].exception is None for name in ('un_data_startup','hs_code_embed')))
+        self.assertFalse(s.running)
+        self.assertFalse(scheduler_thread.is_alive())
+        self.assertTrue(all(not thread.is_alive() for thread in executor._pool._threads))
 
     def test_old_schedule_rejected_before_db(self):
         with mock.patch('sys.argv',['un_data_refresh','--schedule']),mock.patch.object(job,'make_engine') as make:

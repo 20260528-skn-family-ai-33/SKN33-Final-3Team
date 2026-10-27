@@ -7,9 +7,9 @@
 - 출처 KOTRA_MARKET은 service_option에 없으면 batch_run 기록 때 자동으로 등록됩니다 (batch_log.ensure_source).
 - 같은 (source_code, external_id) 기사가 있으면 제목·발행일·URL·본문·분류를 갱신합니다 (article_id 유지).
   원본에 같은 기사 ID가 두 번 있으면 마지막 행을 씁니다.
-- 키워드 결과가 있는 기사의 태그는 지우고 새로 넣습니다: 동의어·분야 사전이 바뀌어도 이전 태그가 남지 않게.
+- 키워드 결과가 있는 기사의 태그는 지우고 새로 넣되, 관리자가 수동 지정한 국가·HS 태그는 보존합니다.
   원본은 전체인데 키워드 결과가 일부 기간뿐이어도(--since) 나머지 기사의 태그·집계는 그대로 남습니다.
-- 일별 집계는 입력 기사의 발행일(발행일이 바뀐 기사는 예전 날짜도)만 지우고 DB 전체 기사(다른 출처 포함)에서 다시 셉니다
+- 일별 집계는 입력 기사의 발행일(발행일이 바뀐 기사는 예전 날짜도)만 지우고 시장뉴스·단신속보 기사에서 다시 셉니다
   (DISTINCT article_id).
 - 품목 태그는 hs_code 테이블에 있는 코드만 넣습니다. hs_code가 비어 있으면 품목 태그·집계 0건으로 넘어가고 경고만 남깁니다.
 - 전체를 한 트랜잭션으로 넣습니다. 중간에 실패하면 모두 롤백되어 아무것도 반영되지 않습니다.
@@ -28,12 +28,14 @@ from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.dialects import mysql, sqlite
 from sqlalchemy.exc import SQLAlchemyError
 
-from backend.app.db.batch_log import Source, track_batch
+from backend.app.db.batch_log import Source, track_batch, ensure_source
 from backend.app.db.session import make_engine, session_scope
+from backend.app.db.news_lock import article_load_lock
 from backend.app.models.hs_code import HsCodeMst
 from backend.app.models.news import COUNTRY, Article, ArticleTag, NewsKeywordDaily, NewsProductDaily
 from backend.app.scheduler.jobs.hs_code_load import hb
 from backend.app.services import news_load as nl
+from backend.app.services import news_schema
 
 ROOT = Path(__file__).resolve().parents[4]
 RAW_DIR = ROOT / "data" / "news"
@@ -94,9 +96,10 @@ def check_tables(engine):
                                 "db/mysql/init/01_schema.sql을 먼저 실행하세요.")
 
 
-def upsert_articles(session, rows):
+def upsert_articles(session, rows, table=None):
     """(source_code, external_id) 기준 upsert. CRUD.upsert_many는 기본키 기준이라 자동 번호 테이블에 쓰지 않습니다."""
-    table = Article.__table__
+    table = news_schema.reflect(session.connection(), "article") if table is None else table
+    rows = news_schema.article_insert_rows(session, table, rows)
     update = ["title", "published_date", "source_url", "body_masked", "category"]
     dialect = session.get_bind().dialect.name
     for i in range(0, len(rows), BATCH):
@@ -119,17 +122,19 @@ def _in_chunks(values, size=1000):
         yield values[i:i + size]
 
 
-def article_ids(session, external_ids):
+def article_ids(session, external_ids, source_code=nl.SOURCE_CODE):
     out = {}
     for chunk in _in_chunks(external_ids):
         out |= dict(session.execute(select(Article.external_id, Article.article_id).where(
-            Article.source_code == nl.SOURCE_CODE, Article.external_id.in_(chunk))).all())
+            Article.source_code == source_code, Article.external_id.in_(chunk))).all())
     return out
 
 
-def keyword_article_counts(engine):
+def keyword_article_counts(engine, *, require_schema=False):
     """article_tag 키워드별 고유 기사 수 {키워드: 기사 수} (누적, 출처 무관). 테이블이 없으면 빈 Counter."""
     if ArticleTag.__tablename__ not in inspect(engine).get_table_names():
+        if require_schema:
+            raise ValueError('keyword_tables_missing')
         return Counter()
     with session_scope(engine) as s:
         q = (select(ArticleTag.keyword_text, func.count(func.distinct(ArticleTag.article_id)))
@@ -137,30 +142,30 @@ def keyword_article_counts(engine):
         return Counter(dict(s.execute(q).all()))
 
 
-def old_dates(session, external_ids):
+def old_dates(session, external_ids, source_code=nl.SOURCE_CODE):
     """이미 DB에 있는 기사들의 현재 발행일."""
     out = set()
     for chunk in _in_chunks(external_ids):
         out |= set(session.scalars(select(Article.published_date).where(
-            Article.source_code == nl.SOURCE_CODE, Article.external_id.in_(chunk)).distinct()))
+            Article.source_code == source_code, Article.external_id.in_(chunk)).distinct()))
     return out
 
 
 def rebuild_daily(session, days):
-    """발행일이 days인 DB 전체 기사(출처 무관)로 두 집계 테이블의 그날 행을 다시 만듭니다."""
+    """MARKET·단신 키워드, MARKET만 HS 집계. 단신의 기존 수동 HS 태그는 그대로 보존합니다."""
     days = sorted(days)
     a, t = Article.__table__, ArticleTag.__table__
     dates, keywords, countries, hs_tags = {}, [], {}, []
     for chunk in _in_chunks(days):
-        q = select(t.c.article_id, a.c.published_date, t.c.keyword_text, t.c.country_code, t.c.hs_code, t.c.hs_ver) \
-            .join(a, a.c.article_id == t.c.article_id).where(a.c.published_date.in_(chunk))
-        for article_id, day, kw, country, hs, ver in session.execute(q):
+        q = select(t.c.article_id, a.c.published_date, t.c.keyword_text, t.c.country_code, t.c.hs_code, t.c.hs_ver, a.c.source_code) \
+            .join(a, a.c.article_id == t.c.article_id).where(a.c.published_date.in_(chunk), a.c.source_code.in_(('KOTRA_MARKET','KOTRA_SHORT_NEWS','KOTRA_SHORTNEWS')))
+        for article_id, day, kw, country, hs, ver, source in session.execute(q):
             dates[article_id] = day
             if kw is not None:
                 keywords.append((article_id, kw))
             elif country is not None:
                 countries.setdefault(article_id, set()).add(country)
-            elif len(hs) == 6:
+            elif hs and len(hs) == 6 and source == "KOTRA_MARKET":
                 hs_tags.append((article_id, hs, ver))
     hs_codes = {tuple(r) for r in session.execute(select(HsCodeMst.hs_code, HsCodeMst.hs_ver).where(
         HsCodeMst.hs_code.in_({h[:4] for _, h, _ in hs_tags})))} if hs_tags else set()
@@ -189,23 +194,39 @@ def load(engine, raws, cleans):
     for r in articles:
         r["published_date"] = date.fromisoformat(r["published_date"])
     by_id = {c["bbstxSn"].strip(): c for c in cleans}
-    with session_scope(engine) as s:
+    with article_load_lock(engine), session_scope(engine) as s:
+        ensure_source(s, SOURCE)
+        table = news_schema.reflect(s.connection(), "article")
         countries = set(s.scalars(select(COUNTRY.c.country_code)))
         hs_codes = {tuple(r) for r in s.execute(select(HsCodeMst.hs_code, HsCodeMst.hs_ver).where(
             HsCodeMst.hs_code.like("______")))}  # 6자리 (밑줄 6개)
         # 발행일이 바뀐 기사는 예전 날짜 집계에서도 빠져야 하므로 예전 날짜도 다시 셈
         days = {r["published_date"] for r in articles} | old_dates(s, [r["external_id"] for r in articles])
-        upsert_articles(s, articles)
+        upsert_articles(s, articles, table)
         ids = article_ids(s, [r["external_id"] for r in articles])
         # 태그는 키워드 결과가 있는 기사만 다시 넣음 (결과가 없는 기사의 기존 태그를 지우지 않게)
         tagged = [r for r in articles if r["external_id"] in by_id]
-        for chunk in _in_chunks([ids[r["external_id"]] for r in tagged]):
-            s.execute(delete(ArticleTag).where(ArticleTag.article_id.in_(chunk)))
+        metadata = news_schema.article_metadata(s, table, ids.values())
         tags, unknown = [], set()
+        replace_ids = {column: [] for column in ("keyword_text", "country_code", "hs_code")}
         for r in tagged:
             clean = by_id[r["external_id"]]
-            tags += nl.tag_rows(clean, ids[r["external_id"]], countries, hs_codes, hb.hs_ver_for(r["published_date"]))
+            article_id = ids[r["external_id"]]
+            meta = metadata.get(article_id) or {}
+            replace = ["keyword_text"]
+            if not meta.get("country_tags_manual", False):
+                replace.append("country_code")
+            if not meta.get("hs_tags_manual", False):
+                replace.append("hs_code")
+            for column in replace:
+                replace_ids[column].append(article_id)
+            candidates = nl.tag_rows(clean, article_id, countries, hs_codes, hb.hs_ver_for(r["published_date"]))
+            tags += [t for t in candidates if any(t[c] is not None for c in replace)]
             unknown |= set(nl.split_values(clean.get("country_all"))) - countries
+        for column, affected_ids in replace_ids.items():
+            for chunk in _in_chunks(affected_ids):
+                s.execute(delete(ArticleTag).where(ArticleTag.article_id.in_(chunk),
+                                                  getattr(ArticleTag, column).isnot(None)))
         _insert(s, ArticleTag, tags)
         kw_rows, hs_rows = rebuild_daily(s, days)
     kinds = {k: sum(t[k] is not None for t in tags) for k in ("keyword_text", "country_code", "hs_code")}
