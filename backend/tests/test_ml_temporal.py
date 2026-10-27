@@ -257,5 +257,31 @@ class CollectorRegressionTest(unittest.TestCase):
         self.assertEqual(out.import_world_usd.iloc[0], 100.)
 
 
+class ExternalVersionTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        (self.dir / "wdi").mkdir()
+        self.wdi = self.dir / "wdi" / "wdi_2022_2025.csv"
+        self.wdi.write_text("year,country_code\n2024,US\n", "utf-8")
+
+    def snapshot(self):
+        import json
+        from backend.app.ml.model_registry import sha256
+        files = [{"path": r"data\external\wdi\wdi_2022_2025.csv", "sha256": sha256(self.wdi)}]  # 실제 기록과 같은 형식
+        (self.dir / "availability_snapshot.json").write_text(json.dumps({"files": files}), "utf-8")
+
+    def test_recorded_version_passes(self):
+        self.snapshot()
+        pp.check_versions(self.dir)
+
+    def test_changed_or_unrecorded_file_rejected(self):
+        with self.assertRaisesRegex(ValueError, "availability_snapshot"):
+            pp.check_versions(self.dir)  # 기록 파일 없음
+        self.snapshot()
+        self.wdi.write_text("year,country_code\n2024,US\n2025,US\n", "utf-8")  # 다시 받아 값이 바뀜
+        with self.assertRaisesRegex(ValueError, "wdi/wdi_2022_2025.csv"):
+            pp.check_versions(self.dir)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,12 +8,14 @@
 features.build_dataset도 같은 함수(market_yearly·wdi_yearly)로 만든 표를 쓴다.
 """
 import argparse
+import json
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import numpy as np
 import pandas as pd
 
+from backend.app.ml.model_registry import sha256
 from backend.app.scheduler.collectors.external import external_collect as ec
 
 OUT_DIR = Path(__file__).resolve().parents[3] / "data" / "ml"
@@ -117,6 +119,27 @@ def wdi_yearly(wdi, countries=None):
     return filled.dropna(how="all", subset=values).reset_index()[["year", "country_code", *values, "filled"]]
 
 
+def check_versions(external_dir):
+    """availability.csv의 날짜는 availability_snapshot.json에 해시를 남긴 파일 버전에만 맞다.
+    원본을 다시 받아 내용이 바뀌었거나 기록에 없는 파일이 생기면, 새 값에 옛 사용 가능일이 붙지 않게 멈춘다."""
+    used = [p for p in [external_dir / "baci" / "baci_imports_hs22.csv"] if p.exists()]  # read_market·read_wdi가 읽는 파일
+    used += sorted((external_dir / "comtrade").glob("comtrade_imports_*.csv"))
+    used += sorted((external_dir / "wdi").glob("wdi_*.csv"))[-1:]
+    if not used:
+        return
+    path = external_dir / "availability_snapshot.json"
+    if not path.exists():
+        raise ValueError(f"{path}가 없어 availability.csv가 현재 외부 파일 버전의 날짜인지 확인할 수 없습니다")
+    # 기록 경로는 저장소 기준 Windows 경로(data\external\baci\...). 하위 폴더/파일 이름으로 맞춘다.
+    recorded = {"/".join(PureWindowsPath(f["path"]).parts[-2:]): f["sha256"]
+                for f in json.loads(path.read_text("utf-8"))["files"]}
+    changed = [name for name in (p.relative_to(external_dir).as_posix() for p in used)
+               if recorded.get(name) != sha256(external_dir / name)]
+    if changed:
+        raise ValueError(f"availability 기록 이후 바뀌었거나 기록에 없는 외부 파일: {changed}. "
+                         "새 버전의 사용 가능일을 availability.csv에, 해시를 availability_snapshot.json에 다시 기록하세요")
+
+
 def load_external(external_dir=None, countries=None, hs_mapping=None):
     """외부 CSV를 읽어 전처리한 두 표를 돌려준다. hs_mapping은 features.hs_key_map 결과 (없으면 코드 그대로)."""
     external_dir = external_dir or ec.OUT_DIR
@@ -125,6 +148,8 @@ def load_external(external_dir=None, countries=None, hs_mapping=None):
         market = market.assign(hs6=[hs_mapping.get(("HS2022", c), c) for c in market.hs6])
     availability_path = external_dir / "availability.csv"
     availability = read_csv(availability_path) if availability_path.exists() else None
+    if availability is not None:
+        check_versions(external_dir)
     return {"market_yearly": market_yearly(market, countries),
             "wdi_yearly": wdi_yearly(read_wdi(external_dir), countries),
             "availability": availability}
