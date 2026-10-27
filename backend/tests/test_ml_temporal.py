@@ -283,5 +283,15 @@ class ExternalVersionTest(unittest.TestCase):
             pp.check_versions(self.dir)
 
 
+class SaveCsvTest(unittest.TestCase):
+    def test_failed_write_keeps_previous_file(self):
+        path = Path(tempfile.mkdtemp()) / "baci" / "baci_imports_hs22.csv"
+        ec.save_csv(pd.DataFrame({"a": [1]}), path)
+        broken = pd.DataFrame({"a": [2]})
+        with patch.object(pd.DataFrame, "to_csv", side_effect=OSError("disk full")), self.assertRaises(OSError):
+            ec.save_csv(broken, path)
+        self.assertEqual(pd.read_csv(path).a.tolist(), [1])
+
+
 if __name__ == "__main__":
     unittest.main()

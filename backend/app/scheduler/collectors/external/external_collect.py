@@ -64,14 +64,21 @@ def wdi_frame(countries, values):
         ["country_code", "year"])
 
 
+def save_csv(df, path):
+    """임시 파일에 다 쓴 뒤에만 이름을 바꿔, 저장 중 실패한 반쪽 CSV가 완료본으로 남지 않게 한다."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    part = path.with_suffix(".part")
+    df.to_csv(part, index=False)
+    part.replace(path)
+
+
 def collect_wdi(from_year, to_year):
     countries = wb_get("country")
     values = [v for code in WDI_INDICATORS
               for v in wb_get(f"country/all/indicator/{code}", date=f"{from_year}:{to_year}")]
     df = wdi_frame(countries, values)
     path = OUT_DIR / "wdi" / f"wdi_{from_year}_{to_year}.csv"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False)
+    save_csv(df, path)
     print(f"WDI 저장: {path} ({len(df)}행, 국가 {df.country_code.nunique()}개)")
     return {"requests": 1 + len(WDI_INDICATORS), "rows": len(values)}
 
@@ -134,8 +141,7 @@ def collect_baci(zip_path, from_year):
         raise RuntimeError(f"zip 안에 {from_year}년 이후 BACI_HS22_Y*.csv가 없음")
     df = pd.concat(frames, ignore_index=True)
     path = OUT_DIR / "baci" / "baci_imports_hs22.csv"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False)
+    save_csv(df, path)
     print(f"BACI 저장: {path} ({len(df):,}행, {df.year.min()}~{df.year.max()})")
     return {"rows": rows}
 
@@ -218,8 +224,7 @@ def collect_comtrade(year):
         print(f"  {n}/{len(codes)} {iso2_by_code[code]}", end="\r")
     df = comtrade_imports(records, iso2_by_code)
     path = OUT_DIR / "comtrade" / f"comtrade_imports_{year}.csv"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(path, index=False)
+    save_csv(df, path)
     print()
     print(f"Comtrade 저장: {path} ({len(df):,}행, 국가 {df.country_code.nunique()}개)")
     return {"requests": 2 + fetched, "rows": len(records)}
