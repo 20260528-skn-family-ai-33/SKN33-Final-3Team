@@ -10,21 +10,32 @@ from backend.app.api.results import result_table
 
 
 def verified_months(store, table):
+    key=('verified_months',table)
+    if key in store.cache: return store.cache[key]
     t,b=store.t(table),store.t('batch_run')
     # 최신 실행이 실패/진행 중인 범위는 공개하지 않는다. 이전 정상 범위를 0으로 덮지 않는다.
-    months=store.c.execute(select(t.c.trade_month).where(t.c.hs_ver=='HS2022').distinct()).scalars().all()
     runs=store.rows(select(b.c.run_id,b.c.period_start,b.c.period_end,b.c.status)
                     .where(b.c.target_table==table).order_by(b.c.run_id.desc()))
+    # 거래 행이 전혀 없는 월도 완료 배치가 보장하면 공개 가능한 0 거래 월이다.
+    months=set()
+    for run in runs:
+        cursor=run['period_start'].replace(day=1)
+        while cursor<=run['period_end']:
+            if run['period_start']<=cursor and month_end(cursor)<=run['period_end']: months.add(cursor)
+            cursor=shift_month(cursor,1)
     verified=[]
     for m in months:
         latest=next((r for r in runs if r['period_start']<=m and r['period_end']>=month_end(m)),None)
         if latest and latest['status']=='SUCCESS': verified.append(m)
-    return sorted(verified)
+    store.cache[key]=sorted(verified)
+    return store.cache[key]
 
 
 def bounds(store):
+    if 'trade_bounds' in store.cache: return store.cache['trade_bounds']
     months=sorted(set(verified_months(store,'export_summary')) & set(verified_months(store,'import_summary')))
     if not months: unavailable('수출·수입 집계와 정상 완료 배치 기록이 모두 준비되어야 합니다.')
+    store.cache['trade_bounds']=months
     return months
 
 
@@ -50,11 +61,14 @@ def resolve_period(store, start=None, end=None, months=3):
     return start,end
 
 
-def metadata(store,start,end,source='CUSTOMS',warnings=None):
+def metadata(store,start,end,source='CUSTOMS',warnings=None,latest_month=None):
     b=store.t('batch_run')
-    version=store.c.scalar(select(func.max(b.c.run_id)).where(b.c.source_code==source,b.c.status=='SUCCESS'))
+    key=('data_version',source)
+    if key not in store.cache:
+        store.cache[key]=store.c.scalar(select(func.max(b.c.run_id)).where(b.c.source_code==source,b.c.status=='SUCCESS'))
+    version=store.cache[key]
     return {'data_version':f'{source}-{version or "unverified"}',
-        'latest_available_month':bounds(store)[-1].strftime('%Y-%m') if source=='CUSTOMS' else None,
+            'latest_available_month':(latest_month or bounds(store)[-1]).strftime('%Y-%m') if source=='CUSTOMS' else None,
         'period':period(start,end) if start else None,
         'sources':[{'code':source,'label':'관세청' if source=='CUSTOMS' else source,'url':None}],
         'freshness':'STALE' if warnings else 'FRESH','generated_at':now().isoformat()+'Z','warnings':warnings or []}
@@ -132,7 +146,6 @@ def anomaly_map(store,start,end,hs=None,countries=None,group='COUNTRY',flow='EXP
 def kpis(store,uid,selected=None):
     start,end=resolve_period(store,selected,selected,1)
     rows=aggregate(store,'export_summary',start,end)
-    if not rows: unavailable('해당 월의 수출 통계가 없습니다.')
     total=sum(r['amount_usd'] for r in rows)
     existing=set(verified_months(store,'export_summary'))
     def total_at(delta):
@@ -140,7 +153,7 @@ def kpis(store,uid,selected=None):
         return sum(r['amount_usd'] for r in aggregate(store,'export_summary',m,m)) if m in existing else None
     kpi={'amount_usd':total,'mom_pct':percentage(total,total_at(-1)),'yoy_pct':percentage(total,total_at(-12)),
          'export_country_count':sum(r['amount_usd']>0 for r in rows),
-         'top_country_share_pct':max(r['amount_usd'] for r in rows)*100/total if total else None}
+            'top_country_share_pct':max((r['amount_usd'] for r in rows),default=0)*100/total if total else None}
     meta=metadata(store,start,end)
     table=result_table(store,uid,[kpi],meta,{'period':period(start,end),'hs_items':[],'country_codes':[]},store.queries)
     return {'kpi':kpi,'result_id':table['result_id'],'meta':meta}
@@ -155,9 +168,9 @@ def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='
     old={r['trade_month']:r['amount_usd'] for r in aggregate(store,'export_summary',shift_month(start,-12),shift_month(end,-12),hs,countries,'MONTH') if r['trade_month'] in verified}
     items=[]; cursor=start
     while cursor<=end:
-        if cursor not in ex or cursor not in im: unavailable('선택 조건에 관측되지 않은 월이 있습니다. 실제 0과 구분해 데이터 확인이 필요합니다.')
-        item={'month':cursor.strftime('%Y-%m'),'export_amount_usd':ex[cursor], 'import_amount_usd':im[cursor],
-              'previous_year_export_usd':old.get(shift_month(cursor,-12))}
+        prior=shift_month(cursor,-12)
+        item={'month':cursor.strftime('%Y-%m'),'export_amount_usd':ex.get(cursor,Decimal(0)), 'import_amount_usd':im.get(cursor,Decimal(0)),
+              'previous_year_export_usd':old.get(prior,Decimal(0)) if prior in verified else None}
         items.append(item); cursor=shift_month(cursor,1)
     meta=metadata(store,start,end)
     out={'items':items,'meta':meta}
@@ -173,7 +186,9 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
     key=lambda r: r['country_code'] if group=='COUNTRY' else r['hs6_code']
     ex={key(r):r['amount_usd'] for r in aggregate(store,'export_summary',start,end,hs,countries,group)}
     im={key(r):r['amount_usd'] for r in aggregate(store,'import_summary',start,end,hs,countries,group)}
-    primary=ex if flow=='EXPORT' else im
+    primary={k:(ex if flow=='EXPORT' else im).get(k,Decimal(0)) for k in ex.keys()|im.keys()}
+    if group=='COUNTRY':
+        for code in countries or []: primary.setdefault(code,Decimal(0))
     total=sum(primary.values())
     previous={}; yoy={}; old_rank={}
     if start==end:
@@ -187,12 +202,10 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
     flags=anomaly_map(store,start,end,hs,countries,group,flow)
     items=[]
     for rank,k in enumerate(sorted(primary,key=lambda k:(-primary[k],k)),1):
-        # 결측 금액을 임의 0으로 변환하지 않는다.
-        if k not in ex or k not in im: unavailable('선택 순위에 수출 또는 수입 관측이 누락되어 있습니다.')
         h=[{'hs_code':k,'hs_ver':'HS2022'}] if group=='HS6' else hs
         country=[k] if group=='COUNTRY' else countries
         items.append({'rank':rank,'country_code':k if group=='COUNTRY' else None,
-            'hs_item':h[0] if group=='HS6' else None,'export_amount_usd':ex[k],'import_amount_usd':im[k],
+            'hs_item':h[0] if group=='HS6' else None,'export_amount_usd':ex.get(k,Decimal(0)),'import_amount_usd':im.get(k,Decimal(0)),
             'share_pct':primary[k]*100/total if total else None,
             'rank_change':old_rank[k]-rank if k in old_rank else None,
             'rank_status':'NOT_APPLICABLE' if start!=end else 'NEW' if k not in old_rank else 'UP' if old_rank[k]>rank else 'DOWN' if old_rank[k]<rank else 'SAME',

@@ -19,6 +19,8 @@ def ready_days(store, start, end):
 
 
 def enqueue_due(store, at=None):
+    # 한 Store로 여러 스케줄 회차를 호출해도 회차 사이 적재 완료를 다시 확인한다.
+    store.cache.clear()
     at=at or datetime.now(ZoneInfo('Asia/Seoul'))
     subscription, option, profile = store.t('report_subscription'),store.t('service_option'),store.t('api_user_profile')
     rows=store.rows(select(subscription).join(option,option.c.option_code==subscription.c.period_code)

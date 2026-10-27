@@ -31,6 +31,7 @@ class Store:
     def __init__(self, database, connection):
         self.db, self.c = database, connection
         self.queries = []
+        self.cache = {}  # 요청/트랜잭션 단위. 다음 요청에서는 배치 변경을 다시 읽는다.
 
     def t(self, name):
         return self.db.table(name, self.c)

@@ -209,6 +209,7 @@ class BackendApiTest(unittest.TestCase):
             for name in ('export_summary','import_summary'):
                 t=self.meta.tables[name]
                 c.execute(delete(t).where(t.c.trade_month>date(2025,10,1)))
+                c.execute(update(self.meta.tables['batch_run']).where(self.meta.tables['batch_run'].c.target_table==name).values(period_end=date(2025,10,31)))
 
     def test_quarterly_reports_catch_up_once_after_later_month(self):
         from backend.app.api.subscriptions import enqueue_due
@@ -231,11 +232,15 @@ class BackendApiTest(unittest.TestCase):
             for name in ('export_summary','import_summary'):
                 t=self.meta.tables[name]
                 c.execute(delete(t).where(t.c.trade_month==date(2025,8,1)))
+                c.execute(self.meta.tables['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION','target_table':name,
+                    'period_start':date(2025,8,1),'period_end':date(2025,8,31),'status':'FAILED','detail_json':{}})
             self.assertEqual(enqueue_due(store),1)
             self.assertEqual(enqueue_due(store),0)
             for name in ('export_summary','import_summary'):
                 c.execute(self.meta.tables[name].insert(),{'trade_month':date(2025,8,1),
                     'country_code':'US','hs6_code':'330499','hs_ver':'HS2022','amount_usd':100})
+                c.execute(self.meta.tables['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION','target_table':name,
+                    'period_start':date(2025,8,1),'period_end':date(2025,8,31),'status':'SUCCESS','detail_json':{}})
             self.assertEqual(enqueue_due(store),1)
             self.assertEqual(enqueue_due(store),0)
 
@@ -490,5 +495,50 @@ class BackendApiTest(unittest.TestCase):
             self.app.state.database.metadata.remove(self.app.state.database.metadata.tables['api_snapshot'])
         self.assertEqual(self.client.get('/health/ready').status_code,503)
 
+
+    def test_sparse_verified_trade_returns_zero_across_apis(self):
+        self.signup()
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['article'].insert(),{'article_id':1,'source_code':'KOTRA_MARKET','external_id':'sparse-news','title':'기사',
+                'published_date':date(2025,12,1),'source_url':'https://example.org/1','body_masked':'본문','category':'경제','visibility_status':'VISIBLE','admin_meta_json':{}})
+            c.execute(delete(self.meta.tables['import_summary']).where(self.meta.tables['import_summary'].c.country_code=='US'))
+            c.execute(delete(self.meta.tables['export_summary']).where(self.meta.tables['export_summary'].c.country_code=='US',self.meta.tables['export_summary'].c.trade_month==date(2025,12,1)))
+        trend=self.client.get('/api/v1/trade/trends?period_start=2025-11&period_end=2025-12&country_codes=US')
+        self.assertEqual(trend.status_code,200,trend.text)
+        self.assertEqual(trend.json()['items'][-1]['export_amount_usd'],0)
+        self.assertEqual(trend.json()['items'][0]['import_amount_usd'],0)
+        for path in ('trade/rankings?period_start=2025-11&period_end=2025-12','trade/rankings/US/products?month=2025-11'):
+            response=self.client.get('/api/v1/'+path)
+            self.assertEqual(response.status_code,200,response.text)
+        response=self.post('analysis/local-issues',{'conditions':{'period':{'start':'2025-12-01','end':'2025-12-31'},'country_codes':['US']}})
+        self.assertEqual(response.status_code,200,response.text)
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        jid=self.post(f'chat/sessions/{sid}/messages',{'question':'2025년 12월 미국 전체 품목 수출 추이','client_message_id':'zero'}).json()['job']['job_id']
+        run_once(self.app.state.database,self.settings)
+        self.assertEqual(self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']['answer']['answer_status'],'ANSWERED')
+
+    def test_wholly_empty_verified_month_and_request_cache(self):
+        from backend.app.api import trade
+        from sqlalchemy import event
+        self.signup()
+        with self.engine.begin() as c:
+            for name in ('export_summary','import_summary'):
+                c.execute(delete(self.meta.tables[name]).where(self.meta.tables[name].c.trade_month==date(2025,12,1)))
+        response=self.client.get('/api/v1/trade/trends?period_start=2025-12&period_end=2025-12')
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['items'][0]['export_amount_usd'],0)
+        queries=[]
+        def record(conn,cursor,statement,params,context,many): queries.append(statement)
+        with self.engine.connect() as c:
+            store=Store(self.app.state.database,c)
+            trade.bounds(store)
+            event.listen(self.engine,'before_cursor_execute',record)
+            try:
+                for _ in range(6): trade.bounds(store); trade.verified_months(store,'export_summary')
+                self.assertEqual(queries,[])
+            finally: event.remove(self.engine,'before_cursor_execute',record)
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION','target_table':'export_summary','period_start':date(2025,12,1),'period_end':date(2025,12,31),'status':'FAILED','detail_json':{}})
+        self.assertNotEqual(self.client.get('/api/v1/trade/trends?period_start=2025-12&period_end=2025-12').status_code,200)
 
 if __name__=='__main__': unittest.main()
