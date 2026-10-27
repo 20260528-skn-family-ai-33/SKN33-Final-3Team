@@ -116,22 +116,33 @@ class AdminNewsMySQLTest(unittest.TestCase):
         self.assertFalse(next(c for c in inspect(self.conn).get_columns('batch_run')
                               if c['name'] == 'detail_json')['nullable'])
 
-    def test_views_include_all_four_sources_and_exclude_hidden(self):
-        before = self.scalar('SELECT COALESCE(SUM(article_count),0) FROM v_article_day WHERE published_date=:d', d=DAY)
-        country_before = self.scalar('SELECT COALESCE(SUM(article_count),0) FROM v_article_country_day '
-                                    "WHERE published_date=:d AND country_code='US'", d=DAY)
-        ids = []
-        for source in ('KOTRA_MARKET', 'HANKYUNG', 'FNNEWS', 'KOTRA_SHORT_NEWS'):
+    def test_views_preserve_market_scope_and_expose_source_and_integrated_counts(self):
+        sources = ('KOTRA_MARKET', 'HANKYUNG', 'FNNEWS', 'KOTRA_SHORT_NEWS')
+        views = ('v_article_day', 'v_article_country_day', 'v_article_source_day',
+                 'v_article_source_country_day', 'v_article_integrated_day', 'v_article_integrated_country_day')
+        def counts():
+            return {view: self.scalar('SELECT COALESCE(SUM(article_count),0) FROM ' + view
+                    + ' WHERE published_date=:d' + (" AND country_code='US'" if 'country' in view else ''), d=DAY)
+                    for view in views}
+        before = counts()
+        ids = {}
+        for source in sources:
             aid = self.insert_article(source)
-            ids.append(aid)
-            # 키워드 태그가 추가돼도 국가별 기사 수는 중복 집계하지 않아야 합니다.
+            ids[source] = aid
             self.conn.execute(text("INSERT INTO article_tag(article_id,country_code) VALUES (:id,'US')"), {'id': aid})
             self.conn.execute(text("INSERT INTO article_tag(article_id,keyword_text) VALUES (:id,'AI'),(:id,'무역')"), {'id': aid})
-        self.assertEqual(self.scalar('SELECT article_count FROM v_article_day WHERE published_date=:d', d=DAY), before + 4)
-        self.assertEqual(self.scalar("SELECT article_count FROM v_article_country_day WHERE published_date=:d AND country_code='US'", d=DAY), country_before + 4)
-        self.conn.execute(self.article.update().where(self.article.c.article_id == ids[-1]).values(visibility_status='HIDDEN'))
-        self.assertEqual(self.scalar('SELECT article_count FROM v_article_day WHERE published_date=:d', d=DAY), before + 3)
-        self.assertEqual(self.scalar("SELECT article_count FROM v_article_country_day WHERE published_date=:d AND country_code='US'", d=DAY), country_before + 3)
+        def assert_delta(expected):
+            actual = counts()
+            self.assertEqual({view: actual[view] - before[view] for view in views}, dict(zip(views, expected)))
+        assert_delta((1, 1, 4, 4, 2, 2))
+        for source in sources:
+            self.assertGreaterEqual(self.scalar('SELECT article_count FROM v_article_source_day '
+                                               'WHERE published_date=:d AND source_code=:s', d=DAY, s=source), 1)
+        # Existing MARKET views exclude hidden rows. Source/integrated views retain
+        # their current total-ingestion contract; migration must not broaden MARKET.
+        self.conn.execute(self.article.update().where(self.article.c.article_id.in_(
+            [ids['KOTRA_MARKET'], ids['KOTRA_SHORT_NEWS']])).values(visibility_status='HIDDEN'))
+        assert_delta((0, 0, 4, 4, 2, 2))
 
     def test_existing_news_and_shortnews_loaders_repeat_preserve_admin_state(self):
         news_load.load(self.engine, [news_raw(self.key, DAY.isoformat())], [news_clean(self.key, DAY.isoformat(), 'AI', 'US')])
@@ -158,7 +169,9 @@ class AdminNewsMySQLTest(unittest.TestCase):
             self.assertEqual(self.scalar("SELECT country_code FROM article_tag WHERE article_id=:id AND country_code IS NOT NULL", id=new['article_id']), 'US')
 
     def test_json_schema_rejects_invalid_article_and_batch_metadata(self):
-        self.reject(lambda: self.insert_article(admin_meta_json={'schema_version': 1}), 3819)
+        invalid = news_schema.admin_defaults(self.policy)
+        del invalid['visibility']  # Keep snapshot valid so CHECK, not BEFORE INSERT, rejects it.
+        self.reject(lambda: self.insert_article(admin_meta_json=invalid), 3819)
         row = dict(source_code='KOTRA_SHORT_NEWS', job_name='ERD_ROLLBACK_CHECK', target_table='article',
                    period_start=DAY, period_end=DAY, detail_json={})
         self.reject(lambda: self.conn.execute(self.batch.insert().values(**row)), 3819)
@@ -196,6 +209,10 @@ class AdminNewsMySQLTest(unittest.TestCase):
     def test_batch_triggers_reject_self_retry(self):
         self.require_trigger('trg_batch_run_insert_v3')
         self.require_trigger('trg_batch_run_update_v3')
+        # This test must also pass in a fresh DB without a prior short-news load.
+        with Session(bind=self.conn, join_transaction_mode='create_savepoint') as session:
+            batch_log.ensure_source(session, shortnews_load.SOURCE)
+            session.commit()
         row = dict(source_code='KOTRA_SHORT_NEWS', job_name='ERD_ROLLBACK_CHECK', target_table='article',
                    period_start=DAY, period_end=DAY, detail_json={'schema_version': 1})
         rid = self.conn.execute(self.batch.insert().values(**row)).inserted_primary_key[0]
