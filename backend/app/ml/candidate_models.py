@@ -172,9 +172,7 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     with FileLock(str(out_dir / f".{base}.lock")):
-        files, db = artifacts.input_manifest(), artifacts.db_inputs(engine)  # 학습·기록과 같은 DB
-        # 환율을 못 읽으면 파일만 비교하므로 정정 전·후 리비전이 모두 맞는다. 그때는 끝까지 보고 가장 최신을 고른다.
-        fx_missing = db["fx"]["rows"] == 0
+        files = db = None
         matched = None
         for revision in range(1, 100):
             name = base if revision == 1 else f"{base}_r{revision}"
@@ -182,9 +180,12 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
             record = read_json(record_path)
             if record is None:
                 break
+            if files is None:  # 비교할 기록이 있을 때만 입력 파일 전체를 해시한다
+                files, db = artifacts.input_manifest(), artifacts.db_inputs(engine)  # 학습·기록과 같은 DB
             if _same_inputs(record["data_info"]["input_snapshot"], files, db):
                 matched = revision, name, artifact, record_path, record
-                if not fx_missing:
+                # 환율을 못 읽으면 파일만 비교하므로 정정 전·후 리비전이 모두 맞는다. 그때는 끝까지 보고 가장 최신을 고른다.
+                if db["fx"]["rows"] > 0:
                     break
         else:
             raise ValueError(f"{base}: 같은 달 재학습 기록이 너무 많습니다")

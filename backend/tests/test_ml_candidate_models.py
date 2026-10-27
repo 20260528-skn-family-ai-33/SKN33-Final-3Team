@@ -126,13 +126,18 @@ class MonthlyRunTest(unittest.TestCase):
         self.saved_version("lightgbm_202602_r2", registered=False)
         self.assertEqual(self.parent_of_next_month(), "lightgbm_202602")
 
-    def test_db_reads_use_job_engine(self):
-        db = Mock(return_value=DB)
+    def test_db_reads_use_job_engine_and_first_run_skips_input_hashing(self):
+        db, files = Mock(return_value=DB), Mock(return_value=FILES)
         with patch.object(C.artifacts, "load_training_data", return_value=loaded()) as load, \
-                patch.object(C.artifacts, "input_manifest", return_value=FILES), patch.object(C.artifacts, "db_inputs", db):
+                patch.object(C.artifacts, "input_manifest", files), patch.object(C.artifacts, "db_inputs", db):
             C.run("2026-02-01", self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)
+            self.assertIs(load.call_args.kwargs["engine"], self.engine)
+            files.assert_not_called()  # 비교할 기록이 없는 첫 실행은 입력 파일을 다시 해시하지 않는다
+            db.assert_not_called()
+            C.run("2026-02-01", self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)  # 같은 달 재실행
         db.assert_called_once_with(self.engine)
-        self.assertIs(load.call_args.kwargs["engine"], self.engine)
+        files.assert_called_once()
+        self.assertEqual(load.call_count, 1)
 
     def test_refuses_month_missing_from_data(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-01-01")):
