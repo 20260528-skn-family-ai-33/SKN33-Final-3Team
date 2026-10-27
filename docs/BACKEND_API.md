@@ -8,7 +8,7 @@
 - 인증·관심·통계·기사·UN 조회·결과 스냅샷·대화 작업·리포트·구독·알림 조회/전달·일부 관리자 기능을 구현했다. 실제 RDS 쓰기와 배포는 실행하지 않았다.
 - **현재 코드 실행에는 앱 저장소 보완이 필요하다.** `api_user_profile`, `api_auth_session`, `api_snapshot`, `api_keyword_block`, `api_audit_event`, `api_rate_limit`, `api_report_file` 7개가 현재 RDS에 없다. `backend/migrations/036_backend_api.sql`은 현재 구현에 대응하는 제안이며 확정 DB 계약이 아니다. 기존 테이블 통합 대안은 아래 DB 재검수 항목에 정리했다. 통합안을 선택하면 코드와 마이그레이션을 함께 변경해야 한다. 이 SQL은 기존 테이블 변경·데이터 시드·수집을 포함하지 않으며 시작/요청 시 자동 DDL은 없다.
 - 활성 `REPORT_PERIOD`, `REPORT_TYPE` 및 승인된 `NOTIFICATION_TERMS`는 운영/데이터 담당자가 준비한다. 없는 옵션이나 약관을 가짜 값으로 생성하지 않는다. API-09에서 지원 주기를 확인한다. 요청형은 `RPT_ON_DEMAND`, 구독형은 `RPT_WEEKLY`, `RPT_MONTHLY`, `RPT_QUARTERLY` 옵션이 필요하다.
-- ML 학습/예측, RAG 임베딩·검색·생성·문장 검증은 담당자에게 남겼다. `integrations.py`는 인터페이스 정의이며 현재 자동으로 플러그인을 로드하거나 모델을 호출하지 않는다. 기사 `summary` 필드는 현재 마스킹한 본문의 앞부분 발췌다. 자연어 채팅은 등록된 코드·국가·기간을 처리하는 제한적 규칙 파서이다.
+- ML 학습/예측, RAG 검색·생성·문장 검증은 담당자에게 남겼다. 기사 `summary`는 마스킹한 본문의 앞부분 발췌다. 채팅 의도는 `IntentProvider`의 기본 구현 `OpenAIIntentProvider`가 구조화된 JSON 슬롯으로 추출한다. 규칙 기반 의도/국가/기간 파서와 앞 세 단어 품목 탐색은 제거했다. 기본 모델은 `API_INTENT_MODEL=gpt-4.1-mini`이며 HS 임베딩 모델과 별개다.
 - `async_job`은 사용하지 않는다. 채팅 실행은 기존 chat_message.result_json, 리포트 실행은 report.content_json의 내부 `_execution` 필드에 저장한다. 이번 PR 검수 반영으로 로컬 실행 상태 파일 의존성을 제거했다. 신규 테이블·컬럼 없이 JSON 규약을 확장하며, 다른 기능의 api_ 저장소 보완안과는 별개다.
 
 ## 설치와 실행
@@ -49,6 +49,12 @@ python -m backend.app.api.worker
 
 채팅은 세션 생성 → `client_message_id`를 포함한 메시지 POST → job 폴링 → NEEDS_INPUT이면 clarification 선택값 제출 순서다. 세션에서 조건이 확정된 뒤에도 같은 메시지 키의 재시도는 같은 job을 돌려준다. 미연결 ML/RAG 요청에는 성공한 모델 결과를 만들지 않는다. SQL은 일반 화면 응답에 없으며 XLSX의 정보 시트에 포함한다. 디버그 SQL은 `API_DEBUG_SQL=true`와 SUPER_ADMIN 모두 필요하다.
 
+질문 해석 실패, 공개 기간 오류, ML/RAG 연결 대기 및 범위 밖 안내는 마지막 성공 답변의 대화 조건을 지우지 않는다. 성공한 새 질문에서 `all_countries`/`all_products`를 명시하거나 기존 컨텍스트 해제 API를 호출하면 해당 범위를 해제한다. LLM의 `ranking_group`은 COUNTRY 또는 HS6이며 순위 대상이 불명확하면 재질문한다.
+
+복수 품목은 표현마다 API-38 단일 선택을 반복한다. 매번 최신 `clarification_id`로 제출하며, 다음 품목이 남으면 같은 job이 다시 NEEDS_INPUT이 된다. 이미 선택한 품목은 기존 chat_message 실행 JSON에 보관하고 모든 표현을 확인한 뒤 조회한다. 따라서 첫 선택 응답만으로 완료를 가정하면 안 된다. 직접 선택(`hs_item`)도 같은 순서를 따른다. 복수 품목의 통계 답변은 품목별 표를 반환하고 각 표에 `hs_item`을 붙인다. HS4와 하위 HS6가 함께 선택되어도 합산 총계로 중복 계산하지 않는다.
+
+API-19 및 채팅 추이 표에는 `previous_year_import_usd`(전년 수입액)를 추가했다. 전년 수출액과 각각의 집계 완료 여부로 검증하며, 검증된 월의 누락 거래는 0, 미검증 월은 null이다. 명시한 전년 비교는 방향에 맞는 금액·증감액·증감률을 답변에 표시한다. 전년 금액이 0이면 증감률을 계산하지 않으며, 비교 기간이 미검증이면 재입력을 안내한다.
+
 503 `DATA_NOT_READY`/`FEATURE_NOT_READY`를 빈 목록이나 숫자 0으로 바꾸지 않는다. 해당 패널에 적재/연결 대기 안내를 표시한다. 409 버전 충돌은 최신 값을 재조회한 뒤 사용자가 다시 저장하게 한다. 보류 API-23/27은 422를 반환한다. RAG 미연결 기사 발췌를 AI 요약으로 표시하지 않는다.
 
 ### 프록시와 로그인 요청 제한
@@ -61,7 +67,31 @@ API-11은 HS 코드·name_ko·original_name_ko 정확 일치 → Chroma hs_code 
 
 모델은 기존 적재기의 text-embedding-3-large를 사용한다. API_HS_CHROMA_PATH(기본 chroma_data), OPENAI_API_KEY, API_HS_VECTOR_ENABLED를 설정한다. API_HS_MAX_DISTANCE의 기본 0.70은 후보 필터이며 정답 보장값이 아니다. 검색 품질 평가는 담당자 확인이 필요하다. 벡터 연결 실패 시 명시적인 warnings와 등록명 부분 일치만 반환한다. API 요청에서는 적재·컬렉션 생성 작업을 실행하지 않는다.
 
-`python -m backend.scripts.sync_hs_vectors`는 API의 TLS RDS 연결로 HS2022 HS2/HS4만 읽어 기존 적재기의 문서 생성·증분 sync를 재사용한다. 로컬 MYSQL_*는 변경하지 않는다. 분류명은 OpenAI로 전송되며 회원·무역 실적은 전송하지 않는다. 2026-10-27 사용자 승인 후 1,324개(HS2 96개, HS4 1,228개)를 로컬 Chroma에 적재했고 재실행은 추가 0개였다. HS6/HS10 전체 벡터 적재는 이번 API-11 검증 범위가 아니다. API 서버가 다른 머신이면 이 컬렉션을 배포하거나 공용 Chroma 연결을 별도로 구성해야 한다.
+중복 경로였던 `backend/scripts/sync_hs_vectors.py`는 제거했다. 벡터 적재는 HS 담당의 `python -m backend.app.scheduler.jobs.hs_code_embed`로 일원화한다. 이 기존 작업은 자체 MYSQL_* 연결 설정을 사용하므로 운영 DB 대상은 담당자가 설정한다(비밀번호 포함 URL을 명령에 노출하지 않는다). API 서버는 컬렉션을 읽기만 한다. 과거 로컬 검증 데이터는 HS2 96개/HS4 1,228개이며, 배포 범위(HS2/4 또는 전체), 배포 경로, 갱신/재색인 담당은 별도 확정이 필요하다. 기존 적재기의 '새 ID만 추가' 동작도 유지하며 이번 수정에서 재적재하지 않았다.
+
+검색어는 Unicode 정규화·공백 정리·대소문자 정규화 후 2~120자로 제한한다. 2자 미만은 임베딩 없이 빈 결과를 반환한다. API-11은 신뢰 프록시 검증을 거친 IP당 기본 분당 60회(`API_HS_IP_LIMIT`)로 제한하며, 기존 api_rate_limit 저장소가 필요하다. 캐시 적중도 요청 제한에 포함한다. 검색 결과와 질의 벡터는 각각 프로세스당 최대 256개, 300초 TTL로 캐시하며 같은 키의 동시 요청은 합친다. 여러 워커 사이의 캐시는 공유하지 않는다. 기준 데이터 재적재 후 API_HS_CACHE_VERSION을 변경/재시작하거나 TTL 만료를 기다린다. API 요청의 OpenAI 임베딩은 기본 timeout 3초, 자동 재시도 0회다(초기 라이브러리/Chroma 로딩 시간은 별도).
+
+정확 일치는 confidence=EXACT, 유사 후보는 LOW 또는 MEDIUM이다. 기본 거리 상한 0.70 외에 1위 거리 0.45 이하와 1·2위 차이 0.08 이상을 모두 만족할 때만 MEDIUM으로 표시한다. 이는 정답 확률이 아니며 모든 결과는 requires_selection=true다. 비슷한 후보 또는 빈 결과에도 browse.url을 반환한다. API-12는 ROOT→HS2, HS2→HS4, HS4→HS6를 조회한다. API-38은 품목 되묻기에서 기존 choice_ids 대신 직접 선택한 hs_item을 받을 수 있으며 두 필드 동시 제출은 거절한다. 새 국가/품목/기간 슬롯과 응답 확장은 프론트 연동 시 함께 반영해야 한다.
+
+신뢰도는 DB에 존재하는 HS2022/HS4 후보를 검증하고 코드 중복을 제거한 뒤 계산한다. 제외된 벡터 ID의 점수는 사용하지 않으며, 유효 후보가 하나뿐이거나 등록명 부분 일치만 있으면 LOW로 표시한다.
+
+### 채팅 슬롯 추출과 프론트 연동
+
+LLM 호출은 intent·국가의 원문 표현/한국어 이름·품목 원문 표현·기간·비교 기간·수출입 방향을 한 번에 추출한다. SQL이나 추론한 HS 코드를 받지 않는다. 원문 근거, country/hs_code 사전, 공개 기간을 서버에서 검증한다. 잘못된 국가·기간·숫자 품목, 응답 파싱 실패 등은 작업 FAILED 대신 재입력 안내(NO_DATA/NEEDS_REVIEW)로 돌려준다. 품목은 hs_search 후보 선택을 요청하며 후보가 없어도 분류에서 직접 선택할 수 있다. 사용자 입력에 명시된 HS6는 DB에서 확인한다. 일반적으로 같은 작업의 품목/관심 확인 후에는 기존 메시지 실행 JSON의 intent_slots를 재사용해 LLM을 재호출하지 않는다. 모델 실패 시 규칙 파서로 되돌아가지 않는다. 비교는 현재 고정 SQL이 지원하는 같은 기간의 전년 대비만 허용하고 다른 비교는 재입력을 요청한다.
+
+기본 제공자는 store=False, timeout 기본 10초, SDK 자동 재시도 0회로 동작한다. 마스킹된 질문과 허용된 이전 조건만 전송하며 회원 정보나 DB 실적을 보내지 않는다. 팀 의도 모델은 db.intent_provider에 IntentProvider 구현을 주입하여 교체할 수 있다. ML/RAG 본문 생성은 연결하지 않았다. 구현 방식은 [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)를 참고했다.
+
+PR #34의 Hs4Search는 로컬 hs4Groups를 검색하는 화면이며 아직 이 API를 호출하지 않는다. 이번 작업은 프론트 파일이나 main을 병합하지 않았다. 담당자는 다음을 반영한다.
+
+1. 검색어가 **2글자 이상이고 마지막 입력 후 300ms가 지난 때**에 API-11 호출. 한 조건만 만족하는 OR가 아니다.
+2. 입력 변경/컴포넌트 해제 시 타이머와 이전 fetch를 취소하고, 취소 이후 도착한 응답도 버린다. 429는 즉시 반복 호출하지 않는다.
+3. SIMILAR는 '비슷한 후보'로 표시하고 자동 확정하지 않는다. 결과 유무와 무관하게 browse.url의 분류 선택 버튼을 표시한다.
+4. ROOT/HS2/HS4의 children을 순차 호출하여 직접 선택한다. 관심 품목은 기존처럼 HS6를 저장한다. 채팅 직접 선택은 API-38에 clarification_id와 hs_item을 제출한다.
+5. 캐시는 백엔드가 담당하므로 별도의 프론트 캐시 구현이 필수는 아니다. 서버 캐시만으로 300ms 대기 UI가 구현되지는 않는다.
+
+PR #34 적용 지점은 `frontend/src/components/pickers.jsx`의 `Hs4Search`다. 현재 `onConfirm(group)`의 `{code,name,items}` 구조를 유지하려면 API-11의 `{hs_code,name_ko}`를 code/name으로 매핑하고, HS4 선택 시 API-12의 HS6 목록을 `items: rows.map(row => [row.hs_code,row.name_ko])`로 전달한다. 로컬 hs4Groups를 실제 후보와 섞으면 없는 코드가 다시 노출되므로 API 연동 시 해당 mock 검색을 교체한다.
+
+직접 선택 예: `POST /api/v1/chat/jobs/{job_id}/clarifications`에 `{"clarification_id":"...","hs_item":{"hs_code":"190230","hs_ver":"HS2022"}}`를 세션/CSRF 헤더와 함께 보낸다. 예시 코드는 실제 사전 존재 여부를 검증받는다.
 
 ### 환율과 알림 조회
 

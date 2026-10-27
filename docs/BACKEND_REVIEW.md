@@ -1,5 +1,27 @@
 # 백엔드 검수 기록
 
+## 2026-10-27 추가 재검수 5건 수정
+
+- 대화 조건 보존: NO_DATA/OUT_OF_SCOPE와 모델 연결 대기 안내는 마지막 성공 조건을 유지한다. 국가·품목 전체 범위 지정과 컨텍스트 해제는 별도 기존 동작으로 유지한다.
+- 순위 대상: 의도 슬롯에 ranking_group(COUNTRY/HS6)을 추가하고 서버 검증 후 집계 group으로 전달한다. 구분이 없으면 재입력을 안내한다.
+- 복수 품목: 각 표현의 선택을 별도 clarification으로 진행하고 선택 결과를 기존 chat_message 실행 JSON에 누적한다. 전체 선택 완료 전에는 조회하지 않는다. 품목별 통계 표와 금액을 반환한다. 후보 없음/직접 선택/지난 clarification 재전송도 검증한다.
+- 전년 수입 비교: previous_year_import_usd를 import_summary의 검증된 월 기준으로 조회한다. 명시 비교 시 수출입 방향에 맞는 전년 금액·증감액·증감률을 표시한다. 검증된 누락 거래=0, 미검증=null, 0 분모의 증감률=null 규칙을 유지한다.
+- HS 신뢰도: DB 검증을 통과한 중복 없는 코드로 거리와 순위 차를 계산한다. 제외된 벡터 ID의 점수로 다른 후보의 신뢰도를 올리지 않는다.
+
+수정 파일: chat.py(조건 보존·선택 누적·결과), intent.py/chat_slots.py(순위 슬롯·검증), trade.py/results.py(전년 수입 금액·표 이름), reference.py(후보 신뢰도), contracts.json(API-38 반복 선택 안내), intent_fixtures.py/test_intent_search.py(기존 테스트 계약 갱신), test_chat_review_regressions.py(신규 10개 회귀), BACKEND_API.md(프론트 연동 계약), 본 문서(검수 기록).
+
+검증 명령:
+
+```powershell
+python -m unittest backend.tests.test_backend_api backend.tests.test_intent_search backend.tests.test_chat_review_regressions backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load backend.tests.test_un_data_refresh backend.tests.test_un_scheduler_integration
+python -m compileall -q backend/app/api backend/tests/test_chat_review_regressions.py backend/tests/test_intent_search.py backend/tests/intent_fixtures.py
+git diff --check
+```
+
+검증 결과: 기존 143개와 신규 회귀 10개, 총 153개가 55.017초에 모두 통과했다. compileall 및 git diff --check도 통과했다(기존 hs_vectors.py 줄바꿈 변환 안내만 있음). 초기 대상 테스트에서는 새 테스트의 쿼리 필드명을 잘못 지정해 1건 실패했으며, 계약의 period_start/period_end로 바로잡은 뒤 전체 테스트를 통과했다.
+
+실행 로그는 로컬 tmp/backend_build/five-fixes-full.log에 보관한다. 이번 검증은 SQLite와 고정 LLM 응답을 사용한다. 실제 LLM의 새로운 ranking_group 추출 정확도, 실제 RDS 쓰기·다중 worker 경합, 프론트 반복 선택/복수 표 표시 E2E는 검증하지 않았다. async_job·신규 DB 테이블·컬럼을 추가하지 않았다. 사용자 요청에 따라 수정 내용을 기능별 로컬 커밋으로 정리하며 푸시는 하지 않는다.
+
 브랜치: `feat/36-backend`. PR 코멘트 및 재검수 수정은 기능별 로컬 커밋으로 정리하며 푸시는 하지 않는다. RDS 마이그레이션은 적용하지 않았다. 기존 수집·적재 코드와 ML/RAG 모델 구현은 변경하지 않았다. 승인받은 HS 분류 정보로 기존 임베딩 적재기를 재사용해 로컬 Chroma 검색 데이터를 준비했다.
 
 ## 생성 파일과 이유
@@ -41,7 +63,7 @@
 | `backend/requirements-api.txt` | API/문서 생성/테스트 실행 의존성 분리 |
 | `backend/scripts/check_api_schema.py` | 실제 DB에 쓰지 않는 연결/준비 상태 조회 |
 | `backend/scripts/create_api_admin.py` | 명시 실행 시에만 최초 최고 관리자 생성 |
-| `backend/scripts/sync_hs_vectors.py` | 로컬 DB 설정을 유지하면서 RDS HS2022 HS2/HS4를 기존 적재기로 Chroma에 증분 동기화 |
+| `backend/scripts/sync_hs_vectors.py` (제거됨) | 초기 로컬 검증용 중복 경로였으며, 후속 리뷰에서 HS 담당 hs_code_embed 작업으로 일원화 |
 | `backend/tests/api_support.py` | SQLite 테스트 DB/샘플 자료 구성 |
 | `backend/tests/fixtures/api_schema.json` | RDS 컬럼 구조의 검증용 사본(실제 행 데이터 없음) |
 | `backend/tests/test_backend_api.py` | 인증·권한·소유권·통계·구독·알림·리포트·작업 통합 테스트 |
@@ -103,12 +125,46 @@ RDS에서는 읽기 전용 트랜잭션으로 새 채팅·리포트 후보 SELEC
 
 최종 검증: `python -m unittest backend.tests.test_backend_api backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load` — **101개(55+5+41), 63.178초, OK**. 기존 93개에 회귀 테스트 8개를 추가했다. `python -m compileall -q backend/app/api backend/tests/test_backend_api.py`와 `git diff --check`도 통과했다. 전체 실행 기록은 `tmp/backend_build/fix-three-full-tests.log`에 있다(커밋 제외). 검증한 코드를 기능별로 커밋하며 푸시는 별도 요청 전까지 하지 않는다.
 
+## 후속 리뷰: 의도 슬롯·검색 비용·후보 표시·적재 담당 분리
+
+수정 파일과 이유:
+
+- `backend/app/api/intent.py` (신규): IntentProvider의 OpenAI Structured Outputs 구현. 기본 gpt-4.1-mini, store=False, temperature=0, timeout 10초, 자동 재시도 없음. intent/국가/품목 표현/기간/방향을 단일 호출로 추출한다.
+- `backend/app/api/chat_slots.py` (신규): 슬롯의 원문 근거·국가 사전·공개 기간 검증. 모호한 두 글자 국가 약어는 버리고, 유효하지 않은 기간/품목은 재입력을 안내한다. HS 코드는 추론하지 않고 명시된 코드를 검증한다.
+- `backend/app/api/chat.py`: 정규식 의도 파서와 앞 세 단어 검색을 제거. 메시지 JSON의 추출 슬롯을 되묻기 후 재사용하고, 후보 없음/오추천 시 API-12 직접 선택으로 재개할 수 있게 했다.
+- `backend/app/api/search_cache.py` (신규), `database.py`, `hs_vectors.py`: 프로세스별 TTL/LRU 상한 및 동일 키 동시 요청 합치기. 검색 결과/질의 임베딩 캐시, 임베딩 timeout 축소.
+- `backend/app/api/reference.py`: 검색어 길이 검증, 확신도와 수동 탐색 경로, ROOT→HS2→HS4→HS6 지원. 실제 벡터 색인의 오추천 자체를 교정한 것은 아니다.
+- `backend/app/api/application.py`: API-11에 신뢰 프록시 처리 후 IP 제한. 기존 api_rate_limit 사용, 우회용 메모리 제한은 추가하지 않았다.
+- `backend/app/api/contracts.json`: API-11/12 응답·탐색 입력 설명과 API-38 직접 선택 hs_item 입력 확장.
+- `backend/app/api/integrations.py`, `backend/.env.api.example`: 주입 가능한 IntentProvider 계약과 모델/timeout/검색 제한 설정.
+- `backend/scripts/sync_hs_vectors.py` (삭제), `backend/requirements-api.txt`: 중복 적재 경로와 그 경로만 필요로 하던 pandas API 의존성 제거. 기존 HS 담당 적재기는 변경하지 않았다.
+- `backend/tests/test_backend_api.py`, `backend/tests/intent_fixtures.py` (신규), `backend/tests/test_intent_search.py` (신규): 기존 규칙 파서 단위 검사를 제거하고 고정 LLM 응답 기반 통합 회귀, 서버 검증·직접 선택·캐시/동시성/IP 제한·SDK 호출 계약을 검증한다.
+- `docs/BACKEND_API.md`, `docs/BACKEND_API_STATUS.md`, 본 문서: 변경된 계약·운영 제약·프론트 담당자 작업 범위 기록.
+
+실제 연결 점검:
+
+- gpt-4.1-mini 공개 예시 3개 검증: SK/TV는 국가 아님, 2024 대비는 비교 연도, 문장 뒤쪽 라면 품목 추출. 초기 점검에서 비교 질문의 RANKING 오분류와 회사 국적 추론이 있어 프롬프트를 보완했다. 최종 점검 3개는 의도/핵심 슬롯 기대값을 통과했다. 대표 사례 점검이며 일반 질문 정확도를 보증하지 않는다.
+- RDS 읽기 전용 + 기존 Chroma에서 라면/선박/김치 후보를 조회했다. 모두 confidence=LOW, requires_selection=true, 같은 검색어 재호출 결과 동일. 재호출은 각 0.001초 미만이었다. 원래 잘못된 후보가 일부 남아 있으며 재색인·품질 평가는 HS 담당 영역이다.
+- API-12 내부 조회로 HS2 96개, HS2 19의 HS4 5개, HS4 1902의 HS6 5개를 확인했다.
+- RDS의 api_rate_limit은 아직 없다. 요청 제한이 추가된 API-11을 운영 HTTP 경로에서 사용하려면 기존 앱 저장소 보완안 적용이 필요하다. 이번 작업은 DDL/적재/회원 데이터 쓰기를 실행하지 않았다.
+- PR #34(main)의 Hs4Search는 로컬 예시 배열 검색이며 API 연동이 없다. 프론트 파일/main 병합은 하지 않았고, 2자 이상 AND 300ms 입력 대기·응답 취소·비슷한 후보 표시·분류 탐색 연결은 프론트 담당자 전달 사항으로 정리했다.
+
+최종 명령 및 결과:
+
+- `python -m unittest backend.tests.test_backend_api backend.tests.test_intent_search backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load`: **117건(53+18+5+41), 85.804초, OK**. 폐기한 정규식 파서 검사 2건을 제거하고 슬롯/검색 회귀 18건을 추가했다. LLM/임베딩은 모의 응답이며 실제 RDS 쓰기는 하지 않는다.
+- `python -m compileall -q backend/app/api backend/tests/test_backend_api.py backend/tests/test_intent_search.py backend/tests/intent_fixtures.py`: 통과.
+- `git diff --check`: 통과(일부 파일 LF→CRLF 안내만 존재).
+- 로컬 점검 스크립트 `tmp/backend_build/intent_live_check.py`: 최종 프롬프트 실제 예시 3건 검증 통과. `hs_review_live_check.py`: 기존 벡터의 낮은 확신도·캐시·읽기 전용 분류 탐색 확인.
+- 기록: `tmp/backend_build/intent-review-full-tests.log`, `intent-live-check-final.log`, `hs-review-live-check.log` (모두 커밋 제외).
+
+미검증/후속 작업: 실제 프론트 API 연동과 300ms 동작 E2E, api_rate_limit 준비 후 RDS HTTP 요청 제한 쓰기, 여러 API 프로세스의 부하·분산 캐시, 전체 자연어/HS 검색 골든셋 정확도와 임계값 조정, 운영 Chroma 배포·색인 범위 및 담당 확정. 이번 수정은 커밋·푸시하지 않았다.
+
 ## 테스트하지 못한 부분
 
 - RDS에 추가 DDL 적용 후 회원/세션/리포트 쓰기. 실제 RDS 데이터와 스키마는 읽기만 했다.
 - MySQL JSON CHECK·generated column·고유 인덱스와 동시 worker/트랜잭션 경합·부하.
 - PR #34 화면 전체에 API를 연결한 브라우저 E2E. 프론트 변경은 이번 범위에서 제외했다.
-- ML/RAG 및 일반 자연어 해석 모델, 기사 급증/주요 이슈 판정 생산자, OAuth/메일/복구·미정 정책 API.
+- ML/RAG 본문 생성 및 대규모 자연어 해석 정확도 평가, 기사 급증/주요 이슈 판정 생산자, OAuth/메일/복구·미정 정책 API.
 - DOCX를 Word/LibreOffice에서 펼친 페이지별 레이아웃 및 여러 길이의 실데이터 리포트 디자인.
 - HTTPS 운영 쿠키·프록시·공유 파일 볼륨·장기 보존/정리·실제 운영 스케줄.
 - 실제 프록시/LB의 헤더 덮어쓰기 및 네트워크 접근 제한, RDS 다중 워커 경합·부하, MySQL 알림 UPDATE 쓰기는 미검증이다. 완료 이력 때문에 폴링을 반복하는 지연은 제거했지만 채팅 JSON 필터의 DB 스캔 비용과 인덱스 효과는 대규모 부하 검증이 필요하다.

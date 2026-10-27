@@ -14,8 +14,8 @@
 | 008 | `DELETE  /api/v1/users/me` | 보류: DEC-46 탈퇴 사유 및 보존·삭제 정책 |
 | 009 | `GET  /api/v1/config/options` | 처리 코드 구현 |
 | 010 | `GET  /api/v1/data/availability` | 처리 코드 구현 |
-| 011 | `GET  /api/v1/reference/hs-codes` | DB 코드·이름 정확 일치 및 HS2022/HS4 Chroma 임베딩 후보; 등록명 보완 검색 |
-| 012 | `GET  /api/v1/reference/hs-codes/{hs_code}/children` | 처리 코드 구현 |
+| 011 | `GET  /api/v1/reference/hs-codes` | 정확 일치/임베딩 후보; TTL 캐시·IP 제한·2자 최소 입력·확신도 및 직접 탐색 경로 |
+| 012 | `GET  /api/v1/reference/hs-codes/{hs_code}/children` | ROOT→HS2→HS4→HS6 사전 탐색 |
 | 013 | `GET  /api/v1/reference/countries` | 처리 코드 구현 |
 | 014 | `GET  /api/v1/reference/regions` | 처리 코드 구현 |
 | 015 | `GET  /api/v1/users/me/interests` | 처리 코드 구현 |
@@ -39,9 +39,9 @@
 | 033 | `GET  /api/v1/chat/sessions` | 처리 코드 구현 |
 | 034 | `POST  /api/v1/chat/sessions` | 처리 코드 구현 |
 | 035 | `GET  /api/v1/chat/sessions/{session_id}/messages` | 처리 코드 구현 |
-| 036 | `POST  /api/v1/chat/sessions/{session_id}/messages` | 규칙 기반 의도/조건 해석; 일반 자연어 모델 미연결 |
+| 036 | `POST  /api/v1/chat/sessions/{session_id}/messages` | 단일 LLM 슬롯 추출 + 서버 사전/기간 검증; ML/RAG 본문 생성은 별도 |
 | 037 | `GET  /api/v1/chat/jobs/{job_id}` | 처리 코드 구현 |
-| 038 | `POST  /api/v1/chat/jobs/{job_id}/clarifications` | 처리 코드 구현 |
+| 038 | `POST  /api/v1/chat/jobs/{job_id}/clarifications` | 후보 선택 또는 HS 직접 선택; 저장된 의도 슬롯 재사용 |
 | 039 | `DELETE  /api/v1/chat/sessions/{session_id}/context` | 처리 코드 구현 |
 | 040 | `DELETE  /api/v1/chat/sessions/{session_id}` | 처리 코드 구현 |
 | 041 | `GET  /api/v1/results/{result_id}` | 처리 코드 구현 |
