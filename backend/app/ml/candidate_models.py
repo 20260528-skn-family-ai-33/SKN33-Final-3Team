@@ -208,6 +208,11 @@ def main():
     targets = {kind: args.out_dir / f"{kind}_{args.version}.joblib" for kind in args.models}
     for kind, path in list(targets.items()):
         if path.exists():
+            try:
+                joblib.load(path)
+            except Exception as exc:  # 예전 실행이 저장 중 끊긴 파일. 건너뛰지 않고 다시 학습한다
+                print(f"{kind}: 기존 파일을 읽을 수 없어 다시 학습 → {path} ({type(exc).__name__})", flush=True)
+                continue
             print(f"{kind}: 이미 있음, 건너뜀 → {path}", flush=True)
             del targets[kind]
     if not targets:
@@ -222,11 +227,16 @@ def main():
         bundle.update(info, snapshot=rows["source"], version=args.version, runtime=_runtime(kind),
                       trained_at=datetime.now(KST).isoformat(timespec="seconds"))
         score = bundle["pipeline"].predict(latest[columns])
-        joblib.dump(bundle, path)
-        # 저장 파일을 다시 읽어 같은 예측이 나오는지 확인한다. 숲 모델은 여러 스레드가 나무 예측을 더하는 순서가
-        # 매번 달라 같은 모델도 1e-15 수준으로 다르므로 완전 일치 대신 허용 오차로 비교한다.
-        reloaded = joblib.load(path)["pipeline"].predict(latest[columns])
-        assert np.allclose(score, reloaded, rtol=0, atol=1e-9), f"{path}: 다시 읽은 모델의 예측이 다릅니다"
+        # 임시 파일에 저장해 다시 읽은 예측이 같을 때만 이름을 바꾼다. 중간에 끊기거나 검사에 실패한 파일이
+        # 완료본 이름으로 남으면 다음 실행이 "이미 있음"으로 건너뛴다.
+        # 숲 모델은 여러 스레드가 나무 예측을 더하는 순서가 매번 달라 같은 모델도 1e-15 수준으로 다르므로
+        # 완전 일치 대신 허용 오차로 비교한다.
+        temporary = path.with_suffix(".joblib.tmp")
+        joblib.dump(bundle, temporary)
+        reloaded = joblib.load(temporary)["pipeline"].predict(latest[columns])
+        if not np.allclose(score, reloaded, rtol=0, atol=1e-9):
+            raise ValueError(f"{temporary}: 다시 읽은 모델의 예측이 다릅니다")
+        temporary.replace(path)
         print(f"{kind}: 저장 {path} ({path.stat().st_size / 1e6:.1f}MB, 학습 {bundle['fit_seconds']:.0f}초, "
               f"{latest.anchor.max().date()} 예측 {len(score):,}행 재확인 일치)", flush=True)
         del bundle

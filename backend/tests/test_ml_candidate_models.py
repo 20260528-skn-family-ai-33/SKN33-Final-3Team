@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import joblib
+import numpy as np
 from sqlalchemy import select
 
 from backend.app.db.session import make_engine, session_scope
@@ -76,6 +77,18 @@ class MonthlyRunTest(unittest.TestCase):
                 self.run_month()
         self.assertFalse((self.out / "lightgbm_202602.joblib").exists())
         self.assertEqual(self.records(), [])
+
+
+class SnapshotCandidateTest(unittest.TestCase):
+    def test_damaged_file_is_retrained_not_skipped(self):
+        out = Path(tempfile.mkdtemp())
+        (out / "ridge_v1.joblib").write_bytes(b"truncated")  # 저장 중 끊긴 파일
+        argv = ["candidate_models", "--models", "ridge", "--out-dir", str(out), "--n-jobs", "1"]
+        with patch("sys.argv", argv), patch.object(C, "_snapshot_frame", return_value=dataset()[C.needed_columns()]):
+            C.main()
+        bundle = joblib.load(out / "ridge_v1.joblib")
+        self.assertTrue(np.isfinite(bundle["pipeline"].predict(dataset()[bundle["features"]].head())).all())
+        self.assertEqual(list(out.glob("*.tmp")), [])
 
 
 if __name__ == "__main__":
