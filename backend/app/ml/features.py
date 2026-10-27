@@ -58,16 +58,22 @@ def apply_hs_key(df, mapping, ver_col="hs_ver", code_col="hs6"):
     return df.assign(**{code_col: keys}).drop(columns=ver_col)
 
 
+def model_countries(country_table, currencies):
+    """시드의 COUNTRY 행(국가·지역)에 DB의 대표 통화를 붙인 국가표. 환율 피처의 통화 매핑이다."""
+    countries = country_table[country_table.country_role == "COUNTRY"][["country_code", "region_id"]]
+    return countries.merge(currencies, on="country_code", how="left")
+
+
 def load_data(external_dir=None, customs_dirs=None):
     """수집 파일로 build_dataset 입력을 만든다. 환율만 DB 조회, 파일 위치는 ml/sources.py."""
     from backend.app.ml import sources as S
     country_table = S.countries()
-    countries = country_table[country_table.country_role == "COUNTRY"][["country_code", "region_id", "currency_code"]]
+    codes = set(country_table.country_code[country_table.country_role == "COUNTRY"])
     mapping = hs_key_map(S.hs_correlation())
-    external = pp.load_external(external_dir, set(countries.country_code), mapping)
+    external = pp.load_external(external_dir, codes, mapping)
     if external["availability"] is None and any(len(external[key]) for key in ("market_yearly", "wdi_yearly")):
         raise ValueError("외부 자료의 공개·버전 시점 정보가 필요합니다: data/external/availability.csv")
-    exports, imports, complete = S.customs(customs_dirs or S.CUSTOMS_DIRS, set(countries.country_code), S.hs2017_codes())
+    exports, imports, complete = S.customs(customs_dirs or S.CUSTOMS_DIRS, codes, S.hs2017_codes())
     exports = apply_hs_key(exports, mapping)
     keys = ["month", "country_code", "hs6"]
     unknown_weight = pd.MultiIndex.from_frame(exports.loc[exports.weight.isna(), keys])
@@ -77,7 +83,7 @@ def load_data(external_dir=None, customs_dirs=None):
     imports = apply_hs_key(imports, mapping).groupby(["month", "country_code", "hs6"], as_index=False).sum()
     # 환율만 예외로 DB(fx_daily, country.currency_code)에서 읽는다. ECOS 수집기가 CSV를 남기지 않기 때문이다.
     fx, currencies = S.fx_from_db()
-    countries = countries.drop(columns="currency_code").merge(currencies, on="country_code", how="left")
+    countries = model_countries(country_table, currencies)
     news, news_topics, news_start = load_shortnews(SHORTNEWS_DIR, country_table[["country_code", "name_ko"]],
                                                    S.topic_majors())
     from backend.app.ml import related_groups

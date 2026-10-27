@@ -45,6 +45,13 @@ def input_manifest():
             for p in sorted(paths) if p.is_file()]
 
 
+def db_inputs():
+    """load_training_data가 DB에서 읽는 환율·통화 매핑의 지문. 같은 이름으로 학습 계보(info)에도 남는다."""
+    fx, currencies = S.fx_from_db()
+    return {"fx": {"rows": len(fx), "sha256": _frame_digest(fx)},
+            "country_mapping_sha256": _frame_digest(F.model_countries(S.countries(), currencies))}
+
+
 def load_training_data(cache_dir=None):
     """입력 파일이 처리 중 바뀌면 버전 계보에 다른 스냅샷을 기록하지 않도록 중단한다."""
     before = input_manifest()
