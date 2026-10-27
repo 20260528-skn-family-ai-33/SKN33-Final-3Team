@@ -393,3 +393,11 @@ SQLite의 기존/관리자 확장 스키마에서 중복 갱신, 출처별 ID �
 분류 색인·후보 질의·LLM 분석·본문 색인·전역 키워드 단계를 `pipeline_result.json`의 `usage`에 따로 기록합니다. 실행별 `run_id`가 다르며, 캐시 적중은 현재 실행 호출·토큰을 증가시키지 않습니다. 잘못된 모델 응답도 이미 보고된 usage는 보존합니다. 응답이나 usage가 없으면 `unreported_calls`로 구분하며 전체 사용량을 확정하지 않습니다. 실패와 PARTIAL에서도 보고된 사용량을 남깁니다. 독립 분류 색인 명령도 `candidate_index_run.json`에 이번 실행 사용량과 실패 상태를 기록합니다.
 
 공통 `root/database.json`은 DB 식별 해시만 저장하며 다른 DB 자료가 기존 출처와 섞이는 것을 막습니다. DB가 다르거나 기존 색인의 출처 DB가 확인되지 않으면 자동 게시하지 않습니다. 본문·전역 키워드 root와 별도 분류 후보 경로를 함께 확인합니다.
+
+## 기존 본문 색인 이관
+
+기본 본문은 `NEWS_VECTOR_ROOT` 또는 `data/rag/index`의 활성 세대 `kotra_article`, 공통 키워드는 같은 root의 `keywords/news_keyword`입니다. `chroma_data`는 단신 분류 후보와 명시적 구형 클라이언트 경로이며, 구형 본문을 자동 삭제·이관하지 않습니다.
+
+`legacy_direct_index_migration_required`가 발생하면 [기존 본문 색인 이관 안내](../../../docs/NEWS_INDEX_MIGRATION.md)의 원본 writer 중지·검증 카탈로그 준비·dry-run·`--apply` 순서를 따릅니다. `python -m backend.app.scheduler.jobs.news_index_migrate --help`로 인자를 확인할 수 있습니다. 원본 파일은 읽기만 하고 임시 복제본에서 벡터를 배치 복사합니다. 모델 호출은 없으며 기존 ID·문서·벡터와 타 출처를 보존합니다. 형식·모델·카탈로그가 맞지 않으면 게시하지 않습니다.
+
+실제 MySQL/RDS·운영 Chroma 이관 및 Windows 실행은 이번 검증에 포함되지 않습니다. 최초 수신 시각과 당시 분류 입력의 근거가 없는 기존 행은 현재 값으로 backfill하지 않습니다. 자세한 필드 의미·복구·제약도 위 안내에 기록했습니다.

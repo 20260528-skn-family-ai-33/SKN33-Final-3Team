@@ -11,7 +11,7 @@ class ArticleViewsTest(unittest.TestCase):
     def check_views(self, admin):
         path = ('db/mysql/migrations/20261023_admin_news_erd.sql' if admin
                 else 'db/mysql/init/01_schema.sql')
-        views = re.findall(r'CREATE(?: OR REPLACE)? VIEW v_article_.*?;', (ROOT / path).read_text())
+        views = re.findall(r'CREATE(?: OR REPLACE)? VIEW v_article_.*?;', (ROOT / path).read_text(encoding="utf-8"))
         self.assertEqual(len(views), 6)
         db = sqlite3.connect(':memory:')
         self.addCleanup(db.close)

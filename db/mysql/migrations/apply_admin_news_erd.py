@@ -29,7 +29,7 @@ BACKUP_TABLES = ('article', 'article_tag', 'batch_run', 'news_keyword_daily',
 
 
 def steps():
-    chunks = re.split(r'^-- @step (\w+) (\w+) ([\w-]+)\n', SQL.read_text(), flags=re.M)
+    chunks = re.split(r'^-- @step (\w+) (\w+) ([\w-]+)\n', SQL.read_text(encoding="utf-8"), flags=re.M)
     return [(*chunks[i:i + 3], chunks[i + 3].strip().removesuffix(';'))
             for i in range(1, len(chunks), 4)]
 

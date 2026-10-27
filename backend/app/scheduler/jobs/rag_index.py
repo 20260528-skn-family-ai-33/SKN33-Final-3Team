@@ -52,8 +52,11 @@ def _refresh(engine, sources, *, store, embed, supplements, raw_market, dry_run)
         from backend.app.services.rag.documents import ArticleDocument
         for line in (store.root/'generations'/previous.generation/'articles.jsonl').read_text(encoding='utf-8').splitlines():
             doc = ArticleDocument.model_validate_json(line)
-            if doc.raw_keywords is not None and not {'original_kw_sub', 'body_origin'} & set(doc.metadata_missing):
-                previous_supplements[doc.key] = {'body_masked':doc.body, 'body_available':bool(doc.body), 'keywords':doc.raw_keywords}
+            if 'body_origin' not in doc.metadata_missing:
+                extra = {'body_masked':doc.body, 'body_available':bool(doc.body)}
+                if doc.raw_keywords is not None and 'original_kw_sub' not in doc.metadata_missing:
+                    extra['keywords'] = doc.raw_keywords
+                previous_supplements[doc.key] = extra
     if ArticleSource.KOTRA_MARKET in sources:
         if raw_market is None:
             from backend.app.scheduler.jobs.news_load import latest_raw, RAW_DIR

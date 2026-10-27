@@ -342,3 +342,11 @@ root의 `database.json`에는 접속 자격 증명을 제외한 DB 식별 해시
 신문·단신의 DB 확정 대표어는 파일 사전으로 다시 바꾸지 않습니다. 색인 작업은 사용한 snapshot을 성공·실패 시 모두 닫습니다. 생성한 OpenAI 제공자는 작업이 닫고, 명시 주입한 제공자는 호출자가 닫습니다.
 
 사용량은 응답 검증 전에 기록합니다. `reported_responses`와 `unreported_calls`를 구분하며, 보고되지 않은 토큰 수를 확인된 0토큰·0원으로 간주하지 않습니다. 알려진 토큰의 비용은 추정치입니다. 단신 전체 사용량의 본문·키워드 단계와 `chroma_result.usage`는 같은 사용량이므로 합산하지 않습니다.
+
+## 기존 본문 색인 이관
+
+기본 본문은 `NEWS_VECTOR_ROOT` 또는 `data/rag/index`의 활성 세대 `kotra_article`, 공통 키워드는 같은 root의 `keywords/news_keyword`입니다. `chroma_data`는 단신 분류 후보와 명시적 구형 클라이언트 경로이며, 구형 본문을 자동 삭제·이관하지 않습니다.
+
+`legacy_direct_index_migration_required`가 발생하면 [기존 본문 색인 이관 안내](../../../docs/NEWS_INDEX_MIGRATION.md)의 원본 writer 중지·검증 카탈로그 준비·dry-run·`--apply` 순서를 따릅니다. `python -m backend.app.scheduler.jobs.news_index_migrate --help`로 인자를 확인할 수 있습니다. 원본 파일은 읽기만 하고 임시 복제본에서 벡터를 배치 복사합니다. 모델 호출은 없으며 기존 ID·문서·벡터와 타 출처를 보존합니다. 형식·모델·카탈로그가 맞지 않으면 게시하지 않습니다.
+
+실제 MySQL/RDS·운영 Chroma 이관 및 Windows 실행은 이번 검증에 포함되지 않습니다. 최초 수신 시각과 당시 분류 입력의 근거가 없는 기존 행은 현재 값으로 backfill하지 않습니다. 자세한 필드 의미·복구·제약도 위 안내에 기록했습니다.
