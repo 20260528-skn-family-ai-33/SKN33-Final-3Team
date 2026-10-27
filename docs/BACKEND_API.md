@@ -9,7 +9,7 @@
 - **현재 코드 실행에는 앱 저장소 보완이 필요하다.** `api_user_profile`, `api_auth_session`, `api_snapshot`, `api_keyword_block`, `api_audit_event`, `api_rate_limit`, `api_report_file` 7개가 현재 RDS에 없다. `backend/migrations/036_backend_api.sql`은 현재 구현에 대응하는 제안이며 확정 DB 계약이 아니다. 기존 테이블 통합 대안은 아래 DB 재검수 항목에 정리했다. 통합안을 선택하면 코드와 마이그레이션을 함께 변경해야 한다. 이 SQL은 기존 테이블 변경·데이터 시드·수집을 포함하지 않으며 시작/요청 시 자동 DDL은 없다.
 - 활성 `REPORT_PERIOD`, `REPORT_TYPE` 및 승인된 `NOTIFICATION_TERMS`는 운영/데이터 담당자가 준비한다. 없는 옵션이나 약관을 가짜 값으로 생성하지 않는다. API-09에서 지원 주기를 확인한다. 요청형은 `RPT_ON_DEMAND`, 구독형은 `RPT_WEEKLY`, `RPT_MONTHLY`, `RPT_QUARTERLY` 옵션이 필요하다.
 - ML 학습/예측, RAG 임베딩·검색·생성·문장 검증은 담당자에게 남겼다. `integrations.py`는 인터페이스 정의이며 현재 자동으로 플러그인을 로드하거나 모델을 호출하지 않는다. 기사 `summary` 필드는 현재 마스킹한 본문의 앞부분 발췌다. 자연어 채팅은 등록된 코드·국가·기간을 처리하는 제한적 규칙 파서이다.
-- `async_job`은 팀의 사용 보류 결정에 따라 API·워커에서 사용하지 않는다. 채팅 실행은 기존 chat_message, 리포트 실행은 기존 report와 지속 실행 로그를 사용한다. 이를 위한 신규 테이블·컬럼은 추가하지 않는다. 다른 기능의 api_ 저장소 보완안과는 별개다.
+- `async_job`은 사용하지 않는다. 채팅 실행은 기존 chat_message.result_json, 리포트 실행은 report.content_json의 내부 `_execution` 필드에 저장한다. 이번 PR 검수 반영으로 로컬 실행 상태 파일 의존성을 제거했다. 신규 테이블·컬럼 없이 JSON 규약을 확장하며, 다른 기능의 api_ 저장소 보완안과는 별개다.
 
 ## 설치와 실행
 
@@ -22,7 +22,7 @@ python -m pip install -r backend/requirements-api.txt
 python -m backend.scripts.check_api_schema
 # DB 담당자가 036_backend_api.sql을 검토·적용한 후:
 python -m backend.scripts.create_api_admin
-python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
 # 별도 터미널
 python -m backend.app.api.worker
 ```
@@ -51,11 +51,29 @@ python -m backend.app.api.worker
 
 503 `DATA_NOT_READY`/`FEATURE_NOT_READY`를 빈 목록이나 숫자 0으로 바꾸지 않는다. 해당 패널에 적재/연결 대기 안내를 표시한다. 409 버전 충돌은 최신 값을 재조회한 뒤 사용자가 다시 저장하게 한다. 보류 API-23/27은 422를 반환한다. RAG 미연결 기사 발췌를 AI 요약으로 표시하지 않는다.
 
+### 프록시와 로그인 요청 제한
+
+API_TRUSTED_PROXY_CIDRS에는 실제 리버스 프록시 IP/CIDR만 지정한다(기본 빈 값: 전달 헤더 무시). 앱이 실제 접속 상대를 검증할 수 있도록 uvicorn은 --no-proxy-headers로 실행한다. 신뢰된 상대의 X-Forwarded-For만 오른쪽부터 검사해 첫 비신뢰 주소를 사용한다. 프록시는 전달 헤더를 올바르게 덮어쓰거나 접속 주소를 추가해야 하며 공개 접속을 차단한 내부 프록시 구성에서 검증해야 한다. API_AUTH_IP_LIMIT은 IP당 분당 100회, API_AUTH_EMAIL_LIMIT은 정규화한 이메일당 분당 10회가 기본이다. 두 제한은 별도 해시 키로 기록한다. 프록시를 신뢰 목록에 넣지 않은 배포에서 실제 IP가 자동 복구되지는 않는다.
+
+### HS 검색과 벡터 적재
+
+API-11은 HS 코드·name_ko·original_name_ko 정확 일치 → Chroma hs_code 컬렉션의 HS2022/HS4 임베딩 후보 → 등록 품목명 부분 일치 보완 순으로 최대 5개를 반환한다. 여기서 정확 일치는 DB에 등록된 이름을 비교하는 의미이며 임의 동의어 사전을 만들지 않는다. 후보 코드는 다시 RDS에서 검증하고 자동 확정하지 않는다. 채팅도 같은 검색 경로를 사용해 선택을 요청한다.
+
+모델은 기존 적재기의 text-embedding-3-large를 사용한다. API_HS_CHROMA_PATH(기본 chroma_data), OPENAI_API_KEY, API_HS_VECTOR_ENABLED를 설정한다. API_HS_MAX_DISTANCE의 기본 0.70은 후보 필터이며 정답 보장값이 아니다. 검색 품질 평가는 담당자 확인이 필요하다. 벡터 연결 실패 시 명시적인 warnings와 등록명 부분 일치만 반환한다. API 요청에서는 적재·컬렉션 생성 작업을 실행하지 않는다.
+
+`python -m backend.scripts.sync_hs_vectors`는 API의 TLS RDS 연결로 HS2022 HS2/HS4만 읽어 기존 적재기의 문서 생성·증분 sync를 재사용한다. 로컬 MYSQL_*는 변경하지 않는다. 분류명은 OpenAI로 전송되며 회원·무역 실적은 전송하지 않는다. 2026-10-27 사용자 승인 후 1,324개(HS2 96개, HS4 1,228개)를 로컬 Chroma에 적재했고 재실행은 추가 0개였다. HS6/HS10 전체 벡터 적재는 이번 API-11 검증 범위가 아니다. API 서버가 다른 머신이면 이 컬렉션을 배포하거나 공용 Chroma 연결을 별도로 구성해야 한다.
+
+### 환율과 알림 조회
+
+fx_daily는 2026-10-27 기존 적재기로 RDS에 43개 통화/8,557건 적재되어 있다. 환율 조회는 통화 정보를 한 번 읽고 윈도 함수로 각 통화의 최근 두 영업일을 한 번에 조회한다. quote_unit(예: JPY 100)을 유지하고 직전 영업일 기준 등락을 계산한다. 실제 0과 미적재를 혼동하지 않으며 빈 통화는 계속 UNAVAILABLE이다. 이번 수정은 새 수집기를 추가하거나 정기 적재를 자동 설정하지 않는다.
+
+알림은 차단 키워드·기사 노출 조건을 SQL EXISTS/JSON 조건으로 필터링하고 COUNT와 LIMIT/OFFSET으로 조회한다. 페이지의 기사·태그는 묶어서 읽으며, 상세 조회는 ID 조건을 적용한다. 팝업은 미확인 대상 최대 100개를 전달하고 확인 이후 남은 대상을 다음 호출에 제공한다. ⑩ 관리자 기사 목록의 영향 리포트 계산은 미확정 요청에 따라 그대로 유지한다.
+
 ## DB 및 담당자 연결 계약
 
 ### async_job 없는 채팅·리포트 실행
 
-첨부 DB 설계서 UN 통합본과 JSON 작성 가이드의 report.status/generation_key/retry_count, chat_message의 조건·결과 저장 구조를 재사용한다. report.conditions_json은 생성 조건, content_json은 완성 결과로 유지하며 실행 단계·오류·회차별 시도는 이 JSON에 섞지 않는다.
+report.status/generation_key/retry_count, chat_message의 조건·결과 저장 구조를 재사용한다. conditions_json은 생성 조건으로 유지한다. content_json은 완료 결과와 내부 `_execution`을 함께 보관하도록 이번 검수 요청에 따라 확장했다. 이 필드는 원 DB 문서에 이미 확정된 필드가 아니며, 프론트 응답·문서 본문에는 노출하지 않는다.
 
 | 기능 | 저장·처리 위치 |
 |---|---|
@@ -64,17 +82,17 @@ python -m backend.app.api.worker
 | 완료 답변 | ASSISTANT content_masked/intent_json/result_json에 답변·확정 조건·결과를 저장한다. 같은 질문의 재시도·되묻기는 USER 행을 추가하지 않는다. |
 | 리포트 작업 등록 | report의 QUEUED 행과 generation_key UNIQUE를 사용한다. 기존 요청형·구독형 리포트 ID를 그대로 사용한다. |
 | 리포트 전체 상태 | report.status/retry_count가 기준이다. READY 결과는 재실행하지 않는다. |
-| 리포트 실행 로그 | API_REPORT_DIRECTORY 아래 `_execution/reports/{report_id}.json`은 최신 실행 상태, `.jsonl`은 회차·단계·오류 이력이다. report_id와 generation_key로 DB 행에 연결하고, 최신 상태 파일은 임시 파일+fsync+원자적 교체로 보관한다. 로그에는 인증 비밀값을 넣지 않는다. |
+| 리포트 실행 상태 | report.content_json._execution에 실행 토큰·유효 시각·시도 횟수·재시도 가능 시각·단계·오류를 저장한다. report 행의 상태와 같은 DB 트랜잭션으로 갱신한다. 과거 로컬 JSON/JSONL 파일은 읽지 않는다. |
 
-API와 모든 worker는 같은 지속 파일 볼륨을 사용해야 한다. 실행 로그는 임시 디렉터리가 아니며 DB와 함께 보존해야 한다. 로그가 없는 기존 리포트는 자동 실행 대상으로 추정하지 않는다. 파일 로그만 새로 만들어 과거 실패 사유를 복원하지 않는다. 앱의 JSON/로그 버전 계약이 없는 과거 채팅·리포트는 자동 작업으로 처리하지 않는다.
+리포트 작업 발견·선점은 RDS만 사용하므로 API/worker의 로컬 디렉터리가 달라도 실행할 수 있다. 완성 PDF/DOCX 다운로드에는 여전히 동일 경로의 공유 파일 볼륨이 필요하다. 파일 전달용 객체 저장소 연결은 별도 작업이다. `_execution` 없는 기존 미완료 report 행은 상태·retry_count·generation_key로 실행 정보를 구성해 재개한다. 원래 요청 조건이 현재 생성기 계약에 맞아야 하며, 과거 오류 내역을 복원하지는 않는다. 기존 worker를 종료하고 새 버전으로 전환한다.
 
-중복 질문은 사용자 행 잠금과 요청 키 조회로, 동시 채팅 처리는 대화방→메시지 순서의 잠금으로 막는다. 워커는 오래된 요청부터 선점하고 SKIP LOCKED를 사용한다. 실행 유효 시각은 10분이며, 실행 중에는 실제 대상 행 잠금도 유지한다. 워커 종료 후 유효 시각이 지나면 같은 대상에서 새 토큰으로 재개하고 이전 토큰의 결과 저장은 거부한다. 대화방 삭제는 같은 잠금 순서에서 메시지와 실행 상태를 함께 제거한다.
+중복 질문은 사용자 행 잠금과 요청 키 조회로, 동시 채팅 처리는 대화방→메시지 순서의 잠금으로 막는다. 워커는 기존 chat_message.result_json과 report.status/content_json에서 실행 상태와 재시도/만료 시각을 SQL로 거른 다음 테이블별 API_JOB_SCAN_SIZE(기본 100개)를 적용한다. 완료 이력과 아직 실행할 수 없는 작업은 후보 상한에 포함하지 않아 과거 이력을 100개씩 읽으며 2초씩 기다리지 않는다. 후보가 잠겨 있으면 다음 호출에서 그 뒤를 확인하고, 선점에 성공하면 해당 종류의 커서를 초기화해 오래된 만료 작업도 다시 확인한다. 전체 큐의 엄격한 FIFO는 보장하지 않는다. 실행 유효 시각은 10분이고 실행 중 대상 행 잠금은 유지한다. 재시작 시 만료 작업을 새 토큰으로 재개하며 이전 토큰의 저장은 거부한다. 테이블·컬럼 추가나 운영 DDL 적용은 없다. 채팅 JSON 필터 자체의 DB 스캔 비용은 남으므로 대규모 운영에서는 EXPLAIN/부하 측정 후 기존 테이블의 인덱스를 별도로 검토해야 한다.
 
-리포트의 재시도 가능한 실패는 회차당 1회 즉시 재시도하고 다시 실패하면 DELAYED로 전환한다. 후속 회차 대기 시간은 API_REPORT_RETRY_DELAY_SECONDS(기본 300초)이며 운영 주기에 맞춰 확정할 설정값이다. retry_count는 실제 재실행 시 누적한다. 재시도 불가 오류는 FAILED로 종료한다. 파일 로그와 DB는 하나의 분산 트랜잭션이 아니므로 DB 업무 상태와 세대 키를 우선하고, 완료 로그 직후 DB 롤백 및 만료 실행권 복구를 테스트한다. 실제 MySQL 동시 워커/공유 볼륨 장애 검증은 별도로 필요하다.
+리포트는 최초 실행을 포함해 API_REPORT_MAX_ATTEMPTS(기본 3회)까지 시도한다. 회차당 1회 즉시 재시도하고 다시 실패하면 DELAYED, API_REPORT_RETRY_DELAY_SECONDS(기본 300초) 후 다음 시도를 한다. 총 상한 도달·재시도 불가 오류는 FAILED로 종료하고 retryable=false를 반환한다. retry_count는 최초를 제외한 실제 재실행 횟수다. 대상이 살아 있는 NOT_FOUND 오류도 FAILED로 처리한다. 구독 예약 실패는 별도로 기록하고 5초 이후 재시도하며, 그동안 채팅·리포트 작업 처리는 계속한다. 작업 처리 루프 자체의 DB 오류는 기록 후 5초 뒤 재시도한다. --once에서도 예약 실패와 별개로 작업 처리를 한 번 시도한 다음 예약 오류를 종료 코드에 반영한다. 실제 MySQL 동시 워커/공유 볼륨 장애 검증은 별도로 필요하다.
 
 이전 async_job 기반 코드를 운영했다면 자동 이전은 제공하지 않는다. 기존 미완료 작업을 확인하고 별도 이관 기준을 정해야 한다. 이번 작업에서는 실제 RDS에 작업을 등록하거나 데이터를 이관하지 않았다.
 
-통계는 HS2022와 `country_role=COUNTRY`만 합산한다. 월별 데이터가 존재하고 그 월 전체를 덮는 가장 최근 `batch_run`이 SUCCESS인 경우 공개한다. 실패/진행 중인 최신 실행이 있으면 그 기간을 제외한다. 수출·수입 공통 가용 범위를 메인 공개 기간으로 사용한다. 없는 관측은 0으로 추정하지 않는다. UN은 월/연과 CIF/FOB를 분리하고 누락 범위를 warnings에 표시한다.
+통계는 HS2022와 `country_role=COUNTRY`만 합산한다. 그 월 전체를 덮는 가장 최근 batch_run이 SUCCESS인 경우 공개한다. 실패/진행 중인 최신 실행이 있으면 그 기간을 제외한다. 수출·수입 공통 가용 범위를 메인 공개 기간으로 사용한다. 검증된 월 안에서 선택 국가·품목의 거래 행이 없으면 추이·순위 금액을 0으로 처리한다. 검증되지 않은 기간을 0으로 채우지 않으며 UN의 결측 표시 규칙은 별개로 유지한다. 검증 월·공개 범위·데이터 버전은 요청 Store 안에서 재사용하며 새 요청/스케줄 회차에서는 다시 확인한다.
 
 앱이 생성하는 datetime은 UTC이다. 원천 `DATE`는 통계월/기사일이다. 기존 적재 코드가 저장한 naive `DATETIME`의 시간대는 데이터 담당자가 확인해야 한다. 프론트 표시 시간대는 Asia/Seoul로 통일한다.
 

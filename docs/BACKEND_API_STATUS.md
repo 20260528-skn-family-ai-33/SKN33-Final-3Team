@@ -14,7 +14,7 @@
 | 008 | `DELETE  /api/v1/users/me` | 보류: DEC-46 탈퇴 사유 및 보존·삭제 정책 |
 | 009 | `GET  /api/v1/config/options` | 처리 코드 구현 |
 | 010 | `GET  /api/v1/data/availability` | 처리 코드 구현 |
-| 011 | `GET  /api/v1/reference/hs-codes` | 코드/부분 문자열 검색; 임베딩 검색 미연결 |
+| 011 | `GET  /api/v1/reference/hs-codes` | DB 코드·이름 정확 일치 및 HS2022/HS4 Chroma 임베딩 후보; 등록명 보완 검색 |
 | 012 | `GET  /api/v1/reference/hs-codes/{hs_code}/children` | 처리 코드 구현 |
 | 013 | `GET  /api/v1/reference/countries` | 처리 코드 구현 |
 | 014 | `GET  /api/v1/reference/regions` | 처리 코드 구현 |
@@ -35,7 +35,7 @@
 | 029 | `GET  /api/v1/articles` | 검색/필터; summary는 본문 발췌 |
 | 030 | `GET  /api/v1/articles/{article_id}` | 마스킹 본문; AI 요약 미연결 |
 | 031 | `GET  /api/v1/issues/major` | 확정 alert_event 조회; 사건 판정기는 별도 담당 |
-| 032 | `GET  /api/v1/exchange-rates` | 빈 fx_daily는 UNAVAILABLE |
+| 032 | `GET  /api/v1/exchange-rates` | 적재된 fx_daily 최근 두 영업일 일괄 조회·단위/등락 계산; 빈 통화는 UNAVAILABLE |
 | 033 | `GET  /api/v1/chat/sessions` | 처리 코드 구현 |
 | 034 | `POST  /api/v1/chat/sessions` | 처리 코드 구현 |
 | 035 | `GET  /api/v1/chat/sessions/{session_id}/messages` | 처리 코드 구현 |
