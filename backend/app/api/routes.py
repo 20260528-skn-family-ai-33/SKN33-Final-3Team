@@ -8,7 +8,7 @@ from urllib.parse import quote
 from sqlalchemy import select, update, delete, func
 from fastapi.responses import Response, FileResponse
 from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs
-from backend.app.api.common import ApiError, require, unavailable, now, clean, digest, page_info, percentage, month, shift_month
+from backend.app.api.common import ApiError, require, unavailable, now, clean, digest, page_info, percentage, month, shift_month, period
 from backend.app.api.security import issue_session, hash_token, administrator
 from backend.app.api.schemas import Signup, Login, PasswordChange, InterestUpdate, NotificationPatch, ReportCreate, Conditions
 from backend.app.api.results import get_table, read_snapshot, result_table
@@ -278,10 +278,11 @@ def changes(store,uid,data,products=False):
     rule={**defaults,**{k:v for k,v in configured.items() if k in defaults}}
     require(all(type(v) in (int,float) for v in rule.values()) and rule['minimum_amount_usd']>0 and rule['minimum_delta_usd']>0 and rule['surge_pct']>0 and rule['drop_pct']<0 and rule['major_pct']>=rule['surge_pct'], '무역 변화 임계값 설정을 확인하세요.','FEATURE_NOT_READY',503)
     items=[]
-    for k,r in current.items():
-        p=old.get(k)
-        if p is None: continue # 미관측을 0/신규 진출로 추정하지 않는다.
-        value,base=r['amount_usd'],p['amount_usd']; growth=percentage(value,base); delta=value-base
+    # Both months are verified above. Missing trades within those months are zero.
+    for k in sorted(current.keys()|old.keys()):
+        value=current.get(k,{}).get('amount_usd',0)
+        base=old.get(k,{}).get('amount_usd',0)
+        growth=percentage(value,base); delta=value-base
         items.append({'country_code':k[0],'hs_item':{'hs_code':k[1],'hs_ver':'HS2022'},'baseline_amount_usd':base,
             'current_amount_usd':value,'change_amount_usd':delta,'growth_pct':growth,'growth_status':'NEW' if base==0 and value>0 else 'NORMAL',
             'severity':'MAJOR' if growth is not None and growth>=rule['major_pct'] else 'NORMAL',
@@ -294,4 +295,6 @@ def changes(store,uid,data,products=False):
     surges=[r for r in items if r['growth_pct'] is not None and r['growth_pct']>=rule['surge_pct'] and r['change_amount_usd']>=rule['minimum_delta_usd']]
     drops=[r for r in items if r['growth_pct'] is not None and r['growth_pct']<=rule['drop_pct'] and r['change_amount_usd']<=-rule['minimum_delta_usd']]
     new=[r for r in items if r['growth_status']=='NEW' and r['current_amount_usd']>=rule['minimum_amount_usd']]
-    return {'surges':surges,'drops':drops,'new_entries':new,'table':result_table(store,uid,surges+drops+new,meta,data,store.queries),'meta':meta}
+    conditions=Conditions(hs_items=hs,country_codes=countries,period=period(start,end),
+        compare_period=period(previous,previous),compare=data['compare'],trade_flow='EXPORT',metric='GROWTH').model_dump(mode='json')
+    return {'surges':surges,'drops':drops,'new_entries':new,'table':result_table(store,uid,surges+drops+new,meta,conditions,store.queries),'meta':meta}
