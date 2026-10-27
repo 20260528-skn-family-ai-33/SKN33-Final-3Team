@@ -985,8 +985,15 @@
         "Request Body",
         "choice_ids",
         "string[]",
-        "필수",
-        "제공된 선택지만. 품목은 1개, 섹션은 복수."
+        "선택",
+        "현재 품목의 선택지 하나. 여러 품목은 NEEDS_INPUT을 반복해 각각 선택. HS 직접 선택 시 생략하며 hs_item과 동시 사용하지 않음."
+      ],
+      [
+        "Request Body",
+        "hs_item",
+        "HsItem",
+        "선택",
+        "HS 품목 되묻기에서 API-12로 직접 선택한 HS4/HS6. choice_ids와 동시 사용 금지."
       ]
     ]
   },

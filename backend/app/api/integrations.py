@@ -10,7 +10,9 @@ class RagProvider(Protocol):
 
 class IntentProvider(Protocol):
     def extract(self, *, question: str, previous_conditions: dict) -> dict:
-        """후보 조건만 반환. 서버가 HS/국가/기간을 검증한 후 고정 쿼리에 사용."""
+        """intent.IntentSlots 형식 반환. 국가명·원문 품목 표현만 추출하며 HS 코드는 추론하지 않는다.
+        서버가 국가/품목/기간을 검증한 후 고정 쿼리에 사용한다.
+        """
         ...
 
 
