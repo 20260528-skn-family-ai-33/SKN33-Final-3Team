@@ -1,5 +1,6 @@
 """시간 교차검증의 누수 방지·이력 부족 처리와 실제 PDF 생성 검증."""
 import importlib.util
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -74,6 +75,36 @@ class TestTemporalReport(unittest.TestCase):
 @unittest.skipUnless(importlib.util.find_spec("reportlab") and importlib.util.find_spec("pypdf"),
                      "PDF 검사 의존성: backend/requirements-ml-report.txt")
 class TestPdfReport(unittest.TestCase):
+    def test_pdf_describes_actual_feature_usage_and_market_type_results(self):
+        from backend.app.ml.reporting import generate_report
+        from pypdf import PdfReader
+        cases = [
+            ({"features_used": ["fx_change_12m", "log_gdp", "mkt_growth", "kor_share"],
+              "model_b": "classifier"}, {"rows": 10, "types_known": 10},
+             ["환율: 모델 A 사용 피처 1/2개", "WDI: 모델 A 사용 피처 1/4개",
+              "시장: 모델 A 사용 피처 2/5개", "시장 유형이 있는 예측은 10행이다.",
+              "시장 유형 산출 방식: classifier", "모델 B 0.7500"]),
+            ({"features_used": [], "model_b": "rule (기준선 미달)"}, {"rows": 10, "types_known": 3},
+             ["환율: 모델 A 사용 피처 0/2개", "시장 유형이 있는 예측은 3행이다.",
+              "시장 유형 산출 방식: rule (기준선 미달)"]),
+            ({"features_used": []}, {"rows": 10, "types_known": 0},
+             ["시장 유형이 있는 예측은 0행이다.", "시장 유형 산출 방식: 미확인"]),
+            ({}, {}, ["환율: 모델 A 사용 여부 미확인", "시장 유형 예측 건수는 미확인이다."]),
+        ]
+        for metadata, predictions, expected in cases:
+            with self.subTest(metadata=metadata, predictions=predictions), tempfile.TemporaryDirectory() as directory:
+                context = {"metadata": metadata, "predictions_summary": predictions,
+                           "evaluation": {"model_b": {"macro_f1": .75}},
+                           # 원본에 값이 있어도 모델이 해당 피처를 선택하지 않을 수 있다.
+                           "feature_summary": {"rows": 10, "feature_nonmissing": {"fx_change_12m": 10}}}
+                path = generate_report(context, {}, Path(directory) / "report.pdf")
+                text = re.sub(r"\s+", "", "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages))
+                for statement in expected:
+                    self.assertIn(re.sub(r"\s+", "", statement), text)
+                for stale in ("환율도 값이 없어", "현재 값 없어 결측", "시장·WDI가 모두 결측",
+                              "B 점수와 유형을 미판정", "현재 모델 B는 과거 공개 시장 라벨을 확보할 때까지"):
+                    self.assertNotIn(re.sub(r"\s+", "", stale), text)
+
     def test_pdf_contains_schema_methods_actual_metrics_and_failure_status(self):
         from backend.app.ml.reporting import generate_report
         from pypdf import PdfReader

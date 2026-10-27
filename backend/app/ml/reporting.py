@@ -134,6 +134,22 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
         values = inventory.get("external", {}).get(kind, {}).get("years", [])
         return ", ".join(str(y) for y in values) if values else "미확인"
 
+    def feature_usage(label, columns):
+        used = meta.get("features_used")
+        if used is None:
+            return f"{label}: 모델 A 사용 여부 미확인"
+        selected = set(columns) & set(used)
+        return f"{label}: 모델 A 사용 피처 {len(selected)}/{len(columns)}개"
+
+    market_usage = feature_usage("시장", ("mkt_log_import", "mkt_growth", "kor_share",
+                                         "kor_share_change", "mkt_hs4_growth"))
+    wdi_usage = feature_usage("WDI", ("log_gdp", "gdp_growth", "log_population", "log_gdp_pc"))
+    fx_usage = feature_usage("환율", ("fx_change_12m", "fx_vol_12m"))
+    known_types = predictions.get("types_known")
+    type_status = ("시장 유형 예측 건수는 미확인이다." if known_types is None else
+                   f"시장 유형이 있는 예측은 {count(known_types)}행이다.")
+    type_status += f" 시장 유형 산출 방식: {meta.get('model_b', '미확인')}."
+
     def chart(labels, series, height=175):
         d = Drawing(width, height)
         left, bottom, top = 35, 38, height - 15
@@ -202,9 +218,10 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
     add("이 보고서의 범위", "h2")
     add("수집 파일 형식·기간, 정합성 검증, 피처와 미래 정답 생성, 시간 분할, 기준선 비교, "
         "시간 순서 K-fold, 출력 스키마와 재실행 방법을 함께 기록한다. 미진출 시장 모델 C의 검증은 별도 과제다.")
-    add("현재 제한", "h2")
-    add("보수적인 외부 데이터 스냅샷 정책으로 시장·WDI 피처는 현재 학습·예측 구간에 연결하지 않았다. "
-        "환율도 값이 없어 제외됐고 시장 유형 B는 미판정이다. 단일 평가월과 후향적 시간 교차검증은 독립 최종 Holdout을 대체하지 않는다.")
+    add("현재 사용 상태와 제한", "h2")
+    add(f"{market_usage}. {wdi_usage}. {fx_usage}. {type_status}")
+    add("사용 피처 수는 저장 모델의 메타데이터 기준이며, 미사용만으로 원본 데이터 결측을 뜻하지 않는다. "
+        "단일 평가월과 후향적 시간 교차검증은 독립 최종 Holdout을 대체하지 않는다.")
     if validation.get("errors") or context.get("error"):
         add("실행 오류: " + " / ".join(validation.get("errors", []) + [context.get("error", "")]), "small")
 
@@ -251,7 +268,7 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
         ["HS·국가 기준", "HS2017 코드 CSV, HS2022toHS2017.xlsx, 품목명 xlsx, 국가 시드 SQL", "HS 판 통일·국가 역할·지역 분류"],
         ["산업 묶음표", "CSV: group, hs4, role, source, note", f"{count(inventory.get('related_groups'))}개 산업 / {count(inventory.get('related_rows'))}행; product·input·related 역할"],
         ["단신속보", "원본 CSV: nttSn, nat, othbcDt\n분석 JSONL: external_id, hs_codes\n토픽 JSONL: external_id, picked", f"{inventory.get('news', {}).get('first', '미확인')} ~ {inventory.get('news', {}).get('last', '미확인')}\n{count(inventory.get('news', {}).get('rows'))}건"],
-        ["환율", "DB: fx_daily(base_date, currency_code, rate_krw), country.currency_code", "유일한 DB 입력 예외. 현재 값 없어 결측"],
+        ["환율", "DB: fx_daily(base_date, currency_code, rate_krw), country.currency_code", fx_usage],
         ["UN 보조 자료", "CSV: freq_code, period_start, country_code, hs6_code, total_import_usd 등", f"월별 자료 마지막 {inventory.get('un', {}).get('last', '미확인')}. 피처에 사용하지 않음"]], [82, 240, width - 322])
     add("BACI는 FOB, Comtrade 수입은 CIF이므로 서로 다른 출처의 수준을 섞어 성장률을 계산하지 않는다. BACI 이후 해는 연결 연도의 Comtrade와 비교한다. 원본·완료 기록·버전 날짜표를 함께 보관해야 한다.", "small")
 
@@ -263,7 +280,7 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
         ("과거 24개월", "최근 12개월과 직전 12개월을 비교한다. 최근 12개월 수출이 100,000 USD 미만인 쌍은 후보에서 제외한다."),
         ("관련 품목", "같은 HS4·HS2 수출은 자기 품목을 제외하고 집계한다. 산업 묶음의 다른 제품·연관 수출과 투입 품목 수입을 성장 신호로 사용한다."),
         ("뉴스", "기사 게시 월을 기준으로 최근·직전 3개월 집계와 국가별 토픽 수를 붙인다. 수집 시작 전 창은 결측이다."),
-        ("외부 자료 시점", "기준월 말까지 사용 가능했던 버전만 연결한다. 현재 정책에서는 시장·WDI가 모두 결측이다."),
+        ("외부 자료 시점", f"기준월 말까지 사용 가능했던 버전만 연결한다. {market_usage}. {wdi_usage}."),
         ("학습 내 변환", "학습 행에서 전부 결측인 열은 제거한다. 외부 성장률·GDP 성장률 등의 1%·99% 절단 경계와 y 절단 경계는 학습 행에서만 추정한다."),
     ]
     table([["단계", "처리 규칙"], *steps], [96, width - 96])
@@ -287,7 +304,9 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
     add("보고용 추가 지표 (채택 판단에는 쓰지 않음)", "h2")
     table([["지표", "정의"], *DETAIL_DEFINITIONS], [100, width - 100])
     add("NDCG는 순서의 품질을 나타내며 Top 5의 직접 일치율은 Precision@5로 확인한다. 모델 점수는 로그 성장 예측값으로, 진출 성공 확률을 뜻하지 않는다.")
-    add("모델 B는 미래 실적의 5개 시장 유형을 분류하고 동일 행·5개 클래스의 macro-F1으로 과거 규칙 기준선과 비교하도록 설계됐다. 현재는 공개 시점을 만족하는 시장 정답·임계값이 없어 B 점수와 유형을 미판정으로 남겼다.", "small")
+    add("모델 B는 미래 실적의 5개 시장 유형을 분류하고 동일 행·5개 클래스의 macro-F1으로 과거 규칙 기준선과 비교하도록 설계됐다. "
+        f"저장된 평가의 macro-F1은 모델 B {num(metric('model_b', 'macro_f1'))}, "
+        f"기준선 {num(metric('baseline_b', 'macro_f1'))}이다. {type_status}", "small")
     add("현재 단일 평가월은 관련 피처 선택에도 사용됐다. 새로운 데이터 구간 또는 별도 최종 Holdout에서 재검증하기 전에는 독립 최종 성능으로 해석하지 않는다.", "small")
 
     # 7. Saved results
@@ -364,7 +383,7 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
         preview_rows.append([row["rank_in_country"], row["hs6"], row.get("product_name", ""), num(row["score"])])
     if len(preview_rows) > 1:
         table(preview_rows, [36, 67, 320, width - 423])
-    add(f"시장 유형이 있는 예측은 {count(predictions.get('types_known'))}행이다. 현재 모델 B는 과거 공개 시장 라벨을 확보할 때까지 미판정으로 제공한다.", "small")
+    add(type_status, "small")
 
     # 10. Testing / reproducibility
     page("09  테스트·자동 생성·실행 명령")
@@ -408,7 +427,7 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
         ["docs/ML_PLAN.md / ML_USAGE.md", "목표·범위·수집 현황·실행 계약"]], [255, width - 255])
     add("추가로 필요한 검증", "h2")
     for text in [
-        "과거 버전별 외부 데이터와 공개 기록을 확보한 후 시장·WDI 피처와 모델 B를 다시 평가해야 한다.",
+        "시장·WDI 피처와 모델 B의 평가는 기준월에 사용 가능했던 외부 데이터 버전과 공개 기록으로 뒷받침해야 한다.",
         "현재 UN 보조 자료에는 평가 정답 마지막 달이 없어 전체 12개월 수요 비교를 완료할 수 없다.",
         "관련 품목 묶음의 산업적 관계는 내용 검토가 필요하며, 자동 후보표는 검토 후 적용한다.",
         "2026년 반도체 등 분포 변화가 크므로 추가 시점 평가와 별도 최종 Holdout을 확보해야 한다.",
