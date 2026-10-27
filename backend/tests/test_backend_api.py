@@ -738,4 +738,51 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(self.client.post('/api/v1/auth/login',json={'email':'same@example.org','password':'fail'}).status_code,401)
         self.assertEqual(self.client.post('/api/v1/auth/login',json={'email':'same@example.org','password':'fail'}).status_code,429)
 
+    def test_notification_sql_filter_count_and_page_queries(self):
+        from backend.app.api import notifications
+        from sqlalchemy import event
+        uid=int(self.signup()); m=self.meta.tables
+        with self.engine.begin() as c:
+            for i in range(120):
+                eid=c.execute(m['alert_event'].insert().values(event_type='MAJOR_ISSUE',event_key=f'{i:064}',payload_json={'target':{'kw_topic':'blocked' if i%2 else 'allowed'}},created_at=now())).inserted_primary_key[0]
+                c.execute(m['user_alert'].insert().values(user_id=uid,event_id=eid,is_interest_match=True,created_at=now()))
+            c.execute(m['api_keyword_block'].insert().values(user_id=uid,kw_topic='blocked',selected_terms=['blocked']))
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            self.assertEqual(notifications.unread_count(store,uid),60)
+            queries=[]
+            def record(conn,cursor,stmt,params,ctx,many): queries.append(stmt)
+            event.listen(self.engine,'before_cursor_execute',record)
+            try:
+                self.assertEqual(notifications.unread_count(store,uid),60)
+                self.assertEqual(len(queries),1)
+                result=notifications.listing(store,uid,page=2,size=5)
+                self.assertEqual(len(result['items']),5)
+                self.assertTrue(any('LIMIT' in q.upper() for q in queries))
+            finally: event.remove(self.engine,'before_cursor_execute',record)
+            out=notifications.read_all(store,uid,'2099-01-01T00:00:00Z','ALL')
+            self.assertEqual(out['updated_count'],60); self.assertEqual(out['unread_count'],0)
+
+    def test_notification_sql_visibility_matches_article_and_array_rules(self):
+        from backend.app.api import notifications
+        uid=int(self.signup()); m=self.meta.tables
+        with self.engine.begin() as c:
+            for i,visibility in [(1,'VISIBLE'),(2,'HIDDEN'),(3,'VISIBLE')]:
+                c.execute(m['article'].insert(),{'article_id':i,'source_code':'KOTRA_MARKET','external_id':str(i),'title':'기사',
+                    'published_date':date(2025,12,1),'source_url':'https://example.org/'+str(i),'body_masked':'본문','category':'경제',
+                    'visibility_status':visibility,'admin_meta_json':{}})
+            c.execute(m['keyword_topic'].insert(),{'keyword_text':'blocked','status':'UNCLASSIFIED'})
+            c.execute(m['article_tag'].insert(),{'article_id':3,'keyword_text':'blocked'})
+            c.execute(m['api_keyword_block'].insert(),{'user_id':uid,'kw_topic':'blocked','selected_terms':['blocked']})
+            for i,(article,ids) in enumerate([(1,[]),(2,[]),(3,[]),(None,[1,2]),(None,['1']), (None,[2,3])],1):
+                c.execute(m['alert_event'].insert(),{'event_id':i,'event_type':'MAJOR_ISSUE','article_id':article,'event_key':f'{i:064}',
+                    'payload_json':{'article_ids':ids},'created_at':now()})
+                c.execute(m['user_alert'].insert(),{'user_id':uid,'event_id':i,'is_interest_match':True,'created_at':now()})
+            store=Store(self.app.state.database,c)
+            rows=notifications.notification_rows(store,uid)
+            self.assertEqual({r['event_id'] for r in rows},{1,4,5})
+            self.assertEqual(notifications.unread_count(store,uid),3)
+            views=notifications.notification_views(store,rows,uid)
+            self.assertTrue(all([a['article_id'] for a in x['issue']['articles']]==['1'] for x in views))
+
 if __name__=='__main__': unittest.main()

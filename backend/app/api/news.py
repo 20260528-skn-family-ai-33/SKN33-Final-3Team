@@ -12,8 +12,11 @@ def source_meta(store,source,latest=None):
 
 def blocked_topics(store,uid):
     if uid is None: return []
+    key=('blocked_topics',uid)
+    if key in store.cache: return store.cache[key]
     b=store.t('api_keyword_block')
-    return list(store.c.execute(select(b.c.kw_topic).where(b.c.user_id==uid)).scalars())
+    store.cache[key]=list(store.c.execute(select(b.c.kw_topic).where(b.c.user_id==uid)).scalars())
+    return store.cache[key]
 
 
 def canonical(store,term):
@@ -43,6 +46,7 @@ def save_blocks(store,uid,keywords,expected):
     for term in keywords: grouped.setdefault(canonical(store,term),[]).append(term)
     store.c.execute(delete(b).where(b.c.user_id==uid))
     for key,terms in grouped.items(): store.insert('api_keyword_block',user_id=uid,kw_topic=key,selected_terms=sorted(set(terms)))
+    store.cache.pop(('blocked_topics',uid),None)
     return blocks(store,uid)
 
 

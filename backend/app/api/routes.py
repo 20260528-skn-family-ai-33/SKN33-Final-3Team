@@ -164,8 +164,8 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==56: return notifications.listing(store,uid,query.get('type','ALL'),query.get('unread_only',False),page,size)
     if identity==57: return {'count':notifications.unread_count(store,uid),'as_of':now().isoformat()+'Z'}
     if identity==58:
-        row=next((r for r in notifications.notification_rows(store,uid) if str(r['user_alert_id'])==path['user_alert_id']),None)
-        require(row is not None,'알림이 없습니다.','NOT_FOUND',404); return {'notification':notifications.notification_view(store,row,uid)}
+        row=notifications.notification_one(store,uid,path['user_alert_id'])
+        return {'notification':notifications.notification_views(store,[row],uid)[0]}
     if identity==59: return notifications.read_one(store,uid,path['user_alert_id'])
     if identity==60: return notifications.read_all(store,uid,body['through'],body.get('type','ALL'))
     if identity==61: return notifications.popups(store,uid)
