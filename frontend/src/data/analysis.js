@@ -22,7 +22,7 @@ export const range = (a, b) => (a === b ? dot(a) : `${dot(a)}~${a.slice(0, 4) ==
 
 /** 자연어 질문 → { country, product, preset, from, to, compareFrom, compareTo, wantsReport } */
 export function parseQuestion(text, previous = {}) {
-  const country = text.includes('전체 국가') ? '' : countries.find(c => text.includes(c.name))?.name ?? previous.country ?? ''
+  const country = text.includes('전체 국가') ? '' : [...countries].sort((a, b) => b.name.length - a.name.length).find(c => text.includes(c.name))?.name ?? previous.country ?? ''
   const code = text.match(/\b(\d{6})\b/)?.[1]
   const alias = Object.keys(ALIASES).find(k => text.includes(k))
   const product = text.includes('전체 품목') ? '' : ((code && products.some(p => p.id === code) ? code : null) || products.find(p => text.includes(p.name))?.id || (alias && ALIASES[alias]) || previous.product) ?? '854232'

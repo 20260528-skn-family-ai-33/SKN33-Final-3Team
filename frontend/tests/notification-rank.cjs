@@ -1,4 +1,4 @@
-// PR #34 회귀 검사: 빌드·preview 후 node tests/pr34-review.cjs [URL]
+// 알림·순위 회귀 검사: 빌드·preview 후 node tests/notification-rank.cjs [URL]
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
 const fs = require('node:fs/promises')
@@ -51,7 +51,14 @@ const base = process.argv[2] || 'http://127.0.0.1:4173'
     assert.ok(await page.getByRole('link', { name: '단신속보', exact: true }).count())
     console.log('PASS 이전 알림·설정 정리, 약관·탭, 단신속보 기사 유지')
 
-    for (const [country, product, period] of [['미국', '330499', '2025-01~2025-12'], ['', '330499', '2025-07~2025-12'], ['미국', '', '2025-12~2025-12']]) {
+    for (const [country, product, period] of [
+      ['미국', '330499', '2025-01~2025-12'],
+      ['인도네시아', '330499', '2025-01~2025-12'],
+      ['인도', '330499', '2025-01~2025-12'],
+      ['', '330499', '2025-07~2025-12'],
+      ['미국', '', '2025-12~2025-12'],
+      ['인도네시아', '', '2025-12~2025-12'],
+    ]) {
       await go('/rank')
       await page.getByLabel('국가', { exact: true }).selectOption(country)
       await page.getByLabel('품목', { exact: true }).selectOption(product)

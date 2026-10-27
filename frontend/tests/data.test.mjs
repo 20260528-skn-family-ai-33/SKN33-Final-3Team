@@ -2,7 +2,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { figures, parseQuestion, reportParagraphs } from '../src/data/analysis.js'
-import { tradeRanking, periodMonths } from '../src/data/trade.js'
+import { tradeRanking, periodMonths, rankingCountries } from '../src/data/trade.js'
+import { countries, products, productName } from '../src/data/catalog.js'
 import { searchArticles } from '../src/data/articles.js'
 import { maskEmail, initialReports, initialNotifications, initialSettings, currentNotifications, currentSettings } from '../src/data/seed.js'
 
@@ -75,11 +76,24 @@ test('이전 속보 알림·설정만 제거하고 다른 알림 이력과 설�
 test('순위에서 전달한 국가·품목·정확한 기간이 이전 대화보다 우선한다', () => {
   const previous = parseQuestion('중국 메모리 최근 6개월 분석')
   for (const period of ['2025-10~2025-12', '2025-07~2025-12', '2025-01~2025-12', '2025-12~2025-12']) {
-    for (const [country, product] of [['미국', '330499'], ['', '330499'], ['미국', '']]) {
-      const result = parseQuestion(`${country || '전체 국가'} · ${product ? `HS ${product}` : '전체 품목'} · ${period} 수출입을 분석해줘`, previous)
+    for (const country of ['', ...rankingCountries]) for (const product of ['', ...products.map(p => p.id)]) {
+      if (!country && !product) continue
+      const result = parseQuestion(`${country || '전체 국가'} · ${product ? `${productName(product)}(HS ${product})` : '전체 품목'} · ${period} 수출입을 분석해줘`, previous)
       assert.deepEqual([result.country, result.product, result.from, result.to], [country, product, ...period.split('~')])
       const follow = parseQuestion('이유를 알려줘', result)
       assert.deepEqual([follow.country, follow.product, follow.from, follow.to], [country, product, ...period.split('~')])
     }
   }
+})
+
+
+test('인도와 인도네시아를 구분하고 원본 국가 순서를 유지한다', () => {
+  const original = countries.map(c => c.name)
+  for (const name of ['인도네시아', '인도']) {
+    const previous = parseQuestion(`${name === '인도' ? '인도네시아' : '인도'} 메모리 최근 6개월 분석`)
+    const result = parseQuestion(`${name} 기초화장품 2025-07~2025-12 분석`, previous)
+    assert.equal(result.country, name)
+    assert.equal(parseQuestion('리포트로 만들어줘', result).country, name)
+  }
+  assert.deepEqual(countries.map(c => c.name), original)
 })
