@@ -46,6 +46,8 @@ Do not turn a company's nationality into a country slot. Example: 'SK의 TV 수�
 has intent=STATISTICS, countries=[], products=['TV']; SK is neither Slovakia nor South Korea here.
 Return products as exact product expressions quoted from the question, anywhere in the sentence.
 Never invent, translate, infer or generate HS codes. Copy an explicit user-supplied HS code only.
+Bare 4- or 6-digit product codes such as '8541 수출', '330499 미국 수출' are allowed
+without an HS prefix; copy their digits as products and let the server verify the dictionary.
 A year such as '2024 대비' is a comparison period, not a product or HS code.
 Use YYYY-MM-DD periods with complete month boundaries; a standalone year means January-December.
 Use recent_months for relative latest published periods; leave unspecified slots null/empty.

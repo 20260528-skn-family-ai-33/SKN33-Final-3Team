@@ -5,15 +5,36 @@ from backend.app.api.common import require, unavailable, page_info
 
 
 def hs_search(store,q,depth=4,limit=5):
+    require(depth==4,'화면 검색은 HS4만 허용합니다.')
+    return _search_depth(store,q,depth,limit)
+
+
+def chat_hs_search(store,q):
+    """Prefer a clear HS6 match; ambiguous natural-language searches ask for HS4 confirmation."""
+    if q.isascii() and q.isdigit() and len(q) in (4,6):
+        return _search_depth(store,q,len(q),5)
+    specific=_search_depth(store,q,6,5)
+    if ((specific['match_type']=='EXACT' and len(specific['items'])==1)
+            or specific['confidence']=='MEDIUM'):
+        return specific
+    broader=hs_search(store,q)
+    result={**broader,'message':'HS6 세부품목을 확정하기 어렵습니다. HS4 분류를 확인하거나 분류에서 HS6를 직접 선택하세요.'}
+    warnings=list(dict.fromkeys(specific.get('warnings',[])+broader.get('warnings',[])))
+    if warnings: result['warnings']=warnings
+    return result
+
+
+def _search_depth(store,q,depth,limit):
     q=' '.join(unicodedata.normalize('NFKC',q).split()).casefold()
-    require(len(q)<=120 and depth==4 and 1<=limit<=5,'검색어 120자 이하·HS4·최대 5개 조건을 확인하세요.')
+    require(len(q)<=120 and depth in (4,6) and 1<=limit<=5,'검색어 120자 이하·HS4/HS6·최대 5개 조건을 확인하세요.')
     if len(q)<2:
         return {'items':[],'match_type':'NONE','confidence':'LOW','message':'2글자 이상 입력하세요.',**browse_hint()}
     from backend.app.api.config import Settings
     settings=getattr(store.db,'settings',None) or Settings()
     key=(q,depth,limit,*(settings.get(k) for k in ('API_HS_VECTOR_ENABLED','API_HS_CHROMA_PATH',
         'API_HS_MAX_DISTANCE','API_HS_CONFIDENT_DISTANCE','API_HS_MIN_MARGIN','API_HS_CACHE_VERSION')))
-    return store.db.hs_search_cache.get_or_load(key,lambda:_hs_search(store,q,limit,settings))
+    return store.db.hs_search_cache.get_or_load(key,lambda:_hs_search(store,q,limit,settings,depth),
+        cache_if=lambda result:not result.get('warnings'))
 
 
 def browse_hint():
@@ -21,19 +42,19 @@ def browse_hint():
         'url':'/api/v1/reference/hs-codes/ROOT/children?hs_ver=HS2022','levels':[2,4,6]}}
 
 
-def _hs_search(store,q,limit,settings):
+def _hs_search(store,q,limit,settings,depth=4):
     store.require_data('hs_code')
     t=store.t('hs_code')
     exact=or_(t.c.hs_code==q,t.c.name_ko==q,t.c.original_name_ko==q) if q.isascii() else or_(t.c.name_ko==q,t.c.original_name_ko==q)
     match=or_(t.c.hs_code.startswith(q,autoescape=True),t.c.name_ko.contains(q,autoescape=True)) if q.isascii() else t.c.name_ko.contains(q,autoescape=True)
-    base=select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth).where(t.c.hs_ver=='HS2022',t.c.depth==4)
+    base=select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth).where(t.c.hs_ver=='HS2022',t.c.depth==depth)
     rows=store.rows(base.where(exact).order_by(t.c.hs_code).limit(limit))
     if rows: return {'items':rows,'match_type':'EXACT','confidence':'EXACT',**browse_hint()}
     from backend.app.api.hs_vectors import candidates
     ranked=[]; warnings=[]
     if settings.get('API_HS_VECTOR_ENABLED','true').lower()=='true':
         try:
-            ranked=candidates(q,settings,limit+1)
+            ranked=candidates(q,settings,limit+1,depth=depth)
         except Exception as error:
             logging.getLogger(__name__).warning('hs_vector_unavailable type=%s',type(error).__name__)
             warnings.append('품목 임베딩 검색 연결을 확인하세요. 등록 품목명 검색 결과만 제공합니다.')

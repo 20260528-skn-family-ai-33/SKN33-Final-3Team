@@ -97,17 +97,13 @@ def select_hs(job,items):
 
 
 def hs_prompt(store,job,conditions):
-    from backend.app.api.reference import hs_search
+    from backend.app.api.reference import chat_hs_search
     pending=job['payload_json']['hs_selection']; expression=pending['remaining'][0]
-    if expression.isascii() and expression.isdigit() and len(expression)==6:
-        t=store.t('hs_code')
-        candidates=store.rows(select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth)
-            .where(t.c.hs_code==expression,t.c.hs_ver=='HS2022',t.c.depth==6))
-    else: candidates=hs_search(store,expression)['items']
+    search=chat_hs_search(store,expression); candidates=search['items']
     job['payload_json']['conditions']=conditions; jobs._save_chat(store,job)
     return {'status':'NEEDS_INPUT','step':'CONTEXT','clarification':{'clarification_id':uuid.uuid4().hex,
         'type':'HS_SELECTION','message':f'“{expression}”에 해당하는 품목을 선택하세요. 남은 품목 {len(pending["remaining"])}개. '+
-            ('비슷한 후보입니다. 없으면 분류에서 직접 선택하세요.' if candidates else '후보가 없습니다. 분류에서 직접 선택하거나 품목명을 바꿔 새 질문을 입력하세요.'),
+            (search.get('message','품목 설명을 확인하고 선택하세요.') if candidates else '후보가 없습니다. 분류에서 직접 선택하거나 품목명을 바꿔 새 질문을 입력하세요.'),
         'browse_url':'/api/v1/reference/hs-codes/ROOT/children?hs_ver=HS2022',
         'choices':[{'choice_id':r['hs_code'],'label':r['name_ko'],
             'value':{'hs_items':[{'hs_code':r['hs_code'],'hs_ver':r['hs_ver']}]}} for r in candidates]},'answer':None}

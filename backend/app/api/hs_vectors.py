@@ -21,7 +21,7 @@ def collection(path):
     return col
 
 
-def candidates(query,settings,limit=5):
+def candidates(query,settings,limit=5,*,depth=4):
     from openai import OpenAI
     path=str(Path(settings.get('API_HS_CHROMA_PATH',str(DEFAULT_PATH))).resolve())
     col=collection(path)
@@ -33,5 +33,5 @@ def candidates(query,settings,limit=5):
             return client.embeddings.create(model=MODEL,input=[query]).data[0].embedding
     vector=VECTOR_CACHE.get_or_load((MODEL,sha256(key.encode()).hexdigest(),query),embed)
     result=col.query(query_embeddings=[vector],n_results=min(limit,col.count()),
-                     where={'$and':[{'hs_ver':'HS2022'},{'depth':4}]},include=['metadatas','distances'])
+                     where={'$and':[{'hs_ver':'HS2022'},{'depth':depth}]},include=['metadatas','distances'])
     return [(meta['hs_code'],float(distance)) for meta,distance in zip(result['metadatas'][0],result['distances'][0])]

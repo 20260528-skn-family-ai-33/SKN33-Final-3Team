@@ -1,5 +1,6 @@
 """Validate LLM slots against server-owned reference data and published periods."""
 import re
+import unicodedata
 from datetime import date
 from sqlalchemy import select, func
 from backend.app.api import trade
@@ -10,25 +11,58 @@ class SlotRepair(Exception):
     pass
 
 
+def country_key(value):
+    return ''.join(unicodedata.normalize('NFKC',value).split()).casefold()
+
+
+def resolve_country(name,rows):
+    key=country_key(name)
+    exact={r['country_code'] for r in rows if country_key(r['name_ko'])==key}
+    matches=exact or ({r['country_code'] for r in rows if key in country_key(r['name_ko'])} if len(key)>=2 else set())
+    if len(matches)>1:
+        raise SlotRepair(f'“{name}”에 해당하는 국가가 여러 개입니다. 전체 국가명으로 다시 입력해 주세요.')
+    if not matches:
+        raise SlotRepair('국가를 확인하지 못했습니다. 전체 국가명으로 다시 입력해 주세요.')
+    return next(iter(matches))
+
+
+def numeric_product(store,question,expression,explicit_codes):
+    if not expression.isascii() or len(expression) not in (4,6):
+        raise SlotRepair('품목은 HS4/HS6 코드 또는 이름으로 입력해 주세요.')
+    if expression not in explicit_codes:
+        # Validate numeric source evidence without using numbers to classify the question.
+        mentions=list(re.finditer(r'(?<![\d.,])'+re.escape(expression)+r'(?![\d.,])',question))
+        def non_product(match):
+            tail=question[match.end():].lstrip()
+            units=r'^(?:년|년도|만|억|천|달러|원|개|%|USD\b|KRW\b)'
+            year_context=1900<=int(expression)<=2100 and re.match(r'^(?:대비|[-/.]\s*\d)',tail)
+            return re.search(r'[$₩]\s*$',question[:match.start()]) or re.match(units,tail,re.I) or year_context
+        if not mentions or all(non_product(match) for match in mentions):
+            raise SlotRepair('연도·금액 표현을 품목으로 사용할 수 없습니다. 품목명 또는 HS 코드를 입력해 주세요.')
+    hs=store.t('hs_code')
+    registered=store.c.scalar(select(hs.c.hs_code).where(hs.c.hs_code==expression,
+        hs.c.hs_ver=='HS2022',hs.c.depth==len(expression)))
+    if registered is None:
+        raise SlotRepair('숫자가 HS 사전에 없습니다. 연도라면 기간으로, 품목이라면 등록 코드나 품목명으로 다시 입력해 주세요.')
+
+
 def resolve(store, question, previous, slots):
     conditions=dict(previous)
     warnings=[]
     country=store.t('country')
-    names={r['name_ko']:r['country_code'] for r in store.rows(select(country).where(country.c.country_role=='COUNTRY'))}
-    found=[]; invalid_country=False
+    countries=store.rows(select(country).where(country.c.country_role=='COUNTRY'))
+    found=[]
     for item in slots.countries:
         mention=item.mention.strip()
         # Require source evidence; arbitrary two-letter abbreviations are not accepted as country names.
         if mention.isascii() and len(mention)==2:
             warnings.append('모호한 두 글자 약어는 국가 조건에서 제외했습니다.')
             continue
-        if not mention or mention.casefold() not in question.casefold() or item.name not in names:
-            warnings.append('확인할 수 없는 국가 표현을 제외했습니다. 국가명을 입력하세요.')
-            invalid_country=True
-        else: found.append(names[item.name])
+        if not mention or mention.casefold() not in question.casefold():
+            raise SlotRepair('국가 표현을 질문에서 확인하지 못했습니다. 전체 국가명으로 다시 입력해 주세요.')
+        found.append(resolve_country(item.name,countries))
     if slots.all_countries: conditions['country_codes']=[]
     elif found: conditions['country_codes']=sorted(set(found))
-    elif invalid_country: raise SlotRepair('국가를 확인하지 못했습니다. 전체 국가명으로 다시 입력해 주세요.')
     conditions.setdefault('country_codes',[])
     conditions.setdefault('hs_items',[])
     if slots.all_products: conditions['hs_items']=[]
@@ -40,8 +74,7 @@ def resolve(store, question, previous, slots):
         expression=expression.strip()
         if not expression or len(expression)>120 or expression.casefold() not in question.casefold():
             raise SlotRepair('품목 표현을 확인하지 못했습니다. 질문에 품목명을 직접 적어 주세요.')
-        if expression.isdigit() and expression not in explicit_codes:
-            raise SlotRepair('숫자가 연도인지 품목인지 확인이 필요합니다. 품목은 이름 또는 HS 코드로 명시해 주세요.')
+        if expression.isdigit(): numeric_product(store,question,expression,explicit_codes)
         expressions.append(expression)
     article_mode=slots.intent=='LOCAL_ISSUES'
     if article_mode:
