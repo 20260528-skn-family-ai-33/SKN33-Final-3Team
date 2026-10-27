@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import re
 import secrets
+from ipaddress import ip_address, ip_network
 from datetime import timedelta
 import bcrypt
 from sqlalchemy import select, delete
@@ -65,6 +66,33 @@ def revoke_sessions(store, user_id):
 def administrator(user, super_only=False):
     allowed = ('SUPER_ADMIN',) if super_only else ('ADMIN','SUPER_ADMIN')
     require(user and user['role'] in allowed, '관리자 권한이 필요합니다.', 'FORBIDDEN', 403)
+
+
+def client_ip(request, settings):
+    peer=request.client.host if request.client else 'unknown'
+    networks=[ip_network(value.strip()) for value in settings.get('API_TRUSTED_PROXY_CIDRS','').split(',') if value.strip()]
+    def trusted(value):
+        address=ip_address(value)
+        return any(address in network for network in networks)
+    try:
+        if not trusted(peer): return peer
+        forwarded=request.headers.get('x-forwarded-for','')
+        if not forwarded or len(forwarded)>2048: return peer
+        chain=[str(ip_address(part.strip())) for part in forwarded.split(',')]
+        for address in reversed(chain):
+            if not trusted(address): return address
+    except ValueError:
+        return peer
+    return peer
+
+
+def limit_auth_request(database, request, settings, identity, body):
+    email=str(body.get('email') or '').strip().casefold()
+    if email:
+        limit_public(database,hash_token(f'{identity}:email:{email}'),
+                     maximum=int(settings.get('API_AUTH_EMAIL_LIMIT',10)))
+    limit_public(database,hash_token(f'{identity}:ip:{client_ip(request,settings)}'),
+                 maximum=int(settings.get('API_AUTH_IP_LIMIT',100)))
 
 
 def limit_public(database, key, maximum=10, seconds=60):

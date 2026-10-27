@@ -722,4 +722,20 @@ class BackendApiTest(unittest.TestCase):
             with patch('backend.app.api.jobs.now',return_value=now()+timedelta(minutes=11)):
                 self.assertEqual(str(jobs.claim(store)['job_id']),ids[0])
 
+    def test_proxy_trust_and_independent_account_limits(self):
+        from starlette.requests import Request
+        from backend.app.api.security import client_ip
+        settings=Settings(values={'API_TRUSTED_PROXY_CIDRS':'10.0.0.0/8'})
+        def request(peer,forwarded):
+            return Request({'type':'http','method':'POST','path':'/','headers':[(b'x-forwarded-for',forwarded.encode())],'client':(peer,123)})
+        self.assertEqual(client_ip(request('10.0.0.2','192.0.2.5, 10.0.0.1'),settings),'192.0.2.5')
+        self.assertEqual(client_ip(request('198.51.100.4','192.0.2.5'),settings),'198.51.100.4')
+        self.assertEqual(client_ip(request('10.0.0.2','bad-address'),settings),'10.0.0.2')
+        self.assertEqual(client_ip(request('10.0.0.2','203.0.113.8, 192.0.2.5'),settings),'192.0.2.5')
+        for n in range(12):
+            self.assertEqual(self.client.post('/api/v1/auth/login',json={'email':f'user{n}@example.org','password':'fail'}).status_code,401)
+        for _ in range(10):
+            self.assertEqual(self.client.post('/api/v1/auth/login',json={'email':'same@example.org','password':'fail'}).status_code,401)
+        self.assertEqual(self.client.post('/api/v1/auth/login',json={'email':'same@example.org','password':'fail'}).status_code,429)
+
 if __name__=='__main__': unittest.main()
