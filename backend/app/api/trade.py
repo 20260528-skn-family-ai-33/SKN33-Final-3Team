@@ -166,11 +166,14 @@ def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='
     im={r['trade_month']:r['amount_usd'] for r in aggregate(store,'import_summary',start,end,hs,countries,'MONTH')}
     verified=set(verified_months(store,'export_summary'))
     old={r['trade_month']:r['amount_usd'] for r in aggregate(store,'export_summary',shift_month(start,-12),shift_month(end,-12),hs,countries,'MONTH') if r['trade_month'] in verified}
+    import_verified=set(verified_months(store,'import_summary'))
+    old_import={r['trade_month']:r['amount_usd'] for r in aggregate(store,'import_summary',shift_month(start,-12),shift_month(end,-12),hs,countries,'MONTH') if r['trade_month'] in import_verified}
     items=[]; cursor=start
     while cursor<=end:
         prior=shift_month(cursor,-12)
         item={'month':cursor.strftime('%Y-%m'),'export_amount_usd':ex.get(cursor,Decimal(0)), 'import_amount_usd':im.get(cursor,Decimal(0)),
-              'previous_year_export_usd':old.get(prior,Decimal(0)) if prior in verified else None}
+              'previous_year_export_usd':old.get(prior,Decimal(0)) if prior in verified else None,
+              'previous_year_import_usd':old_import.get(prior,Decimal(0)) if prior in import_verified else None}
         items.append(item); cursor=shift_month(cursor,1)
     meta=metadata(store,start,end)
     out={'items':items,'meta':meta}
