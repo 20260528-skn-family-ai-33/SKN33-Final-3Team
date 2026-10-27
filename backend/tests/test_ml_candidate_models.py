@@ -92,6 +92,14 @@ class MonthlyRunTest(unittest.TestCase):
         self.assertEqual(self.first_then(db=outage), "lightgbm_202602")
         self.assertEqual(len(self.records()), 1)
 
+    def test_db_outage_picks_latest_revision_with_same_files(self):
+        corrected = {**DB, "fx": {"rows": 10, "sha256": "g"}}
+        self.assertEqual(self.first_then(db=corrected), "lightgbm_202602_r2")
+        outage = {"fx": {"rows": 0, "sha256": "empty"}, "country_mapping_sha256": "no currency"}
+        with patch.object(C.artifacts, "load_training_data", side_effect=AssertionError("재학습하지 않아야 함")):
+            self.assertEqual(self.run_month(db=outage)["model_name"], "lightgbm_202602_r2")  # 정정 전 판이 아님
+        self.assertEqual(len(self.records()), 2)
+
     def test_parent_is_latest_revision_by_number(self):
         for name in ("lightgbm_202602", "lightgbm_202602_r2", "lightgbm_202602_r10"):
             (self.out / f"{name}.registry.json").write_text(json.dumps({"version_id": name}), "utf-8")
