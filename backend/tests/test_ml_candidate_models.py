@@ -2,6 +2,7 @@
 
 실행: python -m unittest backend.tests.test_ml_candidate_models
 """
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -90,6 +91,13 @@ class MonthlyRunTest(unittest.TestCase):
         outage = {"fx": {"rows": 0, "sha256": "empty"}, "country_mapping_sha256": "no currency"}
         self.assertEqual(self.first_then(db=outage), "lightgbm_202602")
         self.assertEqual(len(self.records()), 1)
+
+    def test_parent_is_latest_revision_by_number(self):
+        for name in ("lightgbm_202602", "lightgbm_202602_r2", "lightgbm_202602_r10"):
+            (self.out / f"{name}.registry.json").write_text(json.dumps({"version_id": name}), "utf-8")
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-03-01")):
+            self.run_month("2026-03-01")
+        self.assertEqual(C.read_json(self.out / "lightgbm_202603.registry.json")["parent_version_id"], "lightgbm_202602_r10")
 
     def test_refuses_month_missing_from_data(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-01-01")):

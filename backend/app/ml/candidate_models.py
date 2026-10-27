@@ -12,6 +12,7 @@
     수동: python -m backend.app.ml.candidate_models --monthly 2026-10-01
 """
 import argparse
+import re
 import time
 from dataclasses import asdict
 from datetime import datetime
@@ -151,6 +152,12 @@ def _same_inputs(snapshot, files, db):
     return snapshot["fx"] == db["fx"] and snapshot["country_mapping_sha256"] == db["country_mapping_sha256"]
 
 
+def _version_key(path, kind):
+    """<모델>_<YYYYMM>[_r<n>].registry.json → (YYYYMM, n). 이름 정렬로는 _r10이 _r2보다 앞선다."""
+    match = re.fullmatch(rf"{re.escape(kind)}_(\d{{6}})(?:_r(\d+))?\.registry\.json", path.name)
+    return (match[1], int(match[2] or 1)) if match else None
+
+
 def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=2):
     """customs_monthly ML 단계: 전체 재학습 → <모델>_<YYYYMM>.joblib → ml_model_version(model_a) 기록.
 
@@ -185,11 +192,13 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
             temporary = artifact.with_suffix(".joblib.tmp")
             joblib.dump(bundle, temporary)
             temporary.replace(artifact)
-            previous = sorted(p for p in out_dir.glob(f"{kind}_*.registry.json") if p.name < record_path.name)
+            current = (f"{month:%Y%m}", revision)
+            previous = sorted((key, p) for p in out_dir.glob(f"{kind}_*.registry.json")
+                              if (key := _version_key(p, kind)) is not None and key < current)
             record = {"version_id": name, "model_key": "model_a", "model_name": name,
                       "created_at": created.isoformat(timespec="microseconds"), "status": "READY",
                       "artifact_path": artifact.name, "artifact_sha256": sha256(artifact),
-                      "parent_version_id": read_json(previous[-1])["version_id"] if previous else None,
+                      "parent_version_id": read_json(previous[-1][1])["version_id"] if previous else None,
                       "training_mode": "FULL_RETRAIN", "train_start": rows["info"]["train_start"],
                       "train_end": rows["info"]["train_end"], "train_rows": rows["info"]["train_rows"],
                       "data_info": _finite({"model_family": f"{kind}_full", "trade_month": str(month.date()),
