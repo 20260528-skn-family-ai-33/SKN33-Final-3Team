@@ -1,5 +1,32 @@
 # 백엔드 검수 기록
 
+## 2026-10-27 최신 main 병합 및 충돌 해결
+
+`feat/36-backend`의 `62cbb67`에 `origin/main`의 `cef015c`(단신속보 PR #32 포함)를 병합했다. 충돌 파일 2개를 양쪽 기능을 보존하는 방식으로 해결했다. 원격 푸시는 실행하지 않는다.
+
+| 직접 조정한 파일 | 이유 |
+|---|---|
+| backend/app/scheduler/jobs/news_load.py | MARKET 출처에만 품목 집계를 적용하는 main 규칙과 기존 HS4·HS6 지원을 결합. 단신 키워드 집계 및 수동 HS 태그 보존 |
+| backend/app/scheduler/main.py | 단신속보 opt-in 등록과 env_path 인자를 유지하며 UN 매월 10일 03:00 KST 유지 |
+| backend/tests/test_news_load.py | MARKET HS4·HS6 중복 집계 방지, 두 단신 출처·기타 출처 제외, 기존 태그 보존을 함께 검증. 관리자 ERD 필수 JSON은 실제 upsert 경로로 생성 |
+| backend/tests/test_un_scheduler_integration.py | 단신속보 활성화 시에도 UN 월간 10일과 단신 일간 03시가 함께 등록되는지 검증 |
+| backend/tests/shortnews_offline/run_tests.py / README.md | Windows 필수 시스템 변수·임시 홈·자식 프로세스 의존성 경로 유지. UTF-8 실행과 짧은 증거 경로 안내. 기존 외부 I/O 차단 유지 |
+| backend/tests/test_db_tls.py | Windows SSL 초기화에 필요한 시스템 변수만 테스트 환경에 보존. DB 인증·설정은 격리 |
+| .gitattributes | 체크섬 검증 대상 SQL 한 파일을 LF로 고정. SQL 내용과 기존 SHA256 계약은 변경하지 않음 |
+| docs/BACKEND_REVIEW.md | 병합 검증 결과와 남은 환경 제약 기록 |
+
+단신속보 수집·적재·분석·워커 및 프론트 소스는 `origin/main`과 동일하게 유지했다. 병합으로 들어온 프론트 파일은 기존 main의 파일이며 별도 기능 변경이 아니다. RDS 마이그레이션·데이터 적재·운영 스케줄러 실행은 하지 않았다.
+
+검증:
+
+- 기존 백엔드 회귀 15개 모듈: **300개 모두 통과**(74.393초). 명령은 아래 이전 절의 회귀 명령과 동일하며 신규 통합 테스트 2개가 추가됐다. main에서 사전 테스트가 합성 입력을 쓰도록 바뀌어 이전 9개 skip도 이번에는 실행됐다.
+- 최종 집중 재검증: `python -B -X utf8 -m unittest backend.tests.test_news_load backend.tests.test_news_erd_compat backend.tests.test_un_scheduler_integration backend.tests.test_db_tls backend.tests.test_admin_news_migration.ContractTest` → **63개 모두 통과**(12.112초). 위 300개와 일부 중복되는 별도 실행이다.
+- 단신속보 전용: `python -B -X utf8 backend/tests/shortnews_offline/run_tests.py --repo . --evidence-dir C:/SKN_AI/SKN33-Final-3Team/tmp/t` → **445 passed, 3 failed, 9 skipped, 4 deselected**(195.10초). 임시 SQLite/Chroma·모의 외부 응답 사용. Windows 환경 보완 전 첫 실행은 417 passed / 31 failed였고, 재실행에서 아래 3건만 남았다.
+- 기존 main의 `test_news_index_migrate.py`에서 남은 실패: `test_overlap_symlink_and_writer_confirmation`, `test_target_symlink_and_scratch_overlap_fail_closed`는 Windows 심볼릭 링크 생성 권한 부족(WinError 1314). `test_lock_contention_does_not_modify_existing_files`는 잠긴 publish.lock 파일을 fingerprint가 읽을 때 PermissionError. 해당 담당자 소스/테스트는 변경하지 않았으며 Linux 환경 재검증이 필요하다. 전체 테스트 통과로 간주하지 않는다.
+- 9개 skip은 실제 MySQL 8개와 기존 스키마 관리자 테스트 1개, 4개 deselect는 실행기가 원래 제외하는 네이티브 워커 테스트다. 실제 RDS·외부 LLM/API·운영 Chroma·프론트 E2E·서비스 배포는 검증하지 않았다.
+- 충돌 인덱스 항목 0개, 이번 직접 조정 파일 `git diff --check` 통과. main에서 그대로 가져온 프론트 3개 파일에는 기존 공백 경고가 있으며 변경하지 않았다.
+- 로그(커밋 제외): `tmp/backend_build/merge-main-backend.log`, `merge-main-focused-final.log`, `merge-main-shortnews-final.log`. 전용 시험 XML: `tmp/t/shortnews-offline-1u_3mo4t/results.xml`.
+
 ## 2026-10-27 최종 재검수 및 기능별 커밋 정리
 
 기존 PR 코멘트 대응을 중심으로 HS6 우선 검색, 국가명·숫자 HS 검증, 실패 검색 결과 캐시 제외, 신규·중단 거래 비교, 구독의 불필요한 분기를 정리했다. 이후 재검수에서 뉴스 급증의 평균 0 보정, HS4 기사 적재·집계 누락, 주요 이슈 표시 불일치, 리포트의 0 거래 처리·비교 기간·결과표 재사용 문제를 추가로 수정했다.

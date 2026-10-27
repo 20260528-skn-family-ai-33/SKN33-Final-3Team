@@ -7,10 +7,12 @@ import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 from sqlalchemy import select
 
 from backend.app.db.session import make_engine, session_scope
+from backend.app.db import news_lock
 from backend.app.models.base import Base
 from backend.app.models.batch import BatchRun, ServiceOption
 from backend.app.models.hs_code import HsCodeMst
@@ -93,6 +95,9 @@ class CountTest(unittest.TestCase):
 class NewsLoadTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        load_lock_patch = patch.object(news_lock, "LOAD_LOCK_DIR", Path(self.tmp.name) / "load_locks")
+        load_lock_patch.start()
+        self.addCleanup(load_lock_patch.stop)
         self.url = f"sqlite:///{(Path(self.tmp.name) / 'news.db').as_posix()}"
         self.engine = make_engine(self.url)
         Base.metadata.create_all(self.engine)
@@ -175,6 +180,34 @@ class NewsLoadTest(unittest.TestCase):
         self.assertEqual(self.rows(NewsProductDaily, "hs_code", "country_key", "day_count"),
                          [("8541", "*", 2), ("8541", "US", 2),
                           ("854143", "*", 1), ("854143", "US", 1)])
+
+    def test_hs4_rebuild_preserves_shortnews_tags_but_only_counts_market_products(self):
+        day = date(2026, 10, 1)
+        self.assertEqual(self.run_job([raw("10", "2026-10-01"), raw("11", "2026-10-01")],
+                                     [clean("10", "2026-10-01", "AI", "US", hs4="8541"),
+                                      clean("11", "2026-10-01", "AI", "US", "854143", "8541")]), 0)
+        with session_scope(self.engine) as s:
+            for source in ("KOTRA_SHORT_NEWS", "KOTRA_SHORTNEWS", "OTHER_NEWS"):
+                s.add(ServiceOption(option_code=source, option_type="SOURCE", label_ko=source, value_json={}))
+                s.flush()
+                # 관리자 ERD 확장에서도 필수 JSON·최초 적재 시각을 실제 적재 경로로 채웁니다.
+                job.upsert_articles(s, [dict(source_code=source, external_id="10", title="단신",
+                                            published_date=day, source_url="https://example.test/news",
+                                            body_masked="본문", category=None)])
+                article_id = job.article_ids(s, ["10"], source)["10"]
+                s.add_all([ArticleTag(article_id=article_id, hs_code=code, hs_ver="HS2022")
+                           for code in ("8541", "854143")])
+                s.add_all([ArticleTag(article_id=article_id, keyword_text="AI"),
+                           ArticleTag(article_id=article_id, country_code="US")])
+            s.flush()
+            job.rebuild_daily(s, {day})
+        self.assertEqual(self.rows(NewsProductDaily, "hs_code", "country_key", "day_count"),
+                         [("8541", "*", 2), ("8541", "US", 2),
+                          ("854143", "*", 1), ("854143", "US", 1)])
+        self.assertEqual(self.rows(NewsKeywordDaily, "keyword_text", "country_key", "day_count"),
+                         [("AI", "*", 4), ("AI", "US", 4)])
+        # 집계 대상에서 제외해도 기존 수동 HS 태그 자체는 삭제하지 않습니다.
+        self.assertEqual(len([r for r in self.rows(ArticleTag, "hs_code") if r[0]]), 9)
 
     def test_changed_published_date_removes_old_day_counts(self):
         self.run_job([raw("10", "2026-10-01")], [clean("10", "2026-10-01", "AI")])

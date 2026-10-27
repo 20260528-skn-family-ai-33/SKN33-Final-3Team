@@ -5,6 +5,7 @@
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import date, datetime
 from pathlib import Path
 
@@ -177,11 +178,10 @@ class RefreshFlowTest(unittest.TestCase):
         self.assertEqual({r[4] for r in self.batch_rows()}, {"FAILED"})
 
     def test_job_runs_even_if_batch_db_is_down(self):
-        down = make_engine("mysql+pymysql://u:p@127.0.0.1:1/x")  # 기록용 DB 연결 실패 → 경고만 남기고 작업은 진행
-        try:
-            status = refresh.run_refresh(date(2028, 1, 1), batch_engine=down, **fake_steps())
-        finally:
-            down.dispose()
+        # 실제 포트에 접속하지 않고 동일 DB 연결 예외를 주입합니다.
+        from sqlalchemy.exc import OperationalError
+        with patch.object(self.engine, 'connect', side_effect=OperationalError('connect', {}, Exception('synthetic offline DB'))):
+            status = refresh.run_refresh(date(2028, 1, 1), batch_engine=self.engine, **fake_steps())
         self.assertEqual(status, "DONE")
 
 
@@ -310,7 +310,8 @@ class SchedulerTest(unittest.TestCase):
 
     def test_check_runs_on_every_start(self):
         # 일부만 적재된 채 재시작해도 갱신 작업이 실행되어야 함 (완료 판단은 작업 안에서)
-        jobs = {j.id for j in sched.build_scheduler().get_jobs()}
+        with patch.dict("os.environ", {"SHORTNEWS_DAILY_ENABLED": "false"}):
+            jobs = {j.id for j in sched.build_scheduler().get_jobs()}
         self.assertEqual(jobs, {"hs_code_refresh", sched.RETRY_JOB_ID, "hs_code_embed", "un_data_monthly", "un_data_startup", "un_data_resume", "customs_monthly", "customs_monthly_startup", "fx_daily_load", "fx_daily_startup"})
 
     def test_embed_runs_every_day(self):

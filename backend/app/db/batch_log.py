@@ -17,7 +17,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from sqlalchemy import MetaData, Table
+
 from backend.app.db.session import make_engine, session_scope
+from backend.app.db.news_lock import article_load_lock
 from backend.app.models.batch import BatchRun, ServiceOption
 
 log = logging.getLogger("batch_log")
@@ -60,13 +63,15 @@ def track_batch(source, job_name, target_table, period_start, period_end, engine
     own_engine = engine is None
     try:
         engine = engine or make_engine()
-        with session_scope(engine) as s:
+        with article_load_lock(engine), session_scope(engine) as s:
             ensure_source(s, source)
-            run = BatchRun(source_code=source.code, job_name=job_name, target_table=target_table,
-                           period_start=period_start, period_end=period_end, status="RUNNING", started_at=_now())
-            s.add(run)
-            s.flush()
-            record.run_id = run.run_id
+            table = Table("batch_run", MetaData(), autoload_with=s.connection(), resolve_fks=False)
+            values = dict(source_code=source.code, job_name=job_name, target_table=target_table,
+                          period_start=period_start, period_end=period_end, status="RUNNING", started_at=_now(),
+                          request_count=0, received_count=0)
+            if "detail_json" in table.c:
+                values["detail_json"] = {"schema_version": 1}
+            record.run_id = s.execute(table.insert().values(**values)).inserted_primary_key[0]
         out.info(f"batch_run {record.run_id} 시작 | {job_name} → {target_table} {period_start}~{period_end}")
     except Exception as e:  # 기록 실패가 작업을 막지 않게
         out.warning(f"batch_run 기록 시작 실패 (작업은 계속): {type(e).__name__}: {e}")
@@ -87,7 +92,7 @@ def _finish(engine, record, out):
         return
     status = "FAILED" if record.failed else "SUCCESS"
     try:
-        with session_scope(engine) as s:
+        with article_load_lock(engine), session_scope(engine) as s:
             run = s.get(BatchRun, record.run_id)
             run.status, run.finished_at = status, _now()
             run.request_count, run.received_count = record.request_count, record.received_count
