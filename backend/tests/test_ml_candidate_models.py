@@ -50,8 +50,9 @@ class MonthlyRunTest(unittest.TestCase):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
             result = self.run_month(kind="two_stage")
         bundle = joblib.load(self.out / "two_stage_202602.joblib")
-        self.assertEqual(set(bundle["members"]), {"ext"})  # 최종 모델 = v3 피처 단독
-        self.assertTrue(set(MARKET + WDI) & set(bundle["features"]["ext"]))  # 외부 피처를 쓴다 (가상 데이터의 상수 열은 빠짐)
+        self.assertEqual(set(bundle["members"]), {"base", "ext"})  # 최종 모델 = v1 · v3 앙상블
+        self.assertFalse(set(MARKET + WDI) & set(bundle["features"]["base"]))  # v1은 외부 피처 없음
+        self.assertTrue(set(MARKET + WDI) & set(bundle["features"]["ext"]))  # v3는 외부 피처 사용 (가상 데이터의 상수 열은 빠짐)
         latest = dataset().anchor.max()
         self.assertTrue((bundle["latest"].anchor == latest).all())
         self.assertTrue(np.isfinite(bundle["latest"][["growth", "order", "exp_12m"]].to_numpy()).all())

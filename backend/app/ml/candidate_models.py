@@ -6,7 +6,7 @@
 1) 스냅샷으로 한 번 저장: data/ml/candidates/<모델>_<버전>.joblib (이미 있으면 건너뜀)
     python -m backend.app.ml.candidate_models --models lightgbm random_forest --version v1 --n-jobs 4
 
-2) 월별 수집 뒤 최종 모델(v3 피처 2단계 C, K=100) 전체 재학습(run): 수집 원본으로 피처를 만들어 학습하고
+2) 월별 수집 뒤 최종 모델(2단계 C K=100, v1 · v3 앙상블) 전체 재학습(run): 수집 원본으로 피처를 만들어 학습하고
    data/ml/monthly_models/two_stage_<YYYYMM>.joblib 저장 → DB ml_model_version에 기록한다.
     자동: .env에 CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run (customs_monthly의 ML 단계)
     수동: python -m backend.app.ml.candidate_models --monthly 2026-10-01
@@ -166,7 +166,7 @@ def _version_key(path, kind):
 def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=2):
     """customs_monthly ML 단계: 전체 재학습 → <모델>_<YYYYMM>.joblib → ml_model_version(model_a) 기록.
 
-    kind="two_stage"(기본)는 최종 모델(v3 피처 2단계, two_stage.monthly), 그 밖의 kind는 단일 모델이다.
+    kind="two_stage"(기본)는 최종 모델(2단계 v1 · v3 앙상블, two_stage.monthly), 그 밖의 kind는 단일 모델이다.
 
     같은 달을 입력 파일 그대로 다시 실행하면 재학습하지 않고 저장해 둔 기록만 DB에 다시 보낸다(같은 내용이면 그대로 둔다).
     DB 기록이 실패해도 모델 파일과 기록 JSON은 남아 다음 재시도에서 기록만 다시 보낸다.
@@ -249,7 +249,7 @@ def main():
     parser.add_argument("--n-jobs", type=int, default=2)
     parser.add_argument("--snapshot", type=Path, default=SNAPSHOT_PY311)
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
-    parser.add_argument("--monthly", metavar="YYYY-MM-01", help="월별 최종 모델(v3 피처 2단계) 전체 재학습과 DB 기록을 직접 실행")
+    parser.add_argument("--monthly", metavar="YYYY-MM-01", help="월별 최종 모델(2단계 v1 · v3 앙상블) 전체 재학습과 DB 기록을 직접 실행")
     args = parser.parse_args()
     if args.monthly:
         print(run(args.monthly, n_jobs=args.n_jobs), flush=True)

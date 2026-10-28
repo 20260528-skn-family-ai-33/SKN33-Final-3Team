@@ -12,7 +12,7 @@
 파일
     data/ml/candidates/two_stage_<b|cK>_<base|ext>_<버전>.joblib. 딕셔너리에 두 Pipeline · 피처 · 방식과
     학습 시점의 최신 기준월 예측(latest)을 함께 둬 조회는 파일만 읽는다.
-    월별 재학습(candidate_models.run → monthly)은 MEMBERS 구성(최종: v3 단독)의 모델과 latest를
+    월별 재학습(candidate_models.run → monthly)은 MEMBERS 구성(최종: v1 · v3 앙상블)의 모델과 앙상블 latest를
     data/ml/monthly_models/two_stage_<YYYYMM>.joblib 하나에 담는다 (query --model 그 파일 하나로 조회).
 
 실행 (저장소 루트에서):
@@ -150,9 +150,9 @@ def combine(predictions):
                        order=np.mean([p.order.rank(pct=True).to_numpy() for p in predictions], axis=0))
 
 
-# 최종 모델 = v3 피처 2단계 C(K=100) 단독. v1 · v3 앙상블은 NDCG@5 +0.007이 시드 흔들림 수준이고 Hit@5가 낮아 뺐다 (5차 테스트).
-# 앙상블로 되돌리려면 {"base": "none", "ext": "first_release"}.
-MEMBERS = {"ext": "first_release"}
+# 최종 모델 = v1 · v3 피처 2단계 C(K=100) 앙상블. 같은 시드끼리 v3 단독과 비교하면 NDCG@5가 기준월 3개 × 시드 3개
+# 9번 모두 같거나 높다 (5차 테스트). v3 단독은 {"ext": "first_release"} (학습 약 1.6배 빠름, Hit@5는 기준월마다 엇갈림).
+MEMBERS = {"base": "none", "ext": "first_release"}
 
 
 def monthly(frame, n_jobs=2, method="C", k=100):
