@@ -36,6 +36,27 @@ class CountsTest(unittest.TestCase):
 
 
 class SpikeTest(unittest.TestCase):
+    def test_major_issue_only_zero_average_uses_one(self):
+        for previous, recent, expected_ratio in ((0, 3, 3), (4, 2, 4), (8, 3, 3), (16, 6, 3)):
+            with self.subTest(previous=previous):
+                rows = [art(i, "2026-10-01", ["AI"]) for i in range(previous)]
+                rows += [art(100 + i, "2026-10-26", ["AI"]) for i in range(recent)]
+                result = ac.major_issues(pd.DataFrame(rows), "kw_topic", "2026-10-27")
+                self.assertEqual(result.key.tolist(), ["AI"])
+                self.assertEqual(result.prev_weekly_avg.iloc[0], previous / 8)
+                self.assertEqual(result.ratio.iloc[0], expected_ratio)
+
+    def test_interest_spike_only_zero_average_uses_one(self):
+        for previous, yesterday, expected_ratio, spike in (
+                (0, 2, 2, False), (3, 2, 4.67, True), (7, 2, 2, False), (14, 5, 2.5, True)):
+            with self.subTest(previous=previous):
+                counts = pd.DataFrame([
+                    {"country": "US", "key": "AI", "date": "2026-10-20", "articles": previous},
+                    {"country": "US", "key": "AI", "date": "2026-10-26", "articles": yesterday}])
+                result = ac.interest_spike(counts, "2026-10-27", "US", "AI")
+                self.assertEqual(result["ratio"], expected_ratio)
+                self.assertEqual(result["spike"], spike)
+
     def test_major_issue_fr204(self):
         """FR-204: 최근 7일 3건 ÷ 직전 8주 주평균(0이면 1) = 3배 → 주요 이슈, 2건이면 아님"""
         rows = [art(i, "2026-10-1" + str(i), ["K-뷰티"]) for i in range(3)]  # 10/10~10/12, 판정일 10/14

@@ -18,7 +18,10 @@ class DatabaseTlsTest(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.env = self.root / 'test.env'
         self.env.write_text('MYSQL_HOST=example.test\nMYSQL_USER=test\nMYSQL_PASSWORD=test\nMYSQL_DATABASE=test\n')
-        env_patch = patch.dict(os.environ, {}, clear=True)
+        # Windows OpenSSL needs system paths; keep credentials and DB options isolated.
+        system_env = {key: value for key, value in os.environ.items()
+                      if key.upper() in {'SYSTEMROOT', 'WINDIR'}}
+        env_patch = patch.dict(os.environ, system_env, clear=True)
         env_patch.start()
         self.addCleanup(env_patch.stop)
 

@@ -1,0 +1,3107 @@
+[
+  {
+    "id": 1,
+    "title": "API-01  회원가입",
+    "route": "POST  /api/v1/auth/signup",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Request Body",
+        "name",
+        "string",
+        "필수",
+        "필수 회원 이름. trim 후 비공백. 길이·기존 회원 보완 정책 DEC-43."
+      ],
+      [
+        "Request Body",
+        "email",
+        "string",
+        "필수",
+        "앞뒤 공백 제거, 이메일 형식·중복 검증."
+      ],
+      [
+        "Request Body",
+        "password",
+        "string",
+        "필수",
+        "영문·숫자·특수문자를 각각 포함한 8자 이상. 확인값 일치. 공백/바이트 상한 등 추가 기준 DEC-09."
+      ],
+      [
+        "Request Body",
+        "password_confirm",
+        "string",
+        "필수",
+        "password와 일치, 저장하지 않음."
+      ]
+    ]
+  },
+  {
+    "id": 2,
+    "title": "API-02  로그인",
+    "route": "POST  /api/v1/auth/login",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Request Body",
+        "email",
+        "string",
+        "필수",
+        "등록 이메일."
+      ],
+      [
+        "Request Body",
+        "password",
+        "string",
+        "필수",
+        "평문은 TLS 요청에만 포함."
+      ]
+    ]
+  },
+  {
+    "id": 3,
+    "title": "API-03  로그아웃",
+    "route": "POST  /api/v1/auth/logout",
+    "auth": "선택",
+    "fields": []
+  },
+  {
+    "id": 4,
+    "title": "API-04  내 계정 조회",
+    "route": "GET  /api/v1/users/me",
+    "auth": "필요",
+    "fields": []
+  },
+  {
+    "id": 5,
+    "title": "API-05  시작 화면 변경",
+    "route": "PATCH  /api/v1/users/me",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "landing_page",
+        "string",
+        "필수",
+        "GLOBAL / INTERESTED. 관심이 없으면 INTERESTED 거부."
+      ]
+    ]
+  },
+  {
+    "id": 6,
+    "title": "API-06  등록 이메일 일치 확인",
+    "route": "POST  /api/v1/users/me/email-check",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "email",
+        "string",
+        "필수",
+        "등록 이메일 비교용."
+      ]
+    ]
+  },
+  {
+    "id": 7,
+    "title": "API-07  비밀번호 변경",
+    "route": "POST  /api/v1/users/me/password",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "current_password",
+        "string",
+        "필수",
+        "현재 비밀번호."
+      ],
+      [
+        "Request Body",
+        "new_password",
+        "string",
+        "필수",
+        "영문·숫자·특수문자를 각각 포함한 8자 이상. 확인값 일치. 공백/바이트 상한 등 추가 기준 DEC-09."
+      ],
+      [
+        "Request Body",
+        "new_password_confirm",
+        "string",
+        "필수",
+        "새 비밀번호와 일치."
+      ],
+      [
+        "Request Body",
+        "email",
+        "string",
+        "필수",
+        "등록 이메일과 일치해야 함. 현재 비밀번호와 같은 요청에서 서버 검증."
+      ]
+    ]
+  },
+  {
+    "id": 8,
+    "title": "API-08  회원탈퇴",
+    "route": "DELETE  /api/v1/users/me",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "current_password",
+        "string",
+        "조건부",
+        "이메일 계정 재인증. 소셜 전용은 reauth_token 필요. 평문/토큰 저장 금지."
+      ],
+      [
+        "Request Body",
+        "reason_codes",
+        "string[]",
+        "선택",
+        "복수 탈퇴 사유 코드. 항목·필수 여부 DEC-46. 확정된 서버 목록만 허용; 미확정 상태에서 임의 코드 접수 금지."
+      ],
+      [
+        "Request Body",
+        "other_reason",
+        "string|null",
+        "선택",
+        "기타 사유 직접 입력. null은 기타 없음. 필수 여부·길이 DEC-46."
+      ],
+      [
+        "Request Body",
+        "confirm",
+        "boolean",
+        "필수",
+        "true만 허용."
+      ],
+      [
+        "Request Body",
+        "reauth_token",
+        "string",
+        "선택",
+        "소셜 전용 계정의 최근 재인증 토큰. 방식 DEC-34; 이메일 계정은 생략."
+      ]
+    ]
+  },
+  {
+    "id": 9,
+    "title": "API-09  화면 설정·서비스 옵션 조회",
+    "route": "GET  /api/v1/config/options",
+    "auth": "불필요",
+    "fields": []
+  },
+  {
+    "id": 10,
+    "title": "API-10  데이터 가용 기간 조회",
+    "route": "GET  /api/v1/data/availability",
+    "auth": "불필요",
+    "fields": []
+  },
+  {
+    "id": 11,
+    "title": "API-11  HS 품목 검색",
+    "route": "GET  /api/v1/reference/hs-codes",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "필수",
+        "품목명 또는 4단위 코드 검색어. 2~120자, 2자 미만은 빈 후보 반환. HS2022의 HS4 후보. confidence와 browse를 함께 확인하고 직접 선택."
+      ],
+      [
+        "Query Parameters",
+        "depth",
+        "integer",
+        "선택",
+        "4만 허용. 생략 시 4. 6 또는 다른 값은 400 VALIDATION_ERROR. 하위 6단위 조회는 API-12."
+      ],
+      [
+        "Query Parameters",
+        "limit",
+        "integer",
+        "선택",
+        "기본 5, 최대 5."
+      ]
+    ]
+  },
+  {
+    "id": 12,
+    "title": "API-12  HS 하위 품목 조회",
+    "route": "GET  /api/v1/reference/hs-codes/{hs_code}/children",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "hs_code",
+        "string",
+        "필수",
+        "ROOT(HS2 목록), 2자리 HS2(HS4 목록), 4자리 HS4(HS6 목록)."
+      ],
+      [
+        "Query Parameters",
+        "hs_ver",
+        "string",
+        "필수",
+        "HS2022. 선택한 상위 코드와 동일한 판본. 2022 축약 표기는 허용하지 않음."
+      ]
+    ]
+  },
+  {
+    "id": 13,
+    "title": "API-13  국가 검색",
+    "route": "GET  /api/v1/reference/countries",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "선택",
+        "국가명·별칭."
+      ],
+      [
+        "Query Parameters",
+        "region_id",
+        "integer",
+        "선택",
+        "market_region의 실제 숫자 ID. 예: 북아메리카=21, 아메리카=19. URL query는 region_id=21로 전달하며 서버에서 정수·존재 여부 검증."
+      ]
+    ]
+  },
+  {
+    "id": 14,
+    "title": "API-14  대륙·지역 조회",
+    "route": "GET  /api/v1/reference/regions",
+    "auth": "불필요",
+    "fields": []
+  },
+  {
+    "id": 15,
+    "title": "API-15  관심 설정 조회",
+    "route": "GET  /api/v1/users/me/interests",
+    "auth": "필요",
+    "fields": []
+  },
+  {
+    "id": 16,
+    "title": "API-16  관심 설정 전체 저장",
+    "route": "PUT  /api/v1/users/me/interests",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "hs_items",
+        "HsItem[]",
+        "필수",
+        "HS6만. []면 품목 관심 삭제."
+      ],
+      [
+        "Request Body",
+        "country_codes",
+        "string[]",
+        "필수",
+        "[]면 국가 관심 삭제."
+      ],
+      [
+        "Request Body",
+        "landing_page",
+        "string",
+        "선택",
+        "GLOBAL / INTERESTED. 생략 시 기존값, 최초 등록은 INTERESTED."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "API-15 interests.version의 SHA-256 문자열. 사용자 행 잠금 후 현재값 재계산·비교·교체를 원자적으로 수행."
+      ]
+    ]
+  },
+  {
+    "id": 17,
+    "title": "API-17  답변 조건 관심 추가",
+    "route": "POST  /api/v1/users/me/interests/items",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "result_id",
+        "string",
+        "필수",
+        "본인 답변 결과표 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 18,
+    "title": "API-18  전체 수출 KPI",
+    "route": "GET  /api/v1/trade/kpis",
+    "auth": "필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "month",
+        "string",
+        "선택",
+        "YYYY-MM. 기본 최신 공개 월."
+      ]
+    ]
+  },
+  {
+    "id": 19,
+    "title": "API-19  월별 수출입 추이",
+    "route": "GET  /api/v1/trade/trends",
+    "auth": "필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "hs_code",
+        "string",
+        "선택",
+        "일반 분석에서는 HS4/HS6 선택. 메인·관심 화면의 전체 추이는 품목 필터 없이 요청."
+      ],
+      [
+        "Query Parameters",
+        "hs_ver",
+        "string",
+        "조건부",
+        "hs_code 사용 시 필수."
+      ],
+      [
+        "Query Parameters",
+        "country_codes",
+        "string[]",
+        "선택",
+        "반복 query: country_codes=US&country_codes=VN. 생략 전체."
+      ],
+      [
+        "Query Parameters",
+        "period_start",
+        "string",
+        "선택",
+        "YYYY-MM 시작월. API별 기본값 적용."
+      ],
+      [
+        "Query Parameters",
+        "period_end",
+        "string",
+        "선택",
+        "YYYY-MM 종료월. 기본 최신 정상 공개 월."
+      ],
+      [
+        "Query Parameters",
+        "trade_flow",
+        "string",
+        "선택",
+        "EXPORT / IMPORT / BOTH. 기본 BOTH. 메인·관심 화면은 한국 전체 교역국 수출입 2개 계열."
+      ],
+      [
+        "Query Parameters",
+        "months",
+        "integer",
+        "선택",
+        "기본 24. 최신 정상 공개월까지. 기간 직접 입력과 동시 사용 불가."
+      ]
+    ]
+  },
+  {
+    "id": 20,
+    "title": "API-20  국가·품목 수출입 순위",
+    "route": "GET  /api/v1/trade/rankings",
+    "auth": "필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "hs_code",
+        "string",
+        "선택",
+        "HS4 또는 HS6. 생략 시 전체."
+      ],
+      [
+        "Query Parameters",
+        "hs_ver",
+        "string",
+        "조건부",
+        "hs_code 사용 시 필수."
+      ],
+      [
+        "Query Parameters",
+        "country_codes",
+        "string[]",
+        "선택",
+        "반복 query: country_codes=US&country_codes=VN. 생략 전체."
+      ],
+      [
+        "Query Parameters",
+        "period_start",
+        "string",
+        "선택",
+        "YYYY-MM. 기본 최신 공개월 포함 최근3개월의 시작월."
+      ],
+      [
+        "Query Parameters",
+        "period_end",
+        "string",
+        "선택",
+        "YYYY-MM 종료월. 기본 최신 정상 공개 월."
+      ],
+      [
+        "Query Parameters",
+        "group_by",
+        "string",
+        "선택",
+        "COUNTRY / HS6. 두 기준 모두 정식 지원. 기본 COUNTRY."
+      ],
+      [
+        "Query Parameters",
+        "sort_flow",
+        "string",
+        "선택",
+        "EXPORT / IMPORT. 선택 방향 금액으로 순위·비중을 다시 계산. 기본 EXPORT."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, 1 이상."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 5, 1~100. 메인 각 상위5; 상세는 페이지 조회. 관심 등록 수가5미만이면 실제 대상만."
+      ],
+      [
+        "Query Parameters",
+        "scope",
+        "string",
+        "선택",
+        "GLOBAL / INTERESTED. 관심은 로그인 본인 저장 범위만."
+      ]
+    ]
+  },
+  {
+    "id": 21,
+    "title": "API-21  국가별 상위 세부품목",
+    "route": "GET  /api/v1/trade/rankings/{country_code}/products",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "country_code",
+        "string",
+        "필수",
+        "일반 국가코드."
+      ],
+      [
+        "Query Parameters",
+        "hs_code",
+        "string",
+        "선택",
+        "HS4 또는 HS6. 생략 시 전체."
+      ],
+      [
+        "Query Parameters",
+        "hs_ver",
+        "string",
+        "조건부",
+        "hs_code 사용 시 필수."
+      ],
+      [
+        "Query Parameters",
+        "month",
+        "string",
+        "선택",
+        "단일월 간편 입력. period_start/period_end와 동시 사용 금지. 둘 다 없으면 최근3개월."
+      ],
+      [
+        "Query Parameters",
+        "period_start",
+        "string",
+        "선택",
+        "YYYY-MM. period_end와 함께 입력. month와 양립 금지."
+      ],
+      [
+        "Query Parameters",
+        "period_end",
+        "string",
+        "선택",
+        "YYYY-MM. 기본 최신 정상 공개월."
+      ],
+      [
+        "Query Parameters",
+        "sort_flow",
+        "string",
+        "선택",
+        "EXPORT / IMPORT. 기본 EXPORT."
+      ]
+    ]
+  },
+  {
+    "id": 22,
+    "title": "API-22  급성장 품목",
+    "route": "GET  /api/v1/trade/fast-growing-products",
+    "auth": "필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "month",
+        "string",
+        "선택",
+        "기본 최신 공개 월."
+      ]
+    ]
+  },
+  {
+    "id": 23,
+    "title": "API-23  유망시장 분석 [협의 보류·초안]",
+    "route": "POST  /api/v1/analysis/promising-markets",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "conditions",
+        "Conditions",
+        "필수",
+        "명시 조건. applied_defaults·expanded_regions는 응답 전용이며 입력에서 제외."
+      ],
+      [
+        "Request Body",
+        "minimum_baseline_usd",
+        "number",
+        "선택",
+        "기본 10,000,000 USD. 0 이상. 과거 기준액에 적용."
+      ],
+      [
+        "Request Body",
+        "page",
+        "integer",
+        "선택",
+        "1부터 시작."
+      ],
+      [
+        "Request Body",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 10, 최대 100."
+      ]
+    ]
+  },
+  {
+    "id": 24,
+    "title": "API-24  수출 변화 감지",
+    "route": "POST  /api/v1/analysis/changes",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "hs_items",
+        "HsItem[]",
+        "선택",
+        "생략/[]는 전체."
+      ],
+      [
+        "Request Body",
+        "country_codes",
+        "string[]",
+        "선택",
+        "생략/[]는 전체."
+      ],
+      [
+        "Request Body",
+        "month",
+        "string",
+        "필수",
+        "기준월 YYYY-MM."
+      ],
+      [
+        "Request Body",
+        "compare",
+        "string",
+        "필수",
+        "MOM / YOY."
+      ]
+    ]
+  },
+  {
+    "id": 25,
+    "title": "API-25  시장 구조 비중",
+    "route": "POST  /api/v1/analysis/market-shares",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "conditions",
+        "Conditions",
+        "필수",
+        "명시 조건. applied_defaults·expanded_regions는 응답 전용이며 입력에서 제외."
+      ]
+    ]
+  },
+  {
+    "id": 26,
+    "title": "API-26  시장 비중 추이",
+    "route": "POST  /api/v1/analysis/share-trends",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "conditions",
+        "Conditions",
+        "필수",
+        "명시 조건. applied_defaults·expanded_regions는 응답 전용이며 입력에서 제외."
+      ]
+    ]
+  },
+  {
+    "id": 27,
+    "title": "API-27  국가 성장 패턴 [협의 보류·초안]",
+    "route": "POST  /api/v1/analysis/market-patterns",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "conditions",
+        "Conditions",
+        "필수",
+        "명시 조건. applied_defaults·expanded_regions는 응답 전용이며 입력에서 제외."
+      ]
+    ]
+  },
+  {
+    "id": 28,
+    "title": "API-28  현지 이슈 분석",
+    "route": "POST  /api/v1/analysis/local-issues",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "conditions",
+        "Conditions",
+        "필수",
+        "명시 조건. applied_defaults·expanded_regions는 응답 전용이며 입력에서 제외."
+      ],
+      [
+        "Request Body",
+        "news_start_date",
+        "string",
+        "선택",
+        "YYYY-MM-DD. 기본 최근 3개월."
+      ],
+      [
+        "Request Body",
+        "news_end_date",
+        "string",
+        "선택",
+        "YYYY-MM-DD. 기본 오늘(서울)."
+      ]
+    ]
+  },
+  {
+    "id": 29,
+    "title": "API-29  기사 목록·검색",
+    "route": "GET  /api/v1/articles",
+    "auth": "선택: INTERESTED는 필수",
+    "fields": [
+      [
+        "Query Parameters",
+        "tab",
+        "string",
+        "선택",
+        "ALL / BREAKING / MAJOR_ISSUE. 기본 ALL."
+      ],
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "선택",
+        "기본 목록에서는 생략 가능. mode=SEARCH면 trim 후 비공백 필수. 제목·본문·최종 주제어·동의어·상위어·세부어 검색."
+      ],
+      [
+        "Query Parameters",
+        "start_date",
+        "string",
+        "선택",
+        "선택 YYYY-MM-DD. 검색에서 기간 미지정은 전체 기간. 자연어 기사 기본3개월과 구분."
+      ],
+      [
+        "Query Parameters",
+        "end_date",
+        "string",
+        "선택",
+        "선택 YYYY-MM-DD. 양 끝 입력 시 시작≤종료. 탭 전환 시 조건 유지."
+      ],
+      [
+        "Query Parameters",
+        "scope",
+        "string",
+        "선택",
+        "GLOBAL / INTERESTED. 관심 범위는 서버 계산."
+      ],
+      [
+        "Query Parameters",
+        "country_codes",
+        "string[]",
+        "선택",
+        "반복 query 국가 필터."
+      ],
+      [
+        "Query Parameters",
+        "hs_code",
+        "string",
+        "선택",
+        "품목 필터."
+      ],
+      [
+        "Query Parameters",
+        "hs_ver",
+        "string",
+        "조건부",
+        "hs_code 있으면 필수."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, 1 이상."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ],
+      [
+        "Query Parameters",
+        "mode",
+        "string",
+        "선택",
+        "BROWSE / SEARCH. SEARCH는 비공백 q 필수."
+      ],
+      [
+        "Query Parameters",
+        "category_boost_ids",
+        "integer[]",
+        "선택",
+        "검색 순위 보조만. 일치하지 않는 기사/미분류 후보를 제외하지 않음."
+      ]
+    ]
+  },
+  {
+    "id": 30,
+    "title": "API-30  기사 상세",
+    "route": "GET  /api/v1/articles/{article_id}",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "article_id",
+        "string",
+        "필수",
+        "기사 내부 ID."
+      ]
+    ]
+  },
+  {
+    "id": 31,
+    "title": "API-31  주요 이슈 조회",
+    "route": "GET  /api/v1/issues/major",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, 1 이상."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 32,
+    "title": "API-32  환율 조회",
+    "route": "GET  /api/v1/exchange-rates",
+    "auth": "선택: INTERESTED는 필수",
+    "fields": [
+      [
+        "Query Parameters",
+        "scope",
+        "string",
+        "선택",
+        "GLOBAL / INTERESTED. 기본 GLOBAL."
+      ],
+      [
+        "Query Parameters",
+        "currency_codes",
+        "string[]",
+        "선택",
+        "직접 지정 통화. scope=INTERESTED와 동시 사용 금지."
+      ]
+    ]
+  },
+  {
+    "id": 33,
+    "title": "API-33  대화 목록",
+    "route": "GET  /api/v1/chat/sessions",
+    "auth": "필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, 1 이상."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 34,
+    "title": "API-34  새 대화 생성",
+    "route": "POST  /api/v1/chat/sessions",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "initial_conditions",
+        "Conditions",
+        "선택",
+        "순위 화면에서 사용자가 명시 선택한 조건만 전달. 미지정은 빈 문맥.\n[팀 합의 필요: DEC-28] 확정 Conditions의 필수 필드와 부분 입력 설명이 충돌하므로 요청 전용 스키마 또는 필수 예외 확정 필요."
+      ]
+    ]
+  },
+  {
+    "id": 35,
+    "title": "API-35  저장 대화 열람",
+    "route": "GET  /api/v1/chat/sessions/{session_id}/messages",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "session_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, 1 이상."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 36,
+    "title": "API-36  질문·후속 질문 제출",
+    "route": "POST  /api/v1/chat/sessions/{session_id}/messages",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "session_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ],
+      [
+        "Request Body",
+        "question",
+        "string",
+        "필수",
+        "비어 있지 않은 자연어. 최대 4,000자 제안."
+      ],
+      [
+        "Request Body",
+        "client_message_id",
+        "string",
+        "필수",
+        "클라이언트 생성 UUID. 중복 전송 방지."
+      ]
+    ]
+  },
+  {
+    "id": 37,
+    "title": "API-37  질문 진행·결과 조회",
+    "route": "GET  /api/v1/chat/jobs/{job_id}",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "job_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 38,
+    "title": "API-38  되묻기 선택 제출",
+    "route": "POST  /api/v1/chat/jobs/{job_id}/clarifications",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "job_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ],
+      [
+        "Request Body",
+        "clarification_id",
+        "string",
+        "필수",
+        "현재 NEEDS_INPUT의 ID."
+      ],
+      [
+        "Request Body",
+        "choice_ids",
+        "string[]",
+        "선택",
+        "현재 품목의 선택지 하나. 여러 품목은 NEEDS_INPUT을 반복해 각각 선택. HS 직접 선택 시 생략하며 hs_item과 동시 사용하지 않음."
+      ],
+      [
+        "Request Body",
+        "hs_item",
+        "HsItem",
+        "선택",
+        "HS 품목 되묻기에서 API-12로 직접 선택한 HS4/HS6. choice_ids와 동시 사용 금지."
+      ]
+    ]
+  },
+  {
+    "id": 39,
+    "title": "API-39  대화 컨텍스트 해제",
+    "route": "DELETE  /api/v1/chat/sessions/{session_id}/context",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "session_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 40,
+    "title": "API-40  대화 삭제",
+    "route": "DELETE  /api/v1/chat/sessions/{session_id}",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "session_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 41,
+    "title": "API-41  분석 결과표 조회",
+    "route": "GET  /api/v1/results/{result_id}",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "result_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, 1 이상."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 42,
+    "title": "API-42  결과표 엑셀 다운로드",
+    "route": "GET  /api/v1/results/{result_id}/file",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "result_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 43,
+    "title": "API-43  요청형 리포트 조건 확인",
+    "route": "POST  /api/v1/reports/preview",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "conditions",
+        "Conditions",
+        "선택",
+        "직접 조건. result_id와 정확히 하나. 현재 리포트는 EXPORT만 허용.\n[팀 합의 필요: DEC-28] period_preset 사용 시 Conditions.period 등 요청 필수 필드 처리 및 서버 기본값 확정 필요."
+      ],
+      [
+        "Request Body",
+        "result_id",
+        "string",
+        "선택",
+        "현재 답변의 저장 조건을 재사용."
+      ],
+      [
+        "Request Body",
+        "period_preset",
+        "string",
+        "선택",
+        "LAST_1M / LAST_3M / LAST_6M / LAST_12M / THIS_YEAR / LAST_YEAR. 명시 period와 양립 금지.\n[팀 합의 필요: DEC-28] period 생략을 허용할 요청 스키마/예외 규칙과 preset 적용 후 확정 응답 계약 결정 필요."
+      ]
+    ]
+  },
+  {
+    "id": 44,
+    "title": "API-44  요청형 리포트 생성",
+    "route": "POST  /api/v1/reports",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "preview_id",
+        "string",
+        "필수",
+        "API-43의 본인 확인 토큰."
+      ],
+      [
+        "Request Body",
+        "confirm_conditions",
+        "boolean",
+        "필수",
+        "표시된 제안 조건에 동의하면 true."
+      ],
+      [
+        "Request Body",
+        "sections",
+        "string[]",
+        "선택",
+        "KPI / TOP_COUNTRIES / GROWTH_RISK / LOCAL_ISSUES. 생략 또는 []면 전체."
+      ],
+      [
+        "Request Body",
+        "formats",
+        "string[]",
+        "선택",
+        "PDF / DOCX. 중복 제거 후 최소1개. API-44 생략 시 [PDF]; API-50 필수. 선택 파일 모두 준비돼야 완료."
+      ],
+      [
+        "Request Body",
+        "session_id",
+        "string",
+        "선택",
+        "완료 후 이어갈 본인 세션."
+      ]
+    ]
+  },
+  {
+    "id": 45,
+    "title": "API-45  리포트 생성 상태",
+    "route": "GET  /api/v1/reports/{report_id}/status",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "report_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 46,
+    "title": "API-46  리포트 목록",
+    "route": "GET  /api/v1/reports",
+    "auth": "필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "report_type",
+        "string",
+        "선택",
+        "RPT_ON_DEMAND / RPT_WEEKLY / RPT_MONTHLY / RPT_QUARTERLY. 생략 전체."
+      ],
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "선택",
+        "종류+저장 기간으로 생성한 표시 제목 검색. DB title 컬럼 또는 content_json.title 검색으로 구현하지 않음."
+      ],
+      [
+        "Query Parameters",
+        "status",
+        "string",
+        "선택",
+        "ReportSummary.status 중 하나."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, 1 이상."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 47,
+    "title": "API-47  리포트 웹 열람",
+    "route": "GET  /api/v1/reports/{report_id}",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "report_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 48,
+    "title": "API-48  리포트 파일 다운로드",
+    "route": "GET  /api/v1/reports/{report_id}/files/{format}",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "report_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ],
+      [
+        "Path Parameters",
+        "format",
+        "string",
+        "필수",
+        "소문자 pdf / docx / xlsx. PDF·DOCX는 선택·준비된 파일, XLSX는 저장 결과표 기반 내보내기."
+      ]
+    ]
+  },
+  {
+    "id": 49,
+    "title": "API-49  구독 설정 조회",
+    "route": "GET  /api/v1/users/me/subscriptions",
+    "auth": "필요",
+    "fields": []
+  },
+  {
+    "id": 50,
+    "title": "API-50  구독 설정 전체 저장",
+    "route": "PUT  /api/v1/users/me/subscriptions",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "period_codes",
+        "string[]",
+        "필수",
+        "활성 옵션에서 최소 1개. 중복 제거."
+      ],
+      [
+        "Request Body",
+        "formats",
+        "string[]",
+        "필수",
+        "PDF / DOCX. 중복 제거 후 최소1개. API-44 생략 시 [PDF]; API-50 필수. 선택 파일 모두 준비돼야 완료."
+      ],
+      [
+        "Request Body",
+        "use_saved_interests",
+        "boolean",
+        "필수",
+        "true만 허용. 현재 저장 관심 스냅샷으로 구독 생성/교체."
+      ],
+      [
+        "Request Body",
+        "hs_items",
+        "사용 안 함",
+        "제외",
+        "클라이언트 직접 구독 조건 입력 제외. 저장 관심에서 서버가 복사. 전달하면400."
+      ],
+      [
+        "Request Body",
+        "country_codes",
+        "사용 안 함",
+        "제외",
+        "클라이언트 직접 구독 조건 입력 제외. 저장 관심에서 서버가 복사. 전달하면400."
+      ],
+      [
+        "Request Body",
+        "topic",
+        "string",
+        "선택",
+        "구독 주제 문자열. 생략 시 \"시장 동향\" 적용 제안. filters_json.topic에 저장. topics 배열은 받지 않음."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "API-49 최상위 version 해시. 사용자 잠금 후 집합 재계산·비교와 저장을 원자적으로 수행."
+      ]
+    ]
+  },
+  {
+    "id": 51,
+    "title": "API-51  구독 중지",
+    "route": "DELETE  /api/v1/users/me/subscriptions/{subscription_id}",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "subscription_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 52,
+    "title": "API-52  알림 설정 조회",
+    "route": "GET  /api/v1/users/me/notification-settings",
+    "auth": "필요",
+    "fields": []
+  },
+  {
+    "id": 53,
+    "title": "API-53  알림 설정 변경",
+    "route": "PATCH  /api/v1/users/me/notification-settings",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "notifications_enabled",
+        "boolean",
+        "선택",
+        "true는 현재 약관 동의 필수."
+      ],
+      [
+        "Request Body",
+        "spike_popup",
+        "boolean",
+        "선택",
+        "급증 팝업."
+      ],
+      [
+        "Request Body",
+        "major_issue_popup",
+        "boolean",
+        "선택",
+        "주요이슈 팝업."
+      ],
+      [
+        "Request Body",
+        "report_popup",
+        "boolean",
+        "선택",
+        "리포트 팝업."
+      ]
+    ]
+  },
+  {
+    "id": 54,
+    "title": "API-54  현재 약관 조회",
+    "route": "GET  /api/v1/terms/{terms_type}",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "terms_type",
+        "string",
+        "필수",
+        "notification만 지원. service/privacy는 별도 저장 계약이 없어 422 UNSUPPORTED_TERMS_TYPE."
+      ]
+    ]
+  },
+  {
+    "id": 55,
+    "title": "API-55  약관 응답·알림 활성화",
+    "route": "POST  /api/v1/users/me/consents",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "terms_type",
+        "string",
+        "필수",
+        "NOTIFICATION. 일반 약관은 확정 후."
+      ],
+      [
+        "Request Body",
+        "terms_version",
+        "string",
+        "필수",
+        "방금 조회한 활성 버전."
+      ],
+      [
+        "Request Body",
+        "action",
+        "string",
+        "필수",
+        "AGREE / DECLINE / REVOKE. WITHDRAW는 400 VALIDATION_ERROR."
+      ],
+      [
+        "Request Body",
+        "enable_notifications",
+        "boolean",
+        "선택",
+        "AGREE일 때 true로 동의하고 켜기. 기본 false."
+      ]
+    ]
+  },
+  {
+    "id": 56,
+    "title": "API-56  알림 목록",
+    "route": "GET  /api/v1/notifications",
+    "auth": "필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "type",
+        "string",
+        "선택",
+        "ALL / REPORT / MAJOR_ISSUE / SPIKE. SPIKE는 PRODUCT_SPIKE+KEYWORD_SPIKE. BREAKING은 400."
+      ],
+      [
+        "Query Parameters",
+        "unread_only",
+        "boolean",
+        "선택",
+        "기본 false."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, 1 이상."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 57,
+    "title": "API-57  미읽음 알림 건수",
+    "route": "GET  /api/v1/notifications/unread-count",
+    "auth": "필요",
+    "fields": []
+  },
+  {
+    "id": 58,
+    "title": "API-58  알림 상세",
+    "route": "GET  /api/v1/notifications/{user_alert_id}",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "user_alert_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 59,
+    "title": "API-59  개별 알림 읽음",
+    "route": "PATCH  /api/v1/notifications/{user_alert_id}/read",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "user_alert_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 60,
+    "title": "API-60  알림 모두 읽음",
+    "route": "POST  /api/v1/notifications/read-all",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "through",
+        "string",
+        "필수",
+        "화면이 조회한 as_of 시각. 이후 도착 알림 보존."
+      ],
+      [
+        "Request Body",
+        "type",
+        "string",
+        "선택",
+        "기본 ALL. 목록과 같은 유형 필터."
+      ]
+    ]
+  },
+  {
+    "id": 61,
+    "title": "API-61  접속 팝업 묶음 조회",
+    "route": "GET  /api/v1/notifications/popups",
+    "auth": "필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "cursor",
+        "string",
+        "선택",
+        "이전 응답의 불투명 cursor."
+      ]
+    ]
+  },
+  {
+    "id": 62,
+    "title": "API-62  팝업 표시 확인",
+    "route": "POST  /api/v1/notifications/popups/{delivery_id}/ack",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "delivery_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 63,
+    "title": "API-63  개발 모드 실행 SQL 조회",
+    "route": "GET  /api/v1/debug/results/{result_id}/sql",
+    "auth": "개발 역할 + 환경 허용",
+    "fields": [
+      [
+        "Path Parameters",
+        "result_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 64,
+    "title": "API-64  채팅방 이름 변경",
+    "route": "PATCH  /api/v1/chat/sessions/{session_id}",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "session_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Request Body",
+        "title",
+        "string",
+        "필수",
+        "trim 후 1~160자. 본인 세션만."
+      ]
+    ]
+  },
+  {
+    "id": 65,
+    "title": "API-65  키워드 분야 목록",
+    "route": "GET  /api/v1/reference/keyword-categories",
+    "auth": "불필요",
+    "fields": []
+  },
+  {
+    "id": 66,
+    "title": "API-66  키워드·대표어 검색",
+    "route": "GET  /api/v1/reference/keyword-topics",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "선택",
+        "정제·동의어·상위어 매핑 후보 검색."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, ≥1."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 67,
+    "title": "API-67  내 차단 키워드 조회",
+    "route": "GET  /api/v1/users/me/keyword-blocks",
+    "auth": "필요",
+    "fields": []
+  },
+  {
+    "id": 68,
+    "title": "API-68  내 차단 키워드 전체 저장",
+    "route": "PUT  /api/v1/users/me/keyword-blocks",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "keywords",
+        "string[]",
+        "필수",
+        "선택한 표기. 같은 사전으로 정규화. []는 모두 해제."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "조회 버전과 일치할 때 교체."
+      ]
+    ]
+  },
+  {
+    "id": 69,
+    "title": "API-69  소셜 인증 시작",
+    "route": "POST  /api/v1/auth/social/{provider}/authorize",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "provider",
+        "string",
+        "필수",
+        "kakao / naver / google."
+      ],
+      [
+        "Request Body",
+        "return_path",
+        "string",
+        "선택",
+        "서버 허용 내부 경로만. 임의 외부 URL 거부."
+      ]
+    ]
+  },
+  {
+    "id": 70,
+    "title": "API-70  소셜 인증 콜백",
+    "route": "GET  /api/v1/auth/social/{provider}/callback",
+    "auth": "불필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "provider",
+        "string",
+        "필수",
+        "kakao / naver / google."
+      ],
+      [
+        "Query Parameters",
+        "code",
+        "string",
+        "선택",
+        "인가 코드. 제공자 취소 시 생략 가능."
+      ],
+      [
+        "Query Parameters",
+        "state",
+        "string",
+        "필수",
+        "원 요청과 일치·미만료·미사용 검증."
+      ],
+      [
+        "Query Parameters",
+        "error",
+        "string",
+        "선택",
+        "제공자 취소·오류. 성공 code와 동시 허용하지 않음."
+      ]
+    ]
+  },
+  {
+    "id": 71,
+    "title": "API-71  소셜 신규 가입 정보 조회",
+    "route": "GET  /api/v1/auth/social/signup-context",
+    "auth": "소셜 가입 임시 인증",
+    "fields": []
+  },
+  {
+    "id": 72,
+    "title": "API-72  연락 이메일 인증 요청",
+    "route": "POST  /api/v1/auth/social/email-verifications",
+    "auth": "소셜 가입 임시 인증",
+    "fields": [
+      [
+        "Request Body",
+        "signup_token",
+        "string",
+        "필수",
+        "현재 임시 가입 흐름."
+      ],
+      [
+        "Request Body",
+        "email",
+        "string",
+        "필수",
+        "형식 검증 연락 이메일."
+      ]
+    ]
+  },
+  {
+    "id": 73,
+    "title": "API-73  연락 이메일 인증 확인",
+    "route": "POST  /api/v1/auth/social/email-verifications/{challenge_id}/verify",
+    "auth": "소셜 가입 임시 인증",
+    "fields": [
+      [
+        "Path Parameters",
+        "challenge_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Request Body",
+        "signup_token",
+        "string",
+        "필수",
+        "동일 흐름 토큰."
+      ],
+      [
+        "Request Body",
+        "code",
+        "string",
+        "필수",
+        "사용자 수신 검증 코드."
+      ]
+    ]
+  },
+  {
+    "id": 74,
+    "title": "API-74  소셜 신규 가입 완료",
+    "route": "POST  /api/v1/auth/social/signup",
+    "auth": "소셜 가입 임시 인증",
+    "fields": [
+      [
+        "Request Body",
+        "name",
+        "string",
+        "필수",
+        "소셜 신규 회원의 이름. 제공자 이름은 후보이며 서버에서 사용자 확정값 검증."
+      ],
+      [
+        "Request Body",
+        "signup_token",
+        "string",
+        "필수",
+        "검증된 신규 가입 흐름."
+      ],
+      [
+        "Request Body",
+        "consents",
+        "ConsentAcceptance[]",
+        "필수",
+        "서비스·개인정보 현재 버전 필수 동의."
+      ]
+    ]
+  },
+  {
+    "id": 75,
+    "title": "API-75  일반 동의 정보 조회",
+    "route": "GET  /api/v1/users/me/consents",
+    "auth": "필요",
+    "fields": []
+  },
+  {
+    "id": 76,
+    "title": "API-76  일반 동의 응답 기록",
+    "route": "POST  /api/v1/users/me/consents/general",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "terms_type",
+        "string",
+        "필수",
+        "SERVICE / PRIVACY / OPTIONAL. NOTIFICATION은 API-55."
+      ],
+      [
+        "Request Body",
+        "terms_version",
+        "string",
+        "필수",
+        "제시된 현재 버전."
+      ],
+      [
+        "Request Body",
+        "action",
+        "string",
+        "필수",
+        "AGREE / DECLINE / REVOKE."
+      ]
+    ]
+  },
+  {
+    "id": 77,
+    "title": "API-77  UN 국가·품목별 가용 기간",
+    "route": "GET  /api/v1/un/availability",
+    "auth": "필요",
+    "fields": [
+      [
+        "Query Parameters",
+        "hs6_code",
+        "string",
+        "필수",
+        "6자리."
+      ],
+      [
+        "Query Parameters",
+        "hs_ver",
+        "string",
+        "필수",
+        "현 수집 HS2022."
+      ],
+      [
+        "Query Parameters",
+        "country_codes",
+        "string[]",
+        "선택",
+        "반복 query. 생략은 검증된 국가 전체."
+      ],
+      [
+        "Query Parameters",
+        "freq_code",
+        "string",
+        "필수",
+        "M / A."
+      ]
+    ]
+  },
+  {
+    "id": 78,
+    "title": "API-78  UN 해외시장 규모·한국산 점유율",
+    "route": "POST  /api/v1/analysis/import-market-shares",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "hs6_code",
+        "string",
+        "필수",
+        "6자리. 복수 품목 합산은 별도 확장."
+      ],
+      [
+        "Request Body",
+        "hs_ver",
+        "string",
+        "필수",
+        "원보고 판본."
+      ],
+      [
+        "Request Body",
+        "country_codes",
+        "string[]",
+        "필수",
+        "조회할 대상 수입국 1개 이상."
+      ],
+      [
+        "Request Body",
+        "freq_code",
+        "string",
+        "필수",
+        "M / A. 월/연 혼합 금지."
+      ],
+      [
+        "Request Body",
+        "period_start",
+        "string",
+        "필수",
+        "YYYY-MM-DD. M 월초/A 연초."
+      ],
+      [
+        "Request Body",
+        "period_end",
+        "string",
+        "필수",
+        "마지막 관측 식별일 포함. M 월초/A 연초."
+      ]
+    ]
+  },
+  {
+    "id": 79,
+    "title": "API-79  관리자 운영 요약",
+    "route": "GET  /api/v1/admin/overview",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": []
+  },
+  {
+    "id": 80,
+    "title": "API-80  관리자 조치 알림",
+    "route": "GET  /api/v1/admin/alerts",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "category",
+        "string",
+        "선택",
+        "ALL / DATA / REPORT / MEMBER."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, ≥1."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 81,
+    "title": "API-81  관리자 회원 목록",
+    "route": "GET  /api/v1/admin/users",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "status",
+        "string",
+        "선택",
+        "ALL / ACTIVE / RESTRICTED / WITHDRAWN."
+      ],
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "선택",
+        "이메일 또는 저장된 이름 일부 일치 검색. 검색 결과 탭은 없으며 현재 상태 탭 안에서 결과 표시."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, ≥1."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 82,
+    "title": "API-82  관리자 회원 상세",
+    "route": "GET  /api/v1/admin/users/{user_id}",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "user_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ]
+    ]
+  },
+  {
+    "id": 83,
+    "title": "API-83  관리자 권한 변경",
+    "route": "PATCH  /api/v1/admin/users/{user_id}/role",
+    "auth": "SUPER_ADMIN 전용",
+    "fields": [
+      [
+        "Path Parameters",
+        "user_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Request Body",
+        "role",
+        "string",
+        "필수",
+        "USER / ADMIN. SUPER_ADMIN 값 금지. 대상은 ACTIVE 일반 회원 또는 ADMIN이며 최고 관리자 대상 제외."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "조회 응답의 버전/ETag. 최신 상태와 다르면 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 84,
+    "title": "API-84  회원 이용 제한·해제",
+    "route": "PATCH  /api/v1/admin/users/{user_id}/status",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "user_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Request Body",
+        "status",
+        "string",
+        "필수",
+        "RESTRICTED / ACTIVE. 탈퇴 계정 재활성화 금지."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "조회 응답의 버전/ETag. 최신 상태와 다르면 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 85,
+    "title": "API-85  관리자 저장 관심 조회",
+    "route": "GET  /api/v1/admin/users/{user_id}/interests",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "user_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ]
+    ]
+  },
+  {
+    "id": 86,
+    "title": "API-86  관리자 맞춤 기사 노출 점검",
+    "route": "GET  /api/v1/admin/users/{user_id}/exposure",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "user_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Query Parameters",
+        "start_date",
+        "string",
+        "필수",
+        "완료된 기사 범위 시작."
+      ],
+      [
+        "Query Parameters",
+        "end_date",
+        "string",
+        "필수",
+        "완료된 기사 범위 종료."
+      ]
+    ]
+  },
+  {
+    "id": 87,
+    "title": "API-87  수집 실행 목록",
+    "route": "GET  /api/v1/admin/data/runs",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "source_code",
+        "string",
+        "선택",
+        "허용 원천 옵션 코드."
+      ],
+      [
+        "Query Parameters",
+        "status",
+        "string",
+        "선택",
+        "실제 batch_run 상태 필터."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, ≥1."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 88,
+    "title": "API-88  수집 실행 상세·로그",
+    "route": "GET  /api/v1/admin/data/runs/{run_id}",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "run_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ]
+    ]
+  },
+  {
+    "id": 89,
+    "title": "API-89  실패 범위 재수집",
+    "route": "POST  /api/v1/admin/data/runs/{run_id}/retries",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "run_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Request Body",
+        "scope_ids",
+        "string[]",
+        "필수",
+        "API-88.failed_scopes 중 retryable=true인 scope_id 목록. 해당 run_id 소속·조회 버전과 일치해야 함."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "조회 응답의 버전/ETag. 최신 상태와 다르면 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 90,
+    "title": "API-90  HS 판본 품질 점검 목록",
+    "route": "GET  /api/v1/admin/data/quality-issues",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, ≥1."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 91,
+    "title": "API-91  HS 판본 범위 재검증",
+    "route": "POST  /api/v1/admin/data/quality-issues/{issue_id}/revalidations",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "issue_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Request Body",
+        "source_hs_ver",
+        "string",
+        "필수",
+        "검토한 원천 HS10 판본."
+      ],
+      [
+        "Request Body",
+        "international_hs_ver",
+        "string",
+        "필수",
+        "공식 연결 검증된 국제 판본."
+      ],
+      [
+        "Request Body",
+        "evidence",
+        "string",
+        "필수",
+        "판본 판단 근거."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "[팀 합의 필요 DEC-41] 선행 조회에 version/ETag 제공 계약이 없음. 전달 위치·산출 대상·원자적 비교 방식을 확정한 뒤 활성화. 예시 v1은 형식 설명용이며 실제 요청에 하드코딩 금지."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 92,
+    "title": "API-92  관리자 기사 목록",
+    "route": "GET  /api/v1/admin/articles",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "visibility",
+        "string",
+        "선택",
+        "VISIBLE / EXCLUDED."
+      ],
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "선택",
+        "기사 검색."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, ≥1."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 93,
+    "title": "API-93  관리자 기사 검수 상세",
+    "route": "GET  /api/v1/admin/articles/{article_id}",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "article_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ]
+    ]
+  },
+  {
+    "id": 94,
+    "title": "API-94  기사 국가·품목 연결 수정",
+    "route": "PATCH  /api/v1/admin/articles/{article_id}/links",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "article_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Request Body",
+        "links",
+        "ArticleLinkInput",
+        "필수",
+        "전체 연결 교체."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "조회 응답의 버전/ETag. 최신 상태와 다르면 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 95,
+    "title": "API-95  기사 노출 제외·복구",
+    "route": "PATCH  /api/v1/admin/articles/{article_id}/visibility",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "article_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Request Body",
+        "visibility",
+        "string",
+        "필수",
+        "VISIBLE / EXCLUDED."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "조회 응답의 버전/ETag. 최신 상태와 다르면 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 96,
+    "title": "API-96  기사 출처 현황",
+    "route": "GET  /api/v1/admin/article-sources",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": []
+  },
+  {
+    "id": 97,
+    "title": "API-97  관리자 키워드 검수 목록",
+    "route": "GET  /api/v1/admin/keyword-topics",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "status",
+        "string",
+        "선택",
+        "PENDING / UNCLASSIFIED / CLASSIFIED / SYNONYM."
+      ],
+      [
+        "Query Parameters",
+        "review_status",
+        "string",
+        "선택",
+        "UNREVIEWED / HELD / REVIEWED. 보류는 별도 상태."
+      ],
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "선택",
+        "키워드 검색."
+      ],
+      [
+        "Query Parameters",
+        "candidate_category_id",
+        "integer",
+        "선택",
+        "관리자 검수 후보 분야 필터. 공개 기사 검색 후보 제외와 구분."
+      ],
+      [
+        "Query Parameters",
+        "sort",
+        "string",
+        "선택",
+        "ARTICLE_COUNT_DESC / KEYWORD_ASC / UPDATED_DESC."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, ≥1."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 98,
+    "title": "API-98  키워드 근거 상세",
+    "route": "GET  /api/v1/admin/keyword-topics/detail",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "keyword_text",
+        "string",
+        "필수",
+        "DB 문자열 키. 경로 대신 query로 안전 인코딩."
+      ],
+      [
+        "Query Parameters",
+        "article_limit",
+        "integer",
+        "선택",
+        "3(기본) / 10. 고유 기사 최신순."
+      ]
+    ]
+  },
+  {
+    "id": 99,
+    "title": "API-99  키워드 지정·보류·해제",
+    "route": "PATCH  /api/v1/admin/keyword-topics/review",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Request Body",
+        "keyword_text",
+        "string",
+        "필수",
+        "검수 대상 표기."
+      ],
+      [
+        "Request Body",
+        "action",
+        "string",
+        "필수",
+        "ASSIGN / HOLD / RELEASE."
+      ],
+      [
+        "Request Body",
+        "category_id",
+        "integer|null",
+        "필수",
+        "ASSIGN은 실제 분야 ID 필수. HOLD/RELEASE는 null."
+      ],
+      [
+        "Request Body",
+        "apply_scope",
+        "string",
+        "필수",
+        "NEW_ONLY / EXISTING_NOW. NEW_ONLY는 새 기사부터 적용. 과거 기사 표시 보존 구조 DEC-49 준비 전503. EXISTING_NOW는 명시 대상 재처리이며 과거 저장 답변/리포트는 불변."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "조회 응답의 버전/ETag. 최신 상태와 다르면 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 100,
+    "title": "API-100  검수 키워드 CSV 내보내기",
+    "route": "GET  /api/v1/admin/keyword-topics/export",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "status",
+        "string",
+        "선택",
+        "조회와 같은 DB 상태 필터."
+      ]
+    ]
+  },
+  {
+    "id": 101,
+    "title": "API-101  관리자 분류 틀 목록",
+    "route": "GET  /api/v1/admin/keyword-categories",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": []
+  },
+  {
+    "id": 102,
+    "title": "API-102  관리자 분야 생성",
+    "route": "POST  /api/v1/admin/keyword-categories",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Request Body",
+        "major_name",
+        "string",
+        "필수",
+        "기존/신규 대분류. trim 비공백 ≤40자."
+      ],
+      [
+        "Request Body",
+        "minor_name",
+        "string",
+        "필수",
+        "신규 중분류. trim 비공백 ≤60자."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 103,
+    "title": "API-103  관리자 분야 상세",
+    "route": "GET  /api/v1/admin/keyword-categories/{category_id}",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "category_id",
+        "integer",
+        "필수",
+        "실제 INT UNSIGNED ID."
+      ]
+    ]
+  },
+  {
+    "id": 104,
+    "title": "API-104  관리자 생성 분야 이름 수정",
+    "route": "PATCH  /api/v1/admin/keyword-categories/{category_id}",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "category_id",
+        "integer",
+        "필수",
+        "실제 ID."
+      ],
+      [
+        "Request Body",
+        "major_name",
+        "string",
+        "필수",
+        "≤40자."
+      ],
+      [
+        "Request Body",
+        "minor_name",
+        "string",
+        "필수",
+        "≤60자."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "조회 응답의 버전/ETag. 최신 상태와 다르면 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 105,
+    "title": "API-105  관리자 생성 분야 삭제",
+    "route": "DELETE  /api/v1/admin/keyword-categories/{category_id}",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "category_id",
+        "integer",
+        "필수",
+        "실제 ID."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "조회 응답의 버전/ETag. 최신 상태와 다르면 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 106,
+    "title": "API-106  AI 답변 검수 목록 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 107,
+    "title": "API-107  AI 답변 근거 대조 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 108,
+    "title": "API-108  AI 답변 검수 판정 추가 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 109,
+    "title": "API-109  동일 조건 재분석 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 110,
+    "title": "API-110  관리자 리포트 작업 목록 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 111,
+    "title": "API-111  관리자 리포트 상세·로그 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 112,
+    "title": "API-112  관리자 리포트 파일 다운로드 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 113,
+    "title": "API-113  실패 리포트 재시도 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 114,
+    "title": "API-114  관리자 구독 목록 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 115,
+    "title": "API-115  관리자 구독 상세 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 116,
+    "title": "API-116  관리자 구독 수정·중지 [이번 구현 범위 제외]",
+    "route": "번호 예약·재사용 금지",
+    "auth": "호출 없음",
+    "fields": []
+  },
+  {
+    "id": 117,
+    "title": "API-117  회원 알림 전달 목록",
+    "route": "GET  /api/v1/admin/notification-deliveries",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "user_id",
+        "string",
+        "선택",
+        "회원 필터."
+      ],
+      [
+        "Query Parameters",
+        "result",
+        "string",
+        "선택",
+        "INCLUDED / EXCLUDED / UNKNOWN."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, ≥1."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 118,
+    "title": "API-118  회원 알림 전달 상세",
+    "route": "GET  /api/v1/admin/notification-deliveries/{user_alert_id}",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "user_alert_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ]
+    ]
+  },
+  {
+    "id": 119,
+    "title": "API-119  회원 알림 설정·동의 이력",
+    "route": "GET  /api/v1/admin/users/{user_id}/notification-settings",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "user_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ]
+    ]
+  },
+  {
+    "id": 120,
+    "title": "API-120  알림 편입 제외 진단",
+    "route": "GET  /api/v1/admin/notification-events/{event_id}/diagnosis",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "event_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ],
+      [
+        "Query Parameters",
+        "user_id",
+        "string",
+        "필수",
+        "대상 회원."
+      ]
+    ]
+  },
+  {
+    "id": 121,
+    "title": "API-121  기사량 판정 기준 조회",
+    "route": "GET  /api/v1/admin/notification-rules",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": []
+  },
+  {
+    "id": 122,
+    "title": "API-122  관리자 처리 이력 목록",
+    "route": "GET  /api/v1/admin/audit-events",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "target_type",
+        "string",
+        "선택",
+        "대상 종류 필터."
+      ],
+      [
+        "Query Parameters",
+        "page",
+        "integer",
+        "선택",
+        "기본 1, ≥1."
+      ],
+      [
+        "Query Parameters",
+        "page_size",
+        "integer",
+        "선택",
+        "기본 20, 1~100."
+      ]
+    ]
+  },
+  {
+    "id": 123,
+    "title": "API-123  관리자 처리 이력 상세",
+    "route": "GET  /api/v1/admin/audit-events/{audit_id}",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "audit_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ]
+    ]
+  },
+  {
+    "id": 124,
+    "title": "API-124  공통 운영 설정·발행 일정 조회",
+    "route": "GET  /api/v1/admin/operation-settings",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "kind",
+        "string",
+        "선택",
+        "ALL / NEWS_RULE / REPORT_PERIOD / ARTICLE_SOURCE / TERMS."
+      ]
+    ]
+  },
+  {
+    "id": 125,
+    "title": "API-125  기사 출처 수집 중지·재개",
+    "route": "PATCH  /api/v1/admin/article-sources/{source_code}/collection",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "source_code",
+        "string",
+        "필수",
+        "KOTRA_MARKET / KOTRA_BREAKING."
+      ],
+      [
+        "Request Body",
+        "enabled",
+        "boolean",
+        "필수",
+        "다음 신규 수집 실행 사용 여부."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "[팀 합의 필요 DEC-41] 선행 조회에 version/ETag 제공 계약이 없음. 전달 위치·산출 대상·원자적 비교 방식을 확정한 뒤 활성화. 예시 v1은 형식 설명용이며 실제 요청에 하드코딩 금지."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "비공백 필수. 변경 사유. 최대 1000자(설계 제안)."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인 화면에서 동의한 경우 true만 허용."
+      ]
+    ]
+  },
+  {
+    "id": 126,
+    "title": "API-126  알림 약관 버전·응답 조회",
+    "route": "GET  /api/v1/admin/notification-terms",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Query Parameters",
+        "version",
+        "string",
+        "선택",
+        "생략은 현재 버전."
+      ],
+      [
+        "Query Parameters",
+        "user_id",
+        "string",
+        "선택",
+        "회원 응답 필터. 선택."
+      ]
+    ]
+  },
+  {
+    "id": 127,
+    "title": "API-127  관리자 변경·재처리 진행 조회",
+    "route": "GET  /api/v1/admin/operations/{operation_id}",
+    "auth": "ADMIN / SUPER_ADMIN",
+    "fields": [
+      [
+        "Path Parameters",
+        "operation_id",
+        "string",
+        "필수",
+        "대상 식별자. 서버 존재·권한 검증."
+      ]
+    ]
+  },
+  {
+    "id": 128,
+    "title": "API-128  이름으로 계정 후보 조회",
+    "route": "POST  /api/v1/auth/account-recovery/candidates",
+    "auth": "비로그인·복구 컨텍스트",
+    "fields": [
+      [
+        "Request Body",
+        "name",
+        "string",
+        "필수",
+        "trim 후 비공백 이름. 탈퇴 계정 제외."
+      ]
+    ]
+  },
+  {
+    "id": 129,
+    "title": "API-129  선택 계정 아이디 안내 메일",
+    "route": "POST  /api/v1/auth/account-recovery/email",
+    "auth": "비로그인·복구 컨텍스트",
+    "fields": [
+      [
+        "Request Body",
+        "account_token",
+        "string",
+        "필수",
+        "API-128에서 받은 복구 세션 귀속 토큰."
+      ]
+    ]
+  },
+  {
+    "id": 130,
+    "title": "API-130  임시 비밀번호 발급·재발급",
+    "route": "POST  /api/v1/auth/password-recovery/temporary-password",
+    "auth": "비로그인·복구 컨텍스트",
+    "fields": [
+      [
+        "Request Body",
+        "name",
+        "string",
+        "필수",
+        "trim 후 비공백 이름."
+      ],
+      [
+        "Request Body",
+        "email",
+        "string",
+        "필수",
+        "이름과 함께 등록 이메일 정확히 일치해야 함."
+      ],
+      [
+        "Request Body",
+        "action",
+        "string",
+        "필수",
+        "ISSUE / REISSUE. 재발급도 새 값 생성."
+      ]
+    ]
+  }
+]

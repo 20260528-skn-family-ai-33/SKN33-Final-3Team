@@ -32,13 +32,21 @@ for source in [Path(__file__).resolve(), *sorted((notes/'guard').glob('*.py'))]:
     destination.write_bytes(source.read_bytes())
 root = run/'isolated'
 root.mkdir()
-keep = {key:value for key,value in os.environ.items() if key in {'PATH','HOME','LANG','TMPDIR','TMP','TEMP'}}
+# Child-process lock checks need the same dependency paths as this test interpreter.
+dependency_paths = [str(Path(entry).resolve()) for entry in os.environ.get('PYTHONPATH', '').split(os.pathsep)
+                    if entry]
+# Windows socket/asyncio initialization needs SystemRoot even with network disabled.
+keep = {key:value for key,value in os.environ.items()
+        if key.upper() in {'PATH','HOME','LANG','TMPDIR','TMP','TEMP','SYSTEMROOT','WINDIR'}}
 os.environ.clear()
 os.environ.update(keep)
+if os.name == 'nt':
+    os.environ['USERPROFILE'] = str(root.resolve())
 os.environ.update(PYTHONDONTWRITEBYTECODE='1', SHORTNEWS_OFFLINE_ROOT=str(root),
+                  PYTHONUTF8='1',
                   ANONYMIZED_TELEMETRY='False', SCHEDULER_GUARD_LOG=str(run/'scheduler_guard.jsonl'),
                   SCHEDULER_TEST_REPO=str(repo),
-                  PYTHONPATH=os.pathsep.join([str(notes/'guard'),str(repo)]))
+                  PYTHONPATH=os.pathsep.join([str(notes/'guard'),str(repo),*dependency_paths]))
 os.chdir(root)
 sys.path[:0] = [str(notes/'guard'),str(repo)]
 from offline_guard import install

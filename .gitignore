@@ -33,3 +33,4 @@ tmp/
 # 기사 원문·전처리 결과·DB·로그의 기본 실행 폴더
 /backend/app/scheduler/collectors/trade_news/data/
 .env.code-workspace
+runtime/

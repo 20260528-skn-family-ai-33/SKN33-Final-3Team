@@ -1,3 +1,5 @@
 # Preserve snapshot bytes: initialization verifies SHA256 on every platform.
 /data/un_data/*.csv -text whitespace=cr-at-eol
 /data/un_data/scope.json -text
+# The migration contract checks the exact SQL bytes, including line endings.
+/db/mysql/migrations/20261023_admin_news_erd.sql text eol=lf

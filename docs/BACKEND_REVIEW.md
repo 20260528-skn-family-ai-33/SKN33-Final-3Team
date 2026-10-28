@@ -1,0 +1,253 @@
+# 백엔드 검수 기록
+
+## 2026-10-27 최신 main 병합 및 충돌 해결
+
+`feat/36-backend`의 `62cbb67`에 `origin/main`의 `cef015c`(단신속보 PR #32 포함)를 병합했다. 충돌 파일 2개를 양쪽 기능을 보존하는 방식으로 해결했다. 원격 푸시는 실행하지 않는다.
+
+| 직접 조정한 파일 | 이유 |
+|---|---|
+| backend/app/scheduler/jobs/news_load.py | MARKET 출처에만 품목 집계를 적용하는 main 규칙과 기존 HS4·HS6 지원을 결합. 단신 키워드 집계 및 수동 HS 태그 보존 |
+| backend/app/scheduler/main.py | 단신속보 opt-in 등록과 env_path 인자를 유지하며 UN 매월 10일 03:00 KST 유지 |
+| backend/tests/test_news_load.py | MARKET HS4·HS6 중복 집계 방지, 두 단신 출처·기타 출처 제외, 기존 태그 보존을 함께 검증. 관리자 ERD 필수 JSON은 실제 upsert 경로로 생성 |
+| backend/tests/test_un_scheduler_integration.py | 단신속보 활성화 시에도 UN 월간 10일과 단신 일간 03시가 함께 등록되는지 검증 |
+| backend/tests/shortnews_offline/run_tests.py / README.md | Windows 필수 시스템 변수·임시 홈·자식 프로세스 의존성 경로 유지. UTF-8 실행과 짧은 증거 경로 안내. 기존 외부 I/O 차단 유지 |
+| backend/tests/test_db_tls.py | Windows SSL 초기화에 필요한 시스템 변수만 테스트 환경에 보존. DB 인증·설정은 격리 |
+| .gitattributes | 체크섬 검증 대상 SQL 한 파일을 LF로 고정. SQL 내용과 기존 SHA256 계약은 변경하지 않음 |
+| docs/BACKEND_REVIEW.md | 병합 검증 결과와 남은 환경 제약 기록 |
+
+단신속보 수집·적재·분석·워커 및 프론트 소스는 `origin/main`과 동일하게 유지했다. 병합으로 들어온 프론트 파일은 기존 main의 파일이며 별도 기능 변경이 아니다. RDS 마이그레이션·데이터 적재·운영 스케줄러 실행은 하지 않았다.
+
+검증:
+
+- 기존 백엔드 회귀 15개 모듈: **300개 모두 통과**(74.393초). 명령은 아래 이전 절의 회귀 명령과 동일하며 신규 통합 테스트 2개가 추가됐다. main에서 사전 테스트가 합성 입력을 쓰도록 바뀌어 이전 9개 skip도 이번에는 실행됐다.
+- 최종 집중 재검증: `python -B -X utf8 -m unittest backend.tests.test_news_load backend.tests.test_news_erd_compat backend.tests.test_un_scheduler_integration backend.tests.test_db_tls backend.tests.test_admin_news_migration.ContractTest` → **63개 모두 통과**(12.112초). 위 300개와 일부 중복되는 별도 실행이다.
+- 단신속보 전용: `python -B -X utf8 backend/tests/shortnews_offline/run_tests.py --repo . --evidence-dir C:/SKN_AI/SKN33-Final-3Team/tmp/t` → **445 passed, 3 failed, 9 skipped, 4 deselected**(195.10초). 임시 SQLite/Chroma·모의 외부 응답 사용. Windows 환경 보완 전 첫 실행은 417 passed / 31 failed였고, 재실행에서 아래 3건만 남았다.
+- 기존 main의 `test_news_index_migrate.py`에서 남은 실패: `test_overlap_symlink_and_writer_confirmation`, `test_target_symlink_and_scratch_overlap_fail_closed`는 Windows 심볼릭 링크 생성 권한 부족(WinError 1314). `test_lock_contention_does_not_modify_existing_files`는 잠긴 publish.lock 파일을 fingerprint가 읽을 때 PermissionError. 해당 담당자 소스/테스트는 변경하지 않았으며 Linux 환경 재검증이 필요하다. 전체 테스트 통과로 간주하지 않는다.
+- 9개 skip은 실제 MySQL 8개와 기존 스키마 관리자 테스트 1개, 4개 deselect는 실행기가 원래 제외하는 네이티브 워커 테스트다. 실제 RDS·외부 LLM/API·운영 Chroma·프론트 E2E·서비스 배포는 검증하지 않았다.
+- 충돌 인덱스 항목 0개, 이번 직접 조정 파일 `git diff --check` 통과. main에서 그대로 가져온 프론트 3개 파일에는 기존 공백 경고가 있으며 변경하지 않았다.
+- 로그(커밋 제외): `tmp/backend_build/merge-main-backend.log`, `merge-main-focused-final.log`, `merge-main-shortnews-final.log`. 전용 시험 XML: `tmp/t/shortnews-offline-1u_3mo4t/results.xml`.
+
+## 2026-10-27 최종 재검수 및 기능별 커밋 정리
+
+기존 PR 코멘트 대응을 중심으로 HS6 우선 검색, 국가명·숫자 HS 검증, 실패 검색 결과 캐시 제외, 신규·중단 거래 비교, 구독의 불필요한 분기를 정리했다. 이후 재검수에서 뉴스 급증의 평균 0 보정, HS4 기사 적재·집계 누락, 주요 이슈 표시 불일치, 리포트의 0 거래 처리·비교 기간·결과표 재사용 문제를 추가로 수정했다.
+
+현재 변경은 채팅/HS 검색, 무역 변화, 뉴스 급증, HS4 기사 적재, 주요 이슈 표시, 리포트, 검수 문서로 나누어 로컬 커밋한다. 프론트·ML/RAG·HS 벡터 적재 담당 작업은 변경하지 않았고, async_job·추가 DB 구조·운영 데이터 적재도 적용하지 않았다. 원격 푸시는 실행하지 않는다.
+
+최종 회귀 검증 명령:
+
+```powershell
+python -m unittest backend.tests.test_article_counts backend.tests.test_news_load backend.tests.test_news_keywords backend.tests.test_news_embed backend.tests.test_keyword_topic_load backend.tests.test_backend_api backend.tests.test_pr_search_changes backend.tests.test_report_news_regressions backend.tests.test_report_input_paths backend.tests.test_intent_search backend.tests.test_chat_review_regressions backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load backend.tests.test_un_scheduler_integration
+```
+
+- 총 298개: 289개 통과, 사전 파일이 필요한 기존 테스트 9개 건너뜀, 실패 0개(71.564초).
+- 별도 입력 경로 검증 57개 통과: 직접 입력/저장 결과/이전 형식 결과 54개 및 실제 문서 KPI 3개. 원본 스냅샷이 변경되지 않는 것도 확인했다.
+- 직접 MOM 요청의 KPI는 전월 기준 0.819672%로 확인했다. NONE은 비교 계산을 생략하고 CUSTOM은 명시 비교 기간을 검증한다. BOTH 결과는 임의로 수출로 바꾸지 않고 422 안내를 반환한다.
+- 채팅·KPI·추이·순위·변화 분석·시장 비중·리포트 내부 결과표 재사용, 기본 24개월 추이, 윤년/연도 경계, 소유권·만료·종류 검사를 검증했다.
+- PDF·DOCX·XLSX 생성/다운로드, py_compile 및 git diff --check 통과.
+- 최종 로그: tmp/backend_build/final-input-review-regression.log, final-input-matrix.log(커밋 제외).
+
+실제 RDS·프론트 E2E·다중 워커·실제 LLM/운영 Chroma 정확도는 이번 회귀 검증 범위에 포함하지 않았다. 문서 시각 검수도 별도이며, 기존 맑은 고딕의 마이너스 기호 글리프 경고가 남아 있다. 보류한 실행기 전체 조회 및 관리자 기사 목록의 리포트 전체 조회는 변경하지 않았다. 아래 기록은 각 작업 시점의 결과이며 현재 최종 검증 범위와 커밋 상태는 이 절을 따른다.
+
+## 2026-10-27 HS6 우선 검색 및 후속 PR 5건 수정
+
+| 파일 | 수정 이유 |
+|---|---|
+| backend/app/api/reference.py | 화면 HS4 검색을 유지하고 채팅 HS6 우선 검색 분리. HS6가 모호하면 HS4 확인. 실패 결과 캐시 제외 |
+| backend/app/api/hs_vectors.py | 같은 컬렉션의 depth=4/6 검색 및 질의 임베딩 재사용 |
+| backend/app/api/chat.py | 새 채팅 검색 경로와 HS4 확인 안내 연결 |
+| backend/app/api/chat_slots.py | 정규화 국가명·유일 부분 일치, 모호한 국가 재입력, 접두어 없는 사전 등록 HS4/HS6 허용. 연도/금액 오인 방지 |
+| backend/app/api/intent.py | 접두어 없는 코드 원문도 슬롯으로 추출하도록 명시 |
+| backend/app/api/search_cache.py | cache_if 조건으로 warnings 결과를 저장하지 않음 |
+| backend/app/api/routes.py | 수집 완료된 현재/비교 월의 거래 합집합 비교. 신규 진출 및 거래 중단 누락 수정 |
+| backend/app/api/reports.py | 실행 불가능한 구독 분기를 제거하고 저장 관심을 항상 사용 |
+| backend/tests/test_pr_search_changes.py | 신규 15개 회귀: MOM/YOY 신규·중단, 미수집/임계값, 국가명, 숫자 코드, HS6/HS4 선택, 캐시 복구, 구독, 실제 임시 Chroma 필터 |
+| docs/BACKEND_API.md / 본 문서 | 검색·누락 거래 규칙과 실행 결과·제약 명시 |
+
+검증 명령과 결과:
+
+```powershell
+python -m unittest backend.tests.test_pr_search_changes backend.tests.test_intent_search backend.tests.test_chat_review_regressions
+# 43개 통과, 31.703초
+python -m unittest backend.tests.test_backend_api backend.tests.test_intent_search backend.tests.test_chat_review_regressions backend.tests.test_pr_search_changes backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load backend.tests.test_un_data_refresh backend.tests.test_un_scheduler_integration
+# 168개 통과, 74.047초 (기존 153개 + 신규 15개)
+python -m compileall -q backend/app/api backend/tests/test_pr_search_changes.py
+git diff --check
+# 둘 다 통과. Git의 LF→CRLF 변환 안내는 있음.
+```
+
+실행은 번들 Python과 tmp의 검증 의존성으로 수행했다. SQLite·고정 의도 응답·모의 OpenAI 및 임시 Chroma를 사용했다. 로그는 tmp/backend_build/hs6-pr-targeted.log와 hs6-pr-full.log에 보관한다. 실제 RDS 쓰기, 실제 LLM의 별칭/숫자 슬롯 추출 정확도, 운영 Chroma HS6 적재 여부·전체 품목 검색 정답률, 프론트 E2E는 검증하지 않았다. HS6 의미 검색용 벡터는 기존 HS 담당 적재 작업으로 준비해야 한다. 운영 재적재·DDL·신규 테이블·async_job 도입은 하지 않았다. 보류한 실행기 폴링·관리자 기사 목록의 전체 리포트 조회는 변경하지 않았다. 이번 수정은 커밋/푸시하지 않았다.
+
+## 2026-10-27 추가 재검수 5건 수정
+
+- 대화 조건 보존: NO_DATA/OUT_OF_SCOPE와 모델 연결 대기 안내는 마지막 성공 조건을 유지한다. 국가·품목 전체 범위 지정과 컨텍스트 해제는 별도 기존 동작으로 유지한다.
+- 순위 대상: 의도 슬롯에 ranking_group(COUNTRY/HS6)을 추가하고 서버 검증 후 집계 group으로 전달한다. 구분이 없으면 재입력을 안내한다.
+- 복수 품목: 각 표현의 선택을 별도 clarification으로 진행하고 선택 결과를 기존 chat_message 실행 JSON에 누적한다. 전체 선택 완료 전에는 조회하지 않는다. 품목별 통계 표와 금액을 반환한다. 후보 없음/직접 선택/지난 clarification 재전송도 검증한다.
+- 전년 수입 비교: previous_year_import_usd를 import_summary의 검증된 월 기준으로 조회한다. 명시 비교 시 수출입 방향에 맞는 전년 금액·증감액·증감률을 표시한다. 검증된 누락 거래=0, 미검증=null, 0 분모의 증감률=null 규칙을 유지한다.
+- HS 신뢰도: DB 검증을 통과한 중복 없는 코드로 거리와 순위 차를 계산한다. 제외된 벡터 ID의 점수로 다른 후보의 신뢰도를 올리지 않는다.
+
+수정 파일: chat.py(조건 보존·선택 누적·결과), intent.py/chat_slots.py(순위 슬롯·검증), trade.py/results.py(전년 수입 금액·표 이름), reference.py(후보 신뢰도), contracts.json(API-38 반복 선택 안내), intent_fixtures.py/test_intent_search.py(기존 테스트 계약 갱신), test_chat_review_regressions.py(신규 10개 회귀), BACKEND_API.md(프론트 연동 계약), 본 문서(검수 기록).
+
+검증 명령:
+
+```powershell
+python -m unittest backend.tests.test_backend_api backend.tests.test_intent_search backend.tests.test_chat_review_regressions backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load backend.tests.test_un_data_refresh backend.tests.test_un_scheduler_integration
+python -m compileall -q backend/app/api backend/tests/test_chat_review_regressions.py backend/tests/test_intent_search.py backend/tests/intent_fixtures.py
+git diff --check
+```
+
+검증 결과: 기존 143개와 신규 회귀 10개, 총 153개가 55.017초에 모두 통과했다. compileall 및 git diff --check도 통과했다(기존 hs_vectors.py 줄바꿈 변환 안내만 있음). 초기 대상 테스트에서는 새 테스트의 쿼리 필드명을 잘못 지정해 1건 실패했으며, 계약의 period_start/period_end로 바로잡은 뒤 전체 테스트를 통과했다.
+
+실행 로그는 로컬 tmp/backend_build/five-fixes-full.log에 보관한다. 이번 검증은 SQLite와 고정 LLM 응답을 사용한다. 실제 LLM의 새로운 ranking_group 추출 정확도, 실제 RDS 쓰기·다중 worker 경합, 프론트 반복 선택/복수 표 표시 E2E는 검증하지 않았다. async_job·신규 DB 테이블·컬럼을 추가하지 않았다. 사용자 요청에 따라 수정 내용을 기능별 로컬 커밋으로 정리하며 푸시는 하지 않는다.
+
+브랜치: `feat/36-backend`. PR 코멘트 및 재검수 수정은 기능별 로컬 커밋으로 정리하며 푸시는 하지 않는다. RDS 마이그레이션은 적용하지 않았다. 기존 수집·적재 코드와 ML/RAG 모델 구현은 변경하지 않았다. 승인받은 HS 분류 정보로 기존 임베딩 적재기를 재사용해 로컬 Chroma 검색 데이터를 준비했다.
+
+## 생성 파일과 이유
+
+| 파일 | 생성 이유 |
+|---|---|
+| `backend/.env.api.example` | 비밀번호 없는 API 설정 예시 |
+| `backend/app/api/__init__.py` | API 패키지 선언 |
+| `backend/app/api/accounts.py` | 회원가입·로그인·관심 버전 관리·비밀번호 변경 |
+| `backend/app/api/admin.py` | 회원/기사 관리 및 변경 전후 감사 기록 |
+| `backend/app/api/application.py` | HTTP 서버·요청 검증·인증 적용·공통 오류·OpenAPI |
+| `backend/app/api/chat.py` | 대화 저장·제한적 조건 파싱·관심 적용 확인·비동기 답변 |
+| `backend/app/api/common.py` | 오류·날짜·비율·직렬화·마스킹 공통 함수 |
+| `backend/app/api/config.py` | 로컬 수집 설정과 분리한 RDS/TLS/API 설정 |
+| `backend/app/api/contracts.json` | v0.18의 API 번호·경로·입력·인증 계약 |
+| `backend/app/api/database.py` | 기존 테이블 reflection과 트랜잭션 조회/저장 도구 |
+| `backend/app/api/event_delivery.py` | 확정 알림 사건의 동의·관심·차단 검증 및 중복 없는 전달 |
+| `backend/app/api/files.py` | 저장 결과의 PDF·DOCX·XLSX와 차트 생성 |
+| `backend/app/api/integrations.py` | ML/RAG/의도 추출 담당자용 인터페이스 |
+| `backend/app/api/jobs.py` | 기존 메시지·report JSON을 이용한 멱등성·잠금·재시작 복구, 최대 시도 제한, PK 구간 조회(async_job 및 실행 상태 파일 미사용) |
+| `backend/app/api/news.py` | 기사 검색·노출 필터·차단 키워드·환율 조회 |
+| `backend/app/api/notifications.py` | 약관·수신 설정·알림함·미확인 수·팝업 확인 |
+| `backend/app/api/reference.py` | HS·국가·지역·키워드 기준정보 조회 |
+| `backend/app/api/hs_vectors.py` | 기존 Chroma HS4 검색과 OpenAI 질의 임베딩 어댑터 |
+| `backend/app/api/reports.py` | 조건 확인·리포트 스냅샷·목록/파일·구독 저장 |
+| `backend/app/api/results.py` | 본인 소유 결과 스냅샷과 표 조회 |
+| `backend/app/api/routes.py` | API 번호별 실제 서비스 연결 및 미확정 기능 차단 |
+| `backend/app/api/runtime_schema.py` | 앱 전용 추가 저장소 7개의 정의 |
+| `backend/app/api/schemas.py` | 복합 입력 DTO 및 형식 검증 |
+| `backend/app/api/security.py` | bcrypt·서버 세션·CSRF·역할·요청 제한 |
+| `backend/app/api/subscriptions.py` | 검증된 새 통계/기사 집계를 읽는 구독 발행 트리거 |
+| `backend/app/api/trade.py` | 수출입 KPI·추이·순위·비중·저장 일회성 플래그 조회 |
+| `backend/app/api/un_market.py` | UN 월/연·CIF/FOB 분리 조회 및 비교 |
+| `backend/app/api/worker.py` | 대화/리포트 작업 실행·재시도·구독 트리거 반복 |
+| `backend/app/templates/reports/layout.json` | 첨부 PDF에서 반영한 리포트 섹션/스타일 정의 |
+| `backend/app/templates/reports/summary.docx` | 첨부 요약보고서의 결재/본문 표를 보존한 치환용 템플릿 |
+| `backend/main.py` | uvicorn 진입점 |
+| `backend/migrations/036_backend_api.sql` | 기존 원천 테이블을 바꾸지 않는 앱 저장소 DDL |
+| `backend/requirements-api.txt` | API/문서 생성/테스트 실행 의존성 분리 |
+| `backend/scripts/check_api_schema.py` | 실제 DB에 쓰지 않는 연결/준비 상태 조회 |
+| `backend/scripts/create_api_admin.py` | 명시 실행 시에만 최초 최고 관리자 생성 |
+| `backend/scripts/sync_hs_vectors.py` (제거됨) | 초기 로컬 검증용 중복 경로였으며, 후속 리뷰에서 HS 담당 hs_code_embed 작업으로 일원화 |
+| `backend/tests/api_support.py` | SQLite 테스트 DB/샘플 자료 구성 |
+| `backend/tests/fixtures/api_schema.json` | RDS 컬럼 구조의 검증용 사본(실제 행 데이터 없음) |
+| `backend/tests/test_backend_api.py` | 인증·권한·소유권·통계·구독·알림·리포트·작업 통합 테스트 |
+| `docs/BACKEND_API.md` | 실행·DB/담당자 인계·명세 충돌·제한 설명 |
+| `docs/BACKEND_API_STATUS.md` | 130개 API 번호의 구현/보류/삭제 상태 |
+| `docs/BACKEND_REVIEW.md` | 요청한 생성 파일·이유·명령 결과·미검증 사항 정리 |
+
+기존 파일 변경: `.gitignore`에 `runtime/`을 추가했다. 로컬 `.env`는 API 전용 RDS 설정을 사용하며 Git에서 제외한다. 기존 `MYSQL_*` 수집 설정은 유지한다.
+
+프론트 파일과 API 클라이언트 테스트는 이번 변경에서 제외했다. 실제 화면·API 클라이언트 연결은 프론트 담당자 범위이며 백엔드 연동 계약만 문서로 제공한다.
+
+## 실행 명령과 결과
+
+| 명령/작업 | 결과 |
+|---|---|
+| `git status --short`, `git branch --show-current` | feat/36-backend 확인, 기존 추적 파일 변경은 .gitignore |
+| `git show origin/feat/33-frontend-screens:...` | PR #34 관련 프론트 코드의 mock store/OAuth 흐름 확인 |
+| openpyxl / python-docx / pypdf로 첨부 문서 추출 | API 계약·요구사항·화면·템플릿 대조 |
+| `pip install --target tmp/backend_build/deps ...` | 전역 Python을 바꾸지 않고 API/차트 검증 의존성 설치 |
+| `python -m backend.scripts.check_api_schema` | RDS TLS 인증 연결 성공; 한글 HS 2건·국가 249개·무역 최신월 2026-08·기사 조회 성공; 빈 환율은 UNAVAILABLE |
+| `python -m unittest backend.tests.test_backend_api -v` | PR 검수 회귀 포함 47개 통과; async_job 없는 SQLite DB에서 실행 |
+| `python -m compileall -q ...` | 새 Python 모듈 컴파일 성공 |
+| `git diff --check` | 공백 오류 없음 |
+| `pdftoppm ... report-test.pdf ...` | 생성 PDF 6쪽 렌더링·육안 확인 |
+| `render_docx.py report-test.docx ...` | LibreOffice 미설치로 렌더링 실패. DOCX ZIP/표/치환 및 예시값 제거는 별도 확인 |
+
+초기 테스트에서 발견한 가입 인자 충돌, 공개 인증의 CSRF 처리, RDS 한글 HS 검색 collation 충돌을 수정했다. Windows 샌드박스에서 TestClient 이벤트 루프의 로컬 소켓이 막혀 동일한 SQLite 테스트를 권한 확장 실행했다.
+
+## PR 코멘트 반영 (⑩ 제외)
+
+| 항목 | 수정 및 검증 |
+|---|---|
+| ① | 최신 완료 배치가 보장하는 월의 누락 거래는 0; 실패/진행 중/미수집 월은 계속 차단. API-19/20/21/28 및 채팅 회귀 테스트 |
+| ②~④ | 긴 국가명 우선·겹친 구간 제외, AI/IT 등 모호한 영문 코드 제외, 월 표기·연도 범위·같은 연도 월 범위 분리, 연도/금액 단위 제외와 HS 1901~2100 허용 |
+| ⑤·⑭ | Store 생성 전 오류의 기본 단계, 메인 반복 오류 복구, 실제 삭제된 대상만 무시하고 내부 NOT_FOUND는 실패 처리 |
+| ⑥ | 신뢰 프록시의 전달 IP만 사용, 이메일/IP 제한 분리, 위조/잘못된 헤더 및 여러 이메일 회귀 테스트 |
+| ⑦ | DB 이름 정확 일치 후 실제 Chroma 후보 검색. HS2 96개+HS4 1,228개 적재, 재실행 추가 0개. 회원/실적 데이터 전송 없음 |
+| ⑧ | 알림 SQL 필터·COUNT·페이지 LIMIT, 페이지 기사 일괄 조회. 배지 COUNT 추가 질의 1개(요청 캐시 준비 후), 숨김/차단/배열 기사 연결 회귀 테스트 |
+| ⑨ | Store 캐시로 검증 월·최신 공개월·데이터 버전 재사용. 스케줄 회차는 새로 확인 |
+| ⑩ | 요청대로 관리자 기사 영향 리포트 계산 수정 보류. admin.py 변경 없음 |
+| ⑪ | report.content_json._execution에 실행 상태 저장. 다른 로컬 경로의 워커·상태 JSON 없는 기존 대기 행 재개 검증 |
+| ⑫ | 최초 포함 기본 3회 상한. 상한 도달 시 FAILED/retryable=false, 이후 재실행 없음 |
+| ⑬ | 기존 테이블의 상태·재시도/만료 시각을 SQL로 거른 뒤 후보 최대 100개 조회. 완료 이력 1,000건 뒤 작업도 첫 조회에서 발견; 잠긴 후보 건너뛰기 및 만료 작업 재확인 검증 |
+| fx_daily | 통화별 최근 2개 영업일 일괄 조회, 100단위 통화·주말 경계·빈 통화 회귀 테스트, 실제 RDS HTTP 200 확인 |
+
+추가 검증 명령은 `python -m unittest backend.tests.test_backend_api backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load -v`이며 총 93개(47+5+41)가 통과했다. 테스트용 임시 폴더와 의존성은 tmp/ 아래에 두었다. `python -m backend.scripts.sync_hs_vectors`는 첫 실행 1,324개 추가, 두 번째 실행 추가 0개였다. RDS 환율 HTTP 조회는 USD/EUR/CNY/JPY/GBP 모두 AVAILABLE이고 8,557건을 유지했다. MySQL 알림 필터 SELECT는 실데이터 변경 없이 실행했다. 관련 기록은 로컬 tmp/backend_build/review-tests-full.log, review-rds-check.json, review-hs-search.json에 있다(커밋 제외).
+
+추가 검수에서 채팅 기사 기간 필터, 기사 조회의 무역 통계 의존성, 미발행 분기 복구를 수정했다. 이전 async_job 기반 되묻기 NULL 오류는 해당 테이블 의존성을 제거하는 방식으로 대체했다. 테스트는 질문 중복 없이 되묻기 재개, 삭제된 질문 미실행, 재시작·만료 실행권 복구, 이전 워커의 결과 저장 거부, 회차별 즉시 재시도/DELAYED, 완료 저장 직후 DB 롤백 복구를 포함한다. 실제 RDS 쓰기·동시 워커 검증을 대체하지 않는다.
+
+## 재검수 후 추가 수정 (2026-10-27)
+
+- `chat.py`: 단위의 끝과 조사를 구분해 `HS 3304 일본 수출`에서 3304가 누락되지 않도록 했다. 쉼표로 나열한 `1901,2100`은 코드로, 천 단위 금액·소수·연도·금액 단위가 붙은 숫자는 비코드로 처리한다.
+- `jobs.py`: 기존 chat_message/report에서 실행 가능한 상태와 시각을 먼저 SQL로 필터링하고 후보 수를 제한한다. 완료 메시지 1,000건 뒤의 신규 작업이 첫 claim에서 선택된다. 아직 시각이 오지 않은 리포트 재시도는 후보 수를 소모하지 않는다. 잠긴 후보 이후 작업과 오래된 만료 작업도 계속 확인한다. async_job, 새 테이블/컬럼, 운영 DDL은 추가하지 않았다.
+- `worker.py`: 구독 예약 실패와 작업 실행 실패의 예외 처리를 분리했다. 구독 예약이 계속 실패해도 채팅·리포트 실행은 진행하며 예약만 5초 후 재시도한다. `--once`는 작업 실행을 한 번 시도한 뒤 예약 오류도 실패 종료로 알린다.
+- `test_backend_api.py`: HS 경계 사례, 완료 이력/미래 재시도/잠긴 후보/만료 작업, 일시적·지속적 예약 장애 및 작업 실행 장애 회복을 검증한다. 테스트 DB는 async_job을 생성하지 않는다.
+- `.env.api.example`, `BACKEND_API.md`: API_JOB_SCAN_SIZE가 전체 이력 수가 아닌 실행 가능한 후보 수의 상한임을 명시하고 스케줄러 장애 처리 및 DB JSON 스캔 비용의 한계를 기록했다.
+
+RDS에서는 읽기 전용 트랜잭션으로 새 채팅·리포트 후보 SELECT 두 개의 MySQL 실행 성공을 확인했다. 당시 반환 후보는 각각 0건이며, 실제 선점·UPDATE·운영 작업 실행은 하지 않았다. 채팅 JSON 필터의 대규모 DB 스캔 비용까지 제거한 것은 아니므로 기존 테이블 인덱스와 부하는 별도 검증 대상이다.
+
+최종 검증: `python -m unittest backend.tests.test_backend_api backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load` — **101개(55+5+41), 63.178초, OK**. 기존 93개에 회귀 테스트 8개를 추가했다. `python -m compileall -q backend/app/api backend/tests/test_backend_api.py`와 `git diff --check`도 통과했다. 전체 실행 기록은 `tmp/backend_build/fix-three-full-tests.log`에 있다(커밋 제외). 검증한 코드를 기능별로 커밋하며 푸시는 별도 요청 전까지 하지 않는다.
+
+## 후속 리뷰: 의도 슬롯·검색 비용·후보 표시·적재 담당 분리
+
+수정 파일과 이유:
+
+- `backend/app/api/intent.py` (신규): IntentProvider의 OpenAI Structured Outputs 구현. 기본 gpt-4.1-mini, store=False, temperature=0, timeout 10초, 자동 재시도 없음. intent/국가/품목 표현/기간/방향을 단일 호출로 추출한다.
+- `backend/app/api/chat_slots.py` (신규): 슬롯의 원문 근거·국가 사전·공개 기간 검증. 모호한 두 글자 국가 약어는 버리고, 유효하지 않은 기간/품목은 재입력을 안내한다. HS 코드는 추론하지 않고 명시된 코드를 검증한다.
+- `backend/app/api/chat.py`: 정규식 의도 파서와 앞 세 단어 검색을 제거. 메시지 JSON의 추출 슬롯을 되묻기 후 재사용하고, 후보 없음/오추천 시 API-12 직접 선택으로 재개할 수 있게 했다.
+- `backend/app/api/search_cache.py` (신규), `database.py`, `hs_vectors.py`: 프로세스별 TTL/LRU 상한 및 동일 키 동시 요청 합치기. 검색 결과/질의 임베딩 캐시, 임베딩 timeout 축소.
+- `backend/app/api/reference.py`: 검색어 길이 검증, 확신도와 수동 탐색 경로, ROOT→HS2→HS4→HS6 지원. 실제 벡터 색인의 오추천 자체를 교정한 것은 아니다.
+- `backend/app/api/application.py`: API-11에 신뢰 프록시 처리 후 IP 제한. 기존 api_rate_limit 사용, 우회용 메모리 제한은 추가하지 않았다.
+- `backend/app/api/contracts.json`: API-11/12 응답·탐색 입력 설명과 API-38 직접 선택 hs_item 입력 확장.
+- `backend/app/api/integrations.py`, `backend/.env.api.example`: 주입 가능한 IntentProvider 계약과 모델/timeout/검색 제한 설정.
+- `backend/scripts/sync_hs_vectors.py` (삭제), `backend/requirements-api.txt`: 중복 적재 경로와 그 경로만 필요로 하던 pandas API 의존성 제거. 기존 HS 담당 적재기는 변경하지 않았다.
+- `backend/tests/test_backend_api.py`, `backend/tests/intent_fixtures.py` (신규), `backend/tests/test_intent_search.py` (신규): 기존 규칙 파서 단위 검사를 제거하고 고정 LLM 응답 기반 통합 회귀, 서버 검증·직접 선택·캐시/동시성/IP 제한·SDK 호출 계약을 검증한다.
+- `docs/BACKEND_API.md`, `docs/BACKEND_API_STATUS.md`, 본 문서: 변경된 계약·운영 제약·프론트 담당자 작업 범위 기록.
+
+실제 연결 점검:
+
+- gpt-4.1-mini 공개 예시 3개 검증: SK/TV는 국가 아님, 2024 대비는 비교 연도, 문장 뒤쪽 라면 품목 추출. 초기 점검에서 비교 질문의 RANKING 오분류와 회사 국적 추론이 있어 프롬프트를 보완했다. 최종 점검 3개는 의도/핵심 슬롯 기대값을 통과했다. 대표 사례 점검이며 일반 질문 정확도를 보증하지 않는다.
+- RDS 읽기 전용 + 기존 Chroma에서 라면/선박/김치 후보를 조회했다. 모두 confidence=LOW, requires_selection=true, 같은 검색어 재호출 결과 동일. 재호출은 각 0.001초 미만이었다. 원래 잘못된 후보가 일부 남아 있으며 재색인·품질 평가는 HS 담당 영역이다.
+- API-12 내부 조회로 HS2 96개, HS2 19의 HS4 5개, HS4 1902의 HS6 5개를 확인했다.
+- RDS의 api_rate_limit은 아직 없다. 요청 제한이 추가된 API-11을 운영 HTTP 경로에서 사용하려면 기존 앱 저장소 보완안 적용이 필요하다. 이번 작업은 DDL/적재/회원 데이터 쓰기를 실행하지 않았다.
+- PR #34(main)의 Hs4Search는 로컬 예시 배열 검색이며 API 연동이 없다. 프론트 파일/main 병합은 하지 않았고, 2자 이상 AND 300ms 입력 대기·응답 취소·비슷한 후보 표시·분류 탐색 연결은 프론트 담당자 전달 사항으로 정리했다.
+
+최종 명령 및 결과:
+
+- `python -m unittest backend.tests.test_backend_api backend.tests.test_intent_search backend.tests.test_hs_code_embed backend.tests.test_ecos_collect backend.tests.test_fx_daily_load`: **117건(53+18+5+41), 85.804초, OK**. 폐기한 정규식 파서 검사 2건을 제거하고 슬롯/검색 회귀 18건을 추가했다. LLM/임베딩은 모의 응답이며 실제 RDS 쓰기는 하지 않는다.
+- `python -m compileall -q backend/app/api backend/tests/test_backend_api.py backend/tests/test_intent_search.py backend/tests/intent_fixtures.py`: 통과.
+- `git diff --check`: 통과(일부 파일 LF→CRLF 안내만 존재).
+- 로컬 점검 스크립트 `tmp/backend_build/intent_live_check.py`: 최종 프롬프트 실제 예시 3건 검증 통과. `hs_review_live_check.py`: 기존 벡터의 낮은 확신도·캐시·읽기 전용 분류 탐색 확인.
+- 기록: `tmp/backend_build/intent-review-full-tests.log`, `intent-live-check-final.log`, `hs-review-live-check.log` (모두 커밋 제외).
+
+미검증/후속 작업: 실제 프론트 API 연동과 300ms 동작 E2E, api_rate_limit 준비 후 RDS HTTP 요청 제한 쓰기, 여러 API 프로세스의 부하·분산 캐시, 전체 자연어/HS 검색 골든셋 정확도와 임계값 조정, 운영 Chroma 배포·색인 범위 및 담당 확정. 이번 수정은 커밋·푸시하지 않았다.
+
+## 테스트하지 못한 부분
+
+- RDS에 추가 DDL 적용 후 회원/세션/리포트 쓰기. 실제 RDS 데이터와 스키마는 읽기만 했다.
+- MySQL JSON CHECK·generated column·고유 인덱스와 동시 worker/트랜잭션 경합·부하.
+- PR #34 화면 전체에 API를 연결한 브라우저 E2E. 프론트 변경은 이번 범위에서 제외했다.
+- ML/RAG 본문 생성 및 대규모 자연어 해석 정확도 평가, 기사 급증/주요 이슈 판정 생산자, OAuth/메일/복구·미정 정책 API.
+- DOCX를 Word/LibreOffice에서 펼친 페이지별 레이아웃 및 여러 길이의 실데이터 리포트 디자인.
+- HTTPS 운영 쿠키·프록시·공유 파일 볼륨·장기 보존/정리·실제 운영 스케줄.
+- 실제 프록시/LB의 헤더 덮어쓰기 및 네트워크 접근 제한, RDS 다중 워커 경합·부하, MySQL 알림 UPDATE 쓰기는 미검증이다. 완료 이력 때문에 폴링을 반복하는 지연은 제거했지만 채팅 JSON 필터의 DB 스캔 비용과 인덱스 효과는 대규모 부하 검증이 필요하다.
+- HS 검색은 코드/대표 품목어 실제 확인과 모의 회귀를 수행했다. 전체 생활어 정답률·임계값 튜닝, 다른 서버에 Chroma 배포, HS6/HS10 전체 벡터 적재는 미검증/범위 밖이다. PDF/DOCX는 계속 공유 저장소가 필요하다.
+- 실제 후보는 화장품→3304 1순위, 올리브유→1509 1순위였다. 스킨케어는 3304가 3순위이며 의약품 등 부정확한 후보도 있어 자동 확정하지 않고 사용자 선택을 받는다. 검색 연결 성공과 품목 분류 정답률 검증을 구분한다.
+
+## 충돌과 준비 필요 사항
+
+90개 경로의 처리 코드와 29개 보류 경로를 구분한다. 119개 등록 경로 전체가 완성·운영 검증된 상태는 아니다. 현재 코드는 추가 앱 테이블 7개를 참조하지만, 7개 분리 구조가 팀의 확정 DB 설계는 아니다. 기존 테이블 통합 대안과 추가 저장 정보는 [BACKEND_API.md](BACKEND_API.md)의 DB 재검수 항목을 참조한다. 리포트/주기/약관 옵션도 준비해야 한다. 부분 Conditions/기간 프리셋 DEC-28, OAuth 계약, 실제 기사 출처 코드, PDF/DOCX 파일 저장 구조, 탈퇴·복구·관리자 검수 정책의 차이는 같은 문서에 정리했다. API별 목록은 [BACKEND_API_STATUS.md](BACKEND_API_STATUS.md)를 참조한다.

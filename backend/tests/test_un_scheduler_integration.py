@@ -31,9 +31,27 @@ class SchedulerIntegrationTest(unittest.TestCase):
         j=jobs['un_data_monthly'];self.assertEqual(j.max_instances,1)
         self.assertEqual(j.args,(self.state,Path('custom-scope'),Path('custom-env')))
         now=datetime(2026,10,16,tzinfo=scheduler.KST)
-        self.assertEqual(j.trigger.get_next_fire_time(None,now).isoformat(),'2026-11-01T03:00:00+09:00')
+        self.assertEqual(j.trigger.get_next_fire_time(None,now).isoformat(),'2026-11-10T03:00:00+09:00')
         self.assertEqual(jobs['hs_code_embed'].func,scheduler.embed.run)
         self.assertEqual(jobs['hs_code_refresh'].func,scheduler.hs_refresh_job)
+
+    def test_shortnews_enabled_keeps_un_tenth_day_schedule(self):
+        env = self.state / 'scheduler.env'
+        env.write_text('SHORTNEWS_DAILY_ENABLED=true\n', encoding='utf-8')
+        with mock.patch.dict('os.environ', {}, clear=True):
+            s = scheduler.build_scheduler(self.state, env_path=env)
+        jobs = {j.id: j for j in s.get_jobs()}
+        self.assertEqual(len(jobs), 13)  # 일시중지된 trade_news_daily 등록도 포함
+        self.assertIn('shortnews_startup', jobs)
+        now = datetime(2026, 10, 9, 4, tzinfo=scheduler.KST)
+        for name in ('un_data_monthly', 'shortnews_daily'):
+            self.assertEqual(jobs[name].trigger.get_next_fire_time(None, now).isoformat(),
+                             '2026-10-10T03:00:00+09:00')
+        after = datetime(2026, 10, 10, 4, tzinfo=scheduler.KST)
+        self.assertEqual(jobs['un_data_monthly'].trigger.get_next_fire_time(None, after).isoformat(),
+                         '2026-11-10T03:00:00+09:00')
+        self.assertEqual(jobs['shortnews_daily'].trigger.get_next_fire_time(None, after).isoformat(),
+                         '2026-10-11T03:00:00+09:00')
 
     def test_no_checkpoint_skips_without_api_or_db(self):
         with mock.patch.object(job,'execute_once') as execute:
