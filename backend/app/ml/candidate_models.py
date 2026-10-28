@@ -83,13 +83,20 @@ def _snapshot_frame(path):
 
 
 def _month_frame(month, cache_dir, engine=None):
-    """수집 원본으로 전체 피처를 만든다. 이번 수집 월이 학습 자료에 없으면 멈춘다."""
+    """수집 원본으로 피처를 만들어 그 달 시점까지로 자른다. 이번 수집 월이 학습 자료에 없으면 멈춘다.
+
+    누락 월 자동 복구는 지난달을 나중에 다시 돌리므로, 원본에 그 뒤의 달이 있어도 기준월은 month까지,
+    정답은 미래 12개월이 month 안에 끝나는 기준월만 남긴다 (과거 월 이름으로 미래 자료를 학습하지 않게).
+    """
     ds, data, source = artifacts.load_training_data(cache_dir=cache_dir, engine=engine)
     del data
     if pd.Timestamp(source["raw_period_end"]) < month:
         raise ValueError(f"수집 원본이 {source['raw_period_end']}까지만 있어 {month.date()} 수집분으로 학습할 수 없습니다")
-    frame = ds[[*needed_columns(), "exp_12m"]]  # exp_12m: 2단계 모델의 최신 예측에 함께 저장하는 최근 12개월 수출액
-    frame.attrs = {"source": source}
+    target = F.A_TARGETS[F.HORIZON][0]
+    # exp_12m: 2단계 모델의 최신 예측에 함께 저장하는 최근 12개월 수출액
+    frame = ds.loc[ds.anchor <= month, [*needed_columns(), "exp_12m"]]
+    frame.loc[frame.anchor > month - pd.DateOffset(months=F.HORIZON), target] = np.nan
+    frame.attrs = {"source": {**source, "as_of_month": str(month.date())}}
     return frame
 
 

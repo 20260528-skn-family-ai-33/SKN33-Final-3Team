@@ -160,6 +160,14 @@ class MonthlyRunTest(unittest.TestCase):
         files.assert_called_once()
         self.assertEqual(load.call_count, 1)
 
+    def test_past_month_does_not_learn_later_data(self):
+        # 누락 월 복구: 원본은 2026-02까지 있는데 2025-12 모델을 만든다
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-02-01")):
+            self.run_month("2025-12-01")
+        record = C.read_json(self.out / "lightgbm_202512.registry.json")
+        self.assertEqual(record["train_end"], "2024-12-01")  # 정답의 미래 12개월이 2025-12 안에 끝나는 기준월까지
+        self.assertEqual(record["data_info"]["input_snapshot"]["as_of_month"], "2025-12-01")
+
     def test_refuses_month_missing_from_data(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-01-01")):
             with self.assertRaises(ValueError):
