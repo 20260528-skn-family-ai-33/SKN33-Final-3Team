@@ -38,7 +38,7 @@ TIMEOUT = 60
 
 COMTRADE_URL = "https://comtradeapi.un.org"
 COMTRADE_KOREA = 410
-ENV_KEY = "COMTRADE_API_KEY"
+ENV_KEY = "UN_COMTRADE_API_KEY"
 
 
 def wb_get(path, **params):

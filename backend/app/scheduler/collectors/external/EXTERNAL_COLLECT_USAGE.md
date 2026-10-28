@@ -25,7 +25,7 @@ python -m pip install -r backend/requirements.txt
 저장소 루트 `.env`에 아래 값을 넣습니다. 없으면 `.env.sample`을 복사해 만듭니다.
 
 ```
-COMTRADE_API_KEY=...   # comtradeplus.un.org 무료 키. 없으면 Comtrade만 건너뜀
+UN_COMTRADE_API_KEY=...   # comtradeplus.un.org 무료 키. 없으면 Comtrade만 건너뜀
 MYSQL_HOST=...         # batch_run 기록용. 연결이 안 돼도 수집은 계속됨
 ```
 
@@ -63,7 +63,7 @@ data/external/
    새 판을 집계하면 지난 판 zip은 지웁니다.
 2. WDI: 2022년~작년 지표를 다시 받습니다 (과거 값도 수정되므로 덮어씀). 이전 기간의 `wdi_*.csv`는 지웁니다.
 3. Comtrade: BACI 마지막 연도(연결 연도) ~ 작년을 받습니다. 연결 연도는 BACI 다음 해의 성장률을 같은 Comtrade끼리 비교하는 데만 씁니다.
-   BACI가 없거나 3년 넘게 늦으면 호출 한도 때문에 최근 2년만 받습니다. `.env`에 `COMTRADE_API_KEY`가 없으면 건너뜁니다.
+   BACI가 없거나 3년 넘게 늦으면 호출 한도 때문에 최근 2년만 받습니다. `.env`에 `UN_COMTRADE_API_KEY`가 없으면 건너뜁니다.
    신고국별 응답을 `data/external/comtrade/raw/<연도>/<국가코드>.json`에 남겨, 한도 초과로 끊겨도 다음 실행은 못 받은 나라만 받습니다.
    이미 받은 나라의 수정 신고까지 반영하려면 그 연도의 `raw/<연도>/`를 지우고 실행합니다.
    BACI 새 판이 나오면 연결 연도보다 앞선 해의 `comtrade_imports_<연도>.csv`와 `raw/<연도>/`를 지웁니다.
@@ -90,7 +90,7 @@ python backend/app/scheduler/collectors/external/external_collect.py wdi
 # 2) BACI: 받아 둔 HS22 zip을 집계합니다. (압축 해제 불필요)
 python backend/app/scheduler/collectors/external/external_collect.py baci data/external/baci/BACI_HS22_V202601.zip
 
-# 3) Comtrade: .env에 COMTRADE_API_KEY가 있어야 합니다. 신고 국가당 1회 호출(무료 키 하루 500회).
+# 3) Comtrade: .env에 UN_COMTRADE_API_KEY가 있어야 합니다. 신고 국가당 1회 호출(무료 키 하루 500회).
 python backend/app/scheduler/collectors/external/external_collect.py comtrade --year 2025
 
 # 4) 검사. --db를 붙이면 hs_code(HS2022)·export_summary와 교차 검증까지 합니다.

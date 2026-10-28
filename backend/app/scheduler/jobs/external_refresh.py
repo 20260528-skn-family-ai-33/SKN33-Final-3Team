@@ -7,7 +7,7 @@
    아직 공개 전(404)이면 NOT_READY로 끝내고 다음 달에 다시 시도합니다. 이미 받아 집계했으면 ALREADY이고
    batch_run에 남기지 않습니다.
 2. WDI: 2022년~작년 지표를 다시 받습니다 (World Bank가 과거 값도 수정하므로 매번 덮어씀).
-3. Comtrade: BACI 마지막 연도(연결 연도) ~ 작년을 받습니다. .env에 COMTRADE_API_KEY가 없으면 건너뜁니다.
+3. Comtrade: BACI 마지막 연도(연결 연도) ~ 작년을 받습니다. .env에 UN_COMTRADE_API_KEY가 없으면 건너뜁니다.
    연결 연도는 BACI 다음 해의 성장률을 같은 Comtrade끼리 비교하려고 받습니다 (BACI는 FOB, Comtrade 수입은 CIF).
    BACI가 따라잡아 연결 연도보다 앞선 해의 Comtrade 파일은 지웁니다.
 
