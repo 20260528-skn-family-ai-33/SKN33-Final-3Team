@@ -23,7 +23,7 @@ export default function Rank({ route }) {
   const [group, setGroup] = useState(null)
   const [page, setPage] = useState(1)
   const initial = {
-    country: route.query.get('country') ?? '',
+    country: route.query.get('country') ?? (route.query.get('product') ? '' : '중국'),
     product: route.query.get('product') || '',
     period: PERIODS[0][0],
   }
