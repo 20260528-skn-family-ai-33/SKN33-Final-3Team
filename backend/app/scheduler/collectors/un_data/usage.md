@@ -55,7 +55,7 @@ python -m backend.app.scheduler.jobs.un_data_refresh --api-env .env --state-dir 
 python -m backend.app.scheduler.main --un-api-env .env --un-state-dir data/un_data/runtime
 ```
 
-시작 10초 후 1회 점검하고 **매월 1일 03:00 한국시간** 실행합니다. 기존 HS 작업과 같은 스케줄러 프로세스로 계속 실행합니다.
+시작 10초 후 1회 점검하고 **매월 10일 03:00 한국시간** 실행합니다. 기존 HS 작업과 같은 스케줄러 프로세스로 계속 실행합니다.
 기존 `un_data_refresh --schedule`은 안내 오류로 종료합니다. 이전 UN 전용 프로세스가 실행 중이면 종료한 뒤 통합 스케줄러 하나를 운영하세요.
 기본값은 루트 `.env`와 `data/un_data/runtime`입니다. 초기 적재·수동 갱신과 동일한 상태 경로를 사용하세요.
 초기 체크포인트가 없으면 UN만 건너뛰며 자동으로 CSV를 적재하지 않습니다. 초기화 후 수동 갱신하거나 스케줄러를 재시작하세요.

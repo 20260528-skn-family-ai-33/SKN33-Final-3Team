@@ -6,7 +6,7 @@
 - shortnews_daily (SHORTNEWS_DAILY_ENABLED=true일 때만): 매일 03:00(KST) 전날 단신속보 전체 페이지 수집 후 MySQL 적재.
   시작 10초 후에도 복구 점검하며, 실패·미완료·중단 기간은 날짜별 상태를 읽어 재처리합니다.
   수집·적재 결과는 data/shortnews/daily에 기록합니다.
-- un_data_monthly: 매월 1일 03:00(KST) UN 변경분 갱신, 시작 10초 후에도 1회 점검.
+- un_data_monthly: 매월 10일 03:00(KST) UN 변경분 갱신, 시작 10초 후에도 1회 점검.
   초기 CSV 적재가 필요하며, 체크포인트가 없으면 안내 후 UN 작업만 건너뜁니다.
 - hs_code_refresh: 매년 1월 1일 00:15(KST)에 HS 코드 연간 갱신(다운로드 → CSV → 적재).
   관세청 10단위는 매년, 6단위 HS 판은 몇 년마다(HS2028 …) 바뀌며 둘 다 이 실행에서 처리합니다.
@@ -48,7 +48,7 @@ UN_NOTICE_LOCK = threading.Lock()
 UN_STOP_NOTICES = {}
 log = logging.getLogger(__name__)
 KST = refresh.KST
-UN_TRIGGER = CronTrigger(day=1, hour=3, minute=0, timezone=KST)
+UN_TRIGGER = CronTrigger(day=10, hour=3, minute=0, timezone=KST)
 HS_REFRESH_TRIGGER = CronTrigger(month=1, day=1, hour=0, minute=15, timezone=KST)  # 매년
 HS_EMBED_TRIGGER = CronTrigger(hour=1, minute=0, timezone=KST)  # 매일
 FX_DAILY_TRIGGER = CronTrigger(hour=6, minute=0, timezone=KST)  # 매일 (새벽이라 전 영업일 환율까지)
@@ -170,7 +170,7 @@ def un_resume_job(state_dir=UN_STATE,scope_path=UN_SCOPE,api_env=UN_ENV):
         return 'FAILED'
 
 
-# 기존 HS 작업에 UN 시작 점검과 매월 1일 03:00 KST 작업을 함께 등록합니다.
+# 기존 HS 작업에 UN 시작 점검과 매월 10일 03:00 KST 작업을 함께 등록합니다.
 def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV, *, env_path=ROOT / ".env"):
     scheduler = BlockingScheduler(timezone=KST)
     # misfire_grace_time: 00:15에 잠깐 멈춰 있어도 6시간 안에 켜지면 실행

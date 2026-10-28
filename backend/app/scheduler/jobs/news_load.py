@@ -78,14 +78,15 @@ def latest_raw(raw_dir=RAW_DIR):
     return found[-1]
 
 
-def read_csv(path, columns):
+def read_csv(path, columns, optional_columns=()):
     csv.field_size_limit(sys.maxsize if sys.maxsize < 2 ** 31 else 2 ** 31 - 1)  # 본문 HTML이 수 MB인 기사가 있음
     with open(path, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         missing = set(columns) - set(reader.fieldnames or [])
         if missing:
             raise ValueError(f"{path}에 {', '.join(sorted(missing))} 컬럼이 없습니다.")
-        return [{k: r[k] for k in columns} for r in reader]
+        return [{**{k: r[k] for k in columns},
+                 **{k: r.get(k, "") for k in optional_columns}} for r in reader]
 
 
 def check_tables(engine):
@@ -165,7 +166,7 @@ def rebuild_daily(session, days):
                 keywords.append((article_id, kw))
             elif country is not None:
                 countries.setdefault(article_id, set()).add(country)
-            elif hs and len(hs) == 6 and source == "KOTRA_MARKET":
+            elif hs is not None and len(hs) in (4, 6) and source == "KOTRA_MARKET":
                 hs_tags.append((article_id, hs, ver))
     hs_codes = {tuple(r) for r in session.execute(select(HsCodeMst.hs_code, HsCodeMst.hs_ver).where(
         HsCodeMst.hs_code.in_({h[:4] for _, h, _ in hs_tags})))} if hs_tags else set()
@@ -199,7 +200,7 @@ def load(engine, raws, cleans):
         table = news_schema.reflect(s.connection(), "article")
         countries = set(s.scalars(select(COUNTRY.c.country_code)))
         hs_codes = {tuple(r) for r in s.execute(select(HsCodeMst.hs_code, HsCodeMst.hs_ver).where(
-            HsCodeMst.hs_code.like("______")))}  # 6자리 (밑줄 6개)
+            func.length(HsCodeMst.hs_code).in_((4, 6))))}  # 기사 품목 태그는 HS4·HS6
         # 발행일이 바뀐 기사는 예전 날짜 집계에서도 빠져야 하므로 예전 날짜도 다시 셈
         days = {r["published_date"] for r in articles} | old_dates(s, [r["external_id"] for r in articles])
         upsert_articles(s, articles, table)
@@ -241,7 +242,7 @@ def run(raw_path=None, clean_path=DEFAULT_CLEAN, db_url=None, log_dir=LOG_DIR, t
     try:
         raw_path = Path(raw_path) if raw_path else latest_raw()
         raws = read_csv(raw_path, nl.RAW_COLUMNS)
-        cleans = read_csv(clean_path, nl.CLEAN_COLUMNS)
+        cleans = read_csv(clean_path, nl.CLEAN_COLUMNS, nl.CLEAN_OPTIONAL_COLUMNS)
     except (FileNotFoundError, ValueError) as e:
         log.error(f"적재 실패: {e} | 로그: {log_path}")
         return 1

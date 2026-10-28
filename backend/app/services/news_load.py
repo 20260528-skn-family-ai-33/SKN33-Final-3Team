@@ -2,17 +2,17 @@
 
 입력
 - 원본: collectors/news/news_collect.py가 만든 news_raw CSV (bbstxSn·newsTitl·newsBdt·othbcDt·kotraNewsUrl·infoCl …)
-- 키워드: services/news_keywords/keyword_clean.py 결과 news_keywords_clean.csv (kw_topic·country_all·hs6)
+- 키워드: services/news_keywords/keyword_clean.py 결과 news_keywords_clean.csv (kw_topic·country_all·hs6·선택 hs4)
 
 규칙
 - body_masked: HTML 태그·스크립트를 벗겨 글만 남기고 이메일·전화번호를 [이메일]·[전화번호]로 가립니다.
   본문이 비면 요약(cntntSumar), 그것도 없으면 제목을 넣습니다 (NOT NULL 컬럼).
 - title: 원본 제목의 HTML 문자(&#39;·&middot;·&lsquo; 등, 약 2,400건)를 글자로 바꿔 넣습니다.
 - 키워드 태그: kw_topic(동의어 정리 후 주제어). 사용자 블락은 저장값을 바꾸지 않고 보여 줄 때 거릅니다 (keyword_block.py).
-- 국가 태그: country_all 중 country 테이블에 있는 코드만. 품목 태그: hs6 중 hs_code 테이블에 있는 (코드, 판)만.
+- 국가 태그: country_all 중 country 테이블에 있는 코드만. 품목 태그: hs6·hs4 중 hs_code 테이블에 있는 (코드, 판)만.
   hs_ver는 발행일에 적용되는 판입니다 (hs_code_build.hs_ver_for: 2022~2027 → HS2022).
 - 일별 집계: 한 기사는 같은 날 같은 키워드·품목을 1건으로 셉니다 (DISTINCT article_id).
-  국가별 행과 국가 조건 없는 전체 행(country_code NULL)을 함께 만듭니다. 품목은 HS6 태그와 그 앞 4자리 HS4를 셉니다.
+  국가별 행과 국가 조건 없는 전체 행(country_code NULL)을 함께 만듭니다. 품목은 HS4·HS6 태그와 HS6의 상위 HS4를 셉니다.
 """
 import html
 import re
@@ -22,6 +22,7 @@ from html.parser import HTMLParser
 SOURCE_CODE = "KOTRA_MARKET"
 RAW_COLUMNS = ["bbstxSn", "newsTitl", "newsBdt", "othbcDt", "kotraNewsUrl", "infoCl", "cntntSumar"]
 CLEAN_COLUMNS = ["bbstxSn", "othbcDt", "kw_topic", "country_all", "hs6"]
+CLEAN_OPTIONAL_COLUMNS = ["hs4"]  # 이전 정제 CSV에는 없을 수 있음
 LIMITS = {"title": 600, "source_url": 2048, "category": 120, "keyword_text": 120}
 # 보통 주소(a@b.com, 원문이 일부 가린 sales@tco-****.com)와 도메인 끝(.com)이 빠진 소문자 주소(info@nexus4013).
 # Tech@SG·Autism@Work·BE@RBRICK 같은 프로그램·상품 이름은 대문자가 있어 그대로 둡니다.
@@ -109,7 +110,8 @@ def tag_rows(clean, article_id, countries, hs_codes, hs_ver):
     rows = [{"article_id": article_id, "keyword_text": k} for k in dict.fromkeys(
         _cut(k, "keyword_text") for k in split_values(clean.get("kw_topic"))) if k]
     rows += [{"article_id": article_id, "country_code": c} for c in split_values(clean.get("country_all")) if c in countries]
-    rows += [{"article_id": article_id, "hs_code": h, "hs_ver": hs_ver} for h in split_values(clean.get("hs6"))
+    codes = dict.fromkeys(split_values(clean.get("hs6")) + split_values(clean.get("hs4")))
+    rows += [{"article_id": article_id, "hs_code": h, "hs_ver": hs_ver} for h in codes
              if (h, hs_ver) in hs_codes]
     # 한 번에 INSERT할 수 있게 모든 행의 컬럼을 맞춤 (종류가 다른 칸은 NULL)
     return [{"country_code": None, "hs_code": None, "hs_ver": None, "keyword_text": None, **r} for r in rows]
@@ -130,10 +132,10 @@ def daily_counts(article_dates, targets, article_countries):
 
 
 def product_targets(hs_tags, hs_codes):
-    """HS6 태그 [(article_id, hs6, hs_ver)] → 집계 대상 [(article_id, (코드, 판))]. 사전에 있는 HS4도 함께 셉니다."""
+    """HS4·HS6 태그 → 집계 대상 [(article_id, (코드, 판))]. HS6는 사전에 있는 상위 HS4도 셉니다."""
     out = []
     for article_id, code, ver in hs_tags:
         out.append((article_id, (code, ver)))
-        if (code[:4], ver) in hs_codes:
+        if len(code) == 6 and (code[:4], ver) in hs_codes:
             out.append((article_id, (code[:4], ver)))
     return out

@@ -3,7 +3,7 @@
 저장소 루트에서 기존 테스트 환경으로 실행합니다.
 
 ```bash
-python -B backend/tests/shortnews_offline/run_tests.py --repo .
+python -B -X utf8 backend/tests/shortnews_offline/run_tests.py --repo .
 ```
 
 네트워크·실제 설정 읽기·원격 DB·운영 Chroma 접근을 차단하고 임시 SQLite·Chroma 및 합성 입력을 사용합니다.
@@ -12,3 +12,7 @@ python -B backend/tests/shortnews_offline/run_tests.py --repo .
 실제 스케줄러 시작은 가상 작업으로만 구성된 지정 시험 2건에 한해 허용하고 종료를 확인합니다.
 단신 워커의 네이티브 프로세스 시험 4건은 실행 전에 제외합니다. 실제 MySQL 8건과 구형 스키마 관리자 시험 1건은 건너뜁니다.
 MySQL/RDS·Windows·서비스 설치 검증을 대신하지 않습니다. pytest와 애플리케이션 의존성이 설치된 환경이 필요하며 자동 설치하지 않습니다.
+
+Windows에서는 UTF-8 모드로 실행하고, 긴 경로 오류를 피하려면 짧은 절대 경로를 `--evidence-dir`에 지정합니다.
+실행기는 Windows 필수 시스템 변수와 테스트 의존성의 `PYTHONPATH`를 자식 프로세스에 전달하며,
+임시 홈을 사용합니다. 외부 통신·운영 설정·운영 DB 차단은 유지됩니다.
