@@ -116,6 +116,13 @@ class ComtradeCollectTest(unittest.TestCase):
             self.assertEqual(ec.comtrade_get("x", "k"), [1])
 
 
+class ComtradeKeyTest(unittest.TestCase):
+    def test_new_name_first_then_legacy_name(self):
+        self.assertEqual(ec.comtrade_key({ec.ENV_KEY: "new", ec.LEGACY_ENV_KEY: "old"}), "new")
+        self.assertEqual(ec.comtrade_key({ec.LEGACY_ENV_KEY: "old"}), "old")  # 이름을 바꾸기 전 서버 .env
+        self.assertIsNone(ec.comtrade_key({}))
+
+
 class CheckTest(unittest.TestCase):
     def frame(self, **overrides):
         df = pd.DataFrame({"year": [2022, 2023], "country_code": ["VN", "VN"], "hs6": ["010110", "010110"],

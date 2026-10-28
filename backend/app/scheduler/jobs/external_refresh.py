@@ -154,7 +154,7 @@ def run(today=None, engine=None):
                            lambda: refresh_wdi(last), engine)
     baci_last = baci_last_year()
     drop_covered_comtrade(baci_last)
-    if not dotenv_values(ec.ROOT / ".env").get(ec.ENV_KEY):
+    if not ec.comtrade_key(dotenv_values(ec.ROOT / ".env")):
         log.warning(f"COMTRADE 건너뜀: .env에 {ec.ENV_KEY}가 없음")
     else:
         # BACI 마지막 해(연결 연도)부터 작년까지. BACI가 너무 오래됐거나 없으면 최근 2년만 받는다:

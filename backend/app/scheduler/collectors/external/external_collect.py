@@ -39,6 +39,12 @@ TIMEOUT = 60
 COMTRADE_URL = "https://comtradeapi.un.org"
 COMTRADE_KOREA = 410
 ENV_KEY = "UN_COMTRADE_API_KEY"
+LEGACY_ENV_KEY = "COMTRADE_API_KEY"  # 2026-10-28 이전 이름. 기존 서버 .env에서 Comtrade가 조용히 건너뛰어지지 않게 함께 읽는다
+
+
+def comtrade_key(values):
+    """.env 값에서 Comtrade 키. 새 이름이 없으면 예전 이름을 쓴다."""
+    return values.get(ENV_KEY) or values.get(LEGACY_ENV_KEY)
 
 
 def wb_get(path, **params):
@@ -191,7 +197,7 @@ def comtrade_imports(records, iso2_by_code):
 
 
 def collect_comtrade(year):
-    key = dotenv_values(ROOT / ".env").get(ENV_KEY)
+    key = comtrade_key(dotenv_values(ROOT / ".env"))
     if not key:
         raise RuntimeError(f".env에 {ENV_KEY} 값이 없음")
     res = requests.get(f"{COMTRADE_URL}/files/v1/app/reference/Reporters.json", timeout=TIMEOUT)
