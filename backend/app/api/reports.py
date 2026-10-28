@@ -101,8 +101,8 @@ def create(store,uid,data,key):
 
 
 def formats(store,rid):
-    t=store.t('api_report_file')
-    selected=sorted(store.c.execute(select(t.c.format).where(t.c.report_id==rid)).scalars())
+    t=store.t('report')
+    selected=sorted((store.c.scalar(select(t.c.files_json).where(t.c.report_id==rid)) or {}).keys())
     return selected+['XLSX'] if selected else []
 
 
@@ -212,20 +212,21 @@ def generate(store,job,settings):
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
-    directory=settings.files/str(uid)/str(rid)/str(job['claim_token']); directory.mkdir(parents=True,exist_ok=True)
-    files=store.t('api_report_file'); selected=record['conditions_json'].get('formats',['PDF'])
-    # 기존 report_chk_1을 유지하기 위해 PDF를 보관용 원본으로 생성한다. 공개 다운로드는 선택 양식만.
+    from backend.app.api.report_storage import LocalReportStorage
+    storage=LocalReportStorage(settings.files)
+    prefix=f'{uid}/{rid}/{job["claim_token"]}'
+    selected=record['conditions_json'].get('formats',['PDF'])
     jobs.report_step(store,job,'PDF')
-    pdf=report_pdf(doc,settings); archive=directory/'report.pdf'; archive.write_bytes(pdf)
+    pdf=report_pdf(doc,settings)
+    archive=storage.write(prefix+'/report.pdf',pdf)
+    files={}
     for fmt in selected:
         jobs.report_step(store,job,fmt)
         content=pdf if fmt=='PDF' else report_docx(doc,settings)
-        path=directory/('report.'+fmt.lower()); path.write_bytes(content)
-        store.c.execute(delete(files).where(files.c.report_id==rid,files.c.format==fmt))
-        store.insert('api_report_file',report_id=int(rid),format=fmt,storage_path=str(path),sha256=hashlib.sha256(content).hexdigest(),created_at=now())
+        files[fmt]=storage.write(prefix+'/report.'+fmt.lower(),content)
     t=store.t('report')
     store.c.execute(update(t).where(t.c.report_id==rid).values(status='READY',
-        content_json={**doc,jobs.EXECUTION:clean(job)},pdf_uri=str(archive),completed_at=now()))
+        content_json={**doc,jobs.EXECUTION:clean(job)},files_json=files,pdf_uri=archive['key'],completed_at=now()))
     if record['subscription_id']:
         from backend.app.api.notifications import settings as notification_settings
         conf=notification_settings(store,uid)

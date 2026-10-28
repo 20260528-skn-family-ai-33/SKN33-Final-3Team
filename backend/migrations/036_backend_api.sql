@@ -1,3 +1,5 @@
+-- SUPERSEDED by 038_integration.sql and backend.scripts.migrate_integration.
+-- Historical proposal ONLY: do not apply this file to local or RDS databases.
 -- API application storage only; MySQL 8. Review before applying. No seed/ingestion.
 -- Existing users.user_id must be BIGINT UNSIGNED. Timestamps are UTC.
 

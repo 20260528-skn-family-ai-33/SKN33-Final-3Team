@@ -1909,14 +1909,14 @@
     "id": 79,
     "title": "API-79  관리자 운영 요약",
     "route": "GET  /api/v1/admin/overview",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": []
   },
   {
     "id": 80,
     "title": "API-80  관리자 조치 알림",
     "route": "GET  /api/v1/admin/alerts",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -1945,7 +1945,7 @@
     "id": 81,
     "title": "API-81  관리자 회원 목록",
     "route": "GET  /api/v1/admin/users",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -1981,7 +1981,7 @@
     "id": 82,
     "title": "API-82  관리자 회원 상세",
     "route": "GET  /api/v1/admin/users/{user_id}",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -1996,7 +1996,7 @@
     "id": 83,
     "title": "API-83  관리자 권한 변경",
     "route": "PATCH  /api/v1/admin/users/{user_id}/role",
-    "auth": "SUPER_ADMIN 전용",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2010,7 +2010,7 @@
         "role",
         "string",
         "필수",
-        "USER / ADMIN. SUPER_ADMIN 값 금지. 대상은 ACTIVE 일반 회원 또는 ADMIN이며 최고 관리자 대상 제외."
+        "USER / ADMIN. 대상은 ACTIVE 일반 회원 또는 ADMIN이며 자기 계정은 제외."
       ],
       [
         "Request Body",
@@ -2039,7 +2039,7 @@
     "id": 84,
     "title": "API-84  회원 이용 제한·해제",
     "route": "PATCH  /api/v1/admin/users/{user_id}/status",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2082,7 +2082,7 @@
     "id": 85,
     "title": "API-85  관리자 저장 관심 조회",
     "route": "GET  /api/v1/admin/users/{user_id}/interests",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2097,7 +2097,7 @@
     "id": 86,
     "title": "API-86  관리자 맞춤 기사 노출 점검",
     "route": "GET  /api/v1/admin/users/{user_id}/exposure",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2126,7 +2126,7 @@
     "id": 87,
     "title": "API-87  수집 실행 목록",
     "route": "GET  /api/v1/admin/data/runs",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -2162,7 +2162,7 @@
     "id": 88,
     "title": "API-88  수집 실행 상세·로그",
     "route": "GET  /api/v1/admin/data/runs/{run_id}",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2177,7 +2177,7 @@
     "id": 89,
     "title": "API-89  실패 범위 재수집",
     "route": "POST  /api/v1/admin/data/runs/{run_id}/retries",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2220,7 +2220,7 @@
     "id": 90,
     "title": "API-90  HS 판본 품질 점검 목록",
     "route": "GET  /api/v1/admin/data/quality-issues",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -2242,7 +2242,7 @@
     "id": 91,
     "title": "API-91  HS 판본 범위 재검증",
     "route": "POST  /api/v1/admin/data/quality-issues/{issue_id}/revalidations",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2299,7 +2299,7 @@
     "id": 92,
     "title": "API-92  관리자 기사 목록",
     "route": "GET  /api/v1/admin/articles",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -2335,7 +2335,7 @@
     "id": 93,
     "title": "API-93  관리자 기사 검수 상세",
     "route": "GET  /api/v1/admin/articles/{article_id}",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2350,7 +2350,7 @@
     "id": 94,
     "title": "API-94  기사 국가·품목 연결 수정",
     "route": "PATCH  /api/v1/admin/articles/{article_id}/links",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2393,7 +2393,7 @@
     "id": 95,
     "title": "API-95  기사 노출 제외·복구",
     "route": "PATCH  /api/v1/admin/articles/{article_id}/visibility",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2436,14 +2436,14 @@
     "id": 96,
     "title": "API-96  기사 출처 현황",
     "route": "GET  /api/v1/admin/article-sources",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": []
   },
   {
     "id": 97,
     "title": "API-97  관리자 키워드 검수 목록",
     "route": "GET  /api/v1/admin/keyword-topics",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -2500,7 +2500,7 @@
     "id": 98,
     "title": "API-98  키워드 근거 상세",
     "route": "GET  /api/v1/admin/keyword-topics/detail",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -2522,7 +2522,7 @@
     "id": 99,
     "title": "API-99  키워드 지정·보류·해제",
     "route": "PATCH  /api/v1/admin/keyword-topics/review",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Request Body",
@@ -2579,7 +2579,7 @@
     "id": 100,
     "title": "API-100  검수 키워드 CSV 내보내기",
     "route": "GET  /api/v1/admin/keyword-topics/export",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -2594,14 +2594,14 @@
     "id": 101,
     "title": "API-101  관리자 분류 틀 목록",
     "route": "GET  /api/v1/admin/keyword-categories",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": []
   },
   {
     "id": 102,
     "title": "API-102  관리자 분야 생성",
     "route": "POST  /api/v1/admin/keyword-categories",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Request Body",
@@ -2637,7 +2637,7 @@
     "id": 103,
     "title": "API-103  관리자 분야 상세",
     "route": "GET  /api/v1/admin/keyword-categories/{category_id}",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2652,7 +2652,7 @@
     "id": 104,
     "title": "API-104  관리자 생성 분야 이름 수정",
     "route": "PATCH  /api/v1/admin/keyword-categories/{category_id}",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2702,7 +2702,7 @@
     "id": 105,
     "title": "API-105  관리자 생성 분야 삭제",
     "route": "DELETE  /api/v1/admin/keyword-categories/{category_id}",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2815,7 +2815,7 @@
     "id": 117,
     "title": "API-117  회원 알림 전달 목록",
     "route": "GET  /api/v1/admin/notification-deliveries",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -2851,7 +2851,7 @@
     "id": 118,
     "title": "API-118  회원 알림 전달 상세",
     "route": "GET  /api/v1/admin/notification-deliveries/{user_alert_id}",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2866,7 +2866,7 @@
     "id": 119,
     "title": "API-119  회원 알림 설정·동의 이력",
     "route": "GET  /api/v1/admin/users/{user_id}/notification-settings",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2881,7 +2881,7 @@
     "id": 120,
     "title": "API-120  알림 편입 제외 진단",
     "route": "GET  /api/v1/admin/notification-events/{event_id}/diagnosis",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2903,14 +2903,14 @@
     "id": 121,
     "title": "API-121  기사량 판정 기준 조회",
     "route": "GET  /api/v1/admin/notification-rules",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": []
   },
   {
     "id": 122,
     "title": "API-122  관리자 처리 이력 목록",
     "route": "GET  /api/v1/admin/audit-events",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -2939,7 +2939,7 @@
     "id": 123,
     "title": "API-123  관리자 처리 이력 상세",
     "route": "GET  /api/v1/admin/audit-events/{audit_id}",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -2954,7 +2954,7 @@
     "id": 124,
     "title": "API-124  공통 운영 설정·발행 일정 조회",
     "route": "GET  /api/v1/admin/operation-settings",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -2969,7 +2969,7 @@
     "id": 125,
     "title": "API-125  기사 출처 수집 중지·재개",
     "route": "PATCH  /api/v1/admin/article-sources/{source_code}/collection",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
@@ -3012,7 +3012,7 @@
     "id": 126,
     "title": "API-126  알림 약관 버전·응답 조회",
     "route": "GET  /api/v1/admin/notification-terms",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Query Parameters",
@@ -3034,7 +3034,7 @@
     "id": 127,
     "title": "API-127  관리자 변경·재처리 진행 조회",
     "route": "GET  /api/v1/admin/operations/{operation_id}",
-    "auth": "ADMIN / SUPER_ADMIN",
+    "auth": "ADMIN",
     "fields": [
       [
         "Path Parameters",
