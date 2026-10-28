@@ -49,7 +49,7 @@ class MonthlyRunTest(unittest.TestCase):
     def test_default_trains_final_two_stage_model(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
             result = self.run_month(kind="two_stage")
-        bundle = joblib.load(self.out / "two_stage_202602.joblib")
+        bundle = joblib.load(self.out / "model_a_two_stage_202602.joblib")
         self.assertEqual(set(bundle["members"]), {"base", "ext"})  # 최종 모델 = v1 · v3 앙상블
         self.assertFalse(set(MARKET + WDI) & set(bundle["features"]["base"]))  # v1은 외부 피처 없음
         self.assertTrue(set(MARKET + WDI) & set(bundle["features"]["ext"]))  # v3는 외부 피처 사용 (가상 데이터의 상수 열은 빠짐)
@@ -58,7 +58,7 @@ class MonthlyRunTest(unittest.TestCase):
         self.assertTrue(np.isfinite(bundle["latest"][["growth", "order", "exp_12m"]].to_numpy()).all())
         self.assertIsNotNone(result["country_ndcg_at_5"])
         labeled = int(dataset().y_growth.notna().sum())
-        self.assertEqual(self.records(), [("two_stage_202602", "READY", labeled, "FULL_RETRAIN", "two_stage_202602.joblib")])
+        self.assertEqual(self.records(), [("model_a_two_stage_202602", "READY", labeled, "FULL_RETRAIN", "model_a_two_stage_202602.joblib")])
         self.assertEqual(C.run.__kwdefaults__["kind"], "two_stage")  # customs_monthly는 kind 없이 부른다
 
     def first_then(self, files=FILES, db=DB):
@@ -137,6 +137,10 @@ class MonthlyRunTest(unittest.TestCase):
         for name in ("lightgbm_202602", "lightgbm_202602_r2", "lightgbm_202602_r10"):
             self.saved_version(name)
         self.assertEqual(self.parent_of_next_month(), "lightgbm_202602_r10")
+
+    def test_parent_continues_across_model_family_change(self):
+        self.saved_version("model_a_two_stage_202602")  # 앞 달은 다른 계열(최종 2단계 모델)로 기록
+        self.assertEqual(self.parent_of_next_month(), "model_a_two_stage_202602")
 
     def test_parent_skips_version_missing_from_db(self):
         self.saved_version("lightgbm_202602")

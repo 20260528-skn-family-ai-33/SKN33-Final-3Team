@@ -82,7 +82,7 @@ python -m backend.app.scheduler.jobs.customs_monthly --month 202610
 python -m backend.app.ml.candidate_models --monthly 2026-10-01 --n-jobs 2
 
 # 월별 생성 파일 조회 (생성 완료 후)
-python -m backend.app.ml.two_stage query --model data/ml/monthly_models/two_stage_202610.joblib --country VN
+python -m backend.app.ml.two_stage query --model data/ml/monthly_models/model_a_two_stage_202610.joblib --country VN
 ```
 
 통합 스케줄러는 운영 환경에서 계속 실행해야 합니다. 2026-10-28 로컬 점검에서는 실행 프로세스와 월별 모델 산출물이 확인되지 않았습니다. 코드에 예약이 등록된 것과 서버에서 자동 실행 중인 것은 별도이며, 서버 실행 상태는 미확인입니다.
@@ -91,7 +91,7 @@ python -m backend.app.ml.two_stage query --model data/ml/monthly_models/two_stag
 
 - 월별 경로는 고정 스냅샷 대신 **수집 원본에서 피처를 생성**합니다. 대상 월까지 원본이 있어야 하며 `data/ml/monthly_feature_cache/`를 사용합니다. 최종 구성은 `two_stage.MEMBERS = {"base": "none", "ext": "first_release"}`(v1 · v3 앙상블)이고, 정답이 있는 전체 행으로 매번 **`FULL_RETRAIN`**합니다. 기존 모델에 `partial_fit`하지 않습니다.
 - 외부 자료(BACI·Comtrade·WDI)는 연도별로 늦게 들어와 일부가 빌 수 있어 학습을 멈추지 않습니다. v3 모델에서 비어 빠진 외부 피처는 `.registry.json`의 `data_info.external_dropped`에 남기고, 9개가 모두 빠지면 v3가 v1과 같은 피처로 학습돼 앙상블 효과가 없으므로 경고 로그를 남깁니다.
-- `data/ml/monthly_models/two_stage_<YYYYMM>.joblib` 한 파일에 두 모델과 앙상블한 최신 예측을, 같은 이름의 `.registry.json`에 입력 계보·피처·평가·DB 등록 정보를 저장합니다. DB `ml_model_version`에는 `model_key=model_a`, `model_family=two_stage_full`, `status=READY`로 기록합니다.
+- `data/ml/monthly_models/model_a_two_stage_<YYYYMM>.joblib` 한 파일에 두 모델과 앙상블한 최신 예측을, 같은 이름의 `.registry.json`에 입력 계보·피처·평가·DB 등록 정보를 저장합니다. DB `ml_model_version`에는 `model_key=model_a`, `model_family=two_stage_full`, `status=READY`로 기록합니다.
 - `.env`의 `MYSQL_*` 접속 설정과 `ml_model_version` 테이블이 필요합니다. 초기 테이블 정의는 [`10_ml_model_version.sql`](../../../db/mysql/init/10_ml_model_version.sql)을 참고합니다. 신규 학습 전 DB에서 부모 버전을 확인하며, 파일 생성 뒤 DB 기록이 실패하면 파일과 등록 JSON을 보존합니다.
 - 같은 달·같은 입력의 재실행은 저장 파일의 해시를 확인하고 DB 등록을 재시도합니다. 원본이 정정되면 `_r2`, `_r3` 등 새 버전을 만듭니다. 월별 등록 재시도는 위 `candidate_models --monthly` 명령을 사용합니다.
 - 평가용 모델은 마지막 정답 기준월보다 12개월 이상 앞선 기준월로 학습합니다. `.registry.json`의 `evaluation.model`은 2단계 순서 평가, `model_stage1`은 1단계 성장값 평가, `baseline_growth_12m`은 기준선입니다. 국가별 품목 추천은 `model`, 품목별 국가 추천은 `model_stage1`을 확인합니다. `model`은 0~1 순위 점수(`order`)로 계산하므로 순서만 쓰는 지표(NDCG·Precision@K·Hit@K·top20 F1·`spearman`·`roc_auc`·`average_precision`)만 유효합니다. 같은 블록의 값 크기를 쓰는 지표(`mae`·`rmse`·`median_ae`·`r2`·`explained_variance`·`pearson`)와 0 기준 증가 판정 지표(`accuracy`·`precision`·`recall`·`f1`·`mcc`·`balanced_accuracy`·`predicted_growth_rate`·`tn`/`fp`/`fn`/`tp`)는 해석하지 않고, 증감률 오차·증가 판정은 `model_stage1`에서 봅니다.

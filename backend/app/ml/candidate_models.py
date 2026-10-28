@@ -7,7 +7,7 @@
     python -m backend.app.ml.candidate_models --models lightgbm random_forest --version v1 --n-jobs 4
 
 2) 월별 수집 뒤 최종 모델(2단계 C K=100, v1 · v3 앙상블) 전체 재학습(run): 수집 원본으로 피처를 만들어 학습하고
-   data/ml/monthly_models/two_stage_<YYYYMM>.joblib 저장 → DB ml_model_version에 기록한다.
+   data/ml/monthly_models/model_a_two_stage_<YYYYMM>.joblib 저장 → DB ml_model_version에 기록한다.
     자동: .env에 CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run (customs_monthly의 ML 단계)
     수동: python -m backend.app.ml.candidate_models --monthly 2026-10-01
 """
@@ -157,9 +157,12 @@ def _same_inputs(snapshot, files, db):
     return snapshot["fx"] == db["fx"] and snapshot["country_mapping_sha256"] == db["country_mapping_sha256"]
 
 
-def _version_key(path, kind):
-    """<모델>_<YYYYMM>[_r<n>].registry.json → (YYYYMM, n). 이름 정렬로는 _r10이 _r2보다 앞선다."""
-    match = re.fullmatch(rf"{re.escape(kind)}_(\d{{6}})(?:_r(\d+))?\.registry\.json", path.name)
+MONTHLY_PREFIX = {"two_stage": "model_a_two_stage"}  # 월별 파일 이름 앞부분. 그 밖의 kind는 kind 그대로
+
+
+def _version_key(path):
+    """<계열>_<YYYYMM>[_r<n>].registry.json → (YYYYMM, n). 이름 정렬로는 _r10이 _r2보다 앞선다."""
+    match = re.fullmatch(r".+_(\d{6})(?:_r(\d+))?\.registry\.json", path.name)
     return (match[1], int(match[2] or 1)) if match else None
 
 
@@ -175,7 +178,8 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
     month = pd.Timestamp(trade_month)
     if month != month.to_period("M").to_timestamp():
         raise ValueError("trade_month는 월 초(YYYY-MM-01)여야 합니다")
-    base = f"{kind}_{month:%Y%m}"
+    prefix = MONTHLY_PREFIX.get(kind, kind)
+    base = f"{prefix}_{month:%Y%m}"
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     with FileLock(str(out_dir / f".{base}.lock")):
@@ -202,8 +206,11 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
         if record is None:
             # 부모는 DB에 기록된 직전 버전. 학습 전에 정해 DB에 못 닿으면 학습하기 전에 멈춘다.
             current = (f"{month:%Y%m}", revision)
-            earlier = sorted((key, read_json(p)["version_id"]) for p in out_dir.glob(f"{kind}_*.registry.json")
-                             if (key := _version_key(p, kind)) is not None and key < current)
+            # 모델 계열(lightgbm → model_a_two_stage)이 바뀐 달에도 model_a 이력이 이어지도록 모든 월별 기록에서 찾는다.
+            # 같은 (월, 리비전)이면 같은 계열을 우선한다.
+            earlier = sorted(((key, p.name.startswith(f"{prefix}_")), read_json(p)["version_id"])
+                             for p in out_dir.glob("*.registry.json")
+                             if (key := _version_key(p)) is not None and key < current)
             in_db = registered_versions([version for _, version in earlier], "model_a", engine)
             parent = next((version for _, version in reversed(earlier) if version in in_db), None)
             if kind == "two_stage":
