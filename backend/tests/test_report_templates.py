@@ -52,6 +52,15 @@ class SampleRenderTest(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(UndefinedError):
                 rt.render(rt.KINDS[kind], context)
 
+    def test_long_item_name_keeps_figures_in_subtitle(self):
+        context = rt.sample_context('monthly')
+        context['items'][0]['name'] = '향수·화장품·화장용 제품 중 기초화장품(피부 보호용 크림·로션 등) ' * 4
+        html = rt.render('RPT_MONTHLY', context)
+        sub = re.search(r'기초화장품 상세</h2>\s*<p class="sec-sub">([^<]*)</p>', html).group(1)
+        self.assertIn('…', sub)
+        self.assertLess(len(sub), 120)
+        self.assertIn('12월 수출 879.0백만 달러', sub)
+
     def test_context_layout_key_is_replaced(self):
         context = rt.sample_context('weekly')
         context['layout'] = 'stale'

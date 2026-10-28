@@ -89,11 +89,12 @@
 {# ---------- 품목별 상세 (관심 품목 수만큼) ---------- #}
 {% for item in items %}
 {% call m.page(report, p_items + loop.index0, total) %}
-{{ m.heading(1 + loop.index, item.label ~ ' 상세', 'HS ' ~ item.hs_code ~ ' ' ~ item.name ~ ' · ' ~ month ~ '월 수출 ' ~ (item.amount_usd | musd) ~ '백만 달러 · 전월 ' ~ (item.mom_pct | signed_pct) ~ ' · 전년 동월 ' ~ (item.yoy_pct | signed_pct)) }}
+{# 긴 HS 품목명은 줄여서 뒤의 수출액·증감률이 소제목에서 잘리지 않게 합니다 #}
+{{ m.heading(1 + loop.index, item.label ~ ' 상세', 'HS ' ~ item.hs_code ~ ' ' ~ (item.name | truncate(40, true, '…', 0)) ~ ' · ' ~ month ~ '월 수출 ' ~ (item.amount_usd | musd) ~ '백만 달러 · 전월 ' ~ (item.mom_pct | signed_pct) ~ ' · 전년 동월 ' ~ (item.yoy_pct | signed_pct)) }}
 {{ m.legend([{'name': item.trend.range_label, 'color': colors.accent, 'kind': 'line'}, {'name': '1년 전 같은 달', 'color': colors.previous, 'kind': 'dash'}]) }}
 {{ line_chart(item.trend.labels, [
      {'values': item.trend.current, 'color': colors.accent, 'area': true},
-     {'values': item.trend.previous, 'color': colors.previous, 'dashed': true}], height=170) }}
+     {'values': item.trend.previous, 'color': colors.previous, 'dashed': true}], height=160) }}
 
 <h3>관심 국가 수출 추이<small>{{ item.trend.range_label }} · 백만 달러</small></h3>
 {% set lines = [] %}{% set keys = [] %}
@@ -103,7 +104,7 @@
 {% endfor %}
 {% if lines %}
 {{ m.legend(keys) }}
-{{ line_chart(item.trend.labels, lines, height=150, zero=true) }}
+{{ line_chart(item.trend.labels, lines, height=140, zero=true) }}
 {% else %}
 <div class="empty">관심 국가가 없습니다.</div>
 {% endif %}

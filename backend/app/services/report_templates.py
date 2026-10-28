@@ -284,7 +284,7 @@ def _row(cells, size=7.8):
 
 
 def _heading(sub=None):
-    return 9.7 + (LINE[7.6] * _lines(sub, 7.6, TEXT_MM) + 4 if sub else 0)
+    return 9.7 + (LINE[7.6] * min(_lines(sub, 7.6, TEXT_MM), 2) + 4 if sub else 0)  # 소제목은 CSS로 최대 두 줄
 
 
 def _note(sentences):
