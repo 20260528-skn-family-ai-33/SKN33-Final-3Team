@@ -89,6 +89,8 @@ def _month_frame(month, cache_dir, engine=None):
     정답은 미래 12개월이 month 안에 끝나는 기준월만 남긴다 (과거 월 이름으로 미래 자료를 학습하지 않게).
     """
     ds, data, source = artifacts.load_training_data(cache_dir=cache_dir, engine=engine)
+    # 같은 달 재실행 비교(db_inputs(month=...))와 같은 범위: 그 달까지의 환율만 기록한다
+    source = {**source, "fx": artifacts.fx_info(data["fx"], month)}
     del data
     if pd.Timestamp(source["raw_period_end"]) < month:
         raise ValueError(f"수집 원본이 {source['raw_period_end']}까지만 있어 {month.date()} 수집분으로 학습할 수 없습니다")
@@ -211,7 +213,7 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
             if record is None:
                 break
             if files is None:  # 비교할 기록이 있을 때만 입력 파일 전체를 해시한다
-                files, db = artifacts.input_manifest(), artifacts.db_inputs(engine)  # 학습·기록과 같은 DB
+                files, db = artifacts.input_manifest(), artifacts.db_inputs(engine, month)  # 학습·기록과 같은 DB
                 config = _model_config(kind)
             if (record["data_info"].get("model_config") == config
                     and _same_inputs(record["data_info"]["input_snapshot"], files, db)):

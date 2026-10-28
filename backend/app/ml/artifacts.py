@@ -43,10 +43,18 @@ def input_manifest():
             for p in sorted(paths) if p.is_file()]
 
 
-def db_inputs(engine=None):
+def fx_info(fx, month=None):
+    """환율 지문. month를 주면 그 달까지만 본다: 환율 피처는 기준월과 그 전 환율만 쓰므로, 그 뒤 달·진행 중인 달의
+    일별 적재(fx_daily_load가 매일 추가)는 month까지 학습한 모델을 바꾸지 않는다."""
+    if month is not None:
+        fx = fx[pd.to_datetime(fx.month) <= month]
+    return {"rows": len(fx), "sha256": _frame_digest(fx)}
+
+
+def db_inputs(engine=None, month=None):
     """load_training_data가 DB에서 읽는 환율·통화 매핑의 지문. 같은 이름으로 학습 계보(info)에도 남는다."""
     fx, currencies = S.fx_from_db(engine)
-    return {"fx": {"rows": len(fx), "sha256": _frame_digest(fx)},
+    return {"fx": fx_info(fx, month),
             "country_mapping_sha256": _frame_digest(F.model_countries(S.countries(), currencies))}
 
 
@@ -66,7 +74,7 @@ def load_training_data(cache_dir=None, engine=None):
             "customs_complete_months": sorted(str(pd.Timestamp(m).date()) for m in data["complete_months"]),
             "raw_period_start": str(pd.to_datetime(data["exports"].month).min().date()),
             "raw_period_end": str(pd.to_datetime(data["exports"].month).max().date()),
-            "fx": {"rows": len(data["fx"]), "sha256": _frame_digest(data["fx"])},
+            "fx": fx_info(data["fx"]),
             "country_mapping_sha256": _frame_digest(data["countries"]),
             "pipeline_sources": {p: sha256(ROOT / p) for p in
                 ("backend/app/ml/features.py", "backend/app/ml/sources.py", "backend/app/ml/preprocess.py",

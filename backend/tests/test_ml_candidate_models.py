@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import joblib
 import numpy as np
+import pandas as pd
 from sqlalchemy import select
 
 from backend.app.db.session import make_engine, session_scope
@@ -21,12 +22,13 @@ from backend.tests.test_ml_experiments import dataset
 
 FILES = [{"path": "data/customs/a.csv", "bytes": 1, "sha256": "a"},
          {"path": "data/customs_load_outputs/monthly/202602/state.json", "bytes": 1, "sha256": "s"}]
-DB = {"fx": {"rows": 10, "sha256": "f"}, "country_mapping_sha256": "c"}
+FX = pd.DataFrame({"month": ["2025-11-01", "2025-12-01"], "currency_code": "USD", "rate": [1400.0, 1410.0]})
+DB = {"fx": C.artifacts.fx_info(FX), "country_mapping_sha256": "c"}
 
 
 def loaded(end="2026-02-01", files=FILES, db=DB):
     """load_training_data 대역. 가상 원본은 2022-01~2026-02."""
-    return dataset(), {}, {"raw_period_end": end, "files": files, **db}
+    return dataset(), {"fx": FX}, {"raw_period_end": end, "files": files, **db}
 
 
 class MonthlyRunTest(unittest.TestCase):
@@ -156,7 +158,7 @@ class MonthlyRunTest(unittest.TestCase):
             files.assert_not_called()  # 비교할 기록이 없는 첫 실행은 입력 파일을 다시 해시하지 않는다
             db.assert_not_called()
             C.run("2026-02-01", self.engine, kind="lightgbm", out_dir=self.out, cache_dir=None, n_jobs=1)  # 같은 달 재실행
-        db.assert_called_once_with(self.engine)
+        db.assert_called_once_with(self.engine, pd.Timestamp("2026-02-01"))  # 그 달까지의 환율만 비교
         files.assert_called_once()
         self.assertEqual(load.call_count, 1)
 
@@ -177,6 +179,15 @@ class MonthlyRunTest(unittest.TestCase):
             self.assertEqual(self.run_month()["model_name"], "lightgbm_202602_r2")
         with patch.object(C.artifacts, "load_training_data", side_effect=AssertionError("같은 코드는 재학습하지 않아야 함")):
             self.assertEqual(self.run_month()["model_name"], "lightgbm_202602")  # 원래 코드면 처음 판을 재사용
+
+    def test_daily_fx_after_the_month_is_not_a_correction(self):
+        # fx_daily_load가 매일 쌓는 뒤 달 환율은 그 달 모델의 입력이 아니다. 재시도가 기록만 다시 보내야 한다
+        later = pd.concat([FX, pd.DataFrame({"month": ["2026-03-01"], "currency_code": "USD", "rate": [1420.0]})])
+        self.assertEqual(C.artifacts.fx_info(later, pd.Timestamp("2026-02-01")), DB["fx"])
+        self.assertEqual(self.first_then(db={**DB, "fx": C.artifacts.fx_info(later, pd.Timestamp("2026-02-01"))}),
+                         "lightgbm_202602")
+        revised = FX.assign(rate=[1400.0, 1415.0])  # 그 달 이전 환율 정정은 새 리비전
+        self.assertNotEqual(C.artifacts.fx_info(revised, pd.Timestamp("2026-02-01")), DB["fx"])
 
     def test_refuses_month_missing_from_data(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-01-01")):
