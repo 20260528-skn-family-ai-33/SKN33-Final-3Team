@@ -1,4 +1,4 @@
-"""단신속보 원본 → 최신 분류 후보·LLM → MySQL → 공통 kotra_article 본문 세대 + news_keyword.
+"""단신속보 원본 → 최신 분류 후보·LLM → MySQL → 공통 total_article 본문 세대 + news_keyword.
 
 어느 단계든 실패하면 성공으로 보고하지 않습니다. MySQL 커밋 후 Chroma 실패는
 동일 기사 ID upsert와 내용 기반 분석 캐시로 다음 실행에서 복구합니다.

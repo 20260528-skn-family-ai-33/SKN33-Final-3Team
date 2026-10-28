@@ -59,18 +59,18 @@ def test_single_collection_scope_metadata_reuse_and_document_equals_input(contex
     first=run(context, ALL_SOURCES)
     assert first['status']=='complete', first
     before=GenerationStore(root).snapshot()
-    rows=before.collection('kotra_article').get(include=['documents','metadatas'])
+    rows=before.collection('total_article').get(include=['documents','metadatas'])
     preserved={i:(d,m) for i,d,m in zip(rows['ids'],rows['documents'],rows['metadatas']) if m['source_code'].startswith('KOTRA')}
     assert len(rows['ids'])==4 and len(set(rows['ids']))==4
     assert all(d in calls for d,m in zip(rows['documents'],rows['metadatas']) if m['record_type']=='body')
-    assert first['body']['collections']=={'kotra_article':4}
+    assert first['body']['collections']=={'total_article':4}
     calls.clear()
     with db.begin() as conn:
         conn.execute(insert(ArticleTag), {'article_id':3,'keyword_text':'새 대표어'})
     second=run(context)
     assert second['status']=='complete' and second['body']['embedded']==0
     assert calls==['새 대표어']  # 본문 메타데이터 변경은 재임베딩하지 않음.
-    got=GenerationStore(root).snapshot().collection('kotra_article').get(include=['documents','metadatas'])
+    got=GenerationStore(root).snapshot().collection('total_article').get(include=['documents','metadatas'])
     assert {i:(d,m) for i,d,m in zip(got['ids'],got['documents'],got['metadatas']) if m['source_code'].startswith('KOTRA')}==preserved
     assert second['keywords']['scope']=='all_database_sources'
     assert second['usage']['keywords']['tokens']==3
@@ -86,7 +86,7 @@ def test_hidden_deleted_source_scoped_removal_and_failure_preserve_pointer(conte
         conn.execute(text('DELETE FROM article WHERE article_id=4'))
     result=run(context)
     assert result['status']=='complete'
-    rows=GenerationStore(root).snapshot().collection('kotra_article').get(include=['metadatas'])
+    rows=GenerationStore(root).snapshot().collection('total_article').get(include=['metadatas'])
     assert {m['source_code'] for m in rows['metadatas']}=={'KOTRA_MARKET','KOTRA_SHORT_NEWS'}
     before=(root/'active.json').read_bytes()
     with db.begin() as conn:
@@ -98,7 +98,7 @@ def test_hidden_deleted_source_scoped_removal_and_failure_preserve_pointer(conte
 def test_partial_chunks_repaired_without_other_source_changes(context):
     assert run(context)['status']=='complete'
     db, root, embed, calls=context
-    col=GenerationStore(root).snapshot().collection('kotra_article')
+    col=GenerationStore(root).snapshot().collection('total_article')
     ids=col.get(where={'source_code':'HANKYUNG'})['ids']; col.delete(ids=ids)
     result=run(context)
     assert result['body']['embedded']==1 and result['status']=='complete'
@@ -206,7 +206,7 @@ def test_concurrent_source_calls_serialize_complete_scope(context,monkeypatch):
         assert not b.done() and len(names)==1
         release.set()
         assert a.result(20)['status']==b.result(20)['status']=='complete'
-    col=GenerationStore(root).snapshot().collection('kotra_article')
+    col=GenerationStore(root).snapshot().collection('total_article')
     assert {m['source_code'] for m in col.get(include=['metadatas'])['metadatas']}=={'HANKYUNG','FNNEWS'}
 
 

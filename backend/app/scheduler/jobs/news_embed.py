@@ -24,8 +24,9 @@ from backend.app.db.session import ENV_PATH, make_engine, session_scope
 from backend.app.models.news import Article, ArticleTag
 from backend.app.scheduler.jobs.news_load import keyword_article_counts
 
+from backend.app.services.news_collections import ARTICLE_COLLECTION
+
 MODEL = "text-embedding-3-large"
-ARTICLE_COLLECTION = "kotra_article"
 KEYWORD_COLLECTION = "news_keyword"
 CHROMA_PATH = Path(__file__).resolve().parents[4] / "chroma_data"
 LOG_DIR = Path(__file__).resolve().parents[4] / "data" / "news" / "logs"
@@ -167,7 +168,7 @@ def get_collection(client, name, rebuild=False):
 
 def get_all(col, include, page=GET_PAGE):
     """컬렉션 전체를 page개씩 나눠 읽습니다. 한 번에 읽으면 Chroma(SQLite)가 약 3만 2천 개부터
-    'too many SQL variables'로 실패합니다 (kotra_article은 조각이 10만 개 넘게 들어감)."""
+    'too many SQL variables'로 실패합니다 (total_article은 조각이 10만 개 넘게 들어감)."""
     out = {"ids": [], **{k: [] for k in include}}
     while True:
         got = col.get(include=include, limit=page, offset=len(out["ids"]))
@@ -563,7 +564,7 @@ def _run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log
 
 
 def main():
-    parser = argparse.ArgumentParser(description="article 테이블의 미등록 기사를 임베딩해 Chroma kotra_article 컬렉션에 추가")
+    parser = argparse.ArgumentParser(description="article 테이블의 미등록 기사를 임베딩해 Chroma total_article 컬렉션에 추가")
     parser.add_argument("--db-url", help="SQLAlchemy DB URL (기본: .env의 MYSQL_* 값)")
     parser.add_argument("--rebuild", action="store_true", help="컬렉션을 지우고 전부 다시 임베딩 (모델 변경 시)")
     parser.add_argument("--dry-run", action="store_true", help="OpenAI를 부르지 않고 새로 넣을 조각 수·글자 수만 출력")

@@ -1,4 +1,5 @@
 """단신 본문은 공통 세대 색인 한 곳에 저장합니다. 분류 후보 색인은 별개입니다."""
+from backend.app.services.news_collections import ARTICLE_COLLECTION
 from collections.abc import Mapping
 from copy import deepcopy
 
@@ -29,7 +30,7 @@ def sync_body(*, db_url, root=None, embed=None, dry_run=False, progress=None, ru
     if result.get('sources') != [INTERNAL_SOURCE]:
         raise ValueError('공통 본문 색인의 요청·결과 출처 불일치')
     body, words = result.get('body', {}), result.get('keywords', {})
-    if (body.get('sources') != [INTERNAL_SOURCE] or body.get('collection') != 'kotra_article'
+    if (body.get('sources') != [INTERNAL_SOURCE] or body.get('collection') != ARTICLE_COLLECTION
             or words.get('scope') != 'all_database_sources' or words.get('collection') != 'news_keyword'):
         raise ValueError('공통 본문·키워드 범위 계약 불일치')
     expected = 'planned' if dry_run else 'complete'

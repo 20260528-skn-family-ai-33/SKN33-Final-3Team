@@ -1,4 +1,6 @@
 """기사 RAG 호출 계약. 검색·색인·모델 호출은 수행하지 않습니다."""
+from backend.app.services.news_collections import ARTICLE_COLLECTION
+
 from datetime import date, timedelta
 from enum import Enum
 import re
@@ -50,10 +52,10 @@ class ArticleSource(str, Enum):
 ALL_SOURCES = tuple(ArticleSource)
 # 계약상의 배치 목적지입니다. 실제 컬렉션의 생성·내용을 보증하지 않습니다.
 COLLECTION_BY_SOURCE = MappingProxyType({
-    ArticleSource.KOTRA_MARKET: "kotra_article",
-    ArticleSource.KOTRA_SHORT_NEWS: "kotra_article",
-    ArticleSource.HANKYUNG: "kotra_article",
-    ArticleSource.FNNEWS: "kotra_article",
+    ArticleSource.KOTRA_MARKET: ARTICLE_COLLECTION,
+    ArticleSource.KOTRA_SHORT_NEWS: ARTICLE_COLLECTION,
+    ArticleSource.HANKYUNG: ARTICLE_COLLECTION,
+    ArticleSource.FNNEWS: ARTICLE_COLLECTION,
 })
 
 

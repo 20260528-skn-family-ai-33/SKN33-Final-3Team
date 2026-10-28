@@ -1,5 +1,7 @@
 # 단신속보 MySQL 적재
 
+> 이름 변경: `kotra_article`은 `total_article`로 변경되었습니다. 기존 테스트 결과는 당시 기록을 보존합니다.
+
 `scheduler/collectors/shortnews/shortnews_collect.py`가 저장한 원본 CSV 또는 JSON을
 `scheduler/jobs/shortnews_load.py`로 MySQL에 적재합니다.
 기존 해외시장뉴스의 HTML 정제·연락처 마스킹·upsert·태그 생성·일별 집계를 재사용합니다.
@@ -21,7 +23,7 @@
 
 단신 파이프라인은 `shortnews_vectors.sync_body`에서 공통
 `news_embed.run_sources(['KOTRA_SHORT_NEWS'], db_url=..., root=..., embed=..., progress=...)`를 호출합니다.
-본문은 검증 후 원자 게시하는 세대별 단일 `kotra_article`에 저장하며, 문서와 임베딩 입력 모두
+본문은 검증 후 원자 게시하는 세대별 단일 `total_article`에 저장하며, 문서와 임베딩 입력 모두
 발행일·국가·원천 분류·제목 헤더 + 정제 본문 청크(1000자/150자 겹침)를 사용합니다.
 다른 출처는 보존하며 단신은 HS 태그를 새로 만들거나 본문 메타데이터에 넣지 않습니다.
 DB에서 확정한 단신 대표어는 파일 사전으로 다시 바꾸지 않고 목록형 `keywords`로 저장합니다.
@@ -396,7 +398,7 @@ SQLite의 기존/관리자 확장 스키마에서 중복 갱신, 출처별 ID �
 
 ## 기존 본문 색인 이관
 
-기본 본문은 `NEWS_VECTOR_ROOT` 또는 `data/rag/index`의 활성 세대 `kotra_article`, 공통 키워드는 같은 root의 `keywords/news_keyword`입니다. `chroma_data`는 단신 분류 후보와 명시적 구형 클라이언트 경로이며, 구형 본문을 자동 삭제·이관하지 않습니다.
+기본 본문은 `NEWS_VECTOR_ROOT` 또는 `data/rag/index`의 활성 세대 `total_article`, 공통 키워드는 같은 root의 `keywords/news_keyword`입니다. `chroma_data`는 단신 분류 후보와 명시적 구형 클라이언트 경로이며, 구형 본문을 자동 삭제·이관하지 않습니다.
 
 `legacy_direct_index_migration_required`가 발생하면 [기존 본문 색인 이관 안내](../../../docs/NEWS_INDEX_MIGRATION.md)의 원본 writer 중지·검증 카탈로그 준비·dry-run·`--apply` 순서를 따릅니다. `python -m backend.app.scheduler.jobs.news_index_migrate --help`로 인자를 확인할 수 있습니다. 원본 파일은 읽기만 하고 임시 복제본에서 벡터를 배치 복사합니다. 모델 호출은 없으며 기존 ID·문서·벡터와 타 출처를 보존합니다. 형식·모델·카탈로그가 맞지 않으면 게시하지 않습니다.
 

@@ -1,8 +1,10 @@
 # 기존 본문 Chroma의 일회성 세대 이관
 
-`news_embed`의 기본 본문 경로는 `NEWS_VECTOR_ROOT` 또는 저장소의 `data/rag/index`입니다. 활성 세대는 `active.json`이 가리키며 그 세대의 `chroma/kotra_article`, `articles.jsonl`, `vocabulary.json`, `status.json`을 함께 사용합니다. 공통 키워드는 같은 root의 `keywords/news_keyword`이고 단신 분류 후보는 별도 `chroma_data/short_news_keywords_<버전>`입니다.
+> 이름 변경: `kotra_article`은 `total_article`로 변경되었습니다. 기존 테스트 결과는 당시 기록을 보존합니다.
 
-구형 `chroma_data/kotra_article`은 자동으로 삭제하거나 새 경로로 간주하지 않습니다. `legacy_direct_index_migration_required`는 구형 본문이 있는 상태에서 새 세대가 준비되지 않았다는 뜻입니다. 아래 명령은 본문 벡터를 복사하며 OpenAI를 호출하지 않습니다. `news_keyword`나 단신 분류 후보 컬렉션은 이관하지 않고 원본 위치에 그대로 둡니다. 공통 키워드는 이후 정상 색인 실행에서 DB 전체 태그를 기준으로 갱신합니다.
+`news_embed`의 기본 본문 경로는 `NEWS_VECTOR_ROOT` 또는 저장소의 `data/rag/index`입니다. 활성 세대는 `active.json`이 가리키며 그 세대의 `chroma/total_article`, `articles.jsonl`, `vocabulary.json`, `status.json`을 함께 사용합니다. 공통 키워드는 같은 root의 `keywords/news_keyword`이고 단신 분류 후보는 별도 `chroma_data/short_news_keywords_<버전>`입니다.
+
+구형 `chroma_data/total_article`은 자동으로 삭제하거나 새 경로로 간주하지 않습니다. `legacy_direct_index_migration_required`는 구형 본문이 있는 상태에서 새 세대가 준비되지 않았다는 뜻입니다. 아래 명령은 본문 벡터를 복사하며 OpenAI를 호출하지 않습니다. `news_keyword`나 단신 분류 후보 컬렉션은 이관하지 않고 원본 위치에 그대로 둡니다. 공통 키워드는 이후 정상 색인 실행에서 DB 전체 태그를 기준으로 갱신합니다.
 
 ## 이관 입력과 사전 확인
 
@@ -126,7 +128,7 @@ python -m backend.app.scheduler.jobs.news_index_migrate \
 ## 원본 보존·복구
 
 - 원본 경로에는 Chroma 클라이언트를 연결하지 않습니다. SQLite WAL/SHM과 HNSW 파일을 포함한 전체 디렉터리를 복제합니다. 파일 내용·목록의 SHA-256을 복제 전후·게시 직전에 확인하고 임시 복제본에서만 Chroma를 엽니다. 원본 파일·컬렉션을 수정·삭제하지 않습니다. dry-run도 임시 복제본을 만들며 종료 시 정리합니다. 이는 writer 중지를 대신하는 분산 스냅샷 기능은 아닙니다.
-- 적용 시 소유한 대상 복제본에서 `kotra_article` 이외의 컬렉션을 제거합니다. 원본의 다른 컬렉션은 그대로 유지하며, 전역 키워드 인덱스는 별도 생성 흐름을 따릅니다.
+- 적용 시 소유한 대상 복제본에서 `total_article` 이외의 컬렉션을 제거합니다. 원본의 다른 컬렉션은 그대로 유지하며, 전역 키워드 인덱스는 별도 생성 흐름을 따릅니다.
 - 적용 시 새 대상 root와 `publish.lock`이 생성될 수 있습니다. 검증 실패 시 기존 `active.json`과 DB 식별 기록은 보존합니다. 별도 활성 세대가 이미 있으면 덮어쓰지 않습니다.
 - 모든 ID·문서·벡터를 검증합니다. 기존 메타데이터 중 키워드는 위의 명시적 전환 규칙으로 갱신하고 나머지는 엄격하게 대조하며 필수 메타데이터를 보완합니다. 카탈로그와 사전을 저장하고 소유 클라이언트를 닫은 뒤 `active.json`을 원자적으로 게시합니다.
 - 같은 입력의 재실행은 활성 상태·컬렉션 계약과 모든 레코드를 다시 대조해 `already_complete`를 반환합니다. 이관 뒤 정상 갱신으로 다른 세대가 활성화됐다면 이관 CLI는 중단합니다. 정상 갱신을 되돌리지 않습니다.

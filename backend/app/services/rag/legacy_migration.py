@@ -18,7 +18,7 @@ from backend.app.services.rag.store import (
     persistent_client, validate_generation_contract, collection_distance,
 )
 
-COLLECTION = 'kotra_article'
+from backend.app.services.news_collections import ARTICLE_COLLECTION as COLLECTION
 
 
 def fingerprint(root):

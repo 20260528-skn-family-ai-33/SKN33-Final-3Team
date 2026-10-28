@@ -44,7 +44,7 @@ def test_publish_closes_owned_handles_before_publish_without_closing_external_re
         if stage=='verified':assert all(c.closed for c in handles if c is not reader_client)
     second=store.publish([document(body='새로운 합성 본문')],ALL_SOURCES,vectors,hook=verify)
     assert first['generation']!=second['generation'] and not reader_client.closed
-    assert reader.collection('kotra_article').count()==1
+    assert reader.collection('total_article').count()==1
     reader_client.close()
 
 
@@ -66,7 +66,7 @@ def test_close_failure_never_replaces_active_generation(tmp_path,fail_old):
     failed=[json.loads(p.read_text(encoding='utf-8')) for p in (store.root/'generations').glob('*/status.json')]
     assert sum(r['status']=='failed' for r in failed)==1
     store.client_factory=st.persistent_client
-    with closing(store.snapshot().client) as client:assert client.get_collection('kotra_article').count()==1
+    with closing(store.snapshot().client) as client:assert client.get_collection('total_article').count()==1
 
 
 def test_atomic_json_windows_branch_keeps_file_fsync_and_utf8_without_directory_open(tmp_path,monkeypatch):

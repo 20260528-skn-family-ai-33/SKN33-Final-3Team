@@ -1,5 +1,7 @@
 # 해외시장뉴스 DB 적재·임베딩 사용 안내
 
+> 이름 변경: `kotra_article`은 `total_article`로 변경되었습니다. 기존 테스트 결과는 당시 기록을 보존합니다.
+
 KOTRA 해외시장뉴스 기사를 MySQL과 Chroma(vector DB)에 넣습니다.
 
 | 단계 | 코드 | 하는 일 |
@@ -8,7 +10,7 @@ KOTRA 해외시장뉴스 기사를 MySQL과 Chroma(vector DB)에 넣습니다.
 | ② 키워드 정리 | `services/news_keywords/keyword_clean.py` | 동의어·지역·품목을 정리해 `news_keywords_clean.csv` 생성 ([NEWS_KEYWORDS_USAGE.md](news_keywords/NEWS_KEYWORDS_USAGE.md)) |
 | ③ MySQL 적재 | `scheduler/jobs/news_load.py` (변환: `services/news_load.py`) | 기사 → `article`, 키워드·국가·품목 → `article_tag`, 일별 기사 수 → `news_keyword_daily`·`news_product_daily` |
 | ③-1 키워드 분류 적재 | `scheduler/jobs/keyword_topic_load.py` | 분류 틀 → `keyword_category`, 주제어 상태(분류·미분류·검수 대기·동의어/상위어) → `keyword_topic` |
-| ④ 임베딩 | `scheduler/jobs/news_embed.py` | `article` 본문 조각 → Chroma `kotra_article`, 키워드 → `news_keyword` |
+| ④ 임베딩 | `scheduler/jobs/news_embed.py` | `article` 본문 조각 → Chroma `total_article`, 키워드 → `news_keyword` |
 
 ③은 ①·②의 결과 파일을, ③-1은 ③의 `article_tag`와 ②의 결과 파일을, ④는 ③의 MySQL 테이블을 읽습니다. **① → ② → ③ → ③-1 → ④ 순서**로 실행합니다.
 ② 키워드 정리와 ③-1은 동의어·상위어·분류표 사전(`data/news_keywords/`, git 제외)이 없으면 멈춥니다 — 새로 받은 저장소라면
@@ -168,7 +170,7 @@ WHERE t.keyword_text IN ('AI', '인공지능', 'K뷰티', '전기차보조금', 
 
 ## ④ 임베딩 (`news_embed`)
 
-`article`의 본문은 `NEWS_VECTOR_ROOT`(기본 `data/rag/index`)의 활성 세대 안 `kotra_article` 컬렉션에, 키워드(주제어)는 같은 root의 `keywords/news_keyword`에 넣습니다. `chroma_data` 직접 접근 예시는 아래에 남긴 과거 검증 기록에만 해당합니다.
+`article`의 본문은 `NEWS_VECTOR_ROOT`(기본 `data/rag/index`)의 활성 세대 안 `total_article` 컬렉션에, 키워드(주제어)는 같은 root의 `keywords/news_keyword`에 넣습니다. `chroma_data` 직접 접근 예시는 아래에 남긴 과거 검증 기록에만 해당합니다.
 관련 기사 찾기(RAG)와 비슷한 키워드 추천에 씁니다. **MySQL에는 있지만 컬렉션에 아직 없는 기사만 임베딩해 추가합니다.**
 
 ```powershell
@@ -197,7 +199,7 @@ python -m backend.app.scheduler.jobs.news_embed --rebuild
   [2022-01-03 | CZ | 외부전문가 기고] [기고] 체코에서 거주용 부동산 구매정보
   필자는 2010년부터 체코에서 현지 공인중개사로 …
   ```
-- `kotra_article`: id는 `<article_id>:<조각 번호>`, 메타데이터는 `article_id`·`external_id`·`source_code`·`title`·`published_date`·
+- `total_article`: id는 `<article_id>:<조각 번호>`, 메타데이터는 `article_id`·`external_id`·`source_code`·`title`·`published_date`·
   `published_ymd`(정수, 기간 필터)·`category`·`countries`·`keywords`(목록, `$contains` 필터)·`chunk`·`body_hash`입니다.
 - `news_keyword`: id·문서는 키워드 글자 그대로, 메타데이터는 `keyword`·`article_count`(그 키워드가 붙은 기사 수)입니다.
 - 이미 있는 기사는 다시 임베딩하지 않습니다. 조각 문서가 바뀐 기사(제목·본문, 또는 머리줄의 발행일·국가·분류)와 조각이 일부만 들어간
@@ -326,7 +328,7 @@ python -c $code
 
 ### 공통 색인·집계 계약 보완 (2026-10-25)
 
-공통 `news_embed.run_sources`와 예약 경로는 검증을 마친 본문 세대만 원자적으로 게시합니다. 위 구형 직접-client 예시와 달리 기본 본문은 단일 `kotra_article`을 검증 후 게시하며, 지정 출처의 숨김·삭제를 다음 세대에 반영하고 다른 출처는 보존합니다. 문서와 임베딩 입력은 동일한 발행일·국가·분류·제목 헤더+본문 청크(1000자/150자 겹침)입니다. 메타데이터만 달라지면 벡터를 재사용합니다. 키워드 전역 조회가 실패하면 기존 후보 삭제를 수행하지 않습니다.
+공통 `news_embed.run_sources`와 예약 경로는 검증을 마친 본문 세대만 원자적으로 게시합니다. 위 구형 직접-client 예시와 달리 기본 본문은 단일 `total_article`을 검증 후 게시하며, 지정 출처의 숨김·삭제를 다음 세대에 반영하고 다른 출처는 보존합니다. 문서와 임베딩 입력은 동일한 발행일·국가·분류·제목 헤더+본문 청크(1000자/150자 겹침)입니다. 메타데이터만 달라지면 벡터를 재사용합니다. 키워드 전역 조회가 실패하면 기존 후보 삭제를 수행하지 않습니다.
 
 기존 KOTRA 전용 두 뷰는 유지하고 출처별 뷰와 시장뉴스+단신 통합 뷰를 분리합니다. `news_keyword_daily`는 시장뉴스+단신(구형 출처 별칭 포함), `news_product_daily`는 시장뉴스만 집계하며 신문을 자동 편입하지 않습니다. 단신의 기존 수동 HS 태그는 SQL에 보존하지만 HS 집계·본문 벡터에 넣지 않습니다. 실패 기간을 0건으로 채우지 않으며 수집 상태는 실행 이력과 함께 해석해야 합니다.
 
@@ -345,7 +347,7 @@ root의 `database.json`에는 접속 자격 증명을 제외한 DB 식별 해시
 
 ## 기존 본문 색인 이관
 
-기본 본문은 `NEWS_VECTOR_ROOT` 또는 `data/rag/index`의 활성 세대 `kotra_article`, 공통 키워드는 같은 root의 `keywords/news_keyword`입니다. `chroma_data`는 단신 분류 후보와 명시적 구형 클라이언트 경로이며, 구형 본문을 자동 삭제·이관하지 않습니다.
+기본 본문은 `NEWS_VECTOR_ROOT` 또는 `data/rag/index`의 활성 세대 `total_article`, 공통 키워드는 같은 root의 `keywords/news_keyword`입니다. `chroma_data`는 단신 분류 후보와 명시적 구형 클라이언트 경로이며, 구형 본문을 자동 삭제·이관하지 않습니다.
 
 `legacy_direct_index_migration_required`가 발생하면 [기존 본문 색인 이관 안내](../../../docs/NEWS_INDEX_MIGRATION.md)의 원본 writer 중지·검증 카탈로그 준비·dry-run·`--apply` 순서를 따릅니다. `python -m backend.app.scheduler.jobs.news_index_migrate --help`로 인자를 확인할 수 있습니다. 원본 파일은 읽기만 하고 임시 복제본에서 벡터를 배치 복사합니다. 모델 호출은 없으며 기존 ID·문서·벡터와 타 출처를 보존합니다. 형식·모델·카탈로그가 맞지 않으면 게시하지 않습니다.
 

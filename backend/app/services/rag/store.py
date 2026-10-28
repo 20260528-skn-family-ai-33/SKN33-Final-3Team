@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from filelock import FileLock
 
+from backend.app.services.news_collections import ARTICLE_COLLECTION
 from backend.app.schemas.rag import ArticleSource, COLLECTION_BY_SOURCE
 from backend.app.services.rag.documents import ArticleDocument
 
@@ -56,7 +57,7 @@ def has_legacy_body(path):
     if not database.is_file():
         return False
     with sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True) as conn:
-        return conn.execute("SELECT 1 FROM collections WHERE name='kotra_article' LIMIT 1").fetchone() is not None
+        return conn.execute("SELECT 1 FROM collections WHERE name=? LIMIT 1", (ARTICLE_COLLECTION,)).fetchone() is not None
 
 
 

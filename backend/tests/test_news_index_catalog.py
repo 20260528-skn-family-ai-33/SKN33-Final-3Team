@@ -37,7 +37,7 @@ def write_raw(path, records):
 def collection_rows(root):
     snapshot = GenerationStore(root).snapshot()
     try:
-        data = read_all(snapshot.collection('kotra_article'), ['documents', 'metadatas', 'embeddings'])
+        data = read_all(snapshot.collection('total_article'), ['documents', 'metadatas', 'embeddings'])
         return {key: (doc, meta, list(vector)) for key, doc, meta, vector in zip(
             data['ids'], data['documents'], data['metadatas'], data['embeddings'])}
     finally:
@@ -101,7 +101,7 @@ def export(data, **kwargs):
 def seed_legacy(data, name='legacy'):
     source = data['root'] / name
     client = persistent_client(source)
-    col = client.create_collection('kotra_article', embedding_function=None,
+    col = client.create_collection('total_article', embedding_function=None,
         metadata={'embedding_model': MODEL, 'hnsw:space': 'cosine'})
     original = {}
     for row in news_embed.read_rows(data['engine']):
@@ -181,7 +181,7 @@ def test_country_order_fix_does_not_accept_other_legacy_changes(dataset, change)
     export(dataset)
     source, original = seed_legacy(dataset)
     client = persistent_client(source)
-    col = client.get_collection('kotra_article', embedding_function=None)
+    col = client.get_collection('total_article', embedding_function=None)
     key = sorted(k for k in original if k.startswith('201:'))[0]
     text, meta, _ = original[key]
     if change == 'title': text = text.replace('합성 다국가 기사', '다른 제목')

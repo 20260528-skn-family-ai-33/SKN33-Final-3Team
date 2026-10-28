@@ -51,7 +51,7 @@ class PipelineTest(unittest.TestCase):
     def body_collection(self):
         snapshot = GenerationStore(self.db.root/'vectors').snapshot()
         self.addCleanup(snapshot.client.close)
-        return snapshot.collection('kotra_article')
+        return snapshot.collection('total_article')
 
     def run_pipeline(self):
         return pipeline.run(self.path, db_url=self.db.url, env_path=self.db.root/'absent.env',

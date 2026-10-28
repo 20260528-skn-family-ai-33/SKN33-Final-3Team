@@ -97,7 +97,7 @@ class PublicSearchTest(unittest.TestCase):
     def test_legacy_direct_index_is_explicit_transition_failure(self):
         legacy=self.db.root/'legacy';legacy.mkdir()
         with sqlite3.connect(legacy/'chroma.sqlite3') as conn:
-            conn.execute('CREATE TABLE collections(name TEXT)');conn.execute("INSERT INTO collections VALUES ('kotra_article')")
+            conn.execute('CREATE TABLE collections(name TEXT)');conn.execute("INSERT INTO collections VALUES ('total_article')")
         before=(legacy/'chroma.sqlite3').read_bytes();encode=Mock()
         with patch.object(store,'ROOT',self.root),patch.object(store,'LEGACY_ROOT',legacy):
             with self.assertRaisesRegex(ValueError,'legacy_direct_index_migration_required'):

@@ -1,5 +1,7 @@
 # 단신속보 일일 적재 인계
 
+> 이름 변경: `kotra_article`은 `total_article`로 변경되었습니다. 기존 테스트 결과는 당시 기록을 보존합니다.
+
 저장소 루트에서 실행합니다. 실행 환경에 `backend/requirements.txt`의 의존성을 준비하고 `.env.sample`의 단신 API·OpenAI·MySQL 항목을 별도 `.env`에 설정합니다. 실제 설정과 인증서, 수집 원문, DB·색인·캐시·로그는 커밋하지 않습니다.
 
 ## 적재 전 준비
@@ -36,7 +38,7 @@ MySQL만 적재할 때는 `python -m backend.app.scheduler.jobs.shortnews_load -
 
 - MySQL 출처는 `KOTRA_SHORT_NEWS`이며 기사 ID와 출처의 유일키로 같은 기사를 갱신합니다. 본문은 전체 HTML을 정제·마스킹해 `body_masked`에 저장합니다.
 - 단신은 HS 태그를 생성하거나 HS 집계에 기여하지 않습니다. 기존 수동 태그·관리자 설정을 임의 삭제하지 않습니다.
-- DB 분류에서 선택한 대표어는 `article_tag`에 저장하고 공통 본문 `kotra_article` 및 키워드 `news_keyword` 색인에 반영합니다. 분류 후보 색인은 별도로 유지합니다.
+- DB 분류에서 선택한 대표어는 `article_tag`에 저장하고 공통 본문 `total_article` 및 키워드 `news_keyword` 색인에 반영합니다. 분류 후보 색인은 별도로 유지합니다.
 - `NEWS_VECTOR_ROOT`의 기본값은 `data/rag/index`입니다. 본문 세대·키워드 저장소·DB 식별 기록을 함께 보존합니다. 같은 root에 다른 DB의 자료를 합치지 않습니다.
 - 요약은 분석 캐시와 실행별 `shortnews_analysis_results.json`에 남습니다. 입력·분류가 같으면 분석과 임베딩을 재사용합니다.
 - `data/shortnews/daily/latest_run.json`과 날짜별 실행 결과를 확인합니다. 수집 및 MySQL·색인이 모두 성공한 날짜만 완료로 기록하며 부분 성공은 재시도합니다.

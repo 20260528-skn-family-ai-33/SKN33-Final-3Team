@@ -30,7 +30,7 @@ def legacy(tmp_path):
     source=tmp_path/'legacy';root=tmp_path/'target';catalog=tmp_path/'catalog.json'
     docs=[article(1,'KOTRA_MARKET'),article(2,'KOTRA_SHORT_NEWS')]
     client=persistent_client(source)
-    col=client.create_collection('kotra_article',embedding_function=None,
+    col=client.create_collection('total_article',embedding_function=None,
         metadata={'embedding_model':MODEL,'hnsw:space':'cosine'})
     for doc in docs:
         rows=news_embed.build_docs({'article_id':doc.article_id,'external_id':doc.external_id,
@@ -51,7 +51,7 @@ def run(legacy,**kw):
 
 def rows(root):
     snap=GenerationStore(root).snapshot()
-    try:return read_all(snap.collection('kotra_article'),['documents','metadatas','embeddings'])
+    try:return read_all(snap.collection('total_article'),['documents','metadatas','embeddings'])
     finally:snap.client.close()
 
 
@@ -127,7 +127,7 @@ def test_corrupt_ready_status_fails_without_writing(legacy,field,value):
 
 def test_existing_collection_contract_checked(legacy):
     out=run(legacy,apply=True);client=persistent_client(legacy[1]/'generations'/out['generation']/'chroma')
-    col=client.get_collection('kotra_article',embedding_function=None);col.modify(metadata={k:v for k,v in col.metadata.items() if k!='hnsw:space'}|{'dimensions':8});client.close();before=migration.fingerprint(legacy[1])
+    col=client.get_collection('total_article',embedding_function=None);col.modify(metadata={k:v for k,v in col.metadata.items() if k!='hnsw:space'}|{'dimensions':8});client.close();before=migration.fingerprint(legacy[1])
     with pytest.raises(ValueError,match='existing_collection'):run(legacy,apply=True)
     assert migration.fingerprint(legacy[1])==before
 
@@ -142,7 +142,7 @@ def test_existing_active_and_database_mismatch_preserved(legacy):
 
 
 def test_model_and_unknown_body_catalog_fail_closed(legacy):
-    c=persistent_client(legacy[0]);old=c.get_collection('kotra_article',embedding_function=None);data=read_all(old,['documents','metadatas','embeddings']);c.delete_collection('kotra_article');col=c.create_collection('kotra_article',embedding_function=None,metadata={'hnsw:space':'cosine'});col.add(**data);c.close()
+    c=persistent_client(legacy[0]);old=c.get_collection('total_article',embedding_function=None);data=read_all(old,['documents','metadatas','embeddings']);c.delete_collection('total_article');col=c.create_collection('total_article',embedding_function=None,metadata={'hnsw:space':'cosine'});col.add(**data);c.close()
     with pytest.raises(ValueError,match='provenance_required'):run(legacy)
     assert run(legacy,legacy_model=MODEL)['status']=='planned'
     d=json.loads(legacy[2].read_text(encoding='utf-8'));d['articles'][0]['metadata_missing']=['body_origin'];legacy[2].write_text(json.dumps(d),encoding='utf-8')
@@ -276,7 +276,7 @@ def test_real_sql_adapter_to_migrated_generation_and_public_refresh_without_reem
         exported={'products':vocab.products,'countries':vocab.countries,'synonyms':vocab.synonyms,
                   'hypernyms':vocab.hypernyms,'categories':{t:vocab.categories.lookup(t) for t in vocab.categories.listed}}
         source=tmp_path/'legacy_sql';target=tmp_path/'migrated_sql';catalog=tmp_path/'sql_catalog.json'
-        c=persistent_client(source);col=c.create_collection('kotra_article',embedding_function=None,metadata={'embedding_model':MODEL,'hnsw:space':'cosine'})
+        c=persistent_client(source);col=c.create_collection('total_article',embedding_function=None,metadata={'embedding_model':MODEL,'hnsw:space':'cosine'})
         for doc in docs:
             data=news_embed.build_docs({'article_id':doc.article_id,'external_id':doc.external_id,'source_code':doc.source_code.value,
                 'title':doc.title,'published_date':doc.published_date,'category':doc.category,'body_masked':doc.body,
@@ -418,7 +418,7 @@ def test_persisted_non_axis_vectors_are_copied_exactly_without_reinsertion(tmp_p
     vectors=np.random.default_rng(27).normal(size=(len(expected),3072)).astype('float32')
     vectors/=np.linalg.norm(vectors,axis=1)[:,None]
     client=persistent_client(source)
-    col=client.create_collection('kotra_article',embedding_function=None,
+    col=client.create_collection('total_article',embedding_function=None,
         metadata={'embedding_model':MODEL,'hnsw:space':'cosine'})
     ids=list(expected)
     col.add(ids=ids,documents=[expected[k][0] for k in ids],
@@ -448,7 +448,7 @@ def test_persisted_non_axis_vectors_are_copied_exactly_without_reinsertion(tmp_p
     assert out['status']=='ready' and out['embedded']==0 and out['keyword_changed_chunks']==1001
     assert migration.fingerprint(source)==before
     with migration.readonly_clone(source,persistent_client) as (reader,_):
-        old=read_all(reader.get_collection('kotra_article',embedding_function=None),['documents','embeddings'])
+        old=read_all(reader.get_collection('total_article',embedding_function=None),['documents','embeddings'])
     new=rows(root)
     original={k:(d,list(v)) for k,d,v in zip(old['ids'],old['documents'],old['embeddings'])}
     assert set(original)==set(new['ids'])
@@ -456,7 +456,7 @@ def test_persisted_non_axis_vectors_are_copied_exactly_without_reinsertion(tmp_p
         assert (document,list(vector))==original[key]
         assert 'keywords' not in meta and json.loads(meta['payload'])['kw_topic']==[]
     snap=GenerationStore(root).snapshot()
-    try:assert [c.name for c in snap.client.list_collections()]==['kotra_article']
+    try:assert [c.name for c in snap.client.list_collections()]==['total_article']
     finally:snap.client.close()
     target_before=migration.fingerprint(root)
     assert migration.migrate(source,root,catalog,DB_ID,apply=True,source_stopped=True)['status']=='already_complete'
