@@ -196,7 +196,7 @@ def _version_key(path):
     return (match[1], int(match[2] or 1)) if match else None
 
 
-def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=2):
+def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=4):
     """customs_monthly ML 단계: 전체 재학습 → <모델>_<YYYYMM>.joblib → ml_model_version(model_a) 기록.
 
     kind="two_stage"(기본)는 최종 모델(2단계 v1 · v3 앙상블, two_stage.monthly), 그 밖의 kind는 단일 모델이다.
