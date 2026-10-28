@@ -170,6 +170,18 @@ class MonthlyRunTest(unittest.TestCase):
         self.assertEqual(record["train_end"], "2024-12-01")  # 정답의 미래 12개월이 2025-12 안에 끝나는 기준월까지
         self.assertEqual(record["data_info"]["input_snapshot"]["as_of_month"], "2025-12-01")
 
+    def test_past_month_rerun_ignores_later_month_folders(self):
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-02-01")):
+            self.run_month("2025-12-01")
+        later = [*FILES, {"path": "data/customs_load_outputs/monthly/202601/collection_a/customs_raw_202601.csv",
+                          "bytes": 1, "sha256": "next"}]  # 그사이 다음 달 수집본이 들어옴
+        with patch.object(C.artifacts, "load_training_data", side_effect=AssertionError("학습 내용이 같아 재학습하지 않아야 함")):
+            self.assertEqual(self.run_month("2025-12-01", files=later)["model_name"], "lightgbm_202512")
+        corrected = [*FILES, {"path": "data/customs_load_outputs/monthly/202512/collection_b/customs_raw_202512.csv",
+                              "bytes": 1, "sha256": "fix"}]  # 그 달 자체의 재수집은 정정
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-02-01", files=corrected)):
+            self.assertEqual(self.run_month("2025-12-01", files=corrected)["model_name"], "lightgbm_202512_r2")
+
     def test_model_code_change_trains_new_revision(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
             self.run_month()

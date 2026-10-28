@@ -150,15 +150,23 @@ def _fx_unavailable(db):
     return db["fx"]["rows"] == 0
 
 
-def _same_inputs(snapshot, files, db):
+def _same_inputs(snapshot, files, db, month=None):
     """저장된 학습 계보(input_snapshot)와 지금 입력이 같은 원본인지.
 
     state.json은 실행 단계·ML 결과가 실행마다 바뀌는 체크포인트라 뺀다. 데이터를 정하는 collection_dir는
     선택된 CSV의 경로·해시로 이미 비교된다. DB 환율·통화 매핑도 비교하되, 환율을 못 읽은 빈 표(DB 장애)는
     정정으로 보지 않는다. 그때 다시 학습하면 환율 피처 없는 모델이 새 버전으로 남는다.
+    month를 주면 그 달보다 뒤의 월별 수집 폴더(monthly/<YYYYMM>/)도 뺀다. 과거 월 모델은 그 달까지만 학습하므로
+    나중에 들어온 달은 학습 내용을 바꾸지 않는다.
     """
+    last = f"{month:%Y%m}" if month is not None else None
+
+    def later(path):
+        found = re.search(r"/monthly/(\d{6})/", path)
+        return last is not None and found is not None and found[1] > last
+
     def data(rows):
-        return [f for f in rows if not f["path"].endswith("/state.json")]
+        return [f for f in rows if not f["path"].endswith("/state.json") and not later(f["path"])]
     if data(snapshot["files"]) != data(files):
         return False
     if _fx_unavailable(db) and snapshot["fx"]["rows"] > 0:
@@ -216,7 +224,7 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
                 files, db = artifacts.input_manifest(), artifacts.db_inputs(engine, month)  # 학습·기록과 같은 DB
                 config = _model_config(kind)
             if (record["data_info"].get("model_config") == config
-                    and _same_inputs(record["data_info"]["input_snapshot"], files, db)):
+                    and _same_inputs(record["data_info"]["input_snapshot"], files, db, month)):
                 matched = revision, name, artifact, record_path, record
                 # 환율을 못 읽으면 파일만 비교하므로 정정 전·후 리비전이 모두 맞는다. 그때는 끝까지 보고 가장 최신을 고른다.
                 if not _fx_unavailable(db):
