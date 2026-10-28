@@ -2,15 +2,21 @@
 import { useState } from 'react'
 import Icon from './Icon'
 import { Btn, Check } from './ui'
-import { continents, countries, hs4Groups, toggleValue } from '../data/catalog'
+import { countries, registerProducts, toggleValue } from '../data/catalog'
+import { api } from '../api/client'
+import { useQuery, ErrorNotice, useDebouncedValue } from '../api/hooks'
+import { useApp } from '../store'
 
 /** HS4 검색·확정 입력. 확정되면 onConfirm(group)을 부른다. */
 export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll }) {
+  const { run } = useApp()
   const [query, setQuery] = useState(group ? `${group.code} · ${group.name}` : '')
   const [open, setOpen] = useState(false)
   const confirmed = group && query === `${group.code} · ${group.name}`
   const q = query.trim()
-  const results = q ? hs4Groups.filter(g => g.code.startsWith(q) || g.name.includes(q) || g.items.some(([id, n]) => id.startsWith(q) || n.includes(q))) : hs4Groups
+  const settled = useDebouncedValue(q)
+  const search = useQuery('/reference/hs-codes', { q: settled, depth: 4, limit: 5 }, settled.length >= 2 && !confirmed)
+  const results = (settled === q ? search.data?.items || [] : []).map(h => ({ code: h.hs_code, name: h.name_ko }))
   return (
     <div style={{ display: 'flex', gap: 12, marginTop: 20, position: 'relative' }}>
       <div className={'input' + (q ? ' val' : '') + (open ? ' focus' : '')} style={{ flex: 1, gap: 8 }}>
@@ -29,12 +35,13 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll }) {
           {results.map(g => (
             <button type="button" key={g.code} className="reset" role="option" aria-selected="false"
               onMouseDown={e => e.preventDefault()}
-              onClick={() => { setQuery(`${g.code} · ${g.name}`); setOpen(false); onConfirm(g) }}
+              onClick={() => run(async () => { const data = await api(`/reference/hs-codes/${g.code}/children`, { query: { hs_ver: 'HS2022' } }); registerProducts(data.items); setQuery(`${g.code} · ${g.name}`); setOpen(false); onConfirm({ ...g, items: data.items.map(h => [h.hs_code, h.name_ko]) }) })}
               style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', borderRadius: 8 }}>
-              <span className="hs">HS4 {g.code}</span><b>{g.name}</b><span className="note">하위 {g.items.length}개</span>
+              <span className="hs">HS4 {g.code}</span><b>{g.name}</b><span className="note">하위 품목 보기</span>
             </button>
           ))}
-          {!results.length && <p className="muted" style={{ padding: '10px 12px' }}>검색 결과가 없습니다. 품목명이나 HS 코드를 확인해 주세요.</p>}
+          <ErrorNotice error={search.error} retry={search.reload} />
+          {!results.length && !search.error && <p className="muted" style={{ padding: '10px 12px' }}>{q.length < 2 ? '품목명 또는 HS4를 두 글자 이상 입력하세요.' : search.loading ? '검색 중…' : '검색 결과가 없습니다.'}</p>}
         </div>
       )}
     </div>
@@ -44,11 +51,13 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll }) {
 /** 대륙 추가 칩 + 국가 체크 목록(관심사 등록용 격자 / 관심정보용 칩) */
 export function CountryPicker({ value, onChange, variant = 'grid' }) {
   const [query, setQuery] = useState('')
+  const regions = useQuery('/reference/regions')
+  const continents = (regions.data?.items || []).filter(r => !r.parent_id)
   const list = countries.filter(c => !query.trim() || c.name.includes(query.trim()))
   const shown = variant === 'chips' && !query.trim()
     ? [...countries.filter(c => value.includes(c.name)), ...countries.filter(c => !value.includes(c.name)).slice(0, 3)]
     : (query.trim() ? list : countries.slice(0, Math.max(9, value.length)))
-  const addContinent = name => onChange([...new Set([...value, ...countries.filter(c => c.continent === name).map(c => c.name)])])
+  const addContinent = region => onChange([...new Set([...value, ...countries.filter(c => region.country_codes.includes(c.country_code)).map(c => c.name)])])
   return (
     <>
       <div className={'input' + (query ? ' val' : '')} style={{ marginTop: variant === 'grid' ? 20 : 12 }}>
@@ -56,10 +65,10 @@ export function CountryPicker({ value, onChange, variant = 'grid' }) {
         <Icon name="search" size={18} color="#9AA0AA" />
       </div>
       <div className="chips" style={{ marginTop: variant === 'grid' ? 14 : 12 }}>
-        {continents.map(c => <button type="button" key={c} className="chip sm dash" onClick={() => addContinent(c)}>+ {c}</button>)}
+        {continents.map(c => <button type="button" key={c.region_id} className="chip sm dash" onClick={() => addContinent(c)}>+ {c.name_ko}</button>)}
       </div>
       <p className="note" style={{ marginTop: 8 }}>
-        {variant === 'grid' ? '대륙 추가 시 해당 대륙의 모든 국가가 자동 추가됩니다.' : '대륙 추가 → 해당 대륙의 모든 국가 자동 추가 · 중복 제외'}
+        {regions.error ? '대륙 정보가 준비되지 않아 국가별 선택을 제공합니다.' : variant === 'grid' ? '대륙 추가 시 해당 대륙의 모든 국가가 자동 추가됩니다.' : '대륙 추가 → 해당 대륙의 모든 국가 자동 추가 · 중복 제외'}
       </p>
       {variant === 'grid' ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginTop: 16 }} className="resp-stack">

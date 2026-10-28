@@ -69,13 +69,13 @@ function Toast() {
 
 export default function App() {
   const route = useRoute()
-  const { session } = useApp()
+  const { session, loading, loadError, refresh } = useApp()
   const { path } = route
   // 카카오·네이버·구글 로그인에서 /oauth/{provider}?code=… 로 돌아온 경우 먼저 처리한다.
   const [oauthProvider, setOauthProvider] = useState(callbackProvider)
   const finishOAuth = useCallback(() => setOauthProvider(null), [])
   const isPublic = PUBLIC[path]
-  const needsLogin = !oauthProvider && !isPublic && !session
+  const needsLogin = !loading && !loadError && !oauthProvider && !isPublic && !session
 
   const adminAccountRoute = session?.role === 'admin' && (path === '/account' || path.startsWith('/account/'))
   useEffect(() => {
@@ -87,7 +87,9 @@ export default function App() {
   }, [needsLogin])
 
   let content
-  if (oauthProvider) {
+  if (loading || loadError) {
+    content = <><AuthHeader /><main className="page"><div className="wrap card"><p role={loadError ? 'alert' : 'status'}>{loadError?.message || '로그인 정보를 불러오는 중…'}</p>{loadError && <button className="btn" onClick={refresh}>다시 불러오기</button>}</div></main><FooterSmall /></>
+  } else if (oauthProvider) {
     content = <><AuthHeader /><div className="app-body" id="main"><OAuthCallback provider={oauthProvider} onDone={finishOAuth} /></div><FooterSmall /></>
   } else if (isPublic) {
     const Page = PUBLIC[path]

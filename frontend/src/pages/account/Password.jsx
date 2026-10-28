@@ -8,7 +8,7 @@ import { PASSWORD_HINT, isStrongPassword } from '../../utils/validate'
 import PasswordRules from '../../components/PasswordRules'
 
 export default function Password() {
-  const { session, changePassword, setAccounts, notify } = useApp()
+  const { session, changePassword, notify } = useApp()
   const [verified, setVerified] = useState(() => sessionStorage.getItem('bs2.pwVerified') === session?.email)
   const [email, setEmail] = useState('')
   const [form, setForm] = useState({ current: '', next: '', confirm: '' })
@@ -20,18 +20,17 @@ export default function Password() {
     sessionStorage.setItem('bs2.pwVerified', session.email)
     setVerified(true)
   }
-  const save = () => {
+  const save = async () => {
     const next = {}
     if (!form.current) next.current = '현재 비밀번호를 입력해 주세요.'
     if (!isStrongPassword(form.next)) next.next = PASSWORD_HINT
     else if (form.next === form.current) next.next = '현재 비밀번호와 다른 비밀번호를 입력해 주세요.'
     if (form.next !== form.confirm) next.confirm = '새 비밀번호와 일치하지 않습니다.'
     if (Object.keys(next).length) return setError(next)
-    if (!changePassword(form.current, form.next)) return setError({ current: '현재 비밀번호가 올바르지 않습니다. 다시 입력해 주세요.' })
-    setAccounts(list => list.map(a => (a.email === session.email ? { ...a, tempPassword: false } : a)))
+    if (!await changePassword(form.current, form.next)) return setError({ current: '현재 비밀번호가 올바르지 않습니다. 다시 입력해 주세요.' })
     sessionStorage.removeItem('bs2.pwVerified')
-    notify('비밀번호를 변경했습니다.')
-    navigate('/account/profile')
+    notify('비밀번호를 변경했습니다. 다시 로그인해 주세요.')
+    navigate('/login')
   }
 
   if (!verified) {
