@@ -78,6 +78,21 @@ class TwoStageTest(unittest.TestCase):
         joblib.dump(bundle, path)
         return path
 
+    def test_cross_prediction_holds_out_whole_anchors(self):
+        from unittest.mock import patch
+        seen, real = [], T._regressor
+
+        def record(x, y, columns, seed, n_jobs):
+            seen.append(set(self.rows.anchor.loc[x.index]))
+            return real(x, y, columns, seed, n_jobs)
+        with patch.object(T, "_regressor", side_effect=record):
+            T.fit(self.rows, self.columns, "C", k=5, n_jobs=1, folds=2)
+        every = set(self.rows.anchor)
+        folds = seen[1:]  # 첫 호출은 전체 행 1단계
+        held_out = [every - fit_anchors for fit_anchors in folds]
+        self.assertTrue(all(held_out))  # 교차 모델마다 기준월 하나 이상을 통째로 뺀다
+        self.assertEqual(set().union(*held_out), every)  # 모든 기준월이 자기를 빼고 학습한 모델로 예측된다
+
     def test_combine_averages_and_refuses_different_targets(self):
         bundle = T.fit(self.rows, self.columns, "B", n_jobs=1, folds=2)
         pred = T.predict(bundle, self.latest)
