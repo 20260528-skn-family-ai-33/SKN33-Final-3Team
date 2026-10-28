@@ -2,13 +2,17 @@
 
 실행: python -m unittest backend/tests/test_external_refresh.py
 """
+import json
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
 from unittest import mock
 
+import pandas as pd
+
 from backend.app.db.session import make_engine, session_scope
+from backend.app.ml import preprocess as pp
 from backend.app.models.base import Base
 from backend.app.models.batch import BatchRun
 from backend.app.scheduler import main as sched
@@ -101,6 +105,38 @@ class ExternalRefreshTest(unittest.TestCase):
                 mock.patch.object(job, "dotenv_values", return_value={}):
             self.assertEqual(job.run(date(2027, 3, 1), engine=self.engine)["BACI"], "ALREADY")
         self.assertEqual([r[0] for r in self.runs()], ["EXTERNAL_WDI"])  # ALREADY는 batch_run에 남기지 않음
+
+    def write_availability(self, policy="first_release_dates"):
+        (self.tmp / "availability.csv").write_text(
+            "dataset,source,year,available_from,evidence\n"
+            'market,BACI,2024,2026-01-22,"BACI V202601 릴리스 노트, 2026-01-22"\n', "utf-8")
+        (self.tmp / "availability_snapshot.json").write_text(json.dumps(
+            {"policy": policy, "files": [{"path": "data\\external\\baci\\baci_imports_hs22.csv", "sha256": "old"}]}),
+            "utf-8")
+        for folder, name, body in (("baci", "baci_imports_hs22.csv", "year,country_code\n2024,NA\n2025,VN\n"),
+                                   ("comtrade", "comtrade_imports_2025.csv", "year,country_code\n2025,VN\n"),
+                                   ("wdi", "wdi_2022_2026.csv", "year,country_code,gdp_usd\n2025,VN,1.0\n2026,VN,\n")):
+            (self.tmp / folder).mkdir(exist_ok=True)
+            (self.tmp / folder / name).write_text(body, "utf-8")
+
+    def test_availability_follows_refreshed_files(self):
+        self.write_availability()
+        with self.assertRaises(ValueError):  # 갱신 전: 수집한 파일이 기록과 달라 ML이 멈춘다
+            pp.check_versions(self.tmp)
+        job.record_availability(date(2027, 2, 1))
+        pp.check_versions(self.tmp)  # 갱신 후 통과
+        dates = pd.read_csv(self.tmp / "availability.csv", dtype=str, keep_default_na=False)
+        self.assertEqual(sorted(zip(dates.source, dates.year, dates.available_from)), [
+            ("BACI", "2024", "2026-01-22"),  # 기존 최초 공개일은 그대로
+            ("BACI", "2025", "2027-02-01"), ("COMTRADE", "2025", "2027-02-01"), ("WDI", "2025", "2027-02-01")])
+        # WDI 2026은 값이 없어 날짜를 미리 붙이지 않는다
+        self.assertEqual(dates.evidence[0], "BACI V202601 릴리스 노트, 2026-01-22")
+
+    def test_availability_left_alone_for_other_policy(self):
+        self.write_availability(policy="snapshot_dates")
+        job.record_availability(date(2027, 2, 1))
+        with self.assertRaises(ValueError):  # 판마다 날짜를 정하는 정책은 사람이 확인할 때까지 멈춘다
+            pp.check_versions(self.tmp)
 
     def test_registered_monthly(self):
         jobs = {j.id: j for j in sched.build_scheduler().get_jobs()}
