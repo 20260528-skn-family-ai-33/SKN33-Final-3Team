@@ -28,6 +28,7 @@ from backend.app.ml.runtime import runtime_versions
 from backend.app.ml.transforms import TrainingClipper
 
 ROOT = Path(__file__).resolve().parents[3]
+SNAPSHOT_PY311 = ROOT / "data/ml/features_snapshot_py311.pkl"  # 이 PC Python 3.11로 읽히는 피처 스냅샷 (실험·후보 모델·조회 기본값)
 BASELINES = ("baseline_growth", "baseline_mean", "baseline_zero")
 OPTIONAL = {"lightgbm": "lightgbm", "xgboost": "xgboost"}
 KINDS = {*BASELINES, "hgb", "ridge", "elasticnet", "sgd", "random_forest", "extra_trees", *OPTIONAL}
@@ -500,7 +501,7 @@ def main():
     """노트북과 같은 함수로 데이터 로드 → (민감도) → Dev 비교·리포트 → (Holdout)을 한 번에 실행한다."""
     import argparse
     parser = argparse.ArgumentParser(description=main.__doc__)
-    parser.add_argument("--snapshot", type=Path, default=ROOT / "data/ml/features_snapshot_py311.pkl",
+    parser.add_argument("--snapshot", type=Path, default=SNAPSHOT_PY311,
                         help="피처 스냅샷 (기본: 이 PC Python 3.11용)")
     parser.add_argument("--models", nargs="+", default=["hgb", "ridge", "extra_trees"],
                         choices=sorted(KINDS - set(BASELINES)), help="비교할 모델 (기준선 3종은 자동 포함)")
