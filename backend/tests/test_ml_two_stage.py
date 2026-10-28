@@ -103,6 +103,32 @@ class TwoStageTest(unittest.TestCase):
         self.assertTrue(all(held_out))  # 교차 모델마다 기준월 하나 이상을 통째로 뺀다
         self.assertEqual(set().union(*held_out), every)  # 모든 기준월이 자기를 빼고 학습한 모델로 예측된다
 
+    def test_report_writes_markdown_next_to_registry(self):
+        import contextlib
+        import io
+        import json
+        import tempfile
+        from pathlib import Path
+        record = {"model_name": "model_a_two_stage_202609", "created_at": "2026-10-10T03:20:00.000000+09:00",
+                  "status": "READY", "training_mode": "FULL_RETRAIN", "parent_version_id": None,
+                  "train_start": "2023-12-01", "train_end": "2025-09-01", "train_rows": 1122200,
+                  "artifact_path": "model_a_two_stage_202609.joblib", "artifact_sha256": "a" * 64,
+                  "data_info": {"trade_month": "2026-09-01", "features_used": {"base": ["x"] * 33, "ext": ["x"] * 42},
+                                "external_dropped": {"ext": ["log_gdp"]}, "fit_seconds": 430.0, "runtime": {"lightgbm": "4.7.0"}},
+                  "evaluation": {"test_anchor": "2025-09-01", "train_end": "2024-09-01", "train_rows": 511413, "test_rows": 51406,
+                                 "model": {"country_ndcg_at_5": 0.30}, "model_stage1": {"product_ndcg_at_5": 0.68, "rmse": 2.3},
+                                 "baseline_growth_12m": {"country_ndcg_at_5": 0.35, "product_ndcg_at_5": 0.6}}}
+        path = Path(tempfile.mkdtemp()) / "model_a_two_stage_202609.registry.json"
+        path.write_text(json.dumps(record), "utf-8")
+        with contextlib.redirect_stdout(io.StringIO()):
+            out = T.report(path)
+        self.assertEqual(out.name, "model_a_two_stage_202609.md")
+        text = out.read_text("utf-8")
+        self.assertIn("| 국가 NDCG@5 (채택) | 0.3000 | 0.3500 | -0.0500 |", text)
+        self.assertIn("base 33개, ext 42개", text)
+        self.assertIn("ext: log_gdp", text)
+        self.assertIn("기준선 이하", text)  # 채택 지표가 기준선보다 낮으면 경고
+
     def test_combine_averages_and_refuses_different_targets(self):
         bundle = T.fit(self.rows, self.columns, "B", n_jobs=1, folds=2)
         pred = T.predict(bundle, self.latest)

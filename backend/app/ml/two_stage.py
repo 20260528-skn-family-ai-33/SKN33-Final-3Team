@@ -22,8 +22,10 @@
     python -m backend.app.ml.two_stage train --method C --k 100 --external first_release --version v1
     python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_ext_v1.joblib --country 베트남
     python -m backend.app.ml.two_stage query --model 파일1 파일2 --country VN --hs6 850760   (여러 개면 앙상블)
+    python -m backend.app.ml.two_stage report --registry data/ml/monthly_models/model_a_two_stage_202609.registry.json
 """
 import argparse
+import json
 import logging
 import time
 from datetime import datetime
@@ -278,6 +280,62 @@ def query(args, error):
         print(rows.round({"예측 증감률(%)": 1}).to_string(index=False))
 
 
+# 리포트 지표: (이름, 평가 블록, 키). 국가 순위는 2단계 순서(model), 품목 순위 · 증감률은 1단계 성장률(model_stage1)
+REPORT_METRICS = [
+    ("국가 NDCG@5 (채택)", "model", "country_ndcg_at_5"), ("국가 Precision@5", "model", "country_precision_at_5"),
+    ("국가 Hit@5", "model", "country_hit_at_5"), ("국가 상위 20% F1@5", "model", "country_top20_f1_at_5"),
+    ("국가 NDCG@10", "model", "country_ndcg_at_10"), ("품목 NDCG@5", "model_stage1", "product_ndcg_at_5"),
+    ("품목 Precision@5", "model_stage1", "product_precision_at_5"), ("품목 Hit@5", "model_stage1", "product_hit_at_5"),
+    ("증가 여부 ROC-AUC", "model_stage1", "roc_auc"), ("성장률 RMSE (작을수록 좋음)", "model_stage1", "rmse"),
+]
+
+
+def report(registry_path, out=None):
+    """월별 재학습 기록(<이름>.registry.json)을 Markdown 리포트(<이름>.md)로 만든다. 모델 파일은 읽지 않는다."""
+    registry_path = Path(registry_path)
+    record = json.loads(registry_path.read_text("utf-8"))
+    info, ev = record["data_info"], record["evaluation"]
+    num = lambda v: "-" if v is None else f"{v:,.4f}" if isinstance(v, float) else f"{v:,}"  # noqa: E731
+    features = info.get("features_used") or {}
+    features = features if isinstance(features, dict) else {"model": features}
+    dropped = "; ".join(f"{k}: {', '.join(v)}" for k, v in (info.get("external_dropped") or {}).items() if v)
+    runtime = info.get("runtime") or {}
+    lines = [f"# 모델 A 월별 재학습 리포트 · {record['model_name']}", "",
+             "| 항목 | 값 |", "|---|---|",
+             f"| 수집 월 | {info.get('trade_month', '-')} |",
+             f"| 생성 시각 | {record['created_at'][:19]} |",
+             f"| 상태 · 학습 방식 | {record['status']} · {record['training_mode']} |",
+             f"| 부모 버전 | {record.get('parent_version_id') or '-'} |",
+             f"| 학습 기준월 · 행 | {record['train_start']} ~ {record['train_end']} · {num(record['train_rows'])}행 |",
+             f"| 구성 · 1단계 피처 | {', '.join(f'{k} {len(v)}개' for k, v in features.items())} |",
+             f"| 빠진 외부 피처 | {dropped or '없음'} |",
+             f"| 전체 학습 시간 | {info.get('fit_seconds') or 0:,.0f}초 |",
+             f"| 파일 | {record['artifact_path']} (sha256 {record['artifact_sha256'][:12]}…) |",
+             f"| 실행 환경 | {', '.join(f'{k} {v}' for k, v in runtime.items())} |", ""]
+    if not ev.get("model"):
+        lines += ["평가 기록이 없습니다."]
+    else:
+        base = ev.get("baseline_growth_12m", {})
+        lines += [f"## Holdout 평가 (평가 기준월 {ev.get('test_anchor', '-')})", "",
+                  f"학습 기준월 ~{ev.get('train_end', '-')} {num(ev.get('train_rows'))}행으로 같은 구성을 학습해 "
+                  f"평가 행 {num(ev.get('test_rows'))}개로 쟀다. 기준선은 작년 성장률 순서다.", "",
+                  "| 지표 | 최종 모델 | 기준선 | 차이 |", "|---|---|---|---|"]
+        for label, block, key in REPORT_METRICS:
+            value, ref = ev.get(block, {}).get(key), base.get(key)
+            diff = f"{value - ref:+.4f}" if value is not None and ref is not None else "-"
+            lines.append(f"| {label} | {num(value)} | {num(ref)} | {diff} |")
+        adopted, ref = ev["model"].get("country_ndcg_at_5"), base.get("country_ndcg_at_5")
+        lines += ["", "- 국가 지표는 2단계 순서, 품목 지표와 ROC-AUC · RMSE는 1단계 성장률로 잰다. RMSE 말고는 모두 클수록 좋다.",
+                  "- READY는 학습 파일이 만들어졌다는 뜻이며, 기준선 미달이어도 저장 · 등록은 막지 않는다."]
+        if adopted is not None and ref is not None and adopted <= ref:
+            lines.append("- **주의: 채택 지표(국가 NDCG@5)가 기준선 이하입니다. 입력 자료와 학습 결과를 확인하세요.**")
+    path = Path(out) if out else registry_path.with_suffix("").with_suffix(".md")
+    path.write_text("\n".join(lines) + "\n", "utf-8")
+    print("\n".join(lines))
+    print(f"\n저장: {path}")
+    return path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -295,9 +353,14 @@ def main():
     q.add_argument("--country")
     q.add_argument("--hs6")
     q.add_argument("--top", type=int, default=5)
+    p = sub.add_parser("report", help="월별 재학습 기록(.registry.json)을 Markdown 리포트로 만들기")
+    p.add_argument("--registry", type=Path, required=True)
+    p.add_argument("--out", type=Path, help="기본값: 기록 파일 옆 <이름>.md")
     args = parser.parse_args()
     if args.cmd == "train":
         train(args)
+    elif args.cmd == "report":
+        report(args.registry, args.out)
     elif not args.country and not args.hs6:
         parser.error("--country 또는 --hs6를 지정하세요")
     elif args.top < 1:
