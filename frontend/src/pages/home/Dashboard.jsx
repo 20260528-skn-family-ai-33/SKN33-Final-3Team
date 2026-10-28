@@ -1,13 +1,14 @@
 // BS06 메인(전체) · BS07 메인(내 관심) · BS13 알림 팝오버(머리글)
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, navigate } from '../../router'
 import { useApp } from '../../store'
 import Icon from '../../components/Icon'
 import { Donut, Sparkline } from '../../components/charts'
-import { articles } from '../../data/articles'
-import { productKeyword } from '../../data/catalog'
+import { useQuery, ErrorNotice } from '../../api/hooks'
+import { mapArticle } from '../../api/adapters'
 import heroShip from '../../assets/hero-ship.jpg'
-import { buildView, scaleCards } from './dashboardModel'
+import useDashboard from './useDashboard'
+import useUnData from './useUnData'
 
 const FEATURES = [
   ['chat', '추이·원인 질문', '“중국 메모리 수출이 왜 늘었어?”처럼 물으면 표와 근거 기사로 답해요.', 'rose'],
@@ -35,22 +36,15 @@ function FeatureCard([icon, title, text, tone]) {
   )
 }
 
-function Ticker({ interest, profile }) {
+function Ticker({ interest }) {
   const [tab, setTab] = useState('all')
   const [index, setIndex] = useState(0)
   const [paused, setPaused] = useState(false)
-  const items = useMemo(() => {
-    let list = articles.filter(a => tab === 'all' || a.kind === tab)
-    if (interest) {
-      const words = profile.products.map(productKeyword)
-      const hit = a => (!profile.countries.length || profile.countries.includes(a.country)) && (!words.length || words.some(w => a.title.includes(w)))
-      list = [...list.filter(hit), ...list.filter(a => !hit(a))]
-    }
-    return list.slice(0, 5)
-  }, [tab, interest, profile.countries, profile.products])
+  const result = useQuery('/articles', { scope: interest ? 'INTERESTED' : 'GLOBAL', tab: ({ all: 'ALL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab], page_size: 5 })
+  const items = (result.data?.items || []).map(mapArticle)
   const current = items[index % items.length]
   useEffect(() => {
-    if (paused) return undefined
+    if (paused || !items.length) return undefined
     const t = setInterval(() => setIndex(i => (i + 1) % items.length), 4500)
     return () => clearInterval(t)
   }, [paused, items.length])
@@ -65,9 +59,9 @@ function Ticker({ interest, profile }) {
       </div>
       <span style={{ width: 1, height: 16, background: 'rgba(255,255,255,.25)' }} />
       <span style={{ fontSize: 13, color: '#B8BEC8' }}>KOTRA</span>
-      <Link to={`/articles?tab=${current?.kind === 'general' ? 'all' : current?.kind}&id=${current?.id}`} style={{ flex: 1, color: '#fff', fontSize: 16, fontWeight: 700 }}>{current?.headline}</Link>
+      <Link to={`/articles?tab=${current?.kind === 'general' ? 'all' : current?.kind}&id=${current?.id}`} style={{ flex: 1, color: '#fff', fontSize: 16, fontWeight: 700 }}>{current?.title || (result.error ? result.error.message : result.loading ? '기사를 불러오는 중…' : '조회된 기사가 없습니다.')}</Link>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#B8BEC8' }}>
-        <span style={{ marginRight: 6 }}>{(index % items.length) + 1} / {items.length}</span>
+        <span style={{ marginRight: 6 }}>{items.length ? (index % items.length) + 1 : 0} / {items.length}</span>
         <button type="button" style={round} aria-label="이전 기사" onClick={() => setIndex(i => (i - 1 + items.length) % items.length)}><Icon name="chevronUp" size={13} color="#fff" stroke={2.2} /></button>
         <button type="button" style={round} aria-label="다음 기사" onClick={() => setIndex(i => (i + 1) % items.length)}><Icon name="chevronDown" size={13} color="#fff" stroke={2.2} /></button>
         <button type="button" style={round} aria-label={paused ? '자동 넘김 재생' : '자동 넘김 일시정지'} onClick={() => setPaused(p => !p)}>
@@ -86,9 +80,11 @@ export default function Dashboard({ route }) {
   const requested = route.query.get('view') || mainView || profile.home
   const view = requested === 'interest' && hasInterest ? 'interest' : 'all'
   const interest = view === 'interest'
-  const data = useMemo(() => buildView(view, profile), [view, profile])
   const [months, setMonths] = useState(3)
-  const cards = scaleCards(data.rankCards, months)
+  const market = useDashboard(view, months, profile)
+  const un = useUnData(profile)
+  const data = { ...market, un: un.items }
+  const cards = data.rankCards
 
   const switchView = next => {
     if (next === 'interest' && !hasInterest) {
@@ -142,6 +138,7 @@ export default function Dashboard({ route }) {
               <path d="M0 250 C 90 220, 150 170, 200 190 C 250 210, 270 240, 320 220 C 380 195, 420 120, 470 60" fill="none" stroke="#C8102E" strokeWidth="30" opacity=".9" />
               <path d="M432 74 L 512 0 L 516 110 Z" fill="#C8102E" opacity=".9" />
             </svg>
+            {data.states.map((s, i) => <ErrorNotice key={i} error={s.error} retry={s.reload} />)}
             <p style={{ fontSize: 14, fontWeight: 700, color: '#B0102A' }}>통계 기준 월 {data.statMonth}</p>
             <h2 style={{ marginTop: 8, fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{data.title}</h2>
             <p style={{ marginTop: 10, fontSize: 14, color: '#444B57' }}>{data.period}</p>
@@ -165,7 +162,7 @@ export default function Dashboard({ route }) {
             <div className="between" style={{ alignItems: 'flex-end' }}>
               <div>
                 <h2 style={{ fontSize: 22, fontWeight: 800 }}>{data.fxTitle}</h2>
-                <p className="muted" style={{ marginTop: 6 }}>2026.10.08 · 직전 영업일 대비</p>
+                <p className="muted" style={{ marginTop: 6 }}>{data.fxDate} · 직전 영업일 대비</p>
               </div>
               <span style={{ fontSize: 12, color: '#5C6370' }}>한국은행 ECOS</span>
             </div>
@@ -212,7 +209,7 @@ export default function Dashboard({ route }) {
                     <span style={{ display: 'block', fontSize: 22, fontWeight: 800 }}>{c.exp}</span>
                     <span style={{ display: 'block', fontSize: 12, color: '#A3AAB6' }}>수입 {c.imp}</span>
                   </span>
-                  <Sparkline d={c.spark} color={c.color} />
+                  <Sparkline values={c.values} color={c.color} />
                 </span>
               </Link>
             ))}
@@ -297,7 +294,7 @@ export default function Dashboard({ route }) {
                 {u.items.map(it => (
                   <div key={it.hs} style={{ marginTop: 12, padding: '12px 0 10px', borderTop: '1px solid #E3E6EA', display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <div className="between" style={{ fontSize: 13 }}>
-                      <span style={{ fontWeight: 600 }}>{it.name} <span className="s" style={{ fontWeight: 400 }}>HS {it.hs}</span></span><span className="hs">{it.rank}</span>
+                      <span style={{ fontWeight: 600 }}>{it.name} <span className="s" style={{ fontWeight: 400 }}>HS {it.hs}</span></span><span className="hs">{it.rank} · {it.period}</span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                       <span className="muted" style={{ fontSize: 12 }}>수출 점유율</span>
@@ -311,7 +308,7 @@ export default function Dashboard({ route }) {
               </div>
             ))}
           </div>
-          <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>전년 대비 증감은 %p(퍼센트포인트) · 예시 수치</p>
+<ErrorNotice error={un.error} /><p className="muted" style={{ marginTop: 10, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
         </section>
 
         <section>
@@ -324,11 +321,11 @@ export default function Dashboard({ route }) {
           </div>
           <div style={{ marginTop: 20, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 22 }} className="resp-stack">
             {data.newsCards.map(n => {
-              const found = articles.find(a => a.title === n.title) || articles.find(a => a.id === n.id)
+              const found = n
               return (
                 <Link key={n.title} to={found ? `/articles?tab=${found.kind === 'general' ? 'all' : found.kind}&id=${found.id}` : '/articles'} style={{ color: '#15181E', display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <img src={n.img} alt="" style={{ width: '100%', height: 170, borderRadius: 14, objectFit: 'cover', display: 'block' }} />
-                  <span style={{ fontSize: 12, fontWeight: 800, color: '#B0102A' }}>{n.kind} <span style={{ fontWeight: 500, color: '#5C6370' }}>· {n.date}</span></span>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: '#B0102A' }}>{({ major: '주요 이슈', short: '단신속보', general: '해외시장뉴스' })[n.kind]} <span style={{ fontWeight: 500, color: '#5C6370' }}>· {n.date}</span></span>
                   <span style={{ fontSize: 16, fontWeight: 800, lineHeight: 1.45 }}>{n.title}</span>
                   <span style={{ fontSize: 13, lineHeight: 1.6, color: '#5C6370' }}>{n.summary}</span>
                 </Link>
