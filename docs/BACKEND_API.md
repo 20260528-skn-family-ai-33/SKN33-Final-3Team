@@ -1,12 +1,12 @@
 # 백엔드 실행 및 인계
 
-기준: API 정의서 v0.18(2026-10-23), 같은 날짜 요구사항정의서·화면설계서, 리포트 PDF·요약보고서 DOCX. 작업 브랜치는 `feat/36-backend`이다. 기존 수집·적재 모듈을 변경하지 않고 `backend/app/api`에 HTTP API와 앱 작업 실행기를 추가했다.
+기준: API 정의서 v0.18(2026-10-23), 같은 날짜 요구사항정의서·화면설계서, 리포트 PDF·요약보고서 DOCX. 현재 연동 작업 브랜치는 `feat/38-Integrate`이다. 최신 설치·저장소·Redis·검증 절차는 [INTEGRATION.md](INTEGRATION.md)를 따른다. 기존 수집·적재 모듈을 변경하지 않고 `backend/app/api`에 HTTP API와 앱 작업 실행기를 추가했다.
 
 ## 구현 범위와 활성화 조건
 
 - 총 130개 번호 중 삭제·예약 106~116은 경로를 만들지 않았다. 119개 경로를 등록했으며 90개는 처리 코드를, 29개는 명세의 보류·정책 미정·외부 실행기 미연결에 대한 명시적 오류 응답을 제공한다. 이것은 119개 기능 전체 완료를 뜻하지 않는다. 상세 상태는 [BACKEND_API_STATUS.md](BACKEND_API_STATUS.md)를 참조한다.
-- 인증·관심·통계·기사·UN 조회·결과 스냅샷·대화 작업·리포트·구독·알림 조회/전달·일부 관리자 기능을 구현했다. 실제 RDS 쓰기와 배포는 실행하지 않았다.
-- **현재 코드 실행에는 앱 저장소 보완이 필요하다.** `api_user_profile`, `api_auth_session`, `api_snapshot`, `api_keyword_block`, `api_audit_event`, `api_rate_limit`, `api_report_file` 7개가 현재 RDS에 없다. `backend/migrations/036_backend_api.sql`은 현재 구현에 대응하는 제안이며 확정 DB 계약이 아니다. 기존 테이블 통합 대안은 아래 DB 재검수 항목에 정리했다. 통합안을 선택하면 코드와 마이그레이션을 함께 변경해야 한다. 이 SQL은 기존 테이블 변경·데이터 시드·수집을 포함하지 않으며 시작/요청 시 자동 DDL은 없다.
+- 인증·관심·통계·기사·UN 조회·결과 스냅샷·대화 작업·리포트·구독·알림 조회/전달·일부 관리자 기능을 구현했다. 로컬 통합 검증 후 RDS에는 승인된 스키마 변경만 적용한다. API/worker/Redis 서버 배포는 별도다.
+- 저장소는 PM 합의에 따라 기존 users/report/notification_setting 확장, api_snapshot/api_audit_event 신규, 인증 세션/요청 제한 Redis로 구현했다. 신규 테이블 2개와 기존 테이블 컬럼 11개를 명시적으로 적용한다. 036 SQL은 폐기된 제안이며 038 마이그레이션을 사용한다. 앱 시작/요청 시 자동 DDL은 없다.
 - 활성 `REPORT_PERIOD`, `REPORT_TYPE` 및 승인된 `NOTIFICATION_TERMS`는 운영/데이터 담당자가 준비한다. 없는 옵션이나 약관을 가짜 값으로 생성하지 않는다. API-09에서 지원 주기를 확인한다. 요청형은 `RPT_ON_DEMAND`, 구독형은 `RPT_WEEKLY`, `RPT_MONTHLY`, `RPT_QUARTERLY` 옵션이 필요하다.
 - ML 학습/예측, RAG 검색·생성·문장 검증은 담당자에게 남겼다. 기사 `summary`는 마스킹한 본문의 앞부분 발췌다. 채팅 의도는 `IntentProvider`의 기본 구현 `OpenAIIntentProvider`가 구조화된 JSON 슬롯으로 추출한다. 규칙 기반 의도/국가/기간 파서와 앞 세 단어 품목 탐색은 제거했다. 기본 모델은 `API_INTENT_MODEL=gpt-4.1-mini`이며 HS 임베딩 모델과 별개다.
 - `async_job`은 사용하지 않는다. 채팅 실행은 기존 chat_message.result_json, 리포트 실행은 report.content_json의 내부 `_execution` 필드에 저장한다. 이번 PR 검수 반영으로 로컬 실행 상태 파일 의존성을 제거했다. 신규 테이블·컬럼 없이 JSON 규약을 확장하며, 다른 기능의 api_ 저장소 보완안과는 별개다.
@@ -20,7 +20,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r backend/requirements-api.txt
 python -m backend.scripts.check_api_schema
-# DB 담당자가 036_backend_api.sql을 검토·적용한 후:
+# INTEGRATION.md 절차로 038 마이그레이션과 Redis를 준비한 후:
 python -m backend.scripts.create_api_admin
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
 # 별도 터미널
@@ -35,19 +35,19 @@ python -m backend.app.api.worker
 
 - `/docs`, `/openapi.json`: API 요청 필드·인증·보류 이유.
 - `/health/live`: 프로세스 확인.
-- `/health/ready`: DB 연결과 앱 테이블 존재 확인. 전체 옵션/컬럼/원천 데이터 준비 완료를 뜻하지 않는다.
+- `/health/ready`: DB 연결, 앱 테이블·추가 컬럼, Redis 연결 확인. 전체 옵션/컬럼/원천 데이터 준비 완료를 뜻하지 않는다.
 - `worker --once`: 구독 발행 조건 확인 후 작업 1건 처리.
 - 파일은 `runtime/reports`에 보관하며 Git에서 제외한다. 임시 실패 파일 정리와 법정/운영 보존 정책은 이번 변경에 포함하지 않았다.
 
 ## 프론트 담당자 연동 계약
 
-이번 변경에는 frontend 파일을 포함하지 않는다. API 호출 클라이언트와 PR #34의 localStorage/mock store 교체는 프론트 담당자가 구현한다. 공통 경로는 `/api/v1`이며 `/docs`에서 요청 계약을 확인할 수 있다. 아래 내용은 프론트 담당자에게 전달할 백엔드 인증·응답 계약이다.
+현재 src/live와 src/api/client.js가 아래 계약에 따라 실연동한다. 기존 목업 store는 진입점에서 제외했다. 공통 경로는 /api/v1이며 /docs에서 요청 계약을 확인한다.
 
 모든 요청에 `credentials: include`를 사용한다. 로그인/가입의 `csrf_token`을 메모리에 보관하고 수정 요청의 `X-CSRF-Token`에 넣는다. 새로고침 뒤에는 `GET /users/me`가 `csrf_token`을 추가 반환하므로 세션을 복구할 수 있다(원 명세에 대한 호환 확장). 세션 쿠키 자체는 HttpOnly이다. snake_case를 그대로 사용하고 bigint 식별자를 Number로 변환하지 않는다. 배열 query는 `country_codes=US&country_codes=CN`처럼 반복 전달한다.
 
 리포트는 `POST reports/preview` → 확인된 `preview_id`와 `confirm_conditions:true`로 `POST reports` → `GET reports/{id}/status` → 웹/파일 조회 순서다. 동일 제출의 재시도에는 같은 `Idempotency-Key`, 다른 제출에는 새 키를 사용한다. PDF/DOCX 선택 파일이 모두 완성된 뒤 READY가 된다. XLSX는 저장 표로 생성하며 표별 전체 1,000행 제한을 적용한다. DB의 기존 READY 제약에 맞춰 DOCX만 선택해도 내부 보관 PDF를 만들지만, 선택하지 않은 PDF 다운로드는 제공하지 않는다.
 
-채팅은 세션 생성 → `client_message_id`를 포함한 메시지 POST → job 폴링 → NEEDS_INPUT이면 clarification 선택값 제출 순서다. 세션에서 조건이 확정된 뒤에도 같은 메시지 키의 재시도는 같은 job을 돌려준다. 미연결 ML/RAG 요청에는 성공한 모델 결과를 만들지 않는다. SQL은 일반 화면 응답에 없으며 XLSX의 정보 시트에 포함한다. 디버그 SQL은 `API_DEBUG_SQL=true`와 SUPER_ADMIN 모두 필요하다.
+채팅은 세션 생성 → `client_message_id`를 포함한 메시지 POST → job 폴링 → NEEDS_INPUT이면 clarification 선택값 제출 순서다. 세션에서 조건이 확정된 뒤에도 같은 메시지 키의 재시도는 같은 job을 돌려준다. 미연결 ML/RAG 요청에는 성공한 모델 결과를 만들지 않는다. SQL은 일반 화면 응답에 없으며 XLSX의 정보 시트에 포함한다. 디버그 SQL은 `API_DEBUG_SQL=true`와 ADMIN 모두 필요하다.
 
 질문 해석 실패, 공개 기간 오류, ML/RAG 연결 대기 및 범위 밖 안내는 마지막 성공 답변의 대화 조건을 지우지 않는다. 성공한 새 질문에서 `all_countries`/`all_products`를 명시하거나 기존 컨텍스트 해제 API를 호출하면 해당 범위를 해제한다. LLM의 `ranking_group`은 COUNTRY 또는 HS6이며 순위 대상이 불명확하면 재질문한다.
 
@@ -73,7 +73,7 @@ API-11은 HS 코드·name_ko·original_name_ko 정확 일치 → Chroma hs_code 
 
 중복 경로였던 `backend/scripts/sync_hs_vectors.py`는 제거했다. 벡터 적재는 HS 담당의 `python -m backend.app.scheduler.jobs.hs_code_embed`로 일원화한다. 이 기존 작업은 자체 MYSQL_* 연결 설정을 사용하므로 운영 DB 대상은 담당자가 설정한다(비밀번호 포함 URL을 명령에 노출하지 않는다). API 서버는 컬렉션을 읽기만 한다. 과거 로컬 검증 데이터는 HS2 96개/HS4 1,228개이며, 배포 범위(HS2/4 또는 전체), 배포 경로, 갱신/재색인 담당은 별도 확정이 필요하다. 기존 적재기의 '새 ID만 추가' 동작도 유지하며 이번 수정에서 재적재하지 않았다.
 
-검색어는 Unicode 정규화·공백 정리·대소문자 정규화 후 2~120자로 제한한다. 2자 미만은 임베딩 없이 빈 결과를 반환한다. API-11은 신뢰 프록시 검증을 거친 IP당 기본 분당 60회(`API_HS_IP_LIMIT`)로 제한하며, 기존 api_rate_limit 저장소가 필요하다. 캐시 적중도 요청 제한에 포함한다. 검색 결과와 질의 벡터는 각각 프로세스당 최대 256개, 300초 TTL로 캐시하며 같은 키의 동시 요청은 합친다. 여러 워커 사이의 캐시는 공유하지 않는다. 기준 데이터 재적재 후 API_HS_CACHE_VERSION을 변경/재시작하거나 TTL 만료를 기다린다. API 요청의 OpenAI 임베딩은 기본 timeout 3초, 자동 재시도 0회다(초기 라이브러리/Chroma 로딩 시간은 별도).
+검색어는 Unicode 정규화·공백 정리·대소문자 정규화 후 2~120자로 제한한다. 2자 미만은 임베딩 없이 빈 결과를 반환한다. API-11은 신뢰 프록시 검증을 거친 IP당 기본 분당 60회(`API_HS_IP_LIMIT`)로 제한하며, Redis 요청 제한 저장소를 사용한다. 캐시 적중도 요청 제한에 포함한다. 검색 결과와 질의 벡터는 각각 프로세스당 최대 256개, 300초 TTL로 캐시하며 같은 키의 동시 요청은 합친다. 여러 워커 사이의 캐시는 공유하지 않는다. 기준 데이터 재적재 후 API_HS_CACHE_VERSION을 변경/재시작하거나 TTL 만료를 기다린다. API 요청의 OpenAI 임베딩은 기본 timeout 3초, 자동 재시도 0회다(초기 라이브러리/Chroma 로딩 시간은 별도).
 
 정확 일치는 confidence=EXACT, 유사 후보는 LOW 또는 MEDIUM이다. 기본 거리 상한 0.70 외에 1위 거리 0.45 이하와 1·2위 차이 0.08 이상을 모두 만족할 때만 MEDIUM으로 표시한다. 이는 정답 확률이 아니며 모든 결과는 requires_selection=true다. 비슷한 후보 또는 빈 결과에도 browse.url을 반환한다. API-12는 ROOT→HS2, HS2→HS4, HS4→HS6를 조회한다. API-38은 품목 되묻기에서 기존 choice_ids 대신 직접 선택한 hs_item을 받을 수 있으며 두 필드 동시 제출은 거절한다. 새 국가/품목/기간 슬롯과 응답 확장은 프론트 연동 시 함께 반영해야 한다.
 
@@ -89,7 +89,7 @@ LLM 호출은 intent·국가의 원문 표현/한국어 이름·품목 원문 �
 
 기본 제공자는 store=False, timeout 기본 10초, SDK 자동 재시도 0회로 동작한다. 마스킹된 질문과 허용된 이전 조건만 전송하며 회원 정보나 DB 실적을 보내지 않는다. 팀 의도 모델은 db.intent_provider에 IntentProvider 구현을 주입하여 교체할 수 있다. ML/RAG 본문 생성은 연결하지 않았다. 구현 방식은 [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)를 참고했다.
 
-PR #34의 Hs4Search는 로컬 hs4Groups를 검색하는 화면이며 아직 이 API를 호출하지 않는다. 이번 작업은 프론트 파일이나 main을 병합하지 않았다. 담당자는 다음을 반영한다.
+현재 live/interests.jsx가 사전 API를 호출한다. 기존 목업 Hs4Search는 현재 진입점에 포함하지 않는다. 아래 규칙을 적용했다.
 
 1. 검색어가 **2글자 이상이고 마지막 입력 후 300ms가 지난 때**에 API-11 호출. 한 조건만 만족하는 OR가 아니다.
 2. 입력 변경/컴포넌트 해제 시 타이머와 이전 fetch를 취소하고, 취소 이후 도착한 응답도 버린다. 429는 즉시 반복 호출하지 않는다.
@@ -142,9 +142,9 @@ API-24 변화 목록은 검증된 현재·비교 월의 거래 키 합집합을 
 
 무역 급증/급감 임계값은 확정 요구사항 기본값을 사용한다. 활성 `service_option.option_code=TRADE_CHANGE_THRESHOLDS`의 JSON으로 `minimum_amount_usd`, `minimum_delta_usd`, `surge_pct`, `drop_pct`, `major_pct`를 재설정할 수 있다. 행 생성/수정 도구는 추가하지 않았다. 일회성 추정은 적재된 `anomaly_code`만 읽고 재학습/재판정하지 않는다.
 
-## DB 재검수 및 팀 결정 필요 사항
+## 이전 DB 검토 기록 및 후속 정책 사항
 
-2026-10-27 RDS를 읽기 전용으로 다시 확인했다. 기존 테이블은 31개이며 앞선 검사와 DDL 변경이 없었다. 다음 내용은 저장 정보의 부족과 설계 대안을 구분한 것으로, 신규 7개 테이블 일괄 적용 요청이 아니다.
+아래 표는 2026-10-27의 설계 대안 기록이다. 현재 확정안은 INTEGRATION.md를 우선한다. 당시 RDS를 읽기 전용으로 다시 확인했다. 기존 테이블은 31개이며 앞선 검사와 DDL 변경이 없었다. 다음 내용은 저장 정보의 부족과 설계 대안을 구분한 것으로, 신규 7개 테이블 일괄 적용 요청이 아니다.
 
 | 대상 | 부족한 정보 / 재사용 및 보완안 |
 |---|---|
@@ -169,7 +169,7 @@ API-24 변화 목록은 검증된 현재·비교 월의 거래 키 합집합을 
 | 리포트 PDF | 표지·목차·핵심 요약·지표/추이·수출국·분석 보류/기사·출처 순서와 녹색/베이지 스타일을 코드로 재현했다. 첨부 PDF 페이지를 배경으로 복제하는 방식은 아니며 픽셀 단위 일치는 보장하지 않는다. |
 | 요약 DOCX | 첨부 DOCX의 결재란·조사환경·현황·결론·후속 검토 표를 보존한 `summary.docx`를 채우고 상세 분석을 뒤에 붙인다. 예시 수치/이름/기존 그래프를 실제 결과로 사용하지 않는다. 부서·직위·성명·전화번호 입력 API가 없으므로 빈 기입란을 둔다. |
 | ML / RAG | 사용자 요청대로 구현 제외. GROWTH_RISK는 POLICY_PENDING, RAG 기사 섹션은 미연결 안내. 모델 추론·AI 검증 성공을 가장하지 않는다. |
-| 추가 앱 저장소 | 기존 users에는 이름·권한·세션 등이 없어 api_ 테이블로 분리했다. 이 DDL과 JSON 확장은 구현 제안이며 기존 DB 확정 계약으로 취급하지 않는다. |
+| 추가 앱 저장소 | PM 합의대로 기존 3개 테이블 확장, api_snapshot/api_audit_event 추가, Redis 세션/요청 제한을 적용한다. |
 | 정책 미확정 | 탈퇴/보존, 계정 복구, 소셜 연결, 과거 통계 스냅샷, 기사 검수/벡터 반영, 분야 삭제 등은 상태표의 DEC 항목이 확정돼야 활성화한다. |
 
 ## 리포트 비교 조건과 결과표 재사용
@@ -178,7 +178,7 @@ API-43은 최종 월초·월말 및 최신 공개 월로 조정한 분석 기간
 
 새 RESULT 스냅샷에는 공통 `Conditions` 필드만 저장한다. 리포트의 sections·formats·request_hash 등 내부 정보는 report 행에 보관한다. 이전 RESULT에 내부 필드가 섞여 있어도 API-43은 소유권·유효기간·종류를 확인한 후 분석 필드만 읽는다. 직접 입력에는 기존의 엄격한 필드 검증을 유지한다. `BOTH` 추이 결과를 수출로 임의 변환하지 않으며 `422 UNSUPPORTED_TRADE_FLOW`와 수출만 선택해 재조회하라는 안내를 반환한다. `IMPORT`도 기존 수출 전용 리포트 정책에 따라 422이다.
 
-## 검증
+## 기존 백엔드 단계 검증 기록
 
 ```powershell
 python -m unittest backend.tests.test_backend_api -v
@@ -189,3 +189,6 @@ git diff --check
 테스트 DB는 SQLite이며 `backend/tests/fixtures/api_schema.json`은 실제 RDS에서 읽은 컬럼 구조의 검증용 사본이다. 테스트 DB 생성 시 async_job은 제외하고 전체 API 테스트를 실행한다. 테스트 데이터는 메모리 DB에만 만든다. MySQL의 JSON CHECK·generated column·인덱스 잠금·동시 worker 경합은 SQLite가 재현하지 않으므로 배포 전 MySQL 통합 검증이 필요하다.
 
 RDS에서 읽기 전용으로 연결/테이블 준비 상태/한글 HS 검색/국가/통계 공개기간/기사/환율 미준비 응답을 확인했다. 실제 회원 가입·파일 생성·관리자 변경은 RDS에서 실행하지 않았다. PR #34 프론트 전체 화면 연결·브라우저 E2E, SMTP/OAuth, ML/RAG는 테스트하지 않았다. DOCX 생성·표/치환/ZIP 검증은 했지만 LibreOffice가 없어 페이지 렌더링 검수는 못 했다. PDF는 렌더링해 확인했다.
+
+
+최신 실연동 검증은 INTEGRATION.md 명령과 INTEGRATION_REVIEW.md 결과를 참조한다. 아래 기존 기록의 프론트/로컬 MySQL 미검증 항목은 이번 통합 검증으로 보완한다.
