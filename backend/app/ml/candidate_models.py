@@ -178,12 +178,13 @@ def _same_inputs(snapshot, files, db, month=None):
 MODEL_SOURCES = ("backend/app/ml/candidate_models.py", "backend/app/ml/two_stage.py", "backend/app/ml/experiments.py",
                  "backend/app/ml/feature_recovery.py", "backend/app/ml/features.py", "backend/app/ml/sources.py",
                  "backend/app/ml/preprocess.py", "backend/app/ml/temporal.py", "backend/app/ml/related_groups.py",
-                 "backend/app/ml/transforms.py")
+                 "backend/app/ml/transforms.py", "backend/app/ml/artifacts.py", "backend/app/ml/feature_cache.py")
 
 
 def _model_config(kind):
-    """모델 종류와 학습 코드의 해시. 재사용 판단에서 입력 원본과 함께 비교한다."""
-    return {"kind": kind, "sources": {p: sha256(ROOT / p) for p in MODEL_SOURCES}}
+    """모델 종류·학습 코드의 해시·패키지 버전. 재사용 판단에서 입력 원본과 함께 비교한다."""
+    return {"kind": kind, "sources": {p: sha256(ROOT / p) for p in MODEL_SOURCES},
+            "runtime": _runtime("lightgbm" if kind == "two_stage" else kind)}
 
 
 MONTHLY_PREFIX = {"two_stage": "model_a_two_stage"}  # 월별 파일 이름 앞부분. 그 밖의 kind는 kind 그대로
