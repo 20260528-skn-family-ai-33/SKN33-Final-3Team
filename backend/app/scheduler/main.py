@@ -3,6 +3,9 @@
 실행 (저장소 루트에서): python -m backend.app.scheduler.main
 
 등록된 잡
+- shortnews_daily (SHORTNEWS_DAILY_ENABLED=true일 때만): 매일 03:00(KST) 전날 단신속보 전체 페이지 수집 후 MySQL 적재.
+  시작 10초 후에도 복구 점검하며, 실패·미완료·중단 기간은 날짜별 상태를 읽어 재처리합니다.
+  수집·적재 결과는 data/shortnews/daily에 기록합니다.
 - un_data_monthly: 매월 1일 03:00(KST) UN 변경분 갱신, 시작 10초 후에도 1회 점검.
   초기 CSV 적재가 필요하며, 체크포인트가 없으면 안내 후 UN 작업만 건너뜁니다.
 - hs_code_refresh: 매년 1월 1일 00:15(KST)에 HS 코드 연간 갱신(다운로드 → CSV → 적재).
@@ -25,12 +28,14 @@
 import argparse
 import hashlib
 import logging
+import os
 import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
+from dotenv import dotenv_values
 
 from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
@@ -171,7 +176,7 @@ def un_resume_job(state_dir=UN_STATE,scope_path=UN_SCOPE,api_env=UN_ENV):
 
 
 # 기존 HS 작업에 UN 시작 점검과 매월 1일 03:00 KST 작업을 함께 등록합니다.
-def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV):
+def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV, *, env_path=ROOT / ".env"):
     scheduler = BlockingScheduler(timezone=KST)
     # misfire_grace_time: 00:15에 잠깐 멈춰 있어도 6시간 안에 켜지면 실행
     scheduler.add_job(hs_refresh_job, HS_REFRESH_TRIGGER, args=[scheduler], id="hs_code_refresh",
@@ -201,6 +206,11 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV)
     # 켤 때마다 한 번: 꺼져 있던 동안 빠진 환율을 마지막 적재일부터 채움
     scheduler.add_job(fx_daily_load.run, "date", run_date=datetime.now(KST) + timedelta(seconds=30),
                       id="fx_daily_startup", replace_existing=True)
+    # 통합 실행에서는 단신 정기·10초 복구 작업 모두 명시적으로 켭니다. 전용 worker는 독립입니다.
+    values = {**dotenv_values(env_path), **os.environ}
+    if str(values.get("SHORTNEWS_DAILY_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}:
+        from backend.app.scheduler.jobs import shortnews_daily
+        shortnews_daily.register_jobs(scheduler)
     return scheduler
 
 
@@ -214,7 +224,9 @@ def main():
     logging.basicConfig(level=logging.INFO)
     scheduler = build_scheduler(args.un_state_dir, args.un_scope, args.un_api_env)
     for job in scheduler.get_jobs():
-        print(f"등록: {job.id} | 다음 실행 {job.trigger.get_next_fire_time(None, datetime.now(KST))}")
+        next_time = (getattr(job, "next_run_time", "pending"))
+        when = "일시중지" if next_time is None else job.trigger.get_next_fire_time(None, datetime.now(KST))
+        print(f"등록: {job.id} | 다음 실행 {when}")
     scheduler.start()
 
 

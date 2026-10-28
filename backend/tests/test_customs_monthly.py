@@ -472,7 +472,7 @@ class MonthlyScheduleTest(unittest.TestCase):
 
     def test_shared_scheduler_registers_all_jobs_without_executing_them(self):
         from backend.app.scheduler import main as shared
-        with patch.dict("os.environ", {}, clear=True), patch.object(monthly, "dotenv_values", return_value={}), \
+        with patch.dict("os.environ", {"SHORTNEWS_DAILY_ENABLED": "false"}, clear=True), patch.object(monthly, "dotenv_values", return_value={}), \
                 patch.object(monthly, "run_month") as run_month, \
                 patch.object(shared.refresh, "run_refresh") as refresh, patch.object(shared.embed, "run") as embed:
             scheduler = shared.build_scheduler()
@@ -519,7 +519,8 @@ class MonthlyScheduleTest(unittest.TestCase):
             frozen = MagicMock()
             frozen.now.return_value = datetime(2026, 3, 1, tzinfo=monthly.KST)
             scheduler = MagicMock()
-            with patch.object(monthly, "datetime", frozen), patch.object(monthly, "run_month",
+            with patch.dict("os.environ", {}, clear=True), patch.object(monthly, "dotenv_values", return_value={}), \
+                    patch.object(monthly, "datetime", frozen), patch.object(monthly, "run_month",
                     side_effect=[{"status":"SUCCESS"}, {"status":"FAILED", "retryable":True}, {"status":"SUCCESS"}]) as run:
                 monthly.startup_job(scheduler, output=root)
             self.assertEqual([call.args[0] for call in run.call_args_list], ["202512", "202601", "202602"])
