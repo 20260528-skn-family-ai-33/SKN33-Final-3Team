@@ -111,6 +111,25 @@ class SampleRenderTest(unittest.TestCase):
         context['conditions']['countries'] = [dict(base, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(60)]
         self.assertEqual(rt.layout('RPT_QUARTERLY', context)['country_per_page'], 1)
 
+    def test_long_country_names_make_weekly_table_rows_taller(self):
+        context = rt.sample_context('weekly')
+        row = context['country_counts'][0]
+        context['country_counts'] = [dict(row, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(20)]
+        first_rows = lambda: rt.layout('RPT_WEEKLY', context)['articles'][0][0]['end']  # 첫 쪽에 들어간 표 행 수
+        short = first_rows()
+        for r in context['country_counts']:
+            r['name'] = '세인트빈센트그레나딘연방공화국' + r['country_code']  # 국가 칸에서 줄바꿈되는 이름
+        self.assertLess(first_rows(), short)
+
+    def test_hbar_labels_are_shortened_to_label_width(self):
+        self.assertEqual(rt._fit('미국', 44, 10), '미국')
+        fitted = rt._fit('세인트빈센트그레나딘', 44, 10)
+        self.assertTrue(fitted.endswith('…'))
+        self.assertLessEqual(rt._em(fitted) * 10, 44)
+        svg = str(rt.hbar_chart([{'label': '세인트빈센트그레나딘 · 생산자책임재활용제도', 'values': [3]}], ['#000'], label_width=50))
+        self.assertIn('…</text>', svg)
+        self.assertNotIn('생산자책임', svg)
+
     def test_hbar_peak_keeps_scale_across_pages(self):
         rows = [{'label': 'A', 'values': [5]}]
         self.assertNotEqual(str(rt.hbar_chart(rows, ['#000'])), str(rt.hbar_chart(rows, ['#000'], peak=10)))

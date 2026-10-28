@@ -141,6 +141,16 @@ def _segments(values):
     return segments
 
 
+def _fit(text, width, font_px):
+    """SVG 글자가 width(SVG 단위)를 넘으면 뒤를 …로 줄입니다. 글자 폭은 _em() 기준."""
+    text = str(text)
+    if _em(text) * font_px <= width:
+        return text
+    while text and (_em(text) + 1) * font_px > width:
+        text = text[:-1]
+    return text.rstrip() + '…'
+
+
 def _tick_label(value):
     return f'{value:,.0f}' if abs(value - round(value)) < 1e-9 else f'{value:,.1f}'
 
@@ -249,7 +259,8 @@ def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digit
     out = [f'<svg class="chart" viewBox="0 0 {width} {height}" width="100%" role="img">']
     for i, r in enumerate(rows):
         top = i * row_height + (row_height - bars * (bar_h + 2)) / 2
-        out.append(f'<text x="0" y="{i * row_height + row_height / 2 + 4:.1f}" class="lbl">{escape(r["label"])}</text>')
+        label = _fit(r['label'], label_width - 6, 10)  # 라벨이 막대 위로 겹치지 않게 칸 폭에 맞춰 줄임
+        out.append(f'<text x="0" y="{i * row_height + row_height / 2 + 4:.1f}" class="lbl">{escape(label)}</text>')
         for j, (v, color) in enumerate(zip(r['values'], colors)):
             if v is None:
                 continue
@@ -455,8 +466,9 @@ def layout(report_type, ctx):
         blocks.append({'key': 'note', 'height': 3 + 2 * LINE[7]})
         summary = flow(blocks, BODY_MM - _heading('요약') - 4, rest)
         # 국가별 기사 수 표·그래프는 국가 행 단위로 나눕니다. 마지막 행(인덱스 = 국가 수)은 합계 행입니다.
-        # 표 행(8.6mm)이 그래프 막대(약 6.9mm)보다 높아 표 기준으로 계산합니다.
-        grid = _table('grid', [8.6] * (len(ctx['country_counts']) + 1))
+        # 표 행(8.6mm~, 국가명이 길면 국가 칸 약 30mm에서 줄바꿈)이 그래프 막대(약 6.9mm)보다 높아 표 기준으로 계산합니다.
+        grid = _table('grid', [_row([(r['name'] + (' 관심' if r.get('is_interest') else ''), 30)]) for r in ctx['country_counts']]
+                      + [8.6])
         articles = flow([grid] + _article_blocks(ctx['articles']),
                         BODY_MM - _heading('기사 · 기준') - 4.5, rest)
         spikes = ctx['keyword_spikes']
