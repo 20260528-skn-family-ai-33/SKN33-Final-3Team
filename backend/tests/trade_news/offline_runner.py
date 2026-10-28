@@ -207,6 +207,9 @@ if __name__ == "__main__":
                 (ROOT/'vector_started').touch()
                 time.sleep(60)
             if os.environ.get('OFFLINE_VECTOR_FAULT') == 'exit124':
+                # 느린 시작이 기존 2초를 넘는 상황에서도 자발 종료를 시간 초과와 구분합니다.
+                time.sleep(3)
+                (ROOT/'vector_exit124_ready').touch()
                 raise SystemExit(124)
             return original_index(sources, **options)
         news_embed.run_sources = isolated

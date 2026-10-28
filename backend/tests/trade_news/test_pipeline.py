@@ -25,7 +25,7 @@ def test_full_daily_engine_and_repeat(tmp_path,old_broken):
         specs[host+feed]={'body':f'<urlset xmlns:news="http://www.google.com/schemas/sitemap-news/0.9"><url><loc>{url}</loc><news:news><news:title>반도체 수출 계약 체결</news:title><news:publication_date>2026-10-21</news:publication_date></news:news></url></urlset>'}
         specs[url]={'body':f'<html><head><meta property="article:published_time" content="2026-10-21"></head><body><h1 class="{title_class}">반도체 수출 계약 체결</h1><div {body_class}>한국 시험기업은 미국에 반도체 수출 100억원 계약을 체결했다.<br>공유하기<br>연락 sample@example.test</div></body></html>'}
     (tmp_path/'responses.json').write_text(json.dumps(specs));(tmp_path/'urls.txt').write_text('')
-    env={**os.environ,'OFFLINE_DIR':str(tmp_path),'OFFLINE_ENTRYPOINT':'daily_collect','OFFLINE_RUN_AT':'2026-10-22T03:00:00+09:00','OFFLINE_VIRTUAL_CLOCK':'1','PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':os.pathsep.join([str(T),str(B),os.environ.get('PYTHONPATH','')])}
+    env={**os.environ,'OFFLINE_DIR':str(tmp_path),'OFFLINE_ENTRYPOINT':'daily_collect','OFFLINE_RUN_AT':'2026-10-22T03:00:00+09:00','OFFLINE_VIRTUAL_CLOCK':'1','PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':os.pathsep.join([str(ROOT),str(T),str(B),os.environ.get('PYTHONPATH','')])}
     cmd=[sys.executable,str(T/'offline_runner.py'),'--data-dir',str(tmp_path/'data')]
     for attempt in (1,2):
         result=subprocess.run(cmd,cwd=B,env=env,capture_output=True,text=True,timeout=40)
@@ -56,7 +56,7 @@ def test_parse_failure_keeps_diagnostic_html(tmp_path):
     raw='<html><h1 class="headline">수출 계약</h1><div>선택자 없는 시험 본문</div></html>'
     spec={'https://www.hankyung.com/robots.txt':{'body':'User-agent: *\nAllow: /'},url:{'body':raw}}
     (tmp_path/'responses.json').write_text(json.dumps(spec));(tmp_path/'urls.txt').write_text(url)
-    env={**os.environ,'OFFLINE_DIR':str(tmp_path),'PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':os.pathsep.join([str(T),str(B),os.environ.get('PYTHONPATH','')])}
+    env={**os.environ,'OFFLINE_DIR':str(tmp_path),'PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':os.pathsep.join([str(ROOT),str(T),str(B),os.environ.get('PYTHONPATH','')])}
     cmd=[sys.executable,str(T/'offline_runner.py'),'--data-dir',str(tmp_path/'data'),'--urls-file',str(tmp_path/'urls.txt'),'--input-only','--sites','hankyung']
     subprocess.run(cmd,cwd=B,env=env,capture_output=True,text=True,timeout=40)
     assert not (tmp_path/'network_attempts.log').exists()
@@ -76,7 +76,7 @@ def test_income_full_body_is_not_stored_as_passed_article(tmp_path,income):
     html='<meta property="article:published_time" content="2026-10-21"><h1 class="headline">수출 기업 직원 생활비 조사</h1><div id="articletxt">'+body+'</div>'
     spec={'https://www.hankyung.com/robots.txt':{'body':'User-agent: *\nAllow: /'},url:{'body':html}}
     (tmp_path/'responses.json').write_text(json.dumps(spec));(tmp_path/'urls.txt').write_text(url)
-    env={**os.environ,'OFFLINE_DIR':str(tmp_path),'PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':os.pathsep.join([str(T),str(B),os.environ.get('PYTHONPATH','')])}
+    env={**os.environ,'OFFLINE_DIR':str(tmp_path),'PYTHONDONTWRITEBYTECODE':'1','PYTHONPATH':os.pathsep.join([str(ROOT),str(T),str(B),os.environ.get('PYTHONPATH','')])}
     result=subprocess.run([sys.executable,str(T/'offline_runner.py'),'--data-dir',str(tmp_path/'data'),'--urls-file',str(tmp_path/'urls.txt'),'--input-only','--sites','hankyung'],cwd=B,env=env,capture_output=True,text=True,timeout=40)
     assert result.returncode==0,result.stdout+result.stderr
     assert not (tmp_path/'network_attempts.log').exists()

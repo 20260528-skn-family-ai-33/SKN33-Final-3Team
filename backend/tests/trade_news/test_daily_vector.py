@@ -31,12 +31,15 @@ def test_real_child_full_chain_dictionary_tags_vector_and_repeat(local):
 def test_vector_timeout_or_124_preserves_sql_and_restarts(local,monkeypatch,fault):
     fixtures(local)
     monkeypatch.setenv('OFFLINE_VECTOR_FAULT',fault)
-    monkeypatch.setenv('NEWS_VECTOR_TIMEOUT_SECONDS','2')
+    # 자발 종료 124 확인은 모듈 시작 지연을 허용하고, 실제 시간 초과 시험만 짧게 유지합니다.
+    monkeypatch.setenv('NEWS_VECTOR_TIMEOUT_SECONDS','2' if fault=='pause' else '40')
     result=job.run_with_rag(local.root,now=NOW,env_path=local.env,runner=offline_runner(local,[],bounded=True))
     assert result['status']=='partial' and result['mysql']['status']=='complete',result
     assert result['vector']['status']=='failed'
     if fault=='pause':assert result['vector']['reason']=='timeout'
-    else:assert 'reason' not in result['vector']  # 자발 종료 124는 시간 초과로 오인하지 않음.
+    else:
+        assert 'reason' not in result['vector']  # 자발 종료 124는 시간 초과로 오인하지 않음.
+        assert (local.tmp/'vector_exit124_ready').exists()  # 3초 지연 후 자발 종료까지 도달
     monkeypatch.delenv('OFFLINE_VECTOR_FAULT')
     monkeypatch.setenv('NEWS_VECTOR_TIMEOUT_SECONDS','40')
     result=job.run_with_rag(local.root,now=NOW,env_path=local.env,runner=offline_runner(local,[],bounded=True))

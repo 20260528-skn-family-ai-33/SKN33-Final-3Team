@@ -124,7 +124,7 @@ def test_real_scrapy_interruption_report_and_recovery(tmp_path,mode,code):
         (tmp_path/'responses.json').write_text(json.dumps(spec))
     env={**os.environ,'OFFLINE_DIR':str(tmp_path),'OFFLINE_ENTRYPOINT':'daily_collect',
          'OFFLINE_RUN_AT':'2026-10-22T03:00:00+09:00','OFFLINE_VIRTUAL_CLOCK':'1','PYTHONDONTWRITEBYTECODE':'1',
-         'PYTHONPATH':os.pathsep.join([str(T),str(B),os.environ.get('PYTHONPATH','')])}
+         'PYTHONPATH':os.pathsep.join([str(ROOT),str(T),str(B),os.environ.get('PYTHONPATH','')])}
     data=tmp_path/'data';directory=data/'daily_runs'/DAY
     def execute(fault=''):
         e={**env,'OFFLINE_FAULT_MODE':fault,'OFFLINE_FAIL_SAVE':'1' if fault=='pipeline_failure' else '0'}
