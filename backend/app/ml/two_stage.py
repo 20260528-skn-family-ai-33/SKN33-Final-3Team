@@ -228,7 +228,8 @@ def train(args):
     temporary = path.with_suffix(".joblib.tmp")
     joblib.dump(bundle, temporary)
     again = predict(joblib.load(temporary), latest)  # 다시 읽은 파일로 같은 결과가 나오는지 확인
-    if not np.allclose(again.order, bundle["latest"].order, rtol=0, atol=1e-9):
+    if not (np.allclose(again.order, bundle["latest"].order, rtol=0, atol=1e-9)
+            and np.allclose(again.growth, bundle["latest"].growth, rtol=0, atol=1e-9)):
         raise ValueError(f"{temporary}: 다시 읽은 모델의 예측이 다릅니다")
     temporary.replace(path)
     print(f"저장 {path} ({path.stat().st_size / 1e6:.1f}MB, 학습 {bundle['fit_seconds']:.0f}초, "
