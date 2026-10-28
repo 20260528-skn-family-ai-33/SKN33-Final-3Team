@@ -289,8 +289,32 @@ def _heading(sub=None):
     return 9.7 + (LINE[7.6] * min(_lines(sub, 7.6, TEXT_MM), 2) + 4 if sub else 0)  # 소제목은 CSS로 최대 두 줄
 
 
-def _note(sentences):
-    return 11 + sum(LINE[9] * _lines(s.replace('**', ''), 9, TEXT_MM - 15) + 1.2 for s in sentences)
+def _sentences(sentences, title=0):
+    """요약 문장 상자. 문장 단위로 나뉘며 다음 쪽에서 번호가 이어집니다. title: 위 소제목 높이"""
+    return _table('sentences', [LINE[9] * _lines(s.replace('**', ''), 9, TEXT_MM - 15) + 1.2 for s in sentences],
+                  head=title + 11, empty=0)
+
+
+def _legend_lines(names, width=TEXT_MM):
+    """범례 줄 수. 항목 = 이름 + 표식(약 4.5mm) + 간격 4mm"""
+    lines, used = 1, 0.0
+    for name in names:
+        w = _em(name) * 7 * PT_MM + 8.5
+        if used and used + w > width:
+            lines, used = lines + 1, 0.0
+        used += w
+    return lines
+
+
+def _legend(names):
+    # 위아래 여백 1mm씩 + 7pt 줄. 범례는 flex gap(4mm)이 줄 사이에도 붙습니다 (실측 1줄 5.6mm, 6줄 42.9mm)
+    lines = _legend_lines(names)
+    return 2 + 3.83 * lines + 4 * (lines - 1)
+
+
+def _svg(height, width=640):
+    """본문 폭에 맞춰 늘어나는 SVG 높이(mm)"""
+    return height * TEXT_MM / width
 
 
 def _article(a):
@@ -349,7 +373,7 @@ def flow(blocks, first, rest):
 def _summary_blocks(ctx):
     """월간·분기 요약: KPI · 요약 문장 · 품목 표 · 관심 국가 표(품목 3개씩) · 확인할 점"""
     items = ctx['items']
-    blocks = [{'key': 'kpis', 'height': 29}, {'key': 'sentences', 'height': _note(ctx['summary']['sentences'])}]
+    blocks = [{'key': 'kpis', 'height': 29}, _sentences(ctx['summary']['sentences'])]
     blocks.append(_table('items', [ROW_MM + LINE[7.8] * _lines(i['label'], 7.8, 26) + LINE[7] for i in items]))
     groups = [list(range(n, min(n + 3, len(items)))) for n in range(0, len(items), 3)] or [[]]
     header = max([1] + [_lines(items[i]['label'], 7.8, 20) for g in groups for i in g])
@@ -369,6 +393,17 @@ def _article_blocks(articles, tail=None):
     return blocks
 
 
+def _detail_blocks(item):
+    """월간 품목 상세: 추이 그래프 · 관심 국가 추이(범례가 국가 수만큼 늘어남) · 주요 수출국 표(10개국 + 기타 + 전체)"""
+    countries = item['country_trend']
+    country = H3_MM + (_legend([s['name'] for s in countries]) + _svg(130) if countries else 12)
+    top = len(item['top_countries'][:10]) + (1 if item['others'] else 0) + 1
+    # 그래프 높이(150·130)는 monthly.html과 같아야 합니다. 품목명이 두 줄이어도 국가 3개면 한 쪽에 들어가는 크기
+    return [{'key': 'trend', 'height': _legend(['', '']) + _svg(150)},
+            {'key': 'country', 'height': country},
+            _table('top', [8.5] * top)]
+
+
 def layout(report_type, ctx):
     """템플릿이 쓰는 쪽 나눔. {구역: 쪽 목록}"""
     rest = BODY_MM - _heading()
@@ -376,12 +411,19 @@ def layout(report_type, ctx):
         summary = flow(_summary_blocks(ctx), BODY_MM - _heading('요약 · 비교 기준 · 단위 · 문장 속 수치 검증'), rest)
         tail = ctx.get('one_off_note') if report_type == 'RPT_QUARTERLY' else None
         articles = flow(_article_blocks(ctx['articles'], tail), BODY_MM - _heading('현지 이슈 · 기준') - 4.5, rest)
-        return {'summary': summary, 'articles': articles}
+        pages = {'summary': summary, 'articles': articles}
+        two_lines = BODY_MM - _heading('가' * 200)  # 상세 소제목은 품목명이 길면 두 줄
+        if report_type == 'RPT_MONTHLY':
+            pages['details'] = [flow(_detail_blocks(item), two_lines, rest) for item in ctx['items']]
+        else:
+            # 관심 국가 추이 쪽: 국가가 많아 범례가 길면 한 쪽에 품목 1개
+            chart = H3_MM + _legend([c['name'] for c in ctx['conditions']['countries']]) + _svg(250)
+            pages['country_per_page'] = 2 if 2 * chart + 6 <= two_lines else 1
+        return pages
     if report_type == 'RPT_WEEKLY':
         s = ctx['summary']
         issues = [_row([(r['title'], 77), (r['basis'], 38), (r['related'], 20)]) for r in s['issues']]
-        blocks = [{'key': 'kpis', 'height': 29}, {'key': 'sentences', 'height': H3_MM + _note(s['sentences'])},
-                  _table('issues', issues)]
+        blocks = [{'key': 'kpis', 'height': 29}, _sentences(s['sentences'], title=H3_MM), _table('issues', issues)]
         if s['schedule']:
             blocks.append(_table('schedule', [_row([(r['content'], 118), (r['related'], 32)]) for r in s['schedule']]))
         blocks.append({'key': 'note', 'height': 3 + 2 * LINE[7]})
@@ -393,7 +435,8 @@ def layout(report_type, ctx):
                         BODY_MM - _heading('기사 · 기준') - 4.5, rest)
         spikes = ctx['keyword_spikes']
         shorts = ctx['short_news']['items']
-        keywords = flow([{'key': 'spikes', 'height': 6 + ((30 * len(spikes) + 4) * TEXT_MM / 640 if spikes else 15)},
+        # 급증 키워드 그래프는 키워드 행 단위로 나눕니다 (범례 + 행마다 30 단위 높이)
+        keywords = flow([_table('spikes', [_svg(30)] * len(spikes), head=_legend(['', '']) + _svg(4), empty=15),
                          _table('shorts', [_row([(r['content'], 125)]) for r in shorts]),
                          {'key': 'sources', 'height': H3_MM + 9 + 3 * 8.6 + LINE[7.8] + 3 + 2 * LINE[7]}],
                         BODY_MM - _heading('급증 키워드 · 기사 분포 · 기준 설명 문구'), rest)

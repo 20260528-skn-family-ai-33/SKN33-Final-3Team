@@ -50,8 +50,8 @@
   {'label': '급증 키워드', 'value': c.spike_keywords | num, 'unit': '개', 'sub': '8주 주평균의 ' ~ summary.spike_ratio ~ '배 이상'},
 ], 4) }}
 {% elif b.key == 'sentences' %}
-<h3>이번 주 핵심</h3>
-{{ m.sentences(summary.sentences) }}
+<h3>이번 주 핵심{{ ' (계속)' if b.cont }}</h3>
+{{ m.sentences(summary.sentences[b.start:b.end], b.start + 1) }}
 {% elif b.key == 'issues' %}
 <h3>주요 이슈{{ ' (계속)' if b.cont }}<small>전체 기사 기준 · 최근 7일이 직전 8주 주평균의 3배 이상이거나 KOTRA 통상·규제 분류</small></h3>
 <table>
@@ -125,13 +125,16 @@
 {% endif %}
 {% for b in blocks %}
 {% if b.key == 'spikes' %}
+{# 키워드가 많으면 행 단위로 나누고, 막대 길이는 전체 키워드의 최댓값 기준으로 맞춥니다 #}
 {{ m.legend([{'name': '이번 주', 'color': colors.accent}, {'name': '직전 8주 주평균', 'color': colors.previous}]) }}
+{% set peak = namespace(value=0) %}
+{% for r in keyword_spikes %}{% for v in [r.this_week, r.weekly_avg_8w] %}{% if v is not none and v > peak.value %}{% set peak.value = v %}{% endif %}{% endfor %}{% endfor %}
 {% set rows = [] %}
-{% for r in keyword_spikes %}
+{% for r in keyword_spikes[b.start:b.end] %}
   {% set _ = rows.append({'label': r.keyword ~ ' · ' ~ r.country, 'values': [r.this_week, r.weekly_avg_8w],
                           'tail': {'text': '×' ~ ('%.1f' % r.ratio), 'badge': '급증' if r.ratio >= summary.spike_ratio else none}}) %}
 {% endfor %}
-{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=110, row_height=30, tail_width=80, digits=[0, 1]) }}
+{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=110, row_height=30, tail_width=80, digits=[0, 1], peak=peak.value) }}
 {% else %}<div class="empty">이번 주 키워드 언급 집계가 없습니다.</div>{% endif %}
 {% elif b.key == 'shorts' %}
 <h3>단신속보 하이라이트{{ ' (계속)' if b.cont }}<small>관심 국가 단신 {{ short_news.total }}건 중 {{ short_news['items'] | length }}건 · 최신순</small></h3>

@@ -4,7 +4,11 @@
 {% set n_items = items | length %}
 {% set p_summary = 3 %}
 {% set p_items = p_summary + layout.summary | length %}
-{% set p_issue = p_items + n_items %}
+{# 품목 상세는 관심 국가가 많으면 품목마다 쪽 수가 달라집니다 #}
+{% set detail_start = [] %}
+{% set cursor = namespace(page=p_items) %}
+{% for pages in layout.details %}{% set _ = detail_start.append(cursor.page) %}{% set cursor.page = cursor.page + pages | length %}{% endfor %}
+{% set p_issue = cursor.page %}
 {% set p_sources = p_issue + layout.articles | length %}
 {% set total = p_sources %}
 {% set month = conditions.target_month[5:] | int %}
@@ -23,7 +27,7 @@
 {{ m.cover(report, total) }}
 
 {% set toc = [{'title': '이달의 요약', 'page': p_summary}] %}
-{% for item in items %}{% set _ = toc.append({'title': item.label ~ ' 상세', 'page': p_items + loop.index0}) %}{% endfor %}
+{% for item in items %}{% set _ = toc.append({'title': item.label ~ ' 상세', 'page': detail_start[loop.index0]}) %}{% endfor %}
 {% set _ = toc.extend([{'title': '현지 이슈', 'page': p_issue}, {'title': '데이터 기준 · 출처', 'page': p_sources}]) %}
 {% set info = [
   {'label': '구독 조건', 'value': subscription.label},
@@ -57,7 +61,7 @@
 {% set _ = cards.append({'label': summary.highlight.label, 'value': summary.highlight.value, 'sub': summary.highlight.sub}) %}
 {{ m.kpis(cards, 3) }}
 {% elif b.key == 'sentences' %}
-{{ m.sentences(summary.sentences) }}
+{{ m.sentences(summary.sentences[b.start:b.end], b.start + 1) }}
 {% elif b.key == 'items' %}
 <h3>품목별 주요 지표{{ ' (계속)' if b.cont }}<small>{{ month }}월 수출액 · 백만 달러</small></h3>
 <table>
@@ -88,14 +92,24 @@
 
 {# ---------- 품목별 상세 (관심 품목 수만큼) ---------- #}
 {% for item in items %}
-{% call m.page(report, p_items + loop.index0, total) %}
+{% set item_no = 1 + loop.index %}
+{% set first_page = detail_start[loop.index0] %}
+{% set top = item.top_countries[:10] %}
+{% for blocks in layout.details[loop.index0] %}
+{% call m.page(report, first_page + loop.index0, total) %}
+{% if loop.first %}
 {# 긴 HS 품목명은 줄여서 뒤의 수출액·증감률이 소제목에서 잘리지 않게 합니다 #}
-{{ m.heading(1 + loop.index, item.label ~ ' 상세', 'HS ' ~ item.hs_code ~ ' ' ~ (item.name | truncate(40, true, '…', 0)) ~ ' · ' ~ month ~ '월 수출 ' ~ (item.amount_usd | musd) ~ '백만 달러 · 전월 ' ~ (item.mom_pct | signed_pct) ~ ' · 전년 동월 ' ~ (item.yoy_pct | signed_pct)) }}
+{{ m.heading(item_no, item.label ~ ' 상세', 'HS ' ~ item.hs_code ~ ' ' ~ (item.name | truncate(40, true, '…', 0)) ~ ' · ' ~ month ~ '월 수출 ' ~ (item.amount_usd | musd) ~ '백만 달러 · 전월 ' ~ (item.mom_pct | signed_pct) ~ ' · 전년 동월 ' ~ (item.yoy_pct | signed_pct)) }}
+{% else %}
+{{ m.heading(none, item.label ~ ' 상세 (계속)') }}
+{% endif %}
+{% for b in blocks %}
+{% if b.key == 'trend' %}
 {{ m.legend([{'name': item.trend.range_label, 'color': colors.accent, 'kind': 'line'}, {'name': '1년 전 같은 달', 'color': colors.previous, 'kind': 'dash'}]) }}
 {{ line_chart(item.trend.labels, [
      {'values': item.trend.current, 'color': colors.accent, 'area': true},
-     {'values': item.trend.previous, 'color': colors.previous, 'dashed': true}], height=160) }}
-
+     {'values': item.trend.previous, 'color': colors.previous, 'dashed': true}], height=150) }}
+{% elif b.key == 'country' %}
 <h3>관심 국가 수출 추이<small>{{ item.trend.range_label }} · 백만 달러</small></h3>
 {% set lines = [] %}{% set keys = [] %}
 {% for s in item.country_trend %}
@@ -104,26 +118,33 @@
 {% endfor %}
 {% if lines %}
 {{ m.legend(keys) }}
-{{ line_chart(item.trend.labels, lines, height=140, zero=true) }}
+{{ line_chart(item.trend.labels, lines, height=130, zero=true) }}
 {% else %}
 <div class="empty">관심 국가가 없습니다.</div>
 {% endif %}
-
-<h3>{{ month }}월 주요 수출국<small>상위 {{ item.top_countries[:10] | length }}개국 · 백만 달러</small></h3>
+{% elif b.key == 'top' %}
+{# 행 순서: 상위 국가(최대 10) → 기타(있으면) → 전체 #}
+<h3>{{ month }}월 주요 수출국{{ ' (계속)' if b.cont }}<small>상위 {{ top | length }}개국 · 백만 달러</small></h3>
 <table>
   <tr><th style="width:12mm">순위</th><th>국가</th><th class="r">{{ month }}월 수출액</th><th class="r">비중</th><th class="r">전월 대비</th><th class="r">전년 동월 대비</th></tr>
-  {% for r in item.top_countries[:10] %}
+  {% for idx in range(b.start, b.end) %}
+  {% if idx < top | length %}
+  {% set r = top[idx] %}
   <tr><td>{{ r.rank }}</td><td>{{ m.country(r) }}</td><td class="r">{{ r.amount_usd | musd }}</td><td class="r">{{ r.share_pct | pct }}</td>
     <td class="r">{{ r.mom_pct | change(new=r.get('is_new_mom', false)) }}</td><td class="r">{{ r.yoy_pct | change(new=r.get('is_new_yoy', false)) }}</td></tr>
-  {% endfor %}
-  {% if item.others %}
+  {% elif item.others and idx == top | length %}
   <tr class="other"><td></td><td>기타</td><td class="r">{{ item.others.amount_usd | musd }}</td><td class="r">{{ item.others.share_pct | pct }}</td>
     <td class="r">{{ item.others.mom_pct | change }}</td><td class="r">{{ item.others.yoy_pct | change }}</td></tr>
-  {% endif %}
+  {% else %}
   <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">100.0%</td>
     <td class="r">{{ item.mom_pct | change }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
+  {% endif %}
+  {% endfor %}
 </table>
+{% endif %}
+{% endfor %}
 {% endcall %}
+{% endfor %}
 {% endfor %}
 
 {# ---------- 현지 이슈 ---------- #}

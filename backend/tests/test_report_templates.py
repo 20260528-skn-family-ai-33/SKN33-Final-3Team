@@ -77,6 +77,40 @@ class SampleRenderTest(unittest.TestCase):
         self.assertIn('국가30', html)
         self.assertLess(html.index('국가30'), html.index('<tr class="total"><td>합계</td>'))
 
+    def test_many_interest_countries_continue_detail_page_and_toc(self):
+        context = rt.sample_context('monthly')
+        base = context['items'][0]['country_trend'][0]
+        country = context['conditions']['countries'][0]
+        context['conditions']['countries'] = [dict(country, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(40)]
+        for item in context['items']:
+            item['country_trend'] = [dict(base, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(40)]
+        details = rt.layout('RPT_MONTHLY', context)['details']
+        self.assertTrue(all(len(pages) > 1 for pages in details))
+        html = rt.render('RPT_MONTHLY', context)
+        self.assertIn('기초화장품 상세 (계속)', html)
+        self.assertEqual(html.count('<tr class="total"><td></td><td>전체</td>'), 2)  # 품목마다 전체 행 1번
+        second = 3 + len(rt.layout('RPT_MONTHLY', context)['summary']) + len(details[0])
+        self.assertRegex(html, rf'<span class="t">라면 상세</span><span>{second}</span>')
+        self.assertEqual(pages(html), 2 + 1 + sum(len(p) for p in details) + 1 + 1)
+
+    def test_long_sentences_and_spikes_continue_on_next_page(self):
+        context = rt.sample_context('weekly')
+        context['summary']['sentences'] = [f'핵심 문장 {i} ' + '가나다라 ' * 20 for i in range(1, 31)]
+        context['keyword_spikes'] = [dict(context['keyword_spikes'][0], keyword=f'키워드{i}') for i in range(45)]
+        html = rt.render('RPT_WEEKLY', context)
+        self.assertIn('이번 주 핵심 (계속)', html)
+        self.assertRegex(html, r'<ol start="\d+">')
+        spikes = [b for p in rt.layout('RPT_WEEKLY', context)['keywords'] for b in p if b['key'] == 'spikes']
+        self.assertGreater(len(spikes), 1)
+        self.assertEqual(spikes[-1]['end'], 45)
+
+    def test_quarterly_country_pages_hold_one_item_when_legend_is_long(self):
+        context = rt.sample_context('quarterly')
+        self.assertEqual(rt.layout('RPT_QUARTERLY', context)['country_per_page'], 2)
+        base = context['conditions']['countries'][0]
+        context['conditions']['countries'] = [dict(base, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(60)]
+        self.assertEqual(rt.layout('RPT_QUARTERLY', context)['country_per_page'], 1)
+
     def test_hbar_peak_keeps_scale_across_pages(self):
         rows = [{'label': 'A', 'values': [5]}]
         self.assertNotEqual(str(rt.hbar_chart(rows, ['#000'])), str(rt.hbar_chart(rows, ['#000'], peak=10)))

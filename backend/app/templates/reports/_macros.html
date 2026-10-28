@@ -62,9 +62,9 @@
 </div>
 {% endmacro %}
 
-{# 번호 붙은 요약 문장. sentences: [문장(**강조** 사용 가능)] #}
-{% macro sentences(items) %}
-<div class="note"><ol>{% for text in items %}<li>{{ text | emph }}</li>{% endfor %}</ol></div>
+{# 번호 붙은 요약 문장. sentences: [문장(**강조** 사용 가능)], start: 쪽이 나뉘었을 때 이어지는 번호 #}
+{% macro sentences(items, start=1) %}
+<div class="note"><ol{% if start > 1 %} start="{{ start }}"{% endif %}>{% for text in items %}<li>{{ text | emph }}</li>{% endfor %}</ol></div>
 {% endmacro %}
 
 {# 대상·내용 두 칸 표 (확인할 점·일정 등). rows: [{target, content}] #}

@@ -4,11 +4,15 @@
 {% set item_pages = items | batch(2) | list %}
 {% set item_pages = item_pages if item_pages else [[]] %}
 {% set k = item_pages | length %}
+{# 관심 국가 추이 쪽은 국가가 많아 범례가 길면 한 쪽에 품목 1개 (layout.country_per_page) #}
+{% set country_pages = items | batch(layout.country_per_page) | list %}
+{% set country_pages = country_pages if country_pages else [[]] %}
+{% set kc = country_pages | length %}
 {% set p_summary = 3 %}
 {% set p_trend = p_summary + layout.summary | length %}
 {% set p_country_q = p_trend + k %}
-{% set p_country_m = p_country_q + k %}
-{% set p_top = p_country_m + k %}
+{% set p_country_m = p_country_q + kc %}
+{% set p_top = p_country_m + kc %}
 {% set p_issue = p_top + k %}
 {% set p_sources = p_issue + layout.articles | length %}
 {% set total = p_sources %}
@@ -64,7 +68,7 @@
 {% set _ = cards.append({'label': summary.highlight.label, 'value': summary.highlight.value, 'sub': summary.highlight.sub}) %}
 {{ m.kpis(cards, 3) }}
 {% elif b.key == 'sentences' %}
-{{ m.sentences(summary.sentences) }}
+{{ m.sentences(summary.sentences[b.start:b.end], b.start + 1) }}
 {% elif b.key == 'items' %}
 <h3>품목별 분기 지표{{ ' (계속)' if b.cont }}<small>분기 합계 · 백만 달러</small></h3>
 <table>
@@ -119,7 +123,7 @@
 
 {# ---------- 03·04 관심 국가 추이 ---------- #}
 {% for title, no, start, kind in [('관심 국가 추이 · 최근 8개 분기', 3, p_country_q, 'q'), ('관심 국가 추이 · 해당 분기 3개월', 4, p_country_m, 'm')] %}
-{% for chunk in item_pages %}
+{% for chunk in country_pages %}
 {% call m.page(report, start + loop.index0, total) %}
 {{ m.heading(no if loop.first else none, title ~ ('' if loop.first else ' (계속)'), conditions.countries | map(attribute='name') | join(' · ') ~ ' | 국가별 선 색상은 모든 그래프에서 같습니다') }}
 {% for item in chunk %}
