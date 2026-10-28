@@ -6,6 +6,7 @@ import { Btn, Check, Modal, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
 import { api } from '../../api/client'
+import { amount, percent } from '../../api/adapters'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { Hs4Search } from '../../components/pickers'
 import { monthOffset } from '../home/useDashboard'
@@ -117,7 +118,28 @@ function ConditionCard({ message, onChange, onGenerate }) {
 
 function AnswerCard({ message, onSaveReport, onInterest }) {
   const a = message.answer
-  return <AiBlock><p style={{ fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>
+  const c = a.conditions
+  const trend = a.tables.length === 1 && a.tables[0].rows.length && a.tables[0].rows.every(r => r.month) ? a.tables[0].rows : null
+  const metric = c?.trade_flow === 'IMPORT' ? 'import_amount_usd' : 'export_amount_usd'
+  const prior = c?.trade_flow === 'IMPORT' ? 'previous_year_import_usd' : 'previous_year_export_usd'
+  const total = trend?.every(r => typeof r[metric] === 'number') ? trend.reduce((sum, r) => sum + r[metric], 0) : null
+  const previous = trend?.every(r => typeof r[prior] === 'number') ? trend.reduce((sum, r) => sum + r[prior], 0) : null
+  const growth = total != null && previous > 0 ? (total / previous - 1) * 100 : null
+  const flow = trend && trend.length > 1 && total != null ? trend.at(-1)[metric] > trend[0][metric] ? '증가' : trend.at(-1)[metric] < trend[0][metric] ? '감소' : '동일' : '—'
+  return <AiBlock>
+    {c && <>
+      <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')}` : '전체 품목'} / {c.country_codes?.map(countryName).join(' · ') || '전체 국가'}</p>
+      <p className="note">{range(c.period?.start, c.period?.end)} / 비교 {range(c.compare_period?.start, c.compare_period?.end)}</p>
+    </>}
+    {trend && <div style={{ display: 'flex', gap: 14, marginTop: 16 }}>
+      {[[`${trend.length}개월 ${c?.trade_flow === 'IMPORT' ? '수입' : '수출'}액`, `${amount(total)}억 USD`, '#15181E'], ['전년 동기 대비', percent(growth), growth >= 0 ? '#C8102E' : '#1F5FD1'], ['월별 흐름', flow, '#15181E']].map(([label, value, color]) => (
+        <div key={label} style={{ flex: 1, background: 'var(--bg)', borderRadius: 14, padding: '16px 18px' }}>
+          <p className="muted">{label}</p><p style={{ fontSize: 24, fontWeight: 800, marginTop: 4, color }}>{value}</p>
+        </div>
+      ))}
+    </div>}
+    <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>
+    {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
     {a.warnings?.map(w => <p className="note" key={w}>{w}</p>)}
     {a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
     {a.articles.map(article => <div className="li" key={article.article_id}><div><b>{article.title}</b><p className="muted">{article.summary}</p><Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn></div></div>)}
