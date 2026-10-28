@@ -4,7 +4,8 @@ import { navigate } from '../router'
 import { Btn, Chip, Modal } from '../components/ui'
 import Icon from '../components/Icon'
 import { useApp } from '../store'
-import { isSuperAdmin } from '../auth/roles'
+import { isAdmin } from '../auth/roles'
+import { useQuery, ErrorNotice } from '../api/hooks'
 
 const BANNER = {
   info: { background: 'var(--lav)', color: 'var(--plum)' },
@@ -18,7 +19,7 @@ const lines = text => String(text).split('\n').map((t, i, all) => <span key={i}>
 
 export function AdminButton({ b }) {
   const { session } = useApp()
-  if (/\/BS(52|53|55|56|57)(?:[?]|$)/.test(b.to || '') && !isSuperAdmin(session)) return null
+  if (/\/BS(52|53|55|56|57)(?:[?]|$)/.test(b.to || '') && !isAdmin(session)) return null
   return (
     <Btn kind={b.kind || 'line'} size={b.size || 'sm'} to={b.to} icon={b.icon} style={b.style ? Object.fromEntries(b.style.split(';').filter(Boolean).map(p => { const [k, v] = p.split(':'); return [k.trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v.trim()] })) : undefined}>
       {b.label}
@@ -62,14 +63,9 @@ function MiniLine({ values, max, ticks, color = '#C8102E', w = 520, h = 200 }) {
 
 const OPS_TABS = [['전체', 'BS32'], ['데이터', 'BS34'], ['리포트', 'BS36'], ['회원관리', 'BS38']]
 const OPS_DETAIL = { 전체: 'BS33', 데이터: 'BS35', 리포트: 'BS37', 회원관리: 'BS39' }
-const ALERTS = [
-  ['데이터', '9월 수출 통계 일부 국가 응답 누락', '08:12 · 관세청 수출 통계', 'red', '/admin/inbox/BS65'],
-  ['리포트', '월간 리포트 PDF 생성 실패', '08:35 · 베트남 화장품 9월 리포트', 'red', '/admin/inbox/BS150'],
-  ['회원관리', '탈퇴 회원의 1개월 보존기간 만료 예정', '09:00 · 삭제 예정일 2026.11.01', 'amber', '/admin/members/BS44'],
-]
-
 function OpsDashboard({ tab }) {
-  const alerts = ALERTS.filter(a => tab === '전체' || a[0] === tab)
+  const result = useQuery('/admin/alerts', { page_size: 20 })
+  const alerts = (result.data?.items || []).map(a => ['데이터', a.message, a.created_at, 'red', '/admin/inbox/collection']).filter(a => tab === '전체' || a[0] === tab)
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }} className="resp-stack">
@@ -77,25 +73,25 @@ function OpsDashboard({ tab }) {
           <div className="between">
             <div>
               <p className="t3">전체 회원</p>
-              <p style={{ fontSize: 30, fontWeight: 800, color: 'var(--red)', marginTop: 4 }}>1,248명 <span className="note" style={{ fontWeight: 400 }}>2026년 · 10.21 현재</span></p>
+              <p style={{ fontSize: 30, fontWeight: 800, color: 'var(--red)', marginTop: 4 }}>— <span className="note" style={{ fontWeight: 400 }}>집계 준비 중</span></p>
             </div>
             <Btn to="/admin/members/BS40">상세보기</Btn>
           </div>
-          <MiniLine values={[230, 310, 402, 505, 598, 702, 836, 968, 1104, 1248]} max={1600} ticks={[0, 400, 800, 1200, 1600]} />
+          <MiniLine values={[]} max={1600} ticks={[0, 400, 800, 1200, 1600]} />
         </section>
         <section className="card">
           <div className="between">
             <div>
               <p className="t3">활성 구독</p>
-              <p style={{ fontSize: 30, fontWeight: 800, color: 'var(--plum)', marginTop: 4 }}>426건 <span className="note" style={{ fontWeight: 400 }}>2026년 · 10.21 현재</span></p>
+              <p style={{ fontSize: 30, fontWeight: 800, color: 'var(--plum)', marginTop: 4 }}>— <span className="note" style={{ fontWeight: 400 }}>집계 준비 중</span></p>
             </div>
           </div>
-          <MiniLine values={[80, 96, 121, 160, 190, 236, 288, 334, 388, 426]} max={500} ticks={[0, 100, 200, 300, 400, 500]} color="#2B2350" />
+          <MiniLine values={[]} max={500} ticks={[0, 100, 200, 300, 400, 500]} color="#2B2350" />
         </section>
       </div>
-      <p className="note">2026년 1~10월 · 지난달까지 월말, 이번 달은 10.21 현재 기준 · 시연 데이터</p>
+      <p className="note">회원·구독 월별 통계는 서버의 과거 스냅샷 저장 계약 확정 후 제공됩니다.</p>
       <section className="card">
-        <div className="between"><p className="t2">알림</p><Btn to={`/admin/inbox/${OPS_DETAIL[tab]}`}>상세보기</Btn></div>
+        <ErrorNotice error={result.error} retry={result.reload} /><div className="between"><p className="t2">알림</p><Btn to={`/admin/inbox/${OPS_DETAIL[tab]}`}>상세보기</Btn></div>
         <div className="chips" style={{ marginTop: 14 }}>
           {OPS_TABS.map(([label, id]) => <Chip key={label} sm on={tab === label} to={`/admin/ops/${id}`}>{label}</Chip>)}
         </div>
@@ -110,7 +106,7 @@ function OpsDashboard({ tab }) {
             </div>
           ))}
         </div>
-        <p className="note" style={{ marginTop: 12 }}>{tab === '전체' ? '관리자 조치가 필요한 알림 3건' : `선택한 유형의 알림 ${alerts.length}건`}</p>
+        <p className="note" style={{ marginTop: 12 }}>{`조회된 알림 ${alerts.length}건`}</p>
       </section>
     </>
   )
