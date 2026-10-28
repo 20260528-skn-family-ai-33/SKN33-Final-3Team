@@ -136,6 +136,15 @@ class TwoStageTest(unittest.TestCase):
         both = T.combine([pred, pred])
         np.testing.assert_allclose(both.growth, pred.growth)
         np.testing.assert_allclose(both.order, pred.order.rank(pct=True))
+        np.testing.assert_allclose(both["product"], pred["product"].rank(pct=True))
+
+    def test_product_direction_ranker_scores_every_pair_and_old_files_fall_back_to_stage1(self):
+        bundle = T.fit(self.rows, self.columns, "C", k=5, n_jobs=1, folds=2)
+        pred = T.predict(bundle, self.latest)
+        x = T._x(self.latest, bundle["features"]).assign(stage1_pred=pred.growth.to_numpy())
+        np.testing.assert_allclose(pred["product"], bundle["stage2_product"].predict(x[bundle["stage2_features"]]))
+        old = {key: value for key, value in bundle.items() if key != "stage2_product"}  # 품목 방향 모델 이전 파일
+        np.testing.assert_array_equal(T.predict(old, self.latest)["product"], pred.growth)
         with self.assertRaisesRegex(ValueError, "예측 대상"):
             T.combine([pred, pred.iloc[1:]])
 

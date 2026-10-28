@@ -4,8 +4,9 @@
     B (스태킹)  : 1단계 교차 예측값을 피처로 넣은 순위 학습이 국가 안 전체 후보를 정렬한다
     C (필터링 K): 1단계로 국가별 상위 K개만 남기고 그 안을 순위 학습이 다시 정렬한다 (나머지는 1단계 순서로 그 아래)
 쓰임
-    국가 → 유망 품목 순위 = 2단계 순서(order) / 품목 → 유망 국가 순위 · 예측 증감률 = 1단계 성장률(growth)
-    2단계는 국가 묶음으로만 학습해 품목 방향 순위에는 맞지 않는다 (4차 테스트).
+    국가 → 유망 품목 순위 = 2단계 국가 방향 순서(order) / 품목 → 유망 국가 순위 = 2단계 품목 방향 순서(product)
+    예측 증감률 = 1단계 성장률(growth). 국가 방향 순위 모델은 국가 묶음으로만 학습해 국가끼리 비교할 수 없으므로
+    같은 기준월 · 같은 품목 안 국가 순서를 따로 학습한다 (품목마다 수출국이 적어 후보를 거르지 않는다, 6차 테스트).
 교차 예측
     2단계 학습 행의 1단계 값은 (국가, HS6) 쌍 단위로 나눈 교차 예측이다. 같은 행으로 학습한 회귀 예측을 그대로 쓰면
     실제보다 잘 맞는 값이라 2단계가 그 피처를 과신한다. 쌍 단위 값은 같은 기준월의 다른 쌍을 본 모델이 만들어
@@ -49,6 +50,7 @@ from backend.app.ml.feature_recovery import MARKET, WDI, coverage, recover_exter
 
 KEYS = ["anchor", "country_code", "hs6"]
 GROUP = ["anchor", "country_code"]
+PRODUCT_GROUP = ["anchor", "hs6"]
 GRADES = 30  # 2단계 정답 = 그룹 안 성장 백분위를 0~30 등급으로 (평가 NDCG와 같은 선형 이득)
 FOLDS = 3
 OFFSET = 1e3  # C 방식에서 후보(2단계 점수)를 후보 밖(1단계 성장률, 약 -21~8)보다 항상 위에 둔다
@@ -100,14 +102,14 @@ def _regressor(x, y, columns, seed, n_jobs):
     return model
 
 
-def _ranker(x, rows, columns, seed, n_jobs):
-    """rows는 키 순서라 (기준월, 국가) 그룹이 연속이다."""
+def _ranker(x, rows, columns, seed, n_jobs, group=GROUP):
+    """같은 group 행이 연속이어야 한다 (rows는 키 순서라 (기준월, 국가) 그룹이 연속)."""
     from lightgbm import LGBMRanker
     model, cat = build_model(ModelSpec("lightgbm", "lightgbm"), columns, seed, n_jobs)
     model.set_params(model=LGBMRanker(objective="lambdarank", n_estimators=300, learning_rate=.05, num_leaves=31,
                                       label_gain=list(range(GRADES + 1)), verbosity=-1, n_jobs=n_jobs, random_state=seed))
-    grades = (rows.groupby(GROUP, sort=False).y_growth.rank(pct=True) * GRADES).round().astype(int)
-    sizes = rows.groupby(GROUP, sort=False).size().to_numpy()
+    grades = (rows.groupby(group, sort=False).y_growth.rank(pct=True) * GRADES).round().astype(int)
+    sizes = rows.groupby(group, sort=False).size().to_numpy()
     with threadpool_limits(limits=n_jobs):
         model.fit(x[columns], grades, model__group=sizes, model__categorical_feature=cat)
     return model
@@ -129,14 +131,18 @@ def fit(rows, columns, method="C", k=100, seed=0, n_jobs=4, folds=FOLDS):
     xs = x.assign(stage1_pred=oof)
     keep = _top_k(rows, oof, k) if method == "C" else np.ones(len(rows), bool)
     stage2 = _ranker(xs[keep], rows[keep], stacked, seed, n_jobs)
-    return {"stage1": stage1, "stage2": stage2, "features": columns, "stage2_features": stacked, "method": method,
+    by_product = np.lexsort((rows.country_code.to_numpy(), rows.hs6.to_numpy(), rows.anchor.to_numpy()))
+    stage2_product = _ranker(xs.iloc[by_product], rows.iloc[by_product], stacked, seed, n_jobs, PRODUCT_GROUP)
+    return {"stage1": stage1, "stage2": stage2, "stage2_product": stage2_product, "features": columns, "stage2_features": stacked, "method": method,
             "k": k if method == "C" else None, "folds": folds, "seed": seed, "train_rows": len(rows),
             "stage2_rows": int(keep.sum()), "train_start": str(rows.anchor.min().date()),
             "train_end": str(rows.anchor.max().date()), "fit_seconds": time.perf_counter() - started}
 
 
 def predict(bundle, rows):
-    """growth = 1단계 성장률, order = 국가 안 순서 점수(클수록 위)."""
+    """growth = 1단계 성장률, order = 국가 안 순서 점수, product = 품목 안 순서 점수 (클수록 위).
+
+    품목 방향 모델이 없는 예전 파일은 product = growth (1단계 순서)."""
     x = _x(rows, bundle["features"])
     growth = bundle["stage1"].predict(x)
     keep = _top_k(rows, growth, bundle["k"]) if bundle["method"] == "C" else np.ones(len(rows), bool)
@@ -144,17 +150,22 @@ def predict(bundle, rows):
     if keep.any():
         stacked = x.assign(stage1_pred=growth)[keep]
         order[keep] = OFFSET + bundle["stage2"].predict(stacked[bundle["stage2_features"]])
-    return rows[KEYS].assign(growth=growth, order=order)
+    product = growth
+    if "stage2_product" in bundle:
+        product = bundle["stage2_product"].predict(x.assign(stage1_pred=growth)[bundle["stage2_features"]])
+    return rows[KEYS].assign(growth=growth, order=order, product=product)
 
 
 def combine(predictions):
-    """여러 2단계 모델의 앙상블: 순서는 전체 백분위 순위 평균(실험 5와 같은 방식), 성장률은 평균."""
+    """여러 2단계 모델의 앙상블: 두 방향 순서는 전체 백분위 순위 평균(실험 5와 같은 방식), 성장률은 평균."""
     base = predictions[0][KEYS].reset_index(drop=True)
     for p in predictions[1:]:
         if not p[KEYS].reset_index(drop=True).equals(base):
             raise ValueError("앙상블할 모델의 예측 대상(기준월 · 국가 · HS6)이 다릅니다")
     return base.assign(growth=np.mean([p.growth.to_numpy() for p in predictions], axis=0),
-                       order=np.mean([p.order.rank(pct=True).to_numpy() for p in predictions], axis=0))
+                       order=np.mean([p.order.rank(pct=True).to_numpy() for p in predictions], axis=0),
+                       product=np.mean([(p["product"] if "product" in p else p.growth).rank(pct=True).to_numpy()
+                                        for p in predictions], axis=0))  # 예전 파일의 latest에는 product가 없다
 
 
 # 최종 모델 = v1 · v3 피처 2단계 C(K=100) 앙상블. 같은 시드끼리 v3 단독과 비교하면 NDCG@5가 기준월 3개 × 시드 3개
@@ -167,7 +178,7 @@ def monthly(frame, n_jobs=2, method="C", k=100):
 
     frame은 수집 원본으로 만든 피처 표(외부 피처는 availability.csv 공개일로 붙은 상태).
     Holdout 평가는 candidate_models.holdout_check와 같은 분할(마지막 정답 기준월, 12개월 이상 앞선 기준월로 학습)이다.
-    국가 순위 지표는 2단계 순서(model), 품목 방향 순위 · 증감률 지표는 1단계 성장률(model_stage1)로 잰다.
+    국가 순위 지표는 국가 방향 순서(model), 품목 순위 지표는 품목 방향 순서(model_product), 증감률 지표는 1단계 성장률(model_stage1)로 잰다.
     MEMBERS가 둘 이상이면 combine으로 앙상블한다.
     외부 데이터는 연도별로 늦게 들어와 일부가 빌 수 있어 멈추지 않는다. 학습에서 빠진 외부 피처는 external_dropped에 남기고,
     전부 빠지면 그 모델이 v1과 같은 피처로 학습돼 앙상블 효과가 없으므로 경고한다.
@@ -196,6 +207,7 @@ def monthly(frame, n_jobs=2, method="C", k=100):
                           "train_rows": int(early.sum()), "test_rows": len(test), "fit_seconds": holdout_seconds,
                           "model": evaluate_predictions(test, scores.order.to_numpy())[0],
                           "model_stage1": evaluate_predictions(test, scores.growth.to_numpy())[0],
+                          "model_product": evaluate_predictions(test, scores["product"].to_numpy())[0],
                           "baseline_growth_12m": evaluate_predictions(
                               test, test[F.A_TARGETS[F.HORIZON][1]].to_numpy(dtype=float))[0]})
     bundle = {"members": members, "method": method, "k": k,
@@ -227,8 +239,7 @@ def train(args):
     temporary = path.with_suffix(".joblib.tmp")
     joblib.dump(bundle, temporary)
     again = predict(joblib.load(temporary), latest)  # 다시 읽은 파일로 같은 결과가 나오는지 확인
-    if not (np.allclose(again.order, bundle["latest"].order, rtol=0, atol=1e-9)
-            and np.allclose(again.growth, bundle["latest"].growth, rtol=0, atol=1e-9)):
+    if not all(np.allclose(again[c], bundle["latest"][c], rtol=0, atol=1e-9) for c in ("order", "growth", "product")):
         raise ValueError(f"{temporary}: 다시 읽은 모델의 예측이 다릅니다")
     temporary.replace(path)
     print(f"저장 {path} ({path.stat().st_size / 1e6:.1f}MB, 학습 {bundle['fit_seconds']:.0f}초, "
@@ -248,21 +259,21 @@ def query(args, error):
     if code and hs6:
         name = countries.set_index("country_code").name_ko[code]
         print(f"{label} | {name}({code}) × {hs6} {item_name(hs6, names, width=60)}")
-        rank = pair_rank(pred, code, hs6, country_by="order", product_by="growth")
+        rank = pair_rank(pred, code, hs6, country_by="order", product_by="product")
         if rank is None:
             print("예측 대상이 아닙니다 (최근 12개월 수출 $100K 이상인 쌍만 예측합니다)")
             return
         row = rank["row"]
         print(f"예측 증감률(약) {row.growth_pct:+.1f}% | 최근 12개월 수출 {row.exp_12m:,.0f} USD")
         print(f"{name} 안 순위(2단계) {rank['country_rank']} / {rank['country_size']}개 품목 | "
-              f"{hs6} 안 순위(1단계) {rank['product_rank']} / {rank['product_size']}개국")
+              f"{hs6} 안 순위(품목 방향) {rank['product_rank']} / {rank['product_size']}개국")
         return
     if code:
         rows = pred[pred.country_code == code].nlargest(args.top, "order")
         rows = rows.assign(name=rows.hs6.map(lambda h: item_name(h, names)))[["hs6", "name", "growth_pct", "exp_12m"]]
         header, title = ["HS6", "품목명", "예측 증감률(%)", "최근 12개월 수출(USD)"], f"{countries.set_index('country_code').name_ko[code]}({code}) → 유망 품목"
     else:
-        rows = pred[pred.hs6 == hs6].nlargest(args.top, "growth")
+        rows = pred[pred.hs6 == hs6].nlargest(args.top, "product")
         rows = rows.merge(countries[["country_code", "name_ko"]], on="country_code", how="left")[
             ["country_code", "name_ko", "growth_pct", "exp_12m"]]
         header, title = ["국가코드", "국가명", "예측 증감률(%)", "최근 12개월 수출(USD)"], f"{hs6} {item_name(hs6, names, width=60)} → 유망 국가"
@@ -277,12 +288,13 @@ def query(args, error):
         print(rows.round({"예측 증감률(%)": 1}).to_string(index=False))
 
 
-# 리포트 지표: (이름, 평가 블록, 키). 국가 순위는 2단계 순서(model), 품목 순위 · 증감률은 1단계 성장률(model_stage1)
+# 리포트 지표: (이름, 평가 블록, 키). 국가 순위는 국가 방향 순서(model), 품목 순위는 품목 방향 순서(model_product),
+# 증감률은 1단계 성장률(model_stage1). 품목 방향 모델 이전 기록은 품목 지표를 model_stage1에서 읽는다
 REPORT_METRICS = [
     ("국가 NDCG@5 (채택)", "model", "country_ndcg_at_5"), ("국가 Precision@5", "model", "country_precision_at_5"),
     ("국가 Hit@5", "model", "country_hit_at_5"), ("국가 상위 20% F1@5", "model", "country_top20_f1_at_5"),
-    ("국가 NDCG@10", "model", "country_ndcg_at_10"), ("품목 NDCG@5", "model_stage1", "product_ndcg_at_5"),
-    ("품목 Precision@5", "model_stage1", "product_precision_at_5"), ("품목 Hit@5", "model_stage1", "product_hit_at_5"),
+    ("국가 NDCG@10", "model", "country_ndcg_at_10"), ("품목 NDCG@5", "model_product", "product_ndcg_at_5"),
+    ("품목 Precision@5", "model_product", "product_precision_at_5"), ("품목 Hit@5", "model_product", "product_hit_at_5"),
     ("증가 여부 ROC-AUC", "model_stage1", "roc_auc"), ("성장률 RMSE (작을수록 좋음)", "model_stage1", "rmse"),
 ]
 
@@ -318,11 +330,11 @@ def report(registry_path, out=None):
                   f"평가 행 {num(ev.get('test_rows'))}개로 쟀다. 기준선은 작년 성장률 순서다.", "",
                   "| 지표 | 최종 모델 | 기준선 | 차이 |", "|---|---|---|---|"]
         for label, block, key in REPORT_METRICS:
-            value, ref = ev.get(block, {}).get(key), base.get(key)
+            value, ref = (ev.get(block) or ev.get("model_stage1", {})).get(key), base.get(key)
             diff = f"{value - ref:+.4f}" if value is not None and ref is not None else "-"
             lines.append(f"| {label} | {num(value)} | {num(ref)} | {diff} |")
         adopted, ref = ev["model"].get("country_ndcg_at_5"), base.get("country_ndcg_at_5")
-        lines += ["", "- 국가 지표는 2단계 순서, 품목 지표와 ROC-AUC · RMSE는 1단계 성장률로 잰다. RMSE 말고는 모두 클수록 좋다.",
+        lines += ["", "- 국가 지표는 국가 방향 순서, 품목 지표는 품목 방향 순서, ROC-AUC · RMSE는 1단계 성장률로 잰다. RMSE 말고는 모두 클수록 좋다.",
                   "- READY는 학습 파일이 만들어졌다는 뜻이며, 기준선 미달이어도 저장 · 등록은 막지 않는다."]
         if adopted is not None and ref is not None and adopted <= ref:
             lines.append("- **주의: 채택 지표(국가 NDCG@5)가 기준선 이하입니다. 입력 자료와 학습 결과를 확인하세요.**")

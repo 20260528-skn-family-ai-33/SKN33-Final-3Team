@@ -6,12 +6,13 @@
 
 ## 최종 모델 생성·조회
 
-1단계 `LGBMRegressor`가 다음 12개월의 로그 수출 성장값을 예측하고, 2단계 `LGBMRanker`가 국가별 1단계 상위 100개 품목을 다시 정렬합니다. 후보 밖 품목은 1단계 순서로 그 아래에 둡니다. 이 구성을 외부 피처 없는 v1(1단계 33개)과 외부 피처를 넣은 v3(42개)로 각각 학습하고, 국가 안 순서는 두 모델의 순위 평균, 성장값은 평균으로 합칩니다. 같은 시드끼리 v3 단독과 비교하면 국가별 NDCG@5가 평가 기준월 3개 × 시드 3개 9번 모두 같거나 높았습니다(5차 테스트).
+1단계 `LGBMRegressor`가 다음 12개월의 로그 수출 성장값을 예측하고, 2단계 `LGBMRanker`가 국가별 1단계 상위 100개 품목을 다시 정렬합니다. 후보 밖 품목은 1단계 순서로 그 아래에 둡니다. 이 구성을 외부 피처 없는 v1(1단계 33개)과 외부 피처를 넣은 v3(42개)로 각각 학습하고, 국가 안 순서는 두 모델의 순위 평균, 성장값은 평균으로 합칩니다. 같은 시드끼리 v3 단독과 비교하면 국가별 NDCG@5가 평가 기준월 3개 × 시드 3개 9번 모두 같거나 높았습니다(5차 테스트). 6차 테스트에서 품목 → 국가 순위용 **품목 방향 순위 모델**(같은 기준월 · 같은 품목 안 국가 순서, 후보를 거르지 않음)을 더했습니다. 앙상블 품목 NDCG@5가 Dev 0.6801 → 0.6910, 2025-09 0.6840 → 0.6905로 올랐고(같은 시드 9번 모두 상승) 국가 지표는 그대로입니다.
 
 | 조회 | 사용하는 결과 |
 |---|---|
-| 국가 → 유망 품목 | 2단계 순서 `order` |
-| 품목 → 유망 국가 | 1단계 성장값 `growth` |
+| 국가 → 유망 품목 | 국가 방향 순서 `order` |
+| 품목 → 유망 국가 | 품목 방향 순서 `product` (품목 방향 모델이 없는 예전 파일은 1단계 `growth`) |
+| 예측 증감률 | 1단계 성장값 `growth` |
 | 국가 + 품목 | 예측 증감률·최근 수출액·양방향 순위. 기존 B 모델의 시장 유형 분류는 제공하지 않음 |
 
 명령은 저장소 루트에서 실행합니다. LightGBM은 `backend/requirements.txt`에 포함돼 있습니다(월별 재학습을 돌리는 서버에도 필요). 저장 모델을 조회할 때는 모델의 `runtime`에 기록된 환경을 맞춥니다. 아래 확인된 파일은 Python 3.11.9, NumPy 1.24.3, pandas 2.2.3, SciPy 1.10.1, scikit-learn 1.9.1, joblib 1.6.0, LightGBM 4.7.0에서 생성됐습니다. 뒤쪽의 Python 3.12 HGB 보고서 환경은 별도입니다.
@@ -21,14 +22,14 @@
 python -m pip install -r backend/requirements.txt
 
 # 준비된 피처 스냅샷으로 최종 구성의 두 모델 생성 (v1 · v3)
-python -m backend.app.ml.two_stage train --method C --k 100 --external none --version v1 --n-jobs 2
-python -m backend.app.ml.two_stage train --method C --k 100 --external first_release --version v1 --n-jobs 2
+python -m backend.app.ml.two_stage train --method C --k 100 --external none --version v2 --n-jobs 4
+python -m backend.app.ml.two_stage train --method C --k 100 --external first_release --version v2 --n-jobs 4
 
 # 국가 → 품목 / 품목 → 국가 / 특정 조합 조회
 # --model에 두 파일을 함께 주면 앙상블로 조회
-python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_base_v1.joblib data/ml/candidates/two_stage_c100_ext_v1.joblib --country VN --top 5
-python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_base_v1.joblib data/ml/candidates/two_stage_c100_ext_v1.joblib --hs6 850760 --top 5
-python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_base_v1.joblib data/ml/candidates/two_stage_c100_ext_v1.joblib --country VN --hs6 850760
+python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_base_v2.joblib data/ml/candidates/two_stage_c100_ext_v2.joblib --country VN --top 5
+python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_base_v2.joblib data/ml/candidates/two_stage_c100_ext_v2.joblib --hs6 850760 --top 5
+python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_base_v2.joblib data/ml/candidates/two_stage_c100_ext_v2.joblib --country VN --hs6 850760
 ```
 
 - 학습 기본 입력은 `data/ml/features_snapshot_py311.pkl`입니다. 다른 스냅샷은 `--snapshot <경로>`로 지정합니다. 이 명령은 수출입 원본을 새로 수집하거나 피처 스냅샷을 생성하지 않습니다.
@@ -95,7 +96,7 @@ python -m backend.app.ml.two_stage query --model data/ml/monthly_models/model_a_
 - `.env`의 `MYSQL_*` 접속 설정과 `ml_model_version` 테이블이 필요합니다. 초기 테이블 정의는 [`10_ml_model_version.sql`](../../../db/mysql/init/10_ml_model_version.sql)을 참고합니다. 신규 학습 전 DB에서 부모 버전을 확인하며, 파일 생성 뒤 DB 기록이 실패하면 파일과 등록 JSON을 보존합니다.
 - 같은 달·같은 입력의 재실행은 저장 파일의 해시를 확인하고 DB 등록을 재시도합니다. 원본이 정정되거나 학습 코드(`candidate_models.MODEL_SOURCES`의 파일: K·앙상블 구성·피처 계산 포함)나 패키지 버전이 바뀌면 `_r2`, `_r3` 등 새 버전을 만듭니다. 주석만 고쳐도 같은 달 재실행은 새로 학습합니다.
 - 누락 월 자동 복구로 지난달을 나중에 학습하면, 원본에 그 뒤 달이 있어도 기준월은 그 달까지, 정답은 미래 12개월이 그 달 안에 끝나는 기준월까지만 씁니다(`input_snapshot.as_of_month`). 그 뒤 달 수집 폴더가 추가된 것은 재실행 비교에서 정정으로 보지 않습니다. 피처 값은 현재 보유 원본 기준이라, 그 뒤에 들어온 정정분까지 그 시점 상태로 되돌리지는 않습니다. 월별 등록 재시도는 위 `candidate_models --monthly` 명령을 사용합니다.
-- 평가용 모델은 마지막 정답 기준월보다 12개월 이상 앞선 기준월로 학습합니다. `.registry.json`의 `evaluation.model`은 2단계 순서 평가, `model_stage1`은 1단계 성장값 평가, `baseline_growth_12m`은 기준선입니다. 국가별 품목 추천은 `model`, 품목별 국가 추천은 `model_stage1`을 확인합니다. `model`은 0~1 순위 점수(`order`)로 계산하므로 순서만 쓰는 지표(NDCG·Precision@K·Hit@K·top20 F1·`spearman`·`roc_auc`·`average_precision`)만 유효합니다. 같은 블록의 값 크기를 쓰는 지표(`mae`·`rmse`·`median_ae`·`r2`·`explained_variance`·`pearson`)와 0 기준 증가 판정 지표(`accuracy`·`precision`·`recall`·`f1`·`mcc`·`balanced_accuracy`·`predicted_growth_rate`·`tn`/`fp`/`fn`/`tp`)는 해석하지 않고, 증감률 오차·증가 판정은 `model_stage1`에서 봅니다.
+- 평가용 모델은 마지막 정답 기준월보다 12개월 이상 앞선 기준월로 학습합니다. `.registry.json`의 `evaluation.model_product`는 품목 방향 순서 평가(품목별 국가 추천 지표는 여기서 봅니다), `evaluation.model`은 2단계 순서 평가, `model_stage1`은 1단계 성장값 평가, `baseline_growth_12m`은 기준선입니다. 국가별 품목 추천은 `model`, 품목별 국가 추천은 `model_stage1`을 확인합니다. `model`은 0~1 순위 점수(`order`)로 계산하므로 순서만 쓰는 지표(NDCG·Precision@K·Hit@K·top20 F1·`spearman`·`roc_auc`·`average_precision`)만 유효합니다. 같은 블록의 값 크기를 쓰는 지표(`mae`·`rmse`·`median_ae`·`r2`·`explained_variance`·`pearson`)와 0 기준 증가 판정 지표(`accuracy`·`precision`·`recall`·`f1`·`mcc`·`balanced_accuracy`·`predicted_growth_rate`·`tn`/`fp`/`fn`/`tp`)는 해석하지 않고, 증감률 오차·증가 판정은 `model_stage1`에서 봅니다.
 - 현재 월별 경로는 평가 결과를 기록하지만 기준선 미달을 이유로 저장·등록을 차단하지 않습니다. `READY`는 성능 승격 심사를 통과했다는 뜻이 아닙니다. 뒤쪽 HGB·SGD의 기준선 통과 규칙을 이 경로에 적용해 해석하지 않습니다.
 - 파이프라인 완료 여부는 `data/customs_load_outputs/monthly/<YYYYMM>/state.json`의 `status=SUCCESS`, `completed`의 `ml`, `ml` 결과와 실제 모델·DB 기록을 함께 확인합니다. ML만 직접 실행하면 파이프라인 체크포인트는 갱신하지 않습니다.
 
