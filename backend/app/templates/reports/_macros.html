@@ -1,0 +1,123 @@
+{# 정기 리포트 공통 부품. 각 리포트 템플릿에서 {% import "_macros.html" as m %}로 사용합니다. #}
+
+{# 한 쪽(A4). report: 머리말·꼬리말 정보, n/total: 쪽 번호 #}
+{% macro page(report, n, total, cover=false) %}
+<section class="page{{ ' cover' if cover }}">
+  {% if cover %}
+  <div class="top"><span class="brand">BORDERLESS SELLERS</span>무역·해외시장 분석 리포트</div>
+  {% else %}
+  <div class="hdr"><div><span class="brand">BORDERLESS SELLERS</span>무역·해외시장 분석 리포트</div>
+    <div>{{ report.kind_label }} · {{ report.report_id }}</div></div>
+  {% endif %}
+  {{ caller() }}
+  <div class="ftr"><div>{{ report.footer_label }}{% if report.is_sample %}<span class="sample-mark"> · 수치·기사는 템플릿 예시</span>{% endif %}</div>
+    <div class="no">{{ n }} / {{ total }}</div></div>
+</section>
+{% endmacro %}
+
+{# 표지 #}
+{% macro cover(report, total) %}
+{% call page(report, 1, total, cover=true) %}
+<div class="main">
+  <div class="eyebrow">{{ report.cover_eyebrow }}</div>
+  <h1>{{ report.title }}<br>{{ report.period_label }}</h1>
+  <div class="lead">{{ report.cover_lead }}</div>
+  <div class="rule"></div>
+</div>
+{% endcall %}
+{% endmacro %}
+
+{# 섹션 제목. no: 번호(없으면 생략) #}
+{% macro heading(no, title, sub=none, rule=false) %}
+<h2 class="sec-title">{% if no %}<span class="n">{{ '%02d' % no }}</span>{% endif %}{{ title }}</h2>
+{% if sub %}<p class="sec-sub">{{ sub }}</p>{% endif %}
+{% if rule %}<div class="sec-rule"></div>{% endif %}
+{% endmacro %}
+
+{# 목차 + 보고서 정보. toc: [{title, page}], info: [{label, value}], notes: [문장] #}
+{% macro contents(report, toc, info, notes, total) %}
+{% call page(report, 2, total) %}
+{{ heading(none, '목차', report.period_label ~ ' · ' ~ report.title) }}
+<div class="toc">
+  {% for row in toc %}
+  <div class="row"><span class="n">{{ '%02d' % loop.index }}</span><span class="t">{{ row.title }}</span><span>{{ row.page }}</span></div>
+  {% endfor %}
+</div>
+<h3>보고서 정보</h3>
+<table class="info">
+  {% for row in info %}<tr><th>{{ row.label }}</th><td>{{ row.value }}</td></tr>{% endfor %}
+</table>
+<div class="notes">{% for text in notes %}<p>· {{ text }}</p>{% endfor %}</div>
+{% endcall %}
+{% endmacro %}
+
+{# KPI 카드 묶음. cards: [{label, value, unit?, sub?}] #}
+{% macro kpis(cards, cols=3) %}
+<div class="kpis c{{ cols }}">
+  {% for c in cards %}
+  <div class="kpi"><div class="l">{{ c.label }}</div>
+    <div class="v">{{ c.value }}{% if c.get("unit") %}<span class="u">{{ c.unit }}</span>{% endif %}</div>
+    {% if c.get("sub") %}<div class="s">{{ c.sub }}</div>{% endif %}</div>
+  {% endfor %}
+</div>
+{% endmacro %}
+
+{# 번호 붙은 요약 문장. sentences: [문장(**강조** 사용 가능)] #}
+{% macro sentences(items) %}
+<div class="note"><ol>{% for text in items %}<li>{{ text | emph }}</li>{% endfor %}</ol></div>
+{% endmacro %}
+
+{# 대상·내용 두 칸 표 (확인할 점·일정 등). rows: [{target, content}] #}
+{% macro check_table(rows, head=('대상', '내용')) %}
+<table>
+  <tr><th style="width:32mm">{{ head[0] }}</th><th>{{ head[1] }}</th></tr>
+  {% for r in rows %}<tr><td class="b">{{ r.target }}</td><td>{{ r.content }}</td></tr>{% endfor %}
+</table>
+{% endmacro %}
+
+{# 국가 이름 + 관심 표시 #}
+{% macro country(row) %}<span class="b">{{ row.name }}</span>{% if row.get("is_interest") %}<span class="tag">관심</span>{% endif %}{% endmacro %}
+
+{# 기사 카드 목록. articles: [{no, country, item_label, published_date, source_label, office?, title, summary, source_url?}] #}
+{% macro articles(items, is_sample=false) %}
+{% for a in items %}
+<div class="art">
+  <div class="t"><span class="no">{{ a.no | circled }}</span>{{ a.title }}</div>
+  <div class="m">{{ a.country }} · {{ a.item_label }} · {{ a.published_date | ymd }} · {{ a.source_label }}{% if a.get("office") %} · {{ a.office }}{% endif %}</div>
+  <div class="s">{{ a.summary }}</div>
+  <div class="lk">{% if a.get("source_url") %}<a href="{{ a.source_url }}">원문 보기 ↗</a>{% else %}<span class="small">원문 URL 없음</span>{% endif %}
+    {% if is_sample %}<span class="x">예시 기사 · 실제 원문 URL 연결 전</span>{% endif %}</div>
+</div>
+{% else %}
+<div class="empty">조건에 맞는 관련 기사가 없습니다. 이유를 단정하지 않고 “관련 기사 없음”으로 표시합니다.</div>
+{% endfor %}
+{% endmacro %}
+
+{# 기사 노출 기준 문구. per_country_limit 없으면 제한 해제 #}
+{% macro article_policy(limit) %}
+<div class="policy">{% if limit %}기본: 국가당 최대 {{ limit }}건{% else %}국가당 건수 제한 해제{% endif %}<span> | 사용자 요청 시 국가당 건수 제한 해제</span></div>
+{% endmacro %}
+
+{# 데이터 기준·출처 쪽의 표 3개. sources: [{label, provider, scope}], methods: [{metric, formula}], publish: [{label, value}] #}
+{% macro sources_block(sources, methods, publish) %}
+<table>
+  <tr><th style="width:26mm">구분</th><th style="width:48mm">출처</th><th>기준 · 범위</th></tr>
+  {% for s in sources %}<tr><td class="b">{{ s.label }}</td><td>{{ s.provider }}</td><td>{{ s.scope }}</td></tr>{% endfor %}
+</table>
+<h3>계산 방법</h3>
+<table>
+  <tr><th style="width:36mm">지표</th><th>계산식</th></tr>
+  {% for r in methods %}<tr><td>{{ r.metric }}</td><td>{{ r.formula }}</td></tr>{% endfor %}
+</table>
+<h3>발행 · 검증 정보</h3>
+<table>
+  <tr><th style="width:36mm">항목</th><th>내용</th></tr>
+  {% for r in publish %}<tr><td>{{ r.label }}</td><td>{{ r.value }}</td></tr>{% endfor %}
+</table>
+<p class="disclaimer">본 리포트는 공개 통계와 기사로 만든 참고 자료이며 수출 결정에 대한 권고가 아닙니다. 기사 저작권은 KOTRA에 있으며 원문 링크로 확인할 수 있습니다.</p>
+{% endmacro %}
+
+{# 범례. items: [{name, color, kind: box|line|dash}] #}
+{% macro legend(items) %}
+<div class="legend">{% for i in items %}<span><i class="{{ i.get('kind') or 'box' }}" style="background:{{ i.color }}"></i>{{ i.name }}</span>{% endfor %}</div>
+{% endmacro %}

@@ -1,0 +1,128 @@
+{# 정기 리포트 · 주간 (RPT_WEEKLY). 기사·이슈만 다루며 수출 통계는 없습니다. 변수 설명: templates/reports/README.md #}
+{% import "_macros.html" as m %}
+{% set first_articles = articles[:4] %}
+{% set more_pages = articles[4:] | batch(6) | list %}
+{% set p_summary = 3 %}
+{% set p_articles = 4 %}
+{% set p_keywords = p_articles + 1 + more_pages | length %}
+{% set total = p_keywords %}
+{% set c = summary.counts %}
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>{{ report.title }} · {{ report.period_label }}</title>
+<style>{{ css | safe }}</style>
+</head>
+<body>
+
+{{ m.cover(report, total) }}
+
+{% set toc = [{'title': '이번 주 요약', 'page': p_summary}, {'title': '관심 품목·국가 주요 기사', 'page': p_articles},
+              {'title': '급증 키워드 · 기사 분포', 'page': p_keywords}] %}
+{% set info = [
+  {'label': '보고서 유형', 'value': report.kind_label},
+  {'label': '관심 품목', 'value': conditions.hs_items | map(attribute='label') | join(' · ')},
+  {'label': '관심 국가', 'value': conditions.countries | map(attribute='name') | join(' · ')},
+  {'label': '대상 기간', 'value': conditions.week_label},
+  {'label': '비교 기준', 'value': conditions.compare_label},
+  {'label': '발행', 'value': report.published_at | ymdhm},
+  {'label': '리포트 ID', 'value': report.report_id},
+  {'label': '데이터 기준', 'value': meta.data_basis},
+] %}
+{% set notes = ['주간은 기사·이슈를 다루며, 수출 통계는 월간·분기 보고서에서 확인합니다.'] %}
+{% if report.is_sample %}{% set _ = notes.append('수치·기사는 원본 양식의 시연용 예시입니다.') %}{% endif %}
+{{ m.contents(report, toc, info, notes, total) }}
+
+{# ---------- 01 이번 주 요약 ---------- #}
+{% call m.page(report, p_summary, total) %}
+{{ m.heading(1, '이번 주 요약', report.period_label ~ ' · 관심 품목 및 국가 관련 기사·이슈', rule=true) }}
+{{ m.kpis([
+  {'label': '관심 범위 기사', 'value': c.total | num, 'unit': '건', 'sub': summary.total_note},
+  {'label': '해외시장뉴스', 'value': c.market | num, 'unit': '건', 'sub': '분석 기사'},
+  {'label': '단신속보', 'value': c.short | num, 'unit': '건', 'sub': '짧은 사실 속보'},
+  {'label': '급증 키워드', 'value': c.spike_keywords | num, 'unit': '개', 'sub': '8주 주평균의 ' ~ summary.spike_ratio ~ '배 이상'},
+], 4) }}
+<h3>이번 주 핵심</h3>
+{{ m.sentences(summary.sentences) }}
+
+<h3>주요 이슈<small>전체 기사 기준 · 최근 7일이 직전 8주 주평균의 3배 이상이거나 KOTRA 통상·규제 분류</small></h3>
+<table>
+  <tr><th style="width:21mm">구분</th><th>이슈</th><th style="width:16mm">국가</th><th style="width:40mm">판정 근거</th><th style="width:22mm">관심 관련</th></tr>
+  {% for r in summary.issues %}
+  <tr><td>{% if r.kind == 'SPIKE' %}<span class="tag warn">급증</span>{% else %}<span class="tag gray">통상·규제</span>{% endif %}</td>
+    <td class="b">{{ r.title }}</td><td>{{ r.country }}</td><td>{{ r.basis }}</td><td>{{ r.related }}</td></tr>
+  {% else %}
+  <tr><td colspan="5" class="small">이번 주 기준에 해당하는 주요 이슈가 없습니다.</td></tr>
+  {% endfor %}
+</table>
+
+{% if summary.schedule %}
+<h3>이번 주 일정 · 확인 사항</h3>
+<table>
+  <tr><th style="width:22mm">날짜</th><th>내용</th><th style="width:34mm">관련</th></tr>
+  {% for r in summary.schedule %}<tr><td>{{ r.date }}</td><td>{{ r.content }}</td><td>{{ r.related }}</td></tr>{% endfor %}
+</table>
+{% endif %}
+<p class="small" style="margin-top:3mm">주간 리포트는 지난주 기사·이슈만 정리합니다. 주간 수출 통계는 없으므로 수치는 월간·분기 리포트에서 확인하세요.</p>
+{% endcall %}
+
+{# ---------- 02 관심 품목·국가 주요 기사 ---------- #}
+{% call m.page(report, p_articles, total) %}
+{{ m.heading(2, '관심 품목·국가 주요 기사', '관심 품목 관련 해외 기사 · 선택한 관심 국가만 포함') }}
+{{ m.article_policy(article_limit) }}
+{% set market_sum = country_counts | sum(attribute='market') %}
+{% set short_sum = country_counts | sum(attribute='short') %}
+{% set rows = [] %}
+{% for r in country_counts %}{% set _ = rows.append({'label': r.name, 'values': [r.market + r.short]}) %}{% endfor %}
+<div class="grid-6-4">
+  <div><h3>국가별 기사 수<small>관심 범위 · 건</small></h3>
+    <table>
+      <tr><th>국가</th><th class="r">시장뉴스</th><th class="r">단신속보</th><th class="r">합계</th></tr>
+      {% for r in country_counts %}<tr><td>{{ m.country(r) }}</td><td class="r">{{ r.market | num }}</td><td class="r">{{ r.short | num }}</td><td class="r b">{{ (r.market + r.short) | num }}</td></tr>{% endfor %}
+      <tr class="total"><td>합계</td><td class="r">{{ market_sum | num }}</td><td class="r">{{ short_sum | num }}</td><td class="r">{{ (market_sum + short_sum) | num }}</td></tr>
+    </table></div>
+  <div><h3>기사 수 비교<small>합계 · 건</small></h3>
+    {% if rows %}{{ hbar_chart(rows, [colors.accent], label_width=50, width=300, row_height=26, digits=0) }}{% endif %}
+    <p class="small">기사 수는 관심 국가의 관련 기사 집계입니다.</p></div>
+</div>
+{{ m.articles(first_articles, report.is_sample) }}
+{% endcall %}
+{% for chunk in more_pages %}
+{% call m.page(report, p_articles + loop.index, total) %}
+{{ m.heading(none, '관심 품목·국가 주요 기사 (계속)') }}
+{{ m.articles(chunk, report.is_sample) }}
+{% endcall %}
+{% endfor %}
+
+{# ---------- 03 급증 키워드 · 기사 분포 ---------- #}
+{% call m.page(report, p_keywords, total) %}
+{{ m.heading(3, '급증 키워드 · 기사 분포', '키워드 언급 = 해외시장뉴스 기사 수 · 이번 주(7일) vs 직전 8주 주평균 · 배수 ' ~ summary.spike_ratio ~ ' 이상을 급증으로 표시') }}
+{{ m.legend([{'name': '이번 주', 'color': colors.accent}, {'name': '직전 8주 주평균', 'color': colors.previous}]) }}
+{% set rows = [] %}
+{% for r in keyword_spikes %}
+  {% set _ = rows.append({'label': r.keyword ~ ' · ' ~ r.country, 'values': [r.this_week, r.weekly_avg_8w],
+                          'tail': {'text': '×' ~ ('%.1f' % r.ratio), 'badge': '급증' if r.ratio >= summary.spike_ratio else none}}) %}
+{% endfor %}
+{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=110, row_height=30, tail_width=80, digits=[0, 1]) }}
+{% else %}<div class="empty">이번 주 키워드 언급 집계가 없습니다.</div>{% endif %}
+
+<h3>단신속보 하이라이트<small>관심 국가 단신 {{ short_news.total }}건 중 {{ short_news['items'] | length }}건 · 최신순</small></h3>
+<table>
+  <tr><th style="width:26mm">발행일</th><th style="width:20mm">국가</th><th>내용</th></tr>
+  {% for r in short_news['items'] %}<tr><td>{{ r.published_date | ymd }}</td><td class="b">{{ r.country }}</td><td>{{ r.content }}</td></tr>
+  {% else %}<tr><td colspan="3" class="small">이번 주 관심 국가 단신속보가 없습니다.</td></tr>{% endfor %}
+</table>
+
+<h3>출처 · 기준</h3>
+<table>
+  <tr><th style="width:26mm">구분</th><th>내용</th></tr>
+  <tr><td>기사</td><td>KOTRA 해외시장뉴스(매일 수집) · 단신속보(10분마다 수집) · 기사 id 기준 중복 제거</td></tr>
+  <tr><td>급증 기준</td><td>해외시장뉴스만 집계 · 한 기사는 키워드마다 1건 · 8주 주평균이 0이면 1로 계산</td></tr>
+  <tr><td>발행</td><td>매주 월요일 새벽 · 직전 주 월~일 · 실패 시 1회 재시도 후 “생성 지연” 표시 · {{ report.report_id }}</td></tr>
+</table>
+<p class="disclaimer">본 리포트는 공개 기사로 만든 참고 자료이며 수출 결정에 대한 권고가 아닙니다. 기사 저작권은 KOTRA에 있으며 원문 링크로 확인할 수 있습니다.</p>
+{% endcall %}
+
+</body>
+</html>
