@@ -7,11 +7,11 @@
     국가 → 유망 품목 순위 = 2단계 순서(order) / 품목 → 유망 국가 순위 · 예측 증감률 = 1단계 성장률(growth)
     2단계는 국가 묶음으로만 학습해 품목 방향 순위에는 맞지 않는다 (4차 테스트).
 교차 예측
-    2단계 학습 행의 1단계 값은 기준월 단위로 나눈 교차 예측이다. 같은 행으로 학습한 회귀 예측을 그대로 쓰면
-    실제보다 잘 맞는 값이라 2단계가 그 피처를 과신한다. 쌍 단위로 나누면 같은 기준월의 다른 쌍(같은 미래 기간의
-    시장 흐름)을 보고 만든 값이 되므로, 한 기준월의 행은 그 기준월을 빼고 학습한 모델로 예측한다.
-    정답 기간이 대부분 겹치는 인접 기준월은 학습에 남는다. 엄격히 12개월 간격을 두려면 정답 있는 기준월이
-    더 쌓여야 한다 (현재 22개월이면 월별 평가용 학습에서 2단계를 학습할 행이 남지 않는다).
+    2단계 학습 행의 1단계 값은 (국가, HS6) 쌍 단위로 나눈 교차 예측이다. 같은 행으로 학습한 회귀 예측을 그대로 쓰면
+    실제보다 잘 맞는 값이라 2단계가 그 피처를 과신한다. 쌍 단위 값은 같은 기준월의 다른 쌍을 본 모델이 만들어
+    실제 예측 때보다 조금 유리하지만, 기준월 단위로 나누면 학습 기준월이 적어 1단계 값이 오히려 크게 약해진다.
+    2026-10-28 재측정(미래 기준월 평가, 시드 3개)에서 기준월 단위는 앙상블 2025-09 국가 NDCG@5가 0.7283 → 0.7125,
+    Dev 0.7448 → 0.7360으로 떨어져 2단계를 쓰지 않은 회귀(0.7126)와 같아졌으므로 쌍 단위를 쓴다.
 파일
     data/ml/candidates/two_stage_<b|cK>_<base|ext>_<버전>.joblib. 딕셔너리에 두 Pipeline · 피처 · 방식과
     학습 시점의 최신 기준월 예측(latest)을 함께 둬 조회는 파일만 읽는다.
@@ -121,11 +121,8 @@ def fit(rows, columns, method="C", k=100, seed=0, n_jobs=4, folds=FOLDS):
     x = _x(rows, columns)
     stage1 = _regressor(x, rows.y_growth, columns, seed, n_jobs)
     oof = np.empty(len(rows))
-    anchors = rows.anchor.to_numpy()
-    splits = min(folds, len(np.unique(anchors)))
-    if splits < 2:
-        raise ValueError("기준월 단위 교차 예측에는 정답 있는 기준월이 2개 이상 필요합니다")
-    for fit_idx, out_idx in GroupKFold(n_splits=splits).split(x, groups=anchors):
+    pairs = (rows.country_code + "_" + rows.hs6).to_numpy()
+    for fit_idx, out_idx in GroupKFold(n_splits=folds).split(x, groups=pairs):
         part = _regressor(x.iloc[fit_idx], rows.y_growth.iloc[fit_idx], columns, seed, n_jobs)
         oof[out_idx] = part.predict(x.iloc[out_idx][columns])
     stacked = [*columns, "stage1_pred"]
@@ -133,7 +130,7 @@ def fit(rows, columns, method="C", k=100, seed=0, n_jobs=4, folds=FOLDS):
     keep = _top_k(rows, oof, k) if method == "C" else np.ones(len(rows), bool)
     stage2 = _ranker(xs[keep], rows[keep], stacked, seed, n_jobs)
     return {"stage1": stage1, "stage2": stage2, "features": columns, "stage2_features": stacked, "method": method,
-            "k": k if method == "C" else None, "folds": splits, "seed": seed, "train_rows": len(rows),
+            "k": k if method == "C" else None, "folds": folds, "seed": seed, "train_rows": len(rows),
             "stage2_rows": int(keep.sum()), "train_start": str(rows.anchor.min().date()),
             "train_end": str(rows.anchor.max().date()), "fit_seconds": time.perf_counter() - started}
 

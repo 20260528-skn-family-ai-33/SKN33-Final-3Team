@@ -88,20 +88,21 @@ class TwoStageTest(unittest.TestCase):
         joblib.dump(bundle, path)
         return path
 
-    def test_cross_prediction_holds_out_whole_anchors(self):
+    def test_cross_prediction_holds_out_whole_pairs(self):
         from unittest.mock import patch
         seen, real = [], T._regressor
+        pairs = self.rows.country_code + "_" + self.rows.hs6
 
         def record(x, y, columns, seed, n_jobs):
-            seen.append(set(self.rows.anchor.loc[x.index]))
+            seen.append(set(pairs.loc[x.index]))
             return real(x, y, columns, seed, n_jobs)
         with patch.object(T, "_regressor", side_effect=record):
             T.fit(self.rows, self.columns, "C", k=5, n_jobs=1, folds=2)
-        every = set(self.rows.anchor)
+        every = set(pairs)
         folds = seen[1:]  # 첫 호출은 전체 행 1단계
-        held_out = [every - fit_anchors for fit_anchors in folds]
-        self.assertTrue(all(held_out))  # 교차 모델마다 기준월 하나 이상을 통째로 뺀다
-        self.assertEqual(set().union(*held_out), every)  # 모든 기준월이 자기를 빼고 학습한 모델로 예측된다
+        held_out = [every - fit_pairs for fit_pairs in folds]
+        self.assertTrue(all(held_out))  # 교차 모델마다 (국가, HS6) 쌍 일부를 모든 기준월에서 통째로 뺀다
+        self.assertEqual(set().union(*held_out), every)  # 모든 쌍이 자기 쌍을 보지 않은 모델로 예측된다
 
     def test_report_writes_markdown_next_to_registry(self):
         import contextlib
