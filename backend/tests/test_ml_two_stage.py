@@ -9,7 +9,7 @@ import numpy as np
 from backend.app.ml import two_stage as T
 from backend.app.ml.candidate_models import needed_columns
 from backend.app.ml.experiments import FEATURE_SETS, prepare_scenarios
-from backend.app.ml.feature_recovery import coverage
+from backend.app.ml.feature_recovery import MARKET, WDI, coverage
 from backend.tests.test_ml_experiments import dataset
 
 
@@ -41,6 +41,14 @@ class TwoStageTest(unittest.TestCase):
         x = T._x(self.latest, bundle["features"]).assign(stage1_pred=pred.growth.to_numpy())
         np.testing.assert_allclose(pred.order - T.OFFSET, bundle["stage2"].predict(x[bundle["stage2_features"]]))
         self.assertEqual(bundle["stage2_features"][-1], "stage1_pred")
+
+    def test_monthly_records_and_warns_when_external_features_are_missing(self):
+        frame = dataset()[[*needed_columns(), "exp_12m"]].copy()
+        frame[MARKET + WDI] = np.nan  # 외부 자료가 아직 하나도 들어오지 않은 서버
+        with self.assertLogs(T.log, "WARNING"):
+            bundle, _, _ = T.monthly(frame, n_jobs=1)
+        self.assertEqual(bundle["external_dropped"], {"ext": MARKET + WDI})
+        self.assertEqual(bundle["features"]["ext"], bundle["features"]["base"])
 
     def test_combine_averages_and_refuses_different_targets(self):
         bundle = T.fit(self.rows, self.columns, "B", n_jobs=1, folds=2)

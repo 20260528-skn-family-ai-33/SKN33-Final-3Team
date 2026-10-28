@@ -231,6 +231,7 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
                       "data_info": _finite({"model_family": f"{kind}_full", "trade_month": str(month.date()),
                                             "artifact_root": out_dir.as_posix(), "input_snapshot": source,
                                             "runtime": runtime, "features_used": bundle["features"],
+                                            "external_dropped": bundle.get("external_dropped"),
                                             "target_clip": bundle["target_clip"], "fit_seconds": bundle["fit_seconds"]}),
                       "evaluation": evaluation, "skip_reason": None}
             write_json(record_path, record)

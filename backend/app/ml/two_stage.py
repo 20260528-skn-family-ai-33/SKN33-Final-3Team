@@ -21,6 +21,7 @@
     python -m backend.app.ml.two_stage query --model 파일1 파일2 --country VN --hs6 850760   (여러 개면 앙상블)
 """
 import argparse
+import logging
 import time
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,7 @@ GROUP = ["anchor", "country_code"]
 GRADES = 30  # 2단계 정답 = 그룹 안 성장 백분위를 0~30 등급으로 (평가 NDCG와 같은 선형 이득)
 FOLDS = 3
 OFFSET = 1e3  # C 방식에서 후보(2단계 점수)를 후보 밖(1단계 성장률, 약 -21~8)보다 항상 위에 둔다
+log = logging.getLogger(__name__)
 
 
 def load_rows(snapshot_path=SNAPSHOT_PY311, external="none"):
@@ -162,11 +164,20 @@ def monthly(frame, n_jobs=2, method="C", k=100):
     Holdout 평가는 candidate_models.holdout_check와 같은 분할(마지막 정답 기준월, 12개월 이상 앞선 기준월로 학습)이다.
     국가 순위 지표는 2단계 순서(model), 품목 방향 순위 · 증감률 지표는 1단계 성장률(model_stage1)로 잰다.
     MEMBERS가 둘 이상이면 combine으로 앙상블한다.
+    외부 데이터는 연도별로 늦게 들어와 일부가 빌 수 있어 멈추지 않는다. 학습에서 빠진 외부 피처는 external_dropped에 남기고,
+    전부 빠지면 그 모델이 v1과 같은 피처로 학습돼 앙상블 효과가 없으므로 경고한다.
     """
     source = frame.attrs.get("source")
-    members, latest, tested, holdout_seconds = {}, [], [], 0.0
+    members, latest, tested, holdout_seconds, dropped = {}, [], [], 0.0, {}
     for name, external in MEMBERS.items():
         rows, now, columns = split_rows(frame, external)
+        if external != "none":
+            dropped[name] = [c for c in MARKET + WDI if c not in columns]
+            if len(dropped[name]) == len(MARKET + WDI):
+                log.warning("%s: 외부 피처 %d개가 모두 비어 v1과 같은 피처로 학습합니다 (data/external · availability.csv 확인)",
+                            name, len(dropped[name]))
+            elif dropped[name]:
+                log.info("%s: 비어 있어 학습에서 뺀 외부 피처 %s", name, dropped[name])
         test_anchor = rows.anchor.max()
         early = (rows.anchor <= test_anchor - pd.DateOffset(months=F.HORIZON)).to_numpy()
         test = rows[(rows.anchor == test_anchor).to_numpy()]
@@ -184,7 +195,7 @@ def monthly(frame, n_jobs=2, method="C", k=100):
                               test, test[F.A_TARGETS[F.HORIZON][1]].to_numpy(dtype=float))[0]})
     bundle = {"members": members, "method": method, "k": k,
               "latest": combine(latest).assign(exp_12m=now.exp_12m.to_numpy()),  # query가 이 파일 하나로 조회
-              "features": {name: m["features"] for name, m in members.items()},
+              "features": {name: m["features"] for name, m in members.items()}, "external_dropped": dropped,
               "target_clip": rows.y_growth.quantile(ExperimentConfig().target_clip).tolist(),
               "fit_seconds": sum(m["fit_seconds"] for m in members.values()), "feature_set": "two_stage_" + "_".join(MEMBERS),
               "train_rows": len(rows), "train_start": str(rows.anchor.min().date()),
