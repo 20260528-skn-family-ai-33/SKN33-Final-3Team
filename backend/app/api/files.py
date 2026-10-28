@@ -64,6 +64,11 @@ def chart_image(section, chart, settings):
     font_path=Path(settings.get('API_REPORT_FONT','C:/Windows/Fonts/malgun.ttf'))
     font=FontProperties(fname=str(font_path)) if font_path.is_file() else FontProperties()
     fig=Figure(figsize=(7,3),dpi=150); FigureCanvasAgg(fig); ax=fig.subplots()
+    if not rows:
+        ax.set_axis_off()
+        ax.text(.5,.5,'조회된 자료가 없습니다.',ha='center',va='center',transform=ax.transAxes,fontproperties=font)
+        ax.set_title(chart['title'],fontproperties=font,fontsize=11)
+        fig.tight_layout(); out=BytesIO(); fig.savefig(out,format='png'); return out.getvalue()
     labels=[str(r[x]) for r in rows]; values=[r[y] for r in rows]
     if chart['chart_type']=='HORIZONTAL_BAR':
         ax.barh(labels,values,color='#006849'); ax.invert_yaxis()
