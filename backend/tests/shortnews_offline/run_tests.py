@@ -21,6 +21,9 @@ if repo not in allowed_repositories:
 for selected in args.tests:
     if not Path(selected.split('::')[0]).resolve().is_relative_to(repo/'backend/tests'):
         parser.error('Test selection must be under the explicitly selected repository')
+# 임시 작업 폴더로 이동하기 전에 선택한 테스트 경로를 고정합니다.
+args.tests = ['::'.join([str(Path(item.split('::')[0]).resolve()), *item.split('::')[1:]])
+              for item in args.tests]
 if args.evidence_dir:
     args.evidence_dir.mkdir(parents=True, exist_ok=True)
 run = Path(tempfile.mkdtemp(prefix='shortnews-offline-', dir=args.evidence_dir))
@@ -58,7 +61,13 @@ for name in ('backend.app.scheduler.main','backend.app.scheduler.jobs.shortnews_
     assert path.is_relative_to(repo)
     imports[name] = str(path)
 (run/'imports.json').write_text(json.dumps(imports,indent=2))
-selected = args.tests or [str(repo/path) for path in ['backend/tests/test_shortnews_analysis.py', 'backend/tests/test_shortnews_daily.py', 'backend/tests/test_shortnews_followup.py', 'backend/tests/test_shortnews_keywords.py', 'backend/tests/test_shortnews_load.py', 'backend/tests/test_shortnews_pipeline.py', 'backend/tests/test_shortnews_recovery.py', 'backend/tests/test_shortnews_review.py', 'backend/tests/test_shortnews_search.py', 'backend/tests/test_shortnews_transition.py', 'backend/tests/test_shortnews_vectors_integration.py', 'backend/tests/test_shortnews_worker.py', 'backend/tests/test_news_embed.py', 'backend/tests/test_news_erd_compat.py', 'backend/tests/test_news_keywords.py', 'backend/tests/test_news_load.py', 'backend/tests/test_news_load_lock.py', 'backend/tests/test_admin_news_migration.py', 'backend/tests/test_admin_news_mysql.py', 'backend/tests/test_admin_news_views.py', 'backend/tests/test_hs_code_refresh.py', 'backend/tests/test_customs_monthly.py::MonthlyScheduleTest::test_shared_scheduler_registers_all_jobs_without_executing_them', 'backend/tests/test_un_scheduler_integration.py', 'backend/tests/test_shortnews_isolated_contract.py', 'backend/tests/test_news_index_migrate.py', 'backend/tests/test_news_index_catalog.py']]
+selected = args.tests or [str(repo/path) for path in ['backend/tests/test_shortnews_analysis.py', 'backend/tests/test_shortnews_daily.py', 'backend/tests/test_shortnews_followup.py', 'backend/tests/test_shortnews_keywords.py', 'backend/tests/test_shortnews_load.py', 'backend/tests/test_shortnews_pipeline.py', 'backend/tests/test_shortnews_recovery.py', 'backend/tests/test_shortnews_review.py', 'backend/tests/test_shortnews_search.py', 'backend/tests/test_shortnews_transition.py', 'backend/tests/test_shortnews_vectors_integration.py', 'backend/tests/test_shortnews_worker.py', 'backend/tests/test_news_embed.py', 'backend/tests/test_news_embed_rebuild.py', 'backend/tests/test_news_erd_compat.py', 'backend/tests/test_news_keywords.py', 'backend/tests/test_news_load.py', 'backend/tests/test_news_load_lock.py', 'backend/tests/test_admin_news_migration.py', 'backend/tests/test_admin_news_mysql.py', 'backend/tests/test_admin_news_views.py', 'backend/tests/test_hs_code_refresh.py', 'backend/tests/test_customs_monthly.py::MonthlyScheduleTest::test_shared_scheduler_registers_all_jobs_without_executing_them', 'backend/tests/test_un_scheduler_integration.py', 'backend/tests/test_shortnews_isolated_contract.py', 'backend/tests/test_news_index_migrate.py', 'backend/tests/test_news_index_catalog.py']]
+if not args.tests:
+    selected.extend(str(repo/path) for path in [
+        'backend/tests/test_news_keyword_lifecycle.py',
+        'backend/tests/trade_news/test_common_news_vector.py',
+        'backend/tests/trade_news/test_vector_resource_contract.py',
+    ])
 (run/'manifest.json').write_text(json.dumps({'repo':str(repo),'selected':selected,'run':str(run),
     'test_file_sha256':{name:hashlib.sha256(Path(name).read_bytes()).hexdigest()
                        for name in sorted({str(p) for item in selected for p in ([Path(item.split('::')[0])] if Path(item.split('::')[0]).is_file() else Path(item).rglob('test_*.py'))})}},indent=2))

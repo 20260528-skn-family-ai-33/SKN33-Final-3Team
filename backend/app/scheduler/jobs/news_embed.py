@@ -1,14 +1,16 @@
-"""기본 기사 실행·검색은 공통 세대 색인의 KOTRA 컬렉션을 사용합니다.
+"""기본 기사 실행·검색은 공통 세대 색인의 total_article 컬렉션을 사용합니다.
 
 python -m backend.app.scheduler.jobs.news_embed [--rebuild] [--dry-run] [--keywords-only]
 공통 본문 색인은 data/rag/index 아래에서 검증 후 교체하며 이전 세대를 보존합니다.
+--rebuild는 보존 출처를 포함한 본문 전체와 DB 전체 키워드를 재임베딩합니다.
+--rebuild --dry-run은 모델 호출·저장소 변경 없이 본문 조각·키워드·입력 글자 수를 출력합니다.
 --keywords-only는 기존 전체 기사 태그 범위의 news_keyword 동기화를 유지합니다.
 아래 구형 청크·동기화 함수와 명시적 client 주입 경로는 기준선 재구성과 호환 검증에 사용합니다.
-본문 모델은 text-embedding-3-large, 3072차원이며 청킹은 1000자·150자 겹침입니다.
+기본 본문 모델은 text-embedding-3-large, 3072차원이며 청킹은 1000자·150자 겹침입니다.
 자세한 실행·검증 방법은 docs/SHORTNEWS_INGEST_HANDOFF.md를 따릅니다.
 """
 import argparse
-from backend.app.services.rag.resources import close_owned
+from backend.app.services.rag.resources import close_owned, closing_owned
 import hashlib
 import logging
 from datetime import datetime
@@ -23,10 +25,9 @@ from sqlalchemy import select
 from backend.app.db.session import ENV_PATH, make_engine, session_scope
 from backend.app.models.news import Article, ArticleTag
 from backend.app.scheduler.jobs.news_load import keyword_article_counts
+from backend.app.services.news_embedding import MODEL, DIMENSIONS
 
 from backend.app.services.news_collections import ARTICLE_COLLECTION
-
-MODEL = "text-embedding-3-large"
 KEYWORD_COLLECTION = "news_keyword"
 CHROMA_PATH = Path(__file__).resolve().parents[4] / "chroma_data"
 LOG_DIR = Path(__file__).resolve().parents[4] / "data" / "news" / "logs"
@@ -131,16 +132,11 @@ def openai_embed(env=ENV_PATH):
 
     def embed(texts):
         embed.usage['model_calls'] += 1
-        res = None
-        try:
-            res = client.embeddings.create(model=MODEL, input=texts)
-        finally:
-            from backend.app.services.news_usage import record_usage
-            def counted(value):
-                embed.usage['tokens'] += value['tokens'] or 0
-                embed.usage['reported_responses'] += int(value['reported'])
-            record_usage(counted, MODEL, res)
-        return [d.embedding for d in sorted(res.data, key=lambda d: d.index)]
+        from backend.app.services import news_embedding
+        def counted(value):
+            embed.usage['tokens'] += value['tokens'] or 0
+            embed.usage['reported_responses'] += int(value['reported'])
+        return news_embedding.embed(client, texts, model=MODEL, dimensions=DIMENSIONS, usage_sink=counted)
     embed.usage = {"tokens": 0, 'model_calls': 0, 'reported_responses': 0}
     embed.close = client.close
     return embed
@@ -158,11 +154,16 @@ def get_collection(client, name, rebuild=False):
     if rebuild and name in [c.name for c in client.list_collections()]:
         client.delete_collection(name)
         log.info(f"컬렉션 {name}을 지우고 새로 만듭니다 (--rebuild).")
-    col = client.get_or_create_collection(name, embedding_function=None,
-                                          metadata={"hnsw:space": "cosine", "embedding_model": MODEL})
+    metadata = {"hnsw:space": "cosine", "embedding_model": MODEL}
+    if name == KEYWORD_COLLECTION:
+        metadata['dimensions'] = DIMENSIONS
+    col = client.get_or_create_collection(name, embedding_function=None, metadata=metadata)
     if (col.metadata or {}).get("embedding_model") != MODEL:
         raise ValueError(f"컬렉션 {name}의 임베딩 모델이 {(col.metadata or {}).get('embedding_model')}입니다 "
-                         f"(현재 {MODEL}). 차원이 달라 --rebuild로 다시 만들어야 합니다.")
+                         f"(현재 {MODEL}). --rebuild로 다시 만들어야 합니다.")
+    if name == KEYWORD_COLLECTION:
+        from backend.app.services.rag.keyword_store import check_compatibility
+        check_compatibility(col, model=MODEL, dimensions=DIMENSIONS)
     return col
 
 
@@ -257,7 +258,8 @@ def sync_keywords(counts, col, embed):
         log.info(f"키워드 임베딩 {min(i + KEYWORD_BATCH, len(todo)):,}/{len(todo):,}{usage_text(embed)}")
     for i in range(0, len(gone), KEYWORD_BATCH):
         col.delete(ids=gone[i:i + KEYWORD_BATCH])
-    return {"added": len(todo), "existing": len(counts) - len(todo), "count_updated": len(changed), "deleted": len(gone)}
+    return {"added": len(todo), "existing": len(counts) - len(todo), "count_updated": len(changed), "deleted": len(gone),
+            "embedded": len(todo), "embedding_chars": sum(map(len, todo))}
 
 
 def search(query, n=5, country=None, keyword=None, date_from=None, date_to=None, client=None, embed=None, *, root=None, source_codes='ALL'):
@@ -320,14 +322,15 @@ def search_keywords(query, n=10, client=None, embed=None, *, root=None):
     primary = None
     try:
         if client is None:
-            path = resolve_keyword_root(root)
+            from backend.app.services.rag.keyword_store import active_path
+            path = active_path(resolve_keyword_root(root))
             if not (path / 'chroma.sqlite3').exists():
                 raise ValueError('keyword_index_not_ready')
             owned = persistent_client(path)
             client = owned
         col = client.get_collection(KEYWORD_COLLECTION, embedding_function=None)
-        if (col.metadata or {}).get('embedding_model') != MODEL:
-            raise ValueError('incompatible_keyword_embedding')
+        from backend.app.services.rag.keyword_store import check_compatibility
+        check_compatibility(col, model=MODEL, dimensions=DIMENSIONS)
         if provider is None:
             provider = openai_embed()
         res = col.query(query_embeddings=provider([query]), n_results=n, include=['metadatas', 'distances'])
@@ -346,11 +349,23 @@ def search_keywords(query, n=10, client=None, embed=None, *, root=None):
 
 def sync_all_keywords(engine, path, embed, *, dry_run=False, rebuild=False):
     """모든 호출자가 동일 잠금 안에서 전체 DB 조회→키워드 동기화를 수행합니다."""
-    from contextlib import nullcontext, closing
+    from contextlib import nullcontext
     from filelock import FileLock
     from sqlalchemy import inspect
     from backend.app.services.rag.store import persistent_client
-    path = Path(path)
+    from backend.app.services.rag import keyword_store
+    import math
+    def checked(texts):
+        vectors = list(embed(texts))
+        if len(vectors) != len(texts):
+            raise ValueError('embedding_count_mismatch')
+        for vector in vectors:
+            if len(vector) != DIMENSIONS or not all(math.isfinite(float(v)) for v in vector):
+                raise ValueError('invalid_embedding')
+            if not any(float(v) for v in vector):
+                raise ValueError('zero_keyword_embedding')
+        return vectors
+    path = Path(path).resolve()
     if not dry_run:
         path.parent.mkdir(parents=True, exist_ok=True)
     with nullcontext() if dry_run else FileLock(str(path) + '.lock'):
@@ -358,11 +373,18 @@ def sync_all_keywords(engine, path, embed, *, dry_run=False, rebuild=False):
             raise ValueError('keyword_tables_missing')
         counts = keyword_article_counts(engine, require_schema=True)
         if dry_run:
-            return {'status':'planned','distinct_keywords':len(counts),'deletion_planned':False}
-        with closing(persistent_client(path)) as client:
-            col = get_collection(client, KEYWORD_COLLECTION, rebuild=rebuild)
-            return {**sync_keywords(counts,col,embed),'status':'complete','distinct_keywords':len(counts),
-                    'empty_policy':'preserve_existing' if not counts else None}
+            return {'status':'planned', 'rebuild':rebuild, 'distinct_keywords':len(counts),
+                    'embedded':len(counts) if rebuild else None,
+                    'embedding_chars':sum(map(len, counts)) if rebuild else None,
+                    'deletion_planned':False}
+        if rebuild:
+            result = keyword_store.rebuild(path, counts, checked, model=MODEL, dimensions=DIMENSIONS)
+        else:
+            with closing_owned(persistent_client(keyword_store.active_path(path)), name='keyword_store') as client:
+                col = get_collection(client, KEYWORD_COLLECTION)
+                result = sync_keywords(counts, col, checked)
+        return {**result, 'status':'complete', 'rebuild':rebuild, 'distinct_keywords':len(counts),
+                'empty_policy':('rebuild_empty' if rebuild else 'preserve_existing') if not counts else None}
 
 
 def run_sources(sources, *, db_url=None, root=None, embed=None, dry_run=False, progress=None):
@@ -397,21 +419,30 @@ def run_sources(sources, *, db_url=None, root=None, embed=None, dry_run=False, p
             provider = openai_embed()  # 차이가 없는 실행에서는 키/유료 클라이언트도 만들지 않습니다.
         before = getattr(provider, 'usage', {}).get('tokens')
         before_reports = getattr(provider, 'usage', {}).get('reported_responses')
+        primary = None
         try:
             return provider(texts)
+        except BaseException as exc:
+            primary = exc
+            raise
         finally:
-            after = getattr(provider, 'usage', {}).get('tokens')
-            usage = result['usage'].setdefault(stage, {'tokens':0, 'estimated_usd':None, 'reported':False, 'model_calls':0, 'reported_responses':0, 'unreported_calls':0})
-            usage['model_calls'] += 1
-            after_reports = getattr(provider, 'usage', {}).get('reported_responses')
-            reported = (before is not None and after is not None and
-                        (after_reports > before_reports if before_reports is not None and after_reports is not None else True))
-            usage['reported_responses' if reported else 'unreported_calls'] += 1
-            usage['reported'] = usage['reported_responses'] > 0 and usage['unreported_calls'] == 0
-            if reported:
-                usage['tokens'] += after - before
-                usage['estimated_usd'] = usage['tokens'] * PRICE_PER_M / 1e6
-            checkpoint()
+            try:
+                after = getattr(provider, 'usage', {}).get('tokens')
+                usage = result['usage'].setdefault(stage, {'tokens':0, 'estimated_usd':None, 'reported':False, 'model_calls':0, 'reported_responses':0, 'unreported_calls':0})
+                usage['model_calls'] += 1
+                after_reports = getattr(provider, 'usage', {}).get('reported_responses')
+                reported = (before is not None and after is not None and
+                            (after_reports > before_reports if before_reports is not None and after_reports is not None else True))
+                usage['reported_responses' if reported else 'unreported_calls'] += 1
+                usage['reported'] = usage['reported_responses'] > 0 and usage['unreported_calls'] == 0
+                if reported:
+                    usage['tokens'] += after - before
+                    usage['estimated_usd'] = usage['tokens'] * PRICE_PER_M / 1e6
+                checkpoint()
+            except BaseException as exc:
+                if primary is None:
+                    raise
+                primary.add_note(f'embedding_progress_failed:{type(exc).__name__}')
     def checkpoint():
         if progress is not None and not dry_run:
             progress(deepcopy(result))
@@ -432,7 +463,7 @@ def run_sources(sources, *, db_url=None, root=None, embed=None, dry_run=False, p
             result['keywords'].update(sync_all_keywords(engine, keyword_path, measured, dry_run=dry_run))
             result['status'] = 'planned' if dry_run else 'complete'
     except Exception as exc:
-        code = str(exc) if isinstance(exc, ValueError) and str(exc) in {'source_database_mismatch','source_database_unbound','single_collection_migration_required','article_document_migration_required','legacy_direct_index_migration_required','keyword_tables_missing','dictionary_changed_refresh_all_ready_sources'} else type(exc).__name__
+        code = str(exc) if isinstance(exc, ValueError) and str(exc) in {'source_database_mismatch','source_database_unbound','single_collection_migration_required','article_document_migration_required','legacy_direct_index_migration_required','keyword_tables_missing','dictionary_changed_refresh_all_ready_sources','incompatible_keyword_embedding'} else type(exc).__name__
         result[stage].update(status='failed', error_code=code)
         result['error_code'] = code
         result['status'] = 'partial' if result['body']['status'] in ('complete','planned') else 'failed'
@@ -452,18 +483,63 @@ def run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log_
     """기본 세대 경로 유지. 주입 클라이언트는 빌려 쓰고 공통 키워드 잠금에 참여합니다."""
     from contextlib import nullcontext
     from filelock import FileLock
+    from backend.app.services.rag import keyword_store
     try:
         lock = nullcontext()
+        path = base = None
         if client is not None and not dry_run:
             settings = client.get_settings()
             if settings.is_persistent:
-                path = Path(settings.persist_directory)
-                path.parent.mkdir(parents=True, exist_ok=True)
-                lock = FileLock(str(path) + '.lock')
+                path = Path(settings.persist_directory).resolve()
+                base = keyword_store.writer_base(path)
+                base.parent.mkdir(parents=True, exist_ok=True)
+                lock = FileLock(str(base) + '.lock')
         with lock:
+            # 빌린 client는 이미 열린 세대에 고정됩니다. 기다리는 동안 포인터가
+            # 바뀌었다면 이전 세대를 성공으로 갱신하지 않고 재개방을 요구합니다.
+            if path is not None and keyword_store.active_path(base).resolve() != path:
+                raise ValueError('stale_keyword_generation')
             return _run(db_url, rebuild, dry_run, client, embed, log_dir, keywords_only, raw_market)
     except Exception as exc:
-        log.error('기사 색인 초기화·종료 실패: %s', type(exc).__name__)
+        log.error('기사 색인 초기화·종료 실패: %s',
+                  str(exc) if isinstance(exc, ValueError) and str(exc) == 'stale_keyword_generation' else type(exc).__name__)
+        return 1
+
+
+def _run_keywords(db_url, folder, embed, *, dry_run, rebuild):
+    """호출자가 sync.lock을 보유합니다. 본문 실행과 키워드 전용 실행의 공통 단계입니다."""
+    from contextlib import nullcontext
+    from backend.app.services.rag.store import GenerationStore, resolve_keyword_root
+    from backend.app.db.news_lock import engine_identity
+    engine = None
+    primary = None
+    provider = embed
+    def lazy(texts):
+        nonlocal provider
+        if provider is None:
+            provider = openai_embed()
+        return provider(texts)
+    try:
+        try:
+            engine = make_engine(db_url)
+            store = GenerationStore(folder)
+            with nullcontext() if dry_run else store.lock:
+                store.bind_database(engine_identity(engine), dry_run=dry_run)
+            result = sync_all_keywords(engine, resolve_keyword_root(folder), lazy, dry_run=dry_run, rebuild=rebuild)
+            log.info('키워드 색인: %s', result)
+            return 0
+        except BaseException as exc:
+            primary = exc
+            raise
+        finally:
+            resources = []
+            if engine is not None:
+                resources.append(('database', engine.dispose))
+            if embed is None and provider is not None:
+                resources.append(('embedding', provider.close))
+            close_owned(resources, primary=primary)
+    except Exception:
+        log.exception('키워드 색인 실패')
         return 1
 
 
@@ -471,87 +547,91 @@ def _run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log
     """성공 0, 실패 1. client·embed는 테스트에서 바꿔 넣습니다. keywords_only면 키워드 컬렉션만."""
     if client is None and not keywords_only:
         from backend.app.scheduler.jobs import rag_index
-        report = rag_index.run(['KOTRA_MARKET'], db_url=db_url, embed=embed, raw_market=raw_market, dry_run=dry_run)
-        published = report.get('index', {}).get('status') == 'ready'
-        if report['status'] not in ('complete', 'planned') and not published:
-            return 1
-        # 게시 후 정리·보고 실패라도 키워드는 갱신합니다. 전체 종료 코드는 실패를 유지합니다.
-        keywords_code = run(db_url=db_url, dry_run=dry_run, embed=embed, log_dir=log_dir, keywords_only=True)
-        return keywords_code if report['status'] in ('complete', 'planned') else 1
-    if client is None and keywords_only:
-        engine = None
-        provider = embed
-        def lazy(texts):
-            nonlocal provider
-            if provider is None:
-                provider = openai_embed()
-            return provider(texts)
-        try:
-            engine = make_engine(db_url)
-            from contextlib import nullcontext
-            from filelock import FileLock
-            from backend.app.services.rag.store import GenerationStore, resolve_root, resolve_keyword_root
-            from backend.app.db.news_lock import engine_identity
-            folder = resolve_root()
-            if not dry_run:
-                folder.mkdir(parents=True, exist_ok=True)
-            with nullcontext() if dry_run else FileLock(str(folder / 'sync.lock')):
-                store = GenerationStore(folder)
-                with nullcontext() if dry_run else store.lock:
-                    store.bind_database(engine_identity(engine), dry_run=dry_run)
-                sync_all_keywords(engine, resolve_keyword_root(folder), lazy, dry_run=dry_run, rebuild=rebuild)
-            return 0
-        except Exception:
-            return 1
-        finally:
+        from backend.app.services.rag.store import resolve_root
+        from contextlib import nullcontext
+        from filelock import FileLock
+        folder = resolve_root()
+        if not dry_run:
+            folder.mkdir(parents=True, exist_ok=True)
+        # 본문→키워드 사이에 다른 갱신이 끼어들지 않도록 공통 잠금을 유지합니다.
+        with nullcontext() if dry_run else FileLock(str(folder / 'sync.lock')):
+            report = rag_index.run(['KOTRA_MARKET'], db_url=db_url, embed=embed, raw_market=raw_market,
+                                   dry_run=dry_run, rebuild=rebuild)
+            log.info('본문 색인: %s', report)
+            published = report.get('index', {}).get('status') == 'ready'
+            if report['status'] not in ('complete', 'planned') and not published:
+                log.error('본문 색인 실패: %s', report)
+                return 1
+            # 게시 후 정리·보고 실패라도 키워드는 갱신합니다. 전체 종료 코드는 실패를 유지합니다.
             try:
-                if engine is not None:
-                    engine.dispose()
-            finally:
-                if embed is None and provider is not None:
-                    provider.close()
+                keywords_code = _run_keywords(db_url, folder, embed, rebuild=rebuild, dry_run=dry_run)
+            except Exception:
+                log.exception('키워드 자원 종료 실패')
+                keywords_code = 1
+            if keywords_code:
+                log.error('본문 %s 후 키워드 %s 실패: 부분 완료이며 전체 실행은 실패입니다.',
+                          '계획' if dry_run else '게시', '재구축' if rebuild else '동기화')
+            return keywords_code if report['status'] in ('complete', 'planned') else 1
+    if client is None and keywords_only:
+        from contextlib import nullcontext
+        from filelock import FileLock
+        from backend.app.services.rag.store import resolve_root
+        folder = resolve_root()
+        if not dry_run:
+            folder.mkdir(parents=True, exist_ok=True)
+        with nullcontext() if dry_run else FileLock(str(folder / 'sync.lock')):
+            return _run_keywords(db_url, folder, embed, dry_run=dry_run, rebuild=rebuild)
     log_path = setup_log(log_dir)
     what = "키워드 임베딩(--keywords-only)" if keywords_only else "기사·키워드 임베딩"
     log.info(f"{what}(미등록 항목 추가) 시작 | 모델 {MODEL} | Chroma {CHROMA_PATH if client is None else '(주입)'}"
              f"{' | 미리 보기(--dry-run)' if dry_run else ''}")
     engine = None
     owned_embed = embed is None
+    primary = None
     try:
-        engine = make_engine(db_url)
-        # 키워드만이면 본문(body_masked)은 읽지 않고 article_tag의 키워드별 기사 수만
-        rows = None if keywords_only else read_rows(engine)
-        counts = keyword_article_counts(engine) if keywords_only else keyword_counts(rows)
-        client = client or chromadb.PersistentClient(path=str(CHROMA_PATH))
-        # --rebuild --dry-run: 컬렉션을 지우지 않고, 지운 뒤(빈 컬렉션)를 가정해 셈
-        fresh = rebuild and dry_run
-        articles = None if keywords_only or fresh else get_collection(client, ARTICLE_COLLECTION, rebuild)
-        keywords = None if fresh else get_collection(client, KEYWORD_COLLECTION, rebuild)
-        if dry_run:
-            have_kw = set() if keywords is None else set(get_all(keywords, [])["ids"])
-            new_kw, gone_kw = set(counts) - have_kw, (have_kw - set(counts)) if counts else set()
-            kw_txt = f"키워드 {len(new_kw):,}개 추가 · {len(gone_kw):,}개 삭제"
-            if keywords_only:
-                log.info(f"미리 보기(키워드만): {kw_txt} | 글자 {sum(map(len, new_kw)):,}자 | 로그: {log_path}")
+        try:
+            engine = make_engine(db_url)
+            # 키워드만이면 본문(body_masked)은 읽지 않고 article_tag의 키워드별 기사 수만
+            rows = None if keywords_only else read_rows(engine)
+            counts = keyword_article_counts(engine) if keywords_only else keyword_counts(rows)
+            client = client or chromadb.PersistentClient(path=str(CHROMA_PATH))
+            # --rebuild --dry-run: 컬렉션을 지우지 않고, 지운 뒤(빈 컬렉션)를 가정해 셈
+            fresh = rebuild and dry_run
+            articles = None if keywords_only or fresh else get_collection(client, ARTICLE_COLLECTION, rebuild)
+            keywords = None if rebuild else get_collection(client, KEYWORD_COLLECTION)
+            if dry_run:
+                have_kw = set() if keywords is None else set(get_all(keywords, [])["ids"])
+                new_kw, gone_kw = set(counts) - have_kw, (have_kw - set(counts)) if counts else set()
+                kw_txt = f"키워드 {len(new_kw):,}개 추가 · {len(gone_kw):,}개 삭제"
+                if keywords_only:
+                    log.info(f"미리 보기(키워드만): {kw_txt} | 글자 {sum(map(len, new_kw)):,}자 | 로그: {log_path}")
+                    return 0
+                todo, stale, same, meta = plan(rows, articles)
+                chars = sum(len(d) for d, _ in todo.values()) + sum(map(len, new_kw))
+                log.info(f"미리 보기: 기사 {len(rows):,}건 중 새로/다시 넣을 기사 {len(rows) - same:,}건 (변경 {len(stale):,}) | "
+                         f"조각 {len(todo):,}개 · 메타데이터만 갱신 {len(meta):,}개 · {kw_txt} | 글자 {chars:,}자 | 로그: {log_path}")
                 return 0
-            todo, stale, same, meta = plan(rows, articles)
-            chars = sum(len(d) for d, _ in todo.values()) + sum(map(len, new_kw))
-            log.info(f"미리 보기: 기사 {len(rows):,}건 중 새로/다시 넣을 기사 {len(rows) - same:,}건 (변경 {len(stale):,}) | "
-                     f"조각 {len(todo):,}개 · 메타데이터만 갱신 {len(meta):,}개 · {kw_txt} | 글자 {chars:,}자 | 로그: {log_path}")
-            return 0
-        embed = embed or openai_embed()
-        result = None if keywords_only else sync(rows, articles, embed)
-        kw = sync_keywords(counts, keywords, embed)
+            embed = embed or openai_embed()
+            result = None if keywords_only else sync(rows, articles, embed)
+            if rebuild:
+                from backend.app.services.rag.keyword_store import rebuild_in_client
+                keywords, kw = rebuild_in_client(client, counts, embed, model=MODEL, dimensions=DIMENSIONS)
+            else:
+                kw = sync_keywords(counts, keywords, embed)
+        except BaseException as exc:
+            primary = exc
+            raise
+        finally:
+            resources = []
+            if engine is not None:
+                resources.append(('database', engine.dispose))
+            if owned_embed and embed is not None:
+                resources.append(('embedding', embed.close))
+            close_owned(resources, primary=primary)
     except Exception:
         log.exception(f"실패: 임베딩 중 오류 (이미 추가한 배치는 남고 다음 실행에서 나머지를 추가함)"
                       f"{usage_text(embed)} | 로그: {log_path}")
         return 1
-    finally:
-        try:
-            if engine is not None:
-                engine.dispose()
-        finally:
-            if owned_embed and embed is not None:
-                embed.close()
     if keywords_only:
         log.info(f"완료(키워드만): 키워드 추가 {kw['added']:,} · 기사 수 갱신 {kw['count_updated']:,} · 삭제 {kw['deleted']:,} "
                  f"(컬렉션 {keywords.count():,}개){usage_text(embed)} | 로그: {log_path}")
@@ -564,12 +644,13 @@ def _run(db_url=None, rebuild=False, dry_run=False, client=None, embed=None, log
 
 
 def main():
-    parser = argparse.ArgumentParser(description="article 테이블의 미등록 기사를 임베딩해 Chroma total_article 컬렉션에 추가")
+    parser = argparse.ArgumentParser(description="기사 본문 세대를 게시하고 공통 키워드를 동기화")
     parser.add_argument("--db-url", help="SQLAlchemy DB URL (기본: .env의 MYSQL_* 값)")
-    parser.add_argument("--rebuild", action="store_true", help="컬렉션을 지우고 전부 다시 임베딩 (모델 변경 시)")
-    parser.add_argument("--dry-run", action="store_true", help="OpenAI를 부르지 않고 새로 넣을 조각 수·글자 수만 출력")
+    parser.add_argument("--rebuild", action="store_true", help="보존 출처까지 본문 전체·DB 전체 키워드 재임베딩 후 새 본문 세대로 전환 (이전 세대 보존)")
+    parser.add_argument("--dry-run", action="store_true", help="OpenAI 호출·저장소 변경 없이 계획 출력 (--rebuild: 전체 조각·키워드·글자 수)")
     parser.add_argument("--keywords-only", action="store_true", help="키워드(news_keyword)만 임베딩, 기사 본문은 건드리지 않음")
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
     raise SystemExit(run(args.db_url, args.rebuild, args.dry_run, keywords_only=args.keywords_only))
 
 

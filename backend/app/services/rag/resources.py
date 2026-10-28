@@ -1,4 +1,5 @@
 """소유 자원의 종료 실패가 원래 처리 오류·취소를 덮지 않게 정리합니다."""
+from contextlib import contextmanager
 
 
 def close_owned(resources, *, primary=None):
@@ -20,3 +21,16 @@ def close_owned(resources, *, primary=None):
         target.add_note(f'cleanup_failed:{name}:{type(error).__name__}')
     if primary is None:
         raise target
+
+
+@contextmanager
+def closing_owned(resource, *, name):
+    """처리 오류가 있으면 유지하고, 정상 처리 뒤의 종료 실패는 전파합니다."""
+    primary = None
+    try:
+        yield resource
+    except BaseException as exc:
+        primary = exc
+        raise
+    finally:
+        close_owned([(name, resource.close)], primary=primary)

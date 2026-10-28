@@ -19,6 +19,7 @@ from sqlalchemy import text
 from backend.app.db.news_lock import database_identity
 from backend.app.db.session import make_engine, mysql_url
 from backend.app.services import shortnews_analysis as analysis, shortnews_keywords as keywords
+from backend.app.services import news_embedding as shared_embedding
 from backend.app.services import shortnews_load as service, shortnews_vectors as vectors
 from backend.app.scheduler.jobs import shortnews_load as loader
 
@@ -37,6 +38,7 @@ def run(raw_path, *, db_url=None, env_path=ROOT / '.env', chroma_path=ROOT / 'ch
     engine = None
     owned_api = api is None
     owned_client = client is None
+    primary = None
     try:
         raws = service.read_records(raw_path)
         articles, originals, _ = loader.prepare(raws, [])
@@ -66,26 +68,30 @@ def run(raw_path, *, db_url=None, env_path=ROOT / '.env', chroma_path=ROOT / 'ch
                     counter['reported_responses' if value['reported'] else 'unreported_calls'] += 1
                     for key in ('tokens','input_tokens','output_tokens'):
                         counter[key] += value.get(key) or 0
-                    if value['model'] == keywords.MODEL and counter['reported_responses']:
+                    if (value['model'] == shared_embedding.MODEL and counter['reported_responses']
+                            and (stage in ('body', 'keywords') or keywords.MODEL == shared_embedding.MODEL)):
                         from backend.app.scheduler.jobs.news_embed import PRICE_PER_M
                         counter['estimated_usd'] = counter['tokens'] * PRICE_PER_M / 1e6
                     analysis.atomic_json(directory / 'pipeline_result.json', report)
-                def encode(texts):
-                    stage = ('candidate_query' if report['stage']=='analysis' else
-                             vector_stage[0] if report['stage']=='chroma' else report['stage'])
-                    def counted(value):
-                        encode.usage['tokens'] += value['tokens'] or 0
-                        encode.usage['reported_responses'] += int(value['reported'])
-                        record(stage, value)
-                    return analysis.embed(api, texts, usage_sink=counted)
-                encode.usage = {'tokens':0, 'reported_responses':0}
+                def tracked_encode(embedding, current_stage):
+                    def encode(texts):
+                        def counted(value):
+                            encode.usage['tokens'] += value['tokens'] or 0
+                            encode.usage['reported_responses'] += int(value['reported'])
+                            record(current_stage(), value)
+                        return embedding(api, texts, usage_sink=counted)
+                    encode.usage = {'tokens':0, 'reported_responses':0}
+                    return encode
+                classification_encode = tracked_encode(analysis.embed, lambda:
+                    'candidate_query' if report['stage'] == 'analysis' else report['stage'])
+                common_encode = tracked_encode(shared_embedding.embed, lambda: vector_stage[0])
                 report['stage'] = 'classification_index'
                 snapshot = keywords.read_catalog(engine)
-                index, report['keyword_index'] = keywords.sync_index(snapshot, client, encode)
+                index, report['keyword_index'] = keywords.sync_index(snapshot, client, classification_encode)
                 report['stage'] = 'analysis'
                 results, cache_hits = {}, 0
                 for article in articles:
-                    result, cached = analysis.analyze(article, snapshot, index, encode,
+                    result, cached = analysis.analyze(article, snapshot, index, classification_encode,
                         lambda row, choices: analysis.ask(api, row, choices,
                             usage_sink=lambda value: record('analysis_llm',value)), ROOT / 'data/shortnews/analysis_cache')
                     results[article['external_id']] = result
@@ -120,7 +126,7 @@ def run(raw_path, *, db_url=None, env_path=ROOT / '.env', chroma_path=ROOT / 'ch
                     report['chroma_result'] = deepcopy(value)
                     analysis.atomic_json(directory / 'pipeline_result.json', report)
                 report['chroma_result'] = vectors.sync_body(db_url=engine.url, root=vector_root,
-                                                            embed=encode, progress=checkpoint)
+                                                            embed=common_encode, progress=checkpoint)
                 if report['chroma_result']['status'] != 'complete':
                     report.update(status='PARTIAL', chroma='PARTIAL' if report['chroma_result']['body']['status'] == 'complete' else 'FAILED',
                                   error_code=report['chroma_result'].get('error_code'))
@@ -136,7 +142,14 @@ def run(raw_path, *, db_url=None, env_path=ROOT / '.env', chroma_path=ROOT / 'ch
         if report['stage'] == 'chroma':
             report['chroma'] = 'FAILED'
         log.error('단신속보 처리 실패: 단계=%s 오류=%s', report['stage'], type(exc).__name__)
+    except BaseException as exc:
+        primary = exc
+        raise
     finally:
+        cleanup_interrupt = None
+        if primary is not None:
+            report.update(status='PARTIAL' if report['mysql'] == 'SUCCESS' else 'FAILED',
+                          error_type=type(primary).__name__)
         cleanup_errors = []
         for name, resource, owned, method in (
                 ('database', engine, True, 'dispose'),
@@ -145,14 +158,29 @@ def run(raw_path, *, db_url=None, env_path=ROOT / '.env', chroma_path=ROOT / 'ch
             if resource is not None and owned:
                 try:
                     getattr(resource, method)()
-                except Exception as exc:
+                except BaseException as exc:
                     cleanup_errors.append({'resource': name, 'error_type': type(exc).__name__})
+                    if primary is not None:
+                        primary.add_note(f'cleanup_failed:{name}:{type(exc).__name__}')
+                    elif not isinstance(exc, Exception):
+                        if cleanup_interrupt is None:
+                            cleanup_interrupt = exc
+                        else:
+                            cleanup_interrupt.add_note(f'cleanup_failed:{name}:{type(exc).__name__}')
         if cleanup_errors:
             report['cleanup_errors'] = cleanup_errors
             # 이미 실패한 작업의 최초 원인은 보존하고, 성공한 작업도 종료 실패를 숨기지 않습니다.
             if report['status'] not in ('FAILED', 'PARTIAL'):
                 report.update(status='FAILED', stage='resource_cleanup', error_type=cleanup_errors[0]['error_type'])
-        analysis.atomic_json(directory / 'pipeline_result.json', report)
+        try:
+            analysis.atomic_json(directory / 'pipeline_result.json', report)
+        except BaseException as exc:
+            interrupted = primary if primary is not None else cleanup_interrupt
+            if interrupted is None:
+                raise
+            interrupted.add_note(f'pipeline_report_write_failed:{type(exc).__name__}')
+        if cleanup_interrupt is not None:
+            raise cleanup_interrupt
     return report
 
 

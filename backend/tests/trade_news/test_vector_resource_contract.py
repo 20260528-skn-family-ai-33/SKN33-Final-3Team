@@ -176,3 +176,59 @@ def test_public_run_initialization_and_close_failure_returns_one(context,monkeyp
         monkeypatch.setattr(st,'persistent_client',factory)
         assert ne.run(db_url='isolated',keywords_only=True,embed=embed,log_dir=root/'logs')==1
         assert len(handles)==1 and handles[0].closed
+
+
+@pytest.mark.parametrize('sources',[[],['INVALID'],['BREAKING']])
+def test_public_search_validates_source_before_storage_or_embedding(monkeypatch,sources):
+    factory=Mock(side_effect=AssertionError('storage must not open'))
+    embed=Mock(side_effect=AssertionError('embedding must not run'))
+    monkeypatch.setattr(st,'GenerationStore',factory)
+    with pytest.raises(ValueError):ne.search('합성 질문',source_codes=sources,embed=embed)
+    assert not factory.called and not embed.called
+
+
+def test_public_search_rejects_ambiguous_storage_before_access(tmp_path):
+    client=Mock();embed=Mock()
+    with pytest.raises(ValueError,match='ambiguous_search_storage'):
+        ne.search('합성 질문',client=client,root=tmp_path,embed=embed)
+    client.get_collection.assert_not_called();client.close.assert_not_called();embed.assert_not_called()
+
+
+@pytest.mark.parametrize('failure',[None,'query','unready'])
+def test_public_search_deduplicates_filters_and_closes_owned_snapshot(monkeypatch,failure):
+    client=Mock();col=Mock(metadata={'embedding_model':ne.MODEL})
+    col.query.return_value={'ids':[['id']], 'distances':[[0.1]],'documents':[['본문']], 'metadatas':[[{'source_code':'HANKYUNG'}]]}
+    if failure=='query':col.query.side_effect=RuntimeError('synthetic_query_failure')
+    snapshot=SimpleNamespace(client=client,sources={S.HANKYUNG},collection=Mock(return_value=col))
+    factory=Mock();factory.return_value.snapshot.return_value=snapshot
+    monkeypatch.setattr(st,'GenerationStore',factory)
+    embed=Mock(return_value=[[1.]+[0.]*7])
+    options=dict(source_codes=['HANKYUNG','HANKYUNG'],country='US',keyword='무역',date_from='2026-10-01',date_to='2026-10-24',embed=embed)
+    if failure=='unready':options['source_codes']=['FNNEWS']
+    if failure:
+        with pytest.raises(ValueError if failure=='unready' else RuntimeError,
+                           match='requested_source_not_ready' if failure=='unready' else 'synthetic_query_failure'):
+            ne.search('합성 질문',**options)
+    else:
+        assert ne.search('합성 질문',**options)==[('id',0.1,'본문',{'source_code':'HANKYUNG'})]
+    client.close.assert_called_once()
+    if failure=='unready':
+        snapshot.collection.assert_not_called();embed.assert_not_called()
+    else:
+        where=col.query.call_args.kwargs['where']['$and']
+        assert where==[{'source_code':{'$in':['HANKYUNG']}},{'countries':{'$contains':'US'}},
+            {'keywords':{'$contains':'무역'}},{'record_type':'body'},
+            {'published_ymd':{'$gte':20261001}},{'published_ymd':{'$lte':20261024}}]
+
+
+def test_public_search_injected_client_is_read_only_and_remains_open(tmp_path):
+    from chromadb.errors import NotFoundError
+    with closing(st.persistent_client(tmp_path/'legacy')) as real:
+        borrowed=OwnedClient(real)
+        embed=Mock(return_value=[[1.]+[0.]*7])
+        with pytest.raises(NotFoundError):ne.search('합성 질문',client=borrowed,embed=embed)
+        assert not borrowed.closed and not real.list_collections() and not embed.called
+        col=real.create_collection(ne.ARTICLE_COLLECTION,embedding_function=None,metadata={'embedding_model':ne.MODEL})
+        col.add(ids=['x'],documents=['합성 본문'],metadatas=[{'source_code':'HANKYUNG'}],embeddings=[[1.]+[0.]*7])
+        result=ne.search('합성 질문',client=borrowed,embed=embed,source_codes=['HANKYUNG'])
+        assert len(result)==1 and len(result[0])==4 and not borrowed.closed

@@ -222,6 +222,10 @@ def test_source_views_keep_market_screen_and_distinct_integrated_counts(context)
         assert dict(conn.execute(text('SELECT source_code,article_count FROM v_article_source_day')).all())=={s.value:1 for s in ALL_SOURCES}
 
 
+def test_breaking_alias_is_only_api_adapter():
+    from backend.app.services.rag.source_adapter import normalize_article_type
+    assert normalize_article_type('BREAKING')=='SHORT_NEWS'
+    assert 'KOTRA_SHORT_NEWS' in [s.value for s in ALL_SOURCES]
 
 
 def test_followup_view_migration_leaves_old_admin_contract_unchanged(context):

@@ -45,6 +45,8 @@ class PipelineTest(unittest.TestCase):
         p.start();self.addCleanup(p.stop)
         p = patch.object(pipeline.analysis, 'embed', side_effect=lambda api, words, **kwargs: [[1.0] + [0.0] * 3071 for _ in words])
         self.embed = p.start();self.addCleanup(p.stop)
+        p = patch.object(pipeline.shared_embedding, 'embed', side_effect=lambda api, words, **kwargs: [[1.0] + [0.0] * 3071 for _ in words])
+        self.shared_embed = p.start();self.addCleanup(p.stop)
         p = patch.object(pipeline.analysis, 'ask', return_value={'summary_sentences': ['요약이다.'], 'keywords': ['AI']})
         self.ask = p.start();self.addCleanup(p.stop)
 
@@ -91,6 +93,7 @@ class PipelineTest(unittest.TestCase):
         result = self.run_pipeline()
         self.assertEqual(result['status'], 'SUCCESS', result)
         self.embed.assert_not_called()
+        self.shared_embed.assert_not_called()
         self.ask.assert_not_called()
 
     def seed_old_index(self):

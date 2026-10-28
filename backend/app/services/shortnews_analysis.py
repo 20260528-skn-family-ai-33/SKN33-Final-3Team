@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from backend.app.services.shortnews_keywords import DIMENSIONS, MODEL
+from backend.app.services.news_usage import record_usage
 
 CHAT_MODEL = 'gpt-4.1-mini'
 REVISION = 'full-body-db-candidates:v1'
@@ -33,25 +34,16 @@ def atomic_json(path, value):
             temporary.unlink(missing_ok=True)
 
 
-def record_usage(sink, model, response):
-    """응답 검증 전에 보고된 사용량을 기록합니다. 실패·usage 미제공을 0원으로 확정하지 않습니다."""
-    if sink is None:
-        return
-    usage = getattr(response, 'usage', None)
-    def count(name):
-        value = getattr(usage, name, None)
-        return value if type(value) is int and value >= 0 else None
-    tokens = count('total_tokens')
-    sink({'model':model, 'tokens':tokens, 'input_tokens':count('prompt_tokens'),
-          'output_tokens':count('completion_tokens'), 'reported':tokens is not None})
-
-
 def embed(api, texts, *, usage_sink=None):
     result = None
+    primary = None
     try:
         result = api.embeddings.create(model=MODEL, input=texts, dimensions=DIMENSIONS)
+    except BaseException as exc:
+        primary = exc
+        raise
     finally:
-        record_usage(usage_sink, MODEL, result)
+        record_usage(usage_sink, MODEL, result, primary=primary)
     ordered = sorted(result.data, key=lambda row: row.index)
     if [r.index for r in ordered] != list(range(len(texts))):
         raise ValueError('임베딩 응답 순번 불일치')
@@ -105,13 +97,17 @@ def ask(api, article, choices, *, usage_sink=None):
                                           'maxItems': 5}},
               'required': ['summary_sentences', 'keywords']}
     result = None
+    primary = None
     try:
         result = api.chat.completions.create(model=CHAT_MODEL, temperature=0, max_tokens=1500,
             response_format={'type': 'json_schema', 'json_schema': {'name': 'shortnews_analysis', 'strict': True, 'schema': schema}},
             messages=[{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps(
                 {'title': article['title'], 'body': article['body_masked'], 'candidates': choices}, ensure_ascii=False)}])
+    except BaseException as exc:
+        primary = exc
+        raise
     finally:
-        record_usage(usage_sink, CHAT_MODEL, result)
+        record_usage(usage_sink, CHAT_MODEL, result, primary=primary)
     choice = result.choices[0]
     if choice.finish_reason != 'stop' or choice.message.refusal:
         raise ValueError('LLM 응답 미완료')
