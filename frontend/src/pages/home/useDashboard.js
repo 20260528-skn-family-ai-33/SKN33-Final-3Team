@@ -44,6 +44,6 @@ export default function useDashboard(view, months, profile) {
     productTable: { title: '품목별 수출입', sub: period, rows: ranks.map(r => [r.rank, r.hs, r.name, r.exp, r.imp]), note: '공개된 관세청 집계 기준' },
     countryTable: { title: '교역국별 수출입', sub: period, rows: (countries.data?.items || []).map(r => [r.rank, countryName(r.country_code), amount(r.export_amount_usd), amount(r.import_amount_usd)]), pieTitle: '수출액 비중', pie: (countries.data?.items || []).filter(r => r.share_pct != null).map((r, i) => [`${countryName(r.country_code)} ${Number(r.share_pct).toFixed(1)}%`, colors[i]]), pieNote: '조회 범위 전체 수출액 대비 비중 · 상위 5개국' },
     un: [], unSub: '관심 HS6·국가의 UN 데이터 공개 여부를 확인합니다.',
-    newsTitle: scope === 'GLOBAL' ? '최신 해외시장 기사' : '내 관심 기사', newsSub: 'KOTRA 제공 기사', newsCards: (news.data?.items || []).map(a => ({ ...mapArticle(a), img: newsImage })),
+    newsTitle: scope === 'GLOBAL' ? '최신 해외시장 기사' : '내 관심 기사', newsSub: '기사별 출처와 원문을 확인하세요.', newsCards: (news.data?.items || []).map(a => ({ ...mapArticle(a), img: newsImage })),
   }
 }

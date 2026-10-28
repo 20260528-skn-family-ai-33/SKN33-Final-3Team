@@ -8,4 +8,10 @@ export function mapReport(r) {
 }
 export const amount = value => value == null ? '—' : (Number(value) / 1e8).toLocaleString('ko-KR', Number(value) !== 0 && Math.abs(Number(value)) < 1e7 ? { maximumSignificantDigits: 3 } : { maximumFractionDigits: 1 })
 export const percent = value => value == null ? '—' : `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(1)}%`
-export const mapArticle = a => ({ ...a, id: a.article_id, kind: a.is_major_issue ? 'major' : a.source_code === 'KOTRA_SHORT_NEWS' ? 'short' : 'general', date: a.published_date, country: (a.country_codes || []).map(countryName).join(' · '), source: a.source_code === 'KOTRA_SHORT_NEWS' ? 'KOTRA 단신속보' : 'KOTRA 해외시장뉴스', tags: (a.hs_items || []).map(h => h.name_ko || h.hs_code), url: a.source_url })
+const ARTICLE_SOURCE_NAMES = new Map([
+  ['KOTRA_MARKET', 'KOTRA 해외시장뉴스'],
+  ['KOTRA_SHORT_NEWS', 'KOTRA 단신속보'],
+  ['HANKYUNG', '한국경제'],
+  ['FNNEWS', '파이낸셜뉴스'],
+])
+export const mapArticle = a => ({ ...a, id: a.article_id, kind: a.is_major_issue ? 'major' : a.source_code === 'KOTRA_SHORT_NEWS' ? 'short' : 'general', date: a.published_date, country: (a.country_codes || []).map(countryName).join(' · '), source: ARTICLE_SOURCE_NAMES.get(a.source_code) || a.source_code || '출처 미제공', tags: (a.hs_items || []).map(h => h.name_ko || h.hs_code), url: a.source_url })

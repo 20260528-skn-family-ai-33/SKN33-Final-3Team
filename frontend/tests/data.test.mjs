@@ -27,6 +27,27 @@ test('기사·알림의 실제 연결 대상과 읽음 상태를 보존한다', 
   const n = mapNotification({ user_alert_id: '45', event_type: 'REPORT', target_type: 'REPORT', target_id: '9007199254740997', read_at: null })
   assert.equal(n.read, false); assert.equal(n.reportId, '9007199254740997')
 })
+test('기사 출처는 기사 유형과 독립적으로 실제 제공자를 표시한다', () => {
+  for (const [source_code, expected] of [
+    ['KOTRA_MARKET', 'KOTRA 해외시장뉴스'], ['KOTRA_SHORT_NEWS', 'KOTRA 단신속보'],
+    ['HANKYUNG', '한국경제'], ['FNNEWS', '파이낸셜뉴스'],
+  ]) {
+    for (const is_major_issue of [false, true]) {
+      const a = mapArticle({ article_id: '123', source_code, is_major_issue, source_url: 'https://example.com/article' })
+      assert.equal(a.source, expected)
+      assert.equal(a.kind, is_major_issue ? 'major' : source_code === 'KOTRA_SHORT_NEWS' ? 'short' : 'general')
+      assert.equal(a.url, 'https://example.com/article')
+    }
+  }
+})
+
+test('미등록 또는 누락된 기사 출처를 다른 언론사로 대체하지 않는다', () => {
+  assert.equal(mapArticle({ source_code: 'NEW_PROVIDER' }).source, 'NEW_PROVIDER')
+  for (const source_code of [null, undefined, '']) {
+    assert.equal(mapArticle({ source_code }).source, '출처 미제공')
+  }
+})
+
 test('회원가입 비밀번호 규칙', () => {
   assert.equal(isStrongPassword('Original!123'), true)
   for (const bad of ['12345678', 'abcdefgh', 'abcd1234', 'a1!', 'abcd 123!']) assert.equal(isStrongPassword(bad), false)

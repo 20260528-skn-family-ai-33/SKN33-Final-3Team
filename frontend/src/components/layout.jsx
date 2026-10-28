@@ -94,7 +94,7 @@ export function Footer({ isAdmin = false }) {
           <b>데이터</b>
           <p>수출입 통계 · 관세청</p>
           <p>환율 · 한국은행 ECOS</p>
-          <p>기사 · KOTRA 해외시장뉴스</p>
+          <p>기사 · KOTRA · 한국경제 · 파이낸셜뉴스</p>
         </div>
         <div>
           <b>BORDERLESS SELLERS</b>

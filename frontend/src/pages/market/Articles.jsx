@@ -40,7 +40,7 @@ export default function Articles({ route }) {
   return (
     <>
       <Band
-        image={bandArticles} imagePosition="center 55%" eyebrow="KOTRA 해외시장뉴스" title="기사"
+        image={bandArticles} imagePosition="center 55%" eyebrow="무역·경제 뉴스" title="기사"
         lead={keyword ? '전체기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
         right={(
           <div className="chips">

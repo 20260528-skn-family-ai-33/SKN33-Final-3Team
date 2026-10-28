@@ -58,7 +58,7 @@ function Ticker({ interest }) {
         ))}
       </div>
       <span style={{ width: 1, height: 16, background: 'rgba(255,255,255,.25)' }} />
-      <span style={{ fontSize: 13, color: '#B8BEC8' }}>KOTRA</span>
+      <span style={{ fontSize: 13, color: '#B8BEC8' }}>{current?.source || '기사 출처'}</span>
       <Link to={`/articles?tab=${current?.kind === 'general' ? 'all' : current?.kind}&id=${current?.id}`} style={{ flex: 1, color: '#fff', fontSize: 16, fontWeight: 700 }}>{current?.title || (result.error ? result.error.message : result.loading ? '기사를 불러오는 중…' : '조회된 기사가 없습니다.')}</Link>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#B8BEC8' }}>
         <span style={{ marginRight: 6 }}>{items.length ? (index % items.length) + 1 : 0} / {items.length}</span>
