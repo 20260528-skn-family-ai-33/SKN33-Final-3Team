@@ -215,9 +215,11 @@ def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, dig
     return Markup(''.join(out))
 
 
-def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digits=1, divisor=1, tail_width=0):
-    """가로 막대. rows: [{label, values:[현재, 비교...], tail?:{text, badge?}}]. digits는 막대별 목록도 가능. 막대 길이는 전체 최대값 기준."""
-    peak = max((v for r in rows for v in r['values'] if v is not None), default=0) / divisor or 1
+def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digits=1, divisor=1, tail_width=0, peak=None):
+    """가로 막대. rows: [{label, values:[현재, 비교...], tail?:{text, badge?}}]. digits는 막대별 목록도 가능.
+    막대 길이는 peak(없으면 rows 최대값) 기준 — 여러 쪽에 나눠 그릴 때 같은 peak를 주면 막대 길이를 비교할 수 있습니다."""
+    top = peak if peak is not None else max((v for r in rows for v in r['values'] if v is not None), default=0)
+    peak = top / divisor or 1
     bars = len(colors)
     bar_h = 8 if bars > 1 else 12
     plot_w = width - label_width - tail_width - 40
@@ -384,9 +386,10 @@ def layout(report_type, ctx):
             blocks.append(_table('schedule', [_row([(r['content'], 118), (r['related'], 32)]) for r in s['schedule']]))
         blocks.append({'key': 'note', 'height': 3 + 2 * LINE[7]})
         summary = flow(blocks, BODY_MM - _heading('요약') - 4, rest)
-        n = len(ctx['country_counts'])
-        grid = max(H3_MM + 9 + (n + 1) * 8.6, H3_MM + (26 * n + 4) * 80 / 300 + 8)
-        articles = flow([{'key': 'grid', 'height': grid}] + _article_blocks(ctx['articles']),
+        # 국가별 기사 수 표·그래프는 국가 행 단위로 나눕니다. 마지막 행(인덱스 = 국가 수)은 합계 행입니다.
+        # 표 행(8.6mm)이 그래프 막대(약 6.9mm)보다 높아 표 기준으로 계산합니다.
+        grid = _table('grid', [8.6] * (len(ctx['country_counts']) + 1))
+        articles = flow([grid] + _article_blocks(ctx['articles']),
                         BODY_MM - _heading('기사 · 기준') - 4.5, rest)
         spikes = ctx['keyword_spikes']
         shorts = ctx['short_news']['items']

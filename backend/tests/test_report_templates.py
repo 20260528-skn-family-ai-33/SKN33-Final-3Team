@@ -61,6 +61,27 @@ class SampleRenderTest(unittest.TestCase):
         self.assertLess(len(sub), 120)
         self.assertIn('12월 수출 879.0백만 달러', sub)
 
+    def test_many_weekly_countries_split_table_and_total_on_last_page(self):
+        context = rt.sample_context('weekly')
+        row = context['country_counts'][0]
+        context['country_counts'] = [dict(row, country_code=f'C{i:02d}', name=f'국가{i:02d}', market=i % 7, short=i % 5)
+                                     for i in range(1, 31)]
+        grid = [b for page in rt.layout('RPT_WEEKLY', context)['articles'] for b in page if b['key'] == 'grid']
+        self.assertGreater(len(grid), 1)
+        self.assertEqual([(b['start'], b['end']) for b in grid],
+                         [(grid[0]['start'], grid[0]['end'])] + [(p['end'], n['end']) for p, n in zip(grid, grid[1:])])
+        self.assertEqual(grid[-1]['end'], 31)  # 국가 30개 + 합계 행
+        html = rt.render('RPT_WEEKLY', context)
+        self.assertEqual(html.count('<tr class="total"><td>합계</td>'), 1)
+        self.assertIn('국가별 기사 수 (계속)', html)
+        self.assertIn('국가30', html)
+        self.assertLess(html.index('국가30'), html.index('<tr class="total"><td>합계</td>'))
+
+    def test_hbar_peak_keeps_scale_across_pages(self):
+        rows = [{'label': 'A', 'values': [5]}]
+        self.assertNotEqual(str(rt.hbar_chart(rows, ['#000'])), str(rt.hbar_chart(rows, ['#000'], peak=10)))
+        self.assertEqual(str(rt.hbar_chart(rows, ['#000'])), str(rt.hbar_chart(rows, ['#000'], peak=5)))
+
     def test_context_layout_key_is_replaced(self):
         context = rt.sample_context('weekly')
         context['layout'] = 'stale'

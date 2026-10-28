@@ -87,19 +87,25 @@
 {% endif %}
 {% for b in blocks %}
 {% if b.key == 'grid' %}
+{# 국가가 많으면 쪽마다 같은 국가 범위를 표·그래프에 나눠 그리고, 합계 행은 마지막 쪽에만 둡니다 #}
 {% set market_sum = country_counts | sum(attribute='market') %}
 {% set short_sum = country_counts | sum(attribute='short') %}
+{% set peak = namespace(value=0) %}
+{% for r in country_counts %}{% if r.market + r.short > peak.value %}{% set peak.value = r.market + r.short %}{% endif %}{% endfor %}
+{% set chunk = country_counts[b.start:b.end] %}
 {% set rows = [] %}
-{% for r in country_counts %}{% set _ = rows.append({'label': r.name, 'values': [r.market + r.short]}) %}{% endfor %}
+{% for r in chunk %}{% set _ = rows.append({'label': r.name, 'values': [r.market + r.short]}) %}{% endfor %}
 <div class="grid-6-4">
-  <div><h3>국가별 기사 수<small>관심 범위 · 건</small></h3>
+  <div><h3>국가별 기사 수{{ ' (계속)' if b.cont }}<small>관심 범위 · 건</small></h3>
     <table>
       <tr><th>국가</th><th class="r">시장뉴스</th><th class="r">단신속보</th><th class="r">합계</th></tr>
-      {% for r in country_counts %}<tr><td>{{ m.country(r) }}</td><td class="r">{{ r.market | num }}</td><td class="r">{{ r.short | num }}</td><td class="r b">{{ (r.market + r.short) | num }}</td></tr>{% endfor %}
+      {% for r in chunk %}<tr><td>{{ m.country(r) }}</td><td class="r">{{ r.market | num }}</td><td class="r">{{ r.short | num }}</td><td class="r b">{{ (r.market + r.short) | num }}</td></tr>{% endfor %}
+      {% if b.end > country_counts | length %}
       <tr class="total"><td>합계</td><td class="r">{{ market_sum | num }}</td><td class="r">{{ short_sum | num }}</td><td class="r">{{ (market_sum + short_sum) | num }}</td></tr>
+      {% endif %}
     </table></div>
-  <div><h3>기사 수 비교<small>합계 · 건</small></h3>
-    {% if rows %}{{ hbar_chart(rows, [colors.accent], label_width=50, width=300, row_height=26, digits=0) }}{% endif %}
+  <div><h3>기사 수 비교{{ ' (계속)' if b.cont }}<small>합계 · 건</small></h3>
+    {% if rows %}{{ hbar_chart(rows, [colors.accent], label_width=50, width=300, row_height=26, digits=0, peak=peak.value) }}{% endif %}
     <p class="small">기사 수는 관심 국가의 관련 기사 집계입니다.</p></div>
 </div>
 {% elif b.key == 'articles' %}
