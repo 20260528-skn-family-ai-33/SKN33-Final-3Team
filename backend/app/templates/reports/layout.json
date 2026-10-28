@@ -1,0 +1,17 @@
+{
+  "brand": "BORDERLESS SELLERS",
+  "reference": "리포트_양식_최신판.pdf",
+  "sections": {
+    "SUMMARY": "핵심 요약",
+    "KPI": "주요 지표 및 월별 수출 추이",
+    "TOP_COUNTRIES": "주요 수출국",
+    "GROWTH_RISK": "수출 증가 감소 주요 시장",
+    "LOCAL_ISSUES": "현지 이슈",
+    "NEWS": "주간 주요 기사와 이슈"
+  },
+  "cover": true,
+  "contents": true,
+  "sources_last": true,
+  "currency": "USD",
+  "accent": "#006849"
+}

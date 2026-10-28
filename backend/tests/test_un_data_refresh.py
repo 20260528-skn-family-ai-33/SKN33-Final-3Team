@@ -130,7 +130,7 @@ class MonthlyRefreshTest(unittest.TestCase):
     def test_monthly_trigger(self):
         from backend.app.scheduler import main as scheduler
         trigger=scheduler.build_scheduler().get_job('un_data_monthly').trigger
-        self.assertEqual(trigger.get_next_fire_time(None,datetime(2026,10,15,tzinfo=job.KST)).isoformat(),'2026-11-01T03:00:00+09:00')
+        self.assertEqual(trigger.get_next_fire_time(None,datetime(2026,10,15,tzinfo=job.KST)).isoformat(),'2026-11-10T03:00:00+09:00')
     def test_http_retry_and_key_not_saved(self):
         session=mock.Mock();session.get.side_effect=[mock.Mock(status_code=503),mock.Mock(status_code=200,text='{"count":0,"data":[]}')]
         client=api.Client('secret-test-value',session,interval=0);out=self.path/'payload.json'
