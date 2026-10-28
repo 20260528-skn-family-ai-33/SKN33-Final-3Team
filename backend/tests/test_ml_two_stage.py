@@ -130,6 +130,26 @@ class TwoStageTest(unittest.TestCase):
         self.assertIn("ext: log_gdp", text)
         self.assertIn("기준선 이하", text)  # 채택 지표가 기준선보다 낮으면 경고
 
+    def test_kfold_trains_only_12_months_before_each_validation_month_and_writes_report(self):
+        import contextlib
+        import io
+        import tempfile
+        import pandas as pd
+        result = T.kfold(dataset()[[*needed_columns(), "exp_12m"]], n_splits=2, seeds=(0, 1), n_jobs=1, k=5,
+                          min_train_anchors=1, min_train_rows=1)  # 가상 데이터는 정답 있는 기준월이 15개뿐
+        self.assertEqual(len(result["folds"]), 2)
+        for fold in result["folds"]:
+            gap = pd.Timestamp(fold["validation_anchor"]) - pd.DateOffset(months=12)
+            self.assertLessEqual(pd.Timestamp(fold["train_end"]), gap)  # 검증 기준월 정답 기간과 겹치지 않는 학습
+            self.assertEqual([s["seed"] for s in fold["seeds"]], [0, 1])
+            self.assertIsNotNone(fold["model"]["country_ndcg_at_5"])
+            self.assertIsNotNone(fold["baseline"]["country_ndcg_at_5"])
+        self.assertEqual(result["summary"]["country_ndcg_at_5"]["valid_folds"], 2)
+        with contextlib.redirect_stdout(io.StringIO()):
+            md, js = T.kfold_report(result, tempfile.mkdtemp())
+        self.assertIn("| 국가 NDCG@5 (채택) |", md.read_text("utf-8"))
+        self.assertTrue(js.is_file())
+
     def test_combine_averages_and_refuses_different_targets(self):
         bundle = T.fit(self.rows, self.columns, "B", n_jobs=1, folds=2)
         pred = T.predict(bundle, self.latest)

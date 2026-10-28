@@ -51,6 +51,16 @@ python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c1
 | 저장 예측 | 두 파일 모두 2026-09 기준, 51,153쌍, 217개국·3,802개 HS6 (같은 대상이라 앙상블 가능) |
 | 파일 점검 | 정상 로드, 예측 `growth`·`order`에 결측·무한값 없음, 기준월·국가·품목 중복 키 없음 |
 
+### 시간 순서 K-fold 검증 (최종 모델 리포트)
+
+```powershell
+python -m backend.app.ml.two_stage kfold --folds 8 --seeds 0 1 2 --n-jobs 4
+```
+
+- 검증 기준월 하나가 fold 하나입니다. 학습은 그 기준월보다 12개월 이상 앞선 기준월만 쓰는 확장창이라(`validation.temporal_folds`) 검증 기간 정답이 학습에 들어가지 않습니다. 피처 선택·정답 절단도 fold 학습 행에서만 정합니다.
+- 현재 정답 있는 기준월(2023-12~2025-09)로는 2025-02~2025-09의 8개월을 검증할 수 있습니다. 최종 구성(`MEMBERS` 앙상블, 국가·품목 방향 순위 모델)을 시드별로 학습해 국가 지표는 국가 방향 순서, 품목 지표는 품목 방향 순서로 잽니다.
+- 결과는 `data/ml/reports/model_a_two_stage_kfold_<날짜_시각>.md` · `.json`입니다. 지표별 fold 평균·fold 간 표준편차·최소·최대, 작년 성장률 기준선, 기준선보다 높은 fold 수와 fold별 표를 담습니다. fold 사이 미래 정답 창이 겹치므로 평균·표준편차는 기술 통계이며 신뢰구간이 아닙니다.
+
 `data/`의 모델·스냅샷은 Git에서 제외합니다. 코드 푸시만으로 다른 환경에 모델 파일이 전달되지는 않습니다.
 
 ## 최종 모델 월별 재학습

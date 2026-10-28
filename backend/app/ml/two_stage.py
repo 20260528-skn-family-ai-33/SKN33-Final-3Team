@@ -24,6 +24,7 @@
     python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_ext_v1.joblib --country 베트남
     python -m backend.app.ml.two_stage query --model 파일1 파일2 --country VN --hs6 850760   (여러 개면 앙상블)
     python -m backend.app.ml.two_stage report --registry data/ml/monthly_models/model_a_two_stage_202609.registry.json
+    python -m backend.app.ml.two_stage kfold --folds 8 --seeds 0 1 2   (시간 순서 K-fold 검증 → data/ml/reports/*.md · *.json)
 """
 import argparse
 import json
@@ -57,32 +58,43 @@ OFFSET = 1e3  # C 방식에서 후보(2단계 점수)를 후보 밖(1단계 성�
 log = logging.getLogger(__name__)
 
 
-def load_rows(snapshot_path=SNAPSHOT_PY311, external="none"):
-    """스냅샷으로 split_rows. 스냅샷의 외부 피처가 비어 있으면 first_release일 때 availability.csv 공개일로 붙인다(v3)."""
+def load_frame(snapshot_path=SNAPSHOT_PY311, external=True):
+    """스냅샷 피처 표. 외부 피처가 비어 있고 external이면 availability.csv 공개일로 붙인다(v3)."""
     snapshot = load_snapshot(snapshot_path)
     frame = snapshot[[*needed_columns(), "exp_12m"]]
     frame.attrs = dict(snapshot.attrs)
     del snapshot
-    if external == "first_release" and frame[MARKET + WDI].isna().all().all():
+    if external and frame[MARKET + WDI].isna().all().all():
         frame, _ = recover_external(frame)
-    return split_rows(frame, external)
+    return frame
+
+
+def load_rows(snapshot_path=SNAPSHOT_PY311, external="none"):
+    """스냅샷으로 split_rows."""
+    return split_rows(load_frame(snapshot_path, external == "first_release"), external)
+
+
+def _candidates(external):
+    """external="none"은 외부 피처 9개를 쓰지 않고(v1), "first_release"는 frame에 붙어 있는 외부 피처를 쓴다(v3)."""
+    if external not in ("none", "first_release"):
+        raise ValueError(f"external은 none 또는 first_release: {external}")
+    return [c for c in FEATURE_SETS["all"] if external != "none" or c not in MARKET + WDI]
+
+
+def _available(rows, candidates):
+    stats = coverage(rows[candidates].replace([np.inf, -np.inf], np.nan), candidates)
+    return stats.loc[stats.status == "available", "feature"].tolist()
 
 
 def split_rows(frame, external="none"):
-    """(정답 있는 학습 행, 최신 기준월 행, 1단계 피처). 둘 다 (기준월, 국가, HS6) 키 순서.
-
-    external="none"은 외부 피처 9개를 쓰지 않고(v1), "first_release"는 frame에 붙어 있는 외부 피처를 쓴다(v3).
-    """
-    if external not in ("none", "first_release"):
-        raise ValueError(f"external은 none 또는 first_release: {external}")
-    candidates = [c for c in FEATURE_SETS["all"] if external != "none" or c not in MARKET + WDI]
+    """(정답 있는 학습 행, 최신 기준월 행, 1단계 피처). 둘 다 (기준월, 국가, HS6) 키 순서."""
+    candidates = _candidates(external)
     frame = prepare_scenarios({"original": frame}, F.HORIZON)["original"]
     labeled = frame.y_growth.notna().to_numpy()
     rows = frame[labeled]
     latest = frame[(frame.anchor == frame.anchor.max()).to_numpy()]
     del frame
-    stats = coverage(rows[candidates].replace([np.inf, -np.inf], np.nan), candidates)
-    return rows, latest, stats.loc[stats.status == "available", "feature"].tolist()
+    return rows, latest, _available(rows, candidates)
 
 
 def _x(rows, columns):
@@ -345,6 +357,105 @@ def report(registry_path, out=None):
     return path
 
 
+KFOLD_METRICS = [("국가 NDCG@5 (채택)", "country_ndcg_at_5"), ("국가 Precision@5", "country_precision_at_5"),
+                 ("국가 Hit@5", "country_hit_at_5"), ("국가 상위 20% F1@5", "country_top20_f1_at_5"),
+                 ("국가 NDCG@10", "country_ndcg_at_10"), ("품목 NDCG@5", "product_ndcg_at_5"),
+                 ("품목 Precision@5", "product_precision_at_5"), ("품목 Hit@5", "product_hit_at_5")]
+
+
+def kfold(frame, n_splits=8, seeds=(0, 1, 2), n_jobs=4, method="C", k=100, min_train_anchors=3, min_train_rows=1000):
+    """최종 구성(MEMBERS 앙상블)을 시간 순서 K-fold로 검증한다. frame: 외부 피처가 붙은 피처 표.
+
+    fold = 검증 기준월 하나. 학습은 그보다 12개월 이상 앞선 기준월만 쓰는 확장창이고(validation.temporal_folds),
+    피처 선택 · 정답 절단도 fold 학습 행에서만 정한다. 국가 지표는 국가 방향 순서, 품목 지표는 품목 방향 순서로 잰다.
+    """
+    from backend.app.ml.validation import temporal_folds
+    rows = split_rows(frame, "first_release")[0]  # 두 구성의 학습 행은 같고 쓰는 피처만 다르다
+    baseline = F.A_TARGETS[F.HORIZON][1]
+    keys = [key for _, key in KFOLD_METRICS]
+    result = {"method": "purged_expanding_time_kfold", "gap_months": F.HORIZON, "members": dict(MEMBERS),
+              "model": {"method": method, "k": k}, "seeds": list(seeds), "folds": []}
+    folds = temporal_folds(rows, n_splits, min_train_anchors, min_train_rows)
+    if not folds:
+        raise ValueError("12개월 분리 후 학습할 수 있는 검증 기준월이 2개 미만입니다")
+    for number, fold in enumerate(folds, 1):
+        train = rows[(rows.anchor <= fold["train_cutoff"]).to_numpy()]
+        test = rows[(rows.anchor == fold["validation_anchor"]).to_numpy()]
+        columns = {name: _available(train, _candidates(external)) for name, external in MEMBERS.items()}
+        by_seed = []
+        for seed in seeds:
+            bundles = [fit(train, columns[name], method, k, seed=seed, n_jobs=n_jobs) for name in MEMBERS]
+            pred = combine([predict(bundle, test) for bundle in bundles])
+            country, _ = evaluate_predictions(test, pred.order.to_numpy())
+            product, _ = evaluate_predictions(test, pred["product"].to_numpy())
+            scores = {**country, **{key: value for key, value in product.items() if key.startswith("product_")}}
+            by_seed.append({"seed": seed, "fit_seconds": sum(b["fit_seconds"] for b in bundles), **{key: scores[key] for key in keys}})
+            log.info("K-fold %s 검증 %s 시드 %s: 국가 NDCG@5 %.4f", number, fold["validation_anchor"].date(), seed,
+                     scores["country_ndcg_at_5"])
+        base, _ = evaluate_predictions(test, test[baseline].to_numpy(dtype=float))
+        values = {key: [s[key] for s in by_seed if s[key] is not None] for key in keys}
+        result["folds"].append(_finite({
+            "fold": number, "validation_anchor": str(fold["validation_anchor"].date()),
+            "train_start": str(train.anchor.min().date()), "train_end": str(train.anchor.max().date()),
+            "train_anchors": int(train.anchor.nunique()), "train_rows": len(train), "validation_rows": len(test),
+            "features": {name: len(c) for name, c in columns.items()},
+            "fit_seconds": float(np.mean([s["fit_seconds"] for s in by_seed])), "seeds": by_seed,
+            "model": {key: float(np.mean(v)) if v else None for key, v in values.items()},
+            "seed_std": {key: float(np.std(v)) if len(v) > 1 else None for key, v in values.items()},
+            "baseline": {key: base[key] for key in keys}}))
+    summary = {}
+    for key in keys:
+        model = [f["model"][key] for f in result["folds"] if f["model"][key] is not None]
+        base = [f["baseline"][key] for f in result["folds"] if f["baseline"][key] is not None]
+        wins = sum(f["model"][key] > f["baseline"][key] for f in result["folds"]
+                   if f["model"][key] is not None and f["baseline"][key] is not None)
+        summary[key] = {"mean": float(np.mean(model)) if model else None,
+                        "fold_std": float(np.std(model, ddof=1)) if len(model) > 1 else None,
+                        "min": min(model) if model else None, "max": max(model) if model else None,
+                        "baseline_mean": float(np.mean(base)) if base else None, "wins": wins, "valid_folds": len(model)}
+    result["summary"] = _finite(summary)
+    return result
+
+
+def kfold_report(result, out_dir, snapshot=None):
+    """K-fold 결과를 JSON과 Markdown 리포트로 저장하고 경로를 돌려준다."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(ZoneInfo("Asia/Seoul"))
+    base = out_dir / f"model_a_two_stage_kfold_{stamp:%Y%m%d_%H%M}"
+    result = {**result, "created_at": stamp.isoformat(timespec="seconds"), "snapshot": str(snapshot) if snapshot else None}
+    base.with_suffix(".json").write_text(json.dumps(result, ensure_ascii=False, indent=1), "utf-8")
+    num = lambda v: "-" if v is None else f"{v:.4f}"  # noqa: E731
+    folds, summary = result["folds"], result["summary"]
+    lines = ["# 모델 A 최종 모델 시간 순서 K-fold 검증", "",
+             f"- 구성 : 2단계 LightGBM {result['model']['method']} (K={result['model']['k']}), "
+             f"{' · '.join(f'{n}({e})' for n, e in result['members'].items())} 앙상블, 시드 {', '.join(map(str, result['seeds']))}",
+             f"- 방식 : 확장창 K-fold {len(folds)}개. 검증 기준월마다 그보다 {result['gap_months']}개월 이상 앞선 기준월만 학습하고, "
+             "같은 기준월은 통째로 검증한다. 피처 선택 · 정답 절단은 fold 학습 행에서만 정한다",
+             f"- 작성 : {result['created_at'][:16]}" + (f", 입력 {result['snapshot']}" if result["snapshot"] else ""), "",
+             "## 요약 (fold 평균)", "", "| 지표 | 평균 | fold 간 표준편차 | 최소 | 최대 | 기준선 평균 | 기준선보다 높은 fold |",
+             "|---|---|---|---|---|---|---|"]
+    for label, key in KFOLD_METRICS:
+        s = summary[key]
+        lines.append(f"| {label} | {num(s['mean'])} | {num(s['fold_std'])} | {num(s['min'])} | {num(s['max'])} | "
+                     f"{num(s['baseline_mean'])} | {s['wins']} / {s['valid_folds']} |")
+    lines += ["", "## fold별 결과", "", "| fold | 검증 기준월 | 학습 기준월 | 학습 행 | 국가 NDCG@5 (± 시드) | 기준선 | P@5 | Hit@5 | 품목 NDCG@5 | 학습 시간 |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
+    for f in folds:
+        m = f["model"]
+        lines.append(f"| {f['fold']} | {f['validation_anchor'][:7]} | {f['train_start'][:7]} ~ {f['train_end'][:7]} ({f['train_anchors']}개) | "
+                     f"{f['train_rows']:,} | {num(m['country_ndcg_at_5'])} ± {num(f['seed_std']['country_ndcg_at_5'])} | "
+                     f"{num(f['baseline']['country_ndcg_at_5'])} | {num(m['country_precision_at_5'])} | {num(m['country_hit_at_5'])} | "
+                     f"{num(m['product_ndcg_at_5'])} | {f['fit_seconds']:.0f}초 |")
+    lines += ["", "- 기준선은 작년 성장률 순서다. 표준편차 말고는 모두 클수록 좋다.",
+              "- fold 사이 미래 12개월 정답 창이 겹치므로 평균 · 표준편차는 기술 통계이며 신뢰구간이 아니다.",
+              "- 학습 시간은 시드 평균, 두 모델 합이다."]
+    base.with_suffix(".md").write_text("\n".join(lines) + "\n", "utf-8")
+    print("\n".join(lines))
+    print(f"\n저장: {base.with_suffix('.md')} · {base.with_suffix('.json')}")
+    return base.with_suffix(".md"), base.with_suffix(".json")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -365,11 +476,21 @@ def main():
     p = sub.add_parser("report", help="월별 재학습 기록(.registry.json)을 Markdown 리포트로 만들기")
     p.add_argument("--registry", type=Path, required=True)
     p.add_argument("--out", type=Path, help="기본값: 기록 파일 옆 <이름>.md")
+    f = sub.add_parser("kfold", help="최종 구성을 시간 순서 K-fold로 검증하고 Markdown · JSON 리포트 저장")
+    f.add_argument("--folds", type=int, default=8, help="검증 기준월 수 (가능한 기준월 안에서 고르게)")
+    f.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
+    f.add_argument("--n-jobs", type=int, default=4)
+    f.add_argument("--snapshot", type=Path, default=SNAPSHOT_PY311)
+    f.add_argument("--out-dir", type=Path, default=ROOT / "data/ml/reports")
     args = parser.parse_args()
     if args.cmd == "train":
         train(args)
     elif args.cmd == "report":
         report(args.registry, args.out)
+    elif args.cmd == "kfold":
+        if args.folds < 2:
+            parser.error("--folds는 2 이상입니다")
+        kfold_report(kfold(load_frame(args.snapshot), args.folds, args.seeds, args.n_jobs), args.out_dir, args.snapshot)
     elif not args.country and not args.hs6:
         parser.error("--country 또는 --hs6를 지정하세요")
     elif args.top < 1:
