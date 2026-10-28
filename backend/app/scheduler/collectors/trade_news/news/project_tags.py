@@ -49,5 +49,5 @@ def tag_for_load(article, dictionary):
     tags = extract_tags(article['title'], article['body_masked'], dictionary['countries'], dictionary['products'],
                         country_rules=GEO_DICT, keywords=dictionary.get('keywords', []),
                         published_date=article['published_date'])
-    tags.update(dictionary_sha256=dictionary_fingerprint(dictionary), generation='project-tags-v4')
+    tags.update(dictionary_sha256=dictionary_fingerprint(dictionary), generation='project-tags-v7')
     return {**article, 'tagging': tags}

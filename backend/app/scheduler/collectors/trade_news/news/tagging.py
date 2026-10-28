@@ -1,7 +1,8 @@
 """검증된 프로젝트 사전과 원문 근거로 기사 태그를 만듭니다."""
 import re
+from news.keyword_tags import select_keyword_tags
 
-VERSION = 'tags-v3'
+VERSION = 'tags-v6'
 
 
 def match_term(term, text):
@@ -134,14 +135,8 @@ def extract_tags(title, body, countries=(), products=(), *, country_rules=(), ke
             tags.append({'kind': 'hs', 'hs_code': key[0], 'hs_ver': key[1],
                          'term': term, 'evidence': sentence, 'method': 'verified_dictionary'})
             emitted.add(key)
-    keyword_seen = set()
-    for item in keywords:
-        term, canonical = item['term'], item['canonical']
-        sentence = next((s for s in segments if match_term(term, s.replace('관세청', '') if term == '관세' else s)), None)
-        if sentence and canonical not in keyword_seen:
-            keyword_seen.add(canonical)
-            tags.append({'kind': 'keyword', 'keyword_text': canonical, 'term': term,
-                         'evidence': sentence, 'method': 'project_canonical_dictionary'})
+    # 자동 키워드만 최대 5개로 제한하며 국가·HS 태그는 그대로 유지합니다.
+    tags.extend(select_keyword_tags(segments, keywords))
     return {'version': VERSION, 'tags': tags, 'unresolved': unresolved,
             'dictionary_status': {'countries_loaded': len(countries), 'products_loaded': len(products)},
             'limitation': '국가 태그는 언급 근거이며 수출 대상·정책 시행 주체를 확정하지 않음. 사전 미제공 시 해당 코드 태그 없음.'}
