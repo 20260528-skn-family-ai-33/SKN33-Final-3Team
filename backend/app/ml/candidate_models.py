@@ -164,6 +164,18 @@ def _same_inputs(snapshot, files, db):
     return snapshot["fx"] == db["fx"] and snapshot["country_mapping_sha256"] == db["country_mapping_sha256"]
 
 
+# 학습 결과를 정하는 코드. 같은 달·같은 입력이라도 이 파일들(K·앙상블 구성·피처 계산 포함)이 바뀌면 새 리비전으로 학습한다.
+MODEL_SOURCES = ("backend/app/ml/candidate_models.py", "backend/app/ml/two_stage.py", "backend/app/ml/experiments.py",
+                 "backend/app/ml/feature_recovery.py", "backend/app/ml/features.py", "backend/app/ml/sources.py",
+                 "backend/app/ml/preprocess.py", "backend/app/ml/temporal.py", "backend/app/ml/related_groups.py",
+                 "backend/app/ml/transforms.py")
+
+
+def _model_config(kind):
+    """모델 종류와 학습 코드의 해시. 재사용 판단에서 입력 원본과 함께 비교한다."""
+    return {"kind": kind, "sources": {p: sha256(ROOT / p) for p in MODEL_SOURCES}}
+
+
 MONTHLY_PREFIX = {"two_stage": "model_a_two_stage"}  # 월별 파일 이름 앞부분. 그 밖의 kind는 kind 그대로
 
 
@@ -190,7 +202,7 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     with FileLock(str(out_dir / f".{base}.lock")):
-        files = db = None
+        files = db = config = None
         matched = None
         for revision in range(1, 100):
             name = base if revision == 1 else f"{base}_r{revision}"
@@ -200,7 +212,9 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
                 break
             if files is None:  # 비교할 기록이 있을 때만 입력 파일 전체를 해시한다
                 files, db = artifacts.input_manifest(), artifacts.db_inputs(engine)  # 학습·기록과 같은 DB
-            if _same_inputs(record["data_info"]["input_snapshot"], files, db):
+                config = _model_config(kind)
+            if (record["data_info"].get("model_config") == config
+                    and _same_inputs(record["data_info"]["input_snapshot"], files, db)):
                 matched = revision, name, artifact, record_path, record
                 # 환율을 못 읽으면 파일만 비교하므로 정정 전·후 리비전이 모두 맞는다. 그때는 끝까지 보고 가장 최신을 고른다.
                 if not _fx_unavailable(db):
@@ -244,6 +258,7 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
                       "train_end": bundle["train_end"], "train_rows": bundle["train_rows"],
                       "data_info": _finite({"model_family": f"{kind}_full", "trade_month": str(month.date()),
                                             "artifact_root": out_dir.as_posix(), "input_snapshot": source,
+                                            "model_config": _model_config(kind),
                                             "runtime": runtime, "features_used": bundle["features"],
                                             "external_dropped": bundle.get("external_dropped"),
                                             "target_clip": bundle["target_clip"], "fit_seconds": bundle["fit_seconds"]}),

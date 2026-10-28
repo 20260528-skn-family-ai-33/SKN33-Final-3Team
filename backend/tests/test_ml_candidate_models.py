@@ -168,6 +168,16 @@ class MonthlyRunTest(unittest.TestCase):
         self.assertEqual(record["train_end"], "2024-12-01")  # 정답의 미래 12개월이 2025-12 안에 끝나는 기준월까지
         self.assertEqual(record["data_info"]["input_snapshot"]["as_of_month"], "2025-12-01")
 
+    def test_model_code_change_trains_new_revision(self):
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            self.run_month()
+        changed = {"kind": "lightgbm", "sources": {"backend/app/ml/two_stage.py": "K를 바꾼 코드"}}
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()), \
+                patch.object(C, "_model_config", return_value=changed):
+            self.assertEqual(self.run_month()["model_name"], "lightgbm_202602_r2")
+        with patch.object(C.artifacts, "load_training_data", side_effect=AssertionError("같은 코드는 재학습하지 않아야 함")):
+            self.assertEqual(self.run_month()["model_name"], "lightgbm_202602")  # 원래 코드면 처음 판을 재사용
+
     def test_refuses_month_missing_from_data(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded("2026-01-01")):
             with self.assertRaises(ValueError):
