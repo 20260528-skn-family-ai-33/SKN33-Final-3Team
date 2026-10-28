@@ -85,9 +85,29 @@ class TestPdfReport(unittest.TestCase):
             path = generate_report(context, {}, Path(directory) / "report.pdf")
             text = re.sub(r"\s+", "", "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages))
         for statement in ("모델 B는 평가하지 못했다: 라벨 부족 (외부 시장 데이터가 없는 연도)",
-                          "외부 자료 사용 가능일 2026-10-22이 마지막 기준월 2026-09보다 늦어",
+                          "현재 외부 자료의 사용 가능일 2026-10-22은 예측 기준월 2026-09 이후다.",
                           "유일한 DB 입력 예외. 모델 A 사용 피처 0/2개"):
             self.assertIn(re.sub(r"\s+", "", statement), text)
+
+    def test_pdf_does_not_infer_missing_features_from_invalid_or_unrelated_dates(self):
+        from backend.app.ml.reporting import generate_report
+        from pypdf import PdfReader
+        cases = [
+            ("availability.csv의 연도별 최초 공개일 (근거는 evidence 열)", []),
+            ("2026-99-01", []),
+            (None, []),
+            ("2026-08-31", []),
+            ("2026-09-30", []),  # 기준월 말에 알려진 값은 해당 월에 사용할 수 있다
+            ("2026-10-22", ["log_gdp", "mkt_growth"]),  # 현재 파일 날짜로 저장 모델 입력을 부정하지 않는다
+        ]
+        for available, used in cases:
+            with self.subTest(available=available, used=used), tempfile.TemporaryDirectory() as directory:
+                context = {"metadata": {"features_used": used, "predict_anchor": "2026-09-01"},
+                           "snapshot": {"available_from": available}}
+                path = generate_report(context, {}, Path(directory) / "report.pdf")
+                text = re.sub(r"\s+", "", "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages))
+                self.assertNotIn("시장·WDI값은학습·예측구간에연결되지않았다", text)
+                self.assertNotIn("예측기준월2026-09이후다", text)
 
     def test_pdf_describes_actual_feature_usage_and_market_type_results(self):
         from backend.app.ml.reporting import generate_report

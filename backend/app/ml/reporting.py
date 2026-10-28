@@ -1,7 +1,7 @@
 """저장된 실행 결과와 노트북 검증 결과를 한국어 PDF로 만든다."""
 import argparse
 import os
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from xml.sax.saxutils import escape
 from zoneinfo import ZoneInfo
@@ -145,11 +145,20 @@ def generate_report(context, validation, pdf_path=DEFAULT_PDF):
     wdi_usage = "WDI: " + feature_usage(FEATURE_GROUPS["wdi"])
     fx_note = feature_usage(FEATURE_GROUPS["fx"])  # 입력 표의 '환율' 행에는 라벨 없이 쓴다
     fx_usage = "환율: " + fx_note
-    # 외부 자료가 0개로 나올 때 수집 실패와 시점 정책을 구분할 수 있게 원인을 적는다
+    # 현재 외부 자료의 날짜를 설명한다. 설명 문자열이나 다른 모델의 입력 이력으로 결측 원인을 추정하지 않는다.
     available, anchor = context.get("snapshot", {}).get("available_from"), meta.get("predict_anchor")
-    availability_note = (f"외부 자료 사용 가능일 {available}이 마지막 기준월 {anchor[:7]}보다 늦어 "
-                         "시장·WDI 값은 학습·예측 구간에 연결되지 않았다."
-                         if available and anchor and available[:7] > anchor[:7] else "")
+    availability_note = ""
+    try:
+        available_date, anchor_date = date.fromisoformat(available), date.fromisoformat(anchor)
+    except (TypeError, ValueError):
+        pass  # 연도별 날짜표를 가리키는 설명 또는 날짜 누락은 단일 공개일로 비교할 수 없다
+    else:
+        external_features = set(FEATURE_GROUPS["market"] + FEATURE_GROUPS["wdi"])
+        used = meta.get("features_used")
+        if (used is not None and not external_features.intersection(used)
+                and (available_date.year, available_date.month) > (anchor_date.year, anchor_date.month)):
+            availability_note = (f"현재 외부 자료의 사용 가능일 {available_date.isoformat()}은 "
+                                 f"예측 기준월 {anchor_date:%Y-%m} 이후다.")
     b_eval = ev.get("model_b")
     b_result = (f"모델 B는 평가하지 못했다: {b_eval}." if isinstance(b_eval, str) else
                 f"저장된 평가의 macro-F1은 모델 B {num(metric('model_b', 'macro_f1'))}, "
