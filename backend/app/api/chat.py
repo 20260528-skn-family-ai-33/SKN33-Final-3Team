@@ -29,7 +29,8 @@ def messages(store,uid,identity,page=1,size=20):
     t=store.t('chat_message'); stmt=select(t).where(t.c.session_id==identity)
     rows=store.rows(stmt.order_by(t.c.message_id).offset((page-1)*size).limit(size))
     return {'session':session_view(session),'items':[{'message_id':str(r['message_id']),'role':r['role'],
-        'content_masked':r['content_masked'],'answer':(r['result_json'] or {}).get('answer'),'created_at':r['created_at']} for r in rows],
+        'content_masked':r['content_masked'],'answer':(r['result_json'] or {}).get('answer'),
+        'job':view_job(jobs._chat_job(r)) if jobs._chat_job(r) else None,'created_at':r['created_at']} for r in rows],
         'page':page_info(page,size,store.count(stmt))}
 
 
