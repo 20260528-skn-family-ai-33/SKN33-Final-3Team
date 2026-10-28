@@ -149,7 +149,7 @@ class ShortnewsDailyTest(unittest.TestCase):
             self.assertEqual(set(jobs), {"hs_code_refresh", "hs_code_refresh_retry", "hs_code_embed",
                                         "un_data_monthly", "un_data_startup", "un_data_resume",
                                         "customs_monthly", "customs_monthly_startup", "fx_daily_load",
-                                        "fx_daily_startup", "shortnews_daily", "shortnews_startup"})
+                                        "fx_daily_startup", "shortnews_daily", "shortnews_startup", "trade_news_daily"})
             self.assertIs(jobs[job.JOB_ID].func, run)
             run.assert_not_called()
 

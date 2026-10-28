@@ -3,6 +3,8 @@
 실행 (저장소 루트에서): python -m backend.app.scheduler.main
 
 등록된 잡
+- trade_news_daily: 매일 03:00(KST) 전날 기사 수집·검수 후 article 적재.
+  기본 일시중지이며 NEWS_DAILY_ENABLED=true일 때만 예약 활성화. 시작 즉시 실행하지 않습니다.
 - shortnews_daily (SHORTNEWS_DAILY_ENABLED=true일 때만): 매일 03:00(KST) 전날 단신속보 전체 페이지 수집 후 MySQL 적재.
   시작 10초 후에도 복구 점검하며, 실패·미완료·중단 기간은 날짜별 상태를 읽어 재처리합니다.
   수집·적재 결과는 data/shortnews/daily에 기록합니다.
@@ -199,6 +201,8 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV,
     # 켤 때마다 한 번: 꺼져 있던 동안 빠진 환율을 마지막 적재일부터 채움
     scheduler.add_job(fx_daily_load.run, "date", run_date=datetime.now(KST) + timedelta(seconds=30),
                       id="fx_daily_startup", replace_existing=True)
+    from backend.app.scheduler.jobs import trade_news_daily
+    trade_news_daily.register_jobs(scheduler, env_path=env_path)
     # 통합 실행에서는 단신 정기·10초 복구 작업 모두 명시적으로 켭니다. 전용 worker는 독립입니다.
     values = {**dotenv_values(env_path), **os.environ}
     if str(values.get("SHORTNEWS_DAILY_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}:
