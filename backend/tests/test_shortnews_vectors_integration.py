@@ -45,7 +45,7 @@ class IntegrationTest(unittest.TestCase):
         self.case.path.write_text(json.dumps([fixture.fixture.raw(body='반도체 수출 전망. '*250)]),encoding='utf-8')
         out=self.case.run_pipeline(); self.assertEqual(out['status'],'SUCCESS',out)
         col=self.case.body_collection(); data=read_all(col,['documents','metadatas'])
-        texts=[t for call in self.case.embed.call_args_list for t in call.args[1]]
+        texts=[t for call in self.case.shared_embed.call_args_list for t in call.args[1]]
         self.assertGreater(len(data['ids']),1)
         self.assertTrue(all(d in texts for d in data['documents']))
         self.assertTrue(all(d.startswith('[2026-10-01 | US] 단신 제목\n') for d in data['documents']))

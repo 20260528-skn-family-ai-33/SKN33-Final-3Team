@@ -58,12 +58,13 @@ if args.smoke:
         assert scheduled.max_instances==1 and scheduled.coalesce and not scheduler.running
     elif args.smoke=='usage_lazy':
         from backend.app.scheduler.jobs import news_embed as ne
-        api=NS(embeddings=NS(create=lambda **kw:NS(data=[NS(index=0,embedding=[0.0])],usage=NS(total_tokens=7))),close=lambda:None)
+        vector=[1.0]+[0.0]*(ne.DIMENSIONS-1)
+        api=NS(embeddings=NS(create=lambda **kw:NS(data=[NS(index=0,embedding=vector)],usage=NS(total_tokens=7))),close=lambda:None)
         os.environ['OPENAI_API_KEY']='synthetic-not-a-key'
         with patch.object(ne,'OpenAI',return_value=api):
             provider=ne.openai_embed()
             try:
-                assert provider(['synthetic'])==[[0.0]]
+                assert provider(['synthetic'])==[vector]
                 assert provider.usage=={'tokens':7,'model_calls':1,'reported_responses':1}
             finally:provider.close()
     else:

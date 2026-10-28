@@ -66,7 +66,7 @@ def test_shortnews_usage_cache_and_partial_retry_do_not_double_bill(tmp_path):
         def ask(api,article,choices,*,usage_sink=None):
             analysis.record_usage(usage_sink,analysis.CHAT_MODEL,NS(usage=NS(total_tokens=10,prompt_tokens=8,completion_tokens=2)))
             return {'summary_sentences':['합성 요약.'],'keywords':['AI']}
-        case.embed.side_effect=encode;case.ask.side_effect=ask
+        case.embed.side_effect=encode;case.shared_embed.side_effect=encode;case.ask.side_effect=ask
         first=case.run_pipeline()
         assert first['status']=='SUCCESS'
         assert {'classification_index','candidate_query','analysis_llm','body','keywords'}<=first['usage'].keys()

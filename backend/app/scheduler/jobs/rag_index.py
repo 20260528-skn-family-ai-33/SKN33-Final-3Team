@@ -11,7 +11,7 @@ from backend.app.services.rag.store import GenerationStore, ROOT, atomic_json, r
 from backend.app.services.rag.vocabulary import Vocabulary
 
 
-def refresh(engine, sources, *, store=None, embed=None, supplements=None, raw_market=None, dry_run=False):
+def refresh(engine, sources, *, store=None, embed=None, supplements=None, raw_market=None, dry_run=False, rebuild=False):
     sources = tuple(ArticleSource(s) for s in sources)
     if not sources:
         raise ValueError('empty_source_scope')
@@ -22,22 +22,22 @@ def refresh(engine, sources, *, store=None, embed=None, supplements=None, raw_ma
     if dry_run:
         store.bind_database(identity, dry_run=True)
         return _refresh(engine, sources, store=store, embed=embed, supplements=supplements,
-                        raw_market=raw_market, dry_run=True)
+                        raw_market=raw_market, dry_run=True, rebuild=rebuild)
     store.root.mkdir(parents=True, exist_ok=True)
     with store.lock:
         store.bind_database(identity)
         return _refresh(engine, sources, store=store, embed=embed, supplements=supplements,
-                        raw_market=raw_market, dry_run=False)
+                        raw_market=raw_market, dry_run=False, rebuild=rebuild)
 
 
-def _refresh(engine, sources, *, store, embed, supplements, raw_market, dry_run):
+def _refresh(engine, sources, *, store, embed, supplements, raw_market, dry_run, rebuild=False):
     sources = tuple(ArticleSource(s) for s in sources)
     supplements = {key: list(value) if isinstance(value, list) else [value]
                    for key, value in (supplements or {}).items()}
     previous_supplements = {}
     previous = None
     if (store.root/'active.json').exists():
-        if dry_run:
+        if dry_run or rebuild:
             # 계획은 Chroma를 열지 않습니다. 이전 보조 정보는 읽기 전용 카탈로그만 사용합니다.
             import re
             from types import SimpleNamespace
@@ -76,7 +76,12 @@ def _refresh(engine, sources, *, store, embed, supplements, raw_market, dry_run)
         supplements.setdefault(key, []).append(value)
     vocabulary = Vocabulary.load()
     documents, vocabulary = read_articles(engine, sources, vocabulary=vocabulary, supplements=supplements)
+    exported = {'products': vocabulary.products, 'countries': vocabulary.countries,
+                'synonyms': vocabulary.synonyms, 'hypernyms': vocabulary.hypernyms,
+                'categories': {t: vocabulary.categories.lookup(t) for t in vocabulary.categories.listed}}
     if dry_run:
+        if rebuild:
+            return {**store.plan_rebuild(documents, sources, exported), 'selected_articles': len(documents)}
         return {'status':'planned', 'articles':len(documents), 'sources':[s.value for s in sources],
                 'missing_body':sum(not a.body.strip() or 'body_origin' in a.metadata_missing for a in documents),
                 'missing_metadata':sum(bool(a.metadata_missing) for a in documents)}
@@ -84,12 +89,9 @@ def _refresh(engine, sources, *, store, embed, supplements, raw_market, dry_run)
     if owned:
         from backend.app.scheduler.jobs.news_embed import openai_embed
         embed = openai_embed()
-    exported = {'products': vocabulary.products, 'countries': vocabulary.countries,
-                'synonyms': vocabulary.synonyms, 'hypernyms': vocabulary.hypernyms,
-                'categories': {t: vocabulary.categories.lookup(t) for t in vocabulary.categories.listed}}
     failure = None
     try:
-        result = store.publish(documents, sources, embed, vocabulary=exported)
+        result = store.publish(documents, sources, embed, vocabulary=exported, rebuild=rebuild)
     except BaseException as exc:
         failure = exc
         raise
@@ -109,7 +111,7 @@ def _refresh(engine, sources, *, store, embed, supplements, raw_market, dry_run)
     return result
 
 
-def run(sources=ALL_SOURCES, *, db_url=None, root=None, embed=None, supplements=None, raw_market=None, dry_run=False):
+def run(sources=ALL_SOURCES, *, db_url=None, root=None, embed=None, supplements=None, raw_market=None, dry_run=False, rebuild=False):
     from backend.app.db.session import make_engine
     engine = None
     started = datetime.now(timezone.utc).isoformat()
@@ -117,7 +119,7 @@ def run(sources=ALL_SOURCES, *, db_url=None, root=None, embed=None, supplements=
     try:
         engine = make_engine(db_url)
         report['index'] = refresh(engine, sources, store=GenerationStore(root), embed=embed,
-                                  supplements=supplements, raw_market=raw_market, dry_run=dry_run)
+                                  supplements=supplements, raw_market=raw_market, dry_run=dry_run, rebuild=rebuild)
         report['status'] = 'planned' if dry_run else 'complete'
         if report['index'].get('cleanup_errors'):
             report.update(status='partial', error_code='resource_cleanup_failed',
@@ -150,8 +152,9 @@ def main():
     parser.add_argument('--source', action='append', choices=[s.value for s in ALL_SOURCES])
     parser.add_argument('--root', type=Path)
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--rebuild', action='store_true', help='이전 벡터 재사용 없이 보존 출처까지 본문 전체 재임베딩 (키워드는 news_embed에서 재구축)')
     args = parser.parse_args()
-    result = run(args.source or ALL_SOURCES, root=args.root, dry_run=args.dry_run)
+    result = run(args.source or ALL_SOURCES, root=args.root, dry_run=args.dry_run, rebuild=args.rebuild)
     print(json.dumps(result,ensure_ascii=False))
     return 0 if result['status'] in ('planned','complete') else 1
 
