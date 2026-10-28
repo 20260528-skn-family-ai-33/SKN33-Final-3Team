@@ -55,6 +55,26 @@ class QueryTest(unittest.TestCase):
         self.assertEqual(Q.comparison_hs6("850761", mapping), "850760")
         self.assertEqual(Q.comparison_hs6("030211", mapping), "030211")  # 묶이지 않은 코드는 그대로
 
+    def test_correspondence_table_is_read_once(self):
+        corr = pd.DataFrame({"new_code": ["850761"], "old_code": ["850760"], "group_code": ["850760"]})
+        Q._hs_mapping.cache_clear()
+        try:
+            with patch.object(Q.S, "hs_correlation", return_value=corr) as read:
+                self.assertEqual(Q.comparison_hs6("850761"), "850760")
+                self.assertEqual(Q.comparison_hs6("030211"), "030211")
+            read.assert_called_once()
+        finally:
+            Q._hs_mapping.cache_clear()  # 다른 테스트가 가짜 대응표를 쓰지 않게
+
+    def test_resolve_target_stops_even_if_error_returns(self):
+        countries = S.countries()
+        countries = countries[countries.country_role == "COUNTRY"]
+        messages = []
+        for country, hs6 in (("없는나라", None), ("VN", "8507600000")):
+            with self.subTest(country=country, hs6=hs6), self.assertRaises(ValueError):
+                Q.resolve_target(country, hs6, countries, messages.append)  # 기록만 하고 돌아오는 error
+        self.assertEqual(len(messages), 2)
+
     def test_pair_rank_counts_higher_scores(self):
         pred = pd.DataFrame({"country_code": ["VN", "VN", "VN", "US"], "hs6": ["111111", "222222", "333333", "222222"],
                              "score": [.9, .5, .1, .7]})

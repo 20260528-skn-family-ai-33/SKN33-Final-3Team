@@ -13,6 +13,7 @@
     python -m backend.app.ml.candidate_query --model data/ml/candidates/lightgbm_v2.joblib --country 미국
 """
 import argparse
+from functools import lru_cache
 from pathlib import Path
 
 import joblib
@@ -75,9 +76,14 @@ def predict_latest(bundle, snapshot_path):
     return latest.assign(score=bundle["pipeline"].predict(x))
 
 
+@lru_cache(maxsize=1)
+def _hs_mapping():
+    return hs_key_map(S.hs_correlation())  # UNSD 대응표 xlsx 파싱. 조회마다 다시 읽지 않는다
+
+
 def comparison_hs6(hs6, mapping=None):
     """HS2022 코드 → 스냅샷의 비교용 HS6. 판이 바뀌며 나뉘거나 합쳐진 코드는 묶음 대표 코드(group_code)로 저장돼 있다."""
-    mapping = mapping if mapping is not None else hs_key_map(S.hs_correlation())
+    mapping = mapping if mapping is not None else _hs_mapping()
     return mapping.get(("HS2022", hs6), hs6)
 
 
@@ -96,16 +102,21 @@ def pair_rank(pred, code, hs6, country_by="score", product_by="score"):
             "product_rank": int((in_product[product_by] > row[product_by]).sum()) + 1, "product_size": len(in_product)}
 
 
+def _stop(error, message):
+    error(message)
+    raise ValueError(message)  # error가 기록만 하고 돌아와도 잘못된 입력으로 조회를 이어가지 않는다
+
+
 def resolve_target(country, hs6, countries, error):
-    """--country·--hs6 입력을 (국가 코드, 비교용 HS6)로. 잘못된 입력은 error(안내 문구)로 멈춘다 (보통 parser.error)."""
+    """--country·--hs6 입력을 (국가 코드, 비교용 HS6)로. 잘못된 입력은 error(안내 문구)로 알리고 멈춘다 (보통 parser.error)."""
     try:
         code = country_code(country, countries) if country else None
     except ValueError as exc:
-        error(str(exc))
+        _stop(error, str(exc))
     if hs6 is not None:
         hs6 = hs6.strip()
         if not (len(hs6) == 6 and hs6.isdigit()):  # 10자리 코드를 조용히 잘라 다른 품목을 조회하지 않게 한다
-            error("--hs6는 HS 6단위 6자리 숫자입니다 (예: 850760)")
+            _stop(error, "--hs6는 HS 6단위 6자리 숫자입니다 (예: 850760)")
         key = comparison_hs6(hs6)
         if key != hs6:
             print(f"{hs6}는 판 변경으로 묶인 코드라 비교용 대표 코드 {key}로 조회합니다", flush=True)
