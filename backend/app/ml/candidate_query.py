@@ -81,15 +81,36 @@ def comparison_hs6(hs6, mapping=None):
     return mapping.get(("HS2022", hs6), hs6)
 
 
-def pair_rank(pred, code, hs6):
-    """한 쌍의 예측 행과 국가 안·품목 안 순위 (점수가 더 높은 쌍 수 + 1). 예측 대상이 아니면 None."""
+def pair_rank(pred, code, hs6, country_by="score", product_by="score"):
+    """한 쌍의 예측 행과 국가 안·품목 안 순위 (점수가 더 높은 쌍 수 + 1). 예측 대상이 아니면 None.
+
+    country_by·product_by: 국가 안·품목 안 순위에 쓰는 점수 열 (2단계 모델은 order·growth).
+    """
     pair = pred[(pred.country_code == code) & (pred.hs6 == hs6)]
     if pair.empty:
         return None
     row = pair.iloc[0]
     in_country, in_product = pred[pred.country_code == code], pred[pred.hs6 == hs6]
-    return {"row": row, "country_rank": int((in_country.score > row.score).sum()) + 1, "country_size": len(in_country),
-            "product_rank": int((in_product.score > row.score).sum()) + 1, "product_size": len(in_product)}
+    return {"row": row, "country_rank": int((in_country[country_by] > row[country_by]).sum()) + 1,
+            "country_size": len(in_country),
+            "product_rank": int((in_product[product_by] > row[product_by]).sum()) + 1, "product_size": len(in_product)}
+
+
+def resolve_target(country, hs6, countries, error):
+    """--country·--hs6 입력을 (국가 코드, 비교용 HS6)로. 잘못된 입력은 error(안내 문구)로 멈춘다 (보통 parser.error)."""
+    try:
+        code = country_code(country, countries) if country else None
+    except ValueError as exc:
+        error(str(exc))
+    if hs6 is not None:
+        hs6 = hs6.strip()
+        if not (len(hs6) == 6 and hs6.isdigit()):  # 10자리 코드를 조용히 잘라 다른 품목을 조회하지 않게 한다
+            error("--hs6는 HS 6단위 6자리 숫자입니다 (예: 850760)")
+        key = comparison_hs6(hs6)
+        if key != hs6:
+            print(f"{hs6}는 판 변경으로 묶인 코드라 비교용 대표 코드 {key}로 조회합니다", flush=True)
+        hs6 = key
+    return code, hs6
 
 
 def main():
@@ -106,18 +127,7 @@ def main():
         parser.error("--top은 1 이상입니다")
     countries = S.countries()
     countries = countries[countries.country_role == "COUNTRY"]
-    try:
-        code = country_code(args.country, countries) if args.country else None
-    except ValueError as exc:
-        parser.error(str(exc))
-    hs6 = args.hs6.strip() if args.hs6 else None
-    if hs6 is not None:
-        if not (len(hs6) == 6 and hs6.isdigit()):  # 10자리 코드를 조용히 잘라 다른 품목을 조회하지 않게 한다
-            parser.error("--hs6는 HS 6단위 6자리 숫자입니다 (예: 850760)")
-        key = comparison_hs6(hs6)
-        if key != hs6:
-            print(f"{hs6}는 판 변경으로 묶인 코드라 비교용 대표 코드 {key}로 조회합니다", flush=True)
-        hs6 = key
+    code, hs6 = resolve_target(args.country, args.hs6, countries, parser.error)
 
     bundle = joblib.load(args.model)
     pred = predict_latest(bundle, args.snapshot)

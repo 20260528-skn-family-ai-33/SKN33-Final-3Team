@@ -36,7 +36,7 @@ from threadpoolctl import threadpool_limits
 from backend.app.ml import features as F
 from backend.app.ml import sources as S
 from backend.app.ml.candidate_models import OUT_DIR, _finite, _runtime, needed_columns
-from backend.app.ml.candidate_query import country_code, item_name
+from backend.app.ml.candidate_query import item_name, pair_rank, resolve_target
 from backend.app.ml.experiment_metrics import evaluate_predictions
 from backend.app.ml.experiments import (FEATURE_SETS, ROOT, SNAPSHOT_PY311, ExperimentConfig, ModelSpec, build_model,
                                         load_snapshot, prepare_scenarios)
@@ -229,13 +229,11 @@ def train(args):
           f"최신 기준월 {latest.anchor.max().date()} {len(latest):,}쌍 예측 포함)", flush=True)
 
 
-def query(args):
+def query(args, error):
+    """error: 잘못된 입력을 알리고 멈추는 함수 (main은 parser.error)."""
     countries = S.countries()
     countries = countries[countries.country_role == "COUNTRY"]
-    code = country_code(args.country, countries) if args.country else None
-    hs6 = args.hs6.strip() if args.hs6 else None
-    if hs6 is not None and not (len(hs6) == 6 and hs6.isdigit()):
-        raise SystemExit("--hs6는 6자리 숫자입니다 (예: 850760)")
+    code, hs6 = resolve_target(args.country, args.hs6, countries, error)
     bundles = [joblib.load(p) for p in args.model]
     pred = combine([b["latest"] for b in bundles]).assign(exp_12m=bundles[0]["latest"].exp_12m.to_numpy())
     pred = pred.assign(growth_pct=np.expm1(pred.growth) * 100)
@@ -243,16 +241,15 @@ def query(args):
     label = " + ".join(p.name for p in args.model)
     if code and hs6:
         name = countries.set_index("country_code").name_ko[code]
-        in_country, in_product = pred[pred.country_code == code], pred[pred.hs6 == hs6]
-        pair = in_country[in_country.hs6 == hs6]
         print(f"{label} | {name}({code}) × {hs6} {item_name(hs6, names, width=60)}")
-        if pair.empty:
+        rank = pair_rank(pred, code, hs6, country_by="order", product_by="growth")
+        if rank is None:
             print("예측 대상이 아닙니다 (최근 12개월 수출 $100K 이상인 쌍만 예측합니다)")
             return
-        row = pair.iloc[0]
+        row = rank["row"]
         print(f"예측 증감률(약) {row.growth_pct:+.1f}% | 최근 12개월 수출 {row.exp_12m:,.0f} USD")
-        print(f"{name} 안 순위(2단계) {int((in_country.order > row.order).sum()) + 1} / {len(in_country)}개 품목 | "
-              f"{hs6} 안 순위(1단계) {int((in_product.growth > row.growth).sum()) + 1} / {len(in_product)}개국")
+        print(f"{name} 안 순위(2단계) {rank['country_rank']} / {rank['country_size']}개 품목 | "
+              f"{hs6} 안 순위(1단계) {rank['product_rank']} / {rank['product_size']}개국")
         return
     if code:
         rows = pred[pred.country_code == code].nlargest(args.top, "order")
@@ -299,7 +296,7 @@ def main():
     elif args.top < 1:
         parser.error("--top은 1 이상입니다")
     else:
-        query(args)
+        query(args, parser.error)
 
 
 if __name__ == "__main__":

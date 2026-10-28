@@ -50,6 +50,34 @@ class TwoStageTest(unittest.TestCase):
         self.assertEqual(bundle["external_dropped"], {"ext": MARKET + WDI})
         self.assertEqual(bundle["features"]["ext"], bundle["features"]["base"])
 
+    def test_query_maps_grouped_hs_code_and_reports_bad_country(self):
+        import argparse
+        import contextlib
+        import io
+        from unittest.mock import patch
+        latest = self.latest[T.KEYS].assign(growth=np.linspace(-1, 1, len(self.latest)), order=0.0,
+                                             exp_12m=self.latest.exp_12m.to_numpy())
+        code, hs6 = latest.country_code.iloc[0], latest.hs6.iloc[0]
+        path = self.out_file({"latest": latest})
+
+        def error(message):
+            raise SystemExit(message)
+        with patch("backend.app.ml.candidate_query.comparison_hs6", return_value=hs6) as mapped, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            T.query(argparse.Namespace(model=[path], country=code, hs6="999999", top=5), error)
+        mapped.assert_called_once_with("999999")  # 입력 코드를 비교용 대표 코드로 바꿔 찾는다
+        self.assertIn("순위(2단계)", out.getvalue())
+        with self.assertRaisesRegex(SystemExit, "찾지 못했"):
+            T.query(argparse.Namespace(model=[path], country="없는나라", hs6=None, top=5), error)
+
+    def out_file(self, bundle):
+        import tempfile
+        from pathlib import Path
+        import joblib
+        path = Path(tempfile.mkdtemp()) / "model.joblib"
+        joblib.dump(bundle, path)
+        return path
+
     def test_combine_averages_and_refuses_different_targets(self):
         bundle = T.fit(self.rows, self.columns, "B", n_jobs=1, folds=2)
         pred = T.predict(bundle, self.latest)
