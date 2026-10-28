@@ -216,6 +216,28 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(svg.count('r="1.8"'), 2)         # 앞뒤가 비어 있는 4월·6월은 점
         self.assertIn('>4.0</text>', svg)                 # 끝 값 라벨은 마지막 실제 값
 
+    def test_end_labels_stay_inside_chart_or_move_to_legend(self):
+        labels = [str(i) for i in range(13)]
+        same = lambda n: [{'values': [1e8] * 13}] * n  # 끝 값이 모두 같아 라벨이 한곳에 몰리는 경우
+        for n in (2, 8):
+            ys = [float(y) for y in re.findall(r'y="([\d.]+)" class="end"', str(rt.line_chart(labels, same(n), height=130)))]
+            self.assertEqual(len(ys), n)
+            self.assertGreaterEqual(min(ys), 10)          # 그래프 영역 위
+            self.assertLessEqual(max(ys), 130 - 24 + 3)   # 그래프 영역 아래(+글자 기준선)
+        self.assertNotIn('class="end"', str(rt.line_chart(labels, same(12), height=130)))
+        self.assertFalse(rt.end_labels_fit(12, 130))
+        self.assertTrue(rt.end_labels_fit(8, 130))
+
+        context = rt.sample_context('monthly')
+        country = context['conditions']['countries'][0]
+        context['conditions']['countries'] = [dict(country, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(12)]
+        base = context['items'][0]['country_trend'][0]
+        for item in context['items']:
+            item['country_trend'] = [dict(base, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(12)]
+        html = rt.render('RPT_MONTHLY', context)
+        self.assertIn('범례 숫자는 마지막 값(', html)
+        self.assertIn('국가11 ' + rt.musd(rt.last_value(base['values'])), html)
+
     def test_nice_scale_covers_data(self):
         low, high, ticks = rt.nice_scale([602e6 / 1e6, 879.0])
         self.assertLessEqual(low, 602)

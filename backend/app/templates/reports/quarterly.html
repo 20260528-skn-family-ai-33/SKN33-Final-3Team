@@ -127,10 +127,18 @@
 {% call m.page(report, start + loop.index0, total) %}
 {{ m.heading(no if loop.first else none, title ~ ('' if loop.first else ' (계속)'), conditions.countries | map(attribute='name') | join(' · ') ~ ' | 국가별 선 색상은 모든 그래프에서 같습니다') }}
 {% for item in chunk %}
-<h3>{{ item.label }}<small>단위 백만 달러</small></h3>
-{{ m.legend(country_keys) }}
 {% set source = item.country_quarters if kind == 'q' else item.country_months.series %}
 {% set labels = item.quarters.labels if kind == 'q' else item.country_months.labels %}
+{# 국가가 많아 끝 값 라벨이 그래프 안에 다 들어가지 않으면 라벨 대신 범례에 마지막 값을 붙입니다 #}
+{% set show_ends = end_labels_fit(source | length, 250) %}
+<h3>{{ item.label }}<small>단위 백만 달러{{ '' if show_ends else ' · 범례 숫자는 마지막 값(' ~ labels[-1] ~ ')' }}</small></h3>
+{% if show_ends %}
+{{ m.legend(country_keys) }}
+{% else %}
+{% set keys = [] %}
+{% for s in source %}{% set _ = keys.append({'name': s.name ~ ' ' ~ (last_value(s['values']) | musd), 'color': color_of[s.country_code], 'kind': 'line'}) %}{% endfor %}
+{{ m.legend(keys) }}
+{% endif %}
 {% set lines = [] %}
 {% for s in source %}{% set _ = lines.append({'values': s['values'], 'color': color_of[s.country_code]}) %}{% endfor %}
 {% if lines %}{{ line_chart(labels, lines, height=250, zero=true) }}{% else %}<div class="empty">관심 국가가 없습니다.</div>{% endif %}
