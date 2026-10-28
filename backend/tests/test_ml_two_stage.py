@@ -50,6 +50,16 @@ class TwoStageTest(unittest.TestCase):
         self.assertEqual(bundle["external_dropped"], {"ext": MARKET + WDI})
         self.assertEqual(bundle["features"]["ext"], bundle["features"]["base"])
 
+    def test_monthly_bundles_both_members_for_the_latest_anchor(self):
+        bundle, evaluation, _ = T.monthly(dataset()[[*needed_columns(), "exp_12m"]], n_jobs=1, k=5)
+        self.assertEqual(set(bundle["members"]), set(T.MEMBERS))
+        latest = bundle["latest"]
+        self.assertEqual(latest[T.KEYS].reset_index(drop=True).to_dict("list"),
+                         self.latest[T.KEYS].reset_index(drop=True).to_dict("list"))  # 최신 기준월 전체 쌍
+        self.assertTrue(np.isfinite(latest[["growth", "order"]].to_numpy()).all())
+        for key in ("model", "model_stage1", "baseline_growth_12m"):
+            self.assertIsNotNone(evaluation[key]["country_ndcg_at_5"], key)
+
     def test_query_maps_grouped_hs_code_and_reports_bad_country(self):
         import argparse
         import contextlib
