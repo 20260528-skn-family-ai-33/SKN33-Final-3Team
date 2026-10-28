@@ -1,0 +1,722 @@
+{
+  "synthetic": true,
+  "note": "실제 기사와 검색 결과가 아닌 계약 검증용 합성 예시입니다.",
+  "cases": [
+    {
+      "request": {
+        "request_id": "synthetic-ok",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "local_issue",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "response": {
+        "request_id": "synthetic-ok",
+        "use_case": "local_issue",
+        "status": "ok",
+        "applied_conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        },
+        "target_count": 5,
+        "returned_count": 5,
+        "articles": [
+          {
+            "article_id": 1,
+            "source_code": "KOTRA_MARKET",
+            "external_id": "synthetic-1",
+            "title": "합성 기사 1",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/1",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-1",
+                "chunk_id": "1:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-1"
+                ]
+              }
+            ]
+          },
+          {
+            "article_id": 2,
+            "source_code": "KOTRA_SHORT_NEWS",
+            "external_id": "synthetic-2",
+            "title": "합성 기사 2",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/2",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-2",
+                "chunk_id": "2:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-2"
+                ]
+              }
+            ]
+          },
+          {
+            "article_id": 3,
+            "source_code": "HANKYUNG",
+            "external_id": "synthetic-3",
+            "title": "합성 기사 3",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/3",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-3",
+                "chunk_id": "3:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-3"
+                ]
+              }
+            ]
+          },
+          {
+            "article_id": 4,
+            "source_code": "FNNEWS",
+            "external_id": "synthetic-4",
+            "title": "합성 기사 4",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/4",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-4",
+                "chunk_id": "4:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-4"
+                ]
+              }
+            ]
+          },
+          {
+            "article_id": 5,
+            "source_code": "KOTRA_MARKET",
+            "external_id": "synthetic-5",
+            "title": "합성 기사 5",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/5",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-5",
+                "chunk_id": "5:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-5"
+                ]
+              }
+            ]
+          }
+        ],
+        "completed_sources": [
+          "KOTRA_MARKET",
+          "KOTRA_SHORT_NEWS",
+          "HANKYUNG",
+          "FNNEWS"
+        ]
+      }
+    },
+    {
+      "request": {
+        "request_id": "synthetic-no_results",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "local_issue",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "response": {
+        "request_id": "synthetic-no_results",
+        "use_case": "local_issue",
+        "status": "no_results",
+        "applied_conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        },
+        "target_count": 5,
+        "returned_count": 0,
+        "articles": [],
+        "completed_sources": [
+          "KOTRA_MARKET",
+          "KOTRA_SHORT_NEWS",
+          "HANKYUNG",
+          "FNNEWS"
+        ],
+        "reason": "합성 상태 예시"
+      }
+    },
+    {
+      "request": {
+        "request_id": "synthetic-insufficient_results",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "local_issue",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "response": {
+        "request_id": "synthetic-insufficient_results",
+        "use_case": "local_issue",
+        "status": "insufficient_results",
+        "applied_conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        },
+        "target_count": 5,
+        "returned_count": 3,
+        "articles": [
+          {
+            "article_id": 1,
+            "source_code": "KOTRA_MARKET",
+            "external_id": "synthetic-1",
+            "title": "합성 기사 1",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/1",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-1",
+                "chunk_id": "1:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-1"
+                ]
+              }
+            ]
+          },
+          {
+            "article_id": 2,
+            "source_code": "KOTRA_SHORT_NEWS",
+            "external_id": "synthetic-2",
+            "title": "합성 기사 2",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/2",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-2",
+                "chunk_id": "2:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-2"
+                ]
+              }
+            ]
+          },
+          {
+            "article_id": 3,
+            "source_code": "HANKYUNG",
+            "external_id": "synthetic-3",
+            "title": "합성 기사 3",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/3",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-3",
+                "chunk_id": "3:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-3"
+                ]
+              }
+            ]
+          }
+        ],
+        "completed_sources": [
+          "KOTRA_MARKET",
+          "KOTRA_SHORT_NEWS",
+          "HANKYUNG",
+          "FNNEWS"
+        ],
+        "reason": "합성 상태 예시"
+      }
+    },
+    {
+      "request": {
+        "request_id": "synthetic-insufficient_evidence",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "local_issue",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "response": {
+        "request_id": "synthetic-insufficient_evidence",
+        "use_case": "local_issue",
+        "status": "insufficient_evidence",
+        "applied_conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        },
+        "target_count": 5,
+        "returned_count": 1,
+        "articles": [
+          {
+            "article_id": 1,
+            "source_code": "KOTRA_MARKET",
+            "external_id": "synthetic-1",
+            "title": "합성 기사 1",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/1",
+            "body_status": "missing",
+            "content_version": "synthetic-v1",
+            "evidence": [],
+            "summary": []
+          }
+        ],
+        "completed_sources": [
+          "KOTRA_MARKET",
+          "KOTRA_SHORT_NEWS",
+          "HANKYUNG",
+          "FNNEWS"
+        ],
+        "reason": "합성 상태 예시"
+      }
+    },
+    {
+      "request": {
+        "request_id": "synthetic-partial",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "local_issue",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "response": {
+        "request_id": "synthetic-partial",
+        "use_case": "local_issue",
+        "status": "partial",
+        "applied_conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        },
+        "target_count": 5,
+        "returned_count": 1,
+        "articles": [
+          {
+            "article_id": 1,
+            "source_code": "KOTRA_MARKET",
+            "external_id": "synthetic-1",
+            "title": "합성 기사 1",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/1",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-1",
+                "chunk_id": "1:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-1"
+                ]
+              }
+            ]
+          }
+        ],
+        "completed_sources": [
+          "KOTRA_MARKET"
+        ],
+        "reason": "합성 상태 예시",
+        "failures": [
+          {
+            "stage": "search",
+            "code": "index_unavailable",
+            "source_code": "FNNEWS"
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "request_id": "synthetic-failed",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "local_issue",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "response": {
+        "request_id": "synthetic-failed",
+        "use_case": "local_issue",
+        "status": "failed",
+        "applied_conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        },
+        "target_count": 5,
+        "returned_count": 0,
+        "articles": [],
+        "completed_sources": [],
+        "reason": "합성 상태 예시",
+        "failures": [
+          {
+            "stage": "search",
+            "code": "index_unavailable",
+            "source_code": "FNNEWS"
+          }
+        ]
+      }
+    },
+    {
+      "request": {
+        "request_id": "synthetic-weekly-seven",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "report",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-14",
+            "end": "2026-09-20"
+          },
+          "blocked_topics": []
+        },
+        "limit": 7,
+        "report": {
+          "report_type": "weekly",
+          "article_purpose": "weekly_news"
+        }
+      },
+      "response": {
+        "request_id": "synthetic-weekly-seven",
+        "use_case": "report",
+        "status": "insufficient_results",
+        "applied_conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-14",
+            "end": "2026-09-20"
+          },
+          "blocked_topics": []
+        },
+        "target_count": 7,
+        "returned_count": 3,
+        "articles": [
+          {
+            "article_id": 1,
+            "source_code": "KOTRA_MARKET",
+            "external_id": "synthetic-1",
+            "title": "합성 기사 1",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/1",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-1",
+                "chunk_id": "1:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-1"
+                ]
+              }
+            ]
+          },
+          {
+            "article_id": 2,
+            "source_code": "KOTRA_SHORT_NEWS",
+            "external_id": "synthetic-2",
+            "title": "합성 기사 2",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/2",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-2",
+                "chunk_id": "2:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-2"
+                ]
+              }
+            ]
+          },
+          {
+            "article_id": 3,
+            "source_code": "HANKYUNG",
+            "external_id": "synthetic-3",
+            "title": "합성 기사 3",
+            "countries": [
+              "US"
+            ],
+            "published_date": "2026-09-15",
+            "source_url": "https://example.org/articles/3",
+            "body_status": "available",
+            "content_version": "synthetic-v1",
+            "evidence": [
+              {
+                "evidence_id": "evidence-3",
+                "chunk_id": "3:0",
+                "quote": "이 문장은 계약 검증용 합성 문장입니다."
+              }
+            ],
+            "summary": [
+              {
+                "text": "계약 검증용 합성 문장이다.",
+                "evidence_ids": [
+                  "evidence-3"
+                ]
+              }
+            ]
+          }
+        ],
+        "completed_sources": [
+          "KOTRA_MARKET",
+          "KOTRA_SHORT_NEWS",
+          "HANKYUNG",
+          "FNNEWS"
+        ],
+        "reason": "합성 상태 예시"
+      }
+    }
+  ]
+}
