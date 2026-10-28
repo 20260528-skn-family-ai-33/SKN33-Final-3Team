@@ -34,14 +34,14 @@ class Article(Base):
 
     article_id: Mapped[int] = mapped_column(AUTO_ID, primary_key=True, autoincrement=True)
     source_code: Mapped[str] = mapped_column(String(40), ForeignKey("service_option.option_code"), nullable=False,
-                                             comment="시장뉴스(KOTRA_MARKET) 또는 단신속보를 구분하는 출처 코드")
-    external_id: Mapped[str] = mapped_column(String(100), nullable=False, comment="원천 API의 기사 ID (bbstxSn)")
+                                             comment="기사 제공 기관·언론사를 구분하는 출처 코드. service_option의 SOURCE를 참조")
+    external_id: Mapped[str] = mapped_column(String(100), nullable=False, comment="기사 제공 API 또는 언론사가 부여한 기사 ID")
     title: Mapped[str] = mapped_column(String(600), nullable=False)
     published_date: Mapped[date] = mapped_column(Date, nullable=False, comment="원천 기사 발행일 (수집일 아님)")
     source_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     body_masked: Mapped[str] = mapped_column(Text().with_variant(LONGTEXT, "mysql"), nullable=False,
                                              comment="HTML을 벗기고 이메일·전화번호를 가린 본문")
-    category: Mapped[str | None] = mapped_column(String(120), comment="원천 기사 분류 (infoCl)")
+    category: Mapped[str | None] = mapped_column(String(120), comment="원천이 제공한 기사 분류. 제공되지 않으면 NULL")
 
 
 class ArticleTag(Base):
