@@ -1,17 +1,16 @@
 {# 정기 리포트 · 분기 (RPT_QUARTERLY). 변수 설명: templates/reports/README.md #}
 {% import "_macros.html" as m %}
+{# 품목 그래프 쪽은 2개씩 고정. 요약·기사 쪽 나눔(layout)은 report_templates.layout()이 내용 높이로 계산합니다. #}
 {% set item_pages = items | batch(2) | list %}
 {% set item_pages = item_pages if item_pages else [[]] %}
-{% set article_pages = articles | batch(5) | list %}
-{% set article_pages = article_pages if article_pages else [[]] %}
 {% set k = item_pages | length %}
 {% set p_summary = 3 %}
-{% set p_trend = 4 %}
+{% set p_trend = p_summary + layout.summary | length %}
 {% set p_country_q = p_trend + k %}
 {% set p_country_m = p_country_q + k %}
 {% set p_top = p_country_m + k %}
 {% set p_issue = p_top + k %}
-{% set p_sources = p_issue + article_pages | length %}
+{% set p_sources = p_issue + layout.articles | length %}
 {% set total = p_sources %}
 {% set q = conditions.quarter_label %}
 {% set color_of = {} %}
@@ -49,40 +48,50 @@
 {{ m.contents(report, toc, info, notes, total) }}
 
 {# ---------- 01 분기 요약 ---------- #}
-{% call m.page(report, p_summary, total) %}
+{% for blocks in layout.summary %}
+{% call m.page(report, p_summary + loop.index0, total) %}
+{% if loop.first %}
 {{ m.heading(1, '분기 요약', report.period_label ~ '(' ~ conditions.months_label ~ ') · 전년 동분기·전분기 대비 · 단위 백만 달러 · 문장 속 수치 검증 통과 ' ~ verification.passed ~ '/' ~ verification.total) }}
+{% else %}
+{{ m.heading(none, '분기 요약 (계속)') }}
+{% endif %}
+{% for b in blocks %}
+{% if b.key == 'kpis' %}
 {% set cards = [] %}
 {% for item in items[:2] %}
   {% set _ = cards.append({'label': item.label ~ ' ' ~ q ~ ' 수출', 'value': item.amount_usd | musd(0), 'unit': '백만$', 'sub': '전년 동분기 대비 ' ~ (item.yoy_pct | signed_pct)}) %}
 {% endfor %}
 {% set _ = cards.append({'label': summary.highlight.label, 'value': summary.highlight.value, 'sub': summary.highlight.sub}) %}
 {{ m.kpis(cards, 3) }}
+{% elif b.key == 'sentences' %}
 {{ m.sentences(summary.sentences) }}
-
-<h3>품목별 분기 지표<small>분기 합계 · 백만 달러</small></h3>
+{% elif b.key == 'items' %}
+<h3>품목별 분기 지표{{ ' (계속)' if b.cont }}<small>분기 합계 · 백만 달러</small></h3>
 <table>
   <tr><th>품목</th><th class="r">{{ q }} 합계</th><th class="r">전년 동분기 대비</th><th class="r">전분기 대비</th><th class="r">수출국 수</th><th class="r">1위 국가 비중</th></tr>
-  {% for item in items %}
+  {% for item in items[b.start:b.end] %}
   <tr><td><span class="b">{{ item.label }}</span><br><span class="small">HS {{ item.hs_code }}</span></td>
     <td class="r b">{{ item.amount_usd | musd(0) }}</td><td class="r">{{ item.yoy_pct | change }}</td><td class="r">{{ item.qoq_pct | change }}</td>
     <td class="r">{{ item.country_count | num }}개국 <span class="diff">({{ item.country_count_diff | signed }})</span></td>
     <td class="r">{{ item.top_country.name }} {{ item.top_country.share_pct | pct }}</td></tr>
   {% endfor %}
 </table>
-
-<h3>관심 국가 한눈에<small>{{ q }} 합계 · 전년 동분기 대비</small></h3>
+{% elif b.key == 'overview' %}
+{# 품목이 많으면 가로로 넘치지 않게 품목 3개씩 표를 나눕니다 #}
+<h3>관심 국가 한눈에{{ ' (계속)' if b.cont }}<small>{{ q }} 합계 · 전년 동분기 대비</small></h3>
 <table>
-  <tr><th>관심 국가</th>{% for item in items %}<th class="r">{{ item.label }}</th><th class="r">전년 동분기</th>{% endfor %}</tr>
-  {% for row in interest_overview %}
-  <tr><td class="b">{{ row.name }}</td>{% for v in row['values'] %}<td class="r">{{ v.amount_usd | musd }}</td><td class="r">{{ v.yoy_pct | change }}</td>{% endfor %}</tr>
+  <tr><th>관심 국가</th>{% for i in b.group %}<th class="r">{{ items[i].label }}</th><th class="r">전년 동분기</th>{% endfor %}</tr>
+  {% for row in interest_overview[b.start:b.end] %}
+  <tr><td class="b">{{ row.name }}</td>{% for i in b.group %}{% set v = row['values'][i] %}<td class="r">{{ v.amount_usd | musd }}</td><td class="r">{{ v.yoy_pct | change }}</td>{% endfor %}</tr>
   {% endfor %}
 </table>
-
-{% if summary.check_points %}
-<h3>이번 분기 확인할 점</h3>
-{{ m.check_table(summary.check_points) }}
+{% elif b.key == 'checks' %}
+<h3>이번 분기 확인할 점{{ ' (계속)' if b.cont }}</h3>
+{{ m.check_table(summary.check_points[b.start:b.end]) }}
 {% endif %}
+{% endfor %}
 {% endcall %}
+{% endfor %}
 
 {# ---------- 02 분기·월별 추이 (품목 2개씩 한 쪽) ---------- #}
 {% for chunk in item_pages %}
@@ -155,7 +164,7 @@
 {% endfor %}
 
 {# ---------- 06 현지 이슈 ---------- #}
-{% for chunk in article_pages %}
+{% for blocks in layout.articles %}
 {% call m.page(report, p_issue + loop.index0, total) %}
 {% if loop.first %}
 {{ m.heading(6, '현지 이슈', '품목 관련 해외 기사 · ' ~ report.period_label) }}
@@ -163,8 +172,10 @@
 {% else %}
 {{ m.heading(none, '현지 이슈 (계속)') }}
 {% endif %}
-{{ m.articles(chunk, report.is_sample) }}
-{% if loop.last and one_off_note %}<p class="small" style="margin-top:4mm">{{ one_off_note }}</p>{% endif %}
+{% for b in blocks %}
+{% if b.key == 'articles' %}{{ m.articles(articles[b.start:b.end], report.is_sample) }}
+{% elif b.key == 'tail' %}<p class="small" style="margin-top:4mm">{{ one_off_note }}</p>{% endif %}
+{% endfor %}
 {% endcall %}
 {% endfor %}
 

@@ -34,10 +34,13 @@ python -m unittest backend/tests/test_report_templates.py
 - 요약 문장의 `**강조**`는 굵은 강조색이 됩니다. 그 밖의 문자열은 모두 HTML 이스케이프됩니다.
 - 날짜는 ISO 문자열(`2025-12-15`, `2026-01-16T06:00:00`)로 넘기면 `2025.12.15`, `2026.01.16 06:00`으로 표시합니다.
 - 관심 국가 선 색상은 `conditions.countries` 순서로 정해져 같은 리포트의 모든 그래프에서 같습니다.
-- 주요 수출국 표는 상위 10개국까지만 표시합니다(나머지는 `others`). 한 쪽 높이가 고정이라 넘치는 내용은 잘리므로, 요약 문장·확인할 점·주간 이슈는 각각 5줄 안팎으로 넘겨 주세요.
-  월간·분기 KPI 카드는 앞의 품목 2개 + `summary.highlight`입니다.
-- 목록 길이는 자유입니다: 관심 품목 N개 → 상세 쪽 N개(분기는 2개씩 한 쪽), 기사 5건마다 한 쪽(주간은 첫 쪽 4건, 이후 6건씩).
-  쪽 번호와 목차는 자동 계산됩니다. 빈 목록은 “관련 기사 없음” 등 안내 문구가 나옵니다.
+- 주요 수출국 표는 상위 10개국까지만 표시합니다(나머지는 `others`). 월간·분기 KPI 카드는 앞의 품목 2개 + `summary.highlight`입니다.
+- 목록 길이는 자유입니다: 관심 품목 N개 → 상세 쪽 N개(분기는 2개씩 한 쪽).
+- 쪽 나눔은 `report_templates.layout()`이 글자 수로 블록 높이를 추정해 정합니다. 요약(문장·품목 표·관심 국가 표·확인할 점)·기사·
+  주간 이슈·일정·단신이 한 쪽을 넘으면 “(계속)” 쪽으로 넘어가고, 표는 행 단위로 나뉘어 머리글이 다시 나옵니다.
+  관심 국가 표는 가로로 넘치지 않게 품목 3개씩 나눕니다. 쪽 번호와 목차는 자동 계산되며, 빈 목록은 “관련 기사 없음” 등 안내 문구가 나옵니다.
+  높이는 한글 1자 = 1em(Noto Sans KR)으로 계산해, 폭이 좁은 글꼴(맑은 고딕)에서는 쪽 아래 여백이 조금 남습니다.
+- 추이 값(`trend`, `country_trend`, `quarters` 등)이 `null`인 달은 0으로 그리지 않고 선을 끊습니다. 앞뒤가 모두 비어 있는 값은 점으로 표시합니다.
 - `report.is_sample: true`면 꼬리말·기사 카드에 “템플릿 예시” 표시가 붙습니다. 실제 발행은 `false`.
 
 ## 컨텍스트 변수
@@ -75,7 +78,8 @@ python -m unittest backend/tests/test_report_templates.py
 | `sources[]` | 출처 표 `{label, provider, scope}` |
 
 월간 `conditions`: `target_month`(`2025-12`), `prev_month`, `prev_year_month`. `meta.latest_available_month`와 같으면 “(최신 공개 월)” 표시.
-월간 `items[]`: `hs_code, name, label, amount_usd, mom_pct, yoy_pct, country_count, country_count_diff, top_country{name, share_pct}`,
+월간 `items[]`: `hs_code, name, label, amount_usd, mom_pct, yoy_pct, country_count, country_count_diff, top_country{name, share_pct}`
+(`country_count_diff` = 전년 동월 대비 수출국 수 증감, 분기는 전년 동분기 대비),
 `trend{range_label, labels[13], current[13], previous[13]}`(USD), `country_trend[{country_code, name, values[13]}]`,
 `top_countries[{rank, name, is_interest, amount_usd, share_pct, mom_pct, yoy_pct}]`, `others{amount_usd, share_pct, mom_pct, yoy_pct}`(없으면 `null`).
 

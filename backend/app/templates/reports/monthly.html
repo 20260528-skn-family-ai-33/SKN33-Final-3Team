@@ -1,12 +1,11 @@
 {# 정기 리포트 · 월간 (RPT_MONTHLY). 변수 설명: templates/reports/README.md #}
 {% import "_macros.html" as m %}
-{% set per_page = 5 %}
-{% set article_pages = articles | batch(per_page) | list %}
-{% set article_pages = article_pages if article_pages else [[]] %}
+{# 쪽 나눔(layout)은 report_templates.layout()이 내용 높이로 계산합니다. 넘치면 “(계속)” 쪽이 추가됩니다. #}
 {% set n_items = items | length %}
 {% set p_summary = 3 %}
-{% set p_issue = p_summary + n_items + 1 %}
-{% set p_sources = p_issue + article_pages | length %}
+{% set p_items = p_summary + layout.summary | length %}
+{% set p_issue = p_items + n_items %}
+{% set p_sources = p_issue + layout.articles | length %}
 {% set total = p_sources %}
 {% set month = conditions.target_month[5:] | int %}
 {% set prev_month = conditions.prev_month[5:] | int %}
@@ -24,7 +23,7 @@
 {{ m.cover(report, total) }}
 
 {% set toc = [{'title': '이달의 요약', 'page': p_summary}] %}
-{% for item in items %}{% set _ = toc.append({'title': item.label ~ ' 상세', 'page': p_summary + loop.index}) %}{% endfor %}
+{% for item in items %}{% set _ = toc.append({'title': item.label ~ ' 상세', 'page': p_items + loop.index0}) %}{% endfor %}
 {% set _ = toc.extend([{'title': '현지 이슈', 'page': p_issue}, {'title': '데이터 기준 · 출처', 'page': p_sources}]) %}
 {% set info = [
   {'label': '구독 조건', 'value': subscription.label},
@@ -42,44 +41,54 @@
 {{ m.contents(report, toc, info, notes, total) }}
 
 {# ---------- 01 이달의 요약 ---------- #}
-{% call m.page(report, p_summary, total) %}
+{% for blocks in layout.summary %}
+{% call m.page(report, p_summary + loop.index0, total) %}
+{% if loop.first %}
 {{ m.heading(1, '이달의 요약', report.period_label ~ ' · 전월(' ~ prev_month ~ '월)·전년 동월(' ~ conditions.prev_year_month | replace('-', '.') ~ ') 대비 · 단위 백만 달러 · 문장 속 수치 검증 통과 ' ~ verification.passed ~ '/' ~ verification.total) }}
+{% else %}
+{{ m.heading(none, '이달의 요약 (계속)') }}
+{% endif %}
+{% for b in blocks %}
+{% if b.key == 'kpis' %}
 {% set cards = [] %}
 {% for item in items[:2] %}
   {% set _ = cards.append({'label': item.label ~ ' ' ~ month ~ '월 수출', 'value': item.amount_usd | musd, 'unit': '백만$', 'sub': '전년 동월 대비 ' ~ (item.yoy_pct | signed_pct)}) %}
 {% endfor %}
 {% set _ = cards.append({'label': summary.highlight.label, 'value': summary.highlight.value, 'sub': summary.highlight.sub}) %}
 {{ m.kpis(cards, 3) }}
+{% elif b.key == 'sentences' %}
 {{ m.sentences(summary.sentences) }}
-
-<h3>품목별 주요 지표<small>{{ month }}월 수출액 · 백만 달러</small></h3>
+{% elif b.key == 'items' %}
+<h3>품목별 주요 지표{{ ' (계속)' if b.cont }}<small>{{ month }}월 수출액 · 백만 달러</small></h3>
 <table>
   <tr><th>품목</th><th class="r">{{ month }}월 수출액</th><th class="r">전월 대비</th><th class="r">전년 동월 대비</th><th class="r">수출국 수</th><th class="r">1위 국가 비중</th></tr>
-  {% for item in items %}
+  {% for item in items[b.start:b.end] %}
   <tr><td><span class="b">{{ item.label }}</span><br><span class="small">HS {{ item.hs_code }}</span></td>
     <td class="r b">{{ item.amount_usd | musd }}</td><td class="r">{{ item.mom_pct | change }}</td><td class="r">{{ item.yoy_pct | change }}</td>
     <td class="r">{{ item.country_count | num }}개국 <span class="diff">({{ item.country_count_diff | signed }})</span></td>
     <td class="r">{{ item.top_country.name }} {{ item.top_country.share_pct | pct }}</td></tr>
   {% endfor %}
 </table>
-
-<h3>관심 국가 한눈에<small>{{ month }}월 수출액 · 전년 동월 대비</small></h3>
+{% elif b.key == 'overview' %}
+{# 품목이 많으면 가로로 넘치지 않게 품목 3개씩 표를 나눕니다 #}
+<h3>관심 국가 한눈에{{ ' (계속)' if b.cont }}<small>{{ month }}월 수출액 · 전년 동월 대비</small></h3>
 <table>
-  <tr><th>관심 국가</th>{% for item in items %}<th class="r">{{ item.label }}</th><th class="r">전년 동월</th>{% endfor %}</tr>
-  {% for row in interest_overview %}
-  <tr><td class="b">{{ row.name }}</td>{% for v in row['values'] %}<td class="r">{{ v.amount_usd | musd }}</td><td class="r">{{ v.yoy_pct | change }}</td>{% endfor %}</tr>
+  <tr><th>관심 국가</th>{% for i in b.group %}<th class="r">{{ items[i].label }}</th><th class="r">전년 동월</th>{% endfor %}</tr>
+  {% for row in interest_overview[b.start:b.end] %}
+  <tr><td class="b">{{ row.name }}</td>{% for i in b.group %}{% set v = row['values'][i] %}<td class="r">{{ v.amount_usd | musd }}</td><td class="r">{{ v.yoy_pct | change }}</td>{% endfor %}</tr>
   {% endfor %}
 </table>
-
-{% if summary.check_points %}
-<h3>이번 달 확인할 점</h3>
-{{ m.check_table(summary.check_points) }}
+{% elif b.key == 'checks' %}
+<h3>이번 달 확인할 점{{ ' (계속)' if b.cont }}</h3>
+{{ m.check_table(summary.check_points[b.start:b.end]) }}
 {% endif %}
+{% endfor %}
 {% endcall %}
+{% endfor %}
 
 {# ---------- 품목별 상세 (관심 품목 수만큼) ---------- #}
 {% for item in items %}
-{% call m.page(report, p_summary + loop.index, total) %}
+{% call m.page(report, p_items + loop.index0, total) %}
 {{ m.heading(1 + loop.index, item.label ~ ' 상세', 'HS ' ~ item.hs_code ~ ' ' ~ item.name ~ ' · ' ~ month ~ '월 수출 ' ~ (item.amount_usd | musd) ~ '백만 달러 · 전월 ' ~ (item.mom_pct | signed_pct) ~ ' · 전년 동월 ' ~ (item.yoy_pct | signed_pct)) }}
 {{ m.legend([{'name': item.trend.range_label, 'color': colors.accent, 'kind': 'line'}, {'name': '1년 전 같은 달', 'color': colors.previous, 'kind': 'dash'}]) }}
 {{ line_chart(item.trend.labels, [
@@ -117,7 +126,7 @@
 {% endfor %}
 
 {# ---------- 현지 이슈 ---------- #}
-{% for chunk in article_pages %}
+{% for blocks in layout.articles %}
 {% call m.page(report, p_issue + loop.index0, total) %}
 {% if loop.first %}
 {{ m.heading(n_items + 2, '현지 이슈', '관심 품목 관련 해외 기사 · ' ~ conditions.target_month | replace('-', '.') ~ ' 대상 월 기준 최근 기사') }}
@@ -125,7 +134,7 @@
 {% else %}
 {{ m.heading(none, '현지 이슈 (계속)') }}
 {% endif %}
-{{ m.articles(chunk, report.is_sample) }}
+{% for b in blocks %}{{ m.articles(articles[b.start:b.end], report.is_sample) }}{% endfor %}
 {% endcall %}
 {% endfor %}
 

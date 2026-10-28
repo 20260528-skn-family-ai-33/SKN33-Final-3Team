@@ -56,12 +56,40 @@ class VariableLengthTest(unittest.TestCase):
         context['items'].append(third)
         for row in context['interest_overview']:
             row['values'].append(row['values'][0])
-        context['articles'] = [dict(context['articles'][0], no=i) for i in range(1, 12)]  # 11건 → 기사 3쪽
+        long_summary = '가나다라마바사 아자차카타 ' * 30  # 약 400자 발췌
+        context['articles'] = [dict(context['articles'][0], no=i, summary=long_summary) for i in range(1, 12)]  # 11건 → 기사 3쪽
         html = rt.render('RPT_MONTHLY', context)
         self.assertEqual(pages(html), 2 + 1 + 3 + 3 + 1)
         self.assertIn('세번째 상세', html)
         self.assertIn('현지 이슈 (계속)', html)
         self.assertIn('10 / 10', html)
+
+    def test_overflowing_summary_moves_to_continued_page_and_toc_follows(self):
+        context = rt.sample_context('monthly')
+        for n in range(3, 7):  # 품목 6개
+            extra = copy.deepcopy(context['items'][0])
+            extra.update(label=f'품목{n}', hs_code=f'99990{n}')
+            context['items'].append(extra)
+        for row in context['interest_overview']:
+            row['values'] = row['values'] * 3
+        context['summary']['check_points'] = [{'target': '대상', 'content': '확인 내용 ' * 40}] * 6
+        html = rt.render('RPT_MONTHLY', context)
+        summary_pages = len(rt.layout('RPT_MONTHLY', context)['summary'])
+        self.assertGreater(summary_pages, 1)
+        self.assertIn('이달의 요약 (계속)', html)
+        self.assertEqual(html.count('<h3>관심 국가 한눈에'), 2)  # 품목 3개씩 두 표
+        first_item_page = 3 + summary_pages
+        self.assertRegex(html, rf'<span class="t">기초화장품 상세</span><span>{first_item_page}</span>')
+        self.assertEqual(pages(html), 2 + summary_pages + 6 + 1 + 1)
+
+    def test_flow_splits_rows_and_never_leaves_heading_alone(self):
+        blocks = [{'key': 'a', 'height': 210}, {'key': 't', 'head': 20, 'rows': [30] * 5, 'empty': 8}]
+        result = rt.flow(blocks, 250, 250)
+        self.assertEqual([[(b['key'], b['start'], b['end'], b['cont']) for b in p] for p in result],
+                         [[('a', 0, 0, False)], [('t', 0, 5, False)]])  # 머리글+첫 행이 남은 40mm에 안 들어가면 다음 쪽
+        result = rt.flow([{'key': 't', 'head': 20, 'rows': [100] * 5, 'empty': 8}], 250, 150)
+        self.assertEqual([[(b['start'], b['end'], b['cont']) for b in p] for p in result],
+                         [[(0, 2, False)], [(2, 3, True)], [(3, 4, True)], [(4, 5, True)]])
 
     def test_empty_lists_show_messages(self):
         weekly = rt.sample_context('weekly')
@@ -107,6 +135,12 @@ class FormatTest(unittest.TestCase):
         context['articles'][0]['title'] = '<script>alert(1)</script>'
         html = rt.render('RPT_WEEKLY', context)
         self.assertNotIn('<script>alert(1)</script>', html)
+
+    def test_line_chart_breaks_at_missing_values(self):
+        svg = str(rt.line_chart(['1', '2', '3', '4', '5', '6'], [{'values': [1e6, 2e6, None, 3e6, None, 4e6]}]))
+        self.assertEqual(svg.count('<polyline'), 1)       # 1~2월만 선으로 연결
+        self.assertEqual(svg.count('r="1.8"'), 2)         # 앞뒤가 비어 있는 4월·6월은 점
+        self.assertIn('>4.0</text>', svg)                 # 끝 값 라벨은 마지막 실제 값
 
     def test_nice_scale_covers_data(self):
         low, high, ticks = rt.nice_scale([602e6 / 1e6, 879.0])

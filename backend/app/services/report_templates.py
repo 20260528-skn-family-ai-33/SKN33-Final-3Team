@@ -126,6 +126,21 @@ def nice_scale(values, ticks=5, zero=False):
     return start, end, [start + i * step for i in range(count + 1)]
 
 
+def _segments(values):
+    """[(위치, 값)] 묶음 목록. None에서 끊어 연속 구간끼리만 묶습니다."""
+    segments, current = [], []
+    for i, v in enumerate(values):
+        if v is None:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append((i, v))
+    if current:
+        segments.append(current)
+    return segments
+
+
 def _tick_label(value):
     return f'{value:,.0f}' if abs(value - round(value)) < 1e-9 else f'{value:,.1f}'
 
@@ -148,17 +163,22 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, 
     ends = []
     for s, vals in zip(series, scaled):
         color = s.get('color', ACCENT)
-        points = [(x(i), y(v)) for i, v in enumerate(vals) if v is not None]
-        if not points:
-            continue
-        path = ' '.join(f'{px:.1f},{py:.1f}' for px, py in points)
-        if s.get('area'):
-            base = y(low)
-            out.append(f'<polygon points="{points[0][0]:.1f},{base:.1f} {path} {points[-1][0]:.1f},{base:.1f}" fill="{color}" opacity="0.07"/>')
         dash = ' stroke-dasharray="5 4"' if s.get('dashed') else ''
-        out.append(f'<polyline points="{path}" fill="none" stroke="{color}" stroke-width="{1.6 if s.get("dashed") else 2}"{dash}/>')
-        last = next(v for v in reversed(vals) if v is not None)
-        ends.append([points[-1][0], points[-1][1], last, color])
+        width_px = 1.6 if s.get('dashed') else 2
+        # 값이 없는 달(null)은 이어 그리지 않고 선을 끊습니다. 앞뒤가 모두 비어 있는 점은 작은 원으로 표시합니다.
+        for segment in _segments(vals):
+            points = [(x(i), y(v)) for i, v in segment]
+            path = ' '.join(f'{px:.1f},{py:.1f}' for px, py in points)
+            if s.get('area') and len(points) > 1:
+                base = y(low)
+                out.append(f'<polygon points="{points[0][0]:.1f},{base:.1f} {path} {points[-1][0]:.1f},{base:.1f}" fill="{color}" opacity="0.07"/>')
+            if len(points) > 1:
+                out.append(f'<polyline points="{path}" fill="none" stroke="{color}" stroke-width="{width_px}"{dash}/>')
+            else:
+                out.append(f'<circle cx="{points[0][0]:.1f}" cy="{points[0][1]:.1f}" r="1.8" fill="{color}"/>')
+        last = next(((i, v) for i, v in reversed(list(enumerate(vals))) if v is not None), None)
+        if last:
+            ends.append([x(last[0]), y(last[1]), last[1], color])
     # 끝 값 라벨이 겹치지 않게 세로로 벌림
     ends.sort(key=lambda e: e[1])
     for i in range(1, len(ends)):
@@ -227,6 +247,157 @@ def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digit
     return Markup(''.join(out))
 
 
+# ---------- 쪽 나누기 ----------
+# 쪽 높이가 고정이라 넘치는 내용은 잘립니다. 블록 높이를 mm로 추정해 넘치면 다음 쪽(“(계속)”)으로 보냅니다.
+# 한글 1자 = 1em(Noto Sans KR 기준)으로 계산하며, 폭이 더 좁은 글꼴(맑은 고딕)에서는 아래 여백이 조금 남습니다.
+
+BODY_MM = 252   # A4 297mm − 위 21mm − 아래 20mm − 여유 4mm
+TEXT_MM = 178   # 210mm − 좌우 16mm
+PT_MM = 0.3528
+H3_MM = 13      # 소제목(위 여백 포함)
+ROW_MM = 4.3    # 표 한 행의 위아래 여백 (줄 높이는 별도)
+LINE = {7: 3.83, 7.6: 4.2, 7.8: 4.27, 8.2: 4.48, 9: 4.92, 9.6: 5.25}  # 글자 크기(pt) → 줄 높이(mm), line-height 1.55
+
+
+def _em(text):
+    width = 0.0
+    for ch in str(text):
+        if ch == ' ':
+            width += 0.3
+        elif ord(ch) < 0x2E80:
+            width += 0.6 if ch.isalnum() else 0.4
+        else:
+            width += 1.0
+    return width
+
+
+def _lines(text, size, width_mm):
+    if text is None or text == '':
+        return 0
+    per_line = width_mm / (size * PT_MM)
+    return max(1, math.ceil(_em(text) * 1.02 / per_line))
+
+
+def _row(cells, size=7.8):
+    """표 한 행 높이. cells: [(문자열, 칸 너비 mm)]"""
+    return ROW_MM + LINE[size] * max([1] + [_lines(text, size, width) for text, width in cells])
+
+
+def _heading(sub=None):
+    return 9.7 + (LINE[7.6] * _lines(sub, 7.6, TEXT_MM) + 4 if sub else 0)
+
+
+def _note(sentences):
+    return 11 + sum(LINE[9] * _lines(s.replace('**', ''), 9, TEXT_MM - 15) + 1.2 for s in sentences)
+
+
+def _article(a):
+    meta = ' · '.join(str(a.get(k)) for k in ('country', 'item_label', 'published_date', 'source_label', 'office') if a.get(k))
+    return (5.5 + LINE[9.6] * _lines(a.get('title'), 9.6, TEXT_MM - 6) + LINE[7] * _lines(meta, 7, TEXT_MM) + 1
+            + LINE[8.2] * _lines(a.get('summary'), 8.2, TEXT_MM) + 4.6)
+
+
+def _table(key, rows, head=None, empty=8.6, **extra):
+    """나눌 수 있는 표 블록. 행이 없으면 안내 행 높이만 차지합니다."""
+    return dict(extra, key=key, head=H3_MM + 9 if head is None else head, rows=rows, empty=empty)
+
+
+def flow(blocks, first, rest):
+    """블록을 쪽에 채웁니다. 표·기사 목록(rows)은 행 단위로 나누고, 소제목만 쪽 끝에 남기지 않습니다.
+    반환: 쪽 목록 [[{key, start, end, cont, ...}]]. start:end는 그 쪽에 넣을 행 범위, cont는 이어지는 표 여부."""
+    pages, page, room = [], [], first
+
+    def place(entry, height):
+        nonlocal page, room
+        if page and height > room:
+            pages.append(page)
+            page, room = [], rest
+        page.append(entry)
+        room -= height
+
+    for block in blocks:
+        info = {k: v for k, v in block.items() if k not in ('height', 'head', 'rows', 'empty')}
+        rows = block.get('rows')
+        if rows is None:
+            place(dict(info, start=0, end=0, cont=False), block['height'])
+            continue
+        if not rows:
+            place(dict(info, start=0, end=0, cont=False), block['head'] + block['empty'])
+            continue
+        head, i = block['head'], 0
+        while i < len(rows):
+            used = head + rows[i]
+            if page and used > room:
+                pages.append(page)
+                page, room = [], rest
+            end = i + 1
+            while end < len(rows) and used + rows[end] <= room:
+                used += rows[end]
+                end += 1
+            page.append(dict(info, start=i, end=end, cont=i > 0))
+            room -= used
+            i = end
+            if i < len(rows):
+                pages.append(page)
+                page, room = [], rest
+    pages.append(page)
+    return pages
+
+
+def _summary_blocks(ctx, kpi_cols=3):
+    """월간·분기 요약: KPI · 요약 문장 · 품목 표 · 관심 국가 표(품목 3개씩) · 확인할 점"""
+    items = ctx['items']
+    blocks = [{'key': 'kpis', 'height': 29}, {'key': 'sentences', 'height': _note(ctx['summary']['sentences'])}]
+    blocks.append(_table('items', [ROW_MM + LINE[7.8] * _lines(i['label'], 7.8, 26) + LINE[7] for i in items]))
+    groups = [list(range(n, min(n + 3, len(items)))) for n in range(0, len(items), 3)] or [[]]
+    header = max([1] + [_lines(items[i]['label'], 7.8, 20) for g in groups for i in g])
+    for g in groups:
+        blocks.append(_table('overview', [8.6] * len(ctx['interest_overview']), head=H3_MM + ROW_MM + LINE[7.8] * header,
+                             empty=0, group=g))
+    checks = ctx['summary']['check_points']
+    if checks:
+        blocks.append(_table('checks', [_row([(r['target'], 28), (r['content'], 145)]) for r in checks]))
+    return blocks
+
+
+def _article_blocks(articles, tail=None):
+    blocks = [_table('articles', [_article(a) for a in articles], head=0, empty=15)]
+    if tail:
+        blocks.append({'key': 'tail', 'height': 4 + LINE[7] * _lines(tail, 7, TEXT_MM)})
+    return blocks
+
+
+def layout(report_type, ctx):
+    """템플릿이 쓰는 쪽 나눔. {구역: 쪽 목록}"""
+    rest = BODY_MM - _heading()
+    if report_type in ('RPT_MONTHLY', 'RPT_QUARTERLY'):
+        summary = flow(_summary_blocks(ctx), BODY_MM - _heading('요약 · 비교 기준 · 단위 · 문장 속 수치 검증'), rest)
+        tail = ctx.get('one_off_note') if report_type == 'RPT_QUARTERLY' else None
+        articles = flow(_article_blocks(ctx['articles'], tail), BODY_MM - _heading('현지 이슈 · 기준') - 4.5, rest)
+        return {'summary': summary, 'articles': articles}
+    if report_type == 'RPT_WEEKLY':
+        s = ctx['summary']
+        issues = [_row([(r['title'], 77), (r['basis'], 38), (r['related'], 20)]) for r in s['issues']]
+        blocks = [{'key': 'kpis', 'height': 29}, {'key': 'sentences', 'height': H3_MM + _note(s['sentences'])},
+                  _table('issues', issues)]
+        if s['schedule']:
+            blocks.append(_table('schedule', [_row([(r['content'], 118), (r['related'], 32)]) for r in s['schedule']]))
+        blocks.append({'key': 'note', 'height': 3 + 2 * LINE[7]})
+        summary = flow(blocks, BODY_MM - _heading('요약') - 4, rest)
+        n = len(ctx['country_counts'])
+        grid = max(H3_MM + 9 + (n + 1) * 8.6, H3_MM + (26 * n + 4) * 80 / 300 + 8)
+        articles = flow([{'key': 'grid', 'height': grid}] + _article_blocks(ctx['articles']),
+                        BODY_MM - _heading('기사 · 기준') - 4.5, rest)
+        spikes = ctx['keyword_spikes']
+        shorts = ctx['short_news']['items']
+        keywords = flow([{'key': 'spikes', 'height': 6 + ((30 * len(spikes) + 4) * TEXT_MM / 640 if spikes else 15)},
+                         _table('shorts', [_row([(r['content'], 125)]) for r in shorts]),
+                         {'key': 'sources', 'height': H3_MM + 9 + 3 * 8.6 + LINE[7.8] + 3 + 2 * LINE[7]}],
+                        BODY_MM - _heading('급증 키워드 · 기사 분포 · 기준 설명 문구'), rest)
+        return {'summary': summary, 'articles': articles, 'keywords': keywords}
+    return {}
+
+
 # ---------- 렌더 ----------
 
 def environment():
@@ -245,7 +416,7 @@ def render(report_type, context):
     """report_type: RPT_MONTHLY · RPT_WEEKLY · RPT_QUARTERLY. 빠진 변수는 StrictUndefined로 오류."""
     if report_type not in TEMPLATES:
         raise ValueError(f'unsupported_report_type: {report_type}')
-    return environment().get_template(TEMPLATES[report_type]).render(**context)
+    return environment().get_template(TEMPLATES[report_type]).render(**context, layout=layout(report_type, context))
 
 
 def sample_context(kind):
