@@ -46,6 +46,16 @@ class SampleRenderTest(unittest.TestCase):
         del context['verification']
         with self.assertRaises(UndefinedError):
             rt.render('RPT_MONTHLY', context)
+        for kind, key in (('monthly', 'articles'), ('weekly', 'country_counts')):  # 쪽 나눔이 먼저 읽는 값
+            context = rt.sample_context(kind)
+            del context[key]
+            with self.subTest(key=key), self.assertRaises(UndefinedError):
+                rt.render(rt.KINDS[kind], context)
+
+    def test_context_layout_key_is_replaced(self):
+        context = rt.sample_context('weekly')
+        context['layout'] = 'stale'
+        self.assertEqual(pages(rt.render('RPT_WEEKLY', context)), 5)
 
 
 class VariableLengthTest(unittest.TestCase):

@@ -13,7 +13,7 @@ import re
 from datetime import date, datetime
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, UndefinedError, select_autoescape
 from markupsafe import Markup, escape
 
 TEMPLATE_DIR = Path(__file__).resolve().parents[1] / 'templates' / 'reports'
@@ -344,7 +344,7 @@ def flow(blocks, first, rest):
     return pages
 
 
-def _summary_blocks(ctx, kpi_cols=3):
+def _summary_blocks(ctx):
     """월간·분기 요약: KPI · 요약 문장 · 품목 표 · 관심 국가 표(품목 3개씩) · 확인할 점"""
     items = ctx['items']
     blocks = [{'key': 'kpis', 'height': 29}, {'key': 'sentences', 'height': _note(ctx['summary']['sentences'])}]
@@ -416,7 +416,12 @@ def render(report_type, context):
     """report_type: RPT_MONTHLY · RPT_WEEKLY · RPT_QUARTERLY. 빠진 변수는 StrictUndefined로 오류."""
     if report_type not in TEMPLATES:
         raise ValueError(f'unsupported_report_type: {report_type}')
-    return environment().get_template(TEMPLATES[report_type]).render(**context, layout=layout(report_type, context))
+    try:
+        pages = layout(report_type, context)
+    except KeyError as missing:
+        # 쪽 나눔 계산이 템플릿보다 먼저 값을 읽으므로, 빠진 변수 오류를 템플릿과 같은 종류로 맞춥니다.
+        raise UndefinedError(f'{missing.args[0]!r} is undefined') from missing
+    return environment().get_template(TEMPLATES[report_type]).render({**context, 'layout': pages})
 
 
 def sample_context(kind):
