@@ -144,6 +144,11 @@ class MonthlyRunTest(unittest.TestCase):
         self.saved_version("model_a_two_stage_202602")  # 앞 달은 다른 계열(최종 2단계 모델)로 기록
         self.assertEqual(self.parent_of_next_month(), "model_a_two_stage_202602")
 
+    def test_parent_prefers_same_family_in_the_same_month(self):
+        self.saved_version("model_a_two_stage_202602")  # 계열을 바꾼 달에 두 계열이 모두 기록됨
+        self.saved_version("lightgbm_202602")
+        self.assertEqual(self.parent_of_next_month(), "lightgbm_202602")  # 다음 달(lightgbm)의 부모는 같은 계열
+
     def test_parent_skips_version_missing_from_db(self):
         self.saved_version("lightgbm_202602")
         self.saved_version("lightgbm_202602_r2", registered=False)
