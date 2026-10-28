@@ -2,7 +2,7 @@
 import re
 from news.relevance import assess_relevance, TRADE
 
-VERSION = 'focus-v7.2.1'
+VERSION = 'focus-v7.2.2'
 
 # 이전 평가 도구용 진단 함수입니다. 최종 판정에서는 호출하지 않습니다.
 def broad_economic_overview(article, body):
@@ -47,6 +47,50 @@ def trade_evidence_text(paragraph):
                     if not IMPORT_CONTEXT.search(part) else part for part in result.split('.'))
 
 
+# 교육·모의 활동 자체를 실제 거래 근거로 세지 않습니다. 본문은 보존합니다.
+SIMULATED_ACTIVITY = re.compile(
+    r'(?<![가-힣A-Za-z])모의\s*(?:무역|수출|수입|거래|통관)|경진대회|경연대회'
+    r'|(?:예선|본선)[^.。\n]{0,40}(?:학교|학생|참가팀|개 팀)'
+    r'|학생[^.。\n]{0,60}(?:제안|발표|전략)'
+)
+TRAINING_ACTIVITY = re.compile(r'교육|강좌|강의|수강|연수|실무인력\s*양성|인력\s*양성')
+ASSESSMENT_ACTIVITY = re.compile(
+    r'(?:심사|배점|현장\s*평가|사전\s*평가)[^.。\n]{0,45}(?:\d[\d,.]*\s*(?:%|점)|비율)'
+    r'|(?:참가|교육)\s*인원'
+)
+# 교육 이력을 언급하더라도 별도로 서술한 실제 계약·이행 사실은 유지합니다.
+COMPLETED_TRADE_ACTIVITY = re.compile(
+    r'(?:수출|수입|해외|바이어)[^.。\n]{0,65}'
+    r'(?:계약(?:을|에)?\s*(?:체결|서명)(?:했|한|하였)|선적(?:했|한|하였)|납품(?:했|한|하였)|통관(?:했|한|하였))'
+    r'|(?:수출|수입)(?:했|하였|됐다|되었다)'
+    r'|(?:원산지|통관)[^.。\n]{0,40}애로[^.。\n]{0,20}해결(?:했|한|하였)'
+)
+
+
+def non_trade_activity_reason(sentence):
+    """개별 근거 문장의 모의·교육 문맥을 구분하며 기사 전체를 제외하지 않습니다."""
+    if SIMULATED_ACTIVITY.search(sentence):
+        return '모의 대회·제안·평가·수상에 관한 설명'
+    if any(not TRAINING_ACTIVITY.search(match.group())
+           for match in COMPLETED_TRADE_ACTIVITY.finditer(sentence)):
+        return None
+    if TRAINING_ACTIVITY.search(sentence):
+        return '교육·연수·인력 양성 자체에 관한 설명'
+    if ASSESSMENT_ACTIVITY.search(sentence):
+        return '심사·평가·참가 관련 수치로 실제 교역 실적이 아님'
+    return None
+
+
+def activity_sentences(paragraph):
+    # 소수점은 유지하고 문장 끝의 공백에서만 나눠, 같은 문단의 별도 거래를 살립니다.
+    return [s for s in re.split(r'(?<=[.!?。])\s+|\n', paragraph) if s.strip()]
+
+
+def actual_activity_text(paragraph):
+    return ' '.join(trade_evidence_text(s) if not non_trade_activity_reason(s) else '.'
+                    for s in activity_sentences(paragraph))
+
+
 def concrete_trade_evidence(body):
     """키워드 비율 대신 본문의 구체적 사실·품목·영향을 함께 확인합니다."""
     paragraphs = [p.strip() for p in body.splitlines() if p.strip()]
@@ -55,7 +99,7 @@ def concrete_trade_evidence(body):
     rows = []
     for index, paragraph in enumerate(paragraphs):
         original = paragraph
-        paragraph = trade_evidence_text(paragraph)
+        paragraph = actual_activity_text(paragraph)
         kinds = []
         # 수출과 무관한 매출·주가 숫자가 같은 문단에 있다는 이유로 근거로 세지 않습니다.
         if re.search(r'(?:수출|수입|무역흑자|무역적자|무역수지)[^.。\n]{0,45}?(?:\d[\d,.]*|수십|수백|수천)(?:\s*(?:억|조|만|천))*\s*(?:%|달러|원)', paragraph):
@@ -113,7 +157,7 @@ def activity_evidence(body):
     for index,paragraph in enumerate(body.splitlines(),1):
         if not paragraph.strip():
             continue
-        evidence_text = trade_evidence_text(paragraph)
+        evidence_text = actual_activity_text(paragraph)
         kinds=[kind for kind,pattern in patterns.items() if re.search(pattern,evidence_text,re.I)]
         if kinds:
             rows.append({'paragraph':index,'kinds':kinds,'text':paragraph})
@@ -138,6 +182,12 @@ def assess_focus(article, body_masked):
               else '본문에서 구체적인 거래·규제·무역지원 또는 해외 공급 활동 연결을 확인하지 못함')
     return {'accepted':accepted,'reason':reason,'version':VERSION,
             'concrete_evidence':concrete,'activity_evidence':activities,
+            'ignored_activity_evidence': [
+                {'paragraph': index, 'text': sentence, 'reason': reason}
+                for index, paragraph in enumerate(body_masked.splitlines(), 1)
+                for sentence in activity_sentences(paragraph)
+                if (reason := non_trade_activity_reason(sentence))
+            ],
             'lead_passed':lead_passed,'lead_note':lead_note,
             'trade_sentence_count':len(evidence),'sentence_count':len(sentences),
             'trade_sentence_ratio':ratio,
