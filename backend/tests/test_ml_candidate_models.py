@@ -1,4 +1,4 @@
-"""월별 LightGBM 전체 재학습(run)을 가상 데이터·SQLite로 확인한다 (실데이터 학습·MySQL 연결 없음).
+"""월별 전체 재학습(run)을 가상 데이터·SQLite로 확인한다 (실데이터 학습·MySQL 연결 없음).
 
 실행: python -m unittest backend.tests.test_ml_candidate_models
 """
@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from backend.app.db.session import make_engine, session_scope
 from backend.app.ml import candidate_models as C
+from backend.app.ml.feature_recovery import MARKET, WDI
 from backend.app.models.ml_model_version import MlModelVersion
 from backend.tests.test_ml_experiments import dataset
 
@@ -39,10 +40,25 @@ class MonthlyRunTest(unittest.TestCase):
         self.engine.dispose()
         self.temp.cleanup()
 
-    def run_month(self, month="2026-02-01", files=FILES, db=DB):
+    def run_month(self, month="2026-02-01", files=FILES, db=DB, kind="lightgbm"):
+        """리비전 · 기록 규칙은 모델과 무관해 빠른 단일 LightGBM으로 확인한다 (기본 kind는 아래 최종 모델 시험)."""
         with patch.object(C.artifacts, "input_manifest", return_value=files), \
                 patch.object(C.artifacts, "db_inputs", return_value=db):
-            return C.run(month, self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)
+            return C.run(month, self.engine, kind=kind, out_dir=self.out, cache_dir=None, n_jobs=1)
+
+    def test_default_trains_final_two_stage_model(self):
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            result = self.run_month(kind="two_stage")
+        bundle = joblib.load(self.out / "two_stage_202602.joblib")
+        self.assertEqual(set(bundle["members"]), {"ext"})  # 최종 모델 = v3 피처 단독
+        self.assertTrue(set(MARKET + WDI) & set(bundle["features"]["ext"]))  # 외부 피처를 쓴다 (가상 데이터의 상수 열은 빠짐)
+        latest = dataset().anchor.max()
+        self.assertTrue((bundle["latest"].anchor == latest).all())
+        self.assertTrue(np.isfinite(bundle["latest"][["growth", "order", "exp_12m"]].to_numpy()).all())
+        self.assertIsNotNone(result["country_ndcg_at_5"])
+        labeled = int(dataset().y_growth.notna().sum())
+        self.assertEqual(self.records(), [("two_stage_202602", "READY", labeled, "FULL_RETRAIN", "two_stage_202602.joblib")])
+        self.assertEqual(C.run.__kwdefaults__["kind"], "two_stage")  # customs_monthly는 kind 없이 부른다
 
     def first_then(self, files=FILES, db=DB):
         """기본 입력으로 한 번 학습한 뒤 바뀐 입력으로 다시 실행한 모델 이름."""
@@ -130,11 +146,11 @@ class MonthlyRunTest(unittest.TestCase):
         db, files = Mock(return_value=DB), Mock(return_value=FILES)
         with patch.object(C.artifacts, "load_training_data", return_value=loaded()) as load, \
                 patch.object(C.artifacts, "input_manifest", files), patch.object(C.artifacts, "db_inputs", db):
-            C.run("2026-02-01", self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)
+            C.run("2026-02-01", self.engine, kind="lightgbm", out_dir=self.out, cache_dir=None, n_jobs=1)
             self.assertIs(load.call_args.kwargs["engine"], self.engine)
             files.assert_not_called()  # 비교할 기록이 없는 첫 실행은 입력 파일을 다시 해시하지 않는다
             db.assert_not_called()
-            C.run("2026-02-01", self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)  # 같은 달 재실행
+            C.run("2026-02-01", self.engine, kind="lightgbm", out_dir=self.out, cache_dir=None, n_jobs=1)  # 같은 달 재실행
         db.assert_called_once_with(self.engine)
         files.assert_called_once()
         self.assertEqual(load.call_count, 1)

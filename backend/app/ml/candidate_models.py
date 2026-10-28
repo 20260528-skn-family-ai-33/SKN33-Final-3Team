@@ -6,8 +6,8 @@
 1) 스냅샷으로 한 번 저장: data/ml/candidates/<모델>_<버전>.joblib (이미 있으면 건너뜀)
     python -m backend.app.ml.candidate_models --models lightgbm random_forest --version v1 --n-jobs 4
 
-2) 월별 수집 뒤 LightGBM 전체 재학습(run): 수집 원본으로 피처를 만들어 학습하고
-   data/ml/monthly_models/lightgbm_<YYYYMM>.joblib 저장 → DB ml_model_version에 기록한다.
+2) 월별 수집 뒤 최종 모델(v3 피처 2단계 C, K=100) 전체 재학습(run): 수집 원본으로 피처를 만들어 학습하고
+   data/ml/monthly_models/two_stage_<YYYYMM>.joblib 저장 → DB ml_model_version에 기록한다.
     자동: .env에 CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run (customs_monthly의 ML 단계)
     수동: python -m backend.app.ml.candidate_models --monthly 2026-10-01
 """
@@ -29,8 +29,8 @@ from threadpoolctl import threadpool_limits
 from backend.app.ml import artifacts
 from backend.app.ml import features as F
 from backend.app.ml.experiment_metrics import evaluate_predictions
-from backend.app.ml.experiments import (BASELINES, FEATURE_SETS, KINDS, OPTIONAL, ROOT, ExperimentConfig, ModelSpec,
-                                        build_model, load_snapshot, prepare_scenarios)
+from backend.app.ml.experiments import (BASELINES, FEATURE_SETS, KINDS, OPTIONAL, ROOT, SNAPSHOT_PY311, ExperimentConfig,
+                                        ModelSpec, build_model, load_snapshot, prepare_scenarios)
 from backend.app.ml.feature_recovery import coverage
 from backend.app.ml.model_registry import read_json, register_records, registered_versions, sha256, write_json
 from backend.app.ml.runtime import runtime_versions
@@ -88,7 +88,7 @@ def _month_frame(month, cache_dir, engine=None):
     del data
     if pd.Timestamp(source["raw_period_end"]) < month:
         raise ValueError(f"수집 원본이 {source['raw_period_end']}까지만 있어 {month.date()} 수집분으로 학습할 수 없습니다")
-    frame = ds[needed_columns()]
+    frame = ds[[*needed_columns(), "exp_12m"]]  # exp_12m: 2단계 모델의 최신 예측에 함께 저장하는 최근 12개월 수출액
     frame.attrs = {"source": source}
     return frame
 
@@ -163,8 +163,10 @@ def _version_key(path, kind):
     return (match[1], int(match[2] or 1)) if match else None
 
 
-def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=2):
+def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=2):
     """customs_monthly ML 단계: 전체 재학습 → <모델>_<YYYYMM>.joblib → ml_model_version(model_a) 기록.
+
+    kind="two_stage"(기본)는 최종 모델(v3 피처 2단계, two_stage.monthly), 그 밖의 kind는 단일 모델이다.
 
     같은 달을 입력 파일 그대로 다시 실행하면 재학습하지 않고 저장해 둔 기록만 DB에 다시 보낸다(같은 내용이면 그대로 둔다).
     DB 기록이 실패해도 모델 파일과 기록 JSON은 남아 다음 재시도에서 기록만 다시 보낸다.
@@ -204,12 +206,18 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
                              if (key := _version_key(p, kind)) is not None and key < current)
             in_db = registered_versions([version for _, version in earlier], "model_a", engine)
             parent = next((version for _, version in reversed(earlier) if version in in_db), None)
-            rows = prepare_rows(_month_frame(month, cache_dir, engine))
-            evaluation = holdout_check(rows, kind, n_jobs)
-            bundle = train_full(rows["x"], rows["y"], kind, n_jobs)
+            if kind == "two_stage":
+                from backend.app.ml import two_stage  # two_stage가 이 모듈을 가져다 써 위에서 읽으면 순환 import
+                bundle, evaluation, source = two_stage.monthly(_month_frame(month, cache_dir, engine), n_jobs)
+            else:
+                rows = prepare_rows(_month_frame(month, cache_dir, engine))
+                evaluation = holdout_check(rows, kind, n_jobs)
+                bundle = train_full(rows["x"], rows["y"], kind, n_jobs)
+                bundle.update(rows["info"])
+                source = rows["source"]
             created = datetime.now(KST)
-            runtime = _runtime(kind)
-            bundle.update(rows["info"], version=name, trade_month=str(month.date()), runtime=runtime,
+            runtime = _runtime("lightgbm" if kind == "two_stage" else kind)
+            bundle.update(version=name, trade_month=str(month.date()), runtime=runtime,
                           trained_at=created.isoformat(timespec="seconds"))
             temporary = artifact.with_suffix(".joblib.tmp")
             joblib.dump(bundle, temporary)
@@ -218,10 +226,10 @@ def run(trade_month, engine=None, *, kind="lightgbm", out_dir=MONTHLY_DIR, cache
                       "created_at": created.isoformat(timespec="microseconds"), "status": "READY",
                       "artifact_path": artifact.name, "artifact_sha256": sha256(artifact),
                       "parent_version_id": parent,
-                      "training_mode": "FULL_RETRAIN", "train_start": rows["info"]["train_start"],
-                      "train_end": rows["info"]["train_end"], "train_rows": rows["info"]["train_rows"],
+                      "training_mode": "FULL_RETRAIN", "train_start": bundle["train_start"],
+                      "train_end": bundle["train_end"], "train_rows": bundle["train_rows"],
                       "data_info": _finite({"model_family": f"{kind}_full", "trade_month": str(month.date()),
-                                            "artifact_root": out_dir.as_posix(), "input_snapshot": rows["source"],
+                                            "artifact_root": out_dir.as_posix(), "input_snapshot": source,
                                             "runtime": runtime, "features_used": bundle["features"],
                                             "target_clip": bundle["target_clip"], "fit_seconds": bundle["fit_seconds"]}),
                       "evaluation": evaluation, "skip_reason": None}
@@ -239,9 +247,9 @@ def main():
     parser.add_argument("--models", nargs="+", choices=sorted(KINDS - set(BASELINES)))
     parser.add_argument("--version", default="v1")
     parser.add_argument("--n-jobs", type=int, default=2)
-    parser.add_argument("--snapshot", type=Path, default=ROOT / "data/ml/features_snapshot_py311.pkl")
+    parser.add_argument("--snapshot", type=Path, default=SNAPSHOT_PY311)
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
-    parser.add_argument("--monthly", metavar="YYYY-MM-01", help="월별 LightGBM 전체 재학습과 DB 기록을 직접 실행")
+    parser.add_argument("--monthly", metavar="YYYY-MM-01", help="월별 최종 모델(v3 피처 2단계) 전체 재학습과 DB 기록을 직접 실행")
     args = parser.parse_args()
     if args.monthly:
         print(run(args.monthly, n_jobs=args.n_jobs), flush=True)
