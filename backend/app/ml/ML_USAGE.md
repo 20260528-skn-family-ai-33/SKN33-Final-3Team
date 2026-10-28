@@ -2,7 +2,99 @@
 
 미진출 기능은 [추가 개발 계획](../../../docs/ML_NEW_MARKETS_PLAN.md)을 참고합니다. 이 코드의 후보는 기존 수출 쌍입니다.
 
-설계와 근거는 [docs/ML_PLAN.md](../../../docs/ML_PLAN.md)에 있습니다. 여기에는 실행 방법만 적습니다.
+2026-10-28 기준 최종 선정 구성은 **v3 피처를 사용하는 2단계 LightGBM C 방식(K=100) 단독 모델**입니다. 실행은 아래 최종 모델 안내를 따릅니다. [초기 설계](../../../docs/ML_PLAN.md)와 뒤쪽 HGB·SGD 안내는 이전 모델·실험을 재현할 때 참고합니다.
+
+## 최종 모델 생성·조회
+
+1단계 `LGBMRegressor`가 다음 12개월의 로그 수출 성장값을 예측하고, 2단계 `LGBMRanker`가 국가별 1단계 상위 100개 품목을 다시 정렬합니다. 후보 밖 품목은 1단계 순서로 그 아래에 둡니다. v1·v3 앙상블은 최종 구성에 포함하지 않습니다.
+
+| 조회 | 사용하는 결과 |
+|---|---|
+| 국가 → 유망 품목 | 2단계 순서 `order` |
+| 품목 → 유망 국가 | 1단계 성장값 `growth` |
+| 국가 + 품목 | 예측 증감률·최근 수출액·양방향 순위. 기존 B 모델의 시장 유형 분류는 제공하지 않음 |
+
+명령은 저장소 루트에서 실행합니다. `backend/requirements.txt` 외에 **LightGBM 설치가 필요**합니다. 저장 모델을 조회할 때는 모델의 `runtime`에 기록된 환경을 맞춥니다. 아래 확인된 파일은 Python 3.11.9, NumPy 1.24.3, pandas 2.2.3, SciPy 1.10.1, scikit-learn 1.9.1, joblib 1.6.0, LightGBM 4.7.0에서 생성됐습니다. 뒤쪽의 Python 3.12 HGB 보고서 환경은 별도입니다.
+
+```powershell
+# 새 학습 환경에 백엔드 의존성과 LightGBM 설치
+python -m pip install -r backend/requirements.txt lightgbm
+
+# 준비된 피처 스냅샷으로 최종 구성 생성
+python -m backend.app.ml.two_stage train --method C --k 100 --external first_release --version v1 --n-jobs 2
+
+# 국가 → 품목 / 품목 → 국가 / 특정 조합 조회
+python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_ext_v1.joblib --country VN --top 5
+python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_ext_v1.joblib --hs6 850760 --top 5
+python -m backend.app.ml.two_stage query --model data/ml/candidates/two_stage_c100_ext_v1.joblib --country VN --hs6 850760
+```
+
+- 학습 기본 입력은 `data/ml/features_snapshot_py311.pkl`입니다. 다른 스냅샷은 `--snapshot <경로>`로 지정합니다. 이 명령은 수출입 원본을 새로 수집하거나 피처 스냅샷을 생성하지 않습니다.
+- 최종 구성을 생성할 때 **`--external first_release`를 반드시 지정**합니다. 생략하면 기본값 `none`으로 외부 시장·WDI 피처를 제외한 v1 구성이 만들어집니다. 스냅샷의 해당 외부 피처가 전부 비어 있으면 현재 외부 원본과 `data/external/availability.csv`로 복구합니다.
+- 파일명의 `ext`는 외부 피처를 포함하는 v3 구성, 끝의 `v1`은 저장 버전명입니다. 이미 같은 파일이 있으면 덮어쓰지 않으므로 다시 생성할 때는 `--version v2`처럼 새 버전을 지정합니다.
+- 저장 파일에는 두 학습 파이프라인·피처 목록·학습 정보와 최신 기준월 예측 `latest`가 함께 들어갑니다. 조회는 저장된 예측을 읽으므로 새로운 수집 자료를 자동 반영하지 않습니다. 국가·품목명은 저장소의 기준 파일에서 읽습니다.
+- 정답은 `log1p(미래 12개월 수출액) - log1p(최근 12개월 수출액)`입니다. 출력하는 `expm1(growth) × 100`은 근사 증감률이며 성공 확률이 아닙니다.
+
+### 생성 완료 확인 기록
+
+2026-10-28 로컬 파일 점검 결과입니다. 다른 PC나 서버의 생성·배포 완료를 뜻하지 않습니다.
+
+| 항목 | 확인값 |
+|---|---|
+| 파일 | `data/ml/candidates/two_stage_c100_ext_v1.joblib` |
+| 생성 시각 | 2026-10-27 16:55:20 KST |
+| 구성 | C 방식, K=100, 외부 피처 포함, 1단계 42개 피처 |
+| 학습 | 기준월 2023-12~2025-09, 1,122,200행; 2단계 264,342행 |
+| 저장 예측 | 2026-09 기준, 51,153쌍, 217개국·3,802개 HS6 |
+| 파일 점검 | 정상 로드, 예측 `growth`·`order`에 결측·무한값 없음, 기준월·국가·품목 중복 키 없음 |
+
+`data/`의 모델·스냅샷은 Git에서 제외합니다. 코드 푸시만으로 다른 환경에 모델 파일이 전달되지는 않습니다.
+
+## 최종 모델 월별 재학습
+
+연결 경로는 `scheduler.main → customs_monthly → candidate_models.run → two_stage.monthly`입니다. `.env`에 다음과 같이 설정합니다. 환경변수에 같은 키가 있으면 `.env`보다 우선합니다.
+
+```dotenv
+CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run
+CUSTOMS_MONTHLY_DAY=10
+CUSTOMS_MONTHLY_HOUR=3
+CUSTOMS_MONTHLY_MINUTE=0
+# 누락 월 복구 시작점. 실제 운영 범위에 맞게 지정합니다.
+CUSTOMS_START_MONTH=202601
+```
+
+- 일정 기본값은 **매월 10일 03:00, Asia/Seoul**입니다. 전월 수출입 수집·검증·적재·집계·계산이 끝난 뒤 ML 단계가 실행되므로 모델 학습 시작·완료 시각은 고정되지 않습니다.
+- 2026-10-28 기준 다음 정기 실행은 **2026-11-10 03:00 KST**이며, 전월인 2026-10까지 누락·미완료 월을 오래된 순서로 처리합니다. 스케줄러 시작 20초 뒤에도 같은 복구 작업이 실행됩니다.
+- 외부 데이터 갱신은 별도 작업으로 **매월 1일 04:00 KST**입니다. 모델 재학습 일정과 구분합니다.
+- `CUSTOMS_ML_ENTRYPOINT`가 비어 있으면 `WAITING_FOR_ML`로 남습니다. 이 상태의 월은 자동 복구 대상에서 빠지므로 설정을 채운 뒤 해당 월 파이프라인을 수동 재개합니다.
+
+```powershell
+# 통합 스케줄러 상시 실행: 수출입·외부 데이터 외에 다른 등록 작업도 함께 실행
+python -m backend.app.scheduler.main
+
+# 특정 월 파이프라인 실행 또는 완료되지 않은 단계부터 재개
+python -m backend.app.scheduler.jobs.customs_monthly --month 202610
+
+# 해당 월까지 원본이 준비된 경우 ML 단계만 실행·재시도
+python -m backend.app.ml.candidate_models --monthly 2026-10-01 --n-jobs 2
+
+# 월별 생성 파일 조회 (생성 완료 후)
+python -m backend.app.ml.two_stage query --model data/ml/monthly_models/two_stage_202610.joblib --country VN
+```
+
+통합 스케줄러는 운영 환경에서 계속 실행해야 합니다. 2026-10-28 로컬 점검에서는 실행 프로세스와 월별 모델 산출물이 확인되지 않았습니다. 코드에 예약이 등록된 것과 서버에서 자동 실행 중인 것은 별도이며, 서버 실행 상태는 미확인입니다.
+
+### 월별 입력·산출물·재시도
+
+- 월별 경로는 고정 스냅샷 대신 **수집 원본에서 피처를 생성**합니다. 대상 월까지 원본이 있어야 하며 `data/ml/monthly_feature_cache/`를 사용합니다. 최종 구성은 `two_stage.MEMBERS = {"ext": "first_release"}`이고, 정답이 있는 전체 행으로 매번 **`FULL_RETRAIN`**합니다. 기존 모델에 `partial_fit`하지 않습니다.
+- `data/ml/monthly_models/two_stage_<YYYYMM>.joblib`에 모델과 최신 예측을, 같은 이름의 `.registry.json`에 입력 계보·피처·평가·DB 등록 정보를 저장합니다. DB `ml_model_version`에는 `model_key=model_a`, `model_family=two_stage_full`, `status=READY`로 기록합니다.
+- `.env`의 `MYSQL_*` 접속 설정과 `ml_model_version` 테이블이 필요합니다. 초기 테이블 정의는 [`10_ml_model_version.sql`](../../../db/mysql/init/10_ml_model_version.sql)을 참고합니다. 신규 학습 전 DB에서 부모 버전을 확인하며, 파일 생성 뒤 DB 기록이 실패하면 파일과 등록 JSON을 보존합니다.
+- 같은 달·같은 입력의 재실행은 저장 파일의 해시를 확인하고 DB 등록을 재시도합니다. 원본이 정정되면 `_r2`, `_r3` 등 새 버전을 만듭니다. 월별 등록 재시도는 위 `candidate_models --monthly` 명령을 사용합니다.
+- 평가용 모델은 마지막 정답 기준월보다 12개월 이상 앞선 기준월로 학습합니다. `.registry.json`의 `evaluation.model`은 2단계 순서 평가, `model_stage1`은 1단계 성장값 평가, `baseline_growth_12m`은 기준선입니다. 국가별 품목 추천은 `model`, 품목별 국가 추천은 `model_stage1`을 확인합니다.
+- 현재 월별 경로는 평가 결과를 기록하지만 기준선 미달을 이유로 저장·등록을 차단하지 않습니다. `READY`는 성능 승격 심사를 통과했다는 뜻이 아닙니다. 뒤쪽 HGB·SGD의 기준선 통과 규칙을 이 경로에 적용해 해석하지 않습니다.
+- 파이프라인 완료 여부는 `data/customs_load_outputs/monthly/<YYYYMM>/state.json`의 `status=SUCCESS`, `completed`의 `ml`, `ml` 결과와 실제 모델·DB 기록을 함께 확인합니다. ML만 직접 실행하면 파이프라인 체크포인트는 갱신하지 않습니다.
+
+## 공통 입력과 이전 모델 안내
 
 | 파일 | 하는 일 |
 |---|---|
@@ -10,8 +102,10 @@
 | `preprocess.py` | 외부 CSV(BACI·Comtrade·WDI)를 연 단위 시장·국가 피처 표로 전처리 |
 | `features.py` | 관세청 수출·수입, 외부 표, 단신속보, 관련 품목 묶음표로 (국가, HS6, 기준월) 학습 테이블을 만듦 |
 | `related_groups.py` | 관련 품목 묶음표 검증과 데이터 기반 후보 찾기 |
-| `market_model.py` | 모델 A(유망도)·B(시장 유형) 평가·학습, 최신 기준월 예측 저장, 조회 함수 |
-| `artifacts.py` / `model_registry.py` | A·B별 날짜 버전 파일·학습 데이터 계보 저장, DB 이력 기록·재전송 |
+| `two_stage.py` | 최종 2단계 모델 학습·조회, 월별 재학습 구성 |
+| `candidate_models.py` | 월별 최종 모델 생성·DB 등록, 단일 후보 모델 생성 |
+| `market_model.py` | 기존 HGB 모델 A(유망도)·B(시장 유형) 평가·학습·조회 |
+| `artifacts.py` / `model_registry.py` | 공통 학습 입력·계보·DB 등록과 기존 A·B 날짜 버전 관리 |
 
 ## 준비
 
@@ -30,7 +124,7 @@
    - 단신속보: `backend/app/scheduler/collectors/shortnews/shortnews_outputs/`의 최신 `*/shortnews_raw.csv`, `short_news_analysis.jsonl`(HS 태깅), `short_news_topics.jsonl`(토픽). 토픽 대분류는 `data/news_keywords/keyword_dictionary_view.csv`로 연결합니다. 국가명 표기가 국가 시드의 `name_ko`와 다르면 `features.NEWS_COUNTRY_ALIASES`에 추가합니다.
    - 관련 품목 묶음표: `backend/app/ml/reference/related_hs4.csv` (아래 "관련 품목 묶음표").
    - 환율: **예외로 DB에서 읽습니다**(`fx_daily` 월평균, `country.currency_code`). ECOS 수집기가 CSV를 남기지 않기 때문입니다. DB에 접속하지 못하면 환율 피처만 비고 학습은 계속됩니다. 2026-10-22 현재 `fx_daily`는 0건, 통화가 연결된 국가는 120개입니다.
-   - 학습 행에서 전부 결측인 피처 열(예: 환율)은 학습에서 빠지며, 실제로 쓴 열은 `metadata.json`의 `features_used`에 남습니다.
+   - 학습 행에서 전부 결측인 피처 열(예: 환율)은 학습에서 빠집니다. 실제 피처는 최종 모델 joblib의 `features`와 월별 `.registry.json`의 `data_info.features_used`, 기존 HGB의 `metadata.json.features_used`에서 확인합니다.
 
 ## 입력 파일
 
@@ -101,9 +195,13 @@ python -m backend.app.ml.preprocess          # 국가 = 국가 시드의 COUNTRY
 
 실제 공개일을 임의로 만들지 마세요. 수정된 최신 파일에 과거 최초 발표일을 붙여 과거 피처로 쓰면 안 됩니다. 기준월 이전에 공개되지 않은 값은 연결하지 않습니다. 전년값으로 만든 성장률·보충값은 전년 버전 시점도 반영합니다.
 
-2026-10-22 결정: 과거 버전 기록이 없는 현재 CSV는 **로컬 스냅샷 확보 확인일 2026-10-22**를 보수적 사용 가능일로 기록했습니다. `data/external/availability_snapshot.json`에 원본 4개 파일의 SHA-256과 대상 연도를 남겼습니다. 이는 공식 최초 발표일이 아니며, 학습·예측 기준월(마지막 2026-09)에서는 외부 시장·WDI 피처가 모두 결측입니다. 모델 A는 나머지 피처로 먼저 검증하고, 모델 B는 시장 라벨·기준값을 확보하기 전까지 미판정합니다. 원본 값이 갱신되면 이 날짜표와 해시도 새 버전에 맞춰 다시 확인해야 합니다.
+2026-10-22 초기 HGB 검증에서는 **로컬 스냅샷 확보 확인일 2026-10-22**를 보수적 사용 가능일로 기록했습니다. 당시 학습·예측 기준월(마지막 2026-09)에서는 외부 시장·WDI 피처가 모두 결측이었습니다. `data/external/availability_snapshot.json`은 그 시점 원본의 기록이며 현재 최종 모델의 외부 피처 사용 여부를 대신하지 않습니다.
 
-## 실행
+2026-10-28 확인한 로컬 `availability.csv`는 최초 공개일 근거를 사용하는 설정으로 변경돼 있고, 최종 v3 모델에는 외부 피처가 포함돼 있습니다. 다만 파일의 `evidence`에도 명시된 대로 현재 보유 값에 과거 최초 공개일을 붙인 자료와 국가별 신고 시점 차이가 있어, 과거 수정값·늦게 신고된 값이 이르게 반영될 수 있습니다. `first_release`라는 이름만으로 당시 실제 이용 가능했던 데이터가 재현됐다고 보지 않습니다. 재학습 시 실제 날짜표·원본 버전·피처 목록을 함께 확인하고, 이 설정의 평가를 엄격한 과거 시점 재현 성능으로 해석하지 않습니다.
+
+## 기존 HGB 모델 실행
+
+이 절부터 나오는 `market_model` 명령은 기존 HGB A·B 모델용입니다. 최종 2단계 모델 생성·조회는 문서 앞부분의 `two_stage` 명령을 사용합니다.
 
 2026-10-22 채택 지표는 **국가별 품목 추천 NDCG@5 (`country_ndcg_at_5`)**로 결정했습니다. 다른 지표는 국가별 또는 품목별 `precision_at_5`, `ndcg_at_5`의 네 조합 중 지정할 수 있습니다.
 
@@ -123,7 +221,7 @@ python -m backend.app.ml.market_model query --country VN --hs6 850760
 
 코드에서 쓸 때는 `market_model.top_products("VN")`, `top_countries("850760")`, `market_type_of("VN", "850760")`를 부릅니다.
 
-## 결과
+## 기존 HGB 모델 결과
 
 | 파일 | 내용 |
 |---|---|
@@ -139,7 +237,7 @@ python -m backend.app.ml.market_model query --country VN --hs6 850760
 - `segments`: 반도체(HS4 8541·8542)와 나머지 품목군의 점수·행 수입니다. 국가·품목별 후보가 10개 미만이면 점수를 만들지 않고 평가 그룹 수 0과 결측 점수를 남깁니다. `missing_training_features`는 학습 행에서 전부 결측인 피처입니다.
 - `model_b` vs `baseline_b`: 공통 행 및 동일 5개 유형의 macro-F1. `model_b_all`은 모델 전체 행 점수와 혼동행렬입니다. 비교 불가·미달 시 B 분류기를 채택하지 않습니다.
 
-## 모델 A·B 날짜 버전과 DB 이력
+## 기존 HGB 모델 A·B 날짜 버전과 DB 이력
 
 다음 학습부터 A·B를 각각 `data/ml/versions/<버전 ID>/model_a_<버전 ID>.joblib`, `model_b_<버전 ID>.joblib`로 저장합니다. 버전 ID는 **KST 생성 날짜_시간_마이크로초_충돌방지 ID**입니다. 예: `20261022_143012_123456_a1b2c3d4`. 각 파일은 해당 모델의 피처 변환기를 포함하는 파이프라인입니다.
 
@@ -173,7 +271,7 @@ python -m backend.app.ml.model_registry sync
 
 등록 성공은 SYNCED로 표시합니다. ML 입력 전처리는 계속 수집 파일을 사용하며, 환율 조회와 모델 메타정보 기록은 별도 DB 용도입니다. S3 전환은 보류 상태입니다.
 
-## 월별 캐시와 SGD 추가학습 A·B
+## 실험용 월별 캐시와 SGD 추가학습 A·B
 
 기존 HGB와 독립된 실험 계열을 `incremental.py`에 추가했습니다. **기존 HGB 가중치를 SGD로 변환하는 기능은 아닙니다.** 최초 한 번 SGD 모델을 생성한 뒤 저장된 계수·학습 카운터·전처리 통계·학습 완료 행 기록을 불러와 새 정답 행에만 `partial_fit`을 적용합니다. A는 `SGDRegressor(loss="huber")`, B는 `SGDClassifier(loss="log_loss")`이며, 두 모델 모두 날짜 버전과 DB 이력을 남깁니다.
 
@@ -205,20 +303,20 @@ models = load_models(out_dir="data/ml/incremental")
 predictions = load_predictions(out_dir="data/ml/incremental")
 ```
 
-DB 기록 재시도는 `python -m backend.app.ml.model_registry sync --data-dir data/ml/incremental`입니다. 자동 월별 스케줄 연결은 아직 하지 않았으며, 기존 PDF 노트북은 HGB 검증용입니다. SGD 결과는 해당 버전의 평가 JSON을 확인합니다. 실제 시간·추천 성능은 미측정이고 기존 HGB보다 좋다고 주장하지 않습니다.
+SGD의 DB 기록 재시도는 `python -m backend.app.ml.model_registry sync --data-dir data/ml/incremental`입니다. **SGD 실험 경로는 자동 월별 스케줄에 연결하지 않았습니다.** 최종 2단계 모델은 앞부분에 설명한 별도 월별 경로를 사용합니다. 기존 PDF 노트북은 HGB 검증용입니다. SGD 결과는 해당 버전의 평가 JSON을 확인합니다. 실제 시간·추천 성능은 미측정이고 기존 HGB보다 좋다고 주장하지 않습니다.
 
-### 모델 선택 근거와 비교할 대안
+### 초기 HGB·SGD 선택 근거와 추가학습 대안
 
 HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처리하면서 기존 scikit-learn 환경에서 사용할 수 있어 첫 기준 모델로 선택했습니다. 현재 실데이터 검증은 성장률 기준선과 관련 피처 유무 비교이며 **다른 부스팅을 모두 비교한 최적 모델 선정은 아닙니다.** SGD 선택은 월별 작은 배치에 대한 명시적 `partial_fit`, 별도 의존성 없이 A·B에 같은 재개 구조를 적용할 수 있다는 구현상 판단입니다. 선형 회귀·분류여서 비선형 상호작용 표현력이 제한되고, 순서·학습률·분포 변화에 민감합니다.
 
 | 후보 | 월별 갱신 방식 | 이 작업의 판단 |
 |---|---|---|
-| HistGradientBoosting | 전체 재학습. `warm_start`는 같은 데이터에서 부스팅 반복을 늘리는 용도 | 현재 검증된 기준 모델 유지. 피처 캐시만으로도 전처리 비용을 줄일 수 있음 |
+| HistGradientBoosting | 전체 재학습. `warm_start`는 같은 데이터에서 부스팅 반복을 늘리는 용도 | 초기 비교 기준 모델. 피처 캐시로 전처리 비용을 줄일 수 있음 |
 | SGD 회귀·분류 | 저장된 계수와 학습 상태에 `partial_fit` | 가벼운 추가학습 비교 모델. 추천 성능 우위는 미확인 |
-| LightGBM | `init_model`로 기존 부스터에서 학습 계속 | 비선형 관계를 유지하는 비교 후보. 추가 트리 누적·최근 데이터 과적합·과거 성능 저하를 검증해야 함 |
+| LightGBM | 추가학습 대안은 `init_model`; 최종 2단계 경로는 전체 재학습 | 추가 트리 누적 방식은 별도 비교 대상이며 현재 월별 실행에는 사용하지 않음 |
 | XGBoost | `xgb_model`로 기존 부스터에서 학습 계속 | 동일한 비교 후보. 새 월만 사용할지 과거 표본을 섞을지 평가 설계 필요 |
 
-성능 비교 시 입력/정답/공개 시점/12개월 gap/평가 국가·품목을 맞추고 국가별 NDCG@5를 주 지표로 사용합니다. 기존 HGB 점수와 다른 평가월의 SGD 점수를 단순 비교하지 않습니다. 학습·전처리 시간, Precision@5, 품목군별 성능, 반복 업데이트 후 과거 성능 유지도 함께 기록해야 합니다. 현재 코드는 SGD 초기 후보를 만들기 위한 것이며 최종 모델 우열은 실제 비교 전까지 미정입니다.
+성능 비교 시 입력/정답/공개 시점/12개월 gap/평가 국가·품목을 맞추고 국가별 NDCG@5를 주 지표로 사용합니다. 기존 HGB 점수와 다른 평가월의 SGD 점수를 단순 비교하지 않습니다. 학습·전처리 시간, Precision@5, 품목군별 성능, 반복 업데이트 후 과거 성능 유지도 함께 기록해야 합니다. 이 절의 SGD는 추가학습 실험용이며, 현재 최종 선정 구성은 문서 앞부분의 v3 피처 2단계 C(K=100) 모델입니다.
 
 공식 근거: [HGB warm_start 제약](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html), [SGDRegressor partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDRegressor.html), [SGDClassifier partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDClassifier.html), [LightGBM init_model](https://lightgbm.readthedocs.io/en/stable/pythonapi/lightgbm.train.html), [XGBoost 학습 재개 예제](https://xgboost.readthedocs.io/en/stable/python/examples/continuation.html).
 
@@ -230,10 +328,16 @@ HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처�
 ## 테스트
 
 ```powershell
+# 최종 모델·월별 저장/DB 등록 경로: 가상 데이터와 SQLite 사용
+python -m unittest backend.tests.test_ml_two_stage backend.tests.test_ml_candidate_models
+
+# 기존 모델 및 공통 입력 처리
 python -m unittest backend/tests/test_ml_market.py backend/tests/test_ml_sources.py backend/tests/test_external_data.py backend/tests/test_ml_temporal.py
 ```
 
-## 검증 노트북과 PDF 자동 보고서
+## 기존 HGB 검증 노트북과 PDF 자동 보고서
+
+아래 `report_workflow`는 기존 HGB 산출물을 검증합니다. 최종 2단계 모델의 검증·평가 보고서로 대신 사용하지 않습니다.
 
 ### 저장 환경과 실행 환경 일치
 
