@@ -14,7 +14,7 @@ const SOCIAL = [
 ]
 
 export default function Login() {
-  const { login, notify } = useApp()
+  const { login } = useApp()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState({})
@@ -60,7 +60,7 @@ export default function Login() {
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 26, marginTop: 16 }}>
             {SOCIAL.map(([key, letter, label, style]) => (
-              <button key={key} type="button" className="reset" aria-label={`${label}로 로그인`} onClick={() => notify('소셜 로그인은 서버 연동 준비 중입니다.')}
+              <button key={key} type="button" className="reset" aria-label={`${label}로 로그인`} onClick={() => navigate(`/login/${key}`)}
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, color: 'var(--ink)' }}>
                 <span style={{ width: 52, height: 52, borderRadius: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 19, fontWeight: 800, ...style }}>{letter}</span>
                 <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--sub)' }}>{label}</span>

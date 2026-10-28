@@ -53,7 +53,7 @@ export function FindPassword() {
 
   const submit = async e => {
     e.preventDefault()
-    if (!form.name.trim() || !isEmail(form.email)) return setError('이름과 이메일을 확인해 주세요.')
+    if (!form.name.trim() || !isEmail(form.email)) return setError('이름과 이메일(아이디)을 정확히 입력해 주세요.')
     try { await api('/auth/password-recovery/temporary-password', { method: 'POST', body: { ...form, action: 'ISSUE' } }) } catch (error) { setError(error.message) }
   }
 
