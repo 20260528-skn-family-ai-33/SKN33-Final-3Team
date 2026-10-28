@@ -60,7 +60,7 @@ class ChunkTest(unittest.TestCase):
 
 class UsageTest(unittest.TestCase):
     def test_openai_tokens_are_summed_with_cost(self):
-        res = lambda n, k: SimpleNamespace(data=[SimpleNamespace(index=i,embedding=[0.1]) for i in range(k)],
+        res = lambda n, k: SimpleNamespace(data=[SimpleNamespace(index=i,embedding=[0.1]*ne.DIMENSIONS) for i in range(k)],
                                            usage=SimpleNamespace(total_tokens=n))
         client = mock.Mock()
         client.embeddings.create.side_effect = [res(600_000, 2), res(400_000, 1)]
@@ -92,6 +92,9 @@ class UsageTest(unittest.TestCase):
 
 class NewsEmbedTest(unittest.TestCase):
     def setUp(self):
+        dimensions = mock.patch.object(ne, 'DIMENSIONS', 8)  # FakeEmbed의 실제 차원에 맞춥니다.
+        dimensions.start()
+        self.addCleanup(dimensions.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.db = f"sqlite:///{(Path(self.tmp.name) / 'news.db').as_posix()}"
         self.engine = make_engine(self.db)

@@ -27,6 +27,7 @@ class PublicSearchTest(unittest.TestCase):
             return values
         self.embed=embed
         self.pipeline.embed.side_effect=lambda api,words,**kwargs:embed(words)
+        self.pipeline.shared_embed.side_effect=lambda api,words,**kwargs:embed(words)
         self.pipeline.path.write_text(json.dumps([
             fixture.fixture.fixture.raw('001',body='반도체 수출 관련 합성 본문'),
             fixture.fixture.fixture.raw('002',body='체육 대회 안내 합성 본문'),
