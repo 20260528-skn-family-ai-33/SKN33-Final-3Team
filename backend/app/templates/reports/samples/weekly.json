@@ -1,0 +1,260 @@
+{
+  "report": {
+    "report_id": "RPT-WK-20261019-U0381",
+    "report_type": "RPT_WEEKLY",
+    "kind_label": "정기 리포트 · 주간",
+    "title": "주간 현지 이슈 브리프",
+    "period_label": "2026.10.12 ~ 10.18",
+    "cover_eyebrow": "정기 리포트 · 주간 WEEKLY",
+    "cover_lead": "관심 품목 2개 · 관심 국가 4개",
+    "footer_label": "주간 현지 이슈 브리프 · 2026.10.12~10.18 · 정기(주간)",
+    "published_at": "2026-10-19T06:00:00",
+    "is_sample": true
+  },
+  "subscription": {
+    "subscription_id": 383,
+    "label": "관심 품목 2 · 관심 국가 4 (마이페이지 리포트 구독 · 주간)"
+  },
+  "conditions": {
+    "hs_items": [
+      {
+        "hs_code": "330499",
+        "hs_ver": "HS2022",
+        "name": "기초화장품 등",
+        "label": "기초화장품",
+        "display": "기초화장품 등 HS 330499"
+      },
+      {
+        "hs_code": "190230",
+        "hs_ver": "HS2022",
+        "name": "라면 등 면류",
+        "label": "라면",
+        "display": "라면 등 HS 190230"
+      }
+    ],
+    "countries": [
+      {
+        "country_code": "US",
+        "name": "미국"
+      },
+      {
+        "country_code": "CN",
+        "name": "중국"
+      },
+      {
+        "country_code": "VN",
+        "name": "베트남"
+      },
+      {
+        "country_code": "PL",
+        "name": "폴란드"
+      }
+    ],
+    "week_start": "2026-10-12",
+    "week_end": "2026-10-18",
+    "week_label": "2026.10.12(월) ~ 10.18(일)",
+    "compare_label": "직전 주 · 직전 8주 주평균"
+  },
+  "meta": {
+    "data_basis": "KOTRA 해외시장뉴스 · 단신속보"
+  },
+  "summary": {
+    "counts": {
+      "total": 29,
+      "market": 17,
+      "short": 12,
+      "spike_keywords": 2
+    },
+    "total_note": "전주 비교 재집계 필요",
+    "spike_ratio": 2.5,
+    "issue_spike_ratio": 3,
+    "sentences": [
+      "미국 **‘K-뷰티’ 언급이 주평균의 3.5배**로 늘었습니다. 연말 쇼핑 시즌을 앞둔 재고 확보 기사가 많았습니다(기사 ①).",
+      "**통상·규제 기사 2건**: 중국 수입 화장품 등록 서류 간소화(②), 베트남 수입 식품 라벨 규정 개정 예고(③).",
+      "폴란드의 아시아 뷰티 매장 확대 소식을 확인합니다(기사 ④)."
+    ],
+    "issues": [
+      {
+        "kind": "SPIKE",
+        "title": "‘관세’ 언급 급증",
+        "country": "미국",
+        "basis": "7일 23건 · 주평균 7.5건 · ×3.1",
+        "related": "관심 국가"
+      },
+      {
+        "kind": "REGULATION",
+        "title": "수입 일반화장품 등록 서류 간소화 시행",
+        "country": "중국",
+        "basis": "KOTRA 분류 통상·규제 · 10.14",
+        "related": "기초화장품"
+      },
+      {
+        "kind": "REGULATION",
+        "title": "수입 식품 라벨 표시 규정 개정안 예고",
+        "country": "베트남",
+        "basis": "KOTRA 분류 통상·규제 · 10.16",
+        "related": "라면"
+      }
+    ],
+    "schedule": [
+      {
+        "date": "10.20(월)",
+        "content": "중국 광군제 사전 판매 시작 — 화장품 온라인 판매 동향 확인",
+        "related": "기초화장품 · 중국"
+      },
+      {
+        "date": "10.22(수)",
+        "content": "베트남 라벨 규정 의견 수렴 마감 예정",
+        "related": "라면 · 베트남"
+      },
+      {
+        "date": "11월 중순",
+        "content": "2026년 10월 수출 통계 공개 예정 → 월간 리포트에서 수치 확인",
+        "related": "전 품목"
+      }
+    ]
+  },
+  "country_counts": [
+    {
+      "country_code": "US",
+      "name": "미국",
+      "is_interest": true,
+      "market": 7,
+      "short": 4
+    },
+    {
+      "country_code": "CN",
+      "name": "중국",
+      "is_interest": true,
+      "market": 5,
+      "short": 3
+    },
+    {
+      "country_code": "VN",
+      "name": "베트남",
+      "is_interest": true,
+      "market": 3,
+      "short": 3
+    },
+    {
+      "country_code": "PL",
+      "name": "폴란드",
+      "is_interest": true,
+      "market": 2,
+      "short": 2
+    }
+  ],
+  "article_limit": 2,
+  "articles": [
+    {
+      "no": 1,
+      "article_id": null,
+      "country": "미국",
+      "item_label": "기초화장품",
+      "published_date": "2026-10-13",
+      "source_label": "KOTRA 시장뉴스",
+      "office": null,
+      "title": "미국, 연말 쇼핑 시즌 앞두고 K-뷰티 재고 확보 움직임",
+      "summary": "대형 유통사들이 블랙프라이데이를 앞두고 한국 스킨케어 제품 발주를 늘리고 있다고 전함.",
+      "source_url": null
+    },
+    {
+      "no": 2,
+      "article_id": null,
+      "country": "중국",
+      "item_label": "기초화장품",
+      "published_date": "2026-10-14",
+      "source_label": "KOTRA 시장뉴스",
+      "office": null,
+      "title": "중국, 수입 일반화장품 등록 서류 간소화 시행",
+      "summary": "일반화장품 수입 등록 시 일부 서류 제출을 생략하는 조치를 시행한다고 소개.",
+      "source_url": null
+    },
+    {
+      "no": 3,
+      "article_id": null,
+      "country": "베트남",
+      "item_label": "라면",
+      "published_date": "2026-10-16",
+      "source_label": "KOTRA 시장뉴스",
+      "office": null,
+      "title": "베트남, 수입 식품 라벨 표시 규정 개정안 예고",
+      "summary": "수입 가공식품의 베트남어 라벨 표기 항목을 늘리는 개정안을 예고.",
+      "source_url": null
+    },
+    {
+      "no": 4,
+      "article_id": null,
+      "country": "폴란드",
+      "item_label": "기초화장품",
+      "published_date": "2026-10-15",
+      "source_label": "KOTRA 단신속보",
+      "office": null,
+      "title": "폴란드 드럭스토어 체인, 아시아 뷰티 매장 확대",
+      "summary": "대형 드럭스토어 체인이 아시아 화장품 판매 매장을 추가하기로 했다는 단신.",
+      "source_url": null
+    }
+  ],
+  "keyword_spikes": [
+    {
+      "keyword": "K-뷰티",
+      "country": "미국",
+      "this_week": 9,
+      "weekly_avg_8w": 2.6,
+      "ratio": 3.5
+    },
+    {
+      "keyword": "관세",
+      "country": "미국",
+      "this_week": 23,
+      "weekly_avg_8w": 7.5,
+      "ratio": 3.1
+    },
+    {
+      "keyword": "드럭스토어",
+      "country": "폴란드",
+      "this_week": 3,
+      "weekly_avg_8w": 1.3,
+      "ratio": 2.3
+    },
+    {
+      "keyword": "라면",
+      "country": "중국",
+      "this_week": 4,
+      "weekly_avg_8w": 2.1,
+      "ratio": 1.9
+    },
+    {
+      "keyword": "편의점",
+      "country": "베트남",
+      "this_week": 3,
+      "weekly_avg_8w": 2.0,
+      "ratio": 1.5
+    }
+  ],
+  "short_news": {
+    "total": 12,
+    "items": [
+      {
+        "published_date": "2026-10-18",
+        "country": "미국",
+        "content": "연말 소비 지출 전망 상향 — 온라인 판매 증가 예상"
+      },
+      {
+        "published_date": "2026-10-17",
+        "country": "중국",
+        "content": "광군제 사전 판매 일정 공개"
+      },
+      {
+        "published_date": "2026-10-16",
+        "country": "베트남",
+        "content": "하노이 신규 대형 유통 단지 개장"
+      },
+      {
+        "published_date": "2026-10-15",
+        "country": "폴란드",
+        "content": "드럭스토어 체인 아시아 뷰티 매장 확대 (기사 ④)"
+      }
+    ]
+  }
+}

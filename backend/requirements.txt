@@ -11,6 +11,7 @@ APScheduler>=3.10,<4     # 배치 스케줄러 (scheduler/main.py). 4.x는 API�
 tzdata>=2024.1           # Windows에서 Asia/Seoul 시간대 정보
 chromadb>=1.5,<2         # vector DB (HS 코드 임베딩, hs_code_embed)
 filelock>=3,<4           # UN 수집·초기 적재 상태 파일 동시 실행 방지
+jinja2>=3.1,<4           # 정기 리포트 HTML 템플릿 (services/report_templates.py)
 
 # 수동 일일 기사 수집·article 적재
 -r app/scheduler/collectors/trade_news/requirements.txt
