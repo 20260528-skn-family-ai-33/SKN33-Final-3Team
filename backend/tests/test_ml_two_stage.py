@@ -145,10 +145,14 @@ class TwoStageTest(unittest.TestCase):
             self.assertIsNotNone(fold["model"]["country_ndcg_at_5"])
             self.assertIsNotNone(fold["baseline"]["country_ndcg_at_5"])
         self.assertEqual(result["summary"]["country_ndcg_at_5"]["valid_folds"], 2)
+        out = tempfile.mkdtemp()
         with contextlib.redirect_stdout(io.StringIO()):
-            md, js = T.kfold_report(result, tempfile.mkdtemp())
+            md, js = T.kfold_report(result, out)
+            again, _ = T.kfold_report(result, out)  # 바로 이어 돌린 실행
         self.assertIn("| 국가 NDCG@5 (채택) |", md.read_text("utf-8"))
         self.assertTrue(js.is_file())
+        self.assertNotEqual(md, again)  # 같은 분에 끝나도 앞 리포트를 덮어쓰지 않는다
+        self.assertTrue(md.is_file())
 
     def test_combine_averages_and_refuses_different_targets(self):
         bundle = T.fit(self.rows, self.columns, "B", n_jobs=1, folds=2)

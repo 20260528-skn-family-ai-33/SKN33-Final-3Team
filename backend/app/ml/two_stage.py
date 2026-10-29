@@ -32,6 +32,7 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import joblib
@@ -422,7 +423,8 @@ def kfold_report(result, out_dir, snapshot=None):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(ZoneInfo("Asia/Seoul"))
-    base = out_dir / f"model_a_two_stage_kfold_{stamp:%Y%m%d_%H%M}"
+    # 초 단위 시각 + 짧은 무작위 ID: 같은 분(같은 초)에 끝난 실행끼리 리포트를 덮어쓰지 않는다
+    base = out_dir / f"model_a_two_stage_kfold_{stamp:%Y%m%d_%H%M%S}_{uuid4().hex[:6]}"
     result = {**result, "created_at": stamp.isoformat(timespec="seconds"), "snapshot": str(snapshot) if snapshot else None}
     base.with_suffix(".json").write_text(json.dumps(result, ensure_ascii=False, indent=1), "utf-8")
     num = lambda v: "-" if v is None else f"{v:.4f}"  # noqa: E731
