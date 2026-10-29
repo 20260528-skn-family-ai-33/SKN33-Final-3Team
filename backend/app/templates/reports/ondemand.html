@@ -1,0 +1,291 @@
+{# 요청형 리포트 (RPT_ON_DEMAND). 변수 설명: templates/reports/README.md (요청형)
+   합의(#45): 선택 품목은 합산, 섹션은 고른 것만(SUMMARY는 항상), GROWTH_RISK는 기준 확정 전까지 숨김, 금액은 억 달러. #}
+{% import "_macros.html" as m %}
+{% set c = conditions %}
+{% set k = summary.kpi %}
+{% set sections = layout.sections %}
+{# ---------- 표시 문구 ---------- #}
+{% set items = c.hs_items %}
+{% set subject = '전체 품목' if not items else (items[0].label ~ (' 외 ' ~ (items | length - 1) ~ '개 품목' if items | length > 1 else '')) %}
+{% set title = subject ~ ' 수출 시장 분석' %}
+{% set has_compare = c.compare.mode != 'NONE' %}
+{% set compare_ready = has_compare and c.compare.status == 'READY' %}
+{% set pend = '비교 데이터 준비 중' %}  {# 비교를 골랐지만 비교 기간 통계가 아직 없음 (NONE과 구분) #}
+{% set paired = compare_ready and c.compare.monthly_paired %}
+{% set vs = {'YOY': '전년 동월 대비', 'YOY_PERIOD': '전년 대비', 'MOM': '전월 대비', 'CUSTOM': '비교 기간 대비', 'NONE': ''}[c.compare.mode] %}
+{% set cur = c.period.short %}
+{% set prev = c.compare.short if has_compare else '' %}
+{# 문장 속 비교 대상 (양식: “전년 74.1억 달러”·“전년 151개국”) — 표 머리글·범례는 prev(연도 등)를 씀 #}
+{% set prevw = {'YOY': '전년 동월', 'YOY_PERIOD': '전년', 'MOM': '전월', 'CUSTOM': '비교 기간', 'NONE': ''}[c.compare.mode] %}
+{% set titles = {'SUMMARY': '핵심 요약', 'KPI': '월별 수출 추이', 'TOP_COUNTRIES': '주요 수출국', 'LOCAL_ISSUES': '현지 이슈'} %}
+{% set included = {'SUMMARY': '핵심 요약', 'KPI': '주요 지표 · 월별 수출 추이', 'TOP_COUNTRIES': '주요 수출국', 'LOCAL_ISSUES': '현지 이슈'} %}
+{# ---------- 쪽 번호 (고른 섹션만, 쪽 나눔 결과대로) ---------- #}
+{% set page_count = {'SUMMARY': layout.summary | length, 'KPI': (layout.monthly | length) if 'KPI' in sections else 0,
+                     'TOP_COUNTRIES': (layout.top | length) if 'TOP_COUNTRIES' in sections else 0,
+                     'LOCAL_ISSUES': (layout.articles | length) if 'LOCAL_ISSUES' in sections else 0} %}
+{% set start = {} %}{% set no = {} %}
+{% set cursor = namespace(page=3) %}
+{% for key in sections %}
+  {% set _ = start.update({key: cursor.page}) %}{% set _ = no.update({key: loop.index}) %}
+  {% set cursor.page = cursor.page + page_count[key] %}
+{% endfor %}
+{% set p_sources = cursor.page %}
+{% set total = p_sources %}
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>{{ title }} · {{ c.period.title_label }}</title>
+<style>{{ css | safe }}</style>
+</head>
+<body>
+
+{% set report_view = dict(report, title=title, period_label=c.period.title_label,
+                          footer_label=title ~ ' · 요청형 리포트') %}
+{% call m.page(report_view, 1, total, cover=true) %}
+<div class="main">
+  <div class="eyebrow">요청형 리포트 · ON-DEMAND</div>
+  <h1>{{ title }}</h1>
+  <div class="lead">{{ ('HS ' ~ (items | map(attribute='hs_code') | join(', ')) if items else '전체 품목') }} · {{ (c.countries | map(attribute='name') | join(' · ')) if c.countries else '전체 국가' }} · {{ c.period.title_label }}{{ ' (' ~ vs ~ ')' if has_compare }}</div>
+  <div class="rule"></div>
+</div>
+{% endcall %}
+
+{% set toc = [] %}
+{% for key in sections %}{% set _ = toc.append({'title': titles[key], 'page': start[key]}) %}{% endfor %}
+{% set _ = toc.append({'title': '데이터 기준 · 출처', 'page': p_sources}) %}
+{% set compare_text = '없음' if not has_compare else (c.compare.period_label ~ ' · ' ~ c.compare.basis_label) %}
+{% set included_names = [] %}
+{% for key in sections %}{% set _ = included_names.append(included[key]) %}{% endfor %}
+{% set info = [
+  {'label': '품목', 'value': (items | map(attribute='display') | join(' · ')) if items else '전체 품목'},
+  {'label': '국가', 'value': ((c.countries | map(attribute='name') | join(' · ')) if c.countries else '전체 국가') ~ (' (수출 대상 ' ~ (k.country_count | num) ~ '개국)' if k.country_count is not none else '')},
+  {'label': '분석 기간', 'value': c.period.label ~ ' (' ~ c.period.months ~ '개월)'},
+  {'label': '비교 기간', 'value': compare_text ~ ('' if not has_compare or compare_ready else ' · 비교 데이터 준비 중')},
+  {'label': '포함 항목', 'value': included_names | join(' · ')},
+  {'label': '요청 경로', 'value': 'AI 분석 대화에서 요청' if c.request_channel == 'CHAT' else '리포트 요청 화면'},
+  {'label': '요청 지표', 'value': c.metric.label ~ ' · 현재 계산·정렬 기준: 수출액'},
+  {'label': '생성', 'value': (report.published_at | ymdhm) ~ ' · ' ~ report.report_id},
+  {'label': '데이터 기준', 'value': meta.data_basis},
+] %}
+{% set notes = ['금액은 미국 달러(USD) 기준, 단위 억 달러. 관세청 통계는 공개까지 약 1개월이 걸려 최신 월이 늦게 반영됩니다.',
+                '리포트는 생성 시점의 결과를 저장한 것으로, 다시 열어도 재계산하지 않습니다.'] %}
+{% if items | length > 1 %}{% set _ = notes.append('선택한 품목 ' ~ items | length ~ '개의 수출액을 합산한 결과입니다.') %}{% endif %}
+{% if report.is_sample %}{% set _ = notes.append('이 예시의 수치·기사는 템플릿 시연용입니다.') %}{% endif %}
+{{ m.contents(dict(report_view, period_label=title, title=c.period.title_label), toc, info, notes, total) }}
+
+{# ---------- 핵심 요약 (항상) ---------- #}
+{% for blocks in layout.summary %}
+{% call m.page(report_view, start.SUMMARY + loop.index0, total) %}
+{% if loop.first %}
+{{ m.heading(no.SUMMARY, '핵심 요약', '수치는 관세청 결과표에서 직접 넣었습니다 · ' ~ m.verified_text(verification)) }}
+{% else %}
+{{ m.heading(none, '핵심 요약 (계속)') }}
+{% endif %}
+{% for b in blocks %}
+{% if b.key == 'cards' %}
+{% set top_sub = '' %}
+{# 현재·이전 1위가 모두 있을 때만 비교 문장 (현재 수출 0이나 미준비면 숨김) #}
+{% if compare_ready and k.top1_name and k.prev_top1_name %}
+  {% set top_sub = (k.prev_top1_name ~ ' → ' ~ k.top1_name ~ '으로 1위 교체') if k.prev_top1_name != k.top1_name else (prevw ~ '에도 1위') %}
+{% endif %}
+{{ m.kpis([
+  {'label': c.period.title_label ~ ' 수출액', 'value': k.amount_usd | eok(1), 'unit': '억 달러', 'sub': (vs ~ ' ' ~ (k.change_pct | signed_pct)) if compare_ready else (pend if has_compare else '')},
+  {'label': '1위 수출국', 'value': (k.top1_name ~ ' ' ~ (k.top1_share_pct | pct)) if k.top1_name else '—', 'sub': top_sub},
+  {'label': '수출국 수', 'value': k.country_count | num, 'unit': '개국', 'sub': (prevw ~ ' ' ~ (k.prev_country_count | num) ~ '개국 · ' ~ (k.country_count_diff | signed)) if compare_ready else (pend if has_compare else '')},
+], 3) }}
+{% elif b.key == 'sentences' %}
+{{ m.sentences(summary.sentences[b.start:b.end], b.start + 1) }}
+{% elif b.key == 'metrics' %}
+<h3>주요 지표<small>분석 {{ c.period.label }}{{ ' · 비교 ' ~ c.compare.period_label if has_compare }} · 단위 억 달러</small></h3>
+{% set prev_txt = (prevw ~ ' ') if has_compare else '' %}
+{% set conc = '' %}
+{% if compare_ready and k.top3_share_pct is not none and k.prev_top3_share_pct is not none %}
+  {% set conc = ' · 집중도 완화' if k.top3_share_pct < k.prev_top3_share_pct else (' · 집중도 상승' if k.top3_share_pct > k.prev_top3_share_pct else '') %}
+{% endif %}
+{{ m.kpis([
+  {'label': '기간 수출액', 'value': k.amount_usd | eok(1), 'unit': '억 달러', 'sub': (prev_txt ~ (k.prev_amount_usd | eok(1)) ~ '억 달러') if compare_ready else (pend if has_compare else '')},
+  {'label': (vs ~ ' 증감률') if has_compare else '증감률', 'value': k.change_pct | signed_pct if compare_ready else '—', 'sub': ('증감액 ' ~ (k.change_usd | signed_eok(1)) ~ '억 달러') if compare_ready else (pend if has_compare else '비교 없음')},
+  {'label': '수출국 수', 'value': k.country_count | num, 'unit': '개국', 'sub': (vs ~ ' ' ~ (k.country_count_diff | signed) ~ '개국') if compare_ready else (pend if has_compare else '')},
+  {'label': '상위 1개국 비중', 'value': k.top1_share_pct | num(1), 'unit': '%', 'sub': (k.top1_name ~ ((' (' ~ prevw ~ ' 1위 ' ~ k.prev_top1_name ~ ' ' ~ (k.prev_top1_share_pct | pct) ~ ')') if compare_ready and k.prev_top1_name else '')) if k.top1_name else ''},
+  {'label': '수입액 (참고)', 'value': k.import_usd | eok(1), 'unit': '억 달러', 'sub': (vs ~ ' ' ~ (k.import_change_pct | signed_pct)) if compare_ready else (pend if has_compare else '')},
+  {'label': '무역수지', 'value': k.trade_balance_usd | signed_eok(1), 'unit': '억 달러', 'sub': '수출 − 수입'},
+  {'label': '상위 3개국 비중', 'value': k.top3_share_pct | num(1), 'unit': '%', 'sub': (prev_txt ~ (k.prev_top3_share_pct | pct) ~ conc) if compare_ready else (pend if has_compare else '')},
+  {'label': '월평균 수출액', 'value': k.monthly_avg_usd | eok(2), 'unit': '억 달러', 'sub': ('최고 ' ~ k.peak_month_label ~ ' ' ~ (k.peak_month_usd | eok(2))) if k.peak_month_label else ''},
+], 4) }}
+{% elif b.key == 'checks' %}
+<h3>검토 포인트{{ ' (계속)' if b.cont }}<small>수출 결정이 아니라 다음에 확인할 우선순위입니다</small></h3>
+<table>
+  <tr><th style="width:30mm">시장</th><th>확인할 내용</th><th style="width:48mm">근거</th></tr>
+  {% for r in summary.check_points[b.start:b.end] %}<tr><td class="b">{{ r.target }}</td><td>{{ r.content }}</td><td>{{ r.basis }}</td></tr>{% endfor %}
+</table>
+{% endif %}
+{% endfor %}
+{% if loop.first and has_compare and not compare_ready %}<p class="small" style="margin-top:3mm">비교 기간 데이터가 아직 준비되지 않아 비교 값은 “—”로 표시합니다.</p>{% endif %}
+{% endcall %}
+{% endfor %}
+
+{# ---------- 월별 수출 추이 (KPI 선택 시) ---------- #}
+{% if 'KPI' in sections %}
+{% set mo = monthly %}
+{% for blocks in layout.monthly %}
+{% call m.page(report_view, start.KPI + loop.index0, total) %}
+{% if loop.first %}
+{{ m.heading(no.KPI, '월별 수출 추이', c.period.title_label ~ ' 월별 수출액' ~ (' · ' ~ ('전월 비교' if c.compare.mode == 'MOM' else prevw ~ ' 같은 달 비교') if paired else (' · 비교는 기간 합계만 (월별 대응 기준 없음)' if compare_ready and c.compare.mode == 'CUSTOM' else '')) ~ ' · 단위 억 달러') }}
+{% else %}
+{{ m.heading(none, '월별 수출 추이 (계속)') }}
+{% endif %}
+{% for b in blocks %}
+{% if b.key == 'chart' %}
+{% set keys = [{'name': cur ~ ('년' if cur | length == 4 else ''), 'color': colors.accent, 'kind': 'line'}] %}
+{% set lines = [{'values': mo.current, 'color': colors.accent, 'area': true}] %}
+{% if paired %}
+  {% set _ = keys.append({'name': prev ~ ('년' if prev | length == 4 else '') ~ ' (비교)', 'color': colors.previous, 'kind': 'dash'}) %}
+  {% set _ = lines.append({'values': mo.previous, 'color': colors.previous, 'dashed': true}) %}
+{% endif %}
+{{ m.legend(keys) }}
+{% if has_values(lines | map(attribute='values')) %}
+{{ line_chart(mo.labels, lines, height=230, divisor=100000000, digits=2) }}
+{% else %}
+{{ m.pending() }}
+{% endif %}
+{% elif b.key in ('mgrid', 'mtable') %}
+{% if b.key == 'mgrid' %}<div class="grid2" style="margin-top:5mm"><div>{% else %}<h3>월별 수출액{{ ' (계속)' if b.cont }}<small>단위 억 달러</small></h3>{% endif %}
+{% set month_rows = (mo.rows + [none]) if b.key == 'mgrid' else (mo.rows + [none])[b.start:b.end] %}
+<table>
+  <tr><th>월</th><th class="r">{{ cur }}</th>{% if paired %}<th class="r">{{ prev }}</th><th class="r">증감액</th><th class="r">증감률</th>{% endif %}</tr>
+  {% for r in month_rows %}
+  {% if r is none %}
+  <tr class="total"><td>합계</td><td class="r">{{ k.amount_usd | eok(2) }}</td>{% if paired %}<td class="r">{{ k.prev_amount_usd | eok(2) }}</td><td class="r">{{ k.change_usd | signed_eok(2) }}</td><td class="r">{{ k.change_pct | change }}</td>{% endif %}</tr>
+  {% else %}
+  <tr><td>{{ r.label }}</td><td class="r">{{ r.amount_usd | eok(2) }}</td>{% if paired %}<td class="r">{{ r.prev_amount_usd | eok(2) }}</td><td class="r">{{ r.change_usd | signed_eok(2) }}</td><td class="r">{{ r.change_pct | change }}</td>{% endif %}</tr>
+  {% endif %}
+  {% endfor %}
+</table>
+{% if b.key == 'mgrid' %}</div><div>{% endif %}
+{% endif %}
+{% if b.key in ('mgrid', 'mside') %}
+{% if mo.quarters %}
+<h3 style="{{ 'margin-top:0' if b.key == 'mgrid' }}">분기별 합계<small>억 달러</small></h3>
+<table>
+  <tr><th>분기</th><th class="r">{{ cur }}</th>{% if paired %}<th class="r">{{ prev }}</th><th class="r">증감률</th>{% endif %}</tr>
+  {% for q in mo.quarters %}<tr><td>{{ q.label }}</td><td class="r">{{ q.amount_usd | eok(2) }}</td>{% if paired %}<td class="r">{{ q.prev_amount_usd | eok(2) }}</td><td class="r">{{ q.change_pct | change }}</td>{% endif %}</tr>{% endfor %}
+</table>
+{% endif %}
+{% if mo.notes %}
+<h3>읽는 법</h3>
+<div class="reading">{% for t in mo.notes %}<p>· {{ t }}</p>{% endfor %}</div>
+{% endif %}
+{% if b.key == 'mgrid' %}</div></div>{% endif %}
+{% endif %}
+{% endfor %}
+{% endcall %}
+{% endfor %}
+{% endif %}
+
+{# ---------- 주요 수출국 (TOP_COUNTRIES 선택 시) ---------- #}
+{# 비교를 골랐지만 비교 데이터가 준비 전이면(compare_ready 아님) 열은 두고 이전 값 대신 — 표시 #}
+{% if 'TOP_COUNTRIES' in sections %}
+{% set top = top_countries[:10] %}
+{% set top_rows = (top | list if top else [none]) + (['others'] if others else []) + ['total'] %}
+{% for blocks in layout.top %}
+{% call m.page(report_view, start.TOP_COUNTRIES + loop.index0, total) %}
+{% if loop.first %}
+{{ m.heading(no.TOP_COUNTRIES, '주요 수출국', c.period.title_label ~ ' 수출액 상위 ' ~ top | length ~ '개국' ~ (' · 순위 변동은 ' ~ prevw ~ ' 순위 대비' if compare_ready else '') ~ ' · 단위 억 달러') }}
+{% else %}
+{{ m.heading(none, '주요 수출국 (계속)') }}
+{% endif %}
+{% for b in blocks %}
+{% if b.key == 'ttable' %}
+<table>
+  <tr><th style="width:12mm">순위</th>{% if has_compare %}<th style="width:13mm">변동</th>{% endif %}<th>국가</th><th class="r">{{ cur }} 수출액</th><th class="r">비중</th>{% if has_compare %}<th class="r">{{ prev }} 수출액</th><th class="r">{{ vs }}</th>{% endif %}</tr>
+  {% for r in top_rows[b.start:b.end] %}
+  {% if r is none %}
+  <tr><td colspan="{{ 7 if has_compare else 4 }}" class="small">데이터 준비 중</td></tr>
+  {% elif r is mapping %}
+  <tr class="{{ 'lead' if r.rank == 1 }}"><td>{{ r.rank }}</td>{% if has_compare %}<td>{{ (r.get('rank_move') | rank_move) if compare_ready else '—' }}</td>{% endif %}<td class="b">{{ r.name }}</td>
+    <td class="r">{{ r.amount_usd | eok(2) }}</td><td class="r">{{ r.share_pct | pct }}</td>
+    {% if has_compare %}{% if compare_ready %}<td class="r">{{ r.prev_amount_usd | eok(2) }}</td><td class="r">{{ r.change_pct | change(new=r.get('is_new', false)) }}</td>{% else %}<td class="r">—</td><td class="r">—</td>{% endif %}{% endif %}</tr>
+  {% elif r == 'others' %}
+  <tr class="other"><td></td>{% if has_compare %}<td></td>{% endif %}<td>기타</td><td class="r">{{ others.amount_usd | eok(2) }}</td><td class="r">{{ others.share_pct | pct }}</td>
+    {% if has_compare %}{% if compare_ready %}<td class="r">{{ others.prev_amount_usd | eok(2) }}</td><td class="r">{{ others.change_pct | change }}</td>{% else %}<td class="r">—</td><td class="r">—</td>{% endif %}{% endif %}</tr>
+  {% else %}
+  <tr class="total"><td></td>{% if has_compare %}<td></td>{% endif %}<td>전체</td><td class="r">{{ k.amount_usd | eok(2) }}</td><td class="r">{{ '100.0%' if k.amount_usd else '—' }}</td>
+    {% if has_compare %}{% if compare_ready %}<td class="r">{{ k.prev_amount_usd | eok(2) }}</td><td class="r">{{ k.change_pct | change }}</td>{% else %}<td class="r">—</td><td class="r">—</td>{% endif %}{% endif %}</tr>
+  {% endif %}
+  {% endfor %}
+</table>
+{% elif b.key == 'tgrid' %}
+<div class="grid2">
+  <div><h3>국가별 수출액<small>{{ (cur ~ ' vs ' ~ prev ~ ' · ') if compare_ready }}억 달러</small></h3>
+    {% set bars = [] %}{% set keys = [{'name': cur, 'color': colors.accent}] %}
+    {% if compare_ready %}{% set _ = keys.append({'name': prev, 'color': colors.previous}) %}{% endif %}
+    {% for r in top %}{% set _ = bars.append({'label': r.name, 'values': [r.amount_usd, r.prev_amount_usd] if compare_ready else [r.amount_usd]}) %}{% endfor %}
+    {{ m.legend(keys) }}
+    {% if bars %}{{ hbar_chart(bars, [colors.accent, colors.previous] if compare_ready else [colors.accent], label_width=70, width=320, row_height=30, divisor=100000000, digits=2) }}{% else %}{{ m.pending() }}{% endif %}</div>
+  <div><h3>시장 집중도</h3>
+    {% set cc = concentration %}
+    {% if cc is none %}{{ m.pending() }}{% else %}
+    <table>
+      <tr><th>지표</th><th class="r">{{ cur }}</th>{% if has_compare %}<th class="r">{{ prev }}</th>{% endif %}</tr>
+      {% for label, key, unit in [('상위 1개국 비중', 'top1', '%'), ('상위 3개국 비중', 'top3', '%'), ('상위 10개국 비중', 'top10', '%'), ('수출국 수', 'countries', '개국')] %}
+      {% set v = cc[key] %}
+      <tr><td>{{ label }}</td><td class="r">{{ (v.current | pct) if unit == '%' else ((v.current | num) ~ unit if v.current is not none else '—') }}</td>{% if has_compare %}<td class="r">{{ '—' if not compare_ready else (v.previous | pct) if unit == '%' else ((v.previous | num) ~ unit if v.previous is not none else '—') }}</td>{% endif %}</tr>
+      {% endfor %}
+    </table>
+    {% if cc.get('note') %}<p class="reading" style="margin-top:3mm">{{ cc.note }} 비중 = 국가별 수출액 ÷ 전체 수출액 × 100.</p>{% endif %}
+    {% endif %}</div>
+</div>
+{% endif %}
+{% endfor %}
+{% endcall %}
+{% endfor %}
+{% endif %}
+
+{# ---------- 현지 이슈 (LOCAL_ISSUES 선택 시) ---------- #}
+{% if 'LOCAL_ISSUES' in sections %}
+{% for blocks in layout.articles %}
+{% call m.page(report_view, start.LOCAL_ISSUES + loop.index0, total) %}
+{% if loop.first %}
+{{ m.heading(no.LOCAL_ISSUES, '현지 이슈', '품목 관련 해외 기사 · ' ~ c.period.label ~ ' 기준') }}
+{{ m.article_policy(article_limit) }}
+{% else %}
+{{ m.heading(none, '현지 이슈 (계속)') }}
+{% endif %}
+{% for b in blocks %}{{ m.articles(articles[b.start:b.end], report.is_sample) }}{% endfor %}
+{% endcall %}
+{% endfor %}
+{% endif %}
+
+{# ---------- 데이터 기준 · 출처 ---------- #}
+{% call m.page(report_view, p_sources, total) %}
+{{ m.heading(sections | length + 1, '데이터 기준 · 출처', '이 리포트에 쓴 데이터와 계산 방법') }}
+<table>
+  <tr><th style="width:26mm">구분</th><th style="width:44mm">출처</th><th>기준 · 범위</th><th style="width:38mm">이 리포트에서 쓴 곳</th></tr>
+  {% for s in sources %}<tr><td class="b">{{ s.label }}</td><td>{{ s.provider }}</td><td>{{ s.scope }}</td><td>{{ s.used_in }}</td></tr>{% endfor %}
+</table>
+<h3>계산 방법</h3>
+{% set methods = [('증감률', '(분석 기간 − 비교 기간) ÷ 비교 기간 × 100 · 소수 첫째 자리 반올림' if has_compare else '비교 없음 — 증감률을 계산하지 않음'),
+                  ('비중', '국가별 수출액 ÷ 같은 조건 전체 수출액 × 100 · 표의 비중 합계는 반올림 오차 ±0.1%p'),
+                  ('수출국 수', '분석 기간 수출액이 0보다 큰 국가 수')] %}
+{% if has_compare %}{% set _ = methods.append(('순위 변동', prevw ~ ' 같은 품목·조건의 수출액 순위와 비교 · ▲ 상승 ▼ 하락 – 유지')) %}{% endif %}
+{% if c.compare.mode == 'CUSTOM' %}{% set _ = methods.append(('비교 기간', '두 기간의 월 수가 다를 수 있어 월별로 짝짓지 않고 기간 합계로만 비교')) %}{% endif %}
+{% set _ = methods.append(('품목 합산', ('선택 품목 ' ~ items | length ~ '개 · ' if items | length > 1 else '') ~ 'HS 10단위를 6단위로 합산 · 같은 거래를 중복 합산하지 않음')) %}
+{% set _ = methods.append(('정렬 기준', '수출액 (요청 지표 ' ~ c.metric.label ~ ')')) %}
+<table>
+  <tr><th style="width:36mm">지표</th><th>계산식</th></tr>
+  {% for metric, formula in methods %}<tr><td>{{ metric }}</td><td>{{ formula }}</td></tr>{% endfor %}
+</table>
+<h3>검증 · 생성 정보</h3>
+<table>
+  <tr><th style="width:36mm">항목</th><th>내용</th></tr>
+  <tr><td>표 · KPI 수치</td><td>결과표에서 코드로 직접 삽입 · 일치율 100%</td></tr>
+  <tr><td>문장 속 수치</td><td>{{ m.verified_text(verification) }}</td></tr>
+  <tr><td>생성</td><td>{{ report.published_at | ymdhm }}{{ (' · 소요 ' ~ report.elapsed_seconds ~ '초') if report.get('elapsed_seconds') }} · {{ report.report_id }} · {{ 'AI 분석 대화에서 요청' if c.request_channel == 'CHAT' else '리포트 요청 화면' }}</td></tr>
+  <tr><td>재열람</td><td>저장된 결과·PDF를 그대로 표시 · 최신 데이터로 다시 보려면 새 리포트 생성</td></tr>
+</table>
+<p class="disclaimer">본 리포트는 공개 통계와 기사로 만든 참고 자료이며 수출 결정에 대한 권고가 아닙니다. 기사 저작권은 KOTRA에 있으며 원문 링크로 확인할 수 있습니다.</p>
+{% endcall %}
+
+</body>
+</html>

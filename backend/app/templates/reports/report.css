@@ -80,6 +80,7 @@ td.b, .b { font-weight: 700; }
 .small { font-size: 7.9pt; color: var(--sub); }
 tr.total td { background: var(--head); font-weight: 700; border-bottom: 1.5px solid var(--rule); }
 tr.other td { color: var(--sub); }
+tr.lead td { background: var(--accent-soft); }  /* 요청형 주요 수출국 1위 행 */
 .info th { width: 25mm; background: var(--head); border-top: 0; color: var(--sub); font-size: 9pt; }
 .info tr:first-child th, .info tr:first-child td { border-top: 1.5px solid var(--rule); }
 .chg { font-weight: 700; white-space: nowrap; }
@@ -125,5 +126,7 @@ tr.other td { color: var(--sub); }
 .art .lk a { color: var(--accent); font-weight: 700; text-decoration: none; }
 .art .lk .x { color: var(--faint); margin-left: 2mm; font-size: 7.5pt; }
 .empty { color: var(--sub); padding: 4mm; background: var(--note); text-align: center; }
+.reading { font-size: 9pt; line-height: 1.75; }  /* 요청형 「읽는 법」·집중도 설명 */
+.reading p { margin: 0 0 1mm; }
 .disclaimer { color: var(--sub); font-size: 7.8pt; margin-top: 3mm; }
 .sample-mark { color: var(--faint); }
