@@ -15,7 +15,7 @@ from backend.app.api import news, trade
 from backend.app.api.common import clean, month_end, percentage, require, shift_month
 
 
-KINDS = {'RPT_MONTHLY': '월간', 'RPT_WEEKLY': '주간', 'RPT_QUARTERLY': '분기'}
+KINDS = {'RPT_MONTHLY': '월간', 'RPT_WEEKLY': '주간', 'RPT_QUARTERLY': '분기', 'RPT_ON_DEMAND': '요청형'}
 SOURCES = {'KOTRA_MARKET': 'KOTRA 해외시장뉴스', 'KOTRA_SHORT_NEWS': 'KOTRA 단신속보',
            'HANKYUNG': '한국경제', 'FNNEWS': '파이낸셜뉴스'}
 
@@ -41,7 +41,7 @@ def safe_url(value):
 
 def build_context(store, uid, record, document):
     kind = record['report_type']
-    require(kind in KINDS, '정기 리포트 형식을 확인하세요.')
+    require(kind in KINDS, '리포트 형식을 확인하세요.')
     saved = record['conditions_json']
     start, end = (date.fromisoformat(saved['period'][k]) for k in ('start', 'end'))
     names = {r['country_code']: r['name_ko'] for r in store.rows(select(store.t('country')))}
@@ -92,7 +92,16 @@ def build_context(store, uid, record, document):
             'country': ', '.join(names.get(c, c) for c in a.get('country_codes', [])) or '국가 미분류',
             'item_label': ', '.join(h['hs_code'] for h in a.get('hs_items', [])) or '품목 미분류'})
 
-    if kind == 'RPT_WEEKLY':
+    if kind == 'RPT_ON_DEMAND':
+        from backend.app.services.report_ondemand_context import populate
+        context['report']['kind_label'] = '요청형 리포트'
+        if not hs:
+            context['conditions']['hs_items'] = []
+        else:
+            for item in context['conditions']['hs_items']:
+                item['display'] = f"{item['name']} · HS {item['hs_code']}"
+        populate(store, saved, context, names, start, end)
+    elif kind == 'RPT_WEEKLY':
         _weekly(store, uid, saved, context, names, start, end)
     else:
         _trade(store, saved, context, names, start, end, kind)

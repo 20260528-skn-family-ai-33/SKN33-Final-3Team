@@ -1,4 +1,4 @@
-"""Render the bundled periodic HTML templates in an isolated, offline Chromium page."""
+"""Render bundled report HTML templates in an isolated, offline Chromium page."""
 import base64
 from functools import lru_cache
 from pathlib import Path

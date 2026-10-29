@@ -1,4 +1,4 @@
-"""정기 리포트 HTML 템플릿(월간·주간·분기) 렌더를 예시 데이터로 확인합니다 (DB·네트워크 없이 실행).
+"""리포트 HTML 템플릿(정기 월간·주간·분기, 요청형) 렌더를 예시 데이터로 확인합니다 (DB·네트워크 없이 실행).
 
 실행: python -m unittest backend/tests/test_report_templates.py
 """
@@ -17,7 +17,7 @@ def pages(html):
 
 class SampleRenderTest(unittest.TestCase):
     def test_samples_render_with_expected_pages(self):
-        for kind, expected in (('monthly', 7), ('quarterly', 9), ('weekly', 5)):
+        for kind, expected in (('monthly', 7), ('quarterly', 9), ('weekly', 5), ('ondemand', 7)):
             with self.subTest(kind=kind):
                 html = rt.render(rt.KINDS[kind], rt.sample_context(kind))
                 self.assertEqual(pages(html), expected)
@@ -41,7 +41,7 @@ class SampleRenderTest(unittest.TestCase):
 
     def test_unsupported_type_and_missing_variable_fail(self):
         with self.assertRaises(ValueError):
-            rt.render('RPT_ON_DEMAND', {})
+            rt.render('RPT_UNKNOWN', {})
         context = rt.sample_context('monthly')
         del context['verification']
         with self.assertRaises(UndefinedError):
@@ -264,6 +264,131 @@ class PendingValueTest(unittest.TestCase):
         self.assertGreaterEqual(rt.render('RPT_QUARTERLY', quarterly).count('데이터 준비 중'), 6)
 
 
+class OnDemandTest(unittest.TestCase):
+    """요청형(RPT_ON_DEMAND): 이양원님과 합의한 표시 규칙 (#45)."""
+
+    def render(self, update=None, **conditions):
+        context = rt.sample_context('ondemand')
+        context['conditions'].update(conditions)
+        if update:
+            update(context)
+        return rt.render('RPT_ON_DEMAND', context)
+
+    def toc(self, html):
+        return re.findall(r'<span class="t">([^<]+)</span><span>(\d+)</span>', html)
+
+    def test_sample_matches_form_and_hides_growth_risk(self):
+        html = self.render()
+        self.assertIn('기초화장품 수출 시장 분석', html)
+        self.assertIn('86.4<span class="u">억 달러</span>', html)     # USD 원값 → 억 달러
+        self.assertIn('<td class="r">16.12</td>', html)
+        # GROWTH_RISK는 골랐어도 기준 확정 전까지 목차·쪽·포함 항목에서 빠짐
+        self.assertEqual(self.toc(html), [('핵심 요약', '3'), ('월별 수출 추이', '4'), ('주요 수출국', '5'),
+                                          ('현지 이슈', '6'), ('데이터 기준 · 출처', '7')])
+        self.assertNotIn('증가 감소', html)
+        self.assertIn('핵심 요약 · 주요 지표 · 월별 수출 추이 · 주요 수출국 · 현지 이슈', html)
+
+    def test_title_follows_selected_items(self):
+        item = rt.sample_context('ondemand')['conditions']['hs_items'][0]
+        many = [item, dict(item, hs_code='330410', label='립', display='립 · HS 330410'),
+                dict(item, hs_code='3305', label='모발', display='모발 · HS 3305')]
+        html = self.render(hs_items=many)
+        self.assertIn('기초화장품 외 2개 품목 수출 시장 분석', html)
+        self.assertIn('기초화장품 등 · HS 330499 (6단위) · 립 · HS 330410 · 모발 · HS 3305', html)  # 실제 선택 목록
+        self.assertIn('선택한 품목 3개의 수출액을 합산', html)
+        self.assertIn('전체 품목 수출 시장 분석', self.render(hs_items=[]))
+
+    def test_unselected_sections_leave_toc_and_numbering(self):
+        html = self.render(sections=[])
+        self.assertEqual(self.toc(html), [('핵심 요약', '3'), ('데이터 기준 · 출처', '4')])
+        self.assertEqual(pages(html), 4)
+        self.assertNotIn('주요 지표', html)            # 주요 지표 카드는 KPI 소속
+        self.assertIn('<span class="n">02</span>데이터 기준', html)
+        html = self.render(sections=['LOCAL_ISSUES'])
+        self.assertEqual([t for t, _ in self.toc(html)], ['핵심 요약', '현지 이슈', '데이터 기준 · 출처'])
+
+    def test_compare_modes(self):
+        none = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='NONE'))
+        self.assertNotIn('2024 수출액', none)
+        self.assertNotIn('변동</th>', none)
+        self.assertIn('비교 기간</th><td>없음', none)
+        custom = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='CUSTOM',
+                                          monthly_paired=False))
+        self.assertIn('비교는 기간 합계만', custom)
+        self.assertIn('월별로 짝짓지 않고', custom)
+        self.assertNotIn('<th class="r">증감액</th>', custom)   # 월별 비교 열 없음
+        self.assertIn('2024 수출액', custom)                      # 기간 합계 비교는 표시
+
+    def test_missing_compare_data_differs_from_none(self):
+        def clear(context):
+            k = context['summary']['kpi']
+            k.update(prev_amount_usd=None, change_pct=None, prev_country_count=None, country_count_diff=None)
+        html = self.render(clear, compare=dict(rt.sample_context('ondemand')['conditions']['compare'], status='NOT_READY'))
+        self.assertIn('비교 데이터 준비 중', html)
+        self.assertIn('비교 값은 “—”로 표시', html)
+        self.assertNotIn('전년 —개국', html)
+        # 백엔드가 이전 값을 함께 넘겨도 준비 전이면 이전 값·증감·순위 변동을 보이지 않음
+        mixed = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], status='NOT_READY'))
+        self.assertNotIn('전년 1위', mixed)
+        self.assertRegex(mixed, r'증감률</div>\s*<div class="v">—<')                        # 증감률 카드
+        self.assertRegex(mixed, r'<td class="b">미국</td>\s*<td class="r">16\.12</td><td class="r">18\.7%</td>\s*'
+                                r'<td class="r">—</td><td class="r">—</td>')                  # 이전 수출액·증감
+        self.assertNotRegex(mixed, r'<td>[▲▼]\d')                                            # 순위 변동
+        self.assertRegex(mixed, r'상위 1개국 비중</td><td class="r">18\.7%</td><td class="r">—</td>')
+
+    def test_request_channel_metric_and_verification(self):
+        html = self.render(request_channel='FORM', metric={'code': 'GROWTH', 'label': '증감률'})
+        self.assertIn('리포트 요청 화면', html)
+        self.assertIn('증감률 · 현재 계산·정렬 기준: 수출액', html)
+        self.assertIn('AI 분석 대화에서 요청', self.render())
+        self.assertNotIn('화장품 수출 어디서', self.render())     # 질문 원문은 넣지 않음
+        html = self.render(lambda c: c.update(verification=None))
+        self.assertNotIn('검증 통과', html)
+        self.assertNotIn('검증했', html)                         # 검증 전에는 완료 문구가 없음
+        self.assertIn('문장 속 수치 검증 전', html)
+        self.assertIn('문장 속 수치 검증 통과', self.render())
+
+    def test_unselected_sections_need_no_data_and_unready_values_do_not_fail(self):
+        def strip(context):
+            for key in ('monthly', 'top_countries', 'others', 'concentration', 'articles', 'article_limit'):
+                del context[key]
+        self.assertEqual(pages(self.render(strip, sections=[])), 4)  # 요약 값만 있으면 됨
+        html = self.render(lambda c: c.update(concentration=None))
+        self.assertIn('데이터 준비 중', html)
+        html = self.render(lambda c: c['summary']['kpi'].update(top1_name=None, top1_share_pct=None))
+        self.assertRegex(html, r'1위 수출국</div>\s*<div class="v">—<')
+        self.assertNotIn('1위 교체', html)                                      # 현재 1위가 없으면 비교 문장 없음
+        self.assertNotIn('에도 1위', html)
+        self.assertNotIn('None', html)
+        zero = self.render(lambda c: c['summary']['kpi'].update(amount_usd=0, country_count=0, top1_name=None,
+                                                                 top1_share_pct=None, top3_share_pct=None))
+        self.assertNotIn('1위 교체', zero)                                      # 현재 수출 0 (비교 기간에는 있음)
+        self.assertNotIn('None', zero)
+        self.assertNotIn('(전년 1위', zero)
+        self.assertIn('중국 → 미국으로 1위 교체', self.render())               # 둘 다 있으면 그대로 표시
+        self.assertRegex(zero, r'<td>전체</td><td class="r">0\.00</td><td class="r">—</td>')  # 수출 0이면 비중 100% 아님
+        empty = self.render(lambda c: c['concentration']['countries'].update(current=None))
+        self.assertNotIn('—개국', empty)                                        # 값 없는 수출국 수는 — 만
+
+    def test_month_on_month_wording(self):
+        compare = dict(rt.sample_context('ondemand')['conditions']['compare'], mode='MOM')
+        html = self.render(compare=compare)
+        self.assertIn('전월 비교', html)
+        self.assertNotIn('전월 같은 달', html)
+
+    def test_long_periods_and_many_articles_add_pages(self):
+        def grow(context):
+            m = context['monthly']
+            m['labels'] = m['labels'] * 3
+            m['current'], m['previous'], m['rows'] = m['current'] * 3, m['previous'] * 3, m['rows'] * 3
+            context['articles'] = [dict(context['articles'][0], no=i) for i in range(1, 16)]
+        html = self.render(grow)
+        self.assertIn('월별 수출 추이 (계속)', html)
+        self.assertIn('현지 이슈 (계속)', html)
+        layout = rt.layout('RPT_ON_DEMAND', rt.sample_context('ondemand'))
+        self.assertEqual(layout['sections'], ['SUMMARY', 'KPI', 'TOP_COUNTRIES', 'LOCAL_ISSUES'])
+
+
 class FormatTest(unittest.TestCase):
     def test_number_filters(self):
         self.assertEqual(rt.musd(879_000_000), '879.0')
@@ -277,6 +402,15 @@ class FormatTest(unittest.TestCase):
         self.assertIn('—', rt.change(None))
         self.assertEqual(rt.ymdhm('2026-01-16T06:00:00'), '2026.01.16 06:00')
         self.assertEqual(rt.circled(3), '③')
+        self.assertEqual(rt.eok(8_640_000_000, 1), '86.4')           # 요청형: USD → 억 달러
+        self.assertEqual(rt.eok(1_612_000_000), '16.12')
+        self.assertEqual(rt.signed_eok(-240_000_000), '−2.40')
+        self.assertEqual(rt.eok(None), '—')
+        self.assertIn('▲1', rt.rank_move(1))
+        self.assertIn('▼2', rt.rank_move(-2))
+        self.assertIn('–', rt.rank_move(0))
+        self.assertIn('신규', rt.rank_move('NEW'))
+        self.assertIn('—', rt.rank_move(None))
 
     def test_text_is_escaped(self):
         self.assertEqual(str(rt.emph('<b>x</b> **강조**')), '&lt;b&gt;x&lt;/b&gt; <strong>강조</strong>')
@@ -365,6 +499,36 @@ class FormatTest(unittest.TestCase):
                                 label_width=60, width=320, row_height=30, divisor=1e6, digits=1))
         for x, text in re.findall(r'<text x="([\d.]+)"[^>]*>([\d,.]+)</text>', svg):
             self.assertLessEqual(float(x) + rt._em(text) * 9.5, 320)
+
+    def test_axis_labels_do_not_overlap_on_long_periods(self):
+        labels = [f'{y % 100}.1' if i == 1 else f'{i}' for y in (2023, 2024, 2025) for i in range(1, 13)]  # 36개월
+        svg = str(rt.line_chart(labels, [{'values': [1e8] * 36}]))
+        shown = re.findall(r'<text x="([\d.]+)" y="\d+" text-anchor="middle" class="axis">([^<]+)<', svg)
+        self.assertLess(len(shown), 36)
+        self.assertTrue({'23.1', '24.1', '25.1'} <= {t for _, t in shown})       # 연도 라벨은 남김
+        spans = [(float(x) - rt._em(t) * 4.75, float(x) + rt._em(t) * 4.75) for x, t in shown]
+        self.assertTrue(all(a[1] <= b[0] for a, b in zip(spans, spans[1:])))   # 서로 겹치지 않음
+        short = str(rt.line_chart([str(i) for i in range(1, 14)], [{'values': [1e8] * 13}]))
+        self.assertEqual(short.count('text-anchor="middle" class="axis"'), 13)   # 13개월은 모두 표시
+
+    def test_small_ranges_keep_distinct_axis_ticks(self):
+        # 월 100만~210만 달러를 억 달러로 그리면 눈금 간격이 0.005 → 모두 0.0이 되면 안 됨
+        svg = str(rt.line_chart([str(i) for i in range(1, 13)], [{'values': [1e6 + i * 1e5 for i in range(12)]}],
+                                divisor=1e8, digits=2))
+        ticks = re.findall(r'text-anchor="end" class="axis">([^<]+)<', svg)
+        self.assertEqual(ticks, ['0.005', '0.010', '0.015', '0.020', '0.025'])
+        left = float(re.search(r'<line x1="([\d.]+)"', svg).group(1))
+        self.assertGreaterEqual(left - 6, rt._em('0.025') * 9.5)                 # 늘어난 자릿수도 왼쪽 안에 들어감
+        quarter = str(rt.bar_chart(['a', 'b'], [0.3e6, 0.9e6], ['#000', '#000']))
+        self.assertEqual(re.findall(r'class="axis">([^<]+)<', quarter)[:5], ['0', '0.25', '0.50', '0.75', '1'])
+        self.assertEqual(rt._tick_digits([0, 2.5, 5]), 1)                       # 기존 간격은 그대로 한 자리
+        for low, high in ((2e5, 4e5), (1e3, 5e3), (10, 50), (1, 3)):            # 월 수십만 ~ 몇 달러
+            svg = str(rt.line_chart(['1', '2'], [{'values': [low, high]}], divisor=1e8, digits=2))
+            ticks = re.findall(r'text-anchor="end" class="axis">([^<]+)<', svg)
+            self.assertEqual(len(set(ticks)), len(ticks), ticks)
+        tiny = str(rt.bar_chart(['a', 'b'], [0.1, 0.17], ['#000', '#000'], divisor=1e8))  # 0 다음 눈금 5e-10
+        ticks = re.findall(r'class="axis">([^<]+)<', tiny)[:5]
+        self.assertEqual(len(set(ticks)), len(ticks), ticks)
 
     def test_nice_scale_covers_data(self):
         low, high, ticks = rt.nice_scale([602e6 / 1e6, 879.0])

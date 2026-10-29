@@ -1,6 +1,6 @@
-# 정기 리포트 HTML 템플릿
+# 리포트 HTML 템플릿 (정기·요청형)
 
-`리포트_양식_최신판.pdf`의 월간·주간·분기 양식을 Jinja2 HTML로 옮긴 템플릿입니다. 수치·문장·기사·목록은 모두 컨텍스트 변수로 받고,
+`리포트_양식_최신판.pdf`의 월간·주간·분기·요청형 양식을 Jinja2 HTML로 옮긴 템플릿입니다. 수치·문장·기사·목록은 모두 컨텍스트 변수로 받고,
 템플릿에는 고정 문구(제목 틀·계산식 설명·면책 문구)만 있습니다. A4 한 쪽이 `<section class="page">` 하나이며, 그래프는 JavaScript 없는
 SVG라 HTML → PDF 변환에서도 그대로 나옵니다.
 
@@ -9,6 +9,7 @@ SVG라 HTML → PDF 변환에서도 그대로 나옵니다.
 | `monthly.html` | 월간 (`RPT_MONTHLY`): 표지 · 목차 · 이달의 요약 · 관심 품목별 상세(품목 수만큼) · 현지 이슈 · 데이터 기준 |
 | `quarterly.html` | 분기 (`RPT_QUARTERLY`): 표지 · 목차 · 분기 요약 · 분기·월별 추이 · 관심 국가 추이(8개 분기 / 3개월) · 주요 수출국 · 현지 이슈 · 데이터 기준 |
 | `weekly.html` | 주간 (`RPT_WEEKLY`): 표지 · 목차 · 이번 주 요약 · 관심 품목·국가 기사 · 급증 키워드·기사 분포 (수출 통계 없음) |
+| `ondemand.html` | 요청형 (`RPT_ON_DEMAND`): 표지 · 목차 · 핵심 요약 · 월별 수출 추이 · 주요 수출국 · 현지 이슈 · 데이터 기준 (고른 섹션만, 아래 「요청형」) |
 | `_macros.html` | 공통 부품: 쪽 틀(머리말·꼬리말) · 표지 · 목차 · KPI 카드 · 요약 문장 · 기사 카드 · 출처 표 · 범례 |
 | `report.css` | 양식 디자인 (강조색 `#006849`, `layout.json`과 같음) |
 | `samples/*.json` | 양식 PDF 수치로 만든 예시 컨텍스트 (미리보기·테스트용) |
@@ -21,6 +22,7 @@ SVG라 HTML → PDF 변환에서도 그대로 나옵니다.
 python -m backend.app.services.report_templates monthly --out tmp/report_preview/monthly.html
 python -m backend.app.services.report_templates quarterly --out tmp/report_preview/quarterly.html
 python -m backend.app.services.report_templates weekly --out tmp/report_preview/weekly.html
+python -m backend.app.services.report_templates ondemand --out tmp/report_preview/ondemand.html
 # 다른 데이터로: --data 경로/컨텍스트.json
 
 python -m unittest backend/tests/test_report_templates.py
@@ -68,7 +70,7 @@ python -m unittest backend/tests/test_report_templates.py
 
 ## 컨텍스트 변수
 
-세 종류 공통:
+정기 세 종류 공통 (요청형은 아래 「요청형」 절):
 
 | 변수 | 예시 | 설명 |
 |---|---|---|
@@ -118,16 +120,54 @@ python -m unittest backend/tests/test_report_templates.py
 `keyword_spikes[{keyword, country, this_week, weekly_avg_8w, ratio}]`(`ratio ≥ spike_ratio`면 “급증”),
 `short_news{total, items[{published_date, country, content}]}`.
 
+## 요청형 (`RPT_ON_DEMAND`)
+
+사용자가 고른 조건(품목·국가·기간·비교·섹션)으로 만드는 리포트입니다. 이양원님과 합의한 표시 규칙(#45):
+
+| 항목 | 규칙 |
+|---|---|
+| 품목 | 선택 품목을 **합산**한 결과 하나. 제목은 1개면 「기초화장품 수출 시장 분석」, 여러 개면 「기초화장품 외 2개 품목 …」, 없으면 「전체 품목 …」. 보고서 정보에는 실제 선택 목록 전체 |
+| 섹션 | `SUMMARY`(핵심 요약)는 항상. `KPI` → 주요 지표 카드 8개 + 월별 수출 추이 쪽, `TOP_COUNTRIES` → 주요 수출국 쪽, `LOCAL_ISSUES` → 현지 이슈 쪽. 고르지 않은 섹션은 목차·쪽 번호·포함 항목에서 빠짐 |
+| `GROWTH_RISK` | 증가율 순위의 최소 규모 기준이 정해질 때까지 **골라도 섹션 전체를 숨김** (예측 문구 포함). 기준이 정해지면 양식 6쪽을 추가 |
+| 비교 | 백엔드가 확정한 분석·비교 기간을 그대로 표시. `NONE`이면 비교 열·비교 선·순위 변동을 숨김. 비교를 골랐지만 비교 기간 통계가 없으면(`status`≠`READY`) “비교 데이터 준비 중”으로 NONE과 구분. `CUSTOM`은 월별로 짝짓지 않고(`monthly_paired: false`) 기간 합계만 비교 |
+| 요청 경로 | 질문 원문은 넣지 않음. `request_channel`이 `CHAT`이면 「AI 분석 대화에서 요청」, 그 밖은 「리포트 요청 화면」 |
+| 요청 지표 | `metric`은 계산·정렬에 쓰지 않으므로 「요청 지표 ○○ · 현재 계산·정렬 기준: 수출액」으로 구분 표시 |
+| 금액 | USD 원값을 받아 템플릿에서만 **억 달러**로 표시 (`eok` 필터: 8640000000 → `86.4`·`86.40`). 정기는 백만 달러 유지 |
+| 숨김 | 검토 포인트·요약 문장·읽는 법·집중도 설명은 값이 없으면(null·빈 목록) 생략. 수치와 기사 연결 요약(RAG)은 이번 템플릿에 없음 |
+
+| 변수 | 설명 |
+|---|---|
+| `report{report_id, report_type, kind_label, published_at, elapsed_seconds?, is_sample}` | 제목·표지 문구는 템플릿이 품목·기간으로 만듭니다 |
+| `conditions.hs_items[]` | `{hs_code, hs_ver, name, label, display}` (빈 목록 = 전체 품목) |
+| `conditions.countries[]` | `{country_code, name}` (빈 목록 = 전체 국가) |
+| `conditions.period` | `{start, end, label: '2025.01 ~ 2025.12', months: 12, title_label: '2025년 연간', short: '2025'}` |
+| `conditions.compare` | `{mode: NONE·MOM·YOY·YOY_PERIOD·CUSTOM, status: READY·NOT_READY, period_label, basis_label: '전년 같은 기간 자동 설정', short: '2024', monthly_paired}` |
+| `conditions.sections[]` | 사용자가 고른 섹션 코드 (`KPI`·`TOP_COUNTRIES`·`GROWTH_RISK`·`LOCAL_ISSUES`) |
+| `conditions.request_channel`, `conditions.metric` | `CHAT`·`FORM` / `{code, label}` |
+| `meta.data_basis`, `verification` | 정기와 같음 (`verification: null`이면 “검증 전”) |
+| `summary.kpi` | `amount_usd, prev_amount_usd, change_usd, change_pct, country_count, prev_country_count, country_count_diff, top1_name, top1_share_pct, prev_top1_name, prev_top1_share_pct, import_usd, import_change_pct, trade_balance_usd, top3_share_pct, prev_top3_share_pct, monthly_avg_usd, peak_month_label, peak_month_usd` (모르는 값은 `null` → `—`) |
+| `summary.sentences[]`, `summary.check_points[{target, content, basis}]` | 요약 문장 · 검토 포인트 (null이면 생략) |
+| `monthly` | `{labels[], current[], previous[], rows[{label, amount_usd, prev_amount_usd, change_usd, change_pct}], quarters[{label, amount_usd, prev_amount_usd, change_pct}], notes[]}` — 월 수 자유(14행 넘으면 표를 쪽으로 나눔), `quarters`는 완전한 분기만 |
+| `top_countries[]` | `{rank, rank_move(정수·0·'NEW'·null), name, country_code, amount_usd, share_pct, prev_amount_usd, change_pct, is_new?}` (상위 10개) · `others` (없으면 `null`) |
+| `concentration` | `{top1, top3, top10, countries}` 각 `{current, previous}` + `note?` |
+| `articles[]`, `article_limit` | 정기와 같음 |
+| `sources[]` | `{label, provider, scope, used_in}` (데이터 기준 쪽 표, 「이 리포트에서 쓴 곳」 칸 포함) |
+
 ## 기존 리포트 생성과의 관계
 
-`api/reports.py::generate`는 정기 3종에만 `services/report_context.py::build_context`를 호출합니다.
+`api/reports.py::generate`는 정기 3종과 요청형에 `services/report_context.py::build_context`를 호출합니다.
 실제 조회 값으로 구성한 컨텍스트를 `report.content_json.template_pdf`에 버전과 함께 저장하고,
 `api/files.py::report_pdf` → `services/report_pdf.py::template_pdf`에서 이 HTML을 Chromium으로 PDF 변환합니다.
-요청형 PDF는 기존 ReportLab 경로, DOCX는 기존 `summary.docx`와 `sections[]` 경로를 그대로 사용합니다.
+요청형 PDF도 HTML 템플릿으로 생성하며, 템플릿 컨텍스트가 없는 과거 문서의 ReportLab 경로는 유지합니다.
+DOCX는 기존 `summary.docx`와 `sections[]` 경로를 그대로 사용합니다.
 다운로드는 저장된 파일을 읽으며 재조회·재생성하지 않습니다. XLSX는 기존 `sections[].tables` 내보내기 범위를 유지합니다.
 
 ### 실제 데이터 연결 범위
 
+- 요청형: `report_ondemand_context.py`가 저장된 품목·국가 범위를 합산해 수출액·수입액·무역수지·월평균·국가 수·집중도·국가 순위 변동을 계산합니다. 합산은 SQL의 OR 조건으로 처리하여 같은 품목을 중복 합산하지 않습니다. 금액은 USD로 저장하고 요청형 PDF에서만 억 달러로 표시합니다.
+- 요청형 비교는 미리보기에서 확정한 NONE/MOM/YOY/YOY_PERIOD/CUSTOM 기간을 사용합니다. CUSTOM은 기간 합계만 비교하며 월별로 짝짓지 않습니다. 비교 기간이 미검증이면 비교값은 null이며 비교 없음과 구분합니다. 이전 기간에만 존재하는 국가도 기타의 비교 합계에 포함합니다.
+- 국가 순위는 수출액이 양수인 국가를 대상으로 하며 기존 결과표와 PDF에 같은 기준을 적용합니다. 기사 출처는 실제 포함된 기사의 SOURCE 코드로 구성하여 문서 메타데이터에도 반영합니다.
+- 요청형 SUMMARY는 항상 표시하며 KPI/TOP_COUNTRIES/LOCAL_ISSUES는 선택 시에만 표시합니다. GROWTH_RISK는 최소 규모 기준 확정 전까지 PDF에서 숨깁니다. 요약·검토 문장과 문장 검증 결과는 임의 생성하지 않습니다. 요청 경로는 CHAT/FORM만 사용하며 질문 원문은 템플릿에 전달하지 않습니다. 요청 지표는 표시만 하고 계산·정렬은 수출액을 유지합니다.
 - 월간: 품목별 수출액, 전월/전년 대비, 13개월 추이와 1년 전 비교, 국가별 추이·순위·비중.
 - 분기: 3개월 합계, 전분기/전년 동분기 대비, 8개 분기·3개월 추이, 국가별 추이·순위.
 - 국가 조건은 기존 문서와 같게 적용합니다. 선택 국가가 있으면 그 국가 범위 안의 금액·순위·비중입니다.
@@ -159,10 +199,10 @@ Linux 배포 환경은 `python -m playwright install --with-deps chromium`으로
 ### 검증
 
 ```powershell
-python -m unittest backend.tests.test_report_templates backend.tests.test_periodic_report_pdf backend.tests.test_report_pagination
-# 실제 Chromium으로 3종 생성 → 저장 → API 다운로드 → 재다운로드까지 검증 (SQLite/fakeredis)
+python -m unittest backend.tests.test_report_templates backend.tests.test_periodic_report_pdf backend.tests.test_report_pagination backend.tests.test_ondemand_report_pdf
+# 실제 Chromium으로 정기 3종·요청형 생성 → 저장 → API 다운로드 → 재다운로드 검증 (SQLite/fakeredis)
 $env:RUN_REPORT_PDF_TESTS = '1'
-python -m unittest backend.tests.test_periodic_report_pdf backend.tests.test_report_pagination
+python -m unittest backend.tests.test_periodic_report_pdf backend.tests.test_report_pagination backend.tests.test_ondemand_report_pdf
 ```
 
 `REPORT_PDF_QA_DIRECTORY`를 지정하면 위 통합 테스트의 가상 검증 데이터 PDF/HTML을 해당 폴더에 남깁니다.
@@ -171,5 +211,5 @@ python -m unittest backend.tests.test_periodic_report_pdf backend.tests.test_rep
 목차·보고서 정보는 내용 높이에 따라 여러 쪽으로 나뉩니다. 긴 품목·국가 목록은 내용을 생략하지 않고
 `(계속)` 행으로 이어집니다. 본문 시작 쪽, 목차의 대상 쪽, 전체 페이지 수는 늘어난 앞부분 쪽 수를
 반영해 함께 계산합니다. 기본 글꼴·색상·표·여백은 그대로 사용합니다.
-`test_report_pagination`은 세 종류의 품목 1·10·30개 및 긴 정보 100개 조건에서 인쇄 영역과 목차 대상을
-확인합니다. `REPORT_PAGINATION_QA_DIRECTORY`를 지정하면 월간 10·30개 검증 PDF/HTML을 남깁니다.
+`test_report_pagination`은 네 종류의 품목 1·10·30개 및 긴 정보 100개 조건에서 인쇄 영역과 목차 대상을
+확인합니다. `REPORT_PAGINATION_QA_DIRECTORY`를 지정하면 월간·요청형 10·30개 검증 PDF/HTML을 남깁니다.

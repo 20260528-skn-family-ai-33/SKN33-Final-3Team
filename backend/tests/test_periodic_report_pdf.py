@@ -197,7 +197,7 @@ class PeriodicContextTest(unittest.TestCase):
         self.assertEqual(ctx['articles'], [])
         self.assertIn('조건에 맞는 관련 기사가 없습니다', render('RPT_WEEKLY', ctx))
 
-    def test_requested_pdf_and_docx_do_not_use_html_renderer(self):
+    def test_legacy_snapshot_pdf_and_docx_do_not_use_html_renderer(self):
         uid = int(self.signup())
         _, document, _ = self.context(uid, self.record())
         with patch('backend.app.services.report_pdf.template_pdf', side_effect=AssertionError('unexpected HTML')):

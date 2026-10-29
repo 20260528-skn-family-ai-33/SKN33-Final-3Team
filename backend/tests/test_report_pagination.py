@@ -19,11 +19,11 @@ def large_context(kind, count, long_metadata=False):
         items.append({**copy.deepcopy(base), 'hs_code': str(330400+i),
                       'label': label, 'display': label + (' 긴 품목 설명' * 20 if long_metadata else '')})
     ctx['conditions']['hs_items'] = items
-    if kind != 'weekly':
+    if kind in ('monthly', 'quarterly'):
         ctx['items'] = items
         for row in ctx['interest_overview']:
             row['values'] = [copy.deepcopy(row['values'][0]) for _ in items]
-    elif long_metadata:
+    elif kind == 'weekly' and long_metadata:
         # Weekly uses label rather than display in its information table.
         ctx['conditions']['hs_items'] = [{**i, 'label': i['display']} for i in items]
     return ctx
@@ -97,15 +97,15 @@ class ContentsPaginationTest(unittest.TestCase):
                         for entry in result['toc']:
                             self.assertIn(entry['title'], entry['heading'], entry)
                         # Export the two previously failing cases and check physical pages.
-                        if kind == 'monthly' and count in (10, 30):
+                        if kind in ('monthly', 'ondemand') and count in (10, 30):
                             pdf = page.pdf(format='A4', prefer_css_page_size=True, print_background=True,
                                            margin={'top':'0','bottom':'0','left':'0','right':'0'})
                             self.assertEqual(len(PdfReader(io.BytesIO(pdf)).pages), result['count'])
                             output = os.environ.get('REPORT_PAGINATION_QA_DIRECTORY')
                             if output:
                                 folder = Path(output); folder.mkdir(parents=True, exist_ok=True)
-                                (folder / f'monthly-{count}-items.pdf').write_bytes(pdf)
-                                (folder / f'monthly-{count}-items.html').write_text(html, encoding='utf-8')
+                                (folder / f'{kind}-{count}-items.pdf').write_bytes(pdf)
+                                (folder / f'{kind}-{count}-items.html').write_text(html, encoding='utf-8')
 
 
 if __name__ == '__main__':
