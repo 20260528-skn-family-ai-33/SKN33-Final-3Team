@@ -14,6 +14,7 @@ from sqlalchemy import URL
 
 from backend.app.scheduler.jobs import customs_monthly as monthly
 from backend.app.services.customs_stage import ValidationError
+from backend.tests.scheduler_jobs import BASE_JOBS
 
 
 class MonthlyPipelineTest(unittest.TestCase):
@@ -477,10 +478,7 @@ class MonthlyScheduleTest(unittest.TestCase):
                 patch.object(shared.refresh, "run_refresh") as refresh, patch.object(shared.embed, "run") as embed:
             scheduler = shared.build_scheduler()
         jobs = {job.id: job for job in scheduler.get_jobs()}
-        self.assertEqual(set(jobs), {"hs_code_refresh", "hs_code_refresh_retry", "hs_code_embed",
-                                    "customs_monthly", "customs_monthly_startup",
-                                    "un_data_monthly", "un_data_startup", "un_data_resume",
-                                    "fx_daily_load", "fx_daily_startup", "external_refresh", "trade_news_daily"})
+        self.assertEqual(set(jobs), BASE_JOBS)
         self.assertIs(jobs["customs_monthly"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly_startup"].func, monthly.startup_job)
         self.assertIs(jobs["customs_monthly"].args[0], scheduler)
