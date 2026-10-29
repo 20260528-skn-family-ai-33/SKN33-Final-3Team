@@ -78,7 +78,7 @@
 {% for blocks in layout.summary %}
 {% call m.page(report_view, start.SUMMARY + loop.index0, total) %}
 {% if loop.first %}
-{{ m.heading(no.SUMMARY, '핵심 요약', '수치는 관세청 결과표에서 직접 넣고, 문장 속 수치는 결과표와 대조해 검증했습니다 · ' ~ m.verified_text(verification)) }}
+{{ m.heading(no.SUMMARY, '핵심 요약', '수치는 관세청 결과표에서 직접 넣었습니다 · ' ~ m.verified_text(verification)) }}
 {% else %}
 {{ m.heading(none, '핵심 요약 (계속)') }}
 {% endif %}

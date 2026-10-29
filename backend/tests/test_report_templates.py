@@ -336,6 +336,9 @@ class OnDemandTest(unittest.TestCase):
         self.assertNotIn('화장품 수출 어디서', self.render())     # 질문 원문은 넣지 않음
         html = self.render(lambda c: c.update(verification=None))
         self.assertNotIn('검증 통과', html)
+        self.assertNotIn('검증했', html)                         # 검증 전에는 완료 문구가 없음
+        self.assertIn('문장 속 수치 검증 전', html)
+        self.assertIn('문장 속 수치 검증 통과', self.render())
 
     def test_unselected_sections_need_no_data_and_unready_values_do_not_fail(self):
         def strip(context):
