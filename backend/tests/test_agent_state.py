@@ -95,13 +95,29 @@ class AgentStateTest(unittest.TestCase):
         r = ToolResult(status='OK', digest={'total_usd': 1.5, 'top': [{'country': 'VN', 'usd': 2}]})
         self.assertEqual(ToolResult.model_validate_json(r.model_dump_json()), r)
 
-    def test_long_history_fits_state(self):
+    def test_largest_allowed_state_fits(self):
         q = '가' * 4000  # 허용된 최대 질문, 한글 12KB
-        turns = [{'question': q, 'intent': 'STATISTICS', 'answered_at': datetime(2026, 10, 29, 9, n)} for n in range(5)]
+        full = {'hs_items': [{'hs_code': f'3304{n:02}', 'hs_ver': 'HS2022'} for n in range(5)],
+                'country_codes': [f'C{n:02}' for n in range(20)], 'period': {'start': '2024-10-01', 'end': '2025-09-01'}}
+        turns = [{'question': q, 'intent': 'STATISTICS', 'conditions': full, 'summary': '가' * 200,
+                  'answered_at': datetime(2026, 10, 29, 9, n)} for n in range(5)]
+        tasks, results = [], {}
+        for t in ('t1', 't2', 't3'):
+            tasks.append({**CAUSE, 'task_id': t, 'question': q, 'conditions': full, 'steps': [
+                {**s, 'step_id': s['step_id'].replace('t1', t), 'depends_on': [d.replace('t1', t) for d in s.get('depends_on', [])]}
+                for s in CAUSE['steps']]})
+            digest = {'s': '가' * 2700}  # digest 상한에 가까운 크기
+            results[f'{t}.sql'] = {'status': 'OK', 'result_id': 'r1', 'digest': digest}
+            results[f'{t}.news'] = {'status': 'OK', 'article_ids': list(range(20)), 'digest': digest}
+            results[f'{t}.chart'] = {'status': 'OK', 'chart': chart(
+                task_id=t, title='가' * 40, labels=[f'2025-{n:03}' for n in range(60)],
+                series=[{'name': '가' * 40, 'values': [123456789012.5] * 60} for _ in range(5)])}
         s = AgentState.model_validate({'input': {'job_id': '11', 'session_id': '3', 'user_id': 7, 'question': q,
-                                                 'context': {'session_id': '3', 'recent': turns},
-                                                 'received_at': datetime(2026, 10, 29, 9)}})
+                                                 'context': {'session_id': '3', 'conditions': full, 'recent': turns},
+                                                 'received_at': datetime(2026, 10, 29, 9)},
+                                       'plan': {'tasks': tasks}, 'results': results})
         self.assertEqual(len(s.input.context.recent[0].question), 200)
+        self.assertEqual(len(s.plan.tasks[0].question), 500)
 
     def test_conditions(self):
         with self.assertRaises(ValidationError):

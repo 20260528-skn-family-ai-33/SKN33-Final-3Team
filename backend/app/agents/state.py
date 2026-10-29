@@ -12,10 +12,13 @@ from pydantic_core import to_json
 from backend.app.schemas.rag import ArticlePeriod, CountryCode, HsProduct, _unique
 
 SCHEMA_VERSION = 2
-MAX_STATE_BYTES = 64 * 1024      # 체크포인트 하나의 상한. 넘으면 원본을 state에 넣은 것이다.
+# 체크포인트 하나의 상한. 넘으면 원본을 state에 넣은 것이다.
+# 모든 칸을 허용 최대로 채운 state(질문 4,000자, 하위 질문 3개, digest 6개, 차트 3개)가 약 100KB라 128KB로 둔다.
+MAX_STATE_BYTES = 128 * 1024
 MAX_DIGEST_BYTES = 8 * 1024      # tool 결과 중 LLM에 넘기는 요약의 상한
 HISTORY_TURNS = 5
-HISTORY_QUESTION_CHARS = 200     # 5건 요약에 남기는 질문 길이. 4,000자 질문 6개(한글 약 72KB)가 state 상한을 넘지 않게 자른다
+HISTORY_QUESTION_CHARS = 200     # 5건 요약에 남기는 질문 길이. 원문은 MySQL에 있다
+TASK_QUESTION_CHARS = 500        # 플래너가 나눈 하위 질문 문장 길이. 원 질문은 input.question에 있다
 MAX_TASKS = 3                    # 복합 질문을 나눈 하위 질문 수
 MAX_CHART_LABELS = 60            # 차트 하나의 x축 값 수
 MAX_CHART_SERIES = 5
@@ -42,6 +45,10 @@ StepStatus = Literal['PENDING', 'RUNNING', 'DONE', 'FAILED', 'SKIPPED']
 
 def _json_size(value) -> int:
     return len(to_json(value))
+
+
+def _truncate(limit):
+    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
 
 
 class Model(BaseModel):
@@ -93,7 +100,7 @@ class Interests(Model):
 
 class TurnSummary(Model):
     """답변 1건의 요약. summary는 compose가 쓴 문장, 조건은 주 하위 질문의 구조화된 값이다."""
-    question: Annotated[str, BeforeValidator(lambda v: v[:HISTORY_QUESTION_CHARS] if isinstance(v, str) else v)]
+    question: Annotated[str, _truncate(HISTORY_QUESTION_CHARS)]
     intent: Intent
     conditions: Conditions | None = None
     summary: Annotated[str, Field(max_length=200)] = ''
@@ -137,7 +144,7 @@ class Task(Model):
     """복합 질문을 나눈 하위 질문 하나. 첫 번째가 주 의도이며 최근 검색 조건·요약의 기준이다."""
     task_id: str
     intent: Intent
-    question: Annotated[str, Field(min_length=1, max_length=4000)]   # 플래너가 나눈 하위 질문 문장
+    question: Annotated[str, _truncate(TASK_QUESTION_CHARS), Field(min_length=1)]   # 플래너가 나눈 하위 질문 문장
     steps: list[Step] = Field(default_factory=list, max_length=6)
     conditions: Conditions | None = None        # check_conditions가 채움
     applied_defaults: list[str] = Field(default_factory=list)   # "적용한 조건" 표시용
