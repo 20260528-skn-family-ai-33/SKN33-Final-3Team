@@ -167,6 +167,45 @@ class ReportSubscriptionTest(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]['conditions_json']['period'], {'start':'2025-12-15','end':'2025-12-21'})
 
+    def test_invalid_weekly_config_preserves_other_cycles_and_recovers(self):
+        self.register(); self.news_runs()
+        for index, (value, order) in enumerate((
+                ('', ('WEEKLY', 'MONTHLY', 'QUARTERLY')),
+                ('HANKYUNG,TYPO', ('MONTHLY', 'QUARTERLY', 'WEEKLY')))):
+            with self.subTest(value=value, order=order):
+                uid = int(self.signup(f'cycles{index}@example.org'))
+                for code in order:
+                    since = '2025-10-21T00:00:00Z' if code == 'QUARTERLY' else '2025-12-16T00:00:00Z'
+                    self.subscribe(uid, code, enabled_since=since)
+                self.settings.values['API_WEEKLY_NEWS_SOURCES'] = value
+                with self.assertLogs('backend.app.api.subscriptions', level='WARNING') as logged:
+                    with self.engine.begin() as c:
+                        self.assertEqual(enqueue_due(Store(self.app.state.database, c), datetime(2026,1,20), user_id=uid), 2)
+                self.assertEqual(len(logged.output), 1)
+                self.assertIn('API_WEEKLY_NEWS_SOURCES', logged.output[0])
+                self.assertIn('weekly', logged.output[0])
+                # Inspect after commit: monthly/quarterly inserts were not rolled back.
+                with self.engine.begin() as c:
+                    t = self.meta.tables['report']
+                    self.assertEqual(set(c.execute(select(t.c.report_type).where(t.c.user_id == uid)).scalars()),
+                                     {'RPT_MONTHLY', 'RPT_QUARTERLY'})
+                self.settings.values['API_WEEKLY_NEWS_SOURCES'] = 'HANKYUNG,FNNEWS'
+                with self.engine.begin() as c:
+                    store = Store(self.app.state.database, c)
+                    self.assertEqual(enqueue_due(store, datetime(2026,1,20), user_id=uid), 1)
+                    self.assertEqual(enqueue_due(store, datetime(2026,1,20), user_id=uid), 0)
+
+    def test_invalid_weekly_config_does_not_affect_monthly_only_worker(self):
+        self.register(); uid = self.signup()
+        self.subscribe(uid, 'MONTHLY', enabled_since='2025-12-16T00:00:00Z')
+        self.settings.values['API_WEEKLY_NEWS_SOURCES'] = 'TYPO'
+        with patch('backend.app.api.worker.run_once', return_value=False), \
+                patch('backend.app.api.subscriptions.datetime', wraps=datetime) as clock:
+            clock.now.return_value = datetime(2026,1,15,tzinfo=ZoneInfo('Asia/Seoul'))
+            run_loop(self.app.state.database, self.settings, once=True)
+        with self.engine.begin() as c:
+            self.assertEqual(len(Store(self.app.state.database, c).rows(select(self.meta.tables['report']))), 1)
+
     def test_weekly_enqueue_is_scoped_idempotent_and_preserves_conditions(self):
         self.register(); self.news_runs()
         first = int(self.signup()); second = int(self.signup('second@example.org'))

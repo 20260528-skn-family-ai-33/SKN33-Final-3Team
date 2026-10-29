@@ -1,4 +1,5 @@
 """한국 시간의 정기 발행일과 적재 완료를 확인하는 리포트 발행 트리거."""
+import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from sqlalchemy import select
@@ -85,10 +86,21 @@ def enqueue_due(store, at=None, *, user_id=None):
     if user_id is not None: stmt=stmt.where(subscription.c.user_id==user_id)
     rows=store.rows(stmt)
     if not rows: return 0
+    weekly_config_valid=True
+    if any(row['period_code']=='WEEKLY' and row['filters_json'].get('enabled_since') for row in rows):
+        try:
+            weekly_sources(store)
+        except ValueError as exc:
+            # A weekly-only configuration error must not roll back other cycles.
+            # Log once per scheduling pass, not once per subscriber or missed week.
+            weekly_config_valid=False
+            logging.getLogger(__name__).warning(
+                'weekly_subscription_schedule_skipped: %s; monthly and quarterly scheduling continues', exc)
     count=0
     for row in rows:
         saved=row['filters_json']; code=row['period_code']
         if code not in ('WEEKLY','MONTHLY','QUARTERLY'): continue
+        if code=='WEEKLY' and not weekly_config_valid: continue
         if not saved.get('enabled_since'):
             # 기존 구독을 임의로 과거 발행하지 않는다. API-50 재저장으로 기준을 확정한다.
             continue
