@@ -105,8 +105,8 @@ def market_yearly(market, countries=None):
 def wdi_yearly(wdi, countries=None):
     """연도·국가별 거시 지표 (로그 변환).
 
-    GDP는 인구보다 늦게 발표되므로, 지표마다 비어 있으면 직전 해 값을 WDI_FILL_YEARS년까지 이어 쓰고 filled=True로 표시한다.
-    값이 하나도 없는 (국가, 연도)는 만들지 않는다.
+    일부 지표만 비어 있으면 직전 해 값을 WDI_FILL_YEARS년까지 이어 쓰고 filled=True로 표시한다.
+    원본 지표가 전부 빈 (국가, 연도)는 보충해 만들지 않는다. join_known이 공개일을 확인해 이전 연도 자료를 연결한다.
     """
     w = wdi if countries is None else wdi[wdi.country_code.isin(countries)]
     with np.errstate(divide="ignore"):
@@ -120,9 +120,11 @@ def wdi_yearly(wdi, countries=None):
     years = range(w.year.min(), w.year.max() + 1) if len(w) else []
     full = pd.MultiIndex.from_product([sorted(w.country_code.unique()), years], names=["country_code", "year"])
     w = w.set_index(["country_code", "year"]).reindex(full)[values]
+    observed = w.notna().any(axis=1)
+    # 달력상 빈 연도도 인덱스에는 유지해야 2년 전 값이 '직전 해'로 보충되지 않는다.
     filled = w.groupby(level="country_code").ffill(limit=WDI_FILL_YEARS)
     filled["filled"] = (w.isna() & filled.notna()).any(axis=1)
-    return filled.dropna(how="all", subset=values).reset_index()[["year", "country_code", *values, "filled"]]
+    return filled.loc[observed].reset_index()[["year", "country_code", *values, "filled"]]
 
 
 def check_versions(external_dir):

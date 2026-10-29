@@ -135,6 +135,27 @@ class PreprocessTest(unittest.TestCase):
         self.assertTrue(np.isnan(w.loc[("TW", 2024), "log_gdp"]))  # 이을 과거 값이 없음
         self.assertNotIn(("TW", 2023), w.index)  # 값이 전혀 없던 해는 만들지 않음
 
+    def test_wdi_skips_empty_years_without_bridging_calendar_gaps(self):
+        wdi = pd.DataFrame([
+            (2023, "VN", 100.0, 5.0, 10.0, 10.0),
+            (2024, "VN", None, None, None, None),
+            (2025, "VN", None, None, 12.0, None),
+            (2026, "VN", None, None, None, None),
+        ], columns=["year", "country_code", "gdp_usd", "gdp_growth_pct", "population", "gdp_per_capita_usd"])
+        result = pp.wdi_yearly(wdi).set_index("year")
+        self.assertEqual(result.index.tolist(), [2023, 2025])
+        self.assertTrue(np.isnan(result.loc[2025, "log_gdp"]))  # 2023년 값을 2025년까지 보충하지 않음
+        self.assertFalse(result.loc[2025, "filled"])
+
+    def test_wdi_without_any_values_leaves_features_missing(self):
+        wdi = pd.DataFrame([(2026, "VN", None, None, None, None)],
+                           columns=["year", "country_code", "gdp_usd", "gdp_growth_pct", "population", "gdp_per_capita_usd"])
+        yearly = pp.wdi_yearly(wdi)
+        self.assertTrue(yearly.empty)
+        rows = pd.DataFrame({"anchor": pd.to_datetime(["2027-01-01"]), "country_code": ["VN"]})
+        result = F._add_wdi(rows, yearly, availability=None)
+        self.assertTrue(result[["log_gdp", "gdp_growth", "log_population", "log_gdp_pc"]].isna().all().all())
+
     def test_growth_after_baci_compares_comtrade_with_comtrade(self):
         tmp = Path(tempfile.mkdtemp())
         (tmp / "baci").mkdir()

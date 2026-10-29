@@ -10,9 +10,10 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
+import numpy as np
 
 from backend.app.db.session import make_engine, session_scope
-from backend.app.ml import preprocess as pp
+from backend.app.ml import features as F, preprocess as pp
 from backend.app.models.base import Base
 from backend.app.models.batch import BatchRun
 from backend.app.scheduler import main as sched
@@ -131,6 +132,38 @@ class ExternalRefreshTest(unittest.TestCase):
             ("BACI", "2025", "2027-02-01"), ("COMTRADE", "2025", "2027-02-01"), ("WDI", "2025", "2027-02-01")])
         # WDI 2026은 값이 없어 날짜를 미리 붙이지 않는다
         self.assertEqual(dates.evidence[0], "BACI V202601 릴리스 노트, 2026-01-22")
+
+    def test_empty_wdi_year_uses_published_prior_year_until_values_arrive(self):
+        (self.tmp / "wdi").mkdir()
+        path = self.tmp / "wdi/wdi_2025_2026.csv"
+        raw = pd.DataFrame([
+            (2025, "VN", 100.0, 3.0, 10.0, 10.0),
+            (2026, "VN", None, None, None, None),
+        ], columns=["year", "country_code", "gdp_usd", "gdp_growth_pct", "population", "gdp_per_capita_usd"])
+        raw.to_csv(path, index=False)
+        (self.tmp / "availability.csv").write_text(
+            "dataset,source,year,available_from,evidence\nwdi,WDI,2025,2026-06-01,test\n", "utf-8")
+        (self.tmp / "availability_snapshot.json").write_text(
+            json.dumps({"policy": "first_release_dates", "files": []}), "utf-8")
+        anchors = pd.DataFrame({"anchor": pd.to_datetime(["2026-05-01", "2026-06-01", "2027-01-01", "2027-02-01"]),
+                                "country_code": ["VN"] * 4})
+
+        job.record_availability(date(2027, 1, 1))
+        data = pp.load_external(self.tmp)  # 해시 확인과 실제 WDI 전처리까지 수행
+        self.assertEqual(data["wdi_yearly"].year.tolist(), [2025])
+        self.assertEqual(data["availability"].year.tolist(), [2025])
+        result = F._add_wdi(anchors, data["wdi_yearly"], data["availability"])
+        self.assertTrue(pd.isna(result.log_gdp.iloc[0]))  # 이전 연도라도 공개 전이면 사용하지 않음
+        np.testing.assert_allclose(result.log_gdp.iloc[1:], np.log(100.0))
+
+        # 빈 연도의 실제 값이 나중에 도착하면 그때 사용 가능일을 기록한다.
+        raw.loc[raw.year == 2026, ["gdp_usd", "gdp_growth_pct", "population", "gdp_per_capita_usd"]] = [200., 4., 20., 10.]
+        raw.to_csv(path, index=False)
+        job.record_availability(date(2027, 2, 1))
+        data = pp.load_external(self.tmp)
+        self.assertEqual(data["availability"].set_index("year").loc[2026, "available_from"], "2027-02-01")
+        result = F._add_wdi(anchors, data["wdi_yearly"], data["availability"])
+        np.testing.assert_allclose(result.log_gdp.iloc[2:], np.log([100., 200.]))
 
     def test_availability_left_alone_for_other_policy(self):
         self.write_availability(policy="snapshot_dates")
