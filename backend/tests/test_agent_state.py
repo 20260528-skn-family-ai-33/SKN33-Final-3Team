@@ -1,10 +1,12 @@
 """에이전트 state 계약: 체크포인트 왕복, 하위 질문 계획, 되묻기 일관성, 차트 모양, 크기 상한."""
 import unittest
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import ValidationError
 
-from backend.app.agents.state import AgentState, ChartSpec, MAX_DIGEST_BYTES, SessionContext, TurnSummary
+from backend.app.agents.state import (AgentState, ChartSpec, Conditions, MAX_DIGEST_BYTES, SessionContext, ToolResult,
+                                      TurnSummary)
 
 CAUSE = {'task_id': 't1', 'intent': 'CAUSE', 'question': '베트남 화장품 수출 왜 늘었어?', 'steps': [
     {'step_id': 't1.check', 'tool': 'check_conditions'},
@@ -28,7 +30,7 @@ def state(tasks=(CAUSE,), **extra):
 
 
 def chart(**extra):
-    return {'chart_id': 'c1', 'type': 'line', 'title': '베트남 화장품 수출 추이', 'unit': 'USD', 'source': '관세청',
+    return {'chart_id': 'c1', 'task_id': 't1', 'type': 'line', 'title': '베트남 화장품 수출 추이', 'unit': 'USD', 'source': '관세청',
             'result_id': 'r1', 'labels': ['2025-08', '2025-09'], 'series': [{'name': '수출액', 'values': [1.0, 2.0]}], **extra}
 
 
@@ -53,7 +55,6 @@ class AgentStateTest(unittest.TestCase):
         self.assertEqual([x.step_id for x in s.ready_steps()], ['t2.check'])
         s.plan.tasks[0].steps[3].status = 'PENDING'  # skip_blocked를 빠뜨려도 SKIPPED 의존은 실행되지 않는다
         self.assertEqual([x.step_id for x in s.ready_steps()], ['t2.check'])
-
 
     def test_plan_rules(self):
         with self.assertRaises(ValidationError):  # 하위 질문 사이 의존
@@ -88,6 +89,12 @@ class AgentStateTest(unittest.TestCase):
             state(results={'t1.sql': {'status': 'OK', 'result_id': 'r1', 'digest': {'rows': rows}}})
         self.assertGreater(len(str(rows)), MAX_DIGEST_BYTES)
 
+    def test_digest_only_takes_json_values(self):
+        # Decimal은 JSON 왕복에서 문자열이 되므로 tool이 숫자로 바꿔 넣어야 한다
+        with self.assertRaises(ValidationError): ToolResult(status='OK', digest={'total_usd': Decimal('1.5')})
+        r = ToolResult(status='OK', digest={'total_usd': 1.5, 'top': [{'country': 'VN', 'usd': 2}]})
+        self.assertEqual(ToolResult.model_validate_json(r.model_dump_json()), r)
+
     def test_long_history_fits_state(self):
         q = '가' * 4000  # 허용된 최대 질문, 한글 12KB
         turns = [{'question': q, 'intent': 'STATISTICS', 'answered_at': datetime(2026, 10, 29, 9, n)} for n in range(5)]
@@ -96,6 +103,13 @@ class AgentStateTest(unittest.TestCase):
                                                  'received_at': datetime(2026, 10, 29, 9)}})
         self.assertEqual(len(s.input.context.recent[0].question), 200)
 
+    def test_conditions(self):
+        with self.assertRaises(ValidationError):
+            Conditions.model_validate({'hs_items': [{'hs_code': '330499', 'hs_ver': 'HS2022'}] * 2})
+        with self.assertRaises(ValidationError): Conditions.model_validate({'country_codes': ['VN', 'VN']})
+        # 기사 기간은 일 단위
+        period = Conditions.model_validate({'article_period': {'start': '2026-07-29', 'end': '2026-10-28'}}).article_period
+        self.assertEqual(period.start.day, 29)
 
     def test_context_keeps_last_five_turns_and_latest_conditions(self):
         context = SessionContext(session_id='3')

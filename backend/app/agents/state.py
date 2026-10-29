@@ -4,12 +4,12 @@ LangGraph 그래프의 state이며, langgraph-checkpoint-redis가 Redis에 체�
 질문·답변·결과표·리포트의 원본은 MySQL이며, state에는 그 ID와 작은 요약만 담는다.
 """
 from datetime import date, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, model_validator
 from pydantic_core import to_json
 
-from backend.app.schemas.rag import CountryCode, HsProduct
+from backend.app.schemas.rag import ArticlePeriod, CountryCode, HsProduct, _unique
 
 SCHEMA_VERSION = 2
 MAX_STATE_BYTES = 64 * 1024      # 체크포인트 하나의 상한. 넘으면 원본을 state에 넣은 것이다.
@@ -45,7 +45,8 @@ def _json_size(value) -> int:
 
 
 class Model(BaseModel):
-    # 노드는 필드를 여러 개 바꾼 뒤 반환한다. 검증은 체크포인트에 쓰고 읽을 때 한 번(model_validate / model_validate_json).
+    # 노드는 필드를 여러 개 바꾼 뒤 반환한다. 검증은 LangGraph가 노드 입력으로 state를 만들 때 돈다.
+    # 체크포인터는 model_validate를 부르지 않으므로, 다음 노드가 없는 finalize는 저장 전에 직접 model_validate한다.
     model_config = ConfigDict(extra='forbid')
 
 
@@ -67,9 +68,16 @@ class Conditions(Model):
     country_codes: list[CountryCode] = Field(default_factory=list, max_length=20)
     period: Period | None = None            # 수출입 기간(기본 최근 12개월)
     compare_period: Period | None = None    # 미입력이면 전년 동기, 입력하면 그 기간
-    article_period: Period | None = None    # 기사 기간(기본 최근 3개월)
+    article_period: ArticlePeriod | None = None   # 기사 발행일 기간, 일 단위(기본 최근 3개월)
     trade_flow: Literal['EXPORT', 'IMPORT'] = 'EXPORT'
     ranking_group: Literal['COUNTRY', 'HS6'] | None = None
+
+    @model_validator(mode='after')
+    def check_duplicates(self):
+        # RagRequest도 중복을 거부한다. 되묻기 답을 병합할 때 중복을 걸러야 한다.
+        _unique([(p.hs_code, p.hs_ver) for p in self.hs_items], '품목·버전')
+        _unique(self.country_codes, '국가')
+        return self
 
 
 class Interests(Model):
@@ -113,7 +121,7 @@ class AgentInput(Model):
 class Step(Model):
     step_id: str            # 하위 질문 안에서만이 아니라 계획 전체에서 고유. 예: 't1.sql'
     tool: ToolName
-    args: dict[str, Any] = Field(default_factory=dict)   # 조건 밖의 tool별 인자(지표, 차트 유형 등)
+    args: dict[str, JsonValue] = Field(default_factory=dict)   # 조건 밖의 tool별 인자(지표, 차트 유형 등)
     depends_on: list[str] = Field(default_factory=list)
     status: StepStatus = 'PENDING'
     attempts: int = Field(default=0, ge=0, le=3)
@@ -165,7 +173,7 @@ class DataMeta(Model):
 class Choice(Model):
     choice_id: str
     label: str
-    patch: dict[str, Any]   # 고르면 해당 하위 질문의 Conditions에 병합할 값
+    patch: dict[str, JsonValue]   # 고르면 해당 하위 질문의 Conditions에 병합할 값
 
 
 class Pending(Model):
@@ -187,8 +195,10 @@ class ChartSeries(Model):
 
 
 class ChartSpec(Model):
-    """프론트 charts.jsx(LineChart·Donut 등) props와 같은 모양으로 보낸다."""
+    """answer.charts[] 형식. charts.jsx props와는 다르므로 프론트가 바꿔 그린다
+    (LineChart는 yTicks·색 추가, Donut은 [label, 비율, 색], None 칸은 선을 끊음)."""
     chart_id: str
+    task_id: str
     type: Literal['line', 'bar', 'grouped_bar', 'donut']   # 추이 / 순위 / 두 시점 비교 / 비중
     title: Annotated[str, Field(max_length=40)]
     unit: str
@@ -219,7 +229,7 @@ class ToolResult(Model):
     period: Period | None = None                  # 기준 기간
     source: str | None = None                     # 출처
     checks: list[str] = Field(default_factory=list)   # 통과한 자체 검증
-    digest: dict[str, Any] | None = None          # LLM 입력용: 합계·상위 행 등
+    digest: dict[str, JsonValue] | None = None    # LLM 입력용: 합계·상위 행 등. Decimal·date는 tool이 int·float·str로 바꿔 넣는다
     error: str | None = None                      # 사용자에게 보여도 되는 사유
 
     @model_validator(mode='after')
@@ -259,6 +269,7 @@ class AgentState(Model):
     plan: Plan | None = None
     data_meta: DataMeta | None = None
     pending: Pending | None = None
+    # 이미 MAX_ASKS_PER_CONDITION번 물은 조건은 올리지 말고 "조건을 확인해 다시 질문해 주세요"로 끝낸다
     ask_counts: dict[str, Annotated[int, Field(ge=0, le=MAX_ASKS_PER_CONDITION)]] = Field(default_factory=dict)
     round_started_at: datetime | None = None   # 진행 시간 표시 기준. 워커 시작·되묻기 답 때 다시 잰다
     results: dict[str, ToolResult] = Field(default_factory=dict)  # step_id → 결과
