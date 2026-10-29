@@ -30,6 +30,8 @@ python -c "import lightgbm; print(lightgbm.__version__)"
 | 예측 증감률 | 1단계 성장값 `growth` |
 | 국가 + 품목 | 예측 증감률·최근 수출액·양방향 순위. 기존 B 모델의 시장 유형 분류는 제공하지 않음 |
 
+> **추가 예정: B 모델 시장 유형 분류.** 국가 + 품목 조회에 시장 유형 라벨을 더하고, 근거로 예상 성장률과 이전 12개월 수출액을 함께 반환해야 합니다. 이 기능이 나오기 전까지 채팅은 시장 유형 질문(`MARKET_TYPE`)에 "지원 예정" 안내만 합니다([채팅 에이전트 설계](../../../docs/AGENT_DESIGN.md) D-23).
+
 명령은 저장소 루트에서 실행합니다. LightGBM은 `backend/requirements.txt`에 포함돼 있습니다(월별 재학습을 돌리는 서버에도 필요). 저장 모델을 조회할 때는 모델의 `runtime`에 기록된 환경을 맞춥니다. 아래 확인된 파일은 Python 3.11.9, NumPy 1.24.3, pandas 2.2.3, SciPy 1.10.1, scikit-learn 1.9.1, joblib 1.6.0, LightGBM 4.7.0에서 생성됐습니다. 뒤쪽의 Python 3.12 HGB 보고서 환경은 별도입니다.
 
 ```powershell
