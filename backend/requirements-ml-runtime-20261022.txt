@@ -1,0 +1,7 @@
+# 2026-10-22 모델·features_snapshot.pkl 저장 환경. Python 3.12.x 사용.
+# 새 모델 버전의 실제 환경은 해당 버전 metadata.json/runtime-requirements.txt 참조.
+numpy==2.5.4
+pandas==3.0.1
+scipy==1.18.1
+scikit-learn==1.9.1
+joblib==1.6.0

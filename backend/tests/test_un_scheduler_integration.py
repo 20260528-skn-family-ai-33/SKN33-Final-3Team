@@ -10,6 +10,7 @@ from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_ERROR
 from backend.app.scheduler import main as scheduler
 from backend.app.scheduler.jobs import un_data_refresh as job
 from backend.app.scheduler.jobs import un_data_resume as resume
+from backend.tests.scheduler_jobs import BASE_JOBS, SHORTNEWS_JOBS
 
 
 class SchedulerIntegrationTest(unittest.TestCase):
@@ -25,7 +26,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         with mock.patch.dict('os.environ', {'SHORTNEWS_DAILY_ENABLED': 'false'}):
             s=scheduler.build_scheduler(self.state,Path('custom-scope'),Path('custom-env'))
         jobs={j.id:j for j in s.get_jobs()}
-        self.assertEqual(len(jobs),11)  # 단신속보는 명시적으로 활성화한 경우만 등록
+        self.assertEqual(set(jobs), BASE_JOBS)  # 단신속보는 명시적으로 활성화한 경우만 등록
         start=jobs['un_data_startup'].trigger.run_date
         self.assertTrue(before+timedelta(seconds=9)<=start<=datetime.now(scheduler.KST)+timedelta(seconds=11))
         j=jobs['un_data_monthly'];self.assertEqual(j.max_instances,1)
@@ -41,7 +42,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         with mock.patch.dict('os.environ', {}, clear=True):
             s = scheduler.build_scheduler(self.state, env_path=env)
         jobs = {j.id: j for j in s.get_jobs()}
-        self.assertEqual(len(jobs), 13)  # 일시중지된 trade_news_daily 등록도 포함
+        self.assertEqual(set(jobs), BASE_JOBS | SHORTNEWS_JOBS)  # 일시중지된 trade_news_daily 등록도 포함
         self.assertIn('shortnews_startup', jobs)
         now = datetime(2026, 10, 9, 4, tzinfo=scheduler.KST)
         for name in ('un_data_monthly', 'shortnews_daily'):

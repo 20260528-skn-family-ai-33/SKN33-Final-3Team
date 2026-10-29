@@ -14,6 +14,7 @@ from backend.app.scheduler import main, shortnews_worker
 from backend.app.scheduler.jobs import news_load, shortnews_load
 from backend.app.services import shortnews_keywords as keywords
 from backend.tests import test_shortnews_load as fixture, test_news_load as market_fixture
+from backend.tests.scheduler_jobs import BASE_JOBS, SHORTNEWS_JOBS
 
 
 class SchedulerSwitchTest(unittest.TestCase):
@@ -30,7 +31,7 @@ class SchedulerSwitchTest(unittest.TestCase):
 
     def test_default_off_and_explicit_off_preserve_other_registered_jobs(self):
         baseline = self.jobs()
-        self.assertEqual(len(baseline), 11)
+        self.assertEqual(set(baseline), BASE_JOBS)
         self.assertIsNone(baseline["trade_news_daily"].next_run_time)
         self.assertFalse(any(k.startswith('shortnews') for k in baseline))
         for value in ('false', '0', 'off', '', 'typo'):
@@ -39,14 +40,14 @@ class SchedulerSwitchTest(unittest.TestCase):
 
     def test_env_file_and_environment_precedence_control_both_jobs(self):
         self.env.write_text('SHORTNEWS_DAILY_ENABLED=true', encoding="utf-8")
-        self.assertEqual(len(self.jobs()), 13)
+        self.assertEqual(set(self.jobs()), BASE_JOBS | SHORTNEWS_JOBS)
         with patch.dict(os.environ, {'SHORTNEWS_DAILY_ENABLED': 'false'}):
-            self.assertEqual(len(self.jobs()), 11)
+            self.assertEqual(set(self.jobs()), BASE_JOBS)
         self.env.write_text('SHORTNEWS_DAILY_ENABLED=false', encoding="utf-8")
         for value in ('true', '1', 'ON', ' yes '):
             with patch.dict(os.environ, {'SHORTNEWS_DAILY_ENABLED': value}):
                 jobs = self.jobs()
-                self.assertEqual(len(jobs), 13)
+                self.assertEqual(set(jobs), BASE_JOBS | SHORTNEWS_JOBS)
                 self.assertIsNone(jobs["trade_news_daily"].next_run_time)
                 self.assertIn('shortnews_startup', jobs)
                 self.assertIn('shortnews_daily', jobs)

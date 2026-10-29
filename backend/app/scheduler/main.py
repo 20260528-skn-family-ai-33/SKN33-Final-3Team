@@ -24,6 +24,8 @@
   새벽에는 당일 환율이 아직 없으므로 전 영업일까지 반영됩니다. 통화마다 마지막 적재일이 더 오래됐으면 그날부터 받아
   주말·휴일·중단으로 빠진 날도 채웁니다 (아직 한 건도 없는 통화는 .env의 FX_START_DATE부터, 없으면 최근 14일).
   켤 때도 한 번 실행합니다. 정기·시작 작업이 겹치면 늦게 시작한 쪽은 건너뜁니다.
+- external_refresh: 매월 1일 04:00(KST)에 ML 피처용 외부 데이터(BACI·WDI·Comtrade)를 data/external/ CSV로 갱신합니다.
+  BACI 새 판이 아직 없으면(NOT_READY) 다음 달에 다시 확인합니다. 켤 때는 실행하지 않습니다 (Comtrade 호출 한도).
 """
 import argparse
 import hashlib
@@ -39,6 +41,8 @@ from dotenv import dotenv_values
 
 from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
+from backend.app.scheduler.jobs import customs_monthly
+from backend.app.scheduler.jobs import external_refresh
 
 ROOT = Path(__file__).resolve().parents[3]
 UN_STATE = ROOT / "data/un_data/runtime"
@@ -54,6 +58,7 @@ UN_TRIGGER = CronTrigger(day=10, hour=3, minute=0, timezone=KST)
 HS_REFRESH_TRIGGER = CronTrigger(month=1, day=1, hour=0, minute=15, timezone=KST)  # 매년
 HS_EMBED_TRIGGER = CronTrigger(hour=1, minute=0, timezone=KST)  # 매일
 FX_DAILY_TRIGGER = CronTrigger(hour=6, minute=0, timezone=KST)  # 매일 (새벽이라 전 영업일 환율까지)
+EXTERNAL_TRIGGER = CronTrigger(day=1, hour=4, minute=0, timezone=KST)  # 매월
 RETRY_DAYS = 90
 RETRY_JOB_ID = "hs_code_refresh_retry"
 
@@ -192,8 +197,9 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV,
                       coalesce=True, misfire_grace_time=86400, replace_existing=True)
     scheduler.add_job(un_resume_job,'interval',minutes=1,args=un_args,id='un_data_resume',
                       max_instances=1,coalesce=True,replace_existing=True)
-    from backend.app.scheduler.jobs import customs_monthly
     customs_monthly.register_jobs(scheduler)
+    scheduler.add_job(external_refresh.run, EXTERNAL_TRIGGER, id="external_refresh", coalesce=True,
+                      max_instances=1, misfire_grace_time=24 * 3600, replace_existing=True)
     from backend.app.scheduler.jobs import fx_daily_load
     # 매일 환율 갱신: 실패해도 다음 실행이 마지막 적재일부터 다시 받으므로 따로 재시도하지 않음
     scheduler.add_job(fx_daily_load.run, FX_DAILY_TRIGGER, id="fx_daily_load", coalesce=True, max_instances=1,

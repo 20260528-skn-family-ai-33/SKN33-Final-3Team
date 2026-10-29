@@ -16,6 +16,7 @@ from backend.app.models.base import Base  # noqa: E402
 from backend.app.models.batch import BatchRun, ServiceOption  # noqa: E402
 from backend.app.scheduler import main as sched  # noqa: E402
 from backend.app.scheduler.jobs import hs_code_refresh as refresh  # noqa: E402
+from backend.tests.scheduler_jobs import BASE_JOBS  # noqa: E402
 
 KST = refresh.KST
 
@@ -312,7 +313,7 @@ class SchedulerTest(unittest.TestCase):
         # 일부만 적재된 채 재시작해도 갱신 작업이 실행되어야 함 (완료 판단은 작업 안에서)
         with patch.dict("os.environ", {"SHORTNEWS_DAILY_ENABLED": "false"}):
             jobs = {j.id for j in sched.build_scheduler().get_jobs()}
-        self.assertEqual(jobs, {"hs_code_refresh", sched.RETRY_JOB_ID, "hs_code_embed", "un_data_monthly", "un_data_startup", "un_data_resume", "customs_monthly", "customs_monthly_startup", "fx_daily_load", "fx_daily_startup", "trade_news_daily"})
+        self.assertEqual(jobs, BASE_JOBS)
 
     def test_embed_runs_every_day(self):
         now = datetime(2026, 12, 31, 23, 0, tzinfo=KST)
