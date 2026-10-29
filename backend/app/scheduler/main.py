@@ -197,7 +197,6 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV,
                       coalesce=True, misfire_grace_time=86400, replace_existing=True)
     scheduler.add_job(un_resume_job,'interval',minutes=1,args=un_args,id='un_data_resume',
                       max_instances=1,coalesce=True,replace_existing=True)
-    from backend.app.scheduler.jobs import customs_monthly
     customs_monthly.register_jobs(scheduler)
     scheduler.add_job(external_refresh.run, EXTERNAL_TRIGGER, id="external_refresh", coalesce=True,
                       max_instances=1, misfire_grace_time=24 * 3600, replace_existing=True)

@@ -416,7 +416,7 @@ def _add_market(ds, market_yearly, availability=None):
     if "mkt_hs4_growth" not in dated:
         dated = dated.assign(mkt_hs4_growth=np.nan)
     ds = join_known(ds, dated, pp.MARKET_KEYS, [*columns, "mkt_hs4_growth"])
-    # ponytail: 미래 12개월을 연 단위로 근사 (기준월+6개월이 속한 해 vs 그 전해). 월별 시장 데이터가 생기면 바꾼다.
+    # 미래 12개월을 연 단위로 근사 (기준월+6개월이 속한 해 vs 그 전해). 월별 시장 데이터가 생기면 바꾼다.
     future = dated[[*keys, "mkt_growth", "kor_share", "available_from"]].rename(
         columns={"mkt_growth": "future_mkt_growth", "kor_share": "future_share",
                  "available_from": "type_available_from"})
