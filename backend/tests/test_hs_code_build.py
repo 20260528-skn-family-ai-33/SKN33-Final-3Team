@@ -106,6 +106,100 @@ class HsCodeBuildTest(unittest.TestCase):
             self.assertEqual(sent, [["e"]])  # 유효한 d는 재요청하지 않음
             self.assertEqual(got, {"d": "살아 있는 말", "e": "당나귀"})
 
+    def test_summary_character_limit(self):
+        self.assertTrue(hb.valid_summary("가" * 20))
+        self.assertFalse(hb.valid_summary("가" * 21))
+        self.assertFalse(hb.valid_summary("가" * 10 + " " + "나" * 10))
+
+    def test_summary_rejects_hs_codes_but_allows_dimensions(self):
+        for value in ("기초화장품330499", "3304.99 기초화장품", "3304 99 화장품", "기초화장용 기타 제품E", "납박(0.2mm 이하)M"):
+            self.assertFalse(hb.valid_summary(value), value)
+        self.assertTrue(hb.valid_summary("납 시트·박(0.2mm 이하)"))
+
+    def test_trailing_letter_allowed_only_when_in_source(self):
+        self.assertTrue(hb.valid_summary("비타민C 및 유도체", "비타민 C와 이들의 유도체"))
+        self.assertFalse(hb.valid_summary("기초화장용 제품E", "기타 > PET 용기"))  # PET의 E는 단독 글자가 아님
+        self.assertFalse(hb.valid_summary("비타민C"))
+
+    def test_cache_keeps_summaries_outside_current_items(self):
+        class FakeOpenAI:
+            def __init__(self, api_key):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(hb, "OpenAI", FakeOpenAI):
+            path = Path(tmp) / "cache.json"
+            path.write_text(json.dumps({"a": "말", "z": "수동 요약으로 바뀐 코드"}, ensure_ascii=False), encoding="utf-8")
+            self.assertEqual(hb.summarize({"a": "원문"}, hb.PROMPT, "m", "k", path, "t"), {"a": "말"})
+            self.assertIn("z", json.loads(path.read_text(encoding="utf-8")))
+
+    def test_summary_input_includes_chapter_material(self):
+        names = {"78": "납과 그 제품", "7804": "납 판·시트·박", "780411": "두께 0.2mm 이하"}
+        self.assertEqual(hb.summary_input("780411", names), "납과 그 제품 > 납 판·시트·박 > 두께 0.2mm 이하")
+
+    def test_compact_summary_preserves_threshold_meaning_without_truncation(self):
+        value = hb.compact_summary("면 85% 미만 200g 이하 표백 안 한 평직물")
+        self.assertIn("<85%", value)
+        self.assertIn("≤200g", value)
+        self.assertIn("미표백", value)
+        self.assertIn("평직물", value)
+        self.assertTrue(hb.valid_summary(value))
+        self.assertEqual(hb.compact_summary("가" * 21), "가" * 21)
+        self.assertEqual(hb.compact_summary("기초화장품"), "기초화장품")
+
+    def test_duplicate_response_and_reserved_names_are_retried(self):
+        replies = [{"a": "수동 품목", "b": "동일 품목", "c": "동일 품목"},
+                   {"a": "새 품목", "c": "다른 품목"}]
+        sent = []
+
+        class FakeOpenAI:
+            def __init__(self, api_key):
+                self.chat = self.completions = self
+
+            def create(self, messages, **_):
+                sent.append(set(json.loads(messages[1]["content"])))
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                    content=json.dumps(replies[len(sent) - 1])))])
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(hb, "OpenAI", FakeOpenAI):
+            got = hb.summarize(dict.fromkeys("abc", "원문"), hb.PROMPT, "m", "k",
+                               Path(tmp) / "cache.json", "t", reserved=["수동 품목"])
+            self.assertEqual(sent, [{"a", "b", "c"}, {"a", "c"}])
+            self.assertEqual(got, {"a": "새 품목", "b": "동일 품목", "c": "다른 품목"})
+
+    def test_summarize_repairs_cached_and_cross_batch_duplicates(self):
+        sent = []
+
+        class FakeOpenAI:
+            def __init__(self, api_key):
+                self.chat = self.completions = self
+
+            def create(self, messages, **_):
+                chunk = json.loads(messages[1]["content"])
+                sent.append(set(chunk))
+                # 첫 응답은 기존 캐시와 충돌, 두 번째는 길이 초과, 마지막은 정상.
+                value = ["기존 요약", "가" * 21, "새 품목 요약"][(len(sent) - 1) % 3]
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                    content=json.dumps(dict.fromkeys(chunk, value))))])
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(hb, "OpenAI", FakeOpenAI), mock.patch.object(hb, "BATCH", 1):
+            path = Path(tmp) / "cache.json"
+            path.write_text(json.dumps({"a": "기존 요약", "b": "기존 요약", "c": "가" * 21}))
+            got = hb.summarize(dict.fromkeys("abc", "품목 원문"), hb.PROMPT, "m", "k", path, "t")
+            self.assertEqual(got, {"a": "기존 요약", "b": "새 품목 요약"})
+            self.assertEqual(sent, [{"b"}] * 3 + [{"c"}] * 3)
+            self.assertEqual(len(set(got.values())), len(got))
+
+    def test_failed_summaries_do_not_write_csv(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(hb, "setup_log"), mock.patch.object(hb, "dotenv_values", return_value={"OPENAI_API_KEY": "fake"}), mock.patch.object(hb, "load_names", return_value=NAMES), mock.patch.object(hb, "summarize", return_value={}):
+            output = Path(tmp)
+            csv_path = output / "hs_code_mst.csv"
+            csv_path.write_text("기존 결과", encoding="utf-8")
+            result = hb.run(customs_xlsx="hs_names_20260101.xlsx", output_dir=output, cache_dir=output)
+            self.assertIsNone(result["csv"])
+            self.assertGreater(result["missing"], 0)
+            self.assertIn("requests", result)  # hs_code_refresh가 batch_run.request_count에 더함
+            self.assertEqual(csv_path.read_text(encoding="utf-8"), "기존 결과")
+
 
 if __name__ == "__main__":
     unittest.main()
