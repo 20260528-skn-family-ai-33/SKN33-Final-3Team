@@ -59,7 +59,8 @@ function Detail({ n }) {
 }
 
 export default function Inbox({ route }) {
-  const { notifications, setNotifications } = useApp()
+  const { notifications, setNotifications, refreshNotifications, run } = useApp()
+  useEffect(() => { void run(refreshNotifications) }, [refreshNotifications, run])
   const tab = TABS.some(([key]) => key === route.query.get('tab')) ? route.query.get('tab') : 'all'
   const unreadOnly = route.query.get('unread') === '1'
   const list = notifications.filter(n => (tab === 'all' || n.type === tab) && (!unreadOnly || !n.read || n.id === route.query.get('id')))

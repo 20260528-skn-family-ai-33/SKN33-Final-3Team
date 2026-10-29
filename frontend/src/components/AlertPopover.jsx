@@ -1,10 +1,12 @@
 // 머리글 종 아이콘을 누르면 뜨는 최근 알림 팝오버(BS13)
+import { useEffect } from 'react'
 import { navigate } from '../router'
 import { useApp } from '../store'
 import { notificationTypes } from '../data/seed'
 
 export default function AlertPopover({ onClose }) {
-  const { notifications, setNotifications, unread } = useApp()
+  const { notifications, setNotifications, unread, refreshNotifications, run } = useApp()
+  useEffect(() => { void run(refreshNotifications) }, [refreshNotifications, run])
   const open = n => {
     setNotifications(list => list.map(x => (x.id === n.id ? { ...x, read: true } : x)))
     onClose()

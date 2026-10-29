@@ -21,9 +21,11 @@ def save_snapshot(store, uid, kind, payload, ttl=None):
 
 def read_snapshot(store, uid, identity, kind=None):
     row=store.owned('api_snapshot','snapshot_id',identity,uid)
-    if row['expires_at'] and row['expires_at']<=now():
-        raise ApiError(410,'RESULT_EXPIRED','저장 결과가 만료되었습니다.')
     require(kind is None or row['kind']==kind,'대상을 찾을 수 없습니다.','NOT_FOUND',404)
+    if row['expires_at'] and row['expires_at']<=now():
+        if kind=='PREVIEW':
+            raise ApiError(409,'PREVIEW_EXPIRED','리포트 조건 확인이 만료되었습니다. 조건을 다시 확인해 주세요.')
+        raise ApiError(410,'RESULT_EXPIRED','저장 결과가 만료되었습니다.')
     return row['payload_json']
 
 

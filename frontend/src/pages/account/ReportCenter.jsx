@@ -50,7 +50,7 @@ function ReportItem({ report }) {
 }
 
 export default function ReportCenter({ route }) {
-  const { reports, subscription, setSubscription, profile, notify, refreshReports, fail } = useApp()
+  const { reports, subscription, deleteSubscription, profile, notify, refreshReports, fail } = useApp()
   const generating = reports.some(r => r.status === 'generating' || r.status === 'delayed')
   useEffect(() => {
     let stopped = false, timer
@@ -69,7 +69,7 @@ export default function ReportCenter({ route }) {
   const deleteCycle = tab === 'chat' ? null : tab
 
   const removeSubscription = async () => {
-    if (!await setSubscription(s => ({ ...s, cycles: s.cycles.filter(c => c !== deleteCycle) }))) return
+    if (!await deleteSubscription(deleteCycle)) return
     navigate(withQuery(route, { confirm: null }))
     notify(`${CYCLE[deleteCycle]} 구독을 삭제했습니다. 기존에 발행된 리포트는 계속 조회할 수 있습니다.`)
   }

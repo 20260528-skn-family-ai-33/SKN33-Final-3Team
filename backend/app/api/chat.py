@@ -193,6 +193,9 @@ def execute(store,job):
                 if len(hs)>1: table['hs_item']=item_scope[0]
                 tables.append(table)
                 total=sum(r[metric] for r in output['items'])
+                if conditions.get('compare') in ('YOY','YOY_PERIOD') and not conditions.get('compare_period') and output['items'] and all(r[prior_metric] is not None for r in output['items']):
+                    from backend.app.api.common import period, shift_month
+                    conditions['compare_period']=period(shift_month(date.fromisoformat(p['start']),-12),shift_month(date.fromisoformat(p['end']),-12))
                 label=f'HS {item_scope[0]["hs_code"]}: ' if len(hs)>1 else ''
                 description=f'{label}선택 기간의 {"수출" if metric.startswith("export") else "수입"}액은 {total:,.2f} USD입니다.'
                 if conditions.get('compare_period'):

@@ -13,7 +13,7 @@ export function useServerScreen(template, id, query) {
     : ['BS156','BS157','BS158'].includes(id) ? '/admin/audit-events'
     : ['BS159','BS160','BS161','BS163','BS165'].includes(id) ? '/admin/operation-settings'
     : id === 'BS155' ? '/admin/notification-rules' : null
-  const status = ({ BS41: 'ACTIVE', BS43: 'WITHDRAWN', BS45: 'RESTRICTED' })[id]
+  const status = ({ BS41: 'ACTIVE', BS42: 'WITHDRAWN', BS43: 'RESTRICTED' })[id]
   const paged = ['/admin/alerts', '/admin/users', '/admin/data/runs', '/admin/articles', '/admin/notification-deliveries', '/admin/audit-events'].includes(endpoint)
   const filters = paged ? { page: Number(query.get('page')) || 1, page_size: 20 } : {}
   if (endpoint === '/admin/users') { filters.q = query.get('q') || undefined; filters.status = status }
