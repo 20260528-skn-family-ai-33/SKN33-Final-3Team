@@ -63,12 +63,12 @@ MYSQL_DATABASE=...
 
 ### SQL 시드 및 기존 RDS 요약 갱신문
 
-`db/mysql/init/10_hs_code_seed.sql`은 HS2022 전체 마스터 시드입니다. 신규 행은 공식 원문·출처와 함께 추가하고, 기존 행은 HS6의 `name_ko`만 갱신합니다. 기존 HS2·HS4·HS10 이름과 원문·출처, 다른 판본은 유지합니다.
+`db/mysql/init/11_hs_code_seed.sql`은 HS2022 전체 마스터와 아래 "과거 HS10 보완"의 두 CSV(`hs_code_hs2017.csv`, `hs_code_hs2022_supplement.csv`)를 합친 시드입니다 (18,958행). 신규 행은 공식 원문·출처와 함께 추가하고, 기존 행은 HS6의 `name_ko`만 갱신합니다. 기존 HS2·HS4·HS10 이름과 원문·출처는 유지합니다.
 
 검증된 마스터 CSV에서 SQL을 다시 생성하려면 다음 명령을 사용합니다. UPDATE 파일은 프로젝트 밖 경로로 지정하세요. 생성 도구는 DB에 연결하지 않습니다.
 
 ```powershell
-python backend/app/scheduler/collectors/hscode/hs_code_seed.py --csv <검증된_hs_code_mst.csv> --seed db/mysql/init/10_hs_code_seed.sql --update <프로젝트_밖_UPDATE.sql>
+python backend/app/scheduler/collectors/hscode/hs_code_seed.py --csv <검증된_hs_code_mst.csv> backend/app/scheduler/collectors/hscode/hscode_outputs/HS2017/hs_code_hs2017.csv backend/app/scheduler/collectors/hscode/hscode_outputs/HS2022/hs_code_hs2022_supplement.csv --seed db/mysql/init/11_hs_code_seed.sql --update <프로젝트_밖_UPDATE.sql>
 ```
 
 기존 RDS에는 별도로 전달된 UPDATE SQL을 사용합니다. 선택한 DB에서 `(hs_code, hs_ver)`가 일치하는 HS6 요약명만 변경합니다. 사전 검사에서 대상 행 누락·길이 초과·중복·매핑 밖의 기존 이름과 충돌이 하나라도 있으면 UPDATE를 수행하지 않습니다. 결과의 `missing_rows`, `invalid_names`, `duplicate_names`, `collisions_with_other_existing_rows`, `remaining_mismatches`가 모두 0인지 확인하세요. `updated_rows`는 이전부터 같은 요약이었던 행을 제외한 실제 변경 수입니다.
@@ -145,7 +145,9 @@ python -m backend.app.scheduler.jobs.hs_code_load --csv backend/app/scheduler/co
 
 - 10단위 이름은 실적의 품목명, `source_edition`은 `관세청 수출입실적 YYYY년 M월`(처음 나온 달)입니다.
 - 관세청 HS2017 한글 사전은 포털에 없어(과거 판은 `관세청_HS부호_20250101`뿐) HS2017 상위 행은 이렇게 채웠습니다.
-  2·4단위는 현재 판 한글명 재사용(없으면 UN 영문명), 6단위는 `LLM 한글 번역|UN 영문 원문`입니다.
+  2·4단위는 현재 판 한글명 재사용(없으면 UN 영문명), 6단위는 `20자 이하 요약|UN 영문 원문`입니다.
+  요약은 HS2022와 같은 규칙(`hs_code_build.summarize`)으로 만든 뒤 UN 원문과 대조해 19개를 수동 보정했습니다 (#46).
+  이전의 긴 LLM 한글 번역본은 `hs_code_hs2017_before46.csv`로 남겨 두었으며, 적재 검증(20자·중복)을 통과하지 못하므로 적재하지 않습니다.
 - 보류(적재 안 함): `9999999290`(품목명 `-`, 상위 `9999`·`999999`는 UN 통계용 코드), `621142900`(9자리).
 - HS2022 보완분은 실적 적재(`customs_load`)의 미등록 코드 처리(`fail`·`hold`)를 시험한 뒤 적재합니다.
 

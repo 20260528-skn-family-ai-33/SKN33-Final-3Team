@@ -21,12 +21,15 @@ def sql_text(value):
     return "'" + value.replace("'", "''") + "'"
 
 
-def read_master(path):
-    with open(path, encoding="utf-8-sig", newline="") as stream:
-        rows = list(csv.DictReader(stream))
+def read_master(paths):
+    rows = []
+    for path in paths:  # 여러 판의 CSV를 합쳐도 (hs_code, hs_ver) 중복·판별 요약 중복을 함께 검사
+        with open(path, encoding="utf-8-sig", newline="") as stream:
+            rows += list(csv.DictReader(stream))
     if not rows:
         raise ValueError("Empty master CSV")
     seen, summaries = set(), set()
+    names = hb.csv_names(rows)
     for row in rows:
         code, ver = row["hs_code"], row["hs_ver"]
         if not re.fullmatch(r"(?:[0-9]{2}|[0-9]{4}|[0-9]{6}|[0-9]{10})", code):
@@ -42,7 +45,7 @@ def read_master(path):
         if not name.strip() or len(name) > hb.NAME_MAX or not row["source_edition"]:
             raise ValueError(f"Invalid name/source: {code}")
         if len(code) == 6:
-            if not original.strip() or not hb.valid_summary(name, original) or (ver, name) in summaries:
+            if not original.strip() or not hb.valid_summary(name, hb.summary_source(code, names[ver], original)) or (ver, name) in summaries:
                 raise ValueError(f"Invalid or duplicate summary: {code}/{ver}: {name}")
             summaries.add((ver, name))
         row["summary"] = name
@@ -61,12 +64,14 @@ def insert_batches(table, columns, values, suffix="", size=200):
     return "\n".join(statements)
 
 
-def generate(csv_path, seed_path, update_path):
-    rows = read_master(csv_path)
+def generate(csv_paths, seed_path, update_path):
+    csv_paths = [csv_paths] if isinstance(csv_paths, (str, Path)) else list(csv_paths)
+    rows = read_master(csv_paths)
     six = [r for r in rows if len(r["hs_code"]) == 6]
-    digest = hashlib.sha256(Path(csv_path).read_bytes()).hexdigest()
-    header = ("-- Issue #46: HS2022 품목 요약 (공백 포함 20자 이하, 판별 요약 중복 없음).\n"
-              f"-- 원본 CSV SHA256: {digest}\n"
+    digests = {Path(p).name: hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in csv_paths}
+    versions = ", ".join(sorted({r["hs_ver"] for r in rows}))
+    header = (f"-- Issue #46: {versions} 품목 요약 (공백 포함 20자 이하, 판별 요약 중복 없음).\n"
+              + "".join(f"-- 원본 CSV SHA256 ({name}): {digest}\n" for name, digest in digests.items()) +
               "-- 생성 도구: hs_code_seed.py. 대상 DB를 선택한 뒤 UTF-8 연결로 실행합니다.\n"
               "SET NAMES utf8mb4;\n\n")
     seed = header + (f"-- 총 {len(rows):,}행. 신규 행은 원문·출처와 함께 추가합니다.\n"
@@ -154,12 +159,13 @@ COMMIT;
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-    return {"rows": len(rows), "summaries": len(six), "levels": dict(Counter(len(r["hs_code"]) for r in rows)), "csv_sha256": digest}
+    return {"rows": len(rows), "summaries": len(six), "levels": dict(Counter(len(r["hs_code"]) for r in rows)),
+            "versions": versions, "csv_sha256": digests}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--csv", required=True, type=Path)
+    parser.add_argument("--csv", required=True, type=Path, nargs="+", help="검증된 마스터 CSV (여러 판이면 모두 지정)")
     parser.add_argument("--seed", required=True, type=Path)
     parser.add_argument("--update", required=True, type=Path)
     args = parser.parse_args()

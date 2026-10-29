@@ -49,6 +49,27 @@ class SeedTest(unittest.TestCase):
             self.assertIn('AS new ON DUPLICATE KEY UPDATE', initial.read_text(encoding='utf-8'))
             self.assertNotIn('VALUES(name_ko)', initial.read_text(encoding='utf-8'))
 
+    def test_trailing_letter_checked_against_csv_parent_names(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'master.csv'
+            with path.open('w', encoding='utf-8-sig', newline='') as stream:
+                writer = csv.DictWriter(stream, fieldnames=seed.hb.FIELDS)
+                writer.writeheader()
+                for code, name in (('29', '제29류 유기화학품'), ('2936', '프로비타민과 비타민 C'), ('293627', '비타민C|기타')):
+                    writer.writerow(dict(hs_code=code, depth=str(len(code)), name_ko=name,
+                                         source_edition='src', hs_ver='HS2022'))
+            self.assertEqual(len(seed.read_master([path])), 3)  # C는 4단위명에만 있어도 허용 (생성 단계와 같은 기준)
+
+    def test_multiple_editions_share_one_seed_and_header(self):
+        with tempfile.TemporaryDirectory() as folder:
+            first = self.write_csv(folder, ['피부관리용 화장품'])
+            second = Path(folder) / 'hs2017.csv'
+            second.write_text(first.read_text(encoding='utf-8-sig').replace('HS2022', 'HS2017'), encoding='utf-8-sig')
+            out, update = Path(folder) / 'seed.sql', Path(folder) / 'update.sql'
+            result = seed.generate([first, second], out, update)
+            self.assertEqual((result['rows'], result['versions']), (2, 'HS2017, HS2022'))
+            self.assertTrue(update.read_text(encoding='utf-8').startswith('-- Issue #46: HS2017, HS2022'))
+
     def test_literals_escape_quotes_and_are_sql_mode_independent(self):
         self.assertEqual(seed.sql_text("O'Brien"), "'O''Brien'")
         self.assertEqual(seed.sql_text(None), 'NULL')
