@@ -45,6 +45,7 @@ def run_once(database,settings):
 
 
 def run_loop(db,settings,once=False):
+    db.settings=settings  # The first subscription check runs before run_once.
     next_schedule=0
     while True:
         schedule_error=None

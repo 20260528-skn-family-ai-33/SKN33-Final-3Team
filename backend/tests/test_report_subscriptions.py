@@ -1,10 +1,13 @@
 """Periodic option registration and collector-compatible subscription scheduling."""
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, update, delete
 from backend.tests import test_backend_api as fixtures
 from backend.app.api.database import Store
+from backend.app.api.config import Settings
+from backend.app.api.worker import run_loop
 from backend.app.api.subscriptions import enqueue_due, ready_days, scheduled_periods
 from backend.scripts.register_report_options import plan, apply, REPORT_OPTIONS
 
@@ -19,9 +22,9 @@ class ReportSubscriptionTest(unittest.TestCase):
             store = Store(self.app.state.database, c)
             apply(store, plan(store, lock=True))
 
-    def news_runs(self):
+    def news_runs(self, sources=('HANKYUNG', 'FNNEWS')):
         with self.engine.begin() as c:
-            for source in ('KOTRA_MARKET', 'KOTRA_SHORT_NEWS'):
+            for source in sources:
                 c.execute(self.meta.tables['service_option'].insert(), {
                     'option_code': source, 'option_type': 'SOURCE', 'label_ko': source,
                     'enabled': True, 'sort_order': 1, 'value_json': {}})
@@ -74,7 +77,7 @@ class ReportSubscriptionTest(unittest.TestCase):
         self.news_runs()
         with self.engine.begin() as c:
             t = self.meta.tables['batch_run']
-            c.execute(delete(t).where(t.c.source_code == 'KOTRA_MARKET'))
+            c.execute(delete(t).where(t.c.source_code == 'HANKYUNG'))
         self.assertFalse(self.ready())
 
     def test_latest_failed_or_running_load_blocks_publication(self):
@@ -82,7 +85,7 @@ class ReportSubscriptionTest(unittest.TestCase):
         for status in ('FAILED', 'RUNNING', 'SUCCESS'):
             with self.engine.begin() as c:
                 c.execute(self.meta.tables['batch_run'].insert(), {
-                    'source_code': 'KOTRA_MARKET', 'job_name': 'NEWS_LOAD', 'target_table': 'article',
+                    'source_code': 'HANKYUNG', 'job_name': 'NEWS_LOAD', 'target_table': 'article',
                     'period_start': date(2025, 12, 18), 'period_end': date(2025, 12, 18),
                     'status': status, 'detail_json': {}})
             self.assertEqual(self.ready(), status == 'SUCCESS')
@@ -92,8 +95,77 @@ class ReportSubscriptionTest(unittest.TestCase):
         self.news_runs()
         with self.engine.begin() as c:
             t = self.meta.tables['batch_run']
-            c.execute(update(t).where(t.c.source_code == 'KOTRA_MARKET').values(period_end=date(2025, 12, 20)))
+            c.execute(update(t).where(t.c.source_code == 'HANKYUNG').values(period_end=date(2025, 12, 20)))
         self.assertFalse(self.ready())
+
+    def test_manual_kotra_history_does_not_block_two_current_weeks(self):
+        self.register(); self.news_runs(('KOTRA_MARKET', 'KOTRA_SHORT_NEWS'))
+        uid = self.signup()
+        self.subscribe(uid, enabled_since='2025-12-15T00:00:00Z')
+        with self.engine.begin() as c:
+            t = self.meta.tables['batch_run']
+            c.execute(update(t).where(t.c.target_table == 'article').values(
+                period_start=date(2024, 1, 1), period_end=date(2024, 12, 31)))
+        self.news_runs()
+        with self.engine.begin() as c:
+            t = self.meta.tables['batch_run']
+            c.execute(delete(t).where(t.c.source_code.in_(('HANKYUNG', 'FNNEWS'))))
+            for offset in range(14):
+                day = date(2025, 12, 15) + timedelta(days=offset)
+                for source in ('HANKYUNG', 'FNNEWS'):
+                    c.execute(t.insert(), {'source_code': source, 'job_name': 'TRADE_NEWS_LOAD',
+                        'target_table': 'article', 'period_start': day, 'period_end': day,
+                        'status': 'SUCCESS', 'detail_json': {}})
+            store = Store(self.app.state.database, c)
+            self.assertEqual(enqueue_due(store, datetime(2025, 12, 22)), 1)
+            self.assertEqual(enqueue_due(store, datetime(2025, 12, 29)), 1)
+            self.assertEqual(enqueue_due(store, datetime(2025, 12, 29)), 0)
+
+    def test_optional_shortnews_failure_only_blocks_when_explicitly_required(self):
+        self.news_runs(('HANKYUNG', 'FNNEWS', 'KOTRA_SHORT_NEWS'))
+        with self.engine.begin() as c:
+            t = self.meta.tables['batch_run']
+            c.execute(update(t).where(t.c.source_code == 'KOTRA_SHORT_NEWS').values(status='FAILED'))
+        self.assertTrue(self.ready())
+        self.settings.values['API_WEEKLY_NEWS_SOURCES'] = 'HANKYUNG,FNNEWS,KOTRA_SHORT_NEWS'
+        self.assertFalse(self.ready())
+        with self.engine.begin() as c:
+            t = self.meta.tables['batch_run']
+            c.execute(update(t).where(t.c.source_code == 'KOTRA_SHORT_NEWS').values(status='SUCCESS'))
+        self.assertTrue(self.ready())
+
+    def test_required_source_must_exist_and_remain_enabled(self):
+        self.news_runs(('HANKYUNG',))
+        self.assertFalse(self.ready())
+        self.news_runs(('FNNEWS',))
+        self.assertTrue(self.ready())
+        with self.engine.begin() as c:
+            t = self.meta.tables['service_option']
+            c.execute(update(t).where(t.c.option_code == 'FNNEWS').values(enabled=False))
+        self.assertFalse(self.ready())
+
+    def test_invalid_or_empty_required_sources_do_not_publish(self):
+        self.news_runs()
+        for value in ('', ' ', ',', 'HANKYUNG,TYPO', 'HANKYUNG,,FNNEWS'):
+            with self.subTest(value=value):
+                self.settings.values['API_WEEKLY_NEWS_SOURCES'] = value
+                with self.assertRaisesRegex(ValueError, 'API_WEEKLY_NEWS_SOURCES'):
+                    self.ready()
+
+    def test_first_worker_schedule_uses_explicit_settings(self):
+        self.register(); self.news_runs(('KOTRA_MARKET',))
+        uid = self.signup()
+        self.subscribe(uid, enabled_since='2025-12-15T00:00:00Z')
+        settings = Settings(values={**self.settings.values, 'API_WEEKLY_NEWS_SOURCES': 'KOTRA_MARKET'})
+        # First schedule runs before run_once normally attaches settings to Database.
+        with patch('backend.app.api.worker.run_once', return_value=False), \
+                patch('backend.app.api.subscriptions.datetime', wraps=datetime) as clock:
+            clock.now.return_value = datetime(2025, 12, 22, tzinfo=ZoneInfo('Asia/Seoul'))
+            run_loop(self.app.state.database, settings, once=True)
+        with self.engine.begin() as c:
+            rows = Store(self.app.state.database, c).rows(select(self.meta.tables['report']))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['conditions_json']['period'], {'start':'2025-12-15','end':'2025-12-21'})
 
     def test_weekly_enqueue_is_scoped_idempotent_and_preserves_conditions(self):
         self.register(); self.news_runs()

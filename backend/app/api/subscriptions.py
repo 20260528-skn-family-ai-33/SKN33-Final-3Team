@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from backend.app.api import trade, jobs
 from backend.app.api.common import now, digest, period, shift_month, ApiError
+from backend.app.api.config import Settings
 
 NEWS_SOURCES = ('KOTRA_MARKET', 'KOTRA_SHORT_NEWS', 'HANKYUNG', 'FNNEWS')
 KST = ZoneInfo('Asia/Seoul')
@@ -37,16 +38,28 @@ def scheduled_periods(code, enabled_since, at):
             cursor = shift_month(cursor, 1)
 
 
+def weekly_sources(store):
+    # SOURCE options describe available articles, not which collectors run daily.
+    # Keep publication prerequisites independent of manual/optional ingestion.
+    settings = getattr(store.db, 'settings', None) or Settings()
+    value = settings.values.get('API_WEEKLY_NEWS_SOURCES', 'HANKYUNG,FNNEWS')
+    sources = tuple(dict.fromkeys(part.strip() for part in str(value).split(',')))
+    if not sources or any(source not in NEWS_SOURCES for source in sources):
+        raise ValueError('API_WEEKLY_NEWS_SOURCES must contain supported news source codes separated by commas')
+    return sources
+
+
 def ready_days(store, start, end):
     # Collectors atomically load articles/tags/daily aggregates, then record a single
     # target_table='article' batch. Requiring separate daily-table runs blocks forever.
-    # Check each enabled news provider independently: one provider's success must not
+    # Check each required news provider independently: one provider's success must not
     # hide another provider's missing/failed/running load for the same dates.
     t,options=store.t('batch_run'),store.t('service_option')
-    sources=list(store.c.execute(select(options.c.option_code).where(
-        options.c.option_code.in_(NEWS_SOURCES),options.c.enabled==True,
+    sources=weekly_sources(store)
+    enabled=set(store.c.execute(select(options.c.option_code).where(
+        options.c.option_code.in_(sources),options.c.enabled==True,
         options.c.option_type.in_(('SOURCE','ARTICLE_SOURCE')))).scalars())
-    if not sources: return False
+    if not set(sources)<=enabled: return False
     for source in sources:
         runs=store.rows(select(t.c.run_id,t.c.period_start,t.c.period_end,t.c.status).where(
             t.c.target_table=='article',t.c.source_code==source,
