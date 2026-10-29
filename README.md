@@ -1,3 +1,5 @@
+Linux에서 ML 포함 백엔드를 설치할 때는 [ML 사용 안내의 Linux 배포 준비](backend/app/ml/ML_USAGE.md#linux-배포-준비)를 먼저 확인하세요. LightGBM의 OpenMP 런타임 설치와 월별 재학습 활성화 절차를 설명합니다.
+
 ```
 SKN33-Final-3Team/
 ├── .github/                      GitHub 설정

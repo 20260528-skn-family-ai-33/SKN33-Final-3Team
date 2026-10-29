@@ -110,7 +110,7 @@ CREATE TABLE batch_run (
   run_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '테이블·기간별 데이터 작업 실행 한 건의 번호다.',
   source_code VARCHAR(40) NOT NULL COMMENT '이 작업의 대상 출처 코드다. service_option의 SOURCE 행을 참조한다.',
   job_name VARCHAR(60) NOT NULL COMMENT '수행한 작업 이름이다. 예를 들어 NEWS_COLLECTION 또는 HS6_AGGREGATION이다.',
-  target_table ENUM('hs_code','export_monthly','import_monthly','export_summary','import_summary','fx_daily','article','article_tag','news_product_daily','news_keyword_daily','model_run','report','hs_code_correlation') NOT NULL COMMENT '이 실행이 처리하는 실제 테이블 이름이다. 예: export_monthly.',
+  target_table ENUM('hs_code','export_monthly','import_monthly','export_summary','import_summary','fx_daily','article','article_tag','news_product_daily','news_keyword_daily','model_run','report','hs_code_correlation','external_csv') NOT NULL COMMENT '이 실행이 처리하는 실제 테이블 이름이다. 예: export_monthly.',
   period_start DATE NOT NULL COMMENT '이 작업이 처리하려는 기간의 시작일이다.',
   period_end DATE NOT NULL COMMENT '처리 대상 기간의 마지막 날이다. 시작일을 포함한 양끝 포함 범위다.',
   status ENUM('RUNNING','SUCCESS','FAILED') NOT NULL DEFAULT 'RUNNING' COMMENT 'RUNNING 실행 중, SUCCESS 정상 완료, FAILED 실패를 저장한다.',

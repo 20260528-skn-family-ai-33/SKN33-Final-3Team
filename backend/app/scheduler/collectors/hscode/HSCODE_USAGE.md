@@ -50,7 +50,9 @@ MYSQL_DATABASE=...
 
 - 6단위 목록은 xlsx 6단위 시트가 아니라 **10단위 코드 앞 6자리**로 만듭니다. 6단위 시트에는 6단위가 일부만 있기 때문입니다.
 - 6단위 원문은 6단위 시트 → 10단위 `XXXXXX0000` 행 → (`XXXX00`이면) 4단위 이름 순으로 찾습니다.
-- 요약은 4·5·6단위 이름을 함께 LLM에 넣어 3~5단어로 만듭니다. 5단어를 넘으면 한 번 더 요청하고, 그래도 넘으면 그대로 둡니다.
+- 요약은 2·4·5·6단위 이름을 함께 LLM에 넣어 **공백·문장부호 포함 20자 이하**로 만듭니다. 같은 판의 6단위 요약은 서로 완전히 일치하지 않도록 검사하며, HS코드나 구분용 영문자를 붙인 결과도 거릅니다.
+- 조건 위반·누락은 최대 3회 요청합니다. 끝내 해결하지 못하면 CSV를 저장하지 않고 오류를 냅니다. 유효한 결과는 캐시에 남아 다음 실행에서 누락분만 요청합니다. 새 입력·요약 규칙은 `hs6_summary_cache_v2_<판>_<모델>.json` 캐시를 사용합니다.
+- 긴 응답은 내용을 자르는 대신 수치 조건을 `85% 미만` → `<85%`, `200g 이하` → `≤200g`처럼 표기하고 공백을 줄인 뒤 다시 검사합니다. 재요청에는 이전 응답과 길이·중복 등 거부 이유를 함께 전달합니다.
 - UN 통계용 코드 `99`·`9999`·`999999`(품목 미지정)는 관세율표에 없어 고정값으로 넣습니다. 이름은 "품목 미지정(UN 통계용)"(팀 번역),
   6단위 원문은 UN 영문 원문, `source_edition`은 "UN Comtrade 통계용 코드 (한국어 명칭은 팀 번역)"입니다.
 - `reference/hs6_summary_overrides_<hs_ver>.csv`의 수동 요약이 LLM 요약보다 우선합니다. 요약이 겹치거나 틀린 코드는 이 파일에 `hs_code,summary`로 추가합니다.
@@ -58,6 +60,52 @@ MYSQL_DATABASE=...
 - 적재할 때 6단위 `name_ko`는 `|`로 나눠 `name_ko`(요약)와 `original_name_ko`(원문)에 들어갑니다. 다른 단위의 `original_name_ko`는 NULL입니다.
 
 ## 수동 실행
+
+### SQL 시드 및 기존 RDS 요약 갱신문
+
+`db/mysql/init/11_hs_code_seed.sql`은 HS2022 전체 마스터와 아래 "과거 HS10 보완"의 두 CSV(`hs_code_hs2017.csv`, `hs_code_hs2022_supplement.csv`)를 합친 시드입니다 (18,958행). 신규 행은 공식 원문·출처와 함께 추가하고, 기존 행은 HS6의 `name_ko`만 갱신합니다. 기존 HS2·HS4·HS10 이름과 원문·출처는 유지합니다.
+
+검증된 마스터 CSV에서 SQL을 다시 생성하려면 다음 명령을 사용합니다. UPDATE 파일은 프로젝트 밖 경로로 지정하세요. 생성 도구는 DB에 연결하지 않습니다.
+
+```powershell
+python backend/app/scheduler/collectors/hscode/hs_code_seed.py --csv <검증된_hs_code_mst.csv> backend/app/scheduler/collectors/hscode/hscode_outputs/HS2017/hs_code_hs2017.csv backend/app/scheduler/collectors/hscode/hscode_outputs/HS2022/hs_code_hs2022_supplement.csv --seed db/mysql/init/11_hs_code_seed.sql --update <프로젝트_밖_UPDATE.sql>
+```
+
+기존 RDS에는 별도로 전달된 UPDATE SQL을 사용합니다. 선택한 DB에서 `(hs_code, hs_ver)`가 일치하는 HS6 요약명만 변경합니다. 사전 검사에서 대상 행 누락·길이 초과·중복·매핑 밖의 기존 이름과 충돌이 하나라도 있으면 UPDATE를 수행하지 않습니다. 결과의 `missing_rows`, `invalid_names`, `duplicate_names`, `collisions_with_other_existing_rows`, `remaining_mismatches`가 모두 0인지 확인하세요. `updated_rows`는 이전부터 같은 요약이었던 행을 제외한 실제 변경 수입니다.
+
+UPDATE SQL은 변경 전 이름을 연결 한정 임시 테이블 `tmp_hs46_before`에 보관합니다. 파일 끝에는 같은 연결에서 실행할 수 있는 복원문을 주석으로 제공합니다. 연결 종료 후에도 보관해야 하는 백업은 실행 전에 별도로 준비하세요.
+
+#### RDS 요약명 갱신 후 Chroma 재임베딩
+
+RDS의 `name_ko`를 바꾼 뒤에는 검색에 사용하는 Chroma도 갱신해야 합니다. 매일 실행되는 `hs_code_embed`는 **없는 id만 추가**하므로, 이미 등록된 코드의 문서·벡터·메타데이터(`name_ko`)는 이전 이름으로 남습니다. HS10 문서에도 상위 HS6 요약명이 포함되므로 HS6 변경은 하위 품목의 검색 문서에도 영향을 줍니다.
+
+1. RDS UPDATE가 완료되고 요약명이 반영됐는지 확인합니다.
+2. 검색 API를 중지하고, 같은 Chroma 저장소를 사용하는 서버의 저장소 루트에서 아래 명령을 실행합니다. `.env`의 `MYSQL_*`는 갱신한 RDS를 가리켜야 합니다. 이 CLI의 기본 저장 위치는 저장소 루트 `chroma_data/`입니다. API에서 `API_HS_CHROMA_PATH`를 별도로 설정했다면 CLI 기본 경로와 같은 저장소인지 먼저 확인합니다.
+
+   ```powershell
+   python -m backend.app.scheduler.jobs.hs_code_embed --rebuild
+   ```
+
+3. 종료 코드 0과 완료 로그의 DB 행 수·컬렉션 개수를 확인한 뒤 검색 API를 다시 시작합니다. API는 컬렉션 객체를 프로세스에 캐시하므로, 재시작해 새 컬렉션을 읽도록 합니다. 변경한 품목의 이름과 검색 결과도 확인합니다.
+
+`--rebuild`는 기존 `hs_code` 컬렉션을 삭제하고 **DB의 모든 판본·단위의 코드를 전체 재임베딩**합니다. 변경된 HS6만 처리하는 것이 아니며, OpenAI 임베딩 API 사용 비용이 발생합니다. 재생성 중에는 컬렉션이 없거나 일부 코드만 들어 있으므로 검색을 재개하지 않습니다. 중간에 실패하면 오류를 해결한 뒤 `--rebuild` 없이 같은 명령을 실행해 누락 코드만 이어서 추가합니다.
+
+#### 시드 생성 원본 보관·공유 위치
+
+현재 시드의 원본은 저장소에 포함된 [`reference/seed_inputs/issue46_seed_sources.zip`](reference/seed_inputs/issue46_seed_sources.zip)에 보관합니다. 같은 브랜치/커밋을 체크아웃한 팀원이 압축 파일을 풀어 같은 입력으로 시드를 재생성할 수 있습니다. 실행 결과 폴더 `hscode_outputs/`는 계속 Git에서 제외합니다.
+
+압축 파일에는 시드 입력 `hs_code_mst.csv`, `hs_code_hs2017.csv`, `hs_code_hs2022_supplement.csv`와 비교용 `hs_code_hs2017_before46.csv`, 파일별 해시 목록 `SHA256SUMS.txt`가 있습니다. 시드 입력 3개의 SHA256은 `11_hs_code_seed.sql` 머리말과 일치합니다. `hs_code_hs2017_before46.csv`는 이전 긴 번역을 비교하는 보관본이며 시드 생성·적재 입력으로 사용하지 않습니다.
+
+예를 들어 압축을 `tmp/issue46-seed-sources/`에 풀었다면 다음과 같이 재생성합니다. UPDATE 출력은 프로젝트 밖의 실제 경로로 지정합니다.
+
+```powershell
+Expand-Archive -LiteralPath backend/app/scheduler/collectors/hscode/reference/seed_inputs/issue46_seed_sources.zip -DestinationPath tmp/issue46-seed-sources
+python backend/app/scheduler/collectors/hscode/hs_code_seed.py --csv tmp/issue46-seed-sources/hs_code_mst.csv tmp/issue46-seed-sources/hs_code_hs2017.csv tmp/issue46-seed-sources/hs_code_hs2022_supplement.csv --seed db/mysql/init/11_hs_code_seed.sql --update <프로젝트_밖_UPDATE.sql>
+```
+
+이후 시드를 새로 만들 때는 입력 스냅샷과 `SHA256SUMS.txt`도 함께 갱신해 공유합니다.
+
+### CSV 생성과 적재
 
 모두 저장소 루트에서 실행합니다.
 
@@ -74,9 +122,9 @@ python -m backend.app.scheduler.jobs.hs_code_refresh
 
 - `hs_code_refresh`는 DB에 올해 판 코드가 모두 있으면 `ALREADY_LOADED`로 끝나 CSV를 만들지 않습니다. CSV만 다시 만들 때는 ②를 실행합니다.
 
-- 요약은 `hscode_outputs/hs6_summary_cache_<hs_ver>_<모델>.json`에 저장됩니다. 다시 실행하면 캐시에 없는 코드만 API로 요청합니다.
-  처음부터 다시 요약하려면 이 캐시 파일을 지웁니다.
-- LLM 응답은 비어 있지 않은 문자열이고 `|`가 없으며 500자 이하일 때만 캐시에 저장합니다. 캐시를 읽을 때도 같은 검사를 해서,
+- 요약은 `hscode_outputs/hs6_summary_cache_v2_<hs_ver>_<모델>.json`에 저장됩니다. 다시 실행하면 캐시에 없는 코드만 API로 요청합니다.
+  처음부터 다시 요약하려면 이 캐시 파일을 지웁니다. 수동 요약으로 바뀐 코드의 기존 LLM 요약도 캐시에 남겨 둡니다.
+- LLM 응답은 비어 있지 않은 문자열이고 `|`·HS코드가 없으며 20자 이하일 때만 캐시에 저장합니다. 끝의 영문자는 원문에 단독으로 있는 글자(예: 비타민 C)만 허용합니다. 캐시를 읽을 때도 같은 검사를 해서,
   유효하지 않은 값(이전 버전이 남긴 `None` 등)은 버리고 다시 요청합니다. 캐시 폴더는 API 호출 전에 만듭니다(`--cache-dir`).
 - 6단위 5,600여 개를 처음 요약할 때는 OpenAI API를 140번 정도 호출합니다(약 20~30분).
 
@@ -127,9 +175,11 @@ python -m backend.app.scheduler.jobs.hs_code_load --csv backend/app/scheduler/co
 
 - 10단위 이름은 실적의 품목명, `source_edition`은 `관세청 수출입실적 YYYY년 M월`(처음 나온 달)입니다.
 - 관세청 HS2017 한글 사전은 포털에 없어(과거 판은 `관세청_HS부호_20250101`뿐) HS2017 상위 행은 이렇게 채웠습니다.
-  2·4단위는 현재 판 한글명 재사용(없으면 UN 영문명), 6단위는 `LLM 한글 번역|UN 영문 원문`입니다.
+  2·4단위는 현재 판 한글명 재사용(없으면 UN 영문명), 6단위는 `20자 이하 요약|UN 영문 원문`입니다.
+  요약은 HS2022와 같은 규칙(`hs_code_build.summarize`)으로 만든 뒤 UN 원문과 대조해 19개를 수동 보정했습니다 (#46).
+  이전의 긴 LLM 한글 번역본은 `hs_code_hs2017_before46.csv`로 남겨 두었으며, 적재 검증(20자·중복)을 통과하지 못하므로 적재하지 않습니다.
 - 보류(적재 안 함): `9999999290`(품목명 `-`, 상위 `9999`·`999999`는 UN 통계용 코드), `621142900`(9자리).
-- HS2022 보완분은 실적 적재(`customs_load`)의 미등록 코드 처리(`fail`·`hold`)를 시험한 뒤 적재합니다.
+- 두 CSV는 `11_hs_code_seed.sql`에 포함되어 새 DB에는 시드로 들어갑니다. 위 명령은 시드 없이 기존 DB에 따로 적재할 때 씁니다.
 
 ## HS 판 간 대응표 (hs_code_correlation)
 

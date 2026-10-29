@@ -1,0 +1,7 @@
+# 저장소 루트에서: python -m pip install -r backend/requirements-ml-report.txt
+-r requirements.txt
+reportlab>=4.2
+pypdf>=5.0
+nbformat>=5.10
+nbclient>=0.10
+ipykernel>=6.29

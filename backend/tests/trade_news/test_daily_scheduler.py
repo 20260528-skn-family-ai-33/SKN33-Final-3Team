@@ -16,6 +16,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from sqlalchemy import text
 from filelock import FileLock
 from backend.app.scheduler.jobs import trade_news_daily as job
+from backend.tests.scheduler_jobs import BASE_JOBS, SHORTNEWS_JOBS
 from news.save import Store
 from .test_batch_history import database, rows
 
@@ -74,7 +75,7 @@ def test_common_scheduler_wires_paused_job_without_invoking_jobs(local, monkeypa
     scheduler = main.build_scheduler(local.tmp / 'un', local.tmp / 'scope', local.env, env_path=local.env)
     scheduled = scheduler.get_job(job.JOB_ID)
     assert scheduled.func is job.run_with_rag and scheduled.next_run_time is None
-    assert len(scheduler.get_jobs()) == 11
+    assert {j.id for j in scheduler.get_jobs()} == BASE_JOBS
     assert not any(j.id == 'trade_news_startup' for j in scheduler.get_jobs())
 
 
@@ -420,7 +421,7 @@ def test_integrated_source_switches_are_independent(local, monkeypatch, trade_en
     monkeypatch.setattr(shortnews_daily, 'run', execute)
     scheduler = main.build_scheduler(local.tmp/'un', local.tmp/'scope', local.env, env_path=local.env)
     jobs = {item.id: item for item in scheduler.get_jobs()}
-    assert len(jobs) == 11 + (2 if short_enabled else 0)
+    assert set(jobs) == BASE_JOBS | (SHORTNEWS_JOBS if short_enabled else frozenset())
     assert ('shortnews_daily' in jobs) is short_enabled
     assert ('shortnews_startup' in jobs) is short_enabled
     trade = jobs['trade_news_daily']

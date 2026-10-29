@@ -96,6 +96,14 @@ class HsCodeLoadTest(unittest.TestCase):
         self.assertEqual(len(hs_code_load.validate(unicode_digits)), 2)  # ASCII 0~9만 허용
         self.assertEqual(hs_code_load.validate(ROWS), [])
 
+    def test_validate_enforces_hs6_summary_rule(self):
+        long_name = [*ROWS[:2], {**ROWS[2], "name_ko": "가" * 21 + "|번식용"}]
+        dup = [*ROWS, {**ROWS[2], "hs_code": "010129", "name_ko": "번식용 말|기타"}]
+        other_ver = [*ROWS, {**ROWS[2], "hs_ver": "HS2017"}]  # 판이 다르면 같은 요약 허용
+        self.assertEqual(len(hs_code_load.validate(long_name)), 1)
+        self.assertEqual(len(hs_code_load.validate(dup)), 1)
+        self.assertEqual(hs_code_load.validate(other_ver), [])
+
     def test_load_csv_keeps_leading_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "hs.csv"

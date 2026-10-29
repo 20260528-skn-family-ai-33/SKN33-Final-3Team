@@ -16,6 +16,7 @@ from backend.app.scheduler.collectors.shortnews import shortnews_collect as coll
 from backend.app.scheduler.jobs import shortnews_daily as job, shortnews_load as loader
 from backend.app.scheduler.jobs import shortnews_pipeline
 from backend.tests import test_shortnews_load as fixture
+from backend.tests.scheduler_jobs import BASE_JOBS, SHORTNEWS_JOBS
 
 NOW = datetime.fromisoformat("2026-10-23T03:00:00+09:00")
 
@@ -146,10 +147,7 @@ class ShortnewsDailyTest(unittest.TestCase):
         with patch.object(job, "run") as run, patch.dict(os.environ, {"SHORTNEWS_DAILY_ENABLED": "true"}):
             scheduler = main.build_scheduler()
             jobs = {scheduled.id: scheduled for scheduled in scheduler.get_jobs()}
-            self.assertEqual(set(jobs), {"hs_code_refresh", "hs_code_refresh_retry", "hs_code_embed",
-                                        "un_data_monthly", "un_data_startup", "un_data_resume",
-                                        "customs_monthly", "customs_monthly_startup", "fx_daily_load",
-                                        "fx_daily_startup", "shortnews_daily", "shortnews_startup", "trade_news_daily"})
+            self.assertEqual(set(jobs), BASE_JOBS | SHORTNEWS_JOBS)
             self.assertIs(jobs[job.JOB_ID].func, run)
             run.assert_not_called()
 
