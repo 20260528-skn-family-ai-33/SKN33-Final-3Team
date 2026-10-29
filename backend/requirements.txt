@@ -13,3 +13,7 @@ chromadb>=1.5,<2         # vector DB (HS 코드 임베딩, hs_code_embed)
 filelock>=3,<4           # UN 수집·초기 적재 상태 파일 동시 실행 방지
 scikit-learn>=1.5         # 수출 유망 시장 모델 (backend/app/ml, HistGradientBoosting·평가 지표·joblib)
 lightgbm>=4,<5           # 최종 모델 A(2단계 LightGBM)와 수출입 월별 작업의 ML 재학습 단계
+
+# 수동 일일 기사 수집·article 적재
+-r app/scheduler/collectors/trade_news/requirements.txt
+-r app/scheduler/collectors/trade_news/requirements-mysql.txt

@@ -1,4 +1,4 @@
--- service_option 공통 기준정보 12건. 01_schema.sql 적용 후 대상 DB를 선택하고 실행합니다.
+-- service_option 공통 기준정보 14건. 01_schema.sql 적용 후 대상 DB를 선택하고 실행합니다.
 -- UTF-8 파일이며 클라이언트 연결 문자셋은 utf8mb4를 사용합니다.
 -- 같은 option_code가 있으면 기존 JSON·표시명·정렬·활성 상태를 모두 보존합니다.
 -- 기존 설정 변경은 별도 UPDATE SQL을 작성하여 PR에서 검토합니다.
@@ -178,3 +178,13 @@ VALUES
     ('INTEREST_SCOPE', 'RULE', '관심 범위 공통',
      '{"include_linked_countries":true,"top_country_count":5,"lookback_months":12}',
      20, TRUE);
+
+
+-- 기사 제공 언론사. 기존 SOURCE 행의 설정은 덮어쓰지 않습니다.
+INSERT IGNORE INTO service_option
+    (option_code, option_type, label_ko, value_json, sort_order, enabled)
+VALUES
+    ('HANKYUNG', 'SOURCE', '한국경제',
+     '{"url":"https://www.hankyung.com/","crawler_source":"hankyung"}', 140, 1),
+    ('FNNEWS', 'SOURCE', '파이낸셜뉴스',
+     '{"url":"https://www.fnnews.com/","crawler_source":"fnnews"}', 150, 1);

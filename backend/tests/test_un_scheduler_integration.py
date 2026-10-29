@@ -25,7 +25,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         with mock.patch.dict('os.environ', {'SHORTNEWS_DAILY_ENABLED': 'false'}):
             s=scheduler.build_scheduler(self.state,Path('custom-scope'),Path('custom-env'))
         jobs={j.id:j for j in s.get_jobs()}
-        self.assertEqual(len(jobs),11)  # HS 3 + UN 3 + 수출입 2 + 환율(fx_daily_load·fx_daily_startup) 2 + 외부 데이터 1
+        self.assertEqual(len(jobs),12)  # HS 3 + UN 3 + 수출입 2 + 환율 2 + 외부 데이터 1 + 무역 뉴스 1 (단신속보는 명시적으로 활성화한 경우만)
         start=jobs['un_data_startup'].trigger.run_date
         self.assertTrue(before+timedelta(seconds=9)<=start<=datetime.now(scheduler.KST)+timedelta(seconds=11))
         j=jobs['un_data_monthly'];self.assertEqual(j.max_instances,1)
@@ -41,7 +41,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         with mock.patch.dict('os.environ', {}, clear=True):
             s = scheduler.build_scheduler(self.state, env_path=env)
         jobs = {j.id: j for j in s.get_jobs()}
-        self.assertEqual(len(jobs), 12)
+        self.assertEqual(len(jobs), 14)  # 일시중지된 trade_news_daily와 외부 데이터 external_refresh 등록도 포함
         self.assertIn('shortnews_startup', jobs)
         now = datetime(2026, 10, 9, 4, tzinfo=scheduler.KST)
         for name in ('un_data_monthly', 'shortnews_daily'):
