@@ -11,6 +11,14 @@ def contains(term, text):
     return term in text
 
 
+def query_contains(term, text):
+    """경영환경의 '환경'을 생태·환경보호 주제어로 확장하지 않습니다."""
+    if term == '환경':
+        # 다른 위치의 환경보호 표현은 남기고 경영 문맥의 일치만 제거합니다.
+        text = re.sub(r'경영\s*환경', '', text)
+    return contains(term, text)
+
+
 @dataclass
 class Vocabulary:
     synonyms: dict = field(default_factory=dict)
@@ -55,10 +63,10 @@ class Vocabulary:
         terms.extend(self.countries.get(c, c) for c in request.conditions.geography.codes)
         normalized = kc.normalize(' '.join(terms))
         for alias, canonical in self.synonyms.items():
-            if alias and (contains(alias, normalized) or contains(canonical, normalized)):
+            if alias and (query_contains(alias, normalized) or query_contains(canonical, normalized)):
                 terms.extend((alias, canonical, self.hypernyms.get(canonical, canonical)))
         for child, parent in self.hypernyms.items():
-            if contains(child, normalized) or contains(parent, normalized):
+            if query_contains(child, normalized) or query_contains(parent, normalized):
                 terms.extend((child, parent))
         return '\n'.join(dict.fromkeys(terms))
 
@@ -66,7 +74,7 @@ class Vocabulary:
         query = kc.normalize(request.query)
         found = set()
         for term in set(self.synonyms.values()) | set(self.hypernyms) | set(self.hypernyms.values()):
-            if contains(term, query):
+            if query_contains(term, query):
                 category = kc.category_of(term, self.categories)
                 if category:
                     found.add(category)
