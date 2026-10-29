@@ -177,13 +177,26 @@ def _fit(text, width, font_px):
     return text.rstrip() + '…'
 
 
-def _tick_label(value):
-    return f'{value:,.0f}' if abs(value - round(value)) < 1e-9 else f'{value:,.1f}'
+def _tick_digits(ticks):
+    """눈금 간격을 그대로 보일 소수 자릿수 (최소 1). 0.25 간격은 2자리, 억 달러 소규모 시장의 0.005 간격은 3자리."""
+    step = abs(ticks[1] - ticks[0]) if len(ticks) > 1 else 1
+    if step <= 0:
+        return 1
+    digits = max(1, -math.floor(math.log10(step)))  # 간격의 첫 유효 숫자 자리부터
+    while digits < 12 and abs(step * 10 ** digits - round(step * 10 ** digits)) > 1e-6:
+        digits += 1
+    return digits
+
+
+def _tick_label(value, digits=1):
+    # 정수 판정도 표시 자릿수 기준으로 (아주 작은 눈금 5e-10을 0으로 보지 않게)
+    return f'{value:,.0f}' if abs(value - round(value)) < 10 ** -(digits + 3) else f'{value:,.{digits}f}'
 
 
 def _axis_room(ticks, minimum):
     """세로축 숫자(.axis 9.5)가 왼쪽 밖으로 나가지 않게 가장 긴 눈금 폭 + 8만큼 비웁니다 (기본 폭보다 좁히지 않음)."""
-    return max(minimum, max(_em(_tick_label(t)) for t in ticks) * 9.5 + 8)
+    digits = _tick_digits(ticks)
+    return max(minimum, max(_em(_tick_label(t, digits)) for t in ticks) * 9.5 + 8)
 
 
 def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, zero=False):
@@ -201,7 +214,7 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, 
     out = [f'<svg class="chart" viewBox="0 0 {width} {height}" width="100%" role="img">']
     for t in ticks:
         out.append(f'<line x1="{left}" x2="{width - right}" y1="{y(t):.1f}" y2="{y(t):.1f}" stroke="{GRID}" stroke-width="1"/>')
-        out.append(f'<text x="{left - 6}" y="{y(t) + 3:.1f}" text-anchor="end" class="axis">{_tick_label(t)}</text>')
+        out.append(f'<text x="{left - 6}" y="{y(t) + 3:.1f}" text-anchor="end" class="axis">{_tick_label(t, _tick_digits(ticks))}</text>')
     for i in _visible_labels(labels, x):
         out.append(f'<text x="{x(i):.1f}" y="{height - 6}" text-anchor="middle" class="axis">{escape(labels[i])}</text>')
     ends = []
@@ -307,7 +320,7 @@ def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, dig
     out = [f'<svg class="chart" viewBox="0 0 {width} {height}" width="100%" role="img">']
     for t in ticks:
         out.append(f'<line x1="{left}" x2="{width - right}" y1="{y(t):.1f}" y2="{y(t):.1f}" stroke="{GRID}"/>')
-        out.append(f'<text x="{left - 5}" y="{y(t) + 3:.1f}" text-anchor="end" class="axis">{_tick_label(t)}</text>')
+        out.append(f'<text x="{left - 5}" y="{y(t) + 3:.1f}" text-anchor="end" class="axis">{_tick_label(t, _tick_digits(ticks))}</text>')
     for i, (label, v, color) in enumerate(zip(labels, scaled, colors)):
         cx = left + slot * i + slot / 2
         if v is not None:

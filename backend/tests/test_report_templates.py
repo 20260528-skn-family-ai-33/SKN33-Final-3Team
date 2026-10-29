@@ -327,6 +327,14 @@ class OnDemandTest(unittest.TestCase):
         self.assertIn('비교 데이터 준비 중', html)
         self.assertIn('비교 값은 “—”로 표시', html)
         self.assertNotIn('전년 —개국', html)
+        # 백엔드가 이전 값을 함께 넘겨도 준비 전이면 이전 값·증감·순위 변동을 보이지 않음
+        mixed = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], status='NOT_READY'))
+        self.assertNotIn('전년 1위', mixed)
+        self.assertRegex(mixed, r'증감률</div>\s*<div class="v">—<')                        # 증감률 카드
+        self.assertRegex(mixed, r'<td class="b">미국</td>\s*<td class="r">16\.12</td><td class="r">18\.7%</td>\s*'
+                                r'<td class="r">—</td><td class="r">—</td>')                  # 이전 수출액·증감
+        self.assertNotRegex(mixed, r'<td>[▲▼]\d')                                            # 순위 변동
+        self.assertRegex(mixed, r'상위 1개국 비중</td><td class="r">18\.7%</td><td class="r">—</td>')
 
     def test_request_channel_metric_and_verification(self):
         html = self.render(request_channel='FORM', metric={'code': 'GROWTH', 'label': '증감률'})
@@ -349,6 +357,18 @@ class OnDemandTest(unittest.TestCase):
         self.assertIn('데이터 준비 중', html)
         html = self.render(lambda c: c['summary']['kpi'].update(top1_name=None, top1_share_pct=None))
         self.assertRegex(html, r'1위 수출국</div>\s*<div class="v">—<')
+        self.assertNotIn('1위 교체', html)                                      # 현재 1위가 없으면 비교 문장 없음
+        self.assertNotIn('에도 1위', html)
+        self.assertNotIn('None', html)
+        zero = self.render(lambda c: c['summary']['kpi'].update(amount_usd=0, country_count=0, top1_name=None,
+                                                                 top1_share_pct=None, top3_share_pct=None))
+        self.assertNotIn('1위 교체', zero)                                      # 현재 수출 0 (비교 기간에는 있음)
+        self.assertNotIn('None', zero)
+        self.assertNotIn('(전년 1위', zero)
+        self.assertIn('중국 → 미국으로 1위 교체', self.render())               # 둘 다 있으면 그대로 표시
+        self.assertRegex(zero, r'<td>전체</td><td class="r">0\.00</td><td class="r">—</td>')  # 수출 0이면 비중 100% 아님
+        empty = self.render(lambda c: c['concentration']['countries'].update(current=None))
+        self.assertNotIn('—개국', empty)                                        # 값 없는 수출국 수는 — 만
 
     def test_month_on_month_wording(self):
         compare = dict(rt.sample_context('ondemand')['conditions']['compare'], mode='MOM')
@@ -490,6 +510,25 @@ class FormatTest(unittest.TestCase):
         self.assertTrue(all(a[1] <= b[0] for a, b in zip(spans, spans[1:])))   # 서로 겹치지 않음
         short = str(rt.line_chart([str(i) for i in range(1, 14)], [{'values': [1e8] * 13}]))
         self.assertEqual(short.count('text-anchor="middle" class="axis"'), 13)   # 13개월은 모두 표시
+
+    def test_small_ranges_keep_distinct_axis_ticks(self):
+        # 월 100만~210만 달러를 억 달러로 그리면 눈금 간격이 0.005 → 모두 0.0이 되면 안 됨
+        svg = str(rt.line_chart([str(i) for i in range(1, 13)], [{'values': [1e6 + i * 1e5 for i in range(12)]}],
+                                divisor=1e8, digits=2))
+        ticks = re.findall(r'text-anchor="end" class="axis">([^<]+)<', svg)
+        self.assertEqual(ticks, ['0.005', '0.010', '0.015', '0.020', '0.025'])
+        left = float(re.search(r'<line x1="([\d.]+)"', svg).group(1))
+        self.assertGreaterEqual(left - 6, rt._em('0.025') * 9.5)                 # 늘어난 자릿수도 왼쪽 안에 들어감
+        quarter = str(rt.bar_chart(['a', 'b'], [0.3e6, 0.9e6], ['#000', '#000']))
+        self.assertEqual(re.findall(r'class="axis">([^<]+)<', quarter)[:5], ['0', '0.25', '0.50', '0.75', '1'])
+        self.assertEqual(rt._tick_digits([0, 2.5, 5]), 1)                       # 기존 간격은 그대로 한 자리
+        for low, high in ((2e5, 4e5), (1e3, 5e3), (10, 50), (1, 3)):            # 월 수십만 ~ 몇 달러
+            svg = str(rt.line_chart(['1', '2'], [{'values': [low, high]}], divisor=1e8, digits=2))
+            ticks = re.findall(r'text-anchor="end" class="axis">([^<]+)<', svg)
+            self.assertEqual(len(set(ticks)), len(ticks), ticks)
+        tiny = str(rt.bar_chart(['a', 'b'], [0.1, 0.17], ['#000', '#000'], divisor=1e8))  # 0 다음 눈금 5e-10
+        ticks = re.findall(r'class="axis">([^<]+)<', tiny)[:5]
+        self.assertEqual(len(set(ticks)), len(ticks), ticks)
 
     def test_nice_scale_covers_data(self):
         low, high, ticks = rt.nice_scale([602e6 / 1e6, 879.0])

@@ -85,7 +85,8 @@
 {% for b in blocks %}
 {% if b.key == 'cards' %}
 {% set top_sub = '' %}
-{% if compare_ready and k.prev_top1_name %}
+{# 현재·이전 1위가 모두 있을 때만 비교 문장 (현재 수출 0이나 미준비면 숨김) #}
+{% if compare_ready and k.top1_name and k.prev_top1_name %}
   {% set top_sub = (k.prev_top1_name ~ ' → ' ~ k.top1_name ~ '으로 1위 교체') if k.prev_top1_name != k.top1_name else (prevw ~ '에도 1위') %}
 {% endif %}
 {{ m.kpis([
@@ -104,9 +105,9 @@
 {% endif %}
 {{ m.kpis([
   {'label': '기간 수출액', 'value': k.amount_usd | eok(1), 'unit': '억 달러', 'sub': (prev_txt ~ (k.prev_amount_usd | eok(1)) ~ '억 달러') if compare_ready else (pend if has_compare else '')},
-  {'label': (vs ~ ' 증감률') if has_compare else '증감률', 'value': k.change_pct | signed_pct if has_compare else '—', 'sub': ('증감액 ' ~ (k.change_usd | signed_eok(1)) ~ '억 달러') if compare_ready else (pend if has_compare else '비교 없음')},
+  {'label': (vs ~ ' 증감률') if has_compare else '증감률', 'value': k.change_pct | signed_pct if compare_ready else '—', 'sub': ('증감액 ' ~ (k.change_usd | signed_eok(1)) ~ '억 달러') if compare_ready else (pend if has_compare else '비교 없음')},
   {'label': '수출국 수', 'value': k.country_count | num, 'unit': '개국', 'sub': (vs ~ ' ' ~ (k.country_count_diff | signed) ~ '개국') if compare_ready else (pend if has_compare else '')},
-  {'label': '상위 1개국 비중', 'value': k.top1_share_pct | num(1), 'unit': '%', 'sub': (k.top1_name or '') ~ ((' (' ~ prevw ~ ' 1위 ' ~ k.prev_top1_name ~ ' ' ~ (k.prev_top1_share_pct | pct) ~ ')') if has_compare and k.prev_top1_name else '')},
+  {'label': '상위 1개국 비중', 'value': k.top1_share_pct | num(1), 'unit': '%', 'sub': (k.top1_name ~ ((' (' ~ prevw ~ ' 1위 ' ~ k.prev_top1_name ~ ' ' ~ (k.prev_top1_share_pct | pct) ~ ')') if compare_ready and k.prev_top1_name else '')) if k.top1_name else ''},
   {'label': '수입액 (참고)', 'value': k.import_usd | eok(1), 'unit': '억 달러', 'sub': (vs ~ ' ' ~ (k.import_change_pct | signed_pct)) if compare_ready else (pend if has_compare else '')},
   {'label': '무역수지', 'value': k.trade_balance_usd | signed_eok(1), 'unit': '억 달러', 'sub': '수출 − 수입'},
   {'label': '상위 3개국 비중', 'value': k.top3_share_pct | num(1), 'unit': '%', 'sub': (prev_txt ~ (k.prev_top3_share_pct | pct) ~ conc) if compare_ready else (pend if has_compare else '')},
@@ -183,6 +184,7 @@
 {% endif %}
 
 {# ---------- 주요 수출국 (TOP_COUNTRIES 선택 시) ---------- #}
+{# 비교를 골랐지만 비교 데이터가 준비 전이면(compare_ready 아님) 열은 두고 이전 값 대신 — 표시 #}
 {% if 'TOP_COUNTRIES' in sections %}
 {% set top = top_countries[:10] %}
 {% set top_rows = (top | list if top else [none]) + (['others'] if others else []) + ['total'] %}
@@ -201,15 +203,15 @@
   {% if r is none %}
   <tr><td colspan="{{ 7 if has_compare else 4 }}" class="small">데이터 준비 중</td></tr>
   {% elif r is mapping %}
-  <tr class="{{ 'lead' if r.rank == 1 }}"><td>{{ r.rank }}</td>{% if has_compare %}<td>{{ r.get('rank_move') | rank_move }}</td>{% endif %}<td class="b">{{ r.name }}</td>
+  <tr class="{{ 'lead' if r.rank == 1 }}"><td>{{ r.rank }}</td>{% if has_compare %}<td>{{ (r.get('rank_move') | rank_move) if compare_ready else '—' }}</td>{% endif %}<td class="b">{{ r.name }}</td>
     <td class="r">{{ r.amount_usd | eok(2) }}</td><td class="r">{{ r.share_pct | pct }}</td>
-    {% if has_compare %}<td class="r">{{ r.prev_amount_usd | eok(2) }}</td><td class="r">{{ r.change_pct | change(new=r.get('is_new', false)) }}</td>{% endif %}</tr>
+    {% if has_compare %}{% if compare_ready %}<td class="r">{{ r.prev_amount_usd | eok(2) }}</td><td class="r">{{ r.change_pct | change(new=r.get('is_new', false)) }}</td>{% else %}<td class="r">—</td><td class="r">—</td>{% endif %}{% endif %}</tr>
   {% elif r == 'others' %}
   <tr class="other"><td></td>{% if has_compare %}<td></td>{% endif %}<td>기타</td><td class="r">{{ others.amount_usd | eok(2) }}</td><td class="r">{{ others.share_pct | pct }}</td>
-    {% if has_compare %}<td class="r">{{ others.prev_amount_usd | eok(2) }}</td><td class="r">{{ others.change_pct | change }}</td>{% endif %}</tr>
+    {% if has_compare %}{% if compare_ready %}<td class="r">{{ others.prev_amount_usd | eok(2) }}</td><td class="r">{{ others.change_pct | change }}</td>{% else %}<td class="r">—</td><td class="r">—</td>{% endif %}{% endif %}</tr>
   {% else %}
-  <tr class="total"><td></td>{% if has_compare %}<td></td>{% endif %}<td>전체</td><td class="r">{{ k.amount_usd | eok(2) }}</td><td class="r">100.0%</td>
-    {% if has_compare %}<td class="r">{{ k.prev_amount_usd | eok(2) }}</td><td class="r">{{ k.change_pct | change }}</td>{% endif %}</tr>
+  <tr class="total"><td></td>{% if has_compare %}<td></td>{% endif %}<td>전체</td><td class="r">{{ k.amount_usd | eok(2) }}</td><td class="r">{{ '100.0%' if k.amount_usd else '—' }}</td>
+    {% if has_compare %}{% if compare_ready %}<td class="r">{{ k.prev_amount_usd | eok(2) }}</td><td class="r">{{ k.change_pct | change }}</td>{% else %}<td class="r">—</td><td class="r">—</td>{% endif %}{% endif %}</tr>
   {% endif %}
   {% endfor %}
 </table>
@@ -228,7 +230,7 @@
       <tr><th>지표</th><th class="r">{{ cur }}</th>{% if has_compare %}<th class="r">{{ prev }}</th>{% endif %}</tr>
       {% for label, key, unit in [('상위 1개국 비중', 'top1', '%'), ('상위 3개국 비중', 'top3', '%'), ('상위 10개국 비중', 'top10', '%'), ('수출국 수', 'countries', '개국')] %}
       {% set v = cc[key] %}
-      <tr><td>{{ label }}</td><td class="r">{{ (v.current | pct) if unit == '%' else ((v.current | num) ~ unit) }}</td>{% if has_compare %}<td class="r">{{ (v.previous | pct) if unit == '%' else ((v.previous | num) ~ unit if v.previous is not none else '—') }}</td>{% endif %}</tr>
+      <tr><td>{{ label }}</td><td class="r">{{ (v.current | pct) if unit == '%' else ((v.current | num) ~ unit if v.current is not none else '—') }}</td>{% if has_compare %}<td class="r">{{ '—' if not compare_ready else (v.previous | pct) if unit == '%' else ((v.previous | num) ~ unit if v.previous is not none else '—') }}</td>{% endif %}</tr>
       {% endfor %}
     </table>
     {% if cc.get('note') %}<p class="reading" style="margin-top:3mm">{{ cc.note }} 비중 = 국가별 수출액 ÷ 전체 수출액 × 100.</p>{% endif %}
