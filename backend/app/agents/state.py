@@ -3,10 +3,10 @@
 LangGraph 그래프의 state이며, langgraph-checkpoint-redis가 Redis에 체크포인트로 저장한다(thread_id = job_id).
 질문·답변·결과표·리포트의 원본은 MySQL이며, state에는 그 ID와 작은 요약만 담는다.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic_core import to_json
 
 from backend.app.schemas.rag import ArticlePeriod, CountryCode, HsProduct, _unique
@@ -54,6 +54,12 @@ class Period(Model):
     """월 단위 조회 기간. start·end 모두 1일, 양끝 포함."""
     start: date
     end: date
+
+    @field_validator('end')
+    @classmethod
+    def month_end_to_first(cls, end: date) -> date:
+        # 기존 채팅 코드(common.period)는 MySQL context_json에 end를 그달 말일로 저장한다.
+        return end.replace(day=1) if (end + timedelta(days=1)).day == 1 else end
 
     @model_validator(mode='after')
     def check_months(self):
@@ -226,7 +232,7 @@ class ToolResult(Model):
     article_ids: list[int] = Field(default_factory=list, max_length=20)
     chart: ChartSpec | None = None                # build_chart
     report_id: str | None = None                  # generate_report 비동기 작업
-    period: Period | None = None                  # 기준 기간
+    period: Period | ArticlePeriod | None = None  # 기준 기간. 수출입·ML은 월 단위, 기사는 일 단위
     source: str | None = None                     # 출처
     checks: list[str] = Field(default_factory=list)   # 통과한 자체 검증
     digest: dict[str, JsonValue] | None = None    # LLM 입력용: 합계·상위 행 등. Decimal·date는 tool이 int·float·str로 바꿔 넣는다

@@ -110,6 +110,12 @@ class AgentStateTest(unittest.TestCase):
         # 기사 기간은 일 단위
         period = Conditions.model_validate({'article_period': {'start': '2026-07-29', 'end': '2026-10-28'}}).article_period
         self.assertEqual(period.start.day, 29)
+        self.assertEqual(ToolResult(status='OK', period={'start': '2026-07-29', 'end': '2026-10-28'}).period.end.day, 28)
+        # 기존 채팅 코드가 MySQL context_json에 저장한 말일 기준 기간도 읽는다
+        stored = Conditions.model_validate({'period': {'start': '2024-10-01', 'end': '2025-09-30'},
+                                            'compare_period': {'start': '2023-10-01', 'end': '2024-02-29'}})
+        self.assertEqual((stored.period.end.isoformat(), stored.compare_period.end.isoformat()), ('2025-09-01', '2024-02-01'))
+        with self.assertRaises(ValidationError): Conditions.model_validate({'period': {'start': '2025-01-01', 'end': '2025-09-15'}})
 
     def test_context_keeps_last_five_turns_and_latest_conditions(self):
         context = SessionContext(session_id='3')
