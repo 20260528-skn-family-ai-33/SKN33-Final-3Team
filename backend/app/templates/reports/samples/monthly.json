@@ -1,0 +1,653 @@
+{
+  "report": {
+    "report_id": "RPT-MO-202512-U0381",
+    "report_type": "RPT_MONTHLY",
+    "kind_label": "정기 리포트 · 월간",
+    "title": "관심 품목 월간 수출 동향",
+    "period_label": "2025년 12월",
+    "cover_eyebrow": "정기 리포트 · 월간 MONTHLY",
+    "cover_lead": "관심 품목 2개 · 관심 국가 3개 · 전월·전년 동월 비교",
+    "footer_label": "관심 품목 월간 수출 동향 · 2025년 12월 · 정기(월간)",
+    "published_at": "2026-01-16T06:00:00",
+    "is_sample": true
+  },
+  "subscription": {
+    "subscription_id": 381,
+    "label": "관심 품목 2 · 관심 국가 3 (마이페이지 리포트 구독 · 월간)"
+  },
+  "conditions": {
+    "hs_items": [
+      {
+        "hs_code": "330499",
+        "hs_ver": "HS2022",
+        "name": "기초화장품 등",
+        "label": "기초화장품",
+        "display": "기초화장품 등 HS 330499"
+      },
+      {
+        "hs_code": "190230",
+        "hs_ver": "HS2022",
+        "name": "라면 등 면류",
+        "label": "라면",
+        "display": "라면 등 HS 190230"
+      }
+    ],
+    "countries": [
+      {
+        "country_code": "US",
+        "name": "미국"
+      },
+      {
+        "country_code": "CN",
+        "name": "중국"
+      },
+      {
+        "country_code": "VN",
+        "name": "베트남"
+      }
+    ],
+    "target_month": "2025-12",
+    "prev_month": "2025-11",
+    "prev_year_month": "2024-12"
+  },
+  "meta": {
+    "latest_available_month": "2025-12",
+    "data_basis": "관세청 수출입무역통계 · KOTRA 해외시장뉴스·단신속보",
+    "publish_note": "12월 통계 적재·검증 완료 후 자동 발행"
+  },
+  "verification": {
+    "passed": 4,
+    "total": 4
+  },
+  "summary": {
+    "highlight": {
+      "label": "관심 국가 중 최대 증가",
+      "value": "미국",
+      "sub": "기초화장품 +32.6%"
+    },
+    "sentences": [
+      "12월 기초화장품 수출은 **879.0백만 달러**로 전월보다 +19.4%, 전년 동월보다 **+18.5%** 늘어 올해 월 최고치입니다.",
+      "라면 수출은 **129.0백만 달러**로 전년 동월 대비 **+19.4%** 늘었고, 중국·미국 두 나라가 36.8%를 차지했습니다.",
+      "관심 국가 중 **미국**의 기초화장품 수출이 전년 동월 대비 **+32.6%** 증가했습니다.",
+      "**중국**은 기초화장품이 −14.8% 줄어 관심 국가 중 유일하게 감소했습니다."
+    ],
+    "check_points": [
+      {
+        "target": "12월 계절성",
+        "content": "두 품목 모두 12월이 연중 최고 — 연말 물량 영향인지 1월 수치와 함께 확인"
+      },
+      {
+        "target": "중국 기초화장품",
+        "content": "전년 동월 대비 감소 — 현지 이슈 ②와 4쪽 국가별 표 참고"
+      }
+    ]
+  },
+  "items": [
+    {
+      "hs_code": "330499",
+      "hs_ver": "HS2022",
+      "name": "기초화장품 등",
+      "label": "기초화장품",
+      "display": "기초화장품 등 HS 330499",
+      "amount_usd": 879000000,
+      "mom_pct": 19.4,
+      "yoy_pct": 18.5,
+      "country_count": 142,
+      "country_count_diff": 6,
+      "top_country": {
+        "name": "미국",
+        "share_pct": 19.5
+      },
+      "trend": {
+        "range_label": "2024.12~2025.12",
+        "labels": [
+          "24.12",
+          "25.1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        "current": [
+          742000000,
+          602000000,
+          631000000,
+          718000000,
+          705000000,
+          744000000,
+          702000000,
+          738000000,
+          695000000,
+          761000000,
+          729000000,
+          736000000,
+          879000000
+        ],
+        "previous": [
+          668000000,
+          521000000,
+          544000000,
+          621000000,
+          602000000,
+          633000000,
+          605000000,
+          627000000,
+          598000000,
+          639000000,
+          630000000,
+          648000000,
+          742000000
+        ]
+      },
+      "country_trend": [
+        {
+          "country_code": "US",
+          "name": "미국",
+          "values": [
+            129000000,
+            111000000,
+            116000000,
+            131000000,
+            125000000,
+            138000000,
+            131000000,
+            140000000,
+            129000000,
+            148000000,
+            140000000,
+            138400000,
+            171200000
+          ]
+        },
+        {
+          "country_code": "CN",
+          "name": "중국",
+          "values": [
+            162000000,
+            133000000,
+            138000000,
+            147000000,
+            141000000,
+            151000000,
+            143000000,
+            145000000,
+            135000000,
+            147000000,
+            132000000,
+            121300000,
+            138000000
+          ]
+        },
+        {
+          "country_code": "VN",
+          "name": "베트남",
+          "values": [
+            37000000,
+            30000000,
+            32000000,
+            34000000,
+            33000000,
+            35000000,
+            34000000,
+            36000000,
+            34000000,
+            37000000,
+            35000000,
+            34200000,
+            40100000
+          ]
+        }
+      ],
+      "top_countries": [
+        {
+          "rank": 1,
+          "is_interest": true,
+          "name": "미국",
+          "amount_usd": 171200000,
+          "share_pct": 19.5,
+          "mom_pct": 23.7,
+          "yoy_pct": 32.6
+        },
+        {
+          "rank": 2,
+          "is_interest": true,
+          "name": "중국",
+          "amount_usd": 138000000,
+          "share_pct": 15.7,
+          "mom_pct": 13.8,
+          "yoy_pct": -14.8
+        },
+        {
+          "rank": 3,
+          "is_interest": false,
+          "name": "일본",
+          "amount_usd": 79100000,
+          "share_pct": 9.0,
+          "mom_pct": 12.7,
+          "yoy_pct": 15.6
+        },
+        {
+          "rank": 4,
+          "is_interest": false,
+          "name": "홍콩",
+          "amount_usd": 51000000,
+          "share_pct": 5.8,
+          "mom_pct": 8.3,
+          "yoy_pct": -12.1
+        },
+        {
+          "rank": 5,
+          "is_interest": true,
+          "name": "베트남",
+          "amount_usd": 40100000,
+          "share_pct": 4.6,
+          "mom_pct": 17.3,
+          "yoy_pct": 8.4
+        },
+        {
+          "rank": 6,
+          "is_interest": false,
+          "name": "러시아",
+          "amount_usd": 33000000,
+          "share_pct": 3.8,
+          "mom_pct": 9.6,
+          "yoy_pct": 13.8
+        },
+        {
+          "rank": 7,
+          "is_interest": false,
+          "name": "대만",
+          "amount_usd": 31000000,
+          "share_pct": 3.5,
+          "mom_pct": 19.2,
+          "yoy_pct": 40.9
+        },
+        {
+          "rank": 8,
+          "is_interest": false,
+          "name": "UAE",
+          "amount_usd": 29000000,
+          "share_pct": 3.3,
+          "mom_pct": 20.3,
+          "yoy_pct": 70.6
+        },
+        {
+          "rank": 9,
+          "is_interest": false,
+          "name": "폴란드",
+          "amount_usd": 26000000,
+          "share_pct": 3.0,
+          "mom_pct": 36.8,
+          "yoy_pct": 136.4
+        },
+        {
+          "rank": 10,
+          "is_interest": false,
+          "name": "태국",
+          "amount_usd": 21000000,
+          "share_pct": 2.4,
+          "mom_pct": 10.5,
+          "yoy_pct": 10.5
+        }
+      ],
+      "others": {
+        "amount_usd": 259600000,
+        "share_pct": 29.5,
+        "mom_pct": 25.7,
+        "yoy_pct": 37.0
+      }
+    },
+    {
+      "hs_code": "190230",
+      "hs_ver": "HS2022",
+      "name": "라면 등 면류",
+      "label": "라면",
+      "display": "라면 등 HS 190230",
+      "amount_usd": 129000000,
+      "mom_pct": 8.4,
+      "yoy_pct": 19.4,
+      "country_count": 96,
+      "country_count_diff": 5,
+      "top_country": {
+        "name": "중국",
+        "share_pct": 18.7
+      },
+      "trend": {
+        "range_label": "2024.12~2025.12",
+        "labels": [
+          "24.12",
+          "25.1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        "current": [
+          108000000,
+          92000000,
+          95000000,
+          101000000,
+          99000000,
+          104000000,
+          102000000,
+          107000000,
+          103000000,
+          110000000,
+          116000000,
+          119000000,
+          129000000
+        ],
+        "previous": [
+          97000000,
+          78000000,
+          81000000,
+          86000000,
+          85000000,
+          89000000,
+          87000000,
+          91000000,
+          88000000,
+          94000000,
+          100000000,
+          103000000,
+          108000000
+        ]
+      },
+      "country_trend": [
+        {
+          "country_code": "US",
+          "name": "미국",
+          "values": [
+            19300000,
+            16000000,
+            17000000,
+            18000000,
+            17600000,
+            18500000,
+            18400000,
+            19600000,
+            19000000,
+            20300000,
+            21000000,
+            21200000,
+            23400000
+          ]
+        },
+        {
+          "country_code": "CN",
+          "name": "중국",
+          "values": [
+            22200000,
+            19000000,
+            20000000,
+            21000000,
+            20500000,
+            21400000,
+            21000000,
+            22000000,
+            21000000,
+            22500000,
+            21600000,
+            21800000,
+            24100000
+          ]
+        },
+        {
+          "country_code": "VN",
+          "name": "베트남",
+          "values": [
+            3600000,
+            3100000,
+            3200000,
+            3400000,
+            3300000,
+            3500000,
+            3500000,
+            3700000,
+            3600000,
+            3800000,
+            3900000,
+            3900000,
+            4200000
+          ]
+        }
+      ],
+      "top_countries": [
+        {
+          "rank": 1,
+          "is_interest": true,
+          "name": "중국",
+          "amount_usd": 24100000,
+          "share_pct": 18.7,
+          "mom_pct": 10.6,
+          "yoy_pct": 8.6
+        },
+        {
+          "rank": 2,
+          "is_interest": true,
+          "name": "미국",
+          "amount_usd": 23400000,
+          "share_pct": 18.1,
+          "mom_pct": 10.4,
+          "yoy_pct": 21.2
+        },
+        {
+          "rank": 3,
+          "is_interest": false,
+          "name": "일본",
+          "amount_usd": 11200000,
+          "share_pct": 8.7,
+          "mom_pct": -5.9,
+          "yoy_pct": -8.2
+        },
+        {
+          "rank": 4,
+          "is_interest": false,
+          "name": "네덜란드",
+          "amount_usd": 7400000,
+          "share_pct": 5.7,
+          "mom_pct": 21.3,
+          "yoy_pct": 76.2
+        },
+        {
+          "rank": 5,
+          "is_interest": false,
+          "name": "말레이시아",
+          "amount_usd": 6800000,
+          "share_pct": 5.3,
+          "mom_pct": 9.7,
+          "yoy_pct": 13.3
+        },
+        {
+          "rank": 6,
+          "is_interest": false,
+          "name": "필리핀",
+          "amount_usd": 5300000,
+          "share_pct": 4.1,
+          "mom_pct": 6.0,
+          "yoy_pct": 8.2
+        },
+        {
+          "rank": 7,
+          "is_interest": false,
+          "name": "캐나다",
+          "amount_usd": 5100000,
+          "share_pct": 4.0,
+          "mom_pct": 15.9,
+          "yoy_pct": 45.7
+        },
+        {
+          "rank": 8,
+          "is_interest": false,
+          "name": "호주",
+          "amount_usd": 4900000,
+          "share_pct": 3.8,
+          "mom_pct": 14.0,
+          "yoy_pct": 36.1
+        },
+        {
+          "rank": 9,
+          "is_interest": false,
+          "name": "태국",
+          "amount_usd": 4700000,
+          "share_pct": 3.6,
+          "mom_pct": 6.8,
+          "yoy_pct": 11.9
+        },
+        {
+          "rank": 10,
+          "is_interest": true,
+          "name": "베트남",
+          "amount_usd": 4200000,
+          "share_pct": 3.3,
+          "mom_pct": 7.7,
+          "yoy_pct": 16.7
+        }
+      ],
+      "others": {
+        "amount_usd": 31900000,
+        "share_pct": 24.7,
+        "mom_pct": 7.0,
+        "yoy_pct": 31.3
+      }
+    }
+  ],
+  "interest_overview": [
+    {
+      "country_code": "US",
+      "name": "미국",
+      "values": [
+        {
+          "amount_usd": 171200000,
+          "yoy_pct": 32.6
+        },
+        {
+          "amount_usd": 23400000,
+          "yoy_pct": 21.2
+        }
+      ]
+    },
+    {
+      "country_code": "CN",
+      "name": "중국",
+      "values": [
+        {
+          "amount_usd": 138000000,
+          "yoy_pct": -14.8
+        },
+        {
+          "amount_usd": 24100000,
+          "yoy_pct": 8.6
+        }
+      ]
+    },
+    {
+      "country_code": "VN",
+      "name": "베트남",
+      "values": [
+        {
+          "amount_usd": 40100000,
+          "yoy_pct": 8.4
+        },
+        {
+          "amount_usd": 4200000,
+          "yoy_pct": 16.7
+        }
+      ]
+    }
+  ],
+  "article_limit": 2,
+  "articles": [
+    {
+      "no": 1,
+      "article_id": null,
+      "country": "미국",
+      "item_label": "기초화장품",
+      "published_date": "2025-12-15",
+      "source_label": "KOTRA 해외시장뉴스",
+      "office": "뉴욕무역관",
+      "title": "미국 연말 쇼핑 시즌, K-뷰티 선물세트 판매 호조",
+      "summary": "온라인몰 연말 기획전에서 한국 기초화장품 세트 판매가 늘었다고 전함.",
+      "source_url": null
+    },
+    {
+      "no": 2,
+      "article_id": null,
+      "country": "중국",
+      "item_label": "기초화장품",
+      "published_date": "2025-12-04",
+      "source_label": "KOTRA 해외시장뉴스",
+      "office": "상하이무역관",
+      "title": "중국 화장품 수입 시장, 자국 브랜드와 경쟁 심화",
+      "summary": "현지 브랜드 가격 경쟁으로 수입 브랜드의 온라인 판매가 둔화됐다고 분석.",
+      "source_url": null
+    },
+    {
+      "no": 3,
+      "article_id": null,
+      "country": "중국",
+      "item_label": "라면",
+      "published_date": "2025-11-27",
+      "source_label": "KOTRA 해외시장뉴스",
+      "office": "베이징무역관",
+      "title": "중국 즉석면 시장, 프리미엄·매운맛 제품 수요 확대",
+      "summary": "고가 즉석면과 매운맛 제품 판매가 늘며 한국 라면 수입이 증가했다고 소개.",
+      "source_url": null
+    },
+    {
+      "no": 4,
+      "article_id": null,
+      "country": "폴란드",
+      "item_label": "기초화장품",
+      "published_date": "2025-12-10",
+      "source_label": "KOTRA 단신속보",
+      "office": "바르샤바무역관",
+      "title": "폴란드 드럭스토어 체인, 아시아 화장품 코너 확대",
+      "summary": "주요 드럭스토어 체인이 아시아 화장품 판매 매장을 늘리기로 했다는 단신.",
+      "source_url": null
+    },
+    {
+      "no": 5,
+      "article_id": null,
+      "country": "베트남",
+      "item_label": "라면",
+      "published_date": "2025-12-18",
+      "source_label": "KOTRA 단신속보",
+      "office": "호치민무역관",
+      "title": "베트남 편의점 확대와 수입 간편식 수요",
+      "summary": "편의점 점포 수 증가로 수입 라면·간편식 진열이 늘고 있다는 단신.",
+      "source_url": null
+    }
+  ],
+  "sources": [
+    {
+      "label": "수출 통계",
+      "provider": "관세청 품목별·국가별 수출입실적",
+      "scope": "HS 10단위 월별 → 6단위 합산 · 대상 월 2025.12 · 비교 2025.11, 2024.12"
+    },
+    {
+      "label": "해외시장뉴스",
+      "provider": "KOTRA 해외시장뉴스",
+      "scope": "발행일 · 원문 URL · 이슈 ①②③"
+    },
+    {
+      "label": "단신속보",
+      "provider": "KOTRA 단신속보",
+      "scope": "발행일 · 원문 URL · 이슈 ④⑤"
+    }
+  ]
+}

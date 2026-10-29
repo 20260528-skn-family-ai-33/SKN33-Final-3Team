@@ -1,0 +1,217 @@
+{# 정기 리포트 · 분기 (RPT_QUARTERLY). 변수 설명: templates/reports/README.md #}
+{% import "_macros.html" as m %}
+{# 품목 그래프 쪽은 2개씩 고정. 요약·기사 쪽 나눔(layout)은 report_templates.layout()이 내용 높이로 계산합니다. #}
+{% set item_pages = items | batch(2) | list %}
+{% set item_pages = item_pages if item_pages else [[]] %}
+{% set k = item_pages | length %}
+{# 관심 국가 추이 쪽은 국가가 많아 범례가 길면 한 쪽에 품목 1개 (layout.country_per_page) #}
+{% set country_pages = items | batch(layout.country_per_page) | list %}
+{% set country_pages = country_pages if country_pages else [[]] %}
+{% set kc = country_pages | length %}
+{% set p_summary = 2 + layout.contents_count %}
+{% set p_trend = p_summary + layout.summary | length %}
+{% set p_country_q = p_trend + k %}
+{% set p_country_m = p_country_q + kc %}
+{% set p_top = p_country_m + kc %}
+{% set p_issue = p_top + k %}
+{% set p_sources = p_issue + layout.articles | length %}
+{% set total = p_sources %}
+{% set q = conditions.quarter_label %}
+{% set color_of = {} %}
+{% for c in conditions.countries %}{% set _ = color_of.update({c.country_code: series_colors[loop.index0 % series_colors | length]}) %}{% endfor %}
+{% set country_keys = [] %}
+{% for c in conditions.countries %}{% set _ = country_keys.append({'name': c.name, 'color': color_of[c.country_code], 'kind': 'line'}) %}{% endfor %}
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>{{ report.title }} · {{ report.period_label }}</title>
+<style>{{ css | safe }}</style>
+</head>
+<body>
+
+{{ m.cover(report, total) }}
+
+{% set toc = [
+  {'title': '분기 요약', 'page': p_summary}, {'title': '분기·월별 추이', 'page': p_trend},
+  {'title': '관심 국가 추이 · 최근 8개 분기', 'page': p_country_q}, {'title': '관심 국가 추이 · 해당 분기 3개월', 'page': p_country_m},
+  {'title': '주요 수출국', 'page': p_top}, {'title': '현지 이슈', 'page': p_issue}, {'title': '데이터 기준 · 출처', 'page': p_sources}] %}
+{% set info = [
+  {'label': '구독 조건', 'value': subscription.label},
+  {'label': '관심 품목', 'value': conditions.hs_items | map(attribute='display') | join(' · ')},
+  {'label': '관심 국가', 'value': conditions.countries | map(attribute='name') | join(' · ')},
+  {'label': '대상 분기', 'value': report.period_label ~ ' (' ~ conditions.months_label ~ ')'},
+  {'label': '비교 기준', 'value': '전년 동분기 ' ~ conditions.prev_year_quarter_label ~ ' · 전분기 ' ~ conditions.prev_quarter_label},
+  {'label': '발행', 'value': (report.published_at | ymdhm) ~ ' · ' ~ meta.publish_note},
+  {'label': '리포트 ID', 'value': report.report_id},
+  {'label': '데이터 기준', 'value': meta.data_basis},
+] %}
+{% set notes = ['금액 단위 백만 달러(USD). 분기 합계 = 3개월 월별 수출액 합.',
+                '분기 마지막 달(3·6·9·12월) 통계가 적재·검증되면 자동 발행합니다.'] %}
+{% if report.is_sample %}{% set _ = notes.append('이 예시의 수치·기사는 템플릿 시연용입니다.') %}{% endif %}
+{{ m.contents(report, toc, info, notes, total) }}
+
+{# ---------- 01 분기 요약 ---------- #}
+{% for blocks in layout.summary %}
+{% call m.page(report, p_summary + loop.index0, total) %}
+{% if loop.first %}
+{{ m.heading(1, '분기 요약', report.period_label ~ '(' ~ conditions.months_label ~ ') · 전년 동분기·전분기 대비 · 단위 백만 달러 · ' ~ m.verified_text(verification)) }}
+{% else %}
+{{ m.heading(none, '분기 요약 (계속)') }}
+{% endif %}
+{% for b in blocks %}
+{% if b.key == 'kpis' %}
+{% set cards = [] %}
+{% for item in items[:2] %}
+  {% set _ = cards.append({'label': item.label ~ ' ' ~ q ~ ' 수출', 'value': item.amount_usd | musd(0), 'unit': '백만$', 'sub': '전년 동분기 대비 ' ~ (item.yoy_pct | signed_pct)}) %}
+{% endfor %}
+{# 하이라이트 기준이 정해지지 않으면(null) 카드를 숨깁니다 #}
+{% if summary.highlight %}{% set _ = cards.append({'label': summary.highlight.label, 'value': summary.highlight.value, 'sub': summary.highlight.sub}) %}{% endif %}
+{{ m.kpis(cards, cards | length) }}
+{% elif b.key == 'sentences' %}
+{{ m.sentences(summary.sentences[b.start:b.end], b.start + 1) }}
+{% elif b.key == 'items' %}
+<h3>품목별 분기 지표{{ ' (계속)' if b.cont }}<small>분기 합계 · 백만 달러</small></h3>
+<table>
+  <tr><th>품목</th><th class="r">{{ q }} 합계</th><th class="r">전년 동분기 대비</th><th class="r">전분기 대비</th><th class="r">수출국 수</th><th class="r">1위 국가 비중</th></tr>
+  {% for item in items[b.start:b.end] %}
+  <tr><td><span class="b">{{ item.label }}</span><br><span class="small">HS {{ item.hs_code }}</span></td>
+    <td class="r b">{{ item.amount_usd | musd(0) }}</td><td class="r">{{ item.yoy_pct | change }}</td><td class="r">{{ item.qoq_pct | change }}</td>
+    <td class="r">{{ item.country_count | num }}개국 <span class="diff">({{ item.country_count_diff | signed }})</span></td>
+    <td class="r">{{ item.top_country.name }} {{ item.top_country.share_pct | pct }}</td></tr>
+  {% endfor %}
+</table>
+{% elif b.key == 'overview' %}
+{# 품목이 많으면 가로로 넘치지 않게 품목 3개씩 표를 나눕니다 #}
+<h3>관심 국가 한눈에{{ ' (계속)' if b.cont }}<small>{{ q }} 합계 · 전년 동분기 대비</small></h3>
+<table>
+  <tr><th>관심 국가</th>{% for i in b.group %}<th class="r">{{ items[i].label }}</th><th class="r">전년 동분기</th>{% endfor %}</tr>
+  {% for row in interest_overview[b.start:b.end] %}
+  <tr><td class="b">{{ row.name }}</td>{% for i in b.group %}{% set v = row['values'][i] %}<td class="r">{{ v.amount_usd | musd }}</td><td class="r">{{ v.yoy_pct | change }}</td>{% endfor %}</tr>
+  {% else %}
+  <tr><td colspan="{{ 1 + 2 * b.group | length }}" class="small">{{ '데이터 준비 중' if conditions.countries else '관심 국가가 없습니다.' }}</td></tr>
+  {% endfor %}
+</table>
+{% elif b.key == 'checks' %}
+<h3>이번 분기 확인할 점{{ ' (계속)' if b.cont }}</h3>
+{{ m.check_table(summary.check_points[b.start:b.end]) }}
+{% endif %}
+{% endfor %}
+{% endcall %}
+{% endfor %}
+
+{# ---------- 02 분기·월별 추이 (품목 2개씩 한 쪽) ---------- #}
+{% for chunk in item_pages %}
+{% call m.page(report, p_trend + loop.index0, total) %}
+{{ m.heading(2 if loop.first else none, '분기·월별 추이' ~ ('' if loop.first else ' (계속)'), '분기 합계 8개 분기와 ' ~ q ~ ' 3개월 월별 비교 · 막대: ' ~ conditions.prev_year ~ '년 회색 / ' ~ conditions.year ~ '년 초록') }}
+{{ m.legend([{'name': conditions.year ~ '년 분기', 'color': colors.accent}, {'name': conditions.prev_year ~ '년 분기', 'color': colors.previous}]) }}
+{% for item in chunk %}
+{% set bar_colors = [] %}
+{% for v in item.quarters['values'] %}{% set _ = bar_colors.append(colors.accent if loop.index0 >= item.quarters.current_from else colors.previous) %}{% endfor %}
+<h3>{{ item.label }}<small>HS {{ item.hs_code }} · 백만 달러</small></h3>
+<div class="grid2">
+  <div><div class="small">최근 {{ item.quarters.labels | length }}개 분기 합계</div>
+    {% if has_values([item.quarters['values']]) %}{{ bar_chart(item.quarters.labels, item.quarters['values'], bar_colors, height=235, ticks=7, show=[item.quarters.get('previous_index', item.quarters.current_from - 1), item.quarters.labels | length - 1]) }}{% else %}{{ m.pending() }}{% endif %}</div>
+  <div><div class="small">{{ q }} 월별 3개월 추이 ({{ conditions.year }} vs {{ conditions.prev_year }})</div>
+    <table>
+      <tr><th>월</th><th class="r">{{ conditions.year }}</th><th class="r">{{ conditions.prev_year }}</th><th class="r">전년 동월</th></tr>
+      {% for r in item.months %}<tr><td>{{ r.label }}</td><td class="r">{{ r.amount_usd | musd(0) }}</td><td class="r">{{ r.prev_amount_usd | musd(0) }}</td><td class="r">{{ r.yoy_pct | change }}</td></tr>{% endfor %}
+      <tr class="total"><td>{{ q }}</td><td class="r">{{ item.amount_usd | musd(0) }}</td><td class="r">{{ item.prev_amount_usd | musd(0) }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
+    </table></div>
+</div>
+{% endfor %}
+<p class="small">분기 합계는 월별 수출액을 그대로 더한 값이며, 막대 위 숫자는 {{ conditions.prev_year_quarter_label }}와 {{ report.period_label }}입니다.</p>
+{% endcall %}
+{% endfor %}
+
+{# ---------- 03·04 관심 국가 추이 ---------- #}
+{% for title, no, start, kind in [('관심 국가 추이 · 최근 8개 분기', 3, p_country_q, 'q'), ('관심 국가 추이 · 해당 분기 3개월', 4, p_country_m, 'm')] %}
+{% for chunk in country_pages %}
+{% call m.page(report, start + loop.index0, total) %}
+{{ m.heading(no if loop.first else none, title ~ ('' if loop.first else ' (계속)'), conditions.countries | map(attribute='name') | join(' · ') ~ ' | 국가별 선 색상은 모든 그래프에서 같습니다') }}
+{% for item in chunk %}
+{% set source = item.country_quarters if kind == 'q' else item.country_months.series %}
+{% set labels = item.quarters.labels if kind == 'q' else item.country_months.labels %}
+{# 국가가 많아 끝 값 라벨이 그래프 안에 다 들어가지 않으면 라벨 대신 범례에 마지막 값을 붙입니다 #}
+{% set show_ends = end_labels_fit(source | length, 235) %}
+{# 범례 값은 마지막 기간(labels[-1]) 기준. 그 기간이 null인 국가는 값이 있는 마지막 기간을 괄호로 표시 #}
+<h3>{{ item.label }}<small>단위 백만 달러{{ '' if show_ends else ' · 범례 숫자는 ' ~ full_period_label(labels, labels | length - 1) ~ ' 값 (괄호는 값이 있는 마지막 기간)' }}</small></h3>
+{% if show_ends %}
+{{ m.legend(country_keys) }}
+{% else %}
+{% set keys = [] %}
+{% for s in source %}{% set _ = keys.append({'name': s.name ~ ' ' ~ legend_value(s['values'], labels), 'color': color_of[s.country_code], 'kind': 'line'}) %}{% endfor %}
+{{ m.legend(keys) }}
+{% endif %}
+{% set lines = [] %}
+{% for s in source %}{% set _ = lines.append({'values': s['values'], 'color': color_of[s.country_code]}) %}{% endfor %}
+{% if lines and has_values(lines | map(attribute='values')) %}{{ line_chart(labels, lines, height=235, zero=true) }}
+{% elif lines %}{{ m.pending() }}{% else %}<div class="empty">관심 국가가 없습니다.</div>{% endif %}
+{% endfor %}
+<p class="small">{{ report.period_label }} 값은 해당 국가의 {{ conditions.months_label }} 수출액 합계와 같습니다.</p>
+{% endcall %}
+{% endfor %}
+{% endfor %}
+
+{# ---------- 05 주요 수출국 ---------- #}
+{% for chunk in item_pages %}
+{% call m.page(report, p_top + loop.index0, total) %}
+{{ m.heading(5 if loop.first else none, '주요 수출국' ~ ('' if loop.first else ' (계속)'), q ~ ' 합계 상위 10개국 · 단위 백만 달러 · 전년 동분기(' ~ conditions.prev_year_quarter_label ~ ') 대비') }}
+<div class="grid2">
+{% for item in chunk %}
+  <div><h3>{{ item.label }}<small>HS {{ item.hs_code }}</small></h3>
+  <table class="compact">
+    <tr><th>#</th><th>국가</th><th class="r">{{ q }}</th><th class="r">비중</th><th class="r">전년 동분기</th></tr>
+    {% for r in item.top_countries[:10] %}<tr><td>{{ r.rank }}</td><td>{{ m.country(r) }}</td><td class="r">{{ r.amount_usd | musd }}</td><td class="r">{{ r.share_pct | pct }}</td><td class="r">{{ r.yoy_pct | change(new=r.get('is_new_yoy', false)) }}</td></tr>
+    {% else %}<tr><td colspan="5" class="small">{{ '해당 범위의 수출 실적이 없습니다.' if item.amount_usd == 0 else '데이터 준비 중' }}</td></tr>{% endfor %}
+    {% if item.others %}<tr class="other"><td></td><td>기타</td><td class="r">{{ item.others.amount_usd | musd }}</td><td class="r">{{ item.others.share_pct | pct }}</td><td class="r">{{ item.others.yoy_pct | change }}</td></tr>{% endif %}
+    <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">{{ '100.0%' if item.amount_usd else '—' }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
+  </table></div>
+{% endfor %}
+</div>
+<h3>상위 5개국 {{ q }} 비교<small>{{ conditions.year }} vs {{ conditions.prev_year }} · 백만 달러</small></h3>
+{{ m.legend([{'name': report.period_label, 'color': colors.accent}, {'name': conditions.prev_year_quarter_label, 'color': colors.previous}]) }}
+<div class="grid2">
+{% for item in chunk %}
+  {% set rows = [] %}
+  {% for r in item.top5_compare %}{% set _ = rows.append({'label': r.name, 'values': [r.current, r.previous]}) %}{% endfor %}
+  <div>{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=70, width=320, row_height=30, divisor=1000000, digits='auto') }}{% else %}{{ m.pending() }}{% endif %}</div>
+{% endfor %}
+</div>
+{% endcall %}
+{% endfor %}
+
+{# ---------- 06 현지 이슈 ---------- #}
+{% for blocks in layout.articles %}
+{% call m.page(report, p_issue + loop.index0, total) %}
+{% if loop.first %}
+{{ m.heading(6, '현지 이슈', '품목 관련 해외 기사 · ' ~ report.period_label) }}
+{{ m.article_policy(article_limit, article_policy_note | default(none)) }}
+{% else %}
+{{ m.heading(none, '현지 이슈 (계속)') }}
+{% endif %}
+{% for b in blocks %}
+{% if b.key == 'articles' %}{{ m.articles(articles[b.start:b.end], report.is_sample) }}
+{% elif b.key == 'tail' %}<p class="small" style="margin-top:4mm">{{ one_off_note }}</p>{% endif %}
+{% endfor %}
+{% endcall %}
+{% endfor %}
+
+{# ---------- 07 데이터 기준 · 출처 ---------- #}
+{% call m.page(report, p_sources, total) %}
+{{ m.heading(7, '데이터 기준 · 출처', '이 리포트에 쓴 데이터와 계산 방법') }}
+{{ m.sources_block(sources, [
+  {'metric': '전년 동분기 대비', 'formula': '(' ~ report.period_label ~ ' − ' ~ conditions.prev_year_quarter_label ~ ') ÷ ' ~ conditions.prev_year_quarter_label ~ ' × 100'},
+  {'metric': '전분기 대비', 'formula': '(' ~ report.period_label ~ ' − ' ~ conditions.prev_quarter_label ~ ') ÷ ' ~ conditions.prev_quarter_label ~ ' × 100'},
+  {'metric': '비중', 'formula': '국가별 분기 수출액 ÷ 해당 품목 분기 전체 × 100'},
+  {'metric': '수출국 수', 'formula': '분기 수출액이 0보다 큰 국가 수 · 괄호는 전년 동분기 대비 증감'},
+], [
+  {'label': '발행 조건', 'value': meta.get('publication_policy', '분기 마지막 달(3·6·9·12월) 통계 적재·검증 완료 → 구독자별 생성 · 실패 시 1회 재시도 후 “생성 지연”')},
+  {'label': '수치 검증', 'value': '표·지표는 결과표에서 직접 삽입(100%) · ' ~ m.verified_text(verification)},
+  {'label': '발행', 'value': (report.published_at | ymdhm) ~ ' · ' ~ report.report_id},
+  {'label': '재열람', 'value': '마이페이지 › 리포트 센터에서 저장된 PDF를 그대로 다시 받기'},
+]) }}
+{% endcall %}
+
+</body>
+</html>

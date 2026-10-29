@@ -87,6 +87,14 @@ def chart_image(section, chart, settings):
 
 
 def report_pdf(document,settings):
+    if document.get('template_pdf'):
+        from backend.app.services.report_pdf import template_pdf
+        saved=document['template_pdf']
+        return template_pdf(saved['report_type'],saved['context'],settings)
+    return reportlab_pdf(document,settings)
+
+
+def reportlab_pdf(document,settings):
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, KeepTogether, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors

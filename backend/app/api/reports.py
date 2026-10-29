@@ -212,6 +212,11 @@ def generate(store,job,settings):
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
+    if record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY'):
+        from backend.app.services.report_context import build_context
+        doc['template_pdf']={'version':1,'report_type':record['report_type'],
+                             'context':build_context(store,uid,record,doc)}
+        doc['sql']=list(store.queries)
     from backend.app.api.report_storage import LocalReportStorage
     storage=LocalReportStorage(settings.files)
     prefix=f'{uid}/{rid}/{job["claim_token"]}'
