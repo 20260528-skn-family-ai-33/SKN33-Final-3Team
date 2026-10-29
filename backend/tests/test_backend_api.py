@@ -2,7 +2,7 @@ import io
 import tempfile
 import unittest
 from unittest.mock import patch
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update, delete, text, inspect
@@ -208,7 +208,7 @@ class BackendApiTest(unittest.TestCase):
                 c.execute(self.meta.tables['service_option'].insert(),{'option_code':code,'option_type':kind,
                     'label_ko':'분기','enabled':True,'sort_order':1,'value_json':{}})
             c.execute(self.meta.tables['report_subscription'].insert(),{'user_id':int(uid),'period_code':'QUARTERLY','enabled':True,
-                'filters_json':{'enabled_since':'2025-01-01T00:00:00Z','last_observed_month':baseline,
+                'filters_json':{'enabled_since':('2025-07-20T00:00:00Z' if baseline=='2025-06' else '2025-05-01T00:00:00Z'),'last_observed_month':baseline,
                                 'hs_items':[],'countries':['US'],'formats':['PDF']}})
             for name in ('export_summary','import_summary'):
                 t=self.meta.tables[name]
@@ -248,7 +248,7 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(enqueue_due(store),1)
             self.assertEqual(enqueue_due(store),0)
 
-    def test_quarterly_reports_do_not_backfill_before_subscription_baseline(self):
+    def test_quarterly_reports_do_not_backfill_before_subscription_date(self):
         from backend.app.api.subscriptions import enqueue_due
         uid=self.signup(); self.seed_quarterly_subscription(uid,baseline='2025-06')
         with self.engine.begin() as c:
@@ -288,17 +288,21 @@ class BackendApiTest(unittest.TestCase):
         self.client.put('/api/v1/users/me/interests',json={'hs_items':[],'country_codes':['US'],'expected_version':interest['version']},headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(self.client.put(url,json={**body,'use_saved_interests':False},headers={'X-CSRF-Token':self.csrf}).status_code,400)
         self.assertEqual(self.client.put(url,json={**body,'period_codes':[]},headers={'X-CSRF-Token':self.csrf}).status_code,400)
-        response=self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf}); self.assertEqual(response.status_code,200,response.text)
+        with patch('backend.app.api.reports.now',return_value=datetime(2026,1,1)):
+            response=self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(response.status_code,200,response.text)
         from backend.app.api.subscriptions import enqueue_due
         with self.engine.begin() as c:
             store=Store(self.app.state.database,c)
-            self.assertEqual(enqueue_due(store),0)  # 가입 당시 최신월은 재발행하지 않는다.
+            self.assertEqual(enqueue_due(store,datetime(2026,1,14)),0)  # 발행일 이전에는 생성하지 않는다.
             c.execute(self.meta.tables['service_option'].insert(),{'option_code':'RPT_MONTHLY','option_type':'REPORT_TYPE','label_ko':'월간','enabled':True,'sort_order':1,'value_json':{}})
             for target in ('export_summary','import_summary'):
                 c.execute(self.meta.tables[target].insert(),{'trade_month':date(2026,1,1),'hs6_code':'330499','hs_ver':'HS2022','country_code':'US','amount_usd':1500000})
                 c.execute(self.meta.tables['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION','target_table':target,'period_start':date(2026,1,1),'period_end':date(2026,1,31),'status':'SUCCESS','detail_json':{'schema_version':1}})
-            self.assertEqual(enqueue_due(store),1)
-            self.assertEqual(enqueue_due(store),0)
+            self.assertEqual(enqueue_due(store,datetime(2026,1,15)),1)  # 가입 전 준비된 12월도 예정일에 발행한다.
+            self.assertEqual(enqueue_due(store,datetime(2026,2,14)),0)
+            self.assertEqual(enqueue_due(store,datetime(2026,2,15)),1)
+            self.assertEqual(enqueue_due(store,datetime(2026,2,15)),0)
         self.assertFalse(self.client.get('/api/v1/users/me/notification-settings').json()['settings']['notifications_enabled'])
 
     def test_articles_visibility_and_admin_audit(self):

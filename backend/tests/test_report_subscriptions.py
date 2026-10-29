@@ -1,11 +1,11 @@
 """Periodic option registration and collector-compatible subscription scheduling."""
 import unittest
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, update, delete
 from backend.tests import test_backend_api as fixtures
 from backend.app.api.database import Store
-from backend.app.api.subscriptions import enqueue_due, ready_days
+from backend.app.api.subscriptions import enqueue_due, ready_days, scheduled_periods
 from backend.scripts.register_report_options import plan, apply, REPORT_OPTIONS
 
 
@@ -140,6 +140,101 @@ class ReportSubscriptionTest(unittest.TestCase):
         self.assertEqual({x['period_code'] for x in r.json()['items'] if x['enabled']}, {'WEEKLY','MONTHLY','QUARTERLY'})
         with self.engine.begin() as c:
             self.assertEqual(enqueue_due(Store(self.app.state.database,c),user_id=uid),0)
+
+    def test_monthly_waits_until_15th_even_when_data_was_ready_at_signup(self):
+        self.register(); uid=int(self.signup())
+        self.subscribe(uid, 'MONTHLY', enabled_since='2025-12-16T00:00:00Z')
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            # 14:59 UTC is still Jan 14 KST; midnight KST starts publication.
+            self.assertEqual(enqueue_due(store,datetime(2026,1,14,14,59,tzinfo=timezone.utc)),0)
+            self.assertEqual(enqueue_due(store,datetime(2026,1,14,15,tzinfo=timezone.utc)),1)
+            self.assertEqual(enqueue_due(store,datetime(2026,1,16,tzinfo=ZoneInfo('Asia/Seoul'))),0)
+            row=store.one(select(store.t('report')))
+            self.assertEqual(row['conditions_json']['period'],{'start':'2025-12-01','end':'2025-12-31'})
+
+    def test_quarterly_waits_until_january_20th(self):
+        self.register(); uid=int(self.signup())
+        self.subscribe(uid,'QUARTERLY',enabled_since='2025-10-21T00:00:00Z')
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            self.assertEqual(enqueue_due(store,datetime(2026,1,19,23,59)),0)
+            self.assertEqual(enqueue_due(store,datetime(2026,1,20)),1)
+            row=store.one(select(store.t('report')))
+            self.assertEqual(row['conditions_json']['period'],{'start':'2025-10-01','end':'2025-12-31'})
+            self.assertEqual(row['conditions_json']['compare_period'],{'start':'2024-10-01','end':'2024-12-31'})
+
+    def test_weekly_late_data_is_not_lost_after_next_monday(self):
+        self.register(); self.news_runs(); uid=int(self.signup())
+        self.subscribe(uid,enabled_since='2025-12-15T00:00:00Z')
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c); t=store.t('batch_run')
+            c.execute(update(t).where(t.c.target_table=='article').values(status='FAILED'))
+            self.assertEqual(enqueue_due(store,datetime(2025,12,21,23,59)),0)
+            self.assertEqual(enqueue_due(store,datetime(2025,12,22)),0)
+            c.execute(update(t).where(t.c.target_table=='article').values(status='SUCCESS'))
+            self.assertEqual(enqueue_due(store,datetime(2025,12,30)),1)
+            self.assertEqual(enqueue_due(store,datetime(2025,12,30)),0)
+            row=store.one(select(store.t('report')))
+            self.assertEqual(row['conditions_json']['period'],{'start':'2025-12-15','end':'2025-12-21'})
+
+    def test_monthly_catches_up_multiple_ready_months_after_restart(self):
+        self.register(); uid=int(self.signup())
+        self.subscribe(uid,'MONTHLY',enabled_since='2025-10-16T00:00:00Z')
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            self.assertEqual(enqueue_due(store,datetime(2026,1,16)),3)
+            self.assertEqual(enqueue_due(store,datetime(2026,1,16)),0)
+            rows=store.rows(select(store.t('report')).order_by(store.t('report').c.report_id))
+            self.assertEqual([r['conditions_json']['period']['start'] for r in rows],
+                             ['2025-10-01','2025-11-01','2025-12-01'])
+
+    def test_due_monthly_waits_for_failed_import_then_retries(self):
+        self.register(); uid=int(self.signup())
+        self.subscribe(uid,'MONTHLY',enabled_since='2025-12-16T00:00:00Z')
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c); t=store.t('batch_run')
+            c.execute(t.insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION',
+                'target_table':'import_summary','period_start':date(2025,12,1),
+                'period_end':date(2025,12,31),'status':'FAILED','detail_json':{}})
+            self.assertEqual(enqueue_due(store,datetime(2026,1,15)),0)
+            c.execute(update(t).where(t.c.target_table=='import_summary').values(status='SUCCESS'))
+            self.assertEqual(enqueue_due(store,datetime(2026,1,16)),1)
+            self.assertEqual(enqueue_due(store,datetime(2026,1,16)),0)
+
+
+class PublicationCalendarTest(unittest.TestCase):
+    def dates(self, code, since, at):
+        return [p for p,_ in scheduled_periods(code,since,at)]
+
+    def test_quarter_boundaries_and_year_rollover(self):
+        for due,start,end in [('2026-01-20','2025-10-01','2025-12-31'),
+                              ('2026-04-20','2026-01-01','2026-03-31'),
+                              ('2026-07-20','2026-04-01','2026-06-30'),
+                              ('2026-10-20','2026-07-01','2026-09-30')]:
+            with self.subTest(due=due):
+                since=due[:7]+'-01T00:00:00Z'
+                self.assertEqual(self.dates('QUARTERLY',since,datetime.fromisoformat(due).replace(day=19)),[])
+                self.assertEqual(self.dates('QUARTERLY',since,datetime.fromisoformat(due)),[{'start':start,'end':end}])
+
+    def test_same_day_subscription_starts_next_cycle_and_never_backfills(self):
+        for code,since,at in [('WEEKLY','2025-12-21T15:00:00Z',datetime(2025,12,28)),
+                              ('MONTHLY','2026-01-14T15:00:00Z',datetime(2026,2,14)),
+                              ('QUARTERLY','2026-01-19T15:00:00Z',datetime(2026,4,19))]:
+            with self.subTest(code=code):
+                self.assertEqual(self.dates(code,since,at),[])
+
+    def test_monthly_february_leap_year_and_no_early_publication(self):
+        since='2024-02-16T00:00:00Z'
+        self.assertEqual(self.dates('MONTHLY',since,datetime(2024,3,14)),[])
+        self.assertEqual(self.dates('MONTHLY',since,datetime(2024,3,15)),
+                         [{'start':'2024-02-01','end':'2024-02-29'}])
+
+    def test_weekly_monday_year_rollover(self):
+        since='2025-12-29T00:00:00Z'
+        self.assertEqual(self.dates('WEEKLY',since,datetime(2026,1,4)),[])
+        self.assertEqual(self.dates('WEEKLY',since,datetime(2026,1,5)),
+                         [{'start':'2025-12-29','end':'2026-01-04'}])
 
 
 if __name__ == '__main__': unittest.main()
