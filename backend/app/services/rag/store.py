@@ -1,6 +1,6 @@
 """별도 세대 작성·검증 후 참조 교체. 독자는 한 요청 동안 같은 세대를 사용합니다."""
 from dataclasses import dataclass
-from contextlib import ExitStack, closing
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -15,9 +15,10 @@ from filelock import FileLock
 
 from backend.app.schemas.rag import ArticleSource, COLLECTION_BY_SOURCE
 from backend.app.services.rag.documents import ArticleDocument
+from backend.app.services.news_embedding import MODEL, DIMENSIONS
+from backend.app.services.rag.resources import closing_owned
 
-MODEL = 'text-embedding-3-large'
-DIMENSIONS = 3072
+ARTICLE_COLLECTION = 'kotra_article'
 COLLECTIONS = tuple(dict.fromkeys(COLLECTION_BY_SOURCE.values()))
 REPOSITORY = Path(__file__).resolve().parents[4]
 ROOT = REPOSITORY / 'data/rag/index'
@@ -56,7 +57,7 @@ def has_legacy_body(path):
     if not database.is_file():
         return False
     with sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True) as conn:
-        return conn.execute("SELECT 1 FROM collections WHERE name='kotra_article' LIMIT 1").fetchone() is not None
+        return conn.execute("SELECT 1 FROM collections WHERE name=? LIMIT 1", (ARTICLE_COLLECTION,)).fetchone() is not None
 
 
 
@@ -105,6 +106,21 @@ def read_all(collection, include):
     return output
 
 
+def article_records(article):
+    """계획과 게시에서 같은 문서·조각·입력 길이를 사용합니다."""
+    if not article.body.strip() or 'body_origin' in article.metadata_missing:
+        key = hashlib.sha256((article.identity + ':missing_body').encode()).hexdigest()
+        yield key, '', article.metadata(0, '') | {'record_type': 'missing_body'}, None
+        return
+    from backend.app.scheduler.jobs.news_embed import chunk_text, format_document, CHUNK, OVERLAP
+    for number, chunk in enumerate(chunk_text(article.body, size=CHUNK, overlap=OVERLAP)):
+        text = format_document({'title': article.title, 'published_date': article.published_date,
+                                'countries': article.countries, 'category': article.category}, chunk)
+        digest = hashlib.sha256(text.encode()).hexdigest()
+        key = hashlib.sha256((article.identity + ':' + str(number) + ':' + digest).encode()).hexdigest()
+        yield key, text, article.metadata(number, digest), text
+
+
 @dataclass(frozen=True)
 class IndexSnapshot:
     generation: str
@@ -125,14 +141,14 @@ class IndexSnapshot:
 
 
 class GenerationStore:
-    def __init__(self, root=None, *, client_factory=persistent_client, dimensions=DIMENSIONS, legacy_path=None):
+    def __init__(self, root=None, *, client_factory=persistent_client, dimensions=None, legacy_path=None):
         # factory는 호출마다 새 소유 핸들을 반환해야 합니다. 빌린 client 재사용 함수는 전달하지 않습니다.
         self.root = resolve_root(root)
         # 같은 최종 root면 인자/환경변수 선택 방식과 무관하게 같은 이관 검사를 합니다.
         # 별도 root는 저장소 기본 구형 색인을 자동 인수하거나 조회하지 않습니다.
         self.legacy_path = Path(legacy_path) if legacy_path is not None else (LEGACY_ROOT if self.root == resolve_root(ROOT) else None)
         self.client_factory = client_factory
-        self.dimensions = dimensions
+        self.dimensions = DIMENSIONS if dimensions is None else dimensions
         self.lock = FileLock(str(self.root / 'publish.lock'))
 
     def bind_database(self, identity, *, dry_run=False):
@@ -144,7 +160,8 @@ class GenerationStore:
             saved = json.loads(path.read_text(encoding='utf-8'))
             if saved != {'version': 1, 'database_id': identity}:
                 raise ValueError('source_database_mismatch')
-        elif (self.root / 'active.json').exists() or (self.root / 'keywords/chroma.sqlite3').exists():
+        elif ((self.root / 'active.json').exists() or (self.root / 'keywords/chroma.sqlite3').exists()
+              or (self.root / 'keywords/active.json').exists()):
             raise ValueError('source_database_unbound')
         elif not dry_run:
             atomic_json(path, {'version': 1, 'database_id': identity})
@@ -176,7 +193,64 @@ class GenerationStore:
         return IndexSnapshot(generation, self.client_factory(folder / 'chroma'),
                              frozenset(ArticleSource(s) for s in report['sources']), self.dimensions)
 
-    def publish(self, documents, sources, embed, *, vocabulary=None, hook=lambda stage: None):
+    def catalog(self):
+        """벡터를 열지 않는 이전 세대 입력. 모델·차원 변경 시에도 재구축에 사용합니다."""
+        self.require_active_or_no_legacy()
+        if not (self.root / 'active.json').exists():
+            return None, []
+        generation = json.loads((self.root / 'active.json').read_text(encoding='utf-8'))['generation']
+        folder = self.root / 'generations' / generation
+        report = json.loads((folder / 'status.json').read_text(encoding='utf-8'))
+        if report['status'] != 'ready':
+            raise ValueError('generation_not_ready')
+        validate_generation_contract(report)
+        documents = [ArticleDocument.model_validate_json(line)
+                     for line in (folder / 'articles.jsonl').read_text(encoding='utf-8').splitlines()]
+        if len(documents) != report['articles']:
+            raise ValueError('invalid_generation_catalog')
+        if len({d.key for d in documents}) != len(documents):
+            raise ValueError('duplicate_article')
+        ready = {ArticleSource(s) for s in report['sources']}
+        if any(d.source_code not in ready for d in documents):
+            raise ValueError('source_scope_mismatch')
+        return {**report, 'generation': generation}, documents
+
+    def prepare(self, documents, sources, vocabulary=None):
+        """지정 출처 입력을 교체하고 나머지 출처의 검증된 카탈로그를 보존합니다."""
+        documents = list(documents)
+        previous, catalog = self.catalog()
+        ready_sources = frozenset(ArticleSource(s) for s in sources)
+        if previous:
+            old_sources = frozenset(ArticleSource(s) for s in previous['sources'])
+            old_vocabulary = self.root / 'generations' / previous['generation'] / 'vocabulary.json'
+            if (vocabulary is not None and old_vocabulary.exists() and old_sources - ready_sources
+                    and json.loads(old_vocabulary.read_text(encoding='utf-8')) != vocabulary):
+                raise ValueError('dictionary_changed_refresh_all_ready_sources')
+            documents += [d for d in catalog if d.source_code not in ready_sources]
+            ready_sources |= old_sources
+        if len({d.key for d in documents}) != len(documents):
+            raise ValueError('duplicate_article')
+        if len({d.article_id for d in documents}) != len(documents):
+            raise ValueError('duplicate_internal_article_id')
+        return previous, documents, ready_sources
+
+    def plan_rebuild(self, documents, sources, vocabulary=None):
+        _, documents, ready_sources = self.prepare(documents, sources, vocabulary)
+        chunks = chars = missing = 0
+        for article in documents:
+            for _, text, _, input_text in article_records(article):
+                if input_text is None:
+                    missing += 1
+                else:
+                    chunks += 1
+                    chars += len(text)
+        return {'status': 'planned', 'rebuild': True, 'articles': len(documents),
+                'sources': sorted(s.value for s in ready_sources), 'chunks': chunks,
+                'embedding_chars': chars, 'embedded': chunks, 'reused': 0,
+                'missing_body': missing, 'missing_metadata': sum(bool(d.metadata_missing) for d in documents),
+                'embedding_model': MODEL, 'dimensions': self.dimensions}
+
+    def publish(self, documents, sources, embed, *, vocabulary=None, hook=lambda stage: None, rebuild=False):
         """sources의 전체 현재 입력을 교체. 다른 출처는 이전 세대에서 보존합니다."""
         sources = frozenset(ArticleSource(s) for s in sources)
         if not sources:
@@ -194,31 +268,22 @@ class GenerationStore:
                 if stale_report['status'] == 'building':
                     stale_report.update(status='interrupted', error_code='previous_writer_interrupted')
                     atomic_json(status_path, stale_report)
-            old = self.snapshot() if (self.root / 'active.json').exists() else None
+            previous, documents, ready_sources = self.prepare(documents, sources, vocabulary)
+            # 재구축은 이전 Chroma를 열지 않으므로 모델 변경·벡터 손상에도 카탈로그를 보존합니다.
+            old = self.snapshot() if previous and not rebuild else None
             if old:
-                resources.enter_context(closing(old.client))
-                previous_status = json.loads((self.root / 'generations' / old.generation / 'status.json').read_text(encoding='utf-8'))
-                if set(previous_status.get('collections', {})) != set(COLLECTIONS):
-                    raise ValueError('single_collection_migration_required')
-                old_vocabulary = self.root / 'generations' / old.generation / 'vocabulary.json'
-                if (vocabulary is not None and old_vocabulary.exists() and old.sources - sources
-                        and json.loads(old_vocabulary.read_text(encoding='utf-8')) != vocabulary):
-                    raise ValueError('dictionary_changed_refresh_all_ready_sources')
-                catalog = self.root / 'generations' / old.generation / 'articles.jsonl'
-                documents += [d for d in (ArticleDocument.model_validate_json(line) for line in catalog.read_text(encoding='utf-8').splitlines())
-                              if d.source_code not in sources]
-            if len({d.article_id for d in documents}) != len(documents):
-                raise ValueError('duplicate_internal_article_id')
-            ready_sources = sources | (old.sources if old else frozenset())
+                resources.enter_context(closing_owned(old.client, name='previous_body_store'))
             generation = uuid4().hex
             folder = self.root / 'generations' / generation
             folder.mkdir(parents=True)
             report = {'generation': generation, 'status': 'building', 'stage': 'prepare', 'dimensions': self.dimensions,
+                      'embedding_model': MODEL, 'rebuild': rebuild, 'embedding_chars': 0,
                       'sources': sorted(s.value for s in ready_sources), 'created_at': datetime.now(timezone.utc).isoformat(),
                       **document_contract(), 'articles': len(documents), 'chunks': 0, 'embedded': 0, 'reused': 0, 'collections': {}}
             atomic_json(folder / 'status.json', report)
+            ready_persisted = False
             try:
-                client = resources.enter_context(closing(self.client_factory(folder / 'chroma')))
+                client = resources.enter_context(closing_owned(self.client_factory(folder / 'chroma'), name='body_store'))
                 for name in COLLECTIONS:
                     old_rows = read_all(old.collection(name), ['documents', 'metadatas', 'embeddings']) if old else None
                     reuse = {i: (doc, meta, vector) for i, doc, meta, vector in zip(
@@ -246,21 +311,11 @@ class GenerationStore:
                     col = client.create_collection(name, embedding_function=None,
                         metadata={'embedding_model': MODEL, 'dimensions': self.dimensions, 'hnsw:space': 'cosine', **document_contract()})
                     expected = {}
-                    from backend.app.scheduler.jobs.news_embed import chunk_text, format_document, CHUNK, OVERLAP
                     for article in sorted(documents, key=lambda d: d.key):
                         if COLLECTION_BY_SOURCE[article.source_code] != name:
                             continue
-                        if not article.body.strip() or 'body_origin' in article.metadata_missing:
-                            key = hashlib.sha256((article.identity + ':missing_body').encode()).hexdigest()
-                            meta = article.metadata(0, '') | {'record_type': 'missing_body'}
-                            expected[key] = ('', meta, None)
-                            continue
-                        for number, chunk in enumerate(chunk_text(article.body, size=CHUNK, overlap=OVERLAP)):
-                            text = format_document({'title':article.title, 'published_date':article.published_date,
-                                'countries':article.countries, 'category':article.category}, chunk)
-                            digest = hashlib.sha256(text.encode()).hexdigest()
-                            key = hashlib.sha256((article.identity + ':' + str(number) + ':' + digest).encode()).hexdigest()
-                            metadata = article.metadata(number, digest)
+                        for key, text, metadata, input_text in article_records(article):
+                            number = metadata['chunk']
                             old_key = legacy_keys.get(key)
                             if old_key is not None:
                                 old_text, old_meta, _ = reuse[old_key]
@@ -279,7 +334,7 @@ class GenerationStore:
                                     metadata = extra | metadata
                             if key in expected:
                                 raise ValueError('duplicate_article_record_id')
-                            expected[key] = (text, metadata, text)
+                            expected[key] = (text, metadata, input_text)
                     keys = list(expected)
                     for start in range(0, len(keys), 64):
                         report.update(stage='embedding', current_collection=name, batch_offset=start)
@@ -288,6 +343,7 @@ class GenerationStore:
                         missing = [key for key in part if expected[key][2] is not None
                                    and (key not in reuse or reuse[key][0] != expected[key][0])]
                         fresh = list(embed([expected[key][2] for key in missing])) if missing else []
+                        report['embedding_chars'] += sum(len(expected[key][2]) for key in missing)
                         if len(fresh) != len(missing):
                             raise ValueError('embedding_count_mismatch')
                         vectors = dict(zip(missing, fresh))
@@ -334,25 +390,39 @@ class GenerationStore:
                     os.fsync(stream.fileno())
                 if vocabulary is not None:
                     atomic_json(folder / 'vocabulary.json', vocabulary)
-                elif old and (self.root / 'generations' / old.generation / 'vocabulary.json').exists():
+                elif previous and (self.root / 'generations' / previous['generation'] / 'vocabulary.json').exists():
                     atomic_json(folder / 'vocabulary.json', json.loads(
-                        (self.root / 'generations' / old.generation / 'vocabulary.json').read_text(encoding='utf-8')))
+                        (self.root / 'generations' / previous['generation'] / 'vocabulary.json').read_text(encoding='utf-8')))
                 # 게시 전에 이 호출에서 연 읽기/쓰기 핸들을 닫습니다. 종료 실패도 게시 실패입니다.
                 resources.close()
                 hook('verified')
                 report['status'] = 'ready'
                 report.update(stage='publish', ready_at=datetime.now(timezone.utc).isoformat())
                 atomic_json(folder / 'status.json', report)
+                ready_persisted = True
                 hook('before_publish')
                 atomic_json(self.root / 'active.json', {'generation': generation})
                 return report
             except BaseException as exc:
                 active = self.root / 'active.json'
-                if active.exists() and json.loads(active.read_text(encoding='utf-8')).get('generation') == generation:
-                    if old:
-                        atomic_json(active, {'generation': old.generation})
-                    else:
-                        active.unlink()
-                report.update(status='failed', error_code=type(exc).__name__)
-                atomic_json(folder / 'status.json', report)
+                rollback_failed = False
+                try:
+                    if active.exists() and json.loads(active.read_text(encoding='utf-8')).get('generation') == generation:
+                        if previous:
+                            atomic_json(active, {'generation': previous['generation']})
+                        else:
+                            active.unlink()
+                except BaseException as rollback:
+                    rollback_failed = True
+                    exc.add_note(f'body_pointer_rollback_failed:{type(rollback).__name__}')
+                if rollback_failed and ready_persisted:
+                    # 포인터가 새 세대를 계속 가리킬 수 있습니다. 검증·종료·ready 저장이
+                    # 끝난 세대를 failed로 바꾸면 검색뿐 아니라 카탈로그 기반 재시도도 막힙니다.
+                    exc.add_note('body_ready_generation_preserved_after_rollback_failure')
+                else:
+                    report.update(status='failed', error_code=type(exc).__name__)
+                    try:
+                        atomic_json(folder / 'status.json', report)
+                    except BaseException as cleanup:
+                        exc.add_note(f'body_status_write_failed:{type(cleanup).__name__}')
                 raise
