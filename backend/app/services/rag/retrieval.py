@@ -47,8 +47,14 @@ def filter_where(request, record_type='body', *, sources):
     return {'$and': clauses}
 
 
-def search(request, snapshot, vocabulary, gateway, context):
+def search(request, snapshot, vocabulary, gateway, context, *, candidate_limit=None, rerank=False):
     context.remaining()
+    final_count = request.target_count
+    if candidate_limit is not None and (type(candidate_limit) is not int or candidate_limit < final_count):
+        raise ValueError('invalid_candidate_limit')
+    if rerank is not False and rerank is not True and rerank != 'local_feedback':
+        raise ValueError('unknown_reranker')
+    target = candidate_limit or final_count
     requested = requested_sources(request, snapshot)
     if not requested:
         return SearchResult(failures=[RagFailure(stage='index', code='no_ready_sources')])
@@ -56,7 +62,6 @@ def search(request, snapshot, vocabulary, gateway, context):
     if (len(vector) != snapshot.dimensions or not all(math.isfinite(float(v)) for v in vector)
             or not any(float(v) for v in vector)):
         raise ValueError('invalid_query_embedding')
-    target = request.target_count
     categories = vocabulary.query_categories(request)
     result = SearchResult()
     seen = set()
@@ -157,4 +162,22 @@ def search(request, snapshot, vocabulary, gateway, context):
         window *= 2
     result.candidates.sort(key=lambda x: (x.distance, not x.category_match, x.article.key))
     result.candidates = result.candidates[:target]
+    context.event('candidate_pool', count=len(result.candidates), limit=target,
+                  articles=[{'source_code': c.article.source_code.value,
+                             'external_id': c.article.external_id} for c in result.candidates])
+    if rerank and result.candidates:
+        from backend.app.services.rag.reranking import rerank_candidates, local_feedback_rerank
+        try:
+            if rerank == 'local_feedback':
+                result.candidates = local_feedback_rerank(snapshot, result.candidates, context)
+            elif rerank is True:
+                result.candidates = rerank_candidates(request, result.candidates, gateway, context)
+            else:
+                raise ValueError('unknown_reranker')
+        except RagDeadlineExceeded:
+            raise
+        except Exception as exc:
+            # 재순위화 실패를 숨기지 않고 원래 검색 순서와 정상 후보를 보존합니다.
+            result.failures.append(RagFailure(stage='search', code='rerank_' + type(exc).__name__))
+    result.candidates = result.candidates[:final_count]
     return result

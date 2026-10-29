@@ -31,10 +31,12 @@ def grounded_sentences(payload, candidate):
 
 
 class RagService:
-    def __init__(self, store, vocabulary, gateway, *, cache_dir=None, trace_dir=None):
+    def __init__(self, store, vocabulary, gateway, *, cache_dir=None, trace_dir=None,
+                 candidate_limit=None, rerank=False):
         self.store, self.vocabulary, self.gateway = store, vocabulary, gateway
         self.cache_dir = Path(cache_dir) if cache_dir else None
         self.trace_dir = Path(trace_dir) if trace_dir else None
+        self.candidate_limit, self.rerank = candidate_limit, rerank
 
     def _summary(self, request, candidate, context):
         TypeAdapter(HttpUrl).validate_python(candidate.article.source_url)
@@ -85,7 +87,8 @@ class RagService:
                 from backend.app.services.rag.vocabulary import Vocabulary
                 vocabulary = Vocabulary(**json.loads((self.store.root / 'generations' / snapshot.generation / 'vocabulary.json').read_text(encoding='utf-8')))
             stage = 'query_embedding'
-            found = search(request, snapshot, vocabulary, self.gateway, context)
+            found = search(request, snapshot, vocabulary, self.gateway, context,
+                           candidate_limit=self.candidate_limit, rerank=self.rerank)
             failures.extend(found.failures)
             completed = found.completed_sources
             insufficient_evidence = found.evidence_missing
