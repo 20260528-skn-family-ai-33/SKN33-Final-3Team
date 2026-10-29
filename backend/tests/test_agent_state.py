@@ -90,8 +90,10 @@ class AgentStateTest(unittest.TestCase):
         self.assertGreater(len(str(rows)), MAX_DIGEST_BYTES)
 
     def test_digest_only_takes_json_values(self):
-        # Decimal은 JSON 왕복에서 문자열이 되므로 tool이 숫자로 바꿔 넣어야 한다
+        # Decimal은 JSON 왕복에서 문자열, NaN은 null이 되므로 tool이 바꿔 넣어야 한다
         with self.assertRaises(ValidationError): ToolResult(status='OK', digest={'total_usd': Decimal('1.5')})
+        with self.assertRaises(ValidationError): ToolResult(status='OK', digest={'growth': float('nan')})
+        with self.assertRaises(ValidationError): ChartSpec.model_validate(chart(series=[{'name': 'a', 'values': [1.0, float('nan')]}]))
         r = ToolResult(status='OK', digest={'total_usd': 1.5, 'top': [{'country': 'VN', 'usd': 2}]})
         self.assertEqual(ToolResult.model_validate_json(r.model_dump_json()), r)
 
@@ -147,6 +149,8 @@ class AgentStateTest(unittest.TestCase):
     def test_result_must_belong_to_plan_and_failure_needs_reason(self):
         with self.assertRaises(ValidationError): state(results={'t9.sql': {'status': 'OK'}})
         with self.assertRaises(ValidationError): state(results={'t1.sql': {'status': 'FAILED'}})
+        with self.assertRaises(ValidationError):  # 차트의 task_id는 그 단계의 하위 질문
+            state([CAUSE, RANKING], results={'t1.chart': {'status': 'OK', 'chart': chart(task_id='t2')}})
 
 
 if __name__ == '__main__':

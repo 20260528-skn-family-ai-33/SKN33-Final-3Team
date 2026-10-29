@@ -9,7 +9,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic_core import to_json
 
-from backend.app.schemas.rag import ArticlePeriod, CountryCode, HsProduct, _unique
+from backend.app.schemas.rag import ArticlePeriod, CountryCode, HsProduct
 
 SCHEMA_VERSION = 2
 # 체크포인트 하나의 상한. 넘으면 원본을 state에 넣은 것이다.
@@ -47,6 +47,11 @@ def _json_size(value) -> int:
     return len(to_json(value))
 
 
+def _unique(values, label):
+    if len(values) != len(set(values)):
+        raise ValueError(f'{label} 중복은 허용하지 않습니다')
+
+
 def _truncate(limit):
     return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
 
@@ -54,7 +59,8 @@ def _truncate(limit):
 class Model(BaseModel):
     # 노드는 필드를 여러 개 바꾼 뒤 반환한다. 검증은 LangGraph가 노드 입력으로 state를 만들 때 돈다.
     # 체크포인터는 model_validate를 부르지 않으므로, 다음 노드가 없는 finalize는 저장 전에 직접 model_validate한다.
-    model_config = ConfigDict(extra='forbid')
+    # NaN·inf는 JSON에서 null이 되어 재개 전후 값이 달라지므로 받지 않는다(rag.Contract와 같음).
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
 
 
 class Period(Model):
@@ -242,7 +248,8 @@ class ToolResult(Model):
     period: Period | ArticlePeriod | None = None  # 기준 기간. 수출입·ML은 월 단위, 기사는 일 단위
     source: str | None = None                     # 출처
     checks: list[str] = Field(default_factory=list)   # 통과한 자체 검증
-    digest: dict[str, JsonValue] | None = None    # LLM 입력용: 합계·상위 행 등. Decimal·date는 tool이 int·float·str로 바꿔 넣는다
+    # LLM 입력용: 합계·상위 행 등. Decimal·date·numpy 값은 tool이 int·float·str로 바꿔 넣는다(numpy는 .item()·tolist())
+    digest: dict[str, JsonValue] | None = None
     error: str | None = None                      # 사용자에게 보여도 되는 사유
 
     @model_validator(mode='after')
@@ -294,9 +301,11 @@ class AgentState(Model):
     def check_consistency(self):
         if (self.status == 'NEEDS_INPUT') != (self.pending is not None):
             raise ValueError('NEEDS_INPUT일 때만 pending이 있습니다')
-        steps = {s.step_id for s in self.plan.steps()} if self.plan else set()
-        if not set(self.results) <= steps:
+        owner = {s.step_id: t.task_id for t in self.plan.tasks for s in t.steps} if self.plan else {}
+        if not set(self.results) <= set(owner):
             raise ValueError('계획에 없는 단계의 결과입니다')
+        if any(r.chart and r.chart.task_id != owner[step_id] for step_id, r in self.results.items()):
+            raise ValueError('차트의 task_id가 그 단계의 하위 질문과 다릅니다')
         if self.pending and (not self.plan or self.pending.task_id not in {t.task_id for t in self.plan.tasks}):
             raise ValueError('되묻기가 계획에 없는 하위 질문을 가리킵니다')
         if _json_size(self) > MAX_STATE_BYTES:
@@ -311,7 +320,7 @@ class AgentState(Model):
         return [s for s in steps if s.status == 'PENDING' and set(s.depends_on) <= done]
 
     def skip_blocked(self) -> list[str]:
-        """FAILED·SKIPPED 단계에 의존하는 대기 단계를 SKIPPED로 바꾼다. tool 노드가 단계를 FAILED로 둔 뒤 부른다.
+        """FAILED·SKIPPED 단계에 의존하는 대기 단계를 SKIPPED로 바꾼다. 단계를 FAILED로 둔 노드(check_conditions·tool)가 부른다.
         단계는 같은 하위 질문의 앞 단계에만 의존하므로 한 번 훑으면 전이 의존까지 처리된다."""
         if not self.plan: return []
         stopped = {s.step_id for s in self.plan.steps() if s.status in ('FAILED', 'SKIPPED')}
