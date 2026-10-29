@@ -215,15 +215,16 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
     if group=='COUNTRY':
         for code in countries or []: primary.setdefault(code,Decimal(0))
     total=sum(primary.values())
-    previous={}; yoy={}; old_rank={}
+    previous={}; yoy={}; old_rank={}; rank_comparable=False
     if start==end:
         source='export_summary' if flow=='EXPORT' else 'import_summary'
         available=set(verified_months(store,source))
+        rank_comparable=shift_month(start,-1) in available
         for offset,target in ((-1,previous),(-12,yoy)):
             m=shift_month(start,offset)
             if m in available:
                 target.update({key(r):r['amount_usd'] for r in aggregate(store,source,m,m,hs,countries,group)})
-        old_rank={k:n for n,k in enumerate(sorted(previous,key=lambda k:(-previous[k],k)),1)}
+        old_rank={k:n for n,k in enumerate(sorted((k for k in previous if previous[k]>0),key=lambda k:(-previous[k],k)),1)}
     flags=anomaly_map(store,start,end,hs,countries,group,flow)
     items=[]
     for rank,k in enumerate(sorted(primary,key=lambda k:(-primary[k],k)),1):
@@ -232,8 +233,8 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
         items.append({'rank':rank,'country_code':k if group=='COUNTRY' else None,
             'hs_item':h[0] if group=='HS6' else None,'export_amount_usd':ex.get(k,Decimal(0)),'import_amount_usd':im.get(k,Decimal(0)),
             'share_pct':primary[k]*100/total if total else None,
-            'rank_change':old_rank[k]-rank if k in old_rank else None,
-            'rank_status':'NOT_APPLICABLE' if start!=end else 'NEW' if k not in old_rank else 'UP' if old_rank[k]>rank else 'DOWN' if old_rank[k]<rank else 'SAME',
+            'rank_change':old_rank[k]-rank if k in old_rank and primary[k]>0 else None,
+            'rank_status':'NOT_APPLICABLE' if not rank_comparable or primary[k]<=0 else 'NEW' if k not in old_rank else 'UP' if old_rank[k]>rank else 'DOWN' if old_rank[k]<rank else 'SAME',
             'mom_pct':percentage(primary[k],previous.get(k)), 'yoy_pct':percentage(primary[k],yoy.get(k)),
             'one_off':flags.get(k,anomaly_view(set()))})
     meta=metadata(store,start,end)

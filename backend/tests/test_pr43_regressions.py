@@ -94,6 +94,39 @@ class Pr43RegressionTest(unittest.TestCase):
             self.assertEqual(us[0]['amount_usd'], 1230000)
             self.assertEqual(len(us), 1)
 
+    def test_unverified_previous_month_does_not_mark_all_rankings_as_new(self):
+        self.signup()
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['batch_run'].insert(), {
+                'source_code':'CUSTOMS', 'job_name':'HS6_AGGREGATION', 'target_table':'export_summary',
+                'period_start':date(2025,11,1), 'period_end':date(2025,11,30), 'status':'FAILED', 'detail_json':{}})
+        url = '/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12'
+        for group in ('COUNTRY', 'HS6'):
+            with self.subTest(group=group):
+                response = self.client.get(url + '&group_by=' + group)
+                self.assertEqual(response.status_code, 200, response.text)
+                rows = response.json()['items']
+                self.assertTrue(rows)
+                self.assertTrue(all(r['rank_status']=='NOT_APPLICABLE' for r in rows))
+                self.assertTrue(all(r['rank_change'] is None and r['mom_pct'] is None for r in rows))
+        # A failure in export comparison must not hide verified import rankings.
+        imported = self.client.get(url + '&sort_flow=IMPORT').json()['items']
+        self.assertTrue(all(r['rank_status']=='SAME' for r in imported))
+
+    def test_new_rank_requires_current_trade_and_excludes_zero_prior_trade(self):
+        self.signup()
+        for before, current, status in ((0, 100, 'NEW'), (0, 0, 'NOT_APPLICABLE'), (100, 0, 'NOT_APPLICABLE')):
+            with self.subTest(before=before, current=current):
+                with self.engine.begin() as c:
+                    t = self.meta.tables['export_summary']
+                    for month, value in ((11,before), (12,current)):
+                        c.execute(update(t).where(t.c.country_code=='US', t.c.trade_month==date(2025,month,1)).values(amount_usd=value))
+                response = self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12')
+                self.assertEqual(response.status_code, 200, response.text)
+                us = next(r for r in response.json()['items'] if r['country_code']=='US')
+                self.assertEqual(us['rank_status'], status)
+                self.assertIsNone(us['rank_change'])
+
     def test_query_plan_hint_only_for_unfiltered_mysql_scans(self):
         t = self.meta.tables['export_summary']
         statement = select(t)
