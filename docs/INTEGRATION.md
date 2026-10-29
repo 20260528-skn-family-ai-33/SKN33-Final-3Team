@@ -100,6 +100,14 @@ RDS 스키마 적용은 서버 배포와 별개다. 공용 API/worker/Redis, HTT
 
 ## 정기 리포트 구독과 자동 발행
 
+### PR 리뷰 추가 확인 (2026-10-29)
+
+- 관리자 정책을 사용자와 다시 확인했다. USER/ADMIN 두 역할을 유지하며 **모든 ADMIN**이 다른 ACTIVE 회원의 관리자 권한을 부여·회수하고 개발용 SQL 조회 API를 사용할 수 있다. 특정 이메일이나 최초 관리자만 허용하는 정책은 적용하지 않는다. 자기 계정의 권한·상태 변경 금지, 사유·확인·버전 검사, 세션 무효화와 감사 이력은 유지한다. SQL API는 `API_DEBUG_SQL=true`일 때만 본인 소유의 저장된 결과에 대한 SQL을 조회하며 임의 SQL 실행 기능이 아니다. DEC-48 원문을 확인했다는 의미는 아니다.
+- 프로젝트에서 현재 연결하는 로컬 MySQL 검증 DB와 RDS를 읽기 전용으로 확인했다. 두 DB 모두 `api_user_profile`, `api_report_file`, `api_keyword_block`, `api_auth_session`, `api_rate_limit`이 없고 기존 `users`, `report`, `notification_setting`이 존재한다. 따라서 이 두 DB에는 036 데이터 이관 대상이 없다. 이 확인은 다른 팀원의 별도 DB까지 보장하지 않는다.
+- 036은 적용하지 않는 폐기 제안이다. **036을 별도로 적용한 DB의 자동 이관은 지원하지 않는다.** 이 경우 `migrate_integration`은 기존 데이터를 보호하기 위해 중단한다. 해당 테이블을 삭제해 우회하지 말고 먼저 백업한 후 이름·권한·파일 경로·차단 키워드와 기존 컬럼의 충돌을 검토해 별도 이관해야 한다. 현재 두 DB에 이관 대상이 없음을 확인하는 리뷰 대안을 선택했으며, 데이터 복사·삭제나 RDS 스키마 변경은 실행하지 않았다.
+
+### 설정 및 발행
+
 구독 저장과 발행에는 `service_option`의 주기 코드 `WEEKLY`, `MONTHLY`, `QUARTERLY`(REPORT_PERIOD)와 리포트 종류 `RPT_WEEKLY`, `RPT_MONTHLY`, `RPT_QUARTERLY`(REPORT_TYPE)가 필요하다. 다음 명령은 Settings에 지정된 DB를 사용한다. 시작할 때 자동으로 등록하지 않으며, 로컬 seed나 테스트 약관을 RDS에 복사하지 않는다.
 
 ```powershell

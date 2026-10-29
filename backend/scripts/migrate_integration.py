@@ -12,7 +12,9 @@ def plan(connection):
     inspector=inspect(connection); existing=set(inspector.get_table_names()); statements=[]
     legacy=existing & {'api_user_profile','api_report_file','api_keyword_block','api_auth_session','api_rate_limit'}
     if legacy:
-        raise RuntimeError('Legacy application tables already exist; explicit data migration required: '+','.join(sorted(legacy)))
+        raise RuntimeError('Legacy application tables already exist; stop and preserve their data. '
+                           '036-to-038 automatic migration is not supported; see docs/INTEGRATION.md: '
+                           +','.join(sorted(legacy)))
     for table, additions in EXTENSIONS.items():
         if table not in existing: raise RuntimeError('Missing base table: '+table)
         columns={c['name']:c for c in inspector.get_columns(table)}
