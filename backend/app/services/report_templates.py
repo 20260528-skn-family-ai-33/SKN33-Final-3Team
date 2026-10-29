@@ -192,16 +192,7 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, 
     show_labels = end_labels_fit(len(ends), height)
     # 끝 값 라벨이 겹치지 않게 세로로 벌리되 그래프 영역(top ~ top+plot_h) 안에 둡니다.
     # 라벨이 다 들어갈 자리가 없으면 그리지 않고, 템플릿이 end_labels_fit()으로 확인해 범례에 끝 값을 붙입니다.
-    ends.sort(key=lambda e: e[1])
-    for i in range(1, len(ends)):
-        if ends[i][1] - ends[i - 1][1] < END_GAP:
-            ends[i][1] = ends[i - 1][1] + END_GAP
-    if ends and ends[-1][1] > top + plot_h:
-        shift = ends[-1][1] - (top + plot_h)
-        for e in ends:
-            e[1] -= shift
-        for i in range(len(ends) - 2, -1, -1):  # 위로 올린 뒤 위쪽 라벨끼리 다시 겹치지 않게
-            ends[i][1] = min(ends[i][1], ends[i + 1][1] - END_GAP)
+    _spread([e for e in sorted(ends, key=lambda e: e[1])], top, top + plot_h)
     for px, py, value, color in ends:
         out.append(f'<circle cx="{px:.1f}" cy="{y(value):.1f}" r="3" fill="{color}"/>')
         if show_labels:
@@ -213,14 +204,30 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, 
 END_GAP = 11  # 끝 값 라벨 사이 최소 간격 (SVG 단위)
 
 
+def _spread(ends, low, high):
+    """y 순으로 정렬된 라벨 [x, y, ...]를 간격 END_GAP 이상, low~high 안에 두도록 y를 고칩니다.
+    아래로 밀며 겹침을 풀고(low 이상), 위로 당기며 high를 넘지 않게 합니다.
+    (len-1)·END_GAP ≤ high−low(end_labels_fit)이면 두 경계와 간격을 모두 만족합니다."""
+    for i, e in enumerate(ends):
+        e[1] = max(e[1], low, ends[i - 1][1] + END_GAP if i else low)
+    for i in range(len(ends) - 1, -1, -1):
+        e = ends[i]
+        e[1] = min(e[1], high, ends[i + 1][1] - END_GAP if i < len(ends) - 1 else high)
+
+
 def end_labels_fit(count, height):
     """끝 값 라벨 count개가 높이 height인 line_chart의 그래프 영역 안에 겹치지 않고 들어가는지."""
     return count <= 1 or (count - 1) * END_GAP <= height - 34
 
 
-def last_value(values):
-    """마지막 실제 값 (없으면 None)"""
-    return next((v for v in reversed(values) if v is not None), None)
+def legend_value(values, labels):
+    """범례에 붙일 끝 값 문자열. 마지막 기간이 null이면 값이 있는 마지막 기간을 괄호로 함께 표시합니다.
+    예: '171.2' · '10.0(11)' · 값이 하나도 없으면 '—'"""
+    point = next(((labels[i], v) for i, v in reversed(list(enumerate(values))) if v is not None), None)
+    if point is None:
+        return '—'
+    label, value = point
+    return musd(value) + ('' if label == labels[-1] else f'({label})')
 
 
 def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, digits=0, show=()):
@@ -254,7 +261,11 @@ def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digit
     peak = top / divisor or 1
     bars = len(colors)
     bar_h = 8 if bars > 1 else 12
-    plot_w = width - label_width - tail_width - 40
+    places_of = lambda j: digits[j] if isinstance(digits, (list, tuple)) else digits
+    # 막대 끝 숫자가 오른쪽 밖으로 나가지 않게 가장 긴 숫자 폭만큼 비웁니다 (peak 기준이라 쪽이 나뉘어도 막대 비율 동일)
+    texts = [num(top / divisor, places_of(0))] + [num(v / divisor, places_of(j)) for r in rows
+                                                  for j, v in enumerate(r['values']) if v is not None]
+    plot_w = width - label_width - tail_width - max(40, max(_em(t) for t in texts) * 9.5 + 10)
     height = row_height * len(rows) + 4
     out = [f'<svg class="chart" viewBox="0 0 {width} {height}" width="100%" role="img">']
     for i, r in enumerate(rows):
@@ -268,8 +279,7 @@ def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digit
             yy = top + j * (bar_h + 2)
             out.append(f'<rect x="{label_width}" y="{yy:.1f}" width="{w:.1f}" height="{bar_h}" rx="2" fill="{color}"/>')
             cls = 'val' if j == 0 else 'axis'
-            places = digits[j] if isinstance(digits, (list, tuple)) else digits
-            out.append(f'<text x="{label_width + w + 5:.1f}" y="{yy + bar_h - 1:.1f}" class="{cls}">{num(v / divisor, places)}</text>')
+            out.append(f'<text x="{label_width + w + 5:.1f}" y="{yy + bar_h - 1:.1f}" class="{cls}">{num(v / divisor, places_of(j))}</text>')
         tail = r.get('tail')
         if tail:
             ty = i * row_height + row_height / 2 + 4
@@ -426,12 +436,17 @@ def _article_blocks(articles, tail=None):
     return blocks
 
 
+def _legend_names(series, labels, height):
+    """템플릿 범례에 실제로 들어갈 글자. 끝 값 라벨이 그래프에 안 들어가면 이름 뒤에 끝 값(기간)이 붙습니다."""
+    if end_labels_fit(len(series), height):
+        return [s['name'] for s in series]
+    return [s['name'] + ' ' + legend_value(s['values'], labels) for s in series]
+
+
 def _detail_blocks(item):
     """월간 품목 상세: 추이 그래프 · 관심 국가 추이(범례가 국가 수만큼 늘어남) · 주요 수출국 표(10개국 + 기타 + 전체)"""
     countries = item['country_trend']
-    # 끝 값 라벨이 들어가지 않으면 범례 이름 뒤에 끝 값이 붙어 범례가 넓어집니다
-    suffix = '' if end_labels_fit(len(countries), 130) else ' 0,000.0'
-    country = H3_MM + (_legend([s['name'] + suffix for s in countries]) + _svg(130) if countries else 12)
+    country = H3_MM + (_legend(_legend_names(countries, item['trend']['labels'], 130)) + _svg(130) if countries else 12)
     top = len(item['top_countries'][:10]) + (1 if item['others'] else 0) + 1
     # 그래프 높이(150·130)는 monthly.html과 같아야 합니다. 품목명이 두 줄이어도 국가 3개면 한 쪽에 들어가는 크기
     return [{'key': 'trend', 'height': _legend(['', '']) + _svg(150)},
@@ -451,10 +466,13 @@ def layout(report_type, ctx):
         if report_type == 'RPT_MONTHLY':
             pages['details'] = [flow(_detail_blocks(item), two_lines, rest) for item in ctx['items']]
         else:
-            # 관심 국가 추이 쪽: 국가가 많아 범례가 길면 한 쪽에 품목 1개
+            # 관심 국가 추이 쪽: 국가가 많아 범례가 길면 한 쪽에 품목 1개 (8개 분기·3개월 그래프 중 가장 긴 범례 기준)
             names = [c['name'] for c in ctx['conditions']['countries']]
-            suffix = '' if end_labels_fit(len(names), 250) else ' 0,000.0'  # 끝 값이 범례로 옮겨 가는 경우
-            chart = H3_MM + _legend([n + suffix for n in names]) + _svg(250)
+            legends = [names]
+            for item in ctx['items']:
+                legends.append(_legend_names(item['country_quarters'], item['quarters']['labels'], 250))
+                legends.append(_legend_names(item['country_months']['series'], item['country_months']['labels'], 250))
+            chart = H3_MM + max(_legend(n) for n in legends) + _svg(250)
             pages['country_per_page'] = 2 if 2 * chart + 6 <= two_lines else 1
         return pages
     if report_type == 'RPT_WEEKLY':
@@ -490,7 +508,7 @@ def environment():
     env.filters.update(musd=musd, num=num, pct=pct, signed_pct=signed_pct, signed=signed, change=change,
                        emph=emph, ymd=ymd, ymdhm=ymdhm, circled=circled)
     env.globals.update(line_chart=line_chart, bar_chart=bar_chart, hbar_chart=hbar_chart,
-                       end_labels_fit=end_labels_fit, last_value=last_value,
+                       end_labels_fit=end_labels_fit, legend_value=legend_value,
                        series_colors=SERIES_COLORS,
                        colors={'accent': ACCENT, 'up': UP, 'down': DOWN, 'muted': MUTED, 'previous': PREVIOUS},
                        css=(TEMPLATE_DIR / 'report.css').read_text(encoding='utf-8'))

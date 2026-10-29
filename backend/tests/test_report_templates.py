@@ -253,9 +253,38 @@ class FormatTest(unittest.TestCase):
         base = context['items'][0]['country_trend'][0]
         for item in context['items']:
             item['country_trend'] = [dict(base, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(12)]
+        context['items'][0]['country_trend'][11]['values'] = base['values'][:-1] + [None]  # 국가11만 마지막 달 미수집
         html = rt.render('RPT_MONTHLY', context)
-        self.assertIn('범례 숫자는 마지막 값(', html)
-        self.assertIn('국가11 ' + rt.musd(rt.last_value(base['values'])), html)
+        self.assertIn('범례 숫자는 12 값 (괄호는 값이 있는 마지막 기간)', html)
+        self.assertIn('국가10 ' + rt.musd(base['values'][-1]) + '<', html)
+        self.assertIn('국가11 ' + rt.musd(base['values'][-2]) + '(11)<', html)
+
+    def test_end_labels_keep_both_bounds_with_one_large_value(self):
+        # 양원님 재현 조건: 큰 값 하나 + 작은 값 7개 (기존에는 큰 값 라벨이 y=-52로 그래프 위로 벗어남)
+        labels = [str(i) for i in range(13)]
+        for ends in ([100000000] + [1000000] * 7, [1000000] * 7 + [100000000], [5e7, 1e6, 1e8, 1e6, 2e6, 1e6, 9e7, 1e6, 1e6]):
+            for height in (130, 250):
+                svg = str(rt.line_chart(labels, [{'values': [v] * 13} for v in ends], height=height))
+                ys = sorted(float(y) - 3 for y in re.findall(r'y="(-?[\d.]+)" class="end"', svg))
+                with self.subTest(ends=ends, height=height):
+                    self.assertEqual(len(ys), len(ends))
+                    self.assertGreaterEqual(ys[0], 10)                       # 그래프 영역 위
+                    self.assertLessEqual(ys[-1], height - 24)                # 그래프 영역 아래
+                    self.assertTrue(all(b - a >= rt.END_GAP - 0.01 for a, b in zip(ys, ys[1:])))
+
+    def test_legend_value_marks_period_when_last_is_missing(self):
+        labels = ['10', '11', '12']
+        self.assertEqual(rt.legend_value([1e6, 2e6, 3e6], labels), '3.0')
+        self.assertEqual(rt.legend_value([1e6, 1e7, None], labels), '10.0(11)')
+        self.assertEqual(rt.legend_value([1e6, None, None], labels), '1.0(10)')
+        self.assertEqual(rt.legend_value([None, None, None], labels), '—')
+        self.assertEqual(rt.legend_value([1e6, 2e6, 0], labels), '0.0')  # 실제 0은 그대로
+
+    def test_hbar_reserves_room_for_long_values(self):
+        svg = str(rt.hbar_chart([{'label': '미국', 'values': [99_000e6, 45_000e6]}], ['#000', '#999'],
+                                label_width=60, width=320, row_height=30, divisor=1e6, digits=1))
+        for x, text in re.findall(r'<text x="([\d.]+)"[^>]*>([\d,.]+)</text>', svg):
+            self.assertLessEqual(float(x) + rt._em(text) * 9.5, 320)
 
     def test_nice_scale_covers_data(self):
         low, high, ticks = rt.nice_scale([602e6 / 1e6, 879.0])
