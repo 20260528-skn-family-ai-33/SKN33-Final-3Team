@@ -75,6 +75,36 @@ python backend/app/scheduler/collectors/hscode/hs_code_seed.py --csv <검증된_
 
 UPDATE SQL은 변경 전 이름을 연결 한정 임시 테이블 `tmp_hs46_before`에 보관합니다. 파일 끝에는 같은 연결에서 실행할 수 있는 복원문을 주석으로 제공합니다. 연결 종료 후에도 보관해야 하는 백업은 실행 전에 별도로 준비하세요.
 
+#### RDS 요약명 갱신 후 Chroma 재임베딩
+
+RDS의 `name_ko`를 바꾼 뒤에는 검색에 사용하는 Chroma도 갱신해야 합니다. 매일 실행되는 `hs_code_embed`는 **없는 id만 추가**하므로, 이미 등록된 코드의 문서·벡터·메타데이터(`name_ko`)는 이전 이름으로 남습니다. HS10 문서에도 상위 HS6 요약명이 포함되므로 HS6 변경은 하위 품목의 검색 문서에도 영향을 줍니다.
+
+1. RDS UPDATE가 완료되고 요약명이 반영됐는지 확인합니다.
+2. 검색 API를 중지하고, 같은 Chroma 저장소를 사용하는 서버의 저장소 루트에서 아래 명령을 실행합니다. `.env`의 `MYSQL_*`는 갱신한 RDS를 가리켜야 합니다. 이 CLI의 기본 저장 위치는 저장소 루트 `chroma_data/`입니다. API에서 `API_HS_CHROMA_PATH`를 별도로 설정했다면 CLI 기본 경로와 같은 저장소인지 먼저 확인합니다.
+
+   ```powershell
+   python -m backend.app.scheduler.jobs.hs_code_embed --rebuild
+   ```
+
+3. 종료 코드 0과 완료 로그의 DB 행 수·컬렉션 개수를 확인한 뒤 검색 API를 다시 시작합니다. API는 컬렉션 객체를 프로세스에 캐시하므로, 재시작해 새 컬렉션을 읽도록 합니다. 변경한 품목의 이름과 검색 결과도 확인합니다.
+
+`--rebuild`는 기존 `hs_code` 컬렉션을 삭제하고 **DB의 모든 판본·단위의 코드를 전체 재임베딩**합니다. 변경된 HS6만 처리하는 것이 아니며, OpenAI 임베딩 API 사용 비용이 발생합니다. 재생성 중에는 컬렉션이 없거나 일부 코드만 들어 있으므로 검색을 재개하지 않습니다. 중간에 실패하면 오류를 해결한 뒤 `--rebuild` 없이 같은 명령을 실행해 누락 코드만 이어서 추가합니다.
+
+#### 시드 생성 원본 보관·공유 위치
+
+현재 시드의 원본은 저장소에 포함된 [`reference/seed_inputs/issue46_seed_sources.zip`](reference/seed_inputs/issue46_seed_sources.zip)에 보관합니다. 같은 브랜치/커밋을 체크아웃한 팀원이 압축 파일을 풀어 같은 입력으로 시드를 재생성할 수 있습니다. 실행 결과 폴더 `hscode_outputs/`는 계속 Git에서 제외합니다.
+
+압축 파일에는 시드 입력 `hs_code_mst.csv`, `hs_code_hs2017.csv`, `hs_code_hs2022_supplement.csv`와 비교용 `hs_code_hs2017_before46.csv`, 파일별 해시 목록 `SHA256SUMS.txt`가 있습니다. 시드 입력 3개의 SHA256은 `11_hs_code_seed.sql` 머리말과 일치합니다. `hs_code_hs2017_before46.csv`는 이전 긴 번역을 비교하는 보관본이며 시드 생성·적재 입력으로 사용하지 않습니다.
+
+예를 들어 압축을 `tmp/issue46-seed-sources/`에 풀었다면 다음과 같이 재생성합니다. UPDATE 출력은 프로젝트 밖의 실제 경로로 지정합니다.
+
+```powershell
+Expand-Archive -LiteralPath backend/app/scheduler/collectors/hscode/reference/seed_inputs/issue46_seed_sources.zip -DestinationPath tmp/issue46-seed-sources
+python backend/app/scheduler/collectors/hscode/hs_code_seed.py --csv tmp/issue46-seed-sources/hs_code_mst.csv tmp/issue46-seed-sources/hs_code_hs2017.csv tmp/issue46-seed-sources/hs_code_hs2022_supplement.csv --seed db/mysql/init/11_hs_code_seed.sql --update <프로젝트_밖_UPDATE.sql>
+```
+
+이후 시드를 새로 만들 때는 입력 스냅샷과 `SHA256SUMS.txt`도 함께 갱신해 공유합니다.
+
 ### CSV 생성과 적재
 
 모두 저장소 루트에서 실행합니다.
