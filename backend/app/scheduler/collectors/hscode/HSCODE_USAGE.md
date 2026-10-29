@@ -61,6 +61,22 @@ MYSQL_DATABASE=...
 
 ## 수동 실행
 
+### SQL 시드 및 기존 RDS 요약 갱신문
+
+`db/mysql/init/10_hs_code_seed.sql`은 HS2022 전체 마스터 시드입니다. 신규 행은 공식 원문·출처와 함께 추가하고, 기존 행은 HS6의 `name_ko`만 갱신합니다. 기존 HS2·HS4·HS10 이름과 원문·출처, 다른 판본은 유지합니다.
+
+검증된 마스터 CSV에서 SQL을 다시 생성하려면 다음 명령을 사용합니다. UPDATE 파일은 프로젝트 밖 경로로 지정하세요. 생성 도구는 DB에 연결하지 않습니다.
+
+```powershell
+python backend/app/scheduler/collectors/hscode/hs_code_seed.py --csv <검증된_hs_code_mst.csv> --seed db/mysql/init/10_hs_code_seed.sql --update <프로젝트_밖_UPDATE.sql>
+```
+
+기존 RDS에는 별도로 전달된 UPDATE SQL을 사용합니다. 선택한 DB에서 `(hs_code, hs_ver)`가 일치하는 HS6 요약명만 변경합니다. 사전 검사에서 대상 행 누락·길이 초과·중복·매핑 밖의 기존 이름과 충돌이 하나라도 있으면 UPDATE를 수행하지 않습니다. 결과의 `missing_rows`, `invalid_names`, `duplicate_names`, `collisions_with_other_existing_rows`, `remaining_mismatches`가 모두 0인지 확인하세요. `updated_rows`는 이전부터 같은 요약이었던 행을 제외한 실제 변경 수입니다.
+
+UPDATE SQL은 변경 전 이름을 연결 한정 임시 테이블 `tmp_hs46_before`에 보관합니다. 파일 끝에는 같은 연결에서 실행할 수 있는 복원문을 주석으로 제공합니다. 연결 종료 후에도 보관해야 하는 백업은 실행 전에 별도로 준비하세요.
+
+### CSV 생성과 적재
+
 모두 저장소 루트에서 실행합니다.
 
 ```powershell
