@@ -27,6 +27,7 @@ docker compose -f compose.integration.yml up -d --wait
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r backend/requirements-api-test.txt
+python -m playwright install chromium
 python -m backend.scripts.local_integration schema
 python -m backend.scripts.local_integration migrate
 python -m backend.scripts.local_integration seed
@@ -96,6 +97,32 @@ python -m backend.scripts.migrate_integration_cleanup --apply
 RDS 스키마 적용은 서버 배포와 별개다. 공용 API/worker/Redis, HTTPS 프록시, 운영 약관/옵션, 파일 저장소가 필요하다. 로컬 가상 계정·기사·약관·파일은 RDS로 이관하지 않는다.
 
 정리 스크립트는 USER/ADMIN 이외의 새 역할 저장을 막는 ck_users_api_role 제약도 만든다. 관리자 역할 변경은 ADMIN이 다른 ACTIVE 회원에 대해 사유·확인·버전을 제출하여 실행한다. 자기 계정의 역할·이용 상태 변경은 금지한다. SUPER_ADMIN은 후속 작업 범위다. 컬럼 삭제 후에는 반드시 이번 코드로 API/worker를 재시작해야 한다. 036 SQL은 폐기된 제안 이력으로만 보관한다.
+
+## 정기 리포트 구독과 자동 발행
+
+구독 저장과 발행에는 `service_option`의 주기 코드 `WEEKLY`, `MONTHLY`, `QUARTERLY`(REPORT_PERIOD)와 리포트 종류 `RPT_WEEKLY`, `RPT_MONTHLY`, `RPT_QUARTERLY`(REPORT_TYPE)가 필요하다. 다음 명령은 Settings에 지정된 DB를 사용한다. 시작할 때 자동으로 등록하지 않으며, 로컬 seed나 테스트 약관을 RDS에 복사하지 않는다.
+
+```powershell
+# 대상 DB 설정을 확인한 뒤 계획을 검토한다. 기본 명령은 DB 읽기만 수행한다.
+python -m backend.scripts.register_report_options
+python -m backend.scripts.register_report_options --apply
+```
+
+등록 전 값과 계획은 `runtime/migration-backups`에 저장한다. 누락된 6개 코드만 추가하고, 기존 코드가 비활성 상태이면 활성화한다. 기존 라벨·설정 값과 다른 서비스 코드는 유지한다. 예상과 다른 option_type이면 적용 전에 중단하며, 적용 후 재실행은 변경 0건이어야 한다. 2026-10-29 RDS에 위 6개 코드를 정식 등록했다. 이 명령은 요청형 리포트 코드를 등록하지 않는다.
+
+동작 순서는 구독 API 저장 → `report_subscription`의 관심 품목·국가·형식 및 가입 시점 저장 → 워커의 주기적 적재 완료 확인 → 리포트 작업 생성 → 데이터 조회와 HTML PDF 생성 → 리포트센터 다운로드다. API와 워커는 동일 DB·파일 저장 경로를 사용해야 한다. 기존 DOCX 생성과 파일 저장 방식은 유지한다.
+
+- 새 구독은 현재 공개된 마지막 월을 기준으로 저장하므로, 저장 즉시 과거 리포트를 발행하지 않는다. 이후 적재 완료된 데이터가 발행 조건을 충족해야 한다.
+- 월간은 구독 기준 이후 새로 공개된 최신 월, 분기는 구독 기준 이후 3개월의 적재가 모두 완료된 분기를 발행한다.
+- 주간은 한국 시간 기준 직전 월요일~일요일을 대상으로 한다. 해당 주 이후에 시작한 구독은 제외한다. 활성화된 기사 출처별로 각 날짜를 포함하는 최신 `batch_run(target_table='article')`이 SUCCESS여야 한다. 현재 수집기는 기사·태그·일별 집계를 같은 트랜잭션으로 완료한 뒤 article 배치 하나를 기록하므로, 별도의 일별 집계 테이블 배치를 요구하지 않는다. 누락·RUNNING·FAILED가 있으면 기다린다.
+- 같은 구독·주기·기간은 generation_key로 중복 발행을 막는다. 내부 `enqueue_due(..., user_id=...)`는 검증 계정으로 범위를 좁힐 때만 사용하며 일반 워커는 전체 활성 구독을 검사한다.
+- 자동 발행은 워커가 켜져 있어야 동작한다. 로컬 PC를 끄면 발행도 멈춘다. 주간은 실행 시점의 직전 주만 확인하며, 오래전 미발행 주차의 일괄 복구는 별도 기능이다.
+
+2026-10-29 실제 RDS 검증에서 테스트 구독 3개 저장, 월간·분기 워커 자동 발행, 수집 완료된 과거 주차로 주간 스케줄 실행, PDF/DOCX/XLSX 다운로드와 중복 방지를 확인했다. 실제 배치 기록은 수정하지 않았다. 현재 최신 무역 데이터는 2026-08이며 직전 주 기사 수집은 전체 출처가 완료되지 않아 현재 주간 발행은 대기한다. 테스트 계정·구독·리포트·스냅샷·서버 파일은 검증 후 정리하고 정식 서비스 코드는 유지했다.
+
+```powershell
+python -m unittest backend.tests.test_report_subscriptions backend.tests.test_backend_api backend.tests.test_pr43_regressions -q
+```
 
 ## 테스트
 

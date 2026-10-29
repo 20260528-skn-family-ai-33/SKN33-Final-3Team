@@ -5,11 +5,23 @@ from sqlalchemy import select, update
 from backend.app.api import trade, jobs
 from backend.app.api.common import now, digest, period, month, shift_month, ApiError
 
+NEWS_SOURCES = ('KOTRA_MARKET', 'KOTRA_SHORT_NEWS', 'HANKYUNG', 'FNNEWS')
+
 
 def ready_days(store, start, end):
-    t=store.t('batch_run')
-    for target in ('article','news_product_daily','news_keyword_daily'):
-        runs=store.rows(select(t).where(t.c.target_table==target,t.c.period_end>=start,t.c.period_start<=end).order_by(t.c.run_id.desc()))
+    # Collectors atomically load articles/tags/daily aggregates, then record a single
+    # target_table='article' batch. Requiring separate daily-table runs blocks forever.
+    # Check each enabled news provider independently: one provider's success must not
+    # hide another provider's missing/failed/running load for the same dates.
+    t,options=store.t('batch_run'),store.t('service_option')
+    sources=list(store.c.execute(select(options.c.option_code).where(
+        options.c.option_code.in_(NEWS_SOURCES),options.c.enabled==True,
+        options.c.option_type.in_(('SOURCE','ARTICLE_SOURCE')))).scalars())
+    if not sources: return False
+    for source in sources:
+        runs=store.rows(select(t.c.run_id,t.c.period_start,t.c.period_end,t.c.status).where(
+            t.c.target_table=='article',t.c.source_code==source,
+            t.c.period_end>=start,t.c.period_start<=end).order_by(t.c.run_id.desc()))
         cursor=start
         while cursor<=end:
             latest=next((r for r in runs if r['period_start']<=cursor<=r['period_end']),None)
@@ -18,14 +30,17 @@ def ready_days(store, start, end):
     return True
 
 
-def enqueue_due(store, at=None):
+def enqueue_due(store, at=None, *, user_id=None):
     # 한 Store로 여러 스케줄 회차를 호출해도 회차 사이 적재 완료를 다시 확인한다.
     store.cache.clear()
     at=at or datetime.now(ZoneInfo('Asia/Seoul'))
     subscription, option, profile = store.t('report_subscription'),store.t('service_option'),store.t('users')
-    rows=store.rows(select(subscription).join(option,option.c.option_code==subscription.c.period_code)
+    stmt=(select(subscription).join(option,option.c.option_code==subscription.c.period_code)
         .join(profile,profile.c.user_id==subscription.c.user_id)
-        .where(subscription.c.enabled==True,option.c.enabled==True,profile.c.account_status=='ACTIVE'))
+        .where(subscription.c.enabled==True,option.c.option_type=='REPORT_PERIOD',
+               option.c.enabled==True,profile.c.account_status=='ACTIVE'))
+    if user_id is not None: stmt=stmt.where(subscription.c.user_id==user_id)
+    rows=store.rows(stmt)
     if not rows: return 0
     count=0
     for row in rows:
@@ -62,7 +77,8 @@ def enqueue_due(store, at=None):
         if not current['enabled'] or current['filters_json']!=saved: continue
         report=store.t('report')
         report_type='RPT_'+code
-        if not store.c.scalar(select(option.c.option_code).where(option.c.option_code==report_type,option.c.enabled==True)): continue
+        if not store.c.scalar(select(option.c.option_code).where(option.c.option_code==report_type,
+            option.c.option_type=='REPORT_TYPE',option.c.enabled==True)): continue
         for p,compare in periods:
             key=digest(['SUBSCRIPTION',row['subscription_id'],code,p])
             if store.c.scalar(select(report.c.report_id).where(report.c.generation_key==key)): continue
