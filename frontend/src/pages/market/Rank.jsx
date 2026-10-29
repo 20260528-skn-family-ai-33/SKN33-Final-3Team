@@ -9,11 +9,19 @@ import { useQuery, ErrorNotice, Pagination } from '../../api/hooks'
 import { download } from '../../api/client'
 import { Hs4Search } from '../../components/pickers'
 import { monthOffset } from '../home/useDashboard'
+import { rankInitial } from '../../api/integration'
 
 const COLS = '60px 110px 1fr 1.4fr 110px'
 const COLS_NO_HS = '60px 1fr 1.4fr 110px'
 
 export default function Rank({ route }) {
+  // Re-entering a detail link on the same route must apply its new conditions.
+  const key = new URLSearchParams(route.query)
+  key.delete('alerts')
+  return <RankResults key={key.toString()} route={route} />
+}
+
+function RankResults({ route }) {
   const { run } = useApp()
   const available = useQuery('/data/availability')
   const end = available.data?.trade_end_month
@@ -22,32 +30,34 @@ export default function Rank({ route }) {
   const rankingCountries = countries.map(c => [c.name, c.name])
   const [group, setGroup] = useState(null)
   const [page, setPage] = useState(1)
-  const initial = {
-    country: route.query.get('country') ?? (route.query.get('product') ? '' : '중국'),
-    product: route.query.get('product') || '',
-    period: PERIODS[0][0],
-  }
+  const initial = rankInitial(route.query)
+  const inheritedCountry = initial.countryCodes.length ? '__inherited__' : ''
+  if (!initial.country && inheritedCountry) initial.country = inheritedCountry
+  if (inheritedCountry) rankingCountries.unshift([inheritedCountry, initial.countryCodes.map(countryName).join(' · ')])
   const [draft, setDraft] = useState(initial)
   const [applied, setApplied] = useState(initial)
   const [basis, setBasis] = useState('exp')
   const [error, setError] = useState('')
-  const byMonth = applied.country && applied.product
-  const query = { period_start: monthOffset(end, 1 - Number(applied.period)), period_end: end, country_codes: applied.country ? [countryCode(applied.country)] : [], hs_code: applied.product || undefined, hs_ver: applied.product ? 'HS2022' : undefined }
-  const result = useQuery(byMonth ? '/trade/trends' : '/trade/rankings', byMonth ? query : { ...query, group_by: applied.country ? 'HS6' : 'COUNTRY', sort_flow: basis === 'exp' ? 'EXPORT' : 'IMPORT', page, page_size: 20 }, !!end)
+  const countryCodes = applied.country === '__inherited__' ? applied.countryCodes : applied.country ? [countryCode(applied.country)] : []
+  const countryLabel = countryCodes.map(countryName).join(' · ')
+  const byMonth = !applied.group && countryCodes.length === 1 && applied.product
+  const rankingGroup = applied.group || (countryCodes.length ? 'HS6' : 'COUNTRY')
+  const query = { scope: applied.scope, period_start: applied.start || monthOffset(end, 1 - Number(applied.period)), period_end: applied.end || end, country_codes: countryCodes, hs_code: applied.product || undefined, hs_ver: applied.product ? 'HS2022' : undefined }
+  const result = useQuery(byMonth ? '/trade/trends' : '/trade/rankings', byMonth ? query : { ...query, group_by: rankingGroup, sort_flow: basis === 'exp' ? 'EXPORT' : 'IMPORT', page, page_size: 20 }, !!end)
   const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: r.export_amount_usd == null ? null : Number(r.export_amount_usd) / 1e8, imp: r.import_amount_usd == null ? null : Number(r.import_amount_usd) / 1e8 }))
   const max = Math.max(...rows.map(r => r[basis]), 1)
   const other = basis === 'exp' ? 'imp' : 'exp'
   const label = { exp: '수출액', imp: '수입액' }
 
-  const title = byMonth ? `${applied.country} · ${productName(applied.product)} 월별 수출입`
-    : applied.country ? `${applied.country} 교역 품목 순위`
+  const title = byMonth ? `${countryLabel} · ${productName(applied.product)} 월별 수출입`
+    : rankingGroup === 'HS6' ? `${countryLabel || '전체 국가'} 교역 품목 순위`
       : `${productName(applied.product)} 교역국 순위`
-  const firstCol = byMonth ? '월' : applied.country ? '품목' : '교역국'
-  const showHs = !byMonth && !!applied.country
+  const firstCol = byMonth ? '월' : rankingGroup === 'HS6' ? '품목' : '교역국'
+  const showHs = !byMonth && rankingGroup === 'HS6'
   const cols = showHs ? COLS : COLS_NO_HS
 
   const search = () => {
-    if (!draft.country && !draft.product) return setError('국가 또는 품목 중 하나 이상 선택해 주세요.')
+    if (!draft.inherited && !draft.country && !draft.product) return setError('국가 또는 품목 중 하나 이상 선택해 주세요.')
     setError('')
     setPage(1); setApplied(draft)
   }
@@ -60,9 +70,9 @@ export default function Rank({ route }) {
         <div className="wrap col" style={{ gap: 20 }}>
           <div className="card">
             <div style={{ display: 'flex', gap: 12 }} className="resp-stack">
-              <Select prefix="국가" style={{ flex: 1 }} value={draft.country} onChange={v => setDraft(d => ({ ...d, country: v }))} options={[['', '전체 국가'], ...rankingCountries]} aria-label="국가" />
-              <Select prefix="품목" style={{ flex: 1 }} value={draft.product} onChange={v => setDraft(d => ({ ...d, product: v }))} options={[['', '전체 HS6'], ...products.filter(p => !group || p.hs4 === group.code).map(p => [p.id, `${p.id} ${p.name}`])]} aria-label="품목" />
-              <Select prefix="기간" style={{ flex: 1 }} value={draft.period} onChange={v => setDraft(d => ({ ...d, period: v }))} options={PERIODS} aria-label="기간" />
+              <Select prefix="국가" style={{ flex: 1 }} value={draft.country} onChange={v => setDraft(d => ({ ...d, country: v, group: null, scope: "GLOBAL", inherited: false }))} options={[['', '전체 국가'], ...rankingCountries]} aria-label="국가" />
+              <Select prefix="품목" style={{ flex: 1 }} value={draft.product} onChange={v => setDraft(d => ({ ...d, product: v, group: null, scope: "GLOBAL", inherited: false }))} options={[['', '전체 HS6'], ...products.filter(p => !group || p.hs4 === group.code).map(p => [p.id, `${p.id} ${p.name}`])]} aria-label="품목" />
+              <Select prefix="기간" style={{ flex: 1 }} value={draft.period} onChange={v => setDraft(d => ({ ...d, period: v, start: "", end: "" }))} options={PERIODS} aria-label="기간" />
               <Btn kind="red" size="md" onClick={search} style={{ height: 50, borderRadius: 12, padding: '0 28px' }}><Icon name="search" size={17} />순위 조회</Btn>
             </div>
             <Hs4Search group={group} onConfirm={g => { setGroup(g); setDraft(d => ({ ...d, product: '' })) }} buttonLabel={() => 'HS6 목록에서 선택'} onSelectAll={() => {}} />
@@ -70,7 +80,7 @@ export default function Rank({ route }) {
             {result.loading && <p role="status">조회 중…</p>}
             {error
               ? <p className="field-err" role="alert" style={{ marginTop: 12 }}>{error}</p>
-              : <p className="note" style={{ marginTop: 12 }}>메인에서 진입한 최근 3개월 기준을 유지합니다. 수출 또는 수입 기준으로 순위를 전환할 수 있습니다.</p>}
+              : <p className="note" style={{ marginTop: 12 }}>{query.period_start || "—"} ~ {query.period_end || "—"} 조회 조건을 적용합니다. 수출 또는 수입 기준으로 순위를 전환할 수 있습니다.</p>}
           </div>
           <div className="card">
             <div className="between">
@@ -107,7 +117,7 @@ export default function Rank({ route }) {
             {!byMonth && <Pagination page={page} info={result.data?.page} onChange={setPage} />}
           </div>
         </div>
-        <ChatFab ask={`${applied.country || '전체 국가'} · ${applied.product ? `${productName(applied.product)}(HS ${applied.product})` : '전체 품목'} · ${applied.period} 수출입을 분석해줘`} />
+        <ChatFab ask={`${countryLabel || '전체 국가'} · ${applied.product ? `${productName(applied.product)}(HS ${applied.product})` : '전체 품목'} · ${query.period_start} ~ ${query.period_end} 수출입을 분석해줘`} />
       </main>
     </>
   )

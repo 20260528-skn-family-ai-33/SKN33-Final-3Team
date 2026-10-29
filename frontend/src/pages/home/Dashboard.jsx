@@ -192,12 +192,12 @@ export default function Dashboard({ route }) {
                 <button key={m} type="button" className="reset" aria-pressed={months === m} onClick={() => setMonths(m)}
                   style={{ height: 34, padding: '0 14px', borderRadius: 17, background: months === m ? '#fff' : '#262A33', color: months === m ? '#15181E' : '#C9CED6', fontSize: 13, fontWeight: months === m ? 800 : 400, display: 'inline-flex', alignItems: 'center' }}>{m}개월</button>
               ))}
-              <Link to="/rank" style={{ marginLeft: 10, fontSize: 14, fontWeight: 700, color: '#FF8A9A' }}>상세보기 →</Link>
+              <Link to={data.detailLink("HS6")} style={{ marginLeft: 10, fontSize: 14, fontWeight: 700, color: '#FF8A9A' }}>상세보기 →</Link>
             </div>
           </div>
           <div style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${interest ? Math.min(Math.max(cards.length, 2), 5) : 5},1fr)`, gap: 14 }} className="resp-stack">
             {cards.map(c => (
-              <Link key={c.hs} to={`/rank?product=${c.hs}`} style={{ background: '#1F232B', border: '1px solid #2C313B', borderRadius: 18, padding: 18, color: '#ECEEF1', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <Link key={c.hs} to={data.detailLink("COUNTRY", c.hs)} style={{ background: '#1F232B', border: '1px solid #2C313B', borderRadius: 18, padding: 18, color: '#ECEEF1', display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <span style={{ display: 'flex', gap: 6 }}>
                   <span style={{ padding: '3px 8px', borderRadius: 6, background: '#3A3016', color: '#F2C14E', fontSize: 12, fontWeight: 800 }}>{c.rank}</span>
                   <span style={{ padding: '3px 8px', borderRadius: 6, background: '#2C313B', color: '#C9CED6', fontSize: 12 }}>{c.hs}</span>
@@ -225,7 +225,7 @@ export default function Dashboard({ route }) {
                 <h2 className="t2">{data.productTable.title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{data.productTable.sub}</p>
               </div>
-              <Link to="/rank" className="more">상세보기 →</Link>
+              <Link to={data.detailLink("HS6")} className="more">상세보기 →</Link>
             </div>
             <div className="th" style={{ gridTemplateColumns: '22px 86px 1fr 64px 60px', marginTop: 14 }}>
               <span>순위</span><span>HS6</span><span>품목</span><span className="r">수출액</span><span className="r">수입액</span>
@@ -243,7 +243,7 @@ export default function Dashboard({ route }) {
                 <h2 className="t2">{data.countryTable.title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{data.countryTable.sub}</p>
               </div>
-              <Link to="/rank" className="more">상세보기 →</Link>
+              <Link to={data.detailLink("COUNTRY")} className="more">상세보기 →</Link>
             </div>
             <div style={{ display: 'flex', gap: 26, marginTop: 14 }}>
               <div style={{ flex: '1 1 260px' }}>

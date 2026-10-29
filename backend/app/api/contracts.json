@@ -355,6 +355,13 @@
     "fields": [
       [
         "Query Parameters",
+        "scope",
+        "string",
+        "선택",
+        "GLOBAL / INTERESTED. 기본 GLOBAL. INTERESTED는 본인의 저장된 관심 품목·국가 범위를 서버에서 적용."
+      ],
+      [
+        "Query Parameters",
         "hs_code",
         "string",
         "선택",

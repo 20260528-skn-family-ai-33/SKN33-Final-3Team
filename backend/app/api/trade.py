@@ -16,6 +16,7 @@ def verified_months(store, table):
     # 최신 실행이 실패/진행 중인 범위는 공개하지 않는다. 이전 정상 범위를 0으로 덮지 않는다.
     runs=store.rows(select(b.c.run_id,b.c.period_start,b.c.period_end,b.c.status)
                     .where(b.c.target_table==table).order_by(b.c.run_id.desc()))
+    store.cache[('trade_revision',table)]=digest(runs)
     # 거래 행이 전혀 없는 월도 완료 배치가 보장하면 공개 가능한 0 거래 월이다.
     months=set()
     for run in runs:
@@ -95,6 +96,30 @@ def scope_filters(store,uid,scope='GLOBAL',hs_code=None,hs_ver=None,countries=No
     return hs,countries
 
 
+def hs_filter(t, hs):
+    # Equality permits a full HS6 index lookup; prefix matching is only for HS4.
+    return or_(*(and_(t.c.hs6_code==x['hs_code'] if len(x['hs_code'])==6 else t.c.hs6_code.startswith(x['hs_code']),
+                     t.c.hs_ver==x['hs_ver']) for x in hs))
+
+
+def trade_plan(stmt,t,hs,countries):
+    # For nationwide scans MySQL chose country-first nested loops over all history.
+    # Existing month-leading PK restricts the scan to the requested period instead.
+    if not hs and not countries:
+        stmt=stmt.with_hint(t,'FORCE INDEX (PRIMARY)',dialect_name='mysql')
+    return stmt
+
+
+def query_rows(store,stmt,table):
+    compiled=str(stmt.compile(dialect=store.c.dialect,compile_kwargs={'literal_binds':True}))
+    store.queries.append(compiled)
+    if store.c.dialect.name!='mysql': return store.rows(stmt)
+    revision_table=table.replace('_monthly','_summary')
+    verified_months(store,revision_table)
+    key=(compiled,store.cache[('trade_revision',revision_table)])
+    return store.db.trade_query_cache.get_or_load(key,lambda:store.rows(stmt))
+
+
 def aggregate(store,table,start,end,hs=None,countries=None,group='COUNTRY'):
     t,c=store.t(table),store.t('country')
     groups={'COUNTRY':[t.c.country_code], 'HS6':[t.c.hs6_code,t.c.hs_ver],
@@ -103,19 +128,16 @@ def aggregate(store,table,start,end,hs=None,countries=None,group='COUNTRY'):
     cols=groups[group]
     stmt=select(*cols,func.sum(t.c.amount_usd).label('amount_usd')).select_from(t.join(c,t.c.country_code==c.c.country_code))
     stmt=stmt.where(c.c.country_role=='COUNTRY',t.c.hs_ver=='HS2022',t.c.trade_month>=start,t.c.trade_month<=end)
-    if hs: stmt=stmt.where(or_(*(and_(t.c.hs6_code.startswith(x['hs_code']),t.c.hs_ver==x['hs_ver']) for x in hs)))
+    if hs: stmt=stmt.where(hs_filter(t,hs))
     if countries: stmt=stmt.where(t.c.country_code.in_(countries))
     stmt=stmt.group_by(*cols).order_by(*cols)
-    # 로컬에서 생성한 읽기 전용 SQL과 바인드 값만 스냅샷에 보존한다.
-    compiled=stmt.compile(dialect=store.c.dialect,compile_kwargs={'literal_binds':True})
-    store.queries.append(str(compiled))
-    return store.rows(stmt)
+    return query_rows(store,trade_plan(stmt,t,hs,countries),table)
 
 
 def one_off(store,start,end,hs=None,countries=None):
     t=store.t('export_monthly')
     stmt=select(t.c.anomaly_code).where(t.c.trade_month>=start,t.c.trade_month<=end,t.c.hs_ver=='HS2022')
-    if hs: stmt=stmt.where(or_(*(t.c.hs6_code.startswith(x['hs_code']) for x in hs)))
+    if hs: stmt=stmt.where(hs_filter(t,hs))
     if countries: stmt=stmt.where(t.c.country_code.in_(countries))
     values=set(store.c.execute(stmt.distinct()).scalars())
     return anomaly_view(values)
@@ -134,10 +156,10 @@ def anomaly_map(store,start,end,hs=None,countries=None,group='COUNTRY',flow='EXP
     cols=[t.c.country_code] if group=='COUNTRY' else [t.c.hs6_code] if group=='HS6' else [t.c.country_code,t.c.hs6_code]
     stmt=select(*cols,t.c.anomaly_code).join(c,c.c.country_code==t.c.country_code).where(
         c.c.country_role=='COUNTRY',t.c.trade_month>=start,t.c.trade_month<=end,t.c.hs_ver=='HS2022')
-    if hs: stmt=stmt.where(or_(*(t.c.hs6_code.startswith(x['hs_code']) for x in hs)))
+    if hs: stmt=stmt.where(hs_filter(t,hs))
     if countries: stmt=stmt.where(t.c.country_code.in_(countries))
     values=defaultdict(set)
-    for row in store.rows(stmt.distinct()):
+    for row in query_rows(store,trade_plan(stmt.distinct(),t,hs,countries),t.name):
         key=row['country_code'] if group=='COUNTRY' else row['hs6_code'] if group=='HS6' else (row['country_code'],row['hs6_code'])
         values[key].add(row['anomaly_code'])
     return {k:anomaly_view(v) for k,v in values.items()}

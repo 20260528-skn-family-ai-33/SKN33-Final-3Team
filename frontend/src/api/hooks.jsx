@@ -9,17 +9,17 @@ export function useDebouncedValue(value, delay = 300) {
   return settled
 }
 
-export function useQuery(path, query = {}, enabled = true, interval = 0) {
+export function useQuery(path, query = {}, enabled = true, interval = 0, method = 'GET') {
   const key = JSON.stringify(query)
   const [state, setState] = useState({ data: null, error: null, loading: true })
   const [revision, reload] = useState(0)
-  const requestKey = `${path}|${key}|${revision}|${enabled}`
+  const requestKey = `${method}|${path}|${key}|${revision}|${enabled}`
   useEffect(() => {
     const controller = new AbortController(); let timer
     if (!enabled) return () => controller.abort()
     const load = async () => {
       try {
-        const data = await api(path, { query: JSON.parse(key), signal: controller.signal })
+        const data = await api(path, { method, [method === 'GET' ? 'query' : 'body']: JSON.parse(key), signal: controller.signal })
         if (!controller.signal.aborted) setState({ key: requestKey, data, error: null, loading: false })
       } catch (error) {
         if (!controller.signal.aborted) setState({ key: requestKey, data: null, error, loading: false })
@@ -28,7 +28,7 @@ export function useQuery(path, query = {}, enabled = true, interval = 0) {
     }
     load()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [path, key, enabled, revision, interval, requestKey])
+  }, [path, key, enabled, revision, interval, requestKey, method])
   const reloadQuery = useCallback(() => reload(n => n + 1), [])
   return { ...(enabled ? state.key === requestKey ? state : { data: null, error: null, loading: true } : { data: null, error: null, loading: false }), reload: reloadQuery }
 }
