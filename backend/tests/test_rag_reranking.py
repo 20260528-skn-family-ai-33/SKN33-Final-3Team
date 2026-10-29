@@ -22,10 +22,9 @@ class Scorer(FakeGateway):
         assert set(schema['properties']['scores']['required']) == {str(a['candidate_id']) for a in payload['articles']}
         if self.expire:
             raise RagDeadlineExceeded('global_deadline_exceeded')
-        assert all('차단 본문' not in str(a['chunks']) for a in payload['articles'])
+        assert all('차단 본문' not in str(a['evidence_spans']) for a in payload['articles'])
         return {'scores': {str(a['candidate_id']): {'score': 2,
-                            'chunk_id': next(iter(a['chunks'])),
-                            'quote': '없는 발췌' if self.invalid else next(iter(a['chunks'].values()))}
+                            'evidence_index': 999999 if self.invalid else 0}
                            for a in payload['articles']}}
 
 
@@ -68,7 +67,7 @@ def test_partial_direct_evidence_moves_above_background():
     class Gateway:
         def structured(self, instruction, payload, schema, context):
             return {'scores': {str(i): {'score': 2 if i == 2 else 1,
-                                'chunk_id': str(i + 1), 'quote': f'기사 {i + 1}의 독립 근거'}
+                                'evidence_index': 0}
                                for i in range(3)}}
 
     ranked = rerank_candidates(RagRequest.model_validate(request_payload('chat')),
@@ -76,7 +75,7 @@ def test_partial_direct_evidence_moves_above_background():
     assert [c.article.external_id for c in ranked] == ['3', '1', '2']
 
 
-@pytest.mark.parametrize('bad', ['missing_id', 'extra_id', 'foreign_quote', 'boolean_score'])
+@pytest.mark.parametrize('bad', ['missing_id', 'extra_id', 'foreign_evidence', 'boolean_score'])
 def test_invalid_model_judgment_is_retried_once_then_rejected(bad):
     candidates = [Candidate(document(i), i / 10, 'v1', {str(i): f'기사 {i}의 독립 근거'})
                   for i in range(1, 3)]
@@ -86,14 +85,13 @@ def test_invalid_model_judgment_is_retried_once_then_rejected(bad):
 
         def structured(self, instruction, payload, schema, context):
             self.calls += 1
-            rows = {str(i): {'score': 2, 'chunk_id': str(i + 1),
-                     'quote': f'기사 {i + 1}의 독립 근거'} for i in range(2)}
+            rows = {str(i): {'score': 2, 'evidence_index': 0} for i in range(2)}
             if bad == 'missing_id':
                 rows.pop('1')
             elif bad == 'extra_id':
                 rows['2'] = rows['1']
-            elif bad == 'foreign_quote':
-                rows['0']['quote'] = rows['1']['quote']
+            elif bad == 'foreign_evidence':
+                rows['0']['evidence_index'] = 999999
             else:
                 rows['0']['score'] = True
             return {'scores': rows}
@@ -103,3 +101,34 @@ def test_invalid_model_judgment_is_retried_once_then_rejected(bad):
         rerank_candidates(RagRequest.model_validate(request_payload('chat')),
                           candidates, gateway, ExecutionContext(time.monotonic() + 30))
     assert gateway.calls == 2
+
+
+def test_source_spans_preserve_complete_original_and_offsets():
+    from backend.app.services.rag.reranking import evidence_spans
+    text = "줄바꿈\r\n기호 * -  \n" + "긴 문장" * 250
+    candidate = Candidate(document(1), 0.1, 'v1', {'a': text, 'b': '별도 청크'})
+    spans = evidence_spans(candidate, 7)
+    for chunk, original in candidate.chunks.items():
+        rows = [s for s in spans.values() if s['chunk_id'] == chunk]
+        assert ''.join(s['quote'] for s in rows) == original
+        assert all(original[s['start']:s['end']] == s['quote'] for s in rows)
+
+
+@pytest.mark.parametrize('evidence_id', [-1, 999999, True])
+def test_direct_score_requires_same_article_evidence(evidence_id):
+    class Gateway:
+        def structured(self, *args):
+            return {'scores': {'0': {'score': 3, 'evidence_index': evidence_id}}}
+    with pytest.raises(ValueError):
+        rerank_candidates(RagRequest.model_validate(request_payload('chat')),
+                          [Candidate(document(1), .1, 'v', {'a': '저장 원문'})],
+                          Gateway(), ExecutionContext(time.monotonic() + 30))
+
+
+def test_large_evidence_catalog_uses_bounded_integer_not_enum():
+    from backend.app.services.rag.reranking import evidence_spans, score_schema
+    candidate = Candidate(document(1), .1, 'v', {'a': '원문\n' * 1300})
+    spans = evidence_spans(candidate, 0)
+    schema = score_schema({0: candidate}, {0: spans})
+    field = schema['properties']['scores']['properties']['0']['properties']['evidence_index']
+    assert field == {'type': 'integer', 'minimum': -1, 'maximum': 1299}
