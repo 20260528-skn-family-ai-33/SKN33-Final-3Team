@@ -1,7 +1,7 @@
 // 화면 라우팅과 공통 틀(머리글·바닥글)을 고른다. 경로 ↔ 화면설계서 번호는 MOCKUP_MAP.md 참고.
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { navigate, useRoute, withQuery } from './router'
-import { useApp } from './store'
+import { useApp, useNotifications, useToast } from './store'
 import { AuthHeader, Footer, FooterSmall, SiteHeader } from './components/layout'
 import AlertPopover from './components/AlertPopover'
 import Login from './pages/auth/Login'
@@ -41,7 +41,8 @@ const SITE = {
 }
 
 function UserShell({ active, route, children }) {
-  const { unread, session, logout } = useApp()
+  const { session, logout } = useApp()
+  const { unread } = useNotifications()
   const isAdmin = session?.role === 'admin'
   const open = !isAdmin && route.query.get('alerts') === 'open'
   const toggle = () => navigate(withQuery(route, { alerts: open ? null : 'open' }), { replace: true })
@@ -57,7 +58,7 @@ function UserShell({ active, route, children }) {
 }
 
 function Toast() {
-  const { toast, setToast } = useApp()
+  const { toast, setToast } = useToast()
   if (!toast) return null
   return (
     <div className="toast" role="status">

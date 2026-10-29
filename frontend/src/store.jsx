@@ -1,11 +1,15 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api, setCsrf, download } from './api/client'
 import { navigate } from './router'
 import { registerCountries, registerProducts, countryCode, countryName } from './data/catalog'
 import { mapNotification, mapReport } from './api/adapters'
 const AppContext = createContext(null)
+const NotificationContext = createContext(null)
+const ToastContext = createContext(null)
 export const useApp = () => useContext(AppContext)
+export const useNotifications = () => useContext(NotificationContext)
+export const useToast = () => useContext(ToastContext)
 export const REPORT_STAGES = ['생성 대기', '서버에서 생성 중', '완료']
 // Presentation state only. Server records and credentials never persist in localStorage.
 export function useStored(_key, initial) { return useState(initial) }
@@ -46,13 +50,19 @@ export function AppProvider({ children }) {
   const run = useCallback(async action => { try { return await action() } catch (error) { return fail(error) } }, [fail])
   const clear = useCallback(() => {
     epoch.current++; setSession(null); setCsrf(null); updateProfile(emptyProfile); setChats([]); setReports([]); updateNotifications([]); setUnread(0); setAccounts([]); setMainView(null)
+    updateSettings({ all: false, surge: false, major: false, report: false })
+    updateSubscription({ cycles: [], formats: ['PDF'], items: [] }); setLoadError(null)
   }, [])
   const refreshNotifications = useCallback(async (force = false) => {
     const current = epoch.current
     if (!force && notificationRequest.current?.epoch === current) return notificationRequest.current.promise
     const revision = ++notificationRevision.current
     const promise = Promise.all([allPages('/notifications'), api('/notifications/unread-count')]).then(([items, count]) => {
-      if (current === epoch.current && revision === notificationRevision.current) { updateNotifications(items.map(mapNotification)); setUnread(count.count) }
+      if (current === epoch.current && revision === notificationRevision.current) {
+        const mapped = items.map(mapNotification)
+        updateNotifications(previous => JSON.stringify(previous) === JSON.stringify(mapped) ? previous : mapped)
+        setUnread(count.count)
+      }
     }).finally(() => { if (notificationRequest.current?.promise === promise) notificationRequest.current = null })
     notificationRequest.current = { epoch: current, promise }
     return promise
@@ -108,59 +118,88 @@ export function AppProvider({ children }) {
     document.addEventListener('visibilitychange', poll)
     return () => { clearInterval(timer); window.removeEventListener('focus', poll); document.removeEventListener('visibilitychange', poll) }
   }, [session, loading, loadError, refreshNotifications])
-  const authenticate = async (path, body) => {
+  const authenticate = useCallback(async (path, body) => {
     try {
       const data = await api(path, { method: 'POST', body }); const current = ++epoch.current
       setCsrf(data.csrf_token); setSession(accountView(data.user)); setLoading(true); setLoadError(null)
       try { await loadUser(data.user, current) } catch (error) { setLoadError(error) } finally { setLoading(false) }
       return { ok: true, account: accountView(data.user), path: data.user.post_login_path }
     } catch (error) { return { ok: false, message: error.message } }
-  }
-  const setProfile = async next => run(async () => {
+  }, [loadUser])
+  const setProfile = useCallback(async next => run(async () => {
+    const current = epoch.current
     const p = typeof next === 'function' ? next(profile) : next
     const data = await api('/users/me/interests', { method: 'PUT', body: { hs_items: p.products.map(hs_code => ({ hs_code, hs_ver: 'HS2022' })), country_codes: p.countries.map(countryCode), landing_page: p.home === 'interest' ? 'INTERESTED' : 'GLOBAL', expected_version: profile.version } })
+    if (current !== epoch.current) return false
     updateProfile({ ...p, version: data.interests.version, home: data.interests.landing_page === 'INTERESTED' ? 'interest' : 'all' }); return true
-  })
-  const setSettings = async next => run(async () => {
+  }), [profile, run])
+  const setSettings = useCallback(async next => run(async () => {
+    const current = epoch.current
     await api('/users/me/notification-settings', { method: 'PATCH', body: { notifications_enabled: next.all, spike_popup: next.surge, major_issue_popup: next.major, report_popup: next.report } })
+    if (current !== epoch.current) return false
     updateSettings(next); return true
-  })
-  const setSubscription = async next => run(async () => {
+  }), [run])
+  const setSubscription = useCallback(async next => run(async () => {
+    const current = epoch.current
     const s = typeof next === 'function' ? next(subscription) : next
     if (s.cycles.length) await api('/users/me/subscriptions', { method: 'PUT', body: { period_codes: s.cycles.map(c => c.toUpperCase()), formats: s.formats, use_saved_interests: true, expected_version: subscription.version } })
-    else for (const item of subscription.items.filter(s => s.enabled)) await api(`/users/me/subscriptions/${item.subscription_id}`, { method: 'DELETE' })
-    const fresh = await api('/users/me/subscriptions'); updateSubscription({ ...fresh, cycles: fresh.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: fresh.items.find(s => s.enabled)?.formats || s.formats }); return true
-  })
-  const deleteSubscription = async cycle => run(async () => {
+    else for (const item of subscription.items.filter(s => s.enabled)) {
+      if (current !== epoch.current) return false
+      await api(`/users/me/subscriptions/${item.subscription_id}`, { method: 'DELETE' })
+    }
+    if (current !== epoch.current) return false
+    const fresh = await api('/users/me/subscriptions')
+    if (current !== epoch.current) return false
+    updateSubscription({ ...fresh, cycles: fresh.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: fresh.items.find(s => s.enabled)?.formats || s.formats }); return true
+  }), [subscription, run])
+  const deleteSubscription = useCallback(async cycle => run(async () => {
+    const current = epoch.current
     const target = subscription.items.find(s => s.enabled && s.period_code === cycle.toUpperCase())
     if (!target) throw new Error('삭제할 구독을 찾을 수 없습니다. 새로고침해 주세요.')
     await api(`/users/me/subscriptions/${target.subscription_id}`, { method: 'DELETE' })
+    if (current !== epoch.current) return false
     const fresh = await api('/users/me/subscriptions')
+    if (current !== epoch.current) return false
     updateSubscription({ ...fresh, cycles: fresh.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: fresh.items.find(s => s.enabled)?.formats || subscription.formats })
     return true
-  })
+  }), [subscription, run])
   const setNotifications = useCallback(async next => run(async () => {
+    const current = epoch.current
     const values = typeof next === 'function' ? next(notifications) : next
     const changed = values.filter(n => n.read && !notifications.find(old => old.id === n.id)?.read)
     if (!changed.length) return true
-    for (const item of changed) await api(`/notifications/${item.id}/read`, { method: 'PATCH', body: {} })
+    for (const item of changed) {
+      if (current !== epoch.current) return false
+      await api(`/notifications/${item.id}/read`, { method: 'PATCH', body: {} })
+    }
+    if (current !== epoch.current) return false
     await refreshNotifications(true); return true
   }), [notifications, refreshNotifications, run])
-  const logout = () => run(async () => { await api('/auth/logout', { method: 'POST', body: {} }); clear(); navigate('/login'); return true })
-  const changePassword = (current, next) => run(async () => {
+  const logout = useCallback(() => run(async () => { await api('/auth/logout', { method: 'POST', body: {} }); clear(); navigate('/login'); return true }), [run, clear])
+  const changePassword = useCallback((current, next) => run(async () => {
     await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } }); clear(); navigate('/login'); return true
-  })
-  const downloadReport = (id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`, `리포트-${id}.${format.toLowerCase()}`))
-  const value = {
+  }), [session, run, clear])
+  const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`, `리포트-${id}.${format.toLowerCase()}`)), [run])
+  const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
+  const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])
+  const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
+  const withdraw = useCallback(() => notify('회원 탈퇴는 운영 정책 확정 후 제공됩니다.'), [notify])
+  const setConsents = useCallback(() => { notify('일반 약관 동의 관리는 서버 연동 준비 중입니다.'); return false }, [notify])
+  const value = useMemo(() => ({
     session, account: session, accounts, setAccounts, loading, loadError, refresh, options, countries,
-    login: (email, password) => authenticate('/auth/login', { email, password }),
-    signup: form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }),
-    socialSignIn: () => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), logout, changePassword,
-    withdraw: () => notify('회원 탈퇴는 운영 정책 확정 후 제공됩니다.'),
-    consents: {}, setConsents: () => { notify('일반 약관 동의 관리는 서버 연동 준비 중입니다.'); return false },
+    login, signup, socialSignIn, logout, changePassword, withdraw,
+    consents: {}, setConsents,
     profile, setProfile, settings, setSettings, subscription, setSubscription, deleteSubscription,
-    notifications, setNotifications, unread, refreshNotifications, chats, setChats, refreshChats, reports, refreshReports, downloadReport,
-    mainView, setMainView, notify, toast, setToast, run, fail,
-  }
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>
+    chats, setChats, refreshChats, reports, refreshReports, downloadReport,
+    mainView, setMainView, notify, run, fail,
+  }), [session, accounts, loading, loadError, refresh, options, countries, login, signup, socialSignIn,
+    logout, changePassword, withdraw, setConsents, profile, setProfile, settings, setSettings,
+    subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
+    downloadReport, mainView, notify, run, fail])
+  const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications }),
+    [notifications, setNotifications, unread, refreshNotifications])
+  const toastValue = useMemo(() => ({ toast, setToast }), [toast])
+  return <AppContext.Provider value={value}><NotificationContext.Provider value={notificationValue}>
+    <ToastContext.Provider value={toastValue}>{children}</ToastContext.Provider>
+  </NotificationContext.Provider></AppContext.Provider>
 }

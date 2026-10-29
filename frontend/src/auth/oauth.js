@@ -3,8 +3,7 @@
 // 1) 로그인 버튼 → 각 회사 로그인 페이지로 이동(authorizeUrl)
 // 2) 로그인 후 {origin}/oauth/{provider}?code=...&state=... 로 돌아옴
 // 3) code를 서버(POST {VITE_AUTH_API_BASE}/auth/oauth/{provider})로 보내 토큰 교환·회원 정보 조회
-//    - 개발 중에는 vite.config.js의 oauthDevApi 플러그인이 이 API를 대신한다(.env의 Client Secret 사용).
-//    - 배포 시에는 FastAPI 등 백엔드가 같은 주소·같은 응답 형식으로 구현한다(README 참고).
+//    - 현재 앱은 소셜 로그인을 제공하지 않는다. 재활성화할 때 백엔드 세션 계약에 맞춰 연결해야 한다.
 // Client Secret은 절대 프론트엔드(VITE_ 변수)에 넣지 않는다.
 
 const env = import.meta.env

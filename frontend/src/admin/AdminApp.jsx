@@ -1,5 +1,5 @@
 // 관리자 영역: 공통 틀(머리글·띠·왼쪽 메뉴)과 화면 선택
-import { useApp } from '../store'
+import { useApp, useNotifications } from '../store'
 import { Link, navigate } from '../router'
 import { SiteHeader, FooterSmall } from '../components/layout'
 import { Btn } from '../components/ui'
@@ -37,7 +37,8 @@ function Forbidden() {
 }
 
 export default function AdminApp({ route }) {
-  const { session, unread, logout } = useApp()
+  const { session, logout } = useApp()
+  const { unread } = useNotifications()
   const [, , slug = 'ops', id] = route.path.split('/')
   const menuKey = adminScreens[id]?.menu || slug
   const menu = ADMIN_MENU.find(m => m[0] === (menuKey === 'data' ? 'inbox' : menuKey)) || ADMIN_MENU[0]

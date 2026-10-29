@@ -1,7 +1,7 @@
 // BS27 알림함 전체 · BS28 리포트 발행 · BS29 주요이슈 · BS30 급증 기사
 import { useEffect } from 'react'
 import { navigate, withQuery } from '../../router'
-import { useApp } from '../../store'
+import { useApp, useNotifications } from '../../store'
 import { Btn, Check, Chip } from '../../components/ui'
 import { notificationTypes } from '../../data/seed'
 
@@ -59,7 +59,8 @@ function Detail({ n }) {
 }
 
 export default function Inbox({ route }) {
-  const { notifications, setNotifications, refreshNotifications, run } = useApp()
+  const { run } = useApp()
+  const { notifications, setNotifications, refreshNotifications } = useNotifications()
   useEffect(() => { void run(refreshNotifications) }, [refreshNotifications, run])
   const tab = TABS.some(([key]) => key === route.query.get('tab')) ? route.query.get('tab') : 'all'
   const unreadOnly = route.query.get('unread') === '1'

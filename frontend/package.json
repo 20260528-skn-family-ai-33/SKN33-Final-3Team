@@ -8,9 +8,10 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/data.test.mjs tests/oauth.test.mjs tests/roles.test.mjs tests/api-client.test.mjs tests/integration.test.mjs",
+    "test": "node --test tests/data.test.mjs tests/roles.test.mjs tests/api-client.test.mjs tests/integration.test.mjs tests/request-id.test.mjs",
     "test:integration": "node tests/integration-browser.cjs",
     "test:review": "node tests/review-browser.cjs",
+    "test:store": "node tests/store-browser.cjs",
     "test:e2e": "node tests/integration-browser.cjs"
   },
   "dependencies": {

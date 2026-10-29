@@ -1,6 +1,6 @@
 // 마이페이지 공통 틀(띠 배너 + 왼쪽 메뉴)과 하위 화면 연결
 import { Link } from '../../router'
-import { useApp } from '../../store'
+import { useNotifications } from '../../store'
 import { Band } from '../../components/layout'
 import bandMypage from '../../assets/band-mypage.jpg'
 import ReportCenter from './ReportCenter'
@@ -30,7 +30,7 @@ const PAGES = {
 }
 
 export default function AccountPage({ route }) {
-  const { unread } = useApp()
+  const { unread } = useNotifications()
   const section = route.path.split('/')[2] || 'reports'
   const [Page, menu, lead] = PAGES[section] || PAGES.reports
   const leadText = section === 'reports' && (route.query.get('tab') || 'chat') === 'chat' ? '리포트 종류별로 목록을 확인하고 저장된 PDF를 다시 다운로드합니다.' : lead

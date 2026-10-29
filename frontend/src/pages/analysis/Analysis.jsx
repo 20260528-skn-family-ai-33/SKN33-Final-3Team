@@ -6,6 +6,7 @@ import { Btn, Check, Modal, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
 import { api } from '../../api/client'
+import { requestId } from '../../api/requestId'
 import { previewUsable, previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
 import { amount, percent } from '../../api/adapters'
 import { useQuery, ErrorNotice } from '../../api/hooks'
@@ -61,7 +62,7 @@ function ConditionCard({ message, onChange, onGenerate }) {
       if (!previewUsable(preview, signature)) {
         const conditions = reportConditions(o)
         const data = await api('/reports/preview', { method: 'POST', body: { conditions } })
-        setPreview({ ...data, signature }); request.current = crypto.randomUUID()
+        setPreview({ ...data, signature }); request.current = requestId()
       } else {
         try {
           await onGenerate({ preview_id: preview.preview_id, confirm_conditions: true, formats: ['PDF', 'DOCX'], sections: o.sections.map(s => sectionCodes[s]) }, request.current)
@@ -198,7 +199,7 @@ export default function Analysis({ route }) {
     await run(async () => {
       let id = activeId
       if (!id) { const data = await api('/chat/sessions', { method: 'POST', body: {} }); id = data.session.session_id; setActiveId(id) }
-      if (pending.current?.text !== input || pending.current?.sessionId !== id) pending.current = { text: input, sessionId: id, id: crypto.randomUUID() }
+      if (pending.current?.text !== input || pending.current?.sessionId !== id) pending.current = { text: input, sessionId: id, id: requestId() }
       await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: { question: input, client_message_id: pending.current.id } })
       setInput(''); pending.current = null; await refreshChats()
     })
