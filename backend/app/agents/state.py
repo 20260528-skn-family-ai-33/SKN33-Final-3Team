@@ -6,7 +6,7 @@ LangGraph 그래프의 state이며, langgraph-checkpoint-redis가 Redis에 체�
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 from pydantic_core import to_json
 
 from backend.app.schemas.rag import CountryCode, HsProduct
@@ -15,6 +15,7 @@ SCHEMA_VERSION = 2
 MAX_STATE_BYTES = 64 * 1024      # 체크포인트 하나의 상한. 넘으면 원본을 state에 넣은 것이다.
 MAX_DIGEST_BYTES = 8 * 1024      # tool 결과 중 LLM에 넘기는 요약의 상한
 HISTORY_TURNS = 5
+HISTORY_QUESTION_CHARS = 200     # 5건 요약에 남기는 질문 길이. 4,000자 질문 6개(한글 약 72KB)가 state 상한을 넘지 않게 자른다
 MAX_TASKS = 3                    # 복합 질문을 나눈 하위 질문 수
 MAX_CHART_LABELS = 60            # 차트 하나의 x축 값 수
 MAX_CHART_SERIES = 5
@@ -78,7 +79,7 @@ class Interests(Model):
 
 class TurnSummary(Model):
     """답변 1건의 요약. summary는 compose가 쓴 문장, 조건은 주 하위 질문의 구조화된 값이다."""
-    question: Annotated[str, Field(max_length=4000)]
+    question: Annotated[str, BeforeValidator(lambda v: v[:HISTORY_QUESTION_CHARS] if isinstance(v, str) else v)]
     intent: Intent
     conditions: Conditions | None = None
     summary: Annotated[str, Field(max_length=200)] = ''
@@ -274,7 +275,7 @@ class AgentState(Model):
             raise ValueError('계획에 없는 단계의 결과입니다')
         if self.pending and (not self.plan or self.pending.task_id not in {t.task_id for t in self.plan.tasks}):
             raise ValueError('되묻기가 계획에 없는 하위 질문을 가리킵니다')
-        if _json_size(self.model_dump(mode='json')) > MAX_STATE_BYTES:
+        if _json_size(self) > MAX_STATE_BYTES:
             raise ValueError('state가 체크포인트 상한을 넘습니다')
         return self
 

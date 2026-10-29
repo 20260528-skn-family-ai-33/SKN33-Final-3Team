@@ -88,6 +88,15 @@ class AgentStateTest(unittest.TestCase):
             state(results={'t1.sql': {'status': 'OK', 'result_id': 'r1', 'digest': {'rows': rows}}})
         self.assertGreater(len(str(rows)), MAX_DIGEST_BYTES)
 
+    def test_long_history_fits_state(self):
+        q = '가' * 4000  # 허용된 최대 질문, 한글 12KB
+        turns = [{'question': q, 'intent': 'STATISTICS', 'answered_at': datetime(2026, 10, 29, 9, n)} for n in range(5)]
+        s = AgentState.model_validate({'input': {'job_id': '11', 'session_id': '3', 'user_id': 7, 'question': q,
+                                                 'context': {'session_id': '3', 'recent': turns},
+                                                 'received_at': datetime(2026, 10, 29, 9)}})
+        self.assertEqual(len(s.input.context.recent[0].question), 200)
+
+
     def test_context_keeps_last_five_turns_and_latest_conditions(self):
         context = SessionContext(session_id='3')
         vn = {'country_codes': ['VN'], 'period': {'start': '2025-01-01', 'end': '2025-09-01'}}
