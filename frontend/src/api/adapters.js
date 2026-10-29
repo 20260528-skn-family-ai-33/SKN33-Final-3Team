@@ -8,6 +8,14 @@ export function mapReport(r) {
 }
 export const amount = value => value == null ? '—' : (Number(value) / 1e8).toLocaleString('ko-KR', Number(value) !== 0 && Math.abs(Number(value)) < 1e7 ? { maximumSignificantDigits: 3 } : { maximumFractionDigits: 1 })
 export const percent = value => value == null ? '—' : `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(1)}%`
+export function reportComparison(conditions, kpi) {
+  const mode = conditions?.compare || 'YOY_PERIOD'
+  const labels = { MOM: '전월 대비', YOY: '전년 동월 대비', YOY_PERIOD: '전년 동기 대비', CUSTOM: '비교 기간 대비', NONE: '비교 없음' }
+  // Older saved reports have only mom_pct/yoy_pct; never substitute YOY for CUSTOM.
+  const fallback = mode === 'MOM' ? kpi.mom_pct : ['YOY', 'YOY_PERIOD'].includes(mode) ? kpi.yoy_pct : null
+  const growth = mode === 'NONE' ? null : Object.hasOwn(kpi, 'comparison_pct') ? kpi.comparison_pct : fallback
+  return { label: labels[mode] || '비교 기간 대비', growth, previous: mode === 'NONE' ? null : kpi.previous_amount_usd }
+}
 const ARTICLE_SOURCE_NAMES = new Map([
   ['KOTRA_MARKET', 'KOTRA 해외시장뉴스'],
   ['KOTRA_SHORT_NEWS', 'KOTRA 단신속보'],

@@ -178,7 +178,8 @@ def build_document(store,uid,record):
                 meta['warnings'].append('비교 기간 데이터 미준비: 증감률은 null')
                 meta['freshness']='STALE'
         growth=percentage(total,old); count=sum(r['amount_usd']>0 for r in rows)
-        kpi={'amount_usd':total,'mom_pct':growth if comparison=='MOM' else None,
+        kpi={'amount_usd':total,'previous_amount_usd':old,'comparison_pct':growth,
+             'mom_pct':growth if comparison=='MOM' else None,
              'yoy_pct':growth if comparison in ('YOY','YOY_PERIOD') else None,'export_country_count':count,
              'top_country_share_pct':max(r['amount_usd'] for r in rows)*100/total if total else None}
         text=f'분석 기간 수출액은 {total:,.2f} USD입니다. 수출 실적이 있는 국가는 {count}개국입니다. '

@@ -1,11 +1,22 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { amount, percent, mapReport, mapArticle, mapNotification } from '../src/api/adapters.js'
+import { amount, percent, mapReport, mapArticle, mapNotification, reportComparison } from '../src/api/adapters.js'
 import { registerCountries, countryCode, countryName, registerProducts, productName } from '../src/data/catalog.js'
 import { isStrongPassword } from '../src/utils/validate.js'
 test('미수집 값과 실제 0을 구분하고 USD를 억 USD로 표시한다', () => {
   assert.equal(amount(null), '—'); assert.equal(amount(0), '0'); assert.equal(amount(15720000000), '157.2')
   assert.equal(percent(null), '—'); assert.equal(percent(0), '0.0%'); assert.equal(percent(-5.3), '-5.3%')
+})
+
+test('리포트 비교 방식과 저장된 비교값을 유지하고 예전 문서도 읽는다', () => {
+  assert.equal(reportComparison({ compare: 'MOM' }, { mom_pct: 25, yoy_pct: 80 }).growth, 25)
+  assert.equal(reportComparison({ compare: 'YOY_PERIOD' }, { yoy_pct: 80 }).growth, 80)
+  assert.equal(reportComparison({ compare: 'CUSTOM' }, { comparison_pct: -20 }).growth, -20)
+  assert.equal(reportComparison({ compare: 'CUSTOM' }, { yoy_pct: 80 }).growth, null)
+  assert.equal(reportComparison({ compare: 'NONE' }, { comparison_pct: 99 }).growth, null)
+  assert.equal(reportComparison({ compare: 'MOM' }, { comparison_pct: null, mom_pct: 25 }).growth, null)
+  assert.equal(reportComparison({ compare: 'MOM' }, { comparison_pct: 0, previous_amount_usd: 0 }).growth, 0)
+  assert.equal(reportComparison({ compare: 'MOM' }, { previous_amount_usd: 0 }).previous, 0)
 })
 test('서버 국가 코드와 화면 국가명은 왕복 변환된다', () => {
   registerCountries([{ country_code: 'US', name_ko: '미국' }, { country_code: 'CN', name_ko: '중국' }])

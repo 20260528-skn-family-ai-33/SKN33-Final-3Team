@@ -10,7 +10,7 @@ import { countryName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { api } from '../../api/client'
-import { amount, percent, mapReport, mapArticle } from '../../api/adapters'
+import { amount, percent, mapReport, mapArticle, reportComparison } from '../../api/adapters'
 
 const range = (from, to) => from && to ? `${from} ~ ${to}` : '—'
 
@@ -67,6 +67,7 @@ export default function ReportView({ route }) {
   // 기존 화면의 표시 모델에 저장된 서버 결과만 연결한다.
   const byCode = Object.fromEntries(sections.map(section => [section.section_code, section]))
   const kpi = byCode.KPI?.kpi || {}
+  const comparison = reportComparison(c, kpi)
   const monthly = byCode.KPI?.tables?.find(t => t.columns.some(col => col.key === 'month'))?.rows || []
   const countryRows = byCode.TOP_COUNTRIES?.tables?.[0]?.rows || []
   const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
@@ -76,7 +77,7 @@ export default function ReportView({ route }) {
     sections: Object.keys(sectionCodes).filter(label => byCode[sectionCodes[label]]),
   }
   const f = {
-    total: amount(kpi.amount_usd), growth: kpi.yoy_pct, growthText: percent(kpi.yoy_pct),
+    total: amount(kpi.amount_usd), growth: comparison.growth, growthText: percent(comparison.growth),
     labels: monthly.map(r => r.month), current: monthly.map(r => r.amount_usd / 1e8),
     countryRows: countryRows.map(r => ({ name: r.country, exp: r.amount_usd, share: r.share_pct, growth: r.yoy_pct })),
     news: (byCode.LOCAL_ISSUES?.articles || byCode.NEWS?.articles || []).map(mapArticle),
@@ -122,14 +123,14 @@ export default function ReportView({ route }) {
               {has('주요 지표(KPI)') && (
                 <Section no={no++} title="주요 지표">
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
-                    {[['기간 수출액', `${f.total}억 USD`, '#15181E'], ['전년 대비', f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1'], ['수출국 수', `${kpi.export_country_count ?? '—'}개국`, '#15181E'], ['상위 1개국 비중', kpi.top_country_share_pct == null ? '—' : `${Number(kpi.top_country_share_pct).toFixed(1)}%`, '#15181E']].map(([l, v, c]) => (
+                    {[['기간 수출액', `${f.total}억 USD`, '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1'], ['수출국 수', `${kpi.export_country_count ?? '—'}개국`, '#15181E'], ['상위 1개국 비중', kpi.top_country_share_pct == null ? '—' : `${Number(kpi.top_country_share_pct).toFixed(1)}%`, '#15181E']].map(([l, v, c]) => (
                       <div key={l} style={{ background: 'var(--bg)', borderRadius: 14, padding: '18px 20px' }}>
                         <p className="muted">{l}</p>
                         <p style={{ fontSize: 26, fontWeight: 800, marginTop: 6, color: c }}>{v}</p>
                       </div>
                     ))}
                   </div>
-                  <p className="note" style={{ marginTop: 10 }}>금액 단위: 억 USD · 전년 대비: 서버에서 제공한 증감률만 표시</p>
+                  <p className="note" style={{ marginTop: 10 }}>금액 단위: 억 USD · {comparison.label}: 서버에서 제공한 증감률만 표시</p>
                   <div style={{ marginTop: 22, border: '1px solid var(--line)', borderRadius: 14, padding: '18px 20px' }}>
                     <div className="between">
                       <b>월별 {f.labels.length}개월 수출 추이{report.kind === 'quarterly' ? ' · 분기 리포트' : ''}</b>
@@ -139,7 +140,7 @@ export default function ReportView({ route }) {
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginTop: 14 }}>
-                      {[['분석 기간 합계', `${f.total}억 USD`, '#15181E'], ['비교 기간 합계', '—', '#15181E'], ['전년 동기 대비', f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1']].map(([l, v, c]) => (
+                      {[['분석 기간 합계', `${f.total}억 USD`, '#15181E'], ['비교 기간 합계', amount(comparison.previous) + (comparison.previous == null ? '' : '억 USD'), '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1']].map(([l, v, c]) => (
                         <div key={l} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '14px 16px' }}>
                           <p className="note">{l}</p><p style={{ fontSize: 18, fontWeight: 800, color: c }}>{v}</p>
                         </div>
@@ -153,7 +154,7 @@ export default function ReportView({ route }) {
                     ) : f.labels.length ? (
                       <LineChart width={900} height={240} labels={f.labels} yTicks={ticks} series={[{ color: '#C8102E', values: f.current }]} />
                     ) : <p className="muted">조회된 월별 실적이 없습니다.</p>}
-                    <p className="note">비교 기간의 월별 수출액·합계는 현재 응답에 포함되지 않아 표시하지 않습니다.</p>
+                    <p className="note">비교 기간의 월별 수출액은 현재 응답에 포함되지 않아 표시하지 않습니다. 비교 합계는 저장된 값이 있을 때 표시합니다.</p>
                   </div>
                 </Section>
               )}

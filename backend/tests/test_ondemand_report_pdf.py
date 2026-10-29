@@ -62,6 +62,9 @@ class OnDemandReportTest(unittest.TestCase):
                 self.assertEqual(ctx['conditions']['period']['end'], '2025-12-31')
                 self.assertEqual(ctx['conditions']['compare']['monthly_paired'], mode not in ('NONE', 'CUSTOM'))
                 self.assertEqual(k['prev_amount_usd'], {'YOY':1110000, 'YOY_PERIOD':1110000, 'MOM':1220000, 'CUSTOM':2430000, 'NONE':None}[mode])
+                # API/DOCX/XLSX and PDF must expose the same selected comparison.
+                self.assertEqual(doc['sections'][1]['kpi']['comparison_pct'], k['change_pct'])
+                self.assertEqual(doc['sections'][1]['kpi']['previous_amount_usd'], k['prev_amount_usd'])
                 html = render('RPT_ON_DEMAND', ctx)
                 self.assertNotIn('템플릿 예시', html)
                 self.assertNotIn('문장 속 수치 검증 통과', html)
