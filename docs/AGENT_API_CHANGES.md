@@ -59,7 +59,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 
 ### ChartSpec
 
-프론트 `frontend/src/components/charts.jsx`의 props와 같은 모양입니다.
+`state.ChartSpec` 형식입니다. 프론트 `frontend/src/components/charts.jsx`의 props와는 모양이 달라 프론트가 변환합니다(`LineChart`는 `yTicks`·시리즈 색 추가, `Donut`은 `[label, 비율, 색]`, `null` 칸은 선을 끊어 그림).
 
 ```json
 {"chart_id":"c1","task_id":"t1","type":"line","title":"베트남 화장품 수출 추이","unit":"USD",

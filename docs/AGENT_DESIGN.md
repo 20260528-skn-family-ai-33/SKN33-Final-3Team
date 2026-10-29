@@ -85,7 +85,7 @@
 | D-56 | 2초마다 폴링한다. 단계별 문구, 진행률 바, 경과 초를 보여 주고, 되묻기에 답하면 경과 초를 0부터 다시 센다(`round_started_at`). (Q-47) |
 | D-57 | 한 라운드 실행 상한은 180초(`RUN_TIMEOUT_SECONDS`)다. (Q-48) |
 | D-58 | 비동기 구조를 유지한다. API가 등록하고, 워커가 실행하고, 프론트가 폴링한다. 기존 answer 필드는 유지하고 추가만 한다(§7). |
-| D-59 | 차트는 `state.ChartSpec`이다. 유형 4개(`line`·`bar`·`grouped_bar`·`donut`), 제목 40자, x축 값 60개, 시리즈 5개 이하다. donut은 시리즈 1개, grouped_bar는 2개. 프론트 `charts.jsx` props와 같은 모양이다. (Q-35, C-07) |
+| D-59 | 차트는 `state.ChartSpec`이다. 유형 4개(`line`·`bar`·`grouped_bar`·`donut`), 제목 40자, x축 값 60개, 시리즈 5개 이하다. donut은 시리즈 1개, grouped_bar는 2개. `charts.jsx` props와는 모양이 달라 프론트가 변환한다(LineChart는 `yTicks`·색 추가, Donut은 `[label, 비율, 색]`, 값 없는 칸은 선을 끊음). (Q-35, C-07) |
 | D-60 | API 변경은 [AGENT_API_CHANGES.md](AGENT_API_CHANGES.md)를 따른다: 되묻기 직접 입력, 중단 API, 진행률, 하위 질문. (C-09) |
 | D-61 | 골든셋 평가: 질문 파일은 `backend/tests/golden/chat_golden.jsonl`이고 나중에 LLM으로 만든다. 평가 스크립트 결과는 `outputs/eval/<날짜>/runs.jsonl` + `summary.md`. LLM 원문은 평가 실행에서만 남긴다. 운영 답변에는 `result_json.trace`(intent, 계획, 단계별 시간, 모델명, 프롬프트 버전)만 남긴다. 채점 기준은 4개: intent 일치, 조건(HS·국가·기간·수출입) 일치, 숫자 일치(D-51 허용 오차), 되묻기 종류 일치. (Q-51, C-17, C-18) |
 
@@ -127,10 +127,10 @@
     - 국가는 비슷한 국가로 되묻고, 후보가 없으면 재입력을 요청한다(D-25).
     - ML 필수 조건을 확인한다(D-23).
     - 빈 조건은 최근 조건 → (첫 질문이면) 관심 되묻기 → 기본값 순서로 채운다.
-    - 되묻기가 필요하면 `pending`을 채우고 `ask_counts`를 올린 뒤 `status=NEEDS_INPUT`으로 바꾼다. 2회를 넘으면 종료한다. 그다음 **ask_user 노드**로 간다.
+    - 되묻기가 필요하면 `pending`을 채우고 `ask_counts`를 올린 뒤 `status=NEEDS_INPUT`으로 바꾼다. 그 조건을 이미 2회 물었으면 `ask_counts`를 올리지 않고 종료한다. 그다음 **ask_user 노드**로 간다.
 12. **ask_user 노드**: `interrupt(state.pending)`로 멈춘다. 체크포인트에는 11번이 쓴 `pending`이 남는다. 워커는 MySQL `_execution`을 NEEDS_INPUT + clarification으로 바꾸고, `active` TTL을 30분으로 둔 뒤 끝낸다.
     재개되면 이 노드가 답을 받아 그 하위 질문의 조건에 병합한다. 그리고 `pending=None`, `status=RUNNING`, `round_started_at=지금`으로 바꾸고, 그 하위 질문의 check 단계를 PENDING으로 되돌린 뒤 dispatch로 간다. 직접 입력이면 `pending.message` 맥락으로 해석하고, 해석에 실패하면 check가 다시 묻는다.
-13. **tool 노드**(sql, news, chart, report, ml): 실행 후 `results[step_id]`와 단계 상태를 쓴다. MySQL `_execution`의 step·progress를 갱신하고 dispatch로 돌아간다. 실패하면 재시도 한도까지 다시 하고, 그래도 실패하면 FAILED로 둔다. 같은 하위 질문에서 그 단계에 의존하는 단계는 SKIPPED가 된다.
+13. **tool 노드**(sql, news, chart, report, ml): 실행 후 `results[step_id]`와 단계 상태를 쓴다. MySQL `_execution`의 step·progress를 갱신하고 dispatch로 돌아간다. 실패하면 재시도 한도까지 다시 하고, 그래도 실패하면 FAILED로 두고 `skip_blocked()`를 불러, 그 단계에 직접·간접으로 의존하는 단계를 SKIPPED로 바꾼다. `ready_steps()`는 의존 단계가 모두 DONE인 단계만 돌려준다.
 14. **compose 노드**: LLM 1회로 `Draft`(결론, 설명, `turn_summary`, 첫 답변이면 `title`)를 쓴다. 숫자는 digest 값만 쓴다. `MARKET_TYPE`·`OUT_OF_SCOPE` 하위 질문은 고정 안내 문구를 쓴다.
 15. **verify 노드**: 문장 속 숫자를 결과표와 대조하고, 1회 재생성한 뒤 그래도 틀리면 "확인 필요"를 붙인다.
 16. **finalize 노드**:
@@ -156,7 +156,7 @@
 
 ## 4. state
 
-원본은 [state.py](../backend/app/agents/state.py)다. 필드를 바꾸면 `backend/tests/test_agent_state.py`도 함께 고친다. LangGraph state 스키마로 이 `AgentState`(Pydantic)를 그대로 쓴다.
+원본은 [state.py](../backend/app/agents/state.py)다. 필드를 바꾸면 `backend/tests/test_agent_state.py`도 함께 고친다. LangGraph state 스키마로 이 `AgentState`(Pydantic)를 그대로 쓴다. 검증은 LangGraph가 노드 입력을 만들 때 돌고 체크포인터는 검증하지 않으므로, finalize는 저장 전에 `model_validate`한다.
 
 | 칸 | 쓰는 노드 | 읽는 노드 |
 |---|---|---|
@@ -175,8 +175,8 @@
 - NEEDS_INPUT이면 `pending`이 반드시 있고, 아니면 없어야 한다. `pending.task_id`는 계획에 있어야 한다.
 - 하위 질문은 1~3개다. 각 하위 질문은 `check_conditions`로 시작하고, 같은 하위 질문의 앞 단계에만 의존할 수 있다. `OUT_OF_SCOPE`·`MARKET_TYPE`은 단계가 없다.
 - `step_id`는 계획 전체에서 고유하다(예: `t1.sql`). 계획에 없는 단계의 결과는 넣을 수 없고, FAILED에는 `error`가 필요하다.
-- state 64KB, digest 8KB 이하. 조건 하나당 되묻기 2회까지.
-- 품목 5개, 국가 20개. 설명 4문장, 요약 200자, 제목 20자 이하.
+- state 64KB, digest 8KB 이하. digest·`args`·`patch`에는 JSON 값만 넣는다(Decimal·date는 tool이 숫자·문자열로 바꾼다). 조건 하나당 되묻기 2회까지.
+- 품목 5개, 국가 20개, 중복 불가. 기사 기간(`article_period`)은 일 단위, 나머지 기간은 월 단위. 설명 4문장, 요약 200자, 제목 20자 이하. 5건 요약의 질문은 200자로 자른다(4,000자 질문 6개면 한글 약 72KB로 state 상한을 넘음).
 - 차트 모양: x축 값 수와 시리즈 값 수가 같아야 하고, donut은 시리즈 1개, grouped_bar는 2개다.
 
 ## 5. 모듈 배치
