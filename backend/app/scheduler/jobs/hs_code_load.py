@@ -91,7 +91,8 @@ def to_db_row(r):
 def validate(rows):
     """테이블 제약(형식·필수값·길이·기본키·6단위 원문)에 맞는지 확인하고 오류 목록을 돌려줍니다."""
     limits = {c.name: c.type.length for c in HsCodeMst.__table__.columns if getattr(c.type, "length", None)}
-    errors, seen = [], set()
+    errors, seen, summaries = [], set(), set()
+    names = hb.csv_names(rows)
     for line, r in enumerate(rows, start=2):  # 1행은 헤더
         code, ver = r["hs_code"], r["hs_ver"]
         if not re.fullmatch(r"[0-9]{2}|[0-9]{4}|[0-9]{6}|[0-9]{10}", code):  # isdigit()은 '¹²' 같은 유니코드 숫자도 통과시킴
@@ -115,6 +116,13 @@ def validate(rows):
             errors.append(f"{line}행 {code}: name_ko(요약) 비어 있음")
         if len(code) == 6 and not db_row["original_name_ko"]:
             errors.append(f"{line}행 {code}: original_name_ko(원문) 비어 있음")
+        elif len(code) == 6 and count == 1 and db_row["name_ko"]:  # 형식이 맞는 6단위만 요약 규칙 검사 (#46)
+            source = hb.summary_source(code, names[ver], db_row["original_name_ko"])
+            if not hb.valid_summary(db_row["name_ko"], source):
+                errors.append(f"{line}행 {code}: 6단위 요약이 {hb.SUMMARY_MAX}자 이하·HS코드/구분용 영문자 없음 조건에 맞지 않음")
+            elif (ver, db_row["name_ko"]) in summaries:
+                errors.append(f"{line}행 {code}: 같은 판에 같은 6단위 요약이 있음 ({db_row['name_ko']})")
+            summaries.add((ver, db_row["name_ko"]))
         for col, limit in limits.items():
             if db_row.get(col) and len(db_row[col]) > limit:
                 errors.append(f"{line}행 {code}: {col} {len(db_row[col])}자 > {limit}자")

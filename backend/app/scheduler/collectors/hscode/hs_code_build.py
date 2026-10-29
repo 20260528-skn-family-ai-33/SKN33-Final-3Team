@@ -160,6 +160,20 @@ def valid_summary(value, source=""):
             and not (tail and not re.search(rf"(?<![A-Za-z]){tail[1]}(?![A-Za-z])", source)))
 
 
+def summary_source(code, names, original):
+    """끝 영문자 검사(valid_summary)에 쓰는 원문. 생성·시드·적재가 같은 기준으로 검사하도록
+    CSV에도 남는 2·4단위명과 6단위 원문만 씁니다."""
+    return " ".join((names.get(code[:2], ""), names.get(code[:4], ""), original or ""))
+
+
+def csv_names(rows):
+    """CSV 행 → {판: {코드: 이름(6단위는 요약 부분)}}. 시드·적재에서 summary_source에 넘깁니다."""
+    names = {}
+    for r in rows:
+        names.setdefault(r["hs_ver"], {})[r["hs_code"]] = r["name_ko"].split(SEP, 1)[0]
+    return names
+
+
 def compact_summary(value):
     """긴 LLM 응답의 수치 조건·공백만 압축합니다. 내용은 자르거나 삭제하지 않습니다."""
     if not isinstance(value, str):
@@ -176,9 +190,11 @@ def compact_summary(value):
     return value
 
 
-def summarize(items, prompt, model, api_key, cache_path, label, stats=None, reserved=()):
+def summarize(items, prompt, model, api_key, cache_path, label, stats=None, reserved=(), sources=None):
     """{코드: 입력문}을 BATCH개씩 LLM에 보내 {코드: 요약}을 받습니다. 결과는 캐시해 재실행 시 이어서 합니다.
-    캐시에 유효하지 않은 요약이 있으면(이전 버전에서 저장된 'None' 등) 버리고 다시 요청합니다."""
+    캐시에 유효하지 않은 요약이 있으면(이전 버전에서 저장된 'None' 등) 버리고 다시 요청합니다.
+    sources: 끝 영문자 검사용 {코드: 원문} (기본: 입력문)."""
+    sources = sources or items
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
     reserved = set(reserved)
     used = set(reserved)
@@ -187,7 +203,7 @@ def summarize(items, prompt, model, api_key, cache_path, label, stats=None, rese
         if c not in items:  # 수동 요약으로 바뀐 코드 등: 이번 대상은 아니지만 이미 받은 요약은 캐시에 남김
             continue
         value = compact_summary(value)
-        if not valid_summary(value, items[c]) or value.strip() in used:
+        if not valid_summary(value, sources[c]) or value.strip() in used:
             bad.append(c)
         else:
             cache[c] = value.strip()
@@ -219,7 +235,7 @@ def summarize(items, prompt, model, api_key, cache_path, label, stats=None, rese
                     raise ValueError("요약 응답은 JSON 객체여야 합니다.")
                 for c in list(chunk):
                     value = compact_summary(got.get(c))
-                    if valid_summary(value, items[c]) and value.strip() not in used:
+                    if valid_summary(value, sources[c]) and value.strip() not in used:
                         cache[c] = value.strip()
                         used.add(cache[c])
                         del chunk[c]
@@ -293,11 +309,12 @@ def run(customs_xlsx=None, hs_ver=None, model=DEFAULT_MODEL, env=ENV_PATH, outpu
     stats = {"requests": 0}
     overrides = {c: v for c, v in load_overrides(overrides_path(hs_ver)).items() if c in items}
     fixed = overrides | {c: UN_STATS_NAME for c in UN_STATS if len(c) == 6}
-    if any(not valid_summary(v, items.get(c, "")) for c, v in fixed.items()) or len(set(fixed.values())) != len(fixed):
+    sources = {c: summary_source(c, names, six_name(c, names)) for c in items}
+    if any(not valid_summary(v, sources.get(c, "")) for c, v in fixed.items()) or len(set(fixed.values())) != len(fixed):
         raise ValueError("고정·수동 요약의 20자 제한 또는 중복 검증 실패")
     summaries = summarize({c: v for c, v in items.items() if c not in fixed}, PROMPT, model, key,
                           Path(cache_dir) / f"hs6_summary_cache_v2_{hs_ver}_{model}.json", "품목 요약", stats,
-                          reserved=fixed.values())
+                          reserved=fixed.values(), sources=sources)
     summaries |= fixed
     log.info(f"수동 요약 {len(overrides)}개 적용 ({overrides_path(hs_ver).name})")
     received = len(set(names) - set(KR_SPECIAL) - set(UN_STATS))
