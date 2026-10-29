@@ -46,6 +46,15 @@ class AgentStateTest(unittest.TestCase):
         s.plan.tasks[0].steps[0].status = 'DONE'
         self.assertEqual([x.step_id for x in s.ready_steps()], ['t1.sql', 't1.news', 't2.check'])
 
+    def test_failure_skips_dependents_transitively(self):
+        s = state([CAUSE, RANKING])
+        s.plan.tasks[0].steps[0].status = 'FAILED'
+        self.assertEqual(s.skip_blocked(), ['t1.sql', 't1.news', 't1.chart'])  # chart는 sql을 거쳐 check에 의존
+        self.assertEqual([x.step_id for x in s.ready_steps()], ['t2.check'])
+        s.plan.tasks[0].steps[3].status = 'PENDING'  # skip_blocked를 빠뜨려도 SKIPPED 의존은 실행되지 않는다
+        self.assertEqual([x.step_id for x in s.ready_steps()], ['t2.check'])
+
+
     def test_plan_rules(self):
         with self.assertRaises(ValidationError):  # 하위 질문 사이 의존
             state([CAUSE, {**RANKING, 'steps': [RANKING['steps'][0], {**RANKING['steps'][1], 'depends_on': ['t1.sql']}]}])

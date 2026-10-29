@@ -279,8 +279,19 @@ class AgentState(Model):
         return self
 
     def ready_steps(self) -> list[Step]:
-        """의존 단계가 모두 끝난 대기 단계. 하위 질문 순서대로 나온다."""
+        """의존 단계가 모두 DONE인 대기 단계. 하위 질문 순서대로 나온다."""
         if not self.plan: return []
         steps = self.plan.steps()
-        done = {s.step_id for s in steps if s.status in ('DONE', 'SKIPPED')}
+        done = {s.step_id for s in steps if s.status == 'DONE'}
         return [s for s in steps if s.status == 'PENDING' and set(s.depends_on) <= done]
+
+    def skip_blocked(self) -> list[str]:
+        """FAILED·SKIPPED 단계에 의존하는 대기 단계를 SKIPPED로 바꾼다. tool 노드가 단계를 FAILED로 둔 뒤 부른다.
+        단계는 같은 하위 질문의 앞 단계에만 의존하므로 한 번 훑으면 전이 의존까지 처리된다."""
+        if not self.plan: return []
+        stopped = {s.step_id for s in self.plan.steps() if s.status in ('FAILED', 'SKIPPED')}
+        skipped = []
+        for s in self.plan.steps():
+            if s.status == 'PENDING' and stopped & set(s.depends_on):
+                s.status = 'SKIPPED'; stopped.add(s.step_id); skipped.append(s.step_id)
+        return skipped
