@@ -82,7 +82,7 @@ def generate(csv_paths, seed_path, update_path):
                            "\nAS new ON DUPLICATE KEY UPDATE name_ko = IF(CHAR_LENGTH(hs_code) = 6, new.name_ko, name_ko)")
     seed += "\nCOMMIT;\n"
     update = header + f"""-- 기존 RDS 전용: HS6 {len(six):,}개의 name_ko만 변경합니다. INSERT/DELETE는 하지 않습니다.
--- original_name_ko, source_edition, HS2017 등 다른 판본과 나머지 단위는 변경하지 않습니다.
+-- original_name_ko, source_edition, 입력 CSV에 없는 판본과 나머지 단위는 변경하지 않습니다.
 -- 모든 대상 행이 있어야 갱신합니다. missing_rows > 0이면 시드/판본을 확인하세요.
 -- tmp_hs46_before에는 이 연결에서 복원할 수 있는 변경 전 이름을 보관합니다.
 -- 재실행 시 임시 테이블은 새로 만듭니다. 실행 결과의 updated_rows는 이미 동일한 행을 제외합니다.
