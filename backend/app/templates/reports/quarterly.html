@@ -55,7 +55,7 @@
 {% for blocks in layout.summary %}
 {% call m.page(report, p_summary + loop.index0, total) %}
 {% if loop.first %}
-{{ m.heading(1, '분기 요약', report.period_label ~ '(' ~ conditions.months_label ~ ') · 전년 동분기·전분기 대비 · 단위 백만 달러 · 문장 속 수치 검증 통과 ' ~ verification.passed ~ '/' ~ verification.total) }}
+{{ m.heading(1, '분기 요약', report.period_label ~ '(' ~ conditions.months_label ~ ') · 전년 동분기·전분기 대비 · 단위 백만 달러 · ' ~ m.verified_text(verification)) }}
 {% else %}
 {{ m.heading(none, '분기 요약 (계속)') }}
 {% endif %}
@@ -65,8 +65,9 @@
 {% for item in items[:2] %}
   {% set _ = cards.append({'label': item.label ~ ' ' ~ q ~ ' 수출', 'value': item.amount_usd | musd(0), 'unit': '백만$', 'sub': '전년 동분기 대비 ' ~ (item.yoy_pct | signed_pct)}) %}
 {% endfor %}
-{% set _ = cards.append({'label': summary.highlight.label, 'value': summary.highlight.value, 'sub': summary.highlight.sub}) %}
-{{ m.kpis(cards, 3) }}
+{# 하이라이트 기준이 정해지지 않으면(null) 카드를 숨깁니다 #}
+{% if summary.highlight %}{% set _ = cards.append({'label': summary.highlight.label, 'value': summary.highlight.value, 'sub': summary.highlight.sub}) %}{% endif %}
+{{ m.kpis(cards, cards | length) }}
 {% elif b.key == 'sentences' %}
 {{ m.sentences(summary.sentences[b.start:b.end], b.start + 1) }}
 {% elif b.key == 'items' %}
@@ -87,6 +88,8 @@
   <tr><th>관심 국가</th>{% for i in b.group %}<th class="r">{{ items[i].label }}</th><th class="r">전년 동분기</th>{% endfor %}</tr>
   {% for row in interest_overview[b.start:b.end] %}
   <tr><td class="b">{{ row.name }}</td>{% for i in b.group %}{% set v = row['values'][i] %}<td class="r">{{ v.amount_usd | musd }}</td><td class="r">{{ v.yoy_pct | change }}</td>{% endfor %}</tr>
+  {% else %}
+  <tr><td colspan="{{ 1 + 2 * b.group | length }}" class="small">{{ '데이터 준비 중' if conditions.countries else '관심 국가가 없습니다.' }}</td></tr>
   {% endfor %}
 </table>
 {% elif b.key == 'checks' %}
@@ -108,7 +111,7 @@
 <h3>{{ item.label }}<small>HS {{ item.hs_code }} · 백만 달러</small></h3>
 <div class="grid2">
   <div><div class="small">최근 {{ item.quarters.labels | length }}개 분기 합계</div>
-    {{ bar_chart(item.quarters.labels, item.quarters['values'], bar_colors, height=190, show=[item.quarters.current_from - 1, item.quarters.labels | length - 1]) }}</div>
+    {% if has_values([item.quarters['values']]) %}{{ bar_chart(item.quarters.labels, item.quarters['values'], bar_colors, height=190, show=[item.quarters.current_from - 1, item.quarters.labels | length - 1]) }}{% else %}{{ m.pending() }}{% endif %}</div>
   <div><div class="small">{{ q }} 월별 3개월 추이 ({{ conditions.year }} vs {{ conditions.prev_year }})</div>
     <table>
       <tr><th>월</th><th class="r">{{ conditions.year }}</th><th class="r">{{ conditions.prev_year }}</th><th class="r">전년 동월</th></tr>
@@ -142,7 +145,8 @@
 {% endif %}
 {% set lines = [] %}
 {% for s in source %}{% set _ = lines.append({'values': s['values'], 'color': color_of[s.country_code]}) %}{% endfor %}
-{% if lines %}{{ line_chart(labels, lines, height=250, zero=true) }}{% else %}<div class="empty">관심 국가가 없습니다.</div>{% endif %}
+{% if lines and has_values(lines | map(attribute='values')) %}{{ line_chart(labels, lines, height=250, zero=true) }}
+{% elif lines %}{{ m.pending() }}{% else %}<div class="empty">관심 국가가 없습니다.</div>{% endif %}
 {% endfor %}
 <p class="small">{{ report.period_label }} 값은 해당 국가의 {{ conditions.months_label }} 수출액 합계와 같습니다.</p>
 {% endcall %}
@@ -158,7 +162,8 @@
   <div><h3>{{ item.label }}<small>HS {{ item.hs_code }}</small></h3>
   <table>
     <tr><th>#</th><th>국가</th><th class="r">{{ q }}</th><th class="r">비중</th><th class="r">전년 동분기</th></tr>
-    {% for r in item.top_countries[:10] %}<tr><td>{{ r.rank }}</td><td>{{ m.country(r) }}</td><td class="r">{{ r.amount_usd | musd }}</td><td class="r">{{ r.share_pct | pct }}</td><td class="r">{{ r.yoy_pct | change(new=r.get('is_new_yoy', false)) }}</td></tr>{% endfor %}
+    {% for r in item.top_countries[:10] %}<tr><td>{{ r.rank }}</td><td>{{ m.country(r) }}</td><td class="r">{{ r.amount_usd | musd }}</td><td class="r">{{ r.share_pct | pct }}</td><td class="r">{{ r.yoy_pct | change(new=r.get('is_new_yoy', false)) }}</td></tr>
+    {% else %}<tr><td colspan="5" class="small">데이터 준비 중</td></tr>{% endfor %}
     {% if item.others %}<tr class="other"><td></td><td>기타</td><td class="r">{{ item.others.amount_usd | musd }}</td><td class="r">{{ item.others.share_pct | pct }}</td><td class="r">{{ item.others.yoy_pct | change }}</td></tr>{% endif %}
     <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">100.0%</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
   </table></div>
@@ -170,7 +175,7 @@
 {% for item in chunk %}
   {% set rows = [] %}
   {% for r in item.top5_compare %}{% set _ = rows.append({'label': r.name, 'values': [r.current, r.previous]}) %}{% endfor %}
-  <div>{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=60, width=320, row_height=30, divisor=1000000, digits=1) }}</div>
+  <div>{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=60, width=320, row_height=30, divisor=1000000, digits=1) }}{% else %}{{ m.pending() }}{% endif %}</div>
 {% endfor %}
 </div>
 {% endcall %}
@@ -202,7 +207,7 @@
   {'metric': '수출국 수', 'formula': '분기 수출액이 0보다 큰 국가 수 · 괄호는 전년 동분기 대비 증감'},
 ], [
   {'label': '발행 조건', 'value': '분기 마지막 달(3·6·9·12월) 통계 적재·검증 완료 → 구독자별 생성 · 실패 시 1회 재시도 후 “생성 지연”'},
-  {'label': '수치 검증', 'value': '표·지표는 결과표에서 직접 삽입(100%) · 문장 속 수치 ' ~ verification.passed ~ '/' ~ verification.total ~ ' 통과'},
+  {'label': '수치 검증', 'value': '표·지표는 결과표에서 직접 삽입(100%) · ' ~ m.verified_text(verification)},
   {'label': '발행', 'value': (report.published_at | ymdhm) ~ ' · ' ~ report.report_id},
   {'label': '재열람', 'value': '마이페이지 › 리포트 센터에서 저장된 PDF를 그대로 다시 받기'},
 ]) }}

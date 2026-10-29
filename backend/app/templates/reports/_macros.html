@@ -117,6 +117,12 @@
 <p class="disclaimer">본 리포트는 공개 통계와 기사로 만든 참고 자료이며 수출 결정에 대한 권고가 아닙니다. 기사 저작권은 KOTRA에 있으며 원문 링크로 확인할 수 있습니다.</p>
 {% endmacro %}
 
+{# 통계가 아직 적재·검증되지 않은 자리 (0이나 “없음”과 구분) #}
+{% macro pending(text='데이터 준비 중') %}<div class="empty">{{ text }}</div>{% endmacro %}
+
+{# 문장 속 수치 검증 결과. 검증 전(null)이면 “통과”로 표시하지 않습니다 #}
+{% macro verified_text(verification) %}{% if verification %}문장 속 수치 검증 통과 {{ verification.passed }}/{{ verification.total }}{% else %}문장 속 수치 검증 전{% endif %}{% endmacro %}
+
 {# 범례. items: [{name, color, kind: box|line|dash}] #}
 {% macro legend(items) %}
 <div class="legend">{% for i in items %}<span><i class="{{ i.get('kind') or 'box' }}" style="background:{{ i.color }}"></i>{{ i.name }}</span>{% endfor %}</div>

@@ -43,17 +43,23 @@
 {% endif %}
 {% for b in blocks %}
 {% if b.key == 'kpis' %}
-{{ m.kpis([
+{% set cards = [
   {'label': '관심 범위 기사', 'value': c.total | num, 'unit': '건', 'sub': summary.total_note},
   {'label': '해외시장뉴스', 'value': c.market | num, 'unit': '건', 'sub': '분석 기사'},
   {'label': '단신속보', 'value': c.short | num, 'unit': '건', 'sub': '짧은 사실 속보'},
-  {'label': '급증 키워드', 'value': c.spike_keywords | num, 'unit': '개', 'sub': '8주 주평균의 ' ~ summary.spike_ratio ~ '배 이상'},
-], 4) }}
+] %}
+{# 급증 기준(spike_ratio)이 정해지지 않으면(null) 급증 키워드 카드를 숨깁니다 #}
+{% if summary.spike_ratio is not none and c.spike_keywords is not none %}
+{% set _ = cards.append({'label': '급증 키워드', 'value': c.spike_keywords | num, 'unit': '개', 'sub': '8주 주평균의 ' ~ summary.spike_ratio ~ '배 이상'}) %}
+{% endif %}
+{{ m.kpis(cards, 4) }}
 {% elif b.key == 'sentences' %}
 <h3>이번 주 핵심{{ ' (계속)' if b.cont }}</h3>
 {{ m.sentences(summary.sentences[b.start:b.end], b.start + 1) }}
 {% elif b.key == 'issues' %}
-<h3>주요 이슈{{ ' (계속)' if b.cont }}<small>전체 기사 기준 · 최근 7일이 직전 8주 주평균의 3배 이상이거나 KOTRA 통상·규제 분류</small></h3>
+{# 전체 주요 이슈의 급증 기준은 관심 키워드 기준(spike_ratio)과 따로 정합니다 (issue_spike_ratio, 미정이면 생략) #}
+{% set issue_ratio = summary.get('issue_spike_ratio') %}
+<h3>주요 이슈{{ ' (계속)' if b.cont }}<small>전체 기사 기준 · {{ '최근 7일이 직전 8주 주평균의 ' ~ issue_ratio ~ '배 이상이거나 ' if issue_ratio is not none }}KOTRA 통상·규제 분류</small></h3>
 <table>
   <tr><th style="width:21mm">구분</th><th>이슈</th><th style="width:16mm">국가</th><th style="width:40mm">판정 근거</th><th style="width:22mm">관심 관련</th></tr>
   {% for r in summary.issues[b.start:b.end] %}
@@ -119,7 +125,7 @@
 {% for blocks in layout.keywords %}
 {% call m.page(report, p_keywords + loop.index0, total) %}
 {% if loop.first %}
-{{ m.heading(3, '급증 키워드 · 기사 분포', '키워드 언급 = 해외시장뉴스 기사 수 · 이번 주(7일) vs 직전 8주 주평균 · 배수 ' ~ summary.spike_ratio ~ ' 이상을 급증으로 표시') }}
+{{ m.heading(3, '급증 키워드 · 기사 분포', '키워드 언급 = 해외시장뉴스 기사 수 · 이번 주(7일) vs 직전 8주 주평균' ~ (' · 배수 ' ~ summary.spike_ratio ~ ' 이상을 급증으로 표시' if summary.spike_ratio is not none else '')) }}
 {% else %}
 {{ m.heading(none, '급증 키워드 · 기사 분포 (계속)') }}
 {% endif %}
@@ -132,7 +138,7 @@
 {% set rows = [] %}
 {% for r in keyword_spikes[b.start:b.end] %}
   {% set _ = rows.append({'label': r.keyword ~ ' · ' ~ r.country, 'values': [r.this_week, r.weekly_avg_8w],
-                          'tail': {'text': '×' ~ ('%.1f' % r.ratio), 'badge': '급증' if r.ratio >= summary.spike_ratio else none}}) %}
+                          'tail': {'text': '×' ~ ('%.1f' % r.ratio), 'badge': '급증' if summary.spike_ratio is not none and r.ratio >= summary.spike_ratio else none}}) %}
 {% endfor %}
 {% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=110, row_height=30, tail_width=80, digits=[0, 1], peak=peak.value) }}
 {% else %}<div class="empty">이번 주 키워드 언급 집계가 없습니다.</div>{% endif %}

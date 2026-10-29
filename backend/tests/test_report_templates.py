@@ -208,6 +208,61 @@ class VariableLengthTest(unittest.TestCase):
         self.assertNotIn('예시 기사', html)
 
 
+class PendingValueTest(unittest.TestCase):
+    """팀 기준 미정 블록은 숨기고, 통계 미준비는 “데이터 준비 중”, 문장 검증 전에는 “검증 통과”를 쓰지 않습니다."""
+
+    def test_unverified_sentences_are_not_shown_as_passed(self):
+        for kind in ('monthly', 'quarterly'):
+            context = rt.sample_context(kind)
+            context['verification'] = None
+            html = rt.render(rt.KINDS[kind], context)
+            with self.subTest(kind=kind):
+                self.assertNotIn('검증 통과', html)
+                self.assertIn('문장 속 수치 검증 전', html)
+
+    def test_undecided_blocks_are_hidden(self):
+        context = rt.sample_context('monthly')
+        context['summary'].update(highlight=None, sentences=None, check_points=None)
+        html = rt.render('RPT_MONTHLY', context)
+        self.assertIn('class="kpis c2"', html)          # 품목 카드 2개만
+        self.assertNotIn('class="note"', html)
+        self.assertNotIn('확인할 점', html)
+
+        weekly = rt.sample_context('weekly')
+        weekly['summary'].update(spike_ratio=None, sentences=None, schedule=None)
+        html = rt.render('RPT_WEEKLY', weekly)
+        self.assertNotIn('>급증 키워드<', html)
+        self.assertNotIn('class="badge">급증', html)
+        self.assertNotIn('이상을 급증으로', html)
+        self.assertNotIn('이번 주 핵심', html)
+        self.assertNotIn('이번 주 일정', html)
+        self.assertNotIn('None', html)
+
+    def test_issue_threshold_is_separate_from_keyword_threshold(self):
+        weekly = rt.sample_context('weekly')
+        self.assertIn('직전 8주 주평균의 3배 이상이거나 KOTRA', rt.render('RPT_WEEKLY', weekly))
+        weekly['summary']['issue_spike_ratio'] = None
+        html = rt.render('RPT_WEEKLY', weekly)
+        self.assertIn('전체 기사 기준 · KOTRA 통상·규제 분류', html)
+        self.assertIn('8주 주평균의 2.5배 이상', html)  # 관심 키워드 기준은 그대로
+
+    def test_unready_statistics_show_pending(self):
+        monthly = rt.sample_context('monthly')
+        for item in monthly['items']:
+            item['trend'].update(current=[None] * 13, previous=[None] * 13)
+            item['top_countries'], item['others'] = [], None
+        monthly['interest_overview'] = []
+        html = rt.render('RPT_MONTHLY', monthly)
+        self.assertGreaterEqual(html.count('데이터 준비 중'), 5)  # 품목 2개 × (추이·주요 수출국) + 관심 국가 표
+        self.assertEqual(html.count('<tr class="total"><td></td><td>전체</td>'), 2)
+
+        quarterly = rt.sample_context('quarterly')
+        for item in quarterly['items']:
+            item['quarters']['values'] = [None] * 8
+            item['top_countries'], item['others'], item['top5_compare'] = [], None, []
+        self.assertGreaterEqual(rt.render('RPT_QUARTERLY', quarterly).count('데이터 준비 중'), 6)
+
+
 class FormatTest(unittest.TestCase):
     def test_number_filters(self):
         self.assertEqual(rt.musd(879_000_000), '879.0')

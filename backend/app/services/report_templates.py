@@ -220,6 +220,11 @@ def end_labels_fit(count, height):
     return count <= 1 or (count - 1) * END_GAP <= height - 34
 
 
+def has_values(series_values):
+    """값 목록들 중 null이 아닌 값이 하나라도 있는지 (없으면 템플릿이 “데이터 준비 중” 표시)"""
+    return any(v is not None for values in series_values for v in values)
+
+
 def legend_value(values, labels):
     """범례에 붙일 끝 값 문자열. 마지막 기간이 null이면 값이 있는 마지막 기간을 괄호로 함께 표시합니다.
     예: '171.2' · '10.0(11)' · 값이 하나도 없으면 '—'"""
@@ -416,13 +421,15 @@ def flow(blocks, first, rest):
 def _summary_blocks(ctx):
     """월간·분기 요약: KPI · 요약 문장 · 품목 표 · 관심 국가 표(품목 3개씩) · 확인할 점"""
     items = ctx['items']
-    blocks = [{'key': 'kpis', 'height': 29}, _sentences(ctx['summary']['sentences'])]
+    blocks = [{'key': 'kpis', 'height': 29}]
+    if ctx['summary']['sentences']:  # 요약 방식이 정해지지 않으면(null·빈 목록) 상자째 숨김
+        blocks.append(_sentences(ctx['summary']['sentences']))
     blocks.append(_table('items', [ROW_MM + LINE[7.8] * _lines(i['label'], 7.8, 26) + LINE[7] for i in items]))
     groups = [list(range(n, min(n + 3, len(items)))) for n in range(0, len(items), 3)] or [[]]
     header = max([1] + [_lines(items[i]['label'], 7.8, 20) for g in groups for i in g])
     for g in groups:
         blocks.append(_table('overview', [8.6] * len(ctx['interest_overview']), head=H3_MM + ROW_MM + LINE[7.8] * header,
-                             empty=0, group=g))
+                             group=g))  # 행이 없으면 “데이터 준비 중” 안내 행
     checks = ctx['summary']['check_points']
     if checks:
         blocks.append(_table('checks', [_row([(r['target'], 28), (r['content'], 145)]) for r in checks]))
@@ -447,7 +454,8 @@ def _detail_blocks(item):
     """월간 품목 상세: 추이 그래프 · 관심 국가 추이(범례가 국가 수만큼 늘어남) · 주요 수출국 표(10개국 + 기타 + 전체)"""
     countries = item['country_trend']
     country = H3_MM + (_legend(_legend_names(countries, item['trend']['labels'], 130)) + _svg(130) if countries else 12)
-    top = len(item['top_countries'][:10]) + (1 if item['others'] else 0) + 1
+    # 상위 국가(없으면 “데이터 준비 중” 1행) + 기타 + 전체
+    top = (len(item['top_countries'][:10]) or 1) + (1 if item['others'] else 0) + 1
     # 그래프 높이(150·130)는 monthly.html과 같아야 합니다. 품목명이 두 줄이어도 국가 3개면 한 쪽에 들어가는 크기
     return [{'key': 'trend', 'height': _legend(['', '']) + _svg(150)},
             {'key': 'country', 'height': country},
@@ -478,7 +486,10 @@ def layout(report_type, ctx):
     if report_type == 'RPT_WEEKLY':
         s = ctx['summary']
         issues = [_row([(r['title'], 77), (r['basis'], 38), (r['related'], 20)]) for r in s['issues']]
-        blocks = [{'key': 'kpis', 'height': 29}, _sentences(s['sentences'], title=H3_MM), _table('issues', issues)]
+        blocks = [{'key': 'kpis', 'height': 29}]
+        if s['sentences']:  # 요약 방식이 정해지지 않으면(null·빈 목록) “이번 주 핵심”째 숨김
+            blocks.append(_sentences(s['sentences'], title=H3_MM))
+        blocks.append(_table('issues', issues))
         if s['schedule']:
             blocks.append(_table('schedule', [_row([(r['content'], 118), (r['related'], 32)]) for r in s['schedule']]))
         blocks.append({'key': 'note', 'height': 3 + 2 * LINE[7]})
@@ -508,7 +519,7 @@ def environment():
     env.filters.update(musd=musd, num=num, pct=pct, signed_pct=signed_pct, signed=signed, change=change,
                        emph=emph, ymd=ymd, ymdhm=ymdhm, circled=circled)
     env.globals.update(line_chart=line_chart, bar_chart=bar_chart, hbar_chart=hbar_chart,
-                       end_labels_fit=end_labels_fit, legend_value=legend_value,
+                       end_labels_fit=end_labels_fit, legend_value=legend_value, has_values=has_values,
                        series_colors=SERIES_COLORS,
                        colors={'accent': ACCENT, 'up': UP, 'down': DOWN, 'muted': MUTED, 'previous': PREVIOUS},
                        css=(TEMPLATE_DIR / 'report.css').read_text(encoding='utf-8'))

@@ -45,7 +45,10 @@ h3 small { font-weight: 400; color: var(--sub); font-size: 7.4pt; margin-left: 6
 
 /* KPI 카드 */
 .kpis { display: grid; gap: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: 4mm; }
+.kpis.c1 { grid-template-columns: 1fr; }
+.kpis.c2 { grid-template-columns: repeat(2, 1fr); }
 .kpis.c3 { grid-template-columns: repeat(3, 1fr); }
+.kpis.c1 .kpi:last-child, .kpis.c2 .kpi:last-child { border-right: 0; }
 .kpis.c4 { grid-template-columns: repeat(4, 1fr); gap: 3mm; border: 0; }
 .kpi { padding: 3.5mm 4mm; border-right: 1px solid var(--line); }
 .kpis.c3 .kpi:last-child { border-right: 0; }

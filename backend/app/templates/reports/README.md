@@ -48,6 +48,22 @@ python -m unittest backend/tests/test_report_templates.py
   앞뒤가 모두 비어 있는 값은 점으로 표시합니다. 막대그래프(`quarters`)의 `null`은 그 막대만 비웁니다. 실제 값 0은 그대로 그립니다.
 - `report.is_sample: true`면 꼬리말·기사 카드에 “템플릿 예시” 표시가 붙습니다. 실제 발행은 `false`.
 
+## 미정·미준비 값 (`null` 허용)
+
+키는 항상 넘기되, 값이 정해지지 않았으면 `null`(또는 빈 목록)로 넘깁니다.
+
+| 상황 | 변수 | 표시 |
+|---|---|---|
+| 팀 기준 미정 → 블록 숨김 | `summary.highlight` | 세 번째 KPI 카드 생략 (품목 카드만) |
+| | `summary.sentences` | 요약 문장 상자(주간은 “이번 주 핵심”) 생략 |
+| | `summary.check_points`, 주간 `summary.schedule` | 표 생략 |
+| | 주간 `summary.spike_ratio` (`counts.spike_keywords`) | 급증 키워드 카드·그래프 “급증” 배지·기준 문구 생략 |
+| | 주간 `summary.issue_spike_ratio` (선택) | 주요 이슈 기준 문구에서 배수 생략. 관심 키워드 기준(`spike_ratio`)과 따로 정합니다 |
+| 문장 검증 전 | `verification` | “문장 속 수치 검증 전” (검증 통과로 표시하지 않음) |
+| 통계 미준비 | `trend`·`country_trend`·`quarters` 등 값이 전부 `null` | 그래프 자리에 “데이터 준비 중” |
+| | `top_countries`, `top5_compare`, `interest_overview` 빈 목록 | 표·그래프에 “데이터 준비 중” (관심 국가가 없으면 “관심 국가가 없습니다.”) |
+| | 개별 수치 `null` | `—` |
+
 ## 컨텍스트 변수
 
 세 종류 공통:
@@ -74,8 +90,8 @@ python -m unittest backend/tests/test_report_templates.py
 | 변수 | 설명 |
 |---|---|
 | `meta.publish_note` | 발행 조건 문구 (`12월 통계 적재·검증 완료 후 자동 발행`) |
-| `verification.passed` / `total` | 문장 속 수치 검증 통과 수 |
-| `summary.highlight` | 세 번째 KPI 카드 `{label, value, sub}` |
+| `verification.passed` / `total` | 문장 속 수치 검증 통과 수 (검증 전이면 `verification: null`) |
+| `summary.highlight` | 세 번째 KPI 카드 `{label, value, sub}` (미정이면 `null`) |
 | `summary.sentences[]` | 요약 문장 (번호 자동, `**강조**`) |
 | `summary.check_points[]` | 확인할 점 `{target, content}` (빈 목록이면 표 생략) |
 | `items[]` | 관심 품목별 결과 (아래) |
@@ -95,7 +111,7 @@ python -m unittest backend/tests/test_report_templates.py
 분기 `one_off_note`: 일회성 가능 판정 안내 문구 (`null`이면 생략).
 
 주간: `conditions.week_label`, `conditions.compare_label`,
-`summary{counts{total, market, short, spike_keywords}, total_note, spike_ratio, sentences[], issues[{kind: SPIKE|REGULATION, title, country, basis, related}], schedule[{date, content, related}]}`,
+`summary{counts{total, market, short, spike_keywords}, total_note, spike_ratio, issue_spike_ratio?, sentences[], issues[{kind: SPIKE|REGULATION, title, country, basis, related}], schedule[{date, content, related}]}`,
 `country_counts[{country_code, name, is_interest, market, short}]`,
 `keyword_spikes[{keyword, country, this_week, weekly_avg_8w, ratio}]`(`ratio ≥ spike_ratio`면 “급증”),
 `short_news{total, items[{published_date, country, content}]}`.
