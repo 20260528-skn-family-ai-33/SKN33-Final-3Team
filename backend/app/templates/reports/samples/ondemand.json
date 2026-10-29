@@ -1,0 +1,480 @@
+{
+  "report": {
+    "report_id": "RPT-OD-20261020-0142",
+    "report_type": "RPT_ON_DEMAND",
+    "kind_label": "요청형 리포트",
+    "published_at": "2026-10-20T14:32:00",
+    "elapsed_seconds": 18,
+    "is_sample": true
+  },
+  "conditions": {
+    "hs_items": [
+      {
+        "hs_code": "330499",
+        "hs_ver": "HS2022",
+        "name": "기초화장품 등",
+        "label": "기초화장품",
+        "display": "기초화장품 등 · HS 330499 (6단위)"
+      }
+    ],
+    "countries": [],
+    "period": {
+      "start": "2025-01",
+      "end": "2025-12",
+      "label": "2025.01 ~ 2025.12",
+      "months": 12,
+      "title_label": "2025년 연간",
+      "short": "2025"
+    },
+    "compare": {
+      "mode": "YOY_PERIOD",
+      "status": "READY",
+      "period_label": "2024.01 ~ 2024.12",
+      "basis_label": "전년 같은 기간 자동 설정",
+      "short": "2024",
+      "monthly_paired": true
+    },
+    "sections": [
+      "KPI",
+      "TOP_COUNTRIES",
+      "GROWTH_RISK",
+      "LOCAL_ISSUES"
+    ],
+    "request_channel": "CHAT",
+    "metric": {
+      "code": "AMOUNT",
+      "label": "수출액"
+    }
+  },
+  "meta": {
+    "data_basis": "관세청 수출입무역통계(최신 공개 월 2025.12) · KOTRA 해외시장뉴스"
+  },
+  "verification": {
+    "passed": 5,
+    "total": 5
+  },
+  "summary": {
+    "kpi": {
+      "amount_usd": 8640000000.0,
+      "prev_amount_usd": 7409999999.999999,
+      "change_usd": 1230000000.0,
+      "change_pct": 16.6,
+      "country_count": 158,
+      "prev_country_count": 151,
+      "country_count_diff": 7,
+      "top1_name": "미국",
+      "top1_share_pct": 18.7,
+      "prev_top1_name": "중국",
+      "prev_top1_share_pct": 23.4,
+      "import_usd": 980000000.0000001,
+      "import_change_pct": 7.4,
+      "trade_balance_usd": 7659999999.999999,
+      "top3_share_pct": 45.3,
+      "prev_top3_share_pct": 49.8,
+      "monthly_avg_usd": 720000000.0,
+      "peak_month_label": "12월",
+      "peak_month_usd": 878999999.9999999
+    },
+    "sentences": [
+      "2025년 기초화장품 수출은 **86.4억 달러**로 전년(74.1억 달러)보다 **+16.6%** 늘었습니다.",
+      "**미국이 중국을 제치고 1위 시장**이 됐습니다. 미국은 +28.1% 늘었고, 중국은 −13.8% 줄었습니다.",
+      "폴란드(+119.6%)·UAE(+53.5%) 등 **동유럽·중동 시장이 빠르게 성장**했습니다. 다만 아직 규모는 각각 2억 달러대입니다.",
+      "상위 3개국 비중이 49.8% → **45.3%**로 낮아져 **특정 국가 의존도가 완화**됐습니다.",
+      "12월 수출(8.79억 달러)이 연중 최고였으며 전년 같은 달보다 +18.5% 많았습니다."
+    ],
+    "check_points": [
+      {
+        "target": "미국",
+        "content": "성장이 하반기에도 이어졌는지, 온라인·오프라인 채널 확대가 지속되는지",
+        "basis": "+28.1% · 현지 이슈 ①"
+      },
+      {
+        "target": "중국",
+        "content": "감소가 시장 전반 둔화인지, 현지 브랜드 점유율 상승 영향인지",
+        "basis": "−13.8% · 현지 이슈 ②"
+      },
+      {
+        "target": "폴란드 · UAE",
+        "content": "기준 규모가 작아 성장률이 크게 나타남 — 절대 금액과 함께 판단",
+        "basis": "각 2.2억 · 2.6억 달러"
+      },
+      {
+        "target": "에스토니아",
+        "content": "11월 한 달만 급증 후 복귀 — 일회성 가능, 순위 판단 시 제외 검토",
+        "basis": "일회성 가능성 규칙 ①"
+      }
+    ]
+  },
+  "monthly": {
+    "labels": [
+      "1월",
+      "2월",
+      "3월",
+      "4월",
+      "5월",
+      "6월",
+      "7월",
+      "8월",
+      "9월",
+      "10월",
+      "11월",
+      "12월"
+    ],
+    "current": [
+      602000000.0,
+      631000000.0,
+      718000000.0,
+      705000000.0,
+      744000000.0,
+      702000000.0,
+      738000000.0,
+      695000000.0,
+      761000000.0,
+      729000000.0,
+      736000000.0,
+      878999999.9999999
+    ],
+    "previous": [
+      521000000.0,
+      544000000.0,
+      621000000.0,
+      602000000.0,
+      633000000.0,
+      605000000.0,
+      627000000.0,
+      598000000.0,
+      639000000.0,
+      630000000.0,
+      648000000.0,
+      742000000.0
+    ],
+    "rows": [
+      {
+        "label": "1월",
+        "amount_usd": 602000000.0,
+        "prev_amount_usd": 521000000.0,
+        "change_usd": 81000000.0,
+        "change_pct": 15.5
+      },
+      {
+        "label": "2월",
+        "amount_usd": 631000000.0,
+        "prev_amount_usd": 544000000.0,
+        "change_usd": 87000000.0,
+        "change_pct": 16.0
+      },
+      {
+        "label": "3월",
+        "amount_usd": 718000000.0,
+        "prev_amount_usd": 621000000.0,
+        "change_usd": 97000000.0,
+        "change_pct": 15.6
+      },
+      {
+        "label": "4월",
+        "amount_usd": 705000000.0,
+        "prev_amount_usd": 602000000.0,
+        "change_usd": 103000000.0,
+        "change_pct": 17.1
+      },
+      {
+        "label": "5월",
+        "amount_usd": 744000000.0,
+        "prev_amount_usd": 633000000.0,
+        "change_usd": 111000000.00000001,
+        "change_pct": 17.5
+      },
+      {
+        "label": "6월",
+        "amount_usd": 702000000.0,
+        "prev_amount_usd": 605000000.0,
+        "change_usd": 97000000.0,
+        "change_pct": 16.0
+      },
+      {
+        "label": "7월",
+        "amount_usd": 738000000.0,
+        "prev_amount_usd": 627000000.0,
+        "change_usd": 111000000.00000001,
+        "change_pct": 17.7
+      },
+      {
+        "label": "8월",
+        "amount_usd": 695000000.0,
+        "prev_amount_usd": 598000000.0,
+        "change_usd": 97000000.0,
+        "change_pct": 16.2
+      },
+      {
+        "label": "9월",
+        "amount_usd": 761000000.0,
+        "prev_amount_usd": 639000000.0,
+        "change_usd": 122000000.0,
+        "change_pct": 19.1
+      },
+      {
+        "label": "10월",
+        "amount_usd": 729000000.0,
+        "prev_amount_usd": 630000000.0,
+        "change_usd": 99000000.0,
+        "change_pct": 15.7
+      },
+      {
+        "label": "11월",
+        "amount_usd": 736000000.0,
+        "prev_amount_usd": 648000000.0,
+        "change_usd": 88000000.0,
+        "change_pct": 13.6
+      },
+      {
+        "label": "12월",
+        "amount_usd": 878999999.9999999,
+        "prev_amount_usd": 742000000.0,
+        "change_usd": 137000000.0,
+        "change_pct": 18.5
+      }
+    ],
+    "quarters": [
+      {
+        "label": "1분기",
+        "amount_usd": 1951000000.0000002,
+        "prev_amount_usd": 1686000000.0,
+        "change_pct": 15.7
+      },
+      {
+        "label": "2분기",
+        "amount_usd": 2151000000.0,
+        "prev_amount_usd": 1839999999.9999998,
+        "change_pct": 16.9
+      },
+      {
+        "label": "3분기",
+        "amount_usd": 2194000000.0,
+        "prev_amount_usd": 1864000000.0,
+        "change_pct": 17.7
+      },
+      {
+        "label": "4분기",
+        "amount_usd": 2344000000.0,
+        "prev_amount_usd": 2020000000.0,
+        "change_pct": 16.0
+      }
+    ],
+    "notes": [
+      "12개월 모두 전년 같은 달보다 많았습니다(최소 +13.6%, 최대 +19.1%).",
+      "4분기 합계 23.44억 달러로 분기 기준 최고치입니다.",
+      "월별 금액은 관세청 품목·국가별 수출입실적(HS 10단위)을 6단위로 합산한 값입니다."
+    ]
+  },
+  "top_countries": [
+    {
+      "rank": 1,
+      "rank_move": 1,
+      "name": "미국",
+      "country_code": "US",
+      "amount_usd": 1612000000.0,
+      "share_pct": 18.7,
+      "prev_amount_usd": 1258000000.0,
+      "change_pct": 28.1
+    },
+    {
+      "rank": 2,
+      "rank_move": -1,
+      "name": "중국",
+      "country_code": "CN",
+      "amount_usd": 1496000000.0,
+      "share_pct": 17.3,
+      "prev_amount_usd": 1736000000.0,
+      "change_pct": -13.8
+    },
+    {
+      "rank": 3,
+      "rank_move": 0,
+      "name": "일본",
+      "country_code": "JP",
+      "amount_usd": 807000000.0,
+      "share_pct": 9.3,
+      "prev_amount_usd": 698000000.0,
+      "change_pct": 15.6
+    },
+    {
+      "rank": 4,
+      "rank_move": 0,
+      "name": "홍콩",
+      "country_code": "HK",
+      "amount_usd": 541000000.0,
+      "share_pct": 6.3,
+      "prev_amount_usd": 591000000.0,
+      "change_pct": -8.5
+    },
+    {
+      "rank": 5,
+      "rank_move": 0,
+      "name": "베트남",
+      "country_code": "VN",
+      "amount_usd": 382000000.0,
+      "share_pct": 4.4,
+      "prev_amount_usd": 361000000.0,
+      "change_pct": 5.8
+    },
+    {
+      "rank": 6,
+      "rank_move": 0,
+      "name": "러시아",
+      "country_code": "RU",
+      "amount_usd": 312000000.0,
+      "share_pct": 3.6,
+      "prev_amount_usd": 286000000.0,
+      "change_pct": 9.1
+    },
+    {
+      "rank": 7,
+      "rank_move": 0,
+      "name": "대만",
+      "country_code": "TW",
+      "amount_usd": 298000000.0,
+      "share_pct": 3.4,
+      "prev_amount_usd": 229000000.0,
+      "change_pct": 30.1
+    },
+    {
+      "rank": 8,
+      "rank_move": 1,
+      "name": "UAE",
+      "country_code": "AE",
+      "amount_usd": 261000000.0,
+      "share_pct": 3.0,
+      "prev_amount_usd": 170000000.0,
+      "change_pct": 53.5
+    },
+    {
+      "rank": 9,
+      "rank_move": 1,
+      "name": "폴란드",
+      "country_code": "PL",
+      "amount_usd": 224000000.00000003,
+      "share_pct": 2.6,
+      "prev_amount_usd": 102000000.0,
+      "change_pct": 119.6
+    },
+    {
+      "rank": 10,
+      "rank_move": -2,
+      "name": "태국",
+      "country_code": "TH",
+      "amount_usd": 200999999.99999997,
+      "share_pct": 2.3,
+      "prev_amount_usd": 183000000.0,
+      "change_pct": 9.8
+    }
+  ],
+  "others": {
+    "amount_usd": 2506000000.0,
+    "share_pct": 29.0,
+    "prev_amount_usd": 1796000000.0,
+    "change_pct": 39.5
+  },
+  "concentration": {
+    "top1": {
+      "current": 18.7,
+      "previous": 23.4
+    },
+    "top3": {
+      "current": 45.3,
+      "previous": 49.8
+    },
+    "top10": {
+      "current": 71.0,
+      "previous": 75.8
+    },
+    "countries": {
+      "current": 158,
+      "previous": 151
+    },
+    "note": "미국·일본·대만·UAE·폴란드가 커지고 중국·홍콩이 줄면서 수출이 여러 나라로 분산됐습니다."
+  },
+  "articles": [
+    {
+      "no": 1,
+      "country": "미국",
+      "item_label": "기초화장품",
+      "published_date": "2025-12-08",
+      "source_label": "KOTRA 해외시장뉴스",
+      "office": "뉴욕무역관",
+      "title": "미국 온라인 채널에서 K-뷰티 스킨케어 판매 확대",
+      "summary": "대형 온라인몰과 드럭스토어 체인에서 한국 기초화장품 입점이 늘고, 선케어·진정 라인 수요가 높다고 전함.",
+      "source_url": null
+    },
+    {
+      "no": 2,
+      "country": "중국",
+      "item_label": "기초화장품",
+      "published_date": "2025-11-20",
+      "source_label": "KOTRA 해외시장뉴스",
+      "office": "상하이무역관",
+      "title": "중국 화장품 시장, 현지 브랜드 점유율 상승세",
+      "summary": "가성비 현지 브랜드가 온라인 플랫폼에서 점유율을 높이며 수입 브랜드 경쟁이 심해졌다고 분석.",
+      "source_url": null
+    },
+    {
+      "no": 3,
+      "country": "폴란드",
+      "item_label": "기초화장품",
+      "published_date": "2025-10-14",
+      "source_label": "KOTRA 해외시장뉴스",
+      "office": "바르샤바무역관",
+      "title": "폴란드 드럭스토어 중심으로 수입 화장품 수요 증가",
+      "summary": "대형 드럭스토어의 아시아 화장품 코너 확대와 온라인 판매 증가를 소개.",
+      "source_url": null
+    },
+    {
+      "no": 4,
+      "country": "UAE",
+      "item_label": "기초화장품",
+      "published_date": "2025-12-02",
+      "source_label": "KOTRA 해외시장뉴스",
+      "office": "두바이무역관",
+      "title": "UAE 프리미엄 스킨케어 수요와 할랄 인증 관심",
+      "summary": "고온 기후에 맞춘 진정·보습 제품 수요와 유통사의 할랄 인증 확인 요구가 늘었다고 전함.",
+      "source_url": null
+    },
+    {
+      "no": 5,
+      "country": "일본",
+      "item_label": "기초화장품",
+      "published_date": "2025-11-05",
+      "source_label": "KOTRA 해외시장뉴스",
+      "office": "도쿄무역관",
+      "title": "일본 기초화장품 시장, 저자극·이너뷰티 제품 관심 확대",
+      "summary": "저자극 성분과 먹는 뷰티 제품을 함께 찾는 소비자가 늘며 한국 브랜드 노출이 커졌다고 소개.",
+      "source_url": null
+    }
+  ],
+  "article_limit": 2,
+  "sources": [
+    {
+      "label": "수출입 통계",
+      "provider": "관세청 품목별·국가별 수출입실적",
+      "scope": "HS 10단위 월별 · 2024.01~2025.12 · 최신 공개 월 2025.12",
+      "used_in": "핵심 요약 · 월별 추이 · 주요 수출국"
+    },
+    {
+      "label": "해외시장뉴스",
+      "provider": "KOTRA 해외시장뉴스",
+      "scope": "기사별 발행일 · 원문 URL",
+      "used_in": "현지 이슈"
+    },
+    {
+      "label": "단신속보",
+      "provider": "KOTRA 단신속보",
+      "scope": "이 리포트에는 해당 기사 없음",
+      "used_in": "—"
+    },
+    {
+      "label": "환율",
+      "provider": "한국은행 ECOS 731Y001",
+      "scope": "이 리포트는 원화 환산 없음",
+      "used_in": "—"
+    }
+  ]
+}

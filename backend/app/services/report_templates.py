@@ -1,7 +1,7 @@
-"""정기 리포트(월간·주간·분기) HTML 템플릿 렌더링.
+"""리포트(정기 월간·주간·분기, 요청형) HTML 템플릿 렌더링.
 
 템플릿은 backend/app/templates/reports/에 있고, 수치·문장·기사·목록은 모두 컨텍스트 변수로 받습니다.
-금액은 결과표의 USD 원값을 그대로 받고 표시 형식(백만 달러·증감률·▲▼)만 여기서 바꿉니다.
+금액은 결과표의 USD 원값을 그대로 받고 표시 형식(정기는 백만 달러, 요청형은 억 달러·증감률·▲▼)만 여기서 바꿉니다.
 그래프는 JavaScript 없이 SVG로 그려 HTML → PDF 변환에서도 그대로 나옵니다.
 
 미리보기: python -m backend.app.services.report_templates monthly --out tmp/report_monthly.html
@@ -18,8 +18,9 @@ from markupsafe import Markup, escape
 
 TEMPLATE_DIR = Path(__file__).resolve().parents[1] / 'templates' / 'reports'
 SAMPLE_DIR = TEMPLATE_DIR / 'samples'
-TEMPLATES = {'RPT_MONTHLY': 'monthly.html', 'RPT_WEEKLY': 'weekly.html', 'RPT_QUARTERLY': 'quarterly.html'}
-KINDS = {'monthly': 'RPT_MONTHLY', 'weekly': 'RPT_WEEKLY', 'quarterly': 'RPT_QUARTERLY'}
+TEMPLATES = {'RPT_MONTHLY': 'monthly.html', 'RPT_WEEKLY': 'weekly.html', 'RPT_QUARTERLY': 'quarterly.html',
+             'RPT_ON_DEMAND': 'ondemand.html'}
+KINDS = {'monthly': 'RPT_MONTHLY', 'weekly': 'RPT_WEEKLY', 'quarterly': 'RPT_QUARTERLY', 'ondemand': 'RPT_ON_DEMAND'}
 
 ACCENT = '#006849'
 UP, DOWN, MUTED, GRID, PREVIOUS = '#0B7A4B', '#C0392B', '#8A8F98', '#E6E3DD', '#A8A39B'
@@ -40,6 +41,31 @@ def musd(value, digits=1):
         return '—'
     text = _number(value / 1e6, digits)
     return (MINUS + text) if value < 0 else text
+
+
+def eok(value, digits=2):
+    """USD → 억 달러 숫자 문자열 (요청형 리포트). 단위 글자는 템플릿에서 붙임."""
+    if value is None:
+        return '—'
+    text = _number(value / 1e8, digits)
+    return (MINUS + text) if value < 0 else text
+
+
+def signed_eok(value, digits=2):
+    """증감액(USD) → 부호 붙은 억 달러 (+12.30 · −2.40)."""
+    return '—' if value is None else signed(value / 1e8, digits)
+
+
+def rank_move(value):
+    """순위 변동: 양수 = 올라감(▲), 음수 = 내려감(▼), 0 = –, 'NEW' = 신규, None = 비교 없음(—)."""
+    if value is None:
+        return Markup('<span class="chg none">—</span>')
+    if value == 'NEW':
+        return Markup('<span class="chg new">신규</span>')
+    if value == 0:
+        return Markup('<span class="chg flat">–</span>')
+    cls, mark = ('up', '▲') if value > 0 else ('down', '▼')
+    return Markup(f'<span class="chg {cls}">{mark}{abs(int(value))}</span>')
 
 
 def num(value, digits=0):
@@ -176,8 +202,8 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, 
     for t in ticks:
         out.append(f'<line x1="{left}" x2="{width - right}" y1="{y(t):.1f}" y2="{y(t):.1f}" stroke="{GRID}" stroke-width="1"/>')
         out.append(f'<text x="{left - 6}" y="{y(t) + 3:.1f}" text-anchor="end" class="axis">{_tick_label(t)}</text>')
-    for i, label in enumerate(labels):
-        out.append(f'<text x="{x(i):.1f}" y="{height - 6}" text-anchor="middle" class="axis">{escape(label)}</text>')
+    for i in _visible_labels(labels, x):
+        out.append(f'<text x="{x(i):.1f}" y="{height - 6}" text-anchor="middle" class="axis">{escape(labels[i])}</text>')
     ends = []
     for s, vals in zip(series, scaled):
         color = s.get('color', ACCENT)
@@ -210,6 +236,20 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, 
 
 
 END_GAP = 12  # 끝 값 라벨 사이 최소 간격 (SVG 단위, 라벨 글자 10.5)
+
+
+def _visible_labels(labels, x, font=9.5, gap=4):
+    """가로축 라벨이 겹치지 않게 그릴 위치만 고릅니다. 연도가 붙은 라벨('24.1')·처음·끝을 먼저 두고,
+    나머지는 앞뒤 라벨과 겹치지 않을 때만 둡니다 (달이 많은 요청형 기간에서 '12'와 '24.1'이 붙는 문제)."""
+    n = len(labels)
+    span = lambda i: (x(i) - _em(labels[i]) * font / 2, x(i) + _em(labels[i]) * font / 2)
+    priority = sorted(range(n), key=lambda i: (0 if i in (0, n - 1) or '.' in str(labels[i]) else 1, i))
+    chosen = []
+    for i in priority:
+        left, right = span(i)
+        if all(right + gap <= span(j)[0] or span(j)[1] + gap <= left for j in chosen):
+            chosen.append(i)
+    return sorted(chosen)
 
 
 def _spread(ends, low, high):
@@ -547,7 +587,67 @@ def layout(report_type, ctx):
                          {'key': 'sources', 'height': H3_MM + TH_MM + 2 * ROW1_MM + ROW_MM + 2 * LINE[9] + 3 + 2 * LINE[7.8]}],
                         BODY_MM - _heading('급증 키워드 · 기사 분포 · 기준 설명 문구'), rest)
         return {'summary': summary, 'articles': articles, 'keywords': keywords}
+    if report_type == 'RPT_ON_DEMAND':
+        return _ondemand_layout(ctx, rest)
     return {}
+
+
+# 요청형 섹션 (양식 순서). SUMMARY는 항상, 나머지는 사용자가 고른 것만.
+# GROWTH_RISK(수출 증가·감소 주요 시장)는 최소 규모 기준이 정해질 때까지 섹션 전체를 숨깁니다 (이양원님 합의, #45).
+ONDEMAND_SECTIONS = ('SUMMARY', 'KPI', 'TOP_COUNTRIES', 'LOCAL_ISSUES')
+HALF_MM = (TEXT_MM - 6) / 2  # 두 칸 배치(.grid2)의 한 칸 폭
+
+
+def ondemand_sections(ctx):
+    """실제로 그릴 섹션 코드 (목차·쪽 번호·포함 항목에 같은 목록을 씁니다)."""
+    chosen = set(ctx['conditions']['sections'])
+    return [s for s in ONDEMAND_SECTIONS if s == 'SUMMARY' or s in chosen]
+
+
+def _ondemand_layout(ctx, rest):
+    # 핵심 요약 값은 항상 받고, 나머지 구역 데이터(monthly·top_countries 등)는 그 섹션을 골랐을 때만 읽습니다.
+    sections = ondemand_sections(ctx)
+    s = ctx['summary']
+    pages = {'sections': sections}
+
+    blocks = [{'key': 'cards', 'height': KPI_MM}]
+    if s['sentences']:
+        blocks.append(_sentences(s['sentences']))
+    if 'KPI' in sections:  # 주요 지표 카드 8개 (4개씩 2줄, 실측 한 줄 25.4mm + 간격 3mm)
+        blocks.append({'key': 'metrics', 'height': H3_MM + 2 * 25.4 + 3 + 4})
+    if s['check_points']:
+        blocks.append(_table('checks', [_row([(r['target'], 26), (r['content'], 92), (r['basis'], 44)])
+                                        for r in s['check_points']]))
+    pages['summary'] = flow(blocks, BODY_MM - _heading('수치는 결과표에서 직접 넣고 문장 속 수치는 대조해 검증 · 검증 통과 5/5'), rest)
+
+    if 'KPI' in sections:
+        monthly = ctx['monthly']
+        rows = len(monthly['rows']) + 1  # 합계 행 포함
+        chart = _legend(['', '']) + _svg(230)  # 높이 230은 ondemand.html과 같아야 함
+        side = ((H3_MM + TH_MM + ROW1_MM * len(monthly['quarters'])) if monthly['quarters'] else 0) \
+            + ((H3_MM + sum(9 * 1.75 * PT_MM * _lines(t, 9, HALF_MM) + 1 for t in monthly['notes'])) if monthly['notes'] else 0)
+        if rows <= 14:  # 양식처럼 왼쪽 월별 표, 오른쪽 분기별 합계·읽는 법
+            blocks = [{'key': 'chart', 'height': chart},
+                      {'key': 'mgrid', 'height': 5 + max(TH_MM + ROW1_MM * rows, side)}]
+        else:  # 기간이 길면 월별 표를 본문 폭으로 나눠 그리고 분기별 합계·읽는 법은 그 뒤에
+            blocks = [{'key': 'chart', 'height': chart}, _table('mtable', [ROW1_MM] * rows)]
+            if side:
+                blocks.append({'key': 'mside', 'height': side})
+        pages['monthly'] = flow(blocks, BODY_MM - _heading('월별 수출액과 비교 · 단위 억 달러'), rest)
+
+    if 'TOP_COUNTRIES' in sections:
+        top = ctx['top_countries'][:10]
+        rows = (len(top) or 1) + (1 if ctx['others'] else 0) + 1
+        bars = (30 * max(len(top), 1) + 4) * HALF_MM / 320  # hbar_chart(width=320) 한 칸 폭
+        note = (ctx['concentration'] or {}).get('note')  # 집중도 미준비(null)면 “데이터 준비 중”
+        right = H3_MM + TH_MM + 4 * ROW1_MM + (9 * 1.75 * PT_MM * _lines(note + ' 비중 = 국가별 수출액 ÷ 전체 수출액 × 100.', 9, HALF_MM) + 3 if note else 0)
+        pages['top'] = flow([_table('ttable', [ROW1_MM] * rows, head=TH_MM),
+                             {'key': 'tgrid', 'height': max(H3_MM + _legend(['', '']) + bars, right)}],
+                            BODY_MM - _heading('수출액 상위 10개국 · 순위 변동 · 단위 억 달러'), rest)
+
+    if 'LOCAL_ISSUES' in sections:
+        pages['articles'] = flow(_article_blocks(ctx['articles']), BODY_MM - _heading('현지 이슈 · 기준') - POLICY_MM, rest)
+    return pages
 
 
 # ---------- 렌더 ----------
@@ -556,7 +656,8 @@ def environment():
     env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)), autoescape=select_autoescape(['html']),
                       undefined=StrictUndefined, trim_blocks=True, lstrip_blocks=True)
     env.filters.update(musd=musd, num=num, pct=pct, signed_pct=signed_pct, signed=signed, change=change,
-                       emph=emph, ymd=ymd, ymdhm=ymdhm, circled=circled)
+                       emph=emph, ymd=ymd, ymdhm=ymdhm, circled=circled, eok=eok, signed_eok=signed_eok,
+                       rank_move=rank_move)
     env.globals.update(line_chart=line_chart, bar_chart=bar_chart, hbar_chart=hbar_chart,
                        end_labels_fit=end_labels_fit, legend_value=legend_value, has_values=has_values,
                        full_period_label=full_period_label,
