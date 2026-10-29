@@ -225,14 +225,25 @@ def has_values(series_values):
     return any(v is not None for values in series_values for v in values)
 
 
+def full_period_label(labels, i):
+    """축 라벨은 연도가 바뀔 때만 '24.1Q'·'25.1'처럼 연도를 붙이므로('2Q'·'11'은 연도 생략),
+    앞쪽에서 가장 가까운 연도를 찾아 붙인 기간 이름을 돌려줍니다. 예: ['24.1Q','2Q','3Q','4Q'], 3 → '24.4Q'"""
+    label = str(labels[i])
+    if '.' in label:
+        return label
+    year = next((str(labels[j]).split('.')[0] for j in range(i - 1, -1, -1) if '.' in str(labels[j])), None)
+    return f'{year}.{label}' if year else label
+
+
 def legend_value(values, labels):
-    """범례에 붙일 끝 값 문자열. 마지막 기간이 null이면 값이 있는 마지막 기간을 괄호로 함께 표시합니다.
-    예: '171.2' · '10.0(11)' · 값이 하나도 없으면 '—'"""
-    point = next(((labels[i], v) for i, v in reversed(list(enumerate(values))) if v is not None), None)
+    """범례에 붙일 끝 값 문자열. 마지막 기간이 null이면 값이 있는 마지막 기간을 연도까지 괄호로 표시합니다.
+    마지막 기간 여부는 라벨 글자가 아니라 위치로 판단합니다('4Q'가 연도마다 반복되므로).
+    예: '171.2' · '10.0(25.11)' · '10.0(24.4Q)' · 값이 하나도 없으면 '—'"""
+    point = next(((i, v) for i, v in reversed(list(enumerate(values))) if v is not None), None)
     if point is None:
         return '—'
-    label, value = point
-    return musd(value) + ('' if label == labels[-1] else f'({label})')
+    i, value = point
+    return musd(value) + ('' if i == len(values) - 1 else f'({full_period_label(labels, i)})')
 
 
 def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, digits=0, show=()):
@@ -520,6 +531,7 @@ def environment():
                        emph=emph, ymd=ymd, ymdhm=ymdhm, circled=circled)
     env.globals.update(line_chart=line_chart, bar_chart=bar_chart, hbar_chart=hbar_chart,
                        end_labels_fit=end_labels_fit, legend_value=legend_value, has_values=has_values,
+                       full_period_label=full_period_label,
                        series_colors=SERIES_COLORS,
                        colors={'accent': ACCENT, 'up': UP, 'down': DOWN, 'muted': MUTED, 'previous': PREVIOUS},
                        css=(TEMPLATE_DIR / 'report.css').read_text(encoding='utf-8'))

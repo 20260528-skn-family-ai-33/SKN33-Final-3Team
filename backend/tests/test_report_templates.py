@@ -310,9 +310,9 @@ class FormatTest(unittest.TestCase):
             item['country_trend'] = [dict(base, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(12)]
         context['items'][0]['country_trend'][11]['values'] = base['values'][:-1] + [None]  # 국가11만 마지막 달 미수집
         html = rt.render('RPT_MONTHLY', context)
-        self.assertIn('범례 숫자는 12 값 (괄호는 값이 있는 마지막 기간)', html)
+        self.assertIn('범례 숫자는 25.12 값 (괄호는 값이 있는 마지막 기간)', html)
         self.assertIn('국가10 ' + rt.musd(base['values'][-1]) + '<', html)
-        self.assertIn('국가11 ' + rt.musd(base['values'][-2]) + '(11)<', html)
+        self.assertIn('국가11 ' + rt.musd(base['values'][-2]) + '(25.11)<', html)  # 이전 기간은 연도까지 표시
 
     def test_end_labels_keep_both_bounds_with_one_large_value(self):
         # 양원님 재현 조건: 큰 값 하나 + 작은 값 7개 (기존에는 큰 값 라벨이 y=-52로 그래프 위로 벗어남)
@@ -334,6 +334,30 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(rt.legend_value([1e6, None, None], labels), '1.0(10)')
         self.assertEqual(rt.legend_value([None, None, None], labels), '—')
         self.assertEqual(rt.legend_value([1e6, 2e6, 0], labels), '0.0')  # 실제 0은 그대로
+
+    def test_legend_value_tells_apart_same_quarter_of_different_years(self):
+        # 양원님 재현 조건: 최근 8개 분기 라벨은 '4Q'가 연도마다 반복 → 2024년 4분기 값만 있으면 2025년 4분기로 오해하던 문제
+        labels = ['24.1Q', '2Q', '3Q', '4Q', '25.1Q', '2Q', '3Q', '4Q']
+        self.assertEqual(rt.legend_value([None] * 3 + [1e7] + [None] * 4, labels), '10.0(24.4Q)')
+        self.assertEqual(rt.legend_value([None] * 6 + [1e7, None], labels), '10.0(25.3Q)')
+        self.assertEqual(rt.legend_value([None] * 7 + [1e7], labels), '10.0')
+        self.assertEqual(rt.full_period_label(['24.12', '25.1', '2', '3'], 3), '25.3')
+        self.assertEqual(rt.full_period_label(['24.12', '25.1', '2', '3'], 0), '24.12')
+        self.assertEqual(rt.full_period_label(['2025.10', '2025.11', '2025.12'], 1), '2025.11')
+
+        context = rt.sample_context('quarterly')
+        base = context['conditions']['countries'][0]
+        context['conditions']['countries'] = [dict(base, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(24)]
+        for item in context['items']:
+            s = item['country_quarters'][0]
+            item['country_quarters'] = [dict(s, country_code=f'C{i:02d}', name=f'국가{i:02d}',
+                                             values=[None] * 3 + [1e7] + [None] * 4) for i in range(24)]
+            s = item['country_months']['series'][0]
+            item['country_months']['series'] = [dict(s, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(24)]
+        html = rt.render('RPT_QUARTERLY', context)
+        self.assertIn('국가01 10.0(24.4Q)<', html)
+        self.assertNotIn('국가01 10.0<', html)
+        self.assertIn('범례 숫자는 25.4Q 값', html)  # 안내 문구도 연도까지 표시
 
     def test_hbar_reserves_room_for_long_values(self):
         svg = str(rt.hbar_chart([{'label': '미국', 'values': [99_000e6, 45_000e6]}], ['#000', '#999'],
