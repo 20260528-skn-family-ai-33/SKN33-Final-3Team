@@ -149,7 +149,7 @@ python -m backend.app.scheduler.jobs.hs_code_load --csv backend/app/scheduler/co
   요약은 HS2022와 같은 규칙(`hs_code_build.summarize`)으로 만든 뒤 UN 원문과 대조해 19개를 수동 보정했습니다 (#46).
   이전의 긴 LLM 한글 번역본은 `hs_code_hs2017_before46.csv`로 남겨 두었으며, 적재 검증(20자·중복)을 통과하지 못하므로 적재하지 않습니다.
 - 보류(적재 안 함): `9999999290`(품목명 `-`, 상위 `9999`·`999999`는 UN 통계용 코드), `621142900`(9자리).
-- HS2022 보완분은 실적 적재(`customs_load`)의 미등록 코드 처리(`fail`·`hold`)를 시험한 뒤 적재합니다.
+- 두 CSV는 `11_hs_code_seed.sql`에 포함되어 새 DB에는 시드로 들어갑니다. 위 명령은 시드 없이 기존 DB에 따로 적재할 때 씁니다.
 
 ## HS 판 간 대응표 (hs_code_correlation)
 
