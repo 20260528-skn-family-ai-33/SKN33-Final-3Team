@@ -1,8 +1,17 @@
 """Render the bundled periodic HTML templates in an isolated, offline Chromium page."""
 import base64
+from functools import lru_cache
 from pathlib import Path
 
 from backend.app.api.common import ApiError
+
+
+@lru_cache(maxsize=4)
+def font_css(path, mtime_ns, size):
+    # The file signature invalidates the cache when the configured font is replaced.
+    encoded = base64.b64encode(Path(path).read_bytes()).decode('ascii')
+    return ("<style>@font-face{font-family:ReportKorean;src:url(data:font/ttf;base64,"
+            + encoded + ")}body{font-family:ReportKorean,sans-serif}</style>")
 
 
 def template_pdf(report_type, context, settings):
@@ -17,11 +26,10 @@ def template_pdf(report_type, context, settings):
     if not font.is_file():
         raise ApiError(503, 'REPORT_FONT_UNAVAILABLE', '한글 PDF 글꼴 API_REPORT_FONT 설정이 필요합니다.')
     # Embed only the explicitly configured local font; articles cannot fetch remote assets.
-    encoded = base64.b64encode(font.read_bytes()).decode('ascii')
+    stamp = font.stat()
+    embedded_font = font_css(str(font.resolve()), stamp.st_mtime_ns, stamp.st_size)
     html = render(report_type, context)
-    font_css = ("<style>@font-face{font-family:ReportKorean;src:url(data:font/ttf;base64,"
-                + encoded + ")}body{font-family:ReportKorean,sans-serif}</style>")
-    html = html.replace('</head>', font_css + '</head>', 1)
+    html = html.replace('</head>', embedded_font + '</head>', 1)
     try:
         with sync_playwright() as runtime:
             with runtime.chromium.launch(headless=True, timeout=30000) as browser:

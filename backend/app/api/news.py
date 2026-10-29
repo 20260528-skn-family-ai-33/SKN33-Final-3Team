@@ -43,6 +43,8 @@ def blocks(store,uid):
 def save_blocks(store,uid,keywords,expected):
     u,b=store.t('users'),store.t('notification_setting')
     store.c.execute(select(u.c.user_id).where(u.c.user_id==uid).with_for_update()).first()
+    if not store.c.execute(select(b.c.user_id).where(b.c.user_id==uid).with_for_update()).first():
+        unavailable('알림 설정 행이 준비되지 않았습니다.','FEATURE_NOT_READY')
     require(expected==blocks(store,uid)['settings']['version'],'설정이 변경되었습니다.','VERSION_CONFLICT',409)
     grouped={}
     for term in keywords: grouped.setdefault(canonical(store,term),[]).append(term)
