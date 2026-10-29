@@ -4,6 +4,21 @@
 
 2026-10-28 기준 최종 선정 구성은 **2단계 LightGBM C 방식(K=100)을 v1 · v3 피처로 각각 학습한 두 모델의 앙상블**입니다. 실행은 아래 최종 모델 안내를 따릅니다. [초기 설계](../../../docs/ML_PLAN.md)와 뒤쪽 HGB·SGD 안내는 이전 모델·실험을 재현할 때 참고합니다.
 
+## Linux 배포 준비
+
+LightGBM은 Linux에서 OpenMP 런타임을 사용합니다. 런타임이 없으면 패키지 설치가 끝났어도 `import lightgbm`에서 `OSError: libgomp.so.1`이 발생할 수 있습니다([공식 설치 안내](https://github.com/lightgbm-org/LightGBM/blob/v4.6.0/python-package/README.rst#install-from-pypi)). Debian·Ubuntu 서버에서는 다음과 같이 준비합니다.
+
+```bash
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends libgomp1
+python -m pip install -r backend/requirements.txt
+python -c "import lightgbm; print(lightgbm.__version__)"
+```
+
+컨테이너를 쓰면 실제 실행 이미지에도 `libgomp1`이 필요합니다. `backend/requirements.txt`에는 LightGBM이 포함돼 있으므로 이 목록을 설치하는 환경에 적용합니다. API·worker 전용 `backend/requirements-api.txt`에는 LightGBM이 포함돼 있지 않습니다.
+
+`.env.sample`의 `CUSTOMS_ML_ENTRYPOINT`는 기본적으로 비워 두었습니다. 월별 재학습을 활성화하기 전에 위 import 확인과 입력 데이터·DB 준비, 서버 자원(기본 학습 스레드 4개)을 확인한 뒤 아래 월별 재학습 설정을 적용합니다. 활성화 후에는 정기 일정뿐 아니라 **스케줄러 시작 20초 뒤 누락 월 복구**에서도 학습이 실행될 수 있습니다. 이미 `WAITING_FOR_ML` 상태인 월은 아래 안내대로 수동 재개해야 합니다.
+
 ## 최종 모델 생성·조회
 
 1단계 `LGBMRegressor`가 다음 12개월의 로그 수출 성장값을 예측하고, 2단계 `LGBMRanker`가 국가별 1단계 상위 100개 품목을 다시 정렬합니다. 후보 밖 품목은 1단계 순서로 그 아래에 둡니다. 이 구성을 외부 피처 없는 v1(1단계 33개)과 외부 피처를 넣은 v3(42개)로 각각 학습하고, 국가 안 순서는 두 모델의 순위 평균, 성장값은 평균으로 합칩니다. 같은 시드끼리 v3 단독과 비교하면 국가별 NDCG@5가 평가 기준월 3개 × 시드 3개 9번 모두 같거나 높았습니다(5차 테스트). 6차 테스트에서 품목 → 국가 순위용 **품목 방향 순위 모델**(같은 기준월 · 같은 품목 안 국가 순서, 후보를 거르지 않음)을 더했습니다. 앙상블 품목 NDCG@5가 Dev 0.6801 → 0.6910, 2025-09 0.6840 → 0.6905로 올랐고(같은 시드 9번 모두 상승) 국가 지표는 그대로입니다.
@@ -65,7 +80,7 @@ python -m backend.app.ml.two_stage kfold --folds 8 --seeds 0 1 2 --n-jobs 4
 
 ## 최종 모델 월별 재학습
 
-연결 경로는 `scheduler.main → customs_monthly → candidate_models.run → two_stage.monthly`입니다. `.env`에 다음과 같이 설정합니다. 환경변수에 같은 키가 있으면 `.env`보다 우선합니다.
+연결 경로는 `scheduler.main → customs_monthly → candidate_models.run → two_stage.monthly`입니다. 위 Linux 배포 준비와 서버 자원을 확인한 뒤 재학습을 활성화하려면 `.env`에 다음과 같이 설정합니다. 환경변수에 같은 키가 있으면 `.env`보다 우선합니다.
 
 ```dotenv
 CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run

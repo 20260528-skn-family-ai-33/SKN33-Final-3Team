@@ -12,6 +12,7 @@ tzdata>=2024.1           # Windows에서 Asia/Seoul 시간대 정보
 chromadb>=1.5,<2         # vector DB (HS 코드 임베딩, hs_code_embed)
 filelock>=3,<4           # UN 수집·초기 적재 상태 파일 동시 실행 방지
 scikit-learn>=1.5         # 수출 유망 시장 모델 (backend/app/ml, HistGradientBoosting·평가 지표·joblib)
+# Linux OpenMP 런타임 설치: backend/app/ml/ML_USAGE.md의 Linux 배포 준비 참고
 lightgbm>=4,<5           # 최종 모델 A(2단계 LightGBM)와 수출입 월별 작업의 ML 재학습 단계
 jinja2>=3.1,<4           # 정기 리포트 HTML 템플릿 (services/report_templates.py)
 
