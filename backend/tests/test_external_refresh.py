@@ -133,6 +133,23 @@ class ExternalRefreshTest(unittest.TestCase):
         # WDI 2026은 값이 없어 날짜를 미리 붙이지 않는다
         self.assertEqual(dates.evidence[0], "BACI V202601 릴리스 노트, 2026-01-22")
 
+    def test_revised_past_year_is_recorded_without_moving_its_date(self):
+        self.write_availability()
+        job.record_availability(date(2027, 2, 1))  # 첫 기록: 연도별 해시만 남긴다
+        snapshot = json.loads((self.tmp / "availability_snapshot.json").read_text("utf-8"))
+        self.assertEqual(snapshot["revisions"], [])
+        wdi = self.tmp / "wdi" / "wdi_2022_2026.csv"
+        wdi.write_text("year,country_code,gdp_usd\n2025,VN,1.5\n2026,VN,\n", "utf-8")  # 2025년 값 수정 발표
+        with self.assertLogs(job.log, "WARNING") as logs:
+            job.record_availability(date(2027, 3, 1))
+        self.assertTrue(any("과거 연도 값이 바뀜" in line for line in logs.output))
+        snapshot = json.loads((self.tmp / "availability_snapshot.json").read_text("utf-8"))
+        self.assertEqual([(r["source"], r["year"], r["detected_on"]) for r in snapshot["revisions"]],
+                         [("WDI", 2025, "2027-03-01")])  # BACI·Comtrade는 그대로라 기록하지 않는다
+        dates = pd.read_csv(self.tmp / "availability.csv", dtype=str, keep_default_na=False).set_index(["source", "year"])
+        self.assertEqual(dates.loc[("WDI", "2025"), "available_from"], "2027-02-01")  # 날짜는 옮기지 않는다
+        pp.check_versions(self.tmp)
+
     def test_empty_wdi_year_uses_published_prior_year_until_values_arrive(self):
         (self.tmp / "wdi").mkdir()
         path = self.tmp / "wdi/wdi_2025_2026.csv"

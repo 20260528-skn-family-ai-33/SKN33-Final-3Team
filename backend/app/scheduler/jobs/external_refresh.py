@@ -17,10 +17,12 @@
 진행 로그는 data/external/logs/external_refresh_<시각>.log, 다운로드·수집 실패는 download_failures.log에 따로 쌓습니다.
 """
 import argparse
+import hashlib
 import json
 import logging
 import shutil
 from datetime import date, datetime
+from pathlib import PureWindowsPath
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -146,12 +148,21 @@ def drop_covered_comtrade(baci_last):
 AVAILABILITY_DATASET = {"BACI": "market", "COMTRADE": "market", "WDI": "wdi"}
 
 
-def years_with_values(path, source):
-    """파일에 값이 있는 연도. WDI는 지표가 하나라도 있는 연도만 (발표 전 연도는 빈 행으로 남는다)."""
-    frame = pp.read_csv(path)
-    if source == "WDI":
-        frame = frame[frame.drop(columns=["year", "country_code"], errors="ignore").notna().any(axis=1)]
-    return sorted(int(y) for y in frame.year.dropna().unique())
+def year_digests(path, source, chunksize=500_000):
+    """{연도: 그 연도 행의 SHA-256}. 값이 있는 연도만. WDI는 지표가 하나라도 있는 행만 (발표 전 연도는 빈 행으로 남는다).
+
+    BACI 집계본은 수백만 행이라 나눠 읽는다. 해시는 파일 안 행 순서를 따르며, 수집기가 같은 정렬로 쓰므로
+    값이 같으면 같다. 과거 연도 값이 바뀌었는지(수정 발표) 판별하는 데 쓴다.
+    """
+    digests = {}
+    for chunk in pp.read_csv(path, dtype=str, chunksize=chunksize):  # 문자열로 읽어 나눠 읽는 경계와 무관한 해시
+        if source == "WDI":
+            chunk = chunk[chunk.drop(columns=["year", "country_code"], errors="ignore").notna().any(axis=1)]
+        chunk = chunk[chunk.year.notna()]
+        for year, rows in chunk.groupby(chunk.year.astype(int), sort=True):
+            digest = digests.setdefault(int(year), hashlib.sha256())
+            digest.update(pd.util.hash_pandas_object(rows, index=False).to_numpy().tobytes())
+    return {year: digest.hexdigest() for year, digest in sorted(digests.items())}
 
 
 def record_availability(today):
@@ -162,6 +173,10 @@ def record_availability(today):
     무관하므로 기존 날짜는 그대로 두고, 처음 값이 생긴 연도만 수집일(오늘)로 추가한다. 빈 연도에 미리 날짜를 붙이면
     나중에 들어온 값이 그 이른 날짜로 쓰이므로 값이 있는 연도만 추가한다.
     다른 정책은 파일 판마다 날짜를 다시 정해야 해서 손대지 않고 경고만 남긴다.
+
+    이미 날짜가 있는 과거 연도의 값이 바뀌면(World Bank 등의 수정 발표) 그 값은 기존 최초 공개일부터 쓰인 것처럼
+    학습되므로 경고하고 snapshot의 revisions에 (출처, 연도, 확인일)을 남긴다. 날짜는 바꾸지 않는다: 매달 수정되는
+    WDI 과거 연도를 모두 늦추면 학습 구간의 외부 피처가 전부 빠진다. 해석·재검증은 revisions로 한다.
     """
     csv_path, snapshot_path = ec.OUT_DIR / "availability.csv", ec.OUT_DIR / "availability_snapshot.json"
     if not csv_path.exists() or not snapshot_path.exists():
@@ -172,22 +187,32 @@ def record_availability(today):
         return
     dates = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
     known = set(zip(dates.source, dates.year))
-    added, files = [], []
+    previous = {PureWindowsPath(f["path"]).as_posix(): f.get("year_sha256") or {} for f in snapshot.get("files", [])}
+    added, files, revised = [], [], []
     for source, paths in pp.external_files(ec.OUT_DIR).items():
         for path in paths:
-            years = years_with_values(path, source)
+            name = "data/external/" + path.relative_to(ec.OUT_DIR).as_posix()
+            digests = year_digests(path, source)
+            years = list(digests)
+            old = previous.get(name, {})
+            revised += [{"source": source, "year": year, "path": name, "detected_on": today.isoformat()}
+                        for year in years if str(year) in old and old[str(year)] != digests[year]]
             for year in years:
                 if (source, str(year)) not in known:
                     known.add((source, str(year)))
                     added.append({"dataset": AVAILABILITY_DATASET[source], "source": source, "year": str(year),
                                   "available_from": today.isoformat(),
                                   "evidence": f"external_refresh가 {today}에 처음 수집 (최초 공개일 근거로 바꿀 수 있음)"})
-            files.append({"path": "data/external/" + path.relative_to(ec.OUT_DIR).as_posix(), "sha256": sha256(path),
-                          "bytes": path.stat().st_size, "years": years})
+            files.append({"path": name, "sha256": sha256(path), "bytes": path.stat().st_size, "years": years,
+                          "year_sha256": {str(year): value for year, value in digests.items()}})
     if added:
         ec.save_csv(pd.concat([dates, pd.DataFrame(added)], ignore_index=True), csv_path)
         log.warning(f"AVAILABILITY 새 연도를 수집일 {today}로 추가: {[(r['source'], r['year']) for r in added]}")
-    write_json(snapshot_path, {**snapshot, "files": files, "refreshed_at": datetime.now(KST).isoformat()})
+    if revised:
+        log.warning(f"AVAILABILITY 과거 연도 값이 바뀜 (기존 공개일 유지, 수정값이 이르게 쓰일 수 있음): "
+                    f"{[(r['source'], r['year']) for r in revised]}")
+    write_json(snapshot_path, {**snapshot, "files": files, "revisions": [*snapshot.get("revisions", []), *revised],
+                               "refreshed_at": datetime.now(KST).isoformat()})
     log.info(f"AVAILABILITY 파일 해시 {len(files)}개 다시 기록")
 
 
