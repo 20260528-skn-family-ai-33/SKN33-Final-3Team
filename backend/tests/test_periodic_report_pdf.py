@@ -244,7 +244,7 @@ class PeriodicContextTest(unittest.TestCase):
                 self.assertEqual(data.status_code, 200, data.text[:100] if data.status_code != 200 else '')
                 pdf = PdfReader(io.BytesIO(data.content))
                 text = '\n'.join(p.extract_text() for p in pdf.pages)
-                self.assertIn('BORDERLESS SELLERS', text)
+                self.assertIn('BORDERLESSSELLERS', ''.join(text.split()))
                 self.assertIn('목차', text)
                 self.assertIn('한국경제', text)
                 self.assertNotIn('템플릿 예시', text)

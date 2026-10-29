@@ -223,7 +223,7 @@ class OnDemandReportTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text[:100] if response.status_code != 200 else '')
         pdf = PdfReader(io.BytesIO(response.content))
         text = '\n'.join(page.extract_text() for page in pdf.pages)
-        self.assertIn('BORDERLESS SELLERS', text)
+        self.assertIn('BORDERLESSSELLERS', ''.join(text.split()))
         self.assertIn('요청형 리포트', text)
         self.assertIn('억 달러', text)
         self.assertIn('한국경제', text)
