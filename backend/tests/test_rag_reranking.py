@@ -19,13 +19,14 @@ class Scorer(FakeGateway):
 
     def structured(self, instruction, payload, schema, context):
         self.calls += 1
+        assert set(schema['properties']['scores']['required']) == {str(a['candidate_id']) for a in payload['articles']}
         if self.expire:
             raise RagDeadlineExceeded('global_deadline_exceeded')
         assert all('차단 본문' not in str(a['chunks']) for a in payload['articles'])
-        return {'scores': [{'candidate_id': a['candidate_id'], 'score': 2,
+        return {'scores': {str(a['candidate_id']): {'score': 2,
                             'chunk_id': next(iter(a['chunks'])),
                             'quote': '없는 발췌' if self.invalid else next(iter(a['chunks'].values()))}
-                           for a in payload['articles']]}
+                           for a in payload['articles']}}
 
 
 @pytest.mark.parametrize('mode', ['pool', 'rerank', 'failure', 'deadline', 'local'])
@@ -66,16 +67,16 @@ def test_partial_direct_evidence_moves_above_background():
 
     class Gateway:
         def structured(self, instruction, payload, schema, context):
-            return {'scores': [{'candidate_id': i, 'score': 2 if i == 2 else 1,
+            return {'scores': {str(i): {'score': 2 if i == 2 else 1,
                                 'chunk_id': str(i + 1), 'quote': f'기사 {i + 1}의 독립 근거'}
-                               for i in range(3)]}
+                               for i in range(3)}}
 
     ranked = rerank_candidates(RagRequest.model_validate(request_payload('chat')),
                               candidates, Gateway(), ExecutionContext(time.monotonic() + 30))
     assert [c.article.external_id for c in ranked] == ['3', '1', '2']
 
 
-@pytest.mark.parametrize('bad', ['duplicate_id', 'foreign_quote', 'boolean_score'])
+@pytest.mark.parametrize('bad', ['missing_id', 'extra_id', 'foreign_quote', 'boolean_score'])
 def test_invalid_model_judgment_is_retried_once_then_rejected(bad):
     candidates = [Candidate(document(i), i / 10, 'v1', {str(i): f'기사 {i}의 독립 근거'})
                   for i in range(1, 3)]
@@ -85,14 +86,16 @@ def test_invalid_model_judgment_is_retried_once_then_rejected(bad):
 
         def structured(self, instruction, payload, schema, context):
             self.calls += 1
-            rows = [{'candidate_id': i, 'score': 2, 'chunk_id': str(i + 1),
-                     'quote': f'기사 {i + 1}의 독립 근거'} for i in range(2)]
-            if bad == 'duplicate_id':
-                rows[1]['candidate_id'] = 0
+            rows = {str(i): {'score': 2, 'chunk_id': str(i + 1),
+                     'quote': f'기사 {i + 1}의 독립 근거'} for i in range(2)}
+            if bad == 'missing_id':
+                rows.pop('1')
+            elif bad == 'extra_id':
+                rows['2'] = rows['1']
             elif bad == 'foreign_quote':
-                rows[0]['quote'] = rows[1]['quote']
+                rows['0']['quote'] = rows['1']['quote']
             else:
-                rows[0]['score'] = True
+                rows['0']['score'] = True
             return {'scores': rows}
 
     gateway = Gateway()
