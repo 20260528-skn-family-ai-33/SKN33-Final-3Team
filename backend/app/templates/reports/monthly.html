@@ -112,13 +112,13 @@
 {% if has_values([item.trend.current, item.trend.previous]) %}
 {{ line_chart(item.trend.labels, [
      {'values': item.trend.current, 'color': colors.accent, 'area': true},
-     {'values': item.trend.previous, 'color': colors.previous, 'dashed': true}], height=150) }}
+     {'values': item.trend.previous, 'color': colors.previous, 'dashed': true}], height=140) }}
 {% else %}
 {{ m.pending() }}
 {% endif %}
 {% elif b.key == 'country' %}
 {# 국가가 많아 끝 값 라벨이 그래프 안에 다 들어가지 않으면 라벨 대신 범례에 마지막 값을 붙입니다 #}
-{% set show_ends = end_labels_fit(item.country_trend | length, 130) %}
+{% set show_ends = end_labels_fit(item.country_trend | length, 115) %}
 {# 범례 값은 마지막 기간(labels[-1]) 기준. 그 기간이 null인 국가는 값이 있는 마지막 기간을 괄호로 표시 #}
 <h3>관심 국가 수출 추이<small>{{ item.trend.range_label }} · 백만 달러{{ '' if show_ends else ' · 범례 숫자는 ' ~ full_period_label(item.trend.labels, item.trend.labels | length - 1) ~ ' 값 (괄호는 값이 있는 마지막 기간)' }}</small></h3>
 {% set lines = [] %}{% set keys = [] %}
@@ -128,7 +128,7 @@
 {% endfor %}
 {% if lines and has_values(lines | map(attribute='values')) %}
 {{ m.legend(keys) }}
-{{ line_chart(item.trend.labels, lines, height=130, zero=true) }}
+{{ line_chart(item.trend.labels, lines, height=115, zero=true) }}
 {% elif lines %}
 {{ m.pending() }}
 {% else %}

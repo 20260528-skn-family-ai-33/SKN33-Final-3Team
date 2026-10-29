@@ -111,7 +111,7 @@
 <h3>{{ item.label }}<small>HS {{ item.hs_code }} · 백만 달러</small></h3>
 <div class="grid2">
   <div><div class="small">최근 {{ item.quarters.labels | length }}개 분기 합계</div>
-    {% if has_values([item.quarters['values']]) %}{{ bar_chart(item.quarters.labels, item.quarters['values'], bar_colors, height=190, show=[item.quarters.current_from - 1, item.quarters.labels | length - 1]) }}{% else %}{{ m.pending() }}{% endif %}</div>
+    {% if has_values([item.quarters['values']]) %}{{ bar_chart(item.quarters.labels, item.quarters['values'], bar_colors, height=235, ticks=7, show=[item.quarters.current_from - 1, item.quarters.labels | length - 1]) }}{% else %}{{ m.pending() }}{% endif %}</div>
   <div><div class="small">{{ q }} 월별 3개월 추이 ({{ conditions.year }} vs {{ conditions.prev_year }})</div>
     <table>
       <tr><th>월</th><th class="r">{{ conditions.year }}</th><th class="r">{{ conditions.prev_year }}</th><th class="r">전년 동월</th></tr>
@@ -133,7 +133,7 @@
 {% set source = item.country_quarters if kind == 'q' else item.country_months.series %}
 {% set labels = item.quarters.labels if kind == 'q' else item.country_months.labels %}
 {# 국가가 많아 끝 값 라벨이 그래프 안에 다 들어가지 않으면 라벨 대신 범례에 마지막 값을 붙입니다 #}
-{% set show_ends = end_labels_fit(source | length, 250) %}
+{% set show_ends = end_labels_fit(source | length, 235) %}
 {# 범례 값은 마지막 기간(labels[-1]) 기준. 그 기간이 null인 국가는 값이 있는 마지막 기간을 괄호로 표시 #}
 <h3>{{ item.label }}<small>단위 백만 달러{{ '' if show_ends else ' · 범례 숫자는 ' ~ full_period_label(labels, labels | length - 1) ~ ' 값 (괄호는 값이 있는 마지막 기간)' }}</small></h3>
 {% if show_ends %}
@@ -145,7 +145,7 @@
 {% endif %}
 {% set lines = [] %}
 {% for s in source %}{% set _ = lines.append({'values': s['values'], 'color': color_of[s.country_code]}) %}{% endfor %}
-{% if lines and has_values(lines | map(attribute='values')) %}{{ line_chart(labels, lines, height=250, zero=true) }}
+{% if lines and has_values(lines | map(attribute='values')) %}{{ line_chart(labels, lines, height=235, zero=true) }}
 {% elif lines %}{{ m.pending() }}{% else %}<div class="empty">관심 국가가 없습니다.</div>{% endif %}
 {% endfor %}
 <p class="small">{{ report.period_label }} 값은 해당 국가의 {{ conditions.months_label }} 수출액 합계와 같습니다.</p>
@@ -160,7 +160,7 @@
 <div class="grid2">
 {% for item in chunk %}
   <div><h3>{{ item.label }}<small>HS {{ item.hs_code }}</small></h3>
-  <table>
+  <table class="compact">
     <tr><th>#</th><th>국가</th><th class="r">{{ q }}</th><th class="r">비중</th><th class="r">전년 동분기</th></tr>
     {% for r in item.top_countries[:10] %}<tr><td>{{ r.rank }}</td><td>{{ m.country(r) }}</td><td class="r">{{ r.amount_usd | musd }}</td><td class="r">{{ r.share_pct | pct }}</td><td class="r">{{ r.yoy_pct | change(new=r.get('is_new_yoy', false)) }}</td></tr>
     {% else %}<tr><td colspan="5" class="small">데이터 준비 중</td></tr>{% endfor %}
@@ -175,7 +175,7 @@
 {% for item in chunk %}
   {% set rows = [] %}
   {% for r in item.top5_compare %}{% set _ = rows.append({'label': r.name, 'values': [r.current, r.previous]}) %}{% endfor %}
-  <div>{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=60, width=320, row_height=30, divisor=1000000, digits=1) }}{% else %}{{ m.pending() }}{% endif %}</div>
+  <div>{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=70, width=320, row_height=30, divisor=1000000, digits='auto') }}{% else %}{{ m.pending() }}{% endif %}</div>
 {% endfor %}
 </div>
 {% endcall %}

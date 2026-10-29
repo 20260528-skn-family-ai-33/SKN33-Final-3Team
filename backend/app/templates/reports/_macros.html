@@ -10,7 +10,7 @@
     <div>{{ report.kind_label }} · {{ report.report_id }}</div></div>
   {% endif %}
   {{ caller() }}
-  <div class="ftr"><div>{{ report.footer_label }}{% if report.is_sample %}<span class="sample-mark"> · 수치·기사는 템플릿 예시</span>{% endif %}</div>
+  <div class="ftr"><div>{{ report.footer_label }}{% if report.is_sample and not cover %}<span class="sample-mark"> · 수치·기사는 템플릿 예시</span>{% endif %}</div>
     <div class="no">{{ n }} / {{ total }}</div></div>
 </section>
 {% endmacro %}

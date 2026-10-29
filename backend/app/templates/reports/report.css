@@ -1,4 +1,5 @@
-/* 정기 리포트 공통 디자인 (리포트_양식_최신판.pdf 기준). A4 한 쪽 = .page 하나. */
+/* 정기 리포트 공통 디자인 (리포트_양식_최신판.pdf 기준). A4 한 쪽 = .page 하나.
+   글자 크기·여백은 양식 PDF에서 잰 값입니다. 바꾸면 report_templates.py의 쪽 나눔 높이 상수(LINE·ROW 등)도 함께 맞춰야 합니다. */
 @page { size: A4; margin: 0; }
 :root {
   --accent: #006849; --accent-soft: #E7F1EC; --ink: #1E2126; --sub: #6B7079; --faint: #9AA0A8;
@@ -9,39 +10,40 @@ html, body { margin: 0; padding: 0; background: #E9E7E2; }
 body { font-family: "Noto Sans KR", "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif;
        color: var(--ink); font-size: 9pt; line-height: 1.55; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
-.page { position: relative; width: 210mm; height: 297mm; margin: 8mm auto; padding: 21mm 16mm 20mm; background: #fff;
+.page { position: relative; width: 210mm; height: 297mm; margin: 8mm auto; padding: 25mm 15mm 18mm; background: #fff;
         overflow: hidden; page-break-after: always; break-after: page; box-shadow: 0 1px 6px rgba(0,0,0,.12); }
 .page:last-child { page-break-after: auto; break-after: auto; }
 @media print { html, body { background: #fff; } .page { margin: 0; box-shadow: none; } }
 
 /* 머리말·꼬리말 */
-.hdr { position: absolute; top: 9mm; left: 16mm; right: 16mm; display: flex; justify-content: space-between; align-items: baseline;
-       padding-bottom: 2.5mm; border-bottom: 1px solid var(--line); font-size: 7pt; color: var(--sub); }
-.brand { font-weight: 800; letter-spacing: .28em; color: var(--ink); margin-right: 6px; font-size: 7pt; }
-.ftr { position: absolute; bottom: 9mm; left: 16mm; right: 16mm; display: flex; justify-content: space-between; align-items: baseline;
-       padding-top: 2.5mm; border-top: 1px solid var(--line); font-size: 7pt; color: var(--faint); }
-.ftr .no { color: var(--ink); font-weight: 700; font-size: 8pt; }
+.hdr { position: absolute; top: 13mm; left: 15mm; right: 15mm; display: flex; justify-content: space-between; align-items: baseline;
+       padding-bottom: 2.5mm; border-bottom: 1px solid var(--line); font-size: 7.5pt; color: var(--sub); }
+.brand { font-weight: 800; letter-spacing: .28em; color: var(--ink); margin-right: 6px; font-size: 7.5pt; }
+.ftr { position: absolute; bottom: 7mm; left: 15mm; right: 15mm; display: flex; justify-content: space-between; align-items: baseline;
+       padding-top: 2.5mm; border-top: 1px solid var(--line); font-size: 7.1pt; color: var(--faint); }
+.ftr .no { color: var(--ink); font-weight: 700; font-size: 9pt; }
 
 /* 표지 */
 .cover { padding: 0; }
 .cover::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4mm; background: var(--accent); }
-.cover .top { position: absolute; top: 14mm; left: 18mm; font-size: 7pt; color: var(--sub); }
-.cover .main { position: absolute; top: 92mm; left: 18mm; right: 18mm; }
-.cover .eyebrow { color: var(--accent); font-weight: 700; font-size: 8.5pt; margin-bottom: 6mm; }
-.cover h1 { font-size: 27pt; line-height: 1.32; margin: 0 0 4mm; letter-spacing: -.02em; font-weight: 800; }
-.cover .lead { color: var(--sub); font-size: 10pt; }
+.cover .top { position: absolute; top: 17mm; left: 20.5mm; font-size: 8.2pt; color: var(--sub); }
+.cover .top .brand { font-size: 8.2pt; }
+.cover .main { position: absolute; top: 96mm; left: 20.5mm; right: 20.5mm; }
+.cover .eyebrow { color: var(--accent); font-weight: 700; font-size: 9.4pt; margin-bottom: 6mm; }
+.cover h1 { font-size: 28.5pt; line-height: 1.32; margin: 0 0 4mm; letter-spacing: -.02em; font-weight: 800; }
+.cover .lead { color: var(--sub); font-size: 12pt; }
 .cover .rule { width: 14mm; height: 2px; background: var(--rule); margin-top: 7mm; }
-.cover .ftr { left: 18mm; }
+.cover .ftr { left: 20.5mm; }
 
 /* 섹션 제목 */
-.sec-title { margin: 0 0 1mm; font-size: 16pt; font-weight: 800; letter-spacing: -.02em; }
-.sec-title .n { color: var(--accent); font-size: 12pt; margin-right: 6px; }
+.sec-title { margin: 0 0 1mm; font-size: 15.8pt; font-weight: 800; letter-spacing: -.02em; }
+.sec-title .n { color: var(--accent); font-size: 11.2pt; margin-right: 6px; }
 /* 소제목은 최대 두 줄 (긴 HS 품목명이 고정 높이 쪽을 밀어내지 않게, 넘치면 …) */
-.sec-sub { color: var(--sub); font-size: 7.6pt; margin: 0 0 4mm;
+.sec-sub { color: var(--sub); font-size: 8.6pt; margin: 0 0 4mm;
            display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .sec-rule { border-bottom: 1.5px solid var(--rule); margin-bottom: 4mm; }
-h3 { font-size: 10pt; margin: 5.5mm 0 2mm; font-weight: 800; }
-h3 small { font-weight: 400; color: var(--sub); font-size: 7.4pt; margin-left: 6px; }
+h3 { font-size: 10.5pt; margin: 5.5mm 0 2mm; font-weight: 800; }
+h3 small { font-weight: 400; color: var(--sub); font-size: 8.2pt; margin-left: 6px; }
 
 /* KPI 카드 */
 .kpis { display: grid; gap: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: 4mm; }
@@ -53,53 +55,58 @@ h3 small { font-weight: 400; color: var(--sub); font-size: 7.4pt; margin-left: 6
 .kpi { padding: 3.5mm 4mm; border-right: 1px solid var(--line); }
 .kpis.c3 .kpi:last-child { border-right: 0; }
 .kpis.c4 .kpi { border: 1px solid var(--line); border-radius: 2px; }
-.kpi .l { color: var(--sub); font-size: 7.6pt; }
-.kpi .v { font-size: 19pt; font-weight: 800; letter-spacing: -.02em; line-height: 1.35; }
-.kpi .v .u { font-size: 10pt; font-weight: 700; margin-left: 1px; }
-.kpi .s { color: var(--sub); font-size: 7.4pt; }
+.kpi .l { color: var(--sub); font-size: 8.6pt; }
+.kpi .v { font-size: 21.2pt; font-weight: 800; letter-spacing: -.02em; line-height: 1.35; }
+.kpi .v .u { font-weight: 800; margin-left: 1px; }
+.kpi .s { color: var(--sub); font-size: 8.6pt; }
+.kpis.c4 .kpi .l, .kpis.c4 .kpi .s { font-size: 8.2pt; }
+.kpis.c4 .kpi .v { font-size: 18.8pt; }
+.kpis.c4 .kpi .v .u { font-size: 9pt; font-weight: 700; }
 
 /* 요약 문장 */
-.note { background: var(--note); border-left: 3px solid var(--accent); padding: 3.5mm 5mm; margin: 2mm 0 2mm; }
+.note { background: var(--note); border-left: 3px solid var(--accent); padding: 3.5mm 5mm; margin: 2mm 0 2mm; font-size: 9.8pt; }
 .note ol { margin: 0; padding-left: 4.5mm; }
 .note li { margin: .6mm 0; }
 .note strong, .em { color: var(--accent); font-weight: 800; }
 
 /* 표 */
-table { width: 100%; border-collapse: collapse; font-size: 7.8pt; }
-th { background: var(--head); color: var(--sub); font-weight: 500; text-align: left; padding: 2mm 2.4mm; border-top: 1.5px solid var(--rule); border-bottom: 1px solid var(--line); }
-td { padding: 2mm 2.4mm; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table { width: 100%; border-collapse: collapse; font-size: 9pt; }
+th { background: var(--head); color: var(--sub); font-weight: 500; text-align: left; padding: 1.8mm 2.4mm; border-top: 1.5px solid var(--rule); border-bottom: 1px solid var(--line); font-size: 8.2pt; }
+td { padding: 1.8mm 2.4mm; border-bottom: 1px solid var(--line); vertical-align: middle; }
+table.compact { font-size: 7.9pt; }  /* 두 칸으로 나란히 놓는 좁은 표 (분기 주요 수출국) */
+table.compact th, table.compact td { padding: 1.8mm 1.6mm; }
 .r { text-align: right; } .c { text-align: center; }
 td.b, .b { font-weight: 700; }
-.small { font-size: 7pt; color: var(--sub); }
+.small { font-size: 7.9pt; color: var(--sub); }
 tr.total td { background: var(--head); font-weight: 700; border-bottom: 1.5px solid var(--rule); }
 tr.other td { color: var(--sub); }
-.info th { width: 25mm; background: var(--head); border-top: 0; color: var(--sub); }
+.info th { width: 25mm; background: var(--head); border-top: 0; color: var(--sub); font-size: 9pt; }
 .info tr:first-child th, .info tr:first-child td { border-top: 1.5px solid var(--rule); }
 .chg { font-weight: 700; white-space: nowrap; }
 .chg.up { color: var(--up); } .chg.down { color: var(--down); } .chg.flat, .chg.none { color: var(--faint); }
 .chg.new { color: var(--accent); font-weight: 700; }
-.tag { display: inline-block; white-space: nowrap; font-size: 6.4pt; padding: 0 1.4mm; margin-left: 1.5mm; border-radius: 2px; background: var(--accent-soft); color: var(--accent); font-weight: 700; vertical-align: 1px; }
+.tag { display: inline-block; white-space: nowrap; font-size: 7.5pt; padding: 0 1.4mm; margin-left: 1.5mm; border-radius: 2px; background: var(--accent-soft); color: var(--accent); font-weight: 700; vertical-align: 1px; line-height: 1.4; }
 .tag.warn { background: #FBE9DD; color: #B25418; }
 .tag.gray { background: #ECEAE6; color: #6B6660; }
 .diff { color: var(--faint); }
 
 /* 목차 */
 .toc { margin: 4mm 0 9mm; }
-.toc .row { display: flex; align-items: baseline; padding: 3mm 0; border-bottom: 1px solid var(--line); font-size: 10pt; font-weight: 700; }
-.toc .row .n { width: 13mm; color: var(--accent); }
+.toc .row { display: flex; align-items: baseline; padding: 3mm 0; border-bottom: 1px solid var(--line); font-size: 11pt; font-weight: 700; }
+.toc .row .n { width: 13mm; color: var(--accent); font-size: 10.5pt; }
 .toc .row .t { flex: 1; }
-.notes { color: var(--sub); font-size: 7pt; margin-top: 2mm; }
+.notes { color: var(--sub); font-size: 7.8pt; margin-top: 2mm; }
 .notes p { margin: .4mm 0; }
 
-/* 그래프 */
+/* 그래프 (SVG 글자 크기는 viewBox 단위 — 본문 폭 640 단위 ≈ 180mm, 양식의 7.5~8.6pt에 맞춤) */
 .chart { display: block; overflow: visible; }
-.chart .axis { font-size: 8.5px; fill: var(--faint); }
-.chart .end, .chart .val { font-size: 9px; font-weight: 700; }
+.chart .axis { font-size: 9.5px; fill: var(--faint); }
+.chart .end, .chart .val { font-size: 10.5px; font-weight: 700; }
 .chart .val { fill: var(--ink); }
-.chart .lbl { font-size: 10px; fill: var(--ink); }
-.chart .tail { font-size: 10px; font-weight: 800; fill: var(--ink); }
-.chart .badge { font-size: 8px; font-weight: 700; fill: #B25418; }
-.legend { display: flex; gap: 4mm; font-size: 7pt; color: var(--sub); margin: 1mm 0 1mm; flex-wrap: wrap; }
+.chart .lbl { font-size: 11px; fill: var(--ink); }
+.chart .tail { font-size: 11.5px; font-weight: 800; fill: var(--ink); }
+.chart .badge { font-size: 9.5px; font-weight: 700; fill: #B25418; }
+.legend { display: flex; gap: 4mm; font-size: 8.2pt; color: var(--sub); margin: 1mm 0 1mm; flex-wrap: wrap; }
 .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 1px; margin-right: 4px; vertical-align: -1px; }
 .legend i.line { height: 2px; width: 12px; vertical-align: 2px; }
 .legend i.dash { height: 0; width: 12px; border-top: 2px dashed var(--faint); background: none; vertical-align: 2px; }
@@ -107,16 +114,16 @@ tr.other td { color: var(--sub); }
 .grid-6-4 { display: grid; grid-template-columns: 1.15fr 1fr; gap: 6mm; align-items: start; }
 
 /* 기사 카드 */
-.policy { color: var(--accent); font-weight: 700; font-size: 7.6pt; margin: -2mm 0 2mm; }
+.policy { color: var(--accent); font-weight: 700; font-size: 8.5pt; margin: -2mm 0 2mm; }
 .policy span { color: var(--sub); font-weight: 400; }
-.art { padding: 2.6mm 0; border-bottom: 1px solid var(--line); }
-.art .t { font-size: 9.6pt; font-weight: 800; }
-.art .t .no { color: var(--accent); margin-right: 2mm; font-weight: 700; }
-.art .m { color: var(--sub); font-size: 7pt; margin: .5mm 0; }
-.art .s { font-size: 8.2pt; }
-.art .lk { font-size: 7.2pt; margin-top: .6mm; }
+.art { padding: 2.2mm 0; border-bottom: 1px solid var(--line); line-height: 1.4; }  /* 양식처럼 카드 안 줄 간격을 좁게 */
+.art .t { font-size: 10.5pt; font-weight: 800; }
+.art .t .no { color: var(--accent); margin-right: 2mm; font-weight: 700; font-size: 7.5pt; vertical-align: 1px; }
+.art .m { color: var(--sub); font-size: 7.9pt; margin: .5mm 0; }
+.art .s { font-size: 9pt; }
+.art .lk { font-size: 7.9pt; margin-top: .6mm; }
 .art .lk a { color: var(--accent); font-weight: 700; text-decoration: none; }
-.art .lk .x { color: var(--faint); margin-left: 2mm; }
+.art .lk .x { color: var(--faint); margin-left: 2mm; font-size: 7.5pt; }
 .empty { color: var(--sub); padding: 4mm; background: var(--note); text-align: center; }
-.disclaimer { color: var(--sub); font-size: 7pt; margin-top: 3mm; }
+.disclaimer { color: var(--sub); font-size: 7.8pt; margin-top: 3mm; }
 .sample-mark { color: var(--faint); }

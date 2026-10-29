@@ -114,8 +114,9 @@ class SampleRenderTest(unittest.TestCase):
     def test_long_country_names_make_weekly_table_rows_taller(self):
         context = rt.sample_context('weekly')
         row = context['country_counts'][0]
-        context['country_counts'] = [dict(row, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(20)]
-        first_rows = lambda: rt.layout('RPT_WEEKLY', context)['articles'][0][0]['end']  # 첫 쪽에 들어간 표 행 수
+        context['country_counts'] = [dict(row, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(40)]
+        # 국가별 기사 수 표(grid)가 처음 놓인 쪽에 들어간 행 수 (양식처럼 기사 목록 다음에 옴)
+        first_rows = lambda: next(b['end'] for p in rt.layout('RPT_WEEKLY', context)['articles'] for b in p if b['key'] == 'grid')
         short = first_rows()
         for r in context['country_counts']:
             r['name'] = '세인트빈센트그레나딘연방공화국' + r['country_code']  # 국가 칸에서 줄바꿈되는 이름
