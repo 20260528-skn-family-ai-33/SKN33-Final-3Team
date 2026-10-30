@@ -7,7 +7,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | API | 구분 | 바뀌는 점 | 근거 |
 |---|---|---|---|
 | API-36 질문 보내기 | 동작 변경 | 되묻기 대기 중에 보낸 질문은 새 작업이 아니라 그 작업의 되묻기 답(직접 입력)으로 처리 | D-12 |
-| API-36 | 오류 추가 | 503 `CHAT_UNAVAILABLE` (Redis 장애) | D-06 |
+| API-36 | 오류 | Redis 장애는 기존 503 `REDIS_UNAVAILABLE`(인증과 같은 코드) | D-06 |
 | API-37 작업 조회 | 응답 추가 | `progress`, `round_started_at`, `clarification.allow_text`, `clarification.hint`, 새 되묻기 종류 | D-12, D-25, D-56 |
 | API-37 | 상태 추가 | `status`에 `EXPIRED`, `CANCELLED`, `WAITING_REPORT` | D-04, D-12 |
 | API-37 | answer 추가 | `answer.tasks[]`(복합 질문), `charts[]` 형식 확정 | D-59, D-60 |
@@ -28,8 +28,9 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 |---|---|
 | 진행 중인 작업 없음 | 202, 새 작업 (기존과 같음) |
 | 작업 실행 중(QUEUED·RUNNING·WAITING_REPORT) | 409 `JOB_IN_PROGRESS` (기존). 프론트는 생성 중에 입력창·전송 버튼을 비활성화 |
-| 되묻기 대기 중(NEEDS_INPUT) | 202, **기존 작업**을 반환. 보낸 글은 API-38 `text`와 같이 처리하고, 작업 상태는 QUEUED |
-| Redis 연결 불가 | 503 `CHAT_UNAVAILABLE`, `retryable: true`, 안내 "잠시 후 다시 시도해 주세요." |
+| 되묻기 대기 중(NEEDS_INPUT), 30분 안 | 202, **기존 작업**을 반환. 보낸 글은 API-38 `text`와 같이 처리하고, 작업 상태는 QUEUED. 같은 `client_message_id`로 다시 보내면 같은 작업을 돌려줌. 글은 대화 기록(USER 메시지)에 남음 |
+| Redis 연결 불가 | 503 `REDIS_UNAVAILABLE`, `retryable: true`(기존 인증 저장소 오류와 같음). 프론트 안내 "잠시 후 다시 시도해 주세요." |
+| 되묻기 대기 중이지만 30분이 지남 | 그 작업을 `EXPIRED`로 바꾸고 이 글을 **새 질문**으로 접수한다(202, 새 작업) |
 
 ## API-37 `GET /chat/jobs/{job_id}`
 
@@ -40,7 +41,8 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `status` | string | 기존 값 + `EXPIRED`(되묻기 30분 경과) + `CANCELLED`(사용자 중단) + `WAITING_REPORT`(리포트 완료 대기) |
 | `progress` | object \| null | 실행 중일 때 `{done, total, label}`. 완료 단계 수, 전체 단계 수, 현재 단계 문구(예: "데이터 조회 중"). 진행률 바에 사용 |
 | `round_started_at` | string(ISO 8601) \| null | 경과 초 기준 시각. 되묻기에 답하면 새 시각으로 바뀜. 프론트는 현재 시각 − 이 값으로 초를 표시 |
-| `clarification.kind` | string | 기존 `HS_ITEM`, `INTEREST_CONTEXT` + `COUNTRY`(비슷한 국가 확인), `INTEREST_SELECT`(관심사 골라 받기), `INTEREST_CHANGE`(관심사 변경 확인), `RANKING_GROUP`(국가/품목 순위 선택) |
+| `clarification.kind` | string | 기존 `HS_ITEM`, `INTEREST_CONTEXT` + `COUNTRY`(비슷한 국가 확인), `INTEREST_SELECT`(관심사 골라 받기), `INTEREST_CHANGE`(관심사 변경 확인), `RANKING_GROUP`(국가/품목 순위 선택), `MODEL_PERIOD`(최신 기준 예측 확인), `REPORT_CONFIRM`(리포트 조건·형식 확인), `SHARE_BASIS`(점유율 분모 선택). 뒤 세 개는 아래 보완 절 참고 |
+| `clarification.report_preview` | object \| null | `REPORT_CONFIRM`일 때만. `{preview_id, expires_at, conditions, adjustments, formats}` |
 | `clarification.interests` | object \| null | `INTEREST_SELECT`일 때만. `{hs_items: HsItem[], country_codes: string[]}`, 질문 시점 관심사(품목 최대 100개·국가 최대 250개). 프론트는 체크박스로 보여 주고 품목 5개·국가 20개까지 고르게 한다. 선택지(`choices`)에는 "전체 범위"만 있다 |
 | `clarification.allow_text` | boolean | 직접 입력 답을 받는지. 기본 true |
 | `clarification.hint` | string | 작은 글씨 안내. "다른 질문은 새 채팅을 열거나 이 질문을 중단하세요." |
@@ -55,7 +57,8 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 
 | 필드 | 형식 | 설명 |
 |---|---|---|
-| `tasks` | array | 복합 질문을 나눈 하위 질문. `[{task_id, intent, question, conditions, answer_status}]`. 단일 질문도 1개 |
+| `tasks` | array | 복합 질문을 나눈 하위 질문. `[{task_id, intent, question, conditions, answer_status, conclusion}]`. 단일 질문도 1개. `conclusion`은 그 Task의 결론 문장 목록 |
+| `chart_selectors` | array | 대상이 여러 개인 유망시장 결과의 대상 선택. `[{task_id, result_id, group_by, country_codes, hs_items}]`(아래 D-78~84 절) |
 | `intent`, `conditions` | (기존) | 첫 번째 하위 질문(주 의도)의 값. 기존 화면과 호환 |
 | `tables[].task_id`, `charts[].task_id` | string | 어느 하위 질문의 표·차트인지 |
 | `charts[]` | ChartSpec | 아래 형식 |
@@ -75,15 +78,16 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 
 | 필드 | 규칙 |
 |---|---|
-| `type` | `line`(추이), `bar`(순위), `grouped_bar`(두 시점 비교), `donut`(비중) |
+| `type` | `line`(추이), `bar`(순위·유망시장), `grouped_bar`(두 기간 비교: 길이가 같으면 합계, 다르면 월평균. 여러 대상이거나 길이가 다른 비교일 때), `donut`(비중). 서버가 결과를 보고 정한다 |
+| `granularity` | `MONTH`·`QUARTER`·`YEAR` 또는 null. 60개월을 넘는 추이는 분기·연도로 묶음 |
 | `title` | 40자에서 자름 |
 | `labels` | 1~60개 (x축 값, 또는 donut 조각 이름). 각 40자 이하. 품목명은 앞 20자 + "…" + 끝부분으로 40자에 맞추고, 줄인 이름이 겹치면 끝에 "(HS 코드)"를 붙여 구분함. 같은 코드가 판본만 달리 함께 있으면 "(8483 HS2017)"처럼 판본까지 붙임(설계 D-68). 그 밖은 40자에서 자름. 한 차트 안에서 라벨은 겹치지 않음 |
 | `full_labels` | `labels`와 같은 개수. 줄이기 전 전체 이름. 프론트는 마우스를 올렸을 때 보여 줌 |
-| `series` | 1~5개. 각 `values` 개수 = `labels` 개수. 값이 없으면 `null`(NaN·무한대는 보내지 않음). `name`은 40자 이하이고 한 차트 안에서 겹치지 않음. 품목별 시리즈(여러 품목 추이)의 `name`은 `labels`의 품목명과 같은 규칙으로 줄임 |
+| `series` | 1~5개. 각 `values` 개수 = `labels` 개수. 값이 없으면 `null`(NaN·무한대는 보내지 않음). `name`은 40자 이하이고 한 차트 안에서 겹치지 않음. 여러 대상 추이의 시리즈 `name`은 "국가 · 품목" 전체를 품목명과 같은 규칙으로 줄이고, 겹치는 이름에만 코드를 붙임(설계 D-89). 대상이 5개를 넘으면 금액 상위 5개만 그리고 `warnings`에 안내 |
 | `unit` | 20자 이하 |
 | `source` | 40자에서 자름 |
 | `donut` | 시리즈 1개 |
-| `grouped_bar` | 시리즈 2개 (비교 기간, 조회 기간) |
+| `grouped_bar` | 시리즈 2개 (비교 기간, 조회 기간). 기간 길이가 다르면 값은 월평균이고 시리즈 이름에 "월평균"을 붙임 |
 | `result_id` | 같은 값의 표 보기·엑셀 다운로드에 사용 |
 
 `bar`, `grouped_bar` 컴포넌트는 프론트에 아직 없어 추가가 필요합니다.
@@ -158,3 +162,19 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 - clarification.kind에 SHARE_BASIS를 추가한다. choice_ids 또는 text 중 하나로 답하며 조건별 2회 제한을 따른다. 선택지는 '한국 수출입의 상대국별 비중'과 '해외 수입시장에서 한국 제품의 점유율(지원 예정)'이다. 무관한 hs_item/interest_selection/report_confirmation은 거부한다.
 - 현재 지원하는 분모·수출입 방향·기간을 표와 답변에 명시한다. 해외시장 내 한국 점유율을 선택하면 해당 Task는 NO_DATA와 미지원 문구로 끝낸다.
 - chart와 chart_selector는 같은 result_id를 사용한다. 저장된 ML 조회 결과는 표·차트·다운로드에 재사용하며 만료 시 기존 410 RESULT_EXPIRED 응답을 따른다.
+
+
+## 2026-10-30 리뷰 후 확정 (D-90~94)
+
+- answer.tasks[]의 answer_status는 자체 tool과 선행 입력의 completeness를 반영한다. 일부 대상 누락·기사 근거 부족은 PARTIAL이며 경고 문구로 판정하지 않는다. 내부 completeness/limitations를 사용자 결과 상태와 warnings로 변환한다.
+- answer.articles[]에 evidence_sufficient(boolean)를 추가한다. false면 제목·발행일·원문 링크와 근거 부족 안내만 표시하고 summary는 비운다. 원인 설명·사실 주장의 인용 대상으로 쓰지 않는다. 기사 번호는 전체 카드 순서를 유지한다.
+- clarification.report_preview에 source_results([{task_id, step_id, result_id, conditions, completeness, limitations}])를 추가한다. 선행 분석의 조건·누락 사항을 확인 화면에 표시한다. 서버 내부 입력 사본은 노출하지 않는다.
+- 리포트 확인의 text는 생성·취소 승인이 아니다. '네/생성/취소'에는 버튼을 안내하며 기존 asked_at을 유지하고 확인 횟수를 추가 차감하지 않는다. 실제 승인·거절은 report_confirmation으로만 한다. 독립 리포트 조건 변경은 새 미리보기로 재확인하며, 선행 결과와 다른 조건은 새 분석을 안내한다.
+- 기존 reports.preview(result_id)는 조건만 복사한다. 후속 구현은 선행 결과를 서버 PREVIEW에 복사한 뒤 승인된 동일 사본을 리포트 작업으로 전달한다(D-90). 생성 중 원본 결과표가 만료되어도 승인된 사본으로 완성한다. 누락 섹션을 새 조회로 몰래 채우지 않는다.
+- 리포트 READY 후 해당 Task의 고정 완료 결론과 보기·다운로드 actions를 반환한다. 부분 입력이면 PARTIAL을 유지한다. 생성 전/실패 상태에는 완료 문구를 반환하지 않는다.
+- 이 절은 구현 계약이다. 실제 API·프론트·리포트 워커 변경은 후속 구현이며 현재 routes 동작은 그대로다.
+
+
+### D-95: 선행 결과 대상 선택
+- clarification.kind에 INPUT_SELECTION을 추가한다. 선택지와 직접 입력을 지원하며 API-38은 choice_ids 또는 text만 허용한다. hs_item/interest_selection/report_confirmation은 거부한다. 조건별 2회 제한이다.
+- 사용자가 명시한 개수·기준이면 자동으로 후속 분석한다. 모호한 개수·기준·그룹만 확인한다. applied_defaults/warnings에 실제 선택 기준과 대상 부족을 표시한다. 리포트의 REPORT_CONFIRM은 생략하지 않는다.

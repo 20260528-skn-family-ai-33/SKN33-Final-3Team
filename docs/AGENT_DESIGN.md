@@ -16,20 +16,20 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 ### 저장·세션
 | ID | 결정 |
 |---|---|
-| D-01 | **(임시)** Redis에는 대화방 컨텍스트(최근 검색 조건 + 최근 5건 요약), 세션 lock, LangGraph 체크포인트(실행 state)를 둔다. 로그인 세션은 따로 결정한다(현재 MySQL `api_auth_session` 유지). (Q-02) |
+| D-01 | **(임시)** Redis에는 대화방 컨텍스트(최근 검색 조건 + 최근 5건 요약), 세션 lock, LangGraph 체크포인트(실행 state)를 둔다. 로그인 세션·CSRF·요청 제한은 main에 이미 Redis로 구현돼 있다(`api/redis_store.py`의 `RedisState`, `security.py`). 채팅 키도 같은 Redis와 같은 접두사 `API_REDIS_PREFIX`(기본 `borderless:dev:`)를 쓴다: `{prefix}chat:session:{sid}:context`, `{prefix}chat:session:{sid}:active`. 체크포인터 키는 라이브러리가 정하므로 접두사가 붙지 않는다. (Q-02, 2026-10-30 현행 반영) |
 | D-02 | **(임시)** 컨텍스트는 Redis에만 둔다. MySQL `chat_session.context_json`에는 검색 조건만 저장한다. Redis 키가 사라지면 조건만 MySQL에서 복구하고 5건 요약은 비운 채 다시 쌓는다. (Q-03) |
 | D-03 | **(임시)** 컨텍스트 TTL은 7일, 대화방을 열 때 연장한다. (Q-01) |
 | D-04 | 되묻기 대기는 30분. 지나면 EXPIRED 처리하고 질문을 다시 받는다. |
 | D-05 | 실행 상태는 `state.py`의 `AgentState`를 따른다. |
-| D-06 | **(임시)** Redis 장애 시 채팅 접수를 막고 "잠시 후 다시 시도해 주세요"를 안내한다. (Q-50) |
-| D-07 | **(임시)** Redis는 EC2 Docker로 띄운다. 체크포인터가 RedisJSON·RediSearch를 쓰므로 Redis 8 이상 이미지를 쓴다. AOF를 켜고(`redis.conf`의 `appendonly yes`·`appendfsync everysec`, `/data` 볼륨) 배포할 때 Redis 컨테이너는 내리지 않는다. Redis 설정은 `redis.conf` 한 곳에만 두고 실행 명령에는 설정 파일 경로만 넘긴다. 설정 파일은 `deploy/redis/docker-compose.yml`과 `deploy/redis/redis.conf`이다: `redis:8.2`, 메모리 상한 512MB(`noeviction`, 가득 차면 쓰기가 실패해 채팅 접수가 막힘), 컨테이너 1280MB(AOF 재작성 fork가 copy-on-write로 데이터의 최대 약 2배를 쓰므로 512MB의 2.5배), `127.0.0.1:6379`만 열고, `restart: unless-stopped`. 비밀번호는 실행 명령에 넣지 않고(`docker inspect`·`ps`에 보임) git에 올리지 않는 `deploy/redis/redis-auth.conf`(`requirepass` 한 줄, uid 999만 읽기)를 compose secret으로 넘겨 `include`한다. 비밀번호는 영문·숫자로만 만든다(공백·따옴표·`#`는 설정을 깨뜨림). API·워커는 루트 `.env`의 `API_REDIS_URL`(`redis://:<비밀번호>@127.0.0.1:6379/0`)로 접속하며, 같은 비밀번호를 두 곳에 둔다. 컨테이너 1280MB가 같은 EC2의 API·워커와 함께 들어가는지는 C-23. (Q-49, C-03, C-16, E-08) |
-| D-08 | 채팅 질문 요청 제한은 두지 않는다. 기존 `api_rate_limit`은 로그인·HS 검색에만 적용된 현행을 유지한다. (Q-08, C-01) |
+| D-06 | **(임시)** Redis 장애 시 채팅 접수를 막고 "잠시 후 다시 시도해 주세요"를 안내한다. 인증이 Redis를 먼저 거치므로 응답은 기존 `RedisState`의 503 `REDIS_UNAVAILABLE`(retryable)로 통일한다. 채팅 전용 오류 코드는 만들지 않는다. (Q-50) |
+| D-07 | **(임시)** Redis는 EC2 Docker로 띄운다. 체크포인터가 RedisJSON·RediSearch를 쓰므로 Redis 8 이상 이미지를 쓴다. AOF를 켜고(`redis.conf`의 `appendonly yes`·`appendfsync everysec`, `/data` 볼륨) 배포할 때 Redis 컨테이너는 내리지 않는다. Redis 설정은 `redis.conf` 한 곳에만 두고 실행 명령에는 설정 파일 경로만 넘긴다. 설정 파일은 `deploy/redis/docker-compose.yml`과 `deploy/redis/redis.conf`이다: `redis:8.2`, 메모리 상한 512MB(`noeviction`, 가득 차면 쓰기가 실패해 채팅 접수와 로그인이 함께 막힘. 로그인 세션·요청 제한과 같은 Redis를 쓰기 때문이다), 컨테이너 1280MB(AOF 재작성 fork가 copy-on-write로 데이터의 최대 약 2배를 쓰므로 512MB의 2.5배), `127.0.0.1:6379`만 열고, `restart: unless-stopped`. 비밀번호는 실행 명령에 넣지 않고(`docker inspect`·`ps`에 보임) git에 올리지 않는 `deploy/redis/redis-auth.conf`(`requirepass` 한 줄, uid 999만 읽기)를 compose secret으로 넘겨 `include`한다. 비밀번호는 영문·숫자로만 만든다(공백·따옴표·`#`는 설정을 깨뜨림). API·워커는 루트 `.env`의 `API_REDIS_URL`(`redis://:<비밀번호>@127.0.0.1:6379/0`)로 접속하며, 같은 비밀번호를 두 곳에 둔다. 컨테이너 1280MB가 같은 EC2의 API·워커와 함께 들어가는지는 C-23. (Q-49, C-03, C-16, E-08) |
+| D-08 | 채팅 질문 요청 제한은 두지 않는다. 기존 요청 제한(Redis `RedisState.limit`)은 로그인·HS 검색에만 적용된 현행을 유지한다. (Q-08, C-01) |
 
 ### 하네스
 | ID | 결정 |
 |---|---|
 | D-09 | 에이전트는 LangGraph 그래프로 연결한다. **(임시)** 실행 state는 `langgraph-checkpoint-redis`의 `RedisSaver`로 저장한다. `thread_id`는 `job_id`, TTL은 `state.CHECKPOINT_TTL`(30분, 읽을 때 연장)이다. 그래프 구조는 §5. (C-03) |
-| D-62 | state 상한은 256KB, digest는 8KB다. 칸 상한은 문장·문구 200자, 이름(차트 제목·x축 값·시리즈, 자체 검증, 출처, 숫자) 40자, 목록 10개, `args`·`patch` 512바이트, 관심사 품목 100개·국가 250개다. 코드가 만드는 표시용 글자·목록은 넘으면 자르고, compose가 쓰는 `Draft` 문장은 거부해 재시도한다. 대표적인 최대 크기 시나리오는 상한 이내다(`test_largest_allowed_state_fits`). 처음 정한 64KB는 하위 질문 3개의 digest·차트만으로 넘을 수 있어 바꿨다. (C-21) |
+| D-62 | state 상한은 320KB(되묻기 답 `Task.resolved`를 더해 최대 시나리오가 약 260KB가 되어 256KB에서 올림), digest는 8KB다. 칸 상한은 문장·문구 200자, 이름(차트 제목·x축 값·시리즈, 자체 검증, 출처, 숫자) 40자, 목록 10개, `args`·`patch` 512바이트, 관심사 품목 100개·국가 250개다. 코드가 만드는 표시용 글자·목록은 넘으면 자르고, compose가 쓰는 `Draft` 문장은 거부해 재시도한다. 대표적인 최대 크기 시나리오는 상한 이내다(`test_largest_allowed_state_fits`). 처음 정한 64KB는 하위 질문 3개의 digest·차트만으로 넘을 수 있어 바꿨다. (C-21) |
 
 ### 접수·되묻기
 | ID | 결정 |
@@ -47,7 +47,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 | ID | 결정 |
 |---|---|
 | D-20 | 모델명은 환경변수로 바꿀 수 있게 한다. 플래너는 `API_INTENT_MODEL`, compose는 `API_COMPOSE_MODEL`이며 기본값은 둘 다 `gpt-4.1-mini`. (Q-15) |
-| D-21 | LLM 대기 시간은 10초, 실패하면 1번 재시도한다. (Q-16) |
+| D-21 | 플래너·compose·직접 입력 해석(§13.6)의 LLM 호출이 실패하면 1번 재시도한다. 대기 시간은 플래너 10초, compose 20초, 직접 입력 해석 10초다. LLM SQL 생성(20초)은 재시도 대신 §13.5의 재생성 규칙(최대 2회)을 따른다(§13.3, C-28). (Q-16) |
 | D-22 | 후속 질문의 기본 조건은 생략하면 이어받고, 명시적인 전체 범위는 해제한다. 비교·순위·기사 기간은 D-73의 별도 규칙을 따른다. (Q-18) |
 | D-23 | ML intent는 두 가지다. `PROMISING_MARKET`(유망시장)은 국가·품목 중 1개 이상이 필요하다. `MARKET_TYPE`(시장 유형)은 국가·품목이 모두 필요하지만, B 모델 시장 유형 분류가 나오기 전까지는 단계 없이 "지원 예정" 안내만 한다. 추가 예정 내용은 `backend/app/ml/ML_USAGE.md`에 적었다. (Q-13, C-05) |
 | D-24 | 질문 하나에 품목은 5개, 국가는 20개까지다. (Q-20) |
@@ -55,7 +55,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 | D-26 | 권역 표현(동남아, EU)은 미지원 안내만 한다. (Q-22) |
 | D-27 | 기간을 말하지 않으면 수출입은 최근 12개월, 기사는 최근 3개월이다. (Q-23) |
 | D-28 | 미공개 월을 물으면 범위 밖으로 처리하고 최신 공개 월을 안내한다. (Q-24) |
-| D-29 | 비교 기간을 말하지 않으면 전년 동기, 지정하면 그 기간을 쓴다. 지정 기간용 SQL 템플릿을 보완한다(현재는 전년 동기 열만 있음). (Q-25, C-13) |
+| D-29 | 비교를 요청하지 않으면 비교하지 않는다(`compare_period=None`, D-73). 비교를 요청했는데 기간을 말하지 않으면 check가 전년 동기를 계산해 넣고, 지정하면 그 기간을 쓴다. 지정 기간용 SQL 템플릿을 보완한다(현재는 전년 동기 열만 있음). (Q-25, C-13) |
 | D-30 | 관심 적용 되묻기는 대화방 첫 질문이면서 품목·국가가 둘 다 없을 때만 한다. "전체 범위"를 고르면 그 방에서 다시 묻지 않는다. (Q-26) |
 | D-64 | 관심사가 조건 상한(품목 5개·국가 20개, D-24)을 넘으면 "관심 범위 적용" 대신 `INTEREST_SELECT`로 묻는다. 질문 시점 관심사(D-14, `input.interests`) 중에서 품목 5개·국가 20개까지 체크박스로 고르게 하고, "전체 범위" 선택지를 함께 준다. 상한 안이면 기존처럼 `INTEREST_CONTEXT`(적용/전체 범위)로 묻는다. 판단은 `Interests.fits_conditions()`다. |
 | D-31 | 수출/수입을 말하지 않으면 수출로 보고, 답변에 "수출"을 명시한다. (Q-27) |
@@ -75,7 +75,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 | D-48 | ML 유망시장은 워커가 서버에 둔 모델 파일(v1·v3 앙상블 joblib)과 피처 스냅샷으로 요청 때마다 예측한다. 전체 예측 모집단은 전용 SQL 테이블에 적재하지 않는다. 사용자에게 반환한 조회 결과는 기존 MySQL 결과표 저장소에 보관한다(D-88). 스냅샷은 최신 기준월만 담은 파일(`features_snapshot_py311_latest*.pkl`, 약 22MB)을 쓴다. 전체 스냅샷(약 750MB)은 쓰지 않는다. tool은 최신 스냅샷의 전체 예측 대상에서 `two_stage.predict` → `combine`(앙상블) → 순위를 계산한 뒤 요청한 국가·품목을 필터링한다(D-78). `two_stage.query`는 출력만 하므로 tool은 D-70의 함수를 쓴다. 모델과 스냅샷은 워커 메모리에 한 번 올려 재사용하고, 경로는 환경변수로 받는다. 워커에는 LightGBM·`libgomp1`이 필요하고, 패키지 버전은 모델 `runtime`(ML_USAGE.md)과 맞춘다. 예측 값은 스냅샷이나 모델 파일을 바꿀 때만 달라진다. (C-05, C-19) |
 | D-45 | 재시도는 SQL 2회, 기사 1회, 차트·리포트·ML 0회다. (Q-36) |
 | D-46 | tool 일부가 실패하면 나머지 결과로 PARTIAL 답변을 만들고 경고를 붙인다. (Q-37) |
-| D-70 | ML tool용 함수 이름·형식(구현 전 지정, 구현할 때 이대로 만든다). `two_stage.load_market_bundle(model_paths: list[str], snapshot_path: str) -> dict`는 앙상블 모델과 최신 기준월 스냅샷을 읽어 워커가 한 번만 부른다. `two_stage.predict_markets(bundle, *, country_code: str \| None = None, hs6: str \| None = None, top: int = 10) -> pandas.DataFrame`은 `query`와 같은 규칙으로 예측한다: 국가만 → 유망 품목(`order` 순), 품목만 → 유망 국가(`product` 순), 둘 다 → 그 쌍 한 행. 열은 `anchor`, `country_code`, `hs6`, `growth_pct`, `exp_12m`, `country_rank`, `product_rank`이고, 예측 대상(최근 12개월 수출 $100K 이상)이 아니면 빈 표다. `query`는 이 함수를 불러 출력만 하도록 바꾼다. 두 함수는 ML 담당자가 구현하고, 에이전트 ML tool은 이 함수만 부른다. (E-06, F-03) |
+| D-70 | ML tool용 함수 이름·형식(구현 전 지정, 구현할 때 이대로 만든다). `two_stage.load_market_bundle(model_paths: list[str], snapshot_path: str) -> dict`는 앙상블 모델과 최신 기준월 스냅샷을 읽고, 스냅샷의 전체 예측 대상(국가×HS6)을 모델별로 예측해 `combine`(앙상블)하고 국가 안·품목 안 순위까지 한 번 계산해 bundle에 담는다(D-78). 워커가 한 번만 부른다. `two_stage.predict_markets(bundle, *, country_code: str \| None = None, hs6: str \| None = None, top: int = 10) -> pandas.DataFrame`은 다시 예측하지 않고 bundle의 전체 결과에서 걸러 `query`와 같은 규칙으로 돌려준다: 국가만 → 유망 품목(`order` 순), 품목만 → 유망 국가(`product` 순), 둘 다 → 그 쌍 한 행. 열은 `anchor`, `country_code`, `hs6`, `growth_pct`, `exp_12m`, `country_rank`, `product_rank`, `country_size`, `product_size`이고(뒤 두 값은 전체 모집단 크기), 예측 대상(최근 12개월 수출 $100K 이상)이 아니면 빈 표다. `query`는 이 함수를 불러 출력만 하도록 바꾼다. 두 함수는 ML 담당자가 구현하고, 에이전트 ML tool은 이 함수만 부른다. (E-06, F-03) |
 | D-47 | 단계는 순차 실행한다. 단계별 소요 시간을 로그로 남기고, CAUSE 질문의 90%가 30초 안에 끝나지 않으면서 SQL과 기사 대기가 그 시간의 절반 이상이면 병렬로 바꾼다. (Q-38, C-08) |
 
 ### 답변·마무리·진행 표시
@@ -100,7 +100,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 ### 구현 순서
 | ID | 결정 |
 |---|---|
-| D-71 | ① Redis 컨텍스트·lock(`context.py`) ② 그래프 뼈대 planner → dispatch → check → compose → finalize(메모리 체크포인터로 테스트) ③ SQL tool ④ 되묻기(ask_user) ⑤ 차트 ⑥ ML ⑦ 리포트. 기존 목업 `chat.execute`는 그래프가 붙을 때까지 그대로 둔다. 로그인 세션 Redis 이전(C-20)은 채팅이 다 붙은 뒤 결정한다. (E-07, E-09) |
+| D-71 | ① Redis 컨텍스트·lock(`context.py`) ② 그래프 뼈대 planner → dispatch → check → compose → finalize(메모리 체크포인터로 테스트) ③ SQL tool ④ 되묻기(ask_user) ⑤ 차트 ⑥ ML ⑦ 리포트. 기존 목업 `chat.execute`는 그래프가 붙을 때까지 그대로 둔다. ①은 기존 `RedisState`(`api/redis_store.py`)에 채팅 키용 메서드를 더해 구현한다(D-01). (E-07, E-09) |
 
 ## 2. 구성 요소
 
@@ -119,45 +119,60 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 ## 3. 실행 흐름
 
 ### A. 질문 접수 (API 서버)
-1. `POST /chat/sessions/{sid}/messages`로 질문이 들어온다. Redis에 연결되지 않으면 503 `CHAT_UNAVAILABLE`을 반환한다.
-2. Redis `GET chat:session:{sid}:active`로 진행 중인 작업을 확인한다.
-   - 동일 멱등키 재전송은 먼저 기존 작업을 반환한다(D-77). 그 밖의 RUNNING·QUEUED·WAITING_REPORT 작업이 있으면 409를 반환한다.
-   - NEEDS_INPUT 작업이 있으면 이 글을 그 작업의 직접 입력 답으로 넘기고 C-17로 간다.
-3. 멱등키를 확인하고 USER 메시지를 `_execution.status=QUEUED`로 저장한다. `SET active <job_id> NX EX 1800`.
-4. Redis `GET chat:session:{sid}:context`로 컨텍스트를 읽는다. 없으면 MySQL `context_json.conditions`로 조건만 채운다.
-5. `AgentInput`(질문, 컨텍스트, 관심사, 접수 시각)을 만들어 MySQL `_execution.payload_json.input`에 저장한다. 체크포인트가 사라져도 여기서 다시 시작할 수 있다.
+1. `POST /chat/sessions/{sid}/messages`로 질문이 들어온다. Redis에 연결되지 않으면 인증 단계에서 이미 503 `REDIS_UNAVAILABLE`이 나고, 채팅 단계의 Redis 호출이 실패해도 같은 오류를 돌려준다(D-06).
+2. 대화방 소유권을 확인하고, 같은 멱등키(`client_message_id`)의 기존 작업이 있으면 그대로 돌려준다. 내용이 다르면 409 `IDEMPOTENCY_CONFLICT`다(D-77).
+3. 진행 중인 작업을 확인한다. Redis `GET chat:session:{sid}:active`는 빠른 확인용이고, 최종 판정은 MySQL의 대화방 행 잠금(`SELECT … FOR UPDATE`) 아래에서 읽은 작업 상태다(D-77). Redis 값이 가리키는 작업이 MySQL에 없거나(접수 커밋 실패로 남은 값) 이미 끝났으면 고아 lock이므로 지우고 진행한다. 지울 때는 값이 그 job_id일 때만 지운다(D-77의 원자적 삭제).
+   - 고아 판정과 삭제는 반드시 대화방 행 잠금을 잡은 뒤에 한다. 3~5번은 하나의 트랜잭션이고, 접수한 쪽은 5번 커밋까지 이 잠금을 쥔다. 그래서 다른 접수가 커밋 전 작업의 키를 "MySQL에 없음"으로 보고 지우는 일이 없다. 뒤에 온 쪽은 잠금에서 기다렸다가 커밋된 작업을 보고 409를 받는다.
+   - RUNNING·QUEUED·WAITING_REPORT 작업이 있으면 409 `JOB_IN_PROGRESS`다.
+   - NEEDS_INPUT 작업이 있고 `pending.asked_at`에서 30분이 안 지났으면 이 글을 그 작업의 직접 입력 답으로 넘기고 아래 17번(C. 되묻기 답)으로 간다.
+   - NEEDS_INPUT인데 30분이 지났으면 그 작업을 EXPIRED로 바꾸고 lock을 해제한 뒤 이 글을 새 질문으로 접수한다(4번부터, D-04). API-37도 조회할 때 같은 판정으로 EXPIRED를 보여 준다.
+4. Redis `GET chat:session:{sid}:context`로 컨텍스트를 읽는다. 그 `last_job_id`가 MySQL의 이 방 마지막 성공 답변 job과 다르면 오래된 컨텍스트로 보고 버린다(D-77). 없거나 버렸으면 MySQL `context_json.conditions`로 조건만 채운다.
+   - 기존 `context_json.conditions`에는 `compare`·`metric` 칸이 있고, 기간 end가 말일이며, 품목·국가가 상한을 넘을 수 있다. 그래서 state `Conditions`의 칸만 골라 읽는다. 품목은 앞 5개, 국가는 앞 20개만 남긴다. `compare`가 `NONE`이면 `compare_period=None`이다. 말일 end는 `Period`가 1일로 바꿔 읽는다.
+   - `AgentInput`(질문, 컨텍스트, 관심사, 접수 시각, `first_question`)을 만든다. `first_question`은 이 방에 ASSISTANT 답변이 하나도 없으면 true다(MySQL로 판정, Redis 컨텍스트가 비었는지로 판정하지 않음).
+5. 같은 MySQL 트랜잭션에서 USER 메시지(`_execution.status=QUEUED`)와 `_execution.payload_json.input`(AgentInput)을 저장하고, 커밋 전에 Redis `SET chat:session:{sid}:active <job_id> NX EX 1800`을 한다. SET이 실패하거나 Redis에 쓸 수 없으면 트랜잭션을 되돌리고 409 또는 503을 돌려준다(D-77). SET은 됐는데 MySQL 커밋이 실패하면, 방금 건 키를 값이 이 job_id일 때만 지운 뒤 오류를 돌려준다. 지우기도 실패하면 다음 접수의 3번이 MySQL에 없는 작업을 가리키는 키로 보고 지운다. 체크포인트가 사라져도 저장한 AgentInput으로 다시 시작할 수 있다.
 6. `job_id`를 반환한다. 프론트는 입력창을 잠근다.
 
 ### B. 워커 실행 (그래프)
 7. claim하면 `RUNNING`이 된다. 재개 방식:
-   - 체크포인트(`thread_id=job_id`)가 있으면 이어서 실행한다. 되묻기 답이면 `Command(resume=답)`, 워커가 죽은 뒤면 `None`을 넣는다.
+   - 체크포인트(`thread_id=job_id`)가 있으면 이어서 실행한다. `graph.get_state`에 대기 중인 interrupt(ask_user)가 있고 `payload_json.resume`이 있을 때만 `Command(resume=답)`을 넣는다. 그 밖(장애 재개, 리포트 완료 재개)은 `None`을 넣는다. 재개한 직후 짧은 트랜잭션으로 `payload_json.resume`을 지운다. 그래야 다음 재개(예: 리포트 완료)에서 쓴 답을 다시 보내지 않는다.
    - 체크포인트가 없으면 `AgentState(input=…)`로 처음 실행한다.
-8. `round_started_at`이 비어 있으면 지금 시각을 넣는다. 180초 실행 상한은 벽시계 차이가 아니라 D-85의 누적 예산으로 판정한다. 노드를 시작할 때마다 MySQL 작업 상태가 CANCELLED인지 확인하고, 중단됐으면 멈춘다.
+   - 기존 `worker.run_once`는 대화방 행을 잠근 트랜잭션 안에서 `chat.execute`를 부른다. API_CHAT은 그렇게 하지 않는다. claim 뒤 잠금 트랜잭션을 끝내고 그래프를 실행하며, 상태 저장만 `claim_token`을 확인하는 짧은 트랜잭션으로 한다(D-77). 그래야 그래프가 도는 동안 API-36의 대화방 잠금(3번)이 기다리지 않는다.
+8. `round_started_at`이 비어 있으면 지금 시각을 넣는다(기록용. 화면 경과 시간은 MySQL `round_received_at`을 쓴다, §11.3). 180초 실행 상한은 벽시계 차이가 아니라 D-85의 누적 예산으로 판정한다. 노드를 시작할 때마다 MySQL 작업 상태가 CANCELLED인지 확인하고, 중단됐으면 멈춘다.
 9. **planner 노드**: LLM 1회로 질문을 하위 질문 1~3개로 나눈다. 하위 질문마다 intent와 슬롯을 뽑고, 단계 표(§5.1)로 `plan.tasks`를 만든다.
 10. **dispatch 노드**: 먼저 `steps_finished()`를 부른다. 이 함수는 실패에 막힌 단계를 SKIPPED로 정리한 뒤 판단한다. True면 compose로 가고, 아니면 `ready_steps()`의 첫 단계를 골라 그 tool 노드로 보낸다. `ready_steps()`가 비었다고 끝난 것이 아니다. 리포트·되묻기 대기 중이거나 PENDING·RUNNING 단계가 남으면 compose로 가지 않는다(D-76).
-11. **check_conditions 노드**(하위 질문별): 슬롯을 HS 사전·국가 표·적재 로그와 대조해 `task.conditions`·`applied_defaults`와 공통 `data_meta`를 채운다.
-    - 품목은 SQL 정확 일치만 확정하고, 그 밖은 상위 5로 되묻는다(D-33).
-    - 국가는 비슷한 국가로 되묻고, 후보가 없으면 재입력을 요청한다(D-25).
-    - ML 필수 조건을 확인한다(D-23). 유망시장 질문의 품목이 HS4면 그 아래 HS6로 되묻는다(D-74).
+11. **check_conditions 노드**(하위 질문별): 슬롯을 HS 사전·국가 표·적재 로그와 대조해 `task.conditions`·`applied_defaults`와 공통 `data_meta`를 채운다. 처리 순서와 세부 규칙은 §14.1이 기준이고, 아래는 요약이다.
+    - `task.resolved`(되묻기로 확정한 답)를 먼저 적용하고, 그다음 미지원(ML·리포트 수입, 해외시장 점유율, 국가·품목 없는 유망시장)을 묻기 전에 거른다.
+    - 품목은 SQL 정확 일치만 확정하고, 그 밖은 HS6 상위 5로 되묻는다(D-33). 유망시장 질문의 품목이 HS4면 그 아래 HS6로 되묻는다(D-74).
     - 빈 조건은 최근 조건 → (첫 질문이면) 관심 되묻기 → 기본값 순서로 채운다. 관심사가 품목 5개·국가 20개를 넘으면 관심 되묻기는 골라 받는 `INTEREST_SELECT`다(D-64).
+    - 국가는 비슷한 국가로 되묻고, 후보가 없으면 재입력을 요청한다(D-25).
     - 되묻기가 필요하면 `pending`을 채우고 `ask_counts`를 올린 뒤 `status=NEEDS_INPUT`으로 바꾼다. 그 조건을 이미 2회 물었으면 `ask_counts`를 올리지 않고 해당 하위 질문만 NO_DATA로 끝내며 dispatch로 간다(D-72). 더 물을 수 있을 때만 **ask_user 노드**로 간다.
     - 조건을 확정하지 못해 check 단계를 FAILED로 두면 `skip_blocked()`를 불러 그 하위 질문의 뒤 단계를 SKIPPED로 바꾼다.
 12. **ask_user 노드**: `interrupt(state.pending)`로 멈춘다. 체크포인트에는 11번이 쓴 `pending`이 남는다. 워커는 MySQL `_execution`을 NEEDS_INPUT + clarification으로 바꾸고, `active` TTL을 30분으로 둔 뒤 끝낸다.
-    재개되면 이 노드가 답을 받아 그 하위 질문의 조건에 병합한다. 그리고 `pending=None`, `status=RUNNING`, `round_started_at=지금`으로 바꾸고, 그 하위 질문의 check 단계를 PENDING으로 되돌린 뒤 dispatch로 간다. 직접 입력이면 `pending.message` 맥락으로 해석하고, 해석에 실패하면 check가 다시 묻는다.
+    재개되면 이 노드가 답을 해석해(직접 입력은 §13.6) 그 하위 질문의 `Task.resolved[pending.condition_key]`에 확정한 값을 적는다. 예: 품목 선택은 `{"hs_items": [...]}`, 관심 "전체 범위"는 `{"interest": "GLOBAL"}`, 점유율 분모는 `{"share_basis": ...}`. 확인형 답은 해당 칸에 적는다(MODEL_PERIOD → `slots.latest_prediction_confirmed`, REPORT_CONFIRM → `report_request.confirmed`·`formats`). 그다음 다음을 바꾸고 dispatch로 간다.
+    - `pending=None`, `status=RUNNING`, `round_started_at=지금`
+    - `run_budget`을 MySQL의 새 라운드 값(차감 0초, 복구 0회, 17번)으로 맞춤
+    - 그 하위 질문의 check 단계를 PENDING으로, `attempts`를 0으로 되돌림. `attempts`는 한 번 실행 안의 재시도 수다.
+
+    check는 다시 돌 때 `resolved`부터 적용하고, 이미 확정한 원문 표현·조건은 다시 찾거나 묻지 않는다(§14.1). 그래야 같은 질문을 다시 묻지 않는다. 직접 입력을 해석하지 못하면 `resolved`를 쓰지 않고, check가 같은 condition_key로 다시 묻는다(한도 D-15).
 13. **tool 노드**(sql, news, chart, report, ml): report는 D-76에 따라 완료까지 WAITING_REPORT로 대기하고 재개한다. 나머지는 실행 후 `results[step_id]`와 단계 상태를 쓴다. MySQL `_execution`의 step·progress를 갱신하고 dispatch로 돌아간다. 실패하면 재시도 한도까지 다시 하고, 그래도 실패하면 FAILED로 두고 `skip_blocked()`를 불러, 그 단계에 직접·간접으로 의존하는 단계를 SKIPPED로 바꾼다. `ready_steps()`는 의존 단계가 모두 DONE인 단계만 돌려준다.
-14. **compose 노드**: LLM 1회로 `Draft`(결론 문장 목록, 설명 문장 목록, `turn_summary`, 첫 답변이면 `title`)를 쓴다. 문장은 LLM이 나눠 준다. 숫자는 digest 값만 쓴다. `MARKET_TYPE`·`OUT_OF_SCOPE` 하위 질문은 고정 안내 문구를 쓴다.
-15. **verify 노드**: `Draft.sentences()`(결론 다음 설명)의 문장마다 숫자를 결과표와 대조해 문장 번호(`SentenceCheck.index`)로 남기고, 1회 재생성한 뒤 그래도 틀리면 "확인 필요"를 붙인다.
+14. **compose 노드**: 결과가 있는 하위 질문만 LLM 1회로 `Draft`(결론 문장 목록, 설명 문장 목록, `turn_summary`, 첫 답변이면 `title`)를 쓴다. 숫자는 digest 값만 쓴다. 결과가 없는 하위 질문(`MARKET_TYPE`·`OUT_OF_SCOPE`·NO_DATA)의 결론은 코드가 고정 문구로 넣고, 모두 그렇다면 LLM을 부르지 않는다(§13.1).
+15. **verify 노드**: `Draft.sentences()`(결론 다음 설명)의 LLM 문장마다 숫자를 digest 값과 대조해(§11.4) 문장 번호(`SentenceCheck.index`)로 남긴다. 틀린 문장이 있고 남은 예산이 재생성 몫 이상이면(§13.4) 1회 재생성하고, 그래도 틀리거나 예산이 모자라면 "확인 필요"를 붙인다(§11.4).
 16. **finalize 노드**:
     - answer JSON을 저장한다.
     - D-72 조건을 만족할 때만 MySQL `context_json`에 주 하위 질문의 conditions를 쓴다.
-    - D-72 조건을 만족할 때만 Redis context에 conditions와 검증된 `TurnSummary`를 쓴다(첫 하위 질문 기준).
-    - 첫 답변이고 유효한 제목이 있을 때만 제목을 갱신한다.
+    - MySQL `context_json`은 기존 API 형식으로 쓴다: state `Conditions`를 바꿔 기간 end는 말일, `compare`는 비교 기간이 없으면 `NONE`·전년 동기면 `YOY_PERIOD`·그 밖은 `CUSTOM`, `metric`은 `AMOUNT`로 둔다. 기존 `session_view`·프론트·리포트가 그대로 읽는다. `interest_action`도 여기에 쓴다. 관심 되묻기에서 적용하면 `APPLIED`, 전체 범위를 고르면 `DECLINED`다(D-30).
+    - 제목은 compose의 `title`만 쓴다(D-54). 기존 `save_answer`처럼 질문 앞 160자로 바꾸지 않는다. `title`이 없으면 제목을 그대로 둔다.
+    - Redis context는 MySQL 커밋이 끝나고 그래프 호출이 반환된 뒤 쓴다(D-77). D-72 조건을 만족할 때만 conditions와 검증된 `TurnSummary`를 넣고, `last_job_id`=이 job_id로 둔다(첫 하위 질문 기준). verify 뒤에도 `turn_summary`에 틀린 숫자가 남았으면 이번 `TurnSummary`는 넣지 않는다(D-77 "이력에 남기지 않는다").
     - 같은 MySQL 트랜잭션에서 `_execution=SUCCEEDED`를 확정한다. Redis 정리와 체크포인트 삭제는 그래프 실행 반환 후 수행한다(D-77).
 
 ### C. 되묻기 답·중단 (API 서버)
-17. 선택지·직접 입력(API-38 또는 A-2)이 들어오면:
+17. 선택지·직접 입력(API-38 또는 위 3번에서 넘어온 글)이 들어오면:
     - 체크포인트의 `pending`을 `graph.get_state`로 읽는다. 없거나 `asked_at`에서 30분이 지났으면 409 `CLARIFICATION_EXPIRED`를 반환하고 EXPIRED로 처리한다.
-    - `clarification_id`를 비교하고, 답을 `_execution.payload_json.resume`에 저장한 뒤 QUEUED로 바꾼다. 워커가 7번에서 `Command(resume=답)`으로 재개한다.
+    - 중복 판정(D-77)
+      - API-38은 `clarification_id`와 정규화한 답으로 판정한다.
+      - API-36으로 들어온 직접 입력은 `client_message_id`로 판정한다. `payload_json.resume`의 `client_message_id`(그리고 처리한 답 기록 `resume_history`, 최근 10개)와 같으면 기존 job을 돌려준다.
+      - 직접 입력 글은 대화 기록에 남도록 USER 메시지 행으로 저장한다. 이 행에는 `_execution`을 두지 않아 작업으로 잡히지 않는다.
+    - `clarification_id`를 비교하고, 답을 `_execution.payload_json.resume`(`{clarification_id, client_message_id?, choice_ids?|hs_item?|text?|interest_selection?|report_confirmation?}`)에 저장한 뒤 QUEUED로 바꾼다. 같은 트랜잭션에서 새 라운드를 연다: `_execution.agent`의 `round_id`를 새로 만들고, `round_received_at`=지금, `charged_seconds`=0, `recovery_count`=0, `reservation`=null로 바꾼다(D-85, §11.3). 워커가 7번에서 `Command(resume=답)`으로 재개하고, ask_user가 state의 `run_budget`도 같은 값으로 맞춘다.
 18. 중단(API-131)이 들어오면 `_execution=CANCELLED`로 바꾸고 해당 job의 active만 해제한다. 워커는 다음 노드 진입 및 저장 직전에 중단·소유권을 확인한다. 체크포인트는 실행 종료 후 정리한다(D-77). 리포트 대기 중 중단은 D-76을 따른다.
 
 ### 장애
@@ -175,22 +190,23 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 | 칸 | 쓰는 노드 | 읽는 노드 |
 |---|---|---|
 | `input` (질문·컨텍스트·관심사) | 최초 실행 | planner, check, compose, finalize |
-| `status` | 워커 시작, check(NEEDS_INPUT), ask_user, finalize | 전부 |
-| `plan.tasks[]` (하위 질문: intent·질문·슬롯·단계·조건·기본값·결과 상태) | planner(슬롯은 `PlannerSlots`에서 옮김, D-73). 조건은 check, 단계 상태는 tool 노드, `answer_status`는 그 Task를 끝낸 노드, `slots.latest_prediction_confirmed`는 ask_user | dispatch, tool, compose, finalize || `data_meta` | check | tool, compose |
+| `status` | 워커 시작, check(NEEDS_INPUT), ask_user, generate_report(WAITING_REPORT), 리포트 재개 노드(RUNNING), finalize | 전부 |
+| `plan.tasks[]` (하위 질문: intent·질문·슬롯·단계·조건·기본값·결과 상태) | planner(슬롯은 `PlannerSlots`에서 옮김, D-73). 조건은 check, 단계 상태는 tool 노드, `answer_status`는 그 Task를 끝낸 노드, `slots.latest_prediction_confirmed`는 ask_user | dispatch, tool, compose, finalize |
+| `data_meta` | check | tool, compose |
 | `pending`, `ask_counts` | check (ask_user가 비움) | ask_user, API(되묻기 답 검증) |
-| `round_started_at` | 워커 시작, ask_user | 라운드 경과 시간 표시. 대기·장애 복구로 바꾸지 않음 |
+| `round_started_at` | 워커 시작, ask_user(새 라운드) | 기록용. 화면 경과 시간은 MySQL `_execution.agent.round_received_at`(§11.3)을 쓰고, 실행 상한은 `run_budget`(D-85)으로 판정한다. 대기·장애 복구로 바꾸지 않음 |
 | `run_budget` | 워커 실행 경계 | D-85 실행 예산·장애 복구 횟수. 복구 시 MySQL 실행 메타데이터 우선 |
 | `report_wait` | generate_report(WAITING_REPORT로 바꿀 때), 리포트 재개 노드가 비움 | 완료 확인기, 리포트 재개 노드 (D-76) |
 | `results` (ID + digest + ChartSpec + ChartSelector) | tool | compose(digest), verify(result_id), finalize(chart_selectors, D-82) |
 | `draft` (문장·요약·제목) | compose | verify, finalize |
 | `verification` | verify | finalize |
-| `warnings` | check, tool | finalize |
+| `warnings` | planner(`limit_errors`, D-73), check, tool | compose, finalize |
 
 모델이 강제하는 규칙
 - NEEDS_INPUT이면 `pending`이 반드시 있고, 아니면 없어야 한다. `pending.task_id`는 계획에 있어야 한다.
-- 하위 질문은 1~3개다. 각 하위 질문은 `check_conditions`로 시작하고, 같은 하위 질문의 앞 단계에만 의존할 수 있다. `OUT_OF_SCOPE`·`MARKET_TYPE`은 단계가 없다.
+- 하위 질문은 1~3개다. 각 하위 질문은 `check_conditions`로 시작하고, 같은 하위 질문의 앞 단계 또는 `input_bindings`로 명시한 선행 질문의 SQL·ML 결과에만 의존할 수 있다(D-90). `OUT_OF_SCOPE`·`MARKET_TYPE`은 단계가 없다.
 - `step_id`는 계획 전체에서 고유하다(예: `t1.sql`). 계획에 없는 단계의 결과는 넣을 수 없고, FAILED에는 `error`가 필요하다.
-- state 256KB, digest 8KB 이하. 대표적인 최대 크기 시나리오가 상한 이내다(`test_largest_allowed_state_fits`). 상한을 바꾸거나 칸을 더하면 이 테스트로 확인한다.
+- state 320KB, digest 8KB, `Task.resolved` 4KB 이하. 대표적인 최대 크기 시나리오(약 260KB)가 상한 이내다(`test_largest_allowed_state_fits`). 상한을 바꾸거나 칸을 더하면 이 테스트로 확인한다.
 - 글자 칸은 모두 길이 상한이 있다(D-62). 문장·문구 200자, 이름(차트 제목·x축 값·시리즈, 자체 검증, 출처, 숫자) 40자, 목록 10개, `args`·`patch` 512바이트, 관심사 품목 100개·국가 250개.
   - 코드가 만드는 표시용 글자·목록(되묻기 문구·선택지·품목 표현, 경고, 오류, 적용 조건, 차트 글자, 관심사)은 넘으면 앞에서부터 자른다. HS4 품목명이 최대 347자이고 관심사는 저장 개수 제한이 없기 때문이다(D-63).
   - compose가 쓰는 `Draft` 문장은 자르지 않고 거부한다. 결론은 하위 질문마다 2문장까지(최대 6문장), 설명은 4문장, 문장마다 200자다. 넘으면 compose가 재시도(D-21)한다.
@@ -230,7 +246,7 @@ START → planner → dispatch ─┬→ check_conditions ─┬→ dispatch
 
 ### 5.1 플래너 단계 표 (하위 질문 하나 기준, step_id 앞에 `t1.` 같은 접두사를 붙인다)
 
-각 단계의 `Step.args`와 플래너 출력 형식은 §11.1에 있다.
+각 단계의 `Step.args`와 플래너 출력 형식은 §11.1에 있다. 이 표는 Task 내부 기본 단계다. source_tasks가 있으면 D-90에 따라 첫 check에 선행 SQL/ML 의존성을 추가한다.
 
 | intent | 단계 (괄호는 depends_on) |
 |---|---|
@@ -243,6 +259,12 @@ START → planner → dispatch ─┬→ check_conditions ─┬→ dispatch
 
 ### 5.2 재사용할 기존 코드
 
+그대로 부르면 안 되는 것이 있다. 이 표를 쓸 때 다음을 지킨다.
+- **함수 형식:** `trade.*`·`results.get_table`은 §14.2·§14.5의 실제 형식대로 부른다.
+- **`chat_slots.resolve`:** 첫 실패에서 `SlotRepair`를 던지고, 최근 개월 수를 1~120으로 막고, `IntentSlots`의 `all_*` 플래그를 요구한다. 그래서 통째로 쓰지 않는다. 원문 증거 검사·`resolve_country`·`numeric_product`만 떼어 쓴다.
+- **`worker.run_once`·`jobs.locked_current`:** 대화방을 잠근 채 실행하므로 API_CHAT 경로는 §3-7처럼 바꾼다.
+- **`chat.save_answer`:** 제목·`interest_action`을 덮어쓰므로 finalize는 §3-16 규칙으로 저장한다.
+
 | 필요 | 기존 코드 |
 |---|---|
 | intent·슬롯 추출 프롬프트 규칙 | `api/intent.py` `PROMPT`, `IntentSlots` |
@@ -254,7 +276,7 @@ START → planner → dispatch ─┬→ check_conditions ─┬→ dispatch
 | 기사 RAG 계약·호출 자리 | `schemas/rag.py` `RagRequest`, `RagResponse`, `agents/tools.py` `search_news` |
 | 리포트(PDF/DOCX) | `api/reports.py`, `api/files.py` `report_pdf`, `report_docx` |
 | ML 유망시장 | `ml/two_stage.py` `load_market_bundle`, `predict_markets` (D-70, 구현 예정) |
-| 품목명 줄이기 | `agents/state.py` `shorten_names`(차트 하나의 라벨 목록), `shorten_name`(이름 하나) |
+| 품목명 줄이기 | `agents/state.py` `shorten_names`(차트 하나의 품목 라벨 목록), `shorten_target_names`(국가×품목 대상 라벨 목록, D-89), `shorten_name`(이름 하나) |
 | 작업 claim·완료·재큐 | `api/jobs.py` `claim`, `finish`, `requeue_chat`, `_save_chat` |
 | 답변 저장·조건 갱신 | `api/chat.py` `save_answer` |
 | 프론트 차트 | `frontend/src/components/charts.jsx` `LineChart`, `Donut` (bar·grouped_bar는 추가 필요) |
@@ -270,7 +292,7 @@ START → planner → dispatch ─┬→ check_conditions ─┬→ dispatch
 | 체크포인터 키 (라이브러리가 관리) | `AgentState` 체크포인트 | 30분, 읽을 때 연장 | 실행 중이면 MySQL `AgentInput`으로 처음부터, 되묻기 중이면 만료 |
 
 - 이미지는 Redis 8 이상을 쓴다. RedisJSON·RediSearch가 기본 포함돼 있다.
-- 로그인 세션 키는 로그인 Redis 이전을 결정할 때 추가한다.
+- 로그인 세션·요청 제한은 이미 RedisState가 관리한다(D-01).
 - Redis에 두지 않는 것: 결과표 행, 기사 본문, 채팅 원문 전체, LLM 프롬프트, 작업 큐(MySQL claim 유지).
 
 ## 7. 프론트에 주는 answer JSON
@@ -279,9 +301,14 @@ START → planner → dispatch ─┬→ check_conditions ─┬→ dispatch
 
 ```
 intent, answer_status(ANSWERED|PARTIAL|NO_DATA|OUT_OF_SCOPE), text, conditions,
-tasks[], tables[], charts[], articles[], verification{status, sentence_checks, regeneration_count},
+tasks[{task_id, intent, question, conditions, answer_status, conclusion[]}],
+tables[{…, task_id}], charts[{ChartSpec(granularity 포함), full_labels}], chart_selectors[],
+articles[], verification{status, sentence_checks, regeneration_count},
 actions[], report_id, warnings[]
 ```
+
+- `chart_selectors[]`는 `{task_id, result_id, group_by, country_codes, hs_items}`다(D-82).
+- `tasks[].conclusion`은 그 Task의 결론 문장 목록이다. compose 대체 응답(draft 없음)이면 `[]`다(D-80).
 
 - `text`는 finalize가 `Draft.sentences()`를 순서대로 이어 만든다.
 - `charts[].full_labels`는 finalize가 결과표에서 채우는 줄이기 전 이름이다(D-68). state의 `ChartSpec`에는 없다.
@@ -307,10 +334,11 @@ actions[], report_id, warnings[]
 
 | ID | 내용 | 임시값 |
 |---|---|---|
-| C-20 | 로그인 세션의 Redis 이전 여부. 채팅이 다 붙은 뒤 결정(D-71) | 현재 MySQL 유지 |
+| C-20 | (해결) 로그인 세션·요청 제한은 main에서 이미 Redis로 구현됐다(D-01). | — |
 | C-24 | 리포트 대기의 별도 전체 시간 상한 | 별도 상한 없음. 리포트의 기존 재시도·실패 정책과 사용자 중단 적용(D-76). 추가 상한 도입은 별도 결정 |
 | C-23 | EC2 메모리 배분. Redis 컨테이너 1280MB와 같은 서버의 API·워커(ML 모델·스냅샷을 메모리에 올림, D-48)가 인스턴스 메모리 안에 들어가는지 | Redis 1280MB (`deploy/redis/docker-compose.yml` `TODO(C-23)`) |
-| C-26 | "최근 N개월" 상한과 슬롯 상한 초과 안내 문구(D-73). 적재 데이터 첫 달과 맞는지 | 240개월, `PlannerSlots.limit_errors()` 문구 (`state.py` `TODO(C-26)`) |
+| C-26 | "최근 N개월" 상한과 슬롯 상한 초과 안내 문구(D-73). 적재 데이터 첫 달과 맞는지 | 확정: 240개월. 실제 공개·검증 월 범위도 별도로 검사한다(D-94). |
+| C-31 | (해결) 선행 결과의 국가·품목 선택 확인 정책 | 명시한 개수·기준이면 자동 실행, 모호하면 INPUT_SELECTION으로 확인(D-95, 사용자 승인) |
 | C-27 | digest 목록 행 상한과 ML 대상별 행 수 공식(§11.2). 8KB 안에서 compose 품질을 보고 조정 | 60행, 대상마다 `min(10, 60 // 대상 수)`행 |
 | C-29 | **결정 보류 — ML 연결 때 확인.** 서버에 둘 모델 파일(v1·v3 앙상블)과 최신 기준월 스냅샷의 실제 파일 이름·버전. `API_ML_MODEL_PATHS`·`API_ML_SNAPSHOT_PATH` 값 | `.env.api.example`의 `two_stage_c100_*_v2.joblib`, `features_snapshot_py311_latest_v2.pkl`(예시) |
 | C-30 | LLM SQL 모델 확정. 골든셋(D-61)의 LLM SQL 질문으로 `gpt-4.1-mini`·`gpt-4.1`·`gpt-5.4`를 비교해 정확도·비용·응답 시간을 보고 정한다 | `gpt-4.1` |
@@ -331,9 +359,9 @@ actions[], report_id, warnings[]
 - Task.slots(TaskSlots)는 플래너의 원문 표현을 보관한다. products/countries의 None은 생략, []는 명시적인 전체 범위, 값이 있는 목록은 교체다. 질문에 없는 코드·품목을 추론해서 넣지 않는다. 확정된 값은 Task.conditions에만 넣는다.
 - 품목·국가·수출입 방향·조회 기간은 생략하면 input.context에서 이어받는다. 복합 질문의 각 Task는 동일 접수 시점 컨텍스트를 기준으로 하며 앞 Task의 처리 결과를 암묵적으로 상속하지 않는다. 플래너는 질문 속 공통 조건을 관련 Task에 명시한다.
 - 비교 요청은 comparison_requested로 구분한다. 비교 요청이 없으면 이전 compare_period를 제거한다. 비교 요청이 있으면 명시한 기간, 명시적인 이전 비교 지칭이면 이전 비교 기간, 그 밖에는 전년 동기를 쓴다. 이전 비교 지칭도 플래너가 해당 기간을 슬롯에 넣어 명시한다.
-- ranking_group은 RANKING/MARKET_SHARE에서만 사용한다. 이전 순위 기준을 무조건 상속하지 않고 이번 질문으로 결정하며 모호하면 RANKING_GROUP으로 묻는다. article_period는 D-75를 따른다.
+- ranking_group은 RANKING에서만 사용한다(MARKET_SHARE는 국가별 비중만 지원해 묻지 않는다, D-87). 이전 순위 기준을 무조건 상속하지 않고 이번 질문으로 결정하며 모호하면 RANKING_GROUP으로 묻는다. article_period는 D-75를 따른다.
 - 원문 표현은 각각 120자 이하(국가는 `CountryMention{mention, name}`이다. 정식 국가명 `name`은 플래너가 쓴 값이라 안내 없이 40자로 자른다)이며 초과 시 조용히 잘라 검색하지 않고 조건을 더 짧게 입력하도록 안내한다. 품목·국가 개수 초과도 일부만 골라 실행하지 않는다. 절대 기간과 recent_months는 동시에 받지 않는다. 비교 기간은 comparison_requested=True일 때만 받는다.
-- recent_months는 240개월까지다(`MAX_RECENT_MONTHS`, 임시값 C-26). 넘는 값은 날짜 계산이 깨지므로 받지 않고 안내한다.
+- recent_months는 240개월까지다(`MAX_RECENT_MONTHS`, C-26 확정). 넘는 값은 정책 상한 안내로 거부하며, 상한 이내도 공개·검증 월 범위를 검사한다(D-94).
 - 플래너는 LLM 출력을 `PlannerSlots`로 받는다. 이 모델은 개수·길이 상한을 넘어도 받고, `limit_errors()`가 안내 문구를 돌려준다. 문구가 있으면 그 Task는 단계 없이 `answer_status=NO_DATA`로 두고 문구를 `warnings`에 넣으며, 나머지 Task는 그대로 실행한다. 문구가 없을 때만 상한을 거는 `TaskSlots`로 옮겨 저장한다. 계획 전체를 검증 오류로 실패시키지 않기 위해서다.
 
 ### D-74. 유망시장 지원 범위
@@ -354,15 +382,15 @@ actions[], report_id, warnings[]
 - generate_report는 D-81의 조건·형식 확인을 마친 뒤 report 작업을 멱등하게 접수하고 ReportWait(step_id, report_id, started_at)를 기록한다. 해당 Step은 RUNNING, AgentState와 MySQL 실행 상태는 WAITING_REPORT다. 이 단계에서는 compose/finalize로 진행하거나 성공 답변을 반환하지 않는다.
 - 워커를 점유한 채 대기하지 않는다. report 완료 확인 직전의 전용 재개 지점에 체크포인트를 남기고 실행권을 반환한다. graph 구현은 이 지점에 정적 중단점(동적 interrupt()는 여전히 ask_user 전용)을 두고, 완료 감지 후 해당 체크포인트를 None으로 재개하는 통합 테스트를 작성한다. 일반 QUEUED claim과 분리하여 단일 워커에서도 report 작업을 처리할 수 있어야 한다.
 - 완료 확인기는 MySQL report가 READY면 채팅을 재개 가능하게 하고, 재개 노드가 report_wait를 비우고 결과를 저장한 뒤 Step을 DONE으로 만든다. FAILED면 해당 Step을 FAILED로 두고 D-72에 따라 나머지 질문을 처리한다. report의 DELAYED/QUEUED/RUNNING은 완료가 아니다. 채팅 노드에서 report 생성 재시도를 중복 수행하지 않는다.
-- WAITING_REPORT 동안 같은 대화방은 잠겨 있고 프론트는 2초 폴링과 '리포트 만드는 중' 표시를 유지한다. 진행률은 생성 완료 전 100%로 만들지 않는다. 대기 확인기는 job 소유권을 확인하며 active·체크포인트 TTL을 연장한다. 확인기 중단이나 Redis 유실 시에도 MySQL의 job+step에 연결한 report_id로 기존 리포트를 찾아 재사용한다.
+- WAITING_REPORT 동안 같은 대화방은 잠겨 있고 프론트는 2초 폴링과 '리포트 만드는 중' 표시를 유지한다. 진행률은 생성 완료 전 100%로 만들지 않는다. 대기 확인기는 job 소유권을 확인하며 active·체크포인트 TTL을 연장한다. 확인기 중단이나 Redis 유실 시에도 MySQL의 job+step에 연결한 report_id를 찾고 D-97의 승인 입력 검사를 통과한 기존 리포트를 재사용한다.
 - 리포트 대기는 실행 예산에서 제외한다. 재개 시 round_started_at을 이동하지 않고 run_budget의 기존 차감 시간을 유지한다(D-85). 화면의 전체 경과 시간은 MySQL 라운드 접수 시각으로 계산한다. 리포트 대기의 별도 전체 상한은 TODO(C-24), state.REPORT_WAIT_TIMEOUT_SECONDS는 임시로 None이며 기존 리포트 재시도 한도·실패 상태를 따른다.
 - 사용자가 채팅을 중단하면 대기를 끝내고 답변을 저장하지 않는다. 이미 접수한 리포트는 기존 리포트 작업 정책으로 처리한다. 리포트 자체의 취소는 현재 지원 범위 밖이며 API 확인 문구로 이를 알린다.
 
 ### D-77. 중복·장애·검증의 구현 계약
 - API는 소유권 확인 후 멱등키를 먼저 확인한다. 같은 키·같은 내용은 기존 job, 다른 내용은 IDEMPOTENCY_CONFLICT다. 그 뒤 새 요청의 실행 중 여부를 판단한다. API-36 직접 답변도 client_message_id로, API-38은 clarification_id와 정규화된 답으로 중복을 판정한다. 이미 수락한 동일 답은 기존 job, 다른 답은 CLARIFICATION_CONFLICT다. 새 되묻기에 이전 답을 다시 적용하지 않는다.
-- MySQL의 세션 잠금과 작업 상태를 접수의 최종 기준으로 삼고 AgentInput과 QUEUED 등록을 한 트랜잭션에 저장한다. Redis SET NX 실패나 접수 중 쓰기 실패 시 등록을 롤백한다. Redis 장애는 503이며 성공 응답 후 중복 job을 만들지 않는다. Redis 고아 lock은 가리키는 MySQL job 상태를 확인해 복구한다.
+- MySQL의 세션 잠금과 작업 상태를 접수의 최종 기준으로 삼고 AgentInput과 QUEUED 등록을 한 트랜잭션에 저장한다. Redis SET NX 실패나 접수 중 쓰기 실패 시 등록을 롤백한다. Redis 장애는 503이며 성공 응답 후 중복 job을 만들지 않는다. Redis 고아 lock은 가리키는 MySQL job 상태를 확인해 복구한다. job이 없거나(커밋 실패) 끝났으면 고아다(§3-3·5).
 - 워커는 외부 호출 중 MySQL 트랜잭션·행 잠금을 유지하지 않는다. 짧은 트랜잭션으로 상태를 갱신하고 매번 claim_token 및 CANCELLED 여부를 확인한다. 잠금 삭제·TTL 연장은 active 값이 자기 job_id일 때만 원자적으로 수행한다.
-- finalize는 답변·조건·제목·SUCCEEDED를 같은 MySQL 트랜잭션에 멱등 저장한다. job_id 기준 답변 중복을 방지하고 결과표·리포트는 job_id+step_id 기준으로 재사용한다. Redis 갱신 실패로 MySQL 성공 답변을 실패 처리하거나 다시 생성하지 않는다. 다음 접근에서 성공 여부를 대조해 오래된 Redis 컨텍스트를 무효화하고 조건만 복구한다.
+- finalize는 답변·조건·제목·SUCCEEDED를 같은 MySQL 트랜잭션에 멱등 저장한다. job_id 기준 답변 중복을 방지하고 결과표·리포트는 job_id+step_id로 후보를 찾고 D-97의 입력 fingerprint를 검사해 재사용한다. Redis 갱신 실패로 MySQL 성공 답변을 실패 처리하거나 다시 생성하지 않는다. 다음 접근에서 성공 여부를 대조해 오래된 Redis 컨텍스트를 무효화하고 조건만 복구한다.
 - 체크포인트 삭제는 finalize 노드 안에서 하지 않고 그래프 호출이 반환된 뒤 수행한다. 취소 중 실행이 계속되면 체크포인트가 다시 생길 수 있으므로 중단된 워커가 반환된 뒤 정리한다. 모든 재개는 MySQL의 최종 상태를 먼저 확인한다.
 - verify는 숫자의 존재 여부뿐 아니라 국가·품목·기간·지표·단위를 함께 대조한다. 퍼센트와 퍼센트포인트, 0과 미집계 null을 구분한다. turn_summary의 숫자도 검증하며 검증 실패한 숫자는 이력에 남기지 않는다. 재생성 후 불일치 문장은 NEEDS_REVIEW로 표시한다.
 - 후속 구현 테스트: 중복 질문/직접 답, 취소와 저장 경쟁, 오래된 claim의 저장, SQL 성공 후 워커 중단, report 생성 후 체크포인트 유실, MySQL 성공 후 Redis 실패, WAITING_REPORT 단일 워커 재개를 외부 연결 없이 검증한다.
@@ -415,7 +443,7 @@ actions[], report_id, warnings[]
 
 ### D-85. 실제 실행 예산과 장애 복구 (2026-10-30 사용자 승인)
 - 한 라운드의 실행 예산은 180초다. LLM·SQL·ML 등 실행 중 소요 시간은 포함하고, 큐·되묻기·리포트 생성 대기·장애 복구 대기는 제외한다. 정상 재시도에 든 시간도 포함한다.
-- state.run_budget의 charged_seconds는 이미 차감한 실행 시간, recovery_count는 장애로 소유권을 다시 받은 횟수다. 남은 시간은 max(0, 180 - charged_seconds)다. round_started_at은 표시용이며 대기·재개 때 시간을 이동하거나 새로 설정하지 않는다. 사용자의 새 되묻기 답으로 새 라운드를 시작할 때만 예산을 초기화한다.
+- state.run_budget의 charged_seconds는 이미 차감한 실행 시간, recovery_count는 장애로 소유권을 다시 받은 횟수다. 남은 시간은 max(0, 180 - charged_seconds)다. round_started_at은 기록용이며(화면 경과 시간은 MySQL `round_received_at`, §11.3) 대기·재개 때 시간을 이동하거나 새로 설정하지 않는다. 사용자의 새 되묻기 답으로 새 라운드를 시작할 때만 예산을 초기화한다.
 - 워커는 MySQL _execution에 라운드 ID·차감 시간·복구 횟수·진행 중 호출의 예약 시간을 실행 메타데이터로 기록한다. 전체 AgentState를 별도로 복제하지 않는다. Redis 체크포인트가 사라져도 이 예산은 유지하고, 복구 시 체크포인트 사본보다 MySQL 값을 우선한다.
 - 호출 전에 남은 예산 안에서 해당 노드의 최대 실행 시간을 원자적으로 예약하고 실제 호출 timeout에도 적용한다. 정상 종료하면 단조 시계로 잰 실제 소요 시간으로 정산하고 남은 예약분을 돌려준다. 예약 후 워커가 죽으면 사용 시간을 정확히 알 수 없으므로 예약분은 차감된 채 유지한다. 리포트 생성 자체는 대기 작업이므로 채팅에서는 접수·결과 확인 호출 시간만 예약한다.
 - 예약·정산은 라운드 ID+claim_token+호출 ID 기준으로 멱등 처리한다. 오래된 워커는 정산·반환·답변 저장을 할 수 없다. 재시도 호출도 별도 예약하므로 180초를 새로 부여하지 않는다.
@@ -442,9 +470,16 @@ actions[], report_id, warnings[]
 - 후속 구현 테스트에 10분 장애 대기 후 남은 예산 유지, 예약 후 프로세스 종료·재정산, 복구 횟수 한도, 4개 질문의 무실행 안내, 모호한 점유율 재질문·해외 점유율 미지원, 차트 결과표 불일치를 포함한다.
 
 
+### D-89. 여러 국가·품목의 추이와 차트 유형 (2026-10-30 사용자 결정)
+- 추이(TREND)에 국가·품목이 여러 개면 합계 하나로 더하지 않고 품목×국가 조합(대상)마다 나눈다. 결과표 하나에 `hs_code`·`country_code`로 구분해 담는다(§14.2). 품목만 여럿이면 품목별, 국가만 여럿이면 국가별이다.
+- 대상 이름은 "국가 · 품목" 전체를 `state.shorten_target_names`로 40자 안에 줄이고, 겹치는 것에만 코드를 붙인다(§14.5).
+- 차트는 조회 기간 금액 상위 5개 대상만 그리고 경고를 붙인다. 표에는 모든 대상이 들어가되, 1,000행(D-42)을 넘으면 대상 단위로 자른다(§14.2). 대상 순위는 자르기 전 전체 집계로 정하고, 차트·digest는 표에 들어간 대상 중에서 그 순위대로 고른다.
+- digest는 표에 들어간 대상 중 금액 상위 10개까지 담는다(§11.2, 행 수는 C-27).
+- 차트 유형은 플래너가 계획 때 정하지 않고 build_chart가 결과를 보고 정한다. 대상 수는 품목 되묻기 뒤에야 확정되고 LLM SQL 결과 모양도 실행 뒤에야 알 수 있기 때문이다(§11.1 `Step.args`의 chart는 `{}`).
+
 ### 추가 리뷰 결과 (2026-10-30, D-85~88 반영 후)
 - 기존 results.read_snapshot은 저장 결과 만료 시 410 RESULT_EXPIRED, 없는 결과는 404를 사용한다. 차트 조회에도 같은 구분을 적용하도록 D-82/API 문서의 만료 404 설명을 정정했다.
-- 이번 범위에서 새로 사용자 결정을 받아야 하는 제품 정책은 추가하지 않았다. C-20(로그인 세션), C-23(EC2 메모리), C-24(리포트 대기 상한), C-26(최근 개월 수 상한)은 기존 임시값을 유지한다.
+- 이번 범위에서 새로 사용자 결정을 받아야 하는 제품 정책은 추가하지 않았다. C-20은 해결됐고 C-26은 D-94로 확정했다. C-23(EC2 메모리), C-24(리포트 대기 상한)는 기존 정책을 유지한다.
 - state 계약 검증과 실제 실행 보장은 구분한다. claim 예약·정산, 원자적 접수, 재개·취소 경쟁, 차트 읽기 API와 SQL 집계는 후속 구현 및 통합 테스트가 필요하다. 이 브랜치의 state 단위 테스트 통과로 실행 계층의 완료를 주장하지 않는다.
 
 
@@ -455,16 +490,18 @@ actions[], report_id, warnings[]
 ### 11.1 플래너 (`agents/planner.py`)
 - **호출:** `api/intent.py`의 `OpenAIIntentProvider`와 같은 방식으로 `client.responses.parse(model=API_INTENT_MODEL, instructions=PLANNER_PROMPT, input=JSON, text_format=state.PlannerOutput, max_output_tokens=2000, temperature=0, store=False)`를 부른다. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-20, D-21). `max_retries=0`으로 SDK 자동 재시도는 끈다.
 - **입력 JSON:** `{"question": input.question, "previous_conditions": input.context.conditions(없으면 {}), "recent": [{"question", "intent", "summary"} … 최근 5건]}`. 이전 대화는 데이터로만 넣는다(§8).
-- **출력:** `state.PlannerOutput{tasks: [PlannedTask{intent, question, slots: PlannerSlots, custom_query}]}`. 단계·조건·결과·확인 값은 플래너가 넣지 못한다(모델이 거부).
+- **출력:** `state.PlannerOutput{tasks: [PlannedTask{intent, question, slots: PlannerSlots, custom_query, source_tasks, target_selections}]}`. 단계·조건·결과·확인 값은 플래너가 넣지 못한다(모델이 거부).
 - **프롬프트 규칙(`PLANNER_PROMPT`):** `intent.py` `PROMPT`의 슬롯 규칙(국가는 `{mention: 질문 원문 그대로, name: 정식 한국어 국가명}`, HS 코드 생성 금지, 기간은 월 경계, 연도만 있으면 1~12월, `recent_months`는 상대 기간)을 그대로 가져오고 다음을 더한다.
   - intent는 `state.Intent` 9개 중 하나다. 기존 `ML`은 `PROMISING_MARKET`(유망시장·예측) 또는 `MARKET_TYPE`(시장 유형·군집), 기존 `RAG`는 `CAUSE`(원인 설명) 또는 `LOCAL_ISSUES`(기사 조회)로 나눈다. 리포트 생성 요청은 `REPORT`다.
   - 같은 분석의 여러 대상은 한 Task에 넣고, 서로 다른 분석만 Task를 나눈다(D-34, D-86). Task 수를 줄이려고 질문을 버리지 않는다. 4개 이상이어도 모두 낸다.
   - `share_basis`는 질문에 분모가 분명할 때만 넣고, 아니면 null이다(D-87). `comparison_requested`는 비교를 요청했을 때만 true다(D-73).
-  - `custom_query`는 §11.5의 템플릿으로 답할 수 없을 때만 필요한 조회를 한국어 한 문장으로 적는다.
+  - `custom_query`는 §11.5의 템플릿으로 답할 수 없을 때만 필요한 조회를 한국어 한 문장으로 적는다. 품목별 비중("화장품 중 품목별 비중")도 여기에 해당한다. SHARE 템플릿은 국가별 비중만 지원한다(D-87).
+  - **슬롯의 null과 []는 뜻이 다르다(D-73).** 질문에 언급이 없으면 null이고(이전 조건을 이어받음), "전체 품목"·"모든 국가"처럼 전체를 명시했을 때만 []다. 기존 `intent.py`의 "언급 없으면 null/empty"와 `all_products`·`all_countries` 규칙은 가져오지 않는다. `comparison_requested`는 요청이 없으면 null이다.
+  - `ranking_group`은 RANKING에서만 채운다. MARKET_SHARE에는 넣지 않는다.
 - **코드 후처리(순서 고정):**
   1. `task_count_error(len(tasks))`가 있으면 tool을 실행하지 않고 D-86대로 끝낸다.
   2. Task마다 `slots.limit_errors()`가 있으면 단계 없이 `answer_status=NO_DATA`로 두고 문구를 `warnings`에 넣는다(D-73).
-  3. `task_id`는 `t1`·`t2`·`t3`, `question`은 500자로 자르고, `slots`는 `TaskSlots.model_validate(slots.model_dump())`로 옮긴다.
+  3. `custom_query`는 `Task.custom_query`에 복사한다. `source_tasks`는 D-90에 따라 `input_bindings`와 check 의존성으로 변환한다. `task_id`는 `t1`·`t2`·`t3`, `question`은 500자로 자르고, `slots`는 `TaskSlots.model_validate(slots.model_dump())`로 옮긴다.
   4. 단계는 §5.1 표로 만든다. `step_id`는 `{task_id}.{check|sql|news|chart|report|ml}`이고 `Step.args`는 아래 표다.
 - **실패:** 재시도 후에도 파싱 실패·거부·출력 잘림(`status=incomplete`)이면, 기존 `chat.execute`와 같이 "질문을 해석하지 못했습니다. 국가·품목·기간을 명시해 다시 입력해 주세요."로 `answer_status=NO_DATA` 답변을 저장하고 SUCCEEDED로 끝낸다. 이전 조건은 바꾸지 않는다.
 
@@ -474,7 +511,7 @@ actions[], report_id, warnings[]
 | sql (RANKING) | `{"template": "RANKING", "top": 10}` |
 | sql (MARKET_SHARE) | `{"template": "SHARE"}` |
 | sql (`custom_query`가 있을 때) | `{"template": "LLM_SQL"}` |
-| chart | `{"type": "line"·"bar"·"donut"·"grouped_bar"}`. TREND는 line(비교 기간이 있으면 시리즈 2개), RANKING은 bar, SHARE는 donut, 두 기간 합계 비교는 grouped_bar |
+| chart | `{}`. 차트 유형은 플래너가 정하지 않고 build_chart가 결과(대상 수, 비교 기간, LLM SQL 결과 모양)를 보고 정한다(§14.5, D-89). 대상 수는 품목 되묻기 뒤에야 확정되기 때문이다 |
 | ml | `{"top": 10}` |
 | news | `{"limit": 5}` (`RagRequest.use_case="chat"`) |
 
@@ -482,15 +519,22 @@ actions[], report_id, warnings[]
 - 모든 digest는 `{"kind", "period": {"start": "YYYY-MM", "end": "YYYY-MM"}, "trade_flow", "unit": "USD", "source", "latest_available_month", "rows_total", "truncated"}`를 공통으로 갖는다. `rows_total`은 결과표 전체 행 수, `truncated`는 digest에 일부만 담았는지다.
 - **숫자 표기:** 금액은 USD 정수(반올림), 비율은 소수 1자리 float, 값이 없으면 null이다. Decimal·date·numpy는 tool이 바꿔 넣는다(D-62). 0과 null을 구분한다(D-84).
 - **상한:** digest 하나는 8KB(D-62)이고, 목록 행은 최대 60행이다(C-27). 넘으면 아래 규칙으로 줄이고 `truncated=true`로 둔다. 원본은 결과표에 그대로 있다.
+- **글자 칸 길이:** 행 수만 줄여서는 8KB를 넘을 수 있다(HS4 품목명 347자, 기사 제목·요약 길이 무제한). 그래서 digest에 넣을 때 자른다.
+  - `name`: `shorten_name`, 40자
+  - 기사 `title`: 100자
+  - 기사 요약 문장: 200자
+  - LLM_SQL의 문자열 값: 100자
+
+  그래도 8KB를 넘으면 행을 뒤에서부터 줄여 맞추고 `truncated=true`로 둔다. 8KB를 넘겨 ToolResult 검증이 실패하는 일이 없게 한다.
 
 | kind (tool·template) | 칸 | 60행을 넘을 때 |
 |---|---|---|
-| `TREND` (sql·TREND, `trade.trends`) | `targets: [{hs_code, hs_ver, name, total_usd, compare_total_usd, change_pct, verified_months, requested_months, monthly_avg_usd, compare_monthly_avg_usd, monthly: [{month, amount_usd, compare_amount_usd}]}]`. 품목이 하나여도 `targets`에 1개를 담는다(§14.2) | `monthly`는 대상마다 최근 `60 // 대상 수`개월만 담는다 |
+| `TREND` (sql·TREND, `trade.trends`) | `targets: [{hs_code, hs_ver, name, country_code, country_name, total_usd, compare_total_usd, change_pct, verified_months, requested_months, monthly_avg_usd, compare_monthly_avg_usd, monthly: [{month, amount_usd, compare_amount_usd}]}]`. 대상은 품목×국가 조합이다(D-89). 품목이 없으면 `hs_code`가 null(전체 품목), 국가가 없으면 `country_code`가 null(전체 국가)이다. 대상이 하나여도 `targets`에 1개를 담는다(§14.2) | 대상은 결과표에 들어간 대상 중 조회 기간 금액 상위 10개까지만 담고(§14.2 자르기 순서), `monthly`는 담은 대상마다 최근 `60 // 담은 대상 수`개월만 담는다 |
 | `RANKING` (sql·RANKING, `trade.rankings`) | `group`(COUNTRY·HS6), `total_usd`, `top: [{rank, code, name, amount_usd, share_pct, yoy_pct, mom_pct}]` | 상위 10행만(D-42) |
-| `SHARE` (sql·SHARE, `trade.market_shares`) | `share_basis`, `denominator_usd`, `items: [{code, name, amount_usd, share_pct}]`(상위 10 + 기타) | 해당 없음(최대 11행) |
+| `SHARE` (sql·SHARE, `trade.market_shares`) | `share_basis`, `denominator_usd`, `items: [{code, name, amount_usd, share_pct}]`(상위 10 + 상위 10 밖의 지정 국가 + 기타, §14.2) | 해당 없음(최대 31행) |
 | `LLM_SQL` (sql·LLM_SQL) | `columns: [{key, unit}]`, `rows: [...]`(결과표 앞부분), `sql_summary` | 앞 60행 |
-| `PREDICTION` (ml) | `anchor`, `model_version`, `snapshot_month`, `targets: [{country_code·hs6, items: [{rank, country_code, hs6, name, growth_pct, exp_12m}]}]` | 대상마다 상위 `min(10, 60 // 대상 수)`행. 쌍 조회는 요청 순서 앞 60쌍 |
-| `ARTICLES` (news) | `article_period`, `rag_status`(RagResponse.status), `items: [{article_id, title, published_date, source_code, summary: [문장]}]` | 최대 5건(D-43) |
+| `PREDICTION` (ml) | `anchor`, `model_version`, `snapshot_month`, `targets: [{country_code·hs6, items: [{country_rank, product_rank, country_size, product_size, country_code, hs6, name, growth_pct, exp_12m}]}]` | 대상마다 상위 `min(10, 60 // 대상 수)`행. 쌍 조회는 요청 순서 앞 60쌍 |
+| `ARTICLES` (news) | `article_period`, `rag_status`(RagResponse.status), `items: [{article_id, title, published_date, source_code, evidence_sufficient, summary: [문장]}]` | 최대 5건(D-43) |
 
 ### 11.3 실행 메타데이터 (`chat_message.result_json._execution.agent`)
 - 기존 `_execution`(version 1, `api/jobs.py`)의 칸은 그대로 두고 `agent` 객체만 더한다. `payload_json.input`은 `AgentInput`, `payload_json.resume`은 되묻기 답이다(§3).
@@ -505,18 +549,20 @@ actions[], report_id, warnings[]
 | `recovery_count` | int | 장애로 소유권을 다시 받은 횟수 |
 | `progress` | `{done, total, label}` | tool 노드마다 갱신. `label`은 API 문서의 8개 문구 중 하나 |
 | `report_wait` | `{step_id, report_id, started_at}` 또는 null | WAITING_REPORT 동안(D-76) |
+| `step_results` | `{step_id: {result_id, input_fingerprint, fingerprint_version}}` | 결과표와 같은 짧은 트랜잭션으로 기록한다. 재사용 전 현재 입력 fingerprint, 저장 결과 meta, 소유권·만료를 모두 확인한다. ID만 있는 구형 항목은 재사용하지 않는다(D-97) |
 - 갱신은 `api/jobs.py`처럼 짧은 트랜잭션에서 `claim_token`이 같을 때만 한다. Redis 체크포인트와 값이 다르면 이 값을 따른다(D-85).
 
 ### 11.4 숫자 대조 (`agents/verify.py`)
-- **대상:** `Draft.sentences()`의 문장마다 숫자 토큰을 뽑는다. 결론 문장은 그 Task의 digest, 설명 문장은 모든 Task의 digest와 대조한다.
+- **대상:** `Draft.sentences()`의 문장마다 숫자 토큰을 뽑는다. 결론 문장은 그 Task의 digest, 설명 문장은 모든 Task의 digest와 대조한다. **대조 기준은 digest 값이다.** compose가 본 것이 digest이기 때문이다. 결과표는 digest의 출처일 뿐이고, verify는 결과표를 다시 읽지 않는다. 다른 절의 "결과표와 대조"도 이 뜻이다.
 - **대조하지 않는 문장:** 결과(digest)가 없는 Task의 결론은 §13.1에 따라 코드가 넣은 고정 문구다(예: "품목은 질문 하나에 5개까지…"). 대조하지 않고 `SentenceCheck`도 만들지 않으며, 다시 생성할 대상에도 넣지 않는다. LLM이 쓴 문장(결과가 있는 Task의 결론, 설명, `turn_summary`)만 대조한다.
 - **토큰:** 부호·쉼표·소수를 포함한 숫자와 바로 뒤의 단위다. 단위는 `%`, `%p`, `달러`·`USD`, `만`·`억`·`조`(배수 1e4·1e8·1e12), `배`, `위`다.
 - **대조에서 빼는 것:** 날짜·기간(`2024년`, `3월`, `2024-03`, `12개월`)은 숫자 대조가 아니라 그 Task 조건의 기간과 맞는지만 본다. 기사 인용 `[n]`은 뺀다.
 - **일치 판정:** 문장에 쓴 자릿수로 digest 값을 반올림했을 때 같으면 PASS다(D-51). 예: "3.5억 달러"는 3.45억 이상 3.55억 미만이면 PASS.
   - `%`와 `%p`, 금액과 비율, 총액과 월평균은 서로 다른 지표라 섞이면 MISMATCH다(D-84).
   - digest 값이 null인데 문장이 숫자를 말하면 MISMATCH다.
-  - 문장에 나온 국가·품목 이름이 그 Task의 조건에 없으면 MISMATCH다(D-77).
-- **결과:** `SentenceCheck{index, numbers, status}`. MISMATCH가 있으면 compose를 1번 다시 부르고(`regeneration_count`), 그래도 있으면 `Verification.status=NEEDS_REVIEW`로 두고 화면에 "확인 필요"를 붙인다(D-51). `turn_summary`도 같은 규칙으로 보고, 틀린 숫자는 이력에 남기지 않는다(D-77).
+  - 문장에 나온 국가·품목 이름이 그 Task의 조건에도 없고 그 Task digest 행의 `name`·`code`에도 없으면 MISMATCH다(D-77). 순위·비중·유망시장 답변의 "1위는 미국"은 digest 행에 있으므로 PASS다.
+- **LLM 문장이 하나도 없으면**(모든 Task가 고정 문구) `Verification.status=PASS`, `checks=[]`이다.
+- **결과:** `SentenceCheck{index, numbers, status}`. MISMATCH가 있고 남은 예산이 있으면(§13.4) compose를 1번 다시 부르고(`regeneration_count`), 그래도 있으면 `Verification.status=NEEDS_REVIEW`로 두고 화면에 "확인 필요"를 붙인다(D-51). `turn_summary`도 같은 규칙으로 보고, 틀린 숫자는 이력에 남기지 않는다(D-77).
 
 ### 11.5 템플릿과 LLM SQL의 경계
 - **템플릿 3종으로 처리:**
@@ -526,7 +572,7 @@ actions[], report_id, warnings[]
   - 지정 비교 기간은 TREND 템플릿을 보완해 처리한다(D-29).
 - **LLM SQL로 넘기는 것:** 플래너가 `custom_query`를 쓴 Task만 넘긴다. 템플릿에 없는 지표나 묶음 기준이 필요한 경우다. 예: 물량·단가, 여러 품목을 합친 순위, 특정 국가 묶음의 합계(권역 표현은 D-26대로 미지원).
 - **실행 절차:** D-40·D-41·D-65를 따른다. 생성 프롬프트에는 허용 테이블의 컬럼 목록만 준다. 그다음 sqlglot으로 SELECT만·허용 테이블만·`article.body_masked` 차단·`LIMIT 1000` 강제를 검사하고, READ ONLY 세션으로 실행하며, 쿼리마다 30초 상한을 건다. 검증에 실패하면 최대 2번 다시 만든다.
-- **결과 처리:** 결과는 `results.result_table`로 저장하고 digest는 `LLM_SQL` 형식이다. 숫자 대조는 결과표 값으로 한다.
+- **결과 처리:** 결과는 `results.result_table`로 저장하고 digest는 `LLM_SQL` 형식이다. 숫자 대조는 그 digest 값으로 한다(§11.4).
 
 ### 11.6 추가 의존성
 - `backend/requirements-api.txt`에 `langgraph`, `langgraph-checkpoint-redis`(→ `redis`, `redisvl`), `sqlglot`을 고정 버전으로 더한다. 버전은 추가할 때의 최신 안정판으로 정하고, Redis 8(D-07)과 `RedisSaver(ttl=...)`가 동작하는지 확인한다.
@@ -551,7 +597,7 @@ actions[], report_id, warnings[]
 - **진행 상자:** `progress`가 있으면 진행률 바(`done/total`)와 `progress.label`을 보여 준다. 경과 초는 `현재 시각 − round_started_at`이다. 되묻기에 답하면 서버가 새 값을 주므로 0부터 다시 센다.
 - **입력 잠금:** QUEUED·RUNNING·WAITING_REPORT일 때는 입력창과 전송 버튼을 잠근다(D-11). NEEDS_INPUT일 때는 `clarification.allow_text`가 true면 입력창을 열어 두고, 보낸 글은 API-36으로 보낸다(서버가 되묻기 답으로 처리, D-12). 지금 코드는 NEEDS_INPUT에서도 잠그고 있어 바꿔야 한다.
 - **중단 버튼:** QUEUED·RUNNING·NEEDS_INPUT·WAITING_REPORT일 때 "이 질문 중단" 버튼을 둔다. 확인 모달 문구는 "이 질문을 중단할까요?"이고, WAITING_REPORT이면 "채팅의 리포트 대기를 중단할까요? 이미 접수한 리포트 생성은 계속될 수 있습니다."다. 확인하면 API-131을 부른다.
-- **실패 안내:** `error.code`별 문구를 보여 준다. `QUESTION_TOO_COMPLEX`·`RUN_TIMEOUT`·`RECOVERY_EXHAUSTED`는 서버 문구를 그대로 보여 주고 재시도 버튼은 두지 않는다(retryable=false). 503 `CHAT_UNAVAILABLE`은 "잠시 후 다시 시도해 주세요."와 재시도 버튼을 보여 준다.
+- **실패 안내:** `error.code`별 문구를 보여 준다. `QUESTION_TOO_COMPLEX`·`RUN_TIMEOUT`·`RECOVERY_EXHAUSTED`는 서버 문구(§14.9)를 그대로 보여 주고 재시도 버튼은 두지 않는다(retryable=false). 503 `REDIS_UNAVAILABLE`은 "잠시 후 다시 시도해 주세요."와 재시도 버튼을 보여 준다.
 
 ### 12.2 되묻기 화면 (`job.status === 'NEEDS_INPUT'`)
 - **공통:** `clarification.message`, 선택지 버튼, 작은 글씨 `clarification.hint`, 만료 시각(`expires_at`)을 보여 준다. 409 `CLARIFICATION_EXPIRED`이면 "시간이 지나 다시 질문해 주세요."를 보여 주고 입력을 연다.
@@ -584,12 +630,12 @@ actions[], report_id, warnings[]
 §11에 없던 네 곳(compose, 비슷한 국가, 환경변수·노드 시간, LLM SQL)이다. 운영하며 바꿀 수 있는 값은 C-28로 묶었다.
 
 ### 13.1 compose (`agents/compose.py`)
-- **누가 쓰나:** 결과(digest)가 있는 Task만 LLM이 결론을 쓴다. 다음 Task의 결론은 코드가 고정 문구로 넣는다. 그다음 계획 순서대로 합쳐 `Draft.conclusion`을 만든다(D-80).
+- **누가 쓰나:** REPORT 성공은 D-93의 고정 문구를 우선한다. 그 밖에는 결과(digest)가 있는 Task만 LLM이 결론을 쓴다. 다음 Task의 결론은 코드가 고정 문구로 넣는다. 그다음 계획 순서대로 합쳐 `Draft.conclusion`을 만든다(D-80).
   - `MARKET_TYPE`·`OUT_OF_SCOPE`(D-69 문구)
   - 단계 없이 NO_DATA가 된 Task(`limit_errors()` 문구, D-73)
   - 조건 확인 실패·되묻기 한도 초과로 NO_DATA가 된 Task("조건을 확인해 다시 질문해 주세요.", D-15)
 
-  모든 Task가 고정 문구면 LLM을 부르지 않는다. 이때 `turn_summary`는 빈 문자열이고 최근 조건·요약은 바꾸지 않는다(D-72).
+  모든 Task가 고정 문구면 LLM을 부르지 않는다. 실패·미지원만 있으면 `turn_summary`는 빈 문자열이고 최근 조건·요약은 바꾸지 않는다. 리포트 성공은 D-93의 코드 작성 요약과 D-72의 조건 갱신 규칙을 적용한다.
 - **호출:** `client.responses.parse(model=API_COMPOSE_MODEL, instructions=COMPOSE_PROMPT, input=JSON, text_format=state.Draft, max_output_tokens=1500, temperature=0, store=False)`, 시간 상한 `API_COMPOSE_TIMEOUT_SECONDS`(20초), SDK `max_retries=0`이다.
   - 호출 실패·파싱 실패·`Draft` 검증 실패(문장 200자, Task당 2문장, 설명 4문장)는 1번만 다시 부른다(D-21).
   - 그래도 실패하면 D-67(표·차트만, PARTIAL)로 간다. 사용 가능한 결과가 없으면 NO_DATA다(D-72).
@@ -641,7 +687,7 @@ actions[], report_id, warnings[]
 | 이름 | 기본값 | 쓰는 곳 |
 |---|---|---|
 | `API_REDIS_URL` | `redis://:<비밀번호>@127.0.0.1:6379/0` | 컨텍스트·lock·체크포인터 (임시, D-07) |
-| `API_INTENT_MODEL`, `API_INTENT_TIMEOUT_SECONDS` | `gpt-4.1-mini`, 10 | 플래너(§11.1) |
+| `API_INTENT_MODEL`, `API_INTENT_TIMEOUT_SECONDS` | `gpt-4.1-mini`, 10 | 플래너(§11.1), 직접 입력 해석(§13.6) |
 | `API_COMPOSE_MODEL`, `API_COMPOSE_TIMEOUT_SECONDS` | `gpt-4.1-mini`, 20 | compose(§13.1) |
 | `API_SQL_MODEL`, `API_SQL_TIMEOUT_SECONDS` | `gpt-4.1`, 20 | LLM SQL 생성(§13.5). 더 큰 모델을 쓰기로 함(2026-10-30). 최종 모델은 골든셋 비교 후 확정(C-30) |
 | `API_SQL_EXECUTION_SECONDS` | 30 | LLM SQL 실행 상한(D-41) |
@@ -658,6 +704,7 @@ actions[], report_id, warnings[]
 |---|---|
 | planner LLM 1회 | 10 |
 | check_conditions (DB·HS 임베딩·리포트 미리보기) | 15 |
+| 직접 입력 해석 LLM 1회(§13.6, 규칙으로 정하면 없음) | 10 |
 | sql 템플릿 1회 | 30 |
 | LLM SQL 1회 (생성 20 + 실행 30) | 50 |
 | ml (`predict_markets`, 대상 전체) | 30 |
@@ -670,8 +717,9 @@ actions[], report_id, warnings[]
 
 값은 C-28이다. 단계별 소요 시간 로그(D-47)로 조정한다.
 
-- **마무리 몫:** 남은 노드(chart 5 + compose 20 + verify 5 + finalize 10 = 40초)는 늘 남겨 둔다.
+- **마무리 몫:** "아직 실행하지 않은 chart 단계 수 × 5 + compose 20 + verify 5 + finalize 10"초다. 하위 질문 3개에 차트가 3개 남았으면 50초다. 이 몫은 늘 남겨 둔다.
 - **재시도 조건:** 재시도·재생성(SQL 2회, LLM SQL 재생성 2회, 기사 1회, compose 1회)은 남은 예산이 "그 시도의 예약 시간 + 마무리 몫" 이상일 때만 한다. 모자라면 재시도하지 않고 그 단계를 FAILED로 둔 뒤 `skip_blocked()`하고 D-72대로 부분 답변을 만든다.
+- **verify 뒤 재생성:** 숫자가 틀려 compose를 다시 부르는 것(D-51)은 남은 예산이 "compose 20 + verify 5 + finalize 10 = 35초" 이상일 때만 한다. 모자라면 다시 쓰지 않고 틀린 문장에 "확인 필요"를 붙인다(`Verification.status=NEEDS_REVIEW`).
 - **이유:** 예를 들어 LLM SQL은 3번 다 예약하면 플래너 10 + check 15 + 150 = 175초라 마무리를 할 수 없다. D-40·D-45의 횟수는 최대치이고, 예산 안에서만 쓴다.
 
 ### 13.5 LLM SQL (`agents/tools.py`의 `query_trade_data`, `template=LLM_SQL`)
@@ -711,11 +759,32 @@ actions[], report_id, warnings[]
 - **실행:**
   - 별도 연결에서 `SET SESSION MAX_EXECUTION_TIME = API_SQL_EXECUTION_SECONDS×1000` → `START TRANSACTION READ ONLY` → 실행 → `ROLLBACK` 순서로 돈다(D-41).
   - 결과의 Decimal은 숫자로, date는 `YYYY-MM-DD` 문자열로 바꾼다. `number` 열에 숫자가 아닌 값이 있으면 검증 실패다.
-- **재생성:** 파싱·검사·실행 오류나 시간 초과가 나면 오류 문구를 `previous_error`에 넣어 최대 2번 다시 만든다(D-40). 단, 남은 예산이 50초 + 마무리 몫 40초 이상일 때만이다(§13.4). 그래도 실패하면 그 단계를 FAILED로 두고 `skip_blocked()` 한다(D-72).
+- **재생성:** 파싱·검사·실행 오류나 시간 초과가 나면 오류 문구를 `previous_error`에 넣어 최대 2번 다시 만든다(D-40). 단, 남은 예산이 50초 + 마무리 몫(§13.4) 이상일 때만이다. 그래도 실패하면 그 단계를 FAILED로 두고 `skip_blocked()` 한다(D-72).
 - **저장:**
   - 0행이면 NO_DATA다(숫자 생성 금지).
   - 결과가 있으면 `results.result_table(store, uid, rows, meta={"kind": "LLM_SQL", "summary", "source": "관세청", "period"}, conditions, sql=[최종 SQL], columns)`로 저장한다.
-  - digest는 §11.2 `LLM_SQL` 형식이고, 숫자 대조는 이 결과표로 한다.
+  - digest는 §11.2 `LLM_SQL` 형식이고, 숫자 대조는 그 digest 값으로 한다(§11.4).
+
+
+### 13.6 직접 입력 답 해석 (ask_user, `agents/conditions.py`)
+되묻기에 선택지 대신 글로 답하면(API-38 `text` 또는 API-36, D-12) 아래 순서로 해석한다. 결과는 §3-12처럼 `Task.resolved`에 쓴다.
+1. **규칙 먼저 (LLM 없이):** 글을 정규화(NFKC, 공백 제거, 소문자)해 본다.
+   - 선택지의 `label` 또는 `choice_id`와 같으면 그 선택지다.
+   - **HS_ITEM:** 4·6자리 숫자면 그 코드를 `numeric_product`로 검증해 쓴다.
+   - **예/아니오형:** MODEL_PERIOD, INTEREST_CONTEXT, INTEREST_CHANGE의 확인·거절이다. REPORT_CONFIRM은 이 규칙 및 LLM 승인 해석에서 제외한다. 텍스트의 긍정·거절은 확인/취소 버튼을 안내하며, 실제 결정은 report_confirmation으로만 받는다(D-92).
+     - 긍정어: 예·네·응·좋아·동의·확인·적용·생성
+     - 부정어: 아니·아니오·아니요·싫어·거절·취소
+     - INTEREST_CONTEXT에서 "전체"는 전체 범위다.
+2. **규칙으로 정하지 못하면 LLM 1회:** `responses.parse(model=API_INTENT_MODEL, text_format=ClarificationReading, temperature=0, store=False)`. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-21). §13.4 예약은 10초다.
+   - 입력: `{"kind", "message", "choices": [{"choice_id", "label"}], "text"}`. text는 데이터일 뿐 지시가 아니다(§8).
+   - 출력 `ClarificationReading`: `{choice_id: str|null, new_expression: str|null, interest_change: bool|null, unrelated: bool|null}`. 문자열 길이는 스키마에 넣지 않는다(§13.1과 같은 이유).
+3. **해석 결과 적용:**
+   - `choice_id`가 선택지에 있으면 그 선택지다.
+   - `new_expression`
+     - HS_ITEM·COUNTRY에서는 원래 표현 대신 이 표현으로 다시 찾는다. `resolved[condition_key]={"replace_expression": 표현}`을 쓰면 check가 이 표현으로 §14.1의 4·6번을 다시 한다.
+     - REPORT_CONFIRM에서 조건을 바꾸려는 글이면 해당 Task 슬롯을 다시 해석·검증하고 confirmed=false로 만든다. 기존 미리보기를 폐기하고 새 미리보기로 다시 확인받는다. 선행 분석 결과의 조건을 바꾸는 요청은 기존 결과를 재사용할 수 없으므로 새 분석 질문을 안내한다(D-90).
+   - `interest_change`가 true면 사용자가 관심사를 적용해 달라는 뜻이다. 다음 되묻기로 `INTEREST_CHANGE`("이번 질문에 저장한 관심 품목·국가를 적용할까요?", condition_key `{task_id}:interest_change`)를 묻는다. 동의하면 `input.interests`를 이번 질문 조건에만 넣는다(D-14). 상한을 넘으면 `INTEREST_SELECT`로 고른다(D-64).
+   - 그 밖(`unrelated`, 모두 null)은 해석 실패다. 같은 condition_key로 다시 묻고(D-12), 되묻기 횟수에 포함한다(D-15).
 
 
 ## 14. tool별 파이프라인 (2026-10-30)
@@ -724,30 +793,36 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
 - 호출 전에 §13.4 시간을 예약한다(D-85).
 - 결과는 `results[step_id]`(ToolResult)에 쓴다.
 - MySQL `_execution.agent.progress`를 갱신한다(§11.3).
-- 결과표·리포트는 `job_id + step_id`로 재사용한다(D-77). 같은 단계가 다시 돌면 저장된 `result_id`가 있는지 먼저 본다.
+- 결과표·리포트의 재사용 후보는 `job_id + step_id`로 찾되, 재사용 승인은 D-97의 입력 fingerprint 검사 후에만 한다. 결과표 후보는 MySQL `_execution.agent.step_results`(§11.3), 리포트 후보는 기존 generation_key로 찾는다. state의 result_id만 보고 반환하지 않는다. 저장 전 result_for_storage로 부분 결과를 전파한다(D-96).
 
 ### 14.1 check_conditions (`agents/conditions.py`)
-- **입력:** `task.slots`(TaskSlots), `task.intent`, `input.context.conditions`, `input.interests`, `ask_counts`, `data_meta`
-- **처리 순서:**
+- **입력:** `task.slots`(TaskSlots), `task.resolved`, `task.intent`, `input.context.conditions`, `input.interests`, `input.first_question`, `ask_counts`, `data_meta`
+- **처리 순서:** 이 순서가 기준이다(§3-11은 요약). 묻기 전에 미지원부터 걸러, 되물은 뒤에야 "지원하지 않음"으로 끝나는 일을 막는다.
+  0. **확정한 답 적용:** `task.resolved`의 값을 먼저 적용한다. 이미 확정한 원문 표현(품목·국가)과 조건(순위 기준, 분모, 관심 적용 여부)은 아래 단계에서 다시 찾거나 묻지 않는다(§3-12).
   1. **data_meta:** 수출입 최신 공개 월은 `trade.bounds`, 기사 최신일은 공개 기사(`visibility_status='VISIBLE'`)의 최대 발행일이다(기존 `chat_slots`와 같음).
-  2. **상속:** None은 이어받고, []는 전체, 값은 교체다. 비교 기간과 순위 기준은 D-73을 따른다.
-  3. **품목:**
+  2. **상속:** None은 이어받고, []는 전체, 값은 교체다. 비교 기간과 순위 기준은 D-73을 따른다. 수출입 기본은 EXPORT다(D-31).
+  3. **미지원 먼저 거르기:** 아래는 묻지 않고 그 Task를 NO_DATA로 끝낸다. 문구는 §14.9다.
+     - PROMISING_MARKET·REPORT인데 IMPORT일 때(D-74, D-81)
+     - MARKET_SHARE의 `share_basis`가 `FOREIGN_IMPORT_MARKET`일 때(D-87)
+     - PROMISING_MARKET인데 상속 뒤에도 국가·품목이 모두 없을 때(D-23). 관심 되묻기 대상이면 5번을 먼저 한다.
+  4. **품목:**
      - 숫자는 `numeric_product`로 검증한다.
-     - 이름은 SQL 정확 일치면 확정하고, 아니면 `chat_hs_search` 상위 5로 `HS_ITEM`을 묻는다(D-33). 표현이 여러 개면 `Pending.remaining`·`selected`로 하나씩 묻는다.
-     - PROMISING_MARKET에서 HS4가 오면 HS6로 묻는다(D-74).
-  4. **국가:** §13.2
-  5. **관심 적용 되묻기:** 대화방 첫 질문이고 품목·국가가 모두 비었으며 관심사가 있을 때다(D-30, D-64).
-  6. **기간:**
+     - 이름은 HS6 기준으로 찾는다: `reference._search_depth(store, 표현, 6, 5)`. `chat_hs_search`는 HS6가 확실하지 않으면 HS4 후보로 넘어가므로 쓰지 않는다(D-33).
+       - 정확 일치(`match_type="EXACT"`)가 1건이면 확정한다.
+       - 여러 건이거나 임베딩 후보면 상위 5 HS6로 `HS_ITEM`을 묻는다.
+     - 표현이 여러 개면 하나씩 묻고, 확정한 것은 `resolved`에 쌓인다.
+     - PROMISING_MARKET에서 HS4 코드가 오면 HS6로 묻는다(D-74).
+  5. **관심 적용 되묻기:** `input.first_question`이 true이고, 품목·국가가 모두 비었으며, 관심사가 있고, `resolved`에 관심 답이 없을 때만 묻는다(D-30, D-64).
+  6. **국가:** §13.2
+  7. **기간:**
      - 절대 기간은 `resolve_period`로 검증하고, 미공개 월이면 범위 밖으로 처리한다(D-28).
-     - `recent_months`는 최신 공개 월부터 거꾸로 센다. 기간이 없으면 기본값이다(D-27).
+     - `recent_months`는 최신 공개 월부터 거꾸로 센다. 기간이 없으면 기본값이다(D-27). 계산한 기간도 절대 기간과 동일하게 resolve_period로 검사한다. 최초 공개 월 이전이면 범위를 안내하고, 내부 검증 누락 월은 DATA_NOT_READY로 처리한다(D-94).
      - ML에 과거 기간을 지정하면 `MODEL_PERIOD`로 묻는다(D-74). 기사 기간은 D-75다.
-  7. **비교 기간:** D-73·D-84
-  8. **수출입:** 기본은 EXPORT다(D-31). ML·REPORT에서 IMPORT면 미지원 안내로 NO_DATA다(D-74, D-81).
+  8. **비교 기간:** `comparison_requested`가 아니면 `compare_period=None`(비교 없음)이다. 요청했는데 기간이 없으면 전년 동기를 계산해 넣는다(D-29, D-73, D-84).
   9. **intent별:**
-     - RANKING·MARKET_SHARE의 순위 기준이 모호하면 `RANKING_GROUP`(D-32)
-     - MARKET_SHARE의 분모가 모호하면 `SHARE_BASIS`(D-87)
-     - PROMISING_MARKET 필수 조건(D-23)
-     - REPORT는 `reports.preview` → `REPORT_CONFIRM`(D-81)
+     - RANKING의 순위 기준이 모호하면 `RANKING_GROUP`(D-32). MARKET_SHARE에는 묻지 않는다(국가별만 지원).
+     - MARKET_SHARE의 분모가 모호하면 `SHARE_BASIS`(D-87). 확정한 값은 `conditions.share_basis`에 넣는다.
+     - REPORT는 `reports.preview` → `REPORT_CONFIRM`(D-81). preview의 `compare` 모드는 `compare_period`가 None이면 `NONE`, 전년 동기면 `YOY_PERIOD`, 그 밖은 `CUSTOM`이다.
   10. **되묻기 한도:** 조건 하나당 2회(D-15)
 - **자체 검증:** `Conditions` 모델(중복·상한), `accounts.validate_scope`(사전에 있는 코드인지), 기간 1일 기준(§4)
 - **출력:** 셋 중 하나다.
@@ -759,10 +834,24 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
 ### 14.2 query_trade_data — 템플릿 (`template` = TREND·RANKING·SHARE)
 - **입력:** `task.conditions`, `Step.args`(§11.1)
 - **처리:**
-  - **TREND:** `trade.trends(store, uid, start, end, hs, countries, flow)`. 품목이 여러 개면 품목마다 `save=False`로 부르고, 행마다 `hs_code`·`hs_ver`·`name`을 붙여 합친 뒤 `results.result_table`로 한 번만 저장한다. 한 단계는 결과표 하나다(`ToolResult.result_id`가 하나뿐이고 D-88이 참조 일치를 요구함). 지정 비교 기간은 보완한 템플릿으로 한다(D-29, D-84).
-  - **RANKING:** `trade.rankings(..., group=ranking_group, flow, size=top)`
-  - **SHARE:** `trade.market_shares(conditions)`. `share_basis`가 `KOREA_TRADE_PARTNER`일 때만이다(D-87).
-  - RANKING·SHARE는 함수가 결과를 `results.result_table`에 저장하고 `result_id`를 돌려준다. TREND는 위처럼 합쳐서 저장한다.
+  - **호출 형식 주의(실제 시그니처):**
+    - `trade.trends(store, uid, start=None, end=None, months=24, hs=None, countries=None, flow='BOTH', save=True)`다. 기간은 `'YYYY-MM'` 문자열이고, `months`가 있어 위치 인자로 부르면 어긋나므로 키워드로 부른다.
+    - `trade.rankings(store, uid, start, end, hs, countries, group, flow, page, size)`
+    - `trade.market_shares(store, uid, conditions)`. `conditions.period`는 ISO 날짜 문자열 dict다.
+    - state `Conditions`(1일 기준 `date`)에서 이 형식으로 바꾸는 변환 함수를 tool 안에 둔다.
+  - **TREND:** `trade.trends(store, uid, start=..., end=..., hs=..., countries=..., flow=...)`. 품목·국가가 여러 개면 합계 하나로 더하지 않고 품목×국가 조합마다 나눈다(D-89).
+    - 조합마다 `save=False`로 부르거나, 품목·국가로 묶은 한 번의 집계로 처리한다. 단계 전체가 §13.4의 30초 안에 들어야 한다.
+    - 행마다 `hs_code`·`hs_ver`·`name`·`country_code`·`country_name`을 붙여 합친 뒤 `results.result_table`로 한 번만 저장한다.
+    - **자르기 순서(1,000행, D-42):**
+      1. 저장 전에 대상마다 조회 기간 합계를 전체 행으로 계산하고, 금액 순서로 대상 순위를 정한다. 차트 상위 5개(§14.5)와 digest 상위 10개(§11.2)는 이 순위로 고른다.
+      2. 표는 대상 순위대로 한 대상의 달을 모두 넣으며 채운다. 다음 대상까지 넣으면 1,000행을 넘을 때 거기서 멈춘다. 한 대상의 달을 중간에서 자르지 않는다.
+      3. 빠진 대상이 있으면 결과표 meta에 `truncated_targets`(빠진 대상 수)를 남기고 경고 "표에는 금액 상위 n개 대상만 담았습니다."를 붙인다.
+      4. 차트와 digest의 대상은 표에 들어간 대상 중에서만 순위대로 고른다. 차트는 최대 5개, digest는 최대 10개다. 표는 월별이라 기간이 길면 대상이 적게 들어간다. 예를 들어 240개월이면 4개(960행)만 들어가고, 차트와 digest도 4개다. 그래서 verify가 대조하는 결과표에 digest의 대상이 늘 있다.
+
+      한 단계는 결과표 하나다(`ToolResult.result_id`가 하나뿐이고 D-88이 참조 일치를 요구함). 지정 비교 기간은 보완한 템플릿으로 한다(D-29, D-84).
+  - **RANKING:** `trade.rankings(..., group=ranking_group, flow, size=top)`. 이 함수는 순위 전체 행을 결과표에 저장하므로, HS6 순위처럼 1,000행(D-42)을 넘을 수 있다. 그때는 저장 행을 상위 1,000으로 제한하도록 함수를 보완하고, 잘렸다고 표시한다(D-83).
+  - **SHARE:** `trade.market_shares(store, uid, conditions)`. `share_basis`가 `KOREA_TRADE_PARTNER`이고 국가별 비중일 때만 쓴다(D-87). 이 함수는 `country_codes`를 분모 계산에만 쓰고 결과에서 따로 다루지 않는다. 그래서 사용자가 지정한 국가가 상위 10 밖이면 "기타"에 묻힌다. 지정한 국가는 상위 10 밖이어도 결과·digest `items`에 따로 넣도록 보완한다(`items` 최대 10 + 지정 국가 + 기타). 품목별 비중은 플래너가 `custom_query`로 LLM SQL에 보낸다(§11.1).
+  - 기존 RANKING·SHARE는 내부에서 바로 결과를 저장하므로 그대로 호출하면 D-96·97의 저장 전 검사를 건너뛴다. 후속 구현에서 save=False로 행·meta를 받거나 공통 저장 경계로 분리한다. TREND도 합친 행에 대해 result_for_storage와 fingerprint 검사를 거친 뒤 결과표와 step_results를 같은 트랜잭션으로 저장한다.
 - **자체 검증:**
   - 0행이면 NO_DATA(숫자 생성 금지)
   - 결과 기간이 요청 기간 안인지
@@ -785,9 +874,9 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
   - `search_news`가 None을 돌려주면 NO_DATA로 두고 `NEWS_PENDING_MESSAGE`를 경고에 넣는다(RAG 연결 전).
 - **RagResponse.status 처리:**
   - `ok` → OK
-  - `partial` → OK + 경고
-  - `insufficient_results`(목표보다 적지만 요약까지 갖춘 기사가 있음) → OK + 경고 "관련 기사를 n건만 찾았습니다."
-  - `insufficient_evidence` → 요약이 있는 기사만 쓴다. 하나라도 있으면 OK + 경고 "근거가 확인된 기사 n건만 보여 드립니다.", 없으면 NO_DATA
+  - `partial` → OK + completeness=PARTIAL + limitations에 사유
+  - `insufficient_results`(목표보다 적지만 요약까지 갖춘 기사가 있음) → OK + completeness=PARTIAL + limitations에 사유 + 경고 "관련 기사를 n건만 찾았습니다."
+  - `insufficient_evidence` → 기사가 있으면 OK + completeness=PARTIAL. 요약 없는 기사도 제목·날짜·원문 링크를 표시하고 근거 부족 안내를 붙인다. 설명·인용 근거에는 사용하지 않는다(D-91). 기사 자체가 없으면 NO_DATA
   - `no_results` → NO_DATA, "관련 기사가 없습니다."
   - `failed` → 실패
 - **자체 검증:** 발행일이 `article_period` 안인지, 국가·품목 메타가 조건과 맞는지, 원문 링크가 있는지, 5건 이하인지. 요약 문장의 근거 ID는 `RagResponse` 모델이 검증한다.
@@ -795,30 +884,39 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
 - **실패:** 1회 재시도(D-45), 그 뒤 FAILED. CAUSE는 통계만으로 PARTIAL이다(D-46).
 
 ### 14.5 build_chart
-- **입력:** 의존 단계(sql·ml)의 `result_id`, `Step.args.type`, `task.conditions`
-- **처리:** `results.get_table(result_id)`로 전체 행을 읽어 유형별로 `ChartSpec`을 만든다. 값은 결과표에서 코드로 옮긴다.
+- **입력:** 의존 단계(sql·ml)의 `result_id`, `task.conditions`. 차트 유형은 아래 표대로 결과를 보고 정한다(플래너가 정하지 않음, D-89).
+- **처리:** 결과표의 전체 행을 읽어(아래 "행 읽기") 유형별로 `ChartSpec`을 만든다. 값은 결과표에서 코드로 옮긴다. TREND의 "대상"은 품목×국가 조합이다. 이름은 "국가 · 품목" 전체를 `state.shorten_target_names`로 40자 안에 줄인다. 품목명만 줄이고 국가명을 앞에 붙이면 40자를 넘어 뒤가 잘리고 라벨이 겹쳐 `ChartSpec`이 거부하기 때문이다. 겹치는 이름에만 품목 코드(품목이 없으면 국가코드)를 붙인다. 대상이 품목뿐이면 `shorten_names`와 같은 결과다.
 
   | 결과 | type | labels | series |
   |---|---|---|---|
-  | TREND, 대상 1개 | `line` | 월(`YYYY-MM`). 60개를 넘으면 분기·연도(D-83) | 수출액(또는 수입액). 비교 기간이 있으면 "비교 기간"을 둘째 시리즈로 |
-  | TREND, 대상 2개 이상 + 비교 기간 | `grouped_bar` | 대상 이름(`shorten_names`) | [비교 기간 합계, 조회 기간 합계] |
-  | TREND, 대상 2개 이상, 비교 없음 | `line` | 월 | 대상마다 시리즈 1개(최대 5개, 넘으면 금액 상위 5 + 경고) |
+  | TREND, 대상 1개 | `line` | 월(`YYYY-MM`). 60개를 넘으면 분기·연도(D-83) | 수출액(또는 수입액). 비교 기간이 조회 기간과 길이가 같으면 n번째 달끼리 맞춰 "비교 기간"을 둘째 시리즈로 둔다 |
+  | TREND, 대상 1개 + 길이가 다른 비교 기간 | `grouped_bar` | 대상 이름 1개 | [비교 기간 월평균, 조회 기간 월평균]. 월이 맞지 않아 선으로 겹칠 수 없고, 총액은 길이 차이로 비교가 왜곡되기 때문이다(D-84) |
+  | TREND, 대상 2개 이상 + 비교 기간 | `grouped_bar` | 조회 기간 금액 상위 5개 대상 이름 | 길이가 같으면 [비교 기간 합계, 조회 기간 합계], 다르면 [비교 기간 월평균, 조회 기간 월평균](D-84) |
+  | TREND, 대상 2개 이상, 비교 없음 | `line` | 월 | 조회 기간 금액 상위 5개 대상마다 시리즈 1개 |
   | RANKING | `bar` | 상위 `top`개 국가명·품목명 | 수출액(또는 수입액) |
-  | SHARE | `donut` | 상위 10 + "기타" | 비중(%) |
+  | SHARE | `donut` | 상위 10 + 상위 10 밖의 지정 국가 + "기타" | 비중(%) |
   | PREDICTION (ml) | `bar` | 상위 10 품목명·국가명 | 예측 증감률(%). 대상이 여러 개면 첫 대상 차트 + `chart_selector`(D-82) |
-  | LLM_SQL | 결과 모양으로 정함 | 월·날짜 열 1개 + 숫자 열 → `line`. 문자열 열 1개 + 숫자 열 1개이고 60행 이하 → `bar`. 그 밖은 차트를 만들지 않음(NO_DATA, 경고 없음) | 숫자 열(최대 5개) |
-- **자체 검증:** `ChartSpec` 모델(라벨 수 = 값 수, 60개·5개 상한, donut 1개·grouped_bar 2개), `task_id`·`result_id` 일치(D-88), 단위·기준 기간이 있는지. 품목명은 `shorten_names`로 줄이고, 전체 이름은 finalize가 붙인다(D-68).
+  | LLM_SQL | 결과 모양으로 정함 | 60행 이하일 때만 그린다. 월·날짜 열 1개 + 숫자 열 → `line`, 문자열 열 1개 + 숫자 열 1개 → `bar`. 그 밖이나 60행 초과는 차트를 만들지 않는다. 임의 숫자 열에는 D-83 집계를 하지 않는다 | 숫자 열(최대 5개) |
+
+  - TREND 대상이 5개를 넘으면 경고 "금액 상위 5개만 차트에 표시했습니다. 전체는 표에서 확인하세요."를 붙인다. 표의 1,000행 상한으로 제외된 대상은 별도 경고와 PARTIAL로 알린다(D-89·D-91).
+  - **차트를 만들지 않는 경우**(LLM_SQL 모양이 맞지 않거나 60행 초과, D-83의 연도 60개 초과): 실패가 아니다. 단계는 DONE, `ToolResult{status: "OK", chart: null}`이고 답변 결과에 영향을 주지 않는다(§14.9). D-83의 범위 안내만 경고에 넣는다.
+  - **행 읽기:** 전체 행은 `results.read_snapshot(store, uid, result_id, "RESULT")["rows"]`로 읽는다. `results.get_table`은 한 번에 20행(`size`)만 돌려준다.
+- **자체 검증:** `ChartSpec` 모델(라벨 수 = 값 수, 60개·5개 상한, donut 1개·grouped_bar 2개), `task_id`·`result_id` 일치(D-88), 단위·기준 기간이 있는지. 품목명은 `shorten_names`, 국가×품목 대상 이름은 `shorten_target_names`로 줄이고, 전체 이름은 finalize가 붙인다(D-68).
 - **출력:** `ToolResult{status, chart, chart_selector?, result_id}`
 - **실패:** 재시도하지 않는다(D-45). FAILED여도 답변은 표만으로 만든다(D-46).
 
 ### 14.6 generate_report
 - **입력:** 확인을 마친 `task.report_request`(D-81), `task.conditions`
 - **처리:**
-  - `reports.create(preview_id, confirm_conditions=True, formats=report_request.formats, session_id)`를 부른다. 멱등키는 `chat:{job_id}:{step_id}`다(D-77).
+  - `reports.create(store, uid, data=ReportCreate(preview_id=..., confirm_conditions=True, formats=report_request.formats, session_id=...), key=...)`를 부른다. 기존 함수는 store·uid·요청 모델·멱등키를 받으므로 위치 인자를 생략한 의사 호출을 그대로 구현하지 않는다. 멱등키는 `chat:{job_id}:{step_id}`다(D-77).
   - 섹션은 사용자가 고르지 않고 `ReportCreate` 기본값(KPI·TOP_COUNTRIES·GROWTH_RISK·LOCAL_ISSUES)을 쓴다. 지원 전 섹션의 표시는 기존 리포트 템플릿 정책을 따른다.
   - 접수 뒤에는 `ReportWait`를 기록하고 WAITING_REPORT로 멈춘다. READY면 재개한다(D-76).
+  - 완료 확인은 워커의 `run_loop`가 맡는다. 반복할 때마다(기존 2초 간격) 일반 claim과 따로, WAITING_REPORT 채팅 작업의 `report_wait.report_id`로 MySQL `report.status`를 읽는다. 한 번에 최대 `API_JOB_SCAN_SIZE`건을 보고, `jobs.claim`처럼 메시지 ID 커서(`message_id > 마지막으로 본 ID`, 끝까지 가면 처음부터)로 다음 반복에 이어서 본다. 대기 작업이 많아도 모든 작업이 차례로 확인되고 TTL이 연장된다.
+    - READY: 그 채팅 작업을 QUEUED로 바꿔 재개한다. FAILED도 QUEUED로 바꾸고, 재개 노드가 단계를 FAILED로 둔다.
+    - 그 밖의 상태: active·체크포인트 TTL만 연장한다.
+    - 확인 1회는 §13.4의 "report 완료 확인 10초"로 예약하지만, 대기 시간 자체는 예산에 넣지 않는다(D-85).
 - **자체 검증:** 미리보기의 소유권·만료·조건이 `task.conditions`와 같은지(D-81), 형식이 PDF·DOCX 중 1개 이상인지
-- **출력:** `ToolResult{status=OK, report_id}`. 답변 actions에 리포트 보기를 붙인다.
+- **출력:** `ToolResult{status=OK, report_id, completeness, limitations}`. 선행 입력이 PARTIAL이면 그대로 전파한다. 답변 actions에 리포트 보기·다운로드를 붙이고 D-93의 완료 결론을 쓴다.
 - **실패:** 채팅에서는 재시도하지 않는다. 리포트 자체의 재시도·실패 정책을 따르고, 리포트가 FAILED면 이 단계도 FAILED → D-72다.
 
 ### 14.7 query_market_model
@@ -827,11 +925,11 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
   - 워커가 한 번 `load_market_bundle(API_ML_MODEL_PATHS, API_ML_SNAPSHOT_PATH)`로 읽어 둔다(D-48, D-70, C-29).
   - 대상마다 `predict_markets`를 부른다. 국가만이면 국가별, 품목만이면 품목별, 둘 다면 조합별이고 최대 100쌍이다(D-74, D-78).
   - 결과는 한 결과표에 저장한다. meta에는 `anchor`·모델 버전·스냅샷 기준월·HS 판본을 넣는다(D-79, D-88).
-- **자체 검증:** 행 키(`anchor`, `country_code`, `hs6`)가 중복 없는지, 모든 행의 `anchor`가 같은지, 순위가 1부터 연속인지, `growth_pct`가 유한한지, `exp_12m`이 0 이상인지
+- **자체 검증:** 행 키(`anchor`, `country_code`, `hs6`)가 중복 없는지, 모든 행의 `anchor`가 같은지, 순위가 양수·해당 전체 모집단 크기 이내이고 bundle의 원본 순위와 같은지(필터 결과의 연속성은 요구하지 않음), `growth_pct`가 유한한지, `exp_12m`이 0 이상인지
 - **출력:** `ToolResult{result_id, period(기준월), source="ML 모델", digest(PREDICTION)}`
 - **실패:**
   - 재시도하지 않는다(D-45).
-  - 예측 대상이 아닌 대상은 경고 "○○은 예측 대상이 아닙니다."를 붙인다. 일부만 그렇다면 PARTIAL, 전부면 NO_DATA다(D-74).
+  - 예측 대상이 아닌 대상은 경고 "○○은 예측 대상이 아닙니다."를 붙인다. 일부만 그렇다면 status=OK, completeness=PARTIAL 및 limitations에 누락 대상을 기록한다. 전부면 NO_DATA다(D-74).
   - 파일·메모리 오류는 FAILED다.
 
 ### 14.8 tool이 아닌 노드
@@ -839,7 +937,123 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
 |---|---|
 | planner | §11.1 |
 | dispatch | §3-10 |
-| ask_user | §3-12, D-14·D-64·D-81 |
-| compose | §13.1 |
+| ask_user | §3-12, §13.6, D-14·D-64·D-81 |
+| compose | §13.1 (직전에 §14.9로 하위 질문 결과를 정함) |
 | verify | §11.4 |
 | finalize | §3-16, D-72·D-77 |
+
+### 14.9 단계·하위 질문 결과 정하기와 고정 문구
+- **tool이 NO_DATA를 돌려주면:** 결과는 `ToolResult{status: "NO_DATA", error: 사유 문구}`로 남긴다. 단계는 FAILED로 두고 `skip_blocked()`한다. 그래야 그 결과에 기대는 단계(예: 0행 sql 뒤의 chart)가 `result_id` 없이 돌지 않는다. NO_DATA의 예: 0행, `DATA_NOT_READY`, 예측 대상 아님, 기사 지원 예정, 리포트 거절.
+- **하위 질문 결과(`Task.answer_status`):** compose 바로 앞에서 AgentState.task_outcome(task_id)으로 모든 Task에 대해 정하고 반환값을 answer_status에 저장한다(D-72). 그 Task에 PENDING·RUNNING 단계가 없어야 한다.
+
+  | 하위 질문 상태 | answer_status |
+  |---|---|
+  | `OUT_OF_SCOPE` intent | OUT_OF_SCOPE |
+  | `MARKET_TYPE` intent(지원 예정), `limit_errors`·미지원·check 실패·되묻기 한도 초과 | NO_DATA |
+  | 핵심 단계(sql·ml·report, LOCAL_ISSUES의 news)가 FAILED·SKIPPED | NO_DATA |
+  | 핵심·보조 단계 모두 DONE이고 모든 결과 및 입력 결과가 COMPLETE | ANSWERED |
+  | 핵심 단계는 DONE인데 보조 단계가 FAILED·SKIPPED이거나 자체/선행 입력 결과가 PARTIAL | PARTIAL |
+
+  - 차트를 만들지 않은 chart 단계(§14.5)는 DONE이라 결과에 영향이 없다.
+  - 전체 answer_status는 D-72로 모은다.
+  - 실행 상태가 SUCCEEDED가 되기 전에 모든 Task에 값이 있어야 한다(`state.py`가 검사).
+- **고정 결론 문구의 출처**(§13.1의 코드 작성 결론):
+  - OUT_OF_SCOPE·MARKET_TYPE: D-69 문구
+  - `limit_errors`: 그 문구
+  - 단계가 실패한 Task: 실패한 핵심 단계(없으면 check)의 `ToolResult.error`
+  - 되묻기 한도 초과: "조건을 확인해 다시 질문해 주세요."
+- **미지원·실패 문구:**
+
+  | 경우 | 문구 |
+  |---|---|
+  | 유망시장인데 국가·품목 없음(D-23) | 유망시장은 국가나 품목을 하나 이상 지정해 주세요. |
+  | 유망시장 수입(D-74) | 유망시장 예측은 수출만 지원합니다. |
+  | 리포트 수입(D-81) | 리포트는 현재 수출 분석만 지원합니다. |
+  | 해외시장 점유율(D-87) | 해외 수입시장에서 한국 제품의 점유율은 아직 지원하지 않습니다. |
+  | 예측 대상 아님(D-74) | ○○은 예측 대상이 아닙니다. |
+  | 0행·`DATA_NOT_READY` | 조건에 맞는 데이터가 없습니다. |
+  | 기사 지원 예정(D-43) | 기사 검색은 지원 예정입니다. |
+  | `RUN_TIMEOUT`(D-85, `error.message`) | 처리 시간이 초과되었습니다. 질문을 나눠 다시 시도해 주세요. |
+  | `RECOVERY_EXHAUSTED`(D-85, `error.message`) | 처리 중 문제가 반복되었습니다. 잠시 후 다시 질문해 주세요. |
+
+
+## 15. 리뷰 후 확정한 구현 계약 (2026-10-30 사용자 승인)
+
+### D-90. 선행 분석 결과 전달과 SQL 요청 보존
+- `PlannedTask.source_tasks`는 1부터 시작하는 선행 질문 번호 목록이다. 생략은 []이며 중복·자기 자신·뒤 질문 참조는 거부한다. LLM은 result_id를 생성하지 않는다. `custom_query`는 Task로 그대로 복사하고 체크포인트 왕복에서도 보존한다.
+- 서버가 선행 Task의 핵심 SQL/ML 단계를 `ResultBinding{source_task_id, source_step_id}`로 바꿔 `Task.input_bindings`에 넣는다(최대 2개). 소비 Task의 첫 check.depends_on에 해당 단계 ID를 모두 추가한다. 존재하지 않거나 결과표를 만들지 않는 선행 질문은 소비 Task만 NO_DATA로 종료하고 참조 불가 사유를 남긴다. 단계 없는 실패 Task에 의존하는 경우에도 planner 후처리에서 후속 의존 Task를 순서대로 NO_DATA 처리한다.
+- Plan은 같은 Task의 앞 단계 또는 명시적으로 연결된 앞 Task의 SQL/ML 단계만 허용한다. dispatch는 기존 계획 순서를 따르고 skip_blocked는 질문 경계를 넘어 전이 실패를 전파한다. 독립 질문은 계속 실행한다.
+- 소비 check는 선행 결과가 DONE/OK이며 result_id가 있는지 확인하고, 소유권·만료를 검증해 저장 결과의 조건과 meta를 읽는다. 같은 state의 results와 저장 결과가 다르면 실행하지 않는다. result_id·행 원본은 플래너 슬롯에 넣지 않는다.
+- 일반 후속 분석은 선행 저장 결과를 읽는 전용 입력으로 전달한다. LLM SQL은 결과 원본을 프롬프트에 넣지 않으며, 저장 결과 기반 후속 계산은 코드 또는 제한된 임시 관계 어댑터로 구현한다. 지원하지 않는 계산은 NO_DATA로 안내하며 기존 원천 테이블 재조회로 몰래 대체하지 않는다.
+- 결과로 만드는 리포트는 원본 결과의 확정 조건을 사용한다. 여러 입력의 조건이 다르면 임의 병합하지 않고 소비 Task를 NO_DATA로 처리해 같은 조건으로 분석하도록 안내한다. 부분 결과는 누락 사유와 함께 미리보기에 표시하고 확인받는다.
+- 기존 reports.preview의 result_id는 조건만 복사하므로 재사용 구현으로 충분하지 않다. 후속 구현에서 PREVIEW 스냅샷에 `source_results: [{task_id, step_id, result_id, conditions, completeness, limitations}]`와 서버 전용 결과 사본을 보관한다. API에는 참조·조건·누락 사유만 노출한다. 여러 결과는 서버 내부 어댑터로 전달하고 클라이언트가 원본 행을 제출하지 못한다.
+- 미리보기 시 소유권·만료를 검사하고, 생성 승인 시 미리보기의 동일 입력 사본을 report.content_json에 복사한다. 리포트 워커는 이 사본으로 분석 섹션을 작성해 재조회·모델 재실행을 하지 않는다. 이후 원본 결과표가 만료되어도 접수된 리포트는 계속 생성할 수 있다. 본문 기사 원문은 사본에 넣지 않는다.
+- 리포트 기본 섹션 중 입력 결과로 만들 수 없는 섹션은 '해당 분석 결과에 포함되지 않음'으로 표시한다. 별도 조회로 보충하지 않는다. 조건만으로 요청한 기존 리포트는 기존 생성 경로를 유지한다. 최종 결과의 잘림·누락은 PARTIAL로 전파한다.
+- 결과 저장 재사용은 step_id만으로 판정하지 않는다. 재계획·복구 시 intent, 확정 조건, custom_query, source result ID/버전, tool 버전을 정규화한 input fingerprint가 같을 때만 재사용한다. 다르면 기존 결과를 덮어쓰지 않고 새 결과를 기록한다.
+
+### D-91. 실행 성공과 결과 완전성
+- ToolResult.status는 OK/NO_DATA/FAILED다. `completeness`는 COMPLETE/PARTIAL이고 `limitations`는 코드가 작성한 누락 사유 목록이다(최대 100개, JSON 합계 1KB 이내로 요약; 전체 누락 대상은 결과표 meta에 저장). PARTIAL은 OK와 한 개 이상의 사유가 필요하다. 전체 결과가 없으면 NO_DATA다.
+- 일부 ML 대상 없음, 근거 부족/목표 미달 기사, 결과표 상한으로 실제 대상 누락은 PARTIAL이다. 표에는 모두 있고 차트/digest만 상위 대상으로 제한한 것은 표현 제한이며 그 자체로 PARTIAL은 아니다.
+- §14.9 판정은 핵심 결과 없음 → NO_DATA, 사용 가능한 핵심 결과 + 자체/선행 입력 PARTIAL 또는 보조 실패 → PARTIAL, 모두 완료 → ANSWERED 순서다. 경고 문자열로 판정하지 않는다.
+- RAG 근거 부족 기사는 제목·날짜·링크와 '본문 근거가 부족해 요약을 제공하지 않습니다'를 표시한다. digest에는 evidence_sufficient=false, summary=[]를 넣고 compose의 인용 가능한 articles 입력에서는 제외한다. 인용 번호는 최종 기사 카드 전체 순서를 기준으로 유지한다. 원인·사실 설명에는 근거 충분 기사만 사용한다.
+- ML 전체 bundle에서 그룹별 순위와 모집단 크기를 검증하고 조회 후에는 순위를 보존한다. 단일 쌍 순위가 17위여도 정상이며 단독/복수 조회의 동일 쌍 순위가 같아야 한다.
+
+### D-92. 리포트 승인 경로 통일
+- REPORT_CONFIRM의 승인·거절은 API-38 report_confirmation으로만 처리한다. 최신 clarification_id·preview_id·소유권·만료·선택 형식을 검사한다. text의 '네/생성/취소'는 버튼을 안내하며 confirmed를 변경하지 않는다. 버튼 안내만으로 조건 재확인 횟수를 소진하지 않는다(기존 asked_at 유지).
+- 독립 리포트의 조건 수정은 슬롯 재해석 → 조건 검증 → confirmed=false → 새 미리보기 → 재확인이다. 기존 조건별 2회 제한을 적용한다. 선행 결과 기반 리포트는 결과와 다른 조건으로 바꿀 수 없고 새 분석을 안내한다.
+
+### D-93. 리포트 완료 결론
+- READY 확인 후 코드가 해당 task_id의 TaskConclusion을 만든다: '요청하신 리포트가 완성되었습니다. 아래에서 확인하거나 다운로드할 수 있습니다.' PARTIAL이면 누락 경고를 별도로 유지한다. 실패에는 이 문구를 쓰지 않는다.
+- digest가 없어도 리포트 성공은 사용 가능한 결과다. 코드 작성 문장은 숫자 대조·재생성 대상에서 제외한다. 모든 결론이 고정 문구여도 성공 여부와 구분한다.
+- 첫 Task가 리포트 성공이면 D-72대로 최근 조건을 갱신하고 코드로 조건 요약과 '리포트 생성 완료'를 200자 이내 turn_summary에 남긴다. 첫 답변의 제목도 조건을 포함해 코드로 20자 이내 작성한다. 이후 제목은 유지한다. 리포트 성공의 고정 제목은 D-54의 LLM 제목 규칙에 대한 예외다.
+
+### D-94. 최근 기간 상한 확정
+- C-26은 240개월로 확정한다. 240개월 이내라는 이유만으로 사용 가능하다고 판단하지 않는다. 실제 최초·최신 공개 월 및 기간 내 검증 월 전체를 확인한다. 범위를 자동으로 줄이지 않고 실제 조회 가능 범위를 안내한다.
+- 이 결정은 운영 데이터가 실제 240개월 존재한다는 뜻이 아니다. 실제 적재 범위는 실행 시 trade.bounds로 확인한다.
+
+### 추가 확인 사항
+- C-31은 사용자 답변으로 D-95에 확정했다. 명확한 선택은 자동 실행하고 모호한 선택만 되묻는다.
+- D-70의 양방향 순위와 §11.2 digest의 단일 rank 표현을 맞췄다. 순위 검증에 필요한 country_size/product_size도 ML 반환 계약에 명시했다.
+- ready_steps는 NEEDS_INPUT 및 종료 상태에서도 빈 목록을 반환하도록 보완했다. 외부 호출 실행·취소 경쟁의 최종 방지는 여전히 워커의 소유권 검사 책임이다.
+
+### 구현·검증 경계
+- 이 브랜치는 state 계약과 구현 명세를 수정한다. 그래프, API, SQL/ML/RAG 어댑터, 리포트 스냅샷 연결은 후속 구현이다. v2 state는 아직 운영 배포 전이므로 이번 필드 추가도 v2에 포함한다. 운영 배포 이후 계약 변경 시 버전 마이그레이션을 별도로 둔다.
+- 회귀 검증: custom_query 저장·복원, 앞 Task 결과 전달, 자기/미래/잘못된 생산자 참조 거부, 의존 실패 전파·독립 작업 계속, 부분 ML/RAG 결과, 보고서 완료 고정 결론, 동일 미리보기 입력 사용, 원본 결과 만료 후 생성, 조건 변경 재확인, 기간 240/241 및 실제 공개 범위.
+
+
+### D-95. 선행 결과에서 후속 분석 대상 선택 (C-31, 사용자 승인)
+- '유망 국가 상위 3개의 수출 추이'처럼 차원·개수·정렬 기준이 명확하면 자동으로 선택해 다음 분석을 실행한다. 모호하면 INPUT_SELECTION으로 묻는다. 리포트 생성 승인은 별도로 유지한다.
+- 플래너 `target_selections`는 `[{source_task, dimension, limit, order_by}]`다. dimension은 COUNTRY/HS6, order_by는 country_rank/product_rank/amount_usd, limit은 양의 정수다. 기준이 불명확하면 해당 필드를 null로 낸다. source_task는 source_tasks 안에 있어야 하고 중복 선택 규칙은 거부한다.
+- 서버는 source_task를 실제 ResultBinding에 연결하고 나머지 필드를 binding.selection으로 옮긴다. selection=None은 기존 결과 자체 전달(리포트 등), selection 객체는 후속 조회 조건으로 대상을 추출하는 뜻이다.
+- 소비 check는 원문에 해당 개수·기준의 근거가 있는지와 결과 meta의 그룹을 확인한다. 단일 HS6의 유망 국가 선택은 product_rank, 단일 국가의 유망 품목 선택은 country_rank, 수출입 금액 순위는 amount_usd다. 모델 성장률과 순위 점수를 섞지 않는다. 복수 그룹의 순위를 합쳐 선택하지 않으며 그룹이 불명확하면 확인한다.
+- 선택은 digest/현재 차트가 아닌 저장 결과 전체 행에서 한다. rank는 오름차순, amount_usd는 내림차순, 동률은 코드 오름차순이다. 차원별 코드를 중복 제거하고 앞 limit개를 고른다. HS는 결과 meta의 판본을 보존한다. 원래 입력의 선택하지 않은 조건은 선행 확정 조건에서 이어받되, 사용자가 후속 질문에 명시한 기간 등은 D-73대로 교체한다.
+- 국가 20·품목 5개 상한을 넘는 요청은 자르지 않고 기존 상한 안내로 소비 Task를 NO_DATA 처리한다. 요청한 수보다 실제 결과가 적으면 가능한 대상을 사용하고 누락 수를 limitations에 남겨 PARTIAL로 전파한다. 0개면 NO_DATA다. 저장 결과의 잘림 때문에 상위 N을 보장할 수 없으면 새 분석을 안내하며 임의로 완전한 상위 N이라고 표시하지 않는다.
+- 모호한 경우 Pending.kind=INPUT_SELECTION, condition_key=`{task_id}:input:{source_step_id}`다. choices는 서버가 결과 meta로 구성한 후보 규칙(최대 5개), patch는 dimension/limit/order_by 및 필요한 그룹 식별 코드다. 직접 입력도 같은 스키마와 원문 근거로 검증한다. 확인된 규칙은 Task.resolved에 저장하고 재개 후 다시 묻지 않는다. 조건별 2회 제한을 적용한다. 확인으로도 명시적 복수 그룹 선택을 요구하면 각 그룹을 따로 선택하되 합친 코드 목록에 조건 상한을 적용한다.
+- 추출된 코드는 사전 및 저장 결과 소속을 검증한 뒤 소비 Task.conditions에 넣고 applied_defaults에 선택 기준·사용한 대상을 표시한다. SQL/ML 도구에는 이 확정 조건을 넘긴다. 부모의 result_id와 선택 규칙은 후속 결과 meta 및 input fingerprint에 남긴다.
+- 후속 구현 테스트: 명시한 상위 3 자동 실행, 개수/그룹 모호함 되묻기, 양방향 순위 구분, 동률·중복 코드, 부족한 결과의 PARTIAL, 상한 초과, 조건 상속·명시 기간 교체, 입력 결과 소유권·만료.
+
+
+### 이번 변경 검증 기록
+- state 계약 테스트 45개 중 44개 통과. OpenAI strict schema 검사 1개는 실행 환경에 openai가 없어 미검증이다.
+- 전체 unittest discover는 179개 중 53개 통과, 126개 오류다. 124개는 sqlalchemy/openai/pytest 등 패키지 부재, 2개는 임시 파일 접근 권한 오류다. assertion 실패는 없지만 전체 검증 통과를 뜻하지 않는다.
+- git diff --check 통과. 외부 LLM/DB/Redis와 연결한 통합 실행 및 실제 공개 데이터 범위 검증은 수행하지 않았다. 해당 어댑터는 구현 예정이다.
+- 새 제품 결정 대기는 없다. 기존 운영 확인 C-23(메모리), C-29(ML 배포 파일), C-30(평가 후 SQL 모델), C-27/C-28(품질·시간 조정값)은 그대로 남는다. C-24는 별도 대기 상한 없이 리포트 자체 정책을 따르는 현행 결정을 유지한다.
+
+
+### D-96. 간접 선행 결과의 부분 성공 보존 (리뷰 보완)
+- 모든 성공 tool은 MySQL 결과 저장 **전** `state.result_for_storage(step_id, raw_result)`를 호출한다. 반환된 completeness/limitations를 결과표 meta 및 state.results 양쪽에 동일하게 저장한다. 재사용 결과와 리포트 미리보기/접수 사본에도 동일한 처리를 적용한다. 원본 객체를 제자리에서 수정하지 않는다.
+- 실제 Step.depends_on을 따라 선행 단계의 누락 정보를 전이 병합한다. t1(SQL PARTIAL) → t2(SQL OK) → t3(REPORT OK)는 모두 PARTIAL이며, t2의 저장 결과 자체가 PARTIAL이어야 한다. 관련 없는 형제 단계(예: SQL 결과를 쓰는 리포트와 관계없는 차트 실패)는 입력의 누락으로 전파하지 않는다.
+- 선행 분석이 미완료·실패·결과 없음이면 성공 결과 저장을 거부한다. check_conditions는 결과표 없이 DONE일 수 있다. 다만 대상 선택에서 일부 대상을 확보하지 못했다면 check의 ToolResult에 OK/PARTIAL과 limitations를 기록해 후속 SQL까지 전달한다.
+- 누락 사유는 중복 제거한다. 1KB 또는 100개 상한을 넘으면 앞부분과 '추가 누락 사유는 선행 결과의 상세 정보를 확인하세요.'로 요약한다. 전체 원인은 선행 결과 meta에 유지하고 결과 meta의 source_results로 추적한다. PARTIAL을 COMPLETE로 바꾸거나 크기 초과로 정상 분석 전체를 실패시키지 않는다.
+- task_outcome도 같은 전이 경로를 확인하므로 저장 경계 처리가 빠진 기존 체크포인트의 간접 누락을 숨기지 않는다. MySQL 저장과 워커 연결은 후속 구현 항목이다.
+
+### D-97. 결과 재사용 식별값과 저장 순서 (리뷰 보완)
+1. check로 입력을 확정한 후 정규화된 입력 JSON을 만든다. 필드: fingerprint_version=1, user_id, job_id, task_id, step_id, intent, tool, tool_version, conditions, custom_query, Step.args, 확정된 selection/그룹 규칙, source_results의 result_id·저장 버전·completeness·limitations, 실행에 사용하는 데이터/모델/스냅샷 버전. 리포트는 승인된 PREVIEW의 source 사본 버전·조건·formats·sections도 포함한다. 실행 시각·재시도 횟수·claim_token은 포함하지 않는다.
+2. 날짜는 ISO, dict 키는 정렬, JSON은 UTF-8/공백 없는 형태, NaN/inf 금지로 직렬화해 SHA-256 hex를 계산한다. 의미 있는 목록 순서는 유지한다. 실행에 사용한 버전 식별자를 결과 meta에 함께 저장한다. 캐시 재사용은 당시 버전을 포함한 확정 입력으로 비교한다. 캐시 미스로 실제 재실행할 때는 실제 사용 가능한 데이터/모델 버전을 확인해 새 fingerprint를 계산한다. 과거 버전으로 실행할 수 없는데 예전 fingerprint를 새 결과에 붙이지 않는다. 버전 확인이 안 되면 캐시 일치로 취급하지 않는다.
+3. step_results에서 후보를 찾고 현재 fingerprint와 비교한다. 일치해도 read_snapshot으로 소유권·만료를 확인하고 결과 meta의 fingerprint_version/input_fingerprint가 같은지 검사한다. 세 값이 모두 맞을 때만 저장된 결과와 completeness/limitations를 복원한다.
+4. 미일치·구형 ID 단독 항목·메타 누락은 cache miss다. 기존 결과를 덮어쓰지 않고 새 결과를 만든다. 일반 결과표가 만료됐으면 같은 확정 입력으로 재실행할 수 있지만, 명시적으로 참조한 선행 입력 결과가 만료됐으면 후속 실행은 NO_DATA로 끝내고 재질문을 안내한다. 소유권 불일치는 재사용하지 않고 접근 오류로 종료한다.
+5. 새 결과는 D-96 전파 후 저장한다. 결과표 meta에 fingerprint_version/input_fingerprint/source_results를 기록하고, 결과표 저장 및 step_results 항목 교체를 **같은 MySQL 트랜잭션**에서 수행한다. commit 직전 claim_token·취소 여부를 검사한다. 기존 결과는 기존 보존 정책대로 남기고 최신 후보 포인터만 교체한다. Redis 체크포인트 기록은 MySQL commit 뒤다.
+6. 리포트는 이미 생성 접수된 작업을 중복 생성하지 않는다. generation_key=`chat:{job_id}:{step_id}`의 기존 작업이 있으면 원래 승인 입력 fingerprint를 비교한다. 일치하면 기존 report_id를 재사용한다. 불일치하면 내부 진단 코드 REPORT_INPUT_CONFLICT를 기록하고 해당 Task를 NO_DATA 처리하며 ToolResult.error에 사용자 안내를 남긴다. 새 job 오류 코드로 추가하지 않는다. 사용자에게는 새 질문·새 미리보기 확인을 안내한다. 새 멱등키로 자동 재접수하지 않는다. 아직 접수 전이면 미리보기를 재작성해 확인받을 수 있다.
+- 복구 검증: 같은 입력 재사용, 같은 step_id의 조건/selection/custom_query 변경, 소유권 불일치, 구형 metadata, 결과 저장 중 crash의 원자성, 원본 결과 만료, 오래된 claim, 리포트 입력 충돌, 부분 성공 저장·복원.
+
+- D-96·97 보완 후 추가 점검: 기존 SQL 템플릿의 자동 저장을 공통 저장 경계로 옮기는 후속 작업을 명시했고, 리포트 복구에도 승인 입력 검사를 적용했다. 새 사용자 결정 사항은 발견하지 않았다. 저장 트랜잭션·fingerprint 실행 코드는 후속 구현이며 이번 테스트는 상태 전파 계약을 검증한다.

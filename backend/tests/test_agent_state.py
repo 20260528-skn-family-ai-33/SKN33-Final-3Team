@@ -9,7 +9,7 @@ from backend.app.schemas.rag import HsProduct
 from backend.app.agents.state import (AgentState, ChartSpec, Conditions, Interests, MAX_CONCLUSION_SENTENCES, MAX_DIGEST_BYTES,
                                       MAX_EXPLANATION_SENTENCES, MAX_INTEREST_COUNTRIES, MAX_INTEREST_HS, MAX_LABEL_CHARS,
                                       MAX_LIST_ITEMS, MAX_RECENT_MONTHS, MAX_TEXT_CHARS, PlannerSlots, SessionContext,
-                                      ToolResult, TurnSummary, TaskSlots, shorten_name, shorten_names)
+                                      ToolResult, TurnSummary, TaskSlots, shorten_name, shorten_names, shorten_target_names)
 
 CAUSE = {'task_id': 't1', 'intent': 'CAUSE', 'question': '베트남 화장품 수출 왜 늘었어?', 'steps': [
     {'step_id': 't1.check', 'tool': 'check_conditions'},
@@ -257,7 +257,7 @@ class AgentStateTest(unittest.TestCase):
         self.assertEqual([x.step_id for x in s.ready_steps()], ['t2.check'])
 
     def test_plan_rules(self):
-        with self.assertRaises(ValidationError):  # 하위 질문 사이 의존
+        with self.assertRaises(ValidationError):  # 입력 연결 없이 하위 질문 사이 의존
             state([CAUSE, {**RANKING, 'steps': [RANKING['steps'][0], {**RANKING['steps'][1], 'depends_on': ['t1.sql']}]}])
         with self.assertRaises(ValidationError):  # check_conditions로 시작하지 않음
             state([{**RANKING, 'steps': RANKING['steps'][1:]}])
@@ -314,13 +314,16 @@ class AgentStateTest(unittest.TestCase):
                   'answered_at': datetime(2026, 10, 29, 9, n)} for n in range(5)]
         tasks, results = [], {}
         for t in ('t1', 't2', 't3'):
-            tasks.append({**CAUSE, 'task_id': t, 'question': q, 'conditions': full, 'applied_defaults': texts,
+            # resolved는 전체 4KB 상한(MAX_RESOLVED_BYTES) 근처까지 채운다
+            resolved = {f'{t}:hs:{n}' + '가' * 20: {'hs_items': [{'hs_code': '330499', 'hs_ver': 'HS2022'}] * 2} for n in range(24)}
+            tasks.append({**CAUSE, 'task_id': t, 'question': q, 'conditions': {**full, 'share_basis': 'KOREA_TRADE_PARTNER'},
+                          'applied_defaults': texts, 'resolved': resolved, 'custom_query': text,
                           'slots': {'products': ['가' * 120] * 5, 'countries': [{'mention': '나' * 120, 'name': '다' * MAX_LABEL_CHARS}] * 20,
                                     'comparison_requested': True, 'period': period, 'compare_period': period,
                                     'article_period': full['article_period']}, 'steps': [
                 {**s, 'step_id': s['step_id'].replace('t1', t), 'args': args,
                  'depends_on': [d.replace('t1', t) for d in s.get('depends_on', [])]} for s in CAUSE['steps']]})
-            common = {'status': 'OK', 'source': label, 'checks': labels, 'error': text, 'digest': {'s': '가' * 2700}}  # digest 상한 근처
+            common = {'status': 'OK', 'completeness': 'PARTIAL', 'limitations': ['가' * 160] * 2, 'source': label, 'checks': labels, 'error': text, 'digest': {'s': '가' * 2700}}  # digest 상한 근처
             results[f'{t}.sql'] = {**common, 'result_id': 'r1', 'period': period}
             results[f'{t}.news'] = {**common, 'article_ids': list(range(20)), 'article_period': full['article_period']}
             results[f'{t}.chart'] = {**common, 'chart_selector': {'result_id': 'r1', 'group_by': 'PAIR',
@@ -333,7 +336,8 @@ class AgentStateTest(unittest.TestCase):
         checks = [{'index': n, 'numbers': ['1'] * (MAX_TEXT_CHARS // 2), 'status': 'PASS'} for n in range(n_sentences)]
         s = AgentState.model_validate({
             'input': {'job_id': '11', 'session_id': '3', 'user_id': 7, 'question': q,
-                      'context': {'session_id': '3', 'conditions': full, 'recent': turns},
+                      'context': {'session_id': '3', 'conditions': full, 'recent': turns, 'last_job_id': '9' * 20},
+                      'first_question': True,
                       'interests': {'hs_items': [{'hs_code': f'{n:06}', 'hs_ver': 'HS2022'} for n in range(MAX_INTEREST_HS)],
                                     'country_codes': [f'C{n:03}' for n in range(MAX_INTEREST_COUNTRIES)]},
                       'received_at': datetime(2026, 10, 29, 9)},
@@ -424,6 +428,25 @@ class AgentStateTest(unittest.TestCase):
             state([CAUSE, RANKING], results={'t1.chart': {'status': 'OK', 'chart': chart(task_id='t2')}})
 
 
+class LlmOutputSchemaTest(unittest.TestCase):
+    def test_strict_schema_has_no_length_or_default_keywords(self):
+        """OpenAI strict 모드는 문자열 minLength·maxLength를 지원하지 않는다. 길이는 응답을 받은 뒤 검사한다."""
+        import json
+        from openai.lib._pydantic import to_strict_json_schema
+        from backend.app.agents.state import Draft, PlannerOutput
+        for model in (Draft, PlannerOutput):
+            schema = json.dumps(to_strict_json_schema(model))
+            for keyword in ('"minLength"', '"maxLength"', '"default"'):
+                self.assertNotIn(keyword, schema, f'{model.__name__}: {keyword}')
+        from backend.app.agents.state import Draft as D
+        ok = {'conclusion': [{'task_id': 't1', 'sentences': ['수출이 늘었습니다.']}], 'turn_summary': ''}
+        D.model_validate(ok)
+        with self.assertRaises(ValidationError):
+            D.model_validate({**ok, 'conclusion': [{'task_id': 't1', 'sentences': ['가' * (MAX_TEXT_CHARS + 1)]}]})
+        with self.assertRaises(ValidationError):
+            D.model_validate({**ok, 'title': '가' * 21})
+
+
 class ShortenNameTest(unittest.TestCase):
     def test_long_product_name_keeps_head_and_tail(self):
         name = '전동축[캠샤프트(cam shaft)와 크랭크샤프트(crank shaft)를 포함한다], ' * 3 + '클러치(clutch)와 유니버설조인트'
@@ -448,6 +471,159 @@ class ShortenNameTest(unittest.TestCase):
         labels = shorten_names([a, a], [hs('8483', 'HS2017'), hs('8483')])
         self.assertTrue(labels[0].endswith('(8483 HS2017)') and labels[1].endswith('(8483 HS2022)'))
         self.assertTrue(all(len(x) <= MAX_LABEL_CHARS for x in labels))
+
+    def test_country_product_targets_fit_and_stay_unique(self):
+        a = '전동축[캠샤프트(cam shaft)와 크랭크샤프트(crank shaft)를 포함한다]·베어링하우징과 플레인 샤프트 베어링, 클러치'
+        b = a.replace('베어링하우징', '베어링 하우징')
+        hs = lambda code: HsProduct(hs_code=code, hs_ver='HS2022')
+        targets = [('베트남', a, hs('8483'), 'VN'), ('베트남', b, hs('8484'), 'VN'),
+                   ('미국', a, hs('8483'), 'US'), ('아랍에미리트 연합', None, None, 'AE'), (None, '화장품', hs('3304'), None)]
+        labels = shorten_target_names(targets)
+        # 품목명만 줄이고 국가명을 붙이면 40자를 넘어 잘리며 겹친다. 이름 전체를 줄이고 겹치는 것만 코드를 붙인다
+        ChartSpec.model_validate(chart(labels=labels, series=[{'name': '수출액', 'values': [1.0] * len(labels)}]))
+        self.assertTrue(all(len(x) <= MAX_LABEL_CHARS for x in labels))
+        self.assertTrue(labels[0].startswith('베트남 · ') and labels[0].endswith('(8483)') and labels[1].endswith('(8484)'))
+        self.assertEqual(labels[3:], ['아랍에미리트 연합', '화장품'])
+
+
+
+class DependentTaskContractTest(unittest.TestCase):
+    def make_state(self):
+        source = {'task_id': 't1', 'intent': 'STATISTICS', 'question': '분석', 'steps': [
+            {'step_id': 't1.check', 'tool': 'check_conditions'},
+            {'step_id': 't1.sql', 'tool': 'query_trade_data', 'depends_on': ['t1.check']}]}
+        report = {'task_id': 't2', 'intent': 'REPORT', 'question': '이 결과로 리포트',
+                  'input_bindings': [{'source_task_id': 't1', 'source_step_id': 't1.sql'}], 'steps': [
+                      {'step_id': 't2.check', 'tool': 'check_conditions', 'depends_on': ['t1.sql']},
+                      {'step_id': 't2.report', 'tool': 'generate_report', 'depends_on': ['t2.check']}]}
+        independent = {'task_id': 't3', 'intent': 'LOCAL_ISSUES', 'question': '기사', 'steps': [
+            {'step_id': 't3.check', 'tool': 'check_conditions'},
+            {'step_id': 't3.news', 'tool': 'search_articles', 'depends_on': ['t3.check']}]}
+        return state([source, report, independent])
+
+    def test_query_and_bindings_survive_checkpoint(self):
+        from backend.app.agents.state import PlannerOutput
+        out = PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': '물량', 'custom_query': '월별 물량 합계'},
+                                   {'intent': 'REPORT', 'question': '리포트', 'source_tasks': [1]}])
+        s = self.make_state()
+        s.plan.tasks[0].custom_query = out.tasks[0].custom_query
+        restored = AgentState.model_validate_json(s.model_dump_json())
+        self.assertEqual(restored.plan.tasks[0].custom_query, '월별 물량 합계')
+        self.assertEqual(restored.plan.tasks[1].input_bindings[0].source_step_id, 't1.sql')
+        self.assertEqual([x.step_id for x in s.ready_steps()], ['t1.check', 't3.check'])
+        for sources in ([0], [2], [3], [1, 1]):
+            with self.assertRaises(ValidationError):
+                PlannerOutput(tasks=[out.tasks[0], {'intent': 'REPORT', 'question': 'q', 'source_tasks': sources}])
+
+    def test_target_selection_contract(self):
+        from backend.app.agents.state import PlannerOutput, TargetSelection
+        base = [{'intent': 'PROMISING_MARKET', 'question': '유망 국가'},
+                {'intent': 'STATISTICS', 'question': '상위 3 추이', 'source_tasks': [1],
+                 'target_selections': [{'source_task': 1, 'dimension': 'COUNTRY', 'limit': 3,
+                                        'order_by': 'product_rank'}]}]
+        out = PlannerOutput(tasks=base)
+        s = self.make_state()
+        s.plan.tasks[1].input_bindings[0].selection = TargetSelection.model_validate(
+            out.tasks[1].target_selections[0].model_dump(exclude={'source_task'}))
+        restored = AgentState.model_validate_json(s.model_dump_json())
+        self.assertEqual(restored.plan.tasks[1].input_bindings[0].selection.limit, 3)
+        self.assertIsNone(TargetSelection().limit)  # 모호하면 INPUT_SELECTION으로 확인
+        base[1]['target_selections'][0]['source_task'] = 2
+        with self.assertRaises(ValidationError):
+            PlannerOutput(tasks=base)
+
+    def test_dependency_failure_preserves_independent_work(self):
+        s = self.make_state()
+        s.plan.tasks[0].steps[0].status = 'FAILED'
+        self.assertEqual(s.skip_blocked(), ['t1.sql', 't2.check', 't2.report'])
+        self.assertEqual([x.step_id for x in s.ready_steps()], ['t3.check'])
+        self.assertEqual(s.task_outcome('t2'), 'NO_DATA')
+
+    def test_invalid_binding_and_missing_wait_are_rejected(self):
+        for source in ('t1.check', 't2.report', 't9.sql'):
+            data = self.make_state().model_dump()
+            data['plan']['tasks'][1]['input_bindings'][0]['source_step_id'] = source
+            with self.assertRaises(ValidationError):
+                AgentState.model_validate(data)
+        data = self.make_state().model_dump()
+        data['plan']['tasks'][1]['steps'][0]['depends_on'] = []
+        with self.assertRaises(ValidationError):
+            AgentState.model_validate(data)
+
+    def test_partial_result_propagates_to_report_and_rag(self):
+        s = self.make_state()
+        for step in s.plan.steps():
+            step.status = 'DONE'
+        s.results = {'t1.sql': ToolResult(status='OK', result_id='r1', completeness='PARTIAL', limitations=['일부 대상 없음']),
+                     't2.report': ToolResult(status='OK', report_id='report1'),
+                     't3.news': ToolResult(status='OK', article_ids=[1], completeness='PARTIAL', limitations=['근거 부족'])}
+        self.assertEqual([s.task_outcome(t.task_id) for t in s.plan.tasks], ['PARTIAL'] * 3)
+        s.results['t1.sql'] = ToolResult(status='OK', result_id='r1')
+        self.assertEqual(s.task_outcome('t2'), 'ANSWERED')
+        for fields in ({'status': 'FAILED', 'error': '실패', 'completeness': 'PARTIAL', 'limitations': ['없음']},
+                       {'status': 'OK', 'completeness': 'PARTIAL'},
+                       {'status': 'OK', 'limitations': ['누락']}):
+            with self.assertRaises(ValidationError):
+                ToolResult(**fields)
+
+    def test_three_stage_partial_lineage_is_saved_and_restored(self):
+        tasks = []
+        for i in range(1, 4):
+            tasks.append({'task_id': f't{i}', 'intent': 'REPORT' if i == 3 else 'STATISTICS', 'question': 'q',
+                'input_bindings': [] if i == 1 else [{'source_task_id': f't{i-1}', 'source_step_id': f't{i-1}.sql'}],
+                'steps': [{'step_id': f't{i}.check', 'tool': 'check_conditions', 'status': 'DONE',
+                           'depends_on': [] if i == 1 else [f't{i-1}.sql']},
+                          {'step_id': f't{i}.sql', 'tool': 'generate_report' if i == 3 else 'query_trade_data',
+                           'status': 'DONE', 'depends_on': [f't{i}.check']}]})
+        s = state(tasks)
+        s.results = {'t1.sql': ToolResult(status='OK', result_id='r1', completeness='PARTIAL', limitations=['누락']),
+                     't2.sql': ToolResult(status='OK', result_id='r2'),
+                     't3.sql': ToolResult(status='OK', report_id='r3')}
+        self.assertEqual([s.task_outcome(f't{i}') for i in range(1, 4)], ['PARTIAL'] * 3)
+        raw = s.results['t2.sql']
+        saved = s.result_for_storage('t2.sql', raw)
+        self.assertEqual(raw.completeness, 'COMPLETE')  # 순수 변환
+        self.assertEqual(saved.limitations, ['누락'])
+        s.results['t2.sql'] = saved
+        s.results['t3.sql'] = s.result_for_storage('t3.sql', s.results['t3.sql'])
+        restored = AgentState.model_validate_json(s.model_dump_json())
+        self.assertEqual(restored.results['t3.sql'].limitations, ['누락'])
+        self.assertEqual(restored.task_outcome('t3'), 'PARTIAL')
+
+    def test_lineage_summary_stays_bounded_and_ignores_unrelated_work(self):
+        s = self.make_state()
+        for step in s.plan.steps():
+            step.status = 'DONE'
+        s.results['t1.sql'] = ToolResult(status='OK', result_id='r1', completeness='PARTIAL',
+                                         limitations=['가' * 160, '나' * 160])
+        own = ToolResult(status='OK', report_id='r2', completeness='PARTIAL', limitations=['다' * 160, '라' * 160])
+        saved = s.result_for_storage('t2.report', own)
+        self.assertEqual(saved.completeness, 'PARTIAL')
+        self.assertIn('상세 정보', saved.limitations[-1])
+        self.assertEqual(ToolResult.model_validate_json(saved.model_dump_json()), saved)
+        independent = s.result_for_storage('t3.news', ToolResult(status='OK', article_ids=[1]))
+        self.assertEqual(independent.completeness, 'COMPLETE')
+        s.plan.tasks[0].steps[1].status = 'FAILED'
+        with self.assertRaises(ValueError):
+            s.result_for_storage('t2.report', own)
+
+    def test_report_success_has_conclusion_without_digest(self):
+        from backend.app.agents.state import TaskConclusion
+        s = self.make_state()
+        for step in s.plan.steps():
+            step.status = 'DONE'
+        s.results = {'t1.sql': ToolResult(status='OK', result_id='r1'),
+                     't2.report': ToolResult(status='OK', report_id='report1')}
+        self.assertEqual(s.task_outcome('t2'), 'ANSWERED')
+        conclusion = TaskConclusion.report_completed('t2')
+        self.assertEqual(conclusion.task_id, 't2')
+        self.assertIn('완성', conclusion.sentences[0])
+
+    def test_waiting_or_terminal_states_do_not_dispatch(self):
+        s = self.make_state()
+        for status in ('NEEDS_INPUT', 'CANCELLED', 'FAILED', 'EXPIRED', 'SUCCEEDED'):
+            s.status = status
+            self.assertEqual(s.ready_steps(), [])
 
 
 if __name__ == '__main__':
