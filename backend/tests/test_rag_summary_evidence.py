@@ -50,7 +50,7 @@ class SummaryEvidenceTest(unittest.TestCase):
         captured = []
         def structured(instruction, payload, schema, context):
             captured.append(payload)
-            return self.output(0) if len(captured) == 1 else {'0': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': True, 'supported_by_quote': True}}
+            return self.output(0) if len(captured) == 1 else {'0': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': True, 'relevant_reference': False, 'supported_by_quote': True}}
         gateway.structured = structured
         output = gateway.summarize(request, self.candidate, SimpleNamespace(event=lambda *args, **kw: None))
         self.assertEqual(output['sentences'][0]['quote'], self.candidate.chunks['a'])
@@ -67,22 +67,43 @@ class SummaryEvidenceTest(unittest.TestCase):
         request = SimpleNamespace(query='합성 질문', conditions=SimpleNamespace(model_dump=lambda **kw: {}))
         result = {'sentences': [{'text': '부분 답변', 'quote': '부분 근거', 'chunk_id': 'a'},
                                 {'text': '다른 대상', 'quote': '다른 근거', 'chunk_id': 'b'}]}
-        gateway.structured = lambda *args: {'0': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': True, 'supported_by_quote': True},
-                                           '1': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': False, 'supported_by_quote': True}}
+        gateway.structured = lambda *args: {'0': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': True, 'relevant_reference': False, 'supported_by_quote': True},
+                                           '1': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': False, 'relevant_reference': False, 'supported_by_quote': True}}
         context = SimpleNamespace(event=lambda *args, **kw: None)
         self.assertEqual(gateway.check_summary(request, result, context)['sentences'], result['sentences'][:1])
-        gateway.structured = lambda *args: {'0': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': True, 'supported_by_quote': False},
-                                           '1': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': False, 'supported_by_quote': False}}
+        gateway.structured = lambda *args: {'0': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': True, 'relevant_reference': False, 'supported_by_quote': False},
+                                           '1': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': False, 'relevant_reference': False, 'supported_by_quote': False}}
         self.assertEqual(gateway.check_summary(request, result, context), {'sentences': []})
 
     def test_missing_or_non_boolean_verdict_is_failure_not_normal_hold(self):
         gateway = ModelGateway(None)
         request = SimpleNamespace(query='질문', conditions=SimpleNamespace(model_dump=lambda **kw: {}))
         result = {'sentences': [{'text': '문장', 'quote': '근거', 'chunk_id': 'a'}]}
-        for verdict in [{}, {'0': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': 'false', 'supported_by_quote': True}}]:
+        for verdict in [{}, {'0': {'question_target': '질문 대상', 'sentence_target': '문장 대상', 'support_reason': '근거 확인', 'answers_question': 'false', 'relevant_reference': False, 'supported_by_quote': True}}]:
             gateway.structured = lambda *args: verdict
             with self.assertRaises(ValueError):
                 gateway.check_summary(request, result, None)
+
+
+
+    def test_reference_is_labelled_and_never_bypasses_quote_check(self):
+        gateway = ModelGateway(None)
+        request = SimpleNamespace(query='정책 효과는?', conditions=SimpleNamespace(model_dump=lambda **kw: {}))
+        row = {'text': '기사는 전년도 교역 증가를 설명한다.', 'quote': '전년도 교역 증가', 'chunk_id': 'a'}
+        context = SimpleNamespace(event=lambda *args, **kw: None)
+        flags = {'question_target': '정책 효과', 'sentence_target': '전년도 교역',
+                 'support_reason': '시점이 다른 배경으로만 참조', 'answers_question': False,
+                 'relevant_reference': True, 'supported_by_quote': True}
+        gateway.structured = lambda *args: {'0': flags}
+        result = gateway.check_summary(request, {'sentences': [row]}, context)
+        self.assertTrue(result['sentences'][0]['text'].startswith('참고(직접 답변 아님): '))
+        self.assertEqual(result['sentences'][0]['quote'], row['quote'])
+        self.assertFalse(row['text'].startswith('참고'))
+        flags['supported_by_quote'] = False
+        self.assertEqual(gateway.check_summary(request, {'sentences': [row]}, context), {'sentences': []})
+        flags.pop('relevant_reference')
+        with self.assertRaises(ValueError):
+            gateway.check_summary(request, {'sentences': [row]}, context)
 
 
 if __name__ == '__main__':

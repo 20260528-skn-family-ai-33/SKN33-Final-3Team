@@ -5,11 +5,15 @@ from backend.app.services.rag.store import MODEL, DIMENSIONS
 from backend.app.services.shortnews_analysis import CHAT_MODEL
 from backend.app.services.rag.summary_evidence import summary_ranges, selection_schema, materialize_summary
 
-PROMPT_VERSION = 'article-rag-v6-target-checked'
-SUMMARY_PROMPT = '''이 한 기사에서 질문의 일부 또는 전체에 직접 답하는 근거만 1~2문장으로 요약한다.
+PROMPT_VERSION = 'article-rag-v7-scoped-reference'
+SUMMARY_PROMPT = '''이 한 기사에서 질문의 일부 또는 전체에 직접 답하는 근거 또는 질문 해석에 필요한 참고 근거를 합계 1~2문장으로 요약한다.
 질문은 요구사항일 뿐 사실의 근거가 아니다. 질문의 주체·제품·정책·사건·인과관계를 기사에 없는 상태로 요약에 삽입하지 않는다.
 먼저 기사 내용과 질문의 설명 대상이 일치하는지 판단한다. 같은 국가·월·유사 분야라는 이유만으로 관련 요약을 만들지 않는다.
-복합 질문의 한 요소에 직접 답하면 그 요소만 요약한다. 나머지 요소를 추측해서 채우지 않는다. 직접 답하는 근거가 없으면 sentences=[]이다.
+복합 질문의 한 요소에 직접 답하면 그 요소만 요약한다. 나머지 요소를 추측해서 채우지 않는다. 직접 답변도 관련 참고 근거도 없으면 sentences=[]이다.
+참고 설명은 원래 정책·산업·지표·기간을 문장에 명시한다. 질문 대상과의 원인·효과 관계를 만들지 않는다.
+단순히 같은 국가·분야라는 이유만으로 참고 자료를 제공하지 않는다. 질문 해석에 필요한 연결점을 원문으로 설명할 수 있어야 한다.
+복합 질문의 수요·위험·수입 동향 중 하나만 확인되면 그 부분만 남긴다. 질문에 있는 정책이 그 변화의 원인이라고 추정하지 않는다.
+일반적인 물가 위험을 특정 제품 산업 전체의 위험으로 확대하지 않는다. 추천은 기사에 실제 명시된 권고만 전달하며 다른 규정의 준수 절차로 바꾸지 않는다.
 모든 절의 주체, 행위, 수치, 단위, 비교 기간, 대상, 조건을 이 기사의 선택 근거로 확인한다.
 표 수치는 제목·열·행·단위·기간을 함께 확인한다. 생산과 수출, 월간과 연간, 금액과 물량을 서로 바꾸지 않는다. 확인할 수 없으면 해당 수치를 쓰지 않는다.
 다른 제도·거래의 절차를 질문의 제도·거래에 적용하지 않는다. 투자·공급 사실에서 한국 기업의 기회나 인과 효과를 임의 도출하지 않는다.
@@ -91,9 +95,10 @@ class ModelGateway:
                            'sentence_target': {'type': 'string'},
                            'support_reason': {'type': 'string'},
                            'answers_question': {'type': 'boolean'},
+                           'relevant_reference': {'type': 'boolean'},
                            'supported_by_quote': {'type': 'boolean'}},
             'required': ['question_target', 'sentence_target', 'support_reason',
-                         'answers_question', 'supported_by_quote']}
+                         'answers_question', 'relevant_reference', 'supported_by_quote']}
             for i in range(len(result['sentences']))}
         schema = {'type': 'object', 'additionalProperties': False,
                   'properties': properties, 'required': list(properties)}
@@ -103,6 +108,10 @@ class ModelGateway:
             'answers_question은 이 문장이 질문의 전체 또는 한 요소에 직접 답하면 true다. '
             '같은 국가·기간·유사 단어뿐이거나 다른 산업·제품·정책·현상의 설명이면 false다. '
             '부분 답변은 나머지 요소에 답하지 않아도 true로 인정한다. '
+            'relevant_reference는 직접 답변은 아니지만 질문 해석에 필요한 참고 설명일 때만 true다. '
+            '원래 정책·산업·지표·기간이 문장에 명시되고 support_reason에서 질문과의 구체적인 연결을 설명해야 한다. '
+            '같은 국가·분야뿐인 관계는 false다. 참고 설명도 원문 밖 인과·절차·권고를 추가하면 허용하지 않는다. '
+            '수요·위험·수입 동향의 부분 답변에 질문의 정책 효과까지 요구하지 않는다. '
             'supported_by_quote는 연결된 quote만으로 문장 전체의 주체·대상·수치·단위·비교 기간·조건·인과가 '
             '뒷받침될 때만 true다. 외부 지식·질문·다른 문장의 근거를 빌려오면 false다. '
             '표의 행·열·단위가 불명확하거나 가능성을 확정으로 바꾸면 false다. '
@@ -117,11 +126,15 @@ class ModelGateway:
         for i, row in enumerate(result['sentences']):
             flags = checked[str(i)]
             if (not isinstance(flags, dict) or set(flags) != set(properties[str(i)]['required'])
-                    or any(type(flags[k]) is not bool for k in ('answers_question', 'supported_by_quote'))
+                    or any(type(flags[k]) is not bool for k in ('answers_question', 'relevant_reference', 'supported_by_quote'))
                     or any(not isinstance(flags[k], str) or not flags[k].strip()
                            for k in ('question_target', 'sentence_target', 'support_reason'))):
                 raise ValueError('summary_check_invalid_verdict')
-            if flags['answers_question'] and flags['supported_by_quote']:
-                accepted.append(row)
+            if flags['supported_by_quote']:
+                if flags['answers_question']:
+                    accepted.append(row)
+                elif flags['relevant_reference']:
+                    # Keep the public sentence contract while exposing the limited role.
+                    accepted.append({**row, 'text': '참고(직접 답변 아님): ' + row['text']})
         context.event('summary_grounding_check', checked=len(properties), accepted=len(accepted))
         return {'sentences': accepted}
