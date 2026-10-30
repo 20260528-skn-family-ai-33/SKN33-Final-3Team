@@ -23,6 +23,7 @@ chroma_data/
 
 # Local credentials and Finder metadata
 env
+deploy/redis/redis-auth.conf
 .DS_Store
 
 # Team customs runtime outputs

@@ -1,0 +1,30 @@
+# (임시) 채팅 에이전트용 Redis. 설계: docs/AGENT_DESIGN.md D-07, §6. Redis 관련 값은 바뀔 수 있다.
+# 준비(한 번): 비밀번호 파일을 만들고 컨테이너의 redis 사용자(uid 999)만 읽게 한다. 이 파일은 git에 올리지 않는다.
+#   1) 편집기로 deploy/redis/redis-auth.conf를 만들고 한 줄만 쓴다: requirepass <비밀번호>
+#      셸에서 echo로 만들면 셸 기록에 남는다. 비밀번호는 영문·숫자로만 길게 만든다(공백·따옴표·#는 설정을 깨뜨린다).
+#   2) sudo chown 999:999 deploy/redis/redis-auth.conf && sudo chmod 600 deploy/redis/redis-auth.conf
+#   3) 같은 비밀번호를 루트 .env의 API_REDIS_URL에 넣는다: redis://:<비밀번호>@127.0.0.1:6379/0
+# 실행: docker compose -f deploy/redis/docker-compose.yml up -d
+# 배포할 때 이 컨테이너는 내리지 않는다(AOF로 남긴 컨텍스트·되묻기·체크포인트 보존).
+services:
+  redis:
+    image: redis:8.2   # 체크포인터가 RedisJSON·RediSearch를 쓰므로 8 이상
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      - "127.0.0.1:6379:6379"   # 같은 EC2의 API·워커만 접속
+    volumes:
+      - redis-data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    secrets:
+      - redis_auth
+    # maxmemory 512MB의 2.5배. AOF 재작성·RDB 저장 때 fork한 프로세스가 copy-on-write로 데이터의 최대 약 2배를 쓴다.
+    # TODO(C-23): 같은 EC2의 API·워커(ML 모델·스냅샷)와 합친 메모리가 인스턴스에 맞는지 확인한다(설계 §9).
+    mem_limit: 1280m
+    restart: unless-stopped
+
+secrets:
+  redis_auth:
+    file: ./redis-auth.conf
+
+volumes:
+  redis-data:
