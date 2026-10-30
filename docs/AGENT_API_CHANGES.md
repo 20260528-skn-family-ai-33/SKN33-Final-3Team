@@ -1,6 +1,6 @@
 # 채팅 API 변경 정의 (에이전트 반영분)
 
-API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 새 API 1개를 적었습니다. 근거가 되는 설계 결정은 [채팅 에이전트 설계](AGENT_DESIGN.md) §1에 있습니다. 공통 규칙(Base `/api/v1`, snake_case, `bs_session` 쿠키 + `X-CSRF-Token`, 오류 형식)은 기존과 같습니다.
+API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 새 API 1개를 적었습니다. 근거가 되는 설계 결정은 [채팅 에이전트 설계](AGENT_DESIGN.md) §1에 있습니다. 공통 규칙(Base `/api/v1`, snake_case, `bs_session` 쿠키 + `X-CSRF-Token`, 오류 형식)은 기존과 같습니다. 이 API를 쓰는 화면 구현 명세는 [설계 §12](AGENT_DESIGN.md), 서버 쪽 구현 명세는 [설계 §11](AGENT_DESIGN.md)에 있습니다.
 
 ## 바뀌는 것
 
