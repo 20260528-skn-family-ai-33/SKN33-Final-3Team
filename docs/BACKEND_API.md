@@ -31,6 +31,8 @@ python -m backend.app.api.worker
 
 루트 `.env`에 `backend/.env.api.example`의 키를 설정한다. 기존 수집기의 `MYSQL_*`와 API의 `RDS_MYSQL_*`를 분리했다. `API_DB_TARGET=local`이면 기존 `MYSQL_*`를 사용한다. RDS 연결은 CA 인증서와 호스트명을 검증한다. `.env`/비밀번호는 커밋하지 않는다.
 
+채팅 에이전트가 붙으면 API·worker는 `API_REDIS_URL`(`redis://:<비밀번호>@127.0.0.1:6379/0`)로 Redis에 접속한다. Redis는 `deploy/redis/docker-compose.yml`로 띄우고, 같은 비밀번호를 git에 올리지 않는 `deploy/redis/redis-auth.conf`에도 둔다([채팅 에이전트 설계](AGENT_DESIGN.md) D-07). 지금 코드는 아직 이 값을 읽지 않는다.
+
 로컬 HTTP 개발은 `API_COOKIE_SECURE=false`, HTTPS 배포는 `true`로 둔다. 프론트/백엔드의 호스트명을 localhost 또는 127.0.0.1 중 하나로 통일한다. 교차 사이트 배포는 같은 사이트 프록시 구성을 전제로 한다(SameSite=Lax). `API_CORS_ORIGINS`에 정확한 프론트 Origin을 지정한다. API/worker가 같은 파일 저장소에 접근해야 하며, Linux는 `API_REPORT_FONT`에 한글 TTF 글꼴을 지정한다.
 
 - `/docs`, `/openapi.json`: API 요청 필드·인증·보류 이유.
