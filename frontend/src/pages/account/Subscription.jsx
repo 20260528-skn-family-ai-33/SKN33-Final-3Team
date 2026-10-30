@@ -20,12 +20,12 @@ function OptionCard({ checked, onChange, title, desc, style }) {
 }
 
 export default function Subscription() {
-  const { subscription, setSubscription, notify } = useApp()
+  const { subscription, setSubscription, notify, options } = useApp()
   const [cycles, setCycles] = useState(subscription.cycles)
   const [formats, setFormats] = useState(subscription.formats.length ? subscription.formats : ['PDF'])
   const valid = cycles.length > 0 && formats.length > 0
-  const save = () => {
-    setSubscription({ cycles, formats })
+  const save = async () => {
+    if (!await setSubscription({ cycles, formats })) return
     notify('구독 설정을 저장했습니다. 다음 발행일부터 저장된 관심정보 기준으로 리포트가 생성됩니다.')
     navigate(`/account/reports?tab=${cycles[0]}`)
   }
@@ -37,12 +37,12 @@ export default function Subscription() {
         <div className="between">
           <p style={{ fontSize: 16, fontWeight: 800 }}>발행 주기 <span className="muted" style={{ fontWeight: 500 }}>· 복수 선택 가능</span></p>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Btn onClick={() => setCycles(CYCLES.map(([k]) => k))}>전체선택</Btn>
+            <Btn onClick={() => setCycles(options.report_periods.map(p => p.option_code.toLowerCase()))}>전체선택</Btn>
             <Btn onClick={() => setCycles([])}>전체해제</Btn>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 12, marginTop: 14 }} className="resp-stack">
-          {CYCLES.map(([key, title, desc]) => <OptionCard key={key} checked={cycles.includes(key)} onChange={() => setCycles(c => toggleValue(c, key))} title={title} desc={desc} />)}
+          {CYCLES.map(([key, title, desc]) => <OptionCard key={key} checked={cycles.includes(key)} onChange={() => options.report_periods.some(p => p.option_code === key.toUpperCase()) ? setCycles(c => toggleValue(c, key)) : notify('이 구독 주기는 운영 설정 준비 중입니다.')} title={title} desc={desc} />)}
         </div>
       </div>
       <div style={{ marginTop: 26 }}>

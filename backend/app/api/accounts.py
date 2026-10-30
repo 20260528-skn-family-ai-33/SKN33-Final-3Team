@@ -30,13 +30,13 @@ def user_view(store, user):
     effective=user['landing_page'] if has else 'GLOBAL'
     return {'user_id':str(user['user_id']),'email':user['email'],'name':user['name'],
             'role':user['role'],'landing_page':user['landing_page'],'effective_landing_page':effective,
-            'has_interests':has,'password_change_advised':bool(user['password_change_advised']),
-            'post_login_path':'/admin' if user['role']!='USER' else '/interests' if effective=='INTERESTED' else '/'}
+            'has_interests':has,
+            'post_login_path':'/admin' if user['role']=='ADMIN' else '/?view=interest' if effective=='INTERESTED' else '/'}
 
 
 def get_user(store, user_id=None, email=None, lock=False):
-    u,p=store.t('users'),store.t('api_user_profile')
-    stmt=select(u,p.c.name,p.c.role,p.c.account_status,p.c.password_change_advised).select_from(u.join(p,p.c.user_id==u.c.user_id))
+    u=store.t('users')
+    stmt=select(u)
     stmt=stmt.where(u.c.user_id==user_id) if user_id is not None else stmt.where(u.c.email==email)
     return store.one(stmt.with_for_update() if lock else stmt)
 
@@ -46,12 +46,12 @@ def signup(store, data, response, settings):
     require(email!='admin@example.com','사전 관리 계정은 공개 가입할 수 없습니다.','RESERVED_ACCOUNT',403)
     hashed=password_hash(data.password,data.password_confirm)
     # 추가 저장소의 존재를 먼저 확인하여 가입이 일부만 기록되는 것을 방지한다.
-    for name in ('api_user_profile','api_auth_session','notification_setting'): store.t(name)
+    for name in ('users','notification_setting'): store.t(name)
     u=store.t('users')
     if store.c.scalar(select(u.c.user_id).where(u.c.email==email)):
         raise ApiError(409,'EMAIL_ALREADY_EXISTS','이미 등록된 이메일입니다.')
-    uid=store.insert('users',email=email,password_hash=hashed,landing_page='GLOBAL')
-    store.insert('api_user_profile',user_id=uid,name=data.name,role='USER',account_status='ACTIVE',created_at=now(),password_change_advised=False)
+    uid=store.insert('users',email=email,password_hash=hashed,landing_page='GLOBAL',
+        name=data.name,role='USER',account_status='ACTIVE',created_at=now())
     store.insert('notification_setting',user_id=uid,notifications_enabled=False,report_popup=True,major_issue_popup=True,spike_popup=True)
     return {'user':user_view(store,get_user(store,uid)), 'next_screen':'BS03',
             'csrf_token':issue_session(store,uid,response,settings)}
@@ -62,7 +62,7 @@ def login(store, data, response, settings):
     if not user or not password_matches(data.password,user['password_hash']):
         raise ApiError(401,'INVALID_CREDENTIALS','이메일 또는 비밀번호가 일치하지 않습니다.')
     require(user['account_status']=='ACTIVE','이용이 제한되거나 탈퇴한 계정입니다.','ACCOUNT_UNAVAILABLE',403)
-    p=store.t('api_user_profile')
+    p=store.t('users')
     store.c.execute(update(p).where(p.c.user_id==user['user_id']).values(last_login_at=now()))
     return {'user':user_view(store,user),'csrf_token':issue_session(store,user['user_id'],response,settings)}
 
@@ -89,7 +89,6 @@ def change_password(store, user, data):
     require(str(data.email).lower()==user['email'].lower() and password_matches(data.current_password,user['password_hash']),
             '현재 이메일 또는 비밀번호가 일치하지 않습니다.','CURRENT_PASSWORD_INVALID',403)
     hashed=password_hash(data.new_password,data.new_password_confirm)
-    u,p=store.t('users'),store.t('api_user_profile')
+    u=store.t('users')
     store.c.execute(update(u).where(u.c.user_id==user['user_id']).values(password_hash=hashed))
-    store.c.execute(update(p).where(p.c.user_id==user['user_id']).values(password_change_advised=False))
     revoke_sessions(store,user['user_id'])

@@ -35,12 +35,13 @@ def authenticate(store, request, required=True):
         if required:
             raise ApiError(401, 'UNAUTHENTICATED', '로그인이 필요합니다.')
         return None
-    s, u, p = store.t('api_auth_session'), store.t('users'), store.t('api_user_profile')
-    row = store.one(select(u, p.c.name, p.c.role, p.c.account_status, p.c.password_change_advised,
-                           s.c.csrf_hash, s.c.token_hash).select_from(s.join(u, s.c.user_id == u.c.user_id).join(p, p.c.user_id == u.c.user_id))
-                    .where(s.c.token_hash == hash_token(token), s.c.expires_at > now()))
-    if not row or row['account_status'] != 'ACTIVE':
+    token_hash = hash_token(token)
+    session = store.db.redis.session(token_hash)
+    u = store.t('users')
+    row = store.one(select(u).where(u.c.user_id == session['user_id'])) if session else None
+    if not row or row['account_status'] != 'ACTIVE' or row['auth_version'] != session['auth_version']:
         raise ApiError(401, 'UNAUTHENTICATED', '세션이 만료되었거나 이용할 수 없는 계정입니다.')
+    row.update(csrf_hash=session['csrf_hash'], token_hash=token_hash)
     if request.method not in ('GET','HEAD','OPTIONS'):
         provided = request.headers.get('X-CSRF-Token', '')
         require(hmac.compare_digest(row['csrf_hash'], hash_token(provided)), 'CSRF 검증에 실패했습니다.', 'CSRF_FAILED', 403)
@@ -51,21 +52,24 @@ def issue_session(store, user_id, response, settings):
     token = secrets.token_urlsafe(32)
     csrf = hash_token('csrf:'+token)
     ttl = int(settings.get('API_SESSION_HOURS', 12))*3600
-    store.insert('api_auth_session', token_hash=hash_token(token), user_id=user_id,
-                 csrf_hash=hash_token(csrf), expires_at=now()+timedelta(seconds=ttl))
+    u = store.t('users')
+    version = store.c.scalar(select(u.c.auth_version).where(u.c.user_id == user_id))
+    store.db.redis.save_session(hash_token(token), {'user_id':str(user_id),
+        'csrf_hash':hash_token(csrf), 'auth_version':version}, ttl)
     response.set_cookie('bs_session', token, max_age=ttl, httponly=True,
                         secure=settings.secure_cookie, samesite='lax', path='/')
     return csrf
 
 
 def revoke_sessions(store, user_id):
-    t=store.t('api_auth_session')
-    store.c.execute(delete(t).where(t.c.user_id == user_id))
+    # Transactional generation counter invalidates ALL device sessions without a Redis scan.
+    from sqlalchemy import update
+    t=store.t('users')
+    store.c.execute(update(t).where(t.c.user_id == user_id).values(auth_version=t.c.auth_version+1))
 
 
-def administrator(user, super_only=False):
-    allowed = ('SUPER_ADMIN',) if super_only else ('ADMIN','SUPER_ADMIN')
-    require(user and user['role'] in allowed, '관리자 권한이 필요합니다.', 'FORBIDDEN', 403)
+def administrator(user):
+    require(user and user['role']=='ADMIN', '관리자 권한이 필요합니다.', 'FORBIDDEN', 403)
 
 
 def client_ip(request, settings):
@@ -96,23 +100,4 @@ def limit_auth_request(database, request, settings, identity, body):
 
 
 def limit_public(database, key, maximum=10, seconds=60):
-    """별도 커밋으로 인증 실패에도 카운터 유지. 모든 서버 프로세스가 DB 카운터 공유."""
-    from sqlalchemy.exc import IntegrityError
-    t=database.table('api_rate_limit')
-    for attempt in range(2):
-        try:
-            with database.engine.begin() as c:
-                row=c.execute(select(t).where(t.c.bucket_key==key).with_for_update()).mappings().first()
-                if row is None:
-                    c.execute(t.insert().values(bucket_key=key,window_start=now(),request_count=1))
-                    return
-                if row['window_start']+timedelta(seconds=seconds) <= now():
-                    c.execute(t.update().where(t.c.bucket_key==key).values(window_start=now(),request_count=1))
-                    return
-                if row['request_count'] >= maximum:
-                    raise ApiError(429,'RATE_LIMITED','잠시 후 다시 시도하세요.',retryable=True)
-                c.execute(t.update().where(t.c.bucket_key==key).values(request_count=row['request_count']+1))
-                return
-        except IntegrityError:
-            if attempt:
-                raise
+    database.redis.limit(key, maximum, seconds)

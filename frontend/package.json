@@ -8,8 +8,11 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/data.test.mjs tests/oauth.test.mjs tests/roles.test.mjs",
-    "test:e2e": "node tests/browser.cjs"
+    "test": "node --test tests/data.test.mjs tests/roles.test.mjs tests/api-client.test.mjs tests/integration.test.mjs tests/request-id.test.mjs",
+    "test:integration": "node tests/integration-browser.cjs",
+    "test:review": "node tests/review-browser.cjs",
+    "test:store": "node tests/store-browser.cjs",
+    "test:e2e": "node tests/integration-browser.cjs"
   },
   "dependencies": {
     "react": "^19.2.8",
@@ -20,6 +23,7 @@
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
+    "playwright": "^1.64.1",
     "vite": "^8.3.0"
   }
 }

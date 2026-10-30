@@ -8,7 +8,7 @@ def deliver_event(store, event_id):
     events, alerts = store.t('alert_event'), store.t('user_alert')
     event=store.one(select(events).where(events.c.event_id==event_id).with_for_update())
     require(event is not None,'알림 사건이 없습니다.','NOT_FOUND',404)
-    p=store.t('api_user_profile'); users=store.rows(select(p.c.user_id).where(p.c.account_status=='ACTIVE'))
+    p=store.t('users'); users=store.rows(select(p.c.user_id).where(p.c.account_status=='ACTIVE'))
     if event['event_type']=='REPORT':
         r=store.t('report'); report=store.one(select(r).where(r.c.report_id==event['report_id'],r.c.status=='READY'))
         if report is None or not report['subscription_id']: return 0

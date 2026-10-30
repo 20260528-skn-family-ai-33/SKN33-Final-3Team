@@ -2,7 +2,7 @@
 {% import "_macros.html" as m %}
 {# 쪽 나눔(layout)은 report_templates.layout()이 내용 높이로 계산합니다. 넘치면 “(계속)” 쪽이 추가됩니다. #}
 {% set n_items = items | length %}
-{% set p_summary = 3 %}
+{% set p_summary = 2 + layout.contents_count %}
 {% set p_items = p_summary + layout.summary | length %}
 {# 품목 상세는 관심 국가가 많으면 품목마다 쪽 수가 달라집니다 #}
 {% set detail_start = [] %}
@@ -144,7 +144,7 @@
   {% if item.others %}{% set table_rows = table_rows + ['others'] %}{% endif %}
   {% for r in (table_rows + ['total'])[b.start:b.end] %}
   {% if r is none %}
-  <tr><td colspan="6" class="small">데이터 준비 중</td></tr>
+  <tr><td colspan="6" class="small">{{ '해당 범위의 수출 실적이 없습니다.' if item.amount_usd == 0 else '데이터 준비 중' }}</td></tr>
   {% elif r is mapping %}
   <tr><td>{{ r.rank }}</td><td>{{ m.country(r) }}</td><td class="r">{{ r.amount_usd | musd }}</td><td class="r">{{ r.share_pct | pct }}</td>
     <td class="r">{{ r.mom_pct | change(new=r.get('is_new_mom', false)) }}</td><td class="r">{{ r.yoy_pct | change(new=r.get('is_new_yoy', false)) }}</td></tr>
@@ -152,7 +152,7 @@
   <tr class="other"><td></td><td>기타</td><td class="r">{{ item.others.amount_usd | musd }}</td><td class="r">{{ item.others.share_pct | pct }}</td>
     <td class="r">{{ item.others.mom_pct | change }}</td><td class="r">{{ item.others.yoy_pct | change }}</td></tr>
   {% else %}
-  <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">100.0%</td>
+  <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">{{ '100.0%' if item.amount_usd else '—' }}</td>
     <td class="r">{{ item.mom_pct | change }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
   {% endif %}
   {% endfor %}
@@ -168,7 +168,7 @@
 {% call m.page(report, p_issue + loop.index0, total) %}
 {% if loop.first %}
 {{ m.heading(n_items + 2, '현지 이슈', '관심 품목 관련 해외 기사 · ' ~ conditions.target_month | replace('-', '.') ~ ' 대상 월 기준 최근 기사') }}
-{{ m.article_policy(article_limit) }}
+{{ m.article_policy(article_limit, article_policy_note | default(none)) }}
 {% else %}
 {{ m.heading(none, '현지 이슈 (계속)') }}
 {% endif %}
@@ -185,7 +185,7 @@
   {'metric': '관심 국가 추이', 'formula': '국가별 월 수출액 · ' ~ items[0].trend.range_label if items else '국가별 월 수출액'},
   {'metric': '수출국 수', 'formula': month ~ '월 수출액이 0보다 큰 국가 수 · 괄호는 전년 동월 대비 증감'},
 ], [
-  {'label': '발행 조건', 'value': month ~ '월 통계 적재·검증 완료 이벤트 → 구독자별 생성 · 실패 시 1회 재시도, 계속 실패하면 “생성 지연” 표시 후 다음 배치'},
+  {'label': '발행 조건', 'value': meta.get('publication_policy', month ~ '월 통계 적재·검증 완료 이벤트 → 구독자별 생성 · 실패 시 1회 재시도, 계속 실패하면 “생성 지연” 표시 후 다음 배치')},
   {'label': '수치 검증', 'value': '표·지표는 결과표에서 직접 삽입(100%) · ' ~ m.verified_text(verification)},
   {'label': '발행', 'value': (report.published_at | ymdhm) ~ ' · ' ~ report.report_id},
   {'label': '재열람', 'value': '마이페이지 › 리포트 센터에서 저장된 PDF를 그대로 다시 받을 수 있음'},

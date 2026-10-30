@@ -1,19 +1,19 @@
 // BS16 채팅 생성 · BS17 주간 · BS18 월간 · BS31 분기 리포트 목록, BS20 구독 삭제 확인
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
 import { Btn, Chip, Modal, Select, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
-import { reportParagraphs } from '../../data/analysis'
-import { downloadDocx } from '../../utils/exports'
+
 
 const TABS = ['weekly', 'monthly', 'chat', 'quarterly']
 const CYCLE = { weekly: '주간', monthly: '월간', quarterly: '분기' }
 const SORTS = [['new', '최신 생성일순'], ['old', '오래된 순'], ['title', '제목순']]
 
 function ReportItem({ report }) {
+  const { downloadReport } = useApp()
   const ready = report.status === 'ready'
   const generating = report.status === 'generating'
   return (
@@ -41,8 +41,8 @@ function ReportItem({ report }) {
       {ready ? (
         <div style={{ display: 'flex', gap: 8 }}>
           <Btn kind="ink" to={`/report?id=${report.id}`}>열람</Btn>
-          <Btn icon="download" to={`/report?id=${report.id}&print=1`}>PDF</Btn>
-          <Btn icon="download" onClick={() => downloadDocx(report.title, reportParagraphs(report))}>DOCX</Btn>
+          <Btn icon="download" disabled={!report.available_formats?.includes('PDF')} onClick={() => downloadReport(report.id, 'PDF')}>PDF</Btn>
+          <Btn icon="download" disabled={!report.available_formats?.includes('DOCX')} onClick={() => downloadReport(report.id, 'DOCX')}>DOCX</Btn>
         </div>
       ) : <span className={'tag ' + (generating ? 'red' : 'amber')}>{generating ? '생성 중' : '다운로드 불가'}</span>}
     </div>
@@ -50,20 +50,26 @@ function ReportItem({ report }) {
 }
 
 export default function ReportCenter({ route }) {
-  const { reports, subscription, setSubscription, profile, notify } = useApp()
+  const { reports, subscription, deleteSubscription, profile, notify, refreshReports, fail } = useApp()
+  const generating = reports.some(r => r.status === 'generating' || r.status === 'delayed')
+  useEffect(() => {
+    let stopped = false, timer
+    const load = async () => { try { await refreshReports(); if (!stopped && generating) timer = setTimeout(load, 3000) } catch (e) { if (!stopped) fail(e) } }
+    load(); return () => { stopped = true; clearTimeout(timer) }
+  }, [refreshReports, generating, fail])
   const tab = TABS.includes(route.query.get('tab')) ? route.query.get('tab') : 'chat'
   const confirm = route.query.get('confirm') === 'delete'
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState('new')
-  const target = `${productName(profile.products[0] || '854232')} · ${profile.countries[0] || '전체 국가'}`
+  const target = `${productName(profile.products[0])} · ${profile.countries[0] || '전체 국가'}`
   const list = reports
     .filter(r => r.kind === tab && r.title.includes(query.trim()))
     .sort((a, b) => (sort === 'title' ? a.title.localeCompare(b.title) : sort === 'old' ? a.created.localeCompare(b.created) : b.created.localeCompare(a.created)))
   const subscribed = tab !== 'chat' && subscription.cycles.includes(tab)
   const deleteCycle = tab === 'chat' ? null : tab
 
-  const removeSubscription = () => {
-    setSubscription(s => ({ ...s, cycles: s.cycles.filter(c => c !== deleteCycle) }))
+  const removeSubscription = async () => {
+    if (!await deleteSubscription(deleteCycle)) return
     navigate(withQuery(route, { confirm: null }))
     notify(`${CYCLE[deleteCycle]} 구독을 삭제했습니다. 기존에 발행된 리포트는 계속 조회할 수 있습니다.`)
   }

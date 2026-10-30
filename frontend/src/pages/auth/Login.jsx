@@ -4,7 +4,7 @@ import { Link, navigate } from '../../router'
 import { useApp } from '../../store'
 import { Btn, TextField } from '../../components/ui'
 import { isEmail } from '../../utils/validate'
-import { startSocialLogin } from '../../auth/oauth'
+
 import { AuthFrame, CardHead } from './AuthFrame'
 
 const SOCIAL = [
@@ -14,22 +14,22 @@ const SOCIAL = [
 ]
 
 export default function Login() {
-  const { login, profile } = useApp()
+  const { login } = useApp()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState({})
 
-  const submit = e => {
+  const submit = async e => {
     e.preventDefault()
     const next = {}
     if (!isEmail(email)) next.email = '이메일 형식을 확인해 주세요.'
     if (!password) next.password = '비밀번호를 입력해 주세요.'
     if (Object.keys(next).length) return setError(next)
-    const result = login(email, password)
+    const result = await login(email, password)
     if (!result.ok) return setError({ form: result.message || '이메일 또는 비밀번호가 일치하지 않습니다. 로그인 정보를 확인해 주세요.' })
     // 재로그인: 관심사 등록을 건너뛰고 저장된 메인 설정으로 이동한다.
     if (result.account.role === 'admin') navigate('/admin')
-    else navigate(profile.email === result.account.email && profile.home === 'interest' ? '/?view=interest' : '/')
+    else navigate(result.path || '/')
   }
 
   return (
@@ -60,7 +60,7 @@ export default function Login() {
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 26, marginTop: 16 }}>
             {SOCIAL.map(([key, letter, label, style]) => (
-              <button key={key} type="button" className="reset" aria-label={`${label}로 로그인`} onClick={() => startSocialLogin(key) || navigate(`/login/${key}`)}
+              <button key={key} type="button" className="reset" aria-label={`${label}로 로그인`} onClick={() => navigate(`/login/${key}`)}
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, color: 'var(--ink)' }}>
                 <span style={{ width: 52, height: 52, borderRadius: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 19, fontWeight: 800, ...style }}>{letter}</span>
                 <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--sub)' }}>{label}</span>
@@ -73,8 +73,7 @@ export default function Login() {
           <Link to="/signup" style={{ fontSize: 14, fontWeight: 700, color: 'var(--red-d)', textDecoration: 'underline', textUnderlineOffset: 3 }}>아직 계정이 없으신가요?</Link>
         </p>
         <div style={{ marginTop: 28, background: 'var(--bg)', borderRadius: 12, padding: '14px 16px' }}>
-          <p className="note">체험 계정: <b>demo@example.com</b> / demo1234!</p>
-          <p className="note">최고 관리자 체험: <b>admin@example.com</b> / admin1234!</p>
+          <p className="note">가입한 이메일 계정으로 로그인하세요. 관리자 계정은 운영 담당자가 발급합니다.</p>
         </div>
       </form>
     </AuthFrame>

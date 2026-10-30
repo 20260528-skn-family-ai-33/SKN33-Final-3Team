@@ -1,15 +1,21 @@
 // BS14 AI분석(대화·리포트 조건·생성 진행·일반 답변·표 보기) · BS15 리포트 생성 완료
 import { useEffect, useRef, useState } from 'react'
-import { REPORT_STAGES, useApp } from '../../store'
+import { allPages, useApp } from '../../store'
 import { Band } from '../../components/layout'
 import { Btn, Check, Modal, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
-import { LineChart } from '../../components/charts'
-import { niceTicks } from '../../utils/chart'
-import { productName } from '../../data/catalog'
+import ApiResults from '../../components/ApiResults'
+import { api } from '../../api/client'
+import { requestId } from '../../api/requestId'
+import { previewUsable, previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
+import { amount, percent } from '../../api/adapters'
+import { useQuery, ErrorNotice } from '../../api/hooks'
+import { Hs4Search } from '../../components/pickers'
+import { monthOffset } from '../home/useDashboard'
+import { countryName, productName } from '../../data/catalog'
 import { ALL_SECTIONS } from '../../data/seed'
-import { PERIOD_PRESETS, figures, parseQuestion, presetRange, range, reportParagraphs } from '../../data/analysis'
-import { downloadDocx, downloadExcel } from '../../utils/exports'
+const range = (from, to) => `${from || '—'} ~ ${to || '—'}`
+const PERIOD_PRESETS = [['3', '최근 3개월'], ['6', '최근 6개월'], ['12', '최근 12개월']]
 import bandAnalysis from '../../assets/band-analysis.jpg'
 
 const STATUS_TAG = {
@@ -17,12 +23,8 @@ const STATUS_TAG = {
   generating: ['red', '생성 중'],
   done: ['ok', '생성 완료'],
 }
-const HEADER_TAG = {
-  condition: ['amber', '조건 선택'],
-  generating: ['red', '리포트 생성 중'],
-  done: ['ok', '리포트 생성 완료'],
-}
-const today = () => new Date().toISOString().slice(0, 10).replaceAll('-', '.')
+const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
+const optionsFor = c => ({ conditions: c, country: c.country_codes.map(countryName).join(' · '), product: c.hs_items.map(h => h.hs_code).join(', '), from: c.period.start.slice(0, 7), to: c.period.end.slice(0, 7), ...reportComparisonInputs(c), sections: ALL_SECTIONS })
 
 function AiBlock({ children }) {
   return (
@@ -46,7 +48,33 @@ function UserBubble({ text }) {
 
 /** 상태 1: 리포트 조건 선택 */
 function ConditionCard({ message, onChange, onGenerate }) {
+  const { run, notify } = useApp()
+  const availability = useQuery('/data/availability')
+  const [preview, setPreview] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const request = useRef(null)
   const o = message.options
+  const signature = JSON.stringify(o)
+  const generate = async () => {
+    if (busy) return
+    setBusy(true)
+    await run(async () => {
+      if (!previewUsable(preview, signature)) {
+        const conditions = reportConditions(o)
+        const data = await api('/reports/preview', { method: 'POST', body: { conditions } })
+        setPreview({ ...data, signature }); request.current = requestId()
+      } else {
+        try {
+          await onGenerate({ preview_id: preview.preview_id, confirm_conditions: true, formats: ['PDF', 'DOCX'], sections: o.sections.map(s => sectionCodes[s]) }, request.current)
+        } catch (error) {
+          if (!previewExpired(error)) throw error
+          setPreview(null); request.current = null
+          notify('리포트 조건 확인이 만료되었습니다. 조건을 다시 확인해 주세요.')
+        }
+      }
+    })
+    setBusy(false)
+  }
   const set = patch => onChange({ ...message, options: { ...o, ...patch } })
   if (message.locked) {
     return (
@@ -69,7 +97,7 @@ function ConditionCard({ message, onChange, onGenerate }) {
       <div className="chips" style={{ marginTop: 16 }} role="group" aria-label="기간 빠른 선택">
         {PERIOD_PRESETS.map(([key, label]) => (
           <button key={key} type="button" className={'chip sm' + (message.preset === key ? ' on' : '')} aria-pressed={message.preset === key}
-            onClick={() => onChange({ ...message, preset: key, options: { ...o, ...presetRange(key) } })}>{label}</button>
+            onClick={() => onChange({ ...message, preset: key, options: { ...o, from: monthOffset(availability.data?.trade_end_month, 1 - Number(key)), to: availability.data?.trade_end_month, compareFrom: '', compareTo: '' } })}>{label}</button>
         ))}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 20px 1fr', gap: 10, alignItems: 'center', marginTop: 16 }}>
@@ -87,195 +115,106 @@ function ConditionCard({ message, onChange, onGenerate }) {
       </div>
       <div className="between" style={{ marginTop: 18 }}>
         <span className="note">핵심 요약은 항상 포함 · 선택 응답이 없으면 전체 항목으로 생성</span>
-        <Btn kind="red" size="md" icon="file" onClick={() => onGenerate({ ...o, sections: o.sections.length ? o.sections : ALL_SECTIONS })} disabled={o.from > o.to}>리포트 생성</Btn>
+        <Btn kind="red" size="md" icon="file" onClick={generate} disabled={busy || !o.from || !o.to || o.from > o.to}>{previewUsable(preview, signature) ? '확인한 조건으로 생성' : '리포트 조건 확인'}</Btn>
       </div>
+      {preview?.signature === signature && <p className="note">확인된 기간: {preview.conditions.period.start} ~ {preview.conditions.period.end} · 비교: {preview.conditions.compare_period?.start || '없음'} ~ {preview.conditions.compare_period?.end || ''} · 유효기간 {preview.expires_at}. 위 조건으로 PDF·DOCX를 생성합니다.</p>}
       {o.from > o.to && <p className="field-err">시작 월이 종료 월보다 늦습니다.</p>}
     </AiBlock>
   )
 }
 
-/** 상태 2: 생성 진행 상태 */
-function ProgressCard({ report, stage }) {
-  return (
-    <section className="card" style={{ borderColor: 'var(--line)' }} aria-live="polite">
-      <div className="between">
-        <p style={{ fontSize: 18, fontWeight: 800 }}>리포트를 생성하고 있습니다 <span className="tag red" style={{ marginLeft: 6 }}>작성 중 · {Math.min(stage + 1, REPORT_STAGES.length)} / {REPORT_STAGES.length}</span></p>
-        <span className="muted">예상 남은 시간 약 {Math.max(1, REPORT_STAGES.length - stage)}초</span>
-      </div>
-      <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-        {REPORT_STAGES.map((s, i) => {
-          const done = i < stage, on = i === stage
-          return (
-            <div key={s} style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-start' }}>
-              <div style={{ height: 6, width: '100%', borderRadius: 3, background: done ? '#C8102E' : on ? '#15181E' : '#E3E6EA' }} />
-              <span style={{ fontSize: 14, fontWeight: on ? 800 : 600, color: done || on ? '#15181E' : '#8A919C' }}>{done ? `✓ ${s}` : on ? `${s} · 진행 중` : s}</span>
-            </div>
-          )
-        })}
-      </div>
-      <p className="muted" style={{ marginTop: 18 }}>화면을 이동해도 작업은 유지됩니다. 완료 상태와 결과는 채팅방 및 요청형 리포트 목록에서 확인합니다. {report && `(${report.title})`}</p>
-    </section>
-  )
-}
-
-/** BS15: 생성 완료 */
-function DoneCard({ report }) {
-  if (!report) return <AiBlock><p className="muted">리포트를 찾을 수 없습니다. 리포트 센터에서 확인해 주세요.</p></AiBlock>
-  const o = report.options
-  const f = figures(o)
-  return (
-    <AiBlock>
-      <p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인했습니다.</p>
-      <p style={{ marginTop: 8, fontSize: 15 }}>국가: {o.country || '전체'} · 품목: {productName(o.product)}{o.product && `(${o.product})`} · 분석: {range(o.from, o.to)}</p>
-      <p className="muted" style={{ marginTop: 4 }}>비교: {range(o.compareFrom, o.compareTo)} · 포함: {o.sections.map(s => s.replace('(KPI)', 'KPI').replace('주요 지표KPI', 'KPI').replace(' 기사', '').replace(' 시장', '')).join(' / ')}</p>
-      <div style={{ marginTop: 18, borderRadius: 16, background: '#fff', border: '1px solid #F1A9B4', padding: '20px 22px', boxShadow: 'inset 4px 0 0 var(--red)' }}>
-        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-          <span style={{ width: 48, height: 56, borderRadius: 8, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="file" size={24} color="#C8102E" stroke={1.8} /></span>
-          <div style={{ flex: 1 }}>
-            <p style={{ fontSize: 16, fontWeight: 800 }}>리포트 생성이 완료되었습니다</p>
-            <p style={{ fontSize: 15, marginTop: 2 }}>{report.title}.pdf <span className="note">· {report.pages || 12}쪽 · {report.created}</span></p>
-            <p className="note" style={{ color: 'var(--red-d)' }}>요청형 리포트 목록에 등록되었습니다. 조건·기준 기간·생성일이 함께 저장됩니다.</p>
-          </div>
-        </div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap' }}>
-          <Btn kind="red" icon="download" to={`/report?id=${report.id}&print=1`}>PDF 다운로드</Btn>
-          <Btn kind="red" icon="download" onClick={() => downloadDocx(report.title, reportParagraphs(report))}>DOCX 다운로드</Btn>
-          <Btn kind="ink" to={`/report?id=${report.id}`}>리포트 보기</Btn>
-          <Btn to="/account/reports?tab=chat">요청형 리포트 목록</Btn>
-          <Btn onClick={() => downloadExcel([['월', '수출액(억 USD)', '비교 기간 수출액(억 USD)'], ...f.labels.map((l, i) => [l, f.current[i], f.previous[i]])], `${report.title}_데이터`)}>데이터 엑셀 다운로드</Btn>
-        </div>
-      </div>
-      <p className="note" style={{ marginTop: 12 }}>추가로 국가 비교, 기간 변경, 기사 근거 설명을 요청할 수 있습니다.</p>
-    </AiBlock>
-  )
-}
-
-/** 상태 3·4: 일반 AI 분석 답변 + 표 보기 */
 function AnswerCard({ message, onSaveReport, onInterest }) {
-  const [table, setTable] = useState(false)
-  const o = message.options
-  const f = figures(o)
-  const ticks = niceTicks([...f.current, ...f.previous])
-  const lastYear = Number(o.from.slice(0, 4))
-  const excel = () => downloadExcel(
-    [['월', `${lastYear}년 수출액`, `${lastYear - 1}년 수출액`, '증감률'], ...f.labels.map((l, i) => [l, f.current[i], f.previous[i], `${(((f.current[i] / f.previous[i]) - 1) * 100).toFixed(1)}%`])],
-    `${o.country || '전체'}_${productName(o.product)}_월별수출`,
-  )
-  const article = f.news[0]
-  return (
-    <AiBlock>
-      <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {o.product ? `HS ${o.product}` : '전체 품목'} / {o.country || '전체 국가'}</p>
-      <p className="note">{range(o.from, o.to)} / 비교 {range(o.compareFrom, o.compareTo)} · 단위 억 USD · 관세청</p>
-      <div style={{ display: 'flex', gap: 14, marginTop: 16 }}>
-        {[[`${f.labels.length}개월 수출액`, `${f.total}억 USD`, '#15181E'], ['전년 동기 대비', f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1'], ['월별 흐름', f.flow, '#15181E']].map(([l, v, c]) => (
-          <div key={l} style={{ flex: 1, background: 'var(--bg)', borderRadius: 14, padding: '16px 18px' }}>
-            <p className="muted">{l}</p>
-            <p style={{ fontSize: 24, fontWeight: 800, marginTop: 4, color: c }}>{v}</p>
-          </div>
-        ))}
-      </div>
-      <div style={{ marginTop: 18, border: '1px solid var(--line)', borderRadius: 14, padding: '16px 18px' }}>
-        <div className="between">
-          <b>월별 수출 추이</b>
-          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-            <span className="lg"><i style={{ background: '#C8102E' }} />{lastYear}년</span>
-            <span className="lg"><i style={{ background: '#9A95BF' }} />{lastYear - 1}년</span>
-            <Btn kind="lav" onClick={() => setTable(t => !t)} aria-pressed={table}>{table ? '차트로 보기' : '표로 보기'}</Btn>
-          </div>
+  const a = message.answer
+  const c = a.conditions
+  const trend = a.tables.length === 1 && a.tables[0].rows.length && a.tables[0].rows.every(r => r.month) ? a.tables[0].rows : null
+  const comparison = comparisonPeriod(c, trend)
+  const metric = c?.trade_flow === 'IMPORT' ? 'import_amount_usd' : 'export_amount_usd'
+  const prior = c?.trade_flow === 'IMPORT' ? 'previous_year_import_usd' : 'previous_year_export_usd'
+  const total = trend?.every(r => typeof r[metric] === 'number') ? trend.reduce((sum, r) => sum + r[metric], 0) : null
+  const previous = trend?.every(r => typeof r[prior] === 'number') ? trend.reduce((sum, r) => sum + r[prior], 0) : null
+  const growth = total != null && previous > 0 ? (total / previous - 1) * 100 : null
+  const flow = trend && trend.length > 1 && total != null ? trend.at(-1)[metric] > trend[0][metric] ? '증가' : trend.at(-1)[metric] < trend[0][metric] ? '감소' : '동일' : '—'
+  return <AiBlock>
+    {c && <>
+      <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')}` : '전체 품목'} / {c.country_codes?.map(countryName).join(' · ') || '전체 국가'}</p>
+      <p className="note">{range(c.period?.start, c.period?.end)} / 비교 {range(comparison?.start, comparison?.end)}</p>
+    </>}
+    {trend && <div style={{ display: 'flex', gap: 14, marginTop: 16 }}>
+      {[[`${trend.length}개월 ${c?.trade_flow === 'IMPORT' ? '수입' : '수출'}액`, `${amount(total)}억 USD`, '#15181E'], ['전년 동기 대비', percent(growth), growth >= 0 ? '#C8102E' : '#1F5FD1'], ['월별 흐름', flow, '#15181E']].map(([label, value, color]) => (
+        <div key={label} style={{ flex: 1, background: 'var(--bg)', borderRadius: 14, padding: '16px 18px' }}>
+          <p className="muted">{label}</p><p style={{ fontSize: 24, fontWeight: 800, marginTop: 4, color }}>{value}</p>
         </div>
-        {table ? (
-          <div style={{ marginTop: 14 }}>
-            <div className="between">
-              <p style={{ fontSize: 16, fontWeight: 800 }}>{o.country || '전체'} / {productName(o.product)} <span className="muted" style={{ fontWeight: 500 }}>· 단위: 억 USD · 출처: 관세청</span></p>
-              <Btn kind="red" icon="download" onClick={excel}>엑셀 다운로드</Btn>
-            </div>
-            <div className="th" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr', marginTop: 16 }}><span>월</span><span className="r">{lastYear}년 수출액</span><span className="r">{lastYear - 1}년 수출액</span><span className="r">증감률</span></div>
-            {f.labels.map((l, i) => {
-              const g = ((f.current[i] / f.previous[i]) - 1) * 100
-              return (
-                <div key={l} className="tr" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr' }}>
-                  <span className="b">{l}</span><span className="r b">{f.current[i].toFixed(1)}</span><span className="r s">{f.previous[i].toFixed(1)}</span>
-                  <span className="r b" style={{ color: g >= 0 ? '#C8102E' : '#1F5FD1' }}>{g >= 0 ? '+' : ''}{g.toFixed(1)}%</span>
-                </div>
-              )
-            })}
-            <p className="note" style={{ marginTop: 12 }}>차트로 돌아가기 → 같은 결과 유지 · 다운로드는 숫자 형식과 표시 단위를 보존합니다.</p>
-          </div>
-        ) : (
-          <LineChart labels={f.labels} yTicks={ticks} series={[{ color: '#C8102E', values: f.current }, { color: '#9A95BF', values: f.previous }]} />
-        )}
-      </div>
-      <p style={{ fontSize: 15, fontWeight: 800, marginTop: 18 }}>증가 이유 · 기사 요약 <span className="tag">시연 예시</span></p>
-      <p style={{ marginTop: 8, fontSize: 15, lineHeight: 1.7, color: '#2E333C' }}>
-        기사에서는 {o.country || '주요 시장'}의 서버·전자제품 수요 확대가 {productName(o.product)} 수요를 높였다고 설명하며, 이를 수출 {f.growth >= 0 ? '증가' : '변화'}의 배경으로 제시합니다.
-      </p>
-      {article && <p className="note" style={{ marginTop: 6 }}>{article.date} · {article.country} · KOTRA 해외시장뉴스 · <a href={`#/articles?tab=${article.kind === 'general' ? 'all' : article.kind}&id=${article.id}`}>원문: {article.title} ↗</a></p>}
-      <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-        <Btn kind="red" icon="file" onClick={() => onSaveReport(o)}>리포트로 저장</Btn>
-        <Btn icon="star" onClick={() => onInterest(o)}>관심 목록 추가</Btn>
-        <Btn icon="download" onClick={() => { setTable(true); excel() }}>표 보기·엑셀</Btn>
-      </div>
-    </AiBlock>
-  )
+      ))}
+    </div>}
+    <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>
+    {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
+    {a.warnings?.map(w => <p className="note" key={w}>{w}</p>)}
+    {a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
+    {a.articles.map(article => <div className="li" key={article.article_id}><div><b>{article.title}</b><p className="muted">{article.summary}</p><Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn></div></div>)}
+    <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+      {a.conditions && <Btn kind="red" icon="file" onClick={() => onSaveReport(a.conditions)}>리포트로 저장</Btn>}
+      {a.tables[0]?.result_id && <Btn icon="star" onClick={() => onInterest(a.tables[0].result_id)}>관심 목록 추가</Btn>}
+    </div></AiBlock>
 }
 
 export default function Analysis({ route }) {
-  const { chats, setChats, reports, generateReport, reportStage, setProfile, notify } = useApp()
+  const { chats, refreshChats, refreshReports, run, notify } = useApp()
   const [activeId, setActiveId] = useState(route.query.get('chat') || chats[0]?.id)
   const [input, setInput] = useState(route.query.get('ask') || '')
   const [modal, setModal] = useState(null)
   const [rename, setRename] = useState('')
-  const endRef = useRef(null)
-  const active = chats.find(c => c.id === activeId) || chats[0]
-
+  const [messages, setMessages] = useState([])
+  const [job, setJob] = useState(null)
+  const [error, setError] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [draft, setDraft] = useState(null)
+  const [readRevision, setReadRevision] = useState(0)
+  const [hsGroup, setHsGroup] = useState(null)
+  const endRef = useRef(null), pending = useRef(null)
+  const active = chats.find(c => c.id === activeId)
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-  }, [active?.messages.length])
-
-  const updateChat = (id, fn) => setChats(cs => cs.map(c => (c.id === id ? fn(c) : c)))
-  const newChat = () => {
-    const id = 'c' + Date.now().toString(36)
-    setChats(cs => [{ id, title: '새 채팅', date: today(), status: 'new', messages: [] }, ...cs])
-    setActiveId(id)
-    setInput('')
-  }
-  const send = () => {
-    const text = input.trim()
-    if (!text) return
-    let chat = active
-    if (!chat) {
-      const id = 'c' + Date.now().toString(36)
-      chat = { id, title: '새 채팅', date: today(), status: 'new', messages: [] }
-      setChats(cs => [chat, ...cs])
-      setActiveId(id)
+    let cancelled = false, timer
+    const load = async () => {
+      if (!activeId) return
+      try {
+        const rows = await allPages(`/chat/sessions/${activeId}/messages`)
+        if (cancelled) return
+        setMessages(rows); setError(null)
+        const latest = [...rows].reverse().find(m => m.job)?.job
+        setJob(latest || null)
+        if (latest && ['QUEUED', 'RUNNING'].includes(latest.status)) timer = setTimeout(load, 2000)
+      } catch (e) { if (!cancelled) setError(e) }
     }
-    const previous = [...chat.messages].reverse().find(m => m.options)?.options || {}
-    const parsed = parseQuestion(text, previous)
-    const { wantsReport, preset, ...options } = parsed
-    const aiMessage = wantsReport ? { role: 'ai', kind: 'condition', preset, options } : { role: 'ai', kind: 'answer', options }
-    const title = chat.title === '새 채팅' ? `${options.country || '전체'} ${productName(options.product)} ${wantsReport ? '리포트' : '분석'}` : chat.title
-    const status = wantsReport ? 'condition' : chat.status === 'new' ? 'answer' : chat.status
-    setChats(cs => cs.map(c => (c.id === chat.id ? { ...c, title, status, date: today(), messages: [...c.messages, { role: 'user', text }, aiMessage] } : c)))
-    setInput('')
+    load()
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [activeId, busy, readRevision])
+  useEffect(() => { endRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, [messages.length])
+  const newChat = () => run(async () => {
+    const data = await api('/chat/sessions', { method: 'POST', body: {} })
+    await refreshChats(); setActiveId(data.session.session_id); setMessages([]); setJob(null); setDraft(null); setInput('')
+  })
+  const send = async () => {
+    if (!input.trim() || busy) return
+    setBusy(true)
+    await run(async () => {
+      let id = activeId
+      if (!id) { const data = await api('/chat/sessions', { method: 'POST', body: {} }); id = data.session.session_id; setActiveId(id) }
+      if (pending.current?.text !== input || pending.current?.sessionId !== id) pending.current = { text: input, sessionId: id, id: requestId() }
+      await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: { question: input, client_message_id: pending.current.id } })
+      setInput(''); pending.current = null; await refreshChats()
+    })
+    setBusy(false)
   }
-  const saveAsReport = options => updateChat(active.id, c => ({
-    ...c, status: 'condition',
-    messages: [...c.messages, { role: 'user', text: '이 분석을 리포트로 만들어줘.' }, { role: 'ai', kind: 'condition', preset: 'custom', options: { ...options, sections: ALL_SECTIONS } }],
-  }))
-  const addInterest = o => {
-    setProfile(p => ({ ...p, products: o.product ? [...new Set([...p.products, o.product])] : p.products, countries: o.country ? [...new Set([...p.countries, o.country])] : p.countries }))
-    notify(`관심 목록에 ${[o.country, o.product && productName(o.product)].filter(Boolean).join(' · ')}을(를) 추가했습니다.`)
+  const saveAsReport = conditions => setDraft({ options: optionsFor(conditions) })
+  const addInterest = result_id => run(async () => { await api('/users/me/interests/items', { method: 'POST', body: { result_id } }); notify('관심 목록에 추가했습니다. 관심정보 화면을 새로고침하면 확인할 수 있습니다.') })
+  const removeChat = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') })
+  const updateTitle = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'PATCH', body: { title: rename.trim() } }); await refreshChats(); setModal(null) })
+  const clarify = async body => {
+    setBusy(true)
+    await run(() => api(`/chat/jobs/${job.job_id}/clarifications`, { method: 'POST', body: { clarification_id: job.clarification.clarification_id, ...body } }))
+    setBusy(false)
   }
-  const removeChat = () => {
-    const rest = chats.filter(c => c.id !== active.id)
-    setChats(rest)
-    setActiveId(rest[0]?.id)
-    setModal(null)
-    notify('채팅방을 삭제했습니다. 생성된 리포트는 리포트 센터에 그대로 남습니다.')
-  }
-
-  const report = id => reports.find(r => r.id === id)
-  const headerTag = HEADER_TAG[active?.status]
+  const headerTag = job ? ['amber', ({ QUEUED: '분석 대기', RUNNING: '분석 중', NEEDS_INPUT: '조건 확인', SUCCEEDED: '답변 완료', FAILED: '분석 실패' })[job.status]] : null
 
   return (
     <>
@@ -292,7 +231,7 @@ export default function Analysis({ route }) {
               const on = c.id === active?.id
               const tag = STATUS_TAG[c.status]
               return (
-                <button key={c.id} type="button" className="reset" onClick={() => setActiveId(c.id)} aria-current={on}
+                <button key={c.id} type="button" className="reset" onClick={() => { setActiveId(c.id); setMessages([]); setJob(null); setDraft(null) }} aria-current={on}
                   style={{ padding: '14px 16px', borderRadius: 14, background: on ? 'var(--rose)' : '#fff', boxShadow: on ? 'inset 3px 0 0 var(--red)' : 'none', border: on ? 0 : '1px solid var(--line)' }}>
                   {tag && <span className={'tag ' + tag[0]}>{tag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 5 }} />}{tag[1]}</span>}
                   <p style={{ fontSize: 15, fontWeight: 800, marginTop: tag ? 8 : 0 }}>{c.title}</p>
@@ -313,32 +252,25 @@ export default function Analysis({ route }) {
               {headerTag && <span className={'tag ' + headerTag[0]}>{headerTag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 6 }} />}{headerTag[1]}</span>}
             </div>
             <div className="col" style={{ gap: 18, padding: '24px 26px' }}>
-              {!active?.messages.length && (
+              {!messages.length && (
                 <AiBlock>
                   <p style={{ fontSize: 17, fontWeight: 800 }}>무엇을 분석해 드릴까요?</p>
                   <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>국가·품목·기간을 함께 말해 주세요. 예) “중국 메모리 수출 추이와 증가 이유를 알려줘”, “베트남 화장품 최근 6개월 리포트로 만들어줘”</p>
                 </AiBlock>
               )}
-              {active?.messages.map((m, i) => {
-                if (m.role === 'user') return <UserBubble key={i} text={m.text} />
-                if (m.kind === 'condition') {
-                  return <ConditionCard key={i} message={m}
-                    onChange={next => updateChat(active.id, c => ({ ...c, messages: c.messages.map((x, j) => (j === i ? next : x)) }))}
-                    onGenerate={options => generateReport(active.id, options)} />
-                }
-                if (m.kind === 'progress') {
-                  const r = report(m.reportId)
-                  return <ProgressCard key={i} report={r} stage={reportStage(r)} />
-                }
-                if (m.kind === 'done') return <DoneCard key={i} report={report(m.reportId)} />
-                if (m.kind === 'answer') return <AnswerCard key={i} message={m} onSaveReport={saveAsReport} onInterest={addInterest} />
-                return <AiBlock key={i}><p>{m.text}</p></AiBlock>
-              })}
+              <ErrorNotice error={error} retry={() => setReadRevision(v => v + 1)} />
+              {messages.map(m => m.role === 'USER' ? <UserBubble key={m.message_id} text={m.content_masked} /> : m.answer ? <AnswerCard key={m.message_id} message={m} onSaveReport={saveAsReport} onInterest={addInterest} /> : <AiBlock key={m.message_id}><p>{m.content_masked}</p></AiBlock>)}
+              {job && ['QUEUED', 'RUNNING'].includes(job.status) && <AiBlock><p role="status">서버에서 분석 중입니다. 다른 화면으로 이동해도 작업은 유지됩니다.</p></AiBlock>}
+              {job?.status === 'FAILED' && <ErrorNotice error={job.error || new Error('분석에 실패했습니다.')} />}
+              {job?.status === 'NEEDS_INPUT' && <AiBlock><p>{job.clarification.message}</p><div className="chips">{job.clarification.choices.map(c => <Btn key={c.choice_id} disabled={busy} onClick={() => clarify({ choice_ids: [c.choice_id] })}>{c.hs_item ? `HS ${c.hs_item.hs_code} · ` : ''}{c.label}</Btn>)}</div>
+                {job.clarification.kind === 'HS_ITEM' && <><Hs4Search group={hsGroup} onConfirm={setHsGroup} buttonLabel={() => '하위 품목 선택'} onSelectAll={() => {}} />{hsGroup?.items.map(([code, name]) => <Btn key={code} disabled={busy} onClick={() => clarify({ hs_item: { hs_code: code, hs_ver: 'HS2022' } })}>{name} ({code})</Btn>)}</>}
+              </AiBlock>}
+              {draft && <ConditionCard message={draft} onChange={setDraft} onGenerate={async (body, key) => { const data = await api('/reports', { method: 'POST', body, idempotencyKey: key }); await refreshReports(); setDraft(null); window.location.hash = `/report?id=${data.job.report_id}` }} />}
               <div ref={endRef} />
               <form onSubmit={e => { e.preventDefault(); send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
                 <input value={input} onChange={e => setInput(e.target.value)} aria-label="질문 입력" placeholder="질문하거나 “이 분석을 리포트로 만들어줘”라고 입력하세요."
                   style={{ flex: 1, fontSize: 15, border: 0, outline: 0, font: 'inherit', color: 'var(--ink)', background: 'transparent' }} />
-                <Btn type="submit" kind="red" iconRight="arrowRight" disabled={!input.trim()}>전송</Btn>
+                <Btn type="submit" kind="red" iconRight="arrowRight" disabled={!input.trim() || busy || ['QUEUED', 'RUNNING', 'NEEDS_INPUT'].includes(job?.status)}>전송</Btn>
               </form>
             </div>
           </section>
@@ -351,7 +283,7 @@ export default function Analysis({ route }) {
         <div style={{ marginTop: 16 }}><TextField value={rename} onChange={setRename} aria-label="새 이름" maxLength={40} /></div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
           <Btn size="md" onClick={() => setModal(null)}>취소</Btn>
-          <Btn kind="red" size="md" disabled={!rename.trim()} onClick={() => { updateChat(active.id, c => ({ ...c, title: rename.trim() })); setModal(null) }}>저장</Btn>
+          <Btn kind="red" size="md" disabled={!rename.trim()} onClick={updateTitle}>저장</Btn>
         </div>
       </Modal>
       <Modal open={modal === 'delete'} onClose={() => setModal(null)} width={480} label="채팅방 삭제">

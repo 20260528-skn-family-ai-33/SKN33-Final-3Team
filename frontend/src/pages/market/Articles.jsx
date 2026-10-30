@@ -4,7 +4,9 @@ import { Link, navigate, withQuery } from '../../router'
 import { Band, ChatFab } from '../../components/layout'
 import { Btn, Chip, Pager, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
-import { articleKinds, articleTabs, searchArticles } from '../../data/articles'
+import { articleKinds, articleTabs } from '../../data/articles'
+import { useQuery, ErrorNotice } from '../../api/hooks'
+import { mapArticle } from '../../api/adapters'
 import bandArticles from '../../assets/band-articles.jpg'
 
 const PAGE_SIZE = 5
@@ -19,11 +21,12 @@ export default function Articles({ route }) {
   const selected = q.get('id')
   const [form, setForm] = useState({ keyword, from, to })
   const [error, setError] = useState('')
-  const list = searchArticles({ tab, q: keyword, from, to })
-  const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE))
-  const selectedIndex = list.findIndex(a => a.id === selected)
-  const page = Math.min(pages, Number(q.get('page')) || (selectedIndex >= 0 ? Math.floor(selectedIndex / PAGE_SIZE) + 1 : 1))
-  const shown = list.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+  const page = Math.max(1, Number(q.get('page')) || 1)
+  const result = useQuery('/articles', { tab: ({ all: 'ALL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab] || 'ALL', q: keyword, mode: keyword ? 'SEARCH' : 'BROWSE', start_date: from, end_date: to, page, page_size: PAGE_SIZE })
+  const detail = useQuery(`/articles/${selected}`, {}, !!selected)
+  const list = (result.data?.items || []).map(mapArticle)
+  const pages = Math.max(1, Math.ceil((result.data?.page.total || 0) / PAGE_SIZE))
+  const shown = selected && detail.data && !list.some(a => a.id === selected) ? [mapArticle(detail.data.article), ...list] : list
   const tabLabel = articleTabs.find(([k]) => k === tab)?.[1] || '전체기사'
 
   const search = e => {
@@ -37,7 +40,7 @@ export default function Articles({ route }) {
   return (
     <>
       <Band
-        image={bandArticles} imagePosition="center 55%" eyebrow="KOTRA 해외시장뉴스" title="기사"
+        image={bandArticles} imagePosition="center 55%" eyebrow="무역·경제 뉴스" title="기사"
         lead={keyword ? '전체기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
         right={(
           <div className="chips">
@@ -69,11 +72,13 @@ export default function Articles({ route }) {
           </form>
           <div className="sec-h" style={{ marginTop: 8 }}>
             <h2 className="t2">
-              {keyword ? <>{tabLabel} · “{keyword}” 검색 결과 <span style={{ color: 'var(--red)' }}>{list.length}건</span></> : `${tabLabel} · 최신 기사`}
+              {keyword ? <>{tabLabel} · “{keyword}” 검색 결과 <span style={{ color: 'var(--red)' }}>{result.data?.page.total || 0}건</span></> : `${tabLabel} · 최신 기사`}
               {(from || to) && <span className="muted" style={{ marginLeft: 10, fontWeight: 500 }}>{toDot(from)} ~ {toDot(to)}</span>}
             </h2>
-            <span className="muted">발행일 최신순 · 시연 예시</span>
+            <span className="muted">발행일 최신순</span>
           </div>
+          <ErrorNotice error={result.error || detail.error} retry={result.reload} />
+          {result.loading && <p role="status">기사를 불러오는 중…</p>}
           <div className="col" style={{ gap: 12 }}>
             {shown.map(a => {
               const on = a.id === selected
@@ -96,7 +101,7 @@ export default function Articles({ route }) {
                   </Link>
                   {on && (
                     <div style={{ flexBasis: '100%', marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
-                      <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>{a.summary}</p>
+                      <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>{detail.loading ? '본문을 불러오는 중…' : detail.data?.body_masked || a.summary}</p>
                       <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
                         <Btn kind="ink" iconRight="external" onClick={() => window.open(a.url, '_blank', 'noopener')}>기사 원문 보기</Btn>
                         <Btn to={`/analysis?ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`} icon="chat">AI에게 물어보기</Btn>
@@ -106,7 +111,7 @@ export default function Articles({ route }) {
                 </article>
               )
             })}
-            {!shown.length && (
+            {!shown.length && !result.loading && !result.error && (
               <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
                 <p className="t3">검색 결과가 없습니다.</p>
                 <p className="muted" style={{ marginTop: 6 }}>키워드나 기간을 바꿔 다시 검색해 보세요.</p>

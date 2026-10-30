@@ -94,12 +94,12 @@ export function Footer({ isAdmin = false }) {
           <b>데이터</b>
           <p>수출입 통계 · 관세청</p>
           <p>환율 · 한국은행 ECOS</p>
-          <p>기사 · KOTRA 해외시장뉴스</p>
+          <p>기사 · KOTRA · 한국경제 · 파이낸셜뉴스</p>
         </div>
         <div>
           <b>BORDERLESS SELLERS</b>
           <p>이용약관 · <span style={{ color: '#fff', fontWeight: 700 }}>개인정보처리방침</span></p>
-          <p>화면의 수치·기사는 목업 예시입니다.</p>
+          <p>조회 가능한 수집 데이터를 기준으로 표시합니다.</p>
         </div>
       </div>
       <div className="wrap cp">© 2026 Borderless Sellers</div>
@@ -110,7 +110,7 @@ export function Footer({ isAdmin = false }) {
 export function FooterSmall() {
   return (
     <footer className="ft-s">
-      <div className="wrap">© 2026 Borderless Sellers · 이용약관 · <b style={{ color: '#fff' }}>개인정보처리방침</b> · 화면의 수치·기사는 목업 예시입니다.</div>
+      <div className="wrap">© 2026 Borderless Sellers · 이용약관 · <b style={{ color: '#fff' }}>개인정보처리방침</b></div>
     </footer>
   )
 }

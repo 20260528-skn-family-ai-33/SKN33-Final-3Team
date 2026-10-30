@@ -1,5 +1,7 @@
 // BS22 알림설정 · BS23 알림 수신 약관 동의 모달
 import { useState } from 'react'
+import { api } from '../../api/client'
+import { useQuery, ErrorNotice } from '../../api/hooks'
 import { Link, navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
 import { Btn, Check, Modal, Toggle } from '../../components/ui'
@@ -11,10 +13,12 @@ const ROWS = [
   ['major', '주요 이슈', '전체 주요 무역 이슈 팝업'],
   ['report', '리포트 발행', '주간·월간·분기 구독 리포트 발행 팝업'],
 ]
-const TERMS_VERSION = 'v1.2'
+
 
 export default function NotificationSettings({ route }) {
-  const { settings, setSettings, profile, notify } = useApp()
+  const { settings, setSettings, profile, notify, run } = useApp()
+  const terms = useQuery('/terms/notification')
+  const TERMS_VERSION = terms.data?.terms.version
   const [draft, setDraft] = useState(settings)
   const [agree, setAgree] = useState(false)
   const termsOpen = route.query.get('terms') === 'open'
@@ -30,12 +34,13 @@ export default function NotificationSettings({ route }) {
     set({ [key]: on })
   }
   const closeTerms = () => navigate(withQuery(route, { terms: null }), { replace: true })
-  const acceptTerms = () => {
+  const acceptTerms = async () => {
+    if (!await run(async () => { await api('/users/me/consents', { method: 'POST', body: { terms_type: 'NOTIFICATION', terms_version: TERMS_VERSION, action: 'AGREE', enable_notifications: true } }); return true })) return
     set({ all: true, termsAgreed: true, termsVersion: TERMS_VERSION })
     closeTerms()
   }
-  const save = () => {
-    setSettings(draft)
+  const save = async () => {
+    if (!await setSettings(draft)) return
     notify(draft.all ? '알림 설정을 저장했습니다.' : '알림 설정을 저장했습니다. 전체 알림 수신이 꺼져 있어 새 알림이 등록되지 않습니다.')
   }
   const interestText = `${profile.countries.join('·') || '국가 없음'} / ${profile.products.map(id => `${productName(id)}(HS ${id})`).join(', ') || '품목 없음'}`
@@ -76,15 +81,14 @@ export default function NotificationSettings({ route }) {
             <b style={{ fontSize: 14 }}>알림 수신 약관</b><span className="tag red">현재 적용 버전 {TERMS_VERSION}</span>
           </div>
           <div style={{ padding: 18, height: 150, overflowY: 'auto', fontSize: 14, color: '#444B57', lineHeight: 1.8 }}>
-            [현재 버전의 알림 수신 약관 본문]<br />
-            <span className="note">수신 항목: 급증 기사 · 주요 이슈 · 리포트 발행 / 수신 방법: 서비스 내 팝업·알림함<br />약관 내용을 확인한 후 동의 여부를 선택하세요.</span>
+            <ErrorNotice error={terms.error} retry={terms.reload} /><span style={{ whiteSpace: 'pre-wrap' }}>{terms.loading ? '약관을 불러오는 중…' : terms.data?.terms.body}</span>
           </div>
         </div>
         <Check checked={agree} onChange={setAgree} style={{ marginTop: 16 }}>위 알림 수신 약관을 확인했으며 동의합니다.</Check>
         <p className="note" style={{ marginTop: 8 }}>동의 전에는 알림이 켜지지 않습니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
           <Btn size="md" onClick={closeTerms}>거부</Btn>
-          <Btn kind="red" size="md" disabled={!agree} onClick={acceptTerms}>동의하고 켜기</Btn>
+          <Btn kind="red" size="md" disabled={!agree || !TERMS_VERSION} onClick={acceptTerms}>동의하고 켜기</Btn>
         </div>
       </Modal>
     </section>

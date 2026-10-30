@@ -36,19 +36,28 @@
 
 {# 목차 + 보고서 정보. toc: [{title, page}], info: [{label, value}], notes: [문장] #}
 {% macro contents(report, toc, info, notes, total) %}
-{% call page(report, 2, total) %}
-{{ heading(none, '목차', report.period_label ~ ' · ' ~ report.title) }}
+{% set plan = contents_layout(toc, info, notes, report) %}
+{% for blocks in plan.pages %}
+{% call page(report, 2 + loop.index0, total) %}
+{{ heading(none, '목차' if loop.first else '목차 · 보고서 정보 (계속)', report.period_label ~ ' · ' ~ report.title) }}
+{% for b in blocks %}
+{% if b.key == 'toc' %}
 <div class="toc">
-  {% for row in toc %}
-  <div class="row"><span class="n">{{ '%02d' % loop.index }}</span><span class="t">{{ row.title }}</span><span>{{ row.page }}</span></div>
+  {% for row in toc[b.start:b.end] %}
+  <div class="row"><span class="n">{{ '%02d' % (b.start + loop.index) }}</span><span class="t">{{ row.title }}</span><span>{{ row.page }}</span></div>
   {% endfor %}
 </div>
-<h3>보고서 정보</h3>
+{% elif b.key == 'info' %}
+<h3>보고서 정보{{ ' (계속)' if b.cont }}</h3>
 <table class="info">
-  {% for row in info %}<tr><th>{{ row.label }}</th><td>{{ row.value }}</td></tr>{% endfor %}
+  {% for row in plan.info[b.start:b.end] %}<tr><th>{{ row.label }}</th><td>{{ row.value }}</td></tr>{% endfor %}
 </table>
-<div class="notes">{% for text in notes %}<p>· {{ text }}</p>{% endfor %}</div>
+{% elif b.key == 'notes' %}
+<div class="notes">{% for text in plan.notes[b.start:b.end] %}<p>· {{ text }}</p>{% endfor %}</div>
+{% endif %}
+{% endfor %}
 {% endcall %}
+{% endfor %}
 {% endmacro %}
 
 {# KPI 카드 묶음. cards: [{label, value, unit?, sub?}] #}
@@ -94,8 +103,8 @@
 {% endmacro %}
 
 {# 기사 노출 기준 문구. per_country_limit 없으면 제한 해제 #}
-{% macro article_policy(limit) %}
-<div class="policy">{% if limit %}기본: 국가당 최대 {{ limit }}건{% else %}국가당 건수 제한 해제{% endif %}<span> | 사용자 요청 시 국가당 건수 제한 해제</span></div>
+{% macro article_policy(limit, note=none) %}
+<div class="policy">{% if note %}{{ note }}{% else %}{% if limit %}기본: 국가당 최대 {{ limit }}건{% else %}국가당 건수 제한 해제{% endif %}<span> | 사용자 요청 시 국가당 건수 제한 해제</span>{% endif %}</div>
 {% endmacro %}
 
 {# 데이터 기준·출처 쪽의 표 3개. sources: [{label, provider, scope}], methods: [{metric, formula}], publish: [{label, value}] #}
@@ -114,7 +123,7 @@
   <tr><th style="width:36mm">항목</th><th>내용</th></tr>
   {% for r in publish %}<tr><td>{{ r.label }}</td><td>{{ r.value }}</td></tr>{% endfor %}
 </table>
-<p class="disclaimer">본 리포트는 공개 통계와 기사로 만든 참고 자료이며 수출 결정에 대한 권고가 아닙니다. 기사 저작권은 KOTRA에 있으며 원문 링크로 확인할 수 있습니다.</p>
+<p class="disclaimer">본 리포트는 공개 통계와 기사로 만든 참고 자료이며 수출 결정에 대한 권고가 아닙니다. 기사 저작권은 각 출처 매체에 있으며 원문 링크로 확인할 수 있습니다.</p>
 {% endmacro %}
 
 {# 통계가 아직 적재·검증되지 않은 자리 (0이나 “없음”과 구분) #}

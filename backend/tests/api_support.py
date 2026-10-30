@@ -6,8 +6,17 @@ from pathlib import Path
 from sqlalchemy import (MetaData, Table, Column, Integer, String, Date, DateTime, Numeric,
                         JSON, text, create_engine)
 from sqlalchemy.pool import StaticPool
-from backend.app.api.runtime_schema import RUNTIME_TABLES
+from backend.app.api.runtime_schema import RUNTIME_TABLES, EXTENSIONS
 from backend.app.api.common import now, month_end, shift_month
+
+
+def create_test_app(settings=None, engine=None):
+    import fakeredis
+    from backend.app.api.application import create_app
+    from backend.app.api.config import Settings
+    from backend.app.api.redis_store import RedisState
+    settings=settings or Settings(values={})
+    return create_app(settings,engine,RedisState(settings,fakeredis.FakeRedis(decode_responses=True)))
 
 
 def test_engine():
@@ -28,6 +37,8 @@ def test_engine():
             defs.append(Column(c['name'],typ,primary_key=c['pk'],nullable=c['nullable'],
                 autoincrement=c['auto'],server_default=text(default) if default else None))
         Table(name,meta,*defs)
+    for name, columns in EXTENSIONS.items():
+        for column in columns: meta.tables[name].append_column(column._copy())
     for table in RUNTIME_TABLES: table.to_metadata(meta)
     meta.create_all(engine)
     return engine, meta
@@ -39,10 +50,13 @@ def reference_data(engine, meta):
             {'country_code':'US','name_ko':'미국','country_role':'COUNTRY'},
             {'country_code':'CN','name_ko':'중국','country_role':'COUNTRY'},
             {'country_code':'TOTAL','name_ko':'총계','country_role':'TOTAL'}])
-        c.execute(meta.tables['hs_code'].insert(),[
-            {'hs_code':'3304','hs_ver':'HS2022','depth':4,'name_ko':'화장품','source_edition':'HS2022'},
-            {'hs_code':'330499','hs_ver':'HS2022','depth':6,'name_ko':'기초화장품','source_edition':'HS2022'}])
+        hs_rows=[{'hs_code':'3304','hs_ver':'HS2022','name_ko':'화장품','source_edition':'HS2022','original_name_ko':None},
+            {'hs_code':'330499','hs_ver':'HS2022','name_ko':'기초화장품','source_edition':'HS2022','original_name_ko':'기초화장품'}]
+        if meta.tables['hs_code'].c.depth.computed is None:
+            for row in hs_rows: row['depth']=len(row['hs_code'])
+        c.execute(meta.tables['hs_code'].insert(),hs_rows)
         c.execute(meta.tables['service_option'].insert(),[
+            {'option_code':'CUSTOMS','option_type':'SOURCE','label_ko':'로컬 테스트 관세청','enabled':True,'sort_order':1,'value_json':{}},
             {'option_code':'RPT_ON_DEMAND','option_type':'REPORT_TYPE','label_ko':'요청형','enabled':True,'sort_order':1,'value_json':{}},
             {'option_code':'MONTHLY','option_type':'REPORT_PERIOD','label_ko':'월간','enabled':True,'sort_order':2,'value_json':{}},
             {'option_code':'TERMS_V1','option_type':'NOTIFICATION_TERMS','label_ko':'알림 약관','enabled':True,'sort_order':1,'value_json':{'body':'테스트용 약관'}}])

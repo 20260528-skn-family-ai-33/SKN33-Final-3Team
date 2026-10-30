@@ -45,8 +45,10 @@ def browse_hint():
 def _hs_search(store,q,limit,settings,depth=4):
     store.require_data('hs_code')
     t=store.t('hs_code')
-    exact=or_(t.c.hs_code==q,t.c.name_ko==q,t.c.original_name_ko==q) if q.isascii() else or_(t.c.name_ko==q,t.c.original_name_ko==q)
-    match=or_(t.c.hs_code.startswith(q,autoescape=True),t.c.name_ko.contains(q,autoescape=True)) if q.isascii() else t.c.name_ko.contains(q,autoescape=True)
+    compact=''.join(q.split())
+    name=func.replace(t.c.name_ko,' ',''); original=func.replace(t.c.original_name_ko,' ','')
+    exact=or_(t.c.hs_code==q,t.c.name_ko==q,t.c.original_name_ko==q) if q.isascii() else or_(name==compact,original==compact)
+    match=or_(t.c.hs_code.startswith(q,autoescape=True),t.c.name_ko.contains(q,autoescape=True)) if q.isascii() else name.contains(compact,autoescape=True)
     base=select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth).where(t.c.hs_ver=='HS2022',t.c.depth==depth)
     rows=store.rows(base.where(exact).order_by(t.c.hs_code).limit(limit))
     if rows: return {'items':rows,'match_type':'EXACT','confidence':'EXACT',**browse_hint()}

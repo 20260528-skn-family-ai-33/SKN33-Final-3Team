@@ -112,10 +112,12 @@ def openapi_fields(contract):
     return extra
 
 
-def create_app(settings=None, engine=None):
+def create_app(settings=None, engine=None, redis_state=None):
     settings = settings or Settings()
     db = Database(engine or settings.engine())
     db.settings = settings
+    from backend.app.api.redis_store import RedisState
+    db.redis = redis_state or RedisState(settings)
     app = FastAPI(title='Borderless Sellers API', version='0.18.0')
     app.state.database = db; app.state.settings = settings
     app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=True,
@@ -171,8 +173,9 @@ def create_app(settings=None, engine=None):
     @app.get('/health/ready', include_in_schema=False)
     def ready():
         with db.engine.connect() as connection: connection.execute(text('SELECT 1'))
-        from backend.app.api.runtime_schema import RUNTIME_TABLES
-        for table in RUNTIME_TABLES: db.table(table.name)
+        from backend.app.api.runtime_schema import check_schema
+        check_schema(db)
+        db.redis.ping()
         return {'status':'ready'}
 
     def endpoint(contract):
@@ -203,13 +206,13 @@ def create_app(settings=None, engine=None):
                     limit_auth_request(db,request,settings,identity,body)
                 with db.engine.begin() as connection:
                     store = Store(db,connection)
-                    required = auth in ('필요','ADMIN / SUPER_ADMIN','SUPER_ADMIN 전용','개발 역할 + 환경 허용') or query.get('scope') == 'INTERESTED'
+                    required = auth in ('필요','ADMIN','개발 역할 + 환경 허용') or query.get('scope') == 'INTERESTED'
                     user = None
                     if required or (request.cookies.get('bs_session') and identity not in (1,2,69,70,71,72,73,74,128,129,130)):
                         try: user = authenticate(store,request,required)
                         except ApiError as error:
                             if required or error.status != 401: raise
-                    if 'ADMIN' in auth: administrator(user,auth == 'SUPER_ADMIN 전용')
+                    if 'ADMIN' in auth: administrator(user)
                     result = dispatch(identity,store,user,body,query,path,request,response,settings)
                     if isinstance(result,Response): return result
                     if result is None: response.status_code = 204; return response

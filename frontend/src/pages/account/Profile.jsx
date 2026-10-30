@@ -55,7 +55,7 @@ export default function Profile({ route }) {
   const [draft, setDraft] = useState(consents)
   const [termsView, setTermsView] = useState(null)
   const withdrawOpen = route.query.get('withdraw') === 'open'
-  const social = account && !account.password
+  const social = account && account.provider !== 'email'
 
   const verify = () => {
     if (social) return setEmailError(`${providerLabel[account.provider]} 로그인 계정은 비밀번호가 없어 변경할 수 없습니다.`)
@@ -75,7 +75,6 @@ export default function Profile({ route }) {
           <Btn kind="ink" size="md" style={{ height: 50, borderRadius: 12 }} onClick={verify}>이메일 확인</Btn>
         </div>
         {emailError && <p className="field-err" role="alert">{emailError}</p>}
-        {account?.tempPassword && <p className="field-err" style={{ marginTop: 8 }}>임시 비밀번호로 로그인했습니다. 새 비밀번호로 바꿔 주세요.</p>}
       </section>
 
       <section className="card">
@@ -97,7 +96,7 @@ export default function Profile({ route }) {
         </div>
         <div className="between" style={{ marginTop: 18 }}>
           <span className="note">동의 변경은 저장 시 반영하며, 철회 시 적용되는 이용 범위를 먼저 안내합니다.</span>
-          <Btn kind="red" size="md" onClick={() => { setConsents(draft); notify(draft.optional ? '동의 설정을 저장했습니다.' : '동의 설정을 저장했습니다. 선택 정보는 더 이상 수집·이용하지 않습니다.') }}>동의 설정 저장</Btn>
+          <Btn kind="red" size="md" onClick={() => { setConsents(draft) }}>동의 설정 저장</Btn>
         </div>
       </section>
 
@@ -117,7 +116,7 @@ export default function Profile({ route }) {
         <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>약관 내용</p>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{termsView}</h2>
         <div style={{ marginTop: 14, border: '1px solid var(--line)', borderRadius: 12, padding: 16, height: 180, overflowY: 'auto', fontSize: 14, lineHeight: 1.8, color: '#444B57' }}>
-          [약관 본문 자리] 서비스 운영 주체, 수집 항목(이름·이메일·관심정보·알림 수신 설정), 이용 목적(맞춤 조회·알림·리포트 생성), 보유 기간(탈퇴 후 1개월), 동의 철회 방법을 안내합니다.
+          일반 약관 본문과 동의 관리는 운영 정책 확정 후 제공됩니다.
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}><Btn kind="ink" size="md" onClick={() => setTermsView(null)}>확인</Btn></div>
       </Modal>

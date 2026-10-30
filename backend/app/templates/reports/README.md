@@ -155,7 +155,61 @@ python -m unittest backend/tests/test_report_templates.py
 
 ## 기존 리포트 생성과의 관계
 
-현재 `api/reports.py`의 `build_document`가 만드는 문서(`title`, `sections[]`, `meta`)에는 위 컨텍스트의 일부만 있습니다.
-PDF 연결 작업에서는 이 컨텍스트를 `document['template_pdf']`에 따로 넣고(기존 `sections`·`meta`는 유지), `report_pdf(document, settings)`가
-`render(report_type, document['template_pdf'])` 결과를 PDF 바이트로 바꿉니다. 추가 집계(전월 대비·품목별 상세·요청형 주요 지표 등)도
-연결 작업에서 `build_document`에 더하며, 저장 부분(`generate`·`report_storage`)은 수정하지 않습니다.
+`api/reports.py::generate`는 정기 3종과 요청형에 `services/report_context.py::build_context`를 호출합니다.
+실제 조회 값으로 구성한 컨텍스트를 `report.content_json.template_pdf`에 버전과 함께 저장하고,
+`api/files.py::report_pdf` → `services/report_pdf.py::template_pdf`에서 이 HTML을 Chromium으로 PDF 변환합니다.
+요청형 PDF도 HTML 템플릿으로 생성하며, 템플릿 컨텍스트가 없는 과거 문서의 ReportLab 경로는 유지합니다.
+DOCX는 기존 `summary.docx`와 `sections[]` 경로를 그대로 사용합니다.
+다운로드는 저장된 파일을 읽으며 재조회·재생성하지 않습니다. XLSX는 기존 `sections[].tables` 내보내기 범위를 유지합니다.
+
+### 실제 데이터 연결 범위
+
+- 요청형: `report_ondemand_context.py`가 저장된 품목·국가 범위를 합산해 수출액·수입액·무역수지·월평균·국가 수·집중도·국가 순위 변동을 계산합니다. 합산은 SQL의 OR 조건으로 처리하여 같은 품목을 중복 합산하지 않습니다. 금액은 USD로 저장하고 요청형 PDF에서만 억 달러로 표시합니다.
+- 요청형 비교는 미리보기에서 확정한 NONE/MOM/YOY/YOY_PERIOD/CUSTOM 기간을 사용합니다. CUSTOM은 기간 합계만 비교하며 월별로 짝짓지 않습니다. 비교 기간이 미검증이면 비교값은 null이며 비교 없음과 구분합니다. 이전 기간에만 존재하는 국가도 기타의 비교 합계에 포함합니다.
+- 국가 순위는 수출액이 양수인 국가를 대상으로 하며 기존 결과표와 PDF에 같은 기준을 적용합니다. 기사 출처는 실제 포함된 기사의 SOURCE 코드로 구성하여 문서 메타데이터에도 반영합니다.
+- 요청형 SUMMARY는 항상 표시하며 KPI/TOP_COUNTRIES/LOCAL_ISSUES는 선택 시에만 표시합니다. GROWTH_RISK는 최소 규모 기준 확정 전까지 PDF에서 숨깁니다. 요약·검토 문장과 문장 검증 결과는 임의 생성하지 않습니다. 요청 경로는 CHAT/FORM만 사용하며 질문 원문은 템플릿에 전달하지 않습니다. 요청 지표는 표시만 하고 계산·정렬은 수출액을 유지합니다.
+- 월간: 품목별 수출액, 전월/전년 대비, 13개월 추이와 1년 전 비교, 국가별 추이·순위·비중.
+- 분기: 3개월 합계, 전분기/전년 동분기 대비, 8개 분기·3개월 추이, 국가별 추이·순위.
+- 국가 조건은 기존 문서와 같게 적용합니다. 선택 국가가 있으면 그 국가 범위 안의 금액·순위·비중입니다.
+  관심 품목이 없고 국가만 선택한 구독은 `전체 품목` 한 항목으로 집계합니다. `TOTAL` 국가 행은 합산하지 않습니다.
+- 과거 월이 적재·검증되지 않았다면 `null`, 검증된 월에서 해당 거래 행이 없다면 `0`입니다.
+  일부 월이 미준비인 분기도 `null`입니다. 샘플 JSON은 실제 발행에 사용하지 않습니다.
+- 주간 기사 수는 표시 카드 수(최대 20건)와 별도로 전체 관심 범위를 집계합니다.
+  일반 기사는 단신속보를 제외한 기사이며 한국경제·파이낸셜뉴스도 실제 출처명으로 표시합니다.
+  국가별 표는 다국가 기사를 각 국가에 포함하고 국가 미분류 기사는 제외하므로 전체 기사 수와 다를 수 있습니다.
+- 월간·분기 기사 카드는 기존 문서의 최신 최대 5건, 주간 단신 목록은 최신 최대 5건입니다.
+- AI 요약/원인 분석, 주요 이슈 선정, 급증 키워드·8주 비교, 문장 수치 검증, 일회성 판정은 이번 연결에 포함하지 않습니다.
+  미연결 안내 또는 `null`로 표시하며 임의의 수치나 검증 통과 표시를 만들지 않습니다.
+
+### 워커 환경 설치
+
+API와 워커가 사용하는 같은 Python 환경에서 실행합니다. Chromium은 실제 워커 실행 계정으로 설치합니다.
+
+```powershell
+python -m pip install -r backend/requirements-api.txt
+python -m playwright install chromium
+```
+
+Linux 배포 환경은 `python -m playwright install --with-deps chromium`으로 OS 의존성도 설치합니다.
+`API_REPORT_FONT`에 워커에서 읽을 수 있는 한글 TTF 경로를 설정합니다. Windows 기본값은
+`C:/Windows/Fonts/malgun.ttf`입니다. 폰트는 HTML 안에 삽입하며 외부 자원 요청과 JavaScript 실행은 차단합니다.
+폰트·라이브러리·Chromium이 없으면 명시적 오류가 나며 기존 PDF 디자인으로 몰래 대체하지 않습니다.
+설치와 코드 반영 후 워커를 재시작해야 합니다. DB 마이그레이션, Redis 변경, 프론트 수정은 필요하지 않습니다.
+
+### 검증
+
+```powershell
+python -m unittest backend.tests.test_report_templates backend.tests.test_periodic_report_pdf backend.tests.test_report_pagination backend.tests.test_ondemand_report_pdf
+# 실제 Chromium으로 정기 3종·요청형 생성 → 저장 → API 다운로드 → 재다운로드 검증 (SQLite/fakeredis)
+$env:RUN_REPORT_PDF_TESTS = '1'
+python -m unittest backend.tests.test_periodic_report_pdf backend.tests.test_report_pagination backend.tests.test_ondemand_report_pdf
+```
+
+`REPORT_PDF_QA_DIRECTORY`를 지정하면 위 통합 테스트의 가상 검증 데이터 PDF/HTML을 해당 폴더에 남깁니다.
+일반 테스트에서는 Chromium 실행 통합 테스트를 건너뛰며, 위 환경 변수를 설정한 검증이 별도로 필요합니다.
+
+목차·보고서 정보는 내용 높이에 따라 여러 쪽으로 나뉩니다. 긴 품목·국가 목록은 내용을 생략하지 않고
+`(계속)` 행으로 이어집니다. 본문 시작 쪽, 목차의 대상 쪽, 전체 페이지 수는 늘어난 앞부분 쪽 수를
+반영해 함께 계산합니다. 기본 글꼴·색상·표·여백은 그대로 사용합니다.
+`test_report_pagination`은 네 종류의 품목 1·10·30개 및 긴 정보 100개 조건에서 인쇄 영역과 목차 대상을
+확인합니다. `REPORT_PAGINATION_QA_DIRECTORY`를 지정하면 월간·요청형 10·30개 검증 PDF/HTML을 남깁니다.

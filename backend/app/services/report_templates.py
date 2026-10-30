@@ -501,6 +501,49 @@ def flow(blocks, first, rest):
     return pages
 
 
+def _contents_chunks(value):
+    """Keep all text, splitting a very long information row into bounded continuations."""
+    text = str(value)
+    chunks = []
+    limit = 6 * 140 / (9 * PT_MM)
+    while _em(text) > limit:
+        width, stop, boundary = 0, 0, 0
+        for i, char in enumerate(text):
+            width += _em(char)
+            if width > limit:
+                break
+            stop = i + 1
+            if char.isspace():
+                boundary = stop
+        stop = boundary if boundary > stop // 2 else stop
+        chunks.append(text[:stop])
+        text = text[stop:]
+    chunks.append(text)
+    return chunks
+
+
+def contents_layout(toc, info, notes, report):
+    """Paginate the actual template values, including metadata too long for one row.
+
+    Match the existing TOC/table typography; reserve space for each repeated heading.
+    The render pass below uses this page count to shift every body page and TOC target.
+    """
+    rows = []
+    for row in info:
+        for i, chunk in enumerate(_contents_chunks(row['value'])):
+            rows.append({'label': row['label'] + (' (계속)' if i else ''), 'value': chunk})
+    note_parts = [chunk for note in notes for chunk in _contents_chunks(note)]
+    blocks = [
+        _table('toc', [6.3 + 11 * 1.55 * PT_MM * max(1, _lines(r['title'], 11, 150))
+                       for r in toc], head=13),
+        _table('info', [_row([(r['label'], 20), (r['value'], 140)]) for r in rows], head=H3_MM),
+        _table('notes', [0.8 + LINE[7.8] * max(1, _lines(n, 7.8, 175))
+                         for n in note_parts], head=2),
+    ]
+    room = BODY_MM - _heading(report['period_label'] + ' · ' + report['title'])
+    return {'pages': flow(blocks, room, room), 'info': rows, 'notes': note_parts}
+
+
 def _summary_blocks(ctx):
     """월간·분기 요약: KPI · 요약 문장 · 품목 표 · 관심 국가 표(품목 3개씩) · 확인할 점"""
     items = ctx['items']
@@ -681,7 +724,7 @@ def environment():
 
 
 def render(report_type, context):
-    """report_type: RPT_MONTHLY · RPT_WEEKLY · RPT_QUARTERLY. 빠진 변수는 StrictUndefined로 오류."""
+    """정기 3종과 RPT_ON_DEMAND. 빠진 변수는 StrictUndefined로 오류."""
     if report_type not in TEMPLATES:
         raise ValueError(f'unsupported_report_type: {report_type}')
     try:
@@ -689,7 +732,25 @@ def render(report_type, context):
     except KeyError as missing:
         # 쪽 나눔 계산이 템플릿보다 먼저 값을 읽으므로, 빠진 변수 오류를 템플릿과 같은 종류로 맞춥니다.
         raise UndefinedError(f'{missing.args[0]!r} is undefined') from missing
-    return environment().get_template(TEMPLATES[report_type]).render({**context, 'layout': pages})
+    env = environment()
+    front_count = 1
+
+    def plan_contents(toc, info, notes, report):
+        nonlocal front_count
+        planned = contents_layout(toc, info, notes, report)
+        front_count = len(planned['pages'])
+        return planned
+
+    env.globals['contents_layout'] = plan_contents
+    template = env.get_template(TEMPLATES[report_type])
+    # First pass measures the template's own metadata. Re-render with the resulting
+    # offset so TOC destinations, body page numbers and all totals agree.
+    for _ in range(3):
+        pages['contents_count'] = front_count
+        html = template.render({**context, 'layout': pages})
+        if pages['contents_count'] == front_count:
+            return html
+    raise ValueError('Report contents pagination did not converge')
 
 
 def sample_context(kind):

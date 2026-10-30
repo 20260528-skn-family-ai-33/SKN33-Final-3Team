@@ -29,7 +29,8 @@ def messages(store,uid,identity,page=1,size=20):
     t=store.t('chat_message'); stmt=select(t).where(t.c.session_id==identity)
     rows=store.rows(stmt.order_by(t.c.message_id).offset((page-1)*size).limit(size))
     return {'session':session_view(session),'items':[{'message_id':str(r['message_id']),'role':r['role'],
-        'content_masked':r['content_masked'],'answer':(r['result_json'] or {}).get('answer'),'created_at':r['created_at']} for r in rows],
+        'content_masked':r['content_masked'],'answer':(r['result_json'] or {}).get('answer'),
+        'job':view_job(j) if (j:=jobs._chat_job(r)) else None,'created_at':r['created_at']} for r in rows],
         'page':page_info(page,size,store.count(stmt))}
 
 
@@ -168,11 +169,12 @@ def execute(store,job):
     if job['payload_json'].get('hs_selection',{}).get('remaining'):
         return hs_prompt(store,job,conditions)
     p=conditions['period']; hs=conditions['hs_items']; countries=conditions['country_codes']; tables=[]; articles=[]
+    automatic_comparison=False
     try:
         if article_mode:
             output=news.articles(store,uid,hs=hs,countries=countries,
                 start=date.fromisoformat(p['start']),end=date.fromisoformat(p['end']),size=5)
-            articles=output['items']; text=f'조건에 맞는 KOTRA 기사 {len(articles)}건의 본문 발췌입니다. RAG 요약은 연결 대기 중입니다.'; intent='LOCAL_ISSUES'
+            articles=output['items']; text=f'조건에 맞는 기사 {len(articles)}건의 본문 발췌입니다. RAG 요약은 연결 대기 중입니다.'; intent='LOCAL_ISSUES'
         elif slots.intent=='MARKET_SHARE':
             output=trade.market_shares(store,uid,conditions); tables=[output['table']]
             text='전체 수출국 합계를 분모로 계산한 국가별 비중입니다.'; intent='MARKET_SHARE'
@@ -186,15 +188,23 @@ def execute(store,job):
             metric='export_amount_usd' if conditions['trade_flow']=='EXPORT' else 'import_amount_usd'
             prior_metric='previous_year_export_usd' if conditions['trade_flow']=='EXPORT' else 'previous_year_import_usd'
             descriptions=[]
-            for item_scope in ([[item] for item in hs] if len(hs)>1 else [hs]):
-                output=trade.trends(store,uid,p['start'][:7],p['end'][:7],hs=item_scope,countries=countries,flow=conditions['trade_flow'])
+            outputs=[(item_scope,trade.trends(store,uid,p['start'][:7],p['end'][:7],hs=item_scope,
+                     countries=countries,flow=conditions['trade_flow']))
+                     for item_scope in ([[item] for item in hs] if len(hs)>1 else [hs])]
+            comparison_ready=all(output['items'] and all(r[prior_metric] is not None for r in output['items'])
+                                 for _,output in outputs)
+            automatic_comparison=conditions.get('compare') in ('YOY','YOY_PERIOD') and not conditions.get('compare_period')
+            if automatic_comparison and not comparison_ready:
+                warnings.append('전년 자료가 없는 품목은 전년 비교를 생략했습니다.')
+            for item_scope,output in outputs:
                 table=get_table(store,uid,output['result_id'],1,1000)
                 if len(hs)>1: table['hs_item']=item_scope[0]
                 tables.append(table)
                 total=sum(r[metric] for r in output['items'])
                 label=f'HS {item_scope[0]["hs_code"]}: ' if len(hs)>1 else ''
                 description=f'{label}선택 기간의 {"수출" if metric.startswith("export") else "수입"}액은 {total:,.2f} USD입니다.'
-                if conditions.get('compare_period'):
+                item_comparison_ready=bool(output['items']) and all(r[prior_metric] is not None for r in output['items'])
+                if conditions.get('compare_period') or (automatic_comparison and item_comparison_ready):
                     if any(r[prior_metric] is None for r in output['items']):
                         raise ApiError(503,'DATA_NOT_READY','전년 비교 기간의 검증된 데이터가 없습니다.')
                     baseline=sum(r[prior_metric] for r in output['items'])
@@ -202,6 +212,10 @@ def execute(store,job):
                     description+=f' 전년 동기 {baseline:,.2f} USD 대비 증감액은 {total-baseline:,.2f} USD이며, '+(
                         f'증감률은 {growth:,.2f}%입니다.' if growth is not None else '전년 금액이 0이므로 증감률은 계산하지 않습니다.')
                 descriptions.append(description)
+            # Publish a common period only after every product has been evaluated.
+            if automatic_comparison and comparison_ready:
+                from backend.app.api.common import period, shift_month
+                conditions['compare_period']=period(shift_month(date.fromisoformat(p['start']),-12),shift_month(date.fromisoformat(p['end']),-12))
             text='\n'.join(descriptions); intent='STATISTICS'
         article_mode=intent=='LOCAL_ISSUES'
         answer={'intent':'EXPLAIN' if article_mode else 'STATISTICS','answer_status':'PARTIAL' if article_mode else 'ANSWERED','text':text,'conditions':conditions,'tables':tables,'charts':[],
@@ -211,10 +225,10 @@ def execute(store,job):
         if exc.code not in ('DATA_NOT_READY','PERIOD_NOT_AVAILABLE'): raise
         answer={'intent':'STATISTICS','answer_status':'NO_DATA','text':exc.message,'conditions':conditions,'tables':[],'charts':[],
             'articles':[],'verification':{'status':'NEEDS_REVIEW','sentence_checks':None,'regeneration_count':None},'actions':[],'report_id':None,'warnings':[]}
-    return save_answer(store,uid,sid,question,answer)
+    return save_answer(store,uid,sid,question,answer,automatic_comparison=automatic_comparison)
 
 
-def save_answer(store,uid,sid,question,answer):
+def save_answer(store,uid,sid,question,answer,*,automatic_comparison=False):
     # 질문은 접수 시 저장한다. 되묻기와 재시도에서도 같은 USER 행을 유지한다.
     store.insert('chat_message',session_id=int(sid),role='ASSISTANT',content_masked=answer['text'],
         intent_json=clean({'conditions':answer['conditions'],'intent':answer['intent']}),result_json=clean({'schema_version':1,'answer':answer}),created_at=now())
@@ -222,6 +236,10 @@ def save_answer(store,uid,sid,question,answer):
     context=row['context_json']
     if answer['answer_status'] in ('ANSWERED','PARTIAL') and answer['conditions'] is not None:
         context={'conditions':clean(answer['conditions']),'interest_action':'NONE'}
+        if automatic_comparison:
+            # Keep the displayed comparison in the saved answer, but recalculate an
+            # automatic baseline for the next question instead of making it required.
+            context['conditions']['compare_period']=None
     store.c.execute(update(t).where(t.c.session_id==sid).values(title=question[:160] if row['title']=='새 대화' else row['title'],
         updated_at=now(),context_json=context))
     return {'status':'SUCCEEDED','step':'DONE','answer':answer,'clarification':None,'error':None}

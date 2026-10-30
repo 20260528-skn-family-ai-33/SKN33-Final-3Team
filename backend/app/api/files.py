@@ -64,6 +64,11 @@ def chart_image(section, chart, settings):
     font_path=Path(settings.get('API_REPORT_FONT','C:/Windows/Fonts/malgun.ttf'))
     font=FontProperties(fname=str(font_path)) if font_path.is_file() else FontProperties()
     fig=Figure(figsize=(7,3),dpi=150); FigureCanvasAgg(fig); ax=fig.subplots()
+    if not rows:
+        ax.set_axis_off()
+        ax.text(.5,.5,'조회된 자료가 없습니다.',ha='center',va='center',transform=ax.transAxes,fontproperties=font)
+        ax.set_title(chart['title'],fontproperties=font,fontsize=11)
+        fig.tight_layout(); out=BytesIO(); fig.savefig(out,format='png'); return out.getvalue()
     labels=[str(r[x]) for r in rows]; values=[r[y] for r in rows]
     if chart['chart_type']=='HORIZONTAL_BAR':
         ax.barh(labels,values,color='#006849'); ax.invert_yaxis()
@@ -82,6 +87,14 @@ def chart_image(section, chart, settings):
 
 
 def report_pdf(document,settings):
+    if document.get('template_pdf'):
+        from backend.app.services.report_pdf import template_pdf
+        saved=document['template_pdf']
+        return template_pdf(saved['report_type'],saved['context'],settings)
+    return reportlab_pdf(document,settings)
+
+
+def reportlab_pdf(document,settings):
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, KeepTogether, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
@@ -163,7 +176,8 @@ def report_docx(document,settings=None):
         doc.add_heading(s['title'],1); doc.add_paragraph(s['text'])
         for chart in s.get('charts',[]): doc.add_picture(BytesIO(chart_image(s,chart,settings)),width=Cm(16))
         for source in s.get('tables',[]):
-            cols=source['columns'][:6]
+            # Preserve every saved column, including the seven-column report KPI.
+            cols=source['columns']
             table=doc.add_table(rows=1,cols=len(cols)); table.style='Light Shading Accent 1'
             for cell,col in zip(table.rows[0].cells,cols): cell.text=col['label']
             repeat=OxmlElement('w:tblHeader'); table.rows[0]._tr.get_or_add_trPr().append(repeat)

@@ -4,22 +4,22 @@ import { useApp } from '../../store'
 import { Btn } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { CountryPicker, Hs4Search } from '../../components/pickers'
-import { hs4Groups, productName, toggleValue } from '../../data/catalog'
+import { productName, toggleValue } from '../../data/catalog'
 
 export default function Interests() {
   const { profile, setProfile, notify } = useApp()
   const [countries, setCountries] = useState(profile.countries)
   const [products, setProducts] = useState(profile.products)
   const [home, setHome] = useState(profile.home)
-  const [group, setGroup] = useState(hs4Groups[0])
+  const [group, setGroup] = useState(null)
   const hasInterest = countries.length > 0 || products.length > 0
   const effectiveHome = hasInterest ? home : 'all'
 
   const reset = () => {
     setCountries(profile.countries); setProducts(profile.products); setHome(profile.home)
   }
-  const save = () => {
-    setProfile(p => ({ ...p, countries, products, home: effectiveHome }))
+  const save = async () => {
+    if (!await setProfile(p => ({ ...p, countries, products, home: effectiveHome }))) return
     notify('관심정보와 시작 화면을 저장했습니다. 맞춤 조회·알림·구독 리포트에 바로 적용됩니다.')
   }
   const radio = (value, label, disabled) => (
