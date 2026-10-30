@@ -211,6 +211,30 @@ class OnDemandReportTest(unittest.TestCase):
         self.assertNotIn('수출 증가·감소 주요 시장', html)
         self.assertNotIn('월별 수출 추이</h2>', html)
 
+    def test_exported_kpi_preserves_all_seven_headers_and_values(self):
+        from docx import Document
+        from openpyxl import load_workbook
+        uid = self.signup()
+        _, document = self.context(uid, self.preview(compare='MOM')['conditions'], ['KPI'])
+        source = next(s for s in document['sections'] if s['section_code']=='KPI')['tables'][0]
+        headers = ['수출액', '비교 기간 수출액', '비교 증감률', '전월 대비', '전년 대비', '수출 국가 수', '최대 국가 비중']
+        values = [source['rows'][0][column['key']] for column in source['columns']]
+        xlsx = files.xlsx_bytes([source], document['meta'], [])
+        docx = files.report_docx(document, self.settings)
+        with self.subTest(format='XLSX'):
+            sheet = load_workbook(io.BytesIO(xlsx)).worksheets[0]
+            self.assertEqual([cell.value for cell in sheet[1]], headers)
+            self.assertEqual([cell.value for cell in sheet[2]], values)
+        with self.subTest(format='DOCX'):
+            table = next(t for t in Document(io.BytesIO(docx)).tables if t.cell(0,0).text=='수출액')
+            self.assertEqual([cell.text for cell in table.rows[0].cells], headers)
+            self.assertEqual([cell.text for cell in table.rows[1].cells], [files.display(v) for v in values])
+        output = os.environ.get('REPORT_EXPORT_QA_DIRECTORY')
+        if output:
+            folder = Path(output); folder.mkdir(parents=True, exist_ok=True)
+            (folder/'kpi-export.docx').write_bytes(docx)
+            (folder/'kpi-export.xlsx').write_bytes(xlsx)
+
     @unittest.skipUnless(os.environ.get('RUN_REPORT_PDF_TESTS') == '1', 'Requires Playwright Chromium')
     def test_api_worker_pdf_docx_xlsx_and_frozen_download(self):
         from pypdf import PdfReader
@@ -242,7 +266,15 @@ class OnDemandReportTest(unittest.TestCase):
         plain = lambda payload: '\n'.join(p.text for p in Document(io.BytesIO(payload)).paragraphs)
         self.assertEqual(plain(files.report_docx(saved, self.settings)), plain(files.report_docx(stripped, self.settings)))
         for fmt in ('docx', 'xlsx'):
-            self.assertEqual(self.client.get(f'/api/v1/reports/{rid}/files/{fmt}').status_code, 200)
+            downloaded = self.client.get(f'/api/v1/reports/{rid}/files/{fmt}')
+            self.assertEqual(downloaded.status_code, 200)
+            if fmt == 'docx':
+                headers = [cell.text for t in Document(io.BytesIO(downloaded.content)).tables for cell in t.rows[0].cells]
+            else:
+                from openpyxl import load_workbook
+                headers = [cell.value for cell in load_workbook(io.BytesIO(downloaded.content)).worksheets[0][1]]
+            for label in ('비교 기간 수출액', '비교 증감률', '최대 국가 비중'):
+                self.assertIn(label, headers)
         with patch('backend.app.api.reports.build_document', side_effect=AssertionError('no rebuild')):
             self.assertEqual(self.client.get(f'/api/v1/reports/{rid}/files/pdf').content, response.content)
         other = self.signup('other@example.org')

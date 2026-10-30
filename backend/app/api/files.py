@@ -176,7 +176,8 @@ def report_docx(document,settings=None):
         doc.add_heading(s['title'],1); doc.add_paragraph(s['text'])
         for chart in s.get('charts',[]): doc.add_picture(BytesIO(chart_image(s,chart,settings)),width=Cm(16))
         for source in s.get('tables',[]):
-            cols=source['columns'][:6]
+            # Preserve every saved column, including the seven-column report KPI.
+            cols=source['columns']
             table=doc.add_table(rows=1,cols=len(cols)); table.style='Light Shading Accent 1'
             for cell,col in zip(table.rows[0].cells,cols): cell.text=col['label']
             repeat=OxmlElement('w:tblHeader'); table.rows[0]._tr.get_or_add_trPr().append(repeat)

@@ -4,6 +4,7 @@ from sqlalchemy import select
 from backend.app.api.common import now, clean, ApiError, page_info, require
 
 LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_usd':'수입액',
+        'previous_amount_usd':'비교 기간 수출액','comparison_pct':'비교 증감률',
         'mom_pct':'전월 대비','yoy_pct':'전년 대비','export_country_count':'수출 국가 수',
         'top_country_share_pct':'최대 국가 비중','month':'기준월','period':'기간','country':'국가',
         'country_code':'국가 코드','share_pct':'비중','rank':'순위','rank_change':'순위 변화',
