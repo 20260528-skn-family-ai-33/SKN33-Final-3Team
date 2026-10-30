@@ -5,8 +5,10 @@ from decimal import Decimal
 
 from pydantic import ValidationError
 
-from backend.app.agents.state import (AgentState, ChartSpec, Conditions, MAX_DIGEST_BYTES, SessionContext, ToolResult,
-                                      TurnSummary)
+from backend.app.agents.state import (AgentState, ChartSpec, Conditions, Interests, MAX_CONCLUSION_SENTENCES, MAX_DIGEST_BYTES,
+                                      MAX_EXPLANATION_SENTENCES, MAX_INTEREST_COUNTRIES, MAX_INTEREST_HS, MAX_LABEL_CHARS,
+                                      MAX_LIST_ITEMS, MAX_TEXT_CHARS, SessionContext, ToolResult, TurnSummary,
+                                      shorten_name)
 
 CAUSE = {'task_id': 't1', 'intent': 'CAUSE', 'question': '베트남 화장품 수출 왜 늘었어?', 'steps': [
     {'step_id': 't1.check', 'tool': 'check_conditions'},
@@ -98,28 +100,86 @@ class AgentStateTest(unittest.TestCase):
         self.assertEqual(ToolResult.model_validate_json(r.model_dump_json()), r)
 
     def test_largest_allowed_state_fits(self):
-        q = '가' * 4000  # 허용된 최대 질문, 한글 12KB
+        # 모든 칸을 허용 최대로 채운다. state에 칸을 더하면 여기에도 최대값으로 넣는다.
+        q, text, label, args = '가' * 4000, '가' * MAX_TEXT_CHARS, '가' * MAX_LABEL_CHARS, {'a': 'x' * 500}   # 질문은 한글 12KB
+        texts, labels = [text] * MAX_LIST_ITEMS, [label] * MAX_LIST_ITEMS
+        period = {'start': '2024-10-01', 'end': '2025-09-01'}
         full = {'hs_items': [{'hs_code': f'3304{n:02}', 'hs_ver': 'HS2022'} for n in range(5)],
-                'country_codes': [f'C{n:02}' for n in range(20)], 'period': {'start': '2024-10-01', 'end': '2025-09-01'}}
+                'country_codes': [f'C{n:02}' for n in range(20)], 'period': period, 'compare_period': period,
+                'article_period': {'start': '2024-09-01', 'end': '2025-10-31'}}
         turns = [{'question': q, 'intent': 'STATISTICS', 'conditions': full, 'summary': '가' * 200,
                   'answered_at': datetime(2026, 10, 29, 9, n)} for n in range(5)]
         tasks, results = [], {}
         for t in ('t1', 't2', 't3'):
-            tasks.append({**CAUSE, 'task_id': t, 'question': q, 'conditions': full, 'steps': [
-                {**s, 'step_id': s['step_id'].replace('t1', t), 'depends_on': [d.replace('t1', t) for d in s.get('depends_on', [])]}
-                for s in CAUSE['steps']]})
-            digest = {'s': '가' * 2700}  # digest 상한에 가까운 크기
-            results[f'{t}.sql'] = {'status': 'OK', 'result_id': 'r1', 'digest': digest}
-            results[f'{t}.news'] = {'status': 'OK', 'article_ids': list(range(20)), 'digest': digest}
-            results[f'{t}.chart'] = {'status': 'OK', 'chart': chart(
-                task_id=t, title='가' * 40, labels=[f'2025-{n:03}' for n in range(60)],
+            tasks.append({**CAUSE, 'task_id': t, 'question': q, 'conditions': full, 'applied_defaults': texts, 'steps': [
+                {**s, 'step_id': s['step_id'].replace('t1', t), 'args': args,
+                 'depends_on': [d.replace('t1', t) for d in s.get('depends_on', [])]} for s in CAUSE['steps']]})
+            common = {'status': 'OK', 'source': label, 'checks': labels, 'error': text, 'digest': {'s': '가' * 2700}}  # digest 상한 근처
+            results[f'{t}.sql'] = {**common, 'result_id': 'r1', 'period': period}
+            results[f'{t}.news'] = {**common, 'article_ids': list(range(20)), 'article_period': full['article_period']}
+            results[f'{t}.chart'] = {**common, 'chart': chart(
+                task_id=t, title='가' * 40, unit='가' * 20, source=label, labels=[label] * 60,
                 series=[{'name': '가' * 40, 'values': [123456789012.5] * 60} for _ in range(5)])}
-        s = AgentState.model_validate({'input': {'job_id': '11', 'session_id': '3', 'user_id': 7, 'question': q,
-                                                 'context': {'session_id': '3', 'conditions': full, 'recent': turns},
-                                                 'received_at': datetime(2026, 10, 29, 9)},
-                                       'plan': {'tasks': tasks}, 'results': results})
+        n_sentences = MAX_CONCLUSION_SENTENCES + MAX_EXPLANATION_SENTENCES
+        # 숫자는 문장(200자) 안에서 찾으므로 한 문장에 한 글자 숫자 100개가 최대다
+        checks = [{'index': n, 'numbers': ['1'] * (MAX_TEXT_CHARS // 2), 'status': 'PASS'} for n in range(n_sentences)]
+        s = AgentState.model_validate({
+            'input': {'job_id': '11', 'session_id': '3', 'user_id': 7, 'question': q,
+                      'context': {'session_id': '3', 'conditions': full, 'recent': turns},
+                      'interests': {'hs_items': [{'hs_code': f'{n:06}', 'hs_ver': 'HS2022'} for n in range(MAX_INTEREST_HS)],
+                                    'country_codes': [f'C{n:03}' for n in range(MAX_INTEREST_COUNTRIES)]},
+                      'received_at': datetime(2026, 10, 29, 9)},
+            'status': 'NEEDS_INPUT', 'plan': {'tasks': tasks}, 'results': results, 'warnings': texts,
+            'pending': {**PENDING, 'condition_key': text, 'message': text, 'remaining': [label] * 5,
+                        'selected': full['hs_items'], 'choices': [{'choice_id': str(n), 'label': text, 'patch': args} for n in range(5)]},
+            'draft': {'conclusion': [text] * MAX_CONCLUSION_SENTENCES, 'explanation': [text] * MAX_EXPLANATION_SENTENCES,
+                      'turn_summary': '가' * 200, 'title': '가' * 20},
+            'verification': {'checks': checks}})
         self.assertEqual(len(s.input.context.recent[0].question), 200)
         self.assertEqual(len(s.plan.tasks[0].question), 500)
+
+    def test_display_text_is_cut_but_llm_sentences_are_rejected(self):
+        hs4, text = '가' * 347, '가' * MAX_TEXT_CHARS  # 시드에서 가장 긴 HS4 품목명 길이
+        c = ChartSpec.model_validate(chart(title=hs4, labels=[hs4, hs4], series=[{'name': hs4, 'values': [1.0, 2.0]}]))
+        self.assertEqual((len(c.title), len(c.labels[0]), len(c.series[0].name)), (MAX_LABEL_CHARS,) * 3)
+        p = state(status='NEEDS_INPUT', warnings=[hs4] * 20, pending={**PENDING, 'message': hs4, 'remaining': [hs4],
+                                                                       'choices': [{**PENDING['choices'][0], 'label': hs4}]})
+        self.assertEqual((len(p.warnings), len(p.warnings[0]), len(p.pending.choices[0].label), len(p.pending.remaining[0])),
+                         (MAX_LIST_ITEMS, MAX_TEXT_CHARS, MAX_TEXT_CHARS, MAX_TEXT_CHARS))
+        many = {'hs_items': [{'hs_code': f'{n:06}', 'hs_ver': 'HS2022'} for n in range(150)]}
+        self.assertEqual(len(state(input={**state().input.model_dump(), 'interests': many}).input.interests.hs_items),
+                         MAX_INTEREST_HS)  # 저장 개수 제한이 없는 관심사는 앞에서부터 남긴다
+        # compose가 쓰는 문장은 자르지 않고 거부해 재시도한다
+        with self.assertRaises(ValidationError): state(draft={'conclusion': [text + '가'], 'turn_summary': ''})
+        with self.assertRaises(ValidationError): state(draft={'conclusion': [text] * 7, 'turn_summary': ''})
+
+    def test_interests_over_condition_limit_are_selected(self):
+        hs = [{'hs_code': f'{n:06}', 'hs_ver': 'HS2022'} for n in range(6)]
+        self.assertTrue(Interests(hs_items=hs[:5], country_codes=[f'C{n:02}' for n in range(20)]).fits_conditions())
+        self.assertFalse(Interests(hs_items=hs).fits_conditions())  # 품목 6개: 조건(D-24)에 그대로 못 넣는다
+        self.assertFalse(Interests(country_codes=[f'C{n:02}' for n in range(21)]).fits_conditions())
+        with self.assertRaises(ValidationError): Conditions(hs_items=hs)
+        # 골라 받는 되묻기는 후보가 state에 있으므로 선택지는 '전체 범위'만 둔다
+        select = {**PENDING, 'kind': 'INTEREST_SELECT', 'condition_key': 't1:interest',
+                  'choices': [{'choice_id': 'GLOBAL', 'label': '전체 범위', 'patch': {'hs_items': [], 'country_codes': []}}]}
+        self.assertEqual(state(status='NEEDS_INPUT', pending=select).pending.kind, 'INTEREST_SELECT')
+
+    def test_sentence_checks_point_at_draft_sentences(self):
+        draft = {'conclusion': ['베트남 수출은 12% 늘었습니다.'], 'explanation': ['화장품이 늘었습니다.'], 'turn_summary': ''}
+        ok = state(draft=draft, verification={'checks': [{'index': 0, 'numbers': ['12%'], 'status': 'PASS'},
+                                                         {'index': 1, 'status': 'PASS'}]})
+        self.assertEqual(ok.draft.sentences()[ok.verification.checks[0].index], '베트남 수출은 12% 늘었습니다.')
+        with self.assertRaises(ValidationError): state(draft=draft, verification={'checks': [{'index': 2, 'status': 'PASS'}]})
+        with self.assertRaises(ValidationError): state(verification={'checks': [{'index': 0, 'status': 'PASS'}]})
+
+    def test_finalize_revalidates_models_changed_in_place(self):
+        # 인스턴스를 그대로 넘기면 안쪽 칸을 다시 보지 않으므로 finalize는 dump한 값으로 검증한다
+        s = state(results={'t1.sql': {'status': 'OK'}})
+        s.results['t1.sql'].status = 'FAILED'
+        with self.assertRaises(ValidationError): AgentState.model_validate(s.model_dump())
+        s = state()
+        s.ask_counts['t1:hs:화장품'] = 3
+        with self.assertRaises(ValidationError): AgentState.model_validate(s.model_dump())
 
     def test_conditions(self):
         with self.assertRaises(ValidationError):
@@ -128,7 +188,10 @@ class AgentStateTest(unittest.TestCase):
         # 기사 기간은 일 단위
         period = Conditions.model_validate({'article_period': {'start': '2026-07-29', 'end': '2026-10-28'}}).article_period
         self.assertEqual(period.start.day, 29)
-        self.assertEqual(ToolResult(status='OK', period={'start': '2026-07-29', 'end': '2026-10-28'}).period.end.day, 28)
+        # 기사 결과 기간은 따로 둬서 1일~1일 기간도 JSON 왕복 뒤 일 단위로 남는다
+        r = ToolResult(status='OK', article_period={'start': '2026-07-01', 'end': '2026-10-01'})
+        self.assertEqual(ToolResult.model_validate_json(r.model_dump_json()), r)
+        with self.assertRaises(ValidationError): ToolResult(status='OK', period={'start': '2026-07-29', 'end': '2026-10-28'})
         # 기존 채팅 코드가 MySQL context_json에 저장한 말일 기준 기간도 읽는다
         stored = Conditions.model_validate({'period': {'start': '2024-10-01', 'end': '2025-09-30'},
                                             'compare_period': {'start': '2023-10-01', 'end': '2024-02-29'}})
@@ -151,6 +214,16 @@ class AgentStateTest(unittest.TestCase):
         with self.assertRaises(ValidationError): state(results={'t1.sql': {'status': 'FAILED'}})
         with self.assertRaises(ValidationError):  # 차트의 task_id는 그 단계의 하위 질문
             state([CAUSE, RANKING], results={'t1.chart': {'status': 'OK', 'chart': chart(task_id='t2')}})
+
+
+class ShortenNameTest(unittest.TestCase):
+    def test_long_product_name_keeps_head_and_tail(self):
+        name = '전동축[캠샤프트(cam shaft)와 크랭크샤프트(crank shaft)를 포함한다], ' * 3 + '클러치(clutch)와 유니버설조인트'
+        short = shorten_name(name)
+        self.assertEqual(len(short), MAX_LABEL_CHARS)
+        self.assertEqual(short[:21], name[:20] + '…')
+        self.assertTrue(name.endswith(short[21:]))
+        self.assertEqual(shorten_name('화장품'), '화장품')
 
 
 if __name__ == '__main__':

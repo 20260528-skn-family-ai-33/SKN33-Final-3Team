@@ -6,24 +6,36 @@ LangGraph 그래프의 state이며, langgraph-checkpoint-redis가 Redis에 체�
 from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import (AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, field_validator,
+                      model_validator)
 from pydantic_core import to_json
 
 from backend.app.schemas.rag import ArticlePeriod, CountryCode, HsProduct
 
 SCHEMA_VERSION = 2
-# 체크포인트 하나의 상한. 넘으면 원본을 state에 넣은 것이다.
-# 모든 칸을 허용 최대로 채운 state(질문 4,000자, 하위 질문 3개, digest 6개, 차트 3개)가 약 100KB라 128KB로 둔다.
-MAX_STATE_BYTES = 128 * 1024
+# 체크포인트 하나의 상한(D-62). 넘으면 원본을 state에 넣은 것이다.
+# 모든 칸을 허용 최대로 채운 state가 약 211KB다(test_largest_allowed_state_fits). 칸을 더하면 그 테스트에도 넣는다.
+MAX_STATE_BYTES = 256 * 1024
 MAX_DIGEST_BYTES = 8 * 1024      # tool 결과 중 LLM에 넘기는 요약의 상한
 HISTORY_TURNS = 5
 HISTORY_QUESTION_CHARS = 200     # 5건 요약에 남기는 질문 길이. 원문은 MySQL에 있다
 TASK_QUESTION_CHARS = 500        # 플래너가 나눈 하위 질문 문장 길이. 원 질문은 input.question에 있다
 MAX_TASKS = 3                    # 복합 질문을 나눈 하위 질문 수
+MAX_HS_ITEMS, MAX_COUNTRIES = 5, 20   # 질문 하나의 조회 조건(D-24)
 MAX_CHART_LABELS = 60            # 차트 하나의 x축 값 수
 MAX_CHART_SERIES = 5
+# 칸 상한(D-62). 코드가 만드는 표시용 글자(HS4 품목명이 최대 347자)는 거부하지 않고 자른다.
+# LLM이 쓰는 Draft 문장만 넘으면 거부해 재시도한다.
+MAX_TEXT_CHARS = 200             # 문장 하나: 답변 문장, 되묻기 문구·선택지, 경고, 오류, 적용 조건
+MAX_LABEL_CHARS = 40             # 이름 하나: 차트 제목·x축 값·시리즈, 자체 검증 이름, 출처, 품목 표현, 숫자
+MAX_CONCLUSION_SENTENCES = 2 * MAX_TASKS   # 결론은 하위 질문마다 1~2문장(D-50)
+MAX_EXPLANATION_SENTENCES = 4
+MAX_LIST_ITEMS = 10              # 경고·자체 검증·적용 조건 목록
+MAX_ARGS_BYTES = 512             # Step.args·Choice.patch JSON
+# 관심사는 저장 개수 제한이 없다(D-63). 조건 상한을 넘으면 이 안에서 골라 받는다(D-64). 고를 후보로 앞에서부터 남긴다.
+MAX_INTEREST_HS, MAX_INTEREST_COUNTRIES = 100, 250
 
-# 직접 관리하는 Redis 키. 실행 state는 체크포인터가 관리한다.
+# (임시) Redis 키·TTL은 바뀔 수 있다(설계 §6). 직접 관리하는 키이며, 실행 state는 체크포인터가 관리한다.
 CONTEXT_KEY = 'chat:session:{session_id}:context'  # SessionContext JSON
 ACTIVE_KEY = 'chat:session:{session_id}:active'    # 세션당 진행 중인 job_id 1개(SET NX)
 CONTEXT_TTL_SECONDS = 7 * 24 * 3600  # 대화방을 열 때마다 연장
@@ -53,12 +65,33 @@ def _unique(values, label):
 
 
 def _truncate(limit):
-    return BeforeValidator(lambda v: v[:limit] if isinstance(v, str) else v)
+    """문자열·목록을 앞에서부터 limit개만 남긴다."""
+    return BeforeValidator(lambda v: v[:limit] if isinstance(v, (str, list)) else v)
+
+
+def shorten_name(name: str, head: int = 20, limit: int = MAX_LABEL_CHARS) -> str:
+    """품목명 표시(E-04): 앞 head자 + '…' + 끝부분으로 limit자 안에 맞춘다. chart tool이 품목명 라벨에 쓴다."""
+    if len(name) <= limit:
+        return name
+    return name[:head] + '…' + name[len(name) - (limit - head - 1):]
+
+
+def _check_bytes(value):
+    if _json_size(value) > MAX_ARGS_BYTES:
+        raise ValueError('인자가 너무 큽니다')
+    return value
+
+
+Sentence = Annotated[str, Field(min_length=1, max_length=MAX_TEXT_CHARS)]   # LLM 문장. 넘으면 거부해 재시도
+ShortText = Annotated[str, _truncate(MAX_TEXT_CHARS)]                     # 코드가 만드는 문구. 넘으면 자른다
+Label = Annotated[str, _truncate(MAX_LABEL_CHARS)]
+SmallJson = Annotated[dict[str, JsonValue], AfterValidator(_check_bytes)]
 
 
 class Model(BaseModel):
     # 노드는 필드를 여러 개 바꾼 뒤 반환한다. 검증은 LangGraph가 노드 입력으로 state를 만들 때 돈다.
-    # 체크포인터는 model_validate를 부르지 않으므로, 다음 노드가 없는 finalize는 저장 전에 직접 model_validate한다.
+    # 체크포인터는 model_validate를 부르지 않으므로, 다음 노드가 없는 finalize는 저장 전에
+    # AgentState.model_validate(state.model_dump())로 다시 검증한다. 인스턴스를 그대로 넘기면 제자리에서 바꾼 칸은 다시 보지 않는다.
     # NaN·inf는 JSON에서 null이 되어 재개 전후 값이 달라지므로 받지 않는다(rag.Contract와 같음).
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
 
@@ -83,8 +116,8 @@ class Period(Model):
 
 class Conditions(Model):
     """조건 확인 tool이 확정한 조회 조건. 빈 목록은 '전체'다."""
-    hs_items: list[HsProduct] = Field(default_factory=list, max_length=5)
-    country_codes: list[CountryCode] = Field(default_factory=list, max_length=20)
+    hs_items: list[HsProduct] = Field(default_factory=list, max_length=MAX_HS_ITEMS)
+    country_codes: list[CountryCode] = Field(default_factory=list, max_length=MAX_COUNTRIES)
     period: Period | None = None            # 수출입 기간(기본 최근 12개월)
     compare_period: Period | None = None    # 미입력이면 전년 동기, 입력하면 그 기간
     article_period: ArticlePeriod | None = None   # 기사 발행일 기간, 일 단위(기본 최근 3개월)
@@ -100,8 +133,12 @@ class Conditions(Model):
 
 
 class Interests(Model):
-    hs_items: list[HsProduct] = Field(default_factory=list)
-    country_codes: list[CountryCode] = Field(default_factory=list)
+    hs_items: Annotated[list[HsProduct], _truncate(MAX_INTEREST_HS)] = Field(default_factory=list)
+    country_codes: Annotated[list[CountryCode], _truncate(MAX_INTEREST_COUNTRIES)] = Field(default_factory=list)
+
+    def fits_conditions(self) -> bool:
+        """그대로 조건에 넣을 수 있으면 '관심 범위 적용'(INTEREST_CONTEXT), 아니면 골라 받는다(INTEREST_SELECT, D-64)."""
+        return len(self.hs_items) <= MAX_HS_ITEMS and len(self.country_codes) <= MAX_COUNTRIES
 
 
 class TurnSummary(Model):
@@ -140,7 +177,7 @@ class AgentInput(Model):
 class Step(Model):
     step_id: str            # 하위 질문 안에서만이 아니라 계획 전체에서 고유. 예: 't1.sql'
     tool: ToolName
-    args: dict[str, JsonValue] = Field(default_factory=dict)   # 조건 밖의 tool별 인자(지표, 차트 유형 등)
+    args: SmallJson = Field(default_factory=dict)   # 조건 밖의 tool별 인자(지표, 차트 유형 등)
     depends_on: list[str] = Field(default_factory=list)
     status: StepStatus = 'PENDING'
     attempts: int = Field(default=0, ge=0, le=3)
@@ -153,7 +190,7 @@ class Task(Model):
     question: Annotated[str, _truncate(TASK_QUESTION_CHARS), Field(min_length=1)]   # 플래너가 나눈 하위 질문 문장
     steps: list[Step] = Field(default_factory=list, max_length=6)
     conditions: Conditions | None = None        # check_conditions가 채움
-    applied_defaults: list[str] = Field(default_factory=list)   # "적용한 조건" 표시용
+    applied_defaults: Annotated[list[ShortText], _truncate(MAX_LIST_ITEMS)] = Field(default_factory=list)   # "적용한 조건" 표시용
 
 
 class Plan(Model):
@@ -191,25 +228,27 @@ class DataMeta(Model):
 
 class Choice(Model):
     choice_id: str
-    label: str
-    patch: dict[str, JsonValue]   # 고르면 해당 하위 질문의 Conditions에 병합할 값
+    label: ShortText
+    patch: SmallJson   # 고르면 해당 하위 질문의 Conditions에 병합할 값
 
 
 class Pending(Model):
     """되묻기 대기. 답(선택지·직접 입력)을 조건에 병합하고 그 하위 질문의 check_conditions부터 다시 돈다."""
     clarification_id: str
     task_id: str
-    kind: Literal['HS_ITEM', 'COUNTRY', 'INTEREST_CONTEXT', 'INTEREST_CHANGE', 'RANKING_GROUP']
-    condition_key: str      # 되묻기 횟수를 세는 단위. 예: 't1:hs:화장품', 't1:country:콩고'
-    message: str
+    # INTEREST_SELECT: 관심사가 조건 상한을 넘을 때 input.interests 안에서 품목 5개·국가 20개까지 골라 받는다(D-64).
+    # 후보는 state에 이미 있으므로 choices에는 '전체 범위'만 둔다.
+    kind: Literal['HS_ITEM', 'COUNTRY', 'INTEREST_CONTEXT', 'INTEREST_SELECT', 'INTEREST_CHANGE', 'RANKING_GROUP']
+    condition_key: ShortText   # 되묻기 횟수를 세는 단위. 예: 't1:hs:화장품', 't1:country:콩고'
+    message: ShortText
     choices: list[Choice] = Field(max_length=5)
-    remaining: list[str] = Field(default_factory=list)       # 아직 못 정한 품목 표현
-    selected: list[HsProduct] = Field(default_factory=list)  # 앞 표현에서 고른 품목
+    remaining: list[ShortText] = Field(default_factory=list, max_length=MAX_HS_ITEMS)   # 아직 못 정한 품목 표현
+    selected: list[HsProduct] = Field(default_factory=list, max_length=MAX_HS_ITEMS)  # 앞 표현에서 고른 품목
     asked_at: datetime
 
 
 class ChartSeries(Model):
-    name: Annotated[str, Field(max_length=40)]
+    name: Label   # 품목명이면 HS4 이름이 길 수 있어 자른다
     values: list[float | None]   # 값이 없는 칸은 None. 결과표에서 코드로 채운다
 
 
@@ -219,12 +258,12 @@ class ChartSpec(Model):
     chart_id: str
     task_id: str
     type: Literal['line', 'bar', 'grouped_bar', 'donut']   # 추이 / 순위 / 두 시점 비교 / 비중
-    title: Annotated[str, Field(max_length=40)]
-    unit: str
+    title: Label
+    unit: Annotated[str, Field(max_length=20)]
     period: Period | None = None
-    source: str
+    source: Label
     result_id: str
-    labels: list[str] = Field(min_length=1, max_length=MAX_CHART_LABELS)
+    labels: list[Label] = Field(min_length=1, max_length=MAX_CHART_LABELS)
     series: list[ChartSeries] = Field(min_length=1, max_length=MAX_CHART_SERIES)
 
     @model_validator(mode='after')
@@ -245,12 +284,13 @@ class ToolResult(Model):
     article_ids: list[int] = Field(default_factory=list, max_length=20)
     chart: ChartSpec | None = None                # build_chart
     report_id: str | None = None                  # generate_report 비동기 작업
-    period: Period | ArticlePeriod | None = None  # 기준 기간. 수출입·ML은 월 단위, 기사는 일 단위
-    source: str | None = None                     # 출처
-    checks: list[str] = Field(default_factory=list)   # 통과한 자체 검증
+    period: Period | None = None                  # 수출입·ML 기준 기간(월 단위)
+    article_period: ArticlePeriod | None = None   # search_articles 기준 기간(일 단위). 월 기간과 섞으면 JSON 왕복에서 종류가 바뀐다
+    source: Label | None = None                   # 출처
+    checks: Annotated[list[Label], _truncate(MAX_LIST_ITEMS)] = Field(default_factory=list)   # 통과한 자체 검증 이름
     # LLM 입력용: 합계·상위 행 등. Decimal·date·numpy 값은 tool이 int·float·str로 바꿔 넣는다(numpy는 .item()·tolist())
     digest: dict[str, JsonValue] | None = None
-    error: str | None = None                      # 사용자에게 보여도 되는 사유
+    error: ShortText | None = None                # 사용자에게 보여도 되는 사유
 
     @model_validator(mode='after')
     def check_digest(self):
@@ -263,22 +303,26 @@ class ToolResult(Model):
 
 class Draft(Model):
     """compose의 LLM 호출 1번으로 답변 문장, 대화 요약, (첫 답변이면) 대화방 제목을 같이 받는다.
-    결론은 하위 질문마다 1~2문장, 설명은 전체 4문장 이하."""
-    conclusion: str
-    explanation: list[str] = Field(default_factory=list, max_length=4)
+    결론은 하위 질문마다 1~2문장, 설명은 전체 4문장 이하. LLM이 문장을 나눠 주므로 verify는 문장 번호로 대조한다."""
+    conclusion: list[Sentence] = Field(min_length=1, max_length=MAX_CONCLUSION_SENTENCES)
+    explanation: list[Sentence] = Field(default_factory=list, max_length=MAX_EXPLANATION_SENTENCES)
     turn_summary: Annotated[str, Field(max_length=200)]
     title: Annotated[str, Field(max_length=20)] | None = None
 
+    def sentences(self) -> list[str]:
+        """verify가 대조하는 순서: 결론 다음 설명."""
+        return [*self.conclusion, *self.explanation]
+
 
 class SentenceCheck(Model):
-    sentence: str
-    numbers: list[str] = Field(default_factory=list)
+    index: int = Field(ge=0)   # Draft.sentences()의 번호. 문장 원문은 draft에 있다
+    numbers: list[Label] = Field(default_factory=list)   # 문장에서 찾은 숫자. 문장 200자 안이라 개수도 그 안에 묶인다
     status: Literal['PASS', 'MISMATCH']
 
 
 class Verification(Model):
     status: Literal['PENDING', 'PASS', 'NEEDS_REVIEW'] = 'PENDING'
-    checks: list[SentenceCheck] = Field(default_factory=list)
+    checks: list[SentenceCheck] = Field(default_factory=list, max_length=MAX_CONCLUSION_SENTENCES + MAX_EXPLANATION_SENTENCES)
     regeneration_count: int = Field(default=0, ge=0, le=1)
 
 
@@ -295,7 +339,7 @@ class AgentState(Model):
     results: dict[str, ToolResult] = Field(default_factory=dict)  # step_id → 결과
     draft: Draft | None = None
     verification: Verification = Field(default_factory=Verification)
-    warnings: list[str] = Field(default_factory=list)
+    warnings: Annotated[list[ShortText], _truncate(MAX_LIST_ITEMS)] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def check_consistency(self):
@@ -308,6 +352,9 @@ class AgentState(Model):
             raise ValueError('차트의 task_id가 그 단계의 하위 질문과 다릅니다')
         if self.pending and (not self.plan or self.pending.task_id not in {t.task_id for t in self.plan.tasks}):
             raise ValueError('되묻기가 계획에 없는 하위 질문을 가리킵니다')
+        indexes = [c.index for c in self.verification.checks]
+        if indexes and (not self.draft or len(set(indexes)) != len(indexes) or max(indexes) >= len(self.draft.sentences())):
+            raise ValueError('문장 대조가 답변에 없는 문장을 가리킵니다')
         if _json_size(self) > MAX_STATE_BYTES:
             raise ValueError('state가 체크포인트 상한을 넘습니다')
         return self
