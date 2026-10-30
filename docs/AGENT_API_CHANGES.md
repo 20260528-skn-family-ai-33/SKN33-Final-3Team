@@ -11,7 +11,8 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | API-37 작업 조회 | 응답 추가 | `progress`, `round_started_at`, `clarification.allow_text`, `clarification.hint`, 새 되묻기 종류 | D-12, D-25, D-56 |
 | API-37 | 상태 추가 | `status`에 `EXPIRED`, `CANCELLED` | D-04, D-12 |
 | API-37 | answer 추가 | `answer.tasks[]`(복합 질문), `charts[]` 형식 확정 | D-59, D-60 |
-| API-38 되묻기 답 | 요청 추가 | `text`(직접 입력) | D-12 |
+| API-37 | 응답 추가 | 되묻기 종류 `INTEREST_SELECT`와 `clarification.interests`(고를 관심사 후보) | D-64 |
+| API-38 되묻기 답 | 요청 추가 | `text`(직접 입력), `interest_selection`(관심사 골라 받기) | D-12, D-64 |
 | API-38 | 오류 추가 | 409 `CLARIFICATION_EXPIRED` (30분 경과) | D-04 |
 | API-131 (신규) 질문 중단 | 신설 | `POST /chat/jobs/{job_id}/cancel` | D-12 |
 
@@ -39,10 +40,12 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `status` | string | 기존 값 + `EXPIRED`(되묻기 30분 경과) + `CANCELLED`(사용자 중단) |
 | `progress` | object \| null | 실행 중일 때 `{done, total, label}`. 완료 단계 수, 전체 단계 수, 현재 단계 문구(예: "데이터 조회 중"). 진행률 바에 사용 |
 | `round_started_at` | string(ISO 8601) \| null | 경과 초 기준 시각. 되묻기에 답하면 새 시각으로 바뀜. 프론트는 현재 시각 − 이 값으로 초를 표시 |
-| `clarification.kind` | string | 기존 `HS_ITEM`, `INTEREST_CONTEXT` + `COUNTRY`(비슷한 국가 확인), `INTEREST_CHANGE`(관심사 변경 확인), `RANKING_GROUP`(국가/품목 순위 선택) |
+| `clarification.kind` | string | 기존 `HS_ITEM`, `INTEREST_CONTEXT` + `COUNTRY`(비슷한 국가 확인), `INTEREST_SELECT`(관심사 골라 받기), `INTEREST_CHANGE`(관심사 변경 확인), `RANKING_GROUP`(국가/품목 순위 선택) |
+| `clarification.interests` | object \| null | `INTEREST_SELECT`일 때만. `{hs_items: HsItem[], country_codes: string[]}`, 질문 시점 관심사(품목 최대 100개·국가 최대 250개). 프론트는 체크박스로 보여 주고 품목 5개·국가 20개까지 고르게 한다. 선택지(`choices`)에는 "전체 범위"만 있다 |
 | `clarification.allow_text` | boolean | 직접 입력 답을 받는지. 기본 true |
 | `clarification.hint` | string | 작은 글씨 안내. "다른 질문은 새 채팅을 열거나 이 질문을 중단하세요." |
 | `clarification.expires_at` | string(ISO 8601) | 되묻기 만료 시각(물은 시각 + 30분) |
+| `clarification.message`, 선택지 `label` | string | (기존) 200자에서 자름. HS4 품목명은 최대 347자 (설계 D-62) |
 
 `progress.label` 값: `조건 확인 중`, `데이터 조회 중`, `기사 찾는 중`, `차트 만드는 중`, `리포트 만드는 중`, `시장 예측 조회 중`, `답변 작성 중`, `숫자 확인 중`.
 
@@ -56,6 +59,9 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `intent`, `conditions` | (기존) | 첫 번째 하위 질문(주 의도)의 값. 기존 화면과 호환 |
 | `tables[].task_id`, `charts[].task_id` | string | 어느 하위 질문의 표·차트인지 |
 | `charts[]` | ChartSpec | 아래 형식 |
+| `text` | (기존) | 결론 문장(하위 질문마다 1~2문장, 최대 6문장) 다음 설명 문장(최대 4문장)을 이은 것. 문장마다 200자 이하 |
+| `verification.sentence_checks` | array | 형식 확정. `[{index, sentence, numbers, status}]`. `index`는 `text`를 이루는 문장 순서(0부터), `status`는 `PASS`·`MISMATCH`. `MISMATCH` 문장에 "확인 필요"를 표시 |
+| `warnings` | (기존) | 최대 10개, 각 200자에서 자름 |
 
 ### ChartSpec
 
@@ -70,9 +76,12 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | 필드 | 규칙 |
 |---|---|
 | `type` | `line`(추이), `bar`(순위), `grouped_bar`(두 시점 비교), `donut`(비중) |
-| `title` | 40자 이하 |
-| `labels` | 1~60개 (x축 값, 또는 donut 조각 이름) |
-| `series` | 1~5개. 각 `values` 개수 = `labels` 개수. 값이 없으면 `null` |
+| `title` | 40자에서 자름 |
+| `labels` | 1~60개 (x축 값, 또는 donut 조각 이름). 각 40자 이하. 품목명은 앞 20자 + "…" + 끝부분으로 40자에 맞춤(설계 D-68), 그 밖은 40자에서 자름 |
+| `full_labels` | `labels`와 같은 개수. 줄이기 전 전체 이름. 프론트는 마우스를 올렸을 때 보여 줌 |
+| `series` | 1~5개. 각 `values` 개수 = `labels` 개수. 값이 없으면 `null`(NaN·무한대는 보내지 않음). `name`은 40자에서 자름 |
+| `unit` | 20자 이하 |
+| `source` | 40자에서 자름 |
 | `donut` | 시리즈 1개 |
 | `grouped_bar` | 시리즈 2개 (비교 기간, 조회 기간) |
 | `result_id` | 같은 값의 표 보기·엑셀 다운로드에 사용 |
@@ -84,9 +93,10 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | 필드 | 형식 | 필수 | 설명 |
 |---|---|---|---|
 | `clarification_id` | string | 필수 | 기존 |
-| `choice_ids` | string[] | 셋 중 하나 | 기존 |
-| `hs_item` | HsItem | 셋 중 하나 | 기존 |
-| `text` | string | 셋 중 하나 | **신규.** 1~4,000자, 질문과 같은 마스킹. 되묻기 맥락으로 해석하고, 해석할 수 없으면 다시 되묻기 |
+| `choice_ids` | string[] | 넷 중 하나 | 기존 |
+| `hs_item` | HsItem | 넷 중 하나 | 기존 |
+| `text` | string | 넷 중 하나 | **신규.** 1~4,000자, 질문과 같은 마스킹. 되묻기 맥락으로 해석하고, 해석할 수 없으면 다시 되묻기 |
+| `interest_selection` | object | 넷 중 하나 | **신규.** `INTEREST_SELECT`의 답. `{hs_items: HsItem[], country_codes: string[]}`, 품목 0~5개·국가 0~20개, 둘 다 비면 안 됨. 모두 `clarification.interests` 안의 값이어야 함 |
 
 추가 오류
 
@@ -94,7 +104,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 |---|---|---|
 | `CLARIFICATION_EXPIRED` | 409 | 물은 지 30분이 지났거나 실행 상태가 사라짐. 안내 "시간이 지나 다시 질문해 주세요." |
 | `CLARIFICATION_CONFLICT` | 409 | 기존. `clarification_id` 불일치 |
-| `VALIDATION_ERROR` | 400 | `choice_ids`·`hs_item`·`text` 중 0개 또는 2개 이상 |
+| `VALIDATION_ERROR` | 400 | `choice_ids`·`hs_item`·`text`·`interest_selection` 중 0개 또는 2개 이상. `interest_selection`이 품목 5개·국가 20개를 넘거나, 둘 다 비었거나, 후보에 없는 값을 담음 |
 
 같은 조건에 대한 되묻기는 2회까지입니다. 넘으면 작업이 `SUCCEEDED`로 끝나고, answer는 `answer_status: NO_DATA`와 "조건을 확인해 다시 질문해 주세요."를 담습니다.
 
