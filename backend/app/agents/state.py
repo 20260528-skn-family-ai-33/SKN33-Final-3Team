@@ -202,6 +202,14 @@ class Step(Model):
     attempts: int = Field(default=0, ge=0, le=3)
 
 
+class CountryMention(Model):
+    """플래너가 옮긴 국가 표현 하나(§13.2, intent.py CountrySlot과 같은 모양).
+    mention은 질문 원문 그대로, name은 플래너가 붙인 정식 한국어 국가명이다. 코드는 check_conditions가 확정한다."""
+    mention: Annotated[str, Field(min_length=1)]
+    # 사용자가 쓴 값이 아니라 길다고 안내하지 않고 자른다. 가장 긴 국가명도 20자 안팎이다
+    name: Annotated[str, _truncate(MAX_LABEL_CHARS), Field(min_length=1)]
+
+
 class PlannerSlots(Model):
     """플래너 LLM 출력의 미확정 표현. None은 생략(상속), 빈 목록은 명시적인 전체 범위다.
     국가·품목은 원문 표현만 받으며 코드는 check_conditions가 사전으로 확정한다.
@@ -209,7 +217,7 @@ class PlannerSlots(Model):
     개수·길이 상한을 넘어도 받아서 limit_errors()로 안내한다(D-73). 확인 값은 칸이 없어 LLM이 넣으면 거부된다.
     """
     products: list[Annotated[str, Field(min_length=1)]] | None = None
-    countries: list[Annotated[str, Field(min_length=1)]] | None = None
+    countries: list[CountryMention] | None = None
     period: Period | None = None
     recent_months: int | None = Field(default=None, ge=1)
     trade_flow: Literal['EXPORT', 'IMPORT'] | None = None
@@ -235,7 +243,8 @@ class PlannerSlots(Model):
             errors.append(f'품목은 질문 하나에 {MAX_HS_ITEMS}개까지 물어볼 수 있습니다.')
         if self.countries and len(self.countries) > MAX_COUNTRIES:
             errors.append(f'국가는 질문 하나에 {MAX_COUNTRIES}개까지 물어볼 수 있습니다.')
-        if any(len(x) > MAX_SLOT_CHARS for x in [*(self.products or []), *(self.countries or [])]):
+        mentions = [*(self.products or []), *(c.mention for c in self.countries or [])]
+        if any(len(x) > MAX_SLOT_CHARS for x in mentions):
             errors.append('국가·품목 이름을 더 짧게 입력해 주세요.')
         if self.recent_months and self.recent_months > MAX_RECENT_MONTHS:
             errors.append(f'최근 {MAX_RECENT_MONTHS}개월까지 조회할 수 있습니다.')
@@ -243,16 +252,35 @@ class PlannerSlots(Model):
 
 
 class TaskSlots(PlannerSlots):
-    """Task에 저장하는 슬롯. 플래너는 PlannerSlots로 받고 limit_errors()가 없을 때만 이것으로 옮긴다."""
-    products: list[Annotated[str, Field(min_length=1, max_length=MAX_SLOT_CHARS)]] | None = Field(default=None, max_length=MAX_HS_ITEMS)
-    countries: list[Annotated[str, Field(min_length=1, max_length=MAX_SLOT_CHARS)]] | None = Field(default=None, max_length=MAX_COUNTRIES)
-    recent_months: int | None = Field(default=None, ge=1, le=MAX_RECENT_MONTHS)
+    """Task에 저장하는 슬롯. 플래너는 PlannerSlots로 받고 limit_errors()가 없을 때만 이것으로 옮긴다.
+    상한 검사는 limit_errors() 하나로 한다(개수·길이·최근 개월 수가 두 모델에서 어긋나지 않게)."""
     latest_prediction_confirmed: bool = False  # MODEL_PERIOD에 사용자가 동의했을 때 ask_user만 True로 바꾼다(D-74)
+
+    @model_validator(mode='after')
+    def check_limits(self):
+        if errors := self.limit_errors():
+            raise ValueError(' '.join(errors))
+        return self
 
 
 def task_count_error(count: int) -> str | None:
     """동일 분석 병합 후 호출. 초과 질문을 자르거나 일부만 Plan으로 만들지 않는다(D-86)."""
     return TOO_MANY_TASKS_MESSAGE if count > MAX_TASKS else None
+
+
+class PlannedTask(Model):
+    """플래너 LLM이 내는 하위 질문 하나(설계 §11.1). 단계·조건·결과는 코드가 채운다."""
+    intent: Intent
+    question: Annotated[str, Field(min_length=1)]   # Task로 옮길 때 TASK_QUESTION_CHARS로 자른다
+    slots: PlannerSlots = Field(default_factory=PlannerSlots)
+    # 템플릿(월별 추이·순위·비중)으로 답할 수 없을 때만 필요한 조회를 한국어로 적는다. 있으면 LLM SQL로 간다(§11.5)
+    # 설명일 뿐이라 길면 거부하지 않고 자른다. 거부하면 플래너 출력 전체가 실패한다
+    custom_query: Annotated[str, _truncate(MAX_TEXT_CHARS), Field(min_length=1)] | None = None
+
+
+class PlannerOutput(Model):
+    """플래너 LLM 출력 전체(responses.parse의 text_format). 개수 상한을 두지 않고 task_count_error()로 판단한다(D-86)."""
+    tasks: list[PlannedTask] = Field(min_length=1)
 
 
 class ReportRequest(Model):

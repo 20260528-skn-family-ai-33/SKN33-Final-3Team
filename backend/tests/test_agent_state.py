@@ -197,7 +197,8 @@ class AgentStateTest(unittest.TestCase):
 
     def test_planner_slots_turn_limits_into_guidance(self):
         # 플래너 출력은 상한을 넘어도 받고 안내 문구로 바꾼다. 저장용 TaskSlots는 거부한다(D-73)
-        many = PlannerSlots(products=[f'품목{n}' for n in range(6)], countries=['가' * 121], recent_months=12000)
+        many = PlannerSlots(products=[f'품목{n}' for n in range(6)], countries=[{'mention': '가' * 121, 'name': '베트남'}],
+                            recent_months=12000)
         self.assertEqual(len(many.limit_errors()), 3)   # 품목 개수, 이름 길이, 최근 개월 수
         self.assertEqual(PlannerSlots(products=['화장품'], recent_months=12).limit_errors(), [])
         with self.assertRaises(ValidationError): TaskSlots(products=[f'품목{n}' for n in range(6)])
@@ -211,6 +212,28 @@ class AgentStateTest(unittest.TestCase):
         # 최신 기준 예측 확인(MODEL_PERIOD)은 ask_user만 기록한다. 플래너 출력에는 이 칸이 없다(D-74)
         with self.assertRaises(ValidationError): PlannerSlots.model_validate({'latest_prediction_confirmed': True})
         self.assertTrue(TaskSlots(latest_prediction_confirmed=True).latest_prediction_confirmed)
+
+    def test_planner_output_keeps_all_tasks_for_count_check(self):
+        # 플래너 출력은 하위 질문 수를 자르지 않고 받아 task_count_error()로 판단한다(D-86, 설계 §11.1)
+        from backend.app.agents.state import PlannerOutput, task_count_error
+        raw = {'tasks': [{'intent': 'STATISTICS', 'question': f'질문{n}', 'slots': {'products': ['화장품']}} for n in range(4)]}
+        out = PlannerOutput.model_validate(raw)
+        self.assertEqual(len(out.tasks), 4)
+        self.assertIsNotNone(task_count_error(len(out.tasks)))
+        with self.assertRaises(ValidationError): PlannerOutput.model_validate({'tasks': []})
+        with self.assertRaises(ValidationError):  # 단계·결과는 플래너가 정하지 않는다
+            PlannerOutput.model_validate({'tasks': [{'intent': 'STATISTICS', 'question': 'q', 'steps': []}]})
+        with self.assertRaises(ValidationError):  # 확인 값도 받지 않는다(D-74)
+            PlannerOutput.model_validate({'tasks': [{'intent': 'STATISTICS', 'question': 'q',
+                                                     'slots': {'latest_prediction_confirmed': True}}]})
+        # 국가는 원문 표현과 정식 국가명 쌍으로 받는다(§13.2). 긴 조회 설명은 계획 전체를 실패시키지 않고 자른다
+        out = PlannerOutput.model_validate({'tasks': [{'intent': 'STATISTICS', 'question': 'q', 'custom_query': '가' * 300,
+                                                       'slots': {'countries': [{'mention': '베트낭', 'name': '베트남'}]}}]})
+        self.assertEqual((len(out.tasks[0].custom_query), out.tasks[0].slots.countries[0].name), (MAX_TEXT_CHARS, '베트남'))
+        with self.assertRaises(ValidationError):  # 이름만 있는 문자열은 원문 확인을 못 하므로 받지 않는다
+            PlannerOutput.model_validate({'tasks': [{'intent': 'STATISTICS', 'question': 'q', 'slots': {'countries': ['베트남']}}]})
+        stored = TaskSlots.model_validate(out.tasks[0].slots.model_dump())
+        self.assertEqual(stored.countries[0].mention, '베트낭')
 
     def test_checkpoint_round_trip(self):
         task = {**CAUSE, 'conditions': {'hs_items': [{'hs_code': '3304', 'hs_ver': 'HS2022'}], 'country_codes': ['VN'],
@@ -292,7 +315,7 @@ class AgentStateTest(unittest.TestCase):
         tasks, results = [], {}
         for t in ('t1', 't2', 't3'):
             tasks.append({**CAUSE, 'task_id': t, 'question': q, 'conditions': full, 'applied_defaults': texts,
-                          'slots': {'products': ['가' * 120] * 5, 'countries': ['나' * 120] * 20,
+                          'slots': {'products': ['가' * 120] * 5, 'countries': [{'mention': '나' * 120, 'name': '다' * MAX_LABEL_CHARS}] * 20,
                                     'comparison_requested': True, 'period': period, 'compare_period': period,
                                     'article_period': full['article_period']}, 'steps': [
                 {**s, 'step_id': s['step_id'].replace('t1', t), 'args': args,
