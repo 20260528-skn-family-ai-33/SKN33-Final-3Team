@@ -14,7 +14,7 @@ export function Signup() {
   const set = key => value => setForm(f => ({ ...f, [key]: value }))
   const passwordReady = isStrongPassword(form.password) && form.password === form.confirm
 
-  const submit = e => {
+  const submit = async e => {
     e.preventDefault()
     const next = {}
     if (!form.name.trim()) next.name = '이름을 입력해 주세요.'
@@ -24,7 +24,8 @@ export function Signup() {
     if (form.password !== form.confirm) next.confirm = '비밀번호가 일치하지 않습니다.'
     setError(next)
     if (Object.keys(next).length) return
-    signup(form)
+    const result = await signup(form)
+    if (!result.ok) return setError({ email: result.message })
     navigate('/onboarding')
   }
 
@@ -65,7 +66,7 @@ export function Signup() {
 export function SocialSignup() {
   const { signup, accounts } = useApp()
   const [pending] = useState(() => {
-    try { return JSON.parse(sessionStorage.getItem('bs2.socialPending') || 'null') } catch { return null }
+    return null
   })
   const [form, setForm] = useState({ name: pending?.name || '', email: pending?.email || '', terms: false, privacy: false })
   const [error, setError] = useState('')

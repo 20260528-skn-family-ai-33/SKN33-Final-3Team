@@ -4,23 +4,23 @@ import { navigate } from '../../router'
 import { useApp } from '../../store'
 import { Btn, Check, Steps } from '../../components/ui'
 import { CountryPicker, Hs4Search } from '../../components/pickers'
-import { hs4Groups, productName, toggleValue } from '../../data/catalog'
+import { productName, toggleValue } from '../../data/catalog'
 
 export default function Onboarding({ route }) {
   const { profile, setProfile, setMainView } = useApp()
   const step = Math.min(3, Math.max(1, Number(route.query.get('step')) || 1))
   const [products, setProducts] = useState(profile.products)
   const [countries, setCountries] = useState(profile.countries)
-  const [group, setGroup] = useState(hs4Groups[0])
+  const [group, setGroup] = useState(null)
   const hasInterest = products.length > 0 || countries.length > 0
 
-  const skip = () => {
-    setProfile(p => ({ ...p, home: 'all' }))
+  const skip = async () => {
+    if (!await setProfile(p => ({ ...p, home: 'all' }))) return
     setMainView('all')
     navigate('/')
   }
-  const finish = () => {
-    setProfile(p => ({ ...p, products, countries, home: hasInterest ? 'interest' : 'all' }))
+  const finish = async () => {
+    if (!await setProfile(p => ({ ...p, products, countries, home: hasInterest ? 'interest' : 'all' }))) return
     setMainView(null)
     navigate(hasInterest ? '/?view=interest' : '/')
   }

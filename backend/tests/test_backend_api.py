@@ -2,12 +2,12 @@ import io
 import tempfile
 import unittest
 from unittest.mock import patch
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update, delete, text, inspect
 from backend.tests.api_support import test_engine, reference_data
-from backend.app.api.application import create_app
+from backend.tests.api_support import create_test_app as create_app
 from backend.app.api.config import Settings
 from backend.app.api.common import now
 from backend.app.api.worker import run_once
@@ -208,7 +208,7 @@ class BackendApiTest(unittest.TestCase):
                 c.execute(self.meta.tables['service_option'].insert(),{'option_code':code,'option_type':kind,
                     'label_ko':'분기','enabled':True,'sort_order':1,'value_json':{}})
             c.execute(self.meta.tables['report_subscription'].insert(),{'user_id':int(uid),'period_code':'QUARTERLY','enabled':True,
-                'filters_json':{'enabled_since':'2025-01-01T00:00:00Z','last_observed_month':baseline,
+                'filters_json':{'enabled_since':('2025-07-20T00:00:00Z' if baseline=='2025-06' else '2025-05-01T00:00:00Z'),'last_observed_month':baseline,
                                 'hs_items':[],'countries':['US'],'formats':['PDF']}})
             for name in ('export_summary','import_summary'):
                 t=self.meta.tables[name]
@@ -248,7 +248,7 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(enqueue_due(store),1)
             self.assertEqual(enqueue_due(store),0)
 
-    def test_quarterly_reports_do_not_backfill_before_subscription_baseline(self):
+    def test_quarterly_reports_do_not_backfill_before_subscription_date(self):
         from backend.app.api.subscriptions import enqueue_due
         uid=self.signup(); self.seed_quarterly_subscription(uid,baseline='2025-06')
         with self.engine.begin() as c:
@@ -288,17 +288,21 @@ class BackendApiTest(unittest.TestCase):
         self.client.put('/api/v1/users/me/interests',json={'hs_items':[],'country_codes':['US'],'expected_version':interest['version']},headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(self.client.put(url,json={**body,'use_saved_interests':False},headers={'X-CSRF-Token':self.csrf}).status_code,400)
         self.assertEqual(self.client.put(url,json={**body,'period_codes':[]},headers={'X-CSRF-Token':self.csrf}).status_code,400)
-        response=self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf}); self.assertEqual(response.status_code,200,response.text)
+        with patch('backend.app.api.reports.now',return_value=datetime(2026,1,1)):
+            response=self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual(response.status_code,200,response.text)
         from backend.app.api.subscriptions import enqueue_due
         with self.engine.begin() as c:
             store=Store(self.app.state.database,c)
-            self.assertEqual(enqueue_due(store),0)  # 가입 당시 최신월은 재발행하지 않는다.
+            self.assertEqual(enqueue_due(store,datetime(2026,1,14)),0)  # 발행일 이전에는 생성하지 않는다.
             c.execute(self.meta.tables['service_option'].insert(),{'option_code':'RPT_MONTHLY','option_type':'REPORT_TYPE','label_ko':'월간','enabled':True,'sort_order':1,'value_json':{}})
             for target in ('export_summary','import_summary'):
                 c.execute(self.meta.tables[target].insert(),{'trade_month':date(2026,1,1),'hs6_code':'330499','hs_ver':'HS2022','country_code':'US','amount_usd':1500000})
                 c.execute(self.meta.tables['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION','target_table':target,'period_start':date(2026,1,1),'period_end':date(2026,1,31),'status':'SUCCESS','detail_json':{'schema_version':1}})
-            self.assertEqual(enqueue_due(store),1)
-            self.assertEqual(enqueue_due(store),0)
+            self.assertEqual(enqueue_due(store,datetime(2026,1,15)),1)  # 가입 전 준비된 12월도 예정일에 발행한다.
+            self.assertEqual(enqueue_due(store,datetime(2026,2,14)),0)
+            self.assertEqual(enqueue_due(store,datetime(2026,2,15)),1)
+            self.assertEqual(enqueue_due(store,datetime(2026,2,15)),0)
         self.assertFalse(self.client.get('/api/v1/users/me/notification-settings').json()['settings']['notifications_enabled'])
 
     def test_articles_visibility_and_admin_audit(self):
@@ -309,7 +313,7 @@ class BackendApiTest(unittest.TestCase):
                 'visibility_status':'VISIBLE','admin_meta_json':{'schema_version':1,'visibility':{},'country_tags_manual':False,'hs_tags_manual':False,'classification_input':None,'classification_state':{'status':'PENDING','revision':0}}})
         response=self.client.get('/api/v1/articles?tab=MAJOR_ISSUE'); self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(len(response.json()['items']),1)
-        with self.engine.begin() as c: c.execute(update(m['api_user_profile']).where(m['api_user_profile'].c.user_id==int(uid)).values(role='SUPER_ADMIN'))
+        with self.engine.begin() as c: c.execute(update(m['users']).where(m['users'].c.user_id==int(uid)).values(role='ADMIN'))
         detail=self.client.get('/api/v1/admin/articles/1'); self.assertEqual(detail.status_code,200,detail.text)
         response=self.client.patch('/api/v1/admin/articles/1/visibility',json={'visibility':'EXCLUDED','confirmed':True,'reason':'검수 중','expected_version':detail.json()['version']},headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(response.status_code,200,response.text)
@@ -723,7 +727,7 @@ class BackendApiTest(unittest.TestCase):
             for i in range(120):
                 eid=c.execute(m['alert_event'].insert().values(event_type='MAJOR_ISSUE',event_key=f'{i:064}',payload_json={'target':{'kw_topic':'blocked' if i%2 else 'allowed'}},created_at=now())).inserted_primary_key[0]
                 c.execute(m['user_alert'].insert().values(user_id=uid,event_id=eid,is_interest_match=True,created_at=now()))
-            c.execute(m['api_keyword_block'].insert().values(user_id=uid,kw_topic='blocked',selected_terms=['blocked']))
+            c.execute(update(m['notification_setting']).where(m['notification_setting'].c.user_id==uid).values(keyword_blocks_json=[{'kw_topic':'blocked','selected_terms':['blocked']}]))
         with self.engine.begin() as c:
             store=Store(self.app.state.database,c)
             self.assertEqual(notifications.unread_count(store,uid),60)
@@ -763,7 +767,7 @@ class BackendApiTest(unittest.TestCase):
                     'visibility_status':visibility,'admin_meta_json':{}})
             c.execute(m['keyword_topic'].insert(),{'keyword_text':'blocked','status':'UNCLASSIFIED'})
             c.execute(m['article_tag'].insert(),{'article_id':3,'keyword_text':'blocked'})
-            c.execute(m['api_keyword_block'].insert(),{'user_id':uid,'kw_topic':'blocked','selected_terms':['blocked']})
+            c.execute(update(m['notification_setting']).where(m['notification_setting'].c.user_id==uid).values(keyword_blocks_json=[{'kw_topic':'blocked','selected_terms':['blocked']}]))
             for i,(article,ids) in enumerate([(1,[]),(2,[]),(3,[]),(None,[1,2]),(None,['1']), (None,[2,3])],1):
                 c.execute(m['alert_event'].insert(),{'event_id':i,'event_type':'MAJOR_ISSUE','article_id':article,'event_key':f'{i:064}',
                     'payload_json':{'article_ids':ids},'created_at':now()})

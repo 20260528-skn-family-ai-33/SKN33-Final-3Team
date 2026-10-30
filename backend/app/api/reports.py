@@ -101,8 +101,8 @@ def create(store,uid,data,key):
 
 
 def formats(store,rid):
-    t=store.t('api_report_file')
-    selected=sorted(store.c.execute(select(t.c.format).where(t.c.report_id==rid)).scalars())
+    t=store.t('report')
+    selected=sorted((store.c.scalar(select(t.c.files_json).where(t.c.report_id==rid)) or {}).keys())
     return selected+['XLSX'] if selected else []
 
 
@@ -145,12 +145,19 @@ def section(code,text,tables=None,articles=None,status='READY',kpi=None):
         'articles':articles or [],'verification':{'status':'PASS' if status=='READY' else 'NEEDS_REVIEW','sentence_checks':None,'regeneration_count':None},'content_status':status}
 
 
+def article_sources(articles):
+    from backend.app.services.report_context import SOURCES
+    return [{'code':code,'label':SOURCES.get(code,code),'url':None}
+            for code in sorted({article['source_code'] for article in articles})]
+
+
 def build_document(store,uid,record):
     c=record['conditions_json']; hs=c.get('hs_items',[]); countries=c.get('country_codes',[])
     p=c['period']
     if record['report_type']=='RPT_WEEKLY':
-        meta=news.source_meta(store,'KOTRA',date.fromisoformat(p['end']))
+        meta=news.source_meta(store,'NEWS',date.fromisoformat(p['end']))
         articles=news.articles(store,uid,start=date.fromisoformat(p['start']),end=date.fromisoformat(p['end']),hs=hs,countries=countries,size=20)['items']
+        meta['sources']=article_sources(articles)
         sections=[section('NEWS','지난주 관심 범위에 해당하는 기사 본문 발췌입니다. RAG 요약은 미연결 상태입니다.',articles=articles,status='POLICY_PENDING')]
     else:
         start,end=trade.resolve_period(store,p['start'][:7],p['end'][:7])
@@ -171,7 +178,8 @@ def build_document(store,uid,record):
                 meta['warnings'].append('비교 기간 데이터 미준비: 증감률은 null')
                 meta['freshness']='STALE'
         growth=percentage(total,old); count=sum(r['amount_usd']>0 for r in rows)
-        kpi={'amount_usd':total,'mom_pct':growth if comparison=='MOM' else None,
+        kpi={'amount_usd':total,'previous_amount_usd':old,'comparison_pct':growth,
+             'mom_pct':growth if comparison=='MOM' else None,
              'yoy_pct':growth if comparison in ('YOY','YOY_PERIOD') else None,'export_country_count':count,
              'top_country_share_pct':max(r['amount_usd'] for r in rows)*100/total if total else None}
         text=f'분석 기간 수출액은 {total:,.2f} USD입니다. 수출 실적이 있는 국가는 {count}개국입니다. '
@@ -192,7 +200,8 @@ def build_document(store,uid,record):
             sections.append(block)
         if 'TOP_COUNTRIES' in selected:
             names={r['country_code']:r['name_ko'] for r in store.rows(select(store.t('country')))}
-            top=[{'country':names[r['country_code']],'amount_usd':r['amount_usd'],'share_pct':r['amount_usd']*100/total if total else None} for r in sorted(rows,key=lambda r:(-r['amount_usd'],r['country_code']))[:10]]
+            active_rows=[r for r in rows if r['amount_usd']>0]
+            top=[{'country':names[r['country_code']],'amount_usd':r['amount_usd'],'share_pct':r['amount_usd']*100/total if total else None} for r in sorted(active_rows,key=lambda r:(-r['amount_usd'],r['country_code']))[:10]]
             table=result_table(store,uid,top,meta,c,store.queries)
             block=section('TOP_COUNTRIES','분석 조건 내 수출액 상위 10개국입니다.',[table])
             block['charts']=[{'chart_type':'HORIZONTAL_BAR','result_id':table['result_id'],'x_key':'country','series_keys':['amount_usd'],'title':'주요 수출국 (USD)','positive_color':'#16A34A','negative_color':'#DC2626'}]
@@ -201,7 +210,7 @@ def build_document(store,uid,record):
         if 'LOCAL_ISSUES' in selected:
             articles=news.articles(store,uid,start=start,end=month_end(end),hs=hs,countries=countries,size=5)['items']
             sections.append(section('LOCAL_ISSUES','분석 조건과 기간에 해당하는 기사 본문 발췌입니다. RAG 요약·인과 분석 모듈은 미연결 상태입니다.',articles=articles,status='POLICY_PENDING'))
-            meta['sources'].append({'code':'KOTRA','label':'KOTRA 해외시장뉴스·단신속보','url':None})
+            meta['sources'].extend(article_sources(articles))
     title='수출 시장 분석 리포트' if record['report_type']!='RPT_WEEKLY' else '주간 해외시장 뉴스 리포트'
     subtitle=f"HS {', '.join(x['hs_code'] for x in hs) or '전체'} · {', '.join(countries) or '전체 국가'} · {p['start']} ~ {p['end']} · USD"
     return clean({'schema_version':1,'title':title,'subtitle':subtitle,'generated_at':now().isoformat()+'Z','sections':sections,'meta':meta,'sql':store.queries})
@@ -212,20 +221,26 @@ def generate(store,job,settings):
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
-    directory=settings.files/str(uid)/str(rid)/str(job['claim_token']); directory.mkdir(parents=True,exist_ok=True)
-    files=store.t('api_report_file'); selected=record['conditions_json'].get('formats',['PDF'])
-    # 기존 report_chk_1을 유지하기 위해 PDF를 보관용 원본으로 생성한다. 공개 다운로드는 선택 양식만.
+    if record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
+        from backend.app.services.report_context import build_context
+        doc['template_pdf']={'version':1,'report_type':record['report_type'],
+                             'context':build_context(store,uid,record,doc)}
+        doc['sql']=list(store.queries)
+    from backend.app.api.report_storage import LocalReportStorage
+    storage=LocalReportStorage(settings.files)
+    prefix=f'{uid}/{rid}/{job["claim_token"]}'
+    selected=record['conditions_json'].get('formats',['PDF'])
     jobs.report_step(store,job,'PDF')
-    pdf=report_pdf(doc,settings); archive=directory/'report.pdf'; archive.write_bytes(pdf)
+    pdf=report_pdf(doc,settings)
+    archive=storage.write(prefix+'/report.pdf',pdf)
+    files={}
     for fmt in selected:
         jobs.report_step(store,job,fmt)
         content=pdf if fmt=='PDF' else report_docx(doc,settings)
-        path=directory/('report.'+fmt.lower()); path.write_bytes(content)
-        store.c.execute(delete(files).where(files.c.report_id==rid,files.c.format==fmt))
-        store.insert('api_report_file',report_id=int(rid),format=fmt,storage_path=str(path),sha256=hashlib.sha256(content).hexdigest(),created_at=now())
+        files[fmt]=storage.write(prefix+'/report.'+fmt.lower(),content)
     t=store.t('report')
     store.c.execute(update(t).where(t.c.report_id==rid).values(status='READY',
-        content_json={**doc,jobs.EXECUTION:clean(job)},pdf_uri=str(archive),completed_at=now()))
+        content_json={**doc,jobs.EXECUTION:clean(job)},files_json=files,pdf_uri=archive['key'],completed_at=now()))
     if record['subscription_id']:
         from backend.app.api.notifications import settings as notification_settings
         conf=notification_settings(store,uid)

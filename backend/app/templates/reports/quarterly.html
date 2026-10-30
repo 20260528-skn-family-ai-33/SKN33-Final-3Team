@@ -8,7 +8,7 @@
 {% set country_pages = items | batch(layout.country_per_page) | list %}
 {% set country_pages = country_pages if country_pages else [[]] %}
 {% set kc = country_pages | length %}
-{% set p_summary = 3 %}
+{% set p_summary = 2 + layout.contents_count %}
 {% set p_trend = p_summary + layout.summary | length %}
 {% set p_country_q = p_trend + k %}
 {% set p_country_m = p_country_q + kc %}
@@ -111,7 +111,7 @@
 <h3>{{ item.label }}<small>HS {{ item.hs_code }} · 백만 달러</small></h3>
 <div class="grid2">
   <div><div class="small">최근 {{ item.quarters.labels | length }}개 분기 합계</div>
-    {% if has_values([item.quarters['values']]) %}{{ bar_chart(item.quarters.labels, item.quarters['values'], bar_colors, height=235, ticks=7, show=[item.quarters.current_from - 1, item.quarters.labels | length - 1]) }}{% else %}{{ m.pending() }}{% endif %}</div>
+    {% if has_values([item.quarters['values']]) %}{{ bar_chart(item.quarters.labels, item.quarters['values'], bar_colors, height=235, ticks=7, show=[item.quarters.get('previous_index', item.quarters.current_from - 1), item.quarters.labels | length - 1]) }}{% else %}{{ m.pending() }}{% endif %}</div>
   <div><div class="small">{{ q }} 월별 3개월 추이 ({{ conditions.year }} vs {{ conditions.prev_year }})</div>
     <table>
       <tr><th>월</th><th class="r">{{ conditions.year }}</th><th class="r">{{ conditions.prev_year }}</th><th class="r">전년 동월</th></tr>
@@ -163,9 +163,9 @@
   <table class="compact">
     <tr><th>#</th><th>국가</th><th class="r">{{ q }}</th><th class="r">비중</th><th class="r">전년 동분기</th></tr>
     {% for r in item.top_countries[:10] %}<tr><td>{{ r.rank }}</td><td>{{ m.country(r) }}</td><td class="r">{{ r.amount_usd | musd }}</td><td class="r">{{ r.share_pct | pct }}</td><td class="r">{{ r.yoy_pct | change(new=r.get('is_new_yoy', false)) }}</td></tr>
-    {% else %}<tr><td colspan="5" class="small">데이터 준비 중</td></tr>{% endfor %}
+    {% else %}<tr><td colspan="5" class="small">{{ '해당 범위의 수출 실적이 없습니다.' if item.amount_usd == 0 else '데이터 준비 중' }}</td></tr>{% endfor %}
     {% if item.others %}<tr class="other"><td></td><td>기타</td><td class="r">{{ item.others.amount_usd | musd }}</td><td class="r">{{ item.others.share_pct | pct }}</td><td class="r">{{ item.others.yoy_pct | change }}</td></tr>{% endif %}
-    <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">100.0%</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
+    <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">{{ '100.0%' if item.amount_usd else '—' }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
   </table></div>
 {% endfor %}
 </div>
@@ -186,7 +186,7 @@
 {% call m.page(report, p_issue + loop.index0, total) %}
 {% if loop.first %}
 {{ m.heading(6, '현지 이슈', '품목 관련 해외 기사 · ' ~ report.period_label) }}
-{{ m.article_policy(article_limit) }}
+{{ m.article_policy(article_limit, article_policy_note | default(none)) }}
 {% else %}
 {{ m.heading(none, '현지 이슈 (계속)') }}
 {% endif %}
@@ -206,7 +206,7 @@
   {'metric': '비중', 'formula': '국가별 분기 수출액 ÷ 해당 품목 분기 전체 × 100'},
   {'metric': '수출국 수', 'formula': '분기 수출액이 0보다 큰 국가 수 · 괄호는 전년 동분기 대비 증감'},
 ], [
-  {'label': '발행 조건', 'value': '분기 마지막 달(3·6·9·12월) 통계 적재·검증 완료 → 구독자별 생성 · 실패 시 1회 재시도 후 “생성 지연”'},
+  {'label': '발행 조건', 'value': meta.get('publication_policy', '분기 마지막 달(3·6·9·12월) 통계 적재·검증 완료 → 구독자별 생성 · 실패 시 1회 재시도 후 “생성 지연”')},
   {'label': '수치 검증', 'value': '표·지표는 결과표에서 직접 삽입(100%) · ' ~ m.verified_text(verification)},
   {'label': '발행', 'value': (report.published_at | ymdhm) ~ ' · ' ~ report.report_id},
   {'label': '재열람', 'value': '마이페이지 › 리포트 센터에서 저장된 PDF를 그대로 다시 받기'},

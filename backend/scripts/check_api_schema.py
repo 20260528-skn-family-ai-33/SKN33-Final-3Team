@@ -3,7 +3,7 @@ import json
 from sqlalchemy import inspect, select, text
 from backend.app.api.config import Settings
 from backend.app.api.database import Database, Store
-from backend.app.api.runtime_schema import RUNTIME_TABLES
+from backend.app.api.runtime_schema import RUNTIME_TABLES, EXTENSIONS
 from backend.app.api import reference, trade, news
 from backend.app.api.common import ApiError
 
@@ -13,6 +13,11 @@ def main():
     existing = set(inspect(engine).get_table_names())
     required = {t.name for t in RUNTIME_TABLES}
     print(json.dumps({'connected':True,'missing_app_tables':sorted(required-existing)},ensure_ascii=False))
+    for table,columns in EXTENSIONS.items():
+        actual={c['name'] for c in inspect(engine).get_columns(table)}
+        print(json.dumps({'table':table,'missing_columns':[c.name for c in columns if c.name not in actual]}))
+    from backend.app.api.redis_store import RedisState
+    print(json.dumps({'redis_connected':bool(RedisState(Settings()).ping())}))
     with engine.connect() as connection:
         connection.execute(text('SET TRANSACTION READ ONLY'))
         store=Store(database,connection)

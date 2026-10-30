@@ -2,9 +2,10 @@
 import { useMemo, useState } from 'react'
 import { Link, navigate, withQuery } from '../../router'
 import { useApp, useStored } from '../../store'
+import { useQuery, ErrorNotice } from '../../api/hooks'
 import { Btn, Check, Chip, Radio, Select, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
-import { HISTORY_TYPES, MAJORS, STATUS, initialFields, initialHistory, initialKeywords } from './keywordData'
+import { HISTORY_TYPES, MAJORS, STATUS } from './keywordData'
 
 const SCOPE = { new: '새로 들어오는 기사부터 적용', existing: '이미 저장된 기사에도 바로 적용', none: '기사 분야 변경 없음' }
 const now = () => {
@@ -16,7 +17,7 @@ const card = sel => (sel
   : { padding: '14px 16px', borderRadius: 12, background: '#fff', border: '1px solid var(--line)' })
 
 function useKeywordStore() {
-  const [state, setState] = useStored('bs2.keywords', { keywords: initialKeywords, fields: initialFields, history: initialHistory })
+  const [state, setState] = useStored('bs2.keywords', { keywords: [], fields: [], history: [] })
   return [state, setState]
 }
 
@@ -527,6 +528,7 @@ function History({ route, store }) {
 }
 
 export default function KeywordAdmin({ route }) {
+  const result = useQuery('/admin/keyword-topics')
   const [store, setStore] = useKeywordStore()
   const parts = route.path.split('/')
   const page = parts[3] || 'list'
@@ -539,6 +541,8 @@ export default function KeywordAdmin({ route }) {
   return (
     <div className="col" style={{ gap: 20, minWidth: 0 }}>
       <SubTabs active={page === 'fields' ? 'fields' : page === 'history' ? 'history' : 'list'} />
+      <ErrorNotice error={result.error} retry={result.reload} />
+      {result.loading && <p role="status">불러오는 중…</p>}
       {body}
     </div>
   )

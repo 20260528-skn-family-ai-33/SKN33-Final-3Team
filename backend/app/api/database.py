@@ -12,6 +12,8 @@ class Database:
         self.lock = RLock()
         from backend.app.api.search_cache import SearchCache
         self.hs_search_cache = SearchCache()
+        # Public aggregates only; never cache sessions, user records or result IDs.
+        self.trade_query_cache = SearchCache(maximum=64, ttl=30)
 
     def table(self, name, connection=None):
         with self.lock:

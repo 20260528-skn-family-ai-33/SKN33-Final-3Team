@@ -52,7 +52,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==2: return accounts.login(store,Login.model_validate(body),response,settings)
     if identity==3:
         if user:
-            t=store.t('api_auth_session'); store.c.execute(delete(t).where(t.c.token_hash==user['token_hash']))
+            store.db.redis.revoke(user['token_hash'])
         response.delete_cookie('bs_session',path='/'); return None
     if identity==4: return {'user':accounts.user_view(store,user),'csrf_token':hash_token('csrf:'+request.cookies['bs_session'])}
     if identity==5:
@@ -146,10 +146,11 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         if fmt=='xlsx':
             content=record['content_json']; tables=[t for s in content['sections'] for t in s['tables']]
             return file_response(xlsx_bytes(tables,content['meta'],content.get('sql',[])),'리포트.xlsx',fmt)
-        t=store.t('api_report_file'); file=store.one(select(t).where(t.c.report_id==rid,t.c.format==fmt.upper()))
+        file=(record.get('files_json') or {}).get(fmt.upper())
         require(file is not None,'선택하지 않았거나 준비되지 않은 형식입니다.','NOT_FOUND',404)
-        target=Path(file['storage_path']).resolve(); require(target.is_relative_to(settings.files) and target.is_file(),'파일이 없습니다.','NOT_FOUND',404)
-        return file_response(target.read_bytes(),'리포트.'+fmt,fmt)
+        from backend.app.api.report_storage import LocalReportStorage
+        return file_response(LocalReportStorage(settings.files).read(file),'리포트.'+fmt,fmt)
+
     if identity==49: return reports.subscription_list(store,uid)
     if identity==50: return reports.save_subscriptions(store,uid,body)
     if identity==51:
@@ -171,7 +172,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==61: return notifications.popups(store,uid)
     if identity==62: notifications.acknowledge(store,uid,path['delivery_id']); return None
     if identity==63:
-        require(settings.get('API_DEBUG_SQL','false')=='true' and user['role']=='SUPER_ADMIN','개발 모드 SQL 접근 권한이 없습니다.','FORBIDDEN',403)
+        require(settings.get('API_DEBUG_SQL','false')=='true' and user['role']=='ADMIN','개발 모드 SQL 접근 권한이 없습니다.','FORBIDDEN',403)
         p=read_snapshot(store,uid,path['result_id'],'RESULT'); return {'sql':'\n'.join(p['sql']),'elapsed_ms':None,'row_count':p['total_rows']}
     if identity==65: return reference.categories(store)
     if identity==66: return reference.topics(store,query.get('q'),page,size)

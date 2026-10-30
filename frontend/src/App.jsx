@@ -1,7 +1,7 @@
 // 화면 라우팅과 공통 틀(머리글·바닥글)을 고른다. 경로 ↔ 화면설계서 번호는 MOCKUP_MAP.md 참고.
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { navigate, useRoute, withQuery } from './router'
-import { useApp } from './store'
+import { useApp, useNotifications, useToast } from './store'
 import { AuthHeader, Footer, FooterSmall, SiteHeader } from './components/layout'
 import AlertPopover from './components/AlertPopover'
 import Login from './pages/auth/Login'
@@ -41,7 +41,8 @@ const SITE = {
 }
 
 function UserShell({ active, route, children }) {
-  const { unread, session, logout } = useApp()
+  const { session, logout } = useApp()
+  const { unread } = useNotifications()
   const isAdmin = session?.role === 'admin'
   const open = !isAdmin && route.query.get('alerts') === 'open'
   const toggle = () => navigate(withQuery(route, { alerts: open ? null : 'open' }), { replace: true })
@@ -57,7 +58,7 @@ function UserShell({ active, route, children }) {
 }
 
 function Toast() {
-  const { toast, setToast } = useApp()
+  const { toast, setToast } = useToast()
   if (!toast) return null
   return (
     <div className="toast" role="status">
@@ -69,13 +70,13 @@ function Toast() {
 
 export default function App() {
   const route = useRoute()
-  const { session } = useApp()
+  const { session, loading, loadError, refresh } = useApp()
   const { path } = route
   // 카카오·네이버·구글 로그인에서 /oauth/{provider}?code=… 로 돌아온 경우 먼저 처리한다.
   const [oauthProvider, setOauthProvider] = useState(callbackProvider)
   const finishOAuth = useCallback(() => setOauthProvider(null), [])
   const isPublic = PUBLIC[path]
-  const needsLogin = !oauthProvider && !isPublic && !session
+  const needsLogin = !loading && !loadError && !oauthProvider && !isPublic && !session
 
   const adminAccountRoute = session?.role === 'admin' && (path === '/account' || path.startsWith('/account/'))
   useEffect(() => {
@@ -87,7 +88,9 @@ export default function App() {
   }, [needsLogin])
 
   let content
-  if (oauthProvider) {
+  if (loading || loadError) {
+    content = <><AuthHeader /><main className="page"><div className="wrap card"><p role={loadError ? 'alert' : 'status'}>{loadError?.message || '로그인 정보를 불러오는 중…'}</p>{loadError && <button className="btn" onClick={refresh}>다시 불러오기</button>}</div></main><FooterSmall /></>
+  } else if (oauthProvider) {
     content = <><AuthHeader /><div className="app-body" id="main"><OAuthCallback provider={oauthProvider} onDone={finishOAuth} /></div><FooterSmall /></>
   } else if (isPublic) {
     const Page = PUBLIC[path]

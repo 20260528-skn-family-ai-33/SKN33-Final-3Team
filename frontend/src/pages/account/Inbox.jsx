@@ -1,23 +1,22 @@
 // BS27 알림함 전체 · BS28 리포트 발행 · BS29 주요이슈 · BS30 급증 기사
 import { useEffect } from 'react'
 import { navigate, withQuery } from '../../router'
-import { useApp } from '../../store'
+import { useApp, useNotifications } from '../../store'
 import { Btn, Check, Chip } from '../../components/ui'
 import { notificationTypes } from '../../data/seed'
-import { articleById } from '../../data/articles'
+
 
 const TABS = [['all', '전체'], ['surge', '급증 기사'], ['major', '주요 이슈'], ['report', '리포트 발행']]
 
 function Detail({ n }) {
   const t = notificationTypes[n.type]
-  const article = n.articleId && articleById(n.articleId)
-  const articleLink = article ? `/articles?tab=${article.kind === 'general' ? 'all' : article.kind}&id=${article.id}` : '/articles'
+  const articleLink = n.articleId ? `/articles?id=${n.articleId}` : '/articles'
   return (
     <section className="card" style={{ padding: '28px 30px' }} aria-live="polite">
       <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--sub)' }}>알림 상세</p>
       <span className={'tag ' + t.tone} style={{ marginTop: 12 }}>{n.type === 'report' ? '리포트 발행 · 구독형' : t.label}</span>
       <h3 style={{ fontSize: 26, fontWeight: 800, marginTop: 10 }}>{n.title}</h3>
-      <p className="note">수신 {n.received} · 시연 예시</p>
+      <p className="note">수신 {n.received}</p>
       <div style={{ height: 1, background: 'var(--line)', margin: '20px 0' }} />
       <p style={{ fontSize: 17, fontWeight: 700 }}>{n.body}</p>
       {n.type === 'report' && (
@@ -39,7 +38,7 @@ function Detail({ n }) {
           <div style={{ flex: 2, background: 'var(--bg)', borderRadius: 14, padding: '16px 18px' }}>
             <p className="note">산식</p>
             <p style={{ fontSize: 15, fontWeight: 700, marginTop: 4 }}>{n.formula}</p>
-            <p className="note">{n.basis} · 시연 예시</p>
+            <p className="note">{n.basis}</p>
           </div>
         </div>
       )}
@@ -60,7 +59,9 @@ function Detail({ n }) {
 }
 
 export default function Inbox({ route }) {
-  const { notifications, setNotifications } = useApp()
+  const { run } = useApp()
+  const { notifications, setNotifications, refreshNotifications } = useNotifications()
+  useEffect(() => { void run(refreshNotifications) }, [refreshNotifications, run])
   const tab = TABS.some(([key]) => key === route.query.get('tab')) ? route.query.get('tab') : 'all'
   const unreadOnly = route.query.get('unread') === '1'
   const list = notifications.filter(n => (tab === 'all' || n.type === tab) && (!unreadOnly || !n.read || n.id === route.query.get('id')))

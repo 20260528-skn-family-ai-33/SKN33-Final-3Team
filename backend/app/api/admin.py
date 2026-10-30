@@ -10,21 +10,21 @@ def member(store,row):
     return {'user_id':str(row['user_id']),'email':row['email'],'name':row['name'],'role':row['role'],
         'account_status':row['account_status'],'login_methods':['EMAIL'],
         'active_subscription_count':store.c.scalar(select(func.count()).select_from(s).where(s.c.user_id==row['user_id'],s.c.enabled==True)),
-        'last_login_at':row['last_login_at'],'withdrawn_at':row['withdrawn_at'],'scheduled_delete_at':row['scheduled_delete_at']}
+        'last_login_at':row['last_login_at'],'withdrawn_at':row['withdrawn_at']}
 
 
 def user_row(store,identity,lock=False):
-    u,p=store.t('users'),store.t('api_user_profile')
-    stmt=select(u.c.user_id,u.c.email,u.c.landing_page,p.c.name,p.c.role,p.c.account_status,p.c.created_at,
-        p.c.last_login_at,p.c.withdrawn_at,p.c.scheduled_delete_at).join(p,p.c.user_id==u.c.user_id).where(u.c.user_id==identity)
+    u=store.t('users')
+    stmt=select(u.c.user_id,u.c.email,u.c.landing_page,u.c.name,u.c.role,u.c.account_status,u.c.created_at,
+        u.c.last_login_at,u.c.withdrawn_at).where(u.c.user_id==identity)
     row=store.one(stmt.with_for_update() if lock else stmt)
     require(row is not None,'회원을 찾을 수 없습니다.','NOT_FOUND',404)
     return row
 
 
 def users(store,q=None,status='ALL',page=1,size=20):
-    u,p=store.t('users'),store.t('api_user_profile')
-    stmt=select(u.c.user_id).join(p,p.c.user_id==u.c.user_id)
+    u=p=store.t('users')
+    stmt=select(u.c.user_id)
     if q: stmt=stmt.where(u.c.email.contains(q,autoescape=True) | p.c.name.contains(q,autoescape=True))
     if status!='ALL': stmt=stmt.where(p.c.account_status==status)
     total=store.count(stmt)
@@ -47,20 +47,18 @@ def audit(store,actor,action,target_type,target,before,after,reason):
 
 
 def change_user(store,actor,identity,data,role=False):
-    administrator(actor,super_only=role)
+    administrator(actor)
     row=user_row(store,identity,lock=True)
     require(data.get('confirmed') is True and data.get('reason','').strip(),'변경 확인과 사유가 필요합니다.')
     require(data.get('expected_version')==digest(row),'회원 정보가 변경되었습니다.','VERSION_CONFLICT',409)
+    require(str(row['user_id'])!=str(actor['user_id']),'자기 계정의 권한 또는 이용 상태는 변경할 수 없습니다.','FORBIDDEN',403)
     if role:
-        require(row['email'].lower()!='admin@example.com' and row['role']!='SUPER_ADMIN','최고 관리자 권한은 변경할 수 없습니다.','FORBIDDEN',403)
         require(row['account_status']=='ACTIVE' and data['role'] in ('USER','ADMIN'),'정상 회원의 USER/ADMIN 권한만 변경할 수 있습니다.')
         patch={'role':data['role']}
     else:
-        if row['role']=='SUPER_ADMIN' or row['user_id']==actor['user_id']:
-            unavailable('최고 관리자·자기 계정 제한 정책 DEC-48 합의가 필요합니다.','FEATURE_NOT_READY')
         require(data['status'] in ('ACTIVE','RESTRICTED') and row['account_status']!='WITHDRAWN','상태 변경을 허용할 수 없습니다.')
         patch={'account_status':data['status']}
-    p=store.t('api_user_profile'); store.c.execute(update(p).where(p.c.user_id==identity).values(**patch))
+    p=store.t('users'); store.c.execute(update(p).where(p.c.user_id==identity).values(**patch))
     revoke_sessions(store,identity)
     return audit(store,actor['user_id'],'USER_ROLE' if role else 'USER_STATUS','USER',identity,row,{**row,**patch},data['reason'])
 

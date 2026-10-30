@@ -1,212 +1,205 @@
-// 앱 전역 상태. 서버 연동 전까지 localStorage에 저장한다(키 접두사 bs2.).
-// API를 붙일 때는 이 파일의 동작(login, generateReport …)만 서버 호출로 바꾸면 화면 코드는 그대로 쓸 수 있다.
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { api, setCsrf, download } from './api/client'
 import { navigate } from './router'
-import {
-  currentSettings, currentNotifications, initialChats, initialConsents, initialNotifications, initialProfile, initialReports, initialSettings,
-  initialSubscription, seedAccounts,
-} from './data/seed'
-import { productName } from './data/catalog'
-import { isStrongPassword } from './utils/validate'
-import { canChangeAdminRole } from './auth/roles'
-
-export function useStored(key, initial, normalize = value => value) {
-  const [value, setValue] = useState(() => {
-    try {
-      const raw = localStorage.getItem(key)
-      return normalize(raw ? JSON.parse(raw) : initial)
-    } catch {
-      return initial
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(key, JSON.stringify(value))
-    } catch {
-      window.dispatchEvent(new CustomEvent('storage-warning'))
-    }
-  }, [key, value])
-  return [value, setValue]
-}
-
-export const REPORT_STAGES = ['데이터 조회', '분석', '기사 검색', '작성', '수치 검증', 'PDF']
-const STAGE_MS = 1300
-
+import { registerCountries, registerProducts, countryCode, countryName } from './data/catalog'
+import { mapNotification, mapReport } from './api/adapters'
 const AppContext = createContext(null)
+const NotificationContext = createContext(null)
+const ToastContext = createContext(null)
 export const useApp = () => useContext(AppContext)
-
-const today = () => {
-  const d = new Date()
-  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`
+export const useNotifications = () => useContext(NotificationContext)
+export const useToast = () => useContext(ToastContext)
+export const REPORT_STAGES = ['생성 대기', '서버에서 생성 중', '완료']
+// Presentation state only. Server records and credentials never persist in localStorage.
+export function useStored(_key, initial) { return useState(initial) }
+export async function allPages(path, query = {}) {
+  const items = []
+  for (let page = 1; ; page++) {
+    const data = await api(path, { query: { ...query, page, page_size: 100 } })
+    items.push(...data.items)
+    if (!data.page?.has_next) return items
+  }
 }
-
+const emptyProfile = { name: '', email: '', products: [], countries: [], home: 'all' }
+const accountView = user => ({ ...user, id: user.user_id, serverRole: user.role, role: user.role === 'ADMIN' ? 'admin' : 'user', provider: 'email' })
 export function AppProvider({ children }) {
-  const [accounts, setAccounts] = useStored('bs2.accounts', seedAccounts)
-  const [storedSession, setSession] = useStored('bs2.session', null)
-  const sessionAccount = accounts.find(a => a.email === storedSession?.email)
-  const session = useMemo(() => storedSession && sessionAccount ? { ...storedSession, role: sessionAccount.role } : null, [storedSession, sessionAccount])
-  const [profile, setProfile] = useStored('bs2.profile', initialProfile)
-  const [settings, setSettings] = useStored('bs2.settings', initialSettings, currentSettings)
-  const [consents, setConsents] = useStored('bs2.consents', initialConsents)
-  const [subscription, setSubscription] = useStored('bs2.subscription', initialSubscription)
-  const [notifications, setNotifications] = useStored('bs2.notifications', initialNotifications, currentNotifications)
-  const [chats, setChats] = useStored('bs2.chats', initialChats)
-  const [reports, setReports] = useStored('bs2.reports', initialReports)
-  const [mainView, setMainView] = useStored('bs2.mainView', null)
+  const [session, setSession] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(null)
+  const [profile, updateProfile] = useState(emptyProfile)
+  const [settings, updateSettings] = useState({ all: false, surge: false, major: false, report: false })
+  const [subscription, updateSubscription] = useState({ cycles: [], formats: ['PDF'], items: [] })
+  const [notifications, updateNotifications] = useState([])
+  const [unread, setUnread] = useState(0)
+  const [reports, setReports] = useState([])
+  const [chats, setChats] = useState([])
+  const [accounts, setAccounts] = useState([])
+  const [options, setOptions] = useState({ report_periods: [] })
+  const [countries, setCountries] = useState([])
+  const [mainView, setMainView] = useState(null)
   const [toast, setToast] = useState('')
-  const [tick, setTick] = useState(0)
-
+  const epoch = useRef(0)
+  const notificationRequest = useRef(null)
+  const notificationRevision = useRef(0)
   const notify = useCallback(message => setToast(message), [])
-
-  useEffect(() => {
-    if (!toast) return undefined
-    const t = setTimeout(() => setToast(''), 5000)
-    return () => clearTimeout(t)
-  }, [toast])
-
-  useEffect(() => {
-    const warn = () => setToast('브라우저 저장 공간을 쓸 수 없습니다. 새로고침하면 변경 내용이 사라질 수 있습니다.')
-    window.addEventListener('storage-warning', warn)
-    return () => window.removeEventListener('storage-warning', warn)
+  const fail = useCallback(error => {
+    notify(error.message + (error.status === 409 ? ' 새로고침한 뒤 변경 내용을 확인하고 다시 저장해 주세요.' : error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
+    return false
+  }, [notify])
+  const run = useCallback(async action => { try { return await action() } catch (error) { return fail(error) } }, [fail])
+  const clear = useCallback(() => {
+    epoch.current++; setSession(null); setCsrf(null); updateProfile(emptyProfile); setChats([]); setReports([]); updateNotifications([]); setUnread(0); setAccounts([]); setMainView(null)
+    updateSettings({ all: false, surge: false, major: false, report: false })
+    updateSubscription({ cycles: [], formats: ['PDF'], items: [] }); setLoadError(null)
   }, [])
-
-  // 리포트 생성 진행: 단계별로 시간이 지나면 완료 처리한다. 화면을 옮겨도 계속 진행된다.
-  const generating = reports.some(r => r.status === 'generating')
-  useEffect(() => {
-    if (!generating) return undefined
-    const timer = setInterval(() => {
-      setTick(t => t + 1)
-      const now = Date.now()
-      const finished = reports.filter(r => r.status === 'generating' && now - r.startedAt >= STAGE_MS * REPORT_STAGES.length)
-      if (!finished.length) return
-      setReports(rs => rs.map(r => (finished.some(f => f.id === r.id) ? { ...r, status: 'ready', meta: `생성일 ${r.created} · PDF 생성 완료` } : r)))
-      setChats(cs => cs.map(c => {
-        const done = finished.find(f => f.chatId === c.id)
-        if (!done) return c
-        return {
-          ...c, status: 'done', reportId: done.id,
-          messages: c.messages.map(m => (m.kind === 'progress' && m.reportId === done.id ? { ...m, kind: 'done' } : m)),
-        }
-      }))
-      setToast('리포트 생성이 완료되었습니다. 요청형 리포트 목록에 등록했습니다.')
-    }, 400)
-    return () => clearInterval(timer)
-  }, [generating, reports, setReports, setChats])
-
-  const reportStage = useCallback(report => {
-    if (!report || report.status !== 'generating') return REPORT_STAGES.length
-    return Math.min(REPORT_STAGES.length - 1, Math.floor((Date.now() - report.startedAt) / STAGE_MS))
+  const refreshNotifications = useCallback(async (force = false) => {
+    const current = epoch.current
+    if (!force && notificationRequest.current?.epoch === current) return notificationRequest.current.promise
+    const revision = ++notificationRevision.current
+    const promise = Promise.all([allPages('/notifications'), api('/notifications/unread-count')]).then(([items, count]) => {
+      if (current === epoch.current && revision === notificationRevision.current) {
+        const mapped = items.map(mapNotification)
+        updateNotifications(previous => JSON.stringify(previous) === JSON.stringify(mapped) ? previous : mapped)
+        setUnread(count.count)
+      }
+    }).finally(() => { if (notificationRequest.current?.promise === promise) notificationRequest.current = null })
+    notificationRequest.current = { epoch: current, promise }
+    return promise
   }, [])
-
-  const login = useCallback((email, password) => {
-    const account = accounts.find(a => a.email.toLowerCase() === email.trim().toLowerCase())
-    if (!account || !account.password || account.password !== password) return { ok: false }
-    if (account.status === 'withdrawn') return { ok: false, message: '탈퇴 처리된 계정입니다. 탈퇴일로부터 1개월 동안은 다시 활성화할 수 없습니다.' }
-    setSession({ email: account.email, role: account.role, provider: account.provider })
-    setProfile(p => (p.email === account.email ? p : { ...initialProfile, name: account.name, email: account.email, countries: [], products: [], home: 'all' }))
-    setMainView(null)
-    return { ok: true, account }
-  }, [accounts, setSession, setProfile, setMainView])
-
-  /** 소셜 인증 결과로 로그인한다. 연결된 계정(같은 제공자 ID 또는 같은 이메일)이 없으면 existing: false */
-  const socialSignIn = useCallback(user => {
-    const linked = accounts.find(a => a.socials?.some(x => x.provider === user.provider && x.providerId === user.providerId))
-    const byEmail = user.email && accounts.find(a => a.email.toLowerCase() === user.email.toLowerCase())
-    const match = linked || byEmail
-    if (!match) return { ok: true, existing: false }
-    if (match.status === 'withdrawn') return { ok: false, message: '탈퇴 처리된 계정입니다. 탈퇴일로부터 1개월 동안은 다시 가입하거나 로그인할 수 없습니다.' }
-    setAccounts(list => list.map(a => (a.email !== match.email ? a : {
-      ...a, socials: [...(a.socials || []).filter(x => x.provider !== user.provider), { provider: user.provider, providerId: user.providerId }],
-    })))
-    setSession({ email: match.email, role: match.role, provider: user.provider })
-    setProfile(p => (p.email === match.email ? p : { ...initialProfile, name: match.name, email: match.email, countries: [], products: [], home: 'all' }))
-    setMainView(null)
-    return { ok: true, existing: true, account: match }
-  }, [accounts, setAccounts, setSession, setProfile, setMainView])
-
-  const signup = useCallback(({ name, email, password, provider = 'email', providerId }) => {
-    if (provider === 'email' && !isStrongPassword(password || '')) return false
-    const account = {
-      email: email.trim(), password: password || null, name: name.trim(), provider, joined: today(), role: 'user',
-      socials: providerId ? [{ provider, providerId }] : [],
-    }
-    setAccounts(list => [...list.filter(a => a.email !== account.email), account])
-    setSession({ email: account.email, role: 'user', provider })
-    setProfile({ ...initialProfile, name: account.name, email: account.email, countries: [], products: [], home: 'all' })
-    setMainView(null)
-  }, [setAccounts, setSession, setProfile, setMainView])
-
-  const changeAdminRole = useCallback((email, role) => {
-    const target = accounts.find(a => a.email === email)
-    if (!canChangeAdminRole(session, target, role)) return false
-    setAccounts(list => list.map(a => a.email === email ? { ...a, role } : a))
-    setToast(role === 'admin' ? '관리자 권한을 부여했습니다.' : '관리자 권한을 회수했습니다.')
-    return true
-  }, [accounts, session, setAccounts])
-
-  const logout = useCallback(() => {
-    setSession(null)
-    setMainView(null)
+  const refreshReports = useCallback(async () => {
+    const current = epoch.current; const items = await allPages('/reports')
+    if (current === epoch.current) setReports(items.map(mapReport))
+  }, [])
+  const refreshChats = useCallback(async () => {
+    const current = epoch.current; const items = await allPages('/chat/sessions')
+    if (current === epoch.current) setChats(items.map(c => ({ ...c, id: c.session_id, date: c.updated_at, messages: [] })))
+  }, [])
+  const loadUser = useCallback(async (user, current) => {
+    const [interest, config, refs, pref, subs] = await Promise.all([
+      api('/users/me/interests'), api('/config/options'), api('/reference/countries'), api('/users/me/notification-settings'), api('/users/me/subscriptions'),
+    ])
+    if (current !== epoch.current) return
+    registerCountries(refs.items); setCountries(refs.items); setOptions(config)
+    const scope = interest.interests
+    const groups = await Promise.all([...new Set(scope.hs_items.map(h => h.hs_code.slice(0, 4)))].map(code => api(`/reference/hs-codes/${code}/children`, { query: { hs_ver: 'HS2022' } })))
+    if (current !== epoch.current) return
+    groups.forEach(g => registerProducts(g.items))
+    updateProfile({ ...emptyProfile, name: user.name, email: user.email, products: scope.hs_items.map(h => h.hs_code), countries: scope.country_codes.map(countryName), home: scope.landing_page === 'INTERESTED' ? 'interest' : 'all', version: scope.version })
+    const s = pref.settings
+    updateSettings({ all: s.notifications_enabled, surge: s.spike_popup, major: s.major_issue_popup, report: s.report_popup, termsAgreed: s.consent_current, termsVersion: s.terms_version })
+    updateSubscription({ ...subs, cycles: subs.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: subs.items.find(s => s.enabled)?.formats || ['PDF'] })
+    await Promise.all([refreshNotifications(), refreshReports(), refreshChats()])
+  }, [refreshNotifications, refreshReports, refreshChats])
+  const refresh = useCallback(async () => {
+    const current = ++epoch.current; setLoading(true); setLoadError(null)
     try {
-      sessionStorage.removeItem('bs2.pwVerified')
-      sessionStorage.removeItem('bs2.socialPending')
-    } catch { /* 저장소 접근 불가 */ }
-    navigate('/login')
-    setToast('로그아웃했습니다.')
-  }, [setSession, setMainView])
-
-  const changePassword = useCallback((current, next) => {
-    const account = accounts.find(a => a.email === session?.email)
-    // 서버에서도 같은 규칙으로 막아야 한다(화면 검사만 믿지 않기).
-    if (!account || account.password !== current || !isStrongPassword(next)) return false
-    setAccounts(list => list.map(a => (a.email === account.email ? { ...a, password: next } : a)))
+      const data = await api('/users/me')
+      if (current !== epoch.current) return
+      setCsrf(data.csrf_token); setSession(accountView(data.user)); await loadUser(data.user, current)
+    } catch (error) {
+      if (current !== epoch.current) return
+      if (error.status === 401) { clear(); setLoading(false) } else setLoadError(error)
+    } finally { if (current === epoch.current) setLoading(false) }
+  }, [loadUser, clear])
+  useEffect(() => {
+    const generation = epoch
+    void Promise.resolve().then(refresh)
+    const expired = () => { clear(); setLoading(false); notify('로그인이 만료되었습니다. 다시 로그인해 주세요.') }
+    window.addEventListener('session-expired', expired)
+    return () => { generation.current++; window.removeEventListener('session-expired', expired) }
+  }, [refresh, clear, notify])
+  useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(''), 5000); return () => clearTimeout(timer) }, [toast])
+  useEffect(() => {
+    if (!session || loading || loadError) return
+    const poll = () => { if (document.visibilityState !== 'hidden') void refreshNotifications().catch(() => {}) }
+    const timer = setInterval(poll, 30000)
+    window.addEventListener('focus', poll)
+    document.addEventListener('visibilitychange', poll)
+    return () => { clearInterval(timer); window.removeEventListener('focus', poll); document.removeEventListener('visibilitychange', poll) }
+  }, [session, loading, loadError, refreshNotifications])
+  const authenticate = useCallback(async (path, body) => {
+    try {
+      const data = await api(path, { method: 'POST', body }); const current = ++epoch.current
+      setCsrf(data.csrf_token); setSession(accountView(data.user)); setLoading(true); setLoadError(null)
+      try { await loadUser(data.user, current) } catch (error) { setLoadError(error) } finally { setLoading(false) }
+      return { ok: true, account: accountView(data.user), path: data.user.post_login_path }
+    } catch (error) { return { ok: false, message: error.message } }
+  }, [loadUser])
+  const setProfile = useCallback(async next => run(async () => {
+    const current = epoch.current
+    const p = typeof next === 'function' ? next(profile) : next
+    const data = await api('/users/me/interests', { method: 'PUT', body: { hs_items: p.products.map(hs_code => ({ hs_code, hs_ver: 'HS2022' })), country_codes: p.countries.map(countryCode), landing_page: p.home === 'interest' ? 'INTERESTED' : 'GLOBAL', expected_version: profile.version } })
+    if (current !== epoch.current) return false
+    updateProfile({ ...p, version: data.interests.version, home: data.interests.landing_page === 'INTERESTED' ? 'interest' : 'all' }); return true
+  }), [profile, run])
+  const setSettings = useCallback(async next => run(async () => {
+    const current = epoch.current
+    await api('/users/me/notification-settings', { method: 'PATCH', body: { notifications_enabled: next.all, spike_popup: next.surge, major_issue_popup: next.major, report_popup: next.report } })
+    if (current !== epoch.current) return false
+    updateSettings(next); return true
+  }), [run])
+  const setSubscription = useCallback(async next => run(async () => {
+    const current = epoch.current
+    const s = typeof next === 'function' ? next(subscription) : next
+    if (s.cycles.length) await api('/users/me/subscriptions', { method: 'PUT', body: { period_codes: s.cycles.map(c => c.toUpperCase()), formats: s.formats, use_saved_interests: true, expected_version: subscription.version } })
+    else for (const item of subscription.items.filter(s => s.enabled)) {
+      if (current !== epoch.current) return false
+      await api(`/users/me/subscriptions/${item.subscription_id}`, { method: 'DELETE' })
+    }
+    if (current !== epoch.current) return false
+    const fresh = await api('/users/me/subscriptions')
+    if (current !== epoch.current) return false
+    updateSubscription({ ...fresh, cycles: fresh.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: fresh.items.find(s => s.enabled)?.formats || s.formats }); return true
+  }), [subscription, run])
+  const deleteSubscription = useCallback(async cycle => run(async () => {
+    const current = epoch.current
+    const target = subscription.items.find(s => s.enabled && s.period_code === cycle.toUpperCase())
+    if (!target) throw new Error('삭제할 구독을 찾을 수 없습니다. 새로고침해 주세요.')
+    await api(`/users/me/subscriptions/${target.subscription_id}`, { method: 'DELETE' })
+    if (current !== epoch.current) return false
+    const fresh = await api('/users/me/subscriptions')
+    if (current !== epoch.current) return false
+    updateSubscription({ ...fresh, cycles: fresh.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: fresh.items.find(s => s.enabled)?.formats || subscription.formats })
     return true
-  }, [accounts, session, setAccounts])
-
-  const withdraw = useCallback(reasons => {
-    setAccounts(list => list.map(a => (a.email === session?.email ? { ...a, status: 'withdrawn', withdrawnAt: today(), withdrawReasons: reasons } : a)))
-    setSession(null)
-    navigate('/login')
-    setToast('회원탈퇴가 완료되었습니다. 탈퇴일로부터 1개월 보존 후 완전히 삭제됩니다.')
-  }, [session, setAccounts, setSession])
-
-  const resetDemo = useCallback(() => {
-    ;['accounts', 'session', 'profile', 'settings', 'consents', 'subscription', 'notifications', 'chats', 'reports', 'mainView', 'keywords']
-      .forEach(k => { try { localStorage.removeItem('bs2.' + k) } catch { /* 저장소 접근 불가 */ } })
-    window.location.hash = '/login'
-    window.location.reload()
-  }, [])
-
-  /** 채팅 조건으로 요청형 리포트를 만든다. */
-  const generateReport = useCallback((chatId, options) => {
-    const id = 'r-' + Date.now().toString(36)
-    const title = `${options.country || '전체 국가'} ${productName(options.product)} 수출입 분석`
-    setReports(rs => [{
-      id, chatId, kind: 'chat', title, status: 'generating', startedAt: Date.now(), created: today(), pages: 12,
-      meta: `생성일 ${today()} · 생성 중`, note: '생성 완료 시 요청형 목록에 등록된 리포트', options,
-    }, ...rs])
-    setChats(cs => cs.map(c => (c.id !== chatId ? c : {
-      ...c, status: 'generating',
-      messages: c.messages.map(m => (m.kind === 'condition' && !m.locked ? { ...m, locked: true } : m))
-        .concat({ role: 'ai', kind: 'progress', options, reportId: id }),
-    })))
-    setToast('리포트 생성을 시작했습니다. 다른 화면으로 이동해도 작업은 유지됩니다.')
-    return id
-  }, [setReports, setChats])
-
-  const unread = notifications.filter(n => !n.read).length
-  const account = accounts.find(a => a.email === session?.email)
-
+  }), [subscription, run])
+  const setNotifications = useCallback(async next => run(async () => {
+    const current = epoch.current
+    const values = typeof next === 'function' ? next(notifications) : next
+    const changed = values.filter(n => n.read && !notifications.find(old => old.id === n.id)?.read)
+    if (!changed.length) return true
+    for (const item of changed) {
+      if (current !== epoch.current) return false
+      await api(`/notifications/${item.id}/read`, { method: 'PATCH', body: {} })
+    }
+    if (current !== epoch.current) return false
+    await refreshNotifications(true); return true
+  }), [notifications, refreshNotifications, run])
+  const logout = useCallback(() => run(async () => { await api('/auth/logout', { method: 'POST', body: {} }); clear(); navigate('/login'); return true }), [run, clear])
+  const changePassword = useCallback((current, next) => run(async () => {
+    await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } }); clear(); navigate('/login'); return true
+  }), [session, run, clear])
+  const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`, `리포트-${id}.${format.toLowerCase()}`)), [run])
+  const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
+  const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])
+  const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
+  const withdraw = useCallback(() => notify('회원 탈퇴는 운영 정책 확정 후 제공됩니다.'), [notify])
+  const setConsents = useCallback(() => { notify('일반 약관 동의 관리는 서버 연동 준비 중입니다.'); return false }, [notify])
   const value = useMemo(() => ({
-    accounts, setAccounts, account, session, changeAdminRole, login, socialSignIn, signup, logout, changePassword, withdraw, resetDemo,
-    profile, setProfile, settings, setSettings, consents, setConsents, subscription, setSubscription,
-    notifications, setNotifications, unread, chats, setChats, reports, setReports, generateReport, reportStage,
-    mainView, setMainView, notify, toast, setToast, tick,
-  }), [tick, accounts, setAccounts, account, session, changeAdminRole, login, socialSignIn, signup, logout, changePassword, withdraw, resetDemo,
-    profile, setProfile, settings, setSettings, consents, setConsents, subscription, setSubscription,
-    notifications, setNotifications, unread, chats, setChats, reports, setReports, generateReport, reportStage,
-    mainView, setMainView, notify, toast])
-
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>
+    session, account: session, accounts, setAccounts, loading, loadError, refresh, options, countries,
+    login, signup, socialSignIn, logout, changePassword, withdraw,
+    consents: {}, setConsents,
+    profile, setProfile, settings, setSettings, subscription, setSubscription, deleteSubscription,
+    chats, setChats, refreshChats, reports, refreshReports, downloadReport,
+    mainView, setMainView, notify, run, fail,
+  }), [session, accounts, loading, loadError, refresh, options, countries, login, signup, socialSignIn,
+    logout, changePassword, withdraw, setConsents, profile, setProfile, settings, setSettings,
+    subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
+    downloadReport, mainView, notify, run, fail])
+  const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications }),
+    [notifications, setNotifications, unread, refreshNotifications])
+  const toastValue = useMemo(() => ({ toast, setToast }), [toast])
+  return <AppContext.Provider value={value}><NotificationContext.Provider value={notificationValue}>
+    <ToastContext.Provider value={toastValue}>{children}</ToastContext.Provider>
+  </NotificationContext.Provider></AppContext.Provider>
 }

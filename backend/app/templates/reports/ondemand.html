@@ -24,7 +24,7 @@
                      'TOP_COUNTRIES': (layout.top | length) if 'TOP_COUNTRIES' in sections else 0,
                      'LOCAL_ISSUES': (layout.articles | length) if 'LOCAL_ISSUES' in sections else 0} %}
 {% set start = {} %}{% set no = {} %}
-{% set cursor = namespace(page=3) %}
+{% set cursor = namespace(page=2 + layout.contents_count) %}
 {% for key in sections %}
   {% set _ = start.update({key: cursor.page}) %}{% set _ = no.update({key: loop.index}) %}
   {% set cursor.page = cursor.page + page_count[key] %}
@@ -201,7 +201,7 @@
   <tr><th style="width:12mm">순위</th>{% if has_compare %}<th style="width:13mm">변동</th>{% endif %}<th>국가</th><th class="r">{{ cur }} 수출액</th><th class="r">비중</th>{% if has_compare %}<th class="r">{{ prev }} 수출액</th><th class="r">{{ vs }}</th>{% endif %}</tr>
   {% for r in top_rows[b.start:b.end] %}
   {% if r is none %}
-  <tr><td colspan="{{ 7 if has_compare else 4 }}" class="small">데이터 준비 중</td></tr>
+  <tr><td colspan="{{ 7 if has_compare else 4 }}" class="small">{{ '수출 실적이 없습니다.' if k.amount_usd == 0 else '데이터 준비 중' }}</td></tr>
   {% elif r is mapping %}
   <tr class="{{ 'lead' if r.rank == 1 }}"><td>{{ r.rank }}</td>{% if has_compare %}<td>{{ (r.get('rank_move') | rank_move) if compare_ready else '—' }}</td>{% endif %}<td class="b">{{ r.name }}</td>
     <td class="r">{{ r.amount_usd | eok(2) }}</td><td class="r">{{ r.share_pct | pct }}</td>
@@ -222,7 +222,7 @@
     {% if compare_ready %}{% set _ = keys.append({'name': prev, 'color': colors.previous}) %}{% endif %}
     {% for r in top %}{% set _ = bars.append({'label': r.name, 'values': [r.amount_usd, r.prev_amount_usd] if compare_ready else [r.amount_usd]}) %}{% endfor %}
     {{ m.legend(keys) }}
-    {% if bars %}{{ hbar_chart(bars, [colors.accent, colors.previous] if compare_ready else [colors.accent], label_width=70, width=320, row_height=30, divisor=100000000, digits=2) }}{% else %}{{ m.pending() }}{% endif %}</div>
+    {% if bars %}{{ hbar_chart(bars, [colors.accent, colors.previous] if compare_ready else [colors.accent], label_width=70, width=320, row_height=30, divisor=100000000, digits=2) }}{% else %}{{ m.pending('수출 실적이 없습니다.' if k.amount_usd == 0 else '데이터 준비 중') }}{% endif %}</div>
   <div><h3>시장 집중도</h3>
     {% set cc = concentration %}
     {% if cc is none %}{{ m.pending() }}{% else %}
@@ -248,7 +248,7 @@
 {% call m.page(report_view, start.LOCAL_ISSUES + loop.index0, total) %}
 {% if loop.first %}
 {{ m.heading(no.LOCAL_ISSUES, '현지 이슈', '품목 관련 해외 기사 · ' ~ c.period.label ~ ' 기준') }}
-{{ m.article_policy(article_limit) }}
+{{ m.article_policy(article_limit, article_policy_note | default(none)) }}
 {% else %}
 {{ m.heading(none, '현지 이슈 (계속)') }}
 {% endif %}
@@ -284,7 +284,7 @@
   <tr><td>생성</td><td>{{ report.published_at | ymdhm }}{{ (' · 소요 ' ~ report.elapsed_seconds ~ '초') if report.get('elapsed_seconds') }} · {{ report.report_id }} · {{ 'AI 분석 대화에서 요청' if c.request_channel == 'CHAT' else '리포트 요청 화면' }}</td></tr>
   <tr><td>재열람</td><td>저장된 결과·PDF를 그대로 표시 · 최신 데이터로 다시 보려면 새 리포트 생성</td></tr>
 </table>
-<p class="disclaimer">본 리포트는 공개 통계와 기사로 만든 참고 자료이며 수출 결정에 대한 권고가 아닙니다. 기사 저작권은 KOTRA에 있으며 원문 링크로 확인할 수 있습니다.</p>
+<p class="disclaimer">본 리포트는 공개 통계와 기사로 만든 참고 자료이며 수출 결정에 대한 권고가 아닙니다. 기사 저작권은 각 출처 매체에 있으며 원문 링크로 확인할 수 있습니다.</p>
 {% endcall %}
 
 </body>

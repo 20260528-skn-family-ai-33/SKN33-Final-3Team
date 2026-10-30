@@ -14,8 +14,7 @@ def blocked_topics(store,uid):
     if uid is None: return []
     key=('blocked_topics',uid)
     if key in store.cache: return store.cache[key]
-    b=store.t('api_keyword_block')
-    store.cache[key]=list(store.c.execute(select(b.c.kw_topic).where(b.c.user_id==uid)).scalars())
+    store.cache[key]=[r['kw_topic'] for r in block_items(store,uid)]
     return store.cache[key]
 
 
@@ -30,22 +29,27 @@ def canonical(store,term):
     unavailable('키워드 대표어 순환을 정비해야 합니다.')
 
 
+def block_items(store,uid):
+    t=store.t('notification_setting')
+    return store.c.scalar(select(t.c.keyword_blocks_json).where(t.c.user_id==uid)) or []
+
+
 def blocks(store,uid):
-    b=store.t('api_keyword_block')
-    items=[{'kw_topic':r['kw_topic'],'selected_terms':r['selected_terms'],
-            'expansion_notice':r['kw_topic']+' 주제어로 통합된 기사가 차단됩니다.'}
-           for r in store.rows(select(b).where(b.c.user_id==uid).order_by(b.c.kw_topic))]
+    items=[{**r,'expansion_notice':r['kw_topic']+' 주제어로 통합된 기사가 차단됩니다.'}
+           for r in block_items(store,uid)]
     return {'settings':{'items':items,'version':digest(items)}}
 
 
 def save_blocks(store,uid,keywords,expected):
-    u,b=store.t('users'),store.t('api_keyword_block')
+    u,b=store.t('users'),store.t('notification_setting')
     store.c.execute(select(u.c.user_id).where(u.c.user_id==uid).with_for_update()).first()
+    if not store.c.execute(select(b.c.user_id).where(b.c.user_id==uid).with_for_update()).first():
+        unavailable('알림 설정 행이 준비되지 않았습니다.','FEATURE_NOT_READY')
     require(expected==blocks(store,uid)['settings']['version'],'설정이 변경되었습니다.','VERSION_CONFLICT',409)
     grouped={}
     for term in keywords: grouped.setdefault(canonical(store,term),[]).append(term)
-    store.c.execute(delete(b).where(b.c.user_id==uid))
-    for key,terms in grouped.items(): store.insert('api_keyword_block',user_id=uid,kw_topic=key,selected_terms=sorted(set(terms)))
+    store.c.execute(update(b).where(b.c.user_id==uid).values(keyword_blocks_json=[
+        {'kw_topic':key,'selected_terms':sorted(set(terms))} for key,terms in sorted(grouped.items())]))
     store.cache.pop(('blocked_topics',uid),None)
     return blocks(store,uid)
 
