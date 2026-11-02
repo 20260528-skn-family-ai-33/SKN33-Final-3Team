@@ -140,7 +140,7 @@ function MemberSearch({ value, to }) {
   const go = () => navigate(`${to}?q=${encodeURIComponent(q.trim())}&by=${by}`)
   return (
     <section className="card" style={{ padding: '16px 20px' }}>
-      <form onSubmit={e => { e.preventDefault(); go() }} style={{ display: 'grid', gridTemplateColumns: '1fr 160px auto', gap: 12, alignItems: 'end' }}>
+      <form onSubmit={e => { e.preventDefault(); go() }} className="resp-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 160px auto', gap: 12, alignItems: 'end' }}>
         <div>
           <label className="lbl" htmlFor="member-q">회원 검색</label>
           <div className={'input sm' + (q ? ' val' : '')}>
@@ -172,12 +172,15 @@ function Block({ b, query }) {
       return (
         <section className="card" style={{ padding: '18px 20px' }}>
           {b.title && <p className="t3" style={{ marginBottom: 12 }}>{b.title}</p>}
+          {/* 좁은 화면에서는 표만 가로로 스크롤한다. */}
+          <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 560 }}>
           <div className="th" style={{ gridTemplateColumns: b.cols }}>{b.head.map(h => <span key={h}>{h}</span>)}</div>
           {rows.map((r, i) => (
             <div key={i} className={'tr' + (r.sel ? ' sel' : '')} style={{ gridTemplateColumns: b.cols }}>
               {r.cells.map((c, j) => <span key={j}><Cell c={c} /></span>)}
             </div>
           ))}
+          </div></div>
           {!rows.length && <p className="muted" style={{ padding: '18px 14px' }}>{b.empty || (query?.q ? '검색 결과가 없습니다. 아이디(이메일) 또는 이름을 다시 확인해 주세요.' : '표시할 항목이 없습니다.')}</p>}
         </section>
       )

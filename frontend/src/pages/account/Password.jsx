@@ -39,8 +39,8 @@ export default function Password() {
         <h2 className="t1" style={{ fontSize: 24 }}>비밀번호 변경</h2>
         <p className="muted" style={{ marginTop: 6 }}>비밀번호를 바꾸기 전에 등록된 이메일을 확인합니다.</p>
         <label className="lbl" htmlFor="pw-email" style={{ marginTop: 18 }}>이메일</label>
-        <div style={{ display: 'flex', gap: 10, maxWidth: 620 }}>
-          <TextField id="pw-email" style={{ flex: 1 }} type="email" placeholder="등록된 이메일을 입력하세요" icon="mail" value={email} onChange={v => { setEmail(v); setError({}) }} onEnter={verify} invalid={!!error.email} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, maxWidth: 620 }}>
+          <TextField id="pw-email" style={{ flex: '1 1 200px' }} type="email" placeholder="등록된 이메일을 입력하세요" icon="mail" value={email} onChange={v => { setEmail(v); setError({}) }} onEnter={verify} invalid={!!error.email} />
           <Btn kind="ink" size="md" style={{ height: 50, borderRadius: 12 }} onClick={verify}>이메일 확인</Btn>
         </div>
         {error.email && <p className="field-err" role="alert">{error.email}</p>}

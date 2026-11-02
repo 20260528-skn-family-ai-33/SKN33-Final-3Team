@@ -18,8 +18,8 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll }) {
   const search = useQuery('/reference/hs-codes', { q: settled, depth: 4, limit: 5 }, settled.length >= 2 && !confirmed)
   const results = (settled === q ? search.data?.items || [] : []).map(h => ({ code: h.hs_code, name: h.name_ko }))
   return (
-    <div style={{ display: 'flex', gap: 12, marginTop: 20, position: 'relative' }}>
-      <div className={'input' + (q ? ' val' : '') + (open ? ' focus' : '')} style={{ flex: 1, gap: 8 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 20, position: 'relative' }}>
+      <div className={'input' + (q ? ' val' : '') + (open ? ' focus' : '')} style={{ flex: '1 1 240px', minWidth: 0, gap: 8 }}>
         <Icon name="search" size={18} color="#5C6370" />
         <input
           value={query} placeholder="품목명 또는 HS 코드 입력 (예: 8542, 메모리)" aria-label="품목 검색"

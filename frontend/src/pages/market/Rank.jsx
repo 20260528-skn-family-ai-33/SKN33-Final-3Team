@@ -94,7 +94,9 @@ function RankResults({ route }) {
                 <button type="button" className={'reset' + (basis === 'imp' ? ' on' : '')} aria-pressed={basis === 'imp'} onClick={() => setBasis('imp')}>수입 기준</button>
               </div>
             </div>
-            <div className="th" style={{ gridTemplateColumns: cols, marginTop: 18 }}>
+            {/* 좁은 화면에서는 표만 가로로 스크롤한다. */}
+            <div style={{ overflowX: 'auto', marginTop: 18 }}><div style={{ minWidth: 520 }}>
+            <div className="th" style={{ gridTemplateColumns: cols }}>
               <span>{byMonth ? '구분' : '순위'}</span>{showHs && <span>HS6</span>}<span>{firstCol}</span><span>{label[basis]}</span><span className="r">{label[other]}</span>
             </div>
             {rows.map(r => (
@@ -111,6 +113,7 @@ function RankResults({ route }) {
                 <span className="r s">{r[other] == null ? '—' : r[other].toFixed(1)}</span>
               </div>
             ))}
+            </div></div>
             {empty && <p className="muted" role="status" style={{ padding: '22px 4px', textAlign: 'center' }}>조회 조건에 맞는 수출입 실적이 없습니다. 국가·품목·기간을 바꿔 다시 조회해 주세요.</p>}
             <div className="between" style={{ marginTop: 18 }}>
               <span className="note">표·막대: 억 USD · 엑셀: 원본 USD 단위</span>

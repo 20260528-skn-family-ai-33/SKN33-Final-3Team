@@ -70,8 +70,8 @@ export default function Profile({ route }) {
         <h2 className="t2" style={{ fontSize: 22 }}>비밀번호 수정</h2>
         <p className="muted" style={{ marginTop: 6 }}>등록 이메일과 일치하면 비밀번호 변경 창을 엽니다. 불일치 시 오류를 표시합니다.</p>
         <label className="lbl" htmlFor="pf-email" style={{ marginTop: 18 }}>이메일</label>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <TextField id="pf-email" type="email" style={{ flex: 1 }} placeholder="등록된 이메일을 입력하세요" icon="mail" value={email} onChange={v => { setEmail(v); setEmailError('') }} onEnter={verify} invalid={!!emailError} />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+          <TextField id="pf-email" type="email" style={{ flex: '1 1 200px' }} placeholder="등록된 이메일을 입력하세요" icon="mail" value={email} onChange={v => { setEmail(v); setEmailError('') }} onEnter={verify} invalid={!!emailError} />
           <Btn kind="ink" size="md" style={{ height: 50, borderRadius: 12 }} onClick={verify}>이메일 확인</Btn>
         </div>
         {emailError && <p className="field-err" role="alert">{emailError}</p>}

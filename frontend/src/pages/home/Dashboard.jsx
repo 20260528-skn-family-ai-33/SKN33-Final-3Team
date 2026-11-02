@@ -51,7 +51,7 @@ function Ticker({ interest }) {
   }, [paused, items.length])
   const round = { width: 30, height: 30, borderRadius: 15, background: 'rgba(255,255,255,.12)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, cursor: 'pointer' }
   return (
-    <div style={{ marginTop: 44, background: 'rgba(10,14,20,.74)', border: '1px solid rgba(255,255,255,.14)', borderRadius: 14, padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 16, color: '#fff' }} aria-live="polite">
+    <div style={{ marginTop: 44, background: 'rgba(10,14,20,.74)', border: '1px solid rgba(255,255,255,.14)', borderRadius: 14, padding: '14px 20px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, color: '#fff' }} aria-live="polite">
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 15 }}>
         <strong>{interest ? '내 관심 기사' : '기사'}</strong>
         {TICKER_TABS.map(([key, label]) => (
@@ -60,7 +60,7 @@ function Ticker({ interest }) {
       </div>
       <span style={{ width: 1, height: 16, background: 'rgba(255,255,255,.25)' }} />
       <span style={{ fontSize: 13, color: '#B8BEC8' }}>{current?.source || '기사 출처'}</span>
-      <Link to={`/articles?tab=${current?.kind === 'general' ? 'all' : current?.kind}&id=${current?.id}`} style={{ flex: 1, color: '#fff', fontSize: 16, fontWeight: 700 }}>{current?.title || (result.error ? result.error.message : result.loading ? '기사를 불러오는 중…' : '조회된 기사가 없습니다.')}</Link>
+      <Link to={`/articles?tab=${current?.kind === 'general' ? 'all' : current?.kind}&id=${current?.id}`} style={{ flex: '1 1 220px', minWidth: 0, color: '#fff', fontSize: 16, fontWeight: 700 }}>{current?.title || (result.error ? result.error.message : result.loading ? '기사를 불러오는 중…' : '조회된 기사가 없습니다.')}</Link>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#B8BEC8' }}>
         <span style={{ marginRight: 6 }}>{items.length ? (index % items.length) + 1 : 0} / {items.length}</span>
         <button type="button" style={round} aria-label="이전 기사" onClick={() => setIndex(i => (i - 1 + items.length) % items.length)}><Icon name="chevronUp" size={13} color="#fff" stroke={2.2} /></button>
@@ -147,7 +147,7 @@ export default function Dashboard({ route }) {
               <button type="button" className={'reset seg-btn' + (!interest ? ' on' : '')} aria-pressed={!interest} onClick={() => switchView('all')}>전체</button>
               <button type="button" className={'reset seg-btn' + (interest ? ' on' : '')} aria-pressed={interest} onClick={() => switchView('interest')}>내 관심</button>
             </div>
-            <div style={{ marginTop: 24, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)' }}>
+            <div style={{ marginTop: 24, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
               {data.kpis.map(k => (
                 <div key={k.label} style={{ padding: '22px 24px', borderRight: '1px solid #E3E6EA' }}>
                   <p style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 700 }}><Icon name="flag" />{k.label}</p>
@@ -248,7 +248,7 @@ export default function Dashboard({ route }) {
               </div>
               <Link to={data.detailLink("COUNTRY")} className="more">상세보기 →</Link>
             </div>
-            <div style={{ display: 'flex', gap: 26, marginTop: 14 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 26, marginTop: 14 }}>
               <div style={{ flex: '1 1 260px' }}>
                 <div className="th" style={{ gridTemplateColumns: '22px 1fr 64px 60px' }}>
                   <span>순위</span><span>교역국</span><span className="r">수출액</span><span className="r">수입액</span>
