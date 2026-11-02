@@ -30,6 +30,8 @@ def country_matches(name, rows, threshold):
 
 def ask(state, task, key, kind, message, options, **extra):
     count = state.ask_counts.get(key, 0)
+    if kind == 'COUNTRY' and any(':country:' in k and n for k,n in state.ask_counts.items()):
+        raise SlotRepair('국가를 확정하지 못했습니다. 전체 국가명 또는 국가 코드를 포함해 질문해 주세요.')
     if count >= MAX_ASKS_PER_CONDITION:
         raise SlotRepair('조건을 확인해 다시 질문해 주세요.')
     state.pending = Pending(clarification_id=uuid4().hex, condition_key=key, task_id=task.task_id,
@@ -136,6 +138,12 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         for item in slots.countries:
             key = f'{task.task_id}:country:{item.mention}'
             answer = task.resolved.get(key, {})
+            if not answer:
+                for previous in state.plan.tasks:
+                    confirmed=previous.resolved.get(f'{previous.task_id}:country:{item.mention}', {})
+                    if confirmed.get('country_codes'):
+                        answer=confirmed
+                        break
             if 'country_codes' in answer:
                 out.country_codes.extend(answer['country_codes'])
                 continue
@@ -146,8 +154,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             if code:
                 out.country_codes.append(code)
                 continue
-            if not candidates: raise SlotRepair('국가를 확인하지 못했습니다. 전체 국가명으로 다시 입력해 주세요.')
-            return ask(state, task, key, 'COUNTRY', f'“{item.mention}”에 해당하는 국가가 맞나요?',
+            return ask(state, task, key, 'COUNTRY', f'“{item.mention}”에 해당하는 국가를 선택하거나 직접 입력해 주세요.',
                 [(r['country_code'], r['name_ko'], {'country_codes':[r['country_code']]}) for r in candidates])
     article = store.t('article')
     latest_article = store.c.scalar(select(func.max(article.c.published_date)).where(article.c.visibility_status=='VISIBLE'))

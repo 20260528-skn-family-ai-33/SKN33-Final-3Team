@@ -111,7 +111,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `CLARIFICATION_CONFLICT` | 409 | 기존. `clarification_id` 불일치 |
 | `VALIDATION_ERROR` | 400 | `choice_ids`·`hs_item`·`text`·`interest_selection`·`report_confirmation` 중 0개 또는 2개 이상. `interest_selection`이 품목 5개·국가 20개를 넘거나, 둘 다 비었거나, 후보에 없는 값을 담음 |
 
-같은 조건에 대한 되묻기는 2회까지입니다. 넘으면 해당 하위 질문만 NO_DATA로 끝내고 나머지는 계속합니다. 다른 하위 질문에 사용 가능한 결과가 있으면 전체는 PARTIAL, 없으면 NO_DATA입니다. 실행은 답변 저장 후 SUCCEEDED로 끝납니다(설계 D-72).
+국가 되묻기는 한 작업당 최대 1회입니다. 선택지에 없는 국가도 등록명이나 국가 코드로 답할 수 있습니다. 등록되지 않은 답은 400으로 안내하고 같은 clarification_id를 유지합니다. 다른 조건은 조건당 2회까지이며, 상한에 도달하면 해당 하위 질문만 NO_DATA로 끝냅니다(설계 D-72).
 
 ## API-131 (신규) `POST /chat/jobs/{job_id}/cancel`
 

@@ -38,6 +38,30 @@ class ConditionTest(unittest.TestCase):
         self.assertEqual(self.task.conditions.country_codes,['CN'])
         self.assertEqual(self.step.status,'DONE')
 
+    def test_empty_country_list_allows_manual_code_without_second_question(self):
+        self.state.input.question='가상나라 수출액'
+        self.task.slots=TaskSlots(countries=[{'mention':'가상나라','name':'가상나라'}],recent_months=3)
+        check_conditions(self.store,self.state,self.step)
+        prompt=self.state.pending
+        self.assertEqual(prompt.choices,[])
+        with self.assertRaises(ApiError):
+            answer_patch(self.store,self.state,{'clarification_id':prompt.clarification_id,'text':'없는나라'})
+        self.assertEqual(self.state.pending.clarification_id,prompt.clarification_id)
+        apply_answer(self.state,answer_patch(self.store,self.state,{'clarification_id':prompt.clarification_id,'text':'cn'}))
+        check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.task.conditions.country_codes,['CN'])
+        self.assertEqual(self.state.ask_counts[prompt.condition_key],1)
+
+    def test_two_ambiguous_mentions_do_not_start_a_second_country_prompt(self):
+        self.state.input.question='가상나라 미상나라 수출액'
+        self.task.slots=TaskSlots(countries=[{'mention':n,'name':n} for n in ('가상나라','미상나라')])
+        check_conditions(self.store,self.state,self.step)
+        apply_answer(self.state,{'country_codes':['US']})
+        check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'FAILED')
+        self.assertIsNone(self.state.pending)
+        self.assertEqual(sum(self.state.ask_counts.values()),1)
+
     def test_similar_country_requires_confirmation_even_with_single_match(self):
         rows = [{'country_code':c, 'name_ko':n, 'country_role':'COUNTRY'}
                 for c,n in [('SD','수단'),('SS','남수단'),('VN','베트남')]]

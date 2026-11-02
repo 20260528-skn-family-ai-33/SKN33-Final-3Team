@@ -72,12 +72,12 @@ def answer_patch(store, state, answer, interpret=None):
         if key in (country_key(choice.choice_id),country_key(choice.label)): return choice.patch
     if pending.kind=='COUNTRY':
         from sqlalchemy import select
-        from backend.app.agents.conditions import country_matches
         country=store.t('country')
-        rows=store.rows(select(country.c.country_code,country.c.name_ko,country.c.country_role)
+        rows=store.rows(select(country.c.country_code,country.c.name_ko)
                         .where(country.c.country_role=='COUNTRY'))
-        code,_=country_matches(text,rows,1)
-        if code: return {'country_codes':[code]}
+        exact={r['country_code'] for r in rows if key in (country_key(r['name_ko']),country_key(r['country_code']))}
+        require(len(exact)==1,'국가를 찾을 수 없습니다. 전체 국가명(예: 중국) 또는 국가 코드(예: CN)를 입력해 주세요.')
+        return {'country_codes':list(exact)}
     if pending.kind=='HS_ITEM' and key.isdigit() and len(key) in (4,6):
         try: numeric_product(store,key,key,{key})
         except SlotRepair: return {}
