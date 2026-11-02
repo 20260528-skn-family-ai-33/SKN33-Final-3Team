@@ -21,7 +21,12 @@ function OptionCard({ checked, onChange, title, desc, style }) {
 }
 
 export default function Subscription() {
-  const { subscription, setSubscription, notify, options, profile } = useApp()
+  const { subscription } = useApp()
+  return <SubscriptionForm key={subscription.version} subscription={subscription} />
+}
+
+function SubscriptionForm({ subscription }) {
+  const { setSubscription, notify, options, profile } = useApp()
   const [cycles, setCycles] = useState(subscription.cycles)
   const [formats, setFormats] = useState(subscription.formats.length ? subscription.formats : ['PDF'])
   const hasInterests = !!(profile.products.length || profile.countries.length)

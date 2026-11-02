@@ -6,6 +6,7 @@ import { Btn, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { PASSWORD_HINT, isStrongPassword } from '../../utils/validate'
 import PasswordRules from '../../components/PasswordRules'
+import { usePendingAction } from '../../api/hooks'
 
 export default function Password() {
   const { session, changePassword, notify } = useApp()
@@ -14,6 +15,7 @@ export default function Password() {
   const [form, setForm] = useState({ current: '', next: '', confirm: '' })
   const [error, setError] = useState({})
   const currentInput = useRef(null)
+  const [saving, runOnce] = usePendingAction()
   useEffect(() => {
     const value = currentInput.current?.value
     if (value !== undefined) setForm(previous => previous.current === value ? previous : { ...previous, current: value })
@@ -34,10 +36,20 @@ export default function Password() {
     else if (form.next === current) next.next = '현재 비밀번호와 다른 비밀번호를 입력해 주세요.'
     if (form.next !== form.confirm) next.confirm = '새 비밀번호와 일치하지 않습니다.'
     if (Object.keys(next).length) return setError(next)
-    if (!await changePassword(current, form.next)) return setError({ current: '현재 비밀번호가 올바르지 않습니다. 다시 입력해 주세요.' })
-    sessionStorage.removeItem('bs2.pwVerified')
-    notify('비밀번호를 변경했습니다. 다시 로그인해 주세요.')
-    navigate('/login')
+    await runOnce(async () => {
+      setError({})
+      try {
+        await changePassword(current, form.next)
+      } catch (err) {
+        setError(err.code === 'CURRENT_PASSWORD_INVALID'
+          ? { current: '현재 비밀번호가 올바르지 않습니다. 다시 입력해 주세요.' }
+          : { form: err.message })
+        return
+      }
+      sessionStorage.removeItem('bs2.pwVerified')
+      notify('비밀번호를 변경했습니다. 다시 로그인해 주세요.')
+      navigate('/login')
+    })
   }
 
   if (!verified) {
@@ -87,8 +99,9 @@ export default function Password() {
       {!ready && <p className="note" style={{ marginTop: 14, textAlign: 'right' }}>현재 비밀번호를 입력하고, 새 비밀번호가 조건을 모두 만족하며 확인값과 일치해야 저장할 수 있습니다.</p>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
         <Btn size="md" to="/account/profile">취소</Btn>
-        <Btn kind="red" size="md" type="submit" disabled={!ready}>변경 저장</Btn>
+        <Btn kind="red" size="md" type="submit" disabled={!ready || saving}>{saving ? '저장 중…' : '변경 저장'}</Btn>
       </div>
+      {error.form && <p className="field-err" role="alert">{error.form}</p>}
     </form>
   )
 }

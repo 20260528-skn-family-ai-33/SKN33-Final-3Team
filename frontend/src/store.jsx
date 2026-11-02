@@ -149,30 +149,41 @@ export function AppProvider({ children }) {
     if (current !== epoch.current) return false
     updateSettings(next); return true
   }), [run])
+  const refreshSubscription = useCallback(async current => {
+    const fresh = await api('/users/me/subscriptions')
+    if (current !== epoch.current) return false
+    const active = fresh.items.filter(item => item.enabled)
+    updateSubscription({ ...fresh, cycles: active.map(item => item.period_code.toLowerCase()), formats: active[0]?.formats || ['PDF'] })
+    return true
+  }, [])
   const setSubscription = useCallback(async next => run(async () => {
     const current = epoch.current
     const s = typeof next === 'function' ? next(subscription) : next
-    if (s.cycles.length) await api('/users/me/subscriptions', { method: 'PUT', body: { period_codes: s.cycles.map(c => c.toUpperCase()), formats: s.formats, use_saved_interests: true, expected_version: subscription.version } })
-    else for (const item of subscription.items.filter(s => s.enabled)) {
+    if (s.cycles.length) {
+      try {
+        await api('/users/me/subscriptions', { method: 'PUT', body: { period_codes: s.cycles.map(c => c.toUpperCase()), formats: s.formats, use_saved_interests: true, expected_version: subscription.version } })
+      } catch (error) {
+        if (error.code !== 'VERSION_CONFLICT') throw error
+        if (current === epoch.current && await refreshSubscription(current)) {
+          notify('다른 화면에서 저장한 최신 구독 설정을 불러왔습니다. 확인한 뒤 다시 수정해 주세요.')
+        }
+        return false
+      }
+    } else for (const item of subscription.items.filter(s => s.enabled)) {
       if (current !== epoch.current) return false
       await api(`/users/me/subscriptions/${item.subscription_id}`, { method: 'DELETE' })
     }
     if (current !== epoch.current) return false
-    const fresh = await api('/users/me/subscriptions')
-    if (current !== epoch.current) return false
-    updateSubscription({ ...fresh, cycles: fresh.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: fresh.items.find(s => s.enabled)?.formats || s.formats }); return true
-  }), [subscription, run])
+    return refreshSubscription(current)
+  }), [subscription, run, refreshSubscription, notify])
   const deleteSubscription = useCallback(async cycle => run(async () => {
     const current = epoch.current
     const target = subscription.items.find(s => s.enabled && s.period_code === cycle.toUpperCase())
     if (!target) throw new Error('삭제할 구독을 찾을 수 없습니다. 새로고침해 주세요.')
     await api(`/users/me/subscriptions/${target.subscription_id}`, { method: 'DELETE' })
     if (current !== epoch.current) return false
-    const fresh = await api('/users/me/subscriptions')
-    if (current !== epoch.current) return false
-    updateSubscription({ ...fresh, cycles: fresh.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: fresh.items.find(s => s.enabled)?.formats || subscription.formats })
-    return true
-  }), [subscription, run])
+    return refreshSubscription(current)
+  }), [subscription, run, refreshSubscription])
   const setNotifications = useCallback(async next => run(async () => {
     const current = epoch.current
     const values = typeof next === 'function' ? next(notifications) : next
@@ -186,9 +197,10 @@ export function AppProvider({ children }) {
     await refreshNotifications(true); return true
   }), [notifications, refreshNotifications, run])
   const logout = useCallback(() => run(async () => { await api('/auth/logout', { method: 'POST', body: {} }); clear(); navigate('/login'); return true }), [run, clear])
-  const changePassword = useCallback((current, next) => run(async () => {
-    await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } }); clear(); navigate('/login'); return true
-  }), [session, run, clear])
+  const changePassword = useCallback(async (current, next) => {
+    await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } })
+    clear()
+  }, [session, clear])
   const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`, `리포트-${id}.${format.toLowerCase()}`)), [run])
   const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
   const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])

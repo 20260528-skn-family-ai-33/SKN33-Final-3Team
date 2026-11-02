@@ -52,7 +52,6 @@ export function useQuery(path, query = {}, enabled = true, interval = 0, method 
 export function ErrorNotice({ error, retry }) {
   if (!error) return null
   return <div role="alert" className="field-err"><p>{error.message}</p>
-    {error.status === 409 && <p>최신 정보를 다시 불러온 뒤 변경 내용을 확인하고 저장해 주세요.</p>}
     {error.status === 429 && <p>{error.retryAfter || 60}초 후 다시 시도해 주세요.</p>}
     {retry && error.status !== 429 && <Btn onClick={retry}>다시 불러오기</Btn>}</div>
 }

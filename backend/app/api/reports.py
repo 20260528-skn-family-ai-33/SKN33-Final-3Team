@@ -309,7 +309,7 @@ def save_subscriptions(store,uid,data):
     o=store.t('service_option')
     allowed=set(store.c.execute(select(o.c.option_code).where(o.c.option_type=='REPORT_PERIOD',o.c.enabled==True)).scalars())
     require(selected<=allowed,'비활성 또는 미등록 구독 주기입니다.','FEATURE_NOT_AVAILABLE',422)
-    scope=interests(store,uid)
+    scope=interests(store,uid,lock=True)
     hs=scope.get('hs_items',[]); countries=scope.get('country_codes',[]); validate_scope(store,hs,countries,6)
     require(hs or countries,'구독하려면 관심 등록이 필요합니다.','INTERESTS_REQUIRED',409)
     try: last_month=trade.bounds(store)[-1].strftime('%Y-%m')

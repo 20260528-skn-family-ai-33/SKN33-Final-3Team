@@ -5,9 +5,12 @@ export const setCsrf = value => { csrf = value }
 export class ApiError extends Error {
   constructor(response, payload) {
     const upstreamUnavailable = [502, 503, 504].includes(response.status)
-    super(payload?.message || (upstreamUnavailable
+    const message = payload?.message || (upstreamUnavailable
       ? '서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.'
-      : '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'))
+      : '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.')
+    super(payload?.code === 'VERSION_CONFLICT'
+      ? message + ' 새로고침한 뒤 최신 내용을 확인하고 다시 저장해 주세요.'
+      : message)
     this.status = response.status; this.code = payload?.code
     this.details = payload?.details; this.requestId = payload?.request_id
     this.retryAfter = Number(response.headers.get('Retry-After') || 0)

@@ -1,7 +1,4 @@
 // Shared request rules; kept independent of rendering so URL/expiry contracts can be tested.
-export function previewUsable(preview, signature, now = Date.now()) {
-  return preview?.signature === signature && Date.parse(preview.expires_at) > now
-}
 export function previewExpired(error) {
   return error?.code === 'PREVIEW_EXPIRED' || (error?.status === 410 && error?.code === 'RESULT_EXPIRED')
 }
