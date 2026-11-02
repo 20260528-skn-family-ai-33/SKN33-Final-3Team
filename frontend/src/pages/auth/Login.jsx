@@ -4,6 +4,7 @@ import { Link, navigate } from '../../router'
 import { useApp } from '../../store'
 import { Btn, TextField } from '../../components/ui'
 import { isEmail } from '../../utils/validate'
+import { usePendingAction } from '../../api/hooks'
 
 import { AuthFrame, CardHead } from './AuthFrame'
 
@@ -18,18 +19,25 @@ export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState({})
+  const [pending, runOnce] = usePendingAction()
 
   const submit = async e => {
     e.preventDefault()
     const next = {}
-    if (!isEmail(email)) next.email = '이메일 형식을 확인해 주세요.'
+    if (!isEmail(email)) next.email = '이메일을 name@example.com 형식으로 입력해 주세요.'
     if (!password) next.password = '비밀번호를 입력해 주세요.'
-    if (Object.keys(next).length) return setError(next)
-    const result = await login(email, password)
-    if (!result.ok) return setError({ form: result.message || '이메일 또는 비밀번호가 일치하지 않습니다. 로그인 정보를 확인해 주세요.' })
-    // 재로그인: 관심사 등록을 건너뛰고 저장된 메인 설정으로 이동한다.
-    if (result.account.role === 'admin') navigate('/admin')
-    else navigate(result.path || '/')
+    if (Object.keys(next).length) {
+      setError(next)
+      document.getElementById('login-' + Object.keys(next)[0])?.focus()
+      return
+    }
+    setError({})
+    await runOnce(async () => {
+      const result = await login(email, password)
+      if (!result.ok) return setError({ form: result.code === 'RATE_LIMITED' ? `로그인 시도가 많습니다. ${result.retryAfter || 60}초 후 다시 시도해 주세요.` : result.message || '이메일 또는 비밀번호가 일치하지 않습니다. 로그인 정보를 확인해 주세요.' })
+      if (result.account.role === 'admin') navigate('/admin')
+      else navigate(result.path || '/')
+    })
   }
 
   return (
@@ -46,7 +54,7 @@ export default function Login() {
         {error.password && <p className="field-err">{error.password}</p>}
         {error.form && <p className="field-err" role="alert" style={{ marginTop: 12 }}>{error.form}</p>}
         <div className="sp24" />
-        <Btn type="submit" kind="red" size="lg" block>로그인</Btn>
+        <Btn type="submit" kind="red" size="lg" block disabled={pending}>{pending ? '로그인 중…' : '로그인'}</Btn>
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 16, fontSize: 14 }}>
           <Link to="/find-id" style={{ color: 'var(--sub)', fontWeight: 700 }}>아이디 찾기</Link>
           <span style={{ width: 1, height: 12, background: '#CDD1D8' }} />

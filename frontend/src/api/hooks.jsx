@@ -1,7 +1,24 @@
 /* eslint-disable react-refresh/only-export-components */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { Btn } from '../components/ui'
+
+export function usePendingAction() {
+  const busy = useRef(false)
+  const [pending, setPending] = useState(false)
+  const runOnce = async action => {
+    if (busy.current) return
+    busy.current = true
+    setPending(true)
+    try {
+      return await action()
+    } finally {
+      busy.current = false
+      setPending(false)
+    }
+  }
+  return [pending, runOnce]
+}
 
 export function useDebouncedValue(value, delay = 300) {
   const [settled, setSettled] = useState(value)

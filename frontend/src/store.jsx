@@ -124,7 +124,7 @@ export function AppProvider({ children }) {
       setCsrf(data.csrf_token); setSession(accountView(data.user)); setLoading(true); setLoadError(null)
       try { await loadUser(data.user, current) } catch (error) { setLoadError(error) } finally { setLoading(false) }
       return { ok: true, account: accountView(data.user), path: data.user.post_login_path }
-    } catch (error) { return { ok: false, message: error.message } }
+    } catch (error) { return { ok: false, message: error.message, code: error.code, retryAfter: error.retryAfter, details: error.details } }
   }, [loadUser])
   const setProfile = useCallback(async next => run(async () => {
     const current = epoch.current

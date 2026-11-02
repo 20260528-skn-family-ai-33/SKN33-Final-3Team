@@ -38,3 +38,12 @@ test('download keeps binary payload and aborted requests stay aborted', async ()
     await assert.rejects(api('/articles'), { name: 'AbortError' })
   } finally { globalThis.fetch = old }
 })
+
+test('an unavailable upstream with a non-JSON gateway response has a readable retry message', async () => {
+  const old = globalThis.fetch
+  try {
+    globalThis.fetch = async () => new Response('Bad Gateway', { status: 502 })
+    await assert.rejects(api('/auth/login'), e => e instanceof ApiError && e.status === 502 &&
+      e.message === '서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.')
+  } finally { globalThis.fetch = old }
+})

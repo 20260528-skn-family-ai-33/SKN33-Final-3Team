@@ -4,9 +4,12 @@ let csrf = null
 export const setCsrf = value => { csrf = value }
 export class ApiError extends Error {
   constructor(response, payload) {
-    super(payload.message || `요청을 처리하지 못했습니다 (${response.status}).`)
-    this.status = response.status; this.code = payload.code
-    this.details = payload.details; this.requestId = payload.request_id
+    const upstreamUnavailable = [502, 503, 504].includes(response.status)
+    super(payload?.message || (upstreamUnavailable
+      ? '서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.'
+      : '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'))
+    this.status = response.status; this.code = payload?.code
+    this.details = payload?.details; this.requestId = payload?.request_id
     this.retryAfter = Number(response.headers.get('Retry-After') || 0)
   }
 }
@@ -32,7 +35,7 @@ export async function api(path, { method = 'GET', body, query, signal, idempoten
     })
   } catch (error) {
     if (error.name === 'AbortError') throw error
-    throw new Error('서버에 연결하지 못했습니다. 네트워크와 서버 실행 상태를 확인하세요.')
+    throw new Error('연결하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.')
   }
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}))

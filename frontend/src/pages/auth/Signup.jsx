@@ -5,35 +5,61 @@ import { useApp } from '../../store'
 import { Btn, Check, TextField } from '../../components/ui'
 import { PASSWORD_HINT, isEmail, isStrongPassword } from '../../utils/validate'
 import PasswordRules from '../../components/PasswordRules'
+import { usePendingAction } from '../../api/hooks'
 import { AuthFrame, CardHead, PlainAuthPage } from './AuthFrame'
 
 export function Signup() {
-  const { accounts, signup } = useApp()
+  const { accounts, signup, notify } = useApp()
   const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '' })
   const [error, setError] = useState({})
-  const set = key => value => setForm(f => ({ ...f, [key]: value }))
+  const [pending, runOnce] = usePendingAction()
+  const set = key => value => {
+    setForm(f => ({ ...f, [key]: value }))
+    setError(previous => ({ ...previous, [key]: undefined, form: undefined }))
+  }
   const passwordReady = isStrongPassword(form.password) && form.password === form.confirm
 
   const submit = async e => {
     e.preventDefault()
     const next = {}
     if (!form.name.trim()) next.name = '이름을 입력해 주세요.'
-    if (!isEmail(form.email)) next.email = '이메일 형식을 확인해 주세요.'
+    else if ([...form.name].length > 120) next.name = '이름은 120자 이하로 입력해 주세요.'
+    if (!isEmail(form.email)) next.email = '이메일을 name@example.com 형식으로 입력해 주세요.'
     else if (accounts.some(a => a.email.toLowerCase() === form.email.trim().toLowerCase())) next.email = '이미 가입된 이메일입니다.'
     if (!isStrongPassword(form.password)) next.password = PASSWORD_HINT
     if (form.password !== form.confirm) next.confirm = '비밀번호가 일치하지 않습니다.'
     setError(next)
-    if (Object.keys(next).length) return
-    const result = await signup(form)
-    if (!result.ok) return setError({ email: result.message })
-    navigate('/onboarding')
+    if (Object.keys(next).length) {
+      document.getElementById('su-' + Object.keys(next)[0])?.focus()
+      return
+    }
+    await runOnce(async () => {
+      const result = await signup(form)
+      if (result.ok) {
+        notify('회원가입이 완료되었습니다. 관심사를 설정하거나 건너뛸 수 있습니다.')
+        try {
+          sessionStorage.setItem('bs.onboarding.' + result.account.id, JSON.stringify({ items: [], countries: [], welcome: true }))
+        } catch { /* The signup notice also works without draft storage. */ }
+        return navigate('/onboarding')
+      }
+      const fieldError = (key, message) => {
+        setError({ [key]: message })
+        document.getElementById('su-' + key)?.focus()
+      }
+      if (result.code === 'PASSWORD_POLICY_VIOLATION') return fieldError('password', PASSWORD_HINT)
+      if (['EMAIL_ALREADY_EXISTS', 'RESERVED_ACCOUNT'].includes(result.code)) return fieldError('email', result.message)
+      if (Array.isArray(result.details) && result.details.some(detail => detail.field === 'email')) {
+        return fieldError('email', '이메일을 name@example.com 형식으로 입력해 주세요.')
+      }
+      setError({ form: result.message })
+    })
   }
 
-  const field = (key, label, props) => (
+  const field = (key, label, props, message = error[key]) => (
     <>
       <label className="lbl" htmlFor={'su-' + key}>{label}</label>
-      <TextField id={'su-' + key} value={form[key]} onChange={set(key)} invalid={!!error[key]} {...props} />
-      {error[key] && <p className="field-err">{error[key]}</p>}
+      <TextField id={'su-' + key} value={form[key]} onChange={set(key)} invalid={!!message} aria-describedby={message ? 'su-error-' + key : undefined} {...props} />
+      {message && <p className="field-err" id={'su-error-' + key}>{message}</p>}
     </>
   )
 
@@ -46,14 +72,16 @@ export function Signup() {
         <div className="sp16" />
         {field('email', '이메일 (아이디)', { placeholder: 'name@example.com', type: 'email', autoComplete: 'email' })}
         <div className="sp16" />
-        {field('password', '비밀번호', { placeholder: '영문·숫자·특수문자 포함 8자 이상', type: 'password', autoComplete: 'new-password' })}
+        {field('password', '비밀번호', { placeholder: '영문·숫자·특수문자 포함 8~72자', type: 'password', autoComplete: 'new-password' },
+          form.password.length > 72 ? '비밀번호는 72자 이하로 입력해 주세요.' : error.password)}
         <PasswordRules value={form.password} showErrors={!!error.password} />
         <div className="sp16" />
         {field('confirm', '비밀번호 확인', { placeholder: '비밀번호를 다시 입력하세요', type: 'password', autoComplete: 'new-password' })}
         {form.confirm && form.password === form.confirm && !error.confirm && <p className="field-ok">✓ 비밀번호가 일치합니다</p>}
         <p className="note" style={{ marginTop: 10 }}>이름은 필수 입력입니다. 이메일 형식·중복 여부와 비밀번호 일치 여부를 확인합니다.</p>
         <div className="sp24" />
-        <Btn type="submit" kind="red" size="lg" block disabled={!passwordReady}>회원가입하고 관심사 설정하기</Btn>
+        {error.form && <p className="field-err" role="alert">{error.form}</p>}
+        <Btn type="submit" kind="red" size="lg" block disabled={!passwordReady || pending}>{pending ? '가입 중…' : '회원가입하고 관심사 설정하기'}</Btn>
         {!passwordReady && <p className="note" style={{ marginTop: 8, textAlign: 'center' }}>비밀번호 조건을 모두 만족하고 비밀번호 확인이 일치해야 가입할 수 있습니다.</p>}
         <div className="sp12" />
         <Btn to="/login" size="lg" block>로그인 화면으로 돌아가기</Btn>
