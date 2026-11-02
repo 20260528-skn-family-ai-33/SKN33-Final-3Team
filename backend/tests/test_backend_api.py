@@ -279,6 +279,22 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(len(response.json()['items']),1)
         self.assertTrue(any('2025-02-01' in w for w in response.json()['warnings']))
 
+    def test_hs_search_finds_six_digit_items_without_joining_word_fragments(self):
+        url='/api/v1/reference/hs-codes'
+        table=self.meta.tables['hs_code']
+        with self.engine.begin() as c:
+            c.execute(table.insert(),[
+                {'hs_code':'220890','depth':6,'name_ko':'기타 증류주','hs_ver':'HS2022','source_edition':'test'},
+                {'hs_code':'2208904000','depth':10,'name_ko':'소주','hs_ver':'HS2022','source_edition':'test'},
+                {'hs_code':'2009','depth':4,'name_ko':'채소 주스','hs_ver':'HS2022','source_edition':'test'},
+                {'hs_code':'854232','depth':6,'name_ko':'메모리 집적회로','hs_ver':'HS2022','source_edition':'test'}])
+        for query in ('854232','메모리'):
+            result=self.client.get(url,params={'q':query,'depth':6})
+            self.assertEqual([r['hs_code'] for r in result.json()['items']],['854232'])
+        self.assertEqual(self.client.get(url,params={'q':'소주'}).json()['items'],[])
+        spirits=self.client.get(url,params={'q':'소주','depth':6}).json()['items']
+        self.assertEqual([r['hs_code'] for r in spirits],['220890'])
+
     def test_subscription_validation_and_publication_trigger(self):
         uid=self.signup(); url='/api/v1/users/me/subscriptions'
         version=self.client.get(url).json()['version']
