@@ -1,5 +1,6 @@
 import secrets
-from datetime import timedelta
+from datetime import timedelta, timezone
+import re
 from sqlalchemy import select
 from backend.app.api.common import now, clean, ApiError, page_info, require
 
@@ -27,7 +28,32 @@ def read_snapshot(store, uid, identity, kind=None):
         if kind=='PREVIEW':
             raise ApiError(409,'PREVIEW_EXPIRED','리포트 조건 확인이 만료되었습니다. 조건을 다시 확인해 주세요.')
         raise ApiError(410,'RESULT_EXPIRED','저장 결과가 만료되었습니다.')
-    return row['payload_json']
+    payload=row['payload_json']
+    # Legacy report previews can reference a RESULT containing only conditions.
+    if row['kind']=='RESULT' and 'columns' in payload and 'rows' in payload:
+        payload={**payload,'columns':display_columns(payload['columns'],payload['rows']),
+                 'snapshot_created_at':row['created_at']}
+    return payload
+
+
+def display_columns(columns, rows):
+    if not any(r.get('hs_item') for r in rows):
+        return [c for c in columns if c['key']!='hs_item']
+    return columns
+
+
+def result_filename(payload):
+    conditions=payload.get('conditions') or {}
+    period=conditions.get('period') or payload.get('meta',{}).get('period') or {}
+    parts=[f"{period['start'][:7]}~{period['end'][:7]}"] if period.get('start') and period.get('end') else []
+    parts.extend(conditions.get('country_codes') or ['전체국가'])
+    parts.extend(h['hs_code'] for h in conditions.get('hs_items',[]))
+    flow={'EXPORT':'수출','IMPORT':'수입'}.get(conditions.get('trade_flow'))
+    if flow: parts.append(flow)
+    created=payload['snapshot_created_at']
+    local=created.replace(tzinfo=created.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9)))
+    prefix=re.sub(r'[^\w~.-]+','_','_'.join(parts))[:140]
+    return f"{prefix}_{local:%Y%m%d_%H%M%S}.xlsx"
 
 
 def analysis_conditions(conditions):
@@ -42,6 +68,7 @@ def result_table(store, uid, rows, meta, conditions=None, sql=None, columns=None
     keys=list(rows[0]) if rows else []
     columns=columns or [{'key':k,'label':LABELS.get(k,k),'type':'number' if isinstance(rows[0][k],(int,float)) or k.endswith(('_usd','_pct')) else 'string',
                         'unit':'USD' if k.endswith('_usd') else '%' if k.endswith('_pct') else None} for k in keys]
+    columns=display_columns(columns,rows)
     payload={'columns':columns,'rows':rows,'meta':clean(meta),'conditions':clean(analysis_conditions(conditions or {})),'sql':sql or [],'total_rows':len(rows)}
     identity=save_snapshot(store,uid,'RESULT',payload)
     return {'result_id':identity,'columns':columns,'rows':rows,'total_rows':len(rows),
