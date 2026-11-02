@@ -157,7 +157,7 @@ function Block({ b, query }) {
               {r.cells.map((c, j) => <span key={j}><Cell c={c} /></span>)}
             </div>
           ))}
-          {!rows.length && <p className="muted" style={{ padding: '18px 14px' }}>검색 결과가 없습니다. 아이디(이메일) 또는 이름을 다시 확인해 주세요.</p>}
+          {!rows.length && <p className="muted" style={{ padding: '18px 14px' }}>{query?.q ? '검색 결과가 없습니다. 아이디(이메일) 또는 이름을 다시 확인해 주세요.' : '표시할 항목이 없습니다.'}</p>}
         </section>
       )
     }

@@ -71,7 +71,7 @@ def save_interests(store, uid, data):
     u,t=store.t('users'),store.t('user_interest')
     store.c.execute(select(u.c.user_id).where(u.c.user_id==uid).with_for_update()).first()
     current=interests(store,uid)
-    require(data.expected_version==current['version'],'관심 정보가 변경되었습니다. 다시 조회하세요.','VERSION_CONFLICT',409)
+    require(data.expected_version==current['version'],'관심 정보가 변경되었습니다.','VERSION_CONFLICT',409)
     hs=[x.model_dump() for x in data.hs_items]
     validate_scope(store,hs,data.country_codes,6)
     hs=list({(x['hs_code'],x['hs_ver']):x for x in hs}.values())

@@ -44,7 +44,7 @@ export function AppProvider({ children }) {
   const notificationRevision = useRef(0)
   const notify = useCallback(message => setToast(message), [])
   const fail = useCallback(error => {
-    notify(error.message + (error.status === 409 ? ' 새로고침한 뒤 변경 내용을 확인하고 다시 저장해 주세요.' : error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
+    notify(error.message + (error.code === 'VERSION_CONFLICT' ? ' 새로고침한 뒤 변경 내용을 확인하고 다시 저장해 주세요.' : error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
     return false
   }, [notify])
   const run = useCallback(async action => { try { return await action() } catch (error) { return fail(error) } }, [fail])

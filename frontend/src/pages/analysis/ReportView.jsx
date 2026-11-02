@@ -58,7 +58,7 @@ export default function ReportView({ route }) {
       <div className="card" style={{ maxWidth: 640, margin: '0 auto', textAlign: 'center' }}>
         <ErrorNotice error={error || content.error || job?.error} retry={() => { setRetry(n => n + 1); content.reload() }} />
         {!error && !content.error && <p className="t2" role="status">{status[job?.status] || '저장된 리포트를 불러오는 중…'}</p>}
-        <p className="muted" style={{ marginTop: 8 }}>완료 전에는 열람·다운로드할 수 없습니다. 완료되면 리포트 센터에서 확인할 수 있습니다.</p>
+        {!error && !content.error && <p className="muted" style={{ marginTop: 8 }}>완료 전에는 열람·다운로드할 수 없습니다. 완료되면 리포트 센터에서 확인할 수 있습니다.</p>}
         <Btn to="/account/reports" kind="red" size="md" style={{ marginTop: 20 }}>리포트 센터로</Btn>
       </div>
     </div></main>

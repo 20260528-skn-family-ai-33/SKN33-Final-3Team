@@ -148,7 +148,7 @@ function AnswerCard({ message, onSaveReport, onInterest }) {
     </div>}
     <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
-    {a.warnings?.map(w => <p className="note" key={w}>{w}</p>)}
+    {a.warnings?.filter(w => w !== a.text).map(w => <p className="note" key={w}>{w}</p>)}
     {a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
     {a.articles.map(article => <div className="li" key={article.article_id}><div><b>{article.title}</b><p className="muted">{article.summary}</p><Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn></div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
