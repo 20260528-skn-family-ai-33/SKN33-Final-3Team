@@ -158,7 +158,7 @@ function AnswerCard({ message, onSaveReport, onInterest }) {
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
       {a.report_id && <Btn to={`/report?id=${a.report_id}`}>완성된 리포트 보기</Btn>}
       {a.conditions && <Btn kind="red" icon="file" onClick={() => onSaveReport(a.conditions)}>리포트로 저장</Btn>}
-      {a.tables[0]?.result_id && <Btn icon="star" onClick={() => onInterest(a.tables[0].result_id)}>관심 목록 추가</Btn>}
+      {a.tables[0]?.result_id && <Btn icon="star" onClick={() => onInterest(a)}>관심 목록 추가</Btn>}
     </div></AiBlock>
 }
 
@@ -173,6 +173,8 @@ export default function Analysis({ route }) {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState(null)
+  const [interest, setInterest] = useState(null)
+  const [savingInterest, setSavingInterest] = useState(false)
   const [readRevision, setReadRevision] = useState(0)
   const endRef = useRef(null), pending = useRef(null)
   const inputRef=useRef(null)
@@ -215,7 +217,23 @@ export default function Analysis({ route }) {
     setBusy(false)
   }
   const saveAsReport = conditions => setDraft({ options: optionsFor(conditions) })
-  const addInterest = result_id => run(async () => { await api('/users/me/interests/items', { method: 'POST', body: { result_id } }); notify('관심 목록에 추가했습니다. 관심정보 화면을 새로고침하면 확인할 수 있습니다.') })
+  const addInterest = answer => {
+    const rows=answer.tables.flatMap(t=>t.rows||[])
+    const countries=[...new Set([...(answer.conditions?.country_codes||[]),...rows.map(r=>r.country_code).filter(Boolean)])]
+    const products=[...new Map([...(answer.conditions?.hs_items||[]),...rows.filter(r=>r.hs_code&&r.hs_ver)].filter(h=>h.hs_code.length===6).map(h=>[h.hs_ver+h.hs_code,{hs_code:h.hs_code,hs_ver:h.hs_ver}])).values()]
+    setInterest({countries,products,country_codes:[],hs_items:[]})
+  }
+  const saveInterest = async () => {
+    setSavingInterest(true)
+    await run(async()=>{
+      const {interests:saved}=await api('/users/me/interests')
+      await api('/users/me/interests',{method:'PUT',body:{expected_version:saved.version,
+        country_codes:[...new Set([...saved.country_codes,...interest.country_codes])],
+        hs_items:[...new Map([...saved.hs_items,...interest.hs_items].map(h=>[h.hs_ver+h.hs_code,h])).values()]}})
+      setInterest(null);notify('선택한 국가·품목을 관심 목록에 추가했습니다.')
+    })
+    setSavingInterest(false)
+  }
   const removeChat = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') })
   const updateTitle = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'PATCH', body: { title: rename.trim() } }); await refreshChats(); setModal(null) })
   const clarify = async body => {
@@ -302,6 +320,14 @@ export default function Analysis({ route }) {
       </main>
 
       <Modal open={modal === 'stop'} onClose={()=>setModal(null)} width={420} label="질문 중단"><h2>이 질문을 중단할까요?</h2><p>이미 접수된 리포트는 계속 생성됩니다.</p><div className="chips"><Btn onClick={()=>setModal(null)}>계속 진행</Btn><Btn kind="red" onClick={async()=>{setModal(null);setBusy(true);const data=await run(()=>api(`/chat/jobs/${job.job_id}/cancel`,{method:'POST'}));if(data?.job)setJob(data.job);setReadRevision(v=>v+1);setBusy(false)}}>중단</Btn></div></Modal>
+      <Modal open={!!interest} onClose={()=>!savingInterest&&setInterest(null)} width={480} label="관심 목록 추가">
+        <h2>관심 목록에 추가할 항목</h2><p className="note">저장할 국가·품목을 선택하세요. 품목은 HS6 단위로 등록됩니다.</p>
+        <div className="col" style={{gap:12,maxHeight:320,overflowY:'auto',margin:'16px 0'}}>
+          {interest?.countries.map(c=><Check key={c} disabled={savingInterest} checked={interest.country_codes.includes(c)} onChange={on=>setInterest({...interest,country_codes:on?[...interest.country_codes,c]:interest.country_codes.filter(v=>v!==c)})}>{countryName(c)}</Check>)}
+          {interest?.products.map(h=><Check key={h.hs_ver+h.hs_code} disabled={savingInterest} checked={interest.hs_items.includes(h)} onChange={on=>setInterest({...interest,hs_items:on?[...interest.hs_items,h]:interest.hs_items.filter(v=>v!==h)})}>{productName(h.hs_code)} ({h.hs_code})</Check>)}
+          {interest&&!interest.countries.length&&!interest.products.length&&<p>추가할 국가·HS6 품목이 없습니다. 국가나 품목을 지정해 분석해 주세요.</p>}
+        </div><div className="chips"><Btn disabled={savingInterest} onClick={()=>setInterest(null)}>취소</Btn><Btn kind="red" disabled={savingInterest||!interest||(!interest.country_codes.length&&!interest.hs_items.length)} onClick={saveInterest}>선택 항목 저장</Btn></div>
+      </Modal>
       <Modal open={modal === 'rename'} onClose={() => setModal(null)} width={480} label="채팅방 이름 변경">
         <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>채팅방 관리</p>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>채팅방 이름 변경</h2>
