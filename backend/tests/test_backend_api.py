@@ -294,6 +294,14 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get(url,params={'q':'소주'}).json()['items'],[])
         spirits=self.client.get(url,params={'q':'소주','depth':6}).json()['items']
         self.assertEqual([r['hs_code'] for r in spirits],['220890'])
+        from backend.app.api.reference import chat_hs_search
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            result=chat_hs_search(store,'소주')
+            self.assertNotEqual(result['match_type'],'EXACT')
+            c.execute(table.insert().values(hs_code='8542',depth=4,name_ko='전자 집적 회로',hs_ver='HS2022',source_edition='test'))
+            self.assertIn('8542',[r['hs_code'] for r in chat_hs_search(store,'집적회로')['items']])
+        self.assertEqual(self.client.get(url,params={'q':'집적회로','depth':4}).json()['items'],[])
 
     def test_cancel_legacy_duplicates_and_resubscribe(self):
         uid=int(self.signup())
