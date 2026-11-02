@@ -295,6 +295,39 @@ class BackendApiTest(unittest.TestCase):
         spirits=self.client.get(url,params={'q':'소주','depth':6}).json()['items']
         self.assertEqual([r['hs_code'] for r in spirits],['220890'])
 
+    def test_cancel_legacy_duplicates_and_resubscribe(self):
+        uid=int(self.signup())
+        headers={'X-CSRF-Token':self.csrf}
+        url='/api/v1/users/me/subscriptions'
+        table=self.meta.tables['report_subscription']
+        with self.engine.begin() as c:
+            for _ in range(2):
+                c.execute(table.insert().values(user_id=uid,period_code='MONTHLY',enabled=True,filters_json={}))
+        before=self.client.get(url).json()
+        first=before['items'][0]['subscription_id']
+        self.assertEqual(self.client.delete(f'{url}/{first}',headers=headers).status_code,204)
+        cancelled=self.client.get(url).json()
+        self.assertFalse(any(row['enabled'] for row in cancelled['items']))
+        version=self.client.get('/api/v1/users/me/interests').json()['interests']['version']
+        self.client.put('/api/v1/users/me/interests',headers=headers,json={'hs_items':[],'country_codes':['US'],'expected_version':version})
+        body={'period_codes':['MONTHLY'],'formats':['DOCX'],'use_saved_interests':True,'expected_version':cancelled['version']}
+        saved=self.client.put(url,json=body,headers=headers)
+        self.assertEqual(saved.status_code,200,saved.text)
+        active=[row for row in saved.json()['items'] if row['enabled']]
+        self.assertEqual([(r['subscription_id'],r['formats']) for r in active],[(first,['DOCX'])])
+        self.assertEqual(self.client.put(url,json=body,headers=headers).status_code,409)
+
+    def test_retrying_consent_preserves_history_after_revocation(self):
+        self.signup()
+        url='users/me/consents'
+        body={'terms_type':'NOTIFICATION','terms_version':'TERMS_V1','action':'AGREE','enable_notifications':True}
+        for action in ('AGREE','AGREE','REVOKE','AGREE'):
+            response=self.post(url,{**body,'action':action,'enable_notifications':action=='AGREE'})
+            self.assertEqual(response.status_code,200,response.text)
+        table=self.meta.tables['user_consent']
+        with self.engine.connect() as c:
+            self.assertEqual(list(c.scalars(select(table.c.action).order_by(table.c.consent_id))),['AGREE','REVOKE','AGREE'])
+
     def test_subscription_validation_and_publication_trigger(self):
         uid=self.signup(); url='/api/v1/users/me/subscriptions'
         version=self.client.get(url).json()['version']

@@ -71,7 +71,7 @@ def save_interests(store, uid, data):
     u,t=store.t('users'),store.t('user_interest')
     store.c.execute(select(u.c.user_id).where(u.c.user_id==uid).with_for_update()).first()
     current=interests(store,uid)
-    require(data.expected_version==current['version'],'관심 정보가 변경되었습니다. 다시 조회하세요.','VERSION_CONFLICT',409)
+    require(data.expected_version==current['version'],'다른 화면에서 관심정보를 저장했습니다. 새로고침한 뒤 다시 수정해 주세요.','VERSION_CONFLICT',409)
     hs=[x.model_dump() for x in data.hs_items]
     validate_scope(store,hs,data.country_codes,6)
     hs=list({(x['hs_code'],x['hs_ver']):x for x in hs}.values())
@@ -87,7 +87,7 @@ def save_interests(store, uid, data):
 
 def change_password(store, user, data):
     require(str(data.email).lower()==user['email'].lower() and password_matches(data.current_password,user['password_hash']),
-            '현재 이메일 또는 비밀번호가 일치하지 않습니다.','CURRENT_PASSWORD_INVALID',403)
+            '현재 비밀번호가 일치하지 않습니다.','CURRENT_PASSWORD_INVALID',403)
     hashed=password_hash(data.new_password,data.new_password_confirm)
     u=store.t('users')
     store.c.execute(update(u).where(u.c.user_id==user['user_id']).values(password_hash=hashed))

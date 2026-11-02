@@ -44,7 +44,7 @@ export function AppProvider({ children }) {
   const notificationRevision = useRef(0)
   const notify = useCallback(message => setToast(message), [])
   const fail = useCallback(error => {
-    notify(error.message + (error.status === 409 ? ' 새로고침한 뒤 변경 내용을 확인하고 다시 저장해 주세요.' : error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
+    notify(error.message + (error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
     return false
   }, [notify])
   const run = useCallback(async action => { try { return await action() } catch (error) { return fail(error) } }, [fail])
@@ -133,6 +133,16 @@ export function AppProvider({ children }) {
     if (current !== epoch.current) return false
     updateProfile({ ...p, version: data.interests.version, home: data.interests.landing_page === 'INTERESTED' ? 'interest' : 'all' }); return true
   }), [profile, run])
+  const acceptNotificationTerms = useCallback(version => run(async () => {
+    const current = epoch.current
+    const { consent } = await api('/users/me/consents', { method: 'POST', body: {
+      terms_type: 'NOTIFICATION', terms_version: version, action: 'AGREE', enable_notifications: true,
+    } })
+    if (current !== epoch.current) return false
+    const saved = { all: consent.notifications_enabled, termsAgreed: true, termsVersion: consent.terms_version }
+    updateSettings(previous => ({ ...previous, ...saved }))
+    return saved
+  }), [run])
   const setSettings = useCallback(async next => run(async () => {
     const current = epoch.current
     await api('/users/me/notification-settings', { method: 'PATCH', body: { notifications_enabled: next.all, spike_popup: next.surge, major_issue_popup: next.major, report_popup: next.report } })
@@ -184,16 +194,14 @@ export function AppProvider({ children }) {
   const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])
   const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
   const withdraw = useCallback(() => notify('회원 탈퇴는 운영 정책 확정 후 제공됩니다.'), [notify])
-  const setConsents = useCallback(() => { notify('일반 약관 동의 관리는 서버 연동 준비 중입니다.'); return false }, [notify])
   const value = useMemo(() => ({
     session, account: session, accounts, setAccounts, loading, loadError, refresh, options, countries,
     login, signup, socialSignIn, logout, changePassword, withdraw,
-    consents: {}, setConsents,
-    profile, setProfile, settings, setSettings, subscription, setSubscription, deleteSubscription,
+    profile, setProfile, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
     chats, setChats, refreshChats, reports, refreshReports, downloadReport,
     mainView, setMainView, notify, run, fail,
   }), [session, accounts, loading, loadError, refresh, options, countries, login, signup, socialSignIn,
-    logout, changePassword, withdraw, setConsents, profile, setProfile, settings, setSettings,
+    logout, changePassword, withdraw, profile, setProfile, settings, setSettings, acceptNotificationTerms,
     subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
     downloadReport, mainView, notify, run, fail])
   const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications }),

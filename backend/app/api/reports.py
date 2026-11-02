@@ -114,11 +114,22 @@ def status_view(store,r):
         'error':info.get('error'),'available_formats':formats(store,r['report_id']) if r['status']=='READY' else []}
 
 
-def summary_view(store,r):
-    c=r['conditions_json']; content=r['content_json'] or {}
+def report_hs_names(store,rows):
+    codes={h['hs_code'] for row in rows for h in row['conditions_json'].get('hs_items',[])
+           if h.get('hs_ver','HS2022')=='HS2022'}
+    if not codes: return {}
+    hs=store.t('hs_code')
+    return dict(store.c.execute(select(hs.c.hs_code,hs.c.name_ko).where(
+        hs.c.hs_ver=='HS2022',hs.c.hs_code.in_(codes))).all())
+
+
+def summary_view(store,r,names):
+    c=r['conditions_json']
+    hs_names={h['hs_code']:names[h['hs_code']] for h in c.get('hs_items',[])
+              if h.get('hs_ver','HS2022')=='HS2022' and h['hs_code'] in names}
     return {'report_id':str(r['report_id']),'report_type':r['report_type'],
         'subscription_id':str(r['subscription_id']) if r['subscription_id'] else None,
-        'title':display_title(r),'conditions':{k:v for k,v in c.items() if k in ('hs_items','country_codes','period','compare_period','trade_flow','compare','metric','applied_defaults','expanded_regions')},
+        'title':display_title(r),'hs_names':hs_names,'conditions':{k:v for k,v in c.items() if k in ('hs_items','country_codes','period','compare_period','trade_flow','compare','metric','applied_defaults','expanded_regions')},
         'status':r['status'],'created_at':r['created_at'],'completed_at':r['completed_at'],
         'available_formats':formats(store,r['report_id']) if r['status']=='READY' else []}
 
@@ -129,7 +140,9 @@ def listing(store,uid,q=None,kind=None,status=None,page=1,size=20):
     if status: stmt=stmt.where(t.c.status==status)
     rows=store.rows(stmt.order_by(t.c.created_at.desc(),t.c.report_id.desc()))
     if q: rows=[r for r in rows if q in display_title(r)]
-    return {'items':[summary_view(store,r) for r in rows[(page-1)*size:page*size]],'page':page_info(page,size,len(rows))}
+    visible=rows[(page-1)*size:page*size]
+    names=report_hs_names(store,visible)
+    return {'items':[summary_view(store,r,names) for r in visible],'page':page_info(page,size,len(rows))}
 
 
 def read_report(store,uid,rid):
@@ -137,7 +150,7 @@ def read_report(store,uid,rid):
     require(r['status']=='READY','리포트가 아직 준비되지 않았습니다.','REPORT_NOT_READY',409)
     content=r['content_json']
     require(content.get('schema_version')==1,'이전 리포트 JSON 변환 계약 확인이 필요합니다.','FEATURE_NOT_READY',503)
-    return {'report':summary_view(store,r),'sections':content['sections'],'meta':content['meta']}
+    return {'report':summary_view(store,r,report_hs_names(store,[r])),'sections':content['sections'],'meta':content['meta']}
 
 
 def section(code,text,tables=None,articles=None,status='READY',kpi=None):
@@ -251,9 +264,13 @@ def generate(store,job,settings):
     return {'report_id':str(rid),'step':'DONE'}
 
 
-def subscription_list(store,uid):
+def subscription_rows(store,uid,*,lock=False):
     t=store.t('report_subscription')
-    rows=store.rows(select(t).where(t.c.user_id==uid).order_by(t.c.subscription_id))
+    stmt=select(t).where(t.c.user_id==uid).order_by(t.c.subscription_id)
+    return store.rows(stmt.with_for_update() if lock else stmt)
+
+
+def subscription_view(rows):
     items=[]
     for r in rows:
         p=r['filters_json']
@@ -263,10 +280,28 @@ def subscription_list(store,uid):
     return {'items':items,'version':digest(items)}
 
 
+def subscription_list(store,uid):
+    return subscription_view(subscription_rows(store,uid))
+
+
+def lock_subscriber(store,uid):
+    users=store.t('users')
+    store.c.execute(select(users.c.user_id).where(users.c.user_id==uid).with_for_update()).one()
+
+
+def cancel_subscription(store,uid,subscription_id):
+    lock_subscriber(store,uid)
+    row=store.owned('report_subscription','subscription_id',subscription_id,uid,lock=True)
+    t=store.t('report_subscription')
+    store.c.execute(update(t).where(t.c.user_id==uid,t.c.period_code==row['period_code']).values(enabled=False))
+
+
 def save_subscriptions(store,uid,data):
-    u,t=store.t('users'),store.t('report_subscription')
-    store.c.execute(select(u.c.user_id).where(u.c.user_id==uid).with_for_update()).first()
-    require(subscription_list(store,uid)['version']==data['expected_version'],'구독 설정이 변경되었습니다.','VERSION_CONFLICT',409)
+    t=store.t('report_subscription')
+    lock_subscriber(store,uid)
+    # 인증 조회가 만든 MySQL 스냅샷 대신 앞선 저장이 커밋한 최신 행으로 버전을 검사한다.
+    rows=subscription_rows(store,uid,lock=True)
+    require(subscription_view(rows)['version']==data['expected_version'],'구독 설정이 변경되었습니다.','VERSION_CONFLICT',409)
     selected=set(data['period_codes']); formats=set(data.get('formats',['PDF']))
     require(selected,'주기를 한 개 이상 선택하세요.')
     require(data.get('use_saved_interests') is True,'use_saved_interests는 true만 허용합니다.')
@@ -284,11 +319,16 @@ def save_subscriptions(store,uid,data):
         last_month=None
     payload={'hs_items':hs,'countries':countries,'topic':data.get('topic','시장 동향'),'formats':sorted(formats),
              'enabled_since':now().isoformat()+'Z','last_observed_month':last_month}
-    rows=store.rows(select(t).where(t.c.user_id==uid))
-    require(len({r['period_code'] for r in rows})==len(rows),'같은 주기의 복수 조건 구독 정합화가 필요합니다.','FEATURE_NOT_READY',503)
-    for r in rows:
-        store.c.execute(update(t).where(t.c.subscription_id==r['subscription_id']).values(enabled=r['period_code'] in selected,
-            filters_json=payload if r['period_code'] in selected else r['filters_json']))
-    existing={r['period_code'] for r in rows}
-    for code in selected-existing: store.insert('report_subscription',user_id=uid,period_code=code,filters_json=payload,enabled=True)
-    return subscription_list(store,uid)
+    remaining=selected.copy()
+    # 활성 행 중 가장 오래된 ID를 유지해 기존 발행 기록과의 연결을 보존한다.
+    for row in sorted(rows,key=lambda r:not r['enabled']):
+        code=row['period_code']
+        stmt=update(t).where(t.c.subscription_id==row['subscription_id'])
+        if code in remaining:
+            store.c.execute(stmt.values(enabled=True,filters_json=payload))
+            remaining.remove(code)
+        elif row['enabled']:
+            store.c.execute(stmt.values(enabled=False))
+    for code in sorted(remaining):
+        store.insert('report_subscription',user_id=uid,period_code=code,filters_json=payload,enabled=True)
+    return subscription_view(subscription_rows(store,uid,lock=True))
