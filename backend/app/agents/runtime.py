@@ -4,6 +4,7 @@ from sqlalchemy import select, update
 from openai import OpenAIError
 
 from backend.app.agents import budget
+from backend.app.agents.progress import progress_for
 from backend.app.agents.charts import build_chart
 from backend.app.agents.bindings import resolve as resolve_bindings, source_versions
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
@@ -36,12 +37,8 @@ class Services:
 
     def guard(self, state, node):
         self.execution.sync_budget(state)
-        labels={'check_conditions':'조건 확인 중','query_trade_data':'데이터 조회 중','search_articles':'기사 찾는 중',
-            'build_chart':'차트 만드는 중','generate_report':'리포트 만드는 중','report_ready':'리포트 만드는 중',
-            'query_market_model':'시장 예측 조회 중','compose':'답변 작성 중','verify':'숫자 확인 중'}
-        if state.plan and node in labels:
-            steps=state.plan.steps()
-            progress={'done':sum(s.status in ('DONE','FAILED','SKIPPED') for s in steps),'total':len(steps),'label':labels[node]}
+        if state.plan:
+            progress=progress_for(state,node)
             self.execution.transition(lambda ledger:{**ledger,'progress':progress})
 
     def structured(self, state, node, prompt, payload, schema, tokens, validate=lambda x:x, *, max_attempts=2):
@@ -336,5 +333,6 @@ class Services:
             table=store.t('chat_session')
             store.c.execute(update(table).where(table.c.session_id==session['session_id']).values(**updates))
             job.update(status='SUCCEEDED',finished_at=now().isoformat(),result_json={'step':'DONE','answer':answer})
+            job['agent']['progress']=progress_for(state,'complete')
             job['agent']=budget.settle(job['agent'],**identity,elapsed=monotonic()-started)
         self.execution.transaction(persist)

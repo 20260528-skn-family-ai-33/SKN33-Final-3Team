@@ -117,6 +117,8 @@ def resume(store,job,data,client_key=None):
     jobs.remember_prompt(job,job['result_json']['clarification'],data)
     ledger=budget.new_round(uuid4().hex,job['claim_token'])
     ledger['step_results']=job['agent']['step_results']
+    if job['agent'].get('progress'):
+        ledger['progress']={**job['agent']['progress'],'label':'분석 재개 대기'}
     job.update(agent=ledger,status='QUEUED',available_at=now().isoformat(),round_attempt=0,lease_expires_at=None,result_json={})
     job['version']=jobs.AGENT_QUEUE_VERSION
     job['payload_json'].update(resume=data,accepted_clarifications={**prior,identity:signature})

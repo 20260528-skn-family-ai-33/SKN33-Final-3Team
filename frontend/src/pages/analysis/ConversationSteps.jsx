@@ -5,15 +5,28 @@ import { countryName, productName } from '../../data/catalog'
 
 export function Progress({job}) {
   const [time,setTime]=useState(Date.now)
-  useEffect(()=>{const timer=setInterval(()=>setTime(Date.now()),1000);return ()=>clearInterval(timer)},[])
+  const active=['QUEUED','RUNNING','WAITING_REPORT'].includes(job.status)
+  useEffect(()=>{if(!active)return;const timer=setInterval(()=>setTime(Date.now()),1000);return ()=>clearInterval(timer)},[active])
   const start=Date.parse(job.round_started_at)
-  const {label,done=0,total=0}=job.progress || {}
-  return <div className="chat-step"><div className="between"><b role="status">{label || (job.status==='QUEUED'?'분석 대기 중':'분석 중')}</b>
-    {Number.isFinite(start) && <small>{Math.max(0, Math.floor((time-start)/1000))}초 경과</small>}</div>
-    <progress aria-label="분석 진행률" max={total||1} value={total?done:undefined}/></div>
+  const {label,plan=[]}=job.progress || {}
+  const total=plan.length || job.progress?.total || 0
+  const done=plan.length?plan.filter(s=>['DONE','FAILED','SKIPPED'].includes(s.status)).length:job.progress?.done||0
+  const percent=total?Math.max(0,Math.min(100,Math.round(100*done/total))):0
+  const statuses={PENDING:'예정',RUNNING:'진행 중',WAITING:'대기 중',DONE:'완료',FAILED:'실패',SKIPPED:'건너뜀'}
+  return <div className="chat-step"><div className="between"><b>분석 계획</b><span>{percent}%{total>0 && ` · ${done}/${total}단계`}</span></div>
+    <div className="chat-progress" role="progressbar" aria-label="분석 진행률" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><span style={{width:`${percent}%`}}/></div>
+    <div className="between"><span role="status">{total?label:job.status==='QUEUED'?'분석 대기 중':'질문을 읽고 계획을 작성하고 있습니다.'}</span>
+      {active && Number.isFinite(start) && <small>{Math.max(0, Math.floor((time-start)/1000))}초 경과</small>}</div>
+    {plan.length>0 && <ol className="chat-plan">{plan.map((step,i)=>{
+      const current=(active||job.status==='NEEDS_INPUT') && (step.status==='RUNNING'||step.status==='WAITING')
+      return <li key={step.id} aria-current={current?'step':undefined}>
+        {step.question && step.question!==plan[i-1]?.question && <small>{step.question}</small>}
+        <div>{current?<strong>{step.label}</strong>:<span>{step.label}</span>} <span className="note">{statuses[step.status]}</span></div>
+      </li>
+    })}</ol>}</div>
 }
 
-export function PromptActions({prompt,busy,reply}) {
+export function PromptActions({prompt,busy,reply,onDirectInput}) {
   const [group,setGroup]=useState(null)
   const [formats,setFormats]=useState(prompt.report_preview?.formats || ['PDF'])
   const [countries,setCountries]=useState([])
@@ -22,6 +35,7 @@ export function PromptActions({prompt,busy,reply}) {
   const preview=prompt.report_preview
   return <div className="chat-step"><strong>{prompt.message}</strong>
     {prompt.choices?.length>0 && <div className="chips">{prompt.choices.map(c=><Btn key={c.choice_id} disabled={busy} onClick={()=>reply({choice_ids:[c.choice_id]})}>{c.label}</Btn>)}</div>}
+    {prompt.kind==='COUNTRY' && <div><Btn disabled={busy} onClick={onDirectInput}>목록에 없는 국가 직접 입력</Btn><p className="note">전체 국가명 또는 국가 코드로 입력하세요. 예: 중국, CN</p></div>}
     {prompt.kind==='HS_ITEM' && <><Hs4Search group={group} onConfirm={setGroup} buttonLabel={()=>'이 HS4 선택'} onSelectAll={()=>group && reply({hs_item:{hs_code:group.code,hs_ver:'HS2022'}})}/><div className="chips">{group?.items.map(([code,name])=><Btn key={code} disabled={busy} onClick={()=>reply({hs_item:{hs_code:code,hs_ver:'HS2022'}})}>{name} ({code})</Btn>)}</div></>}
     {prompt.kind==='INTEREST_SELECT' && <><p>국가 {countries.length}/20 · 품목 {products.length}/5</p><div className="chips">
       {prompt.interests?.country_codes?.map(c=><Btn key={c} aria-pressed={countries.includes(c)} kind={countries.includes(c)?'plum':'line'} disabled={busy||(!countries.includes(c)&&countries.length>=20)} onClick={()=>setCountries(toggle(countries,c))}>{countryName(c)}</Btn>)}

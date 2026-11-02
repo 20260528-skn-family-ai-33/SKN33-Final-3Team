@@ -44,6 +44,8 @@ def run(database,settings,job):
     redis=getattr(database,'redis',None) or RedisState(settings)
     if state.pending or state.report_wait:
         def wait(store,current):
+            from backend.app.agents.progress import progress_for
+            current['agent']['progress']=progress_for(state,'wait')
             current.update(status=state.status,lease_expires_at=None)
             current['result_json']={'step':'CONTEXT' if state.pending else 'REPORT'}
             if state.pending:

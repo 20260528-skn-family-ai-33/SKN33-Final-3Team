@@ -175,6 +175,7 @@ export default function Analysis({ route }) {
   const [draft, setDraft] = useState(null)
   const [readRevision, setReadRevision] = useState(0)
   const endRef = useRef(null), pending = useRef(null)
+  const inputRef=useRef(null)
   const active = chats.find(c => c.id === activeId)
   useEffect(() => {
     let cancelled = false, timer
@@ -186,7 +187,7 @@ export default function Analysis({ route }) {
         setMessages(rows); setError(null)
         let latest = [...rows].reverse().find(m => m.job)?.job
         // The job endpoint also checks whether a pending checkpoint has expired.
-        if (latest?.status==='NEEDS_INPUT') latest=(await api(`/chat/jobs/${latest.job_id}`)).job
+        if (latest && (running(latest.status)||latest.status==='NEEDS_INPUT')) latest=(await api(`/chat/jobs/${latest.job_id}`)).job
         if (cancelled) return
         setJob(latest || null)
         if (latest && running(latest.status)) timer = setTimeout(load, 2000)
@@ -269,17 +270,29 @@ export default function Analysis({ route }) {
                 </AiBlock>
               )}
               <ErrorNotice error={error} retry={() => setReadRevision(v => v + 1)} />
-              {messages.map(m => m.role === 'USER' ? <div className="chat-turn" key={m.message_id}><UserBubble text={m.content_masked} />{m.job?.clarification_history?.filter(h => h.id!==job?.clarification?.clarification_id).map(h => <div className="chat-turn" key={h.id}><AiBlock><p>{h.message}</p></AiBlock>{h.answer && <UserBubble text={h.answer}/>}</div>)}</div> : m.answer ? <AnswerCard key={m.message_id} message={m} onSaveReport={saveAsReport} onInterest={addInterest} /> : <AiBlock key={m.message_id}><p>{m.content_masked}</p></AiBlock>)}
-              {job && running(job.status) && <AiBlock><Progress job={job}/></AiBlock>}
+              {messages.map(m => {
+                if (m.role !== 'USER') return m.answer
+                  ? <AnswerCard key={m.message_id} message={m} onSaveReport={saveAsReport} onInterest={addInterest}/>
+                  : <AiBlock key={m.message_id}><p>{m.content_masked}</p></AiBlock>
+                const turn = m.job?.job_id === job?.job_id ? job : m.job
+                return <div className="chat-turn" key={m.message_id}>
+                  <UserBubble text={m.content_masked}/>
+                  {turn && (running(turn.status) || turn.progress?.plan?.length>0) && <AiBlock><Progress job={turn}/></AiBlock>}
+                  {turn?.clarification_history?.filter(h=>h.id!==job?.clarification?.clarification_id).map(h=><div className="chat-turn" key={h.id}>
+                    <AiBlock><p>{h.message}</p></AiBlock>{h.answer && <UserBubble text={h.answer}/>}
+                  </div>)}
+                </div>
+              })}
+              {running(job?.status) && !messages.some(m=>m.job?.job_id===job.job_id) && <AiBlock><Progress job={job}/></AiBlock>}
               {job?.status === 'FAILED' && <ErrorNotice error={job.error || new Error('분석에 실패했습니다.')} />}
               {job?.status === 'EXPIRED' && <AiBlock><p>답변 시간이 지났습니다. 새 질문을 입력해 주세요.</p></AiBlock>}
               {job?.status === 'CANCELLED' && <AiBlock><p>질문을 중단했습니다. 새 질문을 입력할 수 있습니다.</p></AiBlock>}
-              {job?.status === 'NEEDS_INPUT' && <AiBlock><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify}/></AiBlock>}
+              {job?.status === 'NEEDS_INPUT' && <AiBlock><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify} onDirectInput={()=>inputRef.current?.focus()}/></AiBlock>}
               {(running(job?.status)||job?.status==='NEEDS_INPUT') && <Btn size="sm" disabled={busy} onClick={()=>setModal('stop')}>이 질문 중단</Btn>}
               {draft && <ConditionCard message={draft} onClose={()=>setDraft(null)} onChange={setDraft} onGenerate={async (body, key) => { const data = await api('/reports', { method: 'POST', body, idempotencyKey: key }); await refreshReports(); setDraft(null); window.location.hash = `/report?id=${data.job.report_id}` }} />}
               <div ref={endRef} />
               <form onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
-                <input value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onChange={e => setInput(e.target.value)} aria-label="질문 입력" placeholder={job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}
+                <input ref={inputRef} value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onChange={e => setInput(e.target.value)} aria-label="질문 입력" placeholder={job?.clarification?.kind==='COUNTRY'?'국가명 또는 국가 코드 입력':job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}
                   style={{ flex: 1, fontSize: 15, border: 0, outline: 0, font: 'inherit', color: 'var(--ink)', background: 'transparent' }} />
                 <Btn type="submit" kind="red" iconRight="arrowRight" disabled={!input.trim() || busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)}>전송</Btn>
               </form>

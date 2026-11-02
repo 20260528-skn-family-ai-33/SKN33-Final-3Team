@@ -235,12 +235,19 @@ class BackendApiTest(unittest.TestCase):
         def poll(): return self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
         waiting=poll()
         self.assertEqual(waiting['status'],'NEEDS_INPUT',waiting)
+        plan=waiting['progress']['plan']
+        self.assertEqual([s['id'] for s in plan],['t1.check','t1.sql','t1.chart','answer'])
+        self.assertEqual(plan[0]['status'],'WAITING')
+        self.assertEqual((waiting['progress']['done'],waiting['progress']['total']),(0,4))
         body={'clarification_id':waiting['clarification']['clarification_id'],'choice_ids':['COUNTRY']}
         answer=self.post(f'chat/jobs/{jid}/clarifications',body)
         self.assertEqual(answer.status_code,202,answer.text)
+        self.assertEqual(answer.json()['job']['progress']['total'],4)
         self.assertEqual(self.post(f'chat/jobs/{jid}/clarifications',body).json()['job']['status'],'QUEUED')
         self.assertTrue(run_once(db,self.settings))
         done=poll()
+        self.assertEqual(done['progress']['done'],done['progress']['total'])
+        self.assertTrue(all(s['status']=='DONE' for s in done['progress']['plan']))
         self.assertEqual(done['status'],'SUCCEEDED',done)
         self.assertEqual(done['answer']['answer_status'],'ANSWERED')
         self.assertEqual(done['answer']['tables'][0]['rows'][0]['country_code'],'CN')
