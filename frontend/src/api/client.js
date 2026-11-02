@@ -42,11 +42,17 @@ export async function api(path, { method = 'GET', body, query, signal, idempoten
     throw new ApiError(response, payload)
   }
   if (response.status === 204) return null
+  if (blob === 'download') return response
   if (blob) return response.blob()
   return response.json()
 }
 export async function download(path, filename) {
-  const data = await api(path, { blob: true })
+  const response = await api(path, { blob: 'download' })
+  if (!filename) {
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get('Content-Disposition') || '')?.[1]
+    filename = encoded ? decodeURIComponent(encoded) : '분석결과.xlsx'
+  }
+  const data = await response.blob()
   const url = URL.createObjectURL(data)
   const a = document.createElement('a'); a.href = url; a.download = filename
   document.body.appendChild(a); a.click(); a.remove()

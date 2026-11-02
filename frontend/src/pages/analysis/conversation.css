@@ -1,0 +1,5 @@
+.chat-turn,.chat-step { display:grid; gap:12px; }
+.chat-step progress { width:100%; height:8px; accent-color:var(--red); }
+.chat-flow > :not(form),.chat-turn > * { animation:chat-appear 180ms ease-out both; }
+@keyframes chat-appear { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:none; } }
+@media (prefers-reduced-motion:reduce) { .chat-flow > :not(form),.chat-turn > * { animation:none; } }

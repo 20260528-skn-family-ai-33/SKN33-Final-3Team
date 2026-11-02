@@ -44,6 +44,10 @@ export function AppProvider({ children }) {
   const notificationRevision = useRef(0)
   const notify = useCallback(message => setToast(message), [])
   const fail = useCallback(error => {
+    if (error.code==='CLARIFICATION_CONFLICT' || error.code==='CLARIFICATION_EXPIRED') {
+      notify(error.code==='CLARIFICATION_EXPIRED'?'답변 시간이 지났습니다. 새 질문을 입력해 주세요.':'이전 선택지는 마감됐습니다. 대화의 최신 질문을 확인해 주세요.')
+      return false
+    }
     notify(error.message + (error.status === 409 ? ' 새로고침한 뒤 변경 내용을 확인하고 다시 저장해 주세요.' : error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
     return false
   }, [notify])
@@ -179,7 +183,8 @@ export function AppProvider({ children }) {
   const changePassword = useCallback((current, next) => run(async () => {
     await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } }); clear(); navigate('/login'); return true
   }), [session, run, clear])
-  const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`, `리포트-${id}.${format.toLowerCase()}`)), [run])
+  const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`,
+    format.toLowerCase()==='xlsx' ? undefined : `리포트-${id}.${format.toLowerCase()}`)), [run])
   const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
   const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])
   const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
