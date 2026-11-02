@@ -4,6 +4,7 @@ import { navigate } from '../../router'
 import { useApp } from '../../store'
 import { Btn, Check } from '../../components/ui'
 import { toggleValue } from '../../data/catalog'
+import { usePendingAction } from '../../api/hooks'
 
 const CYCLES = [['weekly', '주간', '매주 월요일 발행 · 뉴스·이슈'], ['monthly', '월간', '매월 15일 발행 · 통계+이슈'], ['quarterly', '분기', '분기 종료 후 20일 발행']]
 const FORMATS = [['PDF', '기본 선택'], ['DOCX', '편집 가능한 문서']]
@@ -20,15 +21,22 @@ function OptionCard({ checked, onChange, title, desc, style }) {
 }
 
 export default function Subscription() {
-  const { subscription, setSubscription, notify, options } = useApp()
+  const { subscription } = useApp()
+  return <SubscriptionForm key={subscription.version} subscription={subscription} />
+}
+
+function SubscriptionForm({ subscription }) {
+  const { setSubscription, notify, options, profile } = useApp()
   const [cycles, setCycles] = useState(subscription.cycles)
   const [formats, setFormats] = useState(subscription.formats.length ? subscription.formats : ['PDF'])
-  const valid = cycles.length > 0 && formats.length > 0
-  const save = async () => {
+  const hasInterests = !!(profile.products.length || profile.countries.length)
+  const valid = hasInterests && cycles.length > 0 && formats.length > 0
+  const [pending, runOnce] = usePendingAction()
+  const save = () => runOnce(async () => {
     if (!await setSubscription({ cycles, formats })) return
     notify('구독 설정을 저장했습니다. 다음 발행일부터 저장된 관심정보 기준으로 리포트가 생성됩니다.')
     navigate(`/account/reports?tab=${cycles[0]}`)
-  }
+  })
   return (
     <section className="card">
       <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>{subscription.cycles.length ? '구독 중 · 설정 수정' : '최초 미구독 상태'}</p>
@@ -53,6 +61,7 @@ export default function Subscription() {
       </div>
       <div style={{ marginTop: 24, background: 'var(--bg)', borderRadius: 14, padding: '16px 18px' }}>
         <ul className="note" style={{ margin: 0, paddingLeft: 18 }}>
+          {!hasInterests && <li>구독을 시작하려면 국가나 품목을 먼저 선택해 주세요. <Btn to="/account/interests">관심정보 등록</Btn></li>}
           <li>구독 리포트는 저장된 관심정보를 기준으로 생성됩니다.</li>
           <li>발행 주기는 복수 선택할 수 있으며, 전체해제 시 선택된 주기가 없습니다.</li>
           <li>처음에는 발행 주기가 선택되어 있지 않습니다. PDF는 기본 선택입니다.</li>
@@ -61,7 +70,7 @@ export default function Subscription() {
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
         <Btn size="md" onClick={() => window.history.back()}>취소</Btn>
-        <Btn kind="red" size="md" disabled={!valid} onClick={save}>저장</Btn>
+        <Btn kind="red" size="md" disabled={!valid || pending} onClick={save}>{pending ? '저장 중…' : '저장'}</Btn>
       </div>
     </section>
   )

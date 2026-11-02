@@ -26,6 +26,9 @@ const { chromium } = require('playwright')
     let releaseProfile
     let releaseSettings, releaseSubscription
     let subscriptionReads = 0
+    let conflict = false, savedVersion
+    let previews = 0
+    let revisedPeriod = false
     const conditions = { hs_items: [], country_codes: [], period: { start: '2025-12-01', end: '2025-12-31' }, compare: 'NONE' }
     await page.route('**/api/v1/**', route => {
       const pathname = new URL(route.request().url()).pathname
@@ -43,7 +46,12 @@ const { chromium } = require('playwright')
       if (pathname.endsWith('/users/me/subscriptions')) {
         if (route.request().method() === 'GET') {
           subscriptionReads++
-          return route.fulfill({ json: { items: [] } })
+          return route.fulfill({ json: { version: 'latest', items: [{ enabled: true, period_code: 'MONTHLY', formats: ['DOCX'] }] } })
+        }
+        if (conflict) return route.fulfill({ status: 409, json: { code: 'VERSION_CONFLICT', message: '구독 설정이 변경되었습니다.' } })
+        if (subscriptionReads) {
+          savedVersion = route.request().postDataJSON().expected_version
+          return route.fulfill({ json: {} })
         }
         return new Promise(resolve => { releaseSubscription = async () => {
           await route.fulfill({ json: {} }); resolve()
@@ -65,12 +73,14 @@ const { chromium } = require('playwright')
       if (pathname.endsWith('/chat/sessions') || (pathname.endsWith('/reports') && route.request().method() === 'GET')) {
         return route.fulfill({ json: { items: [], page: { has_next: false } } })
       }
-      if (pathname.endsWith('/data/availability')) return route.fulfill({ json: { trade_end_month: '2025-12' } })
+      if (pathname.endsWith('/data/availability')) return route.fulfill({ json: { trade_start_month: '2024-08', trade_end_month: '2025-12' } })
       if (pathname.endsWith('/reports/preview')) return route.fulfill({ json: {
-        preview_id: 'preview-test', conditions, expires_at: new Date(Date.now() + 60000).toISOString(),
+        preview_id: 'preview-' + (++previews), conditions: { ...conditions,
+          compare_period: { start: '2024-12-01', end: revisedPeriod && previews === 4 ? '2024-12-30' : '2024-12-31' } }, expires_at: new Date(Date.now() + 60000).toISOString(),
       } })
       if (pathname.endsWith('/reports')) {
         generated.push({ body: route.request().postDataJSON(), key: route.request().headers()['idempotency-key'] })
+        if (['preview-1','preview-3'].includes(generated.at(-1).body.preview_id)) return route.fulfill({ status: 409, json: { code: 'PREVIEW_EXPIRED' } })
         return route.fulfill({ status: 202, json: { job: { report_id: '2' } } })
       }
       return route.fulfill({ status: 500, json: { message: 'Unexpected test request: ' + pathname } })
@@ -133,6 +143,14 @@ const { chromium } = require('playwright')
     assert.equal(subscriptionReads, 0)
     assert.deepEqual(await page.evaluate(() => window.reviewApp.subscription.cycles), [])
     console.log('PASS expired subscription save cannot refresh data for a later session')
+    conflict = true
+    const saveMonthly = () => page.evaluate(() => window.reviewApp.setSubscription({ cycles: ['monthly'], formats: ['PDF'] }))
+    assert.equal(await saveMonthly(), false)
+    await page.waitForFunction(() => window.reviewApp.subscription.version === 'latest')
+    assert.deepEqual(await page.evaluate(() => window.reviewApp.subscription.formats), ['DOCX'])
+    conflict = false
+    assert.equal(await saveMonthly(), true)
+    assert.equal(savedVersion, 'latest')
     const ids = await page.evaluate(async () => {
       const { requestId } = await import('/src/api/requestId.js')
       return { secure: isSecureContext, native: typeof crypto.randomUUID,
@@ -150,11 +168,28 @@ const { chromium } = require('playwright')
     await page.waitForFunction(() => document.querySelector('[aria-label="질문 입력"]').value === '')
     assert.match(sent[0].client_message_id, /^[0-9a-f-]{36}$/)
     await page.getByRole('button', { name: '리포트로 저장', exact: true }).click()
+    const year = page.getByLabel('분석 시작 연도')
+    await page.waitForFunction(() => !document.querySelector('[aria-label="분석 시작 연도"]').disabled)
+    assert.deepEqual(await year.locator('option').allTextContents(), ['연도','2025','2024'])
+    await year.selectOption('2024')
+    assert.equal(await page.getByLabel('분석 시작 월').locator('option').first().getAttribute('value'), '08')
+    await year.selectOption('2025')
     await page.getByRole('button', { name: '리포트 조건 확인', exact: true }).click()
+    await page.getByText('비교 기간 2024-12-01 ~ 2024-12-31', { exact:true }).waitFor()
     await page.getByRole('button', { name: '확인한 조건으로 생성', exact: true }).click()
     await page.waitForURL(url => url.hash === '#/report?id=2')
     assert.match(generated[0].key, /^[0-9a-f-]{36}$/)
-    assert.equal(generated[0].body.preview_id, 'preview-test')
+    assert.deepEqual(generated.map(r => r.body.preview_id), ['preview-1','preview-2'])
+    revisedPeriod = true
+    await page.getByRole('button', { name: '리포트로 저장', exact: true }).click()
+    await page.getByRole('button', { name: '리포트 조건 확인', exact: true }).click()
+    const submit = page.getByRole('button', { name: '확인한 조건으로 생성', exact: true })
+    await submit.click()
+    await page.getByText('비교 기간 2024-12-01 ~ 2024-12-30', { exact:true }).waitFor()
+    assert.equal(generated.length,3)
+    await submit.click()
+    await page.waitForFunction(() => !document.querySelector('[role=dialog]'))
+    assert.equal(generated[3].body.preview_id,'preview-4')
     console.log('PASS chat submission, preview and report creation send valid IDs over HTTP')
     assert.deepEqual(errors, [])
   } finally {

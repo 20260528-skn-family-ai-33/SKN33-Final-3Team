@@ -3,12 +3,20 @@ import { useEffect } from 'react'
 import { navigate, withQuery } from '../../router'
 import { useApp, useNotifications } from '../../store'
 import { Btn, Check, Chip } from '../../components/ui'
+import { useQuery, ErrorNotice } from '../../api/hooks'
+import { reportScope } from '../../api/adapters'
 import { notificationTypes } from '../../data/seed'
 
 
 const TABS = [['all', '전체'], ['surge', '급증 기사'], ['major', '주요 이슈'], ['report', '리포트 발행']]
 
 function Detail({ n }) {
+  const { reports } = useApp()
+  const cached = reports.find(r => r.id === n.reportId)
+  const detail = useQuery('/reports/' + n.reportId, {}, !!n.reportId && !cached)
+  const report = cached || detail.data?.report
+  const conditions = report?.conditions
+  const cycle = { RPT_WEEKLY: '주간 리포트', RPT_MONTHLY: '월간 리포트', RPT_QUARTERLY: '분기 리포트' }[report?.report_type]
   const t = notificationTypes[n.type]
   const articleLink = n.articleId ? `/articles?id=${n.articleId}` : '/articles'
   return (
@@ -22,10 +30,11 @@ function Detail({ n }) {
       {n.type === 'report' && (
         <>
           <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '100px 1fr', gap: 8, fontSize: 15 }}>
-            <span className="s">국가 · 품목</span><b>{n.target}</b>
-            <span className="s">대상 기간</span><b>{n.period}</b>
-            <span className="s">유형</span><b>{n.cycle}</b>
+            <span className="s">국가 · 품목</span><b>{report ? reportScope(conditions, report.hs_names) : detail.loading ? '불러오는 중…' : '조건 미확인'}</b>
+            <span className="s">대상 기간</span><b>{conditions?.period ? `${conditions.period.start} ~ ${conditions.period.end}` : '기간 미확인'}</b>
+            <span className="s">유형</span><b>{cycle || '유형 미확인'}</b>
           </div>
+          <ErrorNotice error={detail.error} retry={detail.reload} />
           <div style={{ marginTop: 24 }}><Btn kind="red" size="md" icon="file" to={`/report?id=${n.reportId}`}>구독 리포트 열기</Btn></div>
         </>
       )}
@@ -65,11 +74,11 @@ export default function Inbox({ route }) {
   const tab = TABS.some(([key]) => key === route.query.get('tab')) ? route.query.get('tab') : 'all'
   const unreadOnly = route.query.get('unread') === '1'
   const list = notifications.filter(n => (tab === 'all' || n.type === tab) && (!unreadOnly || !n.read || n.id === route.query.get('id')))
-  const selected = list.find(n => n.id === route.query.get('id')) || list[0]
+  const selected = list.find(n => n.id === route.query.get('id'))
   const tabLabel = TABS.find(([k]) => k === tab)?.[1]
 
   useEffect(() => {
-    if (selected && !selected.read && (route.query.get('id') || !unreadOnly)) setNotifications(ns => ns.map(n => (n.id === selected.id ? { ...n, read: true } : n)))
+    if (selected && !selected.read) setNotifications(ns => ns.map(n => (n.id === selected.id ? { ...n, read: true } : n)))
   }, [selected, setNotifications, route, unreadOnly])
 
   return (
@@ -98,7 +107,7 @@ export default function Inbox({ route }) {
               <button key={n.id} type="button" className="reset" aria-current={on} onClick={() => navigate(withQuery(route, { id: n.id }), { replace: true })}
                 style={{ padding: '16px 18px', borderRadius: 14, background: on ? 'var(--rose)' : '#fff', boxShadow: on ? 'inset 3px 0 0 var(--red)' : 'none', border: on ? 0 : '1px solid var(--line)' }}>
                 <div className="between"><span className={'tag ' + t.tone}>{t.label}</span><span className="note">{n.time}</span></div>
-                <p style={{ fontSize: 15, fontWeight: 800, marginTop: 8 }}>{!n.read && <span className="dot" style={{ marginRight: 6, verticalAlign: 2 }} />}{n.title}</p>
+                <p style={{ fontSize: 15, fontWeight: 800, marginTop: 8 }}>{!n.read && <span className="tag red" style={{ marginRight: 6 }}>미확인</span>}{n.title}</p>
               </button>
             )
           })}

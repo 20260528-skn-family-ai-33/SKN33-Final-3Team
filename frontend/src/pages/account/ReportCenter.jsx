@@ -106,7 +106,7 @@ export default function ReportCenter({ route }) {
               <p className="note">발행된 분기 리포트가 없으면 “조회할 분기 리포트가 없습니다.”를 표시합니다.</p>
               <p className="note">리포트 열람 → 리포트 열람 화면 / PDF·DOCX → 생성 당시 저장 파일 다운로드</p>
             </div>
-            <Btn icon="arrowLeft" to="/account/reports?tab=chat" style={{ marginTop: 16 }}>센터로 돌아가기</Btn>
+            <Btn icon="arrowLeft" to="/account/reports?tab=chat" style={{ marginTop: 16 }}>채팅에서 생성된 리포트로 이동</Btn>
           </>
         )}
       </section>
@@ -127,12 +127,12 @@ export default function ReportCenter({ route }) {
         </section>
       )}
 
-      {tab !== 'chat' && !subscription.cycles.length && (
+      {tab !== 'chat' && !subscribed && (
         <section className="card" style={{ background: 'var(--plum)', border: 0, color: '#fff' }}>
           <div className="between">
             <div>
-              <span className="tag" style={{ background: 'rgba(255,255,255,.14)', color: '#fff' }}>최초 진입 · 미구독 상태</span>
-              <p style={{ fontSize: 20, fontWeight: 800, marginTop: 10 }}>아직 구독 중인 리포트가 없습니다.</p>
+              <span className="tag" style={{ background: 'rgba(255,255,255,.14)', color: '#fff' }}>미구독 상태</span>
+              <p style={{ fontSize: 20, fontWeight: 800, marginTop: 10 }}>{CYCLE[tab]} 리포트를 아직 구독하지 않았습니다.</p>
               <p style={{ marginTop: 4, color: '#D6D3E6' }}>구독 설정에서 발행 주기와 출력 양식을 선택하세요. 최초 발행 전에는 리포트 목록이 비어 있습니다.</p>
             </div>
             <Btn kind="red" size="md" iconRight="arrowRight" to="/account/subscription">구독 설정</Btn>
