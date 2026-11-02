@@ -1,5 +1,5 @@
 // BS09 기사 공통 진입(검색) · BS10 전체기사 · BS11 단신속보 · BS12 주요이슈(선택 기사 강조)
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, navigate, withQuery } from '../../router'
 import { Band, ChatFab } from '../../components/layout'
 import { Btn, Chip, Pager, TextField } from '../../components/ui'
@@ -11,6 +11,7 @@ import bandArticles from '../../assets/band-articles.jpg'
 
 const PAGE_SIZE = 5
 const toDot = d => (d ? d.replaceAll('-', '.') : '')
+const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
 
 export default function Articles({ route }) {
   const q = route.query
@@ -28,13 +29,20 @@ export default function Articles({ route }) {
   const pages = Math.max(1, Math.ceil((result.data?.page.total || 0) / PAGE_SIZE))
   const shown = selected && detail.data && !list.some(a => a.id === selected) ? [mapArticle(detail.data.article), ...list] : list
   const tabLabel = articleTabs.find(([k]) => k === tab)?.[1] || '전체기사'
+  // 메인 등에서 기사를 골라 들어오면 검색칸 아래로 내려가 그 기사가 바로 보이게 한다.
+  const selectedShown = !!selected && shown.some(a => a.id === selected)
+  useEffect(() => {
+    if (!selectedShown) return undefined
+    // 화면 이동 직후 맨 위로 올리는 동작이 끝난 뒤에 내려가도록 한 박자 늦춘다.
+    const timer = setTimeout(() => document.getElementById(`article-${selected}`)?.scrollIntoView({ block: 'start' }), 120)
+    return () => clearTimeout(timer)
+  }, [selected, selectedShown])
 
   const search = e => {
     e.preventDefault()
-    if (!form.keyword.trim()) return setError('키워드를 입력해 주세요. 기간은 선택 사항입니다.')
     if (form.from && form.to && form.from > form.to) return setError('기간의 시작일이 종료일보다 늦습니다.')
     setError('')
-    navigate(withQuery(route, { q: form.keyword.trim(), from: form.from, to: form.to, id: null, page: null }))
+    navigate(withQuery(route, { q: form.keyword.trim() || null, from: form.from || null, to: form.to || null, id: null, page: null }))
   }
 
   return (
@@ -53,8 +61,8 @@ export default function Articles({ route }) {
           <form className="card" onSubmit={search} noValidate>
             <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr auto', gap: 14, alignItems: 'end' }} className="resp-stack">
               <div>
-                <label className="lbl" htmlFor="ar-q">키워드{keyword ? ' *' : ''}</label>
-                <TextField id="ar-q" placeholder="검색어 입력" icon="search" iconColor="#5C6370" value={form.keyword} onChange={v => setForm(f => ({ ...f, keyword: v }))} invalid={!!error && !form.keyword.trim()} />
+                <label className="lbl" htmlFor="ar-q">검색 (선택)</label>
+                <TextField id="ar-q" placeholder="검색어 입력" icon="search" iconColor="#5C6370" value={form.keyword} onChange={v => setForm(f => ({ ...f, keyword: v }))} />
               </div>
               <div>
                 <span className="lbl" id="ar-period">발행 기간 (선택)</span>
@@ -68,7 +76,7 @@ export default function Articles({ route }) {
             </div>
             {error
               ? <p className="field-err" role="alert" style={{ marginTop: 10 }}>{error}</p>
-              : <p className="note" style={{ marginTop: 10 }}>{keyword ? '키워드 필수 · 기간 미지정 시 전체 기간 검색 · 탭 전환 시 검색 조건 유지' : '메인 직접 진입 시 검색어 입력 없이 조회 · 이후 키워드·기간 검색 가능'}</p>}
+              : <p className="note" style={{ marginTop: 10 }}>검색어와 기간은 모두 선택 사항입니다 · 기간 미지정 시 전체 기간 · 탭을 바꿔도 검색 조건 유지</p>}
           </form>
           <div className="sec-h" style={{ marginTop: 8 }}>
             <h2 className="t2">
@@ -83,8 +91,10 @@ export default function Articles({ route }) {
             {shown.map(a => {
               const on = a.id === selected
               const kind = articleKinds[a.kind]
+              // 단신속보만 펼쳐서 본문을 보고, 나머지 기사는 요약 200자와 원문 링크를 바로 보여 준다.
+              const short = a.kind === 'short'
               return (
-                <article key={a.id} className={'li' + (on ? ' sel' : '')} style={{ color: 'var(--ink)', flexWrap: 'wrap' }}>
+                <article key={a.id} id={`article-${a.id}`} className={'li' + (on ? ' sel' : '')} style={{ color: 'var(--ink)', flexWrap: 'wrap', scrollMarginTop: 90 }}>
                   <div style={{ width: 4 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
@@ -95,15 +105,17 @@ export default function Articles({ route }) {
                     </div>
                     <p style={{ fontSize: 18, fontWeight: 800 }}>{a.title}</p>
                     <p className="muted" style={{ marginTop: 6 }}>{a.country} · {a.date} · {a.source}</p>
+                    {!short && a.summary && <p style={{ fontSize: 15, lineHeight: 1.7, color: '#2E333C', marginTop: 10 }}>{cut(a.summary, 200)}</p>}
                   </div>
-                  <Link to={withQuery(route, { id: on ? null : a.id, page: String(page) })} className="more" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} aria-expanded={on}>
-                    {on ? '접기' : '상세 보기'} <Icon name={on ? 'chevronUp' : 'arrowRight'} size={15} />
-                  </Link>
-                  {on && (
+                  {short
+                    ? <Link to={withQuery(route, { id: on ? null : a.id, page: String(page) })} className="more" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} aria-expanded={on}>
+                      {on ? '접기' : '상세 보기'} <Icon name={on ? 'chevronUp' : 'chevronDown'} size={15} />
+                    </Link>
+                    : <Btn kind="ink" iconRight="external" disabled={!a.url} onClick={() => window.open(a.url, '_blank', 'noopener')}>원문 보기</Btn>}
+                  {short && on && (
                     <div style={{ flexBasis: '100%', marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
                       <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>{detail.loading ? '본문을 불러오는 중…' : detail.data?.body_masked || a.summary}</p>
                       <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-                        <Btn kind="ink" iconRight="external" onClick={() => window.open(a.url, '_blank', 'noopener')}>기사 원문 보기</Btn>
                         <Btn to={`/analysis?ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`} icon="chat">AI에게 물어보기</Btn>
                       </div>
                     </div>
@@ -114,11 +126,12 @@ export default function Articles({ route }) {
             {!shown.length && !result.loading && !result.error && (
               <div className="card" style={{ textAlign: 'center', padding: '48px 24px' }}>
                 <p className="t3">검색 결과가 없습니다.</p>
-                <p className="muted" style={{ marginTop: 6 }}>키워드나 기간을 바꿔 다시 검색해 보세요.</p>
+                <p className="muted" style={{ marginTop: 6 }}>검색어나 기간을 바꿔 다시 검색해 보세요.</p>
               </div>
             )}
           </div>
-          {pages > 1 && <Pager page={page} pages={pages} onChange={n => navigate(withQuery(route, { page: String(n) }))} />}
+          {/* 다른 페이지로 가면 펼쳐 둔 상세를 닫아 이전 기사가 남아 보이지 않게 한다. */}
+          {pages > 1 && <Pager page={page} pages={pages} onChange={n => navigate(withQuery(route, { page: String(n), id: null }))} />}
           <p className="note">{selected ? '선택 기사 강조 표시 · 기사 ID로 해당 결과 위치 유지' : '선택 기사 없음 · 전체 목록 진입'}</p>
         </div>
         <ChatFab />

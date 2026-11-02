@@ -31,7 +31,7 @@ export function TextField({ value, onChange, placeholder, type = 'text', icon, i
       <input
         ref={inputRef} type={type} value={value ?? ''} placeholder={placeholder} aria-invalid={invalid || undefined}
         onChange={e => onChange?.(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter' && onEnter) { e.preventDefault(); onEnter() } }}
+        onKeyDown={e => { if (e.key === 'Enter' && onEnter && !e.nativeEvent.isComposing) { e.preventDefault(); onEnter() } }}
         {...rest}
       />
       {icon && <Icon name={icon} size={sm ? 16 : 18} color={iconColor} stroke={icon === 'lock' ? 1.8 : 1.9} />}
@@ -158,11 +158,14 @@ export function Steps({ items, current }) {
   )
 }
 
-export function Pager({ page, pages, onChange }) {
+export function Pager({ page, pages, onChange, window = 5 }) {
+  // 페이지 번호는 현재 페이지가 속한 묶음(1~5, 6~10 …)만 보여 준다.
+  const first = Math.floor((page - 1) / window) * window + 1
+  const last = Math.min(pages, first + window - 1)
   return (
     <nav aria-label="페이지" style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 22 }}>
       <Chip sm aria-label="이전 페이지" disabled={page <= 1} onClick={() => onChange(page - 1)}><Icon name="arrowLeft" size={14} /></Chip>
-      {Array.from({ length: pages }, (_, i) => i + 1).map(n => (
+      {Array.from({ length: last - first + 1 }, (_, i) => first + i).map(n => (
         <Chip sm key={n} on={n === page} onClick={() => onChange(n)}>{n}</Chip>
       ))}
       <Chip sm aria-label="다음 페이지" disabled={page >= pages} onClick={() => onChange(page + 1)}><Icon name="arrowRight" size={14} /></Chip>

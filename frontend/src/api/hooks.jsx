@@ -9,7 +9,8 @@ export function useDebouncedValue(value, delay = 300) {
   return settled
 }
 
-export function useQuery(path, query = {}, enabled = true, interval = 0, method = 'GET') {
+// keep: 조건만 바뀌어 다시 불러오는 동안 같은 경로의 이전 결과를 계속 보여 준다(목록이 비었다가 다시 차며 화면이 튀지 않게).
+export function useQuery(path, query = {}, enabled = true, interval = 0, method = 'GET', keep = false) {
   const key = JSON.stringify(query)
   const [state, setState] = useState({ data: null, error: null, loading: true })
   const [revision, reload] = useState(0)
@@ -30,7 +31,8 @@ export function useQuery(path, query = {}, enabled = true, interval = 0, method 
     return () => { controller.abort(); clearTimeout(timer) }
   }, [path, key, enabled, revision, interval, requestKey, method])
   const reloadQuery = useCallback(() => reload(n => n + 1), [])
-  return { ...(enabled ? state.key === requestKey ? state : { data: null, error: null, loading: true } : { data: null, error: null, loading: false }), reload: reloadQuery }
+  const previous = keep && state.data && state.key?.startsWith(`${method}|${path}|`) ? state.data : null
+  return { ...(enabled ? state.key === requestKey ? state : { data: previous, error: null, loading: true } : { data: null, error: null, loading: false }), reload: reloadQuery }
 }
 export function ErrorNotice({ error, retry }) {
   if (!error) return null

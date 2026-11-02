@@ -33,7 +33,7 @@ export default function Login() {
   }
 
   return (
-    <AuthFrame lead={<>품목·국가별 수출입 순위와 해외 시장 기사를 한곳에서 보고,<br />AI 분석으로 리포트까지 만들어 보세요.</>}>
+    <AuthFrame lead={<>품목·국가별 수출입 순위와 해외 시장 기사를 한곳에서 보고,<br />AI챗봇으로 리포트까지 만들어 보세요.</>}>
       <form onSubmit={submit} noValidate>
         <CardHead eyebrow="로그인" title="다시 오신 걸 환영해요" desc="이메일 또는 소셜 계정으로 로그인하고 무역 분석을 시작하세요." />
         <div className="sp32" />

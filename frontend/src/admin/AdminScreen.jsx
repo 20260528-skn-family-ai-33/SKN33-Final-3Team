@@ -133,10 +133,85 @@ function ArticleSearch({ value, to }) {
   )
 }
 
-/** 회원 아이디(이메일)·이름 검색 */
-function MemberSearch({ value, to }) {
+/** 데이터 수집 이력 검색 + 결과 분류 */
+function RunSearch({ value, status: statusValue, to }) {
   const [q, setQ] = useState(value || '')
-  const [by, setBy] = useState('all')
+  const [status, setStatus] = useState(statusValue || '')
+  const go = (next = status) => {
+    const p = new URLSearchParams()
+    if (q.trim()) p.set('q', q.trim())
+    if (next) p.set('status', next)
+    navigate(p.toString() ? `${to}?${p}` : to)
+  }
+  return (
+    <section className="card" style={{ padding: '16px 20px' }}>
+      <form onSubmit={e => { e.preventDefault(); go() }} className="resp-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 160px auto', gap: 12, alignItems: 'end' }}>
+        <div>
+          <label className="lbl" htmlFor="run-q">수집 이력 검색</label>
+          <div className={'input sm' + (q ? ' val' : '')}>
+            <input id="run-q" value={q} onChange={e => setQ(e.target.value)} placeholder="실행 ID, 수집 작업명 또는 출처 코드 입력" />
+            <Icon name="search" color="#9AA0AA" />
+          </div>
+        </div>
+        <div>
+          <label className="lbl" htmlFor="run-status">결과</label>
+          <div className="input sm val select">
+            <select id="run-status" value={status} onChange={e => { setStatus(e.target.value); go(e.target.value) }}>
+              <option value="">전체</option><option value="SUCCESS">성공</option><option value="FAILED">실패</option><option value="RUNNING">실행 중</option>
+            </select>
+            <Icon name="chevronDown" color="#5C6370" stroke={2} />
+          </div>
+        </div>
+        <Btn type="submit" kind="ink" size="md" style={{ height: 44, borderRadius: 12 }}>검색</Btn>
+      </form>
+      <p className="note" style={{ marginTop: 8 }}>결과를 고르면 바로 걸러집니다. 검색어를 비우고 검색하면 전체 이력으로 돌아갑니다.</p>
+    </section>
+  )
+}
+
+/** 관리자 처리 이력 검색 + 대상 종류 + 정렬 */
+function AuditSearch({ query, to }) {
+  const [q, setQ] = useState(query?.q || '')
+  const go = patch => {
+    const p = new URLSearchParams()
+    const next = { q: q.trim(), target: query?.target || '', sort: query?.sort || '', ...patch }
+    for (const [k, v] of Object.entries(next)) if (v) p.set(k, v)
+    navigate(p.toString() ? `${to}?${p}` : to)
+  }
+  const select = (id, label, key, options) => (
+    <div>
+      <label className="lbl" htmlFor={id}>{label}</label>
+      <div className="input sm val select">
+        <select id={id} value={query?.[key] || ''} onChange={e => go({ [key]: e.target.value })}>
+          {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+        <Icon name="chevronDown" color="#5C6370" stroke={2} />
+      </div>
+    </div>
+  )
+  return (
+    <section className="card" style={{ padding: '16px 20px' }}>
+      <form onSubmit={e => { e.preventDefault(); go({}) }} className="resp-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 130px 130px auto', gap: 12, alignItems: 'end' }}>
+        <div>
+          <label className="lbl" htmlFor="audit-q">처리 이력 검색</label>
+          <div className={'input sm' + (q ? ' val' : '')}>
+            <input id="audit-q" value={q} onChange={e => setQ(e.target.value)} placeholder="처리자 이메일, 대상 ID 또는 처리 사유 입력" />
+            <Icon name="search" color="#9AA0AA" />
+          </div>
+        </div>
+        {select('audit-target', '대상 종류', 'target', [['', '전체'], ['USER', '회원'], ['ARTICLE', '기사']])}
+        {select('audit-sort', '정렬', 'sort', [['', '최신순'], ['oldest', '오래된순']])}
+        <Btn type="submit" kind="ink" size="md" style={{ height: 44, borderRadius: 12 }}>검색</Btn>
+      </form>
+      <p className="note" style={{ marginTop: 8 }}>대상 종류와 정렬은 고르면 바로 적용됩니다. 상세를 누르면 변경 전후 값을 확인할 수 있습니다.</p>
+    </section>
+  )
+}
+
+/** 회원 아이디(이메일)·이름 검색 */
+function MemberSearch({ value, by: byValue, to }) {
+  const [q, setQ] = useState(value || '')
+  const [by, setBy] = useState(byValue || 'id')
   const go = () => navigate(`${to}?q=${encodeURIComponent(q.trim())}&by=${by}`)
   return (
     <section className="card" style={{ padding: '16px 20px' }}>
@@ -152,14 +227,14 @@ function MemberSearch({ value, to }) {
           <label className="lbl" htmlFor="member-by">검색 기준</label>
           <div className="input sm val select">
             <select id="member-by" value={by} onChange={e => setBy(e.target.value)}>
-              <option value="all">아이디 · 이름</option><option value="id">아이디(이메일)</option><option value="name">이름</option>
+              <option value="id">아이디(이메일)</option><option value="name">이름</option>
             </select>
             <Icon name="chevronDown" color="#5C6370" stroke={2} />
           </div>
         </div>
         <Btn type="submit" kind="ink" size="md" style={{ height: 44, borderRadius: 12 }}>검색</Btn>
       </form>
-      <p className="note" style={{ marginTop: 8 }}>회원 아이디(이메일) 또는 이름으로 검색합니다. 일부만 입력해도 찾을 수 있습니다.</p>
+      <p className="note" style={{ marginTop: 8 }}>검색 기준(아이디 또는 이름)을 고른 뒤 검색합니다. 일부만 입력해도 찾을 수 있습니다.</p>
     </section>
   )
 }
@@ -172,12 +247,13 @@ function Block({ b, query }) {
       return (
         <section className="card" style={{ padding: '18px 20px' }}>
           {b.title && <p className="t3" style={{ marginBottom: 12 }}>{b.title}</p>}
+          {b.count && <p className="note" style={{ textAlign: 'right', marginBottom: 8 }}>{b.count}</p>}
           {/* 좁은 화면에서는 표만 가로로 스크롤한다. */}
           <div style={{ overflowX: 'auto' }}><div style={{ minWidth: 560 }}>
           <div className="th" style={{ gridTemplateColumns: b.cols }}>{b.head.map(h => <span key={h}>{h}</span>)}</div>
           {rows.map((r, i) => (
             <div key={i} className={'tr' + (r.sel ? ' sel' : '')} style={{ gridTemplateColumns: b.cols }}>
-              {r.cells.map((c, j) => <span key={j}><Cell c={c} /></span>)}
+              {r.cells.map((c, j) => <span key={j} style={{ minWidth: 0, overflowWrap: 'anywhere' }}><Cell c={c} /></span>)}
             </div>
           ))}
           </div></div>
@@ -234,8 +310,10 @@ function Block({ b, query }) {
       </section>
     )
     case 'skeleton': return <div className="col" style={{ gap: 12 }}>{Array.from({ length: b.rows }, (_, i) => <div key={i} style={{ height: 44, borderRadius: 10, background: '#ECEEF1' }} />)}</div>
-    case 'memberSearch': return <MemberSearch value={query?.q ?? b.value} to={b.to} />
+    case 'memberSearch': return <MemberSearch value={query?.q ?? b.value} by={query?.by} to={b.to} />
     case 'articleSearch': return <ArticleSearch value={query?.q} to={b.to} />
+    case 'auditSearch': return <AuditSearch query={query} to={location.hash.slice(1).split('?')[0]} />
+    case 'runSearch': return <RunSearch value={query?.q} status={query?.status} to={location.hash.slice(1).split('?')[0]} />
     case 'ops': return <OpsDashboard tab={b.tab} />
     default: return null
   }

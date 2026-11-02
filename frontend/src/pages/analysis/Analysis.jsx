@@ -218,7 +218,7 @@ export default function Analysis({ route }) {
 
   return (
     <>
-      <Band image={bandAnalysis} imagePosition="center 60%" eyebrow="AI ANALYSIS" title="AI분석" lead="국가·품목·기간을 자연어로 질문하고, 대화 내용으로 분석 리포트를 생성합니다." />
+      <Band image={bandAnalysis} imagePosition="center 60%" eyebrow="AI CHATBOT" title="AI챗봇" lead="국가·품목·기간을 자연어로 질문하고, 대화 내용으로 분석 리포트를 생성합니다." />
       <main className="page">
         <div className="wrap chat-lay">
           <aside className="card col chat-side" style={{ gap: 10, padding: 18 }}>
@@ -284,7 +284,8 @@ export default function Analysis({ route }) {
       <Modal open={modal === 'rename'} onClose={() => setModal(null)} width={480} label="채팅방 이름 변경">
         <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>채팅방 관리</p>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>채팅방 이름 변경</h2>
-        <div style={{ marginTop: 16 }}><TextField value={rename} onChange={setRename} aria-label="새 이름" maxLength={40} /></div>
+        <div style={{ marginTop: 16 }}><TextField value={rename} onChange={setRename} onEnter={() => rename.trim() && updateTitle()} aria-label="새 이름" maxLength={40} /></div>
+        <p className="note" style={{ marginTop: 6, textAlign: 'right' }}>{rename.length} / 40자 · Enter로 저장</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
           <Btn size="md" onClick={() => setModal(null)}>취소</Btn>
           <Btn kind="red" size="md" disabled={!rename.trim()} onClick={updateTitle}>저장</Btn>

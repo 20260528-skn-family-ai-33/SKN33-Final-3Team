@@ -15,21 +15,27 @@ def report_time(value):
     return datetime.fromisoformat(value.replace('Z','+00:00')).astimezone(ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d %H:%M KST')
 
 
-def xlsx_bytes(tables,meta,sql):
+def xlsx_bytes(tables,meta,sql,unit_headers=False):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill
     wb=Workbook(); wb.remove(wb.active)
     for n,table in enumerate(tables,1):
         require(table['total_rows']<=1000,'엑셀은 필터 전체 결과 1,000행까지만 다운로드할 수 있습니다.','EXPORT_LIMIT_EXCEEDED',422)
         ws=wb.create_sheet(f'결과표{n}')
-        columns=table['columns']; ws.append([c['label'] for c in columns])
+        columns=table['columns']
+        # 천 단위 콤마·소수 자리는 셀 서식으로 붙인다(값은 숫자 그대로). 결과표 다운로드는 머리글에 단위도 적는다.
+        ws.append([c['label']+(f" ({c['unit']})" if unit_headers and c.get('unit') else '') for c in columns])
+        formats=['#,##0' if c.get('unit')=='USD' else '0.0' if c.get('unit')=='%' else None for c in columns]
         for row in table['rows']:
             values=[]
             for c in columns:
                 v=row.get(c['key'])
-                if isinstance(v,(dict,list)): v=str(v)
+                if isinstance(v,dict) and 'hs_code' in v: v=v['hs_code']
+                elif isinstance(v,(dict,list)): v=str(v)
                 values.append(v)
             ws.append(values)
+            for cell,fmt in zip(ws[ws.max_row],formats):
+                if fmt and isinstance(cell.value,(int,float)): cell.number_format=fmt
         # 수식으로 해석될 수 있는 원문도 문자열 셀로 강제한다.
         for row in ws:
             for cell in row:

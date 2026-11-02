@@ -226,12 +226,17 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
                 target.update({key(r):r['amount_usd'] for r in aggregate(store,source,m,m,hs,countries,group)})
         old_rank={k:n for n,k in enumerate(sorted((k for k in previous if previous[k]>0),key=lambda k:(-previous[k],k)),1)}
     flags=anomaly_map(store,start,end,hs,countries,group,flow)
+    hs_names={}
+    if group=='HS6' and primary:
+        # 화면이 품목 코드 대신 품목명을 보여 주도록 이름을 같이 내려준다.
+        code=store.t('hs_code')
+        hs_names={r['hs_code']:r['name_ko'] for r in store.c.execute(select(code.c.hs_code,code.c.name_ko).where(code.c.hs_ver=='HS2022',code.c.hs_code.in_(list(primary)))).mappings()}
     items=[]
     for rank,k in enumerate(sorted(primary,key=lambda k:(-primary[k],k)),1):
         h=[{'hs_code':k,'hs_ver':'HS2022'}] if group=='HS6' else hs
         country=[k] if group=='COUNTRY' else countries
         items.append({'rank':rank,'country_code':k if group=='COUNTRY' else None,
-            'hs_item':h[0] if group=='HS6' else None,'export_amount_usd':ex.get(k,Decimal(0)),'import_amount_usd':im.get(k,Decimal(0)),
+            'hs_item':h[0] if group=='HS6' else None,'hs_name':hs_names.get(k) if group=='HS6' else None,'export_amount_usd':ex.get(k,Decimal(0)),'import_amount_usd':im.get(k,Decimal(0)),
             'has_data':k in ex or k in im,
             'share_pct':primary[k]*100/total if total else None,
             'rank_change':old_rank[k]-rank if k in old_rank and primary[k]>0 else None,
@@ -240,8 +245,9 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
             'one_off':flags.get(k,anomaly_view(set()))})
     meta=metadata(store,start,end)
     conditions={'hs_items':hs or [],'country_codes':countries or [],'period':period(start,end),'trade_flow':flow}
-    # has_data는 화면 표시용이라 엑셀·채팅 결과표에는 넣지 않는다.
-    table=result_table(store,uid,[{k:v for k,v in item.items() if k!='has_data'} for item in items],meta,conditions,store.queries)
+    # has_data는 화면 표시용이라 엑셀·채팅 결과표에는 넣지 않는다. 국가 순위에는 품목명 칸이 필요 없다.
+    hidden={'has_data'} | ({'hs_name'} if group=='COUNTRY' else set())
+    table=result_table(store,uid,[{k:v for k,v in item.items() if k not in hidden} for item in items],meta,conditions,store.queries)
     return {'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items)), 'result_id':table['result_id'],'meta':meta}
 
 

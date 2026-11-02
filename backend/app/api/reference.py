@@ -6,7 +6,33 @@ from backend.app.api.common import require, unavailable, page_info
 
 def hs_search(store,q,depth=4,limit=5):
     require(depth==4,'화면 검색은 HS4만 허용합니다.')
-    return _search_depth(store,q,depth,limit)
+    code=''.join(str(q).split())
+    # 5·6자리 코드(예: 33049, 330499)는 그 코드로 시작하는 HS6 후보를 상위 HS4와 함께 돌려준다.
+    if code.isdigit() and len(code)>4:
+        hs6=_hs6_rows(store,code[:6],prefix=True,limit=limit)
+        if hs6: return {'items':hs6,'match_type':'EXACT' if len(hs6)==1 and len(code)>=6 else 'SIMILAR','confidence':'EXACT' if len(hs6)==1 and len(code)>=6 else 'LOW',**browse_hint()}
+        q=code[:4]
+    result=dict(_search_depth(store,q,depth,limit))
+    # HS4 이름에 없는 말(예: 메모리)은 HS6 품목명에서 찾아 상위 HS4와 함께 보여 준다.
+    if len(result['items'])<limit and not code.isdigit() and len(code)>=2:
+        seen={r['hs_code'] for r in result['items']}
+        extra=[r for r in _hs6_rows(store,code,prefix=False,limit=limit) if r['hs_code'] not in seen]
+        if extra:
+            result['items']=[*result['items'],*extra][:limit]
+            if result['match_type']=='NONE': result['match_type']='SIMILAR'
+    return result
+
+
+def _hs6_rows(store,word,prefix,limit=5):
+    """HS6 코드 또는 품목명으로 HS6를 찾아 상위 HS4 행에 hs6를 붙여 돌려준다."""
+    store.require_data('hs_code')
+    t=store.t('hs_code')
+    cond=t.c.hs_code.startswith(word,autoescape=True) if prefix else func.replace(t.c.name_ko,' ','').contains(''.join(word.split()),autoescape=True)
+    rows=store.rows(select(t.c.hs_code,t.c.name_ko).where(t.c.hs_ver=='HS2022',t.c.depth==6,cond).order_by(t.c.hs_code).limit(limit))
+    if not rows: return []
+    parents={r['hs_code']:r for r in store.rows(select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth)
+        .where(t.c.hs_ver=='HS2022',t.c.depth==4,t.c.hs_code.in_({r['hs_code'][:4] for r in rows})))}
+    return [{**parents[r['hs_code'][:4]],'hs6':{'hs_code':r['hs_code'],'name_ko':r['name_ko']}} for r in rows if r['hs_code'][:4] in parents]
 
 
 def chat_hs_search(store,q):

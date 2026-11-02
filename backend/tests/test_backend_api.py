@@ -321,6 +321,71 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/admin/audit-events').json()['page']['total'],1)
         self.assertEqual(self.client.get('/api/v1/admin/notification-events/999/diagnosis?user_id='+uid).status_code,404)
 
+    def test_product_ranking_includes_hs_name_and_formatted_excel(self):
+        self.signup()
+        response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&group_by=HS6')
+        self.assertEqual(response.status_code,200,response.text)
+        item=response.json()['items'][0]
+        self.assertEqual(item['hs_item']['hs_code'],'330499')
+        self.assertTrue(item['hs_name'])
+        workbook=self.client.get('/api/v1/results/'+response.json()['result_id']+'/file')
+        self.assertEqual(workbook.status_code,200,workbook.text)
+        from openpyxl import load_workbook
+        sheet=load_workbook(io.BytesIO(workbook.content))['결과표1']
+        headers=[c.value for c in sheet[1]]
+        self.assertIn('수출액 (USD)',headers); self.assertIn('품목명',headers)
+        self.assertEqual(sheet.cell(2,headers.index('품목')+1).value,'330499')
+        self.assertEqual(sheet.cell(2,headers.index('수출액 (USD)')+1).number_format,'#,##0')
+        countries=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12').json()
+        self.assertIsNone(countries['items'][0]['hs_name'])
+        table=self.client.get('/api/v1/results/'+countries['result_id']).json()['table']
+        self.assertNotIn('hs_name',[c['key'] for c in table['columns']])
+
+    def test_admin_member_search_follows_selected_field(self):
+        uid=self.signup(); m=self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id==int(uid)).values(role='ADMIN',name='검색이름'))
+            email=c.execute(select(m['users'].c.email).where(m['users'].c.user_id==int(uid))).scalar()
+        part=email.split('@')[0]
+        found=lambda q,by: self.client.get('/api/v1/admin/users',params={'q':q,'by':by}).json()['page']['total']
+        self.assertEqual(found(part,'id'),1)
+        self.assertEqual(found(part,'name'),0)
+        self.assertEqual(found('검색이름','name'),1)
+        self.assertEqual(found('검색이름','id'),0)
+        self.assertEqual(self.client.get('/api/v1/admin/users',params={'q':part,'by':'other'}).status_code,400)
+
+    def test_admin_runs_search_and_status_filter(self):
+        uid=self.signup(); m=self.meta.tables
+        found=lambda **p: self.client.get('/api/v1/admin/data/runs',params=p).json()['page']['total']
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id==int(uid)).values(role='ADMIN'))
+        base,failed=found(),found(status='FAILED')
+        with self.engine.begin() as c:
+            for job,status in (('HS6_AGGREGATION','SUCCESS'),('HS6_AGGREGATION','FAILED'),('ECOS_RATE','FAILED')):
+                c.execute(m['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':job,'target_table':'hs_code_correlation',
+                    'period_start':date(2025,8,1),'period_end':date(2025,8,31),'status':status,'detail_json':{}})
+        self.assertEqual(found(),base+3)
+        self.assertEqual(found(status='FAILED'),failed+2)
+        self.assertEqual(found(q='ecos'),1)
+        self.assertEqual(found(q='HS6',status='FAILED'),1)
+
+    def test_admin_audit_search_and_sort(self):
+        from datetime import datetime
+        uid=self.signup(); m=self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id==int(uid)).values(role='ADMIN'))
+            email=c.execute(select(m['users'].c.email).where(m['users'].c.user_id==int(uid))).scalar()
+            for i,(action,target,reason) in enumerate((('USER_ROLE','USER','권한 부여 검수'),('ARTICLE_VISIBILITY','ARTICLE','정정 확인 전 숨김'))):
+                c.execute(m['api_audit_event'].insert(),{'audit_id':f'audit_t{i}','actor_id':int(uid),'action':action,'target_type':target,
+                    'target_id':str(100+i),'reason':reason,'before_json':{},'after_json':{},'created_at':datetime(2026,1,1+i)})
+        get=lambda **p: self.client.get('/api/v1/admin/audit-events',params=p).json()
+        self.assertEqual([x['audit_id'] for x in get()['items']][:2],['audit_t1','audit_t0'])
+        self.assertEqual([x['audit_id'] for x in get(sort='oldest')['items']][-2:],['audit_t0','audit_t1'])
+        self.assertEqual([x['audit_id'] for x in get(q='정정')['items']],['audit_t1'])
+        self.assertEqual(get(q=email.split('@')[0])['page']['total'],2)
+        self.assertEqual(get(q='정정')['items'][0]['actor_email'],email)
+        self.assertEqual(self.client.get('/api/v1/admin/audit-events',params={'sort':'other'}).status_code,400)
+
     def test_admin_alerts_follow_category_tab(self):
         uid=self.signup(); m=self.meta.tables
         with self.engine.begin() as c:
@@ -503,7 +568,7 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(response.json()['items'][0]['country_code'],'CN')
         self.assertEqual(response.json()['items'][0]['one_off']['status'],'NOT_EVALUATED')
         result=self.client.get('/api/v1/results/'+response.json()['result_id']).json()['table']
-        self.assertEqual(result['rows'],[{k:v for k,v in item.items() if k!='has_data'} for item in response.json()['items']])
+        self.assertEqual(result['rows'],[{k:v for k,v in item.items() if k not in ('has_data','hs_name')} for item in response.json()['items']])
         self.assertEqual(response.json()['items'][0]['rank_status'],'SAME')
         response=self.post('analysis/changes',{'month':'2025-12','compare':'YOY'})
         self.assertEqual(response.status_code,200,response.text)
@@ -782,6 +847,19 @@ class BackendApiTest(unittest.TestCase):
             result=self.client.get('/api/v1/reference/hs-codes?q=화장')
             self.assertEqual(result.json()['items'][0]['hs_code'],'3304')
             self.assertTrue(result.json()['warnings'])
+
+    def test_hs4_search_accepts_hs6_code(self):
+        result=self.client.get('/api/v1/reference/hs-codes?q=330499')
+        self.assertEqual(result.status_code,200,result.text)
+        self.assertEqual([(x['hs_code'],x['hs6']['hs_code']) for x in result.json()['items']],[('3304','330499')])
+        # 5자리는 그 코드로 시작하는 HS6 후보를 돌려준다.
+        result=self.client.get('/api/v1/reference/hs-codes?q=33049')
+        self.assertEqual([x['hs6']['hs_code'] for x in result.json()['items']],['330499'])
+        # HS4 이름에 없는 말은 HS6 품목명에서 찾아 상위 HS4와 함께 돌려준다.
+        with patch('backend.app.api.hs_vectors.candidates',return_value=[]):
+            result=self.client.get('/api/v1/reference/hs-codes?q=기초')
+        self.assertEqual(result.status_code,200,result.text)
+        self.assertEqual([(x['hs_code'],x['hs6']['hs_code']) for x in result.json()['items']],[('3304','330499')])
 
     def test_notification_sql_visibility_matches_article_and_array_rules(self):
         from backend.app.api import notifications

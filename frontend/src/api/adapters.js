@@ -1,10 +1,12 @@
 import { countryName } from '../data/catalog.js'
+// 서버 시각(UTC)을 이 기기 시간대의 'yyyy-mm-dd hh:mm'으로 보여 준다.
+export const localDateTime = value => value ? new Date(value).toLocaleString('sv-SE').slice(0, 16) : ''
 export function mapNotification(n) {
   return { ...n, id: n.user_alert_id, type: n.event_type === 'REPORT' ? 'report' : n.event_type === 'MAJOR_ISSUE' ? 'major' : 'surge', body: n.message, read: !!n.read_at, received: n.created_at, time: n.created_at?.slice(0, 10), reportId: n.target_type === 'REPORT' ? n.target_id : null, articleId: n.target_type === 'NEWS' ? n.target_id || n.issue?.articles?.[0]?.article_id : null, ratio: n.issue?.ratio ?? '—', formula: '현재 건수 ÷ 기준 평균', basis: `${n.issue?.current_count ?? '—'} / ${n.issue?.baseline_average ?? '—'}` }
 }
 export function mapReport(r) {
   const status = ({ READY: 'ready', QUEUED: 'generating', RUNNING: 'generating', DELAYED: 'delayed', FAILED: 'failed' })[r.status]
-  return { ...r, id: r.report_id, kind: ({ RPT_WEEKLY: 'weekly', RPT_MONTHLY: 'monthly', RPT_QUARTERLY: 'quarterly' })[r.report_type] || 'chat', status, created: r.created_at || '', meta: `${r.created_at || ''} · ${r.status}`, options: r.conditions }
+  return { ...r, id: r.report_id, kind: ({ RPT_WEEKLY: 'weekly', RPT_MONTHLY: 'monthly', RPT_QUARTERLY: 'quarterly' })[r.report_type] || 'chat', status, created: r.created_at || '', meta: `${localDateTime(r.created_at)} · ${({ READY: '생성 완료', QUEUED: '생성 대기', RUNNING: '생성 중', DELAYED: '재시도 대기', FAILED: '생성 실패' })[r.status] || r.status}`, options: r.conditions }
 }
 export const amount = value => value == null ? '—' : (Number(value) / 1e8).toLocaleString('ko-KR', Number(value) !== 0 && Math.abs(Number(value)) < 1e7 ? { maximumSignificantDigits: 3 } : { maximumFractionDigits: 1 })
 export const percent = value => value == null ? '—' : `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(1)}%`

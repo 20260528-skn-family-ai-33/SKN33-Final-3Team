@@ -41,7 +41,7 @@ export default function Interests() {
       <div style={{ marginTop: 26, paddingTop: 22, borderTop: '1px solid var(--line)' }}>
         <p style={{ fontSize: 16, fontWeight: 800 }}>관심 품목 / HS6</p>
         <Hs4Search
-          group={group} onConfirm={setGroup} buttonLabel={g => `${g ? g.code + ' ' : ''}하위 품목 전체선택`}
+          group={group} onConfirm={g => { setGroup(g); if (g?.picked) setProducts(p => [...new Set([...p, g.picked])]) }} buttonLabel={g => `${g ? g.code + ' ' : ''}하위 품목 전체선택`}
           onSelectAll={() => setProducts(p => [...new Set([...p, ...group.items.map(([id]) => id)])])}
         />
         {group && (

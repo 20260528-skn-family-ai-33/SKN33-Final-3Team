@@ -5,7 +5,7 @@ import Icon from './Icon'
 const NAV = [
   ['rank', '/rank', '수출입 순위'],
   ['articles', '/articles', '기사'],
-  ['analysis', '/analysis', 'AI분석'],
+  ['analysis', '/analysis', 'AI챗봇'],
 ]
 
 export function Logo() {
@@ -82,7 +82,7 @@ export function Footer({ isAdmin = false }) {
           <b>서비스</b>
           <p><Link to="/rank" className="ft-link">수출입 순위</Link></p>
           <p><Link to="/articles" className="ft-link">기사</Link></p>
-          <p><Link to="/analysis" className="ft-link">AI분석</Link>{!isAdmin && <> · <Link to="/account/reports" className="ft-link">리포트 센터</Link></>}</p>
+          <p><Link to="/analysis" className="ft-link">AI챗봇</Link>{!isAdmin && <> · <Link to="/account/reports" className="ft-link">리포트 센터</Link></>}</p>
         </div>
         {!isAdmin && <div>
           <b>내 정보</b>
@@ -115,7 +115,7 @@ export function FooterSmall() {
   )
 }
 
-/** 화면 오른쪽 아래에 떠 있는 AI 분석 바로가기 */
+/** 화면 오른쪽 아래에 떠 있는 AI챗봇 바로가기 */
 export function ChatFab({ ask = '' }) {
-  return <Link to={ask ? `/analysis?ask=${encodeURIComponent(ask)}` : '/analysis'} className="btn btn-red btn-lg fab"><Icon name="chat" size={18} />AI 분석 채팅 열기</Link>
+  return <Link to={ask ? `/analysis?ask=${encodeURIComponent(ask)}` : '/analysis'} className="btn btn-red btn-lg fab"><Icon name="chat" size={18} />AI챗봇 열기</Link>
 }

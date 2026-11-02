@@ -1,5 +1,5 @@
 // BS89~BS96 키워드·분류 체계: 미분류 키워드(분야 지정·보류·새 분야·분류함 수정) / 분류 기준 관리 / 키워드 처리 이력
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, navigate, withQuery } from '../../router'
 import { useApp, useStored } from '../../store'
 import { useQuery, ErrorNotice } from '../../api/hooks'
@@ -301,6 +301,8 @@ function FieldDetail({ route, store, setStore, id }) {
   const target = store.keywords.find(k => k.id === route.query.get('kw'))
   const [name, setName] = useState(f?.minor || '')
   const [scope, setScope] = useState('new')
+  // 같은 메뉴 안 이동은 스크롤을 유지하므로, 목록 아래에서 분야 상세를 열어도 맨 위에서 보이게 한다.
+  useEffect(() => { window.scrollTo(0, 0) }, [id])
   if (!f) {
     return (
       <section className="card"><p className="t2">분야를 찾을 수 없습니다</p><p className="muted" style={{ marginTop: 6 }}>삭제되었거나 아직 만들지 않은 분야입니다.</p>

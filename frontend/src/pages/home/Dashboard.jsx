@@ -17,7 +17,7 @@ const FEATURES = [
   ['calendar', '정기 리포트 구독', '주간·월간·분기 리포트를 정해진 날 자동으로 받아요.', 'lav'],
 ]
 const SHORTCUTS = [
-  ['sparkle', 'AI 분석', '대화로 묻고\n근거 기사와 함께 답을 받아요', '/analysis'],
+  ['sparkle', 'AI챗봇', '대화로 묻고\n근거 기사와 함께 답을 받아요', '/analysis'],
   ['file', '리포트 센터', '주간·월간·분기 리포트를\n열람하고 내려받아요', '/account/reports'],
   ['star', '관심정보 설정', '관심 품목(HS6)과 국가를\n등록·수정해요', '/account/interests'],
   ['bell', '알림 설정', '리포트 발행·주요이슈·급증 기사\n알림을 관리해요', '/account/settings'],
@@ -25,6 +25,7 @@ const SHORTCUTS = [
 const TICKER_TABS = [['all', '전체기사'], ['short', '단신속보'], ['major', '주요이슈']]
 const DIR_COLOR = { up: '#C8102E', down: '#1F5FD1', flat: '#5C6370' }
 const ARROW = { up: '▲', down: '▼', flat: '' }
+const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
 
 function FeatureCard([icon, title, text, tone]) {
   const bg = tone === 'rose' ? ['#FCE8EB', '#C8102E'] : ['#ECEAF5', '#2B2350']
@@ -103,10 +104,10 @@ export default function Dashboard({ route }) {
         <div className="wrap" style={{ display: 'block' }}>
           <div style={{ display: 'flex', gap: 40, alignItems: 'flex-start' }} className="resp-stack">
             <div style={{ flex: '1 1 380px', paddingTop: 24 }}>
-              <p className="eyebrow">AI 분석</p>
+              <p className="eyebrow">AI챗봇</p>
               <h1 style={{ fontSize: 44, lineHeight: 1.22 }}>대화로 시작하는<br />무역 분석</h1>
               <p className="lead" style={{ fontSize: 16, lineHeight: 1.7, marginTop: 18 }}>품목·국가·기간을 말로 묻고, 수치와 근거 기사를 확인한 뒤<br />그대로 PDF 리포트로 저장할 수 있습니다.</p>
-              <Link to="/analysis" className="btn btn-red btn-lg" style={{ marginTop: 28 }}>AI 분석 채팅 열기 <Icon name="arrowRight" size={18} /></Link>
+              <Link to="/analysis" className="btn btn-red btn-lg" style={{ marginTop: 28 }}>AI챗봇 열기 <Icon name="arrowRight" size={18} /></Link>
             </div>
             <div style={{ flex: '1.2 1 480px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, alignItems: 'start' }}>
               <div className="col" style={{ gap: 18 }}>{FEATURES.slice(0, 2).map(FeatureCard)}</div>
@@ -327,11 +328,10 @@ export default function Dashboard({ route }) {
             {data.newsCards.map(n => {
               const found = n
               return (
-                <Link key={n.title} to={found ? `/articles?tab=${found.kind === 'general' ? 'all' : found.kind}&id=${found.id}` : '/articles'} style={{ color: '#15181E', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <img src={n.img} alt="" style={{ width: '100%', height: 170, borderRadius: 14, objectFit: 'cover', display: 'block' }} />
+                <Link key={n.title} to={found ? `/articles?tab=${found.kind === 'general' ? 'all' : found.kind}&id=${found.id}` : '/articles'} style={{ color: '#15181E', display: 'flex', flexDirection: 'column', gap: 10, border: '1px solid #E3E6EA', borderRadius: 14, padding: '18px 18px 20px' }}>
                   <span style={{ fontSize: 12, fontWeight: 800, color: '#B0102A' }}>{({ major: '주요 이슈', short: '단신속보', general: '해외시장뉴스' })[n.kind]} <span style={{ fontWeight: 500, color: '#5C6370' }}>· {n.date}</span></span>
                   <span style={{ fontSize: 16, fontWeight: 800, lineHeight: 1.45 }}>{n.title}</span>
-                  <span style={{ fontSize: 13, lineHeight: 1.6, color: '#5C6370' }}>{n.summary}</span>
+                  <span style={{ fontSize: 13, lineHeight: 1.6, color: '#5C6370' }}>{cut(n.summary, 50)}</span>
                 </Link>
               )
             })}

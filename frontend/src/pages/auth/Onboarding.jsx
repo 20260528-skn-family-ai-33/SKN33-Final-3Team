@@ -45,7 +45,7 @@ export default function Onboarding({ route }) {
                 <h2 className="t2">관심 품목을 선택해 주세요</h2>
                 <p className="muted" style={{ marginTop: 6 }}>선택 사항 · 품목명 또는 HS6 코드로 검색하고 추가할 수 있습니다.</p>
                 <Hs4Search
-                  group={group} onConfirm={setGroup} buttonLabel={() => '하위 품목 전체선택'}
+                  group={group} onConfirm={g => { setGroup(g); if (g?.picked) setProducts(p => [...new Set([...p, g.picked])]) }} buttonLabel={() => '하위 품목 전체선택'}
                   onSelectAll={() => setProducts(p => [...new Set([...p, ...group.items.map(([id]) => id)])])}
                 />
                 <p className="note" style={{ marginTop: 8 }}>유효한 HS 4자리 선택 확정 후 활성화 · 미확정 상태에서는 비활성화</p>

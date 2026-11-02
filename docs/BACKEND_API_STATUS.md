@@ -14,7 +14,7 @@
 | 008 | `DELETE  /api/v1/users/me` | 보류: DEC-46 탈퇴 사유 및 보존·삭제 정책 |
 | 009 | `GET  /api/v1/config/options` | 처리 코드 구현 |
 | 010 | `GET  /api/v1/data/availability` | 처리 코드 구현 |
-| 011 | `GET  /api/v1/reference/hs-codes` | 정확 일치/임베딩 후보; TTL 캐시·IP 제한·2자 최소 입력·확신도 및 직접 탐색 경로 |
+| 011 | `GET  /api/v1/reference/hs-codes` | 정확 일치/임베딩 후보; TTL 캐시·IP 제한·2자 최소 입력·확신도 및 직접 탐색 경로; 5·6자리 코드와 HS6 품목명은 상위 HS4에 `hs6`를 붙여 반환 |
 | 012 | `GET  /api/v1/reference/hs-codes/{hs_code}/children` | ROOT→HS2→HS4→HS6 사전 탐색 |
 | 013 | `GET  /api/v1/reference/countries` | 처리 코드 구현 |
 | 014 | `GET  /api/v1/reference/regions` | 처리 코드 구현 |
@@ -84,13 +84,13 @@
 | 078 | `POST  /api/v1/analysis/import-market-shares` | 처리 코드 구현 |
 | 079 | `GET  /api/v1/admin/overview` | 보류: DEC-37 과거 월말 회원·구독 스냅샷 저장 계약 |
 | 080 | `GET  /api/v1/admin/alerts` | 처리 코드 구현 |
-| 081 | `GET  /api/v1/admin/users` | 처리 코드 구현 |
+| 081 | `GET  /api/v1/admin/users` | 처리 코드 구현; `by`(all/id/name) 검색 기준 |
 | 082 | `GET  /api/v1/admin/users/{user_id}` | 처리 코드 구현 |
 | 083 | `PATCH  /api/v1/admin/users/{user_id}/role` | 처리 코드 구현 |
 | 084 | `PATCH  /api/v1/admin/users/{user_id}/status` | 처리 코드 구현 |
 | 085 | `GET  /api/v1/admin/users/{user_id}/interests` | 관심값 조회; checks는 추가 진단 없음 |
 | 086 | `GET  /api/v1/admin/users/{user_id}/exposure` | 관심 노출 조회; checks는 추가 진단 없음 |
-| 087 | `GET  /api/v1/admin/data/runs` | 처리 코드 구현 |
+| 087 | `GET  /api/v1/admin/data/runs` | 처리 코드 구현; `q`(실행 ID·작업명·출처) 검색 |
 | 088 | `GET  /api/v1/admin/data/runs/{run_id}` | 보류: DEC-42 상세 로그·실패 범위 생산자 계약 |
 | 089 | `POST  /api/v1/admin/data/runs/{run_id}/retries` | 보류: 데이터 적재 담당자의 실패 범위 재수집 실행기 연결 |
 | 090 | `GET  /api/v1/admin/data/quality-issues` | 보류: DEC-38 HS 판본 품질 판정 저장 계약 |
@@ -125,7 +125,7 @@
 | 119 | `GET  /api/v1/admin/users/{user_id}/notification-settings` | 처리 코드 구현 |
 | 120 | `GET  /api/v1/admin/notification-events/{event_id}/diagnosis` | 존재 검증 후 UNKNOWN; 과거 제외 이유를 추정하지 않음 |
 | 121 | `GET  /api/v1/admin/notification-rules` | 처리 코드 구현 |
-| 122 | `GET  /api/v1/admin/audit-events` | 처리 코드 구현 |
+| 122 | `GET  /api/v1/admin/audit-events` | 처리 코드 구현; `q` 검색·`sort`(latest/oldest)·`actor_email` |
 | 123 | `GET  /api/v1/admin/audit-events/{audit_id}` | 처리 코드 구현 |
 | 124 | `GET  /api/v1/admin/operation-settings` | 처리 코드 구현 |
 | 125 | `PATCH  /api/v1/admin/article-sources/{source_code}/collection` | 보류: DEC-41 버전 획득 및 적재 담당자의 출처 중지 실행기 연결 |
