@@ -36,10 +36,9 @@ export function Signup() {
     await runOnce(async () => {
       const result = await signup(form)
       if (result.ok) {
-        notify('회원가입이 완료되었습니다. 관심사를 설정하거나 건너뛸 수 있습니다.')
         try {
           sessionStorage.setItem('bs.onboarding.' + result.account.id, JSON.stringify({ items: [], countries: [], welcome: true }))
-        } catch { /* The signup notice also works without draft storage. */ }
+        } catch { notify('회원가입이 완료되었습니다.') }
         return navigate('/onboarding')
       }
       const fieldError = (key, message) => {
