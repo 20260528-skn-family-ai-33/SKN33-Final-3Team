@@ -112,6 +112,27 @@ function OpsDashboard({ tab }) {
   )
 }
 
+/** 기사 제목·본문 검색 */
+function ArticleSearch({ value, to }) {
+  const [q, setQ] = useState(value || '')
+  const go = () => navigate(q.trim() ? `${to}?q=${encodeURIComponent(q.trim())}` : to)
+  return (
+    <section className="card" style={{ padding: '16px 20px' }}>
+      <form onSubmit={e => { e.preventDefault(); go() }} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'end' }}>
+        <div>
+          <label className="lbl" htmlFor="article-q">기사 검색</label>
+          <div className={'input sm' + (q ? ' val' : '')}>
+            <input id="article-q" value={q} onChange={e => setQ(e.target.value)} placeholder="기사 제목 또는 본문 내용 입력" />
+            <Icon name="search" color="#9AA0AA" />
+          </div>
+        </div>
+        <Btn type="submit" kind="ink" size="md" style={{ height: 44, borderRadius: 12 }}>검색</Btn>
+      </form>
+      <p className="note" style={{ marginTop: 8 }}>기사 제목 또는 본문 일부로 검색합니다. 비우고 검색하면 전체 목록으로 돌아갑니다.</p>
+    </section>
+  )
+}
+
 /** 회원 아이디(이메일)·이름 검색 */
 function MemberSearch({ value, to }) {
   const [q, setQ] = useState(value || '')
@@ -157,7 +178,7 @@ function Block({ b, query }) {
               {r.cells.map((c, j) => <span key={j}><Cell c={c} /></span>)}
             </div>
           ))}
-          {!rows.length && <p className="muted" style={{ padding: '18px 14px' }}>{query?.q ? '검색 결과가 없습니다. 아이디(이메일) 또는 이름을 다시 확인해 주세요.' : '표시할 항목이 없습니다.'}</p>}
+          {!rows.length && <p className="muted" style={{ padding: '18px 14px' }}>{b.empty || (query?.q ? '검색 결과가 없습니다. 아이디(이메일) 또는 이름을 다시 확인해 주세요.' : '표시할 항목이 없습니다.')}</p>}
         </section>
       )
     }
@@ -211,6 +232,7 @@ function Block({ b, query }) {
     )
     case 'skeleton': return <div className="col" style={{ gap: 12 }}>{Array.from({ length: b.rows }, (_, i) => <div key={i} style={{ height: 44, borderRadius: 10, background: '#ECEEF1' }} />)}</div>
     case 'memberSearch': return <MemberSearch value={query?.q ?? b.value} to={b.to} />
+    case 'articleSearch': return <ArticleSearch value={query?.q} to={b.to} />
     case 'ops': return <OpsDashboard tab={b.tab} />
     default: return null
   }

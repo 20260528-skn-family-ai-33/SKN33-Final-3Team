@@ -95,12 +95,15 @@ export function Toggle({ on, onChange, label, disabled }) {
 /** 화면 위에 뜨는 확인 창. Esc·배경 클릭으로 닫는다. */
 export function Modal({ open = true, onClose, width = 600, top, label, children, className }) {
   const ref = useRef(null)
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose }, [onClose])
   const id = useId()
+  // 부모가 매번 새 onClose를 넘겨도 열려 있는 동안 포커스를 다시 옮기지 않는다(입력 중 글자가 끊기는 문제).
   useEffect(() => {
     if (!open) return undefined
     const prev = document.activeElement
     ref.current?.focus()
-    const onKey = e => { if (e.key === 'Escape') onClose?.() }
+    const onKey = e => { if (e.key === 'Escape') closeRef.current?.() }
     window.addEventListener('keydown', onKey)
     document.body.classList.add('modal-open')
     return () => {
@@ -108,7 +111,7 @@ export function Modal({ open = true, onClose, width = 600, top, label, children,
       document.body.classList.remove('modal-open')
       prev?.focus?.()
     }
-  }, [open, onClose])
+  }, [open])
   if (!open) return null
   return (
     <div className="modal-layer" style={top ? { paddingTop: top } : undefined}>

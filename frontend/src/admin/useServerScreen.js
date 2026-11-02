@@ -1,6 +1,8 @@
 import { useQuery } from '../api/hooks'
 const table = (head, rows) => ({ type: 'table', head, cols: `repeat(${head.length}, minmax(100px, 1fr))`, rows: rows.map(cells => ({ cells: cells.map(c => c == null ? '—' : typeof c === 'object' ? c : String(c)) })) })
 const button = (label, to) => ({ btns: [{ label, to }] })
+// 이미 위에 상세가 열린 행은 같은 화면으로 가는 버튼 대신 '보는 중'으로 표시한다.
+const detailCell = (open, to) => open ? { tag: 'ok', text: '보는 중' } : button('상세', to)
 export function useServerScreen(template, id, query) {
   const user = query.get('user_id'), article = query.get('article_id')
   const endpoint = ['BS32','BS34','BS36','BS38'].includes(id) ? '/admin/overview'
@@ -18,6 +20,7 @@ export function useServerScreen(template, id, query) {
   const filters = paged ? { page: Number(query.get('page')) || 1, page_size: 20 } : {}
   if (endpoint === '/admin/users') { filters.q = query.get('q') || undefined; filters.status = status }
   if (endpoint === '/admin/articles') filters.q = query.get('q') || undefined
+  if (endpoint === '/admin/alerts') filters.category = ({ BS35: 'DATA', BS37: 'REPORT', BS39: 'MEMBER' })[id] || 'ALL'
   const result = useQuery(endpoint, filters, !!endpoint)
   if (!template) return { result, screen: null }
   const items = result.data?.items || result.data?.rules || []
@@ -27,10 +30,13 @@ export function useServerScreen(template, id, query) {
   if (endpoint === '/admin/overview') blocks.push(...template.blocks.filter(b => b.type === 'ops'))
   else if (endpoint === '/admin/users') {
     if (!blocks.some(b => b.type === 'memberSearch')) blocks.push({ type: 'memberSearch', to: '/admin/members/BS49' })
-    blocks.push(table(['아이디(이메일)', '이름', '권한', '이용 상태', '관리'], items.map(r => [r.email, r.name, r.role, r.account_status, button('상세', `/admin/members/BS48?user_id=${r.user_id}`)])))
+    blocks.push(table(['아이디(이메일)', '이름', '권한', '이용 상태', '관리'], items.map(r => [r.email, r.name, r.role, r.account_status, detailCell(String(r.user_id) === user, `/admin/members/BS48?user_id=${r.user_id}`)])))
   } else if (endpoint === '/admin/alerts') blocks.push(table(['분류', '알림 내용', '발생 시각', '관리'], items.map(r => [r.category, r.message, r.created_at, button('수집 이력', '/admin/inbox/collection')])))
   else if (endpoint === '/admin/data/runs') blocks.push(table(['실행 ID', '수집 작업', '대상 기간', '결과', '수신 건수'], items.map(r => [r.run_id, r.job_name, `${r.period_start} ~ ${r.period_end}`, r.status, r.received_count])))
-  else if (endpoint === '/admin/articles') blocks.push(table(['기사 ID', '원문 분류', '노출 상태', '주제', '관리'], items.map(r => [r.article_id, r.original_category, r.visibility, r.kw_topic.join(', '), button('상세', `/admin/data/BS80?article_id=${r.article_id}`)])))
+  else if (endpoint === '/admin/articles') {
+    blocks.push({ type: 'articleSearch', to: '/admin/data/BS77' })
+    blocks.push({ ...table(['기사 ID', '원문 분류', '노출 상태', '주제', '관리'], items.map(r => [r.article_id, r.original_category, r.visibility, r.kw_topic.join(', '), detailCell(String(r.article_id) === article, `/admin/data/BS80?article_id=${r.article_id}`)])), empty: query.get('q') ? '검색 결과가 없습니다. 기사 제목·본문 검색어를 바꿔 보세요.' : '' })
+  }
   else if (endpoint === '/admin/audit-events') blocks.push(table(['처리 시각', '작업', '대상', '사유'], items.map(r => [r.created_at, r.action, `${r.target_type} ${r.target_id}`, r.reason])))
   else if (endpoint === '/admin/operation-settings' || endpoint === '/admin/notification-rules') blocks.push(table(['설정', '활성 여부', '값'], items.map(r => [r.label_ko, r.enabled ? '활성' : '비활성', r.value_text])))
   else if (endpoint === '/admin/notification-deliveries') blocks.push(table(['알림 ID', '회원 ID', '편입 결과', '팝업 확인', '읽음'], items.map(r => [r.user_alert_id, r.user_id, r.result, r.popup_shown_at, r.read_at])))

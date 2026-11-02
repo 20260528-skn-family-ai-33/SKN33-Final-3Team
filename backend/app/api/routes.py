@@ -181,7 +181,10 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==77: return un_market.availability(store,query['hs6_code'],query['hs_ver'],query.get('country_codes',[]),query['freq_code'])
     if identity==78: return un_market.shares(store,body)
     if identity==80:
-        t=store.t('batch_run'); rows=store.rows(select(t).where(t.c.status=='FAILED').order_by(t.c.run_id.desc()))
+        category=query.get('category','ALL')
+        require(category in ('ALL','DATA','REPORT','MEMBER'),'알림 분류를 확인하세요.')
+        # 현재 관리자 알림은 데이터 수집 실패(DATA)만 만든다. 다른 분류 탭에는 섞어 보이지 않는다.
+        t=store.t('batch_run'); rows=store.rows(select(t).where(t.c.status=='FAILED').order_by(t.c.run_id.desc())) if category in ('ALL','DATA') else []
         return {'items':[{'alert_id':str(r['run_id']),'category':'DATA','message':'수집 작업 실패: '+r['job_name'],
             'target_type':'BATCH','target_id':str(r['run_id']),'created_at':r['finished_at']} for r in rows[(page-1)*size:page*size]],'page':page_info(page,size,len(rows))}
     if identity==81: return admin.users(store,query.get('q'),query.get('status','ALL'),page,size)

@@ -3,7 +3,7 @@ import { api } from '../api/client'
 import { useQuery, QueryState, Value } from '../api/hooks'
 import { Btn, Modal, TextField } from '../components/ui'
 import { useApp } from '../store'
-export default function ServerDetail({ type, id }) {
+export default function ServerDetail({ type, id, onChanged }) {
   const { session, run, notify } = useApp()
   const path = type === 'user' ? `/admin/users/${id}` : `/admin/articles/${id}`
   const result = useQuery(path)
@@ -13,7 +13,7 @@ export default function ServerDetail({ type, id }) {
     setBusy(true)
     await run(async () => {
       await api(`${path}/${action.field}`, { method: 'PATCH', body: { [action.key]: action.value, expected_version: result.data.version, confirmed: true, reason } })
-      setAction(null); setReason(''); result.reload(); notify('변경과 감사 이력 저장을 완료했습니다.')
+      setAction(null); setReason(''); result.reload(); onChanged?.(); notify('변경과 감사 이력 저장을 완료했습니다.')
     }); setBusy(false)
   }
   return <section className="card"><QueryState state={result}>{data => {

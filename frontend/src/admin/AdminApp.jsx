@@ -63,8 +63,8 @@ export default function AdminApp({ route }) {
           {isKeyword ? <KeywordAdmin route={route} /> : screen ? <div className="col" style={{ gap: 20, minWidth: 0 }}>
             <ErrorNotice error={binding.result.error} retry={binding.result.reload} />
             {binding.result.loading && <p role="status">불러오는 중…</p>}
-            {binding.user && <ServerDetail type="user" id={binding.user} key={binding.user} />}
-            {binding.article && <ServerDetail type="article" id={binding.article} key={binding.article} />}
+            {binding.user && <ServerDetail type="user" id={binding.user} key={binding.user} onChanged={binding.result.reload} />}
+            {binding.article && <ServerDetail type="article" id={binding.article} key={binding.article} onChanged={binding.result.reload} />}
             <AdminScreen key={screenId} screen={screen} query={Object.fromEntries(route.query)} />
             {binding.result.data?.page && <Pagination page={Number(route.query.get('page')) || 1} info={binding.result.data.page} onChange={page => { const q = new URLSearchParams(route.query); q.set('page', page); navigate(`${route.path}?${q}`) }} />}
           </div> : <div className="card"><p className="t2">화면을 찾을 수 없습니다</p></div>}

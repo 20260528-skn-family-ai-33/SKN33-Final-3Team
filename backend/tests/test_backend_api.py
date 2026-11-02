@@ -321,6 +321,19 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/admin/audit-events').json()['page']['total'],1)
         self.assertEqual(self.client.get('/api/v1/admin/notification-events/999/diagnosis?user_id='+uid).status_code,404)
 
+    def test_admin_alerts_follow_category_tab(self):
+        uid=self.signup(); m=self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id==int(uid)).values(role='ADMIN'))
+            c.execute(m['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION','target_table':'export_summary',
+                'period_start':date(2025,8,1),'period_end':date(2025,8,31),'status':'FAILED','detail_json':{}})
+        for category,count in (('ALL',1),('DATA',1),('REPORT',0),('MEMBER',0)):
+            response=self.client.get('/api/v1/admin/alerts?category='+category)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(len(response.json()['items']),count,category)
+            self.assertEqual(response.json()['page']['total'],count,category)
+        self.assertEqual(self.client.get('/api/v1/admin/alerts?category=OTHER').status_code,400)
+
     def test_worker_fencing_and_duplicate_message_after_context_change(self):
         uid=self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
         body={'question':'2025년 12월 전체 품목 수출 추이','client_message_id':'same'}
