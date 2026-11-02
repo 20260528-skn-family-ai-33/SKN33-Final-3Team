@@ -7,12 +7,12 @@ import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
 import { api } from '../../api/client'
 import { requestId } from '../../api/requestId'
-import { previewUsable, previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
-import { amount, percent } from '../../api/adapters'
-import { useQuery, ErrorNotice } from '../../api/hooks'
+import { previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
+import { amount, percent, reportProduct } from '../../api/adapters'
+import { usePendingAction, useQuery, ErrorNotice } from '../../api/hooks'
 import { Hs4Search } from '../../components/pickers'
 import { monthOffset } from '../home/useDashboard'
-import { countryName, productName } from '../../data/catalog'
+import { countryName } from '../../data/catalog'
 import { ALL_SECTIONS } from '../../data/seed'
 const range = (from, to) => `${from || '—'} ~ ${to || '—'}`
 const PERIOD_PRESETS = [['3', '최근 3개월'], ['6', '최근 6개월'], ['12', '최근 12개월']]
@@ -24,7 +24,7 @@ const STATUS_TAG = {
   done: ['ok', '생성 완료'],
 }
 const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
-const optionsFor = c => ({ conditions: c, country: c.country_codes.map(countryName).join(' · '), product: c.hs_items.map(h => h.hs_code).join(', '), from: c.period.start.slice(0, 7), to: c.period.end.slice(0, 7), ...reportComparisonInputs(c), sections: ALL_SECTIONS })
+const optionsFor = (c, choices) => ({ conditions: c, country: c.country_codes.map(countryName).join(' · '), product: c.hs_items.map(h => reportProduct(h.hs_code, choices?.find(choice => choice.hs_item?.hs_code === h.hs_code)?.label || h.name_ko)).join(', '), from: c.period.start.slice(0, 7), to: c.period.end.slice(0, 7), ...reportComparisonInputs(c), sections: ALL_SECTIONS })
 
 function AiBlock({ children }) {
   return (
@@ -51,53 +51,74 @@ function ConditionCard({ message, onChange, onGenerate }) {
   const { run, notify } = useApp()
   const availability = useQuery('/data/availability')
   const [preview, setPreview] = useState(null)
-  const [busy, setBusy] = useState(false)
+  const [busy, runOnce] = usePendingAction()
   const request = useRef(null)
   const o = message.options
   const signature = JSON.stringify(o)
-  const generate = async () => {
-    if (busy) return
-    setBusy(true)
-    await run(async () => {
-      if (!previewUsable(preview, signature)) {
-        const conditions = reportConditions(o)
-        const data = await api('/reports/preview', { method: 'POST', body: { conditions } })
-        setPreview({ ...data, signature }); request.current = requestId()
-      } else {
-        try {
-          await onGenerate({ preview_id: preview.preview_id, confirm_conditions: true, formats: ['PDF', 'DOCX'], sections: o.sections.map(s => sectionCodes[s]) }, request.current)
-        } catch (error) {
-          if (!previewExpired(error)) throw error
-          setPreview(null); request.current = null
-          notify('리포트 조건 확인이 만료되었습니다. 조건을 다시 확인해 주세요.')
-        }
-      }
-    })
-    setBusy(false)
+  const loadPreview = async () => {
+    const data = await api('/reports/preview', { method: 'POST', body: { conditions: reportConditions(o) } })
+    setPreview({ ...data, signature })
+    request.current = requestId()
+    return data
   }
+  const confirm = () => runOnce(() => run(loadPreview))
+  const generate = () => runOnce(() => run(async () => {
+    const create = p => onGenerate({ preview_id: p.preview_id, confirm_conditions: true, formats: ['PDF', 'DOCX'], sections: o.sections.map(s => sectionCodes[s]) }, request.current)
+    try {
+      await create(preview)
+    } catch (error) {
+      if (!previewExpired(error)) throw error
+      const fresh = await loadPreview()
+      if (JSON.stringify(fresh.conditions) !== JSON.stringify(preview.conditions)) {
+        notify('유효기간이 지나 생성 조건이 바뀌었습니다. 새 조건을 확인해 주세요.')
+        return
+      }
+      await create(fresh)
+    }
+  }))
+  const start = availability.data?.trade_start_month
+  const end = availability.data?.trade_end_month
+  const years = start && end ? Array.from({ length: Number(end.slice(0, 4)) - Number(start.slice(0, 4)) + 1 }, (_, i) => String(Number(end.slice(0, 4)) - i)) : []
+  const incompleteComparison = Boolean(o.compareFrom) !== Boolean(o.compareTo)
+  const reversedComparison = o.compareFrom && o.compareTo && o.compareFrom > o.compareTo
   const set = patch => onChange({ ...message, options: { ...o, ...patch } })
   if (message.locked) {
     return (
       <AiBlock>
         <p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인했습니다.</p>
-        <p style={{ marginTop: 8, fontSize: 15 }}>국가: {o.country || '전체'} · 품목: {productName(o.product)}{o.product && `(${o.product})`} · 분석: {range(o.from, o.to)}</p>
+        <p style={{ marginTop: 8, fontSize: 15 }}>국가: {o.country || '전체'} · 품목: {o.product || '전체 품목'} · 분석: {range(o.from, o.to)}</p>
         <p className="muted" style={{ marginTop: 4 }}>비교: {range(o.compareFrom, o.compareTo)} · 포함: {o.sections.map(s => s.replace('(KPI)', '').replace(' 기사', '').replace(' 시장', '')).join(' / ')}</p>
       </AiBlock>
     )
   }
-  const monthInput = (key, extra) => (
-    <div className="input val sm" style={extra}>
-      <input type="month" value={o[key]} aria-label={key} onChange={e => e.target.value && set({ [key]: e.target.value, preset: 'custom' })} />
+  const monthLabels = { from: '분석 시작', to: '분석 종료', compareFrom: '비교 시작', compareTo: '비교 종료' }
+  const monthInput = key => {
+    const [year = '', month = ''] = (o[key] || '').split('-')
+    const monthsFor = y => Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).filter(m => y + '-' + m >= start && y + '-' + m <= end)
+    const availableMonths = monthsFor(year)
+    const change = value => onChange({ ...message, preset: 'custom', options: { ...o, [key]: value } })
+    return <div className="report-month">
+      <select aria-label={monthLabels[key] + ' 연도'} value={year} disabled={!years.length} onChange={e => {
+        const y = e.target.value, months = monthsFor(y)
+        change(y ? y + '-' + (months.includes(month) ? month : months[0]) : '')
+      }}>
+        <option value="">연도</option>{year && !years.includes(year) && <option disabled>{year}</option>}
+        {years.map(y => <option key={y}>{y}</option>)}
+      </select>
+      <select aria-label={monthLabels[key] + ' 월'} value={month} disabled={!years.includes(year)} onChange={e => change(year + '-' + e.target.value)}>
+        {!month && <option value="">월</option>}{month && !availableMonths.includes(month) && <option value={month} disabled>{Number(month)}월</option>}
+        {availableMonths.map(m => <option key={m} value={m}>{Number(m)}월</option>)}
+      </select>
     </div>
-  )
+  }
   return (
     <AiBlock>
       <p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인해 주세요.</p>
-      <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>품목: {productName(o.product)}{o.product && `(${o.product})`} · 국가: {o.country || '전체'} (국가 선택 생략 가능)</p>
+      <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>품목: {o.product || '전체 품목'} · 국가: {o.country || '전체'} (국가 선택 생략 가능)</p>
       <div className="chips" style={{ marginTop: 16 }} role="group" aria-label="기간 빠른 선택">
         {PERIOD_PRESETS.map(([key, label]) => (
-          <button key={key} type="button" className={'chip sm' + (message.preset === key ? ' on' : '')} aria-pressed={message.preset === key}
-            onClick={() => onChange({ ...message, preset: key, options: { ...o, from: monthOffset(availability.data?.trade_end_month, 1 - Number(key)), to: availability.data?.trade_end_month, compareFrom: '', compareTo: '' } })}>{label}</button>
+          <button key={key} type="button" disabled={!start || !end || monthOffset(end, 1 - Number(key)) < start} className={'chip sm' + (message.preset === key ? ' on' : '')} aria-pressed={message.preset === key}
+            onClick={() => onChange({ ...message, preset: key, options: { ...o, from: monthOffset(end, 1 - Number(key)), to: end, compareFrom: '', compareTo: '' } })}>{label}</button>
         ))}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 20px 1fr', gap: 10, alignItems: 'center', marginTop: 16 }}>
@@ -106,6 +127,7 @@ function ConditionCard({ message, onChange, onGenerate }) {
         <span className="s" style={{ fontSize: 14, fontWeight: 700 }}>비교 기간</span>
         {monthInput('compareFrom')}<span className="c s">~</span>{monthInput('compareTo')}
       </div>
+      <ErrorNotice error={availability.error} retry={availability.reload} />
       <p className="note" style={{ marginTop: 8 }}>기본 비교: 전년 같은 기간 · 직접 지정한 연/월은 그대로 적용</p>
       <p style={{ fontSize: 15, fontWeight: 800, marginTop: 18 }}>어떤 항목을 포함할까요? <span className="s" style={{ fontWeight: 500 }}>(기본: 전체)</span></p>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
@@ -115,10 +137,19 @@ function ConditionCard({ message, onChange, onGenerate }) {
       </div>
       <div className="between" style={{ marginTop: 18 }}>
         <span className="note">핵심 요약은 항상 포함 · 선택 응답이 없으면 전체 항목으로 생성</span>
-        <Btn kind="red" size="md" icon="file" onClick={generate} disabled={busy || !o.from || !o.to || o.from > o.to}>{previewUsable(preview, signature) ? '확인한 조건으로 생성' : '리포트 조건 확인'}</Btn>
+        <Btn kind="red" size="md" icon="file" onClick={confirm} disabled={busy || !o.from || !o.to || o.from > o.to || incompleteComparison || reversedComparison}>리포트 조건 확인</Btn>
       </div>
-      {preview?.signature === signature && <p className="note">확인된 기간: {preview.conditions.period.start} ~ {preview.conditions.period.end} · 비교: {preview.conditions.compare_period?.start || '없음'} ~ {preview.conditions.compare_period?.end || ''} · 유효기간 {preview.expires_at}. 위 조건으로 PDF·DOCX를 생성합니다.</p>}
+      <Modal open={!!preview && preview.signature === signature} onClose={() => { if (!busy) setPreview(null) }} label="리포트 생성 조건 확인" width={520}>
+        <h2>이 조건으로 리포트를 생성할까요?</h2>
+        <p>{o.country || '전체 국가'} · {o.product || '전체 품목'}</p>
+        <p>분석 기간 {preview?.conditions.period.start} ~ {preview?.conditions.period.end}</p>
+        <p>비교 기간 {preview?.conditions.compare_period ? range(preview.conditions.compare_period.start, preview.conditions.compare_period.end) : '없음'}</p>
+        <div className="chips"><Btn disabled={busy} onClick={() => setPreview(null)}>조건 수정</Btn>
+          <Btn kind="red" disabled={busy} onClick={generate}>확인한 조건으로 생성</Btn></div>
+      </Modal>
       {o.from > o.to && <p className="field-err">시작 월이 종료 월보다 늦습니다.</p>}
+      {incompleteComparison && <p className="field-err">비교 시작 월과 종료 월을 모두 선택해 주세요.</p>}
+      {reversedComparison && <p className="field-err">비교 시작 월이 종료 월보다 늦습니다.</p>}
     </AiBlock>
   )
 }
@@ -205,7 +236,7 @@ export default function Analysis({ route }) {
     })
     setBusy(false)
   }
-  const saveAsReport = conditions => setDraft({ options: optionsFor(conditions) })
+  const saveAsReport = conditions => setDraft({ options: optionsFor(conditions, job?.clarification?.choices) })
   const addInterest = result_id => run(async () => { await api('/users/me/interests/items', { method: 'POST', body: { result_id } }); notify('관심 목록에 추가했습니다. 관심정보 화면을 새로고침하면 확인할 수 있습니다.') })
   const removeChat = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') })
   const updateTitle = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'PATCH', body: { title: rename.trim() } }); await refreshChats(); setModal(null) })
@@ -266,7 +297,7 @@ export default function Analysis({ route }) {
               {messages.map(m => m.role === 'USER' ? <UserBubble key={m.message_id} text={m.content_masked} /> : m.answer ? <AnswerCard key={m.message_id} message={m} onSaveReport={saveAsReport} onInterest={addInterest} /> : <AiBlock key={m.message_id}><p>{m.content_masked}</p></AiBlock>)}
               {job && ['QUEUED', 'RUNNING'].includes(job.status) && <AiBlock><p role="status">서버에서 분석 중입니다. 다른 화면으로 이동해도 작업은 유지됩니다.</p></AiBlock>}
               {job?.status === 'FAILED' && <ErrorNotice error={job.error || new Error('분석에 실패했습니다.')} />}
-              {job?.status === 'NEEDS_INPUT' && <AiBlock><p>{job.clarification.message}</p><div className="chips">{job.clarification.choices.map(c => <Btn key={c.choice_id} disabled={busy} onClick={() => clarify({ choice_ids: [c.choice_id] })}>{c.hs_item ? `HS ${c.hs_item.hs_code} · ` : ''}{c.label}</Btn>)}</div>
+              {job?.status === 'NEEDS_INPUT' && <AiBlock><p>{job.clarification.message}</p><div className="chips">{job.clarification.choices.map(c => <Btn key={c.choice_id} className="hs-choice" disabled={busy} onClick={() => clarify({ choice_ids: [c.choice_id] })}>{c.hs_item ? `HS ${c.hs_item.hs_code} · ` : ''}{c.label}</Btn>)}</div>
                 {job.clarification.kind === 'HS_ITEM' && <><Hs4Search group={hsGroup} onConfirm={setHsGroup} buttonLabel={() => '하위 품목 선택'} onSelectAll={() => {}} />{hsGroup?.items.map(([code, name]) => <Btn key={code} disabled={busy} onClick={() => clarify({ hs_item: { hs_code: code, hs_ver: 'HS2022' } })}>{name} ({code})</Btn>)}</>}
               </AiBlock>}
               {draft && <ConditionCard message={draft} onChange={setDraft} onGenerate={async (body, key) => { const data = await api('/reports', { method: 'POST', body, idempotencyKey: key }); await refreshReports(); setDraft(null); window.location.hash = `/report?id=${data.job.report_id}` }} />}

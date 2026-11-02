@@ -83,10 +83,14 @@ function RankResults({ route }) {
           <div className="card">
             {/* 관심사 등록과 같은 순서: ① 품목 검색(HS4·HS6 코드 또는 이름) → ② 세부 품목 칩 → ③ 국가·기간 → 순위 조회 */}
             <p className="lbl" style={{ margin: 0 }}>품목 (선택)</p>
-            <Hs4Search key={pickerKey} group={group} onConfirm={g => {
+            {/* HS4를 고르면 HS4 전체가 조건이 되고 아래 칩에서 HS6로 좁힐 수 있다. HS6(6자리 코드·품목명·HS4 아래 목록)를 고르면 그 HS6가 바로 조건이 된다. */}
+            <Hs4Search key={pickerKey} group={group} expandGroup onConfirm={g => {
               setGroup(g)
               if (g) registerProducts([{ hs_code: g.code, name_ko: g.name }])
-              setDraft(d => ({ ...d, product: g ? g.picked || g.code : '', group: null, scope: 'GLOBAL', inherited: false }))
+              setDraft(d => ({ ...d, product: g ? g.code : '', group: null, scope: 'GLOBAL', inherited: false }))
+            }} onSelectProduct={id => {
+              setGroup(null)
+              setDraft(d => ({ ...d, product: id, group: null, scope: 'GLOBAL', inherited: false }))
             }} />
             {(group || draft.product) && (
               <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 12, background: '#F7F8FA' }}>

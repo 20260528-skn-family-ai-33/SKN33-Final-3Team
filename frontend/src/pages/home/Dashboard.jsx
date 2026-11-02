@@ -105,6 +105,7 @@ export default function Dashboard({ route }) {
           <div style={{ display: 'flex', gap: 40, alignItems: 'flex-start' }} className="resp-stack">
             <div style={{ flex: '1 1 380px', paddingTop: 24 }}>
               <p className="eyebrow">AI챗봇</p>
+              <p className="tag plum" style={{ marginBottom: 8 }}>현재 보기 · {interest ? '내 관심 시장' : '전체 시장'}</p>
               <h1 style={{ fontSize: 44, lineHeight: 1.22 }}>대화로 시작하는<br />무역 분석</h1>
               <p className="lead" style={{ fontSize: 16, lineHeight: 1.7, marginTop: 18 }}>품목·국가·기간을 말로 묻고, 수치와 근거 기사를 확인한 뒤<br />그대로 PDF 리포트로 저장할 수 있습니다.</p>
               <Link to="/analysis" className="btn btn-red btn-lg" style={{ marginTop: 28 }}>AI챗봇 열기 <Icon name="arrowRight" size={18} /></Link>

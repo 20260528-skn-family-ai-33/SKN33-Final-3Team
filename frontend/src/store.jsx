@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api, setCsrf, download } from './api/client'
 import { navigate } from './router'
 import { registerCountries, registerProducts, countryCode, countryName } from './data/catalog'
-import { localDateTime, mapNotification, mapReport } from './api/adapters'
+import { displayTime, mapNotification, mapReport } from './api/adapters'
 const AppContext = createContext(null)
 const NotificationContext = createContext(null)
 const ToastContext = createContext(null)
@@ -44,7 +44,7 @@ export function AppProvider({ children }) {
   const notificationRevision = useRef(0)
   const notify = useCallback(message => setToast(message), [])
   const fail = useCallback(error => {
-    notify(error.message + (error.code === 'VERSION_CONFLICT' ? ' 새로고침한 뒤 변경 내용을 확인하고 다시 저장해 주세요.' : error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
+    notify(error.message + (error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
     return false
   }, [notify])
   const run = useCallback(async action => { try { return await action() } catch (error) { return fail(error) } }, [fail])
@@ -73,7 +73,7 @@ export function AppProvider({ children }) {
   }, [])
   const refreshChats = useCallback(async () => {
     const current = epoch.current; const items = await allPages('/chat/sessions')
-    if (current === epoch.current) setChats(items.map(c => ({ ...c, id: c.session_id, date: localDateTime(c.updated_at), messages: [] })))
+    if (current === epoch.current) setChats(items.map(c => ({ ...c, id: c.session_id, date: displayTime(c.updated_at), messages: [] })))
   }, [])
   const loadUser = useCallback(async (user, current) => {
     const [interest, config, refs, pref, subs] = await Promise.all([
@@ -124,7 +124,7 @@ export function AppProvider({ children }) {
       setCsrf(data.csrf_token); setSession(accountView(data.user)); setLoading(true); setLoadError(null)
       try { await loadUser(data.user, current) } catch (error) { setLoadError(error) } finally { setLoading(false) }
       return { ok: true, account: accountView(data.user), path: data.user.post_login_path }
-    } catch (error) { return { ok: false, message: error.message } }
+    } catch (error) { return { ok: false, message: error.message, code: error.code, retryAfter: error.retryAfter, details: error.details } }
   }, [loadUser])
   const setProfile = useCallback(async next => run(async () => {
     const current = epoch.current
@@ -133,36 +133,57 @@ export function AppProvider({ children }) {
     if (current !== epoch.current) return false
     updateProfile({ ...p, version: data.interests.version, home: data.interests.landing_page === 'INTERESTED' ? 'interest' : 'all' }); return true
   }), [profile, run])
+  const acceptNotificationTerms = useCallback(version => run(async () => {
+    const current = epoch.current
+    const { consent } = await api('/users/me/consents', { method: 'POST', body: {
+      terms_type: 'NOTIFICATION', terms_version: version, action: 'AGREE', enable_notifications: true,
+    } })
+    if (current !== epoch.current) return false
+    const saved = { all: consent.notifications_enabled, termsAgreed: true, termsVersion: consent.terms_version }
+    updateSettings(previous => ({ ...previous, ...saved }))
+    return saved
+  }), [run])
   const setSettings = useCallback(async next => run(async () => {
     const current = epoch.current
     await api('/users/me/notification-settings', { method: 'PATCH', body: { notifications_enabled: next.all, spike_popup: next.surge, major_issue_popup: next.major, report_popup: next.report } })
     if (current !== epoch.current) return false
     updateSettings(next); return true
   }), [run])
+  const refreshSubscription = useCallback(async current => {
+    const fresh = await api('/users/me/subscriptions')
+    if (current !== epoch.current) return false
+    const active = fresh.items.filter(item => item.enabled)
+    updateSubscription({ ...fresh, cycles: active.map(item => item.period_code.toLowerCase()), formats: active[0]?.formats || ['PDF'] })
+    return true
+  }, [])
   const setSubscription = useCallback(async next => run(async () => {
     const current = epoch.current
     const s = typeof next === 'function' ? next(subscription) : next
-    if (s.cycles.length) await api('/users/me/subscriptions', { method: 'PUT', body: { period_codes: s.cycles.map(c => c.toUpperCase()), formats: s.formats, use_saved_interests: true, expected_version: subscription.version } })
-    else for (const item of subscription.items.filter(s => s.enabled)) {
+    if (s.cycles.length) {
+      try {
+        await api('/users/me/subscriptions', { method: 'PUT', body: { period_codes: s.cycles.map(c => c.toUpperCase()), formats: s.formats, use_saved_interests: true, expected_version: subscription.version } })
+      } catch (error) {
+        if (error.code !== 'VERSION_CONFLICT') throw error
+        if (current === epoch.current && await refreshSubscription(current)) {
+          notify('다른 화면에서 저장한 최신 구독 설정을 불러왔습니다. 확인한 뒤 다시 수정해 주세요.')
+        }
+        return false
+      }
+    } else for (const item of subscription.items.filter(s => s.enabled)) {
       if (current !== epoch.current) return false
       await api(`/users/me/subscriptions/${item.subscription_id}`, { method: 'DELETE' })
     }
     if (current !== epoch.current) return false
-    const fresh = await api('/users/me/subscriptions')
-    if (current !== epoch.current) return false
-    updateSubscription({ ...fresh, cycles: fresh.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: fresh.items.find(s => s.enabled)?.formats || s.formats }); return true
-  }), [subscription, run])
+    return refreshSubscription(current)
+  }), [subscription, run, refreshSubscription, notify])
   const deleteSubscription = useCallback(async cycle => run(async () => {
     const current = epoch.current
     const target = subscription.items.find(s => s.enabled && s.period_code === cycle.toUpperCase())
     if (!target) throw new Error('삭제할 구독을 찾을 수 없습니다. 새로고침해 주세요.')
     await api(`/users/me/subscriptions/${target.subscription_id}`, { method: 'DELETE' })
     if (current !== epoch.current) return false
-    const fresh = await api('/users/me/subscriptions')
-    if (current !== epoch.current) return false
-    updateSubscription({ ...fresh, cycles: fresh.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: fresh.items.find(s => s.enabled)?.formats || subscription.formats })
-    return true
-  }), [subscription, run])
+    return refreshSubscription(current)
+  }), [subscription, run, refreshSubscription])
   const setNotifications = useCallback(async next => run(async () => {
     const current = epoch.current
     const values = typeof next === 'function' ? next(notifications) : next
@@ -176,24 +197,23 @@ export function AppProvider({ children }) {
     await refreshNotifications(true); return true
   }), [notifications, refreshNotifications, run])
   const logout = useCallback(() => run(async () => { await api('/auth/logout', { method: 'POST', body: {} }); clear(); navigate('/login'); return true }), [run, clear])
-  const changePassword = useCallback((current, next) => run(async () => {
-    await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } }); clear(); navigate('/login'); return true
-  }), [session, run, clear])
+  const changePassword = useCallback(async (current, next) => {
+    await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } })
+    clear()
+  }, [session, clear])
   const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`, `리포트-${id}.${format.toLowerCase()}`)), [run])
   const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
   const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])
   const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
   const withdraw = useCallback(() => notify('회원 탈퇴는 운영 정책 확정 후 제공됩니다.'), [notify])
-  const setConsents = useCallback(() => { notify('일반 약관 동의 관리는 서버 연동 준비 중입니다.'); return false }, [notify])
   const value = useMemo(() => ({
     session, account: session, accounts, setAccounts, loading, loadError, refresh, options, countries,
     login, signup, socialSignIn, logout, changePassword, withdraw,
-    consents: {}, setConsents,
-    profile, setProfile, settings, setSettings, subscription, setSubscription, deleteSubscription,
+    profile, setProfile, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
     chats, setChats, refreshChats, reports, refreshReports, downloadReport,
     mainView, setMainView, notify, run, fail,
   }), [session, accounts, loading, loadError, refresh, options, countries, login, signup, socialSignIn,
-    logout, changePassword, withdraw, setConsents, profile, setProfile, settings, setSettings,
+    logout, changePassword, withdraw, profile, setProfile, settings, setSettings, acceptNotificationTerms,
     subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
     downloadReport, mainView, notify, run, fail])
   const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications }),

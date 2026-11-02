@@ -14,7 +14,7 @@
 | 008 | `DELETE  /api/v1/users/me` | 보류: DEC-46 탈퇴 사유 및 보존·삭제 정책 |
 | 009 | `GET  /api/v1/config/options` | 처리 코드 구현 |
 | 010 | `GET  /api/v1/data/availability` | 처리 코드 구현 |
-| 011 | `GET  /api/v1/reference/hs-codes` | 정확 일치/임베딩 후보; TTL 캐시·IP 제한·2자 최소 입력·확신도 및 직접 탐색 경로; 5·6자리 코드와 HS6 품목명은 상위 HS4에 `hs6`를 붙여 반환 |
+| 011 | `GET  /api/v1/reference/hs-codes` | 정확 일치/임베딩 후보; TTL 캐시·IP 제한·2자 최소 입력·확신도 및 직접 탐색 경로 |
 | 012 | `GET  /api/v1/reference/hs-codes/{hs_code}/children` | ROOT→HS2→HS4→HS6 사전 탐색 |
 | 013 | `GET  /api/v1/reference/countries` | 처리 코드 구현 |
 | 014 | `GET  /api/v1/reference/regions` | 처리 코드 구현 |

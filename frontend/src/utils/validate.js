@@ -8,10 +8,10 @@ export const PASSWORD_RULES = [
   ['letter', '영문 포함', v => /[A-Za-z]/.test(v)],
   ['digit', '숫자 포함', v => /\d/.test(v)],
   ['special', '특수문자 포함', v => new RegExp(`[${SPECIAL}]`).test(v)],
-  ['length', '8자 이상', v => v.length >= 8],
-  ['charset', '공백·한글 없이 영문·숫자·특수문자만', v => v.length > 0 && new RegExp(`^[A-Za-z\\d${SPECIAL}]+$`).test(v)],
+  ['length', '8~72자', v => v.length >= 8 && v.length <= 72],
+  ['charset', '공백·한글 등 허용되지 않는 문자 없음', v => v.length > 0 && new RegExp(`^[A-Za-z\\d${SPECIAL}]+$`).test(v)],
 ]
-export const PASSWORD_HINT = '영문·숫자·특수문자를 모두 포함해 8자 이상 입력해 주세요.'
+export const PASSWORD_HINT = '비밀번호는 영문·숫자·특수문자를 모두 포함해 8~72자로 입력해 주세요.'
 
 export const passwordChecks = v => PASSWORD_RULES.map(([key, label, test]) => ({ key, label, ok: test(v || '') }))
 export const isEmail = v => EMAIL_RE.test(v.trim())

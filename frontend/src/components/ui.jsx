@@ -1,5 +1,5 @@
 // 목업 클래스(.btn, .input, .cb, .rd, .tg, .modal …)를 실제로 동작하는 요소로 감싼 공통 컴포넌트.
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from '../router'
 import Icon from './Icon'
 
@@ -26,14 +26,16 @@ export function Tag({ tone, className, children, ...rest }) {
 
 /** .input 상자 안에 실제 input을 넣는다. 값이 있으면 .val, 오류면 .err */
 export function TextField({ value, onChange, placeholder, type = 'text', icon, iconColor = '#9AA0AA', sm, invalid, className, style, inputRef, onEnter, ...rest }) {
+  const [visible, setVisible] = useState(false)
   return (
     <div className={cx('input', sm && 'sm', value && 'val', invalid && 'err', className)} style={style}>
       <input
-        ref={inputRef} type={type} value={value ?? ''} placeholder={placeholder} aria-invalid={invalid || undefined}
+        ref={inputRef} type={type === 'password' && visible ? 'text' : type} value={rest.defaultValue !== undefined ? undefined : value ?? ''} placeholder={placeholder} aria-invalid={invalid || undefined}
         onChange={e => onChange?.(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && onEnter && !e.nativeEvent.isComposing) { e.preventDefault(); onEnter() } }}
         {...rest}
       />
+      {type === 'password' && <button type="button" className="reset more" aria-label={visible ? '비밀번호 숨기기' : '비밀번호 보기'} aria-controls={rest.id} aria-pressed={visible} onClick={() => setVisible(v => !v)}>{visible ? '숨기기' : '보기'}</button>}
       {icon && <Icon name={icon} size={sm ? 16 : 18} color={iconColor} stroke={icon === 'lock' ? 1.8 : 1.9} />}
     </div>
   )

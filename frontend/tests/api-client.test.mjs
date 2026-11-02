@@ -38,3 +38,20 @@ test('download keeps binary payload and aborted requests stay aborted', async ()
     await assert.rejects(api('/articles'), { name: 'AbortError' })
   } finally { globalThis.fetch = old }
 })
+
+test('only version conflicts tell the user to reload and review before saving', () => {
+  const response = new Response(null, { status: 409 })
+  const conflict = new ApiError(response, { code: 'VERSION_CONFLICT', message: '기사 정보가 변경되었습니다.' })
+  assert.equal(conflict.message, '기사 정보가 변경되었습니다. 새로고침한 뒤 최신 내용을 확인하고 다시 저장해 주세요.')
+  const prerequisite = new ApiError(response, { code: 'INTERESTS_REQUIRED', message: '관심 등록이 필요합니다.' })
+  assert.equal(prerequisite.message, '관심 등록이 필요합니다.')
+})
+
+test('an unavailable upstream with a non-JSON gateway response has a readable retry message', async () => {
+  const old = globalThis.fetch
+  try {
+    globalThis.fetch = async () => new Response('Bad Gateway', { status: 502 })
+    await assert.rejects(api('/auth/login'), e => e instanceof ApiError && e.status === 502 &&
+      e.message === '서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.')
+  } finally { globalThis.fetch = old }
+})

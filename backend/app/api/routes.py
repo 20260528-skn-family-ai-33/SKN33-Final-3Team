@@ -154,9 +154,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
 
     if identity==49: return reports.subscription_list(store,uid)
     if identity==50: return reports.save_subscriptions(store,uid,body)
-    if identity==51:
-        store.owned('report_subscription','subscription_id',path['subscription_id'],uid)
-        t=store.t('report_subscription'); store.c.execute(update(t).where(t.c.subscription_id==path['subscription_id'],t.c.user_id==uid).values(enabled=False)); return None
+    if identity==51: return reports.cancel_subscription(store,uid,path['subscription_id'])
     if identity==52: return {'settings':notifications.settings(store,uid)}
     if identity==53: return notifications.patch_settings(store,uid,NotificationPatch.model_validate(body).model_dump(exclude_unset=True))
     if identity==54:

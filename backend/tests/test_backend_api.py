@@ -279,6 +279,63 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(len(response.json()['items']),1)
         self.assertTrue(any('2025-02-01' in w for w in response.json()['warnings']))
 
+    def test_hs_search_finds_six_digit_items_without_joining_word_fragments(self):
+        url='/api/v1/reference/hs-codes'
+        table=self.meta.tables['hs_code']
+        with self.engine.begin() as c:
+            c.execute(table.insert(),[
+                {'hs_code':'220890','depth':6,'name_ko':'기타 증류주','hs_ver':'HS2022','source_edition':'test'},
+                {'hs_code':'2208904000','depth':10,'name_ko':'소주','hs_ver':'HS2022','source_edition':'test'},
+                {'hs_code':'2009','depth':4,'name_ko':'채소 주스','hs_ver':'HS2022','source_edition':'test'},
+                {'hs_code':'854232','depth':6,'name_ko':'메모리 집적회로','hs_ver':'HS2022','source_edition':'test'}])
+        for query in ('854232','메모리'):
+            result=self.client.get(url,params={'q':query,'depth':6})
+            self.assertEqual([r['hs_code'] for r in result.json()['items']],['854232'])
+        self.assertEqual(self.client.get(url,params={'q':'소주'}).json()['items'],[])
+        spirits=self.client.get(url,params={'q':'소주','depth':6}).json()['items']
+        self.assertEqual([r['hs_code'] for r in spirits],['220890'])
+        from backend.app.api.reference import chat_hs_search
+        with self.engine.begin() as c:
+            store=Store(self.app.state.database,c)
+            result=chat_hs_search(store,'소주')
+            self.assertNotEqual(result['match_type'],'EXACT')
+            c.execute(table.insert().values(hs_code='8542',depth=4,name_ko='전자 집적 회로',hs_ver='HS2022',source_edition='test'))
+            self.assertIn('8542',[r['hs_code'] for r in chat_hs_search(store,'집적회로')['items']])
+        self.assertEqual(self.client.get(url,params={'q':'집적회로','depth':4}).json()['items'],[])
+
+    def test_cancel_legacy_duplicates_and_resubscribe(self):
+        uid=int(self.signup())
+        headers={'X-CSRF-Token':self.csrf}
+        url='/api/v1/users/me/subscriptions'
+        table=self.meta.tables['report_subscription']
+        with self.engine.begin() as c:
+            for _ in range(2):
+                c.execute(table.insert().values(user_id=uid,period_code='MONTHLY',enabled=True,filters_json={}))
+        before=self.client.get(url).json()
+        first=before['items'][0]['subscription_id']
+        self.assertEqual(self.client.delete(f'{url}/{first}',headers=headers).status_code,204)
+        cancelled=self.client.get(url).json()
+        self.assertFalse(any(row['enabled'] for row in cancelled['items']))
+        version=self.client.get('/api/v1/users/me/interests').json()['interests']['version']
+        self.client.put('/api/v1/users/me/interests',headers=headers,json={'hs_items':[],'country_codes':['US'],'expected_version':version})
+        body={'period_codes':['MONTHLY'],'formats':['DOCX'],'use_saved_interests':True,'expected_version':cancelled['version']}
+        saved=self.client.put(url,json=body,headers=headers)
+        self.assertEqual(saved.status_code,200,saved.text)
+        active=[row for row in saved.json()['items'] if row['enabled']]
+        self.assertEqual([(r['subscription_id'],r['formats']) for r in active],[(first,['DOCX'])])
+        self.assertEqual(self.client.put(url,json=body,headers=headers).status_code,409)
+
+    def test_retrying_consent_preserves_history_after_revocation(self):
+        self.signup()
+        url='users/me/consents'
+        body={'terms_type':'NOTIFICATION','terms_version':'TERMS_V1','action':'AGREE','enable_notifications':True}
+        for action in ('AGREE','AGREE','REVOKE','AGREE'):
+            response=self.post(url,{**body,'action':action,'enable_notifications':action=='AGREE'})
+            self.assertEqual(response.status_code,200,response.text)
+        table=self.meta.tables['user_consent']
+        with self.engine.connect() as c:
+            self.assertEqual(list(c.scalars(select(table.c.action).order_by(table.c.consent_id))),['AGREE','REVOKE','AGREE'])
+
     def test_subscription_validation_and_publication_trigger(self):
         uid=self.signup(); url='/api/v1/users/me/subscriptions'
         version=self.client.get(url).json()['version']
@@ -847,19 +904,6 @@ class BackendApiTest(unittest.TestCase):
             result=self.client.get('/api/v1/reference/hs-codes?q=화장')
             self.assertEqual(result.json()['items'][0]['hs_code'],'3304')
             self.assertTrue(result.json()['warnings'])
-
-    def test_hs4_search_accepts_hs6_code(self):
-        result=self.client.get('/api/v1/reference/hs-codes?q=330499')
-        self.assertEqual(result.status_code,200,result.text)
-        self.assertEqual([(x['hs_code'],x['hs6']['hs_code']) for x in result.json()['items']],[('3304','330499')])
-        # 5자리는 그 코드로 시작하는 HS6 후보를 돌려준다.
-        result=self.client.get('/api/v1/reference/hs-codes?q=33049')
-        self.assertEqual([x['hs6']['hs_code'] for x in result.json()['items']],['330499'])
-        # HS4 이름에 없는 말은 HS6 품목명에서 찾아 상위 HS4와 함께 돌려준다.
-        with patch('backend.app.api.hs_vectors.candidates',return_value=[]):
-            result=self.client.get('/api/v1/reference/hs-codes?q=기초')
-        self.assertEqual(result.status_code,200,result.text)
-        self.assertEqual([(x['hs_code'],x['hs6']['hs_code']) for x in result.json()['items']],[('3304','330499')])
 
     def test_notification_sql_visibility_matches_article_and_array_rules(self):
         from backend.app.api import notifications
