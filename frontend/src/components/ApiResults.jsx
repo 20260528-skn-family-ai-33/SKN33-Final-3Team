@@ -5,13 +5,13 @@ import { niceTicks } from '../utils/chart'
 import { Value } from '../api/hooks'
 import { download } from '../api/client'
 import { useApp } from '../store'
+import { resultColumns } from './resultColumns'
 
 /** Render server snapshots using the existing table and chart components. */
 export default function ApiResults({ table, tableOnly = false }) {
   const { run } = useApp()
   const [showTable, setShowTable] = useState(false)
-  const rows = table?.rows || [], columns = (table?.columns || []).filter(c =>
-    c.key !== 'hs_item' || rows.some(row => row.hs_item))
+  const rows = table?.rows || [], columns = resultColumns(table?.columns || [],rows)
   const numeric = ['amount_usd', 'export_amount_usd', 'import_amount_usd', 'previous_year_export_usd'].filter(key => rows.length && rows.every(r => typeof r[key] === 'number'))
   const chart = !tableOnly && rows.length > 0 && rows.every(r => r.month) && numeric.length > 0
   const bars = !tableOnly && rows.length > 0 && rows.every(r => r.country && typeof r.amount_usd === 'number')
@@ -26,11 +26,11 @@ export default function ApiResults({ table, tableOnly = false }) {
     {chart && !showTable ? <LineChart formatValue={compact} labels={rows.map(r => r.month)} yTicks={niceTicks(rows.flatMap(r => numeric.map(k => r[k])))} series={numeric.map((key, i) => ({ color: colors[i], values: rows.map(r => r[key]) }))} /> : bars && !showTable ? <>
       <div className="th" style={{ gridTemplateColumns: '1fr 2fr 1fr', marginTop: 16 }}><span>국가</span><span>수출액 (USD)</span><span className="r">비중</span></div>
       {rows.map(r => <div key={r.country} className="tr" style={{ gridTemplateColumns: '1fr 2fr 1fr' }}><b>{r.country}</b><span style={{ display: 'flex', gap: 12, alignItems: 'center' }}><span style={{ width: `${Math.max(1, r.amount_usd / maxAmount * 65)}%`, height: 12, borderRadius: 6, background: '#C8102E' }} /><b>{compact(r.amount_usd)}</b></span><span className="r">{r.share_pct == null ? '—' : `${Number(r.share_pct).toFixed(1)}%`}</span></div>)}
-    </> : <>
-      <div className="th" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))`, marginTop: 16 }}>{columns.map(c => <span key={c.key}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>)}</div>
+    </> : <div style={{overflowX:'auto',marginTop:16}}><div style={{minWidth:columns.length*140}}>
+      <div className="th" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))` }}>{columns.map(c => <span key={c.key} style={{overflowWrap:'anywhere'}}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>)}</div>
       {rows.map((row, i) => <div key={i} className="tr" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))` }}>{columns.map(c => <span key={c.key}><Value value={row[c.key]} /></span>)}</div>)}
       {!rows.length && <p className="muted">조회된 결과가 없습니다.</p>}
-    </>}
+    </div></div>}
     {chart && !showTable && <div className="chips">{numeric.map((key, i) => <span key={key} className="lg"><i style={{ background: colors[i] }} />{columns.find(c => c.key === key)?.label || key}</span>)}</div>}
   </div>
 }

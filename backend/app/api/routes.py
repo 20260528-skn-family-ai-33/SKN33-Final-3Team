@@ -155,7 +155,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         store.c.execute(delete(m).where(m.c.session_id==sid)); store.c.execute(delete(t).where(t.c.session_id==sid)); return None
     if identity==41: return {'table':get_table(store,uid,path['result_id'],page,size)}
     if identity==42:
-        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(xlsx_bytes([payload],payload['meta'],payload['sql']),result_filename(payload),'xlsx')
+        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(xlsx_bytes([payload],payload['meta'],payload['sql']),result_filename(payload,store),'xlsx')
     if identity==43: return reports.preview(store,uid,body)
     if identity==44: return reports.create(store,uid,ReportCreate.model_validate(body),request.headers.get('Idempotency-Key'))
     if identity==45: return {'job':reports.status_view(store,store.owned('report','report_id',path['report_id'],uid))}
@@ -167,7 +167,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         if fmt=='xlsx':
             content=record['content_json']; tables=[t for s in content['sections'] for t in s['tables']]
             filename=result_filename({'conditions':record['conditions_json'],
-                                      'snapshot_created_at':record['completed_at'] or record['created_at']})
+                                      'snapshot_created_at':record['completed_at'] or record['created_at']},store)
             return file_response(xlsx_bytes(tables,content['meta'],content.get('sql',[])),filename,fmt)
         file=(record.get('files_json') or {}).get(fmt.upper())
         require(file is not None,'선택하지 않았거나 준비되지 않은 형식입니다.','NOT_FOUND',404)

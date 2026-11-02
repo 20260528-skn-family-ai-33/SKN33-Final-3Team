@@ -12,6 +12,13 @@ LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_
         'rank_status':'순위 상태','previous_year_export_usd':'전년 수출액','previous_year_import_usd':'전년 수입액','growth_pct':'증감률',
         'current_amount_usd':'현재 수출액','baseline_amount_usd':'비교 수출액','change_amount_usd':'증감액',
         'growth_status':'증감 상태','severity':'변화 수준','hs_item':'품목','one_off':'일회성 판정','label':'구분'}
+LABELS.update({'country_name':'국가','hs_code':'HS 코드','trade_month':'기준월',
+    'total_usd':'기간 합계','compare_total_usd':'비교 기간 합계','change_pct':'증감률',
+    'monthly_avg_usd':'월평균 금액','compare_monthly_avg_usd':'비교 기간 월평균',
+    'compare_amount_usd':'비교 기간 금액','verified_months':'집계된 개월 수',
+    'requested_months':'조회 개월 수','compare_verified_months':'비교 집계 개월 수',
+    'compare_requested_months':'비교 조회 개월 수','verified_subtotal_usd':'집계된 금액',
+    'compare_verified_subtotal_usd':'비교 집계 금액'})
 
 
 def save_snapshot(store, uid, kind, payload, ttl=None):
@@ -37,16 +44,33 @@ def read_snapshot(store, uid, identity, kind=None):
 
 
 def display_columns(columns, rows):
-    if not any(r.get('hs_item') for r in rows):
-        return [c for c in columns if c['key']!='hs_item']
-    return columns
+    hidden={'hs_ver'}
+    labels={**LABELS,'name':'품목' if any(r.get('hs_code') for r in rows) else '국가' if any(r.get('country_code') for r in rows) else '명칭'}
+    if not any(r.get('hs_item') for r in rows): hidden.add('hs_item')
+    if any(r.get('country_name') for r in rows): hidden.add('country_code')
+    if any('hs_code' in r for r in rows) and not any(r.get('hs_code') for r in rows): hidden.update(('hs_code','name'))
+    # Monthly rows also carry aggregate metadata for chart/digest consumers.
+    if any('month' in r and 'verified_months' in r for r in rows):
+        hidden.update(('total_usd','compare_total_usd','change_pct','monthly_avg_usd',
+            'compare_monthly_avg_usd','verified_months','requested_months',
+            'compare_verified_months','compare_requested_months','verified_subtotal_usd',
+            'compare_verified_subtotal_usd'))
+        if not any(r.get('compare_amount_usd') is not None for r in rows): hidden.add('compare_amount_usd')
+    return [{**c,'label':labels.get(c['key'],c.get('label',c['key']))
+             if c.get('label',c['key'])==c['key'] else c['label']} for c in columns if c['key'] not in hidden]
 
 
-def result_filename(payload):
+def result_filename(payload, store=None):
     conditions=payload.get('conditions') or {}
     period=conditions.get('period') or payload.get('meta',{}).get('period') or {}
     parts=[f"{period['start'][:7]}~{period['end'][:7]}"] if period.get('start') and period.get('end') else []
-    parts.extend(conditions.get('country_codes') or ['전체국가'])
+    codes=conditions.get('country_codes') or []
+    names={}
+    if store is not None and codes:
+        country=store.t('country')
+        names={r['country_code']:r['name_ko'] for r in store.rows(
+            select(country.c.country_code,country.c.name_ko).where(country.c.country_code.in_(codes)))}
+    parts.extend([names.get(c,c) for c in codes] or ['전체국가'])
     parts.extend(h['hs_code'] for h in conditions.get('hs_items',[]))
     flow={'EXPORT':'수출','IMPORT':'수입'}.get(conditions.get('trade_flow'))
     if flow: parts.append(flow)
