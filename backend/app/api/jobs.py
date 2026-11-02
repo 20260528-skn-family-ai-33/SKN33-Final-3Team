@@ -4,6 +4,8 @@ from sqlalchemy import select, update, and_, or_
 from backend.app.api.common import now, digest, require, clean
 
 EXECUTION = '_execution'
+# Deployed v1 workers filter on version == 1 before claiming or reclaiming.
+AGENT_QUEUE_VERSION = 2
 
 
 def _initial(uid, kind, target, payload, key):
@@ -15,8 +17,30 @@ def _initial(uid, kind, target, payload, key):
 
 def _chat_job(row):
     state=(row['result_json'] or {}).get(EXECUTION)
-    if not state or state.get('version')!=1: return None
+    if not state or state.get('version') not in (1, AGENT_QUEUE_VERSION): return None
     return {**state,'job_id':row['message_id']}
+
+
+def remember_prompt(job, prompt, answer=None):
+    history=job['payload_json'].setdefault('clarification_history',[])
+    identity=prompt['clarification_id']
+    entry=next((item for item in history if item['id']==identity),None)
+    if entry is None:
+        entry={'id':identity,'message':prompt['message']}
+        history.append(entry)
+    if answer is None: return
+    if 'text' in answer: label=answer['text']
+    elif 'choice_ids' in answer:
+        labels={c['choice_id']:c['label'] for c in prompt['choices']}
+        label=', '.join(labels[k] for k in answer['choice_ids'])
+    elif 'hs_item' in answer: label='HS '+answer['hs_item']['hs_code']
+    elif 'report_confirmation' in answer:
+        r=answer['report_confirmation']
+        label='리포트 생성 · '+', '.join(r['formats']) if r['confirm'] else '리포트 생성 취소'
+    else:
+        s=answer['interest_selection']
+        label='선택한 관심 범위: '+', '.join([*(h['hs_code'] for h in s['hs_items']),*s['country_codes']])
+    entry['answer']=label
 
 
 def _save_chat(store, job):
@@ -59,7 +83,7 @@ def find_chat(store, uid, key):
 def _active_chat(store, session_id, exclude=None):
     m=store.t('chat_message')
     stmt=select(m.c.message_id).where(m.c.session_id==session_id,m.c.role=='USER',
-        m.c.result_json[EXECUTION]['status'].as_string().in_(['QUEUED','RUNNING']))
+        m.c.result_json[EXECUTION]['status'].as_string().in_(['QUEUED','RUNNING','NEEDS_INPUT','WAITING_REPORT']))
     if exclude is not None: stmt=stmt.where(m.c.message_id!=exclude)
     return store.c.scalar(stmt.with_for_update())
 
@@ -121,7 +145,7 @@ def claim(store):
     size=getattr(store.db,'job_scan_size',100)
     state=m.c.result_json[EXECUTION]
     pending_stmt=select(m.c.message_id,m.c.session_id,m.c.created_at).where(m.c.role=='USER',
-        state['version'].as_integer()==1,or_(
+        state['version'].as_integer().in_((1, AGENT_QUEUE_VERSION)),or_(
             and_(state['status'].as_string()=='QUEUED',state['available_at'].as_string()<=moment),
             and_(state['status'].as_string()=='RUNNING',state['lease_expires_at'].as_string()<moment)))
     execution=r.c.content_json[EXECUTION]

@@ -63,7 +63,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `tables[].task_id`, `charts[].task_id` | string | 어느 하위 질문의 표·차트인지 |
 | `charts[]` | ChartSpec | 아래 형식 |
 | `text` | (기존) | 결론 문장(하위 질문마다 1~2문장, 최대 6문장) 다음 설명 문장(최대 4문장)을 이은 것. 문장마다 200자 이하 |
-| `verification.sentence_checks` | array | 형식 확정. `[{index, sentence, numbers, status}]`. `index`는 `text`를 이루는 문장 순서(0부터), `status`는 `PASS`·`MISMATCH`. `MISMATCH` 문장에 "확인 필요"를 표시 |
+| `verification.sentence_checks` | array | `[{index, sentence, numbers, status}]`. `index`는 최종 답변의 결론 다음 설명 순서(0부터). FR-101-08·FR-901-02에 따라 한 번 교정한 뒤에도 `MISMATCH`인 문장은 삭제하지 않고 해당 문장 끝에 "확인 필요"를 표시한다. `PASS` 문장에는 표시하지 않는다. |
 | `warnings` | (기존) | 최대 10개, 각 200자에서 자름 |
 
 ### ChartSpec

@@ -2,7 +2,7 @@
 import uuid
 from datetime import date
 from sqlalchemy import select, update
-from backend.app.api.common import require, now, clean, mask_text, page_info, percentage, ApiError
+from backend.app.api.common import require, now, clean, mask_text, page_info, percentage, ApiError, digest
 from backend.app.api import jobs, trade, news
 from backend.app.api.accounts import validate_scope, interests
 
@@ -26,6 +26,8 @@ def create(store,uid,conditions):
 
 def messages(store,uid,identity,page=1,size=20):
     session=store.owned('chat_session','session_id',identity,uid)
+    if store.db.settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true':
+        store.db.redis.chat_context(str(identity),refresh=True)
     t=store.t('chat_message'); stmt=select(t).where(t.c.session_id==identity)
     rows=store.rows(stmt.order_by(t.c.message_id).offset((page-1)*size).limit(size))
     return {'session':session_view(session),'items':[{'message_id':str(r['message_id']),'role':r['role'],
@@ -37,7 +39,7 @@ def messages(store,uid,identity,page=1,size=20):
 def view_job(row):
     p=row['result_json'] or {}
     prompt=p.get('clarification')
-    if prompt:
+    if prompt and 'kind' not in prompt:
         prompt={**{k:prompt[k] for k in ('clarification_id','message')},
             'kind':'HS_ITEM' if prompt['type']=='HS_SELECTION' else 'INTEREST_CONTEXT','multiple':False,
             'browse_url':prompt.get('browse_url'),
@@ -47,7 +49,26 @@ def view_job(row):
     return {'job_id':str(row['job_id']),'session_id':str(row['target_key']),
         'status':p.get('status',row['status']),'step':p.get('step','CONTEXT'),
         'clarification':prompt,'answer':p.get('answer'),'error':p.get('error'),
-        'retry_after_seconds':2 if row['status'] in ('QUEUED','RUNNING') else 0}
+        'clarification_history':row.get('payload_json',{}).get('clarification_history',[]),
+        'progress':row.get('agent',{}).get('progress'),
+        'round_started_at':row.get('agent',{}).get('round_received_at'),
+        'retry_after_seconds':2 if row['status'] in ('QUEUED','RUNNING','WAITING_REPORT') else 0}
+
+
+def cancel(store, uid, identity):
+    from backend.app.agents.context import ACTIVE_STATUSES
+    job = jobs.owned_job(store, uid, identity, lock=True)
+    status = (job.get('result_json') or {}).get('status', job['status'])
+    require(status in ACTIVE_STATUSES, '이미 끝난 작업입니다.', 'JOB_ALREADY_FINISHED', 409)
+    job.update(status='CANCELLED', claim_token=job['claim_token'] + 1,
+               lease_expires_at=None, finished_at=now().isoformat(), result_json={'step': 'DONE'})
+    job['payload_json'].pop('resume', None)
+    jobs._save_chat(store, job)
+    # Admission takes the same session row lock. If commit fails, MySQL still
+    # blocks a new job even if the Redis owner key has already been released.
+    if job.get('agent'):
+        store.db.redis.release_chat(str(job['target_key']), str(job['job_id']))
+    return {'job': view_job(job)}
 
 
 def submit(store,uid,identity,data):
@@ -61,6 +82,10 @@ def submit(store,uid,identity,data):
     if old:
         require(old['target_key']==str(identity) and old['payload_json']['question']==question,'다른 메시지에 사용한 client_message_id입니다.','IDEMPOTENCY_CONFLICT',409)
         return {'job':view_job(old)}
+    graph_enabled=store.db.settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true'
+    if graph_enabled:
+        from backend.app.agents.admission import accept
+        return accept(store,uid,session,question,data['client_message_id'])
     payload={'question':question,'conditions':session['context_json'].get('conditions',{})}
     row=jobs.enqueue(store,uid,'API_CHAT',identity,payload,data['client_message_id'])
     return {'job':view_job(row)}
@@ -68,12 +93,25 @@ def submit(store,uid,identity,data):
 
 def clarification(store,uid,identity,data):
     row=jobs.owned_job(store,uid,identity,lock=True); result=row['result_json'] or {}; prompt=result.get('clarification') or {}
+    payload=row['payload_json']
+    receipt=payload.get('legacy_interest_receipt',{})
+    if receipt and receipt['id']==data['clarification_id']:
+        require(receipt['signature']==digest(data),'이미 다른 답을 수락했습니다.','CLARIFICATION_CONFLICT',409)
+        return {'job':view_job(row)}
+    mixed_interest=('agent' in row and row['version']==1 and row['status']=='SUCCEEDED'
+                    and result.get('status')=='NEEDS_INPUT' and prompt.get('type')=='INTEREST_CONFIRM')
+    if 'agent' in row and not mixed_interest:
+        from backend.app.agents.admission import resume
+        return resume(store,row,data)
     require(result.get('status')=='NEEDS_INPUT' and prompt.get('clarification_id')==data['clarification_id'],
         '현재 되묻기 요청과 일치하지 않습니다.','CLARIFICATION_CONFLICT',409)
+    if mixed_interest:
+        require(set(data)=={'clarification_id','choice_ids'},'제시된 관심 범위 선택지 하나를 고르세요.')
     if data.get('hs_item'):
         require(prompt['type']=='HS_SELECTION' and not data.get('choice_ids'),'품목 되묻기에서 직접 선택만 제출하세요.')
         item=data['hs_item']; validate_scope(store,[item],[])
         conditions=select_hs(row,[item])
+        jobs.remember_prompt(row,prompt,data)
         return {'job':view_job(jobs.requeue_chat(store,row,conditions))}
     require(bool(data.get('choice_ids')),'선택지 또는 직접 선택한 품목이 필요합니다.')
     choices={x['choice_id']:x for x in prompt['choices']}
@@ -84,7 +122,19 @@ def clarification(store,uid,identity,data):
         conditions=select_hs(row,[x for key in data['choice_ids'] for x in choices[key]['value']['hs_items']])
     else:
         for key in data['choice_ids']: conditions.update(choices[key]['value'])
-    return {'job':view_job(jobs.requeue_chat(store,row,conditions))}
+    if mixed_interest:
+        # No graph interrupt exists: finish the originating legacy plan using
+        # its saved intent and conditions, in the v2-only queue.
+        payload['legacy_interest_receipt']={'id':data['clarification_id'],'signature':digest(data)}
+        payload.pop('input',None)
+        row.pop('agent')
+        row.pop('finished_at',None)
+        row['version']=jobs.AGENT_QUEUE_VERSION
+    jobs.remember_prompt(row,prompt,data)
+    resumed=jobs.requeue_chat(store,row,conditions)
+    if mixed_interest:
+        store.db.redis.release_chat(str(row['target_key']),str(row['job_id']))
+    return {'job':view_job(resumed)}
 
 
 def select_hs(job,items):

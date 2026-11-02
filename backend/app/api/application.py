@@ -204,7 +204,11 @@ def create_app(settings=None, engine=None, redis_state=None):
                         maximum=int(settings.get('API_HS_IP_LIMIT',60)))
                 if identity in (1,2,69,72,73,74,128,129,130) and identity not in PENDING:
                     limit_auth_request(db,request,settings,identity,body)
-                with db.engine.begin() as connection:
+                if identity==36 and settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true':
+                    from backend.app.agents.admission import request_transaction
+                    transaction=request_transaction(db)
+                else: transaction=db.engine.begin()
+                with transaction as connection:
                     store = Store(db,connection)
                     required = auth in ('필요','ADMIN','개발 역할 + 환경 허용') or query.get('scope') == 'INTERESTED'
                     user = None

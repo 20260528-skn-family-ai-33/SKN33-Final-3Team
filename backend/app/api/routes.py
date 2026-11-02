@@ -11,7 +11,7 @@ from backend.app.api import accounts, reference, trade, news, notifications, rep
 from backend.app.api.common import ApiError, require, unavailable, now, clean, digest, page_info, percentage, month, shift_month, period
 from backend.app.api.security import issue_session, hash_token, administrator
 from backend.app.api.schemas import Signup, Login, PasswordChange, InterestUpdate, NotificationPatch, ReportCreate, Conditions
-from backend.app.api.results import get_table, read_snapshot, result_table
+from backend.app.api.results import get_table, read_snapshot, result_table, result_filename
 from backend.app.api.files import xlsx_bytes, MIMES
 
 
@@ -117,11 +117,32 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==34: return chat.create(store,uid,body.get('initial_conditions'))
     if identity==35: return chat.messages(store,uid,path['session_id'],page,size)
     if identity==36: return chat.submit(store,uid,path['session_id'],body)
-    if identity==37: return {'job':chat.view_job(jobs.owned_job(store,uid,path['job_id']))}
+    if identity==37:
+        job=jobs.owned_job(store,uid,path['job_id'])
+        if job.get('agent') and job['status']=='NEEDS_INPUT':
+            from backend.app.agents.admission import pending_state,expire
+            job=jobs.owned_job(store,uid,path['job_id'],lock=True)
+            if job['status']=='NEEDS_INPUT' and pending_state(store,job) is None: expire(store,job)
+        return {'job':chat.view_job(job)}
     if identity==38: return chat.clarification(store,uid,path['job_id'],body)
+    if identity==131: return chat.cancel(store,uid,path['job_id'])
+    if identity==132:
+        from types import SimpleNamespace
+        from backend.app.agents.charts import build_chart
+        from backend.app.agents.state import Conditions as AgentConditions
+        rid=path['result_id']; snapshot=read_snapshot(store,uid,rid,'RESULT'); meta=snapshot['meta']
+        require(meta.get('kind')=='PREDICTION','선택 가능한 유망시장 결과표가 아닙니다.')
+        conditions=AgentConditions.model_validate({k:v for k,v in snapshot['conditions'].items() if k in AgentConditions.model_fields})
+        conditions.period=meta.get('tool_result',{}).get('period') or conditions.period
+        task=SimpleNamespace(task_id=meta['task_id'],conditions=conditions)
+        result,full,_=build_chart(store,uid,task,rid,query)
+        return {'chart':{**result.chart.model_dump(mode='json'),'full_labels':full}}
     if identity in (39,40,64):
         sid=path['session_id']; store.owned('chat_session','session_id',sid,uid,lock=True); t=store.t('chat_session')
-        if identity==39: store.c.execute(update(t).where(t.c.session_id==sid).values(context_json={'conditions':{},'interest_action':'CLEARED'})); return None
+        if identity==39:
+            store.c.execute(update(t).where(t.c.session_id==sid).values(context_json={'conditions':{},'interest_action':'CLEARED'}))
+            if settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true': store.db.redis.clear_chat_context(str(sid))
+            return None
         if identity==64:
             require(0<len(body['title'].strip())<=160,'대화 제목은 1~160자입니다.')
             store.c.execute(update(t).where(t.c.session_id==sid).values(title=body['title'].strip(),updated_at=now()))
@@ -134,7 +155,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         store.c.execute(delete(m).where(m.c.session_id==sid)); store.c.execute(delete(t).where(t.c.session_id==sid)); return None
     if identity==41: return {'table':get_table(store,uid,path['result_id'],page,size)}
     if identity==42:
-        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(xlsx_bytes([payload],payload['meta'],payload['sql']),'분석결과.xlsx','xlsx')
+        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(xlsx_bytes([payload],payload['meta'],payload['sql']),result_filename(payload),'xlsx')
     if identity==43: return reports.preview(store,uid,body)
     if identity==44: return reports.create(store,uid,ReportCreate.model_validate(body),request.headers.get('Idempotency-Key'))
     if identity==45: return {'job':reports.status_view(store,store.owned('report','report_id',path['report_id'],uid))}
@@ -145,7 +166,9 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         record=store.owned('report','report_id',rid,uid); require(record['status']=='READY','파일 생성 중입니다.','REPORT_NOT_READY',409)
         if fmt=='xlsx':
             content=record['content_json']; tables=[t for s in content['sections'] for t in s['tables']]
-            return file_response(xlsx_bytes(tables,content['meta'],content.get('sql',[])),'리포트.xlsx',fmt)
+            filename=result_filename({'conditions':record['conditions_json'],
+                                      'snapshot_created_at':record['completed_at'] or record['created_at']})
+            return file_response(xlsx_bytes(tables,content['meta'],content.get('sql',[])),filename,fmt)
         file=(record.get('files_json') or {}).get(fmt.upper())
         require(file is not None,'선택하지 않았거나 준비되지 않은 형식입니다.','NOT_FOUND',404)
         from backend.app.api.report_storage import LocalReportStorage

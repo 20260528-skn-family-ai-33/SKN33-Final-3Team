@@ -22,7 +22,8 @@ def xlsx_bytes(tables,meta,sql):
     for n,table in enumerate(tables,1):
         require(table['total_rows']<=1000,'엑셀은 필터 전체 결과 1,000행까지만 다운로드할 수 있습니다.','EXPORT_LIMIT_EXCEEDED',422)
         ws=wb.create_sheet(f'결과표{n}')
-        columns=table['columns']; ws.append([c['label'] for c in columns])
+        from backend.app.api.results import display_columns
+        columns=display_columns(table['columns'],table['rows']); ws.append([c['label'] for c in columns])
         for row in table['rows']:
             values=[]
             for c in columns:
