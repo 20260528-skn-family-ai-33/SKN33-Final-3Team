@@ -261,6 +261,7 @@ class PlannerSlots(Model):
     countries: list[CountryMention] | None = None
     period: Period | None = None
     recent_months: int | None = Field(default=None, ge=1)
+    ranking_limit: int | None = Field(default=None, ge=1)
     trade_flow: Literal['EXPORT', 'IMPORT'] | None = None
     # None은 False와 같다. 기본값 False는 strict 스키마에 "default"로 실려 None으로 둔다(LLM 출력 모델)
     comparison_requested: bool | None = None
@@ -281,6 +282,8 @@ class PlannerSlots(Model):
         """TaskSlots 상한을 넘는 부분의 안내 문구. 있으면 플래너는 그 하위 질문을 단계 없이 NO_DATA로 끝낸다(D-73).
         C-26: 240개월은 확정 상한이며 실제 공개 범위는 conditions 노드가 별도로 검사한다."""
         errors = []
+        if self.ranking_limit and self.ranking_limit > 1000:
+            errors.append('순위는 한 번에 1,000개까지 조회할 수 있습니다.')
         if self.products and len(self.products) > MAX_HS_ITEMS:
             errors.append(f'품목은 질문 하나에 {MAX_HS_ITEMS}개까지 물어볼 수 있습니다.')
         if self.countries and len(self.countries) > MAX_COUNTRIES:
@@ -563,6 +566,35 @@ class ToolResult(Model):
         return self
 
 
+class SqlColumn(Model):
+    key: Annotated[str, _chars(1, 40)]
+    label: Annotated[str, _chars(1, 40)]
+    type: Literal['number', 'string']
+    unit: Literal['USD', '%', 'KG', 'COUNT'] | None
+
+    @field_validator('key')
+    @classmethod
+    def snake_case(cls, value):
+        import re
+        if not re.fullmatch(r'[a-z][a-z0-9_]*', value):
+            raise ValueError('결과 열은 snake_case여야 합니다')
+        return value
+
+
+class SqlDraft(Model):
+    sql: Annotated[str, _chars(0, 4000)]
+    columns: list[SqlColumn]
+    summary: Annotated[str, _chars(0, 200)]
+    unsupported: Annotated[str, _chars(1, 200)] | None
+
+    @model_validator(mode='after')
+    def unique_columns(self):
+        if not 1 <= len(self.columns) <= 20:
+            raise ValueError('결과 열은 1~20개여야 합니다')
+        _unique([c.key for c in self.columns], 'SQL 결과 열')
+        return self
+
+
 class TaskConclusion(Model):
     task_id: str
     sentences: list[Sentence] = Field(min_length=1, max_length=2)
@@ -736,6 +768,8 @@ class AgentState(Model):
                 if upstream is not None:
                     if upstream.status != 'OK':
                         raise ValueError('실패한 입력으로 성공 결과를 저장할 수 없습니다')
+                    if steps[dependency].tool in ('query_trade_data', 'query_market_model') and not upstream.result_id:
+                        raise ValueError('선행 분석 결과표 참조가 없습니다')
                     reasons.extend(upstream.limitations)
                 elif steps[dependency].tool in ('query_trade_data', 'query_market_model'):
                     raise ValueError('선행 분석 결과가 없습니다')

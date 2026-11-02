@@ -619,6 +619,18 @@ class DependentTaskContractTest(unittest.TestCase):
         self.assertEqual(conclusion.task_id, 't2')
         self.assertIn('완성', conclusion.sentences[0])
 
+    def test_success_without_source_table_cannot_be_stored(self):
+        s = self.make_state()
+        for step in s.plan.steps():
+            step.status = 'DONE'
+        s.results['t1.sql'] = ToolResult(status='OK')
+        report = ToolResult(status='OK', report_id='report1')
+        with self.assertRaisesRegex(ValueError, '결과표 참조'):
+            s.result_for_storage('t2.report', report)
+        s.results['t2.report'] = report
+        with self.assertRaisesRegex(ValueError, '결과표 참조'):
+            s.task_outcome('t2')
+
     def test_waiting_or_terminal_states_do_not_dispatch(self):
         s = self.make_state()
         for status in ('NEEDS_INPUT', 'CANCELLED', 'FAILED', 'EXPIRED', 'SUCCEEDED'):
