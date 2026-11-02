@@ -205,14 +205,14 @@
         "q",
         "string",
         "필수",
-        "품목명 또는 4단위 코드 검색어. 2~120자, 2자 미만은 빈 후보 반환. HS2022의 HS4 후보. confidence와 browse를 함께 확인하고 직접 선택."
+        "품목명 또는 HS 코드 검색어. 2~120자, 2자 미만은 빈 후보 반환. HS2022 후보를 직접 선택."
       ],
       [
         "Query Parameters",
         "depth",
         "integer",
         "선택",
-        "4만 허용. 생략 시 4. 6 또는 다른 값은 400 VALIDATION_ERROR. 하위 6단위 조회는 API-12."
+        "검색할 HS 단위. 4 또는 6을 허용하며 생략 시 4. HS4의 하위 6단위 목록은 API-12."
       ],
       [
         "Query Parameters",

@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Check, Modal, TextArea, TextField, Toggle } from '../../components/ui'
+import { Btn, Check, Modal, TextArea, TextField } from '../../components/ui'
 import { providerLabel } from '../../data/seed'
 
 const CONSENTS = [
@@ -49,10 +49,9 @@ function WithdrawModal({ open, onClose, onConfirm }) {
 }
 
 export default function Profile({ route }) {
-  const { account, session, consents, setConsents, withdraw, notify } = useApp()
+  const { account, session, withdraw } = useApp()
   const [email, setEmail] = useState('')
   const [emailError, setEmailError] = useState('')
-  const [draft, setDraft] = useState(consents)
   const [termsView, setTermsView] = useState(null)
   const withdrawOpen = route.query.get('withdraw') === 'open'
   const social = account && account.provider !== 'email'
@@ -85,18 +84,13 @@ export default function Profile({ route }) {
               <p style={{ fontSize: 16, fontWeight: 700 }}>{title} <span className={'tag ' + (required ? 'red' : '')}>{required ? '필수' : '선택'}</span></p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                 <button type="button" className="reset more" style={{ fontSize: 13 }} onClick={() => setTermsView(title)}>내용 보기</button>
-                <span className="muted" style={{ width: 32 }}>{draft[key] ? '켜짐' : '꺼짐'}</span>
-                <Toggle on={draft[key]} label={title} onChange={on => {
-                  if (required && !on) return notify('필수 동의는 철회하면 서비스를 이용할 수 없습니다. 철회를 원하시면 회원탈퇴를 진행해 주세요.')
-                  setDraft(d => ({ ...d, [key]: on }))
-                }} />
+                <span className="note">동의 여부 조회 준비 중</span>
               </div>
             </div>
           ))}
         </div>
         <div className="between" style={{ marginTop: 18 }}>
-          <span className="note">동의 변경은 저장 시 반영하며, 철회 시 적용되는 이용 범위를 먼저 안내합니다.</span>
-          <Btn kind="red" size="md" onClick={() => { setConsents(draft) }}>동의 설정 저장</Btn>
+          <span className="note">가입 당시의 일반 약관 동의 이력은 아직 조회할 수 없습니다. 알림 수신 동의는 알림설정에서 확인해 주세요.</span>
         </div>
       </section>
 

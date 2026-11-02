@@ -53,15 +53,23 @@ def consent(store,uid,data):
     current=terms(store)
     require(current['version']==data['terms_version'],'약관 버전이 변경되었습니다.','TERMS_VERSION_CHANGED',409)
     t=store.t('notification_setting')
-    store.c.execute(select(t).where(t.c.user_id==uid).with_for_update()).first()
+    setting=store.one(select(t).where(t.c.user_id==uid).with_for_update())
+    if not setting: unavailable('알림 설정 행이 준비되지 않았습니다.','FEATURE_NOT_READY')
     enabled=bool(data.get('enable_notifications')) and data['action']=='AGREE'
     require(not data.get('enable_notifications') or data['action']=='AGREE','동의해야 알림을 켤 수 있습니다.')
-    at=now()
-    store.insert('user_consent',user_id=uid,terms_version=data['terms_version'],action=data['action'],acted_at=at)
+    c=store.t('user_consent')
+    latest=store.one(select(c).where(c.c.user_id==uid).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1).with_for_update())
+    if latest and latest['terms_version']==current['version'] and latest['action']==data['action']=='AGREE':
+        at=latest['acted_at']
+    else:
+        at=now()
+        store.insert('user_consent',user_id=uid,terms_version=current['version'],action=data['action'],acted_at=at)
+    notifications_enabled=bool(setting['notifications_enabled'])
     if data['action']!='AGREE' or enabled:
         store.c.execute(update(t).where(t.c.user_id==uid).values(notifications_enabled=enabled))
+        notifications_enabled=enabled
     return {'consent':{'terms_type':'NOTIFICATION','terms_version':data['terms_version'],'action':data['action'],
-                       'acted_at':at,'notifications_enabled':settings(store,uid)['notifications_enabled']}}
+                       'acted_at':at,'notifications_enabled':notifications_enabled}}
 
 
 def event_allowed(store,uid,event):

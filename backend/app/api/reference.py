@@ -5,8 +5,7 @@ from backend.app.api.common import require, unavailable, page_info
 
 
 def hs_search(store,q,depth=4,limit=5):
-    require(depth==4,'화면 검색은 HS4만 허용합니다.')
-    return _search_depth(store,q,depth,limit)
+    return _search_depth(store,q,depth,limit,for_picker=True)
 
 
 def chat_hs_search(store,q):
@@ -17,23 +16,23 @@ def chat_hs_search(store,q):
     if ((specific['match_type']=='EXACT' and len(specific['items'])==1)
             or specific['confidence']=='MEDIUM'):
         return specific
-    broader=hs_search(store,q)
+    broader=_search_depth(store,q,4,5)
     result={**broader,'message':'HS6 세부품목을 확정하기 어렵습니다. HS4 분류를 확인하거나 분류에서 HS6를 직접 선택하세요.'}
     warnings=list(dict.fromkeys(specific.get('warnings',[])+broader.get('warnings',[])))
     if warnings: result['warnings']=warnings
     return result
 
 
-def _search_depth(store,q,depth,limit):
+def _search_depth(store,q,depth,limit,*,for_picker=False):
     q=' '.join(unicodedata.normalize('NFKC',q).split()).casefold()
     require(len(q)<=120 and depth in (4,6) and 1<=limit<=5,'검색어 120자 이하·HS4/HS6·최대 5개 조건을 확인하세요.')
     if len(q)<2:
         return {'items':[],'match_type':'NONE','confidence':'LOW','message':'2글자 이상 입력하세요.',**browse_hint()}
     from backend.app.api.config import Settings
     settings=getattr(store.db,'settings',None) or Settings()
-    key=(q,depth,limit,*(settings.get(k) for k in ('API_HS_VECTOR_ENABLED','API_HS_CHROMA_PATH',
+    key=(q,depth,limit,for_picker,*(settings.get(k) for k in ('API_HS_VECTOR_ENABLED','API_HS_CHROMA_PATH',
         'API_HS_MAX_DISTANCE','API_HS_CONFIDENT_DISTANCE','API_HS_MIN_MARGIN','API_HS_CACHE_VERSION')))
-    return store.db.hs_search_cache.get_or_load(key,lambda:_hs_search(store,q,limit,settings,depth),
+    return store.db.hs_search_cache.get_or_load(key,lambda:_hs_search(store,q,limit,settings,depth,for_picker),
         cache_if=lambda result:not result.get('warnings'))
 
 
@@ -42,14 +41,25 @@ def browse_hint():
         'url':'/api/v1/reference/hs-codes/ROOT/children?hs_ver=HS2022','levels':[2,4,6]}}
 
 
-def _hs_search(store,q,limit,settings,depth=4):
+def _hs_search(store,q,limit,settings,depth,for_picker):
     store.require_data('hs_code')
     t=store.t('hs_code')
     compact=''.join(q.split())
     name=func.replace(t.c.name_ko,' ',''); original=func.replace(t.c.original_name_ko,' ','')
     exact=or_(t.c.hs_code==q,t.c.name_ko==q,t.c.original_name_ko==q) if q.isascii() else or_(name==compact,original==compact)
-    match=or_(t.c.hs_code.startswith(q,autoescape=True),t.c.name_ko.contains(q,autoescape=True)) if q.isascii() else name.contains(compact,autoescape=True)
+    # 완전 일치는 띄어쓰기 차이를 허용하되 부분 검색으로 단어 경계를 합치지 않는다.
+    match=t.c.name_ko.contains(q,autoescape=True)
+    if q.isascii():
+        match=or_(t.c.hs_code.startswith(q,autoescape=True),match)
+    elif not for_picker:
+        match=name.contains(compact,autoescape=True)
     base=select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth).where(t.c.hs_ver=='HS2022',t.c.depth==depth)
+    # HS10 정식 명칭(예: 소주)은 사용자가 저장할 수 있는 HS6 부모 품목으로 연결한다.
+    if for_picker and depth == 6 and not q.isdigit():
+        detail=t.alias('hs10')
+        parents=select(func.substr(detail.c.hs_code,1,6)).where(
+            detail.c.hs_ver=='HS2022',detail.c.depth==10,detail.c.name_ko==q)
+        exact=or_(exact,t.c.hs_code.in_(parents))
     rows=store.rows(base.where(exact).order_by(t.c.hs_code).limit(limit))
     if rows: return {'items':rows,'match_type':'EXACT','confidence':'EXACT',**browse_hint()}
     from backend.app.api.hs_vectors import candidates

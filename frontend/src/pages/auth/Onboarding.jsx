@@ -1,26 +1,51 @@
 // BS03~BS05 최초 관심사 등록(품목 → 국가 → 완료)
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { navigate } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Check, Steps } from '../../components/ui'
-import { CountryPicker, Hs4Search } from '../../components/pickers'
-import { productName, toggleValue } from '../../data/catalog'
+import { Btn, Steps } from '../../components/ui'
+import { CountryPicker, InterestProducts } from '../../components/pickers'
+import { productName, registerProducts } from '../../data/catalog'
+
+function readDraft(key, version) {
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(key))
+    if (draft?.version && draft.version !== version) return null
+    if (!Array.isArray(draft?.items) || !Array.isArray(draft.countries) ||
+        !draft.items.every(h => /^\d{6}$/.test(h?.hs_code) && typeof h.name_ko === 'string') ||
+        !draft.countries.every(c => typeof c === 'string')) return null
+    registerProducts(draft.items)
+    return draft
+  } catch { return null }
+}
 
 export default function Onboarding({ route }) {
-  const { profile, setProfile, setMainView } = useApp()
+  const { session, profile, setProfile, setMainView, notify } = useApp()
   const step = Math.min(3, Math.max(1, Number(route.query.get('step')) || 1))
-  const [products, setProducts] = useState(profile.products)
-  const [countries, setCountries] = useState(profile.countries)
-  const [group, setGroup] = useState(null)
+  const key = 'bs.onboarding.' + session.id
+  const [version] = useState(profile.version)
+  const [draft] = useState(() => readDraft(key, version))
+  const welcome = draft?.welcome === true
+  const [products, setProducts] = useState(() => draft?.items.map(h => h.hs_code) ?? profile.products)
+  const [countries, setCountries] = useState(draft?.countries ?? profile.countries)
+  useEffect(() => {
+    const items = products.map(id => ({ hs_code: id, name_ko: productName(id) }))
+    try { sessionStorage.setItem(key, JSON.stringify({ items, countries, welcome, version })) } catch { /* Storage may be unavailable. */ }
+  }, [key, products, countries, welcome, version])
+  const endDraft = () => {
+    try { sessionStorage.removeItem(key) } catch { /* Optional draft storage. */ }
+    if (welcome) notify('회원가입이 완료되었습니다. 환영합니다!')
+  }
   const hasInterest = products.length > 0 || countries.length > 0
 
   const skip = async () => {
     if (!await setProfile(p => ({ ...p, home: 'all' }))) return
+    endDraft()
     setMainView('all')
     navigate('/')
   }
   const finish = async () => {
     if (!await setProfile(p => ({ ...p, products, countries, home: hasInterest ? 'interest' : 'all' }))) return
+    endDraft()
     setMainView(null)
     navigate(hasInterest ? '/?view=interest' : '/')
   }
@@ -44,28 +69,7 @@ export default function Onboarding({ route }) {
               <>
                 <h2 className="t2">관심 품목을 선택해 주세요</h2>
                 <p className="muted" style={{ marginTop: 6 }}>선택 사항 · 품목명 또는 HS6 코드로 검색하고 추가할 수 있습니다.</p>
-                <Hs4Search
-                  group={group} onConfirm={setGroup} buttonLabel={() => '하위 품목 전체선택'}
-                  onSelectAll={() => setProducts(p => [...new Set([...p, ...group.items.map(([id]) => id)])])}
-                />
-                <p className="note" style={{ marginTop: 8 }}>유효한 HS 4자리 선택 확정 후 활성화 · 미확정 상태에서는 비활성화</p>
-                {group && (
-                  <div className="col" style={{ gap: 10, marginTop: 18 }}>
-                    {group.items.map(([id, name]) => {
-                      const on = products.includes(id)
-                      return (
-                        <Check key={id} checked={on} onChange={() => setProducts(p => toggleValue(p, id))} className={'li' + (on ? ' sel' : '')} style={{ padding: '14px 18px' }}>
-                          <span className="hs">{id}</span><span style={{ fontSize: 16, fontWeight: 700 }}>{name}</span>
-                        </Check>
-                      )
-                    })}
-                  </div>
-                )}
-                {products.length > 0 && (
-                  <div style={{ marginTop: 18, padding: '14px 18px', borderRadius: 12, background: 'var(--rose)', fontSize: 14, color: 'var(--red-d)', fontWeight: 700 }}>
-                    선택한 품목 {products.length}개 · {products.map(id => `${productName(id)} / HS ${id}`).join(', ')}
-                  </div>
-                )}
+                <InterestProducts products={products} setProducts={setProducts} />
                 <div className="between" style={{ marginTop: 28 }}>
                   <Btn size="md" onClick={skip}>건너뛰기</Btn>
                   <Btn kind="red" size="md" iconRight="arrowRight" to="/onboarding?step=2">다음: 국가 선택</Btn>
@@ -102,7 +106,8 @@ export default function Onboarding({ route }) {
                 <div style={{ marginTop: 28, border: '1px solid var(--line)', borderRadius: 16, overflow: 'hidden' }}>
                   <div className="tr" style={{ gridTemplateColumns: '140px 1fr', padding: '18px 22px' }}>
                     <span className="s">관심 품목</span>
-                    <span className="b">{products.length ? products.map(id => <span key={id} style={{ marginRight: 12 }}>{productName(id)} <span className="hs">HS {id}</span></span>) : '선택 안 함'}</span>
+                    {products.length ? <ul className="chips onboarding-products">{products.map(id =>
+                      <li key={id} className="tag">{productName(id)} <span className="hs">HS {id}</span></li>)}</ul> : <span>선택 안 함</span>}
                   </div>
                   <div className="tr" style={{ gridTemplateColumns: '140px 1fr', padding: '18px 22px' }}>
                     <span className="s">관심 국가</span><span className="b">{countries.length ? countries.join(' · ') : '선택 안 함'}</span>

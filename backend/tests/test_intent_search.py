@@ -60,7 +60,7 @@ class IntentSearchTest(unittest.TestCase):
         with self.engine.begin() as c:
             c.execute(self.meta.tables['hs_code'].insert(),{'hs_code':'190230','hs_ver':'HS2022','depth':6,'name_ko':'면류','source_edition':'HS2022'})
         candidate={'hs_code':'3304','hs_ver':'HS2022','name_ko':'예시 후보','depth':4}
-        with patch('backend.app.api.reference.hs_search',return_value={'items':[candidate]}) as search:
+        with patch('backend.app.api.reference.chat_hs_search',return_value={'items':[candidate]}) as search:
             jid,job=self.ask('미국 시장에서 요즘 많이 팔리는 라면 수출 추이를 알려줘',
                 products=['라면'],all_products=False,countries=[{'mention':'미국','name':'미국'}])
         self.assertEqual(search.call_args.args[1],'라면')

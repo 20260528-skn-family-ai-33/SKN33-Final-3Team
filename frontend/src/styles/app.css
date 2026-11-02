@@ -109,3 +109,30 @@ body.modal-open{overflow:hidden}
 /* segmented toggle rendered with buttons */
 .seg button{height:34px;padding:0 18px;border-radius:17px;font-size:14px;color:#444B57;display:inline-flex;align-items:center}
 .seg button.on{background:var(--ink);color:#fff;font-weight:700}
+
+/* Interest selection and report controls keep the full label available on narrow screens. */
+.interest-group { display: grid; gap: .6rem; min-width: 0; margin: 1rem 0; border: 1px solid var(--line); padding: 1rem; border-radius: 12px; }
+.interest-group legend { font-weight: 700; }
+.interest-summary { margin: 1rem 0; padding: 1rem; background: var(--bg); border-radius: 12px; }
+.onboarding-products { list-style: none; margin: 0; padding: 0; }
+.onboarding-products .tag { white-space: normal; }
+.interest-summary ul { list-style: none; padding: 0; margin: .65rem 0 0; }
+.interest-summary .chip, .btn.hs-choice { white-space: normal; text-align: left; max-width: 100%; height: auto; overflow-wrap: anywhere; }
+.btn.hs-choice { display: block; padding: .6rem .8rem; }
+.hs-label { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.hs-picker { position: relative; display: flex; gap: 12px; margin-top: 20px; }
+.hs-picker > .input { flex: 1; min-width: 0; gap: 8px; }
+.hs-full-name { font-size: .85rem; margin-top: .35rem; overflow-wrap: anywhere; }
+.hs-full-name summary { cursor: pointer; color: var(--sub); }
+.hs-full-name p { margin: .35rem 0; }
+.interest-summary li, .onboarding-products li { min-width: 0; max-width: 100%; }
+@media (max-width: 600px) {
+  .hs-picker { flex-direction: column; }
+  .hs-picker > .input { flex: none; }
+  .interest-summary .between { flex-wrap: wrap; }
+}
+[role=listbox] .hs-label { flex: 1; text-align: left; }
+.report-month { display: flex; flex-wrap: wrap; gap: .35rem; min-width: 0; }
+.report-month select { max-width: 100%; padding: .45rem; border-radius: 6px; border: 1px solid var(--line); background: white; }
+@keyframes password-autofill { from { opacity: .99; } to { opacity: 1; } }
+.password-change input[name=current]:-webkit-autofill { animation: password-autofill .01s; }

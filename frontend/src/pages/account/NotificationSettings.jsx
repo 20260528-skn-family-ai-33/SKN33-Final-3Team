@@ -1,7 +1,6 @@
 // BS22 알림설정 · BS23 알림 수신 약관 동의 모달
 import { useState } from 'react'
-import { api } from '../../api/client'
-import { useQuery, ErrorNotice } from '../../api/hooks'
+import { useQuery, ErrorNotice, usePendingAction } from '../../api/hooks'
 import { Link, navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
 import { Btn, Check, Modal, Toggle } from '../../components/ui'
@@ -16,7 +15,9 @@ const ROWS = [
 
 
 export default function NotificationSettings({ route }) {
-  const { settings, setSettings, profile, notify, run } = useApp()
+  const { settings, setSettings, acceptNotificationTerms, profile, notify } = useApp()
+  const [saving, saveOnce] = usePendingAction()
+  const [accepting, runOnce] = usePendingAction()
   const terms = useQuery('/terms/notification')
   const TERMS_VERSION = terms.data?.terms.version
   const [draft, setDraft] = useState(settings)
@@ -34,15 +35,16 @@ export default function NotificationSettings({ route }) {
     set({ [key]: on })
   }
   const closeTerms = () => navigate(withQuery(route, { terms: null }), { replace: true })
-  const acceptTerms = async () => {
-    if (!await run(async () => { await api('/users/me/consents', { method: 'POST', body: { terms_type: 'NOTIFICATION', terms_version: TERMS_VERSION, action: 'AGREE', enable_notifications: true } }); return true })) return
-    set({ all: true, termsAgreed: true, termsVersion: TERMS_VERSION })
+  const acceptTerms = () => runOnce(async () => {
+    const saved = await acceptNotificationTerms(TERMS_VERSION)
+    if (!saved) return
+    set(saved)
     closeTerms()
-  }
-  const save = async () => {
+  })
+  const save = () => saveOnce(async () => {
     if (!await setSettings(draft)) return
     notify(draft.all ? '알림 설정을 저장했습니다.' : '알림 설정을 저장했습니다. 전체 알림 수신이 꺼져 있어 새 알림이 등록되지 않습니다.')
-  }
+  })
   const interestText = `${profile.countries.join('·') || '국가 없음'} / ${profile.products.map(id => `${productName(id)}(HS ${id})`).join(', ') || '품목 없음'}`
 
   return (
@@ -69,7 +71,7 @@ export default function NotificationSettings({ route }) {
       <p className="note" style={{ marginTop: 12 }}>기본 꺼짐 또는 가입 동의 결과 적용 · 전체 켬 + 현재 약관 동의 시 수신 {termsOk ? `· 알림 약관 ${TERMS_VERSION} 동의 완료` : '· 알림 약관 미동의'}</p>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
         <Btn size="md" onClick={() => setDraft(settings)}>취소</Btn>
-        <Btn kind="red" size="md" onClick={save}>설정 저장</Btn>
+        <Btn kind="red" size="md" disabled={saving} onClick={save}>{saving ? '저장 중…' : '설정 저장'}</Btn>
       </div>
 
       <Modal open={termsOpen} onClose={closeTerms} width={640} label="알림 수신 약관 동의">
@@ -88,7 +90,7 @@ export default function NotificationSettings({ route }) {
         <p className="note" style={{ marginTop: 8 }}>동의 전에는 알림이 켜지지 않습니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
           <Btn size="md" onClick={closeTerms}>거부</Btn>
-          <Btn kind="red" size="md" disabled={!agree || !TERMS_VERSION} onClick={acceptTerms}>동의하고 켜기</Btn>
+          <Btn kind="red" size="md" disabled={!agree || !TERMS_VERSION || accepting} onClick={acceptTerms}>동의하고 켜기</Btn>
         </div>
       </Modal>
     </section>

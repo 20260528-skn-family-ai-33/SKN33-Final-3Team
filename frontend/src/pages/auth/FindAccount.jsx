@@ -26,13 +26,15 @@ export function FindId() {
     e.preventDefault()
     const n = input.trim()
     if (!n) return setError('이름을 입력해 주세요.')
-    try { await api('/auth/account-recovery/candidates', { method: 'POST', body: { name: n } }) } catch (error) { setError(error.message) }
+    try { await api('/auth/account-recovery/candidates', { method: 'POST', body: { name: n } }) } catch (error) {
+      setError(error.code === 'FEATURE_NOT_READY' ? '아이디 찾기는 준비 중입니다.' : error.message)
+    }
   }
 
   return (
     <AuthFrame>
       <form onSubmit={find} noValidate>
-        <CardHead eyebrow="아이디 찾기" size={30} title="아이디를 입력해주세요" desc="회원가입 시 입력한 이름을 입력해주세요." />
+        <CardHead eyebrow="아이디 찾기" size={30} title="가입한 이름을 입력해 주세요" desc="아이디 찾기는 현재 준비 중입니다." />
         {sp(32)}
         <label className="lbl" htmlFor="fi-name">이름</label>
         <TextField id="fi-name" placeholder="예) 홍길동" value={input} onChange={v => { setInput(v); setError('') }} invalid={!!error} />
@@ -54,13 +56,15 @@ export function FindPassword() {
   const submit = async e => {
     e.preventDefault()
     if (!form.name.trim() || !isEmail(form.email)) return setError('이름과 이메일(아이디)을 정확히 입력해 주세요.')
-    try { await api('/auth/password-recovery/temporary-password', { method: 'POST', body: { ...form, action: 'ISSUE' } }) } catch (error) { setError(error.message) }
+    try { await api('/auth/password-recovery/temporary-password', { method: 'POST', body: { ...form, action: 'ISSUE' } }) } catch (error) {
+      setError(error.code === 'FEATURE_NOT_READY' ? '비밀번호 찾기는 준비 중입니다.' : error.message)
+    }
   }
 
   return (
     <AuthFrame>
       <form onSubmit={submit} noValidate>
-        <CardHead eyebrow="비밀번호 찾기" size={30} title="임시 비밀번호를 보내 드려요" desc="가입한 이름과 이메일(아이디)을 입력해 주세요. 두 정보가 모두 확인되면 해당 이메일로 임시 비밀번호를 보내 드립니다." />
+        <CardHead eyebrow="비밀번호 찾기" size={30} title="비밀번호 찾기" desc="임시 비밀번호 메일 발송은 현재 준비 중입니다." />
         {sp(32)}
         <label className="lbl" htmlFor="fp-name">이름</label>
         <TextField id="fp-name" placeholder="예) 홍길동" value={form.name} onChange={v => { setForm(f => ({ ...f, name: v })); setError('') }} />

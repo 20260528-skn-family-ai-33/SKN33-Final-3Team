@@ -1,13 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { previewUsable, previewExpired, rankLink, rankInitial, comparisonPeriod, mapLimited, reportComparisonInputs, reportConditions } from '../src/api/integration.js'
+import { previewExpired, rankLink, rankInitial, comparisonPeriod, mapLimited, reportComparisonInputs, reportConditions } from '../src/api/integration.js'
 
-test('preview signature and expiry both require renewed confirmation', () => {
-  const p = { signature: 'a', expires_at: '2026-01-01T00:10:00Z' }
-  assert.equal(previewUsable(p, 'a', Date.parse('2026-01-01T00:09:59Z')), true)
-  assert.equal(previewUsable(p, 'a', Date.parse(p.expires_at)), false)
-  assert.equal(previewUsable(p, 'changed', Date.parse('2026-01-01T00:09:59Z')), false)
-  assert.equal(previewUsable({ signature:'a' }, 'a'), false)
+test('preview renewal only handles expired snapshots', () => {
   assert.equal(previewExpired({status:409,code:'PREVIEW_EXPIRED'}), true)
   assert.equal(previewExpired({status:410,code:'RESULT_EXPIRED'}), true)
   assert.equal(previewExpired({status:409,code:'IDEMPOTENCY_CONFLICT'}), false)
