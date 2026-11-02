@@ -101,6 +101,8 @@ def build_context(store, uid, record, document):
             for item in context['conditions']['hs_items']:
                 item['display'] = f"{item['name']} · HS {item['hs_code']}"
         populate(store, saved, context, names, start, end)
+        if note := document.get('meta',{}).get('monthly_average_note'):
+            context['summary']['monthly_average_note']=note
     elif kind == 'RPT_WEEKLY':
         _weekly(store, uid, saved, context, names, start, end)
     else:

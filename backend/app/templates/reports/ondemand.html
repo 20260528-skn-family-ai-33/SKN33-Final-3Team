@@ -84,6 +84,7 @@
 {% endif %}
 {% for b in blocks %}
 {% if b.key == 'cards' %}
+{% if summary.monthly_average_note is defined %}<p>{{ summary.monthly_average_note }}</p>{% endif %}
 {% set top_sub = '' %}
 {# 현재·이전 1위가 모두 있을 때만 비교 문장 (현재 수출 0이나 미준비면 숨김) #}
 {% if compare_ready and k.top1_name and k.prev_top1_name %}

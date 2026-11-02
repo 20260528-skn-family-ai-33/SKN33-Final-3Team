@@ -154,7 +154,16 @@ def article_sources(articles):
 def build_document(store,uid,record):
     c=record['conditions_json']; hs=c.get('hs_items',[]); countries=c.get('country_codes',[])
     p=c['period']
-    if record['report_type']=='RPT_WEEKLY':
+    source=(record.get('content_json') or {}).get('source_tables')
+    if source:
+        meta={'sources':[],'period':p,'warnings':[],'freshness':'FROZEN'}
+        sections=[section('SUMMARY','승인한 분석 결과표를 기준으로 작성했습니다.')]
+        kinds={'TREND':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES','PREDICTION':'GROWTH_RISK'}
+        for code in c['sections']:
+            tables=[table for table in source if kinds.get(table['kind'])==code]
+            sections.append(section(code,'승인한 분석 결과입니다.' if tables else '해당 분석 결과에 포함되지 않음',tables))
+        for ref in record['content_json']['source_results']: meta['warnings'].extend(ref['limitations'])
+    elif record['report_type']=='RPT_WEEKLY':
         meta=news.source_meta(store,'NEWS',date.fromisoformat(p['end']))
         articles=news.articles(store,uid,start=date.fromisoformat(p['start']),end=date.fromisoformat(p['end']),hs=hs,countries=countries,size=20)['items']
         meta['sources']=article_sources(articles)
@@ -185,6 +194,25 @@ def build_document(store,uid,record):
         text=f'분석 기간 수출액은 {total:,.2f} USD입니다. 수출 실적이 있는 국가는 {count}개국입니다. '
         if comparison!='NONE':
             text+=f'이전 비교 기간 대비 증감률은 {growth:,.2f}%입니다.' if growth is not None else '이전 비교 기간 증감률은 계산할 수 없습니다.'
+        if prev:
+            current_months=(end.year-start.year)*12+end.month-start.month+1
+            previous_start=date.fromisoformat(prev['start']).replace(day=1)
+            previous_end=date.fromisoformat(prev['end']).replace(day=1)
+            previous_months=(previous_end.year-previous_start.year)*12+previous_end.month-previous_start.month+1
+            if previous_months!=current_months:
+                verified={m for m in trade.verified_months(store,'export_summary') if previous_start<=m<=previous_end}
+                monthly=trade.aggregate(store,'export_summary',previous_start,previous_end,hs,countries,'MONTH')
+                subtotal=sum(r['amount_usd'] for r in monthly if r['trade_month'] in verified)
+                previous_avg=subtotal/len(verified) if verified else None
+                current_avg=total/current_months
+                kpi.update(monthly_avg_usd=current_avg,compare_monthly_avg_usd=previous_avg,
+                    monthly_avg_change_pct=percentage(current_avg,previous_avg),verified_months=current_months,
+                    requested_months=current_months,compare_verified_months=len(verified),compare_requested_months=previous_months)
+                avg_note=f'두 기간의 길이가 다릅니다. 조회 기간 월평균은 {current_avg:,.2f} USD({current_months}/{current_months}개월)입니다.'
+                avg_note+=(f' 비교 기간 월평균은 {previous_avg:,.2f} USD({len(verified)}/{previous_months}개월)입니다.'
+                           if previous_avg is not None else ' 비교 기간에 검증된 월이 없어 월평균은 미집계입니다.')
+                meta['monthly_average_note']=avg_note
+                text+=' '+avg_note
         sections=[section('SUMMARY',text)]
         selected=c.get('sections',list(TITLES)[1:5])
         if 'KPI' in selected:
@@ -221,7 +249,7 @@ def generate(store,job,settings):
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
-    if record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
+    if not (record.get('content_json') or {}).get('source_tables') and record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
         from backend.app.services.report_context import build_context
         doc['template_pdf']={'version':1,'report_type':record['report_type'],
                              'context':build_context(store,uid,record,doc)}
