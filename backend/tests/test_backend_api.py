@@ -470,6 +470,19 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(deliver_event(Store(self.app.state.database,c),1),1)
             self.assertEqual(deliver_event(Store(self.app.state.database,c),1),0)
 
+    def test_rankings_mark_selected_country_without_rows(self):
+        self.signup()
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['country'].insert(),{'country_code':'JP','name_ko':'일본','country_role':'COUNTRY'})
+        response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&country_codes=US&country_codes=JP')
+        self.assertEqual(response.status_code,200,response.text)
+        items={item['country_code']:item for item in response.json()['items']}
+        self.assertTrue(items['US']['has_data'])
+        self.assertFalse(items['JP']['has_data'])
+        self.assertEqual(float(items['JP']['export_amount_usd']),0)
+        result=self.client.get('/api/v1/results/'+response.json()['result_id']).json()['table']
+        self.assertNotIn('has_data',[column['key'] for column in result['columns']])
+
     def test_rankings_and_changes_use_saved_measurements(self):
         self.signup()
         response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&page_size=5')
@@ -477,7 +490,7 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(response.json()['items'][0]['country_code'],'CN')
         self.assertEqual(response.json()['items'][0]['one_off']['status'],'NOT_EVALUATED')
         result=self.client.get('/api/v1/results/'+response.json()['result_id']).json()['table']
-        self.assertEqual(result['rows'],response.json()['items'])
+        self.assertEqual(result['rows'],[{k:v for k,v in item.items() if k!='has_data'} for item in response.json()['items']])
         self.assertEqual(response.json()['items'][0]['rank_status'],'SAME')
         response=self.post('analysis/changes',{'month':'2025-12','compare':'YOY'})
         self.assertEqual(response.status_code,200,response.text)

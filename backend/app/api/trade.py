@@ -232,6 +232,7 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
         country=[k] if group=='COUNTRY' else countries
         items.append({'rank':rank,'country_code':k if group=='COUNTRY' else None,
             'hs_item':h[0] if group=='HS6' else None,'export_amount_usd':ex.get(k,Decimal(0)),'import_amount_usd':im.get(k,Decimal(0)),
+            'has_data':k in ex or k in im,
             'share_pct':primary[k]*100/total if total else None,
             'rank_change':old_rank[k]-rank if k in old_rank and primary[k]>0 else None,
             'rank_status':'NOT_APPLICABLE' if not rank_comparable or primary[k]<=0 else 'NEW' if k not in old_rank else 'UP' if old_rank[k]>rank else 'DOWN' if old_rank[k]<rank else 'SAME',
@@ -239,7 +240,8 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
             'one_off':flags.get(k,anomaly_view(set()))})
     meta=metadata(store,start,end)
     conditions={'hs_items':hs or [],'country_codes':countries or [],'period':period(start,end),'trade_flow':flow}
-    table=result_table(store,uid,items,meta,conditions,store.queries)
+    # has_data는 화면 표시용이라 엑셀·채팅 결과표에는 넣지 않는다.
+    table=result_table(store,uid,[{k:v for k,v in item.items() if k!='has_data'} for item in items],meta,conditions,store.queries)
     return {'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items)), 'result_id':table['result_id'],'meta':meta}
 
 

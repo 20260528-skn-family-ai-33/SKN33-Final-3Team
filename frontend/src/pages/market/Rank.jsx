@@ -44,7 +44,8 @@ function RankResults({ route }) {
   const rankingGroup = applied.group || (countryCodes.length ? 'HS6' : 'COUNTRY')
   const query = { scope: applied.scope, period_start: applied.start || monthOffset(end, 1 - Number(applied.period)), period_end: applied.end || end, country_codes: countryCodes, hs_code: applied.product || undefined, hs_ver: applied.product ? 'HS2022' : undefined }
   const result = useQuery(byMonth ? '/trade/trends' : '/trade/rankings', byMonth ? query : { ...query, group_by: rankingGroup, sort_flow: basis === 'exp' ? 'EXPORT' : 'IMPORT', page, page_size: 20 }, !!end)
-  const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: r.export_amount_usd == null ? null : Number(r.export_amount_usd) / 1e8, imp: r.import_amount_usd == null ? null : Number(r.import_amount_usd) / 1e8 }))
+  const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: r.export_amount_usd == null || r.has_data === false ? null : Number(r.export_amount_usd) / 1e8, imp: r.import_amount_usd == null || r.has_data === false ? null : Number(r.import_amount_usd) / 1e8 }))
+  const empty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
   const max = Math.max(...rows.map(r => r[basis]), 1)
   const other = basis === 'exp' ? 'imp' : 'exp'
   const label = { exp: '수출액', imp: '수입액' }
@@ -110,9 +111,10 @@ function RankResults({ route }) {
                 <span className="r s">{r[other] == null ? '—' : r[other].toFixed(1)}</span>
               </div>
             ))}
+            {empty && <p className="muted" role="status" style={{ padding: '22px 4px', textAlign: 'center' }}>조회 조건에 맞는 수출입 실적이 없습니다. 국가·품목·기간을 바꿔 다시 조회해 주세요.</p>}
             <div className="between" style={{ marginTop: 18 }}>
               <span className="note">표·막대: 억 USD · 엑셀: 원본 USD 단위</span>
-              <Btn icon="download" disabled={!result.data?.result_id} onClick={exportExcel}>엑셀 다운로드</Btn>
+              <Btn icon="download" disabled={!result.data?.result_id || result.loading || empty} onClick={exportExcel}>엑셀 다운로드</Btn>
             </div>
             {!byMonth && <Pagination page={page} info={result.data?.page} onChange={setPage} />}
           </div>

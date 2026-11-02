@@ -24,6 +24,7 @@ const SHORTCUTS = [
 ]
 const TICKER_TABS = [['all', '전체기사'], ['short', '단신속보'], ['major', '주요이슈']]
 const DIR_COLOR = { up: '#C8102E', down: '#1F5FD1', flat: '#5C6370' }
+const ARROW = { up: '▲', down: '▼', flat: '' }
 
 function FeatureCard([icon, title, text, tone]) {
   const bg = tone === 'rose' ? ['#FCE8EB', '#C8102E'] : ['#ECEAF5', '#2B2350']
@@ -152,7 +153,7 @@ export default function Dashboard({ route }) {
                   <p style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 700 }}><Icon name="flag" />{k.label}</p>
                   <p style={{ marginTop: 10, fontSize: 28, fontWeight: 800 }}>{k.value}<span style={{ fontSize: 13, fontWeight: 500, color: '#5C6370' }}> {k.unit}</span></p>
                   <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '5px 12px', fontSize: 13 }}>
-                    {k.rows.map(([l, v, d]) => <FragmentPair key={l} label={l} value={v} color={DIR_COLOR[d]} />)}
+                    {k.rows.map(([l, v, d]) => <FragmentPair key={l} label={l} value={`${ARROW[d]}${v}`} color={DIR_COLOR[d]} />)}
                   </div>
                 </div>
               ))}
@@ -171,7 +172,7 @@ export default function Dashboard({ route }) {
                 <div key={cur} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 14, alignItems: 'center', padding: '13px 4px', borderBottom: '1px solid #E3E6EA', fontSize: 15 }}>
                   <span><strong>{cur}</strong> <span style={{ fontSize: 12, color: '#5C6370' }}>{unit}</span></span>
                   <span style={{ fontWeight: 700 }}>{rate}</span>
-                  <span style={{ minWidth: 108, textAlign: 'right', fontSize: 13, fontWeight: 700, color: DIR_COLOR[dir] }}>{dir === 'up' ? '▲' : '▼'}{change}</span>
+                  <span style={{ minWidth: 108, textAlign: 'right', fontSize: 13, fontWeight: 700, color: DIR_COLOR[dir] }}>{ARROW[dir]}{change}</span>
                 </div>
               ))}
               {!data.fx.length && <p className="muted" style={{ padding: '13px 4px' }}>관심 국가의 환율 정보가 없습니다.</p>}
@@ -214,6 +215,7 @@ export default function Dashboard({ route }) {
               </Link>
             ))}
           </div>
+          {data.productTable.empty && <p style={{ marginTop: 18, fontSize: 14, color: '#A3AAB6' }}>조회 기간에 집계된 수출 품목이 없습니다.</p>}
         </div>
       </section>
 
@@ -235,6 +237,7 @@ export default function Dashboard({ route }) {
                 <span className="b">{rank}</span><span><span className="hs">{hs}</span></span><span className="b" style={{ fontWeight: 700 }}>{name}</span><span className="r b">{exp}</span><span className="r s">{imp}</span>
               </div>
             ))}
+            {data.productTable.empty && <p className="muted" style={{ padding: '18px 4px' }}>조회 기간에 집계된 품목 실적이 없습니다.</p>}
             {data.productTable.note && <p className="note" style={{ marginTop: 12 }}>{data.productTable.note}</p>}
           </div>
           <div className="card" style={{ flex: '1.3 1 540px' }}>
@@ -255,6 +258,7 @@ export default function Dashboard({ route }) {
                     <span className="b">{rank}</span><span style={{ fontWeight: 700 }}>{name}</span><span className="r b">{exp}</span><span className="r s">{imp}</span>
                   </div>
                 ))}
+                {data.countryTable.empty && <p className="muted" style={{ padding: '18px 4px' }}>조회 기간에 집계된 교역국 실적이 없습니다. (— 는 실적 없음)</p>}
               </div>
               <div style={{ flex: '1 1 200px', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 14 }}>
                 <p style={{ fontSize: 14, fontWeight: 800 }}>{data.countryTable.pieTitle}</p>
