@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
+import Icon from '../../components/Icon'
 import { Btn, Check } from '../../components/ui'
 import { Hs4Search } from '../../components/pickers'
 import { countryName, productName } from '../../data/catalog'
 
 export function Progress({job}) {
   const [time,setTime]=useState(Date.now)
+  const [open,setOpen]=useState(false)
+  const panelId=useId()
   const active=['QUEUED','RUNNING','WAITING_REPORT'].includes(job.status)
   useEffect(()=>{if(!active)return;const timer=setInterval(()=>setTime(Date.now()),1000);return ()=>clearInterval(timer)},[active])
   const start=Date.parse(job.round_started_at)
@@ -13,7 +16,8 @@ export function Progress({job}) {
   const done=plan.length?plan.filter(s=>['DONE','FAILED','SKIPPED'].includes(s.status)).length:job.progress?.done||0
   const percent=total?Math.max(0,Math.min(100,Math.round(100*done/total))):0
   const statuses={PENDING:'예정',RUNNING:'진행 중',WAITING:'대기 중',DONE:'완료',FAILED:'실패',SKIPPED:'건너뜀'}
-  return <div className="chat-step"><div className="between"><b>분석 계획</b><span>{percent}%{total>0 && ` · ${done}/${total}단계`}</span></div>
+  return <div className="chat-step"><div className="between"><b>분석 계획</b><div className="chips"><span>{percent}%{total>0 && ` · ${done}/${total}단계`}</span><Btn aria-label={open?'분석 계획 접기':'분석 계획 펼치기'} aria-expanded={open} aria-controls={panelId} onClick={()=>setOpen(v=>!v)}><Icon name={open?'chevronUp':'chevronDown'}/></Btn></div></div>
+    <div id={panelId} hidden={!open} className="chat-plan-details">
     <div className="chat-progress" role="progressbar" aria-label="분석 진행률" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><span style={{width:`${percent}%`}}/></div>
     <div className="between"><span role="status">{total?label:job.status==='QUEUED'?'분석 대기 중':'질문을 읽고 계획을 작성하고 있습니다.'}</span>
       {active && Number.isFinite(start) && <small>{Math.max(0, Math.floor((time-start)/1000))}초 경과</small>}</div>
@@ -23,7 +27,7 @@ export function Progress({job}) {
         {step.question && step.question!==plan[i-1]?.question && <small>{step.question}</small>}
         <div>{current?<strong>{step.label}</strong>:<span>{step.label}</span>} <span className="note">{statuses[step.status]}</span></div>
       </li>
-    })}</ol>}</div>
+    })}</ol>}</div></div>
 }
 
 export function PromptActions({prompt,busy,reply,onDirectInput}) {
