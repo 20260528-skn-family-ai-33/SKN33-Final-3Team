@@ -96,7 +96,14 @@ ask_user interrupt, so the stale answer is ignored rather than delivered twice.
         if has_interrupt and resume is not None and resume.get('clarification_id')!=pending.get('clarification_id'):
             execution.clear_resume(resume)
             return snapshot.values
-        value = Command(resume=resume) if has_interrupt and resume is not None else None
+        # Address the persisted interrupt explicitly. A dict reply is application
+        # data, not LangGraph's interrupt-id -> reply routing map.
+        interrupts=[item for task in snapshot.tasks for item in task.interrupts]
+        # Redis can expose the pending checkpoint before its interrupt writes.
+        # Do not drop an accepted reply just because get_state has no interrupts
+        # yet: the pending clarification is the durable application identity.
+        matching_reply = resume is not None and resume.get('clarification_id')==pending.get('clarification_id')
+        value = Command(resume={item.id:resume for item in interrupts} if interrupts else resume) if matching_reply else None
         require(not has_interrupt or resume is not None,
                 '되묻기 답을 기다리고 있습니다.', 'CLARIFICATION_REQUIRED', 409)
     else:
@@ -105,6 +112,10 @@ ask_user interrupt, so the stale answer is ignored rather than delivered twice.
         value = state.model_dump()
     result = graph.invoke(value, config)
     if resume is not None:
+        after=graph.get_state(config)
+        pending=after.values.get('pending') or {}
+        require(pending.get('clarification_id')!=resume.get('clarification_id'),
+                '조건 입력 재개에 실패했습니다. 입력은 보존되어 있습니다.', 'CLARIFICATION_RESUME_FAILED', 503)
         # Finalize may already have set SUCCEEDED; terminal cleanup uses a
         # separate claim-checked transaction rather than the RUNNING-only guard.
         with execution.database.engine.begin() as connection:

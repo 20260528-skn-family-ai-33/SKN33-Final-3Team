@@ -9,3 +9,6 @@
 .chat-flow > :not(form),.chat-turn > * { animation:chat-appear 180ms ease-out both; }
 @keyframes chat-appear { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:none; } }
 @media (prefers-reduced-motion:reduce) { .chat-flow > :not(form),.chat-turn > * { animation:none; } }
+
+/* Keep the picker above later animated siblings without covering modal layers. */
+.chat-flow > .chat-clarification { position:relative; z-index:2; }

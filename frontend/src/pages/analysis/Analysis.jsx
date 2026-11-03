@@ -30,9 +30,9 @@ const STATUS_TAG = {
 const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
 const optionsFor = (c, choices) => ({ conditions: c, country: c.country_codes.map(countryName).join(' · '), product: c.hs_items.map(h => reportProduct(h.hs_code, choices?.find(choice => choice.hs_item?.hs_code === h.hs_code)?.label || h.name_ko)).join(', '), from: c.period.start.slice(0, 7), to: c.period.end.slice(0, 7), ...reportComparisonInputs(c), sections: ALL_SECTIONS })
 
-function AiBlock({ children }) {
+function AiBlock({ children, className }) {
   return (
-    <div>
+    <div className={className}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <span style={{ width: 30, height: 30, borderRadius: 10, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sparkle" color="#C8102E" stroke={2} /></span>
         <b style={{ fontSize: 14 }}>Borderless Sellers AI</b>
@@ -209,6 +209,7 @@ export default function Analysis({ route }) {
   const [readRevision, setReadRevision] = useState(0)
   const endRef = useRef(null), pending = useRef(null)
   const inputRef=useRef(null)
+  const clarificationRequest=useRef(null), acceptedClarifications=useRef(new Set())
   const active = chats.find(c => c.id === activeId)
   useEffect(() => {
     let cancelled = false, timer
@@ -222,6 +223,10 @@ export default function Analysis({ route }) {
         // The job endpoint also checks whether a pending checkpoint has expired.
         if (latest && (running(latest.status)||latest.status==='NEEDS_INPUT')) latest=(await api(`/chat/jobs/${latest.job_id}`)).job
         if (cancelled) return
+        if (latest?.status==='NEEDS_INPUT' && acceptedClarifications.current.has(latest.clarification?.clarification_id)) {
+          timer=setTimeout(load,2000)
+          return
+        }
         setJob(latest || null)
         if (latest && running(latest.status)) timer = setTimeout(load, 2000)
       } catch (e) { if (!cancelled) setError(e) }
@@ -268,11 +273,18 @@ export default function Analysis({ route }) {
   const removeChat = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') })
   const updateTitle = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'PATCH', body: { title: rename.trim() } }); await refreshChats(); setModal(null) })
   const clarify = async body => {
+    const id=job?.clarification?.clarification_id
+    if (!id || clarificationRequest.current || acceptedClarifications.current.has(id)) return
+    clarificationRequest.current=id
     setBusy(true)
-    const data = await run(() => api(`/chat/jobs/${job.job_id}/clarifications`, { method: 'POST', body: { clarification_id: job.clarification.clarification_id, ...body } }))
-    if (data?.job) { setJob(data.job); setInput(''); setDraft(null) }
-    setReadRevision(v => v + 1)
-    setBusy(false)
+    try {
+      const data = await run(() => api(`/chat/jobs/${job.job_id}/clarifications`, { method: 'POST', body: { clarification_id:id, ...body } }))
+      if (data?.job) {
+        if (data.job.status!=='NEEDS_INPUT' || data.job.clarification?.clarification_id!==id) acceptedClarifications.current.add(id)
+        setJob(data.job); setInput(''); setDraft(null)
+      }
+      setReadRevision(v => v + 1)
+    } finally { clarificationRequest.current=null; setBusy(false) }
   }
   const headerTag = job ? [job.status==='SUCCEEDED'?'ok':'amber', ({ QUEUED: '분석 대기', RUNNING: '분석 중', WAITING_REPORT:'리포트 만드는 중', NEEDS_INPUT: '조건 확인', SUCCEEDED: '답변 완료', FAILED: '분석 실패', EXPIRED:'시간 초과', CANCELLED:'중단됨' })[job.status]] : null
 
@@ -326,7 +338,7 @@ export default function Analysis({ route }) {
                 const turn = m.job?.job_id === job?.job_id ? job : m.job
                 return <div className="chat-turn" key={m.message_id}>
                   <UserBubble text={m.content_masked}/>
-                  {turn && (running(turn.status) || turn.progress?.plan?.length>0) && <AiBlock><Progress job={turn}/></AiBlock>}
+                  {turn && !['CANCELLED','FAILED','EXPIRED'].includes(turn.status) && (running(turn.status) || turn.progress?.plan?.length>0) && <AiBlock><Progress job={turn}/></AiBlock>}
                   {turn?.clarification_history?.filter(h=>h.id!==job?.clarification?.clarification_id).map(h=><div className="chat-turn" key={h.id}>
                     <AiBlock><p>{h.message}</p></AiBlock>{h.answer && <UserBubble text={h.answer}/>}
                   </div>)}
@@ -336,7 +348,7 @@ export default function Analysis({ route }) {
               {job?.status === 'FAILED' && <ErrorNotice error={job.error || new Error('분석에 실패했습니다.')} />}
               {job?.status === 'EXPIRED' && <AiBlock><p>답변 시간이 지났습니다. 새 질문을 입력해 주세요.</p></AiBlock>}
               {job?.status === 'CANCELLED' && <AiBlock><p>질문을 중단했습니다. 새 질문을 입력할 수 있습니다.</p></AiBlock>}
-              {job?.status === 'NEEDS_INPUT' && <AiBlock><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify} onDirectInput={()=>inputRef.current?.focus()}/></AiBlock>}
+              {job?.status === 'NEEDS_INPUT' && <AiBlock className="chat-clarification"><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify} onDirectInput={()=>inputRef.current?.focus()}/></AiBlock>}
               {(running(job?.status)||job?.status==='NEEDS_INPUT') && <Btn size="sm" disabled={busy} onClick={()=>setModal('stop')}>이 질문 중단</Btn>}
               {draft && <ConditionCard message={draft} onClose={()=>setDraft(null)} onChange={setDraft} onGenerate={async (body, key) => { const data = await api('/reports', { method: 'POST', body, idempotencyKey: key }); await refreshReports(); setDraft(null); window.location.hash = `/report?id=${data.job.report_id}` }} />}
               <div ref={endRef} />
