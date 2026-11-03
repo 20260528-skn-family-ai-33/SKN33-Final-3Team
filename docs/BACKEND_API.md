@@ -200,3 +200,16 @@ RDS에서 읽기 전용으로 연결/테이블 준비 상태/한글 HS 검색/�
 
 ### Chromium 자동 준비 (2026-11-03)
 `python -m backend.app.api.worker`는 시작할 때 현재 Playwright 버전의 Chromium 실행 파일 존재를 확인하고, 없을 때만 동일 Python으로 `python -m playwright install chromium`을 실행한다. 일반 서버·워커 재시작에는 재다운로드하지 않는다. Playwright 업그레이드·새 사용자·새 컨테이너에서는 새 버전 설치가 필요할 수 있다. PDF는 이 실행 파일을 직접 사용한다. 네트워크가 없는 배포 환경은 이미지 빌드 단계에서 같은 설치 명령을 실행해 파일을 미리 포함한다.
+
+
+### 리포트 다운로드 파일명 (2026-11-03)
+리포트 XLSX·PDF·DOCX는 공통으로 `{국가명}_{시작일}~{종료일}_{품목명}_{분석내용}_리포트_{YYYYMMDD_hhmmss}.{확장자}`를 사용한다. 국가·품목을 생략하면 전체국가·전체품목이다. 등록명을 조회하고, 저장된 topic이 있으면 분석내용으로 쓰며 없으면 방향·지표로 수출액분석/수출증감분석/수출비중분석/수출순위분석 등을 표시한다. 여러 대상은 하이픈으로 연결하고 3개 초과는 외 N개로 줄인다. 긴 이름과 파일명 금지 문자를 정리한다. 서버 Content-Disposition의 UTF-8 이름을 프런트가 그대로 사용한다. 분석 결과표 단독 엑셀의 기존 파일명 정책은 별개다.
+
+PDF 변환 실패는 설치 누락만을 뜻하지 않는다. report_pdf_failed 로그의 stage(BROWSER_START/PAGE_SETUP/HTML_LOAD/FONT_LOAD/PDF_RENDER)와 원래 Playwright 예외를 확인한다. 사용자 오류 문구도 단계별로 구분한다. 브라우저 파일이 있고 최소 PDF가 성공해도 특정 워커의 일시적 실행 실패가 있을 수 있으며, 재설치보다 같은 실행 환경에서 실제 리포트 재현과 워커 로그를 먼저 확인한다. 이미 재시도 상한에 도달한 FAILED 리포트는 환경 수정만으로 자동 재실행되지 않는다.
+
+신규 리포트 실행 JSON은 report queue version=2로 등록한다. version=1만 조회하는 구형 워커가 최신 리포트를 가져가지 못하게 하며, 최신 워커는 기존 v1 및 실행 JSON 없는 과거 리포트도 복구할 수 있다. 처리 워커 host/pid/report_protocol은 내부 실행 JSON에 기록한다. 재시도 claim 시 이전 실패 오류를 지워 RUNNING 화면에 과거 오류가 계속 표시되지 않게 한다. PDF 오류 원인은 단계별 로그로 확인하며, 브라우저 재설치만으로 해결됐다고 간주하지 않는다.
+
+리포트 파일명의 생성 시각은 completed_at을 한국 시간(KST)으로 변환한 값이며, 완료 시각이 없는 과거 자료는 created_at을 사용한다. 다운로드 시각은 사용하지 않아 같은 리포트의 XLSX·PDF·DOCX 및 재다운로드 파일명이 일관된다.
+# 채팅 컨텍스트 확인
+
+저장소 루트 PowerShell에서 `.venv\Scripts\python.exe -m backend.scripts.inspect_chat_context 20`을 실행하면 `.env` 설정을 사용하여 해당 세션의 Redis 키, 남은 TTL, 진행 중 작업 ID, 최근 조건과 최대 5턴을 읽기 전용으로 출력한다. `20`은 브라우저 개발자 도구 Network의 채팅 messages 요청에 표시되는 세션 ID로 바꾼다. 접속 비밀번호는 출력하지 않는다. 출력에는 대화 내용이 포함되므로 공유 시 주의한다. `context: null`은 캐시 없음, TTL -2는 키 없음, active_job_id null은 진행 중 잠금 없음이다. 빈 summary는 검증에서 제외될 수 있으며 질문·조건 이력과 구분한다.
