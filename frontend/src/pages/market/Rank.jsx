@@ -22,7 +22,7 @@ export default function Rank({ route }) {
 }
 
 function RankResults({ route }) {
-  const { run } = useApp()
+  const { run, profile } = useApp()
   const available = useQuery('/data/availability')
   const end = available.data?.trade_end_month
   const PERIODS = [...[3, 6, 12, 1].map(n => [String(n), n === 1 ? '최근 공개 월' : `최근 ${n}개월`]), ['custom', '연·월 직접 선택']]
@@ -41,6 +41,12 @@ function RankResults({ route }) {
   const [error, setError] = useState('')
   const countryCodes = applied.country === '__inherited__' ? applied.countryCodes : applied.country ? [countryCode(applied.country)] : []
   const countryLabel = countryCodes.map(countryName).join(' · ')
+  // 관심 범위(INTERESTED)로 조회하면 서버가 국가·품목을 고르지 않은 부분을 관심 국가·관심 품목으로 좁힌다.
+  // 제목·파일명·AI 질문도 '전체'가 아니라 실제로 적용된 범위를 적는다.
+  const interestCountries = applied.scope === 'INTERESTED' && !countryCodes.length ? profile.countries || [] : []
+  const interestProducts = applied.scope === 'INTERESTED' && !applied.product ? profile.products || [] : []
+  const scopeCountry = countryLabel || (interestCountries.length === 1 ? interestCountries[0] : interestCountries.length ? '관심 국가' : '전체 국가')
+  const scopeProduct = applied.product ? productName(applied.product) : interestProducts.length === 1 ? productName(interestProducts[0]) : interestProducts.length ? '관심 품목' : '전체 품목'
   const byMonth = !applied.group && countryCodes.length === 1 && applied.product
   const rankingGroup = applied.group || (countryCodes.length ? 'HS6' : 'COUNTRY')
   const query = { scope: applied.scope, period_start: applied.start || monthOffset(end, 1 - Number(applied.period)), period_end: applied.end || end, country_codes: countryCodes, hs_code: applied.product || undefined, hs_ver: applied.product ? 'HS2022' : undefined }
@@ -58,8 +64,8 @@ function RankResults({ route }) {
   const label = { exp: '수출액', imp: '수입액' }
 
   const title = byMonth ? `${countryLabel} · ${productName(applied.product)} 월별 수출입`
-    : rankingGroup === 'HS6' ? `${countryLabel || '전체 국가'} 교역 품목 순위`
-      : `${productName(applied.product)} 교역국 순위`
+    : rankingGroup === 'HS6' ? `${scopeCountry} 교역 품목 순위`
+      : `${scopeProduct} 교역국 순위`
   const firstCol = byMonth ? '월' : rankingGroup === 'HS6' ? '품목' : '교역국'
   const showHs = !byMonth && rankingGroup === 'HS6'
   const cols = showHs ? COLS : COLS_NO_HS
@@ -79,7 +85,8 @@ function RankResults({ route }) {
   // 파일 이름: 국가_기간_내용.xlsx (파일명에 쓸 수 없는 글자는 뺀다)
   // 품목명은 길어서 코드로 적는다. 예) 미국_2025-10~2025-12_HS870332_월별수출입.xlsx
   const fileKind = byMonth ? '월별수출입' : rankingGroup === 'HS6' ? '품목순위' : '교역국순위'
-  const fileName = `${countryLabel || '전체국가'}_${query.period_start}~${query.period_end}_${applied.product ? `HS${applied.product}` : '전체품목'}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '') + '.xlsx'
+  const productLabel = applied.product ? `HS${applied.product}` : interestProducts.length === 1 ? `HS${interestProducts[0]}` : interestProducts.length ? '관심품목' : '전체품목'
+  const fileName = `${scopeCountry}_${query.period_start}~${query.period_end}_${productLabel}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '') + '.xlsx'
   const exportExcel = () => run(() => download(`/results/${result.data.result_id}/file`, fileName))
 
   return (
@@ -127,7 +134,8 @@ function RankResults({ route }) {
                 {end && <span className="note">조회 가능: {available.data?.trade_start_month} ~ {end}</span>}
               </div>
             )}
-            <ErrorNotice error={available.error || result.error} retry={result.reload} />
+            {/* 공개 기간 조회가 실패했으면 그것부터 다시 불러와야 순위 조회도 다시 시작된다. */}
+            <ErrorNotice error={available.error || result.error} retry={available.error ? available.reload : result.reload} />
             {error
               ? <p className="field-err" role="alert" style={{ marginTop: 12 }}>{error}</p>
               : <p className="note" style={{ marginTop: 12 }}>{query.period_start || "—"} ~ {query.period_end || "—"} 조회 조건을 적용합니다. 수출 또는 수입 기준으로 순위를 전환할 수 있습니다. 품목은 이름이나 HS 코드(4·6자리)로 검색해 고른 뒤 세부 품목 칩에서 HS6로 좁힐 수 있습니다.</p>}
@@ -172,7 +180,7 @@ function RankResults({ route }) {
             {!byMonth && <Pagination page={page} info={result.data?.page} onChange={setPage} />}
           </div>
         </div>
-        <ChatFab ask={`${countryLabel || '전체 국가'} · ${applied.product ? `${productName(applied.product)}(HS ${applied.product})` : '전체 품목'} · ${query.period_start} ~ ${query.period_end} 수출입을 분석해줘`} />
+        <ChatFab ask={`${scopeCountry} · ${applied.product ? `${productName(applied.product)}(HS ${applied.product})` : scopeProduct} · ${query.period_start} ~ ${query.period_end} 수출입을 분석해줘`} />
       </main>
     </>
   )
@@ -188,11 +196,12 @@ function CountrySearch({ value, options, onChange }) {
   const matches = typing ? options.filter(([, l]) => text.trim() && l.includes(text.trim())) : []
   const pick = v => { onChange(v); setText(null) }
   return (
-    <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
+    // 포커스가 검색칸과 목록을 모두 벗어났을 때만 목록을 닫는다(Tab으로 선택지에 들어가도 열린 채 유지).
+    <div style={{ flex: 1, position: 'relative', minWidth: 0 }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setText(null) }}>
       <div className={'input val' + (typing ? ' focus' : '')} style={{ gap: 8 }}>
         <span className="select-prefix">국가</span>
         <input value={typing ? text : label} aria-label="국가" placeholder="국가명 입력"
-          onFocus={() => setText('')} onClick={() => !typing && setText('')} onBlur={() => setTimeout(() => setText(null), 150)}
+          onFocus={() => setText('')} onClick={() => !typing && setText('')}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (matches.length) pick(matches[0][0]); else setText(null) } if (e.key === 'Escape') setText(null) }} />
         <Icon name="search" size={16} color="#9AA0AA" />

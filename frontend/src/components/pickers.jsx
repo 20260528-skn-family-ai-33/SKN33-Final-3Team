@@ -54,13 +54,14 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
     onConfirm({ code: h.hs_code, name: h.name_ko, items: data.items.map(item => [item.hs_code, item.name_ko]) })
   }
   return (
-    <div className="hs-picker">
+    // 포커스가 검색칸과 목록을 모두 벗어났을 때만 목록을 닫는다(Tab으로 선택지에 들어가도 열린 채 유지).
+    <div className="hs-picker" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false) }}>
       <div className={'input' + (q ? ' val' : '') + (open ? ' focus' : '')}>
         <Icon name="search" size={18} color="#5C6370" />
         <input
           value={query} placeholder={onSelectProduct ? '품목명 또는 HS 코드 입력 (예: 8542, 메모리)' : '품목명 또는 HS4 코드 입력 (예: 8542)'} aria-label="품목 검색"
           onChange={e => { selection.current++; setQuery(e.target.value); setOpen(true); if (confirmed) onConfirm(null) }}
-          onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onFocus={() => setOpen(true)}
           style={{ fontWeight: confirmed ? 700 : 400 }}
         />
         {q && <button type="button" className="reset more" aria-label="품목 검색 지우기" onClick={() => { selection.current++; setQuery(''); onConfirm(null); setOpen(false) }}>지우기</button>}
@@ -78,6 +79,8 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
             </button>
           ))}
           <ErrorNotice error={active.error} retry={active.reload} />
+          {/* HS4 아래 하위 품목 목록을 못 불러오면 그 사실과 다시 시도를 보여 준다(HS4 전체만 남아 하위 품목이 없는 것처럼 보이지 않게). */}
+          {exactGroup && <ErrorNotice error={children.error} retry={children.reload} />}
           {!results.length && !active.error && <p className="muted" style={{ padding: '10px 12px' }}>{q.length < 2 ? '품목명 또는 HS 코드를 두 글자 이상 입력하세요.' : settled !== q || active.loading ? '검색 중…' : '검색 결과가 없습니다.'}</p>}
         </div>
       )}

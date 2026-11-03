@@ -1,5 +1,11 @@
 import { countryName, productName } from '../data/catalog.js'
 const timeFormatter = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'medium', timeStyle: 'short' })
+// 관리자 표는 yyyy-mm-dd hh:mm:ss 형식을 쓰되, 다른 화면(displayTime)과 같이 한국 시각(KST) 기준으로 보여 준다.
+const kstFormatter = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+export function kstDateTime(iso) {
+  const date = iso && new Date(iso)
+  return date && Number.isFinite(date.getTime()) ? kstFormatter.format(date) : null
+}
 export function displayTime(iso) {
   const date = iso && new Date(iso)
   return date && Number.isFinite(date.getTime()) ? timeFormatter.format(date) : '시각 미확인'

@@ -58,11 +58,23 @@ async function main() {
     await go('/articles')
     await page.locator('#ar-q').fill('검증')
     await page.getByRole('button', { name: '기사 검색' }).click()
-    // 일반·주요이슈 기사는 요약과 원문 보기·AI 질문 버튼을 바로 보여 준다(상세 펼침은 단신속보만).
-    const card = page.locator('article').first()
-    await card.getByRole('button', { name: /원문 보기/ }).waitFor()
-    await card.getByRole('link', { name: /AI에게 물어보기/ }).waitFor()
-    ok('기존 기사 탭·검색·원문 보기·AI 질문 버튼')
+    // 기사 유형별로 검증한다: 일반·주요이슈는 원문 보기·AI 질문 버튼, 단신속보는 상세 펼치기(원문 버튼 없음).
+    await page.locator('article').first().waitFor()
+    const cards = page.locator('article')
+    for (let i = 0; i < await cards.count(); i++) {
+      const card = cards.nth(i)
+      if (await card.getByText('단신속보', { exact: true }).count()) {
+        await card.getByRole('link', { name: '상세 보기' }).click()
+        await card.getByRole('link', { name: '접기' }).waitFor()
+        assert.equal(await card.getByRole('button', { name: /원문 보기/ }).count(), 0)
+        await card.getByRole('link', { name: /AI에게 물어보기/ }).waitFor()
+        await card.getByRole('link', { name: '접기' }).click()
+      } else {
+        await card.getByRole('button', { name: /원문 보기/ }).waitFor()
+        await card.getByRole('link', { name: /AI에게 물어보기/ }).waitFor()
+      }
+    }
+    ok('기존 기사 탭·검색·유형별 원문 보기·상세 펼침·AI 질문 버튼')
     await go('/account/settings')
     await page.getByRole('switch', { name: '전체 알림 수신' }).click()
     await page.getByRole('checkbox', { name: '위 알림 수신 약관을 확인했으며 동의합니다.' }).locator('..').click()

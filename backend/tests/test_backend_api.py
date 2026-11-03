@@ -426,7 +426,7 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(found(q='ecos'),1)
         self.assertEqual(found(q='HS6',status='FAILED'),1)
         # 숫자처럼 보이는 유니코드 문자나 범위를 넘는 번호도 500 없이 0건으로 끝난다.
-        for q in ('²','１２','99999999999999999999999'):
+        for q in ('²','１２','99999999999999999999999','1'*4301,'0'*30+'7'):
             response=self.client.get('/api/v1/admin/data/runs',params={'q':q})
             self.assertEqual(response.status_code,200,response.text)
 
@@ -621,6 +621,21 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(float(items['JP']['export_amount_usd']),0)
         result=self.client.get('/api/v1/results/'+response.json()['result_id']).json()['table']
         self.assertNotIn('has_data',[column['key'] for column in result['columns']])
+        # 엑셀·결과표에서는 실적 없는 행의 금액을 0이 아니라 빈 값으로 둔다(화면의 '—'와 같게).
+        row={r['country_code']:r for r in result['rows']}['JP']
+        self.assertIsNone(row['export_amount_usd']); self.assertIsNone(row['import_amount_usd'])
+
+    def test_rankings_put_rows_with_data_before_empty_rows(self):
+        self.signup(); m=self.meta.tables
+        with self.engine.begin() as c:
+            for code,name in (('AE','아랍에미리트'),('VN','베트남')):
+                c.execute(m['country'].insert(),{'country_code':code,'name_ko':name,'country_role':'COUNTRY'})
+            c.execute(m['import_summary'].insert(),{'trade_month':date(2025,12,1),'hs6_code':'330499','hs_ver':'HS2022','country_code':'VN','amount_usd':1230000})
+        # 수출 기준: VN은 수입만 있고 AE는 실적이 없다. 금액(수출 0)이 같아도 실적 있는 VN이 AE보다 앞에 와야 한다.
+        response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&country_codes=AE&country_codes=VN&sort_flow=EXPORT&page_size=1')
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual([i['country_code'] for i in response.json()['items']],['VN'])
+        self.assertTrue(response.json()['items'][0]['has_data'])
 
     def test_rankings_and_changes_use_saved_measurements(self):
         self.signup()

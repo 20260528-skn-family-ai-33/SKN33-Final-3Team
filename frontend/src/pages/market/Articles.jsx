@@ -112,7 +112,7 @@ export default function Articles({ route }) {
                     ? <Link to={withQuery(route, { id: on ? null : a.id, page: String(page) })} className="more" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} aria-expanded={on}>
                       {on ? '접기' : '상세 보기'} <Icon name={on ? 'chevronUp' : 'chevronDown'} size={15} />
                     </Link>
-                    : <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    : <div className="article-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <Btn kind="ink" iconRight="external" disabled={!a.url} onClick={() => window.open(a.url, '_blank', 'noopener')}>원문 보기</Btn>
                       <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn>
                     </div>}

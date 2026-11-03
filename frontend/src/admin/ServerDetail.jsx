@@ -4,6 +4,7 @@ import { useQuery, QueryState, Value } from '../api/hooks'
 import { Btn, Modal, TextField } from '../components/ui'
 import { useApp } from '../store'
 import { AUDIT_ACTION, AUDIT_TARGET } from './useServerScreen'
+import { kstDateTime } from '../api/adapters'
 export default function ServerDetail({ type, id, onChanged }) {
   const { session, run, notify } = useApp()
   const path = type === 'user' ? `/admin/users/${id}` : `/admin/articles/${id}`
@@ -50,7 +51,7 @@ export function AuditDetail({ id, actorEmail, onClose }) {
       return <>
         <h2 className="t2">처리 이력 상세</h2>
         <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: 10, marginTop: 18 }}>
-          {Object.entries({ '처리 시각': a.created_at ? new Date(a.created_at).toLocaleString('sv-SE') : null, 처리자: actorEmail || `회원 ${a.actor_id}`, 작업: AUDIT_ACTION[a.action] || a.action, 대상: `${AUDIT_TARGET[a.target_type] || a.target_type} ${a.target_id}`, '처리 사유': a.reason, 결과: a.result === 'SUCCEEDED' ? '완료' : a.result, '영향 범위': a.impact })
+          {Object.entries({ '처리 시각(KST)': kstDateTime(a.created_at), 처리자: actorEmail || `회원 ${a.actor_id}`, 작업: AUDIT_ACTION[a.action] || a.action, 대상: `${AUDIT_TARGET[a.target_type] || a.target_type} ${a.target_id}`, '처리 사유': a.reason, 결과: a.result === 'SUCCEEDED' ? '완료' : a.result, '영향 범위': a.impact })
             .map(([label, value]) => <div key={label} style={{ display: 'contents' }}><span className="muted">{label}</span><b style={{ overflowWrap: 'anywhere' }}><Value value={value} /></b></div>)}
         </div>
         <p className="t3" style={{ marginTop: 22 }}>변경 내용</p>

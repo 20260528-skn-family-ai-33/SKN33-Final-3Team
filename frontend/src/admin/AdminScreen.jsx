@@ -310,10 +310,11 @@ function Block({ b, query }) {
       </section>
     )
     case 'skeleton': return <div className="col" style={{ gap: 12 }}>{Array.from({ length: b.rows }, (_, i) => <div key={i} style={{ height: 44, borderRadius: 10, background: '#ECEEF1' }} />)}</div>
-    case 'memberSearch': return <MemberSearch value={query?.q ?? b.value} by={query?.by} to={b.to} />
-    case 'articleSearch': return <ArticleSearch value={query?.q} to={b.to} />
-    case 'auditSearch': return <AuditSearch query={query} to={location.hash.slice(1).split('?')[0]} />
-    case 'runSearch': return <RunSearch value={query?.q} status={query?.status} to={location.hash.slice(1).split('?')[0]} />
+    // 검색칸은 주소(검색어·필터)가 바뀌면 새로 그려, 뒤로 가기 등으로 바뀐 조건과 입력값이 어긋나지 않게 한다.
+    case 'memberSearch': return <MemberSearch key={`${b.to}|${query?.q ?? ''}|${query?.by ?? ''}`} value={query?.q ?? b.value} by={query?.by} to={b.to} />
+    case 'articleSearch': return <ArticleSearch key={query?.q ?? ''} value={query?.q} to={b.to} />
+    case 'auditSearch': return <AuditSearch key={`${query?.q ?? ''}|${query?.target ?? ''}|${query?.sort ?? ''}`} query={query} to={location.hash.slice(1).split('?')[0]} />
+    case 'runSearch': return <RunSearch key={`${query?.q ?? ''}|${query?.status ?? ''}`} value={query?.q} status={query?.status} to={location.hash.slice(1).split('?')[0]} />
     case 'ops': return <OpsDashboard tab={b.tab} />
     default: return null
   }

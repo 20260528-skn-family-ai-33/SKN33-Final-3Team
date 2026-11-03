@@ -232,7 +232,9 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
         code=store.t('hs_code')
         hs_names={r['hs_code']:r['name_ko'] for r in store.c.execute(select(code.c.hs_code,code.c.name_ko).where(code.c.hs_ver=='HS2022',code.c.hs_code.in_(list(primary)))).mappings()}
     items=[]
-    for rank,k in enumerate(sorted(primary,key=lambda k:(-primary[k],k)),1):
+    # 금액이 같으면 실적(수출 또는 수입)이 있는 행을 먼저 둔다. 그래야 실적 없는 행이 앞 페이지를 채우지 않고,
+    # 1페이지에 실적이 없으면 전체 결과에도 없다는 화면의 판단이 맞는다.
+    for rank,k in enumerate(sorted(primary,key=lambda k:(-primary[k],k not in ex and k not in im,k)),1):
         h=[{'hs_code':k,'hs_ver':'HS2022'}] if group=='HS6' else hs
         country=[k] if group=='COUNTRY' else countries
         items.append({'rank':rank,'country_code':k if group=='COUNTRY' else None,
@@ -246,8 +248,10 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
     meta=metadata(store,start,end)
     conditions={'hs_items':hs or [],'country_codes':countries or [],'period':period(start,end),'trade_flow':flow}
     # has_data는 화면 표시용이라 엑셀·채팅 결과표에는 넣지 않는다. 국가 순위에는 품목명 칸이 필요 없다.
+    # 실적이 없는 행은 화면처럼 금액 칸을 비운다(실제로 집계된 0과 구분).
     hidden={'has_data'} | ({'hs_name'} if group=='COUNTRY' else set())
-    table=result_table(store,uid,[{k:v for k,v in item.items() if k not in hidden} for item in items],meta,conditions,store.queries)
+    blank=lambda item:{} if item['has_data'] else {'export_amount_usd':None,'import_amount_usd':None}
+    table=result_table(store,uid,[{**{k:v for k,v in item.items() if k not in hidden},**blank(item)} for item in items],meta,conditions,store.queries)
     return {'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items)), 'result_id':table['result_id'],'meta':meta}
 
 

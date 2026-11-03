@@ -150,3 +150,7 @@ body.modal-open{overflow:hidden}
 .report-month select { max-width: 100%; padding: .45rem; border-radius: 6px; border: 1px solid var(--line); background: white; }
 @keyframes password-autofill { from { opacity: .99; } to { opacity: 1; } }
 .password-change input[name=current]:-webkit-autofill { animation: password-autofill .01s; }
+/* 좁은 화면에서는 기사 원문·AI 버튼을 본문 아래 줄로 내려 제목이 한 글자씩 세로로 접히지 않게 한다. */
+@media (max-width: 640px) {
+  .article-actions { flex-basis: 100%; margin-left: 22px; }
+}
