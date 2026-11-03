@@ -122,6 +122,17 @@ class RagRequest(Contract):
     source_codes: SourceSelection = "ALL"
     limit: PositiveInt | None = None
     report: ReportContext | None = None
+    reference_scope: Literal["target_only", "direct_and_context"] = "target_only"
+    order_by: Literal["relevance", "published_date_desc"] = "relevance"
+
+    def cache_payload(self):
+        """Preserve legacy cache keys only for behaviorally identical default requests."""
+        data = self.model_dump(mode="json", exclude={"request_id"})
+        if self.reference_scope == "target_only":
+            data.pop("reference_scope")
+        if self.order_by == "relevance":
+            data.pop("order_by")
+        return data
 
     @property
     def target_count(self) -> int | None:
@@ -193,6 +204,8 @@ class ArticleEvidence(ArticleKey):
     published_date: CalendarDate
     source_url: HttpUrl
     body_status: Literal["available", "missing"]
+    evidence_role: Literal["unclassified", "direct_evidence", "context_reference", "mixed"] = "unclassified"
+    reference_limitation: str | None = None
     content_version: Text | None = None
     evidence: tuple[EvidenceSpan, ...] = ()
     summary: tuple[SummarySentence, ...] = ()
@@ -231,9 +244,18 @@ class RagResponse(Contract):
     completed_sources: tuple[ArticleSource, ...]
     failures: tuple[RagFailure, ...] = ()
     reason: Text | None = None
+    reference_scope: Literal["target_only", "direct_and_context"] = "target_only"
+    order_by: Literal["relevance", "published_date_desc"] = "relevance"
+    latest_scan_complete: bool | None = None
+    latest_basis: Literal["publication_date"] | None = None
 
     @model_validator(mode="after")
     def check_consistency(self):
+        if self.order_by == "published_date_desc":
+            if self.latest_basis != "publication_date":
+                raise ValueError("최신 기사는 발행일 기준입니다")
+            if any(a.summary or a.evidence or a.evidence_role != "unclassified" for a in self.articles):
+                raise ValueError("발행일 목록을 본문 검증된 근거로 표시할 수 없습니다")
         _unique(tuple(a.key for a in self.articles), "기사 식별자")
         _unique(tuple(a.article_id for a in self.articles), "기사 ID")
         _unique(self.completed_sources, "완료 출처")
@@ -264,7 +286,7 @@ class RagResponse(Contract):
         if self.status == "no_results" and self.articles:
             raise ValueError("no_results에는 기사를 반환할 수 없습니다")
         if self.status in ("ok", "insufficient_results"):
-            if not self.articles or any(not a.summary for a in self.articles):
+            if not self.articles or (self.order_by != "published_date_desc" and any(not a.summary for a in self.articles)):
                 raise ValueError("정상 근거 기사와 요약이 필요합니다")
         if self.status == "ok" and self.target_count is not None and self.returned_count != self.target_count:
             raise ValueError("목표 건수보다 적으면 insufficient_results를 사용합니다")
@@ -272,7 +294,9 @@ class RagResponse(Contract):
             if self.target_count is None or not 0 < self.returned_count < self.target_count:
                 raise ValueError("insufficient_results는 목표보다 적은 양수 건수에 사용합니다")
         if self.status == "insufficient_evidence" and self.articles and all(a.summary for a in self.articles):
-            raise ValueError("근거 부족 상태에는 요약을 보류한 기사가 있어야 합니다")
+            # Grounding-rejected candidates may be omitted from the public list.
+            if self.target_count is None or self.returned_count >= self.target_count:
+                raise ValueError("근거 부족 상태에는 보류한 기사 또는 목표 건수 부족이 있어야 합니다")
         if self.use_case == "chat" and any(len(a.summary) > 2 for a in self.articles):
             raise ValueError("챗봇은 기사별 1~2문장 요약입니다")
         return self
@@ -286,6 +310,11 @@ def validate_response_for(request: RagRequest, response: RagResponse) -> RagResp
         raise ValueError("요청의 확정 조건을 변경할 수 없습니다")
     if response.requested_source_codes != request.source_codes:
         raise ValueError("요청 출처 선택을 변경할 수 없습니다")
+    if response.reference_scope != request.reference_scope or response.order_by != request.order_by:
+        raise ValueError("검색 범위·정렬 정책을 변경할 수 없습니다")
+    if request.order_by == "published_date_desc" and any(
+            a.published_date < b.published_date for a, b in zip(response.articles, response.articles[1:])):
+        raise ValueError("발행일 내림차순 위반")
     if response.target_count != request.target_count:
         raise ValueError("요청과 응답의 목표 건수가 다릅니다")
     return response
