@@ -26,7 +26,8 @@ export function useDebouncedValue(value, delay = 300) {
   return settled
 }
 
-// keep: 조건만 바뀌어 다시 불러오는 동안 같은 경로의 이전 결과를 계속 보여 준다(목록이 비었다가 다시 차며 화면이 튀지 않게).
+// keep: 다시 불러오는 동안 같은 경로의 이전 결과를 계속 보여 준다(목록이 비었다가 다시 차며 화면이 튀지 않게).
+// 문자열을 넘기면 그 값(예: 페이지를 뺀 조회 조건)이 같을 때만 이전 결과를 쓴다. 탭·분류가 바뀌면 이전 행을 바로 비운다.
 export function useQuery(path, query = {}, enabled = true, interval = 0, method = 'GET', keep = false) {
   const key = JSON.stringify(query)
   const [state, setState] = useState({ data: null, error: null, loading: true })
@@ -38,17 +39,17 @@ export function useQuery(path, query = {}, enabled = true, interval = 0, method 
     const load = async () => {
       try {
         const data = await api(path, { method, [method === 'GET' ? 'query' : 'body']: JSON.parse(key), signal: controller.signal })
-        if (!controller.signal.aborted) setState({ key: requestKey, data, error: null, loading: false })
+        if (!controller.signal.aborted) setState({ key: requestKey, group: keep, data, error: null, loading: false })
       } catch (error) {
-        if (!controller.signal.aborted) setState({ key: requestKey, data: null, error, loading: false })
+        if (!controller.signal.aborted) setState({ key: requestKey, group: keep, data: null, error, loading: false })
       }
       if (interval && !controller.signal.aborted) timer = setTimeout(load, interval)
     }
     load()
     return () => { controller.abort(); clearTimeout(timer) }
-  }, [path, key, enabled, revision, interval, requestKey, method])
+  }, [path, key, enabled, revision, interval, requestKey, method, keep])
   const reloadQuery = useCallback(() => reload(n => n + 1), [])
-  const previous = keep && state.data && state.key?.startsWith(`${method}|${path}|`) ? state.data : null
+  const previous = keep && state.data && state.key?.startsWith(`${method}|${path}|`) && (keep === true || state.group === keep) ? state.data : null
   return { ...(enabled ? state.key === requestKey ? state : { data: previous, error: null, loading: true } : { data: null, error: null, loading: false }), reload: reloadQuery }
 }
 export function ErrorNotice({ error, retry }) {

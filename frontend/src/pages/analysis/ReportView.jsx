@@ -58,7 +58,10 @@ export default function ReportView({ route }) {
       <div className="card" style={{ maxWidth: 640, margin: '0 auto', textAlign: 'center' }}>
         <ErrorNotice error={error || content.error || job?.error} retry={() => { setRetry(n => n + 1); content.reload() }} />
         {!error && !content.error && <p className="t2" role="status">{status[job?.status] || '저장된 리포트를 불러오는 중…'}</p>}
-        {!error && !content.error && <p className="muted" style={{ marginTop: 8 }}>완료 전에는 열람·다운로드할 수 없습니다. 완료되면 리포트 센터에서 확인할 수 있습니다.</p>}
+        {/* 실패한 리포트는 완료되지 않으므로 대기 안내 대신 다시 요청하라고 안내한다. */}
+        {!error && !content.error && (job?.status === 'FAILED'
+          ? <p className="muted" style={{ marginTop: 8 }}>리포트를 만들지 못했습니다. AI챗봇에서 같은 조건으로 다시 요청해 주세요.</p>
+          : <p className="muted" style={{ marginTop: 8 }}>완료 전에는 열람·다운로드할 수 없습니다. 완료되면 리포트 센터에서 확인할 수 있습니다.</p>)}
         <Btn to="/account/reports" kind="red" size="md" style={{ marginTop: 20 }}>리포트 센터로</Btn>
       </div>
     </div></main>

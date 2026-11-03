@@ -425,6 +425,10 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(found(status='FAILED'),failed+2)
         self.assertEqual(found(q='ecos'),1)
         self.assertEqual(found(q='HS6',status='FAILED'),1)
+        # 숫자처럼 보이는 유니코드 문자나 범위를 넘는 번호도 500 없이 0건으로 끝난다.
+        for q in ('²','１２','99999999999999999999999'):
+            response=self.client.get('/api/v1/admin/data/runs',params={'q':q})
+            self.assertEqual(response.status_code,200,response.text)
 
     def test_admin_audit_search_and_sort(self):
         from datetime import datetime

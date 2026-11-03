@@ -74,7 +74,8 @@ def runs(store,page=1,size=20,source=None,status=None,q=None):
     if q and q.strip():
         word=q.strip()
         conds=[t.c.job_name.contains(word,autoescape=True),t.c.source_code.contains(word,autoescape=True)]
-        if word.isdigit(): conds.append(t.c.run_id==int(word))
+        # '²' 같은 문자도 isdigit()은 참이므로 ASCII 숫자이면서 BIGINT UNSIGNED 범위일 때만 실행 ID로 본다.
+        if word.isascii() and word.isdigit() and int(word)<2**64: conds.append(t.c.run_id==int(word))
         stmt=stmt.where(or_(*conds))
     rows=store.rows(stmt.order_by(t.c.run_id.desc()).offset((page-1)*size).limit(size))
     return {'items':[{'run_id':str(r['run_id']),**{k:r[k] for k in ('source_code','job_name','period_start','period_end','status','request_count','received_count')},

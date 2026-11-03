@@ -28,18 +28,22 @@ export function useServerScreen(template, id, query) {
   if (endpoint === '/admin/alerts') filters.category = ({ BS35: 'DATA', BS37: 'REPORT', BS39: 'MEMBER' })[id] || 'ALL'
   // 회원·기사 상세를 열면 그 한 건만 보여 주고 목록은 불러오지 않는다.
   const detailOpen = (endpoint === '/admin/users' && !!user) || (endpoint === '/admin/articles' && !!article)
-  const result = useQuery(endpoint, filters, !!endpoint && !detailOpen, 0, 'GET', true)
+  // 페이지만 바뀌거나 다시 불러올 때는 이전 행을 유지하고, 탭·분류·검색 조건이 바뀌면 이전 행을 바로 비운다.
+  const { page: _page, ...group } = filters
+  const result = useQuery(endpoint, filters, !!endpoint && !detailOpen, 0, 'GET', JSON.stringify([endpoint, group]))
   if (!template) return { result, screen: null }
   const items = result.data?.items || result.data?.rules || []
   const blocks = []
   // Keep the original navigation, member search, overview cards and table styling.
-  for (const b of template.blocks) if (['tabs','memberSearch'].includes(b.type)) blocks.push(b)
+  // 상태 탭(정상·탈퇴·이용 제한)에서 검색하면 그 탭에 머물러 상태 조건을 유지한다.
+  for (const b of template.blocks) if (['tabs','memberSearch'].includes(b.type)) blocks.push(b.type === 'memberSearch' && status ? { ...b, to: `/admin/members/${id}` } : b)
   if (endpoint === '/admin/overview') blocks.push(...template.blocks.filter(b => b.type === 'ops'))
   else if (endpoint === '/admin/users' && user) blocks.splice(0, blocks.length, { type: 'buttons', items: [{ label: '회원 목록으로', to: '/admin/members/BS40' }] })
   else if (endpoint === '/admin/users') {
     if (!blocks.some(b => b.type === 'memberSearch')) blocks.push({ type: 'memberSearch', to: '/admin/members/BS49' })
     blocks.push(table(['아이디(이메일)', '이름', '권한', '이용 상태', '관리'], items.map(r => [r.email, r.name, r.role, r.account_status, button('상세', `/admin/members/BS48?user_id=${r.user_id}`)]), '1.8fr 1fr 0.8fr 0.9fr 0.8fr'))
-  } else if (endpoint === '/admin/alerts') blocks.push(table(['분류', '알림 내용', '발생 시각'], items.map(r => [r.category, r.message, localTime(r.created_at)])))
+  } else if (endpoint === '/admin/alerts') blocks.push(table(['분류', '알림 내용', '발생 시각', '관리'], items.map(r => [r.category, r.message, localTime(r.created_at),
+    r.target_type === 'BATCH' ? button('수집 이력', `/admin/inbox/collection?q=${encodeURIComponent(r.target_id)}`) : null]), '0.7fr 2fr 1.2fr 0.8fr'))
   else if (endpoint === '/admin/data/runs') {
     blocks.push({ type: 'runSearch' })
     blocks.push({ ...table(['실행 ID', '수집 작업', '대상 기간', '결과', '수신 건수'], items.map(r => [r.run_id, `${r.source_code} · ${r.job_name}`, `${r.period_start} ~ ${r.period_end}`, RUN_STATUS[r.status] ? { tag: RUN_STATUS[r.status][0], text: RUN_STATUS[r.status][1] } : r.status, r.received_count]), '0.6fr 1.6fr 1.7fr 0.7fr 0.7fr'), empty: query.get('q') || query.get('status') ? '조건에 맞는 수집 이력이 없습니다. 검색어나 결과 분류를 바꿔 보세요.' : '' })

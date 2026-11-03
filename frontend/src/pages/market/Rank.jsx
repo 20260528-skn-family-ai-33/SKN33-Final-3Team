@@ -47,7 +47,12 @@ function RankResults({ route }) {
   const result = useQuery(byMonth ? '/trade/trends' : '/trade/rankings', byMonth ? query : { ...query, group_by: rankingGroup, sort_flow: basis === 'exp' ? 'EXPORT' : 'IMPORT', page, page_size: 20 }, !!end)
   registerProducts((result.data?.items || []).filter(r => r.hs_name).map(r => ({ hs_code: r.hs_item.hs_code, name_ko: r.hs_name })))
   const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: r.export_amount_usd == null || r.has_data === false ? null : Number(r.export_amount_usd) / 1e8, imp: r.import_amount_usd == null || r.has_data === false ? null : Number(r.import_amount_usd) / 1e8 }))
-  const empty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
+  const pageEmpty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
+  // 순위는 큰 금액부터 정렬되므로 1페이지에 실적이 없으면 전체 결과에도 없다. 다른 페이지는 1페이지 판단을 그대로 쓴다.
+  const resultKey = JSON.stringify([byMonth, query, rankingGroup, basis])
+  const [firstPage, setFirstPage] = useState({ key: null, empty: false })
+  if ((byMonth || page === 1) && result.data && !result.loading && (firstPage.key !== resultKey || firstPage.empty !== pageEmpty)) setFirstPage({ key: resultKey, empty: pageEmpty })
+  const empty = byMonth || page === 1 ? pageEmpty : firstPage.key === resultKey && firstPage.empty
   const max = Math.max(...rows.map(r => r[basis]), 1)
   const other = basis === 'exp' ? 'imp' : 'exp'
   const label = { exp: '수출액', imp: '수입액' }
@@ -63,6 +68,8 @@ function RankResults({ route }) {
     if (!draft.inherited && !draft.country && !draft.product) return setError('국가 또는 품목 중 하나 이상 선택해 주세요.')
     if (draft.period === 'custom' && (!draft.start || !draft.end)) return setError('시작 월과 끝 월을 모두 골라 주세요.')
     if (draft.period === 'custom' && draft.start > draft.end) return setError('시작 월이 끝 월보다 늦습니다. 기간을 다시 골라 주세요.')
+    const first = available.data?.trade_start_month
+    if (draft.period === 'custom' && ((first && draft.start < first) || (end && draft.end > end))) return setError(`조회할 수 있는 기간은 ${first} ~ ${end}입니다. 기간을 다시 골라 주세요.`)
     setError('')
     setPage(1); setApplied(draft)
   }
@@ -176,7 +183,9 @@ function CountrySearch({ value, options, onChange }) {
   const label = (options.find(([v]) => v === value) || options[0])[1]
   const [text, setText] = useState(null)
   const typing = text !== null
-  const shown = typing ? options.filter(([v, l]) => v && l.includes(text.trim())) : options
+  // '전체 국가'(값 '')는 검색어와 상관없이 맨 위에 두어 언제든 국가 조건을 풀 수 있게 한다.
+  const shown = typing ? options.filter(([v, l]) => !v || l.includes(text.trim())) : options
+  const matches = shown.filter(([v]) => v)
   const pick = v => { onChange(v); setText(null) }
   return (
     <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
@@ -185,7 +194,7 @@ function CountrySearch({ value, options, onChange }) {
         <input value={typing ? text : label} aria-label="국가" placeholder="국가명 입력"
           onFocus={() => setText('')} onClick={() => !typing && setText('')} onBlur={() => setTimeout(() => setText(null), 150)}
           onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && shown.length) { e.preventDefault(); pick(shown[0][0]) } if (e.key === 'Escape') setText(null) }} />
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); pick(text.trim() && matches.length ? matches[0][0] : '') } if (e.key === 'Escape') setText(null) }} />
         <Icon name="search" size={16} color="#9AA0AA" />
       </div>
       {typing && (
@@ -195,7 +204,7 @@ function CountrySearch({ value, options, onChange }) {
               onMouseDown={e => e.preventDefault()} onClick={() => pick(v)}
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, fontWeight: v === value ? 800 : 500 }}>{l}</button>
           ))}
-          {!shown.length && <p className="muted" style={{ padding: '10px 12px' }}>검색 결과가 없습니다.</p>}
+          {typing && text.trim() && !matches.length && <p className="muted" style={{ padding: '10px 12px' }}>검색 결과가 없습니다.</p>}
         </div>
       )}
     </div>

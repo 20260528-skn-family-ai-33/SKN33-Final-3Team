@@ -11,6 +11,7 @@ import bandArticles from '../../assets/band-articles.jpg'
 
 const PAGE_SIZE = 5
 const toDot = d => (d ? d.replaceAll('-', '.') : '')
+const ask = a => `/analysis?ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
 
 export default function Articles({ route }) {
@@ -111,12 +112,15 @@ export default function Articles({ route }) {
                     ? <Link to={withQuery(route, { id: on ? null : a.id, page: String(page) })} className="more" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} aria-expanded={on}>
                       {on ? '접기' : '상세 보기'} <Icon name={on ? 'chevronUp' : 'chevronDown'} size={15} />
                     </Link>
-                    : <Btn kind="ink" iconRight="external" disabled={!a.url} onClick={() => window.open(a.url, '_blank', 'noopener')}>원문 보기</Btn>}
+                    : <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <Btn kind="ink" iconRight="external" disabled={!a.url} onClick={() => window.open(a.url, '_blank', 'noopener')}>원문 보기</Btn>
+                      <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn>
+                    </div>}
                   {short && on && (
                     <div style={{ flexBasis: '100%', marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
                       <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>{detail.loading ? '본문을 불러오는 중…' : detail.data?.body_masked || a.summary}</p>
                       <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-                        <Btn to={`/analysis?ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`} icon="chat">AI에게 물어보기</Btn>
+                        <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn>
                       </div>
                     </div>
                   )}
