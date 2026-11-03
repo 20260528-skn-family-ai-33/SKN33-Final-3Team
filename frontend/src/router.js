@@ -14,8 +14,9 @@ export function useRoute() {
     const onChange = () => {
       const next = readHash()
       setRoute(prev => {
-        // 같은 화면 안에서 쿼리만 바뀌는 경우(탭·모달)는 스크롤을 유지한다.
-        if (prev.path !== next.path) window.scrollTo(0, 0)
+        // 같은 화면 안에서 쿼리만 바뀌는 경우(탭·모달)와 관리자 같은 메뉴 안의 탭 이동은 스크롤을 유지한다.
+        const section = path => path.startsWith('/admin/') ? path.split('/').slice(0, 3).join('/') : path
+        if (section(prev.path) !== section(next.path)) window.scrollTo(0, 0)
         return next
       })
     }

@@ -42,6 +42,13 @@ class TemplateTest(unittest.TestCase):
         self.assertEqual([r['code'] for r in result['top']], ['CN', 'US'])
         self.assertEqual(result['total_usd'], sum(row['amount_usd'] for row in result['top']))
 
+    def test_ranking_screen_fields_do_not_leak_into_chat_snapshot(self):
+        analysis=self.query('RANKING',ranking_group='HS6')
+        self.assertTrue(analysis.rows)
+        self.assertNotIn('has_data',analysis.rows[0])
+        self.assertNotIn('hs_name',analysis.rows[0])
+        self.assertIn('name',analysis.rows[0])
+
     def test_recent_top_five_question_orders_and_limits_in_one_aggregate(self):
         from backend.app.agents.runtime import Services
         from backend.app.agents.conditions import check_conditions

@@ -45,20 +45,66 @@ async function main() {
     await page.getByRole('button', { name: /기초화장품 삭제/ }).waitFor()
     ok('기존 관심정보 화면에서 저장값 확인')
     await go('/rank')
-    await page.getByLabel('국가', { exact: true }).selectOption('미국')
+    // 국가는 검색형 입력: 이름을 입력한 뒤 목록에서 고른다.
+    await page.getByLabel('국가', { exact: true }).click()
+    await page.getByLabel('국가', { exact: true }).fill('미국')
+    await page.getByRole('option', { name: '미국', exact: true }).click()
     await page.getByRole('button', { name: '순위 조회', exact: true }).click()
     await page.getByText('330499', { exact: true }).waitFor()
     const excel = page.waitForEvent('download')
     await page.getByRole('button', { name: '엑셀 다운로드' }).click()
     await (await excel).saveAs(path.join(out, 'ranking.xlsx'))
     ok('기존 순위 필터·막대·원본 XLSX 다운로드')
+    // 관심 범위 순위: 다른 탭에서 관심 품목을 바꾼 것처럼 서버 값만 바꿔(이 탭의 프로필은 330499 하나) 화면이 응답 기준으로 표기하는지 본다.
+    const putInterests = codes => page.evaluate(async codes => {
+      const me = await (await fetch('/api/v1/users/me')).json()
+      const cur = (await (await fetch('/api/v1/users/me/interests')).json()).interests
+      const r = await fetch('/api/v1/users/me/interests', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token },
+        body: JSON.stringify({ hs_items: codes.map(hs_code => ({ hs_code, hs_ver: 'HS2022' })), country_codes: cur.country_codes, expected_version: cur.version, landing_page: 'INTERESTED' }) })
+      return r.status
+    }, codes)
+    assert.equal(await putInterests(['330499', '330410']), 200)
+    // 순위 응답을 늦춰(가짜 응답 아님) 조회 중에는 AI 버튼이 비활성인지 확인한다.
+    await page.route('**/api/v1/trade/rankings**', async route => { await new Promise(r => setTimeout(r, 1500)); await route.continue() })
+    await go('/rank?scope=INTERESTED&group_by=HS6')
+    await page.locator('.fab[aria-disabled="true"]').waitFor()
+    await page.getByRole('heading', { name: '미국 교역 품목 순위' }).waitFor()
+    await page.locator('a.fab[href*="analysis?ask"]').waitFor()
+    await page.unroute('**/api/v1/trade/rankings**')
+    const ask = decodeURIComponent(await page.locator('a.fab').getAttribute('href'))
+    for (const part of [/^#\/analysis\?ask=미국 · /, /\(HS 330499\)/, /\(HS 330410\)/, / 수출 기준 교역 품목 순위를 분석해줘$/]) assert.match(ask, part)
+    await page.getByText('330499', { exact: true }).first().waitFor()
+    const interestExcel = page.waitForEvent('download')
+    await page.getByRole('button', { name: '엑셀 다운로드' }).click()
+    assert.match((await interestExcel).suggestedFilename(), /^미국_.*_관심품목_품목순위\.xlsx$/)
+    // 상위 코드(HS4 3304)를 지정해도 서버는 그 아래 관심 HS6만 집계하므로 AI 질문에는 HS4가 아니라 실제 HS6 목록이 들어가야 한다.
+    await go('/rank?scope=INTERESTED&group_by=COUNTRY&product=3304')
+    await page.locator('a.fab[href*="analysis?ask"]').waitFor()
+    const askHs4 = decodeURIComponent(await page.locator('a.fab').getAttribute('href'))
+    for (const part of [/\(HS 330499\)/, /\(HS 330410\)/, / 수출 기준 교역국 순위를 분석해줘$/]) assert.match(askHs4, part)
+    assert.doesNotMatch(askHs4, /\(HS 3304\)/)
+    assert.equal(await putInterests(['330499']), 200)
+    ok('관심 범위 순위: 응답 전 AI 비활성·응답 기준 표·파일명·AI 질문(종류·기준·상위 코드 지정 포함)')
     await go('/articles')
     await page.locator('#ar-q').fill('검증')
     await page.getByRole('button', { name: '기사 검색' }).click()
-    await page.getByRole('link', { name: '상세 보기', exact: true }).first().click()
-    await page.getByText('선택한 기사', { exact: true }).waitFor()
-    await page.getByRole('button', { name: '기사 원문 보기' }).waitFor()
-    ok('기존 기사 탭·검색·상세 펼침')
+    // 기사 유형별로 검증한다: 일반·주요이슈는 원문 보기·AI 질문 버튼, 단신속보는 상세 펼치기(원문 버튼 없음).
+    await page.locator('article').first().waitFor()
+    const cards = page.locator('article')
+    for (let i = 0; i < await cards.count(); i++) {
+      const card = cards.nth(i)
+      if (await card.getByText('단신속보', { exact: true }).count()) {
+        await card.getByRole('link', { name: '상세 보기' }).click()
+        await card.getByRole('link', { name: '접기' }).waitFor()
+        assert.equal(await card.getByRole('button', { name: /원문 보기/ }).count(), 0)
+        await card.getByRole('link', { name: /AI에게 물어보기/ }).waitFor()
+        await card.getByRole('link', { name: '접기' }).click()
+      } else {
+        await card.getByRole('button', { name: /원문 보기/ }).waitFor()
+        await card.getByRole('link', { name: /AI에게 물어보기/ }).waitFor()
+      }
+    }
+    ok('기존 기사 탭·검색·유형별 원문 보기·상세 펼침·AI 질문 버튼')
     await go('/account/settings')
     await page.getByRole('switch', { name: '전체 알림 수신' }).click()
     await page.getByRole('checkbox', { name: '위 알림 수신 약관을 확인했으며 동의합니다.' }).locator('..').click()
@@ -74,7 +120,7 @@ async function main() {
     await page.waitForURL('**/#/account/reports?tab=monthly')
     await page.getByRole('link', { name: '삭제', exact: true }).click()
     await page.getByRole('button', { name: '구독 삭제', exact: true }).click()
-    await page.getByText('아직 구독 중인 리포트가 없습니다.', { exact: true }).waitFor()
+    await page.getByText('월간 리포트를 아직 구독하지 않았습니다.', { exact: true }).waitFor()
     ok('기존 구독 설정·삭제 확인 모달')
     await go('/analysis')
     await page.getByRole('button', { name: '새 채팅', exact: true }).click()
@@ -85,7 +131,9 @@ async function main() {
     ok('기존 채팅방 생성·이름 변경')
     await page.getByLabel('질문 입력').fill('미국 HS330499 2025년 10월부터 12월까지 수출 추이를 보여줘')
     await page.getByRole('button', { name: '전송', exact: true }).click()
-    await page.getByRole('button', { name: '기초화장품', exact: true }).click()
+    // 품목 확인 선택지는 DB의 HS6 이름(예: '기타 메이크업 및 기초화장품')으로 나온다.
+    // 답변은 worker가 만들므로 다음 단계처럼 넉넉히 기다린다.
+    await page.getByRole('button', { name: /기초화장품/ }).first().click({ timeout: 90000 })
     await page.getByRole('button', { name: '리포트로 저장', exact: true }).waitFor({ timeout: 90000 })
     await page.getByRole('button', { name: '표로 보기', exact: true }).first().click()
     await page.getByRole('button', { name: '차트로 보기', exact: true }).first().waitFor()

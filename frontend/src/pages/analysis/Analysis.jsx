@@ -234,9 +234,9 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
       <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')} / ` : ''}{c.country_codes?.map(countryName).join(' · ') || '전체 국가'}</p>
       <p className="note">{range(c.period?.start, c.period?.end)} / 비교 {range(comparison?.start, comparison?.end)}</p>
     </>}
-    {trend && <div style={{ display: 'flex', gap: 14, marginTop: 16 }}>
+    {trend && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 16 }}>
       {[[`${trend.length}개월 ${c?.trade_flow === 'IMPORT' ? '수입' : '수출'}액`, `${amount(total)}억 USD`, '#15181E'], ['전년 동기 대비', percent(growth), growth >= 0 ? '#C8102E' : '#1F5FD1'], ['월별 흐름', flow, '#15181E']].map(([label, value, color]) => (
-        <div key={label} style={{ flex: 1, background: 'var(--bg)', borderRadius: 14, padding: '16px 18px' }}>
+        <div key={label} style={{ flex: '1 1 140px', background: 'var(--bg)', borderRadius: 14, padding: '16px 18px' }}>
           <p className="muted">{label}</p><p style={{ fontSize: 24, fontWeight: 800, marginTop: 4, color }}>{value}</p>
         </div>
       ))}
@@ -244,7 +244,7 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
     {receiving && <><p role="status" className="note">검증 완료 · 답변 수신 중</p><p style={{whiteSpace:'pre-wrap',lineHeight:1.8}}>{stream?.id===streamJobId?stream.text:''}</p></>}
     {a.tasks?.length ? <TaskResults answer={a} hideText={receiving}/> : !receiving && <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>}
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
-    {a.warnings?.map(w => <p className="note" key={w}>{w}</p>)}
+    {a.warnings?.filter(w => w !== a.text).map(w => <p className="note" key={w}>{w}</p>)}
     {!a.tasks?.length && a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
     {a.articles.map(article => <div className="li" key={article.article_id}><div><b>{article.title}</b><p className="muted">{article.summary}</p><Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn></div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
@@ -366,15 +366,16 @@ export default function Analysis({ route }) {
 
   return (
     <>
-      <Band image={bandAnalysis} imagePosition="center 60%" eyebrow="AI ANALYSIS" title="AI분석" lead="국가·품목·기간을 자연어로 질문하고, 대화 내용으로 분석 리포트를 생성합니다." />
+      <Band image={bandAnalysis} imagePosition="center 60%" eyebrow="AI CHATBOT" title="AI챗봇" lead="국가·품목·기간을 자연어로 질문하고, 대화 내용으로 분석 리포트를 생성합니다." />
       <main className="page">
-        <div className="wrap" style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 24, alignItems: 'start' }}>
-          <aside className="card col" style={{ gap: 10, padding: 18 }}>
+        <div className="wrap chat-lay">
+          <aside className="card col chat-side" style={{ gap: 10, padding: 18 }}>
             <Btn kind="red" block icon="plus" onClick={newChat}>새 채팅</Btn>
             <div className="between" style={{ marginTop: 6 }}>
               <p style={{ fontSize: 15, fontWeight: 800 }}>내 채팅방</p>
-              <span className="note">최근 대화 순</span>
+              <span className="note">최근 대화 순 · 한국 시각(KST)</span>
             </div>
+            <div className="col chat-list" style={{ gap: 10 }}>
             {chats.map(c => {
               const on = c.id === active?.id
               const tag = STATUS_TAG[c.status]
@@ -387,10 +388,13 @@ export default function Analysis({ route }) {
                 </button>
               )
             })}
+            </div>
             {!chats.length && <p className="muted">채팅방이 없습니다. 새 채팅을 시작하세요.</p>}
             <p style={{ fontSize: 14, fontWeight: 800, marginTop: 10 }}>채팅방 관리</p>
-            <Btn icon="edit" disabled={!active} style={{ justifyContent: 'flex-start' }} onClick={() => { setRename(active.title); setModal('rename') }}>선택 채팅방 이름 변경</Btn>
-            <Btn icon="trash" disabled={!active} style={{ justifyContent: 'flex-start' }} onClick={() => setModal('delete')}>선택 채팅방 삭제</Btn>
+            <div className="col chat-manage" style={{ gap: 10 }}>
+              <Btn icon="edit" disabled={!active} style={{ justifyContent: 'flex-start' }} onClick={() => { setRename(active.title); setModal('rename') }}>선택 채팅방 이름 변경</Btn>
+              <Btn icon="trash" disabled={!active} style={{ justifyContent: 'flex-start' }} onClick={() => setModal('delete')}>선택 채팅방 삭제</Btn>
+            </div>
             <p className="note">삭제 전 확인 창을 표시합니다. 리포트 파일 삭제는 별도 처리합니다.</p>
           </aside>
 
@@ -456,7 +460,8 @@ export default function Analysis({ route }) {
       <Modal open={modal === 'rename'} onClose={() => setModal(null)} width={480} label="채팅방 이름 변경">
         <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>채팅방 관리</p>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>채팅방 이름 변경</h2>
-        <div style={{ marginTop: 16 }}><TextField value={rename} onChange={setRename} aria-label="새 이름" maxLength={40} /></div>
+        <div style={{ marginTop: 16 }}><TextField value={rename} onChange={setRename} onEnter={() => rename.trim() && updateTitle()} aria-label="새 이름" maxLength={40} /></div>
+        <p className="note" style={{ marginTop: 6, textAlign: 'right' }}>{rename.length} / 40자 · Enter로 저장</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
           <Btn size="md" onClick={() => setModal(null)}>취소</Btn>
           <Btn kind="red" size="md" disabled={!rename.trim()} onClick={updateTitle}>저장</Btn>

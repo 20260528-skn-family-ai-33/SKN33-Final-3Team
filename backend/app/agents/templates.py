@@ -179,6 +179,8 @@ def run_template(store, uid, task, step, timeout=30):
         group = conditions.ranking_group
         data = trade.rankings(store, uid, **common, group=group, page=1, size=1000, save=False)
         rows, meta = data['items'], data['meta']
+        # Ranking-screen flags and its duplicate name column are not chat data.
+        rows=[{k:v for k,v in row.items() if k not in ('has_data','hs_name')} for row in rows]
         field = 'export_amount_usd' if conditions.trade_flow == 'EXPORT' else 'import_amount_usd'
         def ranked(row):
             hs = row['hs_item']

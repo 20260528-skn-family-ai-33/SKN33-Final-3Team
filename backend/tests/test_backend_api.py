@@ -620,6 +620,91 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/admin/audit-events').json()['page']['total'],1)
         self.assertEqual(self.client.get('/api/v1/admin/notification-events/999/diagnosis?user_id='+uid).status_code,404)
 
+    def test_product_ranking_includes_hs_name_and_formatted_excel(self):
+        self.signup()
+        response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&group_by=HS6')
+        self.assertEqual(response.status_code,200,response.text)
+        item=response.json()['items'][0]
+        self.assertEqual(item['hs_item']['hs_code'],'330499')
+        self.assertTrue(item['hs_name'])
+        workbook=self.client.get('/api/v1/results/'+response.json()['result_id']+'/file')
+        self.assertEqual(workbook.status_code,200,workbook.text)
+        from openpyxl import load_workbook
+        sheet=load_workbook(io.BytesIO(workbook.content))['결과표1']
+        headers=[c.value for c in sheet[1]]
+        self.assertIn('수출액 (USD)',headers); self.assertIn('품목명',headers)
+        self.assertEqual(sheet.cell(2,headers.index('품목')+1).value,'330499')
+        self.assertEqual(sheet.cell(2,headers.index('수출액 (USD)')+1).number_format,'#,##0')
+        countries=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12').json()
+        self.assertIsNone(countries['items'][0]['hs_name'])
+        table=self.client.get('/api/v1/results/'+countries['result_id']).json()['table']
+        self.assertNotIn('hs_name',[c['key'] for c in table['columns']])
+
+    def test_admin_member_search_follows_selected_field(self):
+        uid=self.signup(); m=self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id==int(uid)).values(role='ADMIN',name='검색이름'))
+            email=c.execute(select(m['users'].c.email).where(m['users'].c.user_id==int(uid))).scalar()
+        part=email.split('@')[0]
+        found=lambda q,by: self.client.get('/api/v1/admin/users',params={'q':q,'by':by}).json()['page']['total']
+        self.assertEqual(found(part,'id'),1)
+        self.assertEqual(found(part,'name'),0)
+        self.assertEqual(found('검색이름','name'),1)
+        self.assertEqual(found('검색이름','id'),0)
+        self.assertEqual(self.client.get('/api/v1/admin/users',params={'q':part,'by':'other'}).status_code,400)
+
+    def test_admin_runs_search_and_status_filter(self):
+        uid=self.signup(); m=self.meta.tables
+        found=lambda **p: self.client.get('/api/v1/admin/data/runs',params=p).json()['page']['total']
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id==int(uid)).values(role='ADMIN'))
+        base,failed=found(),found(status='FAILED')
+        with self.engine.begin() as c:
+            for job,status in (('HS6_AGGREGATION','SUCCESS'),('HS6_AGGREGATION','FAILED'),('ECOS_RATE','FAILED')):
+                c.execute(m['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':job,'target_table':'hs_code_correlation',
+                    'period_start':date(2025,8,1),'period_end':date(2025,8,31),'status':status,'detail_json':{}})
+        self.assertEqual(found(),base+3)
+        self.assertEqual(found(status='FAILED'),failed+2)
+        self.assertEqual(found(q='ecos'),1)
+        self.assertEqual(found(q='HS6',status='FAILED'),1)
+        # 숫자처럼 보이는 유니코드 문자나 범위를 넘는 번호도 500 없이 0건으로 끝난다.
+        for q in ('²','１２','99999999999999999999999','1'*4301,'0'*30+'7','9223372036854775808'):
+            response=self.client.get('/api/v1/admin/data/runs',params={'q':q})
+            self.assertEqual(response.status_code,200,response.text)
+
+    def test_admin_audit_search_and_sort(self):
+        from datetime import datetime
+        uid=self.signup(); m=self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id==int(uid)).values(role='ADMIN'))
+            email=c.execute(select(m['users'].c.email).where(m['users'].c.user_id==int(uid))).scalar()
+            for i,(action,target,reason) in enumerate((('USER_ROLE','USER','권한 부여 검수'),('ARTICLE_VISIBILITY','ARTICLE','정정 확인 전 숨김'))):
+                c.execute(m['api_audit_event'].insert(),{'audit_id':f'audit_t{i}','actor_id':int(uid),'action':action,'target_type':target,
+                    'target_id':str(100+i),'reason':reason,'before_json':{},'after_json':{},'created_at':datetime(2026,1,1+i)})
+        get=lambda **p: self.client.get('/api/v1/admin/audit-events',params=p).json()
+        self.assertEqual([x['audit_id'] for x in get()['items']][:2],['audit_t1','audit_t0'])
+        self.assertEqual([x['audit_id'] for x in get(sort='oldest')['items']][-2:],['audit_t0','audit_t1'])
+        self.assertEqual([x['audit_id'] for x in get(q='정정')['items']],['audit_t1'])
+        self.assertEqual(get(q=email.split('@')[0])['page']['total'],2)
+        self.assertEqual(get(q='정정')['items'][0]['actor_email'],email)
+        # 화면에 보이는 한글 작업 이름(띄어쓰기 무시)으로도 찾는다.
+        self.assertEqual([x['audit_id'] for x in get(q='기사 노출 변경')['items']],['audit_t1'])
+        self.assertEqual([x['audit_id'] for x in get(q='권한변경')['items']],['audit_t0'])
+        self.assertEqual(self.client.get('/api/v1/admin/audit-events',params={'sort':'other'}).status_code,400)
+
+    def test_admin_alerts_follow_category_tab(self):
+        uid=self.signup(); m=self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id==int(uid)).values(role='ADMIN'))
+            c.execute(m['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION','target_table':'export_summary',
+                'period_start':date(2025,8,1),'period_end':date(2025,8,31),'status':'FAILED','detail_json':{}})
+        for category,count in (('ALL',1),('DATA',1),('REPORT',0),('MEMBER',0)):
+            response=self.client.get('/api/v1/admin/alerts?category='+category)
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(len(response.json()['items']),count,category)
+            self.assertEqual(response.json()['page']['total'],count,category)
+        self.assertEqual(self.client.get('/api/v1/admin/alerts?category=OTHER').status_code,400)
+
     def test_worker_fencing_and_duplicate_message_after_context_change(self):
         uid=self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
         body={'question':'2025년 12월 전체 품목 수출 추이','client_message_id':'same'}
@@ -784,6 +869,57 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(deliver_event(Store(self.app.state.database,c),1),1)
             self.assertEqual(deliver_event(Store(self.app.state.database,c),1),0)
 
+    def test_rankings_mark_selected_country_without_rows(self):
+        self.signup()
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['country'].insert(),{'country_code':'JP','name_ko':'일본','country_role':'COUNTRY'})
+        response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&country_codes=US&country_codes=JP')
+        self.assertEqual(response.status_code,200,response.text)
+        items={item['country_code']:item for item in response.json()['items']}
+        self.assertTrue(items['US']['has_data'])
+        self.assertFalse(items['JP']['has_data'])
+        self.assertEqual(float(items['JP']['export_amount_usd']),0)
+        result=self.client.get('/api/v1/results/'+response.json()['result_id']).json()['table']
+        self.assertNotIn('has_data',[column['key'] for column in result['columns']])
+        # 엑셀·결과표에서는 실적 없는 행의 금액을 0이 아니라 빈 값으로 둔다(화면의 '—'와 같게).
+        row={r['country_code']:r for r in result['rows']}['JP']
+        self.assertIsNone(row['export_amount_usd']); self.assertIsNone(row['import_amount_usd'])
+        self.assertIsNone(row['rank']); self.assertIsNone(row['share_pct'])
+
+    def test_rankings_return_applied_interest_scope(self):
+        # 관심 범위 조회는 최신 관심 품목·국가를 실제 적용 조건으로 돌려준다(파일명·AI 질문이 이 값을 쓴다).
+        self.signup(); url='/api/v1/users/me/interests'
+        version=self.client.get(url).json()['interests']['version']
+        body={'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],'country_codes':['US'],'expected_version':version,'landing_page':'INTERESTED'}
+        self.assertEqual(self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf}).status_code,200)
+        response=self.client.get('/api/v1/trade/rankings?scope=INTERESTED&group_by=HS6&period_start=2025-12&period_end=2025-12')
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['conditions'],{'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],'country_codes':['US']})
+        # 월별 추이도 관심 범위에서 상위 코드(3304)를 주면 실제 적용된 관심 HS6를 돌려준다.
+        response=self.client.get('/api/v1/trade/trends?scope=INTERESTED&hs_code=3304&hs_ver=HS2022&country_codes=US&period_start=2025-12&period_end=2025-12')
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['conditions']['hs_items'],[{'hs_code':'330499','hs_ver':'HS2022'}])
+
+    def test_excel_usd_keeps_cents(self):
+        from openpyxl import load_workbook
+        from backend.app.api.files import xlsx_bytes
+        table={'columns':[{'key':'amount_usd','label':'금액','unit':'USD'}],'rows':[{'amount_usd':1234.56},{'amount_usd':1230000}],'total_rows':2}
+        ws=load_workbook(io.BytesIO(xlsx_bytes([table],{},[]))).active
+        self.assertEqual((ws['A2'].value,ws['A2'].number_format),(1234.56,'#,##0.00'))
+        self.assertEqual(ws['A3'].number_format,'#,##0')
+
+    def test_rankings_put_rows_with_data_before_empty_rows(self):
+        self.signup(); m=self.meta.tables
+        with self.engine.begin() as c:
+            for code,name in (('AE','아랍에미리트'),('VN','베트남')):
+                c.execute(m['country'].insert(),{'country_code':code,'name_ko':name,'country_role':'COUNTRY'})
+            c.execute(m['import_summary'].insert(),{'trade_month':date(2025,12,1),'hs6_code':'330499','hs_ver':'HS2022','country_code':'VN','amount_usd':1230000})
+        # 수출 기준: VN은 수입만 있고 AE는 실적이 없다. 금액(수출 0)이 같아도 실적 있는 VN이 AE보다 앞에 와야 한다.
+        response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&country_codes=AE&country_codes=VN&sort_flow=EXPORT&page_size=1')
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual([i['country_code'] for i in response.json()['items']],['VN'])
+        self.assertTrue(response.json()['items'][0]['has_data'])
+
     def test_rankings_and_changes_use_saved_measurements(self):
         self.signup()
         response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&page_size=5')
@@ -791,7 +927,7 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(response.json()['items'][0]['country_code'],'CN')
         self.assertEqual(response.json()['items'][0]['one_off']['status'],'NOT_EVALUATED')
         result=self.client.get('/api/v1/results/'+response.json()['result_id']).json()['table']
-        self.assertEqual(result['rows'],response.json()['items'])
+        self.assertEqual(result['rows'],[{k:v for k,v in item.items() if k not in ('has_data','hs_name')} for item in response.json()['items']])
         self.assertEqual(response.json()['items'][0]['rank_status'],'SAME')
         response=self.post('analysis/changes',{'month':'2025-12','compare':'YOY'})
         self.assertEqual(response.status_code,200,response.text)

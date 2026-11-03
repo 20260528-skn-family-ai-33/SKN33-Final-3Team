@@ -102,7 +102,9 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         start,end=query.get('period_start'),query.get('period_end')
         if identity==19:
             require(not ('months' in query and (start or end)),'months와 직접 기간은 함께 지정할 수 없습니다.')
-            return trade.trends(store,uid,start,end,query.get('months',24),hs,countries,query.get('trade_flow','BOTH'))
+            # 순위 API와 같이 실제 적용된 품목·국가(관심 범위 포함)를 함께 돌려줘 화면 제목·AI 질문이 그 값을 쓰게 한다.
+            return {**trade.trends(store,uid,start,end,query.get('months',24),hs,countries,query.get('trade_flow','BOTH')),
+                    'conditions':{'hs_items':hs or [],'country_codes':countries or []}}
         if identity==21:
             countries=[path['country_code']]; accounts.validate_scope(store,hs,countries)
             if query.get('month'):
@@ -157,7 +159,8 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
             return None
         if identity==64:
             require(0<len(body['title'].strip())<=160,'대화 제목은 1~160자입니다.')
-            store.c.execute(update(t).where(t.c.session_id==sid).values(title=body['title'].strip(),updated_at=now()))
+            # 이름만 바꾸는 것은 대화가 아니므로 '최근 대화 순' 시각(updated_at)은 그대로 둔다.
+            store.c.execute(update(t).where(t.c.session_id==sid).values(title=body['title'].strip()))
             return {'session_id':str(sid),'title':body['title'].strip()}
         # 실행 상태도 메시지에 속하므로 세션 잠금 아래 메시지 삭제로 함께 제거한다.
         m=store.t('chat_message'); snapshots=store.t('api_snapshot')
@@ -167,7 +170,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         store.c.execute(delete(m).where(m.c.session_id==sid)); store.c.execute(delete(t).where(t.c.session_id==sid)); return None
     if identity==41: return {'table':get_table(store,uid,path['result_id'],page,size)}
     if identity==42:
-        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(xlsx_bytes([payload],payload['meta'],payload['sql']),result_filename(payload,store),'xlsx')
+        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(xlsx_bytes([payload],payload['meta'],payload['sql'],unit_headers=True),result_filename(payload,store),'xlsx')
     if identity==43: return reports.preview(store,uid,body)
     if identity==44: return reports.create(store,uid,ReportCreate.model_validate(body),request.headers.get('Idempotency-Key'))
     if identity==45: return {'job':reports.status_view(store,store.owned('report','report_id',path['report_id'],uid))}
@@ -213,17 +216,20 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==77: return un_market.availability(store,query['hs6_code'],query['hs_ver'],query.get('country_codes',[]),query['freq_code'])
     if identity==78: return un_market.shares(store,body)
     if identity==80:
-        t=store.t('batch_run'); rows=store.rows(select(t).where(t.c.status=='FAILED').order_by(t.c.run_id.desc()))
+        category=query.get('category','ALL')
+        require(category in ('ALL','DATA','REPORT','MEMBER'),'알림 분류를 확인하세요.')
+        # 현재 관리자 알림은 데이터 수집 실패(DATA)만 만든다. 다른 분류 탭에는 섞어 보이지 않는다.
+        t=store.t('batch_run'); rows=store.rows(select(t).where(t.c.status=='FAILED').order_by(t.c.run_id.desc())) if category in ('ALL','DATA') else []
         return {'items':[{'alert_id':str(r['run_id']),'category':'DATA','message':'수집 작업 실패: '+r['job_name'],
             'target_type':'BATCH','target_id':str(r['run_id']),'created_at':r['finished_at']} for r in rows[(page-1)*size:page*size]],'page':page_info(page,size,len(rows))}
-    if identity==81: return admin.users(store,query.get('q'),query.get('status','ALL'),page,size)
+    if identity==81: return admin.users(store,query.get('q'),query.get('status','ALL'),page,size,query.get('by','all'))
     if identity==82: return admin.detail(store,path['user_id'])
     if identity in (83,84): return admin.change_user(store,user,path['user_id'],body,identity==83)
     if identity==85: admin.user_row(store,path['user_id']); return {'interests':accounts.interests(store,path['user_id']),'checks':[]}
     if identity==86:
         admin.user_row(store,path['user_id']); scope=accounts.interests(store,path['user_id'])
         return {'direct_country_codes':scope['country_codes'],'articles':news.articles(store,int(path['user_id']),scope='INTERESTED',start=_day(query.get('start_date')),end=_day(query.get('end_date')))['items'],'checks':[]}
-    if identity==87: return admin.runs(store,page,size,query.get('source_code'),query.get('status'))
+    if identity==87: return admin.runs(store,page,size,query.get('source_code'),query.get('status'),query.get('q'))
     if identity==92:
         t=store.t('article'); stmt=select(t.c.article_id)
         if query.get('q'): stmt=stmt.where(t.c.title.contains(query['q'],autoescape=True) | t.c.body_masked.contains(query['q'],autoescape=True))
@@ -276,7 +282,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         values=[{'option_code':r['option_code'],'label_ko':r['label_ko'],'enabled':bool(r['enabled']),
             'value_text':json.dumps(r['value_json'],ensure_ascii=False) if r['option_type']!='SOURCE' else ('수집 활성' if r['enabled'] else '수집 비활성')} for r in rows]
         return {'rules' if identity==121 else 'items':values}
-    if identity==122: return admin.audit_list(store,page,size,query.get('target_type'))
+    if identity==122: return admin.audit_list(store,page,size,query.get('target_type'),query.get('q'),query.get('sort','latest'))
     if identity in (123,127):
         t=store.t('api_audit_event'); row=store.one(select(t).where(t.c.audit_id==path.get('audit_id',path.get('operation_id'))))
         require(row is not None,'처리 이력이 없습니다.','NOT_FOUND',404)

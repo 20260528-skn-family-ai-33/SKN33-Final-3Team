@@ -1973,6 +1973,13 @@
       ],
       [
         "Query Parameters",
+        "by",
+        "string",
+        "선택",
+        "q 검색 기준. all(이메일·이름) / id(이메일만) / name(이름만). 기본 all."
+      ],
+      [
+        "Query Parameters",
         "page",
         "integer",
         "선택",
@@ -2151,6 +2158,13 @@
         "string",
         "선택",
         "실제 batch_run 상태 필터."
+      ],
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "선택",
+        "실행 ID·수집 작업명·출처 코드 검색어."
       ],
       [
         "Query Parameters",
@@ -2928,6 +2942,20 @@
         "string",
         "선택",
         "대상 종류 필터."
+      ],
+      [
+        "Query Parameters",
+        "q",
+        "string",
+        "선택",
+        "대상 ID·처리 사유·처리자 이메일·작업 이름(코드 또는 화면의 한글 이름) 검색어."
+      ],
+      [
+        "Query Parameters",
+        "sort",
+        "string",
+        "선택",
+        "latest(최신순, 기본) / oldest(오래된순)."
       ],
       [
         "Query Parameters",

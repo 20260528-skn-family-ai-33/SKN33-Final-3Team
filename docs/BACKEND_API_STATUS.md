@@ -22,8 +22,8 @@
 | 016 | `PUT  /api/v1/users/me/interests` | 처리 코드 구현 |
 | 017 | `POST  /api/v1/users/me/interests/items` | 처리 코드 구현 |
 | 018 | `GET  /api/v1/trade/kpis` | 처리 코드 구현 |
-| 019 | `GET  /api/v1/trade/trends` | 처리 코드 구현 |
-| 020 | `GET  /api/v1/trade/rankings` | 처리 코드 구현 |
+| 019 | `GET  /api/v1/trade/trends` | 처리 코드 구현; 응답 `conditions`(실제 적용된 hs_items·country_codes, 관심 범위 포함) |
+| 020 | `GET  /api/v1/trade/rankings` | 처리 코드 구현; 응답 항목 `hs_name`(HS6 순위 품목명), `has_data`(실적 유무, 결과표·엑셀에는 넣지 않고 실적 없는 행의 금액·순위·비중은 빈 값), 응답 `conditions`(실제 적용된 hs_items·country_codes, 관심 범위 포함), 같은 금액이면 실적 있는 행 우선 |
 | 021 | `GET  /api/v1/trade/rankings/{country_code}/products` | 처리 코드 구현 |
 | 022 | `GET  /api/v1/trade/fast-growing-products` | 처리 코드 구현 |
 | 023 | `POST  /api/v1/analysis/promising-markets` | 보류: ML 담당 협의 보류 |
@@ -84,13 +84,13 @@
 | 078 | `POST  /api/v1/analysis/import-market-shares` | 처리 코드 구현 |
 | 079 | `GET  /api/v1/admin/overview` | 보류: DEC-37 과거 월말 회원·구독 스냅샷 저장 계약 |
 | 080 | `GET  /api/v1/admin/alerts` | 처리 코드 구현 |
-| 081 | `GET  /api/v1/admin/users` | 처리 코드 구현 |
+| 081 | `GET  /api/v1/admin/users` | 처리 코드 구현; `by`(all/id/name) 검색 기준 |
 | 082 | `GET  /api/v1/admin/users/{user_id}` | 처리 코드 구현 |
 | 083 | `PATCH  /api/v1/admin/users/{user_id}/role` | 처리 코드 구현 |
 | 084 | `PATCH  /api/v1/admin/users/{user_id}/status` | 처리 코드 구현 |
 | 085 | `GET  /api/v1/admin/users/{user_id}/interests` | 관심값 조회; checks는 추가 진단 없음 |
 | 086 | `GET  /api/v1/admin/users/{user_id}/exposure` | 관심 노출 조회; checks는 추가 진단 없음 |
-| 087 | `GET  /api/v1/admin/data/runs` | 처리 코드 구현 |
+| 087 | `GET  /api/v1/admin/data/runs` | 처리 코드 구현; `q`(실행 ID·작업명·출처) 검색 |
 | 088 | `GET  /api/v1/admin/data/runs/{run_id}` | 보류: DEC-42 상세 로그·실패 범위 생산자 계약 |
 | 089 | `POST  /api/v1/admin/data/runs/{run_id}/retries` | 보류: 데이터 적재 담당자의 실패 범위 재수집 실행기 연결 |
 | 090 | `GET  /api/v1/admin/data/quality-issues` | 보류: DEC-38 HS 판본 품질 판정 저장 계약 |
@@ -125,7 +125,7 @@
 | 119 | `GET  /api/v1/admin/users/{user_id}/notification-settings` | 처리 코드 구현 |
 | 120 | `GET  /api/v1/admin/notification-events/{event_id}/diagnosis` | 존재 검증 후 UNKNOWN; 과거 제외 이유를 추정하지 않음 |
 | 121 | `GET  /api/v1/admin/notification-rules` | 처리 코드 구현 |
-| 122 | `GET  /api/v1/admin/audit-events` | 처리 코드 구현 |
+| 122 | `GET  /api/v1/admin/audit-events` | 처리 코드 구현; `q` 검색(대상 ID·사유·처리자 이메일·작업 코드 또는 화면의 한글 작업 이름)·`sort`(latest/oldest)·응답 항목 `actor_email` |
 | 123 | `GET  /api/v1/admin/audit-events/{audit_id}` | 처리 코드 구현 |
 | 124 | `GET  /api/v1/admin/operation-settings` | 처리 코드 구현 |
 | 125 | `PATCH  /api/v1/admin/article-sources/{source_code}/collection` | 보류: DEC-41 버전 획득 및 적재 담당자의 출처 중지 실행기 연결 |

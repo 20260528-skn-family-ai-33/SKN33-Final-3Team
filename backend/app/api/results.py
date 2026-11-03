@@ -11,7 +11,7 @@ LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_
         'country_code':'국가 코드','share_pct':'비중','rank':'순위','rank_change':'순위 변화',
         'rank_status':'순위 상태','previous_year_export_usd':'전년 수출액','previous_year_import_usd':'전년 수입액','growth_pct':'증감률',
         'current_amount_usd':'현재 수출액','baseline_amount_usd':'비교 수출액','change_amount_usd':'증감액',
-        'growth_status':'증감 상태','severity':'변화 수준','hs_item':'품목','one_off':'일회성 판정','label':'구분'}
+        'growth_status':'증감 상태','severity':'변화 수준','hs_item':'품목','hs_name':'품목명','one_off':'일회성 판정','label':'구분'}
 LABELS.update({'country_name':'국가','hs_code':'HS 코드','trade_month':'기준월',
     'total_usd':'기간 합계','compare_total_usd':'비교 기간 합계','change_pct':'증감률',
     'monthly_avg_usd':'월평균 금액','compare_monthly_avg_usd':'비교 기간 월평균',
