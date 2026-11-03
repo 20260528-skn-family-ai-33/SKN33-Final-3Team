@@ -28,6 +28,7 @@ export function Progress({job}) {
 
 export function PromptActions({prompt,busy,reply,onDirectInput}) {
   const [group,setGroup]=useState(null)
+  const [hs4Only,setHs4Only]=useState(false)
   const [formats,setFormats]=useState(prompt.report_preview?.formats || ['PDF'])
   const [countries,setCountries]=useState([])
   const [products,setProducts]=useState([])
@@ -36,7 +37,11 @@ export function PromptActions({prompt,busy,reply,onDirectInput}) {
   return <div className="chat-step"><strong>{prompt.message}</strong>
     {prompt.choices?.length>0 && <div className="chips">{prompt.choices.map(c=><Btn key={c.choice_id} disabled={busy} onClick={()=>reply({choice_ids:[c.choice_id]})}>{c.label}</Btn>)}</div>}
     {prompt.kind==='COUNTRY' && <div><Btn disabled={busy} onClick={onDirectInput}>목록에 없는 국가 직접 입력</Btn><p className="note">전체 국가명 또는 국가 코드로 입력하세요. 예: 중국, CN</p></div>}
-    {prompt.kind==='HS_ITEM' && <><Hs4Search group={group} onConfirm={setGroup} buttonLabel={()=>'이 HS4 선택'} onSelectAll={()=>group && reply({hs_item:{hs_code:group.code,hs_ver:'HS2022'}})}/><div className="chips">{group?.items.map(([code,name])=><Btn key={code} disabled={busy} onClick={()=>reply({hs_item:{hs_code:code,hs_ver:'HS2022'}})}>{name} ({code})</Btn>)}</div></>}
+    {prompt.kind==='HS_ITEM' && <><div className="chips" role="group" aria-label="분석 품목 단위">
+      <Btn disabled={busy} aria-pressed={hs4Only} kind={hs4Only?'plum':'line'} onClick={()=>setHs4Only(true)}>HS4 전체로 분석</Btn>
+      <Btn disabled={busy} aria-pressed={!hs4Only} kind={!hs4Only?'plum':'line'} onClick={()=>setHs4Only(false)}>HS6 세부품목 선택</Btn>
+    </div><p className="note">{hs4Only?'HS4 분류를 검색한 뒤 해당 분류 전체로 분석할 수 있습니다.':'HS4 분류를 검색한 뒤 아래에서 HS6 세부품목을 선택하세요.'}</p>
+    <Hs4Search group={group} onConfirm={setGroup} buttonLabel={()=>'이 HS4 전체로 분석'} onSelectAll={()=>!busy && group && reply({hs_item:{hs_code:group.code,hs_ver:'HS2022'}})}/>{!hs4Only && <div className="chips">{group?.items.map(([code,name])=><Btn key={code} disabled={busy} onClick={()=>reply({hs_item:{hs_code:code,hs_ver:'HS2022'}})}>{name} ({code})</Btn>)}</div>}</>}
     {prompt.kind==='INTEREST_SELECT' && <><p>국가 {countries.length}/20 · 품목 {products.length}/5</p><div className="chips">
       {prompt.interests?.country_codes?.map(c=><Btn key={c} aria-pressed={countries.includes(c)} kind={countries.includes(c)?'plum':'line'} disabled={busy||(!countries.includes(c)&&countries.length>=20)} onClick={()=>setCountries(toggle(countries,c))}>{countryName(c)}</Btn>)}
       {prompt.interests?.hs_items?.map(h=><Btn key={h.hs_ver+h.hs_code} aria-pressed={products.includes(h)} kind={products.includes(h)?'plum':'line'} disabled={busy||(!products.includes(h)&&products.length>=5)} onClick={()=>setProducts(toggle(products,h))}>{productName(h.hs_code)} ({h.hs_code})</Btn>)}</div>

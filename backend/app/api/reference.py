@@ -62,6 +62,13 @@ def _hs_search(store,q,limit,settings,depth,for_picker):
         exact=or_(exact,t.c.hs_code.in_(parents))
     rows=store.rows(base.where(exact).order_by(t.c.hs_code).limit(limit))
     if rows: return {'items':rows,'match_type':'EXACT','confidence':'EXACT',**browse_hint()}
+    if for_picker:
+        rows=store.rows(base.where(match).order_by(t.c.hs_code).limit(limit))
+        # A picker only recommends registered matches; it never auto-confirms them.
+        # Numeric prefixes have no semantic embedding interpretation.
+        if rows or (q.isascii() and q.isdigit()):
+            return {'items':rows,'match_type':'SIMILAR' if rows else 'NONE','confidence':'LOW',
+                'message':'등록된 품목명·코드 검색 결과입니다. 분류와 세부품목을 확인해 선택하세요.',**browse_hint()}
     from backend.app.api.hs_vectors import candidates
     ranked=[]; warnings=[]
     if settings.get('API_HS_VECTOR_ENABLED','true').lower()=='true':

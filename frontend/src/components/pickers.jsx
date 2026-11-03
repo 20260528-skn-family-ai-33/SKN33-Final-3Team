@@ -23,15 +23,16 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const { run } = useApp()
   const [query, setQuery] = useState(group ? `${group.code} · ${group.name}` : '')
   const [open, setOpen] = useState(false)
+  const [hs4Only, setHs4Only] = useState(false)
   const selection = useRef(0)
   const confirmed = group && query === `${group.code} · ${group.name}`
   const q = query.trim()
   const settled = useDebouncedValue(q)
-  const exactProduct = !!onSelectProduct && /^\d{6}$/.test(settled)
+  const exactProduct = !!onSelectProduct && !hs4Only && /^\d{6}$/.test(settled)
   const search = useQuery('/reference/hs-codes', { q: settled, depth: exactProduct ? 6 : 4, limit: 5 }, settled.length >= 2 && !confirmed)
-  const tryProducts = !!onSelectProduct && !/^\d+$/.test(settled) && !!search.data && search.data.match_type !== 'EXACT'
+  const tryProducts = !!onSelectProduct && !hs4Only && settled.length>=2 && !confirmed && !/^\d+$/.test(settled)
   const fallback = useQuery('/reference/hs-codes', { q: settled, depth: 6, limit: 5 }, tryProducts)
-  const preferProducts = tryProducts && (!search.data.items.length || fallback.data?.match_type === 'EXACT')
+  const preferProducts = tryProducts && search.data?.match_type!=='EXACT' && !!fallback.data && (!search.data?.items.length || fallback.data.match_type === 'EXACT')
   const active = preferProducts ? fallback : search
   const results = (settled === q ? active.data?.items || [] : []).filter(h => !exactProduct || h.hs_code === q)
   const select = async h => {
@@ -49,7 +50,11 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
     setQuery(`${h.hs_code} · ${h.name_ko}`)
     onConfirm({ code: h.hs_code, name: h.name_ko, items: data.items.map(item => [item.hs_code, item.name_ko]) })
   }
-  return (
+  return <>
+    {onSelectProduct && <div className="chips" role="group" aria-label="품목 검색 단위">
+      <Btn aria-pressed={!hs4Only} kind={!hs4Only?'plum':'line'} onClick={()=>{selection.current++;setHs4Only(false);setOpen(true)}}>통합 검색</Btn>
+      <Btn aria-pressed={hs4Only} kind={hs4Only?'plum':'line'} onClick={()=>{selection.current++;setHs4Only(true);setOpen(true)}}>HS4 단위로 검색</Btn>
+    </div>}
     <div className="hs-picker">
       <div className={'input' + (q ? ' val' : '') + (open ? ' focus' : '')}>
         <Icon name="search" size={18} color="#5C6370" />
@@ -64,7 +69,7 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
       </div>
       <Btn kind="ink" size="md" disabled={!confirmed} onClick={onSelectAll} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(group)}</Btn>
       {open && !confirmed && (
-        <div role="listbox" style={{ position: 'absolute', top: 56, left: 0, right: 0, zIndex: 20, background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
+        <div role="listbox" style={{ position: 'absolute', top:56, maxHeight:320, overflowY:'auto', left: 0, right: 0, zIndex: 20, background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
           {results.map(h => (
             <button type="button" key={h.hs_code} className="reset" role="option" aria-selected="false"
               onMouseDown={e => e.preventDefault()}
@@ -78,7 +83,7 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
         </div>
       )}
     </div>
-  )
+  </>
 }
 
 export function InterestProducts({ products, setProducts }) {
