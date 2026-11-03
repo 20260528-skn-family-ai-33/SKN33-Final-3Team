@@ -19,7 +19,7 @@ from backend.app.api.database import Database, Store
 from backend.app.api.common import ApiError, clean, require
 from backend.app.api.security import authenticate, administrator, limit_auth_request, limit_public, client_ip, hash_token
 from backend.app.api.routes import dispatch, PENDING
-from backend.app.api.schemas import Conditions, HsItem
+from backend.app.api.schemas import Conditions, ReportConditions, HsItem
 
 CONTRACTS = json.loads(Path(__file__).with_name('contracts.json').read_text(encoding='utf-8'))
 log = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ def validate_value(value, kind, name, query=False):
                 require(parsed.tzinfo is not None, 'through에는 시간대가 필요합니다.')
             except ValueError: raise ApiError(400, 'VALIDATION_ERROR', 'through: 유효한 일시가 필요합니다.')
     elif kind == 'Conditions': return Conditions.model_validate(value).model_dump(mode='json')
+    elif kind == 'ReportConditions': return ReportConditions.model_validate(value).model_dump(mode='json')
     elif kind == 'HsItem': return HsItem.model_validate(value).model_dump(mode='json')
     elif kind in ('ArticleLinkInput', 'ConsentAcceptance'):
         require(isinstance(value, dict), f'{name}: 객체가 필요합니다.')

@@ -1090,7 +1090,7 @@
       [
         "Request Body",
         "conditions",
-        "Conditions",
+        "ReportConditions",
         "선택",
         "직접 조건. result_id와 정확히 하나. 현재 리포트는 EXPORT만 허용.\n[팀 합의 필요: DEC-28] period_preset 사용 시 Conditions.period 등 요청 필수 필드 처리 및 서버 기본값 확정 필요."
       ],

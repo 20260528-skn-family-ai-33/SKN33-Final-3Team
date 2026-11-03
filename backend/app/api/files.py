@@ -74,7 +74,11 @@ def chart_image(section, chart, settings):
     if chart['chart_type']=='HORIZONTAL_BAR':
         ax.barh(labels,values,color='#006849'); ax.invert_yaxis()
     else:
-        ax.plot(labels,values,color='#006849',marker='o',markersize=3)
+        colors=['#006849','#2E6DB4','#8E5BB5','#E07B24','#C2477A']
+        names={c['key']:c['label'] for c in table['columns']}
+        for i,key in enumerate(chart['series_keys']):
+            ax.plot(labels,[r.get(key) for r in rows],color=colors[i%len(colors)],marker='o',markersize=3,label=names.get(key,key))
+        if len(chart['series_keys'])>1: ax.legend(prop=font,fontsize=8)
         if len(labels)>12:
             positions=list(range(0,len(labels),max(1,len(labels)//6)))
             ax.set_xticks(positions,[labels[i] for i in positions])

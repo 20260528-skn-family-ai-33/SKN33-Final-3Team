@@ -115,12 +115,27 @@ class BackendApiTest(unittest.TestCase):
         rid=response.json()['job']['report_id']
         self.assertEqual(self.post('reports',body,**{'Idempotency-Key':'request-1'}).json()['job']['report_id'],rid)
         other={**body,'formats':['PDF']}; self.assertEqual(self.post('reports',other,**{'Idempotency-Key':'request-1'}).status_code,409)
+        with self.engine.connect() as connection:
+            store=Store(self.app.state.database,connection)
+            report=store.t('report')
+            record=store.one(select(report).where(report.c.report_id==rid))
+            self.assertEqual(jobs.report_execution(store,record)['version'],jobs.REPORT_QUEUE_VERSION)
+            legacy_ids=connection.execute(select(report.c.report_id).where(report.c.content_json[jobs.EXECUTION]['version'].as_integer()==1)).scalars().all()
+            self.assertNotIn(int(rid),legacy_ids)
         self.assertTrue(run_once(self.app.state.database,self.settings))
+        with self.engine.connect() as connection:
+            store=Store(self.app.state.database,connection)
+            record=store.one(select(store.t('report')).where(store.t('report').c.report_id==rid))
+            self.assertEqual(jobs.report_execution(store,record)['worker']['report_protocol'],jobs.REPORT_QUEUE_VERSION)
         state=self.client.get(f'/api/v1/reports/{rid}/status'); self.assertEqual(state.json()['job']['status'],'READY',state.text)
         old=self.client.get(f'/api/v1/reports/{rid}').json()
         for fmt in ('pdf','docx','xlsx'):
             file=self.client.get(f'/api/v1/reports/{rid}/files/{fmt}'); self.assertEqual(file.status_code,200,file.text[:100] if fmt=='xlsx' else '')
             self.assertTrue(file.content.startswith(b'%PDF' if fmt=='pdf' else b'PK'))
+            from urllib.parse import unquote
+            filename=unquote(file.headers['content-disposition'])
+            self.assertIn('전체국가_2025-12-01~2025-12-31_',filename)
+            self.assertRegex(filename,r'_수출액분석_리포트_\d{8}_\d{6}\.'+fmt+r'$')
             Path('tmp/backend_build').mkdir(parents=True,exist_ok=True)
             Path(f'tmp/backend_build/report-test.{fmt}').write_bytes(file.content)
         with self.engine.begin() as c: c.execute(update(self.meta.tables['export_summary']).values(amount_usd=1))
@@ -721,6 +736,21 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.post('analysis/promising-markets',{'conditions':conditions}).status_code,422)
         self.assertEqual(self.post('analysis/market-patterns',{'conditions':conditions}).status_code,422)
 
+    def test_report_preview_accepts_korea_option_through_http_validation(self):
+        self.signup()
+        for selected in (True,False):
+            response=self.post('reports/preview',{'conditions':{
+                'period':{'start':'2025-01-01','end':'2025-03-31'},'compare':'NONE',
+                'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],
+                'country_codes':['US','CN'],'include_korea_total':selected}})
+            self.assertEqual(response.status_code,200,response.text)
+            conditions=response.json()['conditions']
+            self.assertEqual(bool(conditions.get('include_korea_total')),selected)
+            self.assertEqual(conditions['country_codes'],['US','CN'])
+        rejected=self.post('reports/preview',{'conditions':{
+            'period':{'start':'2025-01-01','end':'2025-03-31'},'unknown_option':True}})
+        self.assertEqual(rejected.status_code,400)
+
     def test_chat_delete_cleans_results_and_blocks_job_read(self):
         self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
         jid=self.post(f'chat/sessions/{sid}/messages',{'question':'2025년 12월 전체 품목 수출 추이','client_message_id':'del-1'}).json()['job']['job_id']
@@ -1108,7 +1138,6 @@ class BackendApiTest(unittest.TestCase):
         self.signup('stream-other@example.org')
         self.assertEqual(self.client.get(path).status_code,404)
 
-if __name__=='__main__': unittest.main()
 
     def test_country_comparison_pivots_full_snapshots_and_exports_same_columns(self):
         from backend.app.api.results import result_table
@@ -1154,3 +1183,5 @@ if __name__=='__main__': unittest.main()
         self.assertEqual(self.post('results/comparison',body).status_code,400)
         self.signup('comparison-other@example.org')
         self.assertEqual(self.post('results/comparison',body).status_code,404)
+
+if __name__=='__main__': unittest.main()

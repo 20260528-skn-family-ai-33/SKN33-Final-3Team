@@ -1,4 +1,6 @@
 """기존 chat_message/report의 JSON에 실행 상태를 원자적으로 저장한다."""
+import os
+import socket
 from datetime import datetime, timedelta
 from sqlalchemy import select, update, and_, or_
 from backend.app.api.common import now, digest, require, clean
@@ -6,10 +8,11 @@ from backend.app.api.common import now, digest, require, clean
 EXECUTION = '_execution'
 # Deployed v1 workers filter on version == 1 before claiming or reclaiming.
 AGENT_QUEUE_VERSION = 2
+REPORT_QUEUE_VERSION = 2  # Legacy workers only claim report protocol 1.
 
 
 def _initial(uid, kind, target, payload, key):
-    return {'version':1,'job_type':kind,'target_key':str(target),'subject_user_id':uid,
+    return {'version':REPORT_QUEUE_VERSION if kind=='API_REPORT' else 1,'job_type':kind,'target_key':str(target),'subject_user_id':uid,
             'payload_json':clean(payload),'request_key':digest([uid,kind,key]),'status':'QUEUED',
             'attempt_no':0,'round_attempt':0,'claim_token':0,'available_at':now().isoformat(),
             'lease_expires_at':None,'result_json':{'step':'QUERY' if kind=='API_REPORT' else 'CONTEXT'}}
@@ -60,7 +63,7 @@ def report_execution(store, record):
         state.update(generation_key=record['generation_key'],attempt_no=record['retry_count']+int(prior_attempt),
                      lease_expires_at=now().isoformat() if record['status']=='RUNNING' else None)
         if record['status']=='READY': state['result_json']={'step':'DONE'}
-    if state.get('version')!=1 or state.get('generation_key')!=record['generation_key']: return None
+    if state.get('version') not in (1,REPORT_QUEUE_VERSION) or state.get('generation_key')!=record['generation_key']: return None
     status={'READY':'SUCCEEDED','DELAYED':'QUEUED'}.get(record['status'],record['status'])
     return {**state,'job_id':record['report_id'],'status':status}
 
@@ -151,7 +154,7 @@ def claim(store):
     execution=r.c.content_json[EXECUTION]
     legacy=execution['version'].as_integer().is_(None)
     report_stmt=select(r.c.report_id,r.c.created_at).where(
-        or_(legacy,and_(execution['version'].as_integer()==1,execution['generation_key'].as_string()==r.c.generation_key)),
+        or_(legacy,and_(execution['version'].as_integer().in_((1,REPORT_QUEUE_VERSION)),execution['generation_key'].as_string()==r.c.generation_key)),
         or_(and_(r.c.status.in_(['QUEUED','DELAYED']),or_(legacy,execution['available_at'].as_string()<=moment)),
             and_(r.c.status=='RUNNING',or_(legacy,execution['lease_expires_at'].as_string()<moment))))
 
@@ -184,6 +187,7 @@ def claim(store):
         if not row: continue
         job=report_execution(store,row)
         if job and _due(job):
+            job['worker']={'host':socket.gethostname(),'pid':os.getpid(),'report_protocol':REPORT_QUEUE_VERSION}
             if job['attempt_no']>=getattr(store.db,'report_max_attempts',3):
                 job.update(status='FAILED',result_json={'step':'FAILED','error':{
                     'code':'RETRY_EXHAUSTED','message':'리포트 최대 시도 횟수를 초과했습니다.','retryable':False}})
@@ -200,9 +204,12 @@ def claim(store):
 
 
 def _claimed(job):
-    return {**job,'status':'RUNNING','claim_token':job['claim_token']+1,
+    claimed={**job,'status':'RUNNING','claim_token':job['claim_token']+1,
             'attempt_no':job['attempt_no']+1,'round_attempt':job.get('round_attempt',0)+1,
             'lease_expires_at':(now()+timedelta(minutes=10)).isoformat()}
+    if job['job_type']=='API_REPORT':
+        claimed['result_json']={'step':job.get('result_json',{}).get('step','QUERY')}
+    return claimed
 
 
 def locked_current(store,job):
