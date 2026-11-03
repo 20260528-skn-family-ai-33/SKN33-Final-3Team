@@ -196,3 +196,7 @@ RDS에서 읽기 전용으로 연결/테이블 준비 상태/한글 HS 검색/�
 
 
 최신 실연동 검증은 INTEGRATION.md 명령과 INTEGRATION_REVIEW.md 결과를 참조한다. 아래 기존 기록의 프론트/로컬 MySQL 미검증 항목은 이번 통합 검증으로 보완한다.
+
+
+### Chromium 자동 준비 (2026-11-03)
+`python -m backend.app.api.worker`는 시작할 때 현재 Playwright 버전의 Chromium 실행 파일 존재를 확인하고, 없을 때만 동일 Python으로 `python -m playwright install chromium`을 실행한다. 일반 서버·워커 재시작에는 재다운로드하지 않는다. Playwright 업그레이드·새 사용자·새 컨테이너에서는 새 버전 설치가 필요할 수 있다. PDF는 이 실행 파일을 직접 사용한다. 네트워크가 없는 배포 환경은 이미지 빌드 단계에서 같은 설치 명령을 실행해 파일을 미리 포함한다.

@@ -32,7 +32,7 @@ def template_pdf(report_type, context, settings):
     html = html.replace('</head>', embedded_font + '</head>', 1)
     try:
         with sync_playwright() as runtime:
-            with runtime.chromium.launch(headless=True, timeout=30000) as browser:
+            with runtime.chromium.launch(headless=True, executable_path=runtime.chromium.executable_path, timeout=30000) as browser:
                 page = browser.new_page(java_script_enabled=False, offline=True)
                 page.route('**/*', lambda route: route.abort())
                 page.set_default_timeout(30000)

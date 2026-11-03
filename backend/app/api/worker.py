@@ -89,6 +89,8 @@ def run_loop(db,settings,once=False):
 
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--once',action='store_true'); args=parser.parse_args()
+    from backend.app.services.report_browser import ensure_chromium
+    ensure_chromium()
     settings=Settings(); db=Database(settings.engine())
     run_loop(db,settings,args.once)
 
