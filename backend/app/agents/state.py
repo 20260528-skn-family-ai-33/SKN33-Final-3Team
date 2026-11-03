@@ -623,6 +623,8 @@ class SentenceCheck(Model):
     index: int = Field(ge=0)   # Draft.sentences()의 번호. 문장 원문은 draft에 있다
     numbers: list[Label] = Field(default_factory=list)   # 문장에서 찾은 숫자. 문장 200자 안이라 개수도 그 안에 묶인다
     status: Literal['PASS', 'MISMATCH']
+    basis: Literal['DIGEST', 'SNAPSHOT'] = 'DIGEST'
+    reason: Literal['MATCH', 'NOT_CONFIRMED', 'SOURCE_UNAVAILABLE'] = 'NOT_CONFIRMED'
 
 
 class Verification(Model):

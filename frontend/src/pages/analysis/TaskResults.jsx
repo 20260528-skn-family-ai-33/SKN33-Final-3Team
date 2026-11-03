@@ -33,8 +33,8 @@ function Chart({initial,selector}) {
 
 export default function TaskResults({answer}) {
   const conclusionCount=tasks=>tasks.reduce((count,task)=>count+task.conclusion.length,0)
-  const mismatches=new Set((answer.verification?.sentence_checks||[]).filter(c=>c.status==='MISMATCH').map(c=>c.index))
-  const sentence=(s,i)=><p key={i}>{s} {mismatches.has(i)&&<span className="tag amber">확인 필요</span>}</p>
+  const mismatches=new Map((answer.verification?.sentence_checks||[]).filter(c=>c.status==='MISMATCH').map(c=>[c.index,c]))
+  const sentence=(s,i)=><p key={i}>{s} {mismatches.has(i)&&<span className="tag amber" title={mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?'저장된 조회 결과가 만료되어 원본을 확인할 수 없습니다.':'수치·대상·기간·단위를 검증 근거와 일치한다고 확인하지 못했습니다.'}>확인 필요{mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?' · 원본 확인 불가':''}</span>}</p>
   const sections=answer.tasks.map((t,index)=>{
     const start=conclusionCount(answer.tasks.slice(0,index))
     return <section key={t.task_id} className="chat-result"><h3>{index+1}. {t.question} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>

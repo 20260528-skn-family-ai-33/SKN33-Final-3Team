@@ -17,7 +17,7 @@ from backend.app.agents.sql import generated_analysis
 from backend.app.agents.state import AgentState, Draft, Plan, PlannerOutput, Task, TaskConclusion, ToolResult
 from backend.app.agents.templates import api_conditions, run_template
 from backend.app.agents.tools import NEWS_PENDING_MESSAGE
-from backend.app.agents.verify import verify
+from backend.app.agents.verify import verify, snapshot_evidence
 from backend.app.api import trade, results
 from backend.app.api.common import ApiError, clean, now
 from backend.app.api.database import Store
@@ -250,7 +250,18 @@ class Services:
             with self.read_store() as store:
                 from backend.app.agents.templates import _names
                 countries,products=_names(store)
-            verify(state,known_names={*countries.values(),*products.values()})
+                snapshots={}
+                for task in state.plan.tasks:
+                    for step in task.steps:
+                        result=state.results.get(step.step_id)
+                        if step.tool not in ('query_trade_data','query_market_model') or not result or not result.result_id: continue
+                        try:
+                            payload=results.read_snapshot(store,state.input.user_id,result.result_id,'RESULT')
+                            snapshots[step.step_id]=snapshot_evidence(payload)
+                        except ApiError as exc:
+                            if exc.code!='RESULT_EXPIRED': raise
+                            snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
+            verify(state,known_names={*countries.values(),*products.values()},snapshots=snapshots)
         self.execution.call('verify',budget.seconds(self.settings,'verify'),check)
         self.execution.sync_budget(state)
 

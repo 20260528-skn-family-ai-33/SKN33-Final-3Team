@@ -16,7 +16,7 @@ def evidence(digest):
         if isinstance(row,list):
             for item in row: yield from walk(item, identities)
         if not isinstance(row,dict): return
-        ids=identities | {str(row[k]) for k in ('name','code','country_name','country_code','hs_code','hs6','month') if row.get(k)}
+        ids=identities | {str(row[k]) for k in ('name','code','product_name','country_name','country_code','hs_code','hs6','month','trade_month') if row.get(k)}
         for key,value in row.items():
             if isinstance(value,(dict,list)): yield from walk(value,ids)
             elif isinstance(value,(float,int)) and not isinstance(value,bool):
@@ -76,8 +76,12 @@ def check_sentence(sentence, digests, *, known_names=()):
             if not unit or expected!=unit: return False
             monthly={value for value in identities if re.fullmatch(r'\d{4}-\d{2}',value)}
             if explicit_months and monthly and not monthly.intersection(explicit_months): return False
+            if expected=='USD' and '수출' in sentence and 'import' in key: return False
+            if expected=='USD' and '수입' in sentence and 'export' in key: return False
             if expected=='USD' and ('월평균' in sentence)!=('monthly_avg' in key): return False
-            if expected=='USD' and '총액' in sentence and key not in ('total_usd','compare_total_usd'): return False
+            if expected=='USD' and any(word in sentence for word in ('총액','합계')):
+                aggregate=key in ('total_usd','compare_total_usd') or (not monthly and key in ('amount_usd','export_amount_usd','import_amount_usd'))
+                if not aggregate: return False
             if expected=='%' and '비중' in sentence and key!='share_pct': return False
             if expected=='%' and '전년' in sentence and key not in ('yoy_pct','change_pct'): return False
             if expected=='%' and '전월' in sentence and key not in ('mom_pct','change_pct'): return False
@@ -88,9 +92,19 @@ def check_sentence(sentence, digests, *, known_names=()):
     return ok,numbers
 
 
-def verify(state,known_names=()):
-    by_task={t.task_id:[state.results[s.step_id].digest for s in t.steps if s.step_id in state.results
-                        and state.results[s.step_id].digest] for t in state.plan.tasks}
+def snapshot_evidence(payload):
+    """Full saved rows, never paginated or bounded for LLM input. No new SQL."""
+    conditions=payload.get('conditions') or {}
+    return {**{k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions},
+            'columns':payload.get('columns',[]),'rows':payload.get('rows',[]),
+            '_verification_source':'SNAPSHOT'}
+
+
+def verify(state,known_names=(),*,snapshots=None):
+    snapshots=snapshots or {}
+    by_task={t.task_id:[snapshots.get(s.step_id,state.results[s.step_id].digest) for s in t.steps
+                       if s.step_id in state.results and (s.step_id in snapshots or state.results[s.step_id].digest)]
+             for t in state.plan.tasks}
     checks=[]
     names=set(known_names)
     for group in by_task.values():
@@ -99,7 +113,11 @@ def verify(state,known_names=()):
     index=0
     def add(sentence,digests):
         good,numbers=check_sentence(sentence,digests,known_names=names)
-        checks.append(SentenceCheck(index=index,numbers=numbers,status='PASS' if good else 'MISMATCH'))
+        source=any(d.get('_verification_source')=='SNAPSHOT' for d in digests)
+        unavailable=any(d.get('_source_unavailable') for d in digests)
+        checks.append(SentenceCheck(index=index,numbers=numbers,status='PASS' if good else 'MISMATCH',
+            basis='SNAPSHOT' if source else 'DIGEST',
+            reason='MATCH' if good else 'SOURCE_UNAVAILABLE' if unavailable else 'NOT_CONFIRMED'))
     for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
         generated=bool(by_task[task.task_id]) and fixed_conclusion(state,task) is None
         for sentence in conclusion.sentences:
