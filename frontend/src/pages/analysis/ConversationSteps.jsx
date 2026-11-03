@@ -16,7 +16,8 @@ export function Progress({job}) {
   const done=plan.length?plan.filter(s=>['DONE','FAILED','SKIPPED'].includes(s.status)).length:job.progress?.done||0
   const percent=total?Math.max(0,Math.min(100,Math.round(100*done/total))):0
   const statuses={PENDING:'예정',RUNNING:'진행 중',WAITING:'대기 중',DONE:'완료',FAILED:'실패',SKIPPED:'건너뜀'}
-  return <div className="chat-step"><div className="between"><b>분석 계획</b><div className="chips"><span>{percent}%{total>0 && ` · ${done}/${total}단계`}</span><Btn aria-label={open?'분석 계획 접기':'분석 계획 펼치기'} aria-expanded={open} aria-controls={panelId} onClick={()=>setOpen(v=>!v)}><Icon name={open?'chevronUp':'chevronDown'}/></Btn></div></div>
+  return <div className="chat-step"><div className="between"><b>분석 계획 {active && <span className="chat-loading-ring" aria-label="분석 진행 중"/>}</b><div className="chips"><span>{percent}%{total>0 && ` · ${done}/${total}단계`}</span><Btn aria-label={open?'분석 계획 접기':'분석 계획 펼치기'} aria-expanded={open} aria-controls={panelId} onClick={()=>setOpen(v=>!v)}><Icon name={open?'chevronUp':'chevronDown'}/></Btn></div></div>
+    {job.status==='WAITING_REPORT' && <p role="status">리포트 생성 중입니다. 완료되면 이 채팅방에 표시합니다.</p>}
     <div id={panelId} hidden={!open} className="chat-plan-details">
     <div className="chat-progress" role="progressbar" aria-label="분석 진행률" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><span style={{width:`${percent}%`}}/></div>
     <div className="between"><span role="status">{total?label:job.status==='QUEUED'?'분석 대기 중':'질문을 읽고 계획을 작성하고 있습니다.'}</span>

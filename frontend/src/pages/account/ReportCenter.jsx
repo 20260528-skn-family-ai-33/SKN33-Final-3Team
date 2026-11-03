@@ -6,6 +6,7 @@ import { Btn, Chip, Modal, Select, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
+import { localDateTime } from '../../api/adapters'
 
 
 const TABS = ['weekly', 'monthly', 'chat', 'quarterly']
@@ -61,9 +62,19 @@ export default function ReportCenter({ route }) {
   const confirm = route.query.get('confirm') === 'delete'
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState('new')
+  const [status,setStatus]=useState('')
+  const [from,setFrom]=useState('')
+  const [to,setTo]=useState('')
+  const invalidRange=from && to && from>to
   const target = `${productName(profile.products[0])} · ${profile.countries[0] || '전체 국가'}`
   const list = reports
     .filter(r => r.kind === tab && r.title.includes(query.trim()))
+    .filter(r => !status || r.status===status)
+    .filter(r => {
+      if(!from && !to)return true
+      const day=localDateTime(r.created).slice(0,10)
+      return /^\d{4}-\d{2}-\d{2}$/.test(day) && (!from || day>=from) && (!to || day<=to)
+    })
     .sort((a, b) => (sort === 'title' ? a.title.localeCompare(b.title) : sort === 'old' ? a.created.localeCompare(b.created) : b.created.localeCompare(a.created)))
   const subscribed = tab !== 'chat' && subscription.cycles.includes(tab)
   const deleteCycle = tab === 'chat' ? null : tab
@@ -90,6 +101,15 @@ export default function ReportCenter({ route }) {
           <TextField sm style={{ flex: 1 }} placeholder="리포트 제목 검색" icon="search" value={query} onChange={setQuery} aria-label="리포트 제목 검색" />
           <Select sm style={{ width: 180 }} value={sort} onChange={setSort} options={SORTS} aria-label="정렬" />
         </div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:12,alignItems:'center',marginTop:12}}>
+          <Select sm value={status} onChange={setStatus} options={[
+            ['', '전체 상태'],['ready','생성 완료'],['generating','생성 중'],['delayed','생성 지연'],['failed','생성 실패']
+          ]} aria-label="리포트 상태 필터"/>
+          <label>생성일 시작 <input type="date" aria-label="생성일 시작" value={from} max={to||undefined} onChange={e=>setFrom(e.target.value)}/></label>
+          <label>생성일 종료 <input type="date" aria-label="생성일 종료" value={to} min={from||undefined} onChange={e=>setTo(e.target.value)}/></label>
+          <Btn onClick={()=>{setQuery('');setStatus('');setFrom('');setTo('');setSort('new')}}>필터 초기화</Btn>
+        </div>
+        {invalidRange && <p className="field-err" role="alert">생성일 시작이 종료보다 늦습니다.</p>}
         <p style={{ fontSize: 16, fontWeight: 800, marginTop: 22 }}>{reportKinds[tab].tab} · <span style={{ color: 'var(--red)' }}>{list.length}건</span></p>
         <div className="col" style={{ gap: 10, marginTop: 12 }}>
           {list.map(r => <ReportItem key={r.id} report={r} />)}

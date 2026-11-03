@@ -7,7 +7,7 @@ import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
 import { api, streamAnswer } from '../../api/client'
 import { requestId } from '../../api/requestId'
-import { amount, percent, reportProduct } from '../../api/adapters'
+import { amount, percent, reportProduct, localDateTime } from '../../api/adapters'
 import { usePendingAction, useQuery, ErrorNotice } from '../../api/hooks'
 import { previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
 import { monthOffset } from '../home/useDashboard'
@@ -19,6 +19,9 @@ import bandAnalysis from '../../assets/band-analysis.jpg'
 import './conversation.css'
 import { PromptActions, Progress } from './ConversationSteps.jsx'
 import TaskResults from './TaskResults.jsx'
+import { completedMessages } from './completedMessages'
+import { CountryPicker, InterestProducts } from '../../components/pickers'
+import { countryCode } from '../../data/catalog'
 
 const running = status => ['QUEUED','RUNNING','WAITING_REPORT'].includes(status)
 
@@ -86,6 +89,11 @@ function ConditionCard({ message, onChange, onGenerate, onClose }) {
   const incompleteComparison = Boolean(o.compareFrom) !== Boolean(o.compareTo)
   const reversedComparison = o.compareFrom && o.compareTo && o.compareFrom > o.compareTo
   const set = patch => onChange({ ...message, options: { ...o, ...patch } })
+  const setScope = patch => {
+    const conditions={...o.conditions,...patch}
+    set({conditions,country:[...(conditions.include_korea_total?['한국(대한민국) 전체']:[]),...conditions.country_codes.map(countryName)].join(' · '),
+      product:conditions.hs_items.map(h=>reportProduct(h.hs_code)).join(', ')})
+  }
   if (message.locked) {
     return (
       <AiBlock>
@@ -119,6 +127,20 @@ function ConditionCard({ message, onChange, onGenerate, onClose }) {
     <AiBlock>
       <div className="between"><p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인해 주세요.</p><Btn size="sm" onClick={onClose}>닫기</Btn></div>
       <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>품목: {o.product || '전체 품목'} · 국가: {o.country || '전체'} (국가 선택 생략 가능)</p>
+      <details style={{marginTop:16}}><summary>국가 조건 선택 · {o.conditions.country_codes.length+(o.conditions.include_korea_total?1:0)}개</summary>
+        <p className="note">여러 국가를 선택할 수 있습니다. 선택하지 않으면 전체 국가입니다.</p>
+        <p className="note">한국(대한민국)은 전체 수출액입니다. 다른 교역 상대국과 함께 선택하면 월별 금액을 비교합니다. 한국 전체와 상대국 금액은 합산하지 않습니다.</p>
+        <CountryPicker includeKorea showSelected value={[...(o.conditions.include_korea_total?['한국(대한민국)']:[]),...o.conditions.country_codes.map(countryName)]}
+          onChange={names=>setScope({include_korea_total:names.includes('한국(대한민국)'),country_codes:names.filter(n=>n!=='한국(대한민국)').map(countryCode)})}/>
+      </details>
+      <details style={{marginTop:16}}><summary>품목 조건 선택 · {o.conditions.hs_items.length}개</summary>
+        <p className="note">품목을 검색하고 체크박스로 여러 품목을 선택하세요. 선택하지 않으면 전체 품목입니다.</p>
+        <InterestProducts products={o.conditions.hs_items.map(h=>h.hs_code)} setProducts={update=>{
+          const previous=o.conditions.hs_items.map(h=>h.hs_code)
+          const codes=typeof update==='function'?update(previous):update
+          setScope({hs_items:codes.map(code=>({hs_code:code,hs_ver:'HS2022'}))})
+        }}/>
+      </details>
       <div className="chips" style={{ marginTop: 16 }} role="group" aria-label="기간 빠른 선택">
         {PERIOD_PRESETS.map(([key, label]) => (
           <button key={key} type="button" disabled={!start || !end || monthOffset(end, 1 - Number(key)) < start} className={'chip sm' + (message.preset === key ? ' on' : '')} aria-pressed={message.preset === key}
@@ -158,15 +180,43 @@ function ConditionCard({ message, onChange, onGenerate, onClose }) {
   )
 }
 
+function ReportGeneration({initial,onComplete}) {
+  const [job,setJob]=useState(initial)
+  const [error,setError]=useState(null)
+  const [retry,setRetry]=useState(0)
+  useEffect(()=>{
+    const controller=new AbortController(); let timer
+    const poll=async()=>{
+      try {
+        const data=await api(`/reports/${initial.report_id}/status`,{signal:controller.signal})
+        if(controller.signal.aborted)return
+        setJob(data.job);setError(null)
+        if(!['READY','FAILED'].includes(data.job.status))timer=setTimeout(poll,Math.max(2,data.job.retry_after_seconds||2)*1000)
+        else onComplete()
+      } catch(e){if(!controller.signal.aborted)setError(e)}
+    }
+    poll();return ()=>{controller.abort();clearTimeout(timer)}
+  },[initial.report_id,retry,onComplete])
+  const active=!['READY','FAILED'].includes(job.status)
+  return <AiBlock><div role="status"><b>{job.status==='READY'?'리포트 생성 완료':job.status==='FAILED'?'리포트 생성 실패':'리포트 생성 중'}</b>
+    {active && <span className="chat-loading-ring" aria-label="리포트 생성 진행 중"/>}</div>
+    {active && <p className="note">채팅을 계속할 수 있습니다. 완료되면 여기에서 알려드립니다.</p>}
+    <ErrorNotice error={error || job.error} retry={()=>setRetry(v=>v+1)}/>
+    {job.status==='READY' && <Btn to={`/report?id=${job.report_id}`}>리포트 센터에서 이 리포트 열기</Btn>}
+  </AiBlock>
+}
+
 function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
   const [stream,setStream]=useState(null)
   useEffect(()=>{
     if(!streamJobId)return
     const controller=new AbortController()
+    let active=true
+    const timeout=setTimeout(()=>controller.abort(),8000)
     streamAnswer(streamJobId,text=>setStream({id:streamJobId,text,done:false}),controller.signal)
       .catch(()=>{})
-      .finally(()=>{if(!controller.signal.aborted)setStream({id:streamJobId,done:true})})
-    return ()=>controller.abort()
+      .finally(()=>{clearTimeout(timeout);if(active)setStream({id:streamJobId,done:true})})
+    return ()=>{active=false;clearTimeout(timeout);controller.abort()}
   },[streamJobId])
   const a = message.answer
   const c = a.conditions
@@ -178,7 +228,7 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
   const previous = trend?.every(r => typeof r[prior] === 'number') ? trend.reduce((sum, r) => sum + r[prior], 0) : null
   const growth = total != null && previous > 0 ? (total / previous - 1) * 100 : null
   const flow = trend && trend.length > 1 && total != null ? trend.at(-1)[metric] > trend[0][metric] ? '증가' : trend.at(-1)[metric] < trend[0][metric] ? '감소' : '동일' : '—'
-  if(streamJobId && (stream?.id!==streamJobId||!stream.done))return <AiBlock><p role="status" className="note">검증 완료 · 답변 수신 중</p><p style={{whiteSpace:'pre-wrap',lineHeight:1.8}}>{stream?.id===streamJobId?stream.text:''}</p></AiBlock>
+  const receiving=streamJobId && (stream?.id!==streamJobId||!stream.done)
   return <AiBlock>
     {c && <>
       <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')} / ` : ''}{c.country_codes?.map(countryName).join(' · ') || '전체 국가'}</p>
@@ -191,20 +241,21 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
         </div>
       ))}
     </div>}
-    {a.tasks?.length ? <TaskResults answer={a}/> : <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>}
+    {receiving && <><p role="status" className="note">검증 완료 · 답변 수신 중</p><p style={{whiteSpace:'pre-wrap',lineHeight:1.8}}>{stream?.id===streamJobId?stream.text:''}</p></>}
+    {a.tasks?.length ? <TaskResults answer={a} hideText={receiving}/> : !receiving && <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>}
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
     {a.warnings?.map(w => <p className="note" key={w}>{w}</p>)}
     {!a.tasks?.length && a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
     {a.articles.map(article => <div className="li" key={article.article_id}><div><b>{article.title}</b><p className="muted">{article.summary}</p><Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn></div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-      {a.report_id && <Btn to={`/report?id=${a.report_id}`}>완성된 리포트 보기</Btn>}
+      {a.report_id && <><p role="status">리포트 생성 완료</p><Btn to={`/report?id=${a.report_id}`}>리포트 센터에서 이 리포트 열기</Btn></>}
       {a.conditions && <Btn kind="red" icon="file" onClick={() => onSaveReport(a.conditions)}>리포트로 저장</Btn>}
       {a.tables[0]?.result_id && <Btn icon="star" onClick={() => onInterest(a)}>관심 목록 추가</Btn>}
     </div></AiBlock>
 }
 
 export default function Analysis({ route }) {
-  const { chats, refreshChats, refreshReports, run, notify } = useApp()
+  const { session, chats, refreshChats, refreshReports, run, notify } = useApp()
   const [activeId, setActiveId] = useState(route.query.get('chat') || chats[0]?.id)
   const [input, setInput] = useState(route.query.get('ask') || '')
   const [modal, setModal] = useState(null)
@@ -214,6 +265,11 @@ export default function Analysis({ route }) {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState(null)
+  const reportStorageKey=`analysis-reports:${session?.id}`
+  const [chatReports,setChatReports]=useState(()=>{
+    try { return JSON.parse(sessionStorage.getItem(reportStorageKey)||'{}') } catch { return {} }
+  })
+  useEffect(()=>{try {sessionStorage.setItem(reportStorageKey,JSON.stringify(chatReports))}catch{/* Storage can be disabled. */}},[chatReports,reportStorageKey])
   const [interest, setInterest] = useState(null)
   const [savingInterest, setSavingInterest] = useState(false)
   const [readRevision, setReadRevision] = useState(0)
@@ -237,6 +293,7 @@ export default function Analysis({ route }) {
           timer=setTimeout(load,2000)
           return
         }
+        setMessages(completedMessages(rows,latest))
         setJob(latest || null)
         if (latest && running(latest.status)) timer = setTimeout(load, 2000)
       } catch (e) { if (!cancelled) setError(e) }
@@ -245,6 +302,15 @@ export default function Analysis({ route }) {
     return () => { cancelled = true; clearTimeout(timer) }
   }, [activeId, readRevision])
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, [messages.length])
+  const clarificationId=job?.status==='NEEDS_INPUT' ? job.clarification?.clarification_id : null
+  useEffect(() => {
+    if (!clarificationId) return
+    const frame=requestAnimationFrame(()=>{
+      inputRef.current?.closest('form')?.scrollIntoView({block:'end',behavior:'smooth'})
+      if (job.clarification?.allow_text) inputRef.current?.focus({preventScroll:true})
+    })
+    return ()=>cancelAnimationFrame(frame)
+  },[clarificationId,job?.clarification?.allow_text])
   const newChat = () => run(async () => {
     const data = await api('/chat/sessions', { method: 'POST', body: {} })
     await refreshChats(); setActiveId(data.session.session_id); setMessages([]); setJob(null); setDraft(null); setInput('')
@@ -317,7 +383,7 @@ export default function Analysis({ route }) {
                   style={{ padding: '14px 16px', borderRadius: 14, background: on ? 'var(--rose)' : '#fff', boxShadow: on ? 'inset 3px 0 0 var(--red)' : 'none', border: on ? 0 : '1px solid var(--line)' }}>
                   {tag && <span className={'tag ' + tag[0]}>{tag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 5 }} />}{tag[1]}</span>}
                   <p style={{ fontSize: 15, fontWeight: 800, marginTop: tag ? 8 : 0 }}>{c.title}</p>
-                  <p className="note">{c.date}</p>
+                  <p className="note">{localDateTime(c.date)}</p>
                 </button>
               )
             })}
@@ -360,7 +426,13 @@ export default function Analysis({ route }) {
               {job?.status === 'CANCELLED' && <AiBlock><p>질문을 중단했습니다. 새 질문을 입력할 수 있습니다.</p></AiBlock>}
               {job?.status === 'NEEDS_INPUT' && <AiBlock className="chat-clarification"><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify} onDirectInput={()=>inputRef.current?.focus()}/></AiBlock>}
               {(running(job?.status)||job?.status==='NEEDS_INPUT') && <Btn size="sm" disabled={busy} onClick={()=>setModal('stop')}>이 질문 중단</Btn>}
-              {draft && <ConditionCard message={draft} onClose={()=>setDraft(null)} onChange={setDraft} onGenerate={async (body, key) => { const data = await api('/reports', { method: 'POST', body, idempotencyKey: key }); await refreshReports(); setDraft(null); window.location.hash = `/report?id=${data.job.report_id}` }} />}
+              {draft && <ConditionCard message={draft} onClose={()=>setDraft(null)} onChange={setDraft} onGenerate={async (body, key) => {
+                const data=await api('/reports',{method:'POST',body,idempotencyKey:key})
+                setChatReports(previous=>({...previous,[activeId]:[...(previous[activeId]||[]).filter(r=>r.report_id!==data.job.report_id),data.job]}))
+                setDraft(null)
+                await refreshReports()
+              }}/>}
+              {(chatReports[activeId]||[]).map(report=><ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports}/>)}
               <div ref={endRef} />
               <form onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
                 <input ref={inputRef} value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onChange={e => setInput(e.target.value)} aria-label="질문 입력" placeholder={job?.clarification?.kind==='COUNTRY'?'국가명 또는 국가 코드 입력':job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}

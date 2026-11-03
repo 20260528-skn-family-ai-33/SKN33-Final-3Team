@@ -4,13 +4,19 @@ export function displayTime(iso) {
   const date = iso && new Date(iso)
   return date && Number.isFinite(date.getTime()) ? timeFormatter.format(date) : '시각 미확인'
 }
+export function localDateTime(iso) {
+  const date=iso && new Date(iso)
+  if (!date || !Number.isFinite(date.getTime())) return '시각 미확인'
+  const pad=value=>String(value).padStart(2,'0')
+  return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
 export function reportProduct(code, name = productName(code)) {
   if (!name || name === code) return 'HS ' + code
   return `${name.length > 32 ? name.slice(0,31) + '…' : name} (HS ${code})`
 }
 export function reportScope(c, names = {}) {
   if (!c) return '조건 미확인'
-  const countries = c.country_codes?.map(countryName).join(', ') || '전체 국가'
+  const countries = [...(c.include_korea_total?['한국(대한민국) 전체']:[]),...(c.country_codes||[]).map(countryName)].join(', ') || '전체 국가'
   const products = c.hs_items?.map(h => reportProduct(h.hs_code, names[h.hs_code])).join(', ') || '전체 품목'
   return `${countries} · ${products}`
 }
@@ -20,7 +26,7 @@ export function mapNotification(n) {
 export function mapReport(r) {
   const status = ({ READY: 'ready', QUEUED: 'generating', RUNNING: 'generating', DELAYED: 'delayed', FAILED: 'failed' })[r.status]
   const label = { READY: '발행 완료', QUEUED: '생성 대기', RUNNING: '생성 중', DELAYED: '재시도 대기', FAILED: '생성 실패' }[r.status] || '상태 미확인'
-  return { ...r, title: r.conditions ? `${reportScope(r.conditions, r.hs_names)} · ${r.title}` : r.title, id: r.report_id, kind: ({ RPT_WEEKLY: 'weekly', RPT_MONTHLY: 'monthly', RPT_QUARTERLY: 'quarterly' })[r.report_type] || 'chat', status, created: r.created_at || '', meta: `${displayTime(r.created_at)} · ${label}`, options: r.conditions }
+  return { ...r, title: r.conditions ? `${reportScope(r.conditions, r.hs_names)} · ${r.title}` : r.title, id: r.report_id, kind: ({ RPT_WEEKLY: 'weekly', RPT_MONTHLY: 'monthly', RPT_QUARTERLY: 'quarterly' })[r.report_type] || 'chat', status, created: r.created_at || '', meta: `${localDateTime(r.created_at)} · ${label}`, options: r.conditions }
 }
 export const amount = value => value == null ? '—' : (Number(value) / 1e8).toLocaleString('ko-KR', Number(value) !== 0 && Math.abs(Number(value)) < 1e7 ? { maximumSignificantDigits: 3 } : { maximumFractionDigits: 1 })
 export const percent = value => value == null ? '—' : `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(1)}%`

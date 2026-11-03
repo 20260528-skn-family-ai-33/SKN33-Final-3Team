@@ -1,11 +1,12 @@
 // 관심 품목(HS4 → HS6)·관심 국가 선택 부품. 관심사 등록(BS03·BS04)과 관심정보(BS26)에서 함께 쓴다.
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon'
 import { Btn, Check } from './ui'
 import { countries, registerProducts, toggleValue, productName } from '../data/catalog'
 import { api } from '../api/client'
 import { useQuery, ErrorNotice, useDebouncedValue } from '../api/hooks'
 import { useApp } from '../store'
+import { mapLimited } from '../api/integration'
 
 const HS_PREVIEW_LENGTH = 52
 const compactHsName = name => name.length > HS_PREVIEW_LENGTH ? name.slice(0, HS_PREVIEW_LENGTH - 1) + '…' : name
@@ -27,7 +28,8 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const selection = useRef(0)
   const confirmed = group && query === `${group.code} · ${group.name}`
   const q = query.trim()
-  const settled = useDebouncedValue(q)
+  const searchQuery=confirmed ? '' : q
+  const settled = useDebouncedValue(searchQuery)
   const exactProduct = !!onSelectProduct && !hs4Only && /^\d{6}$/.test(settled)
   const search = useQuery('/reference/hs-codes', { q: settled, depth: exactProduct ? 6 : 4, limit: 5 }, settled.length >= 2 && !confirmed)
   const tryProducts = !!onSelectProduct && !hs4Only && settled.length>=2 && !confirmed && !/^\d+$/.test(settled)
@@ -38,8 +40,8 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const select = async h => {
     const revision = ++selection.current
     setOpen(false)
+    registerProducts([h])
     if (h.depth === 6) {
-      registerProducts([h])
       onSelectProduct(h.hs_code)
       setQuery('')
       return
@@ -88,6 +90,26 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
 
 export function InterestProducts({ products, setProducts }) {
   const [group, setGroup] = useState(null)
+  const [names,setNames]=useState({})
+  const [nameError,setNameError]=useState(null)
+  const [nameRetry,setNameRetry]=useState(0)
+  const missing=products.filter(id=>productName(id)===id).join(',')
+  useEffect(()=>{
+    if(!missing)return
+    const controller=new AbortController()
+    mapLimited(missing.split(','),4,async id=>{
+      const data=await api('/reference/hs-codes',{query:{q:id,depth:id.length,limit:5},signal:controller.signal})
+      return data.items.find(h=>h.hs_code===id)
+    },controller.signal).then(items=>{
+      if(controller.signal.aborted)return
+      const found=items.filter(Boolean)
+      registerProducts(found)
+      setNames(previous=>({...previous,...Object.fromEntries(found.map(h=>[h.hs_code,h.name_ko]))}))
+      setNameError(null)
+    }).catch(error=>{if(!controller.signal.aborted)setNameError(error)})
+    return ()=>controller.abort()
+  },[missing,nameRetry])
+  const selectedName=id=>names[id]||(productName(id)!==id?productName(id):'품목명 미확인')
   const ids = group?.items.map(([id]) => id) || []
   const allSelected = ids.length > 0 && ids.every(id => products.includes(id))
   const toggleGroup = () => setProducts(previous => allSelected
@@ -106,26 +128,28 @@ export function InterestProducts({ products, setProducts }) {
       </div>)}
     </fieldset>}
     <div className="interest-summary">
+      <ErrorNotice error={nameError} retry={()=>setNameRetry(v=>v+1)}/>
       <div className="between"><b>선택한 품목 {products.length}개</b>
         {!!products.length && <Btn onClick={() => setProducts([])}>선택 품목 전체 삭제</Btn>}
       </div>
       <ul className="chips">{products.map(id => <li key={id}><button type="button" className="chip sm"
-        onClick={() => setProducts(p => p.filter(code => code !== id))} title={productName(id)} aria-label={`${productName(id)} 삭제`}>
-        {compactHsName(productName(id))} · {id} ×
-      </button><FullHsName name={productName(id)} code={id} /></li>)}</ul>
+        onClick={() => setProducts(p => p.filter(code => code !== id))} title={selectedName(id)} aria-label={`${id} ${selectedName(id)} 삭제`}>
+        {id} · {compactHsName(selectedName(id))} ×
+      </button><FullHsName name={selectedName(id)} code={id} /></li>)}</ul>
     </div>
   </>
 }
 
 /** 대륙 추가 칩 + 국가 체크 목록(관심사 등록용 격자 / 관심정보용 칩) */
-export function CountryPicker({ value, onChange, variant = 'grid' }) {
+export function CountryPicker({ value, onChange, variant = 'grid', includeKorea = false, showSelected = false }) {
   const [query, setQuery] = useState('')
   const regions = useQuery('/reference/regions')
   const continents = (regions.data?.items || []).filter(r => !r.parent_id)
-  const list = countries.filter(c => !query.trim() || c.name.includes(query.trim()))
+  const choices=includeKorea?[{country_code:'__KOREA_TOTAL__',name:'한국(대한민국)'},...countries]:countries
+  const list = choices.filter(c => !query.trim() || c.name.includes(query.trim()))
   const shown = variant === 'chips' && !query.trim()
-    ? [...countries.filter(c => value.includes(c.name)), ...countries.filter(c => !value.includes(c.name)).slice(0, 3)]
-    : (query.trim() ? list : countries.slice(0, Math.max(9, value.length)))
+    ? [...choices.filter(c => value.includes(c.name)), ...choices.filter(c => !value.includes(c.name)).slice(0, 3)]
+    : (query.trim() ? list : choices.slice(0, Math.max(9, value.length)))
   const addContinent = region => onChange([...new Set([...value, ...countries.filter(c => region.country_codes.includes(c.country_code)).map(c => c.name)])])
   return (
     <>
@@ -139,7 +163,7 @@ export function CountryPicker({ value, onChange, variant = 'grid' }) {
       <p className="note" style={{ marginTop: 8 }}>
         {regions.error ? '대륙 정보가 준비되지 않아 국가별 선택을 제공합니다.' : variant === 'grid' ? '대륙 추가 시 해당 대륙의 모든 국가가 자동 추가됩니다.' : '대륙 추가 → 해당 대륙의 모든 국가 자동 추가 · 중복 제외'}
       </p>
-      {!!value.length && <Btn onClick={() => onChange([])}>선택 국가 전체 삭제</Btn>}
+      {!showSelected && !!value.length && <Btn onClick={() => onChange([])}>선택 국가 전체 삭제</Btn>}
       {variant === 'grid' ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginTop: 16 }} className="resp-stack">
           {shown.map(c => {
@@ -160,6 +184,15 @@ export function CountryPicker({ value, onChange, variant = 'grid' }) {
           })}
         </div>
       )}
+      {showSelected && <div className="interest-summary" role="region" aria-label="선택된 국가 목록">
+        <div className="between"><b>선택한 국가 {value.length}개</b>
+          {!!value.length && <Btn onClick={()=>onChange([])}>선택 국가 전체 삭제</Btn>}
+        </div>
+        {value.length ? <ul className="chips">{value.map(name=><li key={name}>
+          <button type="button" className="chip sm" aria-label={`${name} 선택 삭제`}
+            onClick={()=>onChange(value.filter(item=>item!==name))}>{name} ×</button>
+        </li>)}</ul> : <p className="note">선택한 국가가 없습니다.</p>}
+      </div>}
     </>
   )
 }
