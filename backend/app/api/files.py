@@ -1,4 +1,5 @@
 """저장 스냅샷으로 파일 생성. 외부 URL·원본 기사 본문·임의 경로를 내보내지 않는다."""
+import math
 from io import BytesIO
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -35,7 +36,10 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False):
                 values.append(v)
             ws.append(values)
             for cell,fmt in zip(ws[ws.max_row],formats):
-                if fmt and isinstance(cell.value,(int,float)): cell.number_format=fmt
+                if fmt and isinstance(cell.value,(int,float)) and not isinstance(cell.value,bool):
+                    # USD는 정수면 #,##0, 센트가 있으면 #,##0.00으로 원본 값을 그대로 보이게 한다.
+                    cents=fmt=='#,##0' and math.isfinite(cell.value) and cell.value!=int(cell.value)
+                    cell.number_format='#,##0.00' if cents else fmt
         # 수식으로 해석될 수 있는 원문도 문자열 셀로 강제한다.
         for row in ws:
             for cell in row:

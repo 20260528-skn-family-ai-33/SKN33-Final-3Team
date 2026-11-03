@@ -75,9 +75,9 @@ def runs(store,page=1,size=20,source=None,status=None,q=None):
         word=q.strip()
         conds=[t.c.job_name.contains(word,autoescape=True),t.c.source_code.contains(word,autoescape=True)]
         # '²' 같은 문자도 isdigit()은 참이므로 ASCII 숫자만 실행 ID로 본다. 아주 긴 숫자는 int() 자체가 실패하므로
-        # 앞의 0을 뺀 자릿수(BIGINT UNSIGNED 최대 20자리)를 먼저 확인한다.
+        # 앞의 0을 뺀 자릿수를 먼저 확인하고, DB마다 안전한 부호 있는 64비트 범위(SQLite·MySQL 공통) 안에서만 비교한다.
         digits=word.lstrip('0') or '0'
-        if word.isascii() and word.isdigit() and len(digits)<=20 and int(digits)<2**64: conds.append(t.c.run_id==int(digits))
+        if word.isascii() and word.isdigit() and len(digits)<=19 and int(digits)<2**63: conds.append(t.c.run_id==int(digits))
         stmt=stmt.where(or_(*conds))
     rows=store.rows(stmt.order_by(t.c.run_id.desc()).offset((page-1)*size).limit(size))
     return {'items':[{'run_id':str(r['run_id']),**{k:r[k] for k in ('source_code','job_name','period_start','period_end','status','request_count','received_count')},

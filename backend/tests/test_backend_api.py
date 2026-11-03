@@ -426,7 +426,7 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(found(q='ecos'),1)
         self.assertEqual(found(q='HS6',status='FAILED'),1)
         # 숫자처럼 보이는 유니코드 문자나 범위를 넘는 번호도 500 없이 0건으로 끝난다.
-        for q in ('²','１２','99999999999999999999999','1'*4301,'0'*30+'7'):
+        for q in ('²','１２','99999999999999999999999','1'*4301,'0'*30+'7','9223372036854775808'):
             response=self.client.get('/api/v1/admin/data/runs',params={'q':q})
             self.assertEqual(response.status_code,200,response.text)
 
@@ -624,6 +624,24 @@ class BackendApiTest(unittest.TestCase):
         # 엑셀·결과표에서는 실적 없는 행의 금액을 0이 아니라 빈 값으로 둔다(화면의 '—'와 같게).
         row={r['country_code']:r for r in result['rows']}['JP']
         self.assertIsNone(row['export_amount_usd']); self.assertIsNone(row['import_amount_usd'])
+
+    def test_rankings_return_applied_interest_scope(self):
+        # 관심 범위 조회는 최신 관심 품목·국가를 실제 적용 조건으로 돌려준다(파일명·AI 질문이 이 값을 쓴다).
+        self.signup(); url='/api/v1/users/me/interests'
+        version=self.client.get(url).json()['interests']['version']
+        body={'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],'country_codes':['US'],'expected_version':version,'landing_page':'INTERESTED'}
+        self.assertEqual(self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf}).status_code,200)
+        response=self.client.get('/api/v1/trade/rankings?scope=INTERESTED&group_by=HS6&period_start=2025-12&period_end=2025-12')
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['conditions'],{'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],'country_codes':['US']})
+
+    def test_excel_usd_keeps_cents(self):
+        from openpyxl import load_workbook
+        from backend.app.api.files import xlsx_bytes
+        table={'columns':[{'key':'amount_usd','label':'금액','unit':'USD'}],'rows':[{'amount_usd':1234.56},{'amount_usd':1230000}],'total_rows':2}
+        ws=load_workbook(io.BytesIO(xlsx_bytes([table],{},[]))).active
+        self.assertEqual((ws['A2'].value,ws['A2'].number_format),(1234.56,'#,##0.00'))
+        self.assertEqual(ws['A3'].number_format,'#,##0')
 
     def test_rankings_put_rows_with_data_before_empty_rows(self):
         self.signup(); m=self.meta.tables

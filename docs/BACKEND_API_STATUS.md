@@ -23,7 +23,7 @@
 | 017 | `POST  /api/v1/users/me/interests/items` | 처리 코드 구현 |
 | 018 | `GET  /api/v1/trade/kpis` | 처리 코드 구현 |
 | 019 | `GET  /api/v1/trade/trends` | 처리 코드 구현 |
-| 020 | `GET  /api/v1/trade/rankings` | 처리 코드 구현 |
+| 020 | `GET  /api/v1/trade/rankings` | 처리 코드 구현; 응답 `conditions`(실제 적용된 hs_items·country_codes, 관심 범위 포함), 같은 금액이면 실적 있는 행 우선 |
 | 021 | `GET  /api/v1/trade/rankings/{country_code}/products` | 처리 코드 구현 |
 | 022 | `GET  /api/v1/trade/fast-growing-products` | 처리 코드 구현 |
 | 023 | `POST  /api/v1/analysis/promising-markets` | 보류: ML 담당 협의 보류 |

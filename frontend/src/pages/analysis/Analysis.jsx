@@ -256,7 +256,7 @@ export default function Analysis({ route }) {
             <Btn kind="red" block icon="plus" onClick={newChat}>새 채팅</Btn>
             <div className="between" style={{ marginTop: 6 }}>
               <p style={{ fontSize: 15, fontWeight: 800 }}>내 채팅방</p>
-              <span className="note">최근 대화 순</span>
+              <span className="note">최근 대화 순 · 한국 시각(KST)</span>
             </div>
             <div className="col chat-list" style={{ gap: 10 }}>
             {chats.map(c => {

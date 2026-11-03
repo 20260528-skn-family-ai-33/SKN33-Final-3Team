@@ -41,16 +41,17 @@ function RankResults({ route }) {
   const [error, setError] = useState('')
   const countryCodes = applied.country === '__inherited__' ? applied.countryCodes : applied.country ? [countryCode(applied.country)] : []
   const countryLabel = countryCodes.map(countryName).join(' · ')
-  // 관심 범위(INTERESTED)로 조회하면 서버가 국가·품목을 고르지 않은 부분을 관심 국가·관심 품목으로 좁힌다.
-  // 제목·파일명·AI 질문도 '전체'가 아니라 실제로 적용된 범위를 적는다.
-  const interestCountries = applied.scope === 'INTERESTED' && !countryCodes.length ? profile.countries || [] : []
-  const interestProducts = applied.scope === 'INTERESTED' && !applied.product ? profile.products || [] : []
-  const scopeCountry = countryLabel || (interestCountries.length === 1 ? interestCountries[0] : interestCountries.length ? '관심 국가' : '전체 국가')
-  const scopeProduct = applied.product ? productName(applied.product) : interestProducts.length === 1 ? productName(interestProducts[0]) : interestProducts.length ? '관심 품목' : '전체 품목'
   const byMonth = !applied.group && countryCodes.length === 1 && applied.product
   const rankingGroup = applied.group || (countryCodes.length ? 'HS6' : 'COUNTRY')
   const query = { scope: applied.scope, period_start: applied.start || monthOffset(end, 1 - Number(applied.period)), period_end: applied.end || end, country_codes: countryCodes, hs_code: applied.product || undefined, hs_ver: applied.product ? 'HS2022' : undefined }
   const result = useQuery(byMonth ? '/trade/trends' : '/trade/rankings', byMonth ? query : { ...query, group_by: rankingGroup, sort_flow: basis === 'exp' ? 'EXPORT' : 'IMPORT', page, page_size: 20 }, !!end)
+  // 관심 범위(INTERESTED)로 조회하면 서버가 국가·품목을 고르지 않은 부분을 최신 관심 국가·관심 품목으로 좁힌다.
+  // 제목·파일명·AI 질문은 서버가 실제로 적용한 조건(응답의 conditions)을 쓰고, 응답 전에는 내 관심정보로 대신한다.
+  const appliedScope = applied.scope === 'INTERESTED' ? result.data?.conditions : null
+  const interestCountries = applied.scope === 'INTERESTED' && !countryCodes.length ? appliedScope?.country_codes?.map(countryName) || profile.countries || [] : []
+  const interestProducts = applied.scope === 'INTERESTED' && !applied.product ? appliedScope?.hs_items?.map(h => h.hs_code) || profile.products || [] : []
+  const scopeCountry = countryLabel || (interestCountries.length === 1 ? interestCountries[0] : interestCountries.length ? '관심 국가' : '전체 국가')
+  const scopeProduct = applied.product ? productName(applied.product) : interestProducts.length === 1 ? productName(interestProducts[0]) : interestProducts.length ? '관심 품목' : '전체 품목'
   registerProducts((result.data?.items || []).filter(r => r.hs_name).map(r => ({ hs_code: r.hs_item.hs_code, name_ko: r.hs_name })))
   const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: r.export_amount_usd == null || r.has_data === false ? null : Number(r.export_amount_usd) / 1e8, imp: r.import_amount_usd == null || r.has_data === false ? null : Number(r.import_amount_usd) / 1e8 }))
   const pageEmpty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
@@ -77,7 +78,8 @@ function RankResults({ route }) {
     const first = available.data?.trade_start_month
     if (draft.period === 'custom' && ((first && draft.start < first) || (end && draft.end > end))) return setError(first ? `조회할 수 있는 기간은 ${first} ~ ${end}입니다. 기간을 다시 골라 주세요.` : `${end}까지 조회할 수 있습니다. 기간을 다시 골라 주세요.`)
     setError('')
-    setPage(1); setApplied(draft)
+    // 조건이 그대로여도 '순위 조회'를 누르면 다시 불러온다(다른 탭에서 바꾼 관심정보 등 최신 서버 값 반영).
+    setPage(1); setApplied(draft); result.reload()
   }
   // 검색에서 HS4를 고르면 'HS4 전체' + 하위 HS6 칩, 고르기 전에는 지금 선택한 품목만 칩으로 보여 준다.
   const productOptions = group ? [[group.code, `${group.code} 전체`], ...group.items.map(([id, name]) => [id, `${id} ${name}`])]
@@ -86,6 +88,9 @@ function RankResults({ route }) {
   // 품목명은 길어서 코드로 적는다. 예) 미국_2025-10~2025-12_HS870332_월별수출입.xlsx
   const fileKind = byMonth ? '월별수출입' : rankingGroup === 'HS6' ? '품목순위' : '교역국순위'
   const productLabel = applied.product ? `HS${applied.product}` : interestProducts.length === 1 ? `HS${interestProducts[0]}` : interestProducts.length ? '관심품목' : '전체품목'
+  // AI 질문에는 '관심 국가·관심 품목' 같은 묶음 말 대신 실제 국가 이름과 HS 코드를 적어, 채팅이 같은 조건으로 분석하게 한다.
+  const askCountry = countryLabel || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
+  const askProduct = applied.product ? `${productName(applied.product)}(HS ${applied.product})` : interestProducts.length ? interestProducts.map(code => `${productName(code)}(HS ${code})`).join(', ') : '전체 품목'
   const fileName = `${scopeCountry}_${query.period_start}~${query.period_end}_${productLabel}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '') + '.xlsx'
   const exportExcel = () => run(() => download(`/results/${result.data.result_id}/file`, fileName))
 
@@ -180,7 +185,7 @@ function RankResults({ route }) {
             {!byMonth && <Pagination page={page} info={result.data?.page} onChange={setPage} />}
           </div>
         </div>
-        <ChatFab ask={`${scopeCountry} · ${applied.product ? `${productName(applied.product)}(HS ${applied.product})` : scopeProduct} · ${query.period_start} ~ ${query.period_end} 수출입을 분석해줘`} />
+        <ChatFab ask={`${askCountry} · ${askProduct} · ${query.period_start} ~ ${query.period_end} 수출입을 분석해줘`} />
       </main>
     </>
   )
@@ -203,7 +208,7 @@ function CountrySearch({ value, options, onChange }) {
         <input value={typing ? text : label} aria-label="국가" placeholder="국가명 입력"
           onFocus={() => setText('')} onClick={() => !typing && setText('')}
           onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (matches.length) pick(matches[0][0]); else setText(null) } if (e.key === 'Escape') setText(null) }} />
+          onKeyDown={e => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') { e.preventDefault(); if (matches.length) pick(matches[0][0]); else setText(null) } if (e.key === 'Escape') setText(null) }} />
         <Icon name="search" size={16} color="#9AA0AA" />
       </div>
       {typing && (

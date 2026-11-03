@@ -25,6 +25,9 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const [query, setQuery] = useState(group ? `${group.code} · ${group.name}` : '')
   const [open, setOpen] = useState(false)
   const selection = useRef(0)
+  const inputRef = useRef(null)
+  // 목록 안의 '다시 불러오기'를 누르면 그 버튼이 사라지며 포커스가 본문으로 빠지므로, 검색칸으로 되돌려 바깥 클릭 때 목록이 닫히게 한다.
+  const retry = load => () => { load(); inputRef.current?.focus() }
   const confirmed = group && query === `${group.code} · ${group.name}`
   const q = query.trim()
   const settled = useDebouncedValue(q)
@@ -59,7 +62,7 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
       <div className={'input' + (q ? ' val' : '') + (open ? ' focus' : '')}>
         <Icon name="search" size={18} color="#5C6370" />
         <input
-          value={query} placeholder={onSelectProduct ? '품목명 또는 HS 코드 입력 (예: 8542, 메모리)' : '품목명 또는 HS4 코드 입력 (예: 8542)'} aria-label="품목 검색"
+          ref={inputRef} value={query} placeholder={onSelectProduct ? '품목명 또는 HS 코드 입력 (예: 8542, 메모리)' : '품목명 또는 HS4 코드 입력 (예: 8542)'} aria-label="품목 검색"
           onChange={e => { selection.current++; setQuery(e.target.value); setOpen(true); if (confirmed) onConfirm(null) }}
           onFocus={() => setOpen(true)}
           style={{ fontWeight: confirmed ? 700 : 400 }}
@@ -78,9 +81,9 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
               <span className="hs">HS{h.depth} {h.hs_code}</span><b className="hs-label" title={h.name_ko}>{compactHsName(h.name_ko)}</b><span className="note">{h.depth === 6 ? (expandGroup ? '이 품목 선택' : '관심 품목 추가') : exactGroup ? 'HS4 전체로 선택' : '하위 품목 보기'}</span>
             </button>
           ))}
-          <ErrorNotice error={active.error} retry={active.reload} />
+          <ErrorNotice error={active.error} retry={retry(active.reload)} />
           {/* HS4 아래 하위 품목 목록을 못 불러오면 그 사실과 다시 시도를 보여 준다(HS4 전체만 남아 하위 품목이 없는 것처럼 보이지 않게). */}
-          {exactGroup && <ErrorNotice error={children.error} retry={children.reload} />}
+          {exactGroup && <ErrorNotice error={children.error} retry={retry(children.reload)} />}
           {!results.length && !active.error && <p className="muted" style={{ padding: '10px 12px' }}>{q.length < 2 ? '품목명 또는 HS 코드를 두 글자 이상 입력하세요.' : settled !== q || active.loading ? '검색 중…' : '검색 결과가 없습니다.'}</p>}
         </div>
       )}

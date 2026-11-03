@@ -252,7 +252,9 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
     hidden={'has_data'} | ({'hs_name'} if group=='COUNTRY' else set())
     blank=lambda item:{} if item['has_data'] else {'export_amount_usd':None,'import_amount_usd':None}
     table=result_table(store,uid,[{**{k:v for k,v in item.items() if k not in hidden},**blank(item)} for item in items],meta,conditions,store.queries)
-    return {'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items)), 'result_id':table['result_id'],'meta':meta}
+    # 관심 범위(INTERESTED)는 서버가 최신 관심 품목·국가로 좁히므로, 화면이 파일명·AI 질문에 그대로 쓰도록 실제 적용 조건을 함께 돌려준다.
+    return {'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items)), 'result_id':table['result_id'],'meta':meta,
+            'conditions':{'hs_items':hs or [],'country_codes':countries or []}}
 
 
 def market_shares(store,uid,conditions,trends_mode=False):

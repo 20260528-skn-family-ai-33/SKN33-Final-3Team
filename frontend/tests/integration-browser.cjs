@@ -55,6 +55,11 @@ async function main() {
     await page.getByRole('button', { name: '엑셀 다운로드' }).click()
     await (await excel).saveAs(path.join(out, 'ranking.xlsx'))
     ok('기존 순위 필터·막대·원본 XLSX 다운로드')
+    // 대시보드 '상세보기'처럼 관심 범위로 들어오면 서버가 적용한 관심 국가·품목이 제목·AI 질문에 들어가야 한다.
+    await go('/rank?scope=INTERESTED&group_by=HS6')
+    await page.getByRole('heading', { name: '미국 교역 품목 순위' }).waitFor()
+    assert.match(decodeURIComponent(await page.locator('a[href*="analysis?ask"]').getAttribute('href')), /미국 · .*\(HS 330499\)/)
+    ok('관심 범위 순위·적용 조건이 들어간 AI 질문')
     await go('/articles')
     await page.locator('#ar-q').fill('검증')
     await page.getByRole('button', { name: '기사 검색' }).click()
