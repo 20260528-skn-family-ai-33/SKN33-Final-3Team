@@ -1,10 +1,19 @@
-"""에이전트 tool. 설계: docs/AGENT_DESIGN.md §5."""
+"""에이전트 tool. 설계: docs/AGENT_DESIGN.md §5, §13.4, §14.4."""
+import time
+
+from openai import OpenAI
+
 from backend.app.schemas.rag import RagRequest, RagResponse
+from backend.app.services.rag.factory import create_service
+from backend.app.services.rag.runtime import ExecutionContext
 
 NEWS_PENDING_MESSAGE = '기사 검색은 지원 예정입니다.'
 
 
-def search_news(request: RagRequest) -> RagResponse | None:
-    """RAG 담당자가 구현할 기사 검색 자리. None이면 tool은 NO_DATA + NEWS_PENDING_MESSAGE로 처리한다(D-43).
-    TODO(C-15): RAG 모듈이 연결되면 이 함수가 RagResponse를 돌려준다."""
-    return None
+def search_news(request: RagRequest) -> RagResponse:
+    """챗봇의 기사 검색 요청을 공통 RAG 서비스에 전달한다."""
+    context = ExecutionContext(time.monotonic() + 15)
+    if request.order_by == 'published_date_desc':
+        return create_service(None).run(request, context)
+    with OpenAI(timeout=context.remaining(), max_retries=0) as api:
+        return create_service(api).run(request, context)
