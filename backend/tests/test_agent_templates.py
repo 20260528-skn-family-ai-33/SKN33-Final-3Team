@@ -76,6 +76,43 @@ class TemplateTest(unittest.TestCase):
         self.assertIn('DESC',aggregates[0])
         self.assertIn('LIMIT 5',result.sql[0])
 
+    def test_compound_country_and_product_top_five_limits_rows_and_columns(self):
+        from backend.app.agents.planner import explicit_country_ranking, build_plan
+        from backend.app.agents.conditions import check_conditions
+        from backend.tests.test_agent_state import state
+        for i in range(7):
+            code=f'9900{i:02}'
+            values={'hs_code':code,'hs_ver':'HS2022','name_ko':code,'source_edition':'HS2022'}
+            if self.meta.tables['hs_code'].c.depth.computed is None: values['depth']=6
+            self.connection.execute(self.meta.tables['hs_code'].insert().values(**values))
+            for source in ('export_summary','import_summary'):
+                self.connection.execute(self.meta.tables[source].insert().values(country_code='US',
+                    trade_month=date(2025,12,1),hs6_code=code,hs_ver='HS2022',amount_usd=100+i))
+        for flow,word in (('EXPORT','수출'),('IMPORT','수입')):
+            current=state()
+            current.input.question=f'한국의 {word}액이 가장 큰 국가와 품목을 각각 5개씩 보여줘'
+            current.plan,_=build_plan(explicit_country_ranking(current.input.question))
+            self.assertEqual([t.slots.ranking_group for t in current.plan.tasks],['COUNTRY','HS6'])
+            for task in current.plan.tasks:
+                check_conditions(self.store,current,task.steps[0])
+                self.store.queries.clear()
+                analysis=run_template(self.store,1,task,task.steps[1])
+                self.assertEqual(task.conditions.trade_flow,flow)
+                self.assertLessEqual(len(analysis.rows),5)
+                self.assertEqual(len(analysis.sql),1)
+                self.assertIn('LIMIT 5',analysis.sql[0])
+                from unittest.mock import patch
+                from backend.app.agents.charts import build_chart
+                with patch('backend.app.agents.charts.read_snapshot',return_value={
+                    'rows':analysis.rows,'meta':analysis.meta}):
+                    chart,_,_=build_chart(self.store,1,task,'test')
+                self.assertEqual(len(chart.chart.series[0].values),len(analysis.rows))
+                if task.slots.ranking_group=='HS6':
+                    self.assertEqual(len(analysis.rows),5)
+                    self.assertEqual(set(analysis.rows[0]),{'hs_code','name','rank',
+                        'export_amount_usd' if flow=='EXPORT' else 'import_amount_usd'})
+                    self.assertEqual(analysis.result.digest['group'],'HS6')
+
     def test_selected_country_outside_top_ten_keeps_global_denominator(self):
         countries = ['CA','AU','AT','DE','FR','BR','VN','TH','JP','MX','CL']
         for i, code in enumerate(countries):

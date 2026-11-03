@@ -60,7 +60,7 @@ def resolve(store,state,task,out):
         if n>(20 if dimension=='COUNTRY' else 5): raise SlotRepair('선택한 국가 또는 품목이 조건 상한을 넘습니다.')
         if named_group and group_key: rows=[r for r in rows if r[group_key]==named_group]
         field=('export_amount_usd' if out.trade_flow=='EXPORT' else 'import_amount_usd') if order=='amount_usd' else order
-        def code(row): return row.get('country_code') if dimension=='COUNTRY' else row.get('hs6') or (row.get('hs_item') or {}).get('hs_code')
+        def code(row): return row.get('country_code') if dimension=='COUNTRY' else row.get('hs6') or row.get('hs_code') or (row.get('hs_item') or {}).get('hs_code')
         sorted_rows=sorted((r for r in rows if code(r) and r.get(field) is not None),
             key=lambda r:(-r[field] if order=='amount_usd' else r[field],code(r)))
         codes=list(dict.fromkeys(code(r) for r in sorted_rows))[:n]

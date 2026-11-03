@@ -57,6 +57,14 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     report_answer=task.resolved.get(f'{task.task_id}:report_confirm',{})
     if report_answer.get('reject_input_change'): raise SlotRepair('선행 결과의 조건을 변경하려면 새 분석 질문을 입력해 주세요.')
     original=state.input.question+' '+report_answer.get('revision_text','')
+    # Customs tables already describe Korea's trade. Korea is the reporting
+    # country, not a partner to resolve against the country dictionary.
+    reporting_names={'한국','대한민국','우리나라','kr','kor','south korea','republic of korea'}
+    countries=slots.countries
+    if countries:
+        countries=[item for item in countries if not (
+            item.mention.strip().casefold() in reporting_names
+            and item.mention.casefold() in original.casefold())]
     base = state.input.context.conditions or Conditions()
     out = base.model_copy(deep=True)
     out.ranking_group, out.share_basis = slots.ranking_group, slots.share_basis
@@ -71,7 +79,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if state.pending: return
         out.trade_flow=slots.trade_flow or out.trade_flow
     if slots.products is not None: out.hs_items = []
-    if slots.countries is not None: out.country_codes = []
+    if countries is not None: out.country_codes = []
     if task.intent in ('REPORT', 'PROMISING_MARKET') and out.trade_flow == 'IMPORT':
         raise SlotRepair('이 분석은 수출만 지원합니다.')
     share_key = f'{task.task_id}:share_basis'
@@ -129,13 +137,13 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             out.hs_items=change.get('hs_items',interests.hs_items)
             out.country_codes=change.get('country_codes',interests.country_codes)
 
-    if slots.countries:
+    if countries:
         table = store.t('country')
         rows = store.rows(select(table).where(table.c.country_role=='COUNTRY'))
         # TODO(C-28): tune fuzzy matching with evaluation examples.
         settings = getattr(store.db, 'settings', {})
         threshold = float(settings.get('API_CHAT_COUNTRY_SIMILARITY', 0.6))
-        for item in slots.countries:
+        for item in countries:
             key = f'{task.task_id}:country:{item.mention}'
             answer = task.resolved.get(key, {})
             if not answer:

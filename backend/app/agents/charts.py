@@ -70,9 +70,11 @@ def build_chart(store, uid, task, result_id, selection=None):
         kindchart='bar'
         top=rows[:10]
         full=[r['name'] for r in top]
-        labels=shorten_target_names([(r['name'] if r['country_code'] else None,
-            r['name'] if r['hs_item'] else None,HsProduct(**r['hs_item']) if r['hs_item'] else None,
-            r['country_code']) for r in top])
+        def target(row):
+            hs=row.get('hs_item') or ({'hs_code':row['hs_code'],'hs_ver':'HS2022'} if row.get('hs_code') else None)
+            return (row['name'] if row.get('country_code') else None,
+                row['name'] if hs else None, HsProduct(**hs) if hs else None, row.get('country_code'))
+        labels=shorten_target_names([target(r) for r in top])
         field='import_amount_usd' if task.conditions.trade_flow=='IMPORT' else 'export_amount_usd'
         series=[{'name':flow,'values':[r[field] for r in top]}]
     elif kind=='PREDICTION':

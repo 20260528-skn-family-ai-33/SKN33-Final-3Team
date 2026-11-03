@@ -13,6 +13,28 @@ from backend.app.api.common import ApiError
 
 
 class ChatContextTest(unittest.TestCase):
+    def test_rejected_summary_keeps_question_and_conditions_for_followup(self):
+        from backend.app.agents.context import completed_context
+        from backend.app.agents.planner import planner_input
+        from backend.app.agents.state import Conditions, Draft
+        from backend.tests.test_agent_state import state
+        current=state()
+        task=current.plan.tasks[0]
+        task.conditions=Conditions(country_codes=['VN'])
+        task.answer_status='ANSWERED'
+        current.draft=Draft(conclusion=[{'task_id':task.task_id,'sentences':['조회했습니다.']}],turn_summary='')
+        context=completed_context(current)
+        self.redis.acquire_chat('3','11')
+        self.context.publish(context,'11')
+        loaded=self.context.load('3',{},'11')
+        self.assertEqual(len(loaded.recent),1)
+        self.assertEqual(loaded.recent[0].summary,'')
+        current.input.context=loaded
+        current.input.question='수입은?'
+        payload=planner_input(current)
+        self.assertEqual(payload['recent'][0]['question'],context.recent[0].question)
+        self.assertEqual(payload['recent'][0]['conditions']['country_codes'],['VN'])
+
     def setUp(self):
         self.client = fakeredis.FakeRedis(decode_responses=True)
         self.redis = RedisState({'API_REDIS_PREFIX': 'test:agent'}, self.client)

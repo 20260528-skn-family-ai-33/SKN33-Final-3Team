@@ -11,6 +11,25 @@ from backend.app.api.common import ApiError
 
 
 class ConditionTest(unittest.TestCase):
+    def test_korea_is_reporting_country_and_clears_inherited_partner(self):
+        from backend.app.agents.state import Conditions
+        for name in ('한국','대한민국','우리나라'):
+            self.state.input.question=f'{name} 수출액 보여줘'
+            self.state.input.context.conditions=Conditions(country_codes=['US'])
+            self.task.slots=TaskSlots(countries=[{'mention':name,'name':'대한민국'}],products=[],recent_months=3)
+            check_conditions(self.store,self.state,self.step)
+            self.assertIsNone(self.state.pending)
+            self.assertEqual(self.task.conditions.country_codes,[])
+
+    def test_korea_reporting_country_keeps_explicit_partner(self):
+        self.state.input.question='한국의 중국 수입액 보여줘'
+        self.task.slots=TaskSlots(countries=[{'mention':'한국','name':'대한민국'},
+            {'mention':'중국','name':'중국'}],products=[],recent_months=3,trade_flow='IMPORT')
+        check_conditions(self.store,self.state,self.step)
+        self.assertIsNone(self.state.pending)
+        self.assertEqual(self.task.conditions.country_codes,['CN'])
+        self.assertEqual(self.task.conditions.trade_flow,'IMPORT')
+
     def setUp(self):
         engine, meta = test_engine()
         self.addCleanup(engine.dispose)

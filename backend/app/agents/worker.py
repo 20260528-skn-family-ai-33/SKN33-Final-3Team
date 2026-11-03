@@ -1,12 +1,12 @@
 """Claim ownership, invoke the graph, and publish only after durable success."""
 import logging
 from backend.app.agents import budget
-from backend.app.agents.context import ChatContext
+from backend.app.agents.context import ChatContext, completed_context
 from backend.app.agents.execution import ExecutionStore, invoke_graph
 from backend.app.agents.graph import build_graph, graph_config
 from backend.app.agents.runtime import Services
 from datetime import timedelta
-from backend.app.agents.state import CHECKPOINT_TTL, WAITING_TTL_SECONDS, AgentState, TurnSummary
+from backend.app.agents.state import CHECKPOINT_TTL, WAITING_TTL_SECONDS, AgentState
 from backend.app.api.common import now
 from backend.app.api import jobs
 from backend.app.api.redis_store import RedisState
@@ -74,16 +74,7 @@ def run(database,settings,job):
         return
     if state.status=='SUCCEEDED':
         try:
-            context=state.input.context.model_copy(deep=True)
-            primary=state.plan.tasks[0]
-            if primary.answer_status in ('PARTIAL','ANSWERED') and primary.conditions:
-                context.conditions=primary.conditions
-                for decision in primary.resolved.values():
-                    if decision.get('interest') in ('APPLIED','GLOBAL'):
-                        context.interest_action='APPLIED' if decision['interest']=='APPLIED' else 'DECLINED'
-                if state.draft.turn_summary:
-                    context=context.remember(TurnSummary(question=state.input.question,intent=primary.intent,
-                        conditions=primary.conditions,summary=state.draft.turn_summary,answered_at=now()))
+            context=completed_context(state)
             ChatContext(redis).publish(context,jid)
         except Exception:
             logging.getLogger(__name__).warning('chat_context_publish_failed job_id=%s',jid)

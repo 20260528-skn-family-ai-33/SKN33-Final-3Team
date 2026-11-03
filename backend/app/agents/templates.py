@@ -69,7 +69,7 @@ def run_template(store, uid, task, step, timeout=30):
         flow=conditions.trade_flow)
     template = step.args['template']
     simple_country_rank = (template == 'RANKING' and step.args.get('amount_only')
-                           and conditions.ranking_group == 'COUNTRY')
+                           and conditions.ranking_group in ('COUNTRY', 'HS6'))
     if template in ('TREND', 'RANKING') and not simple_country_rank:
         country_names, product_names = _names(store)
     public = api_conditions(conditions)
@@ -151,22 +151,29 @@ def run_template(store, uid, task, step, timeout=30):
         flow=conditions.trade_flow
         source='export_summary' if flow=='EXPORT' else 'import_summary'
         table,country=store.t(source),store.t('country')
+        hs_table=store.t('hs_code')  # Resolve reflected composite FK for SQL compilation.
         amount_key='export_amount_usd' if flow=='EXPORT' else 'import_amount_usd'
         amount=func.sum(table.c.amount_usd).label(amount_key)
-        stmt=(select(country.c.country_code,country.c.name_ko.label('name'),amount)
-              .select_from(table.join(country,table.c.country_code==country.c.country_code))
+        group=conditions.ranking_group
+        dimension=country if group=='COUNTRY' else hs_table
+        code=country.c.country_code if group=='COUNTRY' else dimension.c.hs_code
+        joined=table.join(country,table.c.country_code==country.c.country_code)
+        if group=='HS6':
+            joined=joined.join(dimension,(table.c.hs6_code==dimension.c.hs_code)&(table.c.hs_ver==dimension.c.hs_ver))
+        stmt=(select(code,dimension.c.name_ko.label('name'),amount)
+              .select_from(joined)
               .where(country.c.country_role=='COUNTRY',table.c.hs_ver=='HS2022',
                      table.c.trade_month.between(conditions.period.start,conditions.period.end)))
         if common['hs']: stmt=stmt.where(trade.hs_filter(table,common['hs']))
         if common['countries']: stmt=stmt.where(table.c.country_code.in_(common['countries']))
-        stmt=(stmt.group_by(country.c.country_code,country.c.name_ko)
-              .order_by(amount.desc(),country.c.country_code).limit(step.args['top']))
+        stmt=(stmt.group_by(code,dimension.c.name_ko)
+              .order_by(amount.desc(),code).limit(step.args['top']))
         records=trade.query_rows(store,stmt,source)
-        rows=[{**r,'rank':i,'hs_item':None} for i,r in enumerate(records,1)]
+        rows=[{**r,'rank':i} for i,r in enumerate(records,1)]
         meta=trade.metadata(store,conditions.period.start,conditions.period.end)
-        meta.update(kind='RANKING',group='COUNTRY',requested_top=step.args['top'])
-        digest={**_base('RANKING',conditions,meta,len(rows)),'group':'COUNTRY',
-                'top':[{'rank':r['rank'],'code':r['country_code'],'name':r['name'],'amount_usd':r[amount_key]}
+        meta.update(kind='RANKING',group=group,requested_top=step.args['top'])
+        digest={**_base('RANKING',conditions,meta,len(rows)),'group':group,
+                'top':[{'rank':r['rank'],'code':r['country_code' if group=='COUNTRY' else 'hs_code'],'name':r['name'],'amount_usd':r[amount_key]}
                        for r in rows[:10]],'truncated':len(rows)>10}
     elif template == 'RANKING':
         group = conditions.ranking_group
@@ -179,7 +186,7 @@ def run_template(store, uid, task, step, timeout=30):
             name = country_names.get(code, code) if group == 'COUNTRY' else product_names.get((code, hs['hs_ver']), code)
             return {'rank': row['rank'], 'code': code, 'name': name, 'amount_usd': row[field],
                     'share_pct': row['share_pct'], 'yoy_pct': row['yoy_pct'], 'mom_pct': row['mom_pct']}
-        rows = [{**r, 'name': ranked(r)['name']} for r in rows]
+        rows = [{**r, 'name': ranked(r)['name']} for r in rows[:step.args.get('top',10)]]
         if meta['truncated']: limitations.append('표에는 금액 상위 1000개 항목만 담았습니다.')
         total = sum(r['amount_usd'] for r in trade.aggregate(store,
             'export_summary' if conditions.trade_flow == 'EXPORT' else 'import_summary',

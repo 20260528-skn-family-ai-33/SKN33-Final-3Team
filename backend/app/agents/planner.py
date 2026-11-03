@@ -27,6 +27,9 @@ comparison_requested는 비교 요청에만 true, 요청이 없으면 null입니
 ranking_group은 RANKING에만 COUNTRY/HS6, 모호하면 null입니다.
 ranking_limit은 금액 순위에서 명시한 상위 개수입니다. 국가 5곳은 5이며, 생략되면 null입니다.
 한국의 수출액 상위 국가는 한국의 상대국 순위입니다. 한국을 상대국 필터에 넣지 마세요.
+모든 수출입 테이블은 한국 기준입니다. 한국·대한민국·우리나라는 기준 국가이며 상대국이 아닙니다.
+한국 전체 수출입을 요청하면 countries=[]로 이전 상대국 필터를 해제하세요.
+한국의 대중국 수출처럼 상대국이 명시되면 countries에는 중국만 넣으세요.
 share_basis는 한국의 상대국별 비중이면 KOREA_TRADE_PARTNER,
 해외 수입시장의 한국 비중이면 FOREIGN_IMPORT_MARKET, 불명확하면 null입니다.
 custom_query는 월별 추이/국가·HS6 금액 순위/국가별 비중 템플릿으로 답할 수 없을 때만
@@ -63,6 +66,21 @@ _COUNTRY_AMOUNT = re.compile(
 
 def explicit_country_ranking(question):
     """Only consume a complete standalone request; leave scoped or compound text to the planner."""
+    compound = re.fullmatch(
+        r'(?:최근\s*(?:공개된\s*)?(?P<months>[0-9]{1,4})\s*개월\s*(?:동안(?:의)?\s*)?)?'
+        r'(?:한국|우리나라|대한민국)(?:의)?\s*(?P<flow>수출|수입)액(?:이|가)?\s*'
+        r'(?:가장\s*)?(?:큰|높은|많은)\s*국가와\s*품목을?\s*각각\s*'
+        r'(?P<count>[0-9]{1,4})\s*개씩\s*(?:순서대로\s*)?(?:보여|알려)\s*(?:줘|주세요)[.!?]?',
+        question.strip())
+    if compound:
+        limit = int(compound['count'])
+        months = int(compound['months']) if compound['months'] else None
+        if not limit or months == 0:
+            return None
+        return PlannerOutput(tasks=[{'intent':'RANKING', 'question':question, 'slots':{
+            'ranking_group':group, 'ranking_limit':limit, 'recent_months':months,
+            'trade_flow':'EXPORT' if compound['flow']=='수출' else 'IMPORT',
+            'countries':[], 'products':[]}} for group in ('COUNTRY','HS6')])
     match = _COUNTRY_AMOUNT.fullmatch(question.strip())
     if not match:
         return None
@@ -115,7 +133,7 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
                 args = {'template': template}
                 if template == 'RANKING':
                     args['top'] = item.slots.ranking_limit or 10
-                    if item.slots.ranking_limit and item.slots.ranking_group=='COUNTRY' and not item.slots.comparison_requested:
+                    if item.slots.ranking_limit and item.slots.ranking_group in ('COUNTRY','HS6') and not item.slots.comparison_requested:
                         args['amount_only'] = True
             elif name == 'ml': args = {'top': 10}
             elif name == 'news': args = {'limit': 5}
@@ -131,5 +149,6 @@ def planner_input(state: AgentState) -> dict:
     return {'question': state.input.question,
             'previous_conditions': state.input.context.conditions.model_dump(mode='json')
                 if state.input.context.conditions else {},
-            'recent': [{'question': t.question, 'intent': t.intent, 'summary': t.summary}
+            'recent': [{'question': t.question, 'intent': t.intent, 'summary': t.summary,
+                        'conditions': t.conditions.model_dump(mode='json') if t.conditions else {}}
                        for t in state.input.context.recent]}

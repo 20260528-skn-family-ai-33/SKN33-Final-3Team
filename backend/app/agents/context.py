@@ -6,11 +6,25 @@ lookup through enqueue, Redis SET NX and commit. No MySQL access is hidden here.
 from collections.abc import Callable
 from pydantic import ValidationError
 
-from backend.app.agents.state import Conditions, SessionContext, MAX_HS_ITEMS, MAX_COUNTRIES
+from backend.app.agents.state import Conditions, SessionContext, TurnSummary, MAX_HS_ITEMS, MAX_COUNTRIES
 from backend.app.api.common import ApiError
+from backend.app.api.common import now
 from backend.app.api.redis_store import RedisState
 
 ACTIVE_STATUSES = frozenset({'QUEUED', 'RUNNING', 'NEEDS_INPUT', 'WAITING_REPORT'})
+
+
+def completed_context(state):
+    context = state.input.context.model_copy(deep=True)
+    primary = state.plan.tasks[0]
+    if primary.answer_status in ('PARTIAL', 'ANSWERED') and primary.conditions:
+        for decision in primary.resolved.values():
+            if decision.get('interest') in ('APPLIED', 'GLOBAL'):
+                context.interest_action = 'APPLIED' if decision['interest']=='APPLIED' else 'DECLINED'
+        # Keep confirmed question/conditions even if verifier removed its summary.
+        context = context.remember(TurnSummary(question=state.input.question, intent=primary.intent,
+            conditions=primary.conditions, summary=state.draft.turn_summary, answered_at=now()))
+    return context
 
 
 def restore_conditions(context_json: dict) -> Conditions | None:

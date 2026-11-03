@@ -1,5 +1,6 @@
 """Graph node adapters. Graph I/O never runs under a MySQL session row lock."""
 from contextlib import contextmanager
+import logging
 from sqlalchemy import select, update
 from openai import OpenAIError
 
@@ -52,7 +53,11 @@ class Services:
                                               schema=schema,max_output_tokens=tokens))
         for _ in range(max_attempts):
             try: return self.execution.call(node,timeout,call,finish_reserve=reserve)
-            except (OpenAIError,ValueError,TimeoutError): continue
+            except (OpenAIError,ValueError,TimeoutError) as exc:
+                # Do not log prompts, model text, credentials or private context.
+                logging.getLogger(__name__).warning('agent_structured_failed job_id=%s node=%s error_type=%s',
+                    state.input.job_id,node,type(exc).__name__)
+                continue
             except ApiError as exc:
                 if exc.code!='RUN_TIMEOUT': raise
                 break
