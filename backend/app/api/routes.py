@@ -90,7 +90,9 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         start,end=query.get('period_start'),query.get('period_end')
         if identity==19:
             require(not ('months' in query and (start or end)),'months와 직접 기간은 함께 지정할 수 없습니다.')
-            return trade.trends(store,uid,start,end,query.get('months',24),hs,countries,query.get('trade_flow','BOTH'))
+            # 순위 API와 같이 실제 적용된 품목·국가(관심 범위 포함)를 함께 돌려줘 화면 제목·AI 질문이 그 값을 쓰게 한다.
+            return {**trade.trends(store,uid,start,end,query.get('months',24),hs,countries,query.get('trade_flow','BOTH')),
+                    'conditions':{'hs_items':hs or [],'country_codes':countries or []}}
         if identity==21:
             countries=[path['country_code']]; accounts.validate_scope(store,hs,countries)
             if query.get('month'):

@@ -28,6 +28,11 @@ def demo_data(engine, metadata):
         for code,kind,label in [('KOTRA_MARKET','SOURCE','로컬 검증 기사'),('RPT_MONTHLY','REPORT_TYPE','월간 구독')]:
             if not c.scalar(select(t['service_option'].c.option_code).where(t['service_option'].c.option_code==code)):
                 c.execute(t['service_option'].insert().values(option_code=code,option_type=kind,label_ko=label,enabled=True,sort_order=10,value_json={}))
+        # 관심 품목이 두 개인 화면 검증(통합 테스트)에 쓰는 3304 아래 두 번째 합성 HS6.
+        if not c.scalar(select(t['hs_code'].c.hs_code).where(t['hs_code'].c.hs_code=='330410',t['hs_code'].c.hs_ver=='HS2022')):
+            row={'hs_code':'330410','hs_ver':'HS2022','name_ko':'입술용 메이크업 제품','source_edition':'HS2022','original_name_ko':'입술용 메이크업 제품'}
+            if t['hs_code'].c.depth.computed is None: row['depth']=6
+            c.execute(t['hs_code'].insert().values(**row))
         if not c.scalar(select(t['keyword_topic'].c.keyword_text).where(t['keyword_topic'].c.keyword_text=='로컬검증')):
             c.execute(t['keyword_topic'].insert().values(keyword_text='로컬검증',status='UNCLASSIFIED'))
         if not c.scalar(select(t['article'].c.article_id).where(t['article'].c.external_id=='local-integration-demo')):

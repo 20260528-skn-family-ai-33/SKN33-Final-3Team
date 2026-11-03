@@ -49,9 +49,11 @@ function RankResults({ route }) {
   // 제목·파일명·AI 질문은 서버가 실제로 적용한 조건(응답의 conditions)을 쓰고, 응답 전에는 내 관심정보로 대신한다.
   const appliedScope = applied.scope === 'INTERESTED' ? result.data?.conditions : null
   const interestCountries = applied.scope === 'INTERESTED' && !countryCodes.length ? appliedScope?.country_codes?.map(countryName) || profile.countries || [] : []
-  const interestProducts = applied.scope === 'INTERESTED' && !applied.product ? appliedScope?.hs_items?.map(h => h.hs_code) || profile.products || [] : []
+  // 관심 범위에서 품목(HS4 등)을 지정해도 서버는 그 아래 '관심 HS6'만 집계하므로, 응답이 오면 서버 목록을 그대로 쓴다.
+  // 응답 전에는 지정 품목이 있으면 그것을, 없으면 내 관심 품목을 임시로 쓴다(AI 버튼은 응답 전 비활성).
+  const interestProducts = applied.scope === 'INTERESTED' ? appliedScope?.hs_items?.map(h => h.hs_code) || (applied.product ? [] : profile.products || []) : []
   const scopeCountry = countryLabel || (interestCountries.length === 1 ? interestCountries[0] : interestCountries.length ? '관심 국가' : '전체 국가')
-  const scopeProduct = applied.product ? productName(applied.product) : interestProducts.length === 1 ? productName(interestProducts[0]) : interestProducts.length ? '관심 품목' : '전체 품목'
+  const scopeProduct = interestProducts.length === 1 ? productName(interestProducts[0]) : interestProducts.length ? '관심 품목' : applied.product ? productName(applied.product) : '전체 품목'
   registerProducts((result.data?.items || []).filter(r => r.hs_name).map(r => ({ hs_code: r.hs_item.hs_code, name_ko: r.hs_name })))
   const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: r.export_amount_usd == null || r.has_data === false ? null : Number(r.export_amount_usd) / 1e8, imp: r.import_amount_usd == null || r.has_data === false ? null : Number(r.import_amount_usd) / 1e8 }))
   const pageEmpty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
@@ -64,7 +66,7 @@ function RankResults({ route }) {
   const other = basis === 'exp' ? 'imp' : 'exp'
   const label = { exp: '수출액', imp: '수입액' }
 
-  const title = byMonth ? `${countryLabel} · ${productName(applied.product)} 월별 수출입`
+  const title = byMonth ? `${countryLabel} · ${scopeProduct} 월별 수출입`
     : rankingGroup === 'HS6' ? `${scopeCountry} 교역 품목 순위`
       : `${scopeProduct} 교역국 순위`
   const firstCol = byMonth ? '월' : rankingGroup === 'HS6' ? '품목' : '교역국'
@@ -89,7 +91,7 @@ function RankResults({ route }) {
   // 파일 이름: 국가_기간_내용.xlsx (파일명에 쓸 수 없는 글자는 뺀다)
   // 품목명은 길어서 코드로 적는다. 예) 미국_2025-10~2025-12_HS870332_월별수출입.xlsx
   const fileKind = byMonth ? '월별수출입' : rankingGroup === 'HS6' ? '품목순위' : '교역국순위'
-  const productLabel = applied.product ? `HS${applied.product}` : interestProducts.length === 1 ? `HS${interestProducts[0]}` : interestProducts.length ? '관심품목' : '전체품목'
+  const productLabel = interestProducts.length === 1 ? `HS${interestProducts[0]}` : interestProducts.length ? '관심품목' : applied.product ? `HS${applied.product}` : '전체품목'
   // AI 질문에는 '관심 국가·관심 품목' 같은 묶음 말 대신 실제 국가 이름과 HS 코드를 적어, 채팅이 같은 조건으로 분석하게 한다.
   const askCountry = countryLabel || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
   // AI 질문에는 조회 종류와 수출·수입 기준도 넣어, 채팅이 화면과 같은 순위를 분석하게 한다.
@@ -101,7 +103,7 @@ function RankResults({ route }) {
   const overChatLimit = interestProducts.length > CHAT_MAX_ITEMS || Math.max(countryCodes.length, interestCountries.length) > CHAT_MAX_ITEMS
   const chatBlocked = !result.data || result.loading || !!result.error || overChatLimit
   const chatReason = overChatLimit ? `AI챗봇은 국가·품목을 ${CHAT_MAX_ITEMS}개까지 받을 수 있습니다. 품목이나 국가를 골라 조회한 뒤 열어 주세요.` : '순위 조회가 끝나면 이 조건으로 AI챗봇을 열 수 있습니다.'
-  const askProduct = applied.product ? `${productName(applied.product)}(HS ${applied.product})` : interestProducts.length ? interestProducts.map(code => `${productName(code)}(HS ${code})`).join(', ') : '전체 품목'
+  const askProduct = interestProducts.length ? interestProducts.map(code => `${productName(code)}(HS ${code})`).join(', ') : applied.product ? `${productName(applied.product)}(HS ${applied.product})` : '전체 품목'
   const fileName = `${scopeCountry}_${query.period_start}~${query.period_end}_${productLabel}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '') + '.xlsx'
   const exportExcel = () => run(() => download(`/results/${result.data.result_id}/file`, fileName))
 

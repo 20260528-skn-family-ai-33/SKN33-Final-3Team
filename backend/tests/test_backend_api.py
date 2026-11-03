@@ -634,6 +634,10 @@ class BackendApiTest(unittest.TestCase):
         response=self.client.get('/api/v1/trade/rankings?scope=INTERESTED&group_by=HS6&period_start=2025-12&period_end=2025-12')
         self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(response.json()['conditions'],{'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],'country_codes':['US']})
+        # 월별 추이도 관심 범위에서 상위 코드(3304)를 주면 실제 적용된 관심 HS6를 돌려준다.
+        response=self.client.get('/api/v1/trade/trends?scope=INTERESTED&hs_code=3304&hs_ver=HS2022&country_codes=US&period_start=2025-12&period_end=2025-12')
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['conditions']['hs_items'],[{'hs_code':'330499','hs_ver':'HS2022'}])
 
     def test_excel_usd_keeps_cents(self):
         from openpyxl import load_workbook
