@@ -3,7 +3,8 @@ from pathlib import Path
 
 from backend.app.services.rag.gateway import ModelGateway
 from backend.app.services.rag.service import RagService
-from backend.app.services.rag.store import GenerationStore, resolve_root
+from backend.app.services.rag.store import resolve_root
+from backend.app.services.rag.search_store import SearchStore
 
 
 def create_service(api, *, root=None, catalog_path=None):
@@ -12,5 +13,5 @@ def create_service(api, *, root=None, catalog_path=None):
     from backend.app.services.rag.article_catalog import LocalArticleCatalog
     path = Path(catalog_path) if catalog_path else root / 'article_catalog.sqlite3'
     catalog = LocalArticleCatalog(path) if path.is_file() else None
-    return RagService(GenerationStore(root), None, ModelGateway(api),
+    return RagService(SearchStore(root), None, ModelGateway(api),
                       cache_dir=Path(root)/'summary_cache', trace_dir=Path(root)/'traces', catalog=catalog)

@@ -27,6 +27,32 @@ class ChatNewsToolTest(unittest.TestCase):
             self.assertIsInstance(result, RagResponse)
             self.assertEqual([a.external_id for a in result.articles], [article.external_id])
 
+    def test_team_generation_can_be_searched_without_migrating_it(self):
+        from backend.app.schemas.rag import ALL_SOURCES
+        from backend.app.services.rag.search_store import SearchStore
+        from backend.tests.test_rag_pipeline import document, vectors
+
+        with tempfile.TemporaryDirectory() as root:
+            store = SearchStore(Path(root), dimensions=8)
+            report = store.publish([document(1)], ALL_SOURCES, vectors)
+            folder = Path(root) / 'generations' / report['generation']
+            # Reproduce the independently published team's collection contract.
+            client = store.client_factory(folder / 'chroma')
+            try:
+                client.get_collection('kotra_article').modify(name='total_article')
+            finally:
+                client.close()
+            status = folder / 'status.json'
+            metadata = json.loads(status.read_text())
+            metadata['collections'] = {'total_article':metadata['collections']['kotra_article']}
+            status.write_text(json.dumps(metadata))
+            snapshot = store.snapshot()
+            try:
+                self.assertEqual(snapshot.collection('kotra_article').count(), 1)
+            finally:
+                snapshot.client.close()
+            self.assertEqual(json.loads(status.read_text()), metadata)
+
     def test_normal_search_reports_missing_index_and_closes_client(self):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, NEWS_VECTOR_ROOT=root):
             with patch('backend.app.agents.tools.OpenAI') as client:
