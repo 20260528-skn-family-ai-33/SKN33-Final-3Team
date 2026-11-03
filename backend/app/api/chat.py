@@ -3,7 +3,7 @@ import uuid
 from datetime import date
 from sqlalchemy import select, update
 from backend.app.api.common import require, now, clean, mask_text, page_info, percentage, ApiError
-from backend.app.api import jobs, trade, news
+from backend.app.api import jobs, trade
 from backend.app.api.accounts import validate_scope, interests
 
 
@@ -136,9 +136,9 @@ def execute(store,job):
     except Exception as exc:
         logging.getLogger(__name__).warning('intent_unavailable type=%s',type(exc).__name__)
         return repair_answer(store,uid,sid,question,'질문을 해석하지 못했습니다. 국가·품목·기간을 명시해 다시 입력해 주세요.')
-    if slots.intent in ('ML','RAG'):
+    if slots.intent=='ML':
         return repair_answer(store,uid,sid,question,f'{slots.intent} 담당 모듈 연결을 기다리고 있습니다.')
-    article_mode=slots.intent=='LOCAL_ISSUES'
+    article_mode=slots.intent in ('LOCAL_ISSUES', 'RAG')
     if slots.intent=='OUT_OF_SCOPE':
         return save_answer(store,uid,sid,question,{'intent':'OUT_OF_SCOPE','answer_status':'OUT_OF_SCOPE',
             'text':'수출입 통계·시장 비중·KOTRA 기사에 관한 질문을 입력하세요.','conditions':None,'tables':[],'charts':[],'articles':[],
@@ -172,9 +172,9 @@ def execute(store,job):
     automatic_comparison=False
     try:
         if article_mode:
-            output=news.articles(store,uid,hs=hs,countries=countries,
-                start=date.fromisoformat(p['start']),end=date.fromisoformat(p['end']),size=5)
-            articles=output['items']; text=f'조건에 맞는 기사 {len(articles)}건의 본문 발췌입니다. RAG 요약은 연결 대기 중입니다.'; intent='LOCAL_ISSUES'
+            from backend.app.api.chat_news import article_answer
+            answer = article_answer(store, uid, job['job_id'], question, conditions, warnings, slots.latest_articles)
+            return save_answer(store, uid, sid, question, answer)
         elif slots.intent=='MARKET_SHARE':
             output=trade.market_shares(store,uid,conditions); tables=[output['table']]
             text='전체 수출국 합계를 분모로 계산한 국가별 비중입니다.'; intent='MARKET_SHARE'
@@ -217,10 +217,9 @@ def execute(store,job):
                 from backend.app.api.common import period, shift_month
                 conditions['compare_period']=period(shift_month(date.fromisoformat(p['start']),-12),shift_month(date.fromisoformat(p['end']),-12))
             text='\n'.join(descriptions); intent='STATISTICS'
-        article_mode=intent=='LOCAL_ISSUES'
-        answer={'intent':'EXPLAIN' if article_mode else 'STATISTICS','answer_status':'PARTIAL' if article_mode else 'ANSWERED','text':text,'conditions':conditions,'tables':tables,'charts':[],
-            'articles':articles,'verification':{'status':'NEEDS_REVIEW' if article_mode else 'PASS','sentence_checks':None,'regeneration_count':0},
-            'actions':(['SAVE_REPORT','VIEW_TABLE','EXPORT_XLSX']+(['ADD_INTEREST'] if all(len(x['hs_code'])==6 for x in hs) else [])) if tables else [],'report_id':None,'warnings':warnings+(['RAG 모듈 미연결: 본문 발췌'] if article_mode else [])}
+        answer={'intent':'STATISTICS','answer_status':'ANSWERED','text':text,'conditions':conditions,'tables':tables,'charts':[],
+            'articles':articles,'verification':{'status':'PASS','sentence_checks':None,'regeneration_count':0},
+            'actions':(['SAVE_REPORT','VIEW_TABLE','EXPORT_XLSX']+(['ADD_INTEREST'] if all(len(x['hs_code'])==6 for x in hs) else [])) if tables else [],'report_id':None,'warnings':warnings}
     except ApiError as exc:
         if exc.code not in ('DATA_NOT_READY','PERIOD_NOT_AVAILABLE'): raise
         answer={'intent':'STATISTICS','answer_status':'NO_DATA','text':exc.message,'conditions':conditions,'tables':[],'charts':[],

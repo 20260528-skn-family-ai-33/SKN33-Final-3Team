@@ -181,7 +181,16 @@ function AnswerCard({ message, onSaveReport, onInterest }) {
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
     {a.warnings?.filter(w => w !== a.text).map(w => <p className="note" key={w}>{w}</p>)}
     {a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
-    {a.articles.map(article => <div className="li" key={article.article_id}><div><b>{article.title}</b><p className="muted">{article.summary}</p><Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn></div></div>)}
+    {a.articles.map((article, index) => <div className="li" key={article.article_id}><div>
+      <b>[{index + 1}] {article.title}</b>
+      <p className="muted">{article.source_code} · {article.published_date}</p>
+      {article.sentences?.length ? article.sentences.map((s, i) => <details key={i}>
+        <summary>{s.text} · 근거 보기</summary>
+        {s.quotes.map((quote, j) => <blockquote key={j}>{quote}</blockquote>)}
+      </details>) : <p>{article.summary || (a.order_by === 'published_date_desc' ? '발행일 기준 최신 기사' : '본문 근거 부족')}</p>}
+      <Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn>
+      {/^https?:\/\//i.test(article.source_url || '') && <a href={article.source_url} target="_blank" rel="noreferrer">원문 보기</a>}
+    </div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
       {a.conditions && <Btn kind="red" icon="file" onClick={() => onSaveReport(a.conditions)}>리포트로 저장</Btn>}
       {a.tables[0]?.result_id && <Btn icon="star" onClick={() => onInterest(a.tables[0].result_id)}>관심 목록 추가</Btn>}

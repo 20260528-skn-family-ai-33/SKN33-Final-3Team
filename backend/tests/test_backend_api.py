@@ -183,9 +183,13 @@ class BackendApiTest(unittest.TestCase):
 
     def test_chat_articles_respect_period_boundaries(self):
         self.signup(); self.seed_review_articles()
-        answer=self.chat_answer('2025년 1월 전체 품목 기사','article-period')
+        from backend.tests.chat_news_fixture import indexed_news
+        with indexed_news(self):
+            answer=self.chat_answer('2025년 1월 전체 품목 기사','article-period')
         self.assertEqual(answer['conditions']['period'],{'start':'2025-01-01','end':'2025-01-31'})
-        self.assertEqual([a['published_date'] for a in answer['articles']],['2025-01-31','2025-01-01'])
+        self.assertCountEqual([a['published_date'] for a in answer['articles']],['2025-01-31','2025-01-01'])
+        self.assertIn('[1]', answer['text'])
+        self.assertEqual(answer['articles'][0]['sentences'][0]['quotes'], ['검수 본문'])
 
     def test_chat_articles_without_trade_data(self):
         self.signup(); self.seed_review_articles()
@@ -196,11 +200,12 @@ class BackendApiTest(unittest.TestCase):
                ('전체 품목 기사','2025-10-01',['2025-12-15','2025-10-01']),
                ('최근 2개월 전체 품목 기사','2025-11-01',['2025-12-15'])]
         for i,(question,start,days) in enumerate(cases):
-            with self.subTest(question=question):
+            from backend.tests.chat_news_fixture import indexed_news
+            with self.subTest(question=question), indexed_news(self):
                 answer=self.chat_answer(question,f'news-only-{i}')
                 self.assertEqual(answer['intent'],'EXPLAIN')
                 self.assertEqual(answer['conditions']['period']['start'],start)
-                self.assertEqual([a['published_date'] for a in answer['articles']],days)
+                self.assertCountEqual([a['published_date'] for a in answer['articles']],days)
 
     def seed_quarterly_subscription(self, uid, baseline='2025-05'):
         with self.engine.begin() as c:

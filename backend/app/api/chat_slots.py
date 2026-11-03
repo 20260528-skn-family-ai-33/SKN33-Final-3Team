@@ -76,7 +76,7 @@ def resolve(store, question, previous, slots):
             raise SlotRepair('품목 표현을 확인하지 못했습니다. 질문에 품목명을 직접 적어 주세요.')
         if expression.isdigit(): numeric_product(store,question,expression,explicit_codes)
         expressions.append(expression)
-    article_mode=slots.intent=='LOCAL_ISSUES'
+    article_mode=slots.intent in ('LOCAL_ISSUES', 'RAG')
     if article_mode:
         a=store.t('article')
         latest=store.c.scalar(select(func.max(a.c.published_date)).where(a.c.visibility_status=='VISIBLE'))
@@ -100,6 +100,8 @@ def resolve(store, question, previous, slots):
         if not 1<=count<=120: raise SlotRepair('조회 기간은 1~120개월로 입력해 주세요.')
         conditions['period']=validated(period(shift_month(latest,-count+1),latest))
     else: conditions['period']=validated(conditions['period'])
+    if article_mode and slots.latest_articles and not slots.period:
+        conditions['period']['end'] = min(conditions['period']['end'], latest.isoformat())
     if slots.compare_period:
         # Fixed statistics queries currently support the matching prior-year period only.
         comparison=validated(slots.compare_period.model_dump())
