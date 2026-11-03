@@ -82,6 +82,14 @@ body.modal-open{overflow:hidden}
   .print-sheet{box-shadow:none!important;width:100%!important}
 }
 
+/* AI 분석: 채팅방 목록 + 대화 */
+.chat-lay{display:grid;grid-template-columns:300px minmax(0,1fr);gap:24px;align-items:start}
+
+/* 넓은 화면에서는 상단 메뉴 간격을 넓혀 메뉴끼리 붙어 보이지 않게 한다. */
+@media (min-width:1101px){
+  .nav{gap:clamp(72px,6vw,104px)}
+}
+
 /* responsive: 목업은 1440px 기준. 좁은 화면에서는 단을 줄인다. */
 @media (max-width:1100px){
   .nav{gap:28px}
@@ -89,6 +97,14 @@ body.modal-open{overflow:hidden}
   .side{flex-direction:row;flex-wrap:wrap}
   .side p{width:100%}
   .fab{right:16px;bottom:16px}
+  .chat-lay{grid-template-columns:220px minmax(0,1fr);gap:18px}
+}
+/* 휴대폰 폭에서만 채팅방 목록을 위로 올리고 가로로 넘긴다. */
+@media (max-width:640px){
+  .chat-lay{grid-template-columns:minmax(0,1fr)}
+  .chat-side .chat-list{flex-direction:row;overflow-x:auto;padding-bottom:4px}
+  .chat-side .chat-list>button{flex:0 0 200px}
+  .chat-side .chat-manage{flex-direction:row;flex-wrap:wrap}
 }
 @media (max-width:760px){
   .wrap{padding:0 16px}
@@ -134,3 +150,7 @@ body.modal-open{overflow:hidden}
 .report-month select { max-width: 100%; padding: .45rem; border-radius: 6px; border: 1px solid var(--line); background: white; }
 @keyframes password-autofill { from { opacity: .99; } to { opacity: 1; } }
 .password-change input[name=current]:-webkit-autofill { animation: password-autofill .01s; }
+/* 좁은 화면에서는 기사 원문·AI 버튼을 본문 아래 줄로 내려 제목이 한 글자씩 세로로 접히지 않게 한다. */
+@media (max-width: 640px) {
+  .article-actions { flex-basis: 100%; margin-left: 22px; }
+}

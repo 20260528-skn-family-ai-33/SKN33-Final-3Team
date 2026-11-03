@@ -17,11 +17,11 @@ function ReportItem({ report }) {
   const ready = report.status === 'ready'
   const generating = report.status === 'generating'
   return (
-    <div className="li" style={{ alignItems: 'flex-start', padding: '20px 22px' }}>
+    <div className="li" style={{ alignItems: 'flex-start', flexWrap: 'wrap', padding: '20px 22px' }}>
       <span style={{ width: 46, height: 54, borderRadius: 8, background: ready ? 'var(--rose)' : '#F1F2F5', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none' }}>
         <Icon name="file" size={22} color={ready ? '#C8102E' : '#8A919C'} stroke={1.8} />
       </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: '1 1 200px', minWidth: 0 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span className="tag plum">{reportKinds[report.kind].label}</span>
           <p style={{ fontSize: 17, fontWeight: 800 }}>{report.title}</p>
@@ -86,8 +86,8 @@ export default function ReportCenter({ route }) {
             {TABS.map(t => <Chip key={t} sm on={tab === t} to={`/account/reports?tab=${t}`}>{reportKinds[t].tab}</Chip>)}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
-          <TextField sm style={{ flex: 1 }} placeholder="리포트 제목 검색" icon="search" value={query} onChange={setQuery} aria-label="리포트 제목 검색" />
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
+          <TextField sm style={{ flex: '1 1 200px' }} placeholder="리포트 제목 검색" icon="search" value={query} onChange={setQuery} aria-label="리포트 제목 검색" />
           <Select sm style={{ width: 180 }} value={sort} onChange={setSort} options={SORTS} aria-label="정렬" />
         </div>
         <p style={{ fontSize: 16, fontWeight: 800, marginTop: 22 }}>{reportKinds[tab].tab} · <span style={{ color: 'var(--red)' }}>{list.length}건</span></p>

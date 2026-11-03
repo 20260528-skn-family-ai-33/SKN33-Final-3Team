@@ -78,7 +78,7 @@ const base = process.argv[2] || 'http://127.0.0.1:4173'
       }
       // 조회하지 않은 입력값 대신 실제 표시 중인 조건을 전달합니다.
       await page.getByLabel('국가', { exact: true }).selectOption('중국')
-      await page.getByRole('link', { name: 'AI 분석 채팅 열기', exact: true }).click()
+      await page.getByRole('link', { name: 'AI챗봇 열기', exact: true }).click()
       await page.getByLabel('질문 입력').waitFor()
       const question = await page.getByLabel('질문 입력').inputValue()
       assert.ok(question.includes(country || '전체 국가'))

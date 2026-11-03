@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { api, setCsrf, download } from './api/client'
 import { navigate } from './router'
 import { registerCountries, registerProducts, countryCode, countryName } from './data/catalog'
-import { mapNotification, mapReport } from './api/adapters'
+import { displayTime, mapNotification, mapReport } from './api/adapters'
 const AppContext = createContext(null)
 const NotificationContext = createContext(null)
 const ToastContext = createContext(null)
@@ -73,7 +73,7 @@ export function AppProvider({ children }) {
   }, [])
   const refreshChats = useCallback(async () => {
     const current = epoch.current; const items = await allPages('/chat/sessions')
-    if (current === epoch.current) setChats(items.map(c => ({ ...c, id: c.session_id, date: c.updated_at, messages: [] })))
+    if (current === epoch.current) setChats(items.map(c => ({ ...c, id: c.session_id, date: displayTime(c.updated_at), messages: [] })))
   }, [])
   const loadUser = useCallback(async (user, current) => {
     const [interest, config, refs, pref, subs] = await Promise.all([

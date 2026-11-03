@@ -6,6 +6,7 @@ const inboxTabs = active => [
   { label: '관리자 알림', to: '/admin/inbox/BS33', on: active === 'alerts' },
   { label: '데이터 수집 이력', to: '/admin/inbox/collection', on: active === 'collection' },
   { label: '회원 알림 전달 내역', to: '/admin/inbox/BS149', on: active === 'delivery' },
+  { label: '기사·출처 관리', to: '/admin/data/BS77', on: active === 'articles' },
 ]
 
 export const adminScreens = {
@@ -1338,9 +1339,7 @@ export const adminScreens = {
       crumb: '관리자 / 데이터 수집·품질 / 기사·출처',
       title: '기사·출처 관리',
       sub: '통합 기사와 국가·품목 연결을 검수합니다.',
-      tabs: [
-        { label: '수집 현황', to: '/admin/inbox/BS64' },
-      ]
+      tabs: inboxTabs('articles')
     },
     blocks: [
       {
@@ -1444,7 +1443,8 @@ export const adminScreens = {
       crumb: '관리자 / 데이터 수집·품질 / 기사·출처',
       title: '기사 내용·출처',
       sub: '원문 대조를 위한 기사 상세 패널',
-      actions: [{ label: '목록 / 뒤로', to: '/admin/data/BS78' }]
+      actions: [{ label: '목록 / 뒤로', to: '/admin/data/BS78' }],
+      tabs: inboxTabs('articles')
     },
     blocks: [
       {

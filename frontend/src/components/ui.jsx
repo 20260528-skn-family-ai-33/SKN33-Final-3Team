@@ -32,7 +32,7 @@ export function TextField({ value, onChange, placeholder, type = 'text', icon, i
       <input
         ref={inputRef} type={type === 'password' && visible ? 'text' : type} value={rest.defaultValue !== undefined ? undefined : value ?? ''} placeholder={placeholder} aria-invalid={invalid || undefined}
         onChange={e => onChange?.(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter' && onEnter) { e.preventDefault(); onEnter() } }}
+        onKeyDown={e => { if (e.key === 'Enter' && onEnter && !e.nativeEvent.isComposing) { e.preventDefault(); onEnter() } }}
         {...rest}
       />
       {type === 'password' && <button type="button" className="reset more" aria-label={visible ? '비밀번호 숨기기' : '비밀번호 보기'} aria-controls={rest.id} aria-pressed={visible} onClick={() => setVisible(v => !v)}>{visible ? '숨기기' : '보기'}</button>}
@@ -97,12 +97,15 @@ export function Toggle({ on, onChange, label, disabled }) {
 /** 화면 위에 뜨는 확인 창. Esc·배경 클릭으로 닫는다. */
 export function Modal({ open = true, onClose, width = 600, top, label, children, className }) {
   const ref = useRef(null)
+  const closeRef = useRef(onClose)
+  useEffect(() => { closeRef.current = onClose }, [onClose])
   const id = useId()
+  // 부모가 매번 새 onClose를 넘겨도 열려 있는 동안 포커스를 다시 옮기지 않는다(입력 중 글자가 끊기는 문제).
   useEffect(() => {
     if (!open) return undefined
     const prev = document.activeElement
     ref.current?.focus()
-    const onKey = e => { if (e.key === 'Escape') onClose?.() }
+    const onKey = e => { if (e.key === 'Escape') closeRef.current?.() }
     window.addEventListener('keydown', onKey)
     document.body.classList.add('modal-open')
     return () => {
@@ -110,7 +113,7 @@ export function Modal({ open = true, onClose, width = 600, top, label, children,
       document.body.classList.remove('modal-open')
       prev?.focus?.()
     }
-  }, [open, onClose])
+  }, [open])
   if (!open) return null
   return (
     <div className="modal-layer" style={top ? { paddingTop: top } : undefined}>
@@ -157,14 +160,20 @@ export function Steps({ items, current }) {
   )
 }
 
-export function Pager({ page, pages, onChange }) {
+export function Pager({ page, pages, onChange, window = 5 }) {
+  // 페이지 번호는 현재 페이지가 속한 묶음(1~5, 6~10 …)만 보여 준다.
+  const first = Math.floor((page - 1) / window) * window + 1
+  const last = Math.min(pages, first + window - 1)
   return (
     <nav aria-label="페이지" style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 22 }}>
+      {/* 페이지가 한 묶음보다 많으면 처음·끝으로 바로 가는 버튼도 둔다. */}
+      {pages > window && <Chip sm aria-label="처음 페이지" disabled={page <= 1} onClick={() => onChange(1)}>처음</Chip>}
       <Chip sm aria-label="이전 페이지" disabled={page <= 1} onClick={() => onChange(page - 1)}><Icon name="arrowLeft" size={14} /></Chip>
-      {Array.from({ length: pages }, (_, i) => i + 1).map(n => (
+      {Array.from({ length: last - first + 1 }, (_, i) => first + i).map(n => (
         <Chip sm key={n} on={n === page} onClick={() => onChange(n)}>{n}</Chip>
       ))}
       <Chip sm aria-label="다음 페이지" disabled={page >= pages} onClick={() => onChange(page + 1)}><Icon name="arrowRight" size={14} /></Chip>
+      {pages > window && <Chip sm aria-label={`끝 페이지(${pages})`} disabled={page >= pages} onClick={() => onChange(pages)}>끝</Chip>}
     </nav>
   )
 }
