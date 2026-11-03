@@ -89,7 +89,9 @@ async function main() {
     ok('기존 채팅방 생성·이름 변경')
     await page.getByLabel('질문 입력').fill('미국 HS330499 2025년 10월부터 12월까지 수출 추이를 보여줘')
     await page.getByRole('button', { name: '전송', exact: true }).click()
-    await page.getByRole('button', { name: '기초화장품', exact: true }).click()
+    // 품목 확인 선택지는 DB의 HS6 이름(예: '기타 메이크업 및 기초화장품')으로 나온다.
+    // 답변은 worker가 만들므로 다음 단계처럼 넉넉히 기다린다.
+    await page.getByRole('button', { name: /기초화장품/ }).first().click({ timeout: 90000 })
     await page.getByRole('button', { name: '리포트로 저장', exact: true }).waitFor({ timeout: 90000 })
     await page.getByRole('button', { name: '표로 보기', exact: true }).first().click()
     await page.getByRole('button', { name: '차트로 보기', exact: true }).first().waitFor()

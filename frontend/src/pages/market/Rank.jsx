@@ -69,7 +69,7 @@ function RankResults({ route }) {
     if (draft.period === 'custom' && (!draft.start || !draft.end)) return setError('시작 월과 끝 월을 모두 골라 주세요.')
     if (draft.period === 'custom' && draft.start > draft.end) return setError('시작 월이 끝 월보다 늦습니다. 기간을 다시 골라 주세요.')
     const first = available.data?.trade_start_month
-    if (draft.period === 'custom' && ((first && draft.start < first) || (end && draft.end > end))) return setError(`조회할 수 있는 기간은 ${first} ~ ${end}입니다. 기간을 다시 골라 주세요.`)
+    if (draft.period === 'custom' && ((first && draft.start < first) || (end && draft.end > end))) return setError(first ? `조회할 수 있는 기간은 ${first} ~ ${end}입니다. 기간을 다시 골라 주세요.` : `${end}까지 조회할 수 있습니다. 기간을 다시 골라 주세요.`)
     setError('')
     setPage(1); setApplied(draft)
   }
@@ -139,8 +139,8 @@ function RankResults({ route }) {
                 <p className="muted" style={{ marginTop: 6 }}>{query.period_start} ~ {query.period_end} {byMonth ? '월별' : '누계'} · 억 USD · 관세청</p>
               </div>
               <div className="seg" role="group" aria-label="순위 기준">
-                <button type="button" className={'reset' + (basis === 'exp' ? ' on' : '')} aria-pressed={basis === 'exp'} onClick={() => setBasis('exp')}>수출 기준</button>
-                <button type="button" className={'reset' + (basis === 'imp' ? ' on' : '')} aria-pressed={basis === 'imp'} onClick={() => setBasis('imp')}>수입 기준</button>
+                <button type="button" className={'reset' + (basis === 'exp' ? ' on' : '')} aria-pressed={basis === 'exp'} onClick={() => { setBasis('exp'); setPage(1) }}>수출 기준</button>
+                <button type="button" className={'reset' + (basis === 'imp' ? ' on' : '')} aria-pressed={basis === 'imp'} onClick={() => { setBasis('imp'); setPage(1) }}>수입 기준</button>
               </div>
             </div>
             {/* 좁은 화면에서는 표만 가로로 스크롤한다. */}
@@ -185,7 +185,7 @@ function CountrySearch({ value, options, onChange }) {
   const typing = text !== null
   // '전체 국가'(값 '')는 검색어와 상관없이 맨 위에 두어 언제든 국가 조건을 풀 수 있게 한다.
   const shown = typing ? options.filter(([v, l]) => !v || l.includes(text.trim())) : options
-  const matches = shown.filter(([v]) => v)
+  const matches = typing ? options.filter(([, l]) => text.trim() && l.includes(text.trim())) : []
   const pick = v => { onChange(v); setText(null) }
   return (
     <div style={{ flex: 1, position: 'relative', minWidth: 0 }}>
@@ -194,7 +194,7 @@ function CountrySearch({ value, options, onChange }) {
         <input value={typing ? text : label} aria-label="국가" placeholder="국가명 입력"
           onFocus={() => setText('')} onClick={() => !typing && setText('')} onBlur={() => setTimeout(() => setText(null), 150)}
           onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); pick(text.trim() && matches.length ? matches[0][0] : '') } if (e.key === 'Escape') setText(null) }} />
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (matches.length) pick(matches[0][0]); else setText(null) } if (e.key === 'Escape') setText(null) }} />
         <Icon name="search" size={16} color="#9AA0AA" />
       </div>
       {typing && (
