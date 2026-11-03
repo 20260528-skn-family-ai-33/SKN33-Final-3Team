@@ -1109,3 +1109,48 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get(path).status_code,404)
 
 if __name__=='__main__': unittest.main()
+
+    def test_country_comparison_pivots_full_snapshots_and_exports_same_columns(self):
+        from backend.app.api.results import result_table
+        from backend.app.api.common import shift_month
+        from openpyxl import load_workbook
+        uid=self.signup();ids=[]
+        period={'start':'2024-01-01','end':'2026-01-31'}
+        with self.engine.begin() as connection:
+            store=Store(self.app.state.database,connection)
+            for code,name,count in [('CN','중국',25),('US','미국',24)]:
+                rows=[{'country_code':code,'country_name':name,'hs_code':'330499','hs_ver':'HS2022',
+                    'name':'화장품','month':shift_month(date(2024,1,1),i).strftime('%Y-%m'),
+                    'amount_usd':100+i if code=='CN' else i} for i in range(count)]
+                conditions={'period':period,'country_codes':[code],'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],
+                    'trade_flow':'EXPORT','metric':'AMOUNT'}
+                ids.append(result_table(store,uid,rows,{'kind':'TREND'},conditions)['result_id'])
+        body={'result_ids':ids}
+        response=self.post('results/comparison',body)
+        self.assertEqual(response.status_code,200,response.text)
+        table=response.json()['table']
+        self.assertEqual([c['label'] for c in table['columns']],['HS 코드','품목','기준월','중국 수출액','미국 수출액'])
+        self.assertEqual(table['total_rows'],25)  # Not the 20-row public preview.
+        self.assertEqual(table['rows'][0]['country_1_amount_usd'],0)
+        self.assertEqual(table['rows'][-1]['country_0_amount_usd'],124)
+        self.assertIsNone(table['rows'][-1]['country_1_amount_usd'])
+        exported=self.post('results/comparison',{**body,'format':'xlsx'})
+        self.assertEqual(exported.status_code,200)
+        wb=load_workbook(io.BytesIO(exported.content));sheet=wb['결과표1']
+        self.assertEqual([cell.value for cell in sheet[1]],[c['label']+(f" ({c['unit']})" if c.get('unit') else '') for c in table['columns']])
+        self.assertEqual(sheet.max_row,26)
+        with self.engine.begin() as connection:
+            store=Store(self.app.state.database,connection)
+            duplicate_conditions={**conditions,'compare_period':{'start':'2023-01-01','end':'2023-12-31'}}
+            duplicate=result_table(store,uid,rows,{'kind':'TREND'},duplicate_conditions)['result_id']
+        combined=self.post('results/comparison',{'result_ids':ids+[duplicate]})
+        self.assertEqual(combined.status_code,200,combined.text)
+        self.assertEqual(combined.json()['table']['rows'],table['rows'])
+        with self.engine.begin() as connection:
+            snapshot=self.meta.tables['api_snapshot']
+            record=connection.execute(select(snapshot).where(snapshot.c.snapshot_id==ids[1])).mappings().one()
+            payload=dict(record['payload_json']);payload['conditions']={**payload['conditions'],'trade_flow':'IMPORT'}
+            connection.execute(update(snapshot).where(snapshot.c.snapshot_id==ids[1]).values(payload_json=payload))
+        self.assertEqual(self.post('results/comparison',body).status_code,400)
+        self.signup('comparison-other@example.org')
+        self.assertEqual(self.post('results/comparison',body).status_code,404)

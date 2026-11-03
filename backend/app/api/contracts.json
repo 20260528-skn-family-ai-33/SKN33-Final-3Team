@@ -3145,5 +3145,27 @@
         "본인 소유 리소스 식별자."
       ]
     ]
+  },
+  {
+    "id": 134,
+    "title": "API-134 국가 비교 표 보기 및 엑셀",
+    "route": "POST /api/v1/results/comparison",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "result_ids",
+        "string[]",
+        "필수",
+        "본인 소유 추이 결과 ID 1~3개."
+      ],
+      [
+        "Request Body",
+        "format",
+        "string",
+        "선택",
+        "json 또는 xlsx. 기본 json."
+      ]
+    ]
   }
 ]

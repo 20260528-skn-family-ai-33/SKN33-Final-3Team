@@ -45,6 +45,15 @@ def _day(value):
 
 def dispatch(identity,store,user,body,query,path,request,response,settings):
     uid=user['user_id'] if user else None
+    if identity==134:
+        from backend.app.api.comparison_results import country_comparison
+        table=country_comparison(store,uid,body['result_ids'])
+        fmt=body.get('format','json')
+        require(fmt in ('json','xlsx'),'지원하지 않는 비교 결과 형식입니다.')
+        if fmt=='xlsx':
+            exported={**table,'columns':[{**col,'label':col['label']+(f" ({col['unit']})" if col.get('unit') else '')} for col in table['columns']]}
+            return file_response(xlsx_bytes([exported],table['meta'],table['sql']),result_filename(table,store),'xlsx')
+        return {'table':{k:table[k] for k in ('columns','rows','total_rows','meta')}}
     if identity==133:
         from backend.app.api.answer_stream import final_answer_stream
         return final_answer_stream(jobs.owned_job(store,uid,path['job_id']))
