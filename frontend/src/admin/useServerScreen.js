@@ -5,6 +5,9 @@ const button = (label, to) => ({ btns: [{ label, to }] })
 export const AUDIT_ACTION = { USER_ROLE: '회원 권한 변경', USER_STATUS: '회원 이용 상태 변경', ARTICLE_VISIBILITY: '기사 노출 변경' }
 export const AUDIT_TARGET = { USER: '회원', ARTICLE: '기사' }
 const RUN_STATUS = { SUCCESS: ['ok', '성공'], FAILED: ['red', '실패'], RUNNING: ['', '실행 중'] }
+// 회원 검색 기준은 화면에 있는 아이디(이메일)·이름만 쓴다(이슈 리포트 관리자 페이지 7번에서 '아이디+이름' 삭제).
+// 주소에 그 밖의 값(all 등)이 오면 화면 기본값인 아이디로 맞춰 선택 상자와 실제 조회가 같게 한다.
+export const memberBy = value => ['id', 'name'].includes(value) ? value : 'id'
 export function useServerScreen(template, id, query) {
   const user = query.get('user_id'), article = query.get('article_id')
   const endpoint = ['BS32','BS34','BS36','BS38'].includes(id) ? '/admin/overview'
@@ -20,7 +23,7 @@ export function useServerScreen(template, id, query) {
   const status = ({ BS41: 'ACTIVE', BS42: 'WITHDRAWN', BS43: 'RESTRICTED' })[id]
   const paged = ['/admin/alerts', '/admin/users', '/admin/data/runs', '/admin/articles', '/admin/notification-deliveries', '/admin/audit-events'].includes(endpoint)
   const filters = paged ? { page: Number(query.get('page')) || 1, page_size: 20 } : {}
-  if (endpoint === '/admin/users') { filters.q = query.get('q') || undefined; filters.by = query.get('q') ? query.get('by') || 'id' : undefined; filters.status = status }
+  if (endpoint === '/admin/users') { filters.q = query.get('q') || undefined; filters.by = query.get('q') ? memberBy(query.get('by')) : undefined; filters.status = status }
   if (endpoint === '/admin/articles') filters.q = query.get('q') || undefined
   if (endpoint === '/admin/audit-events') { filters.q = query.get('q') || undefined; filters.target_type = query.get('target') || undefined; filters.sort = query.get('sort') || undefined }
   if (endpoint === '/admin/data/runs') { filters.q = query.get('q') || undefined; filters.status = query.get('status') || undefined }

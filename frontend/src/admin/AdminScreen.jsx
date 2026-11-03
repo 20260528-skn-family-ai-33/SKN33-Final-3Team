@@ -6,6 +6,7 @@ import Icon from '../components/Icon'
 import { useApp } from '../store'
 import { isAdmin } from '../auth/roles'
 import { useQuery, ErrorNotice } from '../api/hooks'
+import { memberBy } from './useServerScreen'
 
 const BANNER = {
   info: { background: 'var(--lav)', color: 'var(--plum)' },
@@ -211,7 +212,7 @@ function AuditSearch({ query, to }) {
 /** 회원 아이디(이메일)·이름 검색 */
 function MemberSearch({ value, by: byValue, to }) {
   const [q, setQ] = useState(value || '')
-  const [by, setBy] = useState(byValue || 'id')
+  const [by, setBy] = useState(memberBy(byValue))
   const go = () => navigate(`${to}?q=${encodeURIComponent(q.trim())}&by=${by}`)
   return (
     <section className="card" style={{ padding: '16px 20px' }}>

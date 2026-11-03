@@ -1,5 +1,5 @@
 // 관심 품목(HS4 → HS6)·관심 국가 선택 부품. 관심사 등록(BS03·BS04)과 관심정보(BS26)에서 함께 쓴다.
-import { useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import Icon from './Icon'
 import { Btn, Check } from './ui'
 import { countries, registerProducts, toggleValue, productName } from '../data/catalog'
@@ -41,6 +41,19 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const exactGroup = expandGroup && onSelectProduct && /^\d{4}$/.test(q) ? found.find(h => h.hs_code === q && h.depth === 4) : null
   const children = useQuery(`/reference/hs-codes/${q}/children`, { hs_ver: 'HS2022' }, !!exactGroup && open && !confirmed)
   const results = exactGroup ? [exactGroup, ...(children.data?.items || [])] : found
+  // 방향키로 고르는 중인 결과(-1이면 없음). Enter로 선택한다.
+  const [cursor, setCursor] = useState(-1)
+  const listId = useId()
+  useEffect(() => { if (cursor >= 0) document.getElementById(`${listId}-${cursor}`)?.scrollIntoView({ block: 'nearest' }) }, [cursor, listId])
+  const onKeyDown = e => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229 || confirmed) return
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); setOpen(true)
+      setCursor(i => e.key === 'ArrowDown' ? Math.min(i + 1, results.length - 1) : Math.max(i - 1, 0))
+    } else if (e.key === 'Enter' && cursor >= 0 && results[cursor]) {
+      e.preventDefault(); const h = results[cursor]; setCursor(-1); run(() => select(h))
+    } else if (e.key === 'Escape') { setOpen(false); setCursor(-1) }
+  }
   const select = async h => {
     const revision = ++selection.current
     setOpen(false)
@@ -62,8 +75,10 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
       <div className={'input' + (q ? ' val' : '') + (open ? ' focus' : '')}>
         <Icon name="search" size={18} color="#5C6370" />
         <input
-          ref={inputRef} value={query} placeholder={onSelectProduct ? '품목명 또는 HS 코드 입력 (예: 8542, 메모리)' : '품목명 또는 HS4 코드 입력 (예: 8542)'} aria-label="품목 검색"
-          onChange={e => { selection.current++; setQuery(e.target.value); setOpen(true); if (confirmed) onConfirm(null) }}
+          ref={inputRef} role="combobox" aria-expanded={open && !confirmed} aria-controls={listId} aria-autocomplete="list"
+          aria-activedescendant={open && cursor >= 0 && results[cursor] ? `${listId}-${cursor}` : undefined} onKeyDown={onKeyDown}
+          value={query} placeholder={onSelectProduct ? '품목명 또는 HS 코드 입력 (예: 8542, 메모리)' : '품목명 또는 HS4 코드 입력 (예: 8542)'} aria-label="품목 검색"
+          onChange={e => { selection.current++; setQuery(e.target.value); setOpen(true); setCursor(-1); if (confirmed) onConfirm(null) }}
           onFocus={() => setOpen(true)}
           style={{ fontWeight: confirmed ? 700 : 400 }}
         />
@@ -72,12 +87,12 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
       </div>
       {buttonLabel && <Btn kind="ink" size="md" disabled={!confirmed} onClick={onSelectAll} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(group)}</Btn>}
       {open && !confirmed && (
-        <div role="listbox" style={{ position: 'absolute', top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
-          {results.map(h => (
-            <button type="button" key={h.hs_code} className="reset" role="option" aria-selected="false"
-              onMouseDown={e => e.preventDefault()}
+        <div role="listbox" id={listId} aria-label="품목 검색 결과" style={{ position: 'absolute', top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
+          {results.map((h, i) => (
+            <button type="button" key={h.hs_code} id={`${listId}-${i}`} className="reset" role="option" aria-selected={i === cursor}
+              onMouseDown={e => e.preventDefault()} onMouseEnter={() => setCursor(i)}
               onClick={() => run(() => select(h))}
-              style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', borderRadius: 8 }}>
+              style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', borderRadius: 8, background: i === cursor ? '#F1F2F5' : undefined }}>
               <span className="hs">HS{h.depth} {h.hs_code}</span><b className="hs-label" title={h.name_ko}>{compactHsName(h.name_ko)}</b><span className="note">{h.depth === 6 ? (expandGroup ? '이 품목 선택' : '관심 품목 추가') : exactGroup ? 'HS4 전체로 선택' : '하위 품목 보기'}</span>
             </button>
           ))}

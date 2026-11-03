@@ -121,6 +121,10 @@ def audit_view(row):
         'impact':'신규 조회에 적용, 저장된 답변·리포트 보존','result':'SUCCEEDED','created_at':row['created_at']}
 
 
+# 화면에 보이는 작업 이름(frontend/src/admin/useServerScreen.js AUDIT_ACTION과 같은 값). 한글 이름으로도 검색되게 쓴다.
+AUDIT_ACTION_LABELS={'USER_ROLE':'회원 권한 변경','USER_STATUS':'회원 이용 상태 변경','ARTICLE_VISIBILITY':'기사 노출 변경'}
+
+
 def audit_list(store,page=1,size=20,target_type=None,q=None,sort='latest'):
     require(sort in ('latest','oldest'),'정렬은 latest 또는 oldest만 허용합니다.')
     t,u=store.t('api_audit_event'),store.t('users'); stmt=select(t)
@@ -129,7 +133,10 @@ def audit_list(store,page=1,size=20,target_type=None,q=None,sort='latest'):
     if q and q.strip():
         word=q.strip()
         actors=select(u.c.user_id).where(u.c.email.contains(word,autoescape=True))
-        stmt=stmt.where(or_(*(c.contains(word,autoescape=True) for c in (t.c.target_id,t.c.reason,t.c.action)),t.c.actor_id.in_(actors)))
+        labels=[code for code,label in AUDIT_ACTION_LABELS.items() if ''.join(word.split()) in label.replace(' ','')]
+        conds=[*(c.contains(word,autoescape=True) for c in (t.c.target_id,t.c.reason,t.c.action)),t.c.actor_id.in_(actors)]
+        if labels: conds.append(t.c.action.in_(labels))
+        stmt=stmt.where(or_(*conds))
     order=(t.c.created_at.asc(),t.c.audit_id.asc()) if sort=='oldest' else (t.c.created_at.desc(),t.c.audit_id.desc())
     rows=store.rows(stmt.order_by(*order).offset((page-1)*size).limit(size))
     emails={r['user_id']:r['email'] for r in store.rows(select(u.c.user_id,u.c.email).where(u.c.user_id.in_({r['actor_id'] for r in rows})))} if rows else {}

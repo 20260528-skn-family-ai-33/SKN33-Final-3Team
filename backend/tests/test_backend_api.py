@@ -445,6 +445,9 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual([x['audit_id'] for x in get(q='정정')['items']],['audit_t1'])
         self.assertEqual(get(q=email.split('@')[0])['page']['total'],2)
         self.assertEqual(get(q='정정')['items'][0]['actor_email'],email)
+        # 화면에 보이는 한글 작업 이름(띄어쓰기 무시)으로도 찾는다.
+        self.assertEqual([x['audit_id'] for x in get(q='기사 노출 변경')['items']],['audit_t1'])
+        self.assertEqual([x['audit_id'] for x in get(q='권한변경')['items']],['audit_t0'])
         self.assertEqual(self.client.get('/api/v1/admin/audit-events',params={'sort':'other'}).status_code,400)
 
     def test_admin_alerts_follow_category_tab(self):
@@ -624,6 +627,7 @@ class BackendApiTest(unittest.TestCase):
         # 엑셀·결과표에서는 실적 없는 행의 금액을 0이 아니라 빈 값으로 둔다(화면의 '—'와 같게).
         row={r['country_code']:r for r in result['rows']}['JP']
         self.assertIsNone(row['export_amount_usd']); self.assertIsNone(row['import_amount_usd'])
+        self.assertIsNone(row['rank']); self.assertIsNone(row['share_pct'])
 
     def test_rankings_return_applied_interest_scope(self):
         # 관심 범위 조회는 최신 관심 품목·국가를 실제 적용 조건으로 돌려준다(파일명·AI 질문이 이 값을 쓴다).

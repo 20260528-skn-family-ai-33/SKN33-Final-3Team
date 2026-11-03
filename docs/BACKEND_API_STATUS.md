@@ -23,7 +23,7 @@
 | 017 | `POST  /api/v1/users/me/interests/items` | 처리 코드 구현 |
 | 018 | `GET  /api/v1/trade/kpis` | 처리 코드 구현 |
 | 019 | `GET  /api/v1/trade/trends` | 처리 코드 구현; 응답 `conditions`(실제 적용된 hs_items·country_codes, 관심 범위 포함) |
-| 020 | `GET  /api/v1/trade/rankings` | 처리 코드 구현; 응답 `conditions`(실제 적용된 hs_items·country_codes, 관심 범위 포함), 같은 금액이면 실적 있는 행 우선 |
+| 020 | `GET  /api/v1/trade/rankings` | 처리 코드 구현; 응답 항목 `hs_name`(HS6 순위 품목명), `has_data`(실적 유무, 결과표·엑셀에는 넣지 않고 실적 없는 행의 금액·순위·비중은 빈 값), 응답 `conditions`(실제 적용된 hs_items·country_codes, 관심 범위 포함), 같은 금액이면 실적 있는 행 우선 |
 | 021 | `GET  /api/v1/trade/rankings/{country_code}/products` | 처리 코드 구현 |
 | 022 | `GET  /api/v1/trade/fast-growing-products` | 처리 코드 구현 |
 | 023 | `POST  /api/v1/analysis/promising-markets` | 보류: ML 담당 협의 보류 |
@@ -125,7 +125,7 @@
 | 119 | `GET  /api/v1/admin/users/{user_id}/notification-settings` | 처리 코드 구현 |
 | 120 | `GET  /api/v1/admin/notification-events/{event_id}/diagnosis` | 존재 검증 후 UNKNOWN; 과거 제외 이유를 추정하지 않음 |
 | 121 | `GET  /api/v1/admin/notification-rules` | 처리 코드 구현 |
-| 122 | `GET  /api/v1/admin/audit-events` | 처리 코드 구현; `q` 검색·`sort`(latest/oldest)·`actor_email` |
+| 122 | `GET  /api/v1/admin/audit-events` | 처리 코드 구현; `q` 검색(대상 ID·사유·처리자 이메일·작업 코드 또는 화면의 한글 작업 이름)·`sort`(latest/oldest)·응답 항목 `actor_email` |
 | 123 | `GET  /api/v1/admin/audit-events/{audit_id}` | 처리 코드 구현 |
 | 124 | `GET  /api/v1/admin/operation-settings` | 처리 코드 구현 |
 | 125 | `PATCH  /api/v1/admin/article-sources/{source_code}/collection` | 보류: DEC-41 버전 획득 및 적재 담당자의 출처 중지 실행기 연결 |

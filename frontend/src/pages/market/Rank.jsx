@@ -1,5 +1,5 @@
 // BS08 수출입 순위(국가·품목·시기별)
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Band, ChatFab } from '../../components/layout'
 import { Btn, Select } from '../../components/ui'
 import Icon from '../../components/Icon'
@@ -55,7 +55,7 @@ function RankResults({ route }) {
   const scopeCountry = countryLabel || (interestCountries.length === 1 ? interestCountries[0] : interestCountries.length ? '관심 국가' : '전체 국가')
   const scopeProduct = interestProducts.length === 1 ? productName(interestProducts[0]) : interestProducts.length ? '관심 품목' : applied.product ? productName(applied.product) : '전체 품목'
   registerProducts((result.data?.items || []).filter(r => r.hs_name).map(r => ({ hs_code: r.hs_item.hs_code, name_ko: r.hs_name })))
-  const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: r.export_amount_usd == null || r.has_data === false ? null : Number(r.export_amount_usd) / 1e8, imp: r.import_amount_usd == null || r.has_data === false ? null : Number(r.import_amount_usd) / 1e8 }))
+  const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.has_data === false ? '—' : r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: r.export_amount_usd == null || r.has_data === false ? null : Number(r.export_amount_usd) / 1e8, imp: r.import_amount_usd == null || r.has_data === false ? null : Number(r.import_amount_usd) / 1e8 }))
   const pageEmpty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
   // 순위는 큰 금액부터 정렬되므로 1페이지에 실적이 없으면 전체 결과에도 없다. 다른 페이지는 1페이지 판단을 그대로 쓴다.
   const resultKey = JSON.stringify([byMonth, query, rankingGroup, basis])
@@ -213,24 +213,42 @@ function CountrySearch({ value, options, onChange }) {
   // '전체 국가'(값 '')는 검색어와 상관없이 맨 위에 두어 언제든 국가 조건을 풀 수 있게 한다.
   const shown = typing ? options.filter(([v, l]) => !v || l.includes(text.trim())) : options
   const matches = typing ? options.filter(([, l]) => text.trim() && l.includes(text.trim())) : []
-  const pick = v => { onChange(v); setText(null) }
+  // 방향키로 고르는 중인 선택지(-1이면 없음). 입력이 바뀌면 처음부터 다시 고른다.
+  const [active, setActive] = useState(-1)
+  const pick = v => { onChange(v); setText(null); setActive(-1) }
+  useEffect(() => { if (active >= 0) document.getElementById(`country-option-${active}`)?.scrollIntoView({ block: 'nearest' }) }, [active])
+  const onKeyDown = e => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!typing) setText('')
+      setActive(i => e.key === 'ArrowDown' ? Math.min(i + 1, shown.length - 1) : Math.max(i - 1, 0))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (active >= 0 && shown[active]) pick(shown[active][0])
+      else if (matches.length) pick(matches[0][0])
+      else setText(null)
+    } else if (e.key === 'Escape') { setText(null); setActive(-1) }
+  }
   return (
     // 포커스가 검색칸과 목록을 모두 벗어났을 때만 목록을 닫는다(Tab으로 선택지에 들어가도 열린 채 유지).
     <div style={{ flex: 1, position: 'relative', minWidth: 0 }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setText(null) }}>
       <div className={'input val' + (typing ? ' focus' : '')} style={{ gap: 8 }}>
         <span className="select-prefix">국가</span>
         <input value={typing ? text : label} aria-label="국가" placeholder="국가명 입력"
+          role="combobox" aria-expanded={typing} aria-controls="country-listbox" aria-autocomplete="list"
+          aria-activedescendant={typing && active >= 0 ? `country-option-${active}` : undefined}
           onFocus={() => setText('')} onClick={() => !typing && setText('')}
-          onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') { e.preventDefault(); if (matches.length) pick(matches[0][0]); else setText(null) } if (e.key === 'Escape') setText(null) }} />
+          onChange={e => { setText(e.target.value); setActive(-1) }}
+          onKeyDown={onKeyDown} />
         <Icon name="search" size={16} color="#9AA0AA" />
       </div>
       {typing && (
-        <div role="listbox" aria-label="국가 목록" style={{ position: 'absolute', top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 280, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
-          {shown.map(([v, l]) => (
-            <button type="button" key={v || 'all'} className="reset" role="option" aria-selected={v === value}
-              onMouseDown={e => e.preventDefault()} onClick={() => pick(v)}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, fontWeight: v === value ? 800 : 500 }}>{l}</button>
+        <div role="listbox" id="country-listbox" aria-label="국가 목록" style={{ position: 'absolute', top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 280, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
+          {shown.map(([v, l], i) => (
+            <button type="button" key={v || 'all'} id={`country-option-${i}`} className="reset" role="option" aria-selected={i === active}
+              onMouseDown={e => e.preventDefault()} onClick={() => pick(v)} onMouseEnter={() => setActive(i)}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, fontWeight: v === value ? 800 : 500, background: i === active ? '#F1F2F5' : undefined }}>{l}</button>
           ))}
           {typing && text.trim() && !matches.length && <p className="muted" style={{ padding: '10px 12px' }}>검색 결과가 없습니다.</p>}
         </div>
