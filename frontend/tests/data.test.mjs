@@ -63,3 +63,21 @@ test('회원가입 비밀번호 규칙', () => {
   assert.equal(isStrongPassword('Original!123'), true)
   for (const bad of ['12345678', 'abcdefgh', 'abcd1234', 'a1!', 'abcd 123!']) assert.equal(isStrongPassword(bad), false)
 })
+
+
+test('trade chart uses a common Korean USD unit without changing amounts', async()=>{
+ const {chartDisplay}=await import('../src/utils/chart.js')
+ const display=chartDisplay([100000000,234567890], 'USD')
+ assert.equal(display.unit,'억USD');assert.equal(display.format(234567890),'2.35')
+})
+test('same-metric country comparisons share a chart; ML and different units stay separate', async()=>{
+ const {comparisonCharts}=await import('../src/pages/analysis/comparisonCharts.js')
+ const period={start:'2026-01-01',end:'2026-02-01'}
+ const tasks=['US','CN'].map((code,i)=>({task_id:'t'+i,intent:'STATISTICS',conditions:{country_codes:[code],hs_items:[],period,trade_flow:'EXPORT'}}))
+ const charts=tasks.map((task,i)=>({chart_id:task.task_id,task_id:task.task_id,type:'line',title:'수출액',source:'관세청',unit:'USD',labels:i?['2026-02']:['2026-01'],series:[{name:'수출액',values:[i+1]}]}))
+ const combined=comparisonCharts(charts,tasks)
+ assert.equal(combined.length,1);assert.deepEqual(combined[0].series.map(s=>s.values),[[1,null],[null,2]])
+ assert.equal(charts[0].series.length,1)
+ assert.equal(comparisonCharts([charts[0],{...charts[1],unit:'%'}],tasks).length,2)
+ assert.equal(comparisonCharts(charts,tasks.map(t=>({...t,intent:'PROMISING_MARKET'}))).length,2)
+})
