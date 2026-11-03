@@ -52,8 +52,8 @@ export async function api(path, { method = 'GET', body, query, signal, idempoten
   if (blob) return response.blob()
   return response.json()
 }
-export async function download(path, filename) {
-  const response = await api(path, { blob: 'download' })
+export async function download(path, filename, options = {}) {
+  const response = await api(path, { ...options, blob: 'download' })
   if (!filename) {
     const encoded = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get('Content-Disposition') || '')?.[1]
     filename = encoded ? decodeURIComponent(encoded) : '분석결과.xlsx'

@@ -81,3 +81,40 @@ test('same-metric country comparisons share a chart; ML and different units stay
  assert.equal(comparisonCharts([charts[0],{...charts[1],unit:'%'}],tasks).length,2)
  assert.equal(comparisonCharts(charts,tasks.map(t=>({...t,intent:'PROMISING_MARKET'}))).length,2)
 })
+
+
+test('comparison table produces one aligned country chart and preserves zero/null',async()=>{
+ const {comparisonChart,comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
+ const conditions={period:{start:'2026-01-01',end:'2026-02-01'},trade_flow:'EXPORT',country_codes:['CN','JP']}
+ const group=comparisonGroups({tasks:[{task_id:'t1',intent:'STATISTICS',conditions}],tables:[{task_id:'t1',result_id:'r',meta:{kind:'TREND'},rows:[{country_code:'CN'}]}]})
+ assert.equal(group.length,1)
+ const chart=comparisonChart({columns:[{key:'cn',type:'number',label:'중국 수출액'},{key:'jp',type:'number',label:'일본 수출액'}],rows:[{hs_code:'854232',name:'메모리',month:'2026-01',cn:10,jp:0},{hs_code:'854232',name:'메모리',month:'2026-02',cn:20,jp:null}]},conditions)
+ assert.equal(chart.series.length,2)
+ assert.deepEqual(chart.series.find(s=>s.name==='일본 수출액').values,[0,null])
+ assert.deepEqual(chart.labels,['2026-01','2026-02'])
+})
+
+
+test('duplicate current-period results with different previous-period settings form one comparison',async()=>{
+ const {comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
+ const period={start:'2026-01-01',end:'2026-02-28'}
+ const tasks=[['CN'],['JP'],['CN','JP']].map((codes,i)=>({task_id:'t'+i,intent:'STATISTICS',conditions:{period:i===2?{end:period.end,start:period.start}:period,trade_flow:'EXPORT',metric:'AMOUNT',country_codes:codes,hs_items:[],compare_period:i===2?{start:'2025-01-01',end:'2025-02-28'}:null}}))
+ const tables=tasks.map((t,i)=>({task_id:t.task_id,result_id:'r'+i,meta:{kind:'TREND'},rows:[{country_code:t.conditions.country_codes[0]}]}))
+ const groups=comparisonGroups({tasks,tables})
+ assert.equal(groups.length,1);assert.equal(groups[0].tables.length,3)
+})
+
+
+test('job completion received after the message read displays its saved answer once',async()=>{
+ const {completedMessages}=await import('../src/pages/analysis/completedMessages.js')
+ const rows=[{message_id:'1',role:'USER',job:{job_id:'1',status:'RUNNING'}}]
+ const answer={text:'저장된 최종 답변'}
+ const job={job_id:'1',status:'SUCCEEDED',answer}
+ const completed=completedMessages(rows,job)
+ assert.equal(rows.length,1);assert.equal(completed.length,2);assert.equal(completed[1].answer,answer)
+ assert.equal(completedMessages(completed,job),completed)
+ assert.equal(completedMessages(rows,{...job,status:'RUNNING'}),rows)
+ const other=[...rows,{role:'USER',message_id:'2',job:{job_id:'2'}}]
+ assert.equal(completedMessages(other,job)[1].role,'ASSISTANT')
+ assert.equal(completedMessages(other,job)[2].message_id,'2')
+})

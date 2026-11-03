@@ -8,7 +8,7 @@ import { useApp } from '../store'
 import { resultColumns } from './resultColumns'
 
 /** Render server snapshots using the existing table and chart components. */
-export default function ApiResults({ table, tableOnly = false }) {
+export default function ApiResults({ table, tableOnly = false, onDownload }) {
   const { run } = useApp()
   const [showTable, setShowTable] = useState(false)
   const rows = table?.rows || [], columns = resultColumns(table?.columns || [],rows)
@@ -21,7 +21,7 @@ export default function ApiResults({ table, tableOnly = false }) {
   return <div style={{ marginTop: 18, border: '1px solid var(--line)', borderRadius: 14, padding: '16px 18px', overflowX: 'auto' }}>
     <div className="between"><b>{chart ? '월별 추이 · USD' : '조회 결과'}</b><div style={{ display: 'flex', gap: 10 }}>
       {(chart || bars) && <Btn kind="lav" onClick={() => setShowTable(v => !v)}>{showTable ? '차트로 보기' : '표로 보기'}</Btn>}
-      {table.result_id && <Btn icon="download" onClick={() => run(() => download(`/results/${table.result_id}/file`))}>엑셀 다운로드</Btn>}
+      {(table.result_id || onDownload) && <Btn icon="download" onClick={() => run(() => onDownload ? onDownload() : download(`/results/${table.result_id}/file`))}>엑셀 다운로드</Btn>}
     </div></div>
     {chart && !showTable ? <LineChart formatValue={compact} labels={rows.map(r => r.month)} yTicks={niceTicks(rows.flatMap(r => numeric.map(k => r[k])))} series={numeric.map((key, i) => ({ color: colors[i], values: rows.map(r => r[key]) }))} /> : bars && !showTable ? <>
       <div className="th" style={{ gridTemplateColumns: '1fr 2fr 1fr', marginTop: 16 }}><span>국가</span><span>수출액 (USD)</span><span className="r">비중</span></div>

@@ -206,8 +206,7 @@ export function AppProvider({ children }) {
     await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } })
     clear()
   }, [session, clear])
-  const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`, `리포트-${id}.${format.toLowerCase()}`,
-      format.toLowerCase()==='xlsx' ? undefined : `리포트-${id}.${format.toLowerCase()}`)), [run])
+  const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`)), [run])
   const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
   const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])
   const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
