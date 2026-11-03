@@ -63,7 +63,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `tables[].task_id`, `charts[].task_id` | string | 어느 하위 질문의 표·차트인지 |
 | `charts[]` | ChartSpec | 아래 형식 |
 | `text` | (기존) | 결론 문장(하위 질문마다 1~2문장, 최대 6문장) 다음 설명 문장(최대 4문장)을 이은 것. 문장마다 200자 이하 |
-| `verification.sentence_checks` | array | `[{index, sentence, numbers, status}]`. `index`는 최종 답변의 결론 다음 설명 순서(0부터). FR-101-08·FR-901-02에 따라 한 번 교정한 뒤에도 `MISMATCH`인 문장은 삭제하지 않고 해당 문장 끝에 "확인 필요"를 표시한다. `PASS` 문장에는 표시하지 않는다. |
+| `verification.sentence_checks` | array | `[{index, sentence, numbers, status, basis, reason}]`. `index`는 최종 답변의 결론 다음 설명 순서(0부터). FR-101-08·FR-901-02에 따라 한 번 교정한 뒤에도 `MISMATCH`인 문장은 삭제하지 않고 해당 문장 끝에 "확인 필요"를 표시한다. `PASS` 문장에는 표시하지 않는다. |
 | `warnings` | (기존) | 최대 10개, 각 200자에서 자름 |
 
 ### ChartSpec
@@ -178,3 +178,12 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 ### D-95: 선행 결과 대상 선택
 - clarification.kind에 INPUT_SELECTION을 추가한다. 선택지와 직접 입력을 지원하며 API-38은 choice_ids 또는 text만 허용한다. hs_item/interest_selection/report_confirmation은 거부한다. 조건별 2회 제한이다.
 - 사용자가 명시한 개수·기준이면 자동으로 후속 분석한다. 모호한 개수·기준·그룹만 확인한다. applied_defaults/warnings에 실제 선택 기준과 대상 부족을 표시한다. 리포트의 REPORT_CONFIRM은 생략하지 않는다.
+
+### 저장 결과 기반 수치 검증
+- sentence_checks.basis는 DIGEST 또는 SNAPSHOT이며, 수치 조회는 저장된 결과표 전체 행을 기준으로 검증한다. reason은 MATCH(일치), NOT_CONFIRMED(대상·기간·지표·단위를 포함한 일치 확인 실패), SOURCE_UNAVAILABLE(저장 결과 만료)다. NOT_CONFIRMED는 실제 오답 확정이 아니다. SOURCE_UNAVAILABLE는 화면에 원본 확인 불가로 함께 표시한다. 재생성 최대 1회와 이후 확인 필요 표시는 유지한다.
+
+
+## 2026-11-03 API-133 최종 답변 스트림
+- `GET /chat/jobs/{job_id}/answer-stream`: 기존 로그인·작업 소유권 검증을 적용한다. SUCCEEDED이며 저장 answer가 있을 때만 `text/event-stream`을 반환한다. 준비 전에는 409 ANSWER_NOT_READY다.
+- `event: delta`, `data: {"text":"..."}`로 검증된 answer.text를 전달하고 `event: done`, `data: {}`로 끝낸다. Cache-Control: private, no-store. 미검증 초안은 보내지 않으며 모델을 재호출하지 않는다. 프론트는 수신 종료 후 저장된 구조화 결과표·차트를 표시하며, 오류 시 기존 최종 응답으로 복구한다. API-37 상태 폴링은 유지한다.
+- 국가 정식명 또는 코드 완전 일치는 포함 관계 후보와 무관하게 자동 확정한다. 완전 일치가 없을 때만 COUNTRY 질문을 표시한다.

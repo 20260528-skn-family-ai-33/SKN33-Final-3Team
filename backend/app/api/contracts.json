@@ -3130,5 +3130,20 @@
                ["Query Parameters", "country_code", "string", "선택", "대상 국가."],
                ["Query Parameters", "hs_code", "string", "선택", "HS6 코드."],
                ["Query Parameters", "hs_ver", "string", "선택", "HS 판본."]]
+  },
+  {
+    "id": 133,
+    "title": "API-133 검증 완료 답변 스트림",
+    "route": "GET /api/v1/chat/jobs/{job_id}/answer-stream",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "job_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
   }
 ]

@@ -45,6 +45,9 @@ def _day(value):
 
 def dispatch(identity,store,user,body,query,path,request,response,settings):
     uid=user['user_id'] if user else None
+    if identity==133:
+        from backend.app.api.answer_stream import final_answer_stream
+        return final_answer_stream(jobs.owned_job(store,uid,path['job_id']))
     page=query.get('page',1); size=query.get('page_size',20)
     if identity in PENDING:
         raise ApiError(422 if identity in (23,27) else 503,'FEATURE_NOT_AVAILABLE' if identity in (23,27) else 'FEATURE_NOT_READY',PENDING[identity])

@@ -1085,4 +1085,27 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(eur['availability'],'UNAVAILABLE'); self.assertIsNone(eur['rate_krw'])
 
 
+
+    def test_verified_answer_stream_requires_completion_and_ownership(self):
+        import json
+        uid=self.signup()
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        with self.engine.begin() as connection:
+            store=Store(self.app.state.database,connection)
+            job=jobs.enqueue(store,uid,'API_CHAT',sid,{'question':'q'},'stream-test')
+        path=f"/api/v1/chat/jobs/{job['job_id']}/answer-stream"
+        self.assertEqual(self.client.get(path).status_code,409)
+        with self.engine.begin() as connection:
+            store=Store(self.app.state.database,connection)
+            job.update(status='SUCCEEDED',result_json={'answer':{'text':'검증된 결과 123 USD입니다.'}})
+            jobs._save_chat(store,job)
+        response=self.client.get(path)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertIn('text/event-stream',response.headers['content-type'])
+        text=''.join(json.loads(block.split('data: ',1)[1])['text'] for block in response.text.split('\n\n') if block.startswith('event: delta'))
+        self.assertEqual(text,job['result_json']['answer']['text'])
+        self.assertIn('event: done',response.text)
+        self.signup('stream-other@example.org')
+        self.assertEqual(self.client.get(path).status_code,404)
+
 if __name__=='__main__': unittest.main()

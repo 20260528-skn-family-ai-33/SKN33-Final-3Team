@@ -5,7 +5,7 @@ import { Band } from '../../components/layout'
 import { Btn, Check, Modal, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
-import { api } from '../../api/client'
+import { api, streamAnswer } from '../../api/client'
 import { requestId } from '../../api/requestId'
 import { amount, percent, reportProduct } from '../../api/adapters'
 import { usePendingAction, useQuery, ErrorNotice } from '../../api/hooks'
@@ -158,7 +158,16 @@ function ConditionCard({ message, onChange, onGenerate, onClose }) {
   )
 }
 
-function AnswerCard({ message, onSaveReport, onInterest }) {
+function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
+  const [stream,setStream]=useState(null)
+  useEffect(()=>{
+    if(!streamJobId)return
+    const controller=new AbortController()
+    streamAnswer(streamJobId,text=>setStream({id:streamJobId,text,done:false}),controller.signal)
+      .catch(()=>{})
+      .finally(()=>{if(!controller.signal.aborted)setStream({id:streamJobId,done:true})})
+    return ()=>controller.abort()
+  },[streamJobId])
   const a = message.answer
   const c = a.conditions
   const trend = !a.tasks?.length && a.tables.length === 1 && a.tables[0].rows.length && a.tables[0].rows.every(r => r.month) ? a.tables[0].rows : null
@@ -169,6 +178,7 @@ function AnswerCard({ message, onSaveReport, onInterest }) {
   const previous = trend?.every(r => typeof r[prior] === 'number') ? trend.reduce((sum, r) => sum + r[prior], 0) : null
   const growth = total != null && previous > 0 ? (total / previous - 1) * 100 : null
   const flow = trend && trend.length > 1 && total != null ? trend.at(-1)[metric] > trend[0][metric] ? '증가' : trend.at(-1)[metric] < trend[0][metric] ? '감소' : '동일' : '—'
+  if(streamJobId && (stream?.id!==streamJobId||!stream.done))return <AiBlock><p role="status" className="note">검증 완료 · 답변 수신 중</p><p style={{whiteSpace:'pre-wrap',lineHeight:1.8}}>{stream?.id===streamJobId?stream.text:''}</p></AiBlock>
   return <AiBlock>
     {c && <>
       <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')} / ` : ''}{c.country_codes?.map(countryName).join(' · ') || '전체 국가'}</p>
@@ -333,7 +343,7 @@ export default function Analysis({ route }) {
               <ErrorNotice error={error} retry={() => setReadRevision(v => v + 1)} />
               {messages.map(m => {
                 if (m.role !== 'USER') return m.answer
-                  ? <AnswerCard key={m.message_id} message={m} onSaveReport={saveAsReport} onInterest={addInterest}/>
+                  ? <AnswerCard key={m.message_id} message={m} streamJobId={m===messages.at(-1) && job?.status==='SUCCEEDED' ? job.job_id : undefined} onSaveReport={saveAsReport} onInterest={addInterest}/>
                   : <AiBlock key={m.message_id}><p>{m.content_masked}</p></AiBlock>
                 const turn = m.job?.job_id === job?.job_id ? job : m.job
                 return <div className="chat-turn" key={m.message_id}>

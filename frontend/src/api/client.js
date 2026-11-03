@@ -64,3 +64,26 @@ export async function download(path, filename) {
   document.body.appendChild(a); a.click(); a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
+
+export async function streamAnswer(jobId,onText,signal) {
+  const response=await api(`/chat/jobs/${jobId}/answer-stream`,{blob:'download',signal})
+  const reader=response.body.getReader(),decoder=new TextDecoder()
+  let buffer='',text='',doneEvent=false
+  try {
+    while(true){
+      const {value,done}=await reader.read()
+      buffer+=decoder.decode(value,{stream:!done}).replace(/\r\n/g,'\n')
+      let end
+      while((end=buffer.indexOf('\n\n'))>=0){
+        const event=buffer.slice(0,end);buffer=buffer.slice(end+2)
+        const type=event.split('\n').find(l=>l.startsWith('event:'))?.slice(6).trim()
+        const data=event.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5).trim()).join('\n')
+        if(type==='delta'){text+=JSON.parse(data).text;onText(text)}
+        if(type==='done')doneEvent=true
+      }
+      if(done)break
+    }
+    if(!doneEvent)throw new Error('답변 스트림이 중단되었습니다.')
+    return text
+  } finally {reader.releaseLock()}
+}
