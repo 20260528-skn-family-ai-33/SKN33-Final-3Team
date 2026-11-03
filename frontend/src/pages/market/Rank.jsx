@@ -152,8 +152,8 @@ function RankResults({ route }) {
                 {end && <span className="note">조회 가능: {available.data?.trade_start_month} ~ {end}</span>}
               </div>
             )}
-            {/* 공개 기간 조회가 실패했으면 그것부터 다시 불러와야 순위 조회도 다시 시작된다. */}
-            <ErrorNotice error={available.error || result.error} retry={available.error ? available.reload : result.reload} />
+            {/* 실패한 요청(공개 기간·순위)을 모두 다시 불러온다. 공개 기간이 복구되면 순위 조회도 다시 시작된다. */}
+            <ErrorNotice error={available.error || result.error} retry={() => { if (available.error) available.reload(); if (result.error) result.reload() }} />
             {error
               ? <p className="field-err" role="alert" style={{ marginTop: 12 }}>{error}</p>
               : <p className="note" style={{ marginTop: 12 }}>{query.period_start || "—"} ~ {query.period_end || "—"} 조회 조건을 적용합니다. 수출 또는 수입 기준으로 순위를 전환할 수 있습니다. 품목은 이름이나 HS 코드(4·6자리)로 검색해 고른 뒤 세부 품목 칩에서 HS6로 좁힐 수 있습니다.</p>}

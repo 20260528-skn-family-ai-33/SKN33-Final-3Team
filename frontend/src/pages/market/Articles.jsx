@@ -86,8 +86,8 @@ export default function Articles({ route }) {
             </h2>
             <span className="muted">발행일 최신순</span>
           </div>
-          {/* 목록과 기사 본문 중 실패한 쪽을 다시 불러온다. */}
-          <ErrorNotice error={result.error || detail.error} retry={result.error ? result.reload : detail.reload} />
+          {/* 목록·기사 본문 중 실패한 요청을 한 번에 모두 다시 불러온다. */}
+          <ErrorNotice error={result.error || detail.error} retry={() => { if (result.error) result.reload(); if (detail.error) detail.reload() }} />
           {result.loading && <p role="status">기사를 불러오는 중…</p>}
           <div className="col" style={{ gap: 12 }}>
             {shown.map(a => {
