@@ -23,7 +23,7 @@ def country_matches(name, rows, threshold):
         if exact or contains or similarity >= threshold:
             matches.append((not exact, -similarity, row['country_code'], row, contains))
     matches.sort(key=lambda m: m[:3])
-    if matches and not matches[0][0] and not any(m[4] for m in matches[1:]):
+    if matches and not matches[0][0]:
         return matches[0][2], []
     return None, [m[3] for m in matches[:5]]
 

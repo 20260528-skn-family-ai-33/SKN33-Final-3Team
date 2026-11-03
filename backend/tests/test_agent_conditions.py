@@ -65,7 +65,8 @@ class ConditionTest(unittest.TestCase):
     def test_similar_country_requires_confirmation_even_with_single_match(self):
         rows = [{'country_code':c, 'name_ko':n, 'country_role':'COUNTRY'}
                 for c,n in [('SD','수단'),('SS','남수단'),('VN','베트남')]]
-        self.assertEqual(country_matches('수단',rows,0.6)[1][0]['country_code'], 'SD')
+        self.assertEqual(country_matches('수단',rows,0.6), ('SD',[]))
+        self.assertEqual(country_matches('SD',rows,0.6), ('SD',[]))
         self.assertIsNone(country_matches('베트낭',rows,0.6)[0])
         self.assertEqual(country_matches('베트남',rows,0.6)[0], 'VN')
 
