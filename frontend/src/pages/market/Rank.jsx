@@ -72,6 +72,8 @@ function RankResults({ route }) {
   const cols = showHs ? COLS : COLS_NO_HS
 
   const search = () => {
+    // 응답을 기다리는 동안 다시 누르면 같은 요청이 겹치므로 무시한다(연속 클릭 시 1회 조회).
+    if (result.loading) return
     if (!draft.inherited && !draft.country && !draft.product) return setError('국가 또는 품목 중 하나 이상 선택해 주세요.')
     if (draft.period === 'custom' && (!draft.start || !draft.end)) return setError('시작 월과 끝 월을 모두 골라 주세요.')
     if (draft.period === 'custom' && draft.start > draft.end) return setError('시작 월이 끝 월보다 늦습니다. 기간을 다시 골라 주세요.')
@@ -90,6 +92,15 @@ function RankResults({ route }) {
   const productLabel = applied.product ? `HS${applied.product}` : interestProducts.length === 1 ? `HS${interestProducts[0]}` : interestProducts.length ? '관심품목' : '전체품목'
   // AI 질문에는 '관심 국가·관심 품목' 같은 묶음 말 대신 실제 국가 이름과 HS 코드를 적어, 채팅이 같은 조건으로 분석하게 한다.
   const askCountry = countryLabel || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
+  // AI 질문에는 조회 종류와 수출·수입 기준도 넣어, 채팅이 화면과 같은 순위를 분석하게 한다.
+  const askKind = byMonth ? '월별 수출입 추이' : `${basis === 'exp' ? '수출' : '수입'} 기준 ${rankingGroup === 'HS6' ? '교역 품목 순위' : '교역국 순위'}`
+  // 지금 AI챗봇은 질문에서 국가·품목을 각각 20개까지만 읽는다(backend/app/api/intent.py IntentSlots).
+  // 그보다 많으면 일부만 분석되므로 넘기지 않고 이유를 안내한다. 결과 ID로 조건을 넘기는 방식은 에이전트 재설계(PR #51, D-64)에서 다룬다.
+  const CHAT_MAX_ITEMS = 20
+  // 대시보드에서 넘어오면 관심 국가가 주소의 country_codes로 직접 오므로 그 개수도 함께 센다.
+  const overChatLimit = interestProducts.length > CHAT_MAX_ITEMS || Math.max(countryCodes.length, interestCountries.length) > CHAT_MAX_ITEMS
+  const chatBlocked = !result.data || result.loading || !!result.error || overChatLimit
+  const chatReason = overChatLimit ? `AI챗봇은 국가·품목을 ${CHAT_MAX_ITEMS}개까지 받을 수 있습니다. 품목이나 국가를 골라 조회한 뒤 열어 주세요.` : '순위 조회가 끝나면 이 조건으로 AI챗봇을 열 수 있습니다.'
   const askProduct = applied.product ? `${productName(applied.product)}(HS ${applied.product})` : interestProducts.length ? interestProducts.map(code => `${productName(code)}(HS ${code})`).join(', ') : '전체 품목'
   const fileName = `${scopeCountry}_${query.period_start}~${query.period_end}_${productLabel}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '') + '.xlsx'
   const exportExcel = () => run(() => download(`/results/${result.data.result_id}/file`, fileName))
@@ -128,7 +139,7 @@ function RankResults({ route }) {
             <div style={{ display: 'flex', gap: 12, marginTop: 16 }} className="resp-stack">
               <CountrySearch value={draft.country} options={[['', '전체 국가'], ...rankingCountries]} onChange={v => setDraft(d => ({ ...d, country: v, group: null, scope: "GLOBAL", inherited: false }))} />
               <Select prefix="기간" style={{ flex: 1 }} value={draft.period} onChange={v => setDraft(d => v === 'custom' ? { ...d, period: v, start: d.start || monthOffset(end, -2), end: d.end || end } : { ...d, period: v, start: "", end: "" })} options={PERIODS} aria-label="기간" />
-              <Btn kind="red" size="md" onClick={search} style={{ height: 50, borderRadius: 12, padding: '0 28px' }}><Icon name="search" size={17} />순위 조회</Btn>
+              <Btn kind="red" size="md" onClick={search} disabled={result.loading} style={{ height: 50, borderRadius: 12, padding: '0 28px' }}><Icon name="search" size={17} />순위 조회</Btn>
             </div>
             {draft.period === 'custom' && (
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
@@ -183,9 +194,10 @@ function RankResults({ route }) {
               <Btn icon="download" disabled={!result.data?.result_id || result.loading || empty} onClick={exportExcel}>엑셀 다운로드</Btn>
             </div>
             {!byMonth && <Pagination page={page} info={result.data?.page} onChange={setPage} />}
+            {overChatLimit && <p className="note" role="status" style={{ marginTop: 10 }}>{chatReason}</p>}
           </div>
         </div>
-        <ChatFab ask={`${askCountry} · ${askProduct} · ${query.period_start} ~ ${query.period_end} 수출입을 분석해줘`} />
+        <ChatFab disabled={chatBlocked} reason={chatReason} ask={`${askCountry} · ${askProduct} · ${query.period_start} ~ ${query.period_end} ${askKind}를 분석해줘`} />
       </main>
     </>
   )

@@ -55,11 +55,30 @@ async function main() {
     await page.getByRole('button', { name: '엑셀 다운로드' }).click()
     await (await excel).saveAs(path.join(out, 'ranking.xlsx'))
     ok('기존 순위 필터·막대·원본 XLSX 다운로드')
-    // 대시보드 '상세보기'처럼 관심 범위로 들어오면 서버가 적용한 관심 국가·품목이 제목·AI 질문에 들어가야 한다.
+    // 관심 범위 순위: 다른 탭에서 관심 품목을 바꾼 것처럼 서버 값만 바꿔(이 탭의 프로필은 330499 하나) 화면이 응답 기준으로 표기하는지 본다.
+    const putInterests = codes => page.evaluate(async codes => {
+      const me = await (await fetch('/api/v1/users/me')).json()
+      const cur = (await (await fetch('/api/v1/users/me/interests')).json()).interests
+      const r = await fetch('/api/v1/users/me/interests', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': me.csrf_token },
+        body: JSON.stringify({ hs_items: codes.map(hs_code => ({ hs_code, hs_ver: 'HS2022' })), country_codes: cur.country_codes, expected_version: cur.version, landing_page: 'INTERESTED' }) })
+      return r.status
+    }, codes)
+    assert.equal(await putInterests(['330499', '330410']), 200)
+    // 순위 응답을 늦춰(가짜 응답 아님) 조회 중에는 AI 버튼이 비활성인지 확인한다.
+    await page.route('**/api/v1/trade/rankings**', async route => { await new Promise(r => setTimeout(r, 1500)); await route.continue() })
     await go('/rank?scope=INTERESTED&group_by=HS6')
+    await page.locator('.fab[aria-disabled="true"]').waitFor()
     await page.getByRole('heading', { name: '미국 교역 품목 순위' }).waitFor()
-    assert.match(decodeURIComponent(await page.locator('a[href*="analysis?ask"]').getAttribute('href')), /미국 · .*\(HS 330499\)/)
-    ok('관심 범위 순위·적용 조건이 들어간 AI 질문')
+    await page.locator('a.fab[href*="analysis?ask"]').waitFor()
+    await page.unroute('**/api/v1/trade/rankings**')
+    const ask = decodeURIComponent(await page.locator('a.fab').getAttribute('href'))
+    for (const part of [/^#\/analysis\?ask=미국 · /, /\(HS 330499\)/, /\(HS 330410\)/, / 수출 기준 교역 품목 순위를 분석해줘$/]) assert.match(ask, part)
+    await page.getByText('330499', { exact: true }).first().waitFor()
+    const interestExcel = page.waitForEvent('download')
+    await page.getByRole('button', { name: '엑셀 다운로드' }).click()
+    assert.match((await interestExcel).suggestedFilename(), /^미국_.*_관심품목_품목순위\.xlsx$/)
+    assert.equal(await putInterests(['330499']), 200)
+    ok('관심 범위 순위: 응답 전 AI 비활성·응답 기준 표·파일명·AI 질문(종류·기준 포함)')
     await go('/articles')
     await page.locator('#ar-q').fill('검증')
     await page.getByRole('button', { name: '기사 검색' }).click()
