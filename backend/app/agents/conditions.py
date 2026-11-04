@@ -250,9 +250,18 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         start = month.replace(day=min(end.day, month_end(month).day)) + timedelta(days=1)
         out.article_period = slots.article_period or {'start':start, 'end':end}
     if task.intent == 'MARKET_SHARE' and not out.share_basis:
+        product = slots.ranking_group == 'HS6'
         return ask(state, task, share_key, 'SHARE_BASIS', '어떤 시장 비중을 조회할까요?',
-            [(v, label, {'share_basis':v}) for v,label in [('KOREA_TRADE_PARTNER','한국 교역의 국가별 비중'),
-                                                           ('FOREIGN_IMPORT_MARKET','해외 수입시장의 한국 비중')]])
+            [(v, label, {'share_basis':v}) for v,label in [
+                ('KOREA_TRADE_PARTNER','한국 교역의 품목별 비중' if product else '한국 교역의 국가별 비중'),
+                ('FOREIGN_IMPORT_MARKET','해외 수입시장의 한국 비중')]])
+    if task.intent == 'MARKET_SHARE' and slots.ranking_group == 'HS6':
+        # SHARE 템플릿은 국가별 비중만 지원한다(D-87). 분모가 한국 교역으로 확정된 품목별 비중은 LLM SQL로 조회한다
+        # (§11.1 custom_query). 해외 수입시장 기준은 위에서 미지원으로 끝났다. 분모가 모호하면 위에서 먼저 되묻는다.
+        sql = next((s for s in task.steps if s.tool == 'query_trade_data'), None)
+        if sql and sql.args.get('template') == 'SHARE':
+            sql.args = {'template': 'LLM_SQL'}
+            task.custom_query = task.custom_query or task.question[:MAX_TEXT_CHARS]
     if task.intent == 'RANKING':
         key = f'{task.task_id}:ranking_group'
         out.ranking_group = task.resolved.get(key, {}).get('ranking_group', slots.ranking_group)

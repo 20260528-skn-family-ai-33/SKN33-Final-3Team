@@ -149,27 +149,47 @@ class DraftTitleTest(unittest.TestCase):
 
 
 class ProductShareTest(unittest.TestCase):
-    def test_product_share_goes_to_llm_sql(self):
+    """품목별 비중(MARKET_SHARE + ranking_group=HS6): 분모를 확인한 뒤에만 LLM SQL로 조회한다(D-87)."""
+    def check(self, slots, resolved=None):
+        from backend.app.agents.conditions import check_conditions
         from backend.app.agents.planner import build_plan
-        output = PlannerOutput(tasks=[{'intent': 'MARKET_SHARE', 'question': '2025년 품목별 수출 비중',
-                                       'slots': {'ranking_group': 'HS6'}}])
-        plan, _ = build_plan(output)
-        task = plan.tasks[0]
-        self.assertEqual(task.intent, 'STATISTICS')
-        self.assertEqual(task.custom_query, '2025년 품목별 수출 비중')
-        self.assertIsNone(task.slots.ranking_group)
-        self.assertEqual(next(s for s in task.steps if s.tool == 'query_trade_data').args, {'template': 'LLM_SQL'})
+        from backend.app.api.database import Database, Store
+        from backend.tests.api_support import reference_data, test_engine
+        from backend.tests.test_agent_state import state
+        engine, meta = test_engine(); self.addCleanup(engine.dispose)
+        reference_data(engine, meta)
+        db = Database(engine); db.settings = Settings({'API_HS_VECTOR_ENABLED': 'false'})
+        connection = engine.connect(); self.addCleanup(connection.close)
+        s = state(); s.input.question = '2025년 품목별 수출 비중'
+        s.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'MARKET_SHARE', 'question': s.input.question,
+                                                     'slots': {'period': {'start': '2025-01-01', 'end': '2025-12-01'}, **slots}}]))
+        task = s.plan.tasks[0]; task.resolved.update(resolved or {})
+        check_conditions(Store(db, connection), s, task.steps[0])
+        return s, task, next(x for x in task.steps if x.tool == 'query_trade_data')
 
-    def test_foreign_market_product_share_keeps_unsupported_path(self):
-        from backend.app.agents.planner import build_plan
-        output = PlannerOutput(tasks=[{'intent': 'MARKET_SHARE', 'question': '베트남 수입시장에서 한국 품목별 점유율',
-                                       'slots': {'ranking_group': 'HS6', 'share_basis': 'FOREIGN_IMPORT_MARKET'}}])
-        self.assertEqual(build_plan(output)[0].tasks[0].intent, 'MARKET_SHARE')
+    def test_ambiguous_basis_is_asked_first(self):
+        s, task, sql = self.check({'ranking_group': 'HS6'})
+        self.assertEqual(s.pending.kind, 'SHARE_BASIS')
+        self.assertIn('품목별', s.pending.choices[0].label)
+        self.assertEqual(sql.args, {'template': 'SHARE'})
 
-    def test_country_share_unchanged(self):
-        from backend.app.agents.planner import build_plan
-        plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'MARKET_SHARE', 'question': '2025년 국가별 수출 비중'}]))
-        self.assertEqual(plan.tasks[0].intent, 'MARKET_SHARE')
+    def test_korea_basis_goes_to_llm_sql(self):
+        for slots, resolved in [({'ranking_group': 'HS6', 'share_basis': 'KOREA_TRADE_PARTNER'}, None),
+                                ({'ranking_group': 'HS6'}, {'t1:share_basis': {'share_basis': 'KOREA_TRADE_PARTNER'}})]:
+            with self.subTest(slots=slots, resolved=resolved):
+                s, task, sql = self.check(slots, resolved)
+                self.assertIsNone(s.pending)
+                self.assertEqual((task.steps[0].status, sql.args, task.custom_query),
+                                 ('DONE', {'template': 'LLM_SQL'}, '2025년 품목별 수출 비중'))
+
+    def test_foreign_basis_stays_unsupported(self):
+        s, task, sql = self.check({'ranking_group': 'HS6', 'share_basis': 'FOREIGN_IMPORT_MARKET'})
+        self.assertEqual(task.steps[0].status, 'FAILED')
+        self.assertIn('지원하지 않습니다', s.results[task.steps[0].step_id].error)
+
+    def test_country_share_keeps_template(self):
+        s, task, sql = self.check({'share_basis': 'KOREA_TRADE_PARTNER'})
+        self.assertEqual((task.steps[0].status, sql.args), ('DONE', {'template': 'SHARE'}))
 
 
 class CheckBudgetTest(unittest.TestCase):
