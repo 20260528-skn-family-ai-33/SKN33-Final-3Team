@@ -259,8 +259,10 @@ class Services:
     def verify(self,state):
         def check(_):
             with self.read_store() as store:
-                from backend.app.agents.templates import _names
-                countries,products=_names(store)
+                # 품목명은 결과 행의 이름만 쓴다(verify가 근거에서 모은다). 전체 품목표의 1·2글자 이름('위'·'기타')이
+                # '1위'·'기타 국가'를 품목으로 읽게 만든다. 국가명은 결과 밖 국가 언급(D-77)을 잡도록 사전 전체를 쓴다.
+                table=store.t('country')
+                countries=[r['name_ko'] for r in store.rows(select(table).where(table.c.country_role=='COUNTRY'))]
                 snapshots={}
                 for task in state.plan.tasks:
                     for step in task.steps:
@@ -272,7 +274,7 @@ class Services:
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
-            verify(state,known_names={*countries.values(),*products.values()},snapshots=snapshots)
+            verify(state,known_names=set(countries),snapshots=snapshots)
         self.execution.call('verify',budget.seconds(self.settings,'verify'),check)
         self.execution.sync_budget(state)
 

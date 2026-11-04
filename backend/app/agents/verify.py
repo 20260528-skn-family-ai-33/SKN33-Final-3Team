@@ -4,19 +4,29 @@ from decimal import Decimal, ROUND_HALF_UP,localcontext
 from backend.app.agents.compose import fixed_conclusion
 from backend.app.agents.state import SentenceCheck, Verification
 
-TOKEN = re.compile(r'(?<![\d.])(?P<value>[+-]?\d[\d,]*(?:\.\d+)?)\s*(?P<scale>[만억조])?\s*(?P<unit>%p|%|달러|USD|배|위|개|건|kg)?', re.I)
+# 앞이 영문이면 이름의 일부다('HS6'의 6, 'Q3'의 3).
+TOKEN = re.compile(r'(?<![\d.A-Za-z])(?P<value>[+-]?\d[\d,]*(?:\.\d+)?)\s*(?P<scale>[만억조])?\s*(?P<unit>%p|%|달러|USD|배|위|개|건|kg)?', re.I)
 DATE = re.compile(r'(?<!\d)(\d{4})\s*(?:년\s*(?:(\d{1,2})\s*월)?|-(\d{2})(?:-\d{2})?)|(\d{1,3})\s*(개월|월)')
 SCALE = {None:1,'만':10**4,'억':10**8,'조':10**12}
 PERIOD_AMOUNTS = {'total_usd','monthly_avg_usd','verified_subtotal_usd',
                   'compare_total_usd','compare_monthly_avg_usd','compare_verified_subtotal_usd'}
+# 저장 행에는 월마다 같은 기간 값이 붙어 있다. change_pct도 두 기간 전체를 비교한 값이라 월에 묶지 않는다.
+PERIOD_KEYS = PERIOD_AMOUNTS | {'change_pct'}
+CHANGE_KEYS = {'change_pct','yoy_pct','mom_pct','growth_pct'}
 DIRECTION = re.compile(r'과거|지난|직전|최근|앞선|향후|앞으로|미래|다가올|다음|예측|예상|전망')
 PAST_WORDS = {'과거','지난','직전','최근','앞선'}
 # "1억 2,346만 달러"는 금액 하나다. 두 숫자로 나누지 않도록 만 단위 한 숫자(12346만)로 바꿔 대조한다.
 COMPOUND = re.compile(r'(?<![\d.])(?P<sign>[+-]?)(?P<eok>\d[\d,]*)\s*억\s*(?P<man>\d[\d,]*)\s*만')
-# 값 바로 뒤의 증감 표현. "5.2% 감소"는 -5.2%다. "~로 감소"는 바뀐 뒤의 값이라 방향으로 보지 않는다.
-CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나)?\s*(?:(?P<down>감소|줄|하락|축소|떨어|낮아|내려)|(?P<up>증가|늘|상승|확대|성장|올라|오르|높아))')
+# 값 바로 뒤의 증감 표현. "5.2% 감소"·"5.2%의 감소"·"5.2% 낮은"은 -5.2%다. "~로 감소"는 바뀐 뒤의 값이라 방향으로 보지 않는다.
+DOWN_WORDS, UP_WORDS = r'감소|줄|하락|축소|떨어|낮|내려|내린', r'증가|늘|상승|확대|성장|올라|오르|높|올린'
+CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나|의|을|를)?\s*(?:(?P<down>'+DOWN_WORDS+r')|(?P<up>'+UP_WORDS+r'))')
+# 같은 주장 안의 증감 단어("감소율은 5.2%", "감소하여 5.2%"). 비율 값에만 쓰고, 한 방향만 있을 때만 본다.
+DOWN, UP = re.compile(DOWN_WORDS), re.compile(UP_WORDS)
 # 한 문장 안의 주장 경계. 월평균·총액·비중 같은 지표 표현은 그 금액이 있는 주장에서만 본다.
-SEPARATOR = re.compile(r'(?<!\d),|,(?!\d)|[;，]|이며|이고|하고|으며')
+# 값 뒤의 '로'("총 1,410만 달러로 월평균 117.5만 달러")도 주장을 나눈다.
+SEPARATOR = re.compile(r'(?<!\d),|,(?!\d)|[;，]|이며|이고|하고|으며|(?:(?<=달러)|(?<=USD)|(?<=[%위배]))로(?=\s)')
+# 이름은 앞이 글자·숫자가 아닐 때만 찾는다('1위'의 '위'). 영문 이름(국가 코드)은 뒤도 본다('USD'의 'US').
+NAME_EDGE = r'(?<![가-힣A-Za-z0-9])'
 # "상위 2개국", "3곳", "2개 품목"은 조회 대상 수이지 통계 수치가 아니다. TOKEN이 "개"까지 먹으므로 뒤는 "국"부터 본다.
 # 단위가 없거나 "개"인 값만 대상 수로 본다. "상위 10%"·"상위 3.5억 달러"는 그대로 검증한다.
 COUNT_BEFORE = re.compile(r'(?:상위|하위)\s*$')
@@ -90,7 +100,7 @@ def evidence(digest):
         if isinstance(row,list):
             for item in row: yield from walk(item, identities)
         if not isinstance(row,dict): return
-        ids=identities | {str(row[k]) for k in ('name','code','product_name','country_name','country_code','hs_code','hs6','month','trade_month') if row.get(k)}
+        ids=identities | {str(row[k]) for k in ('name','label','code','product_name','country_name','country_code','hs_code','hs6','month','trade_month') if row.get(k)}
         for key,value in row.items():
             if isinstance(value,(dict,list)): yield from walk(value,ids)
             elif isinstance(value,(float,int)) and not isinstance(value,bool):
@@ -104,7 +114,7 @@ def evidence(digest):
                 elif key=='compare_amount_usd':
                     if not (month:=_compare_month(digest,row)): continue
                     yield key,Decimal(str(value)),unit,(ids-{str(row.get('month')),str(row.get('trade_month'))})|{month}
-                elif unit and (key in PERIOD_AMOUNTS or not any(
+                elif unit and (key in PERIOD_KEYS or not any(
                         re.fullmatch(r'\d{4}-\d{2}',identity) for identity in ids)):
                     scoped=(ids-{str(row.get('month')),str(row.get('trade_month'))})|_period_scope(digest,key)
                     yield key,Decimal(str(value)),unit,scoped
@@ -123,7 +133,9 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
     dates=list(DATE.finditer(text))
     def names_in(value):
         value=DATE.sub(' ',value)
-        names={name for name in known_names if name and name in value}
+        # 1글자 이름('위'·'조'·'배')은 단위·조사와 구분할 수 없어 이름으로 보지 않는다.
+        names={name for name in known_names if len(name)>1 and name in value and re.search(
+            NAME_EDGE+re.escape(name)+(r'(?![A-Za-z0-9])' if name.isascii() else ''),value)}
         return {name for name in names if not any(name!=other and name in other for other in names)}
     def check_clauses(clauses, require_month):
         inherited=_inherited_names
@@ -178,10 +190,16 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
     if dates and not candidates: ok=False
     text=DATE.sub(' ',text)
     mentioned=names_in(text) or set(_inherited_names)
-    for name in sorted(mentioned,key=len,reverse=True): text=text.replace(name,' ')
     facts=[f for d in candidates for f in evidence(d) if mentioned<=f[3]
            and not (('수입' in sentence and d.get('trade_flow')=='EXPORT') or
                     ('수출' in sentence and d.get('trade_flow')=='IMPORT'))]
+    if len(mentioned)>1 and not facts and not _require_month:
+        # "미국은 3억 달러, 중국은 2억 달러": 한 행에 두 국가가 없으면 이름마다 주장을 나눠 대조한다.
+        starts=sorted({m.start() for name in mentioned for m in re.finditer(NAME_EDGE+re.escape(name),text)})
+        if len(starts)>1:
+            cuts=[0,*starts[1:],len(text)]
+            return check_clauses([text[a:b] for a,b in zip(cuts,cuts[1:])],False)
+    for name in sorted(mentioned,key=len,reverse=True): text=text.replace(name,' ')
     tokens=[m for m in TOKEN.finditer(text) if not _target_count(text,m)]
     # 숫자 없는 문장("수출액은 모두 미국 달러(USD) 단위입니다")은 수치 검증 대상이 아니다. 기간 표현만 본다.
     if mentioned and not facts and tokens: ok=False
@@ -195,6 +213,11 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
         claim=_clause(text,match.start(),match.end())
         change=CHANGE.match(text,match.end()) if unit in ('%','%p','USD') else None
         direction=('down' if change['down'] else 'up') if change else None
+        claim_direction=False   # 주장 안의 증감 단어에서 정한 방향은 증감률 지표에만 적용한다
+        if not direction and unit in ('%','%p'):
+            rest=claim.replace(match.group(),' ',1)
+            down,up=bool(DOWN.search(rest)),bool(UP.search(rest))
+            if down!=up: direction,claim_direction='down' if down else 'up',True
         if direction and raw[0] in '+-' and (value<0)!=(direction=='down'):
             ok=False  # "+5.2% 감소"처럼 부호와 증감 표현이 어긋난다
             continue
@@ -242,7 +265,7 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
                             if re.search(label+r'(?:별|\s*(?:중|내|안))?\s*순위',claim)}
                 if directions and directions!={key}: return False
             claimed=value
-            if direction:  # 증감 표현이 붙은 값은 근거의 부호와 같은 방향이어야 한다
+            if direction and (not claim_direction or key in CHANGE_KEYS or key.endswith('_pp')):  # 증감 표현이 붙은 값은 근거의 부호와 같은 방향이어야 한다
                 if amount==0 or (amount<0)!=(direction=='down'): return False
                 amount,claimed=abs(amount),abs(value)
             with localcontext() as context:
