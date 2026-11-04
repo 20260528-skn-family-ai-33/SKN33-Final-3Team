@@ -21,9 +21,12 @@ def source_versions(store,state,task):
 
 
 def resolve(store,state,task,out):
-    for binding,(snapshot,source) in zip(task.input_bindings,source_versions(store,state,task),strict=True):
-        stored=snapshot['conditions']
-        out=Conditions.model_validate({k:v for k,v in stored.items() if k in Conditions.model_fields})
+    # 기준 조건은 첫 선행 결과의 저장 조건으로 한 번만 만든다. 바인딩마다 새로 만들면 앞 바인딩이 고른
+    # 국가·품목이 뒤 바인딩의 저장 조건(전체 국가 등)으로 덮인다(국가 상위 2 + 품목 상위 1 → country_codes=[]).
+    for index,(binding,(snapshot,source)) in enumerate(zip(task.input_bindings,source_versions(store,state,task),strict=True)):
+        if index==0:
+            stored=snapshot['conditions']
+            out=Conditions.model_validate({k:v for k,v in stored.items() if k in Conditions.model_fields})
         selection=binding.selection
         if not selection: continue
         key=f'{task.task_id}:input:{binding.source_step_id}'
