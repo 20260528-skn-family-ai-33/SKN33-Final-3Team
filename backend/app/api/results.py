@@ -58,7 +58,8 @@ def display_columns(columns, rows, meta=None):
     if any('month' in r and 'verified_months' in r for r in rows):
         monthly_compare=any(r.get('compare_amount_usd') is not None for r in rows)
         # 길이가 다른 기간 비교(D-84)는 월별 비교 금액이 없고 양쪽 총액·월평균·검증 월 수가 비교 근거다. 그때는 숨기지 않는다.
-        period_compare=not monthly_compare and any(r.get('compare_requested_months') for r in rows)
+        period_compare=not monthly_compare and any(r.get('compare_requested_months')
+                                                   and r.get('compare_requested_months')!=r.get('requested_months') for r in rows)
         if not period_compare:
             hidden.update(('total_usd','compare_total_usd','change_pct','monthly_avg_usd',
                 'compare_monthly_avg_usd','verified_months','requested_months',

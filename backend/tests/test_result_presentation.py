@@ -52,6 +52,9 @@ class ResultPresentationTest(unittest.TestCase):
         for label in ('기간 합계', '비교 기간 합계', '월평균 금액', '비교 기간 월평균', '집계된 개월 수', '비교 집계 개월 수'):
             self.assertIn(label, labels)
         self.assertNotIn('비교 기간 금액', labels)
+        # 같은 길이 비교에서 비교 월이 아직 집계되지 않았을 뿐이면 월별 표 그대로 둔다.
+        same = {**row, 'requested_months': 12, 'compare_requested_months': 12}
+        self.assertNotIn('기간 합계', [c['label'] for c in display_columns([{'key': k, 'label': k} for k in same], [same])])
 
     def test_country_filename_uses_reference_name(self):
         engine,meta=test_engine()
