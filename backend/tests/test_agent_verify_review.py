@@ -92,5 +92,28 @@ class ChangeWordTest(unittest.TestCase):
         self.assertFalse(check_sentence('미국 수출 증가율은 5.2%입니다.', [trend_rows(-5.2)], known_names={'미국'})[0])
 
 
+class ReviewFollowupTest(unittest.TestCase):
+    """2차 검토: 국가별 분리의 기간 검사, '대중국', 넓은 증감 단어, 비중을 증감률 근거로 쓰는 문제."""
+    def test_split_claims_keep_period_check(self):
+        known = {'미국', '중국'}
+        self.assertFalse(check_sentence('2023년 미국은 3억 달러, 중국은 2억 달러입니다.', [ranking()], known_names=known)[0])
+        self.assertTrue(check_sentence('2025년 미국은 3억 달러, 중국은 2억 달러입니다.', [ranking()], known_names=known)[0])
+
+    def test_dae_prefix_names_country(self):
+        known = {'미국', '중국'}
+        self.assertTrue(check_sentence('한국의 대중국 수출은 2억 달러입니다.', [ranking()], known_names=known)[0])
+        self.assertFalse(check_sentence('한국의 대중국 수출은 3억 달러입니다.', [ranking()], known_names=known)[0])
+
+    def test_unrelated_words_are_not_directions(self):
+        for sentence in ['수출액이 가장 높은 미국의 증감률은 -5.2%입니다.', '미국 수출 증감률은 -5.2%입니다(오늘 기준).']:
+            with self.subTest(sentence=sentence):
+                self.assertTrue(check_sentence(sentence, [trend_rows(-5.2)], known_names={'미국'})[0])
+
+    def test_share_does_not_ground_change_claim(self):
+        digest = ranking(); digest['top'][0]['share_pct'] = 5.0
+        self.assertFalse(check_sentence('미국 수출이 5.0% 증가했습니다.', [digest], known_names={'미국', '중국'})[0])
+        self.assertTrue(check_sentence('미국 수출 비중은 5.0%입니다.', [digest], known_names={'미국', '중국'})[0])
+
+
 if __name__ == '__main__':
     unittest.main()

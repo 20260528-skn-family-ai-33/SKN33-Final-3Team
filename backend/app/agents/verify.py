@@ -1,5 +1,6 @@
 """Match generated claims to the same bounded evidence used by compose."""
 import re
+from functools import lru_cache
 from decimal import Decimal, ROUND_HALF_UP,localcontext
 from backend.app.agents.compose import fixed_conclusion
 from backend.app.agents.state import SentenceCheck, Verification
@@ -21,16 +22,24 @@ COMPOUND = re.compile(r'(?<![\d.])(?P<sign>[+-]?)(?P<eok>\d[\d,]*)\s*억\s*(?P<m
 DOWN_WORDS, UP_WORDS = r'감소|줄|하락|축소|떨어|낮|내려|내린', r'증가|늘|상승|확대|성장|올라|오르|높|올린'
 CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나|의|을|를)?\s*(?:(?P<down>'+DOWN_WORDS+r')|(?P<up>'+UP_WORDS+r'))')
 # 같은 주장 안의 증감 단어("감소율은 5.2%", "감소하여 5.2%"). 비율 값에만 쓰고, 한 방향만 있을 때만 본다.
-DOWN, UP = re.compile(DOWN_WORDS), re.compile(UP_WORDS)
+# 값과 떨어진 곳에서는 활용형까지 본다. '높'·'늘'만으로는 '가장 높은'·'오늘'도 방향으로 읽는다.
+DOWN = re.compile(r'감소|줄어|줄었|줄고|하락|축소|떨어|내려|내린')
+UP = re.compile(r'증가|늘어|늘었|늘고|상승|확대|성장|올라|오르|올린')
 # 한 문장 안의 주장 경계. 월평균·총액·비중 같은 지표 표현은 그 금액이 있는 주장에서만 본다.
 # 값 뒤의 '로'("총 1,410만 달러로 월평균 117.5만 달러")도 주장을 나눈다.
 SEPARATOR = re.compile(r'(?<!\d),|,(?!\d)|[;，]|이며|이고|하고|으며|(?:(?<=달러)|(?<=USD)|(?<=[%위배]))로(?=\s)')
 # 이름은 앞이 글자·숫자가 아닐 때만 찾는다('1위'의 '위'). 영문 이름(국가 코드)은 뒤도 본다('USD'의 'US').
-NAME_EDGE = r'(?<![가-힣A-Za-z0-9])'
+# 단, '대중국'·'대미국'처럼 낱말 첫머리의 '대(對)'는 허용한다.
+NAME_EDGE = r'(?:(?<![가-힣A-Za-z0-9])|(?<=(?<![가-힣])대))'
 # "상위 2개국", "3곳", "2개 품목"은 조회 대상 수이지 통계 수치가 아니다. TOKEN이 "개"까지 먹으므로 뒤는 "국"부터 본다.
 # 단위가 없거나 "개"인 값만 대상 수로 본다. "상위 10%"·"상위 3.5억 달러"는 그대로 검증한다.
 COUNT_BEFORE = re.compile(r'(?:상위|하위)\s*$')
 COUNT_AFTER = re.compile(r'\s*(?:곳|개국|국|개?\s*(?:국가|품목|시장))')
+
+
+@lru_cache(maxsize=4096)
+def _name_pattern(name):
+    return re.compile(NAME_EDGE+re.escape(name)+(r'(?![A-Za-z0-9])' if name.isascii() else ''))
 
 
 def _target_count(text, match):
@@ -134,8 +143,7 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
     def names_in(value):
         value=DATE.sub(' ',value)
         # 1글자 이름('위'·'조'·'배')은 단위·조사와 구분할 수 없어 이름으로 보지 않는다.
-        names={name for name in known_names if len(name)>1 and name in value and re.search(
-            NAME_EDGE+re.escape(name)+(r'(?![A-Za-z0-9])' if name.isascii() else ''),value)}
+        names={name for name in known_names if len(name)>1 and name in value and _name_pattern(name).search(value)}
         return {name for name in names if not any(name!=other and name in other for other in names)}
     def check_clauses(clauses, require_month):
         inherited=_inherited_names
@@ -188,6 +196,7 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
                     min(12,(int(p['end'][:4])-int(p['start'][:4]))*12+int(p['end'][5:7])-int(p['start'][5:7])+1))) for p in windows)
         if dates_ok: candidates.append(d)
     if dates and not candidates: ok=False
+    dated=text
     text=DATE.sub(' ',text)
     mentioned=names_in(text) or set(_inherited_names)
     facts=[f for d in candidates for f in evidence(d) if mentioned<=f[3]
@@ -195,10 +204,12 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
                     ('수출' in sentence and d.get('trade_flow')=='IMPORT'))]
     if len(mentioned)>1 and not facts and not _require_month:
         # "미국은 3억 달러, 중국은 2억 달러": 한 행에 두 국가가 없으면 이름마다 주장을 나눠 대조한다.
-        starts=sorted({m.start() for name in mentioned for m in re.finditer(NAME_EDGE+re.escape(name),text)})
+        # 날짜가 있는 원문에서 나누고, 날짜가 없는 조각에는 문장의 기간 표현을 붙여 조각마다 기간도 다시 본다.
+        starts=sorted({m.start() for name in mentioned for m in _name_pattern(name).finditer(dated)})
         if len(starts)>1:
-            cuts=[0,*starts[1:],len(text)]
-            return check_clauses([text[a:b] for a,b in zip(cuts,cuts[1:])],False)
+            cuts=[0,*starts[1:],len(dated)]
+            when=' '.join(m.group() for m in dates)
+            return check_clauses([(c if DATE.search(c) else when+' '+c) for c in (dated[a:b] for a,b in zip(cuts,cuts[1:]))],False)
     for name in sorted(mentioned,key=len,reverse=True): text=text.replace(name,' ')
     tokens=[m for m in TOKEN.finditer(text) if not _target_count(text,m)]
     # 숫자 없는 문장("수출액은 모두 미국 달러(USD) 단위입니다")은 수치 검증 대상이 아니다. 기간 표현만 본다.
@@ -264,6 +275,8 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
                 directions={rank_key for label,rank_key in (('품목','country_rank'),('국가','product_rank'))
                             if re.search(label+r'(?:별|\s*(?:중|내|안))?\s*순위',claim)}
                 if directions and directions!={key}: return False
+            # 증감 표현이 붙은 비율은 증감률이다. 비중을 근거로 "5% 증가"를 통과시키지 않는다.
+            if direction and expected in ('%','%p') and 'share' in key: return False
             claimed=value
             if direction and (not claim_direction or key in CHANGE_KEYS or key.endswith('_pp')):  # 증감 표현이 붙은 값은 근거의 부호와 같은 방향이어야 한다
                 if amount==0 or (amount<0)!=(direction=='down'): return False

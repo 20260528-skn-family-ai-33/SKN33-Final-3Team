@@ -88,8 +88,15 @@ class Services:
                 self.execution.transaction(lambda store,job:preview(store,current,task))
             with self.read_store() as store:
                 check_conditions(store,state,step,resolve_bindings=resolve_bindings,confirm_report=create_preview)
-        self.execution.call('check',budget.seconds(self.settings,'check'),work,
-                            finish_reserve=budget.finishing_seconds(state,self.settings))
+        try:
+            self.execution.call('check',budget.seconds(self.settings,'check'),work,
+                                finish_reserve=budget.finishing_seconds(state,self.settings))
+        except ApiError as exc:
+            if exc.code!='RUN_TIMEOUT': raise
+            # 다음 하위 질문의 조건 확인을 시작할 시간이 없을 뿐이다. 이 단계만 실패로 두고, 마무리 몫으로 남긴
+            # 시간에 이미 끝난 결과로 답한다(D-72·D-85). tool 노드의 RUN_TIMEOUT 처리와 같다.
+            step.status='FAILED'
+            state.results[step.step_id]=ToolResult(status='FAILED',error=exc.message)
 
     def resume(self,state,answer):
         pending=state.pending
@@ -259,10 +266,12 @@ class Services:
     def verify(self,state):
         def check(_):
             with self.read_store() as store:
-                # 품목명은 결과 행의 이름만 쓴다(verify가 근거에서 모은다). 전체 품목표의 1·2글자 이름('위'·'기타')이
-                # '1위'·'기타 국가'를 품목으로 읽게 만든다. 국가명은 결과 밖 국가 언급(D-77)을 잡도록 사전 전체를 쓴다.
-                table=store.t('country')
-                countries=[r['name_ko'] for r in store.rows(select(table).where(table.c.country_role=='COUNTRY'))]
+                # 결과 밖 국가·품목 언급(D-77)을 잡도록 국가 사전 전체와 3글자 이상 품목명을 쓴다. 결과 행의 이름은
+                # verify가 근거에서 따로 모은다. 전체 품목표의 1·2글자 이름('위'·'배'·'기타')은 '1위'·'2배'·'기타 국가'를
+                # 품목으로 읽게 만들어 넣지 않는다.
+                table,hs=store.t('country'),store.t('hs_code')
+                names=[r['name_ko'] for r in store.rows(select(table).where(table.c.country_role=='COUNTRY'))]
+                names+=[name for name in store.c.scalars(select(hs.c.name_ko).distinct()) if name and len(name)>=3]
                 snapshots={}
                 for task in state.plan.tasks:
                     for step in task.steps:
@@ -274,7 +283,7 @@ class Services:
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
-            verify(state,known_names=set(countries),snapshots=snapshots)
+            verify(state,known_names=set(names),snapshots=snapshots)
         self.execution.call('verify',budget.seconds(self.settings,'verify'),check)
         self.execution.sync_budget(state)
 
