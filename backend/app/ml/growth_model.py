@@ -37,8 +37,11 @@ MEMBERS = T.MEMBERS  # {"base": "none"(v1), "ext": "first_release"(v3)}
 
 
 def feature_columns(rows, external="none"):
-    """학습 행에 값이 있는 A 후보 피처에서 DROP_FEATURES를 뺀 목록."""
-    return [c for c in T._available(rows, T._candidates(external)) if c not in DROP_FEATURES]
+    """A 후보 피처에서 DROP_FEATURES를 먼저 뺀 뒤, 학습 행에 값이 있는 것만 남긴 목록.
+
+    먼저 빼므로 제외 대상 열이 없는 입력(16개를 미리 지운 표)도 그대로 받는다.
+    """
+    return T._available(rows, [c for c in T._candidates(external) if c not in DROP_FEATURES])
 
 
 def fit(rows, external="none", seed=0, n_jobs=4):

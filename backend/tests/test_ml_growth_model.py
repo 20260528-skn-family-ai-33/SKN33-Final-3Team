@@ -14,6 +14,15 @@ from backend.app.ml.feature_recovery import MARKET, WDI
 from backend.tests.test_ml_experiments import dataset
 
 
+# 2025-08 Holdout(aug_dev/rerun_note.txt v1)에서 검증한 설정. G.HUBER가 바뀌면 이 테스트가 실패해야 한다.
+VERIFIED_HUBER = dict(objective="huber", alpha=1.0, num_leaves=63, n_estimators=1000, learning_rate=.02,
+                      min_child_samples=300, colsample_bytree=.7, subsample=.8, subsample_freq=1, reg_lambda=5)
+VERIFIED_DROP = {"gdp_growth", "region_id", "grp2_c_growth_12m", "news_all_3m", "rel_input_imp_growth_3m",
+                 "imp_hs4_world_growth", "news_3m", "news_change", "grp4_c_growth_3m", "hs4_unit_trend",
+                 "rel_input_imp_growth_12m", "fx_change_12m", "imp_hs4_from_c_growth", "grp4_c_growth_12m",
+                 "country_growth", "grp4_world_growth_12m"}
+
+
 class GrowthModelTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -22,8 +31,19 @@ class GrowthModelTest(unittest.TestCase):
         cls.latest = frame[frame.anchor == frame.anchor.max()]
         cls.bundle = G.fit_members(cls.rows, n_jobs=1)
 
+    def test_settings_match_the_verified_holdout(self):
+        self.assertEqual(G.HUBER, VERIFIED_HUBER)
+        self.assertEqual(set(G.DROP_FEATURES), VERIFIED_DROP)
+        self.assertEqual(len(G.DROP_FEATURES), 16)
+        self.assertEqual(G.BOUNDARY_PCT, 0.0)
+
+    def test_input_without_dropped_columns_gives_the_same_features(self):
+        reduced = self.rows.drop(columns=[c for c in G.DROP_FEATURES if c in self.rows])
+        for external in G.MEMBERS.values():
+            self.assertEqual(G.feature_columns(reduced, external), G.feature_columns(self.rows, external))
+        G.fit(reduced, "first_release", n_jobs=1)  # 열이 없어도 학습된다
+
     def test_features_drop_the_selected_16_and_v1_has_no_external(self):
-        self.assertEqual(len(set(G.DROP_FEATURES)), 16)
         for name, external in G.MEMBERS.items():
             columns = G.feature_columns(self.rows, external)
             self.assertFalse(set(columns) & set(G.DROP_FEATURES), name)
@@ -34,7 +54,7 @@ class GrowthModelTest(unittest.TestCase):
         self.assertEqual(set(self.bundle["members"]), set(G.MEMBERS))
         for member in self.bundle["members"].values():
             params = member["model"].steps[-1][1].get_params()
-            for key, value in G.HUBER.items():
+            for key, value in VERIFIED_HUBER.items():
                 self.assertEqual(params[key], value, key)
             self.assertEqual(member["model"].steps[-1][1].n_features_in_, len(member["features"]))
 
