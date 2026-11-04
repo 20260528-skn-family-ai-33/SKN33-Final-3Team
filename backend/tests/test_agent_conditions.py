@@ -99,6 +99,15 @@ class ConditionTest(unittest.TestCase):
         check_conditions(self.store,self.state,self.step)
         self.assertEqual(self.step.status,'DONE')
         self.assertEqual(self.task.conditions.country_codes,['CN'])
+        # 되묻기로 확정한 새 국가('미구' → 미국)가 있으면 이전 국가를 이어받지 않는다.
+        self.state.input.question='미구는 왜 증가한거야?'
+        self.step.status='PENDING'
+        self.task.slots=TaskSlots(countries=[{'mention':'중국','name':'중국'},{'mention':'미구','name':'미구'}],products=None,recent_months=3)
+        self.task.resolved['t1:country:미구']={'country_codes':['US']}
+        check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'DONE')
+        self.assertEqual(self.task.conditions.country_codes,['US'])
+        del self.task.resolved['t1:country:미구']
         # 같은 국가가 이어받기와 코드 표현으로 두 번 들어와도 하나만 남는다.
         self.state.input.question='CN은 왜 증가한거야?'
         self.step.status='PENDING'
