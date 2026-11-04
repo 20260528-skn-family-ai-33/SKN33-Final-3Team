@@ -113,6 +113,11 @@ def resume(store,job,data,client_key=None):
     if state.pending.kind=='REPORT_CONFIRM' and 'text' in data:
         from backend.app.api.chat_slots import country_key
         if country_key(data['text']) in ('예','네','응','좋아','동의','확인','적용','생성','아니','아니오','아니요','싫어','거절','취소'):
+            # 승인·거절은 버튼으로만 받는다. 그래도 메시지 키는 남겨, 응답 유실 뒤 같은 메시지를 재시도하면
+            # 새 작업이나 다음 되묻기의 답이 아니라 이 작업으로 돌아가게 한다.
+            if client_key:
+                job['payload_json'].setdefault('direct_message_keys',{})[digest([job['subject_user_id'],client_key])]=digest(data['text'])
+                jobs._save_chat(store,job)
             return {'job':view_job(job)}
     jobs.remember_prompt(job,job['result_json']['clarification'],data)
     ledger=budget.new_round(uuid4().hex,job['claim_token'])

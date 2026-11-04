@@ -332,10 +332,16 @@ class BackendApiTest(unittest.TestCase):
         self.assertTrue(prompt['allow_text']); self.assertIn('expires_at',prompt)  # 화면의 만료 시각 표시(API-37)
         url=f'chat/jobs/{jid}/clarifications'
         self.assertEqual(self.post(url,{'clarification_id':cid,'text':'네'}).json()['job']['status'],'NEEDS_INPUT')
+        # 입력창으로 보낸 '네'는 승인이 아니지만 메시지 키는 남는다. 다른 탭에서 확인을 마친 뒤 같은 메시지를
+        # 재시도해도 새 작업이나 다른 되묻기의 답이 되지 않고 이 작업을 돌려준다.
+        yes={'question':'네','client_message_id':'yes-reply'}
+        self.assertEqual(self.post(f'chat/sessions/{sid}/messages',yes).json()['job']['status'],'NEEDS_INPUT')
         confirmation={'preview_id':prompt['report_preview']['preview_id'],'confirm':True,'formats':['DOCX']}
         self.assertEqual(self.post(url,{'clarification_id':cid,'report_confirmation':confirmation}).status_code,202)
         self.assertTrue(run_once(db,self.settings))
         self.assertEqual(poll()['status'],'WAITING_REPORT')
+        retried=self.post(f'chat/sessions/{sid}/messages',yes)
+        self.assertEqual((retried.status_code,retried.json()['job']['job_id']),(202,jid),retried.json())
         self.settings.values['API_CHAT_AGENT_ENABLED']='false'
         # File generation has its own worker tests. Simulate its durable completion signal.
         with self.engine.begin() as connection:
@@ -1087,15 +1093,19 @@ class BackendApiTest(unittest.TestCase):
         from contextlib import contextmanager
         self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
         jid=self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':'db-failure'}).json()['job']['job_id']
-        original=self.engine.begin; count=0
+        from backend.app.api import jobs as job_queue
+        original=self.engine.begin; claim=job_queue.claim; claimed=[]
+        def claim_once(store):
+            job=claim(store); claimed.append(job); return job
         @contextmanager
         def flaky():
-            nonlocal count
-            count+=1
-            if count==3: raise OSError('temporary connection failure')  # 1: wake_ready 검사, 2: claim, 3: 실행 시작
+            # 작업을 받은 뒤 첫 연결(실행 시작)만 실패시킨다. 그 앞의 연결 수(리포트 대기 검사 등)와 무관하다.
+            if claimed and claimed[0] is not None and len(claimed)==1:
+                claimed.append('failed'); raise OSError('temporary connection failure')
             with original() as c: yield c
-        with patch.object(self.engine,'begin',side_effect=flaky):
+        with patch.object(self.engine,'begin',side_effect=flaky), patch.object(job_queue,'claim',side_effect=claim_once):
             self.assertTrue(run_once(self.app.state.database,self.settings))
+        self.assertEqual(claimed[-1],'failed')
         state=self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
         self.assertEqual(state['status'],'FAILED'); self.assertEqual(state['error']['code'],'JOB_FAILED')
 
