@@ -105,6 +105,17 @@ test('duplicate current-period results with different previous-period settings f
 })
 
 
+test('results over the comparison API limit stay separate instead of failing as one group',async()=>{
+ const {comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
+ const period={start:'2026-01-01',end:'2026-02-28'}
+ const codes=n=>Array.from({length:n},(_,i)=>'C'+String(i).padStart(2,'0'))
+ const tasks=[codes(11),codes(21).slice(11)].map((c,i)=>({task_id:'t'+i,intent:'STATISTICS',conditions:{period,trade_flow:'EXPORT',country_codes:c,hs_items:[]}}))
+ const tables=tasks.map((t,i)=>({task_id:t.task_id,result_id:'r'+i,meta:{kind:'TREND'},rows:t.conditions.country_codes.map(country_code=>({country_code}))}))
+ assert.equal(comparisonGroups({tasks,tables}).length,0)
+ assert.equal(comparisonGroups({tasks:tasks.slice(0,1),tables:tables.slice(0,1)}).length,1)
+})
+
+
 test('job completion received after the message read displays its saved answer once',async()=>{
  const {completedMessages}=await import('../src/pages/analysis/completedMessages.js')
  const rows=[{message_id:'1',role:'USER',job:{job_id:'1',status:'RUNNING'}}]

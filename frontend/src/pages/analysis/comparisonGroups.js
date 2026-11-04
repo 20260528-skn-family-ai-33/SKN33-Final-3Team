@@ -13,6 +13,8 @@ export function comparisonGroups(answer) {
     const tasks=answer.tasks.filter(t=>group.tables.some(table=>table.task_id===t.task_id))
     tasks.forEach(t=>t.conditions.country_codes?.forEach(c=>codes.add(c)))
     const products=new Set(tasks.flatMap(t=>t.conditions.hs_items?.map(h=>h.hs_ver+h.hs_code)||[]))
+    // 통합 비교 API 상한(결과 3개·국가 20개, comparison_results.py)을 넘으면 묶지 않고 각 결과를 따로 보여 준다
+    if(group.tables.length>3||codes.size>20)return false
     return group.tables.length>1||codes.size>1||products.size>1
   })
 }
