@@ -33,12 +33,49 @@ class MarketTest(unittest.TestCase):
         provider.return_value.to_dict.return_value = [
             {'anchor': '2026-09-01', 'country_code': 'VN', 'hs6': '150920', 'country_rank': 2, 'country_size': 50,
              'product_rank': 1, 'product_size': 30, 'growth_pct': 3.0, 'exp_12m': 500000}]
-        result = predict(SimpleNamespace(conditions=conditions), {}, provider, {'model': 'm'}, codes={'150930': '150920'})
+        result = predict(SimpleNamespace(conditions=conditions), {}, provider, {'model': 'm'},
+                         codes={('150930', 'HS2022'): '150920'})
         provider.assert_called_once_with({}, country_code=None, hs6='150920', top=5)
         self.assertEqual(result.result.status, 'OK')
-        self.assertEqual(result.rows[0]['hs6'], '150930')
-        # 묶음 대표 코드로 조회한 것은 누락이 아니다. 완전한 결과이고 안내는 조건 확인의 적용 조건에 남긴다.
-        self.assertEqual((result.result.completeness, result.meta['merged_codes']), ('COMPLETE', {'150930': '150920'}))
+        self.assertEqual((result.rows[0]['hs6'], result.rows[0]['hs_ver']), ('150930', 'HS2022'))
+        # 묶음 대표 코드로 조회한 것은 누락이 아니다. 완전한 결과이고 안내는 ML 단계의 적용 조건에 남긴다.
+        self.assertEqual(result.result.completeness, 'COMPLETE')
+
+    def test_same_digits_in_two_editions_stay_separate(self):
+        conditions = Conditions(hs_items=[{'hs_code': '150910', 'hs_ver': 'HS2017'}, {'hs_code': '150910', 'hs_ver': 'HS2022'}])
+        base = {'anchor': '2026-09-01', 'country_code': 'VN', 'country_rank': 2, 'country_size': 50,
+                'product_rank': 1, 'product_size': 30, 'growth_pct': 3.0, 'exp_12m': 500000}
+        provider = Mock(side_effect=[SimpleNamespace(to_dict=lambda orient: [{**base, 'hs6': '150920'}]),
+                                     SimpleNamespace(to_dict=lambda orient: [{**base, 'hs6': '150910'}])])
+        result = predict(SimpleNamespace(conditions=conditions), {}, provider, {'model': 'm'},
+                         codes={('150910', 'HS2017'): '150920'})
+        self.assertEqual([c.kwargs['hs6'] for c in provider.call_args_list], ['150920', '150910'])
+        self.assertEqual([(r['hs6'], r['hs_ver']) for r in result.rows], [('150910', 'HS2017'), ('150910', 'HS2022')])
+
+    def test_hs2017_item_keeps_its_edition_for_names(self):
+        conditions = Conditions(hs_items=[{'hs_code': '150910', 'hs_ver': 'HS2017'}])
+        provider = Mock()
+        provider.return_value.to_dict.return_value = [
+            {'anchor': '2026-09-01', 'country_code': 'VN', 'hs6': '150920', 'country_rank': 2, 'country_size': 50,
+             'product_rank': 1, 'product_size': 30, 'growth_pct': 3.0, 'exp_12m': 500000}]
+        result = predict(SimpleNamespace(conditions=conditions), {}, provider, {'model': 'm'},
+                         codes={('150910', 'HS2017'): '150920'})
+        self.assertEqual((result.rows[0]['hs6'], result.rows[0]['hs_ver']), ('150910', 'HS2017'))
+
+    def test_prediction_chart_keeps_item_edition(self):
+        from backend.app.agents.charts import build_chart
+        task = SimpleNamespace(task_id='t1', conditions=Conditions(hs_items=[{'hs_code': '150910', 'hs_ver': 'HS2017'}]))
+        row = {'anchor': '2026-09-01', 'hs6': '150910', 'hs_ver': 'HS2017', 'product_rank': 1, 'country_rank': 3,
+               'country_size': 50, 'product_size': 30, 'growth_pct': 3.0, 'exp_12m': 500000}
+        rows = [{**row, 'country_code': 'VN', 'name': '베트남'}, {**row, 'country_code': 'US', 'name': '미국', 'product_rank': 2},
+                {**row, 'hs6': '330499', 'hs_ver': 'HS2022', 'country_code': 'JP', 'name': '일본'}]
+        snapshot = {'meta': {'kind': 'PREDICTION', 'group_by': 'HS6'}, 'rows': rows}
+        with patch('backend.app.agents.charts.read_snapshot', return_value=snapshot):
+            result, _, _ = build_chart(None, 1, task, 'r')
+            self.assertEqual([(p.hs_code, p.hs_ver) for p in result.chart_selector.hs_items],
+                             [('150910', 'HS2017'), ('330499', 'HS2022')])
+            chosen, _, _ = build_chart(None, 1, task, 'r', {'hs_code': '150910', 'hs_ver': 'HS2017'})
+        self.assertEqual(chosen.chart.labels, ['베트남', '미국'])
 
     def test_model_codes_reads_correlation_groups(self):
         from backend.app.agents.market import model_codes
@@ -54,9 +91,9 @@ class MarketTest(unittest.TestCase):
         with engine.connect() as c:
             hs = lambda code, ver='HS2022': SimpleNamespace(hs_code=code, hs_ver=ver)
             store = Store(Database(engine), c)
-            self.assertEqual(model_codes(store, [hs('150930'), hs('330499')]), {'150930': '150920'})
-            # HS2017 품목은 이전 판 코드(old_code)로 찾는다. 같은 숫자의 HS2022 코드로 보지 않는다.
-            self.assertEqual(model_codes(store, [hs('150910', 'HS2017')]), {'150910': '150920'})
+            self.assertEqual(model_codes(store, [hs('150930'), hs('330499')]), {('150930', 'HS2022'): '150920'})
+            # HS2017 품목은 이전 판 코드(old_code)로 찾는다. 같은 숫자의 HS2022 코드로 보지 않는다(키에 판본을 둔다).
+            self.assertEqual(model_codes(store, [hs('150910', 'HS2017')]), {('150910', 'HS2017'): '150920'})
             self.assertEqual(model_codes(store, [hs('150910')]), {})
 
     def test_registry_path_relative_to_monthly_directory_and_ready_only(self):

@@ -54,7 +54,7 @@ def hs6_by_exports(bundle, prefix, countries):
 
 
 def model_codes(store, items):
-    """요청 HS6 품목(hs_code·hs_ver) → 모델의 비교용 코드. 판이 바뀌며 묶인 코드는 묶음 대표 코드(group_code)로
+    """요청 HS6 품목(hs_code·hs_ver) → {(코드, 판본): 모델의 비교용 코드}. 판이 바뀌며 묶인 코드는 묶음 대표 코드(group_code)로
     학습돼 있다(ml.features.hs_key_map과 같은 규칙: HS2022는 new_code, HS2017은 old_code로 찾는다). 대응표에 없으면 자기 코드다."""
     from sqlalchemy import select
     from backend.app.api.common import ApiError
@@ -68,23 +68,23 @@ def model_codes(store, items):
         if not codes: continue
         rows=store.rows(select(column.label('code'),t.c.group_code).where(
             t.c.new_ver=='HS2022',t.c.old_ver=='HS2017',column.in_(codes)).distinct())
-        found.update({r['code']:r['group_code'] for r in rows})
+        found.update({(r['code'],version):r['group_code'] for r in rows})
     return found
 
 
 def predict(task,bundle,predict_markets,versions,top=DEFAULT_MARKET_TOP,codes=None):
-    """codes: 요청 HS6 → 모델 비교용 코드(model_codes). 결과 행은 사용자가 요청한 코드로 돌려준다."""
+    """codes: {(요청 HS6, 판본): 모델 비교용 코드}(model_codes). 결과 행은 사용자가 요청한 코드·판본(hs_ver)으로 돌려준다."""
     codes=codes or {}
     conditions=task.conditions
-    requested=list(product(conditions.country_codes or [None], [p.hs_code for p in conditions.hs_items] or [None]))
+    # 품목은 코드와 판본을 함께 들고 다닌다. 같은 숫자가 두 판본에 있어도(개정 전후 다른 품목) 섞지 않는다.
+    requested=list(product(conditions.country_codes or [None], conditions.hs_items or [None]))
     if requested==[(None,None)]: raise ValueError('국가 또는 HS6 품목이 필요합니다.')
     pair_query = all(requested[0])
     per_target_limit = 1 if pair_query else min(top, MAX_MARKET_ROWS // len(requested))
     rows=[]; targets=[]; missing=[]; seen=set(); anchors=set()
-    merged=[]
-    for country,hs in requested:
-        model_hs=codes.get(hs,hs) if hs else None
-        if model_hs!=hs and hs not in merged: merged.append(hs)
+    for country,item in requested:
+        hs,ver=(item.hs_code,item.hs_ver) if item else (None,'HS2022')
+        model_hs=codes.get((hs,ver),hs) if hs else None
         frame=predict_markets(bundle,country_code=country,hs6=model_hs,top=per_target_limit)
         items=frame.to_dict(orient='records')
         if not items:
@@ -92,7 +92,8 @@ def predict(task,bundle,predict_markets,versions,top=DEFAULT_MARKET_TOP,codes=No
         for r in items:
             r['anchor']=str(r['anchor'])[:10]
             if hs and r['hs6']==model_hs: r['hs6']=hs   # 묶음 대표 코드로 예측한 값을 요청한 코드로 보인다
-            key=(r['anchor'],r['country_code'],r['hs6'])
+            r['hs_ver']=ver   # 품목명은 이 판본으로 찾는다(국가→품목 결과는 모델 코드라 HS2022)
+            key=(r['anchor'],r['country_code'],r['hs6'],r['hs_ver'])
             if (key in seen or len(r['hs6'])!=6 or not r['hs6'].isascii() or not r['hs6'].isdigit()
                     or (country and r['country_code']!=country) or (hs and r['hs6']!=hs)
                     or not 1<=r['country_rank']<=r['country_size'] or not 1<=r['product_rank']<=r['product_size']
@@ -117,8 +118,8 @@ def predict(task,bundle,predict_markets,versions,top=DEFAULT_MARKET_TOP,codes=No
              'latest_available_month':anchor,'rows_total':len(rows),'targets':targets[:MAX_DIGEST_ROWS],
              'truncated':sum(len(t['items']) for t in targets[:MAX_DIGEST_ROWS])<len(rows)})
     reason=[f'{len(missing)}개 대상은 예측 대상이 아닙니다.'] if missing else []
-    # 묶음 대표 코드로 조회한 것은 결과가 빠진 것이 아니다. 안내는 조건 확인이 적용 조건(applied_defaults)에 남긴다.
+    # 묶음 대표 코드로 조회한 것은 결과가 빠진 것이 아니다. 안내는 ML 단계가 적용 조건(applied_defaults)에 남긴다.
     if not pair_query and per_target_limit < top:
         reason.append(f'결과표 최대 {MAX_MARKET_ROWS}행 범위에서 대상마다 최대 {per_target_limit}개를 조회했습니다.')
-    return Analysis(rows,{**info,'missing_targets':missing,'merged_codes':{hs:codes[hs] for hs in merged}},ToolResult(status='OK',period=period,source='ML 모델',
+    return Analysis(rows,{**info,'missing_targets':missing},ToolResult(status='OK',period=period,source='ML 모델',
         digest=dg,completeness='PARTIAL' if reason else 'COMPLETE',limitations=reason),public,[])

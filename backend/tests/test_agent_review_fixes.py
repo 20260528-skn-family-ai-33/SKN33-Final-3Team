@@ -135,6 +135,11 @@ class BindingTest(unittest.TestCase):
             out = resolve(None, state, task, Conditions())
         self.assertEqual(out.country_codes, ['US', 'CN'])
         self.assertEqual([h.hs_code for h in out.hs_items], ['330499'])
+        # 선행 결과 행의 판본을 따른다(HS2017 순위 행에서 고른 품목을 HS2022로 바꾸지 않는다).
+        products['rows'][0]['hs_item']['hs_ver'] = 'HS2017'
+        with patch('backend.app.agents.bindings.source_versions', return_value=[(countries, {}), (products, {})]):
+            out = resolve(None, state, task, Conditions())
+        self.assertEqual([(h.hs_code, h.hs_ver) for h in out.hs_items], [('330499', 'HS2017')])
 
 
 class PromisingMarketHs4Test(unittest.TestCase):

@@ -79,7 +79,9 @@ def resolve(store,state,task,out):
         if dimension=='COUNTRY': out.country_codes=codes
         else:
             from backend.app.agents.state import HsProduct
-            out.hs_items=[HsProduct(hs_code=c,hs_ver='HS2022') for c in codes]
+            # 선행 결과 행의 판본을 따른다(예측 행의 hs_ver, 순위 행의 hs_item). 없으면 HS2022다.
+            editions={code(r):r.get('hs_ver') or (r.get('hs_item') or {}).get('hs_ver') or 'HS2022' for r in reversed(sorted_rows)}
+            out.hs_items=[HsProduct(hs_code=c,hs_ver=editions[c]) for c in codes]
         if len(codes)<n:
             state.results[task.steps[0].step_id]=ToolResult(status='OK',completeness='PARTIAL',
                 limitations=[f'요청한 {n}개 중 {len(codes)}개 대상만 있습니다.'])

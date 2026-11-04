@@ -179,22 +179,27 @@ class Services:
             def model(_):
                 bundle,provider,versions=loaded(self.settings)
                 key=fingerprint(state,step,tool_version='1',versions=versions,source_results=parents)
-                previous=self.results.reuse(state,step,key)
-                if previous: return previous
                 with self.read_store() as store:
                     codes=model_codes(store,[p for p in task.conditions.hs_items if len(p.hs_code)==6])
+                # 묶음 대표 코드로 조회한 것은 누락이 아니다. 적용 조건으로 안내한다(완전한 결과라 PARTIAL로 두지 않는다).
+                # 장애 복구로 저장 결과를 재사용할 때도 안내가 빠지지 않게 재사용 확인보다 먼저 남긴다.
+                for (hs,_),group in codes.items():
+                    label=f'HS {hs}는 판 개정으로 묶인 품목이라 대표 코드 {group} 묶음 기준으로 예측합니다.'
+                    if group!=hs and label not in task.applied_defaults: task.applied_defaults.append(label)
+                previous=self.results.reuse(state,step,key)
+                if previous: return previous
                 analysis=predict(task,bundle,provider,versions,step.args.get('top',DEFAULT_MARKET_TOP),codes)
                 if analysis.result.status!='OK': return analysis.result
                 from backend.app.agents.templates import _names
                 with self.read_store() as store: countries,products=_names(store)
                 for row in analysis.rows:
                     row['country_name']=countries.get(row['country_code'],row['country_code'])
-                    row['product_name']=products.get((row['hs6'],'HS2022'),row['hs6'])
+                    row['product_name']=products.get((row['hs6'],row.get('hs_ver','HS2022')),row['hs6'])
                     row['name']=row['product_name'] if analysis.meta['group_by']!='HS6' else row['country_name']
                 from backend.app.agents.digest import bounded
-                names={(r['country_code'],r['hs6']):r['name'] for r in analysis.rows}
+                names={(r['country_code'],r['hs6'],r['hs_ver']):r['name'] for r in analysis.rows}
                 for target in analysis.result.digest['targets']:
-                    for item in target['items']: item['name']=names[item['country_code'],item['hs6']]
+                    for item in target['items']: item['name']=names[item['country_code'],item['hs6'],item['hs_ver']]
                 analysis.result.digest=bounded(analysis.result.digest)
                 return self.results.save(state,step,analysis.result,rows=analysis.rows,meta=analysis.meta,
                     conditions=analysis.conditions,input_fingerprint=key,source_results=parents,versions=versions)

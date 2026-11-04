@@ -80,26 +80,28 @@ def build_chart(store, uid, task, result_id, selection=None):
     elif kind=='PREDICTION':
         from backend.app.api.common import require
         group=snapshot['meta']['group_by']
+        # 예측 행은 요청 품목의 판본(hs_ver)을 함께 갖는다. 이전 결과(판본 없음)는 HS2022다.
+        edition=lambda r: r.get('hs_ver') or 'HS2022'
         countries=list(dict.fromkeys(r['country_code'] for r in rows))
-        products=list(dict.fromkeys(r['hs6'] for r in rows))
+        products=list(dict.fromkeys((r['hs6'],edition(r)) for r in rows))
         if selection is None:
             country=rows[0]['country_code'] if group in ('PAIR','COUNTRY') else None
-            hs=rows[0]['hs6'] if group in ('PAIR','HS6') else None
+            hs,ver=(rows[0]['hs6'],edition(rows[0])) if group in ('PAIR','HS6') else (None,None)
         else:
-            country,hs=selection.get('country_code'),selection.get('hs_code')
+            country,hs,ver=selection.get('country_code'),selection.get('hs_code'),selection.get('hs_ver')
             require(bool(country)==(group in ('PAIR','COUNTRY')) and bool(hs)==(group in ('PAIR','HS6'))
-                    and selection.get('hs_ver')==('HS2022' if hs else None),'선택한 국가·품목 범위를 확인하세요.')
-        subset=[r for r in rows if (not country or r['country_code']==country) and (not hs or r['hs6']==hs)]
+                    and bool(ver)==bool(hs),'선택한 국가·품목 범위를 확인하세요.')
+        subset=[r for r in rows if (not country or r['country_code']==country) and (not hs or (r['hs6'],edition(r))==(hs,ver))]
         require(subset,'결과에 없는 대상입니다.')
         ranked=sorted(subset,key=lambda r:r['country_rank'] if country else r['product_rank'])[:10]
         full=[(r.get('name') or (r['hs6'] if country else r['country_code'])) for r in ranked]
-        labels=shorten_target_names([(None,n,HsProduct(hs_code=r['hs6'],hs_ver='HS2022'),None) if country
+        labels=shorten_target_names([(None,n,HsProduct(hs_code=r['hs6'],hs_ver=edition(r)),None) if country
             else (n,None,None,r['country_code']) for r,n in zip(ranked,full)])
         count=len(rows) if group=='PAIR' else len(countries) if group=='COUNTRY' else len(products)
         if count>1:
             output.chart_selector=ChartSelector(result_id=result_id,group_by=group,
-                country_codes=countries if group!='HS6' else [],hs_items=[HsProduct(hs_code=h,hs_ver='HS2022')
-                    for h in products] if group!='COUNTRY' else [])
+                country_codes=countries if group!='HS6' else [],hs_items=[HsProduct(hs_code=h,hs_ver=v)
+                    for h,v in products] if group!='COUNTRY' else [])
         kindchart,title,unit='bar','유망시장 예측 증감률','%'
         series=[{'name':'예측 증감률','values':[r['growth_pct'] for r in ranked]}]
     elif kind=='LLM_SQL':

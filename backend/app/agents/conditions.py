@@ -266,11 +266,6 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     task.conditions = Conditions.model_validate(data)
     if task.intent=='PROMISING_MARKET':
         if not out.country_codes and not out.hs_items: raise SlotRepair('유망시장을 조회할 국가 또는 품목을 입력해 주세요.')
-        from backend.app.agents.market import model_codes
-        for hs, group in model_codes(store, [h for h in task.conditions.hs_items if len(h.hs_code)==6]).items():
-            if hs != group:
-                label=f'HS {hs}는 판 개정으로 묶인 품목이라 대표 코드 {group} 묶음 기준으로 예측합니다.'
-                if label not in task.applied_defaults: task.applied_defaults.append(label)
         if (slots.period or slots.recent_months) and not slots.latest_prediction_confirmed:
             key=f'{task.task_id}:model_period'
             if key in task.resolved: raise SlotRepair('과거 기준월 예측은 지원하지 않습니다.')
