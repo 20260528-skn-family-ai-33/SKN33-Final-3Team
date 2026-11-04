@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api, setCsrf, download } from './api/client'
 import { navigate } from './router'
-import { registerCountries, registerProducts, countryCode, countryName } from './data/catalog'
+import { registerCountries, registerProducts, countryCode, countryName, productName } from './data/catalog'
 import { mapNotification, mapReport } from './api/adapters'
 const AppContext = createContext(null)
 const NotificationContext = createContext(null)
@@ -138,9 +138,22 @@ export function AppProvider({ children }) {
     if (current !== epoch.current) return false
     updateProfile({ ...p, version: data.interests.version, home: data.interests.landing_page === 'INTERESTED' ? 'interest' : 'all' }); return true
   }), [profile, run])
-  // 다른 화면(채팅 관심 추가 등)이 저장한 관심정보를 프로필에 반영한다. 버전이 어긋나면 관심정보 화면 저장이 409가 된다.
-  const applyInterests = useCallback(scope => updateProfile(p => ({ ...p, products: scope.hs_items.map(h => h.hs_code),
-    countries: scope.country_codes.map(countryName), home: scope.landing_page === 'INTERESTED' ? 'interest' : 'all', version: scope.version })), [])
+  // 채팅 등에서 관심 국가·품목을 기존 관심정보에 더한다. 저장 결과를 프로필에도 반영해야 관심정보 화면 저장이 409가 되지 않는다.
+  const addInterests = useCallback((countryCodes, hsItems) => run(async () => {
+    const current = epoch.current
+    const { interests: saved } = await api('/users/me/interests')
+    const { interests: scope } = await api('/users/me/interests', { method: 'PUT', body: { expected_version: saved.version,
+      country_codes: [...new Set([...saved.country_codes, ...countryCodes])],
+      hs_items: [...new Map([...saved.hs_items, ...hsItems].map(h => [h.hs_ver + h.hs_code, h])).values()] } })
+    if (current !== epoch.current) return 'STALE'  // 그 사이 로그아웃·계정 전환: 새 세션 프로필은 건드리지 않는다
+    updateProfile(p => ({ ...p, products: scope.hs_items.map(h => h.hs_code), countries: scope.country_codes.map(countryName),
+      home: scope.landing_page === 'INTERESTED' ? 'interest' : 'all', version: scope.version }))
+    // 이름을 모르는 새 품목만 HS4 하위 목록으로 등록한다(loadUser와 같은 조회). 저장은 이미 끝났으므로 실패해도 무시한다.
+    const unknown = [...new Set(hsItems.filter(h => productName(h.hs_code) === h.hs_code).map(h => h.hs_code.slice(0, 4)))]
+    Promise.all(unknown.map(code => api(`/reference/hs-codes/${code}/children`, { query: { hs_ver: 'HS2022' } })))
+      .then(groups => { if (current === epoch.current) groups.forEach(g => registerProducts(g.items)) }, () => {})
+    return true
+  }), [run])
   const acceptNotificationTerms = useCallback(version => run(async () => {
     const current = epoch.current
     const { consent } = await api('/users/me/consents', { method: 'POST', body: {
@@ -217,11 +230,11 @@ export function AppProvider({ children }) {
   const value = useMemo(() => ({
     session, account: session, accounts, setAccounts, loading, loadError, refresh, options, countries,
     login, signup, socialSignIn, logout, changePassword, withdraw,
-    profile, setProfile, applyInterests, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
+    profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
     chats, setChats, refreshChats, reports, refreshReports, downloadReport,
     mainView, setMainView, notify, run, fail,
   }), [session, accounts, loading, loadError, refresh, options, countries, login, signup, socialSignIn,
-    logout, changePassword, withdraw, profile, setProfile, applyInterests, settings, setSettings, acceptNotificationTerms,
+    logout, changePassword, withdraw, profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms,
     subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
     downloadReport, mainView, notify, run, fail])
   const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications }),

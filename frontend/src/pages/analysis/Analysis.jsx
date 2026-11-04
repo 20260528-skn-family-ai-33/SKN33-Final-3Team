@@ -255,7 +255,7 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
 }
 
 export default function Analysis({ route }) {
-  const { session, chats, refreshChats, refreshReports, applyInterests, run, notify } = useApp()
+  const { session, chats, refreshChats, refreshReports, addInterests, run, notify } = useApp()
   const [activeId, setActiveId] = useState(route.query.get('chat') || chats[0]?.id)
   const [input, setInput] = useState(route.query.get('ask') || '')
   const [modal, setModal] = useState(null)
@@ -340,17 +340,14 @@ export default function Analysis({ route }) {
         savedCountries:new Set(saved.country_codes),savedProducts:new Set(saved.hs_items.map(h=>h.hs_ver+h.hs_code))})
     })
   }
+  const selectableInterest=interest&&(interest.countries.some(c=>!interest.savedCountries.has(c))||
+    interest.products.some(h=>!interest.savedProducts.has(h.hs_ver+h.hs_code)))
   const saveInterest = async () => {
     if (!interest.country_codes.length && !interest.hs_items.length) { window.alert('체크된 항목이 없습니다'); return }
     setSavingInterest(true)
-    await run(async()=>{
-      const {interests:saved}=await api('/users/me/interests')
-      const data=await api('/users/me/interests',{method:'PUT',body:{expected_version:saved.version,
-        country_codes:[...new Set([...saved.country_codes,...interest.country_codes])],
-        hs_items:[...new Map([...saved.hs_items,...interest.hs_items].map(h=>[h.hs_ver+h.hs_code,h])).values()]}})
-      applyInterests(data.interests)
-      setInterest(null);notify('선택한 국가·품목을 관심 목록에 추가했습니다.')
-    })
+    const saved=await addInterests(interest.country_codes,interest.hs_items)
+    if (saved) setInterest(null)  // 'STALE'(세션 전환)도 닫는다. 다른 계정에서 다시 저장하지 않게 한다
+    if (saved===true) notify('선택한 국가·품목을 관심 목록에 추가했습니다.')
     setSavingInterest(false)
   }
   const removeChat = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') })
@@ -462,7 +459,8 @@ export default function Analysis({ route }) {
           {interest?.countries.map(c=>{const saved=interest.savedCountries.has(c);return <Check key={c} disabled={savingInterest||saved} checked={saved||interest.country_codes.includes(c)} onChange={on=>setInterest({...interest,country_codes:on?[...interest.country_codes,c]:interest.country_codes.filter(v=>v!==c)})}>{countryName(c)}{saved&&' · 이미 등록됨'}</Check>})}
           {interest?.products.map(h=>{const saved=interest.savedProducts.has(h.hs_ver+h.hs_code);return <Check key={h.hs_ver+h.hs_code} disabled={savingInterest||saved} checked={saved||interest.hs_items.includes(h)} onChange={on=>setInterest({...interest,hs_items:on?[...interest.hs_items,h]:interest.hs_items.filter(v=>v!==h)})}>{productName(h.hs_code)} ({h.hs_code}){saved&&' · 이미 등록됨'}</Check>})}
           {interest&&!interest.countries.length&&!interest.products.length&&<p>추가할 국가·HS6 품목이 없습니다. 국가나 품목을 지정해 분석해 주세요.</p>}
-        </div><div className="chips"><Btn disabled={savingInterest} onClick={()=>setInterest(null)}>취소</Btn><Btn kind="red" disabled={savingInterest||!interest} onClick={saveInterest}>선택 항목 저장</Btn></div>
+          {interest&&(interest.countries.length>0||interest.products.length>0)&&!selectableInterest&&<p role="status">모두 이미 등록된 항목입니다.</p>}
+        </div><div className="chips"><Btn disabled={savingInterest} onClick={()=>setInterest(null)}>취소</Btn><Btn kind="red" disabled={savingInterest||!selectableInterest} onClick={saveInterest}>선택 항목 저장</Btn></div>
       </Modal>
       <Modal open={modal === 'rename'} onClose={() => setModal(null)} width={480} label="채팅방 이름 변경">
         <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>채팅방 관리</p>

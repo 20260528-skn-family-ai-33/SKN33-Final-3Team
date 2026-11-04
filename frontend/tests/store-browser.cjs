@@ -30,15 +30,18 @@ const { chromium } = require('playwright')
     let previews = 0
     let revisedPeriod = false
     let interestFlow = false
+    let savedInterests = { version: 'a'.repeat(64), country_codes: ['CN'], hs_items: [], landing_page: 'GLOBAL' }
     const interestPuts = []
     const conditions = { hs_items: [], country_codes: [], period: { start: '2025-12-01', end: '2025-12-31' }, compare: 'NONE' }
     await page.route('**/api/v1/**', route => {
       const pathname = new URL(route.request().url()).pathname
       if (pathname.endsWith('/users/me')) return route.fulfill({ status: 401, json: { message: 'test signed out' } })
-      const savedInterests = { version: 'a'.repeat(64), country_codes: ['CN'], hs_items: [], landing_page: 'GLOBAL' }
       if (interestFlow && pathname.endsWith('/users/me/interests')) {
-        if (route.request().method() === 'PUT') interestPuts.push(route.request().postDataJSON())
-        return route.fulfill({ json: { interests: route.request().method() === 'PUT' ? { ...savedInterests, country_codes: ['CN', 'US'] } : savedInterests } })
+        if (route.request().method() === 'PUT') {
+          interestPuts.push(route.request().postDataJSON())
+          savedInterests = { ...savedInterests, country_codes: route.request().postDataJSON().country_codes }
+        }
+        return route.fulfill({ json: { interests: savedInterests } })
       }
       if (pathname.endsWith('/users/me/interests') && route.request().method() === 'PUT') {
         return new Promise(resolve => { releaseProfile = async () => {
@@ -219,13 +222,16 @@ const { chromium } = require('playwright')
     const alerts = []
     page.once('dialog', d => { alerts.push(d.message()); d.accept() })
     await dialog.getByRole('button', { name: '선택 항목 저장', exact: true }).click()
-    await page.waitForFunction(() => true)
     assert.deepEqual(alerts, ['체크된 항목이 없습니다'])
     assert.equal(interestPuts.length, 0)
     await dialog.locator('label').filter({ hasNotText: '이미 등록됨' }).first().click()
     await dialog.getByRole('button', { name: '선택 항목 저장', exact: true }).click()
     await page.waitForFunction(() => !document.querySelector('[aria-label="관심 목록 추가"][role=dialog]'))
     assert.deepEqual(interestPuts.map(b => b.country_codes), [['CN', 'US']])
+    await page.getByRole('button', { name: '관심 목록 추가', exact: true }).first().click()
+    await dialog.getByText('모두 이미 등록된 항목입니다.', { exact: true }).waitFor()
+    assert.equal(await dialog.getByRole('button', { name: '선택 항목 저장', exact: true }).isDisabled(), true)
+    await dialog.getByRole('button', { name: '취소', exact: true }).click()
     console.log('PASS chat interest dialog disables saved items, alerts on empty selection and saves new items')
     assert.deepEqual(errors, [])
   } finally {
