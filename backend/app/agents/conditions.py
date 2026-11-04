@@ -155,9 +155,21 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             if 'country_codes' in answer:
                 out.country_codes.extend(answer['country_codes'])
                 continue
-            if item.mention.isascii() and len(item.mention)==2: continue
             if item.mention.casefold() not in original.casefold():
                 raise SlotRepair('국가 표현을 질문에서 확인하지 못했습니다.')
+            if item.mention.isascii() and len(item.mention)==2:
+                code = next((r['country_code'] for r in rows
+                             if country_key(r['country_code']) == country_key(item.mention)), None)
+                named_code, _ = country_matches(answer.get('replace_expression', item.name), rows, threshold)
+                if code and named_code == code:
+                    out.country_codes.append(code)
+                    continue
+                if not named_code:  # 국가명이 아닌 약어(TV 등)는 국가 조건이 아니다
+                    continue
+                # 코드와 국가명이 어긋나거나(UK→영국=GB) 없는 코드면 빼지 말고 국가명·입력 코드 후보로 되묻는다.
+                return ask(state, task, key, 'COUNTRY', f'“{item.mention}”에 해당하는 국가를 선택하거나 직접 입력해 주세요.',
+                    [(r['country_code'], r['name_ko'], {'country_codes':[r['country_code']]})
+                     for c in dict.fromkeys(filter(None, (named_code, code))) for r in rows if r['country_code'] == c])
             code, candidates = country_matches(answer.get('replace_expression', item.name), rows, threshold)
             if code:
                 out.country_codes.append(code)

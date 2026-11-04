@@ -11,6 +11,32 @@ from backend.app.api.common import ApiError
 
 
 class ConditionTest(unittest.TestCase):
+    def test_explicit_country_code_is_kept(self):
+        for mention in ('US', 'us'):
+            with self.subTest(mention=mention):
+                self.state.input.question=f'{mention} 수출액'
+                self.task.slots=TaskSlots(countries=[{'mention':mention,'name':'미국'}],products=[],recent_months=3)
+                check_conditions(self.store,self.state,self.step)
+                self.assertEqual(self.step.status,'DONE')
+                self.assertEqual(self.task.conditions.country_codes,['US'])
+
+    def test_unknown_or_mismatched_country_code_asks_instead_of_dropping(self):
+        for mention, choices in (('XX', ['US']), ('CN', ['US', 'CN'])):  # 없는 코드(UK→GB 같은 경우), 국가명과 어긋난 코드
+            with self.subTest(mention=mention):
+                self.state.pending=None; self.state.ask_counts={}
+                self.state.input.question=f'{mention} 수출액'
+                self.task.slots=TaskSlots(countries=[{'mention':mention,'name':'미국'}],products=[],recent_months=3)
+                check_conditions(self.store,self.state,self.step)
+                self.assertEqual(self.state.pending.kind,'COUNTRY')
+                self.assertEqual([c.choice_id for c in self.state.pending.choices],choices)
+
+    def test_non_country_abbreviation_is_not_a_partner(self):
+        self.state.input.question='TV 수출액'
+        self.task.slots=TaskSlots(countries=[{'mention':'TV','name':'텔레비전'}],products=[],recent_months=3)
+        check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'DONE')
+        self.assertEqual(self.task.conditions.country_codes,[])
+
     def test_korea_is_reporting_country_and_clears_inherited_partner(self):
         from backend.app.agents.state import Conditions
         for name in ('한국','대한민국','우리나라'):
