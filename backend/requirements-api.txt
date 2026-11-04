@@ -22,6 +22,14 @@ openai>=2,<3
 langgraph==1.2.19
 langgraph-checkpoint-redis==0.5.2
 sqlglot==30.27.0
+# Promising-market model in the worker (AGENT_DESIGN D-48, §11.6). Versions match the environment that built
+# data/ml/monthly_models/model_a_two_stage_202609.joblib; keep them equal to the model's runtime when it changes.
+# Linux also needs the OpenMP runtime: apt-get install -y --no-install-recommends libgomp1 (backend/app/ml/ML_USAGE.md).
+pandas==3.0.1
+joblib==1.6.0
+lightgbm==4.7.0
+scikit-learn==1.9.1
+threadpoolctl==3.7.0
 # TestClient and artifact verification
 httpx>=0.27,<1
 pypdf>=5,<7

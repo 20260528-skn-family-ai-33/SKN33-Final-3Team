@@ -15,7 +15,7 @@ python -m pip install -r backend/requirements.txt
 python -c "import lightgbm; print(lightgbm.__version__)"
 ```
 
-컨테이너를 쓰면 실제 실행 이미지에도 `libgomp1`이 필요합니다. `backend/requirements.txt`에는 LightGBM이 포함돼 있으므로 이 목록을 설치하는 환경에 적용합니다. API·worker 전용 `backend/requirements-api.txt`에는 LightGBM이 포함돼 있지 않습니다.
+컨테이너를 쓰면 실제 실행 이미지에도 `libgomp1`이 필요합니다. `backend/requirements.txt`에는 LightGBM이 포함돼 있으므로 이 목록을 설치하는 환경에 적용합니다. API·worker 전용 `backend/requirements-api.txt`에도 채팅 유망시장 조회용 pandas·joblib·LightGBM·scikit-learn·threadpoolctl이 들어 있으므로(설계 D-48), 워커 서버·이미지에도 `libgomp1`을 설치합니다.
 
 `.env.sample`의 `CUSTOMS_ML_ENTRYPOINT`는 기본적으로 비워 두었습니다. 월별 재학습을 활성화하기 전에 위 import 확인과 입력 데이터·DB 준비, 서버 자원(기본 학습 스레드 4개)을 확인한 뒤 아래 월별 재학습 설정을 적용합니다. 활성화 후에는 정기 일정뿐 아니라 **스케줄러 시작 20초 뒤 누락 월 복구**에서도 학습이 실행될 수 있습니다. 이미 `WAITING_FOR_ML` 상태인 월은 아래 안내대로 수동 재개해야 합니다.
 
