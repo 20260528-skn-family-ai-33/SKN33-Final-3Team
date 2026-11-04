@@ -90,10 +90,13 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     for expression in slots.products or []:
         key = f'{task.task_id}:hs:{expression}'
         answer = task.resolved.get(key, {})
-        if 'hs_items' in answer:
+        # D-74: 유망시장 모델은 HS6 단위다. 되묻기 답이 HS4("이 HS4 전체로 분석"·4자리 입력)여도 HS6 후보로 다시 묻는다.
+        hs4 = [h['hs_code'] for h in answer.get('hs_items', []) if len(h['hs_code']) == 4] \
+            if task.intent == 'PROMISING_MARKET' else []
+        if 'hs_items' in answer and not hs4:
             out.hs_items.extend(answer['hs_items'])
             continue
-        expr = answer.get('replace_expression', expression)
+        expr = hs4[0] if hs4 else answer.get('replace_expression', expression)
         # D-22: 플래너가 질문에 없는 이전 조건을 그대로 다시 적으면 생략(이어받기)과 같다.
         # 코드가 같거나, 이전 조건을 만든 직전 질문의 표현이고 그 표현의 검색 결과에 이전 품목이 있을 때만 이어받는다.
         if not answer and base.hs_items and expr.casefold() not in original.casefold():
