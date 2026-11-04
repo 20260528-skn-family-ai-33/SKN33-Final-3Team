@@ -276,9 +276,9 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
                 directions={rank_key for label,rank_key in (('품목','country_rank'),('국가','product_rank'))
                             if re.search(label+r'(?:별|\s*(?:중|내|안))?\s*순위',claim)}
                 if directions and directions!={key}: return False
-            # 값 바로 뒤에 증감 표현이 붙은 비율은 증감률이다. 비중을 근거로 "5% 증가"를 통과시키지 않는다.
-            # 같은 주장 안의 다른 곳에 있는 증감 단어("비중은 증가해 40.0%")는 비중 값을 막지 않는다.
-            if direction and not claim_direction and key=='share_pct': return False
+            # 증감 표현이 붙은 비율은 증감률이다. 비중을 근거로 "5% 증가"·"증가해 5%"를 통과시키지 않는다.
+            # 값과 떨어진 증감 단어는 그 주장이 비중을 말할 때만("비중은 증가해 40.0%") 비중 값을 허용한다.
+            if direction and key=='share_pct' and (not claim_direction or not re.search(r'비중|점유', claim)): return False
             claimed=value
             if direction and (not claim_direction or key in CHANGE_KEYS or key.endswith('_pp')):  # 증감 표현이 붙은 값은 근거의 부호와 같은 방향이어야 한다
                 if amount==0 or (amount<0)!=(direction=='down'): return False

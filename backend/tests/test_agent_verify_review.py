@@ -141,6 +141,8 @@ class ReviewFollowupTest(unittest.TestCase):
         self.assertTrue(check_sentence('미국 수출 비중은 5.0%입니다.', [digest], known_names={'미국', '중국'})[0])
         # 증감 단어가 값 바로 뒤가 아니면 비중 값 대조를 막지 않는다.
         self.assertTrue(check_sentence('미국 비중은 증가해 5.0%입니다.', [digest], known_names={'미국', '중국'})[0])
+        # 비중을 말하지 않는 주장의 떨어진 증감 단어("증가해 5.0%")는 증감률 주장이다. 비중 값으로 통과시키지 않는다.
+        self.assertFalse(check_sentence('미국 수출은 전년보다 증가해 5.0%를 기록했습니다.', [digest], known_names={'미국', '중국'})[0])
 
 
 class CountrySubstringTest(unittest.TestCase):
