@@ -330,9 +330,9 @@ class BackendApiTest(unittest.TestCase):
         waiting=poll(); self.assertEqual(waiting['status'],'NEEDS_INPUT',waiting)
         prompt=waiting['clarification']; cid=prompt['clarification_id']
         self.assertTrue(prompt['allow_text']); self.assertIn('expires_at',prompt)  # 화면의 만료 시각 표시(API-37)
-        # 되묻기 대기(NEEDS_INPUT)는 사용자를 기다리는 중이라 조건 초기화(API-39)를 막지 않는다.
+        # 되묻기 대기 중인 작업도 접수 때 고정한 조건으로 답하고 그 조건을 다시 저장하므로 조건 초기화(API-39)를 막는다.
         cleared=self.client.delete(f'/api/v1/chat/sessions/{sid}/context',headers={'X-CSRF-Token':self.csrf})
-        self.assertEqual(cleared.status_code,204,cleared.text)
+        self.assertEqual((cleared.status_code,cleared.json()['code']),(409,'JOB_IN_PROGRESS'))
         url=f'chat/jobs/{jid}/clarifications'
         self.assertEqual(self.post(url,{'clarification_id':cid,'text':'네'}).json()['job']['status'],'NEEDS_INPUT')
         # 입력창으로 보낸 '네'는 승인이 아니지만 메시지 키는 남는다. 다른 탭에서 확인을 마친 뒤 같은 메시지를

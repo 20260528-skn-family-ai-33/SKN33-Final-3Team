@@ -154,15 +154,11 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity in (39,40,64):
         sid=path['session_id']; store.owned('chat_session','session_id',sid,uid,lock=True); t=store.t('chat_session')
         if identity==39:
-            # 실행 중인 답변은 끝날 때 자기 조건을 다시 저장하므로 초기화하지 않는다(D-11과 같은 409).
-            # 되묻기 대기(NEEDS_INPUT, 최대 30분)는 사용자를 기다리는 중이라 초기화를 막지 않는다. 그 작업은 접수 때
-            # 고정한 입력으로 답하고, 답이 나오면 그 답의 조건이 새 최근 조건이 된다.
+            # 진행 중인 작업(되묻기 대기 포함)은 접수 때 고정한 조건으로 답하고, 끝날 때 그 조건을 최근 조건으로 다시
+            # 저장한다. 초기화해도 되살아나므로 막는다(D-11과 같은 409). 되묻기 중이면 답하거나 중단한 뒤 초기화한다.
             m=store.t('chat_message')
-            active=jobs._active_chat(store,sid)
-            if active:
-                row=store.one(select(m).where(m.c.message_id==active))
-                require((jobs._chat_job(row) or {}).get('status')=='NEEDS_INPUT',
-                        '이 대화의 작업이 진행 중입니다.','JOB_IN_PROGRESS',409)
+            require(not jobs._active_chat(store,sid),'진행 중인 질문을 마치거나 중단한 뒤 조건을 초기화해 주세요.',
+                    'JOB_IN_PROGRESS',409)
             latest=store.one(select(m.c.result_json).where(m.c.session_id==sid,m.c.role=='ASSISTANT')
                              .order_by(m.c.message_id.desc()).limit(1))
             # 초기화 직전에 끝난 답변이 아직 Redis에 컨텍스트를 올리지 못했을 수 있다. 그 답변 기준의 캐시는
