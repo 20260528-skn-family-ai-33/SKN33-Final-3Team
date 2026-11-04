@@ -6,7 +6,7 @@ import { Btn, Chip, Modal, Select, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
-import { localDateTime } from '../../api/adapters'
+import { kstDateTimeText } from '../../api/adapters'
 
 
 const TABS = ['weekly', 'monthly', 'chat', 'quarterly']
@@ -76,7 +76,7 @@ export default function ReportCenter({ route }) {
     .filter(r => !status || r.status===status)
     .filter(r => {
       if(!from && !to)return true
-      const day=localDateTime(r.created).slice(0,10)
+      const day=kstDateTimeText(r.created).slice(0,10)
       return /^\d{4}-\d{2}-\d{2}$/.test(day) && (!from || day>=from) && (!to || day<=to)
     })
     .sort((a, b) => (sort === 'title' ? a.title.localeCompare(b.title) : sort === 'old' ? a.created.localeCompare(b.created) : b.created.localeCompare(a.created)))

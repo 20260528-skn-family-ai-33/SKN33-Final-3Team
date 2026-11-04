@@ -7,7 +7,7 @@ import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
 import { api, streamAnswer } from '../../api/client'
 import { requestId } from '../../api/requestId'
-import { amount, percent, reportProduct, localDateTime } from '../../api/adapters'
+import { amount, percent, reportProduct, kstDateTimeText } from '../../api/adapters'
 import { usePendingAction, useQuery, ErrorNotice } from '../../api/hooks'
 import { previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
 import { monthOffset } from '../home/useDashboard'
@@ -377,7 +377,7 @@ export default function Analysis({ route }) {
             <Btn kind="red" block icon="plus" onClick={newChat}>새 채팅</Btn>
             <div className="between" style={{ marginTop: 6 }}>
               <p style={{ fontSize: 15, fontWeight: 800 }}>내 채팅방</p>
-              <span className="note">최근 대화 순 · 기기 현지 시각</span>
+              <span className="note">최근 대화 순 · 한국 시각(KST)</span>
             </div>
             <div className="col chat-list" style={{ gap: 10 }}>
             {chats.map(c => {
@@ -388,7 +388,7 @@ export default function Analysis({ route }) {
                   style={{ padding: '14px 16px', borderRadius: 14, background: on ? 'var(--rose)' : '#fff', boxShadow: on ? 'inset 3px 0 0 var(--red)' : 'none', border: on ? 0 : '1px solid var(--line)' }}>
                   {tag && <span className={'tag ' + tag[0]}>{tag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 5 }} />}{tag[1]}</span>}
                   <p style={{ fontSize: 15, fontWeight: 800, marginTop: tag ? 8 : 0 }}>{c.title}</p>
-                  <p className="note">{localDateTime(c.updated_at)}</p>
+                  <p className="note">{kstDateTimeText(c.updated_at)}</p>
                 </button>
               )
             })}

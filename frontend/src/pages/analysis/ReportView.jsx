@@ -11,7 +11,7 @@ import { countryName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { api } from '../../api/client'
-import { amount, percent, mapReport, mapArticle, reportComparison, localDateTime } from '../../api/adapters'
+import { amount, percent, mapReport, mapArticle, reportComparison, kstDateTimeText } from '../../api/adapters'
 
 const range = (from, to) => from && to ? `${from} ~ ${to}` : '—'
 
@@ -115,7 +115,7 @@ export default function ReportView({ route }) {
               <h1 style={{ fontSize: 34, fontWeight: 800, marginTop: 10 }}>{report.title}</h1>
               <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{o.sections.length === 4 ? '전체 항목 선택' : `${o.sections.length}개 항목 선택`} · {o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
               <div style={{ display: 'flex', gap: 24, marginTop: 18, fontSize: 14, color: '#fff' }}>
-                <span>분석 {range(o.from, o.to)}</span><span>비교 {range(o.compareFrom, o.compareTo)}</span><span>생성일 {localDateTime(report.created)}</span>
+                <span>분석 {range(o.from, o.to)}</span><span>비교 {range(o.compareFrom, o.compareTo)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
               </div>
               <div style={{ position: 'absolute', right: 48, top: 36, width: 110, height: 6, background: '#C8102E' }} />
             </div>
