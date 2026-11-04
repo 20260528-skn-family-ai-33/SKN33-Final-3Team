@@ -101,8 +101,34 @@ class ReviewFollowupTest(unittest.TestCase):
 
     def test_dae_prefix_names_country(self):
         known = {'미국', '중국'}
-        self.assertTrue(check_sentence('한국의 대중국 수출은 2억 달러입니다.', [ranking()], known_names=known)[0])
-        self.assertFalse(check_sentence('한국의 대중국 수출은 3억 달러입니다.', [ranking()], known_names=known)[0])
+        self.assertTrue(check_sentence('한국의 대중국 수출은 2억 달러입니다.', [ranking()], known_names=known, countries=known)[0])
+        self.assertFalse(check_sentence('한국의 대중국 수출은 3억 달러입니다.', [ranking()], known_names=known, countries=known)[0])
+
+    def test_dae_exception_is_only_for_countries(self):
+        from backend.app.agents.verify import _name_pattern
+        self.assertIsNotNone(_name_pattern('중국', True).search('대중국 수출'))
+        self.assertIsNone(_name_pattern('리석', False).search('대리석 수출'))
+        self.assertIsNone(_name_pattern('중국', True).search('확대중국'))
+
+    def test_share_change_column_backs_change_claim(self):
+        digest = {'kind': 'LLM_SQL', 'period': PERIOD, 'trade_flow': 'EXPORT',
+                  'columns': [{'key': 'country_name', 'unit': None}, {'key': 'share_change_pp', 'unit': '%p'}],
+                  'rows': [{'country_name': '미국', 'share_change_pp': 2.1}]}
+        self.assertTrue(check_sentence('미국 비중이 2.1%p 증가했습니다.', [digest], known_names={'미국'})[0])
+
+    def test_dictionary_name_inside_result_name_is_not_outside_target(self):
+        from backend.tests.test_agent_compose import ComposeTest
+        from backend.app.agents.state import ToolResult, Draft
+        from backend.app.agents.verify import verify
+        state = ComposeTest().state(['STATISTICS']); task = state.plan.tasks[0]; task.answer_status = 'ANSWERED'
+        step = next(s for s in task.steps if s.tool == 'query_trade_data')
+        long_name = '전동축[캠샤프트(cam shaft)와…ersal joint)를 포함한다]'
+        state.results[step.step_id] = ToolResult(status='OK', result_id='r', digest={'rows': [{'name': long_name, 'amount_usd': 999}]})
+        for sentence, expected in [('전동축 수출은 999 USD입니다.', 'PASS'), ('기초화장품 수출은 999 USD입니다.', 'MISMATCH')]:
+            with self.subTest(sentence=sentence):
+                state.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': [sentence]}], turn_summary='')
+                verify(state, known_names={'전동축', '기초화장품'})
+                self.assertEqual(state.verification.checks[0].status, expected)
 
     def test_unrelated_words_are_not_directions(self):
         for sentence in ['수출액이 가장 높은 미국의 증감률은 -5.2%입니다.', '미국 수출 증감률은 -5.2%입니다(오늘 기준).']:

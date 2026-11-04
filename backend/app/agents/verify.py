@@ -29,8 +29,9 @@ UP = re.compile(r'증가|늘어|늘었|늘고|상승|확대|성장|올라|오르
 # 값 뒤의 '로'("총 1,410만 달러로 월평균 117.5만 달러")도 주장을 나눈다.
 SEPARATOR = re.compile(r'(?<!\d),|,(?!\d)|[;，]|이며|이고|하고|으며|(?:(?<=달러)|(?<=USD)|(?<=[%위배]))로(?=\s)')
 # 이름은 앞이 글자·숫자가 아닐 때만 찾는다('1위'의 '위'). 영문 이름(국가 코드)은 뒤도 본다('USD'의 'US').
-# 단, '대중국'·'대미국'처럼 낱말 첫머리의 '대(對)'는 허용한다.
-NAME_EDGE = r'(?:(?<![가-힣A-Za-z0-9])|(?<=(?<![가-힣])대))'
+# 국가명만 '대중국'·'대미국'처럼 낱말 첫머리의 '대(對)' 뒤에서도 찾는다. 품목명에 넓히면 '대리석'·'대형'에 걸린다.
+NAME_EDGE = r'(?<![가-힣A-Za-z0-9])'
+COUNTRY_EDGE = r'(?:(?<![가-힣A-Za-z0-9])|(?<=(?<![가-힣])대))'
 # "상위 2개국", "3곳", "2개 품목"은 조회 대상 수이지 통계 수치가 아니다. TOKEN이 "개"까지 먹으므로 뒤는 "국"부터 본다.
 # 단위가 없거나 "개"인 값만 대상 수로 본다. "상위 10%"·"상위 3.5억 달러"는 그대로 검증한다.
 COUNT_BEFORE = re.compile(r'(?:상위|하위)\s*$')
@@ -38,8 +39,8 @@ COUNT_AFTER = re.compile(r'\s*(?:곳|개국|국|개?\s*(?:국가|품목|시장))
 
 
 @lru_cache(maxsize=4096)
-def _name_pattern(name):
-    return re.compile(NAME_EDGE+re.escape(name)+(r'(?![A-Za-z0-9])' if name.isascii() else ''))
+def _name_pattern(name, country=False):
+    return re.compile((COUNTRY_EDGE if country else NAME_EDGE)+re.escape(name)+(r'(?![A-Za-z0-9])' if name.isascii() else ''))
 
 
 def _target_count(text, match):
@@ -131,26 +132,26 @@ def evidence(digest):
     return list(walk(digest,{'prediction'} if digest.get('kind')=='PREDICTION' else set()))
 
 
-def check_sentence(sentence, digests, *, known_names=()):
+def check_sentence(sentence, digests, *, known_names=(), countries=()):
     """문장의 수치를 근거와 대조한다. 월·방향이 여럿인 문장은 주장 단위로 나눠 각각 검사한다."""
-    return _check_claim(sentence,digests,known_names,require_month=False,inherited_names=())
+    return _check_claim(sentence,digests,known_names,require_month=False,inherited_names=(),countries=frozenset(countries))
 
 
-def _check_claim(sentence, digests, known_names, *, require_month, inherited_names):
+def _check_claim(sentence, digests, known_names, *, require_month, inherited_names, countries=frozenset()):
     _require_month,_inherited_names=require_month,inherited_names
     text=_merge_compound(re.sub(r'\[\d+\]', '',sentence))
     dates=list(DATE.finditer(text))
     def names_in(value):
         value=DATE.sub(' ',value)
         # 1글자 이름('위'·'조'·'배')은 단위·조사와 구분할 수 없어 이름으로 보지 않는다.
-        names={name for name in known_names if len(name)>1 and name in value and _name_pattern(name).search(value)}
+        names={name for name in known_names if len(name)>1 and name in value and _name_pattern(name,name in countries).search(value)}
         return {name for name in names if not any(name!=other and name in other for other in names)}
     def check_clauses(clauses, require_month):
         inherited=_inherited_names
         checks=[]
         for clause in clauses:
             inherited=names_in(clause) or inherited
-            checks.append(_check_claim(clause,digests,known_names,
+            checks.append(_check_claim(clause,digests,known_names,countries=countries,
                                        require_month=require_month,inherited_names=inherited))
         return all(good for good,_ in checks),[n for _,nums in checks for n in nums]
     if any(d.get('kind')=='PREDICTION' for d in digests):
@@ -205,7 +206,7 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
     if len(mentioned)>1 and not facts and not _require_month:
         # "미국은 3억 달러, 중국은 2억 달러": 한 행에 두 국가가 없으면 이름마다 주장을 나눠 대조한다.
         # 날짜가 있는 원문에서 나누고, 날짜가 없는 조각에는 문장의 기간 표현을 붙여 조각마다 기간도 다시 본다.
-        starts=sorted({m.start() for name in mentioned for m in _name_pattern(name).finditer(dated)})
+        starts=sorted({m.start() for name in mentioned for m in _name_pattern(name,name in countries).finditer(dated)})
         if len(starts)>1:
             cuts=[0,*starts[1:],len(dated)]
             when=' '.join(m.group() for m in dates)
@@ -276,7 +277,7 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
                             if re.search(label+r'(?:별|\s*(?:중|내|안))?\s*순위',claim)}
                 if directions and directions!={key}: return False
             # 증감 표현이 붙은 비율은 증감률이다. 비중을 근거로 "5% 증가"를 통과시키지 않는다.
-            if direction and expected in ('%','%p') and 'share' in key: return False
+            if direction and key=='share_pct': return False
             claimed=value
             if direction and (not claim_direction or key in CHANGE_KEYS or key.endswith('_pp')):  # 증감 표현이 붙은 값은 근거의 부호와 같은 방향이어야 한다
                 if amount==0 or (amount<0)!=(direction=='down'): return False
@@ -301,7 +302,7 @@ def snapshot_evidence(payload):
             '_verification_source':'SNAPSHOT'}
 
 
-def verify(state,known_names=(),*,snapshots=None):
+def verify(state,known_names=(),*,snapshots=None,countries=()):
     snapshots=snapshots or {}
     def source(step_id):
         digest=state.results[step_id].digest or {}
@@ -312,13 +313,18 @@ def verify(state,known_names=(),*,snapshots=None):
                        if s.step_id in state.results and (s.step_id in snapshots or state.results[s.step_id].digest)]
              for t in state.plan.tasks}
     checks=[]
-    names=set(known_names)
+    identities=set()
     for group in by_task.values():
         for digest in group:
-            for _,_,_,ids in evidence(digest): names.update(ids)
+            for _,_,_,ids in evidence(digest): identities.update(ids)
+    # 사전 이름은 답변에 나온 것만 남긴다(약 1.5만 개 품목명을 문장마다 다시 훑지 않게). 결과 행 이름의 일부인 사전 이름
+    # ('전동축[캠샤프트…]' 안의 '전동축')은 그 결과를 줄여 부른 것이라 결과 밖 대상(D-77)으로 보지 않는다.
+    text=' '.join([*(x for c in state.draft.conclusion for x in c.sentences),*state.draft.explanation,state.draft.turn_summary])
+    names={n for n in known_names if n and n in text and not any(n!=i and n in i for i in identities)}|identities
+    countries=frozenset(countries)
     index=0
     def add(sentence,digests):
-        good,numbers=check_sentence(sentence,digests,known_names=names)
+        good,numbers=check_sentence(sentence,digests,known_names=names,countries=countries)
         source=any(d.get('_verification_source')=='SNAPSHOT' for d in digests)
         unavailable=any(d.get('_source_unavailable') for d in digests)
         checks.append(SentenceCheck(index=index,numbers=numbers,status='PASS' if good else 'MISMATCH',
@@ -334,7 +340,7 @@ def verify(state,known_names=(),*,snapshots=None):
     primary=state.plan.tasks[0]
     summary_ok=True
     if state.draft.turn_summary and fixed_conclusion(state,primary) is None:
-        summary_ok,_=check_sentence(state.draft.turn_summary,by_task[primary.task_id],known_names=names)
+        summary_ok,_=check_sentence(state.draft.turn_summary,by_task[primary.task_id],known_names=names,countries=countries)
         if not summary_ok: state.draft.turn_summary=''
     state.verification=Verification(checks=checks,regeneration_count=state.verification.regeneration_count,
         status='PASS' if summary_ok and all(c.status=='PASS' for c in checks) else 'NEEDS_REVIEW')
