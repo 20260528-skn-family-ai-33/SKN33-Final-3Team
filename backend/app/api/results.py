@@ -15,7 +15,7 @@ LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_
 LABELS.update({'country_name':'국가','hs_code':'HS 코드','trade_month':'기준월',
     'total_usd':'기간 합계','compare_total_usd':'비교 기간 합계','change_pct':'증감률',
     'monthly_avg_usd':'월평균 금액','compare_monthly_avg_usd':'비교 기간 월평균',
-    'compare_amount_usd':'비교 기간 금액','verified_months':'집계된 개월 수',
+    'compare_amount_usd':'비교 기간 금액','compare_month':'비교 기준월','verified_months':'집계된 개월 수',
     'requested_months':'조회 개월 수','compare_verified_months':'비교 집계 개월 수',
     'compare_requested_months':'비교 조회 개월 수','verified_subtotal_usd':'집계된 금액',
     'compare_verified_subtotal_usd':'비교 집계 금액'})
@@ -55,7 +55,7 @@ def display_columns(columns, rows):
             'compare_monthly_avg_usd','verified_months','requested_months',
             'compare_verified_months','compare_requested_months','verified_subtotal_usd',
             'compare_verified_subtotal_usd'))
-        if not any(r.get('compare_amount_usd') is not None for r in rows): hidden.add('compare_amount_usd')
+        if not any(r.get('compare_amount_usd') is not None for r in rows): hidden.update(('compare_amount_usd','compare_month'))
     return [{**c,'label':labels.get(c['key'],c.get('label',c['key']))
              if c.get('label',c['key'])==c['key'] else c['label']} for c in columns if c['key'] not in hidden]
 
