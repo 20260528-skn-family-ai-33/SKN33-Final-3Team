@@ -65,13 +65,17 @@ AnswerStatus = Literal['ANSWERED', 'PARTIAL', 'NO_DATA', 'OUT_OF_SCOPE']
 StepStatus = Literal['PENDING', 'RUNNING', 'DONE', 'FAILED', 'SKIPPED']
 
 
+class SafeError(ValueError):
+    """고정 문구만 담는 검증 오류. 응답 원문을 넣지 않으므로 실패 로그에 사유로 남긴다(llm.validation_details)."""
+
+
 def _json_size(value) -> int:
     return len(to_json(value))
 
 
 def _unique(values, label):
     if len(values) != len(set(values)):
-        raise ValueError(f'{label} 중복은 허용하지 않습니다')
+        raise SafeError(f'{label} 중복은 허용하지 않습니다')
 
 
 def _truncate(limit):
@@ -130,7 +134,7 @@ def _chars(minimum: int, maximum: int | None = None):
     Field(min_length/max_length) 대신 응답을 받은 뒤 검사한다(같은 거부 → 재시도 동작)."""
     def check(value: str) -> str:
         if len(value.strip()) < minimum or (maximum is not None and len(value) > maximum):
-            raise ValueError(f'글자 수는 {minimum}~{maximum or "제한 없음"}자여야 합니다')
+            raise SafeError(f'글자 수는 {minimum}~{maximum or "제한 없음"}자여야 합니다')
         return value
     return AfterValidator(check)
 
@@ -163,7 +167,7 @@ class Period(Model):
     @model_validator(mode='after')
     def check_months(self):
         if self.start.day != 1 or self.end.day != 1 or self.start > self.end:
-            raise ValueError('기간은 월 1일 기준이고 start <= end여야 합니다')
+            raise SafeError('기간은 월 1일 기준이고 start <= end여야 합니다')
         return self
 
 
@@ -273,9 +277,9 @@ class PlannerSlots(Model):
     @model_validator(mode='after')
     def check_periods(self):
         if self.period is not None and self.recent_months is not None:
-            raise ValueError('절대 기간과 최근 개월 수를 동시에 지정할 수 없습니다')
+            raise SafeError('절대 기간과 최근 개월 수를 동시에 지정할 수 없습니다')
         if self.compare_period is not None and not self.comparison_requested:
-            raise ValueError('비교 기간에는 비교 요청이 필요합니다')
+            raise SafeError('비교 기간에는 비교 요청이 필요합니다')
         return self
 
     def limit_errors(self) -> list[str]:
@@ -304,7 +308,7 @@ class TaskSlots(PlannerSlots):
     @model_validator(mode='after')
     def check_limits(self):
         if errors := self.limit_errors():
-            raise ValueError(' '.join(errors))
+            raise SafeError(' '.join(errors))
         return self
 
 
@@ -345,11 +349,11 @@ class PlannerOutput(Model):
         for index, task in enumerate(self.tasks, 1):
             _unique(task.source_tasks, '선행 질문')
             if any(source < 1 or source >= index for source in task.source_tasks):
-                raise ValueError('선행 질문은 현재 질문보다 앞에 있어야 합니다')
+                raise SafeError('선행 질문은 현재 질문보다 앞에 있어야 합니다')
             selected = [s.source_task for s in task.target_selections]
             _unique(selected, '대상 선택의 선행 질문')
             if not set(selected) <= set(task.source_tasks):
-                raise ValueError('대상 선택은 연결된 선행 질문을 가리켜야 합니다')
+                raise SafeError('대상 선택은 연결된 선행 질문을 가리켜야 합니다')
         return self
 
 

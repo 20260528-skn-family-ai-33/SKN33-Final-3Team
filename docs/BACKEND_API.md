@@ -210,6 +210,11 @@ PDF 변환 실패는 설치 누락만을 뜻하지 않는다. report_pdf_failed 
 신규 리포트 실행 JSON은 report queue version=2로 등록한다. version=1만 조회하는 구형 워커가 최신 리포트를 가져가지 못하게 하며, 최신 워커는 기존 v1 및 실행 JSON 없는 과거 리포트도 복구할 수 있다. 처리 워커 host/pid/report_protocol은 내부 실행 JSON에 기록한다. 재시도 claim 시 이전 실패 오류를 지워 RUNNING 화면에 과거 오류가 계속 표시되지 않게 한다. PDF 오류 원인은 단계별 로그로 확인하며, 브라우저 재설치만으로 해결됐다고 간주하지 않는다.
 
 리포트 파일명의 생성 시각은 completed_at을 한국 시간(KST)으로 변환한 값이며, 완료 시각이 없는 과거 자료는 created_at을 사용한다. 다운로드 시각은 사용하지 않아 같은 리포트의 XLSX·PDF·DOCX 및 재다운로드 파일명이 일관된다.
+
+# 채팅 작업 실패 로그
+
+워커의 `agent_structured_failed` 로그는 job_id·node·error_type과 함께 `attempt=현재/최대`, schema, validation을 기록한다. validation은 실패한 모델 이름(model), 실패 필드 경로·오류 종류·고정 문구 검증 사유(`state.SafeError`)를 최대 10건, 전체 오류 개수와 생략 여부로 남긴다. 예: `tasks.0.slots` / `value_error` / `절대 기간과 최근 개월 수를 동시에 지정할 수 없습니다`. 질문·프롬프트·응답 원문·인증 정보·임의 예외 메시지는 남기지 않으며 알 수 없는 필드명은 `<unknown>`으로 표시한다. 이전 로그에서 누락된 상세는 소급 복구할 수 없다.
+
 # 채팅 컨텍스트 확인
 
 저장소 루트 PowerShell에서 `.venv\Scripts\python.exe -m backend.scripts.inspect_chat_context 20`을 실행하면 `.env` 설정을 사용하여 해당 세션의 Redis 키, 남은 TTL, 진행 중 작업 ID, 최근 조건과 최대 5턴을 읽기 전용으로 출력한다. `20`은 브라우저 개발자 도구 Network의 채팅 messages 요청에 표시되는 세션 ID로 바꾼다. 접속 비밀번호는 출력하지 않는다. 출력에는 대화 내용이 포함되므로 공유 시 주의한다. `context: null`은 캐시 없음, TTL -2는 키 없음, active_job_id null은 진행 중 잠금 없음이다. 빈 summary는 검증에서 제외될 수 있으며 질문·조건 이력과 구분한다.

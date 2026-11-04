@@ -1,6 +1,8 @@
 """Graph node adapters. Graph I/O never runs under a MySQL session row lock."""
 from contextlib import contextmanager
 import logging
+import json
+from pydantic import ValidationError
 from sqlalchemy import select, update
 from openai import OpenAIError
 
@@ -11,7 +13,7 @@ from backend.app.agents.bindings import resolve as resolve_bindings, source_vers
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
 from backend.app.agents.compose import COMPOSE_PROMPT, assemble, compose_input
 from backend.app.agents.conditions import check_conditions
-from backend.app.agents.llm import StructuredClient
+from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT
 from backend.app.agents.result_store import ResultStore, fingerprint
 from backend.app.agents.sql import generated_analysis
@@ -51,12 +53,16 @@ class Services:
         def call(_):
             return validate(self.client.parse(model=model,timeout=timeout,prompt=prompt,payload=payload,
                                               schema=schema,max_output_tokens=tokens))
-        for _ in range(max_attempts):
+        for attempt in range(1,max_attempts+1):
             try: return self.execution.call(node,timeout,call,finish_reserve=reserve)
             except (OpenAIError,ValueError,TimeoutError) as exc:
                 # Do not log prompts, model text, credentials or private context.
-                logging.getLogger(__name__).warning('agent_structured_failed job_id=%s node=%s error_type=%s',
-                    state.input.job_id,node,type(exc).__name__)
+                try: details=validation_details(exc,schema) if isinstance(exc,ValidationError) else None
+                except Exception: details={'errors':'details_unavailable'}  # diagnostics must not cancel the retry
+                logging.getLogger(__name__).warning(
+                    'agent_structured_failed job_id=%s node=%s error_type=%s attempt=%s/%s schema=%s validation=%s',
+                    state.input.job_id,node,type(exc).__name__,attempt,max_attempts,schema.__name__,
+                    json.dumps(details,ensure_ascii=False,separators=(',',':')))
                 continue
             except ApiError as exc:
                 if exc.code!='RUN_TIMEOUT': raise

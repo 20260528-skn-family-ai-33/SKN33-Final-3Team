@@ -1,5 +1,40 @@
 """One bounded Responses call; retries and durable budget belong to the caller."""
 import json
+import re
+from typing import get_args
+from pydantic import BaseModel
+
+
+def validation_details(error, schema):
+    """Bounded diagnostics: schema paths and constraints, never model input/text."""
+    from backend.app.agents import state
+    fields=set(); visited=set()
+    def collect(annotation):
+        if isinstance(annotation,type) and issubclass(annotation,BaseModel):
+            if annotation in visited: return
+            visited.add(annotation)
+            for name,field in annotation.model_fields.items():
+                fields.add(name); collect(field.annotation)
+        else:
+            for child in get_args(annotation): collect(child)
+    # validate() may fail on another state model (e.g. build_plan), so its developer-defined field names are safe too.
+    for model in [schema,*vars(state).values()]: collect(model)
+    rows=error.errors(include_input=False,include_url=False)
+    details=[]
+    reasons={'too_long':'항목 개수 상한 초과','too_short':'항목 개수 하한 미달',
+        'missing':'필수 필드 누락','extra_forbidden':'허용하지 않는 필드',
+        'literal_error':'허용하지 않는 선택 값','json_invalid':'올바르지 않은 JSON',
+        'string_type':'문자열이 필요합니다','list_type':'목록이 필요합니다',
+        'greater_than_equal':'최솟값 미달','less_than_equal':'최댓값 초과'}
+    for row in rows[:10]:
+        cause=(row.get('ctx') or {}).get('error')
+        # Only SafeError carries fixed text; other validators may put response text in their exception.
+        reason=str(cause) if isinstance(cause,state.SafeError) else reasons.get(row['type'],'스키마 규칙 위반')
+        details.append({'field':'.'.join(str(part) if isinstance(part,int) or part in fields else '<unknown>'
+            for part in row.get('loc',())[:12]) or '<root>',
+            'type':row['type'] if re.fullmatch(r'[a-z_]{1,64}',row['type']) else 'validation_error', 'reason':reason})
+    return {'model':error.title if error.title in {m.__name__ for m in visited} else '<unknown>',
+            'errors':details,'total':len(rows),'truncated':len(rows)>10}
 
 
 class StructuredClient:
