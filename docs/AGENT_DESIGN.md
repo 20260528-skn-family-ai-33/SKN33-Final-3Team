@@ -99,7 +99,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 | D-51 | 숫자 대조는 화면 표시 단위의 반올림 차이만 허용한다. 대조 결과는 문장 번호(`Draft.sentences()` 순서)로 남긴다. 재생성 후에도 틀린 문장은 "확인 필요"로 표시한다. (Q-42, 43) |
 | D-52 | 5건 요약은 compose가 같은 LLM 호출에서 `Draft.turn_summary`로 쓴다. 200자 이하이고 양식은 `{조건 요약} {질문 요지} → {핵심 결과 1개}`다. 숫자는 답변에 나온 것만 쓰고, 되묻기 과정은 넣지 않는다. 정상·부분 답변만 넣는다. (Q-09, 10, C-06) |
 | D-53 | 최근 검색 조건은 정상·부분 답변일 때만 갱신한다. (Q-44) |
-| D-54 | 대화방 제목은 첫 답변에서만 compose가 검색 조건을 넣어 20자 이하로 쓴다. (Q-45, C-12) |
+| D-54 | 대화방 제목은 첫 답변에서만 compose가 검색 조건을 넣어 20자 이하로 쓴다. 넘으면 초안을 거부하지 않고 20자로 자른다(2026-11-04 PR #61 재검수). (Q-45, C-12) |
 | D-55 | answer actions는 유지한다. 리포트 저장은 PDF/DOCX를 고르게 한다(기존 `formats`). 관심 추가는 현재 조건의 국가·품목을 체크박스로 골라 추가한다(기존 `POST /users/me/interests/items`). (Q-46) |
 | D-56 | 실행 상태는 2초마다 폴링하고 검증·저장된 최종 답변만 API-133 SSE로 전송한다(2026-11-03 사용자 승인). 단계별 문구, 진행률 바, 경과 초를 보여 주고, 되묻기에 답하면 경과 초를 0부터 다시 센다(`round_started_at`). (Q-47) |
 | D-57 | 한 라운드의 실제 에이전트 실행 상한은 180초(`RUN_TIMEOUT_SECONDS`)다. 리포트·큐·장애 복구 대기는 제외하며 이미 사용한 실행 예산은 유지한다(D-85). (Q-48) |
@@ -525,7 +525,7 @@ actions[], report_id, warnings[]
 | sql (MARKET_SHARE) | `{"template": "SHARE"}` |
 | sql (`custom_query`가 있을 때) | `{"template": "LLM_SQL"}` |
 | chart | `{}`. 차트 유형은 플래너가 정하지 않고 build_chart가 결과(대상 수, 비교 기간, LLM SQL 결과 모양)를 보고 정한다(§14.5, D-89). 대상 수는 품목 되묻기 뒤에야 확정되기 때문이다 |
-| ml | `{"top": 10}` |
+| ml | `{"top": ranking_limit 또는 5}` (국가→품목·품목→국가 모두 기본 5, `state.DEFAULT_MARKET_TOP`) |
 | news | `{"limit": 5}` (`RagRequest.use_case="chat"`) |
 
 ### 11.2 digest 형식
@@ -573,7 +573,9 @@ actions[], report_id, warnings[]
 - **일치 판정:** 문장에 쓴 자릿수로 digest 값을 반올림했을 때 같으면 PASS다(D-51). 예: "3.5억 달러"는 3.45억 이상 3.55억 미만이면 PASS.
   - `%`와 `%p`, 금액과 비율, 총액과 월평균은 서로 다른 지표라 섞이면 MISMATCH다(D-84).
   - digest 값이 null인데 문장이 숫자를 말하면 MISMATCH다.
-  - 문장에 나온 국가·품목 이름이 그 Task의 조건에도 없고 그 Task digest 행의 `name`·`code`에도 없으면 MISMATCH다(D-77). 순위·비중·유망시장 답변의 "1위는 미국"은 digest 행에 있으므로 PASS다.
+  - 문장에 나온 국가·품목 이름이 그 Task의 조건에도 없고 그 Task digest 행의 `name`·`label`·`code`에도 없으면 MISMATCH다(D-77). 순위·비중·유망시장 답변의 "1위는 미국"은 digest 행에 있으므로 PASS다.
+  - 이름 사전은 국가 사전 전체(`country_role='COUNTRY'`)와 결과 행의 이름이다. 전체 품목표는 쓰지 않는다(1글자 '위'·'조'·'배', 2글자 '기타'가 '1위'·'기타 국가'를 품목으로 읽는다). 1글자 이름은 보지 않고, 이름 앞이 글자·숫자면 이름이 아니다(2026-11-04).
+  - 한 행에 없는 두 국가가 한 문장에 있으면 이름마다 주장을 나눠 대조한다. `change_pct`는 기간 값이라 월에 묶지 않는다. 증감 방향은 값 바로 뒤 표현을 먼저 보고, 없으면 같은 주장 안의 증감 단어를 증감률 지표에만 적용한다(2026-11-04).
 - **LLM 문장이 하나도 없으면**(모든 Task가 고정 문구) `Verification.status=PASS`, `checks=[]`이다.
 - **결과:** `SentenceCheck{index, numbers, status}`. MISMATCH가 있고 남은 예산이 있으면(§13.4) compose를 1번 다시 부르고(`regeneration_count`), 그래도 있으면 `Verification.status=NEEDS_REVIEW`로 두고 화면에 "확인 필요"를 붙인다(D-51). `turn_summary`도 같은 규칙으로 보고, 틀린 숫자는 이력에 남기지 않는다(D-77).
 
@@ -763,6 +765,8 @@ actions[], report_id, warnings[]
   - 결과 열 별칭은 `columns[].key`와 같은 순서·이름으로 둔다. `ORDER BY`를 넣고, `LIMIT`은 1000 이하다.
   - 금액은 USD다. 비율은 SQL에서 금액으로 계산하고 소수 1자리로 반올림한다. 월별 비율을 평균하지 않는다(D-83).
   - `NOW()`·`CURDATE()` 대신 조건의 기간을 쓴다. 답할 수 없으면 `unsupported`에 이유를 쓴다.
+  - ONLY_FULL_GROUP_BY: 집계하지 않은 SELECT·ORDER BY 식은 GROUP BY에 같은 식으로 넣는다(2026-11-04).
+  - 수출입 테이블 금액은 `country`와 조인해 `country_role='COUNTRY'`만 집계하고(총계 행 제외), `hs_ver`를 하나로 제한한다. 검사기도 수출입 테이블을 쓰면 `hs_ver` 리터럴 조건과 `country_role='COUNTRY'`(또는 `country_code` 리터럴 조건)를 요구한다(2026-11-04). 국가 역할만 담은 뷰는 제안 단계다.
 - **sqlglot 검사(`dialect="mysql"`):**
   - 문장은 하나뿐이고, 최상위는 `Select` 또는 `Union`이다(CTE 허용).
   - 참조 테이블(CTE 이름 제외)은 모두 D-65 허용 목록 안이어야 한다. `information_schema`·`mysql`·`performance_schema`·`sys` 스키마와 `article.body_masked` 컬럼은 거부한다.
@@ -772,7 +776,7 @@ actions[], report_id, warnings[]
 - **실행:**
   - 별도 연결에서 `SET SESSION MAX_EXECUTION_TIME = API_SQL_EXECUTION_SECONDS×1000` → `START TRANSACTION READ ONLY` → 실행 → `ROLLBACK` 순서로 돈다(D-41).
   - 결과의 Decimal은 숫자로, date는 `YYYY-MM-DD` 문자열로 바꾼다. `number` 열에 숫자가 아닌 값이 있으면 검증 실패다.
-- **재생성:** 파싱·검사·실행 오류나 시간 초과가 나면 오류 문구를 `previous_error`에 넣어 최대 2번 다시 만든다(D-40). 단, 남은 예산이 50초 + 마무리 몫(§13.4) 이상일 때만이다. 그래도 실패하면 그 단계를 FAILED로 두고 `skip_blocked()` 한다(D-72).
+- **재생성:** 파싱·검사·실행 오류나 시간 초과가 나면 오류 문구를 `previous_error`에 넣어 최대 2번 다시 만든다(D-40). 검사 오류와 모델이 쓴 SQL의 MySQL 오류(1052·1054·1055·1064·1111·1146)는 코드와 요지를 넘기고, 그 밖의 드라이버·연결 오류는 일반 문구로 바꾼다(`sql.SAFE_MYSQL_ERRORS`). 단, 남은 예산이 50초 + 마무리 몫(§13.4) 이상일 때만이다. 그래도 실패하면 그 단계를 FAILED로 두고 `skip_blocked()` 한다(D-72).
 - **저장:**
   - 0행이면 NO_DATA다(숫자 생성 금지).
   - 결과가 있으면 `results.result_table(store, uid, rows, meta={"kind": "LLM_SQL", "summary", "source": "관세청", "period"}, conditions, sql=[최종 SQL], columns)`로 저장한다.
