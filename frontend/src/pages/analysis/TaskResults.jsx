@@ -94,7 +94,7 @@ export default function TaskResults({answer,hideText=false}) {
       {!hideText && t.conclusion.map((s,i)=>sentence(s,start+i))}
       {charts.filter(c=>c.task_id===t.task_id&&!groupedTasks.has(c.task_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c} selector={answer.chart_selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)} table={answer.tables.find(x=>x.result_id===c.result_id)}/>)}
       {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}
-        charts={charts} selectors={answer.chart_selectors} tasks={answer.tasks}
+        charts={answer.charts||[]} selectors={answer.chart_selectors} tasks={answer.tasks}  // 오류 시 원본 차트(합치기 전)를 보여 준다
         fallback={charts.filter(chart=>g.tables.some(table=>table.task_id===chart.task_id)).sort((a,b)=>(b.type==='line'?100:0)+b.series.length-(a.type==='line'?100:0)-a.series.length)[0]}/>)}
       {answer.tables.filter(x=>x.task_id===t.task_id&&!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</section>
   })

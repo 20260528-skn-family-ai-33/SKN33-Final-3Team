@@ -142,6 +142,8 @@ export function AppProvider({ children }) {
   const addInterests = useCallback((countryCodes, hsItems) => run(async () => {
     const current = epoch.current
     const { interests: saved } = await api('/users/me/interests')
+    // 조회 중 계정이 바뀌면 이전 계정에서 고른 대상을 새 계정에 저장하지 않는다(두 계정의 버전이 같으면 PUT이 통과한다)
+    if (current !== epoch.current) return 'STALE'
     const { interests: scope } = await api('/users/me/interests', { method: 'PUT', body: { expected_version: saved.version,
       country_codes: [...new Set([...saved.country_codes, ...countryCodes])],
       hs_items: [...new Map([...saved.hs_items, ...hsItems].map(h => [h.hs_ver + h.hs_code, h])).values()] } })

@@ -30,12 +30,20 @@ const { chromium } = require('playwright')
     let previews = 0
     let revisedPeriod = false
     let interestFlow = false
+    let releaseInterestRead, holdInterestRead = false
+    const lateInterestPuts = []
     let savedInterests = { version: 'a'.repeat(64), country_codes: ['CN'], hs_items: [], landing_page: 'GLOBAL' }
     const interestPuts = []
     const conditions = { hs_items: [], country_codes: [], period: { start: '2025-12-01', end: '2025-12-31' }, compare: 'NONE' }
     await page.route('**/api/v1/**', route => {
       const pathname = new URL(route.request().url()).pathname
       if (pathname.endsWith('/users/me')) return route.fulfill({ status: 401, json: { message: 'test signed out' } })
+      if (holdInterestRead && pathname.endsWith('/users/me/interests')) {
+        if (route.request().method() === 'PUT') { lateInterestPuts.push(route.request().postDataJSON()); return route.fulfill({ json: { interests: savedInterests } }) }
+        return new Promise(resolve => { releaseInterestRead = async () => {
+          await route.fulfill({ json: { interests: savedInterests } }); resolve()
+        } })
+      }
       if (interestFlow && pathname.endsWith('/users/me/interests')) {
         if (route.request().method() === 'PUT') {
           interestPuts.push(route.request().postDataJSON())
@@ -160,6 +168,16 @@ const { chromium } = require('playwright')
     assert.equal(subscriptionReads, 0)
     assert.deepEqual(await page.evaluate(() => window.reviewApp.subscription.cycles), [])
     console.log('PASS expired subscription save cannot refresh data for a later session')
+    holdInterestRead = true
+    const interestRead = page.waitForRequest(r => r.method() === 'GET' && r.url().endsWith('/users/me/interests'))
+    await page.evaluate(() => { window.reviewPendingSave = window.reviewApp.addInterests(['US'], []) })
+    await interestRead
+    await page.evaluate(() => window.dispatchEvent(new Event('session-expired')))
+    await releaseInterestRead()
+    assert.equal(await page.evaluate(() => window.reviewPendingSave), 'STALE')
+    assert.deepEqual(lateInterestPuts, [])
+    holdInterestRead = false
+    console.log('PASS interests read before an account switch are not saved to the next session')
     conflict = true
     const saveMonthly = () => page.evaluate(() => window.reviewApp.setSubscription({ cycles: ['monthly'], formats: ['PDF'] }))
     assert.equal(await saveMonthly(), false)
