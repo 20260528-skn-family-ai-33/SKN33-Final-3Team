@@ -572,7 +572,12 @@ class BackendApiTest(unittest.TestCase):
             self.assertNotEqual(result['match_type'],'EXACT')
             c.execute(table.insert().values(hs_code='8542',depth=4,name_ko='전자 집적 회로',hs_ver='HS2022',source_edition='test'))
             self.assertIn('8542',[r['hs_code'] for r in chat_hs_search(store,'집적회로')['items']])
-        self.assertEqual(self.client.get(url,params={'q':'집적회로','depth':4}).json()['items'],[])
+        # HS4 이름은 띄어쓰기를 합쳐 맞추지 않지만, 하위 HS6 이름에 있는 말이면 부모 HS4를 후보로 낸다
+        for query in ('집적회로','메모리'):
+            found=self.client.get(url,params={'q':query,'depth':4}).json()
+            self.assertEqual([r['hs_code'] for r in found['items']],['8542'])
+            self.assertEqual(found['match_type'],'SIMILAR')
+        self.assertEqual(self.client.get(url,params={'q':'없는품목','depth':4}).json()['items'],[])
 
     def test_cancel_legacy_duplicates_and_resubscribe(self):
         uid=int(self.signup())
@@ -1231,9 +1236,15 @@ class BackendApiTest(unittest.TestCase):
             result=self.client.get('/api/v1/reference/hs-codes?q=스킨케어')
             self.assertEqual(result.status_code,200,result.text)
             self.assertEqual([x['hs_code'] for x in result.json()['items']],['3304'])
-        with patch('backend.app.api.hs_vectors.candidates',side_effect=RuntimeError('offline')):
+        with patch('backend.app.api.hs_vectors.candidates',side_effect=RuntimeError('offline')) as search:
+            # 품목 선택 검색은 등록명 부분 일치가 있으면 임베딩을 부르지 않는다. 부르지 않았으니 연결 경고도 없다.
             result=self.client.get('/api/v1/reference/hs-codes?q=화장')
             self.assertEqual(result.json()['items'][0]['hs_code'],'3304')
+            self.assertNotIn('warnings',result.json())
+            search.assert_not_called()
+            # 등록명에 없는 말만 임베딩으로 찾고, 그 연결이 실패하면 경고를 붙인다(위 '스킨케어'는 캐시에 남아 다른 말을 쓴다).
+            result=self.client.get('/api/v1/reference/hs-codes?q=보습크림')
+            self.assertEqual(result.status_code,200,result.text)
             self.assertTrue(result.json()['warnings'])
 
     def test_notification_sql_visibility_matches_article_and_array_rules(self):

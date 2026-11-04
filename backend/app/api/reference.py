@@ -69,6 +69,16 @@ def _hs_search(store,q,limit,settings,depth,for_picker):
         if rows or (q.isascii() and q.isdigit()):
             return {'items':rows,'match_type':'SIMILAR' if rows else 'NONE','confidence':'LOW',
                 'message':'등록된 품목명·코드 검색 결과입니다. 분류와 세부품목을 확인해 선택하세요.',**browse_hint()}
+        if depth == 4:
+            # HS4 이름에는 일상어가 드물다(예: "메모리"는 HS6 854232에만 있고 HS4 8542는 "전자집적회로").
+            # 하위 HS6·HS10 이름에 있는 말이면 그 부모 HS4를 후보로 낸다. 자동 확정하지 않는다.
+            child=t.alias('child')
+            parents=select(func.substr(child.c.hs_code,1,4)).where(child.c.hs_ver=='HS2022',child.c.depth.in_((6,10)),
+                or_(child.c.name_ko.contains(q,autoescape=True),child.c.original_name_ko.contains(q,autoescape=True)))
+            rows=store.rows(base.where(t.c.hs_code.in_(parents)).order_by(t.c.hs_code).limit(limit))
+            if rows:
+                return {'items':rows,'match_type':'SIMILAR','confidence':'LOW',
+                    'message':'세부 품목명에서 찾은 분류입니다. 분류를 열어 세부품목을 확인해 선택하세요.',**browse_hint()}
     from backend.app.api.hs_vectors import candidates
     ranked=[]; warnings=[]
     if settings.get('API_HS_VECTOR_ENABLED','true').lower()=='true':
