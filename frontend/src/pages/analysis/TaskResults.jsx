@@ -23,7 +23,7 @@ function Chart({initial,selector,table}) {
   // PAIR 결과는 최대 100쌍이다. 답변에 첫 페이지만 있으면 저장된 전체 조합을 읽는다.
   const needsPairs=pairMode && !table?.expired && (!table || table.total_rows>table.rows.length)
   const pairQuery=useQuery(`/results/${initial.result_id}`,{page_size:100},needsPairs)
-  const pairs=pairMode ? (pairQuery.data?.rows || table?.rows || []) : []
+  const pairs=pairMode ? (pairQuery.data?.table?.rows || table?.rows || []) : []  // API-41: {table:{rows}}
   const pairKey=(c,h)=>`${c}:${h}`
   const change=async(c,h)=>{
     setBusy(true)
