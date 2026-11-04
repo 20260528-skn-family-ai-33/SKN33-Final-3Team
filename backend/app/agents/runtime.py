@@ -26,19 +26,19 @@ from backend.app.api.common import ApiError, clean, now
 from backend.app.api.database import Store
 
 
-_PRODUCT_NAMES = {'at': None, 'names': ()}
 PRODUCT_NAMES_TTL_SECONDS = 3600   # HS 사전은 판본 갱신 때만 바뀐다. 갱신 뒤 최대 1시간은 이전 이름으로 대조한다
 
 
 def product_names(store):
-    """3글자 이상 품목명(D-77 결과 밖 품목 대조). 답변마다 hs_code 전체를 읽지 않도록 프로세스에 1시간 보관한다."""
+    """3글자 이상 품목명(D-77 결과 밖 품목 대조). 답변마다 hs_code 전체를 읽지 않도록 1시간 보관한다.
+    보관 위치는 그 DB의 Database 객체다(프로세스 전역이면 다른 DB의 이름이 섞인다)."""
     from time import monotonic
-    cached = _PRODUCT_NAMES
-    if cached['at'] is None or monotonic() - cached['at'] > PRODUCT_NAMES_TTL_SECONDS:
+    cached = getattr(store.db, 'agent_product_names', None)
+    if cached is None or monotonic() - cached[0] > PRODUCT_NAMES_TTL_SECONDS:
         hs = store.t('hs_code')
-        cached['names'] = tuple(n for n in store.c.scalars(select(hs.c.name_ko).distinct()) if n and len(n) >= 3)
-        cached['at'] = monotonic()
-    return cached['names']
+        cached = (monotonic(), tuple(n for n in store.c.scalars(select(hs.c.name_ko).distinct()) if n and len(n) >= 3))
+        store.db.agent_product_names = cached
+    return cached[1]
 
 
 class Services:
@@ -182,7 +182,7 @@ class Services:
                 previous=self.results.reuse(state,step,key)
                 if previous: return previous
                 with self.read_store() as store:
-                    codes=model_codes(store,[p.hs_code for p in task.conditions.hs_items if len(p.hs_code)==6])
+                    codes=model_codes(store,[p for p in task.conditions.hs_items if len(p.hs_code)==6])
                 analysis=predict(task,bundle,provider,versions,step.args.get('top',DEFAULT_MARKET_TOP),codes)
                 if analysis.result.status!='OK': return analysis.result
                 from backend.app.agents.templates import _names

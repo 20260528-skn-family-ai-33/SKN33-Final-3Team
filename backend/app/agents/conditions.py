@@ -162,10 +162,11 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         threshold = float(settings.get('API_CHAT_COUNTRY_SIMILARITY', 0.6))
         # 질문에 새 국가가 있으면("미국은 왜 증가했어?") 플래너가 함께 적은 이전 국가는 이어받지 않는다.
         # 국가로 확정되는 표현만 센다. 'TV'처럼 국가가 아닌 약어는 뒤에서 빠지므로 이어받기를 막지 않는다.
-        # 되묻기로 확정한 국가('미구' → 미국)도 새 국가다.
+        # 되묻기로 확정한 국가('미구' → 미국)도 새 국가다. 아래처럼 같은 계획의 앞 하위 질문에서 확정한 답도 쓴다.
+        def confirmed(mention):
+            return any(t.resolved.get(f'{t.task_id}:country:{mention}', {}).get('country_codes') for t in state.plan.tasks)
         new_country = any(item.mention.casefold() in original.casefold()
-                          and (country_matches(item.name, rows, threshold)[0]
-                               or task.resolved.get(f'{task.task_id}:country:{item.mention}', {}).get('country_codes'))
+                          and (country_matches(item.name, rows, threshold)[0] or confirmed(item.mention))
                           for item in countries)
         for item in countries:
             key = f'{task.task_id}:country:{item.mention}'
@@ -265,6 +266,11 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     task.conditions = Conditions.model_validate(data)
     if task.intent=='PROMISING_MARKET':
         if not out.country_codes and not out.hs_items: raise SlotRepair('유망시장을 조회할 국가 또는 품목을 입력해 주세요.')
+        from backend.app.agents.market import model_codes
+        for hs, group in model_codes(store, [h for h in task.conditions.hs_items if len(h.hs_code)==6]).items():
+            if hs != group:
+                label=f'HS {hs}는 판 개정으로 묶인 품목이라 대표 코드 {group} 묶음 기준으로 예측합니다.'
+                if label not in task.applied_defaults: task.applied_defaults.append(label)
         if (slots.period or slots.recent_months) and not slots.latest_prediction_confirmed:
             key=f'{task.task_id}:model_period'
             if key in task.resolved: raise SlotRepair('과거 기준월 예측은 지원하지 않습니다.')

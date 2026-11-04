@@ -37,7 +37,8 @@ class MarketTest(unittest.TestCase):
         provider.assert_called_once_with({}, country_code=None, hs6='150920', top=5)
         self.assertEqual(result.result.status, 'OK')
         self.assertEqual(result.rows[0]['hs6'], '150930')
-        self.assertTrue(any('150920' in reason for reason in result.result.limitations))
+        # 묶음 대표 코드로 조회한 것은 누락이 아니다. 완전한 결과이고 안내는 조건 확인의 적용 조건에 남긴다.
+        self.assertEqual((result.result.completeness, result.meta['merged_codes']), ('COMPLETE', {'150930': '150920'}))
 
     def test_model_codes_reads_correlation_groups(self):
         from backend.app.agents.market import model_codes
@@ -51,7 +52,12 @@ class MarketTest(unittest.TestCase):
             c.execute(table.insert(), [{'new_ver': 'HS2022', 'new_code': '150930', 'old_ver': 'HS2017', 'old_code': '150910',
                                         'relation': 'n:1', 'group_code': '150920', 'source_edition': 'test'}])
         with engine.connect() as c:
-            self.assertEqual(model_codes(Store(Database(engine), c), ['150930', '330499']), {'150930': '150920'})
+            hs = lambda code, ver='HS2022': SimpleNamespace(hs_code=code, hs_ver=ver)
+            store = Store(Database(engine), c)
+            self.assertEqual(model_codes(store, [hs('150930'), hs('330499')]), {'150930': '150920'})
+            # HS2017 품목은 이전 판 코드(old_code)로 찾는다. 같은 숫자의 HS2022 코드로 보지 않는다.
+            self.assertEqual(model_codes(store, [hs('150910', 'HS2017')]), {'150910': '150920'})
+            self.assertEqual(model_codes(store, [hs('150910')]), {})
 
     def test_registry_path_relative_to_monthly_directory_and_ready_only(self):
         base=Path('tmp')

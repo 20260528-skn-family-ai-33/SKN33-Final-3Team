@@ -53,15 +53,23 @@ def hs6_by_exports(bundle, prefix, countries):
     return rows.groupby('hs6').exp_12m.sum().sort_values(ascending=False,kind='stable').index.tolist()
 
 
-def model_codes(store, codes):
-    """HS2022 6단위 코드 → 모델의 비교용 코드. 판이 바뀌며 묶인 코드는 묶음 대표 코드(group_code)로 학습돼 있다
-    (ml.features.hs_key_map과 같은 규칙). 대응표에 없으면 자기 코드다."""
+def model_codes(store, items):
+    """요청 HS6 품목(hs_code·hs_ver) → 모델의 비교용 코드. 판이 바뀌며 묶인 코드는 묶음 대표 코드(group_code)로
+    학습돼 있다(ml.features.hs_key_map과 같은 규칙: HS2022는 new_code, HS2017은 old_code로 찾는다). 대응표에 없으면 자기 코드다."""
     from sqlalchemy import select
-    if not codes: return {}
-    t=store.t('hs_code_correlation')
-    rows=store.rows(select(t.c.new_code,t.c.group_code).where(t.c.new_ver=='HS2022',t.c.old_ver=='HS2017',
-                                                               t.c.new_code.in_(sorted(set(codes)))))
-    return {r['new_code']:r['group_code'] for r in rows}
+    from backend.app.api.common import ApiError
+    try: t=store.t('hs_code_correlation')
+    except ApiError as exc:
+        if exc.code!='FEATURE_NOT_READY': raise
+        return {}   # 대응표가 아직 없으면 묶인 코드 없이 요청 코드로 조회한다
+    found={}
+    for version,column in (('HS2022',t.c.new_code),('HS2017',t.c.old_code)):
+        codes=sorted({p.hs_code for p in items if p.hs_ver==version})
+        if not codes: continue
+        rows=store.rows(select(column.label('code'),t.c.group_code).where(
+            t.c.new_ver=='HS2022',t.c.old_ver=='HS2017',column.in_(codes)).distinct())
+        found.update({r['code']:r['group_code'] for r in rows})
+    return found
 
 
 def predict(task,bundle,predict_markets,versions,top=DEFAULT_MARKET_TOP,codes=None):
@@ -109,8 +117,8 @@ def predict(task,bundle,predict_markets,versions,top=DEFAULT_MARKET_TOP,codes=No
              'latest_available_month':anchor,'rows_total':len(rows),'targets':targets[:MAX_DIGEST_ROWS],
              'truncated':sum(len(t['items']) for t in targets[:MAX_DIGEST_ROWS])<len(rows)})
     reason=[f'{len(missing)}개 대상은 예측 대상이 아닙니다.'] if missing else []
-    reason+=[f'HS {hs}는 판 개정으로 묶인 품목이라 대표 코드 {codes[hs]} 묶음 기준으로 예측했습니다.' for hs in merged]
+    # 묶음 대표 코드로 조회한 것은 결과가 빠진 것이 아니다. 안내는 조건 확인이 적용 조건(applied_defaults)에 남긴다.
     if not pair_query and per_target_limit < top:
         reason.append(f'결과표 최대 {MAX_MARKET_ROWS}행 범위에서 대상마다 최대 {per_target_limit}개를 조회했습니다.')
-    return Analysis(rows,{**info,'missing_targets':missing},ToolResult(status='OK',period=period,source='ML 모델',
+    return Analysis(rows,{**info,'missing_targets':missing,'merged_codes':{hs:codes[hs] for hs in merged}},ToolResult(status='OK',period=period,source='ML 모델',
         digest=dg,completeness='PARTIAL' if reason else 'COMPLETE',limitations=reason),public,[])
