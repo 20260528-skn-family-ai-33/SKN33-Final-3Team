@@ -15,7 +15,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | API-38 되묻기 답 | 요청 추가 | `text`(직접 입력), `interest_selection`(관심사 골라 받기) | D-12, D-64 |
 | API-38 | 오류 추가 | 409 `CLARIFICATION_EXPIRED` (30분 경과) | D-04 |
 | API-131 (신규) 질문 중단 | 신설 | `POST /chat/jobs/{job_id}/cancel` | D-12 |
-| API-39 컨텍스트 삭제 | 오류 추가 | 대화방에 실행 중(QUEUED·RUNNING·NEEDS_INPUT·WAITING_REPORT) 작업이 있으면 409 `JOB_IN_PROGRESS`. 삭제 직전에 끝난 답변이 늦게 올린 Redis 컨텍스트는 다음 답변 전까지 쓰지 않는다(`context_json.cleared_after_job_id`, 2026-11-04) | D-11 |
+| API-39 컨텍스트 삭제 | 오류 추가 | 대화방에 실행 중(QUEUED·RUNNING·WAITING_REPORT) 작업이 있으면 409 `JOB_IN_PROGRESS`. 되묻기 대기(NEEDS_INPUT)는 막지 않는다. 삭제 직전에 끝난 답변이 늦게 올린 Redis 컨텍스트는 다음 답변 전까지 쓰지 않는다(`context_json.cleared_after_job_id`, 2026-11-04) | D-11 |
 
 번호 131은 제안입니다. 106~116은 삭제·예약이라 피했습니다. 정의서 담당자가 확정합니다.
 
