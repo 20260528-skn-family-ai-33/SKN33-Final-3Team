@@ -105,8 +105,17 @@ def run_loop(db,settings,once=False):
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--once',action='store_true'); args=parser.parse_args()
     from backend.app.services.report_browser import ensure_chromium
-    ensure_chromium()
+    try:
+        ensure_chromium()
+    except Exception as exc:
+        # 오프라인·권한 제한 서버에서 설치가 실패해도 채팅 작업은 돌린다. PDF 생성만 기존 재시도 오류로 끝난다.
+        logging.getLogger(__name__).warning('chromium_unavailable type=%s; PDF 리포트 생성은 실패합니다',type(exc).__name__)
     settings=Settings(); db=Database(settings.engine())
+    if settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true':
+        # 채팅 작업이 FAILED로만 끝나지 않게 시작할 때 체크포인터 Redis(모듈 포함)를 확인해 원인을 남긴다
+        from backend.app.agents.worker import checkpointer
+        try: checkpointer(db,settings)
+        except Exception as exc: logging.getLogger(__name__).error('chat_checkpointer_unavailable %s',exc)
     run_loop(db,settings,args.once)
 
 

@@ -12,6 +12,21 @@ from backend.app.api import jobs
 from backend.app.api.redis_store import RedisState
 
 
+REQUIRED_MODULES={'search':'RediSearch','ReJSON':'RedisJSON'}
+
+
+def require_modules(client):
+    """(임시) 체크포인터(langgraph-checkpoint-redis)는 RediSearch·RedisJSON을 쓴다(설계 D-07). Redis 7.x에는 없어
+    첫 질문부터 원인 없이 FAILED가 되므로, 연결할 때 모듈부터 확인해 원인을 남긴다."""
+    names=set()
+    for module in client.module_list():
+        name=module.get(b'name',module.get('name')) if isinstance(module,dict) else None
+        names.add(name.decode() if isinstance(name,bytes) else name)
+    missing=[label for name,label in REQUIRED_MODULES.items() if name not in names]
+    if missing:
+        raise RuntimeError(f'Redis에 {"·".join(missing)} 모듈이 없습니다. 채팅 에이전트는 Redis 8 이상이 필요합니다(설계 D-07).')
+
+
 def checkpointer(database,settings):
     with database.lock:
         if not hasattr(database,'agent_checkpointer'):
@@ -19,6 +34,7 @@ def checkpointer(database,settings):
             from langgraph.checkpoint.redis import RedisSaver
             client=Redis.from_url(settings.get('API_REDIS_URL','redis://localhost:6379/0'),
                                   decode_responses=False,socket_timeout=2,socket_connect_timeout=2)
+            require_modules(client)
             saver=RedisSaver(redis_client=client,ttl=CHECKPOINT_TTL)
             saver.setup()
             database.agent_checkpointer=saver
