@@ -50,6 +50,9 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False):
         for col in ws.columns: ws.column_dimensions[col[0].column_letter].width=24
     info=wb.create_sheet('정보')
     info.append(['항목','내용'])
+    # 순위는 상위 1,000행만 저장한다(trade.rankings). 잘렸으면 파일에도 전체 행 수를 남긴다.
+    if meta.get('truncated') and isinstance(meta.get('rows_total'),int):
+        info.append(['안내',f"전체 {meta['rows_total']:,}행 중 상위 1,000행만 담았습니다. 조건을 좁히면 전체를 받을 수 있습니다."])
     for key,value in meta.items(): info.append([key,str(value)])
     for query in sql: info.append(['실행 SQL',query])
     for row in info:
