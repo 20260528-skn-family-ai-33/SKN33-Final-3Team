@@ -319,9 +319,11 @@ def verify(state,known_names=(),*,snapshots=None,countries=()):
             for _,_,_,ids in evidence(digest): identities.update(ids)
     # 사전 이름은 답변에 나온 것만 남긴다(약 1.5만 개 품목명을 문장마다 다시 훑지 않게). 결과 행 이름의 일부인 사전 이름
     # ('전동축[캠샤프트…]' 안의 '전동축')은 그 결과를 줄여 부른 것이라 결과 밖 대상(D-77)으로 보지 않는다.
-    text=' '.join([*(x for c in state.draft.conclusion for x in c.sentences),*state.draft.explanation,state.draft.turn_summary])
-    names={n for n in known_names if n and n in text and not any(n!=i and n in i for i in identities)}|identities
+    # 국가명은 빼지 않는다. '수단'은 '남수단'을 줄여 부른 것이 아니라 다른 국가다.
     countries=frozenset(countries)
+    text=' '.join([*(x for c in state.draft.conclusion for x in c.sentences),*state.draft.explanation,state.draft.turn_summary])
+    names={n for n in known_names if n and n in text
+           and (n in countries or not any(n!=i and n in i for i in identities))}|identities
     index=0
     def add(sentence,digests):
         good,numbers=check_sentence(sentence,digests,known_names=names,countries=countries)

@@ -141,5 +141,18 @@ class ReviewFollowupTest(unittest.TestCase):
         self.assertTrue(check_sentence('미국 수출 비중은 5.0%입니다.', [digest], known_names={'미국', '중국'})[0])
 
 
+class CountrySubstringTest(unittest.TestCase):
+    def test_country_inside_another_country_name_is_still_a_country(self):
+        from backend.tests.test_agent_compose import ComposeTest
+        from backend.app.agents.state import ToolResult, Draft
+        from backend.app.agents.verify import verify
+        state = ComposeTest().state(['STATISTICS']); task = state.plan.tasks[0]; task.answer_status = 'ANSWERED'
+        step = next(s for s in task.steps if s.tool == 'query_trade_data')
+        state.results[step.step_id] = ToolResult(status='OK', result_id='r', digest={'rows': [{'name': '남수단', 'amount_usd': 999}]})
+        state.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['수단 수출은 999 USD입니다.']}], turn_summary='')
+        verify(state, known_names={'수단', '남수단'}, countries={'수단', '남수단'})
+        self.assertEqual(state.verification.checks[0].status, 'MISMATCH')
+
+
 if __name__ == '__main__':
     unittest.main()
