@@ -54,6 +54,9 @@ class ChatContext:
         session_id = str(session_id)
         last_job_id = str(last_job_id) if last_job_id is not None else None
         raw = self.redis.chat_context(session_id, refresh=opened)
+        # 조건 초기화(API-39) 뒤 새 답변이 없으면, 그 앞 답변이 늦게 올린 캐시는 초기화 이전 조건이다.
+        if raw and 'cleared_after_job_id' in context_json and context_json['cleared_after_job_id'] == last_job_id:
+            raw = None
         if raw:
             try:
                 cached = SessionContext.model_validate_json(raw)

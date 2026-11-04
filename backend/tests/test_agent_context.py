@@ -40,6 +40,15 @@ class ChatContextTest(unittest.TestCase):
         self.redis = RedisState({'API_REDIS_PREFIX': 'test:agent'}, self.client)
         self.context = ChatContext(self.redis)
 
+    def test_late_publish_after_clear_is_ignored_until_next_answer(self):
+        from backend.app.agents.state import Conditions
+        old = SessionContext(session_id='3', conditions=Conditions(country_codes=['CN']))
+        self.redis.acquire_chat('3', '11')
+        self.context.publish(old, '11')   # 초기화(API-39) 뒤에 늦게 도착한 답변 11의 컨텍스트
+        cleared = {'conditions': {}, 'interest_action': 'CLEARED', 'cleared_after_job_id': '11'}
+        self.assertIsNone(self.context.load('3', cleared, '11').conditions)
+        self.assertEqual(self.context.load('3', {}, '11').conditions.country_codes, ['CN'])
+
     def test_prefix_and_exclusive_acquisition(self):
         self.assertTrue(self.redis.acquire_chat('s', 'old'))
         self.assertFalse(self.redis.acquire_chat('s', 'new'))

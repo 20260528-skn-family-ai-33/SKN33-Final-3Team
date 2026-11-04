@@ -154,7 +154,16 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity in (39,40,64):
         sid=path['session_id']; store.owned('chat_session','session_id',sid,uid,lock=True); t=store.t('chat_session')
         if identity==39:
-            store.c.execute(update(t).where(t.c.session_id==sid).values(context_json={'conditions':{},'interest_action':'CLEARED'}))
+            # 실행 중인 답변은 끝날 때 자기 조건을 다시 저장하므로 초기화하지 않는다(D-11과 같은 409).
+            require(not jobs._active_chat(store,sid),'이 대화의 작업이 진행 중입니다.','JOB_IN_PROGRESS',409)
+            m=store.t('chat_message')
+            latest=store.one(select(m.c.result_json).where(m.c.session_id==sid,m.c.role=='ASSISTANT')
+                             .order_by(m.c.message_id.desc()).limit(1))
+            # 초기화 직전에 끝난 답변이 아직 Redis에 컨텍스트를 올리지 못했을 수 있다. 그 답변 기준의 캐시는
+            # 초기화 이전 것이므로 다음 답변이 생길 때까지 쓰지 않는다(ChatContext.load).
+            cleared_after=((latest or {}).get('result_json') or {}).get('job_id')
+            store.c.execute(update(t).where(t.c.session_id==sid).values(
+                context_json={'conditions':{},'interest_action':'CLEARED','cleared_after_job_id':cleared_after}))
             if settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true': store.db.redis.clear_chat_context(str(sid))
             return None
         if identity==64:

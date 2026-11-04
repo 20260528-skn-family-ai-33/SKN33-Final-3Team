@@ -1089,6 +1089,15 @@ class BackendApiTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt): run_loop(self.app.state.database,self.settings)
         self.assertEqual(schedule.call_count,1); self.assertEqual(run.call_count,2)
 
+    def test_context_clear_waits_for_running_answer(self):
+        self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':'clear-race'})
+        url=f'/api/v1/chat/sessions/{sid}/context'; headers={'X-CSRF-Token':self.csrf}
+        busy=self.client.delete(url,headers=headers)
+        self.assertEqual((busy.status_code,busy.json()['code']),(409,'JOB_IN_PROGRESS'))
+        self.assertTrue(run_once(self.app.state.database,self.settings))
+        self.assertEqual(self.client.delete(url,headers=headers).status_code,204)
+
     def test_worker_connection_failure_before_store_does_not_mask_error(self):
         from contextlib import contextmanager
         self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
