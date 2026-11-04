@@ -138,6 +138,9 @@ export function AppProvider({ children }) {
     if (current !== epoch.current) return false
     updateProfile({ ...p, version: data.interests.version, home: data.interests.landing_page === 'INTERESTED' ? 'interest' : 'all' }); return true
   }), [profile, run])
+  // 다른 화면(채팅 관심 추가 등)이 저장한 관심정보를 프로필에 반영한다. 버전이 어긋나면 관심정보 화면 저장이 409가 된다.
+  const applyInterests = useCallback(scope => updateProfile(p => ({ ...p, products: scope.hs_items.map(h => h.hs_code),
+    countries: scope.country_codes.map(countryName), home: scope.landing_page === 'INTERESTED' ? 'interest' : 'all', version: scope.version })), [])
   const acceptNotificationTerms = useCallback(version => run(async () => {
     const current = epoch.current
     const { consent } = await api('/users/me/consents', { method: 'POST', body: {
@@ -214,11 +217,11 @@ export function AppProvider({ children }) {
   const value = useMemo(() => ({
     session, account: session, accounts, setAccounts, loading, loadError, refresh, options, countries,
     login, signup, socialSignIn, logout, changePassword, withdraw,
-    profile, setProfile, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
+    profile, setProfile, applyInterests, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
     chats, setChats, refreshChats, reports, refreshReports, downloadReport,
     mainView, setMainView, notify, run, fail,
   }), [session, accounts, loading, loadError, refresh, options, countries, login, signup, socialSignIn,
-    logout, changePassword, withdraw, profile, setProfile, settings, setSettings, acceptNotificationTerms,
+    logout, changePassword, withdraw, profile, setProfile, applyInterests, settings, setSettings, acceptNotificationTerms,
     subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
     downloadReport, mainView, notify, run, fail])
   const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications }),

@@ -29,10 +29,17 @@ const { chromium } = require('playwright')
     let conflict = false, savedVersion
     let previews = 0
     let revisedPeriod = false
+    let interestFlow = false
+    const interestPuts = []
     const conditions = { hs_items: [], country_codes: [], period: { start: '2025-12-01', end: '2025-12-31' }, compare: 'NONE' }
     await page.route('**/api/v1/**', route => {
       const pathname = new URL(route.request().url()).pathname
       if (pathname.endsWith('/users/me')) return route.fulfill({ status: 401, json: { message: 'test signed out' } })
+      const savedInterests = { version: 'a'.repeat(64), country_codes: ['CN'], hs_items: [], landing_page: 'GLOBAL' }
+      if (interestFlow && pathname.endsWith('/users/me/interests')) {
+        if (route.request().method() === 'PUT') interestPuts.push(route.request().postDataJSON())
+        return route.fulfill({ json: { interests: route.request().method() === 'PUT' ? { ...savedInterests, country_codes: ['CN', 'US'] } : savedInterests } })
+      }
       if (pathname.endsWith('/users/me/interests') && route.request().method() === 'PUT') {
         return new Promise(resolve => { releaseProfile = async () => {
           await route.fulfill({ json: { interests: { version: 'new-version', landing_page: 'GLOBAL' } } }); resolve()
@@ -67,7 +74,8 @@ const { chromium } = require('playwright')
           return route.fulfill({ status: 202, json: { job: { job_id: '1' } } })
         }
         return route.fulfill({ json: { items: [{ message_id: '1', role: 'ASSISTANT', answer: {
-          text: 'Test analysis', conditions, tables: [], articles: [], warnings: [],
+          text: 'Test analysis', conditions, articles: [], warnings: [],
+          tables: [{ result_id: 'result-1', columns: [{ key: 'country_code', label: '국가' }], rows: [{ country_code: 'CN' }, { country_code: 'US' }] }],
         } }], page: { has_next: false } } })
       }
       if (pathname.endsWith('/chat/sessions')) {
@@ -203,6 +211,22 @@ const { chromium } = require('playwright')
     await page.waitForFunction(() => !document.querySelector('[role=dialog]'))
     assert.equal(generated[3].body.preview_id,'preview-4')
     console.log('PASS chat submission, preview and report creation send valid IDs over HTTP')
+    interestFlow = true
+    await page.getByRole('button', { name: '관심 목록 추가', exact: true }).first().click()
+    const dialog = page.getByRole('dialog', { name: '관심 목록 추가' })
+    await dialog.getByText('이미 등록됨', { exact: false }).waitFor()
+    assert.equal(await dialog.locator('label', { hasText: '이미 등록됨' }).locator('input').isDisabled(), true)
+    const alerts = []
+    page.once('dialog', d => { alerts.push(d.message()); d.accept() })
+    await dialog.getByRole('button', { name: '선택 항목 저장', exact: true }).click()
+    await page.waitForFunction(() => true)
+    assert.deepEqual(alerts, ['체크된 항목이 없습니다'])
+    assert.equal(interestPuts.length, 0)
+    await dialog.locator('label').filter({ hasNotText: '이미 등록됨' }).first().click()
+    await dialog.getByRole('button', { name: '선택 항목 저장', exact: true }).click()
+    await page.waitForFunction(() => !document.querySelector('[aria-label="관심 목록 추가"][role=dialog]'))
+    assert.deepEqual(interestPuts.map(b => b.country_codes), [['CN', 'US']])
+    console.log('PASS chat interest dialog disables saved items, alerts on empty selection and saves new items')
     assert.deepEqual(errors, [])
   } finally {
     if (browser) await browser.close()
