@@ -82,6 +82,16 @@ class CustomsCollectTest(unittest.TestCase):
         self.assertEqual(cc.resolve_period(start="202507", end="202606"), ("202507", "202606", "202507_202606"))
         self.assertEqual(cc.month_range("202511", "202602"), ["2025.11", "2025.12", "2026.01", "2026.02"])
 
+    def test_api_retry_log_includes_result_code_and_message(self):
+        for code, message in (("22", "호출 한도 초과"), ("30", "미등록 인증키")):
+            payload = f"<r><resultCode>{code}</resultCode><resultMsg>{message}</resultMsg></r>".encode()
+            with self.subTest(code=code), patch.object(cc.requests, "get", side_effect=[
+                    MagicMock(content=payload), MagicMock(content=OK_XML)]), \
+                    patch.object(cc.time, "sleep"), patch("builtins.print") as output:
+                cc.fetch("test", "US", "202501", "202502")
+                output.assert_called_once()
+                self.assertIn(f"API resultCode: {code} {message}", output.call_args.args[0])
+
     def test_transport_retry_log_does_not_expose_service_key(self):
         timeout = cc.requests.ConnectTimeout(f"{cc.API_URL}?serviceKey=private-key")
         with patch.object(cc.requests, "get", side_effect=[timeout, MagicMock(content=OK_XML)]), \

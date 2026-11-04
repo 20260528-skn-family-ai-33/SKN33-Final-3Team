@@ -85,7 +85,7 @@ def parse_response(payload):
         message = (root.findtext(".//resultMsg") or "").strip()
         if code == "99" and message.rstrip(".") == "존재하지 않는 국가코드입니다":
             raise UnsupportedCountryError(f"API resultCode: {code} {message}")
-        raise ValueError(f"API resultCode: {code}")
+        raise ValueError(f"API resultCode: {code} {message}".rstrip())
     return [{child.tag: child.text or "" for child in item} for item in root.iter("item")]
 
 
