@@ -139,6 +139,8 @@ class ReviewFollowupTest(unittest.TestCase):
         digest = ranking(); digest['top'][0]['share_pct'] = 5.0
         self.assertFalse(check_sentence('미국 수출이 5.0% 증가했습니다.', [digest], known_names={'미국', '중국'})[0])
         self.assertTrue(check_sentence('미국 수출 비중은 5.0%입니다.', [digest], known_names={'미국', '중국'})[0])
+        # 증감 단어가 값 바로 뒤가 아니면 비중 값 대조를 막지 않는다.
+        self.assertTrue(check_sentence('미국 비중은 증가해 5.0%입니다.', [digest], known_names={'미국', '중국'})[0])
 
 
 class CountrySubstringTest(unittest.TestCase):
