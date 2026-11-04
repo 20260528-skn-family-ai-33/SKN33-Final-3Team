@@ -161,7 +161,9 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         settings = getattr(store.db, 'settings', {})
         threshold = float(settings.get('API_CHAT_COUNTRY_SIMILARITY', 0.6))
         # 질문에 새 국가가 있으면("미국은 왜 증가했어?") 플래너가 함께 적은 이전 국가는 이어받지 않는다.
-        new_country = any(item.mention.casefold() in original.casefold() for item in countries)
+        # 국가로 확정되는 표현만 센다. 'TV'처럼 국가가 아닌 약어는 뒤에서 빠지므로 이어받기를 막지 않는다.
+        new_country = any(item.mention.casefold() in original.casefold()
+                          and country_matches(item.name, rows, threshold)[0] for item in countries)
         for item in countries:
             key = f'{task.task_id}:country:{item.mention}'
             answer = task.resolved.get(key, {})

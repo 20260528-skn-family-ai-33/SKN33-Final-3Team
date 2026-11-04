@@ -92,6 +92,13 @@ class ConditionTest(unittest.TestCase):
         check_conditions(self.store,self.state,self.step)
         self.assertEqual(self.step.status,'DONE')
         self.assertEqual(self.task.conditions.country_codes,['US'])
+        # 국가가 아닌 약어('TV')만 있으면 이전 국가를 그대로 이어받는다.
+        self.state.input.question='TV는 왜 증가한거야?'
+        self.step.status='PENDING'
+        self.task.slots=TaskSlots(countries=[{'mention':'중국','name':'중국'},{'mention':'TV','name':'텔레비전'}],products=None,recent_months=3)
+        check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'DONE')
+        self.assertEqual(self.task.conditions.country_codes,['CN'])
         # 같은 국가가 이어받기와 코드 표현으로 두 번 들어와도 하나만 남는다.
         self.state.input.question='CN은 왜 증가한거야?'
         self.step.status='PENDING'

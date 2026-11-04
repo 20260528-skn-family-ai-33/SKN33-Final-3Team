@@ -55,6 +55,28 @@ class SqlFilterTest(unittest.TestCase):
         self.assertIn('1055', client.parse.call_args.kwargs['payload']['previous_error'])
 
 
+class SqlFilterBypassTest(unittest.TestCase):
+    JOIN = "FROM export_summary e JOIN country c ON c.country_code = e.country_code "
+
+    def test_filters_must_be_and_conditions_in_every_select(self):
+        ok = [f"SELECT SUM(e.amount_usd) AS value {self.JOIN}WHERE (c.country_role = 'COUNTRY' AND (e.hs_ver = 'HS2022'))",
+              f"WITH t AS (SELECT e.amount_usd {self.JOIN}WHERE c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022') "
+              "SELECT SUM(amount_usd) AS value FROM t"]
+        bad = [f"SELECT SUM(e.amount_usd) AS value {self.JOIN}WHERE c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022' OR 1=1",
+               f"SELECT SUM(e.amount_usd) AS value {self.JOIN}WHERE c.country_role = 'COUNTRY' AND (e.hs_ver = 'HS2022' OR 1=1)",
+               "SELECT SUM(amount_usd) AS value FROM export_summary WHERE country_code = 'US' AND hs_ver = 'HS2022' "
+               "UNION ALL SELECT SUM(amount_usd) FROM import_summary"]
+        for sql in ok:
+            with self.subTest(sql=sql): self.assertTrue(validate_sql(draft(sql)))
+        for sql in bad:
+            with self.subTest(sql=sql), self.assertRaises(ValueError): validate_sql(draft(sql))
+
+    def test_missing_table_error_hides_database_name(self):
+        from sqlalchemy.exc import ProgrammingError
+        error = ProgrammingError('SELECT ...', {}, Exception(1146, "Table 'borderless_prod.users' doesn't exist"))
+        self.assertNotIn('borderless_prod', safe_error(error))
+
+
 class RankingSourceTest(unittest.TestCase):
     def test_rank_order_on_ranking_result_is_amount(self):
         from backend.app.agents.bindings import resolve
@@ -98,6 +120,23 @@ class ProductShareTest(unittest.TestCase):
         from backend.app.agents.planner import build_plan
         plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'MARKET_SHARE', 'question': '2025년 국가별 수출 비중'}]))
         self.assertEqual(plan.tasks[0].intent, 'MARKET_SHARE')
+
+
+class CheckBudgetTest(unittest.TestCase):
+    def test_check_without_time_fails_only_that_step(self):
+        from backend.app.agents.runtime import Services
+        from backend.app.api.common import ApiError
+        from backend.tests.test_agent_state import state
+        s = state(); step = s.plan.tasks[0].steps[0]
+        execution = MagicMock()
+        execution.call.side_effect = ApiError(409, 'RUN_TIMEOUT', '실행 시간이 부족합니다.')
+        Services(execution, Settings({}), client=MagicMock()).check(s, step)
+        self.assertEqual(step.status, 'FAILED')
+        self.assertEqual(s.results[step.step_id].status, 'FAILED')
+        execution.call.side_effect = ApiError(409, 'JOB_CLAIM_LOST', '소유권')
+        step.status = 'PENDING'
+        with self.assertRaises(ApiError):
+            Services(execution, Settings({}), client=MagicMock()).check(s, step)
 
 
 if __name__ == '__main__':
