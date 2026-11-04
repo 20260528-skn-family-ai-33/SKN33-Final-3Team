@@ -181,6 +181,31 @@ def combine(predictions):
                                         for p in predictions], axis=0))  # 예전 파일의 latest에는 product가 없다
 
 
+TREND_BAND = 10  # 현재 동향 경계(%): 지난 12개월 실제 증감률 +10% 초과 성장, -10% 미만 침체
+
+
+def market_view(pred):
+    """현재 동향(사실)과 전망(예측)을 나눠 붙인다. pred: growth와 growth_12m(없으면 현재 동향 미확인)이 있는 latest.
+
+    - 현재 동향: 지난 12개월 실제 수출을 그 전 12개월과 비교한 증감률(growth_12m)을 ±TREND_BAND%로 나눈 것. 예측이 아니다.
+    - 전망: 같은 기준월 전체 쌍 안에서 예측 증감률 순위를 3등분한 상대 등급. 예측 증감률 절대값은 평균 쪽으로 몰려
+      고정 경계로 나누면 유망이 거의 나오지 않는다. 2025-02~09 검증 8개월 3구간 정확도 약 45% (무작위 33%).
+    """
+    past = pd.to_numeric(pred["growth_12m"], errors="coerce") if "growth_12m" in pred else pd.Series(np.nan, pred.index)
+    current = pd.to_numeric(pred["exp_12m"], errors="coerce") if "exp_12m" in pred else pd.Series(np.nan, pred.index)
+    # growth_12m = log1p(current) - log1p(previous). +1 보정을 되돌려 실제 분모를 복원한다.
+    previous = (current + 1) * np.exp(-past) - 1
+    previous = previous.mask(np.isclose(previous, 0, rtol=0, atol=1e-8), 0)
+    valid = np.isfinite(current) & (current >= 0) & np.isfinite(previous) & (previous > 0)
+    past_pct = ((current - previous) / previous.where(valid) * 100).where(valid)
+    trend = np.select([past_pct < -TREND_BAND, past_pct > TREND_BAND], ["침체", "성장"], "정체").astype(object)
+    trend[past_pct.isna().to_numpy()] = "미확인"
+    rank = pred.groupby("anchor").growth.rank(pct=True).to_numpy()
+    outlook = np.select([rank <= 1 / 3, rank > 2 / 3], ["저조", "유망"], "보통").astype(object)
+    outlook[np.isnan(rank)] = "미확인"  # 예측값이 없으면 등급을 매기지 않는다
+    return pred.assign(past_pct=past_pct, trend=trend, outlook=outlook)
+
+
 # 최종 모델 = v1 · v3 피처 2단계 C(K=100) 앙상블. 같은 시드끼리 v3 단독과 비교하면 NDCG@5가 기준월 3개 × 시드 3개
 # 9번 모두 같거나 높다 (5차 테스트). v3 단독은 {"ext": "first_release"} (학습 약 1.6배 빠름, Hit@5는 기준월마다 엇갈림).
 MEMBERS = {"base": "none", "ext": "first_release"}
@@ -224,7 +249,8 @@ def monthly(frame, n_jobs=2, method="C", k=100):
                           "baseline_growth_12m": evaluate_predictions(
                               test, test[F.A_TARGETS[F.HORIZON][1]].to_numpy(dtype=float))[0]})
     bundle = {"members": members, "method": method, "k": k,
-              "latest": combine(latest).assign(exp_12m=now.exp_12m.to_numpy()),  # query가 이 파일 하나로 조회
+              "latest": combine(latest).assign(exp_12m=now.exp_12m.to_numpy(),  # query가 이 파일 하나로 조회
+                                               growth_12m=now.growth_12m.to_numpy()),  # market_view 현재 동향
               "features": {name: m["features"] for name, m in members.items()}, "external_dropped": dropped,
               "target_clip": rows.y_growth.quantile(ExperimentConfig().target_clip).tolist(),
               "fit_seconds": sum(m["fit_seconds"] for m in members.values()), "feature_set": "two_stage_" + "_".join(MEMBERS),
@@ -247,7 +273,8 @@ def train(args):
     bundle = fit(rows, columns, args.method, args.k, args.seed, args.n_jobs)
     bundle.update(external=args.external, version=args.version, runtime=_runtime("lightgbm"),
                   trained_at=datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds"),
-                  latest=predict(bundle, latest).assign(exp_12m=latest.exp_12m.to_numpy()))
+                  latest=predict(bundle, latest).assign(exp_12m=latest.exp_12m.to_numpy(),
+                                                        growth_12m=latest.growth_12m.to_numpy()))
     args.out_dir.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".joblib.tmp")
     joblib.dump(bundle, temporary)
@@ -265,8 +292,11 @@ def query(args, error):
     countries = countries[countries.country_role == "COUNTRY"]
     code, hs6 = resolve_target(args.country, args.hs6, countries, error)
     bundles = [joblib.load(p) for p in args.model]
-    pred = combine([b["latest"] for b in bundles]).assign(exp_12m=bundles[0]["latest"].exp_12m.to_numpy())
-    pred = pred.assign(growth_pct=np.expm1(pred.growth) * 100)
+    first = bundles[0]["latest"]
+    pred = combine([b["latest"] for b in bundles]).assign(exp_12m=first.exp_12m.to_numpy())
+    if "growth_12m" in first:  # 시장 동향 이전 파일에는 없다
+        pred = pred.assign(growth_12m=first.growth_12m.to_numpy())
+    pred = market_view(pred.assign(growth_pct=np.expm1(pred.growth) * 100))
     names = S.hs_names()
     label = " + ".join(p.name for p in args.model)
     if code and hs6:
@@ -278,18 +308,20 @@ def query(args, error):
             return
         row = rank["row"]
         print(f"예측 증감률(약) {row.growth_pct:+.1f}% | 최근 12개월 수출 {row.exp_12m:,.0f} USD")
+        past = " (실적 증감률 산정 불가)" if np.isnan(row.past_pct) else f" (지난 12개월 실적 {row.past_pct:+.1f}%)"
+        print(f"현재 동향 {row.trend}{past} | 전망 {row.outlook} (같은 달 전체 쌍 중 예측 순위 3등분, 2025-02~09 검증 3구간 정확도 약 45%, 재학습 후 미측정)")
         print(f"{name} 안 순위(2단계) {rank['country_rank']} / {rank['country_size']}개 품목 | "
               f"{hs6} 안 순위(품목 방향) {rank['product_rank']} / {rank['product_size']}개국")
         return
     if code:
         rows = pred[pred.country_code == code].nlargest(args.top, "order")
-        rows = rows.assign(name=rows.hs6.map(lambda h: item_name(h, names)))[["hs6", "name", "growth_pct", "exp_12m"]]
-        header, title = ["HS6", "품목명", "예측 증감률(%)", "최근 12개월 수출(USD)"], f"{countries.set_index('country_code').name_ko[code]}({code}) → 유망 품목"
+        rows = rows.assign(name=rows.hs6.map(lambda h: item_name(h, names)))[["hs6", "name", "growth_pct", "exp_12m", "trend", "outlook"]]
+        header, title = ["HS6", "품목명", "예측 증감률(%)", "최근 12개월 수출(USD)", "현재 동향", "전망"], f"{countries.set_index('country_code').name_ko[code]}({code}) → 유망 품목"
     else:
         rows = pred[pred.hs6 == hs6].nlargest(args.top, "product")
         rows = rows.merge(countries[["country_code", "name_ko"]], on="country_code", how="left")[
-            ["country_code", "name_ko", "growth_pct", "exp_12m"]]
-        header, title = ["국가코드", "국가명", "예측 증감률(%)", "최근 12개월 수출(USD)"], f"{hs6} {item_name(hs6, names, width=60)} → 유망 국가"
+            ["country_code", "name_ko", "growth_pct", "exp_12m", "trend", "outlook"]]
+        header, title = ["국가코드", "국가명", "예측 증감률(%)", "최근 12개월 수출(USD)", "현재 동향", "전망"], f"{hs6} {item_name(hs6, names, width=60)} → 유망 국가"
     print(f"{label} | 기준월 {pred.anchor.max().date()} | {title} Top {args.top}")
     if rows.empty:
         print("예측 대상이 없습니다 (최근 12개월 수출 $100K 이상인 쌍만 예측합니다)")

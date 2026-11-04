@@ -57,6 +57,7 @@ class TwoStageTest(unittest.TestCase):
         self.assertEqual(latest[T.KEYS].reset_index(drop=True).to_dict("list"),
                          self.latest[T.KEYS].reset_index(drop=True).to_dict("list"))  # 최신 기준월 전체 쌍
         self.assertTrue(np.isfinite(latest[["growth", "order"]].to_numpy()).all())
+        np.testing.assert_array_equal(latest.growth_12m, self.latest.growth_12m)  # 현재 동향용 지난 12개월 실적
         for key in ("model", "model_stage1", "baseline_growth_12m"):
             self.assertIsNotNone(evaluation[key]["country_ndcg_at_5"], key)
 
@@ -77,8 +78,34 @@ class TwoStageTest(unittest.TestCase):
             T.query(argparse.Namespace(model=[path], country=code, hs6="999999", top=5), error)
         mapped.assert_called_once_with("999999")  # 입력 코드를 비교용 대표 코드로 바꿔 찾는다
         self.assertIn("순위(2단계)", out.getvalue())
+        self.assertIn("현재 동향 미확인 (실적 증감률 산정 불가) | 전망", out.getvalue())  # 예전 파일은 지난 실적이 없다
         with self.assertRaisesRegex(SystemExit, "찾지 못했"):
             T.query(argparse.Namespace(model=[path], country="없는나라", hs6=None, top=5), error)
+
+    def test_market_view_splits_past_trend_from_ranked_outlook(self):
+        import pandas as pd
+        current = 100_000 * (1 + np.array([-.5, -.11, -.09, .09, .11, .5, np.nan, 0, 3]))
+        pred = pd.DataFrame({"anchor": ["2026-09"] * 6 + ["2026-10"] * 3,
+                             "growth": [-3, -2, -1, 0, 1, 2, 5, 6, 7],
+                             "exp_12m": current,
+                             "growth_12m": np.log1p(current) - np.log1p(100_000)})
+        view = T.market_view(pred)
+        self.assertEqual(view.trend.tolist(), ["침체", "침체", "정체", "정체", "성장", "성장", "미확인", "정체", "성장"])  # ±10% 안은 정체
+        self.assertEqual(view.outlook.tolist(), ["저조", "저조", "보통", "보통", "유망", "유망", "저조", "보통", "유망"])  # 기준월마다 3등분
+        self.assertEqual(T.market_view(pred.drop(columns="growth_12m")).trend.unique().tolist(), ["미확인"])
+        self.assertEqual(T.market_view(pred.assign(growth=np.nan)).outlook.unique().tolist(), ["미확인"])  # 예측 없으면 등급 없음
+
+    def test_market_view_undoes_log_smoothing_and_rejects_zero_previous_exports(self):
+        import pandas as pd
+        current = np.array([100_000., 100_000., 150_000., 0.])
+        previous = np.array([0., 1., 100_000., 100_000.])
+        pred = pd.DataFrame({"anchor": ["2026-09"] * 4, "growth": [0.] * 4,
+                             "exp_12m": current, "growth_12m": np.log1p(current) - np.log1p(previous)})
+        view = T.market_view(pred)
+        self.assertTrue(np.isnan(view.past_pct.iloc[0]))
+        self.assertEqual(view.trend.iloc[0], "미확인")
+        np.testing.assert_allclose(view.past_pct.iloc[1:], [9_999_900., 50., -100.])
+        self.assertTrue(T.market_view(pred.drop(columns="exp_12m")).past_pct.isna().all())
 
     def out_file(self, bundle):
         import tempfile
