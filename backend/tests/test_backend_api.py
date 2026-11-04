@@ -1092,7 +1092,7 @@ class BackendApiTest(unittest.TestCase):
         def flaky():
             nonlocal count
             count+=1
-            if count==2: raise OSError('temporary connection failure')
+            if count==3: raise OSError('temporary connection failure')  # 1: wake_ready 검사, 2: claim, 3: 실행 시작
             with original() as c: yield c
         with patch.object(self.engine,'begin',side_effect=flaky):
             self.assertTrue(run_once(self.app.state.database,self.settings))

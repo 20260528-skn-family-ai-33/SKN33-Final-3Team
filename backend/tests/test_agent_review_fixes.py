@@ -147,6 +147,13 @@ class PromisingMarketHs4Test(unittest.TestCase):
         from backend.app.api.database import Database, Store
         engine, meta = test_engine(); self.addCleanup(engine.dispose)
         reference_data(engine, meta)
+        extra = {'hs_code': '330410', 'hs_ver': 'HS2022', 'name_ko': '입술화장품', 'source_edition': 'HS2022',
+                 'original_name_ko': None}
+        if meta.tables['hs_code'].c.depth.computed is None: extra['depth'] = 6
+        with engine.begin() as c: c.execute(meta.tables['hs_code'].insert(), [extra])
+        # 후보 HS6는 예측 모델의 수출액 순서로 고른다(conditions.market_hs4). 모델 파일 없이 순서만 대신한다.
+        self.enterContext(patch('backend.app.agents.market.loaded', return_value=(object(), None, {})))
+        self.enterContext(patch('backend.app.agents.market.hs6_by_exports', return_value=['330499', '330410']))
         db = Database(engine); db.settings = Settings({'API_HS_VECTOR_ENABLED': 'false'})
         connection = engine.connect(); self.addCleanup(connection.close)
         s = state(); task = s.plan.tasks[0]; step = task.steps[0]
