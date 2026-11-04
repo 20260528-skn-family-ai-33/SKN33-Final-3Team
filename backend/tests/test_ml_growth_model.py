@@ -36,6 +36,7 @@ class GrowthModelTest(unittest.TestCase):
         self.assertEqual(set(G.DROP_FEATURES), VERIFIED_DROP)
         self.assertEqual(len(G.DROP_FEATURES), 16)
         self.assertEqual(G.BOUNDARY_PCT, 0.0)
+        self.assertEqual((G.UP, G.DOWN), ("UP", "DOWN"))  # 코드값 (화면 문구는 쓰는 쪽에서)
 
     def test_input_without_dropped_columns_gives_the_same_features(self):
         reduced = self.rows.drop(columns=[c for c in G.DROP_FEATURES if c in self.rows])
@@ -65,6 +66,30 @@ class GrowthModelTest(unittest.TestCase):
         np.testing.assert_array_equal(pred.direction == G.UP, pred.growth_pct >= G.BOUNDARY_PCT)
         logs = [m["model"].predict(T._x(self.latest, m["features"])) for m in self.bundle["members"].values()]
         np.testing.assert_allclose(pred.growth_pct, np.expm1(np.mean(logs, axis=0)) * 100)  # v1·v3 로그 평균
+
+    def test_v3_uses_external_features_and_bundle_records_training(self):
+        ext = set(self.bundle["features"]["ext"])
+        self.assertTrue(ext & set(MARKET + WDI))  # v3가 v1과 같아지지 않는다
+        self.assertGreater(len(ext), len(self.bundle["features"]["base"]))
+        self.assertEqual(self.bundle["train_rows"], len(self.rows))
+        self.assertEqual(self.bundle["train_start"], str(self.rows.anchor.min().date()))
+        self.assertEqual(self.bundle["train_end"], str(self.rows.anchor.max().date()))
+        self.assertIn("lightgbm", self.bundle["runtime"])
+        self.assertGreater(self.bundle["fit_seconds"], 0)
+
+    def test_warns_and_records_when_external_features_are_missing(self):
+        rows = self.rows.copy()
+        rows[MARKET + WDI] = np.nan  # load_frame(external=True)를 거치지 않은 행
+        with self.assertLogs(G.log, "WARNING"):
+            bundle = G.fit_members(rows, n_jobs=1)
+        self.assertEqual(bundle["features"]["ext"], bundle["features"]["base"])
+        self.assertEqual(bundle["external_dropped"]["ext"], [c for c in MARKET + WDI if c not in G.DROP_FEATURES])
+
+    def test_model_a_regressor_keeps_default_settings(self):
+        columns = G.feature_columns(self.rows)
+        model = T._regressor(T._x(self.rows, columns), self.rows.y_growth, columns, 0, 1)
+        self.assertNotEqual(model.steps[-1][1].get_params()["objective"], "huber")
+        self.assertEqual(model.steps[-1][1].get_params()["n_estimators"], 300)
 
     def test_boundary_counts_zero_as_increase(self):
         self.assertEqual(G.direction([0.0, -0.001, 3.2]).tolist(), [G.UP, G.DOWN, G.UP])

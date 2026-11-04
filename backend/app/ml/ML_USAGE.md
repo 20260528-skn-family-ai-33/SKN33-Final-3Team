@@ -355,21 +355,26 @@ HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처�
 
 공식 근거: [HGB warm_start 제약](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html), [SGDRegressor partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDRegressor.html), [SGDClassifier partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDClassifier.html), [LightGBM init_model](https://lightgbm.readthedocs.io/en/stable/pythonapi/lightgbm.train.html), [XGBoost 학습 재개 예제](https://xgboost.readthedocs.io/en/stable/python/examples/continuation.html).
 
-## 증감 예상 모델(개선 B)
+## 증감 예상 모델(모델 B)
 
 `backend/app/ml/growth_model.py`는 화면의 "증가 예상 / 감소 예상" 표시용 회귀 모델입니다. 모델 A의 1단계 성장률(`growth`, L2 손실)과 따로 학습합니다. 지금은 학습·예측 모듈만 있고, 월별 재학습과 조회에는 아직 연결하지 않았습니다.
 
 | 항목 | 값 |
 |---|---|
-| 손실·설정 | LightGBM Huber (`alpha` 1.0, 잎 63, 트리 1000, 학습률 0.02, `min_child_samples` 300, `colsample_bytree` 0.7, `subsample` 0.8, `reg_lambda` 5) |
-| 피처 | 모델 A 후보에서 `DROP_FEATURES` 16개 제외 (v1 20개 · v3 25개 안팎), 환율은 `fx_vol_12m`(DB `fx_daily`, ECOS) |
-| 출력 | `growth_pct` = expm1(v1·v3 로그 성장 평균) × 100, `direction` = `growth_pct` ≥ 0%이면 증가 |
+| 손실·설정 | LightGBM Huber (`alpha` 1.0, 잎 63, 트리 1000, 학습률 0.02, `min_child_samples` 300, `colsample_bytree` 0.7, `subsample` 0.8, `reg_lambda` 5). 정답 절단·범주 처리는 A 1단계와 같은 `two_stage._regressor` |
+| 피처 | 모델 A 후보에서 `DROP_FEATURES` 16개 제외, 환율은 `fx_vol_12m`(DB `fx_daily`, ECOS). 2026-11 스냅샷 기준 v1 20개, v3는 학습 기준월이 2024-08까지면 25개, 2025년 이후 기준월이 들어가면 28개 (시장 변화 피처 `mkt_growth`·`kor_share_change`·`mkt_hs4_growth`는 BACI 2023년 자료 공개 뒤인 2025년 기준월부터 값이 생김) |
+| 출력 | `growth_pct` = expm1(v1·v3 로그 성장 평균) × 100, `direction` = `growth_pct` ≥ 0%이면 `UP`, 아니면 `DOWN` (화면 문구는 쓰는 쪽에서 붙임) |
+| 묶음 기록 | `features`, `external_dropped`, `train_rows`, `train_start`·`train_end`, `fit_seconds`, `runtime` |
 | 검증 | 방향 정답률 Dev(2025-05~09) 59.72% → 61.12%, 2025-08 사후 Holdout 59.29% → 60.66% (국가 단위 95% +0.95 ~ +1.78%p) |
 
+학습 행은 **외부 피처(시장·WDI)를 붙인 표**로 만듭니다. `load_rows(external="none")`처럼 외부 피처가 없는 행을 넣으면 v3가 v1과 같은 피처로 학습되어 앙상블 효과가 없어지므로, 경고를 남기고 빠진 피처를 `external_dropped`에 기록합니다.
+
 ```python
-from backend.app.ml import growth_model as G
-bundle = G.fit_members(train_rows, seed=0)   # 정답(y_growth)이 있는 학습 행
-pred = G.predict(bundle, latest_rows)        # anchor, country_code, hs6, growth_pct, direction
+from backend.app.ml import two_stage as T, growth_model as G
+frame = T.load_frame(external=True)                  # 외부 피처를 붙인 스냅샷 표
+train_rows, latest_rows, _ = T.split_rows(frame, "first_release")
+bundle = G.fit_members(train_rows, seed=0)           # 정답(y_growth)이 있는 학습 행
+pred = G.predict(bundle, latest_rows)                # anchor, country_code, hs6, growth_pct, direction
 ```
 
 성장률 숫자 자체는 오차가 커서(2025-08 MAE 73%p) 화면에는 방향만 보여 주는 것을 전제로 합니다.
