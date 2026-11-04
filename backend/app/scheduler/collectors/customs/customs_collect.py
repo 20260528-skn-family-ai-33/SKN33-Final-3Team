@@ -70,6 +70,10 @@ def load_key(env_path):
     return unquote(key)  # Encoding 키도 Decoding 키로 바꿔 사용 (requests가 다시 인코딩함)
 
 
+class UnsupportedCountryError(RuntimeError):
+    """요청한 국가코드를 관세청 API가 명시적으로 거절했다."""
+
+
 # XML 응답의 오류를 확인하고 품목 목록을 원본 값 그대로 추출합니다.
 def parse_response(payload):
     root = ET.fromstring(payload)
@@ -78,7 +82,10 @@ def parse_response(payload):
         gateway_code = root.findtext(".//returnReasonCode") or "unknown"
         raise ValueError(f"API gateway error code: {gateway_code}")
     if code != "00":
-        raise ValueError(f"API resultCode: {code} {root.findtext('.//resultMsg')}")
+        message = (root.findtext(".//resultMsg") or "").strip()
+        if code == "99" and message.rstrip(".") == "존재하지 않는 국가코드입니다":
+            raise UnsupportedCountryError(f"API resultCode: {code} {message}")
+        raise ValueError(f"API resultCode: {code} {message}".rstrip())
     return [{child.tag: child.text or "" for child in item} for item in root.iter("item")]
 
 
@@ -122,7 +129,9 @@ def fetch(key, country, start, end):
             response = requests.get(API_URL, params=params, timeout=TIMEOUT)
             return parse_response(response.content)
         except (requests.RequestException, ET.ParseError, ValueError) as error:
-            print(f"  재시도 {attempt}/{RETRIES} {country} {start}~{end}: {type(error).__name__} {error}")
+            # 요청 예외 문자열은 인증키가 포함된 전체 URL을 담을 수 있다.
+            reason = str(error) if type(error) is ValueError else type(error).__name__
+            print(f"  재시도 {attempt}/{RETRIES} {country} {start}~{end}: {reason}")
             time.sleep(RETRY_WAIT)
     raise RuntimeError(f"{country} {start}~{end} 수집 실패")
 

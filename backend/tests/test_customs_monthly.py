@@ -386,6 +386,38 @@ class CountryCacheTest(unittest.TestCase):
         self.assertEqual(fetch.call_count, 3)
         self.assertEqual(len(monthly.collector.read_csv(path)), 2)
 
+    def test_unsupported_country_does_not_block_load_or_duplicate_it_on_retry(self):
+        rejection = monthly.collector.UnsupportedCountryError("API resultCode: 99 존재하지 않는 국가코드입니다.")
+        with patch.object(monthly.collector, "resolve_countries", return_value=["US", "XK", "VN"]), \
+                patch.object(monthly.collector, "load_key", return_value="TEST"), \
+                patch.object(monthly.collector, "fetch", side_effect=[self.rows, rejection, [], rejection, []]) as fetch, \
+                patch.object(monthly, "mysql_url", return_value=URL.create("mysql+pymysql", host="test")), \
+                patch.object(monthly, "make_engine"), patch.object(monthly, "MetricCalculator") as metrics, \
+                patch.object(monthly, "load_csv", return_value={"status": "LOADED"}) as load, \
+                patch.dict("os.environ", {"CUSTOMS_ML_ENTRYPOINT": ""}):
+            metrics.return_value.calculate.return_value = {}
+            options = dict(output=self.root, env_path=self.root / ".env")
+            first = monthly.run_month("202509", **options)
+            self.assertEqual(first["status"], "WAITING_FOR_PUBLICATION")
+            report = first["collection"]
+            self.assertEqual(report["unsupported_countries"], {"XK": str(rejection)})
+            self.assertEqual(report["failed_countries"], [])
+            self.assertEqual(report["unconfirmed_empty_countries"], ["VN"])
+            second = monthly.run_month("202509", confirmed_empty_countries=["VN"], **options)
+            self.assertEqual(second["status"], "WAITING_FOR_ML")
+            self.assertEqual(second["collection"]["publication_status"], "CONFIRMED_FOR_SUPPORTED_COUNTRIES")
+            self.assertEqual([call.args[1] for call in fetch.call_args_list], ["US", "XK", "VN", "XK", "VN"])
+            load.assert_called_once()
+            metrics.return_value.calculate.assert_called_once()
+
+    def test_all_unsupported_countries_do_not_complete_an_empty_month(self):
+        with patch.object(monthly.collector, "fetch", side_effect=monthly.collector.UnsupportedCountryError("미지원")):
+            with self.assertRaises(ValidationError):
+                self.collect()
+        report = json.loads((self.root / "collection.json").read_text(encoding="utf-8"))
+        self.assertFalse(report["collection_complete"])
+        self.assertEqual(report["publication_status"], "COLLECTION_ERROR")
+
     def test_total_only_cache_with_valid_hash_and_count_is_still_refetched(self):
         path = self.cache / "US.csv"
         totals = [{**self.rows[0], "year": "총계", "hsCd": "-"}]
