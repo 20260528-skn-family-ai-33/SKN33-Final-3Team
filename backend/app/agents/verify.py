@@ -11,6 +11,28 @@ PERIOD_AMOUNTS = {'total_usd','monthly_avg_usd','verified_subtotal_usd',
                   'compare_total_usd','compare_monthly_avg_usd','compare_verified_subtotal_usd'}
 DIRECTION = re.compile(r'과거|지난|직전|최근|앞선|향후|앞으로|미래|다가올|다음|예측|예상|전망')
 PAST_WORDS = {'과거','지난','직전','최근','앞선'}
+# "1억 2,346만 달러"는 금액 하나다. 두 숫자로 나누지 않도록 만 단위 한 숫자(12346만)로 바꿔 대조한다.
+COMPOUND = re.compile(r'(?<![\d.])(?P<sign>[+-]?)(?P<eok>\d[\d,]*)\s*억\s*(?P<man>\d[\d,]*)\s*만')
+# 값 바로 뒤의 증감 표현. "5.2% 감소"는 -5.2%다. "~로 감소"는 바뀐 뒤의 값이라 방향으로 보지 않는다.
+CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나)?\s*(?:(?P<down>감소|줄|하락|축소|떨어|낮아|내려)|(?P<up>증가|늘|상승|확대|성장|올라|오르|높아))')
+# 한 문장 안의 주장 경계. 월평균·총액·비중 같은 지표 표현은 그 금액이 있는 주장에서만 본다.
+SEPARATOR = re.compile(r'(?<!\d),|,(?!\d)|[;，]|이며|이고|하고|으며')
+# "상위 2개국", "3곳"은 조회 대상 수이지 통계 수치가 아니다.
+COUNT_BEFORE = re.compile(r'(?:상위|하위)\s*$')
+COUNT_AFTER = re.compile(r'\s*(?:곳|개국|개\s*(?:국가|품목))')
+
+
+def _merge_compound(text):
+    def merged(m):
+        total=int(m['eok'].replace(',',''))*10**4+int(m['man'].replace(',',''))
+        return f'{m["sign"]}{total}만'
+    return COMPOUND.sub(merged,text)
+
+
+def _clause(text, start, end):
+    left=max((m.end() for m in SEPARATOR.finditer(text,0,start)),default=0)
+    right=next((m.start() for m in SEPARATOR.finditer(text,end)),len(text))
+    return text[left:right]
 
 
 def _shift(month, offset):
@@ -81,7 +103,7 @@ def check_sentence(sentence, digests, *, known_names=()):
 
 def _check_claim(sentence, digests, known_names, *, require_month, inherited_names):
     _require_month,_inherited_names=require_month,inherited_names
-    text=re.sub(r'\[\d+\]', '',sentence)
+    text=_merge_compound(re.sub(r'\[\d+\]', '',sentence))
     dates=list(DATE.finditer(text))
     def names_in(value):
         value=DATE.sub(' ',value)
@@ -144,14 +166,23 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
     facts=[f for d in candidates for f in evidence(d) if mentioned<=f[3]
            and not (('수입' in sentence and d.get('trade_flow')=='EXPORT') or
                     ('수출' in sentence and d.get('trade_flow')=='IMPORT'))]
-    if mentioned and not facts: ok=False
-    for match in TOKEN.finditer(text):
+    tokens=[m for m in TOKEN.finditer(text)
+            if not COUNT_BEFORE.search(text,0,m.start()) and not COUNT_AFTER.match(text,m.end())]
+    # 숫자 없는 문장("수출액은 모두 미국 달러(USD) 단위입니다")은 수치 검증 대상이 아니다. 기간 표현만 본다.
+    if mentioned and not facts and tokens: ok=False
+    for match in tokens:
         raw,scale,unit=match.group('value','scale','unit')
         value=Decimal(raw.replace(',',''))
         unit={'달러':'USD','usd':'USD','개':'COUNT','건':'COUNT','kg':'KG','%p':'%p'}.get((unit or '').lower(),unit)
         if scale and not unit: unit='USD'
         numbers.append(match.group().strip()[:40])
         granularity=Decimal(1).scaleb(value.as_tuple().exponent)
+        claim=_clause(text,match.start(),match.end())
+        change=CHANGE.match(text,match.end()) if unit in ('%','%p','USD') else None
+        direction=('down' if change['down'] else 'up') if change else None
+        if direction and raw[0] in '+-' and (value<0)!=(direction=='down'):
+            ok=False  # "+5.2% 감소"처럼 부호와 증감 표현이 어긋난다
+            continue
         def matches(fact):
             key,amount,expected,identities=fact
             if not unit or expected!=unit: return False
@@ -183,16 +214,21 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
             if explicit_months and monthly and not monthly.intersection(explicit_months): return False
             if expected=='USD' and '수출' in sentence and 'import' in key: return False
             if expected=='USD' and '수입' in sentence and 'export' in key: return False
-            if expected=='USD' and ('월평균' in sentence)!=('monthly_avg' in key): return False
-            if expected=='USD' and any(word in sentence for word in ('총액','합계')):
+            # 지표 표현은 그 금액이 있는 주장(claim)에서만 본다. "총 1,410만 달러이며, 월평균은 117.5만 달러"
+            if expected=='USD' and ('월평균' in claim)!=('monthly_avg' in key): return False
+            if expected=='USD' and any(word in claim for word in ('총액','합계')):
                 aggregate=key in ('total_usd','compare_total_usd') or ((periods or not monthly) and key in ('amount_usd','export_amount_usd','import_amount_usd'))
                 if not aggregate: return False
-            if expected=='%' and '비중' in sentence and key!='share_pct': return False
-            if expected=='%' and '전년' in sentence and key not in ('yoy_pct','change_pct'): return False
-            if expected=='%' and '전월' in sentence and key not in ('mom_pct','change_pct'): return False
+            if expected=='%' and '비중' in claim and key!='share_pct': return False
+            if expected=='%' and '전년' in claim and key not in ('yoy_pct','change_pct'): return False
+            if expected=='%' and '전월' in claim and key not in ('mom_pct','change_pct'): return False
+            claimed=value
+            if direction:  # 증감 표현이 붙은 값은 근거의 부호와 같은 방향이어야 한다
+                if amount==0 or (amount<0)!=(direction=='down'): return False
+                amount,claimed=abs(amount),abs(value)
             with localcontext() as context:
                 context.prec=max(32,len(amount.as_tuple().digits)+abs(granularity.as_tuple().exponent)+16)
-                return (amount/SCALE[scale]).quantize(granularity,rounding=ROUND_HALF_UP)==value
+                return (amount/SCALE[scale]).quantize(granularity,rounding=ROUND_HALF_UP)==claimed
         if not any(matches(f) for f in facts): ok=False
     return ok,numbers
 
@@ -212,7 +248,12 @@ def snapshot_evidence(payload):
 
 def verify(state,known_names=(),*,snapshots=None):
     snapshots=snapshots or {}
-    by_task={t.task_id:[snapshots.get(s.step_id,state.results[s.step_id].digest) for s in t.steps
+    def source(step_id):
+        digest=state.results[step_id].digest or {}
+        if step_id not in snapshots: return digest
+        # 저장 행에는 없는 결과 전체 합계(순위 total_usd·비중 분모)는 같은 결과로 만든 digest 값을 근거로 더한다
+        return {**snapshots[step_id],**{k:digest[k] for k in ('total_usd','denominator_usd') if k in digest}}
+    by_task={t.task_id:[source(s.step_id) for s in t.steps
                        if s.step_id in state.results and (s.step_id in snapshots or state.results[s.step_id].digest)]
              for t in state.plan.tasks}
     checks=[]
