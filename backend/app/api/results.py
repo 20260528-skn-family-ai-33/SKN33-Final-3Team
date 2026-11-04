@@ -46,6 +46,9 @@ def read_snapshot(store, uid, identity, kind=None):
 def display_columns(columns, rows, meta=None):
     if (meta or {}).get('kind') == 'PREDICTION':
         return prediction_columns(columns, meta.get('group_by'))
+    if (meta or {}).get('kind') == 'LLM_SQL':
+        # 자유 SQL의 열은 요청에 맞춰 모델이 고른 결과다(판본별 품목 수의 hs_ver 등). 템플릿용 숨김 규칙을 쓰지 않는다.
+        return [{**c,'label':c.get('label') or LABELS.get(c['key'],c['key'])} for c in columns]
     hidden={'hs_ver'}
     labels={**LABELS,'name':'품목' if any(r.get('hs_code') for r in rows) else '국가' if any(r.get('country_code') for r in rows) else '명칭'}
     if not any(r.get('hs_item') for r in rows): hidden.add('hs_item')
@@ -53,11 +56,15 @@ def display_columns(columns, rows, meta=None):
     if any('hs_code' in r for r in rows) and not any(r.get('hs_code') for r in rows): hidden.update(('hs_code','name'))
     # Monthly rows also carry aggregate metadata for chart/digest consumers.
     if any('month' in r and 'verified_months' in r for r in rows):
-        hidden.update(('total_usd','compare_total_usd','change_pct','monthly_avg_usd',
-            'compare_monthly_avg_usd','verified_months','requested_months',
-            'compare_verified_months','compare_requested_months','verified_subtotal_usd',
-            'compare_verified_subtotal_usd'))
-        if not any(r.get('compare_amount_usd') is not None for r in rows): hidden.update(('compare_amount_usd','compare_month'))
+        monthly_compare=any(r.get('compare_amount_usd') is not None for r in rows)
+        # 길이가 다른 기간 비교(D-84)는 월별 비교 금액이 없고 양쪽 총액·월평균·검증 월 수가 비교 근거다. 그때는 숨기지 않는다.
+        period_compare=not monthly_compare and any(r.get('compare_requested_months') for r in rows)
+        if not period_compare:
+            hidden.update(('total_usd','compare_total_usd','change_pct','monthly_avg_usd',
+                'compare_monthly_avg_usd','verified_months','requested_months',
+                'compare_verified_months','compare_requested_months','verified_subtotal_usd',
+                'compare_verified_subtotal_usd'))
+        if not monthly_compare: hidden.update(('compare_amount_usd','compare_month'))
     return [{**c,'label':labels.get(c['key'],c.get('label',c['key']))
              if c.get('label',c['key'])==c['key'] else c['label']} for c in columns if c['key'] not in hidden]
 

@@ -35,6 +35,24 @@ class ResultPresentationTest(unittest.TestCase):
         self.assertEqual(row['total_usd'],900)
         self.assertEqual(columns[0]['label'],'month')
 
+    def test_llm_sql_columns_are_shown_as_generated(self):
+        # 판본별 품목 수처럼 자유 SQL이 고른 hs_ver 열은 숨기지 않는다.
+        columns = [{'key': 'hs_ver', 'label': 'HS 판본', 'type': 'string', 'unit': None},
+                   {'key': 'item_count', 'label': '품목 수', 'type': 'number', 'unit': 'COUNT'}]
+        rows = [{'hs_ver': 'HS2017', 'item_count': 5387}, {'hs_ver': 'HS2022', 'item_count': 5612}]
+        self.assertEqual([c['label'] for c in display_columns(columns, rows, {'kind': 'LLM_SQL'})], ['HS 판본', '품목 수'])
+
+    def test_different_length_comparison_keeps_period_totals(self):
+        # 3개월과 12개월 비교(D-84)는 월별 비교 금액이 없고 양쪽 기간 합계·월평균이 비교 근거다.
+        row = {'month': '2026-08', 'country_code': 'VN', 'country_name': '베트남', 'amount_usd': 100,
+               'compare_month': None, 'compare_amount_usd': None, 'total_usd': 300, 'compare_total_usd': 1000,
+               'monthly_avg_usd': 100, 'compare_monthly_avg_usd': 83.3, 'change_pct': -70.0,
+               'verified_months': 3, 'requested_months': 3, 'compare_verified_months': 12, 'compare_requested_months': 12}
+        labels = [c['label'] for c in display_columns([{'key': k, 'label': k} for k in row], [row])]
+        for label in ('기간 합계', '비교 기간 합계', '월평균 금액', '비교 기간 월평균', '집계된 개월 수', '비교 집계 개월 수'):
+            self.assertIn(label, labels)
+        self.assertNotIn('비교 기간 금액', labels)
+
     def test_country_filename_uses_reference_name(self):
         engine,meta=test_engine()
         try:
