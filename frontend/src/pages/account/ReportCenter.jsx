@@ -110,10 +110,12 @@ export default function ReportCenter({ route }) {
             <Select sm style={{ width: 160 }} value={draft.status} onChange={edit('status')} options={[
               ['', '전체 상태'],['ready','생성 완료'],['generating','생성 중'],['delayed','생성 지연'],['failed','생성 실패']
             ]} aria-label="리포트 상태 필터"/>
-            <div className={'input sm' + (draft.from || draft.to ? ' val' : '') + (invalidRange ? ' err' : '')} role="group" aria-label="생성일 기간" style={{ gap: 6, flex: '1 1 300px' }}>
+            <div className={'input sm' + (draft.from || draft.to ? ' val' : '') + (invalidRange ? ' err' : '')} role="group" aria-label="생성일 기간(한국 시각)" style={{ gap: 6, flex: '1 1 300px' }}>
               <input type="date" aria-label="생성일 시작" value={draft.from} max={draft.to || undefined} onChange={e => edit('from')(e.target.value)} style={{ minWidth: 0 }} />
               <span>~</span>
               <input type="date" aria-label="생성일 종료" value={draft.to} min={draft.from || undefined} onChange={e => edit('to')(e.target.value)} style={{ minWidth: 0 }} />
+              {/* 목록의 생성일이 한국 시각(ab6c0c8)이므로 필터도 같은 날짜로 거른다. 기기 시간대로 바꾸면 표시와 어긋난다 */}
+              <span className="note" aria-hidden="true">KST</span>
             </div>
             <Btn type="submit" kind="red" icon="search" disabled={invalidRange}>검색</Btn>
             <Btn onClick={reset}>필터 초기화</Btn>

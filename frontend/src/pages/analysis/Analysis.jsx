@@ -249,7 +249,8 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
     {a.articles.map(article => <div className="li" key={article.article_id}><div><b>{article.title}</b><p className="muted">{article.summary}</p><Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn></div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
       {a.report_id && <><p role="status">리포트 생성 완료</p><Btn to={`/report?id=${a.report_id}`}>리포트 센터에서 이 리포트 열기</Btn></>}
-      {a.conditions && <Btn kind="red" icon="file" onClick={() => onSaveReport(a.conditions)}>리포트로 저장</Btn>}
+      {/* 리포트는 수출 통계 기간이 있어야 만든다. 기사만 조회한 답변(LOCAL_ISSUES)은 period가 null이다 */}
+      {a.conditions?.period && <Btn kind="red" icon="file" onClick={() => onSaveReport(a.conditions)}>리포트로 저장</Btn>}
       {a.tables[0]?.result_id && <Btn icon="star" onClick={() => onInterest(a)}>관심 목록 추가</Btn>}
     </div></AiBlock>
 }
