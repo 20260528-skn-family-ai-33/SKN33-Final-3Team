@@ -7,6 +7,42 @@ from backend.app.agents.state import SentenceCheck, Verification
 TOKEN = re.compile(r'(?<![\d.])(?P<value>[+-]?\d[\d,]*(?:\.\d+)?)\s*(?P<scale>[만억조])?\s*(?P<unit>%p|%|달러|USD|배|위|개|건|kg)?', re.I)
 DATE = re.compile(r'(?<!\d)(\d{4})\s*(?:년\s*(?:(\d{1,2})\s*월)?|-(\d{2})(?:-\d{2})?)|(\d{1,3})\s*(개월|월)')
 SCALE = {None:1,'만':10**4,'억':10**8,'조':10**12}
+PERIOD_AMOUNTS = {'total_usd','monthly_avg_usd','verified_subtotal_usd',
+                  'compare_total_usd','compare_monthly_avg_usd','compare_verified_subtotal_usd'}
+DIRECTION = re.compile(r'과거|지난|직전|최근|앞선|향후|앞으로|미래|다가올|다음|예측|예상|전망')
+PAST_WORDS = {'과거','지난','직전','최근','앞선'}
+
+
+def _shift(month, offset):
+    index=int(month[:4])*12+int(month[5:7])-1+offset
+    return f'{index//12}-{index%12+1:02d}'
+
+
+def _months_between(start, end):
+    return (int(end[:4])-int(start[:4]))*12+int(end[5:7])-int(start[5:7])
+
+
+def _compare_month(digest, row):
+    """compare_month가 없는 예전 결과는 기간 차이로 비교 월을 구한다(두 기간 길이가 같을 때만)."""
+    if row.get('compare_month'): return str(row['compare_month'])
+    period,compare=digest.get('period') or {},digest.get('compare_period') or {}
+    month=str(row.get('month') or row.get('trade_month') or '')[:7]
+    bounds=[str(x.get(k,''))[:7] for x in (period,compare) for k in ('start','end')]
+    if not month or not all(bounds) or _months_between(*bounds[:2])!=_months_between(*bounds[2:]): return None
+    return _shift(bounds[2],_months_between(bounds[0],month))
+
+
+def _period_scope(digest, key):
+    """기간 값의 근거: 해당 기간 표시. change_pct는 두 기간을 비교한 값이라 양쪽 기간을 모두 붙인다."""
+    names=['compare_period' if key.startswith('compare_') else 'period']
+    if key=='change_pct': names.append('compare_period')
+    scope=set()
+    for name in names:
+        period=digest.get(name) or {}
+        start,end=(str(period.get(k,''))[:7] for k in ('start','end'))
+        if start and end: scope.add(f'period:{start}:{end}')
+        if start and start==end: scope.add(start)
+    return scope
 
 
 def evidence(digest):
@@ -25,13 +61,59 @@ def evidence(digest):
                 elif key.endswith('_pct'): unit='%'
                 elif key.endswith('_pp'): unit='%p'
                 elif key=='rank' or key.endswith('_rank'): unit='위'
-                if unit: yield key,Decimal(str(value)),unit,ids
-    return list(walk(digest,set()))
+                if digest.get('kind')=='PREDICTION' and key in ('exp_12m','growth_pct'):
+                    yield key,Decimal(str(value)),unit,ids|{'duration:12'}
+                elif key=='compare_amount_usd':
+                    if not (month:=_compare_month(digest,row)): continue
+                    yield key,Decimal(str(value)),unit,(ids-{str(row.get('month')),str(row.get('trade_month'))})|{month}
+                elif unit and (key in PERIOD_AMOUNTS or not any(
+                        re.fullmatch(r'\d{4}-\d{2}',identity) for identity in ids)):
+                    scoped=(ids-{str(row.get('month')),str(row.get('trade_month'))})|_period_scope(digest,key)
+                    yield key,Decimal(str(value)),unit,scoped
+                elif unit: yield key,Decimal(str(value)),unit,ids
+    return list(walk(digest,{'prediction'} if digest.get('kind')=='PREDICTION' else set()))
 
 
 def check_sentence(sentence, digests, *, known_names=()):
+    """문장의 수치를 근거와 대조한다. 월·방향이 여럿인 문장은 주장 단위로 나눠 각각 검사한다."""
+    return _check_claim(sentence,digests,known_names,require_month=False,inherited_names=())
+
+
+def _check_claim(sentence, digests, known_names, *, require_month, inherited_names):
+    _require_month,_inherited_names=require_month,inherited_names
     text=re.sub(r'\[\d+\]', '',sentence)
     dates=list(DATE.finditer(text))
+    def names_in(value):
+        value=DATE.sub(' ',value)
+        names={name for name in known_names if name and name in value}
+        return {name for name in names if not any(name!=other and name in other for other in names)}
+    def check_clauses(clauses, require_month):
+        inherited=_inherited_names
+        checks=[]
+        for clause in clauses:
+            inherited=names_in(clause) or inherited
+            checks.append(_check_claim(clause,digests,known_names,
+                                       require_month=require_month,inherited_names=inherited))
+        return all(good for good,_ in checks),[n for _,nums in checks for n in nums]
+    if any(d.get('kind')=='PREDICTION' for d in digests):
+        clauses=re.split(r'(?<!\d),|,(?!\d)|[;，]|(?:이고|이며|하고|됐고|었고|았고|였고|(?<=달러)고|(?<=%)고)\s+(?='+DIRECTION.pattern+r')',text)
+        if len(clauses)>1 and all(TOKEN.search(DATE.sub(' ',c)) for c in clauses):
+            return check_clauses(clauses,_require_month)
+    month_dates=[m for m in dates if m.group(2) or m.group(3) or m.group(5)=='월']
+    month_range=None
+    if len(dates)==len(month_dates)==2:
+        first,last=month_dates
+        if re.fullmatch(r'\s*(?:부터|[~～–])\s*',text[first.end():last.start()]):
+            if first.group(1) and (last.group(1) or last.group(5)=='월'):
+                month_range=tuple(f'{m.group(1) or first.group(1)}-{(m.group(2) or m.group(3) or m.group(4)).zfill(2)}'
+                                  for m in month_dates)
+    if len(month_dates)>1 and not month_range:
+        # Keep thousands separators intact and require an unambiguous month per claim.
+        clauses=re.split(r'(?<!\d),|,(?!\d)|[;，]',text)
+        if len(clauses)==1:  # 쉼표 없는 비교 문장: 각 월 표현부터 다음 월 표현 앞까지를 한 주장으로 본다.
+            cuts=[0,*(m.start() for m in month_dates[1:]),len(text)]
+            clauses=[text[a:b] for a,b in zip(cuts,cuts[1:])]
+        return check_clauses(clauses,True)
     numbers=[]
     ok=True
     # Check each digest independently: an explanation may discuss multiple tasks,
@@ -57,8 +139,7 @@ def check_sentence(sentence, digests, *, known_names=()):
         if dates_ok: candidates.append(d)
     if dates and not candidates: ok=False
     text=DATE.sub(' ',text)
-    mentioned={name for name in known_names if name and name in text}
-    mentioned={name for name in mentioned if not any(name!=other and name in other for other in mentioned)}
+    mentioned=names_in(text) or set(_inherited_names)
     for name in sorted(mentioned,key=len,reverse=True): text=text.replace(name,' ')
     facts=[f for d in candidates for f in evidence(d) if mentioned<=f[3]
            and not (('수입' in sentence and d.get('trade_flow')=='EXPORT') or
@@ -74,13 +155,37 @@ def check_sentence(sentence, digests, *, known_names=()):
         def matches(fact):
             key,amount,expected,identities=fact
             if not unit or expected!=unit: return False
+            if 'duration:12' in identities:
+                subject=re.sub(r'(?:과거|지난|직전|최근|앞선)\s*(?:대비|기준월)\s*','',sentence)
+                directions={word in PAST_WORDS for word in DIRECTION.findall(subject)}
+                if directions and directions!={key=='exp_12m'}: return False
             monthly={value for value in identities if re.fullmatch(r'\d{4}-\d{2}',value)}
+            periods=[tuple(i.split(':')[1:]) for i in identities if i.startswith('period:')]
+            years={m.group(1) for m in dates if m.group(1) and not (m.group(2) or m.group(3))}
+            durations={int(m.group(4)) for m in dates if m.group(5)=='개월'}
+            if durations and (periods or monthly or 'duration:12' in identities):
+                lengths={(int(end[:4])-int(start[:4]))*12+int(end[5:])-int(start[5:])+1
+                         for start,end in periods} if periods else {1}
+                if 'duration:12' in identities: lengths={12}
+                if not durations<=lengths: return False
+            if month_range:
+                if month_range not in periods: return False
+            elif key in PERIOD_AMOUNTS or periods:
+                if month_dates and not monthly: return False
+                if years and not any((f'{year}-01',f'{year}-12') in periods for year in years) and not (
+                        'prediction' in identities and all(any(start[:4]==year for start,_ in periods) for year in years)):
+                    return False  # 예측 결과는 기준월이 속한 연도 언급만 허용한다
+            elif years and monthly: return False
+            if _require_month:
+                if not month_dates or not monthly: return False
+            if not month_range and month_dates and monthly and month_dates[0].group(5)=='월':
+                if not any(int(month[5:])==int(month_dates[0].group(4)) for month in monthly): return False
             if explicit_months and monthly and not monthly.intersection(explicit_months): return False
             if expected=='USD' and '수출' in sentence and 'import' in key: return False
             if expected=='USD' and '수입' in sentence and 'export' in key: return False
             if expected=='USD' and ('월평균' in sentence)!=('monthly_avg' in key): return False
             if expected=='USD' and any(word in sentence for word in ('총액','합계')):
-                aggregate=key in ('total_usd','compare_total_usd') or (not monthly and key in ('amount_usd','export_amount_usd','import_amount_usd'))
+                aggregate=key in ('total_usd','compare_total_usd') or ((periods or not monthly) and key in ('amount_usd','export_amount_usd','import_amount_usd'))
                 if not aggregate: return False
             if expected=='%' and '비중' in sentence and key!='share_pct': return False
             if expected=='%' and '전년' in sentence and key not in ('yoy_pct','change_pct'): return False
@@ -95,7 +200,12 @@ def check_sentence(sentence, digests, *, known_names=()):
 def snapshot_evidence(payload):
     """Full saved rows, never paginated or bounded for LLM input. No new SQL."""
     conditions=payload.get('conditions') or {}
-    return {**{k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions},
+    meta=payload.get('meta') or {}
+    scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
+    if meta.get('kind')=='PREDICTION' and meta.get('anchor'):
+        anchor=str(meta['anchor'])[:7]
+        scope.update(kind='PREDICTION',anchor=anchor,period={'start':anchor,'end':anchor})
+    return {**scope,
             'columns':payload.get('columns',[]),'rows':payload.get('rows',[]),
             '_verification_source':'SNAPSHOT'}
 

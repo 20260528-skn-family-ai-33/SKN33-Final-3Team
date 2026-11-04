@@ -129,6 +129,7 @@ def run_template(store, uid, task, step, timeout=30):
                 'compare_verified_months': compare_count, 'compare_requested_months': len(old),
                 'verified_subtotal_usd': subtotal, 'compare_verified_subtotal_usd': compare_subtotal,
                 'monthly': [{'month': m.strftime('%Y-%m'), 'amount_usd': value,
+                    'compare_month': compared[i].strftime('%Y-%m') if len(old) == len(values) else None,
                     'compare_amount_usd': old[i] if len(old) == len(values) else None}
                     for i, (m, value) in enumerate(zip(requested, values))]}
             targets.append(detail)
