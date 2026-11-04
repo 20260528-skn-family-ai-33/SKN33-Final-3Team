@@ -17,7 +17,7 @@ def test_real_child_full_chain_dictionary_tags_vector_and_repeat(local):
                                 runner=offline_runner(local,calls,bounded=True))
         assert result['status']=='complete',result
         assert result['dictionary']['status']=='complete'
-        assert result['vector']['body']['collection']=='kotra_article'
+        assert result['vector']['body']['collection']=='total_article'
         assert result['vector']['status']=='complete'
         assert result['mysql']['inserted' if number==1 else 'existing']==2
         if number==2:assert result['vector']['body']['embedded']==0

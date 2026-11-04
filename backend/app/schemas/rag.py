@@ -1,4 +1,6 @@
 """기사 RAG 호출 계약. 검색·색인·모델 호출은 수행하지 않습니다."""
+from backend.app.services.news_collections import ARTICLE_COLLECTION
+
 from datetime import date, timedelta
 from enum import Enum
 import re
@@ -50,10 +52,10 @@ class ArticleSource(str, Enum):
 ALL_SOURCES = tuple(ArticleSource)
 # 계약상의 배치 목적지입니다. 실제 컬렉션의 생성·내용을 보증하지 않습니다.
 COLLECTION_BY_SOURCE = MappingProxyType({
-    ArticleSource.KOTRA_MARKET: "kotra_article",
-    ArticleSource.KOTRA_SHORT_NEWS: "kotra_article",
-    ArticleSource.HANKYUNG: "kotra_article",
-    ArticleSource.FNNEWS: "kotra_article",
+    ArticleSource.KOTRA_MARKET: ARTICLE_COLLECTION,
+    ArticleSource.KOTRA_SHORT_NEWS: ARTICLE_COLLECTION,
+    ArticleSource.HANKYUNG: ARTICLE_COLLECTION,
+    ArticleSource.FNNEWS: ARTICLE_COLLECTION,
 })
 
 
@@ -112,6 +114,7 @@ class ReportContext(Contract):
 
 
 SourceSelection = tuple[ArticleSource, ...] | Literal["ALL"]
+AnswerFormat = Literal["summary", "list"]
 
 
 class RagRequest(Contract):
@@ -122,14 +125,15 @@ class RagRequest(Contract):
     source_codes: SourceSelection = "ALL"
     limit: PositiveInt | None = None
     report: ReportContext | None = None
-    reference_scope: Literal["target_only", "direct_and_context"] = "target_only"
     order_by: Literal["relevance", "published_date_desc"] = "relevance"
+    answer_format: AnswerFormat | None = None
 
     def cache_payload(self):
-        """Preserve legacy cache keys only for behaviorally identical default requests."""
+        """Cache only this body-grounded request contract."""
         data = self.model_dump(mode="json", exclude={"request_id"})
-        if self.reference_scope == "target_only":
-            data.pop("reference_scope")
+        if self.answer_format is None:
+            data.pop("answer_format")
+        data["retrieval_policy"] = "body-grounded-v26"
         if self.order_by == "relevance":
             data.pop("order_by")
         return data
@@ -188,10 +192,12 @@ class EvidenceSpan(Contract):
 class SummarySentence(Contract):
     text: Text
     evidence_ids: Annotated[tuple[Text, ...], Field(min_length=1)]
+    unverified_question_parts: tuple[Text, ...] = ()
 
     @model_validator(mode="after")
     def check_ids(self):
         _unique(self.evidence_ids, "문장 근거 ID")
+        _unique(self.unverified_question_parts, "문장 인용에서 미확인인 질문 요소")
         return self
 
 
@@ -241,21 +247,45 @@ class RagResponse(Contract):
     target_count: PositiveInt | None
     returned_count: Annotated[StrictInt, Field(ge=0)]
     articles: tuple[ArticleEvidence, ...]
+    unverified_question_parts: tuple[Text, ...] = ()
     completed_sources: tuple[ArticleSource, ...]
     failures: tuple[RagFailure, ...] = ()
     reason: Text | None = None
-    reference_scope: Literal["target_only", "direct_and_context"] = "target_only"
     order_by: Literal["relevance", "published_date_desc"] = "relevance"
+    answer_format: AnswerFormat | None = None
     latest_scan_complete: bool | None = None
     latest_basis: Literal["publication_date"] | None = None
+    latest_scope: Literal["retrieved_candidates"] | None = None
+    latest_candidate_limit: Literal[40] | None = None
+    latest_period: ArticlePeriod | None = None
+    latest_scope_description: Text | None = None
+
+    @staticmethod
+    def common_unverified_parts(articles):
+        sentences = [s for article in articles for s in article.summary]
+        if not sentences:
+            return ()
+        return tuple(part for part in sentences[0].unverified_question_parts
+                     if all(part in s.unverified_question_parts for s in sentences[1:]))
 
     @model_validator(mode="after")
     def check_consistency(self):
+        if self.unverified_question_parts != self.common_unverified_parts(self.articles):
+            raise ValueError("응답의 미확인 항목은 반환된 모든 문장의 근거에서 미확인인 질문 요소여야 합니다")
         if self.order_by == "published_date_desc":
             if self.latest_basis != "publication_date":
                 raise ValueError("최신 기사는 발행일 기준입니다")
-            if any(a.summary or a.evidence or a.evidence_role != "unclassified" for a in self.articles):
-                raise ValueError("발행일 목록을 본문 검증된 근거로 표시할 수 없습니다")
+        if self.latest_scope is not None:
+            if (self.order_by != "published_date_desc" or self.latest_candidate_limit != 40
+                    or self.latest_period is None or self.latest_scope_description is None):
+                raise ValueError("최신 후보 범위에는 기간·건수·설명이 필요합니다")
+            if any(not self.latest_period.start <= a.published_date <= self.latest_period.end for a in self.articles):
+                raise ValueError("최신 응답의 적용 기간 밖 기사입니다")
+        elif any(v is not None for v in (self.latest_candidate_limit, self.latest_period, self.latest_scope_description)):
+            raise ValueError("최신 후보 범위 메타데이터가 불완전합니다")
+        list_only = self.answer_format == "list" or (self.answer_format is None and self.order_by == "published_date_desc")
+        if list_only and any(a.summary or a.evidence for a in self.articles):
+            raise ValueError("목록 응답에는 요약·인용을 표시하지 않습니다")
         _unique(tuple(a.key for a in self.articles), "기사 식별자")
         _unique(tuple(a.article_id for a in self.articles), "기사 ID")
         _unique(self.completed_sources, "완료 출처")
@@ -286,7 +316,7 @@ class RagResponse(Contract):
         if self.status == "no_results" and self.articles:
             raise ValueError("no_results에는 기사를 반환할 수 없습니다")
         if self.status in ("ok", "insufficient_results"):
-            if not self.articles or (self.order_by != "published_date_desc" and any(not a.summary for a in self.articles)):
+            if not self.articles or (not list_only and any(not a.summary for a in self.articles)):
                 raise ValueError("정상 근거 기사와 요약이 필요합니다")
         if self.status == "ok" and self.target_count is not None and self.returned_count != self.target_count:
             raise ValueError("목표 건수보다 적으면 insufficient_results를 사용합니다")
@@ -308,10 +338,20 @@ def validate_response_for(request: RagRequest, response: RagResponse) -> RagResp
         raise ValueError("다른 요청의 응답입니다")
     if response.applied_conditions != request.conditions:
         raise ValueError("요청의 확정 조건을 변경할 수 없습니다")
+    if response.latest_period is not None:
+        start = date.fromordinal(max(request.conditions.period.start.toordinal(),
+                                     request.conditions.period.end.toordinal() - 13))
+        if response.latest_period != ArticlePeriod(start=start, end=request.conditions.period.end):
+            raise ValueError("최근 14일은 요청 기준일을 포함하며 요청 기간과 겹치는 범위입니다")
+    if any(part not in request.query for article in response.articles for sentence in article.summary
+           for part in sentence.unverified_question_parts):
+        raise ValueError("미확인 항목은 요청자가 실제로 물은 질문의 구절이어야 합니다")
     if response.requested_source_codes != request.source_codes:
         raise ValueError("요청 출처 선택을 변경할 수 없습니다")
-    if response.reference_scope != request.reference_scope or response.order_by != request.order_by:
+    if response.order_by != request.order_by:
         raise ValueError("검색 범위·정렬 정책을 변경할 수 없습니다")
+    if request.answer_format is not None and request.answer_format != response.answer_format:
+        raise ValueError("요청한 답변 형식을 변경할 수 없습니다")
     if request.order_by == "published_date_desc" and any(
             a.published_date < b.published_date for a, b in zip(response.articles, response.articles[1:])):
         raise ValueError("발행일 내림차순 위반")

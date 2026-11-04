@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 import math
 
-from backend.app.schemas.rag import ALL_SOURCES, ArticleSource, COLLECTION_BY_SOURCE, RagFailure
+from backend.app.schemas.rag import ALL_SOURCES, COLLECTION_BY_SOURCE, RagFailure
 from backend.app.services.rag.documents import from_metadata
 from backend.app.services.rag.runtime import RagDeadlineExceeded
 from backend.app.services.rag.store import COLLECTIONS
@@ -25,11 +25,6 @@ class SearchResult:
     evidence_missing: bool = False
 
 
-def hs_match(requested, actual):
-    return any(w.hs_ver == p.hs_ver and (w.hs_code == p.hs_code or
-               (len(w.hs_code) == 4 and p.hs_code.startswith(w.hs_code))) for w in requested for p in actual)
-
-
 def requested_sources(request, snapshot):
     if request.source_codes == 'ALL':
         return tuple(s for s in ALL_SOURCES if s in snapshot.sources)
@@ -41,19 +36,15 @@ def filter_where(request, record_type='body', *, sources):
     clauses = [{'record_type': record_type}, {'published_ymd': {'$gte': int(c.period.start.strftime('%Y%m%d'))}},
                {'published_ymd': {'$lte': int(c.period.end.strftime('%Y%m%d'))}}]
     clauses.append({'source_code': {'$in': [s.value for s in sources]}})
-    if request.reference_scope == 'target_only' and c.geography.mode == 'selected':
-        countries = [{'countries': {'$contains': code}} for code in c.geography.codes]
-        clauses.append(countries[0] if len(countries) == 1 else {'$or': countries})
     return {'$and': clauses}
 
 
-def search(request, snapshot, vocabulary, gateway, context, *, candidate_limit=None, rerank=False):
+def search(request, snapshot, vocabulary, gateway, context, *, candidate_limit=None, keep_reserves=False, article_allowed=None):
     context.remaining()
     final_count = request.target_count
-    if candidate_limit is not None and (type(candidate_limit) is not int or candidate_limit < final_count):
+    if candidate_limit is not None and (type(candidate_limit) is not int or candidate_limit < 1 or
+                                        (final_count is not None and candidate_limit < final_count)):
         raise ValueError('invalid_candidate_limit')
-    if rerank is not False and rerank is not True and rerank != 'local_feedback':
-        raise ValueError('unknown_reranker')
     target = candidate_limit or final_count
     requested = requested_sources(request, snapshot)
     if not requested:
@@ -79,10 +70,10 @@ def search(request, snapshot, vocabulary, gateway, context, *, candidate_limit=N
         except Exception as exc:
             for source in ready:
                 result.failures.append(RagFailure(stage='index', code=type(exc).__name__, source_code=source))
-    window = max(15, target * 3)
+    window = max(15, (target or 5) * 3)
     while columns:
         context.remaining()
-        cutoff = sorted(c.distance for c in result.candidates)[target-1] if len(result.candidates) >= target else math.inf
+        cutoff = sorted(c.distance for c in result.candidates)[target-1] if target is not None and len(result.candidates) >= target else math.inf
         for name, (col, ready, exhausted, frontier) in list(columns.items()):
             if exhausted or frontier > cutoff:
                 continue
@@ -92,13 +83,13 @@ def search(request, snapshot, vocabulary, gateway, context, *, candidate_limit=N
                     columns[name][2] = True
                     result.completed_sources.update(ready)
                     continue
-                if window == max(15, target * 3):
+                if window == max(15, (target or 5) * 3):
                     missing = col.get(where=filter_where(request, 'missing_body', sources=ready), include=['metadatas'])
                     for meta in missing['metadatas']:
                         unavailable = from_metadata(meta, '')
-                        if not set(request.conditions.blocked_topics) & set(unavailable.kw_topic):
-                            if not request.conditions.products or hs_match(request.conditions.products, unavailable.products):
-                                result.evidence_missing = True
+                        if (not set(request.conditions.blocked_topics) & set(unavailable.kw_topic)
+                                and (article_allowed is None or article_allowed(unavailable))):
+                            result.evidence_missing = True
                 n = min(window, total)
                 page = col.query(query_embeddings=[vector], n_results=n, where=filter_where(request, sources=ready),
                                  include=['documents', 'metadatas', 'distances'])
@@ -121,26 +112,22 @@ def search(request, snapshot, vocabulary, gateway, context, *, candidate_limit=N
                     c = request.conditions
                     if not c.period.start <= article.published_date <= c.period.end:
                         raise ValueError('period_filter_mismatch')
-                    if request.reference_scope == 'target_only' and c.geography.mode == 'selected' and not set(c.geography.codes) & set(article.countries):
-                        raise ValueError('country_filter_mismatch')
-                    if not article.keywords_ready:
-                        raise ValueError('article_keywords_not_ready')
+                    if article_allowed is not None and not article_allowed(article):
+                        continue
+                    if c.blocked_topics and not article.keywords_ready:
+                        failure = RagFailure(stage='search', code='block_keywords_unverified', source_code=article.source_code)
+                        if failure not in result.failures:
+                            result.failures.append(failure)
+                        context.event('block_keywords_unverified', article_key=article.identity)
+                        continue
                     if set(c.blocked_topics) & set(article.kw_topic):
                         continue  # 기사 내용을 모델에 전달하기 전
-                    tagged = hs_match(c.products, article.products)
-                    semantic = article.source_code in (ArticleSource.HANKYUNG, ArticleSource.FNNEWS) and not article.products
-                    semantic |= article.source_code == ArticleSource.KOTRA_SHORT_NEWS
-                    if request.reference_scope == 'target_only' and c.products and not tagged and not semantic:
-                        continue
                     rows = col.get(where={'article_key': article.identity}, include=['documents', 'metadatas'])
                     chunks = {i: d for i, d, m in sorted(zip(rows['ids'], rows['documents'], rows['metadatas']),
                               key=lambda r: r[2]['chunk']) if m['content_version'] == meta['content_version']}
                     if not chunks or not article.source_url:
                         result.evidence_missing = True
                         continue
-                    if request.reference_scope == 'target_only' and c.products and not tagged:
-                        if not gateway.product_relevant(vocabulary.product_terms(c.products), chunks, context):
-                            continue
                     candidate = Candidate(article, float(distance), meta['content_version'], chunks,
                                           bool(categories & set(article.categories)))
                     result.candidates.append(candidate)
@@ -155,7 +142,7 @@ def search(request, snapshot, vocabulary, gateway, context, *, candidate_limit=N
                 for source in ready:
                     result.failures.append(RagFailure(stage='search', code=type(exc).__name__, source_code=source))
                 del columns[name]
-        cutoff = sorted(c.distance for c in result.candidates)[target-1] if len(result.candidates) >= target else math.inf
+        cutoff = sorted(c.distance for c in result.candidates)[target-1] if target is not None and len(result.candidates) >= target else math.inf
         # 목표 수를 채웠어도 아직 보지 않은 더 좋은 후보·동점 후보를 확인합니다.
         if all(row[2] or row[3] > cutoff for row in columns.values()):
             break
@@ -164,20 +151,8 @@ def search(request, snapshot, vocabulary, gateway, context, *, candidate_limit=N
     result.candidates = result.candidates[:target]
     context.event('candidate_pool', count=len(result.candidates), limit=target,
                   articles=[{'source_code': c.article.source_code.value,
-                             'external_id': c.article.external_id} for c in result.candidates])
-    if rerank and result.candidates:
-        from backend.app.services.rag.reranking import rerank_candidates, local_feedback_rerank
-        try:
-            if rerank == 'local_feedback':
-                result.candidates = local_feedback_rerank(snapshot, result.candidates, context)
-            elif rerank is True:
-                result.candidates = rerank_candidates(request, result.candidates, gateway, context)
-            else:
-                raise ValueError('unknown_reranker')
-        except RagDeadlineExceeded:
-            raise
-        except Exception as exc:
-            # 재순위화 실패를 숨기지 않고 원래 검색 순서와 정상 후보를 보존합니다.
-            result.failures.append(RagFailure(stage='search', code='rerank_' + type(exc).__name__))
-    result.candidates = result.candidates[:final_count]
+                             'external_id': c.article.external_id, 'distance': c.distance}
+                            for c in result.candidates])
+    if not keep_reserves:
+        result.candidates = result.candidates[:final_count]
     return result

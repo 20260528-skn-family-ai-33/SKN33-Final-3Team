@@ -9,16 +9,17 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import threading
 from uuid import uuid4
 
 from filelock import FileLock
 
+from backend.app.services.news_collections import ARTICLE_COLLECTION
 from backend.app.schemas.rag import ArticleSource, COLLECTION_BY_SOURCE
 from backend.app.services.rag.documents import ArticleDocument
 from backend.app.services.news_embedding import MODEL, DIMENSIONS
 from backend.app.services.rag.resources import closing_owned
 
-ARTICLE_COLLECTION = 'kotra_article'
 COLLECTIONS = tuple(dict.fromkeys(COLLECTION_BY_SOURCE.values()))
 REPOSITORY = Path(__file__).resolve().parents[4]
 ROOT = REPOSITORY / 'data/rag/index'
@@ -57,7 +58,7 @@ def has_legacy_body(path):
     if not database.is_file():
         return False
     with sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True) as conn:
-        return conn.execute("SELECT 1 FROM collections WHERE name=? LIMIT 1", (ARTICLE_COLLECTION,)).fetchone() is not None
+        return conn.execute("SELECT 1 FROM collections WHERE name IN (?, ?) LIMIT 1", (ARTICLE_COLLECTION, "kotra_article")).fetchone() is not None
 
 
 
@@ -81,10 +82,39 @@ def atomic_json(path, data):
         temp.unlink(missing_ok=True)
 
 
+_client_lifecycle_lock = threading.RLock()
+
+
+class _OwnedPersistentClient:
+    """Serialize Chroma's shared-system open/close without serializing queries."""
+    def __init__(self, client):
+        self._client = client
+        self._closed = False
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+    def close(self):
+        with _client_lifecycle_lock:
+            if not self._closed:
+                self._client.close()
+                self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
 def persistent_client(path):
     import chromadb
     from chromadb.config import Settings
-    return chromadb.PersistentClient(path=str(path), settings=Settings(anonymized_telemetry=False))
+    # Chroma publishes a shared system before initialization is complete. Opening
+    # another handle or releasing the last handle during that window can fail.
+    with _client_lifecycle_lock:
+        return _OwnedPersistentClient(chromadb.PersistentClient(
+            path=str(path), settings=Settings(anonymized_telemetry=False)))
 
 
 def collection_distance(collection):

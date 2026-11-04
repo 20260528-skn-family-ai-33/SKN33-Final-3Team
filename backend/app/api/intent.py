@@ -57,7 +57,7 @@ are true only if explicitly asked for all. '전체 품목' does NOT mean '전체
 in '2025년 전체 품목 수출을 2024 대비', all_products=true and all_countries=false.
 ML covers clustering/promising markets/prediction;
 RAG covers causal explanations/article summaries; LOCAL_ISSUES is plain article lookup.
-Set latest_articles only when the user asks for newest articles by publication date, not a grounded summary.
+Set latest_articles when publication-date ordering is requested, including summaries of the newest articles.
 Do not return country codes, SQL, recommendations or HS classifications.
 """
 

@@ -1,57 +1,49 @@
-import json
 import os
 from pathlib import Path
-import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from backend.app.agents.tools import search_news
-from backend.app.schemas.rag import RagRequest, RagResponse
+from backend.app.schemas.rag import ALL_SOURCES, RagRequest
+from backend.app.services.rag.store import GenerationStore
 from backend.tests.rag_fixtures import request_payload
-from backend.tests.test_rag_pipeline import document
+from backend.tests.test_rag_pipeline import FakeGateway, document, vectors
 
 
 class ChatNewsToolTest(unittest.TestCase):
-    def test_latest_returns_catalog_article_without_model(self):
+    def test_latest_uses_live_gateway_and_published_originals_without_catalog(self):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, NEWS_VECTOR_ROOT=root):
-            article = document(1)
-            with sqlite3.connect(Path(root) / 'article_catalog.sqlite3') as db:
-                db.execute('CREATE TABLE articles(source_code,external_id,published_date,payload)')
-                db.execute('INSERT INTO articles VALUES (?,?,?,?)', (
-                    article.source_code.value, article.external_id, article.published_date.isoformat(),
-                    json.dumps(article.model_dump(mode='json'))))
-            request = RagRequest.model_validate(request_payload('chat', order_by='published_date_desc'))
-            with patch('backend.app.agents.tools.OpenAI', side_effect=AssertionError):
+            store = GenerationStore(Path(root), dimensions=8)
+            store.publish([document(1, published_date='2026-09-25')], ALL_SOURCES, vectors, vocabulary={})
+            gateway = FakeGateway()
+            request = RagRequest.model_validate(request_payload('chat', order_by='published_date_desc',
+                                                                answer_format='summary'))
+            with patch('backend.app.agents.tools.OpenAI') as client, \
+                 patch('backend.app.services.rag.factory.GenerationStore', return_value=store), \
+                 patch('backend.app.services.rag.factory.ModelGateway', return_value=gateway) as model:
                 result = search_news(request)
-            self.assertIsInstance(result, RagResponse)
-            self.assertEqual([a.external_id for a in result.articles], [article.external_id])
+            model.assert_called_once_with(client.return_value.__enter__.return_value)
+            client.return_value.__exit__.assert_called_once()
+            self.assertEqual(gateway.embed_calls, 1)
+            self.assertEqual([a.external_id for a in result.articles], ['1'])
+            self.assertEqual(result.articles[0].evidence[0].quote, document().body)
+            self.assertEqual(result.latest_scope, 'retrieved_candidates')
+            self.assertFalse((Path(root) / 'article_catalog.sqlite3').exists())
 
-    def test_team_generation_can_be_searched_without_migrating_it(self):
-        from backend.app.schemas.rag import ALL_SOURCES
-        from backend.app.services.rag.search_store import SearchStore
-        from backend.tests.test_rag_pipeline import document, vectors
-
+    def test_team_collection_is_read_without_renaming_or_rebuilding(self):
         with tempfile.TemporaryDirectory() as root:
-            store = SearchStore(Path(root), dimensions=8)
-            report = store.publish([document(1)], ALL_SOURCES, vectors)
-            folder = Path(root) / 'generations' / report['generation']
-            # Reproduce the independently published team's collection contract.
-            client = store.client_factory(folder / 'chroma')
-            try:
-                client.get_collection('kotra_article').modify(name='total_article')
-            finally:
-                client.close()
-            status = folder / 'status.json'
-            metadata = json.loads(status.read_text())
-            metadata['collections'] = {'total_article':metadata['collections']['kotra_article']}
-            status.write_text(json.dumps(metadata))
+            store = GenerationStore(Path(root), dimensions=8)
+            report = store.publish([document(1)], ALL_SOURCES, vectors, vocabulary={})
+            status = Path(root) / 'generations' / report['generation'] / 'status.json'
+            before = status.read_bytes()
             snapshot = store.snapshot()
             try:
-                self.assertEqual(snapshot.collection('kotra_article').count(), 1)
+                self.assertEqual(snapshot.collection('total_article').count(), 1)
+                self.assertEqual([c.name for c in snapshot.client.list_collections()], ['total_article'])
             finally:
                 snapshot.client.close()
-            self.assertEqual(json.loads(status.read_text()), metadata)
+            self.assertEqual(status.read_bytes(), before)
 
     def test_normal_search_reports_missing_index_and_closes_client(self):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, NEWS_VECTOR_ROOT=root):

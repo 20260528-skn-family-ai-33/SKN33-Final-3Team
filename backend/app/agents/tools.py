@@ -11,12 +11,10 @@ from backend.app.services.rag.runtime import ExecutionContext
 NEWS_PENDING_MESSAGE = '기사 검색은 지원 예정입니다.'
 
 
-def search_news(request: RagRequest) -> RagResponse:
+def search_news(request: RagRequest, *, article_allowed=None) -> RagResponse:
     """챗봇의 기사 검색 요청을 공통 RAG 서비스에 전달한다."""
     context = ExecutionContext(time.monotonic() + 15)
     settings = Settings()
     root = settings.get('NEWS_VECTOR_ROOT')
-    if request.order_by == 'published_date_desc':
-        return create_service(None, root=root).run(request, context)
     with OpenAI(api_key=settings.get('OPENAI_API_KEY'), timeout=context.remaining(), max_retries=0) as api:
-        return create_service(api, root=root).run(request, context)
+        return create_service(api, root=root, article_allowed=article_allowed).run(request, context)

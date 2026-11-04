@@ -1,6 +1,5 @@
 """Publish synthetic API database rows to an isolated RAG index, without external inference."""
 from contextlib import contextmanager
-import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -23,13 +22,9 @@ def indexed_news(case):
                          source_url=row['source_url']) for row in records if row['source_url']]
         store = GenerationStore(Path(root), dimensions=8)
         store.publish(docs, ALL_SOURCES, vectors)
-        from backend.app.services.rag.article_catalog import LocalArticleCatalog
-        catalog = Path(root) / 'article_catalog.sqlite3'
-        with sqlite3.connect(catalog) as db:
-            db.execute('CREATE TABLE articles(source_code,external_id,published_date,payload)')
-            db.executemany('INSERT INTO articles VALUES (?,?,?,?)',
-                           [(a.source_code.value, a.external_id, a.published_date.isoformat(),
-                             a.model_dump_json()) for a in docs])
-        service = RagService(store, Vocabulary(), FakeGateway(), catalog=LocalArticleCatalog(catalog))
-        with patch('backend.app.agents.tools.OpenAI'), patch('backend.app.agents.tools.create_service',return_value=service):
-            yield
+        service = RagService(store, Vocabulary(), FakeGateway())
+        def create(api, *, root=None, article_allowed=None):
+            service.article_allowed = article_allowed
+            return service
+        with patch('backend.app.agents.tools.OpenAI'), patch('backend.app.agents.tools.create_service',side_effect=create):
+            yield service
