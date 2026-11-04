@@ -234,6 +234,7 @@ def collect_month(month, directory, env_path, countries, confirmed_empty_countri
     cache.mkdir(parents=True, exist_ok=True)
     failed, ready, unresolved, confirmed = [], [], [], []
     country_errors = {}
+    unsupported = {}
     allowed_empty = set(confirmed_empty_countries)
     if allowed_empty - set(countries):
         raise ValidationError("거래 없음 확인 국가는 이번 수집 대상 국가에 포함되어야 함")
@@ -258,6 +259,10 @@ def collect_month(month, directory, env_path, countries, confirmed_empty_countri
                 save_cache(path, rows, month, country)
                 if not cache_ready(path, month, country):
                     raise ValidationError("저장한 국가별 캐시의 완료 정보가 일치하지 않음")
+            except collector.UnsupportedCountryError as exc:
+                unsupported[country] = str(exc)
+                log.warning("%s %s 미지원 국가코드: %s", month, country, exc)
+                continue
             except (RuntimeError, OSError, ValueError, UnicodeError, csv.Error) as exc:
                 failed.append(country)
                 error = safe_error(exc)
@@ -265,20 +270,28 @@ def collect_month(month, directory, env_path, countries, confirmed_empty_countri
                 if isinstance(exc, RuntimeError):
                     error["retryable"] = True
                 country_errors[country] = error
-                log.warning("%s %s 국가 캐시 수집 실패: %s", month, country, safe_error(exc))
+                log.warning("%s %s 국가 캐시 수집 실패: %s", month, country, error)
                 continue
         ready.append(country)
     csv_path = directory / f"customs_raw_{month}.csv"
     rows = collector.merge(ready, cache, csv_path)
     report = collector.summarize(rows, month, month, countries, failed)
+    all_unsupported = bool(countries) and len(unsupported) == len(countries)
+    publication_status = "CONFIRMED_FOR_SUPPORTED_COUNTRIES" if unsupported else "CONFIRMED_FOR_REQUESTED_COUNTRIES"
+    if failed or all_unsupported:
+        publication_status = "COLLECTION_ERROR"
+    elif unresolved:
+        publication_status = "UNCONFIRMED"
     report.update(unconfirmed_empty_countries=unresolved, confirmed_empty_countries=confirmed,
-                  collection_complete=not failed and not unresolved, country_errors=country_errors,
-                  publication_status="COLLECTION_ERROR" if failed else (
-                      "UNCONFIRMED" if unresolved else "CONFIRMED_FOR_REQUESTED_COUNTRIES"))
+                  unsupported_countries=unsupported, country_errors=country_errors,
+                  collection_complete=not failed and not unresolved and not all_unsupported,
+                  publication_status=publication_status)
     (directory / "collection.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     if failed:
         error_type = RetryableError if all(e["retryable"] for e in country_errors.values()) else ValidationError
         raise error_type("국가별 API/캐시 수집 장애; 정상 국가 캐시를 유지하고 보고서 확인 필요")
+    if all_unsupported:
+        raise ValidationError("수집 대상 국가코드를 모두 API가 거절함; 국가 사전 확인 필요")
     if report["out_of_period_rows"] or (report["rows_data"] and report["missing_months"]):
         raise ValidationError("대상 월이 아닌 실적이 포함됨; 수집 입력 확인 필요")
     return csv_path
