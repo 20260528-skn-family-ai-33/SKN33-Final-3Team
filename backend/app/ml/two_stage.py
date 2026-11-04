@@ -18,6 +18,7 @@
     학습 시점의 최신 기준월 예측(latest)을 함께 둬 조회는 파일만 읽는다.
     월별 재학습(candidate_models.run → monthly)은 MEMBERS 구성(최종: v1 · v3 앙상블)의 모델과 앙상블 latest를
     data/ml/monthly_models/model_a_two_stage_<YYYYMM>.joblib 하나에 담는다 (query --model 그 파일 하나로 조회).
+    에이전트 ML tool은 load_market_bundle(한 번) → predict_markets(대상마다)만 부른다 (설계 D-70, agents/market.py).
 
 실행 (저장소 루트에서):
     python -m backend.app.ml.two_stage train --method C --k 100 --external first_release --version v1
@@ -44,7 +45,7 @@ from threadpoolctl import threadpool_limits
 from backend.app.ml import features as F
 from backend.app.ml import sources as S
 from backend.app.ml.candidate_models import OUT_DIR, _finite, _runtime, needed_columns
-from backend.app.ml.candidate_query import item_name, pair_rank, resolve_target
+from backend.app.ml.candidate_query import item_name, resolve_target
 from backend.app.ml.experiment_metrics import evaluate_predictions
 from backend.app.ml.experiments import (FEATURE_SETS, ROOT, SNAPSHOT_PY311, ExperimentConfig, ModelSpec, build_model,
                                         load_snapshot, prepare_scenarios)
@@ -206,6 +207,54 @@ def market_view(pred):
     return pred.assign(past_pct=past_pct, trend=trend, outlook=outlook)
 
 
+MARKET_COLUMNS = ["anchor", "country_code", "hs6", "growth_pct", "exp_12m",
+                  "country_rank", "product_rank", "country_size", "product_size"]
+
+
+def load_market_bundle(model_paths, snapshot_path=None):
+    """에이전트 ML tool용(설계 D-70·D-78): 모델 파일의 최신 기준월 예측을 앙상블하고 국가 안 · 품목 안 순위를 한 번 계산한다.
+
+    월별 모델(model_a_two_stage_<YYYYMM>.joblib)은 학습 때 최신 기준월 전체 쌍의 앙상블 예측(latest)을 담고 있어
+    스냅샷으로 다시 예측하지 않는다. 예전 후보 파일(v1 · v3 따로)을 함께 주면 각 파일의 latest를 combine한다.
+    snapshot_path는 D-70 형식을 맞추려 받기만 한다: 스냅샷은 매월 갱신되지 않아 모델과 기준월 · 피처 기준이 어긋날 수 있다.
+    순위는 점수가 더 높은 쌍 수 + 1 (국가 안 = order, 품목 안 = product). size는 그룹 전체 모집단 크기.
+    """
+    bundles = [joblib.load(p) for p in model_paths]
+    first = bundles[0]["latest"]
+    pred = combine([b["latest"] for b in bundles]).assign(exp_12m=first.exp_12m.to_numpy())
+    if "growth_12m" in first:  # query의 market_view(현재 동향)용. 시장 동향 이전 파일에는 없다
+        pred = pred.assign(growth_12m=first.growth_12m.to_numpy())
+    if pred.empty or pred.anchor.nunique() != 1 or pred[["order", "product", "growth"]].isna().any().any():
+        raise ValueError("모델의 최신 예측이 비었거나 기준월이 여러 개입니다")
+    by_country, by_product = pred.groupby(GROUP), pred.groupby(PRODUCT_GROUP)
+    pred = pred.assign(growth_pct=np.expm1(pred.growth) * 100,
+                       country_rank=by_country.order.rank(ascending=False, method="min").astype(int),
+                       product_rank=by_product["product"].rank(ascending=False, method="min").astype(int),
+                       country_size=by_country.order.transform("size"),
+                       product_size=by_product["product"].transform("size"))
+    return {"anchor": str(pd.Timestamp(pred.anchor.iloc[0]).date()), "predictions": pred,
+            "model_paths": [str(p) for p in model_paths], "versions": [b.get("version") for b in bundles]}
+
+
+def predict_markets(bundle, *, country_code=None, hs6=None, top=10):
+    """D-70: 다시 예측하지 않고 load_market_bundle 결과에서 거른다.
+
+    국가만 → 그 국가의 유망 품목(국가 안 순위 순) top개, 품목만 → 그 품목의 유망 국가(품목 안 순위 순) top개,
+    둘 다 → 그 쌍 한 행. 예측 대상(최근 12개월 수출 $100K 이상)이 아니면 빈 표.
+    hs6는 모델의 비교용 코드(HS2022 대표 코드)여야 한다. 판 통합으로 묶인 다른 코드는 찾지 못한다(query는 comparison_hs6로 바꿔 넘김).
+    """
+    if not country_code and not hs6:
+        raise ValueError("국가 또는 HS6가 필요합니다")
+    pred = bundle["predictions"]
+    if country_code:
+        pred = pred[pred.country_code == country_code]
+    if hs6:
+        pred = pred[pred.hs6 == hs6]
+    if not (country_code and hs6):
+        pred = pred.sort_values(["country_rank", "hs6"] if country_code else ["product_rank", "country_code"]).head(top)
+    return pred[MARKET_COLUMNS].reset_index(drop=True)
+
+
 # 최종 모델 = v1 · v3 피처 2단계 C(K=100) 앙상블. 같은 시드끼리 v3 단독과 비교하면 NDCG@5가 기준월 3개 × 시드 3개
 # 9번 모두 같거나 높다 (5차 테스트). v3 단독은 {"ext": "first_release"} (학습 약 1.6배 빠름, Hit@5는 기준월마다 엇갈림).
 MEMBERS = {"base": "none", "ext": "first_release"}
@@ -291,38 +340,32 @@ def query(args, error):
     countries = S.countries()
     countries = countries[countries.country_role == "COUNTRY"]
     code, hs6 = resolve_target(args.country, args.hs6, countries, error)
-    bundles = [joblib.load(p) for p in args.model]
-    first = bundles[0]["latest"]
-    pred = combine([b["latest"] for b in bundles]).assign(exp_12m=first.exp_12m.to_numpy())
-    if "growth_12m" in first:  # 시장 동향 이전 파일에는 없다
-        pred = pred.assign(growth_12m=first.growth_12m.to_numpy())
-    pred = market_view(pred.assign(growth_pct=np.expm1(pred.growth) * 100))
+    bundle = load_market_bundle(args.model)
+    view = market_view(bundle["predictions"]).set_index(["country_code", "hs6"])[["past_pct", "trend", "outlook"]]
+    rows = predict_markets(bundle, country_code=code, hs6=hs6, top=args.top).join(view, on=["country_code", "hs6"])
     names = S.hs_names()
-    label = " + ".join(p.name for p in args.model)
+    label = " + ".join(Path(p).name for p in args.model)
     if code and hs6:
         name = countries.set_index("country_code").name_ko[code]
         print(f"{label} | {name}({code}) × {hs6} {item_name(hs6, names, width=60)}")
-        rank = pair_rank(pred, code, hs6, country_by="order", product_by="product")
-        if rank is None:
+        if rows.empty:
             print("예측 대상이 아닙니다 (최근 12개월 수출 $100K 이상인 쌍만 예측합니다)")
             return
-        row = rank["row"]
+        row = rows.iloc[0]
         print(f"예측 증감률(약) {row.growth_pct:+.1f}% | 최근 12개월 수출 {row.exp_12m:,.0f} USD")
         past = " (실적 증감률 산정 불가)" if np.isnan(row.past_pct) else f" (지난 12개월 실적 {row.past_pct:+.1f}%)"
         print(f"현재 동향 {row.trend}{past} | 전망 {row.outlook} (같은 달 전체 쌍 중 예측 순위 3등분, 2025-02~09 검증 3구간 정확도 약 45%, 재학습 후 미측정)")
-        print(f"{name} 안 순위(2단계) {rank['country_rank']} / {rank['country_size']}개 품목 | "
-              f"{hs6} 안 순위(품목 방향) {rank['product_rank']} / {rank['product_size']}개국")
+        print(f"{name} 안 순위(2단계) {row.country_rank} / {row.country_size}개 품목 | "
+              f"{hs6} 안 순위(품목 방향) {row.product_rank} / {row.product_size}개국")
         return
     if code:
-        rows = pred[pred.country_code == code].nlargest(args.top, "order")
         rows = rows.assign(name=rows.hs6.map(lambda h: item_name(h, names)))[["hs6", "name", "growth_pct", "exp_12m", "trend", "outlook"]]
         header, title = ["HS6", "품목명", "예측 증감률(%)", "최근 12개월 수출(USD)", "현재 동향", "전망"], f"{countries.set_index('country_code').name_ko[code]}({code}) → 유망 품목"
     else:
-        rows = pred[pred.hs6 == hs6].nlargest(args.top, "product")
         rows = rows.merge(countries[["country_code", "name_ko"]], on="country_code", how="left")[
             ["country_code", "name_ko", "growth_pct", "exp_12m", "trend", "outlook"]]
         header, title = ["국가코드", "국가명", "예측 증감률(%)", "최근 12개월 수출(USD)", "현재 동향", "전망"], f"{hs6} {item_name(hs6, names, width=60)} → 유망 국가"
-    print(f"{label} | 기준월 {pred.anchor.max().date()} | {title} Top {args.top}")
+    print(f"{label} | 기준월 {bundle['anchor']} | {title} Top {args.top}")
     if rows.empty:
         print("예측 대상이 없습니다 (최근 12개월 수출 $100K 이상인 쌍만 예측합니다)")
         return

@@ -383,7 +383,7 @@ actions[], report_id, warnings[]
 - 사용자가 과거 기간을 명시하면 MODEL_PERIOD로 최신 기준 예측을 볼지 확인한다. 거절하면 해당 Task는 NO_DATA, 동의하면 slots.latest_prediction_confirmed=True를 기록한다. 플래너는 이 값을 True로 생성할 수 없고 ask_user만 사용자 답에 따라 바꾼다. 플래너 출력 모델 `PlannerSlots`에는 이 칸이 없어서, LLM이 넣으면 검증에서 거부된다. 단순 상속 기간 때문에 매번 확인하지 않는다.
 - 결과에 스냅샷 기준월·예측 대상 기간·모델 버전을 표시한다. exp_12m은 과거 12개월 수출액이며 미래 예측액으로 표시하지 않는다. 모델에서 제공하는 예측 기간 정의는 ML 담당자와 함수 계약에 명시한다.
 - 복수 입력은 국가만이면 국가별, 품목만이면 HS6별, 둘 다면 요청된 국가×품목 조합별로 predict_markets를 호출한다(최대 100쌍). 결과를 국가·품목별로 구분하고 임의로 순위를 합치지 않는다. 동일 bundle을 재사용하고 전체 실행 시간 제한을 지킨다. 일부 조합의 데이터 없음·실패는 PARTIAL로 처리한다.
-  - 국가만이면 국가마다 유망 품목 상위 10, 품목만이면 품목마다 유망 국가 상위 10이다. 결과는 한 결과표에 `country_code`·`hs6`로 대상을 구분해 담고, `anchor`는 기준월로만 사용한다(D-79)(최대 200행, D-42 안). 예측 대상이 아닌 대상은 경고 "○○은 예측 대상이 아닙니다."를 붙인다. 대상이 여러 개일 때는 D-82의 대상 선택 차트를 쓴다(C-25 결정 완료).
+  - 국가만이면 국가마다 유망 품목 상위 5, 품목만이면 품목마다 유망 국가 상위 5를 기본으로 조회한다. 질문에 개수를 명시하면 `ranking_limit`을 사용한다. 결과표의 200행 상한 안에서 대상별 조회 개수를 조정하며, 조정 시 답변에 안내한다. 결과는 한 결과표에 `country_code`·`hs6`로 대상을 구분해 담고 HS 코드 바로 옆에 품목명을 표시한다. `anchor`는 기준월로만 사용한다(D-79). 예측 대상이 아닌 대상은 경고 "○○은 예측 대상이 아닙니다."를 붙인다. 대상이 여러 개일 때는 D-82의 대상 선택 차트를 쓴다(C-25 결정 완료).
 
 ### D-75. 기사 기간
 - CAUSE는 확정된 통계 기간 시작월의 전월 1일부터 종료월의 다음 달 말일까지다. 통계 결과와 기사 시점의 연관성을 설명하되 원인으로 확정하지 않는다.
@@ -669,7 +669,7 @@ actions[], report_id, warnings[]
 - **`COMPOSE_PROMPT` 규칙:**
   1. 합니다체. 결론은 Task마다 1~2문장이고 `tasks` 순서대로 `{task_id, sentences}`를 낸다. 설명은 전체 4문장 이하, 문장마다 200자 이하다.
   2. 숫자는 digest에 있는 값만 쓰고, 더하거나 나누거나 증감률을 새로 계산하지 않는다(§8). 값이 null이면 숫자를 쓰지 않고 "집계되지 않았습니다"라고 쓴다. 0과 null을 섞지 않는다(D-84).
-  3. 수출·수입을 문장에 밝힌다(D-31). 금액은 USD이고, 억·만 단위로 바꿔 써도 된다(verify가 단위를 읽는다, §11.4).
+  3. 수출·수입을 문장에 밝힌다(D-31). 금액은 USD이고, compose 입력의 금액은 코드가 만 단위로 반올림한 표기(`digest.korean_usd`, 예: "2,610만 달러", "1억 2,346만 달러", 1만 달러 미만은 "1,234달러")로 준다. LLM은 그 표기를 글자 그대로 옮기고 단위를 바꾸거나 반올림하지 않는다(PR #52 리뷰: LLM이 만·억을 바꾸며 자릿수를 틀림). verify는 원래 digest 숫자로 대조한다(§11.4).
   4. CAUSE는 기사와 통계의 시점을 이어 설명하되 원인으로 단정하지 않는다(D-75). 기사를 쓰면 문장 끝에 `[n]`을 붙인다.
   5. ML(PREDICTION)은 기준월을 밝히고, `exp_12m`은 "과거 12개월 수출액"으로만 쓴다(D-74).
   6. 비교 기간 길이가 다르면 그 사실과 월평균을 함께 쓴다(D-84). 점유율은 분모 의미를 쓴다(D-87).
@@ -704,11 +704,11 @@ actions[], report_id, warnings[]
 | `API_COMPOSE_MODEL`, `API_COMPOSE_TIMEOUT_SECONDS` | `gpt-4.1-mini`, 20 | compose(§13.1) |
 | `API_SQL_MODEL`, `API_SQL_TIMEOUT_SECONDS` | `gpt-4.1`, 20 | LLM SQL 생성(§13.5). 더 큰 모델을 쓰기로 함(2026-10-30). 최종 모델은 골든셋 비교 후 확정(C-30) |
 | `API_SQL_EXECUTION_SECONDS` | 30 | LLM SQL 실행 상한(D-41) |
-| `API_ML_MODEL_PATHS` | 쉼표로 나눈 두 joblib 경로(v1·v3 앙상블) | `load_market_bundle`(D-70) |
-| `API_ML_SNAPSHOT_PATH` | 최신 기준월 스냅샷 경로(`features_snapshot_py311_latest*.pkl`) | `load_market_bundle`(D-48) |
+| `API_ML_MODEL_DIRECTORY` | READY 월별 모델 레지스트리와 아티팩트 디렉터리 | `agents.market.model_paths` |
+| `API_ML_MODEL_PATHS` | 레지스트리 대신 지정할 joblib 경로(여러 개면 쉼표로 구분) | `load_market_bundle`(D-70) |
 | `API_CHAT_MAX_RECOVERIES` | 2 | 장애 재개 횟수(D-85) |
 
-모델·스냅샷 파일의 실제 이름·버전은 ML 담당자가 배포할 때 정한다(결정 보류 C-29, ML 연결 때 확인).
+현재 배포 방식은 월별 모델 아티팩트에 저장된 예측을 읽는다. 채팅 워커에 별도 피처 스냅샷 파일은 필요하지 않다.
 
 ### 13.4 노드별 최대 실행 시간 (실행 예산 예약, D-85)
 호출하기 전에 이 시간을 예약하고, 같은 값을 실제 호출 timeout으로 건다. 재시도는 호출마다 따로 예약한다.
@@ -935,7 +935,7 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
 ### 14.7 query_market_model
 - **입력:** `task.conditions`(국가 목록·HS6 목록), `Step.args.top`(10)
 - **처리:**
-  - 워커가 한 번 `load_market_bundle(API_ML_MODEL_PATHS, API_ML_SNAPSHOT_PATH)`로 읽어 둔다(D-48, D-70, C-29).
+  - 워커가 월별 레지스트리 또는 `API_ML_MODEL_PATHS`에서 고른 아티팩트를 `load_market_bundle(model_paths)`로 읽어 재사용한다.
   - 대상마다 `predict_markets`를 부른다. 국가만이면 국가별, 품목만이면 품목별, 둘 다면 조합별이고 최대 100쌍이다(D-74, D-78).
   - 결과는 한 결과표에 저장한다. meta에는 `anchor`·모델 버전·스냅샷 기준월·HS 판본을 넣는다(D-79, D-88).
 - **자체 검증:** 행 키(`anchor`, `country_code`, `hs6`)가 중복 없는지, 모든 행의 `anchor`가 같은지, 순위가 양수·해당 전체 모집단 크기 이내이고 bundle의 원본 순위와 같은지(필터 결과의 연속성은 요구하지 않음), `growth_pct`가 유한한지, `exp_12m`이 0 이상인지
@@ -1036,10 +1036,10 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
 
 ### D-95. 선행 결과에서 후속 분석 대상 선택 (C-31, 사용자 승인)
 - '유망 국가 상위 3개의 수출 추이'처럼 차원·개수·정렬 기준이 명확하면 자동으로 선택해 다음 분석을 실행한다. 모호하면 INPUT_SELECTION으로 묻는다. 리포트 생성 승인은 별도로 유지한다.
-- 플래너 `target_selections`는 `[{source_task, dimension, limit, order_by}]`다. dimension은 COUNTRY/HS6, order_by는 country_rank/product_rank/amount_usd, limit은 양의 정수다. 기준이 불명확하면 해당 필드를 null로 낸다. source_task는 source_tasks 안에 있어야 하고 중복 선택 규칙은 거부한다.
+- 플래너 `target_selections`는 `[{source_task, dimension, limit, order_by}]`다. dimension은 COUNTRY/HS6, order_by는 country_rank/product_rank/amount_usd, limit은 양의 정수다. 기준이 불명확하면 해당 필드를 null로 낸다. 실제 LLM은 단순 질문에도 자기 자신을 가리키는 선택을 붙이고 복합 질문에서 source_tasks를 빠뜨리므로(PR #52 리뷰) 출력 전체를 거부하지 않고 정리한다: 앞 하위 질문을 가리키는 선택은 source_tasks에 연결하고, 자기 자신·뒤 질문을 가리키는 선택은 버리며, 같은 source_task의 중복 선택은 첫 번째만 남긴다. source_tasks 자체가 앞 질문이 아니면 지금처럼 거부한다. 선행 결과를 받는 질문에서 정식 국가명이 빈 국가 표현("그 국가들")은 버리고, 선행 결과가 없으면 원문 표현으로 사전을 찾는다.
 - 서버는 source_task를 실제 ResultBinding에 연결하고 나머지 필드를 binding.selection으로 옮긴다. selection=None은 기존 결과 자체 전달(리포트 등), selection 객체는 후속 조회 조건으로 대상을 추출하는 뜻이다.
 - 소비 check는 원문에 해당 개수·기준의 근거가 있는지와 결과 meta의 그룹을 확인한다. 단일 HS6의 유망 국가 선택은 product_rank, 단일 국가의 유망 품목 선택은 country_rank, 수출입 금액 순위는 amount_usd다. 모델 성장률과 순위 점수를 섞지 않는다. 복수 그룹의 순위를 합쳐 선택하지 않으며 그룹이 불명확하면 확인한다.
-- 선택은 digest/현재 차트가 아닌 저장 결과 전체 행에서 한다. rank는 오름차순, amount_usd는 내림차순, 동률은 코드 오름차순이다. 차원별 코드를 중복 제거하고 앞 limit개를 고른다. HS는 결과 meta의 판본을 보존한다. 원래 입력의 선택하지 않은 조건은 선행 확정 조건에서 이어받되, 사용자가 후속 질문에 명시한 기간 등은 D-73대로 교체한다.
+- 선택은 digest/현재 차트가 아닌 저장 결과 전체 행에서 한다. rank는 오름차순, amount_usd는 내림차순, 동률은 코드 오름차순이다. 차원별 코드를 중복 제거하고 앞 limit개를 고른다. HS는 결과 meta의 판본을 보존한다. 선행 결과가 둘이면 기준 조건은 첫 결과의 저장 조건으로 한 번만 만들고 각 결과에서 고른 대상을 누적한다. 두 결과의 기간·수출입이 다르면 첫 결과 기준으로 분석하고 적용 조건에 그 사실을 남긴다(사용자 결정). 원래 입력의 선택하지 않은 조건은 선행 확정 조건에서 이어받되, 사용자가 후속 질문에 명시한 기간 등은 D-73대로 교체한다.
 - 국가 20·품목 5개 상한을 넘는 요청은 자르지 않고 기존 상한 안내로 소비 Task를 NO_DATA 처리한다. 요청한 수보다 실제 결과가 적으면 가능한 대상을 사용하고 누락 수를 limitations에 남겨 PARTIAL로 전파한다. 0개면 NO_DATA다. 저장 결과의 잘림 때문에 상위 N을 보장할 수 없으면 새 분석을 안내하며 임의로 완전한 상위 N이라고 표시하지 않는다.
 - 모호한 경우 Pending.kind=INPUT_SELECTION, condition_key=`{task_id}:input:{source_step_id}`다. choices는 서버가 결과 meta로 구성한 후보 규칙(최대 5개), patch는 dimension/limit/order_by 및 필요한 그룹 식별 코드다. 직접 입력도 같은 스키마와 원문 근거로 검증한다. 확인된 규칙은 Task.resolved에 저장하고 재개 후 다시 묻지 않는다. 조건별 2회 제한을 적용한다. 확인으로도 명시적 복수 그룹 선택을 요구하면 각 그룹을 따로 선택하되 합친 코드 목록에 조건 상한을 적용한다.
 - 추출된 코드는 사전 및 저장 결과 소속을 검증한 뒤 소비 Task.conditions에 넣고 applied_defaults에 선택 기준·사용한 대상을 표시한다. SQL/ML 도구에는 이 확정 조건을 넘긴다. 부모의 result_id와 선택 규칙은 후속 결과 meta 및 input fingerprint에 남긴다.

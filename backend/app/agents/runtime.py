@@ -153,13 +153,13 @@ class Services:
             from backend.app.agents.tools import article_result
             return self.execution.call('news',budget.seconds(self.settings,'news'),lambda _:article_result(state,task,step))
         if step.tool=='query_market_model':
-            from backend.app.agents.market import loaded,predict
+            from backend.app.agents.market import DEFAULT_MARKET_TOP, loaded, predict
             def model(_):
                 bundle,provider,versions=loaded(self.settings)
                 key=fingerprint(state,step,tool_version='1',versions=versions,source_results=parents)
                 previous=self.results.reuse(state,step,key)
                 if previous: return previous
-                analysis=predict(task,bundle,provider,versions,step.args.get('top',10))
+                analysis=predict(task,bundle,provider,versions,step.args.get('top',DEFAULT_MARKET_TOP))
                 if analysis.result.status!='OK': return analysis.result
                 from backend.app.agents.templates import _names
                 with self.read_store() as store: countries,products=_names(store)

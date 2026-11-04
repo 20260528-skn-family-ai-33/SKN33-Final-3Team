@@ -5,6 +5,13 @@ from backend.app.api.common import ApiError
 
 
 class AgentPlannerTest(unittest.TestCase):
+    def test_market_top_defaults_to_five_and_accepts_requested_count(self):
+        for requested, expected in [(None, 5), (8, 8)]:
+            plan, _ = self.plan([{'intent': 'PROMISING_MARKET', 'question': '베트남 유망 품목',
+                                  'slots': {'ranking_limit': requested}}])
+            step = next(step for step in plan.tasks[0].steps if step.tool == 'query_market_model')
+            self.assertEqual(step.args['top'], expected)
+
     def plan(self, tasks):
         return build_plan(PlannerOutput(tasks=tasks))
 

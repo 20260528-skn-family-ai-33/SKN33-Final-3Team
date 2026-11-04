@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Btn, Pager } from './ui'
 import { LineChart } from './charts'
 import { niceTicks } from '../utils/chart'
@@ -14,13 +14,19 @@ export default function ApiResults({ table, tableOnly = false, onDownload }) {
   const { run } = useApp()
   const [showTable, setShowTable] = useState(false)
   // 응답에는 첫 페이지(20행)만 온다. 나머지는 저장 결과 API에서 페이지로 읽는다(차트는 전체 값을 따로 그린다).
-  const [paged, setPaged] = useState({ page: 1, rows: null })
+  // 읽은 페이지는 결과 ID와 함께 둔다. 같은 자리에 다른 결과가 오면 첫 페이지부터 보인다.
+  const [loaded, setLoaded] = useState({ id: null, page: 1, rows: null })
+  const latest = useRef(0)
   const rows = table?.rows || [], total = table?.total_rows ?? rows.length
   const pages = table?.result_id && total > rows.length ? Math.ceil(total / PAGE_SIZE) : 1
-  const shown = paged.rows || rows, columns = resultColumns(table?.columns || [],shown)
+  const paged = loaded.id === table?.result_id ? loaded : { page: 1, rows: null }
+  const shown = paged.rows || rows
+  // 여러 페이지면 서버가 전체 행으로 정한 열을 그대로 쓴다(페이지마다 열이 바뀌지 않게). 라벨만 붙인다.
+  const columns = resultColumns(table?.columns || [], rows, { labelsOnly: pages > 1, meta: table?.meta })
   const go = page => run(async () => {
-    const data = page === 1 ? { table } : await api(`/results/${table.result_id}`, { query: { page, page_size: PAGE_SIZE } })
-    setPaged({ page, rows: page === 1 ? null : data.table.rows })
+    const request = ++latest.current, id = table.result_id
+    const data = page === 1 ? { table } : await api(`/results/${id}`, { query: { page, page_size: PAGE_SIZE } })
+    if (request === latest.current) setLoaded({ id, page, rows: page === 1 ? null : data.table.rows })  // 늦게 온 이전 요청은 버린다
   })
   const numeric = ['amount_usd', 'export_amount_usd', 'import_amount_usd', 'previous_year_export_usd'].filter(key => rows.length && rows.every(r => typeof r[key] === 'number'))
   const chart = !tableOnly && rows.length > 0 && rows.every(r => r.month) && numeric.length > 0

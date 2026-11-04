@@ -2,7 +2,7 @@
 import re
 from backend.app.agents.state import (
     AgentState, Plan, PlannerOutput, Task, TaskSlots, Step, ResultBinding,
-    TargetSelection, NO_STEP_INTENTS, task_count_error,
+    TargetSelection, NO_STEP_INTENTS, task_count_error, DEFAULT_MARKET_TOP,
 )
 from backend.app.api.common import ApiError
 
@@ -28,7 +28,8 @@ products에는 질문 속 품목 표현을 그대로 옮기세요. HS 코드를 
 comparison_requested는 비교 요청에만 true, 요청이 없으면 null입니다.
 이전 비교를 명시적으로 지칭한 경우에만 이전 compare_period를 명시하세요.
 ranking_group은 RANKING에만 COUNTRY/HS6, 모호하면 null입니다.
-ranking_limit은 금액 순위에서 명시한 상위 개수입니다. 국가 5곳은 5이며, 생략되면 null입니다.
+ranking_limit은 금액 순위 또는 유망 품목·국가 조회에서 사용자가 명시한 결과 개수입니다.
+예: "베트남 유망 품목 8개"는 PROMISING_MARKET이며 ranking_limit=8입니다. 개수를 생략하면 null입니다.
 한국의 수출액 상위 국가는 한국의 상대국 순위입니다. 한국을 상대국 필터에 넣지 마세요.
 모든 수출입 테이블은 한국 기준입니다. 한국·대한민국·우리나라는 기준 국가이며 상대국이 아닙니다.
 한국 전체 수출입을 요청하면 countries=[]로 이전 상대국 필터를 해제하세요.
@@ -144,7 +145,7 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
                     args['top'] = item.slots.ranking_limit or 10
                     if item.slots.ranking_limit and item.slots.ranking_group in ('COUNTRY','HS6') and not item.slots.comparison_requested:
                         args['amount_only'] = True
-            elif name == 'ml': args = {'top': 10}
+            elif name == 'ml': args = {'top': item.slots.ranking_limit or DEFAULT_MARKET_TOP}
             elif name == 'news': args = {'limit': 5}
             depends_on = [f'{task_id}.{d}' for d in dependencies]
             if name == 'check': depends_on.extend(b.source_step_id for b in bindings)

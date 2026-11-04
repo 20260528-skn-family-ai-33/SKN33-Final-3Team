@@ -38,12 +38,14 @@ def read_snapshot(store, uid, identity, kind=None):
     payload=row['payload_json']
     # Legacy report previews can reference a RESULT containing only conditions.
     if row['kind']=='RESULT' and 'columns' in payload and 'rows' in payload:
-        payload={**payload,'columns':display_columns(payload['columns'],payload['rows']),
+        payload={**payload,'columns':display_columns(payload['columns'],payload['rows'],payload.get('meta')),
                  'snapshot_created_at':row['created_at']}
     return payload
 
 
-def display_columns(columns, rows):
+def display_columns(columns, rows, meta=None):
+    if (meta or {}).get('kind') == 'PREDICTION':
+        return prediction_columns(columns, meta.get('group_by'))
     hidden={'hs_ver'}
     labels={**LABELS,'name':'품목' if any(r.get('hs_code') for r in rows) else '국가' if any(r.get('country_code') for r in rows) else '명칭'}
     if not any(r.get('hs_item') for r in rows): hidden.add('hs_item')
@@ -58,6 +60,24 @@ def display_columns(columns, rows):
         if not any(r.get('compare_amount_usd') is not None for r in rows): hidden.update(('compare_amount_usd','compare_month'))
     return [{**c,'label':labels.get(c['key'],c.get('label',c['key']))
              if c.get('label',c['key'])==c['key'] else c['label']} for c in columns if c['key'] not in hidden]
+
+
+def prediction_columns(columns, group_by):
+    by_key = {column['key']: column for column in columns}
+    rank_fields = {
+        'COUNTRY': [('country_rank', '품목 순위')],
+        'HS6': [('product_rank', '국가 순위')],
+        'PAIR': [('country_rank', '국가 내 품목 순위'), ('product_rank', '품목 내 국가 순위')],
+    }
+    country = ('country_name', '국가') if 'country_name' in by_key else ('country_code', '국가 코드')
+    product_key = 'product_name' if 'product_name' in by_key or group_by == 'HS6' else 'name'
+    fields = rank_fields.get(group_by, rank_fields['PAIR']) + [
+        country, ('hs6', 'HS 코드'), (product_key, '품목명'),
+        ('growth_pct', '예측 수출 증감률'), ('exp_12m', '최근 12개월 수출액'), ('anchor', '예측 기준월'),
+    ]
+    units = {'growth_pct': '%', 'exp_12m': 'USD'}
+    return [{**by_key[key], 'label': label, 'unit': units.get(key, by_key[key].get('unit'))}
+            for key, label in fields if key in by_key]
 
 
 def result_filename(payload, store=None):
@@ -92,7 +112,7 @@ def result_table(store, uid, rows, meta, conditions=None, sql=None, columns=None
     keys=list(rows[0]) if rows else []
     columns=columns or [{'key':k,'label':LABELS.get(k,k),'type':'number' if isinstance(rows[0][k],(int,float)) or k.endswith(('_usd','_pct')) else 'string',
                         'unit':'USD' if k.endswith('_usd') else '%' if k.endswith('_pct') else None} for k in keys]
-    columns=display_columns(columns,rows)
+    columns=display_columns(columns,rows,meta)
     payload={'columns':columns,'rows':rows,'meta':clean(meta),'conditions':clean(analysis_conditions(conditions or {})),'sql':sql or [],'total_rows':len(rows)}
     identity=save_snapshot(store,uid,'RESULT',payload)
     return {'result_id':identity,'columns':columns,'rows':rows,'total_rows':len(rows),

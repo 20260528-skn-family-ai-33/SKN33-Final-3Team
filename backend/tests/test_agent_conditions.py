@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from backend.tests.api_support import reference_data, test_engine
 from backend.tests.test_agent_state import state
 from backend.app.agents.clarification import answer_patch, apply_answer
@@ -11,6 +11,36 @@ from backend.app.api.common import ApiError
 
 
 class ConditionTest(unittest.TestCase):
+    def test_market_hs4_uses_only_eligible_children_ranked_by_exports(self):
+        import pandas as pd
+
+        hs = self.store.t('hs_code')
+        for code in range(330410,330416):
+            self.store.c.execute(hs.insert().values(hs_code=str(code),hs_ver='HS2022',source_edition='HS2022',
+                                                   depth=6,name_ko=f'품목 {code}'))
+        self.state.input.question='미국 HS 3304 유망시장'
+        self.task.intent='PROMISING_MARKET'
+        self.task.slots=TaskSlots(countries=[{'mention':'미국','name':'미국'}],products=['3304'])
+        predictions=pd.DataFrame([
+            ('US','330415',120_000),('US','330499',340_000),('CN','330410',9_000_000),
+        ],columns=['country_code','hs6','exp_12m'])
+        with patch('backend.app.agents.market.loaded',return_value=({'predictions':predictions},None,{})):
+            check_conditions(self.store,self.state,self.step)
+        self.assertEqual([choice.choice_id for choice in self.state.pending.choices],['330499','330415'])
+
+    def test_market_hs4_auto_selects_the_only_eligible_child(self):
+        import pandas as pd
+
+        self.state.input.question='HS 3304 유망시장'
+        self.task.intent='PROMISING_MARKET'
+        self.task.slots=TaskSlots(products=['3304'])
+        predictions=pd.DataFrame([('US','330499',120_000)],columns=['country_code','hs6','exp_12m'])
+        with patch('backend.app.agents.market.loaded',return_value=({'predictions':predictions},None,{})):
+            check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'DONE')
+        self.assertEqual([item.hs_code for item in self.task.conditions.hs_items],['330499'])
+        self.assertIn('330499',self.task.applied_defaults[0])
+
     def test_explicit_country_code_is_kept(self):
         for mention in ('US', 'us'):
             with self.subTest(mention=mention):

@@ -18,8 +18,15 @@ REQUIRED_MODULES={'search':'RediSearch','ReJSON':'RedisJSON'}
 def require_modules(client):
     """(임시) 체크포인터(langgraph-checkpoint-redis)는 RediSearch·RedisJSON을 쓴다(설계 D-07). Redis 7.x에는 없어
     첫 질문부터 원인 없이 FAILED가 되므로, 연결할 때 모듈부터 확인해 원인을 남긴다."""
+    from redis.exceptions import ResponseError
+    try:
+        modules=client.module_list()
+    except ResponseError:
+        # ACL·관리형 Redis가 MODULE 명령을 막으면 확인할 수 없다. 막지 않고 setup()의 FT.·JSON. 오류에 맡긴다
+        logging.getLogger(__name__).warning('redis_module_list_denied; 모듈 확인을 건너뜁니다')
+        return
     names=set()
-    for module in client.module_list():
+    for module in modules:
         name=module.get(b'name',module.get('name')) if isinstance(module,dict) else None
         names.add(name.decode() if isinstance(name,bytes) else name)
     missing=[label for name,label in REQUIRED_MODULES.items() if name not in names]

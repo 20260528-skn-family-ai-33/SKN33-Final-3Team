@@ -12,13 +12,19 @@ import { comparisonGroups, comparisonChart } from './comparisonGroups'
 const colors=['#a71b39','#342954','#4b7578','#967348','#6e6198']
 const badges={PARTIAL:'일부 결과',NO_DATA:'결과 없음',OUT_OF_SCOPE:'범위 밖'}
 
-function Chart({initial,selector}) {
+function Chart({initial,selector,table}) {
   const [selected,setSelected]=useState(null)
   const chart=selected && selected.resultId===initial.result_id ? selected.chart : initial
   const [busy,setBusy]=useState(false)
   const [country,setCountry]=useState(selector?.country_codes[0]||'')
   const [hs,setHs]=useState(selector?.hs_items[0]?.hs_code||'')
   const {run}=useApp()
+  const pairMode=selector?.group_by==='PAIR'
+  // PAIR 결과는 최대 100쌍이다. 답변에 첫 페이지만 있으면 저장된 전체 조합을 읽는다.
+  const needsPairs=pairMode && !table?.expired && (!table || table.total_rows>table.rows.length)
+  const pairQuery=useQuery(`/results/${initial.result_id}`,{page_size:100},needsPairs)
+  const pairs=pairMode ? (pairQuery.data?.rows || table?.rows || []) : []
+  const pairKey=(c,h)=>`${c}:${h}`
   const change=async(c,h)=>{
     setBusy(true)
     const product=selector.hs_items.find(p=>p.hs_code===h)
@@ -30,7 +36,14 @@ function Chart({initial,selector}) {
   const display=chartDisplay(series.flatMap(s=>s.values),chart.unit)
   const props={labels:chart.labels,fullLabels:chart.full_labels,series,label:chart.title,formatValue:display.format}
   return <figure style={{margin:'14px 0'}}><figcaption><b>{chart.title}</b> · {display.unit} {({QUARTER:'· 분기별',YEAR:'· 연도별'})[chart.granularity]}</figcaption>
-    {selector && <div className="chips">{selector.country_codes.length>0 && <select aria-label="차트 국가" disabled={busy} value={country} onChange={e=>change(e.target.value,hs)}>{selector.country_codes.map(c=><option key={c} value={c}>{countryName(c)}</option>)}</select>}{selector.hs_items.length>0 && <select aria-label="차트 품목" disabled={busy} value={hs} onChange={e=>change(country,e.target.value)}>{selector.hs_items.map(h=><option key={h.hs_code} value={h.hs_code}>{productName(h.hs_code)}</option>)}</select>}</div>}
+    {pairMode ? <div className="chips">
+      {pairs.length>0 && <select aria-label="차트 국가·품목" disabled={busy} value={pairKey(country,hs)} onChange={e=>{
+        const pair=pairs.find(p=>pairKey(p.country_code,p.hs6)===e.target.value)
+        if(pair) change(pair.country_code,pair.hs6)
+      }}>{pairs.map(p=><option key={pairKey(p.country_code,p.hs6)} value={pairKey(p.country_code,p.hs6)}>{countryName(p.country_code)} · {productName(p.hs6)}</option>)}</select>}
+      {pairQuery.loading && <span role="status">차트 대상 불러오는 중…</span>}
+      <ErrorNotice error={pairQuery.error} retry={pairQuery.reload}/>
+    </div> : selector && <div className="chips">{selector.country_codes.length>0 && <select aria-label="차트 국가" disabled={busy} value={country} onChange={e=>change(e.target.value,hs)}>{selector.country_codes.map(c=><option key={c} value={c}>{countryName(c)}</option>)}</select>}{selector.hs_items.length>0 && <select aria-label="차트 품목" disabled={busy} value={hs} onChange={e=>change(country,e.target.value)}>{selector.hs_items.map(h=><option key={h.hs_code} value={h.hs_code}>{productName(h.hs_code)}</option>)}</select>}</div>}
     {chart.type==='line'?<LineChart {...props} yTicks={niceTicks(series.flatMap(s=>s.values.filter(v=>v!=null)))}/>:chart.type==='donut'?<><Donut items={chart.labels.map((l,i)=>[l,series[0].values[i]||0,colors[i%colors.length]])}/><p>{chart.labels.map((l,i)=>l+' '+(series[0].values[i]??'—')+'%').join(' · ')}</p></>:<BarChart {...props}/>}
     {series.length>1 && <ul aria-label="그래프 범례" style={{display:'flex',flexWrap:'wrap',gap:'8px 18px',listStyle:'none',padding:0,margin:'12px 0 0'}}>
       {series.map((s,i)=><li key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:13}}>
@@ -68,7 +81,7 @@ export default function TaskResults({answer,hideText=false}) {
     const start=conclusionCount(answer.tasks.slice(0,index))
     return <section key={t.task_id} className="chat-result"><h3>{index+1}. {t.question} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
       {!hideText && t.conclusion.map((s,i)=>sentence(s,start+i))}
-      {charts.filter(c=>c.task_id===t.task_id&&!groupedTasks.has(c.task_id)).map(c=><Chart key={c.chart_id} initial={c} selector={answer.chart_selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)}/>)}
+      {charts.filter(c=>c.task_id===t.task_id&&!groupedTasks.has(c.task_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c} selector={answer.chart_selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)} table={answer.tables.find(x=>x.result_id===c.result_id)}/>)}
       {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}
         fallback={charts.filter(chart=>g.tables.some(table=>table.task_id===chart.task_id)).sort((a,b)=>(b.type==='line'?100:0)+b.series.length-(a.type==='line'?100:0)-a.series.length)[0]}/>)}
       {answer.tables.filter(x=>x.task_id===t.task_id&&!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</section>

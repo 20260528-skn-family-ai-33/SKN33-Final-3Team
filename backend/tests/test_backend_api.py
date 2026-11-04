@@ -28,7 +28,7 @@ class BackendApiTest(unittest.TestCase):
         with patch('backend.app.agents.report.wake_ready', side_effect=ConnectionError), \
              patch('backend.app.api.worker.jobs.claim', return_value=None) as claim_job, \
              self.assertLogs('backend.app.api.worker', level='WARNING'):
-            self.assertFalse(run_once(database, {'API_CHAT_AGENT_ENABLED':'true'}))
+            self.assertFalse(run_once(database, {'API_CHAT_AGENT_ENABLED':'false'}))
         self.assertIs(scan.__exit__.call_args.args[0], ConnectionError)
         self.assertIs(claim_job.call_args.args[0].c, claim.__enter__.return_value)
 
@@ -336,6 +336,7 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.post(url,{'clarification_id':cid,'report_confirmation':confirmation}).status_code,202)
         self.assertTrue(run_once(db,self.settings))
         self.assertEqual(poll()['status'],'WAITING_REPORT')
+        self.settings.values['API_CHAT_AGENT_ENABLED']='false'
         # File generation has its own worker tests. Simulate its durable completion signal.
         with self.engine.begin() as connection:
             table=self.meta.tables['report']

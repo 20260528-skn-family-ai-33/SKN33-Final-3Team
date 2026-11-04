@@ -107,6 +107,29 @@ class TwoStageTest(unittest.TestCase):
         np.testing.assert_allclose(view.past_pct.iloc[1:], [9_999_900., 50., -100.])
         self.assertTrue(T.market_view(pred.drop(columns="exp_12m")).past_pct.isna().all())
 
+    def test_market_bundle_ranks_once_and_filters_like_query(self):
+        from backend.app.ml.candidate_query import pair_rank
+        n = len(self.latest)
+        latest = self.latest[T.KEYS].assign(growth=np.linspace(-1, 1, n), order=np.arange(n) % 7, product=-np.arange(n) % 5,
+                                             exp_12m=self.latest.exp_12m.to_numpy())
+        bundle = T.load_market_bundle([self.out_file({"latest": latest})], "스냅샷은 읽지 않음.pkl")
+        self.assertEqual(bundle["anchor"], str(self.latest.anchor.iloc[0].date()))
+        code, hs6 = latest.country_code.iloc[3], latest.hs6.iloc[3]
+        pair = T.predict_markets(bundle, country_code=code, hs6=hs6)
+        self.assertEqual(list(pair.columns), T.MARKET_COLUMNS)
+        expected = pair_rank(latest, code, hs6, country_by="order", product_by="product")  # query가 쓰던 순위 규칙
+        self.assertEqual(pair.loc[0, ["country_rank", "country_size", "product_rank", "product_size"]].tolist(),
+                         [expected[k] for k in ("country_rank", "country_size", "product_rank", "product_size")])
+        top = T.predict_markets(bundle, country_code=code, top=3)
+        self.assertEqual(top.hs6.tolist(), latest[latest.country_code == code].sort_values(["order", "hs6"], ascending=[False, True]).hs6[:3].tolist())
+        self.assertTrue(top.country_rank.is_monotonic_increasing)
+        countries = T.predict_markets(bundle, hs6=hs6, top=50)
+        self.assertEqual(set(countries.country_code), set(latest[latest.hs6 == hs6].country_code))
+        self.assertTrue(countries.product_rank.is_monotonic_increasing)
+        self.assertTrue(T.predict_markets(bundle, country_code="없는나라").empty)  # 예측 대상이 아니면 빈 표
+        with self.assertRaisesRegex(ValueError, "국가 또는 HS6"):
+            T.predict_markets(bundle)
+
     def out_file(self, bundle):
         import tempfile
         from pathlib import Path

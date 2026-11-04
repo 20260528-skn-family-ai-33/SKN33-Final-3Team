@@ -43,7 +43,25 @@ python -c "import lightgbm; print(lightgbm.__version__)"
 - 전망 정확도는 2025-02~2025-09 검증 기준월 8개(약 40만 쌍)에서 최종 모델 1단계(v1·v3 평균)를 기준월마다 12개월 앞선 데이터로 다시 학습해 쟀습니다. 기준월마다 44~46%로 비슷하고, 하위 10%를 저조로 볼 때는 71%가 실제 하위 1/3이지만 상위는 최고 50%입니다. 수출 규모가 커져도 정확도는 오르지 않습니다(1,000만 달러 이상 43%).
 - 현재 동향은 월별 결과 파일 `latest`의 `exp_12m`과 `growth_12m`으로 계산합니다. `growth_12m`의 학습용 `log1p` 보정을 되돌려 직전 수출액을 복원한 뒤 실제 증감률을 구합니다. 직전 수출액이 0이거나 필요한 실적 열이 없는 예전 파일은 현재 동향이 `미확인`이며, 단일 쌍 조회에 `실적 증감률 산정 불가`를 표시합니다.
 
-> **추가 예정: 채팅 tool용 조회 함수.** `query`는 출력만 하므로 값을 돌려주는 `load_market_bundle(model_paths, snapshot_path)`와 `predict_markets(bundle, *, country_code=None, hs6=None, top=10) -> DataFrame`을 추가하고, `query`는 그 결과를 출력만 하도록 바꿉니다. 형식은 [채팅 에이전트 설계](../../../docs/AGENT_DESIGN.md) D-70에 있습니다. 채팅 워커는 서버에 둔 최신 기준월 스냅샷(`features_snapshot_py311_latest*.pkl`)으로 요청마다 예측합니다(D-48). 함수는 국가 하나·HS6 하나만 받습니다. 채팅에서 HS4 품목은 그 아래 HS6로 되물어 정하고, 국가·품목이 여러 개면 tool이 대상마다 따로 부릅니다(D-74). 되묻기 선택지를 만들려면 HS4 아래 예측 대상 HS6와 최근 12개월 수출액을 알아야 하므로, 번들에서 이를 읽을 수 있게 해 주세요.
+### 채팅 tool용 조회 함수 (설계 D-70)
+
+에이전트 ML tool(`agents/market.py`)은 아래 두 함수만 부릅니다. `query`도 같은 함수로 결과를 만들어 출력만 합니다.
+
+```python
+from backend.app.ml.two_stage import load_market_bundle, predict_markets
+bundle = load_market_bundle(["data/ml/monthly_models/model_a_two_stage_202609.joblib"])  # 워커에서 한 번
+predict_markets(bundle, country_code="VN", top=5)                 # 국가 → 유망 품목 5 (국가 안 순위 순)
+predict_markets(bundle, hs6="850760", top=5)                      # 품목 → 유망 국가 5 (품목 안 순위 순)
+predict_markets(bundle, country_code="VN", hs6="850760")          # 그 쌍 한 행
+```
+
+- `load_market_bundle(model_paths, snapshot_path=None)`: 모델 파일의 최신 기준월 예측(`latest`)을 앙상블하고 국가 안(`order`)·품목 안(`product`) 순위와 모집단 크기를 한 번 계산합니다. 반환 dict는 `anchor`(예측 기준월 `YYYY-MM-DD`)와 `predictions`(전체 쌍 표)를 담습니다.
+  - 월별 모델 파일에는 학습 때 만든 최신 기준월 전체 쌍 예측이 들어 있어 **스냅샷으로 다시 예측하지 않습니다.** `snapshot_path`는 D-70 형식만 맞춥니다. 스냅샷은 매월 갱신되지 않아 모델과 기준월·피처 기준이 어긋날 수 있기 때문입니다(D-48의 "스냅샷으로 요청마다 예측"과 다름).
+  - 예전 후보 파일 두 개(v1·v3)를 함께 주면 각 파일의 `latest`를 앙상블합니다.
+- `predict_markets(bundle, *, country_code=None, hs6=None, top=10)`: 다시 예측하지 않고 거릅니다. 열은 `anchor`, `country_code`, `hs6`, `growth_pct`, `exp_12m`, `country_rank`, `product_rank`, `country_size`, `product_size`입니다. 순위는 점수가 더 높은 쌍 수 + 1이고 크기는 그룹 전체 모집단입니다. 예측 대상(최근 12개월 수출 $100K 이상)이 아니면 빈 표이고, 국가·HS6가 모두 없으면 `ValueError`입니다.
+  - `hs6`는 모델의 비교용 코드(HS2022 대표 코드)여야 합니다. 판 통합으로 다른 코드에 묶인 HS6는 찾지 못합니다(`query`는 `comparison_hs6`로 바꿔 넘깁니다).
+  - HS4 되묻기 선택지(D-74)는 `bundle["predictions"]`의 `hs6`·`exp_12m`에서 읽습니다.
+- 에이전트는 `API_ML_MODEL_PATHS`가 비어 있으면 `data/ml/monthly_models/`(`API_ML_MODEL_DIRECTORY`)의 `.registry.json` 중 `READY`·`model_a`이고 `trade_month`·`created_at`이 가장 최신인 파일을 고릅니다. 2026-11-04 `model_a_two_stage_202609.joblib`로 확인: 읽기 약 3초, 49,083쌍.
 
 > **추가 예정: B 모델 시장 유형 분류.** (`query` 출력에는 위 시장 동향 두 값이 붙어 있습니다. 채팅 tool용 반환 함수와 설계 D-23 반영은 아직입니다.) 국가 + 품목 조회에 시장 유형 라벨을 더하고, 근거로 예상 성장률과 이전 12개월 수출액을 함께 반환해야 합니다. 이 기능이 나오기 전까지 채팅은 시장 유형 질문(`MARKET_TYPE`)에 "지원 예정" 안내만 합니다([채팅 에이전트 설계](../../../docs/AGENT_DESIGN.md) D-23).
 

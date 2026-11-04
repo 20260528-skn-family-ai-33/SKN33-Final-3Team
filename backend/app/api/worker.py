@@ -12,18 +12,18 @@ def run_once(database,settings):
     database.settings=settings
     database.report_max_attempts=max(1,int(settings.get('API_REPORT_MAX_ATTEMPTS',3)))
     database.job_scan_size=max(1,min(1000,int(settings.get('API_JOB_SCAN_SIZE',100))))
-    if settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true':
-        try:
-            from backend.app.agents.report import renew_waiting, wake_ready
-            with database.engine.begin() as connection:
-                waiting=wake_ready(Store(database,connection),database.job_scan_size)
-        except Exception as exc:
-            logging.getLogger(__name__).warning('report_wait_scan_failed type=%s',type(exc).__name__)
-        else:
-            for pending in waiting:
-                try: renew_waiting(database,pending)
-                except Exception as exc:
-                    logging.getLogger(__name__).warning('report_wait_renew_failed type=%s',type(exc).__name__)
+    # The admission flag applies only to new jobs; accepted jobs can still be waiting.
+    try:
+        from backend.app.agents.report import renew_waiting, wake_ready
+        with database.engine.begin() as connection:
+            waiting=wake_ready(Store(database,connection),database.job_scan_size)
+    except Exception as exc:
+        logging.getLogger(__name__).warning('report_wait_scan_failed type=%s',type(exc).__name__)
+    else:
+        for pending in waiting:
+            try: renew_waiting(database,pending)
+            except Exception as exc:
+                logging.getLogger(__name__).warning('report_wait_renew_failed type=%s',type(exc).__name__)
     with database.engine.begin() as connection:
         job=jobs.claim(Store(database,connection))
     if not job: return False

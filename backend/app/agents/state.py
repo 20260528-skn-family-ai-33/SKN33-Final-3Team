@@ -22,6 +22,8 @@ HISTORY_TURNS = 5
 HISTORY_QUESTION_CHARS = 200     # 5건 요약에 남기는 질문 길이. 원문은 MySQL에 있다
 TASK_QUESTION_CHARS = 500        # 플래너가 나눈 하위 질문 문장 길이. 원 질문은 input.question에 있다
 MAX_TASKS = 3                    # 복합 질문을 나눈 하위 질문 수
+DEFAULT_MARKET_TOP = 5
+MAX_MARKET_ROWS = 200
 MAX_HS_ITEMS, MAX_COUNTRIES = 5, 20   # 질문 하나의 조회 조건(D-24)
 MAX_SLOT_CHARS = 120             # 플래너가 옮긴 국가·품목 표현 하나(D-73)
 # C-26 확정: 240개월 상한과 별도로 check_conditions가 실제 공개·검증 월 범위를 검사한다.

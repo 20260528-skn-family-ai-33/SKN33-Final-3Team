@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import select, func
 
 from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period,
-                                     MAX_ASKS_PER_CONDITION, ToolResult)
+                                     MAX_ASKS_PER_CONDITION, MAX_TEXT_CHARS, ToolResult)
 from backend.app.api import accounts, reference, trade
 from backend.app.api.chat_slots import country_key, numeric_product, SlotRepair
 from backend.app.api.common import ApiError, month_end, now, shift_month
@@ -87,6 +87,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     if task.intent == 'MARKET_SHARE' and out.share_basis == 'FOREIGN_IMPORT_MARKET':
         raise SlotRepair('해외 수입시장에서 한국 제품의 점유율은 아직 지원하지 않습니다.')
     hs_table = store.t('hs_code')
+    market_hs4 = []
     for expression in slots.products or []:
         key = f'{task.task_id}:hs:{expression}'
         answer = task.resolved.get(key, {})
@@ -96,6 +97,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if 'hs_items' in answer and not hs4:
             out.hs_items.extend(answer['hs_items'])
             continue
+        # 같은 답에 함께 고른 HS6는 다시 묻는 동안에도 남긴다(다음 답의 patch에 함께 넣는다)
+        kept = [h for h in answer.get('hs_items', []) if len(h['hs_code']) != 4] if hs4 else []
         expr = hs4[0] if hs4 else answer.get('replace_expression', expression)
         # D-22: 플래너가 질문에 없는 이전 조건을 그대로 다시 적으면 생략(이어받기)과 같다.
         # 코드가 같거나, 이전 조건을 만든 직전 질문의 표현이고 그 표현의 검색 결과에 이전 품목이 있을 때만 이어받는다.
@@ -115,8 +118,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             if task.intent != 'PROMISING_MARKET' or len(expr) == 6:
                 out.hs_items.append({'hs_code': expr, 'hs_ver': 'HS2022'})
                 continue
-            candidates = store.rows(select(hs_table).where(hs_table.c.hs_ver=='HS2022',
-                hs_table.c.depth==6, hs_table.c.hs_code.startswith(expr)).order_by(hs_table.c.hs_code).limit(5))
+            market_hs4.append((key, expr, kept))
+            continue
         else:
             found = reference._search_depth(store, expr, 6, 5)
             candidates = found['items']
@@ -124,7 +127,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
                 out.hs_items.append({k: candidates[0][k] for k in ('hs_code','hs_ver')})
                 continue
         return ask(state, task, key, 'HS_ITEM', f'“{expr}”에 해당하는 품목을 선택하세요.',
-            [(r['hs_code'], r['name_ko'], {'hs_items': [{k:r[k] for k in ('hs_code','hs_ver')}]}) for r in candidates])
+            [(r['hs_code'], r['name_ko'], {'hs_items': [*kept, {k:r[k] for k in ('hs_code','hs_ver')}]}) for r in candidates])
 
     interests = state.input.interests
     key = f'{task.task_id}:interest'
@@ -195,6 +198,26 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
                 continue
             return ask(state, task, key, 'COUNTRY', f'“{item.mention}”에 해당하는 국가를 선택하거나 직접 입력해 주세요.',
                 [(r['country_code'], r['name_ko'], {'country_codes':[r['country_code']]}) for r in candidates])
+    if market_hs4:
+        from backend.app.agents.market import hs6_by_exports, loaded
+        try: bundle,_,_=loaded(store.db.settings)
+        except (ImportError,OSError,ValueError): raise SlotRepair('예측 모델을 확인할 수 없습니다.')
+        for key, expr, kept in market_hs4:
+            ranked = hs6_by_exports(bundle, expr, out.country_codes)
+            registered = {r['hs_code']: r for r in store.rows(select(hs_table).where(
+                hs_table.c.hs_ver=='HS2022', hs_table.c.depth==6, hs_table.c.hs_code.startswith(expr)))}
+            candidates = [registered[code] for code in ranked if code in registered][:5]
+            if not candidates:
+                raise SlotRepair('이 품목은 유망시장 예측 대상이 아닙니다.')
+            if len(candidates)==1:
+                row = candidates[0]
+                out.hs_items.extend([*kept, {'hs_code':row['hs_code'], 'hs_ver':row['hs_ver']}])
+                label = f'HS {expr}의 예측 대상인 {row["name_ko"]}({row["hs_code"]})을 적용했습니다.'
+                label = label[:MAX_TEXT_CHARS]
+                if label not in task.applied_defaults: task.applied_defaults.append(label)
+                continue
+            return ask(state, task, key, 'HS_ITEM', f'“{expr}”에 해당하는 품목을 선택하세요.',
+                [(r['hs_code'], r['name_ko'], {'hs_items': [*kept, {k:r[k] for k in ('hs_code','hs_ver')}]}) for r in candidates])
     article = store.t('article')
     latest_article = store.c.scalar(select(func.max(article.c.published_date)).where(article.c.visibility_status=='VISIBLE'))
     bounds = trade.bounds(store) if task.intent != 'LOCAL_ISSUES' else []

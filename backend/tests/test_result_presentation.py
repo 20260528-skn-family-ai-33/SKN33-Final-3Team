@@ -10,6 +10,18 @@ from types import SimpleNamespace
 
 
 class ResultPresentationTest(unittest.TestCase):
+    def test_legacy_prediction_excel_uses_korean_labels_and_relevant_rank(self):
+        row = {'anchor': '2026-09-01', 'country_name': '베트남', 'hs6': '330499',
+               'product_name': '화장품', 'growth_pct': 2.1, 'exp_12m': 123456,
+               'country_rank': 3, 'product_rank': 12, 'country_size': 100, 'name': '화장품'}
+        table = {'columns': [{'key': key, 'label': key} for key in row], 'rows': [row],
+                 'total_rows': 1, 'meta': {'kind': 'PREDICTION', 'group_by': 'COUNTRY'}}
+        sheet = load_workbook(io.BytesIO(xlsx_bytes([table], {}, [], unit_headers=True))).worksheets[0]
+        self.assertEqual([cell.value for cell in sheet[1]], [
+            '품목 순위', '국가', 'HS 코드', '품목명', '예측 수출 증감률 (%)', '최근 12개월 수출액 (USD)', '예측 기준월',
+        ])
+        self.assertEqual(sheet['A2'].value, 3)
+
     def test_monthly_display_and_excel_keep_source_values(self):
         row={'month':'2026-08','hs_code':'330499','hs_ver':'HS2022','name':'화장품',
              'country_code':'VN','country_name':'베트남','amount_usd':123,

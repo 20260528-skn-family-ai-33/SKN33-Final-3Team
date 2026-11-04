@@ -27,6 +27,12 @@ def resolve(store,state,task,out):
         if index==0:
             stored=snapshot['conditions']
             out=Conditions.model_validate({k:v for k,v in stored.items() if k in Conditions.model_fields})
+        elif any(snapshot['conditions'].get(k)!=stored.get(k) for k in ('period','trade_flow')):
+            # 뒤 선행 결과의 기간·수출입이 다르면 첫 결과 기준으로 분석하고 그 사실을 적용 조건에 남긴다
+            p=out.period
+            label=('선행 결과의 기간·수출입 구분이 서로 달라 첫 결과 기준'
+                   +(f'({p.start:%Y-%m}~{p.end:%Y-%m})' if p else '')+'으로 분석했습니다.')
+            if label not in task.applied_defaults: task.applied_defaults.append(label)
         selection=binding.selection
         if not selection: continue
         key=f'{task.task_id}:input:{binding.source_step_id}'

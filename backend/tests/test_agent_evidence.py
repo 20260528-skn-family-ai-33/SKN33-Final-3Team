@@ -7,6 +7,14 @@ from backend.app.agents.verify import check_sentence, snapshot_evidence
 
 
 class EvidenceTest(unittest.TestCase):
+    def test_prediction_rank_uses_the_stated_ranking_direction(self):
+        digest={'kind':'PREDICTION','rows':[{'country_name':'베트남','product_name':'화장품',
+                                            'country_rank':3,'product_rank':1}]}
+        for direction, valid, invalid in (('품목',3,1),('국가',1,3)):
+            for rank,expected in ((valid,True),(invalid,False)):
+                sentence=f'베트남 화장품의 {direction} 순위는 {rank}위입니다.'
+                self.assertEqual(check_sentence(sentence,[digest],known_names=('베트남','화장품'))[0],expected)
+
     def test_prediction_clause_inherits_target_when_omitted(self):
         digest=snapshot_evidence({'meta':{'kind':'PREDICTION','anchor':'2025-02'},'rows':[
             {'country_name':'미국','exp_12m':100,'growth_pct':10},

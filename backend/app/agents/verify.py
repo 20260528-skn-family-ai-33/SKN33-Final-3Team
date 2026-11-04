@@ -17,9 +17,25 @@ COMPOUND = re.compile(r'(?<![\d.])(?P<sign>[+-]?)(?P<eok>\d[\d,]*)\s*억\s*(?P<m
 CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나)?\s*(?:(?P<down>감소|줄|하락|축소|떨어|낮아|내려)|(?P<up>증가|늘|상승|확대|성장|올라|오르|높아))')
 # 한 문장 안의 주장 경계. 월평균·총액·비중 같은 지표 표현은 그 금액이 있는 주장에서만 본다.
 SEPARATOR = re.compile(r'(?<!\d),|,(?!\d)|[;，]|이며|이고|하고|으며')
-# "상위 2개국", "3곳"은 조회 대상 수이지 통계 수치가 아니다.
+# "상위 2개국", "3곳", "2개 품목"은 조회 대상 수이지 통계 수치가 아니다. TOKEN이 "개"까지 먹으므로 뒤는 "국"부터 본다.
+# 단위가 없거나 "개"인 값만 대상 수로 본다. "상위 10%"·"상위 3.5억 달러"는 그대로 검증한다.
 COUNT_BEFORE = re.compile(r'(?:상위|하위)\s*$')
-COUNT_AFTER = re.compile(r'\s*(?:곳|개국|개\s*(?:국가|품목))')
+COUNT_AFTER = re.compile(r'\s*(?:곳|개국|국|개?\s*(?:국가|품목|시장))')
+
+
+def _target_count(text, match):
+    if match['scale'] or match['unit'] not in (None, '개'): return False
+    return bool(COUNT_BEFORE.search(text,0,match.start()) or COUNT_AFTER.match(text,match.end()))
+
+
+def _shown(match):
+    """재생성 안내에 넘길 숫자 표기. 합친 억·만 금액(12346만)은 LLM이 쓴 모양(1억 2,346만)으로 되돌린다."""
+    text=match.group().strip()
+    raw=match['value'].replace(',','')
+    if match['scale']=='만' and raw.lstrip('+-').isdigit() and abs(int(raw))>=10**4:
+        eok,man=divmod(abs(int(raw)),10**4)
+        text=('-' if raw.startswith('-') else '')+f'{eok:,}억'+(f' {man:,}만' if man else '')+text[match.end('scale')-match.start():]
+    return text[:40]
 
 
 def _merge_compound(text):
@@ -166,8 +182,7 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
     facts=[f for d in candidates for f in evidence(d) if mentioned<=f[3]
            and not (('수입' in sentence and d.get('trade_flow')=='EXPORT') or
                     ('수출' in sentence and d.get('trade_flow')=='IMPORT'))]
-    tokens=[m for m in TOKEN.finditer(text)
-            if not COUNT_BEFORE.search(text,0,m.start()) and not COUNT_AFTER.match(text,m.end())]
+    tokens=[m for m in TOKEN.finditer(text) if not _target_count(text,m)]
     # 숫자 없는 문장("수출액은 모두 미국 달러(USD) 단위입니다")은 수치 검증 대상이 아니다. 기간 표현만 본다.
     if mentioned and not facts and tokens: ok=False
     for match in tokens:
@@ -175,7 +190,7 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
         value=Decimal(raw.replace(',',''))
         unit={'달러':'USD','usd':'USD','개':'COUNT','건':'COUNT','kg':'KG','%p':'%p'}.get((unit or '').lower(),unit)
         if scale and not unit: unit='USD'
-        numbers.append(match.group().strip()[:40])
+        numbers.append(_shown(match))
         granularity=Decimal(1).scaleb(value.as_tuple().exponent)
         claim=_clause(text,match.start(),match.end())
         change=CHANGE.match(text,match.end()) if unit in ('%','%p','USD') else None
@@ -222,6 +237,10 @@ def _check_claim(sentence, digests, known_names, *, require_month, inherited_nam
             if expected=='%' and '비중' in claim and key!='share_pct': return False
             if expected=='%' and '전년' in claim and key not in ('yoy_pct','change_pct'): return False
             if expected=='%' and '전월' in claim and key not in ('mom_pct','change_pct'): return False
+            if expected=='위' and 'prediction' in identities:
+                directions={rank_key for label,rank_key in (('품목','country_rank'),('국가','product_rank'))
+                            if re.search(label+r'(?:별|\s*(?:중|내|안))?\s*순위',claim)}
+                if directions and directions!={key}: return False
             claimed=value
             if direction:  # 증감 표현이 붙은 값은 근거의 부호와 같은 방향이어야 한다
                 if amount==0 or (amount<0)!=(direction=='down'): return False

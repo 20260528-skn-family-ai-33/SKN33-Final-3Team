@@ -24,7 +24,7 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False):
         require(table['total_rows']<=1000,'엑셀은 필터 전체 결과 1,000행까지만 다운로드할 수 있습니다.','EXPORT_LIMIT_EXCEEDED',422)
         ws=wb.create_sheet(f'결과표{n}')
         from backend.app.api.results import display_columns
-        columns=display_columns(table['columns'],table['rows'])
+        columns=display_columns(table['columns'],table['rows'],table.get('meta'))
         # 천 단위 콤마·소수 자리는 셀 서식으로 붙인다(값은 숫자 그대로). 결과표 다운로드는 머리글에 단위도 적는다.
         ws.append([c['label']+(f" ({c['unit']})" if unit_headers and c.get('unit') else '') for c in columns])
         formats=['#,##0' if c.get('unit')=='USD' else '0.0' if c.get('unit')=='%' else None for c in columns]
