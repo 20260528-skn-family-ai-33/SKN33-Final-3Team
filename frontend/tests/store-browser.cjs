@@ -16,7 +16,7 @@ const { chromium } = require('playwright')
       // This does not make the HTTP origin a secure context (asserted below).
       args: ['--host-resolver-rules=MAP review-http.test 127.0.0.1', '--no-proxy-server',
         '--disable-features=LocalNetworkAccessChecks'] })
-    const page = await browser.newPage()
+    const page = await browser.newPage({ timezoneId: 'America/Los_Angeles' })
     const errors = []
     page.on('pageerror', error => errors.push(error.message))
     page.on('console', message => { if (message.type() === 'error') console.error(message.text()) })
@@ -70,9 +70,15 @@ const { chromium } = require('playwright')
           text: 'Test analysis', conditions, tables: [], articles: [], warnings: [],
         } }], page: { has_next: false } } })
       }
-      if (pathname.endsWith('/chat/sessions') || (pathname.endsWith('/reports') && route.request().method() === 'GET')) {
+      if (pathname.endsWith('/chat/sessions')) {
+        return route.fulfill({ json: { items: [{ session_id: '1', title: 'Timestamp test chat',
+          updated_at: '2026-11-03T00:30:00Z' }], page: { has_next: false } } })
+      }
+      if (pathname.endsWith('/reports') && route.request().method() === 'GET') {
         return route.fulfill({ json: { items: [], page: { has_next: false } } })
       }
+      if (pathname.endsWith('/reference/regions')) return route.fulfill({ json: { items: [] } })
+      if (pathname.endsWith('/reports/2/status')) return route.fulfill({ json: { job: { report_id: '2', status: 'READY' } } })
       if (pathname.endsWith('/data/availability')) return route.fulfill({ json: { trade_start_month: '2024-08', trade_end_month: '2025-12' } })
       if (pathname.endsWith('/reports/preview')) return route.fulfill({ json: {
         preview_id: 'preview-' + (++previews), conditions: { ...conditions,
@@ -161,7 +167,13 @@ const { chromium } = require('playwright')
     assert.match(ids.first, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     assert.notEqual(ids.first, ids.second)
     console.log('PASS request IDs work in a real insecure HTTP browser origin')
+    await page.evaluate(() => window.reviewApp.refreshChats())
+    await page.waitForFunction(() => window.reviewApp.chats.length === 1)
+    assert.equal(await page.evaluate(() => window.reviewApp.chats[0].updated_at), '2026-11-03T00:30:00Z')
     await page.evaluate(() => window.reviewShowAnalysis())
+    await page.getByText('2026-11-02 16:30:00', { exact: true }).waitFor()
+    await page.getByText('최근 대화 순 · 기기 현지 시각', { exact: true }).waitFor()
+    console.log('PASS chat timestamps retain ISO values and render in the browser timezone across dates')
     await page.getByRole('button', { name: '리포트로 저장', exact: true }).waitFor()
     await page.getByLabel('질문 입력').fill('HTTP test question')
     await page.getByRole('button', { name: '전송', exact: true }).click()
@@ -177,7 +189,7 @@ const { chromium } = require('playwright')
     await page.getByRole('button', { name: '리포트 조건 확인', exact: true }).click()
     await page.getByText('비교 기간 2024-12-01 ~ 2024-12-31', { exact:true }).waitFor()
     await page.getByRole('button', { name: '확인한 조건으로 생성', exact: true }).click()
-    await page.waitForURL(url => url.hash === '#/report?id=2')
+    await page.getByText('리포트 센터에서 이 리포트 열기', { exact: true }).first().waitFor()  // 채팅 안에서 생성 상태를 보여 준다
     assert.match(generated[0].key, /^[0-9a-f-]{36}$/)
     assert.deepEqual(generated.map(r => r.body.preview_id), ['preview-1','preview-2'])
     revisedPeriod = true
