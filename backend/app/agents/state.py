@@ -631,7 +631,8 @@ class Draft(Model):
     conclusion: list[TaskConclusion] = Field(min_length=1, max_length=MAX_TASKS)
     explanation: list[Sentence] = Field(default_factory=list, max_length=MAX_EXPLANATION_SENTENCES)
     turn_summary: Annotated[str, _chars(0, 200)]
-    title: Annotated[str, _chars(1, 20)] | None = None
+    # 대화방 제목(D-54, 20자 이하). 넘으면 초안 전체를 거부하지 않고 자른다
+    title: Annotated[str, _truncate(20), _chars(1)] | None = None
 
     def sentences(self) -> list[str]:
         """verify가 대조하는 순서: 결론 다음 설명."""

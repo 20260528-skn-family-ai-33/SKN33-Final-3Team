@@ -14,7 +14,7 @@ source_tasks는 이번 질문을 여러 하위 질문으로 나눴을 때 앞 �
 같은 분석의 복수 대상은 한 질문으로 묶고, 서로 다른 분석만 분리합니다.
 3개를 넘더라도 요청을 버리거나 억지로 합치지 말고 모두 반환하세요.
 STATISTICS는 합계·추이·기간 비교, RANKING은 명시적인 국가/품목 순위,
-MARKET_SHARE는 한국 수출입 상대국별 비중, CAUSE는 원인 설명,
+MARKET_SHARE는 한국 수출입 상대국별 비중(품목별 비중은 STATISTICS + custom_query), CAUSE는 원인 설명,
 LOCAL_ISSUES는 기사 조회, REPORT는 리포트 생성, PROMISING_MARKET은 유망시장·예측,
 MARKET_TYPE은 시장 유형·군집, OUT_OF_SCOPE는 범위 밖입니다.
 countries는 mention(질문 원문 그대로), name(정식 한국어 국가명) 쌍입니다.
@@ -110,6 +110,10 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
     tasks, warnings = [], []
     for index, item in enumerate(output.tasks, 1):
         task_id = f't{index}'
+        if item.intent == 'MARKET_SHARE' and item.slots.ranking_group == 'HS6':
+            # SHARE 템플릿은 국가별 비중만 지원한다(D-87). 품목별 비중은 LLM SQL로 조회한다(§11.1 custom_query).
+            item = item.model_copy(update={'intent': 'STATISTICS', 'custom_query': item.custom_query or item.question[:200],
+                                           'slots': item.slots.model_copy(update={'ranking_group': None})})
         errors = item.slots.limit_errors()
         bindings = []
         if not errors and item.intent not in NO_STEP_INTENTS:

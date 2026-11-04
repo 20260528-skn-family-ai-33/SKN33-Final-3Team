@@ -85,13 +85,13 @@ class ConditionTest(unittest.TestCase):
         check_conditions(self.store,self.state,self.step)
         self.assertEqual(self.step.status,'DONE')
         self.assertEqual([h.hs_code for h in self.task.conditions.hs_items],['330499'])
-        # 다시 적은 이전 국가와 질문에 있는 새 국가가 섞이면 둘 다 조건이 된다(현재 동작).
+        # 질문에 새 국가가 있으면 플래너가 다시 적은 이전 국가는 이어받지 않는다(PR #61 재검수).
         self.state.input.question='미국은 왜 증가한거야?'
         self.step.status='PENDING'
         self.task.slots=TaskSlots(countries=[{'mention':'중국','name':'중국'},{'mention':'미국','name':'미국'}],products=None,recent_months=3)
         check_conditions(self.store,self.state,self.step)
         self.assertEqual(self.step.status,'DONE')
-        self.assertEqual(sorted(self.task.conditions.country_codes),['CN','US'])
+        self.assertEqual(self.task.conditions.country_codes,['US'])
         # 같은 국가가 이어받기와 코드 표현으로 두 번 들어와도 하나만 남는다.
         self.state.input.question='CN은 왜 증가한거야?'
         self.step.status='PENDING'

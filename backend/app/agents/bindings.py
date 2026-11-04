@@ -39,6 +39,8 @@ def resolve(store,state,task,out):
         rule=task.resolved.get(key) or selection.model_dump(exclude_none=True)
         kind=snapshot['meta']['kind']; group=snapshot['meta'].get('group_by',snapshot['meta'].get('group'))
         dimension=rule.get('dimension'); order=rule.get('order_by'); n=rule.get('limit')
+        # 금액 순위 결과에는 국가 안·품목 안 순위가 없다. 플래너가 순위 이름(country_rank)을 내도 금액 순위로 본다.
+        if kind=='RANKING' and order in ('country_rank','product_rank'): order='amount_usd'
         if kind=='PREDICTION':
             supported=[('COUNTRY','product_rank'),('HS6','country_rank')]
             if group=='COUNTRY': supported=supported[1:]

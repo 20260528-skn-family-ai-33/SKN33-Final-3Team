@@ -443,8 +443,8 @@ class LlmOutputSchemaTest(unittest.TestCase):
         D.model_validate(ok)
         with self.assertRaises(ValidationError):
             D.model_validate({**ok, 'conclusion': [{'task_id': 't1', 'sentences': ['가' * (MAX_TEXT_CHARS + 1)]}]})
-        with self.assertRaises(ValidationError):
-            D.model_validate({**ok, 'title': '가' * 21})
+        # 제목은 거부하지 않고 20자로 자른다(PR #61 재검수). 문장 규칙과 달리 초안 전체를 버릴 이유가 아니다.
+        self.assertEqual(D.model_validate({**ok, 'title': '가' * 21}).title, '가' * 20)
 
 
 class ShortenNameTest(unittest.TestCase):

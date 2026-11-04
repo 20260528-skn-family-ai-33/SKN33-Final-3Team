@@ -160,6 +160,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         # TODO(C-28): tune fuzzy matching with evaluation examples.
         settings = getattr(store.db, 'settings', {})
         threshold = float(settings.get('API_CHAT_COUNTRY_SIMILARITY', 0.6))
+        # 질문에 새 국가가 있으면("미국은 왜 증가했어?") 플래너가 함께 적은 이전 국가는 이어받지 않는다.
+        new_country = any(item.mention.casefold() in original.casefold() for item in countries)
         for item in countries:
             key = f'{task.task_id}:country:{item.mention}'
             answer = task.resolved.get(key, {})
@@ -175,6 +177,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             if item.mention.casefold() not in original.casefold():
                 # D-22: 질문에 없는 이전 조건 국가를 그대로 다시 적은 것은 생략(이어받기)과 같다.
                 echoed, _ = country_matches(item.name, rows, threshold)
+                if new_country and echoed in base.country_codes:
+                    continue
                 if echoed and echoed in base.country_codes:
                     out.country_codes.append(echoed)
                     continue
