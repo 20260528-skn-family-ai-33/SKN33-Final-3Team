@@ -42,7 +42,9 @@ class SqlTest(unittest.TestCase):
         client=MagicMock(); client.parse.side_effect=[draft('DELETE FROM country'),draft('SELECT 1 AS value','number')]
         ledger=MagicMock(); ledger.call.side_effect=lambda node,timeout,fn,finish_reserve:fn(timeout)
         engine=MagicMock()
-        engine.connect.return_value.__enter__.return_value.exec_driver_sql.return_value.mappings.return_value.fetchmany.return_value=[{'value':1}]
+        connection=engine.connect.return_value.__enter__.return_value
+        connection.execution_options.return_value=connection
+        connection.exec_driver_sql.return_value.mappings.return_value.fetchmany.return_value=[{'value':1}]
         with patch('backend.app.agents.sql.schema_for',return_value=[]):
             result=generated_analysis(engine,Settings({}),client,ledger,task,finish_reserve=40,latest_month='2025-03')
         self.assertEqual(result.result.status,'OK')
@@ -99,9 +101,12 @@ class SqlTest(unittest.TestCase):
     def test_readonly_session_rollback_and_connection_disposal_even_on_error(self):
         engine = MagicMock()
         connection = engine.connect.return_value.__enter__.return_value
+        connection.execution_options.return_value = connection
         connection.exec_driver_sql.return_value.mappings.return_value.fetchmany.return_value = [{'value': 1}]
         rows, sql = execute_readonly(engine, draft('SELECT 1 AS value', 'number'))
         self.assertEqual(rows, [{'value': 1}])
+        # 생성 SQL은 파라미터 없이 보낸다(pymysql이 DATE_FORMAT·LIKE의 %를 포맷 문자로 읽지 않게)
+        connection.execution_options.assert_called_once_with(no_parameters=True)
         statements = [call.args[0] for call in connection.exec_driver_sql.call_args_list]
         self.assertEqual(statements[:2], ['SET SESSION MAX_EXECUTION_TIME = 30000', 'START TRANSACTION READ ONLY'])
         self.assertEqual(statements[2], sql)

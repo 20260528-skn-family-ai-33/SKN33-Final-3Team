@@ -106,7 +106,9 @@ def execute_readonly(engine, draft, timeout_seconds=30):
         try:
             connection.exec_driver_sql('SET SESSION MAX_EXECUTION_TIME = ' + str(int(timeout_seconds * 1000)))
             connection.exec_driver_sql('START TRANSACTION READ ONLY')
-            cursor = connection.exec_driver_sql(sql)
+            # 바인딩 값이 없는 SQL이다. 빈 파라미터를 넘기면 pymysql이 DATE_FORMAT('%Y-%m')·LIKE '%화장품%'의
+            # %를 포맷 문자로 읽어 실패한다. no_parameters는 cursor.execute(sql)만 불러 %를 그대로 보낸다.
+            cursor = connection.execution_options(no_parameters=True).exec_driver_sql(sql)
             rows = [dict(row) for row in cursor.mappings().fetchmany(MAX_ROWS)]
             return normalize_rows(rows, draft.columns), sql
         finally:
