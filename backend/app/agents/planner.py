@@ -37,7 +37,13 @@ share_basis는 한국의 상대국별 비중이면 KOREA_TRADE_PARTNER,
 해외 수입시장의 한국 비중이면 FOREIGN_IMPORT_MARKET, 불명확하면 null입니다.
 custom_query는 월별 추이/국가·HS6 금액 순위/국가별 비중 템플릿으로 답할 수 없을 때만
 필요한 계산을 한국어 한 문장으로 씁니다. 물량·단가·품목별 비중 등이 해당합니다.
+분기별·반기별 합계, 전월·전분기 대비 증감액·증감률처럼 월별 값을 묶거나 서로 빼는 계산도
+템플릿에 없으므로 custom_query에 씁니다(예: "2025년 분기별 수출액 합계", "월별 수출액과 전월 대비 증감액").
+전년 동기 비교만 comparison_requested로 처리합니다.
 앞 분석 결과를 사용하는 경우 source_tasks에 1부터 시작하는 앞 질문 번호를 씁니다.
+target_selections는 앞 하위 질문의 결과표에서 다음 대상을 고를 때만 씁니다. 하위 질문이 하나뿐이거나
+"상위 국가 2곳"처럼 그 질문 자체가 순위이면 target_selections는 []이고 ranking_limit을 씁니다.
+앞 결과에서 고른 대상("그 국가들", "해당 품목")은 countries·products에 넣지 마세요.
 대상을 추출하는 경우 target_selections에 source_task, dimension(COUNTRY/HS6), limit,
 order_by(country_rank/product_rank/amount_usd)를 씁니다. 모호한 기준은 null입니다.
 국가 안 품목 순위는 country_rank, 품목 안 국가 순위는 product_rank입니다.

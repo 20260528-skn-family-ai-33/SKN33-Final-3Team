@@ -528,8 +528,12 @@ class DependentTaskContractTest(unittest.TestCase):
         restored = AgentState.model_validate_json(s.model_dump_json())
         self.assertEqual(restored.plan.tasks[1].input_bindings[0].selection.limit, 3)
         self.assertIsNone(TargetSelection().limit)  # 모호하면 INPUT_SELECTION으로 확인
+        # 자기 자신·뒤 질문을 가리키는 대상 선택은 실제 LLM이 단순 질문에도 붙인다. 출력 전체를 거부하지 않고 버린다.
         base[1]['target_selections'][0]['source_task'] = 2
-        with self.assertRaises(ValidationError):
+        dropped = PlannerOutput(tasks=base).tasks[1]
+        self.assertEqual((dropped.target_selections, dropped.source_tasks), ([], [1]))
+        base[1]['source_tasks'] = [2]
+        with self.assertRaises(ValidationError):  # source_tasks 자체가 잘못되면 지금처럼 거부한다
             PlannerOutput(tasks=base)
 
     def test_dependency_failure_preserves_independent_work(self):

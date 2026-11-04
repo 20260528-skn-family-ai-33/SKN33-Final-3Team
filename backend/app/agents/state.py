@@ -251,8 +251,9 @@ class CountryMention(Model):
     """플래너가 옮긴 국가 표현 하나(§13.2, intent.py CountrySlot과 같은 모양).
     mention은 질문 원문 그대로, name은 플래너가 붙인 정식 한국어 국가명이다. 코드는 check_conditions가 확정한다."""
     mention: Annotated[str, _chars(1)]
-    # 사용자가 쓴 값이 아니라 길다고 안내하지 않고 자른다. 가장 긴 국가명도 20자 안팎이다
-    name: Annotated[str, _truncate(MAX_LABEL_CHARS), _chars(1)]
+    # 사용자가 쓴 값이 아니라 길다고 안내하지 않고 자른다. 가장 긴 국가명도 20자 안팎이다.
+    # 빈 값("그 국가들"처럼 정식 국가명을 못 붙인 표현)은 거부하지 않고 PlannerOutput이 정리한다.
+    name: Annotated[str, _truncate(MAX_LABEL_CHARS)]
 
 
 class PlannerSlots(Model):
@@ -350,10 +351,22 @@ class PlannerOutput(Model):
             _unique(task.source_tasks, '선행 질문')
             if any(source < 1 or source >= index for source in task.source_tasks):
                 raise SafeError('선행 질문은 현재 질문보다 앞에 있어야 합니다')
-            selected = [s.source_task for s in task.target_selections]
-            _unique(selected, '대상 선택의 선행 질문')
-            if not set(selected) <= set(task.source_tasks):
-                raise SafeError('대상 선택은 연결된 선행 질문을 가리켜야 합니다')
+            # 실제 LLM은 단순 순위 질문에도 자기 자신을 가리키는 대상 선택을 붙이고, 복합 질문에서는 source_tasks를
+            # 빠뜨리기도 한다. 출력 전체를 거부하지 않고 정리한다: 앞 하위 질문을 가리키면 연결하고, 아니면 버린다.
+            selections = {}
+            for selection in task.target_selections:
+                if 1 <= selection.source_task < index:
+                    selections.setdefault(selection.source_task, selection)
+            task.target_selections = list(selections.values())
+            task.source_tasks.extend(s for s in selections if s not in task.source_tasks)
+            # 정식 국가명이 빈 표현: 선행 결과에서 대상을 받는 질문이면 그 대상("그 국가들")이므로 버리고,
+            # 아니면 원문 표현으로 사전 검색해 못 찾으면 되묻는다(check_conditions).
+            if task.slots.countries:
+                # 모두 버려지면 []("전체 국가")가 아니라 생략(None)이다. 대상은 선행 결과에서 온다
+                task.slots.countries = [c for c in task.slots.countries
+                                        if c.name.strip() or not task.source_tasks] or None
+                for country in task.slots.countries or []:
+                    country.name = country.name.strip() or country.mention.strip()[:MAX_LABEL_CHARS]
         return self
 
 
