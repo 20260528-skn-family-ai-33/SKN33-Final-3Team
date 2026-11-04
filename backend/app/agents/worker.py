@@ -25,6 +25,13 @@ def checkpointer(database,settings):
         return database.agent_checkpointer
 
 
+def cleanup_checkpoint(database,settings,job_id):
+    try:
+        checkpointer(database,settings).delete_thread(str(job_id))
+    except Exception:
+        logging.getLogger(__name__).warning('chat_checkpoint_cleanup_failed job_id=%s',job_id)
+
+
 def run(database,settings,job):
     execution=ExecutionStore(database,job)
     services=Services(execution,settings,getattr(database,'agent_client',None))

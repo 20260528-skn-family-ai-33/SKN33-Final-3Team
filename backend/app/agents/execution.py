@@ -9,6 +9,7 @@ from time import monotonic
 from uuid import uuid4
 
 from langgraph.types import Command
+from sqlalchemy import select
 
 from backend.app.agents import budget
 from backend.app.agents.graph import graph_config
@@ -22,9 +23,13 @@ class ExecutionStore:
     def __init__(self, database, job):
         self.database, self.job = database, deepcopy(job)
 
-    def transaction(self, operation):
+    def transaction(self, operation, *, lock_user=False):
         with self.database.engine.begin() as connection:
             store = Store(self.database, connection)
+            if lock_user:
+                users = store.t('users')
+                store.c.execute(select(users.c.user_id).where(
+                    users.c.user_id == self.job['subject_user_id']).with_for_update()).first()
             current = jobs.locked_current(store, self.job)
             require(current and current['status'] == 'RUNNING'
                     and current['claim_token'] == self.job['claim_token'],

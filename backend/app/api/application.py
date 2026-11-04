@@ -219,11 +219,17 @@ def create_app(settings=None, engine=None, redis_state=None):
                             if required or error.status != 401: raise
                     if 'ADMIN' in auth: administrator(user)
                     result = dispatch(identity,store,user,body,query,path,request,response,settings)
-                    if isinstance(result,Response): return result
-                    if result is None: response.status_code = 204; return response
-                    if identity in (36,38,44): response.status_code = 202
-                    elif identity in (1,34): response.status_code = 201
-                    return clean(result)
+                if checkpoint := store.cache.get('cancelled_checkpoint'):
+                    # After commit, off the request path: the first call may set up the Redis saver.
+                    # ponytail: daemon thread, lost on process exit; the checkpoint TTL still removes it.
+                    import threading
+                    from backend.app.agents.worker import cleanup_checkpoint
+                    threading.Thread(target=cleanup_checkpoint,args=(db,settings,checkpoint),daemon=True).start()
+                if isinstance(result,Response): return result
+                if result is None: response.status_code = 204; return response
+                if identity in (36,38,44): response.status_code = 202
+                elif identity in (1,34): response.status_code = 201
+                return clean(result)
             return await run_in_threadpool(execute)
         return handle
 

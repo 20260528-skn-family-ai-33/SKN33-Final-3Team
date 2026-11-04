@@ -89,6 +89,7 @@ def submit(store,state,task,step):
 
 
 def wake_ready(store,size):
+    waiting=[]
     table=store.t('chat_message'); path=table.c.result_json[jobs.EXECUTION]
     stmt=select(table).where(table.c.role=='USER',path['status'].as_string()=='WAITING_REPORT').order_by(table.c.message_id)
     cursor=getattr(store.db,'agent_report_cursor',0)
@@ -100,14 +101,19 @@ def wake_ready(store,size):
         wait=job['agent']['report_wait']
         report=store.owned('report','report_id',wait['report_id'],job['subject_user_id'])
         if report['status'] not in ('READY','FAILED'):
-            from backend.app.agents.worker import checkpointer
-            from backend.app.agents.graph import graph_config
-            from backend.app.api.redis_store import RedisState
-            redis=getattr(store.db,'redis',None) or RedisState(store.db.settings)
-            redis.renew_chat(str(job['target_key']),str(job['job_id']))
-            checkpointer(store.db,store.db.settings).get_tuple(graph_config(job['job_id']))
+            waiting.append(job)
             continue
         current=jobs.locked_current(store,job)
         if current['status']!='WAITING_REPORT' or current['agent']['report_wait']!=wait: continue
         current.update(status='QUEUED',available_at=now().isoformat(),round_attempt=0)
         jobs._save_chat(store,current)
+    return waiting
+
+
+def renew_waiting(database,job):
+    from backend.app.agents.worker import checkpointer
+    from backend.app.agents.graph import graph_config
+    from backend.app.api.redis_store import RedisState
+    redis=getattr(database,'redis',None) or RedisState(database.settings)
+    redis.renew_chat(str(job['target_key']),str(job['job_id']))
+    checkpointer(database,database.settings).get_tuple(graph_config(job['job_id']))

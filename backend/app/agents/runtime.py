@@ -148,7 +148,7 @@ class Services:
         if step.tool=='generate_report':
             from backend.app.agents.report import submit
             return self.execution.call('report',budget.seconds(self.settings,'report'),lambda _:
-                self.execution.transaction(lambda store,job:submit(store,state,task,step)))
+                self.execution.transaction(lambda store,job:submit(store,state,task,step),lock_user=True))
         if step.tool=='search_articles':
             from backend.app.agents.tools import article_result
             return self.execution.call('news',budget.seconds(self.settings,'news'),lambda _:article_result(state,task,step))

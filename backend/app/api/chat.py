@@ -68,6 +68,8 @@ def cancel(store, uid, identity):
     # blocks a new job even if the Redis owner key has already been released.
     if job.get('agent'):
         store.db.redis.release_chat(str(job['target_key']), str(job['job_id']))
+        if status in ('NEEDS_INPUT','WAITING_REPORT','QUEUED'):
+            store.cache['cancelled_checkpoint']=str(job['job_id'])
     return {'job': view_job(job)}
 
 

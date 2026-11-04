@@ -12,10 +12,19 @@ def run_once(database,settings):
     database.settings=settings
     database.report_max_attempts=max(1,int(settings.get('API_REPORT_MAX_ATTEMPTS',3)))
     database.job_scan_size=max(1,min(1000,int(settings.get('API_JOB_SCAN_SIZE',100))))
+    if settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true':
+        try:
+            from backend.app.agents.report import renew_waiting, wake_ready
+            with database.engine.begin() as connection:
+                waiting=wake_ready(Store(database,connection),database.job_scan_size)
+        except Exception as exc:
+            logging.getLogger(__name__).warning('report_wait_scan_failed type=%s',type(exc).__name__)
+        else:
+            for pending in waiting:
+                try: renew_waiting(database,pending)
+                except Exception as exc:
+                    logging.getLogger(__name__).warning('report_wait_renew_failed type=%s',type(exc).__name__)
     with database.engine.begin() as connection:
-        if settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true':
-            from backend.app.agents.report import wake_ready
-            wake_ready(Store(database,connection),database.job_scan_size)
         job=jobs.claim(Store(database,connection))
     if not job: return False
     store=None
@@ -40,20 +49,26 @@ def run_once(database,settings):
             except ApiError as gone:
                 if gone.code=='NOT_FOUND': return True
                 raise
-            if not current or current['claim_token']!=job['claim_token'] or current['status']!='RUNNING': return True
+            cancelled=bool(current and current['status']=='CANCELLED')
+            if not cancelled and (not current or current['claim_token']!=job['claim_token'] or current['status']!='RUNNING'): return True
             error={'code':exc.code if isinstance(exc,ApiError) else 'JOB_FAILED',
                    'message':exc.message if isinstance(exc,ApiError) else '작업 처리에 실패했습니다.',
                    'details':[],'retryable':exc.retryable if isinstance(exc,ApiError) else True,'request_id':str(job['job_id'])}
-            if job['job_type']=='API_REPORT' and (not isinstance(exc,ApiError) or (exc.retryable and exc.code!='NOT_FOUND')):
+            if cancelled:
+                pass  # Preserve cancellation; clean up the graph after closing the transaction.
+            elif job['job_type']=='API_REPORT' and (not isinstance(exc,ApiError) or (exc.retryable and exc.code!='NOT_FOUND')):
                 jobs.retry_report(store,job,error,failed_step,int(settings.get('API_REPORT_RETRY_DELAY_SECONDS',300)))
             else:
                 jobs.finish(store,job,{'step':failed_step,'error':error},'FAILED')
         if job['job_type']=='API_CHAT' and job.get('agent'):
             try:
                 from backend.app.api.redis_store import RedisState
-                redis=getattr(database,'redis',None) or RedisState(settings)
-                redis.release_chat(str(job['target_key']),str(job['job_id']))
-                if hasattr(database,'agent_checkpointer'): database.agent_checkpointer.delete_thread(str(job['job_id']))
+                try:
+                    redis=getattr(database,'redis',None) or RedisState(settings)
+                    redis.release_chat(str(job['target_key']),str(job['job_id']))
+                finally:
+                    from backend.app.agents.worker import cleanup_checkpoint
+                    cleanup_checkpoint(database,settings,job['job_id'])
             except Exception:
                 logging.getLogger(__name__).warning('chat_cleanup_failed job_id=%s',job['job_id'])
     return True

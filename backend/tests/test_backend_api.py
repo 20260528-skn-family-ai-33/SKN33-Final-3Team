@@ -17,6 +17,21 @@ from backend.app.api import jobs
 
 
 class BackendApiTest(unittest.TestCase):
+    def test_worker_claims_jobs_when_report_wait_scan_fails(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        engine = MagicMock()
+        scan, claim = MagicMock(), MagicMock()
+        engine.begin.side_effect = [scan, claim]
+        database = SimpleNamespace(engine=engine)
+        with patch('backend.app.agents.report.wake_ready', side_effect=ConnectionError), \
+             patch('backend.app.api.worker.jobs.claim', return_value=None) as claim_job, \
+             self.assertLogs('backend.app.api.worker', level='WARNING'):
+            self.assertFalse(run_once(database, {'API_CHAT_AGENT_ENABLED':'true'}))
+        self.assertIs(scan.__exit__.call_args.args[0], ConnectionError)
+        self.assertIs(claim_job.call_args.args[0].c, claim.__enter__.return_value)
+
     def setUp(self):
         Path('tmp/backend_build').mkdir(parents=True,exist_ok=True)
         self.directory=tempfile.TemporaryDirectory(dir='tmp/backend_build',ignore_cleanup_errors=True)
@@ -154,6 +169,20 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.post(f'chat/jobs/{job}/cancel', {}).json()['code'], 'JOB_ALREADY_FINISHED')
         self.assertFalse(run_once(self.app.state.database, self.settings))
         self.assertEqual(self.post(path, {**body, 'client_message_id': 'next'}).status_code, 202)
+
+    def test_cancelling_queued_agent_job_deletes_checkpoint_after_commit(self):
+        from unittest.mock import Mock
+        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        self.signup()
+        db=self.app.state.database; db.agent_checkpointer=Mock()
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        job=self.post(f'chat/sessions/{sid}/messages',{'question':'미국 수출액','client_message_id':'cleanup'}).json()['job']['job_id']
+        def run_now(target,args,daemon):  # run the background cleanup inline so the test can observe it
+            return Mock(start=lambda:target(*args))
+        with patch('threading.Thread',side_effect=run_now):
+            response=self.post(f'chat/jobs/{job}/cancel',{})
+        self.assertEqual(response.json()['job']['status'],'CANCELLED')
+        db.agent_checkpointer.delete_thread.assert_called_once_with(str(job))
 
     def test_legacy_worker_cannot_claim_agent_and_mixed_interest_resumes_same_job(self):
         from backend.app.api import chat
