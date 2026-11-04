@@ -1,4 +1,5 @@
 """D-67/69/80/93: assemble fixed conclusions with bounded generated prose."""
+from backend.app.agents.digest import display_amounts
 from backend.app.agents.state import AgentState, Draft, TaskConclusion
 
 UNSUPPORTED = {
@@ -9,7 +10,8 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 입력 tasks 순서대로 각 task_id의 결론을 1~2문장, 전체 설명은 4문장 이하로 씁니다.
 문장마다 200자 이내입니다. 숫자는 digest에 있는 값만 옮기고 계산하지 마세요.
 0과 null을 구분하고 null은 집계되지 않았다고 쓰세요. 수출·수입과 USD 단위를 밝히세요.
-금액은 만·억 단위를 써도 됩니다. 총액과 월평균, %와 %p를 구분하세요.
+금액은 digest에 적힌 표기(예: "2,610만 달러", "1억 2,346만 달러")를 글자 그대로 옮기세요.
+만·억 단위를 다시 바꾸거나 반올림·합산하지 마세요. 총액과 월평균, %와 %p를 구분하세요.
 비교 기간 길이가 다르면 그 사실과 월평균을 명시하고 점유율 분모 의미를 밝히세요.
 예측은 기준월을 명시하며 exp_12m은 과거 12개월 수출액입니다.
 CAUSE는 기사와 통계의 시점 연관성을 설명하되 원인으로 단정하지 마세요.
@@ -45,7 +47,7 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict]) 
         if conclusion:
             fixed[task.task_id] = conclusion
             continue
-        digests = {s.step_id.rsplit('.', 1)[-1]: state.results[s.step_id].digest for s in task.steps
+        digests = {s.step_id.rsplit('.', 1)[-1]: display_amounts(state.results[s.step_id].digest) for s in task.steps
                    if s.step_id in state.results and state.results[s.step_id].digest}
         if not digests:
             fixed[task.task_id] = TaskConclusion(task_id=task.task_id, sentences=['분석 결과의 요약 정보가 없습니다.'])
