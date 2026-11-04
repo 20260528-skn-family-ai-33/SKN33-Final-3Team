@@ -104,6 +104,13 @@ class SqlFilterBypassTest(unittest.TestCase):
         for sql in bad:
             with self.subTest(sql=sql), self.assertRaises(ValueError): validate_sql(draft(sql))
 
+    def test_using_and_left_join_where_role_are_accepted(self):
+        for sql in ["SELECT SUM(e.amount_usd) AS value FROM export_summary e JOIN country c USING (country_code) "
+                    "WHERE c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022'",
+                    "SELECT SUM(e.amount_usd) AS value FROM export_summary e LEFT JOIN country c "
+                    "ON c.country_code = e.country_code WHERE c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022'"]:
+            with self.subTest(sql=sql): self.assertTrue(validate_sql(draft(sql)))
+
     def test_missing_table_error_hides_database_name(self):
         from sqlalchemy.exc import ProgrammingError
         error = ProgrammingError('SELECT ...', {}, Exception(1146, "Table 'borderless_prod.users' doesn't exist"))

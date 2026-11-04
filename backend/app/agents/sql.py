@@ -142,8 +142,20 @@ def _filters(predicates, column, aliases, value=None, *, single=False, subquery=
     return False
 
 
-def _linked(predicates, trade, country):
-    """`trade.country_code = country.country_code` 조인 조건이 있는지(국가 역할 조건이 이 수출입 테이블에 걸리는지)."""
+def _linked(select, trade, country):
+    """수출입 행과 국가 행이 country_code로 이어졌는지(`ON trade.country_code = country.country_code` 또는
+    `USING (country_code)`). 조인 방향과 무관하게 연결만 본다. 국가 역할 조건이 행을 실제로 거르는지는 그 조건이
+    어디 있는지(_conjuncts)로 따로 판단한다(LEFT JOIN country + WHERE country_role은 거르고, ON country_role은 못 거른다)."""
+    predicates = list(_conjuncts(select))
+    for join in select.args.get('joins') or []:
+        joined = join.this.alias_or_name.lower() if isinstance(join.this, exp.Table) else None
+        using = {u.name.lower() for u in join.args.get('using') or []}
+        if 'country_code' in using and joined in (trade, country):
+            return True
+        on = join.args.get('on')
+        if on is not None and join.side:
+            on = on.unnest()
+            predicates.extend(p.unnest() for p in (on.flatten() if isinstance(on, exp.And) else [on]))
     return any(isinstance(node, exp.EQ) and (
         (_column(node.this, 'country_code', {trade}) and _column(node.expression, 'country_code', {country}))
         or (_column(node.this, 'country_code', {country}) and _column(node.expression, 'country_code', {trade})))
@@ -171,7 +183,7 @@ def _check_trade_filters(query):
             label = sources[trade].name
             if not _filters(predicates, 'hs_ver', {trade}, single=True):
                 raise ValueError(f"{label}에는 hs_ver 조건 하나(예: hs_ver = 'HS2022')를 AND로 걸어야 합니다.")
-            role = any(_filters(predicates, 'country_role', {c}, 'COUNTRY') and _linked(predicates, trade, c)
+            role = any(_filters(predicates, 'country_role', {c}, 'COUNTRY') and _linked(scope.expression, trade, c)
                        for c in countries)
             if not (role or _filters(predicates, 'country_code', {trade}, subquery=True)):
                 raise ValueError(f"{label} 금액은 country와 country_code로 내부 조인해 country_role = 'COUNTRY' 행만 "
