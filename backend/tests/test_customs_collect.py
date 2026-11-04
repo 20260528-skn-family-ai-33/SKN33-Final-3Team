@@ -61,6 +61,19 @@ class CustomsCollectTest(unittest.TestCase):
         self.assertEqual((stats["export_usd"], stats["import_usd"]), (807248, 305294))
         self.assertTrue(stats["collection_complete"])
 
+    def test_only_explicit_unknown_country_bypasses_retries(self):
+        for code, message, unsupported in (
+                ("99", "존재하지 않는 국가코드입니다.", True),
+                ("99", "기타 오류입니다.", False),
+                ("30", "존재하지 않는 국가코드입니다.", False)):
+            payload = f"<r><resultCode>{code}</resultCode><resultMsg>{message}</resultMsg></r>".encode()
+            with self.subTest(code=code, message=message), patch.object(
+                    cc.requests, "get", return_value=MagicMock(content=payload)) as get, patch.object(cc.time, "sleep"):
+                with self.assertRaises(RuntimeError) as error:
+                    cc.fetch("test", "XK", "202609", "202609")
+                self.assertEqual(isinstance(error.exception, cc.UnsupportedCountryError), unsupported)
+                self.assertEqual(get.call_count, 1 if unsupported else cc.RETRIES)
+
     def test_period_options(self):
         self.assertEqual(cc.resolve_period(year=2025), ("202501", "202512", "2025"))
         self.assertEqual(cc.resolve_period(year=2025, month="202503"), ("202503", "202503", "202503"))
@@ -68,6 +81,25 @@ class CustomsCollectTest(unittest.TestCase):
                          ("202501", "202506", "202501_202506"))
         self.assertEqual(cc.resolve_period(start="202507", end="202606"), ("202507", "202606", "202507_202606"))
         self.assertEqual(cc.month_range("202511", "202602"), ["2025.11", "2025.12", "2026.01", "2026.02"])
+
+    def test_api_retry_log_includes_result_code_and_message(self):
+        for code, message in (("22", "호출 한도 초과"), ("30", "미등록 인증키")):
+            payload = f"<r><resultCode>{code}</resultCode><resultMsg>{message}</resultMsg></r>".encode()
+            with self.subTest(code=code), patch.object(cc.requests, "get", side_effect=[
+                    MagicMock(content=payload), MagicMock(content=OK_XML)]), \
+                    patch.object(cc.time, "sleep"), patch("builtins.print") as output:
+                cc.fetch("test", "US", "202501", "202502")
+                output.assert_called_once()
+                self.assertIn(f"API resultCode: {code} {message}", output.call_args.args[0])
+
+    def test_transport_retry_log_does_not_expose_service_key(self):
+        timeout = cc.requests.ConnectTimeout(f"{cc.API_URL}?serviceKey=private-key")
+        with patch.object(cc.requests, "get", side_effect=[timeout, MagicMock(content=OK_XML)]), \
+                patch.object(cc.time, "sleep"), patch("builtins.print") as output:
+            self.assertEqual(len(cc.fetch("private-key", "US", "202501", "202502")), 3)
+        output.assert_called_once()
+        self.assertIn("ConnectTimeout", output.call_args.args[0])
+        self.assertNotIn("private-key", output.call_args.args[0])
 
     def test_country_selection_uses_database_and_deduplicates(self):
         engine = MagicMock()
