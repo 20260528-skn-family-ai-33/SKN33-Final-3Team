@@ -94,11 +94,17 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             out.hs_items.extend(answer['hs_items'])
             continue
         expr = answer.get('replace_expression', expression)
-        # D-22: 플래너가 질문에 없는 이전 조건 코드를 그대로 다시 적으면 생략(이어받기)과 같다.
-        echoed = next((h for h in base.hs_items if h.hs_code == expr), None)
-        if not answer and echoed and expr.casefold() not in original.casefold():
-            out.hs_items.append({'hs_code': echoed.hs_code, 'hs_ver': echoed.hs_ver})
-            continue
+        # D-22: 플래너가 질문에 없는 이전 조건을 그대로 다시 적으면 생략(이어받기)과 같다.
+        # 코드가 같거나, 이전 조건을 만든 직전 질문의 표현이고 그 표현의 검색 결과에 이전 품목이 있을 때만 이어받는다.
+        if not answer and base.hs_items and expr.casefold() not in original.casefold():
+            echoed = [h for h in base.hs_items if h.hs_code == expr]
+            last = state.input.context.recent[-1].question.casefold() if state.input.context.recent else ''
+            if not echoed and not expr.isdigit() and expr.casefold() in last:
+                found = {r['hs_code'] for r in reference._search_depth(store, expr, 6, 5)['items']}
+                echoed = [h for h in base.hs_items if h.hs_code in found]
+            if echoed:
+                out.hs_items.extend({'hs_code': h.hs_code, 'hs_ver': h.hs_ver} for h in echoed)
+                continue
         if not answer and expr.casefold() not in original.casefold():
             raise SlotRepair('질문에서 품목 표현을 확인하지 못했습니다.')
         if expr.isdigit():
@@ -217,7 +223,11 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if not out.ranking_group:
             return ask(state, task, key, 'RANKING_GROUP', '어떤 기준으로 순위를 볼까요?',
                        [('COUNTRY','국가별',{'ranking_group':'COUNTRY'}), ('HS6','품목별',{'ranking_group':'HS6'})])
-    task.conditions = Conditions.model_validate(out.model_dump(warnings=False))
+    # 같은 대상이 여러 경로(이어받기·코드·국가명)로 들어와도 하나만 남긴다. Conditions는 중복을 거부한다.
+    data = out.model_dump(warnings=False)
+    data['country_codes'] = list(dict.fromkeys(data['country_codes']))
+    data['hs_items'] = list({(h['hs_code'], h['hs_ver']): h for h in data['hs_items']}.values())
+    task.conditions = Conditions.model_validate(data)
     if task.intent=='PROMISING_MARKET':
         if not out.country_codes and not out.hs_items: raise SlotRepair('유망시장을 조회할 국가 또는 품목을 입력해 주세요.')
         if (slots.period or slots.recent_months) and not slots.latest_prediction_confirmed:

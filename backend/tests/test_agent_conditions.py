@@ -46,10 +46,41 @@ class ConditionTest(unittest.TestCase):
         self.assertEqual(self.step.status,'DONE')
         self.assertEqual(self.task.conditions.country_codes,['CN'])
         self.assertEqual([h.hs_code for h in self.task.conditions.hs_items],['330499'])
+        # 최근 질문의 품목 표현을 다시 적어도 이어받는다.
+        from datetime import datetime
+        from backend.app.agents.state import TurnSummary
+        self.state.input.context.recent=[TurnSummary(question='중국에 기초화장품 얼마나 팔았어?',intent='STATISTICS',answered_at=datetime(2026,11,4))]
         self.step.status='PENDING'
-        self.task.slots=TaskSlots(countries=[{'mention':'미국','name':'미국'}],products=[],recent_months=3)
-        check_conditions(self.store,self.state,self.step)  # 이전 조건이 아닌 국가는 여전히 질문 원문이 있어야 한다
-        self.assertEqual(self.step.status,'FAILED')
+        self.task.slots=TaskSlots(countries=None,products=['기초화장품'],recent_months=3)
+        check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'DONE')
+        self.assertEqual([h.hs_code for h in self.task.conditions.hs_items],['330499'])
+        # 다시 적은 이전 국가와 질문에 있는 새 국가가 섞이면 둘 다 조건이 된다(현재 동작).
+        self.state.input.question='미국은 왜 증가한거야?'
+        self.step.status='PENDING'
+        self.task.slots=TaskSlots(countries=[{'mention':'중국','name':'중국'},{'mention':'미국','name':'미국'}],products=None,recent_months=3)
+        check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'DONE')
+        self.assertEqual(sorted(self.task.conditions.country_codes),['CN','US'])
+        # 같은 국가가 이어받기와 코드 표현으로 두 번 들어와도 하나만 남는다.
+        self.state.input.question='CN은 왜 증가한거야?'
+        self.step.status='PENDING'
+        self.task.slots=TaskSlots(countries=[{'mention':'중국','name':'중국'},{'mention':'CN','name':'중국'}],products=None,recent_months=3)
+        check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'DONE')
+        self.assertEqual(self.task.conditions.country_codes,['CN'])
+        self.state.input.question='왜 증가한거야?'
+        cases=[
+            ([{'mention':'미국','name':'미국'}],None,['중국에 기초화장품 얼마나 팔았어?']),  # 이전 조건이 아닌 국가
+            (None,['기초화장품'],['중국에 기초화장품 얼마나 팔았어?','중국 수출액 보여줘']),  # 직전 질문이 아닌 예전 턴의 표현
+            (None,['장비'],['중국에 기초화장품 장비 얼마나 팔았어?'])]  # 직전 질문에 있지만 이전 품목과 무관한 일부 표현
+        for countries,products,questions in cases:
+            with self.subTest(countries=countries,products=products):
+                self.state.input.context.recent=[TurnSummary(question=q,intent='STATISTICS',answered_at=datetime(2026,11,4)) for q in questions]
+                self.step.status='PENDING'
+                self.task.slots=TaskSlots(countries=countries,products=products,recent_months=3)
+                check_conditions(self.store,self.state,self.step)  # 질문 원문에 있어야 하는 규칙은 그대로다
+                self.assertEqual(self.step.status,'FAILED')
 
     def test_korea_is_reporting_country_and_clears_inherited_partner(self):
         from backend.app.agents.state import Conditions
