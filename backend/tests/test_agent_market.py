@@ -26,6 +26,33 @@ class MarketTest(unittest.TestCase):
         self.assertEqual([r['hs6'] for r in result.result.digest['targets'][0]['items']],
                          ['330410', '330420', '330499'])
 
+    def test_merged_hs6_is_queried_by_group_code_and_shown_as_requested(self):
+        # 150930은 판 개정으로 150920 묶음에 들어 있어 모델에는 150920으로만 있다.
+        conditions = Conditions(hs_items=[{'hs_code': '150930', 'hs_ver': 'HS2022'}])
+        provider = Mock()
+        provider.return_value.to_dict.return_value = [
+            {'anchor': '2026-09-01', 'country_code': 'VN', 'hs6': '150920', 'country_rank': 2, 'country_size': 50,
+             'product_rank': 1, 'product_size': 30, 'growth_pct': 3.0, 'exp_12m': 500000}]
+        result = predict(SimpleNamespace(conditions=conditions), {}, provider, {'model': 'm'}, codes={'150930': '150920'})
+        provider.assert_called_once_with({}, country_code=None, hs6='150920', top=5)
+        self.assertEqual(result.result.status, 'OK')
+        self.assertEqual(result.rows[0]['hs6'], '150930')
+        self.assertTrue(any('150920' in reason for reason in result.result.limitations))
+
+    def test_model_codes_reads_correlation_groups(self):
+        from backend.app.agents.market import model_codes
+        from backend.tests.api_support import test_engine
+        from backend.app.api.database import Database, Store
+        from backend.app.models.hs_code_correlation import HsCodeCorrelation
+        engine, meta = test_engine(); self.addCleanup(engine.dispose)
+        table = HsCodeCorrelation.__table__   # API 테스트 스키마에는 없는 적재 테이블이라 모델 정의로 만든다
+        table.create(engine)
+        with engine.begin() as c:
+            c.execute(table.insert(), [{'new_ver': 'HS2022', 'new_code': '150930', 'old_ver': 'HS2017', 'old_code': '150910',
+                                        'relation': 'n:1', 'group_code': '150920', 'source_edition': 'test'}])
+        with engine.connect() as c:
+            self.assertEqual(model_codes(Store(Database(engine), c), ['150930', '330499']), {'150930': '150920'})
+
     def test_registry_path_relative_to_monthly_directory_and_ready_only(self):
         base=Path('tmp')
         base.mkdir(exist_ok=True)

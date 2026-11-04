@@ -26,6 +26,21 @@ from backend.app.api.common import ApiError, clean, now
 from backend.app.api.database import Store
 
 
+_PRODUCT_NAMES = {'at': None, 'names': ()}
+PRODUCT_NAMES_TTL_SECONDS = 3600   # HS 사전은 판본 갱신 때만 바뀐다. 갱신 뒤 최대 1시간은 이전 이름으로 대조한다
+
+
+def product_names(store):
+    """3글자 이상 품목명(D-77 결과 밖 품목 대조). 답변마다 hs_code 전체를 읽지 않도록 프로세스에 1시간 보관한다."""
+    from time import monotonic
+    cached = _PRODUCT_NAMES
+    if cached['at'] is None or monotonic() - cached['at'] > PRODUCT_NAMES_TTL_SECONDS:
+        hs = store.t('hs_code')
+        cached['names'] = tuple(n for n in store.c.scalars(select(hs.c.name_ko).distinct()) if n and len(n) >= 3)
+        cached['at'] = monotonic()
+    return cached['names']
+
+
 class Services:
     def __init__(self, execution, settings, client=None):
         self.execution = execution
@@ -160,13 +175,15 @@ class Services:
             from backend.app.agents.tools import article_result
             return self.execution.call('news',budget.seconds(self.settings,'news'),lambda _:article_result(state,task,step))
         if step.tool=='query_market_model':
-            from backend.app.agents.market import DEFAULT_MARKET_TOP, loaded, predict
+            from backend.app.agents.market import DEFAULT_MARKET_TOP, loaded, model_codes, predict
             def model(_):
                 bundle,provider,versions=loaded(self.settings)
                 key=fingerprint(state,step,tool_version='1',versions=versions,source_results=parents)
                 previous=self.results.reuse(state,step,key)
                 if previous: return previous
-                analysis=predict(task,bundle,provider,versions,step.args.get('top',DEFAULT_MARKET_TOP))
+                with self.read_store() as store:
+                    codes=model_codes(store,[p.hs_code for p in task.conditions.hs_items if len(p.hs_code)==6])
+                analysis=predict(task,bundle,provider,versions,step.args.get('top',DEFAULT_MARKET_TOP),codes)
                 if analysis.result.status!='OK': return analysis.result
                 from backend.app.agents.templates import _names
                 with self.read_store() as store: countries,products=_names(store)
@@ -269,9 +286,9 @@ class Services:
                 # 결과 밖 국가·품목 언급(D-77)을 잡도록 국가 사전 전체와 3글자 이상 품목명을 쓴다. 결과 행의 이름은
                 # verify가 근거에서 따로 모은다. 전체 품목표의 1·2글자 이름('위'·'배'·'기타')은 '1위'·'2배'·'기타 국가'를
                 # 품목으로 읽게 만들어 넣지 않는다.
-                table,hs=store.t('country'),store.t('hs_code')
-                names=[r['name_ko'] for r in store.rows(select(table).where(table.c.country_role=='COUNTRY'))]
-                names+=[name for name in store.c.scalars(select(hs.c.name_ko).distinct()) if name and len(name)>=3]
+                table=store.t('country')
+                countries=[r['name_ko'] for r in store.rows(select(table).where(table.c.country_role=='COUNTRY'))]
+                names=[*countries,*product_names(store)]
                 snapshots={}
                 for task in state.plan.tasks:
                     for step in task.steps:
@@ -283,7 +300,7 @@ class Services:
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
-            verify(state,known_names=set(names),snapshots=snapshots)
+            verify(state,known_names=set(names),snapshots=snapshots,countries=countries)
         self.execution.call('verify',budget.seconds(self.settings,'verify'),check)
         self.execution.sync_budget(state)
 
