@@ -355,6 +355,25 @@ HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처�
 
 공식 근거: [HGB warm_start 제약](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html), [SGDRegressor partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDRegressor.html), [SGDClassifier partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDClassifier.html), [LightGBM init_model](https://lightgbm.readthedocs.io/en/stable/pythonapi/lightgbm.train.html), [XGBoost 학습 재개 예제](https://xgboost.readthedocs.io/en/stable/python/examples/continuation.html).
 
+## 증감 예상 모델(개선 B)
+
+`backend/app/ml/growth_model.py`는 화면의 "증가 예상 / 감소 예상" 표시용 회귀 모델입니다. 모델 A의 1단계 성장률(`growth`, L2 손실)과 따로 학습합니다. 지금은 학습·예측 모듈만 있고, 월별 재학습과 조회에는 아직 연결하지 않았습니다.
+
+| 항목 | 값 |
+|---|---|
+| 손실·설정 | LightGBM Huber (`alpha` 1.0, 잎 63, 트리 1000, 학습률 0.02, `min_child_samples` 300, `colsample_bytree` 0.7, `subsample` 0.8, `reg_lambda` 5) |
+| 피처 | 모델 A 후보에서 `DROP_FEATURES` 16개 제외 (v1 20개 · v3 25개 안팎), 환율은 `fx_vol_12m`(DB `fx_daily`, ECOS) |
+| 출력 | `growth_pct` = expm1(v1·v3 로그 성장 평균) × 100, `direction` = `growth_pct` ≥ 0%이면 증가 |
+| 검증 | 방향 정답률 Dev(2025-05~09) 59.72% → 61.12%, 2025-08 사후 Holdout 59.29% → 60.66% (국가 단위 95% +0.95 ~ +1.78%p) |
+
+```python
+from backend.app.ml import growth_model as G
+bundle = G.fit_members(train_rows, seed=0)   # 정답(y_growth)이 있는 학습 행
+pred = G.predict(bundle, latest_rows)        # anchor, country_code, hs6, growth_pct, direction
+```
+
+성장률 숫자 자체는 오차가 커서(2025-08 MAE 73%p) 화면에는 방향만 보여 주는 것을 전제로 합니다.
+
 ## 주의
 
 - 예측 대상은 최근 12개월 수출이 $100k 이상인 쌍뿐입니다. 그보다 작은 쌍은 `query`에서 "예측 대상 아님"으로 나옵니다.
@@ -364,7 +383,7 @@ HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처�
 
 ```powershell
 # 최종 모델·월별 저장/DB 등록 경로: 가상 데이터와 SQLite 사용
-python -m unittest backend.tests.test_ml_two_stage backend.tests.test_ml_candidate_models
+python -m unittest backend.tests.test_ml_two_stage backend.tests.test_ml_candidate_models backend.tests.test_ml_growth_model
 
 # 기존 모델 및 공통 입력 처리
 python -m unittest backend/tests/test_ml_market.py backend/tests/test_ml_sources.py backend/tests/test_external_data.py backend/tests/test_ml_temporal.py
