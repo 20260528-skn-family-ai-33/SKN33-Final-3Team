@@ -94,6 +94,11 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             out.hs_items.extend(answer['hs_items'])
             continue
         expr = answer.get('replace_expression', expression)
+        # D-22: 플래너가 질문에 없는 이전 조건 코드를 그대로 다시 적으면 생략(이어받기)과 같다.
+        echoed = next((h for h in base.hs_items if h.hs_code == expr), None)
+        if not answer and echoed and expr.casefold() not in original.casefold():
+            out.hs_items.append({'hs_code': echoed.hs_code, 'hs_ver': echoed.hs_ver})
+            continue
         if not answer and expr.casefold() not in original.casefold():
             raise SlotRepair('질문에서 품목 표현을 확인하지 못했습니다.')
         if expr.isdigit():
@@ -156,6 +161,11 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
                 out.country_codes.extend(answer['country_codes'])
                 continue
             if item.mention.casefold() not in original.casefold():
+                # D-22: 질문에 없는 이전 조건 국가를 그대로 다시 적은 것은 생략(이어받기)과 같다.
+                echoed, _ = country_matches(item.name, rows, threshold)
+                if echoed and echoed in base.country_codes:
+                    out.country_codes.append(echoed)
+                    continue
                 raise SlotRepair('국가 표현을 질문에서 확인하지 못했습니다.')
             if item.mention.isascii() and len(item.mention)==2:
                 code = next((r['country_code'] for r in rows

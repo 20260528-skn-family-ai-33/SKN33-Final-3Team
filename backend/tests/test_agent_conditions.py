@@ -37,6 +37,20 @@ class ConditionTest(unittest.TestCase):
         self.assertEqual(self.step.status,'DONE')
         self.assertEqual(self.task.conditions.country_codes,[])
 
+    def test_followup_echoing_previous_conditions_inherits_them(self):
+        from backend.app.agents.state import Conditions
+        self.state.input.question='왜 증가한거야?'
+        self.state.input.context.conditions=Conditions(country_codes=['CN'],hs_items=[{'hs_code':'330499','hs_ver':'HS2022'}])
+        self.task.slots=TaskSlots(countries=[{'mention':'중국','name':'중국'}],products=['330499'],recent_months=3)
+        check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'DONE')
+        self.assertEqual(self.task.conditions.country_codes,['CN'])
+        self.assertEqual([h.hs_code for h in self.task.conditions.hs_items],['330499'])
+        self.step.status='PENDING'
+        self.task.slots=TaskSlots(countries=[{'mention':'미국','name':'미국'}],products=[],recent_months=3)
+        check_conditions(self.store,self.state,self.step)  # 이전 조건이 아닌 국가는 여전히 질문 원문이 있어야 한다
+        self.assertEqual(self.step.status,'FAILED')
+
     def test_korea_is_reporting_country_and_clears_inherited_partner(self):
         from backend.app.agents.state import Conditions
         for name in ('한국','대한민국','우리나라'):
