@@ -631,8 +631,9 @@ class Draft(Model):
     conclusion: list[TaskConclusion] = Field(min_length=1, max_length=MAX_TASKS)
     explanation: list[Sentence] = Field(default_factory=list, max_length=MAX_EXPLANATION_SENTENCES)
     turn_summary: Annotated[str, _chars(0, 200)]
-    # 대화방 제목(D-54, 20자 이하). 넘으면 초안 전체를 거부하지 않고 자른다
-    title: Annotated[str, _truncate(20), _chars(1)] | None = None
+    # 대화방 제목(D-54, 20자 이하). 넘으면 초안 전체를 거부하지 않고 자르고, 비어 있으면 없는 것(None)으로 둔다.
+    # 제목은 선택 칸이라 제목 때문에 답변 문장까지 버리지 않는다.
+    title: Annotated[str | None, BeforeValidator(lambda v: (v.strip()[:20] or None) if isinstance(v, str) else v)] = None
 
     def sentences(self) -> list[str]:
         """verify가 대조하는 순서: 결론 다음 설명."""

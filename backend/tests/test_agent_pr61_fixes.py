@@ -142,6 +142,10 @@ class DraftTitleTest(unittest.TestCase):
         title = '2025년 미국·중국 화장품 수출 추이 비교 분석'
         d = Draft(conclusion=[{'task_id': 't1', 'sentences': ['결론입니다.']}], turn_summary='', title=title)
         self.assertEqual(d.title, title[:20])
+        for blank in ('', '   '):
+            with self.subTest(title=blank):
+                self.assertIsNone(Draft(conclusion=[{'task_id': 't1', 'sentences': ['결론입니다.']}], turn_summary='',
+                                        title=blank).title)
 
 
 class ProductShareTest(unittest.TestCase):
@@ -155,6 +159,12 @@ class ProductShareTest(unittest.TestCase):
         self.assertEqual(task.custom_query, '2025년 품목별 수출 비중')
         self.assertIsNone(task.slots.ranking_group)
         self.assertEqual(next(s for s in task.steps if s.tool == 'query_trade_data').args, {'template': 'LLM_SQL'})
+
+    def test_foreign_market_product_share_keeps_unsupported_path(self):
+        from backend.app.agents.planner import build_plan
+        output = PlannerOutput(tasks=[{'intent': 'MARKET_SHARE', 'question': '베트남 수입시장에서 한국 품목별 점유율',
+                                       'slots': {'ranking_group': 'HS6', 'share_basis': 'FOREIGN_IMPORT_MARKET'}}])
+        self.assertEqual(build_plan(output)[0].tasks[0].intent, 'MARKET_SHARE')
 
     def test_country_share_unchanged(self):
         from backend.app.agents.planner import build_plan

@@ -110,8 +110,10 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
     tasks, warnings = [], []
     for index, item in enumerate(output.tasks, 1):
         task_id = f't{index}'
-        if item.intent == 'MARKET_SHARE' and item.slots.ranking_group == 'HS6':
-            # SHARE 템플릿은 국가별 비중만 지원한다(D-87). 품목별 비중은 LLM SQL로 조회한다(§11.1 custom_query).
+        if (item.intent == 'MARKET_SHARE' and item.slots.ranking_group == 'HS6'
+                and item.slots.share_basis != 'FOREIGN_IMPORT_MARKET'):
+            # SHARE 템플릿은 국가별 비중만 지원한다(D-87). 한국 교역의 품목별 비중은 LLM SQL로 조회한다(§11.1 custom_query).
+            # 해외 수입시장의 한국 점유율은 그대로 두어 조건 확인이 미지원 안내를 하게 한다(관세청 표로 계산할 수 없다).
             item = item.model_copy(update={'intent': 'STATISTICS', 'custom_query': item.custom_query or item.question[:200],
                                            'slots': item.slots.model_copy(update={'ranking_group': None})})
         errors = item.slots.limit_errors()
