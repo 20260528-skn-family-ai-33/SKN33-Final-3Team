@@ -71,6 +71,22 @@ class SqlFilterBypassTest(unittest.TestCase):
         for sql in bad:
             with self.subTest(sql=sql), self.assertRaises(ValueError): validate_sql(draft(sql))
 
+    def test_outer_join_multi_edition_and_subquery(self):
+        ok = [f"SELECT SUM(e.amount_usd) AS value FROM export_summary e JOIN country c ON c.country_code = e.country_code "
+              "AND c.country_role = 'COUNTRY' WHERE e.hs_ver = 'HS2022'",
+              "SELECT SUM(e.amount_usd) AS value FROM export_summary e WHERE e.hs_ver = 'HS2022' AND e.country_code IN "
+              "(SELECT country_code FROM country WHERE country_role = 'COUNTRY')",
+              f"SELECT SUM(e.amount_usd) AS value {self.JOIN}WHERE C.country_role = 'COUNTRY' AND E.hs_ver = 'HS2022'"]
+        bad = ["SELECT SUM(e.amount_usd) AS value FROM export_summary e LEFT JOIN country c ON c.country_code = e.country_code "
+               "AND c.country_role = 'COUNTRY' WHERE e.hs_ver = 'HS2022'",
+               f"SELECT SUM(e.amount_usd) AS value {self.JOIN}WHERE c.country_role = 'COUNTRY' AND e.hs_ver IN ('HS2017', 'HS2022')",
+               "SELECT SUM(e.amount_usd) AS value FROM export_summary e WHERE e.hs_ver = 'HS2022' AND e.country_code IN "
+               "(SELECT country_code FROM country)"]
+        for sql in ok:
+            with self.subTest(sql=sql): self.assertTrue(validate_sql(draft(sql)))
+        for sql in bad:
+            with self.subTest(sql=sql), self.assertRaises(ValueError): validate_sql(draft(sql))
+
     def test_missing_table_error_hides_database_name(self):
         from sqlalchemy.exc import ProgrammingError
         error = ProgrammingError('SELECT ...', {}, Exception(1146, "Table 'borderless_prod.users' doesn't exist"))

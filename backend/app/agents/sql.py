@@ -85,9 +85,11 @@ def validate_sql(draft: SqlDraft) -> str:
 
 
 def _conjuncts(select):
-    """WHERE와 JOIN ON의 최상위 AND 조건들. OR 아래 조건은 행을 반드시 거르지 않으므로 넣지 않는다(`OR 1=1`)."""
+    """WHERE와 내부 조인 ON의 최상위 AND 조건들. OR 아래 조건은 행을 반드시 거르지 않으므로 넣지 않는다(`OR 1=1`).
+    LEFT·RIGHT·FULL 조인의 ON 조건은 상대 행을 지우지 않아(총계 행이 NULL 국가로 남는다) 넣지 않는다."""
     found = []
-    for clause in [select.args.get('where'), *(j.args.get('on') for j in select.args.get('joins') or [])]:
+    clauses = [select.args.get('where'), *(j.args.get('on') for j in select.args.get('joins') or [] if not j.side)]
+    for clause in clauses:
         node = clause.this if isinstance(clause, exp.Where) else clause
         if node is None:
             continue
@@ -96,8 +98,21 @@ def _conjuncts(select):
     return found
 
 
-def _filters(predicates, column, aliases, value=None):
-    """`alias.column = 리터럴`(value가 있으면 그 값) 또는 `column IN (리터럴…)`이 있는지. 별칭 없는 열도 받는다."""
+def _country_subquery(node):
+    """`country_code IN (SELECT country_code FROM country WHERE country_role = 'COUNTRY')` 형태인지."""
+    query = node.args.get('query')
+    select = query.this if isinstance(query, exp.Subquery) else query
+    if not isinstance(select, exp.Select):
+        return False
+    tables = {t.alias_or_name.lower(): t for t in select.find_all(exp.Table)}
+    countries = {alias for alias, t in tables.items() if t.name.lower() == 'country'}
+    return len(tables) == 1 and bool(countries) and _filters(_conjuncts(select), 'country_role', countries, 'COUNTRY')
+
+
+def _filters(predicates, column, aliases, value=None, *, single=False, subquery=False):
+    """`alias.column = 리터럴`(value가 있으면 그 값) 또는 `column IN (리터럴…)`이 있는지. 별칭 없는 열도 받는다.
+    single이면 값 하나만(판본 하나로 제한), subquery면 국가 역할 하위 쿼리 IN도 받는다. 별칭은 대소문자를 가리지 않는다."""
+    aliases = {a.lower() for a in aliases}
     for node in predicates:
         if not isinstance(node, (exp.EQ, exp.In)):
             continue
@@ -105,8 +120,12 @@ def _filters(predicates, column, aliases, value=None):
         rights = node.expressions if isinstance(node, exp.In) else [node.expression]
         if isinstance(node, exp.EQ) and isinstance(rights[0], exp.Column):
             left, rights = rights[0], [left]
-        if (isinstance(left, exp.Column) and left.name.lower() == column and (not left.table or left.table in aliases)
-                and rights and all(isinstance(r, exp.Literal) for r in rights)
+        if not (isinstance(left, exp.Column) and left.name.lower() == column
+                and (not left.table or left.table.lower() in aliases)):
+            continue
+        if subquery and isinstance(node, exp.In) and node.args.get('query') is not None and _country_subquery(node):
+            return True
+        if (rights and all(isinstance(r, exp.Literal) for r in rights) and (not single or len(rights) == 1)
                 and (value is None or all(r.this == value for r in rights))):
             return True
     return False
@@ -125,10 +144,11 @@ def _check_trade_filters(query):
             continue
         countries = {alias for alias, source in sources.items() if source.name.lower() == 'country'}
         predicates = _conjuncts(scope.expression)
-        if not _filters(predicates, 'hs_ver', trade):
-            raise ValueError("수출입 테이블은 hs_ver 조건(예: hs_ver = 'HS2022')을 AND로 걸어야 합니다.")
-        if not (_filters(predicates, 'country_role', countries, 'COUNTRY') or _filters(predicates, 'country_code', trade)):
-            raise ValueError("수출입 금액은 country와 조인해 country_role = 'COUNTRY' 행만 AND 조건으로 집계하세요.")
+        if not _filters(predicates, 'hs_ver', trade, single=True):
+            raise ValueError("수출입 테이블은 hs_ver 조건 하나(예: hs_ver = 'HS2022')를 AND로 걸어야 합니다.")
+        if not (_filters(predicates, 'country_role', countries, 'COUNTRY')
+                or _filters(predicates, 'country_code', trade, subquery=True)):
+            raise ValueError("수출입 금액은 country와 내부 조인해 country_role = 'COUNTRY' 행만 AND 조건으로 집계하세요.")
 
 
 def safe_error(exc):
