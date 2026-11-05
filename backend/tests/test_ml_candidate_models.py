@@ -60,8 +60,17 @@ class MonthlyRunTest(unittest.TestCase):
         self.assertTrue(np.isfinite(bundle["latest"][["growth", "order", "exp_12m"]].to_numpy()).all())
         self.assertIsNotNone(result["country_ndcg_at_5"])
         labeled = int(dataset().y_growth.notna().sum())
-        self.assertEqual(self.records(), [("model_a_two_stage_202602", "READY", labeled, "FULL_RETRAIN", "model_a_two_stage_202602.joblib")])
+        # 모델 A 다음에 같은 달 피처 표로 모델 B(증감 예상)를 같은 절차로 학습·기록한다
+        self.assertEqual(self.records(), [("model_a_two_stage_202602", "READY", labeled, "FULL_RETRAIN", "model_a_two_stage_202602.joblib"),
+                                          ("model_b_growth_202602", "READY", labeled, "FULL_RETRAIN", "model_b_growth_202602.joblib")])
         self.assertEqual(C.run.__kwdefaults__["kind"], "two_stage")  # customs_monthly는 kind 없이 부른다
+        growth = joblib.load(self.out / "model_b_growth_202602.joblib")
+        self.assertEqual(list(growth["latest"].columns), ["anchor", "country_code", "hs6", "growth_pct", "direction"])
+        self.assertTrue((growth["latest"].anchor == latest).all())   # 모델 A와 같은 기준월
+        self.assertEqual(result["growth"]["status"], "SUCCESS")
+        record = json.loads((self.out / "model_b_growth_202602.registry.json").read_text("utf-8"))
+        self.assertEqual((record["model_key"], record["status"]), ("model_b", "READY"))
+        self.assertIsNotNone(record["evaluation"]["direction_accuracy"])
 
     def first_then(self, files=FILES, db=DB):
         """기본 입력으로 한 번 학습한 뒤 바뀐 입력으로 다시 실행한 모델 이름."""
@@ -74,6 +83,101 @@ class MonthlyRunTest(unittest.TestCase):
         with session_scope(self.engine) as session:
             return [(r.model_name, r.status, r.train_rows, r.training_mode, r.artifact_path)
                     for r in session.scalars(select(MlModelVersion))]
+
+    def run_growth(self, month="2026-02-01", files=FILES, db=DB):
+        with patch.object(C.artifacts, "input_manifest", return_value=files), \
+                patch.object(C.artifacts, "db_inputs", return_value=db):
+            return C.run_growth(month, self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)
+
+    def test_growth_rerun_only_resends_record(self):
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            self.assertEqual(self.run_growth()["status"], "SUCCESS")
+        with patch.object(C.artifacts, "load_training_data", side_effect=AssertionError("같은 달은 재학습하지 않아야 함")):
+            self.assertEqual(self.run_growth()["model_name"], "model_b_growth_202602")
+        corrected = [{**FILES[0], "sha256": "b"}]  # 같은 달 원본 정정 → 모델 A처럼 새 리비전
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded(files=corrected)):
+            self.assertEqual(self.run_growth(files=corrected)["model_name"], "model_b_growth_202602_r2")
+
+    def test_growth_failure_is_skipped_and_retried_without_touching_model_a(self):
+        from backend.app.ml import growth_model
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            with patch.object(growth_model, "monthly", side_effect=MemoryError()):
+                result = self.run_month(kind="two_stage")
+        self.assertEqual(result["status"], "SUCCESS")   # 모델 A는 저장·기록된다
+        self.assertEqual(result["growth"]["status"], "SKIPPED")
+        self.assertTrue((self.out / "model_a_two_stage_202602.joblib").is_file())
+        self.assertFalse((self.out / "model_b_growth_202602.joblib").exists())
+        self.assertIn(("model_b_growth_202602", "SKIPPED", 0, "FULL_RETRAIN", None), self.records())
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            retried = self.run_growth()   # 다음 실행은 실패 기록을 재사용하지 않고 새 리비전으로 학습한다
+        self.assertEqual((retried["status"], retried["model_name"]), ("SUCCESS", "model_b_growth_202602_r2"))
+        record = json.loads((self.out / "model_b_growth_202602_r2.registry.json").read_text("utf-8"))
+        self.assertIsNone(record["parent_version_id"])   # 파일 없는 SKIPPED 기록은 부모가 아니다
+
+    def test_growth_data_failure_leaves_no_record(self):
+        with patch.object(C, "_month_frame", side_effect=OSError("db down")):
+            result = self.run_growth()
+        self.assertEqual(result["status"], "FAILED")   # 일시 장애는 SKIPPED로 남기지 않는다
+        self.assertFalse((self.out / "model_b_growth_202602.registry.json").exists())
+        self.assertEqual(self.records(), [])
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            self.assertEqual(self.run_growth()["model_name"], "model_b_growth_202602")   # 같은 리비전으로 다시
+
+    def test_growth_does_not_overwrite_hand_built_file(self):
+        manual = self.out / "model_b_growth_202602.joblib"
+        manual.parent.mkdir(parents=True, exist_ok=True)
+        manual.write_bytes(b"manual")
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            self.assertEqual(self.run_growth()["model_name"], "model_b_growth_202602_r2")
+        self.assertEqual(manual.read_bytes(), b"manual")
+
+    def test_retry_pending_retrains_failed_growth_on_the_next_run(self):
+        from backend.app.ml import growth_model
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            with patch.object(growth_model, "monthly", side_effect=MemoryError()):
+                self.assertEqual(self.run_month(kind="two_stage")["growth"]["status"], "SKIPPED")
+        with patch.object(C.artifacts, "input_manifest", return_value=FILES), \
+                patch.object(C.artifacts, "db_inputs", return_value=DB), \
+                patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            # 방금 처리한 달은 같은 실행에서 다시 하지 않는다
+            self.assertIsNone(C.retry_pending(self.engine, out_dir=self.out, cache_dir=None, n_jobs=1, skip={"202602"}))
+            retried = C.retry_pending(self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)
+            self.assertEqual((retried["status"], retried["model_name"]), ("SUCCESS", "model_b_growth_202602_r2"))
+            self.assertIsNone(C.retry_pending(self.engine, out_dir=self.out, cache_dir=None, n_jobs=1))   # READY면 끝
+
+    def test_retry_pending_resends_missing_db_record_without_training(self):
+        with patch.object(C.artifacts, "load_training_data", return_value=loaded()):
+            self.assertEqual(self.run_growth()["status"], "SUCCESS")
+        (self.out / "model_a_two_stage_202602.registry.json").write_text(json.dumps(
+            {"status": "READY", "data_info": {"trade_month": "2026-02-01"}}), "utf-8")
+        with session_scope(self.engine) as session:
+            session.query(MlModelVersion).delete()   # 파일 저장 뒤 DB 기록이 실패한 상태
+        with patch.object(C.artifacts, "input_manifest", return_value=FILES), \
+                patch.object(C.artifacts, "db_inputs", return_value=DB), \
+                patch.object(C.artifacts, "load_training_data", side_effect=AssertionError("다시 학습하지 않아야 함")):
+            self.assertEqual(C.retry_pending(self.engine, out_dir=self.out, cache_dir=None, n_jobs=1)["status"], "SUCCESS")
+            self.assertIsNone(C.retry_pending(self.engine, out_dir=self.out, cache_dir=None, n_jobs=1))   # 기록되면 끝
+        self.assertEqual([r[0] for r in self.records()], ["model_b_growth_202602"])
+
+    def test_retry_pending_stops_after_the_limit(self):
+        for revision in (1, 2, 3):
+            name = "model_b_growth_202602" + ("" if revision == 1 else f"_r{revision}")
+            (self.out / f"{name}.registry.json").write_text(json.dumps({"version_id": name, "status": "SKIPPED"}), "utf-8")
+        (self.out / "model_a_two_stage_202602.registry.json").write_text(json.dumps(
+            {"status": "READY", "data_info": {"trade_month": "2026-02-01"}}), "utf-8")
+        with patch.object(C, "run_growth", side_effect=AssertionError("상한을 넘으면 다시 학습하지 않아야 함")):
+            self.assertIsNone(C.retry_pending(self.engine, out_dir=self.out, limit=3))
+        with patch.object(C, "run_growth", return_value={"status": "SUCCESS"}) as run:
+            C.retry_pending(self.engine, out_dir=self.out, limit=4)
+        run.assert_called_once()
+
+    def test_manual_growth_file_is_not_overwritten(self):
+        manual = self.out / "model_b_growth_202602.joblib"
+        manual.write_bytes(b"operator file")
+        with patch.object(C.artifacts, "load_training_data", side_effect=AssertionError("직접 만든 파일이 있으면 학습하지 않아야 함")):
+            result = self.run_growth()
+        self.assertEqual(result["status"], "SKIPPED")
+        self.assertEqual(manual.read_bytes(), b"operator file")
 
     def test_saves_dated_model_and_records_it(self):
         with patch.object(C.artifacts, "load_training_data", return_value=loaded()):

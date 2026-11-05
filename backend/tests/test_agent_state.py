@@ -443,8 +443,8 @@ class LlmOutputSchemaTest(unittest.TestCase):
         D.model_validate(ok)
         with self.assertRaises(ValidationError):
             D.model_validate({**ok, 'conclusion': [{'task_id': 't1', 'sentences': ['가' * (MAX_TEXT_CHARS + 1)]}]})
-        with self.assertRaises(ValidationError):
-            D.model_validate({**ok, 'title': '가' * 21})
+        # 제목은 거부하지 않고 20자로 자른다(PR #61 재검수). 문장 규칙과 달리 초안 전체를 버릴 이유가 아니다.
+        self.assertEqual(D.model_validate({**ok, 'title': '가' * 21}).title, '가' * 20)
 
 
 class ShortenNameTest(unittest.TestCase):
@@ -528,8 +528,12 @@ class DependentTaskContractTest(unittest.TestCase):
         restored = AgentState.model_validate_json(s.model_dump_json())
         self.assertEqual(restored.plan.tasks[1].input_bindings[0].selection.limit, 3)
         self.assertIsNone(TargetSelection().limit)  # 모호하면 INPUT_SELECTION으로 확인
+        # 자기 자신·뒤 질문을 가리키는 대상 선택은 실제 LLM이 단순 질문에도 붙인다. 출력 전체를 거부하지 않고 버린다.
         base[1]['target_selections'][0]['source_task'] = 2
-        with self.assertRaises(ValidationError):
+        dropped = PlannerOutput(tasks=base).tasks[1]
+        self.assertEqual((dropped.target_selections, dropped.source_tasks), ([], [1]))
+        base[1]['source_tasks'] = [2]
+        with self.assertRaises(ValidationError):  # source_tasks 자체가 잘못되면 지금처럼 거부한다
             PlannerOutput(tasks=base)
 
     def test_dependency_failure_preserves_independent_work(self):
@@ -618,6 +622,18 @@ class DependentTaskContractTest(unittest.TestCase):
         conclusion = TaskConclusion.report_completed('t2')
         self.assertEqual(conclusion.task_id, 't2')
         self.assertIn('완성', conclusion.sentences[0])
+
+    def test_success_without_source_table_cannot_be_stored(self):
+        s = self.make_state()
+        for step in s.plan.steps():
+            step.status = 'DONE'
+        s.results['t1.sql'] = ToolResult(status='OK')
+        report = ToolResult(status='OK', report_id='report1')
+        with self.assertRaisesRegex(ValueError, '결과표 참조'):
+            s.result_for_storage('t2.report', report)
+        s.results['t2.report'] = report
+        with self.assertRaisesRegex(ValueError, '결과표 참조'):
+            s.task_outcome('t2')
 
     def test_waiting_or_terminal_states_do_not_dispatch(self):
         s = self.make_state()

@@ -31,6 +31,20 @@ class GrowthModelTest(unittest.TestCase):
         cls.latest = frame[frame.anchor == frame.anchor.max()]
         cls.bundle = G.fit_members(cls.rows, n_jobs=1)
 
+    def test_save_keeps_latest_predictions_for_the_agent(self):
+        import tempfile
+        from pathlib import Path
+        import joblib
+        with tempfile.TemporaryDirectory() as folder:
+            path = G.save(self.bundle, self.latest, Path(folder) / "model_b_growth_test.joblib")
+            saved = joblib.load(path)
+        self.assertEqual(saved["kind"], "growth_huber")
+        self.assertEqual(list(saved["latest"].columns), [*T.KEYS, "growth_pct", "direction"])
+        self.assertEqual(saved["anchor"], str(self.latest.anchor.max().date()))
+        self.assertTrue(set(saved["latest"].direction) <= {G.UP, G.DOWN})
+        with self.assertRaises(ValueError):   # 기준월이 여러 개면 저장하지 않는다
+            G.save(self.bundle, self.rows, Path(tempfile.gettempdir()) / "model_b_growth_bad.joblib")
+
     def test_settings_match_the_verified_holdout(self):
         self.assertEqual(G.HUBER, VERIFIED_HUBER)
         self.assertEqual(set(G.DROP_FEATURES), VERIFIED_DROP)

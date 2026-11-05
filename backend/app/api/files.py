@@ -23,7 +23,8 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False):
     for n,table in enumerate(tables,1):
         require(table['total_rows']<=1000,'엑셀은 필터 전체 결과 1,000행까지만 다운로드할 수 있습니다.','EXPORT_LIMIT_EXCEEDED',422)
         ws=wb.create_sheet(f'결과표{n}')
-        columns=table['columns']
+        from backend.app.api.results import display_columns
+        columns=display_columns(table['columns'],table['rows'],table.get('meta'))
         # 천 단위 콤마·소수 자리는 셀 서식으로 붙인다(값은 숫자 그대로). 결과표 다운로드는 머리글에 단위도 적는다.
         ws.append([c['label']+(f" ({c['unit']})" if unit_headers and c.get('unit') else '') for c in columns])
         formats=['#,##0' if c.get('unit')=='USD' else '0.0' if c.get('unit')=='%' else None for c in columns]
@@ -49,6 +50,9 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False):
         for col in ws.columns: ws.column_dimensions[col[0].column_letter].width=24
     info=wb.create_sheet('정보')
     info.append(['항목','내용'])
+    # 순위는 상위 1,000행만 저장한다(trade.rankings). 잘렸으면 파일에도 전체 행 수를 남긴다.
+    if meta.get('truncated') and isinstance(meta.get('rows_total'),int):
+        info.append(['안내',f"전체 {meta['rows_total']:,}행 중 상위 1,000행만 담았습니다. 조건을 좁히면 전체를 받을 수 있습니다."])
     for key,value in meta.items(): info.append([key,str(value)])
     for query in sql: info.append(['실행 SQL',query])
     for row in info:
@@ -83,7 +87,11 @@ def chart_image(section, chart, settings):
     if chart['chart_type']=='HORIZONTAL_BAR':
         ax.barh(labels,values,color='#006849'); ax.invert_yaxis()
     else:
-        ax.plot(labels,values,color='#006849',marker='o',markersize=3)
+        colors=['#006849','#2E6DB4','#8E5BB5','#E07B24','#C2477A']
+        names={c['key']:c['label'] for c in table['columns']}
+        for i,key in enumerate(chart['series_keys']):
+            ax.plot(labels,[r.get(key) for r in rows],color=colors[i%len(colors)],marker='o',markersize=3,label=names.get(key,key))
+        if len(chart['series_keys'])>1: ax.legend(prop=font,fontsize=8)
         if len(labels)>12:
             positions=list(range(0,len(labels),max(1,len(labels)//6)))
             ax.set_xticks(positions,[labels[i] for i in positions])

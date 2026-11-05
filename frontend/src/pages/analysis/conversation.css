@@ -1,0 +1,19 @@
+.chat-turn,.chat-step { display:grid; gap:12px; }
+.chat-progress { width:100%; height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
+.chat-progress > span { display:block; height:100%; background:var(--red); transition:width .3s ease; }
+@media (prefers-reduced-motion:reduce) { .chat-progress > span { transition:none; } }
+.chat-plan { margin:0; padding-left:1.8rem; }
+.chat-plan li { padding:4px 8px; color:var(--ink); }
+.chat-plan li[aria-current=step] { background:var(--rose); border-radius:6px; }
+.chat-plan li small { display:block; color:var(--muted); }
+.chat-flow > :not(form),.chat-turn > * { animation:chat-appear 180ms ease-out both; }
+@keyframes chat-appear { from { opacity:0; transform:translateY(5px); } to { opacity:1; transform:none; } }
+@media (prefers-reduced-motion:reduce) { .chat-flow > :not(form),.chat-turn > * { animation:none; } }
+
+/* Keep the picker above later animated siblings without covering modal layers. */
+.chat-flow > .chat-clarification { position:relative; z-index:2; }
+
+.chat-plan-details:not([hidden]) { display:grid; gap:12px; }
+.chat-loading-ring { display:inline-block; width:14px; height:14px; margin-left:6px; border:2px solid var(--line); border-top-color:var(--red); border-radius:50%; vertical-align:middle; animation:chat-spin .8s linear infinite; }
+@keyframes chat-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .chat-loading-ring { animation:none; } }

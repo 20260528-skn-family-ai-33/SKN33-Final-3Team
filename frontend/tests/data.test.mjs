@@ -75,3 +75,69 @@ test('회원가입 비밀번호 규칙', () => {
   assert.equal(isStrongPassword('Original!123'), true)
   for (const bad of ['12345678', 'abcdefgh', 'abcd1234', 'a1!', 'abcd 123!']) assert.equal(isStrongPassword(bad), false)
 })
+
+
+test('trade chart uses a common Korean USD unit without changing amounts', async()=>{
+ const {chartDisplay}=await import('../src/utils/chart.js')
+ const display=chartDisplay([100000000,234567890], 'USD')
+ assert.equal(display.unit,'억USD');assert.equal(display.format(234567890),'2.35')
+})
+test('same-metric country comparisons share a chart; ML and different units stay separate', async()=>{
+ const {comparisonCharts}=await import('../src/pages/analysis/comparisonCharts.js')
+ const period={start:'2026-01-01',end:'2026-02-01'}
+ const tasks=['US','CN'].map((code,i)=>({task_id:'t'+i,intent:'STATISTICS',conditions:{country_codes:[code],hs_items:[],period,trade_flow:'EXPORT'}}))
+ const charts=tasks.map((task,i)=>({chart_id:task.task_id,task_id:task.task_id,type:'line',title:'수출액',source:'관세청',unit:'USD',labels:i?['2026-02']:['2026-01'],series:[{name:'수출액',values:[i+1]}]}))
+ const combined=comparisonCharts(charts,tasks)
+ assert.equal(combined.length,1);assert.deepEqual(combined[0].series.map(s=>s.values),[[1,null],[null,2]])
+ assert.equal(charts[0].series.length,1)
+ assert.equal(comparisonCharts([charts[0],{...charts[1],unit:'%'}],tasks).length,2)
+ assert.equal(comparisonCharts(charts,tasks.map(t=>({...t,intent:'PROMISING_MARKET'}))).length,2)
+})
+
+
+test('comparison table produces one aligned country chart and preserves zero/null',async()=>{
+ const {comparisonChart,comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
+ const conditions={period:{start:'2026-01-01',end:'2026-02-01'},trade_flow:'EXPORT',country_codes:['CN','JP']}
+ const group=comparisonGroups({tasks:[{task_id:'t1',intent:'STATISTICS',conditions}],tables:[{task_id:'t1',result_id:'r',meta:{kind:'TREND'},rows:[{country_code:'CN'}]}]})
+ assert.equal(group.length,1)
+ const chart=comparisonChart({columns:[{key:'cn',type:'number',label:'중국 수출액'},{key:'jp',type:'number',label:'일본 수출액'}],rows:[{hs_code:'854232',name:'메모리',month:'2026-01',cn:10,jp:0},{hs_code:'854232',name:'메모리',month:'2026-02',cn:20,jp:null}]},conditions)
+ assert.equal(chart.series.length,2)
+ assert.deepEqual(chart.series.find(s=>s.name==='일본 수출액').values,[0,null])
+ assert.deepEqual(chart.labels,['2026-01','2026-02'])
+})
+
+
+test('duplicate current-period results with different previous-period settings form one comparison',async()=>{
+ const {comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
+ const period={start:'2026-01-01',end:'2026-02-28'}
+ const tasks=[['CN'],['JP'],['CN','JP']].map((codes,i)=>({task_id:'t'+i,intent:'STATISTICS',conditions:{period:i===2?{end:period.end,start:period.start}:period,trade_flow:'EXPORT',metric:'AMOUNT',country_codes:codes,hs_items:[],compare_period:i===2?{start:'2025-01-01',end:'2025-02-28'}:null}}))
+ const tables=tasks.map((t,i)=>({task_id:t.task_id,result_id:'r'+i,meta:{kind:'TREND'},rows:[{country_code:t.conditions.country_codes[0]}]}))
+ const groups=comparisonGroups({tasks,tables})
+ assert.equal(groups.length,1);assert.equal(groups[0].tables.length,3)
+})
+
+
+test('results over the comparison API limit stay separate instead of failing as one group',async()=>{
+ const {comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
+ const period={start:'2026-01-01',end:'2026-02-28'}
+ const codes=n=>Array.from({length:n},(_,i)=>'C'+String(i).padStart(2,'0'))
+ const tasks=[codes(11),codes(21).slice(11)].map((c,i)=>({task_id:'t'+i,intent:'STATISTICS',conditions:{period,trade_flow:'EXPORT',country_codes:c,hs_items:[]}}))
+ const tables=tasks.map((t,i)=>({task_id:t.task_id,result_id:'r'+i,meta:{kind:'TREND'},rows:t.conditions.country_codes.map(country_code=>({country_code}))}))
+ assert.equal(comparisonGroups({tasks,tables}).length,0)
+ assert.equal(comparisonGroups({tasks:tasks.slice(0,1),tables:tables.slice(0,1)}).length,1)
+})
+
+
+test('job completion received after the message read displays its saved answer once',async()=>{
+ const {completedMessages}=await import('../src/pages/analysis/completedMessages.js')
+ const rows=[{message_id:'1',role:'USER',job:{job_id:'1',status:'RUNNING'}}]
+ const answer={text:'저장된 최종 답변'}
+ const job={job_id:'1',status:'SUCCEEDED',answer}
+ const completed=completedMessages(rows,job)
+ assert.equal(rows.length,1);assert.equal(completed.length,2);assert.equal(completed[1].answer,answer)
+ assert.equal(completedMessages(completed,job),completed)
+ assert.equal(completedMessages(rows,{...job,status:'RUNNING'}),rows)
+ const other=[...rows,{role:'USER',message_id:'2',job:{job_id:'2'}}]
+ assert.equal(completedMessages(other,job)[1].role,'ASSISTANT')
+ assert.equal(completedMessages(other,job)[2].message_id,'2')
+})

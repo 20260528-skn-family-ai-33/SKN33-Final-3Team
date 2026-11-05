@@ -6,6 +6,7 @@ import { countries, registerProducts, toggleValue, productName } from '../data/c
 import { api } from '../api/client'
 import { useQuery, ErrorNotice, useDebouncedValue } from '../api/hooks'
 import { useApp } from '../store'
+import { mapLimited } from '../api/integration'
 
 const HS_PREVIEW_LENGTH = 52
 const compactHsName = name => name.length > HS_PREVIEW_LENGTH ? name.slice(0, HS_PREVIEW_LENGTH - 1) + '…' : name
@@ -24,21 +25,23 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const { run } = useApp()
   const [query, setQuery] = useState(group ? `${group.code} · ${group.name}` : '')
   const [open, setOpen] = useState(false)
+  const [hs4Only, setHs4Only] = useState(false)
   const selection = useRef(0)
   const inputRef = useRef(null)
   // 목록 안의 '다시 불러오기'를 누르면 그 버튼이 사라지며 포커스가 본문으로 빠지므로, 검색칸으로 되돌려 바깥 클릭 때 목록이 닫히게 한다.
   const retry = load => () => { load(); inputRef.current?.focus() }
   const confirmed = group && query === `${group.code} · ${group.name}`
   const q = query.trim()
-  const settled = useDebouncedValue(q)
-  const exactProduct = !!onSelectProduct && /^\d{6}$/.test(settled)
+  const searchQuery=confirmed ? '' : q
+  const settled = useDebouncedValue(searchQuery)
+  const exactProduct = !!onSelectProduct && !hs4Only && /^\d{6}$/.test(settled)
   const search = useQuery('/reference/hs-codes', { q: settled, depth: exactProduct ? 6 : 4, limit: 5 }, settled.length >= 2 && !confirmed)
-  const tryProducts = !!onSelectProduct && !/^\d+$/.test(settled) && !!search.data && search.data.match_type !== 'EXACT'
+  const tryProducts = !!onSelectProduct && !hs4Only && settled.length>=2 && !confirmed && !/^\d+$/.test(settled)
   const fallback = useQuery('/reference/hs-codes', { q: settled, depth: 6, limit: 5 }, tryProducts)
-  const preferProducts = tryProducts && (!search.data.items.length || fallback.data?.match_type === 'EXACT')
+  const preferProducts = tryProducts && search.data?.match_type!=='EXACT' && !!fallback.data && (!search.data?.items.length || fallback.data.match_type === 'EXACT')
   const active = preferProducts ? fallback : search
   const found = (settled === q ? active.data?.items || [] : []).filter(h => !exactProduct || h.hs_code === q)
-  const exactGroup = expandGroup && onSelectProduct && /^\d{4}$/.test(q) ? found.find(h => h.hs_code === q && h.depth === 4) : null
+  const exactGroup = !hs4Only && expandGroup && onSelectProduct && /^\d{4}$/.test(q) ? found.find(h => h.hs_code === q && h.depth === 4) : null
   const children = useQuery(`/reference/hs-codes/${q}/children`, { hs_ver: 'HS2022' }, !!exactGroup && open && !confirmed)
   const results = exactGroup ? [exactGroup, ...(children.data?.items || [])] : found
   // 방향키로 고르는 중인 결과(-1이면 없음). Enter로 선택한다.
@@ -57,8 +60,8 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const select = async h => {
     const revision = ++selection.current
     setOpen(false)
+    registerProducts([h])
     if (h.depth === 6) {
-      registerProducts([h])
       onSelectProduct(h.hs_code)
       setQuery('')
       return
@@ -69,8 +72,11 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
     setQuery(`${h.hs_code} · ${h.name_ko}`)
     onConfirm({ code: h.hs_code, name: h.name_ko, items: data.items.map(item => [item.hs_code, item.name_ko]) })
   }
-  return (
-    // 포커스가 검색칸과 목록을 모두 벗어났을 때만 목록을 닫는다(Tab으로 선택지에 들어가도 열린 채 유지).
+  return <>
+    {onSelectProduct && <div className="chips" role="group" aria-label="품목 검색 단위">
+      <Btn aria-pressed={!hs4Only} kind={!hs4Only?'plum':'line'} onClick={()=>{selection.current++;setCursor(-1);setHs4Only(false);setOpen(true)}}>통합 검색</Btn>
+      <Btn aria-pressed={hs4Only} kind={hs4Only?'plum':'line'} onClick={()=>{selection.current++;setCursor(-1);setHs4Only(true);setOpen(true)}}>HS4 단위로 검색</Btn>
+    </div>}
     <div className="hs-picker" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false) }}>
       <div className={'input' + (q ? ' val' : '') + (open ? ' focus' : '')}>
         <Icon name="search" size={18} color="#5C6370" />
@@ -103,11 +109,31 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
         </div>
       )}
     </div>
-  )
+  </>
 }
 
 export function InterestProducts({ products, setProducts }) {
   const [group, setGroup] = useState(null)
+  const [names,setNames]=useState({})
+  const [nameError,setNameError]=useState(null)
+  const [nameRetry,setNameRetry]=useState(0)
+  const missing=products.filter(id=>productName(id)===id).join(',')
+  useEffect(()=>{
+    if(!missing)return
+    const controller=new AbortController()
+    mapLimited(missing.split(','),4,async id=>{
+      const data=await api('/reference/hs-codes',{query:{q:id,depth:id.length,limit:5},signal:controller.signal})
+      return data.items.find(h=>h.hs_code===id)
+    },controller.signal).then(items=>{
+      if(controller.signal.aborted)return
+      const found=items.filter(Boolean)
+      registerProducts(found)
+      setNames(previous=>({...previous,...Object.fromEntries(found.map(h=>[h.hs_code,h.name_ko]))}))
+      setNameError(null)
+    }).catch(error=>{if(!controller.signal.aborted)setNameError(error)})
+    return ()=>controller.abort()
+  },[missing,nameRetry])
+  const selectedName=id=>names[id]||(productName(id)!==id?productName(id):'품목명 미확인')
   const ids = group?.items.map(([id]) => id) || []
   const allSelected = ids.length > 0 && ids.every(id => products.includes(id))
   const toggleGroup = () => setProducts(previous => allSelected
@@ -126,26 +152,28 @@ export function InterestProducts({ products, setProducts }) {
       </div>)}
     </fieldset>}
     <div className="interest-summary">
+      <ErrorNotice error={nameError} retry={()=>setNameRetry(v=>v+1)}/>
       <div className="between"><b>선택한 품목 {products.length}개</b>
         {!!products.length && <Btn onClick={() => setProducts([])}>선택 품목 전체 삭제</Btn>}
       </div>
       <ul className="chips">{products.map(id => <li key={id}><button type="button" className="chip sm"
-        onClick={() => setProducts(p => p.filter(code => code !== id))} title={productName(id)} aria-label={`${productName(id)} 삭제`}>
-        {compactHsName(productName(id))} · {id} ×
-      </button><FullHsName name={productName(id)} code={id} /></li>)}</ul>
+        onClick={() => setProducts(p => p.filter(code => code !== id))} title={selectedName(id)} aria-label={`${id} ${selectedName(id)} 삭제`}>
+        {id} · {compactHsName(selectedName(id))} ×
+      </button><FullHsName name={selectedName(id)} code={id} /></li>)}</ul>
     </div>
   </>
 }
 
 /** 대륙 추가 칩 + 국가 체크 목록(관심사 등록용 격자 / 관심정보용 칩) */
-export function CountryPicker({ value, onChange, variant = 'grid' }) {
+export function CountryPicker({ value, onChange, variant = 'grid', includeKorea = false, showSelected = false }) {
   const [query, setQuery] = useState('')
   const regions = useQuery('/reference/regions')
   const continents = (regions.data?.items || []).filter(r => !r.parent_id)
-  const list = countries.filter(c => !query.trim() || c.name.includes(query.trim()))
+  const choices=includeKorea?[{country_code:'__KOREA_TOTAL__',name:'한국(대한민국)'},...countries]:countries
+  const list = choices.filter(c => !query.trim() || c.name.includes(query.trim()))
   const shown = variant === 'chips' && !query.trim()
-    ? [...countries.filter(c => value.includes(c.name)), ...countries.filter(c => !value.includes(c.name)).slice(0, 3)]
-    : (query.trim() ? list : countries.slice(0, Math.max(9, value.length)))
+    ? [...choices.filter(c => value.includes(c.name)), ...choices.filter(c => !value.includes(c.name)).slice(0, 3)]
+    : (query.trim() ? list : choices.slice(0, Math.max(9, value.length)))
   const addContinent = region => onChange([...new Set([...value, ...countries.filter(c => region.country_codes.includes(c.country_code)).map(c => c.name)])])
   return (
     <>
@@ -159,7 +187,7 @@ export function CountryPicker({ value, onChange, variant = 'grid' }) {
       <p className="note" style={{ marginTop: 8 }}>
         {regions.error ? '대륙 정보가 준비되지 않아 국가별 선택을 제공합니다.' : variant === 'grid' ? '대륙 추가 시 해당 대륙의 모든 국가가 자동 추가됩니다.' : '대륙 추가 → 해당 대륙의 모든 국가 자동 추가 · 중복 제외'}
       </p>
-      {!!value.length && <Btn onClick={() => onChange([])}>선택 국가 전체 삭제</Btn>}
+      {!showSelected && !!value.length && <Btn onClick={() => onChange([])}>선택 국가 전체 삭제</Btn>}
       {variant === 'grid' ? (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginTop: 16 }} className="resp-stack">
           {shown.map(c => {
@@ -180,6 +208,15 @@ export function CountryPicker({ value, onChange, variant = 'grid' }) {
           })}
         </div>
       )}
+      {showSelected && <div className="interest-summary" role="region" aria-label="선택된 국가 목록">
+        <div className="between"><b>선택한 국가 {value.length}개</b>
+          {!!value.length && <Btn onClick={()=>onChange([])}>선택 국가 전체 삭제</Btn>}
+        </div>
+        {value.length ? <ul className="chips">{value.map(name=><li key={name}>
+          <button type="button" className="chip sm" aria-label={`${name} 선택 삭제`}
+            onClick={()=>onChange(value.filter(item=>item!==name))}>{name} ×</button>
+        </li>)}</ul> : <p className="note">선택한 국가가 없습니다.</p>}
+      </div>}
     </>
   )
 }

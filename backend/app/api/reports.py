@@ -1,7 +1,8 @@
 import hashlib
 import json
+import re
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import select, update, delete
 from backend.app.api.common import require, unavailable, now, digest, period, percentage, clean, page_info, shift_month, month_end
 from backend.app.api import trade, news, jobs
@@ -16,6 +17,32 @@ def display_title(record):
     labels={'RPT_ON_DEMAND':'요청형','RPT_WEEKLY':'주간','RPT_MONTHLY':'월간','RPT_QUARTERLY':'분기'}
     p=record['conditions_json'].get('period',{})
     return f"{labels.get(record['report_type'],record['report_type'])} 리포트 · {p.get('start','')} ~ {p.get('end','')}"
+
+
+def download_filename(store,record,fmt):
+    """User-facing name only; storage IDs/paths and document contents stay intact."""
+    c=record['conditions_json'];codes=c.get('country_codes') or []
+    country=store.t('country')
+    names=dict(store.c.execute(select(country.c.country_code,country.c.name_ko)
+                               .where(country.c.country_code.in_(codes))).all()) if codes else {}
+    hs_names=report_hs_names(store,[record])
+    def joined(items,default):
+        return '-'.join(items[:3])+(f'-외{len(items)-3}개' if len(items)>3 else '') if items else default
+    def safe(value,limit=60):
+        value=re.sub(r'[\\/:*?"<>|\x00-\x1f]+','_',str(value))
+        value=re.sub(r'\s+','_',value).strip(' ._') or '전체'
+        return value.encode('utf-8')[:limit].decode('utf-8',errors='ignore').rstrip(' ._')
+    countries=joined((['한국전체'] if c.get('include_korea_total') else [])+[names.get(code,code) for code in codes],'전체국가')
+    products=joined([hs_names.get(h['hs_code'],'HS'+h['hs_code']) for h in c.get('hs_items',[])],'전체품목')
+    p=c.get('period') or {}
+    period_name=f"{p['start']}~{p['end']}" if p.get('start') and p.get('end') else '전체기간'
+    flow='수입' if c.get('trade_flow')=='IMPORT' else '수출'
+    metric={'AMOUNT':'액분석','GROWTH':'증감분석','SHARE':'비중분석','RANK':'순위분석'}.get(c.get('metric'),'분석')
+    topic=c.get('topic') or flow+metric
+    created=record.get('completed_at') or record['created_at']
+    if isinstance(created,str): created=datetime.fromisoformat(created.replace('Z','+00:00'))
+    local=created.replace(tzinfo=created.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9)))
+    return '_'.join(safe(v) for v in (countries,period_name,products,topic))+f'_리포트_{local:%Y%m%d_%H%M%S}.'+fmt
 
 
 def resolve_comparison(conditions, adjustments):
@@ -56,8 +83,9 @@ def preview(store,uid,data):
     else:
         conditions=data.get('conditions',{})
     require(bool(conditions),'분석 조건 또는 result_id가 필요합니다.')
-    from backend.app.api.schemas import Conditions
-    conditions=Conditions.model_validate(conditions).model_dump(mode='json')
+    from backend.app.api.schemas import ReportConditions
+    conditions=ReportConditions.model_validate(conditions).model_dump(mode='json')
+    if not conditions['include_korea_total']: conditions.pop('include_korea_total')
     require(conditions['trade_flow']=='EXPORT','리포트는 현재 수출 분석만 지원합니다.','UNSUPPORTED_TRADE_FLOW',422)
     validate_scope(store,conditions['hs_items'],conditions['country_codes'])
     p=conditions['period']; latest=trade.bounds(store)[-1]
@@ -129,7 +157,7 @@ def summary_view(store,r,names):
               if h.get('hs_ver','HS2022')=='HS2022' and h['hs_code'] in names}
     return {'report_id':str(r['report_id']),'report_type':r['report_type'],
         'subscription_id':str(r['subscription_id']) if r['subscription_id'] else None,
-        'title':display_title(r),'hs_names':hs_names,'conditions':{k:v for k,v in c.items() if k in ('hs_items','country_codes','period','compare_period','trade_flow','compare','metric','applied_defaults','expanded_regions')},
+        'title':display_title(r),'hs_names':hs_names,'conditions':{k:v for k,v in c.items() if k in ('hs_items','country_codes','include_korea_total','period','compare_period','trade_flow','compare','metric','applied_defaults','expanded_regions')},
         'status':r['status'],'created_at':r['created_at'],'completed_at':r['completed_at'],
         'available_formats':formats(store,r['report_id']) if r['status']=='READY' else []}
 
@@ -167,7 +195,18 @@ def article_sources(articles):
 def build_document(store,uid,record):
     c=record['conditions_json']; hs=c.get('hs_items',[]); countries=c.get('country_codes',[])
     p=c['period']
-    if record['report_type']=='RPT_WEEKLY':
+    # Korea's total already includes selected partners. Never sum overlapping scopes.
+    if c.get('include_korea_total'): countries=[]
+    source=(record.get('content_json') or {}).get('source_tables')
+    if source:
+        meta={'sources':[],'period':p,'warnings':[],'freshness':'FROZEN'}
+        sections=[section('SUMMARY','승인한 분석 결과표를 기준으로 작성했습니다.')]
+        kinds={'TREND':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES','PREDICTION':'GROWTH_RISK'}
+        for code in c['sections']:
+            tables=[table for table in source if kinds.get(table['kind'])==code]
+            sections.append(section(code,'승인한 분석 결과입니다.' if tables else '해당 분석 결과에 포함되지 않음',tables))
+        for ref in record['content_json']['source_results']: meta['warnings'].extend(ref['limitations'])
+    elif record['report_type']=='RPT_WEEKLY':
         meta=news.source_meta(store,'NEWS',date.fromisoformat(p['end']))
         articles=news.articles(store,uid,start=date.fromisoformat(p['start']),end=date.fromisoformat(p['end']),hs=hs,countries=countries,size=20)['items']
         meta['sources']=article_sources(articles)
@@ -198,6 +237,25 @@ def build_document(store,uid,record):
         text=f'분석 기간 수출액은 {total:,.2f} USD입니다. 수출 실적이 있는 국가는 {count}개국입니다. '
         if comparison!='NONE':
             text+=f'이전 비교 기간 대비 증감률은 {growth:,.2f}%입니다.' if growth is not None else '이전 비교 기간 증감률은 계산할 수 없습니다.'
+        if prev:
+            current_months=(end.year-start.year)*12+end.month-start.month+1
+            previous_start=date.fromisoformat(prev['start']).replace(day=1)
+            previous_end=date.fromisoformat(prev['end']).replace(day=1)
+            previous_months=(previous_end.year-previous_start.year)*12+previous_end.month-previous_start.month+1
+            if previous_months!=current_months:
+                verified={m for m in trade.verified_months(store,'export_summary') if previous_start<=m<=previous_end}
+                monthly=trade.aggregate(store,'export_summary',previous_start,previous_end,hs,countries,'MONTH')
+                subtotal=sum(r['amount_usd'] for r in monthly if r['trade_month'] in verified)
+                previous_avg=subtotal/len(verified) if verified else None
+                current_avg=total/current_months
+                kpi.update(monthly_avg_usd=current_avg,compare_monthly_avg_usd=previous_avg,
+                    monthly_avg_change_pct=percentage(current_avg,previous_avg),verified_months=current_months,
+                    requested_months=current_months,compare_verified_months=len(verified),compare_requested_months=previous_months)
+                avg_note=f'두 기간의 길이가 다릅니다. 조회 기간 월평균은 {current_avg:,.2f} USD({current_months}/{current_months}개월)입니다.'
+                avg_note+=(f' 비교 기간 월평균은 {previous_avg:,.2f} USD({len(verified)}/{previous_months}개월)입니다.'
+                           if previous_avg is not None else ' 비교 기간에 검증된 월이 없어 월평균은 미집계입니다.')
+                meta['monthly_average_note']=avg_note
+                text+=' '+avg_note
         sections=[section('SUMMARY',text)]
         selected=c.get('sections',list(TITLES)[1:5])
         if 'KPI' in selected:
@@ -210,6 +268,14 @@ def build_document(store,uid,record):
             trend=result_table(store,uid,monthly,meta,c,store.queries)
             block=section('KPI',text,[table,trend],kpi=clean(kpi))
             block['charts']=[{'chart_type':'LINE','result_id':trend['result_id'],'x_key':'month','series_keys':['amount_usd'],'title':'월별 수출 추이 (USD)','positive_color':'#16A34A','negative_color':'#DC2626'}]
+            if c.get('include_korea_total'):
+                from backend.app.services.report_scope_comparison import comparison_table
+                comparison_table_data=comparison_table(store,uid,c,start,end)
+                block['tables'].append(comparison_table_data)
+                block['charts'].append({'chart_type':'LINE','result_id':comparison_table_data['result_id'],
+                    'x_key':'month','series_keys':[col['key'] for col in comparison_table_data['columns'] if col['key']!='month'],
+                    'title':'한국 전체와 교역 상대국 수출액 비교 (USD)'})
+                block['text']+=' 한국 전체는 상대국별 수출액을 포함하므로 비교 대상 간 금액을 합산하지 않습니다.'
             sections.append(block)
         if 'TOP_COUNTRIES' in selected:
             names={r['country_code']:r['name_ko'] for r in store.rows(select(store.t('country')))}
@@ -234,7 +300,7 @@ def generate(store,job,settings):
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
-    if record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
+    if not (record.get('content_json') or {}).get('source_tables') and record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
         from backend.app.services.report_context import build_context
         doc['template_pdf']={'version':1,'report_type':record['report_type'],
                              'context':build_context(store,uid,record,doc)}

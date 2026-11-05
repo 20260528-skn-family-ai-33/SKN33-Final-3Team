@@ -5,12 +5,13 @@ import { useApp } from '../../store'
 import { Band } from '../../components/layout'
 import { Btn } from '../../components/ui'
 import { LineChart } from '../../components/charts'
+import ApiResults from '../../components/ApiResults'
 import { niceTicks } from '../../utils/chart'
 import { countryName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { api } from '../../api/client'
-import { amount, percent, mapReport, mapArticle, reportComparison } from '../../api/adapters'
+import { amount, percent, mapReport, mapArticle, reportComparison, kstDateTimeText } from '../../api/adapters'
 
 const range = (from, to) => from && to ? `${from} ~ ${to}` : '—'
 
@@ -71,10 +72,13 @@ export default function ReportView({ route }) {
   const kpi = byCode.KPI?.kpi || {}
   const comparison = reportComparison(c, kpi)
   const monthly = byCode.KPI?.tables?.find(t => t.columns.some(col => col.key === 'month'))?.rows || []
+  const scopeComparison=byCode.KPI?.tables?.find(t=>t.meta?.kind==='REPORT_SCOPE_COMPARISON')
+  const scopeSeries=scopeComparison?.columns.filter(col=>col.key!=='month')||[]
+  const scopeColors=['#C8102E','#2E6DB4','#16877C','#8E5BB5','#E07B24']
   const countryRows = byCode.TOP_COUNTRIES?.tables?.[0]?.rows || []
   const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
   const o = {
-    country: (c.country_codes || []).map(countryName).join(' · '), product: (c.hs_items || []).map(h => h.hs_code).join(', '),
+    country: [...(c.include_korea_total?['한국(대한민국) 전체']:[]),...(c.country_codes || []).map(countryName)].join(' · '), product: (c.hs_items || []).map(h => h.hs_code).join(', '),
     from: c.period?.start, to: c.period?.end, compareFrom: c.compare_period?.start, compareTo: c.compare_period?.end,
     sections: Object.keys(sectionCodes).filter(label => byCode[sectionCodes[label]]),
   }
@@ -111,7 +115,7 @@ export default function ReportView({ route }) {
               <h1 style={{ fontSize: 34, fontWeight: 800, marginTop: 10 }}>{report.title}</h1>
               <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{o.sections.length === 4 ? '전체 항목 선택' : `${o.sections.length}개 항목 선택`} · {o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
               <div style={{ display: 'flex', gap: 24, marginTop: 18, fontSize: 14, color: '#fff' }}>
-                <span>분석 {range(o.from, o.to)}</span><span>비교 {range(o.compareFrom, o.compareTo)}</span><span>생성일 {report.created}</span>
+                <span>분석 {range(o.from, o.to)}</span><span>비교 {range(o.compareFrom, o.compareTo)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
               </div>
               <div style={{ position: 'absolute', right: 48, top: 36, width: 110, height: 6, background: '#C8102E' }} />
             </div>
@@ -161,6 +165,13 @@ export default function ReportView({ route }) {
                 </Section>
               )}
 
+              {scopeComparison && <Section no={no++} title="한국 전체 · 교역 상대국 비교">
+                <p className="note">한국 전체에는 개별 상대국 수출액이 포함되므로 비교 대상 간 금액을 합산하지 않습니다. 단위: 억 USD</p>
+                <div className="chips">{scopeSeries.map((s,i)=><span key={s.key} style={{color:scopeColors[i%scopeColors.length]}}>● {s.label}</span>)}</div>
+                <LineChart labels={scopeComparison.rows.map(r=>r.month)} yTicks={niceTicks(scopeComparison.rows.flatMap(r=>scopeSeries.map(s=>r[s.key]/1e8)))}
+                  series={scopeSeries.map((s,i)=>({color:scopeColors[i%scopeColors.length],values:scopeComparison.rows.map(r=>r[s.key]/1e8)}))}/>
+                <ApiResults table={scopeComparison} tableOnly/>
+              </Section>}
               {has('주요 수출국') && (
                 <Section no={no++} title="주요 수출국" action={<Btn kind="lav" className="no-print" onClick={() => setTable(t => ({ ...t, countries: !t.countries }))}>{table.countries ? '막대로 보기' : '표로 보기'}</Btn>}>
                   <div className="th" style={{ gridTemplateColumns: '1fr 2fr 1fr 1fr' }}><span>국가</span><span>수출액</span><span className="r">비중</span><span className="r">전년 대비</span></div>

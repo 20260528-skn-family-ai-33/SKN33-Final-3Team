@@ -48,13 +48,42 @@ export async function api(path, { method = 'GET', body, query, signal, idempoten
     throw new ApiError(response, payload)
   }
   if (response.status === 204) return null
+  if (blob === 'download') return response
   if (blob) return response.blob()
   return response.json()
 }
-export async function download(path, filename) {
-  const data = await api(path, { blob: true })
+export async function download(path, filename, options = {}) {
+  const response = await api(path, { ...options, blob: 'download' })
+  if (!filename) {
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get('Content-Disposition') || '')?.[1]
+    filename = encoded ? decodeURIComponent(encoded) : '분석결과.xlsx'
+  }
+  const data = await response.blob()
   const url = URL.createObjectURL(data)
   const a = document.createElement('a'); a.href = url; a.download = filename
   document.body.appendChild(a); a.click(); a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+export async function streamAnswer(jobId,onText,signal) {
+  const response=await api(`/chat/jobs/${jobId}/answer-stream`,{blob:'download',signal})
+  const reader=response.body.getReader(),decoder=new TextDecoder()
+  let buffer='',text='',doneEvent=false
+  try {
+    while(true){
+      const {value,done}=await reader.read()
+      buffer+=decoder.decode(value,{stream:!done}).replace(/\r\n/g,'\n')
+      let end
+      while((end=buffer.indexOf('\n\n'))>=0){
+        const event=buffer.slice(0,end);buffer=buffer.slice(end+2)
+        const type=event.split('\n').find(l=>l.startsWith('event:'))?.slice(6).trim()
+        const data=event.split('\n').filter(l=>l.startsWith('data:')).map(l=>l.slice(5).trim()).join('\n')
+        if(type==='delta'){text+=JSON.parse(data).text;onText(text)}
+        if(type==='done')doneEvent=true
+      }
+      if(done)break
+    }
+    if(!doneEvent)throw new Error('답변 스트림이 중단되었습니다.')
+    return text
+  } finally {reader.releaseLock()}
 }

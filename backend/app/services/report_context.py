@@ -103,7 +103,19 @@ def build_context(store, uid, record, document):
         else:
             for item in context['conditions']['hs_items']:
                 item['display'] = f"{item['name']} · HS {item['hs_code']}"
-        populate(store, saved, context, names, start, end)
+        populate(store, {**saved,'country_codes':[]} if saved.get('include_korea_total') else saved, context, names, start, end)
+        if saved.get('include_korea_total'):
+            context['conditions']['countries'].insert(0,{'country_code':'__KOREA_TOTAL__','name':'한국(대한민국) 전체'})
+            table=next((t for section in document['sections'] for t in section.get('tables',[])
+                        if t.get('meta',{}).get('kind')=='REPORT_SCOPE_COMPARISON'),None)
+            if table:
+                columns=[col for col in table['columns'] if col['key']!='month']
+                context['scope_comparison']={'labels':[r['month'] for r in table['rows']],
+                    'series':[{'name':col['label'],'values':[r[col['key']] for r in table['rows']]} for col in columns],
+                    'rows':[{'month':r['month'],'name':col['label'],'amount_usd':r[col['key']]}
+                            for r in table['rows'] for col in columns]}
+        if note := document.get('meta',{}).get('monthly_average_note'):
+            context['summary']['monthly_average_note']=note
     elif kind == 'RPT_WEEKLY':
         _weekly(store, uid, saved, context, names, start, end)
     else:

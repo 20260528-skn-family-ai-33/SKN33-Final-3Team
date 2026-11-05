@@ -17,6 +17,21 @@ from backend.app.api import jobs
 
 
 class BackendApiTest(unittest.TestCase):
+    def test_worker_claims_jobs_when_report_wait_scan_fails(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        engine = MagicMock()
+        scan, claim = MagicMock(), MagicMock()
+        engine.begin.side_effect = [scan, claim]
+        database = SimpleNamespace(engine=engine)
+        with patch('backend.app.agents.report.wake_ready', side_effect=ConnectionError), \
+             patch('backend.app.api.worker.jobs.claim', return_value=None) as claim_job, \
+             self.assertLogs('backend.app.api.worker', level='WARNING'):
+            self.assertFalse(run_once(database, {'API_CHAT_AGENT_ENABLED':'false'}))
+        self.assertIs(scan.__exit__.call_args.args[0], ConnectionError)
+        self.assertIs(claim_job.call_args.args[0].c, claim.__enter__.return_value)
+
     def setUp(self):
         Path('tmp/backend_build').mkdir(parents=True,exist_ok=True)
         self.directory=tempfile.TemporaryDirectory(dir='tmp/backend_build',ignore_cleanup_errors=True)
@@ -115,17 +130,283 @@ class BackendApiTest(unittest.TestCase):
         rid=response.json()['job']['report_id']
         self.assertEqual(self.post('reports',body,**{'Idempotency-Key':'request-1'}).json()['job']['report_id'],rid)
         other={**body,'formats':['PDF']}; self.assertEqual(self.post('reports',other,**{'Idempotency-Key':'request-1'}).status_code,409)
+        with self.engine.connect() as connection:
+            store=Store(self.app.state.database,connection)
+            report=store.t('report')
+            record=store.one(select(report).where(report.c.report_id==rid))
+            self.assertEqual(jobs.report_execution(store,record)['version'],jobs.REPORT_QUEUE_VERSION)
+            legacy_ids=connection.execute(select(report.c.report_id).where(report.c.content_json[jobs.EXECUTION]['version'].as_integer()==1)).scalars().all()
+            self.assertNotIn(int(rid),legacy_ids)
         self.assertTrue(run_once(self.app.state.database,self.settings))
+        with self.engine.connect() as connection:
+            store=Store(self.app.state.database,connection)
+            record=store.one(select(store.t('report')).where(store.t('report').c.report_id==rid))
+            self.assertEqual(jobs.report_execution(store,record)['worker']['report_protocol'],jobs.REPORT_QUEUE_VERSION)
         state=self.client.get(f'/api/v1/reports/{rid}/status'); self.assertEqual(state.json()['job']['status'],'READY',state.text)
         old=self.client.get(f'/api/v1/reports/{rid}').json()
         for fmt in ('pdf','docx','xlsx'):
             file=self.client.get(f'/api/v1/reports/{rid}/files/{fmt}'); self.assertEqual(file.status_code,200,file.text[:100] if fmt=='xlsx' else '')
             self.assertTrue(file.content.startswith(b'%PDF' if fmt=='pdf' else b'PK'))
+            from urllib.parse import unquote
+            filename=unquote(file.headers['content-disposition'])
+            self.assertIn('전체국가_2025-12-01~2025-12-31_',filename)
+            self.assertRegex(filename,r'_수출액분석_리포트_\d{8}_\d{6}\.'+fmt+r'$')
             Path('tmp/backend_build').mkdir(parents=True,exist_ok=True)
             Path(f'tmp/backend_build/report-test.{fmt}').write_bytes(file.content)
         with self.engine.begin() as c: c.execute(update(self.meta.tables['export_summary']).values(amount_usd=1))
         self.assertEqual(self.client.get(f'/api/v1/reports/{rid}').json(),old)
         with self.engine.connect() as c: self.assertEqual(len(c.execute(select(self.meta.tables['alert_event'])).all()),0)
+
+    def test_cancelled_job_cannot_be_claimed_and_session_accepts_next_question(self):
+        self.signup()
+        sid = self.post('chat/sessions', {}).json()['session']['session_id']
+        path = f'chat/sessions/{sid}/messages'
+        body = {'question': '미국 수출액', 'client_message_id': 'cancel-test'}
+        job = self.post(path, body).json()['job']['job_id']
+        response = self.post(f'chat/jobs/{job}/cancel', {})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['job']['status'], 'CANCELLED')
+        self.assertEqual(self.post(f'chat/jobs/{job}/cancel', {}).json()['code'], 'JOB_ALREADY_FINISHED')
+        self.assertFalse(run_once(self.app.state.database, self.settings))
+        self.assertEqual(self.post(path, {**body, 'client_message_id': 'next'}).status_code, 202)
+
+    def test_cancelling_queued_agent_job_deletes_checkpoint_after_commit(self):
+        from unittest.mock import Mock
+        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        self.signup()
+        db=self.app.state.database; db.agent_checkpointer=Mock()
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        job=self.post(f'chat/sessions/{sid}/messages',{'question':'미국 수출액','client_message_id':'cleanup'}).json()['job']['job_id']
+        def run_now(target,args,daemon):  # run the background cleanup inline so the test can observe it
+            return Mock(start=lambda:target(*args))
+        with patch('threading.Thread',side_effect=run_now):
+            response=self.post(f'chat/jobs/{job}/cancel',{})
+        self.assertEqual(response.json()['job']['status'],'CANCELLED')
+        db.agent_checkpointer.delete_thread.assert_called_once_with(str(job))
+
+    def test_legacy_worker_cannot_claim_agent_and_mixed_interest_resumes_same_job(self):
+        from backend.app.api import chat
+        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        uid=self.signup()
+        db=self.app.state.database
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        path=f'chat/sessions/{sid}/messages'
+        jid=self.post(path,{'question':'수출 추이를 알려줘','client_message_id':'mixed'}).json()['job']['job_id']
+        with self.engine.begin() as conn:
+            store=Store(db,conn)
+            m=store.t('chat_message')
+            state=m.c.result_json[jobs.EXECUTION]
+            # Same protocol discriminator as main's worker, including expired lease recovery.
+            v1_candidate=select(m.c.message_id).where(m.c.message_id==jid,state['version'].as_integer()==1)
+            self.assertIsNone(conn.scalar(v1_candidate))
+            old=jobs.owned_job(store,uid,jid)
+            old['version']=1  # admission before the protocol fix
+            jobs._save_chat(store,old)
+            self.assertIsNotNone(conn.scalar(v1_candidate))
+            claimed=jobs.claim(store)
+            with patch.object(chat,'interests',return_value={'country_codes':['US'],'hs_items':[]}):
+                waiting=chat.execute(store,claimed)
+            self.assertEqual(waiting['clarification']['type'],'INTEREST_CONFIRM')
+            jobs.finish(store,claimed,waiting)  # unmodified legacy finish defaults to SUCCEEDED
+        url=f'chat/jobs/{jid}/clarifications'
+        body={'clarification_id':waiting['clarification']['clarification_id'],'choice_ids':['GLOBAL']}
+        self.assertEqual(self.post(url,{**body,'clarification_id':'stale'}).status_code,409)
+        accepted=self.post(url,body)
+        self.assertEqual(accepted.status_code,202,accepted.text)
+        self.assertEqual(accepted.json()['job']['job_id'],jid)
+        with self.engine.connect() as conn: self.assertIsNone(conn.scalar(v1_candidate))
+        self.assertTrue(run_once(db,self.settings))
+        done=self.post(url,body).json()['job']
+        self.assertEqual(done['status'],'SUCCEEDED',done)
+        self.assertTrue(done['answer']['tables'])
+        self.assertEqual(done['answer']['conditions']['country_codes'],[])
+        self.assertEqual(self.post(url,{**body,'choice_ids':['APPLY']}).status_code,409)
+
+    def _run_numeric_review(self, correction):
+        from langgraph.checkpoint.memory import InMemorySaver
+        from backend.app.agents.state import PlannerOutput, Draft
+        from unittest.mock import Mock
+        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        database=self.app.state.database
+        database.agent_checkpointer=InMemorySaver()
+        database.agent_client=Mock()
+        wrong='수출액은 98765432198765 USD입니다.'
+        intro='수출 통계를 조회했습니다.'
+        original=Draft(conclusion=[{'task_id':'t1','sentences':[intro]}],explanation=[wrong],turn_summary='')
+        revised=Draft(conclusion=[{'task_id':'t1','sentences':[wrong]}],turn_summary='')
+        database.agent_client.parse.side_effect=[
+            PlannerOutput(tasks=[{'intent':'STATISTICS','question':'수출 통계','slots':{'recent_months':3}}]),
+            original, revised if correction else ValueError('invalid draft')]
+        self.signup()
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        jid=self.post(f'chat/sessions/{sid}/messages',{'question':'수출 통계','client_message_id':'numeric-review'}).json()['job']['job_id']
+        run_once(database,self.settings)
+        job=self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
+        self.assertEqual(job['status'],'SUCCEEDED',job)
+        answer=job['answer']
+        self.assertIn(wrong,answer['text'])
+        verification=answer['verification']
+        self.assertEqual((verification['status'],verification['regeneration_count']),('NEEDS_REVIEW',1))
+        self.assertEqual([(c['index'],c['sentence']) for c in verification['sentence_checks'] if c['status']=='MISMATCH'],
+                         [(0 if correction else 1,wrong)])
+        if not correction: self.assertEqual(verification['sentence_checks'][0]['status'],'PASS')
+        self.assertEqual(database.agent_client.parse.call_count,3)  # planner, draft, one correction
+
+    def test_failed_numeric_correction_keeps_original_marked_sentence(self):
+        self._run_numeric_review(False)
+
+    def test_reverified_shorter_draft_marks_only_final_sentence_index(self):
+        self._run_numeric_review(True)
+
+    def test_agent_worker_resumes_then_publishes_ranked_table(self):
+        from langgraph.checkpoint.memory import InMemorySaver
+        from backend.app.agents.state import Draft, PlannerOutput
+        from unittest.mock import Mock
+        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        db=self.app.state.database
+        db.agent_checkpointer=InMemorySaver()
+        db.agent_client=Mock()
+        db.agent_client.parse.side_effect=[PlannerOutput(tasks=[{'intent':'RANKING','question':'수출 순위',
+            'slots':{'recent_months':3}}]), Draft(conclusion=[{'task_id':'t1','sentences':['중국이 1위입니다.']}],
+                                                   turn_summary='중국이 1위입니다.',title='수출 순위')]
+        self.signup()
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        path=f'chat/sessions/{sid}/messages'
+        response=self.post(path,{'question':'수출 순위','client_message_id':'agent-start'})
+        self.assertEqual(response.status_code,202,response.text)
+        jid=response.json()['job']['job_id']
+        self.assertTrue(run_once(db,self.settings))
+        def poll(): return self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
+        waiting=poll()
+        self.assertEqual(waiting['status'],'NEEDS_INPUT',waiting)
+        plan=waiting['progress']['plan']
+        self.assertEqual([s['id'] for s in plan],['t1.check','t1.sql','t1.chart','answer'])
+        self.assertEqual(plan[0]['status'],'WAITING')
+        self.assertEqual((waiting['progress']['done'],waiting['progress']['total']),(0,4))
+        body={'clarification_id':waiting['clarification']['clarification_id'],'choice_ids':['COUNTRY']}
+        answer=self.post(f'chat/jobs/{jid}/clarifications',body)
+        self.assertEqual(answer.status_code,202,answer.text)
+        self.assertEqual(answer.json()['job']['progress']['total'],4)
+        self.assertEqual(self.post(f'chat/jobs/{jid}/clarifications',body).json()['job']['status'],'QUEUED')
+        self.assertTrue(run_once(db,self.settings))
+        done=poll()
+        self.assertEqual(done['progress']['done'],done['progress']['total'])
+        self.assertTrue(all(s['status']=='DONE' for s in done['progress']['plan']))
+        self.assertEqual(done['status'],'SUCCEEDED',done)
+        self.assertEqual(done['answer']['answer_status'],'ANSWERED')
+        self.assertEqual(done['answer']['tables'][0]['rows'][0]['country_code'],'CN')
+        table=done['answer']['tables'][0]
+        self.assertNotIn('hs_item',[c['key'] for c in table['columns']])
+        messages=self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['items']
+        history=next(m['job'] for m in messages if m.get('job'))['clarification_history']
+        self.assertEqual([(h['message'],h['answer']) for h in history],[(waiting['clarification']['message'],'국가별')])
+        exported=self.client.get(f"/api/v1/results/{table['result_id']}/file")
+        self.assertEqual(exported.status_code,200)
+        from urllib.parse import unquote
+        from openpyxl import load_workbook
+        self.assertRegex(unquote(exported.headers['content-disposition']),r'2025-10~2025-12_전체국가_수출_\d{8}_\d{6}\.xlsx$')
+        wb=load_workbook(io.BytesIO(exported.content),read_only=True)
+        self.assertNotIn('품목',next(wb['결과표1'].values))
+        wb.close()
+        self.assertEqual(done['answer']['charts'][0]['labels'][0],'중국')
+        self.assertEqual(done['answer']['verification']['status'],'PASS')
+        self.assertIsNone(db.redis.chat_active(sid))
+
+    def test_agent_report_needs_explicit_approval_and_ready_before_completion(self):
+        from langgraph.checkpoint.memory import InMemorySaver
+        from backend.app.agents.state import PlannerOutput
+        from unittest.mock import Mock
+        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        db=self.app.state.database
+        db.agent_checkpointer=InMemorySaver()
+        db.agent_client=Mock()
+        db.agent_client.parse.return_value=PlannerOutput(tasks=[{'intent':'REPORT','question':'수출 리포트 생성'}])
+        self.signup()
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        response=self.post(f'chat/sessions/{sid}/messages',{'question':'수출 리포트 생성','client_message_id':'report'})
+        jid=response.json()['job']['job_id']
+        def poll(): return self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
+        self.assertTrue(run_once(db,self.settings))
+        waiting=poll(); self.assertEqual(waiting['status'],'NEEDS_INPUT',waiting)
+        prompt=waiting['clarification']; cid=prompt['clarification_id']
+        self.assertTrue(prompt['allow_text']); self.assertIn('expires_at',prompt)  # 화면의 만료 시각 표시(API-37)
+        # 되묻기 대기 중인 작업도 접수 때 고정한 조건으로 답하고 그 조건을 다시 저장하므로 조건 초기화(API-39)를 막는다.
+        cleared=self.client.delete(f'/api/v1/chat/sessions/{sid}/context',headers={'X-CSRF-Token':self.csrf})
+        self.assertEqual((cleared.status_code,cleared.json()['code']),(409,'JOB_IN_PROGRESS'))
+        url=f'chat/jobs/{jid}/clarifications'
+        self.assertEqual(self.post(url,{'clarification_id':cid,'text':'네'}).json()['job']['status'],'NEEDS_INPUT')
+        # 입력창으로 보낸 '네'는 승인이 아니지만 메시지 키는 남는다. 다른 탭에서 확인을 마친 뒤 같은 메시지를
+        # 재시도해도 새 작업이나 다른 되묻기의 답이 되지 않고 이 작업을 돌려준다.
+        yes={'question':'네','client_message_id':'yes-reply'}
+        self.assertEqual(self.post(f'chat/sessions/{sid}/messages',yes).json()['job']['status'],'NEEDS_INPUT')
+        confirmation={'preview_id':prompt['report_preview']['preview_id'],'confirm':True,'formats':['DOCX']}
+        self.assertEqual(self.post(url,{'clarification_id':cid,'report_confirmation':confirmation}).status_code,202)
+        self.assertTrue(run_once(db,self.settings))
+        self.assertEqual(poll()['status'],'WAITING_REPORT')
+        retried=self.post(f'chat/sessions/{sid}/messages',yes)
+        self.assertEqual((retried.status_code,retried.json()['job']['job_id']),(202,jid),retried.json())
+        self.settings.values['API_CHAT_AGENT_ENABLED']='false'
+        # File generation has its own worker tests. Simulate its durable completion signal.
+        with self.engine.begin() as connection:
+            table=self.meta.tables['report']
+            rid=connection.scalar(select(table.c.report_id))
+            connection.execute(update(table).where(table.c.report_id==rid).values(status='READY'))
+        self.assertTrue(run_once(db,self.settings))
+        done=poll(); self.assertEqual(done['status'],'SUCCEEDED',done)
+        self.assertEqual(done['answer']['report_id'],str(rid))
+        self.assertEqual(db.agent_client.parse.call_count,1)
+
+    def test_agent_report_uses_approved_result_after_source_expires(self):
+        from langgraph.checkpoint.memory import InMemorySaver
+        from backend.app.agents.state import PlannerOutput
+        from backend.app.api import reports
+        from unittest.mock import Mock
+        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        db=self.app.state.database; db.agent_checkpointer=InMemorySaver(); db.agent_client=Mock()
+        db.agent_client.parse.return_value=PlannerOutput(tasks=[{'intent':'STATISTICS','question':'수출액 조회'},
+            {'intent':'REPORT','question':'조회 결과로 리포트','source_tasks':[1]}])
+        uid=self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        response=self.post(f'chat/sessions/{sid}/messages',{'question':'수출액 조회 후 리포트','client_message_id':'freeze'})
+        jid=response.json()['job']['job_id']; run_once(db,self.settings)
+        job=self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
+        self.assertEqual(job['status'],'NEEDS_INPUT',job)
+        prompt=job['clarification']; preview=prompt['report_preview']; source=preview['source_results'][0]['result_id']
+        with self.engine.begin() as conn:
+            snapshot=self.meta.tables['api_snapshot']
+            conn.execute(update(snapshot).where(snapshot.c.snapshot_id==source).values(expires_at=now()-timedelta(hours=1)))
+        accepted=self.post(f'chat/jobs/{jid}/clarifications',{'clarification_id':prompt['clarification_id'],
+            'report_confirmation':{'confirm':True,'formats':['PDF'],'preview_id':preview['preview_id']}})
+        self.assertEqual(accepted.status_code,202,accepted.text)
+        run_once(db,self.settings)
+        job=self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
+        self.assertEqual(job['status'],'WAITING_REPORT',job)
+        with self.engine.begin() as conn:
+            store=Store(db,conn); record=store.one(select(store.t('report')))
+            with patch('backend.app.api.trade.aggregate',side_effect=AssertionError('unexpected requery')):
+                document=reports.build_document(store,uid,record)
+        self.assertEqual(document['sections'][1]['tables'][0]['result_id'],source)
+        self.assertIn('포함되지 않음',document['sections'][-1]['text'])
+
+    def test_agent_expired_clarification_unblocks_session_and_old_id_cannot_resume(self):
+        from langgraph.checkpoint.memory import InMemorySaver
+        from backend.app.agents.state import PlannerOutput
+        from unittest.mock import Mock
+        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        db=self.app.state.database; db.agent_checkpointer=InMemorySaver(); db.agent_client=Mock()
+        db.agent_client.parse.return_value=PlannerOutput(tasks=[{'intent':'RANKING','question':'순위'}])
+        self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        path=f'chat/sessions/{sid}/messages'
+        jid=self.post(path,{'question':'순위','client_message_id':'old'}).json()['job']['job_id']
+        run_once(db,self.settings)
+        pending=self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']['clarification']
+        db.agent_checkpointer.delete_thread(jid)
+        response=self.post(f'chat/jobs/{jid}/clarifications',{'clarification_id':pending['clarification_id'],'text':'국가'})
+        self.assertEqual(response.status_code,409,response.text)
+        self.assertEqual(response.json()['code'],'CLARIFICATION_EXPIRED')
+        self.assertEqual(self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']['status'],'EXPIRED')
+        fresh=self.post(path,{'question':'다음 질문','client_message_id':'new'})
+        self.assertEqual(fresh.status_code,202,fresh.text)
+        self.assertNotEqual(fresh.json()['job']['job_id'],jid)
 
     def test_chat_idempotency_ownership_and_worker(self):
         self.signup()
@@ -301,7 +582,12 @@ class BackendApiTest(unittest.TestCase):
             self.assertNotEqual(result['match_type'],'EXACT')
             c.execute(table.insert().values(hs_code='8542',depth=4,name_ko='전자 집적 회로',hs_ver='HS2022',source_edition='test'))
             self.assertIn('8542',[r['hs_code'] for r in chat_hs_search(store,'집적회로')['items']])
-        self.assertEqual(self.client.get(url,params={'q':'집적회로','depth':4}).json()['items'],[])
+        # HS4 이름은 띄어쓰기를 합쳐 맞추지 않지만, 하위 HS6 이름에 있는 말이면 부모 HS4를 후보로 낸다
+        for query in ('집적회로','메모리'):
+            found=self.client.get(url,params={'q':query,'depth':4}).json()
+            self.assertEqual([r['hs_code'] for r in found['items']],['8542'])
+            self.assertEqual(found['match_type'],'SIMILAR')
+        self.assertEqual(self.client.get(url,params={'q':'없는품목','depth':4}).json()['items'],[])
 
     def test_cancel_legacy_duplicates_and_resubscribe(self):
         uid=int(self.signup())
@@ -581,6 +867,21 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.post('analysis/promising-markets',{'conditions':conditions}).status_code,422)
         self.assertEqual(self.post('analysis/market-patterns',{'conditions':conditions}).status_code,422)
 
+    def test_report_preview_accepts_korea_option_through_http_validation(self):
+        self.signup()
+        for selected in (True,False):
+            response=self.post('reports/preview',{'conditions':{
+                'period':{'start':'2025-01-01','end':'2025-03-31'},'compare':'NONE',
+                'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],
+                'country_codes':['US','CN'],'include_korea_total':selected}})
+            self.assertEqual(response.status_code,200,response.text)
+            conditions=response.json()['conditions']
+            self.assertEqual(bool(conditions.get('include_korea_total')),selected)
+            self.assertEqual(conditions['country_codes'],['US','CN'])
+        rejected=self.post('reports/preview',{'conditions':{
+            'period':{'start':'2025-01-01','end':'2025-03-31'},'unknown_option':True}})
+        self.assertEqual(rejected.status_code,400)
+
     def test_chat_delete_cleans_results_and_blocks_job_read(self):
         self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
         jid=self.post(f'chat/sessions/{sid}/messages',{'question':'2025년 12월 전체 품목 수출 추이','client_message_id':'del-1'}).json()['job']['job_id']
@@ -793,19 +1094,32 @@ class BackendApiTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt): run_loop(self.app.state.database,self.settings)
         self.assertEqual(schedule.call_count,1); self.assertEqual(run.call_count,2)
 
+    def test_context_clear_waits_for_running_answer(self):
+        self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':'clear-race'})
+        url=f'/api/v1/chat/sessions/{sid}/context'; headers={'X-CSRF-Token':self.csrf}
+        busy=self.client.delete(url,headers=headers)
+        self.assertEqual((busy.status_code,busy.json()['code']),(409,'JOB_IN_PROGRESS'))
+        self.assertTrue(run_once(self.app.state.database,self.settings))
+        self.assertEqual(self.client.delete(url,headers=headers).status_code,204)
+
     def test_worker_connection_failure_before_store_does_not_mask_error(self):
         from contextlib import contextmanager
         self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
         jid=self.post(f'chat/sessions/{sid}/messages',{'question':'전체 품목 수출','client_message_id':'db-failure'}).json()['job']['job_id']
-        original=self.engine.begin; count=0
+        from backend.app.api import jobs as job_queue
+        original=self.engine.begin; claim=job_queue.claim; claimed=[]
+        def claim_once(store):
+            job=claim(store); claimed.append(job); return job
         @contextmanager
         def flaky():
-            nonlocal count
-            count+=1
-            if count==2: raise OSError('temporary connection failure')
+            # 작업을 받은 뒤 첫 연결(실행 시작)만 실패시킨다. 그 앞의 연결 수(리포트 대기 검사 등)와 무관하다.
+            if claimed and claimed[0] is not None and len(claimed)==1:
+                claimed.append('failed'); raise OSError('temporary connection failure')
             with original() as c: yield c
-        with patch.object(self.engine,'begin',side_effect=flaky):
+        with patch.object(self.engine,'begin',side_effect=flaky), patch.object(job_queue,'claim',side_effect=claim_once):
             self.assertTrue(run_once(self.app.state.database,self.settings))
+        self.assertEqual(claimed[-1],'failed')
         state=self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
         self.assertEqual(state['status'],'FAILED'); self.assertEqual(state['error']['code'],'JOB_FAILED')
 
@@ -947,9 +1261,15 @@ class BackendApiTest(unittest.TestCase):
             result=self.client.get('/api/v1/reference/hs-codes?q=스킨케어')
             self.assertEqual(result.status_code,200,result.text)
             self.assertEqual([x['hs_code'] for x in result.json()['items']],['3304'])
-        with patch('backend.app.api.hs_vectors.candidates',side_effect=RuntimeError('offline')):
+        with patch('backend.app.api.hs_vectors.candidates',side_effect=RuntimeError('offline')) as search:
+            # 품목 선택 검색은 등록명 부분 일치가 있으면 임베딩을 부르지 않는다. 부르지 않았으니 연결 경고도 없다.
             result=self.client.get('/api/v1/reference/hs-codes?q=화장')
             self.assertEqual(result.json()['items'][0]['hs_code'],'3304')
+            self.assertNotIn('warnings',result.json())
+            search.assert_not_called()
+            # 등록명에 없는 말만 임베딩으로 찾고, 그 연결이 실패하면 경고를 붙인다(위 '스킨케어'는 캐시에 남아 다른 말을 쓴다).
+            result=self.client.get('/api/v1/reference/hs-codes?q=보습크림')
+            self.assertEqual(result.status_code,200,result.text)
             self.assertTrue(result.json()['warnings'])
 
     def test_notification_sql_visibility_matches_article_and_array_rules(self):
@@ -995,5 +1315,74 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(jpy['quote_unit'],100); self.assertEqual(jpy['rate_krw'],891); self.assertEqual(jpy['change_pct'],-1)
         self.assertEqual(eur['availability'],'UNAVAILABLE'); self.assertIsNone(eur['rate_krw'])
 
+
+
+    def test_verified_answer_stream_requires_completion_and_ownership(self):
+        import json
+        uid=self.signup()
+        sid=self.post('chat/sessions',{}).json()['session']['session_id']
+        with self.engine.begin() as connection:
+            store=Store(self.app.state.database,connection)
+            job=jobs.enqueue(store,uid,'API_CHAT',sid,{'question':'q'},'stream-test')
+        path=f"/api/v1/chat/jobs/{job['job_id']}/answer-stream"
+        self.assertEqual(self.client.get(path).status_code,409)
+        with self.engine.begin() as connection:
+            store=Store(self.app.state.database,connection)
+            job.update(status='SUCCEEDED',result_json={'answer':{'text':'검증된 결과 123 USD입니다.'}})
+            jobs._save_chat(store,job)
+        response=self.client.get(path)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertIn('text/event-stream',response.headers['content-type'])
+        text=''.join(json.loads(block.split('data: ',1)[1])['text'] for block in response.text.split('\n\n') if block.startswith('event: delta'))
+        self.assertEqual(text,job['result_json']['answer']['text'])
+        self.assertIn('event: done',response.text)
+        self.signup('stream-other@example.org')
+        self.assertEqual(self.client.get(path).status_code,404)
+
+
+    def test_country_comparison_pivots_full_snapshots_and_exports_same_columns(self):
+        from backend.app.api.results import result_table
+        from backend.app.api.common import shift_month
+        from openpyxl import load_workbook
+        uid=self.signup();ids=[]
+        period={'start':'2024-01-01','end':'2026-01-31'}
+        with self.engine.begin() as connection:
+            store=Store(self.app.state.database,connection)
+            for code,name,count in [('CN','중국',25),('US','미국',24)]:
+                rows=[{'country_code':code,'country_name':name,'hs_code':'330499','hs_ver':'HS2022',
+                    'name':'화장품','month':shift_month(date(2024,1,1),i).strftime('%Y-%m'),
+                    'amount_usd':100+i if code=='CN' else i} for i in range(count)]
+                conditions={'period':period,'country_codes':[code],'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],
+                    'trade_flow':'EXPORT','metric':'AMOUNT'}
+                ids.append(result_table(store,uid,rows,{'kind':'TREND'},conditions)['result_id'])
+        body={'result_ids':ids}
+        response=self.post('results/comparison',body)
+        self.assertEqual(response.status_code,200,response.text)
+        table=response.json()['table']
+        self.assertEqual([c['label'] for c in table['columns']],['HS 코드','품목','기준월','중국 수출액','미국 수출액'])
+        self.assertEqual(table['total_rows'],25)  # Not the 20-row public preview.
+        self.assertEqual(table['rows'][0]['country_1_amount_usd'],0)
+        self.assertEqual(table['rows'][-1]['country_0_amount_usd'],124)
+        self.assertIsNone(table['rows'][-1]['country_1_amount_usd'])
+        exported=self.post('results/comparison',{**body,'format':'xlsx'})
+        self.assertEqual(exported.status_code,200)
+        wb=load_workbook(io.BytesIO(exported.content));sheet=wb['결과표1']
+        self.assertEqual([cell.value for cell in sheet[1]],[c['label']+(f" ({c['unit']})" if c.get('unit') else '') for c in table['columns']])
+        self.assertEqual(sheet.max_row,26)
+        with self.engine.begin() as connection:
+            store=Store(self.app.state.database,connection)
+            duplicate_conditions={**conditions,'compare_period':{'start':'2023-01-01','end':'2023-12-31'}}
+            duplicate=result_table(store,uid,rows,{'kind':'TREND'},duplicate_conditions)['result_id']
+        combined=self.post('results/comparison',{'result_ids':ids+[duplicate]})
+        self.assertEqual(combined.status_code,200,combined.text)
+        self.assertEqual(combined.json()['table']['rows'],table['rows'])
+        with self.engine.begin() as connection:
+            snapshot=self.meta.tables['api_snapshot']
+            record=connection.execute(select(snapshot).where(snapshot.c.snapshot_id==ids[1])).mappings().one()
+            payload=dict(record['payload_json']);payload['conditions']={**payload['conditions'],'trade_flow':'IMPORT'}
+            connection.execute(update(snapshot).where(snapshot.c.snapshot_id==ids[1]).values(payload_json=payload))
+        self.assertEqual(self.post('results/comparison',body).status_code,400)
+        self.signup('comparison-other@example.org')
+        self.assertEqual(self.post('results/comparison',body).status_code,404)
 
 if __name__=='__main__': unittest.main()

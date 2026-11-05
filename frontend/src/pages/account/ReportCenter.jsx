@@ -6,6 +6,7 @@ import { Btn, Chip, Modal, Select, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
+import { kstDateTimeText } from '../../api/adapters'
 
 
 const TABS = ['weekly', 'monthly', 'chat', 'quarterly']
@@ -59,11 +60,25 @@ export default function ReportCenter({ route }) {
   }, [refreshReports, generating, fail])
   const tab = TABS.includes(route.query.get('tab')) ? route.query.get('tab') : 'chat'
   const confirm = route.query.get('confirm') === 'delete'
-  const [query, setQuery] = useState('')
   const [sort, setSort] = useState('new')
+  // 입력 중인 조건(draft)은 검색 버튼·Enter로 적용(applied)한다. 정렬은 바로 반영한다.
+  const EMPTY = { query: '', status: '', from: '', to: '' }
+  const [draft, setDraft] = useState(EMPTY)
+  const [applied, setApplied] = useState(EMPTY)
+  const edit = key => value => setDraft(d => ({ ...d, [key]: value }))
+  const invalidRange = draft.from && draft.to && draft.from > draft.to
+  const search = e => { e?.preventDefault(); if (!invalidRange) setApplied(draft) }
+  const reset = () => { setDraft(EMPTY); setApplied(EMPTY); setSort('new') }
+  const { query, status, from, to } = applied
   const target = `${productName(profile.products[0])} · ${profile.countries[0] || '전체 국가'}`
   const list = reports
     .filter(r => r.kind === tab && r.title.includes(query.trim()))
+    .filter(r => !status || r.status===status)
+    .filter(r => {
+      if(!from && !to)return true
+      const day=kstDateTimeText(r.created).slice(0,10)
+      return /^\d{4}-\d{2}-\d{2}$/.test(day) && (!from || day>=from) && (!to || day<=to)
+    })
     .sort((a, b) => (sort === 'title' ? a.title.localeCompare(b.title) : sort === 'old' ? a.created.localeCompare(b.created) : b.created.localeCompare(a.created)))
   const subscribed = tab !== 'chat' && subscription.cycles.includes(tab)
   const deleteCycle = tab === 'chat' ? null : tab
@@ -86,10 +101,27 @@ export default function ReportCenter({ route }) {
             {TABS.map(t => <Chip key={t} sm on={tab === t} to={`/account/reports?tab=${t}`}>{reportKinds[t].tab}</Chip>)}
           </div>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
-          <TextField sm style={{ flex: '1 1 200px' }} placeholder="리포트 제목 검색" icon="search" value={query} onChange={setQuery} aria-label="리포트 제목 검색" />
-          <Select sm style={{ width: 180 }} value={sort} onChange={setSort} options={SORTS} aria-label="정렬" />
-        </div>
+        <form onSubmit={search} noValidate>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
+            <TextField sm style={{ flex: '1 1 200px' }} placeholder="리포트 제목 검색" icon="search" value={draft.query} onChange={edit('query')} onEnter={search} aria-label="리포트 제목 검색" />
+            <Select sm style={{ width: 180 }} value={sort} onChange={setSort} options={SORTS} aria-label="정렬" />
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginTop: 12 }}>
+            <Select sm style={{ width: 160 }} value={draft.status} onChange={edit('status')} options={[
+              ['', '전체 상태'],['ready','생성 완료'],['generating','생성 중'],['delayed','생성 지연'],['failed','생성 실패']
+            ]} aria-label="리포트 상태 필터"/>
+            <div className={'input sm' + (draft.from || draft.to ? ' val' : '') + (invalidRange ? ' err' : '')} role="group" aria-label="생성일 기간(한국 시각)" style={{ gap: 6, flex: '1 1 300px' }}>
+              <input type="date" aria-label="생성일 시작" value={draft.from} max={draft.to || undefined} onChange={e => edit('from')(e.target.value)} style={{ minWidth: 0 }} />
+              <span>~</span>
+              <input type="date" aria-label="생성일 종료" value={draft.to} min={draft.from || undefined} onChange={e => edit('to')(e.target.value)} style={{ minWidth: 0 }} />
+              {/* 목록의 생성일이 한국 시각(ab6c0c8)이므로 필터도 같은 날짜로 거른다. 기기 시간대로 바꾸면 표시와 어긋난다 */}
+              <span className="note" aria-hidden="true">KST</span>
+            </div>
+            <Btn type="submit" kind="red" icon="search" disabled={invalidRange}>검색</Btn>
+            <Btn onClick={reset}>필터 초기화</Btn>
+          </div>
+        </form>
+        {invalidRange && <p className="field-err" role="alert">생성일 시작이 종료보다 늦습니다.</p>}
         <p style={{ fontSize: 16, fontWeight: 800, marginTop: 22 }}>{reportKinds[tab].tab} · <span style={{ color: 'var(--red)' }}>{list.length}건</span></p>
         <div className="col" style={{ gap: 10, marginTop: 12 }}>
           {list.map(r => <ReportItem key={r.id} report={r} />)}

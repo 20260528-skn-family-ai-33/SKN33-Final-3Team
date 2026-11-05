@@ -693,3 +693,19 @@ class MonthlyCLITest(unittest.TestCase):
                 self.assertEqual(exc.exception.code, 2)
                 self.assertIn("unrecognized arguments", stderr.getvalue())
                 run.assert_not_called()
+
+class MlRetryHookTest(unittest.TestCase):
+    def test_retry_hook_runs_after_recovery_and_never_raises(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from backend.app.scheduler.jobs import customs_monthly as M
+        hook = Mock(return_value={"model_name": "model_b_growth_202609_r2", "status": "SUCCESS"})
+        settings = {"CUSTOMS_ML_ENTRYPOINT": "backend.app.ml.candidate_models:run"}
+        with patch.object(M.importlib, "import_module", return_value=SimpleNamespace(retry_pending=hook)), \
+                patch.object(M, "make_engine") as engine, patch.object(M, "mysql_url", return_value="sqlite://"):
+            self.assertEqual(M.retry_ml(settings, "x.env", skip=["202610"])["status"], "SUCCESS")
+            hook.assert_called_once_with(engine=engine.return_value, skip={"202610"})
+            engine.return_value.dispose.assert_called_once()
+            hook.side_effect = MemoryError()
+            self.assertIsNone(M.retry_ml(settings, "x.env"))   # 실패해도 수출입 복구를 멈추지 않는다
+        self.assertIsNone(M.retry_ml({"CUSTOMS_ML_ENTRYPOINT": ""}, "x.env"))   # ML 단계를 켜지 않았으면 아무것도 하지 않는다

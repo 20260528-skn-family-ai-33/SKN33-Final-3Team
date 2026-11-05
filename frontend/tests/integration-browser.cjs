@@ -141,6 +141,8 @@ async function main() {
     await page.getByRole('button', { name: '리포트로 저장', exact: true }).click()
     await page.getByRole('button', { name: '리포트 조건 확인' }).click()
     await page.getByRole('button', { name: '확인한 조건으로 생성' }).click()
+    // 리포트 생성 뒤에는 채팅에 머문다. 완료되면 나오는 버튼으로 리포트 화면에 들어간다.
+    await page.getByRole('link', { name: '리포트 센터에서 이 리포트 열기' }).first().click({ timeout: 90000 })
     await page.waitForURL('**/#/report?id=*')
     await page.getByRole('button', { name: 'PDF', exact: true }).waitFor({ timeout: 90000 })
     const pdf = page.waitForEvent('download'); await page.getByRole('button', { name: 'PDF', exact: true }).click()

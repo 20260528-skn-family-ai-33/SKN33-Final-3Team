@@ -53,7 +53,7 @@
 - 총 130개 번호 중 삭제·예약 106~116은 경로를 만들지 않았다. 119개 경로를 등록했으며 90개는 처리 코드를, 29개는 명세의 보류·정책 미정·외부 실행기 미연결에 대한 명시적 오류 응답을 제공한다. 이것은 119개 기능 전체 완료를 뜻하지 않는다. 상세 상태는 [BACKEND_API_STATUS.md](BACKEND_API_STATUS.md)를 참조한다.
 - 인증·관심·통계·기사·UN 조회·결과 스냅샷·대화 작업·리포트·구독·알림 조회/전달·일부 관리자 기능을 구현했다. 로컬 통합 검증 후 RDS에는 승인된 스키마 변경만 적용한다. API/worker/Redis 서버 배포는 별도다.
 - 저장소는 PM 합의에 따라 기존 users/report/notification_setting 확장, api_snapshot/api_audit_event 신규, 인증 세션/요청 제한 Redis로 구현했다. 신규 테이블 2개와 기존 테이블 컬럼 11개를 명시적으로 적용한다. 036 SQL은 폐기된 제안이며 038 마이그레이션을 사용한다. 앱 시작/요청 시 자동 DDL은 없다.
-- 활성 `REPORT_PERIOD`, `REPORT_TYPE` 및 승인된 `NOTIFICATION_TERMS`는 운영/데이터 담당자가 준비한다. 없는 옵션이나 약관을 가짜 값으로 생성하지 않는다. API-09에서 지원 주기를 확인한다. 요청형은 `RPT_ON_DEMAND`, 구독형은 `RPT_WEEKLY`, `RPT_MONTHLY`, `RPT_QUARTERLY` 옵션이 필요하다.
+- 활성 `REPORT_PERIOD`, `REPORT_TYPE` 및 승인된 `NOTIFICATION_TERMS`는 운영/데이터 담당자가 준비한다. 없는 옵션이나 약관을 가짜 값으로 생성하지 않는다. API-09에서 지원 주기를 확인한다. 요청형은 `RPT_ON_DEMAND`, 구독형은 `RPT_WEEKLY`, `RPT_MONTHLY`, `RPT_QUARTERLY` 옵션이 필요하다. 기존 DB에 요청형 옵션이 없거나 비활성이면 [요청형 리포트 옵션 SQL](../db/mysql/migrations/20261102_report_service_option.sql)을 수동 적용한다.
 - ML 학습/예측, RAG 검색·생성·문장 검증은 담당자에게 남겼다. 기사 `summary`는 마스킹한 본문의 앞부분 발췌다. 채팅 의도는 `IntentProvider`의 기본 구현 `OpenAIIntentProvider`가 구조화된 JSON 슬롯으로 추출한다. 규칙 기반 의도/국가/기간 파서와 앞 세 단어 품목 탐색은 제거했다. 기본 모델은 `API_INTENT_MODEL=gpt-4.1-mini`이며 HS 임베딩 모델과 별개다.
 - `async_job`은 사용하지 않는다. 채팅 실행은 기존 chat_message.result_json, 리포트 실행은 report.content_json의 내부 `_execution` 필드에 저장한다. 이번 PR 검수 반영으로 로컬 실행 상태 파일 의존성을 제거했다. 신규 테이블·컬럼 없이 JSON 규약을 확장하며, 다른 기능의 api_ 저장소 보완안과는 별개다.
 
@@ -246,3 +246,25 @@ RDS에서 읽기 전용으로 연결/테이블 준비 상태/한글 HS 검색/�
 
 
 최신 실연동 검증은 INTEGRATION.md 명령과 INTEGRATION_REVIEW.md 결과를 참조한다. 아래 기존 기록의 프론트/로컬 MySQL 미검증 항목은 이번 통합 검증으로 보완한다.
+
+
+### Chromium 자동 준비 (2026-11-03)
+`python -m backend.app.api.worker`는 시작할 때 현재 Playwright 버전의 Chromium 실행 파일 존재를 확인하고, 없을 때만 동일 Python으로 `python -m playwright install chromium`을 실행한다. 일반 서버·워커 재시작에는 재다운로드하지 않는다. Playwright 업그레이드·새 사용자·새 컨테이너에서는 새 버전 설치가 필요할 수 있다. PDF는 이 실행 파일을 직접 사용한다. 네트워크가 없는 배포 환경은 이미지 빌드 단계에서 같은 설치 명령을 실행해 파일을 미리 포함한다.
+
+
+### 리포트 다운로드 파일명 (2026-11-03)
+리포트 XLSX·PDF·DOCX는 공통으로 `{국가명}_{시작일}~{종료일}_{품목명}_{분석내용}_리포트_{YYYYMMDD_hhmmss}.{확장자}`를 사용한다. 국가·품목을 생략하면 전체국가·전체품목이다. 등록명을 조회하고, 저장된 topic이 있으면 분석내용으로 쓰며 없으면 방향·지표로 수출액분석/수출증감분석/수출비중분석/수출순위분석 등을 표시한다. 여러 대상은 하이픈으로 연결하고 3개 초과는 외 N개로 줄인다. 긴 이름과 파일명 금지 문자를 정리한다. 서버 Content-Disposition의 UTF-8 이름을 프런트가 그대로 사용한다. 분석 결과표 단독 엑셀의 기존 파일명 정책은 별개다.
+
+PDF 변환 실패는 설치 누락만을 뜻하지 않는다. report_pdf_failed 로그의 stage(BROWSER_START/PAGE_SETUP/HTML_LOAD/FONT_LOAD/PDF_RENDER)와 원래 Playwright 예외를 확인한다. 사용자 오류 문구도 단계별로 구분한다. 브라우저 파일이 있고 최소 PDF가 성공해도 특정 워커의 일시적 실행 실패가 있을 수 있으며, 재설치보다 같은 실행 환경에서 실제 리포트 재현과 워커 로그를 먼저 확인한다. 이미 재시도 상한에 도달한 FAILED 리포트는 환경 수정만으로 자동 재실행되지 않는다.
+
+신규 리포트 실행 JSON은 report queue version=2로 등록한다. version=1만 조회하는 구형 워커가 최신 리포트를 가져가지 못하게 하며, 최신 워커는 기존 v1 및 실행 JSON 없는 과거 리포트도 복구할 수 있다. 처리 워커 host/pid/report_protocol은 내부 실행 JSON에 기록한다. 재시도 claim 시 이전 실패 오류를 지워 RUNNING 화면에 과거 오류가 계속 표시되지 않게 한다. PDF 오류 원인은 단계별 로그로 확인하며, 브라우저 재설치만으로 해결됐다고 간주하지 않는다.
+
+리포트 파일명의 생성 시각은 completed_at을 한국 시간(KST)으로 변환한 값이며, 완료 시각이 없는 과거 자료는 created_at을 사용한다. 다운로드 시각은 사용하지 않아 같은 리포트의 XLSX·PDF·DOCX 및 재다운로드 파일명이 일관된다.
+
+# 채팅 작업 실패 로그
+
+워커의 `agent_structured_failed` 로그는 job_id·node·error_type과 함께 `attempt=현재/최대`, schema, validation을 기록한다. validation은 실패한 모델 이름(model), 실패 필드 경로·오류 종류·고정 문구 검증 사유(`state.SafeError`)를 최대 10건, 전체 오류 개수와 생략 여부로 남긴다. 예: `tasks.0.slots` / `value_error` / `절대 기간과 최근 개월 수를 동시에 지정할 수 없습니다`. 질문·프롬프트·응답 원문·인증 정보·임의 예외 메시지는 남기지 않으며 알 수 없는 필드명은 `<unknown>`으로 표시한다. 이전 로그에서 누락된 상세는 소급 복구할 수 없다.
+
+# 채팅 컨텍스트 확인
+
+저장소 루트 PowerShell에서 `.venv\Scripts\python.exe -m backend.scripts.inspect_chat_context 20`을 실행하면 `.env` 설정을 사용하여 해당 세션의 Redis 키, 남은 TTL, 진행 중 작업 ID, 최근 조건과 최대 5턴을 읽기 전용으로 출력한다. `20`은 브라우저 개발자 도구 Network의 채팅 messages 요청에 표시되는 세션 ID로 바꾼다. 접속 비밀번호는 출력하지 않는다. 출력에는 대화 내용이 포함되므로 공유 시 주의한다. `context: null`은 캐시 없음, TTL -2는 키 없음, active_job_id null은 진행 중 잠금 없음이다. 빈 summary는 검증에서 제외될 수 있으며 질문·조건 이력과 구분한다.
