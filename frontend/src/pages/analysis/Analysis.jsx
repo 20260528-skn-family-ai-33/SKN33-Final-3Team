@@ -277,6 +277,9 @@ export default function Analysis({ route }) {
   const endRef = useRef(null), pending = useRef(null)
   const inputRef=useRef(null)
   const clarificationRequest=useRef(null), acceptedClarifications=useRef(new Set())
+  // 지금 보고 있는 채팅방. 응답이 오기 전에 방을 바꿨으면 그 응답으로 이 방의 작업 상태를 덮어쓰지 않는다
+  // (덮어쓰면 B방의 중단 버튼이 A방 작업을 취소한다).
+  const activeRef=useRef(activeId); activeRef.current=activeId
   const active = chats.find(c => c.id === activeId)
   useEffect(() => {
     let cancelled = false, timer
@@ -324,7 +327,9 @@ export default function Analysis({ route }) {
       if (!id) { const data = await api('/chat/sessions', { method: 'POST', body: {} }); id = data.session.session_id; setActiveId(id) }
       if (pending.current?.text !== input || pending.current?.sessionId !== id) pending.current = { text: input, sessionId: id, id: requestId() }
       const data = await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: { question: input, client_message_id: pending.current.id } })
-      setJob(data.job); setDraft(null); setInput(''); pending.current = null
+      pending.current = null
+      if (activeRef.current!==id) { await refreshChats(); return }   // 응답 전에 방을 옮겼으면 그 방의 작업을 덮어쓰지 않는다
+      setJob(data.job); setDraft(null); setInput('')
       setReadRevision(v => v + 1); await refreshChats()
     })
     setBusy(false)
@@ -357,13 +362,13 @@ export default function Analysis({ route }) {
     const id=job?.clarification?.clarification_id
     if (!id || clarificationRequest.current || acceptedClarifications.current.has(id)) return
     clarificationRequest.current=id
+    const room=activeId
     setBusy(true)
     try {
       const data = await run(() => api(`/chat/jobs/${job.job_id}/clarifications`, { method: 'POST', body: { clarification_id:id, ...body } }))
-      if (data?.job) {
-        if (data.job.status!=='NEEDS_INPUT' || data.job.clarification?.clarification_id!==id) acceptedClarifications.current.add(id)
-        setJob(data.job); setInput(''); setDraft(null)
-      }
+      if (data?.job && (data.job.status!=='NEEDS_INPUT' || data.job.clarification?.clarification_id!==id)) acceptedClarifications.current.add(id)
+      if (activeRef.current!==room) return   // 다른 방으로 옮겼다. 그 방의 작업·입력을 바꾸지 않는다
+      if (data?.job) { setJob(data.job); setInput(''); setDraft(null) }
       setReadRevision(v => v + 1)
     } finally { clarificationRequest.current=null; setBusy(false) }
   }

@@ -13,7 +13,7 @@ export function resultColumns(columns,rows,{ labelsOnly=false, meta }={}) {
       byKey.has('country_name') ? ['country_name', '국가'] : ['country_code', '국가 코드'],
       ['hs6', 'HS 코드'],
       [byKey.has('product_name') || meta.group_by === 'HS6' ? 'product_name' : 'name', '품목명'],
-      ['growth_pct', '예측 수출 증감률', '%'],
+      ['growth_outlook', '증감 예상'],   // 모델 B 방향. 모델 A 예측 증감률(growth_pct)은 순위용이라 보이지 않는다
       ['exp_12m', '최근 12개월 수출액', 'USD'], ['anchor', '예측 기준월'],
     ]
     return fields.filter(([key]) => byKey.has(key)).map(([key, label, unit]) => ({
