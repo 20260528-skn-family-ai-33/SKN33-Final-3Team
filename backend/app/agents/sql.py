@@ -2,6 +2,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 import math
+import re
 from functools import lru_cache
 
 import sqlglot
@@ -37,11 +38,20 @@ ONLY_FULL_GROUP_BY가 켜져 있습니다. SELECT·ORDER BY의 집계하지 않�
 (예: SELECT QUARTER(trade_month) AS quarter ... GROUP BY QUARTER(trade_month) ORDER BY QUARTER(trade_month)).
 export_*·import_* 테이블에는 총계·특수 코드 행이 섞여 있습니다. 금액을 집계할 때는 country와 country_code로 조인해
 country.country_role = 'COUNTRY'인 행만 쓰고, hs_ver는 conditions의 품목 판본(품목이 없으면 'HS2022') 하나로 제한합니다.
+conditions에 국가·품목이 있으면 수출입 표의 country_code·hs*_code를 그 값 리터럴로 직접 거르고 다른 국가·품목은 읽지 않습니다.
+수출입 표의 hs_ver·trade_month 조건은 JOIN ON이 아니라 각 SELECT의 WHERE에 AND로 겁니다.
+기간은 trade_month를 conditions 기간(비교 기간 포함) 안의 날짜로 BETWEEN 또는 >=·< 로 거릅니다.
+기간과 비교 기간이 떨어져 있으면 trade_month IN ('2024-03-01', '2025-03-01')처럼 월을 나열하거나 기간마다 따로 조회합니다.
+비중의 분모가 그 국가·기간 전체이면 분모 범위는 품목(또는 국가)으로 거르지 않아도 됩니다.
+share_basis=KOREA_TRADE_PARTNER는 한국의 같은 기간·수출입 전체(국가 조건이 있으면 그 국가 대상) 금액을 분모로 하는 비중입니다.
+비중 결과에는 분모 금액을 denominator_usd(USD) 열로 함께 반환합니다.
+ranking_group=HS6는 품목별로 묶습니다. 화장품 중 품목별 비중처럼 범위가 정해져 있으면 그 범위의 합계가 분모입니다.
 지원할 수 없는 계산은 지어내지 말고 unsupported에 이유를 적습니다.
 """
 
 
-def validate_sql(draft: SqlDraft) -> str:
+def validate_sql(draft: SqlDraft, conditions=None) -> str:
+    """conditions(state.Conditions)를 주면 생성 SQL이 확정한 국가·품목·기간만 읽는지도 검사한다(_check_conditions)."""
     if draft.unsupported:
         raise ValueError('Unsupported requests must not execute SQL')
     try:
@@ -73,6 +83,8 @@ def validate_sql(draft: SqlDraft) -> str:
                 if source.db or source.catalog or source.name.lower() not in ALLOWED_TABLES:
                     raise ValueError('허용 목록 밖의 테이블입니다.')
     _check_trade_filters(query)
+    if conditions is not None:
+        _check_conditions(query, conditions)
     expressions = query.selects
     if [e.alias_or_name for e in expressions] != [c.key for c in draft.columns]:
         raise ValueError('SQL 열 이름·순서와 columns가 다릅니다.')
@@ -95,12 +107,15 @@ def _conjuncts(select, alias=None):
             clauses.append(join.args.get('on'))
     found = []
     for clause in clauses:
-        node = clause.this if isinstance(clause, exp.Where) else clause
-        if node is None:
-            continue
-        node = node.unnest()
-        found.extend(part.unnest() for part in (node.flatten() if isinstance(node, exp.And) else [node]))
+        found.extend(_and_terms(clause.this if isinstance(clause, exp.Where) else clause))
     return found
+
+
+def _and_terms(node):
+    if node is None:
+        return []
+    node = node.unnest()
+    return [part.unnest() for part in (node.flatten() if isinstance(node, exp.And) else [node])]
 
 
 def _country_subquery(node):
@@ -212,6 +227,118 @@ def _check_trade_filters(query):
                                  "AND 조건으로 집계하세요.")
 
 
+HS_COLUMN = re.compile(r'hs\d*_code')
+
+
+def _literal_filter(node):
+    """(열, 연산, [리터럴 값]) — 열과 리터럴을 비교하는 조건이면. 아니면 None. 연산: eq·in·between·gte·gt·lte·lt·like."""
+    if isinstance(node, exp.Between):
+        low, high = node.args.get('low'), node.args.get('high')
+        if isinstance(node.this, exp.Column) and isinstance(low, exp.Literal) and isinstance(high, exp.Literal):
+            return node.this, 'between', [low.this, high.this]
+        return None
+    if isinstance(node, exp.In):
+        values = node.expressions
+        if isinstance(node.this, exp.Column) and values and all(isinstance(v, exp.Literal) for v in values):
+            return node.this, 'in', [v.this for v in values]
+        return None
+    ops = {exp.EQ: 'eq', exp.GTE: 'gte', exp.GT: 'gt', exp.LTE: 'lte', exp.LT: 'lt', exp.Like: 'like'}
+    flip = {'gte': 'lte', 'gt': 'lt', 'lte': 'gte', 'lt': 'gt'}
+    op = next((name for kind, name in ops.items() if type(node) is kind), None)
+    if op is None:
+        return None
+    left, right = node.this, node.expression
+    if isinstance(left, exp.Literal) and isinstance(right, exp.Column):
+        left, right, op = right, left, flip.get(op, op)
+    if isinstance(left, exp.Column) and isinstance(right, exp.Literal):
+        return left, op, [right.this]
+    return None
+
+
+def _month_number(day):
+    return day.year * 12 + day.month
+
+
+def _dates_within(filters, allowed):
+    """Compare actual first-of-month values selected by AND filters, not their endpoints alone."""
+    low = high = selected = None
+    for _, op, values in filters:
+        if op not in ('eq', 'in', 'between', 'gte', 'gt', 'lte', 'lt'):
+            continue
+        if not all(re.fullmatch(r'\d{4}-\d{2}-\d{2}', v) for v in values):
+            return False
+        try:
+            days = [date.fromisoformat(v) for v in values]
+        except ValueError:
+            return False
+        if op in ('eq', 'in'):
+            points = {_month_number(d) for d in days if d.day == 1}
+            selected = points if selected is None else selected & points
+        if op in ('between', 'gte', 'gt'):
+            start = _month_number(days[0]) + (days[0].day != 1 or op == 'gt')
+            low = start if low is None else max(low, start)
+        if op in ('between', 'lte', 'lt'):
+            end = _month_number(days[-1]) - (days[-1].day == 1 and op == 'lt')
+            high = end if high is None else min(high, end)
+    if selected is not None:
+        selected = {n for n in selected if (low is None or n >= low) and (high is None or n <= high)}
+        return bool(selected) and selected <= allowed
+    return (low is not None and high is not None and 0 <= high-low < len(allowed)
+            and all(n in allowed for n in range(low, high+1)))
+
+
+def _check_conditions(query, conditions):
+    """생성 SQL이 확정 조건과 다른 데이터를 읽지 않게 한다. 결과에는 확정 조건이 붙기 때문이다.
+
+    - 국가·HS 코드를 리터럴로 거르는 곳(WHERE·CASE 등 쿼리 어디든)은 확정 값만 쓴다. 거르지 않은 범위(전체)는
+      비중의 분모로 허용하되, 쿼리 어딘가는 확정 국가·품목을 직접 걸러야 한다.
+    - 수출입 표마다 WHERE에 확정 HS 판본 하나와 확정·비교 기간 안의 trade_month를 건다.
+    - 수출·수입 표를 함께 읽는 무역수지·수출입 비교는 허용한다.
+    """
+    countries = set(conditions.country_codes)
+    editions = {item.hs_ver for item in conditions.hs_items} or {'HS2022'}
+    confirmed = [item.hs_code for item in conditions.hs_items]
+    seen = set()
+    for column, op, values in filter(None, map(_literal_filter, query.walk())):
+        name = column.name.lower()
+        if name == 'country_code' and countries:
+            if op not in ('eq', 'in') or not set(values) <= countries:
+                raise ValueError(f"확정한 국가({', '.join(sorted(countries))})만 country_code로 거르세요.")
+            seen.add('country')
+        if HS_COLUMN.fullmatch(name) and confirmed:
+            if op not in ('eq', 'in', 'like') or not all(
+                    re.fullmatch(r'[0-9]+%?' if op == 'like' else r'[0-9]+', v)
+                    and any(v.startswith(code) for code in confirmed) for v in values):
+                raise ValueError(f"확정한 HS 코드({', '.join(confirmed)})만 hs*_code로 거르세요.")
+            seen.add('hs')
+    if countries and 'country' not in seen:
+        raise ValueError('수출입 표를 확정한 국가 country_code로 거르세요.')
+    if confirmed and 'hs' not in seen:
+        raise ValueError('수출입 표를 확정한 HS 코드(hs*_code)로 거르세요.')
+    allowed_months = {n for p in (conditions.period, conditions.compare_period) if p
+                      for n in range(_month_number(p.start), _month_number(p.end)+1)}
+    for scope in traverse_scope(query):
+        if not isinstance(scope.expression, exp.Select):
+            continue
+        sources = {alias.lower(): source for alias, (_, source) in scope.selected_sources.items()
+                   if isinstance(source, exp.Table)}
+        where = scope.expression.args.get('where')
+        predicates = _and_terms(where.this if where else None)
+        trades = [alias for alias, source in sources.items() if source.name.lower() in TRADE_TABLES]
+        for trade in trades:
+            label = sources[trade].name
+            # 수출입 표가 하나뿐인 범위의 한정자 없는 열은 그 표의 열이다(country와 겹치는 열은 MySQL이 모호하다고 거부한다).
+            filters = [(column.name.lower(), op, values)
+                       for column, op, values in filter(None, map(_literal_filter, predicates))
+                       if column.table.lower() == trade or (not column.table and len(trades) == 1)]
+            edition = next((values[0] for name, op, values in filters if name == 'hs_ver'
+                            and op in ('eq','in') and len(values)==1 and values[0] in editions), None)
+            if edition is None:
+                raise ValueError(f"{label}의 WHERE에 확정한 HS 판본 하나를 지정하세요.")
+            if allowed_months and not _dates_within((f for f in filters if f[0]=='trade_month'), allowed_months):
+                raise ValueError(f"{label}의 WHERE에서 trade_month를 확정 기간 또는 비교 기간 안으로 제한하세요.")
+
+
 def safe_error(exc):
     """재생성 프롬프트에 넣을 오류 문구. 검증 메시지와 SAFE_MYSQL_ERRORS만 요지를 넘긴다."""
     if type(exc) is ValueError:
@@ -246,8 +373,8 @@ def normalize_rows(rows, columns):
     return result
 
 
-def execute_readonly(engine, draft, timeout_seconds=30):
-    sql = validate_sql(draft)
+def execute_readonly(engine, draft, timeout_seconds=30, conditions=None):
+    sql = validate_sql(draft, conditions)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError('Invalid SQL timeout')
     # TODO(D-41): configure a dedicated read-only DB account before deployment.
@@ -284,6 +411,10 @@ MAX_SQL_REGENERATIONS = 2
 def generated_analysis(engine, settings, client, execution, task, *, finish_reserve, latest_month, step=None):
     """Generate/validate/execute each attempt inside its own durable time reservation."""
     conditions = api_conditions(task.conditions)
+    # 결과표 API의 공통 조건과 별도로, 확정된 비중 기준을 생성 입력과 근거에 보존한다.
+    basis = {k: getattr(task.conditions, k) for k in ('share_basis', 'ranking_group') if getattr(task.conditions, k)}
+    prompt_conditions = {**conditions, **basis}
+    product_share = basis.get('share_basis') == 'KOREA_TRADE_PARTNER' and basis.get('ranking_group') == 'HS6'
     timeout = float(settings.get('API_SQL_TIMEOUT_SECONDS', 20))
     query_timeout = float(settings.get('API_SQL_EXECUTION_SECONDS', 30))
     model = settings.get('API_SQL_MODEL', DEFAULT_SQL_MODEL)
@@ -296,20 +427,23 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
         if step is not None:
             step.attempts += 1
         draft = client.parse(model=model, timeout=timeout, prompt=SQL_PROMPT, schema=SqlDraft,
-            max_output_tokens=2000, payload={'request': task.custom_query, 'conditions': conditions,
+            max_output_tokens=2000, payload={'request': task.custom_query, 'conditions': prompt_conditions,
                                             'schema': schema, 'previous_error': error})
         if draft.unsupported:
             return Analysis([], {}, ToolResult(status='NO_DATA', error=draft.unsupported), conditions, [])
-        rows, sql = execute_readonly(engine, draft, query_timeout)
+        if product_share and not any(col.key=='denominator_usd' and col.type=='number' and col.unit=='USD'
+                                     for col in draft.columns):
+            raise ValueError('품목별 비중의 실제 분모 금액을 denominator_usd(USD) 결과 열에 포함하세요.')
+        rows, sql = execute_readonly(engine, draft, query_timeout, task.conditions)
         if not rows:
             return Analysis([], {}, ToolResult(status='NO_DATA', error='조건에 맞는 조회 결과가 없습니다.'), conditions, [sql])
-        meta = {'kind': 'LLM_SQL', 'summary': draft.summary, 'source': '관세청', 'period': conditions['period']}
+        meta = {'kind': 'LLM_SQL', 'summary': draft.summary, 'source': '관세청', 'period': conditions['period'], **basis}
         columns = [col.model_dump() for col in draft.columns]
         digest = bounded({'kind': 'LLM_SQL', 'period': {k: v[:7] for k,v in conditions['period'].items()},
             'trade_flow': conditions['trade_flow'], 'unit': 'USD', 'source': '관세청',
             'latest_available_month': latest_month, 'rows_total': len(rows), 'truncated': len(rows)>MAX_DIGEST_ROWS,
             'columns': [{'key': col.key, 'unit': col.unit} for col in draft.columns],
-            'rows': rows[:MAX_DIGEST_ROWS], 'sql_summary': draft.summary})
+            'rows': rows[:MAX_DIGEST_ROWS], 'sql_summary': draft.summary, **basis})
         return Analysis(rows, meta, ToolResult(status='OK', source='관세청', period=task.conditions.period,
                         digest=digest, checks=['읽기 전용 조회', '결과 열 검사']), conditions, [sql], columns)
     from openai import OpenAIError

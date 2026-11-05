@@ -14,7 +14,7 @@ source_tasks는 이번 질문을 여러 하위 질문으로 나눴을 때 앞 �
 같은 분석의 복수 대상은 한 질문으로 묶고, 서로 다른 분석만 분리합니다.
 3개를 넘더라도 요청을 버리거나 억지로 합치지 말고 모두 반환하세요.
 STATISTICS는 합계·추이·기간 비교, RANKING은 명시적인 국가/품목 순위,
-MARKET_SHARE는 한국 수출입 상대국별 비중(품목별 비중은 STATISTICS + custom_query), CAUSE는 원인 설명,
+MARKET_SHARE는 상대국별·품목별 교역 비중과 해외 수입시장 점유율, CAUSE는 원인 설명,
 LOCAL_ISSUES는 기사 조회, REPORT는 리포트 생성, PROMISING_MARKET은 유망시장·예측,
 MARKET_TYPE은 시장 유형·군집, OUT_OF_SCOPE는 범위 밖입니다.
 countries는 mention(질문 원문 그대로), name(정식 한국어 국가명) 쌍입니다.
@@ -27,14 +27,16 @@ products에는 질문 속 품목 표현을 그대로 옮기세요. HS 코드를 
 상대 기간은 recent_months, 절대 기간과 동시에 넣지 마세요. 기사 기간은 일 단위입니다.
 comparison_requested는 비교 요청에만 true, 요청이 없으면 null입니다.
 이전 비교를 명시적으로 지칭한 경우에만 이전 compare_period를 명시하세요.
-ranking_group은 RANKING에만 COUNTRY/HS6, 모호하면 null입니다.
+ranking_group은 RANKING에 COUNTRY/HS6, 모호하면 null입니다.
+MARKET_SHARE에서는 품목별 비중에만 ranking_group=HS6를 쓰고 custom_query에 필요한 계산을 적습니다.
+예: "2025년 화장품 중 품목별 비중"은 MARKET_SHARE, ranking_group=HS6, share_basis=KOREA_TRADE_PARTNER입니다.
 ranking_limit은 금액 순위 또는 유망 품목·국가 조회에서 사용자가 명시한 결과 개수입니다.
 예: "베트남 유망 품목 8개"는 PROMISING_MARKET이며 ranking_limit=8입니다. 개수를 생략하면 null입니다.
 한국의 수출액 상위 국가는 한국의 상대국 순위입니다. 한국을 상대국 필터에 넣지 마세요.
 모든 수출입 테이블은 한국 기준입니다. 한국·대한민국·우리나라는 기준 국가이며 상대국이 아닙니다.
 한국 전체 수출입을 요청하면 countries=[]로 이전 상대국 필터를 해제하세요.
 한국의 대중국 수출처럼 상대국이 명시되면 countries에는 중국만 넣으세요.
-share_basis는 한국의 상대국별 비중이면 KOREA_TRADE_PARTNER,
+share_basis는 한국 교역액을 분모로 하는 상대국별·품목별 비중이면 KOREA_TRADE_PARTNER,
 해외 수입시장의 한국 비중이면 FOREIGN_IMPORT_MARKET, 불명확하면 null입니다.
 custom_query는 월별 추이/국가·HS6 금액 순위/국가별 비중 템플릿으로 답할 수 없을 때만
 필요한 계산을 한국어 한 문장으로 씁니다. 물량·단가·품목별 비중 등이 해당합니다.

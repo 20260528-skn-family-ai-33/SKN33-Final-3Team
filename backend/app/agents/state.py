@@ -182,7 +182,7 @@ class Conditions(Model):
     compare_period: Period | None = None
     article_period: ArticlePeriod | None = None   # 기사 발행일 기간, 일 단위(기본 최근 3개월)
     trade_flow: Literal['EXPORT', 'IMPORT'] = 'EXPORT'
-    ranking_group: Literal['COUNTRY', 'HS6'] | None = None   # RANKING에서만(D-73)
+    ranking_group: Literal['COUNTRY', 'HS6'] | None = None   # RANKING 또는 MARKET_SHARE의 품목별 비중(D-87)
     share_basis: Literal['KOREA_TRADE_PARTNER', 'FOREIGN_IMPORT_MARKET'] | None = None   # MARKET_SHARE에서만(D-87)
 
     @model_validator(mode='after')

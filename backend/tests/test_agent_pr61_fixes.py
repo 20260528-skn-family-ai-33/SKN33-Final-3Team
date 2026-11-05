@@ -40,14 +40,15 @@ class SqlFilterTest(unittest.TestCase):
 
         task = SimpleNamespace(custom_query='2025년 미국 수출의 분기별 합계',
                                conditions=Conditions(period={'start': '2025-01-01', 'end': '2025-12-01'}))
-        ok = ("SELECT SUM(amount_usd) AS value FROM export_summary WHERE country_code = 'US' AND hs_ver = 'HS2022'")
+        ok = ("SELECT SUM(amount_usd) AS value FROM export_summary WHERE country_code = 'US' AND hs_ver = 'HS2022' "
+              "AND trade_month BETWEEN '2025-01-01' AND '2025-12-01'")
         client = MagicMock(); client.parse.side_effect = [draft(ok), draft(ok)]
         ledger = MagicMock(); ledger.call.side_effect = lambda node, timeout, fn, finish_reserve: fn(timeout)
         calls = []
-        def run(engine, d, timeout):
+        def run(engine, d, timeout, conditions):
             calls.append(d)
             if len(calls) == 1: raise group_by
-            return [{'value': 1}], d.sql
+            return [{'value': 1}], validate_sql(d, conditions)
         with patch('backend.app.agents.sql.schema_for', return_value=[]), \
              patch('backend.app.agents.sql.execute_readonly', side_effect=run):
             result = generated_analysis(object(), Settings({}), client, ledger, task, finish_reserve=40, latest_month='2025-12')
@@ -192,7 +193,7 @@ class DraftTitleTest(unittest.TestCase):
 
 class ProductShareTest(unittest.TestCase):
     """품목별 비중(MARKET_SHARE + ranking_group=HS6): 분모를 확인한 뒤에만 LLM SQL로 조회한다(D-87)."""
-    def check(self, slots, resolved=None):
+    def check(self, slots, resolved=None, custom_query=None):
         from backend.app.agents.conditions import check_conditions
         from backend.app.agents.planner import build_plan
         from backend.app.api.database import Database, Store
@@ -204,16 +205,18 @@ class ProductShareTest(unittest.TestCase):
         connection = engine.connect(); self.addCleanup(connection.close)
         s = state(); s.input.question = '2025년 품목별 수출 비중'
         s.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'MARKET_SHARE', 'question': s.input.question,
+                                                     'custom_query': custom_query,
                                                      'slots': {'period': {'start': '2025-01-01', 'end': '2025-12-01'}, **slots}}]))
         task = s.plan.tasks[0]; task.resolved.update(resolved or {})
         check_conditions(Store(db, connection), s, task.steps[0])
         return s, task, next(x for x in task.steps if x.tool == 'query_trade_data')
 
     def test_ambiguous_basis_is_asked_first(self):
-        s, task, sql = self.check({'ranking_group': 'HS6'})
+        s, task, sql = self.check({'ranking_group': 'HS6'}, custom_query='품목별 수출 금액 비중')
         self.assertEqual(s.pending.kind, 'SHARE_BASIS')
         self.assertIn('품목별', s.pending.choices[0].label)
-        self.assertEqual(sql.args, {'template': 'SHARE'})
+        self.assertEqual(sql.args, {'template': 'LLM_SQL'})
+        self.assertEqual(sql.status, 'PENDING')
 
     def test_korea_basis_goes_to_llm_sql(self):
         for slots, resolved in [({'ranking_group': 'HS6', 'share_basis': 'KOREA_TRADE_PARTNER'}, None),
@@ -225,7 +228,8 @@ class ProductShareTest(unittest.TestCase):
                                  ('DONE', {'template': 'LLM_SQL'}, '2025년 품목별 수출 비중'))
 
     def test_foreign_basis_stays_unsupported(self):
-        s, task, sql = self.check({'ranking_group': 'HS6', 'share_basis': 'FOREIGN_IMPORT_MARKET'})
+        s, task, sql = self.check({'ranking_group': 'HS6', 'share_basis': 'FOREIGN_IMPORT_MARKET'},
+                                  custom_query='품목별 해외 수입시장 점유율')
         self.assertEqual(task.steps[0].status, 'FAILED')
         self.assertIn('지원하지 않습니다', s.results[task.steps[0].step_id].error)
 

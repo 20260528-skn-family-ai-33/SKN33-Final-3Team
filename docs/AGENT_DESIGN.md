@@ -332,6 +332,7 @@ actions[], report_id, warnings[]
 - 숫자(합계·증감률·비중·순위)는 SQL이나 코드가 계산한다. compose는 digest의 값만 옮긴다.
 - HS·국가 코드는 사전·국가 표에 있는 값만 쓴다. LLM 출력은 질문 속 표현을 그대로 옮긴 것만 받는다.
 - LLM SQL은 READ ONLY 세션 + sqlglot 검사(SELECT·허용 테이블·`article.body_masked` 차단·LIMIT) + 시간 상한으로 실행한다(D-41, D-65).
+- 생성 SQL은 확정 조건과 다른 데이터를 읽지 않는다: 국가·HS 코드를 리터럴로 거르는 곳은 확정 값만 쓰고(거르지 않은 전체 범위는 비중 분모로 허용, 쿼리 어딘가는 확정 값으로 걸러야 함), 수출입 표마다 WHERE에 확정 HS 판본 하나와 확정·비교 기간 안의 trade_month를 건다. 무역수지처럼 수출·수입 표를 함께 읽는 것은 허용한다(2026-11-05).
 - 질문·이전 대화·직접 입력 답은 신뢰할 수 없는 입력이다. 프롬프트에 데이터로 넣고 지시로 따르지 않는다.
 - tool 노드마다 MySQL `_execution`의 step·progress를 갱신한다.
 - 외부 호출(LLM, Redis, Chroma, ML 파일)에는 타임아웃을 건다. 테스트는 외부 연결 없이 돌아야 한다. 그래프 테스트는 LangGraph의 메모리 체크포인터로 한다.
@@ -371,7 +372,7 @@ actions[], report_id, warnings[]
 - Task.slots(TaskSlots)는 플래너의 원문 표현을 보관한다. products/countries의 None은 생략, []는 명시적인 전체 범위, 값이 있는 목록은 교체다. 질문에 없는 코드·품목을 추론해서 넣지 않는다. 확정된 값은 Task.conditions에만 넣는다.
 - 품목·국가·수출입 방향·조회 기간은 생략하면 input.context에서 이어받는다. 복합 질문의 각 Task는 동일 접수 시점 컨텍스트를 기준으로 하며 앞 Task의 처리 결과를 암묵적으로 상속하지 않는다. 플래너는 질문 속 공통 조건을 관련 Task에 명시한다.
 - 비교 요청은 comparison_requested로 구분한다. 비교 요청이 없으면 이전 compare_period를 제거한다. 비교 요청이 있으면 명시한 기간, 명시적인 이전 비교 지칭이면 이전 비교 기간, 그 밖에는 전년 동기를 쓴다. 이전 비교 지칭도 플래너가 해당 기간을 슬롯에 넣어 명시한다.
-- ranking_group은 RANKING에서만 사용한다(MARKET_SHARE는 국가별 비중만 지원해 묻지 않는다, D-87). 이전 순위 기준을 무조건 상속하지 않고 이번 질문으로 결정하며 모호하면 RANKING_GROUP으로 묻는다. article_period는 D-75를 따른다.
+- ranking_group은 RANKING의 순위 기준과 MARKET_SHARE의 품목별 비중(HS6)을 구분하는 데 사용한다(D-87). 이전 순위 기준을 무조건 상속하지 않고 이번 질문으로 결정하며, 순위 기준이 모호하면 RANKING_GROUP으로 묻는다. article_period는 D-75를 따른다.
 - 원문 표현은 각각 120자 이하(국가는 `CountryMention{mention, name}`이다. 정식 국가명 `name`은 플래너가 쓴 값이라 안내 없이 40자로 자른다)이며 초과 시 조용히 잘라 검색하지 않고 조건을 더 짧게 입력하도록 안내한다. 품목·국가 개수 초과도 일부만 골라 실행하지 않는다. 절대 기간과 recent_months는 동시에 받지 않는다. 비교 기간은 comparison_requested=True일 때만 받는다.
 - recent_months는 240개월까지다(`MAX_RECENT_MONTHS`, C-26 확정). 넘는 값은 정책 상한 안내로 거부하며, 상한 이내도 공개·검증 월 범위를 검사한다(D-94).
 - 플래너는 LLM 출력을 `PlannerSlots`로 받는다. 이 모델은 개수·길이 상한을 넘어도 받고, `limit_errors()`가 안내 문구를 돌려준다. 문구가 있으면 그 Task는 단계 없이 `answer_status=NO_DATA`로 두고 문구를 `warnings`에 넣으며, 나머지 Task는 그대로 실행한다. 문구가 없을 때만 상한을 거는 `TaskSlots`로 옮겨 저장한다. 계획 전체를 검증 오류로 실패시키지 않기 위해서다.
@@ -474,6 +475,7 @@ actions[], report_id, warnings[]
 - PlannerSlots.share_basis는 KOREA_TRADE_PARTNER(위 정의), FOREIGN_IMPORT_MARKET(해외 수입시장에서 한국 제품 비중), None(모호함)이다. 명확한 요청만 바로 처리하고 '베트남 시장 점유율'처럼 분모가 불명확하면 SHARE_BASIS로 되묻는다. RANKING_GROUP은 국가/품목 구분이며 분모 확인을 대신하지 않는다.
 - SHARE_BASIS는 위 두 의미를 선택지로 표시하고 직접 입력도 받는다. condition_key는 예를 들어 t1:share_basis다. 동일 조건의 2회 제한을 따른다.
 - FOREIGN_IMPORT_MARKET은 데이터·계산 계약이 연결되기 전까지 '해외 수입시장에서 한국 제품의 점유율은 아직 지원하지 않습니다.'로 해당 Task를 NO_DATA 처리한다. LLM SQL로 다른 의미의 비중을 대체 계산하지 않는다.
+- 품목별 비중은 MARKET_SHARE에서 ranking_group=HS6로 구분한다. 같은 분모 확인을 거친 뒤 한국 교역으로 확정된 경우에만 LLM SQL로 계산한다. 분모는 확정된 교역 범위의 합계(질문이 전체 대비면 그 국가·기간 전체)이며, 결과에 `denominator_usd` 열을 포함한다.
 - 확정한 분모 의미·실제 분모 금액·기간·품목·수출입 방향은 결과표 메타데이터와 digest·답변에 표시한다. 모호한 질문은 과거 share_basis를 자동 상속해 확정하지 않는다.
 
 ### D-88. 결과표 저장과 차트 참조 (2026-10-30 사용자 승인)
@@ -510,7 +512,7 @@ actions[], report_id, warnings[]
   - `share_basis`는 질문에 분모가 분명할 때만 넣고, 아니면 null이다(D-87). `comparison_requested`는 비교를 요청했을 때만 true다(D-73).
   - `custom_query`는 §11.5의 템플릿으로 답할 수 없을 때만 필요한 조회를 한국어 한 문장으로 적는다. 품목별 비중("화장품 중 품목별 비중")도 여기에 해당한다. SHARE 템플릿은 국가별 비중만 지원한다(D-87).
   - **슬롯의 null과 []는 뜻이 다르다(D-73).** 질문에 언급이 없으면 null이고(이전 조건을 이어받음), "전체 품목"·"모든 국가"처럼 전체를 명시했을 때만 []다. 기존 `intent.py`의 "언급 없으면 null/empty"와 `all_products`·`all_countries` 규칙은 가져오지 않는다. `comparison_requested`는 요청이 없으면 null이다.
-  - `ranking_group`은 RANKING에서만 채운다. MARKET_SHARE에는 넣지 않는다.
+  - `ranking_group`은 RANKING에서 채운다. MARKET_SHARE는 품목별 비중일 때만 HS6를 넣는다.
 - **코드 후처리(순서 고정):**
   1. `task_count_error(len(tasks))`가 있으면 tool을 실행하지 않고 D-86대로 끝낸다.
   2. Task마다 `slots.limit_errors()`가 있으면 단계 없이 `answer_status=NO_DATA`로 두고 문구를 `warnings`에 넣는다(D-73).

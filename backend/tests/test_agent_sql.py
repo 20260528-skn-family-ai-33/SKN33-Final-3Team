@@ -16,6 +16,60 @@ def draft(sql, kind='string'):
 
 
 class SqlTest(unittest.TestCase):
+    def test_trade_sql_requires_confirmed_scope_for_each_branch(self):
+        conditions = Conditions(country_codes=['US'], hs_items=[{'hs_code':'3304','hs_ver':'HS2022'}],
+            period={'start':'2025-01-01','end':'2025-03-01'},
+            compare_period={'start':'2024-01-01','end':'2024-03-01'})
+        def statement(period, *, country='US', edition='HS2022', product='3304%', table='export_summary'):
+            return (f"SELECT SUM(amount_usd) AS value FROM {table} WHERE country_code='{country}' "
+                    f"AND hs_ver='{edition}' AND hs6_code LIKE '{product}' AND {period}")
+        current = "trade_month >= '2025-01-01' AND trade_month < '2025-04-01'"
+        comparison = "trade_month BETWEEN '2024-01-01' AND '2024-03-01'"
+        joined = ("SELECT SUM(CASE WHEN e.hs6_code LIKE '3304%' THEN e.amount_usd END) AS value FROM export_summary e "
+                  "JOIN country c ON c.country_code=e.country_code WHERE c.country_role='COUNTRY' AND e.country_code='US' "
+                  "AND hs_ver='HS2022' AND trade_month BETWEEN '2025-01-01' AND '2025-03-01'")
+        # 확정 범위, 비교 기간, 수입표(무역수지), 그 국가 전체를 분모로 하는 비중(한정자 없는 열 포함)
+        for valid in (statement(current), statement(current)+' UNION ALL '+statement(comparison),
+                      statement(current, table='import_summary'), joined):
+            self.assertIn('LIMIT 1000', validate_sql(draft(valid,'number'), conditions))
+        rejected = [
+            statement(current, country='JP'),
+            statement(current, edition='HS2017'),
+            statement(current, product='330_%'),
+            joined.replace("LIKE '3304%'", "LIKE '8542%'"),
+            joined.replace("CASE WHEN e.hs6_code LIKE '3304%' THEN e.amount_usd END", "e.amount_usd"),
+            statement("trade_month >= '2025-01-01'"),
+            statement("trade_month BETWEEN '2024-01-01' AND '2025-03-01'"),
+            statement(current)+' UNION ALL '+statement(comparison, country='JP'),
+        ]
+        for sql in rejected:
+            with self.subTest(sql=sql), self.assertRaises(ValueError):
+                validate_sql(draft(sql,'number'), conditions)
+
+    def test_product_share_retains_confirmed_basis_and_denominator(self):
+        conditions = Conditions(period={'start':'2025-01-01','end':'2025-03-01'},
+                                ranking_group='HS6', share_basis='KOREA_TRADE_PARTNER')
+        task = SimpleNamespace(custom_query='품목별 수출 비중', conditions=conditions)
+        result_draft = SqlDraft(sql='SELECT 100 AS denominator_usd, 50 AS share_pct', summary='품목별 비중', unsupported=None,
+            columns=[{'key':'denominator_usd','label':'분모','type':'number','unit':'USD'},
+                     {'key':'share_pct','label':'비중','type':'number','unit':'%'}])
+        client = MagicMock()
+        client.parse.side_effect = [draft('SELECT 50 AS value','number'), result_draft]
+        ledger = MagicMock()
+        ledger.call.side_effect = lambda node, timeout, fn, finish_reserve: fn(timeout)
+        rows = [{'denominator_usd':100, 'share_pct':50}]
+        with patch('backend.app.agents.sql.schema_for',return_value=[]), \
+             patch('backend.app.agents.sql.execute_readonly',return_value=(rows,result_draft.sql)) as execute:
+            result = generated_analysis(object(), Settings({}), client, ledger, task,
+                                        finish_reserve=40, latest_month='2025-03')
+        execute.assert_called_once()
+        payload = client.parse.call_args.kwargs['payload']
+        self.assertEqual(payload['conditions']['share_basis'],'KOREA_TRADE_PARTNER')
+        self.assertEqual(payload['conditions']['ranking_group'],'HS6')
+        self.assertIn('denominator_usd', payload['previous_error'])
+        self.assertEqual(result.meta['share_basis'],'KOREA_TRADE_PARTNER')
+        self.assertEqual(result.result.digest['rows'][0]['denominator_usd'],100)
+
     def test_two_regenerations_then_failure_contains_guidance_and_no_numbers(self):
         task=SimpleNamespace(custom_query='수출 통계',conditions=Conditions(period={'start':'2025-01-01','end':'2025-03-01'}))
         step=SimpleNamespace(attempts=0)
