@@ -22,10 +22,16 @@ openai>=2,<3
 langgraph==1.2.19
 langgraph-checkpoint-redis==0.5.2
 sqlglot==30.27.0
-# Promising-market model in the worker (AGENT_DESIGN D-48, §11.6). Versions match the environment that built
-# data/ml/monthly_models/model_a_two_stage_202609.joblib; keep them equal to the model's runtime when it changes.
+# Promising-market model in the worker (AGENT_DESIGN D-48, §11.6). Versions follow the model runtime recorded in
+# data/ml/monthly_models/model_a_two_stage_202609.registry.json (data_info.runtime: numpy 1.24.3, pandas 2.2.3,
+# scipy 1.10.1, scikit-learn 1.9.1, joblib 1.6.0, lightgbm 4.7.0). numpy is 1.26.4 because redisvl (via
+# langgraph-checkpoint-redis) needs numpy>=1.26; 1.26 reads 1.24 pickles (the agent only loads predictions).
+# scipy 1.10.1 has no Python 3.12 wheels, so the API/worker run on Python 3.11 (same as monthly training).
+# Keep these aligned with the deployed model's runtime when it changes.
 # Linux also needs the OpenMP runtime: apt-get install -y --no-install-recommends libgomp1 (backend/app/ml/ML_USAGE.md).
-pandas==3.0.1
+numpy==1.26.4
+pandas==2.2.3
+scipy==1.10.1
 joblib==1.6.0
 lightgbm==4.7.0
 scikit-learn==1.9.1
