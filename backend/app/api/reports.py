@@ -235,12 +235,14 @@ def generate(store,job,settings):
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
     if record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
-        from backend.app.services.report_context import build_context,weekly_highlights
-        context=build_context(store,uid,record,doc)
-        doc['template_pdf']={'version':1,'report_type':record['report_type'],'context':context}
-        if record['report_type']=='RPT_WEEKLY':
-            news_section=doc['sections'][0]; news_section['text']=weekly_highlights(context)+'\n'+news_section['text']
+        from backend.app.services.report_context import build_context
+        doc['template_pdf']={'version':1,'report_type':record['report_type'],
+                             'context':build_context(store,uid,record,doc)}
         doc['sql']=list(store.queries)
+    # PDF 양식의 급증 키워드·주요 이슈를 웹·DOCX에도 같은 값으로 싣는다. 양식을 만들지 않은 리포트는 건너뛴다.
+    if record['report_type']=='RPT_WEEKLY' and doc.get('template_pdf'):
+        from backend.app.services.report_context import weekly_highlights
+        news_section=doc['sections'][0]; news_section['text']=weekly_highlights(doc['template_pdf']['context'])+'\n'+news_section['text']
     from backend.app.api.report_storage import LocalReportStorage
     storage=LocalReportStorage(settings.files)
     prefix=f'{uid}/{rid}/{job["claim_token"]}'
