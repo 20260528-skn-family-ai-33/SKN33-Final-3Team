@@ -19,6 +19,7 @@ from backend.app.api.database import Database, Store
 from backend.app.api.common import ApiError, clean, require
 from backend.app.api.security import authenticate, administrator, limit_auth_request, limit_public, client_ip, hash_token
 from backend.app.api.routes import dispatch, PENDING
+from backend.app.api import recovery
 from backend.app.api.schemas import Conditions, HsItem
 
 CONTRACTS = json.loads(Path(__file__).with_name('contracts.json').read_text(encoding='utf-8'))
@@ -135,7 +136,7 @@ def create_app(settings=None, engine=None, redis_state=None):
         return response
 
     def error_response(request, error):
-        headers = {'Retry-After':'60'} if error.status == 429 else None
+        headers = {'Retry-After':str(error.retry_after or 60)} if error.status == 429 else None
         return JSONResponse(status_code=error.status, headers=headers, content={
             'code':error.code,'message':error.message,'details':error.details,
             'retryable':error.retryable,'request_id':request.state.request_id})
@@ -204,6 +205,10 @@ def create_app(settings=None, engine=None, redis_state=None):
                         maximum=int(settings.get('API_HS_IP_LIMIT',60)))
                 if identity in (1,2,69,72,73,74,128,129,130) and identity not in PENDING:
                     limit_auth_request(db,request,settings,identity,body)
+                if identity == 130:
+                    # 제한된 요청은 DB 커넥션·사용자 행 잠금을 얻기 전에 거절한다.
+                    recovery.limit_request(db, body, settings)
+                    return recovery.issue_password(db, body, settings)
                 with db.engine.begin() as connection:
                     store = Store(db,connection)
                     required = auth in ('필요','ADMIN','개발 역할 + 환경 허용') or query.get('scope') == 'INTERESTED'

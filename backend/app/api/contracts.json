@@ -2571,7 +2571,7 @@
         "apply_scope",
         "string",
         "필수",
-        "NEW_ONLY / EXISTING_NOW. NEW_ONLY는 새 기사부터 적용. 과거 기사 표시 보존 구조 DEC-49 준비 전503. EXISTING_NOW는 명시 대상 재처리이며 과거 저장 답변/리포트는 불변."
+        "NEW_ONLY: 새로 최초 적재되는 기사부터 적용. 기존 기사 분류·저장 답변·리포트는 보존. CURRENT_LOOKUPS/EXISTING_NOW는 지원하지 않음."
       ],
       [
         "Request Body",
@@ -2721,7 +2721,7 @@
   },
   {
     "id": 105,
-    "title": "API-105  관리자 생성 분야 삭제",
+    "title": "API-105  분야 삭제 (제공하지 않음: 삭제·이관 제외 결정)",
     "route": "DELETE  /api/v1/admin/keyword-categories/{category_id}",
     "auth": "ADMIN",
     "fields": [
@@ -3082,7 +3082,7 @@
   },
   {
     "id": 128,
-    "title": "API-128  이름으로 계정 후보 조회",
+    "title": "API-128  이름·이메일 가입 여부 확인",
     "route": "POST  /api/v1/auth/account-recovery/candidates",
     "auth": "비로그인·복구 컨텍스트",
     "fields": [
@@ -3092,6 +3092,13 @@
         "string",
         "필수",
         "trim 후 비공백 이름. 탈퇴 계정 제외."
+      ],
+      [
+        "Request Body",
+        "email",
+        "string",
+        "필수",
+        "확인할 이메일(아이디). 이름과 일치 여부만 반환하며 후보 목록은 노출하지 않음."
       ]
     ]
   },

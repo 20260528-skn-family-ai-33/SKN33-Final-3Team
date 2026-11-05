@@ -1,4 +1,5 @@
 import secrets
+import time
 from sqlalchemy import select, update, func, or_
 from backend.app.api.common import require, now, digest, clean, page_info, unavailable
 from backend.app.api.security import administrator, revoke_sessions
@@ -43,7 +44,8 @@ def detail(store,identity):
 
 def audit(store,actor,action,target_type,target,before,after,reason):
     require(reason and reason.strip(),'변경 사유가 필요합니다.')
-    identity='audit_'+secrets.token_hex(16)
+    # 운영 DATETIME은 초 정밀도다. 같은 초의 키워드 검수도 저장 순서대로 읽도록 ID 앞에 시각을 둔다.
+    identity='audit_'+(f'{time.time_ns():016x}'+secrets.token_hex(8) if target_type in ('KEYWORD','CATEGORY') else secrets.token_hex(16))
     store.insert('api_audit_event',audit_id=identity,actor_id=actor,action=action,target_type=target_type,target_id=str(target),
         reason=reason.strip(),before_json=clean(before),after_json=clean(after),created_at=now())
     return {'operation':{'operation_id':identity,'status':'SUCCEEDED','audit_id':identity}}
@@ -90,9 +92,10 @@ def article_detail(store,identity):
     t,k,c=store.t('article_tag'),store.t('keyword_topic'),store.t('keyword_category')
     topics=store.rows(select(k.c.keyword_text,k.c.canonical_text,c.c.category_id,c.c.major_name,c.c.minor_name)
         .select_from(t.join(k,t.c.keyword_text==k.c.keyword_text).outerjoin(c,c.c.category_id==k.c.category_id)).where(t.c.article_id==identity))
+    classified = (row['admin_meta_json'] or {}).get('keyword_categories', topics)
     moderation={'article_id':str(identity),'visibility':'VISIBLE' if row['visibility_status']=='VISIBLE' else 'EXCLUDED',
         'original_category':row['category'],'kw_topic':sorted(set(x['canonical_text'] or x['keyword_text'] for x in topics)),
-        'kw_sub':None,'categories':list({x['category_id']:{k:x[k] for k in ('category_id','major_name','minor_name')} for x in topics if x['category_id']}.values()),
+        'kw_sub':None,'categories':list({x['category_id']:{k:x[k] for k in ('category_id','major_name','minor_name')} for x in classified if x['category_id']}.values()),
         'affected_report_ids':[]}
     # 저장 리포트는 변경하지 않고 참조 관계만 검사한다.
     r=store.t('report')
@@ -118,11 +121,13 @@ def change_visibility(store,actor,identity,data):
 def audit_view(row):
     return {'audit_id':row['audit_id'],'actor_id':str(row['actor_id']),'action':row['action'],'target_type':row['target_type'],
         'target_id':row['target_id'],'reason':row['reason'],'before':row['before_json'],'after':row['after_json'],
-        'impact':'신규 조회에 적용, 저장된 답변·리포트 보존','result':'SUCCEEDED','created_at':row['created_at']}
+        'impact':'새 기사부터 적용, 기존 기사·답변·리포트 보존' if row['after_json'].get('apply_scope') == 'NEW_ONLY' else '신규 조회에 적용, 저장된 답변·리포트 보존','result':'SUCCEEDED','created_at':row['created_at']}
 
 
 # 화면에 보이는 작업 이름(frontend/src/admin/useServerScreen.js AUDIT_ACTION과 같은 값). 한글 이름으로도 검색되게 쓴다.
-AUDIT_ACTION_LABELS={'USER_ROLE':'회원 권한 변경','USER_STATUS':'회원 이용 상태 변경','ARTICLE_VISIBILITY':'기사 노출 변경'}
+AUDIT_ACTION_LABELS={'USER_ROLE':'회원 권한 변경','USER_STATUS':'회원 이용 상태 변경','ARTICLE_VISIBILITY':'기사 노출 변경',
+    'KEYWORD_ASSIGN':'키워드 분야 지정','KEYWORD_HOLD':'키워드 보류','KEYWORD_RELEASE':'키워드 지정 해제',
+    'CATEGORY_CREATE':'분야 생성','CATEGORY_RENAME':'분야 이름 변경','CATEGORY_DELETE':'분야 삭제'}
 
 
 def audit_list(store,page=1,size=20,target_type=None,q=None,sort='latest'):

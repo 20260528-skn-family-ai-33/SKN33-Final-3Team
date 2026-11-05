@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 from sqlalchemy import select, update, delete, func
 from fastapi.responses import Response, FileResponse
-from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs
+from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs, recovery, keyword_admin
 from backend.app.api.common import ApiError, require, unavailable, now, clean, digest, page_info, percentage, month, shift_month, period
 from backend.app.api.security import issue_session, hash_token, administrator
 from backend.app.api.schemas import Signup, Login, PasswordChange, InterestUpdate, NotificationPatch, ReportCreate, Conditions
@@ -26,12 +26,8 @@ PENDING={
   88:'DEC-42 상세 로그·실패 범위 생산자 계약',89:'데이터 적재 담당자의 실패 범위 재수집 실행기 연결',
   90:'DEC-38 HS 판본 품질 판정 저장 계약',91:'DEC-41 버전 획득 및 데이터 담당 재검증 실행기 연결',
   94:'태그 변경 이후 집계·벡터 인덱스 반영 실행기 연결',
-  97:'DEC-32 키워드 수동 검수 상태·출처 저장 계약',98:'DEC-32 키워드 검수 근거 저장 계약',
-  99:'DEC-49 과거 기사 분류 보존 및 검수 실행기 연결',
-  101:'DEC-32 기본/관리자 분야 출처 저장 계약',102:'DEC-32 관리자 분야 출처 저장 계약',
-  103:'DEC-32 관리자 분야 출처 저장 계약',104:'DEC-32 관리자 분야 출처 저장 계약',105:'DEC-49 분야 삭제·이관 정책',
   125:'DEC-41 버전 획득 및 적재 담당자의 출처 중지 실행기 연결',
-  128:'DEC-43/44 계정 후보 노출·복구 운영 기준',129:'DEC-44 메일 발송·반복 제한·복구 기준',130:'DEC-44 임시 비밀번호 발급·만료·메일 실패 처리 기준',
+  129:'이름·이메일 일치 여부 확인으로 대체: 아이디 안내 메일은 사용하지 않음',
 }
 
 
@@ -50,6 +46,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         raise ApiError(422 if identity in (23,27) else 503,'FEATURE_NOT_AVAILABLE' if identity in (23,27) else 'FEATURE_NOT_READY',PENDING[identity])
     if identity==1: return accounts.signup(store,Signup.model_validate(body),response,settings)
     if identity==2: return accounts.login(store,Login.model_validate(body),response,settings)
+    if identity==128: return recovery.confirm_account(store,body)
     if identity==3:
         if user:
             store.db.redis.revoke(user['token_hash'])
@@ -204,6 +201,13 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         return {'items':[admin.article_detail(store,i)['moderation'] for i in ids],'page':page_info(page,size,total)}
     if identity==93: return admin.article_detail(store,path['article_id'])
     if identity==95: return admin.change_visibility(store,user,path['article_id'],body)
+    if identity==97: return keyword_admin.listing(store,query,page,size)
+    if identity==98: return keyword_admin.detail(store,query['keyword_text'],query.get('article_limit',3))
+    if identity==99: return keyword_admin.review(store,user,body)
+    if identity==101: return keyword_admin.categories(store)
+    if identity==102: return keyword_admin.category_change(store,user,body)
+    if identity==103: return {'category':keyword_admin.category_row(store,path['category_id'])}
+    if identity in (104,105): return keyword_admin.category_change(store,user,body,path['category_id'],identity==105)
     if identity==96:
         a,b,o=store.t('article'),store.t('batch_run'),store.t('service_option')
         items=[]

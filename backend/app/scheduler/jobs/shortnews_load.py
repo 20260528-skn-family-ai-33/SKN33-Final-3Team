@@ -128,6 +128,7 @@ def load(engine, raws, cleans=()):
                                                         getattr(ArticleTag, column).isnot(None)))
             tags.extend(t for t in candidates if any(t[c] is not None for c in replace))
         news_job._insert(session, ArticleTag, tags)
+        news_schema.freeze_keyword_categories(session, table, [ids[key] for key in ids if key in cleaned], ingestion_policy=True)
         tag_count = len(tags)
         keyword_rows, product_rows = news_job.rebuild_daily(session, days)
     return {"articles": len(articles), "received": len(raws), "duplicates": len(raws) - len(articles),
