@@ -2,10 +2,11 @@
 import csv
 import io
 import json
-from datetime import date
+from datetime import date, timezone
 from pathlib import Path
 from urllib.parse import quote
-from sqlalchemy import select, update, delete, func
+from zoneinfo import ZoneInfo
+from sqlalchemy import and_, select, update, delete, func
 from fastapi.responses import Response, FileResponse
 from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs, recovery, keyword_admin
 from backend.app.api.common import ApiError, require, unavailable, now, clean, digest, page_info, percentage, month, shift_month, period
@@ -31,6 +32,7 @@ PENDING={
 }
 
 
+KST=ZoneInfo('Asia/Seoul')
 SOURCE_LABELS={'CUSTOMS':'관세청','KCS_TRADE':'관세청','KCS_HS_NAMES':'관세청 HS 코드','ECOS':'한국은행 ECOS','UNSD_HS_CORR':'UN HS 연계표',
     'CEPII_BACI':'CEPII BACI','WB_WDI':'세계은행 WDI','UN_COMTRADE':'UN Comtrade','KOTRA_MARKET':'KOTRA 해외시장뉴스',
     'KOTRA_SHORT_NEWS':'KOTRA 단신속보','KOTRA_SHORTNEWS':'KOTRA 단신속보'}
@@ -42,6 +44,18 @@ def failed_run_message(run):
     # 판정 작업은 입력 출처로 기록되지만 수집 작업이 아니다.
     title='주요 이슈 판정 미완료' if run['job_name']=='MAJOR_ISSUE_DETECT' else f'{source} 수집 실패'
     return f"{title} · {run['job_name']} · 대상 기간 {run['period_start']} ~ {run['period_end']} · 실행 #{run['run_id']}"
+
+
+def batch_time_utc(value):
+    """batch_run 시각은 한국 시간으로 저장된다(db/batch_log.py). API 시각은 UTC로 내보낸다."""
+    return value and value.replace(tzinfo=KST).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def failed_report_message(report):
+    """리포트 내용 없이 식별정보만 보여 준다(FR-317-02)."""
+    kind=notifications.REPORT_KINDS.get(report['report_type'],report['report_type'])
+    period=report['conditions_json'].get('period') or {}
+    return f"{kind} 구독 리포트 생성 실패 · 대상 기간 {period.get('start')} ~ {period.get('end')} · 리포트 #{report['report_id']}"
 
 
 def file_response(content,filename,fmt):
@@ -194,10 +208,24 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==80:
         category=query.get('category','ALL')
         require(category in ('ALL','DATA','REPORT','MEMBER'),'알림 분류를 확인하세요.')
-        # 현재 관리자 알림은 데이터 수집 실패(DATA)만 만든다. 다른 분류 탭에는 섞어 보이지 않는다.
-        t=store.t('batch_run'); rows=store.rows(select(t).where(t.c.status=='FAILED').order_by(t.c.run_id.desc())) if category in ('ALL','DATA') else []
-        return {'items':[{'alert_id':str(r['run_id']),'category':'DATA','message':failed_run_message(r),
-            'target_type':'BATCH','target_id':str(r['run_id']),'created_at':r['finished_at']} for r in rows[(page-1)*size:page*size]],'page':page_info(page,size,len(rows))}
+        # 데이터 수집 실패(DATA)와 구독 리포트 생성 실패(REPORT)를 만든다. 회원 알림 분류(MEMBER)는 아직 없다.
+        # 두 출처를 합쳐 정렬하므로 각 출처에서 이 페이지까지의 최신 행만 읽는다.
+        items=[]; total=0; newest=page*size
+        if category in ('ALL','DATA'):
+            t=store.t('batch_run'); failed=t.c.status=='FAILED'
+            total+=store.count(select(t.c.run_id).where(failed))
+            items+=[{'alert_id':str(r['run_id']),'category':'DATA','message':failed_run_message(r),
+                'target_type':'BATCH','target_id':str(r['run_id']),'created_at':batch_time_utc(r['finished_at'])}
+                for r in store.rows(select(t).where(failed).order_by(t.c.finished_at.desc(),t.c.run_id.desc()).limit(newest))]
+        if category in ('ALL','REPORT'):
+            t=store.t('report'); failed=and_(t.c.status=='FAILED',t.c.subscription_id.is_not(None))
+            total+=store.count(select(t.c.report_id).where(failed))
+            items+=[{'alert_id':f"REPORT-{r['report_id']}",'category':'REPORT','message':failed_report_message(r),
+                'target_type':'REPORT','target_id':str(r['report_id']),'created_at':r['completed_at'] or r['created_at']}
+                for r in store.rows(select(t).where(failed).order_by(func.coalesce(t.c.completed_at,t.c.created_at).desc(),t.c.report_id.desc()).limit(newest))]
+        # 시각이 없는 실패 기록은 맨 뒤로 보낸다.
+        items.sort(key=lambda a:(a['created_at'] is not None,a['created_at'] or now(),a['alert_id']),reverse=True)
+        return {'items':items[(page-1)*size:newest],'page':page_info(page,size,total)}
     if identity==81: return admin.users(store,query.get('q'),query.get('status','ALL'),page,size,query.get('by','all'))
     if identity==82: return admin.detail(store,path['user_id'])
     if identity in (83,84): return admin.change_user(store,user,path['user_id'],body,identity==83)

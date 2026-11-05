@@ -108,9 +108,13 @@ def _spike_payload(target, label, subject, count, average, ratio, article_ids):
 
 def detect_keywords(store, target):
     recent_window = windows(target)[0]
+    topics = store.t("keyword_topic")
     for (keyword,), count, average, ratio in _spikes(store, "news_keyword_daily", ["keyword_text"], target):
         ids = _articles(store, lambda t, k=keyword: t.c.keyword_text == k, (MARKET, SHORT_NEWS), *recent_window)
-        payload = _spike_payload(target, keyword, {"keyword_text": keyword}, count, average, ratio, ids)
+        # 동의어는 대표어 차단에도 걸리도록 대표어를 함께 저장합니다(notifications.event_allowed).
+        canonical = store.c.scalar(select(topics.c.canonical_text).where(topics.c.keyword_text == keyword))
+        subject = {"keyword_text": keyword, **({"kw_topic": canonical} if canonical else {})}
+        payload = _spike_payload(target, keyword, subject, count, average, ratio, ids)
         yield _save(store, ["KEYWORD", keyword, target.isoformat()], ids[0] if ids else None, payload)
 
 

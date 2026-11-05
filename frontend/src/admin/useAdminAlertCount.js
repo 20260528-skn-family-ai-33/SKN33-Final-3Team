@@ -1,9 +1,11 @@
 // 관리자 알림(API-80)의 읽음 상태와 종 숫자. 회원 알림함(FR-305)과 분리한다.
 // TODO: API-80의 DB 보완이 정해지면 서버 저장으로 옮긴다. 지금은 알림 ID만 이 브라우저에 저장하므로 다른 PC·브라우저에는 이어지지 않는다.
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { api } from '../api/client'
 import { allPages, useApp } from '../store'
 
 const POLL_MS = 30000
+const COUNT_LIMIT = 100
 const CHANGED = 'admin-alert-read-changed'
 const storageKey = userId => `admin-alert-read:${userId}`
 
@@ -35,14 +37,14 @@ export function useAdminAlertRead() {
   const read = useMemo(() => loadRead(userId), [userId, version])
   const isRead = useCallback(id => read.has(String(id)), [read])
   const markRead = useCallback(ids => saveRead(userId, ids), [userId])
-  const markAllRead = useCallback(async () => {
-    const items = await allPages('/admin/alerts')
+  const markAllRead = useCallback(async category => {
+    const items = await allPages('/admin/alerts', { category })
     saveRead(userId, items.map(item => item.alert_id))
   }, [userId])
   return { isRead, markRead, markAllRead }
 }
 
-/** 종 숫자: 종이 여는 관리자 알림 중 이 브라우저에서 아직 읽지 않은 건수. */
+/** 종 숫자: 최신 관리자 알림 100건 중 이 브라우저에서 아직 읽지 않은 건수. 30초마다 전체 이력을 읽지 않게 범위를 제한한다. */
 export function useAdminAlertCount(enabled) {
   const { isRead } = useAdminAlertRead()
   const [ids, setIds] = useState([])
@@ -51,8 +53,8 @@ export function useAdminAlertCount(enabled) {
     let active = true
     const load = () => {
       if (document.visibilityState === 'hidden') return
-      allPages('/admin/alerts')
-        .then(items => { if (active) setIds(items.map(item => item.alert_id)) })
+      api('/admin/alerts', { query: { page_size: COUNT_LIMIT } })
+        .then(data => { if (active) setIds(data.items.map(item => item.alert_id)) })
         .catch(() => { /* 건수 조회 실패가 화면을 막지 않게 다음 주기에 다시 조회한다. */ })
     }
     load()

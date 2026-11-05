@@ -199,7 +199,7 @@ export default function ReportView({ route }) {
 
               {(newsOnly || o.sections.includes('현지 이슈 기사')) && (
                 <Section no={no++} title="현지 이슈">
-                  <p className="note" style={{ marginBottom: 10 }}>{byCode.LOCAL_ISSUES?.text || byCode.NEWS?.text}</p>
+                  <p className="note" style={{ marginBottom: 10, whiteSpace: 'pre-line' }}>{byCode.LOCAL_ISSUES?.text || byCode.NEWS?.text}</p>
                   <div className="col" style={{ gap: 10 }}>
                     {(f.news.length ? f.news : []).map(a => (
                       <div key={a.id} className="li" style={{ padding: '16px 20px' }}>

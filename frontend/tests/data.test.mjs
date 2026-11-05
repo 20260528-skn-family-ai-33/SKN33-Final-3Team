@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { amount, percent, mapReport, mapArticle, mapNotification, mapPopupGroup, reportComparison } from '../src/api/adapters.js'
+import { amount, percent, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison } from '../src/api/adapters.js'
 import { registerCountries, countryCode, countryName, registerProducts, productName } from '../src/data/catalog.js'
 import { isStrongPassword } from '../src/utils/validate.js'
 test('미수집 값과 실제 0을 구분하고 USD를 억 USD로 표시한다', () => {
@@ -43,6 +43,12 @@ test('기사·알림의 실제 연결 대상과 읽음 상태를 보존한다', 
   assert.equal(aggregate.articleId, null)
   const group = mapPopupGroup({ delivery_id: 'd1', event_type: 'MAJOR_ISSUE', notifications: [{ user_alert_id: '46', event_type: 'MAJOR_ISSUE', title: '주요 이슈: 관세', read_at: null }] })
   assert.equal(group.deliveryId, 'd1'); assert.equal(group.type, 'major'); assert.equal(group.items[0].read, false)
+  assert.deepEqual(popupItemTag({ event_type: 'REPORT', title: '분기 리포트가 발행되었습니다.' }), { label: '분기', tone: 'ok' })
+  assert.deepEqual(popupItemTag({ event_type: 'MAJOR_ISSUE', issue: { reason: 'WEEKLY_NEWS_SPIKE' } }), { label: '기사 급증', tone: 'amber' })
+  assert.equal(popupItemTag({ event_type: 'REPORT', title: '리포트가 발행되었습니다.' }), null)
+  assert.equal(notificationTarget({ id: '1', reportId: '9' }), '/report?id=9')
+  assert.equal(notificationTarget({ id: '1', articleId: '7', reportId: null }), '/articles?id=7')
+  assert.equal(notificationTarget({ id: '1', articleId: null, reportId: null }), '/account/notifications?id=1')
 })
 test('기사 출처는 기사 유형과 독립적으로 실제 제공자를 표시한다', () => {
   for (const [source_code, expected] of [

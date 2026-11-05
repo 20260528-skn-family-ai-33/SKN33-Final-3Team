@@ -235,9 +235,11 @@ def generate(store,job,settings):
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
     if record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
-        from backend.app.services.report_context import build_context
-        doc['template_pdf']={'version':1,'report_type':record['report_type'],
-                             'context':build_context(store,uid,record,doc)}
+        from backend.app.services.report_context import build_context,weekly_highlights
+        context=build_context(store,uid,record,doc)
+        doc['template_pdf']={'version':1,'report_type':record['report_type'],'context':context}
+        if record['report_type']=='RPT_WEEKLY':
+            news_section=doc['sections'][0]; news_section['text']=weekly_highlights(context)+'\n'+news_section['text']
         doc['sql']=list(store.queries)
     from backend.app.api.report_storage import LocalReportStorage
     storage=LocalReportStorage(settings.files)
@@ -259,7 +261,7 @@ def generate(store,job,settings):
         conf=notification_settings(store,uid)
         if conf['notifications_enabled'] and conf['consent_current']:
             event=store.insert('alert_event',event_type='REPORT',report_id=int(rid),event_key=digest(['REPORT',rid]),
-                payload_json={'destination':'REPORT_DETAIL'},created_at=now())
+                payload_json={'destination':'REPORT_DETAIL','report_type':record['report_type'],'period':record['conditions_json']['period']},created_at=now())
             store.insert('user_alert',user_id=uid,event_id=event,is_interest_match=False,created_at=now())
     return {'report_id':str(rid),'step':'DONE'}
 
@@ -325,7 +327,9 @@ def save_subscriptions(store,uid,data):
         code=row['period_code']
         stmt=update(t).where(t.c.subscription_id==row['subscription_id'])
         if code in remaining:
-            store.c.execute(stmt.values(enabled=True,filters_json=payload))
+            # 형식·관심만 바꿔 다시 저장해도 이미 구독 중인 주기의 시작일은 유지한다. 아직 발행 못 한 회차가 사라지면 안 된다.
+            since=row['filters_json'].get('enabled_since') if row['enabled'] else None
+            store.c.execute(stmt.values(enabled=True,filters_json={**payload,'enabled_since':since or payload['enabled_since']}))
             remaining.remove(code)
         elif row['enabled']:
             store.c.execute(stmt.values(enabled=False))

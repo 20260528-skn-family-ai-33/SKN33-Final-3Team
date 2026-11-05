@@ -6,7 +6,7 @@ import Icon from '../components/Icon'
 import { useApp } from '../store'
 import { isAdmin } from '../auth/roles'
 import { useQuery, ErrorNotice } from '../api/hooks'
-import { memberBy } from './useServerScreen'
+import { ALERT_CATEGORY, memberBy } from './useServerScreen'
 
 const BANNER = {
   info: { background: 'var(--lav)', color: 'var(--plum)' },
@@ -66,7 +66,7 @@ const OPS_TABS = [['전체', 'BS32'], ['데이터', 'BS34'], ['리포트', 'BS36
 const OPS_DETAIL = { 전체: 'BS33', 데이터: 'BS35', 리포트: 'BS37', 회원관리: 'BS39' }
 function OpsDashboard({ tab }) {
   const result = useQuery('/admin/alerts', { page_size: 20 })
-  const alerts = (result.data?.items || []).map(a => ['데이터', a.message, a.created_at, 'red', '/admin/inbox/collection']).filter(a => tab === '전체' || a[0] === tab)
+  const alerts = (result.data?.items || []).map(a => [ALERT_CATEGORY[a.category] || a.category, a.message, a.created_at, 'red', a.target_type === 'BATCH' ? '/admin/inbox/collection' : '/admin/inbox/BS37']).filter(a => tab === '전체' || a[0] === tab)
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }} className="resp-stack">

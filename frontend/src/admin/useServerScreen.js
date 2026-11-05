@@ -1,7 +1,7 @@
 import { useQuery } from '../api/hooks'
 import { kstDateTime } from '../api/adapters'
 import { useAdminAlertRead } from './useAdminAlertCount'
-const ALERT_CATEGORY = { DATA: '데이터', REPORT: '리포트', MEMBER: '회원관리' }
+export const ALERT_CATEGORY = { DATA: '데이터', REPORT: '리포트', MEMBER: '회원관리' }
 const table = (head, rows, cols) => ({ type: 'table', head, cols: cols || `repeat(${head.length}, minmax(100px, 1fr))`, rows: rows.map(cells => ({ cells: cells.map(c => c == null ? '—' : typeof c === 'object' ? c : String(c)) })) })
 const button = (label, to) => ({ btns: [{ label, to }] })
 export const AUDIT_ACTION = { USER_ROLE: '회원 권한 변경', USER_STATUS: '회원 이용 상태 변경', ARTICLE_VISIBILITY: '기사 노출 변경', KEYWORD_ASSIGN: '키워드 분야 지정', KEYWORD_HOLD: '키워드 보류', KEYWORD_RELEASE: '키워드 지정 해제', CATEGORY_CREATE: '분야 생성', CATEGORY_RENAME: '분야 이름 변경', CATEGORY_DELETE: '분야 삭제' }
@@ -57,7 +57,7 @@ export function useServerScreen(template, id, query) {
         { btns: [...(unread ? [{ label: '확인', onClick: () => markRead([r.alert_id]) }] : []), ...history] },
       ] }
     })
-    blocks.push({ type: 'buttons', items: [{ label: '모두 확인', onClick: () => { void markAllRead().catch(() => {}) } }] })
+    blocks.push({ type: 'buttons', items: [{ label: '모두 확인', onClick: () => { void markAllRead(filters.category).catch(() => {}) } }] })
     blocks.push({ ...table(['분류', '알림 내용', '발생 시각(KST)', '관리'], [], '0.7fr 2.4fr 1.2fr 1.2fr'), rows })
   } else if (endpoint === '/admin/data/runs') {
     blocks.push({ type: 'runSearch' })

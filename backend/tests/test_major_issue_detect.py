@@ -154,6 +154,18 @@ class DetectTest(unittest.TestCase):
         result = job.detect(self.database, T)
         self.assertEqual((result['events'], result['deliveries']), (1, 0))
 
+    def test_synonym_of_blocked_topic_is_not_delivered(self):
+        self.consent(); self.collected(job.MARKET, job.SHORT_NEWS)
+        setting, topics = self.meta.tables['notification_setting'], self.meta.tables['keyword_topic']
+        with self.engine.begin() as c:
+            c.execute(setting.update().where(setting.c.user_id == self.uid).values(keyword_blocks_json=[{'kw_topic': '관세', 'selected_terms': ['관세']}]))
+            c.execute(topics.insert(), {'keyword_text': '관세', 'status': 'UNCLASSIFIED'})
+            c.execute(topics.insert(), {'keyword_text': '관세율', 'canonical_text': '관세', 'status': 'SYNONYM'})
+        self.keyword('관세율', T, 24)
+        result = job.detect(self.database, T)
+        self.assertEqual((result['events'], result['deliveries']), (1, 0))
+        self.assertEqual(self.events()[0]['payload_json']['target'], {'keyword_text': '관세율', 'kw_topic': '관세'})
+
     def test_aggregate_event_without_article_opens_event_detail(self):
         self.consent(); self.collected(job.MARKET, job.SHORT_NEWS)
         self.keyword('관세', T, 24)

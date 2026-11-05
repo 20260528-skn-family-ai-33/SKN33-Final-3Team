@@ -6,6 +6,7 @@ from backend.app.api.results import save_snapshot, read_snapshot
 
 
 POPUP_KINDS={'report_popup':('REPORT',),'major_issue_popup':('MAJOR_ISSUE',),'spike_popup':('PRODUCT_SPIKE','KEYWORD_SPIKE')}
+REPORT_KINDS={'RPT_WEEKLY':'주간','RPT_MONTHLY':'월간','RPT_QUARTERLY':'분기'}
 
 
 def active_terms(store):
@@ -122,7 +123,11 @@ def issue_view(store,event,uid=None,articles=None):
 
 def notice_text(event_type,p):
     """API 공통스키마 Notification의 유형별 표시 문구. 판정 사건은 근거 값으로 만든다."""
-    if event_type=='REPORT': return '리포트가 발행되었습니다.','저장된 리포트를 확인하세요.'
+    if event_type=='REPORT':
+        kind=REPORT_KINDS.get(p.get('report_type'))
+        period=p.get('period') or {}
+        title=f'{kind} 리포트가 발행되었습니다.' if kind else '리포트가 발행되었습니다.'
+        return title,(f"{period['start']} ~ {period['end']} 기간 리포트를 확인하세요." if period else '저장된 리포트를 확인하세요.')
     label=p.get('label')
     if event_type=='MAJOR_ISSUE' and p.get('reason')=='WEEKLY_NEWS_SPIKE':
         return f'주요 이슈: {label}',f"최근 7일 기사 {p['recent_week_count']}건으로 직전 8주 주평균의 {p['ratio']:.1f}배입니다."

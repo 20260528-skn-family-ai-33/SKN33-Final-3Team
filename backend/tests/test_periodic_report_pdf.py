@@ -2,7 +2,7 @@
 import io
 import os
 import unittest
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +14,7 @@ from backend.app.api.common import ApiError, now
 from backend.app.api.config import Settings
 from backend.app.api.database import Store
 from backend.app.api.worker import run_once
-from backend.app.services.report_context import build_context, safe_url
+from backend.app.services.report_context import build_context, safe_url, weekly_highlights
 from backend.app.services.report_templates import render
 
 
@@ -129,8 +129,56 @@ class PeriodicContextTest(unittest.TestCase):
         self.assertIn('한국경제', html)
         self.assertIn('파이낸셜뉴스', html)
         self.assertNotIn('<script>bad()', html)
-        self.assertIn('아직 연결되지 않았습니다', html)
+        self.assertIn('직전 8주와 비교하지 않았습니다', html)  # 수집 기록이 없으면 0건으로 보이지 않는다
         self.assertNotIn('기사 저작권은 KOTRA', html)
+
+    def collected_news(self):
+        with self.engine.begin() as c:
+            for code in ('KOTRA_MARKET', 'KOTRA_SHORT_NEWS'):
+                c.execute(self.meta.tables['service_option'].insert(), {'option_code': code, 'option_type': 'SOURCE', 'label_ko': code, 'enabled': True, 'sort_order': 5, 'value_json': {}})
+                c.execute(self.meta.tables['batch_run'].insert(), {'source_code': code, 'job_name': 'NEWS', 'target_table': 'article', 'period_start': date(2025, 10, 1), 'period_end': date(2025, 12, 31), 'status': 'SUCCESS', 'detail_json': {}})
+
+    def test_weekly_connects_keyword_spikes_in_subscribed_country(self):
+        uid = int(self.signup())
+        self.seed_news()
+        self.collected_news()
+        table = self.meta.tables['news_keyword_daily']
+        with self.engine.begin() as c:
+            for day, keyword, country, count in [(date(2025, 12, 21), '관세', 'US', 24), (date(2025, 12, 14), '관세', 'US', 64),
+                                                 (date(2025, 12, 21), '평이', 'US', 23), (date(2025, 12, 14), '평이', 'US', 64),
+                                                 (date(2025, 12, 21), '중국만', 'CN', 50)]:
+                c.execute(table.insert(), {'metric_date': day, 'keyword_text': keyword, 'country_code': country, 'day_count': count})
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertEqual(ctx['keyword_spikes'], [{'keyword': '관세', 'country': '미국', 'this_week': 24, 'weekly_avg_8w': 8.0, 'ratio': 3.0}])
+        self.assertEqual((ctx['summary']['counts']['spike_keywords'], ctx['summary']['spike_ratio']), (1, 3))
+        self.assertIn('관세', render('RPT_WEEKLY', ctx))
+        self.assertIn('급증 키워드: 관세(미국) ×3.0', weekly_highlights(ctx))
+
+    def test_weekly_highlights_explain_missing_collection_and_empty_issues(self):
+        uid = int(self.signup())
+        self.seed_news()
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        text = weekly_highlights(ctx)
+        self.assertIn('직전 8주와 비교하지 않았습니다', text)
+        self.assertIn('주요 이슈: 이번 주 기준에 해당하는 주요 이슈가 없습니다.', text)
+
+    def test_weekly_lists_major_issues_of_that_week_once_and_marks_interest(self):
+        uid = int(self.signup())
+        self.seed_news()
+        table = self.meta.tables['alert_event']
+        article_id = 1
+        with self.engine.begin() as c:
+            for key, metric, label, count in [('a', '2025-12-20', '관세', 20), ('b', '2025-12-21', '관세', 24), ('c', '2025-12-30', '다음주', 9)]:
+                c.execute(table.insert(), {'event_type': 'MAJOR_ISSUE', 'event_key': key * 64, 'created_at': datetime(2025, 12, 22), 'payload_json': {
+                    'reason': 'WEEKLY_NEWS_SPIKE', 'label': label, 'metric_date': metric, 'recent_week_count': count, 'baseline_weekly': 8.0, 'ratio': 3.0, 'target': {'keyword_text': label}}})
+            c.execute(table.insert(), {'event_type': 'MAJOR_ISSUE', 'event_key': 'd' * 64, 'article_id': article_id, 'created_at': datetime(2025, 12, 22), 'payload_json': {
+                'reason': 'KOTRA_TRADE_REGULATION', 'label': '규제 강화', 'metric_date': '2025-12-21', 'article_ids': [article_id], 'target': {}}})
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        issues = {r['title']: r for r in ctx['summary']['issues']}
+        self.assertEqual(set(issues), {'‘관세’ 기사 급증', '규제 강화'})
+        self.assertIn('24건', issues['‘관세’ 기사 급증']['basis'])
+        self.assertEqual(issues['규제 강화']['related'], '관심 범위')
+        self.assertIn('규제 강화', render('RPT_WEEKLY', ctx))
 
     def test_unsafe_links_are_removed(self):
         self.assertIsNone(safe_url('javascript:alert(1)'))
