@@ -1,4 +1,5 @@
 from datetime import date
+import json
 from sqlalchemy import select, func, exists, or_, and_, delete, update, case
 from backend.app.api.common import require, unavailable, page_info, digest, now, mask_text, percentage
 from backend.app.api.accounts import interests, validate_scope
@@ -99,7 +100,14 @@ def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope=
             exists(select(t.c.tag_id).where(t.c.article_id==a.c.article_id,t.c.keyword_text.in_(matched)))))
     # 분야는 후보 필터가 아닌 정렬 보조로만 적용한다.
     if category_boost:
-        boost=exists(select(t.c.tag_id).select_from(t.join(k,t.c.keyword_text==k.c.keyword_text)).where(t.c.article_id==a.c.article_id,k.c.category_id.in_(category_boost)))
+        live=exists(select(t.c.tag_id).select_from(t.join(k,t.c.keyword_text==k.c.keyword_text)).where(t.c.article_id==a.c.article_id,k.c.category_id.in_(category_boost)))
+        frozen = a.c.admin_meta_json['keyword_categories'].as_string()
+        if store.c.dialect.name == 'mysql':
+            saved = or_(*(func.json_contains(frozen, json.dumps({'category_id': identity})) == 1 for identity in category_boost))
+        else:
+            values = func.json_each(frozen).table_valued('value').alias('saved_categories')
+            saved = exists(select(1).select_from(values).where(func.json_extract(values.c.value, '$.category_id').in_(category_boost)))
+        boost=case((frozen.is_not(None), saved), else_=live)
         stmt=stmt.order_by(case((boost,0),else_=1))
     return stmt.order_by(a.c.published_date.desc(),a.c.article_id.desc())
 

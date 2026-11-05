@@ -1,4 +1,4 @@
-"""Explicit additive migration. Default is a read-only plan. Never run on app startup."""
+"""Explicit schema migration. Default is a read-only plan. Never run on app startup."""
 import argparse
 import json
 from pathlib import Path
@@ -41,6 +41,17 @@ def plan(connection):
                 actual=columns[column.name]
                 expected=str(column.type.compile(dialect=connection.dialect)).lower()
                 found=str(actual['type'].compile(dialect=connection.dialect)).lower()
+                if table.name == 'api_audit_event' and column.name == 'target_id' and connection.dialect.name == 'mysql':
+                    # #63: 기존 감사 대상 키를 사전의 binary collation과 맞춘다. 데이터·열은 보존한다.
+                    if getattr(actual['type'], 'length', None) != 120 or actual['nullable']:
+                        raise RuntimeError('Table column mismatch: api_audit_event.target_id')
+                    # SHOW CREATE TABLE은 테이블 기본값과 같은 collation을 생략할 수 있다.
+                    # 실제 유효 값을 읽어 이미 적용된 스키마에서 반복 ALTER하지 않는다.
+                    collation = connection.scalar(text("SELECT COLLATION_NAME FROM information_schema.COLUMNS "
+                                                       "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='api_audit_event' AND COLUMN_NAME='target_id'"))
+                    if collation != 'utf8mb4_bin':
+                        statements.append('ALTER TABLE `api_audit_event` MODIFY COLUMN `target_id` VARCHAR(120) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL')
+                    continue
                 if expected!=found or column.nullable!=actual['nullable']:
                     raise RuntimeError(f'Table column mismatch: {table.name}.{column.name}')
             if inspector.get_pk_constraint(table.name)['constrained_columns']!=list(table.primary_key.columns.keys()):
@@ -79,7 +90,7 @@ def main():
             if connection.scalar(text("SELECT GET_LOCK('borderless_migration_038',10)"))!=1:
                 raise RuntimeError('Migration lock unavailable')
             try:
-                # MySQL DDL auto-commits. Additive steps allow a safe rerun after partial failure.
+                # MySQL DDL auto-commits. plan() omits completed steps on a rerun.
                 for statement in plan(connection): connection.exec_driver_sql(statement)
                 connection.commit()
                 assert not plan(connection), 'Migration incomplete'

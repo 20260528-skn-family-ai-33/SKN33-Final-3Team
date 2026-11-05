@@ -72,7 +72,7 @@ function KeywordEditor({ data, fields, reload }) {
   const submit = () => runOnce(async () => {
     setError(null)
     try {
-      await api('/admin/keyword-topics/review', { method: 'PATCH', body: { keyword_text: k.keyword_text, action, category_id: action === 'ASSIGN' ? Number(category) : null, apply_scope: 'CURRENT_LOOKUPS', expected_version: k.version, reason: reason.trim(), confirmed: true } })
+      await api('/admin/keyword-topics/review', { method: 'PATCH', body: { keyword_text: k.keyword_text, action, category_id: action === 'ASSIGN' ? Number(category) : null, apply_scope: 'NEW_ONLY', expected_version: k.version, reason: reason.trim(), confirmed: true } })
       setAction(null); reload(); notify('키워드 변경과 처리 이력을 저장했습니다.')
     } catch (e) { setError(e) }
   })
@@ -86,7 +86,7 @@ function KeywordEditor({ data, fields, reload }) {
     <label className="lbl" htmlFor="keyword-minor" style={{ marginTop: 12 }}>중분류</label>
     <Select id="keyword-minor" value={category} onChange={setCategory} options={[[ '', '선택하세요' ], ...fields.filter(f => f.major_name === major).map(f => [String(f.category_id), f.minor_name])]} />
     <label className="lbl" htmlFor="keyword-reason" style={{ marginTop: 16 }}>처리 사유</label><TextField id="keyword-reason" value={reason} onChange={setReason} maxLength={1000} />
-    <p className="note" style={{ marginTop: 12 }}>분류 변경은 사전 기반 현재 기사 조회에 반영됩니다. 저장된 답변·리포트는 유지됩니다.</p>
+    <p className="note" style={{ marginTop: 12 }}>분류 변경은 새로 적재되는 기사부터 적용됩니다. 기존 기사·답변·리포트의 분류는 유지됩니다.</p>
     <div style={stack}>
       <Btn kind="red" disabled={!category || !reason.trim() || busy} onClick={() => setAction('ASSIGN')}>분야 지정·변경</Btn>
       {k.status !== 'CLASSIFIED' && k.review_status !== 'HELD' && <Btn disabled={!reason.trim() || busy} onClick={() => setAction('HOLD')}>보류</Btn>}
@@ -108,7 +108,7 @@ function Fields({ route, data, reload }) {
     <div style={stack}><Btn onClick={() => setEditing({})}>새 분야 만들기</Btn>{selected && <Btn to="/admin/keywords/fields">분야 목록</Btn>}</div>
     {(selected ? [selected] : data.items).map(f => <div key={f.category_id} className="between" style={{ padding: '16px 0', borderBottom: '1px solid var(--line)' }}>
       <div><b>{fieldLabel(f)}</b><p className="note">{f.editable ? '관리자 생성' : '기본·기존 분야'}</p>{selected && <p className="note">대표 키워드: {f.representative_terms.join(', ') || '없음'}</p>}</div>
-      <div style={stack}><Btn to={`/admin/keywords/fields/${f.category_id}`}>상세</Btn>{f.editable && <Btn onClick={() => setEditing(f)}>수정·삭제</Btn>}</div>
+      <div style={stack}><Btn to={`/admin/keywords/fields/${f.category_id}`}>상세</Btn>{f.editable && <Btn onClick={() => setEditing(f)}>이름 수정</Btn>}</div>
     </div>)}
     {!data.items.length && <p className="muted">분류 사전 적재 후 표시됩니다.</p>}
     {editing && <CategoryEditor key={editing.category_id || 'new'} category={editing} onClose={() => setEditing(null)} reload={reload} />}
@@ -117,22 +117,22 @@ function Fields({ route, data, reload }) {
 
 function CategoryEditor({ category, onClose, reload }) {
   const [major, setMajor] = useState(category.major_name || ''), [minor, setMinor] = useState(category.minor_name || '')
-  const [reason, setReason] = useState(''), [error, setError] = useState(null), [deleting, setDeleting] = useState(false)
+  const [reason, setReason] = useState(''), [error, setError] = useState(null)
   const [busy, runOnce] = usePendingAction()
-  const save = remove => runOnce(async () => {
+  const save = () => runOnce(async () => {
     setError(null)
     try {
-      await api('/admin/keyword-categories' + (category.category_id ? `/${category.category_id}` : ''), { method: remove ? 'DELETE' : category.category_id ? 'PATCH' : 'POST', body: { ...(remove ? {} : { major_name: major.trim(), minor_name: minor.trim() }), ...(category.category_id ? { expected_version: category.version } : {}), reason: reason.trim(), confirmed: true } })
+      await api('/admin/keyword-categories' + (category.category_id ? `/${category.category_id}` : ''), { method: category.category_id ? 'PATCH' : 'POST', body: { major_name: major.trim(), minor_name: minor.trim(), ...(category.category_id ? { expected_version: category.version } : {}), reason: reason.trim(), confirmed: true } })
       onClose(); reload()
     } catch (e) { setError(e) }
   })
   return <Modal onClose={() => !busy && onClose()} label="분야 편집">
-    <h2 className="t2">{deleting ? '이 분야를 삭제할까요?' : category.category_id ? '분야 이름 수정' : '새 분야 만들기'}</h2>
+    <h2 className="t2">{category.category_id ? '분야 이름 수정' : '새 분야 만들기'}</h2>
     <label className="lbl" htmlFor="category-major">대분류</label><TextField id="category-major" value={major} onChange={setMajor} maxLength={40} />
     <label className="lbl" htmlFor="category-minor">중분류</label><TextField id="category-minor" value={minor} onChange={setMinor} maxLength={60} />
     <label className="lbl" htmlFor="category-reason">처리 사유</label><TextField id="category-reason" value={reason} onChange={setReason} maxLength={1000} />
-    <p className="note">키워드·기사에서 사용 중인 분야는 삭제할 수 없습니다.</p><ErrorNotice error={error} />
-    <div style={stack}><Btn disabled={busy} onClick={onClose}>취소</Btn><Btn kind="red" disabled={busy || !reason.trim() || !major.trim() || !minor.trim()} onClick={() => save(deleting)}>{deleting ? '삭제 확인' : '확인하고 저장'}</Btn>{category.category_id && !deleting && <Btn kind="danger" onClick={() => setDeleting(true)}>삭제</Btn>}</div>
+    <p className="note">분야 삭제·이관은 제공하지 않습니다.</p><ErrorNotice error={error} />
+    <div style={stack}><Btn disabled={busy} onClick={onClose}>취소</Btn><Btn kind="red" disabled={busy || !reason.trim() || !major.trim() || !minor.trim()} onClick={save}>확인하고 저장</Btn></div>
   </Modal>
 }
 

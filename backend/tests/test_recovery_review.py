@@ -1,18 +1,24 @@
-"""#63 리뷰 회귀: 원자적 복구 제한과 전체 SMTP 상한."""
+"""#63 리뷰 회귀: 원자적 복구 제한, 전체 SMTP 상한, 정확한 집합 기반 이력 조회."""
 import socket
 import subprocess
 import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch
+from unittest.mock import patch, Mock
+from types import SimpleNamespace
 
 from redis.exceptions import ConnectionError
-from sqlalchemy import select, update
-from backend.app.api.common import ApiError
+from sqlalchemy import select, update, event, inspect
+from sqlalchemy.dialects import mysql
+from backend.app.api.common import ApiError, now
 from backend.app.api.recovery import limit_request, send_temporary_password
 from backend.app.api.security import hash_token, password_matches
 from backend.app.api.redis_store import RedisState
+from backend.app.api.keyword_admin import latest_reviews
+from backend.app.api.database import Store
+from backend.app.api.runtime_schema import RUNTIME_TABLES, EXTENSIONS
+from backend.scripts.migrate_integration import plan
 from backend.tests import test_recovery_keyword_admin as fixture
 
 
@@ -166,6 +172,83 @@ class RecoveryReviewTest(unittest.TestCase):
             self.assertNotIn('not-a-real-app-password', args)
             self.assertNotIn('SyntheticSecret123', args)
             self.assertLessEqual(child.communicate.call_args_list[0].kwargs['timeout'], 15)
+
+
+class KeywordReviewQueryTest(unittest.TestCase):
+    setUp = fixture.RecoveryKeywordAdminTest.setUp
+    seed_admin = fixture.RecoveryKeywordAdminTest.seed_admin
+
+    def test_latest_history_filter_pagination_and_count_without_correlated_scans(self):
+        self.seed_admin()
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['keyword_topic'].insert(), [
+                {'keyword_text': f'query-{i:03}', 'status': 'PENDING'} for i in range(30)])
+            c.execute(self.meta.tables['api_audit_event'].insert(), [
+                {'audit_id': f'query-{i:03}-{n:02}', 'actor_id': self.uid, 'action': 'KEYWORD_HOLD',
+                 'target_type': 'KEYWORD', 'target_id': f'query-{i:03}', 'reason': 'query test',
+                 'before_json': {}, 'after_json': {'review_status': 'HELD' if n == 9 else 'UNREVIEWED'},
+                 'created_at': now()} for i in range(30) for n in range(10)])
+            self.app.state.database.table('api_audit_event', c)
+            self.app.state.database.table('keyword_topic', c)
+            self.app.state.database.table('keyword_category', c)
+            self.app.state.database.table('article_tag', c)
+        statements = []
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            statements.append(statement)
+        event.listen(self.engine, 'before_cursor_execute', capture)
+        try:
+            response = self.client.get('/api/v1/admin/keyword-topics?review_status=HELD&q=query-&sort=KEYWORD_ASC&page=2&page_size=7')
+        finally:
+            event.remove(self.engine, 'before_cursor_execute', capture)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['page']['total'], 30)
+        self.assertEqual([row['keyword_text'] for row in response.json()['items']], [f'query-{i:03}' for i in range(7, 14)])
+        queries = [sql for sql in statements if 'ranked_reviews' in sql]
+        self.assertEqual(len(queries), 2)
+        self.assertTrue(all(sql.lower().count('row_number()') == 1 for sql in queries))
+        self.assertNotIn('article_tag', next(sql for sql in queries if sql.startswith('SELECT count(')))
+        with self.engine.connect() as c:
+            store = Store(self.app.state.database, c)
+            with patch.object(c.dialect, 'name', 'mysql'):
+                sql = str(latest_reviews(store).select().compile(dialect=mysql.dialect()))
+            self.assertNotIn('CAST(', sql)
+            self.assertIn('utf8mb4_bin', sql)
+        indexes = inspect(self.engine).get_indexes('api_audit_event')
+        self.assertEqual(next(i['column_names'] for i in indexes if i['name'] == 'ix_api_audit_target_time'),
+                         ['target_type', 'target_id', 'created_at', 'audit_id'])
+
+    def test_index_migration_is_repeatable_and_preserves_existing_rows(self):
+        with self.engine.begin() as c:
+            c.exec_driver_sql('DROP INDEX ix_api_audit_target_time')
+            statements = plan(c)
+            self.assertEqual(len(statements), 1)
+            self.assertIn('CREATE INDEX ix_api_audit_target_time', statements[0])
+            c.exec_driver_sql(statements[0])
+            self.assertEqual(plan(c), [])
+
+    def test_mysql_collation_plan_uses_effective_value_and_is_idempotent(self):
+        dialect = mysql.dialect()
+        tables = {table.name: table for table in RUNTIME_TABLES}
+        schema = Mock()
+        schema.get_table_names.return_value = list(EXTENSIONS) + list(tables)
+        def columns(name):
+            source = EXTENSIONS[name] if name in EXTENSIONS else tables[name].c
+            return [{'name': column.name, 'type': mysql.VARCHAR(120) if name == 'api_audit_event' and column.name == 'target_id'
+                     else column.type.dialect_impl(dialect), 'nullable': column.nullable} for column in source]
+        schema.get_columns.side_effect = columns
+        schema.get_pk_constraint.side_effect = lambda name: {'constrained_columns': list(tables[name].primary_key.columns.keys())}
+        schema.get_indexes.side_effect = lambda name: [{'name': index.name, 'column_names': list(index.columns.keys())} for index in tables[name].indexes]
+        schema.get_foreign_keys.side_effect = lambda name: [
+            {'constrained_columns': list(fk.columns.keys()), 'referred_table': 'users', 'referred_columns': ['user_id'],
+             'options': {'ondelete': 'CASCADE'}} for fk in tables[name].foreign_key_constraints]
+        connection = SimpleNamespace(dialect=dialect, scalar=Mock(return_value='utf8mb4_0900_ai_ci'))
+        with patch('backend.scripts.migrate_integration.inspect', return_value=schema):
+            statements = plan(connection)
+            self.assertEqual(len(statements), 1)
+            self.assertIn('COLLATE utf8mb4_bin', statements[0])
+            # 열 type에 collation이 생략되어도 실제 테이블 기본값이 binary면 ALTER를 반복하지 않는다.
+            connection.scalar.return_value = 'utf8mb4_bin'
+            self.assertEqual(plan(connection), [])
 
 
 if __name__ == '__main__':

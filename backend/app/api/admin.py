@@ -92,9 +92,10 @@ def article_detail(store,identity):
     t,k,c=store.t('article_tag'),store.t('keyword_topic'),store.t('keyword_category')
     topics=store.rows(select(k.c.keyword_text,k.c.canonical_text,c.c.category_id,c.c.major_name,c.c.minor_name)
         .select_from(t.join(k,t.c.keyword_text==k.c.keyword_text).outerjoin(c,c.c.category_id==k.c.category_id)).where(t.c.article_id==identity))
+    classified = (row['admin_meta_json'] or {}).get('keyword_categories', topics)
     moderation={'article_id':str(identity),'visibility':'VISIBLE' if row['visibility_status']=='VISIBLE' else 'EXCLUDED',
         'original_category':row['category'],'kw_topic':sorted(set(x['canonical_text'] or x['keyword_text'] for x in topics)),
-        'kw_sub':None,'categories':list({x['category_id']:{k:x[k] for k in ('category_id','major_name','minor_name')} for x in topics if x['category_id']}.values()),
+        'kw_sub':None,'categories':list({x['category_id']:{k:x[k] for k in ('category_id','major_name','minor_name')} for x in classified if x['category_id']}.values()),
         'affected_report_ids':[]}
     # 저장 리포트는 변경하지 않고 참조 관계만 검사한다.
     r=store.t('report')
@@ -120,7 +121,7 @@ def change_visibility(store,actor,identity,data):
 def audit_view(row):
     return {'audit_id':row['audit_id'],'actor_id':str(row['actor_id']),'action':row['action'],'target_type':row['target_type'],
         'target_id':row['target_id'],'reason':row['reason'],'before':row['before_json'],'after':row['after_json'],
-        'impact':'신규 조회에 적용, 저장된 답변·리포트 보존','result':'SUCCEEDED','created_at':row['created_at']}
+        'impact':'새 기사부터 적용, 기존 기사·답변·리포트 보존' if row['after_json'].get('apply_scope') == 'NEW_ONLY' else '신규 조회에 적용, 저장된 답변·리포트 보존','result':'SUCCEEDED','created_at':row['created_at']}
 
 
 # 화면에 보이는 작업 이름(frontend/src/admin/useServerScreen.js AUDIT_ACTION과 같은 값). 한글 이름으로도 검색되게 쓴다.

@@ -2571,7 +2571,7 @@
         "apply_scope",
         "string",
         "필수",
-        "CURRENT_LOOKUPS: 사전 기반 현재 기사 조회에 적용. 저장 답변·리포트는 불변. NEW_ONLY/EXISTING_NOW는 스냅샷·재처리 실행기 연결 전 지원하지 않음."
+        "NEW_ONLY: 새로 최초 적재되는 기사부터 적용. 기존 기사 분류·저장 답변·리포트는 보존. CURRENT_LOOKUPS/EXISTING_NOW는 지원하지 않음."
       ],
       [
         "Request Body",
@@ -2721,7 +2721,7 @@
   },
   {
     "id": 105,
-    "title": "API-105  관리자 생성 분야 삭제",
+    "title": "API-105  분야 삭제 (제공하지 않음: 삭제·이관 제외 결정)",
     "route": "DELETE  /api/v1/admin/keyword-categories/{category_id}",
     "auth": "ADMIN",
     "fields": [

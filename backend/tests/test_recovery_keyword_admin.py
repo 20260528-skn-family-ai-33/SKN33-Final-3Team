@@ -158,7 +158,7 @@ class RecoveryKeywordAdminTest(unittest.TestCase):
 
     def review(self, action, category=None, version=None, **extra):
         if version is None: version = self.client.get('/api/v1/admin/keyword-topics/detail', params={'keyword_text': '검수키워드'}).json()['keyword']['version']
-        return self.call('PATCH', 'admin/keyword-topics/review', {'keyword_text': '검수키워드', 'action': action, 'category_id': category, 'expected_version': version, 'confirmed': True, 'reason': '기사 근거 확인', 'apply_scope': 'CURRENT_LOOKUPS', **extra})
+        return self.call('PATCH', 'admin/keyword-topics/review', {'keyword_text': '검수키워드', 'action': action, 'category_id': category, 'expected_version': version, 'confirmed': True, 'reason': '기사 근거 확인', 'apply_scope': 'NEW_ONLY', **extra})
 
     def test_keyword_review_persists_filters_history_and_version_conflicts(self):
         self.assertEqual(self.client.get('/api/v1/admin/keyword-topics').status_code, 403)
@@ -178,13 +178,43 @@ class RecoveryKeywordAdminTest(unittest.TestCase):
         self.assertEqual(classified[0]['article_count'], 1)
         self.assertEqual(self.review('ASSIGN', 2).status_code, 200)
         article = self.client.get('/api/v1/admin/articles/1').json()
-        self.assertEqual(article['moderation']['categories'][0]['category_id'], 2)
+        self.assertEqual(article['moderation']['categories'], [])
         history = self.client.get('/api/v1/admin/audit-events?target_type=KEYWORD').json()['items']
         self.assertEqual(len(history), 3)
         self.assertEqual(history[0]['after']['category_id'], 2)
+        # 새 기사는 최초 적재 정책을 고정하고, 재분류·재적재가 이전 분류를 바꾸지 않는다.
+        import tempfile
+        from pathlib import Path
+        from backend.app.services import news_schema
+        with tempfile.TemporaryDirectory() as directory, patch.object(news_schema, 'SNAPSHOT_DIR', Path(directory)):
+            with self.engine.begin() as c:
+                a = self.meta.tables['article']
+                rows = news_schema.article_insert_rows(c, a, [{'article_id': 2, 'source_code': 'KOTRA_MARKET',
+                    'external_id': 'new-only', 'title': '새 기사', 'published_date': date(2026, 11, 2),
+                    'source_url': 'https://example.org/2', 'body_masked': '새 기사 본문'}])
+                c.execute(a.insert(), rows)
+                c.execute(self.meta.tables['article_tag'].insert(), {'article_id': 2, 'keyword_text': '검수키워드'})
+                news_schema.freeze_keyword_categories(c, a, [2], ingestion_policy=True)
+            self.assertEqual(self.review('ASSIGN', 1).status_code, 200)
+            with self.engine.begin() as c:
+                news_schema.freeze_keyword_categories(c, a, [2], ingestion_policy=True)
+            self.assertEqual(self.client.get('/api/v1/admin/articles/2').json()['moderation']['categories'][0]['category_id'], 2)
+            self.assertEqual(self.client.get('/api/v1/admin/articles/1').json()['moderation']['categories'], [])
+            from backend.app.api.database import Store
+            from backend.app.api.news import article_statement
+            from sqlalchemy.dialects import mysql
+            with self.engine.begin() as c:
+                # 더 최근인 미분류 기사보다 과거에 분야 2로 고정된 기사를 우선한다.
+                c.execute(update(a).where(a.c.article_id == 1).values(published_date=date(2026, 11, 3)))
+                store = Store(self.app.state.database, c)
+                statement = article_statement(store, category_boost=[2])
+                self.assertEqual([r.article_id for r in c.execute(statement)], [2, 1])
+                with patch.object(c.dialect, 'name', 'mysql'):
+                    sql = str(article_statement(store, category_boost=[2]).compile(dialect=mysql.dialect()))
+                self.assertIn('json_contains', sql)
         self.assertEqual(self.review('RELEASE').status_code, 200)
         self.assertEqual(self.client.get('/api/v1/admin/keyword-topics?review_status=UNREVIEWED').json()['page']['total'], 1)
-        self.assertEqual(self.review('ASSIGN', 1, apply_scope='NEW_ONLY').status_code, 422)
+        self.assertEqual(self.review('ASSIGN', 1, apply_scope='CURRENT_LOOKUPS').status_code, 422)
         self.assertEqual(self.review('ASSIGN', 9999).status_code, 404)
 
     def test_category_crud_guards_and_member_minimal_detail(self):
@@ -198,22 +228,54 @@ class RecoveryKeywordAdminTest(unittest.TestCase):
         self.assertTrue(category['editable'])
         self.assertEqual(self.review('ASSIGN', cid).status_code, 200)
         deletion = {'reason': '삭제', 'confirmed': True, 'expected_version': category['version']}
-        self.assertEqual(self.call('DELETE', path, deletion).status_code, 409)
+        self.assertEqual(self.call('DELETE', path, deletion).status_code, 422)
         self.assertEqual(self.review('RELEASE').status_code, 200)
         rename = self.call('PATCH', path, {**body, 'minor_name': '수정 분야', 'expected_version': category['version']})
         self.assertEqual(rename.status_code, 200, rename.text)
-        self.assertEqual(self.call('DELETE', path, deletion).status_code, 409)
+        self.assertEqual(self.call('DELETE', path, deletion).status_code, 422)
         deletion['expected_version'] = self.client.get('/api/v1/'+path).json()['category']['version']
-        self.assertEqual(self.call('DELETE', path, deletion).status_code, 200)
-        history = self.client.get('/api/v1/admin/audit-events?target_type=CATEGORY').json()['items']
-        deleted = next(event for event in history if event['action'] == 'CATEGORY_DELETE')
-        self.assertEqual(deleted['before'], {'major_name': '운영 분류', 'minor_name': '수정 분야'})
-        self.assertEqual(deleted['after'], {})
+        self.assertEqual(self.call('DELETE', path, deletion).status_code, 422)
+        self.assertEqual(self.client.get('/api/v1/'+path).status_code, 200)
         self.assertEqual(self.call('PATCH', 'admin/keyword-categories/1', {**body, 'expected_version': 'x'}).status_code, 409)
         member = self.client.get(f'/api/v1/admin/users/{self.uid}').json()
         self.assertTrue({'interests', 'settings', 'subscriptions'} <= member.keys())
         self.assertNotIn('password_hash', member['member'])
         self.assertNotIn('auth_version', member['member'])
+
+    def test_delayed_keyword_results_use_original_policy_for_both_loaders(self):
+        import tempfile
+        from pathlib import Path
+        from backend.app.db import news_lock
+        from backend.app.services import news_schema
+        from backend.app.scheduler.jobs import news_load, shortnews_load
+        from backend.tests import test_news_load as market, test_shortnews_load as short
+        self.seed_admin()
+        with self.engine.begin() as c:
+            c.exec_driver_sql('CREATE UNIQUE INDEX article_origin ON article(source_code, external_id)')
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(news_schema, 'SNAPSHOT_DIR', Path(directory)/'snapshots'), \
+                patch.object(news_lock, 'LOAD_LOCK_DIR', Path(directory)/'locks'):
+            for loader, raw, clean, source in (
+                (news_load.load, lambda key: market.raw(key, '2026-11-01'),
+                 lambda key: market.clean(key, '2026-11-01', '검수키워드'), 'KOTRA_MARKET'),
+                (shortnews_load.load, lambda key: short.raw(key),
+                 lambda key: short.clean(key, keywords='검수키워드', hs=''), 'KOTRA_SHORT_NEWS'),
+            ):
+                with self.subTest(source=source):
+                    with self.engine.begin() as c:
+                        c.execute(update(self.meta.tables['keyword_topic']).values(category_id=1, status='CLASSIFIED'))
+                    loader(self.engine, [raw('101')], [])
+                    a = self.meta.tables['article']
+                    with self.engine.connect() as c:
+                        pending = c.execute(select(a.c.admin_meta_json).where(a.c.source_code==source, a.c.external_id=='101')).scalar_one()
+                    self.assertNotIn('keyword_categories', pending)
+                    with self.engine.begin() as c:
+                        c.execute(update(self.meta.tables['keyword_topic']).values(category_id=2))
+                    loader(self.engine, [raw('101'), raw('102')], [clean('101'), clean('102')])
+                    with self.engine.connect() as c:
+                        classified = dict(c.execute(select(a.c.external_id, a.c.admin_meta_json).where(a.c.source_code==source, a.c.external_id.in_(['101', '102']))).all())
+                    self.assertEqual(classified['101']['keyword_categories'][0]['category_id'], 1)
+                    self.assertEqual(classified['102']['keyword_categories'][0]['category_id'], 2)
 
     def test_keyword_history_keeps_case_sensitive_dictionary_keys(self):
         self.seed_admin()

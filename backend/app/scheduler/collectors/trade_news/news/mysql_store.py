@@ -42,7 +42,7 @@ class MySQLArticleStore:
         # 예외가 발생하면 정보 조회/INSERT/태그 전체가 이 문맥에서 rollback됩니다.
         from backend.app.db.news_lock import article_load_lock
         with article_load_lock(self.db.engine), self.db.begin():
-            from backend.app.services.news_schema import reflect, article_insert_rows
+            from backend.app.services.news_schema import reflect, article_insert_rows, freeze_keyword_categories
             require_tables(self.db,self.include_tags)
             # 실제 컬럼을 읽어 구형 ERD와 관리자 ERD를 함께 지원합니다. DDL은 실행하지 않습니다.
             article_table = reflect(self.db, 'article')
@@ -79,5 +79,7 @@ class MySQLArticleStore:
                 for k,v in fields.items():query=query.where(TAG.c[k]==v)
                 if self.db.execute(query).first() is None:
                     self.db.execute(TAG.insert().values(article_id=article_id,**fields))
+            if self.include_tags:
+                freeze_keyword_categories(self.db, article_table, [article_id], ingestion_policy=True)
         result={'article_id':article_id,'status':'existing' if existing else 'inserted'}
         return result if return_result else article_id

@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import MetaData, Table, inspect, select
+from sqlalchemy import MetaData, Table, inspect, select, update
 from sqlalchemy.engine import Connection
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -107,3 +107,46 @@ def article_metadata(session, table, ids):
         result.update(session.execute(select(table.c.article_id, table.c.admin_meta_json)
                                       .where(table.c.article_id.in_(ids[start:start + 1000]))).all())
     return result
+
+
+def freeze_keyword_categories(session, table, ids, *, ingestion_policy=False):
+    """최초 분류를 기존 관리자 JSON에 고정한다. 재적재·사전 변경은 고정값을 덮어쓰지 않는다."""
+    ids = list(ids)
+    if not ids or 'admin_meta_json' not in table.c:
+        return
+    connection = session if isinstance(session, Connection) else session.connection()
+    names = set(inspect(connection).get_table_names())
+    if not {'article_tag', 'keyword_topic', 'keyword_category'} <= names:
+        return  # 구형 ERD 호환. 관리자 API는 세 테이블이 있는 환경에서만 활성화된다.
+    tags, topics, categories = (reflect(connection, name) for name in ('article_tag', 'keyword_topic', 'keyword_category'))
+    current = {r['keyword_text']: dict(r) for r in session.execute(
+        select(topics.c.keyword_text, categories.c.category_id, categories.c.major_name, categories.c.minor_name)
+        .select_from(topics.join(categories, topics.c.category_id == categories.c.category_id))).mappings()}
+    policies = {}
+    for offset in range(0, len(ids), 500):
+        rows = session.execute(select(table.c.article_id, table.c.admin_meta_json)
+                               .where(table.c.article_id.in_(ids[offset:offset+500])).with_for_update()).mappings().all()
+        for row in rows:
+            meta = dict(row['admin_meta_json'] or {})
+            if 'keyword_categories' in meta:
+                continue
+            dictionary = current
+            reference = meta.get('classification_input') if ingestion_policy else None
+            if reference:
+                digest = reference.get('sha256', '')
+                if len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+                    raise ValueError('분류 정책 스냅샷 식별자가 유효하지 않습니다')
+                if digest not in policies:
+                    payload = (Path(SNAPSHOT_DIR) / (digest+'.json')).read_bytes()
+                    if hashlib.sha256(payload).hexdigest() != digest:
+                        raise ValueError('분류 정책 스냅샷 무결성을 확인하세요')
+                    saved = json.loads(payload)['tables']
+                    fields = {r['category_id']: r for r in saved.get('keyword_category') or []}
+                    policies[digest] = {r['keyword_text']: {'keyword_text': r['keyword_text'],
+                        **{k: fields[r['category_id']][k] for k in ('category_id', 'major_name', 'minor_name')}}
+                        for r in saved.get('keyword_topic') or [] if r.get('category_id') in fields}
+                dictionary = policies[digest]
+            words = session.execute(select(tags.c.keyword_text).where(tags.c.article_id == row['article_id'],
+                                                                      tags.c.keyword_text.is_not(None))).scalars()
+            meta['keyword_categories'] = [dictionary[word] for word in sorted(set(words)) if word in dictionary]
+            session.execute(update(table).where(table.c.article_id == row['article_id']).values(admin_meta_json=meta))
