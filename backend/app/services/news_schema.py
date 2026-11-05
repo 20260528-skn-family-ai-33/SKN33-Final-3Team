@@ -111,7 +111,7 @@ def article_metadata(session, table, ids):
 
 def freeze_keyword_categories(session, table, ids, *, ingestion_policy=False):
     """최초 분류를 기존 관리자 JSON에 고정한다. 재적재·사전 변경은 고정값을 덮어쓰지 않는다."""
-    ids = list(ids)
+    ids = sorted(set(ids))
     if not ids or 'admin_meta_json' not in table.c:
         return
     connection = session if isinstance(session, Connection) else session.connection()
@@ -125,11 +125,18 @@ def freeze_keyword_categories(session, table, ids, *, ingestion_policy=False):
     policies = {}
     for offset in range(0, len(ids), 500):
         rows = session.execute(select(table.c.article_id, table.c.admin_meta_json)
-                               .where(table.c.article_id.in_(ids[offset:offset+500])).with_for_update()).mappings().all()
+                               .where(table.c.article_id.in_(ids[offset:offset+500]))
+                               .order_by(table.c.article_id).with_for_update()).mappings().all()
+        rows = [row for row in rows if 'keyword_categories' not in (row['admin_meta_json'] or {})]
+        if not rows:
+            continue
+        # 잠근 기사 묶음의 태그를 한 번에 읽는다. 고정된 기사의 태그 조회·UPDATE는 생략한다.
+        words_by_article = {row['article_id']: set() for row in rows}
+        for article_id, word in session.execute(select(tags.c.article_id, tags.c.keyword_text).where(
+                tags.c.article_id.in_(list(words_by_article)), tags.c.keyword_text.is_not(None))):
+            words_by_article[article_id].add(word)
         for row in rows:
             meta = dict(row['admin_meta_json'] or {})
-            if 'keyword_categories' in meta:
-                continue
             dictionary = current
             reference = meta.get('classification_input') if ingestion_policy else None
             if reference:
@@ -146,7 +153,5 @@ def freeze_keyword_categories(session, table, ids, *, ingestion_policy=False):
                         **{k: fields[r['category_id']][k] for k in ('category_id', 'major_name', 'minor_name')}}
                         for r in saved.get('keyword_topic') or [] if r.get('category_id') in fields}
                 dictionary = policies[digest]
-            words = session.execute(select(tags.c.keyword_text).where(tags.c.article_id == row['article_id'],
-                                                                      tags.c.keyword_text.is_not(None))).scalars()
-            meta['keyword_categories'] = [dictionary[word] for word in sorted(set(words)) if word in dictionary]
+            meta['keyword_categories'] = [dictionary[word] for word in sorted(words_by_article[row['article_id']]) if word in dictionary]
             session.execute(update(table).where(table.c.article_id == row['article_id']).values(admin_meta_json=meta))

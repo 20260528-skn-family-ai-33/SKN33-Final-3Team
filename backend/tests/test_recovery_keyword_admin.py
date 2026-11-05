@@ -407,6 +407,49 @@ class KeywordReviewQueryTest(unittest.TestCase):
     setUp = RecoveryKeywordAdminTest.setUp
     seed_admin = RecoveryKeywordAdminTest.seed_admin
 
+    def test_freeze_batches_tag_reads_and_preserves_fixed_or_unclassified_articles(self):
+        from backend.app.services.news_schema import freeze_keyword_categories
+        self.seed_admin()
+        articles = self.meta.tables['article']
+        topics = self.meta.tables['keyword_topic']
+        tags = self.meta.tables['article_tag']
+        with self.engine.begin() as c:
+            c.execute(update(topics).values(category_id=1, status='CLASSIFIED'))
+            c.execute(update(articles).where(articles.c.article_id == 1).values(
+                admin_meta_json={'keyword_categories': [], 'country_tags_manual': True}))
+            c.execute(articles.insert(), [{'article_id': i, 'source_code': 'KOTRA_MARKET',
+                'external_id': f'bulk-{i}', 'title': '일괄 조회 검증', 'published_date': date(2026, 11, 1),
+                'source_url': f'https://example.org/{i}', 'body_masked': '합성 본문',
+                'admin_meta_json': {'country_tags_manual': True}} for i in range(2, 1004)])
+            c.execute(tags.insert(), [{'article_id': i, 'keyword_text': '검수키워드'} for i in range(2, 1002)]
+                      + [{'article_id': 2, 'keyword_text': '검수키워드'},
+                         {'article_id': 1002, 'keyword_text': '나중키워드'}])
+        tag_queries = []
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            if statement.startswith('SELECT') and 'FROM article_tag' in statement:
+                tag_queries.append((statement, len(parameters)))
+        event.listen(self.engine, 'before_cursor_execute', capture)
+        try:
+            with self.engine.begin() as c:
+                freeze_keyword_categories(c, articles, list(reversed(range(1, 1004))) + [2])
+                rows = dict(c.execute(select(articles.c.article_id, articles.c.admin_meta_json)).all())
+                self.assertEqual(len(tag_queries), 3)  # 1,003건이어도 500건 묶음당 태그 SELECT 1회.
+                self.assertTrue(all(' IN (' in sql and count <= 500 for sql, count in tag_queries))
+                self.assertEqual(rows[1]['keyword_categories'], [])
+                for identity in range(2, 1002):
+                    self.assertEqual(len(rows[identity]['keyword_categories']), 1)
+                    self.assertEqual(rows[identity]['keyword_categories'][0]['category_id'], 1)
+                    self.assertTrue(rows[identity]['country_tags_manual'])
+                self.assertEqual(rows[1002]['keyword_categories'], [])
+                self.assertEqual(rows[1003]['keyword_categories'], [])
+                c.execute(topics.insert(), {'keyword_text': '나중키워드', 'category_id': 2, 'status': 'CLASSIFIED'})
+                c.execute(update(topics).where(topics.c.keyword_text == '검수키워드').values(category_id=2))
+                tag_queries.clear()
+                freeze_keyword_categories(c, articles, range(1, 1004))
+                self.assertEqual(tag_queries, [])
+                self.assertEqual(dict(c.execute(select(articles.c.article_id, articles.c.admin_meta_json)).all()), rows)
+        finally:
+            event.remove(self.engine, 'before_cursor_execute', capture)
 
     def test_latest_history_filter_pagination_and_count_without_correlated_scans(self):
         self.seed_admin()
