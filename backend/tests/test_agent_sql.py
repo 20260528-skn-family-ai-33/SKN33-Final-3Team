@@ -37,6 +37,8 @@ class SqlTest(unittest.TestCase):
             statement(current, edition='HS2017'),
             statement(current, product='330_%'),
             joined.replace("LIKE '3304%'", "LIKE '8542%'"),
+            joined.replace("e.country_code='US'", "(e.country_code='US' OR 1=1)")
+                  .replace("CASE WHEN e.hs6_code LIKE '3304%'", "CASE WHEN (e.hs6_code LIKE '3304%' OR 1=1)"),
             joined.replace("CASE WHEN e.hs6_code LIKE '3304%' THEN e.amount_usd END", "e.amount_usd"),
             statement("trade_month >= '2025-01-01'"),
             statement("trade_month BETWEEN '2024-01-01' AND '2025-03-01'"),

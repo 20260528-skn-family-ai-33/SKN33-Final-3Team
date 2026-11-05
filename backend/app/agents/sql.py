@@ -287,6 +287,16 @@ def _dates_within(filters, allowed):
             and all(n in allowed for n in range(low, high+1)))
 
 
+def _required(node):
+    """WHERE·JOIN ON·CASE WHEN 조건에서 AND로만 이어진 조건인지(OR·NOT 아래면 거르지 않을 수 있다: x='US' OR 1=1)."""
+    parent = node.parent
+    while parent is not None and not isinstance(parent, (exp.Where, exp.If, exp.Join, exp.Select)):
+        if isinstance(parent, (exp.Or, exp.Not, exp.Xor)):
+            return False
+        parent = parent.parent
+    return True
+
+
 def _check_conditions(query, conditions):
     """생성 SQL이 확정 조건과 다른 데이터를 읽지 않게 한다. 결과에는 확정 조건이 붙기 때문이다.
 
@@ -299,18 +309,22 @@ def _check_conditions(query, conditions):
     editions = {item.hs_ver for item in conditions.hs_items} or {'HS2022'}
     confirmed = [item.hs_code for item in conditions.hs_items]
     seen = set()
-    for column, op, values in filter(None, map(_literal_filter, query.walk())):
+    for node in query.walk():
+        found = _literal_filter(node)
+        if found is None:
+            continue
+        column, op, values = found
         name = column.name.lower()
         if name == 'country_code' and countries:
             if op not in ('eq', 'in') or not set(values) <= countries:
                 raise ValueError(f"확정한 국가({', '.join(sorted(countries))})만 country_code로 거르세요.")
-            seen.add('country')
+            if _required(node): seen.add('country')
         if HS_COLUMN.fullmatch(name) and confirmed:
             if op not in ('eq', 'in', 'like') or not all(
                     re.fullmatch(r'[0-9]+%?' if op == 'like' else r'[0-9]+', v)
                     and any(v.startswith(code) for code in confirmed) for v in values):
                 raise ValueError(f"확정한 HS 코드({', '.join(confirmed)})만 hs*_code로 거르세요.")
-            seen.add('hs')
+            if _required(node): seen.add('hs')
     if countries and 'country' not in seen:
         raise ValueError('수출입 표를 확정한 국가 country_code로 거르세요.')
     if confirmed and 'hs' not in seen:
