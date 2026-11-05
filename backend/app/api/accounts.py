@@ -87,6 +87,8 @@ def save_interests(store, uid, data):
 
 
 def change_password(store, user, data):
+    # 임시 비밀번호 재발급과 같은 사용자 행 잠금을 사용한다.
+    user=get_user(store,user_id=user['user_id'],lock=True)
     require(str(data.email).lower()==user['email'].lower() and password_matches(data.current_password,user['password_hash']),
             '현재 비밀번호가 일치하지 않습니다.','CURRENT_PASSWORD_INVALID',403)
     hashed=password_hash(data.new_password,data.new_password_confirm)

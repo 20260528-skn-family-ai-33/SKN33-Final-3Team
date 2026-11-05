@@ -7,9 +7,10 @@ from decimal import Decimal
 
 
 class ApiError(Exception):
-    def __init__(self, status, code, message, details=None, retryable=False):
+    def __init__(self, status, code, message, details=None, retryable=False, retry_after=None):
         self.status, self.code, self.message = status, code, message
         self.details, self.retryable = details or [], retryable
+        self.retry_after = retry_after
 
 
 def unavailable(message, code='DATA_NOT_READY'):

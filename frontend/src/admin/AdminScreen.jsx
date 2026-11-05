@@ -200,7 +200,7 @@ function AuditSearch({ query, to }) {
             <Icon name="search" color="#9AA0AA" />
           </div>
         </div>
-        {select('audit-target', '대상 종류', 'target', [['', '전체'], ['USER', '회원'], ['ARTICLE', '기사']])}
+        {select('audit-target', '대상 종류', 'target', [['', '전체'], ['USER', '회원'], ['ARTICLE', '기사'], ['KEYWORD', '키워드'], ['CATEGORY', '분야']])}
         {select('audit-sort', '정렬', 'sort', [['', '최신순'], ['oldest', '오래된순']])}
         <Btn type="submit" kind="ink" size="md" style={{ height: 44, borderRadius: 12 }}>검색</Btn>
       </form>
