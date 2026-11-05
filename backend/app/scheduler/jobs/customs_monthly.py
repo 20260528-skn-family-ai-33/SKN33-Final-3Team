@@ -92,7 +92,38 @@ def startup_job(scheduler, attempt=1, start_month=None, **options):
                 args=[scheduler, attempt + 1], kwargs={"start_month": start_month, **options},
                 id="customs_startup_retry", replace_existing=True)
         return []
-    return [monthly_job(scheduler, month, **options) for month in months]
+    results = [monthly_job(scheduler, month, **options) for month in months]
+    retry_ml(settings, options.get("env_path", ENV_PATH), skip=months)
+    return results
+
+
+def retry_ml(settings, env_path, skip=()):
+    """ML 모듈이 retry_pending을 제공하면 부른다(candidate_models: 수출입 작업은 SUCCESS인데 모델 B가 READY가 아닌 최신 달).
+    수출입 월 복구와 별개라 실패해도 로그만 남긴다. skip은 이번 실행에서 방금 처리한 달이다(다음 실행에 맡김)."""
+    entrypoint = settings.get("CUSTOMS_ML_ENTRYPOINT")
+    if not entrypoint:
+        return None
+    module, separator, _ = entrypoint.partition(":")
+    if not separator or not module.startswith("backend.app.ml."):
+        return None
+    engine = None
+    try:
+        hook = getattr(importlib.import_module(module), "retry_pending", None)
+        if hook is None:
+            return None
+        engine = make_engine(mysql_url(env_path))
+        # 모델 B 같은 달 자동 재학습 상한(candidate_models.GROWTH_RETRY_LIMIT 기본 3)
+        limit = settings.get("CUSTOMS_ML_GROWTH_RETRIES")
+        result = hook(engine=engine, skip=set(skip), **({"limit": int(limit)} if limit else {}))
+        if result is not None:
+            log.info("ML 재시도: %s %s", result.get("model_name"), result.get("status"))
+        return result
+    except Exception as exc:
+        log.warning("ML 재시도 실패: %s", safe_error(exc))
+        return None
+    finally:
+        if engine is not None:
+            engine.dispose()
 
 
 def register_jobs(scheduler, *, env_path=ENV_PATH, start_month=None, **options):

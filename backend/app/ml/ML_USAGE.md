@@ -15,7 +15,7 @@ python -m pip install -r backend/requirements.txt
 python -c "import lightgbm; print(lightgbm.__version__)"
 ```
 
-컨테이너를 쓰면 실제 실행 이미지에도 `libgomp1`이 필요합니다. `backend/requirements.txt`에는 LightGBM이 포함돼 있으므로 이 목록을 설치하는 환경에 적용합니다. API·worker 전용 `backend/requirements-api.txt`에도 채팅 유망시장 조회용 pandas·joblib·LightGBM·scikit-learn·threadpoolctl이 들어 있으므로(설계 D-48), 워커 서버·이미지에도 `libgomp1`을 설치합니다.
+컨테이너를 쓰면 실제 실행 이미지에도 `libgomp1`이 필요합니다. `backend/requirements.txt`에는 LightGBM이 포함돼 있으므로 이 목록을 설치하는 환경에 적용합니다. API·worker 전용 `backend/requirements-api.txt`에도 채팅 유망시장 조회용 numpy·pandas·scipy·joblib·LightGBM·scikit-learn·threadpoolctl이 들어 있으므로(설계 D-48), 워커 서버·이미지에도 `libgomp1`을 설치합니다. 버전은 배포 모델의 runtime(`model_a_two_stage_<YYYYMM>.registry.json`의 `data_info.runtime`)과 같게 고정합니다. 지금 모델은 Python 3.11.9 · numpy 1.24.3 · pandas 2.2.3 · scipy 1.10.1입니다. 워커는 numpy만 1.26.4를 씁니다(에이전트의 `langgraph-checkpoint-redis` → `redisvl`이 numpy 1.26 이상을 요구하고, 1.26은 1.24로 저장한 파일을 그대로 읽음). scipy 1.10.1이 Python 3.12를 지원하지 않아 API·워커도 Python 3.11로 실행합니다.
 
 `.env.sample`의 `CUSTOMS_ML_ENTRYPOINT`는 기본적으로 비워 두었습니다. 월별 재학습을 활성화하기 전에 위 import 확인과 입력 데이터·DB 준비, 서버 자원(기본 학습 스레드 4개)을 확인한 뒤 아래 월별 재학습 설정을 적용합니다. 활성화 후에는 정기 일정뿐 아니라 **스케줄러 시작 20초 뒤 누락 월 복구**에서도 학습이 실행될 수 있습니다. 이미 `WAITING_FOR_ML` 상태인 월은 아래 안내대로 수동 재개해야 합니다.
 
@@ -388,7 +388,19 @@ HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처�
 
 ## 증감 예상 모델(모델 B)
 
-`backend/app/ml/growth_model.py`는 화면의 "증가 예상 / 감소 예상" 표시용 회귀 모델입니다. 모델 A의 1단계 성장률(`growth`, L2 손실)과 따로 학습합니다. 지금은 학습·예측 모듈만 있고, 월별 재학습과 조회에는 아직 연결하지 않았습니다.
+`backend/app/ml/growth_model.py`는 화면의 "증가 예상 / 감소 예상" 표시용 회귀 모델입니다. 모델 A의 1단계 성장률(`growth`, L2 손실)과 따로 학습합니다.
+
+**월별 재학습:** `candidate_models.run`(customs_monthly의 ML 단계, `CUSTOMS_ML_ENTRYPOINT`)이 모델 A를 저장·기록한 뒤 같은 달 피처 표로 `run_growth`를 부릅니다. 절차는 모델 A와 같습니다: 같은 입력·학습 코드면 재학습 없이 기록만 다시 보냄 → 원본이 정정되면 `_r2`, `_r3` … → `model_b_growth_<YYYYMM>.joblib`(최신 기준월 예측 `latest` 포함) → `model_b_growth_<YYYYMM>.registry.json` → DB `ml_model_version`(`model_key=model_b`, `status=READY`). Holdout(마지막 정답 기준월)으로 방향 정답률·모두 감소 기준선·성장률 MAE를 `evaluation`에 남깁니다. 모델 B 학습이 실패해도 모델 A 결과는 그대로이고, 그 달에는 `SKIPPED`(사유 포함) 기록을 남깁니다. 그 달 수출입 작업은 SUCCESS라 월 복구 대상이 아니므로, 스케줄러 복구 작업(시작 20초 뒤·매월 일정)이 끝에 `candidate_models.retry_pending`을 불러 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면 그 달 B만 새 리비전으로 다시 학습합니다. 같은 실행에서 방금 처리한 달은 다음 실행에 맡기고, 같은 달 실패가 3번(`CUSTOMS_ML_GROWTH_RETRIES`) 쌓이면 자동 재학습을 멈춥니다(한 번에 약 20분·메모리 대부분). 파일·기록 JSON은 READY인데 DB 기록이 빠졌으면 학습 없이 기록만 다시 보냅니다. 기록 없이 직접 만든 같은 달 파일(`growth_model.build`)이 있으면 월별 학습이 덮어쓰거나 다시 학습하지 않습니다(월별 학습으로 바꾸려면 그 파일을 치웁니다). 모델 B만 다시 돌리려면 `candidate_models.run_growth("2026-09-01")`을 부릅니다.
+
+2026-11-05 측정(시스템 Python 3.11, 4코어, 8GB PC에서 메모리 부족으로 스왑이 섞임): 2026-09 월별 피처 표 435초(1,669,845행) + 모델 B Holdout 326초 + 전체 학습 365초 = 약 19.5분. 방향 정답률 60.7%(모두 감소 56.6%), 성장률 MAE 70.8%p. 모델 A(약 11분)에 더해지며, 피처 표는 메모리를 아끼려고 A·B가 따로 만듭니다(사용자 결정).
+
+**채팅 에이전트용 파일:** `data/ml/monthly_models/model_b_growth_<YYYYMM>.joblib` (YYYYMM = 최신 기준월). `growth_model.build`(또는 `save`)가 v1·v3 묶음에 최신 기준월 전체 쌍의 예측(`latest`: anchor, country_code, hs6, growth_pct, direction)을 담아 저장하므로 워커는 피처 스냅샷·외부 데이터를 읽지 않습니다. 에이전트는 **모델 A 월별 파일과 기준월이 같을 때만** 방향을 붙이므로 모델 A와 같은 월로 만듭니다.
+
+```bash
+python -m backend.app.ml.growth_model --month 2026-09   # 모델 A 월별 학습과 같은 수집 원본·피처 캐시로 학습해 저장
+```
+
+다른 곳에서 만든 파일을 받으면 위 폴더에 두거나 `API_ML_GROWTH_MODEL_PATH`로 지정합니다. 파일이 없으면 에이전트는 방향 없이 답하고 그 사실을 안내합니다.
 
 | 항목 | 값 |
 |---|---|
