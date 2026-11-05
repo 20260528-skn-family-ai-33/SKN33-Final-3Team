@@ -81,6 +81,7 @@ sha256sum data/ml/monthly_models/*.joblib data/ml/monthly_models/*.registry.json
 - 레지스트리의 `data_info.artifact_root`에 로컬 Windows 경로가 적혀 있지만 정보용이다. 워커는 `API_ML_MODEL_DIRECTORY` 기준 `artifact_path`(파일 이름)로 찾는다.
 - 모델 B 파일은 직접 만든 파일이라 레지스트리가 없다. 워커는 "모델 A와 같은 기준월(2026-09)의 파일"로 찾는다. 기준월이 다른 B 파일은 쓰지 않는다.
 - 파일을 바꾸면 워커가 파일 크기·수정 시각을 보고 새로 읽는다(재시작 불필요).
+- 워커는 시작할 때 모델 A·B를 미리 올린다(모델 A 약 25초). 기다리지 않고 바로 작업을 받으므로, 재시작 뒤 약 25초 안에 들어온 유망시장 질문만 "예측 모델을 불러오는 중입니다. 잠시 후 다시 질문해 주세요." 안내를 받는다. 로그 `agent_ml_warm_failed`가 보이면 모델 파일·경로를 확인한다.
 
 ## 4. `.env` 변경
 

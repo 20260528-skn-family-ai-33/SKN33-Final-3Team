@@ -216,6 +216,23 @@ class WorkerStartupTest(unittest.TestCase):
                 worker.main()
         loop.assert_called_once()
 
+    def test_worker_warms_models_before_loop_but_not_once(self):
+        from backend.app.api import worker
+        settings = MagicMock(engine=MagicMock(), get=lambda k, d=None: 'true' if k == 'API_CHAT_AGENT_ENABLED' else d)
+        order = []
+        for argv, expected in ((['worker'], ['warm', 'loop']), (['worker', '--once'], ['loop'])):
+            order.clear()
+            with self.subTest(argv=argv), patch('sys.argv', argv),                     patch('backend.app.services.report_browser.ensure_chromium'),                     patch('backend.app.agents.worker.checkpointer'),                     patch.object(worker, 'Settings', return_value=settings), patch.object(worker, 'Database'),                     patch.object(worker, 'warm_models', side_effect=lambda s: order.append('warm')),                     patch.object(worker, 'run_loop', side_effect=lambda *a: order.append('loop')):
+                worker.main()
+                self.assertEqual(order, expected)
+
+    def test_warm_models_loads_model_a_then_b_for_its_anchor(self):
+        from backend.app.api.worker import warm_models
+        settings = MagicMock(get=lambda k, d=None: d)
+        with patch('backend.app.agents.market.loaded', return_value=({'anchor': '2026-08-01'}, None, {})),                 patch('backend.app.agents.market.growth') as growth:
+            warm_models(settings).result(timeout=5)
+        growth.assert_called_once_with(settings, '2026-08')
+
 
 class ResultTableTest(unittest.TestCase):
     def test_empty_compare_month_is_hidden(self):

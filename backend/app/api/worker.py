@@ -102,6 +102,14 @@ def run_loop(db,settings,once=False):
         if not worked: time.sleep(2)
 
 
+def warm_models(settings):
+    """유망시장 모델(A·B)을 ML 스레드에 미리 올린다(모델 A 로드 약 25초, ML 시간 상한 30초). 기다리지 않는다:
+    리포트·일반 채팅은 바로 처리하고, 로드 중(재시작 뒤 약 25초) 들어온 유망시장 질문만 '불러오는 중' 안내를 받는다."""
+    from backend.app.agents.market import growth, loaded
+    from backend.app.agents.runtime import warm_ml
+    return warm_ml(lambda: growth(settings, str(loaded(settings)[0].get('anchor') or '')[:7]))
+
+
 def main():
     parser=argparse.ArgumentParser(); parser.add_argument('--once',action='store_true'); args=parser.parse_args()
     from backend.app.services.report_browser import ensure_chromium
@@ -116,10 +124,7 @@ def main():
         from backend.app.agents.worker import checkpointer
         try: checkpointer(db,settings)
         except Exception as exc: logging.getLogger(__name__).error('chat_checkpointer_unavailable %s',exc)
-        # 유망시장 모델(A·B)을 미리 올린다(모델 A 로드 약 25초, ML 시간 상한 30초)
-        from backend.app.agents.market import growth, loaded
-        from backend.app.agents.runtime import warm_ml
-        warm_ml(lambda: growth(settings, str(loaded(settings)[0].get('anchor') or '')[:7]))
+        if not args.once: warm_models(settings)
     run_loop(db,settings,args.once)
 
 
