@@ -39,6 +39,9 @@ class SqlTest(unittest.TestCase):
             joined.replace("LIKE '3304%'", "LIKE '8542%'"),
             joined.replace("e.country_code='US'", "(e.country_code='US' OR 1=1)")
                   .replace("CASE WHEN e.hs6_code LIKE '3304%'", "CASE WHEN (e.hs6_code LIKE '3304%' OR 1=1)"),
+            # 집계 밖 CASE는 품목을 거른 것이 아니다(모든 품목을 읽어 '기타'로 묶음)
+            joined.replace("SUM(CASE WHEN e.hs6_code LIKE '3304%' THEN e.amount_usd END) AS value",
+                           "CASE WHEN e.hs6_code LIKE '3304%' THEN 1 ELSE 0 END AS value"),
             joined.replace("CASE WHEN e.hs6_code LIKE '3304%' THEN e.amount_usd END", "e.amount_usd"),
             statement("trade_month >= '2025-01-01'"),
             statement("trade_month BETWEEN '2024-01-01' AND '2025-03-01'"),
@@ -47,6 +50,34 @@ class SqlTest(unittest.TestCase):
         for sql in rejected:
             with self.subTest(sql=sql), self.assertRaises(ValueError):
                 validate_sql(draft(sql,'number'), conditions)
+
+    def test_grouping_by_country_requires_where_filter(self):
+        conditions = Conditions(country_codes=['US'], hs_items=[{'hs_code':'3304','hs_ver':'HS2022'}],
+            period={'start':'2025-01-01','end':'2025-03-01'})
+        columns = [{'key':'cc','label':'국가','type':'string','unit':None},{'key':'value','label':'금액','type':'number','unit':'USD'}]
+        base = ("SELECT e.country_code AS cc, SUM(CASE WHEN e.country_code='US' AND e.hs6_code LIKE '3304%' "
+                "THEN e.amount_usd END) AS value FROM export_summary e JOIN country c ON c.country_code=e.country_code "
+                "WHERE c.country_role='COUNTRY' AND e.hs_ver='HS2022' AND e.trade_month BETWEEN '2025-01-01' AND '2025-03-01' ")
+        def check(sql):
+            return validate_sql(SqlDraft(sql=sql, columns=columns, summary='조회', unsupported=None), conditions)
+        # 국가별로 묶으면서 WHERE에서 국가를 거르지 않으면 다른 국가 행이 빈 값으로 나온다(GROUP BY 열·1·별칭 모두)
+        for group in ('e.country_code', '1', 'cc'):
+            with self.subTest(group=group), self.assertRaisesRegex(ValueError, '국가별로 묶은 결과'):
+                check(base + 'GROUP BY ' + group)
+        # 조인한 country 별칭으로 걸러도 같은 행을 거른 것이다
+        self.assertIn('LIMIT 1000', check(base + "AND c.country_code='US' GROUP BY 1"))
+        # 스칼라 서브쿼리 안 국가 필터는 바깥 범위의 묶음이 아니다(미국 / 전체 수출 비중)
+        inner = base.replace('e.', 'u.').replace(' e ', ' u ').split(' FROM ', 1)[1]
+        share = (f"SELECT 'US' AS cc, (SELECT SUM(u.amount_usd) FROM {inner} AND u.country_code='US' AND u.hs6_code LIKE '3304%')"
+                 f" / SUM(e.amount_usd) AS value FROM " + base.split(' FROM ', 1)[1])
+        self.assertIn('LIMIT 1000', check(share))
+        # 전체 국가 순위를 CTE에서 구한 뒤 바깥에서 미국만 고르는 것은 허용, 고르지 않으면 거부
+        ranked = ("WITH r AS (SELECT e.country_code, SUM(CASE WHEN e.hs6_code LIKE '3304%' THEN e.amount_usd END) AS total FROM "
+                  + base.split(' FROM ', 1)[1].replace("AND c.country_code='US' ", '') + "GROUP BY e.country_code) ")
+        self.assertIn('LIMIT 1000', check(ranked + "SELECT country_code AS cc, total AS value FROM r WHERE country_code='US'"))
+        with self.assertRaisesRegex(ValueError, '국가별로 묶은 결과'):
+            check(ranked.replace("CASE WHEN e.hs6_code", "CASE WHEN e.country_code='US' AND e.hs6_code")
+                  + "SELECT country_code AS cc, total AS value FROM r WHERE total > 0")
 
     def test_product_share_retains_confirmed_basis_and_denominator(self):
         conditions = Conditions(period={'start':'2025-01-01','end':'2025-03-01'},

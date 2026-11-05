@@ -288,13 +288,31 @@ def _dates_within(filters, allowed):
 
 
 def _required(node):
-    """WHERE·JOIN ON·CASE WHEN 조건에서 AND로만 이어진 조건인지(OR·NOT 아래면 거르지 않을 수 있다: x='US' OR 1=1)."""
+    """WHERE·JOIN ON·집계 안 CASE WHEN 조건에서 AND로만 이어진 조건인지(OR·NOT 아래면 거르지 않을 수 있다: x='US' OR 1=1).
+    CASE WHEN은 SUM(CASE WHEN ... THEN 금액 END)처럼 집계할 값을 고를 때만 인정한다. 집계 밖 CASE(묶음 이름 등)는
+    모든 국가·품목을 읽어 '기타'로 묶을 수 있어 거른 것으로 보지 않는다."""
     parent = node.parent
     while parent is not None and not isinstance(parent, (exp.Where, exp.If, exp.Join, exp.Select)):
         if isinstance(parent, (exp.Or, exp.Not, exp.Xor)):
             return False
         parent = parent.parent
+    if isinstance(parent, exp.If):
+        while parent is not None and not isinstance(parent, exp.Select):
+            if isinstance(parent, exp.AggFunc):
+                return True
+            parent = parent.parent
+        return False
     return True
+
+
+def _ancestors(node, stop):
+    """node의 부모들(stop 직전까지)."""
+    parent = node.parent
+    while parent is not None and parent is not stop:
+        yield parent
+        parent = parent.parent
+    if parent is stop:
+        yield stop
 
 
 def _check_conditions(query, conditions):
@@ -351,6 +369,45 @@ def _check_conditions(query, conditions):
                 raise ValueError(f"{label}의 WHERE에 확정한 HS 판본 하나를 지정하세요.")
             if allowed_months and not _dates_within((f for f in filters if f[0]=='trade_month'), allowed_months):
                 raise ValueError(f"{label}의 WHERE에서 trade_month를 확정 기간 또는 비교 기간 안으로 제한하세요.")
+    _check_output_rows(query, bool(countries), bool(confirmed))
+
+
+def _check_output_rows(query, countries, products):
+    """최종 결과에 확정하지 않은 국가·품목 행이 나오지 않게 한다.
+
+    국가·품목별로 묶은 범위(GROUP BY 열·GROUP BY 1·별칭, 집계 밖 SELECT 열)를 그 범위나 바깥 범위의 WHERE에서
+    확정 값으로 거르지 않으면 다른 국가·품목 행이 결과에 나온다(SUM(CASE WHEN country_code='US' ...) GROUP BY
+    country_code → 다른 국가 행이 빈 값). 순위처럼 CTE에서 전체 국가를 묶은 뒤 바깥에서 WHERE country_code='US'로
+    고르는 것은 허용한다. 범위마다 '거르지 않은 묶음 행이 남는지'를 안쪽(CTE·파생 표·UNION 갈래)부터 전한다.
+    """
+    leaks = {}   # id(범위 식) → {'country', 'hs'} 중 거르지 않은 채 남는 묶음
+    for scope in traverse_scope(query):
+        node = scope.expression
+        if not isinstance(node, exp.Select):
+            leaks[id(node)] = set().union(*(leaks.get(id(s.expression), set()) for s in scope.set_operation_scopes))
+            continue
+        group = node.args.get('group')
+        grouped = {c.name.lower() for c in group.find_all(exp.Column)} if group else set()
+        # 스칼라 서브쿼리 안의 열은 그 서브쿼리 범위의 것이다: 분모 (SELECT SUM(...) WHERE ...)
+        grouped |= {c.name.lower() for e in node.selects for c in e.find_all(exp.Column)
+                    if c.find_ancestor(exp.Select) is node and not any(isinstance(a, exp.AggFunc) for a in _ancestors(c, e))}
+        where = node.args.get('where')
+        # 이 범위 WHERE 어느 표든 인정한다(country 조인 별칭 c.country_code = 'US'도 같은 행을 거른다)
+        scoped = {c.name.lower() for c, _, _ in filter(None, map(_literal_filter, _and_terms(where.this if where else None)))}
+        trade = any(isinstance(s, exp.Table) and s.name.lower() in TRADE_TABLES for _, s in scope.selected_sources.values())
+        inner = set().union(*(leaks.get(id(s.expression), set()) for _, s in scope.selected_sources.values()
+                              if not isinstance(s, exp.Table)))
+        found = set()
+        if countries and 'country_code' in grouped and 'country_code' not in scoped and (trade or 'country' in inner):
+            found.add('country')
+        if products and any(HS_COLUMN.fullmatch(n) for n in grouped) and not any(HS_COLUMN.fullmatch(n) for n in scoped)                 and (trade or 'hs' in inner):
+            found.add('hs')
+        leaks[id(node)] = found
+    final = leaks.get(id(query), set())
+    if 'country' in final:
+        raise ValueError('국가별로 묶은 결과는 WHERE에서 확정한 국가 country_code로 거르세요.')
+    if 'hs' in final:
+        raise ValueError('품목별로 묶은 결과는 WHERE에서 확정한 HS 코드로 거르세요.')
 
 
 def safe_error(exc):
