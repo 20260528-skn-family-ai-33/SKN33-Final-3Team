@@ -9,7 +9,8 @@ BYLINE = re.compile(r'(?:\[[가-힣A-Za-z =·,]{2,50}(?:기자|특파원)\]|(?:[
 _LOCATION = r'[가-힣A-Za-z·ㆍ ]{1,30}'
 _OUTLET = r'[가-힣A-Za-z0-9·ㆍ/ ]{0,30}'
 _DATELINE = rf'(?:\({_LOCATION}[=＝－–—-]{_OUTLET}\)|\[{_LOCATION}[=＝－–—-]{_OUTLET}\])'
-_REPORTER = r'[가-힣]{2,5}(?:(?:\s+|\s*[,·/]\s*)[가-힣]{2,5})*\s+(?:기자|특파원)'
+# 공동 기자명은 첫 유효한 직함까지만 읽어, 같은 줄 본문의 직함까지 지우지 않습니다.
+_REPORTER = r'[가-힣]{2,5}(?:(?:\s+|\s*[,·/]\s*)[가-힣]{2,5})*?\s+(?:기자|특파원)'
 REPORTER_CREDIT = re.compile(
     rf'^(?:{_DATELINE}|\[email\s+protected\]|\[이메일 삭제\])\s*'
     rf'(?:{_REPORTER}|\[기자정보\])(?=$|[=＝\s])\s*(?:[=＝]\s*)?'

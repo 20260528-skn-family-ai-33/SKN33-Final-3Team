@@ -79,6 +79,16 @@ def test_income_inside_full_body_does_not_supply_trade_evidence():
     ('[세종=뉴시스]김하나 기자=본문', '본문'),
     ('(워싱턴·뉴욕=연합뉴스) 김하나 박두리 특파원 ＝ 본문', '본문'),
     ('(대구-) 김하나 기자 본문', '본문'),
+    pytest.param(
+        '(서울=연합뉴스) 홍길동 기자 정부는 외신 기자 초청 수출 설명회를 열었다.',
+        '정부는 외신 기자 초청 수출 설명회를 열었다.',
+        id='reporter-title-repeated-in-body',
+    ),
+    pytest.param(
+        '(워싱턴·뉴욕=연합뉴스) 김하나 박두리 특파원 정부는 해외 특파원 초청 설명회를 열었다.',
+        '정부는 해외 특파원 초청 설명회를 열었다.',
+        id='correspondent-title-repeated-in-body',
+    ),
     ('(서울=뉴스1) 김하나 기자\n본문', '본문'),
     ('본문\n[email\u00a0protected] 김하나 박두리 기자', '본문'),
     ('(서울=뉴스1) [기자정보] = 본문 속 A=B', '본문 속 A=B'),
