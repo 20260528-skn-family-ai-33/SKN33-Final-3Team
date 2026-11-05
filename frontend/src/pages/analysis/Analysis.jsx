@@ -368,10 +368,11 @@ export default function Analysis({ route }) {
       const data = await run(() => api(`/chat/jobs/${job.job_id}/clarifications`, { method: 'POST', body: { clarification_id:id, ...body } }))
       if (data?.job && (data.job.status!=='NEEDS_INPUT' || data.job.clarification?.clarification_id!==id)) acceptedClarifications.current.add(id)
       if (activeRef.current!==room) return   // 다른 방으로 옮겼다. 그 방의 작업·입력을 바꾸지 않는다
-      if (data?.job) { setJob(data.job); setInput(''); setDraft(null) }
-      // 리포트 생성·취소는 버튼으로만 받는다(D-92). 서버가 직접 입력한 승인·거절을 무시했으면 버튼을 안내한다
-      if (body.text && job.clarification.kind==='REPORT_CONFIRM' && data?.job?.status==='NEEDS_INPUT'
-          && data.job.clarification?.clarification_id===id) notify('리포트 생성·취소는 아래 버튼으로 선택해 주세요.')
+      // 리포트 생성·취소는 버튼으로만 받는다(D-92). 서버가 직접 입력한 승인·거절을 무시했으면 버튼을 안내하고 입력은 남긴다
+      const ignored = body.text && job.clarification.kind==='REPORT_CONFIRM' && data?.job?.status==='NEEDS_INPUT'
+        && data.job.clarification?.clarification_id===id
+      if (data?.job) { setJob(data.job); if (!ignored) setInput(''); setDraft(null) }
+      if (ignored) notify('리포트 생성·취소는 아래 버튼으로 선택해 주세요.')
       setReadRevision(v => v + 1)
     } finally { clarificationRequest.current=null; setBusy(false) }
   }
