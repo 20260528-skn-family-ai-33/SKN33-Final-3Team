@@ -126,7 +126,7 @@ python -m backend.scripts.register_report_options --apply
 - 같은 구독·주기·기간은 generation_key로 중복 발행을 막는다. 내부 `enqueue_due(..., user_id=...)`는 검증 계정으로 범위를 좁힐 때만 사용하며 일반 워커는 전체 활성 구독을 검사한다.
 - 자동 발행은 워커가 켜져 있어야 동작한다. 로컬 PC를 끄면 발행도 멈춘다. 재가동하거나 데이터가 늦게 준비되면 가입 이후 발행일이 지난 미발행 회차를 확인해 발행한다. 이미 생성된 회차는 재생성하지 않는다. 따라서 표시 날짜는 정기 발행 예정일이며 데이터 지연·서비스 중단 시 실제 생성은 늦어질 수 있다.
 
-주요 이슈 판정(`major_issue_detect`)은 통합 스케줄러에 매일 05:00·08:00으로 등록되어 있지만, 스케줄러를 켜기 전까지는 자동으로 돌지 않는다. 필요하면 `python -m backend.app.scheduler.jobs.major_issue_detect --date YYYY-MM-DD`로 직접 실행한다. 이 명령은 `.env`의 DB에 연결하고 조건을 만족한 회원에게 알림을 전달하므로 접속 대상을 먼저 확인한다. 기사량 판정은 해당 기간의 `KOTRA_MARKET`·`KOTRA_SHORT_NEWS` 수집 완료 기록이 있어야 하며, 없으면 건너뛰고 실행 기록을 FAILED로 남겨 관리자 알림에 표시한다.
+주요 이슈 판정(`major_issue_detect`)은 통합 스케줄러에 매일 05:00·08:00으로 등록되어 있지만, 스케줄러를 켜기 전까지는 자동으로 돌지 않는다. 필요하면 `python -m backend.app.scheduler.jobs.major_issue_detect --date YYYY-MM-DD`로 직접 실행한다. 이 명령은 `.env`의 DB에 연결하고 조건을 만족한 회원에게 알림을 전달하므로 접속 대상을 먼저 확인한다. 기사량 판정은 해당 기간의 `KOTRA_MARKET`·`KOTRA_SHORT_NEWS` 수집 완료 기록이 있어야 하며, 없으면 건너뛰고 실행 기록을 FAILED로 남겨 관리자 알림에 표시한다. 주간 리포트는 발행 시점에 수집 기록이 없으면 급증 이슈를 판단하지 않았다고 표시하고, 이미 발행한 회차는 다시 만들지 않는다. KOTRA 일별 수집을 운영하기 시작하면 `API_WEEKLY_NEWS_SOURCES`에 두 출처를 추가해 발행이 수집 완료를 기다리게 한다.
 
 주간 발행의 기본 필수 출처는 일별 수집 작업이 있는 `HANKYUNG,FNNEWS`다. `service_option`의 SOURCE 활성 여부는 조회 가능한 출처 목록이며, 활성 출처를 모두 발행 필수 조건으로 취급하지 않는다. 수동 적재인 `KOTRA_MARKET`과 선택 운영인 `KOTRA_SHORT_NEWS`는 기본 필수 조건에서 제외한다. 이 변경은 보고서에 포함할 기사 출처를 필터링하는 기능이 아니며, 기존 기간·관심 범위의 기사 조회는 유지한다.
 

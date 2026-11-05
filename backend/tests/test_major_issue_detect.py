@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from backend.app.api.config import Settings
+from backend.app.api.database import Store
 from backend.app.scheduler.jobs import major_issue_detect as job
 from backend.tests.api_support import create_test_app, reference_data, test_engine
 
@@ -170,6 +171,29 @@ class DetectTest(unittest.TestCase):
         result = job.detect(self.database, T)
         self.assertEqual((result['events'], result['deliveries']), (1, 0))
         self.assertEqual(self.events()[0]['payload_json']['target'], {'keyword_text': '관세율', 'kw_topic': '관세'})
+
+    def test_judgment_counts_only_public_articles(self):
+        self.collected(job.MARKET, job.SHORT_NEWS)
+        self.article(1, T); self.article(2, T, visible='HIDDEN')
+        self.keyword('관세', T, 4, article=1)  # 집계 4건 중 1건 숨김: 3건·주평균 0이라 3배
+        self.keyword('미달', T, 3, article=1)
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['article_tag'].insert(), [{'article_id': 2, 'keyword_text': '관세'}, {'article_id': 2, 'keyword_text': '미달'}])
+        job.detect(self.database, T)
+        events = self.events()
+        self.assertEqual([e['payload_json']['label'] for e in events], ['관세'])
+        self.assertEqual(events[0]['payload_json']['recent_week_count'], 3)
+
+    def test_hidden_hs6_article_is_removed_from_hs4_count_too(self):
+        self.collected(job.MARKET, job.SHORT_NEWS)
+        self.article(1, T, visible='HIDDEN')
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['article_tag'].insert(), {'article_id': 1, 'hs_code': '330499', 'hs_ver': 'HS2022'})
+            for code in ('330499', '3304'):
+                c.execute(self.meta.tables['news_product_daily'].insert(), {'metric_date': T, 'hs_code': code, 'hs_ver': 'HS2022', 'country_code': None, 'day_count': 1})
+        with self.engine.begin() as c:
+            counts = job.product_counts(Store(self.database, c), T - timedelta(days=6), T)
+        self.assertEqual(counts, {})
 
     def test_spike_without_visible_evidence_is_not_an_issue(self):
         self.consent(); self.collected(job.MARKET, job.SHORT_NEWS)

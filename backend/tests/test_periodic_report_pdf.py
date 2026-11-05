@@ -166,6 +166,54 @@ class PeriodicContextTest(unittest.TestCase):
         self.assertEqual(ctx['summary']['counts']['spike_keywords'], 11)
         self.assertEqual(len(ctx['keyword_spikes']), 10)
 
+    def market_article(self, identity, day=date(2025, 12, 21), visible='VISIBLE', **tag):
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['article'].insert(), {'article_id': identity, 'source_code': 'KOTRA_MARKET', 'external_id': f'kw-{identity}', 'title': f'기사 {identity}', 'published_date': day,
+                'source_url': f'https://example.org/{identity}', 'body_masked': '본문', 'category': '경제', 'visibility_status': visible, 'admin_meta_json': {}})
+            for values in tag.get('tags', ()):
+                c.execute(self.meta.tables['article_tag'].insert(), {'article_id': identity, **values})
+
+    def test_weekly_keyword_from_hidden_articles_only_is_not_listed(self):
+        uid = int(self.signup())
+        self.seed_news(); self.collected_news()
+        for identity in (201, 202, 203):
+            self.market_article(identity, visible='HIDDEN', tags=[{'keyword_text': '숨김'}, {'country_code': 'US'}])
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['news_keyword_daily'].insert(), {'metric_date': date(2025, 12, 21), 'keyword_text': '숨김', 'country_code': 'US', 'day_count': 3})
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertEqual(ctx['keyword_spikes'], [])
+
+    def test_weekly_interest_uses_all_issue_articles_not_top_five(self):
+        uid = int(self.signup())
+        self.seed_news(); self.collected_news()
+        # 미국 기사(가장 오래됨)는 대표 5건에 들지 않지만 관심 범위 판정에는 포함된다
+        self.market_article(301, date(2025, 12, 15), tags=[{'keyword_text': '관세'}, {'country_code': 'US'}, {'hs_code': '330499', 'hs_ver': 'HS2022'}])
+        for identity in range(302, 307):
+            self.market_article(identity, tags=[{'keyword_text': '관세'}, {'country_code': 'CN'}])
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['news_keyword_daily'].insert(), {'metric_date': date(2025, 12, 21), 'keyword_text': '관세', 'country_code': None, 'day_count': 6})
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        issue = next(r for r in ctx['summary']['issues'] if '관세' in r['title'])
+        self.assertEqual(issue['related'], '관심 범위')
+
+    def test_weekly_uses_latest_metric_date_when_old_date_is_reprocessed(self):
+        uid = int(self.signup())
+        self.seed_news()
+        table = self.meta.tables['alert_event']
+        with self.engine.begin() as c:
+            for key, metric, count in [('a', '2025-12-20', 24), ('b', '2025-12-18', 6)]:  # 18일을 나중에 재처리
+                c.execute(table.insert(), {'event_type': 'MAJOR_ISSUE', 'event_key': key * 64, 'created_at': datetime(2025, 12, 22), 'payload_json': {
+                    'reason': 'WEEKLY_NEWS_SPIKE', 'label': '관세', 'metric_date': metric, 'recent_week_count': count, 'baseline_weekly': 2.0, 'ratio': 12.0, 'target': {'keyword_text': '관세'}}})
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertIn('24건', ctx['summary']['issues'][0]['basis'])
+
+    def test_weekly_says_spike_was_not_judged_without_collection(self):
+        uid = int(self.signup())
+        self.seed_news()
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertIsNone(ctx['summary']['issue_spike_ratio'])
+        self.assertIn('급증 이슈는 판단하지 않았고', weekly_highlights(ctx))
+
     def test_weekly_includes_sunday_regulation_before_judgment_and_keeps_same_titles(self):
         uid = int(self.signup())
         self.seed_news()
@@ -183,7 +231,7 @@ class PeriodicContextTest(unittest.TestCase):
         ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
         text = weekly_highlights(ctx)
         self.assertIn('직전 8주와 비교하지 않았습니다', text)
-        self.assertIn('주요 이슈: 이번 주 기준에 해당하는 주요 이슈가 없습니다.', text)
+        self.assertIn('주요 이슈: 수집 완료 기록이 없어 급증 이슈는 판단하지 않았고', text)
 
     def test_weekly_lists_major_issues_of_that_week_once_and_marks_interest(self):
         uid = int(self.signup())

@@ -5,7 +5,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, update, delete
 from backend.tests import test_backend_api as fixtures
-from backend.app.api import jobs
+from backend.app.api import jobs, routes
 from backend.app.api.database import Store
 from backend.app.api.config import Settings
 from backend.app.api.worker import run_loop
@@ -367,6 +367,21 @@ class ReportSubscriptionTest(unittest.TestCase):
                 'content_json': {'_execution': {'status': 'FAILED', 'finished_at': '2026-01-15T00:45:00'}}})
         item = self.client.get('/api/v1/admin/alerts', params={'category': 'REPORT'}).json()['items'][0]
         self.assertTrue(item['created_at'].startswith('2026-01-15T00:45'))
+
+    def test_failed_reports_sorted_by_failure_time_and_limited_in_query(self):
+        self.register(); uid = int(self.signup())
+        subscription = self.subscribe(uid, 'MONTHLY')
+        m = self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id == uid).values(role='ADMIN'))
+            for key, finished in (('a', '2026-01-15T05:00:00'), ('b', '2026-01-15T07:00:00'), ('c', '2026-01-15T06:00:00')):
+                c.execute(m['report'].insert(), {'user_id': uid, 'subscription_id': subscription, 'report_type': 'RPT_MONTHLY', 'generation_key': key * 64,
+                    'conditions_json': {'period': {'start': '2025-12-01', 'end': '2025-12-31'}}, 'status': 'FAILED', 'retry_count': 0, 'created_at': datetime(2026, 1, 15), 'content_json': {'_execution': {'finished_at': finished}}})
+        with patch('backend.app.api.routes.failed_report_time', wraps=routes.failed_report_time) as loaded:
+            body = self.client.get('/api/v1/admin/alerts', params={'category': 'REPORT', 'page_size': 1}).json()
+        self.assertEqual(loaded.call_count, 1)  # 페이지에 필요한 행만 읽는다
+        self.assertEqual(body['page']['total'], 3)
+        self.assertTrue(body['items'][0]['created_at'].startswith('2026-01-15T07:00'))
 
     def test_retry_exhausted_report_alert_uses_failure_time(self):
         self.register(); uid = int(self.signup())

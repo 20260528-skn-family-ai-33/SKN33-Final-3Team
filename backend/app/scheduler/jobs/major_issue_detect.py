@@ -7,7 +7,7 @@
 
 - 기사량 판정(FR-204-01): 최근 7일(T-6~T) 기사 수 ÷ 직전 8주 주평균(T-62~T-7 합계÷8) ≥ 3. 주평균이 정확히 0일 때만 분모를 1로 봅니다.
   키워드와 품목(HS6·HS4)을 각각 판정하고, 국가 조건 없는 전체 집계 행(country_code NULL)을 씁니다.
-  공개 근거 기사가 하나도 없으면 집계가 기준을 넘어도 이슈로 만들지 않습니다.
+  일별 집계는 기사를 숨겨도 줄지 않으므로 비공개 기사를 뺀 공개 기사 수로 판정하고, 공개 근거 기사가 없으면 이슈로 만들지 않습니다.
 - 분류 판정(FR-204-03): 최근 3일에 발행된 KOTRA 시장뉴스 중 원천 분류가 통상·규제인 기사. 기사마다 한 번만 사건을 만듭니다.
   늦게 등록된 기사도 잡도록 시장뉴스 수집 범위(DR-02, 최근 3일)만큼 봅니다.
 - 수집이 끝나지 않은 날을 0건으로 보지 않습니다(FR-906-05). T-62~T에 집계 대상 출처의 수집 성공 기록이 없는 날이 있으면
@@ -59,17 +59,54 @@ def spike(recent_count, baseline_count):
     return float(average), float(Decimal(recent_count) / (average or 1))
 
 
-def _counts(store, table, keys, start, end):
-    t = store.t(table)
-    columns = [t.c[key] for key in keys]
-    rows = store.c.execute(select(*columns, func.sum(t.c.day_count)).where(
-        t.c.country_code.is_(None), t.c.metric_date >= start, t.c.metric_date <= end).group_by(*columns))
-    return {tuple(row[:-1]): int(row[-1]) for row in rows}
+def _hidden_tags(store, column, sources, start, end, countries=()):
+    """기간 안 비공개 기사의 태그 행 (값, ..., 기사 ID). 일별 집계는 기사를 숨겨도 줄지 않아 공개 기준으로 뺄 때 씁니다."""
+    a, t = store.t("article"), store.t("article_tag")
+    country_tag = t.alias("country_tag")
+    columns = [*column(t), *([country_tag.c.country_code] if countries else []), a.c.article_id]
+    stmt = select(*columns).select_from(a).join(t, t.c.article_id == a.c.article_id).where(
+        a.c.visibility_status != "VISIBLE", a.c.source_code.in_(sources), a.c.published_date >= start, a.c.published_date <= end)
+    if countries:
+        stmt = stmt.join(country_tag, country_tag.c.article_id == a.c.article_id).where(country_tag.c.country_code.in_(countries))
+    return store.c.execute(stmt.distinct()).all()
 
 
-def _spikes(store, table, keys, target):
+def _subtract(totals, hidden):
+    """일별 집계 합계에서 숨긴 기사를 빼고, 남은 공개 기사가 있는 항목만 돌려줍니다."""
+    counts = {key: total - len(hidden.get(key, ())) for key, total in totals.items()}
+    return {key: count for key, count in counts.items() if count > 0}
+
+
+def keyword_counts(store, start, end, countries=()):
+    """공개 기사 기준 {(키워드, 국가): 건수}. 국가를 주지 않으면 전체 집계 행(국가 None)입니다."""
+    t = store.t("news_keyword_daily")
+    scope = t.c.country_code.in_(countries) if countries else t.c.country_code.is_(None)
+    rows = store.c.execute(select(t.c.keyword_text, t.c.country_code, func.sum(t.c.day_count)).where(
+        scope, t.c.metric_date >= start, t.c.metric_date <= end).group_by(t.c.keyword_text, t.c.country_code))
+    totals = {(keyword, country): int(total) for keyword, country, total in rows}
+    hidden = {}
+    for row in _hidden_tags(store, lambda tag: [tag.c.keyword_text], (MARKET, SHORT_NEWS), start, end, countries):
+        hidden.setdefault((row[0], row[1] if countries else None), set()).add(row[-1])
+    return _subtract(totals, hidden)
+
+
+def product_counts(store, start, end):
+    """공개 기사 기준 {(품목 코드, 판본): 건수}. HS6 태그 기사는 위 단계 HS4 집계에도 들어 있습니다."""
+    t = store.t("news_product_daily")
+    rows = store.c.execute(select(t.c.hs_code, t.c.hs_ver, func.sum(t.c.day_count)).where(
+        t.c.country_code.is_(None), t.c.metric_date >= start, t.c.metric_date <= end).group_by(t.c.hs_code, t.c.hs_ver))
+    totals = {(code, version): int(total) for code, version, total in rows}
+    hidden = {}
+    for code, version, article_id in _hidden_tags(store, lambda tag: [tag.c.hs_code, tag.c.hs_ver], (MARKET,), start, end):
+        if code:
+            hidden.setdefault((code, version), set()).add(article_id)
+            hidden.setdefault((code[:4], version), set()).add(article_id)
+    return _subtract(totals, hidden)
+
+
+def _spikes(counts, target):
     recent_window, baseline_window = windows(target)
-    recent, baseline = _counts(store, table, keys, *recent_window), _counts(store, table, keys, *baseline_window)
+    recent, baseline = counts(*recent_window), counts(*baseline_window)
     for key, count in sorted(recent.items()):
         average, ratio = spike(count, baseline.get(key, 0))
         if count > 0 and ratio >= MINIMUM_RATIO:
@@ -111,7 +148,7 @@ def keyword_issues(store, target):
     """키워드 급증 이슈 (사건 키, 대표 기사, 내용). 공개 근거 기사가 없으면 이슈로 보지 않습니다."""
     recent_window = windows(target)[0]
     topics = store.t("keyword_topic")
-    for (keyword,), count, average, ratio in _spikes(store, "news_keyword_daily", ["keyword_text"], target):
+    for (keyword, _), count, average, ratio in _spikes(lambda start, end: keyword_counts(store, start, end), target):
         ids = _articles(store, lambda t, k=keyword: t.c.keyword_text == k, (MARKET, SHORT_NEWS), *recent_window)
         if not ids:
             log.warning("major_issue_no_visible_evidence keyword=%s target=%s", keyword, target)
@@ -126,7 +163,7 @@ def product_issues(store, target):
     """품목 급증 이슈 (사건 키, 대표 기사, 내용). 공개 근거 기사가 없으면 이슈로 보지 않습니다."""
     recent_window = windows(target)[0]
     names = store.t("hs_code")
-    for (code, version), count, average, ratio in _spikes(store, "news_product_daily", ["hs_code", "hs_ver"], target):
+    for (code, version), count, average, ratio in _spikes(lambda start, end: product_counts(store, start, end), target):
         # HS4 집계에는 그 아래 HS6 태그 기사가 들어 있다
         ids = _articles(store, lambda t, c=code, v=version: (t.c.hs_code.startswith(c)) & (t.c.hs_ver == v), (MARKET,), *recent_window)
         if not ids:

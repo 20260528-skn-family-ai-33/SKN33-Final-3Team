@@ -13,8 +13,8 @@ from sqlalchemy import select, func
 
 from backend.app.api import news, trade
 from backend.app.api.common import clean, month_end, percentage, require, shift_month
-from backend.app.scheduler.jobs.major_issue_detect import (MARKET, MINIMUM_RATIO, SHORT_NEWS, keyword_issues, product_issues,
-                                                           spike, trade_regulation_issues, windows)
+from backend.app.scheduler.jobs.major_issue_detect import (MARKET, MINIMUM_RATIO, SHORT_NEWS, keyword_counts, keyword_issues,
+                                                           product_issues, spike, trade_regulation_issues, windows)
 
 
 KINDS = {'RPT_MONTHLY': '월간', 'RPT_WEEKLY': '주간', 'RPT_QUARTERLY': '분기', 'RPT_ON_DEMAND': '요청형'}
@@ -219,6 +219,8 @@ def weekly_highlights(ctx):
         keywords = ', '.join(f"{r['keyword']}({r['country']}) ×{r['ratio']:.1f}" for r in ctx['keyword_spikes']) or '기준을 넘은 키워드가 없습니다.'
     if summary['issues']:
         issues = ''.join(f"\n· {r['title']} ({r['basis']})" for r in summary['issues'])
+        if summary['issue_spike_ratio'] is None:
+            issues += '\n· 수집 완료 기록이 없어 급증 이슈는 판단하지 않았습니다.'
     else:
         issues = ' ' + summary['issues_note']
     return f'급증 키워드: {keywords}\n주요 이슈:{issues}'
@@ -230,16 +232,8 @@ def _keyword_spikes(store, uid, saved, names, start, end):
     recent, baseline = windows(end)
     if not sources_ready(store, (MARKET, SHORT_NEWS), baseline[0], recent[1]):
         return None
-    t = store.t('news_keyword_daily')
-    countries = saved.get('country_codes') or []
-    scope = t.c.country_code.in_(countries) if countries else t.c.country_code.is_(None)
-
-    def counts(window):
-        rows = store.rows(select(t.c.keyword_text, t.c.country_code, func.sum(t.c.day_count).label('count')).where(
-            scope, t.c.metric_date >= window[0], t.c.metric_date <= window[1]).group_by(t.c.keyword_text, t.c.country_code))
-        return {(r['keyword_text'], r['country_code']): int(r['count']) for r in rows}
-
-    now_counts, old_counts = counts(recent), counts(baseline)
+    countries = saved.get('country_codes') or ()
+    now_counts, old_counts = keyword_counts(store, *recent, countries), keyword_counts(store, *baseline, countries)
     blocked = set(news.blocked_topics(store, uid))
     # 동의어는 대표어를 차단해도 함께 빠진다.
     topics = store.t('keyword_topic')
@@ -257,15 +251,16 @@ def _issue_candidates(store, start, end):
     """이번 주 주요 이슈 후보. 판정 작업이 아직 돌지 않았어도 빠지지 않게 마지막 날 기준을 직접 계산하고, 그 뒤에 저장된 판정을 붙입니다."""
     from backend.app.api.subscriptions import sources_ready
     baseline_start = windows(end)[1][0]
-    live = []
-    if sources_ready(store, (MARKET, SHORT_NEWS), baseline_start, end):
-        live += keyword_issues(store, end)
-    if sources_ready(store, (MARKET,), baseline_start, end):
-        live += product_issues(store, end)
-    live += trade_regulation_issues(store, start, end)  # 표시 건수 제한에 밀리지 않게 급증을 앞에 둔다
-    rows =[{'article_id': article_id, 'payload_json': payload} for _, article_id, payload in live]
+    keyword_ready = sources_ready(store, (MARKET, SHORT_NEWS), baseline_start, end)
+    product_ready = sources_ready(store, (MARKET,), baseline_start, end)
+    live = [*(keyword_issues(store, end) if keyword_ready else ()), *(product_issues(store, end) if product_ready else ()),
+            *trade_regulation_issues(store, start, end)]
     e = store.t('alert_event')
-    return rows + store.rows(select(e).where(e.c.event_type == 'MAJOR_ISSUE', e.c.created_at >= datetime(start.year, start.month, start.day)).order_by(e.c.event_id.desc()))
+    rows = [{'article_id': article_id, 'payload_json': payload} for _, article_id, payload in live] + store.rows(
+        select(e).where(e.c.event_type == 'MAJOR_ISSUE', e.c.created_at >= datetime(start.year, start.month, start.day)).order_by(e.c.event_id.desc()))
+    # 같은 이슈는 판정 기준일이 가장 늦은 건을 쓴다(뒤늦은 재처리가 저장 순서를 뒤집어도 같다). 같은 날은 직접 계산한 값이 앞선다.
+    rows.sort(key=lambda row: row['payload_json'].get('metric_date') or '', reverse=True)
+    return rows, keyword_ready or product_ready
 
 
 def _issue_key(payload):
@@ -275,12 +270,28 @@ def _issue_key(payload):
     return ('REGULATION', tuple(payload.get('article_ids') or ()))
 
 
-def _major_issues(store, uid, scope_stmt, names, start, end):
-    """이번 주 주요 이슈(FR-107-02). 같은 이슈가 여러 날 판정되면 최신 기준 1건만 씁니다."""
-    from backend.app.api.notifications import event_allowed
+def _issue_related(store, scope_stmt, payload, ids):
+    """관심 범위 여부. 표시용 대표 기사 5건이 아니라 이슈에 속한 기사 전체에서 판단합니다."""
     a, tags = store.t('article'), store.t('article_tag')
+    target = payload.get('target') or {}
+    if target.get('keyword_text'):
+        members = select(tags.c.article_id).where(tags.c.keyword_text == target['keyword_text'])
+    elif target.get('hs_code'):
+        members = select(tags.c.article_id).where(tags.c.hs_code.startswith(target['hs_code']), tags.c.hs_ver == target.get('hs_ver'))
+    elif ids:
+        members = ids
+    else:
+        return False
+    return store.c.execute(scope_stmt.order_by(None).with_only_columns(a.c.article_id).where(a.c.article_id.in_(members)).limit(1)).first() is not None
+
+
+def _major_issues(store, uid, scope_stmt, names, start, end):
+    """이번 주 주요 이슈(FR-107-02)와 급증 판정 가능 여부. 같은 이슈가 여러 날 판정되면 기준일이 가장 늦은 1건만 씁니다."""
+    from backend.app.api.notifications import event_allowed
+    tags = store.t('article_tag')
     result, seen = [], set()
-    for row in _issue_candidates(store, start, end):
+    candidates, spike_ready = _issue_candidates(store, start, end)
+    for row in candidates:
         p = row['payload_json']
         metric = p.get('metric_date')
         if not metric or not start <= date.fromisoformat(metric) <= end or not event_allowed(store, uid, row):
@@ -291,7 +302,7 @@ def _major_issues(store, uid, scope_stmt, names, start, end):
             continue
         seen.add(key)
         ids = p.get('article_ids') or ([row['article_id']] if row['article_id'] else [])
-        related = bool(ids) and store.c.execute(scope_stmt.order_by(None).with_only_columns(a.c.article_id).where(a.c.article_id.in_(ids)).limit(1)).first() is not None
+        related = _issue_related(store, scope_stmt, p, ids)
         country = [] if spiked or not ids else store.c.execute(select(tags.c.country_code).where(
             tags.c.article_id.in_(ids), tags.c.country_code.is_not(None)).distinct()).scalars().all()
         result.append({'kind': 'SPIKE' if spiked else 'REGULATION',
@@ -299,9 +310,9 @@ def _major_issues(store, uid, scope_stmt, names, start, end):
                        'country': ', '.join(names.get(c, c) for c in country) or '전체',
                        'basis': (f"7일 {p['recent_week_count']}건 · 주평균 {p['baseline_weekly']:.1f}건 · ×{p['ratio']:.1f}" if spiked else 'KOTRA 통상·규제 분류'),
                        'related': '관심 범위' if related else '—'})
-        if len(result) >= WEEKLY_ISSUE_LIMIT:
-            break
-    return result
+    # 표시 건수 제한에 밀리지 않게 급증을 앞에 둔다.
+    result.sort(key=lambda r: r['kind'] != 'SPIKE')
+    return result[:WEEKLY_ISSUE_LIMIT], spike_ready
 
 
 def _weekly(store, uid, saved, ctx, names, start, end):
@@ -315,12 +326,15 @@ def _weekly(store, uid, saved, ctx, names, start, end):
     source_label = ', '.join(SOURCES.get(r['source_code'], r['source_code']) for r in counts) or '관련 기사 없음'
     ctx['meta']['data_basis'] = source_label + ' · 공개 기사 · 사용자 차단 키워드 적용'
     spikes = _keyword_spikes(store, uid, saved, names, start, end)
+    issues, spike_ready = _major_issues(store, uid, stmt, names, start, end)
     ctx['conditions'].update(week_label=f'{start} ~ {end}', compare_label='직전 8주 주평균' if spikes is not None else '키워드 8주 비교 집계 미완료')
     ctx['summary'] = {'counts': {'total': total, 'market': total - short, 'short': short, 'spike_keywords': None if spikes is None else len(spikes)},
                       'market_label': '일반 기사', 'total_note': f"전체 {total}건 · 본문 카드는 최신 최대 20건",
-                      'spike_ratio': None if spikes is None else MINIMUM_RATIO, 'issue_spike_ratio': MINIMUM_RATIO, 'sentences': [],
-                      'issues': _major_issues(store, uid, stmt, names, start, end), 'schedule': [],
-                      'issues_note': '이번 주 기준에 해당하는 주요 이슈가 없습니다.'}
+                      'spike_ratio': None if spikes is None else MINIMUM_RATIO,
+                      # 수집 기록이 없으면 급증 기준을 빼서 통상·규제만 판단했음을 드러낸다(0건과 구분, FR-906-05).
+                      'issue_spike_ratio': MINIMUM_RATIO if spike_ready else None, 'sentences': [],
+                      'issues': issues, 'schedule': [],
+                      'issues_note': '이번 주 기준에 해당하는 주요 이슈가 없습니다.' if spike_ready else '수집 완료 기록이 없어 급증 이슈는 판단하지 않았고, 통상·규제 이슈는 없습니다.'}
     ctx['keyword_spikes'] = (spikes or [])[:WEEKLY_ISSUE_LIMIT]  # 요약 카드의 총수는 제한 전 건수를 쓴다
     ctx['keyword_note'] = ('기사 수집 완료 기록이 없는 기간이 있어 직전 8주와 비교하지 않았습니다.' if spikes is None
                            else f'최근 7일 ÷ 직전 8주 주평균 {MINIMUM_RATIO}배 이상 · 한 기사는 키워드마다 1건 · 8주 주평균이 0이면 1로 계산')
