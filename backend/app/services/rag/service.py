@@ -185,6 +185,8 @@ class RagService:
                 candidate_limit = 40
                 answer_format, review_body = latest_output(request, self.gateway, context)
                 context.event('latest_output', answer_format=answer_format, review_body=review_body)
+            elif request.use_case == 'chat':
+                candidate_limit = 15
             snapshot = self.store.snapshot()
             applied_sources = requested_sources(request, snapshot)
             context.event('index', generation=snapshot.generation)

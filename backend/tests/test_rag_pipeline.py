@@ -322,6 +322,39 @@ class SearchRecoveryTest(unittest.TestCase):
     publish = PipelineTest.publish
     call = PipelineTest.call
 
+    def test_chat_refills_after_body_review_up_to_fifteen_unique_articles(self):
+        # Tie distances so the fixed-width article keys give a predictable rank.
+        def equal_vectors(texts):
+            return [[1.0] + [0.0] * 7 for _ in texts]
+
+        docs = [document(i, source='KOTRA_MARKET', external_id=f'{i:02}', countries=['FR'])
+                for i in range(1, 18)]
+        self.store.publish(docs, ALL_SOURCES, equal_vectors)
+        self.gateway.embed = lambda texts, context: equal_vectors(texts)
+        self.service.cache_dir = None
+        summarize = self.gateway.summarize
+        for first_supported, last_reviewed, expected_ids in (
+            (1, 5, [1, 2, 3, 4, 5]),
+            (6, 10, [6, 7, 8, 9, 10]),
+            (11, 15, [11, 12, 13, 14, 15]),
+            (13, 15, [13, 14, 15]),
+            (16, 15, []),
+        ):
+            with self.subTest(first_supported=first_supported):
+                reviewed = []
+
+                def review(request, candidate, context):
+                    reviewed.append(candidate.article.article_id)
+                    if candidate.article.article_id < first_supported:
+                        return {'sentences': []}
+                    return summarize(request, candidate, context)
+
+                with patch.object(self.gateway, 'summarize', side_effect=review):
+                    result = self.call(request_payload('chat'))
+                self.assertEqual(reviewed, list(range(1, last_reviewed + 1)))
+                self.assertEqual([a.article_id for a in result.articles], expected_ids)
+                self.assertEqual(result.status, 'ok' if len(expected_ids) == 5 else 'insufficient_evidence')
+
     def test_refill_preserves_global_ranking_even_after_target_is_met(self):
         docs = [document(n, source='KOTRA_MARKET', kw_topic=['차단'] if n < 15 else ['배터리'])
                 for n in range(1, 21)]
