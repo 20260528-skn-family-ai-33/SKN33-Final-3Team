@@ -1,14 +1,23 @@
 """본문 정제 초안: 원문을 보존하고 모든 변경을 행 단위로 기록합니다."""
 import re
 import hashlib
-VERSION = 'clean-v4-20261020'
+VERSION = 'clean-v6-20261103'
 EMAIL = re.compile(r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}')
 PHONE = re.compile(r'(?<!\d)(?:\+82[- .]?(?:10|2|[3-6]\d)|0(?:10|2|[3-6]\d|70))[- .]\d{3,4}[- .]\d{4}(?!\d)')
 BYLINE = re.compile(r'(?:\[[가-힣A-Za-z =·,]{2,50}(?:기자|특파원)\]|(?:[가-힣]{2,12}=)?[가-힣]{2,5}(?:/(?:[가-힣]{2,12}=)?[가-힣]{2,5})*\s+(?:한경닷컴\s+)?(?:(?:객원|선임|수석)\s*)?(?:기자|특파원))')
+# 지역·언론사 또는 가려진 이메일로 시작하는 기자 서명과 구분 기호만 제거합니다.
+_LOCATION = r'[가-힣A-Za-z·ㆍ ]{1,30}'
+_OUTLET = r'[가-힣A-Za-z0-9·ㆍ/ ]{0,30}'
+_DATELINE = rf'(?:\({_LOCATION}[=＝－–—-]{_OUTLET}\)|\[{_LOCATION}[=＝－–—-]{_OUTLET}\])'
+_REPORTER = r'[가-힣]{2,5}(?:(?:\s+|\s*[,·/]\s*)[가-힣]{2,5})*\s+(?:기자|특파원)'
+REPORTER_CREDIT = re.compile(
+    rf'^(?:{_DATELINE}|\[email\s+protected\]|\[이메일 삭제\])\s*'
+    rf'(?:{_REPORTER}|\[기자정보\])(?=$|[=＝\s])\s*(?:[=＝]\s*)?'
+)
 # 숫자·통화·증감 기호는 보존하고 이모지 그림 및 결합 표지만 제거합니다.
 EMOJI = re.compile(r'[\U0001F000-\U0001FAFF\u2600-\u26FF\u2700-\u27BF\uFE0F\u200D\u20E3\U000E0020-\U000E007F]')
 UI = {'영상 모듈 닫기','사진 확대','글자크기 설정','구독하기','기사 원문 보기','공유하기','인쇄','댓글','글자 크기','공유하기 · 인쇄'}
-REASONS = {'ui':'독립된 화면 조작·구독 버튼 문구', 'byline':'독립된 기자 서명·연락처: 본문 사실 설명이 아님', 'contact':'개인 연락처 마스킹', 'notice':'기사 외부의 AI 요약 이용 안내', 'related':'명시적으로 표시된 다른 기사 안내', 'whitespace':'불필요한 앞뒤 공백·빈 줄 정리', 'inline_byline':'문장 끝에 붙은 짧은 기자 서명·연락처', 'premium_notice':'본문 앞의 유료 플랫폼 게재·구독 홍보 안내 (실제 접근 제한은 별도 검사)', 'summary_heading':'기사 외부의 핵심요약 제목·장식 이모지', 'emoji':'장식 이모지 제거, 문장·수치 보존'}
+REASONS = {'reporter_credit':'확인된 기자·특파원 서명 제거', 'ui':'독립된 화면 조작·구독 버튼 문구', 'byline':'독립된 기자 서명·연락처: 본문 사실 설명이 아님', 'contact':'개인 연락처 마스킹', 'notice':'기사 외부의 AI 요약 이용 안내', 'related':'명시적으로 표시된 다른 기사 안내', 'whitespace':'불필요한 앞뒤 공백·빈 줄 정리', 'inline_byline':'문장 끝에 붙은 짧은 기자 서명·연락처', 'premium_notice':'본문 앞의 유료 플랫폼 게재·구독 홍보 안내 (실제 접근 제한은 별도 검사)', 'summary_heading':'기사 외부의 핵심요약 제목·장식 이모지', 'emoji':'장식 이모지 제거, 문장·수치 보존'}
 
 
 def clean_body(raw):
@@ -31,6 +40,9 @@ def clean_body(raw):
             masked = EMAIL.sub('[이메일 삭제]',PHONE.sub('[전화번호 삭제]',result))
             if masked != result:
                 result = masked; kind = 'contact' if kind is None else kind
+        credit = REPORTER_CREDIT.sub('', result, count=1)
+        if credit != result:
+            result, kind = credit, 'reporter_credit'
         # 확인된 게재·구독 홍보 안내 두 문장만 제거합니다. 본문이나 실제 장벽은 추정 삭제하지 않습니다.
         promo = re.match(r"^이 기사는 \d{1,2}월 \d{1,2}일[^\n]{0,180}?한국경제신문의 투자 정보 유료 플랫폼인 '한경 프리미엄9'[^\n]{0,100}?에 게재됐습니다\.\s*한경 프리미엄9을 구독하시면 더 많은 단독 기사를 실시간으로 볼 수 있습니다\.", result)
         # 저장 HTML에서 확인한 별도 홍보 형식도 두 문장이 모두 일치할 때만 제거합니다.
