@@ -81,9 +81,10 @@ def prediction_columns(columns, group_by):
     product_key = 'product_name' if 'product_name' in by_key or group_by == 'HS6' else 'name'
     fields = rank_fields.get(group_by, rank_fields['PAIR']) + [
         country, ('hs6', 'HS 코드'), (product_key, '품목명'),
-        ('growth_pct', '예측 수출 증감률'), ('exp_12m', '최근 12개월 수출액'), ('anchor', '예측 기준월'),
+        ('growth_outlook', '증감 예상'), ('exp_12m', '최근 12개월 수출액'), ('anchor', '예측 기준월'),
     ]
-    units = {'growth_pct': '%', 'exp_12m': 'USD'}
+    # 모델 A의 예측 증감률(growth_pct)은 순위용이라 표에 보이지 않는다. 증감 방향은 모델 B(growth_outlook)로 보인다.
+    units = {'exp_12m': 'USD'}
     return [{**by_key[key], 'label': label, 'unit': units.get(key, by_key[key].get('unit'))}
             for key, label in fields if key in by_key]
 

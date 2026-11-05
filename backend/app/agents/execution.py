@@ -57,11 +57,12 @@ class ExecutionStore:
                                     recovery_count=ledger['recovery_count'])
         state.round_started_at = datetime.fromisoformat(ledger['round_received_at'])
 
-    def call(self, node, timeout, callback, *, finish_reserve=0, clock=monotonic):
+    def call(self, node, timeout, callback, *, finish_reserve=0, clock=monotonic, enforce=True):
+        """enforce=False는 이미 끝난 결과를 받아 마무리하는 호출(리포트 완료 확인)만 쓴다(budget.reserve 참고)."""
         ledger = self.read()['agent']
         identity = dict(round_id=ledger['round_id'], claim_token=self.job['claim_token'], call_id=uuid4().hex)
         self.transition(lambda value: budget.reserve(value, **identity, node=node,
-                            timeout=timeout, finish_reserve=finish_reserve))
+                            timeout=timeout, finish_reserve=finish_reserve, enforce=enforce))
         started = clock()
         try:
             # There is no transaction open while external work runs.

@@ -28,6 +28,21 @@ def country_matches(name, rows, threshold):
     return None, [m[3] for m in matches[:5]]
 
 
+def _bounded_bundle(store, loaded, message):
+    """조건 확인에서 쓰는 모델 묶음(HS4 후보 순서·예측 기준월). ML 단계와 같은 전용 스레드·시간 제한으로 읽는다.
+    캐시가 비어 첫 로드가 늦으면 워커를 붙잡지 않고 그 하위 질문만 다시 질문하도록 안내한다."""
+    from backend.app.agents import budget
+    from backend.app.agents.runtime import bounded_ml
+    settings = store.db.settings
+    try:
+        bundle, _, _ = bounded_ml(lambda: loaded(settings), budget.seconds(settings, 'check'))
+    except TimeoutError:
+        raise SlotRepair('예측 모델을 불러오는 중입니다. 잠시 후 다시 질문해 주세요.')
+    except (ImportError, OSError, ValueError):
+        raise SlotRepair(message)
+    return bundle
+
+
 def ask(state, task, key, kind, message, options, **extra):
     count = state.ask_counts.get(key, 0)
     if kind == 'COUNTRY' and any(':country:' in k and n for k,n in state.ask_counts.items()):
@@ -210,8 +225,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
                 [(r['country_code'], r['name_ko'], {'country_codes':[r['country_code']]}) for r in candidates])
     if market_hs4:
         from backend.app.agents.market import hs6_by_exports, loaded
-        try: bundle,_,_=loaded(store.db.settings)
-        except (ImportError,OSError,ValueError): raise SlotRepair('예측 모델을 확인할 수 없습니다.')
+        bundle=_bounded_bundle(store, loaded, '예측 모델을 확인할 수 없습니다.')
         for key, expr, kept in market_hs4:
             ranked = hs6_by_exports(bundle, expr, out.country_codes)
             registered = {r['hs_code']: r for r in store.rows(select(hs_table).where(
@@ -237,7 +251,10 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         out.period = slots.period or out.period
         if slots.recent_months or not out.period:
             out.period = Period(start=shift_month(bounds[-1], 1-(slots.recent_months or 12)), end=bounds[-1])
-        trade.resolve_period(store, out.period.start.strftime('%Y-%m'), out.period.end.strftime('%Y-%m'))
+        # 유망시장은 통계 기간을 조회하지 않는다. 공개 통계보다 오래된 기간을 물어도 여기서 끝내지 않고, 아래 MODEL_PERIOD로
+        # 최신 기준월 예측을 제안한다.
+        if task.intent != 'PROMISING_MARKET':
+            trade.resolve_period(store, out.period.start.strftime('%Y-%m'), out.period.end.strftime('%Y-%m'))
         if slots.comparison_requested:
             out.compare_period = slots.compare_period or Period(start=shift_month(out.period.start,-12),
                                                                  end=shift_month(out.period.end,-12))
@@ -279,8 +296,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             key=f'{task.task_id}:model_period'
             if key in task.resolved: raise SlotRepair('과거 기준월 예측은 지원하지 않습니다.')
             from backend.app.agents.market import loaded
-            try: bundle,_,_=loaded(store.db.settings)
-            except (ImportError,OSError,ValueError): raise SlotRepair('예측 기준월 스냅샷을 확인할 수 없습니다.')
+            bundle=_bounded_bundle(store, loaded, '예측 기준월 스냅샷을 확인할 수 없습니다.')
             anchor=str(bundle.get('anchor') or bundle.get('snapshot_month') or '')[:7]
             if not anchor: raise SlotRepair('예측 모델의 기준월을 확인할 수 없습니다.')
             if slots.recent_months or slots.period.end.strftime('%Y-%m')!=anchor:

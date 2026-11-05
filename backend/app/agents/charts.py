@@ -102,8 +102,9 @@ def build_chart(store, uid, task, result_id, selection=None):
             output.chart_selector=ChartSelector(result_id=result_id,group_by=group,
                 country_codes=countries if group!='HS6' else [],hs_items=[HsProduct(hs_code=h,hs_ver=v)
                     for h,v in products] if group!='COUNTRY' else [])
-        kindchart,title,unit='bar','유망시장 예측 증감률','%'
-        series=[{'name':'예측 증감률','values':[r['growth_pct'] for r in ranked]}]
+        # 모델 A의 예측 증감률은 순위용이라 보이지 않는다(증감 방향은 모델 B, 표의 '증감 예상'). 순위 순서로 실제 수출액을 그린다.
+        kindchart,title,unit='bar','유망 대상 최근 12개월 수출액','USD'
+        series=[{'name':'최근 12개월 수출액','values':[r['exp_12m'] for r in ranked]}]
     elif kind=='LLM_SQL':
         columns=snapshot['columns']
         text=[c for c in columns if c['type']=='string']

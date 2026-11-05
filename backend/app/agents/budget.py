@@ -37,8 +37,8 @@ def _owned(ledger, round_id, claim_token):
 
 
 def reserve(ledger, *, round_id, claim_token, call_id, timeout, finish_reserve=0, node='unknown', enforce=True):
-    """enforce=False는 finalize 전용이다. 완성된 답변 저장은 앞 호출의 초과 시간 때문에 거부하지 않는다(§13.4 마무리 몫).
-    예약과 정산은 그대로 해서 실제 걸린 시간은 기록한다."""
+    """enforce=False는 이미 끝난 결과를 마무리하는 호출(finalize, 리포트 완료 확인)만 쓴다. 완성된 답변·리포트를
+    앞 호출의 초과 시간 때문에 버리지 않는다(§13.4 마무리 몫). 예약과 정산은 그대로 해서 실제 걸린 시간은 기록한다."""
     _owned(ledger, round_id, claim_token)
     if not all(math.isfinite(x) for x in (timeout, finish_reserve)) or timeout <= 0 or finish_reserve < 0:
         raise ValueError('Invalid budget reservation')

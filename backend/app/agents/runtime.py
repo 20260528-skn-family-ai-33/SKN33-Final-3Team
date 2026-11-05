@@ -41,6 +41,42 @@ def product_names(store):
     return cached[1]
 
 
+_ML_THREAD = None
+_ML_RUNNING = {'since': None}   # 전용 스레드가 지금 돌리는 작업의 시작 시각(monotonic). 멈춤 판단용
+ML_STUCK_SECONDS = 300          # 한 작업이 이보다 오래 끝나지 않으면 멈춘 것으로 보고 오류 로그를 남긴다(복구는 워커 재시작)
+
+
+def bounded_ml(work, seconds):
+    """모델 로드·예측(work)을 전용 스레드 하나에서 돌리고 seconds만 기다린다. 넘으면 TimeoutError(그 ML 단계만 FAILED).
+    파이썬 스레드는 밖에서 멈출 수 없어 늦은 작업은 끝까지 돌지만, 워커는 기다리지 않고 다음 작업으로 넘어간다.
+    스레드가 하나라 늦은 모델 로드가 끝나기 전 다음 호출은 그 뒤에 줄을 선다(모델을 메모리에 두 번 올리지 않는다).
+    작업이 멈추면(끝나지 않음) 이후 ML 호출이 모두 시간 초과가 되므로, 시간 초과마다 경고를 남기고 ML_STUCK_SECONDS를
+    넘으면 오류 로그로 워커 재시작이 필요하다고 알린다(사용자 결정: 스레드를 교체하지 않는다)."""
+    global _ML_THREAD
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    from time import monotonic
+    if _ML_THREAD is None:
+        _ML_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='agent-ml')
+    def tracked():
+        _ML_RUNNING['since'] = monotonic()
+        try: return work()
+        finally: _ML_RUNNING['since'] = None
+    future = _ML_THREAD.submit(tracked)
+    try:
+        return future.result(timeout=seconds)
+    except FutureTimeout:
+        # 아직 시작하지 않고 줄에서 기다리던 작업이면 취소한다. 실패 응답을 받은 요청이 나중에 돌아 새 요청을 늦추지 않게 한다.
+        future.cancel()
+        since = _ML_RUNNING['since']
+        running = monotonic() - since if since is not None else 0.0
+        log = logging.getLogger(__name__)
+        if running >= ML_STUCK_SECONDS:
+            log.error('agent_ml_stuck running_seconds=%.0f; 유망시장 예측이 멈췄습니다. 워커를 다시 시작하세요.', running)
+        else:
+            log.warning('agent_ml_timeout limit_seconds=%.0f running_seconds=%.0f', seconds, running)
+        raise TimeoutError('ML 작업이 제한 시간을 넘었습니다.') from None
+
+
 class Services:
     def __init__(self, execution, settings, client=None):
         self.execution = execution
@@ -175,10 +211,23 @@ class Services:
             from backend.app.agents.tools import article_result
             return self.execution.call('news',budget.seconds(self.settings,'news'),lambda _:article_result(state,task,step))
         if step.tool=='query_market_model':
-            from backend.app.agents.market import DEFAULT_MARKET_TOP, loaded, model_codes, predict
-            def model(_):
-                bundle,provider,versions=loaded(self.settings)
-                key=fingerprint(state,step,tool_version='1',versions=versions,source_results=parents)
+            from backend.app.agents.market import DEFAULT_MARKET_TOP, growth, loaded, model_codes, predict
+            def model(timeout):
+                from time import monotonic
+                deadline=monotonic()+timeout
+                def load():
+                    bundle,provider,versions=loaded(self.settings)
+                    anchor=str(bundle.get('anchor') or '')[:7]
+                    return bundle,provider,versions,anchor,growth(self.settings,anchor)
+                # 모델 로드·예측만 제한 시간 안에 기다린다(DB 조회·저장은 이 스레드에서). bounded_ml 참고.
+                bundle,provider,versions,anchor,(outlook,outlook_version,outlook_note)=bounded_ml(load,timeout)
+                # 증감 예상(모델 B)은 모델 A와 기준월이 같을 때만 쓴다. 다른 달의 방향을 이 순위에 붙이지 않는다.
+                if outlook and outlook['anchor']!=anchor:
+                    outlook,outlook_note=None,(f"증감 예상 모델의 기준월({outlook['anchor']})이 유망시장 모델({anchor})과 달라 "
+                                               '증가·감소 예상은 표시하지 않았습니다.')
+                versions={**versions,'growth':outlook_version if outlook else 'none'}
+                key=fingerprint(state,step,tool_version='2',versions=versions,source_results=parents)
+                if outlook_note and outlook_note not in task.applied_defaults: task.applied_defaults.append(outlook_note)
                 with self.read_store() as store:
                     codes=model_codes(store,[p for p in task.conditions.hs_items if len(p.hs_code)==6])
                 # 묶음 대표 코드로 조회한 것은 누락이 아니다. 적용 조건으로 안내한다(완전한 결과라 PARTIAL로 두지 않는다).
@@ -188,8 +237,11 @@ class Services:
                     if group!=hs and label not in task.applied_defaults: task.applied_defaults.append(label)
                 previous=self.results.reuse(state,step,key)
                 if previous: return previous
-                analysis=predict(task,bundle,provider,versions,step.args.get('top',DEFAULT_MARKET_TOP),codes)
+                analysis=bounded_ml(lambda:predict(task,bundle,provider,versions,step.args.get('top',DEFAULT_MARKET_TOP),
+                                                   codes,outlook['directions'] if outlook else None),
+                                    max(0.1,deadline-monotonic()))
                 if analysis.result.status!='OK': return analysis.result
+                analysis.meta['growth_model_version']=versions['growth']
                 from backend.app.agents.templates import _names
                 with self.read_store() as store: countries,products=_names(store)
                 for row in analysis.rows:
@@ -205,6 +257,8 @@ class Services:
                     conditions=analysis.conditions,input_fingerprint=key,source_results=parents,versions=versions)
             try: return self.execution.call('ml',budget.seconds(self.settings,'ml'),model,
                         finish_reserve=budget.finishing_seconds(state,self.settings))
+            except TimeoutError:
+                return ToolResult(status='FAILED',error='예측이 제한 시간 안에 끝나지 않았습니다. 잠시 후 다시 질문해 주세요.')
             except (ImportError,OSError,MemoryError,ValueError):
                 return ToolResult(status='FAILED',error='예측 모델 또는 기준월 스냅샷을 사용할 수 없습니다.')
         if step.tool=='build_chart':
@@ -324,8 +378,10 @@ class Services:
                 record=store.owned('report','report_id',rid,state.input.user_id)
                 if record['status']=='READY': return ToolResult(status='OK',report_id=rid)
                 return ToolResult(status='FAILED',error='리포트 파일 생성에 실패했습니다.')
+        # 리포트 파일은 이미 만들어졌고 상태만 읽는다. 앞 호출의 초과 시간 때문에 예약이 거부되면 완성된 리포트를 두고
+        # 작업이 FAILED로 끝나므로 예산 검사 없이 예약·정산한다(finalize와 같은 규칙, §13.4).
         return self.execution.call('report',budget.seconds(self.settings,'report'),read,
-                                   finish_reserve=budget.finishing_seconds(state,self.settings))
+                                   finish_reserve=budget.finishing_seconds(state,self.settings),enforce=False)
 
     def finalize(self,state):
         from time import monotonic

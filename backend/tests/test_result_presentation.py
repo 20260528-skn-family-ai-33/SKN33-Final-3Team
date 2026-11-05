@@ -17,10 +17,15 @@ class ResultPresentationTest(unittest.TestCase):
         table = {'columns': [{'key': key, 'label': key} for key in row], 'rows': [row],
                  'total_rows': 1, 'meta': {'kind': 'PREDICTION', 'group_by': 'COUNTRY'}}
         sheet = load_workbook(io.BytesIO(xlsx_bytes([table], {}, [], unit_headers=True))).worksheets[0]
+        # 모델 A의 예측 증감률은 순위용이라 보이지 않는다(증감 방향은 모델 B의 '증감 예상').
         self.assertEqual([cell.value for cell in sheet[1]], [
-            '품목 순위', '국가', 'HS 코드', '품목명', '예측 수출 증감률 (%)', '최근 12개월 수출액 (USD)', '예측 기준월',
+            '품목 순위', '국가', 'HS 코드', '품목명', '최근 12개월 수출액 (USD)', '예측 기준월',
         ])
         self.assertEqual(sheet['A2'].value, 3)
+        row['growth_outlook'] = '증가 예상'
+        table['columns'] = [{'key': key, 'label': key} for key in row]
+        sheet = load_workbook(io.BytesIO(xlsx_bytes([table], {}, [], unit_headers=True))).worksheets[0]
+        self.assertIn('증감 예상', [cell.value for cell in sheet[1]])
 
     def test_monthly_display_and_excel_keep_source_values(self):
         row={'month':'2026-08','hs_code':'330499','hs_ver':'HS2022','name':'화장품',

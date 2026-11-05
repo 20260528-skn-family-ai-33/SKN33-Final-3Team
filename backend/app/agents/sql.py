@@ -142,6 +142,23 @@ def _filters(predicates, column, aliases, value=None, *, single=False, subquery=
     return False
 
 
+def _joins_tables(join):
+    """조인이 두 표를 열 조건으로 잇는지: USING(열) 또는 ON의 최상위 AND 조건에 `별칭1.열 = 별칭2.열`(서로 다른 표)이 있다."""
+    if join.args.get('using'):
+        return True
+    on = join.args.get('on')
+    if on is None:
+        return False
+    on = on.unnest()
+    for node in (on.flatten() if isinstance(on, exp.And) else [on]):
+        node = node.unnest()
+        if (isinstance(node, exp.EQ) and isinstance(node.this, exp.Column) and isinstance(node.expression, exp.Column)
+                and node.this.table and node.expression.table
+                and node.this.table.lower() != node.expression.table.lower()):
+            return True
+    return False
+
+
 def _linked(select, trade, country):
     """수출입 행과 국가 행이 country_code로 이어졌는지(`ON trade.country_code = country.country_code` 또는
     `USING (country_code)`). 조인 방향과 무관하게 연결만 본다. 국가 역할 조건이 행을 실제로 거르는지는 그 조건이
@@ -175,6 +192,11 @@ def _check_trade_filters(query):
                    if isinstance(source, exp.Table)}
         trades = [alias for alias, source in sources.items() if source.name.lower() in TRADE_TABLES]
         countries = [alias for alias, source in sources.items() if source.name.lower() == 'country']
+        # 두 표를 열로 잇지 않는 조인(CROSS JOIN·쉼표 조인·NATURAL·`ON 1=1`)은 수출입 행을 다른 표의 행 수만큼 복제해
+        # 합계를 부풀린다. LEFT JOIN은 앞선 조인 결과를 모두 보존하므로, 그 앞에 이런 조인이 있으면 국가 필터가 있어도 중복된다.
+        if trades and not all(_joins_tables(join) for join in scope.expression.args.get('joins') or []):
+            raise ValueError("수출입 금액을 읽는 SELECT에서는 CROSS JOIN·쉼표 조인 없이 "
+                             "`ON 표1.열 = 표2.열` 또는 USING 조건으로 조인하세요.")
         for trade in trades:
             predicates = _conjuncts(scope.expression, trade)
             if len(trades) > 1:

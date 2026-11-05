@@ -11,6 +11,24 @@ from backend.app.api.common import ApiError
 
 
 class ConditionTest(unittest.TestCase):
+    def test_market_model_load_in_check_is_time_bounded(self):
+        self.state.input.question='미국 HS 3304 유망시장'
+        self.task.intent='PROMISING_MARKET'
+        self.task.slots=TaskSlots(countries=[{'mention':'미국','name':'미국'}],products=['3304'])
+        with patch('backend.app.agents.runtime.bounded_ml', side_effect=TimeoutError()):
+            check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.step.status,'FAILED')
+        self.assertIn('불러오는 중',self.state.results[self.step.step_id].error)
+
+    def test_old_period_market_question_offers_latest_prediction(self):
+        from backend.app.agents.state import Period
+        self.state.input.question='2015년 미국 유망 품목'
+        self.task.intent='PROMISING_MARKET'
+        self.task.slots=TaskSlots(countries=[{'mention':'미국','name':'미국'}],period=Period(start='2015-01-01',end='2015-12-01'))
+        with patch('backend.app.agents.market.loaded',return_value=({'anchor':'2026-09-01'},None,{})):
+            check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.state.pending.kind,'MODEL_PERIOD')   # 통계 기간 검사에서 끝내지 않는다
+
     def test_market_hs4_uses_only_eligible_children_ranked_by_exports(self):
         import pandas as pd
 

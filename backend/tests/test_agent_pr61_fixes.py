@@ -111,6 +111,48 @@ class SqlFilterBypassTest(unittest.TestCase):
                     "ON c.country_code = e.country_code WHERE c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022'"]:
             with self.subTest(sql=sql): self.assertTrue(validate_sql(draft(sql)))
 
+    def test_cross_join_duplicating_trade_rows_is_rejected(self):
+        bad = ["SELECT SUM(e.amount_usd) AS value FROM country c CROSS JOIN hs_code h "
+               "LEFT JOIN export_summary e ON e.country_code = c.country_code AND e.hs_ver = 'HS2022' "
+               "WHERE c.country_role = 'COUNTRY'",
+               "SELECT SUM(e.amount_usd) AS value FROM export_summary e, country c "
+               "WHERE c.country_code = e.country_code AND c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022'",
+               # ON 1=1도 두 표를 열로 잇지 않는 CROSS JOIN이다
+               "SELECT SUM(e.amount_usd) AS value FROM country c JOIN hs_code h ON 1 = 1 "
+               "LEFT JOIN export_summary e ON e.country_code = c.country_code AND e.hs_ver = 'HS2022' "
+               "WHERE c.country_role = 'COUNTRY'"]
+        for sql in bad:
+            with self.subTest(sql=sql), self.assertRaisesRegex(ValueError, 'CROSS JOIN'):
+                validate_sql(draft(sql))
+
+    def test_ml_wait_is_bounded(self):
+        import time
+        from backend.app.agents.runtime import bounded_ml
+        self.assertEqual(bounded_ml(lambda: 7, 1), 7)
+        with self.assertRaises(TimeoutError):
+            bounded_ml(lambda: time.sleep(0.5), 0.05)
+        time.sleep(0.6)   # 앞 작업이 끝나 전용 스레드가 비게 한다
+
+    def test_timed_out_queued_ml_work_is_cancelled(self):
+        import time
+        from backend.app.agents.runtime import bounded_ml
+        ran = []
+        with self.assertRaises(TimeoutError):
+            bounded_ml(lambda: time.sleep(0.3), 0.05)   # 전용 스레드를 잡고 있는 작업
+        with self.assertRaises(TimeoutError):
+            bounded_ml(lambda: ran.append(1), 0.05)      # 그 뒤에 줄 선 작업은 시간 초과 때 취소된다
+        time.sleep(0.4)
+        self.assertEqual(ran, [])
+
+    def test_stuck_ml_work_is_logged_for_restart(self):
+        import time
+        from backend.app.agents import runtime
+        with patch.object(runtime, 'ML_STUCK_SECONDS', 0.05), self.assertLogs(runtime.__name__, 'ERROR') as logs:
+            with self.assertRaises(TimeoutError):
+                runtime.bounded_ml(lambda: time.sleep(0.4), 0.1)
+        self.assertIn('agent_ml_stuck', logs.output[0])
+        time.sleep(0.4)
+
     def test_missing_table_error_hides_database_name(self):
         from sqlalchemy.exc import ProgrammingError
         error = ProgrammingError('SELECT ...', {}, Exception(1146, "Table 'borderless_prod.users' doesn't exist"))
@@ -248,6 +290,28 @@ class FinishBudgetTest(unittest.TestCase):
         Services(execution, Settings({}), client=MagicMock()).finalize(self.answered_state())
         self.assertEqual(reserved[0]['reservation']['node'], 'finalize')
         execution.transaction.assert_called_once()   # 저장은 그대로 진행한다
+
+    def test_report_ready_reserves_even_when_budget_is_spent(self):
+        from types import SimpleNamespace as NS
+        from backend.app.agents.budget import new_round
+        from backend.app.agents.execution import ExecutionStore
+        from backend.app.agents.runtime import Services
+        ledger = new_round('r', 1); ledger['charged_seconds'] = 179.0
+        execution = ExecutionStore.__new__(ExecutionStore)
+        execution.job = {'claim_token': 1}
+        current, changes = [ledger], []
+        execution.read = lambda: {'agent': current[0]}
+        def transition(change):
+            current[0] = change(current[0]); changes.append(current[0])
+        execution.transition = transition
+        state = NS(report_wait=NS(report_id='9'), input=NS(user_id=1), plan=None)
+        services = Services(execution, Settings({}), client=MagicMock())
+        with patch.object(services, 'read_store') as store:
+            store.return_value.__enter__.return_value.owned.return_value = {'status': 'READY'}
+            result = services.report_ready(state)
+        self.assertEqual((result.status, result.report_id), ('OK', '9'))
+        self.assertEqual(changes[0]['reservation']['node'], 'report')
+        self.assertIsNone(changes[-1]['reservation'])   # 걸린 시간은 정산해 기록한다
 
 
 

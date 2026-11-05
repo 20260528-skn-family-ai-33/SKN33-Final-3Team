@@ -77,6 +77,65 @@ class MarketTest(unittest.TestCase):
             chosen, _, _ = build_chart(None, 1, task, 'r', {'hs_code': '150910', 'hs_ver': 'HS2017'})
         self.assertEqual(chosen.chart.labels, ['베트남', '미국'])
 
+    def test_growth_direction_is_attached_and_a_growth_hidden_from_digest(self):
+        conditions = Conditions(country_codes=['VN'])
+        row = {'anchor': '2026-09-01', 'country_code': 'VN', 'country_size': 100, 'product_rank': 5,
+               'product_size': 35, 'growth_pct': -3.0, 'exp_12m': 123456}
+        provider = Mock()
+        provider.return_value.to_dict.return_value = [{**row, 'hs6': '330499', 'country_rank': 1},
+                                                      {**row, 'hs6': '330410', 'country_rank': 2}]
+        result = predict(SimpleNamespace(conditions=conditions), {}, provider, {'model': 'm'},
+                         directions={('VN', '330499'): 'UP'})
+        self.assertEqual([r['growth_outlook'] for r in result.rows], ['증가 예상', None])
+        items = result.result.digest['targets'][0]['items']
+        self.assertEqual(items[0]['growth_outlook'], '증가 예상')
+        self.assertFalse(any('growth_pct' in item for item in items))   # 모델 A 증감률은 요약에 넣지 않는다
+        self.assertTrue(all('growth_pct' in r for r in result.rows))      # 순위 근거로 결과표에는 남긴다
+
+    def test_growth_file_is_optional_and_checked(self):
+        import tempfile, joblib, pandas as pd
+        from pathlib import Path
+        from backend.app.agents.market import growth, _load_growth
+        _load_growth.cache_clear()
+        with tempfile.TemporaryDirectory() as folder:
+            settings = Settings({'API_ML_MODEL_DIRECTORY': folder})
+            self.assertEqual(growth(settings)[:2], (None, 'none'))
+            latest = pd.DataFrame({'anchor': pd.to_datetime(['2026-09-01'] * 2), 'country_code': ['VN', 'US'],
+                                   'hs6': ['330499', '330499'], 'growth_pct': [3.0, -1.0], 'direction': ['UP', 'DOWN']})
+            joblib.dump({'kind': 'growth_huber', 'latest': latest}, Path(folder) / 'model_b_growth_202609.joblib')
+            data, version, note = growth(settings)
+            self.assertEqual((data['anchor'], data['directions'][('US', '330499')], note), ('2026-09', 'DOWN', None))
+            self.assertNotIn(version, ('none', 'invalid'))
+            joblib.dump({'kind': 'growth_huber'}, Path(folder) / 'model_b_growth_202610.joblib')   # latest 없는 파일
+            self.assertEqual(growth(settings)[:2], (None, 'invalid'))
+            # 모델 A와 같은 기준월 파일이 있으면 더 최근 파일보다 그것을 쓴다
+            self.assertEqual(growth(settings, '2026-09')[0]['anchor'], '2026-09')
+            # 월별 학습 레지스트리가 있으면 그것으로 고른다(같은 기준월의 최신 READY 리비전, 실패 SKIPPED 기록은 건너뜀)
+            import json
+            joblib.dump({'kind': 'growth_huber', 'latest': latest}, Path(folder) / 'model_b_growth_202609_r2.joblib')
+            for name, status in (('model_b_growth_202609', 'READY'), ('model_b_growth_202609_r2', 'READY'),
+                                 ('model_b_growth_202609_r3', 'SKIPPED')):
+                (Path(folder) / f'{name}.registry.json').write_text(json.dumps({
+                    'model_key': 'model_b', 'status': status, 'artifact_path': f'{name}.joblib' if status == 'READY' else None,
+                    'data_info': {'anchor': '2026-09-01'}}), encoding='utf-8')
+            from backend.app.agents.market import growth_path
+            self.assertEqual(growth_path(settings, '2026-09').name, 'model_b_growth_202609_r2.joblib')
+            # 다른 달 레지스트리만 있으면 같은 기준월의 직접 만든 파일을 쓴다
+            joblib.dump({'kind': 'growth_huber', 'latest': latest}, Path(folder) / 'model_b_growth_202611.joblib')
+            self.assertEqual(growth_path(settings, '2026-11').name, 'model_b_growth_202611.joblib')
+            # 리비전은 숫자 순서(_r10이 _r2보다 뒤)
+            for revision in (2, 10):
+                joblib.dump({'kind': 'growth_huber', 'latest': latest}, Path(folder) / f'model_b_growth_202611_r{revision}.joblib')
+            self.assertEqual(growth_path(settings, '2026-11').name, 'model_b_growth_202611_r10.joblib')
+            # 잘린 모델 B 파일(EOFError)도 증감 예상만 빠지고 예외를 올리지 않는다
+            truncated = Path(folder) / 'model_b_growth_202611_r10.joblib'
+            truncated.write_bytes(truncated.read_bytes()[:40])
+            self.assertEqual(growth(settings, '2026-11')[:2], (None, 'invalid'))
+            # 깨진 레지스트리는 예외를 올리지 않고 증감 예상 없이 답한다
+            (Path(folder) / 'model_b_growth_202612.registry.json').write_text('{', encoding='utf-8')
+            self.assertEqual(growth(settings, '2026-09')[:2], (None, 'invalid'))
+        _load_growth.cache_clear()
+
     def test_model_codes_reads_correlation_groups(self):
         from backend.app.agents.market import model_codes
         from backend.tests.api_support import test_engine
