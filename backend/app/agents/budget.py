@@ -36,7 +36,9 @@ def _owned(ledger, round_id, claim_token):
             '작업 소유권이 다른 실행기로 이전되었습니다.', 'JOB_CLAIM_LOST', 409)
 
 
-def reserve(ledger, *, round_id, claim_token, call_id, timeout, finish_reserve=0, node='unknown'):
+def reserve(ledger, *, round_id, claim_token, call_id, timeout, finish_reserve=0, node='unknown', enforce=True):
+    """enforce=False는 finalize 전용이다. 완성된 답변 저장은 앞 호출의 초과 시간 때문에 거부하지 않는다(§13.4 마무리 몫).
+    예약과 정산은 그대로 해서 실제 걸린 시간은 기록한다."""
     _owned(ledger, round_id, claim_token)
     if not all(math.isfinite(x) for x in (timeout, finish_reserve)) or timeout <= 0 or finish_reserve < 0:
         raise ValueError('Invalid budget reservation')
@@ -48,7 +50,7 @@ def reserve(ledger, *, round_id, claim_token, call_id, timeout, finish_reserve=0
                 and existing['node'] == node and existing['claim_token'] == claim_token,
                 '호출 예약 내용이 다릅니다.', 'BUDGET_CONFLICT', 409)
         return deepcopy(ledger)
-    require(ledger['charged_seconds'] + timeout + finish_reserve <= RUN_TIMEOUT_SECONDS,
+    require(not enforce or ledger['charged_seconds'] + timeout + finish_reserve <= RUN_TIMEOUT_SECONDS,
             '실행 시간이 부족합니다. 질문을 나누어 다시 요청해 주세요.', 'RUN_TIMEOUT', 409)
     result = deepcopy(ledger)
     result['charged_seconds'] += timeout

@@ -303,6 +303,29 @@ def snapshot_evidence(payload):
             '_verification_source':'SNAPSHOT'}
 
 
+def mark_unverified(state):
+    """시간이 부족해 대조하지 못했을 때(§1·§13.4): verify가 대조할 LLM 문장마다 "확인 필요"(MISMATCH)를 붙인다.
+    고정 문구 결론은 verify처럼 건너뛴다. 숫자가 없는 문장("결과는 아래 표와 차트에서 확인하세요.")은 대조할 것이 없어 PASS다.
+    확인하지 않은 숫자를 다음 턴 요약에 남기지 않도록 turn_summary는 비운다(D-77)."""
+    checks,index=[],0
+    def add(sentence):
+        text=_merge_compound(DATE.sub(' ',re.sub(r'\[\d+\]','',sentence)))
+        numbers=[_shown(m) for m in TOKEN.finditer(text) if not _target_count(text,m)]
+        checks.append(SentenceCheck(index=index,numbers=numbers,status='MISMATCH' if numbers else 'PASS',
+                                    reason='NOT_CONFIRMED' if numbers else 'MATCH'))
+    for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
+        evidence=any(s.step_id in state.results and state.results[s.step_id].digest for s in task.steps)
+        generated=evidence and fixed_conclusion(state,task) is None
+        for sentence in conclusion.sentences:
+            if generated: add(sentence)
+            index+=1
+    for sentence in state.draft.explanation:
+        add(sentence); index+=1
+    if fixed_conclusion(state,state.plan.tasks[0]) is None: state.draft.turn_summary=''
+    state.verification=Verification(checks=checks,regeneration_count=state.verification.regeneration_count,
+                                    status='NEEDS_REVIEW' if any(c.status=='MISMATCH' for c in checks) else 'PASS')
+
+
 def verify(state,known_names=(),*,snapshots=None,countries=()):
     snapshots=snapshots or {}
     def source(step_id):

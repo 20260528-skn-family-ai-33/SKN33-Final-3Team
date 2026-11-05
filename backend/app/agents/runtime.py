@@ -306,7 +306,15 @@ class Services:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
             verify(state,known_names=set(names),snapshots=snapshots,countries=countries)
-        self.execution.call('verify',budget.seconds(self.settings,'verify'),check)
+        try:
+            # finalize 몫은 남긴다(§13.4). compose가 예약보다 오래 걸려 시간이 모자라면 대조하지 못한 문장에
+            # 바로 "확인 필요"를 붙이고 답변은 저장한다(§1 "시간이 부족하면 불일치 문장에 즉시 표시").
+            self.execution.call('verify',budget.seconds(self.settings,'verify'),check,
+                                finish_reserve=budget.seconds(self.settings,'finalize'))
+        except ApiError as exc:
+            if exc.code!='RUN_TIMEOUT': raise
+            from backend.app.agents.verify import mark_unverified
+            mark_unverified(state)
         self.execution.sync_budget(state)
 
     def report_ready(self,state):
@@ -324,7 +332,10 @@ class Services:
         from uuid import uuid4
         identity={'round_id':self.execution.read()['agent']['round_id'],'claim_token':self.execution.job['claim_token'],
                   'call_id':uuid4().hex}
-        self.execution.transition(lambda ledger:budget.reserve(ledger,**identity,node='finalize',timeout=budget.seconds(self.settings,'finalize')))
+        # 완성된 답변 저장은 예산 초과로 거부하지 않는다(enforce=False). 앞 호출이 예약보다 오래 걸려 마무리 몫을 넘겨도
+        # 답변을 버리고 작업을 FAILED로 끝내지 않게 한다. 걸린 시간은 그대로 정산해 기록한다(§13.4).
+        self.execution.transition(lambda ledger:budget.reserve(ledger,**identity,node='finalize',
+                                  timeout=budget.seconds(self.settings,'finalize'),enforce=False))
         started=monotonic()
         def persist(store,job):
             primary=state.plan.tasks[0]

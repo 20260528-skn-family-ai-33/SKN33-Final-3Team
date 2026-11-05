@@ -209,5 +209,47 @@ class CheckBudgetTest(unittest.TestCase):
             Services(execution, Settings({}), client=MagicMock()).check(s, step)
 
 
+class FinishBudgetTest(unittest.TestCase):
+    """마무리 단계에서 시간이 모자라도 완성된 답변을 버리지 않는다(§1, §13.4)."""
+    def answered_state(self):
+        from backend.tests.test_agent_compose import ComposeTest
+        from backend.app.agents.state import ToolResult
+        state = ComposeTest().state(['STATISTICS']); task = state.plan.tasks[0]; task.answer_status = 'ANSWERED'
+        step = next(x for x in task.steps if x.tool == 'query_trade_data')
+        state.results[step.step_id] = ToolResult(status='OK', result_id='r', digest={'rows': [{'country_name': '중국', 'amount_usd': 999}]})
+        state.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['중국 수출은 999 USD입니다.']}],
+                            explanation=['설명 문장입니다.'], turn_summary='중국 999 USD')
+        return state
+
+    def test_verify_without_time_marks_sentences_for_review(self):
+        from backend.app.agents.runtime import Services
+        from backend.app.api.common import ApiError
+        state = self.answered_state()
+        execution = MagicMock()
+        execution.call.side_effect = ApiError(409, 'RUN_TIMEOUT', '실행 시간이 부족합니다.')
+        Services(execution, Settings({}), client=MagicMock()).verify(state)
+        self.assertEqual(execution.call.call_args.kwargs['finish_reserve'], 10)   # finalize 몫을 남긴다
+        self.assertEqual(state.verification.status, 'NEEDS_REVIEW')
+        # 숫자가 있는 문장만 "확인 필요"다. 숫자 없는 설명 문장은 대조할 것이 없어 PASS다.
+        self.assertEqual([(c.index, c.status) for c in state.verification.checks], [(0, 'MISMATCH'), (1, 'PASS')])
+        self.assertEqual(state.verification.checks[0].numbers, ['999 USD'])
+        self.assertEqual(state.draft.turn_summary, '')   # 확인하지 않은 숫자를 다음 턴 요약에 남기지 않는다
+
+    def test_finalize_reserves_even_when_budget_is_spent(self):
+        from backend.app.agents.budget import new_round, reserve
+        from backend.app.agents.runtime import Services
+        from backend.app.api.common import ApiError
+        ledger = new_round('r', 1); ledger['charged_seconds'] = 179.0   # compose가 예약보다 오래 걸린 경우
+        with self.assertRaises(ApiError):
+            reserve(ledger, round_id='r', claim_token=1, call_id='x', timeout=10, node='finalize')
+        execution = MagicMock(); execution.read.return_value = {'agent': ledger}; execution.job = {'claim_token': 1}
+        reserved = []
+        execution.transition.side_effect = lambda change: reserved.append(change(ledger))
+        Services(execution, Settings({}), client=MagicMock()).finalize(self.answered_state())
+        self.assertEqual(reserved[0]['reservation']['node'], 'finalize')
+        execution.transaction.assert_called_once()   # 저장은 그대로 진행한다
+
+
+
 if __name__ == '__main__':
     unittest.main()

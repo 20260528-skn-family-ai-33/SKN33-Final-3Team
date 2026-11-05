@@ -733,6 +733,7 @@ actions[], report_id, warnings[]
 값은 C-28이다. 단계별 소요 시간 로그(D-47)로 조정한다.
 
 - **마무리 몫:** "아직 실행하지 않은 chart 단계 수 × 5 + compose 20 + verify 5 + finalize 10"초다. 하위 질문 3개에 차트가 3개 남았으면 50초다. 이 몫은 늘 남겨 둔다.
+- **마무리 중 시간 부족(2026-11-05):** 예약은 실제 걸린 시간으로 정산되므로 compose가 예약보다 오래 걸리면 마무리 몫이 모자랄 수 있다. verify는 finalize 몫(10초)을 남기고 예약하며, 그래도 예약이 거부되면 대조하지 못한 LLM 문장마다 "확인 필요"(MISMATCH, NOT_CONFIRMED)를 붙이고 `turn_summary`를 비운 뒤 저장으로 넘어간다(`verify.mark_unverified`). finalize는 예산 검사 없이 예약·정산한다(`budget.reserve(enforce=False)`). 완성된 답변을 버리고 작업을 FAILED로 끝내지 않는다.
 - **재시도 조건:** 재시도·재생성(SQL 2회, LLM SQL 재생성 2회, 기사 1회, compose 1회)은 남은 예산이 "그 시도의 예약 시간 + 마무리 몫" 이상일 때만 한다. 모자라면 재시도하지 않고 그 단계를 FAILED로 둔 뒤 `skip_blocked()`하고 D-72대로 부분 답변을 만든다.
 - **verify 뒤 재생성:** 숫자가 틀려 compose를 다시 부르는 것(D-51)은 남은 예산이 "compose 20 + verify 5 + finalize 10 = 35초" 이상일 때만 한다. 모자라면 다시 쓰지 않고 틀린 문장에 "확인 필요"를 붙인다(`Verification.status=NEEDS_REVIEW`).
 - **이유:** 예를 들어 LLM SQL은 3번 다 예약하면 플래너 10 + check 15 + 150 = 175초라 마무리를 할 수 없다. D-40·D-45의 횟수는 최대치이고, 예산 안에서만 쓴다.
