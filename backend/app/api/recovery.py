@@ -1,9 +1,12 @@
 """이름·이메일 확인 및 SMTP 임시 비밀번호 발급. 평문은 메일에만 사용한다."""
 import secrets
-import smtplib
-import ssl
+import json
+import math
+import subprocess
+import sys
+import time
 import string
-from email.message import EmailMessage
+from pathlib import Path
 
 import bcrypt
 from pydantic import BaseModel, EmailStr, Field
@@ -11,7 +14,8 @@ from sqlalchemy import update
 
 from backend.app.api import accounts
 from backend.app.api.common import ApiError, require
-from backend.app.api.security import revoke_sessions
+from backend.app.api.security import revoke_sessions, hash_token
+from backend.app.api.database import Store
 
 
 class RecoveryIdentity(BaseModel):
@@ -25,14 +29,26 @@ def identity(data):
     return value.name.strip(), str(value.email).strip().lower()
 
 
-def matches(user, name):
-    return bool(user and user['account_status'] != 'WITHDRAWN' and (user['name'] or '').strip() == name)
+def matches(user, name, email):
+    # users.email의 MySQL ai_ci 비교는 악센트가 다른 주소도 같은 계정으로 찾는다.
+    # 요청 제한 키·수신 주소와 동일한 정규화만 허용하고 DB 비교 결과를 다시 확인한다.
+    return bool(user and user['account_status'] != 'WITHDRAWN'
+                and (user['name'] or '').strip() == name and user['email'].strip().lower() == email)
 
 
 def confirm_account(store, data):
     name, email = identity(data)
-    found = matches(accounts.get_user(store, email=email), name)
+    found = matches(accounts.get_user(store, email=email), name, email)
     return {'matches': found, 'message': '가입된 계정입니다.' if found else '해당정보로 가입된 계정이 없습니다'}
+
+
+def limit_request(database, data, settings):
+    require(data.get('action') in ('ISSUE', 'REISSUE'), '발급 요청을 확인하세요.')
+    _, email = identity(data)
+    cooldown = int(settings.get('API_RECOVERY_COOLDOWN_SECONDS', 600))
+    maximum = int(settings.get('API_RECOVERY_DAILY_MAX', 5))
+    require(cooldown > 0 and maximum > 0, '계정 복구 요청 제한 설정을 확인하세요.', 'RECOVERY_NOT_CONFIGURED', 503)
+    database.redis.limit_recovery(hash_token(email), cooldown, maximum)
 
 
 def temporary_password():
@@ -49,46 +65,66 @@ def send_temporary_password(settings, recipient, password):
     require(host and sender, '임시 비밀번호 메일 발송 설정이 준비되지 않았습니다.', 'MAIL_NOT_CONFIGURED', 503)
     mode = settings.get('API_SMTP_SECURITY', 'starttls').lower()
     require(mode in ('starttls', 'ssl'), '메일 서버 TLS 설정을 확인하세요.', 'MAIL_NOT_CONFIGURED', 503)
-    message = EmailMessage()
-    message['Subject'] = '[Borderless] 임시 비밀번호 안내'
-    message['From'], message['To'] = sender, recipient
-    message.set_content(f'임시 비밀번호: {password}\n\n이 비밀번호로 로그인한 뒤 계정 설정에서 비밀번호를 변경해 주세요.\n재발급하면 이전 비밀번호는 사용할 수 없습니다.')
     try:
         port = int(settings.get('API_SMTP_PORT', 465 if mode == 'ssl' else 587))
-        timeout = int(settings.get('API_SMTP_TIMEOUT_SECONDS', 10))
-        client = smtplib.SMTP_SSL(host, port, timeout=timeout, context=ssl.create_default_context()) if mode == 'ssl' else smtplib.SMTP(host, port, timeout=timeout)
+        timeout = float(settings.get('API_SMTP_TIMEOUT_SECONDS', 10))
+        total = float(settings.get('API_SMTP_TOTAL_TIMEOUT_SECONDS', 15))
+        require(math.isfinite(total) and 0 < total <= 15 and math.isfinite(timeout) and timeout > 0,
+                '메일 발송 시간 제한 설정을 확인하세요.', 'MAIL_NOT_CONFIGURED', 503)
+        payload = {'host': host, 'port': port, 'mode': mode, 'sender': sender, 'recipient': recipient,
+                   'username': settings.get('API_SMTP_USERNAME'), 'password': settings.get('API_SMTP_PASSWORD', ''),
+                   'temporary_password': password, 'timeout': min(timeout, total)}
+        # DNS·TLS·다단계 인증까지 포함한 총 상한. 스레드 타임아웃은 종료 후에도 메일을 보낼 수 있어
+        # 별도 프로세스를 사용하고, 시간 초과 시 종료·회수한 뒤 조건부 복구를 진행한다.
+        # 자격정보/임시 비밀번호는 명령 인자·로그·임시 파일에 넣지 않고 stdin 파이프로만 전달한다.
+        deadline = time.monotonic() + total
+        # Windows venv launcher는 별도 Python을 띄울 수 있다. 표준 라이브러리만 쓰는 작업은
+        # 실제 인터프리터를 직접 실행해야 kill()이 전송 프로세스 자체를 종료한다.
+        executable = getattr(sys, '_base_executable', None) or sys.executable
+        process = subprocess.Popen([executable, '-I', '-S', str(Path(__file__).with_name('smtp_delivery.py'))],
+                                   stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         try:
-            if mode == 'starttls':
-                client.starttls(context=ssl.create_default_context())
-            if settings.get('API_SMTP_USERNAME'):
-                client.login(settings.get('API_SMTP_USERNAME'), settings.get('API_SMTP_PASSWORD', ''))
-            refused = client.send_message(message)
-            if refused:
-                raise smtplib.SMTPRecipientsRefused(refused)
+            process.communicate(json.dumps(payload).encode('utf-8'), timeout=max(0, deadline-time.monotonic()))
+            if process.returncode != 0:
+                raise OSError('SMTP delivery failed')
         finally:
-            # DATA 접수 뒤 QUIT 연결 종료 오류가 발송 성공을 실패로 뒤집지 않게 한다.
-            try:
-                client.quit()
-            except (OSError, smtplib.SMTPException):
-                client.close()
-    except (OSError, smtplib.SMTPException, ValueError):
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         raise ApiError(503, 'MAIL_DELIVERY_FAILED', '메일을 발송하지 못했습니다. 잠시 후 다시 시도해 주세요.', retryable=True) from None
 
 
-def issue_password(store, data, settings):
+def prepare_password(store, data):
     require(data.get('action') in ('ISSUE', 'REISSUE'), '발급 요청을 확인하세요.')
     name, email = identity(data)
     user = accounts.get_user(store, email=email, lock=True)
-    require(matches(user, name), '해당정보로 가입된 계정이 없습니다', 'ACCOUNT_NOT_FOUND', 404)
-    require(user['account_status'] == 'ACTIVE', '이용할 수 없는 계정입니다.', 'ACCOUNT_UNAVAILABLE', 403)
-    # 소셜 전용 계정에 로컬 비밀번호를 임의로 만들지 않는다.
-    require(bool(user['password_hash']) and user['password_hash'].startswith(('$2a$', '$2b$', '$2y$')),
-            '소셜 가입 계정은 해당 소셜 로그인으로 이용해 주세요.', 'SOCIAL_ACCOUNT', 400)
+    # 없음/이름 불일치/이용 제한/탈퇴/소셜 전용 여부를 서로 다른 응답으로 노출하지 않는다.
+    eligible = (matches(user, name, email) and user['account_status'] == 'ACTIVE'
+                and bool(user['password_hash']) and user['password_hash'].startswith(('$2a$', '$2b$', '$2y$')))
+    require(eligible, '입력한 정보로 임시 비밀번호를 발급할 수 없습니다. 가입 정보를 확인하거나 기존 로그인 방법을 이용해 주세요.',
+            'RECOVERY_NOT_AVAILABLE', 403)
     value = temporary_password()
     hashed = bcrypt.hashpw(value.encode(), bcrypt.gensalt()).decode()
     users = store.t('users')
     store.c.execute(update(users).where(users.c.user_id == user['user_id']).values(password_hash=hashed))
     revoke_sessions(store, user['user_id'])
-    # 요청 트랜잭션 안에서 발송: 명시적인 SMTP 실패는 위 변경도 롤백한다.
-    send_temporary_password(settings, email, value)
+    return user, email, value, hashed
+
+
+def issue_password(database, data, settings):
+    # UPDATE뿐 아니라 COMMIT 성공까지 확인한 후에만 SMTP를 호출한다.
+    with database.engine.begin() as connection:
+        user, email, value, hashed = prepare_password(Store(database, connection), data)
+    try:
+        send_temporary_password(settings, email, value)
+    except ApiError:
+        # 메일 실패 시 후속 변경을 덮어쓰지 않는 조건부 복구. SMTP 동안 행 잠금은 유지하지 않는다.
+        with database.engine.begin() as connection:
+            users = Store(database, connection).t('users')
+            connection.execute(update(users).where(users.c.user_id == user['user_id'],
+                               users.c.password_hash == hashed, users.c.auth_version == user['auth_version']+1)
+                               .values(password_hash=user['password_hash'], auth_version=user['auth_version']))
+        raise
     return {'message': '입력한 이메일로 임시 비밀번호를 발송했습니다. 로그인 후 비밀번호를 변경해 주세요.'}

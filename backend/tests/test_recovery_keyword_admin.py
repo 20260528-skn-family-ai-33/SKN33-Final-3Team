@@ -4,12 +4,13 @@ import smtplib
 from unittest.mock import patch
 from datetime import date
 from fastapi.testclient import TestClient
-from sqlalchemy import select, update, String
+from sqlalchemy import select, update, String, event
+from sqlalchemy.exc import SQLAlchemyError
 from backend.tests.api_support import test_engine, reference_data, create_test_app
 from backend.app.api.config import Settings
 from backend.app.api.common import ApiError
-from backend.app.api.security import password_matches
-from backend.app.api.recovery import send_temporary_password
+from backend.app.api.security import password_matches, hash_token
+from backend.app.api.smtp_delivery import deliver
 from backend.app.services.news_keywords.category_rules import TAX
 
 
@@ -34,6 +35,10 @@ class RecoveryKeywordAdminTest(unittest.TestCase):
     def login(self, password):
         return self.call('POST', 'auth/login', {'email': 'alice@example.org', 'password': password})
 
+    def expire_recovery_cooldown(self):
+        redis = self.app.state.database.redis
+        redis.client.delete(redis.prefix+'recovery:{'+hash_token('alice@example.org')+'}:cooldown')
+
     def test_account_confirmation_exact_pair_and_no_candidate_leak(self):
         for name, email, expected in [(' 홍길동 ', 'ALICE@example.org', True), ('다른이름', 'alice@example.org', False), ('홍길동', 'missing@example.org', False)]:
             r = self.call('POST', 'auth/account-recovery/candidates', {'name': name, 'email': email})
@@ -57,6 +62,7 @@ class RecoveryKeywordAdminTest(unittest.TestCase):
             self.assertEqual(self.client.get('/api/v1/users/me').status_code, 401)
             self.assertEqual(self.login('Sample!123').status_code, 401)
             self.assertEqual(self.login(first).status_code, 200)
+            self.expire_recovery_cooldown()
             self.assertEqual(self.reset(action='REISSUE').status_code, 200)
             second = send.call_args.args[2]
             self.assertNotEqual(first, second)
@@ -70,12 +76,26 @@ class RecoveryKeywordAdminTest(unittest.TestCase):
             self.assertEqual(self.login('Changed!456').status_code, 200)
 
     def test_mail_failure_rolls_back_and_mismatch_sends_nothing(self):
+        def fail_commit(connection):
+            raise SQLAlchemyError('synthetic commit failure')
+        event.listen(self.engine, 'commit', fail_commit)
+        try:
+            with patch('backend.app.api.recovery.send_temporary_password') as send:
+                result = self.reset()
+                self.assertEqual(result.status_code, 503, result.text)
+                self.assertEqual(result.json()['code'], 'DATABASE_UNAVAILABLE')
+                send.assert_not_called()
+        finally:
+            event.remove(self.engine, 'commit', fail_commit)
+        self.expire_recovery_cooldown()
         with patch('backend.app.api.recovery.send_temporary_password', side_effect=ApiError(503, 'MAIL_DELIVERY_FAILED', '실패')) as send:
-            self.assertEqual(self.reset(name='다른이름').status_code, 404)
+            self.assertEqual(self.reset(name='다른이름').status_code, 403)
             send.assert_not_called()
+            self.expire_recovery_cooldown()
             self.assertEqual(self.reset().status_code, 503)
         self.assertEqual(self.client.get('/api/v1/users/me').status_code, 200)
         self.assertEqual(self.login('Sample!123').status_code, 200)
+        self.expire_recovery_cooldown()
         self.assertEqual(self.reset().json()['code'], 'MAIL_NOT_CONFIGURED')
         self.assertEqual(self.login('Sample!123').status_code, 200)
 
@@ -83,28 +103,50 @@ class RecoveryKeywordAdminTest(unittest.TestCase):
         self.app.state.settings.values['API_AUTH_EMAIL_LIMIT'] = '2'
         with patch('backend.app.api.recovery.send_temporary_password') as send:
             self.assertEqual(self.reset().status_code, 200)
+            self.expire_recovery_cooldown()
             self.assertEqual(self.reset().status_code, 200)
             self.assertEqual(self.reset().status_code, 429)
             self.assertEqual(send.call_count, 2)
 
-    def test_smtp_tls_content_and_accepted_mail_survives_quit_error(self):
-        settings = Settings(values={'API_SMTP_HOST': 'smtp.example.org', 'API_SMTP_FROM': 'service@example.org', 'API_SMTP_USERNAME': 'service', 'API_SMTP_PASSWORD': 'synthetic-test-only'})
-        with patch('backend.app.api.recovery.smtplib.SMTP') as smtp:
+    def test_collation_equivalent_email_cannot_confirm_or_reset_another_account(self):
+        # MySQL users.email은 accent-insensitive다. 조회 성공 후에도 입력 이메일을 대조해야 한다.
+        users = self.meta.tables['users']
+        with self.engine.connect() as c:
+            user = dict(c.execute(select(users).where(users.c.user_id == self.uid)).mappings().one())
+        with patch('backend.app.api.recovery.accounts.get_user', return_value=user), \
+                patch('backend.app.api.recovery.send_temporary_password') as send:
+            for email in ('álice@example.org', 'alice@exámple.org'):
+                with self.subTest(email=email):
+                    confirmation = self.call('POST', 'auth/account-recovery/candidates', {'name': user['name'], 'email': email})
+                    self.assertEqual(confirmation.status_code, 200, confirmation.text)
+                    self.assertFalse(confirmation.json()['matches'])
+                    result = self.reset(email=email)
+                    self.assertEqual(result.status_code, 403, result.text)
+                    self.assertEqual(result.json()['code'], 'RECOVERY_NOT_AVAILABLE')
+            send.assert_not_called()
+        with self.engine.connect() as c:
+            after = c.execute(select(users).where(users.c.user_id == self.uid)).mappings().one()
+        self.assertEqual(after['password_hash'], user['password_hash'])
+        self.assertEqual(after['auth_version'], user['auth_version'])
+
+    def test_smtp_tls_content_and_accepted_mail_does_not_wait_for_quit(self):
+        data = {'host': 'smtp.example.org', 'port': 587, 'mode': 'starttls', 'sender': 'service@example.org',
+                'recipient': 'alice@example.org', 'username': 'service', 'password': 'synthetic-test-only',
+                'temporary_password': 'Abc123Synthetic', 'timeout': 10}
+        with patch('backend.app.api.smtp_delivery.smtplib.SMTP') as smtp:
             client = smtp.return_value
             client.send_message.return_value = {}
-            client.quit.side_effect = smtplib.SMTPServerDisconnected('after DATA acceptance')
-            send_temporary_password(settings, 'alice@example.org', 'Abc123Synthetic')
+            deliver(data)
             client.starttls.assert_called_once()
             client.login.assert_called_once()
             message = client.send_message.call_args.args[0]
             self.assertEqual(message['To'], 'alice@example.org')
             self.assertIn('Abc123Synthetic', message.get_content())
             client.close.assert_called_once()
+            client.quit.assert_not_called()
             client.send_message.side_effect = smtplib.SMTPRecipientsRefused({'alice@example.org': (550, b'rejected')})
-            with self.assertRaises(ApiError) as failed:
-                send_temporary_password(settings, 'alice@example.org', 'SecretNotInError')
-            self.assertEqual(failed.exception.code, 'MAIL_DELIVERY_FAILED')
-            self.assertNotIn('SecretNotInError', failed.exception.message)
+            with self.assertRaises(smtplib.SMTPRecipientsRefused):
+                deliver(data)
 
     def seed_admin(self):
         with self.engine.begin() as c:

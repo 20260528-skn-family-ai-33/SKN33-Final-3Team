@@ -132,5 +132,5 @@
 | 126 | `GET  /api/v1/admin/notification-terms` | 처리 코드 구현 |
 | 127 | `GET  /api/v1/admin/operations/{operation_id}` | 이번 앱의 동기 변경 감사 기록 조회 |
 | 128 | `POST  /api/v1/auth/account-recovery/candidates` | 이름·이메일 가입 일치 여부만 확인; 후보 목록 미노출 |
-| 129 | `POST  /api/v1/auth/account-recovery/email` | 보류: DEC-44 메일 발송·반복 제한·복구 기준 |
-| 130 | `POST  /api/v1/auth/password-recovery/temporary-password` | SMTP 임시 비밀번호 발급, bcrypt 저장·세션 무효화·명시적 메일 실패 롤백. SMTP 설정 필요 |
+| 129 | `POST  /api/v1/auth/account-recovery/email` | 이름·이메일 일치 여부 확인으로 대체: 아이디 안내 메일은 사용하지 않음 |
+| 130 | `POST  /api/v1/auth/password-recovery/temporary-password` | DB 커밋 성공 후 임시 비밀번호 메일 발송, 실패 화면 안내. 이메일당 600초 1회·최근 24시간 5회. 계정 불가 사유는 동일 403; SMTP 전체 15초 상한 |

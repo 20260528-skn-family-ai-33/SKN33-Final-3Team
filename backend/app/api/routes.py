@@ -47,7 +47,6 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==1: return accounts.signup(store,Signup.model_validate(body),response,settings)
     if identity==2: return accounts.login(store,Login.model_validate(body),response,settings)
     if identity==128: return recovery.confirm_account(store,body)
-    if identity==130: return recovery.issue_password(store,body,settings)
     if identity==3:
         if user:
             store.db.redis.revoke(user['token_hash'])

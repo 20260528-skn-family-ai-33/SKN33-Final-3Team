@@ -1,4 +1,4 @@
-// LG07~LG10 아이디 찾기, LG11~LG13 비밀번호 찾기(임시 비밀번호 메일 발송)
+// LG07~LG10 가입 여부 확인, LG11~LG13 비밀번호 찾기(임시 비밀번호 메일 발송)
 import { useState } from 'react'
 import { Link } from '../../router'
 import { api } from '../../api/client'
@@ -40,7 +40,7 @@ export function FindId() {
   return (
     <AuthFrame>
       <form onSubmit={find} noValidate>
-        <CardHead eyebrow="아이디 찾기" size={30} title="가입 정보를 확인해 주세요" desc="이름과 이메일(아이디)로 가입 여부를 확인합니다." />
+        <CardHead eyebrow="계정 확인" size={30} title="가입 여부 확인" desc="이름과 이메일(아이디)로 가입 여부를 확인합니다." />
         {sp(32)}
         <label className="lbl" htmlFor="fi-name">이름</label>
         <TextField id="fi-name" placeholder="예) 홍길동" value={input} onChange={v => { setInput(v); setError('') }} invalid={!!error} />
@@ -49,7 +49,7 @@ export function FindId() {
         <TextField id="fi-email" type="email" placeholder="name@example.com" value={email} onChange={v => { setEmail(v); setError('') }} />
         {error && <p className="field-err">{error}</p>}
         {sp(16)}{sp(8)}
-        <Btn type="submit" kind="red" size="lg" block disabled={busy}>{busy ? '확인 중…' : '아이디 찾기'}</Btn>
+        <Btn type="submit" kind="red" size="lg" block disabled={busy}>{busy ? '확인 중…' : '가입 여부 확인'}</Btn>
         {sp(12)}
         <Btn to="/login" size="lg" block>로그인 화면으로 돌아가기</Btn>
         <BottomLinks left={<Link to="/find-password" style={{ color: 'var(--sub)', fontWeight: 700 }}>비밀번호 찾기</Link>} />
@@ -91,7 +91,7 @@ export function FindPassword() {
         <Btn type="submit" kind="red" size="lg" block disabled={busy}>{busy ? '발송 중…' : '임시 비밀번호 받기'}</Btn>
         {sp(12)}
         <Btn to="/login" size="lg" block>로그인 화면으로 돌아가기</Btn>
-        <BottomLinks left={<Link to="/find-id" style={{ color: 'var(--sub)', fontWeight: 700 }}>아이디 찾기</Link>} />
+        <BottomLinks left={<Link to="/find-id" style={{ color: 'var(--sub)', fontWeight: 700 }}>가입 여부 확인</Link>} />
       </form>
       <Modal open={!!message} onClose={() => setMessage('')} label="임시 비밀번호 발송"><p>{message}</p><Btn to="/login" style={{ marginTop: 20 }}>로그인하기</Btn></Modal>
     </AuthFrame>
