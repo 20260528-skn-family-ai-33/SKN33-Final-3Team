@@ -22,7 +22,7 @@ export function AdminButton({ b }) {
   const { session } = useApp()
   if (/\/BS(52|53|55|56|57)(?:[?]|$)/.test(b.to || '') && !isAdmin(session)) return null
   return (
-    <Btn kind={b.kind || 'line'} size={b.size || 'sm'} to={b.to} icon={b.icon} style={b.style ? Object.fromEntries(b.style.split(';').filter(Boolean).map(p => { const [k, v] = p.split(':'); return [k.trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v.trim()] })) : undefined}>
+    <Btn kind={b.kind || 'line'} size={b.size || 'sm'} to={b.to} icon={b.icon} onClick={b.onClick} style={b.style ? Object.fromEntries(b.style.split(';').filter(Boolean).map(p => { const [k, v] = p.split(':'); return [k.trim().replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v.trim()] })) : undefined}>
       {b.label}
     </Btn>
   )

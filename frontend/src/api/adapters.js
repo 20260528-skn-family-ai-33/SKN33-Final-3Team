@@ -21,7 +21,11 @@ export function reportScope(c, names = {}) {
   return `${countries} · ${products}`
 }
 export function mapNotification(n) {
-  return { ...n, id: n.user_alert_id, type: n.event_type === 'REPORT' ? 'report' : n.event_type === 'MAJOR_ISSUE' ? 'major' : 'surge', body: n.message, read: !!n.read_at, received: displayTime(n.created_at), time: displayTime(n.created_at), reportId: n.target_type === 'REPORT' ? n.target_id : null, articleId: n.target_type === 'NEWS' ? n.target_id || n.issue?.articles?.[0]?.article_id : null, ratio: n.issue?.ratio ?? '—', formula: '현재 건수 ÷ 기준 평균', basis: `${n.issue?.current_count ?? '—'} / ${n.issue?.baseline_average ?? '—'}` }
+  return { ...n, id: n.user_alert_id, type: n.event_type === 'REPORT' ? 'report' : n.event_type === 'MAJOR_ISSUE' ? 'major' : 'surge', body: n.message, read: !!n.read_at, received: displayTime(n.created_at), time: displayTime(n.created_at), reportId: n.target_type === 'REPORT' ? n.target_id : null, articleId: n.target_type === 'ARTICLE' ? n.target_id : n.issue?.articles?.[0]?.article_id ?? null, ratio: n.issue?.ratio ?? '—', formula: '현재 건수 ÷ 기준 평균', basis: `${n.issue?.current_count ?? '—'} / ${n.issue?.baseline_average ?? '—'}` }
+}
+export function mapPopupGroup(group) {
+  const items = group.notifications.map(mapNotification)
+  return { deliveryId: group.delivery_id, type: items[0]?.type, items }
 }
 export function mapReport(r) {
   const status = ({ READY: 'ready', QUEUED: 'generating', RUNNING: 'generating', DELAYED: 'delayed', FAILED: 'failed' })[r.status]

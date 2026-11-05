@@ -35,6 +35,19 @@ PENDING={
 }
 
 
+SOURCE_LABELS={'CUSTOMS':'관세청','KCS_TRADE':'관세청','KCS_HS_NAMES':'관세청 HS 코드','ECOS':'한국은행 ECOS','UNSD_HS_CORR':'UN HS 연계표',
+    'CEPII_BACI':'CEPII BACI','WB_WDI':'세계은행 WDI','UN_COMTRADE':'UN Comtrade','KOTRA_MARKET':'KOTRA 해외시장뉴스',
+    'KOTRA_SHORT_NEWS':'KOTRA 단신속보','KOTRA_SHORTNEWS':'KOTRA 단신속보'}
+
+
+def failed_run_message(run):
+    """관리자 알림 한 줄만 보고 어떤 작업이 어느 기간에 실패했는지 알 수 있게 한다."""
+    source=SOURCE_LABELS.get(run['source_code'],run['source_code'])
+    # 판정 작업은 입력 출처로 기록되지만 수집 작업이 아니다.
+    title='주요 이슈 판정 미완료' if run['job_name']=='MAJOR_ISSUE_DETECT' else f'{source} 수집 실패'
+    return f"{title} · {run['job_name']} · 대상 기간 {run['period_start']} ~ {run['period_end']} · 실행 #{run['run_id']}"
+
+
 def file_response(content,filename,fmt):
     return Response(content,media_type=MIMES[fmt],headers={'Content-Disposition':"attachment; filename*=UTF-8''"+quote(filename),'Cache-Control':'private, no-store'})
 
@@ -186,7 +199,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         require(category in ('ALL','DATA','REPORT','MEMBER'),'알림 분류를 확인하세요.')
         # 현재 관리자 알림은 데이터 수집 실패(DATA)만 만든다. 다른 분류 탭에는 섞어 보이지 않는다.
         t=store.t('batch_run'); rows=store.rows(select(t).where(t.c.status=='FAILED').order_by(t.c.run_id.desc())) if category in ('ALL','DATA') else []
-        return {'items':[{'alert_id':str(r['run_id']),'category':'DATA','message':'수집 작업 실패: '+r['job_name'],
+        return {'items':[{'alert_id':str(r['run_id']),'category':'DATA','message':failed_run_message(r),
             'target_type':'BATCH','target_id':str(r['run_id']),'created_at':r['finished_at']} for r in rows[(page-1)*size:page*size]],'page':page_info(page,size,len(rows))}
     if identity==81: return admin.users(store,query.get('q'),query.get('status','ALL'),page,size,query.get('by','all'))
     if identity==82: return admin.detail(store,path['user_id'])
@@ -210,7 +223,8 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         for code in ('KOTRA_MARKET','KOTRA_SHORT_NEWS'):
             enabled=store.c.scalar(select(o.c.enabled).where(o.c.option_code==code))
             if enabled is None: continue
-            latest=store.c.scalar(select(func.max(b.c.run_id)).where(b.c.source_code==code))
+            # 기사 수집 실행만 본다. 같은 출처로 기록되는 판정 작업은 제외한다.
+            latest=store.c.scalar(select(func.max(b.c.run_id)).where(b.c.source_code==code,b.c.target_table=='article'))
             items.append({'source_code':code,'collection_enabled':bool(enabled),'article_count':store.count(select(a).where(a.c.source_code==code)),
                 'visible_count':store.count(select(a).where(a.c.source_code==code,a.c.visibility_status=='VISIBLE')),'latest_run_id':str(latest) if latest else None})
         return {'items':items}

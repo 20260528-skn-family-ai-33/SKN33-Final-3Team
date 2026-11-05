@@ -54,10 +54,13 @@ def save_blocks(store,uid,keywords,expected):
     return blocks(store,uid)
 
 
+TRADE_REGULATION_CATEGORIES=('통상·규제','통상규제')
+
+
 def major_issue_condition(store):
     """목록 필터와 표시값에서 동일한 주요 이슈 판정을 사용한다."""
     a,e=store.t('article'),store.t('alert_event')
-    return or_(and_(a.c.source_code=='KOTRA_MARKET',a.c.category.in_(['통상·규제','통상규제'])),
+    return or_(and_(a.c.source_code=='KOTRA_MARKET',a.c.category.in_(TRADE_REGULATION_CATEGORIES)),
                exists(select(e.c.event_id).where(e.c.article_id==a.c.article_id,e.c.event_type=='MAJOR_ISSUE')))
 
 
