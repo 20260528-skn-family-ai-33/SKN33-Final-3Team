@@ -131,6 +131,6 @@
 | 125 | `PATCH  /api/v1/admin/article-sources/{source_code}/collection` | 보류: DEC-41 버전 획득 및 적재 담당자의 출처 중지 실행기 연결 |
 | 126 | `GET  /api/v1/admin/notification-terms` | 처리 코드 구현 |
 | 127 | `GET  /api/v1/admin/operations/{operation_id}` | 이번 앱의 동기 변경 감사 기록 조회 |
-| 128 | `POST  /api/v1/auth/account-recovery/candidates` | 보류: DEC-43/44 계정 후보 노출·복구 운영 기준 |
+| 128 | `POST  /api/v1/auth/account-recovery/candidates` | 이름·이메일 가입 일치 여부만 확인; 후보 목록 미노출 |
 | 129 | `POST  /api/v1/auth/account-recovery/email` | 보류: DEC-44 메일 발송·반복 제한·복구 기준 |
-| 130 | `POST  /api/v1/auth/password-recovery/temporary-password` | 보류: DEC-44 임시 비밀번호 발급·만료·메일 실패 처리 기준 |
+| 130 | `POST  /api/v1/auth/password-recovery/temporary-password` | SMTP 임시 비밀번호 발급, bcrypt 저장·세션 무효화·명시적 메일 실패 롤백. SMTP 설정 필요 |

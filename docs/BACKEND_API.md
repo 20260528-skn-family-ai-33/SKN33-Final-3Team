@@ -1,5 +1,16 @@
 # 백엔드 실행 및 인계
 
+## 2026-11-05 계정 복구
+
+- API-128은 `name`, `email`을 받아 가입 일치 여부(`matches`, `message`)만 반환한다. 이름만으로 계정 후보를 노출하거나 아이디 안내 메일(API-129)을 보내지 않는다.
+- API-130은 이름·이메일이 일치하는 활성 이메일 계정에 영문 대·소문자와 숫자가 모두 포함된 20자리 임시 비밀번호를 발급한다. 기존 `users.password_hash`를 bcrypt 해시로 교체하고 기존 세션을 무효화한다. 재발급·사용자 비밀번호 변경 전까지 유효하며 로그인만으로 삭제하지 않는다. 사용자 변경 비밀번호의 기존 특수문자 정책은 유지한다.
+- 메일은 `API_SMTP_HOST`, `API_SMTP_PORT`, `API_SMTP_SECURITY`(`starttls`/`ssl`), `API_SMTP_FROM`, `API_SMTP_USERNAME`, `API_SMTP_PASSWORD`, `API_SMTP_TIMEOUT_SECONDS`로 설정한다. 예시는 `backend/.env.api.example`에 있다. 발신 계정 자격정보는 배포 환경에 주입한다. 요청은 기존 이메일·IP 제한을 적용한다. 평문 비밀번호는 메일 외 API 응답·로그·DB에 남기지 않는다.
+- SMTP 미설정·명시적 발송 실패는 비밀번호와 세션 버전 변경을 롤백한다. SMTP와 DB는 분산 트랜잭션이 아니므로 메일 접수 직후 DB 커밋 실패나 전송 응답 유실 시에는 재발급이 필요할 수 있다. 성공은 SMTP 접수이며 수신함 도착 보장은 아니다.
+
+이 절은 아래 초기 인계 기록 중 계정 복구 기능의 보류 상태를 대체한다. 실제 SMTP 수신과 운영 MySQL 검증은 별도 운영 환경에서 수행한다.
+
+검증: `python -m unittest backend.tests.test_recovery_keyword_admin -v`의 계정 복구 테스트 5개 통과. 프론트 테스트 26개 및 빌드·린트 통과.
+
 기준: API 정의서 v0.18(2026-10-23), 같은 날짜 요구사항정의서·화면설계서, 리포트 PDF·요약보고서 DOCX. 현재 연동 작업 브랜치는 `feat/38-Integrate`이다. 최신 설치·저장소·Redis·검증 절차는 [INTEGRATION.md](INTEGRATION.md)를 따른다. 기존 수집·적재 모듈을 변경하지 않고 `backend/app/api`에 HTTP API와 앱 작업 실행기를 추가했다.
 
 ## 구현 범위와 활성화 조건

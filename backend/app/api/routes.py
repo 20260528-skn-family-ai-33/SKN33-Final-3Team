@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 from sqlalchemy import select, update, delete, func
 from fastapi.responses import Response, FileResponse
-from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs
+from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs, recovery
 from backend.app.api.common import ApiError, require, unavailable, now, clean, digest, page_info, percentage, month, shift_month, period
 from backend.app.api.security import issue_session, hash_token, administrator
 from backend.app.api.schemas import Signup, Login, PasswordChange, InterestUpdate, NotificationPatch, ReportCreate, Conditions
@@ -31,7 +31,7 @@ PENDING={
   101:'DEC-32 기본/관리자 분야 출처 저장 계약',102:'DEC-32 관리자 분야 출처 저장 계약',
   103:'DEC-32 관리자 분야 출처 저장 계약',104:'DEC-32 관리자 분야 출처 저장 계약',105:'DEC-49 분야 삭제·이관 정책',
   125:'DEC-41 버전 획득 및 적재 담당자의 출처 중지 실행기 연결',
-  128:'DEC-43/44 계정 후보 노출·복구 운영 기준',129:'DEC-44 메일 발송·반복 제한·복구 기준',130:'DEC-44 임시 비밀번호 발급·만료·메일 실패 처리 기준',
+  129:'이름·이메일 일치 여부 확인으로 대체: 아이디 안내 메일은 사용하지 않음',
 }
 
 
@@ -50,6 +50,8 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         raise ApiError(422 if identity in (23,27) else 503,'FEATURE_NOT_AVAILABLE' if identity in (23,27) else 'FEATURE_NOT_READY',PENDING[identity])
     if identity==1: return accounts.signup(store,Signup.model_validate(body),response,settings)
     if identity==2: return accounts.login(store,Login.model_validate(body),response,settings)
+    if identity==128: return recovery.confirm_account(store,body)
+    if identity==130: return recovery.issue_password(store,body,settings)
     if identity==3:
         if user:
             store.db.redis.revoke(user['token_hash'])

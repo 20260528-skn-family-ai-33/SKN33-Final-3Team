@@ -3082,7 +3082,7 @@
   },
   {
     "id": 128,
-    "title": "API-128  이름으로 계정 후보 조회",
+    "title": "API-128  이름·이메일 가입 여부 확인",
     "route": "POST  /api/v1/auth/account-recovery/candidates",
     "auth": "비로그인·복구 컨텍스트",
     "fields": [
@@ -3092,6 +3092,13 @@
         "string",
         "필수",
         "trim 후 비공백 이름. 탈퇴 계정 제외."
+      ],
+      [
+        "Request Body",
+        "email",
+        "string",
+        "필수",
+        "확인할 이메일(아이디). 이름과 일치 여부만 반환하며 후보 목록은 노출하지 않음."
       ]
     ]
   },
