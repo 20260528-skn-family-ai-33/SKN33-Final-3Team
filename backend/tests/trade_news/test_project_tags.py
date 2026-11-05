@@ -89,6 +89,16 @@ def test_dictionary_transaction_aliases_and_unambiguous_hs(local):
         assert all(len(p['code']) != 2 for p in dictionary['products'])
 
 
+def test_dictionary_trims_only_outer_hs_name_whitespace(local):
+    stored_name = '  냉동 참돔\n'
+    with local.db.begin() as conn:
+        conn.execute(text("INSERT INTO hs_code VALUES ('030199','HS2022',:name)"), {'name': stored_name})
+    with local.db.connect() as conn:
+        products = read_project_dictionary(conn)['products']
+        assert {'code': '030199', 'version': 'HS2022', 'name': '냉동 참돔'} in products
+        assert conn.execute(text("SELECT name_ko FROM hs_code WHERE hs_code='030199'")).scalar_one() == stored_name
+
+
 def test_generated_tags_add_to_existing_without_rewriting_local_data(local):
     args = setup(local.tmp); args.apply = True
     assert load_project.execute(args, lambda: local.db)['inserted'] == 2

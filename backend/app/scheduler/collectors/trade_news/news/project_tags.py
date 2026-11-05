@@ -18,7 +18,7 @@ def read_project_dictionary(connection):
                           aliases=sorted(aliases.get(row.country_code, set()) - {row.name_ko}))
                      for row in connection.execute(text('SELECT country_code,name_ko,country_role FROM country ORDER BY country_code'))]
         # 기존 태깅기는 HS2를 지원하지 않습니다. 품목명으로 코드를 추정하거나 판본을 임의 선택하지 않습니다.
-        products = [dict(code=row.hs_code, version=row.hs_ver, name=row.name_ko)
+        products = [dict(code=row.hs_code, version=row.hs_ver, name=row.name_ko.strip())
                     for row in connection.execute(text('SELECT hs_code,hs_ver,name_ko FROM hs_code ORDER BY hs_code,hs_ver'))
                     if len(row.hs_code) in (4, 6, 10)]
         rows = {r.keyword_text: (r.status, r.canonical_text) for r in connection.execute(

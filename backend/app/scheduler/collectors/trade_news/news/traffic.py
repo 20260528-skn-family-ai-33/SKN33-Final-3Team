@@ -111,6 +111,7 @@ class TrafficMiddleware:
                 raise IgnoreRequest('이번 실행의 본문 접근 확인 1회 사용 완료')
 
     async def process_request(self, request, spider):
+        request.meta.pop('_feed_snapshot', None)  # 재시도·리다이렉트의 각 응답을 새로 보존합니다.
         try:
             site = site_of(request.url)
         except ValueError as exc:
@@ -167,6 +168,9 @@ class TrafficMiddleware:
         if not site:
             return response
         store = spider.store
+        # 안전 차단·403 처리 전에 최신 사이트맵 응답을 보존합니다. 추가 요청은 없습니다.
+        from news.feed_audit import ensure_snapshot
+        ensure_snapshot(spider, response, self.crawler, request=request)
         store.event("response", site=site, url=response.url, status=response.status,
                     latency=request.meta.get("download_latency"))
         is_robots = urlsplit(request.url).path == "/robots.txt"

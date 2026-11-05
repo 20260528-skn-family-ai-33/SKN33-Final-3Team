@@ -7,7 +7,7 @@ from news.save import KST
 def summarize_run(store, sites, before, stats, daily_limit, target=0, discover=False, target_date=None, list_urls=None):
     # 엔진 종료만으로 성공이라고 판단하지 않습니다. 오류와 목표 수치는 별도로 표시합니다.
     error_keys = ('spider_exceptions/count', 'item_error_count', 'log_count/ERROR', 'log_count/CRITICAL',
-                  'feed_structure_errors')
+                  'feed_structure_errors', 'feed_snapshot_errors')
     errors = {key: stats[key] for key in error_keys if stats.get(key)}
     finish = stats.get('finish_reason')
     healthy = not errors and finish == 'finished'
@@ -53,9 +53,14 @@ def summarize_run(store, sites, before, stats, daily_limit, target=0, discover=F
             status = 'pending_remaining'
         else:
             status = 'available_candidates_processed'
+        from news.feed_audit import discovery_note
+        observations = [r for r in stats.get('feed_date_observations', []) if r['site'] == site]
+        date_status, date_note = discovery_note(observations, target_date)
         # 목록 소진은 해당 기간의 모든 기사를 찾았다는 뜻이 아닙니다.
         results[site] = {
             'target_date':target_date,'pending_all_dates':pending_all,
+            'feed_date_status': date_status, 'feed_date_note': date_note,
+            'feed_date_observations': observations,
             'historical_list_path_blocks':historical_blocks,'historical_list_retries':historical_retries,
             'list_retries': list_retries,
             'list_path_blocks': list_blocks, 'body_access_unverified': needs_probe,

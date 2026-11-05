@@ -1,10 +1,5 @@
 """기본 시험은 외부 연결 금지. 명시한 MySQL 시험도 지정 로컬 DB만 연결합니다."""
-import sys
-from pathlib import Path
 import pytest
-ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT/'backend/app/scheduler/collectors/trade_news'))
 
 
 def pytest_addoption(parser):
