@@ -142,6 +142,28 @@ class BindingTest(unittest.TestCase):
         self.assertEqual([(h.hs_code, h.hs_ver) for h in out.hs_items], [('330499', 'HS2017')])
 
 
+class MultiSourceSelectionTest(unittest.TestCase):
+    def test_same_dimension_from_two_sources_is_merged(self):
+        from backend.app.agents.bindings import resolve
+        from backend.app.agents.state import Conditions
+        stored = {'period': {'start': '2025-01-01', 'end': '2025-12-01'}, 'trade_flow': 'EXPORT',
+                  'country_codes': [], 'hs_items': []}
+        first = {'conditions': stored, 'meta': {'kind': 'RANKING', 'group': 'COUNTRY'},
+                 'rows': [{'country_code': 'US', 'export_amount_usd': 300}, {'country_code': 'CN', 'export_amount_usd': 200}]}
+        second = {'conditions': {**stored, 'trade_flow': 'IMPORT'}, 'meta': {'kind': 'RANKING', 'group': 'COUNTRY'},
+                  'rows': [{'country_code': 'JP', 'import_amount_usd': 90}, {'country_code': 'VN', 'import_amount_usd': 80}]}
+        selection = {'dimension': 'COUNTRY', 'limit': 1, 'order_by': 'amount_usd'}
+        bindings = [ResultBinding(source_task_id='t1', source_step_id='t1.sql', selection=selection),
+                    ResultBinding(source_task_id='t2', source_step_id='t2.sql', selection=selection)]
+        task = SimpleNamespace(task_id='t3', input_bindings=bindings, resolved={}, applied_defaults=[],
+                               question='각 결과의 1위 국가 추이', steps=[SimpleNamespace(step_id='t3.check')])
+        state = SimpleNamespace(input=SimpleNamespace(question='두 순위의 1위 국가 1개씩 월별 추이'), results={}, pending=None)
+        with patch('backend.app.agents.bindings.source_versions', return_value=[(first, {}), (second, {})]):
+            out = resolve(None, state, task, Conditions())
+        self.assertEqual(out.country_codes, ['US', 'JP'])   # 앞 결과의 미국이 일본으로 덮이지 않는다
+        self.assertEqual(out.trade_flow, 'EXPORT')          # 선택에는 원본 방향, 후속 분석에는 첫 결과의 방향
+
+
 class PromisingMarketHs4Test(unittest.TestCase):
     def test_hs4_answer_asks_for_hs6(self):
         from backend.tests.api_support import reference_data, test_engine

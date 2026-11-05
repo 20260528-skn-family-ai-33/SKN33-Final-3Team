@@ -1,7 +1,7 @@
 """D-90/95: select downstream inputs from owned, unexpired result rows."""
 import re
 from backend.app.agents.conditions import ask
-from backend.app.agents.state import Conditions, ToolResult
+from backend.app.agents.state import Conditions, HsProduct, MAX_COUNTRIES, MAX_HS_ITEMS, ToolResult
 from backend.app.api.chat_slots import SlotRepair
 from backend.app.api.results import read_snapshot
 
@@ -23,6 +23,8 @@ def source_versions(store,state,task):
 def resolve(store,state,task,out):
     # 기준 조건은 첫 선행 결과의 저장 조건으로 한 번만 만든다. 바인딩마다 새로 만들면 앞 바인딩이 고른
     # 국가·품목이 뒤 바인딩의 저장 조건(전체 국가 등)으로 덮인다(국가 상위 2 + 품목 상위 1 → country_codes=[]).
+    # 여러 선행 결과에서 같은 차원(국가·품목)을 고르면 덮어쓰지 않고 합친다(미국 상위 + 일본 상위 → 둘 다)
+    chosen={'COUNTRY':[], 'HS6':[]}
     for index,(binding,(snapshot,source)) in enumerate(zip(task.input_bindings,source_versions(store,state,task),strict=True)):
         if index==0:
             stored=snapshot['conditions']
@@ -68,20 +70,27 @@ def resolve(store,state,task,out):
                         if value: patch['group_value']=value
                         options.append((f'{dim}_{count}_{value or "all"}',f'{value or ""} {"국가" if dim=="COUNTRY" else "품목"} 상위 {count}개'.strip(),patch))
             ask(state,task,key,'INPUT_SELECTION','선행 결과에서 사용할 대상을 선택하세요.', options[:5]); return out
-        if n>(20 if dimension=='COUNTRY' else 5): raise SlotRepair('선택한 국가 또는 품목이 조건 상한을 넘습니다.')
+        if n>(MAX_COUNTRIES if dimension=='COUNTRY' else MAX_HS_ITEMS):
+            raise SlotRepair('선택한 국가 또는 품목이 조건 상한을 넘습니다.')
         if named_group and group_key: rows=[r for r in rows if r[group_key]==named_group]
-        field=('export_amount_usd' if out.trade_flow=='EXPORT' else 'import_amount_usd') if order=='amount_usd' else order
+        source_flow=snapshot['conditions'].get('trade_flow') or 'EXPORT'
+        field=('export_amount_usd' if source_flow=='EXPORT' else 'import_amount_usd') if order=='amount_usd' else order
         def code(row): return row.get('country_code') if dimension=='COUNTRY' else row.get('hs6') or row.get('hs_code') or (row.get('hs_item') or {}).get('hs_code')
         sorted_rows=sorted((r for r in rows if code(r) and r.get(field) is not None),
             key=lambda r:(-r[field] if order=='amount_usd' else r[field],code(r)))
         codes=list(dict.fromkeys(code(r) for r in sorted_rows))[:n]
         if not codes: raise SlotRepair('요청한 대상이 선행 결과표에 없습니다.')
-        if dimension=='COUNTRY': out.country_codes=codes
+        if dimension=='COUNTRY':
+            chosen['COUNTRY']=list(dict.fromkeys([*chosen['COUNTRY'],*codes]))
+            if len(chosen['COUNTRY'])>MAX_COUNTRIES: raise SlotRepair('선택한 국가 또는 품목이 조건 상한을 넘습니다.')
+            out.country_codes=chosen['COUNTRY']
         else:
-            from backend.app.agents.state import HsProduct
             # 선행 결과 행의 판본을 따른다(예측 행의 hs_ver, 순위 행의 hs_item). 없으면 HS2022다.
             editions={code(r):r.get('hs_ver') or (r.get('hs_item') or {}).get('hs_ver') or 'HS2022' for r in reversed(sorted_rows)}
-            out.hs_items=[HsProduct(hs_code=c,hs_ver=editions[c]) for c in codes]
+            items=[*chosen['HS6'],*((c,editions[c]) for c in codes)]
+            chosen['HS6']=list(dict.fromkeys(items))
+            if len(chosen['HS6'])>MAX_HS_ITEMS: raise SlotRepair('선택한 국가 또는 품목이 조건 상한을 넘습니다.')
+            out.hs_items=[HsProduct(hs_code=c,hs_ver=v) for c,v in chosen['HS6']]
         if len(codes)<n:
             state.results[task.steps[0].step_id]=ToolResult(status='OK',completeness='PARTIAL',
                 limitations=[f'요청한 {n}개 중 {len(codes)}개 대상만 있습니다.'])
