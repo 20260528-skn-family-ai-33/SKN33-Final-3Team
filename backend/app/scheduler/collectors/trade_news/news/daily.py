@@ -148,6 +148,7 @@ def daily_summary(store, target, sites, before, operational, event_offset=0):
     if counts['unreviewed_candidates']: reasons.append('본문 미검수 후보 있음')
     for site, status in operational['sites'].items():
         if status['status'] not in ('available_candidates_processed',): reasons.append(site+': '+status['status'])
+        if status.get('feed_date_note'): reasons.append(site+': '+status['feed_date_note'])
     from news.unfinished import summarize_unfinished
     unfinished=summarize_unfinished(store.root,target,sites,operational['sites'][sites[0]]['daily_limit'])
     from news.date_index import data_issues

@@ -72,3 +72,30 @@ def test_income_inside_full_body_does_not_supply_trade_evidence():
     result=assess_focus({'title':'생활비 조사'},body+'\n'+trade)
     assert result['accepted']
     assert [e['text'] for e in result['activity_evidence']]==[trade]
+
+
+@pytest.mark.parametrize(('before', 'after'), [
+    ('(서울=뉴스1) 홍길동 기자 = 대구의 수출이 늘었다.', '대구의 수출이 늘었다.'),
+    ('[세종=뉴시스]김하나 기자=본문', '본문'),
+    ('(워싱턴·뉴욕=연합뉴스) 김하나 박두리 특파원 ＝ 본문', '본문'),
+    ('(대구-) 김하나 기자 본문', '본문'),
+    pytest.param(
+        '(서울=연합뉴스) 홍길동 기자 정부는 외신 기자 초청 수출 설명회를 열었다.',
+        '정부는 외신 기자 초청 수출 설명회를 열었다.',
+        id='reporter-title-repeated-in-body',
+    ),
+    pytest.param(
+        '(워싱턴·뉴욕=연합뉴스) 김하나 박두리 특파원 정부는 해외 특파원 초청 설명회를 열었다.',
+        '정부는 해외 특파원 초청 설명회를 열었다.',
+        id='correspondent-title-repeated-in-body',
+    ),
+    ('(서울=뉴스1) 김하나 기자\n본문', '본문'),
+    ('본문\n[email\u00a0protected] 김하나 박두리 기자', '본문'),
+    ('(서울=뉴스1) [기자정보] = 본문 속 A=B', '본문 속 A=B'),
+    ('[email protected] [기자정보]', ''),
+    ('김하나 법무법인 태평양 전문위원', '김하나 법무법인 태평양 전문위원'),
+    ('(서울=뉴스1) 장관은 기자들과 만났다.', '(서울=뉴스1) 장관은 기자들과 만났다.'),
+])
+def test_reporter_credit_preserves_context(before, after):
+    assert clean_body(before)['body_masked'] == after
+    assert clean_body(after)['body_masked'] == after

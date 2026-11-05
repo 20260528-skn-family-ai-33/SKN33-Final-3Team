@@ -1,6 +1,5 @@
 """허용 언론사 수집기: URL 목록 또는 공식 사이트맵·RSS에서 후보를 수집."""
-from datetime import date, datetime
-from email.utils import parsedate_to_datetime
+from datetime import date
 from urllib.parse import urljoin, urldefrag, urlsplit
 import scrapy
 from lxml import etree
@@ -9,7 +8,7 @@ from scrapy.exceptions import IgnoreRequest
 from scrapy.spidermiddlewares.httperror import HttpError
 from news.parse import parse_article, PaidArticleError
 from news.urls import FEEDS, DAILY_SITES, article_url, site_of
-from news.save import KST
+from news.feed_audit import publication_day, ensure_snapshot, record_dates, original_feed_url
 
 
 class ArticleSpider(scrapy.Spider):
@@ -56,19 +55,9 @@ class ArticleSpider(scrapy.Spider):
         self.article_inflight.pop(site, None)
 
     def in_period(self, value, period=None):
-        if not value:
-            return True  # 목록에 날짜가 없으면 본문 추출 뒤 검사함
-        try:
-            try:
-                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            except ValueError:
-                parsed = parsedate_to_datetime(value)  # RSS pubDate의 RFC 날짜 형식
-            # 시간대 없는 국내 날짜는 실행 PC의 시간대와 무관하게 한국 시간으로 해석합니다.
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=KST)
-            published_date = parsed.astimezone(KST).date()
-        except (ValueError, TypeError):
-            return True
+        published_date = publication_day(value)
+        if published_date is None:
+            return True  # 날짜 누락·해석 실패는 기존처럼 본문 추출 뒤 확인합니다.
         since, until = self.since, self.until
         if period is not None:
             since = date.fromisoformat(period['since_date']) if period['since_date'] else None
@@ -144,15 +133,16 @@ class ArticleSpider(scrapy.Spider):
                 self.store.db.execute('INSERT OR REPLACE INTO discovery_queue VALUES (?,?,?,?)',
                     (self.daily_target.isoformat(),url,site,'pending'))
         return scrapy.Request(url, callback=self.parse_feed, errback=self.on_error,
-                              meta={'site':site,'request_role':'list'})
+                              meta={'site':site,'request_role':'list','feed_origin_url':url})
 
     def finish_feed(self, response, status='processed'):
         if self.daily_target:
             with self.store.db:
                 self.store.db.execute("UPDATE discovery_queue SET status=? WHERE target=? AND url=?",
-                    (status,self.daily_target.isoformat(),response.request.url))
+                    (status,self.daily_target.isoformat(),original_feed_url(response.request)))
 
     def parse_feed(self, response):
+        ensure_snapshot(self, response)
         # 일일 모드에서는 공식 HTML 목록도 같은 병합 경로로 처리합니다.
         # 요청 URL의 날짜가 아니라 응답의 실제 기사 날짜를 사용합니다.
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -229,14 +219,15 @@ class ArticleSpider(scrapy.Spider):
         entries = selector.xpath("//item | //url")
         if not entries and not selector.xpath("//sitemap"):
             self.store.event("feed_empty_or_changed", site=site, url=response.url)
-        for entry in entries:
+        publications = [entry.xpath(".//publication_date/text() | ./pubDate/text()").get() for entry in entries]
+        record_dates(self, response, publications, is_index=etree.QName(root).localname == 'sitemapindex')
+        for entry, published in zip(entries, publications):
             self.crawler.stats.inc_value(prefix + 'entries_seen')
             url = entry.xpath("./link/text() | ./loc/text()").get()
             if not url:
                 self.crawler.stats.inc_value(prefix + 'missing_url')
                 continue
             # 일반 모드는 본문 전체 판단, 일일 모드만 승인된 제목 후보 표시를 사용합니다.
-            published = entry.xpath(".//publication_date/text() | ./pubDate/text()").get()
             if not self.in_period(published):
                 self.crawler.stats.inc_value(prefix + 'date_filtered')
                 continue
