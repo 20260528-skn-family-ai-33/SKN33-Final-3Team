@@ -116,6 +116,10 @@ def main():
         from backend.app.agents.worker import checkpointer
         try: checkpointer(db,settings)
         except Exception as exc: logging.getLogger(__name__).error('chat_checkpointer_unavailable %s',exc)
+        # 유망시장 모델(A·B)을 미리 올린다(모델 A 로드 약 25초, ML 시간 상한 30초)
+        from backend.app.agents.market import growth, loaded
+        from backend.app.agents.runtime import warm_ml
+        warm_ml(lambda: growth(settings, str(loaded(settings)[0].get('anchor') or '')[:7]))
     run_loop(db,settings,args.once)
 
 

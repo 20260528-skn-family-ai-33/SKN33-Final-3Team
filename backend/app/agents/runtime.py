@@ -46,6 +46,20 @@ _ML_RUNNING = {'since': None}   # 전용 스레드가 지금 돌리는 작업의
 ML_STUCK_SECONDS = 300          # 한 작업이 이보다 오래 끝나지 않으면 멈춘 것으로 보고 오류 로그를 남긴다(복구는 워커 재시작)
 
 
+def warm_ml(work):
+    """워커 시작 때 모델 로드(work)를 ML 전용 스레드에 미리 넣는다. 기다리지 않는다. 첫 유망시장 질문이 모델 로드
+    (수십 초)로 ML 시간 상한을 넘지 않게 한다. 그 사이 들어온 ML 호출은 같은 스레드에서 로드 뒤에 줄을 선다."""
+    global _ML_THREAD
+    from concurrent.futures import ThreadPoolExecutor
+    if _ML_THREAD is None:
+        _ML_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='agent-ml')
+    def run():
+        try: work()
+        except Exception as exc:   # 모델 파일이 없거나 깨져도 워커는 돈다. 질문 때 같은 오류로 그 단계만 실패한다
+            logging.getLogger(__name__).warning('agent_ml_warm_failed type=%s %s', type(exc).__name__, exc)
+    return _ML_THREAD.submit(run)
+
+
 def bounded_ml(work, seconds):
     """모델 로드·예측(work)을 전용 스레드 하나에서 돌리고 seconds만 기다린다. 넘으면 TimeoutError(그 ML 단계만 FAILED).
     파이썬 스레드는 밖에서 멈출 수 없어 늦은 작업은 끝까지 돌지만, 워커는 기다리지 않고 다음 작업으로 넘어간다.

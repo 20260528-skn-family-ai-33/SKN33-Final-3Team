@@ -134,6 +134,13 @@ class SqlFilterBypassTest(unittest.TestCase):
             bounded_ml(lambda: time.sleep(0.5), 0.05)
         time.sleep(0.6)   # 앞 작업이 끝나 전용 스레드가 비게 한다
 
+    def test_warm_ml_runs_on_ml_thread_and_survives_failure(self):
+        from backend.app.agents.runtime import bounded_ml, warm_ml
+        def broken(): raise FileNotFoundError('no model')
+        with self.assertLogs('backend.app.agents.runtime', 'WARNING'):
+            warm_ml(broken).result(timeout=1)
+        self.assertEqual(bounded_ml(lambda: 3, 1), 3)   # 예열 실패 뒤에도 ML 호출은 돈다
+
     def test_timed_out_queued_ml_work_is_cancelled(self):
         import time
         from backend.app.agents.runtime import bounded_ml
