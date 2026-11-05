@@ -98,7 +98,8 @@ class DetectTest(unittest.TestCase):
 
     def test_baseline_outside_window_is_not_counted(self):
         self.collected(job.MARKET, job.SHORT_NEWS)
-        self.keyword('관세', T, 3)
+        self.article(1, T)
+        self.keyword('관세', T, 3, article=1)
         self.keyword('관세', T - timedelta(days=63), 1000)  # 직전 56일보다 앞
         job.detect(self.database, T)
         self.assertEqual(self.events()[0]['payload_json']['baseline_weekly'], 0.0)
@@ -106,7 +107,9 @@ class DetectTest(unittest.TestCase):
     def test_incomplete_collection_skips_only_affected_judgment(self):
         self.collected(job.MARKET)  # 단신 수집 기록 없음
         self.keyword('관세', T, 24)
+        self.article(1, T)
         with self.engine.begin() as c:
+            c.execute(self.meta.tables['article_tag'].insert(), {'article_id': 1, 'hs_code': '330499', 'hs_ver': 'HS2022'})
             c.execute(self.meta.tables['news_product_daily'].insert(), {'metric_date': T, 'hs_code': '330499', 'hs_ver': 'HS2022', 'country_code': None, 'day_count': 9})
         result = job.detect(self.database, T)
         self.assertEqual(result['skipped'], ['keyword'])
@@ -150,7 +153,8 @@ class DetectTest(unittest.TestCase):
         table = self.meta.tables['notification_setting']
         with self.engine.begin() as c:
             c.execute(table.update().where(table.c.user_id == self.uid).values(keyword_blocks_json=[{'kw_topic': '관세', 'selected_terms': ['관세']}]))
-        self.keyword('관세', T, 24)
+        self.article(1, T)
+        self.keyword('관세', T, 24, article=1)
         result = job.detect(self.database, T)
         self.assertEqual((result['events'], result['deliveries']), (1, 0))
 
@@ -161,17 +165,55 @@ class DetectTest(unittest.TestCase):
             c.execute(setting.update().where(setting.c.user_id == self.uid).values(keyword_blocks_json=[{'kw_topic': '관세', 'selected_terms': ['관세']}]))
             c.execute(topics.insert(), {'keyword_text': '관세', 'status': 'UNCLASSIFIED'})
             c.execute(topics.insert(), {'keyword_text': '관세율', 'canonical_text': '관세', 'status': 'SYNONYM'})
-        self.keyword('관세율', T, 24)
+        self.article(1, T)
+        self.keyword('관세율', T, 24, article=1)
         result = job.detect(self.database, T)
         self.assertEqual((result['events'], result['deliveries']), (1, 0))
         self.assertEqual(self.events()[0]['payload_json']['target'], {'keyword_text': '관세율', 'kw_topic': '관세'})
 
-    def test_aggregate_event_without_article_opens_event_detail(self):
+    def test_spike_without_visible_evidence_is_not_an_issue(self):
         self.consent(); self.collected(job.MARKET, job.SHORT_NEWS)
-        self.keyword('관세', T, 24)
+        self.article(1, T, visible='EXCLUDED')
+        self.keyword('관세', T, 24, article=1)
+        result = job.detect(self.database, T)
+        self.assertEqual((result['events'], result['deliveries']), (0, 0))
+        self.assertEqual(self.client.get('/api/v1/notifications/unread-count').json()['count'], 0)
+
+    def test_notification_opens_visible_evidence_when_representative_is_hidden(self):
+        self.consent(); self.collected(job.MARKET, job.SHORT_NEWS)
+        self.article(1, T); self.article(2, T)
+        self.keyword('관세', T, 24, article=1)
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['article_tag'].insert(), {'article_id': 2, 'keyword_text': '관세'})
         job.detect(self.database, T)
+        self.assertEqual(self.events()[0]['article_id'], 2)
+        table = self.meta.tables['article']
+        with self.engine.begin() as c:
+            c.execute(table.update().where(table.c.article_id == 2).values(visibility_status='EXCLUDED'))
         item = self.client.get('/api/v1/notifications').json()['items'][0]
-        self.assertEqual((item['target_type'], item['target_id']), ('ANALYSIS', str(self.events()[0]['event_id'])))
+        self.assertEqual((item['target_type'], item['target_id']), ('ARTICLE', '1'))
+
+    def test_event_without_any_evidence_opens_notification_detail(self):
+        self.consent()
+        tables = self.meta.tables
+        with self.engine.begin() as c:
+            event = c.execute(tables['alert_event'].insert(), {'event_type': 'MAJOR_ISSUE', 'event_key': 'x' * 64, 'created_at': datetime(2026, 10, 14), 'payload_json': {'label': '기존 사건', 'target': {}}}).inserted_primary_key[0]
+            c.execute(tables['user_alert'].insert(), {'user_id': self.uid, 'event_id': event, 'is_interest_match': False, 'created_at': datetime(2026, 10, 14)})
+        item = self.client.get('/api/v1/notifications').json()['items'][0]
+        self.assertEqual((item['target_type'], item['target_id']), ('ANALYSIS', str(event)))
+
+    def test_evidence_prefers_latest_published_over_higher_id(self):
+        self.collected(job.MARKET, job.SHORT_NEWS)
+        self.article(1, T)
+        self.keyword('관세', T, 24, article=1)
+        for identity in range(2, 7):
+            self.article(identity, T - timedelta(days=2))
+            with self.engine.begin() as c:
+                c.execute(self.meta.tables['article_tag'].insert(), {'article_id': identity, 'keyword_text': '관세'})
+        job.detect(self.database, T)
+        event = self.events()[0]
+        self.assertEqual(event['article_id'], 1)
+        self.assertEqual(event['payload_json']['article_ids'], [1, 6, 5, 4, 3])
 
     def test_popup_group_and_ack_do_not_mark_read(self):
         self.consent()

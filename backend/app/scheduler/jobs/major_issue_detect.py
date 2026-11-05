@@ -7,6 +7,7 @@
 
 - 기사량 판정(FR-204-01): 최근 7일(T-6~T) 기사 수 ÷ 직전 8주 주평균(T-62~T-7 합계÷8) ≥ 3. 주평균이 정확히 0일 때만 분모를 1로 봅니다.
   키워드와 품목(HS6·HS4)을 각각 판정하고, 국가 조건 없는 전체 집계 행(country_code NULL)을 씁니다.
+  공개 근거 기사가 하나도 없으면 집계가 기준을 넘어도 이슈로 만들지 않습니다.
 - 분류 판정(FR-204-03): 최근 3일에 발행된 KOTRA 시장뉴스 중 원천 분류가 통상·규제인 기사. 기사마다 한 번만 사건을 만듭니다.
   늦게 등록된 기사도 잡도록 시장뉴스 수집 범위(DR-02, 최근 3일)만큼 봅니다.
 - 수집이 끝나지 않은 날을 0건으로 보지 않습니다(FR-906-05). T-62~T에 집계 대상 출처의 수집 성공 기록이 없는 날이 있으면
@@ -78,11 +79,11 @@ def _spikes(store, table, keys, target):
 def _articles(store, condition, sources, start, end):
     """사건의 근거 기사: 공개 기사 중 최신순. 전체 기사 수와 같을 필요는 없습니다."""
     a, t = store.t("article"), store.t("article_tag")
-    stmt = (select(a.c.article_id).join(t, t.c.article_id == a.c.article_id)
+    stmt = (select(a.c.article_id, a.c.published_date).join(t, t.c.article_id == a.c.article_id)
             .where(condition(t), a.c.visibility_status == "VISIBLE", a.c.source_code.in_(sources),
                    a.c.published_date >= start, a.c.published_date <= end)
-            .distinct().order_by(a.c.article_id.desc()).limit(ARTICLE_LIMIT))
-    return [int(identity) for identity in store.c.execute(stmt).scalars()]
+            .distinct().order_by(a.c.published_date.desc(), a.c.article_id.desc()).limit(ARTICLE_LIMIT))
+    return [int(row[0]) for row in store.c.execute(stmt)]
 
 
 def _save(store, key_parts, article_id, payload):
@@ -106,39 +107,60 @@ def _spike_payload(target, label, subject, count, average, ratio, article_ids):
             "article_ids": article_ids}
 
 
-def detect_keywords(store, target):
+def keyword_issues(store, target):
+    """키워드 급증 이슈 (사건 키, 대표 기사, 내용). 공개 근거 기사가 없으면 이슈로 보지 않습니다."""
     recent_window = windows(target)[0]
     topics = store.t("keyword_topic")
     for (keyword,), count, average, ratio in _spikes(store, "news_keyword_daily", ["keyword_text"], target):
         ids = _articles(store, lambda t, k=keyword: t.c.keyword_text == k, (MARKET, SHORT_NEWS), *recent_window)
+        if not ids:
+            log.warning("major_issue_no_visible_evidence keyword=%s target=%s", keyword, target)
+            continue
         # 동의어는 대표어 차단에도 걸리도록 대표어를 함께 저장합니다(notifications.event_allowed).
         canonical = store.c.scalar(select(topics.c.canonical_text).where(topics.c.keyword_text == keyword))
         subject = {"keyword_text": keyword, **({"kw_topic": canonical} if canonical else {})}
-        payload = _spike_payload(target, keyword, subject, count, average, ratio, ids)
-        yield _save(store, ["KEYWORD", keyword, target.isoformat()], ids[0] if ids else None, payload)
+        yield ["KEYWORD", keyword, target.isoformat()], ids[0], _spike_payload(target, keyword, subject, count, average, ratio, ids)
 
 
-def detect_products(store, target):
+def product_issues(store, target):
+    """품목 급증 이슈 (사건 키, 대표 기사, 내용). 공개 근거 기사가 없으면 이슈로 보지 않습니다."""
     recent_window = windows(target)[0]
     names = store.t("hs_code")
     for (code, version), count, average, ratio in _spikes(store, "news_product_daily", ["hs_code", "hs_ver"], target):
         # HS4 집계에는 그 아래 HS6 태그 기사가 들어 있다
         ids = _articles(store, lambda t, c=code, v=version: (t.c.hs_code.startswith(c)) & (t.c.hs_ver == v), (MARKET,), *recent_window)
+        if not ids:
+            log.warning("major_issue_no_visible_evidence hs_code=%s target=%s", code, target)
+            continue
         label = store.c.scalar(select(names.c.name_ko).where(names.c.hs_code == code, names.c.hs_ver == version)) or code
-        payload = _spike_payload(target, label, {"hs_code": code, "hs_ver": version}, count, average, ratio, ids)
-        yield _save(store, ["PRODUCT", code, version, target.isoformat()], ids[0] if ids else None, payload)
+        yield ["PRODUCT", code, version, target.isoformat()], ids[0], _spike_payload(target, label, {"hs_code": code, "hs_ver": version}, count, average, ratio, ids)
 
 
-def detect_trade_regulation(store, target):
+def trade_regulation_issues(store, start, end):
+    """start~end에 발행된 통상·규제 기사 이슈 (사건 키, 대표 기사, 내용). 기사마다 한 건입니다."""
     a = store.t("article")
     rows = store.rows(select(a.c.article_id, a.c.title).where(
         a.c.source_code == MARKET, a.c.category.in_(TRADE_REGULATION_CATEGORIES), a.c.visibility_status == "VISIBLE",
-        a.c.published_date >= target - timedelta(days=TRADE_LOOKBACK_DAYS - 1), a.c.published_date <= target))
+        a.c.published_date >= start, a.c.published_date <= end).order_by(a.c.published_date.desc(), a.c.article_id.desc()))
     for row in rows:
         identity = int(row["article_id"])
-        payload = {"label": row["title"], "reason": "KOTRA_TRADE_REGULATION", "target": {},
-                   "metric_date": target.isoformat(), "article_ids": [identity]}
-        yield _save(store, ["KOTRA_TRADE_REGULATION", identity], identity, payload)
+        yield ["KOTRA_TRADE_REGULATION", identity], identity, {"label": row["title"], "reason": "KOTRA_TRADE_REGULATION", "target": {},
+                                                               "metric_date": end.isoformat(), "article_ids": [identity]}
+
+
+def detect_keywords(store, target):
+    for parts, article_id, payload in list(keyword_issues(store, target)):
+        yield _save(store, parts, article_id, payload)
+
+
+def detect_products(store, target):
+    for parts, article_id, payload in list(product_issues(store, target)):
+        yield _save(store, parts, article_id, payload)
+
+
+def detect_trade_regulation(store, target):
+    for parts, article_id, payload in list(trade_regulation_issues(store, target - timedelta(days=TRADE_LOOKBACK_DAYS - 1), target)):
+        yield _save(store, parts, article_id, payload)
 
 
 def detect(database, target):

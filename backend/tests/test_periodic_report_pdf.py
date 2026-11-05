@@ -154,6 +154,29 @@ class PeriodicContextTest(unittest.TestCase):
         self.assertIn('관세', render('RPT_WEEKLY', ctx))
         self.assertIn('급증 키워드: 관세(미국) ×3.0', weekly_highlights(ctx))
 
+    def test_weekly_total_counts_all_spikes_but_lists_ten(self):
+        uid = int(self.signup())
+        self.seed_news()
+        self.collected_news()
+        table = self.meta.tables['news_keyword_daily']
+        with self.engine.begin() as c:
+            for i in range(11):
+                c.execute(table.insert(), {'metric_date': date(2025, 12, 21), 'keyword_text': f'키워드{i}', 'country_code': 'US', 'day_count': 5})
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertEqual(ctx['summary']['counts']['spike_keywords'], 11)
+        self.assertEqual(len(ctx['keyword_spikes']), 10)
+
+    def test_weekly_includes_sunday_regulation_before_judgment_and_keeps_same_titles(self):
+        uid = int(self.signup())
+        self.seed_news()
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['service_option'].insert(), {'option_code': 'KOTRA_MARKET', 'option_type': 'SOURCE', 'label_ko': 'KOTRA', 'enabled': True, 'sort_order': 5, 'value_json': {}})
+            for identity in (101, 102):  # 판정 작업이 돌기 전 일요일 기사, 제목이 같아도 별개 이슈
+                c.execute(self.meta.tables['article'].insert(), {'article_id': identity, 'source_code': 'KOTRA_MARKET', 'external_id': f'reg-{identity}', 'title': '같은 제목 규제', 'published_date': date(2025, 12, 21),
+                    'source_url': f'https://example.org/{identity}', 'body_masked': '본문', 'category': '통상·규제', 'visibility_status': 'VISIBLE', 'admin_meta_json': {}})
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertEqual([r['title'] for r in ctx['summary']['issues']], ['같은 제목 규제', '같은 제목 규제'])
+
     def test_weekly_highlights_explain_missing_collection_and_empty_issues(self):
         uid = int(self.signup())
         self.seed_news()

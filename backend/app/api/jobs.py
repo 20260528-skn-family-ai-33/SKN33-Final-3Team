@@ -161,7 +161,7 @@ def claim(store):
         job=report_execution(store,row)
         if job and _due(job):
             if job['attempt_no']>=getattr(store.db,'report_max_attempts',3):
-                job.update(status='FAILED',result_json={'step':'FAILED','error':{
+                job.update(status='FAILED',finished_at=now().isoformat(),result_json={'step':'FAILED','error':{
                     'code':'RETRY_EXHAUSTED','message':'리포트 최대 시도 횟수를 초과했습니다.','retryable':False}})
                 _save_report(store,job)
                 store.c.execute(update(r).where(r.c.report_id==identity).values(status='FAILED'))

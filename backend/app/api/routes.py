@@ -2,11 +2,11 @@
 import csv
 import io
 import json
-from datetime import date, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
-from sqlalchemy import and_, select, update, delete, func
+from sqlalchemy import select, update, delete, func
 from fastapi.responses import Response, FileResponse
 from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs, recovery, keyword_admin
 from backend.app.api.common import ApiError, require, unavailable, now, clean, digest, page_info, percentage, month, shift_month, period
@@ -49,6 +49,12 @@ def failed_run_message(run):
 def batch_time_utc(value):
     """batch_run 시각은 한국 시간으로 저장된다(db/batch_log.py). API 시각은 UTC로 내보낸다."""
     return value and value.replace(tzinfo=KST).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def failed_report_time(report):
+    """실패가 확정된 시각. completed_at은 정상 완료 전용이라 실행 기록을 쓰고, 기록이 없으면 생성 시각으로 대신한다."""
+    value=((report['content_json'] or {}).get(jobs.EXECUTION) or {}).get('finished_at')
+    return datetime.fromisoformat(value) if value else report['created_at']
 
 
 def failed_report_message(report):
@@ -209,23 +215,23 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         category=query.get('category','ALL')
         require(category in ('ALL','DATA','REPORT','MEMBER'),'알림 분류를 확인하세요.')
         # 데이터 수집 실패(DATA)와 구독 리포트 생성 실패(REPORT)를 만든다. 회원 알림 분류(MEMBER)는 아직 없다.
-        # 두 출처를 합쳐 정렬하므로 각 출처에서 이 페이지까지의 최신 행만 읽는다.
+        # 수집 실패는 이 페이지까지의 최신 행만 읽어 합친다. 리포트 실패 시각은 실행 기록(JSON)에 있고 건수가 적어 코드에서 정렬한다.
         items=[]; total=0; newest=page*size
         if category in ('ALL','DATA'):
             t=store.t('batch_run'); failed=t.c.status=='FAILED'
             total+=store.count(select(t.c.run_id).where(failed))
-            items+=[{'alert_id':str(r['run_id']),'category':'DATA','message':failed_run_message(r),
-                'target_type':'BATCH','target_id':str(r['run_id']),'created_at':batch_time_utc(r['finished_at'])}
+            items+=[(0,r['run_id'],{'alert_id':str(r['run_id']),'category':'DATA','message':failed_run_message(r),
+                'target_type':'BATCH','target_id':str(r['run_id']),'created_at':batch_time_utc(r['finished_at'])})
                 for r in store.rows(select(t).where(failed).order_by(t.c.finished_at.desc(),t.c.run_id.desc()).limit(newest))]
         if category in ('ALL','REPORT'):
-            t=store.t('report'); failed=and_(t.c.status=='FAILED',t.c.subscription_id.is_not(None))
-            total+=store.count(select(t.c.report_id).where(failed))
-            items+=[{'alert_id':f"REPORT-{r['report_id']}",'category':'REPORT','message':failed_report_message(r),
-                'target_type':'REPORT','target_id':str(r['report_id']),'created_at':r['completed_at'] or r['created_at']}
-                for r in store.rows(select(t).where(failed).order_by(func.coalesce(t.c.completed_at,t.c.created_at).desc(),t.c.report_id.desc()).limit(newest))]
-        # 시각이 없는 실패 기록은 맨 뒤로 보낸다.
-        items.sort(key=lambda a:(a['created_at'] is not None,a['created_at'] or now(),a['alert_id']),reverse=True)
-        return {'items':items[(page-1)*size:newest],'page':page_info(page,size,total)}
+            t=store.t('report')
+            rows=store.rows(select(t).where(t.c.status=='FAILED',t.c.subscription_id.is_not(None)))
+            total+=len(rows)
+            items+=[(1,r['report_id'],{'alert_id':f"REPORT-{r['report_id']}",'category':'REPORT','message':failed_report_message(r),
+                'target_type':'REPORT','target_id':str(r['report_id']),'created_at':failed_report_time(r)}) for r in rows]
+        # 최신순. 같은 시각은 출처·숫자 ID 순으로 고정해 페이지 경계에서 겹치지 않게 하고, 시각이 없는 기록은 맨 뒤로 보낸다.
+        items.sort(key=lambda x:(x[2]['created_at'] is not None,x[2]['created_at'] or datetime.min,x[0],x[1]),reverse=True)
+        return {'items':[x[2] for x in items[(page-1)*size:newest]],'page':page_info(page,size,total)}
     if identity==81: return admin.users(store,query.get('q'),query.get('status','ALL'),page,size,query.get('by','all'))
     if identity==82: return admin.detail(store,path['user_id'])
     if identity in (83,84): return admin.change_user(store,user,path['user_id'],body,identity==83)

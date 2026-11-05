@@ -13,7 +13,8 @@ from sqlalchemy import select, func
 
 from backend.app.api import news, trade
 from backend.app.api.common import clean, month_end, percentage, require, shift_month
-from backend.app.scheduler.jobs.major_issue_detect import MARKET, MINIMUM_RATIO, SHORT_NEWS, spike, windows
+from backend.app.scheduler.jobs.major_issue_detect import (MARKET, MINIMUM_RATIO, SHORT_NEWS, keyword_issues, product_issues,
+                                                           spike, trade_regulation_issues, windows)
 
 
 KINDS = {'RPT_MONTHLY': '월간', 'RPT_WEEKLY': '주간', 'RPT_QUARTERLY': '분기', 'RPT_ON_DEMAND': '요청형'}
@@ -216,8 +217,11 @@ def weekly_highlights(ctx):
         keywords = ctx['keyword_note']
     else:
         keywords = ', '.join(f"{r['keyword']}({r['country']}) ×{r['ratio']:.1f}" for r in ctx['keyword_spikes']) or '기준을 넘은 키워드가 없습니다.'
-    issues = ' / '.join(f"{r['title']} ({r['basis']})" for r in summary['issues']) or summary['issues_note']
-    return f'급증 키워드: {keywords}\n주요 이슈: {issues}'
+    if summary['issues']:
+        issues = ''.join(f"\n· {r['title']} ({r['basis']})" for r in summary['issues'])
+    else:
+        issues = ' ' + summary['issues_note']
+    return f'급증 키워드: {keywords}\n주요 이슈:{issues}'
 
 
 def _keyword_spikes(store, uid, saved, names, start, end):
@@ -246,22 +250,43 @@ def _keyword_spikes(store, uid, saved, names, start, end):
         if count > 0 and ratio >= MINIMUM_RATIO and keyword not in blocked and keyword not in synonyms:
             result.append({'keyword': keyword, 'country': names.get(country, country) if country else '전체',
                            'this_week': count, 'weekly_avg_8w': average, 'ratio': ratio})
-    return sorted(result, key=lambda r: (-r['ratio'], r['keyword'], r['country']))[:WEEKLY_ISSUE_LIMIT]
+    return sorted(result, key=lambda r: (-r['ratio'], r['keyword'], r['country']))
+
+
+def _issue_candidates(store, start, end):
+    """이번 주 주요 이슈 후보. 판정 작업이 아직 돌지 않았어도 빠지지 않게 마지막 날 기준을 직접 계산하고, 그 뒤에 저장된 판정을 붙입니다."""
+    from backend.app.api.subscriptions import sources_ready
+    baseline_start = windows(end)[1][0]
+    live = []
+    if sources_ready(store, (MARKET, SHORT_NEWS), baseline_start, end):
+        live += keyword_issues(store, end)
+    if sources_ready(store, (MARKET,), baseline_start, end):
+        live += product_issues(store, end)
+    live += trade_regulation_issues(store, start, end)  # 표시 건수 제한에 밀리지 않게 급증을 앞에 둔다
+    rows =[{'article_id': article_id, 'payload_json': payload} for _, article_id, payload in live]
+    e = store.t('alert_event')
+    return rows + store.rows(select(e).where(e.c.event_type == 'MAJOR_ISSUE', e.c.created_at >= datetime(start.year, start.month, start.day)).order_by(e.c.event_id.desc()))
+
+
+def _issue_key(payload):
+    """같은 이슈 판별 기준. 통상·규제는 기사, 급증은 키워드·품목으로 구분합니다(제목이 같아도 다른 기사는 합치지 않습니다)."""
+    if payload.get('reason') == 'WEEKLY_NEWS_SPIKE':
+        return ('SPIKE', tuple(sorted(payload.get('target', {}).items())))
+    return ('REGULATION', tuple(payload.get('article_ids') or ()))
 
 
 def _major_issues(store, uid, scope_stmt, names, start, end):
-    """이번 주에 판정된 주요 이슈(FR-107-02). 같은 이슈가 여러 날 판정되면 최신 판정 1건만 씁니다."""
+    """이번 주 주요 이슈(FR-107-02). 같은 이슈가 여러 날 판정되면 최신 기준 1건만 씁니다."""
     from backend.app.api.notifications import event_allowed
-    e, a, tags = store.t('alert_event'), store.t('article'), store.t('article_tag')
-    rows = store.rows(select(e).where(e.c.event_type == 'MAJOR_ISSUE', e.c.created_at >= datetime(start.year, start.month, start.day)).order_by(e.c.event_id.desc()))
+    a, tags = store.t('article'), store.t('article_tag')
     result, seen = [], set()
-    for row in rows:
+    for row in _issue_candidates(store, start, end):
         p = row['payload_json']
         metric = p.get('metric_date')
         if not metric or not start <= date.fromisoformat(metric) <= end or not event_allowed(store, uid, row):
             continue
         spiked = p.get('reason') == 'WEEKLY_NEWS_SPIKE'
-        key = (p.get('reason'), p.get('label'))
+        key = _issue_key(p)
         if key in seen:
             continue
         seen.add(key)
@@ -296,7 +321,7 @@ def _weekly(store, uid, saved, ctx, names, start, end):
                       'spike_ratio': None if spikes is None else MINIMUM_RATIO, 'issue_spike_ratio': MINIMUM_RATIO, 'sentences': [],
                       'issues': _major_issues(store, uid, stmt, names, start, end), 'schedule': [],
                       'issues_note': '이번 주 기준에 해당하는 주요 이슈가 없습니다.'}
-    ctx['keyword_spikes'] = spikes or []
+    ctx['keyword_spikes'] = (spikes or [])[:WEEKLY_ISSUE_LIMIT]  # 요약 카드의 총수는 제한 전 건수를 쓴다
     ctx['keyword_note'] = ('기사 수집 완료 기록이 없는 기간이 있어 직전 8주와 비교하지 않았습니다.' if spikes is None
                            else f'최근 7일 ÷ 직전 8주 주평균 {MINIMUM_RATIO}배 이상 · 한 기사는 키워드마다 1건 · 8주 주평균이 0이면 1로 계산')
     ctx['news_source_label'] = source_label

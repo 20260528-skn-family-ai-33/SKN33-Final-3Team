@@ -139,12 +139,17 @@ def notice_text(event_type,p):
 def notification_view(store,row,uid,articles=None):
     p=row['payload_json']; report=row['event_type']=='REPORT'
     title,message=notice_text(row['event_type'],p)
-    # 대표 기사가 없는 집계 사건은 근거 상세(ANALYSIS, event_id)로 연다.
-    target=('REPORT',row['report_id']) if report else ('ARTICLE',row['article_id']) if row['article_id'] else ('ANALYSIS',row['event_id'])
+    issue=None if report else issue_view(store,row,uid,articles)
+    if report: target=('REPORT',row['report_id'])
+    else:
+        # 이 회원이 열 수 있는 근거 기사로 이동한다. 대표 기사를 우선하고, 근거가 없으면 알림 상세(ANALYSIS, event_id)로 연다.
+        visible=[a['article_id'] for a in issue['articles']]
+        article=str(row['article_id']) if str(row['article_id']) in visible else visible[0] if visible else None
+        target=('ARTICLE',article) if article else ('ANALYSIS',row['event_id'])
     return {'user_alert_id':str(row['user_alert_id']),'event_id':str(row['event_id']),'event_type':row['event_type'],
         'title':p.get('title',title),'message':p.get('message',message),
         'created_at':row['received_at'],'read_at':row['read_at'],'target_type':target[0],'target_id':str(target[1]),
-        'matched_interest':bool(row['is_interest_match']),'issue':None if report else issue_view(store,row,uid,articles)}
+        'matched_interest':bool(row['is_interest_match']),'issue':issue}
 
 
 def event_allowed_sql(store,uid):
