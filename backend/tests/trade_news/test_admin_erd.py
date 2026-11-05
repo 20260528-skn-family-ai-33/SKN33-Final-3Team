@@ -114,6 +114,31 @@ def test_policy_change_only_affects_new_articles(admin_db):
     assert verify_snapshot(saved[0]) != verify_snapshot(saved[1])
 
 
+def test_delayed_tags_keep_first_ingestion_category(admin_db):
+    with admin_db.begin() as conn:
+        conn.exec_driver_sql('CREATE TABLE keyword_category(category_id INTEGER PRIMARY KEY, major_name TEXT, minor_name TEXT)')
+        conn.exec_driver_sql('ALTER TABLE keyword_topic ADD COLUMN category_id INTEGER')
+        conn.exec_driver_sql("INSERT INTO keyword_category VALUES(1,'기존','분야'),(2,'신규','분야')")
+        conn.exec_driver_sql("INSERT INTO keyword_topic(keyword_text,category_id,status) VALUES('지연키워드',1,'CLASSIFIED')")
+    first = prepared()
+    first['tagging']['tags'] = [{'keyword_text': '지연키워드'}]
+    with admin_db.connect() as conn:
+        MySQLArticleStore(conn, {'hankyung': 'HANKYUNG'}, include_tags=False).save(first)
+    assert 'keyword_categories' not in article_rows(admin_db)[0]['admin_meta_json']
+    with admin_db.begin() as conn:
+        conn.exec_driver_sql('UPDATE keyword_topic SET category_id=2')
+    second = prepared(2)
+    second['tagging']['tags'] = [{'keyword_text': '지연키워드'}]
+    with admin_db.connect() as conn:
+        loader = MySQLArticleStore(conn, {'hankyung': 'HANKYUNG'}, include_tags=True)
+        loader.save(first)
+        loader.save(second)
+        loader.save(first)
+    saved = article_rows(admin_db)
+    assert saved[0]['admin_meta_json']['keyword_categories'][0]['category_id'] == 1
+    assert saved[1]['admin_meta_json']['keyword_categories'][0]['category_id'] == 2
+
+
 @pytest.mark.parametrize('failure', ['write_error', 'corrupt_snapshot'])
 def test_snapshot_failure_rolls_back_and_preserves_saved_articles(admin_db, monkeypatch, failure):
     with admin_db.connect() as conn:

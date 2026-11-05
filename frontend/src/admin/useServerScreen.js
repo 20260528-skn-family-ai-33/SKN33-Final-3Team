@@ -4,8 +4,8 @@ import { useAdminAlertRead } from './useAdminAlertCount'
 const ALERT_CATEGORY = { DATA: '데이터', REPORT: '리포트', MEMBER: '회원관리' }
 const table = (head, rows, cols) => ({ type: 'table', head, cols: cols || `repeat(${head.length}, minmax(100px, 1fr))`, rows: rows.map(cells => ({ cells: cells.map(c => c == null ? '—' : typeof c === 'object' ? c : String(c)) })) })
 const button = (label, to) => ({ btns: [{ label, to }] })
-export const AUDIT_ACTION = { USER_ROLE: '회원 권한 변경', USER_STATUS: '회원 이용 상태 변경', ARTICLE_VISIBILITY: '기사 노출 변경' }
-export const AUDIT_TARGET = { USER: '회원', ARTICLE: '기사' }
+export const AUDIT_ACTION = { USER_ROLE: '회원 권한 변경', USER_STATUS: '회원 이용 상태 변경', ARTICLE_VISIBILITY: '기사 노출 변경', KEYWORD_ASSIGN: '키워드 분야 지정', KEYWORD_HOLD: '키워드 보류', KEYWORD_RELEASE: '키워드 지정 해제', CATEGORY_CREATE: '분야 생성', CATEGORY_RENAME: '분야 이름 변경', CATEGORY_DELETE: '분야 삭제' }
+export const AUDIT_TARGET = { USER: '회원', ARTICLE: '기사', KEYWORD: '키워드', CATEGORY: '분야' }
 const RUN_STATUS = { SUCCESS: ['ok', '성공'], FAILED: ['red', '실패'], RUNNING: ['', '실행 중'] }
 // 회원 검색 기준은 화면에 있는 아이디(이메일)·이름만 쓴다(이슈 리포트 관리자 페이지 7번에서 '아이디+이름' 삭제).
 // 주소에 그 밖의 값(all 등)이 오면 화면 기본값인 아이디로 맞춰 선택 상자와 실제 조회가 같게 한다.

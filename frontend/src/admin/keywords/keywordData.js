@@ -81,7 +81,7 @@ export function keywordLead(route) {
 }
 
 export function keywordFootnote(route) {
-  if (route.path.startsWith('/admin/keywords/history')) return ['기록 항목: 처리 시각 · 처리자 · 키워드 · 처리 유형 · 변경 전/후 분야 · 기사 반영 범위 · 처리 사유 · 재처리 결과', '기존 기사 반영을 고른 경우 재처리 진행·완료·실패 건수를 함께 남깁니다 · 키워드와 기사 제목은 시연 예시']
-  if (route.path.startsWith('/admin/keywords/fields')) return ['기본 분야: 대분류 8 · 중분류 23과 대표 키워드 (category_rules.py TAX에서 DB 분야 표로 옮김) · 관리자가 만든 분야: 이름만 저장, 대표 키워드 없음', '관리자 지정 키워드 수는 시연 예시']
-  return ['미처리: 분야를 정하지 못한 키워드 전체 · 보류: 판단을 미룬 키워드 · 분류함: 관리자가 분야를 지정한 키워드 (다시 수정 가능)', '목록 테이블에는 키워드·처리 상태·분야만 저장 · 기사 수·최근 기사·같이 나온 키워드는 조회할 때 기사 DB에서 계산', '분류 틀: 기본 대분류 8 · 중분류 23 (category_rules.py TAX 기준) + 관리자가 만든 분야 · 키워드별 건수와 기사 제목은 시연 예시']
+  if (route.path.startsWith('/admin/keywords/history')) return ['서버에 저장된 처리 시각 · 처리자 · 변경 전후 값 · 처리 사유를 표시합니다.']
+  if (route.path.startsWith('/admin/keywords/fields')) return ['기본 분류는 대분류 8 · 중분류 23입니다. 실제 목록은 DB의 분야 사전을 조회합니다. 관리자 생성 분야만 수정·삭제할 수 있습니다.']
+  return ['기사 수와 근거는 실제 기사 DB 기준입니다. 분류함에는 기존 자동 분류와 관리자 지정 결과가 함께 표시됩니다.', '분류 변경은 사전 기반 현재 조회에 반영됩니다. 저장 답변·리포트는 유지되며 기사 재처리·벡터 재색인을 실행하지 않습니다.']
 }
