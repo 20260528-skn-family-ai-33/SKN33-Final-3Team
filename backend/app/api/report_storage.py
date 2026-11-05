@@ -22,7 +22,8 @@ class LocalReportStorage:
     def read(self,metadata):
         require(metadata.get('storage')=='local','파일 저장소 연결이 준비되지 않았습니다.','FEATURE_NOT_READY',503)
         target=self.path(metadata['key'])
-        require(target.is_file(),'파일이 없습니다.','NOT_FOUND',404)
+        # DB에 경로는 있는데 파일이 없는 경우(삭제·다른 서버 저장 등). 사용자가 할 수 있는 조치를 안내한다.
+        require(target.is_file(),'현재 리포트를 이용할 수 없습니다. 리포트 재생성 또는 잠시 후 다시 시도해 주세요.','NOT_FOUND',404)
         content=target.read_bytes()
         require(hashlib.sha256(content).hexdigest()==metadata['sha256'],'파일 무결성을 확인하세요.','FILE_UNAVAILABLE',503)
         return content

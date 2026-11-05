@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { api, ApiError, queryString, setCsrf } from '../src/api/client.js'
+import { api, ApiError, queryString, setCsrf, streamAnswer } from '../src/api/client.js'
 
 test('query arrays repeat and IDs remain strings', () => {
   assert.equal(queryString({ country_codes: ['US', 'CN'], id: '18446744073709551615', empty: '', zero: 0, flag: false }), '?country_codes=US&country_codes=CN&id=18446744073709551615&zero=0&flag=false')
@@ -54,4 +54,16 @@ test('an unavailable upstream with a non-JSON gateway response has a readable re
     await assert.rejects(api('/auth/login'), e => e instanceof ApiError && e.status === 502 &&
       e.message === '서비스에 일시적으로 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.')
   } finally { globalThis.fetch = old }
+})
+
+
+test('final answer SSE decodes fragmented Korean and requires done event', async()=>{
+ const old=globalThis.fetch
+ try{
+  const bytes=new TextEncoder().encode('event: delta\ndata: {"text":"검증 완료"}\n\nevent: done\ndata: {}\n\n')
+  globalThis.fetch=async()=>new Response(new ReadableStream({start(c){for(const byte of bytes)c.enqueue(Uint8Array.of(byte));c.close()}}))
+  const chunks=[];assert.equal(await streamAnswer('1',text=>chunks.push(text)),'검증 완료');assert.deepEqual(chunks,['검증 완료'])
+  globalThis.fetch=async()=>new Response('event: delta\ndata: {"text":"일부"}\n\n')
+  await assert.rejects(streamAnswer('1',()=>{}),/중단/)
+ }finally{globalThis.fetch=old}
 })

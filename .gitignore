@@ -39,3 +39,5 @@ tmp/
 /backend/app/scheduler/collectors/trade_news/data/
 .env.code-workspace
 runtime/
+
+/outputs/*

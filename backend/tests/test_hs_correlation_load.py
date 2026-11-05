@@ -81,7 +81,7 @@ class HsCorrelationLoadTest(unittest.TestCase):
                  "group_code": "999998", "source_edition": "old"},
                 {"new_ver": "HS2017", "new_code": "150910", "old_ver": "HS2012", "old_code": "150910", "relation": "1:1",
                  "group_code": "150910", "source_edition": "other"}])
-        self.assertEqual(hc.run("HS2022", "HS2017", xlsx=self.xlsx, db_url=db, log_dir=self.dir, track=False), 0)
+        self.assertEqual(hc.run("HS2022", "HS2017", xlsx=self.xlsx, db_url=db, log_dir=self.dir, save_dir=self.dir, track=False), 0)
         with session_scope(engine) as s:
             corr = CRUD(HsCodeCorrelation)
             self.assertEqual(corr.count(s, new_ver="HS2022", old_ver="HS2017"), 7)
@@ -131,7 +131,7 @@ class HsCorrelationLoadTest(unittest.TestCase):
 
     def test_run_fails_without_table(self):
         db = f"sqlite:///{(self.dir / 'empty.db').as_posix()}"
-        self.assertEqual(hc.run("HS2022", "HS2017", xlsx=self.xlsx, db_url=db, log_dir=self.dir, track=False), 1)
+        self.assertEqual(hc.run("HS2022", "HS2017", xlsx=self.xlsx, db_url=db, log_dir=self.dir, save_dir=self.dir, track=False), 1)
 
 
 if __name__ == "__main__":

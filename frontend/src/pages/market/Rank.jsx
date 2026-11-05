@@ -192,7 +192,7 @@ function RankResults({ route }) {
             </div></div>
             {empty && <p className="muted" role="status" style={{ padding: '22px 4px', textAlign: 'center' }}>조회 조건에 맞는 수출입 실적이 없습니다. 국가·품목·기간을 바꿔 다시 조회해 주세요.</p>}
             <div className="between" style={{ marginTop: 18 }}>
-              <span className="note">표·막대: 억 USD · 엑셀: 원본 USD 단위</span>
+              <span className="note">표·막대: 억 USD · 엑셀: 원본 USD 단위{result.data?.meta?.truncated && ` · 엑셀에는 전체 ${Number(result.data.meta.rows_total).toLocaleString()}행 중 상위 1,000행만 담깁니다`}</span>
               <Btn icon="download" disabled={!result.data?.result_id || result.loading || empty} onClick={exportExcel}>엑셀 다운로드</Btn>
             </div>
             {!byMonth && <Pagination page={page} info={result.data?.page} onChange={setPage} />}

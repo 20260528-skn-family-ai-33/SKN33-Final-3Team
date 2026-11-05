@@ -33,6 +33,10 @@ class Conditions(Input):
     metric: Literal['AMOUNT', 'GROWTH', 'SHARE', 'RANK'] = 'AMOUNT'
 
 
+class ReportConditions(Conditions):
+    include_korea_total: bool = False
+
+
 class Signup(Input):
     name: str = Field(min_length=1, max_length=120)
     email: EmailStr

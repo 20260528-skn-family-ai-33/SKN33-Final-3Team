@@ -153,6 +153,23 @@ class IntentSearchTest(unittest.TestCase):
             value=self.client.get('/api/v1/reference/hs-codes?q=3304').json()
         self.assertEqual(value['confidence'],'EXACT'); embed.assert_not_called()
 
+    def test_picker_partial_name_and_numeric_prefix_skip_embedding(self):
+        self.settings.values['API_HS_VECTOR_ENABLED']='true'
+        with patch('backend.app.api.hs_vectors.candidates') as embed:
+            for query in ('330','화장','999999'):
+                response=self.client.get('/api/v1/reference/hs-codes',params={'q':query})
+                self.assertEqual(response.status_code,200,response.text)
+                self.assertTrue(response.json()['requires_selection'])
+            embed.assert_not_called()
+
+    def test_picker_without_literal_match_keeps_semantic_fallback(self):
+        self.settings.values['API_HS_VECTOR_ENABLED']='true'
+        with patch('backend.app.api.hs_vectors.candidates',return_value=[('3304',.6)]) as embed:
+            response=self.client.get('/api/v1/reference/hs-codes',params={'q':'스킨케어'})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json()['items'][0]['hs_code'],'3304')
+        embed.assert_called_once()
+
 
 class SearchInfrastructureTest(unittest.TestCase):
     def test_cache_coalesces_concurrent_requests_and_returns_copies(self):

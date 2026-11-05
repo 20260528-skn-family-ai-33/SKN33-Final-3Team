@@ -1,7 +1,7 @@
 name: borderless-integration
 services:
   redis:
-    image: redis:7.4-alpine
+    image: redis:8.2   # 채팅 체크포인터(langgraph-checkpoint-redis)가 RedisJSON·RediSearch를 써서 8 이상(설계 D-07)
     command: [redis-server, --appendonly, 'yes', --maxmemory-policy, noeviction]
     ports:
       - '127.0.0.1:6379:6379'

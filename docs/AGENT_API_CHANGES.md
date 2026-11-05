@@ -15,6 +15,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | API-38 되묻기 답 | 요청 추가 | `text`(직접 입력), `interest_selection`(관심사 골라 받기) | D-12, D-64 |
 | API-38 | 오류 추가 | 409 `CLARIFICATION_EXPIRED` (30분 경과) | D-04 |
 | API-131 (신규) 질문 중단 | 신설 | `POST /chat/jobs/{job_id}/cancel` | D-12 |
+| API-39 컨텍스트 삭제 | 오류 추가 | 대화방에 진행 중(QUEUED·RUNNING·NEEDS_INPUT·WAITING_REPORT) 작업이 있으면 409 `JOB_IN_PROGRESS`. 되묻기 대기 작업도 접수 때 고정한 조건으로 답하고 그 조건을 다시 저장하므로 막는다(답하거나 중단한 뒤 초기화). 삭제 직전에 끝난 답변이 늦게 올린 Redis 컨텍스트는 다음 답변 전까지 쓰지 않는다(`context_json.cleared_after_job_id`, 2026-11-04) | D-11 |
 
 번호 131은 제안입니다. 106~116은 삭제·예약이라 피했습니다. 정의서 담당자가 확정합니다.
 
@@ -28,7 +29,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 |---|---|
 | 진행 중인 작업 없음 | 202, 새 작업 (기존과 같음) |
 | 작업 실행 중(QUEUED·RUNNING·WAITING_REPORT) | 409 `JOB_IN_PROGRESS` (기존). 프론트는 생성 중에 입력창·전송 버튼을 비활성화 |
-| 되묻기 대기 중(NEEDS_INPUT), 30분 안 | 202, **기존 작업**을 반환. 보낸 글은 API-38 `text`와 같이 처리하고, 작업 상태는 QUEUED. 같은 `client_message_id`로 다시 보내면 같은 작업을 돌려줌. 글은 대화 기록(USER 메시지)에 남음 |
+| 되묻기 대기 중(NEEDS_INPUT), 30분 안 | 202, **기존 작업**을 반환. 보낸 글은 API-38 `text`와 같이 처리하고, 작업 상태는 QUEUED. 같은 `client_message_id`로 다시 보내면 같은 작업을 돌려줌. 글은 별도 USER 메시지로 저장하지 않고, 원래 질문(작업 행)의 되묻기 기록 `clarification_history`에 그 되묻기의 답으로 남음. 대화 기록 화면은 질문 아래 되묻기·답으로 보여 줌(채팅 작업이 USER 행 하나에 묶여 있어 USER 행을 따로 만들면 답이 두 번 보임) |
 | Redis 연결 불가 | 503 `REDIS_UNAVAILABLE`, `retryable: true`(기존 인증 저장소 오류와 같음). 프론트 안내 "잠시 후 다시 시도해 주세요." |
 | 되묻기 대기 중이지만 30분이 지남 | 그 작업을 `EXPIRED`로 바꾸고 이 글을 **새 질문**으로 접수한다(202, 새 작업) |
 
@@ -49,7 +50,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `clarification.expires_at` | string(ISO 8601) | 되묻기 만료 시각(물은 시각 + 30분) |
 | `clarification.message`, 선택지 `label` | string | (기존) 200자에서 자름. HS4 품목명은 최대 347자 (설계 D-62) |
 
-`progress.label` 값: `조건 확인 중`, `데이터 조회 중`, `기사 찾는 중`, `차트 만드는 중`, `리포트 만드는 중`, `시장 예측 조회 중`, `답변 작성 중`, `숫자 확인 중`.
+`progress.plan`은 실제 계획 단계와 마지막 답변 작성·검증 단계의 순서 목록이다. 각 항목은 `id, label, status`를 가지며 하위 질문 단계에는 `question`도 포함한다. `progress.label`은 현재 작업을 설명한다. 진행 바는 계획 수립 전 0%, 이후 종료된 단계 수(done)/전체 단계 수(total), 답변 저장 후 100%다. 되묻기 중에도 계획을 유지하고 현재 단계를 굵게 표시한다.
 
 ### answer에 더하는 것
 
@@ -63,7 +64,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `tables[].task_id`, `charts[].task_id` | string | 어느 하위 질문의 표·차트인지 |
 | `charts[]` | ChartSpec | 아래 형식 |
 | `text` | (기존) | 결론 문장(하위 질문마다 1~2문장, 최대 6문장) 다음 설명 문장(최대 4문장)을 이은 것. 문장마다 200자 이하 |
-| `verification.sentence_checks` | array | 형식 확정. `[{index, sentence, numbers, status}]`. `index`는 `text`를 이루는 문장 순서(0부터), `status`는 `PASS`·`MISMATCH`. `MISMATCH` 문장에 "확인 필요"를 표시 |
+| `verification.sentence_checks` | array | `[{index, sentence, numbers, status, basis, reason}]`. `index`는 최종 답변의 결론 다음 설명 순서(0부터). FR-101-08·FR-901-02에 따라 한 번 교정한 뒤에도 `MISMATCH`인 문장은 삭제하지 않고 해당 문장 끝에 "확인 필요"를 표시한다. `PASS` 문장에는 표시하지 않는다. |
 | `warnings` | (기존) | 최대 10개, 각 200자에서 자름 |
 
 ### ChartSpec
@@ -111,7 +112,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `CLARIFICATION_CONFLICT` | 409 | 기존. `clarification_id` 불일치 |
 | `VALIDATION_ERROR` | 400 | `choice_ids`·`hs_item`·`text`·`interest_selection`·`report_confirmation` 중 0개 또는 2개 이상. `interest_selection`이 품목 5개·국가 20개를 넘거나, 둘 다 비었거나, 후보에 없는 값을 담음 |
 
-같은 조건에 대한 되묻기는 2회까지입니다. 넘으면 해당 하위 질문만 NO_DATA로 끝내고 나머지는 계속합니다. 다른 하위 질문에 사용 가능한 결과가 있으면 전체는 PARTIAL, 없으면 NO_DATA입니다. 실행은 답변 저장 후 SUCCEEDED로 끝납니다(설계 D-72).
+국가 되묻기는 한 작업당 최대 1회입니다. 선택지에 없는 국가도 등록명이나 국가 코드로 답할 수 있습니다. 등록되지 않은 답은 400으로 안내하고 같은 clarification_id를 유지합니다. 다른 조건은 조건당 2회까지이며, 상한에 도달하면 해당 하위 질문만 NO_DATA로 끝냅니다(설계 D-72).
 
 ## API-131 (신규) `POST /chat/jobs/{job_id}/cancel`
 
@@ -178,3 +179,24 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 ### D-95: 선행 결과 대상 선택
 - clarification.kind에 INPUT_SELECTION을 추가한다. 선택지와 직접 입력을 지원하며 API-38은 choice_ids 또는 text만 허용한다. hs_item/interest_selection/report_confirmation은 거부한다. 조건별 2회 제한이다.
 - 사용자가 명시한 개수·기준이면 자동으로 후속 분석한다. 모호한 개수·기준·그룹만 확인한다. applied_defaults/warnings에 실제 선택 기준과 대상 부족을 표시한다. 리포트의 REPORT_CONFIRM은 생략하지 않는다.
+
+### 저장 결과 기반 수치 검증
+- sentence_checks.basis는 DIGEST 또는 SNAPSHOT이며, 수치 조회는 저장된 결과표 전체 행을 기준으로 검증한다. reason은 MATCH(일치), NOT_CONFIRMED(대상·기간·지표·단위를 포함한 일치 확인 실패), SOURCE_UNAVAILABLE(저장 결과 만료)다. NOT_CONFIRMED는 실제 오답 확정이 아니다. SOURCE_UNAVAILABLE는 화면에 원본 확인 불가로 함께 표시한다. 재생성 최대 1회와 이후 확인 필요 표시는 유지한다.
+
+
+## 2026-11-03 API-133 최종 답변 스트림
+- `GET /chat/jobs/{job_id}/answer-stream`: 기존 로그인·작업 소유권 검증을 적용한다. SUCCEEDED이며 저장 answer가 있을 때만 `text/event-stream`을 반환한다. 준비 전에는 409 ANSWER_NOT_READY다.
+- `event: delta`, `data: {"text":"..."}`로 검증된 answer.text를 전달하고 `event: done`, `data: {}`로 끝낸다. Cache-Control: private, no-store. 미검증 초안은 보내지 않으며 모델을 재호출하지 않는다. 프론트는 검증·저장 완료된 구조화 결과표·차트를 텍스트 스트림 대기와 관계없이 즉시 표시하며, 스트림 오류 시 저장된 최종 텍스트로 복구한다. API-37 상태 폴링은 유지한다.
+- 국가 정식명 또는 코드 완전 일치는 포함 관계 후보와 무관하게 자동 확정한다. 완전 일치가 없을 때만 COUNTRY 질문을 표시한다.
+
+
+## 2026-11-03 국가 비교 결과 표시
+일반 수출입 추이에서 동일 조회 기간·방향·지표의 여러 국가/품목을 비교할 때 그래프 1개와 표 1개로 묶어 표시한다. 표는 `HS 코드 | 품목 | 기준월 | 국가1 수출액 (USD) | 국가2 수출액 (USD)` 형식이며 수입은 수입액으로 표시한다. 여러 품목은 HS·품목별 행으로 구분한다. 원본 결과와 검증 근거는 바꾸지 않고 소유권·만료 검사를 통과한 저장 결과 전체 행을 서버에서 피벗한다. 같은 셀 값의 중복은 한 번만 쓰고 서로 다른 값은 오류로 안내한다. 누락은 null이며 0으로 바꾸지 않는다.
+`POST /results/comparison`(API-134)은 본인 소유 TREND result_ids 1~3개와 선택 format(json/xlsx)을 받는다. 기본 json은 비교 표를 반환하고 xlsx는 동일한 국가 열과 단위를 가진 엑셀을 반환한다. 원본 SQL·ML·LLM 재실행과 새 스냅샷 저장은 없다. 원본 전체 행을 사용하며 비교 표는 국가 20개·1,000행까지다. 그래프는 기존 정책대로 상위 5개 시리즈를 한 그래프에 표시하고 생략 안내를 제공한다. 단일 조회·서로 다른 지표/기간·ML 대상 선택은 기존 방식을 유지한다.
+
+- 비교 뷰는 조회 기간의 월별 금액을 표시하므로 원본의 전년/전월 비교 설정만 다른 중복 결과도 하나로 묶는다. 동일 셀의 현재 금액이 다르면 기존 충돌 검사를 적용한다. 비교 API 로딩 중에는 저장된 기존 차트를 유지하고, 성공 시 통합 차트로 교체한다. 오류면 하위 질문별로 원래 차트와 표를 모두 보여 준다. 결과 3개·국가 20개를 넘는 묶음은 비교를 요청하지 않고 따로 표시한다(2026-11-04). 원본의 비교 기간 수치와 결론은 변경하지 않는다.
+
+- 메시지 목록 조회 직후 job이 SUCCEEDED로 바뀌어 목록에 assistant 메시지가 아직 없으면, 해당 USER 턴에 API-37의 저장된 job.answer를 즉시 표시한다. 이미 답변이 있으면 중복 추가하지 않는다. 최종 답변 스트림이 8초 이내 완료되지 않으면 스트림을 중단하고 저장된 최종 본문을 표시한다. 완료된 답변을 다시 생성하거나 검증 전 초안을 표시하지 않는다.
+# 리포트 한국 전체 비교 조건
+
+리포트 미리보기의 conditions에 선택 필드 `include_korea_total: boolean`을 추가한다(기본 false). true이면 한국 전체와 country_codes의 상대국을 독립된 범위로 비교한다. country_codes에 KR 등 가상 상대국 코드를 넣지 않는다. 미리보기 승인·저장·리포트 상세에 같은 값을 보존한다. 한국 전체는 상대국 필터 없는 COUNTRY 행 합산이며 선택한 상대국과 다시 합산하지 않는다. KPI 섹션의 REPORT_SCOPE_COMPARISON 표와 다중 시리즈 차트는 한국 전체 및 상대국별 월별 수출액을 담는다. 기존 미지정 요청의 의미는 유지한다.

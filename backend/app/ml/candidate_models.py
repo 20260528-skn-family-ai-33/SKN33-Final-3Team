@@ -8,10 +8,13 @@
 
 2) 월별 수집 뒤 최종 모델(2단계 C K=100, v1 · v3 앙상블) 전체 재학습(run): 수집 원본으로 피처를 만들어 학습하고
    data/ml/monthly_models/model_a_two_stage_<YYYYMM>.joblib 저장 → DB ml_model_version에 기록한다.
+   이어서 같은 달 피처 표로 증감 예상 모델(모델 B, growth_model)을 같은 절차로 학습해
+   model_b_growth_<YYYYMM>.joblib 저장 → ml_model_version(model_key=model_b)에 기록한다. B가 실패해도 A 결과는 그대로다.
     자동: .env에 CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run (customs_monthly의 ML 단계)
     수동: python -m backend.app.ml.candidate_models --monthly 2026-10-01
 """
 import argparse
+import logging
 import re
 import time
 from dataclasses import asdict
@@ -32,13 +35,14 @@ from backend.app.ml.experiment_metrics import evaluate_predictions
 from backend.app.ml.experiments import (BASELINES, FEATURE_SETS, KINDS, OPTIONAL, ROOT, SNAPSHOT_PY311, ExperimentConfig,
                                         ModelSpec, build_model, load_snapshot, prepare_scenarios)
 from backend.app.ml.feature_recovery import coverage
-from backend.app.ml.model_registry import read_json, register_records, registered_versions, sha256, write_json
+from backend.app.ml.model_registry import read_json, register_records, registered_versions, sha256, version_key, write_json
 from backend.app.ml.runtime import runtime_versions
 
 OUT_DIR = ROOT / "data/ml/candidates"
 MONTHLY_DIR = ROOT / "data/ml/monthly_models"
 FEATURE_CACHE = ROOT / "data/ml/monthly_feature_cache"  # 월이 추가되면 영향받은 기준월만 다시 계산
 KST = ZoneInfo("Asia/Seoul")
+log = logging.getLogger(__name__)
 
 
 def needed_columns(feature_set="all"):
@@ -188,15 +192,61 @@ def _model_config(kind):
 
 
 MONTHLY_PREFIX = {"two_stage": "model_a_two_stage"}  # 월별 파일 이름 앞부분. 그 밖의 kind는 kind 그대로
+GROWTH_PREFIX = "model_b_growth"  # 증감 예상(모델 B) 월별 파일. agents/market.py가 이 이름과 레지스트리로 찾는다
+GROWTH_SOURCES = (*MODEL_SOURCES, "backend/app/ml/growth_model.py")
 
 
-def _version_key(path):
-    """<계열>_<YYYYMM>[_r<n>].registry.json → (YYYYMM, n). 이름 정렬로는 _r10이 _r2보다 앞선다."""
-    match = re.fullmatch(r".+_(\d{6})(?:_r(\d+))?\.registry\.json", path.name)
-    return (match[1], int(match[2] or 1)) if match else None
+def _growth_config():
+    """모델 B 재사용 판단용. 모델 A 학습 코드에 growth_model.py를 더한 해시와 패키지 버전."""
+    return {"kind": "growth_huber", "sources": {p: sha256(ROOT / p) for p in GROWTH_SOURCES},
+            "runtime": _runtime("lightgbm")}
 
 
-def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=4):
+def _find_revision(out_dir, base, config, month, engine, usable=lambda record: True):
+    """같은 달 기록 중 지금 입력·학습 코드와 같은 것을 찾는다. 없으면 다음 빈 리비전(<base>_r<n>)을 돌려준다.
+
+    반환: (name, artifact, record_path, record). record가 None이면 그 이름으로 새로 학습한다.
+    usable(record)가 False인 기록(예: 학습 실패로 SKIPPED)은 재사용하지 않고 다음 리비전으로 넘어간다.
+    기록 없이 파일만 있는 이름(직접 만든 파일, 기록 전에 멈춘 학습)은 덮어쓰지 않고 건너뛴다.
+    """
+    files = db = None
+    matched = None
+    for revision in range(1, 100):
+        name = base if revision == 1 else f"{base}_r{revision}"
+        artifact, record_path = out_dir / f"{name}.joblib", out_dir / f"{name}.registry.json"
+        record = read_json(record_path)
+        if record is None:
+            if artifact.exists():
+                continue
+            break
+        if files is None:  # 비교할 기록이 있을 때만 입력 파일 전체를 해시한다
+            files, db = artifacts.input_manifest(), artifacts.db_inputs(engine, month)  # 학습·기록과 같은 DB
+        if (usable(record) and record["data_info"].get("model_config") == config
+                and _same_inputs(record["data_info"]["input_snapshot"], files, db, month)):
+            matched = name, artifact, record_path, record
+            # 환율을 못 읽으면 파일만 비교하므로 정정 전·후 리비전이 모두 맞는다. 그때는 끝까지 보고 가장 최신을 고른다.
+            if not _fx_unavailable(db):
+                break
+    else:
+        if matched is None:
+            raise ValueError(f"{base}: 같은 달 재학습 기록이 너무 많습니다")
+    return matched if matched is not None else (name, artifact, record_path, None)
+
+
+def _parent(out_dir, prefix, model_key, name, engine):
+    """DB에 기록된 직전 버전. 같은 (월, 리비전)이면 같은 계열을 우선한다."""
+    current = version_key(f"{name}.registry.json")
+    # 학습 실패(SKIPPED) 기록은 모델 파일이 없어 부모로 삼지 않는다.
+    earlier = sorted(((key, p.name.startswith(f"{prefix}_")), record["version_id"])
+                     for p in out_dir.glob("*.registry.json")
+                     if (key := version_key(p)) is not None and key < current
+                     and (model_key == "model_a") != p.name.startswith(f"{GROWTH_PREFIX}_")
+                     and (record := read_json(p)).get("status") == "READY")
+    in_db = registered_versions([version for _, version in earlier], model_key, engine)
+    return next((version for _, version in reversed(earlier) if version in in_db), None)
+
+
+def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=4, growth=True):
     """customs_monthly ML 단계: 전체 재학습 → <모델>_<YYYYMM>.joblib → ml_model_version(model_a) 기록.
 
     kind="two_stage"(기본)는 최종 모델(2단계 v1 · v3 앙상블, two_stage.monthly), 그 밖의 kind는 단일 모델이다.
@@ -213,38 +263,11 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     with FileLock(str(out_dir / f".{base}.lock")):
-        files = db = config = None
-        matched = None
-        for revision in range(1, 100):
-            name = base if revision == 1 else f"{base}_r{revision}"
-            artifact, record_path = out_dir / f"{name}.joblib", out_dir / f"{name}.registry.json"
-            record = read_json(record_path)
-            if record is None:
-                break
-            if files is None:  # 비교할 기록이 있을 때만 입력 파일 전체를 해시한다
-                files, db = artifacts.input_manifest(), artifacts.db_inputs(engine, month)  # 학습·기록과 같은 DB
-                config = _model_config(kind)
-            if (record["data_info"].get("model_config") == config
-                    and _same_inputs(record["data_info"]["input_snapshot"], files, db, month)):
-                matched = revision, name, artifact, record_path, record
-                # 환율을 못 읽으면 파일만 비교하므로 정정 전·후 리비전이 모두 맞는다. 그때는 끝까지 보고 가장 최신을 고른다.
-                if not _fx_unavailable(db):
-                    break
-        else:
-            if matched is None:
-                raise ValueError(f"{base}: 같은 달 재학습 기록이 너무 많습니다")
-        if matched is not None:
-            revision, name, artifact, record_path, record = matched
+        name, artifact, record_path, record = _find_revision(out_dir, base, _model_config(kind), month, engine)
         if record is None:
             # 부모는 DB에 기록된 직전 버전. 학습 전에 정해 DB에 못 닿으면 학습하기 전에 멈춘다.
-            current = (f"{month:%Y%m}", revision)
             # 모델 계열(lightgbm → model_a_two_stage)이 바뀐 달에도 model_a 이력이 이어지도록 모든 월별 기록에서 찾는다.
-            # 같은 (월, 리비전)이면 같은 계열을 우선한다.
-            earlier = sorted(((key, p.name.startswith(f"{prefix}_")), read_json(p)["version_id"])
-                             for p in out_dir.glob("*.registry.json")
-                             if (key := _version_key(p)) is not None and key < current)
-            in_db = registered_versions([version for _, version in earlier], "model_a", engine)
-            parent = next((version for _, version in reversed(earlier) if version in in_db), None)
+            parent = _parent(out_dir, prefix, "model_a", name, engine)
             if kind == "two_stage":
                 from backend.app.ml import two_stage  # two_stage가 이 모듈을 가져다 써 위에서 읽으면 순환 import
                 bundle, evaluation, source = two_stage.monthly(_month_frame(month, cache_dir, engine), n_jobs)
@@ -278,9 +301,134 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
         elif not artifact.is_file() or sha256(artifact) != record["artifact_sha256"]:
             raise ValueError(f"{artifact}: 저장된 기록과 모델 파일이 다릅니다")
         register_records([record], engine)
+    result = {"status": "SUCCESS", "model_name": name, "artifact": artifact.as_posix(), "train_rows": record["train_rows"],
+              "country_ndcg_at_5": record["evaluation"]["model"].get("country_ndcg_at_5"),
+              "baseline_country_ndcg_at_5": record["evaluation"]["baseline_growth_12m"].get("country_ndcg_at_5")}
+    if kind == "two_stage" and growth:
+        # 피처 표는 모델 B 단계에서 다시 만든다. 모델 A 학습 동안 큰 표를 하나 더 들고 있지 않게 한다(8GB PC, 사용자 결정).
+        result["growth"] = run_growth(month, engine, out_dir=out_dir, cache_dir=cache_dir, n_jobs=n_jobs)
+    return result
+
+
+GROWTH_RETRY_LIMIT = 3   # 같은 달 모델 B를 자동으로 다시 학습하는 최대 횟수(사용자 결정). CUSTOMS_ML_GROWTH_RETRIES로 바꾼다
+
+
+def retry_pending(engine=None, *, out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=4, skip=(), limit=None):
+    """스케줄러 복구 작업(customs_monthly.startup_job)이 부른다. 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면
+    (학습 실패 SKIPPED·기록 없음) 그 달 모델 B만 다시 학습한다. 그 달 수출입 작업은 SUCCESS라 월 복구 대상이 아니기 때문이다.
+
+    skip: 이번 실행에서 방금 처리한 달(YYYYMM). 같은 실행 안에서 곧바로 다시 학습하지 않고 다음 실행에 맡긴다.
+    limit: 같은 달 학습 실패(SKIPPED 기록)가 이만큼 쌓이면 더 하지 않는다(한 번에 약 20분·메모리 대부분). 그 뒤는 run_growth 수동.
+    기록 없이 직접 만든 같은 달 파일은 run_growth가 덮어쓰지 않는다.
+    반환: run_growth 결과, 다시 할 것이 없으면 None.
+    """
+    limit = GROWTH_RETRY_LIMIT if limit is None else int(limit)
+    out_dir = Path(out_dir).resolve()
+    ready = [(key, record) for path in out_dir.glob(f"{MONTHLY_PREFIX['two_stage']}_*.registry.json")
+             if (key := version_key(path)) is not None and (record := read_json(path)).get("status") == "READY"]
+    if not ready:
+        return None
+    month = pd.Timestamp(max(ready, key=lambda item: item[0])[1]["data_info"]["trade_month"])
+    if f"{month:%Y%m}" in set(skip):
+        return None
+    # 리비전 순(_r10이 _r2보다 뒤). 아래 ready[-1:]가 최신 READY다
+    growth = [read_json(p) for p in sorted(out_dir.glob(f"{GROWTH_PREFIX}_{month:%Y%m}*.registry.json"),
+                                           key=lambda p: version_key(p) or ("", 0))
+              if version_key(p) is not None and version_key(p)[0] == f"{month:%Y%m}"]
+    ready = [record for record in growth if record.get("status") == "READY"]
+    if ready:
+        # 파일·기록 JSON은 READY인데 DB 기록이 실패했으면 학습 없이 기록만 다시 보낸다(run_growth의 같은 입력 재사용 경로)
+        if all(record["version_id"] in registered_versions([record["version_id"]], "model_b", engine) for record in ready[-1:]):
+            return None
+        log.info("모델 B %s: DB 기록이 없어 다시 보냅니다(%s).", f"{month:%Y-%m}", ready[-1]["version_id"])
+        return run_growth(month, engine, out_dir=out_dir, cache_dir=cache_dir, n_jobs=n_jobs)
+    failures = sum(record.get("status") == "SKIPPED" for record in growth)
+    if failures >= limit:
+        log.warning("모델 B %s 자동 재학습 중단: 실패 %d회(상한 %d). run_growth로 수동 실행하세요.",
+                    f"{month:%Y-%m}", failures, limit)
+        return None
+    log.info("모델 B %s 다시 학습(READY 기록 없음, 실패 %d회)", f"{month:%Y-%m}", failures)
+    return run_growth(month, engine, out_dir=out_dir, cache_dir=cache_dir, n_jobs=n_jobs)
+
+
+def run_growth(trade_month, engine=None, *, out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=4):
+    """증감 예상 모델(모델 B) 월별 학습. 모델 A(run)와 같은 절차다: 같은 달 피처 표 → 같은 입력이면 재학습 없이 기록만
+    다시 보냄 → 정정되면 _r2 … → <model_b_growth>_<YYYYMM>.joblib(최신 기준월 예측 latest 포함) → 레지스트리 JSON → DB.
+
+    피처 표는 여기서 다시 만든다(모델 A 학습 동안 표를 하나 더 들고 있지 않게, 사용자 결정).
+    실패해도 예외를 올리지 않는다(모델 A 결과를 지킨다). 학습 자체가 실패하면 그 달에 SKIPPED 기록(사유 포함)을 남기고
+    다음 실행은 새 리비전으로 다시 학습한다. 피처 표·DB 같은 자료 단계 실패는 일시 장애일 수 있어 기록을 남기지 않고
+    FAILED만 돌려준다. 어느 쪽이든 스케줄러 복구 작업이 retry_pending으로 다음 실행 때 다시 시도한다.
+    """
+    month = pd.Timestamp(trade_month)
+    base = f"{GROWTH_PREFIX}_{month:%Y%m}"
+    out_dir = Path(out_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
+    try:
+        with FileLock(str(out_dir / f".{base}.lock")):
+            config = _growth_config()
+            name, artifact, record_path, record = _find_revision(
+                out_dir, base, config, month, engine, usable=lambda r: r.get("status") == "READY")
+            manual = out_dir / f"{base}.joblib"
+            if record is None and manual.is_file() and not (out_dir / f"{base}.registry.json").exists():
+                # 기록 없이 직접 만든 같은 달 파일(growth_model.build·save)이 있다. 에이전트가 이 파일을 쓰므로 다시
+                # 학습하지 않는다(약 20분·메모리 대부분). 월별 학습으로 바꾸려면 이 파일을 치운다.
+                log.info("모델 B %s: 기록 없이 직접 만든 파일이 있어 학습하지 않습니다(%s).", f"{month:%Y-%m}", manual.name)
+                return {"status": "SKIPPED", "model_name": name, "reason": "기록 없이 직접 만든 파일이 있어 덮어쓰지 않았습니다.",
+                        "seconds": round(time.perf_counter() - started, 1)}
+            if record is None:
+                parent = _parent(out_dir, GROWTH_PREFIX, "model_b", name, engine)
+                frame = _month_frame(month, cache_dir, engine)  # 실패하면 아래 FAILED(기록 없음)
+                created = datetime.now(KST)
+                try:
+                    from backend.app.ml import growth_model  # growth_model이 이 모듈을 가져다 써 위에서 읽으면 순환 import
+                    bundle, evaluation, source = growth_model.monthly(frame, n_jobs)
+                except Exception as exc:  # 모델 A는 이미 저장됐다. 사유를 남기고 다음 실행에 다시 학습한다
+                    record = {"version_id": name, "model_key": "model_b", "model_name": name,
+                              "created_at": created.isoformat(timespec="microseconds"), "status": "SKIPPED",
+                              "artifact_path": None, "artifact_sha256": None, "parent_version_id": parent,
+                              "training_mode": "FULL_RETRAIN", "train_start": None, "train_end": None, "train_rows": 0,
+                              "data_info": {"model_family": "growth_huber_full", "trade_month": str(month.date()),
+                                            "artifact_root": out_dir.as_posix(), "model_config": config,
+                                            "error_type": type(exc).__name__},
+                              "evaluation": {}, "skip_reason": f"학습 실패: {type(exc).__name__}"[:200]}
+                    write_json(record_path, record)
+                    register_records([record], engine)
+                    return {"status": "SKIPPED", "model_name": name, "reason": record["skip_reason"],
+                            "seconds": round(time.perf_counter() - started, 1)}
+                runtime = _runtime("lightgbm")
+                bundle.update(version=name, trade_month=str(month.date()), runtime=runtime,
+                              trained_at=created.isoformat(timespec="seconds"))
+                temporary = artifact.with_suffix(".joblib.tmp")
+                joblib.dump(bundle, temporary)
+                temporary.replace(artifact)
+                record = {"version_id": name, "model_key": "model_b", "model_name": name,
+                          "created_at": created.isoformat(timespec="microseconds"), "status": "READY",
+                          "artifact_path": artifact.name, "artifact_sha256": sha256(artifact),
+                          "parent_version_id": parent, "training_mode": "FULL_RETRAIN",
+                          "train_start": bundle["train_start"], "train_end": bundle["train_end"],
+                          "train_rows": bundle["train_rows"],
+                          "data_info": _finite({"model_family": "growth_huber_full", "trade_month": str(month.date()),
+                                                "anchor": bundle["anchor"], "artifact_root": out_dir.as_posix(),
+                                                "input_snapshot": source, "model_config": config, "runtime": runtime,
+                                                "features_used": bundle["features"],
+                                                "external_dropped": bundle.get("external_dropped"),
+                                                "fit_seconds": bundle["fit_seconds"],
+                                                "holdout_seconds": bundle.get("holdout_seconds")}),
+                          "evaluation": evaluation, "skip_reason": None}
+                write_json(record_path, record)
+            elif not artifact.is_file() or sha256(artifact) != record["artifact_sha256"]:
+                raise ValueError(f"{artifact}: 저장된 기록과 모델 파일이 다릅니다")
+            register_records([record], engine)
+    except Exception as exc:
+        log.warning("증감 예상 모델 월별 단계 실패(%s). 모델 A 결과는 유지합니다.", type(exc).__name__)
+        return {"status": "FAILED", "model_name": base, "reason": type(exc).__name__,
+                "seconds": round(time.perf_counter() - started, 1)}
     return {"status": "SUCCESS", "model_name": name, "artifact": artifact.as_posix(), "train_rows": record["train_rows"],
-            "country_ndcg_at_5": record["evaluation"]["model"].get("country_ndcg_at_5"),
-            "baseline_country_ndcg_at_5": record["evaluation"]["baseline_growth_12m"].get("country_ndcg_at_5")}
+            "direction_accuracy": record["evaluation"].get("direction_accuracy"),
+            "baseline_all_down": record["evaluation"].get("baseline_all_down"),
+            "seconds": round(time.perf_counter() - started, 1)}
 
 
 def main():
