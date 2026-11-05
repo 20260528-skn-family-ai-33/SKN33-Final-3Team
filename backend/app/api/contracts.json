@@ -2571,7 +2571,7 @@
         "apply_scope",
         "string",
         "필수",
-        "NEW_ONLY / EXISTING_NOW. NEW_ONLY는 새 기사부터 적용. 과거 기사 표시 보존 구조 DEC-49 준비 전503. EXISTING_NOW는 명시 대상 재처리이며 과거 저장 답변/리포트는 불변."
+        "CURRENT_LOOKUPS: 사전 기반 현재 기사 조회에 적용. 저장 답변·리포트는 불변. NEW_ONLY/EXISTING_NOW는 스냅샷·재처리 실행기 연결 전 지원하지 않음."
       ],
       [
         "Request Body",

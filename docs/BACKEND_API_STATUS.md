@@ -100,15 +100,15 @@
 | 094 | `PATCH  /api/v1/admin/articles/{article_id}/links` | 보류: 태그 변경 이후 집계·벡터 인덱스 반영 실행기 연결 |
 | 095 | `PATCH  /api/v1/admin/articles/{article_id}/visibility` | 처리 코드 구현 |
 | 096 | `GET  /api/v1/admin/article-sources` | 처리 코드 구현 |
-| 097 | `GET  /api/v1/admin/keyword-topics` | 보류: DEC-32 키워드 수동 검수 상태·출처 저장 계약 |
-| 098 | `GET  /api/v1/admin/keyword-topics/detail` | 보류: DEC-32 키워드 검수 근거 저장 계약 |
-| 099 | `PATCH  /api/v1/admin/keyword-topics/review` | 보류: DEC-49 과거 기사 분류 보존 및 검수 실행기 연결 |
+| 097 | `GET  /api/v1/admin/keyword-topics` | 실제 사전·기사 건수·검수 상태 조회, 검색·페이지·정렬 |
+| 098 | `GET  /api/v1/admin/keyword-topics/detail` | 실제 기사 근거 및 내용 해시 버전 조회 |
+| 099 | `PATCH  /api/v1/admin/keyword-topics/review` | 지정·보류·해제와 감사 이력 저장. CURRENT_LOOKUPS만 지원; 재처리·과거 표시 보존은 미연결 |
 | 100 | `GET  /api/v1/admin/keyword-topics/export` | 처리 코드 구현 |
-| 101 | `GET  /api/v1/admin/keyword-categories` | 보류: DEC-32 기본/관리자 분야 출처 저장 계약 |
-| 102 | `POST  /api/v1/admin/keyword-categories` | 보류: DEC-32 관리자 분야 출처 저장 계약 |
-| 103 | `GET  /api/v1/admin/keyword-categories/{category_id}` | 보류: DEC-32 관리자 분야 출처 저장 계약 |
-| 104 | `PATCH  /api/v1/admin/keyword-categories/{category_id}` | 보류: DEC-32 관리자 분야 출처 저장 계약 |
-| 105 | `DELETE  /api/v1/admin/keyword-categories/{category_id}` | 보류: DEC-49 분야 삭제·이관 정책 |
+| 101 | `GET  /api/v1/admin/keyword-categories` | 실제 분야 사전, 기본 대분류 8개 및 대표어 조회 |
+| 102 | `POST  /api/v1/admin/keyword-categories` | 관리자 분야 생성 및 출처 감사 기록 |
+| 103 | `GET  /api/v1/admin/keyword-categories/{category_id}` | 실제 분야 상세·버전·편집 가능 여부 |
+| 104 | `PATCH  /api/v1/admin/keyword-categories/{category_id}` | 관리자 생성 분야 이름 변경, 기본 분야 보호 |
+| 105 | `DELETE  /api/v1/admin/keyword-categories/{category_id}` | 사용하지 않는 관리자 생성 분야만 삭제; 이관은 미지원 |
 | 106 | `번호 예약·재사용 금지` | 삭제/예약: 등록하지 않음 |
 | 107 | `번호 예약·재사용 금지` | 삭제/예약: 등록하지 않음 |
 | 108 | `번호 예약·재사용 금지` | 삭제/예약: 등록하지 않음 |

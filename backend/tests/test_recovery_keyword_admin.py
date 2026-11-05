@@ -1,14 +1,16 @@
-"""외부 DB·Redis·메일 없이 계정 복구 흐름을 검증한다."""
+"""외부 DB·Redis·메일 없이 계정 복구와 관리자 저장 흐름을 검증한다."""
 import unittest
 import smtplib
 from unittest.mock import patch
+from datetime import date
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, update, String
 from backend.tests.api_support import test_engine, reference_data, create_test_app
 from backend.app.api.config import Settings
 from backend.app.api.common import ApiError
 from backend.app.api.security import password_matches
 from backend.app.api.recovery import send_temporary_password
+from backend.app.services.news_keywords.category_rules import TAX
 
 
 class RecoveryKeywordAdminTest(unittest.TestCase):
@@ -103,6 +105,95 @@ class RecoveryKeywordAdminTest(unittest.TestCase):
                 send_temporary_password(settings, 'alice@example.org', 'SecretNotInError')
             self.assertEqual(failed.exception.code, 'MAIL_DELIVERY_FAILED')
             self.assertNotIn('SecretNotInError', failed.exception.message)
+
+    def seed_admin(self):
+        with self.engine.begin() as c:
+            c.execute(update(self.meta.tables['users']).where(self.meta.tables['users'].c.user_id == self.uid).values(role='ADMIN'))
+            c.execute(self.meta.tables['keyword_category'].insert(), [{'category_id': i, 'major_name': major, 'minor_name': minor} for i, (major, minor, _) in enumerate(TAX, 1)])
+            c.execute(self.meta.tables['keyword_topic'].insert(), {'keyword_text': '검수키워드', 'status': 'PENDING'})
+            c.execute(self.meta.tables['article'].insert(), {'article_id': 1, 'source_code': 'KOTRA_MARKET', 'external_id': 'test', 'title': '실제 근거 기사', 'published_date': date(2026, 11, 1), 'source_url': 'https://example.org/1', 'body_masked': '본문', 'visibility_status': 'VISIBLE', 'admin_meta_json': {}})
+            c.execute(self.meta.tables['article_tag'].insert(), {'article_id': 1, 'keyword_text': '검수키워드'})
+
+    def review(self, action, category=None, version=None, **extra):
+        if version is None: version = self.client.get('/api/v1/admin/keyword-topics/detail', params={'keyword_text': '검수키워드'}).json()['keyword']['version']
+        return self.call('PATCH', 'admin/keyword-topics/review', {'keyword_text': '검수키워드', 'action': action, 'category_id': category, 'expected_version': version, 'confirmed': True, 'reason': '기사 근거 확인', 'apply_scope': 'CURRENT_LOOKUPS', **extra})
+
+    def test_keyword_review_persists_filters_history_and_version_conflicts(self):
+        self.assertEqual(self.client.get('/api/v1/admin/keyword-topics').status_code, 403)
+        self.seed_admin()
+        categories = self.client.get('/api/v1/admin/keyword-categories').json()
+        self.assertEqual(len(categories['base_majors']), 8)
+        self.assertEqual(len(categories['items']), 23)
+        detail = self.client.get('/api/v1/admin/keyword-topics/detail', params={'keyword_text': '검수키워드'}).json()
+        self.assertEqual(detail['articles'][0]['title'], '실제 근거 기사')
+        version = detail['keyword']['version']
+        self.assertEqual(self.review('HOLD').status_code, 200)
+        self.assertEqual(self.client.get('/api/v1/admin/keyword-topics?review_status=HELD').json()['items'][0]['keyword_text'], '검수키워드')
+        self.assertEqual(self.review('ASSIGN', 1, version).status_code, 409)
+        self.assertEqual(self.review('ASSIGN', 1).status_code, 200)
+        classified = self.client.get('/api/v1/admin/keyword-topics?review_status=REVIEWED').json()['items']
+        self.assertEqual(classified[0]['category_id'], 1)
+        self.assertEqual(classified[0]['article_count'], 1)
+        self.assertEqual(self.review('ASSIGN', 2).status_code, 200)
+        article = self.client.get('/api/v1/admin/articles/1').json()
+        self.assertEqual(article['moderation']['categories'][0]['category_id'], 2)
+        history = self.client.get('/api/v1/admin/audit-events?target_type=KEYWORD').json()['items']
+        self.assertEqual(len(history), 3)
+        self.assertEqual(history[0]['after']['category_id'], 2)
+        self.assertEqual(self.review('RELEASE').status_code, 200)
+        self.assertEqual(self.client.get('/api/v1/admin/keyword-topics?review_status=UNREVIEWED').json()['page']['total'], 1)
+        self.assertEqual(self.review('ASSIGN', 1, apply_scope='NEW_ONLY').status_code, 422)
+        self.assertEqual(self.review('ASSIGN', 9999).status_code, 404)
+
+    def test_category_crud_guards_and_member_minimal_detail(self):
+        self.seed_admin()
+        body = {'major_name': '운영 분류', 'minor_name': '신규 분야', 'reason': '운영 검수', 'confirmed': True}
+        r = self.call('POST', 'admin/keyword-categories', body)
+        self.assertEqual(r.status_code, 200, r.text)
+        cid = r.json()['category_id']
+        path = f'admin/keyword-categories/{cid}'
+        category = self.client.get('/api/v1/'+path).json()['category']
+        self.assertTrue(category['editable'])
+        self.assertEqual(self.review('ASSIGN', cid).status_code, 200)
+        deletion = {'reason': '삭제', 'confirmed': True, 'expected_version': category['version']}
+        self.assertEqual(self.call('DELETE', path, deletion).status_code, 409)
+        self.assertEqual(self.review('RELEASE').status_code, 200)
+        rename = self.call('PATCH', path, {**body, 'minor_name': '수정 분야', 'expected_version': category['version']})
+        self.assertEqual(rename.status_code, 200, rename.text)
+        self.assertEqual(self.call('DELETE', path, deletion).status_code, 409)
+        deletion['expected_version'] = self.client.get('/api/v1/'+path).json()['category']['version']
+        self.assertEqual(self.call('DELETE', path, deletion).status_code, 200)
+        history = self.client.get('/api/v1/admin/audit-events?target_type=CATEGORY').json()['items']
+        deleted = next(event for event in history if event['action'] == 'CATEGORY_DELETE')
+        self.assertEqual(deleted['before'], {'major_name': '운영 분류', 'minor_name': '수정 분야'})
+        self.assertEqual(deleted['after'], {})
+        self.assertEqual(self.call('PATCH', 'admin/keyword-categories/1', {**body, 'expected_version': 'x'}).status_code, 409)
+        member = self.client.get(f'/api/v1/admin/users/{self.uid}').json()
+        self.assertTrue({'interests', 'settings', 'subscriptions'} <= member.keys())
+        self.assertNotIn('password_hash', member['member'])
+        self.assertNotIn('auth_version', member['member'])
+
+    def test_keyword_history_keeps_case_sensitive_dictionary_keys(self):
+        self.seed_admin()
+        # 운영 DB의 기본 감사 테이블 정렬 규칙이 대소문자를 구분하지 않는 경우를 재현한다.
+        # keyword_topic 키는 대소문자를 구분하므로 서로 다른 이력이 합쳐지면 안 된다.
+        with self.engine.begin() as c:
+            audit = self.meta.tables['api_audit_event']
+            audit.drop(c)
+            audit.c.target_id.type = String(120, collation='NOCASE')
+            audit.create(c)
+            c.execute(self.meta.tables['keyword_topic'].insert(), [
+                {'keyword_text': 'AI', 'status': 'PENDING'},
+                {'keyword_text': 'ai', 'status': 'PENDING'},
+            ])
+        detail_path = '/api/v1/admin/keyword-topics/detail'
+        version = self.client.get(detail_path, params={'keyword_text': 'AI'}).json()['keyword']['version']
+        result = self.review('HOLD', version=version, keyword_text='AI')
+        self.assertEqual(result.status_code, 200, result.text)
+        lower = self.client.get(detail_path, params={'keyword_text': 'ai'}).json()['keyword']
+        self.assertEqual(lower['review_status'], 'UNREVIEWED')
+        held = self.client.get('/api/v1/admin/keyword-topics?review_status=HELD').json()['items']
+        self.assertEqual([row['keyword_text'] for row in held], ['AI'])
 
 
 if __name__ == '__main__': unittest.main()

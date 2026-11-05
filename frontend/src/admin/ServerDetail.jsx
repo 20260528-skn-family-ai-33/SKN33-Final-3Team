@@ -5,6 +5,7 @@ import { Btn, Modal, TextField } from '../components/ui'
 import { useApp } from '../store'
 import { AUDIT_ACTION, AUDIT_TARGET } from './useServerScreen'
 import { kstDateTime } from '../api/adapters'
+import { countryName, productName } from '../data/catalog'
 export default function ServerDetail({ type, id, onChanged }) {
   const { session, run, notify } = useApp()
   const path = type === 'user' ? `/admin/users/${id}` : `/admin/articles/${id}`
@@ -23,7 +24,8 @@ export default function ServerDetail({ type, id, onChanged }) {
   return <section className="card"><QueryState state={result}>{data => {
     const record = type === 'user' ? data.member : data.article
     return <><h2 className="t2">{type === 'user' ? '회원 상세' : '기사 내용·출처'}</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: 12, marginTop: 20 }}>{Object.entries(type === 'user' ? { 이메일: record.email, 이름: record.name, 권한: record.role, 상태: record.account_status, '최근 로그인': record.last_login_at } : { 제목: record.title, 출처: record.source_code, 발행일: record.published_date, 노출: data.moderation.visibility }).map(([label, value]) => <div key={label} style={{ display: 'contents' }}><span className="muted">{label}</span><b><Value value={value} /></b></div>)}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: 12, marginTop: 20 }}>{Object.entries(type === 'user' ? { 이메일: record.email, 이름: record.name, 권한: record.role, 상태: record.account_status, '최근 로그인(KST)': kstDateTime(record.last_login_at) } : { 제목: record.title, 출처: record.source_code, 발행일: record.published_date, 노출: data.moderation.visibility }).map(([label, value]) => <div key={label} style={{ display: 'contents' }}><span className="muted">{label}</span><b><Value value={value} /></b></div>)}</div>
+      {type === 'user' && <MemberSettings data={data} />}
       {data.body_masked && <p style={{ whiteSpace: 'pre-wrap', marginTop: 20 }}>{data.body_masked}</p>}
       <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
         {type === 'user' && record.user_id !== session.user_id && record.account_status !== 'WITHDRAWN' && <Btn kind="danger" onClick={() => setAction({ field: 'status', key: 'status', value: record.account_status === 'ACTIVE' ? 'RESTRICTED' : 'ACTIVE', label: record.account_status === 'ACTIVE' ? '회원 이용 제한' : '회원 이용 제한 해제' })}>이용 상태 변경</Btn>}
@@ -37,7 +39,21 @@ export default function ServerDetail({ type, id, onChanged }) {
   </section>
 }
 
-const FIELD_LABEL = { role: '권한', account_status: '이용 상태', visibility: '노출 상태' }
+function MemberSettings({ data }) {
+  const interests = data.interests || {}, settings = data.settings || {}
+  const labels = { notifications_enabled: '알림 수신', report_popup: '리포트 팝업', major_issue_popup: '주요 이슈 팝업', spike_popup: '급증 팝업', consent_current: '현재 알림 약관 동의' }
+  return <div style={{ marginTop: 24 }}>
+    <h3 className="t3">관심정보</h3>
+    <p>국가: {interests.country_codes?.map(countryName).join(', ') || '등록 없음'}</p>
+    <p>품목: {interests.hs_items?.map(h => `${productName(h.hs_code)} (HS ${h.hs_code})`).join(', ') || '등록 없음'}</p>
+    <h3 className="t3" style={{ marginTop: 20 }}>리포트 구독</h3>
+    {data.subscriptions?.length ? data.subscriptions.map(s => <p key={s.subscription_id}>{({ WEEKLY: '주간', MONTHLY: '월간', QUARTERLY: '분기' })[s.period_code] || s.period_code} · {s.enabled ? '구독 중' : '구독 해제'} · {s.formats.join(', ')}</p>) : <p className="muted">구독 없음</p>}
+    <h3 className="t3" style={{ marginTop: 20 }}>알림 설정</h3>
+    {Object.entries(labels).map(([key, label]) => <p key={key}>{label}: {settings[key] == null ? '확인 불가' : settings[key] ? '예' : '아니오'}</p>)}
+  </div>
+}
+
+const FIELD_LABEL = { role: '권한', account_status: '이용 상태', visibility: '노출 상태', keyword_text: '키워드', category_id: '분야 ID', review_status: '검수 상태', status: '분류 상태', major_name: '대분류', minor_name: '중분류', apply_scope: '반영 범위' }
 const VALUE_LABEL = { USER: '일반 회원', ADMIN: '관리자', ACTIVE: '정상', RESTRICTED: '이용 제한', WITHDRAWN: '탈퇴', VISIBLE: '노출', EXCLUDED: '노출 제외' }
 const shown = v => v == null ? '—' : VALUE_LABEL[v] || String(v)
 
@@ -47,7 +63,8 @@ export function AuditDetail({ id, actorEmail, onClose }) {
   return <Modal onClose={onClose} label="처리 이력 상세" width={640}>
     <QueryState state={result}>{({ audit: a }) => {
       const before = a.before || {}, after = a.after || {}
-      const changed = Object.keys(after).filter(k => JSON.stringify(before[k]) !== JSON.stringify(after[k]))
+      const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+        .filter(k => JSON.stringify(before[k]) !== JSON.stringify(after[k]))
       return <>
         <h2 className="t2">처리 이력 상세</h2>
         <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: 10, marginTop: 18 }}>
@@ -62,6 +79,7 @@ export function AuditDetail({ id, actorEmail, onClose }) {
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
           {a.target_type === 'ARTICLE' && <Btn kind="red" to={`/admin/data/BS80?article_id=${a.target_id}`}>이 기사 관리로 가기</Btn>}
           {a.target_type === 'USER' && <Btn kind="red" to={`/admin/members/BS48?user_id=${a.target_id}`}>이 회원 상세로 가기</Btn>}
+          {a.target_type === 'KEYWORD' && <Btn kind="red" to={`/admin/keywords?status=all&kw=${encodeURIComponent(a.target_id)}`}>이 키워드로 가기</Btn>}
           <Btn onClick={onClose}>닫기</Btn>
         </div>
       </>

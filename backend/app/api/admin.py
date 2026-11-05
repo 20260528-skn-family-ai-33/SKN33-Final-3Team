@@ -1,4 +1,5 @@
 import secrets
+import time
 from sqlalchemy import select, update, func, or_
 from backend.app.api.common import require, now, digest, clean, page_info, unavailable
 from backend.app.api.security import administrator, revoke_sessions
@@ -43,7 +44,8 @@ def detail(store,identity):
 
 def audit(store,actor,action,target_type,target,before,after,reason):
     require(reason and reason.strip(),'변경 사유가 필요합니다.')
-    identity='audit_'+secrets.token_hex(16)
+    # 운영 DATETIME은 초 정밀도다. 같은 초의 키워드 검수도 저장 순서대로 읽도록 ID 앞에 시각을 둔다.
+    identity='audit_'+(f'{time.time_ns():016x}'+secrets.token_hex(8) if target_type in ('KEYWORD','CATEGORY') else secrets.token_hex(16))
     store.insert('api_audit_event',audit_id=identity,actor_id=actor,action=action,target_type=target_type,target_id=str(target),
         reason=reason.strip(),before_json=clean(before),after_json=clean(after),created_at=now())
     return {'operation':{'operation_id':identity,'status':'SUCCEEDED','audit_id':identity}}
@@ -122,7 +124,9 @@ def audit_view(row):
 
 
 # 화면에 보이는 작업 이름(frontend/src/admin/useServerScreen.js AUDIT_ACTION과 같은 값). 한글 이름으로도 검색되게 쓴다.
-AUDIT_ACTION_LABELS={'USER_ROLE':'회원 권한 변경','USER_STATUS':'회원 이용 상태 변경','ARTICLE_VISIBILITY':'기사 노출 변경'}
+AUDIT_ACTION_LABELS={'USER_ROLE':'회원 권한 변경','USER_STATUS':'회원 이용 상태 변경','ARTICLE_VISIBILITY':'기사 노출 변경',
+    'KEYWORD_ASSIGN':'키워드 분야 지정','KEYWORD_HOLD':'키워드 보류','KEYWORD_RELEASE':'키워드 지정 해제',
+    'CATEGORY_CREATE':'분야 생성','CATEGORY_RENAME':'분야 이름 변경','CATEGORY_DELETE':'분야 삭제'}
 
 
 def audit_list(store,page=1,size=20,target_type=None,q=None,sort='latest'):
