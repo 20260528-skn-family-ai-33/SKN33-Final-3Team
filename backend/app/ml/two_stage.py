@@ -107,8 +107,9 @@ def _top_k(rows, score, k):
             .rank(ascending=False, method="first") <= k).to_numpy()
 
 
-def _regressor(x, y, columns, seed, n_jobs):
-    model, cat = build_model(ModelSpec("lightgbm", "lightgbm"), columns, seed, n_jobs)
+def _regressor(x, y, columns, seed, n_jobs, params=None):
+    """1단계 회귀. params는 LightGBM 설정 덮어쓰기(기본 없음 = 모델 A). growth_model(모델 B)도 이 함수로 학습한다."""
+    model, cat = build_model(ModelSpec("lightgbm", "lightgbm", dict(params or {})), columns, seed, n_jobs)
     clip = y.quantile(ExperimentConfig().target_clip).tolist()
     with threadpool_limits(limits=n_jobs):
         model.fit(x[columns], y.clip(*clip), model__categorical_feature=cat)
