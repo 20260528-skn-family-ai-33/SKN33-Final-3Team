@@ -431,11 +431,18 @@ def normalize_rows(rows, columns):
         item = {}
         for column in columns:
             value = row[column.key]
-            if isinstance(value, Decimal): value = int(value) if value==value.to_integral_value() else float(value)
+            if isinstance(value, Decimal):
+                if not value.is_finite():
+                    raise ValueError('숫자 열에 유효한 숫자가 없습니다.')
+                value = int(value) if value==value.to_integral_value() else float(value)
             if isinstance(value, (date, datetime)): value = value.isoformat()
             if value is not None:
                 if column.type == 'number':
-                    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    try:
+                        valid = not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+                    except OverflowError:
+                        valid = False
+                    if not valid:
                         raise ValueError('숫자 열에 유효한 숫자가 없습니다.')
                 elif not isinstance(value, str):
                     raise ValueError('문자 열에 문자열이 없습니다.')
@@ -452,7 +459,8 @@ def execute_readonly(engine, draft, timeout_seconds=30, conditions=None):
     # Do not leak transaction/session settings into the application's connection pool.
     with engine.connect() as connection:
         try:
-            connection.exec_driver_sql('SET SESSION MAX_EXECUTION_TIME = ' + str(int(timeout_seconds * 1000)))
+            # MySQL treats zero as unlimited, including positive sub-millisecond settings rounded to zero.
+            connection.exec_driver_sql('SET SESSION MAX_EXECUTION_TIME = ' + str(max(1, int(timeout_seconds * 1000))))
             connection.exec_driver_sql('START TRANSACTION READ ONLY')
             # 바인딩 값이 없는 SQL이다. 빈 파라미터를 넘기면 pymysql이 DATE_FORMAT('%Y-%m')·LIKE '%화장품%'의
             # %를 포맷 문자로 읽어 실패한다. no_parameters는 cursor.execute(sql)만 불러 %를 그대로 보낸다.
