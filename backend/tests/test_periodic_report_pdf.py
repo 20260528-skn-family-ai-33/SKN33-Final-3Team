@@ -204,15 +204,84 @@ class PeriodicContextTest(unittest.TestCase):
             for key, metric, count in [('a', '2025-12-20', 24), ('b', '2025-12-18', 6)]:  # 18일을 나중에 재처리
                 c.execute(table.insert(), {'event_type': 'MAJOR_ISSUE', 'event_key': key * 64, 'created_at': datetime(2025, 12, 22), 'payload_json': {
                     'reason': 'WEEKLY_NEWS_SPIKE', 'label': '관세', 'metric_date': metric, 'recent_week_count': count, 'baseline_weekly': 2.0, 'ratio': 12.0, 'target': {'keyword_text': '관세'}}})
+            for day, count in ((date(2025, 12, 18), 6), (date(2025, 12, 20), 18)):
+                c.execute(self.meta.tables['news_keyword_daily'].insert(), {'metric_date': day, 'keyword_text': '관세', 'country_code': None, 'day_count': count})
         ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
         self.assertIn('24건', ctx['summary']['issues'][0]['basis'])
+
+    def stored_spike(self, key, metric, count, keyword='관세', **extra):
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['alert_event'].insert(), {'event_type': 'MAJOR_ISSUE', 'event_key': key * 64, 'created_at': datetime(2025, 12, 22), 'payload_json': {
+                'reason': 'WEEKLY_NEWS_SPIKE', 'label': keyword, 'metric_date': metric, 'recent_week_count': count, 'baseline_weekly': 0.0, 'ratio': float(count), 'target': {'keyword_text': keyword}, **extra}})
+
+    def keyword_day(self, day, count, keyword='관세'):
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['news_keyword_daily'].insert(), {'metric_date': day, 'keyword_text': keyword, 'country_code': None, 'day_count': count})
+
+    def test_stored_spike_is_dropped_when_public_count_falls_below_threshold(self):
+        uid = int(self.signup())
+        self.seed_news()
+        self.market_article(401, visible='HIDDEN', tags=[{'keyword_text': '관세'}])
+        for identity in (402, 403):
+            self.market_article(identity, tags=[{'keyword_text': '관세'}])
+        self.keyword_day(date(2025, 12, 21), 3)
+        self.stored_spike('a', '2025-12-21', 3)
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertEqual(ctx['summary']['issues'], [])
+
+    def test_stored_spike_shows_recalculated_public_count(self):
+        uid = int(self.signup())
+        self.seed_news()
+        self.market_article(401, visible='HIDDEN', tags=[{'keyword_text': '관세'}])
+        self.market_article(402, tags=[{'keyword_text': '관세'}])
+        self.keyword_day(date(2025, 12, 21), 5)
+        self.stored_spike('a', '2025-12-21', 5)
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertIn('7일 4건', ctx['summary']['issues'][0]['basis'])
 
     def test_weekly_says_spike_was_not_judged_without_collection(self):
         uid = int(self.signup())
         self.seed_news()
         ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
         self.assertIsNone(ctx['summary']['issue_spike_ratio'])
-        self.assertIn('급증 이슈는 판단하지 않았고', weekly_highlights(ctx))
+        self.assertIn('시장뉴스 수집이 완료되지 않아 급증 이슈는 판단하지 않았습니다.', weekly_highlights(ctx))
+
+    def test_weekly_says_only_keyword_spike_was_not_judged_when_short_news_is_missing(self):
+        uid = int(self.signup())
+        self.seed_news()
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['service_option'].insert(), {'option_code': 'KOTRA_MARKET', 'option_type': 'SOURCE', 'label_ko': 'KOTRA', 'enabled': True, 'sort_order': 5, 'value_json': {}})
+            c.execute(self.meta.tables['batch_run'].insert(), {'source_code': 'KOTRA_MARKET', 'job_name': 'NEWS', 'target_table': 'article', 'period_start': date(2025, 10, 1), 'period_end': date(2025, 12, 31), 'status': 'SUCCESS', 'detail_json': {}})
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        summary = ctx['summary']
+        self.assertEqual(summary['issue_spike_ratio'], 3)
+        self.assertEqual(summary['spike_gap_note'], '단신 수집이 완료되지 않아 키워드 급증은 판단하지 않았습니다.')
+        self.assertIn('단신 수집이 완료되지 않아', summary['issues_note'])
+        self.assertNotIn('이번 주 기준에 해당하는', summary['issues_note'])
+        self.assertIn('단신 수집이 완료되지 않아', render('RPT_WEEKLY', ctx))
+
+    def test_interest_ignores_articles_outside_judgment_window(self):
+        uid = int(self.signup())
+        self.seed_news()
+        # 15일 판정에 들어간 기사는 중국뿐이고, 같은 키워드의 미국 기사는 18일에 나왔다
+        for identity in (501, 502, 503):
+            self.market_article(identity, date(2025, 12, 15), tags=[{'keyword_text': '관세'}, {'country_code': 'CN'}])
+        self.market_article(504, date(2025, 12, 18), tags=[{'keyword_text': '관세'}, {'country_code': 'US'}, {'hs_code': '330499', 'hs_ver': 'HS2022'}])
+        self.keyword_day(date(2025, 12, 15), 3)
+        self.stored_spike('a', '2025-12-15', 3, window_start='2025-12-09', window_end='2025-12-15', article_ids=[501, 502, 503])
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertEqual(ctx['summary']['issues'][0]['related'], '—')
+
+    def test_interest_counts_contributing_article_before_report_week(self):
+        uid = int(self.signup())
+        self.seed_news()
+        self.market_article(505, date(2025, 12, 10), tags=[{'keyword_text': '관세'}, {'country_code': 'US'}, {'hs_code': '330499', 'hs_ver': 'HS2022'}])
+        for identity in (506, 507):
+            self.market_article(identity, date(2025, 12, 15), tags=[{'keyword_text': '관세'}, {'country_code': 'CN'}])
+        self.keyword_day(date(2025, 12, 10), 1); self.keyword_day(date(2025, 12, 15), 2)
+        self.stored_spike('a', '2025-12-15', 3, window_start='2025-12-09', window_end='2025-12-15', article_ids=[506, 507, 505])
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertEqual(ctx['summary']['issues'][0]['related'], '관심 범위')
 
     def test_weekly_includes_sunday_regulation_before_judgment_and_keeps_same_titles(self):
         uid = int(self.signup())
@@ -231,7 +300,7 @@ class PeriodicContextTest(unittest.TestCase):
         ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
         text = weekly_highlights(ctx)
         self.assertIn('직전 8주와 비교하지 않았습니다', text)
-        self.assertIn('주요 이슈: 수집 완료 기록이 없어 급증 이슈는 판단하지 않았고', text)
+        self.assertIn('주요 이슈: 시장뉴스 수집이 완료되지 않아 급증 이슈는 판단하지 않았습니다. 확인한 범위에는 주요 이슈가 없습니다.', text)
 
     def test_weekly_lists_major_issues_of_that_week_once_and_marks_interest(self):
         uid = int(self.signup())
@@ -242,6 +311,7 @@ class PeriodicContextTest(unittest.TestCase):
             for key, metric, label, count in [('a', '2025-12-20', '관세', 20), ('b', '2025-12-21', '관세', 24), ('c', '2025-12-30', '다음주', 9)]:
                 c.execute(table.insert(), {'event_type': 'MAJOR_ISSUE', 'event_key': key * 64, 'created_at': datetime(2025, 12, 22), 'payload_json': {
                     'reason': 'WEEKLY_NEWS_SPIKE', 'label': label, 'metric_date': metric, 'recent_week_count': count, 'baseline_weekly': 8.0, 'ratio': 3.0, 'target': {'keyword_text': label}}})
+            c.execute(self.meta.tables['news_keyword_daily'].insert(), {'metric_date': date(2025, 12, 21), 'keyword_text': '관세', 'country_code': None, 'day_count': 24})
             c.execute(table.insert(), {'event_type': 'MAJOR_ISSUE', 'event_key': 'd' * 64, 'article_id': article_id, 'created_at': datetime(2025, 12, 22), 'payload_json': {
                 'reason': 'KOTRA_TRADE_REGULATION', 'label': '규제 강화', 'metric_date': '2025-12-21', 'article_ids': [article_id], 'target': {}}})
         ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
