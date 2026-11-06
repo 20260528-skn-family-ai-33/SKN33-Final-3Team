@@ -6,6 +6,7 @@ over its successor. No S3 DeleteObject permission or local durable disk is used.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+from collections import OrderedDict
 from functools import wraps
 import inspect
 import json
@@ -22,6 +23,34 @@ from .objects import ROOT, Conflict, S3Objects, StorageError, digest, enabled, f
 
 log = logging.getLogger(__name__)
 _active = ContextVar('artifact_workspaces', default=())
+_verified = OrderedDict()
+_verified_lock = threading.Lock()
+
+
+def cached_digest_matches(path, checksum):
+    """Reuse only a hash verified for this exact local file and expected content."""
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return False
+    stamp = (info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino, info.st_dev)
+    key = str(path)
+    with _verified_lock:
+        if _verified.get(key) == (checksum, stamp):
+            _verified.move_to_end(key)
+            return True
+    if file_digest(path) != checksum:
+        return False
+    # A concurrent modification must not earn a cache hit for unverified bytes.
+    after = path.stat()
+    if stamp != (after.st_size, after.st_mtime_ns, after.st_ctime_ns, after.st_ino, after.st_dev):
+        return False
+    with _verified_lock:
+        _verified[key] = checksum, stamp
+        _verified.move_to_end(key)
+        while len(_verified) > 8192:
+            _verified.popitem(last=False)
+    return True
 
 
 def files(root, prefix=None):
@@ -139,7 +168,7 @@ class Workspace:
             target = self.root.joinpath(*key_path(name).parts)
             if not target.resolve().is_relative_to(self.root):
                 raise StorageError('Artifact cache path escapes workspace')
-            if target.is_file() and file_digest(target) == meta['sha256']:
+            if target.is_file() and cached_digest_matches(target, meta['sha256']):
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             temporary = target.with_name('.' + target.name + '.' + uuid4().hex + '.tmp')
