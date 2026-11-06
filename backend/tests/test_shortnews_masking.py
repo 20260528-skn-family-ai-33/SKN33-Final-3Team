@@ -4,7 +4,7 @@ from backend.app.services.shortnews_load import mask_shortnews
 class ShortnewsMaskingTest(unittest.TestCase):
     def test_names_contacts_and_idempotence(self):
         source = '작성자: KOTRA 부쿠레슈티 무역관 홍길동\n문의 : KOTRA 워싱턴 D.C. 무역관 김철수 과장(a@example.com)\n전화번호: 09-12345678, 09-123456789 또는 09 123456789\n핫라인(1510), 직통 전화번호 156으로 문의'
-        expected = '작성자: KOTRA 부쿠레슈티 무역관 [이름]\n문의 : KOTRA 워싱턴 D.C. 무역관 [이름] 과장([이메일])\n전화번호: 09-12345678, 09-123456789 또는 09 123456789\n핫라인(1510), 직통 전화번호 156으로 문의'
+        expected = '전화번호: 09-12345678, 09-123456789 또는 09 123456789\n핫라인(1510), 직통 전화번호 156으로 문의'
         self.assertEqual(mask_shortnews(source), expected)
         self.assertEqual(mask_shortnews(expected), expected)
 
