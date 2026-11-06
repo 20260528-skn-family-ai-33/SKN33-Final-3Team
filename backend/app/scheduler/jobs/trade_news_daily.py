@@ -206,6 +206,7 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
         except Exception as write_error:
             result['report_error_type'] = type(write_error).__name__
         return result
+    acquiring = True
     try:
         # 자식의 crawler.lock과 분리해 수집부터 적재까지 전체 작업의 중복 호출을 막습니다.
         with ExitStack() as stack:
@@ -218,7 +219,9 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
                     # while holding the child's lock. Publish the new run ID before
                     # releasing it so delayed old children fail their identity check.
                     stack.enter_context(workspace(root, 'raw/trade-news'))
+                    acquiring = False
                     root, values = data_settings(data_dir, env_path, locked=True)
+                acquiring = False
                 recover_previous(root)
                 persist(root, result)
             try:
@@ -336,9 +339,20 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
                 result['finished_at'] = datetime.now(KST).isoformat()
                 persist(root, result)
     except (Timeout, Conflict) as exc:
-        result.update(status='already_running', stage='lock',
-                      active_lock=Path(exc.lock_file).name if isinstance(exc, Timeout) else 'S3 lease')
-        log.info('기사 일일 작업 또는 자식 처리 중: 기존 상태를 유지하고 중복 호출을 건너뜁니다.')
+        if acquiring:
+            result.update(status='already_running', stage='lock',
+                          active_lock=Path(exc.lock_file).name if isinstance(exc, Timeout) else 'S3 lease')
+            log.info('기사 일일 작업 또는 자식 처리 중: 기존 상태를 유지하고 중복 호출을 건너뜁니다.')
+        else:
+            result.update(status='failed', stage='storage', error_type=type(exc).__name__,
+                          storage_confirmed=False, finished_at=datetime.now(KST).isoformat())
+            log.error('기사 일일 작업 저장 실패: 리스/저장소 충돌 (%s)', type(exc).__name__)
+            # The lost lease forbids publishing another status into that workspace.
+            # Keep a separate diagnostic receipt rather than rewriting its files.
+            try:
+                atomic_json(CONFIGURATION_ERRORS / ('job_' + run_id + '_storage_failure.json'), result)
+            except Exception as receipt_error:
+                result['report_error_type'] = type(receipt_error).__name__
     except Exception as exc:
         result.update(status='failed', error_type=type(exc).__name__)
         log.error('기사 일일 작업 상태/잠금 오류 (%s)', type(exc).__name__)

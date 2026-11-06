@@ -5,6 +5,7 @@ before reserve() can authorize a request. A failed persistence poisons the
 connection; restarting restores the last confirmed snapshot.
 """
 import json
+import io
 import os
 from contextlib import closing
 from pathlib import Path
@@ -30,9 +31,11 @@ def copy_tables(source, target, selected):
         if kind == 'table':
             target.execute(sql)
             quoted = '"' + name.replace('"', '""') + '"'
-            rows = source.execute('SELECT * FROM ' + quoted)
+            with_rowid = 'WITHOUT ROWID' not in sql.upper()
+            rows = source.execute('SELECT ' + ('rowid,' if with_rowid else '') + '* FROM ' + quoted)
             columns = len(rows.description)
-            target.executemany('INSERT INTO ' + quoted + ' VALUES (' + ','.join('?' * columns) + ')', rows)
+            names = '(' + ','.join('"' + item[0].replace('"', '""') + '"' for item in rows.description) + ')'
+            target.executemany('INSERT INTO ' + quoted + names + ' VALUES (' + ','.join('?' * columns) + ')', rows)
     # Triggers/indexes are created after row copies, preserving their original SQL.
     for kind, name, table, sql in schema:
         if kind != 'table' and table in selected and not name.startswith('sqlite_'):
@@ -93,6 +96,13 @@ def snapshot(content, store, known=()):
 
 
 def verify_snapshot(meta, store, stream=None):
+    if meta.get('schema') == 2:
+        if stream is not None:
+            raise StorageError('Journal snapshots require replay')
+        verify_snapshot(meta['base'], store)
+        for delta in meta['deltas']:
+            verify_snapshot(delta, store)
+        return
     if meta.get('schema') != 1 or not isinstance(meta.get('chunks'), list):
         raise StorageError('Invalid crawler database pointer')
     for part in meta['chunks']:
@@ -114,7 +124,7 @@ def restore(path, store=None, *, details=False):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name('.' + path.name + '.' + uuid4().hex + '.tmp')
     try:
-        if meta.get('schema') == 2:
+        if meta.get('schema') in (2, 3):
             with tempfile.TemporaryDirectory(dir=path.parent, prefix='.restore-') as folder:
                 with closing(sqlite3.connect(temporary)) as merged:
                     for name in ('state', 'articles'):
@@ -142,6 +152,20 @@ def restore(path, store=None, *, details=False):
 
 
 def download_snapshot(meta, store, path):
+    if meta.get('schema') == 2:
+        from .article_journal import replay
+        download_snapshot(meta['base'], store, path)
+        def contents():
+            for delta in meta['deltas']:
+                stream = io.BytesIO()
+                verify_snapshot(delta, store, stream)
+                content = stream.getvalue()
+                if len(content) != delta['bytes'] or digest(content) != delta['sha256']:
+                    raise StorageError('Article delta checksum mismatch')
+                yield content
+        with closing(sqlite3.connect(path)) as db:
+            replay(db, contents())
+        return
     with path.open('wb') as stream:
         verify_snapshot(meta, store, stream)
         stream.flush()
@@ -185,9 +209,9 @@ def migrate_database(path, store=None):
         meta = json.loads(old)
         if meta.get('maintenance') or meta.get('migration_sha256', meta.get('sha256')) != digest(content):
             raise StorageError('Crawler database already published with different contents')
-        if meta.get('schema') == 2 and (meta['parts'].get('prepared') or {}).get('sha256') != prepared_sha:
+        if meta.get('schema') in (2, 3) and (meta['parts'].get('prepared') or {}).get('sha256') != prepared_sha:
             raise StorageError('Inspection database already published with different contents')
-    for item in meta['parts'].values() if meta.get('schema') == 2 else (meta,):
+    for item in meta['parts'].values() if meta.get('schema') in (2, 3) else (meta,):
         if item is not None:
             verify_snapshot(item, store)
 
@@ -197,6 +221,8 @@ class DurableConnection(sqlite3.Connection):
     storage_error = None
 
     def track_write(self, action, table, column, database, trigger):
+        if database == 'temp':
+            return sqlite3.SQLITE_OK
         if action in (sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE):
             self.dirty.add('state' if table in STATE_TABLES else 'articles')
         if action in (sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_DROP_TABLE,
@@ -217,6 +243,16 @@ class DurableConnection(sqlite3.Connection):
             parts = dict(self.parts)
             for name in self.dirty:
                 previous = parts.get(name) or {}
+                if name == 'articles' and previous and self.journal.unchanged_schema():
+                    from .article_journal import COMPACT_COMMITS, COMPACT_BYTES
+                    base = previous if previous.get('schema') == 1 else previous['base']
+                    deltas = [] if previous.get('schema') == 1 else previous['deltas']
+                    content = self.journal.capture()
+                    if content is None:
+                        continue
+                    if len(deltas) < COMPACT_COMMITS and sum(d['bytes'] for d in deltas) + len(content) <= COMPACT_BYTES:
+                        parts[name] = {'schema': 2, 'base': base, 'deltas': [*deltas, snapshot(content, self.store)]}
+                        continue
                 content = partition(self, name)
                 if digest(content) != previous.get('sha256'):
                     parts[name] = snapshot(content, self.store, {p['sha256'] for p in previous.get('chunks', [])})
@@ -225,13 +261,21 @@ class DurableConnection(sqlite3.Connection):
             if parts == self.parts:
                 self.dirty.clear()
                 self.prepared_stamp = prep_stamp
+                if not self.journal.unchanged_schema():
+                    self.journal.install()
+                else:
+                    self.journal.clear()
                 return
             # Article completion, inspection and request budget share ONE CAS pointer.
-            meta = {'schema': 2, 'parts': parts}
+            meta = {'schema': 3, 'parts': parts}
             self.etag = self.store.put(POINTER, json_bytes(meta), etag=self.etag,
                                        content_type='application/json')
             self.parts, self.prepared_stamp = parts, prep_stamp
             self.dirty.clear()
+            if not self.journal.unchanged_schema():
+                self.journal.install()
+            else:
+                self.journal.clear()
         except Exception as exc:
             self.storage_error = exc
             raise
@@ -261,8 +305,10 @@ def connect(path):
     connection = sqlite3.connect(path, factory=DurableConnection, cached_statements=0)
     connection.store, connection.etag = store, etag
     connection.parts = meta.get('parts', {})
-    connection.dirty = set() if meta.get('schema') == 2 else {'state', 'articles'}
+    connection.dirty = set() if meta.get('schema') in (2, 3) else {'state', 'articles'}
     connection.prepared_path = Path(path).parent / 'prepared.sqlite3'
     connection.prepared_stamp = database_stamp(connection.prepared_path)
+    from .article_journal import ArticleJournal
+    connection.journal = ArticleJournal(connection, STATE_TABLES)
     connection.set_authorizer(connection.track_write)
     return connection

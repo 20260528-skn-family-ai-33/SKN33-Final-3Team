@@ -9,8 +9,11 @@ from .sqlite_state import POINTER, PREFIX
 
 
 def referenced(meta):
-    parts = meta['parts'].values() if meta.get('schema') == 2 else (meta,)
-    return {part['key'] for group in parts if group for part in group['chunks']}
+    if meta.get('schema') in (2, 3) and 'parts' in meta:
+        return set().union(*(referenced(part) for part in meta['parts'].values() if part))
+    if meta.get('schema') == 2:
+        return referenced(meta['base']) | set().union(*(referenced(delta) for delta in meta['deltas']))
+    return {part['key'] for part in meta['chunks']}
 
 
 def collect(store, *, apply=False, writers_stopped=False, min_age_days=7, now=None):
