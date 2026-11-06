@@ -14,6 +14,12 @@ from backend.app.api.config import ROOT
 def model_paths(settings):
     configured=settings.get('API_ML_MODEL_PATHS','')
     root=(ROOT / settings.get('API_ML_MODEL_DIRECTORY','data/ml/monthly_models')).resolve()
+    from backend.app.storage.objects import enabled, StorageError
+    if enabled(settings.values):
+        from backend.app.storage.workspace import model_cache
+        if configured:
+            raise StorageError('API_ML_MODEL_PATHS must be empty in S3 mode; select the published registry')
+        root=model_cache(settings)
     if configured: paths=tuple((ROOT / p.strip()).resolve() for p in configured.split(',') if p.strip())
     else:
         records=[json.loads(p.read_text(encoding='utf-8')) for p in root.glob('model_a_two_stage_*.registry.json')]
@@ -22,6 +28,10 @@ def model_paths(settings):
         chosen=max(ready,key=lambda r:(r['data_info']['trade_month'],r['created_at']))
         path=(root/chosen['artifact_path']).resolve()
         if not path.is_relative_to(root): raise ValueError('모델 경로가 배포 디렉터리 밖입니다.')
+        if chosen.get('artifact_sha256'):
+            from backend.app.storage.objects import file_digest
+            if file_digest(path) != chosen['artifact_sha256']:
+                raise ValueError('모델 파일과 READY 레지스트리의 해시가 다릅니다.')
         paths=(path,)
     return paths
 
@@ -54,6 +64,12 @@ def growth_path(settings, anchor=None):
     from backend.app.ml.model_registry import version_key
     root=(ROOT / settings.get('API_ML_MODEL_DIRECTORY','data/ml/monthly_models')).resolve()
     configured=settings.get('API_ML_GROWTH_MODEL_PATH','')
+    from backend.app.storage.objects import enabled, StorageError
+    if enabled(settings.values):
+        from backend.app.storage.workspace import model_cache
+        if configured:
+            raise StorageError('API_ML_GROWTH_MODEL_PATH must be empty in S3 mode')
+        root=model_cache(settings)
     if configured: return (ROOT / configured).resolve()
     stamp=tuple(sorted((p.name,p.stat().st_mtime_ns) for p in root.glob('model_b_growth_*.registry.json')))
     ready=_ready_growth(root,stamp)

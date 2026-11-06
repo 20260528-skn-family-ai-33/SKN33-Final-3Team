@@ -12,6 +12,8 @@ import joblib
 import numpy as np
 import pandas as pd
 from filelock import FileLock
+from backend.app.storage.workspace import stored, checkpoint
+from backend.app.storage.datasets import training_inputs
 
 from backend.app.ml import features as F, sources as S
 from backend.app.ml.model_registry import read_json, sha256, sync_version, write_json
@@ -21,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[3]
 log = logging.getLogger(__name__)
 
 
+@training_inputs
 def input_manifest():
     """실제로 선택할 수집 CSV·체크포인트·기준 파일의 경로와 내용을 기록한다. DB는 읽지 않는다."""
     paths = set()
@@ -58,6 +61,7 @@ def db_inputs(engine=None, month=None):
             "country_mapping_sha256": _frame_digest(F.model_countries(S.countries(), currencies))}
 
 
+@training_inputs
 def load_training_data(cache_dir=None, engine=None):
     """입력 파일이 처리 중 바뀌면 버전 계보에 다른 스냅샷을 기록하지 않도록 중단한다."""
     before = input_manifest()
@@ -130,6 +134,7 @@ def _copy_atomic(source, destination):
     temporary.replace(destination)
 
 
+@stored('models/versions', lambda args: args['out_dir'])
 def save_version(models, predictions, metadata, training_sets, out_dir, data_info=None, eligible_b_rows=0,
                  registry_engine=None, register=True, extra_artifacts=None, model_details=None):
     """새 디렉터리를 완성한 뒤 최신 포인터를 바꾼다. DB 실패는 재전송 가능한 로컬 기록으로 보존한다."""
@@ -214,6 +219,7 @@ def save_version(models, predictions, metadata, training_sets, out_dir, data_inf
         _copy_atomic(directory / "predictions.csv", out_dir / "predictions.csv")
         _copy_atomic(directory / "metadata.json", out_dir / "metadata.json")  # 최신 포인터를 마지막에 교체
     if register:
+        checkpoint(directory)
         result = sync_version(directory, registry_engine)
         log.info("모델 버전 %s | DB %s", version_id, result["status"])
     for record in records:
@@ -221,6 +227,7 @@ def save_version(models, predictions, metadata, training_sets, out_dir, data_inf
     return meta
 
 
+@stored('models/versions', lambda args: args['out_dir'], write=False)
 def artifact_path(out_dir, name, metadata=None, version_id=None):
     """새 버전은 불변 디렉터리에서, 기존 버전은 날짜 없는 경로에서 읽는다."""
     out_dir = Path(out_dir).resolve()
