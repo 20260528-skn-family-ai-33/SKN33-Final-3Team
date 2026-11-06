@@ -1,5 +1,7 @@
 import { useQuery } from '../api/hooks'
 import { kstDateTime } from '../api/adapters'
+import { useAdminAlertRead } from './useAdminAlertCount'
+export const ALERT_CATEGORY = { DATA: '데이터', REPORT: '리포트', MEMBER: '회원관리' }
 const table = (head, rows, cols) => ({ type: 'table', head, cols: cols || `repeat(${head.length}, minmax(100px, 1fr))`, rows: rows.map(cells => ({ cells: cells.map(c => c == null ? '—' : typeof c === 'object' ? c : String(c)) })) })
 const button = (label, to) => ({ btns: [{ label, to }] })
 export const AUDIT_ACTION = { USER_ROLE: '회원 권한 변경', USER_STATUS: '회원 이용 상태 변경', ARTICLE_VISIBILITY: '기사 노출 변경', KEYWORD_ASSIGN: '키워드 분야 지정', KEYWORD_HOLD: '키워드 보류', KEYWORD_RELEASE: '키워드 지정 해제', CATEGORY_CREATE: '분야 생성', CATEGORY_RENAME: '분야 이름 변경', CATEGORY_DELETE: '분야 삭제' }
@@ -10,6 +12,7 @@ const RUN_STATUS = { SUCCESS: ['ok', '성공'], FAILED: ['red', '실패'], RUNNI
 export const memberBy = value => ['id', 'name'].includes(value) ? value : 'id'
 export function useServerScreen(template, id, query) {
   const user = query.get('user_id'), article = query.get('article_id')
+  const { isRead, markRead, markAllRead } = useAdminAlertRead()
   const endpoint = ['BS32','BS34','BS36','BS38'].includes(id) ? '/admin/overview'
     : ['BS33','BS35','BS37','BS39'].includes(id) ? '/admin/alerts'
     : template?.menu === 'members' ? '/admin/users'
@@ -44,9 +47,19 @@ export function useServerScreen(template, id, query) {
   else if (endpoint === '/admin/users') {
     if (!blocks.some(b => b.type === 'memberSearch')) blocks.push({ type: 'memberSearch', to: '/admin/members/BS49' })
     blocks.push(table(['아이디(이메일)', '이름', '권한', '이용 상태', '관리'], items.map(r => [r.email, r.name, r.role, r.account_status, button('상세', `/admin/members/BS48?user_id=${r.user_id}`)]), '1.8fr 1fr 0.8fr 0.9fr 0.8fr'))
-  } else if (endpoint === '/admin/alerts') blocks.push(table(['분류', '알림 내용', '발생 시각(KST)', '관리'], items.map(r => [r.category, r.message, kstDateTime(r.created_at),
-    r.target_type === 'BATCH' ? button('수집 이력', `/admin/inbox/collection?q=${encodeURIComponent(r.target_id)}`) : null]), '0.7fr 2fr 1.2fr 0.8fr'))
-  else if (endpoint === '/admin/data/runs') {
+  } else if (endpoint === '/admin/alerts') {
+    // 안 읽은 줄은 배경색으로 표시하고, '확인' 버튼을 눌러야 읽음으로 바꾼다.
+    const rows = items.map(r => {
+      const unread = !isRead(r.alert_id)
+      const history = r.target_type === 'BATCH' ? [{ label: '수집 이력', to: `/admin/inbox/collection?q=${encodeURIComponent(r.target_id)}` }] : []
+      return { sel: unread, cells: [
+        ALERT_CATEGORY[r.category] || r.category, r.message, kstDateTime(r.created_at) ?? '—',
+        { btns: [...(unread ? [{ label: '확인', onClick: () => markRead([r.alert_id]) }] : []), ...history] },
+      ] }
+    })
+    blocks.push({ type: 'buttons', items: [{ label: '모두 확인', onClick: () => { void markAllRead(filters.category).catch(() => {}) } }] })
+    blocks.push({ ...table(['분류', '알림 내용', '발생 시각(KST)', '관리'], [], '0.7fr 2.4fr 1.2fr 1.2fr'), rows })
+  } else if (endpoint === '/admin/data/runs') {
     blocks.push({ type: 'runSearch' })
     blocks.push({ ...table(['실행 ID', '수집 작업', '대상 기간', '결과', '수신 건수'], items.map(r => [r.run_id, `${r.source_code} · ${r.job_name}`, `${r.period_start} ~ ${r.period_end}`, RUN_STATUS[r.status] ? { tag: RUN_STATUS[r.status][0], text: RUN_STATUS[r.status][1] } : r.status, r.received_count]), '0.6fr 1.6fr 1.7fr 0.7fr 0.7fr'), empty: query.get('q') || query.get('status') ? '조건에 맞는 수집 이력이 없습니다. 검색어나 결과 분류를 바꿔 보세요.' : '' })
   }

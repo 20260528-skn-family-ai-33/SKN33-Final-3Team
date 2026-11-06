@@ -8,7 +8,7 @@ BASE_JOBS = frozenset({
     "un_data_monthly", "un_data_startup", "un_data_resume",
     "customs_monthly", "customs_monthly_startup",
     "fx_daily_load", "fx_daily_startup",
-    "external_refresh", "trade_news_daily",
+    "external_refresh", "trade_news_daily", "major_issue_detect",
 })
 # 단신속보를 켜면 더해지는 작업
 SHORTNEWS_JOBS = frozenset({"shortnews_daily", "shortnews_startup"})

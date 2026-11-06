@@ -4,6 +4,8 @@ import { navigate, useRoute, withQuery } from './router'
 import { useApp, useNotifications, useToast } from './store'
 import { AuthHeader, Footer, FooterSmall, SiteHeader } from './components/layout'
 import AlertPopover from './components/AlertPopover'
+import NotificationPopups from './components/NotificationPopups'
+import { useAdminAlertCount } from './admin/useAdminAlertCount'
 import Login from './pages/auth/Login'
 import { Signup, SocialSignup } from './pages/auth/Signup'
 import { OAuthCallback, SocialError, SocialLogin } from './pages/auth/SocialLogin'
@@ -44,15 +46,17 @@ function UserShell({ active, route, children }) {
   const { session, logout } = useApp()
   const { unread } = useNotifications()
   const isAdmin = session?.role === 'admin'
+  const alertCount = useAdminAlertCount(isAdmin)
   const open = !isAdmin && route.query.get('alerts') === 'open'
   const toggle = () => navigate(withQuery(route, { alerts: open ? null : 'open' }), { replace: true })
   return (
     <>
-      <SiteHeader active={active} unread={unread} bellOpen={open} onBell={isAdmin ? () => navigate('/admin/inbox/BS33') : toggle} isAdmin={isAdmin} onLogout={logout}>
+      <SiteHeader active={active} unread={isAdmin ? alertCount : unread} bellOpen={open} onBell={isAdmin ? () => navigate('/admin/inbox/BS33') : toggle} isAdmin={isAdmin} onLogout={logout}>
         {open && <AlertPopover onClose={toggle} />}
       </SiteHeader>
       <div className="app-body" id="main">{children}</div>
       <Footer isAdmin={isAdmin} />
+      {!isAdmin && <NotificationPopups key={session?.id} />}
     </>
   )
 }

@@ -305,6 +305,10 @@ def generate(store,job,settings):
         doc['template_pdf']={'version':1,'report_type':record['report_type'],
                              'context':build_context(store,uid,record,doc)}
         doc['sql']=list(store.queries)
+    # PDF 양식의 급증 키워드·주요 이슈를 웹·DOCX에도 같은 값으로 싣는다. 양식을 만들지 않은 리포트는 건너뛴다.
+    if record['report_type']=='RPT_WEEKLY' and doc.get('template_pdf'):
+        from backend.app.services.report_context import weekly_highlights
+        news_section=doc['sections'][0]; news_section['text']=weekly_highlights(doc['template_pdf']['context'])+'\n'+news_section['text']
     from backend.app.api.report_storage import LocalReportStorage
     storage=LocalReportStorage(settings.files)
     prefix=f'{uid}/{rid}/{job["claim_token"]}'
@@ -325,7 +329,7 @@ def generate(store,job,settings):
         conf=notification_settings(store,uid)
         if conf['notifications_enabled'] and conf['consent_current']:
             event=store.insert('alert_event',event_type='REPORT',report_id=int(rid),event_key=digest(['REPORT',rid]),
-                payload_json={'destination':'REPORT_DETAIL'},created_at=now())
+                payload_json={'destination':'REPORT_DETAIL','report_type':record['report_type'],'period':record['conditions_json']['period']},created_at=now())
             store.insert('user_alert',user_id=uid,event_id=event,is_interest_match=False,created_at=now())
     return {'report_id':str(rid),'step':'DONE'}
 
@@ -391,7 +395,9 @@ def save_subscriptions(store,uid,data):
         code=row['period_code']
         stmt=update(t).where(t.c.subscription_id==row['subscription_id'])
         if code in remaining:
-            store.c.execute(stmt.values(enabled=True,filters_json=payload))
+            # 형식·관심만 바꿔 다시 저장해도 이미 구독 중인 주기의 시작일은 유지한다. 아직 발행 못 한 회차가 사라지면 안 된다.
+            since=row['filters_json'].get('enabled_since') if row['enabled'] else None
+            store.c.execute(stmt.values(enabled=True,filters_json={**payload,'enabled_since':since or payload['enabled_since']}))
             remaining.remove(code)
         elif row['enabled']:
             store.c.execute(stmt.values(enabled=False))

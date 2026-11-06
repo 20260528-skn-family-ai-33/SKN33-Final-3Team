@@ -5,6 +5,10 @@ from backend.app.api.news import blocked_topics, article_views, article_statemen
 from backend.app.api.results import save_snapshot, read_snapshot
 
 
+POPUP_KINDS={'report_popup':('REPORT',),'major_issue_popup':('MAJOR_ISSUE',),'spike_popup':('PRODUCT_SPIKE','KEYWORD_SPIKE')}
+REPORT_KINDS={'RPT_WEEKLY':'주간','RPT_MONTHLY':'월간','RPT_QUARTERLY':'분기'}
+
+
 def active_terms(store):
     t=store.t('service_option')
     rows=store.rows(select(t).where(t.c.option_type=='NOTIFICATION_TERMS',t.c.enabled==True).order_by(t.c.sort_order.desc(),t.c.option_code.desc()))
@@ -40,12 +44,29 @@ def settings(store,uid):
             'terms_version':latest['terms_version'] if latest else None}
 
 
+def popup_kinds(conf):
+    """지금 팝업으로 보여 줄 수 있는 알림 종류."""
+    if not conf['notifications_enabled'] or not conf['consent_current']: return set()
+    return {kind for flag,kinds in POPUP_KINDS.items() if conf[flag] for kind in kinds}
+
+
+def skip_pending_popups(store,uid,kinds):
+    """팝업을 다시 켜기 전에 받은 알림은 띄우지 않는다. 별도 컬럼이 없어 표시 시각으로 함께 기록한다."""
+    if not kinds: return
+    u,e=store.t('user_alert'),store.t('alert_event')
+    store.c.execute(update(u).where(u.c.user_id==uid,u.c.popup_shown_at.is_(None),
+        u.c.event_id.in_(select(e.c.event_id).where(e.c.event_type.in_(sorted(kinds))))).values(popup_shown_at=now()))
+
+
 def patch_settings(store,uid,values):
+    before=settings(store,uid)
     if values.get('notifications_enabled'):
-        require(settings(store,uid)['consent_current'],'현재 알림 약관 동의가 필요합니다.','CONSENT_REQUIRED',409)
+        require(before['consent_current'],'현재 알림 약관 동의가 필요합니다.','CONSENT_REQUIRED',409)
     t=store.t('notification_setting')
     if values: store.c.execute(update(t).where(t.c.user_id==uid).values(**values))
-    return {'settings':settings(store,uid)}
+    after=settings(store,uid)
+    skip_pending_popups(store,uid,popup_kinds(after)-popup_kinds(before))
+    return {'settings':after}
 
 
 def consent(store,uid,data):
@@ -55,6 +76,7 @@ def consent(store,uid,data):
     t=store.t('notification_setting')
     setting=store.one(select(t).where(t.c.user_id==uid).with_for_update())
     if not setting: unavailable('알림 설정 행이 준비되지 않았습니다.','FEATURE_NOT_READY')
+    before=popup_kinds(settings(store,uid))
     enabled=bool(data.get('enable_notifications')) and data['action']=='AGREE'
     require(not data.get('enable_notifications') or data['action']=='AGREE','동의해야 알림을 켤 수 있습니다.')
     c=store.t('user_consent')
@@ -68,14 +90,19 @@ def consent(store,uid,data):
     if data['action']!='AGREE' or enabled:
         store.c.execute(update(t).where(t.c.user_id==uid).values(notifications_enabled=enabled))
         notifications_enabled=enabled
+    skip_pending_popups(store,uid,popup_kinds(settings(store,uid))-before)
     return {'consent':{'terms_type':'NOTIFICATION','terms_version':data['terms_version'],'action':data['action'],
                        'acted_at':at,'notifications_enabled':notifications_enabled}}
 
 
+def target_blocked(store,uid,payload):
+    blocked=set(blocked_topics(store,uid)); target=payload.get('target',{})
+    return target.get('keyword_text') in blocked or target.get('kw_topic') in blocked
+
+
 def event_allowed(store,uid,event):
-    payload=event['payload_json']; blocked=set(blocked_topics(store,uid))
-    target=payload.get('target',{})
-    if target.get('keyword_text') in blocked or target.get('kw_topic') in blocked: return False
+    payload=event['payload_json']
+    if target_blocked(store,uid,payload): return False
     ids=payload.get('article_ids',[]) or ([event['article_id']] if event['article_id'] else [])
     if ids:
         a=store.t('article')
@@ -92,20 +119,41 @@ def issue_view(store,event,uid=None,articles=None):
         rows=store.rows(article_statement(store,uid).where(a.c.article_id.in_(ids))) if ids else []
         articles=article_views(store,rows,uid)
     return {'event_id':str(event['event_id']),'event_type':event['event_type'],
-        'label':target.get('keyword_text') or target.get('hs_code') or p.get('label','주요 이슈'),
+        'label':p.get('label') or target.get('keyword_text') or target.get('hs_code') or '주요 이슈',
         'reason':p.get('reason',event['event_type']),'current_count':p.get('recent_week_count',p.get('day_count')),
         'baseline_average':p.get('baseline_weekly',p.get('baseline_daily')),'ratio':p.get('ratio'),
         'window_start':p.get('window_start'),'window_end':p.get('window_end'),'articles':articles}
 
 
+def notice_text(event_type,p):
+    """API 공통스키마 Notification의 유형별 표시 문구. 판정 사건은 근거 값으로 만든다."""
+    if event_type=='REPORT':
+        kind=REPORT_KINDS.get(p.get('report_type'))
+        period=p.get('period') or {}
+        title=f'{kind} 리포트가 발행되었습니다.' if kind else '리포트가 발행되었습니다.'
+        return title,(f"{period['start']} ~ {period['end']} 기간 리포트를 확인하세요." if period else '저장된 리포트를 확인하세요.')
+    label=p.get('label')
+    if event_type=='MAJOR_ISSUE' and p.get('reason')=='WEEKLY_NEWS_SPIKE':
+        return f'주요 이슈: {label}',f"최근 7일 기사 {p['recent_week_count']}건으로 직전 8주 주평균의 {p['ratio']:.1f}배입니다."
+    if event_type=='MAJOR_ISSUE' and p.get('reason')=='KOTRA_TRADE_REGULATION':
+        return f'주요 이슈: {label}','KOTRA 통상·규제 기사가 새로 등록되었습니다.'
+    return '관심 기사·주요 이슈 알림','관련 기사를 확인하세요.'
+
+
 def notification_view(store,row,uid,articles=None):
     p=row['payload_json']; report=row['event_type']=='REPORT'
+    title,message=notice_text(row['event_type'],p)
+    issue=None if report else issue_view(store,row,uid,articles)
+    if report: target=('REPORT',row['report_id'])
+    else:
+        # 이 회원이 열 수 있는 근거 기사로 이동한다. 대표 기사를 우선하고, 근거가 없으면 알림 상세(ANALYSIS, event_id)로 연다.
+        visible=[a['article_id'] for a in issue['articles']]
+        article=str(row['article_id']) if str(row['article_id']) in visible else visible[0] if visible else None
+        target=('ARTICLE',article) if article else ('ANALYSIS',row['event_id'])
     return {'user_alert_id':str(row['user_alert_id']),'event_id':str(row['event_id']),'event_type':row['event_type'],
-        'title':p.get('title','리포트가 발행되었습니다.' if report else '관심 기사·주요 이슈 알림'),
-        'message':p.get('message','저장된 리포트를 확인하세요.' if report else '관련 기사를 확인하세요.'),
-        'created_at':row['received_at'],'read_at':row['read_at'],'target_type':'REPORT' if report else 'NEWS',
-        'target_id':str(row['report_id']) if report else str(row['article_id']) if row['article_id'] else None,
-        'matched_interest':bool(row['is_interest_match']),'issue':None if report else issue_view(store,row,uid,articles)}
+        'title':p.get('title',title),'message':p.get('message',message),
+        'created_at':row['received_at'],'read_at':row['read_at'],'target_type':target[0],'target_id':str(target[1]),
+        'matched_interest':bool(row['is_interest_match']),'issue':issue}
 
 
 def event_allowed_sql(store,uid):
@@ -192,14 +240,11 @@ def read_all(store,uid,through,kind):
 
 def popups(store,uid):
     conf=settings(store,uid)
-    if not conf['notifications_enabled'] or not conf['consent_current']:
+    kinds=popup_kinds(conf)
+    if not kinds:
         return {'groups':[],'next_cursor':None,'retry_after_seconds':30}
     u,e=store.t('user_alert'),store.t('alert_event')
-    kinds=[]
-    if conf['report_popup']: kinds.append('REPORT')
-    if conf['major_issue_popup']: kinds.append('MAJOR_ISSUE')
-    if conf['spike_popup']: kinds.extend(['PRODUCT_SPIKE','KEYWORD_SPIKE'])
-    rows=store.rows(notification_statement(store,uid).where(u.c.popup_shown_at.is_(None),e.c.event_type.in_(kinds))
+    rows=store.rows(notification_statement(store,uid).where(u.c.popup_shown_at.is_(None),u.c.read_at.is_(None),e.c.event_type.in_(sorted(kinds)))
                     .order_by(u.c.created_at.desc(),u.c.user_alert_id.desc()).limit(100)); grouped={}
     for r in rows:
         flag='report_popup' if r['event_type']=='REPORT' else 'major_issue_popup' if r['event_type']=='MAJOR_ISSUE' else 'spike_popup'
