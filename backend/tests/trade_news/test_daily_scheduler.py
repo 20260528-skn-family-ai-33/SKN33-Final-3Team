@@ -303,6 +303,7 @@ def test_busy_child_does_not_replace_previous_job(local):
 
 
 @pytest.mark.parametrize('stage', ['collection','mysql'])
+@pytest.mark.skipif(sys.platform == 'win32', reason='POSIX kill(pid, 0) 생존 확인 전용: Windows에서는 종료를 유발함')
 def test_parent_killed_while_child_alive_then_recovers(local, stage):
     import time
     from filelock import Timeout

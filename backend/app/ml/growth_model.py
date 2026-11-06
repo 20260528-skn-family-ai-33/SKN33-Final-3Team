@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 
 import joblib
+from backend.app.storage.workspace import stored
 import numpy as np
 
 from backend.app.ml import features as F
@@ -168,6 +169,7 @@ def save(bundle, latest_rows, path):
     return path
 
 
+@stored('models/monthly', lambda args: args['out_dir'])
 def build(snapshot_path=T.SNAPSHOT_PY311, out_dir=OUT_DIR, seed=0, n_jobs=4, month=None):
     """v1·v3를 학습하고 model_b_growth_<YYYYMM>.joblib로 저장한다.
 

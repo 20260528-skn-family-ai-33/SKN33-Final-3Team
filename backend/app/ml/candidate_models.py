@@ -27,6 +27,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from filelock import FileLock
+from backend.app.storage.workspace import stored, checkpoint
 from threadpoolctl import threadpool_limits
 
 from backend.app.ml import artifacts
@@ -246,6 +247,7 @@ def _parent(out_dir, prefix, model_key, name, engine):
     return next((version for _, version in reversed(earlier) if version in in_db), None)
 
 
+@stored('models/monthly', lambda args: args['out_dir'])
 def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=4, growth=True):
     """customs_monthly ML 단계: 전체 재학습 → <모델>_<YYYYMM>.joblib → ml_model_version(model_a) 기록.
 
@@ -300,6 +302,7 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
             write_json(record_path, record)
         elif not artifact.is_file() or sha256(artifact) != record["artifact_sha256"]:
             raise ValueError(f"{artifact}: 저장된 기록과 모델 파일이 다릅니다")
+        checkpoint(record_path)
         register_records([record], engine)
     result = {"status": "SUCCESS", "model_name": name, "artifact": artifact.as_posix(), "train_rows": record["train_rows"],
               "country_ndcg_at_5": record["evaluation"]["model"].get("country_ndcg_at_5"),
@@ -313,6 +316,7 @@ def run(trade_month, engine=None, *, kind="two_stage", out_dir=MONTHLY_DIR, cach
 GROWTH_RETRY_LIMIT = 3   # 같은 달 모델 B를 자동으로 다시 학습하는 최대 횟수(사용자 결정). CUSTOMS_ML_GROWTH_RETRIES로 바꾼다
 
 
+@stored('models/monthly', lambda args: args['out_dir'])
 def retry_pending(engine=None, *, out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=4, skip=(), limit=None):
     """스케줄러 복구 작업(customs_monthly.startup_job)이 부른다. 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면
     (학습 실패 SKIPPED·기록 없음) 그 달 모델 B만 다시 학습한다. 그 달 수출입 작업은 SUCCESS라 월 복구 대상이 아니기 때문이다.
@@ -351,6 +355,7 @@ def retry_pending(engine=None, *, out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, 
     return run_growth(month, engine, out_dir=out_dir, cache_dir=cache_dir, n_jobs=n_jobs)
 
 
+@stored('models/monthly', lambda args: args['out_dir'])
 def run_growth(trade_month, engine=None, *, out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=4):
     """증감 예상 모델(모델 B) 월별 학습. 모델 A(run)와 같은 절차다: 같은 달 피처 표 → 같은 입력이면 재학습 없이 기록만
     다시 보냄 → 정정되면 _r2 … → <model_b_growth>_<YYYYMM>.joblib(최신 기준월 예측 latest 포함) → 레지스트리 JSON → DB.
@@ -394,6 +399,7 @@ def run_growth(trade_month, engine=None, *, out_dir=MONTHLY_DIR, cache_dir=FEATU
                                             "error_type": type(exc).__name__},
                               "evaluation": {}, "skip_reason": f"학습 실패: {type(exc).__name__}"[:200]}
                     write_json(record_path, record)
+                    checkpoint(record_path)
                     register_records([record], engine)
                     return {"status": "SKIPPED", "model_name": name, "reason": record["skip_reason"],
                             "seconds": round(time.perf_counter() - started, 1)}
@@ -420,6 +426,7 @@ def run_growth(trade_month, engine=None, *, out_dir=MONTHLY_DIR, cache_dir=FEATU
                 write_json(record_path, record)
             elif not artifact.is_file() or sha256(artifact) != record["artifact_sha256"]:
                 raise ValueError(f"{artifact}: 저장된 기록과 모델 파일이 다릅니다")
+            checkpoint(record_path)
             register_records([record], engine)
     except Exception as exc:
         log.warning("증감 예상 모델 월별 단계 실패(%s). 모델 A 결과는 유지합니다.", type(exc).__name__)
@@ -445,6 +452,11 @@ def main():
         return
     if not args.models:
         parser.error("--models 또는 --monthly를 지정하세요")
+    train_candidates(args, parser)
+
+
+@stored('models/candidates', lambda bound: bound['args'].out_dir)
+def train_candidates(args, parser):
     targets = {kind: args.out_dir / f"{kind}_{args.version}.joblib" for kind in args.models}
     for kind, path in list(targets.items()):
         if path.exists():

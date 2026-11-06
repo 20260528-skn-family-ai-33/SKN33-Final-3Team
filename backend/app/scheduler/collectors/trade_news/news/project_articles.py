@@ -8,6 +8,8 @@ from news.article_schema import article_values
 def select_prepared_articles(store, prepared_db, target_date=None, sites=None):
     target = publication_date(str(target_date)) if target_date is not None else None
     selected, rejected, unscoped = [], [], []
+    recovery = dict(prepared_db.execute('SELECT url,reason FROM recovery_required')) if prepared_db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recovery_required'").fetchone() else {}
     for row in store.db.execute('SELECT * FROM articles ORDER BY url'):
         if sites is not None and row['site'] not in sites:
             continue
@@ -22,6 +24,8 @@ def select_prepared_articles(store, prepared_db, target_date=None, sites=None):
             if day != target:
                 continue
         try:
+            if row['url'] in recovery:
+                raise ValueError(recovery[row['url']])
             a = validate_report_row(row)
             ready = prepared_db.execute(
                 'SELECT eligible,payload FROM prepared_article WHERE source_code=? AND external_id=?',

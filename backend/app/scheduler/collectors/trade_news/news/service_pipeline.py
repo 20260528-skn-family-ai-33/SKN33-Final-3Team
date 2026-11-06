@@ -17,6 +17,10 @@ class ServicePreparationPipeline:
 
     def open_spider(self, spider):
         # 기존 수집 폴더 아래에만 준비 결과를 둡니다. 요청 예산은 기존 Store가 관리합니다.
+        if getattr(spider.store.db, 'store', None) is not None:
+            from news.recovery import recover_prepared
+            recover_prepared(spider.store.db, spider.store.root, self.dictionary)
+            spider.store.db.persist()
         self.store = PreparationStore(spider.store.root / 'prepared.sqlite3')
 
     def close_spider(self, spider):

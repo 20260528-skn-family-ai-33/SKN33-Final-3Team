@@ -14,6 +14,7 @@ from pathlib import Path, PureWindowsPath
 
 import numpy as np
 import pandas as pd
+from backend.app.storage.workspace import stored
 
 from backend.app.ml.model_registry import sha256
 from backend.app.scheduler.collectors.external import external_collect as ec
@@ -146,6 +147,7 @@ def check_versions(external_dir):
                          "새 버전의 사용 가능일을 availability.csv에, 해시를 availability_snapshot.json에 다시 기록하세요")
 
 
+@stored('ml-inputs/external', lambda args: args['external_dir'] or ec.OUT_DIR, write=False)
 def load_external(external_dir=None, countries=None, hs_mapping=None):
     """외부 CSV를 읽어 전처리한 두 표를 돌려준다. hs_mapping은 features.hs_key_map 결과 (없으면 코드 그대로)."""
     external_dir = external_dir or ec.OUT_DIR
