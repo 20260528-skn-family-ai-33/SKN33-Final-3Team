@@ -1,4 +1,4 @@
-"""기본 기사 실행·검색은 공통 세대 색인의 kotra_article 컬렉션을 사용합니다.
+"""기본 기사 실행·검색은 공통 세대 색인의 total_article 컬렉션을 사용합니다.
 
 python -m backend.app.scheduler.jobs.news_embed [--rebuild] [--dry-run] [--keywords-only]
 공통 본문 색인은 data/rag/index 아래에서 검증 후 교체하며 이전 세대를 보존합니다.
@@ -27,7 +27,7 @@ from backend.app.models.news import Article, ArticleTag
 from backend.app.scheduler.jobs.news_load import keyword_article_counts
 from backend.app.services.news_embedding import MODEL, DIMENSIONS
 
-ARTICLE_COLLECTION = 'kotra_article'
+from backend.app.services.news_collections import ARTICLE_COLLECTION
 KEYWORD_COLLECTION = "news_keyword"
 CHROMA_PATH = Path(__file__).resolve().parents[4] / "chroma_data"
 LOG_DIR = Path(__file__).resolve().parents[4] / "data" / "news" / "logs"

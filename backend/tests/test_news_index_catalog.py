@@ -37,7 +37,7 @@ def write_raw(path, records):
 def collection_rows(root):
     snapshot = GenerationStore(root).snapshot()
     try:
-        data = read_all(snapshot.collection('kotra_article'), ['documents', 'metadatas', 'embeddings'])
+        data = read_all(snapshot.collection('total_article'), ['documents', 'metadatas', 'embeddings'])
         return {key: (doc, meta, list(vector)) for key, doc, meta, vector in zip(
             data['ids'], data['documents'], data['metadatas'], data['embeddings'])}
     finally:

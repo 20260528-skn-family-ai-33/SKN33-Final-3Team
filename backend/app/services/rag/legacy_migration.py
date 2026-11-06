@@ -18,6 +18,8 @@ from backend.app.services.rag.store import (
     persistent_client, validate_generation_contract, collection_distance,
 )
 
+from backend.app.services.news_collections import ARTICLE_COLLECTION
+
 COLLECTION = 'kotra_article'
 
 
@@ -260,7 +262,7 @@ def migrate(source, root, catalog, database_id, *, apply=False, source_stopped=F
                 if (existing.get('generation') != generation or existing.get('dimensions') != dimensions
                         or existing.get('sources') != sorted({a.source_code.value for a in articles})
                         or existing.get('articles') != len(articles) or existing.get('chunks') != len(expected)
-                        or existing.get('collections') != {COLLECTION:len(expected)}):
+                        or existing.get('collections') != {ARTICLE_COLLECTION:len(expected)}):
                     raise ValueError('migration_existing_status_mismatch')
                 if (folder/'articles.jsonl').read_text(encoding='utf-8') != ''.join(a.model_dump_json()+'\n' for a in articles) or json.loads((folder/'vocabulary.json').read_text(encoding='utf-8')) != vocabulary:
                     raise ValueError('migration_existing_catalog_mismatch')
@@ -270,7 +272,7 @@ def migrate(source, root, catalog, database_id, *, apply=False, source_stopped=F
                       'dimensions':dimensions, 'sources':sorted({a.source_code.value for a in articles}),
                       'articles':len(articles), 'chunks':len(expected), 'embedded':0, 'reused':len(expected),
                       'country_order_preserved_articles':country_order_changes,
-                      'collections':{COLLECTION:len(expected)}, **document_contract()}
+                      'collections':{ARTICLE_COLLECTION:len(expected)}, **document_contract()}
             fallback_ids = sorted(a.article_id for a in articles if 'body:summary_fallback' in a.provenance)
             report.update(summary_fallback_articles=len(fallback_ids), summary_fallback_article_ids=fallback_ids,
                           summary_fallback_chunks=sum('body:summary_fallback' in a.provenance for _, _, a in expected.values()),
@@ -291,13 +293,13 @@ def migrate(source, root, catalog, database_id, *, apply=False, source_stopped=F
                         if collection.name != COLLECTION:
                             writer.delete_collection(collection.name)  # Owned target copy only.
                     target = writer.get_collection(COLLECTION, embedding_function=None)
-                    target.modify(metadata={**{key: value for key, value in info.items() if key != 'hnsw:space'},
+                    target.modify(name=ARTICLE_COLLECTION, metadata={**{key: value for key, value in info.items() if key != 'hnsw:space'},
                                             'embedding_model':MODEL,'dimensions':dimensions,
                                             'distance_metric':'cosine',**document_contract()})
                     if collection_distance(target) != 'cosine':
                         raise ValueError('migration_copied_metric_mismatch')
                 with (readonly_clone(folder/'chroma',client_factory, forbidden_root=root) if existing else nullcontext(None)) as old:
-                    target_read = old[0].get_collection(COLLECTION,embedding_function=None) if old else None
+                    target_read = old[0].get_collection(ARTICLE_COLLECTION,embedding_function=None) if old else None
                     if target_read is not None:
                         target_info = target_read.metadata or {}
                         if (target_read.count() != len(expected) or target_info.get('embedding_model') != MODEL

@@ -2,7 +2,7 @@
 
 기준 브랜치 `feat/50-agent-state` · 갱신 2026-10-30 · 그림: [무역통계 Agent State 설계](https://claude.ai/artifact/2SKYDkScxPRPjhxkxBabCb) (팀 공유 전에는 작성자만 열람) · API 변경: [AGENT_API_CHANGES.md](AGENT_API_CHANGES.md)
 
-현재 `backend/app/api/chat.py`의 `execute`는 목업이다. LLM은 의도와 슬롯만 뽑고, 답변 문장은 고정 문구다. 이 문서는 그 목업을 대체할 실제 에이전트의 설계다. 에이전트·채팅·워커 코드를 고치기 전에 이 문서와 [state.py](../backend/app/agents/state.py)를 먼저 읽는다.
+채팅은 `API_CHAT_AGENT_ENABLED` 설정에 따라 기존 `chat.execute` 또는 LangGraph 에이전트로 실행한다. 기존 기사 답변은 `chat_news.article_answer`, 그래프의 기사 단계는 `tools.article_result`를 거쳐 공통 RAG를 호출한다. 에이전트·채팅·워커 코드를 고치기 전에 이 문서와 [state.py](../backend/app/agents/state.py)를 먼저 읽는다.
 
 **원칙**
 - 원본은 MySQL에 둔다. Redis에는 컨텍스트와 실행 중 상태만 둔다.
@@ -82,8 +82,8 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 | D-41 | 개발 중 LLM SQL은 `.env`에 등록된 관리자 DB 계정으로 실행한다. 대신 세션을 `READ ONLY` 트랜잭션으로 열고, sqlglot으로 SELECT만·허용 테이블만(D-65)·LIMIT 강제를 검사하고, 쿼리마다 최대 30초(`MAX_EXECUTION_TIME`)를 건다. 배포 전에 읽기 전용 계정으로 바꾼다(`TODO(D-41)`). (C-10, E-02) |
 | D-65 | LLM SQL은 개인정보·시스템 테이블을 뺀 모든 테이블을 쓸 수 있다. 구현은 **허용 목록**으로 한다. 목록에 없는 테이블(새로 생긴 테이블, RDS에만 있는 테이블 포함)은 기본 차단이고, 분류한 뒤 목록에 더한다. 허용: `export_monthly`, `export_summary`, `import_monthly`, `import_summary`, `country`, `market_region`, `currency`, `fx_daily`, `hs_code`, `hs_code_correlation`, `un_data`, `keyword_category`, `keyword_topic`, `news_keyword_daily`, `news_product_daily`, 그리고 기사 계열 `article`, `article_tag`, `article_classification`(숨김 기사·`admin_meta_json`도 별도 제한 없이 허용, 2026-10-30 F-01). 단 기사 본문 `article.body_masked`는 sqlglot 검사에서 막는다. 결과표가 digest를 거쳐 LLM 입력이 되므로 §8의 "LLM 입력에 기사 본문 금지"를 지키기 위해서다. `SELECT *`·`article.*`처럼 본문이 딸려 오는 조회도 막는다(2026-10-30). 차단(개인정보): `users`, `api_user_profile`, `api_auth_session`, `user_consent`, `user_interest`, `user_alert`, `notification_setting`, `alert_event`, `chat_session`, `chat_message`, `report`, `report_subscription`, `api_keyword_block`, `api_report_file`, `api_snapshot`. 차단(시스템): `service_option`, `batch_run`, `async_job`, `api_audit_event`, `api_rate_limit`, `ml_model_version`, `model_run`. (E-01) |
 | D-42 | 결과표는 1,000행, 순위는 기본 상위 10이다. (Q-32) |
-| D-43 | 기사 검색 tool은 RAG 담당자가 제공할 `search_news(RagRequest) -> RagResponse`를 부른다. 지금은 자리만 있는 함수(`agents/tools.py`)가 `None`을 돌려준다. 그러면 tool은 NO_DATA와 함께 "기사 검색은 지원 예정입니다." 문구만 남긴다. 기사가 필요한 하위 질문(LOCAL_ISSUES)은 이 문구로 답하고, CAUSE는 통계만 답한 뒤 문구를 덧붙여 PARTIAL로 둔다. `blocked_topics`는 알림 차단용이라 채팅에서는 빈 값이다. (Q-33, C-15) |
-| D-44 | RAG가 연결되면 기사는 확정된 품목명·국가명을 키워드로, CAUSE는 통계 기간 앞뒤 1개월, LOCAL_ISSUES는 명시한 기사 기간 또는 최근 3개월로 vector DB에서 검색한다(D-75). 급증 월은 쓰지 않는다. (Q-34, C-14) |
+| D-43 | 기존 채팅 경로는 RAG·LOCAL_ISSUES 기사 질문에서 `search_news(RagRequest, article_allowed=...) -> RagResponse`를 호출한다. 일반 검색은 유사도순 최대 10건에서 본문·인용 검수를 통과한 기사 최대 5건을 반환한다. 기존 채팅 경로는 `blocked_topics`를 비워 두고 DB 공개·사용자 차단 조건을 후보 선정 전에 적용한다. 그래프의 CAUSE·LOCAL_ISSUES는 `article_result`에서 같은 RAG를 호출하고 `ToolResult`와 digest로 전달한다. 시간 제한과 답변 상태는 §13.4·§14.4를 따른다. (Q-33, C-15) |
+| D-44 | 기사 검색은 질문에 확정된 품목명·국가명을 더해 벡터 색인을 조회한다. 기존 채팅의 LOCAL_ISSUES는 질문이나 대화에서 정한 발행 기간을 쓰고, 기간 조건이 없으면 공개 기사의 최신 발행월을 포함한 최근 3개월을 쓴다. 그래프 설계에서 CAUSE의 기사 기간은 통계 기간을 기준으로 앞뒤 1개월까지다(D-75). (Q-34, C-14) |
 | D-48 | ML 유망시장은 워커가 서버에 둔 모델 파일(v1·v3 앙상블 joblib)과 피처 스냅샷으로 요청 때마다 예측한다. 전체 예측 모집단은 전용 SQL 테이블에 적재하지 않는다. 사용자에게 반환한 조회 결과는 기존 MySQL 결과표 저장소에 보관한다(D-88). 스냅샷은 최신 기준월만 담은 파일(`features_snapshot_py311_latest*.pkl`, 약 22MB)을 쓴다. 전체 스냅샷(약 750MB)은 쓰지 않는다. tool은 최신 스냅샷의 전체 예측 대상에서 `two_stage.predict` → `combine`(앙상블) → 순위를 계산한 뒤 요청한 국가·품목을 필터링한다(D-78). `two_stage.query`는 출력만 하므로 tool은 D-70의 함수를 쓴다. 모델과 스냅샷은 워커 메모리에 한 번 올려 재사용하고, 경로는 환경변수로 받는다. 워커에는 LightGBM·`libgomp1`이 필요하고, 패키지 버전은 모델 `runtime`(ML_USAGE.md)과 맞춘다. 예측 값은 스냅샷이나 모델 파일을 바꿀 때만 달라진다. 증감 예상(모델 B, `ml/growth_model.py`)은 `model_b_growth_<YYYYMM>.joblib` 하나를 읽는다. `API_ML_GROWTH_MODEL_PATH`가 없으면 월별 학습(`candidate_models.run_growth`)이 남긴 READY 레지스트리 중 모델 A와 같은 기준월의 최신 리비전을 쓰고, 레지스트리가 없으면 직접 만든 파일(같은 기준월 → 가장 최근)을 쓴다. 파일에 최신 기준월 전체 쌍의 방향 예측(`latest`)이 있어 워커는 피처를 다시 읽지 않는다. 모델 A 파일과 기준월이 같을 때만 행마다 "증가 예상"·"감소 예상"을 붙이고, 파일이 없거나 기준월이 다르면 방향 없이 답하며 그 사실을 적용 조건에 적는다. 모델 B 버전은 결과 재사용 fingerprint에 들어간다. 모델 로드·예측(ML 단계와 조건 확인의 HS4 후보·예측 기준월 확인)은 전용 스레드 하나에서 돌리고 노드 예약 시간만 기다린다(`runtime.bounded_ml`). 넘으면 그 단계만 실패로 두고 워커는 다음 작업으로 넘어가며, 줄에서 기다리던 작업은 취소한다. 한 작업이 5분 넘게 끝나지 않으면 오류 로그로 워커 재시작이 필요하다고 알린다(스레드는 교체하지 않음, 2026-11-05 사용자 결정). 유망시장 질문은 통계 공개 기간 검사를 하지 않아, 오래된 기간을 물어도 최신 기준월 예측을 되묻는다(MODEL_PERIOD). 판 개정으로 묶인 HS6(예: 150930)는 모델에 묶음 대표 코드(`hs_code_correlation.group_code`, 예: 150920)로만 있으므로 그 코드로 조회하고, 결과는 요청 코드로 보이고, 대표 코드 안내는 누락 사유가 아니라 적용 조건(`applied_defaults`)에 적는다(완전한 결과라 PARTIAL로 두지 않는다). HS2017 품목은 대응표의 이전 판 코드로 찾고, 결과 행에 요청 판본(`hs_ver`)을 남겨 품목명도 그 판본으로 찾는다(2026-11-04). (C-05, C-19) |
 | D-45 | 재시도는 SQL 2회, 기사 1회, 차트·리포트·ML 0회다. (Q-36) |
 | D-46 | tool 일부가 실패하면 나머지 결과로 PARTIAL 답변을 만들고 경고를 붙인다. (Q-37) |
@@ -95,7 +95,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 |---|---|
 | D-50 | 결론은 하위 질문마다 1~2문장, 설명은 전체 4문장 이하로, 합니다체로 쓴다. compose는 하위 질문별 `Draft.conclusion[{task_id, sentences}]`과 `explanation` 문장 목록(문장마다 200자)으로 낸다(D-80). 기사는 문장 끝 [번호]와 기사 카드로 인용한다. (Q-39~41) |
 | D-67 | compose가 재시도(D-21) 후에도 `Draft` 규칙(문장 200자, 결론 하위 질문마다 2문장, 설명 4문장)을 어기면, 표·차트만 담아 `answer_status=PARTIAL`로 답하고 경고 "요약 문장을 만들지 못했습니다."를 붙인다. 작업은 실패로 끝내지 않는다. (E-03) |
-| D-69 | 고정 안내 문구. 시장 유형: "시장 유형 분석은 지원 예정입니다. 대신 이 국가·품목의 유망시장 순위를 볼 수 있습니다." 범위 밖: "수출입 통계·시장 비중·유망시장에 관한 질문을 입력해 주세요." 기사: "기사 검색은 지원 예정입니다."(`tools.NEWS_PENDING_MESSAGE`). (E-05) |
+| D-69 | 고정 안내 문구. 시장 유형: "시장 유형 분석은 지원 예정입니다. 대신 이 국가·품목의 유망시장 순위를 볼 수 있습니다." 범위 밖: "수출입 통계·시장 비중·유망시장에 관한 질문을 입력해 주세요." 기사 검색 실패 안내는 D-43·§14.4를 따른다. (E-05) |
 | D-51 | 숫자 대조는 화면 표시 단위의 반올림 차이만 허용한다. 대조 결과는 문장 번호(`Draft.sentences()` 순서)로 남긴다. 재생성 후에도 틀린 문장은 "확인 필요"로 표시한다. (Q-42, 43) |
 | D-52 | 5건 요약은 compose가 같은 LLM 호출에서 `Draft.turn_summary`로 쓴다. 200자 이하이고 양식은 `{조건 요약} {질문 요지} → {핵심 결과 1개}`다. 숫자는 답변에 나온 것만 쓰고, 되묻기 과정은 넣지 않는다. 정상·부분 답변만 넣는다. (Q-09, 10, C-06) |
 | D-53 | 최근 검색 조건은 정상·부분 답변일 때만 갱신한다. (Q-44) |
@@ -237,7 +237,7 @@ backend/app/agents/
   graph.py        StateGraph 구성 + RedisSaver(ttl=CHECKPOINT_TTL) 연결, 워커에서 invoke/resume
   planner.py      하위 질문 분해 + intent·슬롯 추출(LLM 1회) + STEPS 표
   conditions.py   check_conditions, ask_user
-  tools.py        search_news(자리만, RAG 담당 구현), query_trade_data, search_articles, build_chart, generate_report, query_market_model
+  tools.py        search_news(공통 기사 RAG 서비스 호출), article_result(그래프 기사 결과 변환)
   compose.py      Draft 작성(LLM 1회)
   verify.py       숫자 대조
   finalize.py     answer JSON·컨텍스트·제목 저장, 체크포인트 정리
@@ -264,7 +264,7 @@ START → planner → dispatch ─┬→ check_conditions ─┬→ dispatch
 |---|---|
 | STATISTICS · RANKING · MARKET_SHARE | check → sql(check) → chart(sql) |
 | CAUSE | check → sql(check) → news(check) → chart(sql) |
-| LOCAL_ISSUES | check → news(check). RAG 연결 전에는 news가 "지원 예정" 문구만 남김(D-43) |
+| LOCAL_ISSUES | check → news(check). 확정된 국가·품목·발행 기간으로 기사를 찾는다. 일반 검색은 본문·인용 검수를 통과한 기사 최대 5건을 반환한다(D-43). |
 | REPORT | check → report(check) |
 | PROMISING_MARKET | check → ml(check) → chart(ml) |
 | MARKET_TYPE · OUT_OF_SCOPE | 없음 (안내 문구) |
@@ -551,6 +551,8 @@ actions[], report_id, warnings[]
 | `PREDICTION` (ml) | `anchor`, `model_version`, `snapshot_month`, `targets: [{country_code·hs6, items: [{country_rank, product_rank, country_size, product_size, country_code, hs6, hs_ver, name, growth_outlook, exp_12m}]}]`. `growth_outlook`은 모델 B의 "증가 예상"·"감소 예상"(없으면 null). 모델 A의 `growth_pct`는 순위용이라 결과표 행에만 두고 digest·표·차트에는 넣지 않는다(2026-11-05, 사용자 결정) | 대상마다 상위 `min(10, 60 // 대상 수)`행. 쌍 조회는 요청 순서 앞 60쌍 |
 | `ARTICLES` (news) | `article_period`, `rag_status`(RagResponse.status), `items: [{article_id, title, published_date, source_code, evidence_sufficient, summary: [문장]}]` | 최대 5건(D-43) |
 
+위 표는 그래프 내부 digest 계약이다. 기존 채팅 경로가 작업 결과와 대화 기록에 저장하는 기사 카드의 `sentences[].quotes` 등 공개 필드는 [채팅 API의 기사 답변](AGENT_API_CHANGES.md#기사-검색-답변)을 따른다.
+
 ### 11.3 실행 메타데이터 (`chat_message.result_json._execution.agent`)
 - 기존 `_execution`(version 1, `api/jobs.py`)의 칸은 그대로 두고 `agent` 객체만 더한다. `payload_json.input`은 `AgentInput`, `payload_json.resume`은 되묻기 답이다(§3).
 
@@ -725,7 +727,7 @@ actions[], report_id, warnings[]
 | sql 템플릿 1회 | 30 |
 | LLM SQL 1회 (생성 20 + 실행 30) | 50 |
 | ml (`predict_markets`, 대상 전체) | 30 |
-| news (`search_news`) | 15 |
+| news (`search_news`) | 일반 챗봇 30(검색·검수 29, 마무리 1), 최신순 15 |
 | chart | 5 |
 | report 접수 또는 완료 확인 1회 | 10 |
 | compose LLM 1회 | 20 |
@@ -888,10 +890,11 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
 §13.5다.
 
 ### 14.4 search_articles
+공통 RAG는 유사도순으로 최대 10건, 최신순은 요청 종료일 기준 최근 14일 안의 벡터 후보 최대 40건을 확보한다. 일반 검색은 5건이 검수를 통과하면 즉시 종료한다. 검수 기한 만료 또는 모델 요청 시간 초과 시 후보 확인을 중단하고 이미 완료한 기사를 `partial`로 넘기고, 기존 채팅 경로는 DB 원문과 다시 대조한 인용과 함께 `PARTIAL`로 저장한다. 완료한 기사가 없으면 실패 안내와 빈 목록을 `NO_DATA`로 저장한다. 다음은 그래프가 기사를 이용하는 내부 계약이다.
+
 - **입력:** `task.question`, `task.conditions`(국가·품목·`article_period`), `Step.args.limit`(5)
 - **처리:**
   - `RagRequest(request_id=f"{job_id}:{step_id}", query=task.question, use_case="chat", conditions=SearchConditions(geography=국가가 없으면 all·있으면 selected, products=hs_items, period=article_period, blocked_topics=()), source_codes="ALL", limit=5)`를 만들어 `search_news`를 부른다(D-43, D-44, D-75).
-  - `search_news`가 None을 돌려주면 NO_DATA로 두고 `NEWS_PENDING_MESSAGE`를 경고에 넣는다(RAG 연결 전).
 - **RagResponse.status 처리:**
   - `ok` → OK
   - `partial` → OK + completeness=PARTIAL + limitations에 사유
@@ -899,9 +902,9 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
   - `insufficient_evidence` → 기사가 있으면 OK + completeness=PARTIAL. 요약 없는 기사도 제목·날짜·원문 링크를 표시하고 근거 부족 안내를 붙인다. 설명·인용 근거에는 사용하지 않는다(D-91). 기사 자체가 없으면 NO_DATA
   - `no_results` → NO_DATA, "관련 기사가 없습니다."
   - `failed` → 실패
-- **자체 검증:** 발행일이 `article_period` 안인지, 국가·품목 메타가 조건과 맞는지, 원문 링크가 있는지, 5건 이하인지. 요약 문장의 근거 ID는 `RagResponse` 모델이 검증한다.
+- **자체 검증:** 발행일·출처, 질문의 국가·품목에 대한 본문 관련성, 문장별 원문 인용, 반환 건수를 확인한다. 다른 국가 태그가 붙은 기사도 본문이 질문 대상을 설명하면 근거가 될 수 있다. 요약 문장의 근거 ID는 `RagResponse` 모델이 검증한다.
 - **출력:** `ToolResult{article_ids, article_period, source, digest(ARTICLES)}`
-- **실패:** 1회 재시도(D-45), 그 뒤 FAILED. CAUSE는 통계만으로 PARTIAL이다(D-46).
+- **실패:** 시간 초과는 재시도하지 않는다. 통과한 기사가 있으면 OK + completeness=PARTIAL과 시간 제한 사유를 전달하고, 0건이면 NO_DATA다. 그 밖의 재시도 대상 오류는 1회 재시도(D-45) 후 FAILED로 처리한다. CAUSE는 통계만으로 PARTIAL이다(D-46).
 
 ### 14.5 build_chart
 - **입력:** 의존 단계(sql·ml)의 `result_id`, `task.conditions`. 차트 유형은 아래 표대로 결과를 보고 정한다(플래너가 정하지 않음, D-89).
@@ -963,7 +966,7 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
 | finalize | §3-16, D-72·D-77 |
 
 ### 14.9 단계·하위 질문 결과 정하기와 고정 문구
-- **tool이 NO_DATA를 돌려주면:** 결과는 `ToolResult{status: "NO_DATA", error: 사유 문구}`로 남긴다. 단계는 FAILED로 두고 `skip_blocked()`한다. 그래야 그 결과에 기대는 단계(예: 0행 sql 뒤의 chart)가 `result_id` 없이 돌지 않는다. NO_DATA의 예: 0행, `DATA_NOT_READY`, 예측 대상 아님, 기사 지원 예정, 리포트 거절.
+- **tool이 NO_DATA를 돌려주면:** 결과는 `ToolResult{status: "NO_DATA", error: 사유 문구}`로 남긴다. 단계는 FAILED로 두고 `skip_blocked()`한다. 그래야 그 결과에 기대는 단계(예: 0행 sql 뒤의 chart)가 `result_id` 없이 돌지 않는다. NO_DATA의 예: 0행, `DATA_NOT_READY`, 예측 대상 아님, 기사 검색 시간 초과 시 검수 통과 기사 0건, 리포트 거절.
 - **하위 질문 결과(`Task.answer_status`):** compose 바로 앞에서 AgentState.task_outcome(task_id)으로 모든 Task에 대해 정하고 반환값을 answer_status에 저장한다(D-72). 그 Task에 PENDING·RUNNING 단계가 없어야 한다.
 
   | 하위 질문 상태 | answer_status |
@@ -992,7 +995,7 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
   | 해외시장 점유율(D-87) | 해외 수입시장에서 한국 제품의 점유율은 아직 지원하지 않습니다. |
   | 예측 대상 아님(D-74) | ○○은 예측 대상이 아닙니다. |
   | 0행·`DATA_NOT_READY` | 조건에 맞는 데이터가 없습니다. |
-  | 기사 지원 예정(D-43) | 기사 검색은 지원 예정입니다. |
+  | 기사 검색 실패(D-43) | 기사 검색에 실패했습니다. 잠시 후 다시 시도해 주세요. |
   | `RUN_TIMEOUT`(D-85, `error.message`) | 처리 시간이 초과되었습니다. 질문을 나눠 다시 시도해 주세요. |
   | `RECOVERY_EXHAUSTED`(D-85, `error.message`) | 처리 중 문제가 반복되었습니다. 잠시 후 다시 질문해 주세요. |
 

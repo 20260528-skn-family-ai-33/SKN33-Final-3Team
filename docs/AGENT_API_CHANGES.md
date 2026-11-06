@@ -67,6 +67,20 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `verification.sentence_checks` | array | `[{index, sentence, numbers, status, basis, reason}]`. `index`는 최종 답변의 결론 다음 설명 순서(0부터). FR-101-08·FR-901-02에 따라 한 번 교정한 뒤에도 `MISMATCH`인 문장은 삭제하지 않고 해당 문장 끝에 "확인 필요"를 표시한다. `PASS` 문장에는 표시하지 않는다. |
 | `warnings` | (기존) | 최대 10개, 각 200자에서 자름 |
 
+#### 기사 검색 답변
+
+아래 필드는 기존 채팅 경로(`chat.execute → chat_news.article_answer`)의 기사 답변 계약이다. API-37의 `job.answer`와 대화 기록의 `answer`에 같은 기사 답변을 저장한다.
+
+`API_CHAT_AGENT_ENABLED=true`인 그래프 경로는 같은 RAG 결과를 `article_result`에서 `ToolResult`와 내부 `digest(ARTICLES)`로 변환한다. 시간 초과 시 통과 기사가 있으면 completeness=PARTIAL과 사유를, 0건이면 NO_DATA를 전달하며 재시도하지 않는다. 최종 답변은 위의 `tasks` 계약과 `articles[{article_id, title, published_date, source_code, task_id}]`를 따른다.
+
+| 위치 | 값과 표시 방법 |
+|---|---|
+| `answer_status`, `rag_status`, `warnings` | 일반 검색은 고유 후보 최대 10건을 순서대로 검수하고, 5건이 통과하면 `ANSWERED`가 가능하다. 검수 기한 만료나 모델 요청 시간 초과로 일부만 검수를 마치면 RAG는 `partial`, 표시 가능한 카드가 있는 채팅 답변은 `PARTIAL`이며 시간 제한 안내를 포함한다. 통과한 기사가 생기기 전에 만료되면 `NO_DATA`, `rag_status="failed"`, `articles=[]`와 실패 안내를 저장한다. |
+| `order_by`, `article_period`, `answer_format` | 정렬 기준, 적용 발행 기간, `summary` 또는 `list`. 실패 안내에서는 `answer_format`이 생략될 수 있다. |
+| `latest_scope`, `latest_scope_description` | 최신순에서는 `retrieved_candidates`와 후보 내 최신순 설명을 표시한다. 일반 결과에서는 두 값이 null이며 실패 안내에서는 생략될 수 있다. |
+| `articles[].summary`, `articles[].sentences` | 카드 요약 문자열과 문장별 `{text, quotes, unverified_question_parts}`. `quotes`에는 현재 DB 본문에서 다시 확인한 원문만 들어간다. 목록 형식에서는 빈 문자열과 빈 배열이다. |
+| `articles[].evidence_sufficient`, `articles[].evidence_role`, `articles[].reference_limitation` | 카드의 인용 가능 여부, 직접 근거·참고자료 등의 분류, 참고 시 제한 사항. `answer.unverified_question_parts`는 반환 문장들이 공통으로 확인하지 못한 질문 구절이다. |
+
 ### ChartSpec
 
 `state.ChartSpec` 형식입니다. 프론트 `frontend/src/components/charts.jsx`의 props와는 모양이 달라 프론트가 변환합니다(`LineChart`는 `yTicks`·시리즈 색 추가, `Donut`은 `[label, 비율, 색]`, `null` 칸은 선을 끊어 그림).

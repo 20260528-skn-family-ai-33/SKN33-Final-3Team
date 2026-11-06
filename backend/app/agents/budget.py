@@ -12,7 +12,7 @@ from backend.app.api.common import require
 
 # TODO(C-28): tune from node duration logs; settings override each provisional value.
 DEFAULT_SECONDS = {'planner': 10, 'check': 15, 'direct_input': 10, 'sql': 30,
-    'llm_sql': 50, 'ml': 30, 'news': 15, 'chart': 5, 'report': 10,
+    'llm_sql': 50, 'ml': 30, 'news': 30, 'chart': 5, 'report': 10,
     'compose': 20, 'verify': 5, 'finalize': 10}
 
 

@@ -28,6 +28,7 @@ class IntentSlots(SlotModel):
     trade_flow: Literal['EXPORT','IMPORT'] | None
     ranking_group: Literal['COUNTRY','HS6'] | None = None
     all_countries: bool
+    latest_articles: bool = False
     all_products: bool
 
 
@@ -55,7 +56,8 @@ Previous conditions supply context but do not repeat unchanged slots. all_produc
 are true only if explicitly asked for all. '전체 품목' does NOT mean '전체 국가':
 in '2025년 전체 품목 수출을 2024 대비', all_products=true and all_countries=false.
 ML covers clustering/promising markets/prediction;
-RAG covers causal explanations/summaries; LOCAL_ISSUES is plain article lookup.
+RAG covers causal explanations/article summaries; LOCAL_ISSUES is plain article lookup.
+Set latest_articles when publication-date ordering is requested, including summaries of the newest articles.
 Do not return country codes, SQL, recommendations or HS classifications.
 """
 
