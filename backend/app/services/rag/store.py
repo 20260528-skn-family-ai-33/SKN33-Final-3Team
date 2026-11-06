@@ -118,33 +118,49 @@ def persistent_client(path):
 
 
 class _BorrowedClient:
-    """shared_client가 빌려주는 핸들. 요청이 끝나도 닫지 않는다(close는 아무것도 하지 않음)."""
-    def __init__(self, client):
-        self._client = client
+    """shared_client가 빌려주는 핸들. close는 빌린 수만 줄인다. 최신 세대가 아니고 아무도 쓰지 않으면 실제로 닫는다."""
+    def __init__(self, key, entry):
+        self._key, self._entry, self._closed = key, entry, False
 
     def __getattr__(self, name):
-        return getattr(self._client, name)
+        return getattr(self._entry['client'], name)
 
     def close(self):
-        pass
+        with _client_lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._entry['users'] -= 1
+            _close_retired()
 
 
-_shared_clients = {}
+_shared_clients = {}   # 경로 → {'client', 'users'}
+_latest_shared = None
+
+
+def _close_retired():
+    """최신 세대가 아니고 빌린 곳이 없는 핸들을 닫는다. 동시 검색 중인 이전 세대는 끝날 때 닫는다."""
+    for key, entry in list(_shared_clients.items()):
+        if key != _latest_shared and entry['users'] == 0:
+            entry['client'].close()
+            del _shared_clients[key]
 
 
 def shared_client(path):
     """검색 전용(챗봇) 프로세스에서 같은 세대 색인을 한 번만 연다(2026-11-06, D-104).
-    큰 색인은 여는 데만 수십 초가 걸려 요청마다 열면 검색 예산(30초)을 넘긴다. 새 세대가 열리면 이전 세대 핸들을 닫는다.
+    큰 색인은 여는 데만 수십 초가 걸려 요청마다 열면 검색 예산(30초)을 넘긴다. 새 세대가 열리면 이전 세대는
+    빌린 곳(동시에 도는 다른 검색)이 모두 돌려준 뒤 닫는다(D-105).
     색인을 쓰는 작업(news_embed·이관)에는 쓰지 않는다. 그쪽은 persistent_client로 요청마다 새 핸들을 연다."""
+    global _latest_shared
     key = str(Path(path).resolve())
     with _client_lifecycle_lock:
         if key not in _shared_clients:
-            # ponytail: 워커는 한 번에 작업 하나라 이전 세대를 바로 닫는다. 동시 검색 스레드가 생기면 참조 수로 닫을 것
-            for old in _shared_clients.values():
-                old.close()
-            _shared_clients.clear()
-            _shared_clients[key] = persistent_client(path)
-        return _BorrowedClient(_shared_clients[key])
+            _shared_clients[key] = {'client': persistent_client(path), 'users': 0}
+        _latest_shared = key
+        _close_retired()
+        entry = _shared_clients[key]
+        entry['users'] += 1
+        return _BorrowedClient(key, entry)
 
 
 def collection_distance(collection):

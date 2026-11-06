@@ -36,6 +36,7 @@ def warm_article_index():
             snapshot = GenerationStore(Settings().get('NEWS_VECTOR_ROOT'), client_factory=shared_client).snapshot()
             snapshot.collection(ARTICLE_COLLECTION).query(
                 query_embeddings=[[0.0] * (snapshot.dimensions - 1) + [1.0]], n_results=1)
+            snapshot.client.close()   # 빌린 수만 돌려준다. 핸들은 열린 채 남는다(D-105)
         except Exception as exc:
             logging.getLogger(__name__).warning('rag_index_warm_failed type=%s', type(exc).__name__)
     thread = threading.Thread(target=run, name='rag-index-warm', daemon=True)

@@ -261,6 +261,27 @@ class HsLookupTest(unittest.TestCase):
         self.assertEqual(empty.status, 'NO_DATA')
 
 
+class ParallelWorkerTest(unittest.TestCase):
+    def test_each_claimed_job_runs_in_its_own_thread_up_to_the_limit(self):
+        import threading
+        from backend.app.api import worker
+        release, started, jobs = threading.Event(), [], [{'job_id': n, 'job_type': 'API_CHAT'} for n in range(3)]
+        def claim(database, settings, spawn=None):
+            if not jobs: raise KeyboardInterrupt   # 다 가져가면 루프를 끝낸다
+            spawn(jobs.pop(0)); return True
+        def process(database, settings, job):
+            started.append(job['job_id']); release.wait(5)
+        settings = MagicMock(get=lambda k, d=None: '2' if k == 'API_WORKER_MAX_THREADS' else d)
+        sleeps = []
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 3: release.set()       # 상한(2)에 걸려 기다리는 동안 앞 작업이 끝난다
+        with patch.object(worker, 'run_once', side_effect=claim), patch.object(worker, 'process', side_effect=process),                 patch.object(worker.time, 'sleep', side_effect=sleep),                 patch('backend.app.api.subscriptions.enqueue_due'), self.assertRaises(KeyboardInterrupt):
+            worker.run_loop(MagicMock(), settings)
+        self.assertEqual(sorted(started), [0, 1, 2])
+        self.assertIn(0.5, sleeps)                    # 두 개가 돌 때 세 번째는 바로 가져가지 않았다
+
+
 class WorkerStartupTest(unittest.TestCase):
     def test_missing_redis_modules_are_named(self):
         from backend.app.agents.worker import require_modules
