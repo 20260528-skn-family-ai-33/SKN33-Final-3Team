@@ -90,6 +90,13 @@ def main():
                 atomic_write(source / name, (original / name).read_bytes())
         inventory = [{'file': name, 'bytes': p.stat().st_size, 'sha256': file_digest(p)}
                      for name, p in files(source, prefix)]
+        if args.dataset == 'trade-news':
+            from .sqlite_state import database_inventory
+            # These DBs have a separate atomic pointer; exclusion from the file
+            # manifest must not hide them from the operator's migration inventory.
+            inventory.append(database_inventory(source / 'articles.sqlite3'))
+            if (source / 'prepared.sqlite3').exists():
+                inventory.append(database_inventory(source / 'prepared.sqlite3'))
         if not args.apply:
             print(json.dumps({'prefix': prefix, 'apply': False, 'files': inventory}, ensure_ascii=False, indent=2))
             return

@@ -13,7 +13,9 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 from backend.app.scheduler.collectors.trade_news.news.run_lifecycle import atomic_json
 from backend.app.scheduler.jobs.news_process import run_bounded
-from backend.app.storage.workspace import stored, checkpoint
+from backend.app.storage.workspace import workspace, checkpoint
+from backend.app.storage.objects import Conflict
+from contextlib import ExitStack, nullcontext
 
 ROOT = Path(__file__).resolve().parents[4]
 ENV_PATH = ROOT / '.env'
@@ -69,7 +71,7 @@ def absolute_path(value):
     return (path if path.is_absolute() else ROOT / path).resolve()
 
 
-def data_settings(data_dir, env_path):
+def data_settings(data_dir, env_path, *, locked=False):
     values = settings(env_path)
     data_dir = data_dir or values.get('NEWS_CRAWL_DATA_DIR')
     if not data_dir:
@@ -80,7 +82,7 @@ def data_settings(data_dir, env_path):
     if enabled():
         from filelock import FileLock
         from backend.app.storage.sqlite_state import restore
-        with FileLock(str(root / 'crawler.lock'), timeout=0):
+        with nullcontext() if locked else FileLock(str(root / 'crawler.lock'), timeout=0):
             restore(budget)
     if not budget.is_file():
         raise ValueError('기존 요청 예산 DB 없음')
@@ -173,7 +175,6 @@ def storage_root(arguments):
     return absolute_path(value)
 
 
-@stored('raw/trade-news', storage_root)
 def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_PATH, include_vector=False):
     """날짜는 시작 시 한 번 고정합니다. 실제 예약 실행은 scheduler.start() 이후에만 가능합니다."""
     from filelock import FileLock, Timeout
@@ -188,7 +189,15 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
               'collection': {'status': 'not_started'}, 'mysql': {'status': 'not_started'},
               'dictionary': {'status':'not_started'}, 'vector': {'status':'not_started'}, 'usage':{k:{'tokens':0,'estimated_usd':0.0,'model_calls':0} for k in ('dictionary','collection','mysql')}}
     try:
-        root, values = data_settings(data_dir, env_path)
+        from backend.app.storage.objects import enabled
+        s3 = enabled()
+        if s3:
+            # Resolve settings without touching a live child's filesystem or S3.
+            root = storage_root({'data_dir': data_dir, 'env_path': env_path})
+            values = settings(env_path)
+            root.mkdir(parents=True, exist_ok=True)
+        else:
+            root, values = data_settings(data_dir, env_path)
     except Exception as exc:
         result.update(status='failed', error_type=type(exc).__name__, finished_at=datetime.now(KST).isoformat())
         log.error('기사 실행 설정 오류 (%s). 기존 예산 DB와 SOURCE 설정을 확인하세요.', type(exc).__name__)
@@ -199,10 +208,17 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
         return result
     try:
         # 자식의 crawler.lock과 분리해 수집부터 적재까지 전체 작업의 중복 호출을 막습니다.
-        with FileLock(str(root / 'daily_job.lock'), timeout=0):
+        with ExitStack() as stack:
+            stack.enter_context(FileLock(str(root / 'daily_job.lock'), timeout=0))
             # 부모만 종료되어도 자식은 crawler.lock을 보유합니다. 살아 있는 작업의 상태는 덮어쓰지 않습니다.
             # 새 실행 ID 확정까지 잠가, 아직 시작하지 못한 이전 자식도 이후 단계에서 식별할 수 있게 합니다.
             with FileLock(str(root / 'crawler.lock'), timeout=0):
+                if s3:
+                    # Keep the workspace until the parent finishes, but restore only
+                    # while holding the child's lock. Publish the new run ID before
+                    # releasing it so delayed old children fail their identity check.
+                    stack.enter_context(workspace(root, 'raw/trade-news'))
+                    root, values = data_settings(data_dir, env_path, locked=True)
                 recover_previous(root)
                 persist(root, result)
             try:
@@ -319,8 +335,9 @@ def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_P
             finally:
                 result['finished_at'] = datetime.now(KST).isoformat()
                 persist(root, result)
-    except Timeout as exc:
-        result.update(status='already_running', stage='lock', active_lock=Path(exc.lock_file).name)
+    except (Timeout, Conflict) as exc:
+        result.update(status='already_running', stage='lock',
+                      active_lock=Path(exc.lock_file).name if isinstance(exc, Timeout) else 'S3 lease')
         log.info('기사 일일 작업 또는 자식 처리 중: 기존 상태를 유지하고 중복 호출을 건너뜁니다.')
     except Exception as exc:
         result.update(status='failed', error_type=type(exc).__name__)

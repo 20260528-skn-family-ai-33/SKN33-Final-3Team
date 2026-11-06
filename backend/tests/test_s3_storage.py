@@ -266,7 +266,7 @@ class S3StorageTests(unittest.TestCase):
         meta = json.loads(self.store.get(sqlite_state.POINTER)[0])
         added = {key for key in set(self.client.data) - before if '/_chunks/' in key}
         self.assertGreater(len(added), 0)
-        self.assertLess(len(added), len(meta['chunks']))
+        self.assertLess(len(added), sum(len(part['chunks']) for part in meta['parts'].values() if part))
 
 
 if __name__ == '__main__':

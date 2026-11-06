@@ -36,7 +36,8 @@ def files(root, prefix=None):
                 or name in ('models.joblib', 'predictions.csv', 'metadata.json')):
             continue
         if prefix == 'raw/trade-news' and name in (
-                'articles.sqlite3', 'articles.sqlite3-wal', 'articles.sqlite3-shm', 'articles.sqlite3-journal'):
+                'articles.sqlite3', 'articles.sqlite3-wal', 'articles.sqlite3-shm', 'articles.sqlite3-journal',
+                'prepared.sqlite3', 'prepared.sqlite3-wal', 'prepared.sqlite3-shm', 'prepared.sqlite3-journal'):
             continue
         if prefix == 'reports' and path.suffix.lower() not in ('.pdf', '.docx', '.xlsx', '.html'):
             continue
@@ -133,6 +134,8 @@ class Workspace:
         for name, meta in self.state['files'].items():
             if self.prefix == 'raw/news-history' and name.startswith('logs/'):
                 continue
+            if self.prefix == 'raw/trade-news' and name.split('-')[0] in ('articles.sqlite3', 'prepared.sqlite3'):
+                continue  # Both DBs are restored together from database/_current.json.
             target = self.root.joinpath(*key_path(name).parts)
             if not target.resolve().is_relative_to(self.root):
                 raise StorageError('Artifact cache path escapes workspace')

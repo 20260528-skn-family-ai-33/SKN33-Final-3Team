@@ -26,6 +26,13 @@ class Store:
             sys.path.insert(0, str(project))
         from backend.app.storage.sqlite_state import connect
         self.db = connect(self.root / "articles.sqlite3")
+        try:
+            self._initialize()
+        except BaseException:
+            self.db.close()
+            raise
+
+    def _initialize(self):
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS articles (
@@ -66,6 +73,10 @@ class Store:
         self.db.commit()
         date_index.initialize(self.db)
         self.release_legacy_list_body_holds()
+        if getattr(self.db, 'store', None) is not None:
+            from news.recovery import recover_prepared
+            recover_prepared(self.db, self.root)
+            self.db.persist()
 
     def release_legacy_list_body_holds(self):
         """구버전의 일반 목록 403 보류만 해제합니다. 사이트 차단·예산은 보존합니다."""
