@@ -45,6 +45,24 @@ _ML_RUNNING = {'since': None}   # 전용 스레드가 지금 돌리는 작업의
 ML_STUCK_SECONDS = 300          # 한 작업이 이보다 오래 끝나지 않으면 멈춘 것으로 보고 오류 로그를 남긴다(복구는 워커 재시작)
 
 
+def article_cards(store, state, result):
+    """D-102: 결과 저장소의 인용 근거로 기존 채팅과 같은 기사 카드(요약·근거 보기·원문 링크)를 만든다.
+    지금 DB 본문·공개 여부와 다시 대조한다. 근거가 만료됐거나 없으면 이전처럼 제목·날짜만 보인다."""
+    from backend.app.api.chat_news import eligible_filter, verified_cards
+    payload=None
+    if result.result_id:
+        try: payload=results.read_snapshot(store,state.input.user_id,result.result_id,'ARTICLES')
+        except ApiError as exc:
+            if exc.code!='RESULT_EXPIRED': raise
+    if payload:
+        period=result.article_period
+        stmt,_=eligible_filter(store,state.input.user_id,period.start,period.end)
+        # ponytail: 검색 뒤 숨겨진 기사는 카드에서 빠져 [n] 번호가 한 칸씩 당겨질 수 있다. 몇 초 사이라 드물다
+        return verified_cards(store,stmt,payload['articles'])[0]
+    return [{'article_id':a['article_id'],'title':a['title'],'published_date':a['published_date'],'source_code':a['source_code']}
+            for a in result.digest.get('items',[])]
+
+
 def warm_ml(work):
     """워커 시작 때 모델 로드(work)를 ML 전용 스레드에 미리 넣는다. 기다리지 않는다. 첫 유망시장 질문이 모델 로드
     (수십 초)로 ML 시간 상한을 넘지 않게 한다. 그 사이 들어온 ML 호출은 같은 스레드에서 로드 뒤에 줄을 선다."""
@@ -222,7 +240,14 @@ class Services:
                 self.execution.transaction(lambda store,job:submit(store,state,task,step),lock_user=True))
         if step.tool=='search_articles':
             from backend.app.agents.tools import article_result
-            return self.execution.call('news',budget.seconds(self.settings,'news'),lambda _:article_result(state,task,step))
+            from backend.app.api.chat_news import eligible_filter
+            period=task.conditions.article_period
+            with self.read_store() as store: _,allowed=eligible_filter(store,state.input.user_id,period.start,period.end)
+            def keep(items):   # 인용 근거는 state·LLM 입력 밖 결과 저장소에 둔다(D-102)
+                return self.execution.transaction(lambda store,job:results.save_snapshot(
+                    store,state.input.user_id,'ARTICLES',{'articles':items}))
+            return self.execution.call('news',budget.seconds(self.settings,'news'),
+                                       lambda _:article_result(state,task,step,article_allowed=allowed,keep_evidence=keep))
         if step.tool=='query_market_model':
             from backend.app.agents.market import DEFAULT_MARKET_TOP, growth, loaded, model_codes, predict
             def model(timeout):
@@ -435,8 +460,7 @@ class Services:
                 for step in task.steps:
                     result=state.results.get(step.step_id)
                     if result and result.article_ids and result.digest:
-                        articles.extend({'article_id':a['article_id'],'title':a['title'],'published_date':a['published_date'],
-                            'source_code':a['source_code'],'task_id':task.task_id} for a in result.digest.get('items',[]))
+                        articles.extend({**card,'task_id':task.task_id} for card in article_cards(store,state,result))
                     if not result or not result.result_id: continue
                     if step.tool in ('query_trade_data','query_market_model'):
                         if any(t['result_id']==result.result_id for t in tables): continue   # 공유한 조회(D-100)는 표 하나

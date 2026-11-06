@@ -24,7 +24,9 @@ def search_news(request: RagRequest, *, article_allowed=None) -> RagResponse:
         return create_service(api, root=root, article_allowed=article_allowed).run(request, context)
 
 
-def article_result(state, task, step):
+def article_result(state, task, step, *, article_allowed=None, keep_evidence=None):
+    """그래프 기사 단계(§14.4). article_allowed는 공개·사용자 차단 필터(기존 채팅과 같음).
+    keep_evidence(items)는 인용 근거를 결과 저장소에 두고 result_id를 돌려준다(D-102). 본문 인용은 digest에 넣지 않는다."""
     from backend.app.agents.digest import bounded
     from backend.app.agents.state import ToolResult
     conditions=task.conditions
@@ -32,7 +34,7 @@ def article_result(state, task, step):
         conditions={'geography':{'mode':'selected' if conditions.country_codes else 'all','codes':conditions.country_codes},
                     'products':conditions.hs_items,'period':conditions.article_period,'blocked_topics':()},limit=5)
     try:
-        response=search_news(request)
+        response=search_news(request,article_allowed=article_allowed)
     except RagDeadlineExceeded:
         return ToolResult(status='NO_DATA',error='기사 검색 시간이 끝나 검수를 통과한 기사가 없습니다.')
     if response.request_id!=request.request_id or response.applied_conditions!=request.conditions:
@@ -53,7 +55,11 @@ def article_result(state, task, step):
     partial=response.status!='ok' or any(not a['evidence_sufficient'] for a in items)
     limitation=('기사 검색 시간이 끝나 확인을 마친 결과만 표시합니다.' if timed_out
                 else '기사 근거 또는 검색 범위가 부족합니다.')
-    return ToolResult(status='OK',article_ids=[a['article_id'] for a in items],article_period=conditions.article_period,
+    result_id=None
+    if keep_evidence:
+        from backend.app.api.chat_news import evidence_items
+        result_id=keep_evidence(evidence_items(response.articles))
+    return ToolResult(status='OK',result_id=result_id,article_ids=[a['article_id'] for a in items],article_period=conditions.article_period,
         completeness='PARTIAL' if partial else 'COMPLETE',limitations=[limitation] if partial else [],
         digest=bounded({'kind':'ARTICLES','article_period':conditions.article_period.model_dump(mode='json'),
                         'rag_status':response.status,'items':items,'rows_total':len(items)}))

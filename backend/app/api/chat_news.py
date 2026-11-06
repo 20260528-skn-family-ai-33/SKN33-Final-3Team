@@ -19,6 +19,63 @@ def matching_url(current, indexed):
         return None
 
 
+def eligible_filter(store, uid, start, end):
+    """Current visibility and user blocks, applied before RAG spends its candidate budget."""
+    table = store.t('article')
+    stmt = news.article_statement(store, uid, start=start, end=end)
+    eligible = {(r['article_id'], r['source_code'], r['external_id'], r['published_date'])
+                for r in store.rows(stmt.with_only_columns(table.c.article_id, table.c.source_code,
+                                                          table.c.external_id, table.c.published_date))}
+    def article_allowed(article):
+        return (article.article_id, article.source_code.value, article.external_id,
+                article.published_date) in eligible
+    return stmt, article_allowed
+
+
+def evidence_items(articles):
+    """RagResponse.articles → JSON evidence kept outside LLM input (graph result store, D-102)."""
+    out = []
+    for article in articles:
+        quotes = {e.evidence_id: e.quote for e in article.evidence}
+        out.append({'article_id': article.article_id, 'source_code': article.source_code.value,
+                    'external_id': article.external_id, 'published_date': article.published_date.isoformat(),
+                    'source_url': str(article.source_url), 'evidence_role': article.evidence_role,
+                    'reference_limitation': article.reference_limitation,
+                    'summary': [{'text': s.text, 'quotes': [quotes.get(i) for i in s.evidence_ids],
+                                 'unverified_question_parts': list(s.unverified_question_parts)}
+                                for s in article.summary]})
+    return out
+
+
+def verified_cards(store, stmt, items):
+    """Rebuild cards from the current DB row: drop changed articles and quotes no longer in the body."""
+    table = store.t('article')
+    rows = {r['article_id']: r for r in store.rows(stmt.where(
+        table.c.article_id.in_([a['article_id'] for a in items])))} if items else {}
+    cards, evidence_complete = [], True
+    for article in items:
+        row = rows.get(article['article_id'])
+        if not row or (row['source_code'], row['external_id'], str(row['published_date'])[:10]) != (
+                article['source_code'], article['external_id'], article['published_date'][:10]):
+            continue
+        # v26 returns original body quotes, independent of mutable index headers.
+        body = row['body_masked'] or ''
+        sentences = []
+        for s in article['summary']:
+            quotes = [q if q and q in body else None for q in s['quotes']]
+            if quotes and all(quotes):
+                sentences.append({'text': s['text'], 'quotes': quotes,
+                                  'unverified_question_parts': s['unverified_question_parts']})
+        evidence_complete &= len(sentences) == len(article['summary'])
+        cards.append({'article_id': str(article['article_id']), 'source_code': row['source_code'],
+                      'title': row['title'], 'published_date': row['published_date'],
+                      'source_url': matching_url(row['source_url'], article['source_url']),
+                      'summary': ' '.join(s['text'] for s in sentences), 'sentences': sentences,
+                      'evidence_sufficient': bool(sentences), 'evidence_role': article['evidence_role'],
+                      'reference_limitation': article['reference_limitation']})
+    return cards, evidence_complete
+
+
 def article_answer(store, uid, job_id, question, conditions, warnings, latest):
     countries = conditions['country_codes']
     start, end = (date.fromisoformat(conditions['period'][key]) for key in ('start', 'end'))
@@ -37,14 +94,7 @@ def article_answer(store, uid, job_id, question, conditions, warnings, latest):
 
     # Apply current visibility and user blocks before spending the candidate and
     # summary budgets. Country/product tags are not evidence of body relevance.
-    table = store.t('article')
-    stmt = news.article_statement(store, uid, start=start, end=end)
-    eligible = {(r['article_id'], r['source_code'], r['external_id'], r['published_date'])
-                for r in store.rows(stmt.with_only_columns(table.c.article_id, table.c.source_code,
-                                                          table.c.external_id, table.c.published_date))}
-    def article_allowed(article):
-        return (article.article_id, article.source_code.value, article.external_id,
-                article.published_date) in eligible
+    stmt, article_allowed = eligible_filter(store, uid, start, end)
 
     try:
         response = tools.search_news(request, article_allowed=article_allowed)
@@ -56,32 +106,7 @@ def article_answer(store, uid, job_id, question, conditions, warnings, latest):
         return {**base, 'answer_status': 'NO_DATA', 'text': message, 'articles': [],
                 'rag_status': 'failed', 'warnings': [*warnings, message]}
 
-    cards = []
-    evidence_complete = True
-    if response.articles:
-        rows = {r['article_id']: r for r in store.rows(stmt.where(
-            table.c.article_id.in_([a.article_id for a in response.articles])))}
-        for article in response.articles:
-            row = rows.get(article.article_id)
-            if not row or (row['source_code'], row['external_id'], row['published_date']) != (
-                    article.source_code.value, article.external_id, article.published_date):
-                continue
-            # v26 returns original body quotes, independent of mutable index headers.
-            body = row['body_masked'] or ''
-            evidence = {e.evidence_id: e.quote if e.quote in body else None for e in article.evidence}
-            sentences = []
-            for s in article.summary:
-                quotes = [evidence.get(i) for i in s.evidence_ids]
-                if quotes and all(quotes):
-                    sentences.append({'text': s.text, 'quotes': quotes,
-                                      'unverified_question_parts': list(s.unverified_question_parts)})
-            evidence_complete &= len(sentences) == len(article.summary)
-            cards.append({'article_id': str(article.article_id), 'source_code': row['source_code'],
-                          'title': row['title'], 'published_date': row['published_date'],
-                          'source_url': matching_url(row['source_url'], article.source_url),
-                          'summary': ' '.join(s['text'] for s in sentences), 'sentences': sentences,
-                          'evidence_sufficient': bool(sentences), 'evidence_role': article.evidence_role,
-                          'reference_limitation': article.reference_limitation})
+    cards, evidence_complete = verified_cards(store, stmt, evidence_items(response.articles))
     lines = [f"[{i}] {s['text']}" for i, card in enumerate(cards, 1) for s in card['sentences']]
     list_only = response.answer_format == 'list'
     if lines:

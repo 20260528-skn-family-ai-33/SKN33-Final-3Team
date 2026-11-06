@@ -28,9 +28,12 @@ class ChatNewsToolTest(unittest.TestCase):
                 step = next(s for s in task.steps if s.tool == 'search_articles')
                 execution = Mock()
                 execution.call.side_effect = lambda node, timeout, callback: callback(timeout)
+                execution.transaction.return_value = 'articles_saved'   # 인용 근거 저장(D-102)
                 services = Services(execution, {}, client=Mock())
+                allowed = Mock(name='article_allowed')
 
-                def respond(request):
+                def respond(request, article_allowed=None):
+                    self.assertIs(article_allowed, allowed)   # 공개·사용자 차단 필터를 RAG에 넘긴다
                     if status == 'deadline':
                         raise RagDeadlineExceeded('global_deadline_exceeded')
                     failures = [] if status == 'ok' else [{'stage': 'timeout', 'code': 'candidate_timeout'}]
@@ -38,6 +41,7 @@ class ChatNewsToolTest(unittest.TestCase):
                         request.model_dump(mode='json'), status=status, count=count, failures=failures))
 
                 with patch.object(services, 'read_store', return_value=nullcontext(None)), \
+                     patch('backend.app.api.chat_news.eligible_filter', return_value=(None, allowed)), \
                      patch('backend.app.agents.tools.search_news', side_effect=respond) as search:
                     result = services.tool(agent, step)
                 self.assertEqual(search.call_count, 1)
@@ -45,6 +49,7 @@ class ChatNewsToolTest(unittest.TestCase):
                 self.assertEqual(result.article_ids, list(range(1, count + 1)))
                 self.assertEqual(result.status, 'OK' if count else 'NO_DATA')
                 if count:
+                    self.assertEqual(result.result_id, 'articles_saved')
                     self.assertEqual(result.digest['rag_status'], status)
                     self.assertEqual(result.completeness, 'COMPLETE' if status == 'ok' else 'PARTIAL')
                     self.assertTrue(all(a['evidence_sufficient'] for a in result.digest['items']))
