@@ -22,7 +22,7 @@ export function LineChart({ labels, series, yTicks, width = 760, height = 230, l
           <path d={path(s.values)} fill="none" stroke={s.color} strokeWidth="2.5" strokeLinejoin="round" />
           {s.values.map((v, i) => v != null && (
             <g key={i}>
-              <circle cx={x(i)} cy={y(v)} r="4.5" fill="#fff" stroke={s.color} strokeWidth="2.5"><title>{s.name} 路 {labels[i]}: {v.toLocaleString('ko-KR')}</title></circle>
+              <circle cx={x(i)} cy={y(v)} r="4.5" fill="#fff" stroke={s.color} strokeWidth="2.5"><title>{s.name} 路 {labels[i]}: {formatValue(v)}</title></circle>
               {showValues && series.length===1 && labels.length<=12 && <text x={x(i)} y={y(v) - 11} fontSize={String(formatValue(v)).length>8?10:12} fontWeight="700" fill={s.color} textAnchor={i === 0 ? 'start' : i === s.values.length - 1 ? 'end' : 'middle'}>{formatValue(v)}</text>}
             </g>
           ))}
@@ -48,7 +48,7 @@ export function BarChart({ labels, series, width = 760, label = '毵夒寑 攴鸽灅頂
           {series.map((s, si) => {
             const v = s.values[i], top = i * group + 5 + si * (bar + gap)
             return v != null && <g key={si}>
-              <rect x={Math.min(x(0), x(v))} y={top} width={Math.max(1, Math.abs(x(v) - x(0)))} height={bar} rx="3" fill={s.color}><title>{s.name} 路 {l}: {v.toLocaleString('ko-KR')}</title></rect>
+              <rect x={Math.min(x(0), x(v))} y={top} width={Math.max(1, Math.abs(x(v) - x(0)))} height={bar} rx="3" fill={s.color}><title>{s.name} 路 {l}: {formatValue(v)}</title></rect>
               <text x={Math.max(x(0), x(v)) + 6} y={top + bar - 3} fontSize="11" fontWeight="700" fill={s.color}>{formatValue(v)}</text>
             </g>
           })}
