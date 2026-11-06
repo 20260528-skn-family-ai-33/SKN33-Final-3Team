@@ -23,7 +23,10 @@ export function LineChart({ labels, series, yTicks, width = 760, height = 230, l
           {s.values.map((v, i) => v != null && (
             <g key={i}>
               <circle cx={x(i)} cy={y(v)} r="4.5" fill="#fff" stroke={s.color} strokeWidth="2.5"><title>{s.name} · {labels[i]}: {formatValue(v)}</title></circle>
-              {showValues && series.length===1 && labels.length<=12 && <text x={x(i)} y={y(v) - 11} fontSize={String(formatValue(v)).length>8?10:12} fontWeight="700" fill={s.color} textAnchor={i === 0 ? 'start' : i === s.values.length - 1 ? 'end' : 'middle'}>{formatValue(v)}</text>}
+              {/* 비교(여러 선)도 값을 작은 글자로 쓴다. 겹치지 않게 짝수 선은 점 위, 홀수 선은 점 아래에 둔다(21번) */}
+              {showValues && labels.length<=12 && <text x={x(i)} y={series.length===1 || si%2===0 ? y(v) - (series.length===1?11:8) : y(v) + 16}
+                fontSize={series.length===1 ? (String(formatValue(v)).length>8?10:12) : 9} fontWeight="700" fill={s.color}
+                textAnchor={i === 0 ? 'start' : i === s.values.length - 1 ? 'end' : 'middle'}>{formatValue(v)}</text>}
             </g>
           ))}
         </g>

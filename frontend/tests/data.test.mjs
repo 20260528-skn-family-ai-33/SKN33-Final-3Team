@@ -95,6 +95,17 @@ test('comparison table produces one aligned country chart and preserves zero/nul
 })
 
 
+test('cause and text answers comparing two countries also use the per-period comparison table',async()=>{
+ const {comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
+ const conditions={period:{start:'2026-01-01',end:'2026-02-01'},trade_flow:'EXPORT',country_codes:['CN','US']}
+ for(const task of [{intent:'CAUSE'},{intent:'STATISTICS',answer_format:'TEXT'}]){
+  const groups=comparisonGroups({tasks:[{task_id:'t1',...task,conditions}],tables:[{task_id:'t1',result_id:'r',meta:{kind:'TREND'},rows:[{country_code:'CN'},{country_code:'US'}]}]})
+  assert.equal(groups.length,1)
+ }
+ assert.equal(comparisonGroups({tasks:[{task_id:'t1',intent:'RANKING',conditions}],tables:[{task_id:'t1',result_id:'r',meta:{kind:'TREND'},rows:[{country_code:'CN'},{country_code:'US'}]}]}).length,0)
+})
+
+
 test('duplicate current-period results with different previous-period settings form one comparison',async()=>{
  const {comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
  const period={start:'2026-01-01',end:'2026-02-28'}

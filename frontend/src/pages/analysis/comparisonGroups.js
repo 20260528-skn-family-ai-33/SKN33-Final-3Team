@@ -3,7 +3,7 @@ export function comparisonGroups(answer) {
   const groups=new Map()
   for(const table of answer.tables){
     const task=answer.tasks.find(t=>t.task_id===table.task_id),c=task?.conditions
-    if(task?.intent!=='STATISTICS'||task.answer_format==='TEXT'||!c||table.meta?.kind!=='TREND'||table.expired||!table.result_id)continue
+    if(!['STATISTICS','CAUSE'].includes(task?.intent)||!c||table.meta?.kind!=='TREND'||table.expired||!table.result_id)continue
     const key=JSON.stringify([c.period?.start,c.period?.end,c.trade_flow||'EXPORT',c.metric||'AMOUNT'])
     if(!groups.has(key))groups.set(key,{task_id:task.task_id,conditions:c,tables:[]})
     groups.get(key).tables.push(table)
