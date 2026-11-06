@@ -244,6 +244,107 @@ class PeriodicContextTest(unittest.TestCase):
                 c.execute(self.meta.tables['article_tag'].insert(), {'article_id': identity, 'keyword_text': '차단'})
         self.assertEqual(self.context(uid, self.record('RPT_WEEKLY'))[0]['summary']['issues'], [])
 
+    def block(self, uid, *words, synonyms=()):
+        """회원의 차단 키워드를 저장한다. synonyms는 (동의어, 대표어) 쌍이다."""
+        with self.engine.begin() as c:
+            table = self.meta.tables['keyword_topic']
+            known = set(c.scalars(select(table.c.keyword_text)))
+            rows = [{'keyword_text': w, 'status': 'UNCLASSIFIED'} for w in words if w not in known]
+            rows += [{'keyword_text': s, 'canonical_text': w, 'status': 'UNCLASSIFIED'} for s, w in synonyms if s not in known]
+            if rows:
+                c.execute(table.insert(), [dict({'canonical_text': None}, **row) for row in rows])
+            store = Store(self.app.state.database, c)
+            news.save_blocks(store, uid, list(words), news.blocks(store, uid)['settings']['version'])
+
+    def keyword_articles(self, first, count, day, *keywords, country='US'):
+        """키워드 태그가 붙은 기사를 만들고 일별 집계(국가별·전체)에도 같은 건수를 더한다."""
+        for identity in range(first, first + count):
+            self.market_article(identity, day, tags=[*({'keyword_text': k} for k in keywords), {'country_code': country}])
+        with self.engine.begin() as c:
+            for keyword in keywords:
+                for scope in (country, None):
+                    c.execute(self.meta.tables['news_keyword_daily'].insert(), {'metric_date': day, 'keyword_text': keyword, 'country_code': scope, 'day_count': count})
+
+    def weekly_for_us(self, uid):
+        return self.context(uid, self.record('RPT_WEEKLY'))[0]  # 리포트 조건의 국가는 미국이다
+
+    def test_keyword_on_blocked_articles_is_not_a_spike(self):
+        uid = int(self.signup())
+        self.collected_news()
+        self.keyword_articles(801, 3, date(2025, 12, 21), '관세', '차단')
+        self.block(uid, '차단')
+        ctx = self.weekly_for_us(uid)
+        self.assertEqual(ctx['keyword_spikes'], [])
+        self.assertEqual(ctx['summary']['counts']['spike_keywords'], 0)
+
+    def test_blocked_articles_leave_both_recent_and_baseline_counts(self):
+        uid = int(self.signup())
+        self.collected_news()
+        self.keyword_articles(811, 3, date(2025, 12, 21), '관세')
+        self.keyword_articles(821, 8, date(2025, 12, 1), '관세')
+        self.keyword_articles(831, 8, date(2025, 12, 2), '관세', '차단')  # 차단 전 주평균 2 → ×1.5
+        self.block(uid, '차단')
+        ctx = self.weekly_for_us(uid)  # 차단 후 주평균 1 → ×3.0
+        self.assertEqual(ctx['keyword_spikes'], [{'keyword': '관세', 'country': '미국', 'this_week': 3, 'weekly_avg_8w': 1.0, 'ratio': 3.0}])
+
+    def test_partly_blocked_keyword_shows_the_remaining_count(self):
+        uid = int(self.signup())
+        self.collected_news()
+        self.keyword_articles(841, 3, date(2025, 12, 21), '관세')
+        self.keyword_articles(851, 2, date(2025, 12, 20), '관세', '차단')
+        self.block(uid, '차단')
+        self.assertEqual(self.weekly_for_us(uid)['keyword_spikes'][0]['this_week'], 3)
+
+    def test_synonym_of_blocked_topic_also_removes_the_article(self):
+        uid = int(self.signup())
+        self.collected_news()
+        self.keyword_articles(861, 3, date(2025, 12, 21), '관세', '동의어')
+        self.block(uid, '대표어', synonyms=[('동의어', '대표어')])
+        self.assertEqual(self.weekly_for_us(uid)['keyword_spikes'], [])
+
+    def test_blocks_apply_only_to_the_user_who_set_them(self):
+        uid = int(self.signup())
+        other = int(self.signup('other@example.org'))
+        self.collected_news()
+        self.keyword_articles(871, 3, date(2025, 12, 21), '관세', '차단')
+        self.block(uid, '차단')
+        self.assertEqual([r['keyword'] for r in self.weekly_for_us(other)['keyword_spikes']], ['관세', '차단'])
+
+    def test_stored_spike_uses_counts_without_the_users_blocked_articles(self):
+        uid = int(self.signup())
+        self.collected_news(end=date(2025, 12, 15))
+        self.keyword_articles(881, 4, date(2025, 12, 15), '관세')
+        self.keyword_articles(891, 2, date(2025, 12, 14), '관세', '차단')
+        job.detect(self.app.state.database, date(2025, 12, 15))
+        self.block(uid, '차단')
+        ctx = self.weekly_for_us(uid)
+        issue = next(r for r in ctx['summary']['issues'] if '관세' in r['title'])
+        self.assertIn('7일 4건', issue['basis'])
+
+    def test_stored_spike_is_dropped_when_blocks_take_it_below_threshold(self):
+        uid = int(self.signup())
+        self.collected_news(end=date(2025, 12, 15))
+        self.keyword_articles(901, 2, date(2025, 12, 15), '관세')
+        self.keyword_articles(911, 2, date(2025, 12, 14), '관세', '차단')
+        job.detect(self.app.state.database, date(2025, 12, 15))
+        self.block(uid, '차단')
+        self.assertEqual(self.weekly_for_us(uid)['summary']['issues'], [])
+
+    def test_stored_product_spike_uses_counts_without_the_users_blocked_articles(self):
+        uid = int(self.signup())
+        self.collected_news(end=date(2025, 12, 15))
+        hs = {'hs_code': '330499', 'hs_ver': 'HS2022'}
+        for identity in range(921, 925):
+            self.market_article(identity, date(2025, 12, 15), tags=[hs])
+        for identity in range(931, 933):
+            self.market_article(identity, date(2025, 12, 14), tags=[hs, {'keyword_text': '차단'}])
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['news_product_daily'].insert(), {'metric_date': date(2025, 12, 15), 'hs_code': '330499', 'hs_ver': 'HS2022', 'country_code': None, 'day_count': 6})
+        job.detect(self.app.state.database, date(2025, 12, 15))
+        self.block(uid, '차단')
+        issue = next(r for r in self.weekly_for_us(uid)['summary']['issues'] if r['kind'] == 'SPIKE')
+        self.assertIn('7일 4건', issue['basis'])
+
     def test_weekly_uses_latest_metric_date_when_old_date_is_reprocessed(self):
         uid = int(self.signup())
         self.seed_news()

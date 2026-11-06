@@ -245,8 +245,9 @@ def _keyword_spikes(store, uid, saved, names, start, end):
     if not sources_ready(store, (MARKET, SHORT_NEWS), baseline[0], recent[1]):
         return None
     countries = saved.get('country_codes') or ()
-    now_counts, old_counts = keyword_counts(store, *recent, countries), keyword_counts(store, *baseline, countries)
     blocked = set(news.blocked_topics(store, uid))
+    # 차단한 기사에 함께 붙은 다른 키워드도 세지 않도록 두 기간 모두 회원 기준으로 센다.
+    now_counts, old_counts = keyword_counts(store, *recent, countries, blocked), keyword_counts(store, *baseline, countries, blocked)
     # 동의어는 대표어를 차단해도 함께 빠진다.
     topics = store.t('keyword_topic')
     synonyms = {r['keyword_text'] for r in store.rows(select(topics.c.keyword_text).where(topics.c.canonical_text.in_(blocked)))} if blocked else set()
@@ -284,14 +285,14 @@ def _spike_gap_note(keyword_ready, product_ready):
     return '시장뉴스 수집이 완료되지 않아 급증 이슈는 판단하지 않았습니다.'
 
 
-def _current_spike(store, payload, cache):
-    """저장된 급증 판정을 그 기준일의 지금 공개 기사 수로 다시 계산합니다. 기준 미달이면 None입니다."""
+def _current_spike(store, payload, cache, blocked=()):
+    """저장된 급증 판정을 그 기준일의 지금 공개 기사 수(회원이 차단한 기사 제외)로 다시 계산합니다. 기준 미달이면 None입니다."""
     metric = date.fromisoformat(payload['metric_date'])
     target = payload.get('target') or {}
     if target.get('keyword_text'):
-        kind, counter, key = 'keyword', lambda s, e: keyword_counts(store, s, e), (target['keyword_text'], None)
+        kind, counter, key = 'keyword', lambda s, e: keyword_counts(store, s, e, blocked=blocked), (target['keyword_text'], None)
     elif target.get('hs_code'):
-        kind, counter, key = 'product', lambda s, e: product_counts(store, s, e), (target['hs_code'], target.get('hs_ver'))
+        kind, counter, key = 'product', lambda s, e: product_counts(store, s, e, blocked), (target['hs_code'], target.get('hs_ver'))
     else:
         return None
     if (kind, metric) not in cache:
@@ -343,6 +344,7 @@ def _major_issues(store, uid, saved, names, start, end):
     from backend.app.api.notifications import event_allowed, target_blocked
     tags = store.t('article_tag')
     result, seen, cache = [], set(), {}
+    blocked = set(news.blocked_topics(store, uid))
     candidates, keyword_ready, product_ready = _issue_candidates(store, start, end)
     for row in candidates:
         p = row['payload_json']
@@ -358,7 +360,7 @@ def _major_issues(store, uid, saved, names, start, end):
         if key in seen:
             continue
         if spiked:
-            p = _current_spike(store, p, cache)  # 판정 뒤 기사를 숨겼으면 저장값을 믿지 않는다
+            p = _current_spike(store, p, cache, blocked)  # 판정 뒤 기사를 숨겼거나 회원이 차단했으면 저장값을 믿지 않는다
             if p is None:
                 continue
         seen.add(key)

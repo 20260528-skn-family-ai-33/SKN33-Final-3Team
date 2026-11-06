@@ -24,12 +24,12 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from backend.app.api.common import digest, now
 from backend.app.api.database import Database, Store
 from backend.app.api.event_delivery import deliver_event
-from backend.app.api.news import TRADE_REGULATION_CATEGORIES
+from backend.app.api.news import TRADE_REGULATION_CATEGORIES, blocked_article
 from backend.app.api.subscriptions import sources_ready
 from backend.app.db.batch_log import Source, track_batch
 from backend.app.db.session import make_engine
@@ -59,13 +59,16 @@ def spike(recent_count, baseline_count):
     return float(average), float(Decimal(recent_count) / (average or 1))
 
 
-def _hidden_tags(store, column, sources, start, end, countries=()):
-    """기간 안 비공개 기사의 태그 행 (값, ..., 기사 ID). 일별 집계는 기사를 숨겨도 줄지 않아 공개 기준으로 뺄 때 씁니다."""
+def _hidden_tags(store, column, sources, start, end, countries=(), blocked=()):
+    """기간 안 비공개 기사와 회원이 차단한 기사의 태그 행 (값, ..., 기사 ID). 일별 집계는 줄지 않으므로 뺄 건수를 여기서 구합니다."""
     a, t = store.t("article"), store.t("article_tag")
     country_tag = t.alias("country_tag")
     columns = [*column(t), *([country_tag.c.country_code] if countries else []), a.c.article_id]
+    excluded = a.c.visibility_status != "VISIBLE"
+    if blocked:
+        excluded = or_(excluded, blocked_article(store, blocked))
     stmt = select(*columns).select_from(a).join(t, t.c.article_id == a.c.article_id).where(
-        a.c.visibility_status != "VISIBLE", a.c.source_code.in_(sources), a.c.published_date >= start, a.c.published_date <= end)
+        excluded, a.c.source_code.in_(sources), a.c.published_date >= start, a.c.published_date <= end)
     if countries:
         stmt = stmt.join(country_tag, country_tag.c.article_id == a.c.article_id).where(country_tag.c.country_code.in_(countries))
     return store.c.execute(stmt.distinct()).all()
@@ -77,27 +80,27 @@ def _subtract(totals, hidden):
     return {key: count for key, count in counts.items() if count > 0}
 
 
-def keyword_counts(store, start, end, countries=()):
-    """공개 기사 기준 {(키워드, 국가): 건수}. 국가를 주지 않으면 전체 집계 행(국가 None)입니다."""
+def keyword_counts(store, start, end, countries=(), blocked=()):
+    """공개 기사 기준 {(키워드, 국가): 건수}. 국가를 주지 않으면 전체 집계 행(국가 None)입니다. blocked를 주면 그 회원의 차단 기사도 뺍니다."""
     t = store.t("news_keyword_daily")
     scope = t.c.country_code.in_(countries) if countries else t.c.country_code.is_(None)
     rows = store.c.execute(select(t.c.keyword_text, t.c.country_code, func.sum(t.c.day_count)).where(
         scope, t.c.metric_date >= start, t.c.metric_date <= end).group_by(t.c.keyword_text, t.c.country_code))
     totals = {(keyword, country): int(total) for keyword, country, total in rows}
     hidden = {}
-    for row in _hidden_tags(store, lambda tag: [tag.c.keyword_text], (MARKET, SHORT_NEWS), start, end, countries):
+    for row in _hidden_tags(store, lambda tag: [tag.c.keyword_text], (MARKET, SHORT_NEWS), start, end, countries, blocked):
         hidden.setdefault((row[0], row[1] if countries else None), set()).add(row[-1])
     return _subtract(totals, hidden)
 
 
-def product_counts(store, start, end):
-    """공개 기사 기준 {(품목 코드, 판본): 건수}. HS6 태그 기사는 위 단계 HS4 집계에도 들어 있습니다."""
+def product_counts(store, start, end, blocked=()):
+    """공개 기사 기준 {(품목 코드, 판본): 건수}. HS6 태그 기사는 위 단계 HS4 집계에도 들어 있습니다. blocked는 keyword_counts와 같습니다."""
     t = store.t("news_product_daily")
     rows = store.c.execute(select(t.c.hs_code, t.c.hs_ver, func.sum(t.c.day_count)).where(
         t.c.country_code.is_(None), t.c.metric_date >= start, t.c.metric_date <= end).group_by(t.c.hs_code, t.c.hs_ver))
     totals = {(code, version): int(total) for code, version, total in rows}
     hidden = {}
-    for code, version, article_id in _hidden_tags(store, lambda tag: [tag.c.hs_code, tag.c.hs_ver], (MARKET,), start, end):
+    for code, version, article_id in _hidden_tags(store, lambda tag: [tag.c.hs_code, tag.c.hs_ver], (MARKET,), start, end, blocked=blocked):
         if code:
             hidden.setdefault((code, version), set()).add(article_id)
             hidden.setdefault((code[:4], version), set()).add(article_id)
