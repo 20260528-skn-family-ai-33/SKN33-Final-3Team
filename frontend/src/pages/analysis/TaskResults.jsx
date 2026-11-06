@@ -37,7 +37,7 @@ function Chart({initial,selector,table}) {
   const series=chart.series.map((s,i)=>({...s,color:colors[i%colors.length]}))
   const display=chartDisplay(series.flatMap(s=>s.values),chart.unit)
   const props={labels:chart.labels,fullLabels:chart.full_labels,series,label:chart.title,formatValue:display.format}
-  return <figure style={{margin:'14px 0'}}><figcaption><b>{chart.title}</b> · {display.unit} {({QUARTER:'· 분기별',YEAR:'· 연도별'})[chart.granularity]}</figcaption>
+  return <figure style={{margin:'28px 16px'}}><figcaption><b>{chart.title}</b> · {display.unit} {({QUARTER:'· 분기별',YEAR:'· 연도별'})[chart.granularity]}</figcaption>
     {pairMode ? <div className="chips">
       {pairs.length>0 && <select aria-label="차트 국가·품목" disabled={busy} value={pairKey(country,hs)} onChange={e=>{
         const pair=pairs.find(p=>pairKey(p.country_code,itemKey({hs_code:p.hs6,hs_ver:p.hs_ver||'HS2022'}))===e.target.value)
@@ -90,9 +90,14 @@ export default function TaskResults({answer,hideText=false}) {
   const groupedTasks=new Set(groups.flatMap(g=>g.tables.map(t=>t.task_id)))
   const conclusionCount=tasks=>tasks.reduce((count,task)=>count+task.conclusion.length,0)
   const mismatches=new Map((answer.verification?.sentence_checks||[]).filter(c=>c.status==='MISMATCH').map(c=>[c.index,c]))
-  const sentence=(s,i)=><p key={i}>{s} {mismatches.has(i)&&<span className="tag amber" title={mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?'저장된 조회 결과가 만료되어 원본을 확인할 수 없습니다.':'수치·대상·기간·단위를 검증 근거와 일치한다고 확인하지 못했습니다.'}>확인 필요{mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?' · 원본 확인 불가':''}</span>}</p>
+  const sentence=(s,i)=><p key={i} style={{whiteSpace:'pre-line'}}>{s} {mismatches.has(i)&&<span className="tag amber" title={mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?'저장된 조회 결과가 만료되어 원본을 확인할 수 없습니다.':'수치·대상·기간·단위를 검증 근거와 일치한다고 확인하지 못했습니다.'}>확인 필요{mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?' · 원본 확인 불가':''}</span>}</p>
   const sections=answer.tasks.map((t,index)=>{
     const start=conclusionCount(answer.tasks.slice(0,index))
+    const tables=answer.tables.filter(x=>x.task_id===t.task_id)
+    // 문장형 답변(D-98): 결론을 한 문단으로 읽게 하고, 근거 표는 접어 둔다. 차트 단계는 없다
+    if(t.answer_format==='TEXT')return <section key={t.task_id} className="chat-result"><h3>{index+1}. {t.question} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
+      {!hideText && <div className="chat-paragraph">{t.conclusion.map((s,i)=>sentence(s,start+i))}</div>}
+      {tables.length>0 && <details><summary>근거 표 보기</summary>{tables.map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</details>}</section>
     return <section key={t.task_id} className="chat-result"><h3>{index+1}. {t.question} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
       {!hideText && t.conclusion.map((s,i)=>sentence(s,start+i))}
       {charts.filter(c=>c.task_id===t.task_id&&!groupedTasks.has(c.task_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c} selector={answer.chart_selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)} table={answer.tables.find(x=>x.result_id===c.result_id)}/>)}

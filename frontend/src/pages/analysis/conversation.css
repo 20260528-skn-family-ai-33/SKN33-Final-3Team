@@ -13,7 +13,17 @@
 /* Keep the picker above later animated siblings without covering modal layers. */
 .chat-flow > .chat-clarification { position:relative; z-index:2; }
 
+/* 답이 필요한 칸은 사용자가 답할 때까지 테두리가 깜빡인다. */
+/* 입력창(form) 또는 되묻기 카드의 테두리 상자(마지막 자식)에 붙인다. */
+form.chat-wait,.chat-clarification.chat-wait > :last-child { animation:chat-blink 1.2s ease-in-out infinite; }
+@keyframes chat-blink { 50% { border-color:var(--red); box-shadow:0 0 0 3px rgba(200,16,46,.18); } }
+@media (prefers-reduced-motion:reduce) { form.chat-wait,.chat-clarification.chat-wait > :last-child { animation:none; border-color:var(--red)!important; } }
+
 .chat-plan-details:not([hidden]) { display:grid; gap:12px; }
 .chat-loading-ring { display:inline-block; width:14px; height:14px; margin-left:6px; border:2px solid var(--line); border-top-color:var(--red); border-radius:50%; vertical-align:middle; animation:chat-spin .8s linear infinite; }
 @keyframes chat-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .chat-loading-ring { animation:none; } }
+
+/* 문장형 답변: 결론 문장을 이어지는 문단으로 보여 준다. */
+.chat-paragraph > p { display:inline; }
+.chat-paragraph > p + p::before { content:' '; }

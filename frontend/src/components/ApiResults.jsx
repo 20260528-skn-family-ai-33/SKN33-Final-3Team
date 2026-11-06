@@ -34,7 +34,7 @@ export default function ApiResults({ table, tableOnly = false, onDownload }) {
   const maxAmount = Math.max(1, ...rows.map(r => r.amount_usd || 0))
   const compact = value => Number(value).toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 2 })
   const colors = ['#C8102E', '#2B2350', '#9A95BF', '#8A919C']
-  return <div style={{ marginTop: 18, border: '1px solid var(--line)', borderRadius: 14, padding: '16px 18px', overflowX: 'auto' }}>
+  return <div className="api-results" style={{ border: '1px solid var(--line)', borderRadius: 14, padding: '16px 18px', overflowX: 'auto' }}>
     <div className="between"><b>{chart ? '월별 추이 · USD' : '조회 결과'}</b><div style={{ display: 'flex', gap: 10 }}>
       {(chart || bars) && <Btn kind="lav" onClick={() => setShowTable(v => !v)}>{showTable ? '차트로 보기' : '표로 보기'}</Btn>}
       {(table.result_id || onDownload) && <Btn icon="download" onClick={() => run(() => onDownload ? onDownload() : download(`/results/${table.result_id}/file`))}>엑셀 다운로드</Btn>}
