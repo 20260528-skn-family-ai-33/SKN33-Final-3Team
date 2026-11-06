@@ -312,8 +312,8 @@ def _issue_key(payload):
     return ('REGULATION', tuple(payload.get('article_ids') or ()))
 
 
-def _issue_related(store, uid, saved, payload, ids):
-    """관심 범위 여부. 표시용 대표 기사 5건이 아니라 그 판정에 실제로 들어간 기사 전체(판정 기간·출처)에서 판단합니다."""
+def _issue_has_article(store, uid, payload, ids, hs=(), countries=()):
+    """이 회원에게 공개된 근거 기사가 있는지. 표시용 대표 기사 5건이 아니라 그 판정에 실제로 들어간 기사 전체(판정 기간·출처)에서 찾습니다."""
     a, tags = store.t('article'), store.t('article_tag')
     target = payload.get('target') or {}
     start, end, sources = None, None, None
@@ -331,7 +331,7 @@ def _issue_related(store, uid, saved, payload, ids):
         members = ids
     else:
         return False
-    stmt = news.article_statement(store, uid, start=start, end=end, hs=saved.get('hs_items', []), countries=saved.get('country_codes', []))
+    stmt = news.article_statement(store, uid, start=start, end=end, hs=hs, countries=countries)
     stmt = stmt.order_by(None).with_only_columns(a.c.article_id).where(a.c.article_id.in_(members))
     if sources:
         stmt = stmt.where(a.c.source_code.in_(sources))
@@ -340,16 +340,20 @@ def _issue_related(store, uid, saved, payload, ids):
 
 def _major_issues(store, uid, saved, names, start, end):
     """이번 주 주요 이슈(FR-107-02)와 키워드·품목 판정 가능 여부. 같은 이슈는 기준일이 가장 늦고 지금도 기준을 넘는 1건만 씁니다."""
-    from backend.app.api.notifications import event_allowed
+    from backend.app.api.notifications import event_allowed, target_blocked
     tags = store.t('article_tag')
     result, seen, cache = [], set(), {}
     candidates, keyword_ready, product_ready = _issue_candidates(store, start, end)
     for row in candidates:
         p = row['payload_json']
         metric = p.get('metric_date')
-        if not metric or not start <= date.fromisoformat(metric) <= end or not event_allowed(store, uid, row):
+        if not metric or not start <= date.fromisoformat(metric) <= end:
             continue
         spiked = p.get('reason') == 'WEEKLY_NEWS_SPIKE'
+        # 저장된 대표 기사만 숨겨도 다른 공개 기사로 기준을 넘을 수 있어, 급증은 판정 범위 전체에서 근거를 찾는다.
+        allowed = (not target_blocked(store, uid, p) and _issue_has_article(store, uid, p, ())) if spiked else event_allowed(store, uid, row)
+        if not allowed:
+            continue
         key = _issue_key(p)
         if key in seen:
             continue
@@ -359,7 +363,7 @@ def _major_issues(store, uid, saved, names, start, end):
                 continue
         seen.add(key)
         ids = p.get('article_ids') or ([row['article_id']] if row['article_id'] else [])
-        related = _issue_related(store, uid, saved, p, ids)
+        related = _issue_has_article(store, uid, p, ids, saved.get('hs_items', []), saved.get('country_codes', []))
         country = [] if spiked or not ids else store.c.execute(select(tags.c.country_code).where(
             tags.c.article_id.in_(ids), tags.c.country_code.is_not(None)).distinct()).scalars().all()
         result.append({'kind': 'SPIKE' if spiked else 'REGULATION',

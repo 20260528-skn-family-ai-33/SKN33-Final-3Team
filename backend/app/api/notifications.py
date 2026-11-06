@@ -95,10 +95,14 @@ def consent(store,uid,data):
                        'acted_at':at,'notifications_enabled':notifications_enabled}}
 
 
+def target_blocked(store,uid,payload):
+    blocked=set(blocked_topics(store,uid)); target=payload.get('target',{})
+    return target.get('keyword_text') in blocked or target.get('kw_topic') in blocked
+
+
 def event_allowed(store,uid,event):
-    payload=event['payload_json']; blocked=set(blocked_topics(store,uid))
-    target=payload.get('target',{})
-    if target.get('keyword_text') in blocked or target.get('kw_topic') in blocked: return False
+    payload=event['payload_json']
+    if target_blocked(store,uid,payload): return False
     ids=payload.get('article_ids',[]) or ([event['article_id']] if event['article_id'] else [])
     if ids:
         a=store.t('article')

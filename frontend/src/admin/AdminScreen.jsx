@@ -64,9 +64,11 @@ function MiniLine({ values, max, ticks, color = '#C8102E', w = 520, h = 200 }) {
 
 const OPS_TABS = [['전체', 'BS32'], ['데이터', 'BS34'], ['리포트', 'BS36'], ['회원관리', 'BS38']]
 const OPS_DETAIL = { 전체: 'BS33', 데이터: 'BS35', 리포트: 'BS37', 회원관리: 'BS39' }
+const OPS_CATEGORY = { 전체: 'ALL', 데이터: 'DATA', 리포트: 'REPORT', 회원관리: 'MEMBER' }
 function OpsDashboard({ tab }) {
-  const result = useQuery('/admin/alerts', { page_size: 20 })
-  const alerts = (result.data?.items || []).map(a => [ALERT_CATEGORY[a.category] || a.category, a.message, a.created_at, 'red', a.target_type === 'BATCH' ? '/admin/inbox/collection' : '/admin/inbox/BS37']).filter(a => tab === '전체' || a[0] === tab)
+  // 탭 분류는 서버가 거른 뒤 최신 20건을 준다. 다른 분류가 첫 페이지를 채워도 선택한 탭의 알림이 빠지지 않는다.
+  const result = useQuery('/admin/alerts', { page_size: 20, category: OPS_CATEGORY[tab] || 'ALL' })
+  const alerts = (result.data?.items || []).map(a => [ALERT_CATEGORY[a.category] || a.category, a.message, a.created_at, 'red', a.target_type === 'BATCH' ? '/admin/inbox/collection' : '/admin/inbox/BS37'])
   return (
     <>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }} className="resp-stack">

@@ -9,11 +9,12 @@ from unittest.mock import patch
 from sqlalchemy import delete, select, update
 
 from backend.tests import test_backend_api as fixtures
-from backend.app.api import files, jobs, reports
+from backend.app.api import files, jobs, news, reports
 from backend.app.api.common import ApiError, now
 from backend.app.api.config import Settings
 from backend.app.api.database import Store
 from backend.app.api.worker import run_once
+from backend.app.scheduler.jobs import major_issue_detect as job
 from backend.app.services.report_context import build_context, safe_url, weekly_highlights
 from backend.app.services.report_templates import render
 
@@ -132,11 +133,11 @@ class PeriodicContextTest(unittest.TestCase):
         self.assertIn('직전 8주와 비교하지 않았습니다', html)  # 수집 기록이 없으면 0건으로 보이지 않는다
         self.assertNotIn('기사 저작권은 KOTRA', html)
 
-    def collected_news(self):
+    def collected_news(self, end=date(2025, 12, 31)):
         with self.engine.begin() as c:
             for code in ('KOTRA_MARKET', 'KOTRA_SHORT_NEWS'):
                 c.execute(self.meta.tables['service_option'].insert(), {'option_code': code, 'option_type': 'SOURCE', 'label_ko': code, 'enabled': True, 'sort_order': 5, 'value_json': {}})
-                c.execute(self.meta.tables['batch_run'].insert(), {'source_code': code, 'job_name': 'NEWS', 'target_table': 'article', 'period_start': date(2025, 10, 1), 'period_end': date(2025, 12, 31), 'status': 'SUCCESS', 'detail_json': {}})
+                c.execute(self.meta.tables['batch_run'].insert(), {'source_code': code, 'job_name': 'NEWS', 'target_table': 'article', 'period_start': date(2025, 10, 1), 'period_end': end, 'status': 'SUCCESS', 'detail_json': {}})
 
     def test_weekly_connects_keyword_spikes_in_subscribed_country(self):
         uid = int(self.signup())
@@ -196,9 +197,57 @@ class PeriodicContextTest(unittest.TestCase):
         issue = next(r for r in ctx['summary']['issues'] if '관세' in r['title'])
         self.assertEqual(issue['related'], '관심 범위')
 
+    def detected_spike_on_dec_15(self, keyword='관세', count=10):
+        """실제 판정기로 12월 15일 급증 사건을 만든다. 수집이 15일까지만 끝나 보고서 마지막 날 기준 직접 계산은 돌지 않는다."""
+        self.collected_news(end=date(2025, 12, 15))
+        for identity in range(501, 501 + count):
+            self.market_article(identity, date(2025, 12, 15), tags=[{'keyword_text': keyword}])
+        self.keyword_day(date(2025, 12, 15), count, keyword)
+        job.detect(self.app.state.database, date(2025, 12, 15))
+        with self.engine.begin() as c:
+            event = c.execute(select(self.meta.tables['alert_event'])).mappings().one()
+        return event['payload_json']['article_ids']
+
+    def set_hidden(self, ids):
+        table = self.meta.tables['article']
+        with self.engine.begin() as c:
+            c.execute(update(table).where(table.c.article_id.in_(ids)).values(visibility_status='HIDDEN'))
+
+    def test_spike_stays_when_only_saved_representatives_are_hidden(self):
+        uid = int(self.signup())
+        self.set_hidden(self.detected_spike_on_dec_15())
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertEqual([issue['title'] for issue in ctx['summary']['issues']], ['‘관세’ 기사 급증'])
+        self.assertIn('7일 5건', ctx['summary']['issues'][0]['basis'])
+
+    def test_spike_is_dropped_when_every_evidence_article_is_hidden(self):
+        uid = int(self.signup())
+        self.detected_spike_on_dec_15()
+        self.set_hidden(range(501, 511))
+        ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
+        self.assertEqual(ctx['summary']['issues'], [])
+
+    def test_spike_is_dropped_when_user_blocks_it_or_all_its_public_articles(self):
+        uid = int(self.signup())
+        representatives = self.detected_spike_on_dec_15()
+        self.set_hidden(representatives)
+        rest = [identity for identity in range(501, 511) if identity not in representatives]
+        with self.engine.begin() as c:
+            store = Store(self.app.state.database, c)
+            c.execute(self.meta.tables['keyword_topic'].insert(), [{'keyword_text': word, 'status': 'UNCLASSIFIED'} for word in ('관세', '차단')])
+            news.save_blocks(store, uid, ['관세'], news.blocks(store, uid)['settings']['version'])
+        self.assertEqual(self.context(uid, self.record('RPT_WEEKLY'))[0]['summary']['issues'], [])
+        with self.engine.begin() as c:
+            store = Store(self.app.state.database, c)
+            news.save_blocks(store, uid, ['차단'], news.blocks(store, uid)['settings']['version'])
+            for identity in rest:
+                c.execute(self.meta.tables['article_tag'].insert(), {'article_id': identity, 'keyword_text': '차단'})
+        self.assertEqual(self.context(uid, self.record('RPT_WEEKLY'))[0]['summary']['issues'], [])
+
     def test_weekly_uses_latest_metric_date_when_old_date_is_reprocessed(self):
         uid = int(self.signup())
         self.seed_news()
+        self.market_article(601, date(2025, 12, 18), tags=[{'keyword_text': '관세'}])
         table = self.meta.tables['alert_event']
         with self.engine.begin() as c:
             for key, metric, count in [('a', '2025-12-20', 24), ('b', '2025-12-18', 6)]:  # 18일을 나중에 재처리
@@ -305,6 +354,7 @@ class PeriodicContextTest(unittest.TestCase):
     def test_weekly_lists_major_issues_of_that_week_once_and_marks_interest(self):
         uid = int(self.signup())
         self.seed_news()
+        self.market_article(701, tags=[{'keyword_text': '관세'}])
         table = self.meta.tables['alert_event']
         article_id = 1
         with self.engine.begin() as c:
