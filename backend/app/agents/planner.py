@@ -124,11 +124,16 @@ def explicit_country_ranking(question):
 TRADE_TERMS = ('hs', '관세', 'fta', '원산지', '통관', '무역', '수출', '수입', '품목분류', '세번', '인코텀즈', 'incoterms')
 
 
-def rescue_trade_terms(output: PlannerOutput, terms=TRADE_TERMS) -> PlannerOutput:
+def rescue_trade_terms(output: PlannerOutput, terms=TRADE_TERMS, original='') -> PlannerOutput:
+    """original은 사용자가 쓴 질문이다. 플래너가 하위 질문 문장을 고쳐 써서 용어가 빠져도 원문으로 판단한다.
+    질문이 하나뿐일 때만 원문을 본다(여러 하위 질문이면 다른 질문의 용어로 범위 밖 질문을 살리지 않게)."""
     compact = lambda text: ''.join(text.split()).casefold()
     words = [compact(t) for t in terms if t.strip()]
+    def trade(task):
+        texts = [task.question] + ([original] if len(output.tasks) == 1 else [])
+        return any(w in compact(x) for x in texts for w in words)
     tasks = [{**t.model_dump(), 'intent': 'CONVERSATION', 'slots': {}}
-             if t.intent == 'OUT_OF_SCOPE' and any(w in compact(t.question) for w in words) else t.model_dump()
+             if t.intent == 'OUT_OF_SCOPE' and trade(t) else t.model_dump()
              for t in output.tasks]
     return PlannerOutput.model_validate({**output.model_dump(), 'tasks': tasks})
 

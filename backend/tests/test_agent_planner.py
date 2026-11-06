@@ -34,6 +34,10 @@ class AgentPlannerTest(unittest.TestCase):
         out = rescue_trade_terms(PlannerOutput(tasks=[{'intent': 'OUT_OF_SCOPE', 'question': 'hs 코드가 뭐야?'},
                                                       {'intent': 'OUT_OF_SCOPE', 'question': '오늘 날씨 어때?'}]))
         self.assertEqual([t.intent for t in out.tasks], ['CONVERSATION', 'OUT_OF_SCOPE'])
+        # 플래너가 하위 질문을 고쳐 써 용어가 빠져도 사용자 원문으로 판단한다
+        out = rescue_trade_terms(PlannerOutput(tasks=[{'intent': 'OUT_OF_SCOPE', 'question': '그게 뭔지 설명'}]),
+                                 original='hs코드가 뭔데')
+        self.assertEqual(out.tasks[0].intent, 'CONVERSATION')
 
     def test_source_failure_is_transitive(self):
         plan, _ = self.plan([

@@ -158,7 +158,7 @@ class Services:
         configured=self.settings.get('API_CHAT_TRADE_TERMS','')
         terms=tuple(configured.split(',')) if configured else TRADE_TERMS
         planned=build_plan(explicit) if explicit else self.structured(state,'planner',PLANNER_PROMPT,planner_input(state),PlannerOutput,2000,
-                                                                        lambda output:build_plan(rescue_trade_terms(output,terms)))
+                                                                        lambda output:build_plan(rescue_trade_terms(output,terms,state.input.question)))
         if planned is None:
             reason='질문을 해석하지 못했습니다. 국가·품목·기간을 명시해 다시 입력해 주세요.'
             state.plan=Plan(tasks=[Task(task_id='t1',intent='STATISTICS',question=state.input.question,
