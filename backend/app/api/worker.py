@@ -124,7 +124,10 @@ def main():
         from backend.app.agents.worker import checkpointer
         try: checkpointer(db,settings)
         except Exception as exc: logging.getLogger(__name__).error('chat_checkpointer_unavailable %s',exc)
-        if not args.once: warm_models(settings)
+        if not args.once:
+            warm_models(settings)
+            from backend.app.agents.tools import warm_article_index
+            warm_article_index()
     run_loop(db,settings,args.once)
 
 

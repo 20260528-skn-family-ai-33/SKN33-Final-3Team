@@ -24,6 +24,25 @@ def search_news(request: RagRequest, *, article_allowed=None) -> RagResponse:
         return create_service(api, root=root, article_allowed=article_allowed).run(request, context)
 
 
+def warm_article_index():
+    """워커 시작 때 기사 색인을 미리 연다(D-104). 기다리지 않는다. 큰 색인은 처음 여는 데 수십 초가 걸려,
+    미리 열지 않으면 재시작 뒤 첫 기사 질문이 검색 예산(30초)을 넘긴다. 실패해도 워커는 돈다(질문 때 다시 연다)."""
+    import logging
+    import threading
+    def run():
+        try:
+            from backend.app.services.news_collections import ARTICLE_COLLECTION
+            from backend.app.services.rag.store import GenerationStore, shared_client
+            snapshot = GenerationStore(Settings().get('NEWS_VECTOR_ROOT'), client_factory=shared_client).snapshot()
+            snapshot.collection(ARTICLE_COLLECTION).query(
+                query_embeddings=[[0.0] * (snapshot.dimensions - 1) + [1.0]], n_results=1)
+        except Exception as exc:
+            logging.getLogger(__name__).warning('rag_index_warm_failed type=%s', type(exc).__name__)
+    thread = threading.Thread(target=run, name='rag-index-warm', daemon=True)
+    thread.start()
+    return thread
+
+
 def article_result(state, task, step, *, article_allowed=None, keep_evidence=None):
     """그래프 기사 단계(§14.4). article_allowed는 공개·사용자 차단 필터(기존 채팅과 같음).
     keep_evidence(items)는 인용 근거를 결과 저장소에 두고 result_id를 돌려준다(D-102). 본문 인용은 digest에 넣지 않는다."""

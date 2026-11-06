@@ -117,6 +117,36 @@ def persistent_client(path):
             path=str(path), settings=Settings(anonymized_telemetry=False)))
 
 
+class _BorrowedClient:
+    """shared_client가 빌려주는 핸들. 요청이 끝나도 닫지 않는다(close는 아무것도 하지 않음)."""
+    def __init__(self, client):
+        self._client = client
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+    def close(self):
+        pass
+
+
+_shared_clients = {}
+
+
+def shared_client(path):
+    """검색 전용(챗봇) 프로세스에서 같은 세대 색인을 한 번만 연다(2026-11-06, D-104).
+    큰 색인은 여는 데만 수십 초가 걸려 요청마다 열면 검색 예산(30초)을 넘긴다. 새 세대가 열리면 이전 세대 핸들을 닫는다.
+    색인을 쓰는 작업(news_embed·이관)에는 쓰지 않는다. 그쪽은 persistent_client로 요청마다 새 핸들을 연다."""
+    key = str(Path(path).resolve())
+    with _client_lifecycle_lock:
+        if key not in _shared_clients:
+            # ponytail: 워커는 한 번에 작업 하나라 이전 세대를 바로 닫는다. 동시 검색 스레드가 생기면 참조 수로 닫을 것
+            for old in _shared_clients.values():
+                old.close()
+            _shared_clients.clear()
+            _shared_clients[key] = persistent_client(path)
+        return _BorrowedClient(_shared_clients[key])
+
+
 def collection_distance(collection):
     """Read the immutable index metric without requesting a metric change on modify."""
     meta = collection.metadata or {}

@@ -56,6 +56,22 @@ class ChatNewsToolTest(unittest.TestCase):
                 if status == 'partial':
                     self.assertTrue(any('시간' in reason for reason in result.limitations))
 
+    def test_shared_client_opens_each_generation_once_and_ignores_request_close(self):
+        from backend.app.services.rag import store as rag_store
+        opened = []
+        def fake_open(path):
+            handle = Mock(name=str(path)); opened.append(handle); return handle
+        with patch.object(rag_store, 'persistent_client', side_effect=fake_open),              patch.dict(rag_store._shared_clients, clear=True):
+            first = rag_store.shared_client(Path('g1'))
+            first.close()                                   # 요청이 끝나도 닫지 않는다
+            again = rag_store.shared_client(Path('g1'))
+            self.assertEqual(len(opened), 1)
+            opened[0].close.assert_not_called()
+            again.get_collection('x'); opened[0].get_collection.assert_called_once_with('x')
+            rag_store.shared_client(Path('g2'))             # 새 세대가 열리면 이전 세대를 닫는다
+            self.assertEqual(len(opened), 2)
+            opened[0].close.assert_called_once()
+
     def test_latest_uses_live_gateway_and_published_originals_without_catalog(self):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, NEWS_VECTOR_ROOT=root):
             store = GenerationStore(Path(root), dimensions=8)
