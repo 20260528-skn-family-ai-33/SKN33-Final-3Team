@@ -136,7 +136,7 @@ class NewsLoadTest(unittest.TestCase):
         self.assertEqual(self.run_job(raws, cleans), 0)
         self.assertEqual(self.rows(Article, "external_id", "source_code", "published_date", "category"),
                          [(i, "KOTRA_MARKET", date(2026, 10, d), "트렌드") for i, d in (("10", 1), ("11", 1), ("12", 2))])
-        self.assertEqual(self.rows(Article, "body_masked", external_id="10"), [("연락 [이메일]",)])
+        self.assertEqual(self.rows(Article, "body_masked", external_id="10"), [("연락 a@b.com",)])
         tags = self.rows(ArticleTag, "keyword_text", "country_code", "hs_code", "hs_ver")
         # 없는 국가(ZZ)는 태그에서 빠짐
         self.assertEqual([t[1] for t in tags if t[1]], ["CN", "US", "US"])
