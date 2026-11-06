@@ -64,9 +64,10 @@ ToolName = Literal['check_conditions', 'query_trade_data', 'search_articles', 'b
                    'generate_report', 'query_market_model', 'lookup_hs']
 Intent = Literal['STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES', 'REPORT',
                  'PROMISING_MARKET', 'MARKET_TYPE', 'CONVERSATION', 'HS_LOOKUP', 'OUT_OF_SCOPE']
-# 실행 단계 없이 안내만 하는 intent. MARKET_TYPE은 B 모델 시장 유형 분류가 나오기 전까지 "지원 예정" 안내.
+# 실행 단계 없이 안내만 하는 intent. MARKET_TYPE은 모델 B 증감 예상으로 분류해 유망시장과 같은 단계를 쓴다(D-103).
 # CONVERSATION(D-99)은 이전 대화·무역 용어 질문이다. 조회 없이 compose_text가 최근 대화로 답한다.
-NO_STEP_INTENTS = frozenset({'OUT_OF_SCOPE', 'MARKET_TYPE', 'CONVERSATION'})
+NO_STEP_INTENTS = frozenset({'OUT_OF_SCOPE', 'CONVERSATION'})
+MARKET_INTENTS = frozenset({'PROMISING_MARKET', 'MARKET_TYPE'})   # ML 단계(query_market_model)를 쓰는 intent
 RunStatus = Literal['QUEUED', 'RUNNING', 'NEEDS_INPUT', 'WAITING_REPORT', 'SUCCEEDED', 'FAILED', 'EXPIRED', 'CANCELLED']
 AnswerStatus = Literal['ANSWERED', 'PARTIAL', 'NO_DATA', 'OUT_OF_SCOPE']
 StepStatus = Literal['PENDING', 'RUNNING', 'DONE', 'FAILED', 'SKIPPED']
@@ -779,7 +780,7 @@ class AgentState(Model):
             return 'OUT_OF_SCOPE'
         if task.intent == 'CONVERSATION' and not task.applied_defaults:
             return 'ANSWERED'
-        if task.intent == 'MARKET_TYPE' or not task.steps:
+        if not task.steps:
             return 'NO_DATA'
         if task.steps[0].status != 'DONE':
             return 'NO_DATA'

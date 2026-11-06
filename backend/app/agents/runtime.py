@@ -263,6 +263,8 @@ class Services:
                 if outlook and outlook['anchor']!=anchor:
                     outlook,outlook_note=None,(f"증감 예상 모델의 기준월({outlook['anchor']})이 유망시장 모델({anchor})과 달라 "
                                                '증가·감소 예상은 표시하지 않았습니다.')
+                if task.intent=='MARKET_TYPE' and not outlook:   # D-103: 유형은 모델 B 방향으로만 분류한다
+                    return ToolResult(status='NO_DATA',error=outlook_note or '시장 유형을 분류할 증감 예상 모델이 없습니다.')
                 versions={**versions,'growth':outlook_version if outlook else 'none'}
                 key=fingerprint(state,step,tool_version='2',versions=versions,source_results=parents)
                 if outlook_note and outlook_note not in task.applied_defaults: task.applied_defaults.append(outlook_note)

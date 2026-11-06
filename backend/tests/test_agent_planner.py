@@ -31,7 +31,7 @@ class AgentPlannerTest(unittest.TestCase):
 
     def test_source_failure_is_transitive(self):
         plan, _ = self.plan([
-            {'intent': 'MARKET_TYPE', 'question': 'not ready'},
+            {'intent': 'OUT_OF_SCOPE', 'question': 'not ready'},
             {'intent': 'STATISTICS', 'question': 'source', 'source_tasks': [1]},
             {'intent': 'REPORT', 'question': 'report', 'source_tasks': [2]}])
         self.assertEqual([t.steps for t in plan.tasks], [[], [], []])

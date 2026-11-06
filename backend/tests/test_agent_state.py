@@ -263,9 +263,13 @@ class AgentStateTest(unittest.TestCase):
             state([{**RANKING, 'steps': RANKING['steps'][1:]}])
         with self.assertRaises(ValidationError):  # 하위 질문은 3개까지
             state([CAUSE, RANKING, {**RANKING, 'task_id': 't3'}, {**RANKING, 'task_id': 't4'}])
-        # 시장 유형은 지원 예정 안내만, 단계 없음
-        self.assertEqual(state([{'task_id': 't1', 'intent': 'MARKET_TYPE', 'question': '베트남 화장품 시장 유형'}])
+        # 범위 밖은 안내만, 단계 없음. 시장 유형은 유망시장과 같은 ML 단계를 쓴다(D-103)
+        self.assertEqual(state([{'task_id': 't1', 'intent': 'OUT_OF_SCOPE', 'question': '날씨 알려줘'}])
                          .plan.tasks[0].steps, [])
+        from backend.app.agents.planner import build_plan
+        from backend.app.agents.state import PlannerOutput
+        plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'MARKET_TYPE', 'question': '베트남 화장품 시장 유형'}]))
+        self.assertEqual([s.tool for s in plan.tasks[0].steps], ['check_conditions', 'query_market_model', 'build_chart'])
 
     def test_pending_only_while_waiting(self):
         self.assertEqual(state(status='NEEDS_INPUT', pending=PENDING).pending.kind, 'HS_ITEM')

@@ -16,7 +16,7 @@ source_tasks는 이번 질문을 여러 하위 질문으로 나눴을 때 앞 �
 STATISTICS는 합계·추이·기간 비교, RANKING은 명시적인 국가/품목 순위,
 MARKET_SHARE는 상대국별·품목별 교역 비중과 해외 수입시장 점유율, CAUSE는 원인 설명,
 LOCAL_ISSUES는 기사 조회, REPORT는 리포트 생성, PROMISING_MARKET은 유망시장·예측,
-MARKET_TYPE은 시장 유형·군집, CONVERSATION은 데이터 조회 없이 답할 질문입니다.
+MARKET_TYPE은 국가·품목 시장의 유형(증가 예상 시장·감소 예상 시장) 질문, CONVERSATION은 데이터 조회 없이 답할 질문입니다.
 CONVERSATION은 이전 대화 자체를 묻는 질문(예: "이전 질문 뭐였더라?", "아까 뭐 물어봤지?")과
 무역 용어·개념 설명(예: "HS코드가 뭐야?", "FTA가 뭐야?")입니다. 슬롯은 모두 null이고 새 수치를 조회하지 않습니다.
 이전 결과를 다시 조회·계산해 달라는 요청은 CONVERSATION이 아니라 해당 분석 intent입니다.
@@ -74,6 +74,8 @@ STEPS = {
     'LOCAL_ISSUES': [('check', []), ('news', ['check'])],
     'REPORT': [('check', []), ('report', ['check'])],
     'PROMISING_MARKET': [('check', []), ('ml', ['check']), ('chart', ['ml'])],
+    # D-103: 시장 유형은 모델 B의 증감 예상으로 분류한다. 유망시장과 같은 ML 결과를 쓴다
+    'MARKET_TYPE': [('check', []), ('ml', ['check']), ('chart', ['ml'])],
     'HS_LOOKUP': [('hs', [])],   # D-101: 조건 확인 없이 HS 사전만 찾는다
 }
 
