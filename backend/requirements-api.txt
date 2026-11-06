@@ -1,5 +1,7 @@
 # HTTP API/worker only. Existing ingestion dependencies remain in requirements.txt.
 fastapi>=0.115,<1
+boto3>=1.36,<2
+filelock>=3,<4
 uvicorn>=0.30,<1
 SQLAlchemy>=2.0,<2.1
 PyMySQL[rsa]>=1.1,<2
