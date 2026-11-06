@@ -19,7 +19,13 @@ class Store:
     def __init__(self, directory):
         self.root = Path(directory)
         self.root.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.root / "articles.sqlite3")
+        # The standalone crawler has its own import root; application storage is shared.
+        import sys
+        project = Path(__file__).resolve().parents[6]
+        if str(project) not in sys.path:
+            sys.path.insert(0, str(project))
+        from backend.app.storage.sqlite_state import connect
+        self.db = connect(self.root / "articles.sqlite3")
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
         CREATE TABLE IF NOT EXISTS articles (

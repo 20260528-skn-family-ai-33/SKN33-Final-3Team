@@ -10,6 +10,8 @@ from datetime import date,datetime,timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from filelock import FileLock
+from backend.app.storage.workspace import stored, checkpoint
+from backend.app.storage.datasets import un_inputs
 from sqlalchemy import select, func
 from dotenv import dotenv_values
 from backend.app.db.session import make_engine
@@ -40,6 +42,7 @@ def save(path,obj):
         os.replace(temp,path)
     finally:
         temp.unlink(missing_ok=True)
+    checkpoint(path)
 
 
 # 실패 내용을 기록하다 다시 실패하면 원래 작업 예외를 최상위로 유지하고 저장 오류를 연결합니다.
@@ -74,6 +77,8 @@ SNAPSHOT = {
 
 
 # 전달 스냅샷을 검증·적재·대조한 뒤 확인된 정상 점검일로 초기 체크포인트를 연결합니다.
+@stored('raw/un-data/runtime', lambda args: args['state_dir'])
+@un_inputs
 def initialize_csv(engine, csv_path=DEFAULT_CSV, scope_path=DEFAULT_SCOPE,
                    state_dir=DEFAULT_STATE, today=None):
     """검증된 전달 스냅샷 적재 후 대상 DB 전용 초기 체크포인트 생성."""
@@ -167,6 +172,8 @@ def process_dataset(engine, client, cfg, dataset, folder, guard):
 
 
 # 발표 목록과 미해결 대상을 합쳐 범위별로 처리하고, 모두 해결된 경우에만 정상 점검일을 전진합니다.
+@stored('raw/un-data/runtime', lambda args: args['state_dir'])
+@un_inputs
 def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=None,collection_factory=None):
     validate_state_path(state_dir)
     today=today or datetime.now(KST).date()
@@ -363,6 +370,7 @@ def run(engine,client,scope_path=DEFAULT_SCOPE,state_dir=DEFAULT_STATE,today=Non
 
 
 # 수동 실행과 스케줄러가 공유하는 진입점으로, 설정을 읽고 종료 시 API·DB 자원을 정리합니다.
+@un_inputs
 def execute_once(scope_path=DEFAULT_SCOPE, state_dir=DEFAULT_STATE, api_env=None, *, resume_now=False):
     """수동 실행과 통합 스케줄러가 공유하는 1회 실행 경로."""
     values={**dotenv_values(api_env or ROOT/'.env', encoding='utf-8'), **os.environ}

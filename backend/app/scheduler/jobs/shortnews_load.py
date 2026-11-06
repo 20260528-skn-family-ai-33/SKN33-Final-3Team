@@ -4,6 +4,7 @@ import logging
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from backend.app.storage.datasets import managed_files
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import MetaData, Table, delete, select
@@ -184,6 +185,7 @@ def setup_log(directory):
     return path
 
 
+@managed_files('raw_path', 'clean_path')
 def run(raw_path, clean_path=None, db_url=None, log_dir=LOG_DIR, *, period=None):
     """성공 0 / 실패 1. DB/테이블 생성 및 API 수집은 실행하지 않습니다."""
     engine = None

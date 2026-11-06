@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 from zoneinfo import ZoneInfo
+from backend.app.storage.workspace import stored, checkpoint
 
 from backend.app.db.news_lock import database_identity
 
@@ -43,6 +44,7 @@ def atomic_json(path, value):
         stream.flush()
         os.fsync(stream.fileno())
     temporary.replace(path)
+    checkpoint(path)
 
 
 def validate_progress(progress):
@@ -208,6 +210,7 @@ def process_date(target, root, started, env_path, db_url, database_id, state):
     return outcome
 
 
+@stored('raw/shortnews/daily', lambda args: args['output_dir'])
 def run(target_date=None, *, env_path=ENV_PATH, output_dir=OUTPUT_DIR, db_url=None, now=None):
     """KST 전날까지 미완료 날짜를 복구. 명시적 target_date는 그 날짜만 강제 재실행합니다."""
     from filelock import FileLock, Timeout

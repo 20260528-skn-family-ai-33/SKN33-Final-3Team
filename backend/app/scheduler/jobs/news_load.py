@@ -23,6 +23,7 @@ import sys
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
+from backend.app.storage.datasets import managed_files
 
 from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.dialects import mysql, sqlite
@@ -238,6 +239,7 @@ def load(engine, raws, cleans):
             "keyword_daily": kw_rows, "product_daily": hs_rows}
 
 
+@managed_files('raw_path', 'clean_path', defaults={'raw_path': RAW_DIR})
 def run(raw_path=None, clean_path=DEFAULT_CLEAN, db_url=None, log_dir=LOG_DIR, track=True):
     """적재를 실행하고 결과·오류를 로그에 남깁니다. 성공 0, 실패 1. track=False면 batch_run 기록을 생략합니다."""
     log_path = setup_log(log_dir)

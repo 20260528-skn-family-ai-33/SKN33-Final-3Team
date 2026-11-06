@@ -38,6 +38,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import dotenv_values
+from backend.app.storage.workspace import stored
 
 from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
@@ -122,6 +123,7 @@ def hs_refresh_job(scheduler, attempt=1):
 
 
 # 초기화 여부와 중복 실행을 확인하고, UN 실패가 다른 스케줄 작업을 중단하지 않게 처리합니다.
+@stored('raw/un-data/runtime', lambda args: args['state_dir'])
 def un_refresh_job(state_dir=UN_STATE, scope_path=UN_SCOPE, api_env=UN_ENV):
     """UN의 시작/정기 실행을 직렬화하고 실패를 다른 배치 작업에서 격리합니다."""
     if not UN_RUN_LOCK.acquire(blocking=False):
@@ -149,6 +151,7 @@ def un_refresh_job(state_dir=UN_STATE, scope_path=UN_SCOPE, api_env=UN_ENV):
 
 
 # 매분 영속 상태의 기한만 확인합니다. 대기 중에는 API/DB 연결을 만들지 않습니다.
+@stored('raw/un-data/runtime', lambda args: args['state_dir'])
 def un_resume_job(state_dir=UN_STATE,scope_path=UN_SCOPE,api_env=UN_ENV):
     from backend.app.scheduler.jobs.un_data_resume import read_state,active_is_idle,recovery_blocked
     try:

@@ -26,6 +26,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
+from backend.app.storage.workspace import stored, checkpoint
 
 from backend.app.db.batch_log import track_batch
 from sqlalchemy import select
@@ -186,6 +187,8 @@ def ensure_correlation(new, engine=None):
     return hs_correlation_load.run(new, old, track=False)  # 이 실행의 batch_run 한 건에 포함
 
 
+@stored('ml-inputs/hs-reference', lambda args: hb.REFERENCE_DIR)
+@stored('ml-inputs/hscode', lambda args: hb.OUTPUT_DIR)
 def run_refresh(today=None, download=download_latest, build=hb.run, load=hs_code_load.run, loaded=loaded_codes,
                 expected_of=expected_codes, correlate=ensure_correlation,
                 log_dir=hb.OUTPUT_DIR / "logs", batch_engine=None):
@@ -201,6 +204,8 @@ def run_refresh(today=None, download=download_latest, build=hb.run, load=hs_code
             status = "FAILED"
         if status == "FAILED":
             run.fail()
+        checkpoint(hb.REFERENCE_DIR)
+        checkpoint(hb.OUTPUT_DIR)
     return status
 
 

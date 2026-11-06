@@ -13,6 +13,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 from backend.app.scheduler.collectors.trade_news.news.run_lifecycle import atomic_json
 from backend.app.scheduler.jobs.news_process import run_bounded
+from backend.app.storage.workspace import stored, checkpoint
 
 ROOT = Path(__file__).resolve().parents[4]
 ENV_PATH = ROOT / '.env'
@@ -75,6 +76,12 @@ def data_settings(data_dir, env_path):
         raise ValueError('기존 NEWS_CRAWL_DATA_DIR 설정 필요')
     root = absolute_path(data_dir)
     budget = root / 'articles.sqlite3'
+    from backend.app.storage.objects import enabled
+    if enabled():
+        from filelock import FileLock
+        from backend.app.storage.sqlite_state import restore
+        with FileLock(str(root / 'crawler.lock'), timeout=0):
+            restore(budget)
     if not budget.is_file():
         raise ValueError('기존 요청 예산 DB 없음')
     with closing(sqlite3.connect(budget.as_uri() + '?mode=ro', uri=True)) as db:
@@ -107,6 +114,7 @@ def persist(root, result):
             log.warning('기사 일일 작업 표시 파일 출력 실패 (%s)', type(exc).__name__)
     if result['report_errors']:
         atomic_json(root / 'current_job.json', result)
+    checkpoint(root)
 
 
 def recover_previous(root):
@@ -158,6 +166,14 @@ def collection_status(report, returncode):
     return 'complete'
 
 
+def storage_root(arguments):
+    value=arguments['data_dir'] or settings(arguments['env_path']).get('NEWS_CRAWL_DATA_DIR')
+    if not value:
+        raise ValueError('NEWS_CRAWL_DATA_DIR is required')
+    return absolute_path(value)
+
+
+@stored('raw/trade-news', storage_root)
 def run(data_dir=None, source_map=None, *, now=None, runner=None, env_path=ENV_PATH, include_vector=False):
     """날짜는 시작 시 한 번 고정합니다. 실제 예약 실행은 scheduler.start() 이후에만 가능합니다."""
     from filelock import FileLock, Timeout
