@@ -2,8 +2,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api, setCsrf, download } from './api/client'
 import { navigate } from './router'
-import { registerCountries, registerProducts, countryCode, countryName } from './data/catalog'
-import { displayTime, mapNotification, mapReport } from './api/adapters'
+import { registerCountries, registerProducts, countryCode, countryName, productName } from './data/catalog'
+import { mapNotification, mapReport } from './api/adapters'
 const AppContext = createContext(null)
 const NotificationContext = createContext(null)
 const ToastContext = createContext(null)
@@ -45,6 +45,11 @@ export function AppProvider({ children }) {
   const notify = useCallback(message => setToast(message), [])
   const fail = useCallback(error => {
     notify(error.message + (error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
+    if (error.code==='CLARIFICATION_CONFLICT' || error.code==='CLARIFICATION_EXPIRED') {
+      notify(error.code==='CLARIFICATION_EXPIRED'?'답변 시간이 지났습니다. 새 질문을 입력해 주세요.':'이전 선택지는 마감됐습니다. 대화의 최신 질문을 확인해 주세요.')
+      return false
+    }
+    notify(error.message + (error.status === 409 ? ' 새로고침한 뒤 변경 내용을 확인하고 다시 저장해 주세요.' : error.status === 429 ? ` ${error.retryAfter || 60}초 후 다시 시도해 주세요.` : ''))
     return false
   }, [notify])
   const run = useCallback(async action => { try { return await action() } catch (error) { return fail(error) } }, [fail])
@@ -73,7 +78,7 @@ export function AppProvider({ children }) {
   }, [])
   const refreshChats = useCallback(async () => {
     const current = epoch.current; const items = await allPages('/chat/sessions')
-    if (current === epoch.current) setChats(items.map(c => ({ ...c, id: c.session_id, date: displayTime(c.updated_at), messages: [] })))
+    if (current === epoch.current) setChats(items.map(c => ({ ...c, id: c.session_id, messages: [] })))
   }, [])
   const loadUser = useCallback(async (user, current) => {
     const [interest, config, refs, pref, subs] = await Promise.all([
@@ -133,6 +138,24 @@ export function AppProvider({ children }) {
     if (current !== epoch.current) return false
     updateProfile({ ...p, version: data.interests.version, home: data.interests.landing_page === 'INTERESTED' ? 'interest' : 'all' }); return true
   }), [profile, run])
+  // 채팅 등에서 관심 국가·품목을 기존 관심정보에 더한다. 저장 결과를 프로필에도 반영해야 관심정보 화면 저장이 409가 되지 않는다.
+  const addInterests = useCallback((countryCodes, hsItems) => run(async () => {
+    const current = epoch.current
+    const { interests: saved } = await api('/users/me/interests')
+    // 조회 중 계정이 바뀌면 이전 계정에서 고른 대상을 새 계정에 저장하지 않는다(두 계정의 버전이 같으면 PUT이 통과한다)
+    if (current !== epoch.current) return 'STALE'
+    const { interests: scope } = await api('/users/me/interests', { method: 'PUT', body: { expected_version: saved.version,
+      country_codes: [...new Set([...saved.country_codes, ...countryCodes])],
+      hs_items: [...new Map([...saved.hs_items, ...hsItems].map(h => [h.hs_ver + h.hs_code, h])).values()] } })
+    if (current !== epoch.current) return 'STALE'  // 그 사이 로그아웃·계정 전환: 새 세션 프로필은 건드리지 않는다
+    updateProfile(p => ({ ...p, products: scope.hs_items.map(h => h.hs_code), countries: scope.country_codes.map(countryName),
+      home: scope.landing_page === 'INTERESTED' ? 'interest' : 'all', version: scope.version }))
+    // 이름을 모르는 새 품목만 HS4 하위 목록으로 등록한다(loadUser와 같은 조회). 저장은 이미 끝났으므로 실패해도 무시한다.
+    const unknown = [...new Set(hsItems.filter(h => productName(h.hs_code) === h.hs_code).map(h => h.hs_code.slice(0, 4)))]
+    Promise.all(unknown.map(code => api(`/reference/hs-codes/${code}/children`, { query: { hs_ver: 'HS2022' } })))
+      .then(groups => { if (current === epoch.current) groups.forEach(g => registerProducts(g.items)) }, () => {})
+    return true
+  }), [run])
   const acceptNotificationTerms = useCallback(version => run(async () => {
     const current = epoch.current
     const { consent } = await api('/users/me/consents', { method: 'POST', body: {
@@ -201,7 +224,7 @@ export function AppProvider({ children }) {
     await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } })
     clear()
   }, [session, clear])
-  const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`, `리포트-${id}.${format.toLowerCase()}`)), [run])
+  const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`)), [run])
   const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
   const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])
   const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
@@ -209,11 +232,11 @@ export function AppProvider({ children }) {
   const value = useMemo(() => ({
     session, account: session, accounts, setAccounts, loading, loadError, refresh, options, countries,
     login, signup, socialSignIn, logout, changePassword, withdraw,
-    profile, setProfile, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
+    profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
     chats, setChats, refreshChats, reports, refreshReports, downloadReport,
     mainView, setMainView, notify, run, fail,
   }), [session, accounts, loading, loadError, refresh, options, countries, login, signup, socialSignIn,
-    logout, changePassword, withdraw, profile, setProfile, settings, setSettings, acceptNotificationTerms,
+    logout, changePassword, withdraw, profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms,
     subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
     downloadReport, mainView, notify, run, fail])
   const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications }),

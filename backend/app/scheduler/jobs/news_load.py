@@ -229,6 +229,8 @@ def load(engine, raws, cleans):
                 s.execute(delete(ArticleTag).where(ArticleTag.article_id.in_(chunk),
                                                   getattr(ArticleTag, column).isnot(None)))
         _insert(s, ArticleTag, tags)
+        # 원문만 적재한 기사는 키워드 결과가 도착할 때 최초 수신 정책으로 분류한다.
+        news_schema.freeze_keyword_categories(s, table, [ids[r['external_id']] for r in tagged], ingestion_policy=True)
         kw_rows, hs_rows = rebuild_daily(s, days)
     kinds = {k: sum(t[k] is not None for t in tags) for k in ("keyword_text", "country_code", "hs_code")}
     return {"articles": len(articles), "no_keyword_result": sum(r["external_id"] not in by_id for r in articles),

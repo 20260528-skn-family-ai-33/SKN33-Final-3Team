@@ -22,14 +22,21 @@ class ExecutionContext:
     events: list = field(default_factory=list)
     model_calls: int = 0
     tokens: int = 0
+    finish_reserve: float = 0.0
 
     def __post_init__(self):
         if not math.isfinite(self.deadline):
             raise ValueError('finite_deadline_required')
+        if not math.isfinite(self.finish_reserve) or self.finish_reserve < 0:
+            raise ValueError('invalid_finish_reserve')
         self.started = self.clock()
 
-    def remaining(self):
-        value = self.deadline - self.clock()
+    @property
+    def work_deadline(self):
+        return self.deadline - self.finish_reserve
+
+    def remaining(self, *, finalizing=False):
+        value = (self.deadline if finalizing else self.work_deadline) - self.clock()
         if value <= 0:
             raise RagDeadlineExceeded('global_deadline_exceeded')
         return value

@@ -56,7 +56,7 @@ export default function Login() {
         <div className="sp24" />
         <Btn type="submit" kind="red" size="lg" block disabled={pending}>{pending ? '로그인 중…' : '로그인'}</Btn>
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 12, marginTop: 16, fontSize: 14 }}>
-          <Link to="/find-id" style={{ color: 'var(--sub)', fontWeight: 700 }}>아이디 찾기</Link>
+          <Link to="/find-id" style={{ color: 'var(--sub)', fontWeight: 700 }}>가입 여부 확인</Link>
           <span style={{ width: 1, height: 12, background: '#CDD1D8' }} />
           <Link to="/find-password" style={{ color: 'var(--sub)', fontWeight: 700 }}>비밀번호 찾기</Link>
         </div>

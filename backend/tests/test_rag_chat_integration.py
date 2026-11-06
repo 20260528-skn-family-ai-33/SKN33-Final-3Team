@@ -3,12 +3,13 @@ from datetime import date
 import unittest
 from unittest.mock import patch
 
-from openai import OpenAIError
+import httpx
+from openai import APITimeoutError, OpenAIError
 from sqlalchemy import update
 
 from backend.app.api.chat_news import article_answer, matching_url
 from backend.app.api.database import Store
-from backend.app.services.rag.runtime import RagDeadlineExceeded
+from backend.app.services.rag.runtime import ExecutionContext, RagDeadlineExceeded
 from backend.tests import test_backend_api as base
 from backend.tests import test_chat_review_regressions as chat_fixtures
 from backend.tests.chat_news_fixture import indexed_news
@@ -120,6 +121,46 @@ class ChatRagIntegrationTest(unittest.TestCase):
             self.assertNotIn(str(error), answer['text'])
             history = self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['items']
             self.assertEqual(history[-1]['answer'], answer)
+
+    def test_regular_search_deadline_preserves_only_previously_verified_cards_in_history(self):
+        self.signup()
+        self.seed(5)
+        # None simulates an SDK timeout while the local deadline still has time.
+        for accepted, expires_at in ((0, 29), (2, 29), (2, 31), (0, None), (2, None)):
+            with self.subTest(accepted=accepted, expires_at=expires_at), indexed_news(self) as service:
+                now = [0.]
+                summarize = service.gateway.summarize
+                attempted = []
+
+                def timed_summary(request, candidate, context):
+                    attempted.append(candidate.article.article_id)
+                    if len(attempted) > accepted:
+                        if expires_at is None:
+                            raise APITimeoutError(request=httpx.Request('POST', 'https://example.org/'))
+                        now[0] = expires_at
+                    return summarize(request, candidate, context)
+
+                def context_with_test_clock(deadline, **kwargs):
+                    self.assertEqual(deadline, 30)
+                    return ExecutionContext(deadline, clock=lambda: now[0], **kwargs)
+
+                with patch('backend.app.agents.tools.time') as timer, \
+                     patch('backend.app.agents.tools.ExecutionContext', side_effect=context_with_test_clock), \
+                     patch.object(service.gateway, 'summarize', side_effect=timed_summary):
+                    timer.monotonic.return_value = 0.
+                    sid, _, job = self.ask(f'기사 설명 {accepted} {expires_at}', intent='RAG')
+                answer = job['answer']
+                self.assertEqual(len(attempted), accepted + 1)
+                self.assertEqual([a['article_id'] for a in answer['articles']], list(map(str, attempted[:accepted])))
+                if accepted:
+                    self.assertEqual((answer['answer_status'], answer['rag_status']), ('PARTIAL', 'partial'))
+                    self.assertTrue(any('시간' in w for w in answer['warnings']))
+                    for card in answer['articles']:
+                        self.assertTrue(card['sentences'][0]['quotes'])
+                else:
+                    self.assertEqual((answer['answer_status'], answer['rag_status']), ('NO_DATA', 'failed'))
+                history = self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['items']
+                self.assertEqual(history[-1]['answer'], answer)
 
     def test_http_urls_compare_after_normalization_but_changed_or_unsafe_urls_do_not(self):
         self.assertEqual(matching_url('https://EXAMPLE.org', 'https://example.org/'), 'https://example.org/')

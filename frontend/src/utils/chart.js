@@ -9,3 +9,12 @@ export function niceTicks(values, count = 4, fromZero = false) {
   const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || raw
   return Array.from({ length: count + 1 }, (_, i) => +(lo + i * step).toFixed(2))
 }
+
+
+/** One shared display unit per chart. Underlying values remain unchanged. */
+export function chartDisplay(values, unit) {
+  const max=Math.max(0,...values.filter(v=>Number.isFinite(v)).map(Math.abs))
+  const scale=unit==='USD'?(max>=1e12?1e12:max>=1e8?1e8:max>=1e4?1e4:1):1
+  const prefix=({10000:'만',100000000:'억',1000000000000:'조'})[scale]||''
+  return {unit:prefix+unit,format:n=>(n/scale).toLocaleString('ko-KR',{maximumFractionDigits:2})}
+}

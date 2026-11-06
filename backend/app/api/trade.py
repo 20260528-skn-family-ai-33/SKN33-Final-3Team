@@ -54,6 +54,8 @@ def resolve_period(store, start=None, end=None, months=3):
     end=month(end) if end else available[-1]
     start=month(start) if start else shift_month(end,-months+1)
     require(start<=end,'시작 월이 종료 월보다 늦습니다.')
+    require(start>=available[0],
+            f'최초 공개 월({available[0]:%Y-%m}) 이전입니다.', 'PERIOD_NOT_AVAILABLE', 422)
     require(end<=available[-1],'최신 공개 월을 초과합니다.','PERIOD_NOT_AVAILABLE',422)
     cursor=start
     while cursor<=end:
@@ -124,7 +126,9 @@ def aggregate(store,table,start,end,hs=None,countries=None,group='COUNTRY'):
     t,c=store.t(table),store.t('country')
     groups={'COUNTRY':[t.c.country_code], 'HS6':[t.c.hs6_code,t.c.hs_ver],
             'MONTH':[t.c.trade_month], 'PAIR':[t.c.country_code,t.c.hs6_code,t.c.hs_ver],
-            'MONTH_COUNTRY':[t.c.trade_month,t.c.country_code]}
+            'MONTH_COUNTRY':[t.c.trade_month,t.c.country_code],
+            'MONTH_HS':[t.c.trade_month,t.c.hs6_code,t.c.hs_ver],
+            'MONTH_PAIR':[t.c.trade_month,t.c.country_code,t.c.hs6_code,t.c.hs_ver]}
     cols=groups[group]
     stmt=select(*cols,func.sum(t.c.amount_usd).label('amount_usd')).select_from(t.join(c,t.c.country_code==c.c.country_code))
     stmt=stmt.where(c.c.country_role=='COUNTRY',t.c.hs_ver=='HS2022',t.c.trade_month>=start,t.c.trade_month<=end)
@@ -205,7 +209,7 @@ def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='
     return out
 
 
-def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY',flow='EXPORT',page=1,size=5):
+def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY',flow='EXPORT',page=1,size=5,save=True):
     require(group in ('COUNTRY','HS6') and flow in ('EXPORT','IMPORT'),'순위 기준을 확인하세요.')
     start,end=resolve_period(store,start,end,3)
     key=lambda r: r['country_code'] if group=='COUNTRY' else r['hs6_code']
@@ -247,17 +251,19 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
             'one_off':flags.get(k,anomaly_view(set()))})
     meta=metadata(store,start,end)
     conditions={'hs_items':hs or [],'country_codes':countries or [],'period':period(start,end),'trade_flow':flow}
-    # has_data는 화면 표시용이라 엑셀·채팅 결과표에는 넣지 않는다. 국가 순위에는 품목명 칸이 필요 없다.
-    # 실적이 없는 행은 화면처럼 금액·순위·비중 칸을 비운다(실제로 집계된 0과 구분, 순위를 매길 실적이 없음).
-    hidden={'has_data'} | ({'hs_name'} if group=='COUNTRY' else set())
-    blank=lambda item:{} if item['has_data'] else {'export_amount_usd':None,'import_amount_usd':None,'rank':None,'share_pct':None}
-    table=result_table(store,uid,[{**{k:v for k,v in item.items() if k not in hidden},**blank(item)} for item in items],meta,conditions,store.queries)
-    # 관심 범위(INTERESTED)는 서버가 최신 관심 품목·국가로 좁히므로, 화면이 파일명·AI 질문에 그대로 쓰도록 실제 적용 조건을 함께 돌려준다.
-    return {'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items)), 'result_id':table['result_id'],'meta':meta,
-            'conditions':{'hs_items':hs or [],'country_codes':countries or []}}
+    meta.update(truncated=len(items)>1000, rows_total=len(items))
+    out={'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items)), 'meta':meta,
+         'conditions':{'hs_items':hs or [],'country_codes':countries or []}}
+    if save:
+        # Display-only flags stay in the API; exports distinguish absent observations from zero.
+        hidden={'has_data'} | ({'hs_name'} if group=='COUNTRY' else set())
+        blank=lambda item:{} if item['has_data'] else {'export_amount_usd':None,'import_amount_usd':None,'rank':None,'share_pct':None}
+        table=result_table(store,uid,[{**{k:v for k,v in item.items() if k not in hidden},**blank(item)} for item in items[:1000]],meta,conditions,store.queries)
+        out['result_id']=table['result_id']
+    return out
 
 
-def market_shares(store,uid,conditions,trends_mode=False):
+def market_shares(store,uid,conditions,trends_mode=False,save=True):
     p=conditions['period']; hs=conditions.get('hs_items',[])
     validate_scope(store,hs,conditions.get('country_codes',[]))
     start,end=resolve_period(store,p['start'][:7],p['end'][:7],12)
@@ -269,6 +275,8 @@ def market_shares(store,uid,conditions,trends_mode=False):
     totals=defaultdict(Decimal)
     for r in rows: totals[r['country_code']]+=r['amount_usd']
     top=sorted(totals,key=lambda k:(-totals[k],k))[:10]
+    # Keep explicitly requested countries visible even outside the top ten.
+    top += [code for code in conditions.get('country_codes',[]) if code not in top]
     groups=defaultdict(list)
     annual=trends_mode and (end.year-start.year)*12+end.month-start.month+1>12
     for r in rows:
@@ -280,13 +288,15 @@ def market_shares(store,uid,conditions,trends_mode=False):
         for r in rs: amounts[r['country_code']]+=r['amount_usd']
         denominator=sum(amounts.values())
         for k in top+['OTHER']:
-            amount=sum(v for code,v in amounts.items() if code not in top) if k=='OTHER' else amounts.get(k)
+            amount=sum(v for code,v in amounts.items() if code not in top) if k=='OTHER' else amounts.get(k,Decimal(0))
             if amount is None: continue
             item={'country_code':None if k=='OTHER' else k,'label':'기타' if k=='OTHER' else names[k],
                   'amount_usd':amount,'share_pct':amount*100/denominator if denominator else None}
             if trends_mode: item['period']=label
             items.append(item)
     meta=metadata(store,start,end)
+    if not save:
+        return {'items':items,'denominator_usd':sum(totals.values()),'meta':meta}
     table=result_table(store,uid,items,meta,conditions,store.queries)
     if trends_mode:
         return {'table':table,'granularity':'YEAR' if annual else 'MONTH','chart':{'chart_type':'LINE','result_id':table['result_id'],'x_key':'period','series_keys':['share_pct'],'title':'국가별 비중 추이','positive_color':'#16A34A','negative_color':'#DC2626'},'meta':meta}

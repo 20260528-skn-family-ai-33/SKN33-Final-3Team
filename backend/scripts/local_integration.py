@@ -6,11 +6,20 @@ from sqlalchemy import MetaData, text, inspect, select, update
 from backend.app.api.config import Settings
 
 
+def local_vector_enabled():
+    """루트 .env가 HS 임베딩 검색을 켜 두었고 chroma_data와 OPENAI_API_KEY가 있으면 로컬에서도 켠다.
+    하나라도 없으면 끄고 DB 사전 검색만 쓴다. 후보 코드는 로컬 DB에서 다시 확인하므로 HS 전체 적재가 필요하다."""
+    env=Settings().values
+    path=Path(env.get('API_HS_CHROMA_PATH') or 'chroma_data')
+    return (str(env.get('API_HS_VECTOR_ENABLED','false')).lower()=='true' and bool(env.get('OPENAI_API_KEY'))
+            and (path if path.is_absolute() else Path(__file__).resolve().parents[2]/path).exists())
+
+
 def local_settings():
     return Settings(values={'API_DB_TARGET':'local','MYSQL_HOST':'127.0.0.1','MYSQL_PORT':'3307',
         'MYSQL_DATABASE':'trade_integration','MYSQL_USER':'integration','MYSQL_PASSWORD':'local-integration-only',
         'API_COOKIE_SECURE':'false','API_REDIS_URL':'redis://127.0.0.1:6379/0',
-        'API_REDIS_PREFIX':'borderless:integration:','API_HS_VECTOR_ENABLED':'false'})
+        'API_REDIS_PREFIX':'borderless:integration:','API_HS_VECTOR_ENABLED':'true' if local_vector_enabled() else 'false'})
 
 
 def demo_data(engine, metadata):

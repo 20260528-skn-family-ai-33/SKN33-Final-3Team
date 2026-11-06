@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import logging
+import re
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -22,6 +23,12 @@ def write_json(path, value):
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
     temporary.replace(path)
+
+
+def version_key(path):
+    """<계열>_<YYYYMM>[_r<n>].registry.json 또는 .joblib → (YYYYMM, n). 이름 정렬로는 _r10이 _r2보다 앞선다."""
+    match = re.fullmatch(r".+_(\d{6})(?:_r(\d+))?\.(?:registry\.json|joblib)", Path(path).name)
+    return (match[1], int(match[2] or 1)) if match else None
 
 
 def sha256(path):

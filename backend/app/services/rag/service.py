@@ -6,6 +6,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
+from openai import APITimeoutError
 from pydantic import HttpUrl, TypeAdapter
 
 from backend.app.schemas.rag import (ArticleEvidence, ArticlePeriod, EvidenceSpan, RagFailure, RagRequest, RagResponse,
@@ -159,6 +160,7 @@ class RagService:
 
     def run(self, request, context):
         request = RagRequest.model_validate(request)
+        regular_chat = request.use_case == 'chat' and request.order_by == 'relevance'
         context.event('input')
         stage, articles, completed, failures = 'index', [], set(), []
         insufficient_evidence = False
@@ -185,8 +187,8 @@ class RagService:
                 candidate_limit = 40
                 answer_format, review_body = latest_output(request, self.gateway, context)
                 context.event('latest_output', answer_format=answer_format, review_body=review_body)
-            elif request.use_case == 'chat':
-                candidate_limit = 15
+            elif regular_chat:
+                candidate_limit = 10
             snapshot = self.store.snapshot()
             applied_sources = requested_sources(request, snapshot)
             context.event('index', generation=snapshot.generation)
@@ -230,6 +232,7 @@ class RagService:
                         continue
                     context.event('summary_candidate', article_key=candidate.article.identity)
                     evidence, summary = self._summary(request, candidate, context)
+                    context.remaining()
                     insufficient_evidence |= not summary
                     if not summary:
                         empty_summary_omitted = True
@@ -259,6 +262,10 @@ class RagService:
                 except RagDeadlineExceeded:
                     raise
                 except Exception as exc:
+                    if regular_chat and isinstance(exc, (APITimeoutError, TimeoutError)):
+                        failures.append(RagFailure(stage='timeout', code='candidate_timeout',
+                                                   source_code=candidate.article.source_code))
+                        break
                     failures.append(RagFailure(stage='summary', code=type(exc).__name__, source_code=candidate.article.source_code))
             if failures:
                 status = 'partial' if articles else 'failed'
@@ -270,15 +277,16 @@ class RagService:
                 status = 'insufficient_results'
             else:
                 status = 'ok'
-            context.remaining()
-        except RagDeadlineExceeded:
-            context.event('global_deadline_exceeded')
-            raise
+            if not any(f.stage == 'timeout' for f in failures):
+                context.remaining()
         except Exception as exc:
-            if context.deadline <= context.clock():
+            if isinstance(exc, RagDeadlineExceeded) or context.work_deadline <= context.clock():
                 context.event('global_deadline_exceeded')
-                raise RagDeadlineExceeded('global_deadline_exceeded') from exc
-            failures.append(RagFailure(stage=stage, code=type(exc).__name__))
+                if not (regular_chat and articles):
+                    raise RagDeadlineExceeded('global_deadline_exceeded') from exc
+                failures.append(RagFailure(stage='timeout', code='global_deadline_exceeded'))
+            else:
+                failures.append(RagFailure(stage=stage, code=type(exc).__name__))
             status = 'partial' if articles else 'failed'
         finally:
             if found is not None and hasattr(found.candidates, 'close'):
@@ -313,7 +321,10 @@ class RagService:
                                       if latest_period is not None else None),
             latest_scan_complete=(not failures and not unreviewed_latest if request.order_by == 'published_date_desc' else None))
         response = validate_response_for(request, response)
-        context.remaining()  # 캐시·추적 저장과 응답 검증에 걸린 시간도 전체 상한에 포함합니다.
+        # Finalization does no inference. A slow snapshot close or trace write must
+        # not discard chat evidence already accepted before the work deadline.
+        if not (regular_chat and articles):
+            context.remaining(finalizing=True)
         return response
 
 

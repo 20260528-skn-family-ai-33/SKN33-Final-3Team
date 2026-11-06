@@ -5,18 +5,25 @@ import { Band } from '../../components/layout'
 import { Btn, Check, Modal, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
-import { api } from '../../api/client'
+import { api, streamAnswer } from '../../api/client'
 import { requestId } from '../../api/requestId'
-import { previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
-import { amount, percent, reportProduct } from '../../api/adapters'
+import { amount, percent, reportProduct, kstDateTimeText } from '../../api/adapters'
 import { usePendingAction, useQuery, ErrorNotice } from '../../api/hooks'
-import { Hs4Search } from '../../components/pickers'
+import { previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
 import { monthOffset } from '../home/useDashboard'
-import { countryName } from '../../data/catalog'
+import { countryName, productName } from '../../data/catalog'
 import { ALL_SECTIONS } from '../../data/seed'
 const range = (from, to) => `${from || '—'} ~ ${to || '—'}`
 const PERIOD_PRESETS = [['3', '최근 3개월'], ['6', '최근 6개월'], ['12', '최근 12개월']]
 import bandAnalysis from '../../assets/band-analysis.jpg'
+import './conversation.css'
+import { PromptActions, Progress } from './ConversationSteps.jsx'
+import TaskResults from './TaskResults.jsx'
+import { completedMessages } from './completedMessages'
+import { CountryPicker, InterestProducts } from '../../components/pickers'
+import { countryCode } from '../../data/catalog'
+
+const running = status => ['QUEUED','RUNNING','WAITING_REPORT'].includes(status)
 
 const STATUS_TAG = {
   condition: ['amber', '조건 확인 중'],
@@ -26,9 +33,9 @@ const STATUS_TAG = {
 const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
 const optionsFor = (c, choices) => ({ conditions: c, country: c.country_codes.map(countryName).join(' · '), product: c.hs_items.map(h => reportProduct(h.hs_code, choices?.find(choice => choice.hs_item?.hs_code === h.hs_code)?.label || h.name_ko)).join(', '), from: c.period.start.slice(0, 7), to: c.period.end.slice(0, 7), ...reportComparisonInputs(c), sections: ALL_SECTIONS })
 
-function AiBlock({ children }) {
+function AiBlock({ children, className }) {
   return (
-    <div>
+    <div className={className}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <span style={{ width: 30, height: 30, borderRadius: 10, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sparkle" color="#C8102E" stroke={2} /></span>
         <b style={{ fontSize: 14 }}>Borderless Sellers AI</b>
@@ -47,7 +54,7 @@ function UserBubble({ text }) {
 }
 
 /** 상태 1: 리포트 조건 선택 */
-function ConditionCard({ message, onChange, onGenerate }) {
+function ConditionCard({ message, onChange, onGenerate, onClose }) {
   const { run, notify } = useApp()
   const availability = useQuery('/data/availability')
   const [preview, setPreview] = useState(null)
@@ -82,6 +89,11 @@ function ConditionCard({ message, onChange, onGenerate }) {
   const incompleteComparison = Boolean(o.compareFrom) !== Boolean(o.compareTo)
   const reversedComparison = o.compareFrom && o.compareTo && o.compareFrom > o.compareTo
   const set = patch => onChange({ ...message, options: { ...o, ...patch } })
+  const setScope = patch => {
+    const conditions={...o.conditions,...patch}
+    set({conditions,country:[...(conditions.include_korea_total?['한국(대한민국) 전체']:[]),...conditions.country_codes.map(countryName)].join(' · '),
+      product:conditions.hs_items.map(h=>reportProduct(h.hs_code)).join(', ')})
+  }
   if (message.locked) {
     return (
       <AiBlock>
@@ -113,8 +125,22 @@ function ConditionCard({ message, onChange, onGenerate }) {
   }
   return (
     <AiBlock>
-      <p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인해 주세요.</p>
+      <div className="between"><p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인해 주세요.</p><Btn size="sm" onClick={onClose}>닫기</Btn></div>
       <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>품목: {o.product || '전체 품목'} · 국가: {o.country || '전체'} (국가 선택 생략 가능)</p>
+      <details style={{marginTop:16}}><summary>국가 조건 선택 · {o.conditions.country_codes.length+(o.conditions.include_korea_total?1:0)}개</summary>
+        <p className="note">여러 국가를 선택할 수 있습니다. 선택하지 않으면 전체 국가입니다.</p>
+        <p className="note">한국(대한민국)은 전체 수출액입니다. 다른 교역 상대국과 함께 선택하면 월별 금액을 비교합니다. 한국 전체와 상대국 금액은 합산하지 않습니다.</p>
+        <CountryPicker includeKorea showSelected value={[...(o.conditions.include_korea_total?['한국(대한민국)']:[]),...o.conditions.country_codes.map(countryName)]}
+          onChange={names=>setScope({include_korea_total:names.includes('한국(대한민국)'),country_codes:names.filter(n=>n!=='한국(대한민국)').map(countryCode)})}/>
+      </details>
+      <details style={{marginTop:16}}><summary>품목 조건 선택 · {o.conditions.hs_items.length}개</summary>
+        <p className="note">품목을 검색하고 체크박스로 여러 품목을 선택하세요. 선택하지 않으면 전체 품목입니다.</p>
+        <InterestProducts products={o.conditions.hs_items.map(h=>h.hs_code)} setProducts={update=>{
+          const previous=o.conditions.hs_items.map(h=>h.hs_code)
+          const codes=typeof update==='function'?update(previous):update
+          setScope({hs_items:codes.map(code=>({hs_code:code,hs_ver:'HS2022'}))})
+        }}/>
+      </details>
       <div className="chips" style={{ marginTop: 16 }} role="group" aria-label="기간 빠른 선택">
         {PERIOD_PRESETS.map(([key, label]) => (
           <button key={key} type="button" disabled={!start || !end || monthOffset(end, 1 - Number(key)) < start} className={'chip sm' + (message.preset === key ? ' on' : '')} aria-pressed={message.preset === key}
@@ -154,10 +180,47 @@ function ConditionCard({ message, onChange, onGenerate }) {
   )
 }
 
-function AnswerCard({ message, onSaveReport, onInterest }) {
+function ReportGeneration({initial,onComplete}) {
+  const [job,setJob]=useState(initial)
+  const [error,setError]=useState(null)
+  const [retry,setRetry]=useState(0)
+  useEffect(()=>{
+    const controller=new AbortController(); let timer
+    const poll=async()=>{
+      try {
+        const data=await api(`/reports/${initial.report_id}/status`,{signal:controller.signal})
+        if(controller.signal.aborted)return
+        setJob(data.job);setError(null)
+        if(!['READY','FAILED'].includes(data.job.status))timer=setTimeout(poll,Math.max(2,data.job.retry_after_seconds||2)*1000)
+        else onComplete()
+      } catch(e){if(!controller.signal.aborted)setError(e)}
+    }
+    poll();return ()=>{controller.abort();clearTimeout(timer)}
+  },[initial.report_id,retry,onComplete])
+  const active=!['READY','FAILED'].includes(job.status)
+  return <AiBlock><div role="status"><b>{job.status==='READY'?'리포트 생성 완료':job.status==='FAILED'?'리포트 생성 실패':'리포트 생성 중'}</b>
+    {active && <span className="chat-loading-ring" aria-label="리포트 생성 진행 중"/>}</div>
+    {active && <p className="note">채팅을 계속할 수 있습니다. 완료되면 여기에서 알려드립니다.</p>}
+    <ErrorNotice error={error || job.error} retry={()=>setRetry(v=>v+1)}/>
+    {job.status==='READY' && <Btn to={`/report?id=${job.report_id}`}>리포트 센터에서 이 리포트 열기</Btn>}
+  </AiBlock>
+}
+
+function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
+  const [stream,setStream]=useState(null)
+  useEffect(()=>{
+    if(!streamJobId)return
+    const controller=new AbortController()
+    let active=true
+    const timeout=setTimeout(()=>controller.abort(),8000)
+    streamAnswer(streamJobId,text=>setStream({id:streamJobId,text,done:false}),controller.signal)
+      .catch(()=>{})
+      .finally(()=>{clearTimeout(timeout);if(active)setStream({id:streamJobId,done:true})})
+    return ()=>{active=false;clearTimeout(timeout);controller.abort()}
+  },[streamJobId])
   const a = message.answer
   const c = a.conditions
-  const trend = a.tables.length === 1 && a.tables[0].rows.length && a.tables[0].rows.every(r => r.month) ? a.tables[0].rows : null
+  const trend = !a.tasks?.length && a.tables.length === 1 && a.tables[0].rows.length && a.tables[0].rows.every(r => r.month) ? a.tables[0].rows : null
   const comparison = comparisonPeriod(c, trend)
   const metric = c?.trade_flow === 'IMPORT' ? 'import_amount_usd' : 'export_amount_usd'
   const prior = c?.trade_flow === 'IMPORT' ? 'previous_year_import_usd' : 'previous_year_export_usd'
@@ -165,9 +228,10 @@ function AnswerCard({ message, onSaveReport, onInterest }) {
   const previous = trend?.every(r => typeof r[prior] === 'number') ? trend.reduce((sum, r) => sum + r[prior], 0) : null
   const growth = total != null && previous > 0 ? (total / previous - 1) * 100 : null
   const flow = trend && trend.length > 1 && total != null ? trend.at(-1)[metric] > trend[0][metric] ? '증가' : trend.at(-1)[metric] < trend[0][metric] ? '감소' : '동일' : '—'
+  const receiving=streamJobId && (stream?.id!==streamJobId||!stream.done)
   return <AiBlock>
     {c && <>
-      <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')}` : '전체 품목'} / {c.country_codes?.map(countryName).join(' · ') || '전체 국가'}</p>
+      <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')} / ` : ''}{c.country_codes?.map(countryName).join(' · ') || '전체 국가'}</p>
       <p className="note">{range(c.period?.start, c.period?.end)} / 비교 {range(comparison?.start, comparison?.end)}</p>
     </>}
     {trend && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 16 }}>
@@ -177,28 +241,31 @@ function AnswerCard({ message, onSaveReport, onInterest }) {
         </div>
       ))}
     </div>}
-    <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>
+    {receiving && <><p role="status" className="note">검증 완료 · 답변 수신 중</p><p style={{whiteSpace:'pre-wrap',lineHeight:1.8}}>{stream?.id===streamJobId?stream.text:''}</p></>}
+    {a.tasks?.length ? <TaskResults answer={a} hideText={receiving}/> : !receiving && <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>}
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
     {a.warnings?.filter(w => w !== a.text).map(w => <p className="note" key={w}>{w}</p>)}
-    {a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
+    {!a.tasks?.length && a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
     {a.articles.map((article, index) => <div className="li" key={article.article_id}><div>
       <b>[{index + 1}] {article.title}</b>
       <p className="muted">{article.source_code} · {article.published_date}</p>
       {article.sentences?.length ? article.sentences.map((s, i) => <details key={i}>
         <summary>{s.text} · 근거 보기</summary>
         {s.quotes.map((quote, j) => <blockquote key={j}>{quote}</blockquote>)}
-      </details>) : <p>{article.summary || (a.order_by === 'published_date_desc' ? '발행일 기준 최신 기사' : '본문 근거 부족')}</p>}
+      </details>) : (article.summary || article.evidence_sufficient === false) && <p>{article.summary || (a.order_by === 'published_date_desc' ? '발행일 기준 최신 기사' : '본문 근거 부족')}</p>}
       <Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn>
       {/^https?:\/\//i.test(article.source_url || '') && <a href={article.source_url} target="_blank" rel="noreferrer">원문 보기</a>}
     </div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-      {a.conditions && <Btn kind="red" icon="file" onClick={() => onSaveReport(a.conditions)}>리포트로 저장</Btn>}
-      {a.tables[0]?.result_id && <Btn icon="star" onClick={() => onInterest(a.tables[0].result_id)}>관심 목록 추가</Btn>}
+      {a.report_id && <><p role="status">리포트 생성 완료</p><Btn to={`/report?id=${a.report_id}`}>리포트 센터에서 이 리포트 열기</Btn></>}
+      {/* 리포트는 수출 통계 기간이 있어야 만든다. 기사만 조회한 답변(LOCAL_ISSUES)은 period가 null이다 */}
+      {a.conditions?.period && <Btn kind="red" icon="file" onClick={() => onSaveReport(a.conditions)}>리포트로 저장</Btn>}
+      {a.tables[0]?.result_id && <Btn icon="star" onClick={() => onInterest(a)}>관심 목록 추가</Btn>}
     </div></AiBlock>
 }
 
 export default function Analysis({ route }) {
-  const { chats, refreshChats, refreshReports, run, notify } = useApp()
+  const { session, chats, refreshChats, refreshReports, addInterests, run, notify } = useApp()
   const [activeId, setActiveId] = useState(route.query.get('chat') || chats[0]?.id)
   const [input, setInput] = useState(route.query.get('ask') || '')
   const [modal, setModal] = useState(null)
@@ -208,9 +275,20 @@ export default function Analysis({ route }) {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState(null)
+  const reportStorageKey=`analysis-reports:${session?.id}`
+  const [chatReports,setChatReports]=useState(()=>{
+    try { return JSON.parse(sessionStorage.getItem(reportStorageKey)||'{}') } catch { return {} }
+  })
+  useEffect(()=>{try {sessionStorage.setItem(reportStorageKey,JSON.stringify(chatReports))}catch{/* Storage can be disabled. */}},[chatReports,reportStorageKey])
+  const [interest, setInterest] = useState(null)
+  const [savingInterest, setSavingInterest] = useState(false)
   const [readRevision, setReadRevision] = useState(0)
-  const [hsGroup, setHsGroup] = useState(null)
   const endRef = useRef(null), pending = useRef(null)
+  const inputRef=useRef(null)
+  const clarificationRequest=useRef(null), acceptedClarifications=useRef(new Set())
+  // 지금 보고 있는 채팅방. 응답이 오기 전에 방을 바꿨으면 그 응답으로 이 방의 작업 상태를 덮어쓰지 않는다
+  // (덮어쓰면 B방의 중단 버튼이 A방 작업을 취소한다).
+  const activeRef=useRef(activeId); activeRef.current=activeId
   const active = chats.find(c => c.id === activeId)
   useEffect(() => {
     let cancelled = false, timer
@@ -220,15 +298,32 @@ export default function Analysis({ route }) {
         const rows = await allPages(`/chat/sessions/${activeId}/messages`)
         if (cancelled) return
         setMessages(rows); setError(null)
-        const latest = [...rows].reverse().find(m => m.job)?.job
+        let latest = [...rows].reverse().find(m => m.job)?.job
+        // The job endpoint also checks whether a pending checkpoint has expired.
+        if (latest && (running(latest.status)||latest.status==='NEEDS_INPUT')) latest=(await api(`/chat/jobs/${latest.job_id}`)).job
+        if (cancelled) return
+        if (latest?.status==='NEEDS_INPUT' && acceptedClarifications.current.has(latest.clarification?.clarification_id)) {
+          timer=setTimeout(load,2000)
+          return
+        }
+        setMessages(completedMessages(rows,latest))
         setJob(latest || null)
-        if (latest && ['QUEUED', 'RUNNING'].includes(latest.status)) timer = setTimeout(load, 2000)
+        if (latest && running(latest.status)) timer = setTimeout(load, 2000)
       } catch (e) { if (!cancelled) setError(e) }
     }
     load()
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [activeId, busy, readRevision])
+  }, [activeId, readRevision])
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, [messages.length])
+  const clarificationId=job?.status==='NEEDS_INPUT' ? job.clarification?.clarification_id : null
+  useEffect(() => {
+    if (!clarificationId) return
+    const frame=requestAnimationFrame(()=>{
+      inputRef.current?.closest('form')?.scrollIntoView({block:'end',behavior:'smooth'})
+      if (job.clarification?.allow_text) inputRef.current?.focus({preventScroll:true})
+    })
+    return ()=>cancelAnimationFrame(frame)
+  },[clarificationId,job?.clarification?.allow_text])
   const newChat = () => run(async () => {
     const data = await api('/chat/sessions', { method: 'POST', body: {} })
     await refreshChats(); setActiveId(data.session.session_id); setMessages([]); setJob(null); setDraft(null); setInput('')
@@ -240,21 +335,57 @@ export default function Analysis({ route }) {
       let id = activeId
       if (!id) { const data = await api('/chat/sessions', { method: 'POST', body: {} }); id = data.session.session_id; setActiveId(id) }
       if (pending.current?.text !== input || pending.current?.sessionId !== id) pending.current = { text: input, sessionId: id, id: requestId() }
-      await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: { question: input, client_message_id: pending.current.id } })
-      setInput(''); pending.current = null; await refreshChats()
+      const data = await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: { question: input, client_message_id: pending.current.id } })
+      pending.current = null
+      if (activeRef.current!==id) { await refreshChats(); return }   // 응답 전에 방을 옮겼으면 그 방의 작업을 덮어쓰지 않는다
+      setJob(data.job); setDraft(null); setInput('')
+      setReadRevision(v => v + 1); await refreshChats()
     })
     setBusy(false)
   }
-  const saveAsReport = conditions => setDraft({ options: optionsFor(conditions, job?.clarification?.choices) })
-  const addInterest = result_id => run(async () => { await api('/users/me/interests/items', { method: 'POST', body: { result_id } }); notify('관심 목록에 추가했습니다. 관심정보 화면을 새로고침하면 확인할 수 있습니다.') })
+  const saveAsReport = conditions => setDraft({ options: optionsFor(conditions) })
+  const addInterest = answer => {
+    const rows=answer.tables.flatMap(t=>t.rows||[])
+    const countries=[...new Set([...(answer.conditions?.country_codes||[]),...rows.map(r=>r.country_code).filter(Boolean)])]
+    const products=[...new Map([...(answer.conditions?.hs_items||[]),...rows.filter(r=>r.hs_code&&r.hs_ver)].filter(h=>h.hs_code.length===6).map(h=>[h.hs_ver+h.hs_code,{hs_code:h.hs_code,hs_ver:h.hs_ver}])).values()]
+    // 이미 등록한 국가·품목은 선택할 수 없게 표시한다.
+    return run(async()=>{
+      const {interests:saved}=await api('/users/me/interests')
+      setInterest({countries,products,country_codes:[],hs_items:[],
+        savedCountries:new Set(saved.country_codes),savedProducts:new Set(saved.hs_items.map(h=>h.hs_ver+h.hs_code))})
+    })
+  }
+  const selectableInterest=interest&&(interest.countries.some(c=>!interest.savedCountries.has(c))||
+    interest.products.some(h=>!interest.savedProducts.has(h.hs_ver+h.hs_code)))
+  const saveInterest = async () => {
+    if (!interest.country_codes.length && !interest.hs_items.length) { window.alert('체크된 항목이 없습니다'); return }
+    setSavingInterest(true)
+    const saved=await addInterests(interest.country_codes,interest.hs_items)
+    if (saved) setInterest(null)  // 'STALE'(세션 전환)도 닫는다. 다른 계정에서 다시 저장하지 않게 한다
+    if (saved===true) notify('선택한 국가·품목을 관심 목록에 추가했습니다.')
+    setSavingInterest(false)
+  }
   const removeChat = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') })
   const updateTitle = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'PATCH', body: { title: rename.trim() } }); await refreshChats(); setModal(null) })
   const clarify = async body => {
+    const id=job?.clarification?.clarification_id
+    if (!id || clarificationRequest.current || acceptedClarifications.current.has(id)) return
+    clarificationRequest.current=id
+    const room=activeId
     setBusy(true)
-    await run(() => api(`/chat/jobs/${job.job_id}/clarifications`, { method: 'POST', body: { clarification_id: job.clarification.clarification_id, ...body } }))
-    setBusy(false)
+    try {
+      const data = await run(() => api(`/chat/jobs/${job.job_id}/clarifications`, { method: 'POST', body: { clarification_id:id, ...body } }))
+      if (data?.job && (data.job.status!=='NEEDS_INPUT' || data.job.clarification?.clarification_id!==id)) acceptedClarifications.current.add(id)
+      if (activeRef.current!==room) return   // 다른 방으로 옮겼다. 그 방의 작업·입력을 바꾸지 않는다
+      // 리포트 생성·취소는 버튼으로만 받는다(D-92). 서버가 직접 입력한 승인·거절을 무시했으면 버튼을 안내하고 입력은 남긴다
+      const ignored = body.text && job.clarification.kind==='REPORT_CONFIRM' && data?.job?.status==='NEEDS_INPUT'
+        && data.job.clarification?.clarification_id===id
+      if (data?.job) { setJob(data.job); if (!ignored) setInput(''); setDraft(null) }
+      if (ignored) notify('리포트 생성·취소는 아래 버튼으로 선택해 주세요.')
+      setReadRevision(v => v + 1)
+    } finally { clarificationRequest.current=null; setBusy(false) }
   }
-  const headerTag = job ? ['amber', ({ QUEUED: '분석 대기', RUNNING: '분석 중', NEEDS_INPUT: '조건 확인', SUCCEEDED: '답변 완료', FAILED: '분석 실패' })[job.status]] : null
+  const headerTag = job ? [job.status==='SUCCEEDED'?'ok':'amber', ({ QUEUED: '분석 대기', RUNNING: '분석 중', WAITING_REPORT:'리포트 만드는 중', NEEDS_INPUT: '조건 확인', SUCCEEDED: '답변 완료', FAILED: '분석 실패', EXPIRED:'시간 초과', CANCELLED:'중단됨' })[job.status]] : null
 
   return (
     <>
@@ -276,7 +407,7 @@ export default function Analysis({ route }) {
                   style={{ padding: '14px 16px', borderRadius: 14, background: on ? 'var(--rose)' : '#fff', boxShadow: on ? 'inset 3px 0 0 var(--red)' : 'none', border: on ? 0 : '1px solid var(--line)' }}>
                   {tag && <span className={'tag ' + tag[0]}>{tag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 5 }} />}{tag[1]}</span>}
                   <p style={{ fontSize: 15, fontWeight: 800, marginTop: tag ? 8 : 0 }}>{c.title}</p>
-                  <p className="note">{c.date}</p>
+                  <p className="note">{kstDateTimeText(c.updated_at)}</p>
                 </button>
               )
             })}
@@ -295,7 +426,7 @@ export default function Analysis({ route }) {
               <h2 className="t2">{active?.title || '새 채팅'}</h2>
               {headerTag && <span className={'tag ' + headerTag[0]}>{headerTag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 6 }} />}{headerTag[1]}</span>}
             </div>
-            <div className="col" style={{ gap: 18, padding: '24px 26px' }}>
+            <div className="col chat-flow" style={{ gap: 18, padding: '24px 26px' }}>
               {!messages.length && (
                 <AiBlock>
                   <p style={{ fontSize: 17, fontWeight: 800 }}>무엇을 분석해 드릴까요?</p>
@@ -303,24 +434,53 @@ export default function Analysis({ route }) {
                 </AiBlock>
               )}
               <ErrorNotice error={error} retry={() => setReadRevision(v => v + 1)} />
-              {messages.map(m => m.role === 'USER' ? <UserBubble key={m.message_id} text={m.content_masked} /> : m.answer ? <AnswerCard key={m.message_id} message={m} onSaveReport={saveAsReport} onInterest={addInterest} /> : <AiBlock key={m.message_id}><p>{m.content_masked}</p></AiBlock>)}
-              {job && ['QUEUED', 'RUNNING'].includes(job.status) && <AiBlock><p role="status">서버에서 분석 중입니다. 다른 화면으로 이동해도 작업은 유지됩니다.</p></AiBlock>}
+              {messages.map(m => {
+                if (m.role !== 'USER') return m.answer
+                  ? <AnswerCard key={m.message_id} message={m} streamJobId={m===messages.at(-1) && job?.status==='SUCCEEDED' ? job.job_id : undefined} onSaveReport={saveAsReport} onInterest={addInterest}/>
+                  : <AiBlock key={m.message_id}><p>{m.content_masked}</p></AiBlock>
+                const turn = m.job?.job_id === job?.job_id ? job : m.job
+                return <div className="chat-turn" key={m.message_id}>
+                  <UserBubble text={m.content_masked}/>
+                  {turn && !['CANCELLED','FAILED','EXPIRED'].includes(turn.status) && (running(turn.status) || turn.progress?.plan?.length>0) && <AiBlock><Progress job={turn}/></AiBlock>}
+                  {turn?.clarification_history?.filter(h=>h.id!==job?.clarification?.clarification_id).map(h=><div className="chat-turn" key={h.id}>
+                    <AiBlock><p>{h.message}</p></AiBlock>{h.answer && <UserBubble text={h.answer}/>}
+                  </div>)}
+                </div>
+              })}
+              {running(job?.status) && !messages.some(m=>m.job?.job_id===job.job_id) && <AiBlock><Progress job={job}/></AiBlock>}
               {job?.status === 'FAILED' && <ErrorNotice error={job.error || new Error('분석에 실패했습니다.')} />}
-              {job?.status === 'NEEDS_INPUT' && <AiBlock><p>{job.clarification.message}</p><div className="chips">{job.clarification.choices.map(c => <Btn key={c.choice_id} className="hs-choice" disabled={busy} onClick={() => clarify({ choice_ids: [c.choice_id] })}>{c.hs_item ? `HS ${c.hs_item.hs_code} · ` : ''}{c.label}</Btn>)}</div>
-                {job.clarification.kind === 'HS_ITEM' && <><Hs4Search group={hsGroup} onConfirm={setHsGroup} buttonLabel={() => '하위 품목 선택'} onSelectAll={() => {}} />{hsGroup?.items.map(([code, name]) => <Btn key={code} disabled={busy} onClick={() => clarify({ hs_item: { hs_code: code, hs_ver: 'HS2022' } })}>{name} ({code})</Btn>)}</>}
-              </AiBlock>}
-              {draft && <ConditionCard message={draft} onChange={setDraft} onGenerate={async (body, key) => { const data = await api('/reports', { method: 'POST', body, idempotencyKey: key }); await refreshReports(); setDraft(null); window.location.hash = `/report?id=${data.job.report_id}` }} />}
+              {job?.status === 'EXPIRED' && <AiBlock><p>답변 시간이 지났습니다. 새 질문을 입력해 주세요.</p></AiBlock>}
+              {job?.status === 'CANCELLED' && <AiBlock><p>질문을 중단했습니다. 새 질문을 입력할 수 있습니다.</p></AiBlock>}
+              {job?.status === 'NEEDS_INPUT' && <AiBlock className="chat-clarification"><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify} onDirectInput={()=>inputRef.current?.focus()}/></AiBlock>}
+              {(running(job?.status)||job?.status==='NEEDS_INPUT') && <Btn size="sm" disabled={busy} onClick={()=>setModal('stop')}>이 질문 중단</Btn>}
+              {draft && <ConditionCard message={draft} onClose={()=>setDraft(null)} onChange={setDraft} onGenerate={async (body, key) => {
+                const data=await api('/reports',{method:'POST',body,idempotencyKey:key})
+                setChatReports(previous=>({...previous,[activeId]:[...(previous[activeId]||[]).filter(r=>r.report_id!==data.job.report_id),data.job]}))
+                setDraft(null)
+                await refreshReports()
+              }}/>}
+              {(chatReports[activeId]||[]).map(report=><ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports}/>)}
               <div ref={endRef} />
-              <form onSubmit={e => { e.preventDefault(); send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
-                <input value={input} onChange={e => setInput(e.target.value)} aria-label="질문 입력" placeholder="질문하거나 “이 분석을 리포트로 만들어줘”라고 입력하세요."
+              <form onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
+                <input ref={inputRef} value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onChange={e => setInput(e.target.value)} aria-label="질문 입력" placeholder={job?.clarification?.kind==='COUNTRY'?'국가명 또는 국가 코드 입력':job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}
                   style={{ flex: 1, fontSize: 15, border: 0, outline: 0, font: 'inherit', color: 'var(--ink)', background: 'transparent' }} />
-                <Btn type="submit" kind="red" iconRight="arrowRight" disabled={!input.trim() || busy || ['QUEUED', 'RUNNING', 'NEEDS_INPUT'].includes(job?.status)}>전송</Btn>
+                <Btn type="submit" kind="red" iconRight="arrowRight" disabled={!input.trim() || busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)}>전송</Btn>
               </form>
             </div>
           </section>
         </div>
       </main>
 
+      <Modal open={modal === 'stop'} onClose={()=>setModal(null)} width={420} label="질문 중단"><h2>이 질문을 중단할까요?</h2><p>이미 접수된 리포트는 계속 생성됩니다.</p><div className="chips"><Btn onClick={()=>setModal(null)}>계속 진행</Btn><Btn kind="red" onClick={async()=>{setModal(null);setBusy(true);const data=await run(()=>api(`/chat/jobs/${job.job_id}/cancel`,{method:'POST'}));if(data?.job)setJob(data.job);setReadRevision(v=>v+1);setBusy(false)}}>중단</Btn></div></Modal>
+      <Modal open={!!interest} onClose={()=>!savingInterest&&setInterest(null)} width={480} label="관심 목록 추가">
+        <h2>관심 목록에 추가할 항목</h2><p className="note">저장할 국가·품목을 선택하세요. 품목은 HS6 단위로 등록됩니다.</p>
+        <div className="col" style={{gap:12,maxHeight:320,overflowY:'auto',margin:'16px 0'}}>
+          {interest?.countries.map(c=>{const saved=interest.savedCountries.has(c);return <Check key={c} disabled={savingInterest||saved} checked={saved||interest.country_codes.includes(c)} onChange={on=>setInterest({...interest,country_codes:on?[...interest.country_codes,c]:interest.country_codes.filter(v=>v!==c)})}>{countryName(c)}{saved&&' · 이미 등록됨'}</Check>})}
+          {interest?.products.map(h=>{const saved=interest.savedProducts.has(h.hs_ver+h.hs_code);return <Check key={h.hs_ver+h.hs_code} disabled={savingInterest||saved} checked={saved||interest.hs_items.includes(h)} onChange={on=>setInterest({...interest,hs_items:on?[...interest.hs_items,h]:interest.hs_items.filter(v=>v!==h)})}>{productName(h.hs_code)} ({h.hs_code}){saved&&' · 이미 등록됨'}</Check>})}
+          {interest&&!interest.countries.length&&!interest.products.length&&<p>추가할 국가·HS6 품목이 없습니다. 국가나 품목을 지정해 분석해 주세요.</p>}
+          {interest&&(interest.countries.length>0||interest.products.length>0)&&!selectableInterest&&<p role="status">모두 이미 등록된 항목입니다.</p>}
+        </div><div className="chips"><Btn disabled={savingInterest} onClick={()=>setInterest(null)}>취소</Btn><Btn kind="red" disabled={savingInterest||!selectableInterest} onClick={saveInterest}>선택 항목 저장</Btn></div>
+      </Modal>
       <Modal open={modal === 'rename'} onClose={() => setModal(null)} width={480} label="채팅방 이름 변경">
         <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>채팅방 관리</p>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>채팅방 이름 변경</h2>

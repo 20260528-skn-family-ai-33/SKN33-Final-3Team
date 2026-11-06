@@ -99,7 +99,9 @@ def article_answer(store, uid, job_id, question, conditions, warnings, latest):
     status = ('ANSWERED' if complete else 'PARTIAL') if cards else 'NO_DATA'
     if list_only and any(c['evidence_role'] == 'unclassified' for c in cards):
         warnings = [*warnings, '본문 관련성을 검수하지 않은 목록이며 답변 근거로 확정하지 않았습니다.']
-    if cards and not complete:
+    if any(f.stage == 'timeout' for f in response.failures):
+        warnings = [*warnings, '기사 검색 시간이 끝나 확인을 마친 결과만 표시합니다.']
+    elif cards and not complete:
         warnings = [*warnings, '일부 기사 또는 본문 근거만 확인됐습니다.']
     return {**base, 'answer_status': status, 'text': text, 'articles': cards,
             'rag_status': response.status, 'answer_format': response.answer_format,

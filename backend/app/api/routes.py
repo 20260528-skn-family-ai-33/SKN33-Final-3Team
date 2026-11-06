@@ -7,11 +7,11 @@ from pathlib import Path
 from urllib.parse import quote
 from sqlalchemy import select, update, delete, func
 from fastapi.responses import Response, FileResponse
-from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs
+from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs, recovery, keyword_admin
 from backend.app.api.common import ApiError, require, unavailable, now, clean, digest, page_info, percentage, month, shift_month, period
 from backend.app.api.security import issue_session, hash_token, administrator
 from backend.app.api.schemas import Signup, Login, PasswordChange, InterestUpdate, NotificationPatch, ReportCreate, Conditions
-from backend.app.api.results import get_table, read_snapshot, result_table
+from backend.app.api.results import get_table, read_snapshot, result_table, result_filename
 from backend.app.api.files import xlsx_bytes, MIMES
 
 
@@ -26,12 +26,8 @@ PENDING={
   88:'DEC-42 상세 로그·실패 범위 생산자 계약',89:'데이터 적재 담당자의 실패 범위 재수집 실행기 연결',
   90:'DEC-38 HS 판본 품질 판정 저장 계약',91:'DEC-41 버전 획득 및 데이터 담당 재검증 실행기 연결',
   94:'태그 변경 이후 집계·벡터 인덱스 반영 실행기 연결',
-  97:'DEC-32 키워드 수동 검수 상태·출처 저장 계약',98:'DEC-32 키워드 검수 근거 저장 계약',
-  99:'DEC-49 과거 기사 분류 보존 및 검수 실행기 연결',
-  101:'DEC-32 기본/관리자 분야 출처 저장 계약',102:'DEC-32 관리자 분야 출처 저장 계약',
-  103:'DEC-32 관리자 분야 출처 저장 계약',104:'DEC-32 관리자 분야 출처 저장 계약',105:'DEC-49 분야 삭제·이관 정책',
   125:'DEC-41 버전 획득 및 적재 담당자의 출처 중지 실행기 연결',
-  128:'DEC-43/44 계정 후보 노출·복구 운영 기준',129:'DEC-44 메일 발송·반복 제한·복구 기준',130:'DEC-44 임시 비밀번호 발급·만료·메일 실패 처리 기준',
+  129:'이름·이메일 일치 여부 확인으로 대체: 아이디 안내 메일은 사용하지 않음',
 }
 
 
@@ -45,11 +41,24 @@ def _day(value):
 
 def dispatch(identity,store,user,body,query,path,request,response,settings):
     uid=user['user_id'] if user else None
+    if identity==134:
+        from backend.app.api.comparison_results import country_comparison
+        table=country_comparison(store,uid,body['result_ids'])
+        fmt=body.get('format','json')
+        require(fmt in ('json','xlsx'),'지원하지 않는 비교 결과 형식입니다.')
+        if fmt=='xlsx':
+            exported={**table,'columns':[{**col,'label':col['label']+(f" ({col['unit']})" if col.get('unit') else '')} for col in table['columns']]}
+            return file_response(xlsx_bytes([exported],table['meta'],table['sql']),result_filename(table,store),'xlsx')
+        return {'table':{k:table[k] for k in ('columns','rows','total_rows','meta')}}
+    if identity==133:
+        from backend.app.api.answer_stream import final_answer_stream
+        return final_answer_stream(jobs.owned_job(store,uid,path['job_id']))
     page=query.get('page',1); size=query.get('page_size',20)
     if identity in PENDING:
         raise ApiError(422 if identity in (23,27) else 503,'FEATURE_NOT_AVAILABLE' if identity in (23,27) else 'FEATURE_NOT_READY',PENDING[identity])
     if identity==1: return accounts.signup(store,Signup.model_validate(body),response,settings)
     if identity==2: return accounts.login(store,Login.model_validate(body),response,settings)
+    if identity==128: return recovery.confirm_account(store,body)
     if identity==3:
         if user:
             store.db.redis.revoke(user['token_hash'])
@@ -119,11 +128,43 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==34: return chat.create(store,uid,body.get('initial_conditions'))
     if identity==35: return chat.messages(store,uid,path['session_id'],page,size)
     if identity==36: return chat.submit(store,uid,path['session_id'],body)
-    if identity==37: return {'job':chat.view_job(jobs.owned_job(store,uid,path['job_id']))}
+    if identity==37:
+        job=jobs.owned_job(store,uid,path['job_id'])
+        if job.get('agent') and job['status']=='NEEDS_INPUT':
+            from backend.app.agents.admission import pending_state,expire
+            job=jobs.owned_job(store,uid,path['job_id'],lock=True)
+            if job['status']=='NEEDS_INPUT' and pending_state(store,job) is None: expire(store,job)
+        return {'job':chat.view_job(job)}
     if identity==38: return chat.clarification(store,uid,path['job_id'],body)
+    if identity==131: return chat.cancel(store,uid,path['job_id'])
+    if identity==132:
+        from types import SimpleNamespace
+        from backend.app.agents.charts import build_chart
+        from backend.app.agents.state import Conditions as AgentConditions
+        rid=path['result_id']; snapshot=read_snapshot(store,uid,rid,'RESULT'); meta=snapshot['meta']
+        require(meta.get('kind')=='PREDICTION','선택 가능한 유망시장 결과표가 아닙니다.')
+        conditions=AgentConditions.model_validate({k:v for k,v in snapshot['conditions'].items() if k in AgentConditions.model_fields})
+        conditions.period=meta.get('tool_result',{}).get('period') or conditions.period
+        task=SimpleNamespace(task_id=meta['task_id'],conditions=conditions)
+        result,full,_=build_chart(store,uid,task,rid,query)
+        return {'chart':{**result.chart.model_dump(mode='json'),'full_labels':full}}
     if identity in (39,40,64):
         sid=path['session_id']; store.owned('chat_session','session_id',sid,uid,lock=True); t=store.t('chat_session')
-        if identity==39: store.c.execute(update(t).where(t.c.session_id==sid).values(context_json={'conditions':{},'interest_action':'CLEARED'})); return None
+        if identity==39:
+            # 진행 중인 작업(되묻기 대기 포함)은 접수 때 고정한 조건으로 답하고, 끝날 때 그 조건을 최근 조건으로 다시
+            # 저장한다. 초기화해도 되살아나므로 막는다(D-11과 같은 409). 되묻기 중이면 답하거나 중단한 뒤 초기화한다.
+            m=store.t('chat_message')
+            require(not jobs._active_chat(store,sid),'진행 중인 질문을 마치거나 중단한 뒤 조건을 초기화해 주세요.',
+                    'JOB_IN_PROGRESS',409)
+            latest=store.one(select(m.c.result_json).where(m.c.session_id==sid,m.c.role=='ASSISTANT')
+                             .order_by(m.c.message_id.desc()).limit(1))
+            # 초기화 직전에 끝난 답변이 아직 Redis에 컨텍스트를 올리지 못했을 수 있다. 그 답변 기준의 캐시는
+            # 초기화 이전 것이므로 다음 답변이 생길 때까지 쓰지 않는다(ChatContext.load).
+            cleared_after=((latest or {}).get('result_json') or {}).get('job_id')
+            store.c.execute(update(t).where(t.c.session_id==sid).values(
+                context_json={'conditions':{},'interest_action':'CLEARED','cleared_after_job_id':cleared_after}))
+            if settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true': store.db.redis.clear_chat_context(str(sid))
+            return None
         if identity==64:
             require(0<len(body['title'].strip())<=160,'대화 제목은 1~160자입니다.')
             # 이름만 바꾸는 것은 대화가 아니므로 '최근 대화 순' 시각(updated_at)은 그대로 둔다.
@@ -137,7 +178,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         store.c.execute(delete(m).where(m.c.session_id==sid)); store.c.execute(delete(t).where(t.c.session_id==sid)); return None
     if identity==41: return {'table':get_table(store,uid,path['result_id'],page,size)}
     if identity==42:
-        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(xlsx_bytes([payload],payload['meta'],payload['sql'],unit_headers=True),'분석결과.xlsx','xlsx')
+        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(xlsx_bytes([payload],payload['meta'],payload['sql'],unit_headers=True),result_filename(payload,store),'xlsx')
     if identity==43: return reports.preview(store,uid,body)
     if identity==44: return reports.create(store,uid,ReportCreate.model_validate(body),request.headers.get('Idempotency-Key'))
     if identity==45: return {'job':reports.status_view(store,store.owned('report','report_id',path['report_id'],uid))}
@@ -146,13 +187,14 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==48:
         rid=path['report_id']; fmt=path['format'].lower(); require(fmt in MIMES,'지원하지 않는 파일 형식입니다.','UNSUPPORTED_FORMAT',422)
         record=store.owned('report','report_id',rid,uid); require(record['status']=='READY','파일 생성 중입니다.','REPORT_NOT_READY',409)
+        filename=reports.download_filename(store,record,fmt)
         if fmt=='xlsx':
             content=record['content_json']; tables=[t for s in content['sections'] for t in s['tables']]
-            return file_response(xlsx_bytes(tables,content['meta'],content.get('sql',[])),'리포트.xlsx',fmt)
+            return file_response(xlsx_bytes(tables,content['meta'],content.get('sql',[])),filename,fmt)
         file=(record.get('files_json') or {}).get(fmt.upper())
         require(file is not None,'선택하지 않았거나 준비되지 않은 형식입니다.','NOT_FOUND',404)
         from backend.app.api.report_storage import LocalReportStorage
-        return file_response(LocalReportStorage(settings.files).read(file),'리포트.'+fmt,fmt)
+        return file_response(LocalReportStorage(settings.files).read(file),filename,fmt)
 
     if identity==49: return reports.subscription_list(store,uid)
     if identity==50: return reports.save_subscriptions(store,uid,body)
@@ -204,6 +246,13 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         return {'items':[admin.article_detail(store,i)['moderation'] for i in ids],'page':page_info(page,size,total)}
     if identity==93: return admin.article_detail(store,path['article_id'])
     if identity==95: return admin.change_visibility(store,user,path['article_id'],body)
+    if identity==97: return keyword_admin.listing(store,query,page,size)
+    if identity==98: return keyword_admin.detail(store,query['keyword_text'],query.get('article_limit',3))
+    if identity==99: return keyword_admin.review(store,user,body)
+    if identity==101: return keyword_admin.categories(store)
+    if identity==102: return keyword_admin.category_change(store,user,body)
+    if identity==103: return {'category':keyword_admin.category_row(store,path['category_id'])}
+    if identity in (104,105): return keyword_admin.category_change(store,user,body,path['category_id'],identity==105)
     if identity==96:
         a,b,o=store.t('article'),store.t('batch_run'),store.t('service_option')
         items=[]

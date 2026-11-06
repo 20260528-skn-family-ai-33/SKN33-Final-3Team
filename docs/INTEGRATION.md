@@ -51,7 +51,7 @@ npm ci
 npm run dev -- --host 127.0.0.1
 ```
 
-화면은 http://127.0.0.1:5173, API 문서는 http://127.0.0.1:8000/docs, 준비 상태는 http://127.0.0.1:8000/health/ready 이다. 직접 가입한다. 이전 목업 체험 계정은 실제 계정이 아니다. worker가 꺼져 있으면 리포트/채팅이 대기한다. 실제 자연어 의도 추출에는 OPENAI_API_KEY가 필요하다. 도우미는 HS 벡터 검색을 끄고 DB 사전 검색을 사용한다.
+화면은 http://127.0.0.1:5173, API 문서는 http://127.0.0.1:8000/docs, 준비 상태는 http://127.0.0.1:8000/health/ready 이다. 직접 가입한다. 이전 목업 체험 계정은 실제 계정이 아니다. worker가 꺼져 있으면 리포트/채팅이 대기한다. 실제 자연어 의도 추출에는 OPENAI_API_KEY가 필요하다. HS 벡터 검색은 루트 `.env`에 `API_HS_VECTOR_ENABLED=true`, `OPENAI_API_KEY`가 있고 `API_HS_CHROMA_PATH`(기본 `chroma_data`)가 있을 때만 켜지고, 아니면 DB 사전 검색만 쓴다. 벡터 후보는 로컬 DB에서 다시 확인하므로 HS 전체를 로컬에 적재해야 결과가 나온다: `.\.venv\Scripts\python.exe -m backend.app.scheduler.jobs.hs_code_load --csv <hs_code_mst.csv> --db-url "mysql+pymysql://integration:local-integration-only@127.0.0.1:3307/trade_integration?charset=utf8mb4"`. seed의 HS는 검증용 3행뿐이다.
 
 MySQL: 127.0.0.1:3307 / trade_integration / integration / local-integration-only. Redis: 127.0.0.1:6379. Compose의 공개 비밀번호는 로컬 검증 전용이며 공용 서버 설정으로 복사하지 않는다. 포트는 외부 인터페이스에 열지 않는다.
 

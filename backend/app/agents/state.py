@@ -22,6 +22,8 @@ HISTORY_TURNS = 5
 HISTORY_QUESTION_CHARS = 200     # 5건 요약에 남기는 질문 길이. 원문은 MySQL에 있다
 TASK_QUESTION_CHARS = 500        # 플래너가 나눈 하위 질문 문장 길이. 원 질문은 input.question에 있다
 MAX_TASKS = 3                    # 복합 질문을 나눈 하위 질문 수
+DEFAULT_MARKET_TOP = 5
+MAX_MARKET_ROWS = 200
 MAX_HS_ITEMS, MAX_COUNTRIES = 5, 20   # 질문 하나의 조회 조건(D-24)
 MAX_SLOT_CHARS = 120             # 플래너가 옮긴 국가·품목 표현 하나(D-73)
 # C-26 확정: 240개월 상한과 별도로 check_conditions가 실제 공개·검증 월 범위를 검사한다.
@@ -65,13 +67,17 @@ AnswerStatus = Literal['ANSWERED', 'PARTIAL', 'NO_DATA', 'OUT_OF_SCOPE']
 StepStatus = Literal['PENDING', 'RUNNING', 'DONE', 'FAILED', 'SKIPPED']
 
 
+class SafeError(ValueError):
+    """고정 문구만 담는 검증 오류. 응답 원문을 넣지 않으므로 실패 로그에 사유로 남긴다(llm.validation_details)."""
+
+
 def _json_size(value) -> int:
     return len(to_json(value))
 
 
 def _unique(values, label):
     if len(values) != len(set(values)):
-        raise ValueError(f'{label} 중복은 허용하지 않습니다')
+        raise SafeError(f'{label} 중복은 허용하지 않습니다')
 
 
 def _truncate(limit):
@@ -130,7 +136,7 @@ def _chars(minimum: int, maximum: int | None = None):
     Field(min_length/max_length) 대신 응답을 받은 뒤 검사한다(같은 거부 → 재시도 동작)."""
     def check(value: str) -> str:
         if len(value.strip()) < minimum or (maximum is not None and len(value) > maximum):
-            raise ValueError(f'글자 수는 {minimum}~{maximum or "제한 없음"}자여야 합니다')
+            raise SafeError(f'글자 수는 {minimum}~{maximum or "제한 없음"}자여야 합니다')
         return value
     return AfterValidator(check)
 
@@ -163,7 +169,7 @@ class Period(Model):
     @model_validator(mode='after')
     def check_months(self):
         if self.start.day != 1 or self.end.day != 1 or self.start > self.end:
-            raise ValueError('기간은 월 1일 기준이고 start <= end여야 합니다')
+            raise SafeError('기간은 월 1일 기준이고 start <= end여야 합니다')
         return self
 
 
@@ -176,7 +182,7 @@ class Conditions(Model):
     compare_period: Period | None = None
     article_period: ArticlePeriod | None = None   # 기사 발행일 기간, 일 단위(기본 최근 3개월)
     trade_flow: Literal['EXPORT', 'IMPORT'] = 'EXPORT'
-    ranking_group: Literal['COUNTRY', 'HS6'] | None = None   # RANKING에서만(D-73)
+    ranking_group: Literal['COUNTRY', 'HS6'] | None = None   # RANKING 또는 MARKET_SHARE의 품목별 비중(D-87)
     share_basis: Literal['KOREA_TRADE_PARTNER', 'FOREIGN_IMPORT_MARKET'] | None = None   # MARKET_SHARE에서만(D-87)
 
     @model_validator(mode='after')
@@ -247,8 +253,9 @@ class CountryMention(Model):
     """플래너가 옮긴 국가 표현 하나(§13.2, intent.py CountrySlot과 같은 모양).
     mention은 질문 원문 그대로, name은 플래너가 붙인 정식 한국어 국가명이다. 코드는 check_conditions가 확정한다."""
     mention: Annotated[str, _chars(1)]
-    # 사용자가 쓴 값이 아니라 길다고 안내하지 않고 자른다. 가장 긴 국가명도 20자 안팎이다
-    name: Annotated[str, _truncate(MAX_LABEL_CHARS), _chars(1)]
+    # 사용자가 쓴 값이 아니라 길다고 안내하지 않고 자른다. 가장 긴 국가명도 20자 안팎이다.
+    # 빈 값("그 국가들"처럼 정식 국가명을 못 붙인 표현)은 거부하지 않고 PlannerOutput이 정리한다.
+    name: Annotated[str, _truncate(MAX_LABEL_CHARS)]
 
 
 class PlannerSlots(Model):
@@ -261,6 +268,7 @@ class PlannerSlots(Model):
     countries: list[CountryMention] | None = None
     period: Period | None = None
     recent_months: int | None = Field(default=None, ge=1)
+    ranking_limit: int | None = Field(default=None, ge=1)
     trade_flow: Literal['EXPORT', 'IMPORT'] | None = None
     # None은 False와 같다. 기본값 False는 strict 스키마에 "default"로 실려 None으로 둔다(LLM 출력 모델)
     comparison_requested: bool | None = None
@@ -272,15 +280,17 @@ class PlannerSlots(Model):
     @model_validator(mode='after')
     def check_periods(self):
         if self.period is not None and self.recent_months is not None:
-            raise ValueError('절대 기간과 최근 개월 수를 동시에 지정할 수 없습니다')
+            raise SafeError('절대 기간과 최근 개월 수를 동시에 지정할 수 없습니다')
         if self.compare_period is not None and not self.comparison_requested:
-            raise ValueError('비교 기간에는 비교 요청이 필요합니다')
+            raise SafeError('비교 기간에는 비교 요청이 필요합니다')
         return self
 
     def limit_errors(self) -> list[str]:
         """TaskSlots 상한을 넘는 부분의 안내 문구. 있으면 플래너는 그 하위 질문을 단계 없이 NO_DATA로 끝낸다(D-73).
         C-26: 240개월은 확정 상한이며 실제 공개 범위는 conditions 노드가 별도로 검사한다."""
         errors = []
+        if self.ranking_limit and self.ranking_limit > 1000:
+            errors.append('순위는 한 번에 1,000개까지 조회할 수 있습니다.')
         if self.products and len(self.products) > MAX_HS_ITEMS:
             errors.append(f'품목은 질문 하나에 {MAX_HS_ITEMS}개까지 물어볼 수 있습니다.')
         if self.countries and len(self.countries) > MAX_COUNTRIES:
@@ -301,7 +311,7 @@ class TaskSlots(PlannerSlots):
     @model_validator(mode='after')
     def check_limits(self):
         if errors := self.limit_errors():
-            raise ValueError(' '.join(errors))
+            raise SafeError(' '.join(errors))
         return self
 
 
@@ -342,11 +352,23 @@ class PlannerOutput(Model):
         for index, task in enumerate(self.tasks, 1):
             _unique(task.source_tasks, '선행 질문')
             if any(source < 1 or source >= index for source in task.source_tasks):
-                raise ValueError('선행 질문은 현재 질문보다 앞에 있어야 합니다')
-            selected = [s.source_task for s in task.target_selections]
-            _unique(selected, '대상 선택의 선행 질문')
-            if not set(selected) <= set(task.source_tasks):
-                raise ValueError('대상 선택은 연결된 선행 질문을 가리켜야 합니다')
+                raise SafeError('선행 질문은 현재 질문보다 앞에 있어야 합니다')
+            # 실제 LLM은 단순 순위 질문에도 자기 자신을 가리키는 대상 선택을 붙이고, 복합 질문에서는 source_tasks를
+            # 빠뜨리기도 한다. 출력 전체를 거부하지 않고 정리한다: 앞 하위 질문을 가리키면 연결하고, 아니면 버린다.
+            selections = {}
+            for selection in task.target_selections:
+                if 1 <= selection.source_task < index:
+                    selections.setdefault(selection.source_task, selection)
+            task.target_selections = list(selections.values())
+            task.source_tasks.extend(s for s in selections if s not in task.source_tasks)
+            # 정식 국가명이 빈 표현: 선행 결과에서 대상을 받는 질문이면 그 대상("그 국가들")이므로 버리고,
+            # 아니면 원문 표현으로 사전 검색해 못 찾으면 되묻는다(check_conditions).
+            if task.slots.countries:
+                # 모두 버려지면 []("전체 국가")가 아니라 생략(None)이다. 대상은 선행 결과에서 온다
+                task.slots.countries = [c for c in task.slots.countries
+                                        if c.name.strip() or not task.source_tasks] or None
+                for country in task.slots.countries or []:
+                    country.name = country.name.strip() or country.mention.strip()[:MAX_LABEL_CHARS]
         return self
 
 
@@ -563,6 +585,35 @@ class ToolResult(Model):
         return self
 
 
+class SqlColumn(Model):
+    key: Annotated[str, _chars(1, 40)]
+    label: Annotated[str, _chars(1, 40)]
+    type: Literal['number', 'string']
+    unit: Literal['USD', '%', 'KG', 'COUNT'] | None
+
+    @field_validator('key')
+    @classmethod
+    def snake_case(cls, value):
+        import re
+        if not re.fullmatch(r'[a-z][a-z0-9_]*', value):
+            raise ValueError('결과 열은 snake_case여야 합니다')
+        return value
+
+
+class SqlDraft(Model):
+    sql: Annotated[str, _chars(0, 4000)]
+    columns: list[SqlColumn]
+    summary: Annotated[str, _chars(0, 200)]
+    unsupported: Annotated[str, _chars(1, 200)] | None
+
+    @model_validator(mode='after')
+    def unique_columns(self):
+        if not 1 <= len(self.columns) <= 20:
+            raise ValueError('결과 열은 1~20개여야 합니다')
+        _unique([c.key for c in self.columns], 'SQL 결과 열')
+        return self
+
+
 class TaskConclusion(Model):
     task_id: str
     sentences: list[Sentence] = Field(min_length=1, max_length=2)
@@ -580,7 +631,9 @@ class Draft(Model):
     conclusion: list[TaskConclusion] = Field(min_length=1, max_length=MAX_TASKS)
     explanation: list[Sentence] = Field(default_factory=list, max_length=MAX_EXPLANATION_SENTENCES)
     turn_summary: Annotated[str, _chars(0, 200)]
-    title: Annotated[str, _chars(1, 20)] | None = None
+    # 대화방 제목(D-54, 20자 이하). 넘으면 초안 전체를 거부하지 않고 자르고, 비어 있으면 없는 것(None)으로 둔다.
+    # 제목은 선택 칸이라 제목 때문에 답변 문장까지 버리지 않는다.
+    title: Annotated[str | None, BeforeValidator(lambda v: (v.strip()[:20] or None) if isinstance(v, str) else v)] = None
 
     def sentences(self) -> list[str]:
         """verify가 대조하는 순서: 결론 다음 설명."""
@@ -591,6 +644,8 @@ class SentenceCheck(Model):
     index: int = Field(ge=0)   # Draft.sentences()의 번호. 문장 원문은 draft에 있다
     numbers: list[Label] = Field(default_factory=list)   # 문장에서 찾은 숫자. 문장 200자 안이라 개수도 그 안에 묶인다
     status: Literal['PASS', 'MISMATCH']
+    basis: Literal['DIGEST', 'SNAPSHOT'] = 'DIGEST'
+    reason: Literal['MATCH', 'NOT_CONFIRMED', 'SOURCE_UNAVAILABLE'] = 'NOT_CONFIRMED'
 
 
 class Verification(Model):
@@ -736,6 +791,8 @@ class AgentState(Model):
                 if upstream is not None:
                     if upstream.status != 'OK':
                         raise ValueError('실패한 입력으로 성공 결과를 저장할 수 없습니다')
+                    if steps[dependency].tool in ('query_trade_data', 'query_market_model') and not upstream.result_id:
+                        raise ValueError('선행 분석 결과표 참조가 없습니다')
                     reasons.extend(upstream.limitations)
                 elif steps[dependency].tool in ('query_trade_data', 'query_market_model'):
                     raise ValueError('선행 분석 결과가 없습니다')

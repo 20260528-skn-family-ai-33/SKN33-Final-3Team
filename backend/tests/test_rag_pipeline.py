@@ -322,7 +322,7 @@ class SearchRecoveryTest(unittest.TestCase):
     publish = PipelineTest.publish
     call = PipelineTest.call
 
-    def test_chat_refills_after_body_review_up_to_fifteen_unique_articles(self):
+    def test_chat_refills_after_body_review_up_to_ten_unique_articles(self):
         # Tie distances so the fixed-width article keys give a predictable rank.
         def equal_vectors(texts):
             return [[1.0] + [0.0] * 7 for _ in texts]
@@ -336,9 +336,9 @@ class SearchRecoveryTest(unittest.TestCase):
         for first_supported, last_reviewed, expected_ids in (
             (1, 5, [1, 2, 3, 4, 5]),
             (6, 10, [6, 7, 8, 9, 10]),
-            (11, 15, [11, 12, 13, 14, 15]),
-            (13, 15, [13, 14, 15]),
-            (16, 15, []),
+            (8, 10, [8, 9, 10]),
+            (10, 10, [10]),
+            (11, 10, []),
         ):
             with self.subTest(first_supported=first_supported):
                 reviewed = []

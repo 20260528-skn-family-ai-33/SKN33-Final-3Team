@@ -84,6 +84,7 @@
 {% endif %}
 {% for b in blocks %}
 {% if b.key == 'cards' %}
+{% if summary.monthly_average_note is defined %}<p>{{ summary.monthly_average_note }}</p>{% endif %}
 {% set top_sub = '' %}
 {# 현재·이전 1위가 모두 있을 때만 비교 문장 (현재 수출 0이나 미준비면 숨김) #}
 {% if compare_ready and k.top1_name and k.prev_top1_name %}
@@ -136,7 +137,23 @@
 {{ m.heading(none, '월별 수출 추이 (계속)') }}
 {% endif %}
 {% for b in blocks %}
-{% if b.key == 'chart' %}
+{% if b.key == 'scope_chart' %}
+<h3>한국 전체 · 상대국 비교<small>단위 억 달러</small></h3>
+{% set lines = [] %}{% set keys = [] %}
+{% for s in scope_comparison.series %}
+{% set color = series_colors[loop.index0 % (series_colors | length)] %}
+{% set _ = lines.append({'values':s['values'],'color':color}) %}
+{% set _ = keys.append({'name':s.name,'color':color,'kind':'line'}) %}
+{% endfor %}
+{{ m.legend(keys) }}
+{{ line_chart(scope_comparison.labels, lines, height=230, divisor=100000000, digits=2) }}
+<p class="note">한국 전체에는 각 상대국 금액이 포함됩니다. 비교 대상 간 금액은 합산하지 않습니다.</p>
+{% elif b.key == 'scope_table' %}
+<h3>한국 전체 · 상대국 월별 비교{{ ' (계속)' if b.cont }}</h3>
+<table><tr><th>기준월</th><th>비교 대상</th><th>수출액 (억 달러)</th></tr>
+{% for r in scope_comparison.rows[b.start:b.end] %}<tr><td>{{ r.month }}</td><td>{{ r.name }}</td><td>{{ r.amount_usd | eok }}</td></tr>{% endfor %}
+</table>
+{% elif b.key == 'chart' %}
 {% set keys = [{'name': cur ~ ('년' if cur | length == 4 else ''), 'color': colors.accent, 'kind': 'line'}] %}
 {% set lines = [{'values': mo.current, 'color': colors.accent, 'area': true}] %}
 {% if paired %}

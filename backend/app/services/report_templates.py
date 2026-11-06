@@ -689,6 +689,10 @@ def _ondemand_layout(ctx, rest):
             blocks = [{'key': 'chart', 'height': chart}, _table('mtable', [ROW1_MM] * rows)]
             if side:
                 blocks.append({'key': 'mside', 'height': side})
+        if ctx.get('scope_comparison'):
+            scopes=ctx['scope_comparison']
+            blocks.extend([{'key':'scope_chart','height':H3_MM+_legend([s['name'] for s in scopes['series']])+_svg(230)+12},
+                           _table('scope_table',[ROW1_MM]*len(scopes['rows']))])
         pages['monthly'] = flow(blocks, BODY_MM - _heading('월별 수출액과 비교 · 단위 억 달러'), rest)
 
     if 'TOP_COUNTRIES' in sections:

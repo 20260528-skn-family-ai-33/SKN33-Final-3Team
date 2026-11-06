@@ -15,7 +15,7 @@ python -m pip install -r backend/requirements.txt
 python -c "import lightgbm; print(lightgbm.__version__)"
 ```
 
-컨테이너를 쓰면 실제 실행 이미지에도 `libgomp1`이 필요합니다. `backend/requirements.txt`에는 LightGBM이 포함돼 있으므로 이 목록을 설치하는 환경에 적용합니다. API·worker 전용 `backend/requirements-api.txt`에는 LightGBM이 포함돼 있지 않습니다.
+컨테이너를 쓰면 실제 실행 이미지에도 `libgomp1`이 필요합니다. `backend/requirements.txt`에는 LightGBM이 포함돼 있으므로 이 목록을 설치하는 환경에 적용합니다. API·worker 전용 `backend/requirements-api.txt`에도 채팅 유망시장 조회용 numpy·pandas·scipy·joblib·LightGBM·scikit-learn·threadpoolctl이 들어 있으므로(설계 D-48), 워커 서버·이미지에도 `libgomp1`을 설치합니다. 버전은 배포 모델의 runtime(`model_a_two_stage_<YYYYMM>.registry.json`의 `data_info.runtime`)과 같게 고정합니다. 지금 모델은 Python 3.11.9 · numpy 1.24.3 · pandas 2.2.3 · scipy 1.10.1입니다. 워커는 numpy만 1.26.4를 씁니다(에이전트의 `langgraph-checkpoint-redis` → `redisvl`이 numpy 1.26 이상을 요구하고, 1.26은 1.24로 저장한 파일을 그대로 읽음). scipy 1.10.1이 Python 3.12를 지원하지 않아 API·워커도 Python 3.11로 실행합니다.
 
 `.env.sample`의 `CUSTOMS_ML_ENTRYPOINT`는 기본적으로 비워 두었습니다. 월별 재학습을 활성화하기 전에 위 import 확인과 입력 데이터·DB 준비, 서버 자원(기본 학습 스레드 4개)을 확인한 뒤 아래 월별 재학습 설정을 적용합니다. 활성화 후에는 정기 일정뿐 아니라 **스케줄러 시작 20초 뒤 누락 월 복구**에서도 학습이 실행될 수 있습니다. 이미 `WAITING_FOR_ML` 상태인 월은 아래 안내대로 수동 재개해야 합니다.
 
@@ -28,11 +28,42 @@ python -c "import lightgbm; print(lightgbm.__version__)"
 | 국가 → 유망 품목 | 국가 방향 순서 `order` |
 | 품목 → 유망 국가 | 품목 방향 순서 `product` (품목 방향 모델이 없는 예전 파일은 1단계 `growth`) |
 | 예측 증감률 | 1단계 성장값 `growth` |
-| 국가 + 품목 | 예측 증감률·최근 수출액·양방향 순위. 기존 B 모델의 시장 유형 분류는 제공하지 않음 |
+| 국가 + 품목 | 예측 증감률·최근 수출액·양방향 순위·현재 동향·전망 |
 
-> **추가 예정: 채팅 tool용 조회 함수.** `query`는 출력만 하므로 값을 돌려주는 `load_market_bundle(model_paths, snapshot_path)`와 `predict_markets(bundle, *, country_code=None, hs6=None, top=10) -> DataFrame`을 추가하고, `query`는 그 결과를 출력만 하도록 바꿉니다. 형식은 [채팅 에이전트 설계](../../../docs/AGENT_DESIGN.md) D-70에 있습니다. 채팅 워커는 서버에 둔 최신 기준월 스냅샷(`features_snapshot_py311_latest*.pkl`)으로 요청마다 예측합니다(D-48). 함수는 국가 하나·HS6 하나만 받습니다. 채팅에서 HS4 품목은 그 아래 HS6로 되물어 정하고, 국가·품목이 여러 개면 tool이 대상마다 따로 부릅니다(D-74). 되묻기 선택지를 만들려면 HS4 아래 예측 대상 HS6와 최근 12개월 수출액을 알아야 하므로, 번들에서 이를 읽을 수 있게 해 주세요.
+### 시장 동향: 현재 동향(실적)과 전망(예측)
 
-> **추가 예정: B 모델 시장 유형 분류.** 국가 + 품목 조회에 시장 유형 라벨을 더하고, 근거로 예상 성장률과 이전 12개월 수출액을 함께 반환해야 합니다. 이 기능이 나오기 전까지 채팅은 시장 유형 질문(`MARKET_TYPE`)에 "지원 예정" 안내만 합니다([채팅 에이전트 설계](../../../docs/AGENT_DESIGN.md) D-23).
+시장 동향은 사실과 예측을 섞지 않도록 두 값으로 나눠 표시합니다(`two_stage.market_view`). 조회 표에도 두 열이 붙습니다.
+
+| 구분 | 기준 | 분류 | 신뢰도 |
+|---|---|---|---|
+| 현재 동향 | 지난 12개월 실제 수출을 그 전 12개월과 비교한 증감률(`growth_12m`) | 성장(+10% 초과) · 정체(±10%) · 침체(-10% 미만) | 이미 일어난 실적이라 예측 오차 없음 |
+| 전망 | 같은 기준월 전체 쌍 안에서 예측 증감률 `growth` 순위 3등분 | 유망(상위 1/3) · 보통 · 저조(하위 1/3) | 3구간 정확도 약 45% (무작위 33%, 작년 증감률 그대로 34%) |
+
+- 전망은 **상대 등급**입니다. 예측 증감률이 -0.6%여도 같은 달 다른 쌍보다 높으면 유망입니다. 예측값은 평균 쪽으로 몰려(예측 중앙값 -16.8%, 실제 -8.1%) ±10%·±20% 같은 고정 경계로 나누면 유망이 3~8%만 나오고 실제 유망의 5~12%만 잡습니다. 그래서 순위로 나눕니다.
+- 전망 정확도는 2025-02~2025-09 검증 기준월 8개(약 40만 쌍)에서 최종 모델 1단계(v1·v3 평균)를 기준월마다 12개월 앞선 데이터로 다시 학습해 쟀습니다. 기준월마다 44~46%로 비슷하고, 하위 10%를 저조로 볼 때는 71%가 실제 하위 1/3이지만 상위는 최고 50%입니다. 수출 규모가 커져도 정확도는 오르지 않습니다(1,000만 달러 이상 43%).
+- 현재 동향은 월별 결과 파일 `latest`의 `exp_12m`과 `growth_12m`으로 계산합니다. `growth_12m`의 학습용 `log1p` 보정을 되돌려 직전 수출액을 복원한 뒤 실제 증감률을 구합니다. 직전 수출액이 0이거나 필요한 실적 열이 없는 예전 파일은 현재 동향이 `미확인`이며, 단일 쌍 조회에 `실적 증감률 산정 불가`를 표시합니다.
+
+### 채팅 tool용 조회 함수 (설계 D-70)
+
+에이전트 ML tool(`agents/market.py`)은 아래 두 함수만 부릅니다. `query`도 같은 함수로 결과를 만들어 출력만 합니다.
+
+```python
+from backend.app.ml.two_stage import load_market_bundle, predict_markets
+bundle = load_market_bundle(["data/ml/monthly_models/model_a_two_stage_202609.joblib"])  # 워커에서 한 번
+predict_markets(bundle, country_code="VN", top=5)                 # 국가 → 유망 품목 5 (국가 안 순위 순)
+predict_markets(bundle, hs6="850760", top=5)                      # 품목 → 유망 국가 5 (품목 안 순위 순)
+predict_markets(bundle, country_code="VN", hs6="850760")          # 그 쌍 한 행
+```
+
+- `load_market_bundle(model_paths, snapshot_path=None)`: 모델 파일의 최신 기준월 예측(`latest`)을 앙상블하고 국가 안(`order`)·품목 안(`product`) 순위와 모집단 크기를 한 번 계산합니다. 반환 dict는 `anchor`(예측 기준월 `YYYY-MM-DD`)와 `predictions`(전체 쌍 표)를 담습니다.
+  - 월별 모델 파일에는 학습 때 만든 최신 기준월 전체 쌍 예측이 들어 있어 **스냅샷으로 다시 예측하지 않습니다.** `snapshot_path`는 D-70 형식만 맞춥니다. 스냅샷은 매월 갱신되지 않아 모델과 기준월·피처 기준이 어긋날 수 있기 때문입니다(D-48의 "스냅샷으로 요청마다 예측"과 다름).
+  - 예전 후보 파일 두 개(v1·v3)를 함께 주면 각 파일의 `latest`를 앙상블합니다.
+- `predict_markets(bundle, *, country_code=None, hs6=None, top=10)`: 다시 예측하지 않고 거릅니다. 열은 `anchor`, `country_code`, `hs6`, `growth_pct`, `exp_12m`, `country_rank`, `product_rank`, `country_size`, `product_size`입니다. 순위는 점수가 더 높은 쌍 수 + 1이고 크기는 그룹 전체 모집단입니다. 예측 대상(최근 12개월 수출 $100K 이상)이 아니면 빈 표이고, 국가·HS6가 모두 없으면 `ValueError`입니다.
+  - `hs6`는 모델의 비교용 코드(HS2022 대표 코드)여야 합니다. 판 통합으로 다른 코드에 묶인 HS6는 찾지 못합니다(`query`는 `comparison_hs6`로 바꿔 넘깁니다).
+  - HS4 되묻기 선택지(D-74)는 `bundle["predictions"]`의 `hs6`·`exp_12m`에서 읽습니다.
+- 에이전트는 `API_ML_MODEL_PATHS`가 비어 있으면 `data/ml/monthly_models/`(`API_ML_MODEL_DIRECTORY`)의 `.registry.json` 중 `READY`·`model_a`이고 `trade_month`·`created_at`이 가장 최신인 파일을 고릅니다. 2026-11-04 `model_a_two_stage_202609.joblib`로 확인: 읽기 약 3초, 49,083쌍.
+
+> **추가 예정: B 모델 시장 유형 분류.** (`query` 출력에는 위 시장 동향 두 값이 붙어 있습니다. 채팅 tool용 반환 함수와 설계 D-23 반영은 아직입니다.) 국가 + 품목 조회에 시장 유형 라벨을 더하고, 근거로 예상 성장률과 이전 12개월 수출액을 함께 반환해야 합니다. 이 기능이 나오기 전까지 채팅은 시장 유형 질문(`MARKET_TYPE`)에 "지원 예정" 안내만 합니다([채팅 에이전트 설계](../../../docs/AGENT_DESIGN.md) D-23).
 
 명령은 저장소 루트에서 실행합니다. LightGBM은 `backend/requirements.txt`에 포함돼 있습니다(월별 재학습을 돌리는 서버에도 필요). 저장 모델을 조회할 때는 모델의 `runtime`에 기록된 환경을 맞춥니다. 아래 확인된 파일은 Python 3.11.9, NumPy 1.24.3, pandas 2.2.3, SciPy 1.10.1, scikit-learn 1.9.1, joblib 1.6.0, LightGBM 4.7.0에서 생성됐습니다. 뒤쪽의 Python 3.12 HGB 보고서 환경은 별도입니다.
 
@@ -355,6 +386,42 @@ HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처�
 
 공식 근거: [HGB warm_start 제약](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html), [SGDRegressor partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDRegressor.html), [SGDClassifier partial_fit](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.SGDClassifier.html), [LightGBM init_model](https://lightgbm.readthedocs.io/en/stable/pythonapi/lightgbm.train.html), [XGBoost 학습 재개 예제](https://xgboost.readthedocs.io/en/stable/python/examples/continuation.html).
 
+## 증감 예상 모델(모델 B)
+
+`backend/app/ml/growth_model.py`는 화면의 "증가 예상 / 감소 예상" 표시용 회귀 모델입니다. 모델 A의 1단계 성장률(`growth`, L2 손실)과 따로 학습합니다.
+
+**월별 재학습:** `candidate_models.run`(customs_monthly의 ML 단계, `CUSTOMS_ML_ENTRYPOINT`)이 모델 A를 저장·기록한 뒤 같은 달 피처 표로 `run_growth`를 부릅니다. 절차는 모델 A와 같습니다: 같은 입력·학습 코드면 재학습 없이 기록만 다시 보냄 → 원본이 정정되면 `_r2`, `_r3` … → `model_b_growth_<YYYYMM>.joblib`(최신 기준월 예측 `latest` 포함) → `model_b_growth_<YYYYMM>.registry.json` → DB `ml_model_version`(`model_key=model_b`, `status=READY`). Holdout(마지막 정답 기준월)으로 방향 정답률·모두 감소 기준선·성장률 MAE를 `evaluation`에 남깁니다. 모델 B 학습이 실패해도 모델 A 결과는 그대로이고, 그 달에는 `SKIPPED`(사유 포함) 기록을 남깁니다. 그 달 수출입 작업은 SUCCESS라 월 복구 대상이 아니므로, 스케줄러 복구 작업(시작 20초 뒤·매월 일정)이 끝에 `candidate_models.retry_pending`을 불러 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면 그 달 B만 새 리비전으로 다시 학습합니다. 같은 실행에서 방금 처리한 달은 다음 실행에 맡기고, 같은 달 실패가 3번(`CUSTOMS_ML_GROWTH_RETRIES`) 쌓이면 자동 재학습을 멈춥니다(한 번에 약 20분·메모리 대부분). 파일·기록 JSON은 READY인데 DB 기록이 빠졌으면 학습 없이 기록만 다시 보냅니다. 기록 없이 직접 만든 같은 달 파일(`growth_model.build`)이 있으면 월별 학습이 덮어쓰거나 다시 학습하지 않습니다(월별 학습으로 바꾸려면 그 파일을 치웁니다). 모델 B만 다시 돌리려면 `candidate_models.run_growth("2026-09-01")`을 부릅니다.
+
+2026-11-05 측정(시스템 Python 3.11, 4코어, 8GB PC에서 메모리 부족으로 스왑이 섞임): 2026-09 월별 피처 표 435초(1,669,845행) + 모델 B Holdout 326초 + 전체 학습 365초 = 약 19.5분. 방향 정답률 60.7%(모두 감소 56.6%), 성장률 MAE 70.8%p. 모델 A(약 11분)에 더해지며, 피처 표는 메모리를 아끼려고 A·B가 따로 만듭니다(사용자 결정).
+
+**채팅 에이전트용 파일:** `data/ml/monthly_models/model_b_growth_<YYYYMM>.joblib` (YYYYMM = 최신 기준월). `growth_model.build`(또는 `save`)가 v1·v3 묶음에 최신 기준월 전체 쌍의 예측(`latest`: anchor, country_code, hs6, growth_pct, direction)을 담아 저장하므로 워커는 피처 스냅샷·외부 데이터를 읽지 않습니다. 에이전트는 **모델 A 월별 파일과 기준월이 같을 때만** 방향을 붙이므로 모델 A와 같은 월로 만듭니다.
+
+```bash
+python -m backend.app.ml.growth_model --month 2026-09   # 모델 A 월별 학습과 같은 수집 원본·피처 캐시로 학습해 저장
+```
+
+다른 곳에서 만든 파일을 받으면 위 폴더에 두거나 `API_ML_GROWTH_MODEL_PATH`로 지정합니다. 파일이 없으면 에이전트는 방향 없이 답하고 그 사실을 안내합니다.
+
+| 항목 | 값 |
+|---|---|
+| 손실·설정 | LightGBM Huber (`alpha` 1.0, 잎 63, 트리 1000, 학습률 0.02, `min_child_samples` 300, `colsample_bytree` 0.7, `subsample` 0.8, `reg_lambda` 5). 정답 절단·범주 처리는 A 1단계와 같은 `two_stage._regressor` |
+| 피처 | 모델 A 후보에서 `DROP_FEATURES` 16개 제외, 환율은 `fx_vol_12m`(DB `fx_daily`, ECOS). 2026-11 스냅샷 기준 v1 20개, v3는 학습 기준월이 2024-08까지면 25개, 2025년 이후 기준월이 들어가면 28개 (시장 변화 피처 `mkt_growth`·`kor_share_change`·`mkt_hs4_growth`는 BACI 2023년 자료 공개 뒤인 2025년 기준월부터 값이 생김) |
+| 출력 | `growth_pct` = expm1(v1·v3 로그 성장 평균) × 100, `direction` = `growth_pct` ≥ 0%이면 `UP`, 아니면 `DOWN` (화면 문구는 쓰는 쪽에서 붙임) |
+| 묶음 기록 | `features`, `external_dropped`, `train_rows`, `train_start`·`train_end`, `fit_seconds`, `runtime` |
+| 검증 | 방향 정답률 Dev(2025-05~09) 59.72% → 61.12%, 2025-08 사후 Holdout 59.29% → 60.66% (국가 단위 95% +0.95 ~ +1.78%p) |
+
+학습 행은 **외부 피처(시장·WDI)를 붙인 표**로 만듭니다. `load_rows(external="none")`처럼 외부 피처가 없는 행을 넣으면 v3가 v1과 같은 피처로 학습되어 앙상블 효과가 없어지므로, 경고를 남기고 빠진 피처를 `external_dropped`에 기록합니다.
+
+```python
+from backend.app.ml import two_stage as T, growth_model as G
+frame = T.load_frame(external=True)                  # 외부 피처를 붙인 스냅샷 표
+train_rows, latest_rows, _ = T.split_rows(frame, "first_release")
+bundle = G.fit_members(train_rows, seed=0)           # 정답(y_growth)이 있는 학습 행
+pred = G.predict(bundle, latest_rows)                # anchor, country_code, hs6, growth_pct, direction
+```
+
+성장률 숫자 자체는 오차가 커서(2025-08 MAE 73%p) 화면에는 방향만 보여 주는 것을 전제로 합니다.
+
 ## 주의
 
 - 예측 대상은 최근 12개월 수출이 $100k 이상인 쌍뿐입니다. 그보다 작은 쌍은 `query`에서 "예측 대상 아님"으로 나옵니다.
@@ -364,7 +431,7 @@ HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처�
 
 ```powershell
 # 최종 모델·월별 저장/DB 등록 경로: 가상 데이터와 SQLite 사용
-python -m unittest backend.tests.test_ml_two_stage backend.tests.test_ml_candidate_models
+python -m unittest backend.tests.test_ml_two_stage backend.tests.test_ml_candidate_models backend.tests.test_ml_growth_model
 
 # 기존 모델 및 공통 입력 처리
 python -m unittest backend/tests/test_ml_market.py backend/tests/test_ml_sources.py backend/tests/test_external_data.py backend/tests/test_ml_temporal.py

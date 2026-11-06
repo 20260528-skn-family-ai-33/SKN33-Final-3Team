@@ -19,7 +19,8 @@ from backend.app.api.database import Database, Store
 from backend.app.api.common import ApiError, clean, require
 from backend.app.api.security import authenticate, administrator, limit_auth_request, limit_public, client_ip, hash_token
 from backend.app.api.routes import dispatch, PENDING
-from backend.app.api.schemas import Conditions, HsItem
+from backend.app.api import recovery
+from backend.app.api.schemas import Conditions, ReportConditions, HsItem
 
 CONTRACTS = json.loads(Path(__file__).with_name('contracts.json').read_text(encoding='utf-8'))
 log = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ def validate_value(value, kind, name, query=False):
                 require(parsed.tzinfo is not None, 'through에는 시간대가 필요합니다.')
             except ValueError: raise ApiError(400, 'VALIDATION_ERROR', 'through: 유효한 일시가 필요합니다.')
     elif kind == 'Conditions': return Conditions.model_validate(value).model_dump(mode='json')
+    elif kind == 'ReportConditions': return ReportConditions.model_validate(value).model_dump(mode='json')
     elif kind == 'HsItem': return HsItem.model_validate(value).model_dump(mode='json')
     elif kind in ('ArticleLinkInput', 'ConsentAcceptance'):
         require(isinstance(value, dict), f'{name}: 객체가 필요합니다.')
@@ -135,7 +137,7 @@ def create_app(settings=None, engine=None, redis_state=None):
         return response
 
     def error_response(request, error):
-        headers = {'Retry-After':'60'} if error.status == 429 else None
+        headers = {'Retry-After':str(error.retry_after or 60)} if error.status == 429 else None
         return JSONResponse(status_code=error.status, headers=headers, content={
             'code':error.code,'message':error.message,'details':error.details,
             'retryable':error.retryable,'request_id':request.state.request_id})
@@ -204,7 +206,15 @@ def create_app(settings=None, engine=None, redis_state=None):
                         maximum=int(settings.get('API_HS_IP_LIMIT',60)))
                 if identity in (1,2,69,72,73,74,128,129,130) and identity not in PENDING:
                     limit_auth_request(db,request,settings,identity,body)
-                with db.engine.begin() as connection:
+                if identity == 130:
+                    # 제한된 요청은 DB 커넥션·사용자 행 잠금을 얻기 전에 거절한다.
+                    recovery.limit_request(db, body, settings)
+                    return recovery.issue_password(db, body, settings)
+                if identity==36 and settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true':
+                    from backend.app.agents.admission import request_transaction
+                    transaction=request_transaction(db)
+                else: transaction=db.engine.begin()
+                with transaction as connection:
                     store = Store(db,connection)
                     required = auth in ('필요','ADMIN','개발 역할 + 환경 허용') or query.get('scope') == 'INTERESTED'
                     user = None
@@ -214,11 +224,17 @@ def create_app(settings=None, engine=None, redis_state=None):
                             if required or error.status != 401: raise
                     if 'ADMIN' in auth: administrator(user)
                     result = dispatch(identity,store,user,body,query,path,request,response,settings)
-                    if isinstance(result,Response): return result
-                    if result is None: response.status_code = 204; return response
-                    if identity in (36,38,44): response.status_code = 202
-                    elif identity in (1,34): response.status_code = 201
-                    return clean(result)
+                if checkpoint := store.cache.get('cancelled_checkpoint'):
+                    # After commit, off the request path: the first call may set up the Redis saver.
+                    # ponytail: daemon thread, lost on process exit; the checkpoint TTL still removes it.
+                    import threading
+                    from backend.app.agents.worker import cleanup_checkpoint
+                    threading.Thread(target=cleanup_checkpoint,args=(db,settings,checkpoint),daemon=True).start()
+                if isinstance(result,Response): return result
+                if result is None: response.status_code = 204; return response
+                if identity in (36,38,44): response.status_code = 202
+                elif identity in (1,34): response.status_code = 201
+                return clean(result)
             return await run_in_threadpool(execute)
         return handle
 

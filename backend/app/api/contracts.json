@@ -1001,7 +1001,10 @@
         "HsItem",
         "선택",
         "HS 품목 되묻기에서 API-12로 직접 선택한 HS4/HS6. choice_ids와 동시 사용 금지."
-      ]
+      ],
+      ["Request Body", "text", "string", "선택", "되묻기에 직접 입력한 답."],
+      ["Request Body", "interest_selection", "object", "선택", "질문 접수 시 저장된 관심 범위에서 선택."],
+      ["Request Body", "report_confirmation", "object", "선택", "미리보기 ID·확인 여부·파일 형식."]
     ]
   },
   {
@@ -1087,7 +1090,7 @@
       [
         "Request Body",
         "conditions",
-        "Conditions",
+        "ReportConditions",
         "선택",
         "직접 조건. result_id와 정확히 하나. 현재 리포트는 EXPORT만 허용.\n[팀 합의 필요: DEC-28] period_preset 사용 시 Conditions.period 등 요청 필수 필드 처리 및 서버 기본값 확정 필요."
       ],
@@ -2571,7 +2574,7 @@
         "apply_scope",
         "string",
         "필수",
-        "NEW_ONLY / EXISTING_NOW. NEW_ONLY는 새 기사부터 적용. 과거 기사 표시 보존 구조 DEC-49 준비 전503. EXISTING_NOW는 명시 대상 재처리이며 과거 저장 답변/리포트는 불변."
+        "NEW_ONLY: 새로 최초 적재되는 기사부터 적용. 기존 기사 분류·저장 답변·리포트는 보존. CURRENT_LOOKUPS/EXISTING_NOW는 지원하지 않음."
       ],
       [
         "Request Body",
@@ -2721,7 +2724,7 @@
   },
   {
     "id": 105,
-    "title": "API-105  관리자 생성 분야 삭제",
+    "title": "API-105  분야 삭제 (제공하지 않음: 삭제·이관 제외 결정)",
     "route": "DELETE  /api/v1/admin/keyword-categories/{category_id}",
     "auth": "ADMIN",
     "fields": [
@@ -3082,7 +3085,7 @@
   },
   {
     "id": 128,
-    "title": "API-128  이름으로 계정 후보 조회",
+    "title": "API-128  이름·이메일 가입 여부 확인",
     "route": "POST  /api/v1/auth/account-recovery/candidates",
     "auth": "비로그인·복구 컨텍스트",
     "fields": [
@@ -3092,6 +3095,13 @@
         "string",
         "필수",
         "trim 후 비공백 이름. 탈퇴 계정 제외."
+      ],
+      [
+        "Request Body",
+        "email",
+        "string",
+        "필수",
+        "확인할 이메일(아이디). 이름과 일치 여부만 반환하며 후보 목록은 노출하지 않음."
       ]
     ]
   },
@@ -3136,6 +3146,60 @@
         "string",
         "필수",
         "ISSUE / REISSUE. 재발급도 새 값 생성."
+      ]
+    ]
+  },
+  {
+    "id": 131,
+    "title": "API-131 질문 중단",
+    "route": "POST /api/v1/chat/jobs/{job_id}/cancel",
+    "auth": "필요",
+    "fields": [["Path Parameters", "job_id", "string", "필수", "본인 소유 작업 식별자."]]
+  },
+  {
+    "id": 132,
+    "title": "대상별 유망시장 차트 조회",
+    "route": "GET /api/v1/results/{result_id}/chart",
+    "auth": "필요",
+    "fields": [["Path Parameters", "result_id", "string", "필수", "본인 소유 결과표."],
+               ["Query Parameters", "country_code", "string", "선택", "대상 국가."],
+               ["Query Parameters", "hs_code", "string", "선택", "HS6 코드."],
+               ["Query Parameters", "hs_ver", "string", "선택", "HS 판본."]]
+  },
+  {
+    "id": 133,
+    "title": "API-133 검증 완료 답변 스트림",
+    "route": "GET /api/v1/chat/jobs/{job_id}/answer-stream",
+    "auth": "필요",
+    "fields": [
+      [
+        "Path Parameters",
+        "job_id",
+        "string",
+        "필수",
+        "본인 소유 리소스 식별자."
+      ]
+    ]
+  },
+  {
+    "id": 134,
+    "title": "API-134 국가 비교 표 보기 및 엑셀",
+    "route": "POST /api/v1/results/comparison",
+    "auth": "필요",
+    "fields": [
+      [
+        "Request Body",
+        "result_ids",
+        "string[]",
+        "필수",
+        "본인 소유 추이 결과 ID 1~3개."
+      ],
+      [
+        "Request Body",
+        "format",
+        "string",
+        "선택",
+        "json 또는 xlsx. 기본 json."
       ]
     ]
   }

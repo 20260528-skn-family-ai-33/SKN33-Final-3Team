@@ -100,15 +100,15 @@
 | 094 | `PATCH  /api/v1/admin/articles/{article_id}/links` | 보류: 태그 변경 이후 집계·벡터 인덱스 반영 실행기 연결 |
 | 095 | `PATCH  /api/v1/admin/articles/{article_id}/visibility` | 처리 코드 구현 |
 | 096 | `GET  /api/v1/admin/article-sources` | 처리 코드 구현 |
-| 097 | `GET  /api/v1/admin/keyword-topics` | 보류: DEC-32 키워드 수동 검수 상태·출처 저장 계약 |
-| 098 | `GET  /api/v1/admin/keyword-topics/detail` | 보류: DEC-32 키워드 검수 근거 저장 계약 |
-| 099 | `PATCH  /api/v1/admin/keyword-topics/review` | 보류: DEC-49 과거 기사 분류 보존 및 검수 실행기 연결 |
+| 097 | `GET  /api/v1/admin/keyword-topics` | 실제 사전·기사 건수·검수 상태 조회, 검색·페이지·정렬 |
+| 098 | `GET  /api/v1/admin/keyword-topics/detail` | 실제 기사 근거 및 내용 해시 버전 조회 |
+| 099 | `PATCH  /api/v1/admin/keyword-topics/review` | 지정·보류·해제와 감사 이력 저장. NEW_ONLY: 최초 적재되는 새 기사부터 적용, 기존 기사 분류 보존; 재처리·재색인 미지원 |
 | 100 | `GET  /api/v1/admin/keyword-topics/export` | 처리 코드 구현 |
-| 101 | `GET  /api/v1/admin/keyword-categories` | 보류: DEC-32 기본/관리자 분야 출처 저장 계약 |
-| 102 | `POST  /api/v1/admin/keyword-categories` | 보류: DEC-32 관리자 분야 출처 저장 계약 |
-| 103 | `GET  /api/v1/admin/keyword-categories/{category_id}` | 보류: DEC-32 관리자 분야 출처 저장 계약 |
-| 104 | `PATCH  /api/v1/admin/keyword-categories/{category_id}` | 보류: DEC-32 관리자 분야 출처 저장 계약 |
-| 105 | `DELETE  /api/v1/admin/keyword-categories/{category_id}` | 보류: DEC-49 분야 삭제·이관 정책 |
+| 101 | `GET  /api/v1/admin/keyword-categories` | 실제 분야 사전, 기본 대분류 8개 및 대표어 조회 |
+| 102 | `POST  /api/v1/admin/keyword-categories` | 관리자 분야 생성 및 출처 감사 기록 |
+| 103 | `GET  /api/v1/admin/keyword-categories/{category_id}` | 실제 분야 상세·버전·편집 가능 여부 |
+| 104 | `PATCH  /api/v1/admin/keyword-categories/{category_id}` | 관리자 생성 분야 이름 변경, 기본 분야 보호 |
+| 105 | `DELETE  /api/v1/admin/keyword-categories/{category_id}` | 제공하지 않음: 분야 삭제·이관 제외 결정. 422 FEATURE_NOT_AVAILABLE |
 | 106 | `번호 예약·재사용 금지` | 삭제/예약: 등록하지 않음 |
 | 107 | `번호 예약·재사용 금지` | 삭제/예약: 등록하지 않음 |
 | 108 | `번호 예약·재사용 금지` | 삭제/예약: 등록하지 않음 |
@@ -131,6 +131,6 @@
 | 125 | `PATCH  /api/v1/admin/article-sources/{source_code}/collection` | 보류: DEC-41 버전 획득 및 적재 담당자의 출처 중지 실행기 연결 |
 | 126 | `GET  /api/v1/admin/notification-terms` | 처리 코드 구현 |
 | 127 | `GET  /api/v1/admin/operations/{operation_id}` | 이번 앱의 동기 변경 감사 기록 조회 |
-| 128 | `POST  /api/v1/auth/account-recovery/candidates` | 보류: DEC-43/44 계정 후보 노출·복구 운영 기준 |
-| 129 | `POST  /api/v1/auth/account-recovery/email` | 보류: DEC-44 메일 발송·반복 제한·복구 기준 |
-| 130 | `POST  /api/v1/auth/password-recovery/temporary-password` | 보류: DEC-44 임시 비밀번호 발급·만료·메일 실패 처리 기준 |
+| 128 | `POST  /api/v1/auth/account-recovery/candidates` | 이름·이메일 가입 일치 여부만 확인; 후보 목록 미노출 |
+| 129 | `POST  /api/v1/auth/account-recovery/email` | 이름·이메일 일치 여부 확인으로 대체: 아이디 안내 메일은 사용하지 않음 |
+| 130 | `POST  /api/v1/auth/password-recovery/temporary-password` | DB 커밋 성공 후 임시 비밀번호 메일 발송, 실패 화면 안내. 이메일당 600초 1회·최근 24시간 5회. 계정 불가 사유는 동일 403; SMTP 전체 15초 상한 |
