@@ -15,6 +15,7 @@ from backend.app.api.security import hash_token
 from backend.app.api.common import ApiError
 from backend.app.api.worker import run_once
 from backend.tests.intent_fixtures import extracted_slots
+from backend.tests.api_support import SIGNUP_CONSENTS
 
 
 @unittest.skipUnless(os.environ.get('RUN_LOCAL_INTEGRATION')=='1','Start compose.integration.yml and set RUN_LOCAL_INTEGRATION=1')
@@ -27,7 +28,7 @@ class LocalIntegrationTest(unittest.TestCase):
         assert self.engine.url.host=='127.0.0.1' and self.engine.url.port==3307 and self.engine.url.database=='trade_integration'
         self.app=create_app(self.settings,self.engine); self.client=TestClient(self.app)
         self.email='integration-'+uuid.uuid4().hex+'@example.org'
-        r=self.client.post('/api/v1/auth/signup',json={'name':'로컬 검증','email':self.email,'password':'LocalTest!123','password_confirm':'LocalTest!123'})
+        r=self.client.post('/api/v1/auth/signup',json={'name':'로컬 검증','email':self.email,'password':'LocalTest!123','password_confirm':'LocalTest!123',**SIGNUP_CONSENTS})
         self.assertEqual(r.status_code,201,r.text)
         self.uid=r.json()['user']['user_id']; self.csrf=r.json()['csrf_token']
 
@@ -87,7 +88,7 @@ class LocalIntegrationTest(unittest.TestCase):
         with self.engine.begin() as c: c.execute(update(users).where(users.c.user_id==self.uid).values(role='ADMIN'))
         other=TestClient(self.app)
         try:
-            r=other.post('/api/v1/auth/signup',json={'name':'제한 검증','email':uuid.uuid4().hex+'@example.org','password':'LocalTest!123','password_confirm':'LocalTest!123'})
+            r=other.post('/api/v1/auth/signup',json={'name':'제한 검증','email':uuid.uuid4().hex+'@example.org','password':'LocalTest!123','password_confirm':'LocalTest!123',**SIGNUP_CONSENTS})
             self.assertEqual(r.status_code,201,r.text); target=r.json()['user']['user_id']
             detail=self.client.get(f'/api/v1/admin/users/{target}').json()
             r=self.client.patch(f'/api/v1/admin/users/{target}/status',headers={'X-CSRF-Token':self.csrf},json={'status':'RESTRICTED','reason':'로컬 통합 테스트','confirmed':True,'expected_version':detail['version']})
@@ -134,7 +135,7 @@ class LocalIntegrationTest(unittest.TestCase):
         self.assertTrue(all(set(meta)=={'storage','key','sha256','created_at'} for meta in files.values()));
         self.assertEqual(set(files),{'PDF','DOCX'}); self.assertEqual(files['PDF']['storage'],'local')
         other=TestClient(self.app)
-        r=other.post('/api/v1/auth/signup',json={'name':'다른 회원','email':uuid.uuid4().hex+'@example.org','password':'LocalTest!123','password_confirm':'LocalTest!123'})
+        r=other.post('/api/v1/auth/signup',json={'name':'다른 회원','email':uuid.uuid4().hex+'@example.org','password':'LocalTest!123','password_confirm':'LocalTest!123',**SIGNUP_CONSENTS})
         self.assertEqual(r.status_code,201,r.text)
         self.assertEqual(other.get(f'/api/v1/reports/{rid}/files/pdf').status_code,404)
         other.close()

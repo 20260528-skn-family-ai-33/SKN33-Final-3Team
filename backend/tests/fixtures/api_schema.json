@@ -1564,7 +1564,7 @@
     },
     {
       "name": "option_type",
-      "type": "enum('SOURCE','REPORT_PERIOD','REPORT_TYPE','RULE','NOTIFICATION_TERMS')",
+      "type": "enum('SOURCE','REPORT_PERIOD','REPORT_TYPE','RULE','NOTIFICATION_TERMS','SERVICE_TERMS','PRIVACY_TERMS','PRIVACY_POLICY')",
       "nullable": false,
       "pk": false,
       "auto": false,

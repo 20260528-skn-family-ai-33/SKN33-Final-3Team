@@ -13,6 +13,7 @@ from backend.app.api.security import issue_session, hash_token, administrator
 from backend.app.api.schemas import Signup, Login, PasswordChange, InterestUpdate, NotificationPatch, ReportCreate, Conditions
 from backend.app.api.results import get_table, read_snapshot, result_table, result_filename
 from backend.app.api.files import xlsx_bytes, MIMES
+from backend.app.api.terms import TERMS_TYPES, signup_consents
 
 
 # 이 기능들은 원문에서 계약/정책 확정 전 활성화를 금지한 항목이다.
@@ -63,7 +64,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         if user:
             store.db.redis.revoke(user['token_hash'])
         response.delete_cookie('bs_session',path='/'); return None
-    if identity==4: return {'user':accounts.user_view(store,user),'csrf_token':hash_token('csrf:'+request.cookies['bs_session'])}
+    if identity==4: return {'user':{**accounts.user_view(store,user),'terms_consents':signup_consents(store,uid)},'csrf_token':hash_token('csrf:'+request.cookies['bs_session'])}
     if identity==5:
         landing=body['landing_page']; require(landing in ('GLOBAL','INTERESTED'),'시작 화면을 확인하세요.')
         scope=accounts.interests(store,uid)
@@ -201,9 +202,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==51: return reports.cancel_subscription(store,uid,path['subscription_id'])
     if identity==52: return {'settings':notifications.settings(store,uid)}
     if identity==53: return notifications.patch_settings(store,uid,NotificationPatch.model_validate(body).model_dump(exclude_unset=True))
-    if identity==54:
-        require(path['terms_type'].lower()=='notification','일반 약관 저장 계약이 준비되지 않았습니다.','FEATURE_NOT_READY',503)
-        return {'terms':notifications.terms(store)}
+    if identity==54: return {'terms':notifications.terms(store,path['terms_type'])}
     if identity==55: return notifications.consent(store,uid,body)
     if identity==56: return notifications.listing(store,uid,query.get('type','ALL'),query.get('unread_only',False),page,size)
     if identity==57: return {'count':notifications.unread_count(store,uid),'as_of':now().isoformat()+'Z'}
@@ -284,8 +283,9 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         return {'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items))}
     if identity==119:
         target=path['user_id']; admin.user_row(store,target); c=store.t('user_consent')
-        rows=store.rows(select(c).where(c.c.user_id==target).order_by(c.c.consent_id.desc()))
-        return {'settings':notifications.settings(store,target),'consents':[{'terms_type':'NOTIFICATION',**{k:r[k] for k in ('terms_version','action','acted_at')},'required':True} for r in rows]}
+        o=store.t('service_option')
+        rows=store.rows(select(c,o.c.option_type).join(o,o.c.option_code==c.c.terms_version).where(c.c.user_id==target).order_by(c.c.consent_id.desc()))
+        return {'settings':notifications.settings(store,target),'consents':[{'terms_type':TERMS_TYPES[r['option_type']],**{k:r[k] for k in ('terms_version','action','acted_at')},'required':True} for r in rows]}
     if identity==120:
         admin.user_row(store,query['user_id']); t=store.t('alert_event')
         require(store.c.scalar(select(t.c.event_id).where(t.c.event_id==path['event_id'])) is not None,'알림 사건이 없습니다.','NOT_FOUND',404)

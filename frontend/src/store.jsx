@@ -226,7 +226,7 @@ export function AppProvider({ children }) {
   }, [session, clear])
   const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`)), [run])
   const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
-  const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])
+  const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password, age_confirmed: form.ageConfirmed, service_terms_version: form.serviceTermsVersion, privacy_terms_version: form.privacyTermsVersion }), [authenticate])
   const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
   const withdraw = useCallback(() => notify('회원 탈퇴는 운영 정책 확정 후 제공됩니다.'), [notify])
   const value = useMemo(() => ({

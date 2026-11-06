@@ -98,7 +98,7 @@ export function Footer({ isAdmin = false }) {
         </div>
         <div>
           <b>BORDERLESS SELLERS</b>
-          <p>이용약관 · <span style={{ color: '#fff', fontWeight: 700 }}>개인정보처리방침</span></p>
+          <p><Link to="/terms/service" className="ft-link">이용약관</Link> · <Link to="/terms/privacy-policy" className="ft-link" style={{ color: '#fff', fontWeight: 700 }}>개인정보처리방침</Link></p>
           <p>조회 가능한 수집 데이터를 기준으로 표시합니다.</p>
         </div>
       </div>
@@ -110,7 +110,7 @@ export function Footer({ isAdmin = false }) {
 export function FooterSmall() {
   return (
     <footer className="ft-s">
-      <div className="wrap">© 2026 Borderless Sellers · 이용약관 · <b style={{ color: '#fff' }}>개인정보처리방침</b></div>
+      <div className="wrap">© 2026 Borderless Sellers · <Link to="/terms/service" style={{ color: 'inherit' }}>이용약관</Link> · <Link to="/terms/privacy-policy" style={{ color: '#fff', fontWeight: 700 }}>개인정보처리방침</Link></div>
     </footer>
   )
 }

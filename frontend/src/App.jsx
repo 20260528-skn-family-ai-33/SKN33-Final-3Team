@@ -16,6 +16,7 @@ import Articles from './pages/market/Articles'
 import Analysis from './pages/analysis/Analysis'
 import ReportView from './pages/analysis/ReportView'
 import AccountPage from './pages/account/AccountPage'
+import TermsPage from './pages/terms/TermsPage'
 
 // 관리자 화면은 사용자가 열 때만 불러온다(번들 분리).
 const AdminApp = lazy(() => import('./admin/AdminApp'))
@@ -30,6 +31,8 @@ const PUBLIC = {
   '/login/error': SocialError,
   '/find-id': FindId,
   '/find-password': FindPassword,
+  '/terms/service': () => <TermsPage kind="service" />,
+  '/terms/privacy-policy': () => <TermsPage kind="privacy-policy" />,
 }
 
 const SITE = {

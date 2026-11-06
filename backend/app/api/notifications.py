@@ -3,30 +3,7 @@ from sqlalchemy import select, update, func, and_, or_, exists, cast, String
 from backend.app.api.common import require, unavailable, now, page_info
 from backend.app.api.news import blocked_topics, article_views, article_statement, source_meta
 from backend.app.api.results import save_snapshot, read_snapshot
-
-
-def active_terms(store):
-    t=store.t('service_option')
-    rows=store.rows(select(t).where(t.c.option_type=='NOTIFICATION_TERMS',t.c.enabled==True).order_by(t.c.sort_order.desc(),t.c.option_code.desc()))
-    effective=[]
-    for row in rows:
-        value=(row['value_json'] or {}).get('effective_at')
-        if value:
-            try:
-                parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
-                timestamp=parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).astimezone(timezone.utc).replace(tzinfo=None)
-            except (ValueError,TypeError): unavailable('약관 적용 시각 설정을 확인하세요.','FEATURE_NOT_READY')
-            if timestamp>now(): continue
-        effective.append(row)
-    return effective
-
-
-def terms(store):
-    rows=active_terms(store)
-    if not rows: unavailable('승인된 활성 알림 약관이 아직 등록되지 않았습니다.','FEATURE_NOT_READY')
-    row=rows[0]; data=row['value_json']
-    require(isinstance(data.get('body'),str) and bool(data['body'].strip()),'약관 본문이 준비되지 않았습니다.','FEATURE_NOT_READY',503)
-    return {'terms_type':'NOTIFICATION','version':row['option_code'],'title':row['label_ko'],'body':data['body'],'required':True}
+from backend.app.api.terms import active_terms, current as terms, notification_versions
 
 
 def settings(store,uid):
@@ -34,7 +11,7 @@ def settings(store,uid):
     row=store.one(select(s).where(s.c.user_id==uid))
     if not row: unavailable('알림 설정 행이 준비되지 않았습니다.','FEATURE_NOT_READY')
     active=active_terms(store); version=active[0]['option_code'] if active else None
-    latest=store.one(select(c).where(c.c.user_id==uid).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1))
+    latest=store.one(select(c).where(c.c.user_id==uid,c.c.terms_version.in_(notification_versions(store))).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1))
     return {**{k:bool(row[k]) for k in ('notifications_enabled','spike_popup','major_issue_popup','report_popup')},
             'consent_current':bool(version and latest and latest['terms_version']==version and latest['action']=='AGREE'),
             'terms_version':latest['terms_version'] if latest else None}
@@ -58,7 +35,7 @@ def consent(store,uid,data):
     enabled=bool(data.get('enable_notifications')) and data['action']=='AGREE'
     require(not data.get('enable_notifications') or data['action']=='AGREE','동의해야 알림을 켤 수 있습니다.')
     c=store.t('user_consent')
-    latest=store.one(select(c).where(c.c.user_id==uid).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1).with_for_update())
+    latest=store.one(select(c).where(c.c.user_id==uid,c.c.terms_version.in_(notification_versions(store))).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1).with_for_update())
     if latest and latest['terms_version']==current['version'] and latest['action']==data['action']=='AGREE':
         at=latest['acted_at']
     else:

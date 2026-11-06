@@ -4,11 +4,12 @@ import { navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
 import { Btn, Check, Modal, TextArea, TextField } from '../../components/ui'
 import { providerLabel } from '../../data/seed'
+import { QueryState, useQuery } from '../../api/hooks'
+import TermsBody from '../../components/TermsBody'
 
 const CONSENTS = [
-  ['service', '서비스 이용약관 동의', true],
-  ['privacy', '개인정보 수집·이용 동의', true],
-  ['optional', '선택 정보 수집·이용 동의', false],
+  ['service', 'SERVICE', '서비스 이용약관 동의'],
+  ['privacy', 'PRIVACY', '개인정보 수집·이용 동의'],
 ]
 const REASONS = ['데이터가 부족해서', '다른 사이트 사용', '구독료가 비싸서']
 const OTHER = '기타 (직접 작성)'
@@ -48,8 +49,15 @@ function WithdrawModal({ open, onClose, onConfirm }) {
   )
 }
 
+function TermsView({ kind }) {
+  const terms = useQuery(`/terms/${kind}`)
+  return <QueryState state={terms}>{data => <TermsBody body={data.terms.body} />}</QueryState>
+}
+
 export default function Profile({ route }) {
   const { account, session, withdraw } = useApp()
+  const me = useQuery('/users/me')
+  const consentOf = type => me.data?.user.terms_consents?.find(item => item.terms_type === type)
   const [email, setEmail] = useState('')
   const [emailError, setEmailError] = useState('')
   const [termsView, setTermsView] = useState(null)
@@ -79,18 +87,18 @@ export default function Profile({ route }) {
       <section className="card">
         <h2 className="t2" style={{ fontSize: 22 }}>개인정보 수집 및 약관 동의</h2>
         <div style={{ marginTop: 8 }}>
-          {CONSENTS.map(([key, title, required]) => (
+          {CONSENTS.map(([key, type, title]) => (
             <div key={key} className="between" style={{ padding: '16px 0', borderBottom: '1px solid var(--line2)' }}>
-              <p style={{ fontSize: 16, fontWeight: 700 }}>{title} <span className={'tag ' + (required ? 'red' : '')}>{required ? '필수' : '선택'}</span></p>
+              <p style={{ fontSize: 16, fontWeight: 700 }}>{title} <span className="tag red">필수</span></p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <button type="button" className="reset more" style={{ fontSize: 13 }} onClick={() => setTermsView(title)}>내용 보기</button>
-                <span className="note">동의 여부 조회 준비 중</span>
+                <button type="button" className="reset more" style={{ fontSize: 13 }} onClick={() => setTermsView({ key, title })}>내용 보기</button>
+                <span className="note">{me.loading ? '확인 중…' : consentOf(type) ? `${String(consentOf(type).acted_at).slice(0, 10)} 동의` : '동의 기록 없음'}</span>
               </div>
             </div>
           ))}
         </div>
         <div className="between" style={{ marginTop: 18 }}>
-          <span className="note">가입 당시의 일반 약관 동의 이력은 아직 조회할 수 없습니다. 알림 수신 동의는 알림설정에서 확인해 주세요.</span>
+          <span className="note">알림 수신 동의는 알림설정에서 확인해 주세요. 동의 기록이 없으면 약관 도입 전에 가입한 계정입니다.</span>
         </div>
       </section>
 
@@ -106,11 +114,11 @@ export default function Profile({ route }) {
 
       <WithdrawModal open={withdrawOpen} onClose={() => navigate(withQuery(route, { withdraw: null }), { replace: true })} onConfirm={withdraw} />
 
-      <Modal open={!!termsView} onClose={() => setTermsView(null)} width={560} label={termsView || ''}>
+      <Modal open={!!termsView} onClose={() => setTermsView(null)} width={680} label={termsView?.title || ''}>
         <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>약관 내용</p>
-        <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{termsView}</h2>
-        <div style={{ marginTop: 14, border: '1px solid var(--line)', borderRadius: 12, padding: 16, height: 180, overflowY: 'auto', fontSize: 14, lineHeight: 1.8, color: '#444B57' }}>
-          일반 약관 본문과 동의 관리는 운영 정책 확정 후 제공됩니다.
+        <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>{termsView?.title}</h2>
+        <div style={{ marginTop: 14, border: '1px solid var(--line)', borderRadius: 12, padding: 16, maxHeight: '55vh', overflowY: 'auto' }}>
+          {termsView && <TermsView kind={termsView.key} />}
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}><Btn kind="ink" size="md" onClick={() => setTermsView(null)}>확인</Btn></div>
       </Modal>
