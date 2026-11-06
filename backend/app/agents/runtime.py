@@ -19,7 +19,6 @@ from backend.app.agents.result_store import ResultStore, fingerprint
 from backend.app.agents.sql import generated_analysis
 from backend.app.agents.state import AgentState, Draft, Plan, PlannerOutput, Task, TaskConclusion, ToolResult
 from backend.app.agents.templates import api_conditions, run_template
-from backend.app.agents.tools import NEWS_PENDING_MESSAGE
 from backend.app.agents.verify import verify, snapshot_evidence
 from backend.app.api import trade, results
 from backend.app.api.common import ApiError, clean, now

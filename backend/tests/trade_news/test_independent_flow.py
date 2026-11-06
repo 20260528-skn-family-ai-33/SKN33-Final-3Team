@@ -24,7 +24,7 @@ def test_direct_child_collection_sql_tags_index_and_idempotent_replay(local):
         assert result['mysql']['include_tags'] and result['mysql']['generate_tags']
         assert result['mysql']['inserted' if iteration==1 else 'existing']==2
         assert result['vector']['status']=='complete'
-        assert result['vector']['body']['collection']=='kotra_article'
+        assert result['vector']['body']['collection']=='total_article'
         if iteration==2:assert result['vector']['body']['embedded']==0
         with local.db.connect() as conn:
             assert conn.execute(text('SELECT COUNT(*) FROM article')).scalar()==2

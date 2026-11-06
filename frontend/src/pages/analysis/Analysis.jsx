@@ -246,7 +246,16 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
     {a.warnings?.filter(w => w !== a.text).map(w => <p className="note" key={w}>{w}</p>)}
     {!a.tasks?.length && a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
-    {a.articles.map(article => <div className="li" key={article.article_id}><div><b>{article.title}</b><p className="muted">{article.summary}</p><Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn></div></div>)}
+    {a.articles.map((article, index) => <div className="li" key={article.article_id}><div>
+      <b>[{index + 1}] {article.title}</b>
+      <p className="muted">{article.source_code} · {article.published_date}</p>
+      {article.sentences?.length ? article.sentences.map((s, i) => <details key={i}>
+        <summary>{s.text} · 근거 보기</summary>
+        {s.quotes.map((quote, j) => <blockquote key={j}>{quote}</blockquote>)}
+      </details>) : (article.summary || article.evidence_sufficient === false) && <p>{article.summary || (a.order_by === 'published_date_desc' ? '발행일 기준 최신 기사' : '본문 근거 부족')}</p>}
+      <Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn>
+      {/^https?:\/\//i.test(article.source_url || '') && <a href={article.source_url} target="_blank" rel="noreferrer">원문 보기</a>}
+    </div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
       {a.report_id && <><p role="status">리포트 생성 완료</p><Btn to={`/report?id=${a.report_id}`}>리포트 센터에서 이 리포트 열기</Btn></>}
       {/* 리포트는 수출 통계 기간이 있어야 만든다. 기사만 조회한 답변(LOCAL_ISSUES)은 period가 null이다 */}

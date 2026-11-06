@@ -130,7 +130,7 @@ class BodyAdapterTest(unittest.TestCase):
 
     def test_only_requested_source_and_partial_failure_are_preserved(self):
         for status in ('complete','partial','failed'):
-            result={'status':status,'sources':['KOTRA_SHORT_NEWS'],'body':{'status':'complete' if status != 'failed' else 'failed','sources':['KOTRA_SHORT_NEWS'],'collection':'kotra_article'},'keywords':{'status':'complete' if status == 'complete' else 'failed','scope':'all_database_sources','collection':'news_keyword'},'usage':{},'error_code':None}
+            result={'status':status,'sources':['KOTRA_SHORT_NEWS'],'body':{'status':'complete' if status != 'failed' else 'failed','sources':['KOTRA_SHORT_NEWS'],'collection':'total_article'},'keywords':{'status':'complete' if status == 'complete' else 'failed','scope':'all_database_sources','collection':'news_keyword'},'usage':{},'error_code':None}
             runner=Mock(return_value=result);embed=Mock()
             out=vectors.sync_body(db_url='sqlite://',root=Path('/synthetic-root'),embed=embed,run_sources=runner)
             self.assertEqual(out,result)
