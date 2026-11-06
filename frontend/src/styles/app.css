@@ -92,6 +92,8 @@ body.modal-open{overflow:hidden}
 
 /* 버튼은 높이·한 줄을 지키고 좁은 줄에서도 줄어들지 않는다. HS 선택 버튼(.hs-choice)만 여러 줄을 허용한다. */
 .btn,.chip,.seg button{flex-shrink:0;white-space:nowrap;word-break:keep-all}
+/* 버튼이 든 줄이 화면 폭을 넘으면 버튼을 다음 줄로 내린다(채팅 입력창은 한 줄 유지). */
+:where(div,p,section,li,nav,span):has(> .btn,> .chip){flex-wrap:wrap}
 
 /* 넓은 화면에서는 상단 메뉴 간격을 넓혀 메뉴끼리 붙어 보이지 않게 한다. */
 @media (min-width:1101px){

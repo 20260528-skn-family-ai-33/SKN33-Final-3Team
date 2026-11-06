@@ -54,7 +54,7 @@ function UserBubble({ text }) {
 }
 
 /** 상태 1: 리포트 조건 선택 */
-function ConditionCard({ message, onChange, onGenerate, onClose }) {
+function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
   const { run, notify } = useApp()
   const availability = useQuery('/data/availability')
   const [preview, setPreview] = useState(null)
@@ -96,7 +96,7 @@ function ConditionCard({ message, onChange, onGenerate, onClose }) {
   }
   if (message.locked) {
     return (
-      <AiBlock>
+      <AiBlock id={id}>
         <p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인했습니다.</p>
         <p style={{ marginTop: 8, fontSize: 15 }}>국가: {o.country || '전체'} · 품목: {o.product || '전체 품목'} · 분석: {range(o.from, o.to)}</p>
         <p className="muted" style={{ marginTop: 4 }}>비교: {range(o.compareFrom, o.compareTo)} · 포함: {o.sections.map(s => s.replace('(KPI)', '').replace(' 기사', '').replace(' 시장', '')).join(' / ')}</p>
@@ -124,7 +124,7 @@ function ConditionCard({ message, onChange, onGenerate, onClose }) {
     </div>
   }
   return (
-    <AiBlock>
+    <AiBlock id={id}>
       <div className="between"><p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인해 주세요.</p><Btn size="sm" onClick={onClose}>닫기</Btn></div>
       <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>품목: {o.product || '전체 품목'} · 국가: {o.country || '전체'} (국가 선택 생략 가능)</p>
       <details style={{marginTop:16}}><summary>국가 조건 선택 · {o.conditions.country_codes.length+(o.conditions.include_korea_total?1:0)}개</summary>
@@ -362,7 +362,7 @@ export default function Analysis({ route }) {
     })
     setBusy(false); setSending(null)
   }
-  const saveAsReport = (conditions, after) => setDraft({ options: optionsFor(conditions), after })
+  const saveAsReport = (conditions, after) => { setDraft({ options: optionsFor(conditions), after }); setScrollTo('report-form') }
   const addInterest = answer => {
     const rows=answer.tables.flatMap(t=>t.rows||[])
     const countries=[...new Set([...(answer.conditions?.country_codes||[]),...rows.map(r=>r.country_code).filter(Boolean)])]
@@ -426,6 +426,14 @@ export default function Analysis({ route }) {
   const waiting = job?.status === 'NEEDS_INPUT' && !busy
   const waitInput = waiting && job.clarification?.allow_text
   const unplaced = reports.filter(r => !lastOfTurn.has(r.after))
+  // 리포트 조건 폼은 "리포트로 저장"을 누른 답변 바로 아래에 연다(19번). 위치를 모르면 맨 아래
+  const placedDraft = Boolean(draft?.after && lastOfTurn.has(draft.after))
+  const conditionCard = draft && <ConditionCard id="report-form" message={draft} onClose={()=>setDraft(null)} onChange={setDraft} onGenerate={async (body, key) => {
+                const data=await api('/reports',{method:'POST',body,idempotencyKey:key})
+                setChatReports(previous=>({...previous,[activeId]:[...(previous[activeId]||[]).filter(r=>r.report_id!==data.job.report_id),{...data.job,after:draft.after}]}))
+                setDraft(null); setScrollTo(`report-${data.job.report_id}`)
+                await refreshReports()
+              }}/>
   const headerTag = job ? [job.status==='SUCCEEDED'?'ok':'amber', ({ QUEUED: '분석 대기', RUNNING: '분석 중', WAITING_REPORT:'리포트 만드는 중', NEEDS_INPUT: '조건 확인', SUCCEEDED: '답변 완료', FAILED: '분석 실패', EXPIRED:'시간 초과', CANCELLED:'중단됨' })[job.status]] : null
 
   return (
@@ -481,6 +489,7 @@ export default function Analysis({ route }) {
               )}
               <ErrorNotice error={error} retry={() => setReadRevision(v => v + 1)} />
               {messages.map(m => <Fragment key={m.message_id}>{renderMessage(m)}
+                {placedDraft && lastOfTurn.get(draft.after) === m.message_id && conditionCard}
                 {reports.filter(r => r.after && lastOfTurn.get(r.after) === m.message_id).map(report => <ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports}/>)}
               </Fragment>)}
               {sending && <div className="chat-turn"><UserBubble text={sending}/><AiBlock><p role="status">질문을 접수하고 있습니다 <span className="chat-loading-ring" aria-hidden="true"/></p></AiBlock></div>}
@@ -490,12 +499,7 @@ export default function Analysis({ route }) {
               {job?.status === 'CANCELLED' && <AiBlock><p>질문을 중단했습니다. 새 질문을 입력할 수 있습니다.</p></AiBlock>}
               {job?.status === 'NEEDS_INPUT' && <AiBlock className={'chat-clarification' + (waiting && !waitInput ? ' chat-wait' : '')}><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify} onDirectInput={()=>inputRef.current?.focus()}/></AiBlock>}
               {(running(job?.status)||job?.status==='NEEDS_INPUT') && <Btn size="sm" disabled={busy} onClick={()=>setModal('stop')}>이 질문 중단</Btn>}
-              {draft && <ConditionCard message={draft} onClose={()=>setDraft(null)} onChange={setDraft} onGenerate={async (body, key) => {
-                const data=await api('/reports',{method:'POST',body,idempotencyKey:key})
-                setChatReports(previous=>({...previous,[activeId]:[...(previous[activeId]||[]).filter(r=>r.report_id!==data.job.report_id),{...data.job,after:draft.after}]}))
-                setDraft(null); setScrollTo(`report-${data.job.report_id}`)
-                await refreshReports()
-              }}/>}
+              {draft && !placedDraft && conditionCard}
               {unplaced.map(report=><ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports}/>)}
               <div ref={endRef} />
               <form className={waitInput ? 'chat-wait' : undefined} onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
