@@ -131,7 +131,7 @@ def create(store,uid,data,key):
 def formats(store,rid):
     t=store.t('report')
     selected=sorted((store.c.scalar(select(t.c.files_json).where(t.c.report_id==rid)) or {}).keys())
-    return selected+['XLSX'] if selected else []
+    return sorted(set(selected) | {'XLSX'}) if selected else []
 
 
 def status_view(store,r):
@@ -305,8 +305,8 @@ def generate(store,job,settings):
         doc['template_pdf']={'version':1,'report_type':record['report_type'],
                              'context':build_context(store,uid,record,doc)}
         doc['sql']=list(store.queries)
-    from backend.app.api.report_storage import LocalReportStorage
-    storage=LocalReportStorage(settings.files)
+    from backend.app.api.report_storage import report_storage
+    storage=report_storage(settings)
     prefix=f'{uid}/{rid}/{job["claim_token"]}'
     selected=record['conditions_json'].get('formats',['PDF'])
     jobs.report_step(store,job,'PDF')
@@ -316,7 +316,10 @@ def generate(store,job,settings):
     for fmt in selected:
         jobs.report_step(store,job,fmt)
         content=pdf if fmt=='PDF' else report_docx(doc,settings)
-        files[fmt]=storage.write(prefix+'/report.'+fmt.lower(),content)
+        files[fmt]=archive if fmt=='PDF' else storage.write(prefix+'/report.'+fmt.lower(),content)
+    from backend.app.api.files import xlsx_bytes
+    tables=[t for section in doc['sections'] for t in section['tables']]
+    files['XLSX']=storage.write(prefix+'/report.xlsx',xlsx_bytes(tables,doc['meta'],doc.get('sql',[])))
     t=store.t('report')
     store.c.execute(update(t).where(t.c.report_id==rid).values(status='READY',
         content_json={**doc,jobs.EXECUTION:clean(job)},files_json=files,pdf_uri=archive['key'],completed_at=now()))
