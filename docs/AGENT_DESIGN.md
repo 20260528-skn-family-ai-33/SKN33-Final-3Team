@@ -61,7 +61,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 | D-20 | 모델명은 환경변수로 바꿀 수 있게 한다. 플래너는 `API_INTENT_MODEL`, compose는 `API_COMPOSE_MODEL`이며 기본값은 둘 다 `gpt-4.1-mini`. (Q-15) |
 | D-21 | 플래너·compose·직접 입력 해석(§13.6)의 LLM 호출이 실패하면 1번 재시도한다. 대기 시간은 플래너 10초, compose 20초, 직접 입력 해석 10초다. LLM SQL 생성(20초)은 재시도 대신 §13.5의 재생성 규칙(최대 2회)을 따른다(§13.3, C-28). (Q-16) |
 | D-22 | 후속 질문의 기본 조건은 생략하면 이어받고, 명시적인 전체 범위는 해제한다. 비교·순위·기사 기간은 D-73의 별도 규칙을 따른다. (Q-18) |
-| D-23 | ML intent는 두 가지다. `PROMISING_MARKET`(유망시장)은 국가·품목 중 1개 이상이 필요하다. `MARKET_TYPE`(시장 유형)은 국가·품목이 모두 필요하지만, B 모델 시장 유형 분류가 나오기 전까지는 단계 없이 "지원 예정" 안내만 한다. 추가 예정 내용은 `backend/app/ml/ML_USAGE.md`에 적었다. (Q-13, C-05) |
+| D-23 | ML intent는 두 가지다. `PROMISING_MARKET`(유망시장)은 국가·품목 중 1개 이상이 필요하다. `MARKET_TYPE`(시장 유형)은 국가·품목이 모두 필요하고, 모델 B의 증감 예상으로 "증가 예상 시장"·"감소 예상 시장"을 분류한다(D-103). 추가 예정 내용은 `backend/app/ml/ML_USAGE.md`에 적었다. (Q-13, C-05) |
 | D-24 | 질문 하나에 품목은 5개, 국가는 20개까지다. (Q-20) |
 | D-25 | 국가명이 모호하면 비슷한 국가로 "○○가 맞나요?"를 되묻는다(`COUNTRY`). 후보가 없으면 전체 국가명 재입력을 요청한다. (Q-21) |
 | D-26 | 권역 표현(동남아, EU)은 미지원 안내만 한다. (Q-22) |
@@ -95,7 +95,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 |---|---|
 | D-50 | 결론은 하위 질문마다 1~2문장, 설명은 전체 4문장 이하로, 합니다체로 쓴다. compose는 하위 질문별 `Draft.conclusion[{task_id, sentences}]`과 `explanation` 문장 목록(문장마다 200자)으로 낸다(D-80). 기사는 문장 끝 [번호]와 기사 카드로 인용한다. (Q-39~41) |
 | D-67 | compose가 재시도(D-21) 후에도 `Draft` 규칙(문장 200자, 결론 하위 질문마다 2문장, 설명 4문장)을 어기면, 표·차트만 담아 `answer_status=PARTIAL`로 답하고 경고 "요약 문장을 만들지 못했습니다."를 붙인다. 작업은 실패로 끝내지 않는다. (E-03) |
-| D-69 | 고정 안내 문구. 시장 유형: "시장 유형 분석은 지원 예정입니다. 대신 이 국가·품목의 유망시장 순위를 볼 수 있습니다." 범위 밖: "수출입 통계·시장 비중·유망시장에 관한 질문을 입력해 주세요." 기사 검색 실패 안내는 D-43·§14.4를 따른다. (E-05) |
+| D-69 | 고정 안내 문구. 시장 유형 안내 문구는 D-103으로 없앴다. 범위 밖: "수출입 통계·시장 비중·유망시장에 관한 질문을 입력해 주세요." 기사 검색 실패 안내는 D-43·§14.4를 따른다. (E-05) |
 | D-51 | 숫자 대조는 화면 표시 단위의 반올림 차이만 허용한다. 대조 결과는 문장 번호(`Draft.sentences()` 순서)로 남긴다. 재생성 후에도 틀린 문장은 "확인 필요"로 표시한다. (Q-42, 43) |
 | D-52 | 5건 요약은 compose가 같은 LLM 호출에서 `Draft.turn_summary`로 쓴다. 200자 이하이고 양식은 `{조건 요약} {질문 요지} → {핵심 결과 1개}`다. 숫자는 답변에 나온 것만 쓰고, 되묻기 과정은 넣지 않는다. 정상·부분 답변만 넣는다. (Q-09, 10, C-06) |
 | D-53 | 최근 검색 조건은 정상·부분 답변일 때만 갱신한다. (Q-44) |
@@ -167,7 +167,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 
     check는 다시 돌 때 `resolved`부터 적용하고, 이미 확정한 원문 표현·조건은 다시 찾거나 묻지 않는다(§14.1). 그래야 같은 질문을 다시 묻지 않는다. 직접 입력을 해석하지 못하면 `resolved`를 쓰지 않고, check가 같은 condition_key로 다시 묻는다(한도 D-15).
 13. **tool 노드**(sql, news, chart, report, ml): report는 D-76에 따라 완료까지 WAITING_REPORT로 대기하고 재개한다. 나머지는 실행 후 `results[step_id]`와 단계 상태를 쓴다. MySQL `_execution`의 step·progress를 갱신하고 dispatch로 돌아간다. 실패하면 재시도 한도까지 다시 하고, 그래도 실패하면 FAILED로 두고 `skip_blocked()`를 불러, 그 단계에 직접·간접으로 의존하는 단계를 SKIPPED로 바꾼다. `ready_steps()`는 의존 단계가 모두 DONE인 단계만 돌려준다.
-14. **compose 노드**: 결과가 있는 하위 질문만 LLM 1회로 `Draft`(결론 문장 목록, 설명 문장 목록, `turn_summary`, 첫 답변이면 `title`)를 쓴다. 숫자는 digest 값만 쓴다. 결과가 없는 하위 질문(`MARKET_TYPE`·`OUT_OF_SCOPE`·NO_DATA)의 결론은 코드가 고정 문구로 넣고, 모두 그렇다면 LLM을 부르지 않는다(§13.1).
+14. **compose 노드**: 결과가 있는 하위 질문만 LLM 1회로 `Draft`(결론 문장 목록, 설명 문장 목록, `turn_summary`, 첫 답변이면 `title`)를 쓴다. 숫자는 digest 값만 쓴다. 결과가 없는 하위 질문(`OUT_OF_SCOPE`·NO_DATA)의 결론은 코드가 고정 문구로 넣고, 모두 그렇다면 LLM을 부르지 않는다(§13.1).
 15. **verify 노드**: `Draft.sentences()`(결론 다음 설명)의 LLM 문장마다 숫자를 digest 값과 대조해(§11.4) 문장 번호(`SentenceCheck.index`)로 남긴다. 틀린 문장이 있고 남은 예산이 재생성 몫 이상이면(§13.4) 1회 재생성하고, 그래도 틀리거나 예산이 모자라면 "확인 필요"를 붙인다(§11.4).
 16. **finalize 노드**:
     - answer JSON을 저장한다.
@@ -216,7 +216,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 
 모델이 강제하는 규칙
 - NEEDS_INPUT이면 `pending`이 반드시 있고, 아니면 없어야 한다. `pending.task_id`는 계획에 있어야 한다.
-- 하위 질문은 1~3개다. 각 하위 질문은 `check_conditions`로 시작하고, 같은 하위 질문의 앞 단계 또는 `input_bindings`로 명시한 선행 질문의 SQL·ML 결과에만 의존할 수 있다(D-90). `OUT_OF_SCOPE`·`MARKET_TYPE`·`CONVERSATION`(D-99)은 단계가 없다. `HS_LOOKUP`은 `lookup_hs` 단계 하나뿐이다(D-101).
+- 하위 질문은 1~3개다. 각 하위 질문은 `check_conditions`로 시작하고, 같은 하위 질문의 앞 단계 또는 `input_bindings`로 명시한 선행 질문의 SQL·ML 결과에만 의존할 수 있다(D-90). `OUT_OF_SCOPE`·`CONVERSATION`(D-99)은 단계가 없다. `HS_LOOKUP`은 `lookup_hs` 단계 하나뿐이다(D-101).
 - `step_id`는 계획 전체에서 고유하다(예: `t1.sql`). 계획에 없는 단계의 결과는 넣을 수 없고, FAILED에는 `error`가 필요하다.
 - state 320KB, digest 8KB, `Task.resolved` 4KB 이하. 대표적인 최대 크기 시나리오(약 260KB)가 상한 이내다(`test_largest_allowed_state_fits`). 상한을 바꾸거나 칸을 더하면 이 테스트로 확인한다.
 - 글자 칸은 모두 길이 상한이 있다(D-62). 문장·문구 200자, 이름(차트 제목·x축 값·시리즈, 자체 검증, 출처, 숫자) 40자, 목록 10개, `args`·`patch` 512바이트, 관심사 품목 100개·국가 250개.
@@ -267,7 +267,9 @@ START → planner → dispatch ─┬→ check_conditions ─┬→ dispatch
 | LOCAL_ISSUES | check → news(check). 확정된 국가·품목·발행 기간으로 기사를 찾는다. 일반 검색은 본문·인용 검수를 통과한 기사 최대 5건을 반환한다(D-43). |
 | REPORT | check → report(check) |
 | PROMISING_MARKET | check → ml(check) → chart(ml) |
-| MARKET_TYPE · OUT_OF_SCOPE | 없음 (안내 문구) |
+| MARKET_TYPE | check → ml(check) → chart(ml). 모델 B 증감 예상으로 유형 분류(D-103) |
+| OUT_OF_SCOPE · CONVERSATION | 없음 (D-69 안내 문구 / D-99 대화 답변) |
+| HS_LOOKUP | hs (D-101) |
 
 ### 5.2 재사용할 기존 코드
 
@@ -507,7 +509,7 @@ actions[], report_id, warnings[]
 - **입력 JSON:** `{"question": input.question, "previous_conditions": input.context.conditions(없으면 {}), "recent": [{"question", "intent", "summary"} … 최근 5건]}`. 이전 대화는 데이터로만 넣는다(§8).
 - **출력:** `state.PlannerOutput{tasks: [PlannedTask{intent, question, slots: PlannerSlots, custom_query, source_tasks, target_selections}]}`. 단계·조건·결과·확인 값은 플래너가 넣지 못한다(모델이 거부).
 - **프롬프트 규칙(`PLANNER_PROMPT`):** `intent.py` `PROMPT`의 슬롯 규칙(국가는 `{mention: 질문 원문 그대로, name: 정식 한국어 국가명}`, HS 코드 생성 금지, 기간은 월 경계, 연도만 있으면 1~12월, `recent_months`는 상대 기간)을 그대로 가져오고 다음을 더한다.
-  - intent는 `state.Intent` 9개 중 하나다. 기존 `ML`은 `PROMISING_MARKET`(유망시장·예측) 또는 `MARKET_TYPE`(시장 유형·군집), 기존 `RAG`는 `CAUSE`(원인 설명) 또는 `LOCAL_ISSUES`(기사 조회)로 나눈다. 리포트 생성 요청은 `REPORT`다.
+  - intent는 `state.Intent` 11개 중 하나다(`CONVERSATION` D-99, `HS_LOOKUP` D-101 추가). 기존 `ML`은 `PROMISING_MARKET`(유망시장·예측) 또는 `MARKET_TYPE`(시장 유형, 모델 B 증감 예상 D-103), 기존 `RAG`는 `CAUSE`(원인 설명) 또는 `LOCAL_ISSUES`(기사 조회)로 나눈다. 리포트 생성 요청은 `REPORT`다.
   - 같은 분석의 여러 대상은 한 Task에 넣고, 서로 다른 분석만 Task를 나눈다(D-34, D-86). Task 수를 줄이려고 질문을 버리지 않는다. 4개 이상이어도 모두 낸다.
   - `share_basis`는 질문에 분모가 분명할 때만 넣고, 아니면 null이다(D-87). `comparison_requested`는 비교를 요청했을 때만 true다(D-73).
   - `custom_query`는 §11.5의 템플릿으로 답할 수 없을 때만 필요한 조회를 한국어 한 문장으로 적는다. 품목별 비중("화장품 중 품목별 비중")도 여기에 해당한다. SHARE 템플릿은 국가별 비중만 지원한다(D-87).
@@ -650,7 +652,7 @@ actions[], report_id, warnings[]
 
 ### 13.1 compose (`agents/compose.py`)
 - **누가 쓰나:** REPORT 성공은 D-93의 고정 문구를 우선한다. 그 밖에는 결과(digest)가 있는 Task만 LLM이 결론을 쓴다. 다음 Task의 결론은 코드가 고정 문구로 넣는다. 그다음 계획 순서대로 합쳐 `Draft.conclusion`을 만든다(D-80).
-  - `MARKET_TYPE`·`OUT_OF_SCOPE`(D-69 문구)
+  - `OUT_OF_SCOPE`(D-69 문구)
   - 단계 없이 NO_DATA가 된 Task(`limit_errors()` 문구, D-73)
   - 조건 확인 실패·되묻기 한도 초과로 NO_DATA가 된 Task("조건을 확인해 다시 질문해 주세요.", D-15)
 
@@ -972,7 +974,7 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
   | 하위 질문 상태 | answer_status |
   |---|---|
   | `OUT_OF_SCOPE` intent | OUT_OF_SCOPE |
-  | `MARKET_TYPE` intent(지원 예정), `limit_errors`·미지원·check 실패·되묻기 한도 초과 | NO_DATA |
+  | `limit_errors`·미지원·check 실패·되묻기 한도 초과 | NO_DATA |
   | 핵심 단계(sql·ml·report, LOCAL_ISSUES의 news)가 FAILED·SKIPPED | NO_DATA |
   | 핵심·보조 단계 모두 DONE이고 모든 결과 및 입력 결과가 COMPLETE | ANSWERED |
   | 핵심 단계는 DONE인데 보조 단계가 FAILED·SKIPPED이거나 자체/선행 입력 결과가 PARTIAL | PARTIAL |
@@ -981,7 +983,7 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
   - 전체 answer_status는 D-72로 모은다.
   - 실행 상태가 SUCCEEDED가 되기 전에 모든 Task에 값이 있어야 한다(`state.py`가 검사).
 - **고정 결론 문구의 출처**(§13.1의 코드 작성 결론):
-  - OUT_OF_SCOPE·MARKET_TYPE: D-69 문구
+  - OUT_OF_SCOPE: D-69 문구
   - `limit_errors`: 그 문구
   - 단계가 실패한 Task: 실패한 핵심 단계(없으면 check)의 `ToolResult.error`
   - 되묻기 한도 초과: "조건을 확인해 다시 질문해 주세요."
@@ -1156,4 +1158,14 @@ Redis 컨텍스트·세션 잠금·체크포인터 연결과 채팅 API 변경 �
 - 품목의 HS 코드를 묻는 질문("면도기 HS코드 알려줘")과 코드가 어떤 품목인지 묻는 질문("8510은 무슨 품목이야?")은 새 intent `HS_LOOKUP`이다. HS 개념 설명("HS코드가 뭐야?")은 `CONVERSATION`(D-99)이다. 수출입 금액을 함께 물으면 해당 분석 intent다.
 - 단계는 `lookup_hs` 하나다. 조회 조건을 확정하지 않으므로 `check_conditions`로 시작하지 않는 유일한 단계다(§4 예외). 품목 표현·코드마다 HS2022 사전을 HS4·HS6로 각 5개까지 검색(`reference._search_depth`)해 digest `HS_CODES`(`items: [{query, code, name, level}]`)로 둔다. 찾지 못한 표현은 limitations로 알린다. 예산은 check 몫을 쓴다.
 - `compose_text`가 digest의 코드·품목명만 옮겨 문장으로 답한다. 후보가 여럿이면 나열하고 HS2022 기준임을 밝힌다. verify는 문장의 숫자가 조회한 코드(와 품목명 속 숫자)인지 대조한다(`verify.check_codes`).
+
+### D-102. 그래프 기사 단계의 RAG 연결 마무리 (2026-11-06 사용자 결정)
+- 그래프의 `search_articles`도 기존 채팅(`chat_news`)과 같이 지금 공개 여부·사용자 차단 필터(`article_allowed`, `chat_news.eligible_filter`)를 RAG 후보 선정 전에 적용한다.
+- 문장별 근거 인용(기사 본문 발췌)은 state·digest·LLM 입력에 넣지 않는다(§8). RAG 응답의 근거(`chat_news.evidence_items`)를 결과 저장소(`api_snapshot`, kind `ARTICLES`)에 두고 그 ID를 기사 단계 `ToolResult.result_id`로 남긴다.
+- finalize는 저장한 근거를 지금 DB 본문·공개 여부와 다시 대조해(`chat_news.verified_cards`) 기존 채팅과 같은 기사 카드(요약·문장별 근거 보기·원문 링크·근거 충분 여부·근거 역할)를 만든다. 본문이 바뀐 인용은 빼고, 근거가 없거나 만료되면 제목·날짜만 보인다.
+
+### D-103. 시장 유형 = 모델 B 증감 예상 (2026-11-06 사용자 결정)
+- 기존 HGB 모델 B의 시장 유형(5유형)은 판정 결과가 없다(`predictions.csv` 전 행 공란, ML_VALIDATION). 시장 유형은 현재 모델 B(증감 예상, `ml/growth_model.py`)의 방향으로 분류한다: "증가 예상 시장"·"감소 예상 시장".
+- `MARKET_TYPE`은 `PROMISING_MARKET`과 같은 단계(check → ml → chart)와 조건 규칙(HS6 후보·최신 기준월 예측)을 쓰고(`state.MARKET_INTENTS`), 국가·품목이 모두 있어야 한다(D-23).
+- 모델 B 파일이 없거나 모델 A와 기준월이 다르면 유형을 판정하지 않고 NO_DATA와 그 사유를 답한다. 방향이 없는 행은 "판정하지 못함"으로 쓴다. 유망도 순위는 참고로만 쓴다.
 

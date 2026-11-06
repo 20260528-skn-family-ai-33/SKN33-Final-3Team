@@ -71,7 +71,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 
 아래 필드는 기존 채팅 경로(`chat.execute → chat_news.article_answer`)의 기사 답변 계약이다. API-37의 `job.answer`와 대화 기록의 `answer`에 같은 기사 답변을 저장한다.
 
-`API_CHAT_AGENT_ENABLED=true`인 그래프 경로는 같은 RAG 결과를 `article_result`에서 `ToolResult`와 내부 `digest(ARTICLES)`로 변환한다. 시간 초과 시 통과 기사가 있으면 completeness=PARTIAL과 사유를, 0건이면 NO_DATA를 전달하며 재시도하지 않는다. 최종 답변은 위의 `tasks` 계약과 `articles[{article_id, title, published_date, source_code, task_id}]`를 따른다.
+`API_CHAT_AGENT_ENABLED=true`인 그래프 경로는 같은 RAG 결과를 `article_result`에서 `ToolResult`와 내부 `digest(ARTICLES)`로 변환한다. 시간 초과 시 통과 기사가 있으면 completeness=PARTIAL과 사유를, 0건이면 NO_DATA를 전달하며 재시도하지 않는다. 최종 답변은 위의 `tasks` 계약을 따르고, `articles[]`는 기존 채팅 경로와 같은 카드(`article_id, title, published_date, source_code, source_url, summary, sentences[{text, quotes, unverified_question_parts}], evidence_sufficient, evidence_role, reference_limitation`)에 `task_id`를 더한다. 인용은 결과 저장소에 둔 근거를 저장 시점의 DB 본문과 다시 대조한 것만 넣고, 근거가 없거나 만료되면 `article_id, title, published_date, source_code, task_id`만 있다(D-102).
 
 | 위치 | 값과 표시 방법 |
 |---|---|
