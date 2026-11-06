@@ -272,24 +272,7 @@ def stored(prefix, root, *, write=True):
 
 
 def model_cache(settings):
-    """Pin a model manifest to its content ID so a concurrent update cannot mix versions."""
-    values = settings.values
-    store = S3Objects(values)
-    manifest, _ = store.get('models/monthly/_manifest.json')
-    root = (ROOT / settings.get('ARTIFACT_CACHE_DIRECTORY', 'runtime/s3-cache')).resolve()
-    state = json.loads(manifest)
-    directory = root / 'models' / digest(json_bytes(state['files']))
-    ws = Workspace(directory, 'models/monthly', store=store)
-    # Validate the pinned content without fetching a newer manifest between reads.
-    if state.get('schema') != 1 or not isinstance(state.get('files'), dict):
-        raise StorageError('Invalid model manifest')
-    for name, meta in state['files'].items():
-        key_path(name)
-        if meta['key'] != 'models/monthly/_blobs/' + meta['sha256']:
-            raise StorageError('Model artifact is outside its namespace')
-    ws.state = state
-    lock_dir = root / 'locks'
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    with FileLock(str(lock_dir / 'models.lock'), timeout=30):
-        ws.restore()
-    return directory
+    """Compatibility accessor. Model loaders use model_cache_use to pin readers."""
+    from .model_cache import model_cache_use
+    with model_cache_use(settings) as directory:
+        return directory

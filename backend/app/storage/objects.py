@@ -20,6 +20,10 @@ class Conflict(StorageError):
     pass
 
 
+class NotModified(Exception):
+    pass
+
+
 def config(values=None):
     return values if values is not None else {**dotenv_values(ROOT / '.env'), **os.environ}
 
@@ -80,6 +84,8 @@ class S3Objects:
             return getattr(self.client, method)(Bucket=self.bucket, **kwargs)
         except Exception as exc:
             code = str(getattr(exc, 'response', {}).get('Error', {}).get('Code', ''))
+            if code in ('304', 'NotModified'):
+                raise NotModified() from exc
             if code in ('NoSuchKey', '404'):
                 raise FileNotFoundError(kwargs.get('Key')) from exc
             if code in ('PreconditionFailed', 'ConditionalRequestConflict', '412', '409'):
@@ -102,6 +108,21 @@ class S3Objects:
         if expected and digest(content) != expected:
             raise StorageError('Artifact checksum mismatch')
         return content, result.get('ETag')
+
+    def get_if_changed(self, key, etag=None):
+        try:
+            result = self._call('get_object', Key=self.key(key), **({'IfNoneMatch': etag} if etag else {}))
+        except NotModified:
+            return None
+        try:
+            body = result['Body'].read()
+        except Exception as exc:
+            raise StorageError('S3 model manifest interrupted', retryable=True) from exc
+        finally:
+            result['Body'].close()
+        if result.get('Metadata', {}).get('sha256') and digest(body) != result['Metadata']['sha256']:
+            raise StorageError('Model manifest checksum mismatch')
+        return body, result.get('ETag')
 
     def put(self, key, content, *, etag=None, create=False, content_type='application/octet-stream'):
         checksum = digest(content)

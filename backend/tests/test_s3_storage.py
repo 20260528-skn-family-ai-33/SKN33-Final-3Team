@@ -37,10 +37,12 @@ class MemoryS3:
         self.data[Key] = {'content': Body, 'Metadata': options.get('Metadata', {}), 'ETag': etag}
         return {'ETag': etag}
 
-    def get_object(self, Bucket, Key):
+    def get_object(self, Bucket, Key, **options):
         if Key not in self.data:
             raise ClientError({'Error': {'Code': 'NoSuchKey'}}, 'GetObject')
         item = self.data[Key]
+        if options.get('IfNoneMatch') == item['ETag']:
+            raise ClientError({'Error': {'Code': '304'}}, 'GetObject')
         return {**item, 'Body': io.BytesIO(item['content'])}
 
 
@@ -52,6 +54,7 @@ class S3StorageTests(unittest.TestCase):
         self.root.mkdir()
         self.client = MemoryS3()
         self.settings = Settings(values={'ARTIFACT_STORAGE': 's3', 'ARTIFACT_S3_BUCKET': 'unit-bucket',
+                                         'ARTIFACT_MODEL_CHECK_SECONDS': '0',
                                          'ARTIFACT_CACHE_DIRECTORY': str(Path(self.temp.name) / 'models-cache')})
         self.store = S3Objects(self.settings.values, client=self.client)
         self.prefix = 'raw/test'
@@ -182,7 +185,10 @@ class S3StorageTests(unittest.TestCase):
     def test_model_cache_recovers_and_does_not_mix_revisions(self):
         with workspace(self.root, 'models/monthly', store=self.store):
             (self.root / 'model.joblib').write_bytes(b'model one')
-        with patch('backend.app.storage.workspace.S3Objects', return_value=self.store):
+        from backend.app.storage.model_cache import manager
+        manager.cache_clear()
+        self.addCleanup(manager.cache_clear)
+        with patch('backend.app.storage.objects.S3Objects', return_value=self.store):
             first = model_cache(self.settings)
             with workspace(self.root, 'models/monthly', store=self.store):
                 (self.root / 'model.joblib').write_bytes(b'model two')
