@@ -1,5 +1,7 @@
 """Report byte storage. S3 mode never falls back to a local persistent file."""
 import hashlib
+from functools import lru_cache
+import os
 from pathlib import Path
 from backend.app.api.common import require, now
 from backend.app.storage.objects import S3Objects, StorageError, digest, enabled, key_path
@@ -67,8 +69,18 @@ class S3ReportStorage:
                        retryable=exc.retryable) from exc
 
 
+@lru_cache(maxsize=8)
+def _s3_report_storage(pid, bucket, prefix, region):
+    from types import SimpleNamespace
+    return S3ReportStorage(SimpleNamespace(values={'ARTIFACT_S3_BUCKET': bucket,
+        'ARTIFACT_S3_PREFIX': prefix, 'AWS_REGION': region}))
+
+
 def report_storage(settings):
     try:
-        return S3ReportStorage(settings) if enabled(settings.values) else LocalReportStorage(settings.files)
+        if enabled(settings.values):
+            return _s3_report_storage(os.getpid(), settings.get('ARTIFACT_S3_BUCKET'),
+                settings.get('ARTIFACT_S3_PREFIX', ''), settings.get('AWS_REGION', 'ap-northeast-2'))
+        return LocalReportStorage(settings.files)
     except StorageError as exc:
         S3ReportStorage.failure(exc)

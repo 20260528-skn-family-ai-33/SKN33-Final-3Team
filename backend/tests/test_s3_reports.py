@@ -10,7 +10,11 @@ from backend.app.storage.objects import S3Objects
 
 
 class S3ReportIntegrationTests(unittest.TestCase):
-    setUp = base.BackendApiTest.setUp
+    def setUp(self):
+        from backend.app.api.report_storage import _s3_report_storage
+        _s3_report_storage.cache_clear()
+        self.addCleanup(_s3_report_storage.cache_clear)
+        base.BackendApiTest.setUp(self)
     tearDown = base.BackendApiTest.tearDown
     signup = base.BackendApiTest.signup
     post = base.BackendApiTest.post
