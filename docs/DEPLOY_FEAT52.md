@@ -173,6 +173,7 @@ python -c "from backend.app.api.config import Settings; from backend.app.agents.
 
 월별 수출입 작업(매월 10일 03:00 KST) 뒤 모델 A를, 이어서 모델 B를 학습한다. 모델 B가 실패해도 모델 A는 저장되고, 실패한 달은 스케줄러 복구 작업이 최대 3번 다시 학습한다.
 
+- **월별 학습은 API·워커와 다른 서버에서 돌린다(2026-11-06 결정, C-23).** 같은 서버면 학습 시간대에 메모리가 모자라 채팅 응답이 느려진다.
 - **스케줄러는 API·워커와 다른 환경이어야 한다.** 월별 피처 캐시를 만든 runtime(Python 3.11.9, numpy **1.24.3**, pandas 2.2.3, scipy 1.10.1)과 버전이 정확히 같아야 읽힌다. API 환경(numpy 1.26.4)으로 돌리면 캐시 읽기를 거부한다. 버전은 `backend/requirements-ml-runtime-20261022.txt`·모델 레지스트리의 `data_info.runtime`을 따른다.
 - 필요한 자료: 관세청 수집 원본, `data/ml/monthly_feature_cache`, `data/external`(외부 피처), DB `fx_daily`.
 - 시간·메모리 (2026-11-05, 4코어, 8GB PC에서 측정, 스왑이 섞임):
@@ -184,7 +185,7 @@ python -c "from backend.app.api.config import Settings; from backend.app.agents.
   | 모델 B 학습(검증 + 전체) | 약 12분 |
   | 합계 | 약 31분 |
 
-  8GB에서는 여유 메모리가 600MB까지 떨어졌다. API·워커·Redis와 같은 서버라면 학습 시간대에 응답이 느려질 수 있다(설계 C-23 미정).
+  8GB에서는 여유 메모리가 600MB까지 떨어졌다. 그래서 학습은 별도 서버로 분리하기로 했다(C-23).
 - 직접 만든 B 파일(`model_b_growth_202609.joblib`)이 있는 달은 월별 학습이 덮어쓰지 않는다. 월별 학습 결과(레지스트리 포함)로 바꾸려면 그 파일을 치운다.
 - 모델 B만 수동으로 다시 돌리기(DB `ml_model_version`에 기록함):
 
@@ -201,7 +202,7 @@ python -c "from backend.app.api.config import Settings; from backend.app.agents.
 ## 반영 후 남은 확인 사항
 
 - 자유 SQL DB 계정을 읽기 전용 계정으로 바꾸기 (`TODO(D-41)`)
-- EC2 메모리 배분 (C-23): Redis 1280MB + API·워커(모델 상주) + 월별 학습
+- EC2 메모리 배분 (C-23): 월별 학습은 별도 서버로 분리(2026-11-06 결정). API·워커 서버에 Redis 1280MB + API + 워커(유망시장 모델 + 기사 색인 2~4GB, D-104) + Chromium이 들어가는지 확인
 - 알려진 낮은 빈도 문제 (빈도 1% 미만):
   - 과거 연도를 붙인 유망시장 질문에서 최신 예측에 동의해도 조건 기간이 그대로 남는다
   - 워커 재시작 직후 HS4 유망시장 질문에서 모델 로드 대기가 조건 확인 예약 시간을 넘길 수 있다
