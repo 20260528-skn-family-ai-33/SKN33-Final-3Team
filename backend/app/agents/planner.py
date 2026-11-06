@@ -23,7 +23,8 @@ CONVERSATION은 이전 대화 자체를 묻는 질문(예: "이전 질문 뭐였
 HS_LOOKUP은 품목의 HS 코드를 묻거나(예: "면도기 HS코드 알려줘") HS 코드가 어떤 품목인지 묻는 질문
 (예: "8510은 무슨 품목이야?", "330499 설명해줘")입니다. products에 품목 표현이나 코드를 그대로 옮기고 다른 슬롯은 null입니다.
 수출입 금액을 함께 물으면 HS_LOOKUP이 아니라 해당 분석 intent입니다.
-OUT_OF_SCOPE는 무역과 관계없는 범위 밖입니다.
+OUT_OF_SCOPE는 무역과 관계없는 범위 밖입니다(날씨·잡담 등). HS코드·FTA·관세·원산지·통관 같은 무역 용어 질문은
+대소문자·띄어쓰기와 상관없이 OUT_OF_SCOPE가 아니라 CONVERSATION 또는 HS_LOOKUP입니다(예: "hs코드가 뭐야?"는 CONVERSATION).
 countries는 mention(질문 원문 그대로), name(정식 한국어 국가명) 쌍입니다.
 기업 국적을 국가 조건으로 추론하지 마세요. SK·TV·AI·IT는 국가가 아닙니다.
 products에는 질문 속 품목 표현을 그대로 옮기세요. HS 코드를 생성·번역·추론하지 마세요.
@@ -116,6 +117,20 @@ def explicit_country_ranking(question):
     return PlannerOutput(tasks=[{'intent':'RANKING', 'question':question, 'slots':{
         'ranking_group':'COUNTRY', 'ranking_limit':limit, 'recent_months':months,
         'trade_flow':'EXPORT' if match['flow']=='수출' else 'IMPORT', 'countries':[], 'products':[]}}])
+
+
+# 무역 용어 안전망(2026-11-06 사용자 결정): LLM이 이 용어가 든 질문을 범위 밖으로 내면 대화·용어 질문으로 바꾼다.
+# 설정 API_CHAT_TRADE_TERMS(쉼표 구분)로 바꿀 수 있다.
+TRADE_TERMS = ('hs', '관세', 'fta', '원산지', '통관', '무역', '수출', '수입', '품목분류', '세번', '인코텀즈', 'incoterms')
+
+
+def rescue_trade_terms(output: PlannerOutput, terms=TRADE_TERMS) -> PlannerOutput:
+    compact = lambda text: ''.join(text.split()).casefold()
+    words = [compact(t) for t in terms if t.strip()]
+    tasks = [{**t.model_dump(), 'intent': 'CONVERSATION', 'slots': {}}
+             if t.intent == 'OUT_OF_SCOPE' and any(w in compact(t.question) for w in words) else t.model_dump()
+             for t in output.tasks]
+    return PlannerOutput.model_validate({**output.model_dump(), 'tasks': tasks})
 
 
 def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:

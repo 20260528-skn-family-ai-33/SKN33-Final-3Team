@@ -29,6 +29,12 @@ class AgentPlannerTest(unittest.TestCase):
         self.assertTrue(warnings)
         self.assertEqual(plan.tasks[1].steps[1].args, {'template': 'RANKING', 'top': 10})
 
+    def test_trade_term_out_of_scope_becomes_conversation(self):
+        from backend.app.agents.planner import rescue_trade_terms
+        out = rescue_trade_terms(PlannerOutput(tasks=[{'intent': 'OUT_OF_SCOPE', 'question': 'hs 코드가 뭐야?'},
+                                                      {'intent': 'OUT_OF_SCOPE', 'question': '오늘 날씨 어때?'}]))
+        self.assertEqual([t.intent for t in out.tasks], ['CONVERSATION', 'OUT_OF_SCOPE'])
+
     def test_source_failure_is_transitive(self):
         plan, _ = self.plan([
             {'intent': 'OUT_OF_SCOPE', 'question': 'not ready'},
