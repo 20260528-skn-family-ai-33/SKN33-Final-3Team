@@ -88,7 +88,7 @@ def collected(name, parameter):
     return decorate
 
 
-def managed_files(*parameters, defaults=None):
+def managed_files(*parameters, defaults=None, outputs=()):
     """Resolve loader inputs from S3; an explicit path cannot silently bypass storage."""
     defaults = defaults or {}
     def decorate(function):
@@ -112,6 +112,10 @@ def managed_files(*parameters, defaults=None):
                 if not matches:
                     raise StorageError(f'Input must belong to a migrated S3 dataset: {target}')
                 needed.add(max(matches, key=lambda item: len(item[1].parts)))
+            for parameter in outputs:
+                target = Path(bound.arguments[parameter]).resolve()
+                if any(target.is_relative_to(root.resolve()) for _, root in needed):
+                    raise StorageError('Output must be outside read-only S3 input workspaces')
             with ExitStack() as stack:
                 for prefix, root in sorted(needed):
                     stack.enter_context(workspace(root, prefix, write=False))

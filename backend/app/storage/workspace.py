@@ -29,6 +29,9 @@ def files(root, prefix=None):
     for path in sorted(Path(root).rglob('*')):
         relative = path.relative_to(root)
         name = relative.as_posix()
+        # Legacy diagnostic logs are not disposable input data.
+        if prefix == 'raw/news-history' and relative.parts[0] == 'logs':
+            continue
         if prefix == 'models/versions' and not (name.startswith('versions/')
                 or name in ('models.joblib', 'predictions.csv', 'metadata.json')):
             continue
@@ -128,6 +131,8 @@ class Workspace:
         self.root.mkdir(parents=True, exist_ok=True)
         existing = dict(self.local_files())
         for name, meta in self.state['files'].items():
+            if self.prefix == 'raw/news-history' and name.startswith('logs/'):
+                continue
             target = self.root.joinpath(*key_path(name).parts)
             if not target.resolve().is_relative_to(self.root):
                 raise StorageError('Artifact cache path escapes workspace')
@@ -182,7 +187,7 @@ class Workspace:
 
 
 @contextmanager
-def workspace(root, prefix, *, write=True, store=None, migrate=False):
+def workspace(root, prefix, *, write=True, store=None, migrate=False, reject_busy=False):
     root = Path(root).resolve()
     for active in _active.get():
         if active.prefix == prefix:
@@ -210,6 +215,8 @@ def workspace(root, prefix, *, write=True, store=None, migrate=False):
                 thread.start()
             else:
                 ws.read_manifest()
+                if reject_busy and (ws.state.get('lease') or {}).get('expires', 0) > time.time():
+                    raise Conflict('Artifact workspace is already running', retryable=True)
             if not migrate:
                 ws.restore()
             context = _active.set((*_active.get(), ws))
