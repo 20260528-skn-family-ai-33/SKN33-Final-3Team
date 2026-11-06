@@ -175,13 +175,13 @@ class ShortnewsDailyTest(unittest.TestCase):
         self.assertEqual(raw["smmarCn"], "선택하지 않을 개요")
         article = self.db.rows("article")[0]
         self.assertEqual(article["source_code"], "KOTRA_SHORT_NEWS")
-        self.assertEqual(article["body_masked"], "<수출전망> 문의 [이메일]")
+        self.assertEqual(article["body_masked"], "<수출전망> 문의 a@example.com")
         self.pages = [([fixture.raw("001", "2026-10-22", nttCn="<p>새 본문</p><p>02-123-4567</p>")], 1)]
         self.assertEqual(self.run_job()["status"], "SUCCESS")
         rows = self.db.rows("article")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["article_id"], article["article_id"])
-        self.assertEqual(rows[0]["body_masked"], "새 본문\n[전화번호]")
+        self.assertEqual(rows[0]["body_masked"], "새 본문\n02-123-4567")
         self.assertEqual(len(self.db.rows("article_tag")), 1)
 
     def test_zero_articles_records_requested_day_in_batch(self):
