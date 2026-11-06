@@ -6,7 +6,7 @@ from decimal import Decimal
 from pydantic import ValidationError
 
 from backend.app.schemas.rag import HsProduct
-from backend.app.agents.state import (AgentState, ChartSpec, Conditions, Interests, MAX_CONCLUSION_SENTENCES, MAX_DIGEST_BYTES,
+from backend.app.agents.state import (AgentState, ChartSpec, Conditions, Interests, MAX_TASK_SENTENCES, MAX_DIGEST_BYTES,
                                       MAX_EXPLANATION_SENTENCES, MAX_INTEREST_COUNTRIES, MAX_INTEREST_HS, MAX_LABEL_CHARS,
                                       MAX_LIST_ITEMS, MAX_RECENT_MONTHS, MAX_TEXT_CHARS, PlannerSlots, SessionContext,
                                       ToolResult, TurnSummary, TaskSlots, shorten_name, shorten_names, shorten_target_names)
@@ -331,7 +331,7 @@ class AgentStateTest(unittest.TestCase):
                 task_id=t, title='가' * 40, unit='가' * 20, source=label,
                 labels=[label[:-2] + f'{n:02}' for n in range(60)],   # 한 차트 안에서 라벨·시리즈 이름은 겹치지 않는다
                 series=[{'name': label[:-1] + str(n), 'values': [123456789012.5] * 60} for n in range(5)])}
-        n_sentences = MAX_CONCLUSION_SENTENCES + MAX_EXPLANATION_SENTENCES
+        n_sentences = MAX_TASK_SENTENCES * 3 + MAX_EXPLANATION_SENTENCES  # 차트가 있는 일반 답변이 가장 크다
         # 숫자는 문장(200자) 안에서 찾으므로 한 문장에 한 글자 숫자 100개가 최대다
         checks = [{'index': n, 'numbers': ['1'] * (MAX_TEXT_CHARS // 2), 'status': 'PASS'} for n in range(n_sentences)]
         s = AgentState.model_validate({

@@ -106,6 +106,11 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     for expression in slots.products or []:
         key = f'{task.task_id}:hs:{expression}'
         answer = task.resolved.get(key, {})
+        if not answer:
+            # 같은 계획의 다른 하위 질문에서 같은 품목 표현을 이미 확정했으면 다시 묻지 않는다(국가와 같은 규칙, 2026-11-06).
+            # 예: "중국 면도기 수출 추이와 변화 원인" → 추이·원인 두 하위 질문이 "면도기"를 한 번만 묻는다
+            answer = next((t.resolved[f'{t.task_id}:hs:{expression}'] for t in state.plan.tasks if t is not task
+                           and t.resolved.get(f'{t.task_id}:hs:{expression}', {}).get('hs_items')), {})
         # D-74: 유망시장 모델은 HS6 단위다. 되묻기 답이 HS4("이 HS4 전체로 분석"·4자리 입력)여도 HS6 후보로 다시 묻는다.
         hs4 = [h['hs_code'] for h in answer.get('hs_items', []) if len(h['hs_code']) == 4] \
             if task.intent == 'PROMISING_MARKET' else []

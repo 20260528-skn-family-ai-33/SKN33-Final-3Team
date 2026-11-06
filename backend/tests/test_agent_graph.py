@@ -9,15 +9,15 @@ from backend.app.agents.state import (AgentState, PlannerOutput, Pending, ToolRe
 
 
 class Services:
-    def __init__(self, intent='STATISTICS', ask=False, mismatch=False):
-        self.intent, self.ask, self.mismatch = intent, ask, mismatch
+    def __init__(self, intent='STATISTICS', ask=False, mismatch=False, slots=None):
+        self.intent, self.ask, self.mismatch, self.slots = intent, ask, mismatch, slots or {}
         self.events = []
         self.saved = []
 
     def guard(self, state, node): self.events.append(node)
 
     def planner(self, state):
-        state.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': self.intent, 'question': 'q'}]))
+        state.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': self.intent, 'question': 'q', 'slots': self.slots}]))
 
     def check(self, state, step):
         if self.ask and not state.plan.tasks[0].resolved:
@@ -42,6 +42,11 @@ class Services:
     def compose(self, state):
         state.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['완료했습니다.']}], turn_summary='')
 
+    def compose_text(self, state):
+        self.events.append('compose_text')
+        state.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['하나입니다.', '둘입니다.', '셋입니다.']}],
+                            explanation=['설명입니다.'] * 6, turn_summary='')
+
     def verify(self, state):
         state.verification = Verification(status='NEEDS_REVIEW' if self.mismatch else 'PASS',
             regeneration_count=state.verification.regeneration_count)
@@ -65,6 +70,52 @@ class AgentGraphTest(unittest.TestCase):
             'query_trade_data', 'dispatch', 'build_chart', 'dispatch', 'compose', 'verify', 'finalize'])
         self.assertEqual(len(services.saved), 1)
         self.assertEqual(graph.get_state(graph_config('j')).values['status'], 'SUCCEEDED')
+
+    def test_text_answer_skips_chart_and_uses_text_node(self):
+        services = Services(slots={'answer_format': 'TEXT'})
+        result = build_graph(services, InMemorySaver()).invoke(initial(), graph_config('j'))
+        self.assertEqual(result['status'], 'SUCCEEDED')
+        self.assertNotIn('build_chart', services.events)
+        self.assertEqual(services.events[-4:], ['compose', 'compose_text', 'verify', 'finalize'])
+        self.assertEqual(len(result['draft']['conclusion'][0]['sentences']), 3)
+
+    def test_conversation_has_no_steps_and_uses_text_node(self):
+        services = Services(intent='CONVERSATION')
+        result = build_graph(services, InMemorySaver()).invoke(initial(), graph_config('j'))
+        self.assertEqual(result['plan']['tasks'][0]['steps'], [])
+        self.assertEqual(result['plan']['tasks'][0]['answer_status'], 'ANSWERED')
+        self.assertNotIn('query_trade_data', services.events)
+        self.assertIn('compose_text', services.events)
+
+    def test_conversation_numbers_must_come_from_recent_turns(self):
+        from types import SimpleNamespace
+        from backend.app.agents.verify import check_history
+        recent = [SimpleNamespace(question='중국 화장품 수출 추이', summary='2025년 중국 화장품 수출은 2,610만 달러입니다.')]
+        self.assertTrue(check_history('이전 질문은 중국 화장품 수출 추이였고 2,610만 달러였습니다.', recent)[0])
+        self.assertFalse(check_history('이전 결과는 3,000만 달러였습니다.', recent)[0])
+        self.assertTrue(check_history('HS코드는 품목 분류 번호입니다.', [])[0])
+
+    def test_hs_lookup_plan_has_only_lookup_step(self):
+        plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'HS_LOOKUP', 'question': '면도기 HS코드', 'slots': {'products': ['면도기']}}]))
+        self.assertEqual([s.tool for s in plan.tasks[0].steps], ['lookup_hs'])
+        services = Services(intent='HS_LOOKUP', slots={'products': ['면도기']})
+        result = build_graph(services, InMemorySaver()).invoke(initial(), graph_config('j'))
+        self.assertEqual(result['status'], 'SUCCEEDED')
+        self.assertIn('lookup_hs', services.events)
+        self.assertIn('compose_text', services.events)
+
+    def test_hs_lookup_sentence_numbers_must_be_found_codes(self):
+        from backend.app.agents.verify import check_codes
+        digests = [{'kind': 'HS_CODES', 'items': [{'code': '851010', 'name': '면도기', 'level': 'HS6'}]}]
+        self.assertTrue(check_codes('면도기는 HS 851010입니다.', digests)[0])
+        self.assertFalse(check_codes('면도기는 HS 851020입니다.', digests)[0])
+
+    def test_text_sentence_limits_apply_only_to_text_tasks(self):
+        from backend.app.agents.state import draft_limit_error
+        draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['가.', '나.', '다.']}], turn_summary='')
+        for slots, expected in (({}, True), ({'answer_format': 'TEXT'}, False)):
+            plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': 'q', 'slots': slots}]))
+            self.assertEqual(bool(draft_limit_error(plan, draft)), expected)
 
     def test_interrupt_resume_does_not_repeat_planner_or_ask_counter(self):
         services = Services(ask=True)

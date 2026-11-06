@@ -11,13 +11,13 @@ from backend.app.agents.progress import progress_for
 from backend.app.agents.charts import build_chart
 from backend.app.agents.bindings import resolve as resolve_bindings, source_versions
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
-from backend.app.agents.compose import COMPOSE_PROMPT, assemble, compose_input
+from backend.app.agents.compose import COMPOSE_PROMPT, COMPOSE_TEXT_PROMPT, assemble, compose_input
 from backend.app.agents.conditions import check_conditions
 from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT
-from backend.app.agents.result_store import ResultStore, fingerprint
+from backend.app.agents.result_store import ResultStore, fingerprint, shared_result
 from backend.app.agents.sql import generated_analysis
-from backend.app.agents.state import AgentState, Draft, Plan, PlannerOutput, Task, TaskConclusion, ToolResult
+from backend.app.agents.state import AgentState, Draft, Plan, PlannerOutput, Task, TaskConclusion, ToolResult, is_text_task
 from backend.app.agents.templates import api_conditions, run_template
 from backend.app.agents.tools import NEWS_PENDING_MESSAGE
 from backend.app.agents.verify import verify, snapshot_evidence
@@ -275,14 +275,24 @@ class Services:
                 return ToolResult(status='FAILED',error='예측이 제한 시간 안에 끝나지 않았습니다. 잠시 후 다시 질문해 주세요.')
             except (ImportError,OSError,MemoryError,ValueError):
                 return ToolResult(status='FAILED',error='예측 모델 또는 기준월 스냅샷을 사용할 수 없습니다.')
+        if step.tool=='lookup_hs':
+            from backend.app.agents.tools import hs_lookup_result
+            def lookup(_):
+                with self.read_store() as store: return hs_lookup_result(store,task)
+            return self.execution.call('check',budget.seconds(self.settings,'check'),lookup,
+                                       finish_reserve=budget.finishing_seconds(state,self.settings))
         if step.tool=='build_chart':
             result_id=state.results[step.depends_on[0]].result_id
+            # 공유한 조회(D-100)의 차트는 앞 하위 질문이 이미 그렸다. 같은 차트를 두 번 내지 않는다
+            if any(r.chart and r.chart.result_id==result_id for r in state.results.values()):
+                return ToolResult(status='OK')
             def chart(_):
                 with self.read_store() as store: return build_chart(store,state.input.user_id,task,result_id)
             result,_,warnings=self.execution.call('chart',budget.seconds(self.settings,'chart'),chart)
             state.warnings.extend(warnings)
             return result
         if step.tool!='query_trade_data': return ToolResult(status='NO_DATA',error='요청한 분석 도구가 준비되지 않았습니다.')
+        if shared:=shared_result(state,task,step): return shared   # 같은 조회는 한 번만 실행한다(D-100)
         def template(timeout):
             with self.read_store() as store:
                 mysql=store.c.dialect.name=='mysql'
@@ -319,7 +329,11 @@ class Services:
         for table in ('export_summary','import_summary'): trade.verified_months(store,table)
         return {t:store.cache['trade_revision',t] for t in ('export_summary','import_summary')}
 
-    def compose(self,state):
+    def compose_text(self,state):
+        """문장형 답변 노드(D-98). 같은 compose 예산·검증을 쓰고 프롬프트와 문장 상한만 다르다."""
+        self.compose(state,prompt=COMPOSE_TEXT_PROMPT)
+
+    def compose(self,state,prompt=COMPOSE_PROMPT):
         with self.read_store() as store:
             from backend.app.agents.templates import _names
             countries,products=_names(store)
@@ -338,7 +352,7 @@ class Services:
             state.draft=assemble(state,None,fixed,describe)
             return
         correcting=state.draft is not None and state.verification.regeneration_count==1
-        revised=self.structured(state,'compose',COMPOSE_PROMPT,payload,Draft,1500,
+        revised=self.structured(state,'compose',prompt,payload,Draft,3000 if prompt is COMPOSE_TEXT_PROMPT else 1500,
                                 lambda value:assemble(state,value,fixed,describe),
                                 max_attempts=1 if correcting else 2)
         if revised is None and state.draft is not None and state.verification.regeneration_count:
@@ -417,7 +431,8 @@ class Services:
             for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
                 tasks.append({'task_id':task.task_id,'intent':task.intent,'question':task.question,
                     'conditions':api_conditions(task.conditions) if task.conditions else None,
-                    'conclusion':conclusion.sentences,'answer_status':task.answer_status})
+                    'conclusion':conclusion.sentences,'answer_status':task.answer_status,
+                    'answer_format':'TEXT' if is_text_task(task) else None})
                 for step in task.steps:
                     result=state.results.get(step.step_id)
                     if result and result.article_ids and result.digest:
@@ -425,6 +440,7 @@ class Services:
                             'source_code':a['source_code'],'task_id':task.task_id} for a in result.digest.get('items',[]))
                     if not result or not result.result_id: continue
                     if step.tool in ('query_trade_data','query_market_model'):
+                        if any(t['result_id']==result.result_id for t in tables): continue   # 공유한 조회(D-100)는 표 하나
                         try: table=results.get_table(store,state.input.user_id,result.result_id)
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise

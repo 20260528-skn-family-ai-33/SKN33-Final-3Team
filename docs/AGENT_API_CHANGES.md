@@ -58,7 +58,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 
 | 필드 | 형식 | 설명 |
 |---|---|---|
-| `tasks` | array | 복합 질문을 나눈 하위 질문. `[{task_id, intent, question, conditions, answer_status, conclusion}]`. 단일 질문도 1개. `conclusion`은 그 Task의 결론 문장 목록 |
+| `tasks` | array | 복합 질문을 나눈 하위 질문. `[{task_id, intent, question, conditions, answer_status, conclusion, answer_format}]`. 단일 질문도 1개. `conclusion`은 그 Task의 결론 문장 목록. `answer_format`은 문장형 답변(D-98)·대화·용어 질문(`intent=CONVERSATION`, D-99)·HS 코드 조회(`intent=HS_LOOKUP`, D-101)이면 `"TEXT"`, 아니면 `null`. 같은 조회를 공유한 하위 질문(D-100)은 `tables`·`charts`에 자기 항목이 없다 |
 | `chart_selectors` | array | 대상이 여러 개인 유망시장 결과의 대상 선택. `[{task_id, result_id, group_by, country_codes, hs_items}]`(아래 D-78~84 절) |
 | `intent`, `conditions` | (기존) | 첫 번째 하위 질문(주 의도)의 값. 기존 화면과 호환 |
 | `tables[].task_id`, `charts[].task_id` | string | 어느 하위 질문의 표·차트인지 |

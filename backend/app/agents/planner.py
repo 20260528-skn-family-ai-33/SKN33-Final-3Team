@@ -16,7 +16,14 @@ source_tasks는 이번 질문을 여러 하위 질문으로 나눴을 때 앞 �
 STATISTICS는 합계·추이·기간 비교, RANKING은 명시적인 국가/품목 순위,
 MARKET_SHARE는 상대국별·품목별 교역 비중과 해외 수입시장 점유율, CAUSE는 원인 설명,
 LOCAL_ISSUES는 기사 조회, REPORT는 리포트 생성, PROMISING_MARKET은 유망시장·예측,
-MARKET_TYPE은 시장 유형·군집, OUT_OF_SCOPE는 범위 밖입니다.
+MARKET_TYPE은 시장 유형·군집, CONVERSATION은 데이터 조회 없이 답할 질문입니다.
+CONVERSATION은 이전 대화 자체를 묻는 질문(예: "이전 질문 뭐였더라?", "아까 뭐 물어봤지?")과
+무역 용어·개념 설명(예: "HS코드가 뭐야?", "FTA가 뭐야?")입니다. 슬롯은 모두 null이고 새 수치를 조회하지 않습니다.
+이전 결과를 다시 조회·계산해 달라는 요청은 CONVERSATION이 아니라 해당 분석 intent입니다.
+HS_LOOKUP은 품목의 HS 코드를 묻거나(예: "면도기 HS코드 알려줘") HS 코드가 어떤 품목인지 묻는 질문
+(예: "8510은 무슨 품목이야?", "330499 설명해줘")입니다. products에 품목 표현이나 코드를 그대로 옮기고 다른 슬롯은 null입니다.
+수출입 금액을 함께 물으면 HS_LOOKUP이 아니라 해당 분석 intent입니다.
+OUT_OF_SCOPE는 무역과 관계없는 범위 밖입니다.
 countries는 mention(질문 원문 그대로), name(정식 한국어 국가명) 쌍입니다.
 기업 국적을 국가 조건으로 추론하지 마세요. SK·TV·AI·IT는 국가가 아닙니다.
 products에는 질문 속 품목 표현을 그대로 옮기세요. HS 코드를 생성·번역·추론하지 마세요.
@@ -51,11 +58,14 @@ target_selections는 앞 하위 질문의 결과표에서 다음 대상을 고�
 order_by(country_rank/product_rank/amount_usd)를 씁니다. 모호한 기준은 null입니다.
 국가 안 품목 순위는 country_rank, 품목 안 국가 순위는 product_rank입니다.
 결과 자체를 리포트로 전달하면 대상 선택 규칙은 필요하지 않습니다.
+answer_format은 이전 질문·답변 내용을 묻거나 이전 대화를 이어 설명·정리해 달라는 질문
+(예: "아까 본 결과를 말로 다시 설명해줘", "앞에서 비교한 내용 정리해줘")이면 TEXT, 그 밖에는 null입니다.
+TEXT여도 intent와 국가·품목·기간 슬롯은 같은 규칙으로 채웁니다.
 확인·승인 값, 실행 단계, result_id는 생성하지 마세요.
 """
 
 TOOLS = {'check': 'check_conditions', 'sql': 'query_trade_data', 'news': 'search_articles',
-         'chart': 'build_chart', 'ml': 'query_market_model', 'report': 'generate_report'}
+         'chart': 'build_chart', 'ml': 'query_market_model', 'report': 'generate_report', 'hs': 'lookup_hs'}
 STEPS = {
     'STATISTICS': [('check', []), ('sql', ['check']), ('chart', ['sql'])],
     'RANKING': [('check', []), ('sql', ['check']), ('chart', ['sql'])],
@@ -64,6 +74,7 @@ STEPS = {
     'LOCAL_ISSUES': [('check', []), ('news', ['check'])],
     'REPORT': [('check', []), ('report', ['check'])],
     'PROMISING_MARKET': [('check', []), ('ml', ['check']), ('chart', ['ml'])],
+    'HS_LOOKUP': [('hs', [])],   # D-101: 조건 확인 없이 HS 사전만 찾는다
 }
 
 
@@ -138,6 +149,8 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
                     slots=TaskSlots.model_validate(item.slots.model_dump()), custom_query=item.custom_query,
                     input_bindings=bindings)
         for name, dependencies in STEPS.get(item.intent, []):
+            if name == 'chart' and item.slots.answer_format == 'TEXT':
+                continue   # 문장형 답변은 차트를 만들지 않는다(D-98)
             args = {}
             if name == 'sql':
                 template = 'LLM_SQL' if item.custom_query else {

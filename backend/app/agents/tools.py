@@ -35,3 +35,30 @@ def article_result(state, task, step):
         completeness='PARTIAL' if partial else 'COMPLETE',limitations=['기사 근거 또는 검색 범위가 부족합니다.'] if partial else [],
         digest=bounded({'kind':'ARTICLES','article_period':conditions.article_period.model_dump(mode='json'),
                         'rag_status':response.status,'items':items,'rows_total':len(items)}))
+
+
+HS_LOOKUP_LIMIT = 10   # 표현 하나의 후보 수(HS4·HS6 각 5개)
+
+
+def hs_lookup_result(store, task):
+    """D-101: 품목 표현 → HS 코드, HS 코드 → 품목명. 조건을 확정하지 않고 HS2022 사전 검색 결과만 돌려준다."""
+    from backend.app.agents.digest import bounded
+    from backend.app.agents.state import ToolResult
+    from backend.app.api.reference import _search_depth
+    expressions = (task.slots.products if task.slots else None) or []
+    if not expressions:
+        return ToolResult(status='NO_DATA', error='품목명이나 HS 코드를 함께 입력해 주세요.')
+    items, missing = [], []
+    for expr in expressions:
+        found = {}
+        for depth in (4, 6):
+            for row in _search_depth(store, expr, depth, 5)['items']:
+                found.setdefault(row['hs_code'], {'query': expr, 'code': row['hs_code'], 'name': row['name_ko'],
+                                                  'level': f'HS{depth}'})
+        if found: items.extend(list(found.values())[:HS_LOOKUP_LIMIT])
+        else: missing.append(expr)
+    if not items:
+        return ToolResult(status='NO_DATA', error=f'“{missing[0][:40]}”에 해당하는 HS 코드를 찾지 못했습니다.')
+    return ToolResult(status='OK', completeness='PARTIAL' if missing else 'COMPLETE',
+        limitations=[f'“{m[:40]}”에 해당하는 HS 코드를 찾지 못했습니다.' for m in missing][:5],
+        digest=bounded({'kind': 'HS_CODES', 'hs_ver': 'HS2022', 'items': items, 'rows_total': len(items)}))

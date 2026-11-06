@@ -34,8 +34,12 @@ MAX_CHART_SERIES = 5
 # LLM이 쓰는 Draft 문장만 넘으면 거부해 재시도한다.
 MAX_TEXT_CHARS = 200             # 문장 하나: 답변 문장, 되묻기 문구·선택지, 경고, 오류, 적용 조건
 MAX_LABEL_CHARS = 40             # 이름 하나: 차트 제목·x축 값·시리즈, 자체 검증 이름, 출처, 품목 표현, 숫자
-MAX_CONCLUSION_SENTENCES = 2 * MAX_TASKS   # 결론은 하위 질문마다 1~2문장(D-50)
+MAX_TASK_SENTENCES = 2                     # 결론은 하위 질문마다 1~2문장(D-50)
 MAX_EXPLANATION_SENTENCES = 4
+# 문장형 답변(answer_format=TEXT, D-98): 차트 없이 문장 위주로 답해 상한을 늘린다(2026-11-06 사용자 결정)
+MAX_TEXT_TASK_SENTENCES = 3
+MAX_TEXT_EXPLANATION_SENTENCES = 6
+MAX_CONCLUSION_SENTENCES = MAX_TEXT_TASK_SENTENCES * MAX_TASKS
 MAX_LIST_ITEMS = 10              # 경고·자체 검증·적용 조건 목록
 MAX_ARGS_BYTES = 512             # Step.args·Choice.patch JSON
 MAX_RESOLVED_BYTES = 4 * 1024    # Task.resolved(되묻기로 확정한 답) 전체. 품목 5·국가 20개 답이 1KB 안팎이다
@@ -57,11 +61,12 @@ REPORT_WAIT_TIMEOUT_SECONDS: int | None = None  # TODO(C-24): 별도 대기 상�
 MAX_ASKS_PER_CONDITION = 2           # 조건 하나당 되묻기 횟수
 
 ToolName = Literal['check_conditions', 'query_trade_data', 'search_articles', 'build_chart',
-                   'generate_report', 'query_market_model']
+                   'generate_report', 'query_market_model', 'lookup_hs']
 Intent = Literal['STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES', 'REPORT',
-                 'PROMISING_MARKET', 'MARKET_TYPE', 'OUT_OF_SCOPE']
+                 'PROMISING_MARKET', 'MARKET_TYPE', 'CONVERSATION', 'HS_LOOKUP', 'OUT_OF_SCOPE']
 # 실행 단계 없이 안내만 하는 intent. MARKET_TYPE은 B 모델 시장 유형 분류가 나오기 전까지 "지원 예정" 안내.
-NO_STEP_INTENTS = frozenset({'OUT_OF_SCOPE', 'MARKET_TYPE'})
+# CONVERSATION(D-99)은 이전 대화·무역 용어 질문이다. 조회 없이 compose_text가 최근 대화로 답한다.
+NO_STEP_INTENTS = frozenset({'OUT_OF_SCOPE', 'MARKET_TYPE', 'CONVERSATION'})
 RunStatus = Literal['QUEUED', 'RUNNING', 'NEEDS_INPUT', 'WAITING_REPORT', 'SUCCEEDED', 'FAILED', 'EXPIRED', 'CANCELLED']
 AnswerStatus = Literal['ANSWERED', 'PARTIAL', 'NO_DATA', 'OUT_OF_SCOPE']
 StepStatus = Literal['PENDING', 'RUNNING', 'DONE', 'FAILED', 'SKIPPED']
@@ -276,6 +281,9 @@ class PlannerSlots(Model):
     ranking_group: Literal['COUNTRY', 'HS6'] | None = None
     share_basis: Literal['KOREA_TRADE_PARTNER', 'FOREIGN_IMPORT_MARKET'] | None = None
     article_period: ArticlePeriod | None = None
+    # 문장형 답변(D-98). 이전 질문·답변 내용을 묻거나 이전 대화를 이어 설명해 달라고 할 때 플래너가 TEXT를 고른다.
+    # TEXT면 차트 단계를 만들지 않고 결론·설명 문장 상한이 늘어난다. None은 표·차트 답변이다
+    answer_format: Literal['TEXT'] | None = None
 
     @model_validator(mode='after')
     def check_periods(self):
@@ -444,6 +452,12 @@ class Plan(Model):
                 continue
             if not task.steps and task.answer_status == 'NO_DATA':
                 continue   # 플래너가 상한 초과로 실행 없이 끝낸 하위 질문(D-73)
+            if task.intent == 'HS_LOOKUP':
+                # HS 사전 조회(D-101)는 조회 조건을 확정하지 않는다. 품목 표현을 사전에서 찾기만 한다
+                if [s.tool for s in task.steps] != ['lookup_hs'] or task.steps[0].depends_on or task.input_bindings:
+                    raise ValueError('HS_LOOKUP은 lookup_hs 단계 하나만 있습니다')
+                step_ids.add(task.steps[0].step_id)
+                continue
             if not task.steps or task.steps[0].tool != 'check_conditions':
                 raise ValueError(f'{task.task_id}: 첫 단계는 check_conditions여야 합니다')
             if not set(bound) <= set(task.steps[0].depends_on):
@@ -616,7 +630,8 @@ class SqlDraft(Model):
 
 class TaskConclusion(Model):
     task_id: str
-    sentences: list[Sentence] = Field(min_length=1, max_length=2)
+    # 형식별 상한(일반 2, TEXT 3)은 draft_limit_error가 검사한다
+    sentences: list[Sentence] = Field(min_length=1, max_length=MAX_TEXT_TASK_SENTENCES)
 
     @classmethod
     def report_completed(cls, task_id: str) -> 'TaskConclusion':
@@ -629,7 +644,7 @@ class Draft(Model):
     """compose의 LLM 호출 1번으로 답변 문장, 대화 요약, (첫 답변이면) 대화방 제목을 같이 받는다.
     결론은 하위 질문마다 1~2문장, 설명은 전체 4문장 이하. LLM이 문장을 나눠 주므로 verify는 문장 번호로 대조한다."""
     conclusion: list[TaskConclusion] = Field(min_length=1, max_length=MAX_TASKS)
-    explanation: list[Sentence] = Field(default_factory=list, max_length=MAX_EXPLANATION_SENTENCES)
+    explanation: list[Sentence] = Field(default_factory=list, max_length=MAX_TEXT_EXPLANATION_SENTENCES)
     turn_summary: Annotated[str, _chars(0, 200)]
     # 대화방 제목(D-54, 20자 이하). 넘으면 초안 전체를 거부하지 않고 자르고, 비어 있으면 없는 것(None)으로 둔다.
     # 제목은 선택 칸이라 제목 때문에 답변 문장까지 버리지 않는다.
@@ -638,6 +653,24 @@ class Draft(Model):
     def sentences(self) -> list[str]:
         """verify가 대조하는 순서: 결론 다음 설명."""
         return [sentence for item in self.conclusion for sentence in item.sentences] + self.explanation
+
+
+def is_text_task(task) -> bool:
+    """문장형 답변(D-98)과 대화·용어 질문(D-99)은 compose_text가 쓴다."""
+    return task.intent in ('CONVERSATION', 'HS_LOOKUP') or bool(task.slots and task.slots.answer_format == 'TEXT')
+
+
+def draft_limit_error(plan, draft) -> str | None:
+    """D-50 문장 상한. TEXT 하위 질문은 결론 3문장, TEXT가 하나라도 있으면 설명 6문장까지(D-98)."""
+    tasks = {t.task_id: t for t in plan.tasks}
+    for item in draft.conclusion:
+        limit = MAX_TEXT_TASK_SENTENCES if is_text_task(tasks[item.task_id]) else MAX_TASK_SENTENCES
+        if len(item.sentences) > limit:
+            return f'{item.task_id} 결론은 {limit}문장 이하여야 합니다'
+    limit = MAX_TEXT_EXPLANATION_SENTENCES if any(map(is_text_task, plan.tasks)) else MAX_EXPLANATION_SENTENCES
+    if len(draft.explanation) > limit:
+        return f'설명은 {limit}문장 이하여야 합니다'
+    return None
 
 
 class SentenceCheck(Model):
@@ -650,7 +683,7 @@ class SentenceCheck(Model):
 
 class Verification(Model):
     status: Literal['PENDING', 'PASS', 'NEEDS_REVIEW'] = 'PENDING'
-    checks: list[SentenceCheck] = Field(default_factory=list, max_length=MAX_CONCLUSION_SENTENCES + MAX_EXPLANATION_SENTENCES)
+    checks: list[SentenceCheck] = Field(default_factory=list, max_length=MAX_CONCLUSION_SENTENCES + MAX_TEXT_EXPLANATION_SENTENCES)
     regeneration_count: int = Field(default=0, ge=0, le=1)
 
 
@@ -708,6 +741,8 @@ class AgentState(Model):
             raise ValueError('끝난 작업은 모든 하위 질문의 결과가 있어야 합니다')
         if self.draft and (not self.plan or [c.task_id for c in self.draft.conclusion] != [t.task_id for t in self.plan.tasks]):
             raise ValueError('결론은 모든 하위 질문을 계획 순서대로 한 번씩 포함해야 합니다')
+        if self.draft and (error := draft_limit_error(self.plan, self.draft)):
+            raise ValueError(error)
         indexes = [c.index for c in self.verification.checks]
         if indexes and (not self.draft or len(set(indexes)) != len(indexes) or max(indexes) >= len(self.draft.sentences())):
             raise ValueError('문장 대조가 답변에 없는 문장을 가리킵니다')
@@ -742,11 +777,13 @@ class AgentState(Model):
             raise ValueError('진행 중인 하위 질문은 결과를 집계할 수 없습니다')
         if task.intent == 'OUT_OF_SCOPE':
             return 'OUT_OF_SCOPE'
+        if task.intent == 'CONVERSATION' and not task.applied_defaults:
+            return 'ANSWERED'
         if task.intent == 'MARKET_TYPE' or not task.steps:
             return 'NO_DATA'
         if task.steps[0].status != 'DONE':
             return 'NO_DATA'
-        core_tools = {'query_trade_data', 'query_market_model', 'generate_report'}
+        core_tools = {'query_trade_data', 'query_market_model', 'generate_report', 'lookup_hs'}
         if task.intent == 'LOCAL_ISSUES':
             core_tools.add('search_articles')
         core = [s for s in task.steps if s.tool in core_tools]

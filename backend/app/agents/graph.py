@@ -7,7 +7,7 @@ from typing import Protocol, Any
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 
-from backend.app.agents.state import AgentState, Step, ToolResult, ReportWait
+from backend.app.agents.state import AgentState, Step, ToolResult, ReportWait, is_text_task
 
 
 class NodeServices(Protocol):
@@ -18,12 +18,18 @@ class NodeServices(Protocol):
     def resume(self, state: AgentState, answer: Any) -> None: ...
     def report_ready(self, state: AgentState) -> ToolResult: ...
     def compose(self, state: AgentState) -> None: ...
+    def compose_text(self, state: AgentState) -> None: ...
     def verify(self, state: AgentState) -> None: ...
     def finalize(self, state: AgentState) -> None: ...
 
 
 def checked(state: AgentState) -> dict:
     return AgentState.model_validate(state.model_dump()).model_dump()
+
+
+def compose_node(state: AgentState) -> str:
+    """문장형 하위 질문(D-98)이 있으면 문장 답변 노드로 간다. 예산·진행 표시는 compose와 같이 쓴다."""
+    return 'compose_text' if state.plan and any(map(is_text_task, state.plan.tasks)) else 'compose'
 
 
 def next_step(state: AgentState) -> Step:
@@ -50,7 +56,7 @@ def build_graph(services: NodeServices, checkpointer, *, regeneration_seconds=35
 
     def route(state):
         if state.steps_finished():
-            return 'compose'
+            return compose_node(state)
         return next_step(state).tool
 
     def check(state):
@@ -98,17 +104,23 @@ def build_graph(services: NodeServices, checkpointer, *, regeneration_seconds=35
         state.skip_blocked()
         return checked(state)
 
-    def compose(state):
+    def write_answer(state, write):
         services.guard(state, 'compose')
         if not state.steps_finished():
             raise ValueError('단계가 끝나기 전에 답변을 만들 수 없습니다')
         for task in state.plan.tasks:
             task.answer_status = state.task_outcome(task.task_id)
-        services.compose(state)
+        write(state)
         # A rewritten draft can have fewer sentences. The old indexes were
         # consumed by compose; only verify may attach checks to this draft.
         state.verification.checks = []
         return checked(state)
+
+    def compose(state):
+        return write_answer(state, services.compose)
+
+    def compose_text(state):
+        return write_answer(state, services.compose_text)
 
     def verify(state):
         services.guard(state, 'verify')
@@ -129,10 +141,10 @@ def build_graph(services: NodeServices, checkpointer, *, regeneration_seconds=35
         return checked(state)
 
     for name, node in [('planner', planner), ('dispatch', dispatch), ('check_conditions', check),
-                       ('ask_user', ask_user), ('compose', compose), ('verify', verify),
+                       ('ask_user', ask_user), ('compose', compose), ('compose_text', compose_text), ('verify', verify),
                        ('finalize', finalize), ('report_ready', report_ready)]:
         builder.add_node(name, node)
-    for name in ('query_trade_data', 'search_articles', 'build_chart', 'query_market_model', 'generate_report'):
+    for name in ('query_trade_data', 'search_articles', 'build_chart', 'query_market_model', 'generate_report', 'lookup_hs'):
         builder.add_node(name, tool)
         if name == 'generate_report':
             builder.add_conditional_edges(name, lambda s: 'report_ready' if s.report_wait else 'dispatch',
@@ -141,15 +153,17 @@ def build_graph(services: NodeServices, checkpointer, *, regeneration_seconds=35
             builder.add_edge(name, 'dispatch')
     builder.add_edge(START, 'planner')
     builder.add_edge('planner', 'dispatch')
-    builder.add_conditional_edges('dispatch', route, ['compose', 'check_conditions', 'query_trade_data',
-        'search_articles', 'build_chart', 'query_market_model', 'generate_report'])
+    builder.add_conditional_edges('dispatch', route, ['compose', 'compose_text', 'check_conditions', 'query_trade_data',
+        'search_articles', 'build_chart', 'query_market_model', 'generate_report', 'lookup_hs'])
     builder.add_conditional_edges('check_conditions',
         lambda s: 'ask_user' if s.status == 'NEEDS_INPUT' else 'dispatch', ['ask_user', 'dispatch'])
     builder.add_edge('ask_user', 'dispatch')
     builder.add_edge('report_ready', 'dispatch')
     builder.add_edge('compose', 'verify')
+    builder.add_edge('compose_text', 'verify')
     builder.add_conditional_edges('verify',
-        lambda s: 'compose' if s.verification.status == 'PENDING' else 'finalize', ['compose', 'finalize'])
+        lambda s: compose_node(s) if s.verification.status == 'PENDING' else 'finalize',
+        ['compose', 'compose_text', 'finalize'])
     builder.add_edge('finalize', END)
     return builder.compile(checkpointer=checkpointer, interrupt_before=['report_ready'])
 

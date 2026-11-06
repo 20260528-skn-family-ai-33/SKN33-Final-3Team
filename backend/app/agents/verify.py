@@ -303,6 +303,29 @@ def snapshot_evidence(payload):
             '_verification_source':'SNAPSHOT'}
 
 
+def _tokens(text):
+    text=_merge_compound(DATE.sub(' ',re.sub(r'\[\d+\]','',text)))
+    return [m for m in TOKEN.finditer(text) if not _target_count(text,m)]
+
+
+def check_codes(sentence, digests):
+    """HS_LOOKUP(D-101) 문장의 숫자는 조회한 HS 코드(와 품목명 속 숫자)만 허용한다."""
+    allowed=set()
+    for digest in digests:
+        for item in digest.get('items', []):
+            allowed.add(str(item.get('code', '')))
+            allowed.update(m['value'].replace(',','') for m in _tokens(str(item.get('name', ''))))
+    found=_tokens(sentence)
+    return all(m['value'].replace(',','') in allowed for m in found),[_shown(m) for m in found]
+
+
+def check_history(sentence, recent):
+    """CONVERSATION(D-99) 문장의 숫자는 최근 대화의 질문·요약에 있는 값만 허용한다. 요약 숫자는 이미 verify를 통과했다(D-52)."""
+    allowed={m['value'].replace(',','') for t in recent for m in _tokens(f'{t.question} {t.summary}')}
+    found=_tokens(sentence)
+    return all(m['value'].replace(',','') in allowed for m in found),[_shown(m) for m in found]
+
+
 def mark_unverified(state):
     """시간이 부족해 대조하지 못했을 때(§1·§13.4): verify가 대조할 LLM 문장마다 "확인 필요"(MISMATCH)를 붙인다.
     고정 문구 결론은 verify처럼 건너뛴다. 숫자가 없는 문장("결과는 아래 표와 차트에서 확인하세요.")은 대조할 것이 없어 PASS다.
@@ -315,7 +338,7 @@ def mark_unverified(state):
                                     reason='NOT_CONFIRMED' if numbers else 'MATCH'))
     for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
         evidence=any(s.step_id in state.results and state.results[s.step_id].digest for s in task.steps)
-        generated=evidence and fixed_conclusion(state,task) is None
+        generated=(evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
         for sentence in conclusion.sentences:
             if generated: add(sentence)
             index+=1
@@ -357,6 +380,14 @@ def verify(state,known_names=(),*,snapshots=None,countries=()):
             basis='SNAPSHOT' if source else 'DIGEST',
             reason='MATCH' if good else 'SOURCE_UNAVAILABLE' if unavailable else 'NOT_CONFIRMED'))
     for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
+        if task.intent in ('CONVERSATION','HS_LOOKUP') and fixed_conclusion(state,task) is None:
+            for sentence in conclusion.sentences:
+                good,numbers=(check_history(sentence,state.input.context.recent) if task.intent=='CONVERSATION'
+                              else check_codes(sentence,by_task[task.task_id]))
+                checks.append(SentenceCheck(index=index,numbers=numbers,status='PASS' if good else 'MISMATCH',
+                                            reason='MATCH' if good else 'NOT_CONFIRMED'))
+                index+=1
+            continue
         generated=bool(by_task[task.task_id]) and fixed_conclusion(state,task) is None
         for sentence in conclusion.sentences:
             if generated: add(sentence,by_task[task.task_id])
