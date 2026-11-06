@@ -139,7 +139,12 @@ class StateBackupTest(unittest.TestCase):
         self.assertTrue((self.source/'checkpoint.json').exists())
 
     def test_symlink_rejected(self):
-        (self.source/'linked').symlink_to(self.source/'checkpoint.json')
+        try:
+            (self.source/'linked').symlink_to(self.source/'checkpoint.json')
+        except OSError as exc:
+            if getattr(exc, 'winerror', None) == 1314:
+                self.skipTest('Windows symlink privilege is not available')
+            raise
         with self.assertRaises(ValueError):state.backup_state(self.source,self.backup)
 
     def test_partial_copy_not_published(self):

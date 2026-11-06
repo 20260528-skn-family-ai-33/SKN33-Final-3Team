@@ -1,2 +1,3 @@
 -r requirements-api.txt
 fakeredis[lua]>=2,<3
+pytest>=8,<10
