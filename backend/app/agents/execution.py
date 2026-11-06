@@ -5,7 +5,7 @@ payload_json.input only after the complete service adapter is wired.
 """
 from copy import deepcopy
 from datetime import datetime
-from time import monotonic
+from time import monotonic, sleep
 from uuid import uuid4
 
 from langgraph.types import Command
@@ -84,6 +84,9 @@ class ExecutionStore:
         self.transaction(clear)
 
 
+RESUME_READ_RETRIES, RESUME_READ_DELAY_SECONDS = 3, 1.0
+
+
 def invoke_graph(graph, execution):
     """Invoke outside DB transactions; clear consumed resume only after success.
 
@@ -94,6 +97,14 @@ ask_user interrupt, so the stale answer is ignored rather than delivered twice.
     config = graph_config(job['job_id'])
     snapshot = graph.get_state(config)
     resume = job['payload_json'].get('resume')
+    # 되묻기 답을 이어 붙일 작업인데 체크포인트를 못 읽으면 처음부터 다시 계획하지 않는다(2026-11-06).
+    # 다시 계획하면 같은 조건을 새 ID로 또 묻고, Redis와 MySQL의 되묻기가 달라져 다음 답이 "마감"으로 거부된다.
+    for _ in range(RESUME_READ_RETRIES):
+        if snapshot.values or resume is None: break
+        sleep(RESUME_READ_DELAY_SECONDS)
+        snapshot = graph.get_state(config)
+    require(snapshot.values or resume is None, '조건 입력 재개에 실패했습니다. 잠시 후 다시 질문해 주세요.',
+            'CLARIFICATION_RESUME_FAILED', 503)
     has_interrupt = any(task.interrupts for task in snapshot.tasks)
     if snapshot.values:
         # A crash after consuming an answer may leave the previous payload in
