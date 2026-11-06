@@ -59,13 +59,16 @@ MySQL에서 직접 조회하는 업무 데이터·환율은 S3 파일로 바꾸�
 - manifest의 300초 lease를 30초마다 갱신한다. 같은 namespace의 실행을 직렬화하며, 만료된 실행은 후속 실행의 ETag를 덮어쓸 수 없다. 갱신 실패 시 완료 확정을 차단한다. 서버 시계를 NTP로 동기화한다. 기존 DB 잠금·트랜잭션은 유지한다.
 - S3 실패를 하위 코드가 잡더라도 해당 작업 공간은 실패 상태를 유지한다. 마지막에 `SUCCESS`로 바뀌지 않는다. 미완료 blob은 참조되지 않으므로 읽기에 사용하지 않는다.
 - 리포트는 필요한 모든 형식의 업로드 성공 뒤 DB를 `READY`로 바꾼다. S3 성공 후 DB 실패 시 기존 worker 재시도로 복구하며, 미참조 파일은 사용자에게 노출되지 않는다. 다운로드의 소유권·READY 검사를 먼저 수행한다.
-- 모델은 파일·READY 레지스트리를 S3에 확정한 뒤 DB에 등록한다. DB만 실패하면 같은 입력의 기존 버전을 읽어 재등록한다. API의 모델 캐시는 해시별 blob을 공유하고 현재·직전 목록의 디렉터리만 유지한다. 파일 선택부터 모델 로드까지 프로세스 간 잠금을 유지해 로드 중인 캐시를 삭제하지 않는다. 하드링크가 불가능한 파일시스템에서는 복사한다. 구형 `runtime/s3-cache/models/`는 새 캐시와 별개이며, 구버전 프로세스를 종료한 뒤 수동 정리한다.
+- 모델은 파일·READY 레지스트리를 S3에 확정한 뒤 DB에 등록한다. DB만 실패하면 같은 입력의 기존 버전을 읽어 재등록한다. API의 모델 캐시는 해시별 blob을 공유하고 현재·직전 디렉터리를 유지한다. 다운로드·해시 검증·파일 복사·모델 로드는 전역 잠금 밖에서 수행하고, 교체·정리할 때만 잠근다. 사용 중인 버전은 독립적인 OS 잠금으로 보호해 현재·직전 목록 밖으로 밀려나도 로드 종료까지 보존하며, 프로세스가 종료되면 잠금이 해제된다. 하드링크가 불가능한 파일시스템에서는 개별 사본을 사용한다. 구형 `runtime/s3-cache/models/`는 새 캐시와 별개이며, 구버전 프로세스를 종료한 뒤 수동 정리한다.
+- 모델 매니페스트 조회가 **재시도 가능한 S3 오류**로 실패하면 마지막 완전한 로컬 매니페스트와 해시 검증된 파일을 사용한다. 다른 worker가 내려받은 최신 캐시도 사용하며 재시작 후에도 적용한다. 권한 오류·잘못된 매니페스트·무결성 오류·캐시 유실은 이 정책으로 숨기지 않는다. 정상 복구 여부는 다음 확인 주기에 다시 조회한다.
+- 기존 `history.json`·버전별 `.snapshot.json` 캐시도 장애 복구 시 읽는다. 중단된 다운로드의 임시 디렉터리는 다음 정리 때 제거하며, 독립 OS 잠금이 살아 있는 다운로드는 보존한다.
 - UN은 매 원자적 상태 저장 시 원본·pending·continuation·checkpoint를 함께 확정한다. 작업 전 fence가 S3에 있어야 진행하고, 마지막 release까지 확정돼야 복구 차단이 풀린다. 강제 종료의 `RECOVERY_REQUIRED`를 시간이 지났다는 이유로 해제하지 않는다. 기존 DB UUID·범위 해시 검사를 유지한다.
-- UN의 프로세스 잠금 뒤 예외 처리 안에서 S3 작업 공간을 연다. 로컬·원격 잠금 충돌은 `ALREADY_RUNNING`으로 반환한다. 매분 재개 기한 확인은 읽기 전용이며, 실제 재개할 때만 쓰기 lease를 획득하고 최신 상태를 재확인한다.
-- 기사 수집의 SQLite는 S3 `database/_current.json`이 원본이다. schema 2는 예산·대기열 DB, 기사 DB, 검수 DB를 별도 snapshot으로 저장하고 **하나의 포인터로 함께 확정**한다. 예산만 바뀌면 작은 상태 DB만 복사·해시하며 기사 본문을 직렬화하지 않는다. 각 snapshot은 256KiB 조각을 공유한다. 기존 CLI 호환을 위해 로컬 `articles.sqlite3`는 두 영역을 합친 작업 사본이다.
+- UN의 프로세스 잠금 뒤 예외 처리 안에서 S3 작업 공간을 연다. 로컬·원격 잠금 충돌은 `ALREADY_RUNNING`으로 반환한다. 매분 재개 기한 확인은 읽기 전용이며, 실제 재개할 때만 쓰기 lease를 획득하고 최신 상태를 재확인한다. 복원 시 프로세스별로 검증한 파일의 예상 SHA256·크기·수정/변경 시각·inode·device가 같으면 해시를 재계산하지 않는다. 파일 교체·수정·매니페스트 변경 시 다시 검증하며 캐시 항목은 최대 8,192개다.
+- 기사 수집의 SQLite는 S3 `database/_current.json`이 원본이다. schema 3는 예산·대기열 DB, 기사 DB의 기본 snapshot과 변경 행 journal, 검수 DB를 **하나의 포인터로 함께 확정**한다. 변경 행은 매 커밋 즉시 영속화하며, 삭제·교체·트리거 결과도 포함한다. 전체 기사 복사·해시는 journal 100개 또는 8MiB를 넘기기 전, 혹은 DB 스키마 변경 때만 수행한다. 예산만 바뀌면 작은 상태 DB만 복사·해시하며 기사 본문을 직렬화하지 않는다. 각 snapshot은 256KiB 조각을 공유한다. 기존 CLI 호환을 위해 로컬 `articles.sqlite3`는 두 영역을 합친 작업 사본이다. 조각 정리는 현재 기본 snapshot과 모든 journal 참조를 보존한다.
 - 검수 결과가 저장된 뒤 기사 완료 기록을 확정할 때 검수 DB도 같은 포인터에 포함된다. 부모 checkpoint 전 중단·캐시 유실에도 기사와 검수 결과를 함께 복원한다. 예산 예약 저장 실패는 HTTP 요청을 막고 연결을 실패 상태로 고정한다. 부모 파일 manifest는 기사·검수 DB와 journal을 덮어쓰지 않는다. 복원 시 이전 WAL·rollback journal도 제거해 미확정 내용의 재적용을 막는다.
-- schema 1은 읽기 호환을 유지하며 다음 쓰기 때 schema 2로 전환한다. 기존 기사에 검수 결과가 없거나 불일치하면 수집 시작 및 적재 전에 저장된 원문으로 복구한다. 현재 사전·정책으로 재생성한 결과가 기록된 판정·버전·본문과 일치해야 한다. 일치하지 않으면 `RECOVERY_REQUIRED`로 남겨 적재에서 제외하고 필요한 원래 입력을 확인한다. HTTP 재수집은 하지 않는다.
+- schema 1·2는 읽기 호환을 유지하며 다음 쓰기 때 schema 3으로 전환한다. 초기 이관은 journal이 없는 schema 2로 시작할 수 있다. schema 3을 쓴 뒤의 코드 롤백은 이 형식을 읽는 버전을 사용해야 한다. 기존 기사에 검수 결과가 없거나 불일치하면 수집 시작 및 적재 전에 저장된 원문으로 복구한다. 현재 사전·정책으로 재생성한 결과가 기록된 판정·버전·본문과 일치해야 한다. 일치하지 않으면 `RECOVERY_REQUIRED`로 남겨 적재에서 제외하고 필요한 원래 입력을 확인한다. HTTP 재수집은 하지 않는다.
 - 기사 일일 작업은 부모 잠금과 자식의 `crawler.lock`을 확보한 후에만 S3 파일·DB를 복원한다. 부모만 종료되고 자식이 살아 있으면 `already_running`으로 반환하며 작업 파일을 건드리지 않는다. 새 실행 ID를 확정한 뒤 자식 잠금을 해제하므로 늦게 시작한 이전 자식은 실행 ID 검사에서 중단된다.
+- 기사 작업의 시작 잠금 충돌만 `already_running`으로 반환한다. 작업 시작 후 최종 publish·lease 해제 충돌은 `failed`, `stage=storage`, `storage_confirmed=false`로 반환하고 `tmp/trade_news_job_errors/*_storage_failure.json`에 진단을 남긴다. 권한을 잃은 작업 공간에는 실패 상태를 재업로드하지 않는다.
 - 검수 JSON이 깨졌거나 객체가 아닌 경우에도 원문의 검수 근거로 재생성을 시도한다. 근거가 없거나 재현되지 않으면 복구 필요로 남기며, 개별 검수 데이터의 형식 오류 때문에 전체 수집이 중단되지 않는다. 저장소 초기화 실패 시 SQLite 연결을 닫는다.
 - `news_load` 진단 로그는 입력 작업 공간 밖 `runtime/logs/news_load`에 기록한다. 구형 `data/news/logs`도 입력 복원 시 삭제하지 않는다. 로그의 장기 보존·전송은 운영 로그 수집 정책을 따른다.
 - 리포트 S3 클라이언트는 프로세스·버킷·prefix·리전별로 재사용한다. IAM Role의 갱신 가능한 자격증명은 SDK가 관리한다.
@@ -143,7 +146,7 @@ python -m backend.app.storage.crawler_gc --apply --writers-stopped --min-age-day
 ## 검증
 
 ```bash
-python -m unittest backend.tests.test_s3_storage backend.tests.test_s3_review backend.tests.test_s3_additional_review backend.tests.test_s3_reports backend.tests.test_s3_models
+python -m unittest backend.tests.test_s3_storage backend.tests.test_s3_review backend.tests.test_s3_additional_review backend.tests.test_s3_performance_review backend.tests.test_s3_reports backend.tests.test_s3_models
 python -m unittest discover backend/tests
 python -m pytest backend/tests/trade_news/test_pipeline.py backend/tests/trade_news/test_traffic.py backend/tests/trade_news/test_daily_scheduler.py backend/tests/test_shortnews_isolated_contract.py
 ```
@@ -162,5 +165,7 @@ python -m pytest backend/tests/trade_news/test_pipeline.py backend/tests/trade_n
 # Linux에서 실행: Windows는 프로세스 그룹·파이프 감시 API를 지원하지 않음
 python -m pytest backend/tests/trade_news/test_daily_timeout.py backend/tests/trade_news/test_daily_vector.py -q
 ```
+
+2026-11-06 후속 P3 리뷰 5건 검증: 전체 unittest 1,712개 실행, 실패 0개(제외 49개); Linux S3·UN·이관 집중 125개 및 프로세스 종료·복구 33개 전부 통과. 전체 실행 뒤 추가한 중단 다운로드 정리 및 구형 캐시 호환 보완은 최종 신규 회귀 13개로 Windows·Linux에서 각각 통과했다. 느린 다운로드 중 다른 요청 진행, 실제 별도 프로세스의 읽기 보호, 재시도 가능 오류만 캐시로 복구, 파일 교체 시 재해시, 기사 변경 행·삭제·교체·롤백·BLOB 복원, journal 병합·GC 참조 보존, 최종 저장 충돌의 실패 분류를 검증했다. 모든 검사에서 합성 데이터와 로컬/메모리 저장소를 사용했으며 운영 S3·DB는 변경하지 않았다.
 
 실 AWS 통합 검증은 별도 격리 환경에서 수행해야 한다. S3 403/타임아웃·업로드 후 DB 실패·프로세스 강제 종료·캐시 전체 유실·이중 실행을 확인하고, 배포 서버의 S3 요청 비용과 대형 원본/SQLite snapshot 처리 시간을 측정한다.
