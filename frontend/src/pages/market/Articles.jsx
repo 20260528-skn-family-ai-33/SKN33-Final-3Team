@@ -11,7 +11,8 @@ import bandArticles from '../../assets/band-articles.jpg'
 
 const PAGE_SIZE = 5
 const toDot = d => (d ? d.replaceAll('-', '.') : '')
-const ask = a => `/analysis?ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`
+// 새 채팅방을 만들어 이 질문을 바로 보낸다(Analysis의 new=1)
+const ask = a => `/analysis?new=1&ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
 
 export default function Articles({ route }) {

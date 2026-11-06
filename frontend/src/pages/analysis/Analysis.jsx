@@ -1,6 +1,7 @@
 // BS14 AI분석(대화·리포트 조건·생성 진행·일반 답변·표 보기) · BS15 리포트 생성 완료
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { allPages, useApp } from '../../store'
+import { navigate } from '../../router'
 import { Band } from '../../components/layout'
 import { Btn, Check, Modal, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
@@ -267,7 +268,7 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
 export default function Analysis({ route }) {
   const { session, chats, refreshChats, refreshReports, addInterests, run, notify } = useApp()
   const [activeId, setActiveId] = useState(route.query.get('chat') || chats[0]?.id)
-  const [input, setInput] = useState(route.query.get('ask') || '')
+  const [input, setInput] = useState(route.query.get('new') === '1' ? '' : route.query.get('ask') || '')
   const [modal, setModal] = useState(null)
   const [rename, setRename] = useState('')
   const [messages, setMessages] = useState([])
@@ -347,11 +348,13 @@ export default function Analysis({ route }) {
     const data = await api('/chat/sessions', { method: 'POST', body: {} })
     await refreshChats(); setActiveId(data.session.session_id); setMessages([]); setJob(null); setDraft(null); setInput(''); setDrawer(false)
   })
-  const send = async () => {
-    if (!input.trim() || busy) return
+  // newRoom: 기사 화면의 "AI에게 물어보기"처럼 새 채팅방을 만들어 바로 묻는다(23번)
+  const send = async (text = input, newRoom = false) => {
+    if (!text.trim() || busy) return
+    const input = text
     setBusy(true); setSending(input)
     await run(async () => {
-      let id = activeId
+      let id = newRoom ? null : activeId
       if (!id) { const data = await api('/chat/sessions', { method: 'POST', body: {} }); id = data.session.session_id; setActiveId(id) }
       if (pending.current?.text !== input || pending.current?.sessionId !== id) pending.current = { text: input, sessionId: id, id: requestId() }
       const data = await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: { question: input, client_message_id: pending.current.id } })
@@ -362,6 +365,14 @@ export default function Analysis({ route }) {
     })
     setBusy(false); setSending(null)
   }
+  const askedFromLink = useRef(false)
+  useEffect(() => {
+    const question = route.query.get('ask')
+    if (route.query.get('new') !== '1' || !question || askedFromLink.current) return
+    askedFromLink.current = true
+    navigate('/analysis', { replace: true })   // 새로고침해도 같은 질문을 다시 보내지 않는다
+    send(question, true)
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps -- 처음 열 때 한 번만
   const saveAsReport = (conditions, after) => { setDraft({ options: optionsFor(conditions), after }); setScrollTo('report-form') }
   const addInterest = answer => {
     const rows=answer.tables.flatMap(t=>t.rows||[])
