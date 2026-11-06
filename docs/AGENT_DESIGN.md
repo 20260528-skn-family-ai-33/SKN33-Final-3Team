@@ -1141,6 +1141,7 @@ Redis 컨텍스트·세션 잠금·체크포인터 연결과 채팅 API 변경 �
 
 ### D-99. 대화·용어 질문 (`CONVERSATION`, 2026-11-06 사용자 결정)
 - "이전 질문 뭐였더라?"처럼 이전 대화 자체를 묻는 질문과 "HS코드가 뭐야?" 같은 무역 용어 질문은 새 intent `CONVERSATION`이다. D-98(TEXT)만으로는 플래너가 통계 분석으로 보내 실패했다.
+- 플래너 LLM이 무역 용어(HS·관세·FTA·원산지·통관·무역·수출·수입 등, 설정 `API_CHAT_TRADE_TERMS`)가 든 질문을 범위 밖으로 내면 코드가 `CONVERSATION`으로 바꾼다(`planner.rescue_trade_terms`). 2026-11-06에 "hs코드가 뭐야?"가 가끔 범위 밖으로 분류됐다.
 - 단계가 없다(`NO_STEP_INTENTS`). 결과는 ANSWERED이며, `compose_text`가 최근 5턴의 질문·요약(`recent`)만 보고 결론 1~3문장을 쓴다. 이전 대화가 없으면 없다고 쓴다. 설명은 쓰지 않는다.
 - 숫자는 recent 요약에 있는 값만 허용한다(`verify.check_history`). 요약 숫자는 이미 검증을 통과했다(D-52). 용어 설명에는 숫자를 쓰지 않는다. 다른 숫자는 "확인 필요"로 표시한다.
 - 조건이 없어 대화방의 이전 조건을 바꾸지 않는다. API `tasks[].answer_format`은 `TEXT`다. 이전 결과를 다시 조회·계산해 달라는 요청은 해당 분석 intent다.
