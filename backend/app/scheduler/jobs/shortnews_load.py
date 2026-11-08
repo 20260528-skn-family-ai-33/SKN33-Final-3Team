@@ -16,6 +16,7 @@ from backend.app.models.news import ArticleTag
 from backend.app.scheduler.jobs import news_load as news_job
 from backend.app.services import news_load as news, shortnews_load as sn
 from backend.app.services import news_schema
+from backend.app.services.article_sources import LEGACY_SHORT_NEWS
 
 ROOT = Path(__file__).resolve().parents[4]
 LOG_DIR = ROOT / "data" / "shortnews" / "logs"
@@ -23,7 +24,7 @@ SOURCE = Source(sn.SOURCE_CODE, "KOTRA 단신속보",
                 {"provider": "KOTRA", "api": "https://apis.data.go.kr/B410001/shortBreakingNews/shortBreakingNews",
                  "format": "json/xml"})
 JOB_NAME = "SHORTNEWS_LOAD"
-LEGACY_SOURCE_CODE = "KOTRA_SHORTNEWS"
+LEGACY_SOURCE_CODE = LEGACY_SHORT_NEWS
 log = logging.getLogger("shortnews_load")
 
 

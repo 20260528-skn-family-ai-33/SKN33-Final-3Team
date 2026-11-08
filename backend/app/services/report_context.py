@@ -15,10 +15,11 @@ from backend.app.api import news, trade
 from backend.app.api.common import clean, month_end, percentage, require, shift_month
 from backend.app.scheduler.jobs.major_issue_detect import (MARKET, MINIMUM_RATIO, SHORT_NEWS, keyword_counts, keyword_issues,
                                                            product_counts, product_issues, spike, trade_regulation_issues, windows)
+from backend.app.services.article_sources import KEYWORD_DAILY_SOURCES, PRODUCT_DAILY_SOURCES, SHORT_NEWS_SOURCES
 
 
 KINDS = {'RPT_MONTHLY': '월간', 'RPT_WEEKLY': '주간', 'RPT_QUARTERLY': '분기', 'RPT_ON_DEMAND': '요청형'}
-SOURCES = {'KOTRA_MARKET': 'KOTRA 해외시장뉴스', 'KOTRA_SHORT_NEWS': 'KOTRA 단신속보',
+SOURCES = {MARKET: 'KOTRA 해외시장뉴스', **dict.fromkeys(SHORT_NEWS_SOURCES, 'KOTRA 단신속보'),
            'HANKYUNG': '한국경제', 'FNNEWS': '파이낸셜뉴스'}
 WEEKLY_ISSUE_LIMIT = 10  # 주간 리포트에 싣는 급증 키워드·주요 이슈 최대 건수
 
@@ -324,10 +325,10 @@ def _issue_has_article(store, uid, payload, ids, hs=(), countries=()):
         end = date.fromisoformat(payload['window_end']) if payload.get('window_end') else fallback[1]
     if target.get('keyword_text'):
         members = select(tags.c.article_id).where(tags.c.keyword_text == target['keyword_text'])
-        sources = (MARKET, SHORT_NEWS)
+        sources = KEYWORD_DAILY_SOURCES
     elif target.get('hs_code'):
         members = select(tags.c.article_id).where(tags.c.hs_code.startswith(target['hs_code']), tags.c.hs_ver == target.get('hs_ver'))
-        sources = (MARKET,)
+        sources = PRODUCT_DAILY_SOURCES
     elif ids:
         members = ids
     else:
@@ -385,8 +386,8 @@ def _weekly(store, uid, saved, ctx, names, start, end):
     matched = stmt.order_by(None).subquery()
     counts = store.rows(select(matched.c.source_code, func.count().label('count')).group_by(matched.c.source_code))
     total = sum(r['count'] for r in counts)
-    short = sum(r['count'] for r in counts if r['source_code'] == 'KOTRA_SHORT_NEWS')
-    source_label = ', '.join(SOURCES.get(r['source_code'], r['source_code']) for r in counts) or '관련 기사 없음'
+    short = sum(r['count'] for r in counts if r['source_code'] in SHORT_NEWS_SOURCES)
+    source_label = ', '.join(dict.fromkeys(SOURCES.get(r['source_code'], r['source_code']) for r in counts)) or '관련 기사 없음'
     ctx['meta']['data_basis'] = source_label + ' · 공개 기사 · 사용자 차단 키워드 적용'
     spikes = _keyword_spikes(store, uid, saved, names, start, end)
     issues, keyword_ready, product_ready = _major_issues(store, uid, saved, names, start, end)
@@ -411,12 +412,12 @@ def _weekly(store, uid, saved, ctx, names, start, end):
         country_stmt = country_stmt.where(tags.c.country_code.in_(saved['country_codes']))
     by_country = defaultdict(lambda: {'market': 0, 'short': 0})
     for row in store.rows(country_stmt.group_by(tags.c.country_code, matched.c.source_code)):
-        by_country[row['country_code']]['short' if row['source_code'] == 'KOTRA_SHORT_NEWS' else 'market'] += row['count']
+        by_country[row['country_code']]['short' if row['source_code'] in SHORT_NEWS_SOURCES else 'market'] += row['count']
     ctx['country_counts'] = [{'country_code': c, 'name': names.get(c, c),
                               'is_interest': c in saved.get('country_codes', []), **values}
                              for c, values in sorted(by_country.items())]
     ctx['country_count_note'] = '국가 태그별 집계입니다. 다국가 기사는 각 국가에 포함되며, 국가 미분류 기사는 이 표에서 제외됩니다.'
-    shorts = store.rows(stmt.where(store.t('article').c.source_code == 'KOTRA_SHORT_NEWS').limit(5))
+    shorts = store.rows(stmt.where(store.t('article').c.source_code.in_(SHORT_NEWS_SOURCES)).limit(5))
     ctx['short_news'] = {'total': short, 'items': [
         {'published_date': a['published_date'], 'country': ', '.join(names.get(c, c) for c in a['country_codes']) or '국가 미분류',
          'content': a['title']} for a in news.article_views(store, shorts, uid)]}

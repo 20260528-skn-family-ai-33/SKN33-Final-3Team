@@ -33,12 +33,11 @@ from backend.app.api.news import TRADE_REGULATION_CATEGORIES, blocked_article
 from backend.app.api.subscriptions import sources_ready
 from backend.app.db.batch_log import Source, track_batch
 from backend.app.db.session import make_engine
+from backend.app.services.article_sources import KEYWORD_DAILY_SOURCES, MARKET, PRODUCT_DAILY_SOURCES, SHORT_NEWS
 
 KST = ZoneInfo("Asia/Seoul")
 JOB_NAME = "MAJOR_ISSUE_DETECT"
 TARGET = "news_keyword_daily"
-MARKET = "KOTRA_MARKET"
-SHORT_NEWS = "KOTRA_SHORT_NEWS"
 SOURCE = Source(MARKET, "KOTRA 해외시장뉴스")
 MINIMUM_RATIO = 3
 BASELINE_WEEKS = 8
@@ -88,7 +87,7 @@ def keyword_counts(store, start, end, countries=(), blocked=()):
         scope, t.c.metric_date >= start, t.c.metric_date <= end).group_by(t.c.keyword_text, t.c.country_code))
     totals = {(keyword, country): int(total) for keyword, country, total in rows}
     hidden = {}
-    for row in _hidden_tags(store, lambda tag: [tag.c.keyword_text], (MARKET, SHORT_NEWS), start, end, countries, blocked):
+    for row in _hidden_tags(store, lambda tag: [tag.c.keyword_text], KEYWORD_DAILY_SOURCES, start, end, countries, blocked):
         hidden.setdefault((row[0], row[1] if countries else None), set()).add(row[-1])
     return _subtract(totals, hidden)
 
@@ -100,7 +99,7 @@ def product_counts(store, start, end, blocked=()):
         t.c.country_code.is_(None), t.c.metric_date >= start, t.c.metric_date <= end).group_by(t.c.hs_code, t.c.hs_ver))
     totals = {(code, version): int(total) for code, version, total in rows}
     hidden = {}
-    for code, version, article_id in _hidden_tags(store, lambda tag: [tag.c.hs_code, tag.c.hs_ver], (MARKET,), start, end, blocked=blocked):
+    for code, version, article_id in _hidden_tags(store, lambda tag: [tag.c.hs_code, tag.c.hs_ver], PRODUCT_DAILY_SOURCES, start, end, blocked=blocked):
         if code:
             hidden.setdefault((code, version), set()).add(article_id)
             hidden.setdefault((code[:4], version), set()).add(article_id)
@@ -152,7 +151,7 @@ def keyword_issues(store, target):
     recent_window = windows(target)[0]
     topics = store.t("keyword_topic")
     for (keyword, _), count, average, ratio in _spikes(lambda start, end: keyword_counts(store, start, end), target):
-        ids = _articles(store, lambda t, k=keyword: t.c.keyword_text == k, (MARKET, SHORT_NEWS), *recent_window)
+        ids = _articles(store, lambda t, k=keyword: t.c.keyword_text == k, KEYWORD_DAILY_SOURCES, *recent_window)
         if not ids:
             log.warning("major_issue_no_visible_evidence keyword=%s target=%s", keyword, target)
             continue
@@ -168,7 +167,7 @@ def product_issues(store, target):
     names = store.t("hs_code")
     for (code, version), count, average, ratio in _spikes(lambda start, end: product_counts(store, start, end), target):
         # HS4 집계에는 그 아래 HS6 태그 기사가 들어 있다
-        ids = _articles(store, lambda t, c=code, v=version: (t.c.hs_code.startswith(c)) & (t.c.hs_ver == v), (MARKET,), *recent_window)
+        ids = _articles(store, lambda t, c=code, v=version: (t.c.hs_code.startswith(c)) & (t.c.hs_ver == v), PRODUCT_DAILY_SOURCES, *recent_window)
         if not ids:
             log.warning("major_issue_no_visible_evidence hs_code=%s target=%s", code, target)
             continue
