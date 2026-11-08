@@ -54,10 +54,15 @@ def test_timeout_is_recorded_and_same_day_recovers(local, monkeypatch, stage):
 
 def test_timeout_after_article_commit_preserves_data_and_budget(local, monkeypatch):
     fixtures(local)
-    monkeypatch.setenv('NEWS_LOAD_TIMEOUT_SECONDS', '3')
+    # Reach the first real commit before the injected 60-second pause. Cold
+    # imports can exceed three seconds on CI/WSL; timeout-before-commit would
+    # exercise a different recovery boundary than this test promises.
+    timeout = 10
+    monkeypatch.setenv('NEWS_LOAD_TIMEOUT_SECONDS', str(timeout))
     result = job.run(local.root, now=NOW, env_path=local.env,
                      runner=offline_runner(local, [], 'pause_after_article_commit', bounded=True))
     assert result['mysql']['reason'] == 'timeout' and (local.tmp / 'article_committed').exists()
+    assert result['mysql']['timeout_seconds'] == timeout
     with local.db.connect() as conn:
         assert conn.execute(text('SELECT COUNT(*) FROM article')).scalar() == 1
     with sqlite3.connect(local.root / 'articles.sqlite3') as conn:

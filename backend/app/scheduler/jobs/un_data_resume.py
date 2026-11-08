@@ -7,6 +7,8 @@ from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from filelock import FileLock, Timeout
 from contextlib import contextmanager
+from backend.app.storage.workspace import stored, checkpoint
+from backend.app.storage.datasets import un_inputs
 from backend.app.scheduler.collectors.un_data.api import ApiRequestError
 from backend.app.scheduler.collectors.un_data.continuation import CachedClient,BatchedClient,RequestBudgetExceeded
 from backend.app.scheduler.collectors.un_data.pipeline import require
@@ -81,7 +83,8 @@ def finalize_attempt(state_dir,attempt):
     try:
         job.save(prepared,{'attempt':attempt['token']})
         attempt['publishing']=True
-        os.replace(prepared,folder/RECOVERY_RELEASE)  # 완료 확정 지점. 이 뒤에는 파일 정리가 없습니다.
+        os.replace(prepared,folder/RECOVERY_RELEASE)  # 로컬 원자적 교체. S3 모드의 영구 확정은 아래 checkpoint.
+        checkpoint(folder/RECOVERY_RELEASE)
     except BaseException:
         # 실패 경로의 정리 오류는 기존 저장 오류·인터럽트를 덮지 않습니다.
         try:prepared.unlink(missing_ok=True)
@@ -130,6 +133,8 @@ def continuation_lock(state_dir):
 
 
 # 완료·대기·재시도 소진 상태를 구분합니다. 수동 --resume-now만 재시도 횟수를 초기화합니다.
+@stored('raw/un-data/runtime', lambda args: args['state_dir'])
+@un_inputs
 def run_resumable(engine,client,scope_path,state_dir,today=None,*,budget=CALL_BUDGET,now=None,resume_now=False):
     from backend.app.scheduler.jobs import un_data_refresh as job
     require(isinstance(budget,int) and not isinstance(budget,bool) and budget>0,'호출 예산은 양의 정수여야 합니다')

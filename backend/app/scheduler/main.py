@@ -40,6 +40,10 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import dotenv_values
+from contextlib import nullcontext
+from backend.app.storage.workspace import workspace
+from backend.app.storage.objects import Conflict, enabled
+from filelock import Timeout
 
 from backend.app.scheduler.jobs import hs_code_embed as embed
 from backend.app.scheduler.jobs import hs_code_refresh as refresh
@@ -132,19 +136,10 @@ def un_refresh_job(state_dir=UN_STATE, scope_path=UN_SCOPE, api_env=UN_ENV):
         log.warning('UN 점검이 이미 실행 중입니다. 중복 실행을 건너뜁니다.')
         return 'ALREADY_RUNNING'
     try:
-        if not (Path(state_dir)/'checkpoint.json').is_file():
-            log.warning('UN 초기 체크포인트가 없습니다. un_data_refresh --initialize-csv --state-dir %s를 먼저 실행하세요.', state_dir)
-            return 'NOT_INITIALIZED'
-        # UN의 의존성·설정 오류도 기존 HS 작업 등록/실행을 막지 않도록 여기서 import.
-        from backend.app.scheduler.jobs.un_data_refresh import execute_once
-        result=execute_once(scope_path, state_dir, api_env)
-        report_un_status(state_dir)
-        if isinstance(result,dict) and result.get('status') in ('CANCELLED','RECOVERY_REQUIRED'):
-            return result['status']
-        if isinstance(result,dict) and result.get('status') in ('WAITING','DEFERRED','RETRY_EXHAUSTED','FAILED'):
-            log.warning('UN 재개 상태: %s, 다음 실행: %s',result['status'],result.get('next_attempt_at'))
-            return result['status']
-        return 'SUCCESS'
+        with workspace(state_dir, 'raw/un-data/runtime') if enabled() else nullcontext():
+            return _un_refresh(state_dir, scope_path, api_env)
+    except (Timeout, Conflict):
+        return 'ALREADY_RUNNING'
     except Exception:
         log.exception('UN 점검 실패: 다른 배치 작업은 계속 실행됩니다. 정상 점검일 유지 여부를 확인하고 재시도하세요.')
         return 'FAILED'
@@ -152,8 +147,42 @@ def un_refresh_job(state_dir=UN_STATE, scope_path=UN_SCOPE, api_env=UN_ENV):
         UN_RUN_LOCK.release()
 
 
+def _un_refresh(state_dir, scope_path, api_env):
+    """Called only after acquiring the process and S3 workspace locks."""
+    if not (Path(state_dir)/'checkpoint.json').is_file():
+        log.warning('UN 초기 체크포인트가 없습니다. un_data_refresh --initialize-csv --state-dir %s를 먼저 실행하세요.', state_dir)
+        return 'NOT_INITIALIZED'
+    # UN의 의존성·설정 오류도 기존 HS 작업 등록/실행을 막지 않도록 여기서 import.
+    from backend.app.scheduler.jobs.un_data_refresh import execute_once
+    result=execute_once(scope_path, state_dir, api_env)
+    report_un_status(state_dir)
+    if isinstance(result,dict) and result.get('status') in ('CANCELLED','RECOVERY_REQUIRED'):
+        return result['status']
+    if isinstance(result,dict) and result.get('status') in ('WAITING','DEFERRED','RETRY_EXHAUSTED','FAILED'):
+        log.warning('UN 재개 상태: %s, 다음 실행: %s',result['status'],result.get('next_attempt_at'))
+        return result['status']
+    return 'SUCCESS'
+
+
 # 매분 영속 상태의 기한만 확인합니다. 대기 중에는 API/DB 연결을 만들지 않습니다.
 def un_resume_job(state_dir=UN_STATE,scope_path=UN_SCOPE,api_env=UN_ENV):
+    if not UN_RUN_LOCK.acquire(blocking=False):
+        return 'ALREADY_RUNNING'
+    try:
+        with workspace(state_dir, 'raw/un-data/runtime', write=False, reject_busy=True) if enabled() else nullcontext():
+            decision = _un_resume_status(state_dir)
+    except (Timeout, Conflict):
+        return 'ALREADY_RUNNING'
+    except Exception:
+        log.exception('UN 자동 재개 상태 확인 실패')
+        return 'FAILED'
+    finally:
+        UN_RUN_LOCK.release()
+    # Release the read workspace before upgrading. The writer restores and checks again.
+    return un_refresh_job(state_dir, scope_path, api_env) if decision == 'RUN' else decision
+
+
+def _un_resume_status(state_dir):
     from backend.app.scheduler.jobs.un_data_resume import read_state,active_is_idle,recovery_blocked
     try:
         if recovery_blocked(state_dir):
@@ -169,13 +198,13 @@ def un_resume_job(state_dir=UN_STATE,scope_path=UN_SCOPE,api_env=UN_ENV):
             if not active_is_idle(state_dir):
                 return 'ALREADY_RUNNING'
             # 실행 진입점에서 잠금을 다시 획득하고 상태를 재확인하므로 경쟁 실행도 겹치지 않습니다.
-            return un_refresh_job(state_dir,scope_path,api_env)
+            return 'RUN'
         report_un_status(state_dir)
         if not state or state['status']!='WAITING' or not state.get('next_attempt_at'):
             return 'NO_RETRY'
         if datetime.now(KST)<datetime.fromisoformat(state['next_attempt_at']):
             return 'DEFERRED'
-        return un_refresh_job(state_dir,scope_path,api_env)
+        return 'RUN'
     except Exception:
         log.exception('UN 자동 재개 상태 확인 실패')
         return 'FAILED'

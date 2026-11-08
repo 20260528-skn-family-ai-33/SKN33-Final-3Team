@@ -9,6 +9,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from filelock import FileLock
+from backend.app.storage.workspace import stored
 
 ROOT = Path(__file__).resolve().parents[3]
 log = logging.getLogger(__name__)
@@ -78,6 +79,7 @@ def register_records(records, engine=None):
             engine.dispose()
 
 
+@stored('models/versions', lambda args: Path(args['version_dir']).resolve().parent.parent)
 def sync_version(version_dir, engine=None):
     """DB 장애 시 PENDING을 남긴다. 재시도는 학습 없이 이 함수/CLI만 실행한다."""
     version_dir = Path(version_dir).resolve()
@@ -108,9 +110,14 @@ def main():
     parser.add_argument("command", choices=["sync"])
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data/ml")
     args = parser.parse_args()
-    versions = sorted(p for p in (args.data_dir / "versions").glob("*") if (p / "registry.json").is_file())
+    raise SystemExit(sync_all(args.data_dir))
+
+
+@stored('models/versions', lambda args: args['data_dir'])
+def sync_all(data_dir):
+    versions = sorted(p for p in (data_dir / "versions").glob("*") if (p / "registry.json").is_file())
     if not versions:
-        parser.exit(1, "동기화할 버전 기록이 없습니다.\n")
+        raise ValueError('동기화할 버전 기록이 없습니다.')
     failed = 0
     for directory in versions:
         if read_json(directory / "registry_sync.json", {}).get("status") == "SYNCED":
@@ -118,7 +125,7 @@ def main():
         result = sync_version(directory)
         print(directory.name, result["status"])
         failed += result["status"] != "SYNCED"
-    raise SystemExit(1 if failed else 0)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

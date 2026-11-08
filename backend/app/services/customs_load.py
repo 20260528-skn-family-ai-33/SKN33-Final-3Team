@@ -40,8 +40,9 @@ KEYS = "(SELECT DISTINCT trade_month,country_code,hs6_code,hs_ver FROM customs_s
 def safe_error(exc):
     """DB 예외의 본문에는 접속 정보가 포함될 수 있어 종류와 숫자 코드만 반환한다."""
     original = getattr(exc, "orig", exc)
+    from backend.app.storage.objects import StorageError
     code = original.args[0] if original.args and isinstance(original.args[0], int) else None
-    retryable = isinstance(exc, RetryableError) or (
+    retryable = (isinstance(exc, StorageError) and exc.retryable) or isinstance(exc, RetryableError) or (
         isinstance(exc, OSError) and not isinstance(exc, (FileNotFoundError, PermissionError))) or (
         code in {1040, 1042, 1047, 1158, 1159, 1160, 1161, 1205, 1213, 2002, 2003, 2006, 2013})
     return {"error_type": type(exc).__name__, "db_error_code": code, "retryable": retryable,

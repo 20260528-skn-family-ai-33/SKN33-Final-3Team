@@ -221,13 +221,18 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         rid=path['report_id']; fmt=path['format'].lower(); require(fmt in MIMES,'지원하지 않는 파일 형식입니다.','UNSUPPORTED_FORMAT',422)
         record=store.owned('report','report_id',rid,uid); require(record['status']=='READY','파일 생성 중입니다.','REPORT_NOT_READY',409)
         filename=reports.download_filename(store,record,fmt)
-        if fmt=='xlsx':
-            content=record['content_json']; tables=[t for s in content['sections'] for t in s['tables']]
-            return file_response(xlsx_bytes(tables,content['meta'],content.get('sql',[])),filename,fmt)
         file=(record.get('files_json') or {}).get(fmt.upper())
+        from backend.app.api.report_storage import report_storage
+        storage=report_storage(settings)
+        if fmt=='xlsx' and file is None:
+            content=record['content_json']; tables=[t for s in content['sections'] for t in s['tables']]
+            data=xlsx_bytes(tables,content['meta'],content.get('sql',[]))
+            file=storage.write(f'{uid}/{rid}/legacy/report.xlsx',data)
+            t=store.t('report')
+            store.c.execute(update(t).where(t.c.report_id==rid).values(
+                files_json={**(record.get('files_json') or {}),'XLSX':file}))
         require(file is not None,'선택하지 않았거나 준비되지 않은 형식입니다.','NOT_FOUND',404)
-        from backend.app.api.report_storage import LocalReportStorage
-        return file_response(LocalReportStorage(settings.files).read(file),filename,fmt)
+        return file_response(storage.read(file),filename,fmt)
 
     if identity==49: return reports.subscription_list(store,uid)
     if identity==50: return reports.save_subscriptions(store,uid,body)

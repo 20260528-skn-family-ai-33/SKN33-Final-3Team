@@ -1,5 +1,7 @@
 """경로 사전 검사·중복 알림·실제 재개 제어의 결합 회귀 (SQLite/모의 API)."""
 import shutil
+import sys
+from pathlib import Path
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -28,6 +30,10 @@ class PathNoticeIntegrationTest(unittest.TestCase):
         self.run_resume(budget=6);self.cancel()
         original=self.state
         deep=original.parent/('deep_'+'a'*120)
+        if sys.platform == 'win32':
+            # Build the fixture via an extended path; the application must still reject
+            # this overlong state directory before reading or modifying its contents.
+            deep=Path('\\\\?\\' + str(deep.resolve()))
         shutil.copytree(original,deep)
         before={p.relative_to(deep):p.read_bytes() for p in deep.rglob('*.json')}
         rows=self.snapshot();client=self.client()
@@ -40,7 +46,9 @@ class PathNoticeIntegrationTest(unittest.TestCase):
             self.assertEqual(rows,self.snapshot())
             self.assertEqual(before,{p.relative_to(deep):p.read_bytes() for p in deep.rglob('*.json')})
             self.assertTrue(resume.recovery_blocked(deep))
-        finally:self.state=original
+        finally:
+            self.state=original
+            shutil.rmtree(deep)
         self.assertEqual(self.run_resume()['status'],'CANCELLED')
         self.assertEqual(self.run_resume(resume_now=True)['status'],'DB_VERIFIED')
 

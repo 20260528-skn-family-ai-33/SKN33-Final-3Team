@@ -14,7 +14,7 @@
 - 품목 태그는 hs_code 테이블에 있는 코드만 넣습니다. hs_code가 비어 있으면 품목 태그·집계 0건으로 넘어가고 경고만 남깁니다.
 - 전체를 한 트랜잭션으로 넣습니다. 중간에 실패하면 모두 롤백되어 아무것도 반영되지 않습니다.
 - 실행할 때마다 batch_run에 한 건 기록합니다 (job NEWS_LOAD, 대상 article, 수신 = 원본 기사 수, API 호출 0).
-- 결과·오류는 화면과 data/news/logs/news_load_<시각>.log에 남깁니다.
+- 결과·오류는 화면과 runtime/logs/news_load/news_load_<시각>.log에 남깁니다.
 """
 import argparse
 import csv
@@ -23,6 +23,7 @@ import sys
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
+from backend.app.storage.datasets import managed_files
 
 from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.dialects import mysql, sqlite
@@ -41,7 +42,7 @@ from backend.app.services.article_sources import KEYWORD_DAILY_SOURCES, PRODUCT_
 ROOT = Path(__file__).resolve().parents[4]
 RAW_DIR = ROOT / "data" / "news"
 DEFAULT_CLEAN = ROOT / "data" / "news_keywords" / "news_keywords_clean.csv"
-LOG_DIR = RAW_DIR / "logs"
+LOG_DIR = ROOT / 'runtime' / 'logs' / 'news_load'
 TABLES = [Article, ArticleTag, NewsKeywordDaily, NewsProductDaily]
 JOB_NAME = "NEWS_LOAD"
 SOURCE = Source(nl.SOURCE_CODE, "KOTRA 해외시장뉴스",
@@ -239,6 +240,7 @@ def load(engine, raws, cleans):
             "keyword_daily": kw_rows, "product_daily": hs_rows}
 
 
+@managed_files('raw_path', 'clean_path', defaults={'raw_path': RAW_DIR}, outputs=('log_dir',))
 def run(raw_path=None, clean_path=DEFAULT_CLEAN, db_url=None, log_dir=LOG_DIR, track=True):
     """적재를 실행하고 결과·오류를 로그에 남깁니다. 성공 0, 실패 1. track=False면 batch_run 기록을 생략합니다."""
     log_path = setup_log(log_dir)

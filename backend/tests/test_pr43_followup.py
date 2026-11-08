@@ -110,10 +110,35 @@ class FollowupRegressionTest(unittest.TestCase):
         self.signup(); base.BackendApiTest.seed_review_articles(self)
         with self.engine.begin() as c:
             c.execute(update(self.meta.tables['article']).values(source_code='HANKYUNG'))
-        _,_,job=self.ask('12월 기사',intent='LOCAL_ISSUES')
+        from backend.tests.chat_news_fixture import indexed_news
+        with indexed_news(self):
+            _,_,job=self.ask('12월 기사',intent='LOCAL_ISSUES')
         self.assertTrue(job['answer']['articles'])
         self.assertTrue(all(a['source_code']=='HANKYUNG' for a in job['answer']['articles']))
         self.assertNotIn('KOTRA',job['answer']['text'])
+
+    def test_chat_news_summary_and_quotes_survive_history_reload(self):
+        from backend.tests.chat_news_fixture import indexed_news
+        self.signup()
+        base.BackendApiTest.seed_review_articles(self)
+        with indexed_news(self):
+            sid, _, job = self.ask('12월 기사 내용을 요약해줘', intent='RAG')
+        answer = job['answer']
+        self.assertEqual(answer['articles'][0]['sentences'][0]['quotes'], ['검수 본문'])
+        self.assertIn('[1]', answer['text'])
+        messages = self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['items']
+        self.assertEqual(messages[-1]['answer'], answer)
+
+    def test_chat_latest_uses_publication_dates_and_does_not_invent_quotes(self):
+        from backend.tests.chat_news_fixture import indexed_news
+        self.signup()
+        base.BackendApiTest.seed_review_articles(self)
+        with indexed_news(self):
+            _, _, job = self.ask('최신 기사 목록', intent='LOCAL_ISSUES', latest_articles=True, period=None)
+        answer = job['answer']
+        self.assertEqual(answer['article_period'], {'start':'2025-12-02', 'end':'2025-12-15'})
+        self.assertEqual([c['published_date'] for c in answer['articles']], ['2025-12-15'])
+        self.assertEqual(answer['articles'][0]['sentences'], [])
 
     def test_legacy_migration_stops_without_touching_rows(self):
         with self.engine.begin() as c:

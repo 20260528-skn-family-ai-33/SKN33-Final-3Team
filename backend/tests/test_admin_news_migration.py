@@ -177,6 +177,9 @@ class ResumeTest(unittest.TestCase):
                         self.assertTrue(first['preserved']['article']['unchanged'])
                         self.assertEqual(first['steps'][-1]['status'], 'DEFERRED')
                         second = migration.run(apply=True)
+                        self.assertNotEqual(first['backup'], second['backup'])
+                        self.assertTrue(Path(first['backup']).is_dir())
+                        self.assertTrue(Path(second['backup']).is_dir())
                         self.assertEqual(second['backfilled_rows'], {})
                         self.assertEqual(second['steps'][0]['status'], 'EXISTS')
                         self.assertEqual(conn.trigger_calls, 0)
@@ -188,6 +191,12 @@ class ResumeTest(unittest.TestCase):
 
     def test_resume_expected_backfill_and_repeat_preserve_existing_values(self):
         self.exercise()
+
+    def test_same_clock_tick_keeps_separate_backups(self):
+        fixed = migration.datetime(2026, 11, 6, 12, 0, 0)
+        with patch.object(migration, 'datetime') as clock:
+            clock.now.return_value = fixed
+            self.exercise()
 
     def test_unexpected_change_still_fails_and_records_failure(self):
         self.exercise(corrupt=True)

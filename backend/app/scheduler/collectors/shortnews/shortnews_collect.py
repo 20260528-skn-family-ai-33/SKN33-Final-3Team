@@ -17,6 +17,9 @@ from dotenv import dotenv_values
 BASE = Path(__file__).resolve().parent
 # 인증키는 저장소 루트의 .env에서 읽습니다.
 ENV_PATH = Path(__file__).resolve().parents[5] / ".env"
+if not __package__:
+    sys.path.insert(0, str(ENV_PATH.parent))
+from backend.app.storage.datasets import collected
 API_URL = "https://apis.data.go.kr/B410001/shortBreakingNews/shortBreakingNews"
 # 응답 필드명을 유지한 단신속보뉴스 원본 CSV의 기본 컬럼입니다.
 RAW_FIELDS = ["kbc", "nttSn", "nttSj", "nttCn", "regn", "nat",
@@ -132,6 +135,7 @@ def read_key(env_path):
 
 
 # 기사 ID 중복과 전체 건수 변화를 확인하며 수집 결과와 완료 통계를 저장합니다.
+@collected('shortnews-history', 'directory')
 def collect(args, directory, key=None):
     key = key or read_key(args.env)
     params = {"serviceKey": unquote(key), "type": args.format, "numOfRows": args.page_size}

@@ -1,0 +1,119 @@
+{
+  "dataset_id": "synthetic-contract-smoke-v1",
+  "split": "dev",
+  "synthetic": true,
+  "cases": [
+    {
+      "case_id": "synthetic-case-1",
+      "request": {
+        "request_id": "synthetic-request-1",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "chat",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "relevant_articles": [
+        {
+          "source_code": "KOTRA_MARKET",
+          "external_id": "synthetic-1"
+        }
+      ]
+    },
+    {
+      "case_id": "synthetic-case-2",
+      "request": {
+        "request_id": "synthetic-request-2",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "chat",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "relevant_articles": [
+        {
+          "source_code": "KOTRA_SHORT_NEWS",
+          "external_id": "synthetic-2"
+        }
+      ]
+    },
+    {
+      "case_id": "synthetic-case-3",
+      "request": {
+        "request_id": "synthetic-request-3",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "chat",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "relevant_articles": [
+        {
+          "source_code": "HANKYUNG",
+          "external_id": "synthetic-3"
+        }
+      ]
+    },
+    {
+      "case_id": "synthetic-case-4",
+      "request": {
+        "request_id": "synthetic-request-4",
+        "query": "미국의 배터리 관련 근거 기사를 찾아줘",
+        "use_case": "chat",
+        "conditions": {
+          "geography": {
+            "mode": "selected",
+            "codes": [
+              "US"
+            ]
+          },
+          "products": [],
+          "period": {
+            "start": "2026-09-01",
+            "end": "2026-09-30"
+          },
+          "blocked_topics": []
+        }
+      },
+      "relevant_articles": [
+        {
+          "source_code": "FNNEWS",
+          "external_id": "synthetic-4"
+        }
+      ]
+    }
+  ]
+}
