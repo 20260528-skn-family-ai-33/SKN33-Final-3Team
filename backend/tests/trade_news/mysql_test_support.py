@@ -72,6 +72,27 @@ def block_external_io(monkeypatch, url=None):
     monkeypatch.setattr(socket.socket, 'connect', checked_connect)
     monkeypatch.setattr(socket.socket, 'connect_ex', checked_connect_ex)
     monkeypatch.setattr(socket, 'getaddrinfo', checked_lookup)
+    if sys.platform == 'win32':
+        # asyncio의 내부 socketpair만 허용합니다. 호출자가 지정한 주소나
+        # 기존 로컬 서버로의 접속은 위 차단 규칙을 계속 따릅니다.
+        def internal_socketpair(family=None, type=socket.SOCK_STREAM, proto=0):
+            family = socket.AF_INET if family is None else family
+            if family != socket.AF_INET or type != socket.SOCK_STREAM or proto != 0:
+                raise ValueError('시험 socketpair는 IPv4 TCP 전용입니다')
+            listener = socket.socket(family, type, proto)
+            client = socket.socket(family, type, proto)
+            try:
+                listener.bind(('127.0.0.1', 0))
+                listener.listen(1)
+                connect(client, listener.getsockname())
+                server, _ = listener.accept()
+                return server, client
+            except BaseException:
+                client.close()
+                raise
+            finally:
+                listener.close()
+        monkeypatch.setattr(socket, 'socketpair', internal_socketpair)
     from apscheduler.schedulers.base import BaseScheduler
     monkeypatch.setattr(BaseScheduler, 'start', deny)
 

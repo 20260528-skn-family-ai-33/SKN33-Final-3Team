@@ -15,6 +15,9 @@ from dotenv import dotenv_values
 BASE = Path(__file__).resolve().parent
 # 인증키는 저장소 루트의 .env에서 읽습니다.
 ENV_PATH = Path(__file__).resolve().parents[5] / ".env"
+if not __package__:
+    sys.path.insert(0, str(ENV_PATH.parent))
+from backend.app.storage.workspace import stored
 ENV_KEY = "customs"
 API_URL = "https://apis.data.go.kr/1220000/nitemtrade/getNitemtradeList"
 # 응답 필드명을 유지한 원본 CSV의 기본 컬럼입니다. 추가 응답 필드가 있으면 뒤에 붙여 저장합니다.
@@ -212,6 +215,7 @@ def summarize(rows, start, end, countries, failed):
     }
 
 
+@stored('raw/customs/history', lambda args: BASE / 'customs_outputs')
 def main():
     parser = argparse.ArgumentParser(description="관세청 수출입실적 원본을 CSV로 수집 (1년·한 달·12개월 이내 구간)")
     parser.add_argument("--year", type=int, default=2025, help="1년(1~12월) 수집 연도 (기본 2025)")
@@ -232,6 +236,9 @@ def main():
         parser.error(f"국가 사전 조회 실패 ({type(error).__name__}); MYSQL_* 설정과 기준정보 SQL 확인")
 
     out_dir = args.output_dir / label
+    from backend.app.storage.objects import enabled, StorageError
+    if enabled() and args.output_dir.resolve() != (BASE / 'customs_outputs').resolve():
+        raise StorageError('S3 mode uses customs_outputs as its disposable working directory')
     cache_dir = out_dir / "_cache"
     log_dir = out_dir / "logs"
     cache_dir.mkdir(parents=True, exist_ok=True)

@@ -138,7 +138,7 @@ class RebuildTest(unittest.TestCase):
             self.assertEqual([d.model_dump() for d in after], [d.model_dump() for d in documents])
             snapshot = store.GenerationStore(self.root).snapshot()
             try:
-                col = snapshot.collection('kotra_article')
+                col = snapshot.collection('total_article')
                 data = store.read_all(col, ['embeddings'])
                 self.assertTrue(all(len(v) == 8 and v[1] == 1 for v in data['embeddings']))
             finally:

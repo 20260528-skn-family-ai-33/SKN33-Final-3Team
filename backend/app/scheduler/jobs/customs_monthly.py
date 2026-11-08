@@ -16,6 +16,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from dotenv import dotenv_values
+from backend.app.storage.workspace import stored, checkpoint
 
 from backend.app.db.session import ENV_PATH, make_engine, mysql_url
 from backend.app.scheduler.collectors.customs import customs_collect as collector
@@ -78,6 +79,7 @@ def pending_months(output, latest, start_month=None):
     return pending
 
 
+@stored('raw/customs/monthly', lambda args: args['options'].get('output', DEFAULT_OUTPUT))
 def startup_job(scheduler, attempt=1, start_month=None, **options):
     """시작 시와 매월 실행 시 누락·실패한 월을 오래된 순서대로 재개한다."""
     try:
@@ -189,6 +191,7 @@ def write_state(path, state):
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+    checkpoint(path)
 
 
 def read_state(path):
@@ -328,6 +331,7 @@ def collect_month(month, directory, env_path, countries, confirmed_empty_countri
     return csv_path
 
 
+@stored('raw/customs/monthly', lambda args: args['output'])
 def run_month(month, *, env_path=ENV_PATH, output=DEFAULT_OUTPUT, hs_ver=None,
               ml_entrypoint=None, refresh=False, confirmed_empty_countries=None):
     try:

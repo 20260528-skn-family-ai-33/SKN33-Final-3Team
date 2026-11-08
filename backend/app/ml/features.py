@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from backend.app.storage.datasets import training_inputs
 
 from backend.app.ml import preprocess as pp
 from backend.app.ml.temporal import dated_external, join_known
@@ -64,6 +65,7 @@ def model_countries(country_table, currencies):
     return countries.merge(currencies, on="country_code", how="left")
 
 
+@training_inputs
 def load_data(external_dir=None, customs_dirs=None, engine=None):
     """수집 파일로 build_dataset 입력을 만든다. 환율만 DB 조회(engine 생략 시 기본 접속), 파일 위치는 ml/sources.py."""
     from backend.app.ml import sources as S

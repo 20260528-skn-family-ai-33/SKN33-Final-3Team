@@ -17,7 +17,7 @@ def test_real_child_full_chain_dictionary_tags_vector_and_repeat(local):
                                 runner=offline_runner(local,calls,bounded=True))
         assert result['status']=='complete',result
         assert result['dictionary']['status']=='complete'
-        assert result['vector']['body']['collection']=='kotra_article'
+        assert result['vector']['body']['collection']=='total_article'
         assert result['vector']['status']=='complete'
         assert result['mysql']['inserted' if number==1 else 'existing']==2
         if number==2:assert result['vector']['body']['embedded']==0
@@ -79,8 +79,10 @@ job.run_with_rag(local.root,now=NOW,env_path=local.env,runner=offline_runner(loc
          'PYTHONPATH':os.pathsep.join([str(ROOT),str(COLLECTOR),os.environ.get('PYTHONPATH','')])}
     parent=subprocess.Popen([sys.executable,'-c',code],cwd=ROOT,env=env)
     try:
-        deadline=time.monotonic()+15
-        while not (local.tmp/'vector_started').exists() and time.monotonic()<deadline:time.sleep(.02)
+        # Wait for dictionary export, collection and SQL loading before killing
+        # the parent in the vector stage. Cold starts are not a failure signal.
+        deadline=time.monotonic()+45
+        while parent.poll() is None and not (local.tmp/'vector_started').exists() and time.monotonic()<deadline:time.sleep(.02)
         assert (local.tmp/'vector_started').exists()
         old=json.loads((local.root/'current_job.json').read_text())
         assert old['status']=='running' and old['stage']=='vector' and old['mysql']['status']=='complete'

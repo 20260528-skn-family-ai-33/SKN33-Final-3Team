@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 from dotenv import dotenv_values
+from backend.app.storage.workspace import stored, checkpoint
 
 from backend.app.db.batch_log import Source, track_batch
 from backend.app.ml import preprocess as pp
@@ -72,6 +73,7 @@ def step(name, detail, start, end, work, engine=None):
     with track_batch(SOURCES[name], f"EXTERNAL_{name}", TARGET, start, end, engine=engine, logger=log) as run:
         try:
             stats = work()
+            checkpoint(ec.OUT_DIR)
         except Exception as e:
             run.fail()
             log_failure(name, detail, e)
@@ -216,6 +218,7 @@ def record_availability(today):
     log.info(f"AVAILABILITY 파일 해시 {len(files)}개 다시 기록")
 
 
+@stored('ml-inputs/external', lambda args: ec.OUT_DIR)
 def run(today=None, engine=None):
     """engine: batch_run 기록용 DB. 테스트에서 SQLite를 넘긴다."""
     today = today or datetime.now(KST).date()
@@ -243,6 +246,7 @@ def run(today=None, engine=None):
                                                 lambda year=year: ec.collect_comtrade(year), engine)
     try:  # 수집이 일부 실패해도 남은 파일은 각각 완성본이라 그 해시로 맞춘다
         record_availability(today)
+        checkpoint(ec.OUT_DIR)
     except Exception as e:
         log_failure("AVAILABILITY", str(today), e)
         log.exception(f"AVAILABILITY FAILED: ML 단계가 외부 파일 판 확인에서 멈출 수 있음 | 실패 로그: {FAILURE_LOG}")

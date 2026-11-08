@@ -13,6 +13,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -173,7 +174,7 @@ def run(apply=False, include_triggers=False):
                     raise RuntimeError('실행 중인 배치가 있습니다. 종료 후 다시 실행하세요')
                 conn.exec_driver_sql('SET SESSION lock_wait_timeout=15')
                 conn.commit()
-                backup = ROOT / 'data/db_backups' / datetime.now().strftime('admin_news_erd_%Y%m%d_%H%M%S_%f')
+                backup = ROOT / 'data/db_backups' / (datetime.now().strftime('admin_news_erd_%Y%m%d_%H%M%S_%f_') + uuid4().hex)
                 backup.mkdir(parents=True, mode=0o700)
                 os.chmod(backup, 0o700)
                 before = snapshot(conn)

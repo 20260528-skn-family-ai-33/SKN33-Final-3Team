@@ -2,7 +2,7 @@
 from collections.abc import Mapping
 from copy import deepcopy
 
-ARTICLE_COLLECTION = 'kotra_article'
+from backend.app.services.news_collections import ARTICLE_COLLECTION
 INTERNAL_SOURCE = 'KOTRA_SHORT_NEWS'
 API_SOURCE = 'KOTRA_BREAKING'
 

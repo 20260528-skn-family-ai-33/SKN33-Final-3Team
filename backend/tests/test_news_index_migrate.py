@@ -51,7 +51,7 @@ def run(legacy,**kw):
 
 def rows(root):
     snap=GenerationStore(root).snapshot()
-    try:return read_all(snap.collection('kotra_article'),['documents','metadatas','embeddings'])
+    try:return read_all(snap.collection('total_article'),['documents','metadatas','embeddings'])
     finally:snap.client.close()
 
 
@@ -127,7 +127,7 @@ def test_corrupt_ready_status_fails_without_writing(legacy,field,value):
 
 def test_existing_collection_contract_checked(legacy):
     out=run(legacy,apply=True);client=persistent_client(legacy[1]/'generations'/out['generation']/'chroma')
-    col=client.get_collection('kotra_article',embedding_function=None);col.modify(metadata={k:v for k,v in col.metadata.items() if k!='hnsw:space'}|{'dimensions':8});client.close();before=migration.fingerprint(legacy[1])
+    col=client.get_collection('total_article',embedding_function=None);col.modify(metadata={k:v for k,v in col.metadata.items() if k!='hnsw:space'}|{'dimensions':8});client.close();before=migration.fingerprint(legacy[1])
     with pytest.raises(ValueError,match='existing_collection'):run(legacy,apply=True)
     assert migration.fingerprint(legacy[1])==before
 
@@ -456,7 +456,7 @@ def test_persisted_non_axis_vectors_are_copied_exactly_without_reinsertion(tmp_p
         assert (document,list(vector))==original[key]
         assert 'keywords' not in meta and json.loads(meta['payload'])['kw_topic']==[]
     snap=GenerationStore(root).snapshot()
-    try:assert [c.name for c in snap.client.list_collections()]==['kotra_article']
+    try:assert [c.name for c in snap.client.list_collections()]==['total_article']
     finally:snap.client.close()
     target_before=migration.fingerprint(root)
     assert migration.migrate(source,root,catalog,DB_ID,apply=True,source_stopped=True)['status']=='already_complete'

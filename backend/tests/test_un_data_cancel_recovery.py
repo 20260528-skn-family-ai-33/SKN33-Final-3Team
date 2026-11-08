@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 from backend.tests import test_un_data_resume as fixture
 from backend.app.scheduler.jobs import un_data_resume as resume
@@ -124,6 +125,7 @@ with FileLock(str(folder/'continuation.lock')):
         self.assertEqual(client.request_count,0)
         self.assertEqual((self.state/'continuation.json').read_bytes(),before)
 
+    @unittest.skipIf(sys.platform == 'win32', 'POSIX SIGINT delivery; Windows uses different console signals')
     def test_real_sigint_records_cancelled_and_releases_lock(self):
         import signal
         from filelock import FileLock
@@ -171,7 +173,7 @@ except KeyboardInterrupt:
             refresh.assert_not_called()
         # 프로세스 메모리를 버린 새 인터프리터에서도 차단 표식이 유지됩니다.
         code="from backend.app.scheduler.main import un_resume_job;import sys;print(un_resume_job(sys.argv[1]))"
-        child=subprocess.run([sys.executable,'-c',code,str(self.state)],capture_output=True,text=True,timeout=10)
+        child=subprocess.run([sys.executable,'-c',code,str(self.state)],capture_output=True,text=True,timeout=30)
         self.assertEqual(child.returncode,0)
         self.assertEqual(child.stdout.strip(),'RECOVERY_REQUIRED')
         self.assertEqual(self.run_resume(resume_now=True)['status'],'DB_VERIFIED')
@@ -250,7 +252,7 @@ except KeyboardInterrupt:
         self.assertFalse((self.state/resume.RECOVERY_GUARD).exists())
         self.assertTrue(resume.recovery_blocked(self.state))
         code="from backend.app.scheduler.main import un_resume_job;import sys;print(un_resume_job(sys.argv[1]))"
-        child=subprocess.run([sys.executable,'-c',code,str(self.state)],capture_output=True,text=True,timeout=10)
+        child=subprocess.run([sys.executable,'-c',code,str(self.state)],capture_output=True,text=True,timeout=30)
         self.assertEqual(child.returncode,0)
         self.assertEqual(child.stdout.strip(),'RECOVERY_REQUIRED')
 
@@ -269,7 +271,7 @@ except KeyboardInterrupt:
         primary=ValueError('original failure before finalization')
         cancel_writes=[]
         def replace(source,destination):
-            if str(destination).endswith('/'+resume.RECOVERY_RELEASE):
+            if Path(destination).name == resume.RECOVERY_RELEASE:
                 if after_commit:original_replace(source,destination)
                 raise KeyboardInterrupt('publish boundary')
             return original_replace(source,destination)
@@ -322,7 +324,7 @@ except KeyboardInterrupt:
         primary=ValueError('original body failure')
         first_interrupt=KeyboardInterrupt('first interrupt')
         def replace(source,destination):
-            if str(destination).endswith('/'+resume.RECOVERY_RELEASE):
+            if Path(destination).name == resume.RECOVERY_RELEASE:
                 if after_commit:original_replace(source,destination)
                 raise first_interrupt
             return original_replace(source,destination)
