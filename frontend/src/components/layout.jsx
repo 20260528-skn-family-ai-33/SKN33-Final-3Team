@@ -2,6 +2,7 @@
 import { Link } from '../router'
 import Icon from './Icon'
 
+const CONTACT_EMAIL = 'BorderlessSellers1205@gmail.com'
 const NAV = [
   ['rank', '/rank', '수출입 순위'],
   ['articles', '/articles', '기사'],
@@ -74,35 +75,30 @@ export function Band({ eyebrow, title, lead, image, imagePosition, tone, right, 
   )
 }
 
-export function Footer({ isAdmin = false }) {
+export function Footer() {
   return (
     <footer className="ft">
-      <div className="wrap g">
+      <div className="wrap g ft-info">
         <div>
-          <b>서비스</b>
-          <p><Link to="/rank" className="ft-link">수출입 순위</Link></p>
-          <p><Link to="/articles" className="ft-link">기사</Link></p>
-          <p><Link to="/analysis" className="ft-link">AI챗봇</Link>{!isAdmin && <> · <Link to="/account/reports" className="ft-link">리포트 센터</Link></>}</p>
+          <b>BORDERLESS SELLERS</b>
+          <p>수출입 통계와 해외시장 기사, AI 분석을 한곳에서 보는 무역 데이터 서비스입니다.</p>
+          <p>통계·기사·AI 분석 결과는 참고 자료이며, 수출·거래·투자 권고가 아닙니다.</p>
         </div>
-        {!isAdmin && <div>
-          <b>내 정보</b>
-          <p><Link to="/account/interests" className="ft-link">관심정보</Link></p>
-          <p><Link to="/account/settings" className="ft-link">알림설정</Link></p>
-          <p><Link to="/account/notifications" className="ft-link">알림함</Link></p>
-        </div>}
         <div>
-          <b>데이터</b>
+          <b>데이터 출처</b>
           <p>수출입 통계 · 관세청</p>
+          <p>국가별 점유율 · UN Comtrade</p>
           <p>환율 · 한국은행 ECOS</p>
           <p>기사 · KOTRA · 한국경제 · 파이낸셜뉴스</p>
         </div>
         <div>
-          <b>BORDERLESS SELLERS</b>
-          <p><Link to="/terms/service" className="ft-link">이용약관</Link> · <Link to="/terms/privacy-policy" className="ft-link" style={{ color: '#fff', fontWeight: 700 }}>개인정보처리방침</Link></p>
-          <p>조회 가능한 수집 데이터를 기준으로 표시합니다.</p>
+          <b>약관 및 문의</b>
+          <p><Link to="/terms/service" className="ft-link">이용약관</Link></p>
+          <p><Link to="/terms/privacy-policy" className="ft-link" style={{ color: '#fff', fontWeight: 700 }}>개인정보처리방침</Link></p>
+          <p><a href={`mailto:${CONTACT_EMAIL}`} className="ft-link">{CONTACT_EMAIL}</a></p>
         </div>
       </div>
-      <div className="wrap cp">© 2026 Borderless Sellers</div>
+      <div className="wrap cp">© 2026 Borderless Sellers. All rights reserved.</div>
     </footer>
   )
 }

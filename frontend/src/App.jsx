@@ -55,10 +55,12 @@ function UserShell({ active, route, children }) {
         {open && <AlertPopover onClose={toggle} />}
       </SiteHeader>
       <div className="app-body" id="main">{children}</div>
-      <Footer isAdmin={isAdmin} />
+      <Footer />
     </>
   )
 }
+
+const PageLoader = () => <div className="page-loader" role="status" aria-label="불러오는 중"><div className="page-spinner" /></div>
 
 function Toast() {
   const { toast, setToast } = useToast()
@@ -91,19 +93,21 @@ export default function App() {
   }, [needsLogin])
 
   let content
-  if (loading || loadError) {
-    content = <><AuthHeader /><main className="page"><div className="wrap card"><p role={loadError ? 'alert' : 'status'}>{loadError?.message || '로그인 정보를 불러오는 중…'}</p>{loadError && <button className="btn" onClick={refresh}>다시 불러오기</button>}</div></main><FooterSmall /></>
+  if (loadError) {
+    content = <><AuthHeader /><main className="page"><div className="wrap card"><p role="alert">{loadError.message}</p><button className="btn" onClick={refresh}>다시 불러오기</button></div></main><FooterSmall /></>
+  } else if (loading) {
+    content = <PageLoader />
   } else if (oauthProvider) {
     content = <><AuthHeader /><div className="app-body" id="main"><OAuthCallback provider={oauthProvider} onDone={finishOAuth} /></div><FooterSmall /></>
   } else if (isPublic) {
     const Page = PUBLIC[path]
     content = <><AuthHeader /><div className="app-body" id="main"><Page route={route} /></div><FooterSmall /></>
   } else if (needsLogin || adminAccountRoute) {
-    content = null
+    content = <PageLoader />  // 곧 다른 화면으로 이동한다. 빈 화면이 깜빡이지 않게 한다.
   } else if (path === '/onboarding') {
     content = <><AuthHeader /><div className="app-body" id="main"><Onboarding route={route} /></div><FooterSmall /></>
   } else if (path === '/admin' || path.startsWith('/admin/')) {
-    content = <Suspense fallback={<p className="muted" style={{ padding: 40 }}>관리자 화면을 불러오는 중…</p>}><AdminApp route={route} /></Suspense>
+    content = <Suspense fallback={<PageLoader />}><AdminApp route={route} /></Suspense>
   } else if (path.startsWith('/account')) {
     content = <UserShell route={route}><AccountPage route={route} /></UserShell>
   } else if (SITE[path]) {
