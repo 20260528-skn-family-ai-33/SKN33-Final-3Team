@@ -87,10 +87,11 @@ sha256sum data/ml/monthly_models/*.joblib data/ml/monthly_models/*.registry.json
 
 ### API·워커 (`backend/.env.api.example` 기준)
 
+Writer는 코드에 고정된 `gpt-6-luna`를 사용한다. 기존 `.env`에 `API_COMPOSE_MODEL`이 남아 있어도 워커는 이 값을 사용하지 않는다.
+
 | 키 | 값 | 변경 |
 |---|---|---|
 | `API_CHAT_AGENT_ENABLED` | `true` | 추가. 새 질문을 LangGraph 워커로 접수한다. 기존 미완료 작업은 원래 실행기로 마친다 |
-| `API_COMPOSE_MODEL` | `gpt-4.1-mini` | 추가 |
 | `API_COMPOSE_TIMEOUT_SECONDS` | `20` | 추가 |
 | `API_SQL_MODEL` | `gpt-4.1` | 추가 (C-30 미정, 임시값) |
 | `API_SQL_TIMEOUT_SECONDS` | `20` | 추가 |
