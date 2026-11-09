@@ -5,7 +5,8 @@
 - 키워드: services/news_keywords/keyword_clean.py 결과 news_keywords_clean.csv (kw_topic·country_all·hs6·선택 hs4)
 
 규칙
-- body_masked: HTML 태그·스크립트를 벗겨 글만 남기고 이메일·전화번호를 [이메일]·[전화번호]로 가립니다.
+- body_masked: HTML 태그·스크립트를 벗긴 뒤 작성자·기고자 정보를 삭제하고 문의 담당자 정보는 보존합니다.
+  외부 기업·기관·행사 연락처와 공공 핫라인은 보존합니다.
   본문이 비면 요약(cntntSumar), 그것도 없으면 제목을 넣습니다 (NOT NULL 컬럼).
 - title: 원본 제목의 HTML 문자(&#39;·&middot;·&lsquo; 등, 약 2,400건)를 글자로 바꿔 넣습니다.
 - 키워드 태그: kw_topic(동의어 정리 후 주제어). 사용자 블락은 저장값을 바꾸지 않고 보여 줄 때 거릅니다 (keyword_block.py).
@@ -21,6 +22,7 @@ from html.parser import HTMLParser
 
 SOURCE_CODE = "KOTRA_MARKET"
 RAW_COLUMNS = ["bbstxSn", "newsTitl", "newsBdt", "othbcDt", "kotraNewsUrl", "infoCl", "cntntSumar"]
+RAW_OPTIONAL_COLUMNS = ["newsWrterNm"]  # 이전 수집 CSV와 호환
 CLEAN_COLUMNS = ["bbstxSn", "othbcDt", "kw_topic", "country_all", "hs6"]
 CLEAN_OPTIONAL_COLUMNS = ["hs4"]  # 이전 정제 CSV에는 없을 수 있음
 LIMITS = {"title": 600, "source_url": 2048, "category": 120, "keyword_text": 120}
@@ -98,7 +100,9 @@ def plain_title(value):
 def article_row(raw):
     """원본 CSV 한 행(dict) → article 행."""
     title = plain_title(raw.get("newsTitl"))
-    body = mask(html_to_text(raw.get("newsBdt"))) or mask(html_to_text(raw.get("cntntSumar"))) or title
+    from backend.app.services.news_privacy import mask_article_contacts
+    original = html_to_text(raw.get("newsBdt")) or html_to_text(raw.get("cntntSumar")) or title
+    body = mask_article_contacts(original, title=title, writer=str(raw.get("newsWrterNm") or ""))
     return {"source_code": SOURCE_CODE, "external_id": str(raw["bbstxSn"]).strip(),
             "title": title, "published_date": str(raw["othbcDt"])[:10],
             "source_url": _cut(raw.get("kotraNewsUrl"), "source_url"), "body_masked": body,

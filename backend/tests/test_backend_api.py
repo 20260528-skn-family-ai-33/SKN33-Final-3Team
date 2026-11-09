@@ -752,6 +752,8 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(response.status_code,200,response.text)
             self.assertEqual(len(response.json()['items']),count,category)
             self.assertEqual(response.json()['page']['total'],count,category)
+        message=self.client.get('/api/v1/admin/alerts').json()['items'][0]['message']
+        for word in ('관세청 수집 실패','HS6_AGGREGATION','2025-08-01 ~ 2025-08-31','실행 #'): self.assertIn(word,message)
         self.assertEqual(self.client.get('/api/v1/admin/alerts?category=OTHER').status_code,400)
 
     def test_worker_fencing_and_duplicate_message_after_context_change(self):
