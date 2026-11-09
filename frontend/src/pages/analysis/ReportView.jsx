@@ -8,15 +8,16 @@ import { LineChart } from '../../components/charts'
 import ApiResults from '../../components/ApiResults'
 import { niceTicks } from '../../utils/chart'
 // 리포트 화면의 금액(억 USD)·비율은 PDF 리포트와 같이 소수 2자리로 쓴다(2026-11-06 사용자 결정)
+// 단, 0.1억 미만 금액은 PDF와 같이 유효숫자 1자리로 보여 준다(0.03억·0.0005억).
 const two = value => Number(value).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const amount = value => value == null ? '—' : two(Number(value) / 1e8)
+const amount = value => value == null ? '—' : reportEok(Number(value) / 1e8)
 const percent = value => value == null ? '—' : `${Number(value) > 0 ? '+' : ''}${two(value)}%`
 const share = value => value == null ? '—' : `${two(value)}%`
 import { countryName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { api } from '../../api/client'
-import { mapReport, mapArticle, reportComparison, kstDateTimeText } from '../../api/adapters'
+import { mapReport, mapArticle, reportComparison, kstDateTimeText, reportEok } from '../../api/adapters'
 import { promisingView } from './promising'
 
 const range = (from, to) => from && to ? `${from} ~ ${to}` : '—'
@@ -168,7 +169,7 @@ export default function ReportView({ route }) {
                         {f.labels.map((l, i) => <div key={l} className="tr" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}><span className="b">{l}</span><span className="r b">{amount(monthly[i].amount_usd)}</span><span className="r s">—</span></div>)}
                       </div>
                     ) : f.labels.length ? (
-                      <LineChart width={900} height={240} labels={f.labels} yTicks={ticks} formatValue={two} series={[{ color: '#C8102E', values: f.current }]} />
+                      <LineChart width={900} height={240} labels={f.labels} yTicks={ticks} formatValue={reportEok} series={[{ color: '#C8102E', values: f.current }]} />
                     ) : <p className="muted">조회된 월별 실적이 없습니다.</p>}
                     <p className="note">비교 기간의 월별 수출액은 현재 응답에 포함되지 않아 표시하지 않습니다. 비교 합계는 저장된 값이 있을 때 표시합니다.</p>
                   </div>
@@ -178,7 +179,7 @@ export default function ReportView({ route }) {
               {scopeComparison && <Section no={no++} title="한국 전체 · 교역 상대국 비교">
                 <p className="note">한국 전체에는 개별 상대국 수출액이 포함되므로 비교 대상 간 금액을 합산하지 않습니다. 단위: 억 USD</p>
                 <div className="chips">{scopeSeries.map((s,i)=><span key={s.key} style={{color:scopeColors[i%scopeColors.length]}}>● {s.label}</span>)}</div>
-                <LineChart formatValue={two} labels={scopeComparison.rows.map(r=>r.month)} yTicks={niceTicks(scopeComparison.rows.flatMap(r=>scopeSeries.map(s=>r[s.key]/1e8)))}
+                <LineChart formatValue={reportEok} labels={scopeComparison.rows.map(r=>r.month)} yTicks={niceTicks(scopeComparison.rows.flatMap(r=>scopeSeries.map(s=>r[s.key]/1e8)))}
                   series={scopeSeries.map((s,i)=>({color:scopeColors[i%scopeColors.length],values:scopeComparison.rows.map(r=>r[s.key]/1e8)}))}/>
                 <ApiResults table={scopeComparison} tableOnly/>
               </Section>}

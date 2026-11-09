@@ -54,6 +54,13 @@ export function mapReport(r) {
 }
 // 억 USD 표시. 0.1억 이상은 소수 첫째 자리까지, 0.1억 미만은 유효숫자 1자리(0.02·0.0005)로 보여 준다(D-3).
 export const amount = value => value == null ? '—' : (Number(value) / 1e8).toLocaleString('ko-KR', Number(value) !== 0 && Math.abs(Number(value)) < 1e7 ? { maximumSignificantDigits: 1 } : { maximumFractionDigits: 1 })
+// 리포트(웹·PDF 공통)의 억 USD 숫자. 기본 소수 2자리, 0.1억 미만은 유효숫자 1자리(0.03·0.0005)로 늘려 0.00으로 뭉개지지 않게 한다.
+export function reportEok(value) {
+  if (value == null || Number.isNaN(Number(value))) return '—'
+  const v = Number(value), size = Math.abs(v)
+  const places = v && size < 0.1 ? Math.max(2, -Math.floor(Math.log10(size))) : 2
+  return v.toLocaleString('ko-KR', places === 2 ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : { maximumFractionDigits: places })
+}
 export const percent = value => value == null ? '—' : `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(1)}%`
 export function reportComparison(conditions, kpi) {
   const mode = conditions?.compare || 'YOY_PERIOD'
