@@ -45,17 +45,33 @@ def musd(value, digits=REPORT_DIGITS):
     return (MINUS + text) if value < 0 else text
 
 
+def _eok_digits(value, digits):
+    """억 달러 소수 자릿수. 0.1억 미만은 유효숫자 1자리(0.03·0.0005)로 늘려 0.0으로 뭉개지지 않게 한다(웹 화면과 같은 규칙)."""
+    if value and abs(value) < 0.1:
+        return max(digits, -math.floor(math.log10(abs(value))))
+    return digits
+
+
+def _number_eok(value, digits):
+    places = _eok_digits(value, digits)
+    text = _number(value, places)
+    return text if places == digits else text.rstrip('0').rstrip('.')
+
+
 def eok(value, digits=REPORT_DIGITS):
     """USD → 억 달러 숫자 문자열 (요청형 리포트). 단위 글자는 템플릿에서 붙임."""
     if value is None:
         return '—'
-    text = _number(value / 1e8, digits)
+    text = _number_eok(value / 1e8, digits)
     return (MINUS + text) if value < 0 else text
 
 
 def signed_eok(value, digits=REPORT_DIGITS):
-    """증감액(USD) → 부호 붙은 억 달러 (+12.30 · −2.40)."""
-    return '—' if value is None else signed(value / 1e8, digits)
+    """증감액(USD) → 부호 붙은 억 달러 (+12.30 · −2.40 · +0.03)."""
+    if value is None:
+        return '—'
+    v = value / 1e8
+    return ('+' if v > 0 else MINUS if v < 0 else '') + _number_eok(v, digits)
 
 
 def rank_move(value):
@@ -208,7 +224,8 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REP
     low, high, ticks = nice_scale([v for vals in scaled for v in vals], zero=zero)
     left = _axis_room(ticks, 44)
     # 끝 값 라벨(.end 10.5, 굵게)이 오른쪽 밖으로 나가지 않게 가장 긴 값 폭만큼 비움 (기본 64)
-    right = max([64] + [_em(num(v, digits)) * 11 + 12 for vals in scaled for v in vals if v is not None])
+    label = (lambda v: (MINUS if v < 0 else '') + _number_eok(v, digits)) if divisor == 1e8 else (lambda v: num(v, digits))
+    right = max([64] + [_em(label(v)) * 11 + 12 for vals in scaled for v in vals if v is not None])
     plot_w, plot_h = width - left - right, height - top - bottom
     step = plot_w / max(len(labels) - 1, 1)
     x = lambda i: left + i * step
@@ -245,7 +262,7 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REP
     for px, py, value, color in ends:
         out.append(f'<circle cx="{px:.1f}" cy="{y(value):.1f}" r="3" fill="{color}"/>')
         if show_labels:
-            out.append(f'<text x="{px + 7:.1f}" y="{py + 3:.1f}" class="end" fill="{color}">{num(value, digits)}</text>')
+            out.append(f'<text x="{px + 7:.1f}" y="{py + 3:.1f}" class="end" fill="{color}">{label(value)}</text>')
     out.append('</svg>')
     return Markup(''.join(out))
 
@@ -343,7 +360,8 @@ def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digit
     bar_h = 8 if bars > 1 else 12
     places_of = lambda j: digits[j] if isinstance(digits, (list, tuple)) else digits
     # 막대 끝 숫자가 오른쪽 밖으로 나가지 않게 가장 긴 숫자 폭만큼 비웁니다 (peak 기준이라 쪽이 나뉘어도 막대 비율 동일)
-    texts = [num(peak_value / divisor, places_of(0))] + [num(v / divisor, places_of(j)) for r in rows
+    fmt = (lambda v, d: (MINUS if v < 0 else '') + _number_eok(v, d)) if divisor == 1e8 else num   # 억 단위는 웹과 같은 작은 값 규칙
+    texts = [fmt(peak_value / divisor, places_of(0))] + [fmt(v / divisor, places_of(j)) for r in rows
                                                   for j, v in enumerate(r['values']) if v is not None]
     plot_w = width - label_width - tail_width - max(40, max(_em(t) for t in texts) * 11 + 10)
     height = row_height * len(rows) + 4
@@ -359,7 +377,7 @@ def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digit
             yy = row_top + j * (bar_h + 2)
             out.append(f'<rect x="{label_width}" y="{yy:.1f}" width="{w:.1f}" height="{bar_h}" rx="2" fill="{color}"/>')
             cls = 'val' if j == 0 else 'axis'
-            out.append(f'<text x="{label_width + w + 5:.1f}" y="{yy + bar_h - 1:.1f}" class="{cls}">{num(v / divisor, places_of(j))}</text>')
+            out.append(f'<text x="{label_width + w + 5:.1f}" y="{yy + bar_h - 1:.1f}" class="{cls}">{fmt(v / divisor, places_of(j))}</text>')
         tail = r.get('tail')
         if tail:
             ty = i * row_height + row_height / 2 + 4

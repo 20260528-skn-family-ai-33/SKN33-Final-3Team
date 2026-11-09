@@ -409,6 +409,12 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(rt.eok(1_612_000_000), '16.12')
         self.assertEqual(rt.signed_eok(-240_000_000), '−2.40')
         self.assertEqual(rt.eok(None), '—')
+        # 0.1억 미만은 유효숫자 1자리(웹 화면과 같은 규칙) — 0.0으로 뭉개지지 않는다
+        self.assertEqual(rt.eok(3_300_000, 1), '0.03')
+        self.assertEqual(rt.eok(51_234, 2), '0.0005')
+        self.assertEqual(rt.signed_eok(-3_300_000), '−0.03')
+        self.assertIn('>0.03</text>', str(rt.line_chart(['a', 'b'], [{'values': [1_100_000, 3_300_000]}], divisor=1e8, digits=1)))
+        self.assertIn('>0.03</text>', str(rt.hbar_chart([{'label': '미국', 'values': [3_300_000]}], ['#000'], divisor=100000000, digits=1)))
         self.assertIn('▲1', rt.rank_move(1))
         self.assertIn('▼2', rt.rank_move(-2))
         self.assertIn('–', rt.rank_move(0))
