@@ -120,6 +120,50 @@ class TermsTest(unittest.TestCase):
         self.assertTrue(self.client.get('/api/v1/users/me/notification-settings').json()['settings']['consent_current'])
         self.assertEqual(self.actions(register(self.engine)), {'TERMS_NOTIFICATION_V1': 'KEEP_EXISTING'})
 
+    def test_replace_notification_switches_on_purpose_and_asks_consenters_again(self):
+        """의도적인 알림 약관 전환(--replace-notification): 기존 알림 약관을 끄고 새 버전을 현재 약관으로 둔다.
+        계획에 기존 동의자 수를 보여 주고, 적용 뒤 기존 동의자는 재동의 안내를 받는다. 다시 실행해도 바뀌는 것이 없다."""
+        csrf = self.signup().json()['csrf_token']
+        self.agree_notification(csrf)
+        planned = register(self.engine, write=False, force=True, replace_notification=True)
+        self.assertEqual(self.actions(planned)['TERMS_V1'], 'DISABLE')
+        self.assertEqual(self.actions(planned)['TERMS_NOTIFICATION_V1'], 'INSERT')
+        self.assertEqual(next(c for c in planned if c['code'] == 'TERMS_V1')['consents'], 1)
+        self.assertEqual(self.client.get('/api/v1/terms/notification').json()['terms']['version'], 'TERMS_V1')  # 계획만으로는 바뀌지 않음
+        register(self.engine, force=True, replace_notification=True)
+        self.assertEqual(self.client.get('/api/v1/terms/notification').json()['terms']['version'], 'TERMS_NOTIFICATION_V1')
+        settings = self.client.get('/api/v1/users/me/notification-settings').json()['settings']
+        self.assertEqual((settings['consent_current'], settings['consent_required']), (False, True))
+        self.assertEqual(register(self.engine, force=True), [])
+        with self.engine.connect() as c:  # 기존 약관 행과 동의 기록은 지우지 않는다(이력 보존)
+            table = self.meta.tables['service_option']
+            self.assertFalse(c.scalar(select(table.c.enabled).where(table.c.option_code == 'TERMS_V1')))
+
+    def test_replace_counts_only_consenters_of_the_current_notification_terms(self):
+        """이미 현재 약관이 아닌 옛 알림 약관의 동의자는 재동의 안내를 받고 있으므로, 전환 계획의 영향 인원에 넣지 않는다."""
+        csrf = self.signup().json()['csrf_token']
+        self.agree_notification(csrf)  # TERMS_V1 동의
+        register(self.engine, force=True, replace_notification=True)  # 현재 약관 = TERMS_NOTIFICATION_V1
+        self.option('TERMS_V1_COPY', 'NOTIFICATION_TERMS', 1)  # 현재보다 낮은 옛 약관(사용 중)
+        planned = {c['code']: c for c in register(self.engine, write=False, force=True, replace_notification=True)}
+        self.assertEqual((planned['TERMS_V1_COPY']['action'], planned['TERMS_V1_COPY']['consents']), ('DISABLE', 0))
+
+    def test_notification_tie_suggests_replace_and_replace_resolves_it(self):
+        """동의자 없는 기존 알림 약관과 정렬값이 같으면 등록을 거부하되 전환 방법을 알려 준다. 전환 옵션으로는 등록된다."""
+        self.option('TERMS_OLD_NOTIFICATION', 'NOTIFICATION_TERMS', 10)
+        with self.assertRaisesRegex(ValueError, '--replace-notification'):
+            register(self.engine, write=False)
+        changes = self.actions(register(self.engine, replace_notification=True))
+        self.assertEqual(changes['TERMS_OLD_NOTIFICATION'], 'DISABLE')
+        self.assertEqual(changes['TERMS_NOTIFICATION_V1'], 'INSERT')
+        self.assertEqual(self.client.get('/api/v1/terms/notification').json()['terms']['version'], 'TERMS_NOTIFICATION_V1')
+
+    def test_replace_option_does_not_touch_other_terms_types(self):
+        """전환 옵션은 알림 약관에만 쓴다. 가입 약관의 정렬값 충돌은 그대로 거부한다."""
+        self.option('TERMS_SERVICE_V0', 'SERVICE_TERMS', 10)
+        with self.assertRaisesRegex(ValueError, '정렬값'):
+            register(self.engine, write=False, replace_notification=True)
+
     def test_register_refuses_to_rewrite_terms_members_agreed_to(self):
         """가입자가 동의한 약관 본문을 같은 버전으로 덮어쓰지 않는다. 바꾸려면 새 버전 코드를 쓰거나 --force가 필요하다."""
         self.assertEqual(self.signup().status_code, 201)  # TERMS_SERVICE_V1·TERMS_PRIVACY_V1 동의(테스트 본문)

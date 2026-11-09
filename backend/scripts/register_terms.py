@@ -4,6 +4,8 @@
 - 이미 동의받은 버전의 본문·제목은 바꾸지 않는다. 내용을 바꾸려면 TERMS에 새 버전 코드와 더 큰 정렬값을 추가해 다시 동의를 받는다.
   (실수 정정 등 꼭 같은 버전을 고쳐야 하면 --force)
 - 회원이 이미 동의한 알림 약관이 있으면 새 알림 약관을 등록하지 않는다. 등록하면 기존 동의자가 발송 대상에서 빠진다.
+  의도적으로 새 알림 약관으로 바꿀 때만 --replace-notification을 쓴다. 기존 알림 약관을 끄고(행·동의 기록은 남김) 새 버전을
+  현재 약관으로 둔다. 기존 동의자는 재동의 안내를 받고 다시 동의할 때까지 새 알림을 받지 않는다(계획에 동의자 수를 표시).
 - 현재 버전은 정렬값(sort_order)이 가장 큰 행이다. 같은 종류에 정렬값이 같은 다른 버전이 있으면 등록을 거부한다.
 """
 import argparse
@@ -39,7 +41,7 @@ def rows():
     return result
 
 
-def plan(connection, table, consents, force=False):
+def plan(connection, table, consents, force=False, replace_notification=False):
     def agreed(codes):
         return connection.scalar(select(func.count()).select_from(consents).where(consents.c.terms_version.in_(codes))) if codes else 0
 
@@ -52,12 +54,22 @@ def plan(connection, table, consents, force=False):
         others = [r for r in existing if r['option_type'] == row['option_type'] and r['option_code'] != row['option_code'] and r['enabled']]
         if current is not None and current['option_type'] != row['option_type']:
             raise ValueError('Unexpected option type: ' + row['option_code'])
-        if current is None and row['option_type'] == 'NOTIFICATION_TERMS' and agreed([r['option_code'] for r in others]):
+        notification = row['option_type'] == 'NOTIFICATION_TERMS'
+        if notification and replace_notification and others:
+            # 의도적인 전환: 다른 알림 약관을 끈다. consents는 이 전환으로 재동의가 필요해지는 회원 수다.
+            # 지금 현재 약관(정렬값이 가장 큰 사용 중 행)의 동의자만 센다. 현재가 아닌 옛 약관의 동의자는 이미 재동의 안내 대상이다.
+            enabled = [r for r in existing if r['option_type'] == row['option_type'] and r['enabled']]
+            live = max(enabled, key=lambda r: (r['sort_order'], r['option_code']))['option_code']
+            changes.extend({'action': 'DISABLE', 'row': {'option_code': r['option_code']},
+                            'consents': agreed([r['option_code']]) if r['option_code'] == live else 0} for r in others)
+            others = []
+        if current is None and notification and agreed([r['option_code'] for r in others]):
             changes.append({'action': 'KEEP_EXISTING', 'row': row})  # 기존 동의자가 알림을 계속 받도록 현재 알림 약관을 유지한다
             continue
         tie = [r['option_code'] for r in others if r['sort_order'] == row['sort_order']]
         if tie:
-            raise ValueError(f"{row['option_code']}: 같은 종류의 {', '.join(tie)}와 정렬값이 같습니다. 새 버전은 정렬값을 올려 추가하세요")
+            hint = ' 기존 알림 약관을 새 버전으로 바꾸려면 --replace-notification' if notification else ''
+            raise ValueError(f"{row['option_code']}: 같은 종류의 {', '.join(tie)}와 정렬값이 같습니다. 새 버전은 정렬값을 올려 추가하세요.{hint}")
         if current is None:
             changes.append({'action': 'INSERT', 'row': row})
             continue
@@ -72,35 +84,40 @@ def plan(connection, table, consents, force=False):
 def apply(connection, table, changes):
     for change in changes:
         row = change['row']
-        if change['action'] == 'INSERT':
+        if change['action'] == 'DISABLE':  # 행·동의 기록은 남겨 이력을 보존한다
+            connection.execute(update(table).where(table.c.option_code == row['option_code']).values(enabled=False))
+        elif change['action'] == 'INSERT':
             connection.execute(table.insert().values(**row))
         elif change['action'] == 'UPDATE':
             connection.execute(update(table).where(table.c.option_code == row['option_code']).values(
                 label_ko=row['label_ko'], enabled=True, sort_order=row['sort_order'], value_json=row['value_json']))
 
 
-def register(engine, write=True, force=False):
+def register(engine, write=True, force=False, replace_notification=False):
     metadata = MetaData()
     metadata.reflect(engine, only=['service_option', 'user_consent'])
     table, consents = metadata.tables['service_option'], metadata.tables['user_consent']
     with engine.begin() as connection:
-        changes = plan(connection, table, consents, force)
+        changes = plan(connection, table, consents, force, replace_notification)
         if write:
             apply(connection, table, changes)
             left = [c for c in plan(connection, table, consents, force) if c['action'] != 'KEEP_EXISTING']
             assert not left, 'Terms registration incomplete'
-    return [{'action': c['action'], 'code': c['row']['option_code']} for c in changes]
+    return [{'action': c['action'], 'code': c['row']['option_code'], **({'consents': c['consents']} if 'consents' in c else {})}
+            for c in changes]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--force', action='store_true', help='이미 동의받은 버전의 본문도 덮어씁니다(정정용)')
+    parser.add_argument('--replace-notification', action='store_true',
+                        help='기존 알림 약관을 끄고 docs/terms의 알림 약관으로 바꿉니다. 기존 동의자는 재동의 전까지 알림을 받지 않습니다')
     args = parser.parse_args()
     settings = Settings()
     engine = settings.engine()
     try:
-        changes = register(engine, write=args.apply, force=args.force)
+        changes = register(engine, write=args.apply, force=args.force, replace_notification=args.replace_notification)
         print(json.dumps({'target': settings.get('API_DB_TARGET', 'rds'), 'applied': args.apply, 'changes': changes}, ensure_ascii=False))
     finally:
         engine.dispose()
