@@ -338,3 +338,53 @@ class NewsPrivacyTest(unittest.TestCase):
         # 실제 서명과 작성자 전용 블록은 계속 삭제해야 합니다.
         self.assertEqual(mask('홍길동 변호사\n이메일: writer@example.com\n본문입니다.', title='[기고] 법률'), '본문입니다.')
         self.assertEqual(mask('작성자: 홍길동\n이메일: writer@example.com\n본문입니다.', title='[기고] 법률'), '본문입니다.')
+
+    def test_review_author_suffix_is_processed_in_first_pass(self):
+        for tail, expected in [('문의: KOTRA 무역관 김철수 과장(staff@kotra.or.kr)', ''),
+                               ('신청은 12월까지입니다.', '신청은 12월까지입니다.')]:
+            result = mask('작성자: 홍길동. ' + tail)
+            self.assertEqual(result, expected)
+            self.assertEqual(mask(result), result)
+
+    def test_review_office_staff_at_association_event(self):
+        source = 'KOTRA 하노이 무역관 담당자 홍길동 과장(staff@kotra.or.kr)이 협회 행사 관련 문의를 받습니다.'
+        self.assertEqual(mask(source), 'KOTRA 하노이 무역관이 협회 행사 관련 문의를 받습니다.')
+
+    def test_review_office_refers_to_an_external_contact(self):
+        for org in ('독일 상공회의소', '현지 전시 사무국'):
+            source = f'KOTRA는 {org}(event@example.com, +49 30 1234 5678)에 문의할 것을 안내합니다.'
+            self.assertEqual(mask(source), source)
+
+    def test_review_interview_followed_by_office_inquiry(self):
+        intro = '무역관과 인터뷰를 진행했다.'
+        source = intro + ' 문의: KOTRA 무역관 홍길동 과장(staff@kotra.or.kr)'
+        result = mask(source)
+        self.assertEqual(result, intro)
+        self.assertEqual(mask(result), result)
+
+    def test_author_email_inside_instructions(self):
+        for instruction, expected in (
+            ('이메일: writer@example.com으로 문의하세요.', ''),
+            ('작성자에게 writer@example.com으로 문의하세요.', ''),
+            ('작성자께 writer@kotra.or.kr로 연락 바랍니다. 행사 문의: event@example.com',
+             '작성자께 연락 바랍니다. 행사 문의: event@example.com'),
+        ):
+            with self.subTest(instruction=instruction):
+                body = '작성자: 홍길동\n' + instruction
+                self.assertEqual(mask(body), expected)
+                self.assertEqual(mask(expected), expected)
+        self.assertEqual(mask('앞 문단\n작성자에게 writer@example.com으로 문의하세요.\n뒤 문단'), '앞 문단\n뒤 문단')
+        external = '이메일: event@example.com으로 문의하세요.'
+        self.assertEqual(mask(external), external)
+
+    def test_author_email_after_affiliation_only(self):
+        for affiliation in ('법무법인 예시', '소속: 법무법인 예시'):
+            for field, tail in (('이메일: writer@example.com', ''),
+                                ('작성자에게 writer@example.com으로 문의하세요.', '')):
+                body = '작성자: 홍길동\n' + affiliation + '\n' + field + '\n본문입니다.'
+                expected = affiliation + '\n' + tail + '본문입니다.'
+                self.assertEqual(mask(body), expected)
+                self.assertEqual(mask(expected), expected)
+        for boundary in ('법무법인 예시 행사 안내', '독일 제조사 문의처'):
+            body = boundary + '\n이메일: event@example.com으로 문의하세요.'
+            self.assertEqual(mask('작성자: 홍길동\n' + body), body)

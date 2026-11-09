@@ -118,6 +118,14 @@ def _signature_affiliation(line):
                 re.fullmatch(r'[^\n]{1,90}' + SIGNATURE_ROLE, value))
 
 
+# 명시적인 작성자 행 뒤에서만 사용하는 두 필드 형식입니다.
+AUTHOR_AFFILIATION_ONLY = re.compile(r'(?:소속[ \t]*[:：][ \t]*)?법무법인[ \t]+[가-힣A-Za-z0-9·]+')
+AUTHOR_EMAIL_IN_PROSE = re.compile(
+    r'^[ \t]*(?:작성자(?:에게|께)[ \t]+|(?=(?:이메일|메일|E-?mail)[ \t]*[:：]))'
+    r'(?P<field>(?:(?:이메일|메일|E-?mail)[ \t]*[:：][ \t]*)?'
+    + EMAIL.pattern + r'(?:으로|로)?)(?=[ \t]+(?:문의|연락))', re.I)
+
+
 def _signature_contact(line):
     value = line.strip()
     return bool(EMAIL.fullmatch(value) or
@@ -241,7 +249,46 @@ def _contact_only(line, writer):
     return bool(spans) and _contact_residue_only(residue)
 
 
+# 괄호 앞에서 무역관과 담당자의 관계가 직접 드러나는 서명.
+OFFICE_PERSON = re.compile(
+    r'(?:무역관|KOTRA|코트라)[ \t]+(?P<identity>(?:담당자[ \t]+)?'
+    r'[가-힣]{2,4}[ \t]+' + ROLE + r')[ \t]*$', re.I)
+CONTACT_GROUP = re.compile(r'[（(]([^()（）]+)[）)]')
+
+
+def _narrative_contact_plan(line, writer):
+    # 안내 주체와 실제 문의처, 행사 설명에 등장하는 기관이 다를 수 있습니다.
+    if not OFFICE.search(line) or not (EXTERNAL_OWNER.search(line) or
+            re.search(r'(?:KOTRA|코트라|무역관)[은는이가]', line, re.I)):
+        return None
+    found = False
+    spans = []
+    for group in CONTACT_GROUP.finditer(line):
+        payload = group.group(1)
+        if not (EMAIL.search(payload) or PHONE.search(payload)):
+            continue
+        person = OFFICE_PERSON.search(line[:group.start()])
+        if person:
+            found = True
+            spans.append((len(line[:person.start('identity')].rstrip()), group.end()))
+        elif re.search(r'(?:무역관|KOTRA|코트라)[ \t]*$', line[:group.start()], re.I):
+            found = True
+            spans.extend((group.start(1) + a, group.start(1) + b)
+                         for a, b in _staff_spans(payload, writer))
+        elif (staff_name := NAME_ROLE.search(line[:group.start()])) and staff_name.end() == group.start() and re.search(r'@kotra\.or\.kr\b', payload, re.I):
+            found = True
+            spans.append((staff_name.start(), group.end()))
+        elif re.match(r'(?:에|로|으로|에게)[ \t]*(?:문의|연락)', line[group.end():]):
+            found = True  # 바로 앞 기관이 문의 대상입니다.
+    if found:
+        return LinePlan(tuple(spans), False, Owner.UNKNOWN, 'attributed-contact')
+    return None
+
+
 def _segment_plan(line, owner, writer):
+    attributed = _narrative_contact_plan(line, writer)
+    if attributed is not None:
+        return attributed
     external = _external_owner(line)
     explicit_office = bool(OFFICE.search(line)) and not external
     if external:
@@ -268,6 +315,43 @@ def _segment_plan(line, owner, writer):
         payload_spans = [(max(start, field.end()), end) for start, end in spans if end > field.end()]
         drop = _contact_residue_only(_delete_spans(line, payload_spans)[field.end():])
     return LinePlan(tuple(spans), drop, next_owner, 'office-contact')
+
+
+def _body_plan(line, owner, writer):
+    interview = re.search(r'무역관[과이] 인터뷰', line)
+    if interview:
+        inquiry = re.search(r'(?:문의(?:처)?|담당자)[ \t]*[:：]', line[interview.end():])
+        if not inquiry:
+            return LinePlan(reason='quoted-contact')
+        offset = interview.end() + inquiry.start()
+        tail = _body_plan(line[offset:], Owner.UNKNOWN, writer)
+        spans = ((offset, len(line)),) if tail.drop else tuple(
+            (offset + a, offset + b) for a, b in tail.spans)
+        return LinePlan(spans, False, tail.owner, 'interview-and-inquiry')
+    clauses = _contact_clauses(line)
+    if len(clauses) == 1:
+        plan = _segment_plan(line, owner, writer)
+    else:
+        # 각 소속 구간을 독립 판정하되 원문 구분자와 외부 구간은 그대로 보존합니다.
+        positions, cursor, parts = [], 0, []
+        for clause in clauses:
+            start = line.index(clause, cursor)
+            positions.append((start, start + len(clause)))
+            cursor = start + len(clause)
+            parts.append(_segment_plan(clause, Owner.UNKNOWN, writer))
+        spans = []
+        survivors = [j for j, part in enumerate(parts) if not part.drop]
+        for j, (part, (start, end)) in enumerate(zip(parts, positions)):
+            if part.drop:
+                if any(k > j for k in survivors):
+                    end = positions[j + 1][0]
+                elif j:
+                    start = positions[j - 1][1]
+                spans.append((start, end))
+            else:
+                spans.extend((start + a, start + b) for a, b in part.spans)
+        plan = LinePlan(tuple(spans), not survivors, parts[-1].owner, 'mixed-owners')
+    return plan
 
 
 def plan_article_contacts(body, *, title='', writer=''):
@@ -306,9 +390,32 @@ def plan_article_contacts(body, *, title='', writer=''):
                 signature_started = False
             elif OFFICE.search(line[:author_end]) and not _external_owner(line[:author_end]):
                 owner = Owner.OFFICE
-            plans.append(LinePlan(((0, author_end),), author_active, owner, 'explicit-author'))
+            spans = [(0, author_end)]
+            drop = author_active
+            if not author_active:
+                tail = _body_plan(line[author_end:], owner, writer)
+                spans.extend((author_end + a, author_end + b) for a, b in tail.spans)
+                drop = tail.drop
+                owner = tail.owner
+            plans.append(LinePlan(tuple(spans), drop, owner, 'explicit-author'))
+            continue
+        contact = AUTHOR_EMAIL_IN_PROSE.match(line) if (
+            author_active or line.lstrip().startswith(('작성자에게', '작성자께'))
+        ) else None
+        if contact and re.fullmatch(
+                r'[ \t]+(?:문의|연락)[ \t]*(?:하세요|바랍니다|해 주세요|해 주시기 바랍니다)[.!。]?[ \t]*',
+                line[contact.end():]):
+            plans.append(LinePlan(((0, len(line)),), True, owner, 'author-contact'))
             continue
         if author_active:
+            if AUTHOR_AFFILIATION_ONLY.fullmatch(line.strip()):
+                plans.append(LinePlan(owner=owner, reason='author-affiliation'))
+                continue
+            if contact:
+                plans.append(LinePlan((contact.span('field'),), reason='author-email-in-prose'))
+                author_active = signature_open = False
+                owner = Owner.UNKNOWN
+                continue
             if (not _external_owner(line) and not OFFICE.search(line) and not QUOTE_LABEL.search(line)
                     and (_signature_contact(line) or _contact_only(line, writer) or _signature_affiliation(line))):
                 plans.append(LinePlan(((0, len(line)),), True, owner, 'author-contact'))
@@ -326,33 +433,7 @@ def plan_article_contacts(body, *, title='', writer=''):
                 signature_started = True
                 continue
             signature_open = False
-        if re.search(r'무역관과 인터뷰|무역관이 인터뷰', line):
-            plans.append(LinePlan(reason='quoted-contact'))
-            owner = Owner.UNKNOWN
-            continue
-        clauses = _contact_clauses(line)
-        if len(clauses) == 1:
-            plan = _segment_plan(line, owner, writer)
-        else:
-            # 각 소속 구간을 독립 판정하되 원문 구분자와 외부 구간은 그대로 보존합니다.
-            positions, cursor, parts = [], 0, []
-            for clause in clauses:
-                start = line.index(clause, cursor)
-                positions.append((start, start + len(clause)))
-                cursor = start + len(clause)
-                parts.append(_segment_plan(clause, Owner.UNKNOWN, writer))
-            spans = []
-            survivors = [j for j, part in enumerate(parts) if not part.drop]
-            for j, (part, (start, end)) in enumerate(zip(parts, positions)):
-                if part.drop:
-                    if any(k > j for k in survivors):
-                        end = positions[j + 1][0]
-                    elif j:
-                        start = positions[j - 1][1]
-                    spans.append((start, end))
-                else:
-                    spans.extend((start + a, start + b) for a, b in part.spans)
-            plan = LinePlan(tuple(spans), not survivors, parts[-1].owner, 'mixed-owners')
+        plan = _body_plan(line, owner, writer)
         plans.append(plan)
         owner = plan.owner
     return tuple(plans)
