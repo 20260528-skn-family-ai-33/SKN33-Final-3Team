@@ -278,4 +278,4 @@ class WriterCsvPrivacyTest(unittest.TestCase):
                 rows = job.read_csv(path, nl.RAW_COLUMNS, nl.RAW_OPTIONAL_COLUMNS)
                 self.assertEqual(rows[0]['newsWrterNm'], '홍길동' if with_writer else '')
                 self.assertEqual(nl.article_row(rows[0])['body_masked'],
-                                 'KOTRA 문의하세요.' if with_writer else 'KOTRA 홍길동에게 문의하세요.')
+                                 'KOTRA 홍길동에게 문의하세요.')

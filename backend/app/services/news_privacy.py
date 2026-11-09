@@ -1,22 +1,10 @@
-"""기사 작성자·기고자와 KOTRA 담당자 정보를 표시 없이 삭제합니다.
-
-기업·기관·행사 연락처 및 공공 핫라인은 기사 내용으로 보존합니다.
-"""
+"""작성자·기고자 정보를 삭제하고 본문의 문의 담당자 정보는 보존합니다."""
 import re
 from dataclasses import dataclass
-from enum import Enum
-
 EMAIL = re.compile(r"[\w.+%*-]+[ \t]*@+[ \t\]]*[\w.-]+\.[A-Za-z]{2,}")
 PHONE = re.compile(r"(?<![\w])(?:\+?\(?\d{1,4}\)?[ .-]*){2,7}\d{2,9}(?:[ \t]*\(?(?:내선|Ext\.?|#)[ \t]*\d+\)?)?", re.I)
 AUTHOR = re.compile(r"^([ \t*※ㅇ·-]*(?:공동[ \t]*)?(?:작성자|글쓴이|기고자|취재|글)[ \t]*[:：][ \t]*)(.+)$")
-OFFICE = re.compile(r"KOTRA|코트라|무역관", re.I)
-CONTACT = re.compile(r"문의|담\s*당|연락|이메일|메일|전화|팩스|\b(?:E-?mail|Tel|Fax)\b", re.I)
 ROLE = r"(?:스페셜리스트|부관장|관장|과장|차장|대리|사원|주임|팀장|부장|위원|관세사|변호사|기자|특파원|PM)"
-PARTICLE = r"(?:에게서|에게|께서|께|으로부터|으로|은|는|이|가|을|를|의|와|과|도|만)"
-NAME_ROLE = re.compile(r"(?<![가-힣])([가-힣]{2,4})([ \t]+" + ROLE + r")(?:님|씨)?(?:(?:" + PARTICLE + r")(?![\w])|(?![\w]))")
-
-
-
 def _delete_spans(value, spans):
     """원문 좌표에서 겹치는 구간을 합친 뒤 뒤쪽부터 삭제합니다."""
     merged = []
@@ -58,29 +46,6 @@ def _phone_is_contact(match, value):
     return len(re.sub(r'\D', '', text)) >= 7
 
 
-def _staff_spans(line, writer):
-    spans = [m.span() for m in EMAIL.finditer(line)]
-    spans += [m.span() for m in PHONE.finditer(line) if _phone_is_contact(m, line)]
-    # 연락처 바로 앞의 필드명도 함께 제거합니다.
-    for start, end in list(spans):
-        label = re.search(r'(?:이메일|메일|전화번호|전화|팩스|E-?mail|Tel|Fax)[ \t]*[:：][ \t]*$', line[:start], re.I)
-        if label:
-            spans.append((label.start(), end))
-    spans += [m.span() for m in NAME_ROLE.finditer(line)]
-    patterns = [
-        r'(무역관[ \t]+)(?!Invest Korea)([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+)*)(?=\(|[ \t]+(?:Senior|Specialist))',
-        r'(무역관[ \t]+)(?!담당자|이메일|연락처)([가-힣]{2,4})(?=[ \t]+(?:' + EMAIL.pattern + r'))',
-        r'(무역관[ \t]+)(?!담당자|이메일|연락처)([가-힣]{2,4})(?=[ \t]*\()',
-        r'((?:담\s*당\s*자)[ \t]*[:：][ \t]*)([가-힣]{2,4})(?=[ \t]*(?:$|\())',
-        r'((?:담\s*당\s*자|문의)[ \t]*[:：][ \t]*)([A-Z][a-z]+(?:[ \t]+[A-Z][a-z]+){1,4})(?=[ \t]*(?:$|\())',
-    ]
-    for pattern in patterns:
-        spans += [m.span(2) for m in re.finditer(pattern, line)]
-    if writer and len(writer.strip()) >= 2:
-        spans += [m.span() for m in re.finditer(r'(?<![\w])' + re.escape(writer.strip()) + r'(?:님|씨)?(?:(?:에게서|에게|께서|께|으로부터|으로|은|는|이|가|을|를|의|와|과|도|만)(?![\w])|(?![\w]))', line)]
-    return spans
-
-
 def _clean_deleted_line(line):
     previous = None
     while previous != line:
@@ -119,11 +84,34 @@ def _signature_affiliation(line):
 
 
 # 명시적인 작성자 행 뒤에서만 사용하는 두 필드 형식입니다.
-AUTHOR_AFFILIATION_ONLY = re.compile(r'(?:소속[ \t]*[:：][ \t]*)?법무법인[ \t]+[가-힣A-Za-z0-9·]+')
+AUTHOR_AFFILIATION_ONLY = re.compile(
+    r'(?!(?:.*(?:문의|담당자|연락처|행사 안내)))'
+    r'(?:소속[ \t]*[:：][ \t]*[\w㈜().·& -]+|'
+    r'(?:법무법인|주식회사|㈜|\(주\))[ \t]*[\w·& -]+)'
+)
+SIGNATURE_DEADLINE = re.compile(
+    r'신청[ \t]*마감(?:일|기한)?[ \t]*[:：]?[ \t]*'
+    r'(?:(?:\d{4}년[ \t]*)?\d{1,2}월[ \t]*\d{1,2}일|\d{4}[./-]\d{1,2}[./-]\d{1,2})'
+    r'(?:[ \t]*\d{1,2}(?::\d{2}|시(?:[ \t]*\d{1,2}분)?))?(?:까지)?'
+)
+
+
+def _signature_deadline(line):
+    for group in re.finditer(r'[(（]([^()（）]*)[)）]', line):
+        deadline = SIGNATURE_DEADLINE.search(line, *group.span(1))
+        if deadline:
+            return deadline
+
+
 AUTHOR_EMAIL_IN_PROSE = re.compile(
     r'^[ \t]*(?:작성자(?:에게|께)[ \t]+|(?=(?:이메일|메일|E-?mail)[ \t]*[:：]))'
     r'(?P<field>(?:(?:이메일|메일|E-?mail)[ \t]*[:：][ \t]*)?'
     + EMAIL.pattern + r'(?:으로|로)?)(?=[ \t]+(?:문의|연락))', re.I)
+
+
+AUTHOR_PHONE_EXTENSION = re.compile(
+    r'(?:연락처|전화(?:번호)?|Tel)[ \t:：]+' + PHONE.pattern + r'[ \t]*\(\d+\)', re.I
+)
 
 
 def _signature_contact(line):
@@ -132,84 +120,11 @@ def _signature_contact(line):
                 re.fullmatch(r'(?:이메일|연락처|전화(?:번호)?|E-?mail|Tel)[ \t:：]+(?:' + EMAIL.pattern + r'|' + PHONE.pattern + r'(?:~\d+)?)', value, re.I))
 
 
-EXTERNAL_OWNER = re.compile(
-    r'주최사|주최측|제조사|공급사|판매사|운영사|전시[ \t]*주최|'
-    r'외부[ \t]*(?:기업|기관|행사)|회사[ \t]*담당자|협회'
-)
-QUOTE_LABEL = re.compile(r'이메일 사칭 예시|사칭 이메일')
-
-
-def _quoted_contact_spans(line):
-    """예시 표기부터 그 구간 끝까지만 보호합니다. 이웃 행에는 전파하지 않습니다."""
-    spans = []
-    tokens = _protected_tokens(line)
-    for marker in QUOTE_LABEL.finditer(line):
-        end = len(line)
-        for boundary in re.finditer(r'[;；]|[.。](?=\s)|(?:문의(?:처)?|담당자)[ \t]*[:：]', line[marker.end():]):
-            pos = marker.end() + boundary.start()
-            if not any(a <= pos < b for a, b in tokens):
-                end = pos
-                break
-        spans.append((marker.start(), end))
-    return spans
-
-
-def _external_owner(line):
-    # 외부 소속이 명시된 연락처는 주변 KOTRA 언급보다 우선합니다.
-    return bool(EXTERNAL_OWNER.search(line)) and not bool(
-        re.search(r'(?:문의(?:처)?|담당자)[ \t:：]*(?:KOTRA|코트라|[^:：\n]*무역관)', line, re.I))
-
-
-
-
-def _contact_residue_only(payload):
-    residue = _clean_deleted_line(payload)
-    residue = re.sub(r'(?<![\w])(?:또는|및|혹은|and|or)(?![\w])', '', residue, flags=re.I)
-    residue = re.sub(r'^(?:KOTRA|코트라)[ \t]*', '', residue, flags=re.I)
-    residue = re.sub(r'^(?:[A-Za-z가-힣 .-]+[ \t]+)?무역관', '', residue).strip()
-    residue = re.sub(r'^(?:' + ROLE + r'|Senior Specialist|Specialist|Assistant Manager|Manager)$', '', residue, flags=re.I)
-    return not re.search(r'[\w가-힣]', residue)
-
-
-def _contact_clauses(line):
-    """소속이 바뀌는 경계만 분리합니다. URL과 같은 담당자의 후속 전화번호는 유지합니다."""
-    if not OFFICE.search(line) or not (EXTERNAL_OWNER.search(line) or QUOTE_LABEL.search(line)):
-        return [line]
-    depth, start, parts = 0, 0, []
-    separators = re.compile(r'[,，;；]|[ \t]+/[ \t]+|[ \t]+(?:또는|혹은|및)[ \t]+')
-    protected = _protected_tokens(line)
-    candidates = {m.start(): m for m in separators.finditer(line)
-                  if not any(a <= m.start() < b for a, b in protected)}
-    for i, char in enumerate(line):
-        if char in '(（[':
-            depth += 1
-        elif char in ')）]':
-            depth = max(0, depth - 1)
-        if depth or i not in candidates:
-            continue
-        separator = candidates[i]
-        rest = line[separator.end():]
-        # 연락처 값 앞에 명시적인 소속이 있어야 새 담당자 구간입니다.
-        prefix = re.split(r'[,，;；(（]|https?://|[\w.+%-]+@', rest, maxsplit=1)[0]
-        if OFFICE.search(prefix) or EXTERNAL_OWNER.search(prefix):
-            parts.append(line[start:i].strip())
-            start = separator.end()
-    parts.append(line[start:].strip())
-    return parts
-
-
-class Owner(Enum):
-    UNKNOWN = 'unknown'
-    OFFICE = 'office'
-    EXTERNAL = 'external'
-
-
 @dataclass(frozen=True)
 class LinePlan:
     """원문 한 행의 삭제 좌표와 판정 근거. 분석 단계에서는 본문을 수정하지 않습니다."""
     spans: tuple = ()
     drop: bool = False
-    owner: Owner = Owner.UNKNOWN
     reason: str = 'preserve'
 
 
@@ -218,6 +133,9 @@ def _author_prefix_end(line):
     author = AUTHOR.match(line)
     if not author:
         return None
+    inquiry = re.search(r'(?:문의(?:처)?|담당자)[ \t]*[:：]', line[author.end(1):])
+    if inquiry:
+        line = line[:author.end(1) + inquiry.start()]
     protected = _protected_tokens(line)
     depth = 0
     for i in range(author.end(1), len(line)):
@@ -237,167 +155,30 @@ def _author_prefix_end(line):
     return len(line)
 
 
-def _contact_only(line, writer):
-    """블록의 소속을 다음 행에 전달해도 되는 개인정보 전용 행인지 확인합니다."""
-    spans = _staff_spans(line, writer)
-    field = CONTACT_ROW.match(line)
-    if field:
-        spans = [(max(start, field.end()), end) for start, end in spans if end > field.end()]
-        residue = _delete_spans(line, spans)[field.end():]
-    else:
-        residue = _delete_spans(line, spans)
-    return bool(spans) and _contact_residue_only(residue)
-
-
-# 괄호 앞에서 무역관과 담당자의 관계가 직접 드러나는 서명.
-OFFICE_PERSON = re.compile(
-    r'(?:무역관|KOTRA|코트라)[ \t]+(?P<identity>(?:담당자[ \t]+)?'
-    r'[가-힣]{2,4}[ \t]+' + ROLE + r')[ \t]*$', re.I)
-CONTACT_GROUP = re.compile(r'[（(]([^()（）]+)[）)]')
-
-
-def _narrative_contact_plan(line, writer):
-    # 안내 주체와 실제 문의처, 행사 설명에 등장하는 기관이 다를 수 있습니다.
-    if not OFFICE.search(line) or not (EXTERNAL_OWNER.search(line) or
-            re.search(r'(?:KOTRA|코트라|무역관)[은는이가]', line, re.I)):
-        return None
-    found = False
-    spans = []
-    for group in CONTACT_GROUP.finditer(line):
-        payload = group.group(1)
-        if not (EMAIL.search(payload) or PHONE.search(payload)):
-            continue
-        person = OFFICE_PERSON.search(line[:group.start()])
-        if person:
-            found = True
-            spans.append((len(line[:person.start('identity')].rstrip()), group.end()))
-        elif re.search(r'(?:무역관|KOTRA|코트라)[ \t]*$', line[:group.start()], re.I):
-            found = True
-            spans.extend((group.start(1) + a, group.start(1) + b)
-                         for a, b in _staff_spans(payload, writer))
-        elif (staff_name := NAME_ROLE.search(line[:group.start()])) and staff_name.end() == group.start() and re.search(r'@kotra\.or\.kr\b', payload, re.I):
-            found = True
-            spans.append((staff_name.start(), group.end()))
-        elif re.match(r'(?:에|로|으로|에게)[ \t]*(?:문의|연락)', line[group.end():]):
-            found = True  # 바로 앞 기관이 문의 대상입니다.
-    if found:
-        return LinePlan(tuple(spans), False, Owner.UNKNOWN, 'attributed-contact')
-    return None
-
-
-def _segment_plan(line, owner, writer):
-    attributed = _narrative_contact_plan(line, writer)
-    if attributed is not None:
-        return attributed
-    external = _external_owner(line)
-    explicit_office = bool(OFFICE.search(line)) and not external
-    if external:
-        return LinePlan(owner=Owner.EXTERNAL, reason='external-owner')
-    office_context = explicit_office or owner is Owner.OFFICE
-    is_identity = bool(NAME_ROLE.fullmatch(line.strip())) or _contact_only(line, writer)
-    if office_context and (CONTACT.search(line) or EMAIL.search(line) or is_identity):
-        spans = _staff_spans(line, writer)
-    else:
-        spans = [m.span() for m in EMAIL.finditer(line)
-                 if re.search(r'@+[ \t]*kotra\.or\.kr$', m.group(), re.I)]
-    quoted = _quoted_contact_spans(line)
-    if quoted:
-        spans = [(a, b) for a, b in spans if not any(x < b and a < y for x, y in quoted)]
-        return LinePlan(tuple(spans), False, Owner.UNKNOWN, 'quoted-contact-boundary')
-    # 일반 문장은 블록을 끝냅니다. 빈 줄은 상위 파서가 그대로 통과시킵니다.
-    heading = explicit_office and not re.search(r'[.!?。]|(?:합니다|입니다)$', line)
-    next_owner = Owner.OFFICE if office_context and (heading or _contact_only(line, writer)) else Owner.UNKNOWN
-    if not spans:
-        return LinePlan(owner=next_owner)
-    field = CONTACT_ROW.match(line)
-    drop = _contact_only(line, writer)
-    if field and not drop:
-        payload_spans = [(max(start, field.end()), end) for start, end in spans if end > field.end()]
-        drop = _contact_residue_only(_delete_spans(line, payload_spans)[field.end():])
-    return LinePlan(tuple(spans), drop, next_owner, 'office-contact')
-
-
-def _body_plan(line, owner, writer):
-    interview = re.search(r'무역관[과이] 인터뷰', line)
-    if interview:
-        inquiry = re.search(r'(?:문의(?:처)?|담당자)[ \t]*[:：]', line[interview.end():])
-        if not inquiry:
-            return LinePlan(reason='quoted-contact')
-        offset = interview.end() + inquiry.start()
-        tail = _body_plan(line[offset:], Owner.UNKNOWN, writer)
-        spans = ((offset, len(line)),) if tail.drop else tuple(
-            (offset + a, offset + b) for a, b in tail.spans)
-        return LinePlan(spans, False, tail.owner, 'interview-and-inquiry')
-    clauses = _contact_clauses(line)
-    if len(clauses) == 1:
-        plan = _segment_plan(line, owner, writer)
-    else:
-        # 각 소속 구간을 독립 판정하되 원문 구분자와 외부 구간은 그대로 보존합니다.
-        positions, cursor, parts = [], 0, []
-        for clause in clauses:
-            start = line.index(clause, cursor)
-            positions.append((start, start + len(clause)))
-            cursor = start + len(clause)
-            parts.append(_segment_plan(clause, Owner.UNKNOWN, writer))
-        spans = []
-        survivors = [j for j, part in enumerate(parts) if not part.drop]
-        for j, (part, (start, end)) in enumerate(zip(parts, positions)):
-            if part.drop:
-                if any(k > j for k in survivors):
-                    end = positions[j + 1][0]
-                elif j:
-                    start = positions[j - 1][1]
-                spans.append((start, end))
-            else:
-                spans.extend((start + a, start + b) for a, b in part.spans)
-        plan = LinePlan(tuple(spans), not survivors, parts[-1].owner, 'mixed-owners')
-    return plan
-
-
 def plan_article_contacts(body, *, title='', writer=''):
-    """소속 상태와 서명 문법으로 삭제 계획을 구성합니다. 원문 좌표를 유지합니다."""
+    """작성자 필드와 서명 문법으로 삭제 계획을 구성합니다. 원문 좌표를 유지합니다."""
     lines = body.split('\n')
     plans = []
-    owner = Owner.UNKNOWN
     signature_open = bool(re.match(r'^\[기고\]', title))
     signature_started = False
     author_active = False
-    quote_email_pending = False
     for i, line in enumerate(lines):
         if not line.strip():
-            plans.append(LinePlan(owner=owner))
-            continue
-        if quote_email_pending:
-            quote_email_pending = False
-            # 명시적 예시 표제 바로 다음 이메일 전용 행 한 개만 보호합니다.
-            if EMAIL.fullmatch(line.strip()):
-                plans.append(LinePlan(reason='quoted-email-continuation'))
-                continue
-        if re.fullmatch(r'[ \t]*(?:이메일 사칭 예시|사칭 이메일)[ \t]*[:：][ \t]*', line):
-            quote_email_pending = True
-            owner = Owner.UNKNOWN
-            author_active = False
-            signature_open = False
-            plans.append(LinePlan(reason='quoted-email-heading'))
+            plans.append(LinePlan())
             continue
         author_end = _author_prefix_end(line)
         if author_end is not None:
             author_active = author_end == len(line)
-            # 작성자 여부와 소속은 별개입니다. 작성자 행을 삭제해도 무역관 블록을 끊지 않습니다.
             if not author_active:
-                owner = Owner.UNKNOWN  # 같은 행의 후속 본문은 블록 경계입니다.
                 signature_open = False
-                signature_started = False
-            elif OFFICE.search(line[:author_end]) and not _external_owner(line[:author_end]):
-                owner = Owner.OFFICE
-            spans = [(0, author_end)]
-            drop = author_active
-            if not author_active:
-                tail = _body_plan(line[author_end:], owner, writer)
-                spans.extend((author_end + a, author_end + b) for a, b in tail.spans)
-                drop = tail.drop
-                owner = tail.owner
-            plans.append(LinePlan(tuple(spans), drop, owner, 'explicit-author'))
+            deadline = _signature_deadline(line[:author_end])
+            if deadline:
+                end = deadline.end()
+                # 후속 본문과 마감일 사이의 공백을 보존합니다.
+                boundary = len(line[:author_end].rstrip()) if not author_active else author_end
+                plans.append(LinePlan(((0, deadline.start()), (end, boundary)), reason='explicit-author'))
+            else:
+                plans.append(LinePlan(((0, author_end),), author_active, 'explicit-author'))
             continue
         contact = AUTHOR_EMAIL_IN_PROSE.match(line) if (
             author_active or line.lstrip().startswith(('작성자에게', '작성자께'))
@@ -405,20 +186,18 @@ def plan_article_contacts(body, *, title='', writer=''):
         if contact and re.fullmatch(
                 r'[ \t]+(?:문의|연락)[ \t]*(?:하세요|바랍니다|해 주세요|해 주시기 바랍니다)[.!。]?[ \t]*',
                 line[contact.end():]):
-            plans.append(LinePlan(((0, len(line)),), True, owner, 'author-contact'))
+            plans.append(LinePlan(((0, len(line)),), True, 'author-contact'))
             continue
         if author_active:
             if AUTHOR_AFFILIATION_ONLY.fullmatch(line.strip()):
-                plans.append(LinePlan(owner=owner, reason='author-affiliation'))
+                plans.append(LinePlan(reason='author-affiliation'))
                 continue
             if contact:
                 plans.append(LinePlan((contact.span('field'),), reason='author-email-in-prose'))
                 author_active = signature_open = False
-                owner = Owner.UNKNOWN
                 continue
-            if (not _external_owner(line) and not OFFICE.search(line) and not QUOTE_LABEL.search(line)
-                    and (_signature_contact(line) or _contact_only(line, writer) or _signature_affiliation(line))):
-                plans.append(LinePlan(((0, len(line)),), True, owner, 'author-contact'))
+            if _signature_contact(line) or AUTHOR_PHONE_EXTENSION.fullmatch(line.strip()):
+                plans.append(LinePlan(((0, len(line)),), True, 'author-contact'))
                 continue
             author_active = False
         if signature_open:
@@ -427,15 +206,18 @@ def plan_article_contacts(body, *, title='', writer=''):
                 continue
             following = next((v for v in lines[i + 1:] if v.strip()), '')
             bare_name = bool(re.fullmatch(r'[가-힣]{2,4}', line.strip()) and _signature_affiliation(following))
+            deadline = _signature_deadline(line)
+            if deadline and _contributor_signature(_delete_spans(line, [deadline.span()]), writer):
+                plans.append(LinePlan(((0, deadline.start()), (deadline.end(), len(line))), reason='contributor-signature'))
+                signature_started = True
+                continue
             if (_contributor_signature(line, writer) or bare_name or
                     signature_started and (_signature_contact(line) or _signature_affiliation(line))):
                 plans.append(LinePlan(((0, len(line)),), True, reason='contributor-signature'))
                 signature_started = True
                 continue
             signature_open = False
-        plan = _body_plan(line, owner, writer)
-        plans.append(plan)
-        owner = plan.owner
+        plans.append(LinePlan())
     return tuple(plans)
 
 
@@ -449,7 +231,9 @@ def mask_article_contacts(body, *, title='', writer=''):
         if not plan.spans:
             output.append(line)
         else:
-            result = _clean_deleted_line(_delete_spans(line, plan.spans))
+            result = _delete_spans(line, plan.spans)
+            if plan.reason != 'explicit-author':
+                result = _clean_deleted_line(result)
             if result:
                 output.append(result)
     return '\n'.join(output)

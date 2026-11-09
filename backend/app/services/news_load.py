@@ -5,7 +5,7 @@
 - 키워드: services/news_keywords/keyword_clean.py 결과 news_keywords_clean.csv (kw_topic·country_all·hs6·선택 hs4)
 
 규칙
-- body_masked: HTML 태그·스크립트를 벗긴 뒤 작성자·기고자·KOTRA 담당자 정보만 가립니다.
+- body_masked: HTML 태그·스크립트를 벗긴 뒤 작성자·기고자 정보를 삭제하고 문의 담당자 정보는 보존합니다.
   외부 기업·기관·행사 연락처와 공공 핫라인은 보존합니다.
   본문이 비면 요약(cntntSumar), 그것도 없으면 제목을 넣습니다 (NOT NULL 컬럼).
 - title: 원본 제목의 HTML 문자(&#39;·&middot;·&lsquo; 등, 약 2,400건)를 글자로 바꿔 넣습니다.
