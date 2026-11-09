@@ -19,9 +19,12 @@ SCALE = {None:1,'만':10**4,'억':10**8,'조':10**12}
 CHANGE_KEYS = frozenset({'change_pct','yoy_pct','mom_pct','growth_pct'})
 YEAR_AGO = r'(?:전년(?:도)?|작년|지난\s*해)'
 MONTH_AGO = r'(?:전월|지난\s*달)'
-COMPARISON = re.compile(r'(?P<yoy>'+YEAR_AGO+r')\s*(?:동기\s*)?(?:대비|보다)|(?P<mom>'+MONTH_AGO+r')\s*(?:대비|보다)')
-DOWN_WORDS, UP_WORDS = r'감소|줄|하락|축소|떨어|낮|내려|내린', r'증가|늘|상승|확대|성장|올라|오르|높|올린'
-CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나|의|을|를)?\s*(?:(?P<down>'+DOWN_WORDS+r')|(?P<up>'+UP_WORDS+r'))')
+COMPARE_LINK = r'(?:대비|보다|에\s*비(?:해|하여|하면)|(?:와|과|에)\s*비교(?:해|하여|하면|했을\s*때))'
+COMPARISON = re.compile(r'(?:(?P<yoy>'+YEAR_AGO+r')\s*(?:(?:동기|동월|같은\s*달)\s*)?|'
+                        r'(?P<mom>'+MONTH_AGO+r')\s*)'+COMPARE_LINK)
+COMPARE_OPERATOR = re.compile(COMPARE_LINK)
+DOWN_WORDS, UP_WORDS = r'감소|줄어들|줄|하락|축소|떨어|낮|내려|내린', r'증가|늘어나|늘|상승|확대|성장|올라|오르|높|올린'
+CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나|의|을|를)?\s*(?:(?P<negative>안|못)\s*)?(?:(?P<down>'+DOWN_WORDS+r')|(?P<up>'+UP_WORDS+r'))')
 DOWN = re.compile(r'감소|줄어|줄었|줄고|하락|축소|떨어|내려|내린')
 UP = re.compile(r'증가|늘어|늘었|늘고|상승|확대|성장|올라|오르|올린')
 DIRECTION = re.compile(r'과거|지난|직전|최근|앞선|향후|앞으로|미래|다가올|다음|예측|예상|전망')
@@ -228,6 +231,7 @@ def _quantity_name_roles(text, hits, countries):
 
 class NameCatalog:
     def __init__(self, sources, known_names=(), countries=()):
+        self._row_bindings = {}
         fields=list(source_names(sources))
         self.countries=frozenset(countries)|{name for key,name in fields if key.startswith('country_')}
         for source in sources:
@@ -303,6 +307,14 @@ class NameCatalog:
 
     def names_in(self,text): return frozenset(n for n,_,_ in self.mentions(text))
 
+    def row_binding(self, name):
+        """Aliases and grouped names for one stored identifier, within this catalog only."""
+        if name not in self._row_bindings:
+            parts = self.names_in(name)
+            members = parts if self.grouped(parts) else frozenset()
+            self._row_bindings[name] = (self.aliases.get(name, ()), members)
+        return self._row_bindings[name]
+
     def merge(self,inherited,mentioned):
         country=mentioned & self.countries; product=mentioned-self.countries
         return frozenset((country or inherited & self.countries)|(product or inherited-self.countries))
@@ -348,11 +360,13 @@ class MetricClaim:
     rank_axis: str | None = None
     valid: bool = True
     relation: str = 'EQ'
+    amount_period: str | None = None
+    negated_change: bool = False
 
 
 @dataclass(frozen=True)
 class Claim:
-    quantity: Quantity
+    quantity: Quantity | None
     targets: frozenset[str]
     target_scope: str
     metric: MetricClaim
@@ -419,6 +433,12 @@ def _threshold_relation(suffix):
     return relation, not HISTORICAL_BOUND.match(suffix, end)
 
 
+def _change_predicate(suffix):
+    # In "20% 이상 감소", both the bound and the change belong to the same value.
+    bound = THRESHOLD.match(suffix)
+    return CHANGE.match(suffix, bound.end() if bound else 0)
+
+
 def metric_claim(text,quantity,*,direct_suffix='',flow=None):
     share=bool(re.search(r'비중|점유율',text));change=bool(re.search(r'증감률|증가율|감소율|변동률',text))
     family='SHARE' if share else 'CHANGE' if change else None
@@ -433,7 +453,7 @@ def metric_claim(text,quantity,*,direct_suffix='',flow=None):
         elif re.search(MONTH_AGO,text): comparison='MOM'
     flows={'EXPORT' for _ in re.finditer('수출',text)}|{'IMPORT' for _ in re.finditer('수입',text)}
     direction=None;direct=False
-    after=CHANGE.match(direct_suffix) if quantity.unit in ('%','%p','USD') else None
+    after=_change_predicate(direct_suffix) if quantity.unit in ('%','%p','USD') else None
     if after: direction='DOWN' if after['down'] else 'UP';direct=True
     elif quantity.unit in ('%','%p'):
         down,up=bool(DOWN.search(text)),bool(UP.search(text))
@@ -451,6 +471,64 @@ def metric_claim(text,quantity,*,direct_suffix='',flow=None):
     valid = not (share and change) and len(flows) < 2 and bound_valid
     return MetricClaim(family,aggregate,comparison,next(iter(flows)) if len(flows)==1 else flow,
                        direction,direct,roles,rank_axis,valid,relation)
+
+
+def _scope_measure(metric,quantity,prefix,suffix,label,*,shared,multiple):
+    """Bind comparison and level periods within a single numeric slot."""
+    if quantity.unit == 'USD':
+        delta_label = re.search(r'증감액|증가액|감소액|차액', label)
+        if metric.direct_change or delta_label:
+            direction = metric.direction
+            if not direction and delta_label:
+                direction = {'증가액': 'UP', '감소액': 'DOWN'}.get(delta_label.group())
+            metric = replace(metric, family='AMOUNT_CHANGE', direction=direction,
+                             direct_change=metric.direct_change or direction is not None)
+        else:
+            # A comparison modifies a change; a bare relative date names a level.
+            level_prefix = COMPARISON.sub('', prefix)
+            amount_period = 'AUTO'
+            if re.search(YEAR_AGO, level_prefix):
+                amount_period = 'YOY'
+            elif re.search(MONTH_AGO, level_prefix):
+                amount_period = 'MOM'
+            elif re.search(r'비교\s*기', level_prefix):
+                amount_period = 'COMPARE'
+            elif re.search(r'당기|현재|이번\s*달|올해', level_prefix):
+                amount_period = 'CURRENT'
+            return replace(metric, family='AMOUNT', comparison=None, amount_period=amount_period)
+    if quantity.unit == '%' and not metric.family and COMPARE_OPERATOR.search(prefix):
+        metric = replace(metric, family='CHANGE')
+    if metric.family in ('AMOUNT_CHANGE', 'CHANGE', 'SHARE_CHANGE'):
+        predicate = _change_predicate(suffix)
+        if predicate:
+            end = predicate.end()
+            negated = bool(predicate['negative'])
+            for pattern in (NEGATED_THRESHOLD, NEGATED_PROPOSITION):
+                match = pattern.match(suffix, end)
+                if match:
+                    negated = not negated
+                    end = match.end()
+            metric = replace(metric, negated_change=negated,
+                             valid=metric.valid and not HISTORICAL_BOUND.match(suffix, end))
+        markers = list(COMPARISON.finditer(prefix))
+        axes = {'YOY' if match['yoy'] else 'MOM' for match in markers}
+        rest = COMPARISON.sub('', prefix)
+        # A date or preceding numeric operand can be bound separately by read_time.
+        for operator in COMPARE_OPERATOR.finditer(rest):
+            operand = rest[:operator.start()].rstrip()
+            dated = any(date.end() == len(operand) for date in DATE.finditer(operand))
+            if re.search(r'(?:과거|직전|지난)\s*(?:\d+\s*개월)?$', operand) and metric.prediction_role == {'FUTURE'}:
+                axes.add('FORECAST')
+                continue
+            if operand and not dated:
+                return replace(metric, valid=False)
+        if len(axes) > 1:
+            return replace(metric, valid=False)
+        if axes:
+            metric = replace(metric, comparison=axes.pop())
+        elif not shared and multiple and not COMPARISON.search(prefix+suffix):
+            metric = replace(metric, comparison=None)
+    return metric
 
 
 def _introduces_target(quantity, link):
@@ -503,6 +581,48 @@ def _listed_targets(text, mentions, targets, catalog):
     return [(targets - varied) | {name} for name in ordered] if set(ordered) == varied else []
 
 
+# A finite predicate asserts a direction. Nouns in "증가 여부를 확인하세요"
+# and embedded questions such as "감소했는지" are not assertions.
+TREND_STEMS = (r'(?P<up>증가|상승|확대|성장|늘어났|늘었|늘어나|늘|올랐|올라갔)|'
+               r'(?P<down>감소|하락|축소|줄어들었|줄었|줄어들|줄|내렸|떨어졌)')
+TREND_PREDICATE = re.compile(
+    r'(?P<short>안\s+|못\s+)?'
+    r'(?:' + TREND_STEMS + r')'
+    r'(?P<negative>(?:하)?(?:지는|지도|지|진)\s*(?:않|못하?))?'
+    r'(?P<form>하고\s*있|세를\s*보였|세입|한\s*것으로\s*나타났|하였|했|합|하|았|습|었)?'
+    r'(?P<ending>습니다|니다|다|고|으며|으나|지만|음|함)?[,;，.!。\s]*$')
+TREND_BREAK = re.compile(r'(?<=[고며만나])\s+|(?<=[.。])\s+|[,;，](?!\d)')
+TREND_METRIC = re.compile(r'수출입|수출|수입|점유율|비중|금액|규모|총액|실적|교역액')
+
+
+def _trend_predicate(text):
+    match = TREND_PREDICATE.search(text)
+    if match and not (match['form'] or match['ending'] or match['negative']):
+        # A bare word such as "줄" can end a notice. A clipped trend headline
+        # needs a comparator or measure to give it the meaning of an assertion.
+        prefix = text[:match.start()]
+        if not (COMPARE_OPERATOR.search(prefix) or TREND_METRIC.search(prefix)):
+            return None
+    return match
+
+
+def _trend_claim(syntax, targets, time, catalog, predicate):
+    prefix = syntax[:predicate.start()]
+    axes = {'YOY' if m['yoy'] else 'MOM' for m in COMPARISON.finditer(prefix)}
+    flow_words = set(re.findall(r'수출|수입', prefix))
+    flow = {'수출': 'EXPORT', '수입': 'IMPORT'}.get(next(iter(flow_words), ''))
+    share = bool(re.search(r'점유율|비중', prefix))
+    # With no numeric unit, do not mistake a different measure (e.g. 수출 가격)
+    # or an unknown entity for the trade amount of a matching row.
+    rest = TREND_METRIC.sub('', mask_dates(COMPARISON.sub('', prefix)))
+    rest = re.sub(r'소폭|큰\s*폭으로|대폭|다소|크게|조금|시장|전체|하여|에서|으로|[의은는이가을를에와과액·,\s]', '', rest)
+    valid = len(axes) == 1 and len(flow_words) <= 1 and not rest and not re.search(r'수출입|교역', prefix)
+    metric = MetricClaim(family='SHARE_CHANGE' if share else 'CHANGE', comparison=next(iter(axes), None),
+                         flow=flow, direction='UP' if predicate['up'] else 'DOWN',
+                         negated_change=bool(predicate['negative'] or predicate['short']))
+    return Claim(None, targets, 'GROUP' if catalog.grouped(targets) else 'SINGLE', metric, time, syntax, valid)
+
+
 def parse_sentence(sentence,catalog):
     original_mentions, ambiguous = catalog.resolve_mentions(sentence)
     text = prepare_sentence(sentence, catalog, mentions=original_mentions)
@@ -516,15 +636,30 @@ def parse_sentence(sentence,catalog):
         values=quantities(clean)
         time,last_year=read_time(syntax,context.year)
         if not DATE.search(syntax): time=context.time
-        # A numberless fragment may supply context, but never erases a target/date assertion.
-        if not values: return ParsedSentence((),(time,) if DATE.search(syntax) else (),not ambiguous_name),replace(context,targets=targets,year=last_year,time=time)
+        # Split coordinated assertions only when there is an independent trend
+        # without a value. Numeric lists and their shared units stay intact.
+        trend_cuts = []
+        if TREND_BREAK.search(text) and re.search(TREND_STEMS, clean):
+            boundaries = [m for m in TREND_BREAK.finditer(text)
+                          if not any(a <= m.start() < b for _,a,b in mentions)]
+            start = 0
+            for end, after in [(m.start(), m.end()) for m in boundaries] + [(len(text), len(text))]:
+                fragment = clean[start:end]
+                if _trend_predicate(fragment) and not quantities(fragment):
+                    trend_cuts.extend(cut for cut in (start, after) if 0 < cut < len(text))
+                start = after
+        if not values and not trend_cuts:
+            predicate = _trend_predicate(clean)
+            claims = (_trend_claim(syntax, targets, time, catalog, predicate),) if predicate else ()
+            return ParsedSentence(claims,(time,) if DATE.search(syntax) else (),not ambiguous_name),replace(
+                context,targets=targets,year=last_year,time=time)
         flows=set(re.findall(r'수출|수입',syntax))
         common_flow=({'수출':'EXPORT','수입':'IMPORT'}[next(iter(flows))] if len(flows)==1 else context.flow)
         dates=list(DATE.finditer(syntax))
         points=[m for m in dates if m.group(1) or m.group(5)=='월']
         date_starts=[m for i,m in enumerate(points) if not i or not RANGE_JOIN.fullmatch(text[points[i-1].end():m.start()])]
         # Split only complete assertions, keeping a range and its two endpoints together.
-        cuts = _postposed_boundaries(text, values, mentions)
+        cuts = trend_cuts or _postposed_boundaries(text, values, mentions)
         if not cuts and len(date_starts)>1 and not time.period:
             cuts=[m.start() for m in date_starts[1:] if any(q.end<=m.start() for q in values)]
         if not cuts:
@@ -603,8 +738,15 @@ def parse_sentence(sentence,catalog):
                 metric=replace(metric,flow='EXPORT' if metric_override=='수출액' else 'IMPORT',family='AMOUNT')
             if quantity.unit=='USD' and not metric.family:
                 metric=replace(metric,family='AMOUNT')
-            claim_time=ordered_times[variant_index] if ordered_times and not metric_list and not catalog.grouped(targets) else time
+            # Scope period words and measure labels to this numeric slot.
             previous=next((q for q in reversed(values) if q.end<=quantity.start),None)
+            next_start=next((q.start for q in values if q.start>=quantity.end),right)
+            prefix=syntax[max(left,previous.end if previous else left):quantity.start]
+            suffix=syntax[quantity.end:min(right,next_start)]
+            label=metric_override or (syntax[:values[0].start] if each else prefix)
+            metric=_scope_measure(metric,quantity,prefix,suffix,label,shared=bool(each or metric_override),
+                                  multiple=len(values)>1)
+            claim_time=ordered_times[variant_index] if ordered_times and not metric_list and not catalog.grouped(targets) else time
             if metric.family=='CHANGE' and previous and re.search(r'보다|대비',text[previous.end:quantity.start]):
                 claim_time=replace(claim_time,comparison_reference=True)
             claims.append(Claim(quantity,frozenset(bound_targets),target_scope,metric,claim_time,local,quantity.valid and metric.valid))

@@ -37,12 +37,32 @@ class Fact:
     horizon: int | None
     role: str | None
     anchor: str | None
+    stored_targets: frozenset[str]
 
 
 def period(value):
     if not isinstance(value,dict): return None
     start,end=(str(value.get(k,''))[:7] for k in ('start','end'))
     return (start,end) if all(re.fullmatch(r'\d{4}-(?:0[1-9]|1[0-2])',p) for p in (start,end)) and start<=end else None
+
+
+def _share_point_metric(words, label):
+    """Only saved column metadata can identify the measure and its comparison axis."""
+    named_share = 'share' in words
+    label_words = set(re.findall(r'[a-z]+', label.lower()))
+    labeled_share = 'share' in label_words or bool(re.search(r'점유율|비중', label))
+    axis_words = words | label_words
+    yoy = 'yoy' in axis_words or bool(re.search(YEAR_AGO, label))
+    mom = 'mom' in axis_words or bool(re.search(MONTH_AGO, label))
+    delta = bool(axis_words & {'change', 'delta', 'diff', 'difference', 'comparison'})
+    delta |= bool(re.search(r'변화|변동|증감|차이|상승|하락|증가|감소', label))
+    if not (named_share or labeled_share) or not (delta or yoy or mom):
+        return None
+    conflicting_metric = (not labeled_share and bool(re.search(r'성장률|수익률|증감률', label))
+                          or not named_share and bool(words & {'growth', 'margin', 'yield'}))
+    other_axis = bool(axis_words & {'qoq', 'wow'} or re.search(r'전분기|직전\s*분기|전주|지난\s*주', label))
+    valid = not (yoy and mom or conflicting_metric or other_axis)
+    return 'SHARE_CHANGE', 'YOY' if yoy else 'MOM' if mom else 'PERIOD', valid
 
 
 def metric(key,label,unit,default_flow):
@@ -55,7 +75,12 @@ def metric(key,label,unit,default_flow):
     family=aggregate=comparison=None
     if unit=='USD':
         family='AMOUNT_CHANGE' if words & {'change','delta','difference','diff'} or re.search(r'증감액|증가액|감소액|차액',label) else 'AMOUNT'
+        if family=='AMOUNT_CHANGE':
+            comparison='YOY' if 'yoy' in words else 'MOM' if 'mom' in words else 'PERIOD'
         aggregate='AVERAGE' if 'monthly_avg' in key or '월평균' in label else 'TOTAL' if key in PERIOD_AMOUNTS or re.search(r'총액|합계',label) else None
+    elif unit=='%p' and (points := _share_point_metric(words,label)):
+        family,comparison,points_valid=points
+        valid=valid and points_valid
     elif unit in ('%','%p'):
         def classify(share,change,yoy,mom):
             if yoy and mom: return None,None
@@ -83,6 +108,16 @@ def metric(key,label,unit,default_flow):
     return Metric(key,label,family,flow,aggregate,comparison,valid)
 
 
+def bind_targets(stored, catalog):
+    targets = set(stored)
+    members = set()
+    for name in stored:
+        aliases, group = catalog.row_binding(name)
+        targets.update(aliases, group)
+        members.update(group)
+    return frozenset(targets), frozenset(members)
+
+
 def build_facts(sources,catalog:NameCatalog):
     facts=[]
     for index,source in enumerate(sources):
@@ -92,24 +127,18 @@ def build_facts(sources,catalog:NameCatalog):
         prediction=source.get('kind')=='PREDICTION'
         anchor=str(source.get('anchor') or '')[:7] or None
 
-        def walk(row,targets=frozenset(),members=frozenset(),inherited_month=None,path=()):
+        def walk(row,stored=frozenset(),inherited_month=None,path=()):
             if isinstance(row,list):
-                for i,item in enumerate(row): walk(item,targets,members,inherited_month,path+(str(i),))
+                for i,item in enumerate(row): walk(item,stored,inherited_month,path+(str(i),))
                 return
             if not isinstance(row,dict): return
             names={str(row[k]) for k in ('name','label','code','product_name','country_name','country_code','hs_code','hs6') if row.get(k)}
-            identities=targets|names
-            declared=set()
-            for name in names:
-                parts=catalog.names_in(name)
-                if catalog.grouped(parts): declared.update(parts)
-                identities |= catalog.aliases.get(name,frozenset())
-            group=members|frozenset(declared) if catalog.grouped(frozenset(declared)) else members
-            identities |= group
+            stored = stored.union(names)
+            identities, group = bind_targets(stored, catalog)
             month=str(row.get('month') or row.get('trade_month') or inherited_month or '')[:7] or None
             for key,value in row.items():
                 if isinstance(value,(dict,list)):
-                    walk(value,frozenset(identities),group,month,path+(key,));continue
+                    walk(value,stored,month,path+(key,));continue
                 if not isinstance(value,(float,int,Decimal)) or isinstance(value,bool): continue
                 amount=Decimal(str(value))
                 if not amount.is_finite(): continue
@@ -119,8 +148,10 @@ def build_facts(sources,catalog:NameCatalog):
                 elif key.endswith('_pct'): unit='%'
                 elif key.endswith('_pp'): unit='%p'
                 elif key=='rank' or key.endswith('_rank'): unit='위'
-                if not unit: continue
+                if not unit or (unit=='%p' and column.get('unit') not in (None,'','%p')): continue
                 descriptor=metric(key,column.get('label') or '',unit,source.get('trade_flow'))
+                if unit=='%p' and month and not re.fullmatch(r'\d{4}-(?:0[1-9]|1[0-2])',month):
+                    continue
                 fact_period=compare if key.startswith('compare_') else current
                 fact_compare=None;fact_month=month;horizon=None;role=None
                 period_value=not month or key in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD'
@@ -132,13 +163,25 @@ def build_facts(sources,catalog:NameCatalog):
                         fact_month=shift(compare[0],months_between(current[0],month))
                     if not fact_month: continue
                     fact_period=(fact_month,fact_month)
+                elif month and (descriptor.family=='AMOUNT_CHANGE' or
+                                (unit=='%p' and descriptor.family=='SHARE_CHANGE' and descriptor.comparison=='PERIOD')):
+                    fact_period=(month,month)
+                    paired=None
+                    if current and compare and current[0]<=month<=current[1] and months_between(*current)==months_between(*compare):
+                        paired=shift(compare[0],months_between(current[0],month))
+                    if unit=='%p' and row.get('compare_month') is not None:
+                        # A row-level comparison month must agree with the saved windows, if both exist.
+                        recorded=str(row['compare_month'])[:7]
+                        consistent=not (current and compare) or recorded==paired
+                        paired=recorded if consistent and re.fullmatch(r'\d{4}-(?:0[1-9]|1[0-2])',recorded) else None
+                    if paired: fact_compare=(paired,paired)
                 elif key in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD':
                     fact_month=None
                     if descriptor.comparison=='PERIOD': fact_period=current;fact_compare=compare
                 elif month: fact_period=(month,month)
                 if not fact_month and fact_period and fact_period[0]==fact_period[1]: fact_month=fact_period[0]
                 facts.append(Fact(index,path+(key,),descriptor,amount,unit,frozenset(identities),group,
-                                  fact_period,fact_compare,fact_month,period_value,prediction,horizon,role,anchor))
+                                  fact_period,fact_compare,fact_month,period_value,prediction,horizon,role,anchor,stored))
 
         walk(source)
     return tuple(facts)
