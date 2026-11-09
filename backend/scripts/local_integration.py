@@ -106,6 +106,8 @@ def main():
             initialized=bool(c.scalar(text('SELECT COUNT(*) FROM country')))
         if not initialized: reference_data(target,metadata)
         demo_data(target,metadata)
+        from backend.scripts.register_terms import register
+        register(target)
         print('Synthetic local reference/trade fixtures inserted; no personal or production rows copied.')
     target.dispose()
 

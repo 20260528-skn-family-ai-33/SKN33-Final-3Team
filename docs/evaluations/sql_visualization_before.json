@@ -1,0 +1,441 @@
+{
+  "schema_version": 2,
+  "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
+  "evaluation": "SQL/Visualization offline regression contract evaluation",
+  "evaluated_at_utc": "2026-11-09T02:43:01.047415+00:00",
+  "source_mode": "historical_modules",
+  "source_revision": "1f2c7668365baea75d4df0ac8895166133952bef",
+  "source_dirty": false,
+  "source_changes": [],
+  "harness_revision": "821c14e7716f2bd181afd3d902427bd43a8b9827",
+  "harness_dirty": true,
+  "harness_changes": [
+    "M backend/scripts/evaluate_sql_visualization.py"
+  ],
+  "source_sha256": {
+    "backend/app/agents/sql.py": "bab5ac0f2a60ef9cae1d7d24754cc55c9fe20324693a8ffcdfd804a5155dbbfd",
+    "backend/app/agents/charts.py": "a6290fac56a4f773e638d47d1188af6e932c4b5a8aac827afcd4facbad162946"
+  },
+  "evidence_sha256": {
+    "backend/tests/test_agent_sql.py": "d7d7b189c6ef02a3ef2811cac77380f8b3aa61d82778e4159aa136cc6dafaba6",
+    "backend/tests/test_agent_sql_visualization.py": "1a306bc86ab94c75e5c2f67fef73cf3f4dd860d4d75f0dcb5d007ce3ea2e1dab",
+    "backend/tests/test_agent_templates.py": "f23e7b89ac106bb464b3831561a784d428b6b4389163eb617d4820a372848f54",
+    "backend/scripts/evaluate_sql_visualization.py": "32b0176fc10922f6527f6d7faa3bf03ff4080940bee4ee19a51863ff67fbeb9a",
+    "backend/tests/api_support.py": "02fdcb33cdc1ee52cdc14d08f33b7d668fa4566b3a1b6281caf639b5e8e08319",
+    "backend/app/agents/templates.py": "72ce56ec7a12c7f9f233799a184fa5d293e9788daf2a1f520699dd5962f55efd",
+    "backend/app/agents/state.py": "52fe0d0871493788bd8dbb957d9f7d7535002ef2dcc80ae85cc1cb0cae446caf",
+    "backend/app/api/results.py": "f00eefd548961caa6c347679c21415f12964897184ec11d81b1c3883b1357fc4"
+  },
+  "manifest_sha256": "5106e0820f541316ff884309bac583a6b3d89ff0e37722b6846f0e4c9abeba2f",
+  "environment": {
+    "python": "3.11.15",
+    "platform": "Windows-10-10.0.26300-SP0",
+    "packages": {
+      "sqlglot": "30.27.0",
+      "SQLAlchemy": "2.0.57",
+      "pydantic": "2.14.3"
+    }
+  },
+  "network": "blocked; local SQLite and mocks only",
+  "scoring": "One test method is one case; all subtests must pass. Skips/errors count as non-passes.",
+  "limitations": [
+    "Curated regression cases, not held-out natural-language questions.",
+    "LLM generation is mocked; no live model, RDS, latency, cost or browser evaluation.",
+    "Historical comparison swaps only sql.py/charts.py; current tests and fixtures are unchanged."
+  ],
+  "summary": {
+    "SQL": {
+      "total": 17,
+      "pass": 14,
+      "fail": 1,
+      "error": 2,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 82.35
+    },
+    "Visualization": {
+      "total": 14,
+      "pass": 3,
+      "fail": 8,
+      "error": 3,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 21.43
+    },
+    "SQL→Visualization": {
+      "total": 5,
+      "pass": 4,
+      "fail": 1,
+      "error": 0,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 80.0
+    }
+  },
+  "cases": [
+    {
+      "id": "S01",
+      "agent": "SQL",
+      "category": "조건 반영",
+      "criterion": "국가·HS·판본·기간이 다른 SQL을 거부하고 확정 범위는 허용한다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_trade_sql_requires_confirmed_scope_for_each_branch",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S02",
+      "agent": "SQL",
+      "category": "조건 반영",
+      "criterion": "국가별 집계에 확정 국가 필터를 요구한다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_grouping_by_country_requires_where_filter",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S03",
+      "agent": "SQL",
+      "category": "분모 보존",
+      "criterion": "품목 비중의 기준과 실제 분모 금액을 보존한다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_product_share_retains_confirmed_basis_and_denominator",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S04",
+      "agent": "SQL",
+      "category": "실패 처리",
+      "criterion": "두 번 재생성 후 실패 시 임의 수치 없이 안내한다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_two_regenerations_then_failure_contains_guidance_and_no_numbers",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S05",
+      "agent": "SQL",
+      "category": "실패 처리",
+      "criterion": "잘못된 SQL은 별도 실행 예산으로 재생성한다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_failed_draft_regenerated_with_separate_reservation",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S06",
+      "agent": "SQL",
+      "category": "시간 제한",
+      "criterion": "예산이 부족하면 모델을 호출하지 않는다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_insufficient_time_does_not_call_sql_model",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S07",
+      "agent": "SQL",
+      "category": "SQL 안전성",
+      "criterion": "허용 SELECT·CTE·UNION을 실행 가능하게 유지하고 행 수를 제한한다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_allowed_select_cte_union_and_limit",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S08",
+      "agent": "SQL",
+      "category": "SQL 안전성",
+      "criterion": "비공개 표·본문·변경·파일·잠금 SQL을 거부한다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_rejects_private_tables_body_stars_side_effects_and_metadata",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S09",
+      "agent": "SQL",
+      "category": "숫자 검증",
+      "criterion": "유한한 숫자만 허용하고 null을 보존한다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_numeric_values_are_finite_and_null_stays_null",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S10",
+      "agent": "SQL",
+      "category": "연결 정리",
+      "criterion": "읽기 전용으로 실행하고 오류가 나도 롤백·연결 폐기를 수행한다.",
+      "test": "backend.tests.test_agent_sql.SqlTest.test_readonly_session_rollback_and_connection_disposal_even_on_error",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S11",
+      "agent": "SQL",
+      "category": "숫자 검증",
+      "criterion": "특수 Decimal과 과도한 정수를 일관된 검증 오류로 처리한다.",
+      "test": "backend.tests.test_agent_sql_visualization.SqlBoundaryTest.test_nonfinite_decimal_and_oversized_numeric_values_are_validation_errors",
+      "status": "ERROR",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 235, in test_nonfinite_decimal_and_oversized_numeric_values_are_validation_errors\n    normalize_rows([{'value': value}], self.draft().columns)\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/sql.py\", line 434, in normalize_rows\nOverflowError: cannot convert Infinity to integer\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 235, in test_nonfinite_decimal_and_oversized_numeric_values_are_validation_errors\n    normalize_rows([{'value': value}], self.draft().columns)\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/sql.py\", line 434, in normalize_rows\nOverflowError: cannot convert Infinity to integer\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 235, in test_nonfinite_decimal_and_oversized_numeric_values_are_validation_errors\n    normalize_rows([{'value': value}], self.draft().columns)\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/sql.py\", line 434, in normalize_rows\ndecimal.InvalidOperation: [<class 'decimal.InvalidOperation'>]\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 235, in test_nonfinite_decimal_and_oversized_numeric_values_are_validation_errors\n    normalize_rows([{'value': value}], self.draft().columns)\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/sql.py\", line 438, in normalize_rows\nOverflowError: int too large to convert to float\n"
+      ]
+    },
+    {
+      "id": "S12",
+      "agent": "SQL",
+      "category": "시간 제한",
+      "criterion": "1ms 미만 설정이 무제한 실행으로 바뀌지 않는다.",
+      "test": "backend.tests.test_agent_sql_visualization.SqlBoundaryTest.test_submillisecond_timeout_never_disables_mysql_timeout",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 244, in test_submillisecond_timeout_never_disables_mysql_timeout\n    self.assertEqual(statement, 'SET SESSION MAX_EXECUTION_TIME = 1')\nAssertionError: 'SET SESSION MAX_EXECUTION_TIME = 0' != 'SET SESSION MAX_EXECUTION_TIME = 1'\n- SET SESSION MAX_EXECUTION_TIME = 0\n?                                  ^\n+ SET SESSION MAX_EXECUTION_TIME = 1\n?                                  ^\n\n"
+      ]
+    },
+    {
+      "id": "S13",
+      "agent": "SQL",
+      "category": "실패 처리",
+      "criterion": "잘못된 DB 숫자 이후 재생성에 성공하고 각 연결을 정리한다.",
+      "test": "backend.tests.test_agent_sql_visualization.SqlBoundaryTest.test_nonfinite_database_number_can_regenerate_and_cleanup_connections",
+      "status": "ERROR",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 260, in test_nonfinite_database_number_can_regenerate_and_cleanup_connections\n    analysis = generated_analysis(engine, Settings({}), client, execution, current,\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/sql.py\", line 523, in generated_analysis\n  File \"C:\\Users\\t9100\\AppData\\Roaming\\uv\\python\\cpython-3.11-windows-x86_64-none\\Lib\\unittest\\mock.py\", line 1124, in __call__\n    return self._mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\t9100\\AppData\\Roaming\\uv\\python\\cpython-3.11-windows-x86_64-none\\Lib\\unittest\\mock.py\", line 1128, in _mock_call\n    return self._execute_mock_call(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\t9100\\AppData\\Roaming\\uv\\python\\cpython-3.11-windows-x86_64-none\\Lib\\unittest\\mock.py\", line 1189, in _execute_mock_call\n    result = effect(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 255, in <lambda>\n    execution.call.side_effect = lambda node, seconds, work, finish_reserve: work(seconds)\n                                                                             ^^^^^^^^^^^^^\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/sql.py\", line 508, in attempt\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/sql.py\", line 461, in execute_readonly\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/sql.py\", line 434, in normalize_rows\nOverflowError: cannot convert Infinity to integer\n"
+      ]
+    },
+    {
+      "id": "S14",
+      "agent": "SQL",
+      "category": "실패 처리",
+      "criterion": "빈 결과와 미지원 요청을 불필요하게 재생성하지 않는다.",
+      "test": "backend.tests.test_agent_sql_visualization.SqlBoundaryTest.test_no_rows_and_unsupported_requests_never_regenerate",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S15",
+      "agent": "SQL",
+      "category": "집계 정확성",
+      "criterion": "불완전 기간의 총액은 null이고 월평균은 검증 월만 사용한다.",
+      "test": "backend.tests.test_agent_templates.TemplateTest.test_different_length_comparison_keeps_subtotal_and_null_unverified_total",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S16",
+      "agent": "SQL",
+      "category": "집계 정확성",
+      "criterion": "순위의 분모를 전체 금액으로 유지한다.",
+      "test": "backend.tests.test_agent_templates.TemplateTest.test_country_ranking_uses_full_total",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "S17",
+      "agent": "SQL",
+      "category": "집계 정확성",
+      "criterion": "상위 10 밖 지정 국가도 표시하면서 전체 분모를 보존한다.",
+      "test": "backend.tests.test_agent_templates.TemplateTest.test_selected_country_outside_top_ten_keeps_global_denominator",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "V01",
+      "agent": "Visualization",
+      "category": "월 정렬",
+      "criterion": "국가별 월 축을 맞추고 누락 월은 null로 둔다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_trends_align_missing_months_on_shared_calendar",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 50, in test_trends_align_missing_months_on_shared_calendar\n    self.assertEqual(result.chart.labels, ['2025-01', '2025-02', '2025-03'])\nAssertionError: Lists differ: ['2025-01', '2025-02'] != ['2025-01', '2025-02', '2025-03']\n\nSecond list contains 1 additional elements.\nFirst extra element 2:\n'2025-03'\n\n- ['2025-01', '2025-02']\n+ ['2025-01', '2025-02', '2025-03']\n?                      +++++++++++\n\n"
+      ]
+    },
+    {
+      "id": "V02",
+      "agent": "Visualization",
+      "category": "대상 선정",
+      "criterion": "금액 상위 5개를 선택한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_top_five_trends_are_chosen_by_amount_not_storage_order",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 59, in test_top_five_trends_are_chosen_by_amount_not_storage_order\n    self.assertEqual([s.name for s in result.chart.series], list(reversed(codes[1:])))\nAssertionError: Lists differ: ['US', 'CN', 'JP', 'DE', 'FR'] != ['GB', 'FR', 'DE', 'JP', 'CN']\n\nFirst differing element 0:\n'US'\n'GB'\n\n- ['US', 'CN', 'JP', 'DE', 'FR']\n+ ['GB', 'FR', 'DE', 'JP', 'CN']\n"
+      ]
+    },
+    {
+      "id": "V03",
+      "agent": "Visualization",
+      "category": "이름 구분",
+      "criterion": "축약된 비중 라벨이 겹쳐도 국가를 구분한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_share_names_that_shorten_to_same_label_keep_country_identity",
+      "status": "ERROR",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 67, in test_share_names_that_shorten_to_same_label_keep_country_identity\n    result, full, _ = chart('SHARE', rows)\n                      ^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 38, in chart\n    result = build_chart(None, 7, current or task(), 'saved-result')\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/charts.py\", line 126, in build_chart\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\tmp\\pr68-venv\\Lib\\site-packages\\pydantic\\main.py\", line 280, in __init__\n    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\npydantic_core._pydantic_core.ValidationError: 1 validation error for ChartSpec\n  Value error, 차트 x축 값 중복은 허용하지 않습니다 [type=value_error, input_value={'chart_id': 't1.chart', ...', 'values': [60, 40]}]}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/value_error\n"
+      ]
+    },
+    {
+      "id": "V04",
+      "agent": "Visualization",
+      "category": "표시 상한",
+      "criterion": "요청된 순위를 최대 60개까지 표시하고 생략을 안내한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_ranking_retains_requested_top_and_reports_chart_limit",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 80, in test_ranking_retains_requested_top_and_reports_chart_limit\n    self.assertEqual(len(result.chart.labels), min(size, 60))\nAssertionError: 10 != 12\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 80, in test_ranking_retains_requested_top_and_reports_chart_limit\n    self.assertEqual(len(result.chart.labels), min(size, 60))\nAssertionError: 10 != 60\n"
+      ]
+    },
+    {
+      "id": "V05",
+      "agent": "Visualization",
+      "category": "날짜 정렬",
+      "criterion": "날짜와 해당 값을 함께 정렬한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_llm_dates_are_sorted_with_values_and_nulls",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 91, in test_llm_dates_are_sorted_with_values_and_nulls\n    self.assertEqual(full, ['2025-01', '2025-02', '2025-03'])\nAssertionError: Lists differ: ['2025-03', '2025-01', '2025-02'] != ['2025-01', '2025-02', '2025-03']\n\nFirst differing element 0:\n'2025-03'\n'2025-01'\n\n- ['2025-03', '2025-01', '2025-02']\n+ ['2025-01', '2025-02', '2025-03']\n"
+      ]
+    },
+    {
+      "id": "V06",
+      "agent": "Visualization",
+      "category": "날짜 검증",
+      "criterion": "잘못되거나 혼합된 날짜 단위로 시간축을 만들지 않는다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_invalid_or_mixed_date_granularity_does_not_make_time_axis",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 101, in test_invalid_or_mixed_date_granularity_does_not_make_time_axis\n    self.assertIsNone(result.chart)\nAssertionError: ChartSpec(chart_id='t1.chart', task_id='t1', type='line', title='조회 결과', unit='COUNT', period=Period(start=datetime.date(2025, 1, 1), end=datetime.date(2025, 3, 1)), granularity=None, source='관세청', result_id='saved-result', labels=['2025-02-30'], series=[ChartSeries(name='값', values=[1.0])]) is not None\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 101, in test_invalid_or_mixed_date_granularity_does_not_make_time_axis\n    self.assertIsNone(result.chart)\nAssertionError: ChartSpec(chart_id='t1.chart', task_id='t1', type='line', title='조회 결과', unit='COUNT', period=Period(start=datetime.date(2025, 1, 1), end=datetime.date(2025, 3, 1)), granularity=None, source='관세청', result_id='saved-result', labels=['2025-13'], series=[ChartSeries(name='값', values=[1.0])]) is not None\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 101, in test_invalid_or_mixed_date_granularity_does_not_make_time_axis\n    self.assertIsNone(result.chart)\nAssertionError: ChartSpec(chart_id='t1.chart', task_id='t1', type='line', title='조회 결과', unit='COUNT', period=Period(start=datetime.date(2025, 1, 1), end=datetime.date(2025, 3, 1)), granularity=None, source='관세청', result_id='saved-result', labels=['2025-01', '2025-01-02'], series=[ChartSeries(name='값', values=[1.0, 1.0])]) is not None\n"
+      ]
+    },
+    {
+      "id": "V07",
+      "agent": "Visualization",
+      "category": "기간 집계",
+      "criterion": "분기 집계의 실제 포함 기간을 안내한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_long_trend_aggregation_identifies_actual_partial_period",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 108, in test_long_trend_aggregation_identifies_actual_partial_period\n    self.assertIn('분기', result.chart.title)\nAssertionError: '분기' not found in '수출액'\n"
+      ]
+    },
+    {
+      "id": "V08",
+      "agent": "Visualization",
+      "category": "기간 집계",
+      "criterion": "저장 결과로 차트를 만들 때 월·분기·연도 상한과 누락 월을 올바르게 처리한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_stored_chart_calendar_limits_and_missing_months",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 154, in test_stored_chart_calendar_limits_and_missing_months\n    self.assertIsNone(result.chart.series[0].values[1 if expected == 'MONTH' else 0])\nAssertionError: 1.0 is not None\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 152, in test_stored_chart_calendar_limits_and_missing_months\n    self.assertEqual(result.chart.granularity, expected)\nAssertionError: 'MONTH' != 'QUARTER'\n- MONTH\n+ QUARTER\n\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 154, in test_stored_chart_calendar_limits_and_missing_months\n    self.assertIsNone(result.chart.series[0].values[1 if expected == 'MONTH' else 0])\nAssertionError: 2.0 is not None\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 154, in test_stored_chart_calendar_limits_and_missing_months\n    self.assertIsNone(result.chart.series[0].values[1 if expected == 'MONTH' else 0])\nAssertionError: 11.0 is not None\n",
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 154, in test_stored_chart_calendar_limits_and_missing_months\n    self.assertIsNone(result.chart.series[0].values[1 if expected == 'MONTH' else 0])\nAssertionError: 11.0 is not None\n"
+      ]
+    },
+    {
+      "id": "V09",
+      "agent": "Visualization",
+      "category": "이름 구분",
+      "criterion": "국가·품목 이름이 같아도 고유한 시리즈 이름을 만든다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_country_product_names_remain_unique_after_shared_shortener",
+      "status": "ERROR",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 130, in test_country_product_names_remain_unique_after_shared_shortener\n    result, _, _ = chart('TREND', rows)\n                   ^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 38, in chart\n    result = build_chart(None, 7, current or task(), 'saved-result')\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/charts.py\", line 126, in build_chart\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\tmp\\pr68-venv\\Lib\\site-packages\\pydantic\\main.py\", line 280, in __init__\n    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\npydantic_core._pydantic_core.ValidationError: 1 validation error for ChartSpec\n  Value error, 시리즈 이름 중복은 허용하지 않습니다 [type=value_error, input_value={'chart_id': 't1.chart', ..., 'values': [2, 2, 2]}]}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/value_error\n"
+      ]
+    },
+    {
+      "id": "V10",
+      "agent": "Visualization",
+      "category": "기간 집계",
+      "criterion": "조회·비교 기간의 누락값을 각 집계에 독립적으로 반영한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_comparison_quarters_preserve_missing_values_in_each_period",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "V11",
+      "agent": "Visualization",
+      "category": "대상 선정",
+      "criterion": "부분 집계는 검증 소계로 정렬하고 동률 순서를 유지한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_partial_totals_use_subtotals_and_preserve_tied_order",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 178, in test_partial_totals_use_subtotals_and_preserve_tied_order\n    self.assertEqual([s.name for s in result.chart.series], codes[1:6])\nAssertionError: Lists differ: ['VN', 'US', 'JP', 'CN', 'TH'] != ['US', 'JP', 'CN', 'TH', 'DE']\n\nFirst differing element 0:\n'VN'\n'US'\n\n- ['VN', 'US', 'JP', 'CN', 'TH']\n?  ------\n\n+ ['US', 'JP', 'CN', 'TH', 'DE']\n?                        ++++++\n\n"
+      ]
+    },
+    {
+      "id": "V12",
+      "agent": "Visualization",
+      "category": "이름 구분",
+      "criterion": "코드가 붙은 이름과 실제 이름도 충돌하지 않는다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_disambiguated_names_do_not_collide_with_existing_literal_name",
+      "status": "ERROR",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 186, in test_disambiguated_names_do_not_collide_with_existing_literal_name\n    result, full, _ = chart('SHARE', rows)\n                      ^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 38, in chart\n    result = build_chart(None, 7, current or task(), 'saved-result')\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"1f2c7668365baea75d4df0ac8895166133952bef:backend/app/agents/charts.py\", line 126, in build_chart\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\tmp\\pr68-venv\\Lib\\site-packages\\pydantic\\main.py\", line 280, in __init__\n    validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)\n                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\npydantic_core._pydantic_core.ValidationError: 1 validation error for ChartSpec\n  Value error, 차트 x축 값 중복은 허용하지 않습니다 [type=value_error, input_value={'chart_id': 't1.chart', ...values': [30, 20, 50]}]}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.14/v/value_error\n"
+      ]
+    },
+    {
+      "id": "V13",
+      "agent": "Visualization",
+      "category": "표 유지",
+      "criterion": "차트에 맞지 않는 결과는 원본 표 참조를 유지한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_incompatible_freeform_results_keep_table_without_chart",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "V14",
+      "agent": "Visualization",
+      "category": "저장값 사용",
+      "criterion": "저장된 ML 대상과 실제 수출액을 사용하고 잘못된 선택을 거부한다.",
+      "test": "backend.tests.test_agent_sql_visualization.ChartContractTest.test_ml_selection_uses_saved_pairs_and_actual_exports",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "I01",
+      "agent": "SQL→Visualization",
+      "category": "결과 연결",
+      "criterion": "수입·수출의 추이·순위·비중은 저장값으로 그리고 재조회하지 않는다.",
+      "test": "backend.tests.test_agent_sql_visualization.StoredSqlChartTest.test_template_to_stored_chart_uses_same_values_without_requery",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "I02",
+      "agent": "SQL→Visualization",
+      "category": "다국가 비교",
+      "criterion": "미국·중국의 수입·수출 시리즈와 값을 각각 보존한다.",
+      "test": "backend.tests.test_agent_sql_visualization.StoredSqlChartTest.test_multiple_countries_keep_separate_series_from_query_to_chart",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "I03",
+      "agent": "SQL→Visualization",
+      "category": "동률 일치",
+      "criterion": "7개국 동률에서 표·요약·차트의 상위 대상 순서가 일치한다.",
+      "test": "backend.tests.test_agent_sql_visualization.StoredSqlChartTest.test_tied_top_five_matches_stored_table_and_digest_order",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "I04",
+      "agent": "SQL→Visualization",
+      "category": "접근 제어",
+      "criterion": "타인 결과와 만료된 결과를 재조회 없이 거부한다.",
+      "test": "backend.tests.test_agent_sql_visualization.StoredSqlChartTest.test_saved_chart_enforces_owner_and_expiration_without_requery",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "I05",
+      "agent": "SQL→Visualization",
+      "category": "기간 비교",
+      "criterion": "불완전·상이한 길이의 기간은 저장된 월평균으로 비교하고 월평균 사용을 안내한다.",
+      "test": "backend.tests.test_agent_sql_visualization.StoredSqlChartTest.test_unequal_comparison_preserves_partial_data_and_monthly_average",
+      "status": "FAIL",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_sql_visualization.py\", line 379, in test_unequal_comparison_preserves_partial_data_and_monthly_average\n    self.assertTrue(any('월평균' in w for w in warnings))\nAssertionError: False is not true\n"
+      ]
+    }
+  ]
+}

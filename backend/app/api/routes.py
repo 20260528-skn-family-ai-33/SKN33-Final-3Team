@@ -2,10 +2,11 @@
 import csv
 import io
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
-from sqlalchemy import select, update, delete, func
+from zoneinfo import ZoneInfo
+from sqlalchemy import String, and_, cast, select, update, delete, func
 from fastapi.responses import Response, FileResponse
 from backend.app.api import accounts, reference, trade, news, notifications, reports, chat, un_market, admin, jobs, recovery, keyword_admin
 from backend.app.api.common import ApiError, require, unavailable, now, clean, digest, page_info, percentage, month, shift_month, period
@@ -13,6 +14,7 @@ from backend.app.api.security import issue_session, hash_token, administrator
 from backend.app.api.schemas import Signup, Login, PasswordChange, InterestUpdate, NotificationPatch, ReportCreate, Conditions
 from backend.app.api.results import get_table, read_snapshot, result_table, result_filename
 from backend.app.api.files import xlsx_bytes, MIMES
+from backend.app.api.terms import TERMS_TYPES, active_terms
 
 
 # 이 기능들은 원문에서 계약/정책 확정 전 활성화를 금지한 항목이다.
@@ -29,6 +31,38 @@ PENDING={
   125:'DEC-41 버전 획득 및 적재 담당자의 출처 중지 실행기 연결',
   129:'이름·이메일 일치 여부 확인으로 대체: 아이디 안내 메일은 사용하지 않음',
 }
+
+
+KST=ZoneInfo('Asia/Seoul')
+SOURCE_LABELS={'CUSTOMS':'관세청','KCS_TRADE':'관세청','KCS_HS_NAMES':'관세청 HS 코드','ECOS':'한국은행 ECOS','UNSD_HS_CORR':'UN HS 연계표',
+    'CEPII_BACI':'CEPII BACI','WB_WDI':'세계은행 WDI','UN_COMTRADE':'UN Comtrade','KOTRA_MARKET':'KOTRA 해외시장뉴스',
+    'KOTRA_SHORT_NEWS':'KOTRA 단신속보','KOTRA_SHORTNEWS':'KOTRA 단신속보'}
+
+
+def failed_run_message(run):
+    """관리자 알림 한 줄만 보고 어떤 작업이 어느 기간에 실패했는지 알 수 있게 한다."""
+    source=SOURCE_LABELS.get(run['source_code'],run['source_code'])
+    # 판정 작업은 입력 출처로 기록되지만 수집 작업이 아니다.
+    title='주요 이슈 판정 미완료' if run['job_name']=='MAJOR_ISSUE_DETECT' else f'{source} 수집 실패'
+    return f"{title} · {run['job_name']} · 대상 기간 {run['period_start']} ~ {run['period_end']} · 실행 #{run['run_id']}"
+
+
+def batch_time_utc(value):
+    """batch_run 시각은 한국 시간으로 저장된다(db/batch_log.py). API 시각은 UTC로 내보낸다."""
+    return value and value.replace(tzinfo=KST).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def failed_report_time(report):
+    """실패가 확정된 시각. completed_at은 정상 완료 전용이라 실행 기록을 쓰고, 기록이 없으면 생성 시각으로 대신한다."""
+    value=((report['content_json'] or {}).get(jobs.EXECUTION) or {}).get('finished_at')
+    return datetime.fromisoformat(value) if value else report['created_at']
+
+
+def failed_report_message(report):
+    """리포트 내용 없이 식별정보만 보여 준다(FR-317-02)."""
+    kind=notifications.REPORT_KINDS.get(report['report_type'],report['report_type'])
+    period=report['conditions_json'].get('period') or {}
+    return f"{kind} 구독 리포트 생성 실패 · 대상 기간 {period.get('start')} ~ {period.get('end')} · 리포트 #{report['report_id']}"
 
 
 def file_response(content,filename,fmt):
@@ -206,9 +240,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==51: return reports.cancel_subscription(store,uid,path['subscription_id'])
     if identity==52: return {'settings':notifications.settings(store,uid)}
     if identity==53: return notifications.patch_settings(store,uid,NotificationPatch.model_validate(body).model_dump(exclude_unset=True))
-    if identity==54:
-        require(path['terms_type'].lower()=='notification','일반 약관 저장 계약이 준비되지 않았습니다.','FEATURE_NOT_READY',503)
-        return {'terms':notifications.terms(store)}
+    if identity==54: return {'terms':notifications.terms(store,path['terms_type'])}
     if identity==55: return notifications.consent(store,uid,body)
     if identity==56: return notifications.listing(store,uid,query.get('type','ALL'),query.get('unread_only',False),page,size)
     if identity==57: return {'count':notifications.unread_count(store,uid),'as_of':now().isoformat()+'Z'}
@@ -231,10 +263,26 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==80:
         category=query.get('category','ALL')
         require(category in ('ALL','DATA','REPORT','MEMBER'),'알림 분류를 확인하세요.')
-        # 현재 관리자 알림은 데이터 수집 실패(DATA)만 만든다. 다른 분류 탭에는 섞어 보이지 않는다.
-        t=store.t('batch_run'); rows=store.rows(select(t).where(t.c.status=='FAILED').order_by(t.c.run_id.desc())) if category in ('ALL','DATA') else []
-        return {'items':[{'alert_id':str(r['run_id']),'category':'DATA','message':'수집 작업 실패: '+r['job_name'],
-            'target_type':'BATCH','target_id':str(r['run_id']),'created_at':r['finished_at']} for r in rows[(page-1)*size:page*size]],'page':page_info(page,size,len(rows))}
+        # 데이터 수집 실패(DATA)와 구독 리포트 생성 실패(REPORT)를 만든다. 회원 알림 분류(MEMBER)는 아직 없다.
+        # 두 출처를 합쳐 정렬하므로 각 출처에서 이 페이지까지의 최신 행만 읽는다.
+        items=[]; total=0; newest=page*size
+        if category in ('ALL','DATA'):
+            t=store.t('batch_run'); failed=t.c.status=='FAILED'
+            total+=store.count(select(t.c.run_id).where(failed))
+            items+=[(0,r['run_id'],{'alert_id':str(r['run_id']),'category':'DATA','message':failed_run_message(r),
+                'target_type':'BATCH','target_id':str(r['run_id']),'created_at':batch_time_utc(r['finished_at'])})
+                for r in store.rows(select(t).where(failed).order_by(t.c.finished_at.desc(),t.c.run_id.desc()).limit(newest))]
+        if category in ('ALL','REPORT'):
+            t=store.t('report'); failed=and_(t.c.status=='FAILED',t.c.subscription_id.is_not(None))
+            # 실패 시각은 실행 기록(JSON)에 있고, 기록이 없는 옛 행은 생성 시각으로 정렬한다.
+            failed_at=func.coalesce(t.c.content_json[jobs.EXECUTION]['finished_at'].as_string(),func.replace(cast(t.c.created_at,String),' ','T'))
+            total+=store.count(select(t.c.report_id).where(failed))
+            items+=[(1,r['report_id'],{'alert_id':f"REPORT-{r['report_id']}",'category':'REPORT','message':failed_report_message(r),
+                'target_type':'REPORT','target_id':str(r['report_id']),'created_at':failed_report_time(r)})
+                for r in store.rows(select(t).where(failed).order_by(failed_at.desc(),t.c.report_id.desc()).limit(newest))]
+        # 최신순. 같은 시각은 출처·숫자 ID 순으로 고정해 페이지 경계에서 겹치지 않게 하고, 시각이 없는 기록은 맨 뒤로 보낸다.
+        items.sort(key=lambda x:(x[2]['created_at'] is not None,x[2]['created_at'] or datetime.min,x[0],x[1]),reverse=True)
+        return {'items':[x[2] for x in items[(page-1)*size:newest]],'page':page_info(page,size,total)}
     if identity==81: return admin.users(store,query.get('q'),query.get('status','ALL'),page,size,query.get('by','all'))
     if identity==82: return admin.detail(store,path['user_id'])
     if identity in (83,84): return admin.change_user(store,user,path['user_id'],body,identity==83)
@@ -264,7 +312,8 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         for code in ('KOTRA_MARKET','KOTRA_SHORT_NEWS'):
             enabled=store.c.scalar(select(o.c.enabled).where(o.c.option_code==code))
             if enabled is None: continue
-            latest=store.c.scalar(select(func.max(b.c.run_id)).where(b.c.source_code==code))
+            # 기사 수집 실행만 본다. 같은 출처로 기록되는 판정 작업은 제외한다.
+            latest=store.c.scalar(select(func.max(b.c.run_id)).where(b.c.source_code==code,b.c.target_table=='article'))
             items.append({'source_code':code,'collection_enabled':bool(enabled),'article_count':store.count(select(a).where(a.c.source_code==code)),
                 'visible_count':store.count(select(a).where(a.c.source_code==code,a.c.visibility_status=='VISIBLE')),'latest_run_id':str(latest) if latest else None})
         return {'items':items}
@@ -289,8 +338,9 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         return {'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items))}
     if identity==119:
         target=path['user_id']; admin.user_row(store,target); c=store.t('user_consent')
-        rows=store.rows(select(c).where(c.c.user_id==target).order_by(c.c.consent_id.desc()))
-        return {'settings':notifications.settings(store,target),'consents':[{'terms_type':'NOTIFICATION',**{k:r[k] for k in ('terms_version','action','acted_at')},'required':True} for r in rows]}
+        o=store.t('service_option')
+        rows=store.rows(select(c,o.c.option_type).join(o,o.c.option_code==c.c.terms_version).where(c.c.user_id==target).order_by(c.c.consent_id.desc()))
+        return {'settings':notifications.settings(store,target),'consents':[{'terms_type':TERMS_TYPES[r['option_type']],**{k:r[k] for k in ('terms_version','action','acted_at')},'required':True} for r in rows]}
     if identity==120:
         admin.user_row(store,query['user_id']); t=store.t('alert_event')
         require(store.c.scalar(select(t.c.event_id).where(t.c.event_id==path['event_id'])) is not None,'알림 사건이 없습니다.','NOT_FOUND',404)
@@ -310,8 +360,12 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         return {'operation':{'operation_id':row['audit_id'],'status':'SUCCEEDED','step':'DONE','completed_count':1,'total_count':1,'error_code':None,'message':'변경 및 감사 기록 완료'}}
     if identity==126:
         t=store.t('service_option'); stmt=select(t).where(t.c.option_type=='NOTIFICATION_TERMS')
-        if query.get('version'): stmt=stmt.where(t.c.option_code==query['version'])
-        row=store.one(stmt.order_by(t.c.option_code.desc()).limit(1)); require(row,'약관이 없습니다.','NOT_FOUND',404)
+        if query.get('version'): row=store.one(stmt.where(t.c.option_code==query['version']))
+        else:
+            # 회원 화면(API-54)과 같은 현재 버전을 보여 준다. 현재 버전이 없으면 정렬값이 가장 큰 버전.
+            active=active_terms(store)
+            row=active[0] if active else store.one(stmt.order_by(t.c.sort_order.desc(),t.c.option_code.desc()).limit(1))
+        require(row,'약관이 없습니다.','NOT_FOUND',404)
         c=store.t('user_consent'); consent_query=select(c).where(c.c.terms_version==row['option_code'])
         if query.get('user_id'): consent_query=consent_query.where(c.c.user_id==query['user_id'])
         consents=store.rows(consent_query)

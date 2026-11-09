@@ -1,32 +1,17 @@
-from datetime import datetime, timezone
-from sqlalchemy import select, update, func, and_, or_, exists, cast, String
+from datetime import date, datetime, timezone
+from sqlalchemy import select, update, func, and_, or_, exists, cast, case, String
 from backend.app.api.common import require, unavailable, now, page_info
 from backend.app.api.news import blocked_topics, article_views, article_statement, source_meta
 from backend.app.api.results import save_snapshot, read_snapshot
+# 알림 약관 조회는 가입 약관과 함께 terms.py에 둔다(#76). 판단 기준은 그대로다(사용 중·시행일이 지난 행 중 정렬값이 가장 큰 행).
+from backend.app.api.terms import active_terms, current as terms, notification_versions
+from backend.app.services.article_sources import KEYWORD_DAILY_SOURCES, PRODUCT_DAILY_SOURCES
+
+EVIDENCE_LIMIT=5  # 사건마다 보여 줄 근거 기사 수(판정 작업의 대표 기사 수와 같다)
 
 
-def active_terms(store):
-    t=store.t('service_option')
-    rows=store.rows(select(t).where(t.c.option_type=='NOTIFICATION_TERMS',t.c.enabled==True).order_by(t.c.sort_order.desc(),t.c.option_code.desc()))
-    effective=[]
-    for row in rows:
-        value=(row['value_json'] or {}).get('effective_at')
-        if value:
-            try:
-                parsed=datetime.fromisoformat(value.replace('Z','+00:00'))
-                timestamp=parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).astimezone(timezone.utc).replace(tzinfo=None)
-            except (ValueError,TypeError): unavailable('약관 적용 시각 설정을 확인하세요.','FEATURE_NOT_READY')
-            if timestamp>now(): continue
-        effective.append(row)
-    return effective
-
-
-def terms(store):
-    rows=active_terms(store)
-    if not rows: unavailable('승인된 활성 알림 약관이 아직 등록되지 않았습니다.','FEATURE_NOT_READY')
-    row=rows[0]; data=row['value_json']
-    require(isinstance(data.get('body'),str) and bool(data['body'].strip()),'약관 본문이 준비되지 않았습니다.','FEATURE_NOT_READY',503)
-    return {'terms_type':'NOTIFICATION','version':row['option_code'],'title':row['label_ko'],'body':data['body'],'required':True}
+POPUP_KINDS={'report_popup':('REPORT',),'major_issue_popup':('MAJOR_ISSUE',),'spike_popup':('PRODUCT_SPIKE','KEYWORD_SPIKE')}
+REPORT_KINDS={'RPT_WEEKLY':'주간','RPT_MONTHLY':'월간','RPT_QUARTERLY':'분기'}
 
 
 def settings(store,uid):
@@ -34,18 +19,37 @@ def settings(store,uid):
     row=store.one(select(s).where(s.c.user_id==uid))
     if not row: unavailable('알림 설정 행이 준비되지 않았습니다.','FEATURE_NOT_READY')
     active=active_terms(store); version=active[0]['option_code'] if active else None
-    latest=store.one(select(c).where(c.c.user_id==uid).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1))
+    latest=store.one(select(c).where(c.c.user_id==uid,c.c.terms_version.in_(notification_versions(store))).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1))
+    current=bool(version and latest and latest['terms_version']==version and latest['action']=='AGREE')
     return {**{k:bool(row[k]) for k in ('notifications_enabled','spike_popup','major_issue_popup','report_popup')},
-            'consent_current':bool(version and latest and latest['terms_version']==version and latest['action']=='AGREE'),
-            'terms_version':latest['terms_version'] if latest else None}
+            'consent_current':current,'terms_version':latest['terms_version'] if latest else None,
+            # 알림을 켰지만 동의가 현재 약관이 아니면 알림이 오지 않는다. 화면에서 재동의를 안내하도록 따로 알려 준다.
+            'consent_required':bool(row['notifications_enabled']) and not current}
+
+
+def popup_kinds(conf):
+    """지금 팝업으로 보여 줄 수 있는 알림 종류."""
+    if not conf['notifications_enabled'] or not conf['consent_current']: return set()
+    return {kind for flag,kinds in POPUP_KINDS.items() if conf[flag] for kind in kinds}
+
+
+def skip_pending_popups(store,uid,kinds):
+    """팝업을 다시 켜기 전에 받은 알림은 띄우지 않는다. 별도 컬럼이 없어 표시 시각으로 함께 기록한다."""
+    if not kinds: return
+    u,e=store.t('user_alert'),store.t('alert_event')
+    store.c.execute(update(u).where(u.c.user_id==uid,u.c.popup_shown_at.is_(None),
+        u.c.event_id.in_(select(e.c.event_id).where(e.c.event_type.in_(sorted(kinds))))).values(popup_shown_at=now()))
 
 
 def patch_settings(store,uid,values):
+    before=settings(store,uid)
     if values.get('notifications_enabled'):
-        require(settings(store,uid)['consent_current'],'현재 알림 약관 동의가 필요합니다.','CONSENT_REQUIRED',409)
+        require(before['consent_current'],'현재 알림 약관 동의가 필요합니다.','CONSENT_REQUIRED',409)
     t=store.t('notification_setting')
     if values: store.c.execute(update(t).where(t.c.user_id==uid).values(**values))
-    return {'settings':settings(store,uid)}
+    after=settings(store,uid)
+    skip_pending_popups(store,uid,popup_kinds(after)-popup_kinds(before))
+    return {'settings':after}
 
 
 def consent(store,uid,data):
@@ -55,10 +59,11 @@ def consent(store,uid,data):
     t=store.t('notification_setting')
     setting=store.one(select(t).where(t.c.user_id==uid).with_for_update())
     if not setting: unavailable('알림 설정 행이 준비되지 않았습니다.','FEATURE_NOT_READY')
+    before=popup_kinds(settings(store,uid))
     enabled=bool(data.get('enable_notifications')) and data['action']=='AGREE'
     require(not data.get('enable_notifications') or data['action']=='AGREE','동의해야 알림을 켤 수 있습니다.')
     c=store.t('user_consent')
-    latest=store.one(select(c).where(c.c.user_id==uid).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1).with_for_update())
+    latest=store.one(select(c).where(c.c.user_id==uid,c.c.terms_version.in_(notification_versions(store))).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1).with_for_update())
     if latest and latest['terms_version']==current['version'] and latest['action']==data['action']=='AGREE':
         at=latest['acted_at']
     else:
@@ -68,44 +73,114 @@ def consent(store,uid,data):
     if data['action']!='AGREE' or enabled:
         store.c.execute(update(t).where(t.c.user_id==uid).values(notifications_enabled=enabled))
         notifications_enabled=enabled
+    skip_pending_popups(store,uid,popup_kinds(settings(store,uid))-before)
     return {'consent':{'terms_type':'NOTIFICATION','terms_version':data['terms_version'],'action':data['action'],
                        'acted_at':at,'notifications_enabled':notifications_enabled}}
 
 
+def target_blocked(store,uid,payload):
+    blocked=set(blocked_topics(store,uid)); target=payload.get('target',{})
+    return target.get('keyword_text') in blocked or target.get('kw_topic') in blocked
+
+
+def event_ids(event):
+    return event['payload_json'].get('article_ids',[]) or ([event['article_id']] if event.get('article_id') else [])
+
+
+def spike_target(payload):
+    """기사량 급증 판정이면 대상 키워드 또는 품목. 그 밖의 사건은 None."""
+    target=payload.get('target') or {}
+    if payload.get('reason')!='WEEKLY_NEWS_SPIKE' or not (target.get('keyword_text') or target.get('hs_code')): return None
+    return target
+
+
+def evidence_statement(store,uid,payload,ids=(),hs=None,countries=None):
+    """이 회원이 열 수 있는 근거 기사(최신순). 기사량 급증은 저장된 대표 5건이 아니라 판정 기간·출처·대상 전체에서 찾는다.
+    알림 전달·알림함·팝업·클릭 대상·주요 이슈 목록·주간 리포트가 같은 기준을 쓴다. 근거를 정할 수 없는 사건은 None."""
+    a,tags=store.t('article'),store.t('article_tag')
+    target=spike_target(payload)
+    if target:
+        from backend.app.scheduler.jobs.major_issue_detect import windows  # 판정 작업이 이 모듈을 불러 쓰므로 실행 시점에 가져온다
+        fallback=windows(date.fromisoformat(payload['metric_date']))[0]
+        start=date.fromisoformat(payload['window_start']) if payload.get('window_start') else fallback[0]
+        end=date.fromisoformat(payload['window_end']) if payload.get('window_end') else fallback[1]
+        if target.get('keyword_text'):
+            members,sources=select(tags.c.article_id).where(tags.c.keyword_text==target['keyword_text']),KEYWORD_DAILY_SOURCES
+        else:
+            members,sources=select(tags.c.article_id).where(tags.c.hs_code.startswith(target['hs_code']),tags.c.hs_ver==target.get('hs_ver')),PRODUCT_DAILY_SOURCES
+        return article_statement(store,uid,start=start,end=end,hs=hs,countries=countries).where(a.c.article_id.in_(members),a.c.source_code.in_(sources))
+    if ids: return article_statement(store,uid,hs=hs,countries=countries).where(a.c.article_id.in_(ids))
+    return None
+
+
+def has_evidence(store,uid,payload,ids=(),hs=None,countries=None):
+    stmt=evidence_statement(store,uid,payload,ids,hs,countries)
+    if stmt is None: return None
+    a=store.t('article')
+    return store.c.execute(stmt.order_by(None).with_only_columns(a.c.article_id).limit(1)).first() is not None
+
+
 def event_allowed(store,uid,event):
-    payload=event['payload_json']; blocked=set(blocked_topics(store,uid))
-    target=payload.get('target',{})
-    if target.get('keyword_text') in blocked or target.get('kw_topic') in blocked: return False
-    ids=payload.get('article_ids',[]) or ([event['article_id']] if event['article_id'] else [])
-    if ids:
-        a=store.t('article')
-        visible=store.c.execute(article_statement(store,uid).with_only_columns(a.c.article_id).where(a.c.article_id.in_(ids))).scalars().all()
-        return bool(visible)
-    return True
+    payload=event['payload_json']
+    if target_blocked(store,uid,payload): return False
+    found=has_evidence(store,uid,payload,event_ids(event))
+    return True if found is None else found
+
+
+def spike_articles(store,uid,payload,ids=()):
+    """기사량 급증의 표시·클릭용 근거 기사. 판정 기간·출처·대상을 지금도 만족하고 회원이 볼 수 있는 기사 중에서 고르며,
+    저장된 대표 기사를 먼저 둔다. 재적재로 태그가 바뀐 대표 기사는 여기서 빠진다. 공유 사건 원본은 바꾸지 않는다."""
+    a=store.t('article'); stmt=evidence_statement(store,uid,payload)
+    order=[case((a.c.article_id.in_([int(i) for i in ids]),0),else_=1)] if ids else []
+    stmt=stmt.order_by(None).order_by(*order,a.c.published_date.desc(),a.c.article_id.desc()).limit(EVIDENCE_LIMIT)
+    return article_views(store,store.rows(stmt),uid)
 
 
 def issue_view(store,event,uid=None,articles=None):
     p=event['payload_json']; target=p.get('target',{})
-    ids=p.get('article_ids',[]) or ([event['article_id']] if event['article_id'] else [])
-    if articles is None:
+    ids=event_ids(event)
+    if spike_target(p):
+        articles=spike_articles(store,uid,p,ids)
+    elif articles is None:
         a=store.t('article')
         rows=store.rows(article_statement(store,uid).where(a.c.article_id.in_(ids))) if ids else []
         articles=article_views(store,rows,uid)
     return {'event_id':str(event['event_id']),'event_type':event['event_type'],
-        'label':target.get('keyword_text') or target.get('hs_code') or p.get('label','주요 이슈'),
+        'label':p.get('label') or target.get('keyword_text') or target.get('hs_code') or '주요 이슈',
         'reason':p.get('reason',event['event_type']),'current_count':p.get('recent_week_count',p.get('day_count')),
         'baseline_average':p.get('baseline_weekly',p.get('baseline_daily')),'ratio':p.get('ratio'),
         'window_start':p.get('window_start'),'window_end':p.get('window_end'),'articles':articles}
 
 
+def notice_text(event_type,p):
+    """API 공통스키마 Notification의 유형별 표시 문구. 판정 사건은 근거 값으로 만든다."""
+    if event_type=='REPORT':
+        kind=REPORT_KINDS.get(p.get('report_type'))
+        period=p.get('period') or {}
+        title=f'{kind} 리포트가 발행되었습니다.' if kind else '리포트가 발행되었습니다.'
+        return title,(f"{period['start']} ~ {period['end']} 기간 리포트를 확인하세요." if period else '저장된 리포트를 확인하세요.')
+    label=p.get('label')
+    if event_type=='MAJOR_ISSUE' and p.get('reason')=='WEEKLY_NEWS_SPIKE':
+        return f'주요 이슈: {label}',f"최근 7일 기사 {p['recent_week_count']}건으로 직전 8주 주평균의 {p['ratio']:.1f}배입니다."
+    if event_type=='MAJOR_ISSUE' and p.get('reason')=='KOTRA_TRADE_REGULATION':
+        return f'주요 이슈: {label}','KOTRA 통상·규제 기사가 새로 등록되었습니다.'
+    return '관심 기사·주요 이슈 알림','관련 기사를 확인하세요.'
+
+
 def notification_view(store,row,uid,articles=None):
     p=row['payload_json']; report=row['event_type']=='REPORT'
+    title,message=notice_text(row['event_type'],p)
+    issue=None if report else issue_view(store,row,uid,articles)
+    if report: target=('REPORT',row['report_id'])
+    else:
+        # 이 회원이 열 수 있는 근거 기사로 이동한다. 대표 기사를 우선하고, 근거가 없으면 알림 상세(ANALYSIS, event_id)로 연다.
+        visible=[a['article_id'] for a in issue['articles']]
+        article=str(row['article_id']) if str(row['article_id']) in visible else visible[0] if visible else None
+        target=('ARTICLE',article) if article else ('ANALYSIS',row['event_id'])
     return {'user_alert_id':str(row['user_alert_id']),'event_id':str(row['event_id']),'event_type':row['event_type'],
-        'title':p.get('title','리포트가 발행되었습니다.' if report else '관심 기사·주요 이슈 알림'),
-        'message':p.get('message','저장된 리포트를 확인하세요.' if report else '관련 기사를 확인하세요.'),
-        'created_at':row['received_at'],'read_at':row['read_at'],'target_type':'REPORT' if report else 'NEWS',
-        'target_id':str(row['report_id']) if report else str(row['article_id']) if row['article_id'] else None,
-        'matched_interest':bool(row['is_interest_match']),'issue':None if report else issue_view(store,row,uid,articles)}
+        'title':p.get('title',title),'message':p.get('message',message),
+        'created_at':row['received_at'],'read_at':row['read_at'],'target_type':target[0],'target_id':str(target[1]),
+        'matched_interest':bool(row['is_interest_match']),'issue':issue}
 
 
 def event_allowed_sql(store,uid):
@@ -126,7 +201,21 @@ def event_allowed_sql(store,uid):
         count=func.coalesce(func.json_length(ids),0)
     related=or_(and_(count>0,array_match),and_(count==0,e.c.article_id==a.c.article_id))
     visible=article_statement(store,uid).with_only_columns(a.c.article_id).order_by(None).where(related).correlate(e)
-    conditions.append(or_(and_(count==0,e.c.article_id.is_(None)),exists(visible)))
+    stored=or_(and_(count==0,e.c.article_id.is_(None)),exists(visible))
+    # 기사량 급증은 evidence_statement와 같이 판정 기간·출처·대상 전체에서 이 회원이 열 수 있는 기사를 찾는다.
+    p=e.c.payload_json; target=p['target']
+    keyword,hs,version=(target[key].as_string() for key in ('keyword_text','hs_code','hs_ver'))
+    window_start,window_end=p['window_start'].as_string(),p['window_end'].as_string()
+    spike=and_(func.coalesce(p['reason'].as_string(),'')=='WEEKLY_NEWS_SPIKE',func.coalesce(window_start,'')!='',
+               or_(func.coalesce(keyword,'')!='',func.coalesce(hs,'')!=''))
+    tag=store.t('article_tag').alias('evidence_tag')
+    member=or_(and_(func.coalesce(keyword,'')!='',tag.c.keyword_text==keyword,a.c.source_code.in_(KEYWORD_DAILY_SOURCES)),
+               and_(func.coalesce(keyword,'')=='',tag.c.hs_code.startswith(hs),tag.c.hs_ver==version,a.c.source_code.in_(PRODUCT_DAILY_SOURCES)))
+    # 가장 안쪽 태그 조건도 바깥 알림 사건(e)·기사(a)와 연결해야 한다. 연결하지 않으면 사건 표를 따로 읽어 다른 사건의 대상으로 통과한다.
+    tagged=exists(select(tag.c.tag_id).where(tag.c.article_id==a.c.article_id,member).correlate(e,a))
+    evidence=article_statement(store,uid).with_only_columns(a.c.article_id).order_by(None).where(
+        a.c.published_date>=window_start,a.c.published_date<=window_end,tagged).correlate(e)
+    conditions.append(case((spike,exists(evidence)),else_=stored))
     return and_(*conditions)
 
 
@@ -146,14 +235,13 @@ def notification_rows(store,uid,kind='ALL',unread=False,page=1,size=20):
 
 
 def notification_views(store,rows,uid):
-    ids={identity for row in rows if row['event_type']!='REPORT' for identity in
-         (row['payload_json'].get('article_ids',[]) or ([row['article_id']] if row['article_id'] else []))}
+    # 급증 알림은 issue_view가 판정 조건으로 근거를 다시 고르므로 저장된 대표 기사를 미리 읽지 않는다.
+    stored=[row for row in rows if row['event_type']!='REPORT' and not spike_target(row['payload_json'])]
+    ids={identity for row in stored for identity in event_ids(row)}
     a=store.t('article')
     articles=article_views(store,store.rows(article_statement(store,uid).where(a.c.article_id.in_(ids))),uid) if ids else []
     by_id={item['article_id']:item for item in articles}
-    return [notification_view(store,row,uid,[by_id[str(identity)] for identity in
-            (row['payload_json'].get('article_ids',[]) or ([row['article_id']] if row['article_id'] else []))
-            if str(identity) in by_id]) for row in rows]
+    return [notification_view(store,row,uid,[by_id[str(identity)] for identity in event_ids(row) if str(identity) in by_id]) for row in rows]
 
 
 def listing(store,uid,kind='ALL',unread=False,page=1,size=20):
@@ -190,23 +278,38 @@ def read_all(store,uid,through,kind):
     return {'updated_count':count,'unread_count':unread_count(store,uid)}
 
 
+POPUP_RESERVATION_SECONDS=300  # 팝업 전달 ID 유효시간 = 예약 시간. 확인(ack) 없이 창이 닫히면 이 시간이 지난 뒤 다시 전달한다.
+
+
+def reserved_alerts(store,uid):
+    """아직 확인되지 않았고 예약 시간이 남은 팝업 전달에 들어 있는 회원 알림 ID.
+    잠금 읽기로 다른 창이 방금 커밋한 예약까지 본다(MySQL 반복 읽기는 일반 SELECT에 이 요청의 첫 읽기 시점 스냅숏을 쓴다)."""
+    s=store.t('api_snapshot')
+    rows=store.c.execute(select(s.c.payload_json).where(s.c.user_id==uid,s.c.kind=='DELIVERY',s.c.expires_at>now())
+                         .with_for_update()).scalars()
+    return {int(i) for payload in rows for i in (payload or {}).get('ids',[])}
+
+
 def popups(store,uid):
     conf=settings(store,uid)
-    if not conf['notifications_enabled'] or not conf['consent_current']:
+    kinds=popup_kinds(conf)
+    if not kinds:
         return {'groups':[],'next_cursor':None,'retry_after_seconds':30}
     u,e=store.t('user_alert'),store.t('alert_event')
-    kinds=[]
-    if conf['report_popup']: kinds.append('REPORT')
-    if conf['major_issue_popup']: kinds.append('MAJOR_ISSUE')
-    if conf['spike_popup']: kinds.extend(['PRODUCT_SPIKE','KEYWORD_SPIKE'])
-    rows=store.rows(notification_statement(store,uid).where(u.c.popup_shown_at.is_(None),e.c.event_type.in_(kinds))
+    # 같은 회원의 두 창이 동시에 조회해도 한 알림은 한 창에만 발급한다. 회원 행을 잠가 예약 확인·등록을 한 번에 하나씩 한다.
+    users=store.t('users')
+    store.c.execute(select(users.c.user_id).where(users.c.user_id==uid).with_for_update()).first()
+    reserved=reserved_alerts(store,uid)
+    rows=store.rows(notification_statement(store,uid).where(u.c.popup_shown_at.is_(None),u.c.read_at.is_(None),e.c.event_type.in_(sorted(kinds)))
                     .order_by(u.c.created_at.desc(),u.c.user_alert_id.desc()).limit(100)); grouped={}
+    rows=[r for r in rows if int(r['user_alert_id']) not in reserved]
     for r in rows:
         flag='report_popup' if r['event_type']=='REPORT' else 'major_issue_popup' if r['event_type']=='MAJOR_ISSUE' else 'spike_popup'
         if r['popup_shown_at'] is None and conf[flag]: grouped.setdefault(r['event_type'],[]).append(r)
     groups=[]
-    for kind,rs in grouped.items():
-        identity=save_snapshot(store,uid,'DELIVERY',{'ids':[str(r['user_alert_id']) for r in rs]},300)
+    # 화면은 한 번에 한 묶음만 표시한다(NotificationPopups). 표시할 묶음만 예약하고 나머지 종류는 다음 조회에서 발급한다.
+    for kind,rs in list(grouped.items())[:1]:
+        identity=save_snapshot(store,uid,'DELIVERY',{'ids':[str(r['user_alert_id']) for r in rs]},POPUP_RESERVATION_SECONDS)
         groups.append({'delivery_id':identity,'event_type':kind,'notifications':notification_views(store,rs,uid),'created_at':now()})
     return {'groups':groups,'next_cursor':None,'retry_after_seconds':30}
 

@@ -37,6 +37,7 @@ from backend.app.models.news import COUNTRY, Article, ArticleTag, NewsKeywordDai
 from backend.app.scheduler.jobs.hs_code_load import hb
 from backend.app.services import news_load as nl
 from backend.app.services import news_schema
+from backend.app.services.article_sources import KEYWORD_DAILY_SOURCES, PRODUCT_DAILY_SOURCES
 
 ROOT = Path(__file__).resolve().parents[4]
 RAW_DIR = ROOT / "data" / "news"
@@ -160,14 +161,14 @@ def rebuild_daily(session, days):
     dates, keywords, countries, hs_tags = {}, [], {}, []
     for chunk in _in_chunks(days):
         q = select(t.c.article_id, a.c.published_date, t.c.keyword_text, t.c.country_code, t.c.hs_code, t.c.hs_ver, a.c.source_code) \
-            .join(a, a.c.article_id == t.c.article_id).where(a.c.published_date.in_(chunk), a.c.source_code.in_(('KOTRA_MARKET','KOTRA_SHORT_NEWS','KOTRA_SHORTNEWS')))
+            .join(a, a.c.article_id == t.c.article_id).where(a.c.published_date.in_(chunk), a.c.source_code.in_(KEYWORD_DAILY_SOURCES))
         for article_id, day, kw, country, hs, ver, source in session.execute(q):
             dates[article_id] = day
             if kw is not None:
                 keywords.append((article_id, kw))
             elif country is not None:
                 countries.setdefault(article_id, set()).add(country)
-            elif hs is not None and len(hs) in (4, 6) and source == "KOTRA_MARKET":
+            elif hs is not None and len(hs) in (4, 6) and source in PRODUCT_DAILY_SOURCES:
                 hs_tags.append((article_id, hs, ver))
     hs_codes = {tuple(r) for r in session.execute(select(HsCodeMst.hs_code, HsCodeMst.hs_ver).where(
         HsCodeMst.hs_code.in_({h[:4] for _, h, _ in hs_tags})))} if hs_tags else set()
@@ -245,7 +246,7 @@ def run(raw_path=None, clean_path=DEFAULT_CLEAN, db_url=None, log_dir=LOG_DIR, t
     log_path = setup_log(log_dir)
     try:
         raw_path = Path(raw_path) if raw_path else latest_raw()
-        raws = read_csv(raw_path, nl.RAW_COLUMNS)
+        raws = read_csv(raw_path, nl.RAW_COLUMNS, nl.RAW_OPTIONAL_COLUMNS)
         cleans = read_csv(clean_path, nl.CLEAN_COLUMNS, nl.CLEAN_OPTIONAL_COLUMNS)
     except (FileNotFoundError, ValueError) as e:
         log.error(f"적재 실패: {e} | 로그: {log_path}")

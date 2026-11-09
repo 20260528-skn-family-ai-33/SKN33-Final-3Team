@@ -53,16 +53,17 @@ function Ticker({ interest }) {
   const round = { width: 30, height: 30, borderRadius: 15, background: 'rgba(255,255,255,.12)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, cursor: 'pointer' }
   return (
     <div style={{ marginTop: 44, background: 'rgba(10,14,20,.74)', border: '1px solid rgba(255,255,255,.14)', borderRadius: 14, padding: '14px 20px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, color: '#fff' }} aria-live="polite">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 15 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 15, whiteSpace: 'nowrap' }}>
         <strong>{interest ? '내 관심 기사' : '기사'}</strong>
         {TICKER_TABS.map(([key, label]) => (
           <button key={key} type="button" className="reset" onClick={() => { setTab(key); setIndex(0) }} style={{ color: tab === key ? '#FF8A9A' : '#D5D9E0' }} aria-pressed={tab === key}>{label}</button>
         ))}
       </div>
       <span style={{ width: 1, height: 16, background: 'rgba(255,255,255,.25)' }} />
-      <span style={{ fontSize: 13, color: '#B8BEC8' }}>{current?.source || '기사 출처'}</span>
-      <Link to={`/articles?tab=${current?.kind === 'general' ? 'all' : current?.kind}&id=${current?.id}`} style={{ flex: '1 1 220px', minWidth: 0, color: '#fff', fontSize: 16, fontWeight: 700 }}>{current?.title || (result.error ? result.error.message : result.loading ? '기사를 불러오는 중…' : '조회된 기사가 없습니다.')}</Link>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#B8BEC8' }}>
+      <span style={{ fontSize: 13, color: '#B8BEC8', whiteSpace: 'nowrap' }}>{current?.source || '기사 출처'}</span>
+      {/* 제목이 길면 한 줄에 들어가는 만큼만 보여 주고 …로 줄인다. 전체 제목은 마우스를 올리면 보인다. */}
+      <Link to={`/articles?tab=${current?.kind === 'general' ? 'all' : current?.kind}&id=${current?.id}`} title={current?.title} style={{ flex: '1 1 220px', minWidth: 0, color: '#fff', fontSize: 16, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current?.title || (result.error ? result.error.message : result.loading ? '기사를 불러오는 중…' : '조회된 기사가 없습니다.')}</Link>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#B8BEC8', whiteSpace: 'nowrap' }}>
         <span style={{ marginRight: 6 }}>{items.length ? (index % items.length) + 1 : 0} / {items.length}</span>
         <button type="button" style={round} aria-label="이전 기사" onClick={() => setIndex(i => (i - 1 + items.length) % items.length)}><Icon name="chevronUp" size={13} color="#fff" stroke={2.2} /></button>
         <button type="button" style={round} aria-label="다음 기사" onClick={() => setIndex(i => (i + 1) % items.length)}><Icon name="chevronDown" size={13} color="#fff" stroke={2.2} /></button>
@@ -185,17 +186,17 @@ export default function Dashboard({ route }) {
 
       <section style={{ background: '#15181E', color: '#ECEEF1', padding: '48px 0 52px' }}>
         <div className="wrap">
-          <div className="between" style={{ alignItems: 'flex-end' }}>
+          <div className="between" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
               <h2 style={{ fontSize: 26, fontWeight: 800, color: '#fff' }}>{data.rankTitle}</h2>
               <p style={{ marginTop: 8, fontSize: 13, color: '#A3AAB6' }}>{data.rankSub.replace('최근 3개월', `최근 ${months}개월`)}</p>
             </div>
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
               {[3, 6, 12].map(m => (
                 <button key={m} type="button" className="reset" aria-pressed={months === m} onClick={() => setMonths(m)}
-                  style={{ height: 34, padding: '0 14px', borderRadius: 17, background: months === m ? '#fff' : '#262A33', color: months === m ? '#15181E' : '#C9CED6', fontSize: 13, fontWeight: months === m ? 800 : 400, display: 'inline-flex', alignItems: 'center' }}>{m}개월</button>
+                  style={{ height: 34, padding: '0 14px', borderRadius: 17, background: months === m ? '#fff' : '#262A33', color: months === m ? '#15181E' : '#C9CED6', fontSize: 13, fontWeight: months === m ? 800 : 400, display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}>{m}개월</button>
               ))}
-              <Link to={data.detailLink("HS6")} style={{ marginLeft: 10, fontSize: 14, fontWeight: 700, color: '#FF8A9A' }}>상세보기 →</Link>
+              <Link to={data.detailLink("HS6")} style={{ marginLeft: 10, fontSize: 14, fontWeight: 700, color: '#FF8A9A', whiteSpace: 'nowrap', flexShrink: 0 }}>상세보기 →</Link>
             </div>
           </div>
           <div style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${interest ? Math.min(Math.max(cards.length, 2), 5) : 5},1fr)`, gap: 14 }} className="resp-stack">

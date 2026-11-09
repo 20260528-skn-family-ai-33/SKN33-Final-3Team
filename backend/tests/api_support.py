@@ -10,6 +10,9 @@ from backend.app.api.runtime_schema import RUNTIME_TABLES, EXTENSIONS
 from backend.app.api.common import now, month_end, shift_month
 
 
+SIGNUP_CONSENTS={'age_confirmed':True,'service_terms_version':'TERMS_SERVICE_V1','privacy_terms_version':'TERMS_PRIVACY_V1'}
+
+
 def create_test_app(settings=None, engine=None):
     import fakeredis
     from backend.app.api.application import create_app
@@ -59,7 +62,10 @@ def reference_data(engine, meta):
             {'option_code':'CUSTOMS','option_type':'SOURCE','label_ko':'로컬 테스트 관세청','enabled':True,'sort_order':1,'value_json':{}},
             {'option_code':'RPT_ON_DEMAND','option_type':'REPORT_TYPE','label_ko':'요청형','enabled':True,'sort_order':1,'value_json':{}},
             {'option_code':'MONTHLY','option_type':'REPORT_PERIOD','label_ko':'월간','enabled':True,'sort_order':2,'value_json':{}},
-            {'option_code':'TERMS_V1','option_type':'NOTIFICATION_TERMS','label_ko':'알림 약관','enabled':True,'sort_order':1,'value_json':{'body':'테스트용 약관'}}])
+            {'option_code':'TERMS_V1','option_type':'NOTIFICATION_TERMS','label_ko':'알림 약관','enabled':True,'sort_order':1,'value_json':{'body':'테스트용 약관'}},
+            {'option_code':'TERMS_SERVICE_V1','option_type':'SERVICE_TERMS','label_ko':'서비스 이용약관','enabled':True,'sort_order':1,'value_json':{'body':'테스트용 이용약관'}},
+            {'option_code':'TERMS_PRIVACY_V1','option_type':'PRIVACY_TERMS','label_ko':'개인정보 수집·이용 동의','enabled':True,'sort_order':1,'value_json':{'body':'테스트용 개인정보 동의'}},
+            {'option_code':'PRIVACY_POLICY_V1','option_type':'PRIVACY_POLICY','label_ko':'개인정보 처리방침','enabled':True,'sort_order':1,'value_json':{'body':'테스트용 처리방침'}}])
         for target in ('export_summary','import_summary'):
             c.execute(meta.tables['batch_run'].insert(),{'source_code':'CUSTOMS','job_name':'HS6_AGGREGATION',
                 'target_table':target,'period_start':date(2024,1,1),'period_end':date(2025,12,31),'status':'SUCCESS','detail_json':{'schema_version':1}})

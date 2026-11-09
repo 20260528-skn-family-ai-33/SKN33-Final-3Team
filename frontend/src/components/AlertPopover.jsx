@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { navigate } from '../router'
 import { useApp, useNotifications } from '../store'
 import { notificationTypes } from '../data/seed'
+import { Btn } from './ui'
 
 export default function AlertPopover({ onClose }) {
   const { run } = useApp()
@@ -37,9 +38,8 @@ export default function AlertPopover({ onClose }) {
           )
         })}
         {!notifications.length && <p className="muted" style={{ padding: '22px 20px' }}>새 알림이 없습니다.</p>}
-        <div className="between" style={{ padding: '14px 20px', background: 'var(--bg)' }}>
-          <span className="note">상단 종 아이콘을 다시 선택하면 팝오버가 닫힙니다.</span>
-          <button type="button" className="reset more" onClick={() => { onClose(); navigate('/account/notifications') }}>알림함 전체 보기 →</button>
+        <div style={{ padding: '14px 20px', background: 'var(--bg)' }}>
+          <Btn block onClick={() => { onClose(); navigate('/account/notifications') }}>알림함 전체 보기</Btn>
         </div>
       </div>
     </>

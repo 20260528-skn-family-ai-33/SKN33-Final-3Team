@@ -2,22 +2,41 @@
 import { useState } from 'react'
 import { navigate } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Check, TextField } from '../../components/ui'
+import { Btn, Check, Modal, TextField } from '../../components/ui'
 import { PASSWORD_HINT, isEmail, isStrongPassword } from '../../utils/validate'
 import PasswordRules from '../../components/PasswordRules'
-import { usePendingAction } from '../../api/hooks'
+import TermsBody from '../../components/TermsBody'
+import { ErrorNotice, useQuery, usePendingAction } from '../../api/hooks'
 import { AuthFrame, CardHead, PlainAuthPage } from './AuthFrame'
+
+const NO_AGREEMENT = { age: false, service: false, privacy: false }
 
 export function Signup() {
   const { accounts, signup, notify } = useApp()
   const [form, setForm] = useState({ name: '', email: '', password: '', confirm: '' })
   const [error, setError] = useState({})
   const [pending, runOnce] = usePendingAction()
+  const serviceTerms = useQuery('/terms/service')
+  const privacyTerms = useQuery('/terms/privacy')
+  const [agreed, setAgreed] = useState(NO_AGREEMENT)
+  const [viewing, setViewing] = useState(null)
   const set = key => value => {
     setForm(f => ({ ...f, [key]: value }))
     setError(previous => ({ ...previous, [key]: undefined, form: undefined }))
   }
   const passwordReady = isStrongPassword(form.password) && form.password === form.confirm
+  const serviceVersion = serviceTerms.data?.terms.version
+  const privacyVersion = privacyTerms.data?.terms.version
+  const agreementReady = agreed.age && agreed.service && agreed.privacy && !!serviceVersion && !!privacyVersion
+  const ready = passwordReady && agreementReady
+  const termsError = serviceTerms.error || privacyTerms.error
+  const reloadTerms = () => { serviceTerms.reload(); privacyTerms.reload() }
+  const agreement = (key, label, terms) => (
+    <div className="between" style={{ gap: 12 }}>
+      <Check checked={agreed[key]} onChange={value => setAgreed(current => ({ ...current, [key]: value }))}>{label}</Check>
+      {terms && <button type="button" className="reset more" style={{ fontSize: 13, flexShrink: 0 }} disabled={!terms.data} onClick={() => setViewing(terms.data.terms)}>내용 보기</button>}
+    </div>
+  )
 
   const submit = async e => {
     e.preventDefault()
@@ -34,7 +53,7 @@ export function Signup() {
       return
     }
     await runOnce(async () => {
-      const result = await signup(form)
+      const result = await signup({ ...form, ageConfirmed: agreed.age, serviceTermsVersion: serviceVersion, privacyTermsVersion: privacyVersion })
       if (result.ok) {
         try {
           sessionStorage.setItem('bs.onboarding.' + result.account.id, JSON.stringify({ items: [], countries: [], welcome: true }))
@@ -44,6 +63,10 @@ export function Signup() {
       const fieldError = (key, message) => {
         setError({ [key]: message })
         document.getElementById('su-' + key)?.focus()
+      }
+      if (result.code === 'TERMS_VERSION_CHANGED') {
+        setAgreed(NO_AGREEMENT)
+        reloadTerms()
       }
       if (result.code === 'PASSWORD_POLICY_VIOLATION') return fieldError('password', PASSWORD_HINT)
       if (['EMAIL_ALREADY_EXISTS', 'RESERVED_ACCOUNT'].includes(result.code)) return fieldError('email', result.message)
@@ -78,14 +101,28 @@ export function Signup() {
         {field('confirm', '비밀번호 확인', { placeholder: '비밀번호를 다시 입력하세요', type: 'password', autoComplete: 'new-password' })}
         {form.confirm && form.password === form.confirm && !error.confirm && <p className="field-ok">✓ 비밀번호가 일치합니다</p>}
         <p className="note" style={{ marginTop: 10 }}>이름은 필수 입력입니다. 이메일 형식·중복 여부와 비밀번호 일치 여부를 확인합니다.</p>
+        <div className="col" role="group" aria-label="필수 약관 동의" style={{ gap: 10, marginTop: 22 }}>
+          {agreement('age', '[필수] 만 14세 이상입니다.')}
+          {agreement('service', '[필수] 서비스 이용약관에 동의합니다.', serviceTerms)}
+          {agreement('privacy', '[필수] 개인정보 수집·이용에 동의합니다.', privacyTerms)}
+        </div>
+        <ErrorNotice error={termsError} retry={reloadTerms} />
         <div className="sp24" />
         {error.form && <p className="field-err" role="alert">{error.form}</p>}
-        <Btn type="submit" kind="red" size="lg" block disabled={!passwordReady || pending}>{pending ? '가입 중…' : '회원가입하고 관심사 설정하기'}</Btn>
+        <Btn type="submit" kind="red" size="lg" block disabled={!ready || pending}>{pending ? '가입 중…' : '회원가입하고 관심사 설정하기'}</Btn>
         {!passwordReady && <p className="note" style={{ marginTop: 8, textAlign: 'center' }}>비밀번호 조건을 모두 만족하고 비밀번호 확인이 일치해야 가입할 수 있습니다.</p>}
+        {passwordReady && !agreementReady && <p className="note" style={{ marginTop: 8, textAlign: 'center' }}>필수 항목에 모두 동의해야 가입할 수 있습니다.</p>}
         <div className="sp12" />
         <Btn to="/login" size="lg" block>로그인 화면으로 돌아가기</Btn>
         <p className="note" style={{ marginTop: 16 }}>회원가입 완료 후에만 최초 관심사 등록을 진행합니다.</p>
       </form>
+      <Modal open={!!viewing} onClose={() => setViewing(null)} width={680} label={viewing?.title || '약관 내용'}>
+        <h2 style={{ fontSize: 22, fontWeight: 800 }}>{viewing?.title}</h2>
+        <div style={{ marginTop: 14, border: '1px solid var(--line)', borderRadius: 12, padding: 16, maxHeight: '55vh', overflowY: 'auto' }}>
+          <TermsBody body={viewing?.body} />
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}><Btn kind="ink" size="md" onClick={() => setViewing(null)}>확인</Btn></div>
+      </Modal>
     </AuthFrame>
   )
 }

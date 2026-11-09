@@ -51,12 +51,15 @@ def weekly_sources(store):
 
 
 def ready_days(store, start, end):
+    return sources_ready(store,weekly_sources(store),start,end)
+
+
+def sources_ready(store, sources, start, end):
     # Collectors atomically load articles/tags/daily aggregates, then record a single
     # target_table='article' batch. Requiring separate daily-table runs blocks forever.
     # Check each required news provider independently: one provider's success must not
     # hide another provider's missing/failed/running load for the same dates.
     t,options=store.t('batch_run'),store.t('service_option')
-    sources=weekly_sources(store)
     enabled=set(store.c.execute(select(options.c.option_code).where(
         options.c.option_code.in_(sources),options.c.enabled==True,
         options.c.option_type.in_(('SOURCE','ARTICLE_SOURCE')))).scalars())
