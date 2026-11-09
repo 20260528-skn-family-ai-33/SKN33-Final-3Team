@@ -15,6 +15,8 @@ from backend.app.services.rag.documents import ArticleDocument
 from backend.app.services.rag.store import GenerationStore
 from backend.app.services.rag.service import RagService, rag_node
 from backend.app.services.rag.runtime import ExecutionContext, RagDeadlineExceeded
+from backend.app.services.rag.parallel_review import review_articles
+from backend.app.services.rag.retrieval import Candidate
 from backend.app.services.rag.vocabulary import Vocabulary
 from backend.tests.rag_fixtures import request_payload
 
@@ -317,6 +319,87 @@ class PipelineTest(unittest.TestCase):
             self.assertNotIn('변경 본문', path.read_text())
 
 
+class ParallelReviewTest(unittest.TestCase):
+    def candidates(self):
+        return [Candidate(document(i), float(i), 'synthetic', {}) for i in range(1, 11)]
+
+    def test_three_workers_keep_rank_and_stop_at_five_without_extra_work(self):
+        barrier, lock = threading.Barrier(3), threading.Lock()
+        started, active, maximum = [], [0], [0]
+
+        def review(candidate, child):
+            number = candidate.article.article_id
+            with lock:
+                started.append(number)
+                active[0] += 1
+                maximum[0] = max(maximum[0], active[0])
+            try:
+                if number <= 3:
+                    barrier.wait(timeout=2)
+                if number == 1:
+                    time.sleep(0.03)  # Later ranks finish before the first rank.
+                return [], ['verified']
+            finally:
+                with lock:
+                    active[0] -= 1
+
+        context = ExecutionContext(time.monotonic()+3)
+        results, reason = review_articles(self.candidates(), review, context, 5)
+        self.assertEqual(maximum[0], 3)
+        self.assertEqual(sorted(started), [1, 2, 3, 4, 5])
+        self.assertEqual([c.article.article_id for c, value, error in results], [1, 2, 3, 4, 5])
+        self.assertTrue(all(error is None for _, _, error in results))
+        self.assertEqual(reason, 'target_met')
+
+    def test_deadline_keeps_finished_later_ranks_and_does_not_wait_for_sdk_call(self):
+        release, drained = threading.Event(), threading.Event()
+        lock, live, late_steps = threading.Lock(), [0], []
+
+        def review(candidate, child):
+            number = candidate.article.article_id
+            if number in (2, 3):
+                return [], ['verified']
+            with lock:
+                live[0] += 1
+            try:
+                release.wait(timeout=2)  # Simulate a synchronous in-flight request.
+                child.remaining()
+                late_steps.append(number)
+                return [], ['late']
+            finally:
+                with lock:
+                    live[0] -= 1
+                    if live[0] == 0:
+                        drained.set()
+
+        context = ExecutionContext(time.monotonic()+0.12)
+        start = time.monotonic()
+        try:
+            results, reason = review_articles(self.candidates(), review, context, 5)
+            self.assertLess(time.monotonic()-start, 0.5)
+            self.assertEqual(reason, 'timeout')
+            self.assertEqual([c.article.article_id for c, value, error in results if error is None], [2, 3])
+            trace = copy.deepcopy(context.trace())
+        finally:
+            release.set()
+        self.assertTrue(drained.wait(timeout=2))
+        self.assertEqual(late_steps, [])
+        self.assertEqual(context.events, trace['events'])
+
+    def test_rejections_and_one_failed_worker_allow_all_ten_candidates(self):
+        def review(candidate, child):
+            number = candidate.article.article_id
+            if number == 4:
+                raise ValueError('invalid_quote')
+            return [], ['verified'] if number >= 6 else []
+
+        results, reason = review_articles(self.candidates(), review, ExecutionContext(time.monotonic()+3), 5)
+        self.assertEqual(len(results), 10)
+        self.assertEqual([c.article.article_id for c, value, error in results if value and value[1]], [6, 7, 8, 9, 10])
+        self.assertEqual(sum(error is not None for _, _, error in results), 1)
+        self.assertEqual(reason, 'target_met')
+
+
 class SearchRecoveryTest(unittest.TestCase):
     setUp = PipelineTest.setUp
     publish = PipelineTest.publish
@@ -351,7 +434,7 @@ class SearchRecoveryTest(unittest.TestCase):
 
                 with patch.object(self.gateway, 'summarize', side_effect=review):
                     result = self.call(request_payload('chat'))
-                self.assertEqual(reviewed, list(range(1, last_reviewed + 1)))
+                self.assertEqual(sorted(reviewed), list(range(1, last_reviewed + 1)))
                 self.assertEqual([a.article_id for a in result.articles], expected_ids)
                 self.assertEqual(result.status, 'ok' if len(expected_ids) == 5 else 'insufficient_evidence')
 
