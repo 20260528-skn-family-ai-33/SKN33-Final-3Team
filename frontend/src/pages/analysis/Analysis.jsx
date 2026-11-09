@@ -1,6 +1,7 @@
 // BS14 AI분석(대화·리포트 조건·생성 진행·일반 답변·표 보기) · BS15 리포트 생성 완료
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { allPages, useApp } from '../../store'
+import { navigate } from '../../router'
 import { Band } from '../../components/layout'
 import { Btn, Check, Modal, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
@@ -33,9 +34,9 @@ const STATUS_TAG = {
 const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
 const optionsFor = (c, choices) => ({ conditions: c, country: c.country_codes.map(countryName).join(' · '), product: c.hs_items.map(h => reportProduct(h.hs_code, choices?.find(choice => choice.hs_item?.hs_code === h.hs_code)?.label || h.name_ko)).join(', '), from: c.period.start.slice(0, 7), to: c.period.end.slice(0, 7), ...reportComparisonInputs(c), sections: ALL_SECTIONS })
 
-function AiBlock({ children, className }) {
+function AiBlock({ children, className, id }) {
   return (
-    <div className={className}>
+    <div className={className} id={id}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <span style={{ width: 30, height: 30, borderRadius: 10, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sparkle" color="#C8102E" stroke={2} /></span>
         <b style={{ fontSize: 14 }}>Borderless Sellers AI</b>
@@ -48,13 +49,13 @@ function AiBlock({ children, className }) {
 function UserBubble({ text }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-      <div style={{ maxWidth: 560, background: 'var(--plum)', color: '#fff', borderRadius: '18px 18px 4px 18px', padding: '16px 20px', fontSize: 16, lineHeight: 1.6, whiteSpace: 'pre-line' }}>{text}</div>
+      <div style={{ maxWidth: '75%', background: 'var(--plum)', color: '#fff', borderRadius: '18px 18px 4px 18px', padding: '16px 20px', fontSize: 16, lineHeight: 1.6, whiteSpace: 'pre-line' }}>{text}</div>
     </div>
   )
 }
 
 /** 상태 1: 리포트 조건 선택 */
-function ConditionCard({ message, onChange, onGenerate, onClose }) {
+function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
   const { run, notify } = useApp()
   const availability = useQuery('/data/availability')
   const [preview, setPreview] = useState(null)
@@ -96,7 +97,7 @@ function ConditionCard({ message, onChange, onGenerate, onClose }) {
   }
   if (message.locked) {
     return (
-      <AiBlock>
+      <AiBlock id={id}>
         <p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인했습니다.</p>
         <p style={{ marginTop: 8, fontSize: 15 }}>국가: {o.country || '전체'} · 품목: {o.product || '전체 품목'} · 분석: {range(o.from, o.to)}</p>
         <p className="muted" style={{ marginTop: 4 }}>비교: {range(o.compareFrom, o.compareTo)} · 포함: {o.sections.map(s => s.replace('(KPI)', '').replace(' 기사', '').replace(' 시장', '')).join(' / ')}</p>
@@ -124,7 +125,7 @@ function ConditionCard({ message, onChange, onGenerate, onClose }) {
     </div>
   }
   return (
-    <AiBlock>
+    <AiBlock id={id}>
       <div className="between"><p style={{ fontSize: 17, fontWeight: 800 }}>분석 조건을 확인해 주세요.</p><Btn size="sm" onClick={onClose}>닫기</Btn></div>
       <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>품목: {o.product || '전체 품목'} · 국가: {o.country || '전체'} (국가 선택 생략 가능)</p>
       <details style={{marginTop:16}}><summary>국가 조건 선택 · {o.conditions.country_codes.length+(o.conditions.include_korea_total?1:0)}개</summary>
@@ -198,7 +199,7 @@ function ReportGeneration({initial,onComplete}) {
     poll();return ()=>{controller.abort();clearTimeout(timer)}
   },[initial.report_id,retry,onComplete])
   const active=!['READY','FAILED'].includes(job.status)
-  return <AiBlock><div role="status"><b>{job.status==='READY'?'리포트 생성 완료':job.status==='FAILED'?'리포트 생성 실패':'리포트 생성 중'}</b>
+  return <AiBlock id={`report-${initial.report_id}`}><div role="status"><b>{job.status==='READY'?'리포트 생성 완료':job.status==='FAILED'?'리포트 생성 실패':'리포트 생성 중'}</b>
     {active && <span className="chat-loading-ring" aria-label="리포트 생성 진행 중"/>}</div>
     {active && <p className="note">채팅을 계속할 수 있습니다. 완료되면 여기에서 알려드립니다.</p>}
     <ErrorNotice error={error || job.error} retry={()=>setRetry(v=>v+1)}/>
@@ -252,8 +253,9 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
       {article.sentences?.length ? article.sentences.map((s, i) => <details key={i}>
         <summary>{s.text} · 근거 보기</summary>
         {s.quotes.map((quote, j) => <blockquote key={j}>{quote}</blockquote>)}
-      </details>) : (article.summary || article.evidence_sufficient === false) && <p>{article.summary || (a.order_by === 'published_date_desc' ? '발행일 기준 최신 기사' : '본문 근거 부족')}</p>}
-      <Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn>
+      </details>) : (article.summary || article.evidence_sufficient === false) && <p>{article.summary || (article.unavailable ? '답변 뒤 공개가 바뀌어 볼 수 없는 기사입니다.' : a.order_by === 'published_date_desc' ? '발행일 기준 최신 기사' : '본문 근거 부족')}</p>}
+      {/* unavailable: 검색 뒤 숨겨진 기사. [n] 번호만 지키려고 남긴 자리라 상세로 가지 않는다(D-102) */}
+      {!article.unavailable && <Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn>}
       {/^https?:\/\//i.test(article.source_url || '') && <a href={article.source_url} target="_blank" rel="noreferrer">원문 보기</a>}
     </div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
@@ -267,7 +269,7 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
 export default function Analysis({ route }) {
   const { session, chats, refreshChats, refreshReports, addInterests, run, notify } = useApp()
   const [activeId, setActiveId] = useState(route.query.get('chat') || chats[0]?.id)
-  const [input, setInput] = useState(route.query.get('ask') || '')
+  const [input, setInput] = useState(route.query.get('new') === '1' ? '' : route.query.get('ask') || '')
   const [modal, setModal] = useState(null)
   const [rename, setRename] = useState('')
   const [messages, setMessages] = useState([])
@@ -275,6 +277,10 @@ export default function Analysis({ route }) {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState(null)
+  const [sending, setSending] = useState(null)   // 접수 응답 전까지 보여 줄 질문(15번 로딩)
+  const [scrollTo, setScrollTo] = useState(null)  // 리포트 생성 중 위치로 이동할 요소 id
+  const [drawer, setDrawer] = useState(false)   // 휴대폰 폭의 채팅방 목록 슬라이더
+  const topRef = useRef(null)
   const reportStorageKey=`analysis-reports:${session?.id}`
   const [chatReports,setChatReports]=useState(()=>{
     try { return JSON.parse(sessionStorage.getItem(reportStorageKey)||'{}') } catch { return {} }
@@ -315,6 +321,21 @@ export default function Analysis({ route }) {
     return () => { cancelled = true; clearTimeout(timer) }
   }, [activeId, readRevision])
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, [messages.length])
+  // 리포트 생성이 시작되면(채팅 승인 → WAITING_REPORT, 조건 폼 → 생성 접수) 생성 중 표시가 있는 곳으로 이동한다
+  const waitingReport = job?.status === 'WAITING_REPORT' ? job.job_id : null
+  const scrolledReport = useRef(null)   // 같은 작업의 폴링마다 다시 끌어오지 않는다
+  useEffect(() => {
+    const waiting = waitingReport && scrolledReport.current !== waitingReport
+    const id = scrollTo || (waiting ? `job-progress-${waitingReport}` : null)
+    if (!id) return
+    const frame = requestAnimationFrame(() => {
+      const target = document.getElementById(id)
+      if (!target) return   // 아직 그려지지 않았다. 메시지를 다시 읽으면 다시 찾는다
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      if (id === scrollTo) setScrollTo(null); else scrolledReport.current = waitingReport
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [scrollTo, waitingReport, messages])
   const clarificationId=job?.status==='NEEDS_INPUT' ? job.clarification?.clarification_id : null
   useEffect(() => {
     if (!clarificationId) return
@@ -326,24 +347,38 @@ export default function Analysis({ route }) {
   },[clarificationId,job?.clarification?.allow_text])
   const newChat = () => run(async () => {
     const data = await api('/chat/sessions', { method: 'POST', body: {} })
-    await refreshChats(); setActiveId(data.session.session_id); setMessages([]); setJob(null); setDraft(null); setInput('')
+    await refreshChats(); setActiveId(data.session.session_id); setMessages([]); setJob(null); setDraft(null); setInput(''); setDrawer(false)
   })
-  const send = async () => {
-    if (!input.trim() || busy) return
-    setBusy(true)
+  // newRoom: 기사 화면의 "AI에게 물어보기"처럼 새 채팅방을 만들어 바로 묻는다(23번)
+  const send = async (text = input, newRoom = false) => {
+    if (!text.trim() || busy) return
+    const input = text
+    setBusy(true); setSending(input)
+    let accepted = false
     await run(async () => {
-      let id = activeId
+      let id = newRoom ? null : activeId
       if (!id) { const data = await api('/chat/sessions', { method: 'POST', body: {} }); id = data.session.session_id; setActiveId(id) }
       if (pending.current?.text !== input || pending.current?.sessionId !== id) pending.current = { text: input, sessionId: id, id: requestId() }
       const data = await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: { question: input, client_message_id: pending.current.id } })
       pending.current = null
+      accepted = true
       if (activeRef.current!==id) { await refreshChats(); return }   // 응답 전에 방을 옮겼으면 그 방의 작업을 덮어쓰지 않는다
       setJob(data.job); setDraft(null); setInput('')
       setReadRevision(v => v + 1); await refreshChats()
     })
-    setBusy(false)
+    // 접수에 실패하면 질문을 입력창에 남겨 다시 보낼 수 있게 한다. 기사에서 온 질문은 주소에서 이미 지웠으므로 여기 말고는 남지 않는다
+    if (!accepted) setInput(text)
+    setBusy(false); setSending(null)
   }
-  const saveAsReport = conditions => setDraft({ options: optionsFor(conditions) })
+  const askedFromLink = useRef(false)
+  useEffect(() => {
+    const question = route.query.get('ask')
+    if (route.query.get('new') !== '1' || !question || askedFromLink.current) return
+    askedFromLink.current = true
+    navigate('/analysis', { replace: true })   // 새로고침해도 같은 질문을 다시 보내지 않는다
+    send(question, true)
+  }, [])   // eslint-disable-line react-hooks/exhaustive-deps -- 처음 열 때 한 번만
+  const saveAsReport = (conditions, after) => { setDraft({ options: optionsFor(conditions), after }); setScrollTo('report-form') }
   const addInterest = answer => {
     const rows=answer.tables.flatMap(t=>t.rows||[])
     const countries=[...new Set([...(answer.conditions?.country_codes||[]),...rows.map(r=>r.country_code).filter(Boolean)])]
@@ -385,6 +420,36 @@ export default function Analysis({ route }) {
       setReadRevision(v => v + 1)
     } finally { clarificationRequest.current=null; setBusy(false) }
   }
+  const renderMessage = m => {
+    if (m.role !== 'USER') return m.answer
+      ? <AnswerCard key={m.message_id} message={m} streamJobId={m===messages.at(-1) && job?.status==='SUCCEEDED' ? job.job_id : undefined} onSaveReport={conditions => saveAsReport(conditions, turnOf.get(m.message_id))} onInterest={addInterest}/>
+      : <AiBlock key={m.message_id}><p style={{ whiteSpace: 'pre-line' }}>{m.content_masked}</p></AiBlock>
+    const turn = m.job?.job_id === job?.job_id ? job : m.job
+    return <div className="chat-turn" key={m.message_id}>
+      <UserBubble text={m.content_masked}/>
+      {turn && !['CANCELLED','FAILED','EXPIRED'].includes(turn.status) && (running(turn.status) || turn.progress?.plan?.length>0) && <AiBlock id={`job-progress-${turn.job_id}`}><Progress job={turn}/></AiBlock>}
+      {turn?.clarification_history?.filter(h=>h.id!==job?.clarification?.clarification_id).map(h=><div className="chat-turn" key={h.id}>
+        <AiBlock><p style={{ whiteSpace: 'pre-line' }}>{h.message}</p></AiBlock>{h.answer && <UserBubble text={h.answer}/>}
+      </div>)}
+    </div>
+  }
+  // 리포트 위치는 질문(USER 메시지 ID) 단위로 기억한다. 답변 직후 화면은 임시 답변 ID(completed-…)를 쓰므로
+  // 답변 ID에 묶으면 다음 조회에서 위치를 잃는다. 리포트 칸은 그 질문 턴의 마지막 메시지 뒤에 둔다.
+  const turnOf = new Map(), lastOfTurn = new Map()
+  messages.reduce((turn, m) => { const t = m.role === 'USER' ? m.message_id : turn; turnOf.set(m.message_id, t); lastOfTurn.set(t, m.message_id); return t }, null)
+  const reports = chatReports[activeId] || []
+  // 답이 필요한 칸: 직접 입력이 되면 입력창, 버튼으로만 답하면 되묻기 카드
+  const waiting = job?.status === 'NEEDS_INPUT' && !busy
+  const waitInput = waiting && job.clarification?.allow_text
+  const unplaced = reports.filter(r => !lastOfTurn.has(r.after))
+  // 리포트 조건 폼은 "리포트로 저장"을 누른 답변 바로 아래에 연다(19번). 위치를 모르면 맨 아래
+  const placedDraft = Boolean(draft?.after && lastOfTurn.has(draft.after))
+  const conditionCard = draft && <ConditionCard id="report-form" message={draft} onClose={()=>setDraft(null)} onChange={setDraft} onGenerate={async (body, key) => {
+                const data=await api('/reports',{method:'POST',body,idempotencyKey:key})
+                setChatReports(previous=>({...previous,[activeId]:[...(previous[activeId]||[]).filter(r=>r.report_id!==data.job.report_id),{...data.job,after:draft.after}]}))
+                setDraft(null); setScrollTo(`report-${data.job.report_id}`)
+                await refreshReports()
+              }}/>
   const headerTag = job ? [job.status==='SUCCEEDED'?'ok':'amber', ({ QUEUED: '분석 대기', RUNNING: '분석 중', WAITING_REPORT:'리포트 만드는 중', NEEDS_INPUT: '조건 확인', SUCCEEDED: '답변 완료', FAILED: '분석 실패', EXPIRED:'시간 초과', CANCELLED:'중단됨' })[job.status]] : null
 
   return (
@@ -392,7 +457,9 @@ export default function Analysis({ route }) {
       <Band image={bandAnalysis} imagePosition="center 60%" eyebrow="AI CHATBOT" title="AI챗봇" lead="국가·품목·기간을 자연어로 질문하고, 대화 내용으로 분석 리포트를 생성합니다." />
       <main className="page">
         <div className="wrap chat-lay">
-          <aside className="card col chat-side" style={{ gap: 10, padding: 18 }}>
+          {drawer && <div className="chat-scrim" aria-hidden="true" onClick={() => setDrawer(false)} />}
+          <aside id="chat-rooms" className={'card col chat-side' + (drawer ? ' open' : '')} style={{ gap: 10, padding: 18 }} aria-label="내 채팅방"
+            onKeyDown={e => { if (e.key === 'Escape') setDrawer(false) }}>
             <Btn kind="red" block icon="plus" onClick={newChat}>새 채팅</Btn>
             <div className="between" style={{ marginTop: 6 }}>
               <p style={{ fontSize: 15, fontWeight: 800 }}>내 채팅방</p>
@@ -403,7 +470,7 @@ export default function Analysis({ route }) {
               const on = c.id === active?.id
               const tag = STATUS_TAG[c.status]
               return (
-                <button key={c.id} type="button" className="reset" onClick={() => { setActiveId(c.id); setMessages([]); setJob(null); setDraft(null) }} aria-current={on}
+                <button key={c.id} type="button" className="reset" onClick={() => { setActiveId(c.id); setMessages([]); setJob(null); setDraft(null); setDrawer(false) }} aria-current={on}
                   style={{ padding: '14px 16px', borderRadius: 14, background: on ? 'var(--rose)' : '#fff', boxShadow: on ? 'inset 3px 0 0 var(--red)' : 'none', border: on ? 0 : '1px solid var(--line)' }}>
                   {tag && <span className={'tag ' + tag[0]}>{tag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 5 }} />}{tag[1]}</span>}
                   <p style={{ fontSize: 15, fontWeight: 800, marginTop: tag ? 8 : 0 }}>{c.title}</p>
@@ -421,12 +488,15 @@ export default function Analysis({ route }) {
             <p className="note">삭제 전 확인 창을 표시합니다. 리포트 파일 삭제는 별도 처리합니다.</p>
           </aside>
 
-          <section className="card" style={{ padding: 0, overflow: 'hidden', minWidth: 0 }}>
-            <div className="between" style={{ padding: '18px 26px', borderBottom: '1px solid var(--line)' }}>
-              <h2 className="t2">{active?.title || '새 채팅'}</h2>
+          <section ref={topRef} className="card" style={{ padding: 0, overflow: 'hidden', minWidth: 0 }}>
+            <div className="between" style={{ padding: '18px 20px', borderBottom: '1px solid var(--line)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <Btn className="chat-drawer-btn" aria-label="채팅방 목록 열기" aria-controls="chat-rooms" aria-expanded={drawer} onClick={() => setDrawer(true)}><Icon name="menu" /></Btn>
+                <h2 className="t2">{active?.title || '새 채팅'}</h2>
+              </div>
               {headerTag && <span className={'tag ' + headerTag[0]}>{headerTag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 6 }} />}{headerTag[1]}</span>}
             </div>
-            <div className="col chat-flow" style={{ gap: 18, padding: '24px 26px' }}>
+            <div className="col chat-flow" style={{ gap: 18, padding: '24px 20px' }}>
               {!messages.length && (
                 <AiBlock>
                   <p style={{ fontSize: 17, fontWeight: 800 }}>무엇을 분석해 드릴까요?</p>
@@ -434,40 +504,31 @@ export default function Analysis({ route }) {
                 </AiBlock>
               )}
               <ErrorNotice error={error} retry={() => setReadRevision(v => v + 1)} />
-              {messages.map(m => {
-                if (m.role !== 'USER') return m.answer
-                  ? <AnswerCard key={m.message_id} message={m} streamJobId={m===messages.at(-1) && job?.status==='SUCCEEDED' ? job.job_id : undefined} onSaveReport={saveAsReport} onInterest={addInterest}/>
-                  : <AiBlock key={m.message_id}><p>{m.content_masked}</p></AiBlock>
-                const turn = m.job?.job_id === job?.job_id ? job : m.job
-                return <div className="chat-turn" key={m.message_id}>
-                  <UserBubble text={m.content_masked}/>
-                  {turn && !['CANCELLED','FAILED','EXPIRED'].includes(turn.status) && (running(turn.status) || turn.progress?.plan?.length>0) && <AiBlock><Progress job={turn}/></AiBlock>}
-                  {turn?.clarification_history?.filter(h=>h.id!==job?.clarification?.clarification_id).map(h=><div className="chat-turn" key={h.id}>
-                    <AiBlock><p>{h.message}</p></AiBlock>{h.answer && <UserBubble text={h.answer}/>}
-                  </div>)}
-                </div>
-              })}
-              {running(job?.status) && !messages.some(m=>m.job?.job_id===job.job_id) && <AiBlock><Progress job={job}/></AiBlock>}
+              {messages.map(m => <Fragment key={m.message_id}>{renderMessage(m)}
+                {placedDraft && lastOfTurn.get(draft.after) === m.message_id && conditionCard}
+                {reports.filter(r => r.after && lastOfTurn.get(r.after) === m.message_id).map(report => <ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports}/>)}
+              </Fragment>)}
+              {sending && <div className="chat-turn"><UserBubble text={sending}/><AiBlock><p role="status">질문을 접수하고 있습니다 <span className="chat-loading-ring" aria-hidden="true"/></p></AiBlock></div>}
+              {running(job?.status) && !messages.some(m=>m.job?.job_id===job.job_id) && <AiBlock id={`job-progress-${job.job_id}`}><Progress job={job}/></AiBlock>}
               {job?.status === 'FAILED' && <ErrorNotice error={job.error || new Error('분석에 실패했습니다.')} />}
               {job?.status === 'EXPIRED' && <AiBlock><p>답변 시간이 지났습니다. 새 질문을 입력해 주세요.</p></AiBlock>}
               {job?.status === 'CANCELLED' && <AiBlock><p>질문을 중단했습니다. 새 질문을 입력할 수 있습니다.</p></AiBlock>}
-              {job?.status === 'NEEDS_INPUT' && <AiBlock className="chat-clarification"><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify} onDirectInput={()=>inputRef.current?.focus()}/></AiBlock>}
+              {job?.status === 'NEEDS_INPUT' && <AiBlock className={'chat-clarification' + (waiting && !waitInput ? ' chat-wait' : '')}><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify} onDirectInput={()=>inputRef.current?.focus()}/></AiBlock>}
               {(running(job?.status)||job?.status==='NEEDS_INPUT') && <Btn size="sm" disabled={busy} onClick={()=>setModal('stop')}>이 질문 중단</Btn>}
-              {draft && <ConditionCard message={draft} onClose={()=>setDraft(null)} onChange={setDraft} onGenerate={async (body, key) => {
-                const data=await api('/reports',{method:'POST',body,idempotencyKey:key})
-                setChatReports(previous=>({...previous,[activeId]:[...(previous[activeId]||[]).filter(r=>r.report_id!==data.job.report_id),data.job]}))
-                setDraft(null)
-                await refreshReports()
-              }}/>}
-              {(chatReports[activeId]||[]).map(report=><ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports}/>)}
+              {draft && !placedDraft && conditionCard}
+              {unplaced.map(report=><ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports}/>)}
               <div ref={endRef} />
-              <form onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
+              <form className={waitInput ? 'chat-wait' : undefined} onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
                 <input ref={inputRef} value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onChange={e => setInput(e.target.value)} aria-label="질문 입력" placeholder={job?.clarification?.kind==='COUNTRY'?'국가명 또는 국가 코드 입력':job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}
                   style={{ flex: 1, fontSize: 15, border: 0, outline: 0, font: 'inherit', color: 'var(--ink)', background: 'transparent' }} />
                 <Btn type="submit" kind="red" iconRight="arrowRight" disabled={!input.trim() || busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)}>전송</Btn>
               </form>
             </div>
           </section>
+          <div className="chat-jump" role="group" aria-label="대화 이동">
+            <Btn aria-label="대화 맨 위로" onClick={() => topRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })}><Icon name="chevronUp" /></Btn>
+            <Btn aria-label="대화 맨 아래로" onClick={() => inputRef.current?.closest('form')?.scrollIntoView({ block: 'end', behavior: 'smooth' })}><Icon name="chevronDown" /></Btn>
+          </div>
         </div>
       </main>
 

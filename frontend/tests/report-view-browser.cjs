@@ -11,10 +11,11 @@ const { chromium } = require('playwright')
   let browser
   try {
     browser = await chromium.launch({ headless: true })
+    // 리포트 열람 화면의 비율은 PDF와 같이 소수 2자리(AGENT_DESIGN 2026-11 결정, report_templates.REPORT_DIGITS)
     for (const [mode, label, kpi, expected] of [
-      ['MOM', '전월 대비', { mom_pct: 25, yoy_pct: null, previous_amount_usd: 160000000 }, '+25.0%'],
-      ['CUSTOM', '비교 기간 대비', { comparison_pct: -20, yoy_pct: null }, '-20.0%'],
-      ['YOY_PERIOD', '전년 동기 대비', { yoy_pct: 10 }, '+10.0%'],
+      ['MOM', '전월 대비', { mom_pct: 25, yoy_pct: null, previous_amount_usd: 160000000 }, '+25.00%'],
+      ['CUSTOM', '비교 기간 대비', { comparison_pct: -20, yoy_pct: null }, '-20.00%'],
+      ['YOY_PERIOD', '전년 동기 대비', { yoy_pct: 10 }, '+10.00%'],
       ['NONE', '비교 없음', { comparison_pct: 99, yoy_pct: 99 }, '—'],
       ['CUSTOM', '비교 기간 대비', { yoy_pct: 99 }, '—'],
     ]) {
@@ -49,7 +50,7 @@ const { chromium } = require('playwright')
       assert.equal(await caption.count(), 1, `${mode}: expected label ${label}`)
       assert.equal(await caption.locator('..').locator('p').nth(1).innerText(), expected)
       const previousCard = page.locator('p.note').filter({ hasText: /^비교 기간 합계$/ }).locator('..')
-      assert.equal(await previousCard.locator('p').nth(1).innerText(), mode === 'MOM' ? '1.6억 USD' : '—')
+      assert.equal(await previousCard.locator('p').nth(1).innerText(), mode === 'MOM' ? '1.60억 USD' : '—')
       assert.deepEqual(errors, [])
       console.log(`PASS ${mode}: ${label} ${expected}`)
       await page.close()

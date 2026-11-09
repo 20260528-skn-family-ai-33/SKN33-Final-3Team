@@ -3,7 +3,7 @@ from pathlib import Path
 
 from backend.app.services.rag.gateway import ModelGateway
 from backend.app.services.rag.service import RagService
-from backend.app.services.rag.store import GenerationStore, resolve_root
+from backend.app.services.rag.store import GenerationStore, resolve_root, shared_client
 
 
 def create_service(api, *, root=None, catalog_path=None, article_allowed=None):
@@ -12,5 +12,6 @@ def create_service(api, *, root=None, catalog_path=None, article_allowed=None):
     from backend.app.services.rag.article_catalog import LocalArticleCatalog
     path = Path(catalog_path) if catalog_path else root / 'article_catalog.sqlite3'
     catalog = LocalArticleCatalog(path) if path.is_file() else None
-    return RagService(GenerationStore(root), None, ModelGateway(api),
+    # 검색만 하므로 같은 세대 색인 핸들을 프로세스에서 재사용한다(D-104)
+    return RagService(GenerationStore(root, client_factory=shared_client), None, ModelGateway(api),
                       cache_dir=Path(root)/'summary_cache', trace_dir=Path(root)/'traces', catalog=catalog, article_allowed=article_allowed)

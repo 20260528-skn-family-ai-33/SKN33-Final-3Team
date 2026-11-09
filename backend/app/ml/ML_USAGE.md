@@ -63,7 +63,7 @@ predict_markets(bundle, country_code="VN", hs6="850760")          # 그 쌍 한 
   - HS4 되묻기 선택지(D-74)는 `bundle["predictions"]`의 `hs6`·`exp_12m`에서 읽습니다.
 - 에이전트는 `API_ML_MODEL_PATHS`가 비어 있으면 `data/ml/monthly_models/`(`API_ML_MODEL_DIRECTORY`)의 `.registry.json` 중 `READY`·`model_a`이고 `trade_month`·`created_at`이 가장 최신인 파일을 고릅니다. 2026-11-04 `model_a_two_stage_202609.joblib`로 확인: 읽기 약 3초, 49,083쌍.
 
-> **추가 예정: B 모델 시장 유형 분류.** (`query` 출력에는 위 시장 동향 두 값이 붙어 있습니다. 채팅 tool용 반환 함수와 설계 D-23 반영은 아직입니다.) 국가 + 품목 조회에 시장 유형 라벨을 더하고, 근거로 예상 성장률과 이전 12개월 수출액을 함께 반환해야 합니다. 이 기능이 나오기 전까지 채팅은 시장 유형 질문(`MARKET_TYPE`)에 "지원 예정" 안내만 합니다([채팅 에이전트 설계](../../../docs/AGENT_DESIGN.md) D-23).
+> **시장 유형(2026-11-06 결정):** 채팅의 시장 유형 질문(`MARKET_TYPE`)은 증감 예상 모델 B(`growth_model.py`)의 방향으로 "증가 예상 시장"·"감소 예상 시장"을 답합니다. 기존 HGB 모델 B의 5유형 분류는 판정 결과가 없어 쓰지 않습니다([채팅 에이전트 설계](../../../docs/AGENT_DESIGN.md) D-23·D-103).
 
 명령은 저장소 루트에서 실행합니다. LightGBM은 `backend/requirements.txt`에 포함돼 있습니다(월별 재학습을 돌리는 서버에도 필요). 저장 모델을 조회할 때는 모델의 `runtime`에 기록된 환경을 맞춥니다. 아래 확인된 파일은 Python 3.11.9, NumPy 1.24.3, pandas 2.2.3, SciPy 1.10.1, scikit-learn 1.9.1, joblib 1.6.0, LightGBM 4.7.0에서 생성됐습니다. 뒤쪽의 Python 3.12 HGB 보고서 환경은 별도입니다.
 

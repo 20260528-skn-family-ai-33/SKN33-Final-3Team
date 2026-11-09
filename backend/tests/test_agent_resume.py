@@ -15,6 +15,16 @@ class ResumeRoutingTest(unittest.TestCase):
   self.assertEqual(graph.invoke.call_args.args[0].resume,{'interrupt-id':answer})
   execution.clear_resume.assert_not_called()
 
+ def test_resume_never_restarts_from_scratch_when_checkpoint_is_unreadable(self):
+  from unittest.mock import patch
+  answer={'clarification_id':'c','choice_ids':['330790']}
+  execution=Mock();execution.read.return_value={'job_id':'j','payload_json':{'resume':answer,'input':{}}}
+  graph=Mock();graph.get_state.return_value=SimpleNamespace(values={},tasks=[])
+  with patch('backend.app.agents.execution.sleep'), self.assertRaises(ApiError) as caught:invoke_graph(graph,execution)
+  self.assertEqual(caught.exception.code,'CLARIFICATION_RESUME_FAILED')
+  graph.invoke.assert_not_called()          # 플래너부터 다시 돌리지 않는다
+  self.assertEqual(graph.get_state.call_count,4)   # 처음 1번 + 다시 읽기 3번
+
  def test_reply_is_delivered_when_checkpoint_interrupt_writes_are_not_visible(self):
   from unittest.mock import MagicMock,patch
   from langgraph.checkpoint.memory import InMemorySaver

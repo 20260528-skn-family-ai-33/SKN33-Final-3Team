@@ -194,6 +194,94 @@ class PromisingMarketHs4Test(unittest.TestCase):
         self.assertTrue(all(len(c.choice_id) == 6 and c.choice_id.startswith('3304') for c in s.pending.choices))
 
 
+class SharedProductAnswerTest(unittest.TestCase):
+    def test_second_task_reuses_product_answer_of_first(self):
+        from backend.tests.api_support import reference_data, test_engine
+        from backend.tests.test_agent_state import state, CAUSE
+        from backend.app.agents.conditions import check_conditions
+        from backend.app.agents.state import TaskSlots
+        from backend.app.api.config import Settings
+        from backend.app.api.database import Database, Store
+        engine, meta = test_engine(); self.addCleanup(engine.dispose)
+        reference_data(engine, meta)
+        db = Database(engine); db.settings = Settings({'API_HS_VECTOR_ENABLED': 'false'})
+        connection = engine.connect(); self.addCleanup(connection.close)
+        second = {**CAUSE, 'task_id': 't2', 'steps': [{**x, 'step_id': x['step_id'].replace('t1', 't2'),
+                  'depends_on': [d.replace('t1', 't2') for d in x.get('depends_on', [])]} for x in CAUSE['steps']]}
+        s = state(tasks=(CAUSE, second))
+        s.input.question = '화장품 수출 추이와 변화 원인 알려줘'
+        first, other = s.plan.tasks
+        for task in (first, other): task.slots = TaskSlots(products=['화장품'], countries=None)
+        first.resolved['t1:hs:화장품'] = {'hs_items': [{'hs_code': '330499', 'hs_ver': 'HS2022'}]}
+        check_conditions(Store(db, connection), s, other.steps[0])
+        self.assertIsNone(s.pending)   # 같은 품목을 다시 묻지 않는다
+        self.assertEqual([h.hs_code for h in other.conditions.hs_items], ['330499'])
+
+
+class SharedQueryTest(unittest.TestCase):
+    def test_same_query_in_later_task_reuses_first_result(self):
+        from backend.tests.test_agent_state import state, CAUSE
+        from backend.app.agents.result_store import shared_result
+        from backend.app.agents.state import Conditions, ToolResult
+        stats = {'task_id': 't1', 'intent': 'STATISTICS', 'question': '추이', 'steps': [
+            {'step_id': 't1.check', 'tool': 'check_conditions', 'status': 'DONE'},
+            {'step_id': 't1.sql', 'tool': 'query_trade_data', 'args': {'template': 'TREND'}, 'status': 'DONE',
+             'depends_on': ['t1.check']}]}
+        cause = {**CAUSE, 'task_id': 't2', 'steps': [{**x, 'step_id': x['step_id'].replace('t1', 't2'),
+                 'depends_on': [d.replace('t1', 't2') for d in x.get('depends_on', [])]} for x in CAUSE['steps']]}
+        s = state(tasks=(stats, cause))
+        first, second = s.plan.tasks
+        first.conditions = Conditions(country_codes=['CN'])
+        second.conditions = Conditions(country_codes=['CN'], article_period={'start': '2026-07-01', 'end': '2026-09-30'})
+        s.results['t1.sql'] = ToolResult(status='OK', result_id='r1')
+        step = next(x for x in second.steps if x.tool == 'query_trade_data')
+        step.args = {'template': 'TREND'}
+        self.assertEqual(shared_result(s, second, step).result_id, 'r1')   # 기사 기간만 다르면 같은 조회
+        second.conditions = Conditions(country_codes=['US'])
+        self.assertIsNone(shared_result(s, second, step))                  # 조건이 다르면 따로 조회
+
+
+class HsLookupTest(unittest.TestCase):
+    def test_lookup_by_name_and_code(self):
+        from types import SimpleNamespace
+        from backend.tests.api_support import reference_data, test_engine
+        from backend.app.agents.tools import hs_lookup_result
+        from backend.app.api.config import Settings
+        from backend.app.api.database import Database, Store
+        engine, meta = test_engine(); self.addCleanup(engine.dispose)
+        reference_data(engine, meta)
+        db = Database(engine); db.settings = Settings({'API_HS_VECTOR_ENABLED': 'false'})
+        connection = engine.connect(); self.addCleanup(connection.close)
+        store = Store(db, connection)
+        for products in (['화장품'], ['330499']):
+            result = hs_lookup_result(store, SimpleNamespace(slots=SimpleNamespace(products=products)))
+            self.assertEqual(result.status, 'OK')
+            self.assertIn('330499', [i['code'] for i in result.digest['items']])
+        empty = hs_lookup_result(store, SimpleNamespace(slots=SimpleNamespace(products=['없는품목이름'])))
+        self.assertEqual(empty.status, 'NO_DATA')
+
+
+class ParallelWorkerTest(unittest.TestCase):
+    def test_each_claimed_job_runs_in_its_own_thread_up_to_the_limit(self):
+        import threading
+        from backend.app.api import worker
+        release, started, jobs = threading.Event(), [], [{'job_id': n, 'job_type': 'API_CHAT'} for n in range(3)]
+        def claim(database, settings, spawn=None):
+            if not jobs: raise KeyboardInterrupt   # 다 가져가면 루프를 끝낸다
+            spawn(jobs.pop(0)); return True
+        def process(database, settings, job):
+            started.append(job['job_id']); release.wait(5)
+        settings = MagicMock(get=lambda k, d=None: '2' if k == 'API_WORKER_MAX_THREADS' else d)
+        sleeps = []
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 3: release.set()       # 상한(2)에 걸려 기다리는 동안 앞 작업이 끝난다
+        with patch.object(worker, 'run_once', side_effect=claim), patch.object(worker, 'process', side_effect=process),                 patch.object(worker.time, 'sleep', side_effect=sleep),                 patch('backend.app.api.subscriptions.enqueue_due'), self.assertRaises(KeyboardInterrupt):
+            worker.run_loop(MagicMock(), settings)
+        self.assertEqual(sorted(started), [0, 1, 2])
+        self.assertIn(0.5, sleeps)                    # 두 개가 돌 때 세 번째는 바로 가져가지 않았다
+
+
 class WorkerStartupTest(unittest.TestCase):
     def test_missing_redis_modules_are_named(self):
         from backend.app.agents.worker import require_modules

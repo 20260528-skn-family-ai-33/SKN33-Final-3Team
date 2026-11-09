@@ -30,15 +30,17 @@ CHART_LABEL_LIMIT = 60
 
 
 def _cell(value, column):
-    """결과표 값을 표시용 글자로. 값은 바꾸지 않고(반올림 표시만) 없으면 —. 일회성 판정·상태 코드는 DOCX와 같은 말로."""
+    """결과표 값을 표시용 글자로. 값은 바꾸지 않고(반올림 표시만) 없으면 —. 일회성 판정·상태 코드는 DOCX와 같은 말로.
+    비율과 소수가 있는 금액은 리포트 공통 소수 2자리(report_templates.REPORT_DIGITS). 정수 금액(USD 원값)·개수는 정수로 둔다."""
     from backend.app.api.files import readable
+    from backend.app.services.report_templates import REPORT_DIGITS
     value = readable(value, column.get('key'))
     if value is None or value == '':
         return '—'
-    if column.get('type') == 'number' and isinstance(value, (int, float)):
+    if column.get('type') == 'number' and isinstance(value, (int, float)) and not isinstance(value, bool):
         if column.get('unit') == '%':
-            return f'{value:.1f}%'
-        return f'{value:,.0f}' if float(value).is_integer() else f'{value:,.2f}'
+            return f'{value:.{REPORT_DIGITS}f}%'
+        return f'{value:,.0f}' if float(value).is_integer() else f'{value:,.{REPORT_DIGITS}f}'
     return str(value)
 
 

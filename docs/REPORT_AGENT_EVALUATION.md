@@ -83,7 +83,10 @@ R01–R13·R19–R21은 채팅 API → 워커(`run_once`) → LangGraph → 리�
 | `services/report_ondemand_context.py` | `populate_results`: 결과표 사본만으로 템플릿 맥락을 만든다(최대 200행, 월별 추이 그래프, 출처·누락·미포함 안내). |
 | `services/report_templates.py` | 결과 기반 쪽 나눔(핵심 요약 + 승인한 분석 결과). |
 | `templates/reports/ondemand.html` | `result_mode` 분기. 같은 디자인·매크로로 결과표와 그래프를 그린다. 기존 요청형 출력은 그대로. |
-| `api/files.py` | `readable`: 일회성 판정·상태 코드를 DOCX·PDF·XLSX에서 읽을 수 있는 글자로 표시한다(값은 바꾸지 않음). |
+| `api/files.py` | `readable`: 일회성 판정·상태 코드를 DOCX·PDF에서 읽을 수 있는 글자로 표시한다(값은 바꾸지 않음). XLSX는 사전·목록만 글자로 바꾼다. |
+| `frontend/.../ReportView.jsx` | 결과 기반 리포트(`meta.freshness = FROZEN`)의 웹 열람 화면: 결과표를 그대로 보이고 월별 추이는 국가·품목별 선으로 나누며, 결과표에 없는 섹션은 '해당 분석 결과에 포함되지 않음'으로 둔다. 만료될 수 있는 원본 결과 API를 부르지 않고 이 리포트의 엑셀로 내려받는다. 이전에는 요청형 화면을 그대로 써 KPI가 '—', 국가가 섞인 한 줄 그래프, '준비 중'이 보였다. |
+
+결과표의 비율·소수 금액은 리포트 공통 소수 2자리(`report_templates.REPORT_DIGITS`, AGENT_DESIGN 2026-11 결정)로 표시한다.
 
 ## 재현 방법
 
@@ -96,6 +99,13 @@ python -m unittest backend.tests.test_agent_report
 ```
 
 현재 평가는 종료 코드 0, 작업 전 비교는 미통과 사례가 있어 종료 코드 1이 정상이다.
+
+웹 열람 화면은 브라우저 테스트로 따로 확인한다(통과율에 넣지 않음). 결과 기반 리포트에서 '포함되지 않음' 안내 2곳, '—억 USD'·'준비 중' 미표시,
+결과표 값, 국가별 추이 선 2개, 원본 결과 API 미호출을 확인한다.
+
+```powershell
+cd frontend; node tests/report-view-browser.cjs
+```
 
 ## 실행 증거
 

@@ -271,6 +271,7 @@ class ReportAgentTest(unittest.TestCase):
     def generated(self, tasks, question):
         """승인까지 진행한 뒤 리포트 작업을 실제 generate로 돌린다. PDF 변환(Playwright)만 가로채 문서를 받는다.
         생성 중 통계를 다시 조회하면 실패하도록 trade.aggregate를 막는다(결과 기반 리포트 전용)."""
+        from contextlib import nullcontext
         from unittest.mock import patch
         jid = self.ask(tasks, question)
         self.confirm(jid, formats=['PDF', 'DOCX']); self.work()
@@ -278,7 +279,7 @@ class ReportAgentTest(unittest.TestCase):
         documents = []
         requery = AssertionError('승인한 결과 기반 리포트는 통계를 다시 조회하지 않습니다') if tasks[0]['intent'] != 'REPORT' else None
         with patch('backend.app.api.reports.report_pdf', side_effect=lambda doc, settings: documents.append(doc) or b'%PDF-test'), \
-             patch('backend.app.api.trade.aggregate', side_effect=requery) if requery else patch('builtins.id', id):
+             patch('backend.app.api.trade.aggregate', side_effect=requery) if requery else nullcontext():
             self.work()
         self.assertEqual(self.reports()[0]['status'], 'READY')
         return documents[0]
@@ -340,6 +341,9 @@ class ReportAgentTest(unittest.TestCase):
         populate_results(saved, ctx, date(2025, 1, 1), date(2025, 12, 31), content)
         result = ctx['results'][0]
         self.assertEqual(len(result['rows']), RESULT_ROW_LIMIT)
+        from backend.app.services.report_ondemand_context import _cell  # 비율은 리포트 공통 소수 2자리(REPORT_DIGITS)
+        self.assertEqual(_cell(64.5, {'key': 'share_pct', 'type': 'number', 'unit': '%'}), '64.50%')
+        self.assertEqual(_cell(1234.5, {'key': 'amount_usd', 'type': 'number', 'unit': 'USD'}), '1,234.50')
         self.assertIn('전체 250행 중 200행 표시', result['note'])
         self.assertIsNone(result['chart'])  # 국가 6개 > 시리즈 상한 5
         texts = [r['content'] for r in ctx['summary']['check_points']]

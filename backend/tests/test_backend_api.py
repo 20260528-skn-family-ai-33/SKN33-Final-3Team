@@ -1173,6 +1173,102 @@ class BackendApiTest(unittest.TestCase):
         with self.engine.begin() as c:
             self.assertEqual(str(jobs.claim(Store(self.app.state.database,c))['job_id']),jid2)
 
+    def test_worker_claims_only_agent_jobs_from_its_own_redis(self):
+        # D-106: 같은 RDS를 쓰는 다른 환경(배포 서버)의 작업은 체크포인트가 그쪽 Redis에 있어 가져가면 안 된다.
+        uid=self.signup(); db=self.app.state.database
+        mine=jobs.queue_id(db); self.assertEqual(jobs.queue_id(db),mine)
+        rows=[]
+        for queue,version in (('other-redis',jobs.AGENT_QUEUE_VERSION),(None,2),(mine,jobs.AGENT_QUEUE_VERSION)):
+            sid=self.post('chat/sessions',{}).json()['session']['session_id']
+            state=jobs._initial(uid,'API_CHAT',sid,{'question':'q'},f'k-{version}-{queue}')
+            state.update(version=version,agent={},**({'queue':queue} if queue else {}))
+            rows.append({'session_id':int(sid),'role':'USER','content_masked':'q','created_at':now(),
+                         'result_json':{'schema_version':1,jobs.EXECUTION:state}})
+        with self.engine.begin() as c:
+            ids=[c.execute(self.meta.tables['chat_message'].insert(),row).inserted_primary_key[0] for row in rows]
+        with self.engine.begin() as c:
+            self.assertEqual(jobs.claim(Store(db,c))['job_id'],ids[2])
+        with self.engine.begin() as c:
+            self.assertIsNone(jobs.claim(Store(db,c)))
+        job={}; jobs.mark_agent(job,db)
+        self.assertEqual(job,{'version':jobs.AGENT_QUEUE_VERSION,'queue':mine})
+
+    def test_worker_adopts_agent_jobs_no_worker_took(self):
+        # 배포 전 버전 2 작업, Redis 초기화로 ID가 사라진 버전 3 작업을 유예 시간 동안 아무도 가져가지 않으면 넘겨받는다.
+        # 그대로 두면 대화방이 막힌다. 유예 중인 작업(다른 환경 워커가 곧 가져갈 수 있음)은 두지 않는다
+        from datetime import timedelta
+        uid=self.signup(); db=self.app.state.database
+        old=(now()-timedelta(seconds=jobs.AGENT_ADOPT_GRACE_SECONDS+60)).isoformat()
+        rows=[]
+        for version,status,moment in ((2,'QUEUED',now().isoformat()),(3,'QUEUED',now().isoformat()),
+                                      (2,'QUEUED',old),(2,'RUNNING',old),(3,'QUEUED',old)):
+            sid=self.post('chat/sessions',{}).json()['session']['session_id']
+            state=jobs._initial(uid,'API_CHAT',sid,{'question':'q'},f'v{version}-{status}-{moment}')
+            state.update(version=version,agent={},status=status,available_at=moment,
+                         lease_expires_at=moment if status=='RUNNING' else None,
+                         **({'queue':'gone-redis'} if version==3 else {}))
+            rows.append({'session_id':int(sid),'role':'USER','content_masked':'q','created_at':now(),
+                         'result_json':{'schema_version':1,jobs.EXECUTION:state}})
+        with self.engine.begin() as c:
+            ids=[c.execute(self.meta.tables['chat_message'].insert(),row).inserted_primary_key[0] for row in rows]
+        claimed=[]
+        for _ in range(5):
+            with self.engine.begin() as c:
+                job=jobs.claim(Store(db,c))
+            if job: claimed.append(job)
+        # 유예 중인 앞의 두 작업은 남긴다. 다른 queue의 버전 3은 오래돼도 실행하지 않는다(그쪽 Redis에 체크포인트가 있을 수 있다)
+        self.assertEqual(sorted(j['job_id'] for j in claimed),ids[2:4])
+        with self.engine.begin() as c:
+            row=c.execute(select(self.meta.tables['chat_message']).where(self.meta.tables['chat_message'].c.message_id==ids[4])).mappings().one()
+        orphan=jobs._chat_job(row)
+        self.assertTrue(jobs.abandoned(orphan,db))          # 새 질문이 들어오면 만료해 대화방을 풀어 준다
+        fresh=jobs._chat_job({'message_id':0,'result_json':rows[1]['result_json']})
+        self.assertFalse(jobs.abandoned(fresh,db))
+        # 리포트 대기는 그쪽 워커가 체크포인트를 연장하므로 TTL(30분)과 유예 시간이 모두 지나야 멈춘 것으로 본다
+        def report_wait(seconds):
+            return {**fresh,'status':'WAITING_REPORT','available_at':(now()-timedelta(seconds=seconds)).isoformat()}
+        self.assertFalse(jobs.abandoned(report_wait(jobs.AGENT_ADOPT_GRACE_SECONDS+60),db))
+        self.assertTrue(jobs.abandoned(report_wait(jobs.AGENT_ADOPT_GRACE_SECONDS+30*60+60),db))
+        for job in claimed:
+            self.assertEqual((job['version'],job['queue']),(jobs.AGENT_QUEUE_VERSION,jobs.queue_id(db)))
+
+    def test_queue_id_follows_redis_reset(self):
+        # Redis를 비우면 새 ID를 읽는다. 캐시하면 API와 워커가 서로 다른 ID를 붙잡아 새 질문을 아무도 안 가져간다
+        db=self.app.state.database
+        before=jobs.queue_id(db)
+        db.redis.client.flushall()
+        after=jobs.queue_id(db)
+        self.assertNotEqual(before,after)
+        job={}; jobs.mark_agent(job,db)
+        self.assertEqual(job['queue'],after)
+        self.assertTrue(jobs.same_queue(job,db)); self.assertTrue(jobs.same_queue({},db))
+        self.assertFalse(jobs.same_queue({'queue':before},db))
+
+    def test_clarification_from_other_redis_is_not_expired(self):
+        # 다른 환경(다른 Redis)의 되묻기는 여기서 체크포인트가 안 보인다. 만료하지 않고 409로 거부한다(D-106)
+        from backend.app.agents import admission
+        from backend.app.api.common import ApiError
+        from datetime import timedelta
+        db=self.app.state.database
+        def waiting(minutes):
+            return {'status':'NEEDS_INPUT','queue':'other-redis','payload_json':{},'job_id':1,
+                    'result_json':{'clarification':{'expires_at':(now()+timedelta(minutes=minutes)).isoformat()}}}
+        job=waiting(10)
+        with self.engine.begin() as c, patch.object(admission,'pending_state') as pending, \
+                patch.object(admission,'expire') as expire:
+            with self.assertRaises(ApiError) as caught:
+                admission.resume(Store(db,c),job,{'clarification_id':'c1','choice_ids':['a']})
+            self.assertEqual(caught.exception.code,'JOB_IN_OTHER_ENVIRONMENT')
+            pending.assert_not_called(); expire.assert_not_called()
+            # 만료 시각이 지난 다른 환경의 되묻기는 풀어 준다. 그대로 두면 이 환경에서 그 대화방을 영영 못 쓴다
+            response=admission.resume(Store(db,c),waiting(-1),{'clarification_id':'c1','choice_ids':['a']})
+            self.assertEqual(response.status_code,409); expire.assert_called_once()
+            pending.assert_not_called()
+            # 상태 조회(API-37)·접수도 같은 판단(wait_expired)을 쓴다. 체크포인트를 보지 않는다
+            self.assertFalse(admission.wait_expired(Store(db,c),waiting(10)))
+            self.assertTrue(admission.wait_expired(Store(db,c),waiting(-1)))
+            pending.assert_not_called()
+
     def test_worker_claims_report_past_history_and_future_retries(self):
         self.signup(); rid=self.queued_report('history-report')
         t=self.meta.tables['report']

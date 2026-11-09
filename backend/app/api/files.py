@@ -61,7 +61,8 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False):
     stream=BytesIO(); wb.save(stream); return stream.getvalue()
 
 
-# 결과표의 상태 코드 → 사람이 읽는 말(리포트 DOCX·PDF·XLSX 공통). 값을 바꾸지 않고 표시만 바꾼다.
+# 결과표의 상태 코드 → 사람이 읽는 말(리포트 DOCX·PDF). 값을 바꾸지 않고 표시만 바꾼다.
+# XLSX는 데이터 파일이라 사전·목록만 글자로 바꾸고 상태 코드는 원래 값을 둔다(xlsx_bytes).
 STATUS_LABELS={'NEW':'신규','UP':'상승','DOWN':'하락','SAME':'유지','NOT_APPLICABLE':'해당 없음','NORMAL':'일반','MAJOR':'큰 변화'}
 STATUS_KEYS={'rank_status','growth_status','severity'}
 

@@ -3,11 +3,16 @@ import os
 import socket
 from datetime import datetime, timedelta
 from sqlalchemy import select, update, and_, or_
-from backend.app.api.common import now, digest, require, clean
+from backend.app.api.common import ApiError, now, digest, require, clean
 
 EXECUTION = '_execution'
 # Deployed v1 workers filter on version == 1 before claiming or reclaiming.
-AGENT_QUEUE_VERSION = 2
+# 3: 작업마다 만든 Redis의 queue_id를 붙인다(D-106). 2까지만 아는 배포 워커는 3을 가져가지 않는다.
+AGENT_QUEUE_VERSION = 3
+_KNOWN_CHAT_VERSIONS = (1, 2, AGENT_QUEUE_VERSION)  # 2는 유예 시간 동안 아무 워커도 안 가져간 경우에만 넘겨받는다
+# TODO(C-32): 주인 없는 에이전트 작업의 유예 시간 임시값. 버전 2는 지나면 넘겨받아 실행하고, 다른 queue의 버전 3은
+# 지나면 새 질문 때 만료한다. 임대 시간(10분)과 같게 두었다. API_AGENT_ADOPT_GRACE_SECONDS로 바꾼다
+AGENT_ADOPT_GRACE_SECONDS = 600
 REPORT_QUEUE_VERSION = 2  # Legacy workers only claim report protocol 1.
 
 
@@ -20,8 +25,54 @@ def _initial(uid, kind, target, payload, key):
 
 def _chat_job(row):
     state=(row['result_json'] or {}).get(EXECUTION)
-    if not state or state.get('version') not in (1, AGENT_QUEUE_VERSION): return None
+    if not state or state.get('version') not in _KNOWN_CHAT_VERSIONS: return None
     return {**state,'job_id':row['message_id']}
+
+
+def queue_id(db):
+    """이 프로세스가 쓰는 Redis의 ID. 체크포인트가 Redis에 있으므로 같은 Redis를 쓰는 워커만 작업을 이어 갈 수 있다(D-106).
+    ID는 캐시하지 않는다. Redis를 비우거나 새로 띄우면 ID가 바뀌는데, 캐시하면 API와 워커가 서로 다른 ID를 붙잡는다."""
+    redis=getattr(db,'redis',None) or getattr(db,'queue_redis',None)
+    if redis is None:
+        from backend.app.api.redis_store import RedisState
+        redis=db.queue_redis=RedisState(db.settings)
+    return redis.queue_id()
+
+
+def same_queue(job, db):
+    """이 프로세스의 Redis가 만든 작업인지. queue가 없는 작업(버전 1·2)은 같은 곳으로 본다."""
+    return not job.get('queue') or job['queue']==queue_id(db)
+
+
+def adopt_grace_seconds(db):
+    """주인 없는 작업으로 보기 전 유예 시간(C-32). 워커는 run_once가, API는 설정에서 읽는다."""
+    value=getattr(db,'agent_adopt_grace_seconds',None)
+    if value is None:
+        settings=getattr(db,'settings',None)
+        value=max(0,int(settings.get('API_AGENT_ADOPT_GRACE_SECONDS',AGENT_ADOPT_GRACE_SECONDS))) if settings else AGENT_ADOPT_GRACE_SECONDS
+    return value
+
+
+def abandoned(job, db):
+    """대기·실행 중인데 유예 시간이 지나도록 아무 워커도 손대지 않은 작업. 다른 환경 작업이면 그 워커가 멈췄거나
+    그쪽 Redis가 초기화돼 queue ID가 사라진 경우다. 실행하지 않고 만료만 한다(체크포인트가 그쪽에 있을 수 있다)."""
+    limit=now()-timedelta(seconds=adopt_grace_seconds(db))
+    if job['status']=='QUEUED': moment=job.get('available_at')
+    elif job['status']=='RUNNING': moment=job.get('lease_expires_at')
+    elif job['status']=='WAITING_REPORT':
+        # 리포트 대기는 그쪽 워커가 체크포인트 TTL(30분)을 계속 연장한다. 라운드 시작(available_at)부터 TTL과 유예 시간이
+        # 모두 지났으면 그쪽 워커가 없어 체크포인트도 사라진 것이다. 리포트 재시도(3회·5분)는 이 안에 끝난다
+        from backend.app.agents.state import WAITING_TTL_SECONDS
+        moment=job.get('available_at')
+        limit-=timedelta(seconds=WAITING_TTL_SECONDS)
+    else: return False
+    return bool(moment) and datetime.fromisoformat(moment)<=limit
+
+
+def mark_agent(job, db):
+    """에이전트 대기열에 넣는다. 같은 RDS를 쓰는 다른 환경(배포 서버 등)의 워커가 가져가지 않게 Redis ID를 붙인다(D-106)."""
+    job['version']=AGENT_QUEUE_VERSION
+    job['queue']=queue_id(db)
 
 
 def remember_prompt(job, prompt, answer=None):
@@ -140,6 +191,15 @@ def _due(job):
     return False
 
 
+def _claimable(job, queue, stale):
+    """claim의 SQL 대기열 조건을 잠근 행에 다시 적용한다. stale은 버전 2 유예 기준 시각(isoformat)."""
+    if job['version']==1: return True
+    if not queue: return False   # Redis를 못 읽으면 에이전트 작업은 가져가지 않는다
+    if job['version']==AGENT_QUEUE_VERSION: return job.get('queue')==queue
+    moment=job.get('available_at') if job['status']=='QUEUED' else job.get('lease_expires_at')
+    return job['version']==2 and bool(moment) and (moment<=stale if job['status']=='QUEUED' else moment<stale)
+
+
 def claim(store):
     m,s,r=store.t('chat_message'),store.t('chat_session'),store.t('report')
     # 완료 이력을 LIMIT에 포함하지 않는다. 실행 가능한 행에만 키셋/상한을 적용한다.
@@ -147,8 +207,22 @@ def claim(store):
     cursors=getattr(store.db,'job_scan_cursors',{})
     size=getattr(store.db,'job_scan_size',100)
     state=m.c.result_json[EXECUTION]
-    pending_stmt=select(m.c.message_id,m.c.session_id,m.c.created_at).where(m.c.role=='USER',
-        state['version'].as_integer().in_((1, AGENT_QUEUE_VERSION)),or_(
+    # Redis를 못 읽으면 에이전트 작업만 건너뛴다(체크포인트도 못 쓴다). 리포트·단순 채팅은 계속 가져간다.
+    try: queue=queue_id(store.db)
+    except ApiError: queue=None
+    versions=state['version'].as_integer()==1
+    if queue:
+        # 버전 2 작업은 2만 아는 워커가 가져가게 둔다. 유예 시간이 지나도 아무도 손대지 않았으면 그런 워커가 없는 것이므로
+        # 이 워커가 넘겨받는다. 그대로 두면 _active_chat이 계속 진행 중으로 봐서 대화방이 막힌다.
+        # 다른 queue의 버전 3은 넘겨받지 않는다. 그쪽 Redis가 정상이면 체크포인트가 거기 있다(D-106). 오래 멈춘 작업은
+        # 그 대화방에 새 질문이 들어올 때 만료한다(admission.accept, abandoned).
+        stale=(now()-timedelta(seconds=adopt_grace_seconds(store.db))).isoformat()
+        versions=or_(versions,
+            and_(state['version'].as_integer()==AGENT_QUEUE_VERSION,state['queue'].as_string()==queue),
+            and_(state['version'].as_integer()==2,or_(
+                and_(state['status'].as_string()=='QUEUED',state['available_at'].as_string()<=stale),
+                and_(state['status'].as_string()=='RUNNING',state['lease_expires_at'].as_string()<stale))))
+    pending_stmt=select(m.c.message_id,m.c.session_id,m.c.created_at).where(m.c.role=='USER',versions,or_(
             and_(state['status'].as_string()=='QUEUED',state['available_at'].as_string()<=moment),
             and_(state['status'].as_string()=='RUNNING',state['lease_expires_at'].as_string()<moment)))
     execution=r.c.content_json[EXECUTION]
@@ -179,8 +253,11 @@ def claim(store):
             if not session: continue
             row=store.one(select(m).where(m.c.message_id==identity).with_for_update(skip_locked=True))
             job=_chat_job(row) if row else None
-            if job and _due(job):
+            # 후보 조회는 잠그지 않고 읽었다. 잠근 뒤 다시 읽은 행으로 대기열 조건(버전·queue·유예)을 다시 확인한다.
+            # 그사이 다른 환경이 넘겨받아 queue를 바꿨으면 그 작업의 체크포인트는 그쪽 Redis에 있다
+            if job and _due(job) and _claimable(job,queue,stale if queue else None):
                 cursors[kind]=0  # 새로 만료/재시도 가능해진 오래된 작업도 다음 호출에 확인한다.
+                if job['version']==2: mark_agent(job,store.db)   # 위 유예 조건을 통과한 버전 2 작업만 여기 온다
                 job=_claimed(job); _save_chat(store,job); return job
             continue
         row=store.one(select(r).where(r.c.report_id==identity).with_for_update(skip_locked=True))

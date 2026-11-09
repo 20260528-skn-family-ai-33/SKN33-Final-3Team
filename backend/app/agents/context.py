@@ -17,7 +17,9 @@ ACTIVE_STATUSES = frozenset({'QUEUED', 'RUNNING', 'NEEDS_INPUT', 'WAITING_REPORT
 def completed_context(state):
     context = state.input.context.model_copy(deep=True)
     primary = state.plan.tasks[0]
-    if primary.answer_status in ('PARTIAL', 'ANSWERED') and primary.conditions:
+    # 용어·대화(CONVERSATION)·HS 조회는 조회 조건이 없다. 조건 없이도 질문·요약은 최근 대화에 남긴다.
+    # remember는 conditions가 None이면 이전 검색 조건을 그대로 둔다
+    if primary.answer_status in ('PARTIAL', 'ANSWERED'):
         for decision in primary.resolved.values():
             if decision.get('interest') in ('APPLIED', 'GLOBAL'):
                 context.interest_action = 'APPLIED' if decision['interest']=='APPLIED' else 'DECLINED'

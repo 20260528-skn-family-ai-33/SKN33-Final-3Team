@@ -1,7 +1,7 @@
 """Public view of the actual planner steps, in execution order."""
 LABELS = {'check_conditions':'조건 확인', 'query_trade_data':'무역 데이터 조회',
           'search_articles':'기사 검색','build_chart':'차트 작성',
-          'query_market_model':'유망시장 예측','generate_report':'리포트 생성'}
+          'query_market_model':'유망시장 예측','generate_report':'리포트 생성','lookup_hs':'HS 코드 조회'}
 
 
 def progress_for(state, node):
