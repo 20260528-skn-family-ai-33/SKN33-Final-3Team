@@ -67,9 +67,8 @@ def main():
             import uvicorn
             uvicorn.run('backend.main:app',host='127.0.0.1',port=8000,proxy_headers=False)
         elif args.action=='worker':
-            from backend.app.api.worker import run_loop
-            from backend.app.api.database import Database
-            settings=Settings(); run_loop(Database(settings.engine()),settings)
+            from backend.app.api.worker import run_loop, worker_database
+            settings=Settings(); run_loop(worker_database(settings),settings)   # 배포 워커와 같은 접속 풀(D-105)
         elif args.action=='migrate':
             import sys
             from backend.scripts.migrate_integration import main as migrate

@@ -94,6 +94,14 @@ def max_threads(settings):
     return max(1,int(settings.get('API_WORKER_MAX_THREADS',MAX_THREADS)))
 
 
+def worker_database(settings):
+    """병렬 워커용 DB. 배포(main)와 로컬(local_integration worker)이 같은 풀을 쓴다.
+    스레드 하나가 동시에 접속 2개까지 쓴다(조회 + 저장 트랜잭션). 기본 풀(5+10)이면 병렬 작업이 접속을 기다린다.
+    본 루프(구독 일정·작업 가져오기)와 예열 스레드 몫으로 MAIN_LOOP_CONNECTIONS를 더 둔다"""
+    threads=max_threads(settings)
+    return Database(settings.engine(pool_size=threads+MAIN_LOOP_CONNECTIONS,max_overflow=threads))
+
+
 def run_loop(db,settings,once=False):
     db.settings=settings  # The first subscription check runs before run_once.
     next_schedule=0
@@ -154,10 +162,7 @@ def main():
         # 오프라인·권한 제한 서버에서 설치가 실패해도 채팅 작업은 돌린다. PDF 생성만 기존 재시도 오류로 끝난다.
         logging.getLogger(__name__).warning('chromium_unavailable type=%s; PDF 리포트 생성은 실패합니다',type(exc).__name__)
     settings=Settings()
-    # 스레드 하나가 동시에 접속 2개까지 쓴다(조회 + 저장 트랜잭션). 기본 풀(5+10)이면 병렬 작업이 접속을 기다린다.
-    # 본 루프(구독 일정·작업 가져오기)와 예열 스레드 몫으로 MAIN_LOOP_CONNECTIONS를 더 둔다
-    threads=max_threads(settings)
-    db=Database(settings.engine(pool_size=threads+MAIN_LOOP_CONNECTIONS,max_overflow=threads))
+    db=worker_database(settings)
     # 코드를 바꾼 뒤 이전 워커가 남아 있으면 같은 질문도 워커마다 다르게 답한다(2026-11-06). 시작할 때 코드 버전을 남긴다
     import subprocess
     from backend.app.api.config import ROOT
