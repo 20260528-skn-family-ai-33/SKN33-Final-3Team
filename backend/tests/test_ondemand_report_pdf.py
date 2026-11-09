@@ -211,6 +211,42 @@ class OnDemandReportTest(unittest.TestCase):
         self.assertNotIn('수출 증가·감소 주요 시장', html)
         self.assertNotIn('월별 수출 추이</h2>', html)
 
+    def test_promising_market_section_uses_model_predictions_in_web_and_pdf(self):
+        import pandas as pd
+        uid = self.signup(); conditions = self.preview()['conditions']
+        def predict_markets(bundle, *, country_code=None, hs6=None, top=10):
+            return pd.DataFrame([{'anchor': '2026-09-01', 'country_code': country_code, 'hs6': hs6, 'growth_pct': 12.5,
+                                  'exp_12m': 3400000.0, 'country_rank': 3, 'product_rank': 7, 'country_size': 1200, 'product_size': 90}])
+        outlook = ({'anchor': '2026-09', 'directions': {('US', '330499'): 'UP'}}, 'b1', None)
+        with patch('backend.app.agents.market.loaded', return_value=({'anchor': '2026-09-01'}, predict_markets, {'model': 'a1'})), \
+             patch('backend.app.agents.market.growth', return_value=outlook):
+            ctx, doc = self.context(uid, conditions, ['GROWTH_RISK'])
+        section = next(s for s in doc['sections'] if s['section_code'] == 'GROWTH_RISK')
+        self.assertEqual(section['title'], '유망시장(증가·감소 예상)')
+        row = section['tables'][0]['rows'][0]
+        self.assertEqual((row['country_name'], row['hs6'], row['growth_outlook']), ('미국', '330499', '증가 예상'))
+        # 모델 A의 성장률 숫자는 표 열에 보이지 않는다(방향은 모델 B).
+        self.assertNotIn('growth_pct', [c['key'] for c in section['tables'][0]['columns']])
+        self.assertEqual(ctx['promising']['rows'][0]['rank'], 3)
+        self.assertEqual(ctx['promising']['anchor'], '2026-09')
+        html = render('RPT_ON_DEMAND', ctx)
+        self.assertIn('유망시장(증가·감소 예상)', html)
+        self.assertIn('증가 예상', html)
+        self.assertIn('유망시장 예측', html)   # 데이터 기준 · 출처 표
+
+    def test_promising_market_section_explains_missing_model_or_scope(self):
+        uid = self.signup()
+        # 테스트 환경에는 모델 파일이 없다. 리포트는 만들고 섹션에서 이유를 알린다.
+        ctx, doc = self.context(uid, self.preview()['conditions'], ['GROWTH_RISK'])
+        section = next(s for s in doc['sections'] if s['section_code'] == 'GROWTH_RISK')
+        self.assertEqual(section['text'], reports.PROMISING_UNAVAILABLE)
+        self.assertEqual(section['tables'], [])
+        html = render('RPT_ON_DEMAND', ctx)
+        self.assertIn('표시할 예측 결과가 없습니다.', html)
+        ctx, doc = self.context(uid, self.preview(hs_items=[], country_codes=[])['conditions'], ['GROWTH_RISK'])
+        section = next(s for s in doc['sections'] if s['section_code'] == 'GROWTH_RISK')
+        self.assertIn('국가 또는 HS6 품목을 1개 이상 선택', section['text'])
+
     def test_exported_kpi_preserves_all_seven_headers_and_values(self):
         from docx import Document
         from openpyxl import load_workbook

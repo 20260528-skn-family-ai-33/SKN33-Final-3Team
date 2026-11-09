@@ -17,6 +17,7 @@ import { reportKinds } from '../../data/seed'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { api } from '../../api/client'
 import { mapReport, mapArticle, reportComparison, kstDateTimeText } from '../../api/adapters'
+import { promisingView } from './promising'
 
 const range = (from, to) => from && to ? `${from} ~ ${to}` : '—'
 
@@ -32,6 +33,8 @@ function Section({ no, title, action, children }) {
   )
 }
 
+const PROMISING_COLS = '110px 1fr 1.6fr 100px 150px'
+const OUTLOOK_COLOR = { '증가 예상': '#C8102E', '감소 예상': '#1F5FD1' }
 export default function ReportView({ route }) {
   const { downloadReport, refreshReports } = useApp()
   const id = route.query.get('id')
@@ -81,7 +84,7 @@ export default function ReportView({ route }) {
   const scopeSeries=scopeComparison?.columns.filter(col=>col.key!=='month')||[]
   const scopeColors=['#C8102E','#2E6DB4','#16877C','#8E5BB5','#E07B24']
   const countryRows = byCode.TOP_COUNTRIES?.tables?.[0]?.rows || []
-  const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
+  const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '유망시장(증가·감소 예상)': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
   const o = {
     country: [...(c.include_korea_total?['한국(대한민국) 전체']:[]),...(c.country_codes || []).map(countryName)].join(' · '), product: (c.hs_items || []).map(h => h.hs_code).join(', '),
     from: c.period?.start, to: c.period?.end, compareFrom: c.compare_period?.start, compareTo: c.compare_period?.end,
@@ -96,6 +99,7 @@ export default function ReportView({ route }) {
   const kind = reportKinds[report.kind]
   const newsOnly = report.kind === 'weekly'
   const has = label => !!byCode[sectionCodes[label]]
+  const promising = promisingView(byCode.GROWTH_RISK)
   const ticks = niceTicks(monthly.map(r => r.amount_usd), 3, true).map(value => value / 1e8)
   let no = 1
 
@@ -196,21 +200,22 @@ export default function ReportView({ route }) {
                 </Section>
               )}
 
-              {has('급성장·리스크 시장') && (
-                <Section no={no++} title="급성장 · 리스크 시장">
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                    <div style={{ borderRadius: 14, padding: 20, background: 'var(--rose)' }}>
-                      <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>성장률 상위</p>
-                      <p style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>준비 중</p>
-                      <p className="note">{byCode.GROWTH_RISK?.text}</p>
-                    </div>
-                    <div style={{ borderRadius: 14, padding: 20, background: '#EEF3FC' }}>
-                      <p style={{ fontSize: 13, fontWeight: 800, color: '#1F5FD1' }}>감소율 상위</p>
-                      <p style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>준비 중</p>
-                      <p className="note">{byCode.GROWTH_RISK?.text}</p>
-                    </div>
-                  </div>
-                  <p className="note" style={{ marginTop: 10 }}>성장·리스크 순위는 서버에서 제공된 결과가 있을 때 표시합니다.</p>
+              {has('유망시장(증가·감소 예상)') && (
+                <Section no={no++} title="유망시장(증가·감소 예상)">
+                  <p className="note" style={{ marginBottom: 10 }}>{byCode.GROWTH_RISK?.text}</p>
+                  {promising.rows.length > 0 && <>
+                    <div className="th" style={{ gridTemplateColumns: PROMISING_COLS }}><span>{promising.rankLabel}</span><span>국가</span><span>품목</span><span>증감 예상</span><span className="r">최근 12개월 수출액</span></div>
+                    {promising.rows.map(r => (
+                      <div key={`${r.country_code}-${r.hs6}`} className="tr" style={{ gridTemplateColumns: PROMISING_COLS }}>
+                        <span className="b">{r.rank ?? '—'}{r.size ? <span className="s" style={{ fontWeight: 400 }}> / {Number(r.size).toLocaleString('ko-KR')}</span> : null}</span>
+                        <span className="b">{r.country_name || countryName(r.country_code)}</span>
+                        <span>{r.product_name || r.name || r.hs6} <span className="hs">{r.hs6}</span></span>
+                        <span className="b" style={{ color: OUTLOOK_COLOR[r.growth_outlook] || '#5C6370' }}>{r.growth_outlook || '—'}</span>
+                        <span className="r b">{amount(r.exp_12m)}억 USD</span>
+                      </div>
+                    ))}
+                    <p className="note" style={{ marginTop: 10 }}>{promising.anchor ? `${promising.anchor} 기준 · ` : ''}순위 옆 숫자는 전체 예측 대상 수입니다. 예측은 참고용이며 실제 결과와 다를 수 있습니다.</p>
+                  </>}
                 </Section>
               )}
 
@@ -225,7 +230,7 @@ export default function ReportView({ route }) {
                           <p className="muted" style={{ marginTop: 4 }}>{a.summary}</p>
                           <p className="note">{a.date} · {a.country} · {a.source}</p>
                         </div>
-                        <Link to={`/articles?tab=${a.kind === 'general' ? 'all' : a.kind}&id=${a.id}`} className="more">기사 보기 ↗</Link>
+                        <Link to={`/articles?tab=${a.kind}&id=${a.id}`} className="more">기사 보기 ↗</Link>
                       </div>
                     ))}
                     {!f.news.length && <p className="muted">해당 국가·품목·기간에 맞는 기사가 없습니다.</p>}

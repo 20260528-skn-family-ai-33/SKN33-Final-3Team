@@ -5,7 +5,7 @@ export const articleKinds = {
   major: { label: '주요이슈', tone: 'plum' },
 }
 
-export const articleTabs = [['all', '전체기사'], ['short', '단신속보'], ['major', '주요이슈']]
+export const articleTabs = [['all', '전체기사'], ['general', '일반기사'], ['short', '단신속보'], ['major', '주요이슈']]
 
 const SUMMARY = '현지 수요와 유통 채널, 교역 환경 변화를 정리한 기사입니다. 화면 시연용 요약이며 실제 기사 본문은 서버 연동 후 원문에서 가져옵니다.'
 const KOTRA = 'KOTRA 해외시장뉴스'

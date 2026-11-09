@@ -52,7 +52,8 @@ export function mapReport(r) {
   const label = { READY: '발행 완료', QUEUED: '생성 대기', RUNNING: '생성 중', DELAYED: '재시도 대기', FAILED: '생성 실패' }[r.status] || '상태 미확인'
   return { ...r, title: r.conditions ? `${reportScope(r.conditions, r.hs_names)} · ${r.title}` : r.title, id: r.report_id, kind: ({ RPT_WEEKLY: 'weekly', RPT_MONTHLY: 'monthly', RPT_QUARTERLY: 'quarterly' })[r.report_type] || 'chat', status, created: r.created_at || '', meta: `${kstDateTimeText(r.created_at)} · ${label}`, options: r.conditions }
 }
-export const amount = value => value == null ? '—' : (Number(value) / 1e8).toLocaleString('ko-KR', Number(value) !== 0 && Math.abs(Number(value)) < 1e7 ? { maximumSignificantDigits: 3 } : { maximumFractionDigits: 1 })
+// 억 USD 표시. 0.1억 이상은 소수 첫째 자리까지, 0.1억 미만은 유효숫자 1자리(0.02·0.0005)로 보여 준다(D-3).
+export const amount = value => value == null ? '—' : (Number(value) / 1e8).toLocaleString('ko-KR', Number(value) !== 0 && Math.abs(Number(value)) < 1e7 ? { maximumSignificantDigits: 1 } : { maximumFractionDigits: 1 })
 export const percent = value => value == null ? '—' : `${Number(value) > 0 ? '+' : ''}${Number(value).toFixed(1)}%`
 export function reportComparison(conditions, kpi) {
   const mode = conditions?.compare || 'YOY_PERIOD'

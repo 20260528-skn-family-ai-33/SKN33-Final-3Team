@@ -17,7 +17,7 @@ def pages(html):
 
 class SampleRenderTest(unittest.TestCase):
     def test_samples_render_with_expected_pages(self):
-        for kind, expected in (('monthly', 7), ('quarterly', 9), ('weekly', 5), ('ondemand', 7)):
+        for kind, expected in (('monthly', 7), ('quarterly', 9), ('weekly', 5), ('ondemand', 8)):
             with self.subTest(kind=kind):
                 html = rt.render(rt.KINDS[kind], rt.sample_context(kind))
                 self.assertEqual(pages(html), expected)
@@ -277,16 +277,19 @@ class OnDemandTest(unittest.TestCase):
     def toc(self, html):
         return re.findall(r'<span class="t">([^<]+)</span><span>(\d+)</span>', html)
 
-    def test_sample_matches_form_and_hides_growth_risk(self):
+    def test_sample_matches_form_and_shows_promising_market(self):
         html = self.render()
         self.assertIn('기초화장품 수출 시장 분석', html)
         self.assertIn('86.40<span class="u">억 달러</span>', html)     # USD 원값 → 억 달러
         self.assertIn('<td class="r">16.12</td>', html)
-        # GROWTH_RISK는 골랐어도 기준 확정 전까지 목차·쪽·포함 항목에서 빠짐
+        # GROWTH_RISK는 유망시장(증가·감소 예상)이다. 예측 결과(promising)가 있으면 목차·쪽·포함 항목에 들어간다.
         self.assertEqual(self.toc(html), [('핵심 요약', '3'), ('월별 수출 추이', '4'), ('주요 수출국', '5'),
-                                          ('현지 이슈', '6'), ('데이터 기준 · 출처', '7')])
-        self.assertNotIn('증가 감소', html)
-        self.assertIn('핵심 요약 · 주요 지표 · 월별 수출 추이 · 주요 수출국 · 현지 이슈', html)
+                                          ('유망시장(증가·감소 예상)', '6'), ('현지 이슈', '7'), ('데이터 기준 · 출처', '8')])
+        self.assertIn('감소 예상', html)
+        self.assertIn('핵심 요약 · 주요 지표 · 월별 수출 추이 · 주요 수출국 · 유망시장(증가·감소 예상) · 현지 이슈', html)
+        # 예측 결과가 없는 문맥(이전 저장본)은 이 섹션을 건너뛴다.
+        html = self.render(update=lambda ctx: ctx.pop('promising'))
+        self.assertEqual(self.toc(html)[3], ('현지 이슈', '6'))
 
     def test_title_follows_selected_items(self):
         item = rt.sample_context('ondemand')['conditions']['hs_items'][0]
@@ -386,7 +389,7 @@ class OnDemandTest(unittest.TestCase):
         self.assertIn('월별 수출 추이 (계속)', html)
         self.assertIn('현지 이슈 (계속)', html)
         layout = rt.layout('RPT_ON_DEMAND', rt.sample_context('ondemand'))
-        self.assertEqual(layout['sections'], ['SUMMARY', 'KPI', 'TOP_COUNTRIES', 'LOCAL_ISSUES'])
+        self.assertEqual(layout['sections'], ['SUMMARY', 'KPI', 'TOP_COUNTRIES', 'GROWTH_RISK', 'LOCAL_ISSUES'])
 
 
 class FormatTest(unittest.TestCase):

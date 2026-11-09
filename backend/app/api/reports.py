@@ -191,6 +191,54 @@ def article_sources(articles):
     return source_entries(article['source_code'] for article in articles)
 
 
+PROMISING_UNAVAILABLE='예측 모델 또는 기준월 스냅샷을 사용할 수 없어 유망시장 예측을 넣지 못했습니다.'
+
+
+def promising_section(store,uid,c):
+    """GROWTH_RISK = 유망시장(증가·감소 예상). 채팅 유망시장(PROMISING_MARKET)과 같은 계산을 리포트 국가·HS6 품목으로 한다.
+    모델 A가 유망 순위를, 모델 B가 증가·감소 예상을 낸다. 모델을 쓸 수 없어도 리포트 생성은 실패시키지 않는다."""
+    from types import SimpleNamespace
+    countries=list(c.get('country_codes') or [])
+    hs=[h for h in c.get('hs_items',[]) if len(h['hs_code'])==6]
+    if not countries and not hs:
+        return section('GROWTH_RISK','국가 또는 HS6 품목을 1개 이상 선택하면 유망시장 예측을 함께 넣습니다.',status='NO_DATA')
+    settings=store.db.settings
+    try:
+        from backend.app.agents import budget
+        from backend.app.agents.market import growth, loaded, model_codes, predict
+        from backend.app.agents.runtime import bounded_ml
+        from backend.app.agents.state import Conditions
+        from backend.app.agents.templates import _names
+        conditions=Conditions(country_codes=countries,hs_items=hs)
+        seconds=budget.seconds(settings,'ml')
+        def load():
+            bundle,provider,versions=loaded(settings)
+            anchor=str(bundle.get('anchor') or '')[:7]
+            return bundle,provider,versions,anchor,growth(settings,anchor)
+        # 채팅과 같은 ML 전용 스레드에서 돌린다(모델을 메모리에 두 번 올리지 않고, 멈춰도 워커를 붙잡지 않는다).
+        bundle,provider,versions,anchor,(outlook,_,note)=bounded_ml(load,seconds)
+        if outlook and outlook['anchor']!=anchor:
+            outlook,note=None,f"증감 예상 모델의 기준월({outlook['anchor']})이 유망시장 모델({anchor})과 달라 증가·감소 예상은 표시하지 않았습니다."
+        codes=model_codes(store,conditions.hs_items)
+        analysis=bounded_ml(lambda:predict(SimpleNamespace(conditions=conditions),bundle,provider,versions,codes=codes,
+                                           directions=outlook['directions'] if outlook else None),seconds)
+    except (ImportError,OSError,MemoryError,ValueError,TimeoutError):
+        return section('GROWTH_RISK',PROMISING_UNAVAILABLE,status='NO_DATA')
+    if analysis.result.status!='OK':
+        return section('GROWTH_RISK','선택한 국가·품목은 유망시장 예측 대상이 아닙니다(최근 12개월 수출 10만 달러 이상만 예측).',status='NO_DATA')
+    names,products=_names(store)
+    for row in analysis.rows:
+        row['country_name']=names.get(row['country_code'],row['country_code'])
+        row['product_name']=products.get((row['hs6'],row.get('hs_ver','HS2022')),row['hs6'])
+        row['name']=row['product_name'] if analysis.meta['group_by']!='HS6' else row['country_name']
+    meta={k:v for k,v in analysis.meta.items() if k!='missing_targets'}
+    table=result_table(store,uid,analysis.rows,meta,c,store.queries)
+    text=(f"{analysis.meta['anchor']} 기준 모델 예측입니다. 순위는 다음 12개월 수출 성장 가능성이 높은 순서이고, "
+          '증가·감소 예상은 다음 12개월 수출이 최근 12개월보다 늘지 줄지에 대한 예측 방향입니다.')
+    notes=[n for n in [note,*analysis.result.limitations] if n]
+    return section('GROWTH_RISK',' '.join([text,*notes]),[table],status='READY' if not notes else 'NEEDS_REVIEW')
+
+
 def build_document(store,uid,record):
     c=record['conditions_json']; hs=c.get('hs_items',[]); countries=c.get('country_codes',[])
     p=c['period']
@@ -284,7 +332,7 @@ def build_document(store,uid,record):
             block=section('TOP_COUNTRIES','분석 조건 내 수출액 상위 10개국입니다.',[table])
             block['charts']=[{'chart_type':'HORIZONTAL_BAR','result_id':table['result_id'],'x_key':'country','series_keys':['amount_usd'],'title':'주요 수출국 (USD)','positive_color':'#16A34A','negative_color':'#DC2626'}]
             sections.append(block)
-        if 'GROWTH_RISK' in selected: sections.append(section('GROWTH_RISK','유망시장·ML 선정 기준은 팀 협의 보류 상태입니다.',status='POLICY_PENDING'))
+        if 'GROWTH_RISK' in selected: sections.append(promising_section(store,uid,c))
         if 'LOCAL_ISSUES' in selected:
             articles=news.articles(store,uid,start=start,end=month_end(end),hs=hs,countries=countries,size=5)['items']
             sections.append(section('LOCAL_ISSUES','분석 조건과 기간에 해당하는 기사 본문 발췌입니다. RAG 요약·인과 분석 모듈은 미연결 상태입니다.',articles=articles,status='POLICY_PENDING'))

@@ -648,15 +648,15 @@ def layout(report_type, ctx):
 
 
 # 요청형 섹션 (양식 순서). SUMMARY는 항상, 나머지는 사용자가 고른 것만.
-# GROWTH_RISK(수출 증가·감소 주요 시장)는 최소 규모 기준이 정해질 때까지 섹션 전체를 숨깁니다 (이양원님 합의, #45).
-ONDEMAND_SECTIONS = ('SUMMARY', 'KPI', 'TOP_COUNTRIES', 'LOCAL_ISSUES')
+# GROWTH_RISK는 유망시장(증가·감소 예상)이다. 채팅 유망시장과 같은 ML 결과(promising)가 있을 때 그린다.
+ONDEMAND_SECTIONS = ('SUMMARY', 'KPI', 'TOP_COUNTRIES', 'GROWTH_RISK', 'LOCAL_ISSUES')
 HALF_MM = (TEXT_MM - 6) / 2  # 두 칸 배치(.grid2)의 한 칸 폭
 
 
 def ondemand_sections(ctx):
     """실제로 그릴 섹션 코드 (목차·쪽 번호·포함 항목에 같은 목록을 씁니다)."""
     chosen = set(ctx['conditions']['sections'])
-    return [s for s in ONDEMAND_SECTIONS if s == 'SUMMARY' or s in chosen]
+    return [s for s in ONDEMAND_SECTIONS if s == 'SUMMARY' or (s in chosen and (s != 'GROWTH_RISK' or 'promising' in ctx))]
 
 
 def _ondemand_layout(ctx, rest):
@@ -703,6 +703,12 @@ def _ondemand_layout(ctx, rest):
         pages['top'] = flow([_table('ttable', [ROW1_MM] * rows, head=TH_MM),
                              {'key': 'tgrid', 'height': max(H3_MM + _legend(['', '']) + bars, right)}],
                             BODY_MM - _heading('수출액 상위 10개국 · 순위 변동 · 단위 억 달러'), rest)
+
+    if 'GROWTH_RISK' in sections:
+        promising = ctx['promising']
+        note = {'key': 'pnote', 'height': LINE[9] * _lines(promising['text'], 9, TEXT_MM) + 4}
+        pages['promising'] = flow([note, _table('ptable', [ROW1_MM] * len(promising['rows']), head=TH_MM)],
+                                  BODY_MM - _heading('모델 예측 순위 · 증가·감소 예상 · 단위 억 달러'), rest)
 
     if 'LOCAL_ISSUES' in sections:
         pages['articles'] = flow(_article_blocks(ctx['articles']), BODY_MM - _heading('현지 이슈 · 기준') - POLICY_MM, rest)

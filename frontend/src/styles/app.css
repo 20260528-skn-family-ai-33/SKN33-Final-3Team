@@ -163,6 +163,15 @@ body.modal-open{overflow:hidden}
 /* segmented toggle rendered with buttons */
 .seg button{height:34px;padding:0 18px;border-radius:17px;font-size:14px;color:#444B57;display:inline-flex;align-items:center}
 .seg button.on{background:var(--ink);color:#fff;font-weight:700}
+/* 메인 머리글의 전체↔내 관심 전환(알림 버튼 왼쪽) */
+.hd-view{margin:0 6px 0 16px;padding:3px;flex:none}
+.hd-view button{height:32px;padding:0 14px;white-space:nowrap}
+.hd-r .pill-my,.hd-r .pill-admin,.hd-r .pill-logout{white-space:nowrap;flex:none}
+/* 메인 대시보드의 링크 카드 */
+a.dash-card,.dash-card a{transition:background .15s}
+a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
+.on-dark .field-err{color:#FF8A9A}
+@media (max-width:760px){.hd-view button{padding:0 10px;font-size:13px}}
 
 /* Interest selection and report controls keep the full label available on narrow screens. */
 .interest-group { display: grid; gap: .6rem; min-width: 0; margin: 1rem 0; border: 1px solid var(--line); padding: 1rem; border-radius: 12px; }
