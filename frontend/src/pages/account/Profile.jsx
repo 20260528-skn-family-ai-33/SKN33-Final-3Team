@@ -66,7 +66,7 @@ export default function Profile({ route }) {
 
   const verify = () => {
     if (social) return setEmailError(`${providerLabel[account.provider]} 로그인 계정은 비밀번호가 없어 변경할 수 없습니다.`)
-    if (email.trim().toLowerCase() !== (session?.email || '').toLowerCase()) return setEmailError('등록된 이메일과 일치하지 않습니다. 다시 확인해 주세요.')
+    if (email.trim() !== (session?.email || '')) return setEmailError('등록된 이메일과 일치하지 않습니다. 다시 확인해 주세요.')
     sessionStorage.setItem('bs2.pwVerified', session.email)
     navigate('/account/password')
   }

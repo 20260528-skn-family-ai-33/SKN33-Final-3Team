@@ -34,7 +34,8 @@ def template_pdf(report_type, context, settings):
     stage='BROWSER_START'
     try:
         with sync_playwright() as runtime:
-            with runtime.chromium.launch(headless=True, executable_path=runtime.chromium.executable_path, timeout=30000) as browser:
+            from backend.app.services.report_browser import launch_chromium
+            with launch_chromium(runtime) as browser:
                 stage='PAGE_SETUP'
                 page = browser.new_page(java_script_enabled=False, offline=True)
                 page.route('**/*', lambda route: route.abort())

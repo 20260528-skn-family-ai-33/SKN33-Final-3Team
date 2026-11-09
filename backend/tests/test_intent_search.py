@@ -121,12 +121,13 @@ class IntentSearchTest(unittest.TestCase):
 
     def test_search_cache_and_public_ip_limit(self):
         self.settings.values.update(API_HS_VECTOR_ENABLED='true',API_HS_IP_LIMIT='2')
-        with patch('backend.app.api.hs_vectors.candidates',return_value=[('3304',.60)]) as embed:
-            first=self.client.get('/api/v1/reference/hs-codes?q=스킨케어')
-            second=self.client.get('/api/v1/reference/hs-codes?q=%20스킨케어%20')
-            blocked=self.client.get('/api/v1/reference/hs-codes?q=스킨케어',headers={'X-Forwarded-For':'203.0.113.99'})
+        from backend.app.api.reference import _hs_search
+        with patch('backend.app.api.reference._hs_search',wraps=_hs_search) as search:
+            first=self.client.get('/api/v1/reference/hs-codes?q=화장')
+            second=self.client.get('/api/v1/reference/hs-codes?q=%20화장%20')
+            blocked=self.client.get('/api/v1/reference/hs-codes?q=화장',headers={'X-Forwarded-For':'203.0.113.99'})
         self.assertEqual(first.status_code,200); self.assertEqual(second.status_code,200)
-        self.assertEqual(first.json(),second.json()); self.assertEqual(embed.call_count,1)
+        self.assertEqual(first.json(),second.json()); self.assertEqual(search.call_count,1)
         self.assertEqual(blocked.status_code,429)
 
     def test_short_and_long_queries_never_embed(self):
@@ -136,9 +137,11 @@ class IntentSearchTest(unittest.TestCase):
             embed.assert_not_called()
 
     def test_close_distances_are_only_candidates_and_offer_hierarchy(self):
+        from backend.app.api.reference import chat_hs_search
+        from backend.app.api.database import Store
         self.settings.values['API_HS_VECTOR_ENABLED']='true'
-        with patch('backend.app.api.hs_vectors.candidates',return_value=[('3304',.40),('9999',.41)]):
-            value=self.client.get('/api/v1/reference/hs-codes?q=라면').json()
+        with self.engine.connect() as connection, patch('backend.app.api.hs_vectors.candidates',return_value=[('3304',.40),('9999',.41)]):
+            value=chat_hs_search(Store(self.app.state.database,connection),'라면')
         self.assertEqual(value['confidence'],'LOW'); self.assertEqual(value['match_type'],'SIMILAR')
         self.assertTrue(value['requires_selection']); self.assertIn('직접 선택',value['message'])
         with self.engine.begin() as c:
@@ -162,13 +165,13 @@ class IntentSearchTest(unittest.TestCase):
                 self.assertTrue(response.json()['requires_selection'])
             embed.assert_not_called()
 
-    def test_picker_without_literal_match_keeps_semantic_fallback(self):
+    def test_picker_without_literal_match_does_not_suggest_related_words(self):
         self.settings.values['API_HS_VECTOR_ENABLED']='true'
         with patch('backend.app.api.hs_vectors.candidates',return_value=[('3304',.6)]) as embed:
             response=self.client.get('/api/v1/reference/hs-codes',params={'q':'스킨케어'})
         self.assertEqual(response.status_code,200)
-        self.assertEqual(response.json()['items'][0]['hs_code'],'3304')
-        embed.assert_called_once()
+        self.assertEqual(response.json()['items'],[])
+        embed.assert_not_called()
 
 
 class SearchInfrastructureTest(unittest.TestCase):

@@ -12,7 +12,7 @@ const ROWS = [
   ['all', '전체 알림 수신', '끄면 팝업·새 알림함 등록 중단, 기존 내역 유지'],
   ['surge', '급증 기사', '관심 범위의 품목·키워드 급증 팝업'],
   ['major', '주요 이슈', '전체 주요 무역 이슈 팝업'],
-  ['report', '리포트 발행', '주간·월간·분기 구독 리포트 발행 팝업'],
+  ['report', '리포트 발행', '관심정보 등록과 리포트 구독을 완료하면 주간·월간·분기 리포트 발행을 알려드립니다.'],
 ]
 
 
@@ -53,6 +53,7 @@ export default function NotificationSettings({ route }) {
     <section className="card">
       <h2 className="t1" style={{ fontSize: 24 }}>알림설정</h2>
       <p className="muted" style={{ marginTop: 6 }}>받고 싶은 알림과 관심 조건을 관리합니다.</p>
+      <p className="note" style={{ marginTop: 10 }}>정기 리포트를 받으려면 <Link to="/account/interests" className="more">관심정보 등록</Link>과 <Link to="/account/subscription" className="more">리포트 구독 설정</Link>을 모두 완료해 주세요. 리포트 발행 알림은 전체 알림 수신과 리포트 발행 알림을 켜고 알림 수신 약관에 동의해야 받을 수 있습니다.</p>
       <TermsRenewalNotice onAgree={() => { setAgree(false); navigate(withQuery(route, { terms: 'open' }), { replace: true }) }} />
       <div style={{ marginTop: 10 }}>
         {ROWS.map(([key, title, desc]) => (

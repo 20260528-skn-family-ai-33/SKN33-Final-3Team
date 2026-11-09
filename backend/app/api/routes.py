@@ -104,7 +104,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         require(landing!='INTERESTED' or scope['hs_items'] or scope['country_codes'],'관심 등록이 필요합니다.','INTERESTS_REQUIRED',409)
         t=store.t('users'); store.c.execute(update(t).where(t.c.user_id==uid).values(landing_page=landing))
         return {'user':accounts.user_view(store,{**user,'landing_page':landing})}
-    if identity==6: return {'matches':body['email'].strip().lower()==user['email'].lower()}
+    if identity==6: return {'matches':body['email'].strip()==user['email']}
     if identity==7:
         accounts.change_password(store,user,PasswordChange.model_validate(body)); response.delete_cookie('bs_session',path='/'); return None
     if identity==9:

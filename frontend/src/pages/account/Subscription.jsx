@@ -7,7 +7,7 @@ import { toggleValue } from '../../data/catalog'
 import { usePendingAction } from '../../api/hooks'
 
 const CYCLES = [['weekly', '주간', '매주 월요일 발행 · 뉴스·이슈'], ['monthly', '월간', '매월 15일 발행 · 통계+이슈'], ['quarterly', '분기', '분기 종료 후 20일 발행']]
-const FORMATS = [['PDF', '기본 선택'], ['DOCX', '편집 가능한 문서']]
+const FORMATS = [['PDF', '열람 및 인쇄용 문서'], ['DOCX', '편집 가능한 문서']]
 
 function OptionCard({ checked, onChange, title, desc, style }) {
   return (
@@ -28,11 +28,12 @@ export default function Subscription() {
 function SubscriptionForm({ subscription }) {
   const { setSubscription, notify, options, profile } = useApp()
   const [cycles, setCycles] = useState(subscription.cycles)
-  const [formats, setFormats] = useState(subscription.formats.length ? subscription.formats : ['PDF'])
+  const [formats, setFormats] = useState(subscription.formats)
   const hasInterests = !!(profile.products.length || profile.countries.length)
   const valid = hasInterests && cycles.length > 0 && formats.length > 0
   const [pending, runOnce] = usePendingAction()
   const save = () => runOnce(async () => {
+    if (!valid) return
     if (!await setSubscription({ cycles, formats })) return
     notify('구독 설정을 저장했습니다. 다음 발행일부터 저장된 관심정보 기준으로 리포트가 생성됩니다.')
     navigate(`/account/reports?tab=${cycles[0]}`)
@@ -43,10 +44,10 @@ function SubscriptionForm({ subscription }) {
       <h2 className="t1" style={{ fontSize: 24, marginTop: 4 }}>구독 설정 / 수정</h2>
       <div style={{ marginTop: 26 }}>
         <div className="between">
-          <p style={{ fontSize: 16, fontWeight: 800 }}>발행 주기 <span className="muted" style={{ fontWeight: 500 }}>· 복수 선택 가능</span></p>
+          <p style={{ fontSize: 16, fontWeight: 800 }}>발행 주기 <span className="muted" style={{ fontWeight: 500 }}>· 필수 · 복수 선택 가능</span></p>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Btn onClick={() => setCycles(options.report_periods.map(p => p.option_code.toLowerCase()))}>전체선택</Btn>
-            <Btn onClick={() => setCycles([])}>전체해제</Btn>
+            <Btn onClick={() => setCycles(options.report_periods.map(p => p.option_code.toLowerCase()))}>주기 전체선택</Btn>
+            <Btn onClick={() => setCycles([])}>주기 전체해제</Btn>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 12, marginTop: 14 }} className="resp-stack">
@@ -54,7 +55,7 @@ function SubscriptionForm({ subscription }) {
         </div>
       </div>
       <div style={{ marginTop: 26 }}>
-        <p style={{ fontSize: 16, fontWeight: 800 }}>출력 양식</p>
+        <p style={{ fontSize: 16, fontWeight: 800 }}>출력 양식 <span className="muted" style={{ fontWeight: 500 }}>· 필수 · 하나 이상 선택</span></p>
         <div style={{ display: 'flex', gap: 12, marginTop: 14, maxWidth: 520 }}>
           {FORMATS.map(([key, desc]) => <OptionCard key={key} checked={formats.includes(key)} onChange={() => setFormats(f => toggleValue(f, key))} title={key} desc={desc} />)}
         </div>
@@ -63,8 +64,8 @@ function SubscriptionForm({ subscription }) {
         <ul className="note" style={{ margin: 0, paddingLeft: 18 }}>
           {!hasInterests && <li>구독을 시작하려면 국가나 품목을 먼저 선택해 주세요. <Btn to="/account/interests">관심정보 등록</Btn></li>}
           <li>구독 리포트는 저장된 관심정보를 기준으로 생성됩니다.</li>
-          <li>발행 주기는 복수 선택할 수 있으며, 전체해제 시 선택된 주기가 없습니다.</li>
-          <li>처음에는 발행 주기가 선택되어 있지 않습니다. PDF는 기본 선택입니다.</li>
+          <li>주기 전체선택·주기 전체해제는 발행 주기에만 적용되며 출력 양식은 유지됩니다.</li>
+          <li>처음에는 발행 주기와 출력 양식이 모두 미선택 상태입니다.</li>
           <li>발행 주기와 출력 양식을 각각 하나 이상 선택한 후 저장하세요.</li>
         </ul>
       </div>

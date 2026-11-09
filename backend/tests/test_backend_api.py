@@ -75,6 +75,61 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/articles?page=1&page=2').status_code,400)
         self.assertEqual(self.client.get('/api/v1/notifications?unread_only=no').status_code,400)
 
+    def test_email_case_distinguishes_signup_login_and_account_verification(self):
+        accounts = []
+        for index, email in enumerate(('alice@example.org', 'Alice@example.org', 'Alice@Example.org')):
+            password = f'Sample!12{index}'
+            body = {'name': '홍길동', 'email': ' ' + email + ' ', 'password': password, 'password_confirm': password, **SIGNUP_CONSENTS}
+            response = self.client.post('/api/v1/auth/signup', json=body)
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.json()['user']['email'], email)
+            accounts.append((email, password, response.json()['user']['user_id']))
+            self.assertEqual(self.client.post('/api/v1/auth/signup', json=body).status_code, 409)
+        self.assertEqual(len({uid for _, _, uid in accounts}), 3)
+        for email, password, uid in accounts:
+            login = self.client.post('/api/v1/auth/login', json={'email': email, 'password': password})
+            self.assertEqual(login.status_code, 200, login.text)
+            self.assertEqual(login.json()['user']['user_id'], uid)
+        for email, password in [('ALICE@example.org', 'Sample!120'), ('Alice@example.org', 'Sample!120')]:
+            response = self.client.post('/api/v1/auth/login', json={'email': email, 'password': password})
+            self.assertEqual(response.status_code, 401, response.text)
+
+    def test_password_change_requires_case_exact_email(self):
+        self.signup('Alice@Example.org')
+        self.assertFalse(self.post('users/me/email-check', {'email': 'alice@example.org'}).json()['matches'])
+        self.assertTrue(self.post('users/me/email-check', {'email': ' Alice@Example.org '}).json()['matches'])
+        body = {'email': 'alice@example.org', 'current_password': 'Sample!123',
+                'new_password': 'Changed!456', 'new_password_confirm': 'Changed!456'}
+        self.assertEqual(self.post('users/me/password', body).status_code, 403)
+        self.assertEqual(self.post('users/me/password', {**body, 'email': 'Alice@Example.org'}).status_code, 204)
+
+    def test_picker_search_accepts_one_character_without_changing_chat_minimum(self):
+        from backend.app.api.reference import chat_hs_search
+        with self.engine.begin() as connection:
+            connection.execute(self.meta.tables['hs_code'].insert(), [
+                {'hs_code': '010129', 'depth': 6, 'name_ko': '말', 'hs_ver': 'HS2022', 'source_edition': 'test'},
+                {'hs_code': '010229', 'depth': 6, 'name_ko': '소', 'hs_ver': 'HS2022', 'source_edition': 'test'},
+                {'hs_code': '0101', 'depth': 4, 'name_ko': '말과 동물', 'hs_ver': 'HS2022', 'source_edition': 'test'},
+                {'hs_code': '0102', 'depth': 4, 'name_ko': '소과 동물', 'hs_ver': 'HS2022', 'source_edition': 'test'}])
+        for query, code in [('말', '010129'), ('소', '010229')]:
+            response = self.client.get('/api/v1/reference/hs-codes', params={'q': query, 'depth': 6})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual([item['hs_code'] for item in response.json()['items']], [code])
+            self.assertEqual(response.json()['match_type'], 'EXACT')
+        response = self.client.get('/api/v1/reference/hs-codes', params={'q': '3', 'depth': 4})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('3304', [item['hs_code'] for item in response.json()['items']])
+        with self.engine.connect() as connection:
+            self.assertEqual(chat_hs_search(Store(self.app.state.database, connection), '말')['items'], [])
+        self.settings.values['API_HS_VECTOR_ENABLED'] = 'true'
+        with patch('backend.app.api.hs_vectors.candidates', return_value=[('330499', .1)]) as candidates:
+            for query in ('힣', '화자', '스킨케어'):
+                for depth in (4, 6):
+                    response = self.client.get('/api/v1/reference/hs-codes', params={'q': query, 'depth': depth})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json()['items'], [])
+            candidates.assert_not_called()
+
     def test_interest_version_and_hs_depth(self):
         self.signup(); url='/api/v1/users/me/interests'
         version=self.client.get(url).json()['interests']['version']
@@ -636,6 +691,7 @@ class BackendApiTest(unittest.TestCase):
         self.client.put('/api/v1/users/me/interests',json={'hs_items':[],'country_codes':['US'],'expected_version':interest['version']},headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(self.client.put(url,json={**body,'use_saved_interests':False},headers={'X-CSRF-Token':self.csrf}).status_code,400)
         self.assertEqual(self.client.put(url,json={**body,'period_codes':[]},headers={'X-CSRF-Token':self.csrf}).status_code,400)
+        self.assertEqual(self.client.put(url,json={**body,'formats':[]},headers={'X-CSRF-Token':self.csrf}).status_code,400)
         with patch('backend.app.api.reports.now',return_value=datetime(2026,1,1)):
             response=self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(response.status_code,200,response.text)
@@ -1355,23 +1411,28 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(out['updated_count'],60); self.assertEqual(out['unread_count'],0)
 
     def test_hs_exact_vector_fallback_and_database_verification(self):
+        from backend.app.api.reference import chat_hs_search
         self.settings.values['API_HS_VECTOR_ENABLED']='true'
         with patch('backend.app.api.hs_vectors.candidates',return_value=[('9999',0.1),('3304',0.2)]) as search:
             self.assertEqual(self.client.get('/api/v1/reference/hs-codes?q=화장품').json()['match_type'],'EXACT')
             search.assert_not_called()
             result=self.client.get('/api/v1/reference/hs-codes?q=스킨케어')
             self.assertEqual(result.status_code,200,result.text)
-            self.assertEqual([x['hs_code'] for x in result.json()['items']],['3304'])
+            self.assertEqual(result.json()['items'],[])
+            search.assert_not_called()
+            with self.engine.connect() as connection:
+                result=chat_hs_search(Store(self.app.state.database,connection),'스킨케어')
+            self.assertEqual([x['hs_code'] for x in result['items']],['3304'])
         with patch('backend.app.api.hs_vectors.candidates',side_effect=RuntimeError('offline')) as search:
             # 품목 선택 검색은 등록명 부분 일치가 있으면 임베딩을 부르지 않는다. 부르지 않았으니 연결 경고도 없다.
             result=self.client.get('/api/v1/reference/hs-codes?q=화장')
             self.assertEqual(result.json()['items'][0]['hs_code'],'3304')
             self.assertNotIn('warnings',result.json())
             search.assert_not_called()
-            # 등록명에 없는 말만 임베딩으로 찾고, 그 연결이 실패하면 경고를 붙인다(위 '스킨케어'는 캐시에 남아 다른 말을 쓴다).
-            result=self.client.get('/api/v1/reference/hs-codes?q=보습크림')
-            self.assertEqual(result.status_code,200,result.text)
-            self.assertTrue(result.json()['warnings'])
+            # 채팅 의미 검색의 DB 검증·연결 실패 안내는 그대로 유지한다.
+            with self.engine.connect() as connection:
+                result=chat_hs_search(Store(self.app.state.database,connection),'보습크림')
+            self.assertTrue(result['warnings'])
 
     def test_notification_sql_visibility_matches_article_and_array_rules(self):
         from backend.app.api import notifications
