@@ -82,7 +82,14 @@ def git(*args):
 
 
 def digest_bytes(value):
-    return hashlib.sha256(value).hexdigest()
+    """Hash text consistently across core.autocrlf checkouts and git show bytes."""
+    return hashlib.sha256(value.replace(b'\r\n', b'\n')).hexdigest()
+
+
+def revision_metadata(paths):
+    """HEAD alone does not identify code that has uncommitted or untracked changes."""
+    changes = git('status', '--porcelain', '--untracked-files=all', '--', *paths).splitlines()
+    return {'revision': git('rev-parse', 'HEAD'), 'dirty': bool(changes), 'changes': changes}
 
 
 def reject_network(*args, **kwargs):
@@ -154,6 +161,8 @@ def main(argv=None):
     fixture_paths = ['backend/scripts/evaluate_sql_visualization.py',
                      'backend/tests/api_support.py', 'backend/app/agents/templates.py',
                      'backend/app/agents/state.py', 'backend/app/api/results.py']
+    harness = revision_metadata(test_paths + fixture_paths)
+    source_state = revision_metadata(list(SOURCES))
     with ExitStack() as stack:
         for owner, name in ((socket, 'create_connection'), (socket, 'getaddrinfo'),
                             (socket.socket, 'connect'), (socket.socket, 'connect_ex'),
@@ -163,11 +172,16 @@ def main(argv=None):
                          {path: digest_bytes((ROOT / path).read_bytes()) for path in SOURCES})
         outcomes = [evaluate_case(case) for case in CASES]
     report = {
-        'schema_version': 1,
+        'schema_version': 2,
+        'hash_normalization': 'UTF-8 file bytes with CRLF normalized to LF before SHA256',
         'evaluation': 'SQL/Visualization offline regression contract evaluation',
         'evaluated_at_utc': datetime.now(timezone.utc).isoformat(),
         'source_mode': 'historical_modules' if args.source_ref else 'working_tree',
-        'source_revision': revision, 'harness_revision': git('rev-parse', 'HEAD'),
+        'source_revision': revision,
+        'source_dirty': False if args.source_ref else source_state['dirty'],
+        'source_changes': [] if args.source_ref else source_state['changes'],
+        'harness_revision': harness['revision'], 'harness_dirty': harness['dirty'],
+        'harness_changes': harness['changes'],
         'source_sha256': source_hashes,
         'evidence_sha256': {path: digest_bytes((ROOT / path).read_bytes())
                             for path in test_paths + fixture_paths},

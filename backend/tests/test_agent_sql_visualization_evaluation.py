@@ -2,10 +2,21 @@
 import unittest
 from unittest.mock import patch
 
-from backend.scripts.evaluate_sql_visualization import CASES, evaluate_case, summarize
+from backend.scripts.evaluate_sql_visualization import CASES, digest_bytes, evaluate_case, revision_metadata, summarize
 
 
 class EvaluationTest(unittest.TestCase):
+    def test_text_hash_is_stable_across_windows_and_unix_newlines(self):
+        self.assertEqual(digest_bytes('한글\nnext\n'.encode()), digest_bytes('한글\r\nnext\r\n'.encode()))
+        self.assertNotEqual(digest_bytes(b'a\nb'), digest_bytes(b'a\nc'))
+
+    def test_provenance_marks_uncommitted_harness(self):
+        with patch('backend.scripts.evaluate_sql_visualization.git', side_effect=[' M harness.py', 'head']):
+            self.assertEqual(revision_metadata(['harness.py']),
+                             {'revision': 'head', 'dirty': True, 'changes': [' M harness.py']})
+        with patch('backend.scripts.evaluate_sql_visualization.git', side_effect=['', 'head']):
+            self.assertFalse(revision_metadata(['harness.py'])['dirty'])
+
     def evaluate(self, body):
         class Fixture(unittest.TestCase):
             def runTest(self):
