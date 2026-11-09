@@ -39,6 +39,22 @@ class AgentPlannerTest(unittest.TestCase):
                                  original='hs코드가 뭔데')
         self.assertEqual(out.tasks[0].intent, 'CONVERSATION')
 
+    def test_shared_suffix_product_is_kept_as_one_phrase(self):
+        # D-107: 플래너가 "면도 및 탈취 관련 상품"을 ["면도", "탈취 관련 상품"]으로 나누면 원문 표현으로 되돌린다
+        from backend.app.agents.planner import merge_product_phrases, merge_shared_suffix
+        question = '미국 면도 및 탈취 관련 상품의 수출 추이와 증가 이유를 알려줘'
+        out = merge_product_phrases(PlannerOutput(tasks=[
+            {'intent': 'STATISTICS', 'question': 'q', 'slots': {'products': ['면도', '탈취 관련 상품']}},
+            {'intent': 'CAUSE', 'question': 'q', 'slots': {'products': None}}]), question)
+        self.assertEqual([t.slots.products for t in out.tasks], [['면도 및 탈취 관련 상품'], None])
+        self.assertEqual(merge_shared_suffix(['의료 관련 제품', '미용 관련 제품'], '의료 및 미용 관련 제품 수출'),
+                         ['의료 및 미용 관련 제품'])
+        self.assertEqual(merge_shared_suffix(['반도체', '면도', '탈취 관련 상품'], '반도체와 면도 및 탈취 관련 상품'),
+                         ['반도체', '면도 및 탈취 관련 상품'])
+        # 공통 꼬리말이 없거나 원문에 이어 쓰이지 않았으면 나눈 그대로 둔다
+        self.assertEqual(merge_shared_suffix(['화장품', '세제'], '화장품 및 세제 수출'), ['화장품', '세제'])
+        self.assertEqual(merge_shared_suffix(['면도', '탈취 관련 상품'], '면도기와 탈취 관련 상품'), ['면도', '탈취 관련 상품'])
+
     def test_source_failure_is_transitive(self):
         plan, _ = self.plan([
             {'intent': 'OUT_OF_SCOPE', 'question': 'not ready'},

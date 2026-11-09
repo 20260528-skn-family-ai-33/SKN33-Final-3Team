@@ -138,6 +138,44 @@ def rescue_trade_terms(output: PlannerOutput, terms=TRADE_TERMS, original='') ->
     return PlannerOutput.model_validate({**output.model_dump(), 'tasks': tasks})
 
 
+# 품목 표현 되돌리기(D-107): "면도 및 탈취 관련 상품"처럼 뒤의 "관련 상품"이 앞뒤 단어에 함께 걸리는 표현을
+# 플래너(gpt-4.1-mini)가 ["면도", "탈취 관련 상품"]으로 나눈다. 프롬프트 규칙·예시로는 막히지 않아 코드로 되돌린다.
+_SHARED_SUFFIX = re.compile(r'\s*관련\s*(?:상품|제품|용품|품목)$')
+_JOIN = r'\s*(?:및|와|과|,|·|/)\s*'
+
+
+def merge_shared_suffix(products, original):
+    """뒤 품목의 "관련 상품"이 원문에서 앞 품목들에 함께 걸려 있으면 원문 그대로의 한 표현으로 합친다.
+    "화장품 및 세제"처럼 공통 꼬리말이 없거나 원문에 이어 쓰이지 않았으면 그대로 둔다."""
+    items = list(products or [])
+    end = 0
+    while end < len(items):
+        suffix = _SHARED_SUFFIX.search(items[end])
+        merged = None
+        # ponytail: 바로 앞 품목부터 붙여 본다. "A, B 및 C 관련 상품"은 B·C만 합친다. 3개 이상 묶음이 필요하면 접속어로 판단
+        for start in range(end - 1, -1, -1) if suffix else ():
+            heads = [_SHARED_SUFFIX.sub('', x).strip() for x in items[start:end + 1]]
+            if not all(heads): continue
+            pattern = _JOIN.join(re.escape(h) for h in heads) + r'\s*' + _SHARED_SUFFIX.pattern.lstrip(r'\s*').rstrip('$')
+            found = re.search(pattern, original)
+            if found:
+                merged = start, found.group(0)
+                break
+        if merged:
+            items[merged[0]:end + 1] = [merged[1]]
+            end = merged[0]
+        end += 1
+    return items
+
+
+def merge_product_phrases(output: PlannerOutput, original: str) -> PlannerOutput:
+    tasks = [t.model_dump() for t in output.tasks]
+    for task in tasks:
+        if task['slots'].get('products'):
+            task['slots']['products'] = merge_shared_suffix(task['slots']['products'], original)
+    return PlannerOutput.model_validate({**output.model_dump(), 'tasks': tasks})
+
+
 def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
     error = task_count_error(len(output.tasks))
     if error:

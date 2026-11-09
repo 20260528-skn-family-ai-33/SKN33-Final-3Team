@@ -154,11 +154,12 @@ class Services:
     def planner(self,state):
         from backend.app.agents.planner import explicit_country_ranking
         explicit=explicit_country_ranking(state.input.question)
-        from backend.app.agents.planner import rescue_trade_terms, TRADE_TERMS
+        from backend.app.agents.planner import rescue_trade_terms, TRADE_TERMS, merge_product_phrases
         configured=self.settings.get('API_CHAT_TRADE_TERMS','')
         terms=tuple(configured.split(',')) if configured else TRADE_TERMS
         planned=build_plan(explicit) if explicit else self.structured(state,'planner',PLANNER_PROMPT,planner_input(state),PlannerOutput,2000,
-                                                                        lambda output:build_plan(rescue_trade_terms(output,terms,state.input.question)))
+                                                                        lambda output:build_plan(merge_product_phrases(
+                                                                            rescue_trade_terms(output,terms,state.input.question),state.input.question)))
         if planned is None:
             reason='질문을 해석하지 못했습니다. 국가·품목·기간을 명시해 다시 입력해 주세요.'
             state.plan=Plan(tasks=[Task(task_id='t1',intent='STATISTICS',question=state.input.question,
