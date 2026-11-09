@@ -80,6 +80,8 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `latest_scope`, `latest_scope_description` | 최신순에서는 `retrieved_candidates`와 후보 내 최신순 설명을 표시한다. 일반 결과에서는 두 값이 null이며 실패 안내에서는 생략될 수 있다. |
 | `articles[].summary`, `articles[].sentences` | 카드 요약 문자열과 문장별 `{text, quotes, unverified_question_parts}`. `quotes`에는 현재 DB 본문에서 다시 확인한 원문만 들어간다. 목록 형식에서는 빈 문자열과 빈 배열이다. |
 | `articles[].evidence_sufficient`, `articles[].evidence_role`, `articles[].reference_limitation` | 카드의 인용 가능 여부, 직접 근거·참고자료 등의 분류, 참고 시 제한 사항. `answer.unverified_question_parts`는 반환 문장들이 공통으로 확인하지 못한 질문 구절이다. |
+| `articles[].unavailable` | 그래프 답변(D-102)만. `true`면 검색 뒤 숨겨졌거나 바뀐 기사의 자리다. `title`은 "더 이상 볼 수 없는 기사", `source_url`은 null, 요약·문장은 비어 있다. [n] 번호를 지키려고 남긴다(2026-11-09) |
+| `articles[].evidence_changed` | 그래프 답변만. `true`면 검색 뒤 본문이 정정돼 인용 원문 일부가 사라졌다. 확인된 문장만 `sentences`에 남고, 이 기사를 [n]으로 인용한 답변 문장은 안내 문구로 바뀐다(2026-11-09) |
 
 ### ChartSpec
 
@@ -124,6 +126,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 |---|---|---|
 | `CLARIFICATION_EXPIRED` | 409 | 물은 지 30분이 지났거나 실행 상태가 사라짐. 안내 "시간이 지나 다시 질문해 주세요." |
 | `CLARIFICATION_CONFLICT` | 409 | 기존. `clarification_id` 불일치 |
+| `JOB_IN_OTHER_ENVIRONMENT` | 409 | 같은 RDS를 쓰는 다른 환경(다른 Redis)이 만든 되묻기에 답하거나, 그 환경의 작업이 진행 중인 대화방에 질문함. 상태를 바꾸지 않는다. 되묻기가 30분을 넘었거나 작업이 유예 시간(C-32) 넘게 멈춰 있으면 거부하지 않고 만료한 뒤 새 질문을 받는다. 안내 "이 질문은 다른 서버 환경에서 처리 중입니다. 처음 질문한 환경에서 답해 주세요." (D-106, 2026-11-09) |
 | `VALIDATION_ERROR` | 400 | `choice_ids`·`hs_item`·`text`·`interest_selection`·`report_confirmation` 중 0개 또는 2개 이상. `interest_selection`이 품목 5개·국가 20개를 넘거나, 둘 다 비었거나, 후보에 없는 값을 담음 |
 
 국가 되묻기는 한 작업당 최대 1회입니다. 선택지에 없는 국가도 등록명이나 국가 코드로 답할 수 있습니다. 등록되지 않은 답은 400으로 안내하고 같은 clarification_id를 유지합니다. 다른 조건은 조건당 2회까지이며, 상한에 도달하면 해당 하위 질문만 NO_DATA로 끝냅니다(설계 D-72).
