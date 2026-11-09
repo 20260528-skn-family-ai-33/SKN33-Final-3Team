@@ -150,7 +150,9 @@ class ChatRagIntegrationTest(unittest.TestCase):
                     timer.monotonic.return_value = 0.
                     sid, _, job = self.ask(f'기사 설명 {accepted} {expires_at}', intent='RAG')
                 answer = job['answer']
-                self.assertEqual(len(attempted), accepted + 1)
+                # Up to three workers may already have begun at the timeout.
+                self.assertGreaterEqual(len(attempted), accepted + 1)
+                self.assertLessEqual(len(attempted), accepted + 3)
                 self.assertEqual([a['article_id'] for a in answer['articles']], list(map(str, attempted[:accepted])))
                 if accepted:
                     self.assertEqual((answer['answer_status'], answer['rag_status']), ('PARTIAL', 'partial'))
