@@ -85,12 +85,20 @@ def process(database,settings,job):
     return True
 
 
+# TODO(C-33): 동시 스레드 상한은 임시값이다. OpenAI 요청 한도·RDS 접속 수·메모리를 측정해 정한다. API_WORKER_MAX_THREADS
+MAX_THREADS = 16
+MAIN_LOOP_CONNECTIONS = 2
+
+
+def max_threads(settings):
+    return max(1,int(settings.get('API_WORKER_MAX_THREADS',MAX_THREADS)))
+
+
 def run_loop(db,settings,once=False):
     db.settings=settings  # The first subscription check runs before run_once.
     next_schedule=0
     # D-105: 질문·리포트가 들어올 때마다 스레드를 하나씩 띄워 병렬로 처리한다. 모델·색인은 스레드끼리 한 벌을 쓴다.
-    # TODO(C-31): 동시 스레드 상한은 임시값이다. OpenAI 요청 한도·RDS 접속 수·메모리를 측정해 정한다.
-    limit=max(1,int(settings.get('API_WORKER_MAX_THREADS',16)))
+    limit=max_threads(settings)
     active=set()
     def spawn(job):
         import threading
@@ -146,9 +154,10 @@ def main():
         # 오프라인·권한 제한 서버에서 설치가 실패해도 채팅 작업은 돌린다. PDF 생성만 기존 재시도 오류로 끝난다.
         logging.getLogger(__name__).warning('chromium_unavailable type=%s; PDF 리포트 생성은 실패합니다',type(exc).__name__)
     settings=Settings()
-    # 스레드 하나가 동시에 접속 2개까지 쓴다(조회 + 저장 트랜잭션). 기본 풀(5+10)이면 병렬 작업이 접속을 기다린다
-    threads=max(1,int(settings.get('API_WORKER_MAX_THREADS',16)))
-    db=Database(settings.engine(pool_size=threads,max_overflow=threads))
+    # 스레드 하나가 동시에 접속 2개까지 쓴다(조회 + 저장 트랜잭션). 기본 풀(5+10)이면 병렬 작업이 접속을 기다린다.
+    # 본 루프(구독 일정·작업 가져오기)와 예열 스레드 몫으로 MAIN_LOOP_CONNECTIONS를 더 둔다
+    threads=max_threads(settings)
+    db=Database(settings.engine(pool_size=threads+MAIN_LOOP_CONNECTIONS,max_overflow=threads))
     # 코드를 바꾼 뒤 이전 워커가 남아 있으면 같은 질문도 워커마다 다르게 답한다(2026-11-06). 시작할 때 코드 버전을 남긴다
     import subprocess
     from backend.app.api.config import ROOT

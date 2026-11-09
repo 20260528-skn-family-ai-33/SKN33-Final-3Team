@@ -34,8 +34,11 @@ def _bounded_bundle(store, loaded, message):
     from backend.app.agents import budget
     from backend.app.agents.runtime import bounded_ml
     settings = store.db.settings
+    seconds = budget.seconds(settings, 'check')
     try:
-        bundle, _, _ = bounded_ml(lambda: loaded(settings), budget.seconds(settings, 'check'))
+        # 줄 대기도 check 예산으로 묶는다. 재시작 뒤 예열(모델 로드 약 25초) 중이면 오래 기다리지 않고 '불러오는 중'으로 안내한다
+        # (ML 단계의 줄 대기 상한 API_ML_QUEUE_SECONDS는 예측을 기다리는 몫이라 여기에는 쓰지 않는다)
+        bundle, _, _ = bounded_ml(lambda: loaded(settings), seconds, queue_seconds=seconds)
     except TimeoutError:
         raise SlotRepair('예측 모델을 불러오는 중입니다. 잠시 후 다시 질문해 주세요.')
     except (ImportError, OSError, ValueError):

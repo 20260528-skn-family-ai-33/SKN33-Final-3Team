@@ -148,9 +148,51 @@ class SqlFilterBypassTest(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             bounded_ml(lambda: time.sleep(0.3), 0.05)   # 전용 스레드를 잡고 있는 작업
         with self.assertRaises(TimeoutError):
-            bounded_ml(lambda: ran.append(1), 0.05)      # 그 뒤에 줄 선 작업은 시간 초과 때 취소된다
+            bounded_ml(lambda: ran.append(1), 0.05, queue_seconds=0.05)   # 줄 대기 상한을 넘으면 취소된다
         time.sleep(0.4)
         self.assertEqual(ran, [])
+
+    def test_ml_queue_timeout_is_logged_apart_from_run_timeout(self):
+        import time
+        from backend.app.agents import runtime
+        with self.assertRaises(TimeoutError):
+            runtime.bounded_ml(lambda: time.sleep(0.3), 0.05)   # 전용 스레드를 잡고 있는 작업
+        with self.assertLogs(runtime.__name__, 'WARNING') as logs, self.assertRaises(TimeoutError):
+            runtime.bounded_ml(lambda: 1, 1, queue_seconds=0.05)
+        self.assertIn('agent_ml_queue_timeout', logs.output[0])
+        time.sleep(0.4)
+
+    def test_ml_queue_wait_is_left_out_of_execution_budget(self):
+        # ML 줄 대기는 다른 질문을 기다린 시간이다. 실행 예산(180초)에 넣으면 뒤 단계가 RUN_TIMEOUT이 된다
+        from backend.app.agents.execution import ExecutionStore
+        store = ExecutionStore.__new__(ExecutionStore)
+        ledgers = []
+        store.read = lambda: {'agent': {'round_id': 'r', 'claim_token': 1}}
+        store.job = {'claim_token': 1}
+        store.transition = lambda fn: ledgers.append(fn)
+        clock = iter([0.0, 40.0])
+        with patch('backend.app.agents.execution.budget') as budget:
+            store.call('ml', 30, lambda timeout: 'ok', clock=lambda: next(clock), waited=lambda: 35.0)
+            ledgers[-1]({})
+        self.assertEqual(budget.settle.call_args.kwargs['elapsed'], 5.0)
+        import time
+        from backend.app.agents.runtime import bounded_ml
+        waited = [0.0]
+        with self.assertRaises(TimeoutError):
+            bounded_ml(lambda: time.sleep(0.3), 0.05)   # 전용 스레드를 잡고 있는 작업
+        self.assertEqual(bounded_ml(lambda: 2, 1, waited=waited), 2)
+        self.assertGreater(waited[0], 0.1)              # 앞 작업이 끝날 때까지 기다린 시간을 알려 준다
+
+    def test_ml_queue_wait_is_not_counted_as_run_time(self):
+        # 병렬 워커(D-105): 앞 예측을 기다린 시간은 예측 시간 상한에 넣지 않는다
+        import time
+        from concurrent.futures import ThreadPoolExecutor
+        from backend.app.agents.runtime import bounded_ml
+        with ThreadPoolExecutor(2) as pool:
+            first = pool.submit(bounded_ml, lambda: time.sleep(0.3) or 1, 1)
+            time.sleep(0.05)
+            second = pool.submit(bounded_ml, lambda: 2, 0.1)   # 0.25초 기다리지만 실행은 즉시 끝난다
+            self.assertEqual((first.result(), second.result()), (1, 2))
 
     def test_stuck_ml_work_is_logged_for_restart(self):
         import time

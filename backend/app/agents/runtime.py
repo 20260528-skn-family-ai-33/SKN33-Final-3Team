@@ -43,6 +43,15 @@ def product_names(store):
 _ML_THREAD = None
 _ML_RUNNING = {'since': None}   # 전용 스레드가 지금 돌리는 작업의 시작 시각(monotonic). 멈춤 판단용
 ML_STUCK_SECONDS = 300          # 한 작업이 이보다 오래 끝나지 않으면 멈춘 것으로 보고 오류 로그를 남긴다(복구는 워커 재시작)
+# TODO(C-34): ML 전용 스레드 줄에서 기다리는 상한 임시값. 병렬 워커(D-105)에서 유망시장 질문이 동시에 오면 앞 예측을 기다린다.
+# 이 시간은 예측 시간 상한(ml 30초)과 따로 센다. API_ML_QUEUE_SECONDS로 바꾼다
+ML_QUEUE_SECONDS = 60
+
+
+def ml_queue_seconds(settings):
+    return max(0.0, float(settings.get('API_ML_QUEUE_SECONDS', ML_QUEUE_SECONDS)))
+
+
 
 
 def article_cards(store, state, result):
@@ -77,23 +86,34 @@ def warm_ml(work):
     return _ML_THREAD.submit(run)
 
 
-def bounded_ml(work, seconds):
+def bounded_ml(work, seconds, queue_seconds=ML_QUEUE_SECONDS, waited=None):
     """모델 로드·예측(work)을 전용 스레드 하나에서 돌리고 seconds만 기다린다. 넘으면 TimeoutError(그 ML 단계만 FAILED).
     파이썬 스레드는 밖에서 멈출 수 없어 늦은 작업은 끝까지 돌지만, 워커는 기다리지 않고 다음 작업으로 넘어간다.
     스레드가 하나라 늦은 모델 로드가 끝나기 전 다음 호출은 그 뒤에 줄을 선다(모델을 메모리에 두 번 올리지 않는다).
     작업이 멈추면(끝나지 않음) 이후 ML 호출이 모두 시간 초과가 되므로, 시간 초과마다 경고를 남기고 ML_STUCK_SECONDS를
-    넘으면 오류 로그로 워커 재시작이 필요하다고 알린다(사용자 결정: 스레드를 교체하지 않는다)."""
+    넘으면 오류 로그로 워커 재시작이 필요하다고 알린다(사용자 결정: 스레드를 교체하지 않는다).
+    waited: 줄에서 기다린 초를 더해 둘 목록([0.0]). 호출한 쪽이 실행 예산에서 뺀다(ExecutionStore.call(waited=))."""
     global _ML_THREAD
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
     from time import monotonic
+    import threading
     if _ML_THREAD is None:
         _ML_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='agent-ml')
+    started = threading.Event()
     def tracked():
         _ML_RUNNING['since'] = monotonic()
+        started.set()
         try: return work()
         finally: _ML_RUNNING['since'] = None
+    queued = monotonic()
     future = _ML_THREAD.submit(tracked)
     try:
+        # 병렬 워커(D-105)에서는 앞 질문의 예측이 끝날 때까지 줄에서 기다린다. 기다린 시간은 seconds에 넣지 않고
+        # queue_seconds로 따로 묶는다. 넣으면 동시에 온 유망시장 질문의 뒤쪽이 예측을 시작도 못 하고 시간 초과가 된다.
+        began = started.wait(queue_seconds)
+        if waited is not None: waited[0] += monotonic() - queued   # 시작까지(또는 줄 대기 상한까지) 기다린 시간
+        if not began:
+            raise FutureTimeout()
         return future.result(timeout=seconds)
     except FutureTimeout:
         # 아직 시작하지 않고 줄에서 기다리던 작업이면 취소한다. 실패 응답을 받은 요청이 나중에 돌아 새 요청을 늦추지 않게 한다.
@@ -103,6 +123,9 @@ def bounded_ml(work, seconds):
         log = logging.getLogger(__name__)
         if running >= ML_STUCK_SECONDS:
             log.error('agent_ml_stuck running_seconds=%.0f; 유망시장 예측이 멈췄습니다. 워커를 다시 시작하세요.', running)
+        elif not started.is_set():
+            # 줄 대기 초과와 예측 시간 초과를 나눠 남긴다. C-34(줄 대기 상한)를 정할 때 이 로그로 잰다
+            log.warning('agent_ml_queue_timeout queue_seconds=%.0f front_running_seconds=%.0f', queue_seconds, running)
         else:
             log.warning('agent_ml_timeout limit_seconds=%.0f running_seconds=%.0f', seconds, running)
         raise TimeoutError('ML 작업이 제한 시간을 넘었습니다.') from None
@@ -257,13 +280,16 @@ class Services:
             from backend.app.agents.market import DEFAULT_MARKET_TOP, growth, loaded, model_codes, predict
             def model(timeout):
                 from time import monotonic
-                deadline=monotonic()+timeout
+                spent=[0.0]   # ML 스레드에서 실제로 돈 시간. 줄에서 기다린 시간은 빼고 예측 몫을 계산한다
                 def load():
-                    bundle,provider,versions=loaded(self.settings)
-                    anchor=str(bundle.get('anchor') or '')[:7]
-                    return bundle,provider,versions,anchor,growth(self.settings,anchor)
+                    began=monotonic()
+                    try:
+                        bundle,provider,versions=loaded(self.settings)
+                        anchor=str(bundle.get('anchor') or '')[:7]
+                        return bundle,provider,versions,anchor,growth(self.settings,anchor)
+                    finally: spent[0]=monotonic()-began
                 # 모델 로드·예측만 제한 시간 안에 기다린다(DB 조회·저장은 이 스레드에서). bounded_ml 참고.
-                bundle,provider,versions,anchor,(outlook,outlook_version,outlook_note)=bounded_ml(load,timeout)
+                bundle,provider,versions,anchor,(outlook,outlook_version,outlook_note)=bounded_ml(load,timeout,ml_queue_seconds(self.settings),waited=queue_wait)
                 # 증감 예상(모델 B)은 모델 A와 기준월이 같을 때만 쓴다. 다른 달의 방향을 이 순위에 붙이지 않는다.
                 if outlook and outlook['anchor']!=anchor:
                     outlook,outlook_note=None,(f"증감 예상 모델의 기준월({outlook['anchor']})이 유망시장 모델({anchor})과 달라 "
@@ -284,7 +310,7 @@ class Services:
                 if previous: return previous
                 analysis=bounded_ml(lambda:predict(task,bundle,provider,versions,step.args.get('top',DEFAULT_MARKET_TOP),
                                                    codes,outlook['directions'] if outlook else None),
-                                    max(0.1,deadline-monotonic()))
+                                    max(0.1,timeout-spent[0]),ml_queue_seconds(self.settings),waited=queue_wait)
                 if analysis.result.status!='OK': return analysis.result
                 analysis.meta['growth_model_version']=versions['growth']
                 from backend.app.agents.templates import _names
@@ -300,8 +326,9 @@ class Services:
                 analysis.result.digest=bounded(analysis.result.digest)
                 return self.results.save(state,step,analysis.result,rows=analysis.rows,meta=analysis.meta,
                     conditions=analysis.conditions,input_fingerprint=key,source_results=parents,versions=versions)
+            queue_wait=[0.0]   # ML 줄 대기는 실행 예산에 넣지 않는다(다른 질문을 기다린 시간이다)
             try: return self.execution.call('ml',budget.seconds(self.settings,'ml'),model,
-                        finish_reserve=budget.finishing_seconds(state,self.settings))
+                        finish_reserve=budget.finishing_seconds(state,self.settings),waited=lambda:queue_wait[0])
             except TimeoutError:
                 return ToolResult(status='FAILED',error='예측이 제한 시간 안에 끝나지 않았습니다. 잠시 후 다시 질문해 주세요.')
             except (ImportError,OSError,MemoryError,ValueError):

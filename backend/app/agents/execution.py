@@ -57,8 +57,10 @@ class ExecutionStore:
                                     recovery_count=ledger['recovery_count'])
         state.round_started_at = datetime.fromisoformat(ledger['round_received_at'])
 
-    def call(self, node, timeout, callback, *, finish_reserve=0, clock=monotonic, enforce=True):
-        """enforce=False는 이미 끝난 결과를 받아 마무리하는 호출(리포트 완료 확인)만 쓴다(budget.reserve 참고)."""
+    def call(self, node, timeout, callback, *, finish_reserve=0, clock=monotonic, enforce=True, waited=None):
+        """enforce=False는 이미 끝난 결과를 받아 마무리하는 호출(리포트 완료 확인)만 쓴다(budget.reserve 참고).
+        waited(): 이 호출이 실행하지 않고 기다리기만 한 초(ML 전용 스레드 줄 대기 등). 실행 예산에 넣지 않는다.
+        같은 대화방 잠금 대기와 같이, 다른 질문 때문에 기다린 시간으로 이 질문의 뒤 단계가 RUN_TIMEOUT이 되지 않게 한다."""
         ledger = self.read()['agent']
         identity = dict(round_id=ledger['round_id'], claim_token=self.job['claim_token'], call_id=uuid4().hex)
         self.transition(lambda value: budget.reserve(value, **identity, node=node,
@@ -68,7 +70,7 @@ class ExecutionStore:
             # There is no transaction open while external work runs.
             return callback(timeout)
         finally:
-            elapsed = clock() - started
+            elapsed = max(0.0, clock() - started - (waited() if waited else 0.0))
             def record(value):
                 settled=budget.settle(value,**identity,elapsed=elapsed)
                 timings=settled.setdefault('timings',{})
