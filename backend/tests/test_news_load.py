@@ -136,7 +136,7 @@ class NewsLoadTest(unittest.TestCase):
         self.assertEqual(self.run_job(raws, cleans), 0)
         self.assertEqual(self.rows(Article, "external_id", "source_code", "published_date", "category"),
                          [(i, "KOTRA_MARKET", date(2026, 10, d), "트렌드") for i, d in (("10", 1), ("11", 1), ("12", 2))])
-        self.assertEqual(self.rows(Article, "body_masked", external_id="10"), [("연락 [이메일]",)])
+        self.assertEqual(self.rows(Article, "body_masked", external_id="10"), [("연락 a@b.com",)])
         tags = self.rows(ArticleTag, "keyword_text", "country_code", "hs_code", "hs_ver")
         # 없는 국가(ZZ)는 태그에서 빠짐
         self.assertEqual([t[1] for t in tags if t[1]], ["CN", "US", "US"])
@@ -262,3 +262,20 @@ class NewsLoadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class WriterCsvPrivacyTest(unittest.TestCase):
+    def test_optional_writer_survives_csv_read_and_article_conversion(self):
+        for with_writer in (True, False):
+            with self.subTest(with_writer=with_writer), tempfile.TemporaryDirectory() as directory:
+                record = raw('1', '2026-11-06', body='<p>KOTRA 홍길동에게 문의하세요.</p>')
+                if with_writer:
+                    record['newsWrterNm'] = '홍길동'
+                path = Path(directory) / 'raw.csv'
+                with path.open('w', encoding='utf-8', newline='') as out:
+                    writer = csv.DictWriter(out, fieldnames=list(record))
+                    writer.writeheader()
+                    writer.writerow(record)
+                rows = job.read_csv(path, nl.RAW_COLUMNS, nl.RAW_OPTIONAL_COLUMNS)
+                self.assertEqual(rows[0]['newsWrterNm'], '홍길동' if with_writer else '')
+                self.assertEqual(nl.article_row(rows[0])['body_masked'],
+                                 'KOTRA 홍길동에게 문의하세요.')

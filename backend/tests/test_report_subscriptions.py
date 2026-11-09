@@ -5,6 +5,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, update, delete
 from backend.tests import test_backend_api as fixtures
+from backend.app.api import jobs, routes
 from backend.app.api.database import Store
 from backend.app.api.config import Settings
 from backend.app.api.worker import run_loop
@@ -274,6 +275,136 @@ class ReportSubscriptionTest(unittest.TestCase):
             row=store.one(select(store.t('report')))
             self.assertEqual(row['conditions_json']['period'],{'start':'2025-10-01','end':'2025-12-31'})
             self.assertEqual(row['conditions_json']['compare_period'],{'start':'2024-10-01','end':'2024-12-31'})
+
+    def put_subscriptions(self, codes, formats):
+        version = self.client.get('/api/v1/users/me/subscriptions').json()['version']
+        response = self.client.put('/api/v1/users/me/subscriptions', headers={'X-CSRF-Token': self.csrf}, json={
+            'period_codes': codes, 'formats': formats, 'use_saved_interests': True, 'expected_version': version})
+        self.assertEqual(response.status_code, 200, response.text)
+
+    def stored_since(self, code):
+        t = self.meta.tables['report_subscription']
+        with self.engine.begin() as c:
+            return c.scalar(select(t.c.filters_json).where(t.c.period_code == code))['enabled_since']
+
+    def test_resaving_active_subscription_keeps_unpublished_cycle(self):
+        self.register(); self.signup()
+        interests = self.client.get('/api/v1/users/me/interests').json()['interests']
+        response = self.client.put('/api/v1/users/me/interests', headers={'X-CSRF-Token': self.csrf}, json={
+            'expected_version': interests['version'], 'hs_items': [{'hs_code': '330499', 'hs_ver': 'HS2022'}], 'country_codes': ['US']})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.put_subscriptions(['MONTHLY'], ['PDF'])
+        t = self.meta.tables['report_subscription']
+        with self.engine.begin() as c:
+            row = c.execute(select(t)).mappings().one()
+            c.execute(update(t).values(filters_json={**row['filters_json'], 'enabled_since': '2025-12-01T00:00:00Z'}))
+        self.put_subscriptions(['MONTHLY'], ['PDF', 'DOCX'])  # 양식만 변경: 발행일(1/15)을 앞두고 저장해도 12월분이 남는다
+        self.assertEqual(self.stored_since('MONTHLY'), '2025-12-01T00:00:00Z')
+        with self.engine.begin() as c:
+            self.assertEqual(enqueue_due(Store(self.app.state.database, c), datetime(2026, 1, 20)), 2)
+        self.put_subscriptions(['WEEKLY'], ['PDF'])  # 월간 해지
+        self.put_subscriptions(['WEEKLY', 'MONTHLY'], ['PDF'])  # 다시 구독하면 새 시작일
+        self.assertNotEqual(self.stored_since('MONTHLY'), '2025-12-01T00:00:00Z')
+
+    def test_failed_subscription_report_appears_in_admin_report_alerts(self):
+        self.register(); uid = int(self.signup())
+        subscription = self.subscribe(uid, 'MONTHLY')
+        m = self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id == uid).values(role='ADMIN'))
+            for key, sub, status in (('a', subscription, 'FAILED'), ('b', subscription, 'READY'), ('c', None, 'FAILED')):
+                c.execute(m['report'].insert(), {'user_id': uid, 'subscription_id': sub, 'report_type': 'RPT_MONTHLY', 'generation_key': key * 64,
+                    'conditions_json': {'period': {'start': '2025-12-01', 'end': '2025-12-31'}}, 'status': status, 'retry_count': 0, 'created_at': datetime(2026, 1, 15)})
+        for category, count in (('REPORT', 1), ('ALL', 1), ('DATA', 0), ('MEMBER', 0)):
+            body = self.client.get('/api/v1/admin/alerts', params={'category': category}).json()
+            self.assertEqual(body['page']['total'], count, category)
+        item = self.client.get('/api/v1/admin/alerts', params={'category': 'REPORT'}).json()['items'][0]
+        self.assertEqual((item['category'], item['target_type']), ('REPORT', 'REPORT'))
+        self.assertTrue(item['alert_id'].startswith('REPORT-'))
+        self.assertIn('월간 구독 리포트 생성 실패', item['message'])
+        self.assertIn('2025-12-01 ~ 2025-12-31', item['message'])
+
+    def test_admin_alerts_merge_sources_by_utc_time_and_page(self):
+        self.register(); uid = int(self.signup())
+        subscription = self.subscribe(uid, 'MONTHLY')
+        m = self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id == uid).values(role='ADMIN'))
+            # 수집 실패는 KST 09:30(UTC 00:30), 리포트 실패는 UTC 00:40, 오래된 수집 실패는 하루 전
+            for day, hour, minute in ((15, 9, 30), (14, 9, 0)):
+                c.execute(m['batch_run'].insert(), {'source_code': 'CUSTOMS', 'job_name': 'JOB', 'target_table': 'export_summary', 'period_start': date(2025, 12, 1), 'period_end': date(2025, 12, 31),
+                    'started_at': datetime(2026, 1, day, hour, minute), 'finished_at': datetime(2026, 1, day, hour, minute), 'status': 'FAILED', 'detail_json': {}})
+            c.execute(m['report'].insert(), {'user_id': uid, 'subscription_id': subscription, 'report_type': 'RPT_MONTHLY', 'generation_key': 'a' * 64,
+                'conditions_json': {'period': {'start': '2025-12-01', 'end': '2025-12-31'}}, 'status': 'FAILED', 'retry_count': 0, 'created_at': datetime(2026, 1, 15, 0, 10), 'content_json': {'_execution': {'finished_at': '2026-01-15T00:40:00'}}})
+        first = self.client.get('/api/v1/admin/alerts', params={'page_size': 2}).json()
+        self.assertEqual(first['page']['total'], 3)
+        self.assertEqual([i['category'] for i in first['items']], ['REPORT', 'DATA'])
+        self.assertTrue(first['items'][1]['created_at'].startswith('2026-01-15T00:30'))
+        second = self.client.get('/api/v1/admin/alerts', params={'page_size': 2, 'page': 2}).json()
+        self.assertEqual(len(second['items']), 1)
+        self.assertTrue(second['items'][0]['created_at'].startswith('2026-01-14T00:00'))
+
+    def test_admin_alerts_with_same_time_do_not_repeat_across_pages(self):
+        self.register(); uid = int(self.signup())
+        m = self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id == uid).values(role='ADMIN'))
+            for _ in range(11):  # 문자열 정렬이면 '9'와 '10'의 순서가 SQL과 어긋난다
+                c.execute(m['batch_run'].insert(), {'source_code': 'CUSTOMS', 'job_name': 'JOB', 'target_table': 'export_summary', 'period_start': date(2025, 12, 1), 'period_end': date(2025, 12, 31),
+                    'started_at': datetime(2026, 1, 15, 9), 'finished_at': datetime(2026, 1, 15, 9), 'status': 'FAILED', 'detail_json': {}})
+        seen = [self.client.get('/api/v1/admin/alerts', params={'page_size': 1, 'page': page}).json()['items'][0]['alert_id'] for page in range(1, 12)]
+        self.assertEqual(len(set(seen)), 11)
+        self.assertEqual(seen, sorted(seen, key=int, reverse=True))
+
+    def test_failed_report_alert_uses_failure_time_not_request_time(self):
+        self.register(); uid = int(self.signup())
+        subscription = self.subscribe(uid, 'MONTHLY')
+        m = self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id == uid).values(role='ADMIN'))
+            c.execute(m['report'].insert(), {'user_id': uid, 'subscription_id': subscription, 'report_type': 'RPT_MONTHLY', 'generation_key': 'a' * 64,
+                'conditions_json': {'period': {'start': '2025-12-01', 'end': '2025-12-31'}}, 'status': 'FAILED', 'retry_count': 2, 'created_at': datetime(2026, 1, 15, 0, 10),
+                'content_json': {'_execution': {'status': 'FAILED', 'finished_at': '2026-01-15T00:45:00'}}})
+        item = self.client.get('/api/v1/admin/alerts', params={'category': 'REPORT'}).json()['items'][0]
+        self.assertTrue(item['created_at'].startswith('2026-01-15T00:45'))
+
+    def test_failed_reports_sorted_by_failure_time_and_limited_in_query(self):
+        self.register(); uid = int(self.signup())
+        subscription = self.subscribe(uid, 'MONTHLY')
+        m = self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id == uid).values(role='ADMIN'))
+            for key, finished in (('a', '2026-01-15T05:00:00'), ('b', '2026-01-15T07:00:00'), ('c', '2026-01-15T06:00:00')):
+                c.execute(m['report'].insert(), {'user_id': uid, 'subscription_id': subscription, 'report_type': 'RPT_MONTHLY', 'generation_key': key * 64,
+                    'conditions_json': {'period': {'start': '2025-12-01', 'end': '2025-12-31'}}, 'status': 'FAILED', 'retry_count': 0, 'created_at': datetime(2026, 1, 15), 'content_json': {'_execution': {'finished_at': finished}}})
+        with patch('backend.app.api.routes.failed_report_time', wraps=routes.failed_report_time) as loaded:
+            body = self.client.get('/api/v1/admin/alerts', params={'category': 'REPORT', 'page_size': 1}).json()
+        self.assertEqual(loaded.call_count, 1)  # 페이지에 필요한 행만 읽는다
+        self.assertEqual(body['page']['total'], 3)
+        self.assertTrue(body['items'][0]['created_at'].startswith('2026-01-15T07:00'))
+
+    def test_retry_exhausted_report_alert_uses_failure_time(self):
+        self.register(); uid = int(self.signup())
+        subscription = self.subscribe(uid, 'MONTHLY')
+        m = self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id == uid).values(role='ADMIN'))
+            store = Store(self.app.state.database, c)
+            rid = store.insert('report', user_id=uid, subscription_id=subscription, report_type='RPT_MONTHLY', generation_key='b' * 64,
+                conditions_json={'period': {'start': '2025-12-01', 'end': '2025-12-31'}}, status='QUEUED', retry_count=2, created_at=datetime(2026, 1, 15, 0, 10))
+            jobs.enqueue(store, uid, 'API_REPORT', rid, {'report_id': str(rid)}, 'b' * 64)
+            content = c.execute(select(m['report'].c.content_json).where(m['report'].c.report_id == rid)).scalar()
+            c.execute(update(m['report']).where(m['report'].c.report_id == rid).values(content_json={**content, '_execution': {**content['_execution'], 'attempt_no': 3}}))
+        with self.engine.begin() as c:
+            self.assertIsNone(jobs.claim(Store(self.app.state.database, c)))
+        item = self.client.get('/api/v1/admin/alerts', params={'category': 'REPORT'}).json()['items'][0]
+        self.assertFalse(item['created_at'].startswith('2026-01-15'))  # 요청 시각이 아니라 실패 확정 시각
+
+    def test_report_notice_names_cycle_and_period(self):
+        from backend.app.api.notifications import notice_text
+        self.assertEqual(notice_text('REPORT', {'report_type': 'RPT_WEEKLY', 'period': {'start': '2025-12-15', 'end': '2025-12-21'}}),
+                         ('주간 리포트가 발행되었습니다.', '2025-12-15 ~ 2025-12-21 기간 리포트를 확인하세요.'))
+        self.assertEqual(notice_text('REPORT', {'destination': 'REPORT_DETAIL'}), ('리포트가 발행되었습니다.', '저장된 리포트를 확인하세요.'))
 
     def test_weekly_late_data_is_not_lost_after_next_monday(self):
         self.register(); self.news_runs(); uid=int(self.signup())

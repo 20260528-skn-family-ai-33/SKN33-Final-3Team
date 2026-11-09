@@ -118,7 +118,8 @@ export default function ReportView({ route }) {
             <div style={{ background: 'var(--plum)', color: '#fff', padding: '36px 48px 30px', position: 'relative' }}>
               <p style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1, color: '#FF8A9A' }}>BORDERLESS SELLERS · {kind.eyebrow}</p>
               <h1 style={{ fontSize: 34, fontWeight: 800, marginTop: 10 }}>{report.title}</h1>
-              <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{o.sections.length === 4 ? '전체 항목 선택' : `${o.sections.length}개 항목 선택`} · {o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
+              <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{/* 주간은 기사만 싣는 리포트라 수출 분석 항목 수를 쓰지 않는다 */}
+                {!newsOnly && (o.sections.length === 4 ? '전체 항목 선택 · ' : `${o.sections.length}개 항목 선택 · `)}{o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
               <div style={{ display: 'flex', gap: 24, marginTop: 18, fontSize: 14, color: '#fff' }}>
                 <span>분석 {range(o.from, o.to)}</span><span>비교 {range(o.compareFrom, o.compareTo)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
               </div>
@@ -215,7 +216,7 @@ export default function ReportView({ route }) {
 
               {(newsOnly || o.sections.includes('현지 이슈 기사')) && (
                 <Section no={no++} title="현지 이슈">
-                  <p className="note" style={{ marginBottom: 10 }}>{byCode.LOCAL_ISSUES?.text || byCode.NEWS?.text}</p>
+                  <p className="note" style={{ marginBottom: 10, whiteSpace: 'pre-line' }}>{byCode.LOCAL_ISSUES?.text || byCode.NEWS?.text}</p>
                   <div className="col" style={{ gap: 10 }}>
                     {(f.news.length ? f.news : []).map(a => (
                       <div key={a.id} className="li" style={{ padding: '16px 20px' }}>

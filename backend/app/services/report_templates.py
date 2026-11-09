@@ -628,7 +628,7 @@ def layout(report_type, ctx):
         blocks.append(_table('issues', issues))
         if s['schedule']:
             blocks.append(_table('schedule', [_row([(r['content'], 118), (r['related'], 32)]) for r in s['schedule']]))
-        blocks.append({'key': 'note', 'height': 3 + 2 * LINE[7.9]})
+        blocks.append({'key': 'note', 'height': 3 + (4 if s.get('spike_gap_note') else 2) * LINE[7.9]})
         summary = flow(blocks, BODY_MM - _heading('요약') - 4.3, rest)  # 주간 요약 제목 아래 구분선(0.3mm + 4mm)
         # 국가별 기사 수 표·그래프는 국가 행 단위로 나눕니다. 마지막 행(인덱스 = 국가 수)은 합계 행입니다.
         # 표 행(8.8mm~, 국가명이 길면 국가 칸 약 30mm에서 줄바꿈)이 그래프 막대(약 7mm)보다 높아 표 기준으로 계산합니다.

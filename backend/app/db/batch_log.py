@@ -16,6 +16,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import MetaData, Table
 
@@ -24,6 +25,7 @@ from backend.app.db.news_lock import article_load_lock
 from backend.app.models.batch import BatchRun, ServiceOption
 
 log = logging.getLogger("batch_log")
+KST = ZoneInfo("Asia/Seoul")
 
 
 @dataclass(frozen=True)
@@ -52,7 +54,8 @@ def ensure_source(session, source):
 
 
 def _now():
-    return datetime.now().replace(microsecond=0)  # DB 세션 시간대(KST)와 같은 로컬 시각, 초 단위
+    # batch_run 시각은 한국 시간으로 저장한다. 서버 시간대가 UTC여도 같은 값이 되도록 시간대를 명시한다.
+    return datetime.now(KST).replace(tzinfo=None, microsecond=0)
 
 
 @contextmanager

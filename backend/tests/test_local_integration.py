@@ -132,7 +132,8 @@ class LocalIntegrationTest(unittest.TestCase):
         t=self.app.state.database.table('report')
         with self.engine.connect() as c: files=c.scalar(select(t.c.files_json).where(t.c.report_id==rid))
         self.assertTrue(all(set(meta)=={'storage','key','sha256','created_at'} for meta in files.values()));
-        self.assertEqual(set(files),{'PDF','DOCX'}); self.assertEqual(files['PDF']['storage'],'local')
+        # #70부터 XLSX도 생성 시점에 함께 저장한다.
+        self.assertEqual(set(files),{'PDF','DOCX','XLSX'}); self.assertEqual(files['PDF']['storage'],'local')
         other=TestClient(self.app)
         r=other.post('/api/v1/auth/signup',json={'name':'다른 회원','email':uuid.uuid4().hex+'@example.org','password':'LocalTest!123','password_confirm':'LocalTest!123'})
         self.assertEqual(r.status_code,201,r.text)

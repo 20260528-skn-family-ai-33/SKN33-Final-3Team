@@ -76,7 +76,7 @@
   {% for r in summary.schedule[b.start:b.end] %}<tr><td>{{ r.date }}</td><td>{{ r.content }}</td><td>{{ r.related }}</td></tr>{% endfor %}
 </table>
 {% elif b.key == 'note' %}
-<p class="small" style="margin-top:3mm">주간 리포트는 지난주 기사·이슈만 정리합니다. 주간 수출 통계는 없으므로 수치는 월간·분기 리포트에서 확인하세요.</p>
+<p class="small" style="margin-top:3mm">주간 리포트는 지난주 기사·이슈만 정리합니다. 주간 수출 통계는 없으므로 수치는 월간·분기 리포트에서 확인하세요.{% if summary.get('spike_gap_note') %}<br>{{ summary.spike_gap_note }}{% endif %}</p>
 {% endif %}
 {% endfor %}
 {% endcall %}
