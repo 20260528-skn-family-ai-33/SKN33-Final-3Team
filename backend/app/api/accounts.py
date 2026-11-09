@@ -1,4 +1,5 @@
 from sqlalchemy import select, delete, update
+from sqlalchemy.exc import IntegrityError
 from backend.app.api.common import ApiError, now, digest, require, unavailable
 from backend.app.api.security import password_hash, password_matches, issue_session, revoke_sessions
 
@@ -39,14 +40,12 @@ def user_view(store, user):
 def get_user(store, user_id=None, email=None, lock=False):
     u=store.t('users')
     stmt=select(u)
-    stmt=stmt.where(u.c.user_id==user_id) if user_id is not None else stmt.where(email_equals(store,u.c.email,email))
-    return store.one(stmt.with_for_update() if lock else stmt)
-
-
-def email_equals(store, column, email):
-    # Explicit comparison also protects logins before the unique index migration.
-    collation = 'utf8mb4_bin' if store.c.dialect.name == 'mysql' else 'BINARY'
-    return column.collate(collation) == email
+    # Keep the native UNIQUE email lookup indexable before and after migration.
+    # An old case-insensitive column can find a different spelling: reject it
+    # in Python without applying COLLATE to the indexed/locked SQL expression.
+    stmt=stmt.where(u.c.user_id==user_id) if user_id is not None else stmt.where(u.c.email==email)
+    user=store.one(stmt.with_for_update() if lock else stmt)
+    return user if user_id is not None or not user or user['email']==email else None
 
 
 def signup(store, data, response, settings):
@@ -57,8 +56,18 @@ def signup(store, data, response, settings):
     for name in ('users','notification_setting'): store.t(name)
     if get_user(store,email=email):
         raise ApiError(409,'EMAIL_ALREADY_EXISTS','이미 등록된 이메일입니다.')
-    uid=store.insert('users',email=email,password_hash=hashed,landing_page='GLOBAL',
-        name=data.name,role='USER',account_status='ACTIVE',created_at=now())
+    try:
+        uid=store.insert('users',email=email,password_hash=hashed,landing_page='GLOBAL',
+            name=data.name,role='USER',account_status='ACTIVE',created_at=now())
+    except IntegrityError as error:
+        # users has one client-supplied UNIQUE key: email. Handle both an old
+        # case-insensitive index and a concurrent signup; other constraints
+        # keep their original error. The request transaction rolls back.
+        duplicate = ((store.c.dialect.name == 'mysql' and error.orig.args[:1] == (1062,))
+                     or getattr(error.orig,'sqlite_errorcode',None) == 2067)
+        if duplicate:
+            raise ApiError(409,'EMAIL_ALREADY_EXISTS','이미 등록된 이메일입니다.') from None
+        raise
     store.insert('notification_setting',user_id=uid,notifications_enabled=False,report_popup=True,major_issue_popup=True,spike_popup=True)
     return {'user':user_view(store,get_user(store,uid)), 'next_screen':'BS03',
             'csrf_token':issue_session(store,uid,response,settings)}

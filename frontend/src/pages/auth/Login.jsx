@@ -81,6 +81,7 @@ export default function Login() {
         <p className="note" style={{ marginTop: 16 }}>로그인 후 서비스를 이용할 수 있습니다.</p>
         <div style={{ marginTop: 28, background: 'var(--bg)', borderRadius: 12, padding: '14px 16px' }}>
           <p className="note">가입한 이메일의 대소문자를 정확히 입력해 주세요. 관리자 계정은 운영 담당자가 발급합니다.</p>
+          <p className="note" style={{ marginTop: 6 }}>이메일 대소문자 구분 적용 전에 가입한 계정은 이메일을 모두 소문자로 입력해 주세요. 브라우저 자동완성 주소도 확인해 주세요.</p>
         </div>
       </form>
     </AuthFrame>

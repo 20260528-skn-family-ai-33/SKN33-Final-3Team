@@ -5,6 +5,8 @@ from sqlalchemy.schema import CreateColumn
 from sqlalchemy import Column, String
 from backend.app.api.config import Settings
 
+EMAIL_COMMENT = '로그인에 사용하는 이메일 주소다. 대소문자를 구분하며 같은 주소를 중복 등록하지 않는다.'
+
 
 def plan(connection):
     if connection.dialect.name != 'mysql':
@@ -16,11 +18,11 @@ def plan(connection):
     collation = connection.scalar(text(
         "SELECT COLLATION_NAME FROM information_schema.COLUMNS "
         "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='users' AND COLUMN_NAME='email'"))
-    if collation == 'utf8mb4_bin':
+    if collation == 'utf8mb4_bin' and column.get('comment') == EMAIL_COMMENT:
         return []
-    # Keep the unique index and every stored address/password unchanged.
+    # Keep the unique index/data and align the comment with the initial schema.
     definition = Column('email', String(254, collation='utf8mb4_bin'), nullable=False,
-                        comment=column.get('comment'))
+                        comment=EMAIL_COMMENT)
     return ['ALTER TABLE `users` MODIFY COLUMN ' + str(CreateColumn(definition).compile(dialect=connection.dialect))]
 
 
