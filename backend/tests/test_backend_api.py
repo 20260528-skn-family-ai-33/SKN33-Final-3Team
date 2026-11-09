@@ -105,19 +105,29 @@ class BackendApiTest(unittest.TestCase):
 
     def test_picker_search_accepts_one_character_without_changing_chat_minimum(self):
         from backend.app.api.reference import chat_hs_search
-        response = self.client.get('/api/v1/reference/hs-codes', params={'q': '화', 'depth': 6})
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertIn('330499', [item['hs_code'] for item in response.json()['items']])
+        with self.engine.begin() as connection:
+            connection.execute(self.meta.tables['hs_code'].insert(), [
+                {'hs_code': '010129', 'depth': 6, 'name_ko': '말', 'hs_ver': 'HS2022', 'source_edition': 'test'},
+                {'hs_code': '010229', 'depth': 6, 'name_ko': '소', 'hs_ver': 'HS2022', 'source_edition': 'test'},
+                {'hs_code': '0101', 'depth': 4, 'name_ko': '말과 동물', 'hs_ver': 'HS2022', 'source_edition': 'test'},
+                {'hs_code': '0102', 'depth': 4, 'name_ko': '소과 동물', 'hs_ver': 'HS2022', 'source_edition': 'test'}])
+        for query, code in [('말', '010129'), ('소', '010229')]:
+            response = self.client.get('/api/v1/reference/hs-codes', params={'q': query, 'depth': 6})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual([item['hs_code'] for item in response.json()['items']], [code])
+            self.assertEqual(response.json()['match_type'], 'EXACT')
         response = self.client.get('/api/v1/reference/hs-codes', params={'q': '3', 'depth': 4})
         self.assertEqual(response.status_code, 200, response.text)
         self.assertIn('3304', [item['hs_code'] for item in response.json()['items']])
         with self.engine.connect() as connection:
-            self.assertEqual(chat_hs_search(Store(self.app.state.database, connection), '화')['items'], [])
+            self.assertEqual(chat_hs_search(Store(self.app.state.database, connection), '말')['items'], [])
         self.settings.values['API_HS_VECTOR_ENABLED'] = 'true'
-        with patch('backend.app.api.hs_vectors.candidates') as candidates:
-            response = self.client.get('/api/v1/reference/hs-codes', params={'q': '힣', 'depth': 6})
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.json()['items'], [])
+        with patch('backend.app.api.hs_vectors.candidates', return_value=[('330499', .1)]) as candidates:
+            for query in ('힣', '화자', '스킨케어'):
+                for depth in (4, 6):
+                    response = self.client.get('/api/v1/reference/hs-codes', params={'q': query, 'depth': depth})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json()['items'], [])
             candidates.assert_not_called()
 
     def test_interest_version_and_hs_depth(self):

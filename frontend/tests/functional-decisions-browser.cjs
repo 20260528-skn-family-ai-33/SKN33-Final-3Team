@@ -22,7 +22,7 @@ const { chromium } = require('playwright')
     let read = false
     let failInterestSave = false
     const user = { user_id: '1', name: '검수', email: 'Review@Example.org', role: 'USER' }
-    const product = { hs_code: '330499', hs_ver: 'HS2022', depth: 6, name_ko: '화장품' }
+    const product = { hs_code: '010129', hs_ver: 'HS2022', depth: 6, name_ko: '말' }
     await page.route('**/api/v1/**', async route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname.replace('/api/v1', '')
       const reply = json => route.fulfill({ json })
@@ -49,9 +49,10 @@ const { chromium } = require('playwright')
       if (p === '/reference/regions') return reply({ items: [{ region_id: 1, parent_id: null, name_ko: '아메리카', country_codes: ['US'] }] })
       if (p === '/reference/hs-codes') {
         searches.push(url.searchParams.get('q'))
-        return reply({ items: url.searchParams.get('depth') === '6' ? [product] : [], match_type: 'SIMILAR' })
+        const items = url.searchParams.get('depth') === '6' && url.searchParams.get('q') === '말' ? [product] : []
+        return reply({ items, match_type: items.length ? 'EXACT' : 'NONE' })
       }
-      if (p === '/reference/hs-codes/3304/children') return reply({ items: [product] })
+      if (p === '/reference/hs-codes/0101/children') return reply({ items: [product] })
       if (p === '/users/me/notification-settings') return reply({ settings: { notifications_enabled: false } })
       if (p === '/terms/notification') return reply({ terms: { version: 'v1', body: '검수 약관' } })
       if (p === '/notifications/unread-count') return reply({ count: read ? 0 : 1 })
@@ -70,17 +71,18 @@ const { chromium } = require('playwright')
     await page.goto(base + '#/login')
     await page.getByRole('link', { name: '회원가입', exact: true }).waitFor()
     assert.equal(await page.getByRole('link', { name: '회원가입', exact: true }).count(), 1)
+    await page.getByText(/구분 적용 전에 가입한 계정은 이메일을 모두 소문자/).waitFor()
 
     await page.goto(base + '#/onboarding')
-    await page.getByRole('combobox', { name: '품목 검색' }).fill('화')
-    await page.getByRole('option').filter({ hasText: '화장품' }).click()
-    assert.ok(searches.includes('화'))
+    await page.getByRole('combobox', { name: '품목 검색' }).fill('말')
+    await page.getByRole('option').filter({ hasText: '말' }).click()
+    assert.ok(searches.includes('말'))
     await page.getByRole('button', { name: '건너뛰기', exact: true }).click()
     await page.getByRole('dialog').waitFor()
     await page.screenshot({ path: path.join(screenshots, 'skip-confirmation.png'), fullPage: true })
     await page.getByRole('button', { name: '취소', exact: true }).click()
     assert.equal(writes.filter(w => w.p === '/users/me/interests').length, 0)
-    assert.ok((await page.locator('body').innerText()).includes('화장품'))
+    assert.ok((await page.locator('body').innerText()).includes('말'))
     await page.getByRole('button', { name: '건너뛰기', exact: true }).click()
     await page.getByRole('button', { name: '저장하지 않고 건너뛰기' }).click()
     await page.getByText('메인 화면', { exact: true }).waitFor()
@@ -152,6 +154,7 @@ const { chromium } = require('playwright')
     failInterestSave = true
     await page.goto(base + '#/onboarding?step=2')
     await page.getByRole('button', { name: '건너뛰기', exact: true }).click()
+    await page.getByRole('dialog').getByText(/기존에 저장한 관심정보는 유지/).waitFor()
     await page.getByRole('button', { name: '저장하지 않고 건너뛰기' }).click()
     await page.getByRole('status').filter({ hasText: '검수용 저장 실패' }).waitFor()
     assert.equal(await page.getByRole('dialog').isVisible(), true)

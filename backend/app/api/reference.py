@@ -80,10 +80,11 @@ def _hs_search(store,q,limit,settings,depth,for_picker):
             if rows:
                 return {'items':rows,'match_type':'SIMILAR','confidence':'LOW',
                     'message':'세부 품목명에서 찾은 분류입니다. 분류를 열어 세부품목을 확인해 선택하세요.',**browse_hint()}
-        if len(q) == 1:
-            # Single-character input searches registered names/codes only;
-            # input correction and related-word suggestions remain deferred.
-            return {'items':[],'match_type':'NONE','confidence':'LOW',**browse_hint()}
+        # B-14 admits complete one-character names such as 말/소. For every
+        # picker query, unmatched text (e.g. 화자) must not suggest 화장품 via
+        # embeddings or typo correction. Chat semantic search remains below.
+        return {'items':[],'match_type':'NONE','confidence':'LOW',
+            'message':'등록된 품목명·코드가 없습니다. 검색어를 확인하거나 분류에서 직접 선택하세요.',**browse_hint()}
     from backend.app.api.hs_vectors import candidates
     ranked=[]; warnings=[]
     if settings.get('API_HS_VECTOR_ENABLED','true').lower()=='true':
