@@ -152,7 +152,7 @@
   <tr class="other"><td></td><td>기타</td><td class="r">{{ item.others.amount_usd | musd }}</td><td class="r">{{ item.others.share_pct | pct }}</td>
     <td class="r">{{ item.others.mom_pct | change }}</td><td class="r">{{ item.others.yoy_pct | change }}</td></tr>
   {% else %}
-  <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">{{ '100.0%' if item.amount_usd else '—' }}</td>
+  <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">{{ '100.00%' if item.amount_usd else '—' }}</td>
     <td class="r">{{ item.mom_pct | change }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
   {% endif %}
   {% endfor %}

@@ -27,6 +27,8 @@ UP, DOWN, MUTED, GRID, PREVIOUS = '#0B7A4B', '#C0392B', '#8A8F98', '#E6E3DD', '#
 # 관심 국가 선 색상. 같은 리포트 안의 모든 그래프에서 국가 순서대로 같은 색을 씁니다.
 SERIES_COLORS = ['#E07B24', '#2E6DB4', '#8E5BB5', '#16877C', '#C2477A', '#6B7A2A']
 MINUS = '−'
+# 리포트의 금액·비율 표시는 소수 2자리로 맞춘다(2026-11-06 사용자 결정). 개수(국가 수·건수)는 정수다
+REPORT_DIGITS = 2
 
 
 # ---------- 표시 형식 ----------
@@ -35,7 +37,7 @@ def _number(value, digits):
     return f'{abs(value):,.{digits}f}'
 
 
-def musd(value, digits=1):
+def musd(value, digits=REPORT_DIGITS):
     """USD → 백만 달러 숫자 문자열 (단위 글자는 템플릿에서 붙임)."""
     if value is None:
         return '—'
@@ -43,7 +45,7 @@ def musd(value, digits=1):
     return (MINUS + text) if value < 0 else text
 
 
-def eok(value, digits=2):
+def eok(value, digits=REPORT_DIGITS):
     """USD → 억 달러 숫자 문자열 (요청형 리포트). 단위 글자는 템플릿에서 붙임."""
     if value is None:
         return '—'
@@ -51,7 +53,7 @@ def eok(value, digits=2):
     return (MINUS + text) if value < 0 else text
 
 
-def signed_eok(value, digits=2):
+def signed_eok(value, digits=REPORT_DIGITS):
     """증감액(USD) → 부호 붙은 억 달러 (+12.30 · −2.40)."""
     return '—' if value is None else signed(value / 1e8, digits)
 
@@ -75,11 +77,11 @@ def num(value, digits=0):
     return (MINUS + text) if value < 0 else text
 
 
-def pct(value, digits=1):
+def pct(value, digits=REPORT_DIGITS):
     return '—' if value is None else num(value, digits) + '%'
 
 
-def signed_pct(value, digits=1):
+def signed_pct(value, digits=REPORT_DIGITS):
     if value is None:
         return '—'
     return ('+' if value > 0 else MINUS if value < 0 else '') + _number(value, digits) + '%'
@@ -91,14 +93,14 @@ def signed(value, digits=0):
     return ('+' if value > 0 else MINUS if value < 0 else '') + _number(value, digits)
 
 
-def change(value, digits=1, new=False):
+def change(value, digits=REPORT_DIGITS, new=False):
     """증감률을 ▲(증가)/▼(감소) 색 표시로. 비교 값이 0이라 계산할 수 없으면 new=True → '신규'."""
     if new:
         return Markup('<span class="chg new">신규</span>')
     if value is None:
         return Markup('<span class="chg none">—</span>')
     if value == 0:
-        return Markup('<span class="chg flat">– 0.0%</span>')
+        return Markup(f'<span class="chg flat">– {_number(0, digits)}%</span>')
     cls, mark = ('up', '▲') if value > 0 else ('down', '▼')
     return Markup(f'<span class="chg {cls}">{mark} {_number(value, digits)}%</span>')
 
@@ -199,7 +201,7 @@ def _axis_room(ticks, minimum):
     return max(minimum, max(_em(_tick_label(t, digits)) for t in ticks) * 9.5 + 8)
 
 
-def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, zero=False):
+def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REPORT_DIGITS, zero=False):
     """series: [{values(USD 또는 원값, divisor로 나눠 표시), color?, dashed?, area?}]. 선 끝에 마지막 값 라벨."""
     top, bottom = 10, 24
     scaled = [[None if v is None else v / divisor for v in s['values']] for s in series]
@@ -307,7 +309,7 @@ def legend_value(values, labels):
     return musd(value) + ('' if i == len(values) - 1 else f'({full_period_label(labels, i)})')
 
 
-def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, digits=0, show=(), ticks=5):
+def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, digits=REPORT_DIGITS, show=(), ticks=5):
     """세로 막대. show: 값 라벨을 표시할 막대 위치 목록. ticks: 눈금 개수 기준 (nice_scale)."""
     right, top, bottom = 6, 14, 22
     scaled = [None if v is None else v / divisor for v in values]
@@ -332,14 +334,11 @@ def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, dig
     return Markup(''.join(out))
 
 
-def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digits=1, divisor=1, tail_width=0, peak=None):
-    """가로 막대. rows: [{label, values:[현재, 비교...], tail?:{text, badge?}}]. digits는 막대별 목록도 가능하며,
-    'auto'면 양식처럼 최댓값이 100 이상일 때 소수점 없이(452), 작으면 한 자리(67.5)로 표시합니다.
+def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digits=REPORT_DIGITS, divisor=1, tail_width=0, peak=None):
+    """가로 막대. rows: [{label, values:[현재, 비교...], tail?:{text, badge?}}]. digits는 막대별 목록도 가능합니다.
     막대 길이는 peak(없으면 rows 최대값) 기준 — 여러 쪽에 나눠 그릴 때 같은 peak를 주면 막대 길이를 비교할 수 있습니다."""
     peak_value = peak if peak is not None else max((v for r in rows for v in r['values'] if v is not None), default=0)
     peak = peak_value / divisor or 1
-    if digits == 'auto':
-        digits = 0 if peak >= 100 else 1
     bars = len(colors)
     bar_h = 8 if bars > 1 else 12
     places_of = lambda j: digits[j] if isinstance(digits, (list, tuple)) else digits
@@ -593,7 +592,7 @@ def _detail_heading(item):
     """월간 상세 소제목 높이 — 템플릿 문구와 같은 길이로 추정 (품목명은 40자로 줄임)"""
     name = str(item['name'])
     name = name if len(name) <= 40 else name[:39] + '…'
-    return _heading(f"HS {item['hs_code']} {name} · 12월 수출 {musd(item['amount_usd'])}백만 달러 · 전월 +00.0% · 전년 동월 +00.0%")
+    return _heading(f"HS {item['hs_code']} {name} · 12월 수출 {musd(item['amount_usd'])}백만 달러 · 전월 +00.00% · 전년 동월 +00.00%")
 
 
 def layout(report_type, ctx):

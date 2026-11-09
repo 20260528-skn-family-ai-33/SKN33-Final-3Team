@@ -16,7 +16,7 @@ class ComposeTest(unittest.TestCase):
         return state
 
     def test_all_fixed_needs_no_generated_response(self):
-        state = self.state(['MARKET_TYPE', 'OUT_OF_SCOPE'])
+        state = self.state(['OUT_OF_SCOPE', 'OUT_OF_SCOPE'])
         for task in state.plan.tasks:
             task.answer_status = state.task_outcome(task.task_id)
         payload, fixed = compose_input(state, describe, [])

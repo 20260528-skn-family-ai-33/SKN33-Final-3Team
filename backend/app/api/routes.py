@@ -165,9 +165,9 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==37:
         job=jobs.owned_job(store,uid,path['job_id'])
         if job.get('agent') and job['status']=='NEEDS_INPUT':
-            from backend.app.agents.admission import pending_state,expire
+            from backend.app.agents.admission import wait_expired,expire
             job=jobs.owned_job(store,uid,path['job_id'],lock=True)
-            if job['status']=='NEEDS_INPUT' and pending_state(store,job) is None: expire(store,job)
+            if job['status']=='NEEDS_INPUT' and wait_expired(store,job): expire(store,job)
         return {'job':chat.view_job(job)}
     if identity==38: return chat.clarification(store,uid,path['job_id'],body)
     if identity==131: return chat.cancel(store,uid,path['job_id'])

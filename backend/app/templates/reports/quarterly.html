@@ -63,7 +63,7 @@
 {% if b.key == 'kpis' %}
 {% set cards = [] %}
 {% for item in items[:2] %}
-  {% set _ = cards.append({'label': item.label ~ ' ' ~ q ~ ' 수출', 'value': item.amount_usd | musd(0), 'unit': '백만$', 'sub': '전년 동분기 대비 ' ~ (item.yoy_pct | signed_pct)}) %}
+  {% set _ = cards.append({'label': item.label ~ ' ' ~ q ~ ' 수출', 'value': item.amount_usd | musd, 'unit': '백만$', 'sub': '전년 동분기 대비 ' ~ (item.yoy_pct | signed_pct)}) %}
 {% endfor %}
 {# 하이라이트 기준이 정해지지 않으면(null) 카드를 숨깁니다 #}
 {% if summary.highlight %}{% set _ = cards.append({'label': summary.highlight.label, 'value': summary.highlight.value, 'sub': summary.highlight.sub}) %}{% endif %}
@@ -76,7 +76,7 @@
   <tr><th>품목</th><th class="r">{{ q }} 합계</th><th class="r">전년 동분기 대비</th><th class="r">전분기 대비</th><th class="r">수출국 수</th><th class="r">1위 국가 비중</th></tr>
   {% for item in items[b.start:b.end] %}
   <tr><td><span class="b">{{ item.label }}</span><br><span class="small">HS {{ item.hs_code }}</span></td>
-    <td class="r b">{{ item.amount_usd | musd(0) }}</td><td class="r">{{ item.yoy_pct | change }}</td><td class="r">{{ item.qoq_pct | change }}</td>
+    <td class="r b">{{ item.amount_usd | musd }}</td><td class="r">{{ item.yoy_pct | change }}</td><td class="r">{{ item.qoq_pct | change }}</td>
     <td class="r">{{ item.country_count | num }}개국 <span class="diff">({{ item.country_count_diff | signed }})</span></td>
     <td class="r">{{ item.top_country.name }} {{ item.top_country.share_pct | pct }}</td></tr>
   {% endfor %}
@@ -115,8 +115,8 @@
   <div><div class="small">{{ q }} 월별 3개월 추이 ({{ conditions.year }} vs {{ conditions.prev_year }})</div>
     <table>
       <tr><th>월</th><th class="r">{{ conditions.year }}</th><th class="r">{{ conditions.prev_year }}</th><th class="r">전년 동월</th></tr>
-      {% for r in item.months %}<tr><td>{{ r.label }}</td><td class="r">{{ r.amount_usd | musd(0) }}</td><td class="r">{{ r.prev_amount_usd | musd(0) }}</td><td class="r">{{ r.yoy_pct | change }}</td></tr>{% endfor %}
-      <tr class="total"><td>{{ q }}</td><td class="r">{{ item.amount_usd | musd(0) }}</td><td class="r">{{ item.prev_amount_usd | musd(0) }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
+      {% for r in item.months %}<tr><td>{{ r.label }}</td><td class="r">{{ r.amount_usd | musd }}</td><td class="r">{{ r.prev_amount_usd | musd }}</td><td class="r">{{ r.yoy_pct | change }}</td></tr>{% endfor %}
+      <tr class="total"><td>{{ q }}</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">{{ item.prev_amount_usd | musd }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
     </table></div>
 </div>
 {% endfor %}
@@ -165,7 +165,7 @@
     {% for r in item.top_countries[:10] %}<tr><td>{{ r.rank }}</td><td>{{ m.country(r) }}</td><td class="r">{{ r.amount_usd | musd }}</td><td class="r">{{ r.share_pct | pct }}</td><td class="r">{{ r.yoy_pct | change(new=r.get('is_new_yoy', false)) }}</td></tr>
     {% else %}<tr><td colspan="5" class="small">{{ '해당 범위의 수출 실적이 없습니다.' if item.amount_usd == 0 else '데이터 준비 중' }}</td></tr>{% endfor %}
     {% if item.others %}<tr class="other"><td></td><td>기타</td><td class="r">{{ item.others.amount_usd | musd }}</td><td class="r">{{ item.others.share_pct | pct }}</td><td class="r">{{ item.others.yoy_pct | change }}</td></tr>{% endif %}
-    <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">{{ '100.0%' if item.amount_usd else '—' }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
+    <tr class="total"><td></td><td>전체</td><td class="r">{{ item.amount_usd | musd }}</td><td class="r">{{ '100.00%' if item.amount_usd else '—' }}</td><td class="r">{{ item.yoy_pct | change }}</td></tr>
   </table></div>
 {% endfor %}
 </div>
@@ -175,7 +175,7 @@
 {% for item in chunk %}
   {% set rows = [] %}
   {% for r in item.top5_compare %}{% set _ = rows.append({'label': r.name, 'values': [r.current, r.previous]}) %}{% endfor %}
-  <div>{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=70, width=320, row_height=30, divisor=1000000, digits='auto') }}{% else %}{{ m.pending() }}{% endif %}</div>
+  <div>{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=70, width=320, row_height=30, divisor=1000000) }}{% else %}{{ m.pending() }}{% endif %}</div>
 {% endfor %}
 </div>
 {% endcall %}

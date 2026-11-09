@@ -27,7 +27,8 @@ class Settings:
     def files(self):
         return Path(self.get('API_REPORT_DIRECTORY', str(ROOT / 'runtime' / 'reports'))).resolve()
 
-    def engine(self):
+    def engine(self, **pool):
+        """pool: 접속 풀 크기(pool_size·max_overflow). 병렬 워커는 스레드 수만큼 늘린다(D-105)."""
         prefix = 'RDS_MYSQL_' if self.get('API_DB_TARGET', 'rds') == 'rds' else 'MYSQL_'
         required = [prefix + k for k in ('HOST', 'USER', 'PASSWORD', 'DATABASE')]
         if any(not self.get(k) for k in required):
@@ -42,4 +43,4 @@ class Settings:
             raise ValueError('RDS_MYSQL_SSL_CA를 설정하세요. RDS는 TLS 인증서와 호스트를 검증합니다.')
         if ca:
             args.update(ssl_ca=ca, ssl_verify_cert=True, ssl_verify_identity=True)
-        return create_engine(url, pool_pre_ping=True, pool_recycle=1800, connect_args=args)
+        return create_engine(url, pool_pre_ping=True, pool_recycle=1800, connect_args=args, **pool)

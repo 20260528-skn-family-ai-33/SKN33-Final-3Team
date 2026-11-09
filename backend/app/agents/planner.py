@@ -16,7 +16,15 @@ source_tasks는 이번 질문을 여러 하위 질문으로 나눴을 때 앞 �
 STATISTICS는 합계·추이·기간 비교, RANKING은 명시적인 국가/품목 순위,
 MARKET_SHARE는 상대국별·품목별 교역 비중과 해외 수입시장 점유율, CAUSE는 원인 설명,
 LOCAL_ISSUES는 기사 조회, REPORT는 리포트 생성, PROMISING_MARKET은 유망시장·예측,
-MARKET_TYPE은 시장 유형·군집, OUT_OF_SCOPE는 범위 밖입니다.
+MARKET_TYPE은 국가·품목 시장의 유형(증가 예상 시장·감소 예상 시장) 질문, CONVERSATION은 데이터 조회 없이 답할 질문입니다.
+CONVERSATION은 이전 대화 자체를 묻는 질문(예: "이전 질문 뭐였더라?", "아까 뭐 물어봤지?")과
+무역 용어·개념 설명(예: "HS코드가 뭐야?", "FTA가 뭐야?")입니다. 슬롯은 모두 null이고 새 수치를 조회하지 않습니다.
+이전 결과를 다시 조회·계산해 달라는 요청은 CONVERSATION이 아니라 해당 분석 intent입니다.
+HS_LOOKUP은 품목의 HS 코드를 묻거나(예: "면도기 HS코드 알려줘") HS 코드가 어떤 품목인지 묻는 질문
+(예: "8510은 무슨 품목이야?", "330499 설명해줘")입니다. products에 품목 표현이나 코드를 그대로 옮기고 다른 슬롯은 null입니다.
+수출입 금액을 함께 물으면 HS_LOOKUP이 아니라 해당 분석 intent입니다.
+OUT_OF_SCOPE는 무역과 관계없는 범위 밖입니다(날씨·잡담 등). HS코드·FTA·관세·원산지·통관 같은 무역 용어 질문은
+대소문자·띄어쓰기와 상관없이 OUT_OF_SCOPE가 아니라 CONVERSATION 또는 HS_LOOKUP입니다(예: "hs코드가 뭐야?"는 CONVERSATION).
 countries는 mention(질문 원문 그대로), name(정식 한국어 국가명) 쌍입니다.
 기업 국적을 국가 조건으로 추론하지 마세요. SK·TV·AI·IT는 국가가 아닙니다.
 products에는 질문 속 품목 표현을 그대로 옮기세요. HS 코드를 생성·번역·추론하지 마세요.
@@ -51,11 +59,14 @@ target_selections는 앞 하위 질문의 결과표에서 다음 대상을 고�
 order_by(country_rank/product_rank/amount_usd)를 씁니다. 모호한 기준은 null입니다.
 국가 안 품목 순위는 country_rank, 품목 안 국가 순위는 product_rank입니다.
 결과 자체를 리포트로 전달하면 대상 선택 규칙은 필요하지 않습니다.
+answer_format은 이전 질문·답변 내용을 묻거나 이전 대화를 이어 설명·정리해 달라는 질문
+(예: "아까 본 결과를 말로 다시 설명해줘", "앞에서 비교한 내용 정리해줘")이면 TEXT, 그 밖에는 null입니다.
+TEXT여도 intent와 국가·품목·기간 슬롯은 같은 규칙으로 채웁니다.
 확인·승인 값, 실행 단계, result_id는 생성하지 마세요.
 """
 
 TOOLS = {'check': 'check_conditions', 'sql': 'query_trade_data', 'news': 'search_articles',
-         'chart': 'build_chart', 'ml': 'query_market_model', 'report': 'generate_report'}
+         'chart': 'build_chart', 'ml': 'query_market_model', 'report': 'generate_report', 'hs': 'lookup_hs'}
 STEPS = {
     'STATISTICS': [('check', []), ('sql', ['check']), ('chart', ['sql'])],
     'RANKING': [('check', []), ('sql', ['check']), ('chart', ['sql'])],
@@ -64,6 +75,9 @@ STEPS = {
     'LOCAL_ISSUES': [('check', []), ('news', ['check'])],
     'REPORT': [('check', []), ('report', ['check'])],
     'PROMISING_MARKET': [('check', []), ('ml', ['check']), ('chart', ['ml'])],
+    # D-103: 시장 유형은 모델 B의 증감 예상으로 분류한다. 유망시장과 같은 ML 결과를 쓴다
+    'MARKET_TYPE': [('check', []), ('ml', ['check']), ('chart', ['ml'])],
+    'HS_LOOKUP': [('hs', [])],   # D-101: 조건 확인 없이 HS 사전만 찾는다
 }
 
 
@@ -105,6 +119,76 @@ def explicit_country_ranking(question):
         'trade_flow':'EXPORT' if match['flow']=='수출' else 'IMPORT', 'countries':[], 'products':[]}}])
 
 
+# 무역 용어 안전망(2026-11-06 사용자 결정): LLM이 이 용어가 든 질문을 범위 밖으로 내면 대화·용어 질문으로 바꾼다.
+# 설정 API_CHAT_TRADE_TERMS(쉼표 구분)로 바꿀 수 있다.
+TRADE_TERMS = ('hs', '관세', 'fta', '원산지', '통관', '무역', '수출', '수입', '품목분류', '세번', '인코텀즈', 'incoterms')
+AMBIGUOUS_TRADE_TERMS = frozenset({'수입'})   # 소득이라는 뜻도 있어 용어 질문일 때만 살린다
+_DEFINITION = re.compile(r'뭐야|뭔가요|뭐예요|뭐에요|무엇|뜻|의미|설명|란\?|이란|라는')
+
+
+def rescue_trade_terms(output: PlannerOutput, terms=TRADE_TERMS, original='') -> PlannerOutput:
+    """original은 사용자가 쓴 질문이다. 플래너가 하위 질문 문장을 고쳐 써서 용어가 빠져도 원문으로 판단한다.
+    질문이 하나뿐일 때만 원문을 본다(여러 하위 질문이면 다른 질문의 용어로 범위 밖 질문을 살리지 않게)."""
+    compact = lambda text: ''.join(text.split()).casefold()
+    words = [t.strip().casefold() for t in terms if t.strip()]
+    def found(word, text):
+        if word.isascii():
+            # 영문 용어는 띄어쓰기를 지우지 않은 원문에서 앞뒤가 영문자가 아닐 때만 맞춘다
+            # ("this"·"fish" 속 hs 제외, "hs코드"·"what is HS"는 맞음). 용어 안 공백은 띄어쓰기 차이를 허용한다("free trade")
+            body = r'\s*'.join(re.escape(part) for part in word.split())
+            return bool(re.search(rf'(?<![a-z]){body}(?![a-z])', text.casefold()))
+        word = compact(word)
+        if word not in compact(text): return False
+        # 뜻이 여럿인 용어("수입"=소득)는 용어를 묻는 질문일 때만 살린다. "내 수입으로 집 살 수 있을까?"는 범위 밖 그대로
+        return word not in AMBIGUOUS_TRADE_TERMS or bool(_DEFINITION.search(compact(text)))
+    def trade(task):
+        texts = [task.question] + ([original] if len(output.tasks) == 1 else [])
+        return any(found(w, x) for x in texts for w in words)
+    tasks = [{**t.model_dump(), 'intent': 'CONVERSATION', 'slots': {}}
+             if t.intent == 'OUT_OF_SCOPE' and trade(t) else t.model_dump()
+             for t in output.tasks]
+    return PlannerOutput.model_validate({**output.model_dump(), 'tasks': tasks})
+
+
+# 품목 표현 되돌리기(D-107): "면도 및 탈취 관련 상품"처럼 뒤의 "관련 상품"이 앞뒤 단어에 함께 걸리는 표현을
+# 플래너(gpt-4.1-mini)가 ["면도", "탈취 관련 상품"]으로 나눈다. 프롬프트 규칙·예시로는 막히지 않아 코드로 되돌린다.
+_SUFFIX_BODY = r'관련\s*(?:상품|제품|용품|품목)'   # 앵커 없는 꼬리말. 아래 두 패턴이 함께 쓴다
+_SHARED_SUFFIX = re.compile(rf'\s*{_SUFFIX_BODY}$')
+_JOIN = r'\s*(?:및|와|과|,|·|/)\s*'
+
+
+def merge_shared_suffix(products, original):
+    """뒤 품목의 "관련 상품"이 원문에서 앞 품목들에 함께 걸려 있으면 원문 그대로의 한 표현으로 합친다.
+    "화장품 및 세제"처럼 공통 꼬리말이 없거나 원문에 이어 쓰이지 않았으면 그대로 둔다."""
+    items = list(products or [])
+    end = 0
+    while end < len(items):
+        suffix = _SHARED_SUFFIX.search(items[end])
+        merged = None
+        # ponytail: 바로 앞 품목부터 붙여 본다. "A, B 및 C 관련 상품"은 B·C만 합친다. 3개 이상 묶음이 필요하면 접속어로 판단
+        for start in range(end - 1, -1, -1) if suffix else ():
+            heads = [_SHARED_SUFFIX.sub('', x).strip() for x in items[start:end + 1]]
+            if not all(heads): continue
+            pattern = _JOIN.join(re.escape(h) for h in heads) + r'\s*' + _SUFFIX_BODY
+            found = re.search(pattern, original)
+            if found:
+                merged = start, found.group(0)
+                break
+        if merged:
+            items[merged[0]:end + 1] = [merged[1]]
+            end = merged[0]
+        end += 1
+    return items
+
+
+def merge_product_phrases(output: PlannerOutput, original: str) -> PlannerOutput:
+    tasks = [t.model_dump() for t in output.tasks]
+    for task in tasks:
+        if task['slots'].get('products'):
+            task['slots']['products'] = merge_shared_suffix(task['slots']['products'], original)
+    return PlannerOutput.model_validate({**output.model_dump(), 'tasks': tasks})
+
+
 def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
     error = task_count_error(len(output.tasks))
     if error:
@@ -138,6 +222,8 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
                     slots=TaskSlots.model_validate(item.slots.model_dump()), custom_query=item.custom_query,
                     input_bindings=bindings)
         for name, dependencies in STEPS.get(item.intent, []):
+            if name == 'chart' and item.slots.answer_format == 'TEXT':
+                continue   # 문장형 답변은 차트를 만들지 않는다(D-98)
             args = {}
             if name == 'sql':
                 template = 'LLM_SQL' if item.custom_query else {

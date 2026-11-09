@@ -126,12 +126,12 @@ def clarification(store,uid,identity,data):
         for key in data['choice_ids']: conditions.update(choices[key]['value'])
     if mixed_interest:
         # No graph interrupt exists: finish the originating legacy plan using
-        # its saved intent and conditions, in the v2-only queue.
+        # its saved intent and conditions, in the agent queue (v3, D-106).
         payload['legacy_interest_receipt']={'id':data['clarification_id'],'signature':digest(data)}
         payload.pop('input',None)
         row.pop('agent')
         row.pop('finished_at',None)
-        row['version']=jobs.AGENT_QUEUE_VERSION
+        jobs.mark_agent(row,store.db)
     jobs.remember_prompt(row,prompt,data)
     resumed=jobs.requeue_chat(store,row,conditions)
     if mixed_interest:

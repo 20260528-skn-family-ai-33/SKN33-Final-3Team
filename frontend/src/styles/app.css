@@ -92,7 +92,15 @@ body.modal-open{overflow:hidden}
 }
 
 /* AI 분석: 채팅방 목록 + 대화 */
-.chat-lay{display:grid;grid-template-columns:300px minmax(0,1fr);gap:24px;align-items:start}
+.wrap.chat-lay{max-width:1600px;padding:0 12px}
+.chat-lay{display:grid;grid-template-columns:280px minmax(0,1fr);gap:20px;align-items:start;word-break:keep-all;overflow-wrap:anywhere}
+/* 채팅방 목록은 대화를 스크롤해도 화면 안에 남는다. 목록이 길면 목록만 스크롤한다. */
+.chat-side{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto}
+
+/* 버튼은 높이·한 줄을 지키고 좁은 줄에서도 줄어들지 않는다. HS 선택 버튼(.hs-choice)만 여러 줄을 허용한다. */
+.btn,.chip,.seg button{flex-shrink:0;white-space:nowrap;word-break:keep-all}
+/* 버튼이 든 줄이 화면 폭을 넘으면 버튼을 다음 줄로 내린다(채팅 입력창은 한 줄 유지). */
+:where(div,p,section,li,nav,span):has(> .btn,> .chip){flex-wrap:wrap}
 
 /* 넓은 화면에서는 상단 메뉴 간격을 넓혀 메뉴끼리 붙어 보이지 않게 한다. */
 @media (min-width:1101px){
@@ -108,13 +116,25 @@ body.modal-open{overflow:hidden}
   .fab{right:16px;bottom:16px}
   .chat-lay{grid-template-columns:220px minmax(0,1fr);gap:18px}
 }
-/* 휴대폰 폭에서만 채팅방 목록을 위로 올리고 가로로 넘긴다. */
+/* 휴대폰 폭에서는 채팅방 목록을 숨기고, 대화 제목 왼쪽 버튼으로 여는 왼쪽 슬라이더로 보여 준다. 목록은 세로로 스크롤한다. */
+.chat-drawer-btn{display:none!important}
+.chat-scrim{display:none}
 @media (max-width:640px){
   .chat-lay{grid-template-columns:minmax(0,1fr)}
-  .chat-side .chat-list{flex-direction:row;overflow-x:auto;padding-bottom:4px}
-  .chat-side .chat-list>button{flex:0 0 200px}
-  .chat-side .chat-manage{flex-direction:row;flex-wrap:wrap}
+  .chat-drawer-btn{display:inline-flex!important}
+  .chat-side{position:fixed;top:0;bottom:0;left:0;z-index:61;width:min(300px,85vw);max-height:none;border-radius:0 16px 16px 0;
+    overflow-y:auto;transform:translateX(-100%);visibility:hidden;transition:transform .2s ease,visibility .2s}
+  .chat-side.open{transform:none;visibility:visible}
+  .chat-scrim{display:block;position:fixed;inset:0;z-index:60;background:rgba(21,24,30,.4)}
 }
+@media (max-width:640px) and (prefers-reduced-motion:reduce){ .chat-side{transition:none} }
+/* 대화 맨 위·맨 아래 이동 버튼 */
+.chat-jump{position:fixed;right:24px;bottom:24px;z-index:40;display:flex;flex-direction:column;gap:8px}
+.chat-jump .btn{width:44px;padding:0;box-shadow:0 4px 14px rgba(21,24,30,.15)}
+@media (max-width:640px){ .chat-jump{right:12px;bottom:96px} }
+.api-results{margin-top:18px}
+/* 채팅 답변의 표는 차트와 같은 간격을 둔다 */
+.chat-flow .api-results{margin:28px 16px}
 @media (max-width:760px){
   .wrap{padding:0 16px}
   .hd .wrap{gap:12px}
@@ -151,7 +171,9 @@ body.modal-open{overflow:hidden}
 .onboarding-products { list-style: none; margin: 0; padding: 0; }
 .onboarding-products .tag { white-space: normal; }
 .interest-summary ul { list-style: none; padding: 0; margin: .65rem 0 0; }
-.interest-summary .chip, .btn.hs-choice { white-space: normal; text-align: left; max-width: 100%; height: auto; overflow-wrap: anywhere; }
+.btn.hs-choice { white-space: normal; text-align: left; max-width: 100%; height: auto; overflow-wrap: anywhere; }
+/* 선택 칩은 높이·한 줄을 지키고 넘치는 이름은 …로 줄인다. 전체 이름은 title·FullHsName에 있다 */
+.interest-summary .chip { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; line-height: 32px; }
 .btn.hs-choice { display: block; padding: .6rem .8rem; }
 .hs-label { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .hs-picker { position: relative; display: flex; gap: 12px; margin-top: 20px; }
