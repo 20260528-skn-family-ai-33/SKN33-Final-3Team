@@ -7,7 +7,6 @@
 import argparse
 from contextlib import ExitStack
 from datetime import datetime, timezone
-import hashlib
 import importlib
 from importlib.metadata import version
 import json
@@ -20,7 +19,8 @@ import types
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[2]
+# 팀 평가기(SQL·Visualization)와 같은 증거 규칙: CRLF/LF와 무관한 해시, 커밋하지 않은 변경 표시
+from backend.scripts.evaluate_sql_visualization import ROOT, digest_bytes, revision_metadata
 # 이 작업에서 바꾸는 운영 모듈. 과거 비교 때 이 파일만 그 커밋 내용으로 교체한다.
 SOURCES = ('backend/app/api/files.py', 'backend/app/services/report_ondemand_context.py',
            'backend/app/services/report_templates.py', 'backend/app/services/report_context.py',
@@ -74,10 +74,6 @@ def git(*args):
     return subprocess.check_output(['git', *args], cwd=ROOT).decode('utf-8').strip()
 
 
-def sha(value):
-    return hashlib.sha256(value).hexdigest()
-
-
 LOOPBACK = {'127.0.0.1', '::1', 'localhost'}
 
 
@@ -100,7 +96,7 @@ def install_sources(revision):
     hashes = {}
     for path in SOURCES:
         source = subprocess.check_output(['git', 'show', f'{revision}:{path}'], cwd=ROOT)
-        hashes[path] = sha(source)
+        hashes[path] = digest_bytes(source)
         name = path[:-3].replace('/', '.')
         parent_name, attribute = name.rsplit('.', 1)
         parent = importlib.import_module(parent_name)
@@ -153,22 +149,28 @@ def main(argv=None):
     revision = git('rev-parse', '--verify', '--end-of-options', (args.source_ref or 'HEAD') + '^{commit}')
     tests = sorted({case['test'].rsplit('.', 2)[0].replace('.', '/') + '.py' for case in CASES})
     fixtures = ['backend/scripts/evaluate_report_agent.py', 'backend/tests/api_support.py', 'backend/tests/intent_fixtures.py']
+    harness = revision_metadata(tests + fixtures)
+    source_state = revision_metadata(list(SOURCES))
     with ExitStack() as stack:
         # (대상, 이름, 주소 인자 위치): 함수는 첫 인자, 소켓 메서드는 self 다음, sendto는 (self, data, address).
         for owner, name, position in ((socket, 'create_connection', 0), (socket, 'getaddrinfo', 0), (socket.socket, 'connect', 1),
                                       (socket.socket, 'connect_ex', 1), (socket.socket, 'sendto', 2)):
             stack.enter_context(patch.object(owner, name, offline(getattr(owner, name), position)))
-        hashes = install_sources(revision) if args.source_ref else {p: sha((ROOT / p).read_bytes()) for p in SOURCES}
+        hashes = install_sources(revision) if args.source_ref else {p: digest_bytes((ROOT / p).read_bytes()) for p in SOURCES}
         outcomes = [run_case(case) for case in CASES]
     report = {
-        'schema_version': 1,
+        'schema_version': 2,
+        'hash_normalization': 'UTF-8 file bytes with CRLF normalized to LF before SHA256',
         'evaluation': 'Report Agent 오프라인 설계 계약 평가',
         'evaluated_at_utc': datetime.now(timezone.utc).isoformat(),
         'source_mode': 'historical_modules' if args.source_ref else 'working_tree',
-        'source_revision': revision, 'harness_revision': git('rev-parse', 'HEAD'),
+        'source_revision': revision,
+        'source_dirty': False if args.source_ref else source_state['dirty'],
+        'source_changes': [] if args.source_ref else source_state['changes'],
+        'harness_revision': harness['revision'], 'harness_dirty': harness['dirty'], 'harness_changes': harness['changes'],
         'source_sha256': hashes,
-        'evidence_sha256': {p: sha((ROOT / p).read_bytes()) for p in tests + fixtures},
-        'manifest_sha256': sha(json.dumps(CASES, ensure_ascii=False, sort_keys=True).encode()),
+        'evidence_sha256': {p: digest_bytes((ROOT / p).read_bytes()) for p in tests + fixtures},
+        'manifest_sha256': digest_bytes(json.dumps(CASES, ensure_ascii=False, sort_keys=True).encode()),
         'environment': {'python': platform.python_version(), 'platform': platform.platform(),
                         'packages': {n: version(n) for n in ('langgraph', 'SQLAlchemy', 'pydantic')}},
         'network': '차단. SQLite·fakeredis·Mock만 사용',

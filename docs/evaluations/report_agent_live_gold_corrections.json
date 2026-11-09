@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "applies_to": "report_agent_live_questions.jsonl (고정본은 바꾸지 않음)",
+  "decided_at": "2026-11-09",
+  "decided_by": "AI 초안(Claude) — 사람 검토 대기",
+  "principle": "모델 출력을 본 뒤 바꾼 정답이므로 이 재채점은 개발 세트 결과다. 모델·프롬프트·코드는 바꾸지 않았고 같은 출력을 다시 채점만 한다.",
+  "corrections": {
+    "L22": {
+      "reason": "리포트 아님 유형의 판정 기준은 '리포트를 만들지 않는다'이다. 원인 질문을 STATISTICS+CAUSE로 나누는 것은 Report Agent 범위 밖이라 허용한다.",
+      "expected": {"intents": [["CAUSE"], ["STATISTICS", "CAUSE"]], "report": null}
+    },
+    "L29": {
+      "reason": "이전 조건을 비우지 않고 같은 값으로 다시 적어도 확정 조건이 같다(플래너 프롬프트는 비우라고 지시하므로 결과 문서에 별도 기록).",
+      "expected": {"intents": [["REPORT"]], "report": {"sources": [], "trade_flow": "EXPORT", "countries": "INHERIT", "products": "INHERIT", "period": "INHERIT",
+        "inherit_equivalent": {"countries": ["미국"], "products": ["330499"], "period": {"start": "2025-01", "end": "2025-03"}}}}
+    },
+    "L30": {
+      "reason": "L29와 같음(품목을 같은 값으로 다시 적음).",
+      "expected": {"intents": [["REPORT"]], "report": {"sources": [], "trade_flow": "EXPORT", "countries": ["중국"], "products": "INHERIT", "period": "INHERIT",
+        "inherit_equivalent": {"products": ["330499"]}}}
+    },
+    "L31": {
+      "reason": "L29와 같음(국가·품목을 같은 값으로 다시 적음).",
+      "expected": {"intents": [["REPORT"]], "report": {"sources": [], "trade_flow": "EXPORT", "countries": "INHERIT", "products": "INHERIT", "period": {"recent_months": 6},
+        "inherit_equivalent": {"countries": ["베트남"], "products": ["330499"]}}}
+    },
+    "L32": {
+      "reason": "L29와 같음(국가·품목을 같은 값으로 다시 적음).",
+      "expected": {"intents": [["REPORT"]], "report": {"sources": [], "trade_flow": "IMPORT", "countries": "INHERIT", "products": "INHERIT", "period": "INHERIT",
+        "inherit_equivalent": {"countries": ["중국"], "products": ["8542"]}}}
+    }
+  }
+}
