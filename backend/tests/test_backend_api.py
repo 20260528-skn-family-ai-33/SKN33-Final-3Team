@@ -103,6 +103,23 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.post('users/me/password', body).status_code, 403)
         self.assertEqual(self.post('users/me/password', {**body, 'email': 'Alice@Example.org'}).status_code, 204)
 
+    def test_picker_search_accepts_one_character_without_changing_chat_minimum(self):
+        from backend.app.api.reference import chat_hs_search
+        response = self.client.get('/api/v1/reference/hs-codes', params={'q': '화', 'depth': 6})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('330499', [item['hs_code'] for item in response.json()['items']])
+        response = self.client.get('/api/v1/reference/hs-codes', params={'q': '3', 'depth': 4})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('3304', [item['hs_code'] for item in response.json()['items']])
+        with self.engine.connect() as connection:
+            self.assertEqual(chat_hs_search(Store(self.app.state.database, connection), '화')['items'], [])
+        self.settings.values['API_HS_VECTOR_ENABLED'] = 'true'
+        with patch('backend.app.api.hs_vectors.candidates') as candidates:
+            response = self.client.get('/api/v1/reference/hs-codes', params={'q': '힣', 'depth': 6})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()['items'], [])
+            candidates.assert_not_called()
+
     def test_interest_version_and_hs_depth(self):
         self.signup(); url='/api/v1/users/me/interests'
         version=self.client.get(url).json()['interests']['version']

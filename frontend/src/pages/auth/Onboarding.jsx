@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react'
 import { navigate } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Steps } from '../../components/ui'
+import { Btn, Modal, Steps } from '../../components/ui'
+import { usePendingAction } from '../../api/hooks'
 import { CountryPicker, InterestProducts } from '../../components/pickers'
 import { productName, registerProducts } from '../../data/catalog'
 
@@ -27,6 +28,8 @@ export default function Onboarding({ route }) {
   const welcome = draft?.welcome === true
   const [products, setProducts] = useState(() => draft?.items.map(h => h.hs_code) ?? profile.products)
   const [countries, setCountries] = useState(draft?.countries ?? profile.countries)
+  const [skipOpen, setSkipOpen] = useState(false)
+  const [pending, runOnce] = usePendingAction()
   useEffect(() => {
     const items = products.map(id => ({ hs_code: id, name_ko: productName(id) }))
     try { sessionStorage.setItem(key, JSON.stringify({ items, countries, welcome, version })) } catch { /* Storage may be unavailable. */ }
@@ -37,18 +40,19 @@ export default function Onboarding({ route }) {
   }
   const hasInterest = products.length > 0 || countries.length > 0
 
-  const skip = async () => {
+  const skip = () => runOnce(async () => {
     if (!await setProfile(p => ({ ...p, home: 'all' }))) return
     endDraft()
     setMainView('all')
     navigate('/')
-  }
-  const finish = async () => {
+  })
+  const requestSkip = () => hasInterest ? setSkipOpen(true) : skip()
+  const finish = () => runOnce(async () => {
     if (!await setProfile(p => ({ ...p, products, countries, home: hasInterest ? 'interest' : 'all' }))) return
     endDraft()
     setMainView(null)
     navigate(hasInterest ? '/?view=interest' : '/')
-  }
+  })
 
   return (
     <>
@@ -71,7 +75,7 @@ export default function Onboarding({ route }) {
                 <p className="muted" style={{ marginTop: 6 }}>선택 사항 · 품목명 또는 HS6 코드로 검색하고 추가할 수 있습니다.</p>
                 <InterestProducts products={products} setProducts={setProducts} />
                 <div className="between" style={{ marginTop: 28 }}>
-                  <Btn size="md" onClick={skip}>건너뛰기</Btn>
+                  <Btn size="md" disabled={pending} onClick={requestSkip}>건너뛰기</Btn>
                   <Btn kind="red" size="md" iconRight="arrowRight" to="/onboarding?step=2">다음: 국가 선택</Btn>
                 </div>
                 <p className="note" style={{ marginTop: 14 }}>건너뛰면 전체 시장이 기본 메인으로 표시됩니다. 관심정보는 나중에 수정할 수 있습니다.</p>
@@ -87,7 +91,7 @@ export default function Onboarding({ route }) {
                 <div className="between" style={{ marginTop: 26 }}>
                   <div style={{ display: 'flex', gap: 10 }}>
                     <Btn size="md" icon="arrowLeft" to="/onboarding?step=1">이전</Btn>
-                    <Btn size="md" onClick={skip}>건너뛰기</Btn>
+                    <Btn size="md" disabled={pending} onClick={requestSkip}>건너뛰기</Btn>
                   </div>
                   <Btn kind="red" size="md" iconRight="arrowRight" to="/onboarding?step=3">다음: 완료 확인</Btn>
                 </div>
@@ -123,7 +127,7 @@ export default function Onboarding({ route }) {
                 </ul>
                 <div className="between" style={{ marginTop: 26 }}>
                   <Btn size="md" icon="arrowLeft" to="/onboarding?step=2">이전</Btn>
-                  <Btn kind="red" size="lg" iconRight="arrowRight" onClick={finish}>완료하고 시작하기</Btn>
+                  <Btn kind="red" size="lg" iconRight="arrowRight" disabled={pending} onClick={finish}>완료하고 시작하기</Btn>
                 </div>
                 <p className="note" style={{ marginTop: 14 }}>선택한 관심사가 없으면 전체 시장 메인으로 이동합니다. 재로그인 시에는 이 과정을 생략합니다.</p>
               </>
@@ -131,6 +135,14 @@ export default function Onboarding({ route }) {
           </div>
         </div>
       </main>
+      <Modal open={skipOpen} onClose={() => !pending && setSkipOpen(false)} label="관심사 등록 건너뛰기">
+        <h2 className="t2">관심사 등록을 건너뛸까요?</h2>
+        <p className="muted" style={{ marginTop: 12 }}>선택한 품목과 국가는 저장되지 않습니다. 관심정보는 나중에 마이페이지에서 등록할 수 있습니다.</p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>
+          <Btn size="md" disabled={pending} onClick={() => setSkipOpen(false)}>취소</Btn>
+          <Btn kind="red" size="md" disabled={pending} onClick={skip}>{pending ? '처리 중…' : '저장하지 않고 건너뛰기'}</Btn>
+        </div>
+      </Modal>
     </>
   )
 }

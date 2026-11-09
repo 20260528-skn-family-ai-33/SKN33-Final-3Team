@@ -26,8 +26,9 @@ def chat_hs_search(store,q):
 def _search_depth(store,q,depth,limit,*,for_picker=False):
     q=' '.join(unicodedata.normalize('NFKC',q).split()).casefold()
     require(len(q)<=120 and depth in (4,6) and 1<=limit<=5,'검색어 120자 이하·HS4/HS6·최대 5개 조건을 확인하세요.')
-    if len(q)<2:
-        return {'items':[],'match_type':'NONE','confidence':'LOW','message':'2글자 이상 입력하세요.',**browse_hint()}
+    minimum = 1 if for_picker else 2
+    if len(q)<minimum:
+        return {'items':[],'match_type':'NONE','confidence':'LOW','message':f'{minimum}글자 이상 입력하세요.',**browse_hint()}
     from backend.app.api.config import Settings
     settings=getattr(store.db,'settings',None) or Settings()
     key=(q,depth,limit,for_picker,*(settings.get(k) for k in ('API_HS_VECTOR_ENABLED','API_HS_CHROMA_PATH',
@@ -79,6 +80,10 @@ def _hs_search(store,q,limit,settings,depth,for_picker):
             if rows:
                 return {'items':rows,'match_type':'SIMILAR','confidence':'LOW',
                     'message':'세부 품목명에서 찾은 분류입니다. 분류를 열어 세부품목을 확인해 선택하세요.',**browse_hint()}
+        if len(q) == 1:
+            # Single-character input searches registered names/codes only;
+            # input correction and related-word suggestions remain deferred.
+            return {'items':[],'match_type':'NONE','confidence':'LOW',**browse_hint()}
     from backend.app.api.hs_vectors import candidates
     ranked=[]; warnings=[]
     if settings.get('API_HS_VECTOR_ENABLED','true').lower()=='true':
