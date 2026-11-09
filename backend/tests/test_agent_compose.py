@@ -1,7 +1,14 @@
+import json
 import unittest
+from unittest.mock import MagicMock, patch
+import httpx
+from openai import OpenAI
 from backend.app.agents.compose import compose_input, assemble
+from backend.app.agents.llm import StructuredClient
 from backend.app.agents.planner import build_plan
+from backend.app.agents.runtime import Services
 from backend.app.agents.state import AgentState, PlannerOutput, ToolResult, Draft
+from backend.app.api.config import Settings
 from backend.tests.test_agent_graph import initial
 
 
@@ -14,6 +21,49 @@ class ComposeTest(unittest.TestCase):
         state = AgentState.model_validate(initial())
         state.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': i, 'question': 'q'} for i in intents]))
         return state
+
+    def test_compose_model_is_pinned_on_responses_api(self):
+        expected_model = 'gpt-6-luna'
+        for overrides in [{}, {'API_COMPOSE_MODEL': 'gpt-4.1-mini'}]:
+            with self.subTest(overrides=overrides):
+                state = self.state(['STATISTICS'])
+                task = state.plan.tasks[0]
+                task.answer_status = 'ANSWERED'
+                step = next(s for s in task.steps if s.tool == 'query_trade_data')
+                state.results[step.step_id] = ToolResult(status='OK', digest={'total': 10})
+                draft = Draft(conclusion=[{'task_id': task.task_id, 'sentences': ['수출액은 10 USD입니다.']}],
+                              turn_summary='수출액 10 USD')
+                requests = []
+
+                def respond(request):
+                    requests.append(request)
+                    return httpx.Response(200, json={
+                        'object': 'response', 'id': 'resp_test', 'created_at': 0, 'model': expected_model,
+                        'status': 'completed', 'output': [{'type': 'message', 'id': 'msg_test',
+                            'role': 'assistant', 'status': 'completed', 'content': [{'type': 'output_text',
+                                'text': draft.model_dump_json(), 'annotations': []}]}]})
+
+                def client_factory(**kwargs):
+                    return OpenAI(**kwargs, base_url='https://test.invalid/v1',
+                                  http_client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+                settings = Settings({'OPENAI_API_KEY': 'test', **overrides})
+                execution = MagicMock()
+                execution.call.side_effect = lambda node, timeout, call, **kwargs: call(timeout)
+                services = Services(execution, settings, StructuredClient(settings, client_factory))
+                with patch.object(services, 'read_store'), patch('backend.app.agents.templates._names', return_value=({}, {})):
+                    services.compose(state)
+
+                self.assertEqual(state.draft, draft)
+                self.assertEqual(len(requests), 1)
+                self.assertEqual(requests[0].url.path, '/v1/responses')
+                body = json.loads(requests[0].content)
+                self.assertEqual(body['model'], expected_model)
+                self.assertEqual(body['text']['format']['name'], 'Draft')
+                self.assertTrue(body['text']['format']['strict'])
+                self.assertEqual(body['max_output_tokens'], 1500)
+                self.assertFalse(body['store'])
+                self.assertNotIn('temperature', body)
 
     def test_all_fixed_needs_no_generated_response(self):
         state = self.state(['OUT_OF_SCOPE', 'OUT_OF_SCOPE'])

@@ -1,5 +1,7 @@
 """D-67/69/80/93: assemble fixed conclusions with bounded generated prose."""
-from backend.app.agents.digest import display_amounts
+import re
+
+from backend.app.agents.digest import display_amounts, korean_usd
 from backend.app.agents.state import AgentState, Draft, TaskConclusion, draft_limit_error, is_text_task
 
 UNSUPPORTED = {
@@ -16,9 +18,9 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 growth_outlook(증가 예상·감소 예상)은 모델의 방향 예상이므로 '예상'으로 쓰고 증감률 숫자를 만들지 마세요. null이면 언급하지 마세요.
 MARKET_TYPE은 각 국가·품목 시장의 유형을 growth_outlook으로 답합니다: 증가 예상이면 '증가 예상 시장', 감소 예상이면 '감소 예상 시장'.
 growth_outlook이 null인 행은 유형을 판정하지 못했다고 쓰고 다른 유형을 지어내지 마세요. 유망도 순위는 참고로만 씁니다.
-CAUSE는 기사와 통계의 시점 연관성을 설명하되 원인으로 단정하지 마세요.
-인용은 articles에 포함된 근거 충분 기사만 쓰고 문장 끝 [n]으로 인용하세요.
-applied_defaults와 warnings를 필요한 설명에 반영하세요.
+결론과 설명은 각 하위 질문에서 요청한 내용에 집중하세요. 요청 밖 자료의 유무를 덧붙이지 마세요.
+자료에 없는 비교 기간을 추측하지 마세요. 사용자에게 내부 필드명을 노출하지 마세요.
+applied_defaults와 warnings는 해당 하위 질문과 관련된 내용만 반영하세요.
 turn_summary는 첫 번째 하위 질문 기준, 200자 이내 조건 요약과 질문 요지 → 핵심 결과 1개입니다.
 숫자는 답변에 쓴 것만 옮깁니다. title은 first_answer일 때만 조건을 포함한 20자 이내입니다.
 regeneration이 있으면 잘못된 문장과 숫자를 바로잡으세요.
@@ -35,6 +37,120 @@ intent가 HS_LOOKUP인 task는 digest.items(query·code·name·level)의 HS 코�
 코드를 만들거나 바꾸지 말고, 후보가 여럿이면 대표 후보를 고르지 말고 나열하며 HS2022 기준이라고 밝힙니다.
 """
 
+ARTICLE_PROMPT = """아래 기사 작성 지침은 article_search_planned가 true인 하위 질문에만 적용합니다.
+false인 하위 질문의 결론에서는 기사·검색 상황을 언급하지 마세요. 전체 설명의 검색 한계도 검색 대상 질문에만 연결하세요.
+CAUSE는 기사와 통계의 시점 연관성을 설명하되 원인으로 단정하지 마세요.
+기사 내용은 articles에서만 가져오고 문장 끝에 [n]으로 인용하세요. 결론에는 같은 task_id의 번호만 쓰세요.
+evidence_role이 context_reference면 배경 자료입니다. mixed면 '참고(직접 답변 아님)' 문장은 배경으로만 쓰세요.
+unclassified는 근거 역할 미분류입니다. 기사 제목으로 인과관계를 추측하지 마세요.
+reference_limitation과 요약 문장의 unverified_question_parts를 지키세요. news의 unverified_question_parts는
+그 하위 질문의 모든 기사 근거에서 미확인인 항목입니다. 답할 수 있는 사실과 확인할 수 없는 부분을 명시하세요.
+기사 검색을 요청했으나 쓸 근거가 없으면 확인된 수치와 해당 검색의 한계를 밝히세요. 기사만 있으면 통계 수치를 만들지 마세요.
+기사 사실을 쓴 결론과 설명에는 각각 출처를 붙이세요. 기사 발행일을 사건 발생일로 바꾸지 마세요.
+"""
+
+
+def numbered_articles(state):
+    """The UI lists all returned articles. Only a subset of those numbers is citable."""
+    articles = []
+    for task in state.plan.tasks:
+        for step in task.steps:
+            result = state.results.get(step.step_id)
+            if step.tool != 'search_articles' or not result or result.status != 'OK' or not result.article_ids:
+                continue
+            for item in (result.digest or {}).get('items', []):
+                if item['article_id'] in result.article_ids:
+                    articles.append({**item, 'task_id': task.task_id, 'n': len(articles) + 1})
+    return articles
+
+
+def _trade_fact(digest):
+    if digest.get('kind') == 'LLM_SQL' and digest.get('rows'):
+        row = digest['rows'][0]
+        for column in digest.get('columns', []):
+            key, unit = column['key'], column.get('unit')
+            if key not in row or unit not in ('USD', '%', 'KG', 'COUNT'):
+                continue
+            label = column.get('label') or key
+            value = row[key]
+            if value is None:
+                return f'결과표 첫 행의 {label} 값은 미집계입니다.'
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                amount = korean_usd(value) if unit == 'USD' else f'{value:,}' + {'%': '%', 'KG': ' kg', 'COUNT': '건'}[unit]
+                return f'결과표 첫 행의 {label} 값은 {amount}입니다.'
+    flow = {'EXPORT': '수출액', 'IMPORT': '수입액'}.get(digest.get('trade_flow'))
+    if not flow:
+        return None
+    targets = digest.get('targets') or []
+    target = targets[0] if digest.get('kind') == 'TREND' and targets else digest
+    label = ' '.join(str(target[k])[:40] for k in ('country_name', 'name') if target.get(k))
+    subject = ' '.join(filter(None, (label, flow)))
+    if 'total_usd' not in target:
+        return None
+    value = target['total_usd']
+    if value is not None:
+        return f'{subject}은 {korean_usd(value)}입니다.'
+    if target.get('verified_months') and target.get('verified_subtotal_usd') is not None:
+        return f'{subject}은 전체 기간 미집계이며, 집계된 달의 소계는 {korean_usd(target["verified_subtotal_usd"])}입니다.'
+    return f'{subject}은 전체 기간 미집계입니다.'
+
+
+def fallback_conclusion(state, task):
+    """Build a conclusion from the same result handles used to render this task."""
+    results = [(s.tool, state.results[s.step_id]) for s in task.steps if s.step_id in state.results]
+    if task.intent == 'CONVERSATION':
+        task.answer_status = 'PARTIAL'
+        return TaskConclusion(task_id=task.task_id, sentences=['질문에 대한 답변 문장을 만들지 못했습니다.'])
+    for tool, result in results:
+        if tool == 'lookup_hs' and result.status == 'OK' and (result.digest or {}).get('items'):
+            candidates = [f"{item['code']} {item['name']}" for item in result.digest['items']]
+            summary = 'HS2022 조회 후보는 ' + ', '.join(candidates) + '입니다.'
+            if len(summary) > 200:
+                summary = 'HS2022 조회 후보 코드입니다. ' + ', '.join(dict.fromkeys(i['code'] for i in result.digest['items']))
+            task.answer_status = 'PARTIAL'
+            return TaskConclusion(task_id=task.task_id, sentences=[
+                summary if len(summary) <= 200 else 'HS 코드 후보를 찾았으나 전체 목록을 답변 문장으로 만들지 못했습니다.'])
+    tables = [r for tool, r in results if tool in ('query_trade_data', 'query_market_model') and r.status == 'OK' and r.result_id]
+    chart = any(r.status == 'OK' and r.chart and r.result_id for _, r in results)
+    articles = any(a['task_id'] == task.task_id for a in numbered_articles(state))
+    facts = [_trade_fact(r.digest or {}) for r in tables]
+    fact = next((value for value in facts if value), None)
+    resources = [name for name, present in [('결과표', tables), ('차트', chart), ('기사 목록', articles)] if present]
+    reasons = [r.error for tool, r in results if r.status != 'OK' and r.error and tool != 'build_chart']
+    if task.intent == 'CAUSE' and not reasons:
+        if not tables:
+            reasons.append('요청한 통계 수치를 확인할 수 없습니다.')
+        elif not articles:
+            reasons.append('기사 근거에서 증감 배경을 확인할 수 없습니다.')
+    if not resources:
+        task.answer_status = 'NO_DATA'
+        sentences = [reasons[0] if reasons else '조건에 맞는 분석 결과가 없습니다.']
+    else:
+        task.answer_status = 'PARTIAL'
+        sentences = [fact] if fact else []
+        if articles or not fact:
+            sentences.append(' · '.join(resources) + '에서 확인할 수 있습니다.')
+        if reasons:
+            if len(sentences) == 2:
+                sentences[-1] += ' ' + reasons[0]
+            else:
+                sentences.append(reasons[0])
+    return TaskConclusion(task_id=task.task_id, sentences=[s[:200] for s in sentences])
+
+
+def _citable_article(article):
+    summary = []
+    for sentence in article.get('summary', []):
+        # Checkpoints saved before evidence roles used a list of plain strings.
+        if isinstance(sentence, str):
+            sentence = {'text': sentence, 'unverified_question_parts': []}
+        summary.append({'text': sentence['text'],
+                        'unverified_question_parts': sentence.get('unverified_question_parts', [])})
+    return {'n': article['n'], 'task_id': article['task_id'], 'title': article['title'][:100],
+            'published_date': article['published_date'], 'summary': summary,
+            'evidence_role': article.get('evidence_role', 'unclassified'),
+            'reference_limitation': article.get('reference_limitation')}
+
 
 def fixed_conclusion(state, task):
     if task.intent in UNSUPPORTED:
@@ -42,18 +158,22 @@ def fixed_conclusion(state, task):
     if task.intent == 'REPORT' and task.answer_status in ('ANSWERED', 'PARTIAL'):
         return TaskConclusion.report_completed(task.task_id)
     if task.answer_status == 'NO_DATA':
-        reason = next((state.results[s.step_id].error for s in task.steps
+        reasons = list(dict.fromkeys(state.results[s.step_id].error for s in task.steps
                        if s.step_id in state.results and state.results[s.step_id].error
                        and s.tool in ('check_conditions', 'query_trade_data', 'query_market_model',
-                                      'generate_report', 'search_articles')), None)
-        if not reason and not task.steps:
-            reason = ' '.join(task.applied_defaults)
+                                      'generate_report', 'lookup_hs', 'search_articles')))
+        if not reasons:
+            reasons = [' '.join(task.applied_defaults) if not task.steps and task.applied_defaults
+                       else '조건에 맞는 분석 결과가 없습니다.']
         return TaskConclusion(task_id=task.task_id,
-            sentences=[(reason or '조건을 확인해 다시 질문해 주세요.')[:200]])
+            sentences=[s[:200] for s in reasons[:2]])
     return None
 
 
-def compose_input(state: AgentState, describe_conditions, articles: list[dict]) -> tuple[dict, dict]:
+def compose_input(state: AgentState, describe_conditions, articles: list[dict], *, news_warnings=None) -> tuple[dict, dict]:
+    news_warnings = news_warnings or {}
+    common_warnings = [w for w in state.warnings if w not in news_warnings.values()]
+    allowed = [_citable_article(a) for a in articles if a.get('evidence_sufficient') and a.get('summary')]
     fixed, tasks = {}, []
     for task in state.plan.tasks:
         conclusion = fixed_conclusion(state, task)
@@ -62,23 +182,44 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict]) 
             continue
         if task.intent == 'CONVERSATION':
             tasks.append({'task_id': task.task_id, 'intent': task.intent, 'question': task.question,
-                          'answer_format': 'TEXT', 'conditions': {}, 'digests': {}, 'applied_defaults': [], 'warnings': []})
+                          'answer_format': 'TEXT', 'article_search_planned': False, 'conditions': {},
+                          'digests': {}, 'applied_defaults': [], 'warnings': []})
             continue
-        digests = {s.step_id.rsplit('.', 1)[-1]: display_amounts(state.results[s.step_id].digest) for s in task.steps
-                   if s.step_id in state.results and state.results[s.step_id].digest}
+        digests, limits = {}, []
+        for step in task.steps:
+            result = state.results.get(step.step_id)
+            if result is None:
+                continue
+            if result.error:
+                limits.append(result.error)
+            limits.extend(result.limitations)
+            if result.status == 'OK' and result.digest:
+                digest = result.digest
+                if step.tool == 'search_articles':
+                    # The numbered, evidence-filtered articles are the only source of article text.
+                    digest = {k: v for k, v in digest.items() if k != 'items'}
+                digests[step.step_id.rsplit('.', 1)[-1]] = display_amounts(digest)
         if not digests:
-            fixed[task.task_id] = TaskConclusion(task_id=task.task_id, sentences=['분석 결과의 요약 정보가 없습니다.'])
+            fixed[task.task_id] = fallback_conclusion(state, task)
             continue
+        if digests.keys() == {'news'} and (
+                task.intent == 'CAUSE' or not any(a['task_id'] == task.task_id for a in allowed)):
+            fixed[task.task_id] = fallback_conclusion(state, task)
+            continue
+        search_planned = any(step.tool == 'search_articles' for step in task.steps)
+        conditions = dict(describe_conditions(task.conditions))
+        if not search_planned:
+            conditions.pop('article_period', None)
+        warnings = list(common_warnings)
+        if task.task_id in news_warnings:
+            warnings.append(news_warnings[task.task_id])
         tasks.append({'task_id': task.task_id, 'intent': task.intent, 'question': task.question,
             'answer_format': 'TEXT' if is_text_task(task) else None,
-            'conditions': describe_conditions(task.conditions), 'digests': digests,
-            'applied_defaults': task.applied_defaults, 'warnings': state.warnings})
+            'article_search_planned': search_planned, 'conditions': conditions, 'digests': digests,
+            'applied_defaults': task.applied_defaults, 'warnings': list(dict.fromkeys([*warnings, *limits]))})
     mismatches = [{'index': c.index, 'sentence': state.draft.sentences()[c.index], 'numbers': c.numbers}
                   for c in state.verification.checks if c.status == 'MISMATCH'] if state.draft else []
     # Caller supplies already bounded titles/summaries; do not accept article bodies.
-    allowed = [{'n': a['n'], 'task_id': a['task_id'], 'title': a['title'][:100],
-                'published_date': a['published_date'], 'summary': [s[:200] for s in a.get('summary', [])]}
-               for a in articles if a.get('evidence_sufficient', False)]
     payload = {'question': state.input.question, 'first_answer': state.input.first_question,
         'tasks': tasks, 'articles': allowed,
         'regeneration': {'mismatches': mismatches} if mismatches else None}
@@ -88,10 +229,28 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict]) 
     return payload, fixed
 
 
-def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_conditions) -> Draft:
+def validate_citations(generated, articles):
+    by_task = {}
+    for a in articles:
+        by_task.setdefault(a['task_id'], set()).add(str(a['n']))
+    def check(sentences, allowed):
+        for sentence in sentences:
+            for token in re.findall(r'\[([^\[\]]*)\]', sentence):
+                if (re.search(r'\d', token) or token.strip().lower() == 'n') and token not in allowed:
+                    raise ValueError('해당 문장에서 사용할 수 없는 기사 인용 번호입니다.')
+    for conclusion in generated.conclusion:
+        check(conclusion.sentences, by_task.get(conclusion.task_id, set()))
+    check(generated.explanation, {str(a['n']) for a in articles})
+
+
+def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_conditions, *, articles=None) -> Draft:
     expected = [t.task_id for t in state.plan.tasks if t.task_id not in fixed]
     if expected != ([c.task_id for c in generated.conclusion] if generated else []):
         raise ValueError('생성 결론의 하위 질문 순서 또는 개수가 다릅니다')
+    if generated:
+        if articles is None:
+            articles = [a for a in numbered_articles(state) if a.get('evidence_sufficient') and a.get('summary')]
+        validate_citations(generated, articles)
     by_id = {c.task_id: c for c in generated.conclusion} if generated else {}
     by_id.update(fixed)
     primary = state.plan.tasks[0]

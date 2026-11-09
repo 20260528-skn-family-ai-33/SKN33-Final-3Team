@@ -48,10 +48,12 @@ class StructuredClient:
         key = next((v for k, v in self.settings.values.items() if k.lower() == 'openai_api_key' and v), None)
         if not key:
             raise ValueError('LLM API key missing')
+        # GPT-6 Luna의 기본 추론 강도(medium)에서는 temperature를 보낼 수 없다.
+        sampling = {} if model == 'gpt-6-luna' else {'temperature': 0}
         with factory(api_key=key, timeout=timeout, max_retries=0) as client:
             response = client.responses.parse(model=model, instructions=prompt,
                 input=json.dumps(payload, ensure_ascii=False, allow_nan=False), text_format=schema,
-                max_output_tokens=max_output_tokens, temperature=0, store=False)
+                max_output_tokens=max_output_tokens, store=False, **sampling)
         if response.status != 'completed' or response.output_parsed is None:
             raise ValueError('LLM response refused or incomplete')
         # Revalidate even when a test/integration provider returns a model instance.

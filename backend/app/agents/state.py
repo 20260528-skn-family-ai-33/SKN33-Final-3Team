@@ -792,15 +792,19 @@ class AgentState(Model):
         if task.intent == 'LOCAL_ISSUES':
             core_tools.add('search_articles')
         core = [s for s in task.steps if s.tool in core_tools]
-        if not core or any(s.status != 'DONE' or s.step_id not in self.results
-                           or self.results[s.step_id].status != 'OK' for s in core):
-            return 'NO_DATA'
         relevant = [self.results[s.step_id] for s in task.steps if s.step_id in self.results]
         for binding in task.input_bindings:
             result = self.results.get(binding.source_step_id)
             if result is None or result.status != 'OK':
                 return 'NO_DATA'
             relevant.append(result)
+        if not core or any(s.status != 'DONE' or s.step_id not in self.results
+                           or self.results[s.step_id].status != 'OK' for s in core):
+            if task.intent == 'CAUSE' and any(
+                    s.tool == 'search_articles' and s.status == 'DONE' and (r := self.results.get(s.step_id))
+                    and r.status == 'OK' and r.article_ids and (r.digest or {}).get('items') for s in task.steps):
+                return 'PARTIAL'
+            return 'NO_DATA'
         # 저장 경계에서 전파하지 않은 이전 체크포인트도 간접 선행 결과를 확인한다.
         for step in core:
             relevant.append(self.result_for_storage(step.step_id, self.results[step.step_id]))

@@ -1,0 +1,173 @@
+"""Run the six synthetic Writer Dev cases through compose. No database or article service is contacted."""
+import argparse
+from contextlib import nullcontext
+from datetime import datetime
+import json
+from pathlib import Path
+from time import monotonic
+from unittest.mock import patch
+
+import httpx
+from dotenv import dotenv_values
+from openai import OpenAI
+
+from backend.app.agents.llm import StructuredClient
+from backend.app.agents.planner import build_plan
+from backend.app.agents.runtime import Services, WRITER_MODEL
+from backend.app.agents.state import AgentState, Conditions, PlannerOutput, ToolResult
+from backend.app.agents.tools import article_result
+from backend.app.api.config import Settings
+from backend.app.schemas.rag import ArticleEvidence, RagResponse
+from backend.tests.rag_fixtures import article_payload, response_payload
+
+
+def statistic(amounts, flow='EXPORT', **comparison):
+    months = ['2026-08', '2026-09'][-len(amounts):]
+    return {'kind': 'TREND', 'trade_flow': flow, 'unit': 'USD', 'targets': [{
+        'name': '전체 품목', 'country_name': '전체 국가',
+        'total_usd': None if None in amounts else sum(amounts),
+        'monthly': [{'month': m, 'amount_usd': v} for m, v in zip(months, amounts, strict=True)],
+        **comparison}]}
+
+
+def article(n, title, sentence, role, missing=()):
+    row = article_payload(n)
+    row.update(title=title, evidence_role=role,
+               reference_limitation='통관 절차 공지만 확인됩니다.' if missing else None)
+    row['summary'][0].update(text=sentence, unverified_question_parts=list(missing))
+    row['evidence'][0]['quote'] = sentence
+    return row
+
+
+DEV = {
+    '01-large-export': [('STATISTICS', '9월 한국의 총수출액은 얼마인가요?', statistic([123460000]), [])],
+    '02-zero-null': [('STATISTICS', '8월과 9월 수출액을 각각 알려 주세요. 두 달 전체 합계도 확인되나요?',
+                      statistic([0, None]), [])],
+    '03-import': [('STATISTICS', '9월 수입액과 비교 기간 수입액, 증감률을 알려 주세요.',
+                   statistic([1234], 'IMPORT', compare_total_usd=1542, change_pct=-20.0), [])],
+    '04-context': [('CAUSE', '9월 수출 증가 원인이 통관 절차 변경인가요?',
+                    statistic([30000], compare_total_usd=25000, change_pct=20),
+                    [article(1, '통관 절차 공지', '참고(직접 답변 아님): 통관 신고서 양식 개정이 공지됐다.',
+                             'context_reference', ['수출 증가 원인'])])],
+    '05-two-tasks': [('LOCAL_ISSUES', '9월 포장 기준 변경 내용을 기사로 알려 주세요.', None,
+                      [article(1, '포장 기준 공지', '포장 기준에 분리 표시가 추가됐다.', 'direct_evidence')]),
+                     ('LOCAL_ISSUES', '9월 창고 운영 변경 내용을 기사로 알려 주세요.', None,
+                      [article(2, '창고 운영 공지', '창고가 야간 운영을 시작했다.', 'direct_evidence')])],
+    '06-partial': [('CAUSE', '9월 수출액과 그 배경을 기사로 설명해 주세요.', statistic([26100000]), [])],
+}
+
+
+def dev_state(case):
+    question = ' '.join(q for _, q, _, _ in case)
+    state = AgentState(input={'question': question, 'job_id': 'dev', 'user_id': 1, 'session_id': '1',
+                              'received_at': datetime(2026, 10, 1), 'context': {'session_id': '1'}})
+    state.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': i, 'question': q} for i, q, _, _ in case]))
+    for task, (_, _, stats, articles) in zip(state.plan.tasks, case, strict=True):
+        period = {'start': '2026-09-01', 'end': '2026-09-30'}
+        first = stats['targets'][0]['monthly'][0]['month'] if stats else '2026-09'
+        task.conditions = Conditions(period={'start': first+'-01', 'end': '2026-09-01'}, article_period=period,
+                                     trade_flow=stats['trade_flow'] if stats else 'EXPORT')
+        for step in task.steps:
+            step.status = 'DONE'
+            if step.tool == 'query_trade_data':
+                state.results[step.step_id] = ToolResult(status='OK', result_id=step.step_id, digest=stats)
+            if step.tool == 'search_articles':
+                def search(request, *, article_allowed=None, started=None):
+                    data = response_payload(request.model_dump(mode='json'), count=len(articles),
+                            status='insufficient_results' if articles else 'failed', articles=articles,
+                            failures=[] if articles else [{'stage':'timeout', 'code':'synthetic_timeout'}],
+                            unverified_question_parts=RagResponse.common_unverified_parts(
+                                [ArticleEvidence.model_validate(a) for a in articles]))
+                    return RagResponse.model_validate(data)
+                with patch('backend.app.agents.tools.search_news', side_effect=search):
+                    result = article_result(state, task, step)
+                state.results[step.step_id] = result
+                if result.status != 'OK':
+                    step.status = 'FAILED'
+        task.answer_status = state.task_outcome(task.task_id)
+    return state
+
+
+class Meter:
+    def __init__(self):
+        self.attempts = []
+
+    def call(self, node, timeout, callback, **kwargs):
+        attempt = {}
+        self.attempts.append(attempt)
+        started = monotonic()
+        try:
+            result = callback(timeout)
+            attempt['accepted'] = True
+            return result
+        except Exception as exc:
+            attempt.update(accepted=False, error=type(exc).__name__)
+            raise
+        finally:
+            attempt['seconds'] = round(monotonic() - started, 3)
+
+    def response(self, response):
+        response.read()
+        data = response.json()
+        self.attempts[-1].update(http_status=response.status_code, usage=data.get('usage'),
+            output=data.get('output'), status=data.get('status'), resolved_model=data.get('model'),
+            service_tier=data.get('service_tier'))
+
+    def request(self, request):
+        self.attempts[-1]['request'] = json.loads(request.content)
+
+    def client(self, **kwargs):
+        transport = httpx.Client(timeout=kwargs['timeout'],
+                                 event_hooks={'request': [self.request], 'response': [self.response]})
+        return OpenAI(**kwargs, base_url='https://api.openai.com/v1', http_client=transport)
+
+
+def measurements(model, attempts):
+    # Standard text prices per million tokens on 2026-11-09, including the default cache-write lifetime.
+    input_price, read_price, write_price, output_price = {
+        'gpt-4.1-mini': (0.40, 0.10, 0, 1.60),
+        'gpt-6-luna': (0.10, 0.01, 0.125, 0.50),
+    }[model]
+    estimate = 0
+    for a in attempts:
+        usage = a.get('usage')
+        if not usage or a.get('service_tier') != 'default':
+            estimate = None
+            break
+        details = usage['input_tokens_details']
+        reads, writes = details['cached_tokens'], details['cache_write_tokens']
+        ordinary = usage['input_tokens'] - reads - writes
+        estimate += (ordinary * input_price + reads * read_price + writes * write_price +
+                     usage['output_tokens'] * output_price) / 1_000_000
+    return {'first_draft_accepted': bool(attempts and attempts[0]['accepted']),
+            'retries': max(0, len(attempts) - 1), 'seconds': round(sum(a['seconds'] for a in attempts), 3),
+            'estimated_usd': round(estimate, 12) if estimate is not None else None}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--env-file', type=Path, required=True)
+    parser.add_argument('--models', choices=[WRITER_MODEL], default=WRITER_MODEL,
+                        help='Writer 모델은 고정이며 이 인자는 생략할 수 있습니다.')
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    states = {name: dev_state(case) for name, case in DEV.items()}
+    key = dotenv_values(args.env_file, interpolate=False)['OPENAI_API_KEY']
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with args.output.open('x', encoding='utf-8') as out:
+        for name, state in states.items():
+            settings = Settings({'OPENAI_API_KEY': key})
+            meter = Meter()
+            services = Services(meter, settings, StructuredClient(settings, meter.client))
+            with patch.object(services, 'read_store', return_value=nullcontext()), \
+                 patch('backend.app.agents.templates._names', return_value=({}, {})):
+                services.compose(state)
+            record = {'case': name, 'model': WRITER_MODEL, 'attempts': meter.attempts,
+                      'metrics': measurements(WRITER_MODEL, meter.attempts),
+                      'draft': state.draft.model_dump(mode='json'), 'warnings': state.warnings}
+            print(json.dumps(record, ensure_ascii=False), file=out, flush=True)
+            print(name, WRITER_MODEL, len(meter.attempts), flush=True)
+
+
+if __name__ == '__main__':
+    main()

@@ -313,11 +313,67 @@ class BackendApiTest(unittest.TestCase):
     def test_reverified_shorter_draft_marks_only_final_sentence_index(self):
         self._run_numeric_review(True)
 
+    def test_writer_citations_match_the_job_and_saved_message_article_order(self):
+        from unittest.mock import Mock
+        from langgraph.checkpoint.memory import InMemorySaver
+        from backend.app.agents.state import Draft, PlannerOutput
+        from backend.app.schemas.rag import RagResponse
+        from backend.tests.rag_fixtures import article_payload, response_payload
+
+        self.settings.values['API_CHAT_AGENT_ENABLED'] = 'true'
+        db = self.app.state.database
+        db.agent_checkpointer = InMemorySaver()
+        db.agent_client = Mock()
+        questions = ['포장 공지를 알려 주세요.', '창고 공지를 알려 주세요.']
+        period = {'start': '2026-09-01', 'end': '2026-09-30'}
+        plan = PlannerOutput(tasks=[{'intent': 'LOCAL_ISSUES', 'question': q, 'slots': {'article_period': period}}
+                                    for q in questions])
+        valid = Draft(conclusion=[{'task_id': 't1', 'sentences': ['포장 공지입니다.[2]']},
+                                  {'task_id': 't2', 'sentences': ['창고 공지입니다.[3]']}], turn_summary='포장 공지')
+        invalid = valid.model_copy(deep=True)
+        invalid.conclusion[0].sentences = ['포장 공지입니다.[3]']
+        db.agent_client.parse.side_effect = [plan, invalid, valid]
+
+        def search(request, *, article_allowed=None, started=None):
+            item = article_payload(11 if request.query == questions[0] else 12)
+            items = [item]
+            if request.query == questions[0]:
+                items.insert(0, dict(article_payload(10), evidence=[], summary=[]))
+            return RagResponse.model_validate(response_payload(request.model_dump(mode='json'),
+                status='insufficient_evidence' if len(items) == 2 else 'insufficient_results',
+                count=len(items), articles=items))
+
+        with self.engine.begin() as connection:
+            for number in (10, 11, 12):
+                item = article_payload(number)
+                row = {k: item[k] for k in ('article_id', 'source_code', 'external_id', 'title', 'source_url')}
+                connection.execute(self.meta.tables['article'].insert().values(**row,
+                    published_date=date.fromisoformat(item['published_date']), body_masked=item['evidence'][0]['quote'],
+                    category='경제·무역', visibility_status='VISIBLE', admin_meta_json={}))
+        self.signup()
+        sid = self.post('chat/sessions', {}).json()['session']['session_id']
+        job = self.post(f'chat/sessions/{sid}/messages', {'question': ' '.join(questions),
+                        'client_message_id': 'writer-citations'}).json()['job']
+        with patch('backend.app.agents.tools.search_news', side_effect=search):
+            self.assertTrue(run_once(db, self.settings))
+        job = self.client.get(f"/api/v1/chat/jobs/{job['job_id']}").json()['job']
+        self.assertEqual(job['status'], 'SUCCEEDED', job)
+        self.assertEqual(db.agent_client.parse.call_count, 3)
+        answer = job['answer']
+        self.assertEqual([a['article_id'] for a in answer['articles']], ['10', '11', '12'])
+        self.assertTrue(answer['articles'][1]['sentences'])
+        self.assertEqual([t['conclusion'] for t in answer['tasks']], [c.sentences for c in valid.conclusion])
+        table = self.meta.tables['chat_message']
+        with self.engine.connect() as connection:
+            saved = connection.scalar(select(table.c.result_json).where(table.c.role == 'ASSISTANT'))
+        self.assertEqual(saved['answer']['articles'], answer['articles'])
+
     def test_agent_worker_resumes_then_publishes_ranked_table(self):
         from langgraph.checkpoint.memory import InMemorySaver
         from backend.app.agents.state import Draft, PlannerOutput
         from unittest.mock import Mock
         self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        self.settings.values['API_COMPOSE_MODEL']='gpt-4.1-mini'
         db=self.app.state.database
         db.agent_checkpointer=InMemorySaver()
         db.agent_client=Mock()
@@ -349,6 +405,13 @@ class BackendApiTest(unittest.TestCase):
         self.assertTrue(all(s['status']=='DONE' for s in done['progress']['plan']))
         self.assertEqual(done['status'],'SUCCEEDED',done)
         self.assertEqual(done['answer']['answer_status'],'ANSWERED')
+        requested_models = [call.kwargs['model'] for call in db.agent_client.parse.call_args_list]
+        self.assertEqual(requested_models, ['gpt-4.1-mini', 'gpt-6-luna'])
+        message = self.meta.tables['chat_message']
+        with self.engine.connect() as connection:
+            saved = connection.execute(select(message.c.result_json).where(
+                message.c.session_id == int(sid), message.c.role == 'ASSISTANT')).scalar_one()
+        self.assertEqual(saved['trace']['models']['compose'], requested_models[-1])
         self.assertEqual(done['answer']['tables'][0]['rows'][0]['country_code'],'CN')
         table=done['answer']['tables'][0]
         self.assertNotIn('hs_item',[c['key'] for c in table['columns']])

@@ -247,7 +247,7 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
     {a.warnings?.filter(w => w !== a.text).map(w => <p className="note" key={w}>{w}</p>)}
     {!a.tasks?.length && a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
-    {a.articles.map((article, index) => <div className="li" key={article.article_id}><div>
+    {a.articles.map((article, index) => <div className="li" key={`${article.task_id || ''}:${article.article_id}`}><div>
       <b>[{index + 1}] {article.title}</b>
       <p className="muted">{article.source_code} · {article.published_date}</p>
       {article.sentences?.length ? article.sentences.map((s, i) => <details key={i}>
