@@ -1,8 +1,11 @@
-from datetime import datetime, timezone
-from sqlalchemy import select, update, func, and_, or_, exists, cast, String
+from datetime import date, datetime, timezone
+from sqlalchemy import select, update, func, and_, or_, exists, cast, case, String
 from backend.app.api.common import require, unavailable, now, page_info
 from backend.app.api.news import blocked_topics, article_views, article_statement, source_meta
 from backend.app.api.results import save_snapshot, read_snapshot
+from backend.app.services.article_sources import KEYWORD_DAILY_SOURCES, PRODUCT_DAILY_SOURCES
+
+EVIDENCE_LIMIT=5  # 사건마다 보여 줄 근거 기사 수(판정 작업의 대표 기사 수와 같다)
 
 
 POPUP_KINDS={'report_popup':('REPORT',),'major_issue_popup':('MAJOR_ISSUE',),'spike_popup':('PRODUCT_SPIKE','KEYWORD_SPIKE')}
@@ -100,24 +103,60 @@ def target_blocked(store,uid,payload):
     return target.get('keyword_text') in blocked or target.get('kw_topic') in blocked
 
 
+def event_ids(event):
+    return event['payload_json'].get('article_ids',[]) or ([event['article_id']] if event.get('article_id') else [])
+
+
+def spike_target(payload):
+    """기사량 급증 판정이면 대상 키워드 또는 품목. 그 밖의 사건은 None."""
+    target=payload.get('target') or {}
+    if payload.get('reason')!='WEEKLY_NEWS_SPIKE' or not (target.get('keyword_text') or target.get('hs_code')): return None
+    return target
+
+
+def evidence_statement(store,uid,payload,ids=(),hs=None,countries=None):
+    """이 회원이 열 수 있는 근거 기사(최신순). 기사량 급증은 저장된 대표 5건이 아니라 판정 기간·출처·대상 전체에서 찾는다.
+    알림 전달·알림함·팝업·클릭 대상·주요 이슈 목록·주간 리포트가 같은 기준을 쓴다. 근거를 정할 수 없는 사건은 None."""
+    a,tags=store.t('article'),store.t('article_tag')
+    target=spike_target(payload)
+    if target:
+        from backend.app.scheduler.jobs.major_issue_detect import windows  # 판정 작업이 이 모듈을 불러 쓰므로 실행 시점에 가져온다
+        fallback=windows(date.fromisoformat(payload['metric_date']))[0]
+        start=date.fromisoformat(payload['window_start']) if payload.get('window_start') else fallback[0]
+        end=date.fromisoformat(payload['window_end']) if payload.get('window_end') else fallback[1]
+        if target.get('keyword_text'):
+            members,sources=select(tags.c.article_id).where(tags.c.keyword_text==target['keyword_text']),KEYWORD_DAILY_SOURCES
+        else:
+            members,sources=select(tags.c.article_id).where(tags.c.hs_code.startswith(target['hs_code']),tags.c.hs_ver==target.get('hs_ver')),PRODUCT_DAILY_SOURCES
+        return article_statement(store,uid,start=start,end=end,hs=hs,countries=countries).where(a.c.article_id.in_(members),a.c.source_code.in_(sources))
+    if ids: return article_statement(store,uid,hs=hs,countries=countries).where(a.c.article_id.in_(ids))
+    return None
+
+
+def has_evidence(store,uid,payload,ids=(),hs=None,countries=None):
+    stmt=evidence_statement(store,uid,payload,ids,hs,countries)
+    if stmt is None: return None
+    a=store.t('article')
+    return store.c.execute(stmt.order_by(None).with_only_columns(a.c.article_id).limit(1)).first() is not None
+
+
 def event_allowed(store,uid,event):
     payload=event['payload_json']
     if target_blocked(store,uid,payload): return False
-    ids=payload.get('article_ids',[]) or ([event['article_id']] if event['article_id'] else [])
-    if ids:
-        a=store.t('article')
-        visible=store.c.execute(article_statement(store,uid).with_only_columns(a.c.article_id).where(a.c.article_id.in_(ids))).scalars().all()
-        return bool(visible)
-    return True
+    found=has_evidence(store,uid,payload,event_ids(event))
+    return True if found is None else found
 
 
 def issue_view(store,event,uid=None,articles=None):
     p=event['payload_json']; target=p.get('target',{})
-    ids=p.get('article_ids',[]) or ([event['article_id']] if event['article_id'] else [])
+    ids=event_ids(event)
     if articles is None:
         a=store.t('article')
         rows=store.rows(article_statement(store,uid).where(a.c.article_id.in_(ids))) if ids else []
         articles=article_views(store,rows,uid)
+    if not articles and spike_target(p):
+        # 대표 기사를 하나도 열 수 없으면 이 회원이 볼 수 있는 같은 판정의 근거 기사를 대신 보여 준다. 공유 사건 원본은 바꾸지 않는다.
+        articles=article_views(store,store.rows(evidence_statement(store,uid,p).limit(EVIDENCE_LIMIT)),uid)
     return {'event_id':str(event['event_id']),'event_type':event['event_type'],
         'label':p.get('label') or target.get('keyword_text') or target.get('hs_code') or '주요 이슈',
         'reason':p.get('reason',event['event_type']),'current_count':p.get('recent_week_count',p.get('day_count')),
@@ -174,7 +213,21 @@ def event_allowed_sql(store,uid):
         count=func.coalesce(func.json_length(ids),0)
     related=or_(and_(count>0,array_match),and_(count==0,e.c.article_id==a.c.article_id))
     visible=article_statement(store,uid).with_only_columns(a.c.article_id).order_by(None).where(related).correlate(e)
-    conditions.append(or_(and_(count==0,e.c.article_id.is_(None)),exists(visible)))
+    stored=or_(and_(count==0,e.c.article_id.is_(None)),exists(visible))
+    # 기사량 급증은 evidence_statement와 같이 판정 기간·출처·대상 전체에서 이 회원이 열 수 있는 기사를 찾는다.
+    p=e.c.payload_json; target=p['target']
+    keyword,hs,version=(target[key].as_string() for key in ('keyword_text','hs_code','hs_ver'))
+    window_start,window_end=p['window_start'].as_string(),p['window_end'].as_string()
+    spike=and_(func.coalesce(p['reason'].as_string(),'')=='WEEKLY_NEWS_SPIKE',func.coalesce(window_start,'')!='',
+               or_(func.coalesce(keyword,'')!='',func.coalesce(hs,'')!=''))
+    tag=store.t('article_tag').alias('evidence_tag')
+    member=or_(and_(func.coalesce(keyword,'')!='',tag.c.keyword_text==keyword,a.c.source_code.in_(KEYWORD_DAILY_SOURCES)),
+               and_(func.coalesce(keyword,'')=='',tag.c.hs_code.startswith(hs),tag.c.hs_ver==version,a.c.source_code.in_(PRODUCT_DAILY_SOURCES)))
+    # 가장 안쪽 태그 조건도 바깥 알림 사건(e)·기사(a)와 연결해야 한다. 연결하지 않으면 사건 표를 따로 읽어 다른 사건의 대상으로 통과한다.
+    tagged=exists(select(tag.c.tag_id).where(tag.c.article_id==a.c.article_id,member).correlate(e,a))
+    evidence=article_statement(store,uid).with_only_columns(a.c.article_id).order_by(None).where(
+        a.c.published_date>=window_start,a.c.published_date<=window_end,tagged).correlate(e)
+    conditions.append(case((spike,exists(evidence)),else_=stored))
     return and_(*conditions)
 
 

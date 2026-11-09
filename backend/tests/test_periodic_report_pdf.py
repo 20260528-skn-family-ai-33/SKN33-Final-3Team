@@ -345,9 +345,105 @@ class PeriodicContextTest(unittest.TestCase):
         issue = next(r for r in self.weekly_for_us(uid)['summary']['issues'] if r['kind'] == 'SPIKE')
         self.assertIn('7일 4건', issue['basis'])
 
+    def consent(self):
+        r = self.client.post('/api/v1/users/me/consents', headers={'X-CSRF-Token': self.csrf},
+                             json={'terms_type': 'NOTIFICATION', 'terms_version': 'TERMS_V1', 'action': 'AGREE', 'enable_notifications': True})
+        self.assertEqual(r.status_code, 200, r.text)
+
+    def short_news_run(self, start, end, status):
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['batch_run'].insert(), {'source_code': 'KOTRA_SHORT_NEWS', 'job_name': 'NEWS', 'target_table': 'article',
+                                                               'period_start': start, 'period_end': end, 'status': status, 'detail_json': {}})
+
+    def test_member_gets_spike_alert_from_viewable_evidence_when_all_representatives_are_blocked(self):
+        """관세 기사 8건 중 최신 5건(대표 기사)만 차단해도 남은 3건으로 기준을 넘으면 알림을 받고, 어디서나 볼 수 있는 기사로 연다."""
+        uid = int(self.signup()); self.consent()
+        self.collected_news()
+        self.keyword_articles(1001, 3, date(2025, 12, 15), '관세')
+        self.keyword_articles(1011, 5, date(2025, 12, 21), '관세', '차단')
+        self.block(uid, '차단')
+        result = job.detect(self.app.state.database, date(2025, 12, 21))
+        self.assertEqual(result['events'], 2)  # '관세'와 '차단' 키워드가 각각 급증. '차단' 사건은 차단한 회원에게 가지 않는다.
+        self.assertEqual(result['deliveries'], 1)
+        visible = {'1001', '1002', '1003'}
+        items = self.client.get('/api/v1/notifications').json()['items']
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['target_type'], 'ARTICLE')
+        self.assertIn(items[0]['target_id'], visible)
+        self.assertTrue({a['article_id'] for a in items[0]['issue']['articles']} <= visible)
+        self.assertTrue(items[0]['issue']['articles'])
+        self.assertEqual(self.client.get('/api/v1/notifications/unread-count').json()['count'], 1)
+        groups = self.client.get('/api/v1/notifications/popups').json()['groups']
+        popup = [n for g in groups for n in g['notifications']]
+        self.assertEqual([(n['target_type'], n['target_id'] in visible) for n in popup], [('ARTICLE', True)])
+        major = self.client.get('/api/v1/issues/major').json()['items']
+        self.assertEqual(len(major), 1)
+        self.assertTrue(major[0]['articles'] and {a['article_id'] for a in major[0]['articles']} <= visible)
+        issues = self.weekly_for_us(uid)['summary']['issues']
+        self.assertEqual([r['title'] for r in issues], ['‘관세’ 기사 급증'])
+        self.assertIn('7일 3건', issues[0]['basis'])
+
+    def test_inbox_checks_evidence_of_each_spike_event_separately(self):
+        """알림함 조건은 사건마다 자기 대상의 근거를 본다. 다른 사건의 근거 기사 때문에 통과하면 안 된다."""
+        uid = int(self.signup()); self.consent()
+        self.collected_news()
+        self.keyword_articles(1061, 3, date(2025, 12, 21), '관세')
+        self.keyword_articles(1071, 3, date(2025, 12, 21), '무역', '차단')
+        job.detect(self.app.state.database, date(2025, 12, 21))
+        labels = lambda: sorted(n['issue']['label'] for n in self.client.get('/api/v1/notifications').json()['items'])
+        self.assertEqual(labels(), ['관세', '무역', '차단'])
+        self.block(uid, '차단')  # 전달 뒤 차단: '무역' 기사는 모두 '차단' 태그가 있어 더는 열 수 없다
+        self.assertEqual(labels(), ['관세'])
+        self.assertEqual(self.client.get('/api/v1/notifications/unread-count').json()['count'], 1)
+
+    def test_member_without_any_viewable_evidence_gets_no_spike_alert(self):
+        uid = int(self.signup()); self.consent()
+        self.collected_news()
+        self.keyword_articles(1021, 3, date(2025, 12, 21), '관세', '차단')
+        self.block(uid, '차단')
+        self.assertEqual(job.detect(self.app.state.database, date(2025, 12, 21))['deliveries'], 0)
+        self.assertEqual(self.client.get('/api/v1/notifications').json()['items'], [])
+        self.assertEqual(self.client.get('/api/v1/issues/major').json()['items'], [])
+
+    def test_stored_spike_is_excluded_when_its_own_window_is_not_fully_collected(self):
+        """판정 후 그 판정의 8주 비교 기간 중 하루가 재수집 실패로 바뀌면 그 판정은 쓰지 않는다."""
+        uid = int(self.signup())
+        self.collected_news()
+        self.keyword_articles(1031, 3, date(2025, 12, 20), '관세')
+        job.detect(self.app.state.database, date(2025, 12, 20))
+        self.short_news_run(date(2025, 11, 10), date(2025, 11, 10), 'FAILED')
+        summary = self.weekly_for_us(uid)['summary']
+        self.assertEqual(summary['issues'], [])
+        self.assertEqual(summary['spike_gap_note'], '12월 21일 기준 단신 수집이 완료되지 않아 키워드 급증은 판단하지 않았습니다.')
+
+    def test_stored_spike_before_a_failed_day_keeps_its_own_date(self):
+        """20일(토)까지 수집 완료 후 21일(일) 단신만 실패하면 20일 판정은 유효하고 안내는 21일 기준이다."""
+        uid = int(self.signup())
+        self.collected_news(end=date(2025, 12, 20))
+        with self.engine.begin() as c:  # 시장뉴스는 21일까지 끝났다
+            c.execute(self.meta.tables['batch_run'].insert(), {'source_code': 'KOTRA_MARKET', 'job_name': 'NEWS', 'target_table': 'article',
+                                                               'period_start': date(2025, 12, 21), 'period_end': date(2025, 12, 21), 'status': 'SUCCESS', 'detail_json': {}})
+        self.keyword_articles(1041, 3, date(2025, 12, 20), '관세')
+        job.detect(self.app.state.database, date(2025, 12, 20))
+        self.short_news_run(date(2025, 12, 21), date(2025, 12, 21), 'FAILED')
+        summary = self.weekly_for_us(uid)['summary']
+        self.assertEqual([r['title'] for r in summary['issues']], ['‘관세’ 기사 급증'])
+        self.assertTrue(summary['issues'][0]['basis'].startswith('12월 20일 기준 · 7일 3건'))
+        self.assertEqual(summary['spike_gap_note'], '12월 21일 기준 단신 수집이 완료되지 않아 키워드 급증은 판단하지 않았습니다.')
+
+    def test_spike_shows_once_after_a_canonical_keyword_is_assigned(self):
+        uid = int(self.signup())
+        self.collected_news()
+        self.keyword_articles(1051, 3, date(2025, 12, 21), '관세')
+        job.detect(self.app.state.database, date(2025, 12, 21))
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['keyword_topic'].insert(), {'keyword_text': '관세', 'canonical_text': '관세정책', 'status': 'UNCLASSIFIED'})
+        issues = self.weekly_for_us(uid)['summary']['issues']
+        self.assertEqual([r['title'] for r in issues], ['‘관세’ 기사 급증'])
+
     def test_weekly_uses_latest_metric_date_when_old_date_is_reprocessed(self):
         uid = int(self.signup())
-        self.seed_news()
+        self.seed_news(); self.collected_news()  # 저장된 판정은 수집이 끝난 기간에서만 쓴다
         self.market_article(601, date(2025, 12, 18), tags=[{'keyword_text': '관세'}])
         table = self.meta.tables['alert_event']
         with self.engine.begin() as c:
@@ -370,7 +466,7 @@ class PeriodicContextTest(unittest.TestCase):
 
     def test_stored_spike_is_dropped_when_public_count_falls_below_threshold(self):
         uid = int(self.signup())
-        self.seed_news()
+        self.seed_news(); self.collected_news()  # 저장된 판정은 수집이 끝난 기간에서만 쓴다
         self.market_article(401, visible='HIDDEN', tags=[{'keyword_text': '관세'}])
         for identity in (402, 403):
             self.market_article(identity, tags=[{'keyword_text': '관세'}])
@@ -381,7 +477,7 @@ class PeriodicContextTest(unittest.TestCase):
 
     def test_stored_spike_shows_recalculated_public_count(self):
         uid = int(self.signup())
-        self.seed_news()
+        self.seed_news(); self.collected_news()  # 저장된 판정은 수집이 끝난 기간에서만 쓴다
         self.market_article(401, visible='HIDDEN', tags=[{'keyword_text': '관세'}])
         self.market_article(402, tags=[{'keyword_text': '관세'}])
         self.keyword_day(date(2025, 12, 21), 5)
@@ -405,14 +501,14 @@ class PeriodicContextTest(unittest.TestCase):
         ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
         summary = ctx['summary']
         self.assertEqual(summary['issue_spike_ratio'], 3)
-        self.assertEqual(summary['spike_gap_note'], '단신 수집이 완료되지 않아 키워드 급증은 판단하지 않았습니다.')
+        self.assertEqual(summary['spike_gap_note'], '12월 21일 기준 단신 수집이 완료되지 않아 키워드 급증은 판단하지 않았습니다.')
         self.assertIn('단신 수집이 완료되지 않아', summary['issues_note'])
         self.assertNotIn('이번 주 기준에 해당하는', summary['issues_note'])
         self.assertIn('단신 수집이 완료되지 않아', render('RPT_WEEKLY', ctx))
 
     def test_interest_ignores_articles_outside_judgment_window(self):
         uid = int(self.signup())
-        self.seed_news()
+        self.seed_news(); self.collected_news(end=date(2025, 12, 15))  # 15일 저장 판정만 쓰이도록 수집은 15일까지
         # 15일 판정에 들어간 기사는 중국뿐이고, 같은 키워드의 미국 기사는 18일에 나왔다
         for identity in (501, 502, 503):
             self.market_article(identity, date(2025, 12, 15), tags=[{'keyword_text': '관세'}, {'country_code': 'CN'}])
@@ -424,7 +520,7 @@ class PeriodicContextTest(unittest.TestCase):
 
     def test_interest_counts_contributing_article_before_report_week(self):
         uid = int(self.signup())
-        self.seed_news()
+        self.seed_news(); self.collected_news(end=date(2025, 12, 15))  # 15일 저장 판정만 쓰이도록 수집은 15일까지
         self.market_article(505, date(2025, 12, 10), tags=[{'keyword_text': '관세'}, {'country_code': 'US'}, {'hs_code': '330499', 'hs_ver': 'HS2022'}])
         for identity in (506, 507):
             self.market_article(identity, date(2025, 12, 15), tags=[{'keyword_text': '관세'}, {'country_code': 'CN'}])
@@ -450,11 +546,11 @@ class PeriodicContextTest(unittest.TestCase):
         ctx, _, _ = self.context(uid, self.record('RPT_WEEKLY'))
         text = weekly_highlights(ctx)
         self.assertIn('직전 8주와 비교하지 않았습니다', text)
-        self.assertIn('주요 이슈: 시장뉴스 수집이 완료되지 않아 급증 이슈는 판단하지 않았습니다. 확인한 범위에는 주요 이슈가 없습니다.', text)
+        self.assertIn('주요 이슈: 12월 21일 기준 시장뉴스 수집이 완료되지 않아 급증 이슈는 판단하지 않았습니다. 확인한 범위에는 주요 이슈가 없습니다.', text)
 
     def test_weekly_lists_major_issues_of_that_week_once_and_marks_interest(self):
         uid = int(self.signup())
-        self.seed_news()
+        self.seed_news(); self.collected_news()  # 저장된 판정은 수집이 끝난 기간에서만 쓴다
         self.market_article(701, tags=[{'keyword_text': '관세'}])
         table = self.meta.tables['alert_event']
         article_id = 1

@@ -15,7 +15,7 @@ from backend.app.api import news, trade
 from backend.app.api.common import clean, month_end, percentage, require, shift_month
 from backend.app.scheduler.jobs.major_issue_detect import (MARKET, MINIMUM_RATIO, SHORT_NEWS, keyword_counts, keyword_issues,
                                                            product_counts, product_issues, spike, trade_regulation_issues, windows)
-from backend.app.services.article_sources import KEYWORD_DAILY_SOURCES, PRODUCT_DAILY_SOURCES, SHORT_NEWS_SOURCES
+from backend.app.services.article_sources import SHORT_NEWS_SOURCES
 
 
 KINDS = {'RPT_MONTHLY': '월간', 'RPT_WEEKLY': '주간', 'RPT_QUARTERLY': '분기', 'RPT_ON_DEMAND': '요청형'}
@@ -277,13 +277,26 @@ def _issue_candidates(store, start, end):
     return rows, keyword_ready, product_ready
 
 
-def _spike_gap_note(keyword_ready, product_ready):
-    """판단하지 못한 급증 범위 안내. 미판정을 0건으로 보이지 않게 합니다(FR-906-05)."""
+def _day_label(day):
+    return f'{day.month}월 {day.day}일 기준'
+
+
+def _spike_gap_note(keyword_ready, product_ready, end):
+    """판단하지 못한 급증 범위 안내. 미판정을 0건으로 보이지 않게 합니다(FR-906-05). 어느 날 기준인지 함께 밝힙니다."""
     if keyword_ready and product_ready:
         return None
     if product_ready:
-        return '단신 수집이 완료되지 않아 키워드 급증은 판단하지 않았습니다.'
-    return '시장뉴스 수집이 완료되지 않아 급증 이슈는 판단하지 않았습니다.'
+        return f'{_day_label(end)} 단신 수집이 완료되지 않아 키워드 급증은 판단하지 않았습니다.'
+    return f'{_day_label(end)} 시장뉴스 수집이 완료되지 않아 급증 이슈는 판단하지 않았습니다.'
+
+
+def _spike_ready(store, target, metric, cache):
+    """그 판정일 기준 최근 7일과 직전 8주의 필수 출처 수집이 모두 끝났는지. 키워드는 시장뉴스·단신, 품목은 시장뉴스가 필요합니다."""
+    from backend.app.api.subscriptions import sources_ready
+    sources = (MARKET, SHORT_NEWS) if target.get('keyword_text') else (MARKET,)
+    if (sources, metric) not in cache:
+        cache[sources, metric] = sources_ready(store, sources, windows(metric)[1][0], metric)
+    return cache[sources, metric]
 
 
 def _current_spike(store, payload, cache, blocked=()):
@@ -308,43 +321,21 @@ def _current_spike(store, payload, cache, blocked=()):
 
 
 def _issue_key(payload):
-    """같은 이슈 판별 기준. 통상·규제는 기사, 급증은 키워드·품목으로 구분합니다(제목이 같아도 다른 기사는 합치지 않습니다)."""
-    if payload.get('reason') == 'WEEKLY_NEWS_SPIKE':
-        return ('SPIKE', tuple(sorted(payload.get('target', {}).items())))
-    return ('REGULATION', tuple(payload.get('article_ids') or ()))
-
-
-def _issue_has_article(store, uid, payload, ids, hs=(), countries=()):
-    """이 회원에게 공개된 근거 기사가 있는지. 표시용 대표 기사 5건이 아니라 그 판정에 실제로 들어간 기사 전체(판정 기간·출처)에서 찾습니다."""
-    a, tags = store.t('article'), store.t('article_tag')
+    """같은 이슈 판별 기준. 통상·규제는 기사, 급증은 키워드·품목으로 구분합니다(제목이 같아도 다른 기사는 합치지 않습니다).
+    대표어(kw_topic)는 나중에 지정될 수 있어 키에 넣지 않습니다. 회원 차단 판정에는 계속 씁니다."""
     target = payload.get('target') or {}
-    start, end, sources = None, None, None
-    if target.get('keyword_text') or target.get('hs_code'):
-        fallback = windows(date.fromisoformat(payload['metric_date']))[0]
-        start = date.fromisoformat(payload['window_start']) if payload.get('window_start') else fallback[0]
-        end = date.fromisoformat(payload['window_end']) if payload.get('window_end') else fallback[1]
-    if target.get('keyword_text'):
-        members = select(tags.c.article_id).where(tags.c.keyword_text == target['keyword_text'])
-        sources = KEYWORD_DAILY_SOURCES
-    elif target.get('hs_code'):
-        members = select(tags.c.article_id).where(tags.c.hs_code.startswith(target['hs_code']), tags.c.hs_ver == target.get('hs_ver'))
-        sources = PRODUCT_DAILY_SOURCES
-    elif ids:
-        members = ids
-    else:
-        return False
-    stmt = news.article_statement(store, uid, start=start, end=end, hs=hs, countries=countries)
-    stmt = stmt.order_by(None).with_only_columns(a.c.article_id).where(a.c.article_id.in_(members))
-    if sources:
-        stmt = stmt.where(a.c.source_code.in_(sources))
-    return store.c.execute(stmt.limit(1)).first() is not None
+    if payload.get('reason') == 'WEEKLY_NEWS_SPIKE':
+        if target.get('keyword_text'):
+            return ('SPIKE', 'KEYWORD', target['keyword_text'])
+        return ('SPIKE', 'PRODUCT', target.get('hs_code'), target.get('hs_ver'))
+    return ('REGULATION', tuple(payload.get('article_ids') or ()))
 
 
 def _major_issues(store, uid, saved, names, start, end):
     """이번 주 주요 이슈(FR-107-02)와 키워드·품목 판정 가능 여부. 같은 이슈는 기준일이 가장 늦고 지금도 기준을 넘는 1건만 씁니다."""
-    from backend.app.api.notifications import event_allowed, target_blocked
+    from backend.app.api.notifications import event_allowed, event_ids, has_evidence
     tags = store.t('article_tag')
-    result, seen, cache = [], set(), {}
+    result, seen, cache, ready = [], set(), {}, {}
     blocked = set(news.blocked_topics(store, uid))
     candidates, keyword_ready, product_ready = _issue_candidates(store, start, end)
     for row in candidates:
@@ -353,9 +344,11 @@ def _major_issues(store, uid, saved, names, start, end):
         if not metric or not start <= date.fromisoformat(metric) <= end:
             continue
         spiked = p.get('reason') == 'WEEKLY_NEWS_SPIKE'
-        # 저장된 대표 기사만 숨겨도 다른 공개 기사로 기준을 넘을 수 있어, 급증은 판정 범위 전체에서 근거를 찾는다.
-        allowed = (not target_blocked(store, uid, p) and _issue_has_article(store, uid, p, ())) if spiked else event_allowed(store, uid, row)
-        if not allowed:
+        # 판정 뒤 그 판정 기간의 수집이 실패로 바뀌었으면 저장된 판정을 쓰지 않는다(FR-906-05).
+        if spiked and not _spike_ready(store, p.get('target') or {}, date.fromisoformat(metric), ready):
+            continue
+        # 알림 전달·알림함과 같은 기준: 급증은 판정 범위 전체에서 이 회원이 열 수 있는 근거 기사를 찾는다.
+        if not event_allowed(store, uid, row):
             continue
         key = _issue_key(p)
         if key in seen:
@@ -365,14 +358,14 @@ def _major_issues(store, uid, saved, names, start, end):
             if p is None:
                 continue
         seen.add(key)
-        ids = p.get('article_ids') or ([row['article_id']] if row['article_id'] else [])
-        related = _issue_has_article(store, uid, p, ids, saved.get('hs_items', []), saved.get('country_codes', []))
+        ids = event_ids(row)
+        related = bool(has_evidence(store, uid, p, ids, saved.get('hs_items', []), saved.get('country_codes', [])))
         country = [] if spiked or not ids else store.c.execute(select(tags.c.country_code).where(
             tags.c.article_id.in_(ids), tags.c.country_code.is_not(None)).distinct()).scalars().all()
         result.append({'kind': 'SPIKE' if spiked else 'REGULATION',
                        'title': f"‘{p.get('label')}’ 기사 급증" if spiked else p.get('label'),
                        'country': ', '.join(names.get(c, c) for c in country) or '전체',
-                       'basis': (f"7일 {p['recent_week_count']}건 · 주평균 {p['baseline_weekly']:.1f}건 · ×{p['ratio']:.1f}" if spiked else 'KOTRA 통상·규제 분류'),
+                       'basis': (f"{_day_label(date.fromisoformat(metric))} · 7일 {p['recent_week_count']}건 · 주평균 {p['baseline_weekly']:.1f}건 · ×{p['ratio']:.1f}" if spiked else 'KOTRA 통상·규제 분류'),
                        'related': '관심 범위' if related else '—'})
     # 표시 건수 제한에 밀리지 않게 급증을 앞에 둔다.
     result.sort(key=lambda r: r['kind'] != 'SPIKE')
@@ -391,7 +384,7 @@ def _weekly(store, uid, saved, ctx, names, start, end):
     ctx['meta']['data_basis'] = source_label + ' · 공개 기사 · 사용자 차단 키워드 적용'
     spikes = _keyword_spikes(store, uid, saved, names, start, end)
     issues, keyword_ready, product_ready = _major_issues(store, uid, saved, names, start, end)
-    gap_note = _spike_gap_note(keyword_ready, product_ready)
+    gap_note = _spike_gap_note(keyword_ready, product_ready, end)
     ctx['conditions'].update(week_label=f'{start} ~ {end}', compare_label='직전 8주 주평균' if spikes is not None else '키워드 8주 비교 집계 미완료')
     ctx['summary'] = {'counts': {'total': total, 'market': total - short, 'short': short, 'spike_keywords': None if spikes is None else len(spikes)},
                       'market_label': '일반 기사', 'total_note': f"전체 {total}건 · 본문 카드는 최신 최대 20건",
