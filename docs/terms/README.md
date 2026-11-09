@@ -2,17 +2,23 @@
 
 Borderless Sellers 회원가입·알림 약관 초안입니다. 서비스 화면과 동의 저장에 연결했지만, 공개 전 법률 검토가 필요합니다.
 
-문서를 고치면 등록 스크립트를 다시 실행해야 화면에 반영됩니다. 공개 후 내용을 바꿀 때는 `register_terms.py`에 새 버전 코드를 추가해 다시 동의를 받습니다.
+## 배포 순서
+아래 순서를 지켜야 합니다. 코드를 먼저 배포하면 약관을 찾을 수 없어 회원가입이 `503 FEATURE_NOT_READY`로 막힙니다.
 
-```bash
-python -m backend.scripts.migrate_integration --apply
-```
+1. `python -m backend.scripts.migrate_integration --apply`
+2. `python -m backend.scripts.register_terms --apply` (먼저 `--apply` 없이 실행해 계획을 확인합니다)
+3. API 배포
 
-```bash
-python -m backend.scripts.register_terms --apply
-```
+두 명령은 `.env`가 가리키는 DB에 적용됩니다. 로컬 DB는 `python -m backend.scripts.local_integration migrate`와 `seed`를 사용합니다.
 
-두 명령은 `.env`가 가리키는 DB에 적용됩니다. 로컬 DB는 `python -m backend.scripts.local_integration migrate`와 `seed`를 사용합니다. 등록 전에는 약관을 찾을 수 없어 회원가입이 `503 FEATURE_NOT_READY`로 막힙니다.
+## 약관 등록 규칙 (`register_terms.py`)
+| 상황 | 동작 |
+|---|---|
+| 회원이 이미 동의한 알림 약관이 있음 | 새 알림 약관을 등록하지 않고 기존 약관을 유지합니다(`KEEP_EXISTING`). 바꾸면 기존 동의자가 안내 없이 발송 대상에서 빠지기 때문입니다. |
+| 이미 동의받은 버전의 본문·제목이 문서와 다름 | 등록을 거부합니다. 새 버전 코드와 더 큰 정렬값을 `TERMS`에 추가하세요. 오탈자 정정처럼 같은 버전을 꼭 고쳐야 하면 `--force`. |
+| 같은 종류에 정렬값이 같은 다른 버전이 있음 | 등록을 거부합니다. 현재 버전은 정렬값이 가장 큰 행이며, 버전 코드 문자열로 고르지 않습니다(`V10` < `V2`). |
+
+알림 약관을 새 버전으로 바꾸면, 알림을 켜 둔 기존 동의자에게는 알림설정·알림함에 재동의 안내가 뜨고 다시 동의할 때까지 새 알림이 오지 않습니다.
 
 ## 동의 저장
 | 항목 | 저장 위치 |
@@ -81,7 +87,8 @@ python -m backend.scripts.register_terms --apply
 |---|---|---|
 | 회원 탈퇴, 탈퇴 후 1개월 뒤 파기 | 탈퇴 API 보류 (DEC-46), 파기 작업 없음 | 탈퇴·파기 구현 |
 | 약관 도입 전 가입자의 동의 | 동의 기록 없음 | 다시 동의받을지 결정 |
-| 소셜 가입 동의 | 체크박스만 있음, 서버 보류 | 소셜 구현 시 함께 연결 |
+| 가입 약관(이용약관·개인정보) 새 버전 | 기존 회원에게 재동의를 받는 화면 없음 | 새 버전을 낼 때 함께 구현 |
+| 소셜 가입 동의 | 체크박스만 있음, 서버 보류 | 소셜 구현 시 가입 API와 같이 `signup_versions()` 검증·저장을 거치도록 연결 |
 | 변경 이력 공개 | 없음 | 이전 버전 보기 |
 | 주요 이슈·정기 리포트 알림 | main에 아직 없음 (PR #68) | PR #68 병합 |
 

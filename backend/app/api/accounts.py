@@ -1,7 +1,7 @@
 from sqlalchemy import select, delete, update
 from backend.app.api.common import ApiError, now, digest, require, unavailable
 from backend.app.api.security import password_hash, password_matches, issue_session, revoke_sessions
-from backend.app.api.terms import record_signup, signup_versions
+from backend.app.api.terms import record_signup, signup_consents, signup_versions
 
 
 def interests(store, user_id, *, lock=False):
@@ -34,7 +34,9 @@ def user_view(store, user):
     return {'user_id':str(user['user_id']),'email':user['email'],'name':user['name'],
             'role':user['role'],'landing_page':user['landing_page'],'effective_landing_page':effective,
             'has_interests':has,
-            'post_login_path':'/admin' if user['role']=='ADMIN' else '/?view=interest' if effective=='INTERESTED' else '/'}
+            'post_login_path':'/admin' if user['role']=='ADMIN' else '/?view=interest' if effective=='INTERESTED' else '/',
+            # 가입·로그인·내 계정 조회가 같은 형태를 돌려주도록 가입 약관 동의 기록(최신순)을 함께 싣는다.
+            'terms_consents':signup_consents(store,user['user_id'])}
 
 
 def get_user(store, user_id=None, email=None, lock=False):

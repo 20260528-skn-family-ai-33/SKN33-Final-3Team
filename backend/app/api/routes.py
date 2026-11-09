@@ -13,7 +13,7 @@ from backend.app.api.security import issue_session, hash_token, administrator
 from backend.app.api.schemas import Signup, Login, PasswordChange, InterestUpdate, NotificationPatch, ReportCreate, Conditions
 from backend.app.api.results import get_table, read_snapshot, result_table, result_filename
 from backend.app.api.files import xlsx_bytes, MIMES
-from backend.app.api.terms import TERMS_TYPES, signup_consents
+from backend.app.api.terms import TERMS_TYPES, active_terms
 
 
 # 이 기능들은 원문에서 계약/정책 확정 전 활성화를 금지한 항목이다.
@@ -64,7 +64,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         if user:
             store.db.redis.revoke(user['token_hash'])
         response.delete_cookie('bs_session',path='/'); return None
-    if identity==4: return {'user':{**accounts.user_view(store,user),'terms_consents':signup_consents(store,uid)},'csrf_token':hash_token('csrf:'+request.cookies['bs_session'])}
+    if identity==4: return {'user':accounts.user_view(store,user),'csrf_token':hash_token('csrf:'+request.cookies['bs_session'])}
     if identity==5:
         landing=body['landing_page']; require(landing in ('GLOBAL','INTERESTED'),'시작 화면을 확인하세요.')
         scope=accounts.interests(store,uid)
@@ -310,8 +310,12 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         return {'operation':{'operation_id':row['audit_id'],'status':'SUCCEEDED','step':'DONE','completed_count':1,'total_count':1,'error_code':None,'message':'변경 및 감사 기록 완료'}}
     if identity==126:
         t=store.t('service_option'); stmt=select(t).where(t.c.option_type=='NOTIFICATION_TERMS')
-        if query.get('version'): stmt=stmt.where(t.c.option_code==query['version'])
-        row=store.one(stmt.order_by(t.c.option_code.desc()).limit(1)); require(row,'약관이 없습니다.','NOT_FOUND',404)
+        if query.get('version'): row=store.one(stmt.where(t.c.option_code==query['version']))
+        else:
+            # 회원 화면(API-54)과 같은 현재 버전을 보여 준다. 현재 버전이 없으면 정렬값이 가장 큰 버전.
+            active=active_terms(store)
+            row=active[0] if active else store.one(stmt.order_by(t.c.sort_order.desc(),t.c.option_code.desc()).limit(1))
+        require(row,'약관이 없습니다.','NOT_FOUND',404)
         c=store.t('user_consent'); consent_query=select(c).where(c.c.terms_version==row['option_code'])
         if query.get('user_id'): consent_query=consent_query.where(c.c.user_id==query['user_id'])
         consents=store.rows(consent_query)

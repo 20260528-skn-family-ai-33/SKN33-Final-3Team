@@ -62,9 +62,9 @@ def record_signup(store, uid, versions):
 
 
 def signup_consents(store, uid):
-    """내 계정 화면에 보여 줄 가입 약관 동의 기록. 약관 도입 전 가입자는 비어 있다."""
+    """내 계정 화면에 보여 줄 가입 약관 동의 기록(최신순). 종류마다 첫 항목이 가장 최근 동의다. 약관 도입 전 가입자는 비어 있다."""
     c, o = store.t('user_consent'), store.t('service_option')
     rows = store.rows(select(c.c.terms_version, c.c.acted_at, o.c.option_type).join(o, o.c.option_code == c.c.terms_version)
                       .where(c.c.user_id == uid, c.c.action == 'AGREE', o.c.option_type.in_(['SERVICE_TERMS', 'PRIVACY_TERMS']))
-                      .order_by(c.c.acted_at, c.c.consent_id))
+                      .order_by(c.c.acted_at.desc(), c.c.consent_id.desc()))
     return [{'terms_type': TERMS_TYPES[r['option_type']], 'terms_version': r['terms_version'], 'acted_at': r['acted_at']} for r in rows]

@@ -6,6 +6,7 @@ import { useApp } from '../../store'
 import { Btn, Check, Modal, Toggle } from '../../components/ui'
 import { productName } from '../../data/catalog'
 import TermsBody from '../../components/TermsBody'
+import TermsRenewalNotice from '../../components/TermsRenewalNotice'
 
 const ROWS = [
   ['all', '전체 알림 수신', '끄면 팝업·새 알림함 등록 중단, 기존 내역 유지'],
@@ -52,6 +53,7 @@ export default function NotificationSettings({ route }) {
     <section className="card">
       <h2 className="t1" style={{ fontSize: 24 }}>알림설정</h2>
       <p className="muted" style={{ marginTop: 6 }}>받고 싶은 알림과 관심 조건을 관리합니다.</p>
+      <TermsRenewalNotice onAgree={() => { setAgree(false); navigate(withQuery(route, { terms: 'open' }), { replace: true }) }} />
       <div style={{ marginTop: 10 }}>
         {ROWS.map(([key, title, desc]) => (
           <div key={key} className="between" style={{ padding: '18px 0', borderBottom: '1px solid var(--line2)', opacity: key !== 'all' && !draft.all ? 0.55 : 1 }}>

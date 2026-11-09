@@ -6,6 +6,7 @@ import { Btn, Check, Chip } from '../../components/ui'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { reportScope } from '../../api/adapters'
 import { notificationTypes } from '../../data/seed'
+import TermsRenewalNotice from '../../components/TermsRenewalNotice'
 
 
 const TABS = [['all', '전체'], ['surge', '급증 기사'], ['major', '주요 이슈'], ['report', '리포트 발행']]
@@ -97,6 +98,7 @@ export default function Inbox({ route }) {
           </div>
         </div>
         <p className="muted" style={{ marginTop: 8 }}>선택한 유형: <b style={{ color: 'var(--red-d)' }}>{tabLabel}</b></p>
+        <TermsRenewalNotice to="/account/settings?terms=open" />
       </section>
       <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 20, alignItems: 'stretch' }} className="resp-stack">
         <section className="card col" style={{ gap: 10, padding: 18, minHeight: 560 }}>

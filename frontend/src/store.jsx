@@ -92,7 +92,7 @@ export function AppProvider({ children }) {
     groups.forEach(g => registerProducts(g.items))
     updateProfile({ ...emptyProfile, name: user.name, email: user.email, products: scope.hs_items.map(h => h.hs_code), countries: scope.country_codes.map(countryName), home: scope.landing_page === 'INTERESTED' ? 'interest' : 'all', version: scope.version })
     const s = pref.settings
-    updateSettings({ all: s.notifications_enabled, surge: s.spike_popup, major: s.major_issue_popup, report: s.report_popup, termsAgreed: s.consent_current, termsVersion: s.terms_version })
+    updateSettings({ all: s.notifications_enabled, surge: s.spike_popup, major: s.major_issue_popup, report: s.report_popup, termsAgreed: s.consent_current, termsVersion: s.terms_version, termsRequired: !!s.consent_required })
     updateSubscription({ ...subs, cycles: subs.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: subs.items.find(s => s.enabled)?.formats || ['PDF'] })
     await Promise.all([refreshNotifications(), refreshReports(), refreshChats()])
   }, [refreshNotifications, refreshReports, refreshChats])
@@ -162,7 +162,7 @@ export function AppProvider({ children }) {
       terms_type: 'NOTIFICATION', terms_version: version, action: 'AGREE', enable_notifications: true,
     } })
     if (current !== epoch.current) return false
-    const saved = { all: consent.notifications_enabled, termsAgreed: true, termsVersion: consent.terms_version }
+    const saved = { all: consent.notifications_enabled, termsAgreed: true, termsVersion: consent.terms_version, termsRequired: false }
     updateSettings(previous => ({ ...previous, ...saved }))
     return saved
   }), [run])

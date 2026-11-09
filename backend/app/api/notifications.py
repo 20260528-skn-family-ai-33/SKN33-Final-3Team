@@ -12,9 +12,11 @@ def settings(store,uid):
     if not row: unavailable('알림 설정 행이 준비되지 않았습니다.','FEATURE_NOT_READY')
     active=active_terms(store); version=active[0]['option_code'] if active else None
     latest=store.one(select(c).where(c.c.user_id==uid,c.c.terms_version.in_(notification_versions(store))).order_by(c.c.acted_at.desc(),c.c.consent_id.desc()).limit(1))
+    current=bool(version and latest and latest['terms_version']==version and latest['action']=='AGREE')
     return {**{k:bool(row[k]) for k in ('notifications_enabled','spike_popup','major_issue_popup','report_popup')},
-            'consent_current':bool(version and latest and latest['terms_version']==version and latest['action']=='AGREE'),
-            'terms_version':latest['terms_version'] if latest else None}
+            'consent_current':current,'terms_version':latest['terms_version'] if latest else None,
+            # 알림을 켰지만 동의가 현재 약관이 아니면 알림이 오지 않는다. 화면에서 재동의를 안내하도록 따로 알려 준다.
+            'consent_required':bool(row['notifications_enabled']) and not current}
 
 
 def patch_settings(store,uid,values):
