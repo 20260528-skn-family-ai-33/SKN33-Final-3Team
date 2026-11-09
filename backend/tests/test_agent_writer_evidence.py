@@ -46,7 +46,7 @@ class WriterEvidenceTest(unittest.TestCase):
                                   {'task_id': 't2', 'sentences': ['통관 절차 공지는 배경 자료입니다.[1]']}],
                       turn_summary='')
         request = compose(state, draft, text=True).parse.call_args.kwargs
-        self.assertEqual(request['max_output_tokens'], 3000)
+        self.assertEqual(request['max_output_tokens'], 6000)
         self.assertIn(ARTICLE_PROMPT, request['prompt'])
         self.assertIn('recent', request['payload'])
         self.assertEqual([t['article_search_planned'] for t in request['payload']['tasks']], [False, True])
@@ -118,14 +118,28 @@ class WriterEvidenceTest(unittest.TestCase):
         def draft(t1, t2, explanation):
             return Draft(conclusion=[{'task_id': 't1', 'sentences': [t1]}, {'task_id': 't2', 'sentences': [t2]}],
                          explanation=[explanation], turn_summary='기사 요약')
-        valid = draft('포장 [2]', '창고 [3]', '두 공지 [2][3]')
+        valid = draft('포장 [2]', '창고 [3]', '두 공지 [2, 3]')
+        for citation in ('[2][3]', '[2, 3]', '[2,3]'):
+            with self.subTest(citation=citation):
+                current = state.model_copy(deep=True)
+                expected = draft('포장 [2]', '창고 [3]', '두 공지 ' + citation)
+                self.assertEqual(compose(current, expected).parse.call_count, 1)
+                self.assertEqual(current.draft, expected)
         for bad in [draft('포장 [3]', '창고 [3]', '전체 [2]'), draft('포장 [1]', '창고 [3]', '전체 [2]'),
-                    draft('포장 [2]', '창고 [3]', '전체 [99]'), draft('포장 [2]', '창고 [2,3]', '전체 [2]')]:
+                    draft('포장 [2]', '창고 [3]', '전체 [2, 99]'), draft('포장 [2]', '창고 [3]', '전체 [2,]'),
+                    draft('포장 [2]', '창고 [3]', '전체 [2-3]'), draft('포장 [2]', '창고 [3]', '전체 [n]'), draft('포장 [2]', '창고 [2,3]', '전체 [2]')]:
             with self.subTest(bad=bad), self.assertLogs('backend.app.agents.runtime', 'WARNING'):
                 current = state.model_copy(deep=True)
                 client = compose(current, bad, valid)
                 self.assertEqual(client.parse.call_count, 2)
                 self.assertEqual(current.draft, valid)
+
+    def test_two_articles_in_one_task_can_share_a_bracket(self):
+        first, second = DEV['05-two-tasks']
+        state = dev_state([('LOCAL_ISSUES', '포장·창고 공지를 알려 주세요.', None, first[3] + second[3])])
+        draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['두 공지가 있습니다.[1, 2]']}], turn_summary='')
+        self.assertEqual(compose(state, draft).parse.call_count, 1)
+        self.assertEqual(state.draft, draft)
 
     def test_stats_only_after_both_draft_attempts_fail(self):
         state = dev_state(DEV['06-partial'])

@@ -2,7 +2,7 @@
 import re
 from functools import lru_cache
 from decimal import Decimal, ROUND_HALF_UP,localcontext
-from backend.app.agents.compose import fixed_conclusion
+from backend.app.agents.compose import ARTICLE_CITATION, fixed_conclusion
 from backend.app.agents.state import SentenceCheck, Verification
 
 # 앞이 영문이면 이름의 일부다('HS6'의 6, 'Q3'의 3).
@@ -139,7 +139,7 @@ def check_sentence(sentence, digests, *, known_names=(), countries=()):
 
 def _check_claim(sentence, digests, known_names, *, require_month, inherited_names, countries=frozenset()):
     _require_month,_inherited_names=require_month,inherited_names
-    text=_merge_compound(re.sub(r'\[\d+\]', '',sentence))
+    text=_merge_compound(ARTICLE_CITATION.sub('', sentence))
     dates=list(DATE.finditer(text))
     def names_in(value):
         value=DATE.sub(' ',value)
@@ -304,7 +304,7 @@ def snapshot_evidence(payload):
 
 
 def _tokens(text):
-    text=_merge_compound(DATE.sub(' ',re.sub(r'\[\d+\]','',text)))
+    text=_merge_compound(DATE.sub(' ',ARTICLE_CITATION.sub('', text)))
     return [m for m in TOKEN.finditer(text) if not _target_count(text,m)]
 
 
@@ -342,7 +342,7 @@ def _dates(text):
     """문장 속 절대 날짜(연·월). 숫자 대조(_tokens)는 날짜를 지우므로 따로 읽는다.
     "최근 12개월"처럼 기간 길이는 날짜가 아니라서 대조하지 않는다(전처럼 통과)."""
     out=set()
-    for m in DATE.finditer(re.sub(r'\[\d+\]','',text)):
+    for m in DATE.finditer(ARTICLE_CITATION.sub('', text)):
         if m[1]: out|=_date_keys(m[1], m[2] or m[3])
         elif m[5]=='월': out.add(m[4]+'월')
     return out
@@ -375,7 +375,7 @@ def mark_unverified(state):
     확인하지 않은 숫자를 다음 턴 요약에 남기지 않도록 turn_summary는 비운다(D-77)."""
     checks,index=[],0
     def add(sentence):
-        text=_merge_compound(DATE.sub(' ',re.sub(r'\[\d+\]','',sentence)))
+        text=_merge_compound(DATE.sub(' ',ARTICLE_CITATION.sub('', sentence)))
         numbers=[_shown(m) for m in TOKEN.finditer(text) if not _target_count(text,m)]
         checks.append(SentenceCheck(index=index,numbers=numbers,status='MISMATCH' if numbers else 'PASS',
                                     reason='NOT_CONFIRMED' if numbers else 'MATCH'))

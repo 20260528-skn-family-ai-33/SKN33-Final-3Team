@@ -88,8 +88,8 @@ class ChatNewsToolTest(unittest.TestCase):
         self.assertEqual(len(verified_cards(store, Mock(), items)[0]), 1)   # 기존 채팅은 그대로 뺀다
         # 숨겨진 기사를 인용한 문장은 그 기사 내용이므로 안내 문구로 바꾼다. 문장 수는 verify 번호와 맞춰 그대로다
         from backend.app.agents.runtime import redact_hidden_citations, HIDDEN_ARTICLE_SENTENCE
-        texts = ['숨긴 기사 내용 [1]', '보이는 기사 내용 [2]', '숫자만 있는 문장']
-        self.assertEqual(redact_hidden_citations(texts, cards), [HIDDEN_ARTICLE_SENTENCE, *texts[1:]])
+        texts = ['숨긴 기사 내용 [1]', '공통 설명 [2, 1]', '보이는 기사 내용 [2]', '수출액은 1달러입니다.']
+        self.assertEqual(redact_hidden_citations(texts, cards), [HIDDEN_ARTICLE_SENTENCE, HIDDEN_ARTICLE_SENTENCE, *texts[2:]])
 
     def test_graph_cards_mark_corrected_articles_and_redact_their_citations(self):
         # 검색 뒤 본문이 정정돼 인용 원문이 사라진 기사도 그 기사를 인용한 답변 문장을 가린다
@@ -102,7 +102,7 @@ class ChatNewsToolTest(unittest.TestCase):
             'published_date': '2026-09-25', 'title': '정정된 기사', 'source_url': 'https://example.com', 'body_masked': '새 본문'}]
         cards, _ = verified_cards(store, Mock(), [item], keep_missing=True)
         self.assertTrue(cards[0]['evidence_changed'])
-        self.assertEqual(redact_hidden_citations(['수출이 늘었습니다 [1]'], cards), [HIDDEN_ARTICLE_SENTENCE])
+        self.assertEqual(redact_hidden_citations(['수출이 늘었습니다 [1, 2]'], cards + [{}]), [HIDDEN_ARTICLE_SENTENCE])
         self.assertNotIn('evidence_changed', verified_cards(store, Mock(), [item])[0][0])   # 기존 채팅은 그대로
 
     def test_warm_index_returns_handle_when_probe_fails(self):

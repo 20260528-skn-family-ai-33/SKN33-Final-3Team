@@ -62,7 +62,7 @@ class ComposeTest(unittest.TestCase):
                 self.assertEqual(body['model'], expected_model)
                 self.assertEqual(body['text']['format']['name'], 'Draft')
                 self.assertTrue(body['text']['format']['strict'])
-                self.assertEqual(body['max_output_tokens'], 1500)
+                self.assertEqual(body['max_output_tokens'], 3000)
                 self.assertFalse(body['store'])
                 if expected_model == 'gpt-4.1-mini':
                     self.assertEqual(body['temperature'], 0)
@@ -70,6 +70,28 @@ class ComposeTest(unittest.TestCase):
                 else:
                     self.assertNotIn('temperature', body)
                     self.assertEqual(body['reasoning'], {'effort': 'low'})
+
+    def test_no_data_prefers_tool_reason_then_stepless_notice_then_generic_message(self):
+        state = self.state(['STATISTICS'])
+        task = state.plan.tasks[0]
+        task.answer_status = 'NO_DATA'
+        step = next(s for s in task.steps if s.tool == 'check_conditions')
+        reason = '조건을 확인해 다시 질문해 주세요.'
+        state.results[step.step_id] = ToolResult(status='NO_DATA', error=reason)
+        task.applied_defaults = ['질문에 포함된 조건이 너무 많습니다.']
+
+        def fixed_text():
+            payload, fixed = compose_input(state, describe, [])
+            self.assertEqual(payload['tasks'], [])
+            return fixed[task.task_id].sentences
+
+        self.assertEqual(fixed_text(), [reason])
+        state.results.clear()
+        self.assertEqual(fixed_text(), ['조건에 맞는 분석 결과가 없습니다.'])
+        task.steps = []
+        self.assertEqual(fixed_text(), task.applied_defaults)
+        task.applied_defaults = []
+        self.assertEqual(fixed_text(), ['조건에 맞는 분석 결과가 없습니다.'])
 
     def test_all_fixed_needs_no_generated_response(self):
         state = self.state(['OUT_OF_SCOPE', 'OUT_OF_SCOPE'])

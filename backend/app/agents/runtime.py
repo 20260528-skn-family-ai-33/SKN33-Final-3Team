@@ -2,7 +2,6 @@
 from contextlib import contextmanager
 import logging
 import json
-import re
 import threading
 from pydantic import ValidationError
 from sqlalchemy import select, update
@@ -14,7 +13,7 @@ from backend.app.agents.charts import build_chart
 from backend.app.agents.bindings import resolve as resolve_bindings, source_versions
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
 from backend.app.agents.compose import (ARTICLE_PROMPT, COMPOSE_PROMPT, COMPOSE_TEXT_PROMPT, assemble, compose_input,
-                                        fallback_conclusion, numbered_articles, validate_citations)
+                                        cited_article_numbers, fallback_conclusion, numbered_articles, validate_citations)
 from backend.app.agents.conditions import check_conditions
 from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT
@@ -29,6 +28,8 @@ from backend.app.api.database import Store
 
 
 DEFAULT_MODELS = {'intent': 'gpt-4.1-mini', 'compose': 'gpt-6-luna', 'sql': 'gpt-4.1'}
+COMPOSE_OUTPUT_TOKENS = 3000
+COMPOSE_TEXT_OUTPUT_TOKENS = 6000
 PRODUCT_NAMES_TTL_SECONDS = 3600   # HS 사전은 판본 갱신 때만 바뀐다. 갱신 뒤 최대 1시간은 이전 이름으로 대조한다
 
 
@@ -68,7 +69,6 @@ def ml_queue_seconds(settings):
     return max(0.0, float(settings.get('API_ML_QUEUE_SECONDS', ML_QUEUE_SECONDS)))
 
 
-CITATION = re.compile(r'\[(\d+)\]')
 HIDDEN_ARTICLE_SENTENCE = '이 문장이 인용한 기사는 답변 뒤 공개 여부나 본문이 바뀌어 내용을 표시하지 않습니다.'
 
 
@@ -76,7 +76,7 @@ def redact_hidden_citations(sentences, articles):
     """숨겨진 기사(카드 unavailable)나 검색 뒤 본문이 정정된 기사(evidence_changed)를 [n]으로 인용한 문장을
     안내 문구로 바꾼다. 번호는 카드 순서다. 문장 수는 그대로다. 정정 전 원문으로 쓴 문장을 그대로 보이지 않게 한다."""
     hidden={str(n) for n,card in enumerate(articles,1) if card.get('unavailable') or card.get('evidence_changed')}
-    return [HIDDEN_ARTICLE_SENTENCE if hidden & set(CITATION.findall(s)) else s for s in sentences]
+    return [HIDDEN_ARTICLE_SENTENCE if hidden & cited_article_numbers(s) else s for s in sentences]
 
 
 def article_cards(store, state, result):
@@ -447,7 +447,7 @@ class Services:
             state.draft=assemble(state,None,fixed,describe)
             return
         correcting=state.draft is not None and state.verification.regeneration_count==1
-        tokens = 3000 if prompt is COMPOSE_TEXT_PROMPT else 1500
+        tokens = COMPOSE_TEXT_OUTPUT_TOKENS if prompt is COMPOSE_TEXT_PROMPT else COMPOSE_OUTPUT_TOKENS
         if any(task['article_search_planned'] for task in payload['tasks']):
             prompt += ARTICLE_PROMPT
         revised=self.structured(state,'compose',prompt,payload,Draft,tokens,
@@ -580,7 +580,7 @@ class Services:
                 s.step_id:max(0,s.attempts-1) for t in state.plan.tasks for s in t.steps
                 if s.tool=='query_trade_data' and s.args.get('template')=='LLM_SQL'},
                 'plan':[{'task_id':t.task_id,'intent':t.intent,'steps':[s.tool for s in t.steps]}
-                   for t in state.plan.tasks],'seconds':job['agent'].get('timings',{}),'prompt_version':4,
+                   for t in state.plan.tasks],'seconds':job['agent'].get('timings',{}),'prompt_version':5,
                    'models':{name:self.model_for(name) for name in DEFAULT_MODELS}}
             store.insert('chat_message',session_id=int(state.input.session_id),role='ASSISTANT',content_masked=answer['text'],
                 intent_json=clean({'intent':primary.intent,'conditions':answer['conditions']}),

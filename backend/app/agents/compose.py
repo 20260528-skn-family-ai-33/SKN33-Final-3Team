@@ -4,6 +4,14 @@ import re
 from backend.app.agents.digest import display_amounts, korean_usd
 from backend.app.agents.state import AgentState, Draft, TaskConclusion, draft_limit_error, is_text_task
 
+# Shared by Writer validation, numeric verification and hidden-article redaction.
+ARTICLE_CITATION = re.compile(r'\[\s*([0-9]+(?:\s*,\s*[0-9]+)*)\s*\]')
+
+
+def cited_article_numbers(text):
+    return {number.strip() for group in ARTICLE_CITATION.findall(text) for number in group.split(',')}
+
+
 UNSUPPORTED = {
     'OUT_OF_SCOPE': '수출입 통계·시장 비중·유망시장에 관한 질문을 입력해 주세요.',
 }
@@ -40,7 +48,7 @@ intent가 HS_LOOKUP인 task는 digest.items(query·code·name·level)의 HS 코�
 ARTICLE_PROMPT = """아래 기사 작성 지침은 article_search_planned가 true인 하위 질문에만 적용합니다.
 false인 하위 질문의 결론에서는 기사·검색 상황을 언급하지 마세요. 전체 설명의 검색 한계도 검색 대상 질문에만 연결하세요.
 CAUSE는 기사와 통계의 시점 연관성을 설명하되 원인으로 단정하지 마세요.
-기사 내용은 articles에서만 가져오고 문장 끝에 [n]으로 인용하세요. 여러 기사는 [1][2]처럼 번호마다 괄호를 쓰세요.
+기사 내용은 articles에서만 가져오고 문장 끝에 [n]으로 인용하세요. 여러 기사는 [1][2] 또는 [1, 2]처럼 인용하세요.
 결론에는 같은 task_id의 번호만 쓰세요.
 evidence_role이 context_reference면 배경 자료입니다. mixed면 '참고(직접 답변 아님)' 문장은 배경으로만 쓰세요.
 unclassified는 근거 역할 미분류입니다. 기사 제목으로 인과관계를 추측하지 마세요.
@@ -236,8 +244,11 @@ def validate_citations(generated, articles):
         by_task.setdefault(a['task_id'], set()).add(str(a['n']))
     def check(sentences, allowed):
         for sentence in sentences:
-            for token in re.findall(r'\[([^\[\]]*)\]', sentence):
-                if (re.search(r'\d', token) or token.strip().lower() == 'n') and token not in allowed:
+            for bracket in re.findall(r'\[[^\[\]]*\]', sentence):
+                if not re.search(r'\d', bracket) and bracket[1:-1].strip().lower() != 'n':
+                    continue
+                numbers = cited_article_numbers(bracket)
+                if not numbers or not numbers.issubset(allowed):
                     raise ValueError('해당 문장에서 사용할 수 없는 기사 인용 번호입니다.')
     for conclusion in generated.conclusion:
         check(conclusion.sentences, by_task.get(conclusion.task_id, set()))

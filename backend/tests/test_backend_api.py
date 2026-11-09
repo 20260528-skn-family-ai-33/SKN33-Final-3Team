@@ -329,7 +329,8 @@ class BackendApiTest(unittest.TestCase):
         plan = PlannerOutput(tasks=[{'intent': 'LOCAL_ISSUES', 'question': q, 'slots': {'article_period': period}}
                                     for q in questions])
         valid = Draft(conclusion=[{'task_id': 't1', 'sentences': ['포장 공지입니다.[2]']},
-                                  {'task_id': 't2', 'sentences': ['창고 공지입니다.[3]']}], turn_summary='포장 공지')
+                                  {'task_id': 't2', 'sentences': ['창고 공지입니다.[3]']}],
+                      explanation=['두 공지를 확인했습니다.[2, 3]'], turn_summary='포장 공지')
         invalid = valid.model_copy(deep=True)
         invalid.conclusion[0].sentences = ['포장 공지입니다.[3]']
         db.agent_client.parse.side_effect = [plan, invalid, valid]
@@ -367,6 +368,9 @@ class BackendApiTest(unittest.TestCase):
         with self.engine.connect() as connection:
             saved = connection.scalar(select(table.c.result_json).where(table.c.role == 'ASSISTANT'))
         self.assertEqual(saved['answer']['articles'], answer['articles'])
+        self.assertIn(valid.explanation[0], saved['answer']['text'])
+        check = next(c for c in answer['verification']['sentence_checks'] if c['sentence'] == valid.explanation[0])
+        self.assertEqual((check['status'], check['numbers']), ('PASS', []))
 
     def test_agent_worker_resumes_then_publishes_ranked_table(self):
         from langgraph.checkpoint.memory import InMemorySaver
