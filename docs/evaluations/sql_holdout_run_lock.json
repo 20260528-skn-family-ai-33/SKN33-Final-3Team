@@ -1,0 +1,10 @@
+{
+  "started_at_utc": "2026-11-09T03:46:55.478566+00:00",
+  "agent_revision": "e465dd962deafa5aecd4354eb937d4cbc5a02776",
+  "questions_sha256": "3a8faf7c281d9c9216e5821c86776d593677c95e7c469a31c27710961bcd918d",
+  "adapter_sha256": {
+    "backend/scripts/evaluate_sql_holdout.py": "d93c3de0407d4d8b82fd024768bae29be6ef4b2f12b818821df5ad77d1128c16",
+    "backend/scripts/prepare_sql_holdout.py": "9fd1c9ffbee1bd8bcc024c8fb39bf6c8437a50dd24af30703c41b4debbc12095"
+  },
+  "policy": "No second run, even if partial or low-scoring"
+}

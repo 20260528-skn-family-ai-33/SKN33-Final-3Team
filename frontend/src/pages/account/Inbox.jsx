@@ -6,6 +6,7 @@ import { Btn, Check, Chip } from '../../components/ui'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { reportScope } from '../../api/adapters'
 import { notificationTypes } from '../../data/seed'
+import TermsRenewalNotice from '../../components/TermsRenewalNotice'
 
 
 const TABS = [['all', '전체'], ['surge', '급증 기사'], ['major', '주요 이슈'], ['report', '리포트 발행']]
@@ -88,7 +89,15 @@ export default function Inbox({ route }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
             <h2 className="t2" style={{ fontSize: 22 }}>알림함</h2>
             <div className="chips">
-              {TABS.map(([key, label]) => <Chip key={key} sm on={tab === key} to={withQuery(route, { tab: key === 'all' ? null : key, id: null })}>{label}</Chip>)}
+              {TABS.map(([key, label]) => {
+                // 전체 건수는 머리글 종과 왼쪽 메뉴에 이미 있으므로 유형 탭에만 표시한다.
+                const count = key === 'all' ? 0 : notifications.filter(n => !n.read && n.type === key).length
+                return (
+                  <Chip key={key} sm on={tab === key} to={withQuery(route, { tab: key === 'all' ? null : key, id: null })}>
+                    {label}{count > 0 && <span aria-label={`미확인 ${count}건`} style={{ marginLeft: 6, minWidth: 18, padding: '0 5px', borderRadius: 9, background: 'var(--red)', color: '#fff', fontSize: 11, fontWeight: 800, lineHeight: '18px', display: 'inline-block', textAlign: 'center' }}>{count}</span>}
+                  </Chip>
+                )
+              })}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -97,6 +106,7 @@ export default function Inbox({ route }) {
           </div>
         </div>
         <p className="muted" style={{ marginTop: 8 }}>선택한 유형: <b style={{ color: 'var(--red-d)' }}>{tabLabel}</b></p>
+        <TermsRenewalNotice to="/account/settings?terms=open" />
       </section>
       <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 20, alignItems: 'stretch' }} className="resp-stack">
         <section className="card col" style={{ gap: 10, padding: 18, minHeight: 560 }}>
@@ -105,9 +115,10 @@ export default function Inbox({ route }) {
             const on = n.id === selected?.id
             return (
               <button key={n.id} type="button" className="reset" aria-current={on} onClick={() => navigate(withQuery(route, { id: n.id }), { replace: true })}
-                style={{ padding: '16px 18px', borderRadius: 14, background: on ? 'var(--rose)' : '#fff', boxShadow: on ? 'inset 3px 0 0 var(--red)' : 'none', border: on ? 0 : '1px solid var(--line)' }}>
+                style={{ padding: '16px 18px', borderRadius: 14, background: n.read ? '#fff' : 'var(--rose)', boxShadow: on ? 'inset 4px 0 0 var(--red)' : 'none', border: on ? '1px solid var(--red)' : '1px solid var(--line)' }}>
                 <div className="between"><span className={'tag ' + t.tone}>{t.label}</span><span className="note">{n.time}</span></div>
-                <p style={{ fontSize: 15, fontWeight: 800, marginTop: 8 }}>{!n.read && <span className="tag red" style={{ marginRight: 6 }}>미확인</span>}{n.title}</p>
+                {/* 안 읽은 알림은 배경색으로 구분하고, 눌러서 읽으면 흰색이 된다. */}
+                <p style={{ fontSize: 15, fontWeight: 800, marginTop: 8 }}>{!n.read && <span className="dot" role="img" aria-label="미확인" style={{ marginRight: 8, verticalAlign: 2 }} />}{n.title}</p>
               </button>
             )
           })}

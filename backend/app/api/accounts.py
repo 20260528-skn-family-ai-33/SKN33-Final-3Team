@@ -2,6 +2,7 @@ from sqlalchemy import select, delete, update
 from sqlalchemy.exc import IntegrityError
 from backend.app.api.common import ApiError, now, digest, require, unavailable
 from backend.app.api.security import password_hash, password_matches, issue_session, revoke_sessions
+from backend.app.api.terms import record_signup, signup_consents, signup_versions
 
 
 def interests(store, user_id, *, lock=False):
@@ -34,7 +35,9 @@ def user_view(store, user):
     return {'user_id':str(user['user_id']),'email':user['email'],'name':user['name'],
             'role':user['role'],'landing_page':user['landing_page'],'effective_landing_page':effective,
             'has_interests':has,
-            'post_login_path':'/admin' if user['role']=='ADMIN' else '/?view=interest' if effective=='INTERESTED' else '/'}
+            'post_login_path':'/admin' if user['role']=='ADMIN' else '/?view=interest' if effective=='INTERESTED' else '/',
+            # 가입·로그인·내 계정 조회가 같은 형태를 돌려주도록 가입 약관 동의 기록(최신순)을 함께 싣는다.
+            'terms_consents':signup_consents(store,user['user_id'])}
 
 
 def get_user(store, user_id=None, email=None, lock=False):
@@ -53,9 +56,10 @@ def signup(store, data, response, settings):
     require(email.casefold()!='admin@example.com','사전 관리 계정은 공개 가입할 수 없습니다.','RESERVED_ACCOUNT',403)
     hashed=password_hash(data.password,data.password_confirm)
     # 추가 저장소의 존재를 먼저 확인하여 가입이 일부만 기록되는 것을 방지한다.
-    for name in ('users','notification_setting'): store.t(name)
+    for name in ('users','notification_setting','user_consent'): store.t(name)
     if get_user(store,email=email):
         raise ApiError(409,'EMAIL_ALREADY_EXISTS','이미 등록된 이메일입니다.')
+    versions=signup_versions(store,data)
     try:
         uid=store.insert('users',email=email,password_hash=hashed,landing_page='GLOBAL',
             name=data.name,role='USER',account_status='ACTIVE',created_at=now())
@@ -69,6 +73,7 @@ def signup(store, data, response, settings):
             raise ApiError(409,'EMAIL_ALREADY_EXISTS','이미 등록된 이메일입니다.') from None
         raise
     store.insert('notification_setting',user_id=uid,notifications_enabled=False,report_popup=True,major_issue_popup=True,spike_popup=True)
+    record_signup(store,uid,versions)
     return {'user':user_view(store,get_user(store,uid)), 'next_screen':'BS03',
             'csrf_token':issue_session(store,uid,response,settings)}
 

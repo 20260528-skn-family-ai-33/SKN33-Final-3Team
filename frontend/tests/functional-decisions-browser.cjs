@@ -21,7 +21,10 @@ const { chromium } = require('playwright')
     let subscriptions = []
     let read = false
     let failInterestSave = false
-    const user = { user_id: '1', name: '검수', email: 'Review@Example.org', role: 'USER' }
+    const user = { user_id: '1', name: '검수', email: 'Review@Example.org', role: 'USER', terms_consents: [
+      { terms_type: 'SERVICE', terms_version: 'TERMS_SERVICE_V1', acted_at: '2026-11-09' },
+      { terms_type: 'PRIVACY', terms_version: 'TERMS_PRIVACY_V1', acted_at: '2026-11-09' },
+    ] }
     const product = { hs_code: '010129', hs_ver: 'HS2022', depth: 6, name_ko: '말' }
     await page.route('**/api/v1/**', async route => {
       const request = route.request(), url = new URL(request.url()), p = url.pathname.replace('/api/v1', '')
@@ -55,6 +58,8 @@ const { chromium } = require('playwright')
       if (p === '/reference/hs-codes/0101/children') return reply({ items: [product] })
       if (p === '/users/me/notification-settings') return reply({ settings: { notifications_enabled: false } })
       if (p === '/terms/notification') return reply({ terms: { version: 'v1', body: '검수 약관' } })
+      if (p === '/terms/service') return reply({ terms: { version: 'TERMS_SERVICE_V1', title: '서비스 이용약관', body: '검수 서비스 약관' } })
+      if (p === '/terms/privacy') return reply({ terms: { version: 'TERMS_PRIVACY_V1', title: '개인정보 수집·이용 동의', body: '검수 개인정보 약관' } })
       if (p === '/notifications/unread-count') return reply({ count: read ? 0 : 1 })
       if (p === '/notifications') return reply({ items: [{ user_alert_id: '1', event_type: 'MAJOR_ISSUE', title: '검수 알림', message: '검수 본문', read_at: read ? '2026-11-09' : null, created_at: '2026-11-09' }], page: { has_next: false } })
       if (p.includes('/notifications/') && request.method() === 'PATCH') { read = true; return route.fulfill({ status: 204 }) }
@@ -125,10 +130,11 @@ const { chromium } = require('playwright')
     await page.getByRole('heading', { name: '비밀번호 수정', exact: true }).waitFor()
     await page.goto(base + '#/account/profile')
     await page.getByRole('heading', { name: '비밀번호 수정', exact: true }).waitFor()
+    assert.equal(await page.getByText('2026-11-09 동의', { exact: true }).count(), 2)
     await page.goto(base + '#/account/notifications')
     await page.getByText('선택한 알림이 없습니다.').waitFor()
     assert.equal(writes.filter(w => w.p.includes('/notifications/')).length, 0)
-    await page.getByRole('link', { name: '주요 이슈', exact: true }).click()
+    await page.getByRole('link', { name: /^주요 이슈/ }).click()
     assert.equal(writes.filter(w => w.p.includes('/notifications/')).length, 0)
     const readResponse = page.waitForResponse(response => response.url().endsWith('/notifications/1/read'))
     await page.getByRole('button').filter({ hasText: '검수 알림' }).click()
@@ -174,6 +180,26 @@ const { chromium } = require('playwright')
     await page.getByRole('button', { name: '주기 전체선택', exact: true }).click()
     assert.equal(await page.getByRole('button', { name: '저장', exact: true }).isDisabled(), true)
     console.log('PASS empty onboarding skips directly and subscription still requires interests')
+
+    await page.goto(base + '#/signup')
+    await page.getByLabel('이름', { exact: true }).fill('신규 회원')
+    await page.getByLabel('이메일 (아이디)', { exact: true }).fill('NewUser@Example.org')
+    await page.getByLabel('비밀번호', { exact: true }).fill('Sample!123')
+    await page.getByLabel('비밀번호 확인', { exact: true }).fill('Sample!123')
+    const signupButton = page.getByRole('button', { name: '회원가입하고 관심사 설정하기', exact: true })
+    assert.equal(await signupButton.isDisabled(), true)
+    const agreements = page.getByRole('group', { name: '필수 약관 동의' })
+    for (const label of ['[필수] 만 14세 이상입니다.', '[필수] 서비스 이용약관에 동의합니다.', '[필수] 개인정보 수집·이용에 동의합니다.']) {
+      await agreements.getByText(label, { exact: true }).click()
+    }
+    await signupButton.click()
+    await page.waitForURL(/#\/onboarding$/)
+    const signupBody = writes.find(w => w.p === '/auth/signup').body
+    assert.equal(signupBody.email, 'NewUser@Example.org')
+    assert.equal(signupBody.age_confirmed, true)
+    assert.equal(signupBody.service_terms_version, 'TERMS_SERVICE_V1')
+    assert.equal(signupBody.privacy_terms_version, 'TERMS_PRIVACY_V1')
+    console.log('PASS merged signup preserves case-exact email and mandatory terms consent')
     assert.deepEqual(errors, [])
   } finally {
     if (browser) await browser.close()

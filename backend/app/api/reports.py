@@ -187,9 +187,8 @@ def section(code,text,tables=None,articles=None,status='READY',kpi=None):
 
 
 def article_sources(articles):
-    from backend.app.services.report_context import SOURCES
-    return [{'code':code,'label':SOURCES.get(code,code),'url':None}
-            for code in sorted({article['source_code'] for article in articles})]
+    from backend.app.services.report_context import source_entries
+    return source_entries(article['source_code'] for article in articles)
 
 
 def build_document(store,uid,record):
@@ -295,6 +294,16 @@ def build_document(store,uid,record):
     return clean({'schema_version':1,'title':title,'subtitle':subtitle,'generated_at':now().isoformat()+'Z','sections':sections,'meta':meta,'sql':store.queries})
 
 
+def attach_weekly_summary(doc):
+    """PDF 양식의 급증 키워드·주요 이슈를 웹·DOCX에도 같은 값으로 싣는다. 양식을 만들지 않은 리포트는 건너뛴다."""
+    if not doc.get('template_pdf'): return
+    from backend.app.services.report_context import source_entries, weekly_highlights
+    ctx=doc['template_pdf']['context']
+    news_section=doc['sections'][0]; news_section['text']=weekly_highlights(ctx)+'\n'+news_section['text']
+    # 출처는 본문 카드 20건이 아니라 요약·급증·주요 이슈에 실제로 쓴 기사 기준이다(PDF와 같은 목록).
+    if 'source_codes' in ctx: doc['meta']['sources']=source_entries(ctx['source_codes'])
+
+
 def generate(store,job,settings):
     jobs.report_step(store,job,'QUERY')
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
@@ -305,6 +314,7 @@ def generate(store,job,settings):
         doc['template_pdf']={'version':1,'report_type':record['report_type'],
                              'context':build_context(store,uid,record,doc)}
         doc['sql']=list(store.queries)
+    if record['report_type']=='RPT_WEEKLY': attach_weekly_summary(doc)
     from backend.app.api.report_storage import report_storage
     storage=report_storage(settings)
     prefix=f'{uid}/{rid}/{job["claim_token"]}'
@@ -328,7 +338,7 @@ def generate(store,job,settings):
         conf=notification_settings(store,uid)
         if conf['notifications_enabled'] and conf['consent_current']:
             event=store.insert('alert_event',event_type='REPORT',report_id=int(rid),event_key=digest(['REPORT',rid]),
-                payload_json={'destination':'REPORT_DETAIL'},created_at=now())
+                payload_json={'destination':'REPORT_DETAIL','report_type':record['report_type'],'period':record['conditions_json']['period']},created_at=now())
             store.insert('user_alert',user_id=uid,event_id=event,is_interest_match=False,created_at=now())
     return {'report_id':str(rid),'step':'DONE'}
 
@@ -394,7 +404,9 @@ def save_subscriptions(store,uid,data):
         code=row['period_code']
         stmt=update(t).where(t.c.subscription_id==row['subscription_id'])
         if code in remaining:
-            store.c.execute(stmt.values(enabled=True,filters_json=payload))
+            # 형식·관심만 바꿔 다시 저장해도 이미 구독 중인 주기의 시작일은 유지한다. 아직 발행 못 한 회차가 사라지면 안 된다.
+            since=row['filters_json'].get('enabled_since') if row['enabled'] else None
+            store.c.execute(stmt.values(enabled=True,filters_json={**payload,'enabled_since':since or payload['enabled_since']}))
             remaining.remove(code)
         elif row['enabled']:
             store.c.execute(stmt.values(enabled=False))

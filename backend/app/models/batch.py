@@ -8,7 +8,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.models.base import Base
 
-OPTION_TYPES = ("SOURCE", "REPORT_PERIOD", "REPORT_TYPE", "RULE", "NOTIFICATION_TERMS")
+OPTION_TYPES = ("SOURCE", "REPORT_PERIOD", "REPORT_TYPE", "RULE", "NOTIFICATION_TERMS",
+                "SERVICE_TERMS", "PRIVACY_TERMS", "PRIVACY_POLICY")
 TARGET_TABLES = ("hs_code", "export_monthly", "import_monthly", "export_summary", "import_summary", "fx_daily",
                  "article", "article_tag", "news_product_daily", "news_keyword_daily", "model_run", "report",
                  "hs_code_correlation", "external_csv")

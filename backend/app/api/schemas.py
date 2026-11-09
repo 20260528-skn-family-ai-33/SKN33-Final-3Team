@@ -56,6 +56,9 @@ class Signup(Input):
     email: AccountEmail
     password: str
     password_confirm: str
+    age_confirmed: bool
+    service_terms_version: str
+    privacy_terms_version: str
 
     @field_validator('name')
     @classmethod

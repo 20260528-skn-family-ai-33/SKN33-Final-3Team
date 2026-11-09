@@ -15,7 +15,7 @@ CREATE TABLE users (
 
 CREATE TABLE service_option (
   option_code VARCHAR(40) NOT NULL COMMENT '설정 하나의 고유 코드다. 예를 들어 MONTHLY이며, 이 표의 PK다.',
-  option_type ENUM('SOURCE','REPORT_PERIOD','REPORT_TYPE','RULE','NOTIFICATION_TERMS') NOT NULL COMMENT '출처·구독 주기·리포트 종류·판정 규칙·약관 중 어떤 선택지 그룹인지 구분한다.',
+  option_type ENUM('SOURCE','REPORT_PERIOD','REPORT_TYPE','RULE','NOTIFICATION_TERMS','SERVICE_TERMS','PRIVACY_TERMS','PRIVACY_POLICY') NOT NULL COMMENT '출처·구독 주기·리포트 종류·판정 규칙·약관 중 어떤 선택지 그룹인지 구분한다.',
   label_ko VARCHAR(120) NOT NULL COMMENT '사람이 읽는 한글 이름이다. 예를 들어 월간 리포트다.',
   value_json JSON NOT NULL COMMENT '설정의 구체 내용을 묶은 객체다. 주기는 발행 조건, 출처는 URL·한도, 규칙은 임계값을 담는다.',
   sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '같은 그룹 안에서 화면에 표시할 순서다. 작은 수를 먼저 표시한다.',

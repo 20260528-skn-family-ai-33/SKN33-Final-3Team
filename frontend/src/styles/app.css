@@ -64,6 +64,13 @@ button.bell:hover{background:var(--line2)}
 .modal-layer .modal{position:relative;max-width:100%;outline:none}
 body.modal-open{overflow:hidden}
 
+/* 문구가 들어간 버튼·링크는 옆 내용이 길어도 세로로 접히지 않게 한다. 긴 내용은 옆 글자가 줄바꿈한다. */
+.more,.chip,.nav a,.pill-my,.pill-admin,.pill-logout,.seg button{white-space:nowrap;flex-shrink:0}
+.btn{flex-shrink:0}
+.btn.hs-choice,.interest-summary .chip{flex-shrink:1}
+.chip{max-width:100%}
+.ft .g.ft-info{grid-template-columns:1.4fr 1fr 1fr}
+
 /* floating chat button */
 .fab{position:fixed;right:40px;bottom:36px;z-index:50}
 
@@ -115,11 +122,22 @@ body.modal-open{overflow:hidden}
   .logo{font-size:0;flex:none}
   .pill-my,.pill-admin{padding:0 12px}
   .band h1{font-size:28px}
-  .ft .g{grid-template-columns:1fr 1fr}
+  .ft .g,.ft .g.ft-info{grid-template-columns:1fr}
+  .pill-logout{font-size:0;gap:0;padding:0 11px}
+  /* 품목명처럼 화면보다 긴 칩은 칩 전체 폭을 쓴 뒤에만 줄바꿈한다. */
+  .chip{white-space:normal;height:auto;min-height:34px;padding-top:6px;padding-bottom:6px;line-height:1.3}
   .alert-pop{right:16px;width:calc(100vw - 32px)}
   .modal-layer{padding-top:60px}
   .modal{padding:24px 20px!important}
   .resp-stack{grid-template-columns:1fr!important;flex-direction:column!important}
+}
+
+/* 휴대폰 폭에서는 메뉴를 둘째 줄로 내려 머리글이 화면 밖으로 넘치지 않게 한다. */
+@media (max-width:560px){
+  .hd .wrap{height:auto;flex-wrap:wrap;gap:0 12px;padding-top:10px}
+  .nav{order:3;width:100%;justify-content:space-around}
+  .nav a{padding:10px 0 12px}
+  .alert-pop{top:100%}
 }
 
 /* segmented toggle rendered with buttons */

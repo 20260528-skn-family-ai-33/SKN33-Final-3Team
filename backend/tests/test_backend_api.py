@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update, delete, text, inspect
-from backend.tests.api_support import test_engine, reference_data
+from backend.tests.api_support import test_engine, reference_data, SIGNUP_CONSENTS
 from backend.tests.api_support import create_test_app as create_app
 from backend.app.api.config import Settings
 from backend.app.api.common import now
@@ -48,7 +48,7 @@ class BackendApiTest(unittest.TestCase):
         self.client.close(); self.engine.dispose(); self.directory.cleanup()
 
     def signup(self,email='alice@example.org'):
-        response=self.client.post('/api/v1/auth/signup',json={'name':'홍길동','email':email,'password':'Sample!123','password_confirm':'Sample!123'})
+        response=self.client.post('/api/v1/auth/signup',json={'name':'홍길동','email':email,'password':'Sample!123','password_confirm':'Sample!123',**SIGNUP_CONSENTS})
         self.assertEqual(response.status_code,201,response.text)
         self.csrf=response.json()['csrf_token']; return response.json()['user']['user_id']
 
@@ -79,7 +79,7 @@ class BackendApiTest(unittest.TestCase):
         accounts = []
         for index, email in enumerate(('alice@example.org', 'Alice@example.org', 'Alice@Example.org')):
             password = f'Sample!12{index}'
-            body = {'name': '홍길동', 'email': ' ' + email + ' ', 'password': password, 'password_confirm': password}
+            body = {'name': '홍길동', 'email': ' ' + email + ' ', 'password': password, 'password_confirm': password, **SIGNUP_CONSENTS}
             response = self.client.post('/api/v1/auth/signup', json=body)
             self.assertEqual(response.status_code, 201, response.text)
             self.assertEqual(response.json()['user']['email'], email)
@@ -680,7 +680,7 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(response.status_code,200,response.text)
         table=self.meta.tables['user_consent']
         with self.engine.connect() as c:
-            self.assertEqual(list(c.scalars(select(table.c.action).order_by(table.c.consent_id))),['AGREE','REVOKE','AGREE'])
+            self.assertEqual(list(c.scalars(select(table.c.action).where(table.c.terms_version=='TERMS_V1').order_by(table.c.consent_id))),['AGREE','REVOKE','AGREE'])
 
     def test_subscription_validation_and_publication_trigger(self):
         uid=self.signup(); url='/api/v1/users/me/subscriptions'
@@ -808,6 +808,8 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(response.status_code,200,response.text)
             self.assertEqual(len(response.json()['items']),count,category)
             self.assertEqual(response.json()['page']['total'],count,category)
+        message=self.client.get('/api/v1/admin/alerts').json()['items'][0]['message']
+        for word in ('관세청 수집 실패','HS6_AGGREGATION','2025-08-01 ~ 2025-08-31','실행 #'): self.assertIn(word,message)
         self.assertEqual(self.client.get('/api/v1/admin/alerts?category=OTHER').status_code,400)
 
     def test_worker_fencing_and_duplicate_message_after_context_change(self):
@@ -1313,23 +1315,28 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(out['updated_count'],60); self.assertEqual(out['unread_count'],0)
 
     def test_hs_exact_vector_fallback_and_database_verification(self):
+        from backend.app.api.reference import chat_hs_search
         self.settings.values['API_HS_VECTOR_ENABLED']='true'
         with patch('backend.app.api.hs_vectors.candidates',return_value=[('9999',0.1),('3304',0.2)]) as search:
             self.assertEqual(self.client.get('/api/v1/reference/hs-codes?q=화장품').json()['match_type'],'EXACT')
             search.assert_not_called()
             result=self.client.get('/api/v1/reference/hs-codes?q=스킨케어')
             self.assertEqual(result.status_code,200,result.text)
-            self.assertEqual([x['hs_code'] for x in result.json()['items']],['3304'])
+            self.assertEqual(result.json()['items'],[])
+            search.assert_not_called()
+            with self.engine.connect() as connection:
+                result=chat_hs_search(Store(self.app.state.database,connection),'스킨케어')
+            self.assertEqual([x['hs_code'] for x in result['items']],['3304'])
         with patch('backend.app.api.hs_vectors.candidates',side_effect=RuntimeError('offline')) as search:
             # 품목 선택 검색은 등록명 부분 일치가 있으면 임베딩을 부르지 않는다. 부르지 않았으니 연결 경고도 없다.
             result=self.client.get('/api/v1/reference/hs-codes?q=화장')
             self.assertEqual(result.json()['items'][0]['hs_code'],'3304')
             self.assertNotIn('warnings',result.json())
             search.assert_not_called()
-            # 등록명에 없는 말만 임베딩으로 찾고, 그 연결이 실패하면 경고를 붙인다(위 '스킨케어'는 캐시에 남아 다른 말을 쓴다).
-            result=self.client.get('/api/v1/reference/hs-codes?q=보습크림')
-            self.assertEqual(result.status_code,200,result.text)
-            self.assertTrue(result.json()['warnings'])
+            # 채팅 의미 검색의 DB 검증·연결 실패 안내는 그대로 유지한다.
+            with self.engine.connect() as connection:
+                result=chat_hs_search(Store(self.app.state.database,connection),'보습크림')
+            self.assertTrue(result['warnings'])
 
     def test_notification_sql_visibility_matches_article_and_array_rules(self):
         from backend.app.api import notifications

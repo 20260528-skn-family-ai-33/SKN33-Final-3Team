@@ -5,7 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.dialects import mysql
 from sqlalchemy.exc import IntegrityError
 from backend.tests import test_backend_api as base
-from backend.tests.api_support import test_engine
+from backend.tests.api_support import test_engine, SIGNUP_CONSENTS
 from backend.app.api import accounts, admin
 from backend.app.api.common import ApiError
 from backend.app.api.database import Store
@@ -47,7 +47,7 @@ class EmailCaseCompatibilityTest(unittest.TestCase):
             # Bypass the precheck to reproduce a concurrent insert too.
             with patch.object(accounts, 'get_user', return_value=None):
                 response = self.client.post('/api/v1/auth/signup', json={
-                    'name': '테스트', 'email': email, 'password': 'Sample!123', 'password_confirm': 'Sample!123'})
+                    'name': '테스트', 'email': email, 'password': 'Sample!123', 'password_confirm': 'Sample!123', **SIGNUP_CONSENTS})
             self.assertEqual(response.status_code, 409, response.text)
             self.assertEqual(response.json()['code'], 'EMAIL_ALREADY_EXISTS')
             self.assertFalse(response.json()['retryable'])
@@ -65,7 +65,8 @@ class EmailCaseCompatibilityTest(unittest.TestCase):
         for code in (1062, 1048):
             error = IntegrityError('INSERT users', {}, Exception(code, 'synthetic database error'))
             store.insert.side_effect = error
-            with patch.object(accounts, 'get_user', return_value=None), patch.object(accounts, 'password_hash'):
+            with patch.object(accounts, 'get_user', return_value=None), patch.object(accounts, 'password_hash'), \
+                    patch.object(accounts, 'signup_versions', return_value=[]):
                 with self.assertRaises(ApiError if code == 1062 else IntegrityError) as raised:
                     accounts.signup(store, data, MagicMock(), self.settings)
             if code == 1062:

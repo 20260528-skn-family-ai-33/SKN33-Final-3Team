@@ -24,6 +24,8 @@
   새벽에는 당일 환율이 아직 없으므로 전 영업일까지 반영됩니다. 통화마다 마지막 적재일이 더 오래됐으면 그날부터 받아
   주말·휴일·중단으로 빠진 날도 채웁니다 (아직 한 건도 없는 통화는 .env의 FX_START_DATE부터, 없으면 최근 14일).
   켤 때도 한 번 실행합니다. 정기·시작 작업이 겹치면 늦게 시작한 쪽은 건너뜁니다.
+- major_issue_detect: 매일 05:00·08:00(KST)에 어제 기준 주요 이슈(FR-204)를 판정해 alert_event 저장 후 알림함에 전달합니다.
+  수집 완료 기록이 없는 기간의 기사량 판정은 건너뜁니다. 켤 때는 실행하지 않습니다.
 - external_refresh: 매월 1일 04:00(KST)에 ML 피처용 외부 데이터(BACI·WDI·Comtrade)를 data/external/ CSV로 갱신합니다.
   BACI 새 판이 아직 없으면(NOT_READY) 다음 달에 다시 확인합니다. 켤 때는 실행하지 않습니다 (Comtrade 호출 한도).
 """
@@ -62,6 +64,8 @@ UN_TRIGGER = CronTrigger(day=10, hour=3, minute=0, timezone=KST)
 HS_REFRESH_TRIGGER = CronTrigger(month=1, day=1, hour=0, minute=15, timezone=KST)  # 매년
 HS_EMBED_TRIGGER = CronTrigger(hour=1, minute=0, timezone=KST)  # 매일
 FX_DAILY_TRIGGER = CronTrigger(hour=6, minute=0, timezone=KST)  # 매일 (새벽이라 전 영업일 환율까지)
+# 매일 03:00 기사 수집 뒤. 수집이 늦으면 첫 회차는 건너뛰므로 한 번 더 돈다 (같은 사건은 한 번만 저장·전달)
+MAJOR_ISSUE_TRIGGER = CronTrigger(hour="5,8", minute=0, timezone=KST)
 EXTERNAL_TRIGGER = CronTrigger(day=1, hour=4, minute=0, timezone=KST)  # 매월
 RETRY_DAYS = 90
 RETRY_JOB_ID = "hs_code_refresh_retry"
@@ -236,6 +240,9 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV,
     # 켤 때마다 한 번: 꺼져 있던 동안 빠진 환율을 마지막 적재일부터 채움
     scheduler.add_job(fx_daily_load.run, "date", run_date=datetime.now(KST) + timedelta(seconds=30),
                       id="fx_daily_startup", replace_existing=True)
+    from backend.app.scheduler.jobs import major_issue_detect
+    scheduler.add_job(major_issue_detect.run, MAJOR_ISSUE_TRIGGER, id="major_issue_detect", coalesce=True, max_instances=1,
+                      misfire_grace_time=6 * 3600, replace_existing=True)
     from backend.app.scheduler.jobs import trade_news_daily
     trade_news_daily.register_jobs(scheduler, env_path=env_path)
     # 통합 실행에서는 단신 정기·10초 복구 작업 모두 명시적으로 켭니다. 전용 worker는 독립입니다.
