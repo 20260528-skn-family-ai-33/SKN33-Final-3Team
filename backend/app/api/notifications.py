@@ -147,16 +147,24 @@ def event_allowed(store,uid,event):
     return True if found is None else found
 
 
+def spike_articles(store,uid,payload,ids=()):
+    """기사량 급증의 표시·클릭용 근거 기사. 판정 기간·출처·대상을 지금도 만족하고 회원이 볼 수 있는 기사 중에서 고르며,
+    저장된 대표 기사를 먼저 둔다. 재적재로 태그가 바뀐 대표 기사는 여기서 빠진다. 공유 사건 원본은 바꾸지 않는다."""
+    a=store.t('article'); stmt=evidence_statement(store,uid,payload)
+    order=[case((a.c.article_id.in_([int(i) for i in ids]),0),else_=1)] if ids else []
+    stmt=stmt.order_by(None).order_by(*order,a.c.published_date.desc(),a.c.article_id.desc()).limit(EVIDENCE_LIMIT)
+    return article_views(store,store.rows(stmt),uid)
+
+
 def issue_view(store,event,uid=None,articles=None):
     p=event['payload_json']; target=p.get('target',{})
     ids=event_ids(event)
-    if articles is None:
+    if spike_target(p):
+        articles=spike_articles(store,uid,p,ids)
+    elif articles is None:
         a=store.t('article')
         rows=store.rows(article_statement(store,uid).where(a.c.article_id.in_(ids))) if ids else []
         articles=article_views(store,rows,uid)
-    if not articles and spike_target(p):
-        # 대표 기사를 하나도 열 수 없으면 이 회원이 볼 수 있는 같은 판정의 근거 기사를 대신 보여 준다. 공유 사건 원본은 바꾸지 않는다.
-        articles=article_views(store,store.rows(evidence_statement(store,uid,p).limit(EVIDENCE_LIMIT)),uid)
     return {'event_id':str(event['event_id']),'event_type':event['event_type'],
         'label':p.get('label') or target.get('keyword_text') or target.get('hs_code') or '주요 이슈',
         'reason':p.get('reason',event['event_type']),'current_count':p.get('recent_week_count',p.get('day_count')),
@@ -247,14 +255,13 @@ def notification_rows(store,uid,kind='ALL',unread=False,page=1,size=20):
 
 
 def notification_views(store,rows,uid):
-    ids={identity for row in rows if row['event_type']!='REPORT' for identity in
-         (row['payload_json'].get('article_ids',[]) or ([row['article_id']] if row['article_id'] else []))}
+    # 급증 알림은 issue_view가 판정 조건으로 근거를 다시 고르므로 저장된 대표 기사를 미리 읽지 않는다.
+    stored=[row for row in rows if row['event_type']!='REPORT' and not spike_target(row['payload_json'])]
+    ids={identity for row in stored for identity in event_ids(row)}
     a=store.t('article')
     articles=article_views(store,store.rows(article_statement(store,uid).where(a.c.article_id.in_(ids))),uid) if ids else []
     by_id={item['article_id']:item for item in articles}
-    return [notification_view(store,row,uid,[by_id[str(identity)] for identity in
-            (row['payload_json'].get('article_ids',[]) or ([row['article_id']] if row['article_id'] else []))
-            if str(identity) in by_id]) for row in rows]
+    return [notification_view(store,row,uid,[by_id[str(identity)] for identity in event_ids(row) if str(identity) in by_id]) for row in rows]
 
 
 def listing(store,uid,kind='ALL',unread=False,page=1,size=20):

@@ -396,6 +396,81 @@ class PeriodicContextTest(unittest.TestCase):
         self.assertEqual(labels(), ['관세'])
         self.assertEqual(self.client.get('/api/v1/notifications/unread-count').json()['count'], 1)
 
+    def test_alert_skips_a_representative_that_no_longer_matches_the_judgment(self):
+        """대표 기사의 태그가 바뀌면(재적재) 근거 목록에서 빠지고, 클릭은 남은 같은 판정 기사로 간다."""
+        self.signup(); self.consent()
+        self.collected_news()
+        for i, identity in enumerate(range(1101, 1109)):
+            self.market_article(identity, date(2025, 12, 14 + i % 7), tags=[{'keyword_text': '관세'}, {'country_code': 'US'}])
+        self.keyword_day(date(2025, 12, 21), 8)
+        job.detect(self.app.state.database, date(2025, 12, 21))
+        item = self.client.get('/api/v1/notifications').json()['items'][0]
+        moved = item['target_id']
+        tags = self.meta.tables['article_tag']
+        with self.engine.begin() as c:
+            c.execute(tags.update().where(tags.c.article_id == int(moved), tags.c.keyword_text == '관세').values(keyword_text='물류'))
+        remaining = {str(i) for i in range(1101, 1109)} - {moved}
+        item = self.client.get('/api/v1/notifications').json()['items'][0]
+        self.assertIn(item['target_id'], remaining)
+        self.assertNotIn(moved, {a['article_id'] for a in item['issue']['articles']})
+        major = self.client.get('/api/v1/issues/major').json()['items'][0]
+        self.assertNotIn(moved, {a['article_id'] for a in major['articles']})
+        popup = [n for g in self.client.get('/api/v1/notifications/popups').json()['groups'] for n in g['notifications']][0]
+        self.assertIn(popup['target_id'], remaining)
+
+    def weekly_document(self, uid):
+        """작업자가 만드는 것과 같은 주간 문서: 웹 본문·DOCX가 쓰는 문서와 PDF용 맥락을 함께 만든다."""
+        record = self.record('RPT_WEEKLY')
+        with self.engine.begin() as c:
+            store = Store(self.app.state.database, c)
+            doc = reports.build_document(store, uid, record)
+            doc['template_pdf'] = {'version': 1, 'report_type': 'RPT_WEEKLY', 'context': build_context(store, uid, record, doc)}
+            reports.attach_weekly_summary(doc)
+        return doc
+
+    def docx_text(self, doc):
+        from docx import Document
+        return '\n'.join(p.text for p in Document(io.BytesIO(files.report_docx(doc, self.app.state.settings))).paragraphs)
+
+    def test_report_sources_count_legacy_and_current_short_news_once(self):
+        uid = int(self.signup())
+        self.collected_news()
+        for identity, code in ((1201, 'KOTRA_SHORTNEWS'), (1202, 'KOTRA_SHORT_NEWS')):
+            with self.engine.begin() as c:
+                c.execute(self.meta.tables['article'].insert(), {'article_id': identity, 'source_code': code, 'external_id': f's-{identity}', 'title': f'단신 {identity}',
+                    'published_date': date(2025, 12, 20), 'source_url': f'https://example.org/{identity}', 'body_masked': '본문', 'visibility_status': 'VISIBLE', 'admin_meta_json': {}})
+                for tag in ({'country_code': 'US'}, {'hs_code': '330499', 'hs_ver': 'HS2022'}):
+                    c.execute(self.meta.tables['article_tag'].insert(), {'article_id': identity, **tag})
+        doc = self.weekly_document(uid)
+        self.assertEqual(doc['template_pdf']['context']['summary']['counts']['short'], 2)
+        labels = [s['label'] for s in doc['meta']['sources']]
+        self.assertEqual(labels.count('KOTRA 단신속보'), 1)
+        self.assertEqual(self.docx_text(doc).count('KOTRA 단신속보'), 1)
+
+    def test_report_sources_include_articles_used_for_spikes_beyond_the_20_cards(self):
+        uid = int(self.signup())
+        self.collected_news()
+        for identity in range(1301, 1304):  # 단신 운임 3건 → 운임(미국) ×3.0
+            with self.engine.begin() as c:
+                c.execute(self.meta.tables['article'].insert(), {'article_id': identity, 'source_code': 'KOTRA_SHORT_NEWS', 'external_id': f'f-{identity}', 'title': f'운임 {identity}',
+                    'published_date': date(2025, 12, 18), 'source_url': f'https://example.org/{identity}', 'body_masked': '본문', 'visibility_status': 'VISIBLE', 'admin_meta_json': {}})
+                for tag in ({'keyword_text': '운임'}, {'country_code': 'US'}):
+                    c.execute(self.meta.tables['article_tag'].insert(), {'article_id': identity, **tag})
+        with self.engine.begin() as c:
+            for scope in ('US', None):
+                c.execute(self.meta.tables['news_keyword_daily'].insert(), {'metric_date': date(2025, 12, 18), 'keyword_text': '운임', 'country_code': scope, 'day_count': 3})
+        for identity in range(1401, 1421):  # 본문 카드 20건을 채우는 최신 해외시장뉴스
+            self.market_article(identity, date(2025, 12, 21), tags=[{'keyword_text': '관세'}, {'country_code': 'US'}, {'hs_code': '330499', 'hs_ver': 'HS2022'}])
+        doc = self.weekly_document(uid)
+        ctx = doc['template_pdf']['context']
+        self.assertEqual([r['keyword'] for r in ctx['keyword_spikes']], ['운임'])
+        self.assertEqual(len(doc['sections'][0]['articles']), 20)
+        labels = [s['label'] for s in doc['meta']['sources']]
+        self.assertEqual(sorted(labels), ['KOTRA 단신속보', 'KOTRA 해외시장뉴스'])
+        text = self.docx_text(doc)
+        self.assertEqual((text.count('KOTRA 단신속보'), text.count('KOTRA 해외시장뉴스')), (1, 1))
+        self.assertEqual(ctx['news_source_label'], 'KOTRA 해외시장뉴스, KOTRA 단신속보')
+
     def test_member_without_any_viewable_evidence_gets_no_spike_alert(self):
         uid = int(self.signup()); self.consent()
         self.collected_news()

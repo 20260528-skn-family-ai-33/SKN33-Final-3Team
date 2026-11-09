@@ -187,9 +187,8 @@ def section(code,text,tables=None,articles=None,status='READY',kpi=None):
 
 
 def article_sources(articles):
-    from backend.app.services.report_context import SOURCES
-    return [{'code':code,'label':SOURCES.get(code,code),'url':None}
-            for code in sorted({article['source_code'] for article in articles})]
+    from backend.app.services.report_context import source_entries
+    return source_entries(article['source_code'] for article in articles)
 
 
 def build_document(store,uid,record):
@@ -295,6 +294,16 @@ def build_document(store,uid,record):
     return clean({'schema_version':1,'title':title,'subtitle':subtitle,'generated_at':now().isoformat()+'Z','sections':sections,'meta':meta,'sql':store.queries})
 
 
+def attach_weekly_summary(doc):
+    """PDF 양식의 급증 키워드·주요 이슈를 웹·DOCX에도 같은 값으로 싣는다. 양식을 만들지 않은 리포트는 건너뛴다."""
+    if not doc.get('template_pdf'): return
+    from backend.app.services.report_context import source_entries, weekly_highlights
+    ctx=doc['template_pdf']['context']
+    news_section=doc['sections'][0]; news_section['text']=weekly_highlights(ctx)+'\n'+news_section['text']
+    # 출처는 본문 카드 20건이 아니라 요약·급증·주요 이슈에 실제로 쓴 기사 기준이다(PDF와 같은 목록).
+    if 'source_codes' in ctx: doc['meta']['sources']=source_entries(ctx['source_codes'])
+
+
 def generate(store,job,settings):
     jobs.report_step(store,job,'QUERY')
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
@@ -305,10 +314,7 @@ def generate(store,job,settings):
         doc['template_pdf']={'version':1,'report_type':record['report_type'],
                              'context':build_context(store,uid,record,doc)}
         doc['sql']=list(store.queries)
-    # PDF 양식의 급증 키워드·주요 이슈를 웹·DOCX에도 같은 값으로 싣는다. 양식을 만들지 않은 리포트는 건너뛴다.
-    if record['report_type']=='RPT_WEEKLY' and doc.get('template_pdf'):
-        from backend.app.services.report_context import weekly_highlights
-        news_section=doc['sections'][0]; news_section['text']=weekly_highlights(doc['template_pdf']['context'])+'\n'+news_section['text']
+    if record['report_type']=='RPT_WEEKLY': attach_weekly_summary(doc)
     from backend.app.api.report_storage import report_storage
     storage=report_storage(settings)
     prefix=f'{uid}/{rid}/{job["claim_token"]}'

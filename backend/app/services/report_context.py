@@ -15,13 +15,28 @@ from backend.app.api import news, trade
 from backend.app.api.common import clean, month_end, percentage, require, shift_month
 from backend.app.scheduler.jobs.major_issue_detect import (MARKET, MINIMUM_RATIO, SHORT_NEWS, keyword_counts, keyword_issues,
                                                            product_counts, product_issues, spike, trade_regulation_issues, windows)
-from backend.app.services.article_sources import SHORT_NEWS_SOURCES
+from backend.app.services.article_sources import KEYWORD_DAILY_SOURCES, SHORT_NEWS_SOURCES
 
 
 KINDS = {'RPT_MONTHLY': '월간', 'RPT_WEEKLY': '주간', 'RPT_QUARTERLY': '분기', 'RPT_ON_DEMAND': '요청형'}
 SOURCES = {MARKET: 'KOTRA 해외시장뉴스', **dict.fromkeys(SHORT_NEWS_SOURCES, 'KOTRA 단신속보'),
            'HANKYUNG': '한국경제', 'FNNEWS': '파이낸셜뉴스'}
 WEEKLY_ISSUE_LIMIT = 10  # 주간 리포트에 싣는 급증 키워드·주요 이슈 최대 건수
+
+
+def canonical_source(code):
+    """옛 단신 코드는 현행 코드로 본다. 출처 목록에서 같은 매체가 두 번 나오지 않게 한다."""
+    return SHORT_NEWS if code in SHORT_NEWS_SOURCES else code
+
+
+def source_entries(codes):
+    """리포트 출처 목록(웹 상세·DOCX·PDF 공통). 같은 매체는 한 번만, 코드 순으로 싣는다."""
+    unique = sorted({canonical_source(code) for code in codes})
+    return [{'code': code, 'label': SOURCES.get(code, code), 'url': None} for code in unique]
+
+
+def source_label(codes):
+    return ', '.join(s['label'] for s in source_entries(codes)) or '관련 기사 없음'
 
 
 def months(start, end):
@@ -331,9 +346,22 @@ def _issue_key(payload):
     return ('REGULATION', tuple(payload.get('article_ids') or ()))
 
 
-def _major_issues(store, uid, saved, names, start, end):
+def _spike_sources(store, uid, saved, spikes, end):
+    """급증 키워드 계산에 실제로 쓰인 기사의 출처(회원 차단·공개 상태·관심 국가 적용)."""
+    if not spikes:
+        return set()
+    a, tags = store.t('article'), store.t('article_tag')
+    recent = windows(end)[0]
+    stmt = news.article_statement(store, uid, start=recent[0], end=recent[1], countries=saved.get('country_codes') or [])
+    stmt = stmt.order_by(None).with_only_columns(a.c.source_code).distinct().where(
+        a.c.source_code.in_(KEYWORD_DAILY_SOURCES),
+        a.c.article_id.in_(select(tags.c.article_id).where(tags.c.keyword_text.in_({r['keyword'] for r in spikes}))))
+    return set(store.c.execute(stmt).scalars())
+
+
+def _major_issues(store, uid, saved, names, start, end, used_sources=None):
     """이번 주 주요 이슈(FR-107-02)와 키워드·품목 판정 가능 여부. 같은 이슈는 기준일이 가장 늦고 지금도 기준을 넘는 1건만 씁니다."""
-    from backend.app.api.notifications import event_allowed, event_ids, has_evidence
+    from backend.app.api.notifications import event_allowed, event_ids, evidence_statement, has_evidence
     tags = store.t('article_tag')
     result, seen, cache, ready = [], set(), {}, {}
     blocked = set(news.blocked_topics(store, uid))
@@ -360,6 +388,11 @@ def _major_issues(store, uid, saved, names, start, end):
         seen.add(key)
         ids = event_ids(row)
         related = bool(has_evidence(store, uid, p, ids, saved.get('hs_items', []), saved.get('country_codes', [])))
+        if used_sources is not None:  # 이 이슈의 근거 기사 출처도 리포트 출처에 싣는다
+            a = store.t('article')
+            evidence = evidence_statement(store, uid, p, ids)
+            if evidence is not None:
+                used_sources.update(store.c.execute(evidence.order_by(None).with_only_columns(a.c.source_code).distinct()).scalars())
         country = [] if spiked or not ids else store.c.execute(select(tags.c.country_code).where(
             tags.c.article_id.in_(ids), tags.c.country_code.is_not(None)).distinct()).scalars().all()
         result.append({'kind': 'SPIKE' if spiked else 'REGULATION',
@@ -380,10 +413,13 @@ def _weekly(store, uid, saved, ctx, names, start, end):
     counts = store.rows(select(matched.c.source_code, func.count().label('count')).group_by(matched.c.source_code))
     total = sum(r['count'] for r in counts)
     short = sum(r['count'] for r in counts if r['source_code'] in SHORT_NEWS_SOURCES)
-    source_label = ', '.join(dict.fromkeys(SOURCES.get(r['source_code'], r['source_code']) for r in counts)) or '관련 기사 없음'
-    ctx['meta']['data_basis'] = source_label + ' · 공개 기사 · 사용자 차단 키워드 적용'
     spikes = _keyword_spikes(store, uid, saved, names, start, end)
-    issues, keyword_ready, product_ready = _major_issues(store, uid, saved, names, start, end)
+    # 출처는 본문 카드가 아니라 기사 수 요약·급증 키워드·주요 이슈에 실제로 쓴 기사 기준으로 모은다(웹·DOCX·PDF 공통).
+    used = {r['source_code'] for r in counts} | _spike_sources(store, uid, saved, spikes, end)
+    issues, keyword_ready, product_ready = _major_issues(store, uid, saved, names, start, end, used)
+    ctx['source_codes'] = [s['code'] for s in source_entries(used)]
+    news_sources = source_label(used)
+    ctx['meta']['data_basis'] = news_sources + ' · 공개 기사 · 사용자 차단 키워드 적용'
     gap_note = _spike_gap_note(keyword_ready, product_ready, end)
     ctx['conditions'].update(week_label=f'{start} ~ {end}', compare_label='직전 8주 주평균' if spikes is not None else '키워드 8주 비교 집계 미완료')
     ctx['summary'] = {'counts': {'total': total, 'market': total - short, 'short': short, 'spike_keywords': None if spikes is None else len(spikes)},
@@ -396,7 +432,7 @@ def _weekly(store, uid, saved, ctx, names, start, end):
     ctx['keyword_spikes'] = (spikes or [])[:WEEKLY_ISSUE_LIMIT]  # 요약 카드의 총수는 제한 전 건수를 쓴다
     ctx['keyword_note'] = ('기사 수집 완료 기록이 없는 기간이 있어 직전 8주와 비교하지 않았습니다.' if spikes is None
                            else f'최근 7일 ÷ 직전 8주 주평균 {MINIMUM_RATIO}배 이상 · 한 기사는 키워드마다 1건 · 8주 주평균이 0이면 1로 계산')
-    ctx['news_source_label'] = source_label
+    ctx['news_source_label'] = news_sources
     ctx['publish_note'] = '구독 스케줄러의 지난주 월~일 발행 조건 및 워커 재시도 설정 적용'
     tags = store.t('article_tag')
     country_stmt = select(tags.c.country_code, matched.c.source_code, func.count(func.distinct(matched.c.article_id)).label('count'))\
