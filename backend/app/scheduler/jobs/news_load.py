@@ -243,7 +243,7 @@ def run(raw_path=None, clean_path=DEFAULT_CLEAN, db_url=None, log_dir=LOG_DIR, t
     log_path = setup_log(log_dir)
     try:
         raw_path = Path(raw_path) if raw_path else latest_raw()
-        raws = read_csv(raw_path, nl.RAW_COLUMNS)
+        raws = read_csv(raw_path, nl.RAW_COLUMNS, nl.RAW_OPTIONAL_COLUMNS)
         cleans = read_csv(clean_path, nl.CLEAN_COLUMNS, nl.CLEAN_OPTIONAL_COLUMNS)
     except (FileNotFoundError, ValueError) as e:
         log.error(f"적재 실패: {e} | 로그: {log_path}")

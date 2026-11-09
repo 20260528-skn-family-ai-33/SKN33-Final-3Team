@@ -262,3 +262,20 @@ class NewsLoadTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class WriterCsvPrivacyTest(unittest.TestCase):
+    def test_optional_writer_survives_csv_read_and_article_conversion(self):
+        for with_writer in (True, False):
+            with self.subTest(with_writer=with_writer), tempfile.TemporaryDirectory() as directory:
+                record = raw('1', '2026-11-06', body='<p>KOTRA 홍길동에게 문의하세요.</p>')
+                if with_writer:
+                    record['newsWrterNm'] = '홍길동'
+                path = Path(directory) / 'raw.csv'
+                with path.open('w', encoding='utf-8', newline='') as out:
+                    writer = csv.DictWriter(out, fieldnames=list(record))
+                    writer.writeheader()
+                    writer.writerow(record)
+                rows = job.read_csv(path, nl.RAW_COLUMNS, nl.RAW_OPTIONAL_COLUMNS)
+                self.assertEqual(rows[0]['newsWrterNm'], '홍길동' if with_writer else '')
+                self.assertEqual(nl.article_row(rows[0])['body_masked'],
+                                 'KOTRA 문의하세요.' if with_writer else 'KOTRA 홍길동에게 문의하세요.')

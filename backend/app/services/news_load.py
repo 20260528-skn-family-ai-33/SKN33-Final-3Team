@@ -22,6 +22,7 @@ from html.parser import HTMLParser
 
 SOURCE_CODE = "KOTRA_MARKET"
 RAW_COLUMNS = ["bbstxSn", "newsTitl", "newsBdt", "othbcDt", "kotraNewsUrl", "infoCl", "cntntSumar"]
+RAW_OPTIONAL_COLUMNS = ["newsWrterNm"]  # 이전 수집 CSV와 호환
 CLEAN_COLUMNS = ["bbstxSn", "othbcDt", "kw_topic", "country_all", "hs6"]
 CLEAN_OPTIONAL_COLUMNS = ["hs4"]  # 이전 정제 CSV에는 없을 수 있음
 LIMITS = {"title": 600, "source_url": 2048, "category": 120, "keyword_text": 120}
