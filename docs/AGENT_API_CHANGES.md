@@ -126,6 +126,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 |---|---|---|
 | `CLARIFICATION_EXPIRED` | 409 | 물은 지 30분이 지났거나 실행 상태가 사라짐. 안내 "시간이 지나 다시 질문해 주세요." |
 | `CLARIFICATION_CONFLICT` | 409 | 기존. `clarification_id` 불일치 |
+| `CLARIFICATION_RESUME_FAILED` | 503 | 되묻기 답을 이어 실행할 때 체크포인트를 읽지 못함(`execution.invoke_graph`). 워커가 작업 `error.code`로 저장해 API-37에 나간다. 처음부터 다시 계획하지 않는다. 안내 "조건 입력 재개에 실패했습니다. 잠시 후 다시 질문해 주세요." (2026-11-06) |
 | `JOB_IN_OTHER_ENVIRONMENT` | 409 | 같은 RDS를 쓰는 다른 환경(다른 Redis)이 만든 되묻기에 답하거나, 그 환경의 작업이 진행 중인 대화방에 질문함. 상태를 바꾸지 않는다. 되묻기가 30분을 넘었거나 작업이 유예 시간(C-32) 넘게 멈춰 있으면 거부하지 않고 만료한 뒤 새 질문을 받는다. 안내 "이 질문은 다른 서버 환경에서 처리 중입니다. 처음 질문한 환경에서 답해 주세요." (D-106, 2026-11-09) |
 | `VALIDATION_ERROR` | 400 | `choice_ids`·`hs_item`·`text`·`interest_selection`·`report_confirmation` 중 0개 또는 2개 이상. `interest_selection`이 품목 5개·국가 20개를 넘거나, 둘 다 비었거나, 후보에 없는 값을 담음 |
 
