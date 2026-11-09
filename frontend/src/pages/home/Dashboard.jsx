@@ -39,17 +39,26 @@ function RegionError({ label, states, dark }) {
 }
 
 /** 메인 KPI 영역 장식 화살표. 몸통 끝을 화살촉 밑변 가운데에 맞춰 하나로 이어지게 그린다. */
+// 메인 상단의 상승 화살표. 지그재그로 오르는 굵은 화살표에 아래쪽 그림자 면을 겹쳐 입체감을 준다.
+const ARROW_LINE = 'M10 140 L68 124 C82 120 86 104 98 102 C112 100 112 126 128 123 C146 120 148 78 166 76 C184 74 184 106 200 101 C218 95 234 66 246 36'
+const ARROW_HEAD = '262,-4 224,27 268,47'
 function TrendArrow() {
   return (
-    <svg aria-hidden="true" width="300" height="150" viewBox="0 0 300 150" style={{ position: 'absolute', right: 0, top: -6 }}>
+    <svg className="trend-arrow" aria-hidden="true" width="300" height="170" viewBox="0 -12 300 170" style={{ position: 'absolute', right: 0, top: -30 }}>
       <defs>
-        <linearGradient id="trend-arrow-fill" x1="0" y1="1" x2="1" y2="0">
-          <stop offset="0" stopColor="#C8102E" stopOpacity=".25" />
-          <stop offset="1" stopColor="#C8102E" />
+        <linearGradient id="trend-arrow-face" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#E3283F" />
+          <stop offset="1" stopColor="#B80E27" />
         </linearGradient>
       </defs>
-      <path d="M16 128 C 70 128, 92 92, 132 96 S 196 108, 236 50" fill="none" stroke="url(#trend-arrow-fill)" strokeWidth="14" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M262 14 L 268 72 L 214 44 Z" fill="#C8102E" stroke="#C8102E" strokeWidth="6" strokeLinejoin="round" />
+      <g transform="translate(6 7)" fill="#7E0A1D" stroke="#7E0A1D">
+        <path d={ARROW_LINE} fill="none" strokeWidth="18" strokeLinejoin="round" />
+        <polygon points={ARROW_HEAD} strokeWidth="3" strokeLinejoin="round" />
+      </g>
+      <g fill="url(#trend-arrow-face)" stroke="url(#trend-arrow-face)">
+        <path d={ARROW_LINE} fill="none" strokeWidth="18" strokeLinejoin="round" />
+        <polygon points={ARROW_HEAD} strokeWidth="3" strokeLinejoin="round" />
+      </g>
     </svg>
   )
 }
