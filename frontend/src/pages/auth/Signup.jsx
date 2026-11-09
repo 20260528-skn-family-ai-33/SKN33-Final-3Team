@@ -44,7 +44,7 @@ export function Signup() {
     if (!form.name.trim()) next.name = '이름을 입력해 주세요.'
     else if ([...form.name].length > 120) next.name = '이름은 120자 이하로 입력해 주세요.'
     if (!isEmail(form.email)) next.email = '이메일을 name@example.com 형식으로 입력해 주세요.'
-    else if (accounts.some(a => a.email.toLowerCase() === form.email.trim().toLowerCase())) next.email = '이미 가입된 이메일입니다.'
+    else if (accounts.some(a => a.email === form.email.trim())) next.email = '이미 가입된 이메일입니다.'
     if (!isStrongPassword(form.password)) next.password = PASSWORD_HINT
     if (form.password !== form.confirm) next.confirm = '비밀번호가 일치하지 않습니다.'
     setError(next)
@@ -57,7 +57,7 @@ export function Signup() {
       if (result.ok) {
         try {
           sessionStorage.setItem('bs.onboarding.' + result.account.id, JSON.stringify({ items: [], countries: [], welcome: true }))
-        } catch { notify('회원가입이 완료되었습니다.') }
+        } catch { notify('회원가입이 완료되었습니다. 환영합니다!') }
         return navigate('/onboarding')
       }
       const fieldError = (key, message) => {
@@ -100,7 +100,7 @@ export function Signup() {
         <div className="sp16" />
         {field('confirm', '비밀번호 확인', { placeholder: '비밀번호를 다시 입력하세요', type: 'password', autoComplete: 'new-password' })}
         {form.confirm && form.password === form.confirm && !error.confirm && <p className="field-ok">✓ 비밀번호가 일치합니다</p>}
-        <p className="note" style={{ marginTop: 10 }}>이름은 필수 입력입니다. 이메일 형식·중복 여부와 비밀번호 일치 여부를 확인합니다.</p>
+        <p className="note" style={{ marginTop: 10 }}>이름은 필수 입력입니다. 이메일은 대소문자를 구분하며 형식·중복 여부와 비밀번호 일치 여부를 확인합니다.</p>
         <div className="col" role="group" aria-label="필수 약관 동의" style={{ gap: 10, marginTop: 22 }}>
           {agreement('age', '[필수] 만 14세 이상입니다.')}
           {agreement('service', '[필수] 서비스 이용약관에 동의합니다.', serviceTerms)}
@@ -148,7 +148,7 @@ export function SocialSignup() {
   const submit = () => {
     if (!form.name.trim()) return setError('이름을 입력해 주세요.')
     if (!isEmail(form.email)) return setError('연락 이메일 형식을 확인해 주세요.')
-    if (accounts.some(a => a.email.toLowerCase() === form.email.trim().toLowerCase())) return setError('이미 가입된 이메일입니다. 기존 계정으로 로그인한 뒤 연결해 주세요.')
+    if (accounts.some(a => a.email === form.email.trim())) return setError('이미 가입된 이메일입니다. 기존 계정으로 로그인한 뒤 연결해 주세요.')
     signup({ name: form.name, email: form.email, provider: pending.provider, providerId: pending.providerId })
     sessionStorage.removeItem('bs2.socialPending')
     navigate('/onboarding')
