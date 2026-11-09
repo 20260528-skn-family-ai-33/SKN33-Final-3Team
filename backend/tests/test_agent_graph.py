@@ -94,6 +94,17 @@ class AgentGraphTest(unittest.TestCase):
         self.assertTrue(check_history('이전 질문은 중국 화장품 수출 추이였고 2,610만 달러였습니다.', recent)[0])
         self.assertFalse(check_history('이전 결과는 3,000만 달러였습니다.', recent)[0])
         self.assertTrue(check_history('HS코드는 품목 분류 번호입니다.', [])[0])
+        # 값이 같아도 단위가 다르거나, 요약에 없는 날짜를 쓰면 통과하지 않는다
+        self.assertFalse(check_history('이전 결과는 2,610만%였습니다.', recent)[0])
+        self.assertFalse(check_history('2024년 결과는 2,610만 달러였습니다.', recent)[0])
+        self.assertTrue(check_history('2025년 결과는 2,610만이었습니다.', recent)[0])   # 단위 생략은 값·배율만 본다
+        # 기간 길이(개월)는 날짜가 아니라 대조하지 않는다. 이전 질문의 확정 조건 기간 달은 날짜로 허용한다
+        self.assertTrue(check_history('아까 최근 12개월 추이를 물으셨습니다.', recent)[0])
+        from datetime import date
+        period = SimpleNamespace(period=SimpleNamespace(start=date(2024, 1, 1), end=date(2024, 12, 31)))
+        asked = [SimpleNamespace(question='중국 화장품 수출', summary='', conditions=period)]
+        self.assertTrue(check_history('2024년 1월부터 12월까지 물으셨습니다.', asked)[0])
+        self.assertFalse(check_history('2023년을 물으셨습니다.', asked)[0])
 
     def test_hs_lookup_plan_has_only_lookup_step(self):
         plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'HS_LOOKUP', 'question': '면도기 HS코드', 'slots': {'products': ['면도기']}}]))
@@ -109,6 +120,10 @@ class AgentGraphTest(unittest.TestCase):
         digests = [{'kind': 'HS_CODES', 'items': [{'code': '851010', 'name': '면도기', 'level': 'HS6'}]}]
         self.assertTrue(check_codes('면도기는 HS 851010입니다.', digests)[0])
         self.assertFalse(check_codes('면도기는 HS 851020입니다.', digests)[0])
+        # HS를 붙여 쓴 코드도 대조한다. 판본 표기(HS2022)는 코드가 아니다
+        digests[0]['hs_ver'] = 'HS2022'
+        self.assertTrue(check_codes('HS2022 기준 면도기는 HS851010입니다.', digests)[0])
+        self.assertFalse(check_codes('면도기는 HS851020입니다.', digests)[0])
 
     def test_text_sentence_limits_apply_only_to_text_tasks(self):
         from backend.app.agents.state import draft_limit_error

@@ -38,6 +38,11 @@ def chart(**extra):
 
 
 class AgentStateTest(unittest.TestCase):
+    def test_pre_d103_market_type_checkpoint_still_loads(self):
+        # D-103 전 체크포인트: MARKET_TYPE은 단계 없는 안내였다. 배포 뒤 30분 동안 남은 체크포인트도 읽어야 한다
+        old = state(tasks=({'task_id': 't1', 'intent': 'MARKET_TYPE', 'question': '베트남 화장품 시장 유형', 'steps': []},))
+        self.assertEqual(old.task_outcome('t1'), 'NO_DATA')
+
     def test_chart_references_must_use_the_same_result(self):
         selector = {'result_id': 'r1', 'group_by': 'COUNTRY', 'country_codes': ['VN']}
         self.assertEqual(ToolResult(status='OK', result_id='r1', chart=chart(), chart_selector=selector).result_id, 'r1')

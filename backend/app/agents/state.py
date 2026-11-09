@@ -453,6 +453,10 @@ class Plan(Model):
                 continue
             if not task.steps and task.answer_status == 'NO_DATA':
                 continue   # 플래너가 상한 초과로 실행 없이 끝낸 하위 질문(D-73)
+            if task.intent == 'MARKET_TYPE' and not task.steps and not task.input_bindings:
+                # D-103 전 체크포인트: MARKET_TYPE은 단계 없는 "지원 예정" 안내였다(체크포인트 TTL 30분 동안 남는다).
+                # 그대로 읽어 NO_DATA로 끝낸다. 새 계획의 MARKET_TYPE은 항상 단계가 있다
+                continue
             if task.intent == 'HS_LOOKUP':
                 # HS 사전 조회(D-101)는 조회 조건을 확정하지 않는다. 품목 표현을 사전에서 찾기만 한다
                 if [s.tool for s in task.steps] != ['lookup_hs'] or task.steps[0].depends_on or task.input_bindings:

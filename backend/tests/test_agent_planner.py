@@ -38,6 +38,17 @@ class AgentPlannerTest(unittest.TestCase):
         out = rescue_trade_terms(PlannerOutput(tasks=[{'intent': 'OUT_OF_SCOPE', 'question': '그게 뭔지 설명'}]),
                                  original='hs코드가 뭔데')
         self.assertEqual(out.tasks[0].intent, 'CONVERSATION')
+        # 영문 용어는 단어 속 글자("this")로 맞추지 않고, "수입"(소득)은 용어를 물을 때만 살린다
+        for question, intent in (('what is this weather', 'OUT_OF_SCOPE'), ('내 수입으로 집 살 수 있을까?', 'OUT_OF_SCOPE'),
+                                 ('수입이 무슨 뜻이야?', 'CONVERSATION'), ('FTA가 뭐야?', 'CONVERSATION'),
+                                 ('what is HS code', 'CONVERSATION'), ('fish sticks', 'OUT_OF_SCOPE')):
+            out = rescue_trade_terms(PlannerOutput(tasks=[{'intent': 'OUT_OF_SCOPE', 'question': question}]), original=question)
+            self.assertEqual(out.tasks[0].intent, intent, question)
+        # 설정 용어에 띄어쓰기가 있어도 원문 띄어쓰기와 상관없이 맞춘다
+        for question in ('What is free trade?', 'freetrade 뜻'):
+            out = rescue_trade_terms(PlannerOutput(tasks=[{'intent': 'OUT_OF_SCOPE', 'question': question}]),
+                                     terms=('free trade',), original=question)
+            self.assertEqual(out.tasks[0].intent, 'CONVERSATION', question)
 
     def test_shared_suffix_product_is_kept_as_one_phrase(self):
         # D-107: 플래너가 "면도 및 탈취 관련 상품"을 ["면도", "탈취 관련 상품"]으로 나누면 원문 표현으로 되돌린다

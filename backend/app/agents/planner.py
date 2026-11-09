@@ -122,16 +122,28 @@ def explicit_country_ranking(question):
 # 무역 용어 안전망(2026-11-06 사용자 결정): LLM이 이 용어가 든 질문을 범위 밖으로 내면 대화·용어 질문으로 바꾼다.
 # 설정 API_CHAT_TRADE_TERMS(쉼표 구분)로 바꿀 수 있다.
 TRADE_TERMS = ('hs', '관세', 'fta', '원산지', '통관', '무역', '수출', '수입', '품목분류', '세번', '인코텀즈', 'incoterms')
+AMBIGUOUS_TRADE_TERMS = frozenset({'수입'})   # 소득이라는 뜻도 있어 용어 질문일 때만 살린다
+_DEFINITION = re.compile(r'뭐야|뭔가요|뭐예요|뭐에요|무엇|뜻|의미|설명|란\?|이란|라는')
 
 
 def rescue_trade_terms(output: PlannerOutput, terms=TRADE_TERMS, original='') -> PlannerOutput:
     """original은 사용자가 쓴 질문이다. 플래너가 하위 질문 문장을 고쳐 써서 용어가 빠져도 원문으로 판단한다.
     질문이 하나뿐일 때만 원문을 본다(여러 하위 질문이면 다른 질문의 용어로 범위 밖 질문을 살리지 않게)."""
     compact = lambda text: ''.join(text.split()).casefold()
-    words = [compact(t) for t in terms if t.strip()]
+    words = [t.strip().casefold() for t in terms if t.strip()]
+    def found(word, text):
+        if word.isascii():
+            # 영문 용어는 띄어쓰기를 지우지 않은 원문에서 앞뒤가 영문자가 아닐 때만 맞춘다
+            # ("this"·"fish" 속 hs 제외, "hs코드"·"what is HS"는 맞음). 용어 안 공백은 띄어쓰기 차이를 허용한다("free trade")
+            body = r'\s*'.join(re.escape(part) for part in word.split())
+            return bool(re.search(rf'(?<![a-z]){body}(?![a-z])', text.casefold()))
+        word = compact(word)
+        if word not in compact(text): return False
+        # 뜻이 여럿인 용어("수입"=소득)는 용어를 묻는 질문일 때만 살린다. "내 수입으로 집 살 수 있을까?"는 범위 밖 그대로
+        return word not in AMBIGUOUS_TRADE_TERMS or bool(_DEFINITION.search(compact(text)))
     def trade(task):
         texts = [task.question] + ([original] if len(output.tasks) == 1 else [])
-        return any(w in compact(x) for x in texts for w in words)
+        return any(found(w, x) for x in texts for w in words)
     tasks = [{**t.model_dump(), 'intent': 'CONVERSATION', 'slots': {}}
              if t.intent == 'OUT_OF_SCOPE' and trade(t) else t.model_dump()
              for t in output.tasks]
@@ -140,7 +152,8 @@ def rescue_trade_terms(output: PlannerOutput, terms=TRADE_TERMS, original='') ->
 
 # 품목 표현 되돌리기(D-107): "면도 및 탈취 관련 상품"처럼 뒤의 "관련 상품"이 앞뒤 단어에 함께 걸리는 표현을
 # 플래너(gpt-4.1-mini)가 ["면도", "탈취 관련 상품"]으로 나눈다. 프롬프트 규칙·예시로는 막히지 않아 코드로 되돌린다.
-_SHARED_SUFFIX = re.compile(r'\s*관련\s*(?:상품|제품|용품|품목)$')
+_SUFFIX_BODY = r'관련\s*(?:상품|제품|용품|품목)'   # 앵커 없는 꼬리말. 아래 두 패턴이 함께 쓴다
+_SHARED_SUFFIX = re.compile(rf'\s*{_SUFFIX_BODY}$')
 _JOIN = r'\s*(?:및|와|과|,|·|/)\s*'
 
 
@@ -156,7 +169,7 @@ def merge_shared_suffix(products, original):
         for start in range(end - 1, -1, -1) if suffix else ():
             heads = [_SHARED_SUFFIX.sub('', x).strip() for x in items[start:end + 1]]
             if not all(heads): continue
-            pattern = _JOIN.join(re.escape(h) for h in heads) + r'\s*' + _SHARED_SUFFIX.pattern.lstrip(r'\s*').rstrip('$')
+            pattern = _JOIN.join(re.escape(h) for h in heads) + r'\s*' + _SUFFIX_BODY
             found = re.search(pattern, original)
             if found:
                 merged = start, found.group(0)
