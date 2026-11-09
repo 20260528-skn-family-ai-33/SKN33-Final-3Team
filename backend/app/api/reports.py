@@ -253,7 +253,8 @@ def promising_section(store,uid,c):
         return section('GROWTH_RISK',PROMISING_UNAVAILABLE,status='NO_DATA')
     # 선택 범위(리포트 한도 품목 100·국가 250)는 모델 장애가 아니다. 예측 한도에 맞추고 무엇을 계산했는지 알린다.
     countries,hs,scope=promising_scope(bundle,countries,items,MAX_COUNTRIES,MAX_HS_ITEMS)
-    if not countries and not hs:
+    # 품목을 골랐는데 예측할 HS6가 하나도 안 남았으면 멈춘다. 빈 품목 목록은 모델에서 '전체 품목'이라 국가만 남기면 엉뚱한 품목이 나온다.
+    if (items and not hs) or (not countries and not hs):
         return section('GROWTH_RISK',' '.join(['선택한 품목에는 유망시장 예측 대상이 없습니다.',*scope]),status='NO_DATA')
     try:
         if outlook and outlook['anchor']!=anchor:

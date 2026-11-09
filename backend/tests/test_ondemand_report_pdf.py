@@ -274,6 +274,11 @@ class OnDemandReportTest(unittest.TestCase):
         none = self.promising(uid, {**c, 'hs_items': [{'hs_code': '9999', 'hs_ver': 'HS2022'}], 'country_codes': []}, [('US', '330499', 9e6)])
         self.assertIn('HS 9999에는 유망시장 예측 대상인 HS6 품목이 없습니다.', none['text'])
         self.assertEqual(none['tables'], [])
+        # 국가를 함께 골라도, 선택한 HS4에 예측 대상이 없으면 그 나라의 다른 품목(자동차)으로 채우지 않는다.
+        cars = self.promising(uid, {**c, 'country_codes': ['US']}, [('US', '870323', 5e8)])
+        self.assertEqual(cars['tables'], [])
+        self.assertEqual(cars['content_status'], 'NO_DATA')
+        self.assertIn('HS 3304에는 유망시장 예측 대상인 HS6 품목이 없습니다.', cars['text'])
 
     def test_promising_market_uses_first_items_when_selection_is_over_limit(self):
         uid = self.signup(); c = self.preview()['conditions']
