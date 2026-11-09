@@ -25,7 +25,27 @@ export function reportScope(c, names = {}) {
   return `${countries} · ${products}`
 }
 export function mapNotification(n) {
-  return { ...n, id: n.user_alert_id, type: n.event_type === 'REPORT' ? 'report' : n.event_type === 'MAJOR_ISSUE' ? 'major' : 'surge', body: n.message, read: !!n.read_at, received: displayTime(n.created_at), time: displayTime(n.created_at), reportId: n.target_type === 'REPORT' ? n.target_id : null, articleId: n.target_type === 'NEWS' ? n.target_id || n.issue?.articles?.[0]?.article_id : null, ratio: n.issue?.ratio ?? '—', formula: '현재 건수 ÷ 기준 평균', basis: `${n.issue?.current_count ?? '—'} / ${n.issue?.baseline_average ?? '—'}` }
+  return { ...n, id: n.user_alert_id, type: n.event_type === 'REPORT' ? 'report' : n.event_type === 'MAJOR_ISSUE' ? 'major' : 'surge', body: n.message, read: !!n.read_at, received: displayTime(n.created_at), time: displayTime(n.created_at), reportId: n.target_type === 'REPORT' ? n.target_id : null, articleId: n.target_type === 'ARTICLE' ? n.target_id : n.issue?.articles?.[0]?.article_id ?? null, ratio: n.issue?.ratio ?? '—', formula: '현재 건수 ÷ 기준 평균', basis: `${n.issue?.current_count ?? '—'} / ${n.issue?.baseline_average ?? '—'}` }
+}
+/** 알림을 눌렀을 때 열 화면(FR-305-03). 기사·리포트가 없으면 알림 상세로 간다. */
+export function notificationTarget(n) {
+  if (n.reportId) return `/report?id=${n.reportId}`
+  return n.articleId ? `/articles?id=${n.articleId}` : `/account/notifications?id=${n.id}`
+}
+const REPORT_CYCLE_TONES = { 주간: 'amber', 월간: 'plum', 분기: 'ok' }
+const ISSUE_REASON_TAGS = { WEEKLY_NEWS_SPIKE: ['기사 급증', 'amber'], KOTRA_TRADE_REGULATION: ['통상·규제', 'plum'] }
+/** 팝업에서 한 건을 구분할 표시. 리포트는 주기, 주요 이슈는 판정 이유로 나눈다. 구분할 값이 없으면 null. */
+export function popupItemTag(n) {
+  if (n.event_type === 'REPORT') {
+    const cycle = /^(주간|월간|분기)/.exec(n.title || '')?.[1]
+    return cycle ? { label: cycle, tone: REPORT_CYCLE_TONES[cycle] } : null
+  }
+  const issue = ISSUE_REASON_TAGS[n.issue?.reason]
+  return issue ? { label: issue[0], tone: issue[1] } : null
+}
+export function mapPopupGroup(group) {
+  const items = group.notifications.map(mapNotification)
+  return { deliveryId: group.delivery_id, type: items[0]?.type, items }
 }
 export function mapReport(r) {
   const status = ({ READY: 'ready', QUEUED: 'generating', RUNNING: 'generating', DELAYED: 'delayed', FAILED: 'failed' })[r.status]

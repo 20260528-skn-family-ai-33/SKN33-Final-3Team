@@ -55,11 +55,21 @@ def save_blocks(store,uid,keywords,expected):
     return blocks(store,uid)
 
 
+TRADE_REGULATION_CATEGORIES=('통상·규제','통상규제')
+
+
 def major_issue_condition(store):
     """목록 필터와 표시값에서 동일한 주요 이슈 판정을 사용한다."""
     a,e=store.t('article'),store.t('alert_event')
-    return or_(and_(a.c.source_code=='KOTRA_MARKET',a.c.category.in_(['통상·규제','통상규제'])),
+    return or_(and_(a.c.source_code=='KOTRA_MARKET',a.c.category.in_(TRADE_REGULATION_CATEGORIES)),
                exists(select(e.c.event_id).where(e.c.article_id==a.c.article_id,e.c.event_type=='MAJOR_ISSUE')))
+
+
+def blocked_article(store,blocked):
+    """기사에 차단 키워드나 차단 대표어의 동의어 태그가 있는지. 같은 태그 표를 쓰는 바깥 조회와 섞이지 않게 별칭을 쓴다."""
+    a,k=store.t('article'),store.t('keyword_topic'); t=store.t('article_tag').alias('blocked_tag')
+    return exists(select(t.c.tag_id).select_from(t.outerjoin(k,k.c.keyword_text==t.c.keyword_text)).where(t.c.article_id==a.c.article_id,
+        or_(t.c.keyword_text.in_(blocked),k.c.canonical_text.in_(blocked))))
 
 
 def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope='GLOBAL',countries=None,hs=None,mode='BROWSE',category_boost=None):
@@ -85,9 +95,7 @@ def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope=
     if hs: stmt=stmt.where(exists(select(t.c.tag_id).where(t.c.article_id==a.c.article_id,
         or_(*(and_(t.c.hs_code.startswith(x['hs_code']),t.c.hs_ver==x['hs_ver']) for x in hs)))))
     blocked=blocked_topics(store,uid)
-    if blocked:
-        stmt=stmt.where(~exists(select(t.c.tag_id).select_from(t.outerjoin(k,k.c.keyword_text==t.c.keyword_text)).where(t.c.article_id==a.c.article_id,
-            or_(t.c.keyword_text.in_(blocked),k.c.canonical_text.in_(blocked)))))
+    if blocked: stmt=stmt.where(~blocked_article(store,blocked))
     if tab=='MARKET': stmt=stmt.where(a.c.source_code=='KOTRA_MARKET')
     if tab=='BREAKING': stmt=stmt.where(a.c.source_code=='KOTRA_SHORT_NEWS')
     if tab=='MAJOR_ISSUE':

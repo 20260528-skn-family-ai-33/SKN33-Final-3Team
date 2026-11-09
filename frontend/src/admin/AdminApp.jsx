@@ -1,9 +1,10 @@
 // 관리자 영역: 공통 틀(머리글·띠·왼쪽 메뉴)과 화면 선택
-import { useApp, useNotifications } from '../store'
+import { useApp } from '../store'
 import { Link, navigate } from '../router'
 import { SiteHeader, FooterSmall } from '../components/layout'
 import { Btn, Pager } from '../components/ui'
 import AdminScreen from './AdminScreen'
+import { useAdminAlertCount } from './useAdminAlertCount'
 import { useServerScreen } from './useServerScreen'
 import ServerDetail, { AuditDetail } from './ServerDetail'
 import { ErrorNotice } from '../api/hooks'
@@ -38,7 +39,7 @@ function Forbidden() {
 
 export default function AdminApp({ route }) {
   const { session, logout } = useApp()
-  const { unread } = useNotifications()
+  const alertCount = useAdminAlertCount(session?.role === 'admin')
   const [, , slug = 'ops', id] = route.path.split('/')
   const menuKey = adminScreens[id]?.menu || slug
   const menu = ADMIN_MENU.find(m => m[0] === (menuKey === 'data' ? 'inbox' : menuKey)) || ADMIN_MENU[0]
@@ -82,7 +83,7 @@ export default function AdminApp({ route }) {
 
   return (
     <>
-      <SiteHeader admin unread={unread} onBell={() => navigate('/admin/inbox/BS33')} onLogout={session ? logout : undefined} />
+      <SiteHeader admin unread={alertCount} onBell={() => navigate('/admin/inbox/BS33')} onLogout={session ? logout : undefined} />
       <section className="band ink">
         <div className="wrap">
           <div>
