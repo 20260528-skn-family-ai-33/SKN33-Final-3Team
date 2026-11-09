@@ -738,12 +738,80 @@ class BackendApiTest(unittest.TestCase):
         sheet=load_workbook(io.BytesIO(workbook.content))['결과표1']
         headers=[c.value for c in sheet[1]]
         self.assertIn('수출액 (USD)',headers); self.assertIn('품목명',headers)
-        self.assertEqual(sheet.cell(2,headers.index('품목')+1).value,'330499')
+        self.assertEqual(headers,['순위','HS 코드','품목명','수출액 (USD)','수입액 (USD)','수출 비중 (%)'])
+        self.assertEqual(sheet.cell(2,headers.index('HS 코드')+1).value,'330499')
         self.assertEqual(sheet.cell(2,headers.index('수출액 (USD)')+1).number_format,'#,##0')
         countries=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12').json()
         self.assertIsNone(countries['items'][0]['hs_name'])
         table=self.client.get('/api/v1/results/'+countries['result_id']).json()['table']
         self.assertNotIn('hs_name',[c['key'] for c in table['columns']])
+
+    def test_trade_screen_excel_layouts_and_agent_defaults_are_separate(self):
+        from openpyxl import load_workbook
+        from backend.app.api import trade
+        from backend.app.api.results import read_snapshot
+
+        uid=self.signup()
+        def workbook_for(path):
+            response=self.client.get('/api/v1/'+path)
+            self.assertEqual(response.status_code,200,response.text)
+            file=self.client.get('/api/v1/results/'+response.json()['result_id']+'/file')
+            self.assertEqual(file.status_code,200)
+            workbook=load_workbook(io.BytesIO(file.content))
+            info=dict(list(workbook['정보'].values)[1:])
+            self.assertIn('조회 기간',info)
+            self.assertNotIn('실행 SQL',info)
+            self.assertNotIn('export_profile',info)
+            return response.json(),workbook['결과표1']
+
+        for group in ('COUNTRY','HS6'):
+            for flow in ('EXPORT','IMPORT'):
+                with self.subTest(group=group,flow=flow):
+                    response,sheet=workbook_for('trade/rankings?period_start=2025-10&period_end=2025-12'
+                                               f'&group_by={group}&sort_flow={flow}')
+                    entity=['국가'] if group=='COUNTRY' else ['HS 코드','품목명']
+                    share='수출 비중 (%)' if flow=='EXPORT' else '수입 비중 (%)'
+                    self.assertEqual([c.value for c in sheet[1]],['순위',*entity,'수출액 (USD)','수입액 (USD)',share])
+                    self.assertEqual(sheet.max_row,len(response['items'])+1)
+                    self.assertEqual(sheet.cell(2,3 if group=='COUNTRY' else 4).value,float(response['items'][0]['export_amount_usd']))
+                    if group=='COUNTRY': self.assertIn(sheet['B2'].value,('미국','중국'))
+                    # 화면 응답의 분석용 값은 유지한다.
+                    self.assertIn('one_off',response['items'][0])
+
+        response,sheet=workbook_for('trade/trends?period_start=2025-10&period_end=2025-12&country_codes=US')
+        self.assertEqual([c.value for c in sheet[1]],['기준월','수출액 (USD)','수입액 (USD)'])
+        self.assertEqual(sheet.max_row,4)
+        self.assertIn('previous_year_export_usd',response['items'][0])
+
+        # 채팅/에이전트는 같은 함수를 기본 옵션으로 사용한다. 기존 컬럼이 남아야 한다.
+        with self.engine.connect() as connection:
+            store=Store(self.app.state.database,connection)
+            ranking=trade.rankings(store,uid,'2025-12','2025-12')
+            payload=read_snapshot(store,uid,ranking['result_id'],'RESULT')
+            headers={c['key'] for c in payload['columns']}
+            self.assertTrue({'rank_change','rank_status','mom_pct','yoy_pct','one_off'}<=headers)
+            self.assertNotIn('export_profile',payload['meta'])
+            trend=trade.trends(store,uid,'2025-12','2025-12')
+            payload=read_snapshot(store,uid,trend['result_id'],'RESULT')
+            self.assertIn('previous_year_export_usd',[c['key'] for c in payload['columns']])
+
+    def test_empty_screen_ranking_excel_keeps_identifying_headers(self):
+        from openpyxl import load_workbook
+        self.signup()
+        with self.engine.begin() as connection:
+            connection.execute(delete(self.meta.tables['export_summary']))
+            connection.execute(delete(self.meta.tables['import_summary']))
+        for group,identifiers in [('COUNTRY',['국가']),('HS6',['HS 코드','품목명'])]:
+            response=self.client.get('/api/v1/trade/rankings',params={
+                'period_start':'2025-12','period_end':'2025-12','group_by':group})
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(response.json()['items'],[])
+            file=self.client.get('/api/v1/results/'+response.json()['result_id']+'/file')
+            self.assertEqual(file.status_code,200)
+            sheet=load_workbook(io.BytesIO(file.content))['결과표1']
+            self.assertEqual([cell.value for cell in sheet[1]],
+                ['순위',*identifiers,'수출액 (USD)','수입액 (USD)','수출 비중 (%)'])
+            self.assertEqual(sheet.max_row,1)
 
     def test_admin_member_search_follows_selected_field(self):
         uid=self.signup(); m=self.meta.tables
@@ -1034,7 +1102,9 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(response.json()['items'][0]['country_code'],'CN')
         self.assertEqual(response.json()['items'][0]['one_off']['status'],'NOT_EVALUATED')
         result=self.client.get('/api/v1/results/'+response.json()['result_id']).json()['table']
-        self.assertEqual(result['rows'],[{k:v for k,v in item.items() if k not in ('has_data','hs_name')} for item in response.json()['items']])
+        self.assertEqual([{k:v for k,v in row.items() if k!='country_name'} for row in result['rows']],
+                         [{k:v for k,v in item.items() if k not in ('has_data','hs_name')} for item in response.json()['items']])
+        self.assertEqual([row['country_name'] for row in result['rows']],['중국','미국'])
         self.assertEqual(response.json()['items'][0]['rank_status'],'SAME')
         response=self.post('analysis/changes',{'month':'2025-12','compare':'YOY'})
         self.assertEqual(response.status_code,200,response.text)

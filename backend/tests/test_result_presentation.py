@@ -10,6 +10,100 @@ from types import SimpleNamespace
 
 
 class ResultPresentationTest(unittest.TestCase):
+    def test_user_excel_info_keeps_conditions_warnings_and_limit_but_not_internal_fields(self):
+        from backend.app.api.files import result_xlsx
+        from copy import deepcopy
+        meta={'export_profile':'TRADE_SCREEN','period':{'start':'2025-10-01','end':'2025-12-31'},
+              'sources':[{'code':'CUSTOMS','label':'관세청','url':None}],
+              'generated_at':'2026-11-09T00:00:00Z','data_version':'internal-1',
+              'freshness':'STALE','truncated':True,'rows_total':1001,'warnings':['비교 자료 미집계']}
+        payload={'meta':meta,'conditions':{'period':meta['period'],'hs_items':[{'hs_code':'010129','hs_ver':'HS2022'}],
+                   'country_codes':['US'],'trade_flow':'IMPORT'},'sql':['SELECT private_column FROM internal_table'],
+                 'columns':[{'key':'amount','label':'수입액','unit':'USD'}],'rows':[{'amount':0}],'total_rows':1}
+        original=deepcopy(payload)
+        workbook=load_workbook(io.BytesIO(result_xlsx(payload)))
+        info=dict(list(workbook['정보'].values)[1:])
+        self.assertEqual(info['조회 품목 (HS 코드)'],'010129')
+        self.assertEqual(info['조회 국가 코드'],'US')
+        self.assertEqual(info['조회 기준'],'수입')
+        self.assertEqual(info['조회 기간'],'2025-10-01 ~ 2025-12-31')
+        self.assertEqual(info['생성 시각'],'2026-11-09 09:00 KST')
+        self.assertEqual(info['출처'],'관세청')
+        self.assertEqual(info['주의사항'],'비교 자료 미집계')
+        self.assertIn('상위 1,000행',info['안내'])
+        self.assertNotIn('실행 SQL',info)
+        self.assertNotIn('export_profile',info)
+        self.assertNotIn('data_version',info)
+        self.assertEqual(workbook['결과표1']['A2'].value,0)
+        self.assertEqual(payload,original)
+        # 표의 모양으로 출처를 추정하지 않는다. 표시가 없는 에이전트/과거 스냅샷은 원본 유지.
+        del payload['meta']['export_profile']
+        workbook=load_workbook(io.BytesIO(result_xlsx(payload)))
+        info=dict(list(workbook['정보'].values)[1:])
+        self.assertEqual(info['실행 SQL'],payload['sql'][0])
+        self.assertEqual(info['data_version'],'internal-1')
+
+    def test_periodic_excel_distinguishes_no_comparison_from_unavailable_data(self):
+        from backend.app.api.reports import report_xlsx
+        from copy import deepcopy
+        row={'amount_usd':0,'previous_amount_usd':None,'comparison_pct':None,'mom_pct':None,'yoy_pct':None}
+        table={'columns':[{'key':key,'label':key,'unit':'USD' if key.endswith('_usd') else '%' if key.endswith('_pct') else None} for key in row],
+               'rows':[row],'total_rows':1}
+        doc={'sections':[{'tables':[table]}],'meta':{'warnings':['비교 기간 자료 미집계']},'sql':['SELECT 1']}
+        original=deepcopy(doc)
+        for comparison in ('NONE','YOY_PERIOD'):
+            record={'report_type':'RPT_MONTHLY','conditions_json':{'compare':comparison,
+                    'compare_period':{'start':'2024-01-01','end':'2024-12-31'}}}
+            workbook=load_workbook(io.BytesIO(report_xlsx(record,doc)))
+            headers=[cell.value for cell in workbook['결과표1'][1]]
+            self.assertEqual('비교 기간 수출액 (USD)' in headers,comparison!='NONE')
+            self.assertEqual('비교 증감률 (%)' in headers,comparison!='NONE')
+            self.assertEqual(workbook['결과표1']['A2'].value,0)
+            info=dict(list(workbook['정보'].values)[1:])
+            self.assertEqual('비교 기간' in info,comparison!='NONE')
+            self.assertEqual(info['주의사항'],'비교 기간 자료 미집계')
+            self.assertNotIn('실행 SQL',info)
+        self.assertEqual(doc,original)
+        row.update(monthly_avg_change_pct=12.5,compare_verified_months=3,compare_requested_months=12)
+        table['columns'].extend([{'key':key,'label':key,'unit':'%' if key.endswith('_pct') else None}
+                                for key in ('monthly_avg_change_pct','compare_verified_months','compare_requested_months')])
+        workbook=load_workbook(io.BytesIO(report_xlsx(record,doc)))
+        headers=[c.value for c in workbook['결과표1'][1]]
+        self.assertIn('월평균 증감률 (%)',headers)
+        self.assertIn('비교 집계 개월 수',headers)
+        self.assertIn('비교 조회 개월 수',headers)
+        # 생성 후 source_tables가 빠진 과거 에이전트 문서도 FROZEN 출처를 보존한다.
+        doc['meta']['freshness']='FROZEN'
+        workbook=load_workbook(io.BytesIO(report_xlsx({'report_type':'RPT_MONTHLY'},doc)))
+        self.assertIn('전월 대비',[c.value for c in workbook['결과표1'][1]])
+        self.assertIn('실행 SQL',dict(list(workbook['정보'].values)[1:]))
+
+    def test_periodic_excel_removes_duplicate_rates_without_changing_agent_or_pdf_tables(self):
+        from copy import deepcopy
+        from backend.app.api.reports import report_xlsx
+        row={'amount_usd':125.5,'previous_amount_usd':100,'comparison_pct':25.5,
+             'mom_pct':None,'yoy_pct':25.5,'export_country_count':2,'top_country_share_pct':80}
+        columns=[{'key':key,'label':key,'unit':'USD' if key.endswith('_usd') else '%' if key.endswith('_pct') else None} for key in row]
+        table={'columns':columns,'rows':[row],'total_rows':1}
+        document={'sections':[{'tables':[table]}],'meta':{},'sql':[]}
+        original=deepcopy(document)
+        for kind in ('RPT_MONTHLY','RPT_QUARTERLY'):
+            sheet=load_workbook(io.BytesIO(report_xlsx({'report_type':kind},document))).worksheets[0]
+            self.assertEqual([c.value for c in sheet[1]],[
+                '수출액 (USD)','비교 기간 수출액 (USD)','비교 증감률 (%)','수출 국가 수','최대 국가 비중 (%)'])
+            self.assertEqual(sheet['A2'].value,125.5)
+            self.assertEqual(sheet['C2'].value,25.5)
+        for record in ({'report_type':'RPT_ON_DEMAND'},
+                       {'report_type':'RPT_MONTHLY','content_json':{'source_tables':[table]}}):
+            actual=load_workbook(io.BytesIO(report_xlsx(record,document)))
+            expected=load_workbook(io.BytesIO(xlsx_bytes([table],{},[])))
+            self.assertEqual(actual.sheetnames,expected.sheetnames)
+            for actual_sheet,expected_sheet in zip(actual,expected):
+                self.assertEqual(list(actual_sheet.values),list(expected_sheet.values))
+        self.assertEqual(document,original)
+        empty={'sections':[{'tables':[]}],'meta':{},'sql':[]}
+        self.assertEqual(load_workbook(io.BytesIO(report_xlsx({'report_type':'RPT_WEEKLY'},empty))).sheetnames,['정보'])
+
     def test_legacy_prediction_excel_uses_korean_labels_and_relevant_rank(self):
         row = {'anchor': '2026-09-01', 'country_name': '베트남', 'hs6': '330499',
                'product_name': '화장품', 'growth_pct': 2.1, 'exp_12m': 123456,

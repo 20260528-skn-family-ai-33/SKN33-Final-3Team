@@ -42,3 +42,24 @@ class ReportScopeComparisonTest(unittest.TestCase):
         html=render('RPT_ON_DEMAND',context)
         self.assertIn('한국 전체 · 상대국 비교',html)
         self.assertIn('한국(대한민국) 전체 수출액',html)
+
+    def test_periodic_comparison_download_has_readable_info_and_preserves_overlap_notice(self):
+        import io
+        from openpyxl import load_workbook
+        from backend.app.api.files import result_xlsx
+        from backend.app.api.results import read_snapshot
+        for kind in ('RPT_MONTHLY','RPT_ON_DEMAND'):
+            record={'report_id':1,'report_type':kind,'conditions_json':{**self.conditions,'sections':['KPI']},'content_json':{}}
+            doc=reports.build_document(self.store,1,record)
+            table=next(t for section in doc['sections'] for t in section['tables'] if t['meta'].get('kind')=='REPORT_SCOPE_COMPARISON')
+            payload=read_snapshot(self.store,1,table['result_id'],'RESULT')
+            workbook=load_workbook(io.BytesIO(result_xlsx(payload)))
+            info=dict(list(workbook['정보'].values)[1:])
+            if kind=='RPT_MONTHLY':
+                self.assertNotIn('실행 SQL',info)
+                self.assertIn('합산하지 않습니다',info['주의사항'])
+                self.assertEqual(info['조회 국가 코드'],'US, CN')
+            else:
+                self.assertIn('실행 SQL',info)
+                self.assertNotIn('export_profile',payload['meta'])
+            self.assertEqual(workbook['결과표1']['B2'].value,3240000)
