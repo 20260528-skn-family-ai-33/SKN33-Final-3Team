@@ -26,7 +26,13 @@ def user_xlsx_info(meta,conditions=None):
     if conditions:
         hs=conditions.get('hs_items') or []
         rows.append(('조회 품목 (HS 코드)',', '.join(str(item['hs_code']) for item in hs) or '전체 품목'))
-        rows.append(('조회 국가 코드',', '.join(conditions.get('country_codes') or []) or '전체 국가'))
+        country_codes=', '.join(conditions.get('country_codes') or [])
+        # 개별 비교표 스냅샷은 리포트 전용 조건 대신 overlapping_scopes를 보존한다.
+        if conditions.get('include_korea_total') or meta.get('overlapping_scopes'):
+            scope='한국 전체'+(f' (비교 상대국: {country_codes})' if country_codes else '')
+            rows.append(('조회 국가',scope))
+        else:
+            rows.append(('조회 국가 코드',country_codes or '전체 국가'))
         flow={'EXPORT':'수출','IMPORT':'수입','BOTH':'수출·수입'}.get(conditions.get('trade_flow'))
         if flow: rows.append(('조회 기준',flow))
         comparison=conditions.get('compare')
