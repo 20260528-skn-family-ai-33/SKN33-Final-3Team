@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import logging
 import json
 import re
+import threading
 from pydantic import ValidationError
 from sqlalchemy import select, update
 from openai import OpenAIError
@@ -42,6 +43,18 @@ def product_names(store):
 
 
 _ML_THREAD = None
+_ML_THREAD_LOCK = threading.Lock()
+
+
+def _ml_thread():
+    """ML 전용 스레드(하나). 병렬 워커에서 두 질문이 동시에 처음 불러도 실행기가 둘 생기지 않게 잠금 안에서 만든다
+    (둘이면 모델을 메모리에 두 번 올린다). 배포 워커는 예열이 먼저 만들지만, 로컬 워커처럼 예열 없이 도는 경로도 있다."""
+    global _ML_THREAD
+    with _ML_THREAD_LOCK:
+        if _ML_THREAD is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _ML_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='agent-ml')
+        return _ML_THREAD
 _ML_RUNNING = {'since': None}   # 전용 스레드가 지금 돌리는 작업의 시작 시각(monotonic). 멈춤 판단용
 ML_STUCK_SECONDS = 300          # 한 작업이 이보다 오래 끝나지 않으면 멈춘 것으로 보고 오류 로그를 남긴다(복구는 워커 재시작)
 # TODO(C-34): ML 전용 스레드 줄에서 기다리는 상한 임시값. 병렬 워커(D-105)에서 유망시장 질문이 동시에 오면 앞 예측을 기다린다.
@@ -87,15 +100,11 @@ def article_cards(store, state, result):
 def warm_ml(work):
     """워커 시작 때 모델 로드(work)를 ML 전용 스레드에 미리 넣는다. 기다리지 않는다. 첫 유망시장 질문이 모델 로드
     (수십 초)로 ML 시간 상한을 넘지 않게 한다. 그 사이 들어온 ML 호출은 같은 스레드에서 로드 뒤에 줄을 선다."""
-    global _ML_THREAD
-    from concurrent.futures import ThreadPoolExecutor
-    if _ML_THREAD is None:
-        _ML_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='agent-ml')
     def run():
         try: work()
         except Exception as exc:   # 모델 파일이 없거나 깨져도 워커는 돈다. 질문 때 같은 오류로 그 단계만 실패한다
             logging.getLogger(__name__).warning('agent_ml_warm_failed type=%s %s', type(exc).__name__, exc)
-    return _ML_THREAD.submit(run)
+    return _ml_thread().submit(run)
 
 
 def bounded_ml(work, seconds, queue_seconds=ML_QUEUE_SECONDS, waited=None):
@@ -105,12 +114,8 @@ def bounded_ml(work, seconds, queue_seconds=ML_QUEUE_SECONDS, waited=None):
     작업이 멈추면(끝나지 않음) 이후 ML 호출이 모두 시간 초과가 되므로, 시간 초과마다 경고를 남기고 ML_STUCK_SECONDS를
     넘으면 오류 로그로 워커 재시작이 필요하다고 알린다(사용자 결정: 스레드를 교체하지 않는다).
     waited: 줄에서 기다린 초를 더해 둘 목록([0.0]). 호출한 쪽이 실행 예산에서 뺀다(ExecutionStore.call(waited=))."""
-    global _ML_THREAD
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    from concurrent.futures import TimeoutError as FutureTimeout
     from time import monotonic
-    import threading
-    if _ML_THREAD is None:
-        _ML_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='agent-ml')
     started = threading.Event()
     def tracked():
         _ML_RUNNING['since'] = monotonic()
@@ -118,7 +123,7 @@ def bounded_ml(work, seconds, queue_seconds=ML_QUEUE_SECONDS, waited=None):
         try: return work()
         finally: _ML_RUNNING['since'] = None
     queued = monotonic()
-    future = _ML_THREAD.submit(tracked)
+    future = _ml_thread().submit(tracked)
     try:
         # 병렬 워커(D-105)에서는 앞 질문의 예측이 끝날 때까지 줄에서 기다린다. 기다린 시간은 seconds에 넣지 않고
         # queue_seconds로 따로 묶는다. 넣으면 동시에 온 유망시장 질문의 뒤쪽이 예측을 시작도 못 하고 시간 초과가 된다.

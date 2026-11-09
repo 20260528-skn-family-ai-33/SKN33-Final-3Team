@@ -183,6 +183,16 @@ class SqlFilterBypassTest(unittest.TestCase):
         self.assertEqual(bounded_ml(lambda: 2, 1, waited=waited), 2)
         self.assertGreater(waited[0], 0.1)              # 앞 작업이 끝날 때까지 기다린 시간을 알려 준다
 
+    def test_ml_thread_is_created_once_under_concurrent_first_calls(self):
+        # 예열 없이 두 질문이 동시에 처음 불러도 실행기는 하나다(모델을 두 번 올리지 않는다)
+        from concurrent.futures import ThreadPoolExecutor
+        from backend.app.agents import runtime
+        with patch.object(runtime, '_ML_THREAD', None):
+            with ThreadPoolExecutor(8) as pool:
+                made = {id(t) for t in pool.map(lambda _: runtime._ml_thread(), range(8))}
+            self.assertEqual(len(made), 1)
+            runtime._ML_THREAD.shutdown(wait=False)
+
     def test_ml_queue_wait_is_not_counted_as_run_time(self):
         # 병렬 워커(D-105): 앞 예측을 기다린 시간은 예측 시간 상한에 넣지 않는다
         import time
