@@ -4,6 +4,7 @@ from decimal import Decimal
 import math
 import re
 from functools import lru_cache
+from pydantic import model_validator
 
 import sqlglot
 from sqlglot import exp
@@ -41,13 +42,39 @@ country.country_role = 'COUNTRY'인 행만 쓰고, hs_ver는 conditions의 품�
 conditions에 국가·품목이 있으면 수출입 표의 country_code·hs*_code를 그 값 리터럴로 직접 거르고 다른 국가·품목은 읽지 않습니다.
 수출입 표의 hs_ver·trade_month 조건은 JOIN ON이 아니라 각 SELECT의 WHERE에 AND로 겁니다.
 기간은 trade_month를 conditions 기간(비교 기간 포함) 안의 날짜로 BETWEEN 또는 >=·< 로 거릅니다.
-기간과 비교 기간이 떨어져 있으면 trade_month IN ('2024-03-01', '2025-03-01')처럼 월을 나열하거나 기간마다 따로 조회합니다.
+기간과 비교 기간이 떨어져 있으면 월을 IN으로 나열하거나 각 기간 조건을 괄호 안에서 OR로 연결합니다. 두 기간 사이의 미요청 월은 포함하지 않습니다.
+여러 HS6 품목은 hs6_code IN (...)으로 거릅니다. HS4는 hs4_code 또는 hs6_code LIKE '확정HS4%'를 사용하며 HS6를 hs10_code와 동일시하지 않습니다.
+월별 출력은 DATE_FORMAT(trade_month, '%Y-%m')으로 YYYY-MM 문자열을 반환하고 같은 식으로 GROUP BY·ORDER BY합니다.
+사용자가 지정한 결과 열·순서·단위·날짜 형식을 지킵니다. 날짜 조건의 원본 trade_month와 표시용 월 문자열을 구분합니다.
+비교 열의 순서는 요청에 적힌 순서를 따릅니다. conditions의 period가 먼저라는 이유로 조회 기간 열을 앞에 놓지 않습니다.
+중량 미제공(NULL)은 SUM(weight_kg)에서도 NULL로 유지하며 0으로 채우지 않습니다. 단가는 SUM(amount_usd)/NULLIF(SUM(weight_kg),0)입니다.
+월 목록을 만들어 LEFT JOIN하거나 두 기간을 비교할 때는 수출입 원본끼리 직접 조인하지 않습니다.
+각 수출입 원본을 별도 CTE/파생 SELECT의 WHERE에서 국가·HS·판본·기간으로 제한하고 필요한 월/대상 단위로 먼저 집계한 뒤 조인합니다.
+원본의 필터를 LEFT JOIN ON에만 넣으면 범위 검사에서 거부됩니다. 달력은 집계된 CTE와 월로 조인하고 누락값을 0으로 바꾸지 않습니다.
+전년 동월 비교는 두 기간의 집계 결과를 월 번호/지정한 기간의 월 순서로 대응시키며, 연도가 다른 YYYY-MM 문자열의 동일 비교로 조인하지 않습니다.
 비중의 분모가 그 국가·기간 전체이면 분모 범위는 품목(또는 국가)으로 거르지 않아도 됩니다.
 share_basis=KOREA_TRADE_PARTNER는 한국의 같은 기간·수출입 전체(국가 조건이 있으면 그 국가 대상) 금액을 분모로 하는 비중입니다.
 비중 결과에는 분모 금액을 denominator_usd(USD) 열로 함께 반환합니다.
 ranking_group=HS6는 품목별로 묶습니다. 화장품 중 품목별 비중처럼 범위가 정해져 있으면 그 범위의 합계가 분모입니다.
-지원할 수 없는 계산은 지어내지 말고 unsupported에 이유를 적습니다.
+요청이 특정 국가·품목·비교 대상·순위 기준을 필요로 하지만 확정되지 않았다면 전체 조회나 임의 기준으로 대체하지 않습니다.
+conditions의 빈 국가·품목 목록은 전체 범위로 사용할 수 있습니다. 다만 요청이 특정 대상을 미정이라고 명시하거나 '그 나라/그 품목'을 가리키는데 확정 조건이 비어 있으면 unsupported입니다.
+국가·품목 언급 없이 전체 합계를 묻는 정상 요청과 특정 대상이 미정인 요청을 구분합니다. HS 코드를 만들어내지 않습니다.
+요청 기간과 확정 기간이 다르면 확정 기간의 수치로 요청 기간의 답을 대신하지 않습니다.
+지원하지 않는 지표·미래 확정값·개인정보·변경 요청 또는 추가 확인이 필요한 질문은 unsupported에 이유와 필요한 조건을 적습니다.
+unsupported 응답은 sql="", columns=[], summary=""로 반환합니다. 정상 조회는 unsupported=null이며 결과 열 1~20개를 명시합니다.
 """
+
+
+class SqlGenerationDraft(SqlDraft):
+    """SQL-local transport: refusals have no result columns; shared State stays unchanged."""
+
+    @model_validator(mode='after')
+    def unique_columns(self):
+        if self.unsupported:
+            if self.sql or self.columns:
+                raise ValueError('미지원 응답은 sql과 columns를 비워야 합니다.')
+            return self
+        return super().unique_columns()
 
 
 def validate_sql(draft: SqlDraft, conditions=None) -> str:
@@ -141,6 +168,13 @@ def _filters(predicates, column, aliases, value=None, *, single=False, subquery=
     single이면 값 하나만(판본 하나로 제한), subquery면 국가 역할 하위 쿼리 IN도 받는다. 별칭은 대소문자를 가리지 않는다."""
     aliases = {a.lower() for a in aliases}
     for node in predicates:
+        literal = _literal_filter(node)
+        if literal is not None:
+            left, op, values = literal
+            if (_column(left, column, aliases) and op in ('eq', 'in')
+                    and (not single or len(set(values)) == 1)
+                    and (value is None or all(v == value for v in values))):
+                return True
         if not isinstance(node, (exp.EQ, exp.In)):
             continue
         left = node.this
@@ -219,7 +253,8 @@ def _check_trade_filters(query):
                                                                for c in p.find_all(exp.Column))]
             label = sources[trade].name
             if not _filters(predicates, 'hs_ver', {trade}, single=True):
-                raise ValueError(f"{label}에는 hs_ver 조건 하나(예: hs_ver = 'HS2022')를 AND로 걸어야 합니다.")
+                raise ValueError(f"{label}에는 hs_ver 리터럴 조건 하나를 AND로 걸어야 합니다. "
+                                 "외부 조인이면 원본을 별도 CTE에서 WHERE로 제한·집계한 뒤 CTE끼리 조인하세요.")
             role = any(_filters(predicates, 'country_role', {c}, 'COUNTRY') and _linked(scope.expression, trade, c)
                        for c in countries)
             if not (role or _filters(predicates, 'country_code', {trade}, subquery=True)):
@@ -232,6 +267,21 @@ HS_COLUMN = re.compile(r'hs\d*_code')
 
 def _literal_filter(node):
     """(열, 연산, [리터럴 값]) — 열과 리터럴을 비교하는 조건이면. 아니면 None. 연산: eq·in·between·gte·gt·lte·lt·like."""
+    node = node.unnest()
+    if isinstance(node, exp.Or):
+        # Only a disjunction constraining the SAME qualified column is a filter.
+        # Mixed aliases/columns, NOT, tautologies and unconstrained branches stay rejected.
+        parts = [_literal_filter(part) for part in node.flatten()]
+        if not parts or any(part is None for part in parts):
+            return None
+        column = parts[0][0]
+        if any((c.table.lower(), c.name.lower()) != (column.table.lower(), column.name.lower())
+               for c, _, _ in parts):
+            return None
+        ops = {op for _, op, _ in parts}
+        if ops <= {'eq', 'in'} or ops == {'like'}:
+            return column, 'in' if ops <= {'eq', 'in'} else 'like', [v for _, _, vs in parts for v in vs]
+        return None
     if isinstance(node, exp.Between):
         low, high = node.args.get('low'), node.args.get('high')
         if isinstance(node.this, exp.Column) and isinstance(low, exp.Literal) and isinstance(high, exp.Literal):
@@ -305,6 +355,31 @@ def _required(node):
     return True
 
 
+def _date_filter_branches(node, trade, allow_unqualified):
+    """Prove every OR branch is bounded; combine AND bounds without widening gaps.
+
+    Non-date predicates cannot prove a date bound. Cap expansion so model SQL
+    cannot force exponential validation work. No SQL expression is rewritten.
+    """
+    if node is None:
+        return [[]]
+    node = node.unnest()
+    if isinstance(node, (exp.And, exp.Or)):
+        left = _date_filter_branches(node.this, trade, allow_unqualified)
+        right = _date_filter_branches(node.expression, trade, allow_unqualified)
+        size = len(left) + len(right) if isinstance(node, exp.Or) else len(left) * len(right)
+        if size > 64:
+            raise ValueError('기간 OR 조건이 너무 복잡합니다. 월 IN 목록이나 단순한 기간 조건을 사용하세요.')
+        return left + right if isinstance(node, exp.Or) else [a + b for a in left for b in right]
+    found = _literal_filter(node)
+    if found:
+        column, op, values = found
+        if column.name.lower() == 'trade_month' and (column.table.lower() == trade
+                or (not column.table and allow_unqualified)):
+            return [[('trade_month', op, values)]]
+    return [[]]
+
+
 def _ancestors(node, stop):
     """node의 부모들(stop 직전까지)."""
     parent = node.parent
@@ -366,9 +441,12 @@ def _check_conditions(query, conditions):
             edition = next((values[0] for name, op, values in filters if name == 'hs_ver'
                             and op in ('eq','in') and len(values)==1 and values[0] in editions), None)
             if edition is None:
-                raise ValueError(f"{label}의 WHERE에 확정한 HS 판본 하나를 지정하세요.")
-            if allowed_months and not _dates_within((f for f in filters if f[0]=='trade_month'), allowed_months):
-                raise ValueError(f"{label}의 WHERE에서 trade_month를 확정 기간 또는 비교 기간 안으로 제한하세요.")
+                raise ValueError(f"{label}의 WHERE에 확정한 HS 판본 하나를 지정하세요. "
+                                 "외부 조인이면 원본을 별도 CTE에서 WHERE로 제한·집계한 뒤 조인하세요.")
+            if allowed_months and not all(_dates_within(branch, allowed_months) for branch in
+                    _date_filter_branches(where.this if where else None, trade, len(trades) == 1)):
+                raise ValueError(f"{label}의 WHERE에서 trade_month를 확정 기간 또는 비교 기간 안으로 제한하세요. "
+                                 "외부 조인이면 각 기간을 별도 CTE의 WHERE에서 제한·집계한 뒤 조인하세요.")
     _check_output_rows(query, bool(countries), bool(confirmed))
 
 
@@ -505,11 +583,12 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
         schema = schema_for(engine)
         if step is not None:
             step.attempts += 1
-        draft = client.parse(model=model, timeout=timeout, prompt=SQL_PROMPT, schema=SqlDraft,
+        draft = client.parse(model=model, timeout=timeout, prompt=SQL_PROMPT, schema=SqlGenerationDraft,
             max_output_tokens=2000, payload={'request': task.custom_query, 'conditions': prompt_conditions,
                                             'schema': schema, 'previous_error': error})
         if draft.unsupported:
             return Analysis([], {}, ToolResult(status='NO_DATA', error=draft.unsupported), conditions, [])
+        draft = SqlDraft.model_validate(draft.model_dump())
         if product_share and not any(col.key=='denominator_usd' and col.type=='number' and col.unit=='USD'
                                      for col in draft.columns):
             raise ValueError('품목별 비중의 실제 분모 금액을 denominator_usd(USD) 결과 열에 포함하세요.')
