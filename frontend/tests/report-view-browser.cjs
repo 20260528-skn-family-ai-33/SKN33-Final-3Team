@@ -95,5 +95,63 @@ const { chromium } = require('playwright')
       console.log(`PASS header ${type} ${sections.length}: ${line}`)
       await page.close()
     }
+    // 승인한 채팅 결과로 만든 리포트(meta.freshness FROZEN, D-90): 결과표를 그대로 보이고 없는 섹션은 '포함되지 않음'.
+    // 집계 카드의 '—'·'준비 중'을 그리지 않고, 만료될 수 있는 원본 결과 API(/results)를 부르지 않는다.
+    {
+      const trend = { result_id: 'result_t', kind: 'TREND', total_rows: 4,
+        columns: [{ key: 'country_name', label: '국가', type: 'string' }, { key: 'month', label: '기준월', type: 'string' }, { key: 'amount_usd', label: '수출액', type: 'number', unit: 'USD' }],
+        rows: [['중국', '2025-10', 2210000], ['미국', '2025-10', 1210000], ['중국', '2025-11', 2220000], ['미국', '2025-11', 1220000]]
+          .map(([country_name, month, amount_usd]) => ({ country_name, month, amount_usd })) }
+      const ranking = { result_id: 'result_r', kind: 'RANKING', total_rows: 2,
+        columns: [{ key: 'rank', label: '순위', type: 'number' }, { key: 'country_name', label: '국가', type: 'string' }, { key: 'export_usd', label: '수출액', type: 'number', unit: 'USD' }],
+        rows: [{ rank: 1, country_name: '중국', export_usd: 6660000 }, { rank: 2, country_name: '미국', export_usd: 3660000 }] }
+      const missing = '해당 분석 결과에 포함되지 않음'
+      const sections = [
+        { section_code: 'SUMMARY', title: '핵심 요약', text: '승인한 분석 결과표를 기준으로 작성했습니다.', tables: [], articles: [] },
+        { section_code: 'KPI', title: '주요 지표 및 월별 수출 추이', text: '승인한 분석 결과입니다.', kpi: null, tables: [trend], articles: [] },
+        { section_code: 'TOP_COUNTRIES', title: '주요 수출국', text: '승인한 분석 결과입니다.', kpi: null, tables: [ranking], articles: [] },
+        { section_code: 'GROWTH_RISK', title: '수출 증가 감소 주요 시장', text: missing, kpi: null, tables: [], articles: [] },
+        { section_code: 'LOCAL_ISSUES', title: '현지 이슈', text: missing, kpi: null, tables: [], articles: [] }]
+      const page = await browser.newPage()
+      const errors = [], requested = []
+      page.on('pageerror', e => errors.push(e.message))
+      await page.route('**/api/v1/**', route => {
+        const pathname = new URL(route.request().url()).pathname
+        requested.push(pathname)
+        if (pathname.endsWith('/users/me')) return route.fulfill({ status: 401, json: { message: 'test' } })
+        if (pathname.endsWith('/reports/1/status')) return route.fulfill({ json: { job: { status: 'READY' } } })
+        if (pathname.endsWith('/reports/1')) return route.fulfill({ json: {
+          report: { report_id: '1', report_type: 'RPT_ON_DEMAND', status: 'READY', title: '결과 기반 검수', created_at: '2026-11-09', available_formats: ['PDF'],
+            conditions: { compare: 'NONE', hs_items: [{ hs_code: '330499', hs_ver: 'HS2022' }], country_codes: ['US', 'CN'], period: { start: '2025-10-01', end: '2025-12-31' } } },
+          sections, meta: { sources: [], warnings: ['2025-12 일부 통계 미공개'], freshness: 'FROZEN' } } })
+        if (pathname.endsWith('/reports')) return route.fulfill({ json: { items: [], page: { has_next: false } } })
+        return route.fulfill({ status: 500, json: { message: 'Unexpected test API: ' + pathname } })
+      })
+      await page.route('**/report-view-harness', route => route.fulfill({ contentType: 'text/html', body: `
+        <div id="root"></div><script type="module">
+        import RefreshRuntime from '/@react-refresh';
+        RefreshRuntime.injectIntoGlobalHook(window);
+        window.$RefreshReg$ = () => {}; window.$RefreshSig$ = () => type => type;
+        window.__vite_plugin_react_preamble_installed__ = true;
+        await import('/tests/report-view-harness.jsx');
+        </script>` }))
+      await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/report-view-harness`)
+      const title = page.getByRole('heading', { name: '결과 기반 검수' })
+      try { await title.waitFor() }
+      catch (error) { console.error({ errors, text: await page.locator('body').innerText() }); throw error }
+      const text = (await page.locator('article').innerText()).replace(/\s+/g, ' ')
+      const header = (await title.locator('xpath=following-sibling::p[1]').innerText()).replace(/\s+/g, ' ').trim()
+      assert.equal(header, '승인한 분석 결과로 작성 · HS6 330499 · 국가: US · CN')
+      assert.equal(text.split(missing).length - 1, 2, '결과표에 없는 섹션 두 곳에 포함되지 않음 안내')
+      for (const absent of ['—억 USD', '준비 중', '데이터 준비 중', '전체 항목 선택']) assert.ok(!text.includes(absent), `결과 기반 리포트에 '${absent}'가 보이면 안 된다`)
+      for (const shown of ['2,210,000', '1,220,000', '6,660,000', '3,660,000', '2025-12 일부 통계 미공개']) assert.ok(text.includes(shown), `결과표 값 ${shown}`)
+      // 월별 추이는 국가별 선 두 개(섞어 한 줄로 그리지 않는다)
+      const legend = await page.locator('article .chips .lg').allInnerTexts()
+      assert.deepEqual(legend.filter(t => ['중국', '미국'].includes(t.trim())).sort(), ['미국', '중국'])
+      assert.ok(!requested.some(p => p.includes('/results/')), '원본 결과 API를 부르지 않는다: ' + requested.join(', '))
+      assert.deepEqual(errors, [])
+      console.log('PASS result-based report view')
+      await page.close()
+    }
   } finally { if (browser) await browser.close(); await server.close() }
 })().catch(error => { console.error(error); process.exitCode = 1 })
