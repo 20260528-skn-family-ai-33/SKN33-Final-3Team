@@ -1,0 +1,16 @@
+name: skn-sql-eval74
+services:
+  mysql:
+    image: mysql@sha256:85b9bf2e29cf836ecb8c2a15a935d4ba0c606631dff1dd79531a11983c638f2a # MySQL 8.4.11
+    environment:
+      MYSQL_ROOT_PASSWORD: local-evaluation-root-only
+      MYSQL_DATABASE: sql_agent_eval
+    ports:
+      - '127.0.0.1:3308:3306'
+    volumes:
+      - ./sql_snapshot.sql:/docker-entrypoint-initdb.d/01_snapshot.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, 'mysqladmin ping -h localhost -uroot -p"$$MYSQL_ROOT_PASSWORD" --silent']
+      interval: 3s
+      timeout: 3s
+      retries: 40

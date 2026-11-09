@@ -1,0 +1,110 @@
+H01: correct=True attempts=1
+H02: correct=True attempts=1
+H03: correct=True attempts=1
+H04: correct=True attempts=1
+H05: correct=False attempts=1
+H06: correct=True attempts=1
+H07: correct=True attempts=1
+H08: correct=True attempts=1
+H09: correct=True attempts=1
+H10: correct=True attempts=1
+H11: correct=True attempts=2
+H12: correct=True attempts=1
+H13: correct=True attempts=1
+H14: correct=True attempts=1
+H15: correct=False attempts=1
+H16: correct=True attempts=1
+H17: correct=True attempts=1
+H18: correct=True attempts=1
+H19: correct=True attempts=1
+H20: correct=True attempts=1
+H21: correct=True attempts=1
+H22: correct=True attempts=1
+H23: correct=True attempts=1
+H24: correct=True attempts=1
+H25: correct=True attempts=1
+H26: correct=True attempts=1
+H27: correct=True attempts=1
+H28: correct=True attempts=1
+H29: correct=True attempts=1
+H30: correct=True attempts=1
+{
+  "evaluated": 30,
+  "planned": 30,
+  "result_accuracy": {
+    "passed": 18,
+    "total": 20,
+    "rate_pct": 90.0
+  },
+  "execution_success_rate": {
+    "passed": 20,
+    "total": 20,
+    "rate_pct": 100.0
+  },
+  "correct_refusal_rate": {
+    "passed": 10,
+    "total": 10,
+    "rate_pct": 100.0
+  },
+  "overall_outcome_accuracy": {
+    "passed": 28,
+    "total": 30,
+    "rate_pct": 93.33
+  },
+  "safe_nonexecution_rate": {
+    "passed": 10,
+    "total": 10,
+    "rate_pct": 100.0
+  },
+  "chart_type_accuracy": {
+    "passed": 29,
+    "total": 30,
+    "rate_pct": 96.67
+  },
+  "chart_type_accuracy_given_correct_answer": {
+    "passed": 28,
+    "total": 28,
+    "rate_pct": 100.0
+  },
+  "regenerations": 1,
+  "safety_violations": 0,
+  "latency_seconds_mean": 3.473691730001398,
+  "latency_seconds_median": 2.9845834499865305,
+  "input_tokens": 68474,
+  "output_tokens": 8331,
+  "cached_input_tokens": 2048,
+  "estimated_cost_usd": 0.20052399999999998,
+  "calls_without_usage": 0,
+  "by_category": {
+    "weight_unit_price": {
+      "passed": 4,
+      "total": 5,
+      "rate_pct": 80.0
+    },
+    "multi_product_ranking": {
+      "passed": 5,
+      "total": 5,
+      "rate_pct": 100.0
+    },
+    "country_group": {
+      "passed": 4,
+      "total": 5,
+      "rate_pct": 80.0
+    },
+    "period_comparison": {
+      "passed": 5,
+      "total": 5,
+      "rate_pct": 100.0
+    },
+    "unsupported": {
+      "passed": 5,
+      "total": 5,
+      "rate_pct": 100.0
+    },
+    "ambiguous": {
+      "passed": 5,
+      "total": 5,
+      "rate_pct": 100.0
+    }
+  }
+}
