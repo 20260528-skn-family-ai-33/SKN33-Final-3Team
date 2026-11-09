@@ -293,6 +293,21 @@ class OnDemandReportTest(unittest.TestCase):
                                     'country_codes': [f'C{i}' for i in range(21)]}, [('C0', '330499', 1e6)])
         self.assertIn('선택한 21개국 중 앞의 20개국만 예측했습니다.', many['text'])
 
+    def test_model_storage_or_broken_file_only_empties_the_promising_section(self):
+        import pickle
+        from backend.app.storage.objects import StorageError
+        uid = self.signup(); conditions = self.preview()['conditions']
+        for error in (StorageError('manifest unavailable'), EOFError('truncated model'), pickle.UnpicklingError('broken'),
+                      FileNotFoundError('missing')):
+            with self.subTest(error=type(error).__name__), patch('backend.app.agents.market.loaded', side_effect=error):
+                ctx, document = self.context(uid, conditions)
+                sections = {s['section_code']: s for s in document['sections']}
+                # 모델 저장소·파일 오류는 유망시장 섹션만 비우고, 통계·기사 섹션과 리포트는 그대로 만든다
+                self.assertEqual(sections['GROWTH_RISK']['content_status'], 'NO_DATA')
+                self.assertEqual(sections['GROWTH_RISK']['text'], reports.PROMISING_UNAVAILABLE)
+                self.assertEqual(sections['KPI']['content_status'], 'READY')
+                self.assertEqual(ctx['summary']['kpi']['amount_usd'], 1230000)
+
     def test_copied_chat_prediction_keeps_its_rank_basis(self):
         uid = self.signup(); conditions = self.preview()['conditions']
         row = {'anchor': '2026-09-01', 'country_code': 'US', 'hs6': '330499', 'country_rank': 3, 'country_size': 1200,

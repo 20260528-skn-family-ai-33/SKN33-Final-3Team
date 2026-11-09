@@ -227,6 +227,14 @@ def promising_scope(bundle,countries,items,max_countries,max_items):
     return countries,hs,notes
 
 
+def model_errors():
+    """유망시장 섹션만 비우고 리포트는 계속 만들 모델 오류. 모델 저장소(S3 manifest·캐시) 오류, 잘린 파일(EOFError),
+    깨진 피클까지 포함한다. 그 밖의 오류(코드 결함)는 그대로 올린다."""
+    import pickle
+    from backend.app.storage.objects import StorageError
+    return (ImportError,OSError,MemoryError,ValueError,TimeoutError,EOFError,pickle.UnpicklingError,StorageError)
+
+
 def promising_section(store,uid,c):
     """GROWTH_RISK = 유망시장(증가·감소 예상). 채팅 유망시장(PROMISING_MARKET)과 같은 계산을 리포트 국가·품목으로 한다.
     모델 A가 유망 순위를, 모델 B가 증가·감소 예상을 낸다. 모델을 쓸 수 없어도 리포트 생성은 실패시키지 않는다."""
@@ -249,7 +257,7 @@ def promising_section(store,uid,c):
             return bundle,provider,versions,anchor,growth(settings,anchor)
         # 채팅과 같은 ML 전용 스레드에서 돌린다(모델을 메모리에 두 번 올리지 않고, 멈춰도 워커를 붙잡지 않는다).
         bundle,provider,versions,anchor,(outlook,_,note)=bounded_ml(load,seconds)
-    except (ImportError,OSError,MemoryError,ValueError,TimeoutError):
+    except model_errors():
         return section('GROWTH_RISK',PROMISING_UNAVAILABLE,status='NO_DATA')
     # 선택 범위(리포트 한도 품목 100·국가 250)는 모델 장애가 아니다. 예측 한도에 맞추고 무엇을 계산했는지 알린다.
     countries,hs,scope=promising_scope(bundle,countries,items,MAX_COUNTRIES,MAX_HS_ITEMS)
@@ -263,7 +271,7 @@ def promising_section(store,uid,c):
         codes=model_codes(store,conditions.hs_items)
         analysis=bounded_ml(lambda:predict(SimpleNamespace(conditions=conditions),bundle,provider,versions,codes=codes,
                                            directions=outlook['directions'] if outlook else None),seconds)
-    except (ImportError,OSError,MemoryError,ValueError,TimeoutError):
+    except model_errors():
         return section('GROWTH_RISK',PROMISING_UNAVAILABLE,status='NO_DATA')
     if analysis.result.status!='OK':
         return section('GROWTH_RISK',' '.join(['선택한 국가·품목은 유망시장 예측 대상이 아닙니다(최근 12개월 수출 10만 달러 이상만 예측).',*scope]),status='NO_DATA')

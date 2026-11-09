@@ -275,8 +275,9 @@
 <p class="reading" style="margin-bottom:3mm">{{ pm.text }}</p>
 {% elif b.key == 'ptable' %}
 {% if pm.rows %}
-<table>
-  <tr><th style="width:24mm">{{ pm.rank_label }}</th><th>국가</th><th>품목</th><th style="width:20mm">HS 코드</th><th style="width:24mm">증감 예상</th><th class="r" style="width:30mm">최근 12개월 수출액</th></tr>
+<table style="table-layout:fixed">
+  {# 칸 너비는 report_templates.PROMISING_COLS와 같아야 한다(쪽 나눔 높이 계산). #}
+  <tr><th style="width:24mm">{{ pm.rank_label }}</th><th style="width:30mm">국가</th><th style="width:50mm">품목</th><th style="width:20mm">HS 코드</th><th style="width:24mm">증감 예상</th><th class="r" style="width:32mm">최근 12개월 수출액</th></tr>
   {% for r in pm.rows[b.start:b.end] %}
   <tr><td>{{ r.rank }}{% if r.size %} <span class="small">/ {{ r.size | num }}</span>{% endif %}</td><td class="b">{{ r.country }}</td><td>{{ r.product }}</td><td>{{ r.hs6 }}</td>
     <td style="color:{{ colors.up if r.outlook == '증가 예상' else colors.down if r.outlook == '감소 예상' else colors.muted }}">{{ r.outlook or '—' }}</td>

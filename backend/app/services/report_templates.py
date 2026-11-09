@@ -477,6 +477,24 @@ def _table(key, rows, head=None, empty=ROW1_MM, **extra):
     return dict(extra, key=key, head=H3_MM + TH_MM if head is None else head, rows=rows, empty=empty)
 
 
+# 유망시장 표 칸 너비(mm). ondemand.html의 th 너비와 같아야 한다. 글자 폭 = 칸 너비 − 좌우 여백 4.8mm.
+PROMISING_COLS = (24, 30, 50, 20, 24, 32)
+
+
+def _promising_table(promising):
+    """유망시장 표. 국가·품목 이름이 길면 줄이 바뀌므로 행마다 높이를 잰다(머리 행도 줄바꿈 반영).
+    국가명은 굵은 글씨라 폭을 6% 좁게 본다."""
+    w = [c - 4.8 for c in PROMISING_COLS]
+    heads = [promising.get('rank_label') or '', '국가', '품목', 'HS 코드', '증감 예상', '최근 12개월 수출액']
+    head = TH_MM + LINE[8.2] * (max(_lines(t, 8.2, x) for t, x in zip(heads, w)) - 1)
+    def rank(r):
+        return f"{r.get('rank') if r.get('rank') is not None else '—'}" + (f" / {num(r['size'])}" if r.get('size') else '')
+    rows = [_row([(rank(r), w[0]), (r.get('country') or '', w[1] * 0.94), (r.get('product') or '', w[2]),
+                  (r.get('hs6') or '', w[3]), (r.get('outlook') or '—', w[4]), (eok(r.get('exp_12m_usd'), 2), w[5])])
+            for r in promising['rows']]
+    return _table('ptable', rows, head=head)
+
+
 def flow(blocks, first, rest):
     """블록을 쪽에 채웁니다. 표·기사 목록(rows)은 행 단위로 나누고, 소제목만 쪽 끝에 남기지 않습니다.
     반환: 쪽 목록 [[{key, start, end, cont, ...}]]. start:end는 그 쪽에 넣을 행 범위, cont는 이어지는 표 여부."""
@@ -726,7 +744,7 @@ def _ondemand_layout(ctx, rest):
     if 'GROWTH_RISK' in sections:
         promising = ctx['promising']
         note = {'key': 'pnote', 'height': LINE[9] * _lines(promising['text'], 9, TEXT_MM) + 4}
-        pages['promising'] = flow([note, _table('ptable', [ROW1_MM] * len(promising['rows']), head=TH_MM)],
+        pages['promising'] = flow([note, _promising_table(promising)],
                                   BODY_MM - _heading('모델 예측 순위 · 증가·감소 예상 · 단위 억 달러'), rest)
 
     if 'LOCAL_ISSUES' in sections:
