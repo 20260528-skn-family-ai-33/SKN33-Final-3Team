@@ -57,11 +57,12 @@ function Chart({initial,selector,table}) {
   </figure>
 }
 
-function ComparisonResult({group,fallback,charts,selectors,tasks}) {
+// tableOnly: 문장형 답변(D-98)의 "근거 표 보기"는 차트 없이 표만 보여 준다
+function ComparisonResult({group,fallback,charts,selectors,tasks,tableOnly=false}) {
   const result_ids=group.tables.map(t=>t.result_id)
   const result=useQuery('/results/comparison',{result_ids},true,0,'POST')
   if(result.loading)return <section aria-label="통합 비교 결과"><h3>비교 결과</h3>
-    {fallback && <Chart initial={fallback}/>}
+    {fallback && !tableOnly && <Chart initial={fallback}/>}
     <p role="status">비교 표를 구성하고 있습니다.</p>
   </section>
   // 통합 비교가 실패해도(국가 20개 초과 등) 각 결과는 유효하다. 원래 차트와 표를 하위 질문별 제목 아래 그대로 보여 준다.
@@ -70,15 +71,15 @@ function ComparisonResult({group,fallback,charts,selectors,tasks}) {
     {[...new Set(group.tables.map(t=>t.task_id))].map(taskId=>{
       const index=tasks.findIndex(t=>t.task_id===taskId),own=group.tables.filter(t=>t.task_id===taskId)
       return <div key={taskId}>{group.tables.length>own.length && <h4>{index+1}. {tasks[index]?.question}</h4>}
-        {charts.filter(c=>own.some(t=>t.result_id===c.result_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c}
+        {!tableOnly && charts.filter(c=>own.some(t=>t.result_id===c.result_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c}
           selector={selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)} table={own.find(t=>t.result_id===c.result_id)}/>)}
         {own.map(t=><ApiResults key={t.result_id} table={t} tableOnly/>)}</div>
     })}
   </section>
   const table=result.data.table,chart=comparisonChart(table,group.conditions)
   return <section aria-label="통합 비교 결과"><h3>비교 결과</h3>
-    {table.rows.length>0 && <Chart initial={chart}/>}
-    {chart.truncated && <p className="note">그래프에는 금액 상위 5개 대상만 표시합니다. 전체 비교 결과는 표에서 확인하세요.</p>}
+    {!tableOnly && table.rows.length>0 && <Chart initial={chart}/>}
+    {!tableOnly && chart.truncated && <p className="note">그래프에는 금액 상위 5개 대상만 표시합니다. 전체 비교 결과는 표에서 확인하세요.</p>}
     <ApiResults table={table} tableOnly onDownload={()=>download('/results/comparison',undefined,{method:'POST',body:{result_ids,format:'xlsx'}})}/>
   </section>
 }
@@ -99,7 +100,7 @@ export default function TaskResults({answer,hideText=false}) {
       {!hideText && <div className="chat-paragraph">{t.conclusion.map((s,i)=>sentence(s,start+i))}</div>}
       {tables.length>0 && <details><summary>근거 표 보기</summary>
         {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}
-          charts={answer.charts||[]} selectors={answer.chart_selectors} tasks={answer.tasks}/>)}   {/* 비교는 시기별 한 줄(22번) */}
+          charts={answer.charts||[]} selectors={answer.chart_selectors} tasks={answer.tasks} tableOnly/>)}   {/* 비교는 시기별 한 줄(22번), 표만 */}
         {tables.filter(x=>!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</details>}</section>
     return <section key={t.task_id} className="chat-result"><h3>{index+1}. {t.question} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
       {!hideText && t.conclusion.map((s,i)=>sentence(s,start+i))}

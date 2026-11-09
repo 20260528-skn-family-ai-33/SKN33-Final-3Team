@@ -354,16 +354,20 @@ export default function Analysis({ route }) {
     if (!text.trim() || busy) return
     const input = text
     setBusy(true); setSending(input)
+    let accepted = false
     await run(async () => {
       let id = newRoom ? null : activeId
       if (!id) { const data = await api('/chat/sessions', { method: 'POST', body: {} }); id = data.session.session_id; setActiveId(id) }
       if (pending.current?.text !== input || pending.current?.sessionId !== id) pending.current = { text: input, sessionId: id, id: requestId() }
       const data = await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: { question: input, client_message_id: pending.current.id } })
       pending.current = null
+      accepted = true
       if (activeRef.current!==id) { await refreshChats(); return }   // 응답 전에 방을 옮겼으면 그 방의 작업을 덮어쓰지 않는다
       setJob(data.job); setDraft(null); setInput('')
       setReadRevision(v => v + 1); await refreshChats()
     })
+    // 접수에 실패하면 질문을 입력창에 남겨 다시 보낼 수 있게 한다. 기사에서 온 질문은 주소에서 이미 지웠으므로 여기 말고는 남지 않는다
+    if (!accepted) setInput(text)
     setBusy(false); setSending(null)
   }
   const askedFromLink = useRef(false)
