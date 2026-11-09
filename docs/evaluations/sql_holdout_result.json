@@ -1,0 +1,2966 @@
+{
+  "schema_version": 1,
+  "scoring_version": 2,
+  "kind": "single_run_question_holdout_real_llm_local_mysql",
+  "started_at_utc": "2026-11-09T03:46:55.596829+00:00",
+  "gold_status": "PROVISIONAL_UNREVIEWED_GOLD",
+  "model_requested": "gpt-4.1",
+  "prompt_sha256": "875ac205e000f5d5585fb7cac4013c9199e87638c4772235b19c8c39f41b8843",
+  "dataset_role": "question_holdout",
+  "schema_sha256": "6c84a092247284ab13912f57cc19b25960914156bb8af043ac9fa952cf0a9a8d",
+  "snapshot": {
+    "version": "synthetic-trade-v1",
+    "baseline_month": "2025-03",
+    "mysql_version": "8.4.11",
+    "sql_mode": "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+    "data_sha256": "798dfb8627f40fbf56d0ffdf98a554ed23fb8a58a57aeb33dd33e6c02fd4309d",
+    "snapshot_file_sha256": "d20755e0676fd244590babea7255987fe832046747b247e4a4256801d6cdd1e4",
+    "row_counts": {
+      "country": 5,
+      "hs_code": 6,
+      "export_monthly": 288,
+      "import_monthly": 288,
+      "export_summary": 300,
+      "import_summary": 300
+    }
+  },
+  "questions_sha256": "3a8faf7c281d9c9216e5821c86776d593677c95e7c469a31c27710961bcd918d",
+  "harness": {
+    "revision": "e465dd962deafa5aecd4354eb937d4cbc5a02776",
+    "dirty": false,
+    "changes": []
+  },
+  "evidence_sha256": {
+    "backend/scripts/evaluate_sql_live.py": "c18d4784f568a86647e583a174825e69c7398cc86da6b19507c31860324a819e",
+    "backend/scripts/evaluate_sql_visualization.py": "32b0176fc10922f6527f6d7faa3bf03ff4080940bee4ee19a51863ff67fbeb9a",
+    "backend/app/agents/sql.py": "d57c567dafb197115184f98e36b7f7b8b4c60dd3ac88c6314f501de649b5d150",
+    "backend/app/agents/charts.py": "8656071f898e833cf474a69dd692ac053a2b36c9ef317b0a68d02e4e8c076da7",
+    "backend/app/agents/llm.py": "37ac5117072f67c2e24cbeb7b8d9e6df7183bc4263ea82214ed26925929edf3e",
+    "backend/app/agents/state.py": "52fe0d0871493788bd8dbb957d9f7d7535002ef2dcc80ae85cc1cb0cae446caf",
+    "docs/evaluations/sql_questions.jsonl": "851c1e9281611c8be11aff5702e1102d3dd90d227b4ea8020e3ea5ca3f9f7a7c",
+    "docs/evaluations/sql_questions_manifest.json": "c054b1d3cf99d9ed626a251a20db216a660c01834f53fd4db8dcd896c8d42719",
+    "docs/evaluations/sql_snapshot.sql": "d20755e0676fd244590babea7255987fe832046747b247e4a4256801d6cdd1e4",
+    "docs\\evaluations\\sql_holdout_questions.jsonl": "3a8faf7c281d9c9216e5821c86776d593677c95e7c469a31c27710961bcd918d",
+    "docs\\evaluations\\sql_holdout_manifest.json": "1f6665dd72199d8b0803fb3a74a6d5004d816b7e5f724a1ee817d218bcf23903",
+    "backend/scripts/evaluate_sql_holdout.py": "d93c3de0407d4d8b82fd024768bae29be6ef4b2f12b818821df5ad77d1128c16",
+    "backend/scripts/prepare_sql_holdout.py": "9fd1c9ffbee1bd8bcc024c8fb39bf6c8437a50dd24af30703c41b4debbc12095"
+  },
+  "hash_normalization": "CRLF to LF before SHA256",
+  "pricing": {
+    "input_per_million_usd": 2.0,
+    "cached_input_per_million_usd": 0.5,
+    "output_per_million_usd": 8.0,
+    "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
+    "checked_on": "2026-11-09"
+  },
+  "cost_cap_usd": 1.0,
+  "safety_probes": [
+    {
+      "sql": "DELETE FROM export_summary",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT * FROM export_summary",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT password AS value FROM users",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT body_masked AS value FROM article",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT LOAD_FILE('/etc/passwd') AS value",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT SLEEP(1) AS value",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT country_code AS value FROM country FOR UPDATE",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT country_code AS value INTO OUTFILE '/tmp/eval-forbidden' FROM country",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    }
+  ],
+  "cases": [
+    {
+      "id": "H01",
+      "category": "weight_unit_price",
+      "question": "2025년 2월 수출 중량을 전체 국가와 전체 품목에 걸쳐 한꺼번에 합산해 줘. HS2022 기준이며 출력은 kg 숫자 하나면 돼.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "total_weight_kg": 2987
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "total_weight_kg",
+          "label": "total_weight_kg",
+          "type": "number",
+          "unit": "KG"
+        }
+      ],
+      "expected_rows": [
+        [
+          2987
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT SUM(em.weight_kg) AS total_weight_kg FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2025-02-01' AND '2025-02-28' LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.05461,
+          "usage": {
+            "input_tokens": 2179,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 163,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2342
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_08c686968e6057a5016af1423df16c87d08216d36c3c81a851",
+          "estimated_cost_usd": 0.005662,
+          "latency_seconds": 11.085285899986047,
+          "draft": {
+            "sql": "SELECT SUM(em.weight_kg) AS total_weight_kg\nFROM export_monthly em\nJOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE em.hs_ver = 'HS2022'\n  AND em.trade_month BETWEEN '2025-02-01' AND '2025-02-28';",
+            "columns": [
+              {
+                "key": "total_weight_kg",
+                "label": "total_weight_kg",
+                "type": "number",
+                "unit": "KG"
+              }
+            ],
+            "summary": "2025년 2월 전체 국가와 전체 품목의 수출 중량(kg) 합계입니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 16.77313750004396
+    },
+    {
+      "id": "H02",
+      "category": "weight_unit_price",
+      "question": "HS2022 기준 2025년 2월 전체 국가·전체 품목 수입을 품목별로 나누고, HS6 코드와 가중 단가(USD/kg) 두 열로 보여줘. 단가는 합계 금액/합계 중량이며 소수 셋째 자리까지.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "bar",
+      "chart": {
+        "chart_id": "H02.chart",
+        "task_id": "H02",
+        "type": "bar",
+        "title": "2025년 2월 전체 국가·전체 품목…, 소수 셋째 자리)로 보여줍니다.",
+        "unit": "USD",
+        "period": {
+          "start": "2025-02-01",
+          "end": "2025-02-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "H02",
+        "labels": [
+          "150910",
+          "330499",
+          "854231"
+        ],
+        "series": [
+          {
+            "name": "가중 단가(USD/kg)",
+            "values": [
+              30.284,
+              21.498,
+              21.444
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "hs6_code": "150910",
+          "weighted_unit_price_usd_per_kg": 30.284
+        },
+        {
+          "hs6_code": "330499",
+          "weighted_unit_price_usd_per_kg": 21.498
+        },
+        {
+          "hs6_code": "854231",
+          "weighted_unit_price_usd_per_kg": 21.444
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "hs6_code",
+          "label": "HS6 코드",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "weighted_unit_price_usd_per_kg",
+          "label": "가중 단가(USD/kg)",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "150910",
+          30.284
+        ],
+        [
+          "330499",
+          21.498
+        ],
+        [
+          "854231",
+          21.444
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT im.hs6_code AS hs6_code, ROUND(SUM(im.amount_usd) / NULLIF(SUM(im.weight_kg), 0), 3) AS weighted_unit_price_usd_per_kg FROM import_monthly AS im JOIN country AS c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE im.hs_ver = 'HS2022' AND im.trade_month BETWEEN '2025-02-01' AND '2025-02-28' GROUP BY im.hs6_code ORDER BY im.hs6_code LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054742,
+          "usage": {
+            "input_tokens": 2200,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 280,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2480
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_06184cced061fffa016af14240fee487d0afc52923d8aeb352",
+          "estimated_cost_usd": 0.00664,
+          "latency_seconds": 2.300779999990482,
+          "draft": {
+            "sql": "SELECT im.hs6_code AS hs6_code, ROUND(SUM(im.amount_usd) / NULLIF(SUM(im.weight_kg), 0), 3) AS weighted_unit_price_usd_per_kg\nFROM import_monthly im\nJOIN country c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE im.hs_ver = 'HS2022'\n  AND im.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\nGROUP BY im.hs6_code\nORDER BY im.hs6_code\nLIMIT 1000;",
+            "columns": [
+              {
+                "key": "hs6_code",
+                "label": "HS6 코드",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "weighted_unit_price_usd_per_kg",
+                "label": "가중 단가(USD/kg)",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2025년 2월 전체 국가·전체 품목 수입을 HS6 코드별로 나누고, 각 품목의 가중 단가(USD/kg, 소수 셋째 자리)로 보여줍니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 2.4693377999938093
+    },
+    {
+      "id": "H03",
+      "category": "weight_unit_price",
+      "question": "2024년 2~3월 미국과 중국의 기초화장품 330499 및 프로세서 854231 수출을 모두 합쳐 가중 단가 하나를 구해줘. HS2022, 소수 셋째 자리 USD/kg, 개별 단가의 평균은 아니야.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "weighted_unit_price_usd_per_kg": 10
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "weighted_unit_price_usd_per_kg",
+          "label": "가중 단가(USD/kg)",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          10
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT ROUND(SUM(em.amount_usd) / NULLIF(SUM(em.weight_kg), 0), 3) AS weighted_unit_price_usd_per_kg FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.hs_ver = 'HS2022' AND (em.hs6_code = '330499' OR em.hs6_code = '854231') AND em.country_code IN ('US', 'CN') AND em.trade_month BETWEEN '2024-02-01' AND '2024-03-31' LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054922,
+          "usage": {
+            "input_tokens": 2239,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 267,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2506
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0ebe6ebda3991a32016af14243712487d0bf4e05afbf9d3e72",
+          "estimated_cost_usd": 0.006614,
+          "latency_seconds": 2.052773800038267,
+          "draft": {
+            "sql": "SELECT ROUND(SUM(em.amount_usd) / NULLIF(SUM(em.weight_kg), 0), 3) AS weighted_unit_price_usd_per_kg\nFROM export_monthly em\nJOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE em.hs_ver = 'HS2022'\n  AND (\n    em.hs6_code = '330499' OR em.hs6_code = '854231'\n  )\n  AND em.country_code IN ('US', 'CN')\n  AND em.trade_month BETWEEN '2024-02-01' AND '2024-03-31';",
+            "columns": [
+              {
+                "key": "weighted_unit_price_usd_per_kg",
+                "label": "가중 단가(USD/kg)",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2024년 2~3월 미국과 중국에 대한 HS2022 기준 기초화장품(330499) 및 프로세서(854231) 수출의 전체 가중 단가(USD/kg, 소수 셋째 자리)를 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 2.2448713000048883
+    },
+    {
+      "id": "H04",
+      "category": "weight_unit_price",
+      "question": "2025년 1~3월 독일 프로세서 854231(HS2022) 수출의 중량 데이터 상태를 확인할래. 중량이 0인 원본 행 수, 양수인 원본 행 수 순서의 두 숫자 열을 줘.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "zero_weight_count": 1,
+          "positive_weight_count": 2
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "zero_weight_count",
+          "label": "중량 0 행 수",
+          "type": "number",
+          "unit": "COUNT"
+        },
+        {
+          "key": "positive_weight_count",
+          "label": "중량 양수 행 수",
+          "type": "number",
+          "unit": "COUNT"
+        }
+      ],
+      "expected_rows": [
+        [
+          1,
+          2
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT SUM(CASE WHEN em.weight_kg = 0 THEN 1 ELSE 0 END) AS zero_weight_count, SUM(CASE WHEN em.weight_kg > 0 THEN 1 ELSE 0 END) AS positive_weight_count FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.country_code = 'DE' AND em.hs6_code = '854231' AND em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31' LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054772,
+          "usage": {
+            "input_tokens": 2215,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 288,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2503
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0d70dc2821477911016af142462c1487d0b443c97a6f7b324e",
+          "estimated_cost_usd": 0.006734,
+          "latency_seconds": 2.7549702000105754,
+          "draft": {
+            "sql": "SELECT\n  SUM(CASE WHEN em.weight_kg = 0 THEN 1 ELSE 0 END) AS zero_weight_count,\n  SUM(CASE WHEN em.weight_kg > 0 THEN 1 ELSE 0 END) AS positive_weight_count\nFROM export_monthly em\nJOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE em.country_code = 'DE'\n  AND em.hs6_code = '854231'\n  AND em.hs_ver = 'HS2022'\n  AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31';",
+            "columns": [
+              {
+                "key": "zero_weight_count",
+                "label": "중량 0 행 수",
+                "type": "number",
+                "unit": "COUNT"
+              },
+              {
+                "key": "positive_weight_count",
+                "label": "중량 양수 행 수",
+                "type": "number",
+                "unit": "COUNT"
+              }
+            ],
+            "summary": "2025년 1~3월 독일로 수출된 HS2022 854231 프로세서의 원본 행 중 중량이 0인 행과 양수인 행의 개수를 각각 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.1055871000280604
+    },
+    {
+      "id": "H05",
+      "category": "weight_unit_price",
+      "question": "일본 올리브유 150910(HS2022)의 2025년 1~3월 수출 중량에서 미제공(NULL) 원본 행은 몇 개이며 제공된 중량 합계는 얼마야? 열은 미제공 건수, 제공 중량 kg 순서로.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "null_count": 1,
+          "provided_weight_kg": 674
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "null_count",
+          "label": "미제공 건수",
+          "type": "number",
+          "unit": null
+        },
+        {
+          "key": "provided_weight_kg",
+          "label": "제공 중량 kg",
+          "type": "number",
+          "unit": "KG"
+        }
+      ],
+      "expected_rows": [
+        [
+          1,
+          674
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT SUM(weight_kg IS NULL) AS null_count, SUM(weight_kg) AS provided_weight_kg FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.country_code = 'JP' AND em.hs6_code = '150910' AND em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31' LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": false,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054808,
+          "usage": {
+            "input_tokens": 2219,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 262,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2481
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_060bac1209eeabd9016af1424905c087d0b30f76dfe7e2d0f2",
+          "estimated_cost_usd": 0.006534,
+          "latency_seconds": 2.083846999972593,
+          "draft": {
+            "sql": "SELECT \n  SUM(weight_kg IS NULL) AS null_count, \n  SUM(weight_kg) AS provided_weight_kg\nFROM export_monthly em\nJOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE em.country_code = 'JP'\n  AND em.hs6_code = '150910'\n  AND em.hs_ver = 'HS2022'\n  AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31';",
+            "columns": [
+              {
+                "key": "null_count",
+                "label": "미제공 건수",
+                "type": "number",
+                "unit": null
+              },
+              {
+                "key": "provided_weight_kg",
+                "label": "제공 중량 kg",
+                "type": "number",
+                "unit": "KG"
+              }
+            ],
+            "summary": "2025년 1~3월 일본 올리브유(HS2022 150910) 수출 중량에서 미제공(NULL) 원본 행의 개수와 제공된 중량 합계를 집계합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 2.980938500026241
+    },
+    {
+      "id": "H06",
+      "category": "multi_product_ranking",
+      "question": "2025년 2월 전체 국가에서 330499와 854231(HS2022)을 합친 수출 중량이 가장 작은 두 국가를 찾아줘. 국가코드와 kg, 중량 오름차순이며 동률은 국가코드 오름차순.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "bar",
+      "chart": {
+        "chart_id": "H06.chart",
+        "task_id": "H06",
+        "type": "bar",
+        "title": "2025년 2월 전체 국가에서 HS2… 국가코드 오름차순으로 반환합니다.",
+        "unit": "KG",
+        "period": {
+          "start": "2025-02-01",
+          "end": "2025-02-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "H06",
+        "labels": [
+          "US",
+          "CN"
+        ],
+        "series": [
+          {
+            "name": "kg",
+            "values": [
+              244.0,
+              444.0
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "country_code": "US",
+          "weight_kg": 244
+        },
+        {
+          "country_code": "CN",
+          "weight_kg": 444
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "country_code",
+          "label": "country_code",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "weight_kg",
+          "label": "kg",
+          "type": "number",
+          "unit": "KG"
+        }
+      ],
+      "expected_rows": [
+        [
+          "US",
+          244
+        ],
+        [
+          "CN",
+          444
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH filtered_exports AS (SELECT em.country_code, SUM(em.weight_kg) AS total_weight_kg FROM export_monthly AS em INNER JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.trade_month BETWEEN '2025-02-01' AND '2025-02-28' AND em.hs_ver = 'HS2022' AND (em.hs6_code = '330499' OR em.hs6_code = '854231') GROUP BY em.country_code) SELECT fe.country_code AS country_code, fe.total_weight_kg AS weight_kg FROM filtered_exports AS fe ORDER BY fe.total_weight_kg ASC, fe.country_code ASC LIMIT 2",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054884,
+          "usage": {
+            "input_tokens": 2228,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 329,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2557
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_09aeb0eafc30b347016af1424c53fc87d0a8c6187192ea3613",
+          "estimated_cost_usd": 0.007088,
+          "latency_seconds": 2.3594595000031404,
+          "draft": {
+            "sql": "WITH filtered_exports AS (\n  SELECT \n    em.country_code,\n    SUM(em.weight_kg) AS total_weight_kg\n  FROM export_monthly em\n  INNER JOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE em.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n    AND em.hs_ver = 'HS2022'\n    AND (em.hs6_code = '330499' OR em.hs6_code = '854231')\n  GROUP BY em.country_code\n)\nSELECT \n  fe.country_code AS country_code,\n  fe.total_weight_kg AS weight_kg\nFROM filtered_exports fe\nORDER BY fe.total_weight_kg ASC, fe.country_code ASC\nLIMIT 2;",
+            "columns": [
+              {
+                "key": "country_code",
+                "label": "country_code",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "weight_kg",
+                "label": "kg",
+                "type": "number",
+                "unit": "KG"
+              }
+            ],
+            "summary": "2025년 2월 전체 국가에서 HS2022 330499와 854231을 합친 수출 중량이 가장 작은 두 국가의 국가코드와 중량(kg)을 중량 오름차순, 동률시 국가코드 오름차순으로 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.876753699965775
+    },
+    {
+      "id": "H07",
+      "category": "multi_product_ranking",
+      "question": "전체 국가를 대상으로 HS2022의 854231·150910 수출을 2024년 2~3월 합산하고, 합계가 15,000 USD 이상인 국가만 순위로 보여줘. 국가코드, 합계 USD이며 금액 내림차순·동률 코드 오름차순.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "bar",
+      "chart": {
+        "chart_id": "H07.chart",
+        "task_id": "H07",
+        "type": "bar",
+        "title": "2024년 2~3월 HS2022 85…률은 코드 오름차순으로 보여줍니다.",
+        "unit": "USD",
+        "period": {
+          "start": "2024-02-01",
+          "end": "2024-03-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "H07",
+        "labels": [
+          "DE"
+        ],
+        "series": [
+          {
+            "name": "합계 USD",
+            "values": [
+              17100.0
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "country_code": "DE",
+          "total_amount_usd": 17100
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "country_code",
+          "label": "국가코드",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "total_amount_usd",
+          "label": "합계 USD",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "DE",
+          17100
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT em.country_code AS country_code, SUM(em.amount_usd) AS total_amount_usd FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2024-02-01' AND '2024-03-31' AND (em.hs6_code = '854231' OR em.hs6_code = '150910') GROUP BY em.country_code HAVING SUM(em.amount_usd) >= 15000 ORDER BY total_amount_usd DESC, country_code ASC LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054942,
+          "usage": {
+            "input_tokens": 2239,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 312,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2551
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_051afd7a03330b36016af1424fd8d087d084d911a950c2ecb0",
+          "estimated_cost_usd": 0.006974,
+          "latency_seconds": 2.743386099988129,
+          "draft": {
+            "sql": "SELECT\n  em.country_code AS country_code,\n  SUM(em.amount_usd) AS total_amount_usd\nFROM export_monthly em\nJOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE\n  em.hs_ver = 'HS2022'\n  AND em.trade_month BETWEEN '2024-02-01' AND '2024-03-31'\n  AND (\n    em.hs6_code = '854231' OR em.hs6_code = '150910'\n  )\nGROUP BY em.country_code\nHAVING SUM(em.amount_usd) >= 15000\nORDER BY total_amount_usd DESC, country_code ASC\nLIMIT 1000;",
+            "columns": [
+              {
+                "key": "country_code",
+                "label": "국가코드",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "total_amount_usd",
+                "label": "합계 USD",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2024년 2~3월 HS2022 854231, 150910 수출 합계가 15,000 USD 이상인 국가의 국가코드와 합계 USD를 금액 내림차순, 동률은 코드 오름차순으로 보여줍니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 2.98822839994682
+    },
+    {
+      "id": "H08",
+      "category": "multi_product_ranking",
+      "question": "2025년 2월 전체 국가에서 HS2022 330499·150910을 합친 수출 가중 단가 상위 3개국을 찾아줘. 금액/중량을 소수 셋째 자리로 계산하고 국가코드, 단가 USD/kg 순서. 단가 내림차순, 동률 코드 오름차순.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "bar",
+      "chart": {
+        "chart_id": "H08.chart",
+        "task_id": "H08",
+        "type": "bar",
+        "title": "2025년 2월 전체 국가에서 HS2…차순, 동률 코드 오름차순)입니다.",
+        "unit": "USD",
+        "period": {
+          "start": "2025-02-01",
+          "end": "2025-02-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "H08",
+        "labels": [
+          "JP",
+          "US",
+          "CN"
+        ],
+        "series": [
+          {
+            "name": "단가 USD/kg",
+            "values": [
+              21.893,
+              11.575,
+              10.881
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "country_code": "JP",
+          "unit_price_usd_per_kg": 21.893
+        },
+        {
+          "country_code": "US",
+          "unit_price_usd_per_kg": 11.575
+        },
+        {
+          "country_code": "CN",
+          "unit_price_usd_per_kg": 10.881
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "country_code",
+          "label": "국가코드",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "unit_price_usd_per_kg",
+          "label": "단가 USD/kg",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "JP",
+          21.893
+        ],
+        [
+          "US",
+          11.575
+        ],
+        [
+          "CN",
+          10.881
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT em.country_code AS country_code, ROUND(SUM(em.amount_usd) / NULLIF(SUM(em.weight_kg), 0), 3) AS unit_price_usd_per_kg FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.trade_month BETWEEN '2025-02-01' AND '2025-02-28' AND em.hs_ver = 'HS2022' AND (em.hs6_code = '330499' OR em.hs6_code = '150910') GROUP BY em.country_code HAVING NOT SUM(em.weight_kg) IS NULL ORDER BY unit_price_usd_per_kg DESC, em.country_code ASC LIMIT 3",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054978,
+          "usage": {
+            "input_tokens": 2246,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 333,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2579
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_09504a771d315372016af14252e6ec87d0adb0fad80d734fd0",
+          "estimated_cost_usd": 0.007156,
+          "latency_seconds": 2.345228300022427,
+          "draft": {
+            "sql": "SELECT\n  em.country_code AS country_code,\n  ROUND(SUM(em.amount_usd) / NULLIF(SUM(em.weight_kg), 0), 3) AS unit_price_usd_per_kg\nFROM export_monthly em\nJOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE em.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n  AND em.hs_ver = 'HS2022'\n  AND (em.hs6_code = '330499' OR em.hs6_code = '150910')\nGROUP BY em.country_code\nHAVING SUM(em.weight_kg) IS NOT NULL\nORDER BY unit_price_usd_per_kg DESC, em.country_code ASC\nLIMIT 3;",
+            "columns": [
+              {
+                "key": "country_code",
+                "label": "국가코드",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "unit_price_usd_per_kg",
+                "label": "단가 USD/kg",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2025년 2월 전체 국가에서 HS2022 330499, 150910을 합친 수출 가중 단가 상위 3개국(국가코드, 단가 USD/kg, 단가 내림차순, 동률 코드 오름차순)입니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.520322800031863
+    },
+    {
+      "id": "H09",
+      "category": "multi_product_ranking",
+      "question": "전체 국가의 HS2022 330499·854231·150910 수출 합계가 2024년 2월 대비 2025년 2월 얼마나 늘었는지로 상위 2개국을 정해줘. 국가코드, 증가액 USD 순서, 증가액 동률이면 코드 오름차순.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "bar",
+      "chart": {
+        "chart_id": "H09.chart",
+        "task_id": "H09",
+        "type": "bar",
+        "title": "2024년 2월 대비 2025년 2월…률시 코드 오름차순)로 반환합니다.",
+        "unit": "USD",
+        "period": {
+          "start": "2025-02-01",
+          "end": "2025-02-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "H09",
+        "labels": [
+          "CN",
+          "DE"
+        ],
+        "series": [
+          {
+            "name": "증가액 USD",
+            "values": [
+              750.0,
+              750.0
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "country_code": "CN",
+          "increase_usd": 750
+        },
+        {
+          "country_code": "DE",
+          "increase_usd": 750
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "country_code",
+          "label": "국가코드",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "increase_usd",
+          "label": "증가액 USD",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "CN",
+          750
+        ],
+        [
+          "DE",
+          750
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH feb_2025 AS (SELECT em.country_code, SUM(em.amount_usd) AS amount_usd_2025 FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.trade_month BETWEEN '2025-02-01' AND '2025-02-28' AND em.hs_ver = 'HS2022' AND em.hs6_code IN ('330499', '854231', '150910') GROUP BY em.country_code), feb_2024 AS (SELECT em.country_code, SUM(em.amount_usd) AS amount_usd_2024 FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.trade_month BETWEEN '2024-02-01' AND '2024-02-29' AND em.hs_ver = 'HS2022' AND em.hs6_code IN ('330499', '854231', '150910') GROUP BY em.country_code) SELECT f25.country_code AS country_code, (COALESCE(f25.amount_usd_2025, 0) - COALESCE(f24.amount_usd_2024, 0)) AS increase_usd FROM feb_2025 AS f25 LEFT JOIN feb_2024 AS f24 ON f25.country_code = f24.country_code UNION ALL SELECT f24.country_code AS country_code, (0 - COALESCE(f24.amount_usd_2024, 0)) AS increase_usd FROM feb_2024 AS f24 LEFT JOIN feb_2025 AS f25 ON f24.country_code = f25.country_code WHERE f25.country_code IS NULL ORDER BY increase_usd DESC, country_code ASC LIMIT 2",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.055112,
+          "usage": {
+            "input_tokens": 2280,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 584,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2864
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_045ba95dccde6acf016af14256824887d08df3d2e4d38304d1",
+          "estimated_cost_usd": 0.009232,
+          "latency_seconds": 3.2949535000370815,
+          "draft": {
+            "sql": "WITH feb_2025 AS (\n  SELECT\n    em.country_code,\n    SUM(em.amount_usd) AS amount_usd_2025\n  FROM export_monthly em\n  JOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE em.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n    AND em.hs_ver = 'HS2022'\n    AND em.hs6_code IN ('330499', '854231', '150910')\n  GROUP BY em.country_code\n),\nfeb_2024 AS (\n  SELECT\n    em.country_code,\n    SUM(em.amount_usd) AS amount_usd_2024\n  FROM export_monthly em\n  JOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE em.trade_month BETWEEN '2024-02-01' AND '2024-02-29'\n    AND em.hs_ver = 'HS2022'\n    AND em.hs6_code IN ('330499', '854231', '150910')\n  GROUP BY em.country_code\n)\nSELECT\n  f25.country_code AS country_code,\n  (COALESCE(f25.amount_usd_2025, 0) - COALESCE(f24.amount_usd_2024, 0)) AS increase_usd\nFROM feb_2025 f25\nLEFT JOIN feb_2024 f24 ON f25.country_code = f24.country_code\nUNION ALL\nSELECT\n  f24.country_code AS country_code,\n  (0 - COALESCE(f24.amount_usd_2024, 0)) AS increase_usd\nFROM feb_2024 f24\nLEFT JOIN feb_2025 f25 ON f24.country_code = f25.country_code\nWHERE f25.country_code IS NULL\nORDER BY increase_usd DESC, country_code ASC\nLIMIT 2;",
+            "columns": [
+              {
+                "key": "country_code",
+                "label": "국가코드",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "increase_usd",
+                "label": "증가액 USD",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2024년 2월 대비 2025년 2월 HS2022 330499, 854231, 150910 수출 합계 증가액 기준 상위 2개국을 국가코드, 증가액 USD 순서(동률시 코드 오름차순)로 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.5571393000427634
+    },
+    {
+      "id": "H10",
+      "category": "multi_product_ranking",
+      "question": "미국·일본·독일의 2024년 2~3월 수입 중 HS2022 330499와 854231을 합쳐 월평균 금액이 큰 두 국가를 보여줘. 두 달 합계를 2로 나눠 국가코드, 월평균 USD 순서로, 동률은 코드 오름차순.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "bar",
+      "chart": {
+        "chart_id": "H10.chart",
+        "task_id": "H10",
+        "type": "bar",
+        "title": "2024년 2~3월 미국, 일본, 독… 월평균 USD 순으로 반환합니다.",
+        "unit": "USD",
+        "period": {
+          "start": "2024-02-01",
+          "end": "2024-03-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "H10",
+        "labels": [
+          "DE",
+          "JP"
+        ],
+        "series": [
+          {
+            "name": "avg_monthly_amount_usd",
+            "values": [
+              16700.0,
+              12700.0
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "country_code": "DE",
+          "avg_monthly_amount_usd": 16700
+        },
+        {
+          "country_code": "JP",
+          "avg_monthly_amount_usd": 12700
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "country_code",
+          "label": "country_code",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "avg_monthly_amount_usd",
+          "label": "avg_monthly_amount_usd",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "DE",
+          16700
+        ],
+        [
+          "JP",
+          12700
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH filtered_imports AS (SELECT im.country_code, SUM(im.amount_usd) AS total_amount_usd FROM import_monthly AS im JOIN country AS c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE im.trade_month BETWEEN '2024-02-01' AND '2024-03-31' AND im.hs_ver = 'HS2022' AND im.hs6_code IN ('330499', '854231') AND im.country_code IN ('US', 'JP', 'DE') GROUP BY im.country_code) SELECT fi.country_code AS country_code, ROUND(fi.total_amount_usd / 2, 2) AS avg_monthly_amount_usd FROM filtered_imports AS fi ORDER BY avg_monthly_amount_usd DESC, country_code ASC LIMIT 2",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054972,
+          "usage": {
+            "input_tokens": 2254,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 350,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2604
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0a07b708de5a2657016af14259f67487d0836822754edbe278",
+          "estimated_cost_usd": 0.007308,
+          "latency_seconds": 2.525442500016652,
+          "draft": {
+            "sql": "WITH filtered_imports AS (\n  SELECT \n    im.country_code,\n    SUM(im.amount_usd) AS total_amount_usd\n  FROM import_monthly im\n  JOIN country c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE im.trade_month BETWEEN '2024-02-01' AND '2024-03-31'\n    AND im.hs_ver = 'HS2022'\n    AND im.hs6_code IN ('330499', '854231')\n    AND im.country_code IN ('US', 'JP', 'DE')\n  GROUP BY im.country_code\n)\nSELECT \n  fi.country_code AS country_code,\n  ROUND(fi.total_amount_usd / 2, 2) AS avg_monthly_amount_usd\nFROM filtered_imports fi\nORDER BY avg_monthly_amount_usd DESC, country_code ASC\nLIMIT 2;",
+            "columns": [
+              {
+                "key": "country_code",
+                "label": "country_code",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "avg_monthly_amount_usd",
+                "label": "avg_monthly_amount_usd",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2024년 2~3월 미국, 일본, 독일의 HS2022 330499와 854231 수입 합계에서 월평균 금액이 큰 두 국가를 국가코드, 월평균 USD 순으로 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 2.944662199995946
+    },
+    {
+      "id": "H11",
+      "category": "country_group",
+      "question": "2025년 2월 HS2022 전체 품목 수출을 미국+독일은 A그룹, 중국+일본은 B그룹으로 합쳐줘. 그룹명과 합계 USD 두 열이고 A, B 순서야.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "bar",
+      "chart": {
+        "chart_id": "H11.chart",
+        "task_id": "H11",
+        "type": "bar",
+        "title": "2025년 2월 미국+독일(A), 중…2 품목 수출 합계(USD)입니다.",
+        "unit": "USD",
+        "period": {
+          "start": "2025-02-01",
+          "end": "2025-02-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "H11",
+        "labels": [
+          "A",
+          "B"
+        ],
+        "series": [
+          {
+            "name": "total_usd",
+            "values": [
+              17820.0,
+              17820.0
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "group_name": "A",
+          "total_usd": 17820
+        },
+        {
+          "group_name": "B",
+          "total_usd": 17820
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "group_name",
+          "label": "group_name",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "total_usd",
+          "label": "total_usd",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "A",
+          17820
+        ],
+        [
+          "B",
+          17820
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT CASE WHEN em.country_code IN ('US', 'DE') THEN 'A' ELSE 'B' END AS group_name, SUM(em.amount_usd) AS total_usd FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.trade_month BETWEEN '2025-02-01' AND '2025-02-28' AND em.country_code IN ('US', 'DE', 'CN', 'JP') AND em.hs_ver = 'HS2022' GROUP BY group_name ORDER BY group_name LIMIT 2",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 2,
+      "regenerations": 1,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054678,
+          "usage": {
+            "input_tokens": 2198,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 329,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2527
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_032eb5728c92f5d6016af1425d61ac87d0b02ac344ed1674e9",
+          "estimated_cost_usd": 0.007028,
+          "latency_seconds": 2.1025533999782056,
+          "draft": {
+            "sql": "WITH filtered_export AS (\n  SELECT em.country_code, SUM(em.amount_usd) AS total_usd\n  FROM export_monthly em\n  JOIN country c ON em.country_code = c.country_code\n  WHERE em.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n    AND em.hs_ver = 'HS2022'\n    AND c.country_role = 'COUNTRY'\n    AND em.country_code IN ('US', 'DE', 'CN', 'JP')\n  GROUP BY em.country_code\n)\nSELECT \n  CASE \n    WHEN country_code IN ('US', 'DE') THEN 'A'\n    WHEN country_code IN ('CN', 'JP') THEN 'B'\n  END AS group_name,\n  SUM(total_usd) AS sum_usd\nFROM filtered_export\nGROUP BY group_name\nORDER BY FIELD(group_name, 'A', 'B')\nLIMIT 2;",
+            "columns": [
+              {
+                "key": "group_name",
+                "label": "group_name",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "sum_usd",
+                "label": "sum_usd",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2025년 2월 미국+독일(A), 중국+일본(B) 그룹별 전체 수출 합계(USD)를 반환합니다.",
+            "unsupported": null
+          }
+        },
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054754,
+          "usage": {
+            "input_tokens": 2206,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 2048
+            },
+            "output_tokens": 267,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2473
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_063e28b68e861de7016af1425f87cc87d0bec238b0cbd3a6a5",
+          "estimated_cost_usd": 0.003476,
+          "latency_seconds": 6.906657100014854,
+          "draft": {
+            "sql": "SELECT\n  CASE WHEN em.country_code IN ('US', 'DE') THEN 'A' ELSE 'B' END AS group_name,\n  SUM(em.amount_usd) AS total_usd\nFROM export_monthly em\nJOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE em.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n  AND em.country_code IN ('US', 'DE', 'CN', 'JP')\n  AND em.hs_ver = 'HS2022'\nGROUP BY group_name\nORDER BY group_name\nLIMIT 2;",
+            "columns": [
+              {
+                "key": "group_name",
+                "label": "group_name",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "total_usd",
+                "label": "total_usd",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2025년 2월 미국+독일(A), 중국+일본(B) 그룹별 전체 HS2022 품목 수출 합계(USD)입니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 10.03005049994681
+    },
+    {
+      "id": "H12",
+      "category": "country_group",
+      "question": "전체 국가·전체 품목의 HS2022 수출을 2024년 2~3월 월별로 합쳐줘. 월(YYYY-MM), 중량 kg, 금액 USD의 세 열이고 서로 다른 단위는 한 그래프로 겹치지 말아줘.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "month": "2024-02",
+          "weight_kg": 2932,
+          "amount_usd": 32640
+        },
+        {
+          "month": "2024-03",
+          "weight_kg": 2853,
+          "amount_usd": 32760
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "month",
+          "label": "월",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "weight_kg",
+          "label": "중량",
+          "type": "number",
+          "unit": "KG"
+        },
+        {
+          "key": "amount_usd",
+          "label": "금액",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "2024-02",
+          2932,
+          32640
+        ],
+        [
+          "2024-03",
+          2853,
+          32760
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT DATE_FORMAT(e.trade_month, '%Y-%m') AS month, SUM(e.weight_kg) AS weight_kg, SUM(e.amount_usd) AS amount_usd FROM export_monthly AS e JOIN country AS c ON e.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE e.hs_ver = 'HS2022' AND e.trade_month BETWEEN '2024-02-01' AND '2024-03-31' GROUP BY DATE_FORMAT(e.trade_month, '%Y-%m') ORDER BY DATE_FORMAT(e.trade_month, '%Y-%m') LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054702,
+          "usage": {
+            "input_tokens": 2195,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 320,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2515
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0e8671238614a65f016af1426729f887d0a7af3e5a01af4151",
+          "estimated_cost_usd": 0.00695,
+          "latency_seconds": 2.9726312999846414,
+          "draft": {
+            "sql": "SELECT DATE_FORMAT(e.trade_month, '%Y-%m') AS month, SUM(e.weight_kg) AS weight_kg, SUM(e.amount_usd) AS amount_usd\nFROM export_monthly e\nJOIN country c ON e.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE e.hs_ver = 'HS2022'\n  AND e.trade_month BETWEEN '2024-02-01' AND '2024-03-31'\nGROUP BY DATE_FORMAT(e.trade_month, '%Y-%m')\nORDER BY DATE_FORMAT(e.trade_month, '%Y-%m')\nLIMIT 1000;",
+            "columns": [
+              {
+                "key": "month",
+                "label": "월",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "weight_kg",
+                "label": "중량",
+                "type": "number",
+                "unit": "KG"
+              },
+              {
+                "key": "amount_usd",
+                "label": "금액",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2024년 2~3월 전체 국가·전체 품목의 HS2022 기준 수출 월별 중량(kg)과 금액(USD) 합계입니다. 단위가 다른 두 열은 한 그래프에 겹치지 않게 각각 사용하세요.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.886444500007201
+    },
+    {
+      "id": "H13",
+      "category": "country_group",
+      "question": "2025년 2월 미국과 중국을 묶은 전체 품목(HS2022) 무역수지를 수출액 빼기 수입액으로 계산해 USD 숫자 하나로 보여줘.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "trade_balance_usd": -11820
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "trade_balance_usd",
+          "label": "trade_balance_usd",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          -11820
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT (COALESCE(e.total_export_usd, 0) - COALESCE(i.total_import_usd, 0)) AS trade_balance_usd FROM (SELECT SUM(em.amount_usd) AS total_export_usd FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.hs_ver = 'HS2022' AND em.country_code IN ('US', 'CN') AND em.trade_month BETWEEN '2025-02-01' AND '2025-02-28') AS e CROSS JOIN (SELECT SUM(im.amount_usd) AS total_import_usd FROM import_monthly AS im JOIN country AS c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE im.hs_ver = 'HS2022' AND im.country_code IN ('US', 'CN') AND im.trade_month BETWEEN '2025-02-01' AND '2025-02-28') AS i LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054628,
+          "usage": {
+            "input_tokens": 2184,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 341,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2525
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0c468a47112ed70e016af1426b1b2887d098ad9e9e5d76e2b6",
+          "estimated_cost_usd": 0.007096,
+          "latency_seconds": 2.9904086999595165,
+          "draft": {
+            "sql": "SELECT (COALESCE(e.total_export_usd, 0) - COALESCE(i.total_import_usd, 0)) AS trade_balance_usd\nFROM (\n  SELECT SUM(em.amount_usd) AS total_export_usd\n  FROM export_monthly em\n  JOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE em.hs_ver = 'HS2022'\n    AND em.country_code IN ('US', 'CN')\n    AND em.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n) e\nCROSS JOIN (\n  SELECT SUM(im.amount_usd) AS total_import_usd\n  FROM import_monthly im\n  JOIN country c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE im.hs_ver = 'HS2022'\n    AND im.country_code IN ('US', 'CN')\n    AND im.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n) i",
+            "columns": [
+              {
+                "key": "trade_balance_usd",
+                "label": "trade_balance_usd",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2025년 2월 미국과 중국을 묶은 전체 품목(HS2022) 무역수지를 수출액에서 수입액을 뺀 USD 숫자 하나로 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.6849300999892876
+    },
+    {
+      "id": "H14",
+      "category": "country_group",
+      "question": "2024년 2~3월 HS2022 전체 국가·전체 품목 수출 합계에서 각 국가가 차지하는 비율을 보여줘. 국가코드와 비율 %만, 소수 첫째 자리, 코드 오름차순.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "bar",
+      "chart": {
+        "chart_id": "H14.chart",
+        "task_id": "H14",
+        "type": "bar",
+        "title": "2024년 2~3월 HS2022 전체…코드 기준 오름차순으로 보여줍니다.",
+        "unit": "%",
+        "period": {
+          "start": "2024-02-01",
+          "end": "2024-03-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "H14",
+        "labels": [
+          "CN",
+          "DE",
+          "JP",
+          "US"
+        ],
+        "series": [
+          {
+            "name": "share_percent",
+            "values": [
+              20.4,
+              38.8,
+              29.6,
+              11.2
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "country_code": "CN",
+          "share_percent": 20.4
+        },
+        {
+          "country_code": "DE",
+          "share_percent": 38.8
+        },
+        {
+          "country_code": "JP",
+          "share_percent": 29.6
+        },
+        {
+          "country_code": "US",
+          "share_percent": 11.2
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "country_code",
+          "label": "country_code",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "share_percent",
+          "label": "share_percent",
+          "type": "number",
+          "unit": "%"
+        }
+      ],
+      "expected_rows": [
+        [
+          "CN",
+          20.4
+        ],
+        [
+          "DE",
+          38.8
+        ],
+        [
+          "JP",
+          29.6
+        ],
+        [
+          "US",
+          11.2
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH filtered_exports AS (SELECT em.country_code, SUM(em.amount_usd) AS country_amount_usd FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code WHERE em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2024-02-01' AND '2024-03-31' AND c.country_role = 'COUNTRY' GROUP BY em.country_code), total_exports AS (SELECT SUM(country_amount_usd) AS total_amount_usd FROM filtered_exports) SELECT fe.country_code AS country_code, ROUND(100 * fe.country_amount_usd / NULLIF(te.total_amount_usd, 0), 1) AS share_percent FROM filtered_exports AS fe CROSS JOIN total_exports AS te ORDER BY fe.country_code ASC LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054684,
+          "usage": {
+            "input_tokens": 2189,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 333,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2522
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_039877f0119a61e8016af1426ec64087d0a5aeb2606f4a4df7",
+          "estimated_cost_usd": 0.007042,
+          "latency_seconds": 2.4187194000114687,
+          "draft": {
+            "sql": "WITH filtered_exports AS (\n  SELECT \n    em.country_code,\n    SUM(em.amount_usd) AS country_amount_usd\n  FROM export_monthly em\n  JOIN country c ON em.country_code = c.country_code\n  WHERE em.hs_ver = 'HS2022'\n    AND em.trade_month BETWEEN '2024-02-01' AND '2024-03-31'\n    AND c.country_role = 'COUNTRY'\n  GROUP BY em.country_code\n),\ntotal_exports AS (\n  SELECT SUM(country_amount_usd) AS total_amount_usd FROM filtered_exports\n)\nSELECT \n  fe.country_code AS country_code,\n  ROUND(100 * fe.country_amount_usd / NULLIF(te.total_amount_usd, 0), 1) AS share_percent\nFROM filtered_exports fe\nCROSS JOIN total_exports te\nORDER BY fe.country_code ASC\nLIMIT 1000;",
+            "columns": [
+              {
+                "key": "country_code",
+                "label": "country_code",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "share_percent",
+                "label": "share_percent",
+                "type": "number",
+                "unit": "%"
+              }
+            ],
+            "summary": "2024년 2~3월 HS2022 전체 국가·전체 품목 수출 합계에서 각 국가가 차지하는 비율(%)을 국가코드 기준 오름차순으로 보여줍니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 2.902903200010769
+    },
+    {
+      "id": "H15",
+      "category": "country_group",
+      "question": "일본과 독일을 하나의 시장처럼 합쳐 2025년 2월 전체 품목(HS2022)의 수입 가중 단가를 품목별로 비교해줘. HS6 코드, 합계 금액/합계 중량의 USD/kg 단가 순서이고 소수 셋째 자리.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "bar",
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "hs6_code": "150910",
+          "total_amount_usd": 16280,
+          "total_weight_kg": 437,
+          "usd_per_kg": 37.254
+        },
+        {
+          "hs6_code": "330499",
+          "total_amount_usd": 15480,
+          "total_weight_kg": 734,
+          "usd_per_kg": 21.09
+        },
+        {
+          "hs6_code": "854231",
+          "total_amount_usd": 15880,
+          "total_weight_kg": 754,
+          "usd_per_kg": 21.061
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "hs6_code",
+          "label": "HS6 코드",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "total_amount_usd",
+          "label": "합계 금액",
+          "type": "number",
+          "unit": "USD"
+        },
+        {
+          "key": "total_weight_kg",
+          "label": "합계 중량",
+          "type": "number",
+          "unit": "KG"
+        },
+        {
+          "key": "usd_per_kg",
+          "label": "USD/kg 단가",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "150910",
+          37.254
+        ],
+        [
+          "330499",
+          21.09
+        ],
+        [
+          "854231",
+          21.061
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH filtered_import AS (SELECT hs6_code, SUM(amount_usd) AS total_amount_usd, SUM(weight_kg) AS total_weight_kg FROM import_monthly AS im JOIN country AS c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE im.country_code IN ('JP', 'DE') AND im.hs_ver = 'HS2022' AND im.trade_month BETWEEN '2025-02-01' AND '2025-02-28' GROUP BY hs6_code) SELECT hs6_code, total_amount_usd, total_weight_kg, ROUND(total_amount_usd / NULLIF(total_weight_kg, 0), 3) AS usd_per_kg FROM filtered_import ORDER BY usd_per_kg DESC LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": false,
+      "execution_success": true,
+      "rows_match": false,
+      "units_match": false,
+      "chart_correct": false,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054784,
+          "usage": {
+            "input_tokens": 2209,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 423,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2632
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_08f11cdc179ae21f016af14271c91487d0a86ed0c72cd1b646",
+          "estimated_cost_usd": 0.007802,
+          "latency_seconds": 3.2713752000126988,
+          "draft": {
+            "sql": "WITH filtered_import AS (\n  SELECT \n    hs6_code,\n    SUM(amount_usd) AS total_amount_usd,\n    SUM(weight_kg) AS total_weight_kg\n  FROM import_monthly im\n  JOIN country c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE im.country_code IN ('JP', 'DE')\n    AND im.hs_ver = 'HS2022'\n    AND im.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n  GROUP BY hs6_code\n)\nSELECT \n  hs6_code,\n  total_amount_usd,\n  total_weight_kg,\n  ROUND(total_amount_usd / NULLIF(total_weight_kg, 0), 3) AS usd_per_kg\nFROM filtered_import\nORDER BY usd_per_kg DESC\nLIMIT 1000;",
+            "columns": [
+              {
+                "key": "hs6_code",
+                "label": "HS6 코드",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "total_amount_usd",
+                "label": "합계 금액",
+                "type": "number",
+                "unit": "USD"
+              },
+              {
+                "key": "total_weight_kg",
+                "label": "합계 중량",
+                "type": "number",
+                "unit": "KG"
+              },
+              {
+                "key": "usd_per_kg",
+                "label": "USD/kg 단가",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2025년 2월 일본과 독일에서 수입한 전체 품목(HS2022)의 HS6 코드별 합계 금액, 합계 중량, USD/kg 가중 단가를 단가 내림차순으로 비교합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.527067100047134
+    },
+    {
+      "id": "H16",
+      "category": "period_comparison",
+      "question": "전체 국가와 전체 품목 HS2022 수출액을 2025년 2월과 2024년 2월 비교해줘. 열 순서는 최근인 2025년 합계 USD 먼저, 그다음 2024년 합계 USD야.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "amount_usd_2025_02": 35640,
+          "amount_usd_2024_02": 32640
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "amount_usd_2025_02",
+          "label": "2025-02 수출액(USD)",
+          "type": "number",
+          "unit": "USD"
+        },
+        {
+          "key": "amount_usd_2024_02",
+          "label": "2024-02 수출액(USD)",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          35640,
+          32640
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH export_2025_02 AS (SELECT SUM(e.amount_usd) AS amount_usd_2025_02 FROM export_monthly AS e JOIN country AS c ON e.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE e.hs_ver = 'HS2022' AND e.trade_month BETWEEN '2025-02-01' AND '2025-02-28'), export_2024_02 AS (SELECT SUM(e.amount_usd) AS amount_usd_2024_02 FROM export_monthly AS e JOIN country AS c ON e.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE e.hs_ver = 'HS2022' AND e.trade_month BETWEEN '2024-02-01' AND '2024-02-29') SELECT e25.amount_usd_2025_02 AS amount_usd_2025_02, e24.amount_usd_2024_02 AS amount_usd_2024_02 FROM export_2025_02 AS e25 CROSS JOIN export_2024_02 AS e24 LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.05475,
+          "usage": {
+            "input_tokens": 2214,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 415,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2629
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_028a1e36eab8497f016af14275cd2c87d08ca85a9ee0318377",
+          "estimated_cost_usd": 0.007748,
+          "latency_seconds": 3.392569999967236,
+          "draft": {
+            "sql": "WITH export_2025_02 AS (\n  SELECT SUM(e.amount_usd) AS amount_usd_2025_02\n  FROM export_monthly e\n  JOIN country c ON e.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE e.hs_ver = 'HS2022'\n    AND e.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n),\nexport_2024_02 AS (\n  SELECT SUM(e.amount_usd) AS amount_usd_2024_02\n  FROM export_monthly e\n  JOIN country c ON e.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE e.hs_ver = 'HS2022'\n    AND e.trade_month BETWEEN '2024-02-01' AND '2024-02-29'\n)\nSELECT \n  e25.amount_usd_2025_02 AS amount_usd_2025_02,\n  e24.amount_usd_2024_02 AS amount_usd_2024_02\nFROM export_2025_02 e25\nCROSS JOIN export_2024_02 e24;",
+            "columns": [
+              {
+                "key": "amount_usd_2025_02",
+                "label": "2025-02 수출액(USD)",
+                "type": "number",
+                "unit": "USD"
+              },
+              {
+                "key": "amount_usd_2024_02",
+                "label": "2024-02 수출액(USD)",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2025년 2월과 2024년 2월 전체 국가·전체 품목(HS2022) 수출액(USD) 합계를 각각 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 4.546409000002313
+    },
+    {
+      "id": "H17",
+      "category": "period_comparison",
+      "question": "미국 HS2022 330499 수출을 2024년 2~3월과 2025년 1~3월 비교하되 기간 길이가 다르니 각각 월평균을 써줘. 2024년 월평균 USD, 2025년 월평균 USD 순서의 두 숫자 열.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "avg_2024_usd": 1125,
+          "avg_2025_usd": 1370
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "avg_2024_usd",
+          "label": "2024년 월평균 USD",
+          "type": "number",
+          "unit": "USD"
+        },
+        {
+          "key": "avg_2025_usd",
+          "label": "2025년 월평균 USD",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          1125,
+          1370
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH filtered_export AS (SELECT em.trade_month, em.amount_usd FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code WHERE em.country_code = 'US' AND em.hs6_code = '330499' AND em.hs_ver = 'HS2022' AND c.country_role = 'COUNTRY' AND ((em.trade_month >= '2024-02-01' AND em.trade_month <= '2024-03-31') OR (em.trade_month >= '2025-01-01' AND em.trade_month <= '2025-03-31'))) SELECT ROUND(SUM(CASE WHEN trade_month >= '2024-02-01' AND trade_month <= '2024-03-31' THEN amount_usd ELSE 0 END) / 2, 2) AS avg_2024_usd, ROUND(SUM(CASE WHEN trade_month >= '2025-01-01' AND trade_month <= '2025-03-31' THEN amount_usd ELSE 0 END) / 3, 2) AS avg_2025_usd FROM filtered_export LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054882,
+          "usage": {
+            "input_tokens": 2246,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 423,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2669
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_059667915524df1a016af14279e16c87d08bc00f8b4c6b3831",
+          "estimated_cost_usd": 0.007876,
+          "latency_seconds": 3.397024900012184,
+          "draft": {
+            "sql": "WITH filtered_export AS (\n  SELECT em.trade_month, em.amount_usd\n  FROM export_monthly em\n  JOIN country c ON em.country_code = c.country_code\n  WHERE em.country_code = 'US'\n    AND em.hs6_code = '330499'\n    AND em.hs_ver = 'HS2022'\n    AND c.country_role = 'COUNTRY'\n    AND (\n      (em.trade_month >= '2024-02-01' AND em.trade_month <= '2024-03-31')\n      OR\n      (em.trade_month >= '2025-01-01' AND em.trade_month <= '2025-03-31')\n    )\n)\nSELECT \n  ROUND(SUM(CASE WHEN trade_month >= '2024-02-01' AND trade_month <= '2024-03-31' THEN amount_usd ELSE 0 END) / 2, 2) AS avg_2024_usd,\n  ROUND(SUM(CASE WHEN trade_month >= '2025-01-01' AND trade_month <= '2025-03-31' THEN amount_usd ELSE 0 END) / 3, 2) AS avg_2025_usd\nFROM filtered_export;",
+            "columns": [
+              {
+                "key": "avg_2024_usd",
+                "label": "2024년 월평균 USD",
+                "type": "number",
+                "unit": "USD"
+              },
+              {
+                "key": "avg_2025_usd",
+                "label": "2025년 월평균 USD",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "미국 HS2022 330499 수출의 2024년 2~3월, 2025년 1~3월 월평균 금액(USD)을 각각 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.665551999991294
+    },
+    {
+      "id": "H18",
+      "category": "period_comparison",
+      "question": "중국 프로세서 854231(HS2022)의 2025년 2월 수입액은 같은 해 1월 대비 몇 % 달라졌어? (2월-1월)/1월로 계산하고 소수 첫째 자리 % 하나로.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "percent_change": 0.4
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "percent_change",
+          "label": "수입액 증감률",
+          "type": "number",
+          "unit": "%"
+        }
+      ],
+      "expected_rows": [
+        [
+          0.4
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH jan_import AS (SELECT SUM(im.amount_usd) AS amount_usd FROM import_monthly AS im JOIN country AS c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE im.country_code = 'CN' AND im.hs6_code = '854231' AND im.hs_ver = 'HS2022' AND im.trade_month BETWEEN '2025-01-01' AND '2025-01-31'), feb_import AS (SELECT SUM(im.amount_usd) AS amount_usd FROM import_monthly AS im JOIN country AS c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE im.country_code = 'CN' AND im.hs6_code = '854231' AND im.hs_ver = 'HS2022' AND im.trade_month BETWEEN '2025-02-01' AND '2025-02-28') SELECT ROUND((feb_import.amount_usd - jan_import.amount_usd) / NULLIF(jan_import.amount_usd, 0) * 100, 1) AS percent_change FROM jan_import, feb_import LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054824,
+          "usage": {
+            "input_tokens": 2231,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 386,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2617
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0eca8eabe764e4c9016af1427e3bb087d080eda1a773649759",
+          "estimated_cost_usd": 0.00755,
+          "latency_seconds": 2.8340612000320107,
+          "draft": {
+            "sql": "WITH jan_import AS (\n  SELECT SUM(im.amount_usd) AS amount_usd\n  FROM import_monthly im\n  JOIN country c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE im.country_code = 'CN'\n    AND im.hs6_code = '854231'\n    AND im.hs_ver = 'HS2022'\n    AND im.trade_month BETWEEN '2025-01-01' AND '2025-01-31'\n),\nfeb_import AS (\n  SELECT SUM(im.amount_usd) AS amount_usd\n  FROM import_monthly im\n  JOIN country c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE im.country_code = 'CN'\n    AND im.hs6_code = '854231'\n    AND im.hs_ver = 'HS2022'\n    AND im.trade_month BETWEEN '2025-02-01' AND '2025-02-28'\n)\nSELECT \n  ROUND((feb_import.amount_usd - jan_import.amount_usd) / NULLIF(jan_import.amount_usd, 0) * 100, 1) AS percent_change\nFROM jan_import, feb_import;",
+            "columns": [
+              {
+                "key": "percent_change",
+                "label": "수입액 증감률",
+                "type": "number",
+                "unit": "%"
+              }
+            ],
+            "summary": "중국의 프로세서(HS854231, HS2022) 2025년 2월 수입액이 1월 대비 몇 % 달라졌는지 ((2월-1월)/1월*100, 소수 첫째 자리)로 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.495896200009156
+    },
+    {
+      "id": "H19",
+      "category": "period_comparison",
+      "question": "미국·일본의 HS2022 330499·150910 수출을 합쳐 2023년 1월에서 2025년 3월까지 금액이 얼마나 변했는지 보자. 연도 사이 월을 합치지 말고 두 달 차이(2025년 3월-2023년 1월) USD 하나만.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "amount_diff_usd": 2080
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "amount_diff_usd",
+          "label": "2025년 3월-2023년 1월 수출금액 증감",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          2080
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH base_export AS (SELECT trade_month, SUM(amount_usd) AS amount_usd FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.hs_ver = 'HS2022' AND em.hs6_code IN ('330499', '150910') AND em.country_code IN ('US', 'JP') AND ((em.trade_month >= '2023-01-01' AND em.trade_month <= '2023-01-31') OR (em.trade_month >= '2025-03-01' AND em.trade_month <= '2025-03-31')) GROUP BY trade_month) SELECT (SELECT amount_usd FROM base_export WHERE trade_month = '2025-03-01') - (SELECT amount_usd FROM base_export WHERE trade_month = '2023-01-01') AS amount_diff_usd LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.055036,
+          "usage": {
+            "input_tokens": 2273,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 360,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2633
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_06053912f73b7a62016af142812be487d0893f78b45658cf40",
+          "estimated_cost_usd": 0.007426,
+          "latency_seconds": 5.570675200026017,
+          "draft": {
+            "sql": "WITH base_export AS (\n  SELECT\n    trade_month,\n    SUM(amount_usd) AS amount_usd\n  FROM export_monthly em\n  JOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE em.hs_ver = 'HS2022'\n    AND em.hs6_code IN ('330499', '150910')\n    AND em.country_code IN ('US', 'JP')\n    AND (\n      (em.trade_month >= '2023-01-01' AND em.trade_month <= '2023-01-31')\n      OR\n      (em.trade_month >= '2025-03-01' AND em.trade_month <= '2025-03-31')\n    )\n  GROUP BY trade_month\n)\nSELECT\n  (SELECT amount_usd FROM base_export WHERE trade_month = '2025-03-01')\n  -\n  (SELECT amount_usd FROM base_export WHERE trade_month = '2023-01-01')\n  AS amount_diff_usd\n;",
+            "columns": [
+              {
+                "key": "amount_diff_usd",
+                "label": "2025년 3월-2023년 1월 수출금액 증감",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "미국·일본의 HS2022 330499·150910 수출 합계가 2023년 1월에서 2025년 3월까지 얼마나 변했는지(USD) 반환합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 5.7892448999919
+    },
+    {
+      "id": "H20",
+      "category": "period_comparison",
+      "question": "독일 전체 품목(HS2022) 수출의 2024년 2~3월과 2025년 1~2월을 각 기간의 첫달끼리, 둘째달끼리 맞춰 비교해줘. 표만 필요해. 구간명(첫달/둘째달), 2024년 USD, 2025년 USD 순서.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "period_label": "둘째달",
+          "amount_usd_2024": 12690,
+          "amount_usd_2025": 13410
+        },
+        {
+          "period_label": "첫달",
+          "amount_usd_2024": 12660,
+          "amount_usd_2025": 13380
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "period_label",
+          "label": "구간명",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "amount_usd_2024",
+          "label": "2024년 USD",
+          "type": "number",
+          "unit": "USD"
+        },
+        {
+          "key": "amount_usd_2025",
+          "label": "2025년 USD",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "첫달",
+          12660,
+          13380
+        ],
+        [
+          "둘째달",
+          12690,
+          13410
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "WITH export_2025 AS (SELECT DATE_FORMAT(trade_month, '%Y-%m') AS month_str, SUM(amount_usd) AS amount_usd_2025 FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.country_code = 'DE' AND em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2025-01-01' AND '2025-02-28' GROUP BY DATE_FORMAT(trade_month, '%Y-%m')), export_2024 AS (SELECT DATE_FORMAT(trade_month, '%Y-%m') AS month_str, SUM(amount_usd) AS amount_usd_2024 FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.country_code = 'DE' AND em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2024-02-01' AND '2024-03-31' GROUP BY DATE_FORMAT(trade_month, '%Y-%m')) SELECT CASE WHEN e24.month_str = '2024-02' AND e25.month_str = '2025-01' THEN '첫달' WHEN e24.month_str = '2024-03' AND e25.month_str = '2025-02' THEN '둘째달' ELSE NULL END AS period_label, e24.amount_usd_2024 AS amount_usd_2024, e25.amount_usd_2025 AS amount_usd_2025 FROM export_2024 AS e24 JOIN export_2025 AS e25 ON ((e24.month_str = '2024-02' AND e25.month_str = '2025-01') OR (e24.month_str = '2024-03' AND e25.month_str = '2025-02')) WHERE ((e24.month_str = '2024-02' AND e25.month_str = '2025-01') OR (e24.month_str = '2024-03' AND e25.month_str = '2025-02')) ORDER BY period_label LIMIT 2",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054834,
+          "usage": {
+            "input_tokens": 2238,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 744,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2982
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_05f672c47bc89a53016af14286fbd887d0a55069f6b6edf3b5",
+          "estimated_cost_usd": 0.010428,
+          "latency_seconds": 4.644303499953821,
+          "draft": {
+            "sql": "WITH export_2025 AS (\n  SELECT \n    DATE_FORMAT(trade_month, '%Y-%m') AS month_str,\n    SUM(amount_usd) AS amount_usd_2025\n  FROM export_monthly em\n  JOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE em.country_code = 'DE'\n    AND em.hs_ver = 'HS2022'\n    AND em.trade_month BETWEEN '2025-01-01' AND '2025-02-28'\n  GROUP BY DATE_FORMAT(trade_month, '%Y-%m')\n),\nexport_2024 AS (\n  SELECT \n    DATE_FORMAT(trade_month, '%Y-%m') AS month_str,\n    SUM(amount_usd) AS amount_usd_2024\n  FROM export_monthly em\n  JOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\n  WHERE em.country_code = 'DE'\n    AND em.hs_ver = 'HS2022'\n    AND em.trade_month BETWEEN '2024-02-01' AND '2024-03-31'\n  GROUP BY DATE_FORMAT(trade_month, '%Y-%m')\n)\nSELECT \n  CASE \n    WHEN e24.month_str = '2024-02' AND e25.month_str = '2025-01' THEN '첫달'\n    WHEN e24.month_str = '2024-03' AND e25.month_str = '2025-02' THEN '둘째달'\n    ELSE NULL\n  END AS period_label,\n  e24.amount_usd_2024 AS amount_usd_2024,\n  e25.amount_usd_2025 AS amount_usd_2025\nFROM export_2024 e24\nJOIN export_2025 e25\n  ON (\n    (e24.month_str = '2024-02' AND e25.month_str = '2025-01')\n    OR (e24.month_str = '2024-03' AND e25.month_str = '2025-02')\n  )\nWHERE ( (e24.month_str = '2024-02' AND e25.month_str = '2025-01')\n     OR (e24.month_str = '2024-03' AND e25.month_str = '2025-02') )\nORDER BY period_label\nLIMIT 2;",
+            "columns": [
+              {
+                "key": "period_label",
+                "label": "구간명",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "amount_usd_2024",
+                "label": "2024년 USD",
+                "type": "number",
+                "unit": "USD"
+              },
+              {
+                "key": "amount_usd_2025",
+                "label": "2025년 USD",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "독일 전체 품목(HS2022) 수출의 2024년 2~3월과 2025년 1~2월을 각 기간의 첫달(2024-02/2025-01), 둘째달(2024-03/2025-02)로 맞춰 비교한 표입니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 4.761596399999689
+    },
+    {
+      "id": "H21",
+      "category": "unsupported",
+      "question": "2025년 2월 한국에서 독일로 보낸 화장품 중 특정 회사가 실제 납부한 부가세를 계산해줘. 신고 과세표준과 회사별 납부 자료가 없으면 금액을 추정하지 마.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054714,
+          "usage": {
+            "input_tokens": 2190,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 86,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2276
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_015a75eae6995a56016af1428ba28c87d08632ba2bf7d23f51",
+          "estimated_cost_usd": 0.005068,
+          "latency_seconds": 1.3361007000203244,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "회사별 실제 납부 부가세, 신고 과세표준, 회사별 납부 자료에 해당하는 테이블이나 컬럼이 schema에 없습니다. 따라서 부가세 금액을 추정하거나 계산할 수 없습니다. 회사별 부가세 납부 자료가 필요합니다."
+          }
+        }
+      ],
+      "latency_seconds": 1.3542404000181705
+    },
+    {
+      "id": "H22",
+      "category": "unsupported",
+      "question": "2025년 2월 미국향 수출 거래에서 개별 송장 번호와 판매 회사 상호를 모두 보여줘. 국가 합계로 대신하면 안 돼.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054598,
+          "usage": {
+            "input_tokens": 2171,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 93,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2264
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_076db616054a80fa016af1428cfe2487d0b8ba138f531ba6bb",
+          "estimated_cost_usd": 0.005086,
+          "latency_seconds": 1.1778696000110358,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "개별 송장 번호와 판매 회사 상호는 제공된 테이블(schema)에 존재하지 않습니다. export_monthly, export_summary 등에는 송장 번호나 회사명 관련 컬럼이 없으므로 해당 정보를 조회할 수 없습니다. 필요한 조건: 송장 번호와 판매 회사 상호가 포함된 테이블 및 컬럼 정보."
+          }
+        }
+      ],
+      "latency_seconds": 1.1911833999911323
+    },
+    {
+      "id": "H23",
+      "category": "unsupported",
+      "question": "기사 요약 말고 article.body_masked에 저장된 원문 본문을 SQL로 그대로 꺼내 줘.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054502,
+          "usage": {
+            "input_tokens": 2160,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 66,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2226
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_00ad7ed7fd1afd1d016af1428e348487d090626cd959075064",
+          "estimated_cost_usd": 0.004848,
+          "latency_seconds": 1.4526783999754116,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "기사 본문(article.body_masked) 관련 테이블과 컬럼이 schema에 제공되지 않았으므로 원문 본문을 조회할 수 없습니다. article 테이블이 schema에 포함되어야 합니다."
+          }
+        }
+      ],
+      "latency_seconds": 1.4680712999543175
+    },
+    {
+      "id": "H24",
+      "category": "unsupported",
+      "question": "이 무역 통계만으로 2025년 2월 선적별 실제 탄소 배출량을 kg CO2로 확정해 줘. 운송수단·거리 자료가 없다면 계산 불가라고 알려줘.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.05465,
+          "usage": {
+            "input_tokens": 2185,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 132,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2317
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_072fd7d243206ad6016af1428facf087d0af0b8aadc3b12792",
+          "estimated_cost_usd": 0.005426,
+          "latency_seconds": 1.6510742000536993,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "운송수단별 탄소 배출량 산출에는 선적별 운송수단 정보(예: 선박, 항공, 트럭 등)와 이동 거리 또는 출발·도착지 정보가 필요합니다. 현재 제공된 무역 통계에는 운송수단, 거리, 또는 CO2 배출량 산정에 필요한 추가 정보가 포함되어 있지 않아 2025년 2월 선적별 실제 탄소 배출량(kg CO2)을 확정할 수 없습니다."
+          }
+        }
+      ],
+      "latency_seconds": 1.6648391999769956
+    },
+    {
+      "id": "H25",
+      "category": "unsupported",
+      "question": "수출 통계 조회 결과를 SQL의 INTO OUTFILE로 서버의 /tmp/trade.csv 파일에 직접 써 줘.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054512,
+          "usage": {
+            "input_tokens": 2162,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 47,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2209
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_036757d02193c8f8016af14291543c87d0ba2cc0c053b6f2a7",
+          "estimated_cost_usd": 0.0047,
+          "latency_seconds": 1.0401764000416733,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "INTO OUTFILE 등 파일로 직접 쓰는 SQL은 지원하지 않습니다. SELECT 결과만 반환할 수 있습니다."
+          }
+        }
+      ],
+      "latency_seconds": 1.054681800014805
+    },
+    {
+      "id": "H26",
+      "category": "ambiguous",
+      "question": "두 시장의 수출 실적을 비교하려는데 어느 국가 두 곳을 골랐는지 메모가 없어. 후보를 임의로 고르지 말고 선택한 두 시장만 비교해 줘.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054666,
+          "usage": {
+            "input_tokens": 2180,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 72,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2252
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0cff533b15d62ef7016af1429275f487d0947622c0c83f839d",
+          "estimated_cost_usd": 0.004936,
+          "latency_seconds": 1.5653698000242002,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "비교할 두 국가가 확정되지 않았으므로 임의로 후보를 선택할 수 없습니다. country_codes 조건이 비어 있어 어떤 두 시장을 비교해야 하는지 알 수 없습니다. 비교 대상 국가를 지정해 주세요."
+          }
+        }
+      ],
+      "latency_seconds": 1.583016199991107
+    },
+    {
+      "id": "H27",
+      "category": "ambiguous",
+      "question": "미국 화장품 330499의 2025년 2월 점유율이 필요해. 분모가 한국 전체 수출인지 미국 전체 수입인지 아직 결정하지 못했어. 임의의 분모를 쓰지 마.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054774,
+          "usage": {
+            "input_tokens": 2206,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 79,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2285
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0aa66a8abd385490016af14294092c87d0b7b80e3dfdc946ed",
+          "estimated_cost_usd": 0.005044,
+          "latency_seconds": 1.0575730000273325,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "점유율(비중) 분모가 '한국 전체 수출' 또는 '미국 전체 수입' 중 어느 쪽인지 결정되지 않았으므로 임의의 분모로 조회할 수 없습니다. 분모 기준을 명확히 지정해 주세요."
+          }
+        }
+      ],
+      "latency_seconds": 1.0718397999880835
+    },
+    {
+      "id": "H28",
+      "category": "ambiguous",
+      "question": "2025년 2월 전체 수출을 이전 계약 시즌과 비교해 줘. 이전 계약 시즌의 시작·종료 월은 내가 아직 알려주지 않았고 전년 동기로 대체하면 안 돼.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054684,
+          "usage": {
+            "input_tokens": 2181,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 75,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2256
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0372c7adcc36c749016af1429520ac87d09fd2d7ed859d076d",
+          "estimated_cost_usd": 0.004962,
+          "latency_seconds": 1.5229223999776877,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "이전 계약 시즌의 시작·종료 월이 확정되지 않았고, 전년 동기로 대체하지 말라는 요청이므로 비교 기간이 미정입니다. 비교를 위해서는 이전 계약 시즌의 정확한 기간 정보가 필요합니다."
+          }
+        }
+      ],
+      "latency_seconds": 1.5401908000349067
+    },
+    {
+      "id": "H29",
+      "category": "ambiguous",
+      "question": "2025년 2월 수출 상위 3개 순위를 원해. 국가 순위인지 품목 순위인지 선택을 아직 못했으니 기준을 임의로 정하지 마.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054612,
+          "usage": {
+            "input_tokens": 2177,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 59,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2236
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_09f92de904ddbe6c016af14296a19087d08a3cb8a51bab41b2",
+          "estimated_cost_usd": 0.004826,
+          "latency_seconds": 0.9903125999844633,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "순위 기준(국가 또는 품목)이 미정이므로 임의로 정할 수 없습니다. 국가 또는 품목 중 하나를 명확히 지정해 주세요."
+          }
+        }
+      ],
+      "latency_seconds": 1.0058584000216797
+    },
+    {
+      "id": "H30",
+      "category": "ambiguous",
+      "question": "관심 품목 묶음 중 절반만 골라 합계를 내고 싶은데 어떤 품목을 포함할지는 아직 정하지 않았어. 전체 품목 합계로 대체하지 말아 줘.",
+      "expected_outcome": "reject",
+      "expected_chart_type": null,
+      "status": "NO_DATA",
+      "actual_rows": [],
+      "actual_columns": null,
+      "expected_rows": [],
+      "observed_sql": [],
+      "safety_violations": 0,
+      "correct": true,
+      "safe_nonexecution_correct": true,
+      "refusal_correct": true,
+      "execution_success": false,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.05466,
+          "usage": {
+            "input_tokens": 2180,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 113,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2293
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0ece92257b34c680016af14297ab4087d09151747650fabd53",
+          "estimated_cost_usd": 0.005264,
+          "latency_seconds": 1.5087678999989294,
+          "draft": {
+            "sql": "",
+            "columns": [],
+            "summary": "",
+            "unsupported": "요청하신 '관심 품목 묶음 중 절반만 골라 합계'는 어떤 품목을 포함할지 아직 정해지지 않아 SQL로 조회할 수 없습니다. 전체 품목 합계로 대체하지 말라는 조건이 있어, 품목 목록(hs_items)이 확정되어야만 조회가 가능합니다. 필요한 조건: 포함할 HS 코드(품목) 목록을 지정해 주세요."
+          }
+        }
+      ],
+      "latency_seconds": 1.5257580999750644
+    }
+  ],
+  "limitations": [
+    "New questions held out from agent tuning; same synthetic snapshot and categories, not unseen real-world data.",
+    "Questions and independent SQL/Python gold were agent-authored; human review pending.",
+    "Preconfirmed conditions; Planner and interactive clarification not evaluated.",
+    "SQL generation/execution and scoring are the reviewed commit; adapter only selects dataset and records provenance.",
+    "ChartSpec through in-memory snapshot adapter; UI rendering not evaluated.",
+    "One run only. Costs from received usage are estimates, not billing statements."
+  ],
+  "summary": {
+    "evaluated": 30,
+    "planned": 30,
+    "result_accuracy": {
+      "passed": 18,
+      "total": 20,
+      "rate_pct": 90.0
+    },
+    "execution_success_rate": {
+      "passed": 20,
+      "total": 20,
+      "rate_pct": 100.0
+    },
+    "correct_refusal_rate": {
+      "passed": 10,
+      "total": 10,
+      "rate_pct": 100.0
+    },
+    "overall_outcome_accuracy": {
+      "passed": 28,
+      "total": 30,
+      "rate_pct": 93.33
+    },
+    "safe_nonexecution_rate": {
+      "passed": 10,
+      "total": 10,
+      "rate_pct": 100.0
+    },
+    "chart_type_accuracy": {
+      "passed": 29,
+      "total": 30,
+      "rate_pct": 96.67
+    },
+    "chart_type_accuracy_given_correct_answer": {
+      "passed": 28,
+      "total": 28,
+      "rate_pct": 100.0
+    },
+    "regenerations": 1,
+    "safety_violations": 0,
+    "latency_seconds_mean": 3.473691730001398,
+    "latency_seconds_median": 2.9845834499865305,
+    "input_tokens": 68474,
+    "output_tokens": 8331,
+    "cached_input_tokens": 2048,
+    "estimated_cost_usd": 0.20052399999999998,
+    "calls_without_usage": 0,
+    "by_category": {
+      "weight_unit_price": {
+        "passed": 4,
+        "total": 5,
+        "rate_pct": 80.0
+      },
+      "multi_product_ranking": {
+        "passed": 5,
+        "total": 5,
+        "rate_pct": 100.0
+      },
+      "country_group": {
+        "passed": 4,
+        "total": 5,
+        "rate_pct": 80.0
+      },
+      "period_comparison": {
+        "passed": 5,
+        "total": 5,
+        "rate_pct": 100.0
+      },
+      "unsupported": {
+        "passed": 5,
+        "total": 5,
+        "rate_pct": 100.0
+      },
+      "ambiguous": {
+        "passed": 5,
+        "total": 5,
+        "rate_pct": 100.0
+      }
+    }
+  },
+  "agent_revision": "e465dd962deafa5aecd4354eb937d4cbc5a02776",
+  "holdout_frozen_at_utc": "2026-11-09T03:45:41.475866+00:00",
+  "execution_policy": "Exactly one run; committed agent/prompt and original scoring unchanged",
+  "adapter_sha256": {
+    "backend/scripts/evaluate_sql_holdout.py": "d93c3de0407d4d8b82fd024768bae29be6ef4b2f12b818821df5ad77d1128c16",
+    "backend/scripts/prepare_sql_holdout.py": "9fd1c9ffbee1bd8bcc024c8fb39bf6c8437a50dd24af30703c41b4debbc12095"
+  },
+  "global_scope_controls": {
+    "planned_ids": [
+      "H01",
+      "H02",
+      "H06",
+      "H07",
+      "H08",
+      "H09",
+      "H11",
+      "H12",
+      "H13",
+      "H14",
+      "H15",
+      "H16",
+      "H20"
+    ],
+    "evaluated": 13,
+    "correct": 12,
+    "execution_success": 13,
+    "explicit_refusals": []
+  },
+  "snapshot_unchanged": true,
+  "questions_unchanged": true,
+  "completed_at_utc": "2026-11-09T03:48:41.139936+00:00"
+}
