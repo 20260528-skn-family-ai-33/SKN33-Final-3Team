@@ -1,23 +1,30 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
   "evaluation": "SQL/Visualization offline regression contract evaluation",
-  "evaluated_at_utc": "2026-11-09T00:56:25.585119+00:00",
+  "evaluated_at_utc": "2026-11-09T02:43:00.783555+00:00",
   "source_mode": "working_tree",
-  "source_revision": "5302c472b8cd4dc4ceefd4939631e9172bcd69b8",
-  "harness_revision": "5302c472b8cd4dc4ceefd4939631e9172bcd69b8",
+  "source_revision": "821c14e7716f2bd181afd3d902427bd43a8b9827",
+  "source_dirty": false,
+  "source_changes": [],
+  "harness_revision": "821c14e7716f2bd181afd3d902427bd43a8b9827",
+  "harness_dirty": true,
+  "harness_changes": [
+    "M backend/scripts/evaluate_sql_visualization.py"
+  ],
   "source_sha256": {
-    "backend/app/agents/sql.py": "8a5b3376682dee2630bf35effa2e43d9630c9ce5aab6a554922714361ab753e2",
-    "backend/app/agents/charts.py": "c5ac5d5f60aad41732c18e29673ef0cf8ada7494e0593c250a6d6b017d115c5d"
+    "backend/app/agents/sql.py": "df9c6c7e7aa1b5182935bd151a6312093c815abc20f0c7e8417af0e703635a85",
+    "backend/app/agents/charts.py": "8656071f898e833cf474a69dd692ac053a2b36c9ef317b0a68d02e4e8c076da7"
   },
   "evidence_sha256": {
-    "backend/tests/test_agent_sql.py": "75b3ff1daaf09170260fb7872b7651d7d877edf9bb05d7506e58573cbb58e81f",
+    "backend/tests/test_agent_sql.py": "d7d7b189c6ef02a3ef2811cac77380f8b3aa61d82778e4159aa136cc6dafaba6",
     "backend/tests/test_agent_sql_visualization.py": "1a306bc86ab94c75e5c2f67fef73cf3f4dd860d4d75f0dcb5d007ce3ea2e1dab",
-    "backend/tests/test_agent_templates.py": "629f6eb69f62c696b1b87764b84854fd685bed98d308dd865e7a5607a14f091c",
-    "backend/scripts/evaluate_sql_visualization.py": "4fe934e62e0cac6cd952e15bb8832bc9a2398e416d14d40e25062dc7d0ebde68",
-    "backend/tests/api_support.py": "646d2bf8d14f1e9128f1b7dae159c1824e1bc8a9d1fe692d0127a3b15c0ede23",
-    "backend/app/agents/templates.py": "dc7dc9ac073383d62be0bb28e1086aded5be522ddce3a70df180e860c7ede883",
-    "backend/app/agents/state.py": "058b775b9c4c000c912bd677fb06dbc76fcd38553c485ec7557c0c1f83c3c6cb",
-    "backend/app/api/results.py": "cc28550e384a5fb76250bcb00b5ad8a7a5ca0a3792e08ffc9515f7ef90ac463c"
+    "backend/tests/test_agent_templates.py": "f23e7b89ac106bb464b3831561a784d428b6b4389163eb617d4820a372848f54",
+    "backend/scripts/evaluate_sql_visualization.py": "32b0176fc10922f6527f6d7faa3bf03ff4080940bee4ee19a51863ff67fbeb9a",
+    "backend/tests/api_support.py": "02fdcb33cdc1ee52cdc14d08f33b7d668fa4566b3a1b6281caf639b5e8e08319",
+    "backend/app/agents/templates.py": "72ce56ec7a12c7f9f233799a184fa5d293e9788daf2a1f520699dd5962f55efd",
+    "backend/app/agents/state.py": "52fe0d0871493788bd8dbb957d9f7d7535002ef2dcc80ae85cc1cb0cae446caf",
+    "backend/app/api/results.py": "f00eefd548961caa6c347679c21415f12964897184ec11d81b1c3883b1357fc4"
   },
   "manifest_sha256": "5106e0820f541316ff884309bac583a6b3d89ff0e37722b6846f0e4c9abeba2f",
   "environment": {

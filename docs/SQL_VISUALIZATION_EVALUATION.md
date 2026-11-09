@@ -2,6 +2,9 @@
 
 평가일: 2026-11-09 (KST) · 관련 이슈 #74 / PR #75
 
+실제 모델·로컬 MySQL 질문 평가는 [SQL 실제 호출 평가](SQL_LIVE_EVALUATION.md)를 본다.
+아래 36개 점수는 회귀 테스트 통과율이며 실제 질문 정확도와 합산하지 않는다.
+
 ## 목적과 평가 범위
 
 SQL Agent의 조건 검증·집계·실패 처리와 Visualization Agent의 결과 변환이
@@ -23,7 +26,10 @@ SQL Agent의 조건 검증·집계·실패 처리와 Visualization Agent의 결�
 
 - PR 작업 전: `1f2c7668365baea75d4df0ac8895166133952bef`
 - 리뷰 수정 전: `5a9966c581bede2cab73e4e65a77bfea06c15073`
-- 현재 평가 대상: `5302c47` 이후 작업 트리의 `sql.py`, `charts.py` (두 운영 모듈은 해당 커밋과 동일)
+- 위 표의 기존 평가 대상은 `sql_visualization_current.json`이며 두 운영 모듈은 `5302c47`의 내용이다.
+  실제 호출 평가에서 발견한 문제를 수정한 뒤의 회귀 결과는
+  [sql_visualization_improved.json](evaluations/sql_visualization_improved.json)에 별도로 보존한다(36/36 통과).
+  각 JSON의 `source_revision`, `source_dirty`, `source_sha256`로 실행 당시 코드를 구분한다.
 - 과거 비교는 **두 운영 모듈만 해당 커밋으로 메모리에서 교체**한다. 나머지 코드,
   평가 테스트, fixture, 의존성은 동일하다. 과거 브랜치 전체의 테스트 결과를 뜻하지 않는다.
 - Git checkout·reset·파일 덮어쓰기 없이 각각 별도 프로세스에서 실행했다.
@@ -101,8 +107,14 @@ python -m unittest backend.tests.test_agent_sql_visualization backend.tests.test
 - [리뷰 수정 전 결과 JSON](evaluations/sql_visualization_before_review.json)
 
 각 파일에는 평가 시각, Git 기준, Python·패키지 버전, 평가 기준·운영 모듈·fixture·테스트의
-SHA256, 항목별 상태 및 실패 내역이 포함된다. 비교할 때 동일한 `manifest_sha256`과
-`evidence_sha256`인지 확인한다. 소스 해시는 비교 대상 버전에 따라 달라진다.
+SHA256, 항목별 상태 및 실패 내역이 포함된다. schema_version 2부터 텍스트 바이트의 CRLF를 LF로
+정규화한 뒤 SHA256을 계산한다. Windows의 core.autocrlf 설정 때문에 같은 코드가 다른 해시가 되지 않는다.
+비교할 때 동일한 `manifest_sha256`과 `evidence_sha256`인지 확인한다. 소스 해시는 비교 대상 버전에 따라 달라진다.
+
+`harness_revision`은 실행 시 HEAD이며 `harness_dirty=true`이면 그 커밋 그대로 실행한 것이 아니다.
+`harness_changes`와 정규화된 파일 해시로 미커밋·미추적 평가기/테스트를 구분한다.
+운영 모듈도 `source_dirty`, `source_changes`를 별도 기록한다. 출력 JSON 자체의 변경은
+평가기 코드 변경으로 세지 않는다. 이전 schema_version 1 결과와 해시를 직접 비교하면 안 된다.
 
 ## 미평가 및 후속 항목
 
