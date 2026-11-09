@@ -11,6 +11,7 @@ from backend.app.api.results import read_snapshot, save_snapshot, result_table, 
 from backend.app.api.files import report_pdf, report_docx
 
 TITLES=json.loads((Path(__file__).resolve().parents[1]/'templates/reports/layout.json').read_text(encoding='utf-8'))['sections']
+PERIODIC_REPORT_TYPES=frozenset(('RPT_WEEKLY','RPT_MONTHLY','RPT_QUARTERLY'))
 
 
 def display_title(record):
@@ -270,7 +271,7 @@ def build_document(store,uid,record):
             if c.get('include_korea_total'):
                 from backend.app.services.report_scope_comparison import comparison_table
                 comparison_table_data=comparison_table(store,uid,c,start,end,
-                    periodic_export=record['report_type'] in ('RPT_MONTHLY','RPT_QUARTERLY'))
+                    periodic_export=record['report_type'] in PERIODIC_REPORT_TYPES)
                 block['tables'].append(comparison_table_data)
                 block['charts'].append({'chart_type':'LINE','result_id':comparison_table_data['result_id'],
                     'x_key':'month','series_keys':[col['key'] for col in comparison_table_data['columns'] if col['key']!='month'],
@@ -309,8 +310,9 @@ def report_xlsx(record,document):
     from backend.app.api.files import xlsx_bytes, user_xlsx_info
     tables=[table for section in document['sections'] for table in section['tables']]
     # 정기 리포트만 정비한다. 요청형/에이전트가 선택한 결과표는 그대로 내보낸다.
-    periodic=record['report_type'] in ('RPT_WEEKLY','RPT_MONTHLY','RPT_QUARTERLY')
-    if periodic and not (record.get('content_json') or {}).get('source_tables') and document['meta'].get('freshness')!='FROZEN':
+    periodic=record['report_type'] in PERIODIC_REPORT_TYPES
+    # build_document는 원본 결과표를 재사용한 문서에 FROZEN을 기록한다.
+    if periodic and document['meta'].get('freshness')!='FROZEN':
         conditions=record.get('conditions_json') or {}
         exported=[]
         for table in tables:

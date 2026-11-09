@@ -87,22 +87,42 @@ class ResultPresentationTest(unittest.TestCase):
         table={'columns':columns,'rows':[row],'total_rows':1}
         document={'sections':[{'tables':[table]}],'meta':{},'sql':[]}
         original=deepcopy(document)
-        for kind in ('RPT_MONTHLY','RPT_QUARTERLY'):
+        for kind in ('RPT_WEEKLY','RPT_MONTHLY','RPT_QUARTERLY'):
             sheet=load_workbook(io.BytesIO(report_xlsx({'report_type':kind},document))).worksheets[0]
             self.assertEqual([c.value for c in sheet[1]],[
                 '수출액 (USD)','비교 기간 수출액 (USD)','비교 증감률 (%)','수출 국가 수','최대 국가 비중 (%)'])
             self.assertEqual(sheet['A2'].value,125.5)
             self.assertEqual(sheet['C2'].value,25.5)
-        for record in ({'report_type':'RPT_ON_DEMAND'},
-                       {'report_type':'RPT_MONTHLY','content_json':{'source_tables':[table]}}):
-            actual=load_workbook(io.BytesIO(report_xlsx(record,document)))
-            expected=load_workbook(io.BytesIO(xlsx_bytes([table],{},[])))
-            self.assertEqual(actual.sheetnames,expected.sheetnames)
-            for actual_sheet,expected_sheet in zip(actual,expected):
-                self.assertEqual(list(actual_sheet.values),list(expected_sheet.values))
+        actual=load_workbook(io.BytesIO(report_xlsx({'report_type':'RPT_ON_DEMAND'},document)))
+        expected=load_workbook(io.BytesIO(xlsx_bytes([table],{},[])))
+        self.assertEqual(actual.sheetnames,expected.sheetnames)
+        for actual_sheet,expected_sheet in zip(actual,expected):
+            self.assertEqual(list(actual_sheet.values),list(expected_sheet.values))
         self.assertEqual(document,original)
         empty={'sections':[{'tables':[]}],'meta':{},'sql':[]}
         self.assertEqual(load_workbook(io.BytesIO(report_xlsx({'report_type':'RPT_WEEKLY'},empty))).sheetnames,['정보'])
+
+    def test_source_table_documents_keep_frozen_excel_before_and_after_storage(self):
+        from copy import deepcopy
+        from backend.app.api.reports import build_document, report_xlsx
+        row={'amount_usd':125.5,'comparison_pct':25.5,'mom_pct':None,'yoy_pct':25.5}
+        table={'kind':'TREND','columns':[{'key':key,'label':key} for key in row],
+               'rows':[row],'total_rows':1}
+        for kind in ('RPT_WEEKLY','RPT_MONTHLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
+            with self.subTest(kind=kind):
+                record={'report_type':kind,'conditions_json':{'sections':['KPI'],
+                    'period':{'start':'2025-01-01','end':'2025-03-31'},'compare':'NONE'},
+                    'content_json':{'source_tables':[table],'source_results':[{'limitations':['원본 주의사항']}]}}
+                document=build_document(SimpleNamespace(queries=['SELECT original']),1,record)
+                self.assertEqual(document['meta']['freshness'],'FROZEN')
+                original=deepcopy(document)
+                expected=load_workbook(io.BytesIO(xlsx_bytes([table],document['meta'],document['sql'])))
+                for content in (record['content_json'],document):
+                    actual=load_workbook(io.BytesIO(report_xlsx({**record,'content_json':content},document)))
+                    self.assertEqual(actual.sheetnames,expected.sheetnames)
+                    for actual_sheet,expected_sheet in zip(actual,expected):
+                        self.assertEqual(list(actual_sheet.values),list(expected_sheet.values))
+                self.assertEqual(document,original)
 
     def test_legacy_prediction_excel_uses_korean_labels_and_relevant_rank(self):
         row = {'anchor': '2026-09-01', 'country_name': '베트남', 'hs6': '330499',
