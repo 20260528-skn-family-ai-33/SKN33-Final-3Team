@@ -126,24 +126,35 @@ class _BorrowedClient:
         return getattr(self._entry['client'], name)
 
     def close(self):
-        with _client_lifecycle_lock:
+        with _shared_lock:
             if self._closed:
                 return
             self._closed = True
             self._entry['users'] -= 1
-            _close_retired()
+            retired = _take_retired()
+        _close_all(retired)
 
 
 _shared_clients = {}   # 경로 → {'client', 'users'}
 _latest_shared = None
+# 빌려주기 장부 전용 잠금. 색인 열기·닫기(_client_lifecycle_lock, 큰 색인은 수십 초)를 이 잠금 안에서 하지 않아
+# 새 세대를 여는 동안에도 다른 검색은 이미 열린 핸들을 바로 빌린다.
+_shared_lock = threading.Lock()
 
 
-def _close_retired():
-    """최신 세대가 아니고 빌린 곳이 없는 핸들을 닫는다. 동시 검색 중인 이전 세대는 끝날 때 닫는다."""
+def _take_retired():
+    """_shared_lock 안에서 부른다. 최신 세대가 아니고 빌린 곳이 없는 핸들을 장부에서 빼 돌려준다(닫기는 잠금 밖)."""
+    retired = []
     for key, entry in list(_shared_clients.items()):
         if key != _latest_shared and entry['users'] == 0:
-            entry['client'].close()
+            retired.append(entry['client'])
             del _shared_clients[key]
+    return retired
+
+
+def _close_all(clients):
+    for client in clients:
+        client.close()
 
 
 def shared_client(path):
@@ -153,14 +164,23 @@ def shared_client(path):
     색인을 쓰는 작업(news_embed·이관)에는 쓰지 않는다. 그쪽은 persistent_client로 요청마다 새 핸들을 연다."""
     global _latest_shared
     key = str(Path(path).resolve())
-    with _client_lifecycle_lock:
-        if key not in _shared_clients:
-            _shared_clients[key] = {'client': persistent_client(path), 'users': 0}
-        _latest_shared = key
-        _close_retired()
-        entry = _shared_clients[key]
-        entry['users'] += 1
-        return _BorrowedClient(key, entry)
+    opened = None
+    while True:
+        with _shared_lock:
+            entry = _shared_clients.get(key)
+            if entry is None and opened is not None:
+                entry = _shared_clients[key] = {'client': opened, 'users': 0}
+                opened = None
+            if entry is not None:
+                _latest_shared = key
+                entry['users'] += 1
+                retired = _take_retired()
+                break
+        opened = persistent_client(path)   # 장부 잠금 밖에서 연다
+    if opened is not None:
+        retired.append(opened)   # 그사이 다른 검색이 같은 세대를 먼저 열었다
+    _close_all(retired)
+    return _BorrowedClient(key, entry)
 
 
 def collection_distance(collection):
@@ -219,6 +239,7 @@ class IndexSnapshot:
 class GenerationStore:
     def __init__(self, root=None, *, client_factory=persistent_client, dimensions=None, legacy_path=None):
         # factory는 호출마다 새 소유 핸들을 반환해야 합니다. 빌린 client 재사용 함수는 전달하지 않습니다.
+        # 예외: 검색만 하는 챗봇(rag.factory.create_service)은 shared_client를 씁니다(D-104). 게시·이관에는 쓰지 않습니다.
         self.root = resolve_root(root)
         # 같은 최종 root면 인자/환경변수 선택 방식과 무관하게 같은 이관 검사를 합니다.
         # 별도 root는 저장소 기본 구형 색인을 자동 인수하거나 조회하지 않습니다.

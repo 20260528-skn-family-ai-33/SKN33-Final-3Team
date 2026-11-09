@@ -12,12 +12,16 @@ CHAT_SEARCH_SECONDS = 30
 CHAT_FINISH_RESERVE_SECONDS = 1
 
 
-def search_news(request: RagRequest, *, article_allowed=None) -> RagResponse:
-    """챗봇의 기사 검색 요청을 공통 RAG 서비스에 전달한다."""
+def search_news(request: RagRequest, *, article_allowed=None, started=None) -> RagResponse:
+    """챗봇의 기사 검색 요청을 공통 RAG 서비스에 전달한다.
+    started(time.monotonic): 검색 예산을 이 시각부터 센다. 앞에서 공개·차단 필터를 조회했으면 그 시간도 예산에 넣는다."""
     request = RagRequest.model_validate(request)
     regular_chat = request.use_case == 'chat' and request.order_by == 'relevance'
-    context = ExecutionContext(time.monotonic() + (CHAT_SEARCH_SECONDS if regular_chat else 15),
-                               finish_reserve=CHAT_FINISH_RESERVE_SECONDS if regular_chat else 0)
+    reserve = CHAT_FINISH_RESERVE_SECONDS if regular_chat else 0
+    deadline = (time.monotonic() if started is None else started) + (CHAT_SEARCH_SECONDS if regular_chat else 15)
+    if deadline - time.monotonic() <= reserve:
+        raise RagDeadlineExceeded('global_deadline_exceeded')   # 필터 조회만으로 예산을 다 썼다
+    context = ExecutionContext(deadline, finish_reserve=reserve)
     settings = Settings()
     root = settings.get('NEWS_VECTOR_ROOT')
     with OpenAI(api_key=settings.get('OPENAI_API_KEY'), timeout=context.remaining(), max_retries=0) as api:
@@ -34,9 +38,12 @@ def warm_article_index():
             from backend.app.services.news_collections import ARTICLE_COLLECTION
             from backend.app.services.rag.store import GenerationStore, shared_client
             snapshot = GenerationStore(Settings().get('NEWS_VECTOR_ROOT'), client_factory=shared_client).snapshot()
-            snapshot.collection(ARTICLE_COLLECTION).query(
-                query_embeddings=[[0.0] * (snapshot.dimensions - 1) + [1.0]], n_results=1)
-            snapshot.client.close()   # 빌린 수만 돌려준다. 핸들은 열린 채 남는다(D-105)
+            try:
+                snapshot.collection(ARTICLE_COLLECTION).query(
+                    query_embeddings=[[0.0] * (snapshot.dimensions - 1) + [1.0]], n_results=1)
+            finally:
+                # 빌린 수만 돌려준다. 핸들은 열린 채 남는다(D-105). 시험 검색이 실패해도 돌려줘야 새 세대가 열린 뒤 닫힌다
+                snapshot.client.close()
         except Exception as exc:
             logging.getLogger(__name__).warning('rag_index_warm_failed type=%s', type(exc).__name__)
     thread = threading.Thread(target=run, name='rag-index-warm', daemon=True)
@@ -44,7 +51,7 @@ def warm_article_index():
     return thread
 
 
-def article_result(state, task, step, *, article_allowed=None, keep_evidence=None):
+def article_result(state, task, step, *, article_allowed=None, keep_evidence=None, started=None):
     """그래프 기사 단계(§14.4). article_allowed는 공개·사용자 차단 필터(기존 채팅과 같음).
     keep_evidence(items)는 인용 근거를 결과 저장소에 두고 result_id를 돌려준다(D-102). 본문 인용은 digest에 넣지 않는다."""
     from backend.app.agents.digest import bounded
@@ -54,7 +61,7 @@ def article_result(state, task, step, *, article_allowed=None, keep_evidence=Non
         conditions={'geography':{'mode':'selected' if conditions.country_codes else 'all','codes':conditions.country_codes},
                     'products':conditions.hs_items,'period':conditions.article_period,'blocked_topics':()},limit=5)
     try:
-        response=search_news(request,article_allowed=article_allowed)
+        response=search_news(request,article_allowed=article_allowed,started=started)
     except RagDeadlineExceeded:
         return ToolResult(status='NO_DATA',error='기사 검색 시간이 끝나 검수를 통과한 기사가 없습니다.')
     if response.request_id!=request.request_id or response.applied_conditions!=request.conditions:

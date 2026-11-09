@@ -32,7 +32,7 @@ class ChatNewsToolTest(unittest.TestCase):
                 services = Services(execution, {}, client=Mock())
                 allowed = Mock(name='article_allowed')
 
-                def respond(request, article_allowed=None):
+                def respond(request, article_allowed=None, started=None):
                     self.assertIs(article_allowed, allowed)   # 공개·사용자 차단 필터를 RAG에 넘긴다
                     if status == 'deadline':
                         raise RagDeadlineExceeded('global_deadline_exceeded')
@@ -74,6 +74,65 @@ class ChatNewsToolTest(unittest.TestCase):
             again.close()                                   # 마지막 사용자가 돌려주면 이전 세대를 닫는다(D-105)
             opened[0].close.assert_called_once()
             newer.close(); opened[1].close.assert_not_called()   # 최신 세대는 계속 열어 둔다
+
+    def test_graph_cards_keep_place_of_hidden_articles(self):
+        # compose는 digest 순서로 [n]을 붙였다. 검색 뒤 숨겨진 기사도 자리를 남겨 [2]가 3번째 기사를 가리키지 않게 한다
+        from backend.app.api.chat_news import verified_cards, UNAVAILABLE_TITLE
+        items = [{'article_id': i, 'source_code': 'KOTRA', 'external_id': str(i), 'published_date': '2026-09-25',
+                  'source_url': 'https://example.com', 'evidence_role': 'direct', 'reference_limitation': None,
+                  'summary': []} for i in (1, 2)]
+        store = Mock(); store.rows.return_value = [{'article_id': 2, 'source_code': 'KOTRA', 'external_id': '2',
+            'published_date': '2026-09-25', 'title': '보이는 기사', 'source_url': 'https://example.com', 'body_masked': ''}]
+        cards, _ = verified_cards(store, Mock(), items, keep_missing=True)
+        self.assertEqual([c['title'] for c in cards], [UNAVAILABLE_TITLE, '보이는 기사'])
+        self.assertEqual(len(verified_cards(store, Mock(), items)[0]), 1)   # 기존 채팅은 그대로 뺀다
+        # 숨겨진 기사를 인용한 문장은 그 기사 내용이므로 안내 문구로 바꾼다. 문장 수는 verify 번호와 맞춰 그대로다
+        from backend.app.agents.runtime import redact_hidden_citations, HIDDEN_ARTICLE_SENTENCE
+        texts = ['숨긴 기사 내용 [1]', '보이는 기사 내용 [2]', '숫자만 있는 문장']
+        self.assertEqual(redact_hidden_citations(texts, cards), [HIDDEN_ARTICLE_SENTENCE, *texts[1:]])
+
+    def test_graph_cards_mark_corrected_articles_and_redact_their_citations(self):
+        # 검색 뒤 본문이 정정돼 인용 원문이 사라진 기사도 그 기사를 인용한 답변 문장을 가린다
+        from backend.app.api.chat_news import verified_cards
+        from backend.app.agents.runtime import redact_hidden_citations, HIDDEN_ARTICLE_SENTENCE
+        item = {'article_id': 1, 'source_code': 'KOTRA', 'external_id': '1', 'published_date': '2026-09-25',
+                'source_url': 'https://example.com', 'evidence_role': 'direct', 'reference_limitation': None,
+                'summary': [{'text': '수출이 늘었다', 'quotes': ['옛 원문'], 'unverified_question_parts': []}]}
+        store = Mock(); store.rows.return_value = [{'article_id': 1, 'source_code': 'KOTRA', 'external_id': '1',
+            'published_date': '2026-09-25', 'title': '정정된 기사', 'source_url': 'https://example.com', 'body_masked': '새 본문'}]
+        cards, _ = verified_cards(store, Mock(), [item], keep_missing=True)
+        self.assertTrue(cards[0]['evidence_changed'])
+        self.assertEqual(redact_hidden_citations(['수출이 늘었습니다 [1]'], cards), [HIDDEN_ARTICLE_SENTENCE])
+        self.assertNotIn('evidence_changed', verified_cards(store, Mock(), [item])[0][0])   # 기존 채팅은 그대로
+
+    def test_warm_index_returns_handle_when_probe_fails(self):
+        # 예열 시험 검색이 실패해도 빌린 핸들을 돌려줘야 새 세대가 열린 뒤 이전 세대가 닫힌다
+        from backend.app.agents import tools
+        snapshot = Mock(); snapshot.dimensions = 4
+        snapshot.collection.return_value.query.side_effect = RuntimeError('probe failed')
+        with patch('backend.app.services.rag.store.GenerationStore') as store, self.assertLogs(tools.__name__, 'WARNING'):
+            store.return_value.snapshot.return_value = snapshot
+            tools.warm_article_index().join(5)
+        snapshot.client.close.assert_called_once()
+
+    def test_search_budget_counts_filter_time(self):
+        # 공개·차단 필터 조회로 예산을 다 쓰면 RAG를 시작하지 않는다. 검색은 예약된 30초 안에서 끝나야 한다
+        import time
+        from backend.app.services.rag.runtime import RagDeadlineExceeded
+        with patch('backend.app.agents.tools.create_service') as service, self.assertRaises(RagDeadlineExceeded):
+            search_news(RagRequest.model_validate(request_payload('chat')), started=time.monotonic() - 31)
+        service.assert_not_called()
+
+    def test_shared_client_opens_outside_the_borrow_lock(self):
+        # 새 세대를 여는 수십 초 동안 다른 검색이 이미 열린 핸들을 빌릴 수 있어야 한다
+        from backend.app.services.rag import store as rag_store
+        held = []
+        def fake_open(path):
+            held.append(rag_store._shared_lock.locked()); return Mock(name=str(path))
+        with patch.object(rag_store, 'persistent_client', side_effect=fake_open), \
+             patch.dict(rag_store._shared_clients, clear=True), patch.object(rag_store, '_latest_shared', None):
+            rag_store.shared_client(Path('g1')).close()
+        self.assertEqual(held, [False])
 
     def test_latest_uses_live_gateway_and_published_originals_without_catalog(self):
         with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, NEWS_VECTOR_ROOT=root):

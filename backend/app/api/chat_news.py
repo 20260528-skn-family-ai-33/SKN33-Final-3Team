@@ -1,6 +1,7 @@
 """Convert a resolved chat question into cited article cards for the chat history."""
 from datetime import date
 import logging
+import time
 
 from pydantic import HttpUrl, TypeAdapter, ValidationError
 
@@ -47,8 +48,12 @@ def evidence_items(articles):
     return out
 
 
-def verified_cards(store, stmt, items):
-    """Rebuild cards from the current DB row: drop changed articles and quotes no longer in the body."""
+UNAVAILABLE_TITLE = '더 이상 볼 수 없는 기사'
+
+
+def verified_cards(store, stmt, items, *, keep_missing=False):
+    """Rebuild cards from the current DB row: drop changed articles and quotes no longer in the body.
+    keep_missing: 답변이 이미 [n] 번호로 인용한 목록이면 빠진 기사 자리에 제목 없는 카드를 남겨 번호를 지킨다(그래프 답변)."""
     table = store.t('article')
     rows = {r['article_id']: r for r in store.rows(stmt.where(
         table.c.article_id.in_([a['article_id'] for a in items])))} if items else {}
@@ -57,6 +62,12 @@ def verified_cards(store, stmt, items):
         row = rows.get(article['article_id'])
         if not row or (row['source_code'], row['external_id'], str(row['published_date'])[:10]) != (
                 article['source_code'], article['external_id'], article['published_date'][:10]):
+            if keep_missing:   # 숨겨졌거나 바뀐 기사의 제목·본문은 보이지 않는다
+                cards.append({'article_id': str(article['article_id']), 'source_code': article['source_code'],
+                              'title': UNAVAILABLE_TITLE, 'published_date': article['published_date'][:10],
+                              'source_url': None, 'summary': '', 'sentences': [], 'evidence_sufficient': False,
+                              'evidence_role': article['evidence_role'], 'reference_limitation': article['reference_limitation'],
+                              'unavailable': True})
             continue
         # v26 returns original body quotes, independent of mutable index headers.
         body = row['body_masked'] or ''
@@ -66,13 +77,16 @@ def verified_cards(store, stmt, items):
             if quotes and all(quotes):
                 sentences.append({'text': s['text'], 'quotes': quotes,
                                   'unverified_question_parts': s['unverified_question_parts']})
-        evidence_complete &= len(sentences) == len(article['summary'])
+        changed = len(sentences) != len(article['summary'])
+        evidence_complete &= not changed
         cards.append({'article_id': str(article['article_id']), 'source_code': row['source_code'],
                       'title': row['title'], 'published_date': row['published_date'],
                       'source_url': matching_url(row['source_url'], article['source_url']),
                       'summary': ' '.join(s['text'] for s in sentences), 'sentences': sentences,
                       'evidence_sufficient': bool(sentences), 'evidence_role': article['evidence_role'],
-                      'reference_limitation': article['reference_limitation']})
+                      'reference_limitation': article['reference_limitation'],
+                      # 검색 뒤 본문이 정정돼 인용 원문 일부가 사라졌다. 그래프 답변은 이 기사를 인용한 문장을 다시 쓰지 못하므로 가린다
+                      **({'evidence_changed': True} if keep_missing and changed else {})})
     return cards, evidence_complete
 
 
@@ -94,10 +108,11 @@ def article_answer(store, uid, job_id, question, conditions, warnings, latest):
 
     # Apply current visibility and user blocks before spending the candidate and
     # summary budgets. Country/product tags are not evidence of body relevance.
+    started = time.monotonic()   # 검색 마감은 필터 조회 시작부터 센다
     stmt, article_allowed = eligible_filter(store, uid, start, end)
 
     try:
-        response = tools.search_news(request, article_allowed=article_allowed)
+        response = tools.search_news(request, article_allowed=article_allowed, started=started)
     except Exception as exc:
         logging.getLogger(__name__).warning('article_search_unavailable type=%s', type(exc).__name__)
         response = None

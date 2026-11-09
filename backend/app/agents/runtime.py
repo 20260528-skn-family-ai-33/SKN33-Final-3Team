@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import logging
 import json
+import re
 from pydantic import ValidationError
 from sqlalchemy import select, update
 from openai import OpenAIError
@@ -52,12 +53,22 @@ def ml_queue_seconds(settings):
     return max(0.0, float(settings.get('API_ML_QUEUE_SECONDS', ML_QUEUE_SECONDS)))
 
 
+CITATION = re.compile(r'\[(\d+)\]')
+HIDDEN_ARTICLE_SENTENCE = '이 문장이 인용한 기사는 답변 뒤 공개 여부나 본문이 바뀌어 내용을 표시하지 않습니다.'
+
+
+def redact_hidden_citations(sentences, articles):
+    """숨겨진 기사(카드 unavailable)나 검색 뒤 본문이 정정된 기사(evidence_changed)를 [n]으로 인용한 문장을
+    안내 문구로 바꾼다. 번호는 카드 순서다. 문장 수는 그대로다. 정정 전 원문으로 쓴 문장을 그대로 보이지 않게 한다."""
+    hidden={str(n) for n,card in enumerate(articles,1) if card.get('unavailable') or card.get('evidence_changed')}
+    return [HIDDEN_ARTICLE_SENTENCE if hidden & set(CITATION.findall(s)) else s for s in sentences]
 
 
 def article_cards(store, state, result):
     """D-102: 결과 저장소의 인용 근거로 기존 채팅과 같은 기사 카드(요약·근거 보기·원문 링크)를 만든다.
     지금 DB 본문·공개 여부와 다시 대조한다. 근거가 만료됐거나 없으면 이전처럼 제목·날짜만 보인다."""
-    from backend.app.api.chat_news import eligible_filter, verified_cards
+    from backend.app.api import news
+    from backend.app.api.chat_news import verified_cards
     payload=None
     if result.result_id:
         try: payload=results.read_snapshot(store,state.input.user_id,result.result_id,'ARTICLES')
@@ -65,9 +76,10 @@ def article_cards(store, state, result):
             if exc.code!='RESULT_EXPIRED': raise
     if payload:
         period=result.article_period
-        stmt,_=eligible_filter(store,state.input.user_id,period.start,period.end)
-        # ponytail: 검색 뒤 숨겨진 기사는 카드에서 빠져 [n] 번호가 한 칸씩 당겨질 수 있다. 몇 초 사이라 드물다
-        return verified_cards(store,stmt,payload['articles'])[0]
+        # 카드는 저장된 기사 ID만 다시 대조한다. 기간 전체의 공개 기사 목록(eligible_filter)은 필요 없다
+        stmt=news.article_statement(store,state.input.user_id,start=period.start,end=period.end)
+        # compose는 digest 순서로 [n]을 붙였다. 검색 뒤 숨겨지거나 바뀐 기사도 자리를 남겨 번호가 다른 기사를 가리키지 않게 한다
+        return verified_cards(store,stmt,payload['articles'],keep_missing=True)[0]
     return [{'article_id':a['article_id'],'title':a['title'],'published_date':a['published_date'],'source_code':a['source_code']}
             for a in result.digest.get('items',[])]
 
@@ -270,12 +282,16 @@ class Services:
             from backend.app.agents.tools import article_result
             from backend.app.api.chat_news import eligible_filter
             period=task.conditions.article_period
-            with self.read_store() as store: _,allowed=eligible_filter(store,state.input.user_id,period.start,period.end)
             def keep(items):   # 인용 근거는 state·LLM 입력 밖 결과 저장소에 둔다(D-102)
                 return self.execution.transaction(lambda store,job:results.save_snapshot(
                     store,state.input.user_id,'ARTICLES',{'articles':items}))
-            return self.execution.call('news',budget.seconds(self.settings,'news'),
-                                       lambda _:article_result(state,task,step,article_allowed=allowed,keep_evidence=keep))
+            def search(_):
+                # 공개·차단 필터 조회도 기사 예산 안에서 한다. 검색 마감은 필터 조회 시작부터 센다(넓은 기간이면 이 조회도 오래 걸린다)
+                from time import monotonic
+                started=monotonic()
+                with self.read_store() as store: _,allowed=eligible_filter(store,state.input.user_id,period.start,period.end)
+                return article_result(state,task,step,article_allowed=allowed,keep_evidence=keep,started=started)
+            return self.execution.call('news',budget.seconds(self.settings,'news'),search)
         if step.tool=='query_market_model':
             from backend.app.agents.market import DEFAULT_MARKET_TOP, growth, loaded, model_codes, predict
             def model(timeout):
@@ -509,7 +525,18 @@ class Services:
                             if exc.code=='RESULT_EXPIRED': continue
                             raise
                         charts.append({**result.chart.model_dump(mode='json'),'full_labels':full})
-            checks=[{**c.model_dump(),'sentence':sentences[c.index]} for c in state.verification.checks]
+            # 검색 뒤 숨겨진 기사(카드 unavailable)를 [n]으로 인용한 문장은 그 기사 내용을 옮긴 것이므로 보이지 않는다.
+            # 문장 수·번호는 verify 대조(sentence_checks.index)와 맞춰야 해서 빼지 않고 안내 문구로 바꾼다
+            sentences=redact_hidden_citations(sentences,articles)
+            for item in tasks: item['conclusion']=redact_hidden_citations(item['conclusion'],articles)
+            if HIDDEN_ARTICLE_SENTENCE in sentences:
+                # 대화 요약·제목도 숨긴 기사 내용을 옮겼을 수 있다. 요약은 최근 대화(recent)로 다음 질문의 플래너와
+                # "아까 뭐라고 했지?" 답변(CONVERSATION)에 다시 쓰이므로 비운다. 최근 대화에는 질문과 조건만 남는다
+                state.draft=state.draft.model_copy(update={'turn_summary':'','title':None})
+            # 안내 문구로 바꾼 문장의 대조 결과에도 숨긴 기사에서 옮긴 숫자가 남지 않게 한다
+            checks=[{**c.model_dump(),'sentence':sentences[c.index],
+                     **({'numbers':[]} if sentences[c.index]==HIDDEN_ARTICLE_SENTENCE else {})}
+                    for c in state.verification.checks]
             answer={'intent':primary.intent,'answer_status':overall,'text':'\n'.join(sentences),'tasks':tasks,
                 'conditions':tasks[0]['conditions'],'tables':tables,'charts':charts,'articles':articles, 'actions':[],
                 'chart_selectors':[],'report_id':None,'verification':{'status':state.verification.status,

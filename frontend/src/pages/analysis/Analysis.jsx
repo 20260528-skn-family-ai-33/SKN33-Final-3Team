@@ -253,8 +253,9 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
       {article.sentences?.length ? article.sentences.map((s, i) => <details key={i}>
         <summary>{s.text} · 근거 보기</summary>
         {s.quotes.map((quote, j) => <blockquote key={j}>{quote}</blockquote>)}
-      </details>) : (article.summary || article.evidence_sufficient === false) && <p>{article.summary || (a.order_by === 'published_date_desc' ? '발행일 기준 최신 기사' : '본문 근거 부족')}</p>}
-      <Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn>
+      </details>) : (article.summary || article.evidence_sufficient === false) && <p>{article.summary || (article.unavailable ? '답변 뒤 공개가 바뀌어 볼 수 없는 기사입니다.' : a.order_by === 'published_date_desc' ? '발행일 기준 최신 기사' : '본문 근거 부족')}</p>}
+      {/* unavailable: 검색 뒤 숨겨진 기사. [n] 번호만 지키려고 남긴 자리라 상세로 가지 않는다(D-102) */}
+      {!article.unavailable && <Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn>}
       {/^https?:\/\//i.test(article.source_url || '') && <a href={article.source_url} target="_blank" rel="noreferrer">원문 보기</a>}
     </div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>

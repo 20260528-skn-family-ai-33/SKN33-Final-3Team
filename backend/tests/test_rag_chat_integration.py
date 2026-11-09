@@ -178,7 +178,9 @@ class ChatRagIntegrationTest(unittest.TestCase):
                     self.assertEqual(deadline, 30)
                     return ExecutionContext(deadline, clock=lambda: now[0], **kwargs)
 
+                # 검색 마감은 chat_news가 필터 조회 전에 잰 시각부터 센다. 두 곳 모두 같은 시험 시계를 쓴다
                 with patch('backend.app.agents.tools.time') as timer, \
+                     patch('backend.app.api.chat_news.time', timer), \
                      patch('backend.app.agents.tools.ExecutionContext', side_effect=context_with_test_clock), \
                      patch.object(service.gateway, 'summarize', side_effect=timed_summary):
                     timer.monotonic.return_value = 0.
