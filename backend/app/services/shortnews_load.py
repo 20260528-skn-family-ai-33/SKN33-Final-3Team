@@ -7,7 +7,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from backend.app.services.news_load import html_to_text, mask, plain_title
+from backend.app.services.news_load import html_to_text, plain_title
 from backend.app.services.news_keywords.rule_data import GEO_DICT
 
 SOURCE_CODE = "KOTRA_SHORT_NEWS"
@@ -61,6 +61,11 @@ def published_date(value):
     return date.fromisoformat(value[:10])
 
 
+def mask_shortnews(body):
+    from backend.app.services.news_privacy import mask_article_contacts
+    return mask_article_contacts(body)
+
+
 def article_row(raw):
     # plain_title은 600자로 자르므로 정제 후 길이는 먼저 별도로 검증합니다.
     original_title = text(raw.get("nttSj"))
@@ -77,7 +82,7 @@ def article_row(raw):
             raise ValueError(f"{name}이 ERD 길이 {limit}자를 초과합니다")
     return {"source_code": SOURCE_CODE, "external_id": article_id(raw.get("nttSn")),
             "title": title, "published_date": published_date(raw.get("othbcDt")),
-            "source_url": url, "body_masked": mask(body),
+            "source_url": url, "body_masked": mask_shortnews(body),
             "category": None}  # regn은 지역이고 기사 분야가 아니므로 category로 넣지 않습니다.
 
 
