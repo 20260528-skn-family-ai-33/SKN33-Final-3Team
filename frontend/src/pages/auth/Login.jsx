@@ -59,6 +59,8 @@ export default function Login() {
           <Link to="/find-id" style={{ color: 'var(--sub)', fontWeight: 700 }}>가입 여부 확인</Link>
           <span style={{ width: 1, height: 12, background: '#CDD1D8' }} />
           <Link to="/find-password" style={{ color: 'var(--sub)', fontWeight: 700 }}>비밀번호 찾기</Link>
+          <span style={{ width: 1, height: 12, background: '#CDD1D8' }} />
+          <Link to="/signup" style={{ color: 'var(--red-d)', fontWeight: 700 }}>회원가입</Link>
         </div>
         <div style={{ marginTop: 22 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -77,11 +79,8 @@ export default function Login() {
           </div>
         </div>
         <p className="note" style={{ marginTop: 16 }}>로그인 후 서비스를 이용할 수 있습니다.</p>
-        <p style={{ marginTop: 10 }}>
-          <Link to="/signup" style={{ fontSize: 14, fontWeight: 700, color: 'var(--red-d)', textDecoration: 'underline', textUnderlineOffset: 3 }}>아직 계정이 없으신가요?</Link>
-        </p>
         <div style={{ marginTop: 28, background: 'var(--bg)', borderRadius: 12, padding: '14px 16px' }}>
-          <p className="note">가입한 이메일 계정으로 로그인하세요. 관리자 계정은 운영 담당자가 발급합니다.</p>
+          <p className="note">가입한 이메일의 대소문자를 정확히 입력해 주세요. 관리자 계정은 운영 담당자가 발급합니다.</p>
         </div>
       </form>
     </AuthFrame>

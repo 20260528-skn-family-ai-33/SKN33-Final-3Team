@@ -39,18 +39,23 @@ def user_view(store, user):
 def get_user(store, user_id=None, email=None, lock=False):
     u=store.t('users')
     stmt=select(u)
-    stmt=stmt.where(u.c.user_id==user_id) if user_id is not None else stmt.where(u.c.email==email)
+    stmt=stmt.where(u.c.user_id==user_id) if user_id is not None else stmt.where(email_equals(store,u.c.email,email))
     return store.one(stmt.with_for_update() if lock else stmt)
 
 
+def email_equals(store, column, email):
+    # Explicit comparison also protects logins before the unique index migration.
+    collation = 'utf8mb4_bin' if store.c.dialect.name == 'mysql' else 'BINARY'
+    return column.collate(collation) == email
+
+
 def signup(store, data, response, settings):
-    email=str(data.email).strip().lower()
-    require(email!='admin@example.com','사전 관리 계정은 공개 가입할 수 없습니다.','RESERVED_ACCOUNT',403)
+    email=str(data.email).strip()
+    require(email.casefold()!='admin@example.com','사전 관리 계정은 공개 가입할 수 없습니다.','RESERVED_ACCOUNT',403)
     hashed=password_hash(data.password,data.password_confirm)
     # 추가 저장소의 존재를 먼저 확인하여 가입이 일부만 기록되는 것을 방지한다.
     for name in ('users','notification_setting'): store.t(name)
-    u=store.t('users')
-    if store.c.scalar(select(u.c.user_id).where(u.c.email==email)):
+    if get_user(store,email=email):
         raise ApiError(409,'EMAIL_ALREADY_EXISTS','이미 등록된 이메일입니다.')
     uid=store.insert('users',email=email,password_hash=hashed,landing_page='GLOBAL',
         name=data.name,role='USER',account_status='ACTIVE',created_at=now())
@@ -60,7 +65,7 @@ def signup(store, data, response, settings):
 
 
 def login(store, data, response, settings):
-    user=get_user(store,email=str(data.email).strip().lower(),lock=True)
+    user=get_user(store,email=str(data.email).strip(),lock=True)
     if not user or not password_matches(data.password,user['password_hash']):
         raise ApiError(401,'INVALID_CREDENTIALS','이메일 또는 비밀번호가 일치하지 않습니다.')
     require(user['account_status']=='ACTIVE','이용이 제한되거나 탈퇴한 계정입니다.','ACCOUNT_UNAVAILABLE',403)
@@ -89,7 +94,7 @@ def save_interests(store, uid, data):
 def change_password(store, user, data):
     # 임시 비밀번호 재발급과 같은 사용자 행 잠금을 사용한다.
     user=get_user(store,user_id=user['user_id'],lock=True)
-    require(str(data.email).lower()==user['email'].lower() and password_matches(data.current_password,user['password_hash']),
+    require(str(data.email).strip()==user['email'] and password_matches(data.current_password,user['password_hash']),
             '현재 비밀번호가 일치하지 않습니다.','CURRENT_PASSWORD_INVALID',403)
     hashed=password_hash(data.new_password,data.new_password_confirm)
     u=store.t('users')

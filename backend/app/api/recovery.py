@@ -9,31 +9,31 @@ import string
 from pathlib import Path
 
 import bcrypt
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import update
 
 from backend.app.api import accounts
 from backend.app.api.common import ApiError, require
 from backend.app.api.security import revoke_sessions, hash_token
 from backend.app.api.database import Store
+from backend.app.api.schemas import AccountEmail
 
 
 class RecoveryIdentity(BaseModel):
     name: str = Field(min_length=1, max_length=120)
-    email: EmailStr
+    email: AccountEmail
 
 
 def identity(data):
     value = RecoveryIdentity.model_validate(data)
     require(bool(value.name.strip()), '이름을 입력해 주세요.')
-    return value.name.strip(), str(value.email).strip().lower()
+    return value.name.strip(), str(value.email).strip()
 
 
 def matches(user, name, email):
-    # users.email의 MySQL ai_ci 비교는 악센트가 다른 주소도 같은 계정으로 찾는다.
-    # 요청 제한 키·수신 주소와 동일한 정규화만 허용하고 DB 비교 결과를 다시 확인한다.
+    # 계정 식별은 대소문자까지 일치해야 한다. DB 조회 결과도 다시 확인한다.
     return bool(user and user['account_status'] != 'WITHDRAWN'
-                and (user['name'] or '').strip() == name and user['email'].strip().lower() == email)
+                and (user['name'] or '').strip() == name and user['email'] == email)
 
 
 def confirm_account(store, data):
@@ -48,7 +48,8 @@ def limit_request(database, data, settings):
     cooldown = int(settings.get('API_RECOVERY_COOLDOWN_SECONDS', 600))
     maximum = int(settings.get('API_RECOVERY_DAILY_MAX', 5))
     require(cooldown > 0 and maximum > 0, '계정 복구 요청 제한 설정을 확인하세요.', 'RECOVERY_NOT_CONFIGURED', 503)
-    database.redis.limit_recovery(hash_token(email), cooldown, maximum)
+    # 대소문자가 다른 계정도 같은 메일함으로 전달될 수 있어 남용 제한은 공유한다.
+    database.redis.limit_recovery(hash_token(email.casefold()), cooldown, maximum)
 
 
 def temporary_password():

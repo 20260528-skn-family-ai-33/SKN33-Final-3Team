@@ -75,6 +75,34 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/articles?page=1&page=2').status_code,400)
         self.assertEqual(self.client.get('/api/v1/notifications?unread_only=no').status_code,400)
 
+    def test_email_case_distinguishes_signup_login_and_account_verification(self):
+        accounts = []
+        for index, email in enumerate(('alice@example.org', 'Alice@example.org', 'Alice@Example.org')):
+            password = f'Sample!12{index}'
+            body = {'name': '홍길동', 'email': ' ' + email + ' ', 'password': password, 'password_confirm': password}
+            response = self.client.post('/api/v1/auth/signup', json=body)
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.json()['user']['email'], email)
+            accounts.append((email, password, response.json()['user']['user_id']))
+            self.assertEqual(self.client.post('/api/v1/auth/signup', json=body).status_code, 409)
+        self.assertEqual(len({uid for _, _, uid in accounts}), 3)
+        for email, password, uid in accounts:
+            login = self.client.post('/api/v1/auth/login', json={'email': email, 'password': password})
+            self.assertEqual(login.status_code, 200, login.text)
+            self.assertEqual(login.json()['user']['user_id'], uid)
+        for email, password in [('ALICE@example.org', 'Sample!120'), ('Alice@example.org', 'Sample!120')]:
+            response = self.client.post('/api/v1/auth/login', json={'email': email, 'password': password})
+            self.assertEqual(response.status_code, 401, response.text)
+
+    def test_password_change_requires_case_exact_email(self):
+        self.signup('Alice@Example.org')
+        self.assertFalse(self.post('users/me/email-check', {'email': 'alice@example.org'}).json()['matches'])
+        self.assertTrue(self.post('users/me/email-check', {'email': ' Alice@Example.org '}).json()['matches'])
+        body = {'email': 'alice@example.org', 'current_password': 'Sample!123',
+                'new_password': 'Changed!456', 'new_password_confirm': 'Changed!456'}
+        self.assertEqual(self.post('users/me/password', body).status_code, 403)
+        self.assertEqual(self.post('users/me/password', {**body, 'email': 'Alice@Example.org'}).status_code, 204)
+
     def test_interest_version_and_hs_depth(self):
         self.signup(); url='/api/v1/users/me/interests'
         version=self.client.get(url).json()['interests']['version']
