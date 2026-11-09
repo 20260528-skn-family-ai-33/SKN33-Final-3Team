@@ -1171,6 +1171,26 @@ class BackendApiTest(unittest.TestCase):
         with self.engine.begin() as c:
             self.assertEqual(str(jobs.claim(Store(self.app.state.database,c))['job_id']),jid2)
 
+    def test_worker_claims_only_agent_jobs_from_its_own_redis(self):
+        # D-106: 같은 RDS를 쓰는 다른 환경(배포 서버)의 작업은 체크포인트가 그쪽 Redis에 있어 가져가면 안 된다.
+        uid=self.signup(); db=self.app.state.database
+        mine=jobs.queue_id(db); self.assertEqual(jobs.queue_id(db),mine)
+        rows=[]
+        for queue,version in (('other-redis',jobs.AGENT_QUEUE_VERSION),(None,2),(mine,jobs.AGENT_QUEUE_VERSION)):
+            sid=self.post('chat/sessions',{}).json()['session']['session_id']
+            state=jobs._initial(uid,'API_CHAT',sid,{'question':'q'},f'k-{version}-{queue}')
+            state.update(version=version,agent={},**({'queue':queue} if queue else {}))
+            rows.append({'session_id':int(sid),'role':'USER','content_masked':'q','created_at':now(),
+                         'result_json':{'schema_version':1,jobs.EXECUTION:state}})
+        with self.engine.begin() as c:
+            ids=[c.execute(self.meta.tables['chat_message'].insert(),row).inserted_primary_key[0] for row in rows]
+        with self.engine.begin() as c:
+            self.assertEqual(jobs.claim(Store(db,c))['job_id'],ids[2])
+        with self.engine.begin() as c:
+            self.assertIsNone(jobs.claim(Store(db,c)))
+        job={}; jobs.mark_agent(job,db)
+        self.assertEqual(job,{'version':jobs.AGENT_QUEUE_VERSION,'queue':mine})
+
     def test_worker_claims_report_past_history_and_future_retries(self):
         self.signup(); rid=self.queued_report('history-report')
         t=self.meta.tables['report']

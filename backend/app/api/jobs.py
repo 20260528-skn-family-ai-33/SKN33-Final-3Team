@@ -3,11 +3,13 @@ import os
 import socket
 from datetime import datetime, timedelta
 from sqlalchemy import select, update, and_, or_
-from backend.app.api.common import now, digest, require, clean
+from backend.app.api.common import ApiError, now, digest, require, clean
 
 EXECUTION = '_execution'
 # Deployed v1 workers filter on version == 1 before claiming or reclaiming.
-AGENT_QUEUE_VERSION = 2
+# 3: 작업마다 만든 Redis의 queue_id를 붙인다(D-106). 2까지만 아는 배포 워커는 3을 가져가지 않는다.
+AGENT_QUEUE_VERSION = 3
+_KNOWN_CHAT_VERSIONS = (1, 2, AGENT_QUEUE_VERSION)  # 2는 지난 기록 조회용. 새로 가져가지는 않는다
 REPORT_QUEUE_VERSION = 2  # Legacy workers only claim report protocol 1.
 
 
@@ -20,8 +22,22 @@ def _initial(uid, kind, target, payload, key):
 
 def _chat_job(row):
     state=(row['result_json'] or {}).get(EXECUTION)
-    if not state or state.get('version') not in (1, AGENT_QUEUE_VERSION): return None
+    if not state or state.get('version') not in _KNOWN_CHAT_VERSIONS: return None
     return {**state,'job_id':row['message_id']}
+
+
+def queue_id(db):
+    """이 프로세스가 쓰는 Redis의 ID. 체크포인트가 Redis에 있으므로 같은 Redis를 쓰는 워커만 작업을 이어 갈 수 있다(D-106)."""
+    if not getattr(db,'job_queue_id',None):
+        from backend.app.api.redis_store import RedisState
+        db.job_queue_id=(getattr(db,'redis',None) or RedisState(db.settings)).queue_id()
+    return db.job_queue_id
+
+
+def mark_agent(job, db):
+    """에이전트 대기열에 넣는다. 같은 RDS를 쓰는 다른 환경(배포 서버 등)의 워커가 가져가지 않게 Redis ID를 붙인다(D-106)."""
+    job['version']=AGENT_QUEUE_VERSION
+    job['queue']=queue_id(db)
 
 
 def remember_prompt(job, prompt, answer=None):
@@ -147,8 +163,12 @@ def claim(store):
     cursors=getattr(store.db,'job_scan_cursors',{})
     size=getattr(store.db,'job_scan_size',100)
     state=m.c.result_json[EXECUTION]
-    pending_stmt=select(m.c.message_id,m.c.session_id,m.c.created_at).where(m.c.role=='USER',
-        state['version'].as_integer().in_((1, AGENT_QUEUE_VERSION)),or_(
+    # Redis를 못 읽으면 에이전트 작업만 건너뛴다(체크포인트도 못 쓴다). 리포트·단순 채팅은 계속 가져간다.
+    try: queue=queue_id(store.db)
+    except ApiError: queue=None
+    versions=state['version'].as_integer()==1
+    if queue: versions=or_(versions,and_(state['version'].as_integer()==AGENT_QUEUE_VERSION,state['queue'].as_string()==queue))
+    pending_stmt=select(m.c.message_id,m.c.session_id,m.c.created_at).where(m.c.role=='USER',versions,or_(
             and_(state['status'].as_string()=='QUEUED',state['available_at'].as_string()<=moment),
             and_(state['status'].as_string()=='RUNNING',state['lease_expires_at'].as_string()<moment)))
     execution=r.c.content_json[EXECUTION]

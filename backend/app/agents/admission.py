@@ -63,7 +63,7 @@ def accept(store,uid,session,question,key):
     job['payload_json']['input']=AgentInput(job_id=jid,session_id=str(sid),user_id=uid,question=question,context=cached,
         interests={k:saved[k] for k in ('hs_items','country_codes')},first_question=latest is None,received_at=now()).model_dump(mode='json')
     job['agent']=budget.new_round(uuid4().hex,0)
-    job['version']=jobs.AGENT_QUEUE_VERSION
+    jobs.mark_agent(job,store.db)
     jobs._save_chat(store,job)
     def lookup(owner):
         row=store.one(select(table).where(table.c.session_id==sid,table.c.message_id==owner,table.c.role=='USER'))
@@ -125,7 +125,7 @@ def resume(store,job,data,client_key=None):
     if job['agent'].get('progress'):
         ledger['progress']={**job['agent']['progress'],'label':'분석 재개 대기'}
     job.update(agent=ledger,status='QUEUED',available_at=now().isoformat(),round_attempt=0,lease_expires_at=None,result_json={})
-    job['version']=jobs.AGENT_QUEUE_VERSION
+    jobs.mark_agent(job,store.db)
     job['payload_json'].update(resume=data,accepted_clarifications={**prior,identity:signature})
     if client_key:
         job['payload_json'].setdefault('direct_message_keys',{})[digest([job['subject_user_id'],client_key])]=digest(data.get('text',''))
