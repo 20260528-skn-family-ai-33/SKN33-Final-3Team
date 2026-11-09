@@ -2,6 +2,18 @@
 
 평가일: 2026-11-09 (KST) · 관련 이슈 #82
 
+## 평가 구성 (팀 SQL·Visualization 평가와 같은 3단계)
+
+| 단계 | 문서 | 대상 | LLM | 결과 |
+|---|---|---|---|---|
+| ① 오프라인 회귀 | 이 문서 | 승인·접수·대기·완료·리포트 파일(설계 계약 22사례) | Mock | 작업 전 19/22 → 현재 22/22 |
+| ② 실제 호출 | [REPORT_AGENT_LIVE_EVALUATION.md](REPORT_AGENT_LIVE_EVALUATION.md) | 리포트 요청 이해(플래너) 32문항 | 실제 OpenAI | 1판 18/32, 정답 수정 재채점 23/32(개발 세트) |
+| ③ Holdout | [REPORT_AGENT_HOLDOUT_EVALUATION.md](REPORT_AGENT_HOLDOUT_EVALUATION.md) | 새 질문 24문항, 코드 고정 뒤 한 번만 | 실제 OpenAI | 21/24 |
+
+②·③의 정답은 AI 초안이며 사람 검토 대기 중이다. 평가기 자체도 테스트한다:
+`backend/tests/test_agent_report_evaluation.py`(점수가 실패·오류·건너뜀을 숨기지 않음, 줄바꿈과 무관한 해시, 커밋하지 않은 변경 표시, 사례 등록표,
+외부 네트워크 차단)와 `backend/tests/test_agent_report_live_evaluation.py`(실제 호출 평가의 채점, 정답을 모델에 보내지 않음, 비용 상한, 질문 변경·holdout 재실행 거부).
+
 ## 목적과 평가 범위
 
 채팅 에이전트의 Report Agent가 설계(`docs/AGENT_DESIGN.md` D-76·D-81·D-90·D-92·D-93·D-96·D-97, §14.6)대로
@@ -112,7 +124,7 @@ cd frontend; node tests/report-view-browser.cjs
 - [현재 결과 JSON](evaluations/report_agent_current.json)
 - [작업 전 결과 JSON](evaluations/report_agent_before.json)
 
-각 파일에는 평가 시각, Git 기준, Python·패키지 버전, 운영 모듈·테스트·fixture의 SHA256, 사례별 상태와 실패 내역이 있다.
+각 파일에는 평가 시각, Git 기준과 커밋하지 않은 변경 여부(source_dirty·harness_dirty), Python·패키지 버전, 운영 모듈·테스트·fixture의 SHA256(CRLF를 LF로 바꾼 뒤 계산), 사례별 상태와 실패 내역이 있다.
 
 ## 미평가 및 후속 항목
 
