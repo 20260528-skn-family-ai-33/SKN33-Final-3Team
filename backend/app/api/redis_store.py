@@ -70,8 +70,9 @@ class RedisState:
         """이 Redis 한 대를 가리키는 고정 ID(D-106). 처음 부른 프로세스가 만들고, 다른 프로세스는 같은 값을 읽는다.
         TTL이 없어 Redis를 비우거나 새로 띄우면 바뀌는데, 그때는 체크포인트도 함께 사라지므로 옛 작업을 못 가져가는 편이 맞다."""
         key = self.prefix + 'job_queue_id'
-        self.call('set', key, secrets.token_hex(16), nx=True)
-        return self.call('get', key)
+        token = secrets.token_hex(16)
+        # SET NX GET(Redis 7+, 에이전트는 Redis 8 필요 D-07): 있으면 기존 값, 없으면 None을 돌려줘 한 번에 끝난다
+        return self.call('set', key, token, nx=True, get=True) or token
 
     def chat_context(self, session_id, *, refresh=False):
         from backend.app.agents.state import CONTEXT_KEY, CONTEXT_TTL_SECONDS

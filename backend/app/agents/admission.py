@@ -1,5 +1,5 @@
 """Agent API admission under the already-held MySQL session lock."""
-from datetime import timezone
+from datetime import datetime, timezone
 from uuid import uuid4
 from contextlib import contextmanager
 from sqlalchemy import select
@@ -15,6 +15,8 @@ from backend.app.agents.worker import checkpointer
 from backend.app.api import jobs,accounts
 from backend.app.api.chat import view_job
 from backend.app.api.common import now,mask_text,require,digest
+
+OTHER_QUEUE_MESSAGE='이 질문은 다른 서버 환경에서 처리 중입니다. 처음 질문한 환경에서 답해 주세요.'
 
 
 @contextmanager
@@ -47,8 +49,13 @@ def accept(store,uid,session,question,key):
     active=jobs._active_chat(store,sid)
     if active:
         current=jobs.owned_job(store,uid,active,lock=True)
-        if current['status']=='NEEDS_INPUT' and pending_state(store,current) is None:
+        foreign=not jobs.same_queue(current,store.db)
+        if foreign and jobs.abandoned(current,store.db):
+            expire(store,current)   # 다른 환경(또는 초기화 전 Redis)의 작업이 유예 시간 넘게 멈춰 있다. 실행하지 않고 풀어 준다
+        elif current['status']=='NEEDS_INPUT' and wait_expired(store,current,foreign=foreign):
             expire(store,current)
+        elif foreign:
+            require(False,OTHER_QUEUE_MESSAGE,'JOB_IN_OTHER_ENVIRONMENT',409)
         elif current['status']=='NEEDS_INPUT':
             prompt=current['result_json']['clarification']
             return resume(store,current,{'clarification_id':prompt['clarification_id'],'text':question},client_key=key)
@@ -84,6 +91,24 @@ def pending_state(store,job):
     return state if (now()-asked).total_seconds()<WAITING_TTL_SECONDS else None
 
 
+def wait_expired(store,job,*,foreign=None):
+    """되묻기가 끝났는지(만료 처리 대상). 다른 Redis가 만든 되묻기는 여기서 체크포인트가 안 보이므로
+    저장된 만료 시각으로만 판단한다. 체크포인트로 판단하면 그쪽의 유효한 되묻기를 지운다(D-106).
+    접수·되묻기 답·상태 조회가 모두 이 함수로 판단한다. foreign: 호출한 쪽이 이미 구한 값(Redis를 다시 읽지 않는다)."""
+    if foreign is None: foreign=not jobs.same_queue(job,store.db)
+    if foreign: return not foreign_waiting(job)
+    return pending_state(store,job) is None
+
+
+def foreign_waiting(job):
+    """다른 Redis가 만든 되묻기가 아직 유효한지. 저장된 clarification.expires_at(asked_at + 30분)으로만 판단한다."""
+    expires=((job.get('result_json') or {}).get('clarification') or {}).get('expires_at')
+    if not expires: return False
+    at=datetime.fromisoformat(expires)
+    if at.tzinfo: at=at.astimezone(timezone.utc).replace(tzinfo=None)
+    return now()<at
+
+
 def expire(store,job):
     job.update(status='EXPIRED',result_json={'step':'DONE'},finished_at=now().isoformat())
     jobs._save_chat(store,job)
@@ -102,7 +127,12 @@ def resume(store,job,data,client_key=None):
         return {'job':view_job(job)}
     require(job['status']!='EXPIRED','시간이 지나 다시 질문해 주세요.','CLARIFICATION_EXPIRED',409)
     require(job['status']=='NEEDS_INPUT','현재 되묻기와 일치하지 않습니다.','CLARIFICATION_CONFLICT',409)
-    state=pending_state(store,job)
+    # 다른 Redis(다른 환경)가 만든 작업은 여기서 체크포인트가 안 보인다. 만료로 처리하면 그쪽의 유효한 되묻기를 지운다(D-106)
+    if not jobs.same_queue(job,store.db):
+        require(not foreign_waiting(job),OTHER_QUEUE_MESSAGE,'JOB_IN_OTHER_ENVIRONMENT',409)
+        state=None   # 만료 시각이 지났다. 아래에서 만료로 처리해 대화방을 풀어 준다
+    else:
+        state=pending_state(store,job)
     if state is None:
         expire(store,job)
         # Return the error as a response so expiration commits with the request.
