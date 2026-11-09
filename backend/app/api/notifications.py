@@ -298,20 +298,38 @@ def read_all(store,uid,through,kind):
     return {'updated_count':count,'unread_count':unread_count(store,uid)}
 
 
+POPUP_RESERVATION_SECONDS=300  # 팝업 전달 ID 유효시간 = 예약 시간. 확인(ack) 없이 창이 닫히면 이 시간이 지난 뒤 다시 전달한다.
+
+
+def reserved_alerts(store,uid):
+    """아직 확인되지 않았고 예약 시간이 남은 팝업 전달에 들어 있는 회원 알림 ID.
+    잠금 읽기로 다른 창이 방금 커밋한 예약까지 본다(MySQL 반복 읽기는 일반 SELECT에 이 요청의 첫 읽기 시점 스냅숏을 쓴다)."""
+    s=store.t('api_snapshot')
+    rows=store.c.execute(select(s.c.payload_json).where(s.c.user_id==uid,s.c.kind=='DELIVERY',s.c.expires_at>now())
+                         .with_for_update()).scalars()
+    return {int(i) for payload in rows for i in (payload or {}).get('ids',[])}
+
+
 def popups(store,uid):
     conf=settings(store,uid)
     kinds=popup_kinds(conf)
     if not kinds:
         return {'groups':[],'next_cursor':None,'retry_after_seconds':30}
     u,e=store.t('user_alert'),store.t('alert_event')
+    # 같은 회원의 두 창이 동시에 조회해도 한 알림은 한 창에만 발급한다. 회원 행을 잠가 예약 확인·등록을 한 번에 하나씩 한다.
+    users=store.t('users')
+    store.c.execute(select(users.c.user_id).where(users.c.user_id==uid).with_for_update()).first()
+    reserved=reserved_alerts(store,uid)
     rows=store.rows(notification_statement(store,uid).where(u.c.popup_shown_at.is_(None),u.c.read_at.is_(None),e.c.event_type.in_(sorted(kinds)))
                     .order_by(u.c.created_at.desc(),u.c.user_alert_id.desc()).limit(100)); grouped={}
+    rows=[r for r in rows if int(r['user_alert_id']) not in reserved]
     for r in rows:
         flag='report_popup' if r['event_type']=='REPORT' else 'major_issue_popup' if r['event_type']=='MAJOR_ISSUE' else 'spike_popup'
         if r['popup_shown_at'] is None and conf[flag]: grouped.setdefault(r['event_type'],[]).append(r)
     groups=[]
-    for kind,rs in grouped.items():
-        identity=save_snapshot(store,uid,'DELIVERY',{'ids':[str(r['user_alert_id']) for r in rs]},300)
+    # 화면은 한 번에 한 묶음만 표시한다(NotificationPopups). 표시할 묶음만 예약하고 나머지 종류는 다음 조회에서 발급한다.
+    for kind,rs in list(grouped.items())[:1]:
+        identity=save_snapshot(store,uid,'DELIVERY',{'ids':[str(r['user_alert_id']) for r in rs]},POPUP_RESERVATION_SECONDS)
         groups.append({'delivery_id':identity,'event_type':kind,'notifications':notification_views(store,rs,uid),'created_at':now()})
     return {'groups':groups,'next_cursor':None,'retry_after_seconds':30}
 

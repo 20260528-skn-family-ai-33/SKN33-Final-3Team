@@ -25,6 +25,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from backend.app.api.common import digest, now
 from backend.app.api.database import Database, Store
@@ -125,15 +126,33 @@ def _articles(store, condition, sources, start, end):
     return [int(row[0]) for row in store.c.execute(stmt)]
 
 
+def _register(store, key, article_id, payload):
+    """사건 키를 원자적으로 등록합니다. 새로 등록했으면 사건 ID, 다른 작업이 먼저 등록했으면 None.
+
+    정기 판정과 수동 재실행이 같은 기준일을 함께 판정하면 둘 다 '없음'을 확인한 뒤 저장할 수 있습니다. 고유 제약(uq_event_key)이
+    늦은 쪽을 막으므로, 그 저장만 세이브포인트로 되돌리고 판정 작업 전체는 계속합니다. 사건 키 중복이 아닌 오류는 그대로 올립니다."""
+    events = store.t("alert_event")
+    try:
+        with store.c.begin_nested():
+            return store.insert("alert_event", event_type="MAJOR_ISSUE", article_id=article_id, event_key=key,
+                                payload_json={"schema_version": 1, **payload}, created_at=now())
+    except IntegrityError:
+        # 잠금 읽기로 다른 작업이 커밋한 최신 행을 본다(MySQL 반복 읽기의 이전 스냅샷이 아니라).
+        if store.c.scalar(select(events.c.event_id).where(events.c.event_key == key).with_for_update()) is None:
+            raise
+        return None
+
+
 def _save(store, key_parts, article_id, payload):
-    """사건을 한 번만 저장하고 전달합니다. (새 사건 여부, 전달 건수)"""
+    """사건을 한 번만 저장하고 전달합니다. (새 사건 여부, 전달 건수). 새로 등록한 작업만 회원 알림을 전달합니다."""
     events = store.t("alert_event")
     key = digest(["MAJOR_ISSUE", *key_parts])
-    identity = store.c.scalar(select(events.c.event_id).where(events.c.event_key == key))
-    if identity is not None:
+    if store.c.scalar(select(events.c.event_id).where(events.c.event_key == key)) is not None:
         return False, 0  # 저장과 전달은 한 트랜잭션이므로 이미 있는 사건은 전달도 끝났습니다. 나중에 알림을 켠 회원에게 다시 보내지 않습니다.
-    identity = store.insert("alert_event", event_type="MAJOR_ISSUE", article_id=article_id, event_key=key,
-                            payload_json={"schema_version": 1, **payload}, created_at=now())
+    identity = _register(store, key, article_id, payload)
+    if identity is None:
+        log.info("major_issue_already_registered key=%s", key)
+        return False, 0
     return True, deliver_event(store, identity)
 
 
