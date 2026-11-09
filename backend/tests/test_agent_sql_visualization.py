@@ -134,6 +134,25 @@ class ChartContractTest(unittest.TestCase):
         self.assertIn('CN', names[0])
         self.assertIn('US', names[1])
 
+    def test_stored_chart_calendar_limits_and_missing_months(self):
+        # Exercise the public entry point so historical implementations use the same input contract.
+        for size, expected in ((60, 'MONTH'), (61, 'QUARTER'), (180, 'QUARTER'),
+                               (181, 'YEAR'), (720, 'YEAR'), (732, None)):
+            with self.subTest(size=size):
+                start = date(2000, 1, 1)
+                end = shift_month(start, size - 1)
+                calendar = [shift_month(start, i).strftime('%Y-%m') for i in range(size)]
+                rows = trend('US', {month: 1 for i, month in enumerate(calendar) if i != 1})
+                current = task(period={'start': start, 'end': end})
+                result, _, warnings = chart('TREND', rows, current=current)
+                if expected is None:
+                    self.assertIsNone(result.chart)
+                    self.assertTrue(warnings)
+                else:
+                    self.assertEqual(result.chart.granularity, expected)
+                    self.assertLessEqual(len(result.chart.labels), 60)
+                    self.assertIsNone(result.chart.series[0].values[1 if expected == 'MONTH' else 0])
+
     def test_comparison_quarters_preserve_missing_values_in_each_period(self):
         calendar = [shift_month(date(2020, 1, 1), i).strftime('%Y-%m') for i in range(61)]
         rows = trend('US', {month: None if i == 1 else 1 for i, month in enumerate(calendar)})
