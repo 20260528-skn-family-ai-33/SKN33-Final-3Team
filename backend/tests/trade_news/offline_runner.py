@@ -3,6 +3,7 @@ import json
 import base64
 import os
 import socket
+import sys
 import time
 from pathlib import Path
 
@@ -18,7 +19,17 @@ def deny(*args, **kwargs):
         f.write(repr(args) + "\n")
     raise AssertionError("외부 네트워크 연결 금지")
 
-# Scrapy를 불러오기 전부터 DNS와 TCP 연결을 막음
+# Windows reactor의 자체 wake-up 소켓만 네트워크 차단 전에 생성합니다.
+# 실제 HTTP 요청은 아래 핸들러로 대체되며 DNS/TCP 차단은 그대로 유지합니다.
+if sys.platform == 'win32' and __name__ == '__main__':
+    from scrapy.utils.reactor import install_reactor, verify_installed_reactor
+    install_reactor('twisted.internet.asyncioreactor.AsyncioSelectorReactor')
+    import scrapy.crawler
+    # Scrapy 재설치는 이미 설치된 reactor를 버리기 전에 Windows wake-up
+    # 소켓을 한 번 더 생성합니다. 설치된 종류를 검증하는 것으로 대체합니다.
+    scrapy.crawler.install_reactor = lambda reactor_path, event_loop_path=None: verify_installed_reactor(reactor_path)
+
+# 실제 수집을 시작하기 전부터 DNS와 TCP 연결을 막음
 socket.socket.connect = deny
 socket.socket.connect_ex = deny
 socket.getaddrinfo = deny

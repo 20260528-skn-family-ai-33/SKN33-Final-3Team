@@ -51,6 +51,17 @@ def execute(args, engine_factory=None):
         lock = FileLock(str(root/'crawler.lock'), timeout=0)
         lock.acquire()
         require_current_job(root, 'mysql')
+        from backend.app.storage.objects import enabled
+        if enabled():
+            from backend.app.storage.sqlite_state import connect
+            from news.recovery import recover_prepared
+            repair_db = connect(root / 'articles.sqlite3')
+            try:
+                repair_db.row_factory = sqlite3.Row
+                result['preparation_recovery'] = recover_prepared(repair_db, root)
+                repair_db.persist()
+            finally:
+                repair_db.close()
         # 잠금을 해제하기 전에 실행 종료 이력과 결과 파일을 확정합니다.
         if args.apply and getattr(args, 'record_batch_run', False):
             from news.batch_history import BatchHistory

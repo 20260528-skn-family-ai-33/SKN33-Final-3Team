@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 from filelock import FileLock
+from backend.app.storage.workspace import stored
 from backend.app.scheduler.jobs import un_data_refresh as job
 
 
@@ -13,6 +14,7 @@ def matches(record, dataset):
     return approved[0] == version[0] and job.version_time(approved) == job.version_time(version)
 
 
+@stored('raw/un-data/runtime', lambda args: args['state_dir'])
 def manage(state_dir, action='list', *, key=None, release=None, approver=None, reason=None):
     state_dir = Path(state_dir)
     job.require(state_dir.is_dir(), '상태 디렉터리가 없습니다')

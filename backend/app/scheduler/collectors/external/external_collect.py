@@ -17,6 +17,9 @@ import requests
 from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[5]
+if not __package__:
+    sys.path.insert(0, str(ROOT))
+from backend.app.storage.workspace import stored
 OUT_DIR = ROOT / "data" / "external"
 SEED_SQL = ROOT / "db" / "mysql" / "init" / "04_country_seed.sql"
 
@@ -347,6 +350,7 @@ def check(with_db):
     return not problems
 
 
+@stored('ml-inputs/external', lambda args: OUT_DIR)
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)

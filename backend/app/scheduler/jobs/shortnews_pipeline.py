@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 from filelock import FileLock
+from backend.app.storage.datasets import collected, managed_files
 from sqlalchemy import text
 
 from backend.app.db.news_lock import database_identity
@@ -27,6 +28,8 @@ ROOT = Path(__file__).resolve().parents[4]
 log = logging.getLogger(__name__)
 
 
+@collected('shortnews-processed', 'log_dir')
+@managed_files('raw_path')
 def run(raw_path, *, db_url=None, env_path=ROOT / '.env', chroma_path=ROOT / 'chroma_data',
         log_dir=ROOT / 'data/shortnews/pipeline_logs', period=None, api=None, client=None, vector_root=None):
     import chromadb

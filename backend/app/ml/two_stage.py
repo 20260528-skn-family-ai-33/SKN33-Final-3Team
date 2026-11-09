@@ -33,6 +33,7 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
+from backend.app.storage.workspace import stored
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -313,6 +314,7 @@ def model_name(method, k, external, version):
     return f"two_stage_{'b' if method == 'B' else f'c{k}'}_{'base' if external == 'none' else 'ext'}_{version}"
 
 
+@stored('models/candidates', lambda bound: bound['args'].out_dir)
 def train(args):
     path = args.out_dir / f"{model_name(args.method, args.k, args.external, args.version)}.joblib"
     if path.exists():

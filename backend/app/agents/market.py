@@ -11,19 +11,44 @@ from backend.app.agents.templates import Analysis, api_conditions
 from backend.app.api.config import ROOT
 
 
-def model_paths(settings):
+def model_paths(settings, *, _root=None):
     configured=settings.get('API_ML_MODEL_PATHS','')
     root=(ROOT / settings.get('API_ML_MODEL_DIRECTORY','data/ml/monthly_models')).resolve()
-    if configured: paths=tuple((ROOT / p.strip()).resolve() for p in configured.split(',') if p.strip())
-    else:
-        records=[json.loads(p.read_text(encoding='utf-8')) for p in root.glob('model_a_two_stage_*.registry.json')]
-        ready=[r for r in records if r.get('status')=='READY' and r.get('model_key')=='model_a']
-        if not ready: raise FileNotFoundError('배포된 월별 모델 레지스트리가 없습니다.')
-        chosen=max(ready,key=lambda r:(r['data_info']['trade_month'],r['created_at']))
-        path=(root/chosen['artifact_path']).resolve()
-        if not path.is_relative_to(root): raise ValueError('모델 경로가 배포 디렉터리 밖입니다.')
-        paths=(path,)
-    return paths
+    from backend.app.storage.objects import enabled, StorageError
+    if enabled(settings.values):
+        from backend.app.storage.workspace import model_cache
+        if configured:
+            raise StorageError('API_ML_MODEL_PATHS must be empty in S3 mode; select the published registry')
+        root=_root or model_cache(settings)
+        return _published_model_paths(root)
+    if configured:
+        return tuple((ROOT / p.strip()).resolve() for p in configured.split(',') if p.strip())
+    return _registry_model_paths(root)
+
+
+@lru_cache(maxsize=8)
+def _published_model_paths(root):
+    # root identifies immutable manifest contents; lease-only ETag changes reuse it.
+    return _registry_model_paths(root, published=True)
+
+
+def _registry_model_paths(root, published=False):
+    records=[json.loads(p.read_text(encoding='utf-8')) for p in root.glob('model_a_two_stage_*.registry.json')]
+    ready=[r for r in records if r.get('status')=='READY' and r.get('model_key')=='model_a']
+    if not ready: raise FileNotFoundError('배포된 월별 모델 레지스트리가 없습니다.')
+    chosen=max(ready,key=lambda r:(r['data_info']['trade_month'],r['created_at']))
+    path=(root/chosen['artifact_path']).resolve()
+    if not path.is_relative_to(root): raise ValueError('모델 경로가 배포 디렉터리 밖입니다.')
+    if chosen.get('artifact_sha256'):
+        if published:
+            manifest=json.loads((root/'.snapshot.json').read_text(encoding='utf-8'))
+            actual=manifest[path.relative_to(root).as_posix()]['sha256']
+        else:
+            from backend.app.storage.objects import file_digest
+            actual=file_digest(path)
+        if actual != chosen['artifact_sha256']:
+            raise ValueError('모델 파일과 READY 레지스트리의 해시가 다릅니다.')
+    return (path,)
 
 
 @lru_cache(maxsize=1)
@@ -35,6 +60,13 @@ def _load(paths,revision):
 
 
 def loaded(settings):
+    from backend.app.storage.objects import enabled
+    if enabled(settings.values):
+        from backend.app.storage.model_cache import model_cache_use
+        with model_cache_use(settings) as root:
+            paths=model_paths(settings, _root=root)
+            revision=tuple((info.st_size,info.st_mtime_ns) for info in (p.stat() for p in paths))
+            return _load(paths,revision)
     paths=model_paths(settings)
     revision=tuple((info.st_size,info.st_mtime_ns) for info in (p.stat() for p in paths))
     return _load(paths,revision)
@@ -44,17 +76,33 @@ def loaded(settings):
 OUTLOOK_LABELS={'UP':'증가 예상','DOWN':'감소 예상'}
 
 
-def growth_path(settings, anchor=None):
+def growth_path(settings, anchor=None, *, _root=None):
     """모델 B 파일. API_ML_GROWTH_MODEL_PATH가 없으면 월별 모델 폴더에서 고른다(모델 A의 model_paths와 같은 방식).
 
     모델 A와 같은 기준월(anchor, YYYY-MM)을 먼저 찾는다: 1) 월별 학습(candidate_models.run_growth)의 READY 레지스트리
     (data_info.anchor) → 2) 직접 만든 파일 model_b_growth_<YYYYMM>.joblib(growth_model.build). 같은 달이 없으면
     3) READY 중 최신 → 4) 가장 최근 파일(기준월이 달라 runtime이 쓰지 않는다). 각 단계는 최신 리비전. 하나도 없으면 None.
     """
-    from backend.app.ml.model_registry import version_key
     root=(ROOT / settings.get('API_ML_MODEL_DIRECTORY','data/ml/monthly_models')).resolve()
     configured=settings.get('API_ML_GROWTH_MODEL_PATH','')
+    from backend.app.storage.objects import enabled, StorageError
+    if enabled(settings.values):
+        from backend.app.storage.workspace import model_cache
+        if configured:
+            raise StorageError('API_ML_GROWTH_MODEL_PATH must be empty in S3 mode')
+        root=_root or model_cache(settings)
+        return _published_growth_path(root, anchor)
     if configured: return (ROOT / configured).resolve()
+    return _select_growth_path(root, anchor)
+
+
+@lru_cache(maxsize=16)
+def _published_growth_path(root, anchor):
+    return _select_growth_path(root, anchor)
+
+
+def _select_growth_path(root, anchor):
+    from backend.app.ml.model_registry import version_key
     stamp=tuple(sorted((p.name,p.stat().st_mtime_ns) for p in root.glob('model_b_growth_*.registry.json')))
     ready=_ready_growth(root,stamp)
     files=sorted((p for p in root.glob('model_b_growth_*.joblib') if version_key(p)),key=version_key)
@@ -96,11 +144,15 @@ def growth(settings, anchor=None):
     """(증감 예상 {anchor, directions{(국가, 모델 HS6): UP·DOWN}} 또는 None, 버전, 안내 문구 또는 None).
     파일이 없거나 파일·레지스트리를 읽을 수 없으면 증감 예상 없이 답한다(유망 순위는 모델 A만으로 낸다)."""
     try:
-        path=growth_path(settings,anchor)
-        if path is None or not path.exists():
-            return None,'none','증감 예상 모델 파일이 없어 증가·감소 예상은 표시하지 않았습니다.'
-        info=path.stat()
-        data,version=_load_growth(path,(info.st_size,info.st_mtime_ns))
+        from contextlib import nullcontext
+        from backend.app.storage.objects import enabled
+        from backend.app.storage.model_cache import model_cache_use
+        with model_cache_use(settings) if enabled(settings.values) else nullcontext(None) as root:
+            path=growth_path(settings,anchor,_root=root)
+            if path is None or not path.exists():
+                return None,'none','증감 예상 모델 파일이 없어 증가·감소 예상은 표시하지 않았습니다.'
+            info=path.stat()
+            data,version=_load_growth(path,(info.st_size,info.st_mtime_ns))
     except Exception:   # 선택 기능이다. 잘린 파일(EOFError)·깨진 피클 등 어떤 읽기 오류도 유망 순위를 막지 않는다
         return None,'invalid','증감 예상 모델 파일을 읽지 못해 증가·감소 예상은 표시하지 않았습니다.'
     return data,version,None
