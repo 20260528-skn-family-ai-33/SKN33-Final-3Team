@@ -681,6 +681,7 @@ class BackendApiTest(unittest.TestCase):
         self.client.put('/api/v1/users/me/interests',json={'hs_items':[],'country_codes':['US'],'expected_version':interest['version']},headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(self.client.put(url,json={**body,'use_saved_interests':False},headers={'X-CSRF-Token':self.csrf}).status_code,400)
         self.assertEqual(self.client.put(url,json={**body,'period_codes':[]},headers={'X-CSRF-Token':self.csrf}).status_code,400)
+        self.assertEqual(self.client.put(url,json={**body,'formats':[]},headers={'X-CSRF-Token':self.csrf}).status_code,400)
         with patch('backend.app.api.reports.now',return_value=datetime(2026,1,1)):
             response=self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(response.status_code,200,response.text)
