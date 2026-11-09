@@ -1,0 +1,29 @@
+{
+  "dataset_version": "sql-questions-v1",
+  "question_count": 40,
+  "frozen_at_utc": "2026-11-09T02:35:37.935852+00:00",
+  "questions_sha256": "851c1e9281611c8be11aff5702e1102d3dd90d227b4ea8020e3ea5ca3f9f7a7c",
+  "snapshot": {
+    "version": "synthetic-trade-v1",
+    "baseline_month": "2025-03",
+    "mysql_version": "8.4.11",
+    "sql_mode": "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+    "data_sha256": "798dfb8627f40fbf56d0ffdf98a554ed23fb8a58a57aeb33dd33e6c02fd4309d",
+    "snapshot_file_sha256": "d20755e0676fd244590babea7255987fe832046747b247e4a4256801d6cdd1e4",
+    "row_counts": {
+      "country": 5,
+      "hs_code": 6,
+      "export_monthly": 288,
+      "import_monthly": 288,
+      "export_summary": 300,
+      "import_summary": 300
+    }
+  },
+  "gold_authorship": "agent-authored independent reference SQL; NOT human-verified",
+  "human_review": {
+    "status": "pending",
+    "reviewer": null,
+    "approved_questions_sha256": null
+  },
+  "policy": "Freeze before first LLM call. No prompt/code/gold tuning against these results. Version any corrections."
+}
