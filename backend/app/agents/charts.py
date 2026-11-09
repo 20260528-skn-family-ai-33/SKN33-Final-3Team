@@ -60,13 +60,14 @@ def _target_labels(targets):
 
 
 def _trend_order(item):
-    identity, rows = item
+    _, rows = item
     total = rows[0].get('total_usd')
     if total is None:
         total = rows[0].get('verified_subtotal_usd')
     if total is None:
         total = sum(row.get('amount_usd') or 0 for row in rows)
-    return -total, tuple(value or '' for value in identity)
+    # Keep the stored table/digest order for ties, including the top-five boundary.
+    return -total
 
 
 def build_chart(store, uid, task, result_id, selection=None):

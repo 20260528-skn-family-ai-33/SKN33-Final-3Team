@@ -134,6 +134,42 @@ class ChartContractTest(unittest.TestCase):
         self.assertIn('CN', names[0])
         self.assertIn('US', names[1])
 
+    def test_comparison_quarters_preserve_missing_values_in_each_period(self):
+        calendar = [shift_month(date(2020, 1, 1), i).strftime('%Y-%m') for i in range(61)]
+        rows = trend('US', {month: None if i == 1 else 1 for i, month in enumerate(calendar)})
+        for i, row in enumerate(rows):
+            row.update(requested_months=61, compare_requested_months=61,
+                       compare_amount_usd=None if i == 4 else 2)
+        current = task(period={'start': '2020-01-01', 'end': '2025-01-01'},
+                       compare_period={'start': '2010-01-01', 'end': '2015-01-01'})
+        result, full, _ = chart('TREND', rows, current=current)
+        self.assertEqual((result.chart.type, result.chart.granularity), ('line', 'QUARTER'))
+        self.assertEqual((full[0], full[-1], len(full)), ('2020-Q1', '2025-Q1', 21))
+        self.assertEqual(result.chart.series[0].values, [None] + [3] * 19 + [1])
+        self.assertEqual(result.chart.series[1].values, [6, None] + [6] * 18 + [2])
+
+    def test_partial_totals_use_subtotals_and_preserve_tied_order(self):
+        codes = ['VN', 'US', 'JP', 'CN', 'TH', 'DE', 'AU']
+        rows = []
+        for code in codes:
+            for row in trend(code, {'2025-01': 50 if code == 'VN' else 100,
+                                    '2025-02': None, '2025-03': 0}):
+                rows.append({**row, 'total_usd': None})
+        result, _, warnings = chart('TREND', rows)
+        self.assertEqual([s.name for s in result.chart.series], codes[1:6])
+        self.assertTrue(all(s.values == [100, None, 0] for s in result.chart.series))
+        self.assertTrue(warnings)
+
+    def test_disambiguated_names_do_not_collide_with_existing_literal_name(self):
+        rows = [{'country_code': code, 'label': name, 'share_pct': amount}
+                for code, name, amount in [('US', '동일명', 30), ('CN', '동일명', 20),
+                                           ('JP', '동일명(US)', 50)]]
+        result, full, _ = chart('SHARE', rows)
+        self.assertEqual(len(set(result.chart.labels)), 3)
+        self.assertTrue(all(len(label) <= 40 for label in result.chart.labels))
+        self.assertEqual(full, ['동일명', '동일명', '동일명(US)'])
+        self.assertEqual(result.chart.series[0].values, [30, 20, 50])
+
     def test_incompatible_freeform_results_keep_table_without_chart(self):
         columns = [{'key': 'month', 'label': '월', 'type': 'string', 'unit': None},
                    {'key': 'value', 'label': '값', 'type': 'number', 'unit': 'USD'}]
@@ -275,6 +311,29 @@ class StoredSqlChartTest(unittest.TestCase):
                         key=lambda r: r['month'])
                     self.assertEqual(series.values, [float(r['amount_usd']) for r in country_rows])
                 self.assertNotEqual(result.chart.series[0].values, result.chart.series[1].values)
+
+    def test_tied_top_five_matches_stored_table_and_digest_order(self):
+        from sqlalchemy import update
+        codes = ['VN', 'US', 'JP', 'CN', 'TH', 'DE', 'AU']
+        self.connection.execute(self.meta.tables['country'].insert(), [
+            {'country_code': code, 'name_ko': code, 'country_role': 'COUNTRY'}
+            for code in codes if code not in ('US', 'CN')])
+        for flow, source in (('IMPORT', 'import_summary'), ('EXPORT', 'export_summary')):
+            self.connection.execute(update(self.meta.tables[source]).values(amount_usd=0))
+            for comparison in (None, {'start': '2024-01-01', 'end': '2024-03-01'}):
+                with self.subTest(flow=flow, comparison=comparison):
+                    current = task(country_codes=codes, trade_flow=flow, compare_period=comparison)
+                    analysis, identity = self.save('TREND', current)
+                    snapshot = results.read_snapshot(self.store, 7, identity, 'RESULT')
+                    stored_codes = list(dict.fromkeys(r['country_code'] for r in snapshot['rows']))
+                    self.assertEqual(stored_codes, codes)
+                    self.assertEqual([t['country_code'] for t in analysis.result.digest['targets']], codes)
+                    self.assertTrue(all(r['total_usd'] == 0 for r in snapshot['rows']))
+                    names = {r['country_code']: r['country_name'] for r in snapshot['rows']}
+                    result, _, warnings = build_chart(self.store, 7, current, identity)
+                    actual = result.chart.labels if comparison else [s.name for s in result.chart.series]
+                    self.assertEqual(actual, [names[code] for code in stored_codes[:5]])
+                    self.assertTrue(warnings)
 
     def test_saved_chart_enforces_owner_and_expiration_without_requery(self):
         from sqlalchemy import update
