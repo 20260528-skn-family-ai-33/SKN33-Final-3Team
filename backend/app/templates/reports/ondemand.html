@@ -106,7 +106,7 @@
   {% set conc = ' · 집중도 완화' if k.top3_share_pct < k.prev_top3_share_pct else (' · 집중도 상승' if k.top3_share_pct > k.prev_top3_share_pct else '') %}
 {% endif %}
 {{ m.kpis([
-  {'label': '기간 수출액', 'value': k.amount_usd | eok, 'unit': '억 달러', 'sub': (prev_txt ~ (k.prev_amount_usd | eok) ~ '억 달러') if compare_ready else (pend if has_compare else '')},
+  {'label': '기간 수출액', 'value': k.amount_usd | eok, 'unit': '억 달러', 'sub': (prev_txt ~ (((k.prev_amount_usd | eok) ~ '억 달러') if k.prev_amount_usd else '실적 없음')) if compare_ready else (pend if has_compare else '')},
   {'label': (vs ~ ' 증감률') if has_compare else '증감률', 'value': k.change_pct | signed_pct if compare_ready else '—', 'sub': ('증감액 ' ~ (k.change_usd | signed_eok) ~ '억 달러') if compare_ready else (pend if has_compare else '비교 없음')},
   {'label': '수출국 수', 'value': k.country_count | num, 'unit': '개국', 'sub': (vs ~ ' ' ~ (k.country_count_diff | signed) ~ '개국') if compare_ready else (pend if has_compare else '')},
   {'label': '상위 1개국 비중', 'value': k.top1_share_pct | num(2), 'unit': '%', 'sub': (k.top1_name ~ ((' (' ~ prevw ~ ' 1위 ' ~ k.prev_top1_name ~ ' ' ~ (k.prev_top1_share_pct | pct) ~ ')') if compare_ready and k.prev_top1_name else '')) if k.top1_name else ''},

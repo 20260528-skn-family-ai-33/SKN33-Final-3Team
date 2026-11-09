@@ -38,7 +38,6 @@ function RegionError({ label, states, dark }) {
   return <div className={dark ? 'on-dark' : undefined}><ErrorNotice error={{ ...failed[0].error, message }} retry={retry} /></div>
 }
 
-/** 메인 KPI 영역 장식 화살표. 몸통 끝을 화살촉 밑변 가운데에 맞춰 하나로 이어지게 그린다. */
 // 메인 상단의 상승 화살표. 지그재그로 오르는 굵은 화살표에 아래쪽 그림자 면을 겹쳐 입체감을 준다.
 const ARROW_LINE = 'M10 140 L68 124 C82 120 86 104 98 102 C112 100 112 126 128 123 C146 120 148 78 166 76 C184 74 184 106 200 101 C218 95 234 66 246 36'
 const ARROW_HEAD = '262,-4 224,27 268,47'
@@ -338,7 +337,7 @@ export default function Dashboard({ route }) {
               </div>
             ))}
           </div>
-<RegionError label="한국의 세계시장 점유율" states={[{ error: un.error }]} /><p className="muted" style={{ marginTop: 10, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
+<RegionError label="한국의 세계시장 점유율" states={[un]} /><p className="muted" style={{ marginTop: 10, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
         </section>
 
         <section>

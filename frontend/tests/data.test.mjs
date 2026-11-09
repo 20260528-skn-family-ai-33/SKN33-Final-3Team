@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { amount, percent, reportEok, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison } from '../src/api/adapters.js'
 import { registerCountries, countryCode, countryName, registerProducts, productName } from '../src/data/catalog.js'
 import { isStrongPassword } from '../src/utils/validate.js'
+import { promisingView } from '../src/pages/analysis/promising.js'
 test('미수집 값과 실제 0을 구분하고 USD를 억 USD로 표시한다', () => {
   assert.equal(amount(null), '—'); assert.equal(amount(0), '0'); assert.equal(amount(15720000000), '157.2')
   assert.equal(amount(2345678), '0.02'); assert.equal(amount(51234), '0.0005'); assert.equal(amount(1230), '0.00001')
@@ -157,4 +158,11 @@ test('job completion received after the message read displays its saved answer o
  const other=[...rows,{role:'USER',message_id:'2',job:{job_id:'2'}}]
  assert.equal(completedMessages(other,job)[1].role,'ASSISTANT')
  assert.equal(completedMessages(other,job)[2].message_id,'2')
+})
+
+test('유망시장 표는 저장된 순위 기준(group_by)을 행 모양보다 먼저 쓴다', () => {
+  const row = { anchor: '2026-09-01', country_code: 'US', hs6: '330499', country_rank: 3, country_size: 1200, product_rank: 7, product_size: 90 }
+  const view = promisingView({ tables: [{ meta: { group_by: 'HS6' }, rows: [row] }] })
+  assert.equal(view.rankLabel, '품목 안 순위'); assert.equal(view.rows[0].rank, 7); assert.equal(view.rows[0].size, 90)
+  assert.equal(promisingView({ tables: [{ meta: { group_by: 'COUNTRY' }, rows: [row] }] }).rows[0].rank, 3)
 })

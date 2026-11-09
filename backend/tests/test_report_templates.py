@@ -369,7 +369,8 @@ class OnDemandTest(unittest.TestCase):
         self.assertNotIn('None', zero)
         self.assertNotIn('(전년 1위', zero)
         self.assertIn('중국 → 미국으로 1위 교체', self.render())               # 둘 다 있으면 그대로 표시
-        self.assertRegex(zero, r'<td>전체</td><td class="r">0\.00</td><td class="r">—</td>')  # 수출 0이면 비중 100% 아님
+        self.assertRegex(zero, r'<td>전체</td><td class="r">—</td><td class="r">—</td>')  # 수출 0은 실적 없음(—), 비중 100% 아님
+        self.assertNotIn('—<span class="u">', zero)   # 값이 —인 카드에는 단위를 붙이지 않는다
         empty = self.render(lambda c: c['concentration']['countries'].update(current=None))
         self.assertNotIn('—개국', empty)                                        # 값 없는 수출국 수는 — 만
 
@@ -413,6 +414,9 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(rt.eok(3_300_000, 1), '0.03')
         self.assertEqual(rt.eok(51_234, 2), '0.0005')
         self.assertEqual(rt.signed_eok(-3_300_000), '−0.03')
+        # 실적 0은 실적 없음(—), 증감액의 실제 0은 그대로 둔다
+        self.assertEqual(rt.eok(0), '—')
+        self.assertEqual(rt.signed_eok(0), '0.00')
         self.assertIn('>0.03</text>', str(rt.line_chart(['a', 'b'], [{'values': [1_100_000, 3_300_000]}], divisor=1e8, digits=1)))
         self.assertIn('>0.03</text>', str(rt.hbar_chart([{'label': '미국', 'values': [3_300_000]}], ['#000'], divisor=100000000, digits=1)))
         self.assertIn('▲1', rt.rank_move(1))

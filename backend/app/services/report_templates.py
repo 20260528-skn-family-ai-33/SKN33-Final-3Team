@@ -59,8 +59,9 @@ def _number_eok(value, digits):
 
 
 def eok(value, digits=REPORT_DIGITS):
-    """USD → 억 달러 숫자 문자열 (요청형 리포트). 단위 글자는 템플릿에서 붙임."""
-    if value is None:
+    """USD 실적 금액 → 억 달러 숫자 문자열 (요청형 리포트). 단위 글자는 템플릿에서 붙임.
+    실적 0은 그 기간에 실적이 없다는 뜻이라 —로 쓴다(웹 화면과 같은 규칙). 증감액처럼 실제 0이 의미 있는 값은 signed_eok."""
+    if value is None or value == 0:
         return '—'
     text = _number_eok(value / 1e8, digits)
     return (MINUS + text) if value < 0 else text

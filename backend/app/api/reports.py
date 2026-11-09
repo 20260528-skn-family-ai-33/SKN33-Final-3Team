@@ -194,22 +194,54 @@ def article_sources(articles):
 PROMISING_UNAVAILABLE='예측 모델 또는 기준월 스냅샷을 사용할 수 없어 유망시장 예측을 넣지 못했습니다.'
 
 
+def promising_scope(bundle,countries,items,max_countries,max_items):
+    """리포트 조건 → 유망시장 예측 대상(국가, HS6 품목)과 안내 문구.
+    채팅 유망시장과 같은 한도(국가 20개·품목 5개)로 계산하고, 넘치면 앞에서부터 쓰고 알린다.
+    HS4는 모델이 HS6로 예측하므로 선택 국가 기준 최근 12개월 수출액이 큰 하위 HS6로 바꾼다(채팅의 HS4 처리와 같은 순서)."""
+    from backend.app.agents.market import hs6_by_exports
+    notes=[]
+    if len(countries)>max_countries:
+        notes.append(f'유망시장 예측은 국가 {max_countries}개까지 계산합니다. 선택한 {len(countries)}개국 중 앞의 {max_countries}개국만 예측했습니다.')
+        countries=countries[:max_countries]
+    hs=[]; seen=set(); expanded=[]
+    def add(code,ver):
+        if (code,ver) in seen: return False
+        seen.add((code,ver)); hs.append({'hs_code':code,'hs_ver':ver}); return True
+    for item in items:
+        code,ver=item['hs_code'],item.get('hs_ver','HS2022')
+        if len(code)==6:
+            add(code,ver); continue
+        children=[x for x in hs6_by_exports(bundle,code,countries) if len(x)==6][:max_items]
+        if not children:
+            notes.append(f'HS {code}에는 유망시장 예측 대상인 HS6 품목이 없습니다.'); continue
+        expanded.append((code,[x for x in children if add(x,'HS2022')]))
+    total=len(hs)
+    if total>max_items:
+        notes.append(f'유망시장 예측은 품목 {max_items}개까지 계산합니다. 대상 품목 {total}개 중 앞의 {max_items}개만 예측했습니다.')
+        hs=hs[:max_items]
+    kept={h['hs_code'] for h in hs if h['hs_ver']=='HS2022'}
+    for code,children in expanded:
+        used=[x for x in children if x in kept]
+        if used:
+            notes.append(f'HS {code}는 최근 12개월 수출액이 큰 하위 HS6 품목({", ".join(used)})으로 예측했습니다.')
+    return countries,hs,notes
+
+
 def promising_section(store,uid,c):
-    """GROWTH_RISK = 유망시장(증가·감소 예상). 채팅 유망시장(PROMISING_MARKET)과 같은 계산을 리포트 국가·HS6 품목으로 한다.
+    """GROWTH_RISK = 유망시장(증가·감소 예상). 채팅 유망시장(PROMISING_MARKET)과 같은 계산을 리포트 국가·품목으로 한다.
     모델 A가 유망 순위를, 모델 B가 증가·감소 예상을 낸다. 모델을 쓸 수 없어도 리포트 생성은 실패시키지 않는다."""
     from types import SimpleNamespace
     countries=list(c.get('country_codes') or [])
-    hs=[h for h in c.get('hs_items',[]) if len(h['hs_code'])==6]
-    if not countries and not hs:
-        return section('GROWTH_RISK','국가 또는 HS6 품목을 1개 이상 선택하면 유망시장 예측을 함께 넣습니다.',status='NO_DATA')
+    items=[h for h in c.get('hs_items',[]) if len(h['hs_code']) in (4,6)]
+    if not countries and not items:
+        return section('GROWTH_RISK','국가 또는 HS4·HS6 품목을 1개 이상 선택하면 유망시장 예측을 함께 넣습니다.',status='NO_DATA')
     settings=store.db.settings
     try:
         from backend.app.agents import budget
         from backend.app.agents.market import growth, loaded, model_codes, predict
         from backend.app.agents.runtime import bounded_ml
-        from backend.app.agents.state import Conditions
+        from backend.app.agents.state import MAX_COUNTRIES, MAX_HS_ITEMS, Conditions
         from backend.app.agents.templates import _names
-        conditions=Conditions(country_codes=countries,hs_items=hs)
         seconds=budget.seconds(settings,'ml')
         def load():
             bundle,provider,versions=loaded(settings)
@@ -217,15 +249,23 @@ def promising_section(store,uid,c):
             return bundle,provider,versions,anchor,growth(settings,anchor)
         # 채팅과 같은 ML 전용 스레드에서 돌린다(모델을 메모리에 두 번 올리지 않고, 멈춰도 워커를 붙잡지 않는다).
         bundle,provider,versions,anchor,(outlook,_,note)=bounded_ml(load,seconds)
+    except (ImportError,OSError,MemoryError,ValueError,TimeoutError):
+        return section('GROWTH_RISK',PROMISING_UNAVAILABLE,status='NO_DATA')
+    # 선택 범위(리포트 한도 품목 100·국가 250)는 모델 장애가 아니다. 예측 한도에 맞추고 무엇을 계산했는지 알린다.
+    countries,hs,scope=promising_scope(bundle,countries,items,MAX_COUNTRIES,MAX_HS_ITEMS)
+    if not countries and not hs:
+        return section('GROWTH_RISK',' '.join(['선택한 품목에는 유망시장 예측 대상이 없습니다.',*scope]),status='NO_DATA')
+    try:
         if outlook and outlook['anchor']!=anchor:
             outlook,note=None,f"증감 예상 모델의 기준월({outlook['anchor']})이 유망시장 모델({anchor})과 달라 증가·감소 예상은 표시하지 않았습니다."
+        conditions=Conditions(country_codes=countries,hs_items=hs)
         codes=model_codes(store,conditions.hs_items)
         analysis=bounded_ml(lambda:predict(SimpleNamespace(conditions=conditions),bundle,provider,versions,codes=codes,
                                            directions=outlook['directions'] if outlook else None),seconds)
     except (ImportError,OSError,MemoryError,ValueError,TimeoutError):
         return section('GROWTH_RISK',PROMISING_UNAVAILABLE,status='NO_DATA')
     if analysis.result.status!='OK':
-        return section('GROWTH_RISK','선택한 국가·품목은 유망시장 예측 대상이 아닙니다(최근 12개월 수출 10만 달러 이상만 예측).',status='NO_DATA')
+        return section('GROWTH_RISK',' '.join(['선택한 국가·품목은 유망시장 예측 대상이 아닙니다(최근 12개월 수출 10만 달러 이상만 예측).',*scope]),status='NO_DATA')
     names,products=_names(store)
     for row in analysis.rows:
         row['country_name']=names.get(row['country_code'],row['country_code'])
@@ -235,8 +275,14 @@ def promising_section(store,uid,c):
     table=result_table(store,uid,analysis.rows,meta,c,store.queries)
     text=(f"{analysis.meta['anchor']} 기준 모델 예측입니다. 순위는 다음 12개월 수출 성장 가능성이 높은 순서이고, "
           '증가·감소 예상은 다음 12개월 수출이 최근 12개월보다 늘지 줄지에 대한 예측 방향입니다.')
-    notes=[n for n in [note,*analysis.result.limitations] if n]
+    notes=[n for n in [*scope,note,*analysis.result.limitations] if n]
     return section('GROWTH_RISK',' '.join([text,*notes]),[table],status='READY' if not notes else 'NEEDS_REVIEW')
+
+
+def prediction_group(conditions):
+    """예측 결과의 순위 기준(group_by). market.predict와 같은 규칙: 국가·품목 둘 다 → PAIR, 국가만 → COUNTRY, 품목만 → HS6."""
+    countries,items=(conditions or {}).get('country_codes') or [],(conditions or {}).get('hs_items') or []
+    return 'PAIR' if countries and items else 'COUNTRY' if countries else 'HS6' if items else None
 
 
 def build_document(store,uid,record):
@@ -249,6 +295,13 @@ def build_document(store,uid,record):
         meta={'sources':[],'period':p,'warnings':[],'freshness':'FROZEN'}
         sections=[section('SUMMARY','승인한 분석 결과표를 기준으로 작성했습니다.')]
         kinds={'TREND':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES','PREDICTION':'GROWTH_RISK'}
+        refs=record['content_json'].get('source_results') or []
+        source=[dict(table) for table in source]
+        for i,table in enumerate(source):
+            # 채팅 결과 복사본의 예측 표는 원래 순위 기준(group_by)을 그대로 쓴다. 예전에 저장한 복사본은 원본 조건으로 되살린다.
+            if table['kind']=='PREDICTION' and not (table.get('meta') or {}).get('group_by'):
+                group=prediction_group(refs[i].get('conditions') if i<len(refs) else None)
+                if group: table['meta']={**(table.get('meta') or {}),'kind':'PREDICTION','group_by':group}
         for code in c['sections']:
             tables=[table for table in source if kinds.get(table['kind'])==code]
             sections.append(section(code,'승인한 분석 결과입니다.' if tables else '해당 분석 결과에 포함되지 않음',tables))
