@@ -28,8 +28,7 @@ from backend.app.api.common import ApiError, clean, now
 from backend.app.api.database import Store
 
 
-WRITER_MODEL = 'gpt-6-luna'
-DEFAULT_MODELS = {'intent': 'gpt-4.1-mini', 'compose': WRITER_MODEL, 'sql': 'gpt-4.1'}
+DEFAULT_MODELS = {'intent': 'gpt-4.1-mini', 'compose': 'gpt-6-luna', 'sql': 'gpt-4.1'}
 PRODUCT_NAMES_TTL_SECONDS = 3600   # HS 사전은 판본 갱신 때만 바뀐다. 갱신 뒤 최대 1시간은 이전 이름으로 대조한다
 
 
@@ -170,8 +169,6 @@ class Services:
             self.execution.transition(lambda ledger:{**ledger,'progress':progress})
 
     def model_for(self, role):
-        if role == 'compose':
-            return WRITER_MODEL
         return self.settings.get('API_'+role.upper()+'_MODEL', DEFAULT_MODELS[role])
 
     def structured(self, state, node, prompt, payload, schema, tokens, validate=lambda x:x, *, max_attempts=2):
@@ -583,7 +580,7 @@ class Services:
                 s.step_id:max(0,s.attempts-1) for t in state.plan.tasks for s in t.steps
                 if s.tool=='query_trade_data' and s.args.get('template')=='LLM_SQL'},
                 'plan':[{'task_id':t.task_id,'intent':t.intent,'steps':[s.tool for s in t.steps]}
-                   for t in state.plan.tasks],'seconds':job['agent'].get('timings',{}),'prompt_version':3,
+                   for t in state.plan.tasks],'seconds':job['agent'].get('timings',{}),'prompt_version':4,
                    'models':{name:self.model_for(name) for name in DEFAULT_MODELS}}
             store.insert('chat_message',session_id=int(state.input.session_id),role='ASSISTANT',content_masked=answer['text'],
                 intent_json=clean({'intent':primary.intent,'conditions':answer['conditions']}),

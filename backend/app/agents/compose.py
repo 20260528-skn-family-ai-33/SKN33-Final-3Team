@@ -40,7 +40,8 @@ intent가 HS_LOOKUP인 task는 digest.items(query·code·name·level)의 HS 코�
 ARTICLE_PROMPT = """아래 기사 작성 지침은 article_search_planned가 true인 하위 질문에만 적용합니다.
 false인 하위 질문의 결론에서는 기사·검색 상황을 언급하지 마세요. 전체 설명의 검색 한계도 검색 대상 질문에만 연결하세요.
 CAUSE는 기사와 통계의 시점 연관성을 설명하되 원인으로 단정하지 마세요.
-기사 내용은 articles에서만 가져오고 문장 끝에 [n]으로 인용하세요. 결론에는 같은 task_id의 번호만 쓰세요.
+기사 내용은 articles에서만 가져오고 문장 끝에 [n]으로 인용하세요. 여러 기사는 [1][2]처럼 번호마다 괄호를 쓰세요.
+결론에는 같은 task_id의 번호만 쓰세요.
 evidence_role이 context_reference면 배경 자료입니다. mixed면 '참고(직접 답변 아님)' 문장은 배경으로만 쓰세요.
 unclassified는 근거 역할 미분류입니다. 기사 제목으로 인과관계를 추측하지 마세요.
 reference_limitation과 요약 문장의 unverified_question_parts를 지키세요. news의 unverified_question_parts는

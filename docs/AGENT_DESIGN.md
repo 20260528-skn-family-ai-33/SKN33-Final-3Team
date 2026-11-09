@@ -58,7 +58,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 ### 플래너·조건
 | ID | 결정 |
 |---|---|
-| D-20 | 플래너는 `API_INTENT_MODEL`로 모델을 선택하며 기본값은 `gpt-4.1-mini`다. Writer(compose)는 `gpt-6-luna`로 고정한다. (Q-15) |
+| D-20 | 플래너는 `API_INTENT_MODEL`로 모델을 선택하며 기본값은 `gpt-4.1-mini`다. Writer(compose)는 `API_COMPOSE_MODEL`로 선택하며 미설정 기본값은 `gpt-6-luna`다. 운영 모델은 Dev 비교와 최종 Holdout 검증 후 확정한다. (Q-15) |
 | D-21 | 플래너·compose·직접 입력 해석(§13.6)의 LLM 호출이 실패하면 1번 재시도한다. 대기 시간은 플래너 10초, compose 20초, 직접 입력 해석 10초다. LLM SQL 생성(20초)은 재시도 대신 §13.5의 재생성 규칙(최대 2회)을 따른다(§13.3, C-28). (Q-16) |
 | D-22 | 후속 질문의 기본 조건은 생략하면 이어받고, 명시적인 전체 범위는 해제한다. 비교·순위·기사 기간은 D-73의 별도 규칙을 따른다. (Q-18) |
 | D-23 | ML intent는 두 가지다. `PROMISING_MARKET`(유망시장)은 국가·품목 중 1개 이상이 필요하다. `MARKET_TYPE`(시장 유형)은 국가·품목이 모두 필요하고, 모델 B의 증감 예상으로 "증가 예상 시장"·"감소 예상 시장"을 분류한다(D-103). 추가 예정 내용은 `backend/app/ml/ML_USAGE.md`에 적었다. (Q-13, C-05) |
@@ -657,10 +657,10 @@ actions[], report_id, warnings[]
 - **누가 쓰나:** REPORT 성공은 D-93의 고정 문구를 우선한다. 결과(digest)가 있는 Task는 LLM이 결론을 쓴다. 대화·용어 질문(CONVERSATION)은 조회 없이 최근 대화를 입력한다(D-99). 다음 Task의 결론은 코드가 고정 문구로 넣는다. 그다음 계획 순서대로 합쳐 `Draft.conclusion`을 만든다(D-80).
   - `OUT_OF_SCOPE`(D-69 문구)
   - 단계 없이 NO_DATA가 된 Task(`limit_errors()` 문구, D-73)
-  - 조건 확인 실패·되묻기 한도 초과로 NO_DATA가 된 Task("조건을 확인해 다시 질문해 주세요.", D-15)
+  - 조건 확인에 실패한 NO_DATA Task는 도구가 남긴 실제 사유를 전달한다. 되묻기 한도 초과 시에는 "조건을 확인해 다시 질문해 주세요."를 쓴다(D-15). 도구 오류 사유가 없고 단계 없는 Task의 안내도 없으면 "조건에 맞는 분석 결과가 없습니다."를 쓴다.
 
   모든 Task가 고정 문구면 LLM을 부르지 않는다. 실패·미지원만 있으면 `turn_summary`는 빈 문자열이고 최근 조건·요약은 바꾸지 않는다. 리포트 성공은 D-93의 코드 작성 요약과 D-72의 조건 갱신 규칙을 적용한다.
-- **호출:** `client.responses.parse(model=WRITER_MODEL, instructions=prompt, input=JSON, text_format=state.Draft, max_output_tokens=tokens, store=False)`, 시간 상한 `API_COMPOSE_TIMEOUT_SECONDS`(20초), SDK `max_retries=0`이다. `gpt-6-luna`는 모델 기본 추론 강도(`medium`)를 쓰며 `temperature`를 생략한다. 일반 답변은 최대 1500토큰, 문장형 답변(D-98)은 최대 3000토큰이다. 워커 요청과 실행 기록은 같은 고정 모델을 사용한다. 예전 배포 환경의 `API_COMPOSE_MODEL` 값은 무시한다.
+- **호출:** `client.responses.parse(model=compose_model, instructions=prompt, input=JSON, text_format=state.Draft, max_output_tokens=tokens, store=False)`, 시간 상한 `API_COMPOSE_TIMEOUT_SECONDS`(20초), SDK `max_retries=0`이다. 두 Luna 후보는 `reasoning.effort=low`를 쓰며, mini는 `temperature=0`을 쓴다. 일반 답변은 최대 1500토큰, 문장형 답변(D-98)은 최대 3000토큰이다. 워커 요청과 실행 기록은 모두 `API_COMPOSE_MODEL`에서 선택한 모델을 사용한다.
   - 최초 초안의 호출 실패·파싱 실패·`Draft` 검증 실패(일반 답변 D-50, 문장형 답변 D-98)는 1번만 다시 부른다(D-21). 수치 불일치로 이미 교정 호출을 한 경우에는 다시 호출하지 않는다. 교정 응답을 사용할 수 없으면 기사 인용 번호가 유효한 원래 초안을 유지하고 재검증해 불일치 문장에 “확인 필요”를 표시한다(FR-101-08).
   - 그래도 실패하면 실제 자료로 대체 결론을 만든다. 원인 질문에서 통계만 남으면 확인된 수치와 기사 검색 실패 사유를, 기사만 남으면 기사 목록을 안내한다. 자료가 모두 없으면 원인과 함께 NO_DATA를 표시한다(D-67, D-72).
 - **입력 JSON** (LLM이 쓸 Task만):
@@ -682,7 +682,7 @@ actions[], report_id, warnings[]
   1. 합니다체. 결론은 Task마다 1~2문장이고 `tasks` 순서대로 `{task_id, sentences}`를 낸다. 설명은 전체 4문장 이하, 문장마다 200자 이하다.
   2. 숫자는 digest에 있는 값만 쓰고, 더하거나 나누거나 증감률을 새로 계산하지 않는다(§8). 값이 null이면 숫자를 쓰지 않고 "집계되지 않았습니다"라고 쓴다. 0과 null을 섞지 않는다(D-84).
   3. 수출·수입을 문장에 밝힌다(D-31). 금액은 USD이고, compose 입력의 금액은 코드가 만 단위로 반올림한 표기(`digest.korean_usd`, 예: "2,610만 달러", "1억 2,346만 달러", 1만 달러 미만은 "1,234달러")로 준다. LLM은 그 표기를 글자 그대로 옮기고 단위를 바꾸거나 반올림하지 않는다(PR #52 리뷰: LLM이 만·억을 바꾸며 자릿수를 틀림). verify는 원래 digest 숫자로 대조한다(§11.4).
-  4. CAUSE는 기사와 통계의 시점을 이어 설명하되 원인으로 단정하지 않는다(D-75). 기사를 쓰면 문장 끝에 `[n]`을 붙인다.
+  4. CAUSE는 기사와 통계의 시점을 이어 설명하되 원인으로 단정하지 않는다(D-75). 기사를 쓰면 문장 끝에 `[n]`을 붙인다. 여러 기사는 `[1][2]`로 인용한다. 검사와 비공개 기사 가림 처리는 각 괄호에서 번호 하나를 읽는다.
   5. ML(PREDICTION)은 기준월을 밝히고, `exp_12m`은 "과거 12개월 수출액"으로만 쓴다(D-74).
   6. 비교 기간 길이가 다르면 그 사실과 월평균을 함께 쓴다(D-84). 점유율은 분모 의미를 쓴다(D-87).
   7. `applied_defaults`와 `warnings`의 내용은 필요하면 설명 문장에 반영한다. 지어내거나 빼지 않는다.
@@ -695,9 +695,31 @@ actions[], report_id, warnings[]
 
 RAG 근거 전달·인용 검사·부분 결과 안내 적용 후 Luna에 같은 6건을 다시 실행했다. 통관 절차 변경 공지는 배경으로 인용하고 수출 증가 원인은 미확인이라고 답했다. 기사 검색 기한이 지난 질문에는 확인된 수출액과 검색 한계를 함께 전달했다. 결과는 6건 모두 첫 초안 통과, 중앙 응답 시간 5.752초, 추정 비용 $0.00191543이었다. 실행 코드는 `backend/scripts/evaluate_writer_dev.py`, 요청·토큰·응답과 질문별 판정은 로컬 `outputs/eval/2026-11-09-writer/`에 있다.
 
-고정 모델로 같은 6건을 다시 호출했다. 통계 전용 질문에 기사 부재를 언급한 건수는 3/3에서 0/3으로 줄었다. 참고 기사의 인과관계 한계, 복합 질문의 [1]·[2] 인용, 검색 시간 초과 안내는 유지됐다. 6건 모두 첫 초안 통과, 중앙 응답 시간 4.693초, 추정 비용 $0.00185830이었다. 원시 결과는 같은 평가 폴더의 `luna-fixed.jsonl`에 있다.
+당시 고정했던 `gpt-6-luna`로 같은 6건을 다시 호출했다. 통계 전용 질문에 기사 부재를 언급한 건수는 3/3에서 0/3으로 줄었다. 참고 기사의 인과관계 한계, 복합 질문의 [1]·[2] 인용, 검색 시간 초과 안내는 유지됐다. 6건 모두 첫 초안 통과, 중앙 응답 시간 4.693초, 추정 비용 $0.00185830이었다. 원시 결과는 같은 평가 폴더의 `luna-fixed.jsonl`에 있다.
 
-PR #84·#85 통합 뒤에는 앞서 저장한 마지막 6개 초안을 같은 합성 입력으로 재생했다. 6개 모두 현재 compose의 첫 시도 검증을 통과해 같은 초안이 반환됐다. 이 재생에는 모델 호출이 없으며 통합 후 응답 시간과 비용을 새로 측정하지 않았다.
+PR #84·#85 통합 뒤에는 앞서 저장한 마지막 6개 초안을 같은 합성 입력으로 재생했다. 6개 모두 통합 시점 compose의 첫 시도 검증을 통과해 같은 초안이 반환됐다. 이 재생에는 모델 호출이 없으며 통합 후 응답 시간과 비용을 새로 측정하지 않았다.
+
+#### 세 모델을 같은 Dev 문항으로 비교하는 방법
+
+저장소 루트에서 다음 명령을 실행한다. 기본으로 `gpt-4.1-mini`, `gpt-5.6-luna`, `gpt-6-luna`를 비교한다. 일부만 실행할 때는 `--models gpt-5.6-luna gpt-6-luna`처럼 지정한다. 기존 기록을 보존하도록 출력 파일은 실행마다 새 이름을 쓴다.
+
+```bash
+python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/eval/writer-dev-run.jsonl
+```
+
+문항마다 동일한 통계·RAG 상태를 복사해서 각 모델의 Writer에 전달한다. 모델별 출력에는 초안 수용, 재시도, 대체 결론, `incomplete` 응답 수, 추론 토큰, 응답 시간과 추정 비용이 기록된다. 원시 JSONL에는 시도별 요청과 종료 사유를 남긴다. 사용량을 알 수 없는 호출이 있으면 해당 합계는 `null`이다. Holdout은 최종 설정을 정한 뒤 별도로 평가한다.
+
+2026-11-09에 모델당 동일한 6문항을 한 번씩 실행했다. 문항별 실제 요청에서 질문·근거, 프롬프트, 출력 스키마와 토큰 상한이 일치했다. 두 Luna의 추론 강도는 `low`였다.
+
+| 모델 | 첫 초안 통과 | 재시도 / incomplete | 응답 시간 중앙값 | 추론 토큰 합계 | 6문항 추정 비용(USD) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `gpt-4.1-mini` | 6/6 | 0 / 0 | 2.327초 | 0 | $0.00555760 |
+| `gpt-5.6-luna` | 6/6 | 0 / 0 | 4.014초 | 684 | $0.00364224 |
+| `gpt-6-luna` | 6/6 | 0 / 0 | 3.533초 | 64 | $0.00128322 |
+
+복합 질문의 포장·창고 결론에 올바른 번호를 붙인 건수는 mini 0/2, 두 Luna 각각 2/2였다. 기사 검색 시간 초과와 수출액을 함께 안내한 모델은 6-luna였다. 통관 질문에서 mini와 5.6-luna는 주어지지 않은 비교 기간을 ‘전월’로 썼다. 6-luna는 30,000달러와 25,000달러가 모두 ‘3만 달러’로 표시된 입력을 보고 두 금액이 같다고 설명했다. 초안 수용률만으로 이런 오류를 판별할 수 없다.
+
+추정 비용은 각 응답의 토큰 사용량에 실행 시점의 Standard 단가를 적용한 값이다. [OpenAI Docs · GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini) · [GPT-5.6 Luna](https://developers.openai.com/api/docs/models/gpt-5.6-luna) · [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)
 
 ### 13.2 비슷한 국가 찾기 (`agents/conditions.py`)
 플래너가 준 국가 슬롯(`mention` 원문 + `name` 한국어 국가명)마다 아래 순서로 처리한다. 원문 증거 검사는 기존 `chat_slots.resolve`를 그대로 쓴다. 단, 질문에 없는 표현이라도 플래너가 이전 조건의 국가·품목을 그대로 다시 적은 것이면 생략과 같이 이어받는다(D-22, 후속 질문 "왜 증가했어?"). 두 글자 영문 표현은 등록된 `country_code`이고 `name`도 같은 국가로 확정될 때만 국가로 받는다. `name`이 국가로 확정되지 않으면(예: "TV") 국가 조건에서 빼고, 코드가 없거나 `name`과 다른 국가면(예: "UK"→영국=GB) 빼지 않고 해당 국가 후보로 되묻는다.
@@ -723,7 +745,7 @@ PR #84·#85 통합 뒤에는 앞서 저장한 마지막 6개 초안을 같은 �
 |---|---|---|
 | `API_REDIS_URL` | `redis://:<비밀번호>@127.0.0.1:6379/0` | 컨텍스트·lock·체크포인터 (임시, D-07) |
 | `API_INTENT_MODEL`, `API_INTENT_TIMEOUT_SECONDS` | `gpt-4.1-mini`, 10 | 플래너(§11.1), 직접 입력 해석(§13.6) |
-| `API_COMPOSE_TIMEOUT_SECONDS` | 20 | 고정 모델 `gpt-6-luna`의 compose 호출 제한(§13.1) |
+| `API_COMPOSE_MODEL`, `API_COMPOSE_TIMEOUT_SECONDS` | `gpt-6-luna`, 20 | Writer 모델 선택 및 호출 시간 상한(§13.1) |
 | `API_SQL_MODEL`, `API_SQL_TIMEOUT_SECONDS` | `gpt-4.1`, 20 | LLM SQL 생성(§13.5). 더 큰 모델을 쓰기로 함(2026-10-30). 최종 모델은 골든셋 비교 후 확정(C-30) |
 | `API_SQL_EXECUTION_SECONDS` | 30 | LLM SQL 실행 상한(D-41) |
 | `API_ML_MODEL_DIRECTORY` | READY 월별 모델 레지스트리와 아티팩트 디렉터리 | `agents.market.model_paths` |

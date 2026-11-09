@@ -87,7 +87,7 @@ sha256sum data/ml/monthly_models/*.joblib data/ml/monthly_models/*.registry.json
 
 ### API·워커 (`backend/.env.api.example` 기준)
 
-Writer는 코드에 고정된 `gpt-6-luna`를 사용한다. 기존 `.env`에 `API_COMPOSE_MODEL`이 남아 있어도 워커는 이 값을 사용하지 않는다.
+Writer 모델은 `API_COMPOSE_MODEL`로 선택한다. 설정을 생략하면 `gpt-6-luna`를 사용한다. 기존 배포에 값이 있으면 그 모델로 호출하고 실행 기록에도 같은 이름을 남긴다. 세 후보의 Dev 비교 방법은 [에이전트 설계 §13.1](AGENT_DESIGN.md#131-compose-agentscomposepy)에 있다.
 
 | 키 | 값 | 변경 |
 |---|---|---|

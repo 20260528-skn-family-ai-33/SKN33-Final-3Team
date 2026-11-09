@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from datetime import datetime
 import json
 from pathlib import Path
+from statistics import median
 from time import monotonic
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ from openai import OpenAI
 
 from backend.app.agents.llm import StructuredClient
 from backend.app.agents.planner import build_plan
-from backend.app.agents.runtime import Services, WRITER_MODEL
+from backend.app.agents.runtime import Services
 from backend.app.agents.state import AgentState, Conditions, PlannerOutput, ToolResult
 from backend.app.agents.tools import article_result
 from backend.app.api.config import Settings
@@ -110,7 +111,8 @@ class Meter:
         response.read()
         data = response.json()
         self.attempts[-1].update(http_status=response.status_code, usage=data.get('usage'),
-            output=data.get('output'), status=data.get('status'), resolved_model=data.get('model'),
+            output=data.get('output'), status=data.get('status'), incomplete_details=data.get('incomplete_details'),
+            resolved_model=data.get('model'),
             service_tier=data.get('service_tier'))
 
     def request(self, request):
@@ -122,51 +124,83 @@ class Meter:
         return OpenAI(**kwargs, base_url='https://api.openai.com/v1', http_client=transport)
 
 
+# Standard USD per million tokens (input, cache read, default cache write, output), 2026-11-09.
+STANDARD_PRICES = {
+    'gpt-4.1-mini': (0.40, 0.10, None, 1.60),
+    'gpt-5.6-luna': (0.20, 0.02, 0.25, 1.20),
+    'gpt-6-luna': (0.10, 0.01, 0.125, 0.50),
+}
+
+
+def estimated_cost(model, attempt):
+    usage = attempt.get('usage')
+    if not usage or attempt.get('service_tier') != 'default':
+        return None
+    input_price, read_price, write_price, output_price = STANDARD_PRICES[model]
+    details = usage.get('input_tokens_details') or {}
+    reads = details.get('cached_tokens', 0)
+    writes = details.get('cache_write_tokens', 0)
+    if writes and write_price is None:
+        return None  # No published separate cache-write price for this model.
+    ordinary = usage['input_tokens'] - reads - writes
+    return (ordinary * input_price + reads * read_price + writes * (write_price or 0) +
+            usage['output_tokens'] * output_price) / 1_000_000
+
+
+def total_if_known(values):
+    return sum(values) if values and None not in values else None
+
+
 def measurements(model, attempts):
-    # Standard text prices per million tokens on 2026-11-09, including the default cache-write lifetime.
-    input_price, read_price, write_price, output_price = {
-        'gpt-4.1-mini': (0.40, 0.10, 0, 1.60),
-        'gpt-6-luna': (0.10, 0.01, 0.125, 0.50),
-    }[model]
-    estimate = 0
-    for a in attempts:
-        usage = a.get('usage')
-        if not usage or a.get('service_tier') != 'default':
-            estimate = None
-            break
-        details = usage['input_tokens_details']
-        reads, writes = details['cached_tokens'], details['cache_write_tokens']
-        ordinary = usage['input_tokens'] - reads - writes
-        estimate += (ordinary * input_price + reads * read_price + writes * write_price +
-                     usage['output_tokens'] * output_price) / 1_000_000
+    estimate = total_if_known([estimated_cost(model, a) for a in attempts])
+    reasoning = [((a.get('usage') or {}).get('output_tokens_details') or {}).get('reasoning_tokens')
+                 for a in attempts]
     return {'first_draft_accepted': bool(attempts and attempts[0]['accepted']),
+            'fallback': not any(a['accepted'] for a in attempts),
             'retries': max(0, len(attempts) - 1), 'seconds': round(sum(a['seconds'] for a in attempts), 3),
+            'incomplete': sum(a.get('status') == 'incomplete' for a in attempts),
+            'reasoning_tokens': total_if_known(reasoning),
             'estimated_usd': round(estimate, 12) if estimate is not None else None}
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--env-file', type=Path, required=True)
-    parser.add_argument('--models', choices=[WRITER_MODEL], default=WRITER_MODEL,
-                        help='Writer 모델은 고정이며 이 인자는 생략할 수 있습니다.')
-    parser.add_argument('--output', type=Path, required=True)
-    args = parser.parse_args()
-    states = {name: dev_state(case) for name, case in DEV.items()}
-    key = dotenv_values(args.env_file, interpolate=False)['OPENAI_API_KEY']
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open('x', encoding='utf-8') as out:
-        for name, state in states.items():
-            settings = Settings({'OPENAI_API_KEY': key})
+def evaluate(models, key, out):
+    metrics = {model: [] for model in models}
+    for name, case in DEV.items():
+        baseline = dev_state(case)
+        for model in models:
+            state = baseline.model_copy(deep=True)
+            settings = Settings({'OPENAI_API_KEY': key, 'API_COMPOSE_MODEL': model})
             meter = Meter()
             services = Services(meter, settings, StructuredClient(settings, meter.client))
             with patch.object(services, 'read_store', return_value=nullcontext()), \
                  patch('backend.app.agents.templates._names', return_value=({}, {})):
                 services.compose(state)
-            record = {'case': name, 'model': WRITER_MODEL, 'attempts': meter.attempts,
-                      'metrics': measurements(WRITER_MODEL, meter.attempts),
+            result = measurements(model, meter.attempts)
+            metrics[model].append(result)
+            record = {'case': name, 'model': model, 'attempts': meter.attempts, 'metrics': result,
                       'draft': state.draft.model_dump(mode='json'), 'warnings': state.warnings}
             print(json.dumps(record, ensure_ascii=False), file=out, flush=True)
-            print(name, WRITER_MODEL, len(meter.attempts), flush=True)
+            print(name, model, len(meter.attempts), flush=True)
+    for model, rows in metrics.items():
+        totals = {k: total_if_known([r[k] for r in rows]) for k in
+                  ('first_draft_accepted', 'retries', 'fallback', 'incomplete', 'reasoning_tokens', 'estimated_usd')}
+        print(json.dumps({'model': model, 'cases': len(rows), 'median_seconds': median(r['seconds'] for r in rows),
+                          **totals}), flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--env-file', type=Path, required=True)
+    parser.add_argument('--models', nargs='+', choices=STANDARD_PRICES, default=list(STANDARD_PRICES),
+                        help='비교할 Writer 모델 목록. 생략하면 세 모델을 모두 평가합니다.')
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    if len(set(args.models)) != len(args.models):
+        parser.error('동일한 모델을 두 번 지정할 수 없습니다.')
+    key = dotenv_values(args.env_file, interpolate=False)['OPENAI_API_KEY']
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with args.output.open('x', encoding='utf-8') as out:
+        evaluate(args.models, key, out)
 
 
 if __name__ == '__main__':

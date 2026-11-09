@@ -4,6 +4,8 @@ import re
 from typing import get_args
 from pydantic import BaseModel
 
+from backend.app.agents.state import Draft
+
 
 def validation_details(error, schema):
     """Bounded diagnostics: schema paths and constraints, never model input/text."""
@@ -48,12 +50,14 @@ class StructuredClient:
         key = next((v for k, v in self.settings.values.items() if k.lower() == 'openai_api_key' and v), None)
         if not key:
             raise ValueError('LLM API key missing')
-        # GPT-6 Luna의 기본 추론 강도(medium)에서는 temperature를 보낼 수 없다.
-        sampling = {} if model == 'gpt-6-luna' else {'temperature': 0}
+        options = {'temperature': 0}
+        if model in ('gpt-5.6-luna', 'gpt-6-luna'):
+            # Writer의 출력 예산은 추론 토큰도 포함한다. 다른 노드는 기존 추론 설정을 유지한다.
+            options = {'reasoning': {'effort': 'low'}} if schema is Draft else {}
         with factory(api_key=key, timeout=timeout, max_retries=0) as client:
             response = client.responses.parse(model=model, instructions=prompt,
                 input=json.dumps(payload, ensure_ascii=False, allow_nan=False), text_format=schema,
-                max_output_tokens=max_output_tokens, store=False, **sampling)
+                max_output_tokens=max_output_tokens, store=False, **options)
         if response.status != 'completed' or response.output_parsed is None:
             raise ValueError('LLM response refused or incomplete')
         # Revalidate even when a test/integration provider returns a model instance.

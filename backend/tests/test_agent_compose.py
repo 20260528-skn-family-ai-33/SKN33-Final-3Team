@@ -22,9 +22,10 @@ class ComposeTest(unittest.TestCase):
         state.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': i, 'question': 'q'} for i in intents]))
         return state
 
-    def test_compose_model_is_pinned_on_responses_api(self):
-        expected_model = 'gpt-6-luna'
-        for overrides in [{}, {'API_COMPOSE_MODEL': 'gpt-4.1-mini'}]:
+    def test_compose_model_selection_on_responses_api(self):
+        for model in (None, 'gpt-4.1-mini', 'gpt-5.6-luna', 'gpt-6-luna'):
+            overrides = {'API_COMPOSE_MODEL': model} if model else {}
+            expected_model = model or 'gpt-6-luna'
             with self.subTest(overrides=overrides):
                 state = self.state(['STATISTICS'])
                 task = state.plan.tasks[0]
@@ -63,7 +64,12 @@ class ComposeTest(unittest.TestCase):
                 self.assertTrue(body['text']['format']['strict'])
                 self.assertEqual(body['max_output_tokens'], 1500)
                 self.assertFalse(body['store'])
-                self.assertNotIn('temperature', body)
+                if expected_model == 'gpt-4.1-mini':
+                    self.assertEqual(body['temperature'], 0)
+                    self.assertNotIn('reasoning', body)
+                else:
+                    self.assertNotIn('temperature', body)
+                    self.assertEqual(body['reasoning'], {'effort': 'low'})
 
     def test_all_fixed_needs_no_generated_response(self):
         state = self.state(['OUT_OF_SCOPE', 'OUT_OF_SCOPE'])
