@@ -99,11 +99,10 @@ export default function Articles({ route }) {
                 <article key={a.id} id={`article-${a.id}`} className={'li' + (on ? ' sel' : '')} style={{ color: 'var(--ink)', flexWrap: 'wrap', scrollMarginTop: 90 }}>
                   <div style={{ width: 4 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                       <span className={'tag ' + kind.tone}>{kind.label}</span>
                       {a.tags.map(t => <span key={t} className="tag">{t}</span>)}
                       {a.surge && <span className="tag amber">급증 {a.surge}</span>}
-                      {on && <span className="tag" style={{ background: 'var(--ink)', color: '#fff' }}>선택한 기사</span>}
                     </div>
                     <p style={{ fontSize: 18, fontWeight: 800 }}>{a.title}</p>
                     <p className="muted" style={{ marginTop: 6 }}>{a.country} · {a.date} · {a.source}</p>
@@ -137,7 +136,6 @@ export default function Articles({ route }) {
           </div>
           {/* 다른 페이지로 가면 펼쳐 둔 상세를 닫아 이전 기사가 남아 보이지 않게 한다. */}
           {pages > 1 && <Pager page={page} pages={pages} onChange={n => navigate(withQuery(route, { page: String(n), id: null }))} />}
-          <p className="note">{selected ? '선택 기사 강조 표시 · 기사 ID로 해당 결과 위치 유지' : '선택 기사 없음 · 전체 목록 진입'}</p>
         </div>
         <ChatFab />
       </main>

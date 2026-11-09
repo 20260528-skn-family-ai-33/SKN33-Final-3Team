@@ -104,7 +104,8 @@ class IntegrationStorageTest(unittest.TestCase):
         other=TestClient(self.app)
         self.addCleanup(other.close)
         r=other.post('/api/v1/auth/signup',json={'name':'대상 회원','email':'target@example.org',
-            'password':'Sample!123','password_confirm':'Sample!123'})
+            'password':'Sample!123','password_confirm':'Sample!123','age_confirmed':True,
+            'service_terms_version':'TERMS_SERVICE_V1','privacy_terms_version':'TERMS_PRIVACY_V1'})
         self.assertEqual(r.status_code,201,r.text); target=r.json()['user']['user_id']
         self.assertEqual(other.get('/api/v1/admin/users').status_code,403)
         def change(identity, role):

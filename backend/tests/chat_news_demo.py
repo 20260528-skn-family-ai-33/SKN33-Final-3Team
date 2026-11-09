@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from backend.app.api.config import Settings
 from backend.app.api.worker import run_once
-from backend.tests.api_support import create_test_app, reference_data, test_engine
+from backend.tests.api_support import SIGNUP_CONSENTS, create_test_app, reference_data, test_engine
 from backend.tests.chat_news_fixture import indexed_news
 from backend.tests.intent_fixtures import BASE
 
@@ -46,7 +46,7 @@ def main():
     app.mount('/', StaticFiles(directory=dist, html=True), name='demo-ui')
     with TestClient(app) as client:
         login = client.post('/api/v1/auth/signup', json={'name':'테스트','email':'demo@example.org',
-                            'password':'Sample!123','password_confirm':'Sample!123'})
+                            'password':'Sample!123','password_confirm':'Sample!123',**SIGNUP_CONSENTS})
         login.raise_for_status()
     def intent(*, question, previous_conditions):
         return {**BASE, 'intent':'LOCAL_ISSUES' if '최신' in question else 'RAG',

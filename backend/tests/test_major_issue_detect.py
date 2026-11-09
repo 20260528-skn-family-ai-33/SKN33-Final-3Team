@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from backend.app.api.config import Settings
 from backend.app.api.database import Store
 from backend.app.scheduler.jobs import major_issue_detect as job
-from backend.tests.api_support import create_test_app, reference_data, test_engine
+from backend.tests.api_support import SIGNUP_CONSENTS, create_test_app, reference_data, test_engine
 
 T = date(2026, 10, 14)
 ALL_DAYS = (T - timedelta(days=62), T)
@@ -39,7 +39,8 @@ class DetectTest(unittest.TestCase):
         self.client = TestClient(self.app)
         self.addCleanup(self.client.close)
         self.addCleanup(self.engine.dispose)
-        response = self.client.post('/api/v1/auth/signup', json={'name': '시험', 'email': 'major@example.org', 'password': 'Sample!123', 'password_confirm': 'Sample!123'})
+        response = self.client.post('/api/v1/auth/signup', json={'name': '시험', 'email': 'major@example.org', 'password': 'Sample!123',
+                                                                  'password_confirm': 'Sample!123', **SIGNUP_CONSENTS})  # 가입 필수 동의(#76)
         self.csrf = response.json()['csrf_token']
         self.uid = int(response.json()['user']['user_id'])
         tables = self.meta.tables

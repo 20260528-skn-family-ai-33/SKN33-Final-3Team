@@ -92,7 +92,7 @@ export function AppProvider({ children }) {
     groups.forEach(g => registerProducts(g.items))
     updateProfile({ ...emptyProfile, name: user.name, email: user.email, products: scope.hs_items.map(h => h.hs_code), countries: scope.country_codes.map(countryName), home: scope.landing_page === 'INTERESTED' ? 'interest' : 'all', version: scope.version })
     const s = pref.settings
-    updateSettings({ all: s.notifications_enabled, surge: s.spike_popup, major: s.major_issue_popup, report: s.report_popup, termsAgreed: s.consent_current, termsVersion: s.terms_version })
+    updateSettings({ all: s.notifications_enabled, surge: s.spike_popup, major: s.major_issue_popup, report: s.report_popup, termsAgreed: s.consent_current, termsVersion: s.terms_version, termsRequired: !!s.consent_required })
     updateSubscription({ ...subs, cycles: subs.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: subs.items.find(s => s.enabled)?.formats || ['PDF'] })
     await Promise.all([refreshNotifications(), refreshReports(), refreshChats()])
   }, [refreshNotifications, refreshReports, refreshChats])
@@ -162,7 +162,7 @@ export function AppProvider({ children }) {
       terms_type: 'NOTIFICATION', terms_version: version, action: 'AGREE', enable_notifications: true,
     } })
     if (current !== epoch.current) return false
-    const saved = { all: consent.notifications_enabled, termsAgreed: true, termsVersion: consent.terms_version }
+    const saved = { all: consent.notifications_enabled, termsAgreed: true, termsVersion: consent.terms_version, termsRequired: false }
     updateSettings(previous => ({ ...previous, ...saved }))
     return saved
   }), [run])
@@ -226,7 +226,7 @@ export function AppProvider({ children }) {
   }, [session, clear])
   const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`)), [run])
   const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
-  const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password }), [authenticate])
+  const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password, age_confirmed: form.ageConfirmed, service_terms_version: form.serviceTermsVersion, privacy_terms_version: form.privacyTermsVersion }), [authenticate])
   const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
   const withdraw = useCallback(() => notify('회원 탈퇴는 운영 정책 확정 후 제공됩니다.'), [notify])
   const value = useMemo(() => ({

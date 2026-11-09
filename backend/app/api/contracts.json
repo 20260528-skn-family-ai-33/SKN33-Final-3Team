@@ -32,6 +32,27 @@
         "string",
         "필수",
         "password와 일치, 저장하지 않음."
+      ],
+      [
+        "Request Body",
+        "age_confirmed",
+        "boolean",
+        "필수",
+        "만 14세 이상 확인. false면 422 AGE_CONFIRMATION_REQUIRED."
+      ],
+      [
+        "Request Body",
+        "service_terms_version",
+        "string",
+        "필수",
+        "API-54 service로 조회한 활성 버전. 다르면 409 TERMS_VERSION_CHANGED. user_consent에 저장."
+      ],
+      [
+        "Request Body",
+        "privacy_terms_version",
+        "string",
+        "필수",
+        "API-54 privacy로 조회한 활성 버전. 다르면 409 TERMS_VERSION_CHANGED. user_consent에 저장."
       ]
     ]
   },
@@ -1381,7 +1402,7 @@
         "terms_type",
         "string",
         "필수",
-        "notification만 지원. service/privacy는 별도 저장 계약이 없어 422 UNSUPPORTED_TERMS_TYPE."
+        "notification, service, privacy, privacy-policy. 그 밖의 값은 422 UNSUPPORTED_TERMS_TYPE."
       ]
     ]
   },
@@ -1396,7 +1417,7 @@
         "terms_type",
         "string",
         "필수",
-        "NOTIFICATION. 일반 약관은 확정 후."
+        "NOTIFICATION. 가입 약관은 API-01에서 함께 저장."
       ],
       [
         "Request Body",

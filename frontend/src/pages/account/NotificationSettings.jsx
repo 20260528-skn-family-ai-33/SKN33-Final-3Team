@@ -5,6 +5,8 @@ import { Link, navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
 import { Btn, Check, Modal, Toggle } from '../../components/ui'
 import { productName } from '../../data/catalog'
+import TermsBody from '../../components/TermsBody'
+import TermsRenewalNotice from '../../components/TermsRenewalNotice'
 
 const ROWS = [
   ['all', '전체 알림 수신', '끄면 팝업·새 알림함 등록 중단, 기존 내역 유지'],
@@ -51,6 +53,7 @@ export default function NotificationSettings({ route }) {
     <section className="card">
       <h2 className="t1" style={{ fontSize: 24 }}>알림설정</h2>
       <p className="muted" style={{ marginTop: 6 }}>받고 싶은 알림과 관심 조건을 관리합니다.</p>
+      <TermsRenewalNotice onAgree={() => { setAgree(false); navigate(withQuery(route, { terms: 'open' }), { replace: true }) }} />
       <div style={{ marginTop: 10 }}>
         {ROWS.map(([key, title, desc]) => (
           <div key={key} className="between" style={{ padding: '18px 0', borderBottom: '1px solid var(--line2)', opacity: key !== 'all' && !draft.all ? 0.55 : 1 }}>
@@ -82,8 +85,8 @@ export default function NotificationSettings({ route }) {
           <div className="between" style={{ padding: '12px 18px', background: 'var(--bg)' }}>
             <b style={{ fontSize: 14 }}>알림 수신 약관</b><span className="tag red">현재 적용 버전 {TERMS_VERSION}</span>
           </div>
-          <div style={{ padding: 18, height: 150, overflowY: 'auto', fontSize: 14, color: '#444B57', lineHeight: 1.8 }}>
-            <ErrorNotice error={terms.error} retry={terms.reload} /><span style={{ whiteSpace: 'pre-wrap' }}>{terms.loading ? '약관을 불러오는 중…' : terms.data?.terms.body}</span>
+          <div style={{ padding: 18, height: 240, overflowY: 'auto' }}>
+            <ErrorNotice error={terms.error} retry={terms.reload} />{terms.loading ? <span className="muted">약관을 불러오는 중…</span> : <TermsBody body={terms.data?.terms.body} />}
           </div>
         </div>
         <Check checked={agree} onChange={setAgree} style={{ marginTop: 16 }}>위 알림 수신 약관을 확인했으며 동의합니다.</Check>

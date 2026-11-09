@@ -165,7 +165,7 @@ export function Pager({ page, pages, onChange, window = 5 }) {
   const first = Math.floor((page - 1) / window) * window + 1
   const last = Math.min(pages, first + window - 1)
   return (
-    <nav aria-label="페이지" style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 22 }}>
+    <nav aria-label="페이지" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 22 }}>
       {/* 페이지가 한 묶음보다 많으면 처음·끝으로 바로 가는 버튼도 둔다. */}
       {pages > window && <Chip sm aria-label="처음 페이지" disabled={page <= 1} onClick={() => onChange(1)}>처음</Chip>}
       <Chip sm aria-label="이전 페이지" disabled={page <= 1} onClick={() => onChange(page - 1)}><Icon name="arrowLeft" size={14} /></Chip>

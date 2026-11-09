@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update, delete, text, inspect
-from backend.tests.api_support import test_engine, reference_data
+from backend.tests.api_support import test_engine, reference_data, SIGNUP_CONSENTS
 from backend.tests.api_support import create_test_app as create_app
 from backend.app.api.config import Settings
 from backend.app.api.common import now
@@ -48,7 +48,7 @@ class BackendApiTest(unittest.TestCase):
         self.client.close(); self.engine.dispose(); self.directory.cleanup()
 
     def signup(self,email='alice@example.org'):
-        response=self.client.post('/api/v1/auth/signup',json={'name':'홍길동','email':email,'password':'Sample!123','password_confirm':'Sample!123'})
+        response=self.client.post('/api/v1/auth/signup',json={'name':'홍길동','email':email,'password':'Sample!123','password_confirm':'Sample!123',**SIGNUP_CONSENTS})
         self.assertEqual(response.status_code,201,response.text)
         self.csrf=response.json()['csrf_token']; return response.json()['user']['user_id']
 
@@ -625,7 +625,7 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(response.status_code,200,response.text)
         table=self.meta.tables['user_consent']
         with self.engine.connect() as c:
-            self.assertEqual(list(c.scalars(select(table.c.action).order_by(table.c.consent_id))),['AGREE','REVOKE','AGREE'])
+            self.assertEqual(list(c.scalars(select(table.c.action).where(table.c.terms_version=='TERMS_V1').order_by(table.c.consent_id))),['AGREE','REVOKE','AGREE'])
 
     def test_subscription_validation_and_publication_trigger(self):
         uid=self.signup(); url='/api/v1/users/me/subscriptions'

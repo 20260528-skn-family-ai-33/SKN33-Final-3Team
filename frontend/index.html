@@ -10,9 +10,16 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Gothic+A1:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <title>Borderless Sellers</title>
+    <style>
+      /* 앱 스타일을 받기 전에도 같은 로딩 표시를 쓰도록 여기에 둔다. App.jsx의 PageLoader도 이 규칙을 쓴다. */
+      .page-loader{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fff}
+      .page-spinner{width:36px;height:36px;border:3px solid #E3E6EA;border-top-color:#C8102E;border-radius:50%;animation:page-spin .8s linear infinite}
+      @keyframes page-spin{to{transform:rotate(360deg)}}
+      @media (prefers-reduced-motion:reduce){.page-spinner{animation-duration:2.4s}}
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div class="page-loader" role="status" aria-label="불러오는 중"><div class="page-spinner"></div></div></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
