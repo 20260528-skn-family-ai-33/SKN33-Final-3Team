@@ -175,7 +175,7 @@
 {% for item in chunk %}
   {% set rows = [] %}
   {% for r in item.top5_compare %}{% set _ = rows.append({'label': r.name, 'values': [r.current, r.previous]}) %}{% endfor %}
-  <div>{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=70, width=320, row_height=30, divisor=1000000, digits='auto') }}{% else %}{{ m.pending() }}{% endif %}</div>
+  <div>{% if rows %}{{ hbar_chart(rows, [colors.accent, colors.previous], label_width=70, width=320, row_height=30, divisor=1000000) }}{% else %}{{ m.pending() }}{% endif %}</div>
 {% endfor %}
 </div>
 {% endcall %}

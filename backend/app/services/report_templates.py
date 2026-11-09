@@ -335,13 +335,10 @@ def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, dig
 
 
 def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digits=REPORT_DIGITS, divisor=1, tail_width=0, peak=None):
-    """가로 막대. rows: [{label, values:[현재, 비교...], tail?:{text, badge?}}]. digits는 막대별 목록도 가능하며,
-    'auto'면 양식처럼 최댓값이 100 이상일 때 소수점 없이(452), 작으면 한 자리(67.5)로 표시합니다.
+    """가로 막대. rows: [{label, values:[현재, 비교...], tail?:{text, badge?}}]. digits는 막대별 목록도 가능합니다.
     막대 길이는 peak(없으면 rows 최대값) 기준 — 여러 쪽에 나눠 그릴 때 같은 peak를 주면 막대 길이를 비교할 수 있습니다."""
     peak_value = peak if peak is not None else max((v for r in rows for v in r['values'] if v is not None), default=0)
     peak = peak_value / divisor or 1
-    if digits == 'auto':
-        digits = REPORT_DIGITS
     bars = len(colors)
     bar_h = 8 if bars > 1 else 12
     places_of = lambda j: digits[j] if isinstance(digits, (list, tuple)) else digits
