@@ -100,7 +100,12 @@ def build_context(store, uid, record, document):
         else:
             for item in context['conditions']['hs_items']:
                 item['display'] = f"{item['name']} · HS {item['hs_code']}"
-        populate(store, {**saved,'country_codes':[]} if saved.get('include_korea_total') else saved, context, names, start, end)
+        content = record.get('content_json') or {}
+        if content.get('source_tables'):  # 승인한 채팅 결과로 만든 리포트: 결과표 사본만 쓰고 다시 조회하지 않는다(D-90)
+            from backend.app.services.report_ondemand_context import populate_results
+            populate_results(saved, context, start, end, content)
+        else:
+            populate(store, {**saved,'country_codes':[]} if saved.get('include_korea_total') else saved, context, names, start, end)
         if saved.get('include_korea_total'):
             context['conditions']['countries'].insert(0,{'country_code':'__KOREA_TOTAL__','name':'한국(대한민국) 전체'})
             table=next((t for section in document['sections'] for t in section.get('tables',[])

@@ -1,0 +1,291 @@
+{
+  "schema_version": 1,
+  "evaluation": "Report Agent 오프라인 설계 계약 평가",
+  "evaluated_at_utc": "2026-11-09T03:50:07.551468+00:00",
+  "source_mode": "working_tree",
+  "source_revision": "c6e6bcda14d3d043de37519c05bba83f2e1408ad",
+  "harness_revision": "c6e6bcda14d3d043de37519c05bba83f2e1408ad",
+  "source_sha256": {
+    "backend/app/api/files.py": "a6b840a7cd19b05282d12eee079635066fbcc097e68297e80216dab9d532f802",
+    "backend/app/services/report_ondemand_context.py": "04dd7095baa9915def600f1298f10b46599f06e6980d18fbbf52936a64e697f4",
+    "backend/app/services/report_templates.py": "e798a8abd9d9fbf07d00d0d29e78725edb61f0f1decdc14f66e1baeb93cc7068",
+    "backend/app/services/report_context.py": "6f81e597b8bfe43828570ffb14cf817ad578f2ad276717144bbe00aebcf220a2",
+    "backend/app/api/reports.py": "e885c86fee14b26865ef183e3bf15823e5004e8a7eef3c3800bcff8c075c7228",
+    "backend/app/agents/report.py": "687bb44888d2995b049e2f175ef4ca359ed9a088d00ba82d6bcddccae7b22199"
+  },
+  "evidence_sha256": {
+    "backend/tests/test_agent_graph.py": "c2ce8ba1497aa67e3759b06733dc4276d83a8f01782fffef284c70612f643316",
+    "backend/tests/test_agent_pr61_fixes.py": "bd951e0ef5c4beebe83cb9426a19ae3dbf6df5787492356bca6033f80b715303",
+    "backend/tests/test_agent_report.py": "9f2534b8f925314940ccb54de2760d5b954a3cf3ec046f30741d189a9cb6b1d1",
+    "backend/tests/test_agent_state.py": "ba7db888fe60ea5c12114919ed93665a5eb6d77434e8610f4c2ab8f30dc0c977",
+    "backend/tests/test_backend_api.py": "d4eb7b62b8f0f80452c3547d87941ba213fdbbf6b1edaf60a8d36d475c1ca5e1",
+    "backend/scripts/evaluate_report_agent.py": "68556670c911cbba400a2dd2c5625facce582f5dd07ef19e8c137d8833a29d48",
+    "backend/tests/api_support.py": "646d2bf8d14f1e9128f1b7dae159c1824e1bc8a9d1fe692d0127a3b15c0ede23",
+    "backend/tests/intent_fixtures.py": "5c7e05213c3fa9be232bc6a60722f00b2485bbf9a21005fa1da144b7f8bb01eb"
+  },
+  "manifest_sha256": "e31efa6d09c3f0555f9660de856181397f5390cb69bb9bf3a3bdfd54cbe5692e",
+  "environment": {
+    "python": "3.12.13",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "packages": {
+      "langgraph": "1.2.19",
+      "SQLAlchemy": "2.0.55",
+      "pydantic": "2.14.2"
+    }
+  },
+  "network": "차단. SQLite·fakeredis·Mock만 사용",
+  "scoring": "테스트 메서드 1개 = 사례 1개, 모든 subTest 통과 시 PASS. SKIP·ERROR도 분모에 포함.",
+  "limitations": [
+    "선정한 설계 계약 사례의 통과율이며 실제 사용자 질문 분포나 서비스 전체 정확도가 아니다.",
+    "LLM 플래너·답변 초안은 Mock으로 고정했다. 실제 모델·RDS·지연·비용은 평가하지 않았다.",
+    "리포트 파일 생성은 완료 신호(report.status)로 대신했다. 파일 내용은 별도 사례로 본다.",
+    "과거 비교는 SOURCES 모듈만 교체하며 현재 테스트·fixture를 그대로 쓴다."
+  ],
+  "summary": {
+    "승인": {
+      "total": 6,
+      "pass": 6,
+      "fail": 0,
+      "error": 0,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 100.0
+    },
+    "대기·완료": {
+      "total": 7,
+      "pass": 7,
+      "fail": 0,
+      "error": 0,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 100.0
+    },
+    "선행 결과": {
+      "total": 5,
+      "pass": 5,
+      "fail": 0,
+      "error": 0,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 100.0
+    },
+    "리포트 파일": {
+      "total": 4,
+      "pass": 4,
+      "fail": 0,
+      "error": 0,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 100.0
+    },
+    "합계": {
+      "total": 22,
+      "pass": 22,
+      "fail": 0,
+      "error": 0,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 100.0
+    }
+  },
+  "cases": [
+    {
+      "id": "R01",
+      "group": "승인",
+      "category": "명시 승인",
+      "criterion": "미리보기를 만들어 묻고, 입력창의 글은 승인으로 쓰지 않으며 리포트를 만들지 않는다(D-81·D-92).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_report_waits_for_explicit_button_approval",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R02",
+      "group": "승인",
+      "category": "입력 검증",
+      "criterion": "다른 미리보기·잘못된 형식·중복·빈 형식·문자열 확인값은 거부한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_confirmation_must_match_the_preview_and_formats",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R03",
+      "group": "승인",
+      "category": "형식 보존",
+      "criterion": "사용자가 고른 PDF·DOCX를 리포트에 그대로 남긴다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_selected_formats_are_kept_on_the_report",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R04",
+      "group": "승인",
+      "category": "지원 범위",
+      "criterion": "수입 리포트는 미리보기·리포트 없이 안내하고 수출로 바꾸지 않는다(D-81).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_import_report_is_refused_before_preview",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R05",
+      "group": "승인",
+      "category": "취소",
+      "criterion": "취소하면 리포트를 접수하지 않는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_cancel_creates_no_report",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R06",
+      "group": "승인",
+      "category": "만료",
+      "criterion": "만료된 미리보기 승인으로 만들지 않고 새 미리보기로 다시 묻는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_expired_preview_is_confirmed_again_not_created",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R07",
+      "group": "대기·완료",
+      "category": "완료 대기",
+      "criterion": "QUEUED·RUNNING·DELAYED 동안 대기하고 READY에서 리포트 번호·완료 문구로 끝난다(D-76·D-93).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_chat_waits_until_the_report_is_ready",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R08",
+      "group": "대기·완료",
+      "category": "실패 처리",
+      "criterion": "FAILED면 완료 문구 없이 그 질문만 NO_DATA, 다른 분석은 답한다(D-72).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_failed_report_ends_the_wait_without_success_text",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R09",
+      "group": "대기·완료",
+      "category": "중복 방지",
+      "criterion": "같은 단계 재실행은 리포트를 재사용하고 승인 입력이 다르면 접수하지 않는다(D-97).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_same_step_reuses_the_report_and_conflicting_input_is_refused",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R10",
+      "group": "대기·완료",
+      "category": "대기 확인",
+      "criterion": "한 번에 일부만 확인해도 커서로 모든 대기 채팅을 깨운다(§14.6).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_waiting_checker_visits_every_waiting_chat",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R11",
+      "group": "대기·완료",
+      "category": "완료 제목",
+      "criterion": "첫 답변의 제목·요약을 LLM 재호출 없이 코드로 20자 이내 작성한다(D-93).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_first_answer_title_and_summary_come_from_code",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R12",
+      "group": "선행 결과",
+      "category": "조건 충돌",
+      "criterion": "조건이 다른 선행 결과를 합치지 않고 리포트만 NO_DATA로 끝낸다(D-90).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_result_based_report_refuses_sources_with_different_conditions",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R13",
+      "group": "선행 결과",
+      "category": "조건 고정",
+      "criterion": "선행 결과 기반 리포트는 글로 조건을 바꾸지 않고 새 분석을 안내한다(D-92).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_result_based_report_cannot_change_conditions_by_text",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R14",
+      "group": "대기·완료",
+      "category": "그래프 중단",
+      "criterion": "리포트 대기 중 그래프가 실행권을 놓고 완료 후 이어서 재개한다(D-76).",
+      "test": "backend.tests.test_agent_graph.AgentGraphTest.test_report_wait_releases_graph_and_resumes_with_none",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R15",
+      "group": "대기·완료",
+      "category": "실행 예산",
+      "criterion": "실행 예산을 다 써도 완성된 리포트의 결과 확인을 거부하지 않는다(§13.4).",
+      "test": "backend.tests.test_agent_pr61_fixes.FinishBudgetTest.test_report_ready_reserves_even_when_budget_is_spent",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R16",
+      "group": "선행 결과",
+      "category": "부분 결과",
+      "criterion": "선행 결과의 누락(PARTIAL)을 리포트 결과까지 전파한다(D-96).",
+      "test": "backend.tests.test_agent_state.DependentTaskContractTest.test_partial_result_propagates_to_report_and_rag",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R17",
+      "group": "선행 결과",
+      "category": "완료 결론",
+      "criterion": "요약 정보가 없어도 리포트 성공 결론을 고정 문구로 만든다(D-93).",
+      "test": "backend.tests.test_agent_state.DependentTaskContractTest.test_report_success_has_conclusion_without_digest",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R18",
+      "group": "선행 결과",
+      "category": "결과 고정",
+      "criterion": "원본 결과가 만료돼도 승인한 사본으로 재조회 없이 문서를 만든다(D-90).",
+      "test": "backend.tests.test_backend_api.BackendApiTest.test_agent_report_uses_approved_result_after_source_expires",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R19",
+      "group": "리포트 파일",
+      "category": "템플릿",
+      "criterion": "결과 기반 리포트도 요청형 템플릿으로 결과표·그래프를 싣고, 없는 섹션은 알리며, 다시 조회하지 않는다(D-90).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_result_based_report_uses_the_ondemand_template_without_requery",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R20",
+      "group": "리포트 파일",
+      "category": "기존 유지",
+      "criterion": "조건으로 요청한 채팅 리포트는 기존 요청형 집계 섹션을 그대로 쓴다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_condition_report_keeps_the_ondemand_template",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R21",
+      "group": "리포트 파일",
+      "category": "표시",
+      "criterion": "일회성 판정·순위 상태를 PDF·DOCX에서 읽을 수 있는 말로 싣는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_result_report_cells_are_readable_in_pdf_and_docx",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R22",
+      "group": "리포트 파일",
+      "category": "분량·누락",
+      "criterion": "PDF 결과표는 200행까지 싣고 전체 행 수·누락 사유·미포함 항목을 알린다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_result_tables_are_bounded_and_keep_missing_notes",
+      "status": "PASS",
+      "details": []
+    }
+  ]
+}

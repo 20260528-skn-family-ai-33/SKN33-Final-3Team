@@ -21,6 +21,89 @@ def period_view(start, end):
             'short': short}
 
 
+KINDS = {'TREND': '월별 추이', 'RANKING': '순위', 'SHARE': '비중', 'PREDICTION': '유망시장 예측', 'LLM_SQL': '사용자 지정 조회'}
+SECTION_LABELS = {'KPI': '주요 지표·월별 추이', 'TOP_COUNTRIES': '주요 수출국', 'GROWTH_RISK': '수출 증가·감소 시장',
+                  'LOCAL_ISSUES': '현지 이슈'}
+RESULT_ROW_LIMIT = 200   # PDF에 싣는 결과표 행 수. 전체 행은 함께 만드는 XLSX에 있다.
+CHART_SERIES_LIMIT = 5   # 채팅 차트와 같은 시리즈 상한(D-59)
+CHART_LABEL_LIMIT = 60
+
+
+def _cell(value, column):
+    """결과표 값을 표시용 글자로. 값은 바꾸지 않고(반올림 표시만) 없으면 —. 일회성 판정·상태 코드는 DOCX와 같은 말로."""
+    from backend.app.api.files import readable
+    value = readable(value, column.get('key'))
+    if value is None or value == '':
+        return '—'
+    if column.get('type') == 'number' and isinstance(value, (int, float)):
+        if column.get('unit') == '%':
+            return f'{value:.1f}%'
+        return f'{value:,.0f}' if float(value).is_integer() else f'{value:,.2f}'
+    return str(value)
+
+
+def _trend_chart(table):
+    """월별 추이 결과의 꺾은선 그래프. 기준월 열과 USD 금액 열이 있을 때만, 나머지 글자 열 조합을 시리즈로 둔다."""
+    columns = table['columns']
+    keys = [c['key'] for c in columns]
+    amount = next((c['key'] for c in columns if c.get('type') == 'number' and c.get('unit') == 'USD'), None)
+    if table.get('kind') != 'TREND' or 'month' not in keys or not amount:
+        return None
+    names = [c['key'] for c in columns if c.get('type') != 'number' and c['key'] != 'month']
+    labels = sorted({r['month'] for r in table['rows'] if r.get('month')})
+    if not labels or len(labels) > CHART_LABEL_LIMIT:
+        return None
+    series = {}
+    for r in table['rows']:
+        name = ' · '.join(str(r.get(k)) for k in names if r.get(k)) or '수출액'
+        series.setdefault(name, {})[r['month']] = r.get(amount)
+    if len(series) > CHART_SERIES_LIMIT:
+        return None
+    return {'labels': labels, 'series': [{'name': name, 'values': [values.get(m) for m in labels]} for name, values in series.items()]}
+
+
+def populate_results(saved, ctx, start, end, content):
+    """승인한 채팅 분석 결과로 만드는 요청형 리포트(D-90). 저장된 결과표 사본만 쓰고 통계를 다시 조회하지 않는다.
+    결과표에 없는 요청형 섹션은 만들지 않고 '해당 분석 결과에 포함되지 않음'으로 알린다."""
+    from datetime import date
+    start, end = start.replace(day=1), end.replace(day=1)
+    sections = saved.get('sections', ['KPI', 'TOP_COUNTRIES', 'GROWTH_RISK', 'LOCAL_ISSUES'])
+    mode = saved.get('compare', 'NONE') if saved.get('compare_period') else 'NONE'
+    previous = [date.fromisoformat(saved['compare_period'][k]) for k in ('start', 'end')] if mode != 'NONE' else []
+    c = ctx['conditions']
+    c.update(period=period_view(start, end), sections=sections, request_channel='CHAT', result_mode=True,
+             metric={'code': saved.get('metric', 'AMOUNT'), 'label': METRICS[saved.get('metric', 'AMOUNT')]},
+             compare={'mode': mode, 'status': 'NONE' if mode == 'NONE' else 'READY', 'monthly_paired': False,
+                      'period_label': period_view(*previous)['label'] if previous else '',
+                      'short': period_view(*previous)['short'] if previous else '', 'basis_label': BASES[mode]})
+    refs = {ref['result_id']: ref for ref in content.get('source_results', [])}
+    results, checks = [], []
+    for i, table in enumerate(content.get('source_tables', []), 1):
+        columns = [{'key': col['key'], 'label': col['label'] + (f" ({col['unit']})" if col.get('unit') else ''),
+                    'numeric': col.get('type') == 'number'} for col in table['columns']]
+        rows = [[_cell(r.get(col['key']), col) for col in table['columns']] for r in table['rows'][:RESULT_ROW_LIMIT]]
+        total = table.get('total_rows', len(table['rows']))
+        note = f'전체 {total:,}행' + (f' 중 {len(rows):,}행 표시 · 전체는 XLSX 파일' if total > len(rows) else '')
+        title = f"결과 {i} · {KINDS.get(table.get('kind'), table.get('kind'))}"
+        results.append({'result_id': table['result_id'], 'title': title, 'columns': columns, 'rows': rows, 'note': note,
+                        'chart': _trend_chart(table)})
+        ref = refs.get(table['result_id'], {})
+        checks.append({'target': title, 'content': f"승인한 결과표 {total:,}행 · 결과 ID {table['result_id']}",
+                       'basis': '승인 시점 사본 · ' + ('일부 누락' if ref.get('completeness') == 'PARTIAL' else '재조회 없음')})
+        checks.extend({'target': title, 'content': text, 'basis': '누락·제한 사유'} for text in ref.get('limitations', []))
+    from backend.app.api.reports import RESULT_SECTIONS  # 웹·DOCX 문서와 같은 섹션 대응
+    covered = {RESULT_SECTIONS.get(t.get('kind')) for t in content.get('source_tables', [])}
+    missing = [SECTION_LABELS[s] for s in sections if s in SECTION_LABELS and s not in covered]
+    if missing:
+        checks.append({'target': '포함되지 않은 항목', 'content': ' · '.join(missing) + ': 해당 분석 결과에 포함되지 않음',
+                       'basis': '결과표 밖 내용은 다시 조회해 채우지 않음'})
+    ctx['results'] = results
+    ctx['summary'] = {'kpi': {'amount_usd': None, 'country_count': None}, 'sentences': [], 'check_points': checks}
+    ctx['meta']['data_basis'] = '승인한 AI 분석 결과표 사본 · 관세청 수출입무역통계 · 재조회 없음'
+    ctx['sources'] = [{'label': '분석 결과표', 'provider': '관세청 (AI 분석 대화 결과)',
+                       'scope': f'결과 {len(results)}개 · 승인 시점에 저장한 사본', 'used_in': '승인한 분석 결과'}]
+
+
 def populate(store, saved, ctx, names, start, end):
     from datetime import date
     start, end = start.replace(day=1), end.replace(day=1)

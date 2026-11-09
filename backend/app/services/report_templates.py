@@ -655,9 +655,27 @@ HALF_MM = (TEXT_MM - 6) / 2  # 두 칸 배치(.grid2)의 한 칸 폭
 
 
 def ondemand_sections(ctx):
-    """실제로 그릴 섹션 코드 (목차·쪽 번호·포함 항목에 같은 목록을 씁니다)."""
+    """실제로 그릴 섹션 코드 (목차·쪽 번호·포함 항목에 같은 목록을 씁니다).
+    승인한 채팅 결과로 만든 리포트(results)는 핵심 요약과 결과표만 그립니다. 결과표에 없는 집계 섹션은 만들지 않습니다(D-90)."""
+    if ctx.get('results') is not None:
+        return ['SUMMARY', 'RESULTS']
     chosen = set(ctx['conditions']['sections'])
     return [s for s in ONDEMAND_SECTIONS if s == 'SUMMARY' or s in chosen]
+
+
+def _result_blocks(results):
+    """결과표마다 (월별 추이면 그래프) + 표. 표는 행 단위로 쪽을 나눕니다. 칸 폭은 본문 폭을 열 수로 나눈 값으로 추정합니다."""
+    blocks = []
+    for i, table in enumerate(results):
+        chart = table.get('chart')
+        if chart:  # 소제목 + 범례 + 그래프(높이 230은 ondemand.html과 같아야 함)
+            blocks.append({'key': 'rchart', 'table': i,
+                           'height': H3_MM + _legend([s['name'] for s in chart['series']]) + _svg(230)})
+        width = TEXT_MM / max(len(table['columns']), 1) - 2
+        blocks.append(_table('rtable', [_row([(cell, width) for cell in row]) for row in table['rows']],
+                             head=H3_MM + TH_MM + LINE[8.2] * max(_lines(c['label'], 8.2, width) for c in table['columns'])
+                             if table['columns'] else None, table=i))
+    return blocks
 
 
 def _ondemand_layout(ctx, rest):
@@ -665,6 +683,13 @@ def _ondemand_layout(ctx, rest):
     sections = ondemand_sections(ctx)
     s = ctx['summary']
     pages = {'sections': sections}
+
+    if 'RESULTS' in sections:  # 결과 기반: 집계 카드 없이 검토표(결과 출처·누락·미포함 항목)만
+        pages['summary'] = flow([_table('checks', [_row([(r['target'], 26), (r['content'], 92), (r['basis'], 44)])
+                                                   for r in s['check_points']])],
+                                BODY_MM - _heading('승인한 AI 분석 결과표로 작성 · 다시 조회하지 않음'), rest)
+        pages['results'] = flow(_result_blocks(ctx['results']), BODY_MM - _heading('대화에서 승인한 결과표 사본 · 금액 단위는 각 열 머리글'), rest)
+        return pages
 
     blocks = [{'key': 'cards', 'height': KPI_MM}]
     if s['sentences']:
