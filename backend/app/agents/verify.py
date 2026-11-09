@@ -325,7 +325,7 @@ def check_codes(sentence, digests):
     prefixed=[m['code'] for m in HS_PREFIXED.finditer(sentence)]
     good=(all(m['value'].replace(',','') in allowed for m in found)
           and all(code in allowed or code in versions for code in prefixed))
-    return good,[_shown(m) for m in found]+[f'HS{code}' for code in prefixed if code not in versions][:10]
+    return good,([_shown(m) for m in found]+[f'HS{code}' for code in prefixed if code not in versions])[:10]
 
 
 def _fact(match):
