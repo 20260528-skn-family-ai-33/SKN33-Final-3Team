@@ -278,6 +278,7 @@ export default function Analysis({ route }) {
   const [messages, setMessages] = useState([])
   const [job, setJob] = useState(null)
   const [error, setError] = useState(null)
+  const [statusError, setStatusError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState(null)
   const [sending, setSending] = useState(null)   // 접수 응답 전까지 보여 줄 질문(15번 로딩)
@@ -300,28 +301,42 @@ export default function Analysis({ route }) {
   const activeRef=useRef(activeId); activeRef.current=activeId
   const active = chats.find(c => c.id === activeId)
   useEffect(() => {
-    let cancelled = false, timer
+    let cancelled = false, timer, checkingStatus = false
+    const controller = new AbortController()
+    const alreadyAnswered = latest => latest?.status === 'NEEDS_INPUT' && acceptedClarifications.current.has(latest.clarification?.clarification_id)
+    const showMessages = (rows, latest) => {
+      setMessages(completedMessages(rows, latest))
+      // 대화는 표시하되 이미 답한 확인 요청은 오래된 목록으로 되살리지 않는다.
+      if (!alreadyAnswered(latest)) setJob(latest || null)
+    }
+    const checkStatus = async (rows, snapshot) => {
+      if (cancelled || checkingStatus) return
+      checkingStatus = true
+      setStatusError(null)
+      try {
+        const latest = (await api(`/chat/jobs/${snapshot.job_id}`, { signal: controller.signal })).job
+        if (cancelled) return
+        showMessages(rows, latest)
+        if (running(latest.status) || alreadyAnswered(latest)) timer = setTimeout(load, 2000)
+      } catch (e) {
+        if (!cancelled) setStatusError({ sessionId: activeId, revision: readRevision, error: e, retry: () => checkStatus(rows, snapshot) })
+      } finally { checkingStatus = false }
+    }
     const load = async () => {
       if (!activeId) return
       try {
         const rows = await allPages(`/chat/sessions/${activeId}/messages`)
         if (cancelled) return
-        setError(null)
-        let latest = [...rows].reverse().find(m => m.job)?.job
+        setError(null); setStatusError(null)
+        const latest = [...rows].reverse().find(m => m.job)?.job
+        // 상태 조회가 늦거나 실패해도 이미 받은 대화는 해당 작업과 함께 표시한다.
+        showMessages(rows, latest)
         // The job endpoint also checks whether a pending checkpoint has expired.
-        if (latest && (running(latest.status)||latest.status==='NEEDS_INPUT')) latest=(await api(`/chat/jobs/${latest.job_id}`)).job
-        if (cancelled) return
-        if (latest?.status==='NEEDS_INPUT' && acceptedClarifications.current.has(latest.clarification?.clarification_id)) {
-          timer=setTimeout(load,2000)
-          return
-        }
-        setMessages(completedMessages(rows,latest))
-        setJob(latest || null)
-        if (latest && running(latest.status)) timer = setTimeout(load, 2000)
+        if (latest && (running(latest.status)||latest.status==='NEEDS_INPUT')) await checkStatus(rows, latest)
       } catch (e) { if (!cancelled) setError(e) }
     }
     load()
-    return () => { cancelled = true; clearTimeout(timer) }
+    return () => { cancelled = true; clearTimeout(timer); controller.abort() }
   }, [activeId, readRevision])
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, [messages.length])
   // 리포트 생성이 시작되면(채팅 승인 → WAITING_REPORT, 조건 폼 → 생성 접수) 생성 중 표시가 있는 곳으로 이동한다
@@ -518,6 +533,11 @@ export default function Analysis({ route }) {
                 </AiBlock>
               )}
               <ErrorNotice error={error} retry={() => setReadRevision(v => v + 1)} />
+              {statusError && statusError.sessionId === activeId && statusError.revision === readRevision && <div>
+                <p className="note">작업 상태를 확인하지 못했습니다. 표시된 대화 내역은 유지됩니다.</p>
+                <ErrorNotice error={statusError.error} />
+                <Btn onClick={statusError.retry}>작업 상태 다시 조회</Btn>
+              </div>}
               {unplaced.map(reportCard)}
               {messages.map(m => <Fragment key={m.message_id}>{renderMessage(m)}
                 {placedDraft && lastOfTurn.get(draft.after) === m.message_id && conditionCard}

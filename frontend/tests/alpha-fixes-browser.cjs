@@ -27,6 +27,9 @@ const { chromium } = require('playwright')
       { message_id: '2', role: 'ASSISTANT', content_masked: answer.text, answer },
     ]
     let next = 3
+    let statusMode = '503', finishStatus, statusCalls = 0, messageReads = 0
+    const statusUnavailable = { status: 503, json: { message: '작업 상태 조회 일시 실패 테스트' } }
+    const recoveredJob = { job_id: '90', status: 'SUCCEEDED', answer: { ...answer, text: '상태 재조회로 복구된 답변' } }
     const loadedJobs = new Set(['1']), prematureStreams = []
     const user = { user_id: '1', name: '검수', email: 'Review@Example.org', role: 'USER', terms_consents: [] }
     await page.route('**/api/v1/**', async route => {
@@ -44,7 +47,21 @@ const { chromium } = require('playwright')
       if (p === '/users/me/subscriptions') return reply({ items: [], version: '1' })
       if (p === '/notifications/unread-count') return reply({ count: 0 })
       if (p.startsWith('/terms/')) return reply({ terms: { version: 'TERMS_NOTIFICATION_V1', body: '알림 수신 약관 본문' } })
-      if (p === '/chat/sessions') return reply({ items: [{ session_id: '1', title: '테스트 채팅', updated_at: '2026-11-10T00:00:00Z' }], page: { has_next: false } })
+      if (p === '/chat/sessions') return reply({ items: [
+        { session_id: '1', title: '테스트 채팅', updated_at: '2026-11-10T00:00:00Z' },
+        { session_id: '2', title: '다른 채팅', updated_at: '2026-11-10T00:00:00Z' },
+      ], page: { has_next: false } })
+      if (p === '/chat/sessions/2/messages') return reply({ items: [
+        { message_id: '201', role: 'USER', content_masked: '다른 방 질문' },
+        { message_id: '202', role: 'ASSISTANT', content_masked: '다른 방 답변' },
+      ], page: { has_next: false } })
+      if (p === '/chat/jobs/90') {
+        statusCalls++
+        const response = statusMode === 'hold' ? await new Promise(resolve => { finishStatus = resolve })
+          : statusMode === '503' ? statusUnavailable : { json: { job: recoveredJob } }
+        return route.fulfill(response)
+      }
+      if (p === '/chat/jobs/90/clarifications' && req.method() === 'POST') return reply({ job: { job_id: '90', status: 'RUNNING' } })
       if (p === '/chat/sessions/1/messages') {
         if (req.method() === 'POST') {
           const id = String(next++)
@@ -54,6 +71,7 @@ const { chromium } = require('playwright')
           if (!failed) rows.push({ message_id: String(next++), role: 'ASSISTANT', answer: { ...answer, text: req.postDataJSON().question === '다음 질문' ? '후속 답변' : '중간 답변' } })
           return reply({ job })
         }
+        messageReads++
         await new Promise(resolve => setTimeout(resolve, 150))
         rows.forEach(row => { if (row.job) loadedJobs.add(row.job.job_id) })
         return reply({ items: rows, page: { has_next: false } })
@@ -103,6 +121,69 @@ const { chromium } = require('playwright')
     await page.getByText('첫 질문', { exact: true }).waitFor()
     assert.equal(await page.locator('#report-99').count(), 0)
     console.log('PASS failed report stays before later turns and can be dismissed persistently')
+
+    rows.push({ message_id: '90', role: 'USER', content_masked: '상태 조회 대기 질문', job: { job_id: '90', status: 'RUNNING' } })
+    statusMode = 'hold'
+    const pendingStatus = page.waitForRequest('**/api/v1/chat/jobs/90')
+    await page.reload()
+    await pendingStatus
+    // History must render before the status response, including previously completed answers.
+    await page.getByText('첫 질문', { exact: true }).waitFor()
+    await page.getByText('후속 답변', { exact: true }).waitFor()
+    await page.getByText('상태 조회 대기 질문', { exact: true }).waitFor()
+    finishStatus(statusUnavailable)
+    await page.getByText('작업 상태 조회 일시 실패 테스트', { exact: true }).waitFor()
+    assert.equal(await page.getByLabel('질문 입력').isDisabled(), true)
+    const readsBeforeRetry = messageReads, callsBeforeRetry = statusCalls
+    statusMode = '503'
+    const repeatedFailure = page.waitForResponse('**/api/v1/chat/jobs/90')
+    await page.getByRole('button', { name: '작업 상태 다시 조회', exact: true }).click()
+    await repeatedFailure
+    await page.getByText('작업 상태 조회 일시 실패 테스트', { exact: true }).waitFor()
+    assert.equal(messageReads, readsBeforeRetry, 'Status retry must not refetch the message list')
+    assert.equal(statusCalls, callsBeforeRetry + 1)
+    assert.equal(await page.getByText('후속 답변', { exact: true }).count(), 1)
+    statusMode = 'complete'
+    await page.getByRole('button', { name: '작업 상태 다시 조회', exact: true }).click()
+    await page.getByText('상태 재조회로 복구된 답변', { exact: true }).waitFor()
+    assert.equal(await page.getByText('작업 상태 조회 일시 실패 테스트', { exact: true }).count(), 0)
+    assert.equal(await page.getByLabel('질문 입력').isDisabled(), false)
+    assert.equal(messageReads, readsBeforeRetry)
+    assert.deepEqual(prematureStreams, [])
+    console.log('PASS slow/503 status responses preserve history, and status-only retry recovers the answer')
+
+    rows.at(-1).job = { job_id: '90', status: 'NEEDS_INPUT', clarification: {
+      clarification_id: 'confirm-90', kind: 'CHOICE', message: '분석 조건을 확인해 주세요', allow_text: false,
+      choices: [{ choice_id: 'yes', label: '이 조건으로 분석' }],
+    } }
+    statusMode = '503'
+    await page.reload()
+    await page.getByText('작업 상태 조회 일시 실패 테스트', { exact: true }).waitFor()
+    const statusAfterClarification = page.waitForResponse('**/api/v1/chat/jobs/90')
+    await page.getByRole('button', { name: '이 조건으로 분석', exact: true }).click()
+    await statusAfterClarification
+    await page.getByText('작업 상태 조회 일시 실패 테스트', { exact: true }).waitFor()
+    assert.equal(await page.getByText('첫 질문', { exact: true }).count(), 1)
+    assert.equal(await page.getByText('후속 답변', { exact: true }).count(), 1)
+    assert.equal(await page.getByRole('button', { name: '이 조건으로 분석', exact: true }).count(), 0)
+    assert.equal(await page.getByLabel('질문 입력').isDisabled(), true)
+    rows.at(-1).job = { job_id: '90', status: 'RUNNING' }
+    console.log('PASS stale clarification snapshots do not reopen an already accepted prompt after a 503')
+
+    statusMode = 'hold'
+    const lateStatus = page.waitForRequest('**/api/v1/chat/jobs/90')
+    await page.reload()
+    await lateStatus
+    await page.getByText('상태 조회 대기 질문', { exact: true }).waitFor()
+    await page.getByRole('button', { name: /다른 채팅/ }).click()
+    await page.getByText('다른 방 답변', { exact: true }).waitFor()
+    finishStatus({ json: { job: recoveredJob } })
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+    assert.equal(await page.getByText('상태 재조회로 복구된 답변', { exact: true }).count(), 0)
+    assert.equal(await page.getByRole('button', { name: '작업 상태 다시 조회', exact: true }).count(), 0)
+    assert.equal(await page.getByText('다른 방 답변', { exact: true }).count(), 1)
+    rows.pop()
+    console.log('PASS late status response cannot overwrite a different chat')
 
     await page.goto(base + '#/articles')
     await page.getByText('페이지 1 기사 1', { exact: true }).waitFor()
