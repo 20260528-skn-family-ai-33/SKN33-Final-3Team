@@ -149,7 +149,7 @@
 - 검증 보고서 부산물: `features_snapshot.pkl`(피처 캐시)·`features_snapshot_summary.json`·`report_training_attempt.json` (`report_workflow`, git 제외)
   - 지금은 CSV와 조회 함수(`top_products`·`top_countries`·`market_type_of`)로 읽는다.
   - 서비스 API가 조회하므로 최종적으로는 DB에 저장한다. 테이블 설계는 별도 이슈.
-- 재학습 주기: 관세청 월별 적재(매월 10일) 뒤 월 1회 예측 갱신, 재학습은 분기 1회 또는 외부 데이터 새 판이 나왔을 때.
+- 재학습 주기: 관세청 월별 적재(매월 18일) 뒤 월 1회 예측 갱신, 재학습은 분기 1회 또는 외부 데이터 새 판이 나왔을 때.
 
 ## 11. 실제 학습까지 남은 작업 (순서대로)
 

@@ -203,7 +203,7 @@ python -m backend.app.scheduler.jobs.customs_monthly --month 202509
 python -m backend.app.scheduler.jobs.customs_monthly --month 202509 --refresh
 ```
 
-기본 실행은 **매월 10일 03:00 Asia/Seoul**, 대상은 전월입니다. 스케줄러 프로세스를 계속 실행해야 합니다.
+기본 실행은 **매월 18일 03:00 Asia/Seoul**, 대상은 전월입니다. 스케줄러 프로세스를 계속 실행해야 합니다.
 공용 `scheduler/main.py`가 `customs_monthly.register_jobs(scheduler)`로 수출입 작업을 등록합니다.
 수출입 전용 스케줄러와 `--schedule` 옵션은 제거했으며, 특정 월의 수동 실행은 `--month`를 사용합니다.
 시작 약 20초 뒤에도 복구 범위의 누락·실패 월을 점검하며, 실패한 작업은 같은 대상 월로 다음 날 재시도합니다(최대 30회).
@@ -251,7 +251,7 @@ python -m backend.app.scheduler.jobs.customs_monthly --month 202509 --confirmed-
 `.env`에서 운영 설정을 바꿀 수 있습니다.
 
 ```dotenv
-CUSTOMS_MONTHLY_DAY=10
+CUSTOMS_MONTHLY_DAY=18
 CUSTOMS_MONTHLY_HOUR=3
 CUSTOMS_MONTHLY_MINUTE=0
 # 운영 시작 월 예시: 2026년 1월부터 복구 (실제 운영 범위에 맞게 지정)
@@ -259,8 +259,8 @@ CUSTOMS_START_MONTH=202601
 CUSTOMS_ML_ENTRYPOINT=backend.app.ml.<팀_ML_모듈>:<실행함수>
 ```
 
-월별 순서는 수집 → 검증·사전 보완·적재·집계 → 이력·이상 판정 → ML 연결입니다.
+자동 일정은 18일 수집 → 검증·사전 보완·적재·집계 → 이력·이상 판정까지 완료한 뒤 `WAITING_FOR_ML`로 대기하고, 19일 ML 전용 작업이 학습합니다. 시작 20초 뒤 수집 복구는 ML을 실행하지 않으며, 40초 뒤 ML 복구는 예약일이 지난 월만 처리합니다. 수동 월 파이프라인 실행은 기존처럼 ML까지 이어갈 수 있습니다.
 ML 함수는 `run(trade_month="2025-09-01", engine=engine)` 형태의 인자를 받고 `{"status": "SUCCESS", ...}`를 반환해야 합니다.
 실패 재실행에 대비해 대상 월을 기준으로 중복 처리를 방지하는 것은 해당 ML 함수에서 처리합니다.
-현재 저장소의 ML 구현은 비어 있으므로 실제 함수가 준비되지 않았으면 설정을 비워 둡니다.
+최종 모델의 실행 함수는 `backend.app.ml.candidate_models:run`입니다. AWS에서 별도 예약한 서버에서는 이 설정을 비워 중복 학습을 막습니다.
 이 경우 수출입 적재·계산 후 **WAITING_FOR_ML**로 남으며 ML까지 완료했다고 표시하지 않습니다.

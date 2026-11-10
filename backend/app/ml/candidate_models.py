@@ -10,7 +10,7 @@
    data/ml/monthly_models/model_a_two_stage_<YYYYMM>.joblib 저장 → DB ml_model_version에 기록한다.
    이어서 같은 달 피처 표로 증감 예상 모델(모델 B, growth_model)을 같은 절차로 학습해
    model_b_growth_<YYYYMM>.joblib 저장 → ml_model_version(model_key=model_b)에 기록한다. B가 실패해도 A 결과는 그대로다.
-    자동: .env에 CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run (customs_monthly의 ML 단계)
+    자동: .env에 CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run (매월 19일 customs_ml_monthly의 ML 전용 단계)
     수동: python -m backend.app.ml.candidate_models --monthly 2026-10-01
 """
 import argparse
@@ -318,7 +318,7 @@ GROWTH_RETRY_LIMIT = 3   # 같은 달 모델 B를 자동으로 다시 학습하�
 
 @stored('models/monthly', lambda args: args['out_dir'])
 def retry_pending(engine=None, *, out_dir=MONTHLY_DIR, cache_dir=FEATURE_CACHE, n_jobs=4, skip=(), limit=None):
-    """스케줄러 복구 작업(customs_monthly.startup_job)이 부른다. 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면
+    """ML 전용 복구 작업(customs_monthly.ml_monthly_job)이 부른다. 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면
     (학습 실패 SKIPPED·기록 없음) 그 달 모델 B만 다시 학습한다. 그 달 수출입 작업은 SUCCESS라 월 복구 대상이 아니기 때문이다.
 
     skip: 이번 실행에서 방금 처리한 달(YYYYMM). 같은 실행 안에서 곧바로 다시 학습하지 않고 다음 실행에 맡긴다.

@@ -17,7 +17,7 @@ python -c "import lightgbm; print(lightgbm.__version__)"
 
 컨테이너를 쓰면 실제 실행 이미지에도 `libgomp1`이 필요합니다. `backend/requirements.txt`에는 LightGBM이 포함돼 있으므로 이 목록을 설치하는 환경에 적용합니다. API·worker 전용 `backend/requirements-api.txt`에도 채팅 유망시장 조회용 numpy·pandas·scipy·joblib·LightGBM·scikit-learn·threadpoolctl이 들어 있으므로(설계 D-48), 워커 서버·이미지에도 `libgomp1`을 설치합니다. 버전은 배포 모델의 runtime(`model_a_two_stage_<YYYYMM>.registry.json`의 `data_info.runtime`)과 같게 고정합니다. 지금 모델은 Python 3.11.9 · numpy 1.24.3 · pandas 2.2.3 · scipy 1.10.1입니다. 워커는 numpy만 1.26.4를 씁니다(에이전트의 `langgraph-checkpoint-redis` → `redisvl`이 numpy 1.26 이상을 요구하고, 1.26은 1.24로 저장한 파일을 그대로 읽음). scipy 1.10.1이 Python 3.12를 지원하지 않아 API·워커도 Python 3.11로 실행합니다.
 
-`.env.sample`의 `CUSTOMS_ML_ENTRYPOINT`는 기본적으로 비워 두었습니다. 월별 재학습을 활성화하기 전에 위 import 확인과 입력 데이터·DB 준비, 서버 자원(기본 학습 스레드 4개)을 확인한 뒤 아래 월별 재학습 설정을 적용합니다. 활성화 후에는 정기 일정뿐 아니라 **스케줄러 시작 20초 뒤 누락 월 복구**에서도 학습이 실행될 수 있습니다. 이미 `WAITING_FOR_ML` 상태인 월은 아래 안내대로 수동 재개해야 합니다.
+`.env.sample`의 `CUSTOMS_ML_ENTRYPOINT`는 기본적으로 비워 두었습니다. 월별 재학습을 활성화하기 전에 위 import 확인과 입력 데이터·DB 준비, 서버 자원(기본 학습 스레드 4개)을 확인한 뒤 아래 월별 재학습 설정을 적용합니다. 활성화하면 **매월 19일**에 ML 전용 작업이 실행되며, **스케줄러 시작 40초 뒤**에는 예약일이 지난 미완료 월만 복구합니다. 18일 수집과 시작 20초 뒤 수집 복구는 ML을 실행하지 않습니다. `WAITING_FOR_ML` 상태인 월도 ML 전용 작업이 이어서 처리합니다.
 
 ## 최종 모델 생성·조회
 
@@ -113,24 +113,30 @@ python -m backend.app.ml.two_stage kfold --folds 8 --seeds 0 1 2 --n-jobs 4
 
 `data/`의 모델·스냅샷은 Git에서 제외합니다. 코드 푸시만으로 다른 환경에 모델 파일이 전달되지는 않습니다.
 
-## 최종 모델 월별 재학습
+## 운영 ML 예약 변경 (2026-11-10)
 
-연결 경로는 `scheduler.main → customs_monthly → candidate_models.run → two_stage.monthly`입니다. 위 Linux 배포 준비와 서버 자원을 확인한 뒤 재학습을 활성화하려면 `.env`에 다음과 같이 설정합니다. 환경변수에 같은 키가 있으면 `.env`보다 우선합니다.
+운영 ML은 AWS 스케줄러에서 별도로 실행합니다. 수집 일정 변경 배포 후 AWS의 월 실행일을 **11일 → 19일**로 변경하고, 기존 실행 시각·시간대는 유지합니다. 저장소 스케줄러도 ML 실행일을 **19일**로 분리했으며 **AWS 설정 변경은 아직 미적용**입니다.
+
+관세청·UN 월간 수집 기본값은 **18일 03:00 KST**, 외부 데이터 갱신은 기존 **1일 04:00 KST**를 유지합니다. 운영 환경에 `CUSTOMS_MONTHLY_DAY=10`이 명시되어 있으면 코드 기본값보다 우선하므로 배포 시 `18`로 바꿔야 합니다. AWS로만 ML을 실행하는 서버에서는 `CUSTOMS_ML_ENTRYPOINT`를 비워 코드 스케줄러의 학습을 비활성화합니다. 코드 ML 작업은 수집·적재·계산 체크포인트가 완료된 월만 학습하며, 미완료이면 원본 상태를 보존하고 다음 날 다시 확인합니다.
+
+## 코드 스케줄러의 월별 재학습
+
+연결 경로는 `scheduler.main → customs_monthly.ml_monthly_job → run_month(ml_only=True) → candidate_models.run → two_stage.monthly`입니다. 위 Linux 배포 준비와 서버 자원을 확인한 뒤 재학습을 활성화하려면 `.env`에 다음과 같이 설정합니다. 환경변수에 같은 키가 있으면 `.env`보다 우선합니다.
 
 ```dotenv
 CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run
-CUSTOMS_MONTHLY_DAY=10
+CUSTOMS_MONTHLY_DAY=18
 CUSTOMS_MONTHLY_HOUR=3
 CUSTOMS_MONTHLY_MINUTE=0
 # 누락 월 복구 시작점. 실제 운영 범위에 맞게 지정합니다.
 CUSTOMS_START_MONTH=202601
 ```
 
-- 일정 기본값은 **매월 10일 03:00, Asia/Seoul**입니다. 전월 수출입 수집·검증·적재·집계·계산이 끝난 뒤 ML 단계가 실행되므로 모델 학습 시작·완료 시각은 고정되지 않습니다.
-- 2026-10-28 기준 다음 정기 실행은 **2026-11-10 03:00 KST**이며, 전월인 2026-10까지 누락·미완료 월을 오래된 순서로 처리합니다. 스케줄러 시작 20초 뒤에도 같은 복구 작업이 실행됩니다.
+- 수집 기본 일정은 **매월 18일 03:00 KST**, ML은 **매월 19일 03:00 KST**입니다. ML 실행일은 `ML_MONTHLY_DAY=19`이며 시각은 기존 `CUSTOMS_MONTHLY_HOUR`·`CUSTOMS_MONTHLY_MINUTE`를 공유합니다. 수집·계산이 완료되지 않았다면 ML 전용 재시도에서 같은 대상 월을 다음 날 확인합니다(최대 30회). 수집을 대신 실행하거나 덜 적재된 자료로 학습하지 않습니다.
+- 2026-11-10 기준 다음 수집은 **2026-11-18 03:00 KST**, ML은 **2026-11-19 03:00 KST**입니다. 시작 20초 뒤 수집 복구, 40초 뒤 ML 복구를 별도로 등록합니다. 19일 예약 시각 전 재시작에서는 전월 ML을 미리 실행하지 않고, 이전에 실행일이 지난 월만 복구합니다.
 - 2026-10-29 로컬 실측(Python 3.11, `n_jobs=4`, 학습 1,122,200행, 품목 방향 순위 모델 포함): ML 단계 약 **11.3분**(전체 학습 451초 + Holdout 점검 187초, 피처 생성 제외)으로 30분 이내라 매월 전체 재학습합니다. 정답 있는 기준월이 매월 하나(약 4.5%)씩 늘어 학습 시간도 비슷하게 늘어납니다. 서버 사양에 따라 달라지므로 첫 월별 실행의 `fit_seconds`로 확인합니다. 스케줄러가 부르는 월별 단계는 기본 4코어(`candidate_models.run(n_jobs=4)`)로 학습합니다. (2026-10-28 품목 방향 모델 추가 전 측정은 `n_jobs=2`로 약 10.5분이었습니다.)
 - 외부 데이터 갱신은 별도 작업으로 **매월 1일 04:00 KST**입니다. 모델 재학습 일정과 구분합니다.
-- `CUSTOMS_ML_ENTRYPOINT`가 비어 있으면 `WAITING_FOR_ML`로 남습니다. 이 상태의 월은 자동 복구 대상에서 빠지므로 설정을 채운 뒤 해당 월 파이프라인을 수동 재개합니다.
+- `CUSTOMS_ML_ENTRYPOINT`가 비어 있으면 수집 결과는 `WAITING_FOR_ML`로 남고 ML 예약·복구는 학습 없이 종료합니다. 값을 설정한 뒤 재시작하거나 다음 19일 예약을 기다리면 기한이 지난 대기 월을 처리합니다. 명시적 `customs_monthly --month` 수동 실행은 기존처럼 수집부터 ML까지 실행할 수 있습니다.
 
 ```powershell
 # 통합 스케줄러 상시 실행: 수출입·외부 데이터 외에 다른 등록 작업도 함께 실행
@@ -390,7 +396,7 @@ HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처�
 
 `backend/app/ml/growth_model.py`는 화면의 "증가 예상 / 감소 예상" 표시용 회귀 모델입니다. 모델 A의 1단계 성장률(`growth`, L2 손실)과 따로 학습합니다.
 
-**월별 재학습:** `candidate_models.run`(customs_monthly의 ML 단계, `CUSTOMS_ML_ENTRYPOINT`)이 모델 A를 저장·기록한 뒤 같은 달 피처 표로 `run_growth`를 부릅니다. 절차는 모델 A와 같습니다: 같은 입력·학습 코드면 재학습 없이 기록만 다시 보냄 → 원본이 정정되면 `_r2`, `_r3` … → `model_b_growth_<YYYYMM>.joblib`(최신 기준월 예측 `latest` 포함) → `model_b_growth_<YYYYMM>.registry.json` → DB `ml_model_version`(`model_key=model_b`, `status=READY`). Holdout(마지막 정답 기준월)으로 방향 정답률·모두 감소 기준선·성장률 MAE를 `evaluation`에 남깁니다. 모델 B 학습이 실패해도 모델 A 결과는 그대로이고, 그 달에는 `SKIPPED`(사유 포함) 기록을 남깁니다. 그 달 수출입 작업은 SUCCESS라 월 복구 대상이 아니므로, 스케줄러 복구 작업(시작 20초 뒤·매월 일정)이 끝에 `candidate_models.retry_pending`을 불러 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면 그 달 B만 새 리비전으로 다시 학습합니다. 같은 실행에서 방금 처리한 달은 다음 실행에 맡기고, 같은 달 실패가 3번(`CUSTOMS_ML_GROWTH_RETRIES`) 쌓이면 자동 재학습을 멈춥니다(한 번에 약 20분·메모리 대부분). 파일·기록 JSON은 READY인데 DB 기록이 빠졌으면 학습 없이 기록만 다시 보냅니다. 기록 없이 직접 만든 같은 달 파일(`growth_model.build`)이 있으면 월별 학습이 덮어쓰거나 다시 학습하지 않습니다(월별 학습으로 바꾸려면 그 파일을 치웁니다). 모델 B만 다시 돌리려면 `candidate_models.run_growth("2026-09-01")`을 부릅니다.
+**월별 재학습:** `candidate_models.run`(customs_monthly의 ML 단계, `CUSTOMS_ML_ENTRYPOINT`)이 모델 A를 저장·기록한 뒤 같은 달 피처 표로 `run_growth`를 부릅니다. 절차는 모델 A와 같습니다: 같은 입력·학습 코드면 재학습 없이 기록만 다시 보냄 → 원본이 정정되면 `_r2`, `_r3` … → `model_b_growth_<YYYYMM>.joblib`(최신 기준월 예측 `latest` 포함) → `model_b_growth_<YYYYMM>.registry.json` → DB `ml_model_version`(`model_key=model_b`, `status=READY`). Holdout(마지막 정답 기준월)으로 방향 정답률·모두 감소 기준선·성장률 MAE를 `evaluation`에 남깁니다. 모델 B 학습이 실패해도 모델 A 결과는 그대로이고, 그 달에는 `SKIPPED`(사유 포함) 기록을 남깁니다. 그 달 수출입 작업은 SUCCESS라 월 복구 대상이 아니므로, ML 전용 복구 작업(시작 40초 뒤·매월 19일 일정)이 끝에 `candidate_models.retry_pending`을 불러 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면 그 달 B만 새 리비전으로 다시 학습합니다. 같은 실행에서 방금 처리한 달은 다음 실행에 맡기고, 같은 달 실패가 3번(`CUSTOMS_ML_GROWTH_RETRIES`) 쌓이면 자동 재학습을 멈춥니다(한 번에 약 20분·메모리 대부분). 파일·기록 JSON은 READY인데 DB 기록이 빠졌으면 학습 없이 기록만 다시 보냅니다. 기록 없이 직접 만든 같은 달 파일(`growth_model.build`)이 있으면 월별 학습이 덮어쓰거나 다시 학습하지 않습니다(월별 학습으로 바꾸려면 그 파일을 치웁니다). 모델 B만 다시 돌리려면 `candidate_models.run_growth("2026-09-01")`을 부릅니다.
 
 2026-11-05 측정(시스템 Python 3.11, 4코어, 8GB PC에서 메모리 부족으로 스왑이 섞임): 2026-09 월별 피처 표 435초(1,669,845행) + 모델 B Holdout 326초 + 전체 학습 365초 = 약 19.5분. 방향 정답률 60.7%(모두 감소 56.6%), 성장률 MAE 70.8%p. 모델 A(약 11분)에 더해지며, 피처 표는 메모리를 아끼려고 A·B가 따로 만듭니다(사용자 결정).
 
