@@ -66,6 +66,10 @@ GROUPS = [
         ('R22', '분량·누락', 'result_tables_are_bounded_and_keep_missing_notes', 'PDF 결과표는 200행까지 싣고 전체 행 수·누락 사유·미포함 항목을 알린다.'),
         ('R23', '표시', 'result_trend_chart_uses_monthly_amounts_and_no_summing_notice',
          '월별 차트는 기간 합계가 아닌 월별 금액을 국가·품목별 선으로 그리고, 결과 기반 PDF에 품목 합산 안내를 싣지 않는다.'),
+        ('R24', '분량·누락', 'wide_result_table_is_split_into_column_groups_in_the_pdf',
+         '열이 많은 결과표는 식별 열을 반복한 열 묶음으로 나눠 실제 PDF에서 마지막 열까지 보인다.'),
+        ('R25', '표시', 'same_named_products_get_separate_chart_series',
+         '이름이 같은 품목은 HS 코드(필요하면 판본·국가 코드)로 차트 시리즈를 나누고 범례에 표시한다.'),
     ]),
 ]
 CASES = [dict(id=identity, group=group, category=category, criterion=criterion, test=f'{test_class}.test_{method}')

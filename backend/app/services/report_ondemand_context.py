@@ -45,6 +45,9 @@ def _cell(value, column):
 
 
 SERIES_KEYS = ('country_name', 'name')  # 추이 결과의 국가·품목 표시 열. 웹 ReportView.trendChart와 같은 기준
+RESULT_COLUMN_LIMIT = 8  # A4 본문(180mm)에 잘리지 않고 들어가는 결과표 열 수. 넘치면 열 묶음으로 나눈다
+ID_COLUMNS = (('rank', 'country_rank', 'product_rank'), ('month', 'trade_month'), ('country_name', 'country_code'),
+              ('name', 'product_name', 'hs_code', 'hs6'))  # 열 묶음마다 반복하는 식별 열(각 묶음에서 첫 번째로 있는 열)
 
 
 def _trend_chart(table):
@@ -58,13 +61,38 @@ def _trend_chart(table):
     labels = sorted({r['month'] for r in table['rows'] if r.get('month')})
     if not labels or len(labels) > CHART_LABEL_LIMIT:
         return None
+    # 시리즈는 국가 코드·HS 코드·판본으로 나눈다. 이름(예: 0409·040900 모두 '천연꿀')으로 나누면 다른 품목 값이 한 선에서 덮인다.
     series = {}
     for r in table['rows']:
-        name = ' · '.join(str(r.get(k)) for k in names if r.get(k)) or '수출액'
-        series.setdefault(name, {})[r['month']] = r.get(amount)
+        # 코드가 없는 예전 결과는 표시 이름으로 대신한다(국가 이름만 있는 표를 한 선으로 합치지 않게)
+        key = (r.get('country_code') or r.get('country_name'), r.get('hs_code') or r.get('name'), r.get('hs_ver'))
+        entry = series.setdefault(key, {'name': ' · '.join(str(r.get(k)) for k in names if r.get(k)) or '수출액', 'values': {}})
+        entry['values'][r['month']] = r.get(amount)
     if len(series) > CHART_SERIES_LIMIT:
         return None
-    return {'labels': labels, 'series': [{'name': name, 'values': [values.get(m) for m in labels]} for name, values in series.items()]}
+    return {'labels': labels, 'series': [{'name': name, 'values': [s['values'].get(m) for m in labels]}
+                                         for name, s in zip(_series_names(series), series.values())]}
+
+
+def _series_names(series):
+    """범례 이름. 이름이 겹치는 시리즈만 HS 코드를 붙이고, 그래도 겹치면 판본·국가 코드까지 붙인다."""
+    base, keys = [s['name'] for s in series.values()], list(series)
+    def label(detail):  # key = (국가 코드, HS 코드, 판본)
+        return [n if base.count(n) == 1 else n + ' (' + ' · '.join(
+                    ('HS ' if i == 1 else '') + str(key[i]) for i in detail if key[i]) + ')' for n, key in zip(base, keys)]
+    names = label((1,))
+    return names if len(set(names)) == len(names) else label((1, 2, 0))
+
+
+def _column_groups(columns):
+    """A4 본문에 들어가도록 열을 RESULT_COLUMN_LIMIT개 이하 묶음으로 나눈다. 순위·월·국가·품목 식별 열은 묶음마다 반복한다."""
+    keys = [c['key'] for c in columns]
+    if len(keys) <= RESULT_COLUMN_LIMIT:
+        return [list(range(len(keys)))]
+    ids = [keys.index(next(k for k in group if k in keys)) for group in ID_COLUMNS if any(k in keys for k in group)]
+    rest = [i for i in range(len(keys)) if i not in ids]
+    size = max(RESULT_COLUMN_LIMIT - len(ids), 2)
+    return [ids + rest[i:i + size] for i in range(0, len(rest), size)]
 
 
 def populate_results(saved, ctx, start, end, content):
@@ -90,8 +118,13 @@ def populate_results(saved, ctx, start, end, content):
         total = table.get('total_rows', len(table['rows']))
         note = f'전체 {total:,}행' + (f' 중 {len(rows):,}행 표시 · 전체는 XLSX 파일' if total > len(rows) else '')
         title = f"결과 {i} · {KINDS.get(table.get('kind'), table.get('kind'))}"
-        results.append({'result_id': table['result_id'], 'title': title, 'columns': columns, 'rows': rows, 'note': note,
-                        'chart': _trend_chart(table)})
+        # 열이 많은 결과표(예: 기간 길이가 다른 비교 15열)는 열 묶음으로 나눠 싣는다. 식별 열은 묶음마다 반복하고 그래프는 첫 묶음에만.
+        groups = _column_groups(table['columns'])
+        for g, picked in enumerate(groups, 1):
+            part = f' · 열 {g}/{len(groups)}' if len(groups) > 1 else ''
+            results.append({'result_id': table['result_id'], 'title': title + part, 'columns': [columns[k] for k in picked],
+                            'rows': [[row[k] for k in picked] for row in rows], 'note': note,
+                            'chart': _trend_chart(table) if g == 1 else None})
         ref = refs.get(table['result_id'], {})
         checks.append({'target': title, 'content': f"승인한 결과표 {total:,}행 · 결과 ID {table['result_id']}",
                        'basis': '승인 시점 사본 · ' + ('일부 누락' if ref.get('completeness') == 'PARTIAL' else '재조회 없음')})
@@ -106,7 +139,7 @@ def populate_results(saved, ctx, start, end, content):
     ctx['summary'] = {'kpi': {'amount_usd': None, 'country_count': None}, 'sentences': [], 'check_points': checks}
     ctx['meta']['data_basis'] = '승인한 AI 분석 결과표 사본 · 관세청 수출입무역통계 · 재조회 없음'
     ctx['sources'] = [{'label': '분석 결과표', 'provider': '관세청 (AI 분석 대화 결과)',
-                       'scope': f'결과 {len(results)}개 · 승인 시점에 저장한 사본', 'used_in': '승인한 분석 결과'}]
+                       'scope': f"결과 {len(content.get('source_tables', []))}개 · 승인 시점에 저장한 사본", 'used_in': '승인한 분석 결과'}]
 
 
 def populate(store, saved, ctx, names, start, end):

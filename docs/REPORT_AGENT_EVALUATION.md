@@ -6,7 +6,7 @@
 
 | 단계 | 문서 | 대상 | LLM | 결과 |
 |---|---|---|---|---|
-| ① 오프라인 회귀 | 이 문서 | 승인·접수·대기·완료·리포트 파일(설계 계약 23사례) | Mock | 작업 전 19/23 → 현재 23/23 |
+| ① 오프라인 회귀 | 이 문서 | 승인·접수·대기·완료·리포트 파일(설계 계약 25사례) | Mock | 작업 전(최신 main) 19/25 → 현재 25/25 |
 | ② 실제 호출 | [REPORT_AGENT_LIVE_EVALUATION.md](REPORT_AGENT_LIVE_EVALUATION.md) | 리포트 요청 이해(플래너) 32문항 | 실제 OpenAI | 1판 18/32, 정답 수정 재채점 23/32(개발 세트) |
 | ③ Holdout | [REPORT_AGENT_HOLDOUT_EVALUATION.md](REPORT_AGENT_HOLDOUT_EVALUATION.md) | 새 질문 24문항, 코드 고정 뒤 한 번만 | 실제 OpenAI | 21/24 |
 
@@ -33,10 +33,11 @@ Report Agent 코드: `backend/app/agents/report.py`(미리보기·접수·대기
 | 승인 | 6/6 (100%) | 6/6 (100%) | 명시 승인·입력 검증·형식·수입 거부·취소·만료 |
 | 대기·완료 | 7/7 (100%) | 7/7 (100%) | 완료 대기·실패·중복 방지·대기 확인기·제목·그래프 중단·실행 예산 |
 | 선행 결과 | 5/5 (100%) | 5/5 (100%) | 조건 충돌·조건 고정·부분 결과·완료 결론·결과 고정 |
-| 리포트 파일 | 1/5 (20%) | 5/5 (100%) | 템플릿·기존 유지·표시·분량과 누락 안내·월별 차트 |
-| 합계 | 19/23 (82.61%) | 23/23 (100%) | 등록된 사례 23개 |
+| 리포트 파일 | 1/7 (14.29%) | 7/7 (100%) | 템플릿·기존 유지·표시·분량과 누락 안내·월별 차트·넓은 표·같은 이름 품목 |
+| 합계 | 19/25 (76%) | 25/25 (100%) | 등록된 사례 25개 |
 
-- 작업 전: `c6e6bcd` (이슈 #82 시작 시점 main)
+- 작업 전: `91d183b` (최신 main, 이 브랜치의 변경 없음). 처음에는 이슈 시작 시점 `c6e6bcd`와 비교했지만,
+  main의 다른 PR(#91·#92)이 같은 모듈을 바꾼 뒤로는 옛 모듈을 끼우면 최신 코드와 import가 맞지 않아(`result_xlsx` 등) 비교 기준을 최신 main으로 옮겼다.
 - 현재 평가 대상: 이 브랜치의 작업 트리
 - 과거 비교는 **바꾼 운영 모듈 6개만 해당 커밋 내용으로 메모리에서 교체**한다(`files.py`, `report_ondemand_context.py`,
   `report_templates.py`, `report_context.py`, `api/reports.py`, `agents/report.py`). 테스트·fixture·템플릿 HTML은 현재 것을 그대로 쓴다.
@@ -50,6 +51,8 @@ Report Agent 코드: `backend/app/agents/report.py`(미리보기·접수·대기
   일회성 판정이 `{'suspected': False, ...}` 같은 원시 값으로 찍혔다(R21). 결과표 분량 제한·누락 안내 기능이 없었다(R22).
   R23은 PR 리뷰에서 찾은 결함이다. 월별 차트가 앞쪽 USD 열인 기간 합계(`total_usd`)를 그려 월별 100·200이 300·300으로 보였고,
   같은 길이 비교에서는 비교 기준월(`compare_month`)로 선을 나눴다. 결과 기반 PDF 표지에 품목 합산 안내도 잘못 실렸다.
+  R24·R25도 PR 리뷰에서 찾았다. 15열 비교 결과표는 A4 본문보다 넓어 오른쪽 열이 PDF에서 잘렸고(실제 PDF에 마지막 열 값이 없음을 재현),
+  이름이 같은 품목(0409·040900 모두 '천연꿀')은 한 선으로 합쳐져 한쪽 값이 다른 쪽을 덮었다.
 - R20(조건으로 요청한 리포트는 기존 템플릿 유지)은 작업 전에도 통과한다. 개선이 기존 요청형 리포트를 바꾸지 않았음을 확인하는 사례다.
 
 ## 사례와 판정 기준
@@ -79,8 +82,10 @@ Report Agent 코드: `backend/app/agents/report.py`(미리보기·접수·대기
 | R21 | 표시 | 일회성 판정·순위 상태를 PDF·DOCX에서 읽을 수 있는 말(판정 전·해당 없음 등)로 싣는다. |
 | R22 | 분량·누락 | PDF 결과표는 200행까지 싣고 전체 행 수·누락 사유·미포함 항목을 알리며, 시리즈 5개 초과 추이는 표만 둔다. |
 | R23 | 표시 | 월별 차트는 기간 합계가 아닌 월별 금액(`amount_usd`)을 국가·품목별 선으로 그리고(기간 길이가 같은·다른 비교 모두), 결과 기반 PDF에 품목 합산 안내를 싣지 않는다. |
+| R24 | 분량·누락 | 열이 8개를 넘는 결과표는 순위·월·국가·품목 식별 열을 반복한 열 묶음으로 나눠, 실제 PDF(Chromium 렌더링 후 글자 추출)에서 마지막 열까지 보인다. |
+| R25 | 표시 | 이름이 같은 품목은 HS 코드(겹치면 판본·국가 코드까지)로 차트 시리즈를 나누고 범례에 표시한다(PDF·웹 같은 기준). |
 
-R01–R13·R19–R23은 `backend/tests/test_agent_report.py`, R14–R18은 기존 테스트를 재사용한다.
+R01–R13·R19–R25는 `backend/tests/test_agent_report.py`, R14–R18은 기존 테스트를 재사용한다.
 R01–R13·R19–R21은 채팅 API → 워커(`run_once`) → LangGraph → 리포트 접수·생성까지 실제 코드를 SQLite에서 끝까지 실행한다.
 
 ### 채점
@@ -109,7 +114,7 @@ R01–R13·R19–R21은 채팅 API → 워커(`run_once`) → LangGraph → 리�
 
 ```powershell
 python -m backend.scripts.evaluate_report_agent --output docs/evaluations/report_agent_current.json
-python -m backend.scripts.evaluate_report_agent --source-ref c6e6bcd --output docs/evaluations/report_agent_before.json
+python -m backend.scripts.evaluate_report_agent --source-ref 91d183b --output docs/evaluations/report_agent_before.json
 python -m unittest backend.tests.test_agent_report
 ```
 

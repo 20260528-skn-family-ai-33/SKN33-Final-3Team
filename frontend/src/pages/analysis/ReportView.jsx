@@ -45,14 +45,22 @@ function trendChart(table) {
   if (table.kind !== 'TREND' || !keys.includes(amount) || !keys.includes('month')) return null
   const names = ['country_name', 'name'].filter(k => keys.includes(k))
   const labels = [...new Set(table.rows.map(r => r.month).filter(Boolean))].sort()
+  // 선은 국가 코드·HS 코드·판본으로 나눈다(PDF와 같은 기준). 이름이 같은 품목(0409·040900 '천연꿀')을 한 선으로 합치지 않는다.
   const groups = new Map()
   for (const r of table.rows) {
-    const name = names.map(k => r[k]).filter(Boolean).join(' · ') || '수출액'
-    if (!groups.has(name)) groups.set(name, {})
-    groups.get(name)[r.month] = r[amount]
+    const codes = [r.country_code || r.country_name, r.hs_code || r.name, r.hs_ver]   // 코드가 없는 예전 결과는 이름으로 대신
+    const key = JSON.stringify(codes)
+    if (!groups.has(key)) groups.set(key, { codes, name: names.map(k => r[k]).filter(Boolean).join(' · ') || '수출액', values: {} })
+    groups.get(key).values[r.month] = r[amount]
   }
   if (!labels.length || labels.length > 60 || groups.size > SERIES_COLORS.length) return null
-  const series = [...groups].map(([name, values], i) => ({ name, color: SERIES_COLORS[i], values: labels.map(m => values[m] == null ? null : values[m] / 1e8) }))
+  const list = [...groups.values()], base = list.map(g => g.name)
+  // 이름이 겹치는 선만 HS 코드를 붙이고, 그래도 겹치면 판본·국가 코드까지 붙인다.
+  const label = detail => list.map((g, i) => base.filter(n => n === base[i]).length === 1 ? base[i]
+    : `${base[i]} (${detail.map(k => g.codes[k] && (k === 1 ? `HS ${g.codes[k]}` : g.codes[k])).filter(Boolean).join(' · ')})`)
+  let shown = label([1])
+  if (new Set(shown).size !== shown.length) shown = label([1, 2, 0])
+  const series = list.map((g, i) => ({ name: shown[i], color: SERIES_COLORS[i], values: labels.map(m => g.values[m] == null ? null : g.values[m] / 1e8) }))
   return { labels, series, ticks: niceTicks(table.rows.map(r => r[amount]), 3, true).map(v => v / 1e8) }
 }
 

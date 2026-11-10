@@ -111,10 +111,15 @@ const { chromium } = require('playwright')
       const ranking = { result_id: 'result_r', kind: 'RANKING', total_rows: 2,
         columns: [{ key: 'rank', label: '순위', type: 'number' }, { key: 'country_name', label: '국가', type: 'string' }, { key: 'export_usd', label: '수출액', type: 'number', unit: 'USD' }],
         rows: [{ rank: 1, country_name: '중국', export_usd: 6660000 }, { rank: 2, country_name: '미국', export_usd: 3660000 }] }
+      // 이름이 같은 품목(0409·040900 모두 '천연꿀')은 HS 코드로 선을 나눈다
+      const honey = { result_id: 'result_h', kind: 'TREND', total_rows: 4,
+        columns: [{ key: 'name', label: '품목', type: 'string' }, { key: 'month', label: '기준월', type: 'string' }, { key: 'amount_usd', label: '수출액', type: 'number', unit: 'USD' }],
+        rows: [['0409', '2025-10', 300000000], ['0409', '2025-11', 310000000], ['040900', '2025-10', 50000000], ['040900', '2025-11', 60000000]]
+          .map(([hs_code, month, amount_usd]) => ({ country_code: 'US', hs_code, hs_ver: 'HS2022', name: '천연꿀', month, amount_usd })) }
       const missing = '해당 분석 결과에 포함되지 않음'
       const sections = [
         { section_code: 'SUMMARY', title: '핵심 요약', text: '승인한 분석 결과표를 기준으로 작성했습니다.', tables: [], articles: [] },
-        { section_code: 'KPI', title: '주요 지표 및 월별 수출 추이', text: '승인한 분석 결과입니다.', kpi: null, tables: [trend], articles: [] },
+        { section_code: 'KPI', title: '주요 지표 및 월별 수출 추이', text: '승인한 분석 결과입니다.', kpi: null, tables: [trend, honey], articles: [] },
         { section_code: 'TOP_COUNTRIES', title: '주요 수출국', text: '승인한 분석 결과입니다.', kpi: null, tables: [ranking], articles: [] },
         { section_code: 'GROWTH_RISK', title: '수출 증가 감소 주요 시장', text: missing, kpi: null, tables: [], articles: [] },
         { section_code: 'LOCAL_ISSUES', title: '현지 이슈', text: missing, kpi: null, tables: [], articles: [] }]
@@ -156,8 +161,10 @@ const { chromium } = require('playwright')
       assert.deepEqual(legend.filter(t => ['중국', '미국'].includes(t.trim())).sort(), ['미국', '중국'])
       assert.ok(!legend.some(t => t.includes('2024-')), '비교 기준월로 선을 나누지 않는다: ' + legend.join(', '))
       // 선의 값은 월별 금액(억 USD)이다. 기간 합계(4.43·2.43)를 월마다 그리지 않는다
-      const points = await page.locator('article svg circle title').allTextContents()
-      assert.deepEqual(points.map(t => t.replace(/\s+/g, ' ').trim()).sort(), ['미국 · 2025-10: 1.21', '미국 · 2025-11: 1.22', '중국 · 2025-10: 2.21', '중국 · 2025-11: 2.22'])
+      assert.ok(legend.includes('천연꿀 (HS 0409)') && legend.includes('천연꿀 (HS 040900)'), '이름이 같은 품목은 HS 코드로 구분: ' + legend.join(', '))
+      const points = (await page.locator('article svg circle title').allTextContents()).map(t => t.replace(/\s+/g, ' ').trim())
+      assert.deepEqual(points.filter(t => t.startsWith('천연꿀')).sort(), ['천연꿀 (HS 040900) · 2025-10: 0.50', '천연꿀 (HS 040900) · 2025-11: 0.60', '천연꿀 (HS 0409) · 2025-10: 3.00', '천연꿀 (HS 0409) · 2025-11: 3.10'].sort())
+      assert.deepEqual(points.filter(t => /^(미국|중국) · /.test(t)).sort(), ['미국 · 2025-10: 1.21', '미국 · 2025-11: 1.22', '중국 · 2025-10: 2.21', '중국 · 2025-11: 2.22'])
       // 저장된 결과표는 서버가 확정한 열을 그대로 보인다(채팅 화면의 숨김 규칙을 적용하지 않음)
       for (const head of ['HS 판본', '기간 합계', '월평균 금액', '비교 기준월', '비교 기간 금액']) assert.ok(text.includes(head), '결과표 열 ' + head)
       assert.ok(!requested.some(p => p.includes('/results/')), '원본 결과 API를 부르지 않는다: ' + requested.join(', '))

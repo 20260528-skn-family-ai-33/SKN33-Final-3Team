@@ -353,6 +353,75 @@ class ReportAgentTest(unittest.TestCase):
         ctx.update(verification=None, article_limit=None, article_policy_note='', subscription={'label': ''})
         self.assertNotIn('합산한 결과', render('RPT_ON_DEMAND', ctx))
 
+    def _result_ctx(self, columns, rows, kind='TREND'):
+        from datetime import date
+        from backend.app.services.report_ondemand_context import populate_results
+        content = {'source_tables': [{'result_id': 'r1', 'kind': kind, 'columns': columns, 'rows': rows}],
+                   'source_results': [{'result_id': 'r1', 'completeness': 'COMPLETE', 'limitations': []}]}
+        ctx = {'conditions': {'hs_items': [], 'countries': []}, 'meta': {}, 'articles': [],
+               'report': {'report_id': '1', 'report_type': 'RPT_ON_DEMAND', 'title': 't', 'period_label': 'p', 'kind_label': 'k',
+                          'cover_eyebrow': 'e', 'cover_lead': 'l', 'footer_label': 'f', 'is_sample': False,
+                          'published_at': '2026-11-09T12:00:00+09:00'},
+               'verification': None, 'article_limit': None, 'article_policy_note': '', 'subscription': {'label': ''}}
+        populate_results({'sections': ['KPI'], 'compare': 'NONE', 'metric': 'AMOUNT'}, ctx, date(2025, 1, 1), date(2025, 6, 30), content)
+        return ctx
+
+    def test_wide_result_table_is_split_into_column_groups_in_the_pdf(self):
+        """R24 기간 길이가 다른 비교처럼 열이 많은 결과표(15열)는 A4에서 잘리지 않게 열 묶음으로 나눈다.
+        월·국가·품목 식별 열은 묶음마다 반복하고, 실제 PDF에 마지막 열까지 보인다."""
+        from backend.app.services.report_ondemand_context import RESULT_COLUMN_LIMIT
+        keys = ['country_name', 'name', 'month', 'amount_usd', 'compare_amount_usd', 'total_usd', 'compare_total_usd',
+                'change_pct', 'monthly_avg_usd', 'compare_monthly_avg_usd', 'verified_months', 'requested_months',
+                'compare_verified_months', 'verified_subtotal_usd', 'compare_verified_subtotal_usd']
+        columns = [{'key': k, 'label': k, 'type': 'string' if k in ('country_name', 'name', 'month') else 'number',
+                    'unit': 'USD' if k.endswith('_usd') else None} for k in keys]
+        rows = [{**{k: 1000 + i for i, k in enumerate(keys)}, 'country_name': '미국', 'name': '화장품', 'month': '2025-01',
+                 'compare_verified_subtotal_usd': 13579}]
+        ctx = self._result_ctx(columns, rows)
+        parts = ctx['results']
+        self.assertGreater(len(parts), 1)
+        shown = []
+        for part in parts:
+            labels = [c['key'] for c in part['columns']]
+            self.assertLessEqual(len(labels), RESULT_COLUMN_LIMIT)
+            self.assertEqual(labels[:3], ['month', 'country_name', 'name'])  # 식별 열 반복
+            self.assertEqual(len(part['rows'][0]), len(labels))
+            shown += labels[3:]
+        self.assertEqual(sorted(shown), sorted(set(keys) - {'country_name', 'name', 'month'}))  # 빠지거나 겹치는 열 없음
+        self.assertTrue(parts[0]['chart'])
+        self.assertIsNone(parts[1]['chart'])  # 그래프는 첫 묶음에만
+        self.assertIn('열 2/', parts[1]['title'])
+        self.assertIn('결과 1개', ctx['sources'][0]['scope'])  # 열 묶음은 결과 수를 늘리지 않는다
+        # 실제 PDF: 마지막 열 값(13,579)이 페이지 밖으로 잘리지 않고 글자로 남는다
+        from pathlib import Path
+        font = Path('C:/Windows/Fonts/malgun.ttf')
+        if not font.is_file():
+            self.skipTest('PDF 한글 글꼴 없음')
+        from io import BytesIO
+        from pypdf import PdfReader
+        from backend.app.api.common import ApiError
+        from backend.app.services.report_pdf import template_pdf
+        try:
+            pdf = template_pdf('RPT_ON_DEMAND', ctx, {'API_REPORT_FONT': str(font)})
+        except ApiError as exc:
+            self.skipTest(f'PDF 렌더러 없음: {exc}')
+        text = ''.join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)
+        self.assertIn('13,579', text)
+
+    def test_same_named_products_get_separate_chart_series(self):
+        """R25 이름이 같은 품목(0409·040900 모두 '천연꿀')은 HS 코드로 시리즈를 나누고 범례에 HS 코드를 붙인다."""
+        columns = [{'key': k, 'label': k, 'type': 'number' if k == 'amount_usd' else 'string', 'unit': 'USD' if k == 'amount_usd' else None}
+                   for k in ('country_name', 'name', 'hs_code', 'month', 'amount_usd')]
+        rows = [{'country_code': 'US', 'country_name': '미국', 'name': '천연꿀', 'hs_code': hs, 'hs_ver': 'HS2022', 'month': m, 'amount_usd': v}
+                for hs, values in (('0409', (100, 200)), ('040900', (10, 20))) for m, v in zip(('2025-01', '2025-02'), values)]
+        chart = self._result_ctx(columns, rows)['results'][0]['chart']
+        self.assertEqual(chart['series'], [{'name': '미국 · 천연꿀 (HS 0409)', 'values': [100, 200]},
+                                           {'name': '미국 · 천연꿀 (HS 040900)', 'values': [10, 20]}])
+        # HS 코드도 같고 판본만 다르면 판본까지 붙인다
+        rows[2:] = [{**r, 'hs_code': '0409', 'hs_ver': 'HS2017'} for r in rows[2:]]
+        names = [s['name'] for s in self._result_ctx(columns, rows)['results'][0]['chart']['series']]
+        self.assertEqual(names, ['미국 · 천연꿀 (HS 0409 · HS2022 · US)', '미국 · 천연꿀 (HS 0409 · HS2017 · US)'])
+
     def test_result_tables_are_bounded_and_keep_missing_notes(self):
         """R22 결과표는 최대 200행만 PDF에 싣고 전체 행 수를 알린다. 부분 결과(PARTIAL)의 누락 사유를 그대로 싣고,
         시리즈가 5개를 넘는 추이는 그래프 없이 표만 둔다."""
