@@ -2,6 +2,7 @@
 import unittest
 from copy import deepcopy
 from decimal import Decimal
+from unittest.mock import patch
 from backend.app.agents.verify import check_sentence, inspect_sentence, verify, mark_unverified
 from backend.app.agents.verify_claims import NameCatalog, parse_sentence
 from backend.app.agents.context import completed_context
@@ -83,6 +84,27 @@ class SemanticBindingCases(unittest.TestCase):
                 self.assertEqual(state.verification.checks[0].basis,'SNAPSHOT')
 
 class SemanticInvariants(unittest.TestCase):
+    def test_mention_cache_shares_only_equivalent_vocabularies_within_request(self):
+        shared = {}
+        def catalog(names, countries, cache):
+            return NameCatalog([], names, countries, mention_cache=cache)
+
+        first = catalog(['미국'], ['미국'], shared)
+        same = catalog(['미국'], ['미국'], shared)
+        sentence = '미국 반도체 수출은 증가했다.'
+        with patch.object(NameCatalog, '_resolve_mentions', autospec=True,
+                          side_effect=NameCatalog._resolve_mentions) as resolve:
+            for text in ('미국', sentence):
+                self.assertEqual(first.resolve_mentions(text), same.resolve_mentions(text))
+            self.assertEqual(resolve.call_count, 2)
+            extended = catalog(['미국', '반도체'], ['미국'], shared)
+            self.assertIn('반도체', extended.names_in(sentence))
+            self.assertNotIn('반도체', first.names_in(sentence))
+            catalog(['미국'], [], shared).resolve_mentions(sentence)
+            catalog(['미국'], ['미국'], {}).resolve_mentions(sentence)
+            self.assertEqual(resolve.call_count, 5)
+
+
     def assert_sentence(self,text,source,expected):
         self.assertEqual(check_sentence(text,[source],known_names=('미국','일본','반도체'),
                                         countries=('미국','일본'))[0],expected,text)

@@ -230,7 +230,7 @@ def _quantity_name_roles(text, hits, countries):
 
 
 class NameCatalog:
-    def __init__(self, sources, known_names=(), countries=()):
+    def __init__(self, sources, known_names=(), countries=(), *, mention_cache=None):
         self._row_bindings = {}
         fields=list(source_names(sources))
         self.countries=frozenset(countries)|{name for key,name in fields if key.startswith('country_')}
@@ -238,6 +238,10 @@ class NameCatalog:
             if source.get('group')=='COUNTRY':
                 self.countries |= {name for key,name in source_names(source.get('top',[])) if key in ('name','code')}
         self.names=frozenset(n for n in known_names if n and len(n)>1)|{n for _,n in fields if len(n)>1}
+        # Mention spans depend on the vocabulary and country roles. Alias
+        # ownership and row bindings still belong to each individual catalog.
+        self._mentions = ({} if mention_cache is None else
+                          mention_cache.setdefault((self.names, self.countries), {}))
         stored = {name for _, name in fields}
         products = {name for key, name in fields if key in ('product_name', 'name', 'label')} - self.countries
         candidates = self.names - stored - self.countries
@@ -249,6 +253,11 @@ class NameCatalog:
                 self.aliases.setdefault(owners[0], set()).add(short)
 
     def resolve_mentions(self, text):
+        if text not in self._mentions:
+            self._mentions[text] = self._resolve_mentions(text)
+        return self._mentions[text]
+
+    def _resolve_mentions(self, text):
         # Identify whole stored names first. A model number, date, unit or amount
         # embedded in that name must not erase the identifier before it is found.
         value=text
@@ -300,7 +309,7 @@ class NameCatalog:
             if len({n for n,_,_ in contained})>1 and re.fullmatch(r'[\s과와및,·ㆍ]+',remainder): composite.add(name)
         hits={h for h in hits if h[0] not in composite}
         mentions = sorted((h for h in hits if not any(h[0]!=other[0] and other[1]<=h[1] and h[2]<=other[2] for other in hits)),key=lambda h:h[1])
-        return mentions, 'unresolved' in roles.values()
+        return tuple(mentions), 'unresolved' in roles.values()
 
     def mentions(self, text):
         return self.resolve_mentions(text)[0]
@@ -589,10 +598,41 @@ TREND_PREDICATE = re.compile(
     r'(?P<short>안\s+|못\s+)?'
     r'(?:' + TREND_STEMS + r')'
     r'(?P<negative>(?:하)?(?:지는|지도|지|진)\s*(?:않|못하?))?'
-    r'(?P<form>하고\s*있|세를\s*보였|세입|한\s*것으로\s*나타났|하였|했|합|하|았|습|었)?'
-    r'(?P<ending>습니다|니다|다|고|으며|으나|지만|음|함)?[,;，.!。\s]*$')
-TREND_BREAK = re.compile(r'(?<=[고며만나])\s+|(?<=[.。])\s+|[,;，](?!\d)')
+    r'(?P<form>하는\s*추세(?:를\s*보였|입|이)?|하고\s*있|세를\s*보였|세입|한\s*것으로\s*(?:나타났|집계됐|확인됐)|하였|했|합|하|았|습|었)?'
+    r'(?P<ending>습니다|니다|다|고|으며|으나|지만|한\s+반면|음|함)?[,;，.!。\s]*$')
+# Connective verbs describe the change leading to a reported level.
+LEVEL_CHANGE = re.compile(
+    r'(?P<short>안\s+|못\s+)?(?:' + TREND_STEMS + r')'
+    r'(?P<negative>(?:하)?(?:지는|지도|지|진)\s*(?:않|못하?))?'
+    r'(?:해(?:서)?|하여|아(?:서)?|어(?:서)?|며|면서|한(?:\s+(?:결과|후))?)?'
+    r'[\s,，]*$')
+TREND_BREAK = re.compile(r'(?<=반면)\s+|(?<=[고며만나])\s+|(?<=[.。])\s+|[,;，](?!\d)')
 TREND_METRIC = re.compile(r'수출입|수출|수입|점유율|비중|금액|규모|총액|실적|교역액')
+
+# A path over several observations cannot be proved by a single change cell.
+TREND_PATH = re.compile(r'꾸준히|지속적으로|연속으로|갈수록|거듭할수록|매달|매월|추세|꾸준한')
+ARTICLE_MEASURE = re.compile(r'수요|가격|단가')
+ARTICLE_SUBJECT = re.compile(r'(?:' + ARTICLE_MEASURE.pattern + r')(?:은|는|이|가)(?=\s|$)')
+# Match the causal noun phrase itself. Text before its subject can contain
+# another complete assertion or the main clause's subject and comparator.
+ARTICLE_ASIDE = re.compile(
+    r'(?:수요|가격|단가)(?:가|이|의|는|은)?\s*'
+    r'(?:둔화|감소|하락|증가|상승|변동|약화|회복)'
+    r'(?:(?:된|한)?\s*(?:에도(?:\s*불구하고)?|때문에|영향으로|가운데|여파로)|했지만|됐지만)(?=\s|[,，])')
+UNRESOLVED_DIRECTION = re.compile(
+    r'(?P<up>증가|상승|확대|성장|늘어|늘었)|(?P<down>감소|하락|축소|줄어|줄었)')
+GUIDANCE = re.compile(r'여부|했는지|하는지|했는가|(?:확인|참고|참조|살펴)\s*(?:하세요|하십시오|바랍니다|할 수)')
+
+
+def _without_article_aside(text, syntax, mentions):
+    aside = ARTICLE_ASIDE.search(syntax)
+    if not aside:
+        return text
+    start = aside.start()
+    for _, left, right in reversed(mentions):
+        if right <= start and re.fullmatch(r'의?\s*', text[right:start]):
+            start = left
+    return text[:start] + ' ' + text[aside.end():]
 
 
 def _trend_predicate(text):
@@ -606,8 +646,11 @@ def _trend_predicate(text):
     return match
 
 
-def _trend_claim(syntax, targets, time, catalog, predicate):
+def _trend_claim(syntax, targets, time, catalog, predicate, *, understood=True):
     prefix = syntax[:predicate.start()]
+    article = list(ARTICLE_SUBJECT.finditer(prefix))
+    if article and not TREND_METRIC.search(prefix, article[-1].end()):
+        return None
     axes = {'YOY' if m['yoy'] else 'MOM' for m in COMPARISON.finditer(prefix)}
     flow_words = set(re.findall(r'수출|수입', prefix))
     flow = {'수출': 'EXPORT', '수입': 'IMPORT'}.get(next(iter(flow_words), ''))
@@ -616,11 +659,20 @@ def _trend_claim(syntax, targets, time, catalog, predicate):
     # or an unknown entity for the trade amount of a matching row.
     rest = TREND_METRIC.sub('', mask_dates(COMPARISON.sub('', prefix)))
     rest = re.sub(r'소폭|큰\s*폭으로|대폭|다소|크게|조금|시장|전체|하여|에서|으로|[의은는이가을를에와과액·,\s]', '', rest)
-    valid = len(axes) == 1 and len(flow_words) <= 1 and not rest and not re.search(r'수출입|교역', prefix)
+    valid = understood and not TREND_PATH.search(syntax) and len(axes) <= 1 and len(flow_words) <= 1 and not rest and not re.search(r'수출입|교역', prefix)
     metric = MetricClaim(family='SHARE_CHANGE' if share else 'CHANGE', comparison=next(iter(axes), None),
                          flow=flow, direction='UP' if predicate['up'] else 'DOWN',
-                         negated_change=bool(predicate['negative'] or predicate['short']))
+                         negated_change=bool(understood and (predicate['negative'] or predicate['short'])))
     return Claim(None, targets, 'GROUP' if catalog.grouped(targets) else 'SINGLE', metric, time, syntax, valid)
+
+
+def _unresolved_direction(text):
+    for marker in UNRESOLVED_DIRECTION.finditer(text):
+        suffix = text[marker.end():]
+        if suffix.startswith(('률', '율', '액', '분', '폭')) or GUIDANCE.search(suffix):
+            continue
+        return marker
+    return None
 
 
 def parse_sentence(sentence,catalog):
@@ -634,6 +686,9 @@ def parse_sentence(sentence,catalog):
         syntax=mask_spans(text,[(a,b) for _,a,b in mentions])
         clean=mask_dates(syntax)
         values=quantities(clean)
+        without_aside = _without_article_aside(text, syntax, mentions)
+        if without_aside != text:
+            return parse(without_aside, context)
         time,last_year=read_time(syntax,context.year)
         if not DATE.search(syntax): time=context.time
         # Split coordinated assertions only when there is an independent trend
@@ -645,12 +700,16 @@ def parse_sentence(sentence,catalog):
             start = 0
             for end, after in [(m.start(), m.end()) for m in boundaries] + [(len(text), len(text))]:
                 fragment = clean[start:end]
-                if _trend_predicate(fragment) and not quantities(fragment):
+                if (_trend_predicate(fragment) or _unresolved_direction(fragment)) and not quantities(fragment):
                     trend_cuts.extend(cut for cut in (start, after) if 0 < cut < len(text))
                 start = after
         if not values and not trend_cuts:
             predicate = _trend_predicate(clean)
-            claims = (_trend_claim(syntax, targets, time, catalog, predicate),) if predicate else ()
+            marker = predicate or _unresolved_direction(clean)
+            claim = _trend_claim(syntax, targets, time, catalog, marker, understood=bool(predicate)) if marker else None
+            if claim and not claim.metric.flow and context.metric and context.metric.family == 'AMOUNT':
+                claim = replace(claim, metric=replace(claim.metric, flow=context.flow))
+            claims = (claim,) if claim else ()
             return ParsedSentence(claims,(time,) if DATE.search(syntax) else (),not ambiguous_name),replace(
                 context,targets=targets,year=last_year,time=time)
         flows=set(re.findall(r'수출|수입',syntax))
@@ -750,7 +809,51 @@ def parse_sentence(sentence,catalog):
             if metric.family=='CHANGE' and previous and re.search(r'보다|대비',text[previous.end:quantity.start]):
                 claim_time=replace(claim_time,comparison_reference=True)
             claims.append(Claim(quantity,frozenset(bound_targets),target_scope,metric,claim_time,local,quantity.valid and metric.valid))
-        return ParsedSentence(tuple(claims),valid=not ambiguous_name),Context(targets,last_year,common_flow,time,claims[-1].metric)
+        last_metric = claims[-1].metric
+        predicate = _trend_predicate(clean)
+        # For a numeric change the numeric claim already carries the direction.
+        # An amount alone cannot discharge a separate directional assertion.
+        marker = predicate
+        if not predicate:
+            candidate = _unresolved_direction(clean)
+            if candidate and (TREND_PATH.search(clean) or
+                              (candidate.start() >= values[-1].end and not claims[-1].metric.direct_change)):
+                marker = candidate
+        level = claims[-1]
+        separate_direction = (predicate and level.metric.family == 'AMOUNT'
+                              and level.quantity.end <= predicate.start())
+        if not predicate and level.metric.family == 'AMOUNT':
+            # A preceding numeric change already owns the connecting verb.
+            # Otherwise keep the whole prefix so axis, flow and article subject
+            # are interpreted by the same rules as a direction after the level.
+            previous_change = any(c.metric.family in ('CHANGE', 'SHARE_CHANGE', 'AMOUNT_CHANGE')
+                                  for c in claims[:-1])
+            before_level = clean[:level.quantity.start]
+            candidate = None if previous_change else _unresolved_direction(before_level)
+            if candidate:
+                leading = LEVEL_CHANGE.search(before_level)
+                if leading:
+                    predicate = marker = leading
+                    separate_direction = True
+                elif not marker:
+                    marker = candidate
+        if marker and (separate_direction or not predicate or TREND_PATH.search(clean)):
+            trend_syntax = syntax
+            if separate_direction:
+                # Preserve offsets and the comparator on either side of the level.
+                # "달러로 증가" gives a level; "달러 증가" is already a delta.
+                end = level.quantity.end
+                link = re.match(r'(?:으로|로|이며|이고|를 기록해|를 기록한 뒤)(?=\s)', syntax[end:])
+                if link:
+                    end += link.end()
+                trend_syntax = mask_spans(syntax, [(level.quantity.start, end)])
+            trend = _trend_claim(trend_syntax, level.targets, level.time, catalog, marker,
+                                 understood=bool(predicate))
+            if trend:
+                if not trend.metric.flow and level.metric.flow:
+                    trend = replace(trend, metric=replace(trend.metric, flow=level.metric.flow))
+                claims.append(trend)
+        return ParsedSentence(tuple(claims),valid=not ambiguous_name),Context(targets,last_year,common_flow,time,last_metric)
 
     parsed, _ = parse(text)
     return replace(parsed, valid=False) if ambiguous else parsed

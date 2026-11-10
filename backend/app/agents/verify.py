@@ -162,8 +162,8 @@ class PreparedEvidence:
     facts: tuple[Fact, ...]
 
 
-def _prepare(sources, known_names, countries):
-    catalog = NameCatalog(sources, known_names, countries)
+def _prepare(sources, known_names, countries, *, mention_cache=None):
+    catalog = NameCatalog(sources, known_names, countries, mention_cache=mention_cache)
     return PreparedEvidence(sources, catalog, build_facts(sources, catalog))
 
 
@@ -174,6 +174,7 @@ def inspect_sentence(sentence,sources,*,known_names=(),countries=()):
 
 def _matching_cells(claim, facts, sources, catalog):
     matches = []
+    inferred_axes = set()
     for fact in facts:
         if claim.quantity is None:
             # A country/product detail row alone cannot establish the trend of
@@ -182,6 +183,11 @@ def _matching_cells(claim, facts, sources, catalog):
                     or bool(fact.stored_targets & catalog.countries) != bool(claim.targets & catalog.countries)):
                 continue
         reason = mismatch(claim, fact, sources[fact.source])
+        if claim.quantity is None and not claim.metric.comparison and reason in (None, 'DIRECTION'):
+            axes = [axis for axis in ('YOY', 'MOM') if _comparison_matches(axis, fact)]
+            if not axes:
+                continue
+            inferred_axes.update(axes)
         if claim.metric.negated_change:
             # Invert only an evidenced numeric predicate. A missing or
             # incompatible cell proves neither the assertion nor its negation.
@@ -193,7 +199,7 @@ def _matching_cells(claim, facts, sources, catalog):
             supports = reason is None
         if supports:
             matches.append((fact.source, fact.path))
-    return tuple(matches)
+    return tuple(matches) if len(inferred_axes) <= 1 else ()
 
 
 def _inspect_prepared(sentence, prepared):
@@ -281,7 +287,9 @@ def verify(state,known_names=(),*,snapshots=None,countries=()):
     countries = frozenset(countries)
     # Numeric facts are extracted exactly once per step. Only grounded names
     # join the request-wide dictionary, as in the original identity pass.
-    steps = {step: _prepare([source(step)], known_names, countries) for step in dict.fromkeys(all_steps)}
+    mention_cache = {}
+    steps = {step: _prepare([source(step)], known_names, countries, mention_cache=mention_cache)
+             for step in dict.fromkeys(all_steps)}
     names = known_names.union(n for item in steps.values() for fact in item.facts for n in fact.targets if len(n)>1)
     scopes = {}
 
@@ -292,7 +300,7 @@ def verify(state,known_names=(),*,snapshots=None,countries=()):
             prepared = steps[group[0]]
         else:
             sources = [steps[step].sources[0] for step in group]
-            catalog = NameCatalog(sources, names, countries)
+            catalog = NameCatalog(sources, names, countries, mention_cache=mention_cache)
             facts = []
             for index, step in enumerate(group):
                 for fact in steps[step].facts:
