@@ -45,6 +45,9 @@ THRESHOLD = re.compile(r'\s*(?:을|를|은|는|이|가|의|에)?\s*(?:(?:다소|
                        r'(미만|초과|이상|이하|넘(?=었|는|은|어|지|진|습니다|는다)|미달)')
 THRESHOLD_RELATIONS = {'미만': 'LT', '초과': 'GT', '이상': 'GE', '이하': 'LE', '넘': 'GT', '미달': 'LT'}
 NEGATIVE_COPULA = r'(?:아니|아(?=닌|닙))'  # Leave the modifier in "아닌 적" for the scope check.
+# Some directional lexemes end before the verbal suffix (곤두박질-치-지,
+# 떨어-지-지, 급락-하-지). Consume the stem extension only before negation.
+CHANGE_STEM_END = re.compile(r'(?:치|지|가|들)(?=지(?:는|도)?\s*(?:않|못)|진\s*(?:않|못))')
 NEGATED_THRESHOLD = re.compile(r'\s*(?:(?:하|이)?(?:지(?:는|도)?|진)\s*(?:않|못)'
                                r'|(?:이|가|은|는)?\s*' + NEGATIVE_COPULA + ')')
 NEGATED_RELATIONS = {'LT': 'GE', 'GT': 'LE', 'GE': 'LT', 'LE': 'GT'}
@@ -376,6 +379,7 @@ class TimeClaim:
     period: tuple[str,str] | None = None
     anchor_reference: bool = False
     comparison_reference: bool = False
+    cumulative: bool = False
 
 
 @dataclass(frozen=True)
@@ -532,6 +536,9 @@ def _scope_measure(metric,quantity,prefix,suffix,label,*,shared,multiple):
         predicate = _change_predicate(suffix)
         if predicate:
             end = predicate.end()
+            stem_end = CHANGE_STEM_END.match(suffix, end)
+            if stem_end:
+                end = stem_end.end()
             negated = bool(predicate['negative'])
             for pattern in (NEGATED_THRESHOLD, NEGATED_PROPOSITION):
                 match = pattern.match(suffix, end)
@@ -719,9 +726,39 @@ SUBJECT_WORD = r'([가-힣A-Za-z0-9][가-힣A-Za-z0-9·/-]*)'
 SUBJECT_QUALIFIERS = (
     re.compile(SUBJECT_WORD + r'의\s*@'),
     re.compile(r'(?:수출|수입)(?:액)?\s*중\s+' + SUBJECT_WORD),
-    re.compile(SUBJECT_WORD + r'\s+기준'),
+    re.compile(SUBJECT_WORD + r'\s+(?:기준|부문|부문별|분야|품목)(?=으로|에서|의|은|는|이|가|별|\s|$)'),
 )
 SCOPE_LABELS = frozenset('전체 연간 월간 기간 금액 총액 올해 전년 전월 오늘 현재'.split())
+
+
+# A partner can carry destination/area markers, while period modifiers constrain
+# the evidence cell. Leave product words in place for subject resolution.
+REPORTER = re.compile(r'(?<![가-힣])(?:대한민국|한국)의\s*(?:대(?=\S))?$')
+
+
+PARTNER_ROLE = re.compile(r'(?:의\s*)?\s*(?:(?:시장|지역)(?:의)?|향)(?=\s|수출|수입)')
+PRODUCT_ROLE = re.compile(r'\s*(?:부문|분야|품목)(?:에서|의|은|는|이|가|별)?(?=\s|$)')
+PERIOD_MODIFIER = re.compile(r'(?<![가-힣])(?:연간|월간|누적)(?=\s*(?:수출|수입))')
+
+
+def _trade_subject(text, mentions, catalog):
+    spans = [(a, b) for _, a, b in mentions]
+    reporters = []
+    for name, start, end in mentions:
+        if name in catalog.countries:
+            reporter = REPORTER.search(text[:start])
+            if reporter:
+                reporters.append(reporter.span())
+            role = PARTNER_ROLE
+        else:
+            role = PRODUCT_ROLE
+        tail = role.match(text, end)
+        if tail:
+            spans.append(tail.span())
+    if reporters:
+        mentions = [(name, a, b) for name, a, b in mentions
+                    if not any(left <= a and b <= right for left, right in reporters)]
+    return mentions, mask_spans(text, spans + reporters)
 
 
 def _unknown_trade_subject(syntax, mentions):
@@ -756,9 +793,9 @@ def parse_sentence(sentence,catalog):
 
     def parse(text,context=Context()):
         mentions, ambiguous_name = catalog.resolve_mentions(text)
+        mentions, syntax = _trade_subject(text, mentions, catalog)
         names=frozenset(n for n,_,_ in mentions)
         targets=catalog.merge(context.targets,names)
-        syntax=mask_spans(text,[(a,b) for _,a,b in mentions])
         clean=mask_dates(syntax)
         values=quantities(clean)
         without_aside = _without_article_aside(text, syntax, mentions)
@@ -766,6 +803,13 @@ def parse_sentence(sentence,catalog):
             return parse(without_aside, context)
         time,last_year=read_time(syntax,context.year)
         if not DATE.search(syntax): time=context.time
+        period_words = list(PERIOD_MODIFIER.finditer(syntax))
+        if period_words:
+            labels = {word.group() for word in period_words}
+            durations = {length for label, length in [('연간', 12), ('월간', 1)] if label in labels}
+            time = replace(time, durations=time.durations | durations, cumulative='누적' in labels)
+            syntax = mask_spans(syntax, [word.span() for word in period_words])
+            clean = mask_dates(syntax)
         # Split coordinated assertions only when there is an independent trend
         # without a value. Numeric lists and their shared units stay intact.
         trend_cuts = []

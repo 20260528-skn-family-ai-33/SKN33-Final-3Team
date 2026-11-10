@@ -43,6 +43,9 @@ def _time_matches(claim:Claim,fact:Fact):
     months={fact.month} if fact.month else set()
     if time.comparison_reference and fact.metric.family=='CHANGE':
         months={fact.compare_period[0]} if fact.compare_period and fact.compare_period[0]==fact.compare_period[1] else set()
+    if time.cumulative and (not fact.period_value or not fact.period
+                            or fact.period[0] == fact.period[1]):
+        return False
     if time.durations:
         lengths={months_between(*p)+1 for p in periods}
         if fact.horizon: lengths.add(fact.horizon)
