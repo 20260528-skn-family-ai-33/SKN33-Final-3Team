@@ -686,7 +686,25 @@ class SentenceCheck(Model):
     reason: Literal['MATCH', 'NOT_CONFIRMED', 'SOURCE_UNAVAILABLE'] = 'NOT_CONFIRMED'
 
 
+class ClaimFeedback(Model):
+    # Half-open Python character offsets within the original sentence or summary.
+    span: tuple[int, int] | None = None
+    targets: tuple[str, ...] = ()
+    action: Literal['REVIEW', 'CORRECT', 'PRESERVE'] = 'REVIEW'
+    section: Literal['conclusion', 'explanation', 'summary']
+    task_id: str | None = None
+    index: int | None = None
+    passage: str
+    reason: str
+    step_id: str | None = None
+    cell: tuple[str, ...] | None = None
+
+
 class Verification(Model):
+    feedback: list[ClaimFeedback] = Field(default_factory=list)
+    confirmed_claims: list[ClaimFeedback] = Field(default_factory=list)
+    summary_status: Literal['PASS', 'MISMATCH'] | None = None
+    failed_summary: Annotated[str, _chars(0, 200)] = ''
     status: Literal['PENDING', 'PASS', 'NEEDS_REVIEW'] = 'PENDING'
     checks: list[SentenceCheck] = Field(default_factory=list, max_length=MAX_CONCLUSION_SENTENCES + MAX_TEXT_EXPLANATION_SENTENCES)
     regeneration_count: int = Field(default=0, ge=0, le=1)
