@@ -13,6 +13,7 @@
     "test:review": "node tests/review-browser.cjs",
     "test:store": "node tests/store-browser.cjs",
     "test:decisions": "node tests/functional-decisions-browser.cjs",
+    "test:alpha": "node tests/alpha-fixes-browser.cjs",
     "test:e2e": "node tests/integration-browser.cjs"
   },
   "dependencies": {
