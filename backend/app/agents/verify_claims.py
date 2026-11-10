@@ -356,12 +356,15 @@ class NameCatalog:
         return len(names & self.countries)>1 or len(names-self.countries)>1
 
 
+ARTICLE_CITATION = re.compile(r'\[\s*[0-9]+(?:\s*,\s*[0-9]+)*\s*\]')
+
+
 def prepare_sentence(sentence, catalog, *, mentions=None):
     """Normalize amounts/citations only outside recognized identifier spans."""
     if mentions is None:
         mentions = catalog.mentions(sentence)
     spans=[(a,b) for _,a,b in mentions]
-    text=re.sub(r'\[\d+\]',lambda m:m.group() if _overlaps(*m.span(),spans) else ' '*len(m.group()),sentence)
+    text=ARTICLE_CITATION.sub(lambda m:m.group() if _overlaps(*m.span(),spans) else ' '*len(m.group()),sentence)
     return COMPOUND.sub(lambda m:m.group() if _overlaps(*m.span(),spans) else _merge_compound(m.group()),text)
 
 

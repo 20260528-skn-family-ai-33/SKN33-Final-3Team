@@ -114,6 +114,9 @@ def build_graph(services: NodeServices, checkpointer, *, regeneration_seconds=35
         # A rewritten draft can have fewer sentences. The old indexes were
         # consumed by compose; only verify may attach checks to this draft.
         state.verification.checks = []
+        state.verification.feedback = []
+        state.verification.failed_summary = ''
+        state.verification.summary_status = None
         return checked(state)
 
     def compose(state):
@@ -128,6 +131,8 @@ def build_graph(services: NodeServices, checkpointer, *, regeneration_seconds=35
         if (state.verification.status == 'NEEDS_REVIEW'
                 and state.verification.regeneration_count == 0
                 and state.run_budget.remaining_seconds() >= regeneration_seconds):
+            if state.verification.failed_summary:
+                state.draft.turn_summary = state.verification.failed_summary
             state.verification.regeneration_count = 1
             state.verification.status = 'PENDING'
         return checked(state)

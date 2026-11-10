@@ -9,9 +9,9 @@ from dataclasses import dataclass, replace
 import re
 
 from backend.app.agents.compose import fixed_conclusion
-from backend.app.agents.state import SentenceCheck, Verification
+from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
-    NameCatalog, Claim, TimeClaim, parse_sentence, quantities, mask_dates, quantity_text,
+    ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, quantities, mask_dates, quantity_text,
     TOKEN, DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift,
 )
 from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, period
@@ -248,7 +248,7 @@ def snapshot_evidence(payload):
 
 
 def _tokens(text):
-    text=_merge_compound(DATE.sub(' ',re.sub(r'\[\d+\]','',text)))
+    text=_merge_compound(DATE.sub(' ',ARTICLE_CITATION.sub('',text)))
     return [m for m in TOKEN.finditer(text) if not _target_count(text,m)]
 
 
@@ -286,7 +286,7 @@ def _dates(text):
     """문장 속 절대 날짜(연·월). 숫자 대조(_tokens)는 날짜를 지우므로 따로 읽는다.
     "최근 12개월"처럼 기간 길이는 날짜가 아니라서 대조하지 않는다(전처럼 통과)."""
     out=set()
-    for m in DATE.finditer(re.sub(r'\[\d+\]','',text)):
+    for m in DATE.finditer(ARTICLE_CITATION.sub('',text)):
         if m[1]: out|=_date_keys(m[1], m[2] or m[3])
         elif m[5]=='월': out.add(m[4]+'월')
     return out
@@ -313,32 +313,83 @@ def check_history(sentence, recent):
     return good,[_shown(m) for m in found]
 
 
+def generated_conclusion(state, task, has_evidence):
+    fixed_ids = getattr(state, 'fixed_conclusion_ids', None)
+    if fixed_ids is not None:
+        return task.task_id not in fixed_ids
+    return (has_evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
+
+
 def mark_unverified(state):
     """시간이 부족해 대조하지 못했을 때(§1·§13.4): verify가 대조할 LLM 문장마다 "확인 필요"(MISMATCH)를 붙인다.
     고정 문구 결론은 건너뛴다. 증감 주장은 수치가 없어도 확인 필요이며, 안내문은 PASS다.
     확인하지 않은 숫자를 다음 턴 요약에 남기지 않도록 turn_summary는 비운다(D-77)."""
     checks,index=[],0
     catalog=NameCatalog([result.digest for result in state.results.values() if result.digest])
-    def add(sentence):
+    feedback = []
+    def add(sentence, section, task_id=None):
         text=quantity_text(sentence,catalog)
         numbers=[q.shown for q in quantities(text)]
         needs_check = bool(numbers) or any(c.quantity is None for c in parse_sentence(sentence,catalog).claims)
+        if needs_check:
+            feedback.append(ClaimFeedback(section=section, task_id=task_id, index=index,
+                                          passage=sentence, reason="NOT_CONFIRMED"))
         checks.append(SentenceCheck(index=index,numbers=numbers,status='MISMATCH' if needs_check else 'PASS',
                                     reason='NOT_CONFIRMED' if needs_check else 'MATCH'))
     for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
         evidence=any(s.step_id in state.results and state.results[s.step_id].digest for s in task.steps)
-        generated=(evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
+        generated=generated_conclusion(state,task,evidence)
         for sentence in conclusion.sentences:
-            if generated: add(sentence)
+            if generated: add(sentence, "conclusion", task.task_id)
             index+=1
     for sentence in state.draft.explanation:
-        add(sentence); index+=1
-    if fixed_conclusion(state,state.plan.tasks[0]) is None: state.draft.turn_summary=''
-    state.verification=Verification(checks=checks,regeneration_count=state.verification.regeneration_count,
-                                    status='NEEDS_REVIEW' if any(c.status=='MISMATCH' for c in checks) else 'PASS')
+        add(sentence, "explanation"); index+=1
+    failed_summary = state.draft.turn_summary if fixed_conclusion(state,state.plan.tasks[0]) is None else ''
+    if failed_summary:
+        state.draft.turn_summary = ''
+        feedback.append(ClaimFeedback(section='summary', task_id=state.plan.tasks[0].task_id,
+                                      passage=failed_summary, reason='NOT_CONFIRMED'))
+    state.verification = Verification(
+        checks=checks, feedback=feedback, failed_summary=failed_summary,
+        summary_status='MISMATCH' if failed_summary else None,
+        regeneration_count=state.verification.regeneration_count,
+        status='NEEDS_REVIEW' if feedback else 'PASS',
+    )
 
 
-def verify(state,known_names=(),*,snapshots=None,countries=()):
+def diagnose_claim(claim, prepared, group):
+    """Only identify an attribute when an otherwise compatible cell isolates it."""
+    if not claim.valid or not claim.metric.family or not claim.targets:
+        return 'NOT_CONFIRMED', None, None
+    candidates = []
+    for fact in prepared.facts:
+        if claim.targets != fact.targets or claim.metric.family != fact.metric.family:
+            continue
+        source = prepared.sources[fact.source]
+        reason = mismatch(claim, fact, source)
+        if reason == 'COMPARISON':
+            relaxed = replace(claim, metric=replace(claim.metric, comparison=None))
+        elif reason == 'DIRECTION' and fact.value != 0:
+            relaxed = replace(claim, metric=replace(claim.metric, direction='UP' if fact.value>0 else 'DOWN'))
+        elif reason in ('PERIOD', 'SOURCE_PERIOD'):
+            reason = 'PERIOD'
+            relaxed = replace(claim, time=TimeClaim())
+        elif reason == 'VALUE':
+            relaxed = None
+        else:
+            continue
+        if relaxed is None or mismatch(relaxed, fact, source) is None:
+            candidates.append((reason, group[fact.source], fact.path))
+    comparison = [c for c in candidates if c[0]=='COMPARISON']
+    candidates = comparison or candidates
+    if len(candidates)==1:
+        return candidates[0]
+    return 'NOT_CONFIRMED', None, None
+
+
+def judge_draft(state,known_names=(),*,snapshots=None,countries=()):
+    """Judge the saved draft and supplied evidence without mutating the turn."""
+    feedback = []
     snapshots=snapshots or {}
     def source(step_id):
         digest=state.results[step_id].digest or {}
@@ -383,34 +434,67 @@ def verify(state,known_names=(),*,snapshots=None,countries=()):
         return prepared
 
     index=0
-    def add(sentence,group):
+    def inspect(sentence,group,section,task_id=None):
         prepared = prepare_scope(group)
         digests = prepared.sources
-        good,numbers=_check_prepared(sentence,prepared)
+        good,claims=_inspect_prepared(sentence,prepared)
+        numbers=[c.claim.quantity.shown for c in claims if c.claim.quantity]
+        if not good and not claims:
+            numbers=[q.shown for q in quantities(quantity_text(sentence,prepared.catalog))]
         source=any(d.get('_verification_source')=='SNAPSHOT' for d in digests)
         unavailable=any(d.get('_source_unavailable') for d in digests)
+        location = dict(section=section, task_id=task_id, index=None if section=='summary' else index)
+        if not good:
+            failures = [c.claim for c in claims if not c.matches]
+            for claim in failures:
+                reason, step, cell = diagnose_claim(claim, prepared, group) if not unavailable else ('SOURCE_UNAVAILABLE', None, None)
+                passage = claim.text.strip()
+                if passage not in sentence:
+                    # Masking a citation preserves offsets but inserts spaces into the parsed clause.
+                    citation_free = passage.rstrip(' .!?')
+                    if citation_free and citation_free in sentence:
+                        passage = citation_free
+                    elif claim.quantity and claim.quantity.shown in sentence:
+                        passage = claim.quantity.shown
+                if claim.quantity and claim.quantity.shown in sentence and claim.quantity.shown not in passage:
+                    passage = claim.quantity.shown
+                feedback.append(ClaimFeedback(**location, passage=passage, reason=reason, step_id=step, cell=cell))
+            if not failures:
+                feedback.append(ClaimFeedback(**location, passage=sentence,
+                    reason='SOURCE_UNAVAILABLE' if unavailable else 'NOT_CONFIRMED'))
+        if section=='summary':
+            return good
         checks.append(SentenceCheck(index=index,numbers=numbers,status='PASS' if good else 'MISMATCH',
             basis='SNAPSHOT' if source else 'DIGEST',
             reason='MATCH' if good else 'SOURCE_UNAVAILABLE' if unavailable else 'NOT_CONFIRMED'))
     for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
-        if task.intent in ('CONVERSATION','HS_LOOKUP') and fixed_conclusion(state,task) is None:
+        if task.intent in ('CONVERSATION','HS_LOOKUP') and generated_conclusion(state,task,True):
             for sentence in conclusion.sentences:
                 good,numbers=(check_history(sentence,state.input.context.recent) if task.intent=='CONVERSATION'
-                              else check_codes(sentence,by_task[task.task_id]))
+                              else check_codes(sentence,[source(step) for step in by_task[task.task_id]]))
+                if not good:
+                    feedback.append(ClaimFeedback(section="conclusion", task_id=task.task_id, index=index, passage=sentence, reason="NOT_CONFIRMED"))
                 checks.append(SentenceCheck(index=index,numbers=numbers,status='PASS' if good else 'MISMATCH',
                                             reason='MATCH' if good else 'NOT_CONFIRMED'))
                 index+=1
             continue
-        generated=bool(by_task[task.task_id]) and fixed_conclusion(state,task) is None
+        generated=generated_conclusion(state,task,bool(by_task[task.task_id]))
         for sentence in conclusion.sentences:
-            if generated: add(sentence,by_task[task.task_id])
+            if generated: inspect(sentence,by_task[task.task_id],'conclusion',task.task_id)
             index+=1
     for sentence in state.draft.explanation:
-        add(sentence,all_steps); index+=1
+        inspect(sentence,all_steps,'explanation'); index+=1
     primary=state.plan.tasks[0]
     summary_ok=True
     if state.draft.turn_summary and fixed_conclusion(state,primary) is None:
-        summary_ok,_=_check_prepared(state.draft.turn_summary,prepare_scope(by_task[primary.task_id]))
-        if not summary_ok: state.draft.turn_summary=''
-    state.verification=Verification(checks=checks,regeneration_count=state.verification.regeneration_count,
+        summary_ok=inspect(state.draft.turn_summary,by_task[primary.task_id],'summary',primary.task_id)
+    return Verification(checks=checks,feedback=feedback,
+        summary_status=('PASS' if summary_ok else 'MISMATCH') if state.draft.turn_summary else None,
+        failed_summary='' if summary_ok else state.draft.turn_summary,regeneration_count=state.verification.regeneration_count,
         status='PASS' if summary_ok and all(c.status=='PASS' for c in checks) else 'NEEDS_REVIEW')
+
+
+def verify(state,known_names=(),*,snapshots=None,countries=()):
+    state.verification = judge_draft(state,known_names,snapshots=snapshots,countries=countries)
+    if state.verification.summary_status == 'MISMATCH':
+        state.draft.turn_summary = ''
