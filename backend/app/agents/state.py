@@ -687,6 +687,10 @@ class SentenceCheck(Model):
 
 
 class ClaimFeedback(Model):
+    # Half-open Python character offsets within the original sentence or summary.
+    span: tuple[int, int] | None = None
+    targets: tuple[str, ...] = ()
+    action: Literal['REVIEW', 'CORRECT', 'PRESERVE'] = 'REVIEW'
     section: Literal['conclusion', 'explanation', 'summary']
     task_id: str | None = None
     index: int | None = None
@@ -698,6 +702,7 @@ class ClaimFeedback(Model):
 
 class Verification(Model):
     feedback: list[ClaimFeedback] = Field(default_factory=list)
+    confirmed_claims: list[ClaimFeedback] = Field(default_factory=list)
     summary_status: Literal['PASS', 'MISMATCH'] | None = None
     failed_summary: Annotated[str, _chars(0, 200)] = ''
     status: Literal['PENDING', 'PASS', 'NEEDS_REVIEW'] = 'PENDING'

@@ -25,7 +25,7 @@ class Fact:
     source: int
     path: tuple[str,...]
     metric: Metric
-    value: Decimal
+    value: Decimal | str | None
     unit: str
     targets: frozenset[str]
     group_members: frozenset[str]
@@ -132,13 +132,26 @@ def build_facts(sources,catalog:NameCatalog):
                 for i,item in enumerate(row): walk(item,stored,inherited_month,path+(str(i),))
                 return
             if not isinstance(row,dict): return
-            names={str(row[k]) for k in ('name','label','code','product_name','country_name','country_code','hs_code','hs6') if row.get(k)}
+            names={str(row[k]) for k in ('name','label','code','product_name','hs_name','country_name','country_code','hs_code','hs6') if row.get(k)}
             stored = stored.union(names)
             identities, group = bind_targets(stored, catalog)
             month=str(row.get('month') or row.get('trade_month') or inherited_month or '')[:7] or None
             for key,value in row.items():
                 if isinstance(value,(dict,list)):
                     walk(value,stored,month,path+(key,));continue
+                if value is None and key == 'amount_usd' and month:
+                    descriptor = metric(key, '', 'USD', source.get('trade_flow'))
+                    facts.append(Fact(index, path+(key,), descriptor, None, 'NULL', identities, group,
+                                      (month,month), None, month, False, prediction, None, None, anchor, stored))
+                    continue
+                if prediction and key == 'growth_outlook' and value in ('증가 예상', '감소 예상', None):
+                    row_anchor = str(row.get('anchor') or anchor or '')[:7]
+                    if anchor and row_anchor != anchor:
+                        continue
+                    descriptor = Metric(key, '시장 예상 방향', 'OUTLOOK', source.get('trade_flow'), None, None)
+                    facts.append(Fact(index, path+(key,), descriptor, value, 'OUTLOOK', identities, group,
+                                      None, None, row_anchor or None, False, True, 12, 'FUTURE', row_anchor, stored))
+                    continue
                 if not isinstance(value,(float,int,Decimal)) or isinstance(value,bool): continue
                 amount=Decimal(str(value))
                 if not amount.is_finite(): continue

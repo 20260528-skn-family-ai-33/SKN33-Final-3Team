@@ -13,8 +13,21 @@ CURRENCY = r'(?:[가-힣]+\s*)?(?:달러|파운드|프랑|페소|리라|디나�
 MONEY_UNIT = CURRENCY+r'|[A-Z]{3}(?![A-Za-z])|US\$|[$€£¥₩]'
 UNIT = r'%p|%|'+MONEY_UNIT+r'|배|위|개|건|kg'
 TOKEN = re.compile(NUMBER+r'\s*(?P<scale>[만억조])?\s*(?P<unit>'+UNIT+r')?', re.I)
-DATE = re.compile(r'(?<!\d)(\d{4})\s*(?:년\s*(?:(\d{1,2})\s*월)?|-(\d{2})(?:-\d{2})?)|(\d{1,3})\s*(개월|월)')
+# Dates in recalled history and HS lookups retain their original numeric-token rules.
+def _date_pattern(day='', bare_day=''):
+    return re.compile(r'(?<!\d)(\d{4})\s*(?:년\s*(?:(\d{1,2})\s*월' + day +
+                      r')?|-(\d{2})(?:-\d{2})?)|(\d{1,3})\s*(개월|월)' + bare_day)
+
+
+HISTORY_DATE = _date_pattern()
+DAY = r'\s*(?:3[01]|[12]\d|0?[1-9])\s*일(?![간차])'
+DATE = _date_pattern('(?:'+DAY+')?', '(?:(?<!개월)'+DAY+')?')
 COMPOUND = re.compile(r'(?<![\d.])(?P<sign>[+-]?)(?P<eok>\d[\d,]*)\s*억\s*(?P<man>\d[\d,]*)\s*만')
+# Expand abbreviated measures before parsing, retaining original draft offsets.
+SHORTHAND = re.compile(COMPOUND.pattern +
+    r'|(?<![\d.])(?P<quarter>[1-4])분기'
+    r'|(?<![\d.])(?P<month>1[0-2]|0?[1-9])(?=\s*[~～–·]\s*(?:1[0-2]|0?[1-9])월)'
+    r'|(?<![\d.])(?P<rank>\d+)(?=\s*·\s*\d+위)')
 SCALE = {None:1,'만':10**4,'억':10**8,'조':10**12}
 CHANGE_KEYS = frozenset({'change_pct','yoy_pct','mom_pct','growth_pct'})
 YEAR_AGO = r'(?:전년(?:도)?|작년|지난\s*해)'
@@ -87,6 +100,17 @@ def months_between(start, end):
 def _target_count(text, match):
     if match['scale'] or match['unit'] not in (None,'개'): return False
     return bool(COUNT_BEFORE.search(text,0,match.start()) or COUNT_AFTER.match(text,match.end()))
+
+
+def change_phrase_end(text, quantity_end, limit):
+    """Include the adjacent Korean change predicate, without swallowing later clauses."""
+    predicate = CHANGE.match(text, quantity_end, limit)
+    if not predicate:
+        return quantity_end
+    end = predicate.end()
+    while end < limit and '가' <= text[end] <= '힣':
+        end += 1
+    return end
 
 
 def _shown(match):
@@ -166,7 +190,7 @@ def source_names(value):
     elif isinstance(value,dict):
         for key,item in value.items():
             if key in ('columns','conditions','meta'): continue
-            if key in ('country_name','country_code','product_name','name','label','code','hs_code','hs6') and item:
+            if key in ('country_name','country_code','product_name','hs_name','name','label','code','hs_code','hs6') and item:
                 yield key,str(item)
             elif isinstance(item,(dict,list)): yield from source_names(item)
 
@@ -257,7 +281,7 @@ class NameCatalog:
         self._mentions = ({} if mention_cache is None else
                           mention_cache.setdefault((self.names, self.countries), {}))
         stored = {name for _, name in fields}
-        products = {name for key, name in fields if key in ('product_name', 'name', 'label')} - self.countries
+        products = {name for key, name in fields if key in ('product_name', 'hs_name', 'name', 'label')} - self.countries
         candidates = self.names - stored - self.countries
         self.aliases = {}
         if candidates:
@@ -359,13 +383,28 @@ class NameCatalog:
 ARTICLE_CITATION = re.compile(r'\[\s*[0-9]+(?:\s*,\s*[0-9]+)*\s*\]')
 
 
-def prepare_sentence(sentence, catalog, *, mentions=None):
+def prepare_sentence(sentence, catalog, *, mentions=None, compounds=None):
     """Normalize amounts/citations only outside recognized identifier spans."""
     if mentions is None:
         mentions = catalog.mentions(sentence)
     spans=[(a,b) for _,a,b in mentions]
     text=ARTICLE_CITATION.sub(lambda m:m.group() if _overlaps(*m.span(),spans) else ' '*len(m.group()),sentence)
-    return COMPOUND.sub(lambda m:m.group() if _overlaps(*m.span(),spans) else _merge_compound(m.group()),text)
+    def normalize(match):
+        if _overlaps(*match.span(), spans):
+            return match.group()
+        if match['quarter']:
+            last = int(match['quarter']) * 3
+            normalized = f'{last-2}월~{last}월'
+        elif match['month']:
+            normalized = match.group() + '월'
+        elif match['rank']:
+            normalized = match.group() + '위'
+        else:
+            normalized = _merge_compound(match.group())
+        if compounds is not None:
+            compounds.append((match.start(), match.end(), len(normalized)))
+        return normalized
+    return SHORTHAND.sub(normalize, text)
 
 
 def quantity_text(sentence, catalog):
@@ -383,6 +422,7 @@ class TimeClaim:
     anchor_reference: bool = False
     comparison_reference: bool = False
     cumulative: bool = False
+    month_window: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -410,6 +450,8 @@ class Claim:
     time: TimeClaim
     text: str
     valid: bool = True
+    span: tuple[int, int] | None = None
+    quantity_span: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -441,8 +483,11 @@ def read_time(text, inherited_year=None):
         elif current_year: months.add(f'{current_year}-{int(count):02d}')
         else: bare.add(int(count))
     period=None
+    month_window=None
     if len(dates)==2 and RANGE_JOIN.fullmatch(text[dates[0].end():dates[1].start()]):
         first,last=dates
+        if first[5] == last[5] == '월':
+            month_window = int(first[4]), int(last[4])
         if first.group(1) and last.group(1) and not (first.group(2) or first.group(3) or last.group(2) or last.group(3)):
             period=(first.group(1)+'-01',last.group(1)+'-12')
         elif first.group(1) and (first.group(2) or first.group(3)):
@@ -450,7 +495,7 @@ def read_time(text, inherited_year=None):
             if end_month: period=(f'{first.group(1)}-{int(first.group(2) or first.group(3)):02d}',f'{last.group(1) or first.group(1)}-{int(end_month):02d}')
     comparison_reference=any(re.match(r'\s*(?:대비|보다)',text[d.end():]) for d in dates)
     return TimeClaim(frozenset(years),frozenset(months),frozenset(bare),frozenset(durations),period,'기준' in text,
-                     comparison_reference),current_year
+                     comparison_reference,month_window=month_window),current_year
 
 
 def _threshold_relation(suffix):
@@ -629,15 +674,15 @@ TREND_PREDICATE = re.compile(
     r'(?P<short>안\s+|못\s+)?'
     r'(?:' + TREND_STEMS + r')'
     r'(?P<negative>(?:하)?(?:지는|지도|지|진)\s*(?:않|못하?))?'
-    r'(?P<form>하는\s*추세(?:를\s*보였|입|이)?|하고\s*있|세를\s*보였|세입|한\s*것으로\s*(?:나타났|집계됐|확인됐)|하였|했|합|하|았|습|었)?'
-    r'(?P<ending>습니다|니다|다|고|으며|으나|지만|한\s+반면|음|함)?[,;，.!。\s]*$')
+    r'(?P<form>(?:은|는)\s*확인되|하는\s*추세(?:를\s*보였|입|이)?|하고\s*있|세를\s*보였|세입|한\s*것으로\s*(?:나타났|집계됐|확인됐)|하였|했|합|하|았|습|었)?'
+    r'(?P<ending>습니다|니다|다|고|으며|으나|나|지만|한\s+반면|음|함)?[,;，.!。\s]*$')
 # Connective verbs describe the change leading to a reported level.
 LEVEL_CHANGE = re.compile(
     r'(?P<short>안\s+|못\s+)?(?:' + TREND_STEMS + r')'
     r'(?P<negative>(?:하)?(?:지는|지도|지|진)\s*(?:않|못하?))?'
     r'(?:해(?:서)?|하여|아(?:서)?|어(?:서)?|며|면서|한(?:\s+(?:결과|후))?)?'
     r'[\s,，]*$')
-TREND_BREAK = re.compile(r'(?<=반면)\s+|(?<=[고며만나])\s+|(?<=[.。])\s+|[,;，](?!\d)')
+TREND_BREAK = re.compile(r'(?<=반면)\s+|(?<=[했됐았었였하되이줬졌났렸랐으][고며])\s+|(?<=지만)\s+|(?<=으나)\s+|(?<=[.。])\s+|[,;，](?!\d)')
 TREND_METRIC = re.compile(r'수출입|수출|수입|점유율|비중|금액|규모|총액|실적|교역액')
 
 # A path over several observations cannot be proved by a single change cell.
@@ -656,7 +701,7 @@ UNRESOLVED_DIRECTION = re.compile(
 GUIDANCE = re.compile(r'여부|했는지|하는지|했는가|(?:확인|참고|참조|살펴)\s*(?:하세요|하십시오|바랍니다|할 수)')
 
 
-def _without_article_aside(text, syntax, mentions):
+def _article_aside_span(text, syntax, mentions):
     # Anchor the main clause on a grounded subject, rather than enumerating
     # inflections of the article's background predicate. Never discard an
     # earlier trade assertion, number, date or comparison.
@@ -674,15 +719,15 @@ def _without_article_aside(text, syntax, mentions):
                              or DATE.search(background) or quantities(background))
                     and re.match(r'\s*(?:의\s*)?(?:수출|수입|점유율|비중)', COMPARISON.sub('', main))
                     and COMPARISON.search(main) and _trend_predicate(main)):
-                return text[start:]
+                return 0, start
     aside = ARTICLE_ASIDE.search(syntax)
     if not aside:
-        return text
+        return None
     start = aside.start()
     for _, left, right in reversed(mentions):
         if right <= start and re.fullmatch(r'의?\s*', text[right:start]):
             start = left
-    return text[:start] + ' ' + text[aside.end():]
+    return start, aside.end()
 
 
 def _trend_predicate(text):
@@ -707,7 +752,12 @@ def _trend_claim(syntax, targets, time, catalog, predicate, *, understood=True):
     share = bool(re.search(r'점유율|비중', prefix))
     # With no numeric unit, do not mistake a different measure (e.g. 수출 가격)
     # or an unknown entity for the trade amount of a matching row.
+    # An explicit calendar comparator may follow the separately verified reference amount.
+    if not axes and re.search(r'보다\s*$', prefix) and (time.months or time.bare_months):
+        time = replace(time, comparison_reference=True)
+        prefix = re.sub(r'보다\s*$', '', prefix)
     rest = TREND_METRIC.sub('', mask_dates(COMPARISON.sub('', prefix)))
+    rest = re.sub(r'^\s*(?:기사|보도)에\s*따르면[,，]?\s*', '', rest)
     rest = re.sub(r'소폭|큰\s*폭으로|대폭|다소|크게|조금|시장|전체|하여|에서|으로|[도의은는이가을를에와과액·,\s]', '', rest)
     valid = understood and not TREND_PATH.search(syntax) and len(axes) <= 1 and len(flow_words) <= 1 and not rest and not re.search(r'수출입|교역', prefix)
     metric = MetricClaim(family='SHARE_CHANGE' if share else 'CHANGE', comparison=next(iter(axes), None),
@@ -719,6 +769,14 @@ def _trend_claim(syntax, targets, time, catalog, predicate, *, understood=True):
 def _unresolved_direction(text):
     for marker in UNRESOLVED_DIRECTION.finditer(text):
         suffix = text[marker.end():]
+        # A nominal trend in a question about causation is not a second observation.
+        # Inspect only this clause; a later caveat must not erase an asserted predicate.
+        tail = re.split(r'[,;.!?→]', suffix, maxsplit=1)[0]
+        nominal = re.match(r'(?:의|와|과|가|이|를|을|에|는|은|\s)', tail)
+        if nominal and not re.match(r'(?:은|는)\s*확인', tail) and re.search(r'원인|인과|연관|관련|배경|효과|때문|질문|질의|요청|설명할 수 있는지', tail):
+            continue
+        if re.search(r'(?:야간\s*)?대기(?:시간)?(?:가|는|의)?\s*$', text[:marker.start()]):
+            continue
         if suffix.startswith(('률', '율', '액', '분', '폭')) or GUIDANCE.search(suffix):
             continue
         return marker
@@ -739,7 +797,7 @@ SCOPE_LABELS = frozenset('전체 연간 월간 기간 금액 총액 올해 전�
 REPORTER = re.compile(r'(?<![가-힣])(?:대한민국|한국)의\s*(?:대(?=\S))?$')
 
 
-PARTNER_ROLE = re.compile(r'(?:의\s*)?\s*(?:(?:시장|지역)(?:의)?|향)(?=\s|수출|수입)')
+PARTNER_ROLE = re.compile(r'(?:의\s*)?\s*(?:(?:시장|지역)(?:의)?|[향행])(?=\s|수출|수입)')
 PRODUCT_ROLE = re.compile(r'\s*(?:부문|분야|품목)(?:에서|의|은|는|이|가|별)?(?=\s|$)')
 PERIOD_MODIFIER = re.compile(r'(?<![가-힣])(?:연간|월간|누적)(?=\s*(?:수출|수입))')
 
@@ -790,20 +848,141 @@ def _unknown_trade_subject(syntax, mentions):
     return False
 
 
+OUTLOOK = re.compile(
+    r'(?P<unknown>(?:증가 예상 시장 또는 감소 예상 시장으로 구분할 수 없|증가·감소 예상은 판정하지 못|유형을 판정하지 못))'
+    r'|(?P<direction>증가|감소)(?:가|할 것으로)?\s*예상')
+OUTLOOK_SUBJECT = re.compile(
+    r'(?:모델은|기준(?:월|으로)?|유형을 질문했으며|방향을 수치 예측 없이 요청했습니다|'
+    r'방향값이 없어|예상 방향 자료가 집계되지 않아|(?:시장)?의?\s*예상 방향은|시장|수출|수입|'
+    r'(?:유형|방향)\s*(?:판정|분류)\s*(?:자료|정보)?\s*여부|예측|모델|그리고|[의은는이가을를으로와과,·→\s])+')
+OUTLOOK_END = re.compile(r'(?:되는|됩니다|입니다|이며|으로|은|을|됩|입|이|$|[.\s])')
+
+
+def _outlook_claims(text, catalog):
+    """Read the saved market classification independently of quantitative changes."""
+    mentions, syntax = _trade_subject(text, catalog.mentions(text), catalog)
+    removed = []
+    claims = []
+    for found in OUTLOOK.finditer(syntax):
+        before = syntax[:found.start()]
+        # A numeric growth forecast is already checked as a numeric claim.
+        if re.search(r'%\s*$', before):
+            continue
+        start = max((m.end() for m in re.finditer(r'(?<!\d),|,(?!\d)|[.](?!\d)|→|이며\s+', before)), default=0)
+        scope_start = max((m.end() for m in re.finditer(r'(?<!\d)\.(?!\d)', before)), default=0)
+        lead = syntax[scope_start:start]
+        local_names = any(start <= a < b <= found.start() for _,a,b in mentions)
+        short_topic = bool(lead.strip()) and not re.search(r'[.;]|\d+\s*(?:만|억|달러|%)|이며|했고', lead)
+        if not local_names and not OUTLOOK.search(lead) and (short_topic or re.search(r'(?:질문|문의|요청)(?:했|한)', lead)):
+            start = scope_start
+        prefix = syntax[start:found.start()]
+        names = frozenset(n for n,a,b in mentions if start <= a < b <= found.start())
+        suffix = re.split(r'[,，.!]|이며|했으며', syntax[found.end():], maxsplit=1)[0]
+        time, _ = read_time(prefix)
+        subject = mask_dates(prefix).strip()
+        valid = (not subject or bool(OUTLOOK_SUBJECT.fullmatch(subject)))
+        if found['unknown']:
+            valid &= not re.search(r'아니|아닙|않', suffix)
+        else:
+            valid &= bool(OUTLOOK_END.match(syntax[found.end():]))
+            valid &= not re.search(r'아니|아닙|않|못|없|여부|인지|일까|일지', suffix)
+            # A target after the classification needs its own explicit binding.
+            valid &= not any(found.end() <= a < found.end()+len(suffix) for _,a,b in mentions)
+        flows = set(re.findall(r'수출|수입', prefix))
+        metric = MetricClaim(family='OUTLOOK', direction=found['direction'] or '미분류',
+                             flow={'수출':'EXPORT','수입':'IMPORT'}.get(next(iter(flows), '')))
+        claims.append(Claim(None, names, 'SINGLE', metric, time, found.group(), valid and len(flows)<=1,
+                            found.span()))
+        removed.append(found.span())
+    return claims, removed
+
+
+# A null monthly amount and a recorded zero are different saved observations.
+MONTH_STATE = re.compile(
+    r'(?:(?P<label>0|미집계)인 달은\s*(?P<after>(?:\d{4}년\s*)?\d{1,2}월)'
+    r'|(?P<before>(?:\d{4}년\s*)?\d{1,2}월)\s*(?P<missing>미집계))')
+MONTH_STATE_QUESTION = re.compile(r'0인 달과 미집계인 달을\s*확인했으며')
+
+
+def _monthly_status_claims(text, catalog):
+    mentions, syntax = _trade_subject(text, catalog.mentions(text), catalog)
+    claims, spans = [], []
+    for match in MONTH_STATE.finditer(syntax):
+        date = match['before'] or match['after']
+        prefix = syntax[:match.start()]
+        # These labels refer to trade amounts. A weight, price or count is a different measure.
+        flow_words = set(re.findall(r'수출|수입', prefix))
+        valid = len(flow_words) <= 1 and not re.search(r'중량|물량|건수|수량|가격|단가|증감률|비중|점유율', prefix)
+        clause_start = max((m.end() for m in re.finditer(r'[.,，](?!\d)', prefix)), default=0)
+        names = frozenset(n for n,a,b in mentions if clause_start <= a < b <= match.start())
+        if not names:
+            names = frozenset(n for n,_,b in mentions if b <= match.start())
+        subject = mask_dates(prefix[clause_start:])
+        if _unknown_trade_subject(syntax[:match.start()], [(n,a,b) for n,a,b in mentions if b<=match.start()]):
+            valid = False
+        unbound = re.search(r'([가-힣A-Za-z]+)\s+(?:수출|수입)', subject)
+        if unbound and unbound[1] not in ('월별', '전체', '한국', '한국의', '분기', '기간'):
+            valid = False
+        after_label = re.split(r'[,，.]|이며', syntax[match.end():], maxsplit=1)[0]
+        if re.search(r'아니|아닙|않', after_label):
+            valid = False
+        _, year = read_time(prefix)
+        time, _ = read_time(date, year)
+        metric = MetricClaim(family='MONTH_STATE', direction='ZERO' if match['label']=='0' else 'MISSING',
+                             flow={'수출':'EXPORT','수입':'IMPORT'}.get(next(iter(flow_words), '')))
+        claims.append(Claim(None, names, 'SINGLE', metric, time, match.group(), valid, match.span()))
+        # In "8월(0달러)" the explicit monetary assertion still needs its date.
+        end = match.start('after') if match['after'] and re.match(r'\s*\(\s*[+-]?\d', syntax[match.end():]) else match.end()
+        spans.append((match.start(), end))
+    if claims:
+        spans.extend(m.span() for m in MONTH_STATE_QUESTION.finditer(syntax))
+    return claims, spans
+
+
 def parse_sentence(sentence,catalog):
     original_mentions, ambiguous = catalog.resolve_mentions(sentence)
-    text = prepare_sentence(sentence, catalog, mentions=original_mentions)
+    outlook, outlook_spans = _outlook_claims(sentence, catalog) if OUTLOOK.search(sentence) else ([], [])
+    monthly, monthly_spans = _monthly_status_claims(sentence, catalog) if MONTH_STATE.search(sentence) else ([], [])
+    quantitative = mask_spans(sentence, outlook_spans + monthly_spans)
+    compounds = []
+    text = prepare_sentence(quantitative, catalog, mentions=original_mentions, compounds=compounds)
+    # Track normalized characters to the original draft, including repeated values and 억/만 amounts.
+    origins = [(i, i + 1) for i in range(len(sentence))]
+    for left, right, size in reversed(compounds):
+        origins[left:right] = [(left, right)] * size
 
-    def parse(text,context=Context()):
+    def parse(text, origins, context=Context()):
+        def parse_pair(left_end, right_start):
+            first, prior = parse(text[:left_end], origins[:left_end], context)
+            second, following = parse(text[right_start:], origins[right_start:], prior)
+            return ParsedSentence(first.claims + second.claims, first.date_only + second.date_only,
+                                  first.valid and second.valid), following
+
+        def source_span(start, end):
+            while start < end and text[start] in ' \t\r\n,;，':
+                start += 1
+            while end > start and text[end-1] in ' \t\r\n.,;!?。，':
+                end -= 1
+            # A removed article aside or embedded citation cannot form one editable range.
+            if start == end or None in origins[start:end]:
+                return None
+            first, last = origins[start][0], origins[end-1][1]
+            if ARTICLE_CITATION.search(sentence, first, last):
+                return None
+            return first, last
+
         mentions, ambiguous_name = catalog.resolve_mentions(text)
         mentions, syntax = _trade_subject(text, mentions, catalog)
         names=frozenset(n for n,_,_ in mentions)
         targets=catalog.merge(context.targets,names)
         clean=mask_dates(syntax)
         values=quantities(clean)
-        without_aside = _without_article_aside(text, syntax, mentions)
-        if without_aside != text:
-            return parse(without_aside, context)
+        aside = _article_aside_span(text, syntax, mentions)
+        if aside:
+            start, end = aside
+            if start == 0:
+                return parse(text[end:], origins[end:], context)
+            return parse(text[:start] + ' ' + text[end:], origins[:start] + [None] + origins[end:], context)
         time,last_year=read_time(syntax,context.year)
         if not DATE.search(syntax): time=context.time
         period_words = list(PERIOD_MODIFIER.finditer(syntax))
@@ -813,12 +992,62 @@ def parse_sentence(sentence,catalog):
             time = replace(time, durations=time.durations | durations, cumulative='누적' in labels)
             syntax = mask_spans(syntax, [word.span() for word in period_words])
             clean = mask_dates(syntax)
+        negated_forecast = re.search(r'미래 매출 전망치가 아니라[,，]?\s*(?=(?:기준월[^,，.]*?)?과거\s*12개월[^,，.]*?수출액)', syntax)
+        if negated_forecast:
+            # The stated amount is explicitly identified as historical by the same clause.
+            return parse(mask_spans(text, [negated_forecast.span()]), origins, context)
+        unavailable_total = re.search(r'(?<=이며)[,，]\s*(?=\d+개월\s*전체\s*기간\s*합계)', syntax)
+        after_subtotal = re.search(r'(?<=이며)[,，]\s*(?=\d{1,2}월\s*(?:자료가 없|미집계))', syntax)
+        split = None
+        if unavailable_total and '확인할 수 없' in syntax[unavailable_total.end():]:
+            split = unavailable_total
+        elif after_subtotal and '소계' in syntax[:after_subtotal.start()]:
+            split = after_subtotal
+        if split:
+            return parse_pair(split.start(), split.end())
+        # Topic/date lists in a question can precede a new explicitly dated answer.
+        # Keep the original slices and inherited entities; bind the later amount to its local date.
+        local_start = re.search(r'(?:확인한 결과|검토한 결과|문의했으며|질문했으며|확인했으며|구분한 결과|반영한 결과|→|:)\s*[,，]?\s*', text)
+        if local_start:
+            lead = syntax[:local_start.start()]
+            tail = text[local_start.end():]
+            lead_end = re.search(r'(?:인지|는지)\s*$', lead)
+            lead_values = quantities(mask_dates(lead))
+            asked_value = (len(lead_values) == 1 and lead_end and
+                           re.fullmatch(r'(?:으로|로) 집계됐는지\s*', lead[lead_values[0].end:]))
+            local_answer = DATE.search(tail) or asked_value or re.search(r'원인|관련성|연관성|같은 현상|질의', lead)
+            if (local_answer and tail and (not lead_values or asked_value) and not _trend_predicate(mask_dates(lead))
+                    and not _unresolved_direction(mask_dates(lead))):
+                lead_time, year = read_time(lead, context.year)
+                lead_names = frozenset(n for n, _, end in mentions if end <= local_start.start())
+                lead_flows = set(re.findall(r'수출|수입', lead))
+                flow = {'수출':'EXPORT', '수입':'IMPORT'}.get(next(iter(lead_flows), '')) if len(lead_flows)==1 else context.flow
+                parsed, following = parse(tail, origins[local_start.end():], replace(
+                    context, year=year, flow=flow, time=lead_time if DATE.search(lead) else context.time,
+                    targets=catalog.merge(context.targets, lead_names)))
+                return replace(parsed, date_only=(lead_time, *parsed.date_only)), following
+        # A monthly list can start with its reporting window. Bind the first level to its own month.
+        if values and time.month_window is None:
+            leading_range = re.match(r'\s*(?:\d{4}년\s*)?\d{1,2}월[~～–]\d{1,2}월', syntax)
+            if leading_range:
+                detail = syntax[leading_range.end():values[0].start]
+                if DATE.search(detail) and not COMPARE_OPERATOR.search(detail):
+                    window, year = read_time(leading_range.group(), context.year)
+                    parsed, following = parse(text[leading_range.end():], origins[leading_range.end():],
+                                              replace(context, year=year))
+                    return replace(parsed, date_only=(window, *parsed.date_only)), following
+        # Keep a finite direction attached to its level before a separate causal caveat.
+        qualified = re.search(r'(?:했지만|했으나|확인되나)[,，]?\s+', syntax)
+        if qualified and re.search(r'원인|인과|관련|연관', syntax[qualified.end():]):
+            if _trend_predicate(mask_dates(syntax[:qualified.end()])):
+                return parse_pair(qualified.end(), qualified.end())
         # Split coordinated assertions only when there is an independent trend
         # without a value. Numeric lists and their shared units stay intact.
         trend_cuts = []
         if TREND_BREAK.search(text) and re.search(TREND_STEMS, clean):
             boundaries = [m for m in TREND_BREAK.finditer(text)
-                          if not any(a <= m.start() < b for _,a,b in mentions)]
+                          if not any(a <= m.start() < b for _,a,b in mentions)
+                          and not any(q.start < m.end() and m.start() < q.end for q in values)]
             start = 0
             for end, after in [(m.start(), m.end()) for m in boundaries] + [(len(text), len(text))]:
                 fragment = clean[start:end]
@@ -829,9 +1058,9 @@ def parse_sentence(sentence,catalog):
             predicate = _trend_predicate(clean)
             marker = predicate or _unresolved_direction(clean)
             claim = _trend_claim(syntax, targets, time, catalog, marker, understood=bool(predicate)) if marker else None
-            if claim and not claim.metric.flow and context.metric and context.metric.family == 'AMOUNT':
+            if claim and not claim.metric.flow and context.flow and (not context.metric or context.metric.family == 'AMOUNT'):
                 claim = replace(claim, metric=replace(claim.metric, flow=context.flow))
-            claims = (claim,) if claim else ()
+            claims = (replace(claim, span=source_span(marker.start(), marker.end())),) if claim else ()
             return ParsedSentence(claims,(time,) if DATE.search(syntax) else (),not ambiguous_name),replace(
                 context,targets=targets,year=last_year,time=time)
         flows=set(re.findall(r'수출|수입',syntax))
@@ -858,11 +1087,10 @@ def parse_sentence(sentence,catalog):
                 if any(q.end<=boundary.start() for q in values): cuts.append(boundary.end())
         if cuts:
             cuts=sorted({0,*cuts,len(text)})
-            parts=[text[a:b] for a,b in zip(cuts,cuts[1:])]
             # Context comes from the preceding assertion, not all later names/dates.
             collected=[];date_only=[];valid=not ambiguous_name
-            for part in parts:
-                parsed,context=parse(part,context)
+            for a,b in zip(cuts,cuts[1:]):
+                parsed,context=parse(text[a:b],origins[a:b],context)
                 collected.extend(parsed.claims);date_only.extend(parsed.date_only);valid &= parsed.valid
             return ParsedSentence(tuple(collected),tuple(date_only),valid),context
 
@@ -873,11 +1101,14 @@ def parse_sentence(sentence,catalog):
         metric_mentions=list(METRIC.finditer(syntax))
         prefix_metrics=[m for m in metric_mentions if m.end()<=values[0].start]
         # '수출액의 점유율' has one metric; a coordinated list needs explicit separators.
+        if each and len(prefix_metrics) >= 3 and prefix_metrics[-2].group() in ('총액','합계','월평균'):
+            if re.fullmatch(r'\s+', text[prefix_metrics[-3].end():prefix_metrics[-2].start()]):
+                prefix_metrics = prefix_metrics[-2:]
         metric_list=(each and len(prefix_metrics)>1 and all(re.fullmatch(r'\s*(?:과|와|및|,|·)\s*',text[a.end():b.start()])
                      for a,b in zip(prefix_metrics,prefix_metrics[1:])))
         variants=[]
         ordered_times=[]
-        if each and len(points)>1 and not time.period:
+        if each and len(points)>1 and not (time.period or time.month_window):
             inherited_year=context.year
             for point in points:
                 scoped,inherited_year=read_time(point.group(),inherited_year)
@@ -909,12 +1140,24 @@ def parse_sentence(sentence,catalog):
                 relation=COMPARISON.search(syntax[:values[0].start])
                 local=metric_override+(' '+relation.group() if relation and re.search('률|율',metric_override) and not re.search('점유율|비중',metric_override) else '')
                 metric_local=local
+            denominator = quantity.unit == 'USD' and (
+                re.search(r'분모(?:인|는|로 쓰이는)?\s*(?:한국(?:의)?\s*)?(?:전체\s*)?(?:수출입?|수입)?액?(?:은|는)?\s*$', metric_local[:quantity.start-left])
+                or re.match(r'\s*(?:를|을)?\s*분모로', metric_local[quantity.end-left:]))
+            if denominator and not any(left <= a < b <= right for _, a, b in mentions):
+                bound_targets = frozenset()
+            if quantity.unit == '위':
+                before = [name for name, a, b in mentions if left <= a < b <= quantity.start]
+                if len(before) == 1 and re.search(r'앞서|앞섭|뒤따', syntax[quantity.end:]):
+                    bound_targets = catalog.merge(context.targets, frozenset(before))
+                    target_scope = 'GROUP' if catalog.grouped(bound_targets) else 'SINGLE'
             metric=metric_claim(metric_local,quantity,direct_suffix=syntax[quantity.end:right],flow=common_flow)
             if not metric.family and context.metric:
                 compatible={'%':{'SHARE','CHANGE','SHARE_CHANGE'},'%p':{'SHARE_CHANGE'},'USD':{'AMOUNT','AMOUNT_CHANGE'}}
                 if context.metric.family in compatible.get(quantity.unit,set()):
                     metric=replace(metric,family=context.metric.family,aggregate=context.metric.aggregate,
                                    comparison=metric.comparison or context.metric.comparison)
+            if metric_override in ('합계', '총액', '월평균'):
+                metric = replace(metric, family='AMOUNT', aggregate='AVERAGE' if metric_override=='월평균' else 'TOTAL')
             if metric_override and metric_override in ('수출액','수입액'):
                 metric=replace(metric,flow='EXPORT' if metric_override=='수출액' else 'IMPORT',family='AMOUNT')
             if quantity.unit=='USD' and not metric.family:
@@ -927,13 +1170,33 @@ def parse_sentence(sentence,catalog):
             label=metric_override or (syntax[:values[0].start] if each else prefix)
             metric=_scope_measure(metric,quantity,prefix,suffix,label,shared=bool(each or metric_override),
                                   multiple=len(values)>1)
+            if quantity.unit == 'USD' and re.search(r'소계(?:는|은|가)?\s*$', prefix):
+                metric = replace(metric, aggregate='SUBTOTAL')
+            if denominator:
+                metric = replace(metric, aggregate='DENOMINATOR')
             claim_time=ordered_times[variant_index] if ordered_times and not metric_list and not catalog.grouped(targets) else time
+            if quantity.unit == 'USD' and metric.amount_period in ('MOM','YOY','COMPARE') and not DATE.search(prefix):
+                # An inherited current month is the reference point, not the date of the prior level.
+                if not DATE.search(syntax[:quantity.end]):
+                    claim_time = TimeClaim()
             if metric.family=='CHANGE' and previous and re.search(r'보다|대비',text[previous.end:quantity.start]):
                 claim_time=replace(claim_time,comparison_reference=True)
+            if metric.aggregate == 'TOTAL' and not DATE.search(syntax) and re.match(r'\s*(?:[,，]\s*)?(?:총액|합계)', syntax):
+                claim_time = TimeClaim()
             valid = quantity.valid and metric.valid
             if metric.family == 'CHANGE' and _unknown_trade_subject(syntax, mentions):
                 valid = False
-            claims.append(Claim(quantity,frozenset(bound_targets),target_scope,metric,claim_time,local,valid))
+            value_span = source_span(quantity.start, quantity.end)
+            # In a shared list the prefix or suffix can belong to several values.
+            span = source_span(left, right) if len(variants) == 1 else value_span
+            if not span and metric.comparison:
+                # A citation elsewhere in the clause must not hide a contiguous comparison.
+                comparisons = list(COMPARISON.finditer(syntax, left, quantity.start))
+                if len(comparisons) == 1:
+                    end = change_phrase_end(syntax, quantity.end, right)
+                    span = source_span(comparisons[0].start(), end)
+            claims.append(Claim(quantity, frozenset(bound_targets), target_scope, metric, claim_time,
+                                local, valid, span or value_span, value_span))
         last_metric = claims[-1].metric
         predicate = _trend_predicate(clean)
         # For a numeric change the numeric claim already carries the direction.
@@ -977,8 +1240,29 @@ def parse_sentence(sentence,catalog):
             if trend:
                 if not trend.metric.flow and level.metric.flow:
                     trend = replace(trend, metric=replace(trend.metric, flow=level.metric.flow))
-                claims.append(trend)
+                # A second assertion in the same clause must not be marked as part of the level.
+                claims[-1] = replace(level, span=level.quantity_span)
+                claims.append(replace(trend, span=source_span(marker.start(), marker.end())))
         return ParsedSentence(tuple(claims),valid=not ambiguous_name),Context(targets,last_year,common_flow,time,last_metric)
 
-    parsed, _ = parse(text)
-    return replace(parsed, valid=False) if ambiguous else parsed
+    parsed, _ = parse(text, origins)
+    claims = list(parsed.claims)
+    # The trailing subject in "A가 1위, B가 2위로 A가 앞선다" does not own B's rank.
+    # Both stated ranks must also support the stated ordering.
+    ordering = re.search(r'(앞섭|앞섰|앞선|뒤따)', sentence)
+    ranks = [c for c in claims if c.quantity and c.quantity.unit == '위']
+    if ordering and ranks:
+        tail = sentence[:ordering.start()]
+        last = next(((n, a, b) for n,a,b in reversed(original_mentions)
+                     if b <= ordering.start() and re.fullmatch(r'[이가은는]?\s*', tail[b:])), None)
+        if last and len(ranks) == 2:
+            own = [c for c in ranks if last[0] in c.targets]
+            others = [c for c in ranks if last[0] not in c.targets]
+            if len(own) == len(others) == 1:
+                lhs, rhs = own[0].quantity.value, others[0].quantity.value
+                supported = lhs > rhs if ordering.group() == '뒤따' else lhs < rhs
+                if not supported:
+                    span = last[1], ordering.end()
+                    claims.append(Claim(None, own[0].targets, 'SINGLE', MetricClaim(family='RANK'),
+                                        own[0].time, sentence[slice(*span)], False, span))
+    return replace(parsed, claims=(*claims, *outlook, *monthly), valid=parsed.valid and not ambiguous)

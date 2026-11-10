@@ -115,6 +115,7 @@ def build_graph(services: NodeServices, checkpointer, *, regeneration_seconds=35
         # consumed by compose; only verify may attach checks to this draft.
         state.verification.checks = []
         state.verification.feedback = []
+        state.verification.confirmed_claims = []
         state.verification.failed_summary = ''
         state.verification.summary_status = None
         return checked(state)
