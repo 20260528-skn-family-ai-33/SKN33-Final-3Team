@@ -48,10 +48,17 @@ class StructuredClient:
         key = next((v for k, v in self.settings.values.items() if k.lower() == 'openai_api_key' and v), None)
         if not key:
             raise ValueError('LLM API key missing')
+        # GPT-5·6 계열(gpt-5.6-luna·gpt-6-luna 등 추론 모델)은 temperature를 받지 않아 빼고, 추론 강도만 설정으로 넘긴다.
+        # TODO(C-35): 이슈 86 평가로 플래너·compose 모델과 추론 강도(API_LLM_REASONING_EFFORT)를 확정한다.
+        # gpt-6 계열이 temperature를 거부하는지는 첫 호출로 확인한다(문서로 확인하지 못함)
+        reasoning = model.startswith(('gpt-5', 'gpt-6'))
+        options = {} if reasoning else {'temperature': 0}
+        if reasoning and (effort := self.settings.get('API_LLM_REASONING_EFFORT')):
+            options['reasoning'] = {'effort': effort}
         with factory(api_key=key, timeout=timeout, max_retries=0) as client:
             response = client.responses.parse(model=model, instructions=prompt,
                 input=json.dumps(payload, ensure_ascii=False, allow_nan=False), text_format=schema,
-                max_output_tokens=max_output_tokens, temperature=0, store=False)
+                max_output_tokens=max_output_tokens, store=False, **options)
         if response.status != 'completed' or response.output_parsed is None:
             raise ValueError('LLM response refused or incomplete')
         # Revalidate even when a test/integration provider returns a model instance.

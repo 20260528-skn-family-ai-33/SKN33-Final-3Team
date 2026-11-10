@@ -360,6 +360,7 @@ actions[], report_id, warnings[]
 | C-33 | 병렬 워커(D-105)의 동시 스레드 상한. OpenAI 요청 한도(분당 토큰)·RDS 접속 수·워커 메모리를 동시 질문 부하로 측정해 정한다 | `API_WORKER_MAX_THREADS=16`, 접속 풀 = 스레드 수 × 2 + 본 루프 2(워커 1대 최대 34개). 배포 전 RDS `max_connections`가 API 서버 풀·수집기·관리 접속과 합쳐 충분한지 확인하고 결과를 여기 적는다(미확인) |
 | C-32 | 주인 없는 에이전트 작업의 유예 시간(D-106). 버전 2는 지나면 넘겨받아 실행하고, 다른 queue의 버전 3은 지나면 새 질문 때 만료한다. 다른 환경 워커의 재시작·배포 중단 시간에 맞춰 정한다 | `API_AGENT_ADOPT_GRACE_SECONDS=600`(임대 시간과 같음) |
 | C-34 | 병렬 워커(D-105)에서 ML 전용 스레드 줄을 기다리는 상한. 예측 시간 상한(ml 30초)과 따로 센다. 동시 유망시장 질문 수와 예측 시간을 측정해 정한다 | `API_ML_QUEUE_SECONDS=60` |
+| C-35 | 플래너·compose 모델과 GPT-5 계열 추론 강도. 이슈 86 평가셋(`backend/evals/agent`, [AGENT_EVAL.md](AGENT_EVAL.md))으로 기준선 `gpt-4.1-mini`와 후보 `gpt-5.6-luna`·`gpt-6-luna`를 비교해 정한다. GPT-5·6 계열은 temperature를 보내지 않는다 | `gpt-4.1-mini`, 추론 강도 미설정 |
 | C-28 | §13의 운영 조정값: 노드별 예약 시간(§13.4), 비슷한 국가 기준값, compose·LLM SQL 시간 상한(§13.3) | 비슷한 정도 0.6·후보 5개, compose 20초, SQL 생성 20초·실행 30초, 노드 시간은 §13.4 표 |
 
 
