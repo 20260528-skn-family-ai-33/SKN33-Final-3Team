@@ -151,6 +151,8 @@ const check = (name, ok) => { results.push([name, ok]); console.log(`${ok ? 'PAS
   check('BS02 공백 포함 비밀번호 → 가입 불가', await join.isDisabled())
   await page.fill('#su-password', 'test1234!')
   await page.fill('#su-confirm', 'test1234!')
+  check('BS02 필수 약관 미동의 → 가입 불가', await join.isDisabled())
+  for (const label of ['만 14세 이상', '서비스 이용약관', '개인정보 수집·이용']) await page.click(`label.opt:has-text("${label}")`)
   await page.click('button:has-text("회원가입하고 관심사 설정하기")')
   await page.waitForTimeout(200)
   check('BS03 관심사 등록 진입', (await text()).includes('관심 품목을 선택해 주세요'))

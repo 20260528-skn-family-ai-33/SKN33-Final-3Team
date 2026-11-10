@@ -1,11 +1,24 @@
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { amount, percent, mapReport, mapArticle, mapNotification, reportComparison } from '../src/api/adapters.js'
+import { amount, percent, reportEok, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison } from '../src/api/adapters.js'
 import { registerCountries, countryCode, countryName, registerProducts, productName } from '../src/data/catalog.js'
 import { isStrongPassword } from '../src/utils/validate.js'
+import { promisingView } from '../src/pages/analysis/promising.js'
 test('미수집 값과 실제 0을 구분하고 USD를 억 USD로 표시한다', () => {
   assert.equal(amount(null), '—'); assert.equal(amount(0), '0'); assert.equal(amount(15720000000), '157.2')
+  assert.equal(amount(2345678), '0.02'); assert.equal(amount(51234), '0.0005'); assert.equal(amount(1230), '0.00001')
   assert.equal(percent(null), '—'); assert.equal(percent(0), '0.0%'); assert.equal(percent(-5.3), '-5.3%')
+})
+
+test('리포트 억 USD는 소수 2자리, 0.1억 미만은 유효숫자 1자리로 PDF와 같게 쓴다', () => {
+  assert.equal(reportEok(null), '—'); assert.equal(reportEok(0), '0.00'); assert.equal(reportEok(1234.5), '1,234.50')
+  assert.equal(reportEok(0.12), '0.12'); assert.equal(reportEok(0.0345), '0.03'); assert.equal(reportEok(0.000512), '0.0005'); assert.equal(reportEok(-0.004), '-0.004')
+})
+
+test('리포트 억 USD 반올림은 PDF와 같은 공통 사례를 따른다(최단 십진 표기 기준, 0.5는 0에서 먼 쪽)', () => {
+  const file = new URL('../../backend/tests/fixtures/report_eok_cases.json', import.meta.url)
+  for (const [usd, expected] of JSON.parse(readFileSync(file, 'utf8')).cases) assert.equal(reportEok(usd / 1e8), expected, String(usd))
 })
 
 test('리포트 비교 방식과 저장된 비교값을 유지하고 예전 문서도 읽는다', () => {
@@ -37,6 +50,18 @@ test('기사·알림의 실제 연결 대상과 읽음 상태를 보존한다', 
   assert.equal(a.country, '미국'); assert.equal(a.kind, 'short'); assert.deepEqual(a.tags, ['330499'])
   const n = mapNotification({ user_alert_id: '45', event_type: 'REPORT', target_type: 'REPORT', target_id: '9007199254740997', read_at: null })
   assert.equal(n.read, false); assert.equal(n.reportId, '9007199254740997')
+  const article = mapNotification({ user_alert_id: '46', event_type: 'MAJOR_ISSUE', target_type: 'ARTICLE', target_id: '7', issue: { articles: [{ article_id: '8' }] } })
+  assert.equal(article.type, 'major'); assert.equal(article.articleId, '7')
+  const aggregate = mapNotification({ user_alert_id: '47', event_type: 'MAJOR_ISSUE', target_type: 'ANALYSIS', target_id: '3', issue: { articles: [] } })
+  assert.equal(aggregate.articleId, null)
+  const group = mapPopupGroup({ delivery_id: 'd1', event_type: 'MAJOR_ISSUE', notifications: [{ user_alert_id: '46', event_type: 'MAJOR_ISSUE', title: '주요 이슈: 관세', read_at: null }] })
+  assert.equal(group.deliveryId, 'd1'); assert.equal(group.type, 'major'); assert.equal(group.items[0].read, false)
+  assert.deepEqual(popupItemTag({ event_type: 'REPORT', title: '분기 리포트가 발행되었습니다.' }), { label: '분기', tone: 'ok' })
+  assert.deepEqual(popupItemTag({ event_type: 'MAJOR_ISSUE', issue: { reason: 'WEEKLY_NEWS_SPIKE' } }), { label: '기사 급증', tone: 'amber' })
+  assert.equal(popupItemTag({ event_type: 'REPORT', title: '리포트가 발행되었습니다.' }), null)
+  assert.equal(notificationTarget({ id: '1', reportId: '9' }), '/report?id=9')
+  assert.equal(notificationTarget({ id: '1', articleId: '7', reportId: null }), '/articles?id=7')
+  assert.equal(notificationTarget({ id: '1', articleId: null, reportId: null }), '/account/notifications?id=1')
 })
 test('기사 출처는 기사 유형과 독립적으로 실제 제공자를 표시한다', () => {
   for (const [source_code, expected] of [
@@ -95,6 +120,17 @@ test('comparison table produces one aligned country chart and preserves zero/nul
 })
 
 
+test('cause and text answers comparing two countries also use the per-period comparison table',async()=>{
+ const {comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
+ const conditions={period:{start:'2026-01-01',end:'2026-02-01'},trade_flow:'EXPORT',country_codes:['CN','US']}
+ for(const task of [{intent:'CAUSE'},{intent:'STATISTICS',answer_format:'TEXT'}]){
+  const groups=comparisonGroups({tasks:[{task_id:'t1',...task,conditions}],tables:[{task_id:'t1',result_id:'r',meta:{kind:'TREND'},rows:[{country_code:'CN'},{country_code:'US'}]}]})
+  assert.equal(groups.length,1)
+ }
+ assert.equal(comparisonGroups({tasks:[{task_id:'t1',intent:'RANKING',conditions}],tables:[{task_id:'t1',result_id:'r',meta:{kind:'TREND'},rows:[{country_code:'CN'},{country_code:'US'}]}]}).length,0)
+})
+
+
 test('duplicate current-period results with different previous-period settings form one comparison',async()=>{
  const {comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
  const period={start:'2026-01-01',end:'2026-02-28'}
@@ -128,4 +164,11 @@ test('job completion received after the message read displays its saved answer o
  const other=[...rows,{role:'USER',message_id:'2',job:{job_id:'2'}}]
  assert.equal(completedMessages(other,job)[1].role,'ASSISTANT')
  assert.equal(completedMessages(other,job)[2].message_id,'2')
+})
+
+test('유망시장 표는 저장된 순위 기준(group_by)을 행 모양보다 먼저 쓴다', () => {
+  const row = { anchor: '2026-09-01', country_code: 'US', hs6: '330499', country_rank: 3, country_size: 1200, product_rank: 7, product_size: 90 }
+  const view = promisingView({ tables: [{ meta: { group_by: 'HS6' }, rows: [row] }] })
+  assert.equal(view.rankLabel, '품목 안 순위'); assert.equal(view.rows[0].rank, 7); assert.equal(view.rows[0].size, 90)
+  assert.equal(promisingView({ tables: [{ meta: { group_by: 'COUNTRY' }, rows: [row] }] }).rows[0].rank, 3)
 })

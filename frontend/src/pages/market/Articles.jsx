@@ -1,4 +1,4 @@
-// BS09 기사 공통 진입(검색) · BS10 전체기사 · BS11 단신속보 · BS12 주요이슈(선택 기사 강조)
+// BS09 기사 공통 진입(검색) · BS10 전체기사 · 일반기사 · BS11 단신속보 · BS12 주요이슈(선택 기사 강조)
 import { useEffect, useState } from 'react'
 import { Link, navigate, withQuery } from '../../router'
 import { Band, ChatFab } from '../../components/layout'
@@ -11,7 +11,8 @@ import bandArticles from '../../assets/band-articles.jpg'
 
 const PAGE_SIZE = 5
 const toDot = d => (d ? d.replaceAll('-', '.') : '')
-const ask = a => `/analysis?ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`
+// 새 채팅방을 만들어 이 질문을 바로 보낸다(Analysis의 new=1)
+const ask = a => `/analysis?new=1&ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
 
 export default function Articles({ route }) {
@@ -24,7 +25,7 @@ export default function Articles({ route }) {
   const [form, setForm] = useState({ keyword, from, to })
   const [error, setError] = useState('')
   const page = Math.max(1, Number(q.get('page')) || 1)
-  const result = useQuery('/articles', { tab: ({ all: 'ALL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab] || 'ALL', q: keyword, mode: keyword ? 'SEARCH' : 'BROWSE', start_date: from, end_date: to, page, page_size: PAGE_SIZE })
+  const result = useQuery('/articles', { tab: ({ all: 'ALL', general: 'GENERAL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab] || 'ALL', q: keyword, mode: keyword ? 'SEARCH' : 'BROWSE', start_date: from, end_date: to, page, page_size: PAGE_SIZE })
   const detail = useQuery(`/articles/${selected}`, {}, !!selected)
   const list = (result.data?.items || []).map(mapArticle)
   const pages = Math.max(1, Math.ceil((result.data?.page.total || 0) / PAGE_SIZE))
@@ -50,7 +51,7 @@ export default function Articles({ route }) {
     <>
       <Band
         image={bandArticles} imagePosition="center 55%" eyebrow="무역·경제 뉴스" title="기사"
-        lead={keyword ? '전체기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
+        lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
         right={(
           <div className="chips">
             {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} to={withQuery(route, { tab: key, id: null, page: null })}>{label}</Chip>)}
@@ -99,11 +100,10 @@ export default function Articles({ route }) {
                 <article key={a.id} id={`article-${a.id}`} className={'li' + (on ? ' sel' : '')} style={{ color: 'var(--ink)', flexWrap: 'wrap', scrollMarginTop: 90 }}>
                   <div style={{ width: 4 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                       <span className={'tag ' + kind.tone}>{kind.label}</span>
                       {a.tags.map(t => <span key={t} className="tag">{t}</span>)}
                       {a.surge && <span className="tag amber">급증 {a.surge}</span>}
-                      {on && <span className="tag" style={{ background: 'var(--ink)', color: '#fff' }}>선택한 기사</span>}
                     </div>
                     <p style={{ fontSize: 18, fontWeight: 800 }}>{a.title}</p>
                     <p className="muted" style={{ marginTop: 6 }}>{a.country} · {a.date} · {a.source}</p>
@@ -137,7 +137,6 @@ export default function Articles({ route }) {
           </div>
           {/* 다른 페이지로 가면 펼쳐 둔 상세를 닫아 이전 기사가 남아 보이지 않게 한다. */}
           {pages > 1 && <Pager page={page} pages={pages} onChange={n => navigate(withQuery(route, { page: String(n), id: null }))} />}
-          <p className="note">{selected ? '선택 기사 강조 표시 · 기사 ID로 해당 결과 위치 유지' : '선택 기사 없음 · 전체 목록 진입'}</p>
         </div>
         <ChatFab />
       </main>

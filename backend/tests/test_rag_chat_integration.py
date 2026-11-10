@@ -71,6 +71,40 @@ class ChatRagIntegrationTest(unittest.TestCase):
         self.assertEqual({a['article_id'] for a in result['articles']}, {'3','4','5','6','7'})
         self.assertEqual({key[1] for key in called}, {'3','4','5','6','7'})
 
+    def test_graph_cards_come_from_saved_evidence_and_current_body(self):
+        from types import SimpleNamespace
+        from backend.app.agents import tools
+        from backend.app.agents.runtime import article_cards
+        from backend.app.api import results
+        from backend.app.api.chat_news import eligible_filter, evidence_items
+        from backend.app.schemas.rag import RagRequest
+        uid = int(self.signup()); self.seed(2)
+        period = {'start': date(2025, 12, 1), 'end': date(2025, 12, 31)}
+        with self.engine.connect() as conn:   # 숨긴 기사는 그래프 기사 단계에서도 후보가 아니다
+            conn.execute(update(self.meta.tables['article']).where(self.meta.tables['article'].c.article_id == 2)
+                         .values(visibility_status='HIDDEN')); conn.commit()
+        with indexed_news(self) as service:
+            service.vocabulary.products['HS2022:330499'] = ['화장품']
+            with self.engine.begin() as conn:
+                store = Store(self.app.state.database, conn)
+                _, allowed = eligible_filter(store, uid, period['start'], period['end'])
+                response = tools.search_news(RagRequest(request_id='j:t1.news', query='미국 화장품 수출을 설명해줘',
+                    use_case='chat', limit=5, conditions={'period': period, 'blocked_topics': (),
+                    'products': [{'hs_code': '330499', 'hs_ver': 'HS2022'}],
+                    'geography': {'mode': 'selected', 'codes': ['US']}}), article_allowed=allowed)
+                identity = results.save_snapshot(store, uid, 'ARTICLES', {'articles': evidence_items(response.articles)})
+        result = SimpleNamespace(result_id=identity, article_period=SimpleNamespace(**period), digest={'items': []})
+        state = SimpleNamespace(input=SimpleNamespace(user_id=uid))
+        with self.engine.connect() as conn:
+            cards = article_cards(Store(self.app.state.database, conn), state, result)
+        self.assertEqual([c['article_id'] for c in cards], ['1'])
+        self.assertEqual(cards[0]['sentences'][0]['quotes'], ['중국 수입사가 미국 화장품을 수입했다. 합성 근거 1.'])
+        self.assertEqual(cards[0]['source_url'], 'https://example.org/1')
+        with self.engine.begin() as conn:
+            conn.execute(update(self.meta.tables['article']).values(body_masked='수정된 본문'))
+        with self.engine.connect() as conn:   # 저장 뒤 본문이 바뀌면 그 인용은 보이지 않는다
+            self.assertEqual(article_cards(Store(self.app.state.database, conn), state, result)[0]['sentences'], [])
+
     def test_changed_body_cannot_keep_stale_quotes(self):
         uid = int(self.signup()); self.seed()
         with indexed_news(self) as service:
@@ -144,13 +178,17 @@ class ChatRagIntegrationTest(unittest.TestCase):
                     self.assertEqual(deadline, 30)
                     return ExecutionContext(deadline, clock=lambda: now[0], **kwargs)
 
+                # 검색 마감은 chat_news가 필터 조회 전에 잰 시각부터 센다. 두 곳 모두 같은 시험 시계를 쓴다
                 with patch('backend.app.agents.tools.time') as timer, \
+                     patch('backend.app.api.chat_news.time', timer), \
                      patch('backend.app.agents.tools.ExecutionContext', side_effect=context_with_test_clock), \
                      patch.object(service.gateway, 'summarize', side_effect=timed_summary):
                     timer.monotonic.return_value = 0.
                     sid, _, job = self.ask(f'기사 설명 {accepted} {expires_at}', intent='RAG')
                 answer = job['answer']
-                self.assertEqual(len(attempted), accepted + 1)
+                # Up to three workers may already have begun at the timeout.
+                self.assertGreaterEqual(len(attempted), accepted + 1)
+                self.assertLessEqual(len(attempted), accepted + 3)
                 self.assertEqual([a['article_id'] for a in answer['articles']], list(map(str, attempted[:accepted])))
                 if accepted:
                     self.assertEqual((answer['answer_status'], answer['rag_status']), ('PARTIAL', 'partial'))

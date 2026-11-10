@@ -5,7 +5,7 @@ from uuid import uuid4
 from sqlalchemy import select, func
 
 from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period,
-                                     MAX_ASKS_PER_CONDITION, MAX_TEXT_CHARS, ToolResult)
+                                     MAX_ASKS_PER_CONDITION, MAX_TEXT_CHARS, MARKET_INTENTS, ToolResult)
 from backend.app.api import accounts, reference, trade
 from backend.app.api.chat_slots import country_key, numeric_product, SlotRepair
 from backend.app.api.common import ApiError, month_end, now, shift_month
@@ -34,8 +34,11 @@ def _bounded_bundle(store, loaded, message):
     from backend.app.agents import budget
     from backend.app.agents.runtime import bounded_ml
     settings = store.db.settings
+    seconds = budget.seconds(settings, 'check')
     try:
-        bundle, _, _ = bounded_ml(lambda: loaded(settings), budget.seconds(settings, 'check'))
+        # 줄 대기도 check 예산으로 묶는다. 재시작 뒤 예열(모델 로드 약 25초) 중이면 오래 기다리지 않고 '불러오는 중'으로 안내한다
+        # (ML 단계의 줄 대기 상한 API_ML_QUEUE_SECONDS는 예측을 기다리는 몫이라 여기에는 쓰지 않는다)
+        bundle, _, _ = bounded_ml(lambda: loaded(settings), seconds, queue_seconds=seconds)
     except TimeoutError:
         raise SlotRepair('예측 모델을 불러오는 중입니다. 잠시 후 다시 질문해 주세요.')
     except (ImportError, OSError, ValueError):
@@ -95,7 +98,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         out.trade_flow=slots.trade_flow or out.trade_flow
     if slots.products is not None: out.hs_items = []
     if countries is not None: out.country_codes = []
-    if task.intent in ('REPORT', 'PROMISING_MARKET') and out.trade_flow == 'IMPORT':
+    if task.intent in ('REPORT', *MARKET_INTENTS) and out.trade_flow == 'IMPORT':
         raise SlotRepair('이 분석은 수출만 지원합니다.')
     share_key = f'{task.task_id}:share_basis'
     out.share_basis = task.resolved.get(share_key, {}).get('share_basis', slots.share_basis)
@@ -106,9 +109,14 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     for expression in slots.products or []:
         key = f'{task.task_id}:hs:{expression}'
         answer = task.resolved.get(key, {})
+        if not answer:
+            # 같은 계획의 다른 하위 질문에서 같은 품목 표현을 이미 확정했으면 다시 묻지 않는다(국가와 같은 규칙, 2026-11-06).
+            # 예: "중국 면도기 수출 추이와 변화 원인" → 추이·원인 두 하위 질문이 "면도기"를 한 번만 묻는다
+            answer = next((t.resolved[f'{t.task_id}:hs:{expression}'] for t in state.plan.tasks if t is not task
+                           and t.resolved.get(f'{t.task_id}:hs:{expression}', {}).get('hs_items')), {})
         # D-74: 유망시장 모델은 HS6 단위다. 되묻기 답이 HS4("이 HS4 전체로 분석"·4자리 입력)여도 HS6 후보로 다시 묻는다.
         hs4 = [h['hs_code'] for h in answer.get('hs_items', []) if len(h['hs_code']) == 4] \
-            if task.intent == 'PROMISING_MARKET' else []
+            if task.intent in MARKET_INTENTS else []
         if 'hs_items' in answer and not hs4:
             out.hs_items.extend(answer['hs_items'])
             continue
@@ -130,7 +138,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             raise SlotRepair('질문에서 품목 표현을 확인하지 못했습니다.')
         if expr.isdigit():
             numeric_product(store, original if not answer else expr, expr, set())
-            if task.intent != 'PROMISING_MARKET' or len(expr) == 6:
+            if task.intent not in MARKET_INTENTS or len(expr) == 6:
                 out.hs_items.append({'hs_code': expr, 'hs_ver': 'HS2022'})
                 continue
             market_hs4.append((key, expr, kept))
@@ -253,7 +261,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             out.period = Period(start=shift_month(bounds[-1], 1-(slots.recent_months or 12)), end=bounds[-1])
         # 유망시장은 통계 기간을 조회하지 않는다. 공개 통계보다 오래된 기간을 물어도 여기서 끝내지 않고, 아래 MODEL_PERIOD로
         # 최신 기준월 예측을 제안한다.
-        if task.intent != 'PROMISING_MARKET':
+        if task.intent not in MARKET_INTENTS:
             trade.resolve_period(store, out.period.start.strftime('%Y-%m'), out.period.end.strftime('%Y-%m'))
         if slots.comparison_requested:
             out.compare_period = slots.compare_period or Period(start=shift_month(out.period.start,-12),
@@ -290,8 +298,10 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     data['country_codes'] = list(dict.fromkeys(data['country_codes']))
     data['hs_items'] = list({(h['hs_code'], h['hs_ver']): h for h in data['hs_items']}.values())
     task.conditions = Conditions.model_validate(data)
-    if task.intent=='PROMISING_MARKET':
+    if task.intent in MARKET_INTENTS:
         if not out.country_codes and not out.hs_items: raise SlotRepair('유망시장을 조회할 국가 또는 품목을 입력해 주세요.')
+        if task.intent == 'MARKET_TYPE' and not (out.country_codes and out.hs_items):   # D-23: 국가·품목 쌍의 유형
+            raise SlotRepair('시장 유형은 국가와 품목을 함께 입력해 주세요.')
         if (slots.period or slots.recent_months) and not slots.latest_prediction_confirmed:
             key=f'{task.task_id}:model_period'
             if key in task.resolved: raise SlotRepair('과거 기준월 예측은 지원하지 않습니다.')

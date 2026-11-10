@@ -1,0 +1,62 @@
+{
+  "dataset_version": "sql-question-holdout-v1",
+  "dataset_role": "question_holdout",
+  "frozen_at_utc": "2026-11-09T03:45:41.475866+00:00",
+  "agent_revision": "e465dd962deafa5aecd4354eb937d4cbc5a02776",
+  "question_count": 30,
+  "category_counts": {
+    "weight_unit_price": 5,
+    "multi_product_ranking": 5,
+    "country_group": 5,
+    "period_comparison": 5,
+    "unsupported": 5,
+    "ambiguous": 5
+  },
+  "global_scope_controls": [
+    "H01",
+    "H02",
+    "H06",
+    "H07",
+    "H08",
+    "H09",
+    "H11",
+    "H12",
+    "H13",
+    "H14",
+    "H15",
+    "H16",
+    "H20"
+  ],
+  "questions_sha256": "3a8faf7c281d9c9216e5821c86776d593677c95e7c469a31c27710961bcd918d",
+  "snapshot": {
+    "version": "synthetic-trade-v1",
+    "baseline_month": "2025-03",
+    "mysql_version": "8.4.11",
+    "sql_mode": "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+    "data_sha256": "798dfb8627f40fbf56d0ffdf98a554ed23fb8a58a57aeb33dd33e6c02fd4309d",
+    "snapshot_file_sha256": "d20755e0676fd244590babea7255987fe832046747b247e4a4256801d6cdd1e4",
+    "row_counts": {
+      "country": 5,
+      "hs_code": 6,
+      "export_monthly": 288,
+      "import_monthly": 288,
+      "export_summary": 300,
+      "import_summary": 300
+    }
+  },
+  "frozen_code_sha256": {
+    "backend/app/agents/sql.py": "d57c567dafb197115184f98e36b7f7b8b4c60dd3ac88c6314f501de649b5d150",
+    "backend/app/agents/charts.py": "8656071f898e833cf474a69dd692ac053a2b36c9ef317b0a68d02e4e8c076da7",
+    "backend/app/agents/state.py": "52fe0d0871493788bd8dbb957d9f7d7535002ef2dcc80ae85cc1cb0cae446caf",
+    "backend/app/agents/llm.py": "37ac5117072f67c2e24cbeb7b8d9e6df7183bc4263ea82214ed26925929edf3e",
+    "backend/scripts/evaluate_sql_live.py": "c18d4784f568a86647e583a174825e69c7398cc86da6b19507c31860324a819e"
+  },
+  "independent_gold_check": "All 20 answer SQL queries cross-checked against independent Python row arithmetic before LLM calls.",
+  "gold_authorship": "Agent-authored new questions/reference SQL; NOT human-verified",
+  "human_review": {
+    "status": "pending",
+    "reviewer": null,
+    "approved_questions_sha256": null
+  },
+  "policy": "Exactly one full evaluation run; production code/prompt and frozen questions/answers must not change. Retain failures; no rerun/tuning on holdout."
+}

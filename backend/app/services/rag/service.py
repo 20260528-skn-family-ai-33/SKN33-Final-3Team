@@ -13,6 +13,7 @@ from backend.app.schemas.rag import (ArticleEvidence, ArticlePeriod, EvidenceSpa
                                     SummarySentence, validate_response_for)
 from backend.app.services.rag.retrieval import search, requested_sources
 from backend.app.services.rag.runtime import RagDeadlineExceeded, RagInferenceUnavailable
+from backend.app.services.rag.parallel_review import review_articles
 from backend.app.services.rag.store import atomic_json
 
 
@@ -134,6 +135,7 @@ class RagService:
         if path:
             try:
                 result = grounded_sentences(json.loads(path.read_text(encoding='utf-8')), candidate, context)
+                context.remaining()
                 context.event('summary_cache_hit', article_key=candidate.article.identity, sentences=len(result[1]))
                 return result
             except FileNotFoundError:
@@ -146,7 +148,9 @@ class RagService:
             context.remaining()
             try:
                 payload = self.gateway.summarize(request, candidate, context)
+                context.remaining()
                 result = grounded_sentences(payload, candidate, context)
+                context.remaining()
                 if path:
                     try:
                         atomic_json(path, payload)
@@ -207,13 +211,34 @@ class RagService:
             insufficient_evidence = found.evidence_missing
             stage = 'summary'
             originals = snapshot_originals(self.store, snapshot, self.catalog, found.candidates, context)
+            parallel_summaries = {}
+            if regular_chat:
+                available = [c for c in found.candidates if c.article.key in originals]
+                for candidate in available:
+                    candidate.article = originals[candidate.article.key]
+                results, stopped = review_articles(available,
+                    lambda candidate, child: self._summary(request, candidate, child), context, request.target_count)
+                for candidate, value, error in results:
+                    if error is None:
+                        parallel_summaries[candidate.article.key] = value
+                    elif not isinstance(error, (RagDeadlineExceeded, APITimeoutError, TimeoutError, RagInferenceUnavailable)):
+                        failures.append(RagFailure(stage='summary', code=type(error).__name__,
+                                                   source_code=candidate.article.source_code))
+                if stopped == 'timeout':
+                    failures.append(RagFailure(stage='timeout', code='candidate_timeout'))
+                elif stopped == 'inference_unavailable':
+                    failures.append(RagFailure(stage='summary', code='inference_unavailable'))
+                    context.event('unreviewed_inference_unavailable')
             for candidate in found.candidates:
-                context.remaining()
+                if not regular_chat:
+                    context.remaining()
                 try:
                     if candidate.article.key not in originals:
                         failures.append(RagFailure(stage='evidence', code='source_version_unavailable',
                                                    source_code=candidate.article.source_code))
                         context.event('source_version_unavailable', article_key=candidate.article.identity)
+                        continue
+                    if regular_chat and candidate.article.key not in parallel_summaries:
                         continue
                     candidate.article = originals[candidate.article.key]
                     article = candidate.article
@@ -230,9 +255,12 @@ class RagService:
                         if request.target_count is not None and len(articles) >= request.target_count:
                             break
                         continue
-                    context.event('summary_candidate', article_key=candidate.article.identity)
-                    evidence, summary = self._summary(request, candidate, context)
-                    context.remaining()
+                    if regular_chat:
+                        evidence, summary = parallel_summaries[candidate.article.key]
+                    else:
+                        context.event('summary_candidate', article_key=candidate.article.identity)
+                        evidence, summary = self._summary(request, candidate, context)
+                        context.remaining()
                     insufficient_evidence |= not summary
                     if not summary:
                         empty_summary_omitted = True

@@ -3,8 +3,10 @@
 실행: python -m unittest backend/tests/test_report_templates.py
 """
 import copy
+import json
 import re
 import unittest
+from pathlib import Path
 
 from jinja2 import UndefinedError
 
@@ -17,7 +19,7 @@ def pages(html):
 
 class SampleRenderTest(unittest.TestCase):
     def test_samples_render_with_expected_pages(self):
-        for kind, expected in (('monthly', 7), ('quarterly', 9), ('weekly', 5), ('ondemand', 7)):
+        for kind, expected in (('monthly', 7), ('quarterly', 9), ('weekly', 5), ('ondemand', 8)):
             with self.subTest(kind=kind):
                 html = rt.render(rt.KINDS[kind], rt.sample_context(kind))
                 self.assertEqual(pages(html), expected)
@@ -26,9 +28,9 @@ class SampleRenderTest(unittest.TestCase):
 
     def test_monthly_values_come_from_context(self):
         html = rt.render('RPT_MONTHLY', rt.sample_context('monthly'))
-        self.assertIn('879.0', html)                       # 879,000,000 USD → 백만 달러
+        self.assertIn('879.00', html)                      # 879,000,000 USD → 백만 달러(소수 2자리)
         self.assertIn('<strong>879.0백만 달러</strong>', html)  # 문장 속 **강조**
-        self.assertIn('class="chg down">▼ 14.8%', html)
+        self.assertIn('class="chg down">▼ 14.80%', html)
 
     def test_quarterly_year_labels_and_top10_cap(self):
         context = rt.sample_context('quarterly')
@@ -59,7 +61,7 @@ class SampleRenderTest(unittest.TestCase):
         sub = re.search(r'기초화장품 상세</h2>\s*<p class="sec-sub">([^<]*)</p>', html).group(1)
         self.assertIn('…', sub)
         self.assertLess(len(sub), 120)
-        self.assertIn('12월 수출 879.0백만 달러', sub)
+        self.assertIn('12월 수출 879.00백만 달러', sub)
 
     def test_many_weekly_countries_split_table_and_total_on_last_page(self):
         context = rt.sample_context('weekly')
@@ -277,16 +279,19 @@ class OnDemandTest(unittest.TestCase):
     def toc(self, html):
         return re.findall(r'<span class="t">([^<]+)</span><span>(\d+)</span>', html)
 
-    def test_sample_matches_form_and_hides_growth_risk(self):
+    def test_sample_matches_form_and_shows_promising_market(self):
         html = self.render()
         self.assertIn('기초화장품 수출 시장 분석', html)
-        self.assertIn('86.4<span class="u">억 달러</span>', html)     # USD 원값 → 억 달러
+        self.assertIn('86.40<span class="u">억 달러</span>', html)     # USD 원값 → 억 달러
         self.assertIn('<td class="r">16.12</td>', html)
-        # GROWTH_RISK는 골랐어도 기준 확정 전까지 목차·쪽·포함 항목에서 빠짐
+        # GROWTH_RISK는 유망시장(증가·감소 예상)이다. 예측 결과(promising)가 있으면 목차·쪽·포함 항목에 들어간다.
         self.assertEqual(self.toc(html), [('핵심 요약', '3'), ('월별 수출 추이', '4'), ('주요 수출국', '5'),
-                                          ('현지 이슈', '6'), ('데이터 기준 · 출처', '7')])
-        self.assertNotIn('증가 감소', html)
-        self.assertIn('핵심 요약 · 주요 지표 · 월별 수출 추이 · 주요 수출국 · 현지 이슈', html)
+                                          ('유망시장(증가·감소 예상)', '6'), ('현지 이슈', '7'), ('데이터 기준 · 출처', '8')])
+        self.assertIn('감소 예상', html)
+        self.assertIn('핵심 요약 · 주요 지표 · 월별 수출 추이 · 주요 수출국 · 유망시장(증가·감소 예상) · 현지 이슈', html)
+        # 예측 결과가 없는 문맥(이전 저장본)은 이 섹션을 건너뛴다.
+        html = self.render(update=lambda ctx: ctx.pop('promising'))
+        self.assertEqual(self.toc(html)[3], ('현지 이슈', '6'))
 
     def test_title_follows_selected_items(self):
         item = rt.sample_context('ondemand')['conditions']['hs_items'][0]
@@ -331,10 +336,10 @@ class OnDemandTest(unittest.TestCase):
         mixed = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], status='NOT_READY'))
         self.assertNotIn('전년 1위', mixed)
         self.assertRegex(mixed, r'증감률</div>\s*<div class="v">—<')                        # 증감률 카드
-        self.assertRegex(mixed, r'<td class="b">미국</td>\s*<td class="r">16\.12</td><td class="r">18\.7%</td>\s*'
+        self.assertRegex(mixed, r'<td class="b">미국</td>\s*<td class="r">16\.12</td><td class="r">18\.70%</td>\s*'
                                 r'<td class="r">—</td><td class="r">—</td>')                  # 이전 수출액·증감
         self.assertNotRegex(mixed, r'<td>[▲▼]\d')                                            # 순위 변동
-        self.assertRegex(mixed, r'상위 1개국 비중</td><td class="r">18\.7%</td><td class="r">—</td>')
+        self.assertRegex(mixed, r'상위 1개국 비중</td><td class="r">18\.70%</td><td class="r">—</td>')
 
     def test_request_channel_metric_and_verification(self):
         html = self.render(request_channel='FORM', metric={'code': 'GROWTH', 'label': '증감률'})
@@ -366,7 +371,8 @@ class OnDemandTest(unittest.TestCase):
         self.assertNotIn('None', zero)
         self.assertNotIn('(전년 1위', zero)
         self.assertIn('중국 → 미국으로 1위 교체', self.render())               # 둘 다 있으면 그대로 표시
-        self.assertRegex(zero, r'<td>전체</td><td class="r">0\.00</td><td class="r">—</td>')  # 수출 0이면 비중 100% 아님
+        self.assertRegex(zero, r'<td>전체</td><td class="r">—</td><td class="r">—</td>')  # 수출 0은 실적 없음(—), 비중 100% 아님
+        self.assertNotIn('—<span class="u">', zero)   # 값이 —인 카드에는 단위를 붙이지 않는다
         empty = self.render(lambda c: c['concentration']['countries'].update(current=None))
         self.assertNotIn('—개국', empty)                                        # 값 없는 수출국 수는 — 만
 
@@ -386,18 +392,18 @@ class OnDemandTest(unittest.TestCase):
         self.assertIn('월별 수출 추이 (계속)', html)
         self.assertIn('현지 이슈 (계속)', html)
         layout = rt.layout('RPT_ON_DEMAND', rt.sample_context('ondemand'))
-        self.assertEqual(layout['sections'], ['SUMMARY', 'KPI', 'TOP_COUNTRIES', 'LOCAL_ISSUES'])
+        self.assertEqual(layout['sections'], ['SUMMARY', 'KPI', 'TOP_COUNTRIES', 'GROWTH_RISK', 'LOCAL_ISSUES'])
 
 
 class FormatTest(unittest.TestCase):
     def test_number_filters(self):
-        self.assertEqual(rt.musd(879_000_000), '879.0')
+        self.assertEqual(rt.musd(879_000_000), '879.00')
         self.assertEqual(rt.musd(-2_400_000, 2), '−2.40')
         self.assertEqual(rt.musd(None), '—')
-        self.assertEqual(rt.signed_pct(16.6), '+16.6%')
-        self.assertEqual(rt.signed_pct(-13.8), '−13.8%')
+        self.assertEqual(rt.signed_pct(16.6), '+16.60%')
+        self.assertEqual(rt.signed_pct(-13.8), '−13.80%')
         self.assertEqual(rt.signed(6), '+6')
-        self.assertIn('▲ 19.4%', rt.change(19.4))
+        self.assertIn('▲ 19.40%', rt.change(19.4))
         self.assertIn('신규', rt.change(None, new=True))
         self.assertIn('—', rt.change(None))
         self.assertEqual(rt.ymdhm('2026-01-16T06:00:00'), '2026.01.16 06:00')
@@ -406,6 +412,20 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(rt.eok(1_612_000_000), '16.12')
         self.assertEqual(rt.signed_eok(-240_000_000), '−2.40')
         self.assertEqual(rt.eok(None), '—')
+        # 0.1억 미만은 유효숫자 1자리(웹 화면과 같은 규칙) — 0.0으로 뭉개지지 않는다
+        self.assertEqual(rt.eok(3_300_000, 1), '0.03')
+        self.assertEqual(rt.eok(51_234, 2), '0.0005')
+        self.assertEqual(rt.signed_eok(-3_300_000), '−0.03')
+        # 웹과 PDF는 같은 반올림을 쓴다: 최단 십진 표기 기준, 0.5는 0에서 먼 쪽(15,000 USD → 0.0002, 웹·PDF 공통 사례 파일)
+        cases = json.loads((Path(__file__).parent / 'fixtures' / 'report_eok_cases.json').read_text(encoding='utf-8'))['cases']
+        for usd, expected in cases:
+            self.assertEqual(rt.eok(usd).replace(rt.MINUS, '-'), expected, usd)
+            self.assertEqual(rt.signed_eok(usd).replace(rt.MINUS, '-').lstrip('+'), expected, usd)
+        # 실적 0은 실적 없음(—), 증감액의 실제 0은 그대로 둔다
+        self.assertEqual(rt.eok(0), '—')
+        self.assertEqual(rt.signed_eok(0), '0.00')
+        self.assertIn('>0.03</text>', str(rt.line_chart(['a', 'b'], [{'values': [1_100_000, 3_300_000]}], divisor=1e8, digits=1)))
+        self.assertIn('>0.03</text>', str(rt.hbar_chart([{'label': '미국', 'values': [3_300_000]}], ['#000'], divisor=100000000, digits=1)))
         self.assertIn('▲1', rt.rank_move(1))
         self.assertIn('▼2', rt.rank_move(-2))
         self.assertIn('–', rt.rank_move(0))
@@ -423,7 +443,7 @@ class FormatTest(unittest.TestCase):
         svg = str(rt.line_chart(['1', '2', '3', '4', '5', '6'], [{'values': [1e6, 2e6, None, 3e6, None, 4e6]}]))
         self.assertEqual(svg.count('<polyline'), 1)       # 1~2월만 선으로 연결
         self.assertEqual(svg.count('r="1.8"'), 2)         # 앞뒤가 비어 있는 4월·6월은 점
-        self.assertIn('>4.0</text>', svg)                 # 끝 값 라벨은 마지막 실제 값
+        self.assertIn('>4.00</text>', svg)                 # 끝 값 라벨은 마지막 실제 값
 
     def test_end_labels_stay_inside_chart_or_move_to_legend(self):
         labels = [str(i) for i in range(13)]
@@ -464,18 +484,18 @@ class FormatTest(unittest.TestCase):
 
     def test_legend_value_marks_period_when_last_is_missing(self):
         labels = ['10', '11', '12']
-        self.assertEqual(rt.legend_value([1e6, 2e6, 3e6], labels), '3.0')
-        self.assertEqual(rt.legend_value([1e6, 1e7, None], labels), '10.0(11)')
-        self.assertEqual(rt.legend_value([1e6, None, None], labels), '1.0(10)')
+        self.assertEqual(rt.legend_value([1e6, 2e6, 3e6], labels), '3.00')
+        self.assertEqual(rt.legend_value([1e6, 1e7, None], labels), '10.00(11)')
+        self.assertEqual(rt.legend_value([1e6, None, None], labels), '1.00(10)')
         self.assertEqual(rt.legend_value([None, None, None], labels), '—')
-        self.assertEqual(rt.legend_value([1e6, 2e6, 0], labels), '0.0')  # 실제 0은 그대로
+        self.assertEqual(rt.legend_value([1e6, 2e6, 0], labels), '0.00')  # 실제 0은 그대로
 
     def test_legend_value_tells_apart_same_quarter_of_different_years(self):
         # 양원님 재현 조건: 최근 8개 분기 라벨은 '4Q'가 연도마다 반복 → 2024년 4분기 값만 있으면 2025년 4분기로 오해하던 문제
         labels = ['24.1Q', '2Q', '3Q', '4Q', '25.1Q', '2Q', '3Q', '4Q']
-        self.assertEqual(rt.legend_value([None] * 3 + [1e7] + [None] * 4, labels), '10.0(24.4Q)')
-        self.assertEqual(rt.legend_value([None] * 6 + [1e7, None], labels), '10.0(25.3Q)')
-        self.assertEqual(rt.legend_value([None] * 7 + [1e7], labels), '10.0')
+        self.assertEqual(rt.legend_value([None] * 3 + [1e7] + [None] * 4, labels), '10.00(24.4Q)')
+        self.assertEqual(rt.legend_value([None] * 6 + [1e7, None], labels), '10.00(25.3Q)')
+        self.assertEqual(rt.legend_value([None] * 7 + [1e7], labels), '10.00')
         self.assertEqual(rt.full_period_label(['24.12', '25.1', '2', '3'], 3), '25.3')
         self.assertEqual(rt.full_period_label(['24.12', '25.1', '2', '3'], 0), '24.12')
         self.assertEqual(rt.full_period_label(['2025.10', '2025.11', '2025.12'], 1), '2025.11')
@@ -490,7 +510,7 @@ class FormatTest(unittest.TestCase):
             s = item['country_months']['series'][0]
             item['country_months']['series'] = [dict(s, country_code=f'C{i:02d}', name=f'국가{i:02d}') for i in range(24)]
         html = rt.render('RPT_QUARTERLY', context)
-        self.assertIn('국가01 10.0(24.4Q)<', html)
+        self.assertIn('국가01 10.00(24.4Q)<', html)
         self.assertNotIn('국가01 10.0<', html)
         self.assertIn('범례 숫자는 25.4Q 값', html)  # 안내 문구도 연도까지 표시
 

@@ -6,7 +6,7 @@ from decimal import Decimal
 from pydantic import ValidationError
 
 from backend.app.schemas.rag import HsProduct
-from backend.app.agents.state import (AgentState, ChartSpec, Conditions, Interests, MAX_CONCLUSION_SENTENCES, MAX_DIGEST_BYTES,
+from backend.app.agents.state import (AgentState, ChartSpec, Conditions, Interests, MAX_TASK_SENTENCES, MAX_DIGEST_BYTES,
                                       MAX_EXPLANATION_SENTENCES, MAX_INTEREST_COUNTRIES, MAX_INTEREST_HS, MAX_LABEL_CHARS,
                                       MAX_LIST_ITEMS, MAX_RECENT_MONTHS, MAX_TEXT_CHARS, PlannerSlots, SessionContext,
                                       ToolResult, TurnSummary, TaskSlots, shorten_name, shorten_names, shorten_target_names)
@@ -38,6 +38,11 @@ def chart(**extra):
 
 
 class AgentStateTest(unittest.TestCase):
+    def test_pre_d103_market_type_checkpoint_still_loads(self):
+        # D-103 전 체크포인트: MARKET_TYPE은 단계 없는 안내였다. 배포 뒤 30분 동안 남은 체크포인트도 읽어야 한다
+        old = state(tasks=({'task_id': 't1', 'intent': 'MARKET_TYPE', 'question': '베트남 화장품 시장 유형', 'steps': []},))
+        self.assertEqual(old.task_outcome('t1'), 'NO_DATA')
+
     def test_chart_references_must_use_the_same_result(self):
         selector = {'result_id': 'r1', 'group_by': 'COUNTRY', 'country_codes': ['VN']}
         self.assertEqual(ToolResult(status='OK', result_id='r1', chart=chart(), chart_selector=selector).result_id, 'r1')
@@ -263,9 +268,13 @@ class AgentStateTest(unittest.TestCase):
             state([{**RANKING, 'steps': RANKING['steps'][1:]}])
         with self.assertRaises(ValidationError):  # 하위 질문은 3개까지
             state([CAUSE, RANKING, {**RANKING, 'task_id': 't3'}, {**RANKING, 'task_id': 't4'}])
-        # 시장 유형은 지원 예정 안내만, 단계 없음
-        self.assertEqual(state([{'task_id': 't1', 'intent': 'MARKET_TYPE', 'question': '베트남 화장품 시장 유형'}])
+        # 범위 밖은 안내만, 단계 없음. 시장 유형은 유망시장과 같은 ML 단계를 쓴다(D-103)
+        self.assertEqual(state([{'task_id': 't1', 'intent': 'OUT_OF_SCOPE', 'question': '날씨 알려줘'}])
                          .plan.tasks[0].steps, [])
+        from backend.app.agents.planner import build_plan
+        from backend.app.agents.state import PlannerOutput
+        plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'MARKET_TYPE', 'question': '베트남 화장품 시장 유형'}]))
+        self.assertEqual([s.tool for s in plan.tasks[0].steps], ['check_conditions', 'query_market_model', 'build_chart'])
 
     def test_pending_only_while_waiting(self):
         self.assertEqual(state(status='NEEDS_INPUT', pending=PENDING).pending.kind, 'HS_ITEM')
@@ -331,7 +340,7 @@ class AgentStateTest(unittest.TestCase):
                 task_id=t, title='가' * 40, unit='가' * 20, source=label,
                 labels=[label[:-2] + f'{n:02}' for n in range(60)],   # 한 차트 안에서 라벨·시리즈 이름은 겹치지 않는다
                 series=[{'name': label[:-1] + str(n), 'values': [123456789012.5] * 60} for n in range(5)])}
-        n_sentences = MAX_CONCLUSION_SENTENCES + MAX_EXPLANATION_SENTENCES
+        n_sentences = MAX_TASK_SENTENCES * 3 + MAX_EXPLANATION_SENTENCES  # 차트가 있는 일반 답변이 가장 크다
         # 숫자는 문장(200자) 안에서 찾으므로 한 문장에 한 글자 숫자 100개가 최대다
         checks = [{'index': n, 'numbers': ['1'] * (MAX_TEXT_CHARS // 2), 'status': 'PASS'} for n in range(n_sentences)]
         s = AgentState.model_validate({

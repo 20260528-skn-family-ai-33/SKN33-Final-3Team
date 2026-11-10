@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from backend.app.agents.sql import validate_sql, normalize_rows, execute_readonly
 from backend.app.agents.state import SqlDraft
 from backend.app.agents.state import Conditions
-from backend.app.agents.sql import generated_analysis
+from backend.app.agents.sql import generated_analysis, SqlGenerationDraft
 from backend.app.api.config import Settings
 from backend.app.api.common import ApiError
 
@@ -16,6 +16,96 @@ def draft(sql, kind='string'):
 
 
 class SqlTest(unittest.TestCase):
+    def test_or_filters_keep_confirmed_scope_without_rewriting_query(self):
+        conditions = Conditions(country_codes=['US', 'CN'],
+            hs_items=[{'hs_code':'3304','hs_ver':'HS2022'}, {'hs_code':'8542','hs_ver':'HS2022'}],
+            period={'start':'2025-01-01','end':'2025-03-01'})
+        base = ("SELECT SUM(e.amount_usd) AS value FROM export_summary e WHERE e.hs_ver='HS2022' "
+                "AND e.trade_month BETWEEN '2025-01-01' AND '2025-03-31' AND {country} AND {product}")
+        countries = "(e.country_code='US' OR 'CN'=e.country_code)"
+        products = "(e.hs6_code LIKE '3304%' OR e.hs6_code LIKE '8542%')"
+        for product in (products, "(e.hs6_code='330499' OR e.hs6_code IN ('854231'))"):
+            result = validate_sql(draft(base.format(country=countries, product=product), 'number'), conditions)
+            self.assertIn(' OR ', result)
+        for country, product in [
+            ("(e.country_code='US' OR 1=1)", products),
+            ("(e.country_code='US' OR e.country_code='JP')", products),
+            ("NOT (e.country_code='US' OR e.country_code='CN')", products),
+            ("(e.country_code='US' OR x.country_code='CN')", products),
+            (countries, "(e.hs6_code LIKE '3304%' OR e.hs6_code LIKE '15%')"),
+            (countries, "(e.hs6_code LIKE '3304%' OR e.amount_usd>0)"),
+        ]:
+            with self.subTest(country=country, product=product), self.assertRaises(ValueError):
+                validate_sql(draft(base.format(country=country, product=product), 'number'), conditions)
+        grouped = base.format(country=countries, product=products).replace(
+            'SUM(e.amount_usd) AS value', 'e.country_code AS value') + ' GROUP BY e.country_code'
+        self.assertIn('GROUP BY', validate_sql(draft(grouped), conditions))
+
+    def test_disjoint_period_or_requires_every_branch_to_be_bounded(self):
+        conditions = Conditions(country_codes=['US'],
+            period={'start':'2025-01-01','end':'2025-03-01'},
+            compare_period={'start':'2024-01-01','end':'2024-03-01'})
+        base = ("SELECT SUM(e.amount_usd) AS value FROM export_summary e "
+                "WHERE e.country_code='US' AND e.hs_ver='HS2022' AND ")
+        current = "e.trade_month BETWEEN '2025-01-01' AND '2025-03-31'"
+        previous = "(e.trade_month>='2024-01-01' AND e.trade_month<'2024-04-01')"
+        for dates in (f'({current} OR {previous})',
+                      "e.trade_month>='2024-01-01' AND e.trade_month<'2025-04-01' AND "
+                      "(e.trade_month<'2024-04-01' OR e.trade_month>='2025-01-01')"):
+            self.assertIn(' OR ', validate_sql(draft(base+dates,'number'), conditions))
+        for dates in (f'({current} OR 1=1)', f'({current} OR e.trade_month<\'2024-04-01\')',
+                      f'({current} OR e.trade_month=\'2024-08-01\')', f'NOT ({current} OR {previous})',
+                      f'({current} OR other.trade_month BETWEEN \'2024-01-01\' AND \'2024-03-01\')'):
+            with self.subTest(dates=dates), self.assertRaises(ValueError):
+                validate_sql(draft(base+dates,'number'), conditions)
+
+    def test_sql_local_refusal_schema_stops_without_query_or_regeneration(self):
+        client = MagicMock()
+        client.parse.return_value = SqlGenerationDraft(sql='', columns=[], summary='',
+            unsupported='국가를 확정해 주세요.')
+        execution = MagicMock()
+        execution.call.side_effect = lambda name, seconds, action, **kwargs: action(None)
+        step = SimpleNamespace(attempts=0)
+        task = SimpleNamespace(custom_query='그 나라 수출액', conditions=Conditions(
+            period={'start':'2025-01-01','end':'2025-03-01'}))
+        with patch('backend.app.agents.sql.schema_for', return_value=[]), \
+                patch('backend.app.agents.sql.execute_readonly') as execute:
+            result = generated_analysis(None, Settings({}), client, execution, task,
+                finish_reserve=0, latest_month='2025-03', step=step)
+        self.assertEqual(result.result.status, 'NO_DATA')
+        self.assertEqual(result.result.error, '국가를 확정해 주세요.')
+        self.assertEqual(step.attempts, 1)
+        self.assertIs(client.parse.call_args.kwargs['schema'], SqlGenerationDraft)
+        execute.assert_not_called()
+        for sql, columns, unsupported in [('', [], None), ('SELECT 1', [], '거부'),
+                ('', [dict(key='v',label='값',type='number',unit=None)], '거부')]:
+            with self.subTest(sql=sql, unsupported=unsupported), self.assertRaises(ValueError):
+                SqlGenerationDraft(sql=sql, columns=columns, summary='', unsupported=unsupported)
+
+    def test_filtered_monthly_ctes_allow_calendar_and_comparison_left_joins(self):
+        conditions = Conditions(country_codes=['US'], hs_items=[{'hs_code':'330499','hs_ver':'HS2022'}],
+            period={'start':'2025-01-01','end':'2025-03-01'},
+            compare_period={'start':'2024-01-01','end':'2024-03-01'})
+        def monthly(year):
+            return ("SELECT e.trade_month, SUM(e.weight_kg) AS weight FROM export_monthly e "
+                    "WHERE e.country_code='US' AND e.hs6_code='330499' AND e.hs_ver='HS2022' "
+                    f"AND e.trade_month BETWEEN '{year}-01-01' AND '{year}-03-31' GROUP BY e.trade_month")
+        columns = [dict(key='month',label='월',type='string',unit=None),
+                   dict(key='weight',label='중량',type='number',unit='KG')]
+        calendar = (f"WITH amounts AS ({monthly(2025)}), "
+            "months AS (SELECT '2025-01' AS month UNION ALL SELECT '2025-02' UNION ALL SELECT '2025-03') "
+            "SELECT m.month AS month, a.weight AS weight FROM months m "
+            "LEFT JOIN amounts a ON DATE_FORMAT(a.trade_month, '%Y-%m')=m.month ORDER BY m.month")
+        comparison = (f"WITH current_period AS ({monthly(2025)}), prior_period AS ({monthly(2024)}) "
+            "SELECT DATE_FORMAT(c.trade_month, '%Y-%m') AS month, p.weight AS weight "
+            "FROM current_period c LEFT JOIN prior_period p ON MONTH(c.trade_month)=MONTH(p.trade_month) "
+            "ORDER BY c.trade_month")
+        for sql in (calendar, comparison):
+            self.assertIn('LEFT JOIN', validate_sql(SqlDraft(sql=sql,columns=columns,summary='',unsupported=None), conditions))
+            with self.assertRaises(ValueError):
+                validate_sql(SqlDraft(sql=sql.replace("e.hs_ver='HS2022'", "e.hs_ver='HS2017'"),
+                    columns=columns,summary='',unsupported=None), conditions)
+
     def test_trade_sql_requires_confirmed_scope_for_each_branch(self):
         conditions = Conditions(country_codes=['US'], hs_items=[{'hs_code':'3304','hs_ver':'HS2022'}],
             period={'start':'2025-01-01','end':'2025-03-01'},

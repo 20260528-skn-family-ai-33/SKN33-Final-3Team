@@ -5,7 +5,7 @@ payload_json.input only after the complete service adapter is wired.
 """
 from copy import deepcopy
 from datetime import datetime
-from time import monotonic
+from time import monotonic, sleep
 from uuid import uuid4
 
 from langgraph.types import Command
@@ -57,8 +57,10 @@ class ExecutionStore:
                                     recovery_count=ledger['recovery_count'])
         state.round_started_at = datetime.fromisoformat(ledger['round_received_at'])
 
-    def call(self, node, timeout, callback, *, finish_reserve=0, clock=monotonic, enforce=True):
-        """enforce=False는 이미 끝난 결과를 받아 마무리하는 호출(리포트 완료 확인)만 쓴다(budget.reserve 참고)."""
+    def call(self, node, timeout, callback, *, finish_reserve=0, clock=monotonic, enforce=True, waited=None):
+        """enforce=False는 이미 끝난 결과를 받아 마무리하는 호출(리포트 완료 확인)만 쓴다(budget.reserve 참고).
+        waited(): 이 호출이 실행하지 않고 기다리기만 한 초(ML 전용 스레드 줄 대기 등). 실행 예산에 넣지 않는다.
+        같은 대화방 잠금 대기와 같이, 다른 질문 때문에 기다린 시간으로 이 질문의 뒤 단계가 RUN_TIMEOUT이 되지 않게 한다."""
         ledger = self.read()['agent']
         identity = dict(round_id=ledger['round_id'], claim_token=self.job['claim_token'], call_id=uuid4().hex)
         self.transition(lambda value: budget.reserve(value, **identity, node=node,
@@ -68,7 +70,7 @@ class ExecutionStore:
             # There is no transaction open while external work runs.
             return callback(timeout)
         finally:
-            elapsed = clock() - started
+            elapsed = max(0.0, clock() - started - (waited() if waited else 0.0))
             def record(value):
                 settled=budget.settle(value,**identity,elapsed=elapsed)
                 timings=settled.setdefault('timings',{})
@@ -84,6 +86,9 @@ class ExecutionStore:
         self.transaction(clear)
 
 
+RESUME_READ_RETRIES, RESUME_READ_DELAY_SECONDS = 3, 1.0
+
+
 def invoke_graph(graph, execution):
     """Invoke outside DB transactions; clear consumed resume only after success.
 
@@ -94,6 +99,14 @@ ask_user interrupt, so the stale answer is ignored rather than delivered twice.
     config = graph_config(job['job_id'])
     snapshot = graph.get_state(config)
     resume = job['payload_json'].get('resume')
+    # 되묻기 답을 이어 붙일 작업인데 체크포인트를 못 읽으면 처음부터 다시 계획하지 않는다(2026-11-06).
+    # 다시 계획하면 같은 조건을 새 ID로 또 묻고, Redis와 MySQL의 되묻기가 달라져 다음 답이 "마감"으로 거부된다.
+    for _ in range(RESUME_READ_RETRIES):
+        if snapshot.values or resume is None: break
+        sleep(RESUME_READ_DELAY_SECONDS)
+        snapshot = graph.get_state(config)
+    require(snapshot.values or resume is None, '조건 입력 재개에 실패했습니다. 잠시 후 다시 질문해 주세요.',
+            'CLARIFICATION_RESUME_FAILED', 503)
     has_interrupt = any(task.interrupts for task in snapshot.tasks)
     if snapshot.values:
         # A crash after consuming an answer may leave the previous payload in

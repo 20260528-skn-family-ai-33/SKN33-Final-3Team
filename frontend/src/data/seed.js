@@ -1,6 +1,6 @@
 // 브라우저에 처음 저장되는 체험 데이터(계정·리포트·알림·채팅). 서버 연동 시 API 응답으로 대체한다.
 
-export const ALL_SECTIONS = ['주요 지표(KPI)', '주요 수출국', '급성장·리스크 시장', '현지 이슈 기사']
+export const ALL_SECTIONS = ['주요 지표(KPI)', '주요 수출국', '유망시장(증가·감소 예상)', '현지 이슈 기사']
 
 /** 체험 계정. 비밀번호는 README의 체험 계정 표와 같다. */
 export const seedAccounts = [

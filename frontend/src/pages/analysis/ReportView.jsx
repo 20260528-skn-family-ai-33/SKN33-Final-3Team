@@ -7,11 +7,20 @@ import { Btn } from '../../components/ui'
 import { LineChart } from '../../components/charts'
 import ApiResults from '../../components/ApiResults'
 import { niceTicks } from '../../utils/chart'
+// 리포트 화면의 금액(억 USD)·비율은 PDF 리포트와 같이 소수 2자리로 쓴다(2026-11-06 사용자 결정)
+// 단, 0.1억 미만 금액은 PDF와 같이 유효숫자 1자리로 보여 준다(0.03억·0.0005억).
+const two = value => Number(value).toLocaleString('ko-KR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// 실적 금액 0은 그 기간에 실적이 없다는 뜻이라 —로 쓴다(메인·순위와 같은 규칙). 그래프 눈금의 0은 reportEok로 그대로 둔다.
+const amount = value => value == null || Number(value) === 0 ? '—' : reportEok(Number(value) / 1e8)
+const withUnit = (value, unit) => { const text = amount(value); return text === '—' ? text : text + unit }
+const percent = value => value == null ? '—' : `${Number(value) > 0 ? '+' : ''}${two(value)}%`
+const share = value => value == null ? '—' : `${two(value)}%`
 import { countryName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { api } from '../../api/client'
-import { amount, percent, mapReport, mapArticle, reportComparison, kstDateTimeText } from '../../api/adapters'
+import { mapReport, mapArticle, reportComparison, kstDateTimeText, reportEok } from '../../api/adapters'
+import { promisingView } from './promising'
 
 const range = (from, to) => from && to ? `${from} ~ ${to}` : '—'
 
@@ -27,6 +36,8 @@ function Section({ no, title, action, children }) {
   )
 }
 
+const PROMISING_COLS = '110px 1fr 1.6fr 100px 150px'
+const OUTLOOK_COLOR = { '증가 예상': '#C8102E', '감소 예상': '#1F5FD1' }
 export default function ReportView({ route }) {
   const { downloadReport, refreshReports } = useApp()
   const id = route.query.get('id')
@@ -76,14 +87,14 @@ export default function ReportView({ route }) {
   const scopeSeries=scopeComparison?.columns.filter(col=>col.key!=='month')||[]
   const scopeColors=['#C8102E','#2E6DB4','#16877C','#8E5BB5','#E07B24']
   const countryRows = byCode.TOP_COUNTRIES?.tables?.[0]?.rows || []
-  const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
+  const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '유망시장(증가·감소 예상)': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
   const o = {
     country: [...(c.include_korea_total?['한국(대한민국) 전체']:[]),...(c.country_codes || []).map(countryName)].join(' · '), product: (c.hs_items || []).map(h => h.hs_code).join(', '),
     from: c.period?.start, to: c.period?.end, compareFrom: c.compare_period?.start, compareTo: c.compare_period?.end,
     sections: Object.keys(sectionCodes).filter(label => byCode[sectionCodes[label]]),
   }
   const f = {
-    total: amount(kpi.amount_usd), growth: comparison.growth, growthText: percent(comparison.growth),
+    total: withUnit(kpi.amount_usd, '억 USD'), growth: comparison.growth, growthText: percent(comparison.growth),
     labels: monthly.map(r => r.month), current: monthly.map(r => r.amount_usd / 1e8),
     countryRows: countryRows.map(r => ({ name: r.country, exp: r.amount_usd, share: r.share_pct, growth: r.yoy_pct })),
     news: (byCode.LOCAL_ISSUES?.articles || byCode.NEWS?.articles || []).map(mapArticle),
@@ -91,6 +102,7 @@ export default function ReportView({ route }) {
   const kind = reportKinds[report.kind]
   const newsOnly = report.kind === 'weekly'
   const has = label => !!byCode[sectionCodes[label]]
+  const promising = promisingView(byCode.GROWTH_RISK)
   const ticks = niceTicks(monthly.map(r => r.amount_usd), 3, true).map(value => value / 1e8)
   let no = 1
 
@@ -113,7 +125,8 @@ export default function ReportView({ route }) {
             <div style={{ background: 'var(--plum)', color: '#fff', padding: '36px 48px 30px', position: 'relative' }}>
               <p style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1, color: '#FF8A9A' }}>BORDERLESS SELLERS · {kind.eyebrow}</p>
               <h1 style={{ fontSize: 34, fontWeight: 800, marginTop: 10 }}>{report.title}</h1>
-              <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{o.sections.length === 4 ? '전체 항목 선택' : `${o.sections.length}개 항목 선택`} · {o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
+              <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{/* 주간은 기사만 싣는 리포트라 수출 분석 항목 수를 쓰지 않는다 */}
+                {!newsOnly && (o.sections.length === 4 ? '전체 항목 선택 · ' : `${o.sections.length}개 항목 선택 · `)}{o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
               <div style={{ display: 'flex', gap: 24, marginTop: 18, fontSize: 14, color: '#fff' }}>
                 <span>분석 {range(o.from, o.to)}</span><span>비교 {range(o.compareFrom, o.compareTo)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
               </div>
@@ -129,7 +142,7 @@ export default function ReportView({ route }) {
               {has('주요 지표(KPI)') && (
                 <Section no={no++} title="주요 지표">
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
-                    {[['기간 수출액', `${f.total}억 USD`, '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1'], ['수출국 수', `${kpi.export_country_count ?? '—'}개국`, '#15181E'], ['상위 1개국 비중', kpi.top_country_share_pct == null ? '—' : `${Number(kpi.top_country_share_pct).toFixed(1)}%`, '#15181E']].map(([l, v, c]) => (
+                    {[['기간 수출액', f.total, '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1'], ['수출국 수', `${kpi.export_country_count ?? '—'}개국`, '#15181E'], ['상위 1개국 비중', share(kpi.top_country_share_pct), '#15181E']].map(([l, v, c]) => (
                       <div key={l} style={{ background: 'var(--bg)', borderRadius: 14, padding: '18px 20px' }}>
                         <p className="muted">{l}</p>
                         <p style={{ fontSize: 26, fontWeight: 800, marginTop: 6, color: c }}>{v}</p>
@@ -146,7 +159,7 @@ export default function ReportView({ route }) {
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginTop: 14 }}>
-                      {[['분석 기간 합계', `${f.total}억 USD`, '#15181E'], ['비교 기간 합계', amount(comparison.previous) + (comparison.previous == null ? '' : '억 USD'), '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1']].map(([l, v, c]) => (
+                      {[['분석 기간 합계', f.total, '#15181E'], ['비교 기간 합계', withUnit(comparison.previous, '억 USD'), '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1']].map(([l, v, c]) => (
                         <div key={l} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '14px 16px' }}>
                           <p className="note">{l}</p><p style={{ fontSize: 18, fontWeight: 800, color: c }}>{v}</p>
                         </div>
@@ -158,7 +171,7 @@ export default function ReportView({ route }) {
                         {f.labels.map((l, i) => <div key={l} className="tr" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}><span className="b">{l}</span><span className="r b">{amount(monthly[i].amount_usd)}</span><span className="r s">—</span></div>)}
                       </div>
                     ) : f.labels.length ? (
-                      <LineChart width={900} height={240} labels={f.labels} yTicks={ticks} series={[{ color: '#C8102E', values: f.current }]} />
+                      <LineChart width={900} height={240} labels={f.labels} yTicks={ticks} formatValue={reportEok} series={[{ color: '#C8102E', values: f.current }]} />
                     ) : <p className="muted">조회된 월별 실적이 없습니다.</p>}
                     <p className="note">비교 기간의 월별 수출액은 현재 응답에 포함되지 않아 표시하지 않습니다. 비교 합계는 저장된 값이 있을 때 표시합니다.</p>
                   </div>
@@ -168,7 +181,7 @@ export default function ReportView({ route }) {
               {scopeComparison && <Section no={no++} title="한국 전체 · 교역 상대국 비교">
                 <p className="note">한국 전체에는 개별 상대국 수출액이 포함되므로 비교 대상 간 금액을 합산하지 않습니다. 단위: 억 USD</p>
                 <div className="chips">{scopeSeries.map((s,i)=><span key={s.key} style={{color:scopeColors[i%scopeColors.length]}}>● {s.label}</span>)}</div>
-                <LineChart labels={scopeComparison.rows.map(r=>r.month)} yTicks={niceTicks(scopeComparison.rows.flatMap(r=>scopeSeries.map(s=>r[s.key]/1e8)))}
+                <LineChart formatValue={reportEok} labels={scopeComparison.rows.map(r=>r.month)} yTicks={niceTicks(scopeComparison.rows.flatMap(r=>scopeSeries.map(s=>r[s.key]/1e8)))}
                   series={scopeSeries.map((s,i)=>({color:scopeColors[i%scopeColors.length],values:scopeComparison.rows.map(r=>r[s.key]/1e8)}))}/>
                 <ApiResults table={scopeComparison} tableOnly/>
               </Section>}
@@ -179,9 +192,9 @@ export default function ReportView({ route }) {
                     <div key={r.name} className="tr" style={{ gridTemplateColumns: '1fr 2fr 1fr 1fr' }}>
                       <span className="b">{r.name}</span>
                       {table.countries
-                        ? <span className="b">{amount(r.exp)}억 USD</span>
-                        : <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}><span style={{ width: `${Math.min(65, Math.max(0, (r.share || 0) * .65))}%`, height: 12, borderRadius: 6, background: '#C8102E' }} /><b style={{ whiteSpace: 'nowrap' }}>{amount(r.exp)}억</b></span>}
-                      <span className="r b">{r.share == null ? '—' : `${Number(r.share).toFixed(1)}%`}</span>
+                        ? <span className="b">{withUnit(r.exp, '억 USD')}</span>
+                        : <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}><span style={{ width: `${Math.min(65, Math.max(0, (r.share || 0) * .65))}%`, height: 12, borderRadius: 6, background: '#C8102E' }} /><b style={{ whiteSpace: 'nowrap' }}>{withUnit(r.exp, '억')}</b></span>}
+                      <span className="r b">{share(r.share)}</span>
                       <span className="r b" style={{ color: r.growth >= 0 ? '#C8102E' : '#1F5FD1' }}>{percent(r.growth)}</span>
                     </div>
                   ))}
@@ -190,27 +203,28 @@ export default function ReportView({ route }) {
                 </Section>
               )}
 
-              {has('급성장·리스크 시장') && (
-                <Section no={no++} title="급성장 · 리스크 시장">
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-                    <div style={{ borderRadius: 14, padding: 20, background: 'var(--rose)' }}>
-                      <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>성장률 상위</p>
-                      <p style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>준비 중</p>
-                      <p className="note">{byCode.GROWTH_RISK?.text}</p>
-                    </div>
-                    <div style={{ borderRadius: 14, padding: 20, background: '#EEF3FC' }}>
-                      <p style={{ fontSize: 13, fontWeight: 800, color: '#1F5FD1' }}>감소율 상위</p>
-                      <p style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>준비 중</p>
-                      <p className="note">{byCode.GROWTH_RISK?.text}</p>
-                    </div>
-                  </div>
-                  <p className="note" style={{ marginTop: 10 }}>성장·리스크 순위는 서버에서 제공된 결과가 있을 때 표시합니다.</p>
+              {has('유망시장(증가·감소 예상)') && (
+                <Section no={no++} title="유망시장(증가·감소 예상)">
+                  <p className="note" style={{ marginBottom: 10 }}>{byCode.GROWTH_RISK?.text}</p>
+                  {promising.rows.length > 0 && <>
+                    <div className="th" style={{ gridTemplateColumns: PROMISING_COLS }}><span>{promising.rankLabel}</span><span>국가</span><span>품목</span><span>증감 예상</span><span className="r">최근 12개월 수출액</span></div>
+                    {promising.rows.map(r => (
+                      <div key={`${r.country_code}-${r.hs6}`} className="tr" style={{ gridTemplateColumns: PROMISING_COLS }}>
+                        <span className="b">{r.rank ?? '—'}{r.size ? <span className="s" style={{ fontWeight: 400 }}> / {Number(r.size).toLocaleString('ko-KR')}</span> : null}</span>
+                        <span className="b">{r.country_name || countryName(r.country_code)}</span>
+                        <span>{r.product_name || r.name || r.hs6} <span className="hs">{r.hs6}</span></span>
+                        <span className="b" style={{ color: OUTLOOK_COLOR[r.growth_outlook] || '#5C6370' }}>{r.growth_outlook || '—'}</span>
+                        <span className="r b">{withUnit(r.exp_12m, '억 USD')}</span>
+                      </div>
+                    ))}
+                    <p className="note" style={{ marginTop: 10 }}>{promising.anchor ? `${promising.anchor} 기준 · ` : ''}순위 옆 숫자는 전체 예측 대상 수입니다. 예측은 참고용이며 실제 결과와 다를 수 있습니다.</p>
+                  </>}
                 </Section>
               )}
 
               {(newsOnly || o.sections.includes('현지 이슈 기사')) && (
                 <Section no={no++} title="현지 이슈">
-                  <p className="note" style={{ marginBottom: 10 }}>{byCode.LOCAL_ISSUES?.text || byCode.NEWS?.text}</p>
+                  <p className="note" style={{ marginBottom: 10, whiteSpace: 'pre-line' }}>{byCode.LOCAL_ISSUES?.text || byCode.NEWS?.text}</p>
                   <div className="col" style={{ gap: 10 }}>
                     {(f.news.length ? f.news : []).map(a => (
                       <div key={a.id} className="li" style={{ padding: '16px 20px' }}>
@@ -219,7 +233,7 @@ export default function ReportView({ route }) {
                           <p className="muted" style={{ marginTop: 4 }}>{a.summary}</p>
                           <p className="note">{a.date} · {a.country} · {a.source}</p>
                         </div>
-                        <Link to={`/articles?tab=${a.kind === 'general' ? 'all' : a.kind}&id=${a.id}`} className="more">기사 보기 ↗</Link>
+                        <Link to={`/articles?tab=${a.kind}&id=${a.id}`} className="more">기사 보기 ↗</Link>
                       </div>
                     ))}
                     {!f.news.length && <p className="muted">해당 국가·품목·기간에 맞는 기사가 없습니다.</p>}

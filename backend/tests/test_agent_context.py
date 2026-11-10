@@ -35,6 +35,21 @@ class ChatContextTest(unittest.TestCase):
         self.assertEqual(payload['recent'][0]['question'],context.recent[0].question)
         self.assertEqual(payload['recent'][0]['conditions']['country_codes'],['VN'])
 
+    def test_term_and_hs_answers_stay_in_recent_turns(self):
+        # 조건 없는 용어·HS 조회 답변도 "아까 뭐 물어봤지?"에 답할 수 있게 남긴다. 이전 검색 조건은 그대로 둔다
+        from backend.app.agents.context import completed_context
+        from backend.app.agents.state import Conditions, Draft
+        from backend.tests.test_agent_state import state
+        current=state()
+        previous=Conditions(country_codes=['VN'])
+        current.input.context=current.input.context.model_copy(update={'conditions':previous})
+        task=current.plan.tasks[0]
+        task.intent='CONVERSATION'; task.conditions=None; task.answer_status='ANSWERED'
+        current.draft=Draft(conclusion=[{'task_id':task.task_id,'sentences':['HS 코드는 품목 분류 번호입니다.']}],turn_summary='HS 코드 설명')
+        context=completed_context(current)
+        self.assertEqual([(t.intent,t.summary) for t in context.recent[-1:]],[('CONVERSATION','HS 코드 설명')])
+        self.assertEqual(context.conditions,previous)
+
     def setUp(self):
         self.client = fakeredis.FakeRedis(decode_responses=True)
         self.redis = RedisState({'API_REDIS_PREFIX': 'test:agent'}, self.client)

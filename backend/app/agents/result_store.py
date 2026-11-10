@@ -31,6 +31,31 @@ def fingerprint(state, step, *, tool_version, versions, source_results):
     return hashlib.sha256(canonical.encode('utf-8')).hexdigest()
 
 
+def _query_key(task, step):
+    # 기사 기간은 수출입 조회에 쓰지 않는다(CAUSE와 STATISTICS가 같은 추이를 조회하는 경우)
+    conditions = task.conditions.model_dump(mode='json', exclude={'article_period'}) if task.conditions else None
+    return step.tool, step.args, conditions, task.custom_query
+
+
+def shared_result(state, task, step):
+    """D-100: 같은 답변의 앞 하위 질문이 같은 조회(도구·인자·조건·요청 문장)를 이미 했으면 그 결과를 그대로 쓴다.
+    선행 결과를 받는(input_bindings) 조회는 입력이 달라 공유하지 않는다."""
+    if task.input_bindings or step.tool != 'query_trade_data':
+        return None
+    key = _query_key(task, step)
+    for other in state.plan.tasks:
+        if other is task:
+            return None
+        if other.input_bindings:
+            continue
+        for s in other.steps:
+            result = state.results.get(s.step_id)
+            if (s.status == 'DONE' and result and result.status == 'OK' and result.result_id
+                    and _query_key(other, s) == key):
+                return result
+    return None
+
+
 class ResultStore:
     def __init__(self, execution):
         self.execution = execution

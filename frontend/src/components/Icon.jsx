@@ -11,6 +11,7 @@ const PATHS = {
   calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 10h18" /></>,
   chevronUp: <path d="M6 15l6-6 6 6" />,
   chevronDown: <path d="M6 9l6 6 6-6" />,
+  menu: <path d="M4 6h16M4 12h16M4 18h16" />,
   pause: <path d="M9 5v14M15 5v14" />,
   sparkle: <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />,
   star: <path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z" />,

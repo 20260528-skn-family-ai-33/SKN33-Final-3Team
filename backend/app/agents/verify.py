@@ -244,6 +244,72 @@ def snapshot_evidence(payload):
             '_verification_source':'SNAPSHOT'}
 
 
+def _tokens(text):
+    text=_merge_compound(DATE.sub(' ',re.sub(r'\[\d+\]','',text)))
+    return [m for m in TOKEN.finditer(text) if not _target_count(text,m)]
+
+
+# TOKEN은 영문자 뒤 숫자를 읽지 않는다. "HS8516"처럼 붙여 쓴 코드는 따로 읽어 조회한 코드인지 대조한다
+HS_PREFIXED = re.compile(r'(?<![A-Za-z])HS\s*-?\s*(?P<code>\d{2,10})', re.I)
+
+
+def check_codes(sentence, digests):
+    """HS_LOOKUP(D-101) 문장의 숫자는 조회한 HS 코드(와 품목명 속 숫자)만 허용한다.
+    "HS8516"처럼 HS를 붙여 쓴 코드도 조회한 코드이거나 판본 표기(HS2022 등)여야 한다."""
+    allowed, versions = set(), set()
+    for digest in digests:
+        versions.update(re.findall(r'\d+', str(digest.get('hs_ver', ''))))
+        for item in digest.get('items', []):
+            allowed.add(str(item.get('code', '')))
+            allowed.update(m['value'].replace(',','') for m in _tokens(str(item.get('name', ''))))
+    found=_tokens(sentence)
+    prefixed=[m['code'] for m in HS_PREFIXED.finditer(sentence)]
+    good=(all(m['value'].replace(',','') in allowed for m in found)
+          and all(code in allowed or code in versions for code in prefixed))
+    return good,([_shown(m) for m in found]+[f'HS{code}' for code in prefixed if code not in versions])[:10]
+
+
+def _fact(match):
+    """대조용 숫자 표기: 값·단위 배율(만·억·조)·단위(%·달러 등)."""
+    return match['value'].replace(',',''), match['scale'] or '', (match['unit'] or '').casefold()
+
+
+def _date_keys(year, month=None):
+    # "2025년 5월" 요약을 "5월"·"2025년"으로 줄여 써도 같은 날짜다
+    return {str(year)} | ({f'{year}-{int(month):02d}', f'{int(month)}월'} if month else set())
+
+
+def _dates(text):
+    """문장 속 절대 날짜(연·월). 숫자 대조(_tokens)는 날짜를 지우므로 따로 읽는다.
+    "최근 12개월"처럼 기간 길이는 날짜가 아니라서 대조하지 않는다(전처럼 통과)."""
+    out=set()
+    for m in DATE.finditer(re.sub(r'\[\d+\]','',text)):
+        if m[1]: out|=_date_keys(m[1], m[2] or m[3])
+        elif m[5]=='월': out.add(m[4]+'월')
+    return out
+
+
+def _turn_dates(turn):
+    """이전 질문의 확정 조건 기간(시작·끝 달)도 그 대화에서 말한 날짜로 본다."""
+    period=getattr(getattr(turn,'conditions',None),'period',None)
+    return set().union(*(_date_keys(d.year, d.month) for d in (period.start, period.end))) if period else set()
+
+
+def check_history(sentence, recent):
+    """CONVERSATION(D-99) 문장의 숫자는 최근 대화의 질문·요약에 있는 값만 허용한다. 요약 숫자는 이미 verify를 통과했다(D-52).
+    값만이 아니라 단위 배율·단위(12억 달러 ≠ 12%)와 날짜(연·월)까지 같아야 한다. 문장에 단위를 생략했으면 값·배율만 본다.
+    날짜는 이전 질문·요약에 쓰였거나 그 질문의 확정 조건 기간의 시작·끝 달이면 허용한다."""
+    history=[f'{t.question} {t.summary}' for t in recent]
+    facts={_fact(m) for text in history for m in _tokens(text)}
+    dates=set().union(set(),*(_dates(text) for text in history),*(_turn_dates(t) for t in recent))
+    found=_tokens(sentence)
+    def known(m):
+        value,scale,unit=_fact(m)
+        return any(v==value and s==scale and (not unit or u==unit) for v,s,u in facts)
+    good=all(known(m) for m in found) and _dates(sentence)<=dates
+    return good,[_shown(m) for m in found]
+
+
 def mark_unverified(state):
     """시간이 부족해 대조하지 못했을 때(§1·§13.4): verify가 대조할 LLM 문장마다 "확인 필요"(MISMATCH)를 붙인다.
     고정 문구 결론은 건너뛴다. 증감 주장은 수치가 없어도 확인 필요이며, 안내문은 PASS다.
@@ -258,7 +324,7 @@ def mark_unverified(state):
                                     reason='NOT_CONFIRMED' if needs_check else 'MATCH'))
     for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
         evidence=any(s.step_id in state.results and state.results[s.step_id].digest for s in task.steps)
-        generated=evidence and fixed_conclusion(state,task) is None
+        generated=(evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
         for sentence in conclusion.sentences:
             if generated: add(sentence)
             index+=1
@@ -324,6 +390,14 @@ def verify(state,known_names=(),*,snapshots=None,countries=()):
             basis='SNAPSHOT' if source else 'DIGEST',
             reason='MATCH' if good else 'SOURCE_UNAVAILABLE' if unavailable else 'NOT_CONFIRMED'))
     for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
+        if task.intent in ('CONVERSATION','HS_LOOKUP') and fixed_conclusion(state,task) is None:
+            for sentence in conclusion.sentences:
+                good,numbers=(check_history(sentence,state.input.context.recent) if task.intent=='CONVERSATION'
+                              else check_codes(sentence,by_task[task.task_id]))
+                checks.append(SentenceCheck(index=index,numbers=numbers,status='PASS' if good else 'MISMATCH',
+                                            reason='MATCH' if good else 'NOT_CONFIRMED'))
+                index+=1
+            continue
         generated=bool(by_task[task.task_id]) and fixed_conclusion(state,task) is None
         for sentence in conclusion.sentences:
             if generated: add(sentence,by_task[task.task_id])

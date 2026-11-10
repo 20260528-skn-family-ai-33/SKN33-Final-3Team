@@ -8,8 +8,25 @@ from backend.app.api.config import Settings
 from backend.app.api.runtime_schema import RUNTIME_TABLES, EXTENSIONS
 
 
+TERMS_OPTION_TYPES=('SERVICE_TERMS','PRIVACY_TERMS','PRIVACY_POLICY')
+
+
+def option_type_step(inspector):
+    """가입 약관을 service_option에 등록할 수 있게 ENUM 값만 늘린다. 기존 값·행은 그대로 둔다."""
+    column=next(c for c in inspector.get_columns('service_option') if c['name']=='option_type')
+    values=list(getattr(column['type'],'enums',None) or [])
+    missing=[value for value in TERMS_OPTION_TYPES if value not in values]
+    if not values or not missing: return None
+    quoted=','.join("'"+value+"'" for value in values+missing)
+    comment=(column.get('comment') or '').replace("'","''")
+    return f"ALTER TABLE `service_option` MODIFY COLUMN `option_type` ENUM({quoted}) NOT NULL COMMENT '{comment}'"
+
+
 def plan(connection):
     inspector=inspect(connection); existing=set(inspector.get_table_names()); statements=[]
+    if 'service_option' in existing:
+        step=option_type_step(inspector)
+        if step: statements.append(step)
     legacy=existing & {'api_user_profile','api_report_file','api_keyword_block','api_auth_session','api_rate_limit'}
     if legacy:
         raise RuntimeError('Legacy application tables already exist; stop and preserve their data. '

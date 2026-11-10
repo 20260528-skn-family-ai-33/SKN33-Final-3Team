@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update, delete, text, inspect
-from backend.tests.api_support import test_engine, reference_data
+from backend.tests.api_support import test_engine, reference_data, SIGNUP_CONSENTS
 from backend.tests.api_support import create_test_app as create_app
 from backend.app.api.config import Settings
 from backend.app.api.common import now
@@ -48,7 +48,7 @@ class BackendApiTest(unittest.TestCase):
         self.client.close(); self.engine.dispose(); self.directory.cleanup()
 
     def signup(self,email='alice@example.org'):
-        response=self.client.post('/api/v1/auth/signup',json={'name':'홍길동','email':email,'password':'Sample!123','password_confirm':'Sample!123'})
+        response=self.client.post('/api/v1/auth/signup',json={'name':'홍길동','email':email,'password':'Sample!123','password_confirm':'Sample!123',**SIGNUP_CONSENTS})
         self.assertEqual(response.status_code,201,response.text)
         self.csrf=response.json()['csrf_token']; return response.json()['user']['user_id']
 
@@ -74,6 +74,61 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/articles?page=0').status_code,400)
         self.assertEqual(self.client.get('/api/v1/articles?page=1&page=2').status_code,400)
         self.assertEqual(self.client.get('/api/v1/notifications?unread_only=no').status_code,400)
+
+    def test_email_case_distinguishes_signup_login_and_account_verification(self):
+        accounts = []
+        for index, email in enumerate(('alice@example.org', 'Alice@example.org', 'Alice@Example.org')):
+            password = f'Sample!12{index}'
+            body = {'name': '홍길동', 'email': ' ' + email + ' ', 'password': password, 'password_confirm': password, **SIGNUP_CONSENTS}
+            response = self.client.post('/api/v1/auth/signup', json=body)
+            self.assertEqual(response.status_code, 201, response.text)
+            self.assertEqual(response.json()['user']['email'], email)
+            accounts.append((email, password, response.json()['user']['user_id']))
+            self.assertEqual(self.client.post('/api/v1/auth/signup', json=body).status_code, 409)
+        self.assertEqual(len({uid for _, _, uid in accounts}), 3)
+        for email, password, uid in accounts:
+            login = self.client.post('/api/v1/auth/login', json={'email': email, 'password': password})
+            self.assertEqual(login.status_code, 200, login.text)
+            self.assertEqual(login.json()['user']['user_id'], uid)
+        for email, password in [('ALICE@example.org', 'Sample!120'), ('Alice@example.org', 'Sample!120')]:
+            response = self.client.post('/api/v1/auth/login', json={'email': email, 'password': password})
+            self.assertEqual(response.status_code, 401, response.text)
+
+    def test_password_change_requires_case_exact_email(self):
+        self.signup('Alice@Example.org')
+        self.assertFalse(self.post('users/me/email-check', {'email': 'alice@example.org'}).json()['matches'])
+        self.assertTrue(self.post('users/me/email-check', {'email': ' Alice@Example.org '}).json()['matches'])
+        body = {'email': 'alice@example.org', 'current_password': 'Sample!123',
+                'new_password': 'Changed!456', 'new_password_confirm': 'Changed!456'}
+        self.assertEqual(self.post('users/me/password', body).status_code, 403)
+        self.assertEqual(self.post('users/me/password', {**body, 'email': 'Alice@Example.org'}).status_code, 204)
+
+    def test_picker_search_accepts_one_character_without_changing_chat_minimum(self):
+        from backend.app.api.reference import chat_hs_search
+        with self.engine.begin() as connection:
+            connection.execute(self.meta.tables['hs_code'].insert(), [
+                {'hs_code': '010129', 'depth': 6, 'name_ko': '말', 'hs_ver': 'HS2022', 'source_edition': 'test'},
+                {'hs_code': '010229', 'depth': 6, 'name_ko': '소', 'hs_ver': 'HS2022', 'source_edition': 'test'},
+                {'hs_code': '0101', 'depth': 4, 'name_ko': '말과 동물', 'hs_ver': 'HS2022', 'source_edition': 'test'},
+                {'hs_code': '0102', 'depth': 4, 'name_ko': '소과 동물', 'hs_ver': 'HS2022', 'source_edition': 'test'}])
+        for query, code in [('말', '010129'), ('소', '010229')]:
+            response = self.client.get('/api/v1/reference/hs-codes', params={'q': query, 'depth': 6})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual([item['hs_code'] for item in response.json()['items']], [code])
+            self.assertEqual(response.json()['match_type'], 'EXACT')
+        response = self.client.get('/api/v1/reference/hs-codes', params={'q': '3', 'depth': 4})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('3304', [item['hs_code'] for item in response.json()['items']])
+        with self.engine.connect() as connection:
+            self.assertEqual(chat_hs_search(Store(self.app.state.database, connection), '말')['items'], [])
+        self.settings.values['API_HS_VECTOR_ENABLED'] = 'true'
+        with patch('backend.app.api.hs_vectors.candidates', return_value=[('330499', .1)]) as candidates:
+            for query in ('힣', '화자', '스킨케어'):
+                for depth in (4, 6):
+                    response = self.client.get('/api/v1/reference/hs-codes', params={'q': query, 'depth': depth})
+                    self.assertEqual(response.status_code, 200, response.text)
+                    self.assertEqual(response.json()['items'], [])
+            candidates.assert_not_called()
 
     def test_interest_version_and_hs_depth(self):
         self.signup(); url='/api/v1/users/me/interests'
@@ -625,7 +680,7 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(response.status_code,200,response.text)
         table=self.meta.tables['user_consent']
         with self.engine.connect() as c:
-            self.assertEqual(list(c.scalars(select(table.c.action).order_by(table.c.consent_id))),['AGREE','REVOKE','AGREE'])
+            self.assertEqual(list(c.scalars(select(table.c.action).where(table.c.terms_version=='TERMS_V1').order_by(table.c.consent_id))),['AGREE','REVOKE','AGREE'])
 
     def test_subscription_validation_and_publication_trigger(self):
         uid=self.signup(); url='/api/v1/users/me/subscriptions'
@@ -636,6 +691,7 @@ class BackendApiTest(unittest.TestCase):
         self.client.put('/api/v1/users/me/interests',json={'hs_items':[],'country_codes':['US'],'expected_version':interest['version']},headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(self.client.put(url,json={**body,'use_saved_interests':False},headers={'X-CSRF-Token':self.csrf}).status_code,400)
         self.assertEqual(self.client.put(url,json={**body,'period_codes':[]},headers={'X-CSRF-Token':self.csrf}).status_code,400)
+        self.assertEqual(self.client.put(url,json={**body,'formats':[]},headers={'X-CSRF-Token':self.csrf}).status_code,400)
         with patch('backend.app.api.reports.now',return_value=datetime(2026,1,1)):
             response=self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf})
         self.assertEqual(response.status_code,200,response.text)
@@ -669,6 +725,21 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/admin/audit-events').json()['page']['total'],1)
         self.assertEqual(self.client.get('/api/v1/admin/notification-events/999/diagnosis?user_id='+uid).status_code,404)
 
+    def test_general_article_tab_excludes_breaking_and_major_issue(self):
+        m=self.meta.tables
+        with self.engine.begin() as c:
+            for i,source,category in [(1,'KOTRA_MARKET','통상·규제'),(2,'KOTRA_SHORT_NEWS','경제'),(3,'KOTRA_MARKET','경제'),
+                                      (4,'KOTRA_MARKET',None),(5,'HANKYUNG',None),(6,'KOTRA_MARKET','경제')]:
+                c.execute(m['article'].insert(),{'article_id':i,'source_code':source,'external_id':f'general-{i}','title':'기사',
+                    'published_date':date(2025,12,i),'source_url':f'https://example.org/{i}','body_masked':'본문','category':category,
+                    'visibility_status':'VISIBLE','admin_meta_json':{}})
+            # 6번은 분야는 일반이지만 주요 이슈 알림으로 판정된 기사다.
+            c.execute(m['alert_event'].insert(),{'event_id':1,'event_type':'MAJOR_ISSUE','article_id':6,'event_key':'g'*64,'payload_json':{},'created_at':now()})
+        ids=lambda tab:{a['article_id'] for a in self.client.get(f'/api/v1/articles?tab={tab}').json()['items']}
+        self.assertEqual(ids('GENERAL'),{'3','4','5'})
+        self.assertEqual(ids('GENERAL')|ids('BREAKING')|ids('MAJOR_ISSUE'),ids('ALL'))
+        self.assertEqual(self.client.get('/api/v1/articles?tab=OTHER').status_code,400)
+
     def test_product_ranking_includes_hs_name_and_formatted_excel(self):
         self.signup()
         response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&group_by=HS6')
@@ -682,12 +753,80 @@ class BackendApiTest(unittest.TestCase):
         sheet=load_workbook(io.BytesIO(workbook.content))['결과표1']
         headers=[c.value for c in sheet[1]]
         self.assertIn('수출액 (USD)',headers); self.assertIn('품목명',headers)
-        self.assertEqual(sheet.cell(2,headers.index('품목')+1).value,'330499')
+        self.assertEqual(headers,['순위','HS 코드','품목명','수출액 (USD)','수입액 (USD)','수출 비중 (%)'])
+        self.assertEqual(sheet.cell(2,headers.index('HS 코드')+1).value,'330499')
         self.assertEqual(sheet.cell(2,headers.index('수출액 (USD)')+1).number_format,'#,##0')
         countries=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12').json()
         self.assertIsNone(countries['items'][0]['hs_name'])
         table=self.client.get('/api/v1/results/'+countries['result_id']).json()['table']
         self.assertNotIn('hs_name',[c['key'] for c in table['columns']])
+
+    def test_trade_screen_excel_layouts_and_agent_defaults_are_separate(self):
+        from openpyxl import load_workbook
+        from backend.app.api import trade
+        from backend.app.api.results import read_snapshot
+
+        uid=self.signup()
+        def workbook_for(path):
+            response=self.client.get('/api/v1/'+path)
+            self.assertEqual(response.status_code,200,response.text)
+            file=self.client.get('/api/v1/results/'+response.json()['result_id']+'/file')
+            self.assertEqual(file.status_code,200)
+            workbook=load_workbook(io.BytesIO(file.content))
+            info=dict(list(workbook['정보'].values)[1:])
+            self.assertIn('조회 기간',info)
+            self.assertNotIn('실행 SQL',info)
+            self.assertNotIn('export_profile',info)
+            return response.json(),workbook['결과표1']
+
+        for group in ('COUNTRY','HS6'):
+            for flow in ('EXPORT','IMPORT'):
+                with self.subTest(group=group,flow=flow):
+                    response,sheet=workbook_for('trade/rankings?period_start=2025-10&period_end=2025-12'
+                                               f'&group_by={group}&sort_flow={flow}')
+                    entity=['국가'] if group=='COUNTRY' else ['HS 코드','품목명']
+                    share='수출 비중 (%)' if flow=='EXPORT' else '수입 비중 (%)'
+                    self.assertEqual([c.value for c in sheet[1]],['순위',*entity,'수출액 (USD)','수입액 (USD)',share])
+                    self.assertEqual(sheet.max_row,len(response['items'])+1)
+                    self.assertEqual(sheet.cell(2,3 if group=='COUNTRY' else 4).value,float(response['items'][0]['export_amount_usd']))
+                    if group=='COUNTRY': self.assertIn(sheet['B2'].value,('미국','중국'))
+                    # 화면 응답의 분석용 값은 유지한다.
+                    self.assertIn('one_off',response['items'][0])
+
+        response,sheet=workbook_for('trade/trends?period_start=2025-10&period_end=2025-12&country_codes=US')
+        self.assertEqual([c.value for c in sheet[1]],['기준월','수출액 (USD)','수입액 (USD)'])
+        self.assertEqual(sheet.max_row,4)
+        self.assertIn('previous_year_export_usd',response['items'][0])
+
+        # 채팅/에이전트는 같은 함수를 기본 옵션으로 사용한다. 기존 컬럼이 남아야 한다.
+        with self.engine.connect() as connection:
+            store=Store(self.app.state.database,connection)
+            ranking=trade.rankings(store,uid,'2025-12','2025-12')
+            payload=read_snapshot(store,uid,ranking['result_id'],'RESULT')
+            headers={c['key'] for c in payload['columns']}
+            self.assertTrue({'rank_change','rank_status','mom_pct','yoy_pct','one_off'}<=headers)
+            self.assertNotIn('export_profile',payload['meta'])
+            trend=trade.trends(store,uid,'2025-12','2025-12')
+            payload=read_snapshot(store,uid,trend['result_id'],'RESULT')
+            self.assertIn('previous_year_export_usd',[c['key'] for c in payload['columns']])
+
+    def test_empty_screen_ranking_excel_keeps_identifying_headers(self):
+        from openpyxl import load_workbook
+        self.signup()
+        with self.engine.begin() as connection:
+            connection.execute(delete(self.meta.tables['export_summary']))
+            connection.execute(delete(self.meta.tables['import_summary']))
+        for group,identifiers in [('COUNTRY',['국가']),('HS6',['HS 코드','품목명'])]:
+            response=self.client.get('/api/v1/trade/rankings',params={
+                'period_start':'2025-12','period_end':'2025-12','group_by':group})
+            self.assertEqual(response.status_code,200,response.text)
+            self.assertEqual(response.json()['items'],[])
+            file=self.client.get('/api/v1/results/'+response.json()['result_id']+'/file')
+            self.assertEqual(file.status_code,200)
+            sheet=load_workbook(io.BytesIO(file.content))['결과표1']
+            self.assertEqual([cell.value for cell in sheet[1]],
+                ['순위',*identifiers,'수출액 (USD)','수입액 (USD)','수출 비중 (%)'])
+            self.assertEqual(sheet.max_row,1)
 
     def test_admin_member_search_follows_selected_field(self):
         uid=self.signup(); m=self.meta.tables
@@ -752,6 +891,8 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(response.status_code,200,response.text)
             self.assertEqual(len(response.json()['items']),count,category)
             self.assertEqual(response.json()['page']['total'],count,category)
+        message=self.client.get('/api/v1/admin/alerts').json()['items'][0]['message']
+        for word in ('관세청 수집 실패','HS6_AGGREGATION','2025-08-01 ~ 2025-08-31','실행 #'): self.assertIn(word,message)
         self.assertEqual(self.client.get('/api/v1/admin/alerts?category=OTHER').status_code,400)
 
     def test_worker_fencing_and_duplicate_message_after_context_change(self):
@@ -976,7 +1117,9 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(response.json()['items'][0]['country_code'],'CN')
         self.assertEqual(response.json()['items'][0]['one_off']['status'],'NOT_EVALUATED')
         result=self.client.get('/api/v1/results/'+response.json()['result_id']).json()['table']
-        self.assertEqual(result['rows'],[{k:v for k,v in item.items() if k not in ('has_data','hs_name')} for item in response.json()['items']])
+        self.assertEqual([{k:v for k,v in row.items() if k!='country_name'} for row in result['rows']],
+                         [{k:v for k,v in item.items() if k not in ('has_data','hs_name')} for item in response.json()['items']])
+        self.assertEqual([row['country_name'] for row in result['rows']],['중국','미국'])
         self.assertEqual(response.json()['items'][0]['rank_status'],'SAME')
         response=self.post('analysis/changes',{'month':'2025-12','compare':'YOY'})
         self.assertEqual(response.status_code,200,response.text)
@@ -1171,6 +1314,102 @@ class BackendApiTest(unittest.TestCase):
         with self.engine.begin() as c:
             self.assertEqual(str(jobs.claim(Store(self.app.state.database,c))['job_id']),jid2)
 
+    def test_worker_claims_only_agent_jobs_from_its_own_redis(self):
+        # D-106: 같은 RDS를 쓰는 다른 환경(배포 서버)의 작업은 체크포인트가 그쪽 Redis에 있어 가져가면 안 된다.
+        uid=self.signup(); db=self.app.state.database
+        mine=jobs.queue_id(db); self.assertEqual(jobs.queue_id(db),mine)
+        rows=[]
+        for queue,version in (('other-redis',jobs.AGENT_QUEUE_VERSION),(None,2),(mine,jobs.AGENT_QUEUE_VERSION)):
+            sid=self.post('chat/sessions',{}).json()['session']['session_id']
+            state=jobs._initial(uid,'API_CHAT',sid,{'question':'q'},f'k-{version}-{queue}')
+            state.update(version=version,agent={},**({'queue':queue} if queue else {}))
+            rows.append({'session_id':int(sid),'role':'USER','content_masked':'q','created_at':now(),
+                         'result_json':{'schema_version':1,jobs.EXECUTION:state}})
+        with self.engine.begin() as c:
+            ids=[c.execute(self.meta.tables['chat_message'].insert(),row).inserted_primary_key[0] for row in rows]
+        with self.engine.begin() as c:
+            self.assertEqual(jobs.claim(Store(db,c))['job_id'],ids[2])
+        with self.engine.begin() as c:
+            self.assertIsNone(jobs.claim(Store(db,c)))
+        job={}; jobs.mark_agent(job,db)
+        self.assertEqual(job,{'version':jobs.AGENT_QUEUE_VERSION,'queue':mine})
+
+    def test_worker_adopts_agent_jobs_no_worker_took(self):
+        # 배포 전 버전 2 작업, Redis 초기화로 ID가 사라진 버전 3 작업을 유예 시간 동안 아무도 가져가지 않으면 넘겨받는다.
+        # 그대로 두면 대화방이 막힌다. 유예 중인 작업(다른 환경 워커가 곧 가져갈 수 있음)은 두지 않는다
+        from datetime import timedelta
+        uid=self.signup(); db=self.app.state.database
+        old=(now()-timedelta(seconds=jobs.AGENT_ADOPT_GRACE_SECONDS+60)).isoformat()
+        rows=[]
+        for version,status,moment in ((2,'QUEUED',now().isoformat()),(3,'QUEUED',now().isoformat()),
+                                      (2,'QUEUED',old),(2,'RUNNING',old),(3,'QUEUED',old)):
+            sid=self.post('chat/sessions',{}).json()['session']['session_id']
+            state=jobs._initial(uid,'API_CHAT',sid,{'question':'q'},f'v{version}-{status}-{moment}')
+            state.update(version=version,agent={},status=status,available_at=moment,
+                         lease_expires_at=moment if status=='RUNNING' else None,
+                         **({'queue':'gone-redis'} if version==3 else {}))
+            rows.append({'session_id':int(sid),'role':'USER','content_masked':'q','created_at':now(),
+                         'result_json':{'schema_version':1,jobs.EXECUTION:state}})
+        with self.engine.begin() as c:
+            ids=[c.execute(self.meta.tables['chat_message'].insert(),row).inserted_primary_key[0] for row in rows]
+        claimed=[]
+        for _ in range(5):
+            with self.engine.begin() as c:
+                job=jobs.claim(Store(db,c))
+            if job: claimed.append(job)
+        # 유예 중인 앞의 두 작업은 남긴다. 다른 queue의 버전 3은 오래돼도 실행하지 않는다(그쪽 Redis에 체크포인트가 있을 수 있다)
+        self.assertEqual(sorted(j['job_id'] for j in claimed),ids[2:4])
+        with self.engine.begin() as c:
+            row=c.execute(select(self.meta.tables['chat_message']).where(self.meta.tables['chat_message'].c.message_id==ids[4])).mappings().one()
+        orphan=jobs._chat_job(row)
+        self.assertTrue(jobs.abandoned(orphan,db))          # 새 질문이 들어오면 만료해 대화방을 풀어 준다
+        fresh=jobs._chat_job({'message_id':0,'result_json':rows[1]['result_json']})
+        self.assertFalse(jobs.abandoned(fresh,db))
+        # 리포트 대기는 그쪽 워커가 체크포인트를 연장하므로 TTL(30분)과 유예 시간이 모두 지나야 멈춘 것으로 본다
+        def report_wait(seconds):
+            return {**fresh,'status':'WAITING_REPORT','available_at':(now()-timedelta(seconds=seconds)).isoformat()}
+        self.assertFalse(jobs.abandoned(report_wait(jobs.AGENT_ADOPT_GRACE_SECONDS+60),db))
+        self.assertTrue(jobs.abandoned(report_wait(jobs.AGENT_ADOPT_GRACE_SECONDS+30*60+60),db))
+        for job in claimed:
+            self.assertEqual((job['version'],job['queue']),(jobs.AGENT_QUEUE_VERSION,jobs.queue_id(db)))
+
+    def test_queue_id_follows_redis_reset(self):
+        # Redis를 비우면 새 ID를 읽는다. 캐시하면 API와 워커가 서로 다른 ID를 붙잡아 새 질문을 아무도 안 가져간다
+        db=self.app.state.database
+        before=jobs.queue_id(db)
+        db.redis.client.flushall()
+        after=jobs.queue_id(db)
+        self.assertNotEqual(before,after)
+        job={}; jobs.mark_agent(job,db)
+        self.assertEqual(job['queue'],after)
+        self.assertTrue(jobs.same_queue(job,db)); self.assertTrue(jobs.same_queue({},db))
+        self.assertFalse(jobs.same_queue({'queue':before},db))
+
+    def test_clarification_from_other_redis_is_not_expired(self):
+        # 다른 환경(다른 Redis)의 되묻기는 여기서 체크포인트가 안 보인다. 만료하지 않고 409로 거부한다(D-106)
+        from backend.app.agents import admission
+        from backend.app.api.common import ApiError
+        from datetime import timedelta
+        db=self.app.state.database
+        def waiting(minutes):
+            return {'status':'NEEDS_INPUT','queue':'other-redis','payload_json':{},'job_id':1,
+                    'result_json':{'clarification':{'expires_at':(now()+timedelta(minutes=minutes)).isoformat()}}}
+        job=waiting(10)
+        with self.engine.begin() as c, patch.object(admission,'pending_state') as pending, \
+                patch.object(admission,'expire') as expire:
+            with self.assertRaises(ApiError) as caught:
+                admission.resume(Store(db,c),job,{'clarification_id':'c1','choice_ids':['a']})
+            self.assertEqual(caught.exception.code,'JOB_IN_OTHER_ENVIRONMENT')
+            pending.assert_not_called(); expire.assert_not_called()
+            # 만료 시각이 지난 다른 환경의 되묻기는 풀어 준다. 그대로 두면 이 환경에서 그 대화방을 영영 못 쓴다
+            response=admission.resume(Store(db,c),waiting(-1),{'clarification_id':'c1','choice_ids':['a']})
+            self.assertEqual(response.status_code,409); expire.assert_called_once()
+            pending.assert_not_called()
+            # 상태 조회(API-37)·접수도 같은 판단(wait_expired)을 쓴다. 체크포인트를 보지 않는다
+            self.assertFalse(admission.wait_expired(Store(db,c),waiting(10)))
+            self.assertTrue(admission.wait_expired(Store(db,c),waiting(-1)))
+            pending.assert_not_called()
+
     def test_worker_claims_report_past_history_and_future_retries(self):
         self.signup(); rid=self.queued_report('history-report')
         t=self.meta.tables['report']
@@ -1257,23 +1496,28 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(out['updated_count'],60); self.assertEqual(out['unread_count'],0)
 
     def test_hs_exact_vector_fallback_and_database_verification(self):
+        from backend.app.api.reference import chat_hs_search
         self.settings.values['API_HS_VECTOR_ENABLED']='true'
         with patch('backend.app.api.hs_vectors.candidates',return_value=[('9999',0.1),('3304',0.2)]) as search:
             self.assertEqual(self.client.get('/api/v1/reference/hs-codes?q=화장품').json()['match_type'],'EXACT')
             search.assert_not_called()
             result=self.client.get('/api/v1/reference/hs-codes?q=스킨케어')
             self.assertEqual(result.status_code,200,result.text)
-            self.assertEqual([x['hs_code'] for x in result.json()['items']],['3304'])
+            self.assertEqual(result.json()['items'],[])
+            search.assert_not_called()
+            with self.engine.connect() as connection:
+                result=chat_hs_search(Store(self.app.state.database,connection),'스킨케어')
+            self.assertEqual([x['hs_code'] for x in result['items']],['3304'])
         with patch('backend.app.api.hs_vectors.candidates',side_effect=RuntimeError('offline')) as search:
             # 품목 선택 검색은 등록명 부분 일치가 있으면 임베딩을 부르지 않는다. 부르지 않았으니 연결 경고도 없다.
             result=self.client.get('/api/v1/reference/hs-codes?q=화장')
             self.assertEqual(result.json()['items'][0]['hs_code'],'3304')
             self.assertNotIn('warnings',result.json())
             search.assert_not_called()
-            # 등록명에 없는 말만 임베딩으로 찾고, 그 연결이 실패하면 경고를 붙인다(위 '스킨케어'는 캐시에 남아 다른 말을 쓴다).
-            result=self.client.get('/api/v1/reference/hs-codes?q=보습크림')
-            self.assertEqual(result.status_code,200,result.text)
-            self.assertTrue(result.json()['warnings'])
+            # 채팅 의미 검색의 DB 검증·연결 실패 안내는 그대로 유지한다.
+            with self.engine.connect() as connection:
+                result=chat_hs_search(Store(self.app.state.database,connection),'보습크림')
+            self.assertTrue(result['warnings'])
 
     def test_notification_sql_visibility_matches_article_and_array_rules(self):
         from backend.app.api import notifications

@@ -2,6 +2,8 @@
 from contextlib import contextmanager
 import logging
 import json
+import re
+import threading
 from pydantic import ValidationError
 from sqlalchemy import select, update
 from openai import OpenAIError
@@ -11,13 +13,13 @@ from backend.app.agents.progress import progress_for
 from backend.app.agents.charts import build_chart
 from backend.app.agents.bindings import resolve as resolve_bindings, source_versions
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
-from backend.app.agents.compose import COMPOSE_PROMPT, assemble, compose_input
+from backend.app.agents.compose import COMPOSE_PROMPT, COMPOSE_TEXT_PROMPT, assemble, compose_input
 from backend.app.agents.conditions import check_conditions
 from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT
-from backend.app.agents.result_store import ResultStore, fingerprint
+from backend.app.agents.result_store import ResultStore, fingerprint, shared_result
 from backend.app.agents.sql import generated_analysis
-from backend.app.agents.state import AgentState, Draft, Plan, PlannerOutput, Task, TaskConclusion, ToolResult
+from backend.app.agents.state import AgentState, Draft, Plan, PlannerOutput, Task, TaskConclusion, ToolResult, is_text_task
 from backend.app.agents.templates import api_conditions, run_template
 from backend.app.agents.verify import verify, snapshot_evidence
 from backend.app.api import trade, results
@@ -41,41 +43,94 @@ def product_names(store):
 
 
 _ML_THREAD = None
+_ML_THREAD_LOCK = threading.Lock()
+
+
+def _ml_thread():
+    """ML 전용 스레드(하나). 병렬 워커에서 두 질문이 동시에 처음 불러도 실행기가 둘 생기지 않게 잠금 안에서 만든다
+    (둘이면 모델을 메모리에 두 번 올린다). 배포 워커는 예열이 먼저 만들지만, 로컬 워커처럼 예열 없이 도는 경로도 있다."""
+    global _ML_THREAD
+    with _ML_THREAD_LOCK:
+        if _ML_THREAD is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _ML_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='agent-ml')
+        return _ML_THREAD
 _ML_RUNNING = {'since': None}   # 전용 스레드가 지금 돌리는 작업의 시작 시각(monotonic). 멈춤 판단용
 ML_STUCK_SECONDS = 300          # 한 작업이 이보다 오래 끝나지 않으면 멈춘 것으로 보고 오류 로그를 남긴다(복구는 워커 재시작)
+# TODO(C-34): ML 전용 스레드 줄에서 기다리는 상한 임시값. 병렬 워커(D-105)에서 유망시장 질문이 동시에 오면 앞 예측을 기다린다.
+# 이 시간은 예측 시간 상한(ml 30초)과 따로 센다. API_ML_QUEUE_SECONDS로 바꾼다
+ML_QUEUE_SECONDS = 60
+
+
+def ml_queue_seconds(settings):
+    return max(0.0, float(settings.get('API_ML_QUEUE_SECONDS', ML_QUEUE_SECONDS)))
+
+
+CITATION = re.compile(r'\[(\d+)\]')
+HIDDEN_ARTICLE_SENTENCE = '이 문장이 인용한 기사는 답변 뒤 공개 여부나 본문이 바뀌어 내용을 표시하지 않습니다.'
+
+
+def redact_hidden_citations(sentences, articles):
+    """숨겨진 기사(카드 unavailable)나 검색 뒤 본문이 정정된 기사(evidence_changed)를 [n]으로 인용한 문장을
+    안내 문구로 바꾼다. 번호는 카드 순서다. 문장 수는 그대로다. 정정 전 원문으로 쓴 문장을 그대로 보이지 않게 한다."""
+    hidden={str(n) for n,card in enumerate(articles,1) if card.get('unavailable') or card.get('evidence_changed')}
+    return [HIDDEN_ARTICLE_SENTENCE if hidden & set(CITATION.findall(s)) else s for s in sentences]
+
+
+def article_cards(store, state, result):
+    """D-102: 결과 저장소의 인용 근거로 기존 채팅과 같은 기사 카드(요약·근거 보기·원문 링크)를 만든다.
+    지금 DB 본문·공개 여부와 다시 대조한다. 근거가 만료됐거나 없으면 이전처럼 제목·날짜만 보인다."""
+    from backend.app.api import news
+    from backend.app.api.chat_news import verified_cards
+    payload=None
+    if result.result_id:
+        try: payload=results.read_snapshot(store,state.input.user_id,result.result_id,'ARTICLES')
+        except ApiError as exc:
+            if exc.code!='RESULT_EXPIRED': raise
+    if payload:
+        period=result.article_period
+        # 카드는 저장된 기사 ID만 다시 대조한다. 기간 전체의 공개 기사 목록(eligible_filter)은 필요 없다
+        stmt=news.article_statement(store,state.input.user_id,start=period.start,end=period.end)
+        # compose는 digest 순서로 [n]을 붙였다. 검색 뒤 숨겨지거나 바뀐 기사도 자리를 남겨 번호가 다른 기사를 가리키지 않게 한다
+        return verified_cards(store,stmt,payload['articles'],keep_missing=True)[0]
+    return [{'article_id':a['article_id'],'title':a['title'],'published_date':a['published_date'],'source_code':a['source_code']}
+            for a in result.digest.get('items',[])]
 
 
 def warm_ml(work):
     """워커 시작 때 모델 로드(work)를 ML 전용 스레드에 미리 넣는다. 기다리지 않는다. 첫 유망시장 질문이 모델 로드
     (수십 초)로 ML 시간 상한을 넘지 않게 한다. 그 사이 들어온 ML 호출은 같은 스레드에서 로드 뒤에 줄을 선다."""
-    global _ML_THREAD
-    from concurrent.futures import ThreadPoolExecutor
-    if _ML_THREAD is None:
-        _ML_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='agent-ml')
     def run():
         try: work()
         except Exception as exc:   # 모델 파일이 없거나 깨져도 워커는 돈다. 질문 때 같은 오류로 그 단계만 실패한다
             logging.getLogger(__name__).warning('agent_ml_warm_failed type=%s %s', type(exc).__name__, exc)
-    return _ML_THREAD.submit(run)
+    return _ml_thread().submit(run)
 
 
-def bounded_ml(work, seconds):
+def bounded_ml(work, seconds, queue_seconds=ML_QUEUE_SECONDS, waited=None):
     """모델 로드·예측(work)을 전용 스레드 하나에서 돌리고 seconds만 기다린다. 넘으면 TimeoutError(그 ML 단계만 FAILED).
     파이썬 스레드는 밖에서 멈출 수 없어 늦은 작업은 끝까지 돌지만, 워커는 기다리지 않고 다음 작업으로 넘어간다.
     스레드가 하나라 늦은 모델 로드가 끝나기 전 다음 호출은 그 뒤에 줄을 선다(모델을 메모리에 두 번 올리지 않는다).
     작업이 멈추면(끝나지 않음) 이후 ML 호출이 모두 시간 초과가 되므로, 시간 초과마다 경고를 남기고 ML_STUCK_SECONDS를
-    넘으면 오류 로그로 워커 재시작이 필요하다고 알린다(사용자 결정: 스레드를 교체하지 않는다)."""
-    global _ML_THREAD
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    넘으면 오류 로그로 워커 재시작이 필요하다고 알린다(사용자 결정: 스레드를 교체하지 않는다).
+    waited: 줄에서 기다린 초를 더해 둘 목록([0.0]). 호출한 쪽이 실행 예산에서 뺀다(ExecutionStore.call(waited=))."""
+    from concurrent.futures import TimeoutError as FutureTimeout
     from time import monotonic
-    if _ML_THREAD is None:
-        _ML_THREAD = ThreadPoolExecutor(max_workers=1, thread_name_prefix='agent-ml')
+    started = threading.Event()
     def tracked():
         _ML_RUNNING['since'] = monotonic()
+        started.set()
         try: return work()
         finally: _ML_RUNNING['since'] = None
-    future = _ML_THREAD.submit(tracked)
+    queued = monotonic()
+    future = _ml_thread().submit(tracked)
     try:
+        # 병렬 워커(D-105)에서는 앞 질문의 예측이 끝날 때까지 줄에서 기다린다. 기다린 시간은 seconds에 넣지 않고
+        # queue_seconds로 따로 묶는다. 넣으면 동시에 온 유망시장 질문의 뒤쪽이 예측을 시작도 못 하고 시간 초과가 된다.
+        began = started.wait(queue_seconds)
+        if waited is not None: waited[0] += monotonic() - queued   # 시작까지(또는 줄 대기 상한까지) 기다린 시간
+        if not began:
+            raise FutureTimeout()
         return future.result(timeout=seconds)
     except FutureTimeout:
         # 아직 시작하지 않고 줄에서 기다리던 작업이면 취소한다. 실패 응답을 받은 요청이 나중에 돌아 새 요청을 늦추지 않게 한다.
@@ -85,6 +140,9 @@ def bounded_ml(work, seconds):
         log = logging.getLogger(__name__)
         if running >= ML_STUCK_SECONDS:
             log.error('agent_ml_stuck running_seconds=%.0f; 유망시장 예측이 멈췄습니다. 워커를 다시 시작하세요.', running)
+        elif not started.is_set():
+            # 줄 대기 초과와 예측 시간 초과를 나눠 남긴다. C-34(줄 대기 상한)를 정할 때 이 로그로 잰다
+            log.warning('agent_ml_queue_timeout queue_seconds=%.0f front_running_seconds=%.0f', queue_seconds, running)
         else:
             log.warning('agent_ml_timeout limit_seconds=%.0f running_seconds=%.0f', seconds, running)
         raise TimeoutError('ML 작업이 제한 시간을 넘었습니다.') from None
@@ -136,7 +194,12 @@ class Services:
     def planner(self,state):
         from backend.app.agents.planner import explicit_country_ranking
         explicit=explicit_country_ranking(state.input.question)
-        planned=build_plan(explicit) if explicit else self.structured(state,'planner',PLANNER_PROMPT,planner_input(state),PlannerOutput,2000,build_plan)
+        from backend.app.agents.planner import rescue_trade_terms, TRADE_TERMS, merge_product_phrases
+        configured=self.settings.get('API_CHAT_TRADE_TERMS','')
+        terms=tuple(configured.split(',')) if configured else TRADE_TERMS
+        planned=build_plan(explicit) if explicit else self.structured(state,'planner',PLANNER_PROMPT,planner_input(state),PlannerOutput,2000,
+                                                                        lambda output:build_plan(merge_product_phrases(
+                                                                            rescue_trade_terms(output,terms,state.input.question),state.input.question)))
         if planned is None:
             reason='질문을 해석하지 못했습니다. 국가·품목·기간을 명시해 다시 입력해 주세요.'
             state.plan=Plan(tasks=[Task(task_id='t1',intent='STATISTICS',question=state.input.question,
@@ -222,22 +285,38 @@ class Services:
                 self.execution.transaction(lambda store,job:submit(store,state,task,step),lock_user=True))
         if step.tool=='search_articles':
             from backend.app.agents.tools import article_result
-            return self.execution.call('news',budget.seconds(self.settings,'news'),lambda _:article_result(state,task,step))
+            from backend.app.api.chat_news import eligible_filter
+            period=task.conditions.article_period
+            def keep(items):   # 인용 근거는 state·LLM 입력 밖 결과 저장소에 둔다(D-102)
+                return self.execution.transaction(lambda store,job:results.save_snapshot(
+                    store,state.input.user_id,'ARTICLES',{'articles':items}))
+            def search(_):
+                # 공개·차단 필터 조회도 기사 예산 안에서 한다. 검색 마감은 필터 조회 시작부터 센다(넓은 기간이면 이 조회도 오래 걸린다)
+                from time import monotonic
+                started=monotonic()
+                with self.read_store() as store: _,allowed=eligible_filter(store,state.input.user_id,period.start,period.end)
+                return article_result(state,task,step,article_allowed=allowed,keep_evidence=keep,started=started)
+            return self.execution.call('news',budget.seconds(self.settings,'news'),search)
         if step.tool=='query_market_model':
             from backend.app.agents.market import DEFAULT_MARKET_TOP, growth, loaded, model_codes, predict
             def model(timeout):
                 from time import monotonic
-                deadline=monotonic()+timeout
+                spent=[0.0]   # ML 스레드에서 실제로 돈 시간. 줄에서 기다린 시간은 빼고 예측 몫을 계산한다
                 def load():
-                    bundle,provider,versions=loaded(self.settings)
-                    anchor=str(bundle.get('anchor') or '')[:7]
-                    return bundle,provider,versions,anchor,growth(self.settings,anchor)
+                    began=monotonic()
+                    try:
+                        bundle,provider,versions=loaded(self.settings)
+                        anchor=str(bundle.get('anchor') or '')[:7]
+                        return bundle,provider,versions,anchor,growth(self.settings,anchor)
+                    finally: spent[0]=monotonic()-began
                 # 모델 로드·예측만 제한 시간 안에 기다린다(DB 조회·저장은 이 스레드에서). bounded_ml 참고.
-                bundle,provider,versions,anchor,(outlook,outlook_version,outlook_note)=bounded_ml(load,timeout)
+                bundle,provider,versions,anchor,(outlook,outlook_version,outlook_note)=bounded_ml(load,timeout,ml_queue_seconds(self.settings),waited=queue_wait)
                 # 증감 예상(모델 B)은 모델 A와 기준월이 같을 때만 쓴다. 다른 달의 방향을 이 순위에 붙이지 않는다.
                 if outlook and outlook['anchor']!=anchor:
                     outlook,outlook_note=None,(f"증감 예상 모델의 기준월({outlook['anchor']})이 유망시장 모델({anchor})과 달라 "
                                                '증가·감소 예상은 표시하지 않았습니다.')
+                if task.intent=='MARKET_TYPE' and not outlook:   # D-103: 유형은 모델 B 방향으로만 분류한다
+                    return ToolResult(status='NO_DATA',error=outlook_note or '시장 유형을 분류할 증감 예상 모델이 없습니다.')
                 versions={**versions,'growth':outlook_version if outlook else 'none'}
                 key=fingerprint(state,step,tool_version='2',versions=versions,source_results=parents)
                 if outlook_note and outlook_note not in task.applied_defaults: task.applied_defaults.append(outlook_note)
@@ -252,7 +331,7 @@ class Services:
                 if previous: return previous
                 analysis=bounded_ml(lambda:predict(task,bundle,provider,versions,step.args.get('top',DEFAULT_MARKET_TOP),
                                                    codes,outlook['directions'] if outlook else None),
-                                    max(0.1,deadline-monotonic()))
+                                    max(0.1,timeout-spent[0]),ml_queue_seconds(self.settings),waited=queue_wait)
                 if analysis.result.status!='OK': return analysis.result
                 analysis.meta['growth_model_version']=versions['growth']
                 from backend.app.agents.templates import _names
@@ -268,20 +347,31 @@ class Services:
                 analysis.result.digest=bounded(analysis.result.digest)
                 return self.results.save(state,step,analysis.result,rows=analysis.rows,meta=analysis.meta,
                     conditions=analysis.conditions,input_fingerprint=key,source_results=parents,versions=versions)
+            queue_wait=[0.0]   # ML 줄 대기는 실행 예산에 넣지 않는다(다른 질문을 기다린 시간이다)
             try: return self.execution.call('ml',budget.seconds(self.settings,'ml'),model,
-                        finish_reserve=budget.finishing_seconds(state,self.settings))
+                        finish_reserve=budget.finishing_seconds(state,self.settings),waited=lambda:queue_wait[0])
             except TimeoutError:
                 return ToolResult(status='FAILED',error='예측이 제한 시간 안에 끝나지 않았습니다. 잠시 후 다시 질문해 주세요.')
             except (ImportError,OSError,MemoryError,ValueError):
                 return ToolResult(status='FAILED',error='예측 모델 또는 기준월 스냅샷을 사용할 수 없습니다.')
+        if step.tool=='lookup_hs':
+            from backend.app.agents.tools import hs_lookup_result
+            def lookup(_):
+                with self.read_store() as store: return hs_lookup_result(store,task)
+            return self.execution.call('check',budget.seconds(self.settings,'check'),lookup,
+                                       finish_reserve=budget.finishing_seconds(state,self.settings))
         if step.tool=='build_chart':
             result_id=state.results[step.depends_on[0]].result_id
+            # 공유한 조회(D-100)의 차트는 앞 하위 질문이 이미 그렸다. 같은 차트를 두 번 내지 않는다
+            if any(r.chart and r.chart.result_id==result_id for r in state.results.values()):
+                return ToolResult(status='OK')
             def chart(_):
                 with self.read_store() as store: return build_chart(store,state.input.user_id,task,result_id)
             result,_,warnings=self.execution.call('chart',budget.seconds(self.settings,'chart'),chart)
             state.warnings.extend(warnings)
             return result
         if step.tool!='query_trade_data': return ToolResult(status='NO_DATA',error='요청한 분석 도구가 준비되지 않았습니다.')
+        if shared:=shared_result(state,task,step): return shared   # 같은 조회는 한 번만 실행한다(D-100)
         def template(timeout):
             with self.read_store() as store:
                 mysql=store.c.dialect.name=='mysql'
@@ -318,7 +408,11 @@ class Services:
         for table in ('export_summary','import_summary'): trade.verified_months(store,table)
         return {t:store.cache['trade_revision',t] for t in ('export_summary','import_summary')}
 
-    def compose(self,state):
+    def compose_text(self,state):
+        """문장형 답변 노드(D-98). 같은 compose 예산·검증을 쓰고 프롬프트와 문장 상한만 다르다."""
+        self.compose(state,prompt=COMPOSE_TEXT_PROMPT)
+
+    def compose(self,state,prompt=COMPOSE_PROMPT):
         with self.read_store() as store:
             from backend.app.agents.templates import _names
             countries,products=_names(store)
@@ -337,7 +431,7 @@ class Services:
             state.draft=assemble(state,None,fixed,describe)
             return
         correcting=state.draft is not None and state.verification.regeneration_count==1
-        revised=self.structured(state,'compose',COMPOSE_PROMPT,payload,Draft,1500,
+        revised=self.structured(state,'compose',prompt,payload,Draft,3000 if prompt is COMPOSE_TEXT_PROMPT else 1500,
                                 lambda value:assemble(state,value,fixed,describe),
                                 max_attempts=1 if correcting else 2)
         if revised is None and state.draft is not None and state.verification.regeneration_count:
@@ -416,14 +510,15 @@ class Services:
             for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
                 tasks.append({'task_id':task.task_id,'intent':task.intent,'question':task.question,
                     'conditions':api_conditions(task.conditions) if task.conditions else None,
-                    'conclusion':conclusion.sentences,'answer_status':task.answer_status})
+                    'conclusion':conclusion.sentences,'answer_status':task.answer_status,
+                    'answer_format':'TEXT' if is_text_task(task) else None})
                 for step in task.steps:
                     result=state.results.get(step.step_id)
                     if result and result.article_ids and result.digest:
-                        articles.extend({'article_id':a['article_id'],'title':a['title'],'published_date':a['published_date'],
-                            'source_code':a['source_code'],'task_id':task.task_id} for a in result.digest.get('items',[]))
+                        articles.extend({**card,'task_id':task.task_id} for card in article_cards(store,state,result))
                     if not result or not result.result_id: continue
                     if step.tool in ('query_trade_data','query_market_model'):
+                        if any(t['result_id']==result.result_id for t in tables): continue   # 공유한 조회(D-100)는 표 하나
                         try: table=results.get_table(store,state.input.user_id,result.result_id)
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
@@ -435,7 +530,18 @@ class Services:
                             if exc.code=='RESULT_EXPIRED': continue
                             raise
                         charts.append({**result.chart.model_dump(mode='json'),'full_labels':full})
-            checks=[{**c.model_dump(),'sentence':sentences[c.index]} for c in state.verification.checks]
+            # 검색 뒤 숨겨진 기사(카드 unavailable)를 [n]으로 인용한 문장은 그 기사 내용을 옮긴 것이므로 보이지 않는다.
+            # 문장 수·번호는 verify 대조(sentence_checks.index)와 맞춰야 해서 빼지 않고 안내 문구로 바꾼다
+            sentences=redact_hidden_citations(sentences,articles)
+            for item in tasks: item['conclusion']=redact_hidden_citations(item['conclusion'],articles)
+            if HIDDEN_ARTICLE_SENTENCE in sentences:
+                # 대화 요약·제목도 숨긴 기사 내용을 옮겼을 수 있다. 요약은 최근 대화(recent)로 다음 질문의 플래너와
+                # "아까 뭐라고 했지?" 답변(CONVERSATION)에 다시 쓰이므로 비운다. 최근 대화에는 질문과 조건만 남는다
+                state.draft=state.draft.model_copy(update={'turn_summary':'','title':None})
+            # 안내 문구로 바꾼 문장의 대조 결과에도 숨긴 기사에서 옮긴 숫자가 남지 않게 한다
+            checks=[{**c.model_dump(),'sentence':sentences[c.index],
+                     **({'numbers':[]} if sentences[c.index]==HIDDEN_ARTICLE_SENTENCE else {})}
+                    for c in state.verification.checks]
             answer={'intent':primary.intent,'answer_status':overall,'text':'\n'.join(sentences),'tasks':tasks,
                 'conditions':tasks[0]['conditions'],'tables':tables,'charts':charts,'articles':articles, 'actions':[],
                 'chart_selectors':[],'report_id':None,'verification':{'status':state.verification.status,

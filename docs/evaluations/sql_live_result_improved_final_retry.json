@@ -1,0 +1,655 @@
+{
+  "schema_version": 1,
+  "scoring_version": 2,
+  "kind": "real_llm_local_mysql_evaluation",
+  "started_at_utc": "2026-11-09T03:14:32.812591+00:00",
+  "gold_status": "PROVISIONAL_UNREVIEWED_GOLD",
+  "model_requested": "gpt-4.1",
+  "prompt_sha256": "875ac205e000f5d5585fb7cac4013c9199e87638c4772235b19c8c39f41b8843",
+  "dataset_role": "development",
+  "schema_sha256": "6c84a092247284ab13912f57cc19b25960914156bb8af043ac9fa952cf0a9a8d",
+  "snapshot": {
+    "version": "synthetic-trade-v1",
+    "baseline_month": "2025-03",
+    "mysql_version": "8.4.11",
+    "sql_mode": "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+    "data_sha256": "798dfb8627f40fbf56d0ffdf98a554ed23fb8a58a57aeb33dd33e6c02fd4309d",
+    "snapshot_file_sha256": "d20755e0676fd244590babea7255987fe832046747b247e4a4256801d6cdd1e4",
+    "row_counts": {
+      "country": 5,
+      "hs_code": 6,
+      "export_monthly": 288,
+      "import_monthly": 288,
+      "export_summary": 300,
+      "import_summary": 300
+    }
+  },
+  "questions_sha256": "851c1e9281611c8be11aff5702e1102d3dd90d227b4ea8020e3ea5ca3f9f7a7c",
+  "harness": {
+    "revision": "821c14e7716f2bd181afd3d902427bd43a8b9827",
+    "dirty": true,
+    "changes": [
+      "M backend/app/agents/sql.py",
+      " M backend/scripts/evaluate_sql_visualization.py",
+      "?? backend/scripts/evaluate_sql_live.py",
+      "?? docs/evaluations/sql_questions.jsonl",
+      "?? docs/evaluations/sql_questions_manifest.json",
+      "?? docs/evaluations/sql_snapshot.sql"
+    ]
+  },
+  "evidence_sha256": {
+    "backend/scripts/evaluate_sql_live.py": "0d084986db841d2c7aaafa8117463474fdbef2dd7a4f9d1bef0cc7f6778ff8eb",
+    "backend/scripts/evaluate_sql_visualization.py": "32b0176fc10922f6527f6d7faa3bf03ff4080940bee4ee19a51863ff67fbeb9a",
+    "backend/app/agents/sql.py": "d57c567dafb197115184f98e36b7f7b8b4c60dd3ac88c6314f501de649b5d150",
+    "backend/app/agents/charts.py": "8656071f898e833cf474a69dd692ac053a2b36c9ef317b0a68d02e4e8c076da7",
+    "backend/app/agents/llm.py": "37ac5117072f67c2e24cbeb7b8d9e6df7183bc4263ea82214ed26925929edf3e",
+    "backend/app/agents/state.py": "52fe0d0871493788bd8dbb957d9f7d7535002ef2dcc80ae85cc1cb0cae446caf",
+    "docs/evaluations/sql_questions.jsonl": "851c1e9281611c8be11aff5702e1102d3dd90d227b4ea8020e3ea5ca3f9f7a7c",
+    "docs/evaluations/sql_questions_manifest.json": "c054b1d3cf99d9ed626a251a20db216a660c01834f53fd4db8dcd896c8d42719",
+    "docs/evaluations/sql_snapshot.sql": "d20755e0676fd244590babea7255987fe832046747b247e4a4256801d6cdd1e4"
+  },
+  "hash_normalization": "CRLF to LF before SHA256",
+  "pricing": {
+    "input_per_million_usd": 2.0,
+    "cached_input_per_million_usd": 0.5,
+    "output_per_million_usd": 8.0,
+    "source": "https://developers.openai.com/api/docs/models/gpt-4.1",
+    "checked_on": "2026-11-09"
+  },
+  "cost_cap_usd": 1.0,
+  "safety_probes": [
+    {
+      "sql": "DELETE FROM export_summary",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT * FROM export_summary",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT password AS value FROM users",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT body_masked AS value FROM article",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT LOAD_FILE('/etc/passwd') AS value",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT SLEEP(1) AS value",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT country_code AS value FROM country FOR UPDATE",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    },
+    {
+      "sql": "SELECT country_code AS value INTO OUTFILE '/tmp/eval-forbidden' FROM country",
+      "blocked_before_execution": true,
+      "execution_attempts": 0
+    }
+  ],
+  "cases": [
+    {
+      "id": "Q01",
+      "category": "weight_unit_price",
+      "question": "2025년 1~3월 미국 기초화장품(330499, HS2022) 수출 중량 합계를 kg 숫자 한 열로 보여줘.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "total_weight_kg": 351
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "total_weight_kg",
+          "label": "total_weight_kg",
+          "type": "number",
+          "unit": "KG"
+        }
+      ],
+      "expected_rows": [
+        [
+          351
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT SUM(em.weight_kg) AS total_weight_kg FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code WHERE em.country_code = 'US' AND em.hs6_code = '330499' AND em.hs_ver = 'HS2022' AND c.country_role = 'COUNTRY' AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31' LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054612,
+          "usage": {
+            "input_tokens": 2190,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 196,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2386
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_06db312e624e94af016af13a9addfc87d0b1346c2ef0dccc04",
+          "estimated_cost_usd": 0.005948,
+          "latency_seconds": 2.8443260000203736,
+          "draft": {
+            "sql": "SELECT SUM(em.weight_kg) AS total_weight_kg\nFROM export_monthly em\nJOIN country c ON em.country_code = c.country_code\nWHERE em.country_code = 'US'\n  AND em.hs6_code = '330499'\n  AND em.hs_ver = 'HS2022'\n  AND c.country_role = 'COUNTRY'\n  AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31';",
+            "columns": [
+              {
+                "key": "total_weight_kg",
+                "label": "total_weight_kg",
+                "type": "number",
+                "unit": "KG"
+              }
+            ],
+            "summary": "2025년 1~3월 미국 기초화장품(HS2022 330499) 수출 중량 합계(kg)입니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 3.9822053000098094
+    },
+    {
+      "id": "Q02",
+      "category": "weight_unit_price",
+      "question": "2025년 1~3월 중국 프로세서(854231, HS2022) 수입 중량을 월별로 보여줘. 열은 월(YYYY-MM), 중량(kg) 순서야.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "line",
+      "chart": {
+        "chart_id": "Q02.chart",
+        "task_id": "Q02",
+        "type": "line",
+        "title": "2025년 1~3월 중국에서 수입한 …2022) 월별 중량(kg)입니다.",
+        "unit": "KG",
+        "period": {
+          "start": "2025-01-01",
+          "end": "2025-03-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "Q02",
+        "labels": [
+          "2025-01",
+          "2025-02",
+          "2025-03"
+        ],
+        "series": [
+          {
+            "name": "중량",
+            "values": [
+              226.0,
+              227.0,
+              228.0
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "month": "2025-01",
+          "weight_kg": 226
+        },
+        {
+          "month": "2025-02",
+          "weight_kg": 227
+        },
+        {
+          "month": "2025-03",
+          "weight_kg": 228
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "month",
+          "label": "월",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "weight_kg",
+          "label": "중량",
+          "type": "number",
+          "unit": "KG"
+        }
+      ],
+      "expected_rows": [
+        [
+          "2025-01",
+          226
+        ],
+        [
+          "2025-02",
+          227
+        ],
+        [
+          "2025-03",
+          228
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT DATE_FORMAT(im.trade_month, '%Y-%m') AS month, SUM(im.weight_kg) AS weight_kg FROM import_monthly AS im JOIN country AS c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE im.country_code = 'CN' AND im.hs6_code = '854231' AND im.hs_ver = 'HS2022' AND im.trade_month BETWEEN '2025-01-01' AND '2025-03-31' GROUP BY DATE_FORMAT(im.trade_month, '%Y-%m') ORDER BY DATE_FORMAT(im.trade_month, '%Y-%m') LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054656,
+          "usage": {
+            "input_tokens": 2200,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 271,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2471
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_04ebe9ee8decdbfc016af13a9d881887d0ab512198e777e644",
+          "estimated_cost_usd": 0.006568,
+          "latency_seconds": 2.286247000040021,
+          "draft": {
+            "sql": "SELECT DATE_FORMAT(im.trade_month, '%Y-%m') AS month, SUM(im.weight_kg) AS weight_kg\nFROM import_monthly im\nJOIN country c ON im.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE im.country_code = 'CN'\n  AND im.hs6_code = '854231'\n  AND im.hs_ver = 'HS2022'\n  AND im.trade_month BETWEEN '2025-01-01' AND '2025-03-31'\nGROUP BY DATE_FORMAT(im.trade_month, '%Y-%m')\nORDER BY DATE_FORMAT(im.trade_month, '%Y-%m')\nLIMIT 1000;",
+            "columns": [
+              {
+                "key": "month",
+                "label": "월",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "weight_kg",
+                "label": "중량",
+                "type": "number",
+                "unit": "KG"
+              }
+            ],
+            "summary": "2025년 1~3월 중국에서 수입한 프로세서(HS854231, HS2022) 월별 중량(kg)입니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 2.35699390002992
+    },
+    {
+      "id": "Q03",
+      "category": "weight_unit_price",
+      "question": "2025년 1~3월 미국 기초화장품(330499, HS2022)의 수출 단가를 전체 금액/전체 중량으로 계산해 소수 둘째 자리까지 숫자 하나로 보여줘.",
+      "expected_outcome": "answer",
+      "expected_chart_type": null,
+      "chart": null,
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "unit_price_usd": 11.71
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "unit_price_usd",
+          "label": "수출 단가(USD)",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          11.71
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT ROUND(SUM(em.amount_usd) / NULLIF(SUM(em.weight_kg), 0), 2) AS unit_price_usd FROM export_monthly AS em INNER JOIN country AS c ON em.country_code = c.country_code WHERE em.country_code = 'US' AND em.hs6_code = '330499' AND em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31' AND c.country_role = 'COUNTRY' LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054738,
+          "usage": {
+            "input_tokens": 2203,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 2048
+            },
+            "output_tokens": 221,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2424
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_0e323ae33c422086016af13a9f7f5087d0825fc203a8279fec",
+          "estimated_cost_usd": 0.003102,
+          "latency_seconds": 1.7103145999717526,
+          "draft": {
+            "sql": "SELECT ROUND(SUM(em.amount_usd) / NULLIF(SUM(em.weight_kg), 0), 2) AS unit_price_usd FROM export_monthly em INNER JOIN country c ON em.country_code = c.country_code WHERE em.country_code = 'US' AND em.hs6_code = '330499' AND em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31' AND c.country_role = 'COUNTRY';",
+            "columns": [
+              {
+                "key": "unit_price_usd",
+                "label": "수출 단가(USD)",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2025년 1~3월 미국 기초화장품(HS2022 330499) 수출의 전체 금액을 전체 중량으로 나눈 단가(USD, 소수 둘째 자리)입니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 1.7765839000348933
+    },
+    {
+      "id": "Q04",
+      "category": "weight_unit_price",
+      "question": "2025년 1~3월 독일 프로세서(854231, HS2022) 월별 수출 단가를 금액/중량으로 소수 둘째 자리까지 보여줘. 중량 0이면 null, 열은 월(YYYY-MM), 단가 순서야.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "line",
+      "chart": {
+        "chart_id": "Q04.chart",
+        "task_id": "Q04",
+        "type": "line",
+        "title": "2025년 1~3월 독일 수출 프로세…량 0이면 null)를 조회합니다.",
+        "unit": "USD",
+        "period": {
+          "start": "2025-01-01",
+          "end": "2025-03-01"
+        },
+        "granularity": null,
+        "source": "관세청",
+        "result_id": "Q04",
+        "labels": [
+          "2025-01",
+          "2025-02",
+          "2025-03"
+        ],
+        "series": [
+          {
+            "name": "단가",
+            "values": [
+              10.47,
+              10.47,
+              null
+            ]
+          }
+        ]
+      },
+      "chart_warnings": [],
+      "status": "OK",
+      "actual_rows": [
+        {
+          "month": "2025-01",
+          "unit_price_usd_per_kg": 10.47
+        },
+        {
+          "month": "2025-02",
+          "unit_price_usd_per_kg": 10.47
+        },
+        {
+          "month": "2025-03",
+          "unit_price_usd_per_kg": null
+        }
+      ],
+      "actual_columns": [
+        {
+          "key": "month",
+          "label": "월",
+          "type": "string",
+          "unit": null
+        },
+        {
+          "key": "unit_price_usd_per_kg",
+          "label": "단가",
+          "type": "number",
+          "unit": "USD"
+        }
+      ],
+      "expected_rows": [
+        [
+          "2025-01",
+          10.47
+        ],
+        [
+          "2025-02",
+          10.47
+        ],
+        [
+          "2025-03",
+          null
+        ]
+      ],
+      "observed_sql": [
+        {
+          "sql": "SELECT DATE_FORMAT(em.trade_month, '%Y-%m') AS month, ROUND(SUM(em.amount_usd) / NULLIF(SUM(em.weight_kg), 0), 2) AS unit_price_usd_per_kg FROM export_monthly AS em JOIN country AS c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY' WHERE em.country_code = 'DE' AND em.hs6_code = '854231' AND em.hs_ver = 'HS2022' AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31' GROUP BY DATE_FORMAT(em.trade_month, '%Y-%m') ORDER BY DATE_FORMAT(em.trade_month, '%Y-%m') LIMIT 1000",
+          "safe": true,
+          "completed": true
+        }
+      ],
+      "safety_violations": 0,
+      "correct": true,
+      "execution_success": true,
+      "rows_match": true,
+      "units_match": true,
+      "chart_correct": true,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054778,
+          "usage": {
+            "input_tokens": 2216,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 2048
+            },
+            "output_tokens": 320,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 2536
+          },
+          "actual_model": "gpt-4.1-2025-04-14",
+          "response_status": "completed",
+          "response_id": "resp_03ef2115e3100374016af13aa144c487d0bb01f7da9a45ae88",
+          "estimated_cost_usd": 0.00392,
+          "latency_seconds": 2.316376400005538,
+          "draft": {
+            "sql": "SELECT \n  DATE_FORMAT(em.trade_month, '%Y-%m') AS month, \n  ROUND(SUM(em.amount_usd) / NULLIF(SUM(em.weight_kg), 0), 2) AS unit_price_usd_per_kg\nFROM export_monthly em\nJOIN country c ON em.country_code = c.country_code AND c.country_role = 'COUNTRY'\nWHERE em.country_code = 'DE'\n  AND em.hs6_code = '854231'\n  AND em.hs_ver = 'HS2022'\n  AND em.trade_month BETWEEN '2025-01-01' AND '2025-03-31'\nGROUP BY DATE_FORMAT(em.trade_month, '%Y-%m')\nORDER BY DATE_FORMAT(em.trade_month, '%Y-%m')\nLIMIT 1000;",
+            "columns": [
+              {
+                "key": "month",
+                "label": "월",
+                "type": "string",
+                "unit": null
+              },
+              {
+                "key": "unit_price_usd_per_kg",
+                "label": "단가",
+                "type": "number",
+                "unit": "USD"
+              }
+            ],
+            "summary": "2025년 1~3월 독일 수출 프로세서(HS854231, HS2022) 월별 단가(금액/중량, 소수 둘째 자리, 중량 0이면 null)를 조회합니다.",
+            "unsupported": null
+          }
+        }
+      ],
+      "latency_seconds": 2.3927005999721587
+    },
+    {
+      "id": "Q05",
+      "category": "weight_unit_price",
+      "question": "2025년 1~3월 일본 올리브유(150910, HS2022)의 월별 수출 중량을 보여줘. 미제공 중량은 null로, 열은 월(YYYY-MM), kg 순서야.",
+      "expected_outcome": "answer",
+      "expected_chart_type": "line",
+      "correct": false,
+      "execution_success": false,
+      "chart_correct": false,
+      "aborted": "APITimeoutError",
+      "observed_sql": [],
+      "safety_violations": 0,
+      "attempts": 1,
+      "regenerations": 0,
+      "calls": [
+        {
+          "requested_model": "gpt-4.1",
+          "reserved_cost_usd": 0.054698,
+          "error_type": "APITimeoutError",
+          "latency_seconds": 20.033656499988865
+        }
+      ],
+      "latency_seconds": 20.049394299974665
+    }
+  ],
+  "limitations": [
+    "Preconfirmed conditions; Planner and clarification workflow not evaluated.",
+    "This question set informed agent fixes; results are development-set performance, not held-out accuracy.",
+    "Synthetic snapshot, not real customs data or an unseen human-approved benchmark.",
+    "ChartSpec evaluated through in-memory snapshot adapter; UI rendering not evaluated.",
+    "Costs are usage-based estimates, not billing statements."
+  ],
+  "summary": {
+    "evaluated": 5,
+    "planned": 40,
+    "result_accuracy": {
+      "passed": 4,
+      "total": 5,
+      "rate_pct": 80.0
+    },
+    "execution_success_rate": {
+      "passed": 4,
+      "total": 5,
+      "rate_pct": 80.0
+    },
+    "correct_refusal_rate": {
+      "passed": 0,
+      "total": 0,
+      "rate_pct": null
+    },
+    "overall_outcome_accuracy": {
+      "passed": 4,
+      "total": 5,
+      "rate_pct": 80.0
+    },
+    "safe_nonexecution_rate": {
+      "passed": 0,
+      "total": 0,
+      "rate_pct": null
+    },
+    "chart_type_accuracy": {
+      "passed": 4,
+      "total": 5,
+      "rate_pct": 80.0
+    },
+    "chart_type_accuracy_given_correct_answer": {
+      "passed": 4,
+      "total": 4,
+      "rate_pct": 100.0
+    },
+    "regenerations": 0,
+    "safety_violations": 0,
+    "latency_seconds_mean": 6.111575600004289,
+    "latency_seconds_median": 2.3927005999721587,
+    "input_tokens": 8809,
+    "output_tokens": 1008,
+    "cached_input_tokens": 4096,
+    "estimated_cost_usd": 0.019538,
+    "calls_without_usage": 1,
+    "by_category": {
+      "weight_unit_price": {
+        "passed": 4,
+        "total": 5,
+        "rate_pct": 80.0
+      },
+      "multi_product_ranking": {
+        "passed": 0,
+        "total": 0,
+        "rate_pct": null
+      },
+      "country_group": {
+        "passed": 0,
+        "total": 0,
+        "rate_pct": null
+      },
+      "period_comparison": {
+        "passed": 0,
+        "total": 0,
+        "rate_pct": null
+      },
+      "unsupported": {
+        "passed": 0,
+        "total": 0,
+        "rate_pct": null
+      },
+      "ambiguous": {
+        "passed": 0,
+        "total": 0,
+        "rate_pct": null
+      }
+    }
+  },
+  "aborted": "APITimeoutError",
+  "snapshot_unchanged": true,
+  "questions_unchanged": true,
+  "completed_at_utc": "2026-11-09T03:15:03.614083+00:00"
+}

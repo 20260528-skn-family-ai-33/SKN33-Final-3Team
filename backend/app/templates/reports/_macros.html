@@ -65,7 +65,7 @@
 <div class="kpis c{{ cols }}">
   {% for c in cards %}
   <div class="kpi"><div class="l">{{ c.label }}</div>
-    <div class="v">{{ c.value }}{% if c.get("unit") %}<span class="u">{{ c.unit }}</span>{% endif %}</div>
+    <div class="v">{{ c.value }}{% if c.get("unit") and c.value != '—' %}<span class="u">{{ c.unit }}</span>{% endif %}</div>
     {% if c.get("sub") %}<div class="s">{{ c.sub }}</div>{% endif %}</div>
   {% endfor %}
 </div>

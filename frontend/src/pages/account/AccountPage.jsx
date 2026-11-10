@@ -31,8 +31,8 @@ const PAGES = {
 
 export default function AccountPage({ route }) {
   const { unread } = useNotifications()
-  const section = route.path.split('/')[2] || 'reports'
-  const [Page, menu, lead] = PAGES[section] || PAGES.reports
+  const section = route.path.split('/')[2] || 'profile'
+  const [Page, menu, lead] = PAGES[section] || PAGES.profile
   const leadText = section === 'reports' && (route.query.get('tab') || 'chat') === 'chat' ? '리포트 종류별로 목록을 확인하고 저장된 PDF를 다시 다운로드합니다.' : lead
   return (
     <>

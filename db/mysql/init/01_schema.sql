@@ -6,7 +6,7 @@ SET NAMES utf8mb4;
 
 CREATE TABLE users (
   user_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '회원 한 명을 구분하는 내부 번호다. 자동으로 부여한다.',
-  email VARCHAR(254) NOT NULL COMMENT '로그인에 사용하는 이메일 주소다. 같은 주소를 중복 등록하지 않는다.',
+  email VARCHAR(254) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '로그인에 사용하는 이메일 주소다. 대소문자를 구분하며 같은 주소를 중복 등록하지 않는다.',
   password_hash VARCHAR(255) NOT NULL COMMENT 'bcrypt로 계산한 비밀번호 해시 문자열이다. 평문 비밀번호는 저장하지 않는다.',
   landing_page ENUM('GLOBAL','INTERESTED') NOT NULL DEFAULT 'INTERESTED' COMMENT '로그인 후 첫 화면을 GLOBAL 전체 시장 또는 INTERESTED 관심 시장으로 선택한다.',
   PRIMARY KEY (user_id),
@@ -15,7 +15,7 @@ CREATE TABLE users (
 
 CREATE TABLE service_option (
   option_code VARCHAR(40) NOT NULL COMMENT '설정 하나의 고유 코드다. 예를 들어 MONTHLY이며, 이 표의 PK다.',
-  option_type ENUM('SOURCE','REPORT_PERIOD','REPORT_TYPE','RULE','NOTIFICATION_TERMS') NOT NULL COMMENT '출처·구독 주기·리포트 종류·판정 규칙·약관 중 어떤 선택지 그룹인지 구분한다.',
+  option_type ENUM('SOURCE','REPORT_PERIOD','REPORT_TYPE','RULE','NOTIFICATION_TERMS','SERVICE_TERMS','PRIVACY_TERMS','PRIVACY_POLICY') NOT NULL COMMENT '출처·구독 주기·리포트 종류·판정 규칙·약관 중 어떤 선택지 그룹인지 구분한다.',
   label_ko VARCHAR(120) NOT NULL COMMENT '사람이 읽는 한글 이름이다. 예를 들어 월간 리포트다.',
   value_json JSON NOT NULL COMMENT '설정의 구체 내용을 묶은 객체다. 주기는 발행 조건, 출처는 URL·한도, 규칙은 임계값을 담는다.',
   sort_order SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '같은 그룹 안에서 화면에 표시할 순서다. 작은 수를 먼저 표시한다.',

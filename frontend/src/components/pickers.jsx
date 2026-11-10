@@ -35,8 +35,8 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const searchQuery=confirmed ? '' : q
   const settled = useDebouncedValue(searchQuery)
   const exactProduct = !!onSelectProduct && !hs4Only && /^\d{6}$/.test(settled)
-  const search = useQuery('/reference/hs-codes', { q: settled, depth: exactProduct ? 6 : 4, limit: 5 }, settled.length >= 2 && !confirmed)
-  const tryProducts = !!onSelectProduct && !hs4Only && settled.length>=2 && !confirmed && !/^\d+$/.test(settled)
+  const search = useQuery('/reference/hs-codes', { q: settled, depth: exactProduct ? 6 : 4, limit: 5 }, settled.length >= 1 && !confirmed)
+  const tryProducts = !!onSelectProduct && !hs4Only && settled.length>=1 && !confirmed && !/^\d+$/.test(settled)
   const fallback = useQuery('/reference/hs-codes', { q: settled, depth: 6, limit: 5 }, tryProducts)
   const preferProducts = tryProducts && search.data?.match_type!=='EXACT' && !!fallback.data && (!search.data?.items.length || fallback.data.match_type === 'EXACT')
   const active = preferProducts ? fallback : search
@@ -105,7 +105,7 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
           <ErrorNotice error={active.error} retry={retry(active.reload)} />
           {/* HS4 아래 하위 품목 목록을 못 불러오면 그 사실과 다시 시도를 보여 준다(HS4 전체만 남아 하위 품목이 없는 것처럼 보이지 않게). */}
           {exactGroup && <ErrorNotice error={children.error} retry={retry(children.reload)} />}
-          {!results.length && !active.error && <p className="muted" style={{ padding: '10px 12px' }}>{q.length < 2 ? '품목명 또는 HS 코드를 두 글자 이상 입력하세요.' : settled !== q || active.loading ? '검색 중…' : '검색 결과가 없습니다.'}</p>}
+          {!results.length && !active.error && <p className="muted" style={{ padding: '10px 12px' }}>{q.length < 1 ? '품목명 또는 HS 코드를 한 글자 이상 입력하세요.' : settled !== q || active.loading ? '검색 중…' : '검색 결과가 없습니다.'}</p>}
         </div>
       )}
     </div>

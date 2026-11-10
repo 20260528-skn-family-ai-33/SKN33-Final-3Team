@@ -12,6 +12,7 @@
     "test:integration": "node tests/integration-browser.cjs",
     "test:review": "node tests/review-browser.cjs",
     "test:store": "node tests/store-browser.cjs",
+    "test:decisions": "node tests/functional-decisions-browser.cjs",
     "test:e2e": "node tests/integration-browser.cjs"
   },
   "dependencies": {

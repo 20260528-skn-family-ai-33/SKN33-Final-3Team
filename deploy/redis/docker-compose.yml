@@ -18,7 +18,7 @@ services:
     secrets:
       - redis_auth
     # maxmemory 512MB의 2.5배. AOF 재작성·RDB 저장 때 fork한 프로세스가 copy-on-write로 데이터의 최대 약 2배를 쓴다.
-    # TODO(C-23): 같은 EC2의 API·워커(ML 모델·스냅샷)와 합친 메모리가 인스턴스에 맞는지 확인한다(설계 §9).
+    # TODO(C-23): 같은 EC2의 API·워커(ML 모델·기사 색인)와 합친 메모리가 인스턴스에 맞는지 확인한다(설계 §9). 월별 학습은 별도 서버(2026-11-06).
     mem_limit: 1280m
     restart: unless-stopped
 

@@ -50,7 +50,7 @@ class ConversionTest(unittest.TestCase):
         r = sn.article_row(raw(day="20261001", regn="북미"))
         self.assertEqual(r["external_id"], "001")
         self.assertEqual(r["published_date"], date(2026, 10, 1))
-        self.assertEqual(r["body_masked"], "문의 [이메일] [전화번호]")
+        self.assertEqual(r["body_masked"], "문의 a@example.com 02-123-4567")
         self.assertIsNone(r["category"])
         with self.assertRaisesRegex(ValueError, "본문"):
             sn.article_row(raw(nttCn="<p></p>", nttSj="문의 a@example.com"))
@@ -93,7 +93,7 @@ class ConversionTest(unittest.TestCase):
                 with self.subTest(format=name):
                     articles = [sn.article_row(r) for r in sn.read_records(root / name)]
                     self.assertEqual([a["body_masked"] for a in articles],
-                                     ["<수출전망> 문의 [이메일]", "첫 문단\n문의 [전화번호]"])
+                                     ["<수출전망> 문의 a@example.com", "첫 문단\n문의 02-123-4567"])
                     self.assertTrue(all(a["source_code"] == "KOTRA_SHORT_NEWS" for a in articles))
 
 

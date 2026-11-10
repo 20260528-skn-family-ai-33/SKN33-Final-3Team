@@ -23,7 +23,7 @@ export default function Password() {
   const set = key => v => { setForm(f => ({ ...f, [key]: v })); setError(e => ({ ...e, [key]: '' })) }
 
   const verify = () => {
-    if (email.trim().toLowerCase() !== (session?.email || '').toLowerCase()) return setError({ email: '등록된 이메일과 일치하지 않습니다.' })
+    if (email.trim() !== (session?.email || '')) return setError({ email: '등록된 이메일과 일치하지 않습니다.' })
     sessionStorage.setItem('bs2.pwVerified', session.email)
     setVerified(true)
   }

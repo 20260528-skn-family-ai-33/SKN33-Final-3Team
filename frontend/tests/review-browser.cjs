@@ -7,8 +7,10 @@ async function main() {
   const browser = await chromium.launch({ channel: 'chrome', headless: true })
   try {
   const context = await browser.newContext()
+  const termsVersion = async kind => (await (await context.request.get(`${base}/api/v1/terms/${kind}`)).json()).terms.version
   const response = await context.request.post(base + '/api/v1/auth/signup', { data: {
     name: 'PR 검수', email: `review-${Date.now()}@example.org`, password: 'ReviewLocal!123', password_confirm: 'ReviewLocal!123',
+    age_confirmed: true, service_terms_version: await termsVersion('service'), privacy_terms_version: await termsVersion('privacy'),
   } })
   assert.equal(response.status(), 201)
   const { csrf_token: csrf } = await response.json()

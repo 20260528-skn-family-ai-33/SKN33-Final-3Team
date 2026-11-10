@@ -32,9 +32,9 @@
 | 026 | `POST  /api/v1/analysis/share-trends` | 처리 코드 구현 |
 | 027 | `POST  /api/v1/analysis/market-patterns` | 보류: ML 담당 협의 보류 |
 | 028 | `POST  /api/v1/analysis/local-issues` | 통계+기사 본문 발췌; RAG 분석 미연결 |
-| 029 | `GET  /api/v1/articles` | 검색/필터; summary는 본문 발췌 |
+| 029 | `GET  /api/v1/articles` | 검색/필터; summary는 본문 발췌; tab=GENERAL(일반기사: 단신속보·주요이슈 제외) 추가 |
 | 030 | `GET  /api/v1/articles/{article_id}` | 마스킹 본문; AI 요약 미연결 |
-| 031 | `GET  /api/v1/issues/major` | 확정 alert_event 조회; 사건 판정기는 별도 담당 |
+| 031 | `GET  /api/v1/issues/major` | 확정 alert_event 조회; 판정은 scheduler/jobs/major_issue_detect.py |
 | 032 | `GET  /api/v1/exchange-rates` | 적재된 fx_daily 최근 두 영업일 일괄 조회·단위/등락 계산; 빈 통화는 UNAVAILABLE |
 | 033 | `GET  /api/v1/chat/sessions` | 처리 코드 구현 |
 | 034 | `POST  /api/v1/chat/sessions` | 처리 코드 구현 |

@@ -11,6 +11,7 @@ import json
 import math
 import re
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, UndefinedError, select_autoescape
@@ -27,6 +28,8 @@ UP, DOWN, MUTED, GRID, PREVIOUS = '#0B7A4B', '#C0392B', '#8A8F98', '#E6E3DD', '#
 # 관심 국가 선 색상. 같은 리포트 안의 모든 그래프에서 국가 순서대로 같은 색을 씁니다.
 SERIES_COLORS = ['#E07B24', '#2E6DB4', '#8E5BB5', '#16877C', '#C2477A', '#6B7A2A']
 MINUS = '−'
+# 리포트의 금액·비율 표시는 소수 2자리로 맞춘다(2026-11-06 사용자 결정). 개수(국가 수·건수)는 정수다
+REPORT_DIGITS = 2
 
 
 # ---------- 표시 형식 ----------
@@ -35,7 +38,7 @@ def _number(value, digits):
     return f'{abs(value):,.{digits}f}'
 
 
-def musd(value, digits=1):
+def musd(value, digits=REPORT_DIGITS):
     """USD → 백만 달러 숫자 문자열 (단위 글자는 템플릿에서 붙임)."""
     if value is None:
         return '—'
@@ -43,17 +46,37 @@ def musd(value, digits=1):
     return (MINUS + text) if value < 0 else text
 
 
-def eok(value, digits=2):
-    """USD → 억 달러 숫자 문자열 (요청형 리포트). 단위 글자는 템플릿에서 붙임."""
-    if value is None:
+def _round_eok(value, digits):
+    """억 달러 값 → (소수 자릿수, 반올림한 절댓값 Decimal). 웹 adapters.reportEok와 같은 규칙이다.
+    - 값의 최단 십진 표기(repr, JS String과 같음)를 기준으로 반올림하고 0.5는 0에서 먼 쪽으로 올린다
+      (부동소수점 내부값 0.000149999…를 쓰면 웹과 PDF가 0.0002·0.0001로 갈린다).
+    - 0.1억 미만은 유효숫자 1자리(0.03·0.0005)까지 자릿수를 늘려 0.00으로 뭉개지지 않게 한다."""
+    exact = Decimal(repr(abs(float(value))))
+    places = max(digits, -exact.adjusted()) if value and abs(value) < 0.1 else digits
+    return places, exact.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
+
+
+def _number_eok(value, digits):
+    places, rounded = _round_eok(value, digits)
+    text = f'{rounded:,.{places}f}'
+    return text if places == digits else text.rstrip('0').rstrip('.')
+
+
+def eok(value, digits=REPORT_DIGITS):
+    """USD 실적 금액 → 억 달러 숫자 문자열 (요청형 리포트). 단위 글자는 템플릿에서 붙임.
+    실적 0은 그 기간에 실적이 없다는 뜻이라 —로 쓴다(웹 화면과 같은 규칙). 증감액처럼 실제 0이 의미 있는 값은 signed_eok."""
+    if value is None or value == 0:
         return '—'
-    text = _number(value / 1e8, digits)
+    text = _number_eok(value / 1e8, digits)
     return (MINUS + text) if value < 0 else text
 
 
-def signed_eok(value, digits=2):
-    """증감액(USD) → 부호 붙은 억 달러 (+12.30 · −2.40)."""
-    return '—' if value is None else signed(value / 1e8, digits)
+def signed_eok(value, digits=REPORT_DIGITS):
+    """증감액(USD) → 부호 붙은 억 달러 (+12.30 · −2.40 · +0.03)."""
+    if value is None:
+        return '—'
+    v = value / 1e8
+    return ('+' if v > 0 else MINUS if v < 0 else '') + _number_eok(v, digits)
 
 
 def rank_move(value):
@@ -75,11 +98,11 @@ def num(value, digits=0):
     return (MINUS + text) if value < 0 else text
 
 
-def pct(value, digits=1):
+def pct(value, digits=REPORT_DIGITS):
     return '—' if value is None else num(value, digits) + '%'
 
 
-def signed_pct(value, digits=1):
+def signed_pct(value, digits=REPORT_DIGITS):
     if value is None:
         return '—'
     return ('+' if value > 0 else MINUS if value < 0 else '') + _number(value, digits) + '%'
@@ -91,14 +114,14 @@ def signed(value, digits=0):
     return ('+' if value > 0 else MINUS if value < 0 else '') + _number(value, digits)
 
 
-def change(value, digits=1, new=False):
+def change(value, digits=REPORT_DIGITS, new=False):
     """증감률을 ▲(증가)/▼(감소) 색 표시로. 비교 값이 0이라 계산할 수 없으면 new=True → '신규'."""
     if new:
         return Markup('<span class="chg new">신규</span>')
     if value is None:
         return Markup('<span class="chg none">—</span>')
     if value == 0:
-        return Markup('<span class="chg flat">– 0.0%</span>')
+        return Markup(f'<span class="chg flat">– {_number(0, digits)}%</span>')
     cls, mark = ('up', '▲') if value > 0 else ('down', '▼')
     return Markup(f'<span class="chg {cls}">{mark} {_number(value, digits)}%</span>')
 
@@ -199,14 +222,15 @@ def _axis_room(ticks, minimum):
     return max(minimum, max(_em(_tick_label(t, digits)) for t in ticks) * 9.5 + 8)
 
 
-def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, zero=False):
+def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REPORT_DIGITS, zero=False):
     """series: [{values(USD 또는 원값, divisor로 나눠 표시), color?, dashed?, area?}]. 선 끝에 마지막 값 라벨."""
     top, bottom = 10, 24
     scaled = [[None if v is None else v / divisor for v in s['values']] for s in series]
     low, high, ticks = nice_scale([v for vals in scaled for v in vals], zero=zero)
     left = _axis_room(ticks, 44)
     # 끝 값 라벨(.end 10.5, 굵게)이 오른쪽 밖으로 나가지 않게 가장 긴 값 폭만큼 비움 (기본 64)
-    right = max([64] + [_em(num(v, digits)) * 11 + 12 for vals in scaled for v in vals if v is not None])
+    label = (lambda v: (MINUS if v < 0 else '') + _number_eok(v, digits)) if divisor == 1e8 else (lambda v: num(v, digits))
+    right = max([64] + [_em(label(v)) * 11 + 12 for vals in scaled for v in vals if v is not None])
     plot_w, plot_h = width - left - right, height - top - bottom
     step = plot_w / max(len(labels) - 1, 1)
     x = lambda i: left + i * step
@@ -243,7 +267,7 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=1, 
     for px, py, value, color in ends:
         out.append(f'<circle cx="{px:.1f}" cy="{y(value):.1f}" r="3" fill="{color}"/>')
         if show_labels:
-            out.append(f'<text x="{px + 7:.1f}" y="{py + 3:.1f}" class="end" fill="{color}">{num(value, digits)}</text>')
+            out.append(f'<text x="{px + 7:.1f}" y="{py + 3:.1f}" class="end" fill="{color}">{label(value)}</text>')
     out.append('</svg>')
     return Markup(''.join(out))
 
@@ -307,7 +331,7 @@ def legend_value(values, labels):
     return musd(value) + ('' if i == len(values) - 1 else f'({full_period_label(labels, i)})')
 
 
-def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, digits=0, show=(), ticks=5):
+def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, digits=REPORT_DIGITS, show=(), ticks=5):
     """세로 막대. show: 값 라벨을 표시할 막대 위치 목록. ticks: 눈금 개수 기준 (nice_scale)."""
     right, top, bottom = 6, 14, 22
     scaled = [None if v is None else v / divisor for v in values]
@@ -332,19 +356,17 @@ def bar_chart(labels, values, colors, *, height=200, width=330, divisor=1e6, dig
     return Markup(''.join(out))
 
 
-def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digits=1, divisor=1, tail_width=0, peak=None):
-    """가로 막대. rows: [{label, values:[현재, 비교...], tail?:{text, badge?}}]. digits는 막대별 목록도 가능하며,
-    'auto'면 양식처럼 최댓값이 100 이상일 때 소수점 없이(452), 작으면 한 자리(67.5)로 표시합니다.
+def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digits=REPORT_DIGITS, divisor=1, tail_width=0, peak=None):
+    """가로 막대. rows: [{label, values:[현재, 비교...], tail?:{text, badge?}}]. digits는 막대별 목록도 가능합니다.
     막대 길이는 peak(없으면 rows 최대값) 기준 — 여러 쪽에 나눠 그릴 때 같은 peak를 주면 막대 길이를 비교할 수 있습니다."""
     peak_value = peak if peak is not None else max((v for r in rows for v in r['values'] if v is not None), default=0)
     peak = peak_value / divisor or 1
-    if digits == 'auto':
-        digits = 0 if peak >= 100 else 1
     bars = len(colors)
     bar_h = 8 if bars > 1 else 12
     places_of = lambda j: digits[j] if isinstance(digits, (list, tuple)) else digits
     # 막대 끝 숫자가 오른쪽 밖으로 나가지 않게 가장 긴 숫자 폭만큼 비웁니다 (peak 기준이라 쪽이 나뉘어도 막대 비율 동일)
-    texts = [num(peak_value / divisor, places_of(0))] + [num(v / divisor, places_of(j)) for r in rows
+    fmt = (lambda v, d: (MINUS if v < 0 else '') + _number_eok(v, d)) if divisor == 1e8 else num   # 억 단위는 웹과 같은 작은 값 규칙
+    texts = [fmt(peak_value / divisor, places_of(0))] + [fmt(v / divisor, places_of(j)) for r in rows
                                                   for j, v in enumerate(r['values']) if v is not None]
     plot_w = width - label_width - tail_width - max(40, max(_em(t) for t in texts) * 11 + 10)
     height = row_height * len(rows) + 4
@@ -360,7 +382,7 @@ def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digit
             yy = row_top + j * (bar_h + 2)
             out.append(f'<rect x="{label_width}" y="{yy:.1f}" width="{w:.1f}" height="{bar_h}" rx="2" fill="{color}"/>')
             cls = 'val' if j == 0 else 'axis'
-            out.append(f'<text x="{label_width + w + 5:.1f}" y="{yy + bar_h - 1:.1f}" class="{cls}">{num(v / divisor, places_of(j))}</text>')
+            out.append(f'<text x="{label_width + w + 5:.1f}" y="{yy + bar_h - 1:.1f}" class="{cls}">{fmt(v / divisor, places_of(j))}</text>')
         tail = r.get('tail')
         if tail:
             ty = i * row_height + row_height / 2 + 4
@@ -457,6 +479,24 @@ def _article(a):
 def _table(key, rows, head=None, empty=ROW1_MM, **extra):
     """나눌 수 있는 표 블록. 행이 없으면 안내 행 높이만 차지합니다."""
     return dict(extra, key=key, head=H3_MM + TH_MM if head is None else head, rows=rows, empty=empty)
+
+
+# 유망시장 표 칸 너비(mm). ondemand.html의 th 너비와 같아야 한다. 글자 폭 = 칸 너비 − 좌우 여백 4.8mm.
+PROMISING_COLS = (24, 30, 50, 20, 24, 32)
+
+
+def _promising_table(promising):
+    """유망시장 표. 국가·품목 이름이 길면 줄이 바뀌므로 행마다 높이를 잰다(머리 행도 줄바꿈 반영).
+    국가명은 굵은 글씨라 폭을 6% 좁게 본다."""
+    w = [c - 4.8 for c in PROMISING_COLS]
+    heads = [promising.get('rank_label') or '', '국가', '품목', 'HS 코드', '증감 예상', '최근 12개월 수출액']
+    head = TH_MM + LINE[8.2] * (max(_lines(t, 8.2, x) for t, x in zip(heads, w)) - 1)
+    def rank(r):
+        return f"{r.get('rank') if r.get('rank') is not None else '—'}" + (f" / {num(r['size'])}" if r.get('size') else '')
+    rows = [_row([(rank(r), w[0]), (r.get('country') or '', w[1] * 0.94), (r.get('product') or '', w[2]),
+                  (r.get('hs6') or '', w[3]), (r.get('outlook') or '—', w[4]), (eok(r.get('exp_12m_usd'), 2), w[5])])
+            for r in promising['rows']]
+    return _table('ptable', rows, head=head)
 
 
 def flow(blocks, first, rest):
@@ -593,7 +633,7 @@ def _detail_heading(item):
     """월간 상세 소제목 높이 — 템플릿 문구와 같은 길이로 추정 (품목명은 40자로 줄임)"""
     name = str(item['name'])
     name = name if len(name) <= 40 else name[:39] + '…'
-    return _heading(f"HS {item['hs_code']} {name} · 12월 수출 {musd(item['amount_usd'])}백만 달러 · 전월 +00.0% · 전년 동월 +00.0%")
+    return _heading(f"HS {item['hs_code']} {name} · 12월 수출 {musd(item['amount_usd'])}백만 달러 · 전월 +00.00% · 전년 동월 +00.00%")
 
 
 def layout(report_type, ctx):
@@ -626,7 +666,7 @@ def layout(report_type, ctx):
         blocks.append(_table('issues', issues))
         if s['schedule']:
             blocks.append(_table('schedule', [_row([(r['content'], 118), (r['related'], 32)]) for r in s['schedule']]))
-        blocks.append({'key': 'note', 'height': 3 + 2 * LINE[7.9]})
+        blocks.append({'key': 'note', 'height': 3 + (4 if s.get('spike_gap_note') else 2) * LINE[7.9]})
         summary = flow(blocks, BODY_MM - _heading('요약') - 4.3, rest)  # 주간 요약 제목 아래 구분선(0.3mm + 4mm)
         # 국가별 기사 수 표·그래프는 국가 행 단위로 나눕니다. 마지막 행(인덱스 = 국가 수)은 합계 행입니다.
         # 표 행(8.8mm~, 국가명이 길면 국가 칸 약 30mm에서 줄바꿈)이 그래프 막대(약 7mm)보다 높아 표 기준으로 계산합니다.
@@ -649,15 +689,15 @@ def layout(report_type, ctx):
 
 
 # 요청형 섹션 (양식 순서). SUMMARY는 항상, 나머지는 사용자가 고른 것만.
-# GROWTH_RISK(수출 증가·감소 주요 시장)는 최소 규모 기준이 정해질 때까지 섹션 전체를 숨깁니다 (이양원님 합의, #45).
-ONDEMAND_SECTIONS = ('SUMMARY', 'KPI', 'TOP_COUNTRIES', 'LOCAL_ISSUES')
+# GROWTH_RISK는 유망시장(증가·감소 예상)이다. 채팅 유망시장과 같은 ML 결과(promising)가 있을 때 그린다.
+ONDEMAND_SECTIONS = ('SUMMARY', 'KPI', 'TOP_COUNTRIES', 'GROWTH_RISK', 'LOCAL_ISSUES')
 HALF_MM = (TEXT_MM - 6) / 2  # 두 칸 배치(.grid2)의 한 칸 폭
 
 
 def ondemand_sections(ctx):
     """실제로 그릴 섹션 코드 (목차·쪽 번호·포함 항목에 같은 목록을 씁니다)."""
     chosen = set(ctx['conditions']['sections'])
-    return [s for s in ONDEMAND_SECTIONS if s == 'SUMMARY' or s in chosen]
+    return [s for s in ONDEMAND_SECTIONS if s == 'SUMMARY' or (s in chosen and (s != 'GROWTH_RISK' or 'promising' in ctx))]
 
 
 def _ondemand_layout(ctx, rest):
@@ -704,6 +744,12 @@ def _ondemand_layout(ctx, rest):
         pages['top'] = flow([_table('ttable', [ROW1_MM] * rows, head=TH_MM),
                              {'key': 'tgrid', 'height': max(H3_MM + _legend(['', '']) + bars, right)}],
                             BODY_MM - _heading('수출액 상위 10개국 · 순위 변동 · 단위 억 달러'), rest)
+
+    if 'GROWTH_RISK' in sections:
+        promising = ctx['promising']
+        note = {'key': 'pnote', 'height': LINE[9] * _lines(promising['text'], 9, TEXT_MM) + 4}
+        pages['promising'] = flow([note, _promising_table(promising)],
+                                  BODY_MM - _heading('모델 예측 순위 · 증가·감소 예상 · 단위 억 달러'), rest)
 
     if 'LOCAL_ISSUES' in sections:
         pages['articles'] = flow(_article_blocks(ctx['articles']), BODY_MM - _heading('현지 이슈 · 기준') - POLICY_MM, rest)
