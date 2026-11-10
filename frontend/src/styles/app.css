@@ -207,3 +207,16 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 @media (max-width: 640px) {
   .article-actions { flex-basis: 100%; margin-left: 22px; }
 }
+
+/* 메인 품목별·교역국별 표: 모든 행을 두 줄 높이로 고정하고 내용은 세로 가운데. 두 줄을 넘는 글은 …로 줄인다(전체는 마우스를 올리면 보임). */
+.tr.row2{height:72px;padding-top:0;padding-bottom:0;line-height:22px;align-items:center}
+.tr.row2>span{min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
+
+/* 메인 상단 기능 카드(링크): 마우스를 올리면 살짝 떠오른다. 키보드 초점도 같은 모양. */
+.feature-card{transition:transform .15s,box-shadow .15s}
+.feature-card:hover,.feature-card:focus-visible{transform:translateY(-3px);box-shadow:0 16px 36px rgba(0,0,0,.26)!important}
+
+/* 머리글의 회원 이름(토글과 알림 사이). 길면 …로 줄이고, 좁은 화면에서는 자리가 없어 숨긴다. */
+.hd-user{flex:none;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:#444B57;margin-left:6px}
+.hd-user b{color:var(--ink);font-weight:700}
+@media (max-width:760px){.hd-user{display:none}}

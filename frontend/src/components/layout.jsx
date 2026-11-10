@@ -27,7 +27,7 @@ export function AuthHeader() {
 
 /** 서비스 머리글. admin=true면 관리자 화면용(관리자 버튼만 표시) */
 /** beforeBell: 알림 버튼 왼쪽에 둘 화면별 조작(메인의 전체↔내 관심 전환) */
-export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admin, onLogout, beforeBell, children }) {
+export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admin, onLogout, beforeBell, userName, children }) {
   return (
     <header className="hd">
       <div className="wrap">
@@ -39,6 +39,8 @@ export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admi
         </nav>
         <div className="hd-r">
           {beforeBell}
+          {/* 로그인한 회원 이름. 이름이 없는 계정(예전 회원)은 표시하지 않는다. */}
+          {userName && <span className="hd-user" title={`${userName} 님`}><b>{userName}</b> 님</span>}
           <button
             type="button" className={'bell' + (bellOpen ? ' open' : '')} onClick={onBell}
             aria-label={`알림 ${unread}건`} aria-expanded={!!bellOpen} aria-haspopup="dialog"
@@ -77,6 +79,10 @@ export function Band({ eyebrow, title, lead, image, imagePosition, tone, right, 
   )
 }
 
+// 푸터 데이터 출처: 출처 기관 사이트를 새 탭으로 연다.
+function SourceLink({ href, children }) {
+  return <a href={href} target="_blank" rel="noopener noreferrer" className="ft-link">{children}</a>
+}
 export function Footer() {
   return (
     <footer className="ft">
@@ -88,10 +94,10 @@ export function Footer() {
         </div>
         <div>
           <b>데이터 출처</b>
-          <p>수출입 통계 · 관세청</p>
-          <p>국가별 점유율 · UN Comtrade</p>
-          <p>환율 · 한국은행 ECOS</p>
-          <p>기사 · KOTRA · 한국경제 · 파이낸셜뉴스</p>
+          <p>수출입 통계 : <SourceLink href="https://tradedata.go.kr">관세청</SourceLink></p>
+          <p>국가별 점유율 : <SourceLink href="https://comtradeplus.un.org">UN Comtrade</SourceLink></p>
+          <p>환율 : <SourceLink href="https://ecos.bok.or.kr">한국은행 ECOS</SourceLink></p>
+          <p>기사 : <SourceLink href="https://dream.kotra.or.kr/kotranews/index.do">KOTRA</SourceLink> · <SourceLink href="https://www.hankyung.com">한국경제</SourceLink> · <SourceLink href="https://www.fnnews.com">파이낸셜뉴스</SourceLink></p>
         </div>
         <div>
           <b>약관 및 문의</b>

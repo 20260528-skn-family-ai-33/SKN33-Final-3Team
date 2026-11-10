@@ -1,4 +1,5 @@
 // 목업과 같은 모양의 SVG 차트(선 그래프·도넛·스파크라인)
+import { useState } from 'react'
 
 /** 월별 꺾은선. series: [{ color, values }] — 점 위에 값 표시, null 칸은 선을 끊는다 */
 export function LineChart({ labels, series, yTicks, width = 760, height = 230, label = '선 그래프', formatValue = String, fullLabels, showValues = true }) {
@@ -63,17 +64,51 @@ export function BarChart({ labels, series, width = 760, label = '막대 그래�
 /** 두 시점 비교 막대(조회·비교 기간) */
 export const GroupedBarChart = BarChart
 
-/** 비율 도넛(목업의 원그래프). items: [[label, percent, color]] */
+/**
+ * 비율 원그래프. items: [[label, percent, color]]
+ * 첫 조각은 12시 방향(수직)에서 시작해 시계 방향으로 이어 그린다. 조각 경로를 각도로 직접 계산하므로
+ * 브라우저마다 원의 시작점이 달라 첫 조각이 수직선 왼쪽으로 넘어가는 일이 없다.
+ * 비율 합이 반올림 때문에 100과 조금 달라도 합계 기준으로 나눠 원을 정확히 한 바퀴 채운다.
+ * 조각에 마우스를 올리면 어느 항목인지 말풍선으로 보여 준다. 클릭 동작은 없어 커서는 기본 화살표로 둔다.
+ */
 export function Donut({ items, size = 132 }) {
-  const C = 2 * Math.PI * 10.5
-  const lens = items.map(([, pct]) => (pct / 100) * C)
-  const starts = lens.map((_, i) => lens.slice(0, i).reduce((s, v) => s + v, 0))
+  const [hover, setHover] = useState(null)
+  const valid = items.map(([label, pct, color]) => [label, Math.max(0, Number(pct) || 0), color])
+  const total = valid.reduce((s, [, v]) => s + v, 0) || 1
+  const R = 20, CX = 21, CY = 21
+  const point = a => `${(CX + R * Math.sin(a)).toFixed(3)} ${(CY - R * Math.cos(a)).toFixed(3)}`
+  // 각 조각의 시작 누적값(앞 조각들의 합). 렌더 중 변수를 다시 대입하지 않도록 미리 계산한다.
+  const starts = valid.map((_, i) => valid.slice(0, i).reduce((s, [, v]) => s + v, 0))
+  const slices = valid.map(([label, pct, color], i) => {
+    const a0 = (starts[i] / total) * 2 * Math.PI
+    const a1 = ((starts[i] + pct) / total) * 2 * Math.PI
+    const full = a1 - a0 >= 2 * Math.PI - 1e-6
+    const d = full ? null : `M${CX} ${CY} L${point(a0)} A${R} ${R} 0 ${a1 - a0 > Math.PI ? 1 : 0} 1 ${point(a1)} Z`
+    const text = /%\s*$/.test(label) ? label : `${label} ${pct}%`
+    return { label, color, d, text, empty: pct === 0 }
+  })
+  const move = (e, i) => {
+    const box = e.currentTarget.ownerSVGElement.getBoundingClientRect()
+    setHover({ i, x: e.clientX - box.left, y: e.clientY - box.top })
+  }
+  const active = hover && slices[hover.i]
   return (
-    <svg width={size} height={size} viewBox="0 0 42 42" role="img" aria-label="원그래프" style={{ flex: 'none', transform: 'rotate(-90deg)' }}>
-      {items.map(([label, , color], i) => (
-        <circle key={label} cx="21" cy="21" r="10.5" fill="none" stroke={color} strokeWidth="21" strokeDasharray={`${lens[i].toFixed(2)} ${(C - lens[i]).toFixed(2)}`} strokeDashoffset={(-starts[i]).toFixed(2)} />
-      ))}
-    </svg>
+    <div style={{ position: 'relative', flex: 'none', width: size, height: size }} onMouseLeave={() => setHover(null)}>
+      <svg width={size} height={size} viewBox="0 0 42 42" role="img" aria-label={`원그래프: ${slices.map(s => s.text).join(', ')}`} style={{ display: 'block' }}>
+        {slices.map((s, i) => s.empty ? null : (
+          s.d
+            ? <path key={s.label} d={s.d} fill={s.color} stroke="#fff" strokeWidth="0" strokeLinejoin="round" opacity={hover && hover.i !== i ? 0.55 : 1}
+                onMouseMove={e => move(e, i)} onMouseEnter={e => move(e, i)} style={{ cursor: 'default', transition: 'opacity .15s' }}><title>{s.text}</title></path>
+            : <circle key={s.label} cx={CX} cy={CY} r={R} fill={s.color}
+                onMouseMove={e => move(e, i)} onMouseEnter={e => move(e, i)} style={{ cursor: 'default' }}><title>{s.text}</title></circle>
+        ))}
+      </svg>
+      {active && (
+        <div role="tooltip" style={{ position: 'absolute', left: hover.x, top: hover.y - 10, transform: 'translate(-50%, -100%)', pointerEvents: 'none', whiteSpace: 'nowrap', background: '#15181E', color: '#fff', fontSize: 12, fontWeight: 700, lineHeight: '18px', padding: '5px 9px', borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,.18)', zIndex: 5, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: active.color, flexShrink: 0 }} />{active.text}
+        </div>
+      )}
+    </div>
   )
 }
 

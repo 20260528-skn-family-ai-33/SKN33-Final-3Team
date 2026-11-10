@@ -60,7 +60,7 @@ export default function useDashboard(view, months, profile) {
   const productRows = (tableProducts.data?.items || []).map(r => [r.rank, r.hs_item.hs_code, productName(r.hs_item.hs_code), money(r.export_amount_usd), money(r.import_amount_usd)])
   // 선택 국가를 채우려고 서버가 넣은 실적 없는 행은 0이 아니라 결측(—)으로 보여 준다.
   const countryRows = (countries.data?.items || []).map(r => [r.rank, countryName(r.country_code), r.has_data === false ? '—' : money(r.export_amount_usd), r.has_data === false ? '—' : money(r.import_amount_usd)])
-  const link = n => (group, product, country) => rankLink({ scope, start: monthOffset(end, 1 - n), end, months: n, countries: country_codes, group, product, country })
+  const link = n => (group, product, country, flow) => rankLink({ scope, start: monthOffset(end, 1 - n), end, months: n, countries: country_codes, group, product, country, flow })
   const tablePeriod = periodText(countries.data || tableProducts.data)
   // 영역별 오류 안내: 기준 월 조회가 실패하면 모든 영역이 비므로 각 영역에 함께 넣는다.
   const states = {
@@ -71,8 +71,8 @@ export default function useDashboard(view, months, profile) {
     states, statMonth: end || '확인 중', title: scope === 'GLOBAL' ? '대한민국 수출입 현황' : '내 관심 시장 수출입 현황',
     period: `${kpiRange.period_start || '—'} ~ ${end || '—'} · 억 USD`, kpiLink: link(KPI_MONTHS),
     kpis: [
-      { label: '수출액', value: money(exp), unit: '억 USD', rows: [['전년 대비', percent(expYoy), direction(expYoy)]] },
-      { label: '수입액', value: money(imp), unit: '억 USD', rows: [['전년 대비', percent(impYoy), direction(impYoy)]] },
+      { label: '수출액', flow: 'EXPORT', value: money(exp), unit: '억 USD', rows: [['전년 대비', percent(expYoy), direction(expYoy)]] },
+      { label: '수입액', flow: 'IMPORT', value: money(imp), unit: '억 USD', rows: [['전년 대비', percent(impYoy), direction(impYoy)]] },
       { label: '무역수지', value: noTrade ? '—' : amount(exp - imp), unit: '억 USD', rows: [['전월 수출 증감', percent(mom), direction(mom)]] },
     ],
     fxTitle: scope === 'GLOBAL' ? '주요 통화 환율' : '관심 국가 환율', fxDate: fx.data?.items?.[0]?.base_date || '기준일 미제공',
