@@ -725,6 +725,21 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(self.client.get('/api/v1/admin/audit-events').json()['page']['total'],1)
         self.assertEqual(self.client.get('/api/v1/admin/notification-events/999/diagnosis?user_id='+uid).status_code,404)
 
+    def test_general_article_tab_excludes_breaking_and_major_issue(self):
+        m=self.meta.tables
+        with self.engine.begin() as c:
+            for i,source,category in [(1,'KOTRA_MARKET','통상·규제'),(2,'KOTRA_SHORT_NEWS','경제'),(3,'KOTRA_MARKET','경제'),
+                                      (4,'KOTRA_MARKET',None),(5,'HANKYUNG',None),(6,'KOTRA_MARKET','경제')]:
+                c.execute(m['article'].insert(),{'article_id':i,'source_code':source,'external_id':f'general-{i}','title':'기사',
+                    'published_date':date(2025,12,i),'source_url':f'https://example.org/{i}','body_masked':'본문','category':category,
+                    'visibility_status':'VISIBLE','admin_meta_json':{}})
+            # 6번은 분야는 일반이지만 주요 이슈 알림으로 판정된 기사다.
+            c.execute(m['alert_event'].insert(),{'event_id':1,'event_type':'MAJOR_ISSUE','article_id':6,'event_key':'g'*64,'payload_json':{},'created_at':now()})
+        ids=lambda tab:{a['article_id'] for a in self.client.get(f'/api/v1/articles?tab={tab}').json()['items']}
+        self.assertEqual(ids('GENERAL'),{'3','4','5'})
+        self.assertEqual(ids('GENERAL')|ids('BREAKING')|ids('MAJOR_ISSUE'),ids('ALL'))
+        self.assertEqual(self.client.get('/api/v1/articles?tab=OTHER').status_code,400)
+
     def test_product_ranking_includes_hs_name_and_formatted_excel(self):
         self.signup()
         response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&group_by=HS6')

@@ -10,7 +10,11 @@ import { resultColumns } from './resultColumns'
 const PAGE_SIZE = 20
 
 /** Render server snapshots using the existing table and chart components. */
-export default function ApiResults({ table, tableOnly = false, onDownload }) {
+// 월별 추이 그래프에 그릴 금액 열. 질문 방향(flow)을 알면 그 방향의 올해·전년 값만, 모르면 있는 금액 열을 모두 그린다.
+const FLOW_KEYS = { EXPORT: ['amount_usd', 'export_amount_usd', 'previous_year_export_usd'], IMPORT: ['amount_usd', 'import_amount_usd', 'previous_year_import_usd'] }
+const ALL_KEYS = ['amount_usd', 'export_amount_usd', 'import_amount_usd', 'previous_year_export_usd', 'previous_year_import_usd']
+
+export default function ApiResults({ table, tableOnly = false, onDownload, flow }) {
   const { run } = useApp()
   const [showTable, setShowTable] = useState(false)
   // 응답에는 첫 페이지(20행)만 온다. 나머지는 저장 결과 API에서 페이지로 읽는다(차트는 전체 값을 따로 그린다).
@@ -28,12 +32,12 @@ export default function ApiResults({ table, tableOnly = false, onDownload }) {
     const data = page === 1 ? { table } : await api(`/results/${id}`, { query: { page, page_size: PAGE_SIZE } })
     if (request === latest.current) setLoaded({ id, page, rows: page === 1 ? null : data.table.rows })  // 늦게 온 이전 요청은 버린다
   })
-  const numeric = ['amount_usd', 'export_amount_usd', 'import_amount_usd', 'previous_year_export_usd'].filter(key => rows.length && rows.every(r => typeof r[key] === 'number'))
+  const numeric = (FLOW_KEYS[flow] || ALL_KEYS).filter(key => rows.length && rows.every(r => typeof r[key] === 'number'))
   const chart = !tableOnly && rows.length > 0 && rows.every(r => r.month) && numeric.length > 0
   const bars = !tableOnly && rows.length > 0 && rows.every(r => r.country && typeof r.amount_usd === 'number')
   const maxAmount = Math.max(1, ...rows.map(r => r.amount_usd || 0))
   const compact = value => Number(value).toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 2 })
-  const colors = ['#C8102E', '#2B2350', '#9A95BF', '#8A919C']
+  const colors = ['#C8102E', '#2B2350', '#9A95BF', '#8A919C', '#DBA343']
   return <div className="api-results" style={{ border: '1px solid var(--line)', borderRadius: 14, padding: '16px 18px', overflowX: 'auto' }}>
     <div className="between"><b>{chart ? '월별 추이 · USD' : '조회 결과'}</b><div style={{ display: 'flex', gap: 10 }}>
       {(chart || bars) && <Btn kind="lav" onClick={() => setShowTable(v => !v)}>{showTable ? '차트로 보기' : '표로 보기'}</Btn>}

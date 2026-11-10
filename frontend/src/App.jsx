@@ -11,6 +11,7 @@ import { Signup } from './pages/auth/Signup'
 import { FindId, FindPassword } from './pages/auth/FindAccount'
 import Onboarding from './pages/auth/Onboarding'
 import Dashboard from './pages/home/Dashboard'
+import MainViewToggle from './pages/home/MainViewToggle'
 import Rank from './pages/market/Rank'
 import Articles from './pages/market/Articles'
 import Analysis from './pages/analysis/Analysis'
@@ -47,7 +48,8 @@ function UserShell({ active, route, children }) {
   const toggle = () => navigate(withQuery(route, { alerts: open ? null : 'open' }), { replace: true })
   return (
     <>
-      <SiteHeader active={active} unread={isAdmin ? alertCount : unread} bellOpen={open} onBell={isAdmin ? () => navigate('/admin/inbox/BS33') : toggle} isAdmin={isAdmin} onLogout={logout}>
+      <SiteHeader active={active} unread={isAdmin ? alertCount : unread} bellOpen={open} onBell={isAdmin ? () => navigate('/admin/inbox/BS33') : toggle} isAdmin={isAdmin} onLogout={logout}
+        beforeBell={route.path === '/' ? <MainViewToggle route={route} /> : null}>
         {open && <AlertPopover onClose={toggle} />}
       </SiteHeader>
       <div className="app-body" id="main">{children}</div>

@@ -29,7 +29,38 @@ def large_context(kind, count, long_metadata=False):
     return ctx
 
 
+LONG_COUNTRIES = ['보스니아 헤르체고비나', '중앙아프리카공화국', '세인트빈센트 그레나딘', '트리니다드 토바고', '미국']
+LONG_PRODUCTS = ['기타 메이크업용이나 피부 미용용 제품류(선크림이나 선탠 제품을 포함한다)와 매니큐어용이나 페디큐어용 제품류',
+                 '반도체 디바이스(광전성 반도체 디바이스를 포함한다)와 그 밖의 집적회로 부분품',
+                 '승용자동차와 그 밖의 차량(주로 사람을 수송할 수 있도록 설계된 것)', '향수와 화장수', '립 메이크업용 제품류']
+
+
+def promising_context(count, long=True):
+    """국가 5개 × 품목 5개처럼 이름이 길어 줄이 바뀌는 유망시장 예측 결과."""
+    ctx = rt.sample_context('ondemand')
+    base = ctx['promising']['rows'][0]
+    ctx['promising']['rows'] = [{**base, 'rank': i + 1, 'size': 1240, 'hs6': '330499', 'outlook': '증가 예상', 'exp_12m_usd': 1.23e9,
+                                 'country': LONG_COUNTRIES[i % 5] if long else '미국',
+                                 'product': LONG_PRODUCTS[(i // 5) % 5] if long else '향수'} for i in range(count)]
+    return ctx
+
+
 class ContentsPaginationTest(unittest.TestCase):
+    def test_promising_rows_with_wrapped_names_get_their_own_height(self):
+        for count in (25, 60):
+            with self.subTest(rows=count):
+                pages = rt.layout('RPT_ON_DEMAND', promising_context(count))['promising']
+                parts = [(b['start'], b['end']) for page in pages for b in page if b['key'] == 'ptable']
+                # 모든 행이 빠짐없이, 겹치지 않고 한 번씩 들어간다
+                self.assertEqual([i for start, end in parts for i in range(start, end)], list(range(count)))
+        short = rt.layout('RPT_ON_DEMAND', promising_context(25, long=False))['promising']
+        long = rt.layout('RPT_ON_DEMAND', promising_context(25))['promising']
+        first = lambda pages: next(b['end'] - b['start'] for b in pages[0] if b['key'] == 'ptable')
+        # 줄이 바뀌는 행은 더 높으므로 첫 쪽에 들어가는 행 수가 줄어든다(예전에는 23행을 넣어 아래가 잘렸다)
+        self.assertLess(first(long), first(short))
+        self.assertGreater(len(long), len(short))
+
+
     def test_long_information_keeps_every_character_and_repeats_row_label(self):
         value = ' · '.join(f'품목 {i:03} 긴 설명 (HS {330400+i})' for i in range(100))
         plan = rt.contents_layout([{'title': '요약', 'page': 3}],
@@ -106,6 +137,21 @@ class ContentsPaginationTest(unittest.TestCase):
                                 folder = Path(output); folder.mkdir(parents=True, exist_ok=True)
                                 (folder / f'{kind}-{count}-items.pdf').write_bytes(pdf)
                                 (folder / f'{kind}-{count}-items.html').write_text(html, encoding='utf-8')
+            # 유망시장: 줄바꿈되는 긴 국가·품목명도 바닥글 위에서 끝나고 다음 쪽에서 이어진다
+            for count in (25, 60):
+                with self.subTest(promising=count):
+                    html = rt.render('RPT_ON_DEMAND', promising_context(count))
+                    html = html.replace('</head>', '<style>@font-face{font-family:ReportKorean;src:url(data:font/ttf;base64,'
+                                        + encoded + ')}body{font-family:ReportKorean,sans-serif}</style></head>')
+                    page.set_content(html)
+                    page.evaluate('document.fonts.ready')
+                    rows = page.evaluate('''() => [...document.querySelectorAll('.page')].flatMap((p,i)=>{
+                        const bottom=p.querySelector('.ftr').getBoundingClientRect().top;
+                        return [...p.querySelectorAll('table[style*="table-layout:fixed"] tr')].filter(r=>!r.querySelector('th'))
+                            .map(r=>({page:i+1,rank:r.cells[0].textContent.split('/')[0].trim(),over:r.getBoundingClientRect().bottom>bottom+0.5}));
+                    })''')
+                    self.assertEqual([r['rank'] for r in rows], [str(i + 1) for i in range(count)])
+                    self.assertEqual([r for r in rows if r['over']], [])
 
 
 if __name__ == '__main__':

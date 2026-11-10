@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api/client'
 import { mapLimited } from '../../api/integration'
 import { countryCode, countryName, productName } from '../../data/catalog'
+// reload: 오류 안내의 '다시 불러오기'가 같은 조건으로 다시 조회한다.
 export default function useUnData(profile) {
   const key = JSON.stringify([profile.products, profile.countries])
   const [state, setState] = useState({ key: null, items: [], error: null })
+  const [round, setRound] = useState(0)
+  const reload = useCallback(() => setRound(n => n + 1), [])
   useEffect(() => {
     const controller = new AbortController()
     const [products, countries] = JSON.parse(key)
@@ -40,6 +43,6 @@ export default function useUnData(profile) {
       } catch (error) { if (!controller.signal.aborted) setState({ key, items: [], error }) }
     }
     load(); return () => controller.abort()
-  }, [key])
-  return state.key === key ? state : { items: [], error: null }
+  }, [key, round])
+  return { ...(state.key === key ? state : { items: [], error: null }), reload }
 }

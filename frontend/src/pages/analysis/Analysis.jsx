@@ -31,7 +31,7 @@ const STATUS_TAG = {
   generating: ['red', '생성 중'],
   done: ['ok', '생성 완료'],
 }
-const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '급성장·리스크 시장': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
+const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '유망시장(증가·감소 예상)': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
 const optionsFor = (c, choices) => ({ conditions: c, country: c.country_codes.map(countryName).join(' · '), product: c.hs_items.map(h => reportProduct(h.hs_code, choices?.find(choice => choice.hs_item?.hs_code === h.hs_code)?.label || h.name_ko)).join(', '), from: c.period.start.slice(0, 7), to: c.period.end.slice(0, 7), ...reportComparisonInputs(c), sections: ALL_SECTIONS })
 
 function AiBlock({ children, className, id }) {
@@ -108,7 +108,9 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
   const monthInput = key => {
     const [year = '', month = ''] = (o[key] || '').split('-')
     const monthsFor = y => Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0')).filter(m => y + '-' + m >= start && y + '-' + m <= end)
-    const availableMonths = monthsFor(year)
+    // 연도를 고르기 전에도 월 칸을 잠그지 않는다(Tab이 항상 연도→월 순서로 움직이게). 그때 월은 최신 연도 기준이다.
+    const monthYear = year || (end || '').slice(0, 4)
+    const availableMonths = monthsFor(monthYear)
     const change = value => onChange({ ...message, preset: 'custom', options: { ...o, [key]: value } })
     return <div className="report-month">
       <select aria-label={monthLabels[key] + ' 연도'} value={year} disabled={!years.length} onChange={e => {
@@ -118,7 +120,7 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
         <option value="">연도</option>{year && !years.includes(year) && <option disabled>{year}</option>}
         {years.map(y => <option key={y}>{y}</option>)}
       </select>
-      <select aria-label={monthLabels[key] + ' 월'} value={month} disabled={!years.includes(year)} onChange={e => change(year + '-' + e.target.value)}>
+      <select aria-label={monthLabels[key] + ' 월'} value={month} disabled={!years.length} onChange={e => change(monthYear + '-' + e.target.value)}>
         {!month && <option value="">월</option>}{month && !availableMonths.includes(month) && <option value={month} disabled>{Number(month)}월</option>}
         {availableMonths.map(m => <option key={m} value={m}>{Number(m)}월</option>)}
       </select>
@@ -149,13 +151,13 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
         ))}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '90px 1fr 20px 1fr', gap: 10, alignItems: 'center', marginTop: 16 }}>
-        <span className="s" style={{ fontSize: 14, fontWeight: 700 }}>직접 선택</span>
+        <span className="s" style={{ fontSize: 14, fontWeight: 700 }}>분석 기간</span>
         {monthInput('from')}<span className="c s">~</span>{monthInput('to')}
         <span className="s" style={{ fontSize: 14, fontWeight: 700 }}>비교 기간</span>
         {monthInput('compareFrom')}<span className="c s">~</span>{monthInput('compareTo')}
       </div>
       <ErrorNotice error={availability.error} retry={availability.reload} />
-      <p className="note" style={{ marginTop: 8 }}>기본 비교: 전년 같은 기간 · 직접 지정한 연/월은 그대로 적용</p>
+      <p className="note" style={{ marginTop: 8 }}>비교 기간을 비워 두면 전년 같은 기간과 비교합니다.</p>
       <p style={{ fontSize: 15, fontWeight: 800, marginTop: 18 }}>어떤 항목을 포함할까요? <span className="s" style={{ fontWeight: 500 }}>(기본: 전체)</span></p>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
         {ALL_SECTIONS.map(s => (
@@ -246,7 +248,7 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
     {a.tasks?.length ? <TaskResults answer={a} hideText={receiving}/> : !receiving && <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{a.text}</p>}
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
     {a.warnings?.filter(w => w !== a.text).map(w => <p className="note" key={w}>{w}</p>)}
-    {!a.tasks?.length && a.tables.map((table, i) => <ApiResults key={i} table={table} />)}
+    {!a.tasks?.length && a.tables.map((table, i) => <ApiResults key={i} table={table} flow={c?.trade_flow} />)}
     {a.articles.map((article, index) => <div className="li" key={article.article_id}><div>
       <b>[{index + 1}] {article.title}</b>
       <p className="muted">{article.source_code} · {article.published_date}</p>

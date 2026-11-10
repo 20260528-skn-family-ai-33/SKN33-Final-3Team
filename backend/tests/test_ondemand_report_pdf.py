@@ -211,6 +211,123 @@ class OnDemandReportTest(unittest.TestCase):
         self.assertNotIn('수출 증가·감소 주요 시장', html)
         self.assertNotIn('월별 수출 추이</h2>', html)
 
+    def test_promising_market_section_uses_model_predictions_in_web_and_pdf(self):
+        import pandas as pd
+        uid = self.signup(); conditions = self.preview()['conditions']
+        def predict_markets(bundle, *, country_code=None, hs6=None, top=10):
+            return pd.DataFrame([{'anchor': '2026-09-01', 'country_code': country_code, 'hs6': hs6, 'growth_pct': 12.5,
+                                  'exp_12m': 3400000.0, 'country_rank': 3, 'product_rank': 7, 'country_size': 1200, 'product_size': 90}])
+        outlook = ({'anchor': '2026-09', 'directions': {('US', '330499'): 'UP'}}, 'b1', None)
+        with patch('backend.app.agents.market.loaded', return_value=({'anchor': '2026-09-01'}, predict_markets, {'model': 'a1'})), \
+             patch('backend.app.agents.market.growth', return_value=outlook):
+            ctx, doc = self.context(uid, conditions, ['GROWTH_RISK'])
+        section = next(s for s in doc['sections'] if s['section_code'] == 'GROWTH_RISK')
+        self.assertEqual(section['title'], '유망시장(증가·감소 예상)')
+        row = section['tables'][0]['rows'][0]
+        self.assertEqual((row['country_name'], row['hs6'], row['growth_outlook']), ('미국', '330499', '증가 예상'))
+        # 모델 A의 성장률 숫자는 표 열에 보이지 않는다(방향은 모델 B).
+        self.assertNotIn('growth_pct', [c['key'] for c in section['tables'][0]['columns']])
+        self.assertEqual(ctx['promising']['rows'][0]['rank'], 3)
+        self.assertEqual(ctx['promising']['anchor'], '2026-09')
+        html = render('RPT_ON_DEMAND', ctx)
+        self.assertIn('유망시장(증가·감소 예상)', html)
+        self.assertIn('증가 예상', html)
+        self.assertIn('유망시장 예측', html)   # 데이터 기준 · 출처 표
+
+    def test_promising_market_section_explains_missing_model_or_scope(self):
+        uid = self.signup()
+        # 테스트 환경에는 모델 파일이 없다. 리포트는 만들고 섹션에서 이유를 알린다.
+        ctx, doc = self.context(uid, self.preview()['conditions'], ['GROWTH_RISK'])
+        section = next(s for s in doc['sections'] if s['section_code'] == 'GROWTH_RISK')
+        self.assertEqual(section['text'], reports.PROMISING_UNAVAILABLE)
+        self.assertEqual(section['tables'], [])
+        html = render('RPT_ON_DEMAND', ctx)
+        self.assertIn('표시할 예측 결과가 없습니다.', html)
+        ctx, doc = self.context(uid, self.preview(hs_items=[], country_codes=[])['conditions'], ['GROWTH_RISK'])
+        section = next(s for s in doc['sections'] if s['section_code'] == 'GROWTH_RISK')
+        self.assertIn('국가 또는 HS4·HS6 품목을 1개 이상 선택', section['text'])
+
+    def promising(self, uid, c, predictions):
+        """모의 모델로 유망시장 섹션을 만든다. predictions: [(국가, HS6, 최근 12개월 수출액)]."""
+        import pandas as pd
+        frame = pd.DataFrame([{'country_code': cc, 'hs6': hs, 'exp_12m': exp} for cc, hs, exp in predictions])
+        def predict_markets(bundle, *, country_code=None, hs6=None, top=10):
+            rows = frame[(frame.country_code == country_code) & (frame.hs6 == hs6)] if country_code and hs6 else \
+                frame[frame.hs6 == hs6] if hs6 else frame[frame.country_code == country_code]
+            return pd.DataFrame([{'anchor': '2026-09-01', 'country_code': r.country_code, 'hs6': r.hs6, 'growth_pct': 1.0,
+                                  'exp_12m': float(r.exp_12m), 'country_rank': i + 1, 'product_rank': i + 1,
+                                  'country_size': 100, 'product_size': 100} for i, r in enumerate(rows.itertuples())][:top])
+        bundle = {'anchor': '2026-09-01', 'predictions': frame}
+        with patch('backend.app.agents.market.loaded', return_value=(bundle, predict_markets, {'model': 'a1'})), \
+             patch('backend.app.agents.market.growth', return_value=(None, None, None)), \
+             self.engine.begin() as connection:
+            return reports.promising_section(Store(self.app.state.database, connection), uid, c)
+
+    def test_promising_market_turns_hs4_into_its_hs6_items(self):
+        uid = self.signup(); c = self.preview()['conditions']
+        c = {**c, 'country_codes': ['US'], 'hs_items': [{'hs_code': '3304', 'hs_ver': 'HS2022'}]}
+        section = self.promising(uid, c, [('US', '330499', 9e6), ('US', '330410', 2e6), ('US', '870323', 5e8), ('CN', '330420', 7e6)])
+        hs6 = {r['hs6'] for r in section['tables'][0]['rows']}
+        # 선택한 HS4의 하위 품목만 예측한다. 다른 품목(자동차)이나 선택하지 않은 국가의 품목은 들어가지 않는다.
+        self.assertEqual(hs6, {'330499', '330410'})
+        self.assertIn('HS 3304는 최근 12개월 수출액이 큰 하위 HS6 품목(330499, 330410)으로 예측했습니다.', section['text'])
+        none = self.promising(uid, {**c, 'hs_items': [{'hs_code': '9999', 'hs_ver': 'HS2022'}], 'country_codes': []}, [('US', '330499', 9e6)])
+        self.assertIn('HS 9999에는 유망시장 예측 대상인 HS6 품목이 없습니다.', none['text'])
+        self.assertEqual(none['tables'], [])
+        # 국가를 함께 골라도, 선택한 HS4에 예측 대상이 없으면 그 나라의 다른 품목(자동차)으로 채우지 않는다.
+        cars = self.promising(uid, {**c, 'country_codes': ['US']}, [('US', '870323', 5e8)])
+        self.assertEqual(cars['tables'], [])
+        self.assertEqual(cars['content_status'], 'NO_DATA')
+        self.assertIn('HS 3304에는 유망시장 예측 대상인 HS6 품목이 없습니다.', cars['text'])
+
+    def test_promising_market_uses_first_items_when_selection_is_over_limit(self):
+        uid = self.signup(); c = self.preview()['conditions']
+        codes = ['330410', '330420', '330430', '330491', '330499', '330510']
+        c = {**c, 'country_codes': [], 'hs_items': [{'hs_code': h, 'hs_ver': 'HS2022'} for h in codes]}
+        section = self.promising(uid, c, [('US', h, 1e6) for h in codes])
+        # 리포트 한도(품목 100개) 안의 선택은 모델 장애가 아니다. 앞의 5개로 예측하고 그 사실을 알린다.
+        self.assertNotEqual(section['text'], reports.PROMISING_UNAVAILABLE)
+        self.assertEqual({r['hs6'] for r in section['tables'][0]['rows']}, set(codes[:5]))
+        self.assertIn('대상 품목 6개 중 앞의 5개만 예측했습니다.', section['text'])
+        many = self.promising(uid, {**c, 'hs_items': [{'hs_code': '330499', 'hs_ver': 'HS2022'}],
+                                    'country_codes': [f'C{i}' for i in range(21)]}, [('C0', '330499', 1e6)])
+        self.assertIn('선택한 21개국 중 앞의 20개국만 예측했습니다.', many['text'])
+
+    def test_model_storage_or_broken_file_only_empties_the_promising_section(self):
+        import pickle
+        from backend.app.storage.objects import StorageError
+        uid = self.signup(); conditions = self.preview()['conditions']
+        for error in (StorageError('manifest unavailable'), EOFError('truncated model'), pickle.UnpicklingError('broken'),
+                      FileNotFoundError('missing')):
+            with self.subTest(error=type(error).__name__), patch('backend.app.agents.market.loaded', side_effect=error):
+                ctx, document = self.context(uid, conditions)
+                sections = {s['section_code']: s for s in document['sections']}
+                # 모델 저장소·파일 오류는 유망시장 섹션만 비우고, 통계·기사 섹션과 리포트는 그대로 만든다
+                self.assertEqual(sections['GROWTH_RISK']['content_status'], 'NO_DATA')
+                self.assertEqual(sections['GROWTH_RISK']['text'], reports.PROMISING_UNAVAILABLE)
+                self.assertEqual(sections['KPI']['content_status'], 'READY')
+                self.assertEqual(ctx['summary']['kpi']['amount_usd'], 1230000)
+
+    def test_copied_chat_prediction_keeps_its_rank_basis(self):
+        uid = self.signup(); conditions = self.preview()['conditions']
+        row = {'anchor': '2026-09-01', 'country_code': 'US', 'hs6': '330499', 'country_rank': 3, 'country_size': 1200,
+               'product_rank': 7, 'product_size': 90, 'exp_12m': 1e6}
+        table = {'result_id': 'r1', 'kind': 'PREDICTION', 'rows': [row], 'columns': [], 'total_rows': 1}
+        for source_conditions, group, rank in (({'country_codes': [], 'hs_items': [{'hs_code': '330499', 'hs_ver': 'HS2022'}]}, 'HS6', 7),
+                                               ({'country_codes': ['US'], 'hs_items': []}, 'COUNTRY', 3)):
+            with self.subTest(group=group):
+                record = {'report_id': 42, 'report_type': 'RPT_ON_DEMAND', 'conditions_json': {**conditions, 'sections': ['GROWTH_RISK']},
+                          'content_json': {'source_tables': [table], 'source_results': [{'conditions': source_conditions, 'limitations': []}]}}
+                with self.engine.begin() as connection:
+                    store = Store(self.app.state.database, connection)
+                    document = reports.build_document(store, uid, record)
+                    ctx = build_context(store, uid, record, document)
+                section = next(s for s in document['sections'] if s['section_code'] == 'GROWTH_RISK')
+                # 한 행짜리 결과도 행 모양으로 추측하지 않고 원래 조건의 순위 기준을 쓴다.
+                self.assertEqual(section['tables'][0]['meta']['group_by'], group)
+                self.assertEqual(ctx['promising']['rows'][0]['rank'], rank)
+                self.assertNotIn('meta', table)   # 저장된 원본은 바꾸지 않는다
+
     def test_exported_kpi_preserves_all_seven_headers_and_values(self):
         from docx import Document
         from openpyxl import load_workbook
