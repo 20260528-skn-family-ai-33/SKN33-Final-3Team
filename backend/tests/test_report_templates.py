@@ -3,8 +3,10 @@
 실행: python -m unittest backend/tests/test_report_templates.py
 """
 import copy
+import json
 import re
 import unittest
+from pathlib import Path
 
 from jinja2 import UndefinedError
 
@@ -414,6 +416,11 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(rt.eok(3_300_000, 1), '0.03')
         self.assertEqual(rt.eok(51_234, 2), '0.0005')
         self.assertEqual(rt.signed_eok(-3_300_000), '−0.03')
+        # 웹과 PDF는 같은 반올림을 쓴다: 최단 십진 표기 기준, 0.5는 0에서 먼 쪽(15,000 USD → 0.0002, 웹·PDF 공통 사례 파일)
+        cases = json.loads((Path(__file__).parent / 'fixtures' / 'report_eok_cases.json').read_text(encoding='utf-8'))['cases']
+        for usd, expected in cases:
+            self.assertEqual(rt.eok(usd).replace(rt.MINUS, '-'), expected, usd)
+            self.assertEqual(rt.signed_eok(usd).replace(rt.MINUS, '-').lstrip('+'), expected, usd)
         # 실적 0은 실적 없음(—), 증감액의 실제 0은 그대로 둔다
         self.assertEqual(rt.eok(0), '—')
         self.assertEqual(rt.signed_eok(0), '0.00')

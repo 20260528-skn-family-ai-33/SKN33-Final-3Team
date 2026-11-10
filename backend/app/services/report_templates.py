@@ -11,6 +11,7 @@ import json
 import math
 import re
 from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, UndefinedError, select_autoescape
@@ -45,16 +46,19 @@ def musd(value, digits=REPORT_DIGITS):
     return (MINUS + text) if value < 0 else text
 
 
-def _eok_digits(value, digits):
-    """억 달러 소수 자릿수. 0.1억 미만은 유효숫자 1자리(0.03·0.0005)로 늘려 0.0으로 뭉개지지 않게 한다(웹 화면과 같은 규칙)."""
-    if value and abs(value) < 0.1:
-        return max(digits, -math.floor(math.log10(abs(value))))
-    return digits
+def _round_eok(value, digits):
+    """억 달러 값 → (소수 자릿수, 반올림한 절댓값 Decimal). 웹 adapters.reportEok와 같은 규칙이다.
+    - 값의 최단 십진 표기(repr, JS String과 같음)를 기준으로 반올림하고 0.5는 0에서 먼 쪽으로 올린다
+      (부동소수점 내부값 0.000149999…를 쓰면 웹과 PDF가 0.0002·0.0001로 갈린다).
+    - 0.1억 미만은 유효숫자 1자리(0.03·0.0005)까지 자릿수를 늘려 0.00으로 뭉개지지 않게 한다."""
+    exact = Decimal(repr(abs(float(value))))
+    places = max(digits, -exact.adjusted()) if value and abs(value) < 0.1 else digits
+    return places, exact.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP)
 
 
 def _number_eok(value, digits):
-    places = _eok_digits(value, digits)
-    text = _number(value, places)
+    places, rounded = _round_eok(value, digits)
+    text = f'{rounded:,.{places}f}'
     return text if places == digits else text.rstrip('0').rstrip('.')
 
 

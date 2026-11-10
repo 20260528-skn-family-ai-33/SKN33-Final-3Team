@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { amount, percent, reportEok, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison } from '../src/api/adapters.js'
@@ -13,6 +14,11 @@ test('미수집 값과 실제 0을 구분하고 USD를 억 USD로 표시한다',
 test('리포트 억 USD는 소수 2자리, 0.1억 미만은 유효숫자 1자리로 PDF와 같게 쓴다', () => {
   assert.equal(reportEok(null), '—'); assert.equal(reportEok(0), '0.00'); assert.equal(reportEok(1234.5), '1,234.50')
   assert.equal(reportEok(0.12), '0.12'); assert.equal(reportEok(0.0345), '0.03'); assert.equal(reportEok(0.000512), '0.0005'); assert.equal(reportEok(-0.004), '-0.004')
+})
+
+test('리포트 억 USD 반올림은 PDF와 같은 공통 사례를 따른다(최단 십진 표기 기준, 0.5는 0에서 먼 쪽)', () => {
+  const file = new URL('../../backend/tests/fixtures/report_eok_cases.json', import.meta.url)
+  for (const [usd, expected] of JSON.parse(readFileSync(file, 'utf8')).cases) assert.equal(reportEok(usd / 1e8), expected, String(usd))
 })
 
 test('리포트 비교 방식과 저장된 비교값을 유지하고 예전 문서도 읽는다', () => {
