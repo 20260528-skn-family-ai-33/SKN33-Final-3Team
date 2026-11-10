@@ -74,7 +74,7 @@
 {% set notes = [('금액은 미국 달러(USD) 기준이며 결과표 열 머리글의 단위로 표시합니다. 대화에서 승인한 결과표를 그대로 실었고 다시 조회하지 않았습니다.'
                  if result_mode else '금액은 미국 달러(USD) 기준, 단위 억 달러. 관세청 통계는 공개까지 약 1개월이 걸려 최신 월이 늦게 반영됩니다.'),
                 '리포트는 생성 시점의 결과를 저장한 것으로, 다시 열어도 재계산하지 않습니다.'] %}
-{% if items | length > 1 %}{% set _ = notes.append('선택한 품목 ' ~ items | length ~ '개의 수출액을 합산한 결과입니다.') %}{% endif %}
+{% if items | length > 1 and not result_mode %}{% set _ = notes.append('선택한 품목 ' ~ items | length ~ '개의 수출액을 합산한 결과입니다.') %}{% endif %}
 {% if report.is_sample %}{% set _ = notes.append('이 예시의 수치·기사는 템플릿 시연용입니다.') %}{% endif %}
 {{ m.contents(dict(report_view, period_label=title, title=c.period.title_label), toc, info, notes, total) }}
 

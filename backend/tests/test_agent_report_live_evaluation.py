@@ -101,6 +101,26 @@ class LiveHarnessTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '바뀌었습니다'):
                 live.run(target, args)
 
+    def test_holdout_refuses_changed_prompt_or_schema_before_key_and_lock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            questions = root / 'q.jsonl'
+            questions.write_text('\n'.join(json.dumps(case([['REPORT']], None) | {'id': f'Q{i}'}) for i in range(20)) + '\n', encoding='utf-8')
+            target = {'questions': questions, 'manifest': root / 'm.json', 'review': root / 'r.md', 'result': root / 'out.json',
+                      'lock': root / 'lock.json', 'role': 'holdout'}
+            live.freeze(target)
+            frozen = json.loads(target['manifest'].read_text(encoding='utf-8'))
+            args = SimpleNamespace(allow_unreviewed_gold=True, max_cost_usd=0.1, set='holdout', output=None)
+            for name in ('prompt_sha256', 'schema_sha256'):
+                target['manifest'].write_text(json.dumps(frozen | {name: '0' * 64}), encoding='utf-8')
+                with patch('backend.app.api.config.Settings') as settings, self.assertRaisesRegex(ValueError, name):
+                    live.run(target, args)
+                settings.assert_not_called()   # API 키를 읽기 전에 멈춘다
+                self.assertFalse(target['lock'].exists())   # 잠금 파일도 만들지 않는다
+            # 개발 세트는 플래너 수정 전후 비교용이라 거부하지 않고 바뀐 항목을 결과에 남긴다
+            self.assertEqual(live.changed_inputs(frozen | {'prompt_sha256': '0' * 64}), ['prompt_sha256'])
+            self.assertEqual(live.changed_inputs(frozen), [])
+
     def test_cost_cap_stops_before_the_call(self):
         recorder = live.Recorder(max_cost=0.000001)
         with patch('openai.OpenAI') as factory:

@@ -324,6 +324,35 @@ class ReportAgentTest(unittest.TestCase):
             self.assertNotIn('NOT_APPLICABLE', text)
             self.assertIn('판정 전', text)
 
+    def test_result_trend_chart_uses_monthly_amounts_and_no_summing_notice(self):
+        """R23 기간 합계(total_usd)가 앞 열에 있고 비교 기준월(compare_month)이 있어도 차트는 월별 금액(amount_usd)을
+        국가·품목별 한 선으로 그린다. 결과 기반 PDF는 품목이 여러 개여도 '합산한 결과' 안내를 싣지 않는다."""
+        from datetime import date
+        from backend.app.services.report_ondemand_context import populate_results
+        from backend.app.services.report_templates import render
+        number = lambda key: {'key': key, 'label': key, 'type': 'number', 'unit': 'USD'}
+        text = lambda key: {'key': key, 'label': key, 'type': 'string', 'unit': None}
+        columns = [text('country_name'), text('name'), number('total_usd'), number('monthly_avg_usd'), text('month'),
+                   number('amount_usd'), text('compare_month'), number('compare_amount_usd')]
+        for label, compare_months in (('기간 길이가 다른 비교', [None, None]), ('기간 길이가 같은 비교', ['2024-01', '2024-02'])):
+            with self.subTest(label):
+                rows = [{'country_name': '미국', 'name': '화장품', 'total_usd': 300, 'monthly_avg_usd': 150, 'month': m,
+                         'amount_usd': v, 'compare_month': cm, 'compare_amount_usd': None if cm is None else 50}
+                        for m, v, cm in zip(('2025-01', '2025-02'), (100, 200), compare_months)]
+                content = {'source_tables': [{'result_id': 'r1', 'kind': 'TREND', 'columns': columns, 'rows': rows}],
+                           'source_results': [{'result_id': 'r1', 'completeness': 'COMPLETE', 'limitations': []}]}
+                ctx = {'conditions': {'hs_items': [{'hs_code': h, 'name': n, 'label': n, 'display': f'{n} (HS {h})'} for h, n in (('330499', '화장품'), ('330410', '립 제품'))], 'countries': []},
+                       'meta': {}, 'articles': [], 'report': {}}
+                populate_results({'sections': ['KPI'], 'compare': 'NONE', 'metric': 'AMOUNT'}, ctx,
+                                 date(2025, 1, 1), date(2025, 2, 28), content)
+                self.assertEqual(ctx['results'][0]['chart'], {'labels': ['2025-01', '2025-02'],
+                                                              'series': [{'name': '미국 · 화장품', 'values': [100, 200]}]})
+        ctx['report'] = {'report_id': '1', 'report_type': 'RPT_ON_DEMAND', 'title': 't', 'period_label': 'p', 'kind_label': 'k',
+                         'cover_eyebrow': 'e', 'cover_lead': 'l', 'footer_label': 'f', 'is_sample': False,
+                         'published_at': '2026-11-09T12:00:00+09:00'}
+        ctx.update(verification=None, article_limit=None, article_policy_note='', subscription={'label': ''})
+        self.assertNotIn('합산한 결과', render('RPT_ON_DEMAND', ctx))
+
     def test_result_tables_are_bounded_and_keep_missing_notes(self):
         """R22 결과표는 최대 200행만 PDF에 싣고 전체 행 수를 알린다. 부분 결과(PARTIAL)의 누락 사유를 그대로 싣고,
         시리즈가 5개를 넘는 추이는 그래프 없이 표만 둔다."""

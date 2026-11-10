@@ -100,9 +100,14 @@ const { chromium } = require('playwright')
     // 집계 카드의 '—'·'준비 중'을 그리지 않고, 만료될 수 있는 원본 결과 API(/results)를 부르지 않는다.
     {
       const trend = { result_id: 'result_t', kind: 'TREND', total_rows: 4,
-        columns: [{ key: 'country_name', label: '국가', type: 'string' }, { key: 'month', label: '기준월', type: 'string' }, { key: 'amount_usd', label: '수출액', type: 'number', unit: 'USD' }],
-        rows: [['중국', '2025-10', 2210000], ['미국', '2025-10', 1210000], ['중국', '2025-11', 2220000], ['미국', '2025-11', 1220000]]
-          .map(([country_name, month, amount_usd]) => ({ country_name, month, amount_usd })) }
+        // 서버가 확정한 열 순서 그대로: 기간 합계(total_usd)가 월별 금액보다 앞에 있고, 같은 길이 비교라 compare_month가 월마다 다르다
+        columns: [{ key: 'country_name', label: '국가', type: 'string' }, { key: 'hs_ver', label: 'HS 판본', type: 'string' },
+          { key: 'total_usd', label: '기간 합계', type: 'number', unit: 'USD' }, { key: 'monthly_avg_usd', label: '월평균 금액', type: 'number', unit: 'USD' },
+          { key: 'month', label: '기준월', type: 'string' }, { key: 'amount_usd', label: '수출액', type: 'number', unit: 'USD' },
+          { key: 'compare_month', label: '비교 기준월', type: 'string' }, { key: 'compare_amount_usd', label: '비교 기간 금액', type: 'number', unit: 'USD' }],
+        rows: [['중국', '2025-10', 221000000, 443000000], ['미국', '2025-10', 121000000, 243000000], ['중국', '2025-11', 222000000, 443000000], ['미국', '2025-11', 122000000, 243000000]]
+          .map(([country_name, month, amount_usd, total_usd]) => ({ country_name, hs_ver: 'HS2022', total_usd, monthly_avg_usd: total_usd / 2, month, amount_usd,
+            compare_month: month.replace('2025', '2024'), compare_amount_usd: 100000000 })) }
       const ranking = { result_id: 'result_r', kind: 'RANKING', total_rows: 2,
         columns: [{ key: 'rank', label: '순위', type: 'number' }, { key: 'country_name', label: '국가', type: 'string' }, { key: 'export_usd', label: '수출액', type: 'number', unit: 'USD' }],
         rows: [{ rank: 1, country_name: '중국', export_usd: 6660000 }, { rank: 2, country_name: '미국', export_usd: 3660000 }] }
@@ -145,10 +150,16 @@ const { chromium } = require('playwright')
       assert.equal(header, '승인한 분석 결과로 작성 · HS6 330499 · 국가: US · CN')
       assert.equal(text.split(missing).length - 1, 2, '결과표에 없는 섹션 두 곳에 포함되지 않음 안내')
       for (const absent of ['—억 USD', '준비 중', '데이터 준비 중', '전체 항목 선택']) assert.ok(!text.includes(absent), `결과 기반 리포트에 '${absent}'가 보이면 안 된다`)
-      for (const shown of ['2,210,000', '1,220,000', '6,660,000', '3,660,000', '2025-12 일부 통계 미공개']) assert.ok(text.includes(shown), `결과표 값 ${shown}`)
+      for (const shown of ['221,000,000', '122,000,000', '443,000,000', 'HS2022', '2024-10', '6,660,000', '3,660,000', '2025-12 일부 통계 미공개']) assert.ok(text.includes(shown), `결과표 값 ${shown}`)
       // 월별 추이는 국가별 선 두 개(섞어 한 줄로 그리지 않는다)
       const legend = await page.locator('article .chips .lg').allInnerTexts()
       assert.deepEqual(legend.filter(t => ['중국', '미국'].includes(t.trim())).sort(), ['미국', '중국'])
+      assert.ok(!legend.some(t => t.includes('2024-')), '비교 기준월로 선을 나누지 않는다: ' + legend.join(', '))
+      // 선의 값은 월별 금액(억 USD)이다. 기간 합계(4.43·2.43)를 월마다 그리지 않는다
+      const points = await page.locator('article svg circle title').allTextContents()
+      assert.deepEqual(points.map(t => t.replace(/\s+/g, ' ').trim()).sort(), ['미국 · 2025-10: 1.21', '미국 · 2025-11: 1.22', '중국 · 2025-10: 2.21', '중국 · 2025-11: 2.22'])
+      // 저장된 결과표는 서버가 확정한 열을 그대로 보인다(채팅 화면의 숨김 규칙을 적용하지 않음)
+      for (const head of ['HS 판본', '기간 합계', '월평균 금액', '비교 기준월', '비교 기간 금액']) assert.ok(text.includes(head), '결과표 열 ' + head)
       assert.ok(!requested.some(p => p.includes('/results/')), '원본 결과 API를 부르지 않는다: ' + requested.join(', '))
       assert.deepEqual(errors, [])
       console.log('PASS result-based report view')

@@ -44,14 +44,17 @@ def _cell(value, column):
     return str(value)
 
 
+SERIES_KEYS = ('country_name', 'name')  # 추이 결과의 국가·품목 표시 열. 웹 ReportView.trendChart와 같은 기준
+
+
 def _trend_chart(table):
-    """월별 추이 결과의 꺾은선 그래프. 기준월 열과 USD 금액 열이 있을 때만, 나머지 글자 열 조합을 시리즈로 둔다."""
-    columns = table['columns']
-    keys = [c['key'] for c in columns]
-    amount = next((c['key'] for c in columns if c.get('type') == 'number' and c.get('unit') == 'USD'), None)
-    if table.get('kind') != 'TREND' or 'month' not in keys or not amount:
+    """월별 추이 결과의 꺾은선 그래프. 기준월 열과 월별 금액(amount_usd) 열이 있을 때만, 국가·품목 열로 시리즈를 나눈다.
+    total_usd 같은 기간 합계 열이나 compare_month 같은 비교 열은 쓰지 않는다(월마다 같은 값·시리즈 분할 오류)."""
+    keys = [c['key'] for c in table['columns']]
+    if table.get('kind') != 'TREND' or 'month' not in keys or 'amount_usd' not in keys:
         return None
-    names = [c['key'] for c in columns if c.get('type') != 'number' and c['key'] != 'month']
+    amount = 'amount_usd'
+    names = [k for k in SERIES_KEYS if k in keys]
     labels = sorted({r['month'] for r in table['rows'] if r.get('month')})
     if not labels or len(labels) > CHART_LABEL_LIMIT:
         return None

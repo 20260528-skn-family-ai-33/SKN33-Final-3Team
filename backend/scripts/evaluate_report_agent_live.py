@@ -217,6 +217,19 @@ def run_planner(question, previous_conditions, client, settings):
 
 
 # ── 고정·실행 ────────────────────────────────────────────────
+def model_input_hashes():
+    """모델 출력에 영향을 주는 플래너 프롬프트와 출력 스키마의 해시. 고정할 때 기록하고 실행 전에 대조한다."""
+    from backend.app.agents.planner import PLANNER_PROMPT
+    from backend.app.agents.state import PlannerOutput
+    return {'prompt_sha256': digest_bytes(PLANNER_PROMPT.encode()),
+            'schema_sha256': digest_bytes(json.dumps(PlannerOutput.model_json_schema(), sort_keys=True).encode())}
+
+
+def changed_inputs(manifest):
+    """고정 기록과 다른 프롬프트·스키마 이름 목록."""
+    return [k for k, v in model_input_hashes().items() if manifest.get(k) != v]
+
+
 def freeze(target):
     from backend.app.agents.planner import PLANNER_PROMPT
     from backend.app.agents.state import PlannerOutput
@@ -224,8 +237,7 @@ def freeze(target):
     manifest = {'schema_version': 1, 'frozen_at_utc': datetime.now(timezone.utc).isoformat(),
                 'questions_sha256': digest_bytes(target['questions'].read_bytes()), 'questions': len(cases),
                 'categories': {c: sum(1 for x in cases if x['category'] == c) for c in dict.fromkeys(x['category'] for x in cases)},
-                'prompt_sha256': digest_bytes(PLANNER_PROMPT.encode()),
-                'schema_sha256': digest_bytes(json.dumps(PlannerOutput.model_json_schema(), sort_keys=True).encode()),
+                **model_input_hashes(),
                 'code_revision': revision_metadata(HARNESS), 'gold_author': 'AI 초안(Claude)',
                 'human_review': {'status': 'pending', 'reviewer': None, 'approved_questions_sha256': None}}
     write_json(target['manifest'], manifest)
@@ -250,6 +262,11 @@ def run(target, args):
     questions_hash = digest_bytes(target['questions'].read_bytes())
     if questions_hash != manifest['questions_sha256']:
         raise ValueError('고정한 뒤 질문·정답이 바뀌었습니다. 새 세트로 다시 고정하세요')
+    # holdout은 고정한 프롬프트·스키마로만 한 번 실행한다(API 키 로딩·잠금 파일 생성 전에 거부).
+    # 개발 세트는 플래너를 고친 뒤 같은 질문으로 다시 돌려 비교하는 용도라 실행하되 결과에 바뀐 항목을 남긴다.
+    changed = changed_inputs(manifest)
+    if changed and target['role'] == 'holdout':
+        raise ValueError(f"고정한 뒤 {', '.join(changed)}가 바뀌었습니다. holdout은 고정한 프롬프트·스키마로만 실행합니다")
     review = manifest['human_review']
     approved = review['status'] == 'approved' and bool(review.get('reviewer')) and review.get('approved_questions_sha256') == questions_hash
     if not approved and not args.allow_unreviewed_gold:
@@ -270,6 +287,7 @@ def run(target, args):
               'started_at_utc': datetime.now(timezone.utc).isoformat(),
               'gold_status': 'human_approved' if approved else 'PROVISIONAL_UNREVIEWED_GOLD',
               'model_requested': MODEL, 'prompt_sha256': digest_bytes(PLANNER_PROMPT.encode()),
+              'changed_since_freeze': changed,
               'questions_sha256': questions_hash, 'manifest_frozen_at_utc': manifest['frozen_at_utc'],
               'harness': revision_metadata(HARNESS), 'evidence_sha256': {p: digest_bytes((ROOT / p).read_bytes()) for p in HARNESS},
               'hash_normalization': 'CRLF to LF before SHA256', 'pricing': PRICE, 'cost_cap_usd': args.max_cost_usd,

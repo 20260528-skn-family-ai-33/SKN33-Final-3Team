@@ -64,6 +64,8 @@ GROUPS = [
         ('R20', '기존 유지', 'condition_report_keeps_the_ondemand_template', '조건으로 요청한 채팅 리포트는 기존 요청형 집계 섹션을 그대로 쓴다.'),
         ('R21', '표시', 'result_report_cells_are_readable_in_pdf_and_docx', '일회성 판정·순위 상태를 PDF·DOCX에서 읽을 수 있는 말로 싣는다.'),
         ('R22', '분량·누락', 'result_tables_are_bounded_and_keep_missing_notes', 'PDF 결과표는 200행까지 싣고 전체 행 수·누락 사유·미포함 항목을 알린다.'),
+        ('R23', '표시', 'result_trend_chart_uses_monthly_amounts_and_no_summing_notice',
+         '월별 차트는 기간 합계가 아닌 월별 금액을 국가·품목별 선으로 그리고, 결과 기반 PDF에 품목 합산 안내를 싣지 않는다.'),
     ]),
 ]
 CASES = [dict(id=identity, group=group, category=category, criterion=criterion, test=f'{test_class}.test_{method}')

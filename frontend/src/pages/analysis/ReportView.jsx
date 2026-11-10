@@ -36,9 +36,10 @@ const SERIES_COLORS = ['#C8102E', '#2E6DB4', '#16877C', '#8E5BB5', '#E07B24']
 
 /** 월별 추이 결과표를 국가·품목별 선으로 나눈다(PDF 결과 기반 모드와 같은 기준: 시리즈 5개·월 60개 이하). 아니면 null. */
 function trendChart(table) {
-  const amount = table.columns.find(c => c.type === 'number' && c.unit === 'USD')?.key
-  if (table.kind !== 'TREND' || !amount || !table.columns.some(c => c.key === 'month')) return null
-  const names = table.columns.filter(c => c.type !== 'number' && c.key !== 'month').map(c => c.key)
+  // 월별 금액(amount_usd)만 쓴다. 기간 합계(total_usd)나 비교 기준월(compare_month)로 선을 만들거나 나누지 않는다.
+  const keys = table.columns.map(c => c.key), amount = 'amount_usd'
+  if (table.kind !== 'TREND' || !keys.includes(amount) || !keys.includes('month')) return null
+  const names = ['country_name', 'name'].filter(k => keys.includes(k))
   const labels = [...new Set(table.rows.map(r => r.month).filter(Boolean))].sort()
   const groups = new Map()
   for (const r of table.rows) {
@@ -66,7 +67,7 @@ function ResultSections({ sections, onDownload }) {
               <LineChart width={900} height={240} labels={chart.labels} yTicks={chart.ticks} formatValue={value => Number(value).toFixed(2)} series={chart.series} />
               <div className="chips">{chart.series.map(s => <span key={s.name} className="lg"><i style={{ background: s.color }} />{s.name}</span>)}</div>
             </div>}
-            <ApiResults table={{ ...table, result_id: undefined }} tableOnly onDownload={onDownload} />
+            <ApiResults table={{ ...table, result_id: undefined }} tableOnly fixedColumns onDownload={onDownload} />
           </div>
         )
       })}
