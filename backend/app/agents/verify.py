@@ -175,8 +175,9 @@ def inspect_sentence(sentence,sources,*,known_names=(),countries=()):
 def _matching_cells(claim, facts, sources, catalog):
     matches = []
     inferred_axes = set()
+    check_dimensions = claim.quantity is None or (claim.targets and claim.metric.family == 'CHANGE')
     for fact in facts:
-        if claim.quantity is None:
+        if check_dimensions:
             # A country/product detail row alone cannot establish the trend of
             # the whole country or of the product across all countries.
             if (bool(fact.stored_targets - catalog.countries) != bool(claim.targets - catalog.countries)

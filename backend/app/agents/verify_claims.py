@@ -23,10 +23,12 @@ COMPARE_LINK = r'(?:대비|보다|에\s*비(?:해|하여|하면)|(?:와|과|에)
 COMPARISON = re.compile(r'(?:(?P<yoy>'+YEAR_AGO+r')\s*(?:(?:동기|동월|같은\s*달)\s*)?|'
                         r'(?P<mom>'+MONTH_AGO+r')\s*)'+COMPARE_LINK)
 COMPARE_OPERATOR = re.compile(COMPARE_LINK)
+EXTREME_DOWN = r'급감|급락|곤두박질'
+EXTREME_UP = r'급증|급등|치솟'
 DOWN_WORDS, UP_WORDS = r'감소|줄어들|줄|하락|축소|떨어|낮|내려|내린', r'증가|늘어나|늘|상승|확대|성장|올라|오르|높|올린'
-CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나|의|을|를)?\s*(?:(?P<negative>안|못)\s*)?(?:(?P<down>'+DOWN_WORDS+r')|(?P<up>'+UP_WORDS+r'))')
-DOWN = re.compile(r'감소|줄어|줄었|줄고|하락|축소|떨어|내려|내린')
-UP = re.compile(r'증가|늘어|늘었|늘고|상승|확대|성장|올라|오르|올린')
+CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나|의|을|를)?\s*(?:(?P<negative>안|못)\s*)?(?:(?P<down>'+DOWN_WORDS+'|'+EXTREME_DOWN+r')|(?P<up>'+UP_WORDS+'|'+EXTREME_UP+r'))')
+DOWN = re.compile(EXTREME_DOWN + r'|감소|줄어|줄었|줄고|하락|축소|떨어|내려|내린')
+UP = re.compile(EXTREME_UP + r'|증가|늘어|늘었|늘고|상승|확대|성장|올라|오르|올린')
 DIRECTION = re.compile(r'과거|지난|직전|최근|앞선|향후|앞으로|미래|다가올|다음|예측|예상|전망')
 PAST_WORDS = frozenset({'과거','지난','직전','최근','앞선'})
 RANGE_JOIN = re.compile(r'\s*(?:부터|[~～–])\s*')
@@ -229,6 +231,14 @@ def _quantity_name_roles(text, hits, countries):
     return {hit: anchors[hit[1:]] for hit in dual}
 
 
+def _contained_names(text, names, lengths):
+    """Exact substring candidates; scan the smaller of dictionary and text windows."""
+    if len(text) * len(lengths) >= len(names):
+        return {name for name in names if name in text}
+    return {part for size in lengths for i in range(len(text) - size + 1)
+            if (part := text[i:i + size]) in names}
+
+
 class NameCatalog:
     def __init__(self, sources, known_names=(), countries=(), *, mention_cache=None):
         self._row_bindings = {}
@@ -238,6 +248,7 @@ class NameCatalog:
             if source.get('group')=='COUNTRY':
                 self.countries |= {name for key,name in source_names(source.get('top',[])) if key in ('name','code')}
         self.names=frozenset(n for n in known_names if n and len(n)>1)|{n for _,n in fields if len(n)>1}
+        self._lengths = {len(name) for name in self.names}
         # Mention spans depend on the vocabulary and country roles. Alias
         # ownership and row bindings still belong to each individual catalog.
         self._mentions = ({} if mention_cache is None else
@@ -246,11 +257,17 @@ class NameCatalog:
         products = {name for key, name in fields if key in ('product_name', 'name', 'label')} - self.countries
         candidates = self.names - stored - self.countries
         self.aliases = {}
-        for short in candidates:
-            owners = [name for name in products if short in name
-                      and (not any(c.isdigit() for c in short) or _name_pattern(short).search(name))]
-            if len(owners) == 1:
-                self.aliases.setdefault(owners[0], set()).add(short)
+        if candidates:
+            lengths = {len(name) for name in candidates}
+            owners = {}
+            for product in products:
+                for short in _contained_names(product, candidates, lengths):
+                    if any(c.isdigit() for c in short) and not _name_pattern(short).search(product):
+                        continue
+                    owners[short] = None if short in owners else product
+            for short, owner in owners.items():
+                if owner is not None:
+                    self.aliases.setdefault(owner, set()).add(short)
 
     def resolve_mentions(self, text):
         if text not in self._mentions:
@@ -261,7 +278,7 @@ class NameCatalog:
         # Identify whole stored names first. A model number, date, unit or amount
         # embedded in that name must not erase the identifier before it is found.
         value=text
-        possible={name for name in self.names if name in value}
+        possible = _contained_names(value, self.names, self._lengths)
         hits={(name,m.start(),m.end()) for name in possible for m in _name_pattern(name,name in self.countries).finditer(value)}
         pending=list(hits)
         for _,_,end in pending:
@@ -319,7 +336,11 @@ class NameCatalog:
     def row_binding(self, name):
         """Aliases and grouped names for one stored identifier, within this catalog only."""
         if name not in self._row_bindings:
-            parts = self.names_in(name)
+            # A group needs two distinct identifiers. Explicit HS references
+            # can contribute identifiers outside the dictionary.
+            possible = _contained_names(name, self.names, self._lengths)
+            parts = (self.names_in(name) if len(possible) >= 2 or HS_REFERENCE.search(name)
+                     else frozenset())
             members = parts if self.grouped(parts) else frozenset()
             self._row_bindings[name] = (self.aliases.get(name, ()), members)
         return self._row_bindings[name]
@@ -618,13 +639,32 @@ ARTICLE_SUBJECT = re.compile(r'(?:' + ARTICLE_MEASURE.pattern + r')(?:은|는|�
 ARTICLE_ASIDE = re.compile(
     r'(?:수요|가격|단가)(?:가|이|의|는|은)?\s*'
     r'(?:둔화|감소|하락|증가|상승|변동|약화|회복)'
-    r'(?:(?:된|한)?\s*(?:에도(?:\s*불구하고)?|때문에|영향으로|가운데|여파로)|했지만|됐지만)(?=\s|[,，])')
+    r'(?:(?:된|한)?\s*(?:에도(?:\s*불구하고)?|에\s*힘입어|으로|때문에|영향으로|가운데|여파로)|했지만|됐지만)(?=\s|[,，])')
 UNRESOLVED_DIRECTION = re.compile(
-    r'(?P<up>증가|상승|확대|성장|늘어|늘었)|(?P<down>감소|하락|축소|줄어|줄었)')
+    r'(?P<up>증가|상승|확대|성장|늘어|늘었|' + EXTREME_UP + r')|(?P<down>감소|하락|축소|줄어|줄었|' + EXTREME_DOWN + r')'
+    r'|(?P<similar>비슷한\s*수준|유사한\s*수준|보합세)')
 GUIDANCE = re.compile(r'여부|했는지|하는지|했는가|(?:확인|참고|참조|살펴)\s*(?:하세요|하십시오|바랍니다|할 수)')
 
 
 def _without_article_aside(text, syntax, mentions):
+    # Anchor the main clause on a grounded subject, rather than enumerating
+    # inflections of the article's background predicate. Never discard an
+    # earlier trade assertion, number, date or comparison.
+    if ARTICLE_MEASURE.search(syntax):
+        for _, start, _ in mentions:
+            # Keep a comparator immediately before the subject in the main clause.
+            for comparison in COMPARISON.finditer(syntax, 0, start):
+                if not text[comparison.end():start].strip():
+                    start = comparison.start()
+                    break
+            background, main = syntax[:start], syntax[start:]
+            if (ARTICLE_MEASURE.search(background)
+                    and re.search(r'(?:로|어|아|에|해|가운데|에도|께|며|서|여|려)[,，]?\s*$', background.rstrip())
+                    and not (TREND_METRIC.search(background) or COMPARISON.search(background)
+                             or DATE.search(background) or quantities(background))
+                    and re.match(r'\s*(?:의\s*)?(?:수출|수입|점유율|비중)', COMPARISON.sub('', main))
+                    and COMPARISON.search(main) and _trend_predicate(main)):
+                return text[start:]
     aside = ARTICLE_ASIDE.search(syntax)
     if not aside:
         return text
@@ -658,10 +698,10 @@ def _trend_claim(syntax, targets, time, catalog, predicate, *, understood=True):
     # With no numeric unit, do not mistake a different measure (e.g. 수출 가격)
     # or an unknown entity for the trade amount of a matching row.
     rest = TREND_METRIC.sub('', mask_dates(COMPARISON.sub('', prefix)))
-    rest = re.sub(r'소폭|큰\s*폭으로|대폭|다소|크게|조금|시장|전체|하여|에서|으로|[의은는이가을를에와과액·,\s]', '', rest)
+    rest = re.sub(r'소폭|큰\s*폭으로|대폭|다소|크게|조금|시장|전체|하여|에서|으로|[도의은는이가을를에와과액·,\s]', '', rest)
     valid = understood and not TREND_PATH.search(syntax) and len(axes) <= 1 and len(flow_words) <= 1 and not rest and not re.search(r'수출입|교역', prefix)
     metric = MetricClaim(family='SHARE_CHANGE' if share else 'CHANGE', comparison=next(iter(axes), None),
-                         flow=flow, direction='UP' if predicate['up'] else 'DOWN',
+                         flow=flow, direction='UP' if predicate['up'] else 'DOWN' if predicate['down'] else None,
                          negated_change=bool(understood and (predicate['negative'] or predicate['short'])))
     return Claim(None, targets, 'GROUP' if catalog.grouped(targets) else 'SINGLE', metric, time, syntax, valid)
 
@@ -673,6 +713,41 @@ def _unresolved_direction(text):
             continue
         return marker
     return None
+
+
+SUBJECT_WORD = r'([가-힣A-Za-z0-9][가-힣A-Za-z0-9·/-]*)'
+SUBJECT_QUALIFIERS = (
+    re.compile(SUBJECT_WORD + r'의\s*@'),
+    re.compile(r'(?:수출|수입)(?:액)?\s*중\s+' + SUBJECT_WORD),
+    re.compile(SUBJECT_WORD + r'\s+기준'),
+)
+SCOPE_LABELS = frozenset('전체 연간 월간 기간 금액 총액 올해 전년 전월 오늘 현재'.split())
+
+
+def _unknown_trade_subject(syntax, mentions):
+    """Detect unbound qualifiers inside, before, or after the trade subject."""
+    if not re.search(r'수출|수입', syntax):
+        return False
+    # Mark resolved names explicitly: spaces alone cannot distinguish a
+    # missing qualifier from a known product already bound to its source row.
+    marked = list(syntax)
+    for _, start, _ in mentions:
+        marked[start] = '@'
+    scope = mask_dates(COMPARISON.sub(' ', ''.join(marked)))
+    for pattern in SUBJECT_QUALIFIERS:
+        if any(m[1] not in SCOPE_LABELS for m in pattern.finditer(scope)):
+            return True
+    for measure in re.finditer(r'수출|수입', syntax):
+        end = max((b for _, _, b in mentions if b <= measure.start()), default=None)
+        if end is None:
+            continue
+        gap = mask_dates(COMPARISON.sub('', syntax[end:measure.start()])).strip()
+        # Case particles and aggregate labels do not introduce a product.
+        if re.fullmatch(r'(?:으로의|로의|에서의|에 대한|의|은|는|이|가)?\s*(?:전체|총|전체의)?', gap):
+            continue
+        if re.fullmatch(r'[가-힣A-Za-z0-9][가-힣A-Za-z0-9 /·-]*', gap):
+            return True
+    return False
 
 
 def parse_sentence(sentence,catalog):
@@ -808,7 +883,10 @@ def parse_sentence(sentence,catalog):
             claim_time=ordered_times[variant_index] if ordered_times and not metric_list and not catalog.grouped(targets) else time
             if metric.family=='CHANGE' and previous and re.search(r'보다|대비',text[previous.end:quantity.start]):
                 claim_time=replace(claim_time,comparison_reference=True)
-            claims.append(Claim(quantity,frozenset(bound_targets),target_scope,metric,claim_time,local,quantity.valid and metric.valid))
+            valid = quantity.valid and metric.valid
+            if metric.family == 'CHANGE' and _unknown_trade_subject(syntax, mentions):
+                valid = False
+            claims.append(Claim(quantity,frozenset(bound_targets),target_scope,metric,claim_time,local,valid))
         last_metric = claims[-1].metric
         predicate = _trend_predicate(clean)
         # For a numeric change the numeric claim already carries the direction.

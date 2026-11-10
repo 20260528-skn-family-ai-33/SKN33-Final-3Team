@@ -113,6 +113,77 @@ class DirectionOnlyTest(unittest.TestCase):
         self.check('미국 수출은 전월 대비 5% 감소해 100달러가 됐다.', True,
                    [(0, 'mom_pct'), (0, 'amount_usd')], numbers=['5%', '100달러'], rows=rows)
 
+    def test_review_article_background_pairs(self):
+        period = dict(start='2025-01', end='2025-12')
+        prior = dict(start='2024-01', end='2024-12')
+        cases = (
+            '수요 회복으로 미국 수출이 전년 대비 증가했습니다 [1].',
+            '수요 회복에 힘입어 미국 수출이 전년 대비 증가했습니다.',
+            '현지 수요가 회복된 시기에 미국 수출도 전년 대비 증가했습니다 [1].',
+            '수요 회복과 함께 미국 수출은 전년 대비 증가했습니다 [1].',
+            '반도체 가격 반등과 맞물려 미국 수출이 전년 대비 증가했습니다 [2].',
+            '수요가 회복되는 가운데 미국 수출은 전년 대비 증가했습니다 [1].',
+            '수요가 회복된 가운데 미국 수출은 전년 대비 증가했습니다 [1].',
+            '일본 수요 둔화에도 미국 수출은 전년 대비 증가했습니다 [1].',
+            '수요 회복으로 미국 수출이 전년 대비 50% 증가했습니다 [1].',
+        )
+        for value in (50, -50):
+            rows = [dict(country_name='미국', change_pct=value),
+                    dict(country_name='일본', change_pct=-value),
+                    dict(country_name='미국', product_name='반도체', change_pct=-value)]
+            for sentence in cases:
+                with self.subTest(value=value, sentence=sentence):
+                    self.check(sentence, value > 0, [(0, 'change_pct' if value > 0 else None)],
+                               rows=rows, period=period, compare=prior,
+                               numbers=['50%'] if '50%' in sentence else [])
+
+    def test_review_unknown_subject_and_qualitative_claims(self):
+        rows = [dict(country_name='미국', yoy_pct=50, mom_pct=-10),
+                dict(country_name='미국', product_name='반도체', yoy_pct=-50)]
+        for text in ('미국 수출은 수요 회복에 힘입어 전년 대비 증가했습니다.',
+                     '수요 회복으로 전년 대비 미국 수출이 증가했습니다.'):
+            self.check(text, True, [(0, 'yoy_pct')], rows=rows)
+            self.check(text.replace('증가', '감소'), False, [(0, None)], rows=rows)
+            self.check(text.replace('전년', '전월').replace('증가', '감소'),
+                       True, [(0, 'mom_pct')], rows=rows)
+        text = '수요 회복으로 미국 자동차 수출은 전년 대비 50% 증가했습니다.'
+        self.check(text, False, [(0, None)], rows=rows, numbers=['50%'])
+        self.check(text, True, [(2, 'yoy_pct')], numbers=['50%'],
+                   rows=rows + [dict(country_name='미국', product_name='자동차', yoy_pct=50)])
+        for text in ('수요 회복으로 미국 수출이 전년 대비 급감했습니다.',
+                     '수요 회복으로 미국 수출은 전년과 비슷한 수준입니다.'):
+            self.check(text, False, [(0, None)], rows=rows)
+        self.check('미국 수출의 급감 여부를 확인하세요.', True, [], rows=rows)
+
+    def test_product_qualifier_order_never_borrows_country_change(self):
+        country = dict(country_name='미국', yoy_pct=50)
+        product = dict(country_name='미국', product_name='자동차', yoy_pct=-50)
+        for body in ('자동차의 미국 수출은 전년 대비 50% 증가했습니다.',
+                     '미국 자동차 수출은 전년 대비 50% 증가했습니다.',
+                     '미국 수출 중 자동차는 전년 대비 50% 증가했습니다.',
+                     '미국의 전년 대비 수출 증가율은 자동차 기준 50%입니다.'):
+            with self.subTest(body=body):
+                self.check(body, False, [(0, None)], rows=[country], numbers=['50%'])
+                self.check(body, False, [(0, None)], rows=[country, product], numbers=['50%'])
+                self.check(body.replace('증가', '감소'), True, [(1, 'yoy_pct')],
+                           rows=[country, product], numbers=['50%'])
+
+    def test_extreme_direction_with_and_without_magnitude(self):
+        rows = [dict(country_name='미국', yoy_pct=50, mom_pct=-50)]
+        for phrase in ('급락했습니다', '곤두박질쳤습니다'):
+            for text in (f'미국 수출은 전년 대비 {phrase}.', f'전년 대비 미국 수출이 {phrase}.'):
+                self.check(text, False, [(0, None)], rows=rows)
+            for axis, ok in [('전년', False), ('전월', True)]:
+                self.check(f'미국 수출은 {axis} 대비 50% {phrase}.', ok,
+                           [(0, 'mom_pct' if ok else None)], numbers=['50%'], rows=rows)
+        self.check('전년 대비 미국 수출은 50% 치솟았습니다.', True,
+                   [(0, 'yoy_pct')], numbers=['50%'], rows=rows)
+        self.check('전월 대비 미국 수출은 50% 치솟았습니다.', False,
+                   [(0, None)], numbers=['50%'], rows=rows)
+        self.check('미국 수출은 전년 대비 50% 곤두박질쳤습니다.', False,
+                   [(0, None)], numbers=['50%'], rows=[dict(country_name='미국', mom_pct=-50)])
+        self.check('미국 수출의 급락 여부를 확인하세요.', True, [], rows=rows)
+
     def test_single_scoped_axis_and_unsupported_path(self):
         rows = [dict(country_name='미국', yoy_pct=-20, amount_usd=100),
                 dict(country_name='일본', mom_pct=10)]
