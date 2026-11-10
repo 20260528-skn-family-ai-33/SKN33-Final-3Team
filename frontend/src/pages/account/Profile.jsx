@@ -4,7 +4,7 @@ import { navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
 import { Btn, Check, Modal, TextArea, TextField } from '../../components/ui'
 import { providerLabel } from '../../data/seed'
-import { QueryState, useQuery } from '../../api/hooks'
+import { ErrorNotice, QueryState, useQuery } from '../../api/hooks'
 import TermsBody from '../../components/TermsBody'
 
 const CONSENTS = [
@@ -55,8 +55,19 @@ function TermsView({ kind }) {
 }
 
 export default function Profile({ route }) {
-  const { account, session, withdraw } = useApp()
+  const { account, session, withdraw, settings, acceptNotificationTerms, revokeNotificationTerms } = useApp()
   const me = useQuery('/users/me')
+  const notificationTerms = useQuery('/terms/notification')
+  const notificationVersion = notificationTerms.data?.terms.version
+  // 알림 수신 동의(선택): 현재 알림 약관에 동의한 상태면 체크. 알림설정 화면과 같은 상태(settings)를 쓴다.
+  const notificationAgreed = !!settings.termsAgreed && settings.termsVersion === notificationVersion
+  const [notificationSaving, setNotificationSaving] = useState(false)
+  const toggleNotification = async () => {
+    if (!notificationVersion || notificationSaving) return
+    setNotificationSaving(true)
+    try { await (notificationAgreed ? revokeNotificationTerms : acceptNotificationTerms)(notificationVersion) }
+    finally { setNotificationSaving(false) }
+  }
   const consentOf = type => me.data?.user.terms_consents?.find(item => item.terms_type === type)
   const [email, setEmail] = useState('')
   const [emailError, setEmailError] = useState('')
@@ -92,13 +103,23 @@ export default function Profile({ route }) {
               <p style={{ fontSize: 16, fontWeight: 700 }}>{title} <span className="tag red">필수</span></p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                 <button type="button" className="reset more" style={{ fontSize: 13 }} onClick={() => setTermsView({ key, title })}>내용 보기</button>
-                <span className="note">{me.loading ? '확인 중…' : consentOf(type) ? `${String(consentOf(type).acted_at).slice(0, 10)} 동의` : '동의 기록 없음'}</span>
+                <span className="note">{me.loading ? '확인 중…' : me.error ? '불러오지 못함' : consentOf(type) ? `${String(consentOf(type).acted_at).slice(0, 10)} 동의` : '동의 기록 없음'}</span>
               </div>
             </div>
           ))}
+          <div className="between" style={{ padding: '16px 0', borderBottom: '1px solid var(--line2)' }}>
+            <p style={{ fontSize: 16, fontWeight: 700 }}>알림 수신 동의 <span className="tag">선택</span></p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <button type="button" className="reset more" style={{ fontSize: 13 }} onClick={() => setTermsView({ key: 'notification', title: '알림 수신 동의' })}>내용 보기</button>
+              <Check checked={notificationAgreed} disabled={!notificationVersion || notificationSaving} onChange={toggleNotification}
+                aria-label="알림 수신 동의">{notificationAgreed ? '동의함' : '동의 안 함'}</Check>
+            </div>
+          </div>
         </div>
+        {/* 불러오기에 실패하면 '동의 기록 없음'으로 오해하지 않게 오류와 다시 불러오기를 보인다 */}
+        <ErrorNotice error={me.error} retry={me.reload} />
         <div className="between" style={{ marginTop: 18 }}>
-          <span className="note">알림 수신 동의는 알림설정에서 확인해 주세요. 동의 기록이 없으면 약관 도입 전에 가입한 계정입니다.</span>
+          <span className="note">알림 수신 동의를 해제하면 알림도 함께 꺼집니다. 알림 종류는 알림설정에서 고를 수 있습니다. 필수 약관의 동의 기록이 없으면 약관 도입 전에 가입한 계정입니다.</span>
         </div>
       </section>
 

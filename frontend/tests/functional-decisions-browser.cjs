@@ -57,6 +57,11 @@ const { chromium } = require('playwright')
       }
       if (p === '/reference/hs-codes/0101/children') return reply({ items: [product] })
       if (p === '/users/me/notification-settings') return reply({ settings: { notifications_enabled: false } })
+      if (p === '/users/me/consents' && request.method() === 'POST') {
+        const data = request.postDataJSON()
+        return reply({ consent: { terms_type: 'NOTIFICATION', terms_version: data.terms_version, action: data.action,
+          acted_at: '2026-11-10', notifications_enabled: data.action === 'AGREE' && !!data.enable_notifications } })
+      }
       if (p === '/terms/notification') return reply({ terms: { version: 'v1', body: '검수 약관' } })
       if (p === '/terms/service') return reply({ terms: { version: 'TERMS_SERVICE_V1', title: '서비스 이용약관', body: '검수 서비스 약관' } })
       if (p === '/terms/privacy') return reply({ terms: { version: 'TERMS_PRIVACY_V1', title: '개인정보 수집·이용 동의', body: '검수 개인정보 약관' } })
@@ -131,6 +136,17 @@ const { chromium } = require('playwright')
     await page.goto(base + '#/account/profile')
     await page.getByRole('heading', { name: '비밀번호 수정', exact: true }).waitFor()
     assert.equal(await page.getByText('2026-11-09 동의', { exact: true }).count(), 2)
+    // 알림 수신 동의(선택): 회원정보에서 체크하면 현재 알림 약관에 동의(알림 켜짐), 해제하면 철회(알림 꺼짐)
+    const notifyRow = page.locator('.between', { hasText: '알림 수신 동의' }).filter({ hasText: '선택' })
+    await notifyRow.getByText('동의 안 함').waitFor()
+    await notifyRow.locator('label.opt').click()
+    await notifyRow.getByText('동의함').waitFor()
+    assert.deepEqual(writes.filter(w => w.p === '/users/me/consents').map(w => [w.body.action, w.body.terms_version, w.body.enable_notifications]),
+      [['AGREE', 'v1', true]])
+    await notifyRow.locator('label.opt').click()
+    await notifyRow.getByText('동의 안 함').waitFor()
+    assert.deepEqual(writes.filter(w => w.p === '/users/me/consents').map(w => [w.body.action, w.body.enable_notifications]),
+      [['AGREE', true], ['REVOKE', false]])
     await page.goto(base + '#/account/notifications')
     await page.getByText('선택한 알림이 없습니다.').waitFor()
     assert.equal(writes.filter(w => w.p.includes('/notifications/')).length, 0)

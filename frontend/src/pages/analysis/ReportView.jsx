@@ -90,7 +90,7 @@ export default function ReportView({ route }) {
   const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '유망시장(증가·감소 예상)': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
   const o = {
     country: [...(c.include_korea_total?['한국(대한민국) 전체']:[]),...(c.country_codes || []).map(countryName)].join(' · '), product: (c.hs_items || []).map(h => h.hs_code).join(', '),
-    from: c.period?.start, to: c.period?.end, compareFrom: c.compare_period?.start, compareTo: c.compare_period?.end,
+    from: c.period?.start, to: c.period?.end,
     sections: Object.keys(sectionCodes).filter(label => byCode[sectionCodes[label]]),
   }
   const f = {
@@ -128,7 +128,7 @@ export default function ReportView({ route }) {
               <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{/* 주간은 기사만 싣는 리포트라 수출 분석 항목 수를 쓰지 않는다 */}
                 {!newsOnly && (o.sections.length === 4 ? '전체 항목 선택 · ' : `${o.sections.length}개 항목 선택 · `)}{o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
               <div style={{ display: 'flex', gap: 24, marginTop: 18, fontSize: 14, color: '#fff' }}>
-                <span>분석 {range(o.from, o.to)}</span><span>비교 {range(o.compareFrom, o.compareTo)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
+                <span>분석 {range(o.from, o.to)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
               </div>
               <div style={{ position: 'absolute', right: 48, top: 36, width: 110, height: 6, background: '#C8102E' }} />
             </div>
