@@ -189,6 +189,16 @@ def merge_product_phrases(output: PlannerOutput, original: str) -> PlannerOutput
     return PlannerOutput.model_validate({**output.model_dump(), 'tasks': tasks})
 
 
+def trade_terms(settings) -> tuple:
+    configured = settings.get('API_CHAT_TRADE_TERMS', '')
+    return tuple(configured.split(',')) if configured else TRADE_TERMS
+
+
+def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS) -> PlannerOutput:
+    """LLM 플래너 출력의 코드 안전망. 실행(runtime)과 평가(backend/evals/agent)가 같은 순서로 쓴다."""
+    return merge_product_phrases(rescue_trade_terms(output, terms, question), question)
+
+
 def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
     error = task_count_error(len(output.tasks))
     if error:
