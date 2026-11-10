@@ -1,4 +1,4 @@
-"""Run the six synthetic Writer Dev cases through compose. No database or article service is contacted."""
+"""Evaluate the 100 synthetic Writer Dev cases using the service compose routes. No database or article service is contacted."""
 import argparse
 from contextlib import nullcontext
 from datetime import datetime
@@ -12,6 +12,7 @@ import httpx
 from dotenv import dotenv_values
 from openai import OpenAI
 
+from backend.app.agents.graph import compose_node
 from backend.app.agents.llm import StructuredClient
 from backend.app.agents.planner import build_plan
 from backend.app.agents.runtime import Services
@@ -20,6 +21,7 @@ from backend.app.agents.tools import article_result
 from backend.app.api.config import Settings
 from backend.app.schemas.rag import ArticleEvidence, RagResponse
 from backend.tests.rag_fixtures import article_payload, response_payload
+from backend.scripts.writer_dev_dataset import DATA, load_dataset, score
 
 
 def statistic(amounts, flow='EXPORT', **comparison):
@@ -40,6 +42,7 @@ def article(n, title, sentence, role, missing=()):
     return row
 
 
+# Original six fixtures retained for baseline replay and regression tests.
 DEV = {
     '01-large-export': [('STATISTICS', '9월 한국의 총수출액은 얼마인가요?', statistic([123460000]), [])],
     '02-zero-null': [('STATISTICS', '8월과 9월 수출액을 각각 알려 주세요. 두 달 전체 합계도 확인되나요?',
@@ -152,55 +155,83 @@ def total_if_known(values):
 
 
 def measurements(model, attempts):
-    estimate = total_if_known([estimated_cost(model, a) for a in attempts])
+    estimate = total_if_known([estimated_cost(model, a) for a in attempts]) if attempts else 0.0
     reasoning = [((a.get('usage') or {}).get('output_tokens_details') or {}).get('reasoning_tokens')
                  for a in attempts]
-    return {'first_draft_accepted': bool(attempts and attempts[0]['accepted']),
-            'fallback': not any(a['accepted'] for a in attempts),
+    return {'first_draft_accepted': bool(attempts[0]['accepted']) if attempts else None,
+            'fixed': not attempts, 'fallback': bool(attempts) and not any(a['accepted'] for a in attempts),
             'retries': max(0, len(attempts) - 1), 'seconds': round(sum(a['seconds'] for a in attempts), 3),
             'incomplete': sum(a.get('status') == 'incomplete' for a in attempts),
-            'reasoning_tokens': total_if_known(reasoning),
+            'reasoning_tokens': total_if_known(reasoning) if attempts else 0,
             'estimated_usd': round(estimate, 12) if estimate is not None else None}
 
 
-def evaluate(models, key, out):
+def generate_case(case, model, key):
+    """Run the Writer on its input alone so a blind evaluation can seal predictions before scoring."""
+    state = case.state.model_copy(deep=True)
+    # The service graph derives these outcomes from tool results immediately before compose.
+    for task in state.plan.tasks:
+        task.answer_status = state.task_outcome(task.task_id)
+    names = (case.country_names, {(code, 'HS2022'): label for code, label in case.product_names.items()})
+    settings = Settings({'OPENAI_API_KEY': key, 'API_COMPOSE_MODEL': model})
+    meter = Meter()
+    services = Services(meter, settings, StructuredClient(settings, meter.client))
+    with patch.object(services, 'read_store', return_value=nullcontext()), \
+         patch('backend.app.agents.templates._names', return_value=names):
+        if compose_node(state) == 'compose_text':
+            services.compose_text(state)
+        else:
+            services.compose(state)
+    record = {'case': case.case_id, 'group': case.group, 'model': model, 'route': compose_node(state),
+              'attempts': meter.attempts, 'metrics': measurements(model, meter.attempts),
+              'draft': state.draft.model_dump(mode='json'), 'warnings': state.warnings}
+    return state, record
+
+
+def evaluate(models, key, out, dataset=None):
     metrics = {model: [] for model in models}
-    for name, case in DEV.items():
-        baseline = dev_state(case)
+    if dataset is None:
+        dataset = load_dataset()
+    for case, gold in dataset:
         for model in models:
-            state = baseline.model_copy(deep=True)
-            settings = Settings({'OPENAI_API_KEY': key, 'API_COMPOSE_MODEL': model})
-            meter = Meter()
-            services = Services(meter, settings, StructuredClient(settings, meter.client))
-            with patch.object(services, 'read_store', return_value=nullcontext()), \
-                 patch('backend.app.agents.templates._names', return_value=({}, {})):
-                services.compose(state)
-            result = measurements(model, meter.attempts)
+            state, record = generate_case(case, model, key)
+            result = record['metrics']
             metrics[model].append(result)
-            record = {'case': name, 'model': model, 'attempts': meter.attempts, 'metrics': result,
-                      'draft': state.draft.model_dump(mode='json'), 'warnings': state.warnings}
+            record['evaluation'] = score(state, gold, fixed=result['fixed'])
             print(json.dumps(record, ensure_ascii=False), file=out, flush=True)
-            print(name, model, len(meter.attempts), flush=True)
+            print(case.case_id, model, len(record['attempts']), flush=True)
     for model, rows in metrics.items():
         totals = {k: total_if_known([r[k] for r in rows]) for k in
-                  ('first_draft_accepted', 'retries', 'fallback', 'incomplete', 'reasoning_tokens', 'estimated_usd')}
-        print(json.dumps({'model': model, 'cases': len(rows), 'median_seconds': median(r['seconds'] for r in rows),
+                  ('fixed', 'retries', 'fallback', 'incomplete', 'reasoning_tokens', 'estimated_usd')}
+        called = [r for r in rows if not r['fixed']]
+        totals['model_cases'] = len(called)
+        totals['first_draft_accepted'] = sum(r['first_draft_accepted'] for r in called)
+        print(json.dumps({'model': model, 'cases': len(rows), 'median_seconds': median(r['seconds'] for r in called) if called else None,
                           **totals}), flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--env-file', type=Path, required=True)
+    parser.add_argument('--cases', type=Path, default=DATA / 'writer_dev_cases.jsonl')
+    parser.add_argument('--gold', type=Path, default=DATA / 'writer_dev_gold.jsonl')
+    parser.add_argument('--validate-only', action='store_true', help='Validate the frozen inputs and gold without an API key.')
+    parser.add_argument('--env-file', type=Path)
     parser.add_argument('--models', nargs='+', choices=STANDARD_PRICES, default=list(STANDARD_PRICES),
                         help='비교할 Writer 모델 목록. 생략하면 세 모델을 모두 평가합니다.')
-    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if len(set(args.models)) != len(args.models):
         parser.error('동일한 모델을 두 번 지정할 수 없습니다.')
+    dataset = load_dataset(args.cases, args.gold)
+    if args.validate_only:
+        print(f'Writer Dev: {len(dataset)} matched cases and gold records')
+        return
+    if not args.env_file or not args.output:
+        parser.error('--env-file and --output are required for model evaluation')
     key = dotenv_values(args.env_file, interpolate=False)['OPENAI_API_KEY']
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open('x', encoding='utf-8') as out:
-        evaluate(args.models, key, out)
+        evaluate(args.models, key, out, dataset)
 
 
 if __name__ == '__main__':
