@@ -13,7 +13,7 @@ from backend.app.api.common import ApiError, require, unavailable, now, clean, d
 from backend.app.api.security import issue_session, hash_token, administrator
 from backend.app.api.schemas import Signup, Login, PasswordChange, InterestUpdate, NotificationPatch, ReportCreate, Conditions
 from backend.app.api.results import get_table, read_snapshot, result_table, result_filename
-from backend.app.api.files import xlsx_bytes, MIMES
+from backend.app.api.files import xlsx_bytes, result_xlsx, MIMES
 from backend.app.api.terms import TERMS_TYPES, active_terms
 
 
@@ -134,13 +134,13 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         if identity==19:
             require(not ('months' in query and (start or end)),'months와 직접 기간은 함께 지정할 수 없습니다.')
             # 순위 API와 같이 실제 적용된 품목·국가(관심 범위 포함)를 함께 돌려줘 화면 제목·AI 질문이 그 값을 쓰게 한다.
-            return {**trade.trends(store,uid,start,end,query.get('months',24),hs,countries,query.get('trade_flow','BOTH')),
+            return {**trade.trends(store,uid,start,end,query.get('months',24),hs,countries,query.get('trade_flow','BOTH'),screen_export=True),
                     'conditions':{'hs_items':hs or [],'country_codes':countries or []}}
         if identity==21:
             countries=[path['country_code']]; accounts.validate_scope(store,hs,countries)
             if query.get('month'):
                 require(not start and not end,'month와 기간은 함께 지정할 수 없습니다.'); start=end=query['month']
-        result=trade.rankings(store,uid,start,end,hs,countries,'HS6' if identity==21 else query.get('group_by','COUNTRY'),query.get('sort_flow','EXPORT'),page,5 if identity==21 else query.get('page_size',5))
+        result=trade.rankings(store,uid,start,end,hs,countries,'HS6' if identity==21 else query.get('group_by','COUNTRY'),query.get('sort_flow','EXPORT'),page,5 if identity==21 else query.get('page_size',5),screen_export=True)
         if identity==21: return {'items':result['items'],'meta':result['meta']}
         return result
     if identity in (22,24): return changes(store,uid,body if identity==24 else query,identity==22)
@@ -212,7 +212,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         store.c.execute(delete(m).where(m.c.session_id==sid)); store.c.execute(delete(t).where(t.c.session_id==sid)); return None
     if identity==41: return {'table':get_table(store,uid,path['result_id'],page,size)}
     if identity==42:
-        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(xlsx_bytes([payload],payload['meta'],payload['sql'],unit_headers=True),result_filename(payload,store),'xlsx')
+        payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(result_xlsx(payload),result_filename(payload,store),'xlsx')
     if identity==43: return reports.preview(store,uid,body)
     if identity==44: return reports.create(store,uid,ReportCreate.model_validate(body),request.headers.get('Idempotency-Key'))
     if identity==45: return {'job':reports.status_view(store,store.owned('report','report_id',path['report_id'],uid))}
@@ -226,8 +226,8 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         from backend.app.api.report_storage import report_storage
         storage=report_storage(settings)
         if fmt=='xlsx' and file is None:
-            content=record['content_json']; tables=[t for s in content['sections'] for t in s['tables']]
-            data=xlsx_bytes(tables,content['meta'],content.get('sql',[]))
+            content=record['content_json']
+            data=reports.report_xlsx(record,content)
             file=storage.write(f'{uid}/{rid}/legacy/report.xlsx',data)
             t=store.t('report')
             store.c.execute(update(t).where(t.c.report_id==rid).values(

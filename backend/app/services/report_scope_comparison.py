@@ -4,7 +4,7 @@ from backend.app.api import trade, results
 from backend.app.api.common import shift_month
 
 
-def comparison_table(store,uid,conditions,start,end):
+def comparison_table(store,uid,conditions,start,end,periodic_export=False):
     codes=conditions.get('country_codes',[])
     names={r['country_code']:r['name_ko'] for r in store.rows(select(store.t('country')))}
     records=trade.aggregate(store,'export_summary',start,end,conditions.get('hs_items',[]),[],'MONTH_COUNTRY')
@@ -25,4 +25,5 @@ def comparison_table(store,uid,conditions,start,end):
         cursor=shift_month(cursor,1)
     meta=trade.metadata(store,start,end)
     meta.update(kind='REPORT_SCOPE_COMPARISON',overlapping_scopes=True)
+    if periodic_export: meta['export_profile']='PERIODIC_REPORT'
     return results.result_table(store,uid,rows,meta,conditions,store.queries,columns=columns)

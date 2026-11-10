@@ -11,6 +11,7 @@ from backend.app.api.results import read_snapshot, save_snapshot, result_table, 
 from backend.app.api.files import report_pdf, report_docx
 
 TITLES=json.loads((Path(__file__).resolve().parents[1]/'templates/reports/layout.json').read_text(encoding='utf-8'))['sections']
+PERIODIC_REPORT_TYPES=frozenset(('RPT_WEEKLY','RPT_MONTHLY','RPT_QUARTERLY'))
 
 
 def display_title(record):
@@ -269,7 +270,8 @@ def build_document(store,uid,record):
             block['charts']=[{'chart_type':'LINE','result_id':trend['result_id'],'x_key':'month','series_keys':['amount_usd'],'title':'월별 수출 추이 (USD)','positive_color':'#16A34A','negative_color':'#DC2626'}]
             if c.get('include_korea_total'):
                 from backend.app.services.report_scope_comparison import comparison_table
-                comparison_table_data=comparison_table(store,uid,c,start,end)
+                comparison_table_data=comparison_table(store,uid,c,start,end,
+                    periodic_export=record['report_type'] in PERIODIC_REPORT_TYPES)
                 block['tables'].append(comparison_table_data)
                 block['charts'].append({'chart_type':'LINE','result_id':comparison_table_data['result_id'],
                     'x_key':'month','series_keys':[col['key'] for col in comparison_table_data['columns'] if col['key']!='month'],
@@ -304,6 +306,27 @@ def attach_weekly_summary(doc):
     if 'source_codes' in ctx: doc['meta']['sources']=source_entries(ctx['source_codes'])
 
 
+def report_xlsx(record,document):
+    from backend.app.api.files import xlsx_bytes, user_xlsx_info
+    tables=[table for section in document['sections'] for table in section['tables']]
+    # 정기 리포트만 정비한다. 요청형/에이전트가 선택한 결과표는 그대로 내보낸다.
+    periodic=record['report_type'] in PERIODIC_REPORT_TYPES
+    # build_document는 원본 결과표를 재사용한 문서에 FROZEN을 기록한다.
+    if periodic and document['meta'].get('freshness')!='FROZEN':
+        conditions=record.get('conditions_json') or {}
+        exported=[]
+        for table in tables:
+            hidden={'mom_pct','yoy_pct'} if any(column['key']=='comparison_pct' for column in table['columns']) else set()
+            # 비교 미선택과 비교 자료 미집계는 다르다. 미집계 열은 경고와 함께 유지한다.
+            if conditions.get('compare')=='NONE': hidden.update(('previous_amount_usd','comparison_pct','mom_pct','yoy_pct'))
+            columns=[{**column,'label':'월평균 증감률'} if column['key']=='monthly_avg_change_pct' else column
+                     for column in table['columns'] if column['key'] not in hidden]
+            exported.append({**table,'columns':columns})
+        return xlsx_bytes(exported,document['meta'],document.get('sql',[]),unit_headers=True,
+                          info_rows=user_xlsx_info(document['meta'],conditions))
+    return xlsx_bytes(tables,document['meta'],document.get('sql',[]))
+
+
 def generate(store,job,settings):
     jobs.report_step(store,job,'QUERY')
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
@@ -327,9 +350,7 @@ def generate(store,job,settings):
         jobs.report_step(store,job,fmt)
         content=pdf if fmt=='PDF' else report_docx(doc,settings)
         files[fmt]=archive if fmt=='PDF' else storage.write(prefix+'/report.'+fmt.lower(),content)
-    from backend.app.api.files import xlsx_bytes
-    tables=[t for section in doc['sections'] for t in section['tables']]
-    files['XLSX']=storage.write(prefix+'/report.xlsx',xlsx_bytes(tables,doc['meta'],doc.get('sql',[])))
+    files['XLSX']=storage.write(prefix+'/report.xlsx',report_xlsx(record,doc))
     t=store.t('report')
     store.c.execute(update(t).where(t.c.report_id==rid).values(status='READY',
         content_json={**doc,jobs.EXECUTION:clean(job)},files_json=files,pdf_uri=archive['key'],completed_at=now()))

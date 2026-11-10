@@ -42,3 +42,51 @@ class ReportScopeComparisonTest(unittest.TestCase):
         html=render('RPT_ON_DEMAND',context)
         self.assertIn('한국 전체 · 상대국 비교',html)
         self.assertIn('한국(대한민국) 전체 수출액',html)
+
+    def test_periodic_comparison_download_has_readable_info_and_preserves_overlap_notice(self):
+        import io
+        from openpyxl import load_workbook
+        from backend.app.api.files import result_xlsx
+        from backend.app.api.results import read_snapshot
+        for kind in ('RPT_MONTHLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
+            record={'report_id':1,'report_type':kind,'conditions_json':{**self.conditions,'sections':['KPI']},'content_json':{}}
+            doc=reports.build_document(self.store,1,record)
+            table=next(t for section in doc['sections'] for t in section['tables'] if t['meta'].get('kind')=='REPORT_SCOPE_COMPARISON')
+            payload=read_snapshot(self.store,1,table['result_id'],'RESULT')
+            workbook=load_workbook(io.BytesIO(result_xlsx(payload)))
+            info=dict(list(workbook['정보'].values)[1:])
+            if kind!='RPT_ON_DEMAND':
+                self.assertNotIn('실행 SQL',info)
+                self.assertIn('합산하지 않습니다',info['주의사항'])
+                self.assertEqual(info['조회 국가'],'한국 전체 (비교 상대국: US, CN)')
+                self.assertNotIn('조회 국가 코드',info)
+            else:
+                self.assertIn('실행 SQL',info)
+                self.assertNotIn('export_profile',payload['meta'])
+            self.assertEqual(workbook['결과표1']['B2'].value,3240000)
+
+    def test_periodic_workbook_country_scope_matches_aggregated_amount(self):
+        import io
+        from copy import deepcopy
+        from openpyxl import load_workbook
+        for kind in ('RPT_MONTHLY','RPT_QUARTERLY'):
+            for include_total,codes,label,expected_scope,expected_amount in (
+                (True,['US','CN'],'조회 국가','한국 전체 (비교 상대국: US, CN)',9780000),
+                (True,['US'],'조회 국가','한국 전체 (비교 상대국: US)',9780000),
+                (True,[],'조회 국가','한국 전체',9780000),
+                (False,['US'],'조회 국가 코드','US',3390000),
+                (False,[],'조회 국가 코드','전체 국가',9780000),
+            ):
+                with self.subTest(kind=kind,include_total=include_total,codes=codes):
+                    conditions={**self.conditions,'sections':['KPI'],'country_codes':codes,
+                                'include_korea_total':include_total}
+                    record={'report_type':kind,'conditions_json':conditions,'content_json':{}}
+                    document=reports.build_document(self.store,1,record)
+                    original=deepcopy(document)
+                    workbook=load_workbook(io.BytesIO(reports.report_xlsx(record,document)))
+                    info=dict(list(workbook['정보'].values)[1:])
+                    self.assertEqual(info[label],expected_scope)
+                    self.assertEqual(workbook['결과표1']['A2'].value,expected_amount)
+                    self.assertEqual('주의사항' in info,include_total)
+                    self.assertEqual(document,original)
+                    self.assertEqual(conditions['country_codes'],codes)
