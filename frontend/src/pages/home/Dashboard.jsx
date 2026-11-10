@@ -189,9 +189,10 @@ export default function Dashboard({ route }) {
               <span style={{ fontSize: 12, color: '#5C6370' }}>한국은행 ECOS</span>
             </div>
             <RegionError label="환율" states={data.states.fx} />
-            <div style={{ marginTop: 14, borderTop: '2px solid #15181E' }}>
+            <div role="region" aria-label={data.fxTitle} tabIndex={data.fx.length >= 5 ? 0 : undefined}
+              style={{ marginTop: 14, borderTop: '2px solid #15181E', ...(data.fx.length >= 5 ? { maxHeight: 242, overflowY: 'auto', scrollbarGutter: 'stable' } : {}) }}>
               {data.fx.map(([cur, unit, rate, change, dir]) => (
-                <div key={cur} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 14, alignItems: 'center', padding: '13px 4px', borderBottom: '1px solid #E3E6EA', fontSize: 15 }}>
+                <div key={cur} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 14, alignItems: 'center', minHeight: 48, lineHeight: '22px', padding: '12px 4px', borderBottom: '1px solid #E3E6EA', fontSize: 15 }}>
                   <span><strong>{cur}</strong> <span style={{ fontSize: 12, color: '#5C6370' }}>{unit}</span></span>
                   <span style={{ fontWeight: 700 }}>{rate}</span>
                   <span style={{ minWidth: 108, textAlign: 'right', fontSize: 13, fontWeight: 700, color: DIR_COLOR[dir] }}>{ARROW[dir]}{change}</span>
@@ -289,9 +290,10 @@ export default function Dashboard({ route }) {
                 <p style={{ fontSize: 14, fontWeight: 800 }}>{data.countryTable.pieTitle}</p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
                   <Donut items={data.countryTable.pie.map(([label, color]) => [label, parseFloat(label.split(' ').pop()), color])} />
-                  <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, color: '#2E333C' }}>
+                  <ul aria-label="수출입 비중 국가 목록" tabIndex={data.countryTable.pie.length >= 5 ? 0 : undefined}
+                    style={{ listStyle: 'none', margin: 0, padding: 0, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, color: '#2E333C', ...(data.countryTable.pie.length >= 5 ? { maxHeight: 224, overflowY: 'auto', scrollbarGutter: 'stable' } : {}) }}>
                     {data.countryTable.pie.map(([label, color]) => (
-                      <li key={label} style={{ display: 'flex', alignItems: 'center', gap: 7 }}><span style={{ width: 10, height: 10, borderRadius: 2, background: color }} />{label}</li>
+                      <li key={label} style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 7, minHeight: 40, lineHeight: '20px', overflowWrap: 'anywhere' }}><span style={{ width: 10, height: 10, flexShrink: 0, borderRadius: 2, background: color }} /><span>{label}</span></li>
                     ))}
                   </ul>
                 </div>
