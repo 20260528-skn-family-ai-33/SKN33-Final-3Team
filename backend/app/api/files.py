@@ -16,9 +16,56 @@ def report_time(value):
     return datetime.fromisoformat(value.replace('Z','+00:00')).astimezone(ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d %H:%M KST')
 
 
-def xlsx_bytes(tables,meta,sql,unit_headers=False):
+def user_xlsx_info(meta,conditions=None):
+    """일반 화면/정기 리포트용 정보 시트. SQL·내부 상태 대신 조회 조건과 출처를 싣는다."""
+    conditions=conditions or {}
+    rows=[]
+    selected=conditions.get('period') or meta.get('period') or {}
+    if selected.get('start') and selected.get('end'):
+        rows.append(('조회 기간',f"{selected['start']} ~ {selected['end']}"))
+    if conditions:
+        hs=conditions.get('hs_items') or []
+        rows.append(('조회 품목 (HS 코드)',', '.join(str(item['hs_code']) for item in hs) or '전체 품목'))
+        country_codes=', '.join(conditions.get('country_codes') or [])
+        # 개별 비교표 스냅샷은 리포트 전용 조건 대신 overlapping_scopes를 보존한다.
+        if conditions.get('include_korea_total') or meta.get('overlapping_scopes'):
+            scope='한국 전체'+(f' (비교 상대국: {country_codes})' if country_codes else '')
+            rows.append(('조회 국가',scope))
+        else:
+            rows.append(('조회 국가 코드',country_codes or '전체 국가'))
+        flow={'EXPORT':'수출','IMPORT':'수입','BOTH':'수출·수입'}.get(conditions.get('trade_flow'))
+        if flow: rows.append(('조회 기준',flow))
+        comparison=conditions.get('compare')
+        if comparison:
+            rows.append(('비교 방식',{'NONE':'비교 없음','MOM':'전월 대비','YOY':'전년 동월 대비',
+                'YOY_PERIOD':'전년 동기 대비','CUSTOM':'지정 기간 비교'}.get(comparison,comparison)))
+        previous=conditions.get('compare_period') or {}
+        if comparison!='NONE' and previous.get('start') and previous.get('end'):
+            rows.append(('비교 기간',f"{previous['start']} ~ {previous['end']}"))
+    rows.append(('금액 단위','USD'))
+    sources=[source.get('label') or source.get('code') if isinstance(source,dict) else str(source)
+             for source in meta.get('sources',[])]
+    if any(sources): rows.append(('출처',', '.join(dict.fromkeys(source for source in sources if source))))
+    if meta.get('latest_available_month'): rows.append(('최신 공개 월',meta['latest_available_month']))
+    if meta.get('generated_at'): rows.append(('생성 시각',report_time(meta['generated_at'])))
+    if meta.get('rows_total') is not None: rows.append(('전체 결과 행 수',meta['rows_total']))
+    notes=list(meta.get('warnings') or [])
+    if meta.get('monthly_average_note'): notes.append(meta['monthly_average_note'])
+    if conditions.get('include_korea_total') or meta.get('overlapping_scopes'):
+        notes.append('한국 전체 수출액에는 개별 상대국 수출액이 포함되므로 비교 대상 간 금액을 합산하지 않습니다.')
+    rows.extend(('주의사항',note) for note in dict.fromkeys(notes) if note)
+    return rows
+
+
+def result_xlsx(payload):
+    meta=payload['meta']
+    info=user_xlsx_info(meta,payload.get('conditions')) if meta.get('export_profile') in ('TRADE_SCREEN','PERIODIC_REPORT') else None
+    return xlsx_bytes([payload],meta,payload['sql'],unit_headers=True,info_rows=info)
+
+
+def xlsx_bytes(tables,meta,sql,unit_headers=False,info_rows=None):
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill
+    from openpyxl.styles import Font, PatternFill, Alignment
     wb=Workbook(); wb.remove(wb.active)
     for n,table in enumerate(tables,1):
         require(table['total_rows']<=1000,'엑셀은 필터 전체 결과 1,000행까지만 다운로드할 수 있습니다.','EXPORT_LIMIT_EXCEEDED',422)
@@ -53,11 +100,15 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False):
     # 순위는 상위 1,000행만 저장한다(trade.rankings). 잘렸으면 파일에도 전체 행 수를 남긴다.
     if meta.get('truncated') and isinstance(meta.get('rows_total'),int):
         info.append(['안내',f"전체 {meta['rows_total']:,}행 중 상위 1,000행만 담았습니다. 조건을 좁히면 전체를 받을 수 있습니다."])
-    for key,value in meta.items(): info.append([key,str(value)])
-    for query in sql: info.append(['실행 SQL',query])
+    if info_rows is None:
+        for key,value in meta.items(): info.append([key,str(value)])
+        for query in sql: info.append(['실행 SQL',query])
+    else:
+        for row in info_rows: info.append(row)
     for row in info:
         for cell in row:
             if isinstance(cell.value,str): cell.data_type='s'
+            if info_rows is not None: cell.alignment=Alignment(wrap_text=True,vertical='top')
     info.column_dimensions['A'].width=24; info.column_dimensions['B'].width=100
     stream=BytesIO(); wb.save(stream); return stream.getvalue()
 

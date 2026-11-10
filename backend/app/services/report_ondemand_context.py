@@ -123,3 +123,24 @@ def populate(store, saved, ctx, names, start, end):
     if 'LOCAL_ISSUES' in sections:
         ctx['sources'].append({'label': '기사', 'provider': ', '.join(dict.fromkeys(a['source_label'] for a in ctx['articles'])) or '관련 기사 없음',
                                'scope': ctx['article_policy_note'], 'used_in': '현지 이슈'})
+
+
+RANK_LABELS = {'COUNTRY': '국가 안 순위', 'HS6': '품목 안 순위', 'PAIR': '국가 안 순위'}
+
+
+def promising_view(block):
+    """GROWTH_RISK 섹션(유망시장·증가·감소 예상)을 PDF 표로 바꾼다. 웹·DOCX와 같은 저장 결과(문서의 표)를 쓴다.
+    COUNTRY는 국가 안 품목 순위, HS6는 품목 안 국가 순위, PAIR(국가·품목 쌍)는 국가 안 품목 순위를 보인다."""
+    table = (block.get('tables') or [None])[0] if block else None
+    rows = (table or {}).get('rows') or []
+    group = ((table or {}).get('meta') or {}).get('group_by')
+    if group not in RANK_LABELS:   # 채팅 결과를 복사한 표에는 meta가 없다. 행 모양으로 정한다
+        countries, products = {r['country_code'] for r in rows}, {r['hs6'] for r in rows}
+        group = 'COUNTRY' if len(countries) == 1 and len(products) > 1 else 'HS6' if len(products) == 1 and len(countries) > 1 else 'PAIR'
+    rank, size = ('product_rank', 'product_size') if group == 'HS6' else ('country_rank', 'country_size')
+    return {'text': (block or {}).get('text') or '유망시장 예측 결과가 없습니다.',
+            'anchor': str(rows[0].get('anchor') or '')[:7] or None if rows else None,
+            'group_by': group, 'rank_label': RANK_LABELS[group],
+            'rows': [{'rank': r.get(rank), 'size': r.get(size), 'country': r.get('country_name') or r['country_code'],
+                      'product': r.get('product_name') or r.get('name') or r['hs6'], 'hs6': r['hs6'],
+                      'outlook': r.get('growth_outlook'), 'exp_12m_usd': r.get('exp_12m')} for r in rows]}

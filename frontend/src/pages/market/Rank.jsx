@@ -10,9 +10,14 @@ import { download } from '../../api/client'
 import { Hs4Search } from '../../components/pickers'
 import { monthOffset } from '../home/useDashboard'
 import { rankInitial } from '../../api/integration'
+import { amount } from '../../api/adapters'
 
 const COLS = '60px 110px 1fr 1.4fr 110px'
 const COLS_NO_HS = '60px 1fr 1.4fr 110px'
+// 실적 없음(서버가 채운 빈 행, 금액 0)은 0.0이 아니라 —로 보여 준다(D-3). 엑셀은 원본 값 그대로다.
+const noRecord = (row, value) => value == null || row.has_data === false || Number(value) === 0
+// 억 USD 값 표시. 메인 대시보드와 같은 규칙: 0.1억 미만은 유효숫자 1자리(0.02), 그 이상은 소수 첫째 자리까지(D-3).
+const eok = value => value == null ? '—' : amount(value * 1e8)
 
 export default function Rank({ route }) {
   // Re-entering a detail link on the same route must apply its new conditions.
@@ -55,7 +60,7 @@ function RankResults({ route }) {
   const scopeCountry = countryLabel || (interestCountries.length === 1 ? interestCountries[0] : interestCountries.length ? '관심 국가' : '전체 국가')
   const scopeProduct = interestProducts.length === 1 ? productName(interestProducts[0]) : interestProducts.length ? '관심 품목' : applied.product ? productName(applied.product) : '전체 품목'
   registerProducts((result.data?.items || []).filter(r => r.hs_name).map(r => ({ hs_code: r.hs_item.hs_code, name_ko: r.hs_name })))
-  const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.has_data === false ? '—' : r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: r.export_amount_usd == null || r.has_data === false ? null : Number(r.export_amount_usd) / 1e8, imp: r.import_amount_usd == null || r.has_data === false ? null : Number(r.import_amount_usd) / 1e8 }))
+  const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.has_data === false ? '—' : r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: noRecord(r, r.export_amount_usd) ? null : Number(r.export_amount_usd) / 1e8, imp: noRecord(r, r.import_amount_usd) ? null : Number(r.import_amount_usd) / 1e8 }))
   const pageEmpty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
   // 순위는 큰 금액부터 정렬되므로 1페이지에 실적이 없으면 전체 결과에도 없다. 다른 페이지는 1페이지 판단을 그대로 쓴다.
   const resultKey = JSON.stringify([byMonth, query, rankingGroup, basis])
@@ -184,9 +189,9 @@ function RankResults({ route }) {
                   <span style={{ flex: 1, height: 10, borderRadius: 5, background: '#F1F2F5', overflow: 'hidden' }}>
                     <span style={{ display: 'block', height: 10, background: basis === 'exp' ? '#C8102E' : '#2B2350', width: `${Math.round((r[basis] / max) * 100)}%` }} />
                   </span>
-                  <b style={{ width: 56, textAlign: 'right' }}>{r[basis] == null ? '—' : r[basis].toFixed(1)}</b>
+                  <b style={{ width: 64, flex: 'none', textAlign: 'right' }}>{eok(r[basis])}</b>
                 </span>
-                <span className="r s">{r[other] == null ? '—' : r[other].toFixed(1)}</span>
+                <span className="r s">{eok(r[other])}</span>
               </div>
             ))}
             </div></div>

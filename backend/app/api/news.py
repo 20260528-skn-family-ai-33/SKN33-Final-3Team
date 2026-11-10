@@ -1,6 +1,6 @@
 from datetime import date
 import json
-from sqlalchemy import select, func, exists, or_, and_, delete, update, case
+from sqlalchemy import select, func, exists, or_, and_, delete, update, case, false
 from backend.app.api.common import require, unavailable, page_info, digest, now, mask_text, percentage
 from backend.app.api.accounts import interests, validate_scope
 
@@ -74,7 +74,7 @@ def blocked_article(store,blocked):
 
 def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope='GLOBAL',countries=None,hs=None,mode='BROWSE',category_boost=None):
     a,t,k=store.t('article'),store.t('article_tag'),store.t('keyword_topic')
-    require(tab in ('ALL','BREAKING','MAJOR_ISSUE') and scope in ('GLOBAL','INTERESTED'),'기사 탭·범위를 확인하세요.')
+    require(tab in ('ALL','GENERAL','BREAKING','MAJOR_ISSUE') and scope in ('GLOBAL','INTERESTED'),'기사 탭·범위를 확인하세요.')
     require(mode in ('BROWSE','SEARCH'),'검색 모드를 확인하세요.')
     if mode=='SEARCH': require(q and q.strip(),'검색어를 입력하세요.')
     if start and end: require(start<=end,'기사 시작일·종료일을 확인하세요.')
@@ -100,6 +100,10 @@ def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope=
     if tab=='BREAKING': stmt=stmt.where(a.c.source_code=='KOTRA_SHORT_NEWS')
     if tab=='MAJOR_ISSUE':
         stmt=stmt.where(major_issue_condition(store))
+    # 일반기사 = 단신속보도 주요이슈도 아닌 기사(화면 mapArticle의 general 판정과 같다).
+    if tab=='GENERAL':
+        # category가 NULL이면 판정식이 NULL이 되므로 거짓으로 바꿔 일반기사에 남긴다.
+        stmt=stmt.where(a.c.source_code!='KOTRA_SHORT_NEWS',~func.coalesce(major_issue_condition(store),false()))
     if start: stmt=stmt.where(a.c.published_date>=start)
     if end: stmt=stmt.where(a.c.published_date<=end)
     if q:

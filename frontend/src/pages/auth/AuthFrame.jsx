@@ -59,17 +59,3 @@ export function MailPreview({ subject, children }) {
     </div>
   )
 }
-
-/** 소셜 로그인 연결처럼 흰 바탕의 단순 화면(LG02~LG06) */
-export function PlainAuthPage({ eyebrow, title, desc, children }) {
-  return (
-    <main className="page white" style={{ minHeight: 760, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '64px 24px' }}>
-      <div style={{ width: 720, maxWidth: '100%' }}>
-        <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--red-d)' }}>{eyebrow}</p>
-        <h2 className="t1" style={{ fontSize: 34, marginTop: 8 }}>{title}</h2>
-        {desc && <p className="muted" style={{ fontSize: 15, marginTop: 10 }}>{desc}</p>}
-        {children}
-      </div>
-    </main>
-  )
-}

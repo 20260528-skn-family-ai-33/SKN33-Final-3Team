@@ -1,11 +1,24 @@
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { amount, percent, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison } from '../src/api/adapters.js'
+import { amount, percent, reportEok, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison } from '../src/api/adapters.js'
 import { registerCountries, countryCode, countryName, registerProducts, productName } from '../src/data/catalog.js'
 import { isStrongPassword } from '../src/utils/validate.js'
+import { promisingView } from '../src/pages/analysis/promising.js'
 test('미수집 값과 실제 0을 구분하고 USD를 억 USD로 표시한다', () => {
   assert.equal(amount(null), '—'); assert.equal(amount(0), '0'); assert.equal(amount(15720000000), '157.2')
+  assert.equal(amount(2345678), '0.02'); assert.equal(amount(51234), '0.0005'); assert.equal(amount(1230), '0.00001')
   assert.equal(percent(null), '—'); assert.equal(percent(0), '0.0%'); assert.equal(percent(-5.3), '-5.3%')
+})
+
+test('리포트 억 USD는 소수 2자리, 0.1억 미만은 유효숫자 1자리로 PDF와 같게 쓴다', () => {
+  assert.equal(reportEok(null), '—'); assert.equal(reportEok(0), '0.00'); assert.equal(reportEok(1234.5), '1,234.50')
+  assert.equal(reportEok(0.12), '0.12'); assert.equal(reportEok(0.0345), '0.03'); assert.equal(reportEok(0.000512), '0.0005'); assert.equal(reportEok(-0.004), '-0.004')
+})
+
+test('리포트 억 USD 반올림은 PDF와 같은 공통 사례를 따른다(최단 십진 표기 기준, 0.5는 0에서 먼 쪽)', () => {
+  const file = new URL('../../backend/tests/fixtures/report_eok_cases.json', import.meta.url)
+  for (const [usd, expected] of JSON.parse(readFileSync(file, 'utf8')).cases) assert.equal(reportEok(usd / 1e8), expected, String(usd))
 })
 
 test('리포트 비교 방식과 저장된 비교값을 유지하고 예전 문서도 읽는다', () => {
@@ -151,4 +164,11 @@ test('job completion received after the message read displays its saved answer o
  const other=[...rows,{role:'USER',message_id:'2',job:{job_id:'2'}}]
  assert.equal(completedMessages(other,job)[1].role,'ASSISTANT')
  assert.equal(completedMessages(other,job)[2].message_id,'2')
+})
+
+test('유망시장 표는 저장된 순위 기준(group_by)을 행 모양보다 먼저 쓴다', () => {
+  const row = { anchor: '2026-09-01', country_code: 'US', hs6: '330499', country_rank: 3, country_size: 1200, product_rank: 7, product_size: 90 }
+  const view = promisingView({ tables: [{ meta: { group_by: 'HS6' }, rows: [row] }] })
+  assert.equal(view.rankLabel, '품목 안 순위'); assert.equal(view.rows[0].rank, 7); assert.equal(view.rows[0].size, 90)
+  assert.equal(promisingView({ tables: [{ meta: { group_by: 'COUNTRY' }, rows: [row] }] }).rows[0].rank, 3)
 })
