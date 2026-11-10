@@ -1,4 +1,5 @@
 """D-67/69/80/93: assemble fixed conclusions with bounded generated prose."""
+from collections import Counter
 import re
 
 from backend.app.agents.digest import display_amounts, korean_usd
@@ -19,6 +20,7 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 입력 tasks 순서대로 각 task_id의 결론을 1~2문장, 전체 설명은 4문장 이하로 씁니다.
 문장마다 200자 이내입니다. 숫자는 digest에 있는 값만 옮기고 계산하지 마세요.
 0과 null을 구분하고 null은 집계되지 않았다고 쓰세요. 수출·수입과 USD 단위를 밝히세요.
+요청한 월들에 미집계가 섞여 있으면 제시된 각 월을 실제 금액(0 포함) 또는 미집계와 짝지어 설명하세요. 소계를 제시할 때에는 전체 기간 합계를 확인할 수 있는지도 밝히세요.
 금액은 digest에 적힌 표기(예: "2,610만 달러", "1억 2,346만 달러")를 글자 그대로 옮기세요.
 만·억 단위를 다시 바꾸거나 반올림·합산하지 마세요. 총액과 월평균, %와 %p를 구분하세요.
 비교 기간 길이가 다르면 그 사실과 월평균을 명시하고 점유율 분모 의미를 밝히세요.
@@ -232,6 +234,15 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
     payload = {'question': state.input.question, 'first_answer': state.input.first_question,
         'tasks': tasks, 'articles': allowed,
         'regeneration': {'mismatches': mismatches} if mismatches else None}
+    if state.draft and state.verification.regeneration_count:
+        original = state.draft.model_dump()
+        original['turn_summary'] = getattr(state.verification, 'failed_summary', '') or state.draft.turn_summary
+        payload['regeneration'] = {
+            'draft': original, 'mismatches': mismatches,
+            'feedback': [item.model_dump(mode='json') for item in state.verification.feedback],
+            'confirmed_claims': [item.model_dump(mode='json') for item in state.verification.confirmed_claims],
+            'summary_status': getattr(state.verification, 'summary_status', None),
+        }
     if any(t['answer_format'] for t in tasks):
         # 숫자는 digest만 쓰므로 이전 대화는 질문·요약만 준다. 요약 숫자는 verify를 통과한 것만 남아 있다(D-52)
         payload['recent'] = [{'question': t.question, 'summary': t.summary} for t in state.input.context.recent]
@@ -282,3 +293,132 @@ def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_c
     if error := draft_limit_error(state.plan, draft):
         raise ValueError(error)   # 재시도 대상(D-21·D-67)
     return draft
+
+
+def validate_rewrite(state, revised, payload):
+    from backend.app.agents.verify import check_codes, check_history, check_sentence
+
+    failed = {item['index'] for item in payload['regeneration']['mismatches']}
+    by_task = {}
+    for task in state.plan.tasks:
+        inputs = next((t['digests'] for t in payload['tasks'] if t['task_id']==task.task_id), {})
+        by_task[task.task_id] = [state.results[step.step_id].digest for step in task.steps
+                               if step.step_id.rsplit('.', 1)[-1] in inputs and step.tool!='search_articles']
+
+    def check_numbers(sentence, sources, task):
+        if task and task.intent=='CONVERSATION':
+            good, numbers = check_history(sentence, state.input.context.recent)
+        elif task and task.intent=='HS_LOOKUP':
+            good, numbers = check_codes(sentence, sources)
+        else:
+            good, numbers = check_sentence(sentence, sources)
+        if numbers and not good:
+            raise ValueError('재작성한 수치를 Writer 입력에서 확인할 수 없습니다.')
+
+    def check_section(before, after, offset, sources, task):
+        protected = Counter(line for i, line in enumerate(before, offset) if i not in failed)
+        available = Counter(after)
+        if protected - available:
+            raise ValueError('검증된 문장이나 인용이 누락됐습니다.')
+        if len(before) == protected.total() and available != protected:
+            raise ValueError('검증된 문장이 변경됐습니다.')
+        if not cited_article_numbers(' '.join(before)) <= cited_article_numbers(' '.join(after)):
+            raise ValueError('기존 기사 인용이 누락됐습니다.')
+        for line in available - protected:
+            check_numbers(line, sources, task)
+
+    offset = 0
+    for task, old, new in zip(state.plan.tasks, state.draft.conclusion, revised.conclusion, strict=True):
+        check_section(old.sentences, new.sentences, offset, by_task[task.task_id], task)
+        offset += len(old.sentences)
+    check_section(state.draft.explanation, revised.explanation, offset,
+                  [source for group in by_task.values() for source in group], None)
+    if payload['regeneration']['summary_status']=='PASS':
+        revised.turn_summary = state.draft.turn_summary
+    elif payload['regeneration']['summary_status']=='MISMATCH' and not revised.turn_summary:
+        raise ValueError('검증에 실패한 요약을 다시 작성해야 합니다.')
+    elif revised.turn_summary:
+        primary = state.plan.tasks[0]
+        check_numbers(revised.turn_summary, by_task[primary.task_id], primary)
+    revised.title = state.draft.title
+    return revised
+
+
+def apply_claim_edits(state, payload, edits):
+    """Apply edits against one immutable draft. Locations use Verify's global sentence index."""
+    from backend.app.agents.verify import check_sentence
+
+    verification = state.verification
+    original = Draft.model_validate(payload['regeneration']['draft'])
+    revised = original.model_copy(deep=True)
+    locations = {}
+    for conclusion in revised.conclusion:
+        for i in range(len(conclusion.sentences)):
+            locations['conclusion', len(locations)] = (conclusion.task_id, conclusion.sentences, i)
+    for i in range(len(revised.explanation)):
+        locations['explanation', len(locations)] = (None, revised.explanation, i)
+    summary = [original.turn_summary]
+    locations['summary', None] = (state.plan.tasks[0].task_id, summary, 0)
+
+    expected = {i for i, f in enumerate(verification.feedback) if f.action == 'CORRECT'}
+    if {e.feedback_index for e in edits.edits} != expected or len(edits.edits) != len(expected):
+        raise ValueError('EDIT_SET_MISMATCH')
+    changes = {}
+    for edit in edits.edits:
+        f = verification.feedback[edit.feedback_index]
+        loc = (f.section, f.index)
+        if loc not in locations or locations[loc][0] != f.task_id or not f.span:
+            raise ValueError('INVALID_LOCATION')
+        if f.section == 'summary' and verification.summary_status != 'MISMATCH':
+            raise ValueError('PROTECTED_SUMMARY')
+        task_id, lines, i = locations[loc]
+        old = lines[i]
+        left, right = f.span
+        if not (0 <= left < right <= len(old)) or old[left:right] != f.passage:
+            raise ValueError('STALE_SPAN')
+        if edit.replacement == f.passage or not edit.replacement.strip():
+            raise ValueError('UNCHANGED_EDIT')
+        for guard in [*verification.feedback, *verification.confirmed_claims]:
+            if guard.action == 'CORRECT' or (guard.section, guard.index) != loc:
+                continue
+            if guard.span is None or max(left,guard.span[0]) < min(right,guard.span[1]):
+                raise ValueError('PROTECTED_CLAIM')
+        owner = next((task for task in state.plan.tasks
+                      if any(step.step_id == f.step_id and step.tool != 'search_articles'
+                             for step in task.steps)), None)
+        result = state.results.get(f.step_id)
+        inputs = next((t['digests'] for t in payload['tasks'] if owner and t['task_id']==owner.task_id), {})
+        if (not owner or (task_id and task_id != owner.task_id) or not result or not result.digest
+                or f.step_id.rsplit('.', 1)[-1] not in inputs):
+            raise ValueError('NO_WRITER_EVIDENCE')
+        if f.reason == 'COMPARISON':
+            for period in ('전년', '전월', '전분기'):
+                if period in owner.question and period in f.passage and period not in edit.replacement:
+                    raise ValueError('REQUESTED_COMPARISON_CHANGED')
+        changes.setdefault(loc, []).append((left, right, edit.replacement, result.digest, f.targets))
+
+    for loc, patches in changes.items():
+        _, lines, i = locations[loc]
+        original_line = lines[i]
+        boundary = len(original_line)
+        for left, right, replacement, evidence, targets in sorted(patches, key=lambda p:p[0], reverse=True):
+            if right > boundary:
+                raise ValueError('OVERLAPPING_EDITS')
+            boundary = left
+            lines[i] = lines[i][:left] + replacement + lines[i][right:]
+        # A span may cover just one digit inside an article date or citation.
+        markers = r'\[\s*\d+(?:\s*,\s*\d+)*\s*\]|(?:\d{4}년\s*)?\d{1,2}월\s*\d{1,2}일|\d{4}-\d{2}-\d{2}'
+        if re.findall(markers, original_line) != re.findall(markers, lines[i]):
+            raise ValueError('PROTECTED_CITATION_OR_DATE')
+        # Validate each corrected statement against its own Writer-visible step.
+        for left, right, replacement, evidence, targets in patches:
+            if re.search(r'\d', original_line[left:right]) and not re.search(r'\d', replacement):
+                raise ValueError('MISSING_CORRECTED_VALUE')
+            if not check_sentence(lines[i], [evidence], known_names=targets)[0]:
+                raise ValueError('UNSUPPORTED_CORRECTION')
+    revised.turn_summary = summary[0]
+    revised = Draft.model_validate(revised.model_dump())
+    validate_citations(revised, payload['articles'])
+    if draft_limit_error(state.plan, revised):
+        raise ValueError('DRAFT_LIMIT')
+    return revised

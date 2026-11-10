@@ -686,7 +686,34 @@ class SentenceCheck(Model):
     reason: Literal['MATCH', 'NOT_CONFIRMED', 'SOURCE_UNAVAILABLE'] = 'NOT_CONFIRMED'
 
 
+class PassageEdit(Model):
+    feedback_index: int
+    replacement: Sentence
+
+
+class WriterEdits(Model):
+    edits: list[PassageEdit]
+
+
+class ClaimFeedback(Model):
+    # Half-open Python character offsets within the original sentence or summary.
+    span: tuple[int, int] | None = None
+    targets: tuple[str, ...] = ()
+    action: Literal['REVIEW', 'CORRECT', 'PRESERVE'] = 'REVIEW'
+    section: Literal['conclusion', 'explanation', 'summary']
+    task_id: str | None = None
+    index: int | None = None
+    passage: str
+    reason: str
+    step_id: str | None = None
+    cell: tuple[str, ...] | None = None
+
+
 class Verification(Model):
+    feedback: list[ClaimFeedback] = Field(default_factory=list)
+    confirmed_claims: list[ClaimFeedback] = Field(default_factory=list)
+    summary_status: Literal['PASS', 'MISMATCH'] | None = None
+    failed_summary: Annotated[str, _chars(0, 200)] = ''
     status: Literal['PENDING', 'PASS', 'NEEDS_REVIEW'] = 'PENDING'
     checks: list[SentenceCheck] = Field(default_factory=list, max_length=MAX_CONCLUSION_SENTENCES + MAX_TEXT_EXPLANATION_SENTENCES)
     regeneration_count: int = Field(default=0, ge=0, le=1)
@@ -721,6 +748,8 @@ class AgentState(Model):
     round_started_at: datetime | None = None   # 라운드 시작 표시용. 대기·복구 때 이동/초기화하지 않는다(D-85)
     run_budget: RunBudget = Field(default_factory=RunBudget)
     results: dict[str, ToolResult] = Field(default_factory=dict)  # step_id → 결과
+    fixed_conclusion_ids: list[str] | None = Field(default=None, max_length=MAX_TASKS)
+    writer_rewrite_result: str | None = None
     draft: Draft | None = None
     verification: Verification = Field(default_factory=Verification)
     warnings: Annotated[list[ShortText], _truncate(MAX_LIST_ITEMS)] = Field(default_factory=list)

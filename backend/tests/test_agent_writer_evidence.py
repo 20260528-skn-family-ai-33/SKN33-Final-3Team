@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.app.agents.compose import ARTICLE_PROMPT, compose_input, numbered_articles
 from backend.app.agents.runtime import Services
-from backend.app.agents.state import AgentState, Draft, MAX_DIGEST_BYTES, ToolResult
+from backend.app.agents.state import AgentState, Draft, MAX_DIGEST_BYTES, SentenceCheck, ToolResult
 from backend.app.api.config import Settings
 from backend.scripts.evaluate_writer_dev import DEV, article, dev_state, statistic
 
@@ -195,3 +195,101 @@ class WriterEvidenceTest(unittest.TestCase):
         client.parse.assert_called_once()
         self.assertNotIn('[8]', ' '.join(state.draft.sentences()))
         self.assertIn('2,610만 달러', state.draft.sentences()[0])
+
+    def test_rewrite_preserves_verified_sentence_and_rejects_unknown_amount(self):
+        for text in (False, True):
+            for new, accepted in [('수출액은 0달러입니다.', True), ('수출액은 777달러입니다.', False)]:
+                with self.subTest(text=text, new=new):
+                    state = dev_state(DEV['02-zero-null'])
+                    old = '수출액은 10달러입니다.'
+                    kept = '표를 확인하세요.'
+                    def draft(sentence):
+                        return Draft(conclusion=[{'task_id': 't1', 'sentences': [sentence, kept]}],
+                                     turn_summary='')
+                    compose(state, draft(old), text=text)
+                    self.assertEqual(state.fixed_conclusion_ids, [])
+                    state.verification.checks = [SentenceCheck(index=0, status='MISMATCH', numbers=['10달러'])]
+                    state.verification.regeneration_count = 1
+                    client = compose(state, draft(new), text=text)
+                    payload = client.parse.call_args.kwargs['payload']
+                    self.assertEqual(payload['regeneration']['draft']['conclusion'][0]['sentences'], [old, kept])
+                    self.assertEqual(state.draft.sentences(), [new if accepted else old, kept])
+
+    def test_action_rewrite_uses_only_addressed_span(self):
+        from backend.app.agents.state import ClaimFeedback, WriterEdits
+
+        old = '미국 수출은 전년 동월 대비 1.5% 감소했습니다.'
+        phrase = '전년 동월 대비 1.5% 감소'
+        start = old.index(phrase)
+        for text in (False, True):
+            for section in ('conclusion', 'summary'):
+                for replacement, expected in [
+                    ('전년 동월 대비 3% 증가', 'ACCEPTED_CORRECTION'),
+                    ('전년 동월 대비 777% 증가', 'UNSUPPORTED_CORRECTION'),
+                    ('전월 대비 1.5% 감소', 'REQUESTED_COMPARISON_CHANGED'),
+                    (phrase, 'UNCHANGED_EDIT'),
+                ]:
+                    with self.subTest(text=text, section=section, replacement=replacement):
+                        state = dev_state(DEV['02-zero-null'])
+                        state.plan.tasks[0].question = '미국 수출은 전년 동월 대비 어떻게 변했나요?'
+                        state.results['t1.sql'].digest = {'kind':'TREND', 'trade_flow':'EXPORT',
+                            'rows':[{'country_name':'미국', 'yoy_pct':3, 'mom_pct':-1.5}]}
+                        body = old if section == 'conclusion' else '검증된 본문입니다.'
+                        state.draft = Draft(conclusion=[{'task_id':'t1','sentences':[body]}],
+                                            turn_summary='유지할 요약' if section == 'conclusion' else '')
+                        verification = state.verification
+                        verification.regeneration_count = 1
+                        verification.summary_status = 'PASS' if section == 'conclusion' else 'MISMATCH'
+                        verification.failed_summary = old if section == 'summary' else ''
+                        index = 0 if section == 'conclusion' else None
+                        feedback = ClaimFeedback(section=section, task_id='t1', index=index, reason='COMPARISON',
+                            passage=phrase, span=(start, start + len(phrase)), action='CORRECT', step_id='t1.sql')
+                        verification.feedback = [feedback]
+                        verification.confirmed_claims = [feedback.model_copy(update={
+                            'span':(0,2), 'passage':'미국', 'action':'PRESERVE', 'reason':'MATCH'})]
+                        result = WriterEdits(edits=[{'feedback_index':0, 'replacement':replacement}])
+                        client = compose(state, result, text=text)
+                        sent = client.parse.call_args.kwargs['payload']['regeneration']
+                        self.assertEqual(sent['confirmed_claims'][0]['span'], [0,2])
+                        self.assertEqual(state.writer_rewrite_result, expected)
+                        amended = old.replace(phrase, replacement)
+                        accepted = expected == 'ACCEPTED_CORRECTION'
+                        self.assertEqual(state.draft.sentences(), [amended if accepted and section=='conclusion' else body])
+                        self.assertEqual(state.draft.turn_summary, (amended if accepted else old) if section=='summary' else '유지할 요약')
+
+    def test_protected_and_invalid_feedback_preserve_draft(self):
+        from backend.app.agents.state import ClaimFeedback, WriterEdits
+
+        for text in (False, True):
+            for condition, expected in [
+                ('review', 'PRESERVED_NO_CORRECTION'), ('overlap', 'PROTECTED_CLAIM'),
+                ('outside', 'INVALID_LOCATION'), ('stale', 'STALE_SPAN'),
+                ('snapshot_only', 'NO_WRITER_EVIDENCE'), ('date', 'PROTECTED_CITATION_OR_DATE'),
+                ('timeout', 'MODEL_OR_SCHEMA_FAILURE'),
+            ]:
+                with self.subTest(text=text, condition=condition):
+                    state = dev_state(DEV['04-context'])
+                    line = '9월 3일 기사에서 확인했습니다.[1]'
+                    state.draft = Draft(conclusion=[{'task_id':'t1','sentences':[line]}], turn_summary='')
+                    first = state.draft.model_copy(deep=True)
+                    start = line.index('3')
+                    feedback = ClaimFeedback(section='conclusion', task_id='t1', index=0,
+                        passage='3', span=(start, start+1), action='CORRECT', reason='VALUE', step_id='t1.sql')
+                    if condition == 'review':
+                        feedback.action = 'REVIEW'
+                    elif condition == 'outside':
+                        feedback.index = 3
+                    elif condition == 'stale':
+                        feedback.passage = '7'
+                    elif condition == 'snapshot_only':
+                        feedback.step_id = 't1.unknown'
+                    elif condition == 'overlap':
+                        state.verification.confirmed_claims = [feedback.model_copy(update={'action':'PRESERVE'})]
+                    state.verification.feedback = [feedback]
+                    state.verification.regeneration_count = 1
+                    value = TimeoutError() if condition == 'timeout' else WriterEdits(edits=[
+                        {'feedback_index':0,'replacement':'15'}])
+                    client = compose(state, value, text=text)
+                    self.assertEqual(client.parse.call_count, int(condition != 'review'))
+                    self.assertEqual(state.writer_rewrite_result, expected)
+                    self.assertEqual(state.draft, first)

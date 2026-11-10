@@ -4,7 +4,7 @@ import re
 from typing import get_args
 from pydantic import BaseModel
 
-from backend.app.agents.state import Draft
+from backend.app.agents.state import Draft, WriterEdits
 
 
 def validation_details(error, schema):
@@ -53,7 +53,7 @@ class StructuredClient:
         options = {'temperature': 0}
         if model in ('gpt-5.6-luna', 'gpt-6-luna'):
             # Writer의 출력 예산은 추론 토큰도 포함한다. 다른 노드는 기존 추론 설정을 유지한다.
-            options = {'reasoning': {'effort': 'low'}} if schema is Draft else {}
+            options = {'reasoning': {'effort': 'low'}} if schema in (Draft, WriterEdits) else {}
         with factory(api_key=key, timeout=timeout, max_retries=0) as client:
             response = client.responses.parse(model=model, instructions=prompt,
                 input=json.dumps(payload, ensure_ascii=False, allow_nan=False), text_format=schema,

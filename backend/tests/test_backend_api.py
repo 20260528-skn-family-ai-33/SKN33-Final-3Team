@@ -303,14 +303,16 @@ class BackendApiTest(unittest.TestCase):
         verification=answer['verification']
         self.assertEqual((verification['status'],verification['regeneration_count']),('NEEDS_REVIEW',1))
         self.assertEqual([(c['index'],c['sentence']) for c in verification['sentence_checks'] if c['status']=='MISMATCH'],
-                         [(0 if correction else 1,wrong)])
-        if not correction: self.assertEqual(verification['sentence_checks'][0]['status'],'PASS')
+                         [(1,wrong)])
+        # The shorter candidate drops a verified conclusion and keeps the unsupported number.
+        self.assertIn(intro, answer['text'])
+        self.assertEqual(verification['sentence_checks'][0]['status'],'PASS')
         self.assertEqual(database.agent_client.parse.call_count,3)  # planner, draft, one correction
 
     def test_failed_numeric_correction_keeps_original_marked_sentence(self):
         self._run_numeric_review(False)
 
-    def test_reverified_shorter_draft_marks_only_final_sentence_index(self):
+    def test_invalid_shorter_rewrite_preserves_original_sentence_indexes(self):
         self._run_numeric_review(True)
 
     def test_writer_citations_match_the_job_and_saved_message_article_order(self):

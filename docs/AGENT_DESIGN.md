@@ -654,6 +654,7 @@ actions[], report_id, warnings[]
 §11에 없던 네 곳(compose, 비슷한 국가, 환경변수·노드 시간, LLM SQL)이다. 운영하며 바꿀 수 있는 값은 C-28로 묶었다.
 
 ### 13.1 compose (`agents/compose.py`)
+- 초안 조립이 성공하면 코드가 작성한 결론의 Task ID를 `fixed_conclusion_ids`에 기록한다. 재작성 입력에는 이전 초안, 실패 위치, 문제 구절, 판정 사유가 들어간다. 새 수치는 해당 Writer 입력 근거에서 확인하고 기존 정상 문장과 기사 인용을 보존한다. 요약만 실패한 경우 본문을 유지한다. 일반·문장형 경로 모두 같은 규칙을 적용한다.
 - **누가 쓰나:** REPORT 성공은 D-93의 고정 문구를 우선한다. 결과(digest)가 있는 Task는 LLM이 결론을 쓴다. 대화·용어 질문(CONVERSATION)은 조회 없이 최근 대화를 입력한다(D-99). 다음 Task의 결론은 코드가 고정 문구로 넣는다. 그다음 계획 순서대로 합쳐 `Draft.conclusion`을 만든다(D-80).
   - `OUT_OF_SCOPE`(D-69 문구)
   - 단계 없이 NO_DATA가 된 Task(`limit_errors()` 문구, D-73)
@@ -793,6 +794,7 @@ python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/e
 - **마무리 중 시간 부족(2026-11-05):** 예약은 실제 걸린 시간으로 정산되므로 compose가 예약보다 오래 걸리면 마무리 몫이 모자랄 수 있다. verify는 finalize 몫(10초)을 남기고 예약하며, 그래도 예약이 거부되면 대조하지 못한 LLM 문장마다 "확인 필요"(MISMATCH, NOT_CONFIRMED)를 붙이고 `turn_summary`를 비운 뒤 저장으로 넘어간다(`verify.mark_unverified`). finalize는 예산 검사 없이 예약·정산한다(`budget.reserve(enforce=False)`). 완성된 답변을 버리고 작업을 FAILED로 끝내지 않는다.
 - **재시도 조건:** 재시도·재생성(SQL 2회, LLM SQL 재생성 2회, 기사 1회, compose 1회)은 남은 예산이 "그 시도의 예약 시간 + 마무리 몫" 이상일 때만 한다. 모자라면 재시도하지 않고 그 단계를 FAILED로 둔 뒤 `skip_blocked()`하고 D-72대로 부분 답변을 만든다.
 - **verify 뒤 재생성:** 숫자가 틀려 compose를 다시 부르는 것(D-51)은 남은 예산이 "compose 20 + verify 5 + finalize 10 = 35초" 이상일 때만 한다. 모자라면 다시 쓰지 않고 틀린 문장에 "확인 필요"를 붙인다(`Verification.status=NEEDS_REVIEW`).
+- Verify가 주장별 피드백을 주면 일반·문장형 Writer는 최초 초안과 동일한 Task 근거를 사용한다. `feedback`과 `confirmed_claims`의 위치는 결론→설명 순서의 문장 번호(요약은 별도)와 원문 내 Python 문자 반열린 구간이다. `CORRECT`만 기존 생성 예산에서 한 번 호출해 교체문을 받고, 코드는 원문·보호 구간·근거·인용을 확인한 후 적용한다. `REVIEW`와 `PRESERVE`만 있으면 호출 없이 초안을 보존한다. 결과는 체크포인트의 `writer_rewrite_result`에 기록한다. 문장 검사만 있는 이전 체크포인트는 기존 재작성 경로를 사용한다.
 - **이유:** 예를 들어 LLM SQL은 3번 다 예약하면 플래너 10 + check 15 + 150 = 175초라 마무리를 할 수 없다. D-40·D-45의 횟수는 최대치이고, 예산 안에서만 쓴다.
 
 ### 13.5 LLM SQL (`agents/tools.py`의 `query_trade_data`, `template=LLM_SQL`)
