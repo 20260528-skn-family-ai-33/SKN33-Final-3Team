@@ -293,7 +293,7 @@ export default function Dashboard({ route }) {
                   <ul aria-label="수출입 비중 국가 목록" tabIndex={data.countryTable.pie.length >= 5 ? 0 : undefined}
                     style={{ listStyle: 'none', margin: 0, padding: 0, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13, color: '#2E333C', ...(data.countryTable.pie.length >= 5 ? { maxHeight: 224, overflowY: 'auto', scrollbarGutter: 'stable' } : {}) }}>
                     {data.countryTable.pie.map(([label, color]) => (
-                      <li key={label} style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 7, minHeight: 40, lineHeight: '20px', overflowWrap: 'anywhere' }}><span style={{ width: 10, height: 10, flexShrink: 0, borderRadius: 2, background: color }} /><span>{label}</span></li>
+                      <li key={label} style={{ display: 'flex', flexShrink: 0, alignItems: 'center', gap: 7, minHeight: 40, lineHeight: '20px', overflowWrap: 'break-word' }}><span style={{ width: 10, height: 10, flexShrink: 0, borderRadius: 2, background: color }} /><span>{label}</span></li>
                     ))}
                   </ul>
                 </div>
