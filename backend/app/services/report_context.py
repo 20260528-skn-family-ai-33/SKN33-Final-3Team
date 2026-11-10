@@ -135,6 +135,15 @@ def build_context(store, uid, record, document):
                     'series':[{'name':col['label'],'values':[r[col['key']] for r in table['rows']]} for col in columns],
                     'rows':[{'month':r['month'],'name':col['label'],'amount_usd':r[col['key']]}
                             for r in table['rows'] for col in columns]}
+        if 'GROWTH_RISK' in context['conditions']['sections']:
+            from backend.app.services.report_ondemand_context import promising_view
+            block=next((x for x in document['sections'] if x['section_code']=='GROWTH_RISK'),None)
+            context['promising']=promising_view(block)
+            # 출처 표는 섹션 순서(유망시장 → 현지 이슈)를 따른다.
+            at=next((i for i,x in enumerate(context['sources']) if x['label']=='기사'),len(context['sources']))
+            context['sources'].insert(at,{'label':'유망시장 예측','provider':'자체 ML 모델 (관세청 통계 기반)',
+                'scope':(f"{context['promising']['anchor']} 기준월 예측" if context['promising']['anchor'] else '예측 결과 없음'),
+                'used_in':'유망시장(증가·감소 예상)'})
         if note := document.get('meta',{}).get('monthly_average_note'):
             context['summary']['monthly_average_note']=note
     elif kind == 'RPT_WEEKLY':

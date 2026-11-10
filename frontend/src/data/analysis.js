@@ -87,7 +87,7 @@ export function reportParagraphs(report) {
   ]
   if (o.sections.includes('주요 지표(KPI)')) lines.push(`02 주요 지표: 기간 수출액 ${f.total}억 USD · 전년 대비 ${f.growthText} · 수입액 ${f.imp}억 USD · 월별 ${f.labels.map((l, i) => `${l} ${f.current[i]}`).join(', ')}`)
   if (o.sections.includes('주요 수출국')) lines.push(`03 주요 수출국: ${f.countryRows.map(r => `${r.name} ${r.exp}억(${r.share}%)`).join(', ')}`)
-  if (o.sections.includes('급성장·리스크 시장')) lines.push(`04 급성장·리스크 시장: 성장률 상위 ${f.countryRows[0]?.name} ${f.growthText} · 감소율 상위 해당 국가 없음`)
+  if (o.sections.includes('유망시장(증가·감소 예상)')) lines.push('04 유망시장(증가·감소 예상): 서버 예측 결과로 표시')
   if (o.sections.includes('현지 이슈 기사')) lines.push(`05 현지 이슈: ${f.news.map(a => `${a.title}(${a.date})`).join(' / ') || '해당 기간 기사 없음'}`)
   lines.push('출처: 관세청 수출입 통계 · KOTRA 해외시장뉴스 · 한국은행 ECOS (시연 데이터)')
   return lines

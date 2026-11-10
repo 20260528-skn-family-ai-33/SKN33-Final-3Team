@@ -42,15 +42,12 @@
 | BS30 | 알림함 / 급증 기사 | `/account/notifications?tab=surge` |  |
 | BS31 | 리포트 센터 / 분기 | `/account/reports?tab=quarterly` |  |
 
-## 소셜 로그인 · 계정 찾기
+## 계정 찾기
+
+LG02~LG06 소셜 로그인 연결·가입·오류 화면은 제공하지 않는다. 관련 프론트 경로와 UI를 제거했다.
 
 | 번호 | 화면 | 경로 | 비고 |
 |---|---|---|---|
-| LG02 | 카카오 인증 연결·복귀 | `/login/kakao` → 카카오 로그인 → `/oauth/kakao` | 키가 없으면 설정 안내 |
-| LG03 | 네이버 인증 연결·복귀 | `/login/naver` → 네이버 로그인 → `/oauth/naver` | 키가 없으면 설정 안내 |
-| LG04 | 구글 인증 연결·복귀 | `/login/google` → 구글 로그인 → `/oauth/google` | 키가 없으면 설정 안내 |
-| LG05 | 소셜 신규 회원 · 추가 정보 확인 | `/signup/social` | 소셜 인증 후 연결된 계정이 없을 때 자동 이동 |
-| LG06 | 로그인 실패·취소 상태 및 구현 계약 | `/login/error?provider=kakao&reason=cancel` | 취소·state 불일치·토큰 교환 실패 시 자동 이동 |
 | LG07 | 아이디 찾기 | `/find-id` |  |
 | LG08 | 아이디 찾기 · 가입 계정 선택 | `/find-id?step=select` | 아이디 찾기에서 `홍길동` 입력 |
 | LG09 | 아이디 찾기 · 회원정보 없음 | `/find-id?step=none` | 등록되지 않은 이름 입력 |

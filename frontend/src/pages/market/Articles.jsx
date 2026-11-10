@@ -1,4 +1,4 @@
-// BS09 기사 공통 진입(검색) · BS10 전체기사 · BS11 단신속보 · BS12 주요이슈(선택 기사 강조)
+// BS09 기사 공통 진입(검색) · BS10 전체기사 · 일반기사 · BS11 단신속보 · BS12 주요이슈(선택 기사 강조)
 import { useEffect, useState } from 'react'
 import { Link, navigate, withQuery } from '../../router'
 import { Band, ChatFab } from '../../components/layout'
@@ -25,7 +25,7 @@ export default function Articles({ route }) {
   const [form, setForm] = useState({ keyword, from, to })
   const [error, setError] = useState('')
   const page = Math.max(1, Number(q.get('page')) || 1)
-  const result = useQuery('/articles', { tab: ({ all: 'ALL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab] || 'ALL', q: keyword, mode: keyword ? 'SEARCH' : 'BROWSE', start_date: from, end_date: to, page, page_size: PAGE_SIZE })
+  const result = useQuery('/articles', { tab: ({ all: 'ALL', general: 'GENERAL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab] || 'ALL', q: keyword, mode: keyword ? 'SEARCH' : 'BROWSE', start_date: from, end_date: to, page, page_size: PAGE_SIZE })
   const detail = useQuery(`/articles/${selected}`, {}, !!selected)
   const list = (result.data?.items || []).map(mapArticle)
   const pages = Math.max(1, Math.ceil((result.data?.page.total || 0) / PAGE_SIZE))
@@ -51,7 +51,7 @@ export default function Articles({ route }) {
     <>
       <Band
         image={bandArticles} imagePosition="center 55%" eyebrow="무역·경제 뉴스" title="기사"
-        lead={keyword ? '전체기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
+        lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
         right={(
           <div className="chips">
             {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} to={withQuery(route, { tab: key, id: null, page: null })}>{label}</Chip>)}
