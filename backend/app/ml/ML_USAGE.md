@@ -17,7 +17,7 @@ python -c "import lightgbm; print(lightgbm.__version__)"
 
 컨테이너를 쓰면 실제 실행 이미지에도 `libgomp1`이 필요합니다. `backend/requirements.txt`에는 LightGBM이 포함돼 있으므로 이 목록을 설치하는 환경에 적용합니다. API·worker 전용 `backend/requirements-api.txt`에도 채팅 유망시장 조회용 numpy·pandas·scipy·joblib·LightGBM·scikit-learn·threadpoolctl이 들어 있으므로(설계 D-48), 워커 서버·이미지에도 `libgomp1`을 설치합니다. 버전은 배포 모델의 runtime(`model_a_two_stage_<YYYYMM>.registry.json`의 `data_info.runtime`)과 같게 고정합니다. 지금 모델은 Python 3.11.9 · numpy 1.24.3 · pandas 2.2.3 · scipy 1.10.1입니다. 워커는 numpy만 1.26.4를 씁니다(에이전트의 `langgraph-checkpoint-redis` → `redisvl`이 numpy 1.26 이상을 요구하고, 1.26은 1.24로 저장한 파일을 그대로 읽음). scipy 1.10.1이 Python 3.12를 지원하지 않아 API·워커도 Python 3.11로 실행합니다.
 
-`.env.sample`의 `CUSTOMS_ML_ENTRYPOINT`는 기본적으로 비워 두었습니다. 월별 재학습을 활성화하기 전에 위 import 확인과 입력 데이터·DB 준비, 서버 자원(기본 학습 스레드 4개)을 확인한 뒤 아래 월별 재학습 설정을 적용합니다. 활성화하면 **매월 19일**에 ML 전용 작업이 실행되며, **스케줄러 시작 40초 뒤**에는 예약일이 지난 미완료 월만 복구합니다. 18일 수집과 시작 20초 뒤 수집 복구는 ML을 실행하지 않습니다. `WAITING_FOR_ML` 상태인 월도 ML 전용 작업이 이어서 처리합니다.
+운영 ML 예약은 AWS에서만 관리합니다. 통합 수집 스케줄러는 `CUSTOMS_ML_ENTRYPOINT` 설정 유무와 관계없이 ML을 실행하지 않습니다. 이 설정은 기존 월 파이프라인을 수동 실행할 때만 사용하며, AWS 운영 환경에서는 기본값인 빈 값으로 둡니다. 학습 실행 환경은 위 import 확인과 입력 데이터·DB 준비, 서버 자원(기본 학습 스레드 4개)을 확인합니다.
 
 ## 최종 모델 생성·조회
 
@@ -115,44 +115,30 @@ python -m backend.app.ml.two_stage kfold --folds 8 --seeds 0 1 2 --n-jobs 4
 
 ## 운영 ML 예약 변경 (2026-11-10)
 
-운영 ML은 AWS 스케줄러에서 별도로 실행합니다. 수집 일정 변경 배포 후 AWS의 월 실행일을 **11일 → 19일**로 변경하고, 기존 실행 시각·시간대는 유지합니다. 저장소 스케줄러도 ML 실행일을 **19일**로 분리했으며 **AWS 설정 변경은 아직 미적용**입니다.
+운영 ML은 **AWS 스케줄러에서만** 실행합니다. 이번 PR에서 추가했던 코드 ML 정기 예약·시작 복구·ML 전용 재시도 경로는 제거했습니다. 따라서 코드 ML 복구가 수집 S3 잠금과 충돌하거나 수집 체크포인트를 FAILED로 덮어쓰는 경로도 없습니다.
 
-관세청·UN 월간 수집 기본값은 **18일 03:00 KST**, 외부 데이터 갱신은 기존 **1일 04:00 KST**를 유지합니다. 운영 환경에 `CUSTOMS_MONTHLY_DAY=10`이 명시되어 있으면 코드 기본값보다 우선하므로 배포 시 `18`로 바꿔야 합니다. AWS로만 ML을 실행하는 서버에서는 `CUSTOMS_ML_ENTRYPOINT`를 비워 코드 스케줄러의 학습을 비활성화합니다. 코드 ML 작업은 수집·적재·계산 체크포인트가 완료된 월만 학습하며, 미완료이면 원본 상태를 보존하고 다음 날 다시 확인합니다.
+배포 담당자는 수집 일정 배포에 맞춰 AWS ML 실행일을 **11일 → 19일**로 변경하고, **기존 실행 시각·시간대를 유지했는지와 변경 후 다음 실행 일시**를 확인합니다. 이 저장소 수정에서는 **AWS 설정을 변경하지 않았습니다**. AWS 실행 시각을 코드의 수집 시각(03:00 KST)으로 바꾸지 않습니다.
 
-## 코드 스케줄러의 월별 재학습
+관세청·UN 수집 기본값은 **18일 03:00 KST**, 외부 데이터 갱신은 기존 **1일 04:00 KST**입니다. 운영 환경에 `CUSTOMS_MONTHLY_DAY=10`이 지정되어 있으면 배포 시 `18`로 변경합니다. 통합 스케줄러의 수집·시작 복구·재시도는 ML을 호출하지 않고, 수집·계산 완료 월은 `WAITING_FOR_ML`로 남깁니다. AWS에서 ML만 실행한 결과는 모델 파일·레지스트리·DB 기록으로 확인하며, 수집 체크포인트의 ML 완료 여부와 구분합니다.
 
-연결 경로는 `scheduler.main → customs_monthly.ml_monthly_job → run_month(ml_only=True) → candidate_models.run → two_stage.monthly`입니다. 위 Linux 배포 준비와 서버 자원을 확인한 뒤 재학습을 활성화하려면 `.env`에 다음과 같이 설정합니다. 환경변수에 같은 키가 있으면 `.env`보다 우선합니다.
+## 수동 월별 재학습
 
-```dotenv
-CUSTOMS_ML_ENTRYPOINT=backend.app.ml.candidate_models:run
-CUSTOMS_MONTHLY_DAY=18
-CUSTOMS_MONTHLY_HOUR=3
-CUSTOMS_MONTHLY_MINUTE=0
-# 누락 월 복구 시작점. 실제 운영 범위에 맞게 지정합니다.
-CUSTOMS_START_MONTH=202601
-```
-
-- 수집 기본 일정은 **매월 18일 03:00 KST**, ML은 **매월 19일 03:00 KST**입니다. ML 실행일은 `ML_MONTHLY_DAY=19`이며 시각은 기존 `CUSTOMS_MONTHLY_HOUR`·`CUSTOMS_MONTHLY_MINUTE`를 공유합니다. 수집·계산이 완료되지 않았다면 ML 전용 재시도에서 같은 대상 월을 다음 날 확인합니다(최대 30회). 수집을 대신 실행하거나 덜 적재된 자료로 학습하지 않습니다.
-- 2026-11-10 기준 다음 수집은 **2026-11-18 03:00 KST**, ML은 **2026-11-19 03:00 KST**입니다. 시작 20초 뒤 수집 복구, 40초 뒤 ML 복구를 별도로 등록합니다. 19일 예약 시각 전 재시작에서는 전월 ML을 미리 실행하지 않고, 이전에 실행일이 지난 월만 복구합니다.
-- 2026-10-29 로컬 실측(Python 3.11, `n_jobs=4`, 학습 1,122,200행, 품목 방향 순위 모델 포함): ML 단계 약 **11.3분**(전체 학습 451초 + Holdout 점검 187초, 피처 생성 제외)으로 30분 이내라 매월 전체 재학습합니다. 정답 있는 기준월이 매월 하나(약 4.5%)씩 늘어 학습 시간도 비슷하게 늘어납니다. 서버 사양에 따라 달라지므로 첫 월별 실행의 `fit_seconds`로 확인합니다. 스케줄러가 부르는 월별 단계는 기본 4코어(`candidate_models.run(n_jobs=4)`)로 학습합니다. (2026-10-28 품목 방향 모델 추가 전 측정은 `n_jobs=2`로 약 10.5분이었습니다.)
-- 외부 데이터 갱신은 별도 작업으로 **매월 1일 04:00 KST**입니다. 모델 재학습 일정과 구분합니다.
-- `CUSTOMS_ML_ENTRYPOINT`가 비어 있으면 수집 결과는 `WAITING_FOR_ML`로 남고 ML 예약·복구는 학습 없이 종료합니다. 값을 설정한 뒤 재시작하거나 다음 19일 예약을 기다리면 기한이 지난 대기 월을 처리합니다. 명시적 `customs_monthly --month` 수동 실행은 기존처럼 수집부터 ML까지 실행할 수 있습니다.
+기존 ML 실행 함수와 CLI는 유지합니다. 원본·DB·실행 환경을 확인한 뒤 필요한 월을 명시해서 실행합니다. `CUSTOMS_ML_ENTRYPOINT`를 설정해도 통합 스케줄러에 ML 예약이 생기지 않습니다.
 
 ```powershell
-# 통합 스케줄러 상시 실행: 수출입·외부 데이터 외에 다른 등록 작업도 함께 실행
+# 통합 수집 스케줄러: ML 학습은 실행하지 않음
 python -m backend.app.scheduler.main
 
-# 특정 월 파이프라인 실행 또는 완료되지 않은 단계부터 재개
+# 특정 월 수집 파이프라인 수동 재개
+# CUSTOMS_ML_ENTRYPOINT를 설정한 경우에는 기존처럼 ML 단계까지 실행 가능
 python -m backend.app.scheduler.jobs.customs_monthly --month 202610
 
-# 해당 월까지 원본이 준비된 경우 ML 단계만 실행·재시도
+# 원본이 준비된 월의 ML만 명시적으로 실행·재시도
 python -m backend.app.ml.candidate_models --monthly 2026-10-01 --n-jobs 2
 
-# 월별 생성 파일 조회 (생성 완료 후)
+# 생성 모델 조회
 python -m backend.app.ml.two_stage query --model data/ml/monthly_models/model_a_two_stage_202610.joblib --country VN
 ```
-
-통합 스케줄러는 운영 환경에서 계속 실행해야 합니다. 2026-10-28 로컬 점검에서는 실행 프로세스와 월별 모델 산출물이 확인되지 않았습니다. 코드에 예약이 등록된 것과 서버에서 자동 실행 중인 것은 별도이며, 서버 실행 상태는 미확인입니다.
 
 ### 월별 입력·산출물·재시도
 
@@ -161,7 +147,7 @@ python -m backend.app.ml.two_stage query --model data/ml/monthly_models/model_a_
 - `data/ml/monthly_models/model_a_two_stage_<YYYYMM>.joblib` 한 파일에 두 모델과 앙상블한 최신 예측을, 같은 이름의 `.registry.json`에 입력 계보·피처·평가·DB 등록 정보를 저장합니다. DB `ml_model_version`에는 `model_key=model_a`, `model_family=two_stage_full`, `status=READY`로 기록합니다.
 - `.env`의 `MYSQL_*` 접속 설정과 `ml_model_version` 테이블이 필요합니다. 초기 테이블 정의는 [`10_ml_model_version.sql`](../../../db/mysql/init/10_ml_model_version.sql)을 참고합니다. 신규 학습 전 DB에서 부모 버전을 확인하며, 파일 생성 뒤 DB 기록이 실패하면 파일과 등록 JSON을 보존합니다.
 - 같은 달·같은 입력의 재실행은 저장 파일의 해시를 확인하고 DB 등록을 재시도합니다. 원본이 정정되거나 학습 코드(`candidate_models.MODEL_SOURCES`의 파일: K·앙상블 구성·피처 계산 포함)나 패키지 버전이 바뀌면 `_r2`, `_r3` 등 새 버전을 만듭니다. 주석만 고쳐도 같은 달 재실행은 새로 학습합니다.
-- 누락 월 자동 복구로 지난달을 나중에 학습하면, 원본에 그 뒤 달이 있어도 기준월은 그 달까지, 정답은 미래 12개월이 그 달 안에 끝나는 기준월까지만 씁니다(`input_snapshot.as_of_month`). 그 뒤 달 수집 폴더가 추가된 것은 재실행 비교에서 정정으로 보지 않습니다. 피처 값은 현재 보유 원본 기준이라, 그 뒤에 들어온 정정분까지 그 시점 상태로 되돌리지는 않습니다. 월별 등록 재시도는 위 `candidate_models --monthly` 명령을 사용합니다.
+- 누락 월을 명시해 지난달을 나중에 학습하면, 원본에 그 뒤 달이 있어도 기준월은 그 달까지, 정답은 미래 12개월이 그 달 안에 끝나는 기준월까지만 씁니다(`input_snapshot.as_of_month`). 그 뒤 달 수집 폴더가 추가된 것은 재실행 비교에서 정정으로 보지 않습니다. 피처 값은 현재 보유 원본 기준이라, 그 뒤에 들어온 정정분까지 그 시점 상태로 되돌리지는 않습니다. 월별 등록 재시도는 위 `candidate_models --monthly` 명령을 사용합니다.
 - 평가용 모델은 마지막 정답 기준월보다 12개월 이상 앞선 기준월로 학습합니다. `.registry.json`의 `evaluation.model_product`는 품목 방향 순서 평가(품목별 국가 추천 지표는 여기서 봅니다), `evaluation.model`은 2단계 순서 평가, `model_stage1`은 1단계 성장값 평가, `baseline_growth_12m`은 기준선입니다. 국가별 품목 추천은 `model`, 품목별 국가 추천은 `model_stage1`을 확인합니다. `model`은 0~1 순위 점수(`order`)로 계산하므로 순서만 쓰는 지표(NDCG·Precision@K·Hit@K·top20 F1·`spearman`·`roc_auc`·`average_precision`)만 유효합니다. 같은 블록의 값 크기를 쓰는 지표(`mae`·`rmse`·`median_ae`·`r2`·`explained_variance`·`pearson`)와 0 기준 증가 판정 지표(`accuracy`·`precision`·`recall`·`f1`·`mcc`·`balanced_accuracy`·`predicted_growth_rate`·`tn`/`fp`/`fn`/`tp`)는 해석하지 않고, 증감률 오차·증가 판정은 `model_stage1`에서 봅니다.
 - 현재 월별 경로는 평가 결과를 기록하지만 기준선 미달을 이유로 저장·등록을 차단하지 않습니다. `READY`는 성능 승격 심사를 통과했다는 뜻이 아닙니다. 뒤쪽 HGB·SGD의 기준선 통과 규칙을 이 경로에 적용해 해석하지 않습니다.
 - 파이프라인 완료 여부는 `data/customs_load_outputs/monthly/<YYYYMM>/state.json`의 `status=SUCCESS`, `completed`의 `ml`, `ml` 결과와 실제 모델·DB 기록을 함께 확인합니다. ML만 직접 실행하면 파이프라인 체크포인트는 갱신하지 않습니다.
@@ -396,7 +382,7 @@ HGB는 표 데이터의 비선형 상호작용, 결측·범주형 입력을 처�
 
 `backend/app/ml/growth_model.py`는 화면의 "증가 예상 / 감소 예상" 표시용 회귀 모델입니다. 모델 A의 1단계 성장률(`growth`, L2 손실)과 따로 학습합니다.
 
-**월별 재학습:** `candidate_models.run`(customs_monthly의 ML 단계, `CUSTOMS_ML_ENTRYPOINT`)이 모델 A를 저장·기록한 뒤 같은 달 피처 표로 `run_growth`를 부릅니다. 절차는 모델 A와 같습니다: 같은 입력·학습 코드면 재학습 없이 기록만 다시 보냄 → 원본이 정정되면 `_r2`, `_r3` … → `model_b_growth_<YYYYMM>.joblib`(최신 기준월 예측 `latest` 포함) → `model_b_growth_<YYYYMM>.registry.json` → DB `ml_model_version`(`model_key=model_b`, `status=READY`). Holdout(마지막 정답 기준월)으로 방향 정답률·모두 감소 기준선·성장률 MAE를 `evaluation`에 남깁니다. 모델 B 학습이 실패해도 모델 A 결과는 그대로이고, 그 달에는 `SKIPPED`(사유 포함) 기록을 남깁니다. 그 달 수출입 작업은 SUCCESS라 월 복구 대상이 아니므로, ML 전용 복구 작업(시작 40초 뒤·매월 19일 일정)이 끝에 `candidate_models.retry_pending`을 불러 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면 그 달 B만 새 리비전으로 다시 학습합니다. 같은 실행에서 방금 처리한 달은 다음 실행에 맡기고, 같은 달 실패가 3번(`CUSTOMS_ML_GROWTH_RETRIES`) 쌓이면 자동 재학습을 멈춥니다(한 번에 약 20분·메모리 대부분). 파일·기록 JSON은 READY인데 DB 기록이 빠졌으면 학습 없이 기록만 다시 보냅니다. 기록 없이 직접 만든 같은 달 파일(`growth_model.build`)이 있으면 월별 학습이 덮어쓰거나 다시 학습하지 않습니다(월별 학습으로 바꾸려면 그 파일을 치웁니다). 모델 B만 다시 돌리려면 `candidate_models.run_growth("2026-09-01")`을 부릅니다.
+**월별 재학습:** `candidate_models.run`(customs_monthly의 ML 단계, `CUSTOMS_ML_ENTRYPOINT`)이 모델 A를 저장·기록한 뒤 같은 달 피처 표로 `run_growth`를 부릅니다. 절차는 모델 A와 같습니다: 같은 입력·학습 코드면 재학습 없이 기록만 다시 보냄 → 원본이 정정되면 `_r2`, `_r3` … → `model_b_growth_<YYYYMM>.joblib`(최신 기준월 예측 `latest` 포함) → `model_b_growth_<YYYYMM>.registry.json` → DB `ml_model_version`(`model_key=model_b`, `status=READY`). Holdout(마지막 정답 기준월)으로 방향 정답률·모두 감소 기준선·성장률 MAE를 `evaluation`에 남깁니다. 모델 B 학습이 실패해도 모델 A 결과는 그대로이고, 그 달에는 `SKIPPED`(사유 포함) 기록을 남깁니다. 그 달 수출입 작업은 SUCCESS라 월 복구 대상이 아니므로, 기존 `candidate_models.retry_pending` 함수를 별도로 호출하면 최신 READY 모델 A와 같은 달의 모델 B가 READY가 아니면 그 달 B만 새 리비전으로 다시 학습합니다. 이 함수는 통합 수집 스케줄러에서 자동 호출하지 않습니다. 호출자가 전달한 skip 대상 월은 건너뛰고, 같은 달 실패가 3번(`CUSTOMS_ML_GROWTH_RETRIES`) 쌓이면 자동 재학습을 멈춥니다(한 번에 약 20분·메모리 대부분). 파일·기록 JSON은 READY인데 DB 기록이 빠졌으면 학습 없이 기록만 다시 보냅니다. 기록 없이 직접 만든 같은 달 파일(`growth_model.build`)이 있으면 월별 학습이 덮어쓰거나 다시 학습하지 않습니다(월별 학습으로 바꾸려면 그 파일을 치웁니다). 모델 B만 다시 돌리려면 `candidate_models.run_growth("2026-09-01")`을 부릅니다.
 
 2026-11-05 측정(시스템 Python 3.11, 4코어, 8GB PC에서 메모리 부족으로 스왑이 섞임): 2026-09 월별 피처 표 435초(1,669,845행) + 모델 B Holdout 326초 + 전체 학습 365초 = 약 19.5분. 방향 정답률 60.7%(모두 감소 56.6%), 성장률 MAE 70.8%p. 모델 A(약 11분)에 더해지며, 피처 표는 메모리를 아끼려고 A·B가 따로 만듭니다(사용자 결정).
 

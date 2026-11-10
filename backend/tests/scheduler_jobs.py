@@ -7,7 +7,6 @@ BASE_JOBS = frozenset({
     "hs_code_refresh", "hs_code_refresh_retry", "hs_code_embed",
     "un_data_monthly", "un_data_startup", "un_data_resume",
     "customs_monthly", "customs_monthly_startup",
-    "customs_ml_monthly", "customs_ml_startup",
     "fx_daily_load", "fx_daily_startup",
     "external_refresh", "trade_news_daily", "major_issue_detect",
 })

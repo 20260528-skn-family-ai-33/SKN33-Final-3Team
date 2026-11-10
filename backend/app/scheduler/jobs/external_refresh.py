@@ -170,7 +170,7 @@ def year_digests(path, source, chunksize=500_000):
 def record_availability(today):
     """availability.csv·availability_snapshot.json을 이번에 수집한 외부 파일에 맞춘다.
 
-    맞추지 않으면 preprocess.check_versions가 해시 불일치로 멈춰 19일 ML 월별 작업이 실패한다.
+    맞추지 않으면 preprocess.check_versions가 해시 불일치로 멈춰 AWS에서 별도로 예약한 ML 월별 작업이 실패한다.
     최초 공개일 정책(first_release_dates)에서만 자동으로 맞춘다. 이 정책의 날짜는 (출처, 연도)마다 정해지고 파일 판과
     무관하므로 기존 날짜는 그대로 두고, 처음 값이 생긴 연도만 수집일(오늘)로 추가한다. 빈 연도에 미리 날짜를 붙이면
     나중에 들어온 값이 그 이른 날짜로 쓰이므로 값이 있는 연도만 추가한다.

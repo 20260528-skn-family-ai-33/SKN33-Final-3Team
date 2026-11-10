@@ -76,36 +76,52 @@ class MonthlyPipelineTest(unittest.TestCase):
         self.MetricCalculator.return_value.calculate.assert_called_once()
         self.ml.run.assert_called_once()
 
-    def test_scheduled_collection_defers_configured_ml_until_ml_job(self):
+    def test_scheduled_collection_skips_configured_ml_and_manual_run_remains_available(self):
         first = self.run_month(ml_entrypoint='backend.app.ml.test_pipeline:run', run_ml=False)
         self.assertEqual(first['status'], 'WAITING_FOR_ML')
         self.ml.run.assert_not_called()
         for _ in range(2):
-            result = self.run_month(ml_entrypoint='backend.app.ml.test_pipeline:run', ml_only=True)
+            result = self.run_month(ml_entrypoint='backend.app.ml.test_pipeline:run')
             self.assertEqual(result['status'], 'SUCCESS')
         self.collect_month.assert_called_once()
         self.load_csv.assert_called_once()
         self.MetricCalculator.return_value.calculate.assert_called_once()
         self.ml.run.assert_called_once()
 
-    def test_ml_only_waits_for_missing_or_partial_collection_without_changing_checkpoint(self):
-        folder = self.root / '202509'
-        folder.mkdir()
-        state = {'status': 'WAITING_FOR_PUBLICATION', 'completed': ['load', 'metrics'], 'collection_complete': False}
-        path = folder / 'state.json'
-        path.write_text(json.dumps(state), encoding='utf-8')
-        for missing in (False, True):
-            if missing:
-                path.unlink()
-            result = self.run_month(ml_entrypoint='backend.app.ml.test_pipeline:run', ml_only=True)
-            self.assertEqual(result['status'], 'WAITING_FOR_PUBLICATION')
-            self.assertTrue(result['retryable'])
-            if missing:
-                self.assertFalse(path.exists())
-            else:
-                self.assertEqual(json.loads(path.read_text()), state)
-        self.collect_month.assert_not_called()
-        self.load_csv.assert_not_called()
+    def test_registered_collection_and_startup_never_train_or_fail_completed_collection(self):
+        from apscheduler.schedulers.blocking import BlockingScheduler
+        scheduler = BlockingScheduler(timezone=monthly.KST)
+        with patch.dict('os.environ', {'CUSTOMS_ML_ENTRYPOINT': self.ml.__name__ + ':run'}, clear=True), \
+                patch.object(monthly, 'datetime') as clock, patch.object(monthly, 'retry_ml') as retry:
+            clock.now.return_value = datetime(2025, 10, 19, 3, tzinfo=monthly.KST)
+            monthly.register_jobs(scheduler, output=self.root, env_path=self.root / '.env',
+                                  start_month='202509', run_ml=True)
+            self.assertEqual({job.id for job in scheduler.get_jobs()},
+                             {'customs_monthly', 'customs_monthly_startup'})
+            job = scheduler.get_job('customs_monthly')
+            self.assertEqual(job.func(*job.args, **job.kwargs)[0]['status'], 'WAITING_FOR_ML')
+            path = self.root / '202509' / 'state.json'
+            before = path.read_bytes()
+            self.resolve_countries.return_value = ['US', 'VN']
+            startup = scheduler.get_job('customs_monthly_startup')
+            self.assertEqual(startup.func(*startup.args, **startup.kwargs), [])
+            self.assertEqual(path.read_bytes(), before)
+            self.ml.run.assert_not_called()
+            retry.assert_not_called()
+
+    def test_collection_retry_keeps_ml_disabled_and_original_month(self):
+        scheduler = MagicMock()
+        self.load_csv.side_effect = [{'status': 'FAILED', 'retryable': True}, {'status': 'LOADED'}]
+        options = {'output': self.root, 'env_path': self.root / '.env', 'run_ml': False,
+                   'ml_entrypoint': self.ml.__name__ + ':run'}
+        result = monthly.monthly_job(scheduler, '202509', **options)
+        self.assertEqual(result['status'], 'FAILED')
+        call = scheduler.add_job.call_args
+        self.assertEqual(call.kwargs['id'], 'customs_monthly_retry_202509')
+        self.assertEqual(call.kwargs['args'][1:], ['202509', 2])
+        self.assertFalse(call.kwargs['kwargs']['run_ml'])
+        resumed = call.args[0](*call.kwargs['args'], **call.kwargs['kwargs'])
+        self.assertEqual(resumed['status'], 'WAITING_FOR_ML')
         self.ml.run.assert_not_called()
 
     def test_failed_load_is_retried_before_metrics_or_ml(self):
@@ -573,7 +589,7 @@ class MonthlyScheduleTest(unittest.TestCase):
         with patch.dict("os.environ", {}, clear=True), patch.object(monthly, "dotenv_values", return_value={}):
             monthly.register_jobs(scheduler)
         self.assertEqual({j.id for j in scheduler.get_jobs()},
-            {"existing_shared_job", "customs_monthly", "customs_monthly_startup", "customs_ml_monthly", "customs_ml_startup"})
+            {"existing_shared_job", "customs_monthly", "customs_monthly_startup"})
         self.assertIs(scheduler.get_job("customs_monthly_startup").func, monthly.startup_job)
         self.assertIs(scheduler.get_job("customs_monthly").func, monthly.startup_job)
 
@@ -738,39 +754,6 @@ class MlRetryHookTest(unittest.TestCase):
     def test_collection_recovery_does_not_train_model_b(self):
         with patch.object(monthly, 'pending_months', return_value=[]), patch.object(monthly, 'retry_ml') as retry:
             monthly.startup_job(MagicMock(), run_ml=False)
-        retry.assert_not_called()
-
-    def test_ml_startup_respects_nineteenth_day_cutoff_and_skips_complete_months(self):
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            for month, status in [('202608', 'SUCCESS'), ('202609', 'WAITING_FOR_ML'), ('202610', 'WAITING_FOR_ML')]:
-                (root / month).mkdir()
-                (root / month / 'state.json').write_text(json.dumps({'status': status}), encoding='utf-8')
-            for day, hour, expected in [(18, 4, ['202609']), (19, 2, ['202609']), (19, 3, ['202609', '202610'])]:
-                with self.subTest(day=day,hour=hour), patch.dict('os.environ', {}, clear=True), \
-                        patch.object(monthly, 'dotenv_values', return_value={'CUSTOMS_ML_ENTRYPOINT':'backend.app.ml.test_pipeline:run'}), \
-                        patch.object(monthly, 'datetime') as clock, patch.object(monthly, 'monthly_job') as run, \
-                        patch.object(monthly, 'retry_ml') as retry:
-                    clock.now.return_value = datetime(2026,11,day,hour,tzinfo=monthly.KST)
-                    monthly.ml_monthly_job(MagicMock(), output=root)
-                    self.assertEqual([call.args[1] for call in run.call_args_list], expected)
-                    self.assertTrue(all(call.kwargs['ml_only'] for call in run.call_args_list))
-                    self.assertIn('202610', retry.call_args.kwargs['skip'])
-
-    def test_ml_retry_keeps_target_month_and_does_not_replace_collection_retry(self):
-        scheduler = MagicMock()
-        with patch.object(monthly, 'run_month', return_value={'status':'WAITING_FOR_PUBLICATION','retryable':True}):
-            monthly.monthly_job(scheduler, '202610', ml_only=True)
-        call = scheduler.add_job.call_args
-        self.assertEqual(call.kwargs['id'], 'customs_ml_retry_202610')
-        self.assertEqual(call.kwargs['args'][1:], ['202610', 2])
-        self.assertTrue(call.kwargs['kwargs']['ml_only'])
-
-    def test_disabled_ml_schedule_does_not_open_database(self):
-        with patch.dict('os.environ', {}, clear=True), patch.object(monthly, 'dotenv_values', return_value={}), \
-                patch.object(monthly, 'monthly_job') as run, patch.object(monthly, 'retry_ml') as retry:
-            self.assertEqual(monthly.ml_monthly_job(MagicMock()), [])
-        run.assert_not_called()
         retry.assert_not_called()
 
     def test_retry_hook_runs_after_recovery_and_never_raises(self):

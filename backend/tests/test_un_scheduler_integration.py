@@ -48,8 +48,7 @@ class SchedulerIntegrationTest(unittest.TestCase):
         for name in ('un_data_monthly', 'customs_monthly'):
             self.assertEqual(jobs[name].trigger.get_next_fire_time(None, now).isoformat(),
                              '2026-10-18T03:00:00+09:00')
-        self.assertEqual(jobs['customs_ml_monthly'].trigger.get_next_fire_time(None, now).isoformat(),
-                         '2026-10-19T03:00:00+09:00')
+        self.assertFalse(any(name.startswith('customs_ml') for name in jobs))
         self.assertFalse(jobs['customs_monthly'].kwargs['run_ml'])
         self.assertFalse(jobs['customs_monthly_startup'].kwargs['run_ml'])
         self.assertEqual(jobs['shortnews_daily'].trigger.get_next_fire_time(None,now).isoformat(),

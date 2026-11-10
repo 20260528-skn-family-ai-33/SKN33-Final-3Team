@@ -30,7 +30,6 @@ DEFAULT_OUTPUT = ENV_PATH.parent / "data/customs_load_outputs/monthly"
 KST = ZoneInfo("Asia/Seoul")
 log = logging.getLogger(__name__)
 CACHE_VERSION = 2
-ML_MONTHLY_DAY = 19
 
 
 def monthly_job(scheduler, month=None, attempt=1, **options):
@@ -48,7 +47,7 @@ def monthly_job(scheduler, month=None, attempt=1, **options):
     if result["status"] in ("FAILED", "WAITING_FOR_PUBLICATION") and result.get("retryable", False) and attempt < 30:
         scheduler.add_job(monthly_job, "date", run_date=datetime.now(KST) + timedelta(days=1),
             args=[scheduler, month, attempt + 1], kwargs=options,
-            id=f"{'customs_ml' if options.get('ml_only') else 'customs_monthly'}_retry_{month}", replace_existing=True)
+            id=f"customs_monthly_retry_{month}", replace_existing=True)
     return result
 
 
@@ -101,50 +100,6 @@ def startup_job(scheduler, attempt=1, start_month=None, **options):
     return results
 
 
-@stored('raw/customs/monthly', lambda args: args['options'].get('output', DEFAULT_OUTPUT))
-def ml_monthly_job(scheduler, start_month=None, **options):
-    """19일에 전월 ML만 실행한다. 시작 시에는 이미 예약일이 지난 월만 복구한다."""
-    env_path = options.get('env_path', ENV_PATH)
-    settings = {**dotenv_values(env_path), **os.environ}
-    if not (options.get('ml_entrypoint') or settings.get('CUSTOMS_ML_ENTRYPOINT')):
-        return []
-    current = datetime.now(KST)
-    due = current.replace(day=ML_MONTHLY_DAY, hour=int(settings.get('CUSTOMS_MONTHLY_HOUR', 3)),
-                          minute=int(settings.get('CUSTOMS_MONTHLY_MINUTE', 0)), second=0, microsecond=0)
-    previous = current.replace(day=1) - timedelta(days=1)
-    latest = previous if current >= due else previous.replace(day=1) - timedelta(days=1)
-    latest = latest.strftime('%Y%m')
-    start = start_month or settings.get('CUSTOMS_START_MONTH')
-    if start and latest < start:
-        return []
-    output = Path(options.get('output', DEFAULT_OUTPUT))
-    # 누락·부분 수집은 ML 전용 실행에서 기다린다. 수집 작업의 체크포인트를 덮어쓰지 않는다.
-    months = {latest}
-    if output.exists():
-        months.update(p.name for p in output.iterdir() if p.is_dir()
-                      and re.fullmatch(r'[0-9]{4}(0[1-9]|1[0-2])', p.name)
-                      and (not start or p.name >= start) and p.name <= latest)
-    attempted, results = [], []
-    for month in sorted(months):
-        try:
-            state = json.loads((output / month / 'state.json').read_text(encoding='utf-8'))
-            if not isinstance(state, dict):
-                raise ValueError('체크포인트 구조 오류')
-        except FileNotFoundError:
-            state = {}
-        except (ValueError, UnicodeError):
-            log.warning('ML 대기 월 %s의 체크포인트가 손상됐습니다. 수집 복구 작업을 먼저 실행하세요.', month)
-            continue
-        if state.get('status') == 'SUCCESS' or (state.get('status') == 'FAILED' and state.get('retryable') is False):
-            continue
-        attempted.append(month)
-        results.append(monthly_job(scheduler, month, **{**options, 'ml_only': True, 'run_ml': True}))
-    # 새 전월 데이터는 19일 전에는 모델 B 복구 경로로도 학습하지 않는다.
-    skip = attempted + ([previous.strftime('%Y%m')] if current < due else [])
-    retry_ml(settings, env_path, skip=skip)
-    return results
-
-
 def retry_ml(settings, env_path, skip=()):
     """ML 모듈이 retry_pending을 제공하면 부른다(candidate_models: 수출입 작업은 SUCCESS인데 모델 B가 READY가 아닌 최신 달).
     수출입 월 복구와 별개라 실패해도 로그만 남긴다. skip은 이번 실행에서 방금 처리한 달이다(다음 실행에 맡김)."""
@@ -182,18 +137,12 @@ def register_jobs(scheduler, *, env_path=ENV_PATH, start_month=None, **options):
         hour=int(settings.get("CUSTOMS_MONTHLY_HOUR", 3)),
         minute=int(settings.get("CUSTOMS_MONTHLY_MINUTE", 0)), timezone=KST)
     # 판본은 실행 시 대상 월로 결정한다. 등록 시점의 판본을 과거·미래 월에 고정하지 않는다.
+    # 자동 ML은 AWS에서만 실행한다. 설정이 남아 있어도 수집·시작 복구·재시도에서 학습하지 않는다.
     kwargs = {"env_path": env_path, "start_month": start_month, **options, "run_ml": False}
     scheduler.add_job(startup_job, trigger, args=[scheduler], kwargs=kwargs, id="customs_monthly",
         coalesce=True, max_instances=1, misfire_grace_time=24 * 3600, replace_existing=True)
     scheduler.add_job(startup_job, "date", run_date=datetime.now(KST) + timedelta(seconds=20),
         args=[scheduler], kwargs=kwargs, id="customs_monthly_startup", replace_existing=True)
-    ml_trigger = CronTrigger(day=ML_MONTHLY_DAY, hour=int(settings.get('CUSTOMS_MONTHLY_HOUR', 3)),
-                            minute=int(settings.get('CUSTOMS_MONTHLY_MINUTE', 0)), timezone=KST)
-    ml_options = {'env_path': env_path, 'start_month': start_month, **options}
-    scheduler.add_job(ml_monthly_job, ml_trigger, args=[scheduler], kwargs=ml_options, id='customs_ml_monthly',
-        coalesce=True, max_instances=1, misfire_grace_time=24 * 3600, replace_existing=True)
-    scheduler.add_job(ml_monthly_job, 'date', run_date=datetime.now(KST) + timedelta(seconds=40),
-        args=[scheduler], kwargs=ml_options, id='customs_ml_startup', replace_existing=True)
 
 
 @contextmanager
@@ -386,11 +335,11 @@ def collect_month(month, directory, env_path, countries, confirmed_empty_countri
 
 @stored('raw/customs/monthly', lambda args: args['output'])
 def run_month(month, *, env_path=ENV_PATH, output=DEFAULT_OUTPUT, hs_ver=None,
-              ml_entrypoint=None, refresh=False, confirmed_empty_countries=None, run_ml=True, ml_only=False):
+              ml_entrypoint=None, refresh=False, confirmed_empty_countries=None, run_ml=True):
     try:
         return _run_month(month, env_path=env_path, output=output, hs_ver=hs_ver,
                           ml_entrypoint=ml_entrypoint, refresh=refresh,
-                          confirmed_empty_countries=confirmed_empty_countries, run_ml=run_ml, ml_only=ml_only)
+                          confirmed_empty_countries=confirmed_empty_countries, run_ml=run_ml)
     except Exception as exc:
         # 잠금·접근 실패에서는 다른 실행의 체크포인트를 덮어쓰지 않는다.
         error = safe_error(exc)
@@ -400,7 +349,7 @@ def run_month(month, *, env_path=ENV_PATH, output=DEFAULT_OUTPUT, hs_ver=None,
         return report
 
 
-def _run_month(month, *, env_path, output, hs_ver, ml_entrypoint, refresh, confirmed_empty_countries, run_ml, ml_only):
+def _run_month(month, *, env_path, output, hs_ver, ml_entrypoint, refresh, confirmed_empty_countries, run_ml):
     if not isinstance(month, str) or not re.fullmatch(r"[0-9]{4}(0[1-9]|1[0-2])", month) or not 2 <= int(month[:4]) <= 9997:
         raise ValidationError("대상 월은 YYYYMM, 연도는 2~9997이어야 함")
     env_path, output = Path(env_path), Path(output)
@@ -412,11 +361,6 @@ def _run_month(month, *, env_path, output, hs_ver, ml_entrypoint, refresh, confi
     state_path = folder / "state.json"
     with month_lock(folder / "run.lock"):
         state = read_state(state_path)
-        if ml_only and (not {'collect', 'load', 'metrics'}.issubset(state.get('completed', []))
-                        or not state.get('collection_complete', True)):
-            if state.get('status') == 'FAILED' and state.get('retryable') is False:
-                return state
-            return {'month': month, 'status': 'WAITING_FOR_PUBLICATION', 'current_stage': 'collect', 'retryable': True}
         try:
             countries = collector.resolve_countries(env_path)
             if confirmed_empty_countries is None:
@@ -469,8 +413,6 @@ def _run_month(month, *, env_path, output, hs_ver, ml_entrypoint, refresh, confi
             for step in ("collect", "load", "metrics", "ml"):
                 if step in state["completed"]:
                     continue
-                if ml_only and step != 'ml':
-                    raise ValidationError('ML 실행 전 수집 체크포인트 재검증이 필요합니다. 수집 작업을 먼저 재개하세요.')
                 state.update(status="RUNNING", current_stage=step)
                 write_state(state_path, state)
                 if step == "collect":
