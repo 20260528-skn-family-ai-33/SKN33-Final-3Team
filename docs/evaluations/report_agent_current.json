@@ -2,17 +2,17 @@
   "schema_version": 2,
   "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
   "evaluation": "Report Agent 오프라인 설계 계약 평가",
-  "evaluated_at_utc": "2026-11-09T07:51:06.909615+00:00",
+  "evaluated_at_utc": "2026-11-10T00:58:15.510802+00:00",
   "source_mode": "working_tree",
-  "source_revision": "edd27bc0ca5f214ff2d14ecbb7cac314c0b290e8",
+  "source_revision": "f3df3c4f1c7885df611d52825b8bf721dc048ff4",
   "source_dirty": false,
   "source_changes": [],
-  "harness_revision": "edd27bc0ca5f214ff2d14ecbb7cac314c0b290e8",
+  "harness_revision": "f3df3c4f1c7885df611d52825b8bf721dc048ff4",
   "harness_dirty": false,
   "harness_changes": [],
   "source_sha256": {
     "backend/app/api/files.py": "a2921e50de218ee0285649b21de8d4f48adabec3394f17be947baaebd3ea6753",
-    "backend/app/services/report_ondemand_context.py": "7ab064a034de35a06db8caa8b94105c266de64fd3ca89ff0e7eb27cf2b092740",
+    "backend/app/services/report_ondemand_context.py": "afdafb98764d8f3aaa959e4afb9cff1bb3c16c16085b483eef8909a382af7a45",
     "backend/app/services/report_templates.py": "5bb10f2a8c9c3811c3cad7cb0b63bb8dc6b5e0dffba683d41b3f6c0209bf085c",
     "backend/app/services/report_context.py": "66138f8653b261e3e37e5095bc3c3cfd6b358c98d6ed7ad3fad9624670fc2a34",
     "backend/app/api/reports.py": "dc6649322335d92ed02c939e6207feec6051303e41bc483666e83d62076567b1",
@@ -21,14 +21,14 @@
   "evidence_sha256": {
     "backend/tests/test_agent_graph.py": "7d1b0e5780b5aad7f9b76f9e366aaf37a56dc0240dceb50a81e67c1f299b55dd",
     "backend/tests/test_agent_pr61_fixes.py": "73908cce2991f8adb09a702b204c7e30c7478d569e603eb4b037cd3f402e8d7f",
-    "backend/tests/test_agent_report.py": "b1e7bb8a5770a5588377f6322ebc30b3c3b7eed1bd64f47b5dc26032e87f20c2",
+    "backend/tests/test_agent_report.py": "523b3b7c52c2e538967bd8668f8e0f227346485a55e7330ab70901e6cb4c8777",
     "backend/tests/test_agent_state.py": "35c261bb9009c2f9dc9fbb635020d3fe9b1d1ae1e86b4fcf6a78427792ce25ba",
     "backend/tests/test_backend_api.py": "47d96994b294e62380a1a3afc27d00d68d7743d953b71e7eaf559473127b249a",
-    "backend/scripts/evaluate_report_agent.py": "b4a71937e0b2b749960726d5c94daa7db62fd9f8e764fd17a087822ea0a92769",
+    "backend/scripts/evaluate_report_agent.py": "da9cfa71748021ab86e0c8130dbe1623f63af758623178839686b9dfd49d0fe3",
     "backend/tests/api_support.py": "e39e158e4840bb652d8e86db8d21991044c6cda1765c977db6482a2c75b48003",
     "backend/tests/intent_fixtures.py": "a34fed014fdd8532c8f89145bdd615a39418ab6d23e66c60280bc91865f3d4e5"
   },
-  "manifest_sha256": "e31efa6d09c3f0555f9660de856181397f5390cb69bb9bf3a3bdfd54cbe5692e",
+  "manifest_sha256": "4f6fa494b6c86d49e2ba4d805332d6d4d831c9dd26097ae02ff709d9ed43ca4b",
   "environment": {
     "python": "3.12.13",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -75,8 +75,8 @@
       "pass_rate_pct": 100.0
     },
     "리포트 파일": {
-      "total": 4,
-      "pass": 4,
+      "total": 5,
+      "pass": 5,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -84,8 +84,8 @@
       "pass_rate_pct": 100.0
     },
     "합계": {
-      "total": 22,
-      "pass": 22,
+      "total": 23,
+      "pass": 23,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -289,6 +289,15 @@
       "category": "분량·누락",
       "criterion": "PDF 결과표는 200행까지 싣고 전체 행 수·누락 사유·미포함 항목을 알린다.",
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_result_tables_are_bounded_and_keep_missing_notes",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R23",
+      "group": "리포트 파일",
+      "category": "표시",
+      "criterion": "월별 차트는 기간 합계가 아닌 월별 금액을 국가·품목별 선으로 그리고, 결과 기반 PDF에 품목 합산 안내를 싣지 않는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_result_trend_chart_uses_monthly_amounts_and_no_summing_notice",
       "status": "PASS",
       "details": []
     }

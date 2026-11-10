@@ -13,6 +13,8 @@
 - 실제 호출 평가([REPORT_AGENT_LIVE_EVALUATION.md](REPORT_AGENT_LIVE_EVALUATION.md))의 32문항과 같은 질문은 없다. 표현·국가·품목·기간을 새로 썼다.
 - 정답 규칙은 실행 전에 정했다. 이전 조건을 이어받는 질문은 실제 호출 평가 2판과 같이 "비우거나 같은 값"을 인정한다(`inherit_equivalent`).
 - 실행 전 평가 하네스를 커밋했다(`edd27bc`, 결과의 `harness.dirty = false`). 질문·프롬프트·스키마 해시는 [manifest](evaluations/report_agent_holdout_manifest.json)에 있다.
+- 실행 당시 실행기는 질문 해시만 대조했다. 리뷰 뒤 holdout은 API 키를 읽고 잠금 파일을 만들기 전에 프롬프트·스키마 해시도 대조하도록 고쳤다.
+  이번 결과의 `prompt_sha256`은 manifest와 같고, 현재 코드의 프롬프트·스키마 해시도 manifest와 같다(고정한 입력으로 실행됨).
 - [실행 잠금 기록](evaluations/report_agent_holdout_run_lock.json)이 있으면 다시 실행하지 않는다. 문항 안의 재시도(플래너 2회)는 운영 정책대로 적용했다.
 - 모델 `gpt-4.1-mini`, 비용 추정 **$0.026**. 운영 RDS·DB는 쓰지 않았다(플래너는 DB를 읽지 않음).
 
