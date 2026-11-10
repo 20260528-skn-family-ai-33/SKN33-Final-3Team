@@ -2,33 +2,33 @@
   "schema_version": 2,
   "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
   "evaluation": "Report Agent 오프라인 설계 계약 평가",
-  "evaluated_at_utc": "2026-11-10T00:58:34.504841+00:00",
+  "evaluated_at_utc": "2026-11-10T07:10:50.247138+00:00",
   "source_mode": "historical_modules",
-  "source_revision": "c6e6bcda14d3d043de37519c05bba83f2e1408ad",
+  "source_revision": "91d183bf989c09ece5e19a9e6ed1f90abee5a2c7",
   "source_dirty": false,
   "source_changes": [],
-  "harness_revision": "f3df3c4f1c7885df611d52825b8bf721dc048ff4",
+  "harness_revision": "f941e640016a58ad8f1e34b816af04d0f97b3d90",
   "harness_dirty": false,
   "harness_changes": [],
   "source_sha256": {
-    "backend/app/api/files.py": "bd4bb94bbbaf97aa8b0fed9227a1e0489856ec0a532b0604d16f21143f662a1c",
-    "backend/app/services/report_ondemand_context.py": "5ccf6d029d384c915e505edaeeb600a6140a2fd2af1121128a5ddd2c066d9645",
-    "backend/app/services/report_templates.py": "b3c605efdb06d1066cdb04c2218e8eeb9e5d9b5030d9bdde86a9ac90ef1f835e",
-    "backend/app/services/report_context.py": "1f0ac5122fad484a9f8ed751b503053845b0bb3e190bab487652dd560c66c1fd",
-    "backend/app/api/reports.py": "8249fdfccd0e94517bb73212047fc64fe0af84ccc95cf6c29323d648b8e5dbbb",
-    "backend/app/agents/report.py": "a846835f85413ffe7e166a820bcf7c77aabce44de8540d1d493d743d324286bf"
+    "backend/app/api/files.py": "d09836161892404e35fae281fb2e6d3aaf6eb02ffdc8d31bc97af53bb4a98f6d",
+    "backend/app/services/report_ondemand_context.py": "46dd91e9c5c91f9da97d671a63ea21849a08cd6ad8ff87583ddc20b85d50effe",
+    "backend/app/services/report_templates.py": "2ef8e1a01528e6c04996e1ed88fc95f219a84ea444c92aee5f725eada62ccfd8",
+    "backend/app/services/report_context.py": "f08183d759c2fb767c1dc10efd4930d8af6fbaa493b39b9d7c12bfa7a9d3a861",
+    "backend/app/api/reports.py": "6026b49f42be9563bc7f64b3b4171867d6e3e5494547d40fbfa2f9937903bb65",
+    "backend/app/agents/report.py": "f265c00c5c2b6ccf7a0f8dc9b9aeb893995288d381a8cacf705343fe665aff88"
   },
   "evidence_sha256": {
     "backend/tests/test_agent_graph.py": "7d1b0e5780b5aad7f9b76f9e366aaf37a56dc0240dceb50a81e67c1f299b55dd",
     "backend/tests/test_agent_pr61_fixes.py": "73908cce2991f8adb09a702b204c7e30c7478d569e603eb4b037cd3f402e8d7f",
-    "backend/tests/test_agent_report.py": "523b3b7c52c2e538967bd8668f8e0f227346485a55e7330ab70901e6cb4c8777",
+    "backend/tests/test_agent_report.py": "97fab8e4f865bc459b3b23dd7fe379d95cf4f1d18195648dba4a170500ab278a",
     "backend/tests/test_agent_state.py": "35c261bb9009c2f9dc9fbb635020d3fe9b1d1ae1e86b4fcf6a78427792ce25ba",
-    "backend/tests/test_backend_api.py": "47d96994b294e62380a1a3afc27d00d68d7743d953b71e7eaf559473127b249a",
-    "backend/scripts/evaluate_report_agent.py": "da9cfa71748021ab86e0c8130dbe1623f63af758623178839686b9dfd49d0fe3",
+    "backend/tests/test_backend_api.py": "cfe4e0f622f5665e0c4bf5b51494f88988fdf3988e860093cbb14a6493e2ca91",
+    "backend/scripts/evaluate_report_agent.py": "832510d9966b377ea61b7601c06f1cf28bad88380c725047fcd86bd8676ee4ed",
     "backend/tests/api_support.py": "e39e158e4840bb652d8e86db8d21991044c6cda1765c977db6482a2c75b48003",
     "backend/tests/intent_fixtures.py": "a34fed014fdd8532c8f89145bdd615a39418ab6d23e66c60280bc91865f3d4e5"
   },
-  "manifest_sha256": "4f6fa494b6c86d49e2ba4d805332d6d4d831c9dd26097ae02ff709d9ed43ca4b",
+  "manifest_sha256": "f6b67c81e430380a0e0634bbcfe0d05d836bcd57a7e014a0a7a9a498a8dc1bbf",
   "environment": {
     "python": "3.12.13",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -75,22 +75,22 @@
       "pass_rate_pct": 100.0
     },
     "리포트 파일": {
-      "total": 5,
+      "total": 7,
       "pass": 1,
       "fail": 1,
-      "error": 3,
+      "error": 5,
       "skip": 0,
       "xfail": 0,
-      "pass_rate_pct": 20.0
+      "pass_rate_pct": 14.29
     },
     "합계": {
-      "total": 23,
+      "total": 25,
       "pass": 19,
       "fail": 1,
-      "error": 3,
+      "error": 5,
       "skip": 0,
       "xfail": 0,
-      "pass_rate_pct": 82.61
+      "pass_rate_pct": 76.0
     }
   },
   "cases": [
@@ -264,7 +264,7 @@
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_result_based_report_uses_the_ondemand_template_without_requery",
       "status": "FAIL",
       "details": [
-        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_report.py\", line 294, in test_result_based_report_uses_the_ondemand_template_without_requery\n    self.assertIn('template_pdf', doc)\nAssertionError: 'template_pdf' not found in {'schema_version': 1, 'title': '수출 시장 분석 리포트', 'subtitle': 'HS 전체 · 전체 국가 · 2025-10-01 ~ 2025-12-31 · USD', 'generated_at': '2026-11-10T00:58:31Z', 'sections': [{'section_code': 'SUMMARY', 'title': '핵심 요약', 'text': '승인한 분석 결과표를 기준으로 작성했습니다.', 'kpi': None, 'tables': [], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}, {'section_code': 'KPI', 'title': '주요 지표 및 월별 수출 추이', 'text': '승인한 분석 결과입니다.', 'kpi': None, 'tables': [{'result_id': 'result_dcdae5099f7daf32424dc155a6022b1f', 'kind': 'TREND', 'rows': [{'hs_code': None, 'hs_ver': None, 'name': '전체 품목', 'country_code': None, 'country_name': '전체 국가', 'total_usd': 10320000, 'compare_total_usd': None, 'change_pct': None, 'verified_months': 3, 'requested_months': 3, 'monthly_avg_usd': 3440000, 'compare_monthly_avg_usd': None, 'compare_verified_months': 0, 'compare_requested_months': 0, 'verified_subtotal_usd': 10320000, 'compare_verified_subtotal_usd': 0, 'month': '2025-10', 'amount_usd': 3420000, 'compare_month': None, 'compare_amount_usd': None}, {'hs_code': None, 'hs_ver': None, 'name': '전체 품목', 'country_code': None, 'country_name': '전체 국가', 'total_usd': 10320000, 'compare_total_usd': None, 'change_pct': None, 'verified_months': 3, 'requested_months': 3, 'monthly_avg_usd': 3440000, 'compare_monthly_avg_usd': None, 'compare_verified_months': 0, 'compare_requested_months': 0, 'verified_subtotal_usd': 10320000, 'compare_verified_subtotal_usd': 0, 'month': '2025-11', 'amount_usd': 3440000, 'compare_month': None, 'compare_amount_usd': None}, {'hs_code': None, 'hs_ver': None, 'name': '전체 품목', 'country_code': None, 'country_name': '전체 국가', 'total_usd': 10320000, 'compare_total_usd': None, 'change_pct': None, 'verified_months': 3, 'requested_months': 3, 'monthly_avg_usd': 3440000, 'compare_monthly_avg_usd': None, 'compare_verified_months': 0, 'compare_requested_months': 0, 'verified_subtotal_usd': 10320000, 'compare_verified_subtotal_usd': 0, 'month': '2025-12', 'amount_usd': 3460000, 'compare_month': None, 'compare_amount_usd': None}], 'columns': [{'key': 'country_name', 'label': '국가', 'type': 'string', 'unit': None}, {'key': 'month', 'label': '기준월', 'type': 'string', 'unit': None}, {'key': 'amount_usd', 'label': '수출액', 'type': 'number', 'unit': 'USD'}], 'total_rows': 3}], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}, {'section_code': 'TOP_COUNTRIES', 'title': '주요 수출국', 'text': '해당 분석 결과에 포함되지 않음', 'kpi': None, 'tables': [], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}, {'section_code': 'GROWTH_RISK', 'title': '수출 증가 감소 주요 시장', 'text': '해당 분석 결과에 포함되지 않음', 'kpi': None, 'tables': [], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}, {'section_code': 'LOCAL_ISSUES', 'title': '현지 이슈', 'text': '해당 분석 결과에 포함되지 않음', 'kpi': None, 'tables': [], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}], 'meta': {'sources': [], 'period': {'start': '2025-10-01', 'end': '2025-12-31'}, 'warnings': [], 'freshness': 'FROZEN'}, 'sql': []}\n"
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_report.py\", line 294, in test_result_based_report_uses_the_ondemand_template_without_requery\n    self.assertIn('template_pdf', doc)\nAssertionError: 'template_pdf' not found in {'schema_version': 1, 'title': '수출 시장 분석 리포트', 'subtitle': 'HS 전체 · 전체 국가 · 2025-10-01 ~ 2025-12-31 · USD', 'generated_at': '2026-11-10T07:10:47Z', 'sections': [{'section_code': 'SUMMARY', 'title': '핵심 요약', 'text': '승인한 분석 결과표를 기준으로 작성했습니다.', 'kpi': None, 'tables': [], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}, {'section_code': 'KPI', 'title': '주요 지표 및 월별 수출 추이', 'text': '승인한 분석 결과입니다.', 'kpi': None, 'tables': [{'result_id': 'result_19a250bf06db7e5b606e15bbee3a819a', 'kind': 'TREND', 'rows': [{'hs_code': None, 'hs_ver': None, 'name': '전체 품목', 'country_code': None, 'country_name': '전체 국가', 'total_usd': 10320000, 'compare_total_usd': None, 'change_pct': None, 'verified_months': 3, 'requested_months': 3, 'monthly_avg_usd': 3440000, 'compare_monthly_avg_usd': None, 'compare_verified_months': 0, 'compare_requested_months': 0, 'verified_subtotal_usd': 10320000, 'compare_verified_subtotal_usd': 0, 'month': '2025-10', 'amount_usd': 3420000, 'compare_month': None, 'compare_amount_usd': None}, {'hs_code': None, 'hs_ver': None, 'name': '전체 품목', 'country_code': None, 'country_name': '전체 국가', 'total_usd': 10320000, 'compare_total_usd': None, 'change_pct': None, 'verified_months': 3, 'requested_months': 3, 'monthly_avg_usd': 3440000, 'compare_monthly_avg_usd': None, 'compare_verified_months': 0, 'compare_requested_months': 0, 'verified_subtotal_usd': 10320000, 'compare_verified_subtotal_usd': 0, 'month': '2025-11', 'amount_usd': 3440000, 'compare_month': None, 'compare_amount_usd': None}, {'hs_code': None, 'hs_ver': None, 'name': '전체 품목', 'country_code': None, 'country_name': '전체 국가', 'total_usd': 10320000, 'compare_total_usd': None, 'change_pct': None, 'verified_months': 3, 'requested_months': 3, 'monthly_avg_usd': 3440000, 'compare_monthly_avg_usd': None, 'compare_verified_months': 0, 'compare_requested_months': 0, 'verified_subtotal_usd': 10320000, 'compare_verified_subtotal_usd': 0, 'month': '2025-12', 'amount_usd': 3460000, 'compare_month': None, 'compare_amount_usd': None}], 'columns': [{'key': 'country_name', 'label': '국가', 'type': 'string', 'unit': None}, {'key': 'month', 'label': '기준월', 'type': 'string', 'unit': None}, {'key': 'amount_usd', 'label': '수출액', 'type': 'number', 'unit': 'USD'}], 'total_rows': 3}], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}, {'section_code': 'TOP_COUNTRIES', 'title': '주요 수출국', 'text': '해당 분석 결과에 포함되지 않음', 'kpi': None, 'tables': [], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}, {'section_code': 'GROWTH_RISK', 'title': '유망시장(증가·감소 예상)', 'text': '해당 분석 결과에 포함되지 않음', 'kpi': None, 'tables': [], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}, {'section_code': 'LOCAL_ISSUES', 'title': '현지 이슈', 'text': '해당 분석 결과에 포함되지 않음', 'kpi': None, 'tables': [], 'charts': [], 'articles': [], 'verification': {'status': 'PASS', 'sentence_checks': None, 'regeneration_count': None}, 'content_status': 'READY'}], 'meta': {'sources': [], 'period': {'start': '2025-10-01', 'end': '2025-12-31'}, 'warnings': [], 'freshness': 'FROZEN'}, 'sql': []}\n"
       ]
     },
     {
@@ -295,7 +295,7 @@
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_result_tables_are_bounded_and_keep_missing_notes",
       "status": "ERROR",
       "details": [
-        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_report.py\", line 360, in test_result_tables_are_bounded_and_keep_missing_notes\n    from backend.app.services.report_ondemand_context import RESULT_ROW_LIMIT, populate_results\nImportError: cannot import name 'RESULT_ROW_LIMIT' from 'backend.app.services.report_ondemand_context' (C:\\SKN_AI\\SKN33-Final-3Team\\backend\\app\\services\\report_ondemand_context.py)\n"
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_report.py\", line 429, in test_result_tables_are_bounded_and_keep_missing_notes\n    from backend.app.services.report_ondemand_context import RESULT_ROW_LIMIT, populate_results\nImportError: cannot import name 'RESULT_ROW_LIMIT' from 'backend.app.services.report_ondemand_context' (C:\\SKN_AI\\SKN33-Final-3Team\\backend\\app\\services\\report_ondemand_context.py)\n"
       ]
     },
     {
@@ -307,6 +307,28 @@
       "status": "ERROR",
       "details": [
         "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_report.py\", line 331, in test_result_trend_chart_uses_monthly_amounts_and_no_summing_notice\n    from backend.app.services.report_ondemand_context import populate_results\nImportError: cannot import name 'populate_results' from 'backend.app.services.report_ondemand_context' (C:\\SKN_AI\\SKN33-Final-3Team\\backend\\app\\services\\report_ondemand_context.py)\n"
+      ]
+    },
+    {
+      "id": "R24",
+      "group": "리포트 파일",
+      "category": "분량·누락",
+      "criterion": "열이 많은 결과표는 식별 열을 반복한 열 묶음으로 나눠 실제 PDF에서 마지막 열까지 보인다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_wide_result_table_is_split_into_column_groups_in_the_pdf",
+      "status": "ERROR",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_report.py\", line 372, in test_wide_result_table_is_split_into_column_groups_in_the_pdf\n    from backend.app.services.report_ondemand_context import RESULT_COLUMN_LIMIT\nImportError: cannot import name 'RESULT_COLUMN_LIMIT' from 'backend.app.services.report_ondemand_context' (C:\\SKN_AI\\SKN33-Final-3Team\\backend\\app\\services\\report_ondemand_context.py)\n"
+      ]
+    },
+    {
+      "id": "R25",
+      "group": "리포트 파일",
+      "category": "표시",
+      "criterion": "이름이 같은 품목은 HS 코드(필요하면 판본·국가 코드)로 차트 시리즈를 나누고 범례에 표시한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_same_named_products_get_separate_chart_series",
+      "status": "ERROR",
+      "details": [
+        "Traceback (most recent call last):\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_report.py\", line 417, in test_same_named_products_get_separate_chart_series\n    chart = self._result_ctx(columns, rows)['results'][0]['chart']\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\SKN_AI\\SKN33-Final-3Team\\backend\\tests\\test_agent_report.py\", line 358, in _result_ctx\n    from backend.app.services.report_ondemand_context import populate_results\nImportError: cannot import name 'populate_results' from 'backend.app.services.report_ondemand_context' (C:\\SKN_AI\\SKN33-Final-3Team\\backend\\app\\services\\report_ondemand_context.py)\n"
       ]
     }
   ]
