@@ -190,8 +190,9 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .onboarding-products .tag { white-space: normal; }
 .interest-summary ul { list-style: none; padding: 0; margin: .65rem 0 0; }
 .btn.hs-choice { white-space: normal; text-align: left; max-width: 100%; height: auto; overflow-wrap: break-word; }
-/* 선택 칩은 높이·한 줄을 지키고 넘치는 이름은 …로 줄인다. 전체 이름은 title·FullHsName에 있다 */
-.interest-summary .chip { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; line-height: 32px; }
+/* 선택 칩은 높이·한 줄을 지키고 넘치는 이름은 …로 줄인다. 전체 이름은 title·FullHsName에 있다.
+   줄 높이 = .chip.sm 높이(mockup.css, 25px) - 위아래 테두리 2px. 칩 높이를 바꾸면 이 값도 같이 바꾼다. */
+.interest-summary .chip { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; line-height: 23px; }
 .btn.hs-choice { display: block; padding: .6rem .8rem; }
 .hs-label { min-width: 0; overflow-wrap: break-word; white-space: normal; }
 .hs-picker { position: relative; display: flex; gap: 12px; margin-top: 20px; }

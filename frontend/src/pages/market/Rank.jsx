@@ -62,19 +62,26 @@ function RankResults({ route }) {
   registerProducts((result.data?.items || []).filter(r => r.hs_name).map(r => ({ hs_code: r.hs_item.hs_code, name_ko: r.hs_name })))
   const pageInfo = result.data?.page
   // 기사 화면처럼 페이지를 넘기면 새 목록을 다 불러온 뒤 결과 표 맨 위로 올라간다(처음 열 때는 그대로 둔다).
-  const resultTop = useRef(null), previousPage = useRef(page)
+  // 요청이 실패하면 결과 표 대신 조회 카드의 오류 안내·다시 불러오기 버튼이 보이게 그쪽으로 옮긴다.
+  const resultTop = useRef(null), errorTop = useRef(null), previousPage = useRef(page)
   useEffect(() => {
     if (previousPage.current === page || result.loading) return
     previousPage.current = page
-    resultTop.current?.scrollIntoView({ block: 'start' })
-  }, [page, result.loading])
+    if (result.error) errorTop.current?.scrollIntoView({ block: 'center' })
+    else resultTop.current?.scrollIntoView({ block: 'start' })
+  }, [page, result.loading, result.error])
   // 전체 쪽수는 마지막으로 성공한 응답 기준으로 기억한다. 다음 페이지를 불러오는 중이거나 요청이 실패해도
   // 조회 조건·정렬 기준이 같으면 페이지 버튼을 그대로 두어 방금 본 페이지로 돌아갈 수 있게 한다.
   const pagesKey = JSON.stringify([byMonth, query, rankingGroup, basis])
-  const freshPages = pageInfo?.page_size ? Math.ceil((pageInfo.total ?? pageInfo.total_count ?? 0) / pageInfo.page_size) : null
-  const [knownPages, setKnownPages] = useState({ key: null, pages: 0 })
-  if (freshPages != null && (knownPages.key !== pagesKey || knownPages.pages !== freshPages)) setKnownPages({ key: pagesKey, pages: freshPages })
-  const pages = freshPages ?? (knownPages.key === pagesKey ? knownPages.pages : 0)
+  const freshTotal = pageInfo?.page_size ? Number(pageInfo.total ?? pageInfo.total_count ?? 0) : null
+  const freshPages = freshTotal == null ? null : Math.ceil(freshTotal / pageInfo.page_size)
+  const [knownPages, setKnownPages] = useState({ key: null, pages: 0, total: null })
+  if (freshPages != null && (knownPages.key !== pagesKey || knownPages.pages !== freshPages || knownPages.total !== freshTotal)) setKnownPages({ key: pagesKey, pages: freshPages, total: freshTotal })
+  const known = knownPages.key === pagesKey
+  const pages = freshPages ?? (known ? knownPages.pages : 0)
+  const total = freshTotal ?? (known ? knownPages.total : null)
+  // 조회 사이에 결과가 줄어 지금 페이지가 마지막 페이지보다 뒤가 되면(예: 41건 → 7건) 마지막 유효 페이지를 다시 조회한다.
+  if (freshPages != null && !result.loading && page > Math.max(freshPages, 1)) setPage(Math.max(freshPages, 1))
   const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.has_data === false ? '—' : r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: noRecord(r, r.export_amount_usd) ? null : Number(r.export_amount_usd) / 1e8, imp: noRecord(r, r.import_amount_usd) ? null : Number(r.import_amount_usd) / 1e8 }))
   const pageEmpty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
   // 순위는 큰 금액부터 정렬되므로 1페이지에 실적이 없으면 전체 결과에도 없다. 다른 페이지는 1페이지 판단을 그대로 쓴다.
@@ -173,7 +180,7 @@ function RankResults({ route }) {
               </div>
             )}
             {/* 실패한 요청(공개 기간·순위)을 모두 다시 불러온다. 공개 기간이 복구되면 순위 조회도 다시 시작된다. */}
-            <ErrorNotice error={available.error || result.error} retry={() => { if (available.error) available.reload(); if (result.error) result.reload() }} />
+            <div ref={errorTop}><ErrorNotice error={available.error || result.error} retry={() => { if (available.error) available.reload(); if (result.error) result.reload() }} /></div>
             {error
               ? <p className="field-err" role="alert" style={{ marginTop: 12 }}>{error}</p>
               : <p className="note" style={{ marginTop: 12 }}>{query.period_start || "—"} ~ {query.period_end || "—"} 조회 조건을 적용합니다. 수출 또는 수입 기준으로 순위를 전환할 수 있습니다. 품목은 이름이나 HS 코드(4·6자리)로 검색해 고른 뒤 세부 품목 칩에서 HS6로 좁힐 수 있습니다.</p>}
@@ -182,7 +189,7 @@ function RankResults({ route }) {
             <div className="between">
               <div>
                 <h2 className="t2">{title}</h2>
-                <p className="muted" style={{ marginTop: 6 }}>{query.period_start} ~ {query.period_end} {byMonth ? '월별' : '누계'} · 억 USD · 관세청</p>
+                <p className="muted" style={{ marginTop: 6 }}>{query.period_start} ~ {query.period_end} {byMonth ? '월별' : '누계'} · 억 USD · 관세청{!byMonth && total != null && ` · 총 ${total.toLocaleString('ko-KR')}건`}</p>
               </div>
               <div className="seg" role="group" aria-label="순위 기준">
                 <button type="button" className={'reset' + (basis === 'exp' ? ' on' : '')} aria-pressed={basis === 'exp'} onClick={() => { setBasis('exp'); setPage(1) }}>수출 기준</button>

@@ -176,14 +176,19 @@ export default function Dashboard({ route }) {
   const un = useUnData(profile)
   const data = { ...market, un: un.items }
   const cards = data.rankCards
-  // 관심 시장은 카드 수가 바뀔 수 있어, 불러오는 동안에는 직전 카드 수만큼 스켈레톤을 그린다.
-  const [cardCount, setCardCount] = useState(5)
-  if (!data.cardsLoading && cards.length && cards.length !== cardCount) setCardCount(cards.length)
+  // 관심 시장은 카드 수가 바뀔 수 있어, 불러오는 동안에는 직전 조회의 카드 수(0개 포함)만큼 스켈레톤을 그린다.
+  // 직전 결과가 0건이면 카드 대신 '집계된 품목이 없습니다' 줄 자리만 표시해 아래 표가 밀리지 않게 한다.
+  // 보기(전체·내 관심)를 바꾼 직후처럼 직전 결과가 없으면 전체는 5개, 내 관심은 관심 품목 수(최대 5개)로 어림한다.
+  const [lastCards, setLastCards] = useState({ view, count: null })
+  const settledCount = !data.cardsLoading && (data.cardsEmpty || cards.length) ? cards.length : null
+  if (settledCount != null && (lastCards.view !== view || lastCards.count !== settledCount)) setLastCards({ view, count: settledCount })
+  const guessCount = interest && profile.products.length ? Math.min(profile.products.length, 5) : 5
+  const cardCount = lastCards.view === view && lastCards.count != null ? lastCards.count : guessCount
   // 그리드 열 수(데스크톱 배치용, 최소 2열)와 스켈레톤 개수(직전 카드 수 그대로)는 따로 계산한다.
   // 모바일에서는 카드가 한 열로 쌓여, 열 수만큼 스켈레톤을 그리면 품목 1개일 때 빈 카드가 한 줄 더 생긴다.
   const shownCount = data.cardsLoading ? cardCount : cards.length
   const cardColumns = interest ? Math.min(Math.max(shownCount, 2), 5) : 5
-  const skeletonCount = interest ? Math.min(Math.max(cardCount, 1), 5) : 5
+  const skeletonCount = Math.min(cardCount, 5)
   const [unRef, unHeight] = useUnVisibleHeight([data.un])
 
   return (
@@ -301,7 +306,8 @@ export default function Dashboard({ route }) {
               </Link>
             ))}
           </div>
-          {!data.cardsLoading && data.cardsEmpty && <p style={{ marginTop: 18, fontSize: 14, color: '#5C6370' }}>조회 기간에 집계된 수출 품목이 없습니다.</p>}
+          {data.cardsLoading && skeletonCount === 0 && <p aria-hidden="true" style={{ marginTop: 18, height: 21, display: 'flex', alignItems: 'center' }}><Bone w={260} h={14} /></p>}
+          {!data.cardsLoading && data.cardsEmpty && <p style={{ marginTop: 18, fontSize: 14, lineHeight: '21px', color: '#5C6370' }}>조회 기간에 집계된 수출 품목이 없습니다.</p>}
         </div>
       </section>
 
