@@ -108,6 +108,10 @@ const { chromium } = require('playwright')
         rows: [['중국', '2025-10', 221000000, 443000000], ['미국', '2025-10', 121000000, 243000000], ['중국', '2025-11', 222000000, 443000000], ['미국', '2025-11', 122000000, 243000000]]
           .map(([country_name, month, amount_usd, total_usd]) => ({ country_name, hs_ver: 'HS2022', total_usd, monthly_avg_usd: total_usd / 2, month, amount_usd,
             compare_month: month.replace('2025', '2024'), compare_amount_usd: 100000000 })) }
+      // 250행 결과표: 웹도 PDF처럼 200행까지만 그리고 나머지는 엑셀로 안내한다
+      const many = { result_id: 'result_m', kind: 'RANKING', total_rows: 250,
+        columns: [{ key: 'rank', label: '순위', type: 'number' }, { key: 'name', label: '품목', type: 'string' }],
+        rows: Array.from({ length: 250 }, (_, i) => ({ rank: i + 1, name: `ITEM-${i + 1}` })) }
       const ranking = { result_id: 'result_r', kind: 'RANKING', total_rows: 2,
         columns: [{ key: 'rank', label: '순위', type: 'number' }, { key: 'country_name', label: '국가', type: 'string' }, { key: 'export_usd', label: '수출액', type: 'number', unit: 'USD' }],
         rows: [{ rank: 1, country_name: '중국', export_usd: 6660000 }, { rank: 2, country_name: '미국', export_usd: 3660000 }] }
@@ -120,7 +124,7 @@ const { chromium } = require('playwright')
       const sections = [
         { section_code: 'SUMMARY', title: '핵심 요약', text: '승인한 분석 결과표를 기준으로 작성했습니다.', tables: [], articles: [] },
         { section_code: 'KPI', title: '주요 지표 및 월별 수출 추이', text: '승인한 분석 결과입니다.', kpi: null, tables: [trend, honey], articles: [] },
-        { section_code: 'TOP_COUNTRIES', title: '주요 수출국', text: '승인한 분석 결과입니다.', kpi: null, tables: [ranking], articles: [] },
+        { section_code: 'TOP_COUNTRIES', title: '주요 수출국', text: '승인한 분석 결과입니다.', kpi: null, tables: [ranking, many], articles: [] },
         { section_code: 'GROWTH_RISK', title: '수출 증가 감소 주요 시장', text: missing, kpi: null, tables: [], articles: [] },
         { section_code: 'LOCAL_ISSUES', title: '현지 이슈', text: missing, kpi: null, tables: [], articles: [] }]
       const page = await browser.newPage()
@@ -169,6 +173,9 @@ const { chromium } = require('playwright')
       for (const head of ['HS 판본', '기간 합계', '월평균 금액', '비교 기준월', '비교 기간 금액']) assert.ok(text.includes(head), '결과표 열 ' + head)
       assert.ok(!requested.some(p => p.includes('/results/')), '원본 결과 API를 부르지 않는다: ' + requested.join(', '))
       assert.deepEqual(errors, [])
+      assert.ok(text.includes('전체 250행 중 200행 표시 · 전체는 엑셀 파일'), '200행 상한 안내')
+      assert.ok(text.includes('ITEM-200') && !text.includes('ITEM-201'), '201번째 행부터는 그리지 않는다')
+      assert.ok(text.includes('전체 2행'), '상한 아래 표는 전체 행 수만 안내')
       console.log('PASS result-based report view')
       await page.close()
     }

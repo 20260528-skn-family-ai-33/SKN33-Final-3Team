@@ -139,12 +139,16 @@ def build_context(store, uid, record, document):
             from backend.app.services.report_ondemand_context import promising_view
             block=next((x for x in document['sections'] if x['section_code']=='GROWTH_RISK'),None)
             context['promising']=promising_view(block)
-            # 출처 표는 섹션 순서(유망시장 → 현지 이슈)를 따른다.
-            at=next((i for i,x in enumerate(context['sources']) if x['label']=='기사'),len(context['sources']))
-            context['sources'].insert(at,{'label':'유망시장 예측','provider':'자체 ML 모델 (관세청 통계 기반)',
-                'scope':(f"{context['promising']['anchor']} 기준월 예측" if context['promising']['anchor'] else '예측 결과 없음'),
-                'used_in':'유망시장(증가·감소 예상)'})
-        if note := document.get('meta',{}).get('monthly_average_note'):
+            # 결과 기반 리포트는 결과표 사본만 싣는다(D-90). ML을 따로 돌리지 않으므로 출처표에 '유망시장 예측' 행을 넣지 않는다.
+            # 예측 결과표를 승인했다면 그 사본이 '분석 결과표' 출처로 이미 실린다.
+            if not content.get('source_tables'):
+                # 출처 표는 섹션 순서(유망시장 → 현지 이슈)를 따른다.
+                at=next((i for i,x in enumerate(context['sources']) if x['label']=='기사'),len(context['sources']))
+                context['sources'].insert(at,{'label':'유망시장 예측','provider':'자체 ML 모델 (관세청 통계 기반)',
+                    'scope':(f"{context['promising']['anchor']} 기준월 예측" if context['promising']['anchor'] else '예측 결과 없음'),
+                    'used_in':'유망시장(증가·감소 예상)'})
+        # 월평균 안내는 조건 기반 집계 카드용이다. 결과 기반 리포트에는 집계 카드가 없다.
+        if not content.get('source_tables') and (note := document.get('meta',{}).get('monthly_average_note')):
             context['summary']['monthly_average_note']=note
     elif kind == 'RPT_WEEKLY':
         _weekly(store, uid, saved, context, names, start, end)

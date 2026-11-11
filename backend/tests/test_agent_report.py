@@ -306,6 +306,11 @@ class ReportAgentTest(unittest.TestCase):
         self.assertIn('해당 분석 결과에 포함되지 않음', html)
         self.assertIn(result['rows'][0][-1], html)
         self.assertNotIn('수출액 상위', html)  # 결과에 없는 요청형 섹션(주요 수출국 등)을 지어내지 않는다
+        # 저장된 섹션에 GROWTH_RISK가 있어도 ML을 돌리지 않았으므로 출처표에 '유망시장 예측' 행이 없고, 월평균 안내도 싣지 않는다
+        self.assertIn('GROWTH_RISK', ctx['conditions']['sections'])
+        self.assertEqual([s['label'] for s in ctx['sources']], ['분석 결과표'])
+        self.assertNotIn('자체 ML 모델', html)
+        self.assertNotIn('monthly_average_note', ctx['summary'])
 
     def test_result_report_cells_are_readable_in_pdf_and_docx(self):
         """R21 순위 결과의 일회성 판정·순위 상태는 원시 값({'suspected': ...}, NOT_APPLICABLE) 대신 읽을 수 있는 말로 싣는다."""

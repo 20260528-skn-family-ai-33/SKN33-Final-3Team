@@ -66,12 +66,17 @@ function trendChart(table) {
 
 /** 승인한 채팅 결과로 만든 리포트(D-90). 결과표 사본을 그대로 보여 주고, 결과표에 없는 섹션은 저장된 안내('해당 분석 결과에 포함되지 않음')를 쓴다.
  *  원본 결과는 만료될 수 있으므로 결과 API(페이지·엑셀)를 부르지 않고 이 리포트의 엑셀 파일로 내려받는다. */
+const RESULT_ROW_LIMIT = 200   // PDF 결과 기반 모드(report_ondemand_context.RESULT_ROW_LIMIT)와 같은 값
+
 function ResultSections({ sections, onDownload }) {
   return sections.map((section, index) => (
     <Section key={section.section_code} no={index + 1} title={section.title}>
       <p className="note" style={{ whiteSpace: 'pre-line' }}>{section.text}</p>
       {(section.tables || []).map(table => {
-        const chart = trendChart(table)
+        const chart = trendChart(table)   // 그래프는 PDF와 같이 결과표 전체 행으로 그린다
+        // 표는 PDF와 같은 상한(RESULT_ROW_LIMIT행)까지만 그리고, 나머지는 이 리포트의 엑셀로 안내한다.
+        const total = table.total_rows ?? table.rows.length
+        const shown = table.rows.slice(0, RESULT_ROW_LIMIT)
         return (
           <div key={table.result_id || table.kind}>
             {chart && <div style={{ marginTop: 14 }}>
@@ -79,7 +84,8 @@ function ResultSections({ sections, onDownload }) {
               <LineChart width={900} height={240} labels={chart.labels} yTicks={chart.ticks} formatValue={reportEok} series={chart.series} />
               <div className="chips">{chart.series.map(s => <span key={s.name} className="lg"><i style={{ background: s.color }} />{s.name}</span>)}</div>
             </div>}
-            <ApiResults table={{ ...table, result_id: undefined }} tableOnly fixedColumns onDownload={onDownload} />
+            <ApiResults table={{ ...table, rows: shown, total_rows: shown.length, result_id: undefined }} tableOnly fixedColumns onDownload={onDownload} />
+            <p className="note" style={{ marginTop: 8 }}>{`전체 ${total.toLocaleString()}행` + (total > shown.length ? ` 중 ${shown.length.toLocaleString()}행 표시 · 전체는 엑셀 파일` : '')}</p>
           </div>
         )
       })}
