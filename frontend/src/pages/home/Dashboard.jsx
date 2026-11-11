@@ -14,13 +14,13 @@ import useUnData from './useUnData'
 
 // 메인 상단 기능 카드. 마지막 값은 누르면 이동할 화면이다(예전 '분석 · 리포트 바로가기' 띠의 링크를 옮겨 왔다).
 const FEATURES = [
-  ['chat', '추이·원인 질문', '“중국 메모리 수출이 왜 늘었어?”처럼 물으면 표와 근거 기사로 답해요.', 'rose', '/analysis'],
-  ['bell', '급증 기사 알림', '관심 품목·국가 기사량이 평소보다 늘면 알림으로 알려줘요.', 'rose', '/account/settings'],
+  ['chat', '추이·원인 질문', '“중국 메모리 수출이 왜 늘었어?”처럼 물으면\n표와 근거 기사로 답해요.', 'rose', '/analysis'],
+  ['bell', '급증 기사 알림', '관심 품목·국가 기사량이 평소보다 늘면\n알림으로 알려줘요.', 'rose', '/account/settings'],
   ['file', '리포트 센터', '주간·월간·분기 리포트를\n열람하고 내려받아요', 'lav', '/account/reports'],
-  ['calendar', '정기 리포트 구독', '주간·월간·분기 리포트를 정해진 날 자동으로 받아요.', 'lav', '/account/subscription'],
+  ['calendar', '정기 리포트 구독', '주간·월간·분기 리포트를\n정해진 날 자동으로 받아요.', 'lav', '/account/subscription'],
 ]
 // 품목별·교역국별 표의 열 너비. 머리 줄(.th)과 행(.tr)이 같은 값을 써야 열이 어긋나지 않는다.
-const PRODUCT_TABLE_COLS = '24px 86px 1fr 64px 60px'
+const PRODUCT_TABLE_COLS = '24px 90px 1fr 64px 60px'
 const COUNTRY_TABLE_COLS = '24px 1fr 64px 60px'
 const TICKER_TABS = [['all', '전체기사'], ['general', '일반기사'], ['short', '단신속보'], ['major', '주요이슈']]
 const DIR_COLOR = { up: '#C8102E', down: '#1F5FD1', flat: '#5C6370' }
@@ -98,7 +98,7 @@ function useUnVisibleHeight(deps) {
 function FeatureCard([icon, title, text, tone, to]) {
   const bg = tone === 'rose' ? ['#FCE8EB', '#C8102E'] : ['#ECEAF5', '#2B2350']
   return (
-    <Link key={title} to={to} className="feature-card" style={{ display: 'block', background: '#fff', borderRadius: 18, padding: 24, boxShadow: '0 12px 30px rgba(0,0,0,.18)' }}>
+    <Link key={title} to={to} className="feature-card" style={{ display: 'block', background: 'rgba(255,255,255,0.85)', borderRadius: 18, padding: 24, boxShadow: '0 12px 30px rgba(0,0,0,.18)' }}>
       <span style={{ width: 48, height: 48, borderRadius: 14, background: bg[0], color: bg[1], display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={icon} size={24} stroke={1.8} /></span>
       <h3 style={{ margin: '16px 0 6px', fontSize: 18, fontWeight: 800, color: '#15181E' }}>{title}</h3>
       <p style={{ fontSize: 14, lineHeight: 1.6, color: '#444B57', whiteSpace: 'pre-line' }}>{text}</p>
@@ -148,6 +148,24 @@ function Ticker({ interest }) {
   )
 }
 
+// 수출 상위 품목 카드 자리표시(스켈레톤). 실제 카드와 같은 크기·배치로 그려 값이 들어와도 화면이 튀지 않는다.
+const CARD_STYLE = { background: '#fff', border: '1px solid #E3E6EA', borderRadius: 18, padding: 18, color: '#15181E', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: '0 4px 14px rgba(21,24,30,.05)' }
+const Bone = ({ w, h, r = 6, style }) => <span className="skel" style={{ display: 'block', width: w, height: h, borderRadius: r, ...style }} />
+function RankCardSkeleton() {
+  return (
+    <div className="dash-card" aria-hidden="true" style={CARD_STYLE}>
+      <span style={{ display: 'flex', gap: 6 }}><Bone w={24} h={22} /><Bone w={58} h={22} /></span>
+      <span style={{ height: 48, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 8 }}><Bone w="90%" h={16} /><Bone w="60%" h={16} /></span>
+      <span style={{ marginTop: 'auto', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 80px', gridTemplateRows: '18px 30px 18px', columnGap: 10, alignItems: 'center' }}>
+        <Bone w={36} h={11} />
+        <Bone w={80} h={40} r={8} style={{ gridColumn: 2, gridRow: '1 / 4', alignSelf: 'center' }} />
+        <Bone w="75%" h={22} style={{ gridColumn: 1, gridRow: 2 }} />
+        <Bone w="55%" h={11} style={{ gridColumn: 1, gridRow: 3 }} />
+      </span>
+    </div>
+  )
+}
+
 export default function Dashboard({ route }) {
   const { profile } = useApp()
   // 전체↔내 관심 전환 버튼은 머리글(알림 왼쪽)에 있다. 여기서는 현재 보기만 읽는다.
@@ -158,6 +176,19 @@ export default function Dashboard({ route }) {
   const un = useUnData(profile)
   const data = { ...market, un: un.items }
   const cards = data.rankCards
+  // 관심 시장은 카드 수가 바뀔 수 있어, 불러오는 동안에는 직전 조회의 카드 수(0개 포함)만큼 스켈레톤을 그린다.
+  // 직전 결과가 0건이면 카드 대신 '집계된 품목이 없습니다' 줄 자리만 표시해 아래 표가 밀리지 않게 한다.
+  // 보기(전체·내 관심)를 바꾼 직후처럼 직전 결과가 없으면 전체는 5개, 내 관심은 관심 품목 수(최대 5개)로 어림한다.
+  const [lastCards, setLastCards] = useState({ view, count: null })
+  const settledCount = !data.cardsLoading && (data.cardsEmpty || cards.length) ? cards.length : null
+  if (settledCount != null && (lastCards.view !== view || lastCards.count !== settledCount)) setLastCards({ view, count: settledCount })
+  const guessCount = interest && profile.products.length ? Math.min(profile.products.length, 5) : 5
+  const cardCount = lastCards.view === view && lastCards.count != null ? lastCards.count : guessCount
+  // 그리드 열 수(데스크톱 배치용, 최소 2열)와 스켈레톤 개수(직전 카드 수 그대로)는 따로 계산한다.
+  // 모바일에서는 카드가 한 열로 쌓여, 열 수만큼 스켈레톤을 그리면 품목 1개일 때 빈 카드가 한 줄 더 생긴다.
+  const shownCount = data.cardsLoading ? cardCount : cards.length
+  const cardColumns = interest ? Math.min(Math.max(shownCount, 2), 5) : 5
+  const skeletonCount = Math.min(cardCount, 5)
   const [unRef, unHeight] = useUnVisibleHeight([data.un])
 
   return (
@@ -242,7 +273,9 @@ export default function Dashboard({ route }) {
           <div className="between" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
               <h2 style={{ fontSize: 26, fontWeight: 800, color: '#15181E' }}>{data.rankTitle}</h2>
-              <p style={{ marginTop: 8, fontSize: 13, color: '#5C6370' }}>{data.rankSub}</p>
+              {data.cardsLoading
+                ? <Bone w={170} h={13} style={{ marginTop: 11, marginBottom: 3 }} />
+                : <p style={{ marginTop: 8, fontSize: 13, color: '#5C6370' }}>{data.rankSub}</p>}
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
               {[3, 6, 12].map(m => (
@@ -253,9 +286,11 @@ export default function Dashboard({ route }) {
             </div>
           </div>
           <RegionError label="수출 상위 품목" states={data.states.cards} />
-          <div style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${interest ? Math.min(Math.max(cards.length, 2), 5) : 5},1fr)`, gap: 14 }} className="resp-stack">
-            {cards.map(c => (
-              <Link key={c.hs} to={data.cardLink('COUNTRY', c.hs)} className="dash-card" style={{ background: '#fff', border: '1px solid #E3E6EA', borderRadius: 18, padding: 18, color: '#15181E', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: '0 4px 14px rgba(21,24,30,.05)' }}>
+          <div aria-busy={data.cardsLoading} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
+            {data.cardsLoading && <span role="status" className="sr-only">수출 상위 품목을 불러오는 중입니다</span>}
+            {data.cardsLoading && Array.from({ length: skeletonCount }, (_, i) => <RankCardSkeleton key={i} />)}
+            {!data.cardsLoading && cards.map(c => (
+              <Link key={c.hs} to={data.cardLink('COUNTRY', c.hs)} className="dash-card" style={CARD_STYLE}>
                 <span style={{ display: 'flex', gap: 6 }}>
                   <span style={{ padding: '3px 8px', borderRadius: 6, background: '#FCE8EB', color: '#B0102A', fontSize: 12, fontWeight: 800 }}>{c.rank}</span>
                   <span style={{ padding: '3px 8px', borderRadius: 6, background: '#F1F2F5', color: '#444B57', fontSize: 12 }}>{c.hs}</span>
@@ -271,7 +306,8 @@ export default function Dashboard({ route }) {
               </Link>
             ))}
           </div>
-          {data.cardsEmpty && <p style={{ marginTop: 18, fontSize: 14, color: '#5C6370' }}>조회 기간에 집계된 수출 품목이 없습니다.</p>}
+          {data.cardsLoading && skeletonCount === 0 && <p aria-hidden="true" style={{ marginTop: 18, height: 21, display: 'flex', alignItems: 'center' }}><Bone w={260} h={14} /></p>}
+          {!data.cardsLoading && data.cardsEmpty && <p style={{ marginTop: 18, fontSize: 14, lineHeight: '21px', color: '#5C6370' }}>조회 기간에 집계된 수출 품목이 없습니다.</p>}
         </div>
       </section>
 
@@ -287,7 +323,7 @@ export default function Dashboard({ route }) {
             </div>
             <RegionError label="품목별 수출입" states={data.states.products} />
             <div className="th" style={{ gridTemplateColumns: PRODUCT_TABLE_COLS, marginTop: 14 }}>
-              <span>순위</span><span>HS6</span><span>품목</span><span className="r">수출액</span><span className="r">수입액</span>
+              <span>순위</span><span>품목코드(HS6)</span><span>품목</span><span className="r">수출액</span><span className="r">수입액</span>
             </div>
             {data.productTable.rows.map(([rank, hs, name, exp, imp]) => (
               <div key={hs} className="tr row2" style={{ gridTemplateColumns: PRODUCT_TABLE_COLS }}>
