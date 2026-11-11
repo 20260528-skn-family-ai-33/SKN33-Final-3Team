@@ -278,11 +278,17 @@ class NameCatalog:
         # 근거 범위의 HS 코드와 그 표시명("HS 3304 화장품")은 품목 하나다. 묶음(GROUP) 판정에서 하나로 센다.
         self._same_product = {str(source['hs_name']): str(source['hs_code']) for source in sources
                               if isinstance(source, dict) and source.get('hs_code') and source.get('hs_name')}
+        bindings = {}
+        for source in sources:
+            for mention, name in source.get('_country_mentions', ()):
+                bindings.setdefault(mention, set()).add(name)
+        self.country_mentions = {m: next(iter(names)) for m, names in bindings.items()
+                                 if len(names) == 1 and len(m) > 1 and m not in self.names}
         self._lengths = {len(name) for name in self.names}
         # Mention spans depend on the vocabulary and country roles. Alias
         # ownership and row bindings still belong to each individual catalog.
         self._mentions = ({} if mention_cache is None else
-                          mention_cache.setdefault((self.names, self.countries), {}))
+                          mention_cache.setdefault((self.names, self.countries, frozenset(self.country_mentions.items())), {}))
         stored = {name for _, name in fields}
         self._stored = frozenset(stored)
         self.ambiguous_countries = set()  # 여러 품목 행과 짝지어진 국가. 국가 이름만으로는 행을 고르지 못한다.
@@ -312,6 +318,11 @@ class NameCatalog:
         value=text
         possible = _contained_names(value, self.names, self._lengths)
         hits={(name,m.start(),m.end()) for name in possible for m in _name_pattern(name,name in self.countries).finditer(value)}
+        for mention, name in self.country_mentions.items():
+            if mention in text:
+                for match in _name_pattern(mention, True).finditer(text):
+                    if not re.match(r'[가-힣A-Za-z0-9]', text[match.end():]):
+                        hits.add((name, match.start(), match.end()))
         pending=list(hits)
         for _,_,end in pending:
             join=re.compile(r'(?:과|와|및)\s*').match(value,end)
@@ -440,6 +451,7 @@ class TimeClaim:
     comparison_reference: bool = False
     cumulative: bool = False
     month_window: tuple[int, int] | None = None
+    subject_year: str | None = None
 
 
 @dataclass(frozen=True)
@@ -513,6 +525,30 @@ def _mask_period_end_days(text):
             return ' ' * len(match.group())
         return match.group()
     return PERIOD_END_DAY.sub(mask, text)
+# Match the grammatical complement at the date boundary. The matched span is
+# temporal syntax, so it must not also be interpreted as a product qualifier.
+DENOMINATOR_LINK = r'(?:를|을)?\s*분모로'
+AMOUNT_LABEL = r'수출액|수입액|교역액|금액'
+ANNUAL_BASE_LINK = re.compile(
+    r'\s*(?:' + COMPARE_LINK + r'|(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')\s*)?(?:' + DENOMINATOR_LINK +
+    r'|(?:을|를)?\s*(?:비교\s*)?기준으로)(?:\s+한(?=\s))?)'
+)
+
+
+def annual_comparison_roles(text):
+    """Return subject and base years only when two full-year dates have a clear reference."""
+    dates = list(DATE.finditer(text))
+    if len(dates) != 2 or any(not d[1] or any(d.groups()[1:]) for d in dates) or dates[0][1] == dates[1][1]:
+        return None
+    references = []
+    for i, date in enumerate(dates):
+        end = dates[i+1].start() if i+1 < len(dates) else len(text)
+        if ANNUAL_BASE_LINK.match(text, date.end(), end):
+            references.append(i)
+    if len(references) == 1:
+        index, = references
+        return dates[1-index][1], dates[index][1]
+    return None
 
 
 def read_time(text, inherited_year=None):
@@ -540,8 +576,11 @@ def read_time(text, inherited_year=None):
             end_month=last.group(2) or last.group(3) or (last.group(4) if last.group(5)=='월' else None)
             if end_month: period=(f'{first.group(1)}-{int(first.group(2) or first.group(3)):02d}',f'{last.group(1) or first.group(1)}-{int(end_month):02d}')
     comparison_reference=any(re.match(r'\s*(?:대비|보다)',text[d.end():]) for d in dates)
+    roles = annual_comparison_roles(text) if len(years) == 2 and not period else None
+    subject_year = roles[0] if roles else None
+    comparison_reference = comparison_reference or bool(roles)
     return TimeClaim(frozenset(years),frozenset(months),frozenset(bare),frozenset(durations),period,'기준' in text,
-                     comparison_reference,month_window=month_window),current_year
+                     comparison_reference,month_window=month_window,subject_year=subject_year),current_year
 
 
 def _threshold_relation(suffix):
@@ -574,7 +613,7 @@ def metric_claim(text,quantity,*,direct_suffix='',flow=None):
     if aggregate=='TOTAL' and quantity.unit in ('%','%p'):
         aggregate=None  # "수출 총액 기준으로 중국 28.4%"의 총액은 비율의 분모 설명이다.
     if aggregate: family='AMOUNT'
-    if re.search(r'수출액|수입액|교역액|금액',text) and quantity.unit=='USD': family='AMOUNT'
+    if re.search(AMOUNT_LABEL,text) and quantity.unit=='USD': family='AMOUNT'
     comparison=None
     relation=COMPARISON.search(text)
     if relation: comparison='YOY' if relation['yoy'] else 'MOM'
@@ -1197,7 +1236,7 @@ def parse_sentence(sentence,catalog):
                 metric_local=local
             denominator = quantity.unit == 'USD' and (
                 re.search(r'분모(?:인|는|로 쓰이는)?\s*(?:한국(?:의)?\s*)?(?:전체\s*)?(?:수출입?|수입)?액?(?:은|는)?\s*$', metric_local[:quantity.start-left])
-                or re.match(r'\s*(?:를|을)?\s*분모로', metric_local[quantity.end-left:]))
+                or re.match(r'\s*' + DENOMINATOR_LINK, metric_local[quantity.end-left:]))
             if denominator and not any(left <= a < b <= right for _, a, b in mentions):
                 bound_targets = frozenset()
             if quantity.unit == '위':
@@ -1239,8 +1278,14 @@ def parse_sentence(sentence,catalog):
             if metric.aggregate == 'TOTAL' and not DATE.search(syntax) and re.match(r'\s*(?:[,，]\s*)?(?:총액|합계)', syntax):
                 claim_time = TimeClaim()
             valid = quantity.valid and metric.valid
-            if metric.family == 'CHANGE' and _unknown_trade_subject(syntax, mentions):
-                valid = False
+            if metric.family == 'CHANGE':
+                subject_syntax = syntax
+                if claim_time.subject_year:
+                    complements = [m.span() for date in DATE.finditer(syntax)
+                                   if (m := ANNUAL_BASE_LINK.match(syntax, date.end()))]
+                    subject_syntax = mask_spans(syntax, complements)
+                if _unknown_trade_subject(subject_syntax, mentions):
+                    valid = False
             value_span = source_span(quantity.start, quantity.end)
             # In a shared list the prefix or suffix can belong to several values.
             span = source_span(left, right) if len(variants) == 1 else value_span

@@ -217,6 +217,50 @@ class WriterEvidenceTest(unittest.TestCase):
                     self.assertEqual(payload['regeneration']['draft']['conclusion'][0]['sentences'], [old, kept])
                     self.assertEqual(state.draft.sentences(), [new if accepted else old, kept])
 
+    def test_resolved_country_mention_binds_each_numeric_claim_to_the_same_partner(self):
+        from backend.app.agents.state import CountryMention
+        from backend.app.agents.verify import snapshot_evidence, verify
+
+        state = dev_state(DEV['02-zero-null'])
+        state.input.question = '대미 부품 수출액 비교'
+        task = state.plan.tasks[0]
+        task.slots.countries = [CountryMention(mention='대미', name='미국')]
+        task.conditions.country_codes = ['US']
+        scope = dict(period={'start':'2022-01','end':'2022-12'},
+                     compare_period={'start':'2021-01','end':'2021-12'}, trade_flow='EXPORT')
+        rows = [dict(country_code='US', country_name='미국', name='부품', total_usd=120,
+                     compare_total_usd=100, change_pct=20),
+                dict(country_code='JP', country_name='일본', name='부품', total_usd=130,
+                     compare_total_usd=100, change_pct=30)]
+        snapshots = {'t1.sql': snapshot_evidence(dict(conditions=scope, rows=rows))}
+        for current, rate, expected in [(120, 20, 'PASS'), (130, 30, 'MISMATCH')]:
+            line = f'2022년 한국의 대미 부품 수출액은 {current}달러로, 2021년의 100달러보다 {rate}% 증가했습니다.'
+            state.draft = Draft(conclusion=[dict(task_id='t1', sentences=[line])], turn_summary='')
+            verify(state, countries=['미국', '일본'], snapshots=snapshots)
+            self.assertEqual(state.verification.checks[0].status, expected)
+
+    def test_reversed_annual_rate_rechecks_corrected_final_draft(self):
+        from backend.app.agents.verify import snapshot_evidence, verify
+
+        state = dev_state(DEV['02-zero-null'])
+        rows = [dict(country_name='미국', total_usd=80, compare_total_usd=100, change_pct=-20)]
+        period = {'start': '2021-01', 'end': '2021-12'}
+        base = {'start': '2022-01', 'end': '2022-12'}
+        scope = dict(period=period, compare_period=base, trade_flow='EXPORT')
+        state.results['t1.sql'].digest = dict(kind='TREND', rows=rows, **scope)
+        snapshots = {'t1.sql': snapshot_evidence(dict(conditions=scope, rows=rows))}
+        wrong = '2022년 수출액은 2021년 대비 20% 감소했습니다.'
+        state.draft = Draft(conclusion=[dict(task_id='t1', sentences=[wrong])], turn_summary='')
+        verify(state, snapshots=snapshots)
+        self.assertEqual(state.verification.status, 'NEEDS_REVIEW')
+        self.assertEqual(state.verification.feedback[0].cell, ('rows', '0', 'change_pct'))
+        state.verification.regeneration_count = 1
+        client = compose(state)
+        client.parse.assert_not_called()
+        self.assertEqual(state.draft.sentences(), ['2021년 수출액은 2022년 대비 20% 감소했습니다.'])
+        verify(state, snapshots=snapshots)
+        self.assertEqual(state.verification.status, 'PASS')
+
     def test_action_rewrite_uses_only_addressed_span(self):
         from backend.app.agents.state import ClaimFeedback, WriterEdits
 

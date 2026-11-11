@@ -505,6 +505,16 @@ class Services:
                            '0부터 시작하는 feedback_index와 passage를 대체할 정확한 문자열 replacement를 반환하세요. '
                            '원문의 조사·어미와 문장부호는 span 경계에 맞추세요. 질문의 비교 기준을 유지하고 '
                            '해당 task의 digests에서 수치와 방향을 확인하세요. REVIEW와 PRESERVE는 수정하지 마세요.')
+            from backend.app.agents.compose import period_role_edits
+            edits = period_role_edits(state.verification.feedback)
+            if edits:
+                try:
+                    state.draft = apply_edits(edits)
+                except ValueError:
+                    pass  # The normal correction path can still propose a valid edit.
+                else:
+                    state.writer_rewrite_result = 'ACCEPTED_CORRECTION'
+                    return
             revised = self.structured(state, 'compose', instruction, payload, WriterEdits, tokens, apply_edits, max_attempts=1)
             if revised is not None:
                 state.draft = revised

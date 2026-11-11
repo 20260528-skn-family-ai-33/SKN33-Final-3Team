@@ -431,6 +431,20 @@ class ConditionTest(unittest.TestCase):
         self.assertEqual(self.step.status,'FAILED')
         self.assertIsNone(self.state.pending)
 
+    def test_explicit_annual_base_overrides_reversed_planner_roles(self):
+        from backend.app.agents.state import Period
+
+        self.state.input.question = '2025년 대비 2024년 수출액 변화율'
+        self.task.slots = TaskSlots(
+            comparison_requested=True,
+            period=Period(start='2025-01-01', end='2025-12-01'),
+            compare_period=Period(start='2024-01-01', end='2024-12-01'),
+        )
+        with patch('backend.app.agents.conditions.trade.resolve_period'):
+            check_conditions(self.store, self.state, self.step)
+        self.assertEqual(self.task.conditions.period.start.year, 2024)
+        self.assertEqual(self.task.conditions.compare_period.start.year, 2025)
+
     def test_exact_product_and_country_period_are_resolved_against_sqlite(self):
         self.state.input.question='미국 기초화장품 수출액'
         self.task.slots=TaskSlots(products=['기초화장품'],countries=[{'mention':'미국','name':'미국'}],recent_months=3)

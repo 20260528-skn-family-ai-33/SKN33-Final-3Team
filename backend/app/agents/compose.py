@@ -24,6 +24,7 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 요청한 월들에 미집계가 섞여 있으면 제시된 각 월을 실제 금액(0 포함) 또는 미집계와 짝지어 설명하세요. 소계를 제시할 때에는 전체 기간 합계를 확인할 수 있는지도 밝히세요.
 금액은 digest에 적힌 표기(예: "2,610만 달러", "1억 2,346만 달러")를 글자 그대로 옮기세요.
 만·억 단위를 다시 바꾸거나 반올림·합산하지 마세요. 총액과 월평균, %와 %p를 구분하세요.
+기간 비교의 change_pct는 compare_period의 compare_total_usd를 분모로 한 period의 total_usd 변화율입니다. 문장에 두 기간의 역할을 그대로 쓰세요.
 비교 기간 길이가 다르면 그 사실과 월평균을 명시하고 점유율 분모 의미를 밝히세요.
 예측은 기준월을 명시하며 exp_12m은 과거 12개월 수출액입니다.
 월 단위 통계·비교 기간의 종료일을 날짜로 쓸 때는 해당 월의 말일로 씁니다(예: 2025년 12월 31일). 기사 발행 기간의 날짜는 그대로 씁니다.
@@ -563,6 +564,26 @@ def requested_axis(task):
         if start == month_gap(current.end, previous.end):
             return {1: 'MOM', 3: 'QOQ', 12: 'YOY'}.get(start)
     return None
+
+
+def period_role_edits(feedback):
+    """Swap only the two year labels in a verified period-role reversal."""
+    from backend.app.agents.state import WriterEdits
+
+    edits = []
+    for index, item in enumerate(feedback):
+        if item.action != 'CORRECT':
+            continue
+        if item.reason != 'REVERSED_PERIODS':
+            return None
+        years = list(re.finditer(r'(?<!\d)\d{4}(?!\d)', item.passage))
+        if len(years) != 2:
+            return None
+        first, last = years
+        replacement = (item.passage[:first.start()] + last.group() + item.passage[first.end():last.start()]
+                       + first.group() + item.passage[last.end():])
+        edits.append(dict(feedback_index=index, replacement=replacement))
+    return WriterEdits(edits=edits) if edits else None
 
 
 def apply_claim_edits(state, payload, edits):

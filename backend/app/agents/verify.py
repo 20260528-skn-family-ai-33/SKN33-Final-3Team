@@ -39,6 +39,9 @@ def _source_supports(time: TimeClaim,source):
 
 def _time_matches(claim:Claim,fact:Fact):
     time=claim.time
+    if time.subject_year and fact.metric.family == 'CHANGE':
+        if fact.period != (time.subject_year + '-01', time.subject_year + '-12'):
+            return False
     periods=tuple(p for p in ((fact.compare_period,) if time.comparison_reference and fact.metric.family=='CHANGE'
                               else (fact.period,)) if p)
     months={fact.month} if fact.month else set()
@@ -59,7 +62,9 @@ def _time_matches(claim:Claim,fact:Fact):
     if time.years:
         if fact.prediction:
             if not fact.anchor or time.years!={fact.anchor[:4]}: return False
-        elif not all((year+'-01',year+'-12') in periods for year in time.years): return False
+        else:
+            years = time.years - {time.subject_year} if fact.metric.family == 'CHANGE' else time.years
+            if not all((year+'-01',year+'-12') in periods for year in years): return False
     if time.months or time.bare_months:
         anchor_reference=fact.prediction and fact.horizon==12 and 12 in time.durations and time.anchor_reference
         if anchor_reference:
@@ -498,6 +503,21 @@ def mark_unverified(state):
 
 def diagnose_claim(claim, prepared, group):
     """Only identify an attribute when an otherwise compatible cell isolates it."""
+    if claim.valid and claim.metric.family == 'CHANGE' and claim.time.subject_year and len(claim.time.years) == 2:
+        # A TREND snapshot repeats the period total and change on every monthly row.
+        # Identify the series before using its value to diagnose a role reversal.
+        reference, = claim.time.years - {claim.time.subject_year}
+        swapped = replace(claim, time=replace(claim.time, subject_year=reference))
+        candidates = {}
+        for fact in prepared.facts:
+            if (fact.metric.key == 'change_pct' and fact.period_value and claim.targets <= fact.targets
+                    and _time_matches(swapped, fact)):
+                key = (fact.source, fact.stored_targets, fact.period, fact.compare_period, fact.value)
+                candidates.setdefault(key, fact)
+        if len(candidates) == 1:
+            fact, = candidates.values()
+            if mismatch(swapped, fact, prepared.sources[fact.source]) is None:
+                return 'REVERSED_PERIODS', group[fact.source], fact.path
     if not claim.valid or not claim.metric.family or not claim.targets:
         return 'NOT_CONFIRMED', None, None
     if claim.metric.negated_change or claim.metric.family == 'OUTLOOK':
@@ -548,13 +568,17 @@ def _correction_span(sentence, claim, reason):
     start, end = claim.span
     if reason == 'COMPARISON':
         pattern = COMPARISON
-    elif reason == 'PERIOD':
+    elif reason in ('PERIOD', 'REVERSED_PERIODS'):
         pattern = DATE
     elif reason == 'DIRECTION':
         pattern = DOWN if claim.metric.direction == 'DOWN' else UP
     else:
         return None
     matches = list(pattern.finditer(sentence, start, end))
+    if reason == 'REVERSED_PERIODS':
+        if len(matches) == 2:
+            return matches[0].start(1), matches[1].end(1)
+        return None
     if len(matches) != 1:
         return None
     if reason == 'COMPARISON' and claim.quantity_span:
@@ -609,8 +633,21 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
     # Numeric facts are extracted exactly once per step. Only grounded names
     # join the request-wide dictionary, as in the original identity pass.
     mention_cache = {}
-    steps = {step: _prepare([source(step)], known_names, countries, mention_cache=mention_cache)
-             for step in dict.fromkeys(all_steps)}
+    def scoped_source(task, step):
+        evidence = source(step)
+        conditions = getattr(task, 'conditions', None)
+        mentions_in_question = getattr(getattr(task, 'slots', None), 'countries', None)
+        if not conditions or not mentions_in_question:
+            return evidence
+        codes = set(conditions.country_codes or ())
+        rows = evidence.get('rows') or evidence.get('targets') or ()
+        selected = {r.get('country_name') for r in rows if r.get('country_code') in codes}
+        mentions = [(c.mention, c.name) for c in mentions_in_question
+                    if c.mention in state.input.question and c.name in selected and c.mention != c.name]
+        return {**evidence, '_country_mentions': mentions} if mentions else evidence
+
+    steps = {step: _prepare([scoped_source(task, step)], known_names, countries, mention_cache=mention_cache)
+             for task in state.plan.tasks for step in by_task[task.task_id]}
     names = known_names.union(n for item in steps.values() for fact in item.facts for n in fact.targets if len(n)>1)
     scopes = {}
 

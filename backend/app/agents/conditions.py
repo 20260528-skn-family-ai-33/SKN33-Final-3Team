@@ -90,6 +90,17 @@ def _match_country_mention(mention, name, rows, threshold):
     return None, candidates, None
 
 
+def comparison_windows(question, current, baseline):
+    from backend.app.agents.verify_claims import annual_comparison_roles
+
+    if current and baseline and all(w.start.month == 1 and w.end.month == 12 and w.start.year == w.end.year
+                                    for w in (current, baseline)):
+        roles = annual_comparison_roles(question)
+        if roles == (str(baseline.start.year), str(current.start.year)):
+            return baseline, current
+    return current, baseline
+
+
 def _bounded_bundle(store, loaded, message):
     """조건 확인에서 쓰는 모델 묶음(HS4 후보 순서·예측 기준월). ML 단계와 같은 전용 스레드·시간 제한으로 읽는다.
     캐시가 비어 첫 로드가 늦으면 워커를 붙잡지 않고 그 하위 질문만 다시 질문하도록 안내한다."""
@@ -392,12 +403,16 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         out.period = slots.period or out.period
         if slots.recent_months or not out.period:
             out.period = Period(start=shift_month(bounds[-1], 1-(slots.recent_months or 12)), end=bounds[-1])
+        comparison = slots.compare_period
+        if slots.comparison_requested and slots.period:
+            question = original if len(state.plan.tasks) == 1 else task.question
+            out.period, comparison = comparison_windows(question, out.period, comparison)
         # 유망시장은 통계 기간을 조회하지 않는다. 공개 통계보다 오래된 기간을 물어도 여기서 끝내지 않고, 아래 MODEL_PERIOD로
         # 최신 기준월 예측을 제안한다.
         if task.intent not in MARKET_INTENTS:
             trade.resolve_period(store, out.period.start.strftime('%Y-%m'), out.period.end.strftime('%Y-%m'))
         if slots.comparison_requested:
-            out.compare_period = slots.compare_period or Period(start=shift_month(out.period.start,-12),
+            out.compare_period = comparison or Period(start=shift_month(out.period.start,-12),
                                                                  end=shift_month(out.period.end,-12))
     if task.intent == 'CAUSE':
         out.article_period = {'start':shift_month(out.period.start,-1), 'end':month_end(shift_month(out.period.end,1))}
