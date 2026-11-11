@@ -395,6 +395,33 @@ def hbar_chart(rows, colors, *, label_width=120, width=640, row_height=26, digit
     return Markup(''.join(out))
 
 
+def diverging_chart(rows, *, width=640, row_height=26, label_width=80, divisor=1e8, digits=REPORT_DIGITS):
+    """증감액 막대(양식 '국가별 증감액'). rows: [{label, value}]. 가운데 축에서 증가는 오른쪽(UP), 감소는 왼쪽(DOWN)으로 그린다.
+    국가명은 증가 막대의 왼쪽, 감소 막대의 오른쪽에 둔다."""
+    fmt = lambda v: ('+' if v > 0 else MINUS if v < 0 else '') + _number_eok(abs(v), digits)
+    peak = max((abs(r['value']) for r in rows), default=0) or 1
+    texts = [fmt(r['value'] / divisor) for r in rows]
+    pad = max([40] + [_em(t) * 11 + 10 for t in texts])   # 막대 끝 숫자가 밖으로 나가지 않게
+    half = (width - 2 * (label_width + pad)) / 2
+    axis = width / 2
+    height = row_height * len(rows) + 4
+    out = [f'<svg class="chart" viewBox="0 0 {width} {height}" width="100%" role="img">',
+           f'<line x1="{axis}" x2="{axis}" y1="0" y2="{height}" stroke="#2B2E33" stroke-width="1"/>']
+    for i, (r, text) in enumerate(zip(rows, texts)):
+        v = r['value']; w = max(abs(v) / peak * half, 1); y = i * row_height + (row_height - 12) / 2; ty = y + 10
+        label = escape(_fit(r['label'], label_width - 6, 11))
+        if v >= 0:
+            out.append(f'<rect x="{axis}" y="{y:.1f}" width="{w:.1f}" height="12" rx="2" fill="{UP}"/>'
+                       f'<text x="{axis + w + 5:.1f}" y="{ty:.1f}" class="val">{text}</text>'
+                       f'<text x="{axis - 6:.1f}" y="{ty:.1f}" text-anchor="end" class="lbl">{label}</text>')
+        else:
+            out.append(f'<rect x="{axis - w:.1f}" y="{y:.1f}" width="{w:.1f}" height="12" rx="2" fill="{DOWN}"/>'
+                       f'<text x="{axis - w - 5:.1f}" y="{ty:.1f}" text-anchor="end" class="val">{text}</text>'
+                       f'<text x="{axis + 6:.1f}" y="{ty:.1f}" class="lbl">{label}</text>')
+    out.append('</svg>')
+    return Markup(''.join(out))
+
+
 # ---------- 쪽 나누기 ----------
 # 쪽 높이가 고정이라 넘치는 내용은 잘립니다. 블록 높이를 mm로 추정해 넘치면 다음 쪽(“(계속)”)으로 보냅니다.
 # 한글 1자 = 1em(Noto Sans KR 기준)으로 계산하며, 폭이 더 좁은 글꼴(맑은 고딕)에서는 아래 여백이 조금 남습니다.
@@ -483,6 +510,9 @@ def _table(key, rows, head=None, empty=ROW1_MM, **extra):
 
 # 유망시장 표 칸 너비(mm). ondemand.html의 th 너비와 같아야 한다. 글자 폭 = 칸 너비 − 좌우 여백 4.8mm.
 PROMISING_COLS = (24, 30, 50, 20, 24, 32)
+COMPACT_ROW_MM = 7.6   # table.compact 한 줄 행(7.9pt, 실측)
+DIVERGING_ROW = 22     # 유망시장 증감액 막대 한 줄 높이(SVG 단위). ondemand.html과 같아야 한다
+BOX_GAP_MIN, BOX_GAP_MAX = 6, 20   # 증감액 그래프와 ML 박스 사이 여백(mm). 남는 공간에 따라 이 범위에서 정한다
 
 
 def _promising_table(promising):
@@ -772,9 +802,28 @@ def _ondemand_layout(ctx, rest):
 
     if 'GROWTH_RISK' in sections:
         promising = ctx['promising']
-        note = {'key': 'pnote', 'height': LINE[9] * _lines(promising['text'], 9, TEXT_MM) + 4}
-        pages['promising'] = flow([note, _promising_table(promising)],
-                                  BODY_MM - _heading('모델 예측 순위 · 증가·감소 예상 · 단위 억 달러'), rest)
+        changes = ctx.get('changes') or {'status': 'NOT_READY'}
+        blocks = []
+        if changes['status'] == 'READY' and (changes['growth'] or changes['decline'] or changes['bars']):
+            # 성장률 상위·감소율 상위 표를 두 칸으로 나란히(table.compact, 국가명 한 줄 기준)
+            rows = max(len(changes['growth']), len(changes['decline']), 1)
+            blocks.append({'key': 'ctables', 'height': H3_MM + TH_MM + rows * COMPACT_ROW_MM + 2})
+            if changes['bars']:  # 소제목 + 증감액 막대(ondemand.html의 diverging_chart row_height와 같은 값)
+                blocks.append({'key': 'cchart', 'height': H3_MM + 3.5 + _svg(DIVERGING_ROW * len(changes['bars']) + 4)})   # .cchart-head 위 여백
+        else:
+            blocks.append({'key': 'cnone', 'height': H3_MM + ROW1_MM + 6})
+        # 아래 박스: ML 유망시장 분석(소제목 + 안내 문장 + 예측 표). 박스 안쪽 위아래 여백 6mm
+        note = {'key': 'pnote', 'height': LINE[9] * _lines(promising['text'], 9, TEXT_MM - 10) + 7}
+        table = _promising_table(promising)
+        table = dict(table, head=table['head'] + 6)   # 행 단위로 나뉘는 표. 박스 여백은 머리 높이에 더한다
+        formula = {'key': 'cformula', 'height': 3 + 2 * LINE[7.9]}
+        # 박스 위 여백: 한 쪽에 남는 공간이 있으면 최대 BOX_GAP_MAX까지 띄우고, 빠듯하면 BOX_GAP_MIN만 둔다(쪽이 넘치지 않게).
+        first = BODY_MM - _heading('실제 수출 증감 · 모델 예측 · 단위 억 달러')
+        used = (sum(b['height'] for b in blocks) + H3_MM + note['height'] + formula['height']
+                + table['head'] + (sum(table['rows']) if table['rows'] else table['empty']))
+        gap = max(BOX_GAP_MIN, min(BOX_GAP_MAX, first - used - BOX_GAP_MIN))
+        blocks += [{'key': 'mlhead', 'gap': round(gap, 1), 'height': H3_MM + gap - 2}, note, table, formula]
+        pages['promising'] = flow(blocks, first, rest)
 
     if 'LOCAL_ISSUES' in sections:
         pages['articles'] = flow(_article_blocks(ctx['articles']), BODY_MM - _heading('현지 이슈 · 기준') - POLICY_MM, rest)
@@ -789,7 +838,7 @@ def environment():
     env.filters.update(musd=musd, num=num, pct=pct, signed_pct=signed_pct, signed=signed, change=change,
                        emph=emph, ymd=ymd, ymdhm=ymdhm, circled=circled, eok=eok, signed_eok=signed_eok,
                        rank_move=rank_move)
-    env.globals.update(line_chart=line_chart, bar_chart=bar_chart, hbar_chart=hbar_chart,
+    env.globals.update(line_chart=line_chart, bar_chart=bar_chart, hbar_chart=hbar_chart, diverging_chart=diverging_chart,
                        end_labels_fit=end_labels_fit, legend_value=legend_value, has_values=has_values,
                        full_period_label=full_period_label,
                        series_colors=SERIES_COLORS,

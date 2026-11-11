@@ -139,6 +139,8 @@ def build_context(store, uid, record, document):
             from backend.app.services.report_ondemand_context import promising_view
             block=next((x for x in document['sections'] if x['section_code']=='GROWTH_RISK'),None)
             context['promising']=promising_view(block)
+            # 위쪽 실제 수출 증감(성장률·감소율 상위, 증감액 그래프). 예전 문서에는 없어서 비어 있으면 안내만 한다.
+            context['changes']=(block or {}).get('changes') or {'status':'NOT_READY'}
             # 결과 기반 리포트는 결과표 사본만 싣는다(D-90). ML을 따로 돌리지 않으므로 출처표에 '유망시장 예측' 행을 넣지 않는다.
             # 예측 결과표를 승인했다면 그 사본이 '분석 결과표' 출처로 이미 실린다.
             if not content.get('source_tables'):

@@ -293,6 +293,52 @@ class OnDemandTest(unittest.TestCase):
         html = self.render(update=lambda ctx: ctx.pop('promising'))
         self.assertEqual(self.toc(html)[3], ('현지 이슈', '6'))
 
+    def test_promising_section_shows_actual_changes_above_ml_box(self):
+        """#95 유망시장 쪽은 양식(급성장·리스크 시장)대로 실제 수출 증감(성장률·감소율 상위 표, 국가별 증감액 막대)을 먼저 싣고,
+        아래 박스에 ML 예측을 싣는다. 비교 기간이 없거나 통계가 준비되지 않으면 이유만 안내하고 ML 박스는 그대로 둔다."""
+        html = self.render()
+        page = html[html.index('유망시장(증가·감소 예상)</h2>'):html.index('현지 이슈</h2>')]
+        order = [page.index(t) for t in ('성장률 상위 5개국', '감소율 상위 4개국', '국가별 증감액', 'ML 유망시장 분석', '기초화장품', '성장률 = ')]
+        self.assertEqual(order, sorted(order))
+        self.assertIn('<td class="b">에스토니아</td><td class="r">0.15</td><td class="r">0.33</td>', page)
+        self.assertIn('+3.54', page)                                    # 증감액 막대(억 달러)
+        self.assertEqual(page.count('class="mlbox'), 3)                 # 박스: 소제목·문장·예측 표
+        self.assertEqual([t for t in self.toc(html)][3], ('유망시장(증가·감소 예상)', '6'))   # 한 쪽에 들어간다
+        for status, text in (('NO_COMPARE', '비교 기간을 선택하면 국가별 증감을 표시합니다.'),
+                             ('NOT_READY', '비교 기간 통계가 아직 준비되지 않았습니다.')):
+            with self.subTest(status):
+                html = self.render(update=lambda ctx: ctx.update(changes={'status': status}))
+                self.assertIn(text, html)
+                self.assertNotIn('국가별 증감액', html)
+                self.assertIn('ML 유망시장 분석', html)
+        # 예전 문맥(changes 없음)도 오류 없이 안내만 한다
+        self.assertIn('비교 기간 통계가 아직 준비되지 않았습니다.', self.render(update=lambda ctx: ctx.pop('changes')))
+
+    def test_country_changes_ranks_by_rate_with_minimum_size(self):
+        """성장률 상위는 분석 기간, 감소율 상위는 비교 기간 수출액 1천만 달러 이상만. 막대는 증가 6·감소 4, 합계 행은 뺀다."""
+        from types import SimpleNamespace
+        from sqlalchemy import column, table
+        from backend.app.api.reports import country_changes
+        names = {c: c for c in 'ABCDEFGHIJKLM'}
+        store = SimpleNamespace(t=lambda name: table(name, column('country_code'), column('name_ko')),
+                                rows=lambda stmt: [{'country_code': k, 'name_ko': f'국가{v}'} for k, v in names.items()])
+        M = 10_000_000
+        current = {'A': 3 * M, 'B': 2 * M, 'C': 5 * M, 'D': 0.5 * M, 'E': 1 * M, 'F': 4 * M, 'TOTAL': 99 * M, 'G': 2 * M, 'H': 1 * M}
+        previous = {'A': 1 * M, 'B': 1 * M, 'C': 4 * M, 'D': 0.1 * M, 'E': 2 * M, 'F': 8 * M, 'TOTAL': 90 * M, 'G': 0, 'H': 0.5 * M}
+        rows = [{'country_code': k, 'amount_usd': v} for k, v in current.items()]
+        prev_rows = [{'country_code': k, 'amount_usd': v} for k, v in previous.items()]
+        period = {'start': '2025-01-01', 'end': '2025-12-31'}; compare = {'start': '2024-01-01', 'end': '2024-12-31'}
+        result = country_changes(store, rows, prev_rows, period, compare)
+        self.assertEqual(result['status'], 'READY')
+        # D(+400%)는 분석 기간 0.5천만이라 제외, G는 비교 기간 0이라 증감률 없음(순위 제외), H(+100%) 1천만 → 포함
+        self.assertEqual([i['country_code'] for i in result['growth']], ['A', 'B', 'H', 'C'])
+        self.assertEqual([i['country_code'] for i in result['decline']], ['F', 'E'])
+        self.assertNotIn('TOTAL', [i['country_code'] for i in result['bars']])
+        self.assertEqual([i['country_code'] for i in result['bars']], ['A', 'G', 'B', 'C', 'H', 'D', 'E', 'F'])
+        self.assertEqual(result['growth'][0]['country'], '국가A')
+        self.assertEqual(country_changes(store, rows, prev_rows, period, None), {'status': 'NO_COMPARE'})
+        self.assertEqual(country_changes(store, rows, None, period, compare), {'status': 'NOT_READY'})
+
     def test_title_follows_selected_items(self):
         item = rt.sample_context('ondemand')['conditions']['hs_items'][0]
         many = [item, dict(item, hs_code='330410', label='립', display='립 · HS 330410'),
