@@ -114,7 +114,7 @@ function RankResults({ route }) {
 
   return (
     <>
-      <Band tone="lgbg" eyebrow="수출입 순위" title="국가 · 품목 · 시기별 수출입 순위" lead="국가 또는 품목 중 하나 이상 선택 · 시기 선택은 선택 사항" />
+      <Band tone="lgbg"  title="국가 · 품목 · 시기별 수출입 순위" lead="국가 또는 품목 중 하나 이상 선택 · 시기 선택은 선택 사항" />
       <main className="page" style={{ position: 'relative', paddingBottom: 120 }}>
         <div className="wrap col" style={{ gap: 20 }}>
           <div className="card">
