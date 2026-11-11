@@ -9,6 +9,10 @@
 3. **첫 수동 배포** — `SKN33_DEPLOY_MODE`를 `manual`로 설정한다. **Actions → Test and deploy → Run workflow**에서 `main`을 선택해 실행한다. 웹 EC2가 배포 성공을 보고했는지, 서비스가 정상인지, EC2에 적용된 커밋이 Actions에서 검사한 커밋과 일치하는지 확인한다.
 4. **자동 배포** — 첫 배포를 확인한 뒤 값을 `auto`로 바꾼다. 이후 `main`에 푸시한 커밋이 검사를 통과하면 자동으로 배포된다. 새 배포를 일시 중지하려면 `off`로 바꾼다. 테스트와 빌드는 계속 실행된다.
 
+이 저장소의 GitHub Actions는 `main`에서 조직·저장소 ID를 포함한 `sub`(`repo:조직@조직ID/저장소@저장소ID:ref:refs/heads/main`)를 발급한다. [GitHub의 immutable subject 형식](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims)을 사용하며, 조직 ID는 `gh api orgs/20260528-skn-family-ai-33 --jq .id`, 저장소 ID는 `gh api repos/20260528-skn-family-ai-33/SKN33-Final-3Team --jq .id`로 확인한다.
+
+저장소를 이전·개명하거나 GitHub의 OIDC subject 설정을 바꾸면 [aws-delivery.json](aws-delivery.json)의 `ReleaseRole`과 운영 IAM 역할의 `sub`를 새로 발급되는 값에 맞춘다. `StringEquals`로 이 저장소의 `main`과 `aud=sts.amazonaws.com`을 정확히 일치시키는 조건을 유지한다.
+
 ## 기존 테스트 실패를 처리하는 기준
 
 [`known-failures.json`](known-failures.json)에 등록된 테스트도 매번 실행한다. 전체 테스트 ID, 예외 유형, 오류 메시지의 첫 줄, 실패한 검증문이 **모두** 기록과 일치할 때만 실패를 임시로 허용한다. 목록에 있는 테스트가 통과해도 CI는 정상 진행한다. 원인을 수정하면 해당 항목을 삭제한다. 목록이 빈 객체(`{}`)가 되면 테스트 실패가 한 건만 발생해도 배포를 차단한다.
@@ -24,7 +28,31 @@
 - 웹: `TRADE_API_PYTHON=/실제/API/가상환경/bin/python` (운영 API 유닛과 같은 인터프리터)
 - ML: `TRADE_ML_PYTHON=/실제/ML/가상환경/bin/python` (운영 재학습과 같은 인터프리터)
 
-수신기와 유닛을 함께 설치하고 유닛 변경 후 `sudo systemctl daemon-reload`를 실행한다. 런타임을 교체할 때는 이 환경 파일도 갱신하고 `sudo -u trade /실제/경로/bin/python --version`으로 실행 권한을 확인한다. 경로만 바꿀 때는 수신기를 재설치할 필요가 없다. 경로 누락·오류는 서비스 전환 전에 `runtime configuration` 단계에서 보고된다. 수신기 자체와 수집기에는 기존 공용 경로 `/opt/trade/venv/bin/python`을 사용한다.
+웹 수신기와 수집기는 기존 `/opt/trade/venv/bin/python`을 사용한다. ML에서는 두 Python의 역할이 다르다. `20-release.conf`의 `ExecStartPre`는 **수신기 전용 Python**으로 S3의 승인된 코드를 가져온다. `TRADE_ML_PYTHON`은 **학습용 Python**으로, 수신기가 새 코드를 실제 학습 환경에서 검사할 때 사용한다.
+
+웹 수신기(`trade-release.service`)는 root로 실행된다. 웹에 설치하거나 패키지를 갱신할 때는 가상환경과 내부 패키지, Python 실행 파일, 그 상위 경로를 root가 소유하고 일반 사용자가 수정할 수 없는지 확인한다. 운영 웹 EC2의 가상환경은 `root:trade 750`, 실제 Python 실행 파일은 `root:root 755`다. `trade`는 기존 환경에서 수집기를 실행하고, 패키지 설치·갱신은 관리자가 수행한다.
+
+```bash
+cd /
+sudo stat -Lc '%U:%G %a %n' /opt/trade/venv /opt/trade/venv/bin/python
+sudo namei -l /opt/trade/venv/bin/python
+sudo find -L /opt/trade/venv \( ! -user root -o -perm /022 \) -print -quit
+sudo -u trade find -L /opt/trade/venv -writable -print -quit
+```
+
+마지막 두 명령은 모두 오류나 출력 없이 끝나야 한다. 경로가 나오면 수신기를 활성화하기 전에 해당 파일·디렉터리의 소유권과 쓰기 권한을 바로잡는다.
+
+ML EC2를 처음 설치할 때는 Python 3.11과 `venv`를 준비하고, 드롭인을 설치하기 전에 아래 명령을 실행한다. 수신기는 관리자 권한으로 실행되므로 `/opt/trade/delivery`와 전용 가상환경은 root가 소유하고 일반 사용자가 수정할 수 없어야 한다.
+
+```bash
+sudo install -d -o root -g root -m 0755 /opt/trade/delivery
+sudo /usr/bin/python3.11 -m venv /opt/trade/delivery/venv
+sudo /opt/trade/delivery/venv/bin/python -m pip install 'boto3==1.43.125'
+/opt/trade/delivery/venv/bin/python -m pip check
+/opt/trade/delivery/venv/bin/python -I -c "import boto3; print(boto3.__version__)"
+```
+
+수신기와 유닛을 함께 설치하고 유닛 변경 후 `sudo systemctl daemon-reload`를 실행한다. ML에서는 `systemctl cat trade-train.service`로 `ExecStartPre`가 위 전용 Python을 가리키는지 확인한다. 이 확인에는 재학습을 시작할 필요가 없다. API·ML 학습 런타임을 교체할 때는 `release-runtime.env`도 갱신하고 `sudo -u trade /실제/경로/bin/python --version`으로 실행 권한을 확인한다. 경로만 바꿀 때는 수신기를 재설치할 필요가 없다. 경로 누락·오류는 서비스 전환 전에 `runtime configuration` 단계에서 보고된다.
 
 ## 웹 EC2에 적용되는 순서
 
@@ -44,5 +72,12 @@
 
 - **배포 실패 또는 시간 초과** — Actions에서 해당 커밋과 실패 단계를 확인한다. 시간 초과는 정해진 시간 안에 EC2의 결과를 받지 못했다는 뜻이다. 웹 EC2에서 `journalctl -u trade-release.service`로 수신기 로그를 보고, 배포 기록(`/opt/trade/deployed-main.json`)과 EC2가 보낸 결과를 대조한다.
 - **수신기 업데이트** — 관리자 권한으로 실행되는 수신기와 systemd 유닛은 애플리케이션과 별도로 설치한다. `deploy/ci` 변경 사항을 검토한 뒤 해당 서버에 검토한 버전을 설치한다.
-- **롤백까지 실패하거나 롤백 도중 수신기가 중단된 경우** — `transaction.json`이 남고 자동 복구는 멈춘다. 웹 Actions의 `rollback` 결과에는 원래 실패 단계와 오류 유형도 표시된다. ML은 복구 전 학습을 시작하지 않는다. 웹에서는 `sudo systemctl stop trade-release.timer`로 타이머를 일시 중지한다. 수신기 로그·트랜잭션의 백업 경로·서비스 상태를 확인하고 원인을 해결한 뒤 해당 서버에서 `sudo /opt/trade/venv/bin/python -I /opt/trade/delivery/receive.py retry-rollback`으로 복원을 한 번 실행한다. 실패하면 계속 보류되며, 성공하면 트랜잭션 파일이 자동으로 사라진다. 파일을 직접 삭제하지 않는다. 복원한 커밋과 웹 서비스 상태를 확인한 뒤 웹 타이머를 다시 시작하고 실패했던 웹 배포는 Actions에서 새 실행으로 요청한다.
+- **롤백까지 실패하거나 롤백 도중 수신기가 중단된 경우** — `transaction.json`이 남고 자동 복구는 멈춘다. 웹 Actions의 `rollback` 결과에는 원래 실패 단계와 오류 유형도 표시된다. ML은 복구 전 학습을 시작하지 않는다. 웹에서는 `sudo systemctl stop trade-release.timer`로 타이머를 일시 중지한다. 수신기 로그·트랜잭션의 백업 경로·서비스 상태를 확인하고 원인을 해결한 뒤 **해당 서버에서만** 아래 복원 명령을 한 번 실행한다.
+
+  | 서버 | 복원 명령 |
+  | --- | --- |
+  | 웹 | `sudo /opt/trade/venv/bin/python -I /opt/trade/delivery/receive.py retry-rollback` |
+  | ML | `sudo /opt/trade/delivery/venv/bin/python -I /opt/trade/delivery/receive.py retry-rollback` |
+
+  실패하면 계속 보류되며, 성공하면 트랜잭션 파일이 자동으로 사라진다. 파일을 직접 삭제하지 않는다. 웹 복원 시에는 복원한 커밋과 서비스 상태를 확인한 뒤 타이머를 다시 시작하고 실패했던 웹 배포는 Actions에서 새 실행으로 요청한다.
 - **백업과 코드 복구** — 현재 소스 목록(`/opt/trade/delivery/baseline.json`), 같은 커밋의 배포 기록(`/opt/trade/deployed-main.json`), 복원용 파일을 함께 백업한다. Git에서 이전 코드로 되돌릴 때는 `git revert`로 되돌림 커밋을 만들고 `main`에 반영해 같은 검증과 배포 절차를 거친다.
