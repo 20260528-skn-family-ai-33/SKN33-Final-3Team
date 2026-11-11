@@ -359,7 +359,7 @@ class WriterEvidenceTest(unittest.TestCase):
                 step.status = 'SKIPPED'
         task.answer_status = state.task_outcome(task.task_id)
         for invalid_sentence in ('기사 목록을 확인하세요.', '기사 목록을 확인하세요.[1]',
-                                 '창고가 운영을 재개했습니다.[2]'):
+                                 '창고가 운영을 재개했습니다.[2]', '선박이 출항했습니다.[2]'):
             with self.subTest(invalid_sentence=invalid_sentence):
                 current = state.model_copy(deep=True)
                 invalid = Draft(conclusion=[{'task_id':'t1','sentences':[invalid_sentence]}], turn_summary='')
@@ -372,10 +372,13 @@ class WriterEvidenceTest(unittest.TestCase):
 
         for text in (False, True):
             current = state.model_copy(deep=True)
-            valid = Draft(conclusion=[{'task_id':'t1','sentences':['선박이 출항했습니다.[2]']}], turn_summary='')
-            client = compose(current, valid, text=text)
-            self.assertEqual(client.parse.call_count, 1)
-            self.assertEqual(current.draft.sentences()[0], '선박이 출항했습니다.[2]')
+            valid = Draft(conclusion=[{'task_id':'t1','sentences':['창고가 운영을 재개했습니다.[1]']}], turn_summary='')
+            false_cause = valid.model_copy(update={'explanation':['세관은 창고 재개가 수출 증가의 원인이라고 발표했습니다.[1]']})
+            with self.assertLogs('backend.app.agents.runtime', 'WARNING'):
+                client = compose(current, false_cause, valid, text=text)
+            self.assertEqual(client.parse.call_count, 2)
+            self.assertFalse(current.draft.explanation)
+            self.assertEqual(current.draft.sentences()[0], '창고가 운영을 재개했습니다.[1]')
             self.assertIn('통계 조회 실패', current.draft.sentences()[1])
             self.assertIn('인과관계는 판단할 수 없습니다', current.draft.sentences()[1])
 
@@ -384,7 +387,8 @@ class WriterEvidenceTest(unittest.TestCase):
         from backend.app.agents.verify import verify
 
         for text, question in [(False, '미국 수출은 작년 같은 달보다 얼마나 늘었나요?'),
-                               (True, '미국 수출은 전년 동월 대비 얼마나 늘었나요?')]:
+                               (True, '미국 수출은 전년 동월 대비 얼마나 늘었나요?'),
+                               (False, '지난달 미국 수출은 1년 전 같은 달보다 얼마나 늘었나요?')]:
             for replacement, accepted in [('전월 대비 1.5% 감소했습니다', False),
                                           ('지난해 같은 달보다 3% 증가했습니다', True)]:
                 with self.subTest(text=text, replacement=replacement):
@@ -401,3 +405,22 @@ class WriterEvidenceTest(unittest.TestCase):
                     verify(state)
                     self.assertEqual(state.verification.status, 'PASS' if accepted else 'NEEDS_REVIEW')
                     self.assertEqual(state.draft.sentences(), ['미국 수출은 '+replacement+'.' if accepted else original])
+
+    def test_irrelevant_body_cannot_be_rescued_by_matching_title_or_fallback(self):
+        row = article(12, '창고 재개', '철도 상담회 일정을 공지했습니다.', 'direct_evidence')
+        state = dev_state([('CAUSE','창고 재개로 수출이 늘었나요?',statistic([500]),[row])])
+        task = state.plan.tasks[0]
+        for step in task.steps:
+            if step.tool == 'query_trade_data':
+                step.status = 'FAILED'
+                state.results[step.step_id] = ToolResult(status='NO_DATA', error='통계 조회 실패')
+            elif step.tool == 'build_chart':
+                step.status = 'SKIPPED'
+        task.answer_status = state.task_outcome(task.task_id)
+        invalid = Draft(conclusion=[{'task_id':'t1','sentences':['철도 상담회 일정을 공지했습니다.[1]']}],turn_summary='')
+        compose(state, invalid, invalid)
+        answer = ' '.join(state.draft.sentences())
+        self.assertNotIn('철도 상담회', answer)
+        self.assertNotIn('[1]', answer)
+        self.assertIn('질문에 해당하는 사실을 확인하지 못했습니다', answer)
+        self.assertIn('통계 조회 실패', answer)

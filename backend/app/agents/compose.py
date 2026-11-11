@@ -109,6 +109,34 @@ def _trade_fact(digest):
     return f'{subject}은 전체 기간 미집계입니다.'
 
 
+# Compare body-backed summary words, never the title or citation marker. Exclude
+# words shared by nearly every trade/cause question from the similarity score.
+_GENERIC_TOPIC = set("수출 수입 무역 증가 감소 변화 원인 때문 영향 통계 확인 기사 공지 안내 질문 운영 재개 계획 실제 관련 발표 시행 효과 이번 지난 직접 답변 참고 자료 여부 배경 설명 알려".split())
+_ENDING = re.compile(r'(?:했습니다|됐습니다|합니다|습니다|했나요|됐나요|인가요|했는지|됐는지|하고|으로|에서|에게|보다|처럼|까지|만큼|때문|에는|에도|은|는|이|가|을|를|와|과|로|의|도)$')
+
+
+def body_terms(text):
+    words = re.findall(r'[가-힣]+|[a-z]+', text.lower())
+    terms = {_ENDING.sub('', word) for word in words}
+    return {word for word in terms if len(word) >= 2 and word not in _GENERIC_TOPIC}
+
+
+def relevant_article_facts(question, cards):
+    """Rank citable body sentences by lexical cosine similarity to the question."""
+    query = body_terms(question)
+    ranked = []
+    for card in cards:
+        for item in card['summary']:
+            fact = item['text'].strip()
+            terms = body_terms(fact)
+            common = query & terms
+            if common and not cited_article_numbers(fact):
+                score = len(common) / (len(query) * len(terms)) ** 0.5
+                ranked.append((score, str(card['n']), fact))
+    ranked.sort(key=lambda row: -row[0])
+    return [(number, fact) for _, number, fact in ranked]
+
+
 def missing_trade_notice(state, task):
     reason = next((state.results[s.step_id].error for s in task.steps if s.tool == 'query_trade_data'
                    and s.step_id in state.results and state.results[s.step_id].error), '')
@@ -141,16 +169,16 @@ def fallback_conclusion(state, task):
     resources = [name for name, present in [('결과표', tables), ('차트', chart), ('기사 목록', articles)] if present]
     reasons = [r.error for tool, r in results if r.status != 'OK' and r.error and tool != 'build_chart']
     if task.intent == 'CAUSE' and not tables:
-        for card in cards:
-            if not card.get('evidence_sufficient'):
-                continue
-            for item in _citable_article(card)['summary']:
-                fact_text = item['text'].strip()
-                citation = f"[{card['n']}]"
-                if fact_text and not cited_article_numbers(fact_text) and len(fact_text + citation) <= 200:
-                    task.answer_status = 'PARTIAL'
-                    return TaskConclusion(task_id=task.task_id, sentences=[
-                        fact_text + citation, missing_trade_notice(state, task)])
+        citable = [_citable_article(card) for card in cards if card.get('evidence_sufficient')]
+        for number, fact_text in relevant_article_facts(task.question, citable):
+            cited = f'{fact_text}[{number}]'
+            if len(cited) <= 200:
+                task.answer_status = 'PARTIAL'
+                return TaskConclusion(task_id=task.task_id, sentences=[cited, missing_trade_notice(state, task)])
+        if citable:
+            task.answer_status = 'PARTIAL'
+            return TaskConclusion(task_id=task.task_id, sentences=[
+                '기사 본문 근거에서 질문에 해당하는 사실을 확인하지 못했습니다.', missing_trade_notice(state, task)])
     if task.intent == 'CAUSE' and not reasons:
         if not tables:
             reasons.append('요청한 통계 수치를 확인할 수 없습니다.')
@@ -241,6 +269,9 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
             if not cards:
                 fixed[task.task_id] = fallback_conclusion(state, task)
                 continue
+            if task.intent == 'CAUSE' and not relevant_article_facts(task.question, cards):
+                fixed[task.task_id] = fallback_conclusion(state, task)
+                continue
             if task.intent == 'CAUSE' and len(cards) == 1 and len(cards[0]['summary']) == 1:
                 partial = fallback_conclusion(state, task)
                 if cited_article_numbers(partial.sentences[0]):
@@ -280,12 +311,21 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
 
 def complete_article_only_conclusions(state, draft, payload):
     """Bind each selected fact to its own article and attach the tool's limitation once."""
+    limited = set()
     for task, conclusion in zip(state.plan.tasks, draft.conclusion, strict=True):
         inputs = next((t for t in payload['tasks'] if t['task_id'] == task.task_id), None)
-        if task.intent != 'CAUSE' or not inputs or inputs['digests'].keys() != {'news'}:
+        if task.intent != 'CAUSE':
             continue
-        supported = {(str(card['n']), item['text'].strip()) for card in payload['articles']
-                     if card['task_id'] == task.task_id for item in card['summary']}
+        cards = [card for card in payload['articles'] if card['task_id'] == task.task_id]
+        if not inputs:
+            if cards and not any(s.tool == 'query_trade_data' and s.step_id in state.results
+                                 and state.results[s.step_id].status == 'OK' for s in task.steps):
+                limited.add(task.task_id)
+            continue
+        if inputs['digests'].keys() != {'news'}:
+            continue
+        limited.add(task.task_id)
+        supported = set(relevant_article_facts(task.question, cards))
         notice = missing_trade_notice(state, task)
         facts = []
         for line in conclusion.sentences:
@@ -307,6 +347,18 @@ def complete_article_only_conclusions(state, draft, payload):
         else:
             raise ValueError('기사 사실과 통계 한계를 함께 표시할 공간이 부족합니다.')
         conclusion.sentences = facts
+
+    if limited and draft.explanation:
+        # Shared explanations have no task_id. Accept a repeated verified conclusion
+        # or an exact, relevant body sentence with all of its sources identified.
+        accepted = {line for conclusion in draft.conclusion for line in conclusion.sentences}
+        evidence = {pair for task in state.plan.tasks for pair in relevant_article_facts(
+            task.question, [card for card in payload['articles'] if card['task_id'] == task.task_id])}
+        for line in draft.explanation:
+            numbers = cited_article_numbers(line)
+            fact = ARTICLE_CITATION.sub('', line).strip()
+            if line not in accepted and (not numbers or any((n, fact) not in evidence for n in numbers)):
+                raise ValueError('부분 응답 설명의 주장을 확인된 결론이나 기사 근거에서 확인할 수 없습니다.')
 
 
 def validate_citations(generated, articles):
@@ -405,9 +457,11 @@ def validate_rewrite(state, revised, payload):
 
 
 def comparison_axes(text):
-    from backend.app.agents.verify_claims import MONTH_AGO, YEAR_AGO
-    patterns = {'YOY': YEAR_AGO, 'MOM': MONTH_AGO, 'QOQ': r'전분기|직전\s*분기|지난\s*분기'}
-    return {axis for axis, pattern in patterns.items() if re.search(pattern, text)}
+    from backend.app.agents.verify_claims import COMPARISON, COMPARE_LINK
+    axes = {match.lastgroup.upper() for match in COMPARISON.finditer(text)}
+    if re.search(r'(?:전분기|직전\s*분기|지난\s*분기)\s*' + COMPARE_LINK, text):
+        axes.add('QOQ')
+    return axes
 
 
 def requested_axis(task):
