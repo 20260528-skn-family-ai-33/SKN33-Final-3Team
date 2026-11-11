@@ -482,12 +482,26 @@ class WriterEvidenceTest(unittest.TestCase):
             {'task_id':'t2','sentences':['9월 수출액은 200달러입니다.']},
             {'task_id':'t3','sentences':['9월 수입액은 400달러입니다.']}],
             explanation=['8월 수출액은 100달러입니다.', '8월 수입액은 300달러입니다.'],turn_summary='')
-        for text in (False,True):
-            for wrong in (None,'8월 수출액은 300달러입니다.','8월 수출액은 100달러이며 창고 재개 때문입니다.'):
+        for text in (False, True):
+            for report in ('8월 수출액은 100달러입니다.', '8월 수출액은 100달러로 집계됐습니다.',
+                           '8월 수출액은 100달러로 집계되었습니다.'):
+                with self.subTest(text=text, report=report):
+                    current = state.model_copy(deep=True)
+                    candidate = valid.model_copy(update={'explanation':[report, valid.explanation[1]]})
+                    client = compose(current, candidate, text=text)
+                    self.assertEqual(client.parse.call_count, 1)
+                    self.assertEqual(current.draft.explanation, candidate.explanation)
+                    self.assertEqual(current.draft.conclusion[1:], candidate.conclusion[1:])
+
+            for wrong in ('8월 수출액은 300달러로 집계됐습니다.',
+                          '8월 수출액은 100달러이며 창고 재개 때문입니다.',
+                          '창고 재개 덕분에 8월 수출액은 100달러로 집계됐습니다.',
+                          '8월 수출액은 100달러로 집계됐으며 창고 재개가 원인입니다.'):
                 with self.subTest(text=text, wrong=wrong):
                     current = state.model_copy(deep=True)
-                    outputs = [valid] if wrong is None else [valid.model_copy(update={'explanation':[wrong]}), valid]
-                    client = compose(current, *outputs, text=text)
-                    self.assertEqual(client.parse.call_count, len(outputs))
+                    invalid = valid.model_copy(update={'explanation':[wrong]})
+                    with self.assertLogs('backend.app.agents.runtime', 'WARNING'):
+                        client = compose(current, invalid, valid, text=text)
+                    self.assertEqual(client.parse.call_count, 2)
                     self.assertEqual(current.draft.explanation, valid.explanation)
-                    self.assertIn('부산 수출 통계 조회 실패',current.draft.conclusion[0].sentences[1])
+                    self.assertIn('부산 수출 통계 조회 실패', current.draft.conclusion[0].sentences[1])

@@ -333,6 +333,10 @@ _STAT_WORDS = re.compile(
     r'했으며|했고|했습니다|이며|이고|입니다|였습니다|이었습니다|에서|으로|은|는|이|가|의|와|과|로)',
     re.IGNORECASE)
 
+# A reporting predicate describes the verified quantity. Match the whole tail so
+# an appended reason, negation or forecast cannot be discarded with the ending.
+_STAT_REPORT_END = re.compile(r'\s*(?:으로|로)\s*(?:집계|기록|확인)(?:됐습니다|되었습니다|됩니다)\s*[.]?\s*')
+
 
 def supported_stat_explanation(line, state, payload, country_names):
     from backend.app.agents.verify import inspect_sentence
@@ -362,6 +366,9 @@ def supported_stat_explanation(line, state, payload, country_names):
             continue
         # Strip only entities the parser bound to supported claims in this task.
         remainder = line
+        end = max((c.claim.quantity_span[1] for c in claims if c.claim.quantity_span), default=0)
+        if end and _STAT_REPORT_END.fullmatch(line[end:]):
+            remainder = line[:end]
         for name in sorted({n for c in claims for n in c.claim.targets}, key=len, reverse=True):
             remainder = remainder.replace(name, ' ')
         if not _STAT_WORDS.sub('', remainder):
