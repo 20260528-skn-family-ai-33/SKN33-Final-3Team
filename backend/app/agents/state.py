@@ -686,6 +686,15 @@ class SentenceCheck(Model):
     reason: Literal['MATCH', 'NOT_CONFIRMED', 'SOURCE_UNAVAILABLE'] = 'NOT_CONFIRMED'
 
 
+class PassageEdit(Model):
+    feedback_index: int
+    replacement: Sentence
+
+
+class WriterEdits(Model):
+    edits: list[PassageEdit]
+
+
 class ClaimFeedback(Model):
     # Half-open Python character offsets within the original sentence or summary.
     span: tuple[int, int] | None = None
@@ -739,6 +748,8 @@ class AgentState(Model):
     round_started_at: datetime | None = None   # 라운드 시작 표시용. 대기·복구 때 이동/초기화하지 않는다(D-85)
     run_budget: RunBudget = Field(default_factory=RunBudget)
     results: dict[str, ToolResult] = Field(default_factory=dict)  # step_id → 결과
+    fixed_conclusion_ids: list[str] | None = Field(default=None, max_length=MAX_TASKS)
+    writer_rewrite_result: str | None = None
     draft: Draft | None = None
     verification: Verification = Field(default_factory=Verification)
     warnings: Annotated[list[ShortText], _truncate(MAX_LIST_ITEMS)] = Field(default_factory=list)
@@ -810,15 +821,19 @@ class AgentState(Model):
         if task.intent == 'LOCAL_ISSUES':
             core_tools.add('search_articles')
         core = [s for s in task.steps if s.tool in core_tools]
-        if not core or any(s.status != 'DONE' or s.step_id not in self.results
-                           or self.results[s.step_id].status != 'OK' for s in core):
-            return 'NO_DATA'
         relevant = [self.results[s.step_id] for s in task.steps if s.step_id in self.results]
         for binding in task.input_bindings:
             result = self.results.get(binding.source_step_id)
             if result is None or result.status != 'OK':
                 return 'NO_DATA'
             relevant.append(result)
+        if not core or any(s.status != 'DONE' or s.step_id not in self.results
+                           or self.results[s.step_id].status != 'OK' for s in core):
+            if task.intent == 'CAUSE' and any(
+                    s.tool == 'search_articles' and s.status == 'DONE' and (r := self.results.get(s.step_id))
+                    and r.status == 'OK' and r.article_ids and (r.digest or {}).get('items') for s in task.steps):
+                return 'PARTIAL'
+            return 'NO_DATA'
         # 저장 경계에서 전파하지 않은 이전 체크포인트도 간접 선행 결과를 확인한다.
         for step in core:
             relevant.append(self.result_for_storage(step.step_id, self.results[step.step_id]))

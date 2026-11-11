@@ -2,7 +2,6 @@
 from contextlib import contextmanager
 import logging
 import json
-import re
 import threading
 from pydantic import ValidationError
 from sqlalchemy import select, update
@@ -13,13 +12,14 @@ from backend.app.agents.progress import progress_for
 from backend.app.agents.charts import build_chart
 from backend.app.agents.bindings import resolve as resolve_bindings, source_versions
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
-from backend.app.agents.compose import COMPOSE_PROMPT, COMPOSE_TEXT_PROMPT, assemble, compose_input
+from backend.app.agents.compose import (ARTICLE_PROMPT, COMPOSE_PROMPT, COMPOSE_TEXT_PROMPT, assemble, compose_input,
+                                        apply_claim_edits, complete_article_only_conclusions, cited_article_numbers, fallback_conclusion, numbered_articles, validate_citations, validate_rewrite)
 from backend.app.agents.conditions import check_conditions
 from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT
 from backend.app.agents.result_store import ResultStore, fingerprint, shared_result
 from backend.app.agents.sql import generated_analysis
-from backend.app.agents.state import AgentState, Draft, Plan, PlannerOutput, Task, TaskConclusion, ToolResult, is_text_task
+from backend.app.agents.state import AgentState, Draft, Plan, PlannerOutput, Task, ToolResult, WriterEdits, is_text_task
 from backend.app.agents.templates import api_conditions, run_template
 from backend.app.agents.verify import verify, snapshot_evidence
 from backend.app.api import trade, results
@@ -27,6 +27,9 @@ from backend.app.api.common import ApiError, clean, now
 from backend.app.api.database import Store
 
 
+DEFAULT_MODELS = {'intent': 'gpt-4.1-mini', 'compose': 'gpt-6-luna', 'sql': 'gpt-4.1'}
+COMPOSE_OUTPUT_TOKENS = 3000
+COMPOSE_TEXT_OUTPUT_TOKENS = 6000
 PRODUCT_NAMES_TTL_SECONDS = 3600   # HS 사전은 판본 갱신 때만 바뀐다. 갱신 뒤 최대 1시간은 이전 이름으로 대조한다
 
 
@@ -66,7 +69,6 @@ def ml_queue_seconds(settings):
     return max(0.0, float(settings.get('API_ML_QUEUE_SECONDS', ML_QUEUE_SECONDS)))
 
 
-CITATION = re.compile(r'\[(\d+)\]')
 HIDDEN_ARTICLE_SENTENCE = '이 문장이 인용한 기사는 답변 뒤 공개 여부나 본문이 바뀌어 내용을 표시하지 않습니다.'
 
 
@@ -74,7 +76,7 @@ def redact_hidden_citations(sentences, articles):
     """숨겨진 기사(카드 unavailable)나 검색 뒤 본문이 정정된 기사(evidence_changed)를 [n]으로 인용한 문장을
     안내 문구로 바꾼다. 번호는 카드 순서다. 문장 수는 그대로다. 정정 전 원문으로 쓴 문장을 그대로 보이지 않게 한다."""
     hidden={str(n) for n,card in enumerate(articles,1) if card.get('unavailable') or card.get('evidence_changed')}
-    return [HIDDEN_ARTICLE_SENTENCE if hidden & set(CITATION.findall(s)) else s for s in sentences]
+    return [HIDDEN_ARTICLE_SENTENCE if hidden & cited_article_numbers(s) else s for s in sentences]
 
 
 def article_cards(store, state, result):
@@ -166,10 +168,14 @@ class Services:
             progress=progress_for(state,node)
             self.execution.transition(lambda ledger:{**ledger,'progress':progress})
 
+    def model_for(self, role):
+        return self.settings.get('API_'+role.upper()+'_MODEL', DEFAULT_MODELS[role])
+
     def structured(self, state, node, prompt, payload, schema, tokens, validate=lambda x:x, *, max_attempts=2):
-        prefix = 'COMPOSE' if node=='compose' else 'INTENT'
+        role = 'compose' if node == 'compose' else 'intent'
+        prefix = role.upper()
         timeout = float(self.settings.get('API_'+prefix+'_TIMEOUT_SECONDS',budget.DEFAULT_SECONDS[node]))
-        model = self.settings.get('API_'+prefix+'_MODEL','gpt-4.1-mini')
+        model = self.model_for(role)
         reserve = budget.finishing_seconds(state,self.settings)
         if node=='compose': reserve -= budget.seconds(self.settings,'compose')
         def call(_):
@@ -420,31 +426,88 @@ class Services:
             if not c:return {}
             return {**c.model_dump(mode='json'),'countries':[{'code':k,'name':countries.get(k,k)} for k in c.country_codes],
                     'products':[{'code':p.hs_code,'name':products.get((p.hs_code,p.hs_ver),p.hs_code)} for p in c.hs_items]}
-        articles=[]
-        for t in state.plan.tasks:
-            for s in t.steps:
-                res=state.results.get(s.step_id)
-                if res and res.digest and res.digest.get('kind')=='ARTICLES':
-                    articles.extend({**a,'task_id':t.task_id,'n':len(articles)+1} for a in res.digest['items'])
-        payload,fixed=compose_input(state,describe,articles)
+        articles = numbered_articles(state)
+        news_warnings = {}
+        for task in state.plan.tasks:
+            if task.intent != 'CAUSE' or task.answer_status == 'NO_DATA':
+                continue
+            news = next((state.results.get(s.step_id) for s in task.steps if s.tool == 'search_articles'), None)
+            cited = [a for a in articles if a['task_id'] == task.task_id and a.get('evidence_sufficient')]
+            reason = news.error if news and news.status != 'OK' else None
+            if cited and all(a.get('evidence_role') == 'context_reference' for a in cited):
+                reason = '기사에서는 배경 정보만 확인되며 수출입 증감의 원인은 확인되지 않았습니다.'
+            if reason:
+                label = f'{task.question[:60]} — ' if len(state.plan.tasks) > 1 else ''
+                warning = (label + reason)[:200]
+                news_warnings[task.task_id] = warning
+                if warning not in state.warnings:
+                    state.warnings.append(warning)
+        payload,fixed=compose_input(state,describe,articles,news_warnings=news_warnings,country_names=countries.values())
+        correcting = state.draft is not None and state.verification.regeneration_count == 1
         if not payload['tasks']:
+            if correcting and (state.verification.feedback or state.verification.confirmed_claims):
+                state.writer_rewrite_result = 'PRESERVED_NO_WRITER_INPUT'
+                return
             state.draft=assemble(state,None,fixed,describe)
+            state.fixed_conclusion_ids=list(fixed)
             return
-        correcting=state.draft is not None and state.verification.regeneration_count==1
-        revised=self.structured(state,'compose',prompt,payload,Draft,3000 if prompt is COMPOSE_TEXT_PROMPT else 1500,
-                                lambda value:assemble(state,value,fixed,describe),
+        tokens = COMPOSE_TEXT_OUTPUT_TOKENS if prompt is COMPOSE_TEXT_PROMPT else COMPOSE_OUTPUT_TOKENS
+        if any(task['article_search_planned'] for task in payload['tasks']):
+            prompt += ARTICLE_PROMPT
+        if correcting and (state.verification.feedback or state.verification.confirmed_claims or state.verification.summary_status):
+            if state.verification.failed_summary and not state.draft.turn_summary:
+                state.draft.turn_summary = state.verification.failed_summary
+            if not any(item.action == 'CORRECT' for item in state.verification.feedback):
+                state.writer_rewrite_result = 'PRESERVED_NO_CORRECTION'
+                return
+            reason = 'MODEL_OR_SCHEMA_FAILURE'
+            def apply_edits(value):
+                nonlocal reason
+                try:
+                    return apply_claim_edits(state, payload, value)
+                except ValueError as exc:
+                    reason = str(exc) if str(exc).isupper() else 'INVALID_DRAFT'
+                    raise
+            instruction = ('재작성 전용입니다. Draft 대신 edits만 반환하세요. regeneration.feedback의 CORRECT마다 '
+                           '0부터 시작하는 feedback_index와 passage를 대체할 정확한 문자열 replacement를 반환하세요. '
+                           '원문의 조사·어미와 문장부호는 span 경계에 맞추세요. 질문의 비교 기준을 유지하고 '
+                           '해당 task의 digests에서 수치와 방향을 확인하세요. REVIEW와 PRESERVE는 수정하지 마세요.')
+            revised = self.structured(state, 'compose', instruction, payload, WriterEdits, tokens, apply_edits, max_attempts=1)
+            if revised is not None:
+                state.draft = revised
+            state.writer_rewrite_result = 'ACCEPTED_CORRECTION' if revised is not None else reason
+            return
+        if correcting:
+            prompt += ('\nregeneration.draft에서 지적된 주장만 수정하세요. 다른 문장과 기사 인용은 그대로 옮기세요. '
+                       '요약만 실패하면 검증된 본문으로 요약을 고치세요. '
+                       '새 통계 수치는 해당 tasks의 digests에 있는 근거만 사용하세요.')
+        def assemble_response(value):
+            draft = assemble(state,value,fixed,describe,articles=payload['articles'])
+            complete_article_only_conclusions(state, draft, payload, countries.values())
+            return validate_rewrite(state,draft,payload) if correcting else draft
+        revised=self.structured(state,'compose',prompt,payload,Draft,tokens,
+                                assemble_response,
                                 max_attempts=1 if correcting else 2)
         if revised is None and state.draft is not None and state.verification.regeneration_count:
-            # The correction call failed. Recheck the original sentences so the
-            # UI can still flag their numbers instead of losing them to a fallback.
-            return
+            # Pre-migration checkpoints can hold a draft that never passed citation validation.
+            try:
+                prior = state.draft.model_copy(deep=True)
+                validate_citations(prior, payload['articles'])
+                complete_article_only_conclusions(state, prior, payload, countries.values())
+            except ValueError:
+                pass
+            else:
+                state.draft = prior
+                return
         state.draft=revised
         if state.draft is None:
+            if '요약 문장을 만들지 못했습니다.' not in state.warnings:
+                state.warnings.append('요약 문장을 만들지 못했습니다.')
             for task in state.plan.tasks:
                 if task.task_id not in fixed:
-                    task.answer_status='PARTIAL'
-                    fixed[task.task_id]=TaskConclusion(task_id=task.task_id,sentences=['결과는 아래 표와 차트에서 확인하세요.'])
+                    fixed[task.task_id]=fallback_conclusion(state, task, countries.values())
             state.draft=assemble(state,None,fixed,describe)
+        state.fixed_conclusion_ids=list(fixed)
 
     def verify(self,state):
         def check(_):
@@ -514,7 +577,7 @@ class Services:
                     'answer_format':'TEXT' if is_text_task(task) else None})
                 for step in task.steps:
                     result=state.results.get(step.step_id)
-                    if result and result.article_ids and result.digest:
+                    if step.tool == 'search_articles' and result and result.status == 'OK' and result.article_ids and result.digest:
                         articles.extend({**card,'task_id':task.task_id} for card in article_cards(store,state,result))
                     if not result or not result.result_id: continue
                     if step.tool in ('query_trade_data','query_market_model'):
@@ -556,9 +619,8 @@ class Services:
                 s.step_id:max(0,s.attempts-1) for t in state.plan.tasks for s in t.steps
                 if s.tool=='query_trade_data' and s.args.get('template')=='LLM_SQL'},
                 'plan':[{'task_id':t.task_id,'intent':t.intent,'steps':[s.tool for s in t.steps]}
-                   for t in state.plan.tasks],'seconds':job['agent'].get('timings',{}),'prompt_version':1,
-                   'models':{name:self.settings.get('API_'+name.upper()+'_MODEL',default) for name,default in
-                             [('intent','gpt-4.1-mini'),('compose','gpt-4.1-mini'),('sql','gpt-4.1')]}}
+                   for t in state.plan.tasks],'seconds':job['agent'].get('timings',{}),'prompt_version':5,
+                   'models':{name:self.model_for(name) for name in DEFAULT_MODELS}}
             store.insert('chat_message',session_id=int(state.input.session_id),role='ASSISTANT',content_masked=answer['text'],
                 intent_json=clean({'intent':primary.intent,'conditions':answer['conditions']}),
                 result_json=clean({'schema_version':2,'answer':answer,'job_id':state.input.job_id,'trace':trace}),created_at=now())
