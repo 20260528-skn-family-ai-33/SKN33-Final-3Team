@@ -62,7 +62,6 @@
   {'label': '품목', 'value': (items | map(attribute='display') | join(' · ')) if items else '전체 품목'},
   {'label': '국가', 'value': ((c.countries | map(attribute='name') | join(' · ')) if c.countries else '전체 국가') ~ (' (수출 대상 ' ~ (k.country_count | num) ~ '개국)' if k.country_count is not none else '')},
   {'label': '분석 기간', 'value': c.period.label ~ ' (' ~ c.period.months ~ '개월)'},
-  {'label': '비교 기간', 'value': compare_text ~ ('' if not has_compare or compare_ready else ' · 비교 데이터 준비 중')},
   {'label': '포함 항목', 'value': included_names | join(' · ')},
   {'label': '요청 경로', 'value': 'AI 분석 대화에서 요청' if c.request_channel == 'CHAT' else '리포트 요청 화면'},
   {'label': '요청 지표', 'value': c.metric.label ~ ' · 현재 계산·정렬 기준: 수출액'},

@@ -60,10 +60,15 @@ class ResultPresentationTest(unittest.TestCase):
             self.assertEqual('비교 증감률 (%)' in headers,comparison!='NONE')
             self.assertEqual(workbook['결과표1']['A2'].value,0)
             info=dict(list(workbook['정보'].values)[1:])
-            self.assertEqual('비교 기간' in info,comparison!='NONE')
+            self.assertNotIn('비교 기간',info)   # 리포트 파일 정보에는 비교 기간 날짜를 싣지 않는다(#95). 비교 열·비교 방식은 유지
+            self.assertEqual('비교 방식' in info,True)
             self.assertEqual(info['주의사항'],'비교 기간 자료 미집계')
             self.assertNotIn('실행 SQL',info)
         self.assertEqual(doc,original)
+        # 일반 화면 엑셀(리포트가 아님)은 비교 기간 행을 그대로 싣는다
+        from backend.app.api.files import user_xlsx_info
+        screen=dict(user_xlsx_info({},{'compare':'YOY_PERIOD','compare_period':{'start':'2024-01-01','end':'2024-12-31'}}))
+        self.assertEqual(screen['비교 기간'],'2024-01-01 ~ 2024-12-31')
         row.update(monthly_avg_change_pct=12.5,compare_verified_months=3,compare_requested_months=12)
         table['columns'].extend([{'key':key,'label':key,'unit':'%' if key.endswith('_pct') else None}
                                 for key in ('monthly_avg_change_pct','compare_verified_months','compare_requested_months')])

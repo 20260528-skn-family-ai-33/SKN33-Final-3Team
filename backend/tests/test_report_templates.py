@@ -316,13 +316,14 @@ class OnDemandTest(unittest.TestCase):
         none = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='NONE'))
         self.assertNotIn('2024 수출액', none)
         self.assertNotIn('변동</th>', none)
-        self.assertIn('비교 기간</th><td>없음', none)
+        self.assertNotIn('비교 기간</th>', none)   # 보고서 정보 표에 비교 기간 행을 싣지 않는다(#95)
         custom = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='CUSTOM',
                                           monthly_paired=False))
         self.assertIn('비교는 기간 합계만', custom)
         self.assertIn('월별로 짝짓지 않고', custom)
         self.assertNotIn('<th class="r">증감액</th>', custom)   # 월별 비교 열 없음
         self.assertIn('2024 수출액', custom)                      # 기간 합계 비교는 표시
+        self.assertNotIn('비교 기간</th>', custom)                # 비교가 있어도 보고서 정보 표에 비교 기간 날짜 행은 없음(#95)
 
     def test_missing_compare_data_differs_from_none(self):
         def clear(context):

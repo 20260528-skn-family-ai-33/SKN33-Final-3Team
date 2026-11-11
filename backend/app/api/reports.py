@@ -433,7 +433,7 @@ def report_xlsx(record,document):
                      for column in table['columns'] if column['key'] not in hidden]
             exported.append({**table,'columns':columns})
         return xlsx_bytes(exported,document['meta'],document.get('sql',[]),unit_headers=True,
-                          info_rows=user_xlsx_info(document['meta'],conditions))
+                          info_rows=user_xlsx_info(document['meta'],conditions,compare_period=False))
     return xlsx_bytes(tables,document['meta'],document.get('sql',[]))
 
 
