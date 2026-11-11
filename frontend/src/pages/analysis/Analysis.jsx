@@ -569,7 +569,8 @@ export default function Analysis({ route }) {
               </AiBlock> : !messages.length && (
                 <AiBlock>
                   <p style={{ fontSize: 17, fontWeight: 800 }}>무엇을 분석해 드릴까요?</p>
-                  <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>국가·품목·기간을 함께 말해 주세요. 예) “중국 메모리 수출 추이와 증가 이유를 알려줘”, “베트남 화장품 최근 6개월 리포트로 만들어줘”</p>
+                  <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>국가·품목·기간을 함께 말해 주세요. 질문은 한 번에 3개 이하로 나누어 질문해주세요.</p>
+                  <p className="muted" style={{ marginTop: 4, fontSize: 14 }}>예) “중국 메모리 수출 추이와 증가 이유를 알려줘”, “베트남 화장품 최근 6개월 리포트로 만들어줘”</p>
                 </AiBlock>
               )}
               <ErrorNotice error={error} retry={() => setReadRevision(v => v + 1)} />
