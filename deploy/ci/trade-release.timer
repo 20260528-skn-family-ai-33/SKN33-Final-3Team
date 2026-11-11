@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a tested web release
+
+[Timer]
+OnBootSec=45s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Unit=trade-release.service
+
+[Install]
+WantedBy=timers.target

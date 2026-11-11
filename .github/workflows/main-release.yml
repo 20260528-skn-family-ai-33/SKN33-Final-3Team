@@ -1,0 +1,112 @@
+name: Test and deploy
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      OPENBLAS_NUM_THREADS: '2'
+      OMP_NUM_THREADS: '2'
+      ML_REPORT_FONT: /usr/share/fonts/truetype/nanum/NanumGothic.ttf
+      API_REPORT_FONT: /usr/share/fonts/truetype/nanum/NanumGothic.ttf
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install runtime and test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-nanum libgomp1
+          python -m pip install -r backend/requirements.txt -r backend/requirements-api-test.txt
+          python -m playwright install --with-deps chromium
+          mkdir -p 'C:/Windows/Fonts'
+          ln -s "$API_REPORT_FONT" 'C:/Windows/Fonts/malgun.ttf'
+      - name: Run full suite and compare known failures
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend/app/scheduler/collectors/trade_news
+        run: python deploy/ci/backend_tests.py
+      - name: Check release activation and rollback offline
+        run: python -m unittest discover -s deploy/ci -p 'test_*.py'
+
+  frontend:
+    name: Frontend tests and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      # The alpha harness explicitly launches the Chrome channel.
+      - name: Ensure Chrome is available
+        run: command -v google-chrome || npx --no-install playwright install --with-deps chrome
+      - run: npm run test:alpha
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 3
+
+  deploy:
+    name: Deploy to AWS
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'workflow_dispatch' &&
+        (vars.SKN33_DEPLOY_MODE == 'manual' || vars.SKN33_DEPLOY_MODE == 'auto')) ||
+       (github.event_name == 'push' && vars.SKN33_DEPLOY_MODE == 'auto'))
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    concurrency: production-web
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-2
+      RELEASE_BUCKET: skn33-team3-trade-876143322800-ap-northeast-2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - run: python3 deploy/ci/package.py "$GITHUB_SHA" "$RUNNER_TEMP/release.tgz"
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::876143322800:role/skn33-team3-actions-release
+          aws-region: ap-northeast-2
+          role-session-name: release-${{ github.run_id }}
+      - name: Publish release and wait for EC2 verification
+        run: python3 deploy/ci/publish.py
+      - name: Verify public homepage matches this build
+        run: |
+          curl --fail --silent --show-error --max-time 20 --retry 2 https://52.78.125.232/ -o "$RUNNER_TEMP/live-index.html"
+          cmp frontend/dist/index.html "$RUNNER_TEMP/live-index.html"
