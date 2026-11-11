@@ -11,7 +11,6 @@ import heroShip from '../../assets/hero-ship.jpg'
 import useDashboard from './useDashboard'
 import useMainView from './useMainView'
 import useUnData from './useUnData'
-import { countryCode } from '../../data/catalog'
 
 // 메인 상단 기능 카드. 마지막 값은 누르면 이동할 화면이다(예전 '분석 · 리포트 바로가기' 띠의 링크를 옮겨 왔다).
 const FEATURES = [
@@ -20,6 +19,9 @@ const FEATURES = [
   ['file', '리포트 센터', '주간·월간·분기 리포트를\n열람하고 내려받아요', 'lav', '/account/reports'],
   ['calendar', '정기 리포트 구독', '주간·월간·분기 리포트를 정해진 날 자동으로 받아요.', 'lav', '/account/subscription'],
 ]
+// 품목별·교역국별 표의 열 너비. 머리 줄(.th)과 행(.tr)이 같은 값을 써야 열이 어긋나지 않는다.
+const PRODUCT_TABLE_COLS = '24px 86px 1fr 64px 60px'
+const COUNTRY_TABLE_COLS = '24px 1fr 64px 60px'
 const TICKER_TABS = [['all', '전체기사'], ['general', '일반기사'], ['short', '단신속보'], ['major', '주요이슈']]
 const DIR_COLOR = { up: '#C8102E', down: '#1F5FD1', flat: '#5C6370' }
 const ARROW = { up: '▲', down: '▼', flat: '' }
@@ -105,18 +107,11 @@ function FeatureCard([icon, title, text, tone, to]) {
 }
 
 function Ticker({ interest }) {
-  const { profile } = useApp()
   const [tab, setTab] = useState('all')
   const [index, setIndex] = useState(0)
   const [paused, setPaused] = useState(false)
-  const apiTab = ({ all: 'ALL', general: 'GENERAL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab]
-  // 내 관심(INTERESTED)은 관심 국가와 관심 품목(HS) 태그가 모두 맞아야 한다. 단신속보는 적재 시 HS 태그를 넣지 않고
-  // 주요이슈(KOTRA 통상·규제 등)도 HS 태그가 거의 없어 항상 비게 된다. 그래서 이 두 탭은 관심 국가 기준으로 조회한다.
-  const interestCountries = interest ? profile.countries.map(countryCode) : []
-  const byCountry = interest && (tab === 'short' || tab === 'major') && interestCountries.length > 0
-  const result = useQuery('/articles', byCountry
-    ? { scope: 'GLOBAL', country_codes: interestCountries, tab: apiTab, page_size: 5 }
-    : { scope: interest ? 'INTERESTED' : 'GLOBAL', tab: apiTab, page_size: 5 })
+  // 내 관심에서 단신속보·주요이슈를 관심 국가로 맞추는 규칙은 서버(news.article_statement)가 정한다.
+  const result = useQuery('/articles', { scope: interest ? 'INTERESTED' : 'GLOBAL', tab: ({ all: 'ALL', general: 'GENERAL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab], page_size: 5 })
   const items = (result.data?.items || []).map(mapArticle)
   const current = items[index % items.length]
   useEffect(() => {
@@ -188,10 +183,13 @@ export default function Dashboard({ route }) {
       <section style={{ background: '#F6F7F9', padding: '48px 0 52px' }}>
         <div className="wrap resp-stack" style={{ display: 'flex', gap: 32 }}>
           <div style={{ flex: '2 1 600px', position: 'relative' }}>
-            <RegionError label="주요 지표" states={data.states.kpi} />
-            <p style={{ fontSize: 14, fontWeight: 700, color: '#B0102A' }}>통계 기준 월 {data.statMonth}</p>
-            <h2 style={{ marginTop: 8, fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{data.title}</h2>
-            <p style={{ marginTop: 10, fontSize: 14, color: '#444B57' }}>{data.period}</p>
+            {/* 제목·기간 글자는 상승 화살표보다 위에 그려 화살표가 글자를 가리지 않게 한다. */}
+            <div style={{ position: 'relative', zIndex: 2 }}>
+              <RegionError label="주요 지표" states={data.states.kpi} />
+              <p style={{ fontSize: 14, fontWeight: 700, color: '#B0102A' }}>통계 기준 월 {data.statMonth}</p>
+              <h2 style={{ marginTop: 8, fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{data.title}</h2>
+              <p style={{ marginTop: 10, fontSize: 14, color: '#444B57' }}>{data.period}</p>
+            </div>
             {/* 화살표는 지표 카드 묶음 기준으로 놓아 화면 폭이 바뀌어도 카드와의 위치가 유지된다. 카드가 화살표 위에 그려진다. */}
             <div style={{ position: 'relative', marginTop: 24 }}>
             <TrendArrow />
@@ -286,11 +284,11 @@ export default function Dashboard({ route }) {
  <Link to={data.tableLink('HS6')} className="more">상세보기 →</Link>
             </div>
             <RegionError label="품목별 수출입" states={data.states.products} />
-            <div className="th" style={{ gridTemplateColumns: '24px 86px 1fr 64px 60px', marginTop: 14 }}>
+            <div className="th" style={{ gridTemplateColumns: PRODUCT_TABLE_COLS, marginTop: 14 }}>
               <span>순위</span><span>HS6</span><span>품목</span><span className="r">수출액</span><span className="r">수입액</span>
             </div>
             {data.productTable.rows.map(([rank, hs, name, exp, imp]) => (
-              <div key={hs} className="tr row2" style={{ gridTemplateColumns: '24px 86px 1fr 64px 60px' }}>
+              <div key={hs} className="tr row2" style={{ gridTemplateColumns: PRODUCT_TABLE_COLS }}>
                 <span className="b">{rank}</span><span><span className="hs">{hs}</span></span><span className="b" title={name} style={{ fontWeight: 700 }}>{name}</span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
               </div>
             ))}
@@ -305,11 +303,11 @@ export default function Dashboard({ route }) {
                 <p className="muted" style={{ marginTop: 6 }}>{data.countryTable.sub}</p>
                 <RegionError label="교역국별 수출입" states={data.states.countries} />
                 <div style={{ marginTop: 14 }}>
-                  <div className="th" style={{ gridTemplateColumns: '24px 1fr 64px 60px' }}>
+                  <div className="th" style={{ gridTemplateColumns: COUNTRY_TABLE_COLS }}>
                     <span>순위</span><span>교역국</span><span className="r">수출액</span><span className="r">수입액</span>
                   </div>
                   {data.countryTable.rows.map(([rank, name, exp, imp]) => (
-                    <div key={name} className="tr row2" style={{ gridTemplateColumns: '24px 1fr 64px 60px' }}>
+                    <div key={name} className="tr row2" style={{ gridTemplateColumns: COUNTRY_TABLE_COLS }}>
                       <span className="b">{rank}</span><span title={name} style={{ fontWeight: 700 }}>{name}</span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
                     </div>
                   ))}
@@ -347,6 +345,7 @@ export default function Dashboard({ route }) {
           </div>
           <div style={{ marginTop: 14, display: 'flex', gap: '6px 24px', fontSize: 13, color: '#5C6370', flexWrap: 'wrap' }}>
             <span><strong style={{ color: '#15181E' }}>수출 점유율</strong> = 상대국 전체 수입 중 한국산 비중</span>
+            <span>순위 = 상대국 공급국 중 한국 순위</span>
           </div>
           <div ref={unRef} role="region" aria-label="한국의 세계시장 점유율 카드" tabIndex={unHeight ? 0 : undefined}
             style={{ marginTop: 16, position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, ...(unHeight ? { maxHeight: unHeight, overflowY: 'auto', scrollbarGutter: 'stable', paddingRight: 4 } : {}) }} className="resp-stack">

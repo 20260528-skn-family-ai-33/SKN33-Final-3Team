@@ -176,6 +176,8 @@ a.dash-card,.dash-card a{transition:background .15s}
 a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 /* 메인 상승 화살표: 좁은 화면에서는 제목을 가리므로 숨긴다. */
 @media (max-width:640px){.trend-arrow{display:none}}
+/* 761~1000px는 지표 카드 칸이 좁아 화살표가 제목·기간 글자와 겹친다(760px 이하는 한 줄로 쌓여 겹치지 않음). */
+@media (min-width:761px) and (max-width:1000px){.trend-arrow{display:none}}
 .on-dark .field-err{color:#FF8A9A}
 @media (max-width:760px){.hd-view button{padding:0 10px;font-size:13px}}
 
