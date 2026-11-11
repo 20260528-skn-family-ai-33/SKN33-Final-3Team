@@ -10,6 +10,27 @@ from types import SimpleNamespace
 
 
 class ResultPresentationTest(unittest.TestCase):
+    def test_small_share_excel_preserves_numbers_and_distinguishes_missing_values(self):
+        from copy import deepcopy
+        from backend.app.api.reports import report_xlsx
+        values=[0.012345,0.0001,0.09999,0.1,0,None]
+        table={'columns':[{'key':'amount_usd','label':'수출액','unit':'USD'},
+                          {'key':'share_pct','label':'비중','unit':'%'},
+                          {'key':'growth_pct','label':'증감률','unit':'%'}],
+               'rows':[{'amount_usd':125.5,'share_pct':v,'growth_pct':v} for v in values], 'total_rows':len(values)}
+        document={'sections':[{'tables':[table]}],'meta':{},'sql':[]}
+        original=deepcopy(document)
+        for kind in ('RPT_ON_DEMAND','RPT_MONTHLY','RPT_QUARTERLY'):
+            with self.subTest(kind=kind):
+                sheet=load_workbook(io.BytesIO(report_xlsx({'report_type':kind},document))).worksheets[0]
+                self.assertEqual([c.value for c in sheet[1]],['수출액 (USD)','비중 (%)','증감률 (%)'])
+                self.assertEqual([sheet.cell(i+2,2).value for i in range(len(values))],values[:-1]+['-'])
+                self.assertEqual([sheet.cell(i+2,2).number_format for i in range(5)],['0.0000']*3+['0.0']*2)
+                self.assertEqual(sheet['A2'].number_format,'#,##0.00')
+                self.assertEqual(sheet['C2'].number_format,'0.0')
+                self.assertIsNone(sheet['C7'].value)
+        self.assertEqual(document,original)
+
     def test_user_excel_info_keeps_conditions_warnings_and_limit_but_not_internal_fields(self):
         from backend.app.api.files import result_xlsx
         from copy import deepcopy
@@ -80,7 +101,7 @@ class ResultPresentationTest(unittest.TestCase):
         # 생성 후 source_tables가 빠진 과거 에이전트 문서도 FROZEN 출처를 보존한다.
         doc['meta']['freshness']='FROZEN'
         workbook=load_workbook(io.BytesIO(report_xlsx({'report_type':'RPT_MONTHLY'},doc)))
-        self.assertIn('전월 대비',[c.value for c in workbook['결과표1'][1]])
+        self.assertIn('전월 대비 (%)',[c.value for c in workbook['결과표1'][1]])
         self.assertIn('실행 SQL',dict(list(workbook['정보'].values)[1:]))
 
     def test_periodic_excel_removes_duplicate_rates_without_changing_agent_or_pdf_tables(self):
@@ -99,7 +120,7 @@ class ResultPresentationTest(unittest.TestCase):
             self.assertEqual(sheet['A2'].value,125.5)
             self.assertEqual(sheet['C2'].value,25.5)
         actual=load_workbook(io.BytesIO(report_xlsx({'report_type':'RPT_ON_DEMAND'},document)))
-        expected=load_workbook(io.BytesIO(xlsx_bytes([table],{},[])))
+        expected=load_workbook(io.BytesIO(xlsx_bytes([table],{},[],unit_headers=True)))
         self.assertEqual(actual.sheetnames,expected.sheetnames)
         for actual_sheet,expected_sheet in zip(actual,expected):
             self.assertEqual(list(actual_sheet.values),list(expected_sheet.values))
@@ -121,7 +142,7 @@ class ResultPresentationTest(unittest.TestCase):
                 document=build_document(SimpleNamespace(queries=['SELECT original']),1,record)
                 self.assertEqual(document['meta']['freshness'],'FROZEN')
                 original=deepcopy(document)
-                expected=load_workbook(io.BytesIO(xlsx_bytes([table],document['meta'],document['sql'])))
+                expected=load_workbook(io.BytesIO(xlsx_bytes([table],document['meta'],document['sql'],unit_headers=True)))
                 for content in (record['content_json'],document):
                     actual=load_workbook(io.BytesIO(report_xlsx({**record,'content_json':content},document)))
                     self.assertEqual(actual.sheetnames,expected.sheetnames)

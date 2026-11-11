@@ -76,6 +76,54 @@ class MonthlyPipelineTest(unittest.TestCase):
         self.MetricCalculator.return_value.calculate.assert_called_once()
         self.ml.run.assert_called_once()
 
+    def test_scheduled_collection_skips_configured_ml_and_manual_run_remains_available(self):
+        first = self.run_month(ml_entrypoint='backend.app.ml.test_pipeline:run', run_ml=False)
+        self.assertEqual(first['status'], 'WAITING_FOR_ML')
+        self.ml.run.assert_not_called()
+        for _ in range(2):
+            result = self.run_month(ml_entrypoint='backend.app.ml.test_pipeline:run')
+            self.assertEqual(result['status'], 'SUCCESS')
+        self.collect_month.assert_called_once()
+        self.load_csv.assert_called_once()
+        self.MetricCalculator.return_value.calculate.assert_called_once()
+        self.ml.run.assert_called_once()
+
+    def test_registered_collection_and_startup_never_train_or_fail_completed_collection(self):
+        from apscheduler.schedulers.blocking import BlockingScheduler
+        scheduler = BlockingScheduler(timezone=monthly.KST)
+        with patch.dict('os.environ', {'CUSTOMS_ML_ENTRYPOINT': self.ml.__name__ + ':run'}, clear=True), \
+                patch.object(monthly, 'datetime') as clock, patch.object(monthly, 'retry_ml') as retry:
+            clock.now.return_value = datetime(2025, 10, 19, 3, tzinfo=monthly.KST)
+            monthly.register_jobs(scheduler, output=self.root, env_path=self.root / '.env',
+                                  start_month='202509', run_ml=True)
+            self.assertEqual({job.id for job in scheduler.get_jobs()},
+                             {'customs_monthly', 'customs_monthly_startup'})
+            job = scheduler.get_job('customs_monthly')
+            self.assertEqual(job.func(*job.args, **job.kwargs)[0]['status'], 'WAITING_FOR_ML')
+            path = self.root / '202509' / 'state.json'
+            before = path.read_bytes()
+            self.resolve_countries.return_value = ['US', 'VN']
+            startup = scheduler.get_job('customs_monthly_startup')
+            self.assertEqual(startup.func(*startup.args, **startup.kwargs), [])
+            self.assertEqual(path.read_bytes(), before)
+            self.ml.run.assert_not_called()
+            retry.assert_not_called()
+
+    def test_collection_retry_keeps_ml_disabled_and_original_month(self):
+        scheduler = MagicMock()
+        self.load_csv.side_effect = [{'status': 'FAILED', 'retryable': True}, {'status': 'LOADED'}]
+        options = {'output': self.root, 'env_path': self.root / '.env', 'run_ml': False,
+                   'ml_entrypoint': self.ml.__name__ + ':run'}
+        result = monthly.monthly_job(scheduler, '202509', **options)
+        self.assertEqual(result['status'], 'FAILED')
+        call = scheduler.add_job.call_args
+        self.assertEqual(call.kwargs['id'], 'customs_monthly_retry_202509')
+        self.assertEqual(call.kwargs['args'][1:], ['202509', 2])
+        self.assertFalse(call.kwargs['kwargs']['run_ml'])
+        resumed = call.args[0](*call.kwargs['args'], **call.kwargs['kwargs'])
+        self.assertEqual(resumed['status'], 'WAITING_FOR_ML')
+        self.ml.run.assert_not_called()
+
     def test_failed_load_is_retried_before_metrics_or_ml(self):
         self.load_csv.side_effect = [{"status": "FAILED"}, {"status": "LOADED"}]
         self.assertEqual(self.run_month()["current_stage"], "load")
@@ -489,16 +537,24 @@ class CountryCacheTest(unittest.TestCase):
 
 
 class MonthlyScheduleTest(unittest.TestCase):
-    def test_tenth_day_kst_and_previous_month_rollover(self):
+    def test_explicit_first_day_schedule_is_preserved(self):
+        scheduler=MagicMock()
+        with patch.dict('os.environ',{},clear=True), patch.object(monthly,'dotenv_values',return_value={'CUSTOMS_MONTHLY_DAY':'1'}):
+            monthly.register_jobs(scheduler)
+        trigger=scheduler.add_job.call_args_list[0].args[1]
+        self.assertEqual(trigger.get_next_fire_time(None,datetime(2026,1,2,tzinfo=monthly.KST)),
+                         datetime(2026,2,1,3,tzinfo=monthly.KST))
+
+    def test_eighteenth_day_kst_and_previous_month_rollover(self):
         from backend.app.scheduler import main as shared
         main = monthly
         with patch.dict("os.environ", {}, clear=True), patch.object(main, "dotenv_values", return_value={}):
             scheduler = shared.build_scheduler()
         job = next(j for j in scheduler.get_jobs() if j.id == "customs_monthly")
         now = datetime(2026, 1, 1, tzinfo=main.KST)
-        self.assertEqual(job.trigger.get_next_fire_time(None, now), datetime(2026, 1, 10, 3, tzinfo=main.KST))
+        self.assertEqual(job.trigger.get_next_fire_time(None, now), datetime(2026, 1, 18, 3, tzinfo=main.KST))
         fake_datetime = MagicMock()
-        fake_datetime.now.return_value = datetime(2026, 1, 10, 3, tzinfo=main.KST)
+        fake_datetime.now.return_value = datetime(2026, 1, 18, 3, tzinfo=main.KST)
         with patch.object(main, "datetime", fake_datetime), patch.object(main, "run_month", return_value={"status": "SUCCESS"}) as run:
             main.monthly_job(scheduler)
         run.assert_called_once_with("202512")
@@ -695,6 +751,11 @@ class MonthlyCLITest(unittest.TestCase):
                 run.assert_not_called()
 
 class MlRetryHookTest(unittest.TestCase):
+    def test_collection_recovery_does_not_train_model_b(self):
+        with patch.object(monthly, 'pending_months', return_value=[]), patch.object(monthly, 'retry_ml') as retry:
+            monthly.startup_job(MagicMock(), run_ml=False)
+        retry.assert_not_called()
+
     def test_retry_hook_runs_after_recovery_and_never_raises(self):
         from types import SimpleNamespace
         from unittest.mock import Mock, patch
