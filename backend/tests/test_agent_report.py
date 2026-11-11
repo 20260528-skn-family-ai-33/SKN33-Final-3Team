@@ -399,7 +399,9 @@ class ReportAgentTest(unittest.TestCase):
         self.assertIn('결과 1개', ctx['sources'][0]['scope'])  # 열 묶음은 결과 수를 늘리지 않는다
         # 실제 PDF: 마지막 열 값(13,579)이 페이지 밖으로 잘리지 않고 글자로 남는다
         from pathlib import Path
-        font = Path('C:/Windows/Fonts/malgun.ttf')
+        from backend.app.api.config import Settings
+        # 운영·CI와 같은 설정(API_REPORT_FONT)을 먼저 쓰고, 없으면 Windows 기본 글꼴(test_report_pagination과 같은 방식)
+        font = Path(Settings().get('API_REPORT_FONT', 'C:/Windows/Fonts/malgun.ttf'))
         if not font.is_file():
             self.skipTest('PDF 한글 글꼴 없음')
         from io import BytesIO
