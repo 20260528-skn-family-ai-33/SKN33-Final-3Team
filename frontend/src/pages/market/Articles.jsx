@@ -15,6 +15,9 @@ const toDot = d => (d ? d.replaceAll('-', '.') : '')
 const ask = a => `/analysis?new=1&ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
 
+// 단신속보 본문은 줄바꿈으로 문단이 구분돼 온다. 줄마다 문단으로 나누고, 줄 앞의 -·*·** 표시는 떼고 보여 준다.
+const paragraphs = text => String(text || '').split(/\r?\n/).map(line => line.trim().replace(/^[-*•]+\s*/, '')).filter(Boolean)
+
 export default function Articles({ route }) {
   const q = route.query
   const tab = q.get('tab') || 'all'
@@ -57,8 +60,8 @@ export default function Articles({ route }) {
   return (
     <>
       <Band
-        image={bandArticles} imagePosition="center 55%"  title="기사"
-        lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
+        image={bandArticles} imagePosition="center 55%"  title="기사 조회"
+        lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '유형별 무역·경제 기사 조회'}
         right={(
           <div className="chips">
             {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} to={withQuery(route, { tab: key, id: null, page: null })}>{label}</Chip>)}
@@ -126,7 +129,9 @@ export default function Articles({ route }) {
                     </div>}
                   {short && on && (
                     <div style={{ flexBasis: '100%', marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
-                      <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>{detail.loading ? '본문을 불러오는 중…' : detail.data?.body_masked || a.summary}</p>
+                      {detail.loading
+                        ? <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>본문을 불러오는 중…</p>
+                        : paragraphs(detail.data?.body_masked || a.summary).map((line, i) => <p key={i} style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C', marginTop: i ? 10 : 0 }}>{line}</p>)}
                       <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
                         <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn>
                       </div>

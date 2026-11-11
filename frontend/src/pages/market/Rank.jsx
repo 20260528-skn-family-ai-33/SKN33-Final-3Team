@@ -1,11 +1,11 @@
 // BS08 수출입 순위(국가·품목·시기별)
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Band, ChatFab } from '../../components/layout'
-import { Btn, Select } from '../../components/ui'
+import { Btn, Pager, Select } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName, countries, countryCode, countryName, registerProducts } from '../../data/catalog'
 import { useApp } from '../../store'
-import { useQuery, ErrorNotice, Pagination } from '../../api/hooks'
+import { useQuery, ErrorNotice } from '../../api/hooks'
 import { download } from '../../api/client'
 import { Hs4Search } from '../../components/pickers'
 import { monthOffset } from '../home/useDashboard'
@@ -60,6 +60,15 @@ function RankResults({ route }) {
   const scopeCountry = countryLabel || (interestCountries.length === 1 ? interestCountries[0] : interestCountries.length ? '관심 국가' : '전체 국가')
   const scopeProduct = interestProducts.length === 1 ? productName(interestProducts[0]) : interestProducts.length ? '관심 품목' : applied.product ? productName(applied.product) : '전체 품목'
   registerProducts((result.data?.items || []).filter(r => r.hs_name).map(r => ({ hs_code: r.hs_item.hs_code, name_ko: r.hs_name })))
+  const pageInfo = result.data?.page
+  // 기사 화면처럼 페이지를 넘기면 새 목록을 다 불러온 뒤 결과 표 맨 위로 올라간다(처음 열 때는 그대로 둔다).
+  const resultTop = useRef(null), previousPage = useRef(page)
+  useEffect(() => {
+    if (previousPage.current === page || result.loading) return
+    previousPage.current = page
+    resultTop.current?.scrollIntoView({ block: 'start' })
+  }, [page, result.loading])
+  const pages = pageInfo?.page_size ? Math.ceil((pageInfo.total ?? pageInfo.total_count ?? 0) / pageInfo.page_size) : 0
   const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.has_data === false ? '—' : r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: noRecord(r, r.export_amount_usd) ? null : Number(r.export_amount_usd) / 1e8, imp: noRecord(r, r.import_amount_usd) ? null : Number(r.import_amount_usd) / 1e8 }))
   const pageEmpty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
   // 순위는 큰 금액부터 정렬되므로 1페이지에 실적이 없으면 전체 결과에도 없다. 다른 페이지는 1페이지 판단을 그대로 쓴다.
@@ -114,7 +123,7 @@ function RankResults({ route }) {
 
   return (
     <>
-      <Band tone="lgbg"  title="국가 · 품목 · 시기별 수출입 순위" lead="국가 또는 품목 중 하나 이상 선택 · 시기 선택은 선택 사항" />
+      <Band tone="lgbg"  title="국가 · 품목 · 시기별 수출입 순위" lead="국가 / 품목 / 시기를 선택하여 순위 조회" />
       <main className="page" style={{ position: 'relative', paddingBottom: 120 }}>
         <div className="wrap col" style={{ gap: 20 }}>
           <div className="card">
@@ -163,7 +172,7 @@ function RankResults({ route }) {
               ? <p className="field-err" role="alert" style={{ marginTop: 12 }}>{error}</p>
               : <p className="note" style={{ marginTop: 12 }}>{query.period_start || "—"} ~ {query.period_end || "—"} 조회 조건을 적용합니다. 수출 또는 수입 기준으로 순위를 전환할 수 있습니다. 품목은 이름이나 HS 코드(4·6자리)로 검색해 고른 뒤 세부 품목 칩에서 HS6로 좁힐 수 있습니다.</p>}
           </div>
-          <div className="card">
+          <div ref={resultTop} className="card" style={{ scrollMarginTop: 90 }}>
             <div className="between">
               <div>
                 <h2 className="t2">{title}</h2>
@@ -177,7 +186,7 @@ function RankResults({ route }) {
             {/* 좁은 화면에서는 표만 가로로 스크롤한다. */}
             <div style={{ overflowX: 'auto', marginTop: 18 }}><div style={{ minWidth: 520 }}>
             <div className="th" style={{ gridTemplateColumns: cols }}>
-              <span>{byMonth ? '구분' : '순위'}</span>{showHs && <span>HS6</span>}<span>{firstCol}</span><span>{label[basis]} (억 USD)</span><span className="r">{label[other]} (억 USD)</span>
+              <span>{byMonth ? '구분' : '순위'}</span>{showHs && <span>품목코드(HS6)</span>}<span>{firstCol}</span><span>{label[basis]} (억 USD)</span><span className="r">{label[other]} (억 USD)</span>
             </div>
             {result.loading && <p className="muted" role="status" style={{ padding: '22px 4px', textAlign: 'center' }}>순위를 불러오는 중입니다…</p>}
             {!result.loading && rows.map(r => (
@@ -200,7 +209,8 @@ function RankResults({ route }) {
               <span className="note">표·막대: 억 USD · 엑셀: 원본 USD 단위{result.data?.meta?.truncated && ` · 엑셀에는 전체 ${Number(result.data.meta.rows_total).toLocaleString()}행 중 상위 1,000행만 담깁니다`}</span>
               <Btn icon="download" disabled={!result.data?.result_id || result.loading || empty} onClick={exportExcel}>엑셀 다운로드</Btn>
             </div>
-            {!byMonth && <Pagination page={page} info={result.data?.page} onChange={setPage} />}
+            {/* 기사 화면과 같은 번호형 페이지 이동(처음·←·1~5·→·끝) */}
+            {!byMonth && pages > 1 && <Pager page={page} pages={pages} onChange={setPage} />}
             {overChatLimit && <p className="note" role="status" style={{ marginTop: 10 }}>{chatReason}</p>}
           </div>
         </div>

@@ -83,6 +83,8 @@ export default function useDashboard(view, months, profile) {
     fx: (fx.data?.items || []).map(r => [r.currency_code, `${r.quote_unit} 단위`, r.rate_krw == null ? '—' : Number(r.rate_krw).toLocaleString('ko-KR'), percent(r.change_pct), r.change_pct > 0 ? 'up' : r.change_pct < 0 ? 'down' : 'flat']),
     rankTitle: '수출 상위 품목', rankSub: periodText(cardProducts.data), rankCards: ranks, cardLink: link(months),
     cardsEmpty: !!cardProducts.data && !ranks.length, tableLink: link(TABLE_MONTHS),
+    // 기간(3·6·12개월)을 바꾸면 순위와 추이 그래프를 모두 받을 때까지 스켈레톤을 보여 준다.
+    cardsLoading: availability.loading || cardProducts.loading || series.loading,
     productTable: { title: '품목별 수출입', sub: periodText(tableProducts.data), rows: productRows, note: '공개된 관세청 집계 기준', empty: !!tableProducts.data && !productRows.length },
     countryTable: { title: '교역국별 수출입', sub: tablePeriod, rows: countryRows, empty: !!countries.data && !(countries.data.items || []).some(r => r.has_data !== false), pieTitle: '수출액 비중', pie: (shares.data?.items || []).filter(r => r.share_pct != null).map((r, i) => [`${r.label} ${Number(r.share_pct).toFixed(1)}%`, r.country_code == null ? PIE_OTHER : PIE_COLORS[i % PIE_COLORS.length]]), pieNote: `${tableRange.period_start || '—'} ~ ${end || '—'} · 전체 수출국 분모 · 상위 10개국+기타` },
     un: [], unSub: '관심 HS6·국가의 UN 데이터 공개 여부를 확인합니다.',
