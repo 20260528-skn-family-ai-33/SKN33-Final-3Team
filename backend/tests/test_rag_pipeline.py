@@ -620,6 +620,13 @@ class StateMatrixTest(unittest.TestCase):
                                          'other_state_preserved':state==before,'owned_fields_only':owned})
 
 class VocabularyContextTest(unittest.TestCase):
+    def test_confirmed_hs6_expands_article_query_with_code_and_name(self):
+        payload = self.request('관련 기사 찾아줘').model_dump()
+        payload['conditions']['products'] = [{'hs_code': '330499', 'hs_ver': 'HS2022'}]
+        request = RagRequest.model_validate(payload)
+        vocabulary = Vocabulary(products={'HS2022:330499': ['기초화장품']})
+        self.assertEqual(vocabulary.query(request).splitlines(), ['관련 기사 찾아줘', '기초화장품', '330499'])
+
     def vocabulary(self):
         return Vocabulary(synonyms={'환경산업': '환경'}, hypernyms={'환경보호': '환경'},
                           categories={'환경': '친환경'})

@@ -8,13 +8,13 @@ import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
 import { api, streamAnswer } from '../../api/client'
 import { requestId } from '../../api/requestId'
-import { amount, percent, reportProduct, kstDateTimeText } from '../../api/adapters'
+import { amount, percent, reportProduct, kstDateTimeText, monthEndDate } from '../../api/adapters'
 import { usePendingAction, useQuery, ErrorNotice } from '../../api/hooks'
 import { previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
 import { monthOffset } from '../home/useDashboard'
-import { countryName, productName } from '../../data/catalog'
+import { countryName, productChoiceLabel } from '../../data/catalog'
 import { ALL_SECTIONS } from '../../data/seed'
-const range = (from, to) => `${from || '—'} ~ ${to || '—'}`
+const range = (from, to) => `${from || '—'} ~ ${monthEndDate(to) || '—'}`
 const PERIOD_PRESETS = [['3', '최근 3개월'], ['6', '최근 6개월'], ['12', '최근 12개월']]
 import bandAnalysis from '../../assets/band-analysis.jpg'
 import './conversation.css'
@@ -171,7 +171,7 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
       <Modal open={!!preview && preview.signature === signature} onClose={() => { if (!busy) setPreview(null) }} label="리포트 생성 조건 확인" width={520}>
         <h2>이 조건으로 리포트를 생성할까요?</h2>
         <p>{o.country || '전체 국가'} · {o.product || '전체 품목'}</p>
-        <p>분석 기간 {preview?.conditions.period.start} ~ {preview?.conditions.period.end}</p>
+        <p>분석 기간 {range(preview?.conditions.period.start, preview?.conditions.period.end)}</p>
         <p>비교 기간 {preview?.conditions.compare_period ? range(preview.conditions.compare_period.start, preview.conditions.compare_period.end) : '없음'}</p>
         <div className="chips"><Btn disabled={busy} onClick={() => setPreview(null)}>조건 수정</Btn>
           <Btn kind="red" disabled={busy} onClick={generate}>확인한 조건으로 생성</Btn></div>
@@ -236,7 +236,9 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
   return <AiBlock>
     {c && <>
       <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')} / ` : ''}{c.country_codes?.map(countryName).join(' · ') || '전체 국가'}</p>
-      <p className="note">{range(c.period?.start, c.period?.end)} / 비교 {range(comparison?.start, comparison?.end)}</p>
+      {a.article_period && !c.period
+        ? <p className="note">기사 검색 기간 {a.article_period.start} ~ {a.article_period.end}</p>
+        : c.period && <p className="note">{range(c.period.start, c.period.end)}{comparison && ` / 비교 ${range(comparison.start, comparison.end)}`}</p>}
     </>}
     {trend && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 16 }}>
       {[[`${trend.length}개월 ${c?.trade_flow === 'IMPORT' ? '수입' : '수출'}액`, `${amount(total)}억 USD`, '#15181E'], ['전년 동기 대비', percent(growth), growth >= 0 ? '#C8102E' : '#1F5FD1'], ['월별 흐름', flow, '#15181E']].map(([label, value, color]) => (
@@ -271,7 +273,9 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
 
 export default function Analysis({ route }) {
   const { session, chats, refreshChats, refreshReports, addInterests, run, notify } = useApp()
-  const [activeId, setActiveId] = useState(route.query.get('chat') || chats[0]?.id)
+  const [articleId, setArticleId] = useState(() => route.query.get('new') === '1' ? route.query.get('article') : null)
+  const selectedArticle = useQuery(`/articles/${articleId}`, {}, !!articleId)
+  const [activeId, setActiveId] = useState(articleId ? null : route.query.get('chat') || chats[0]?.id)
   const [input, setInput] = useState(route.query.get('new') === '1' ? '' : route.query.get('ask') || '')
   const [modal, setModal] = useState(null)
   const [rename, setRename] = useState('')
@@ -365,10 +369,15 @@ export default function Analysis({ route }) {
   },[clarificationId,job?.clarification?.allow_text])
   const newChat = () => run(async () => {
     const data = await api('/chat/sessions', { method: 'POST', body: {} })
-    await refreshChats(); setActiveId(data.session.session_id); setMessages([]); setJob(null); setDraft(null); setInput(''); setDrawer(false)
+    await refreshChats(); clearArticle(); setActiveId(data.session.session_id); setMessages([]); setJob(null); setDraft(null); setInput(''); setDrawer(false)
   })
+  const clearArticle = () => {
+    if (!articleId) return
+    setArticleId(null)
+    navigate('/analysis', { replace: true })
+  }
   // newRoom: 기사 화면의 "AI에게 물어보기"처럼 새 채팅방을 만들어 바로 묻는다(23번)
-  const send = async (text = input, newRoom = false) => {
+  const send = async (text = input, newRoom = false, mode = null) => {
     if (!text.trim() || busy) return
     const input = text
     setBusy(true); setSending(input)
@@ -376,16 +385,22 @@ export default function Analysis({ route }) {
     await run(async () => {
       let id = newRoom ? null : activeId
       if (!id) { const data = await api('/chat/sessions', { method: 'POST', body: {} }); id = data.session.session_id; setActiveId(id) }
-      if (pending.current?.text !== input || pending.current?.sessionId !== id) pending.current = { text: input, sessionId: id, id: requestId() }
-      const data = await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: { question: input, client_message_id: pending.current.id } })
+      if (pending.current?.text !== input || pending.current?.sessionId !== id || pending.current?.mode !== mode) {
+        pending.current = { text: input, sessionId: id, mode, id: requestId() }
+      }
+      const data = await api(`/chat/sessions/${id}/messages`, { method: 'POST', body: {
+        question: input, client_message_id: pending.current.id,
+        ...(mode ? { article_action: { article_id: articleId, mode } } : {}),
+      } })
       pending.current = null
       accepted = true
       if (activeRef.current!==id) { await refreshChats(); return }   // 응답 전에 방을 옮겼으면 그 방의 작업을 덮어쓰지 않는다
+      clearArticle()
       setJob(data.job); setDraft(null); setInput(''); setSending(null)
       setReadRevision(v => v + 1); await refreshChats()
     })
     // 접수에 실패하면 질문을 입력창에 남겨 다시 보낼 수 있게 한다. 기사에서 온 질문은 주소에서 이미 지웠으므로 여기 말고는 남지 않는다
-    if (!accepted) setInput(text)
+    if (!accepted && !mode) setInput(text)
     setBusy(false); setSending(null)
   }
   const askedFromLink = useRef(false)
@@ -499,7 +514,7 @@ export default function Analysis({ route }) {
               const on = c.id === active?.id
               const tag = STATUS_TAG[c.status]
               return (
-                <button key={c.id} type="button" className="reset" onClick={() => { setActiveId(c.id); setMessages([]); setJob(null); setDraft(null); setDrawer(false) }} aria-current={on}
+                <button key={c.id} type="button" className="reset" onClick={() => { clearArticle(); setActiveId(c.id); setMessages([]); setJob(null); setDraft(null); setDrawer(false) }} aria-current={on}
                   style={{ padding: '14px 16px', borderRadius: 14, background: on ? 'var(--rose)' : '#fff', boxShadow: on ? 'inset 3px 0 0 var(--red)' : 'none', border: on ? 0 : '1px solid var(--line)' }}>
                   {tag && <span className={'tag ' + tag[0]}>{tag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 5 }} />}{tag[1]}</span>}
                   <p style={{ fontSize: 15, fontWeight: 800, marginTop: tag ? 8 : 0 }}>{c.title}</p>
@@ -526,7 +541,23 @@ export default function Analysis({ route }) {
               {headerTag && <span className={'tag ' + headerTag[0]}>{headerTag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 6 }} />}{headerTag[1]}</span>}
             </div>
             <div className="col chat-flow" style={{ gap: 18, padding: '24px 20px' }}>
-              {!messages.length && (
+              {articleId ? <AiBlock>
+                <ErrorNotice error={selectedArticle.error} retry={selectedArticle.reload} />
+                {selectedArticle.data?.article ? <>
+                  <p>「{selectedArticle.data.article.title}」 기사에 대해 무엇을 도와드릴까요?</p>
+                  <div className="chips">
+                    {[
+                      ['summary', '기사 요약', '기사 내용을 요약해 줘.'],
+                      ['related', '유사 기사 검색', '유사한 다른 기사를 찾아줘.'],
+                      ['both', '요약과 유사 기사 검색', '기사 내용을 요약하고 유사한 다른 기사도 찾아줘.'],
+                    ].map(([mode, label, question]) =>
+                      <Btn key={mode} disabled={busy || running(job?.status)}
+                        onClick={() => send(`「${selectedArticle.data.article.title.slice(0, 200)}」 ${question}`, false, mode)}>
+                        {label}
+                      </Btn>)}
+                  </div>
+                </> : !selectedArticle.error && <p role="status">선택한 기사를 불러오고 있습니다.</p>}
+              </AiBlock> : !messages.length && (
                 <AiBlock>
                   <p style={{ fontSize: 17, fontWeight: 800 }}>무엇을 분석해 드릴까요?</p>
                   <p className="muted" style={{ marginTop: 6, fontSize: 14 }}>국가·품목·기간을 함께 말해 주세요. 예) “중국 메모리 수출 추이와 증가 이유를 알려줘”, “베트남 화장품 최근 6개월 리포트로 만들어줘”</p>
@@ -568,7 +599,7 @@ export default function Analysis({ route }) {
         <h2>관심 목록에 추가할 항목</h2><p className="note">저장할 국가·품목을 선택하세요. 품목은 HS6 단위로 등록됩니다.</p>
         <div className="col" style={{gap:12,maxHeight:320,overflowY:'auto',margin:'16px 0'}}>
           {interest?.countries.map(c=>{const saved=interest.savedCountries.has(c);return <Check key={c} disabled={savingInterest||saved} checked={saved||interest.country_codes.includes(c)} onChange={on=>setInterest({...interest,country_codes:on?[...interest.country_codes,c]:interest.country_codes.filter(v=>v!==c)})}>{countryName(c)}{saved&&' · 이미 등록됨'}</Check>})}
-          {interest?.products.map(h=>{const saved=interest.savedProducts.has(h.hs_ver+h.hs_code);return <Check key={h.hs_ver+h.hs_code} disabled={savingInterest||saved} checked={saved||interest.hs_items.includes(h)} onChange={on=>setInterest({...interest,hs_items:on?[...interest.hs_items,h]:interest.hs_items.filter(v=>v!==h)})}>{productName(h.hs_code)} ({h.hs_code}){saved&&' · 이미 등록됨'}</Check>})}
+          {interest?.products.map(h=>{const saved=interest.savedProducts.has(h.hs_ver+h.hs_code);return <Check key={h.hs_ver+h.hs_code} disabled={savingInterest||saved} checked={saved||interest.hs_items.includes(h)} onChange={on=>setInterest({...interest,hs_items:on?[...interest.hs_items,h]:interest.hs_items.filter(v=>v!==h)})}>{productChoiceLabel(h.hs_code,h.name_ko)}{saved&&' · 이미 등록됨'}</Check>})}
           {interest&&!interest.countries.length&&!interest.products.length&&<p>추가할 국가·HS6 품목이 없습니다. 국가나 품목을 지정해 분석해 주세요.</p>}
           {interest&&(interest.countries.length>0||interest.products.length>0)&&!selectableInterest&&<p role="status">모두 이미 등록된 항목입니다.</p>}
         </div><div className="chips"><Btn disabled={savingInterest} onClick={()=>setInterest(null)}>취소</Btn><Btn kind="red" disabled={savingInterest||!selectableInterest} onClick={saveInterest}>선택 항목 저장</Btn></div>

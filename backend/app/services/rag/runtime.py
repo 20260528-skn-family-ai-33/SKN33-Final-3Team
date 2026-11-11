@@ -4,6 +4,28 @@ import time
 import math
 from uuid import uuid4
 from threading import Event
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from threading import BoundedSemaphore
+
+_QUERY_CALLS = ThreadPoolExecutor(max_workers=3, thread_name_prefix='rag-query')
+_QUERY_SLOTS = BoundedSemaphore(3)
+
+
+def query_call(work, seconds):
+    """진행 중인 외부 질의는 제한된 스레드에서 끝내고 늦은 결과를 호출자에게 돌려주지 않는다."""
+    if not _QUERY_SLOTS.acquire(blocking=False):
+        raise RagInferenceUnavailable('query_inference_busy')
+    try:
+        future = _QUERY_CALLS.submit(work)
+    except BaseException:
+        _QUERY_SLOTS.release()
+        raise
+    future.add_done_callback(lambda _: _QUERY_SLOTS.release())
+    try:
+        return future.result(timeout=seconds)
+    except FutureTimeout as exc:
+        future.cancel()
+        raise RagDeadlineExceeded('query_embedding_timeout') from exc
 
 
 class RagDeadlineExceeded(TimeoutError):
