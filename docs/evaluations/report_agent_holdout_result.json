@@ -1,0 +1,1572 @@
+{
+  "schema_version": 1,
+  "kind": "report_agent_planner_real_llm",
+  "set": "holdout",
+  "dataset_role": "holdout",
+  "started_at_utc": "2026-11-09T07:48:43.801949+00:00",
+  "gold_status": "PROVISIONAL_UNREVIEWED_GOLD",
+  "model_requested": "gpt-4.1-mini",
+  "prompt_sha256": "130b44de68797e479bde47316f775c90ed439d150757fe8f75e7ec3553624110",
+  "questions_sha256": "fda0c0bb4de09bf2c3fac0f5ba2cf9a2c4a0fcb996af13d5d6e586081dbecc90",
+  "manifest_frozen_at_utc": "2026-11-09T07:48:25.162107+00:00",
+  "harness": {
+    "revision": "edd27bc0ca5f214ff2d14ecbb7cac314c0b290e8",
+    "dirty": false,
+    "changes": []
+  },
+  "evidence_sha256": {
+    "backend/scripts/evaluate_report_agent_live.py": "1b49d90c589aa5e978677d4b69d5761bfc8431fe2a1027e32b3eb13a6c36bd95",
+    "backend/app/agents/planner.py": "b1d9af903abc33a6b0fc98a0a9d6f580958c40f95c3b14ace310336fdc3f7e36",
+    "backend/app/agents/runtime.py": "18b1f2e35069938c69961de8dcbce465a73c12d175db50e87f121ad1dc766f0b",
+    "backend/app/agents/state.py": "1f4c68fe1fd2994e90e02e6efb01a67abccff71f7ceb5ee3b1f7ba84cc923d41",
+    "backend/app/agents/llm.py": "37ac5117072f67c2e24cbeb7b8d9e6df7183bc4263ea82214ed26925929edf3e"
+  },
+  "hash_normalization": "CRLF to LF before SHA256",
+  "pricing": {
+    "input_per_million_usd": 0.4,
+    "cached_input_per_million_usd": 0.1,
+    "output_per_million_usd": 1.6,
+    "source": "https://developers.openai.com/api/docs/models/gpt-4.1-mini",
+    "checked_on": "2026-11-09",
+    "note": "모델 페이지에 Deprecated 표시(후속 GPT-5 mini 권장). 운영 설정값 그대로 평가한다."
+  },
+  "cost_cap_usd": 1.0,
+  "scoring": "정답에 적힌 항목(의도 순서·리포트 여부·선행 연결·수출입·국가·품목·기간)이 모두 맞아야 정답. null은 채점하지 않음.",
+  "limitations": [
+    "플래너(리포트 요청 이해)만 실제 호출한다. 조건 확정(HS·국가 사전)·미리보기·승인·접수·완료는 오프라인 회귀 평가가 맡는다.",
+    "정답은 AI가 작성한 초안이며 사람 검토 전이다(PROVISIONAL_UNREVIEWED_GOLD).",
+    "고정 질문 세트의 결과이며 실제 사용자 질문 분포나 서비스 전체 정확도가 아니다.",
+    "비용은 사용량 기반 추정이며 청구 내역이 아니다."
+  ],
+  "cases": [
+    {
+      "id": "H01",
+      "category": "condition_report",
+      "question": "호주 와인 수출 현황을 리포트로 받아볼 수 있을까?",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "호주 와인 수출 현황 리포트 생성 요청",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "호주"
+          ],
+          "products": [
+            "와인"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010688,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3480,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 112,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3592
+          },
+          "response_status": "completed",
+          "latency_seconds": 3.2677448999602348,
+          "estimated_cost_usd": 0.0005728
+        }
+      ],
+      "latency_seconds": 5.206098300055601
+    },
+    {
+      "id": "H02",
+      "category": "condition_report",
+      "question": "싱가포르 대상 화장품 수출 분석 보고서 하나 뽑아 줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "싱가포르 대상 화장품 수출 분석 보고서 생성",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "싱가포르"
+          ],
+          "products": [
+            "화장품"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010689200000000001,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3482,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 118,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3600
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.6777476000133902,
+          "estimated_cost_usd": 0.0015816
+        }
+      ],
+      "latency_seconds": 1.693952600006014
+    },
+    {
+      "id": "H03",
+      "category": "condition_report",
+      "question": "2024년 하반기 멕시코 자동차 부품 수출 리포트 작성 부탁드립니다",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "2024년 하반기 멕시코 자동차 부품 수출 리포트 작성 부탁드립니다",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "멕시코"
+          ],
+          "products": [
+            "자동차 부품"
+          ],
+          "recent_months": null,
+          "period": {
+            "start": "2024-07",
+            "end": "2024-12"
+          }
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true,
+        "period": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0106956,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3483,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 143,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3626
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.750142200035043,
+          "estimated_cost_usd": 0.0006236
+        }
+      ],
+      "latency_seconds": 1.7635968000395223
+    },
+    {
+      "id": "H04",
+      "category": "condition_report",
+      "question": "최근 1년 대만 반도체 수출 리포트 PDF로 만들어 주세요",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "최근 1년 대만 반도체 수출 리포트 PDF로 만들어 주세요",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "대만"
+          ],
+          "products": [
+            "반도체"
+          ],
+          "recent_months": null,
+          "period": {
+            "start": "2023-06",
+            "end": "2024-05"
+          }
+        }
+      ],
+      "warnings": [],
+      "correct": false,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true,
+        "period": false
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0106896,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3480,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 135,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3615
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.0597077999264,
+          "estimated_cost_usd": 0.001608
+        }
+      ],
+      "latency_seconds": 2.07208900002297
+    },
+    {
+      "id": "H05",
+      "category": "condition_report",
+      "question": "인도랑 브라질 두 나라 의약품 수출 리포트 생성해줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "인도와 브라질의 의약품 수출 리포트 생성",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "인도",
+            "브라질"
+          ],
+          "products": [
+            "의약품"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0106888,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3481,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 129,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3610
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.6614257000619546,
+          "estimated_cost_usd": 0.0015988000000000003
+        }
+      ],
+      "latency_seconds": 1.6708742999471724
+    },
+    {
+      "id": "H06",
+      "category": "result_report",
+      "question": "필리핀 라면 수출액 먼저 확인하고 그 데이터로 리포트 만들어줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "STATISTICS",
+          "question": "필리핀 라면 수출액을 확인해줘",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "필리핀"
+          ],
+          "products": [
+            "라면"
+          ],
+          "recent_months": null,
+          "period": null
+        },
+        {
+          "intent": "REPORT",
+          "question": "필리핀 라면 수출액 데이터를 바탕으로 리포트를 만들어줘",
+          "sources": [
+            1
+          ],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "필리핀"
+          ],
+          "products": [
+            "라면"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0106952,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3481,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 227,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3708
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.40861899999436,
+          "estimated_cost_usd": 0.0017556000000000002
+        }
+      ],
+      "latency_seconds": 2.422349200001918
+    },
+    {
+      "id": "H07",
+      "category": "result_report",
+      "question": "의약품 수출 많이 하는 나라 순위 뽑고 그걸 바탕으로 보고서 써줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "RANKING",
+          "question": "의약품 수출 많이 하는 나라 순위 뽑아줘",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": null,
+          "products": [
+            "의약품"
+          ],
+          "recent_months": null,
+          "period": null
+        },
+        {
+          "intent": "REPORT",
+          "question": "의약품 수출 많이 하는 나라 순위 결과를 바탕으로 보고서 작성해줘",
+          "sources": [
+            1
+          ],
+          "trade_flow": "EXPORT",
+          "countries": null,
+          "products": [
+            "의약품"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010696,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3486,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 214,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3700
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.370889400015585,
+          "estimated_cost_usd": 0.0007384000000000001
+        }
+      ],
+      "latency_seconds": 2.381011600024067
+    },
+    {
+      "id": "H08",
+      "category": "result_report",
+      "question": "영국 위스키 최근 12개월 수출 추이를 조회해서 결과를 리포트로 남겨줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "STATISTICS",
+          "question": "영국 위스키 최근 12개월 수출 추이를 조회해줘",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "영국"
+          ],
+          "products": [
+            "위스키"
+          ],
+          "recent_months": 12,
+          "period": null
+        },
+        {
+          "intent": "REPORT",
+          "question": "영국 위스키 최근 12개월 수출 추이 결과를 리포트로 남겨줘",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "영국"
+          ],
+          "products": [
+            "위스키"
+          ],
+          "recent_months": 12,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": false,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": false,
+        "trade_flow": true,
+        "countries": true,
+        "products": true,
+        "period": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0106988,
+          "error_type": "ValidationError",
+          "latency_seconds": 2.292599100037478,
+          "validation_errors": [
+            {
+              "loc": [],
+              "type": "value_error"
+            }
+          ]
+        },
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0106988,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3486,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 233,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3719
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.117350999964401,
+          "estimated_cost_usd": 0.0017672
+        }
+      ],
+      "latency_seconds": 4.430232899961993
+    },
+    {
+      "id": "H09",
+      "category": "result_report",
+      "question": "라면 유망 수출국을 예측한 다음 그 예측 결과로 리포트 만들어 줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "PROMISING_MARKET",
+          "question": "라면 유망 수출국 예측",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": null,
+          "products": [
+            "라면"
+          ],
+          "recent_months": null,
+          "period": null
+        },
+        {
+          "intent": "REPORT",
+          "question": "라면 유망 수출국 예측 결과로 리포트 작성",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": null,
+          "products": [
+            "라면"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": false,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": false,
+        "trade_flow": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010696,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3485,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 201,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3686
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.128286399994977,
+          "estimated_cost_usd": 0.0007172000000000001
+        }
+      ],
+      "latency_seconds": 2.137350899982266
+    },
+    {
+      "id": "H10",
+      "category": "import_report",
+      "question": "호주산 소고기 수입 동향 보고서 작성해줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "호주산 소고기 수입 동향 보고서 작성해줘",
+          "sources": [],
+          "trade_flow": "IMPORT",
+          "countries": [
+            "호주"
+          ],
+          "products": [
+            "소고기"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0106832,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3477,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 116,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3593
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.6862651000265032,
+          "estimated_cost_usd": 0.000578
+        }
+      ],
+      "latency_seconds": 1.696485299966298
+    },
+    {
+      "id": "H11",
+      "category": "import_report",
+      "question": "칠레 와인 수입 리포트 하나 만들어 줄래?",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "칠레 와인 수입 리포트 생성 요청",
+          "sources": [],
+          "trade_flow": "IMPORT",
+          "countries": [
+            "칠레"
+          ],
+          "products": [
+            "와인"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0106828,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3475,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 110,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3585
+          },
+          "response_status": "completed",
+          "latency_seconds": 4.946909599937499,
+          "estimated_cost_usd": 0.0005676
+        }
+      ],
+      "latency_seconds": 4.956242799991742
+    },
+    {
+      "id": "H12",
+      "category": "import_report",
+      "question": "독일에서 수입하는 자동차 최근 6개월 리포트로 정리해줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "독일에서 수입하는 자동차 최근 6개월 리포트로 정리해줘",
+          "sources": [],
+          "trade_flow": "IMPORT",
+          "countries": [
+            "독일"
+          ],
+          "products": [
+            "자동차"
+          ],
+          "recent_months": 6,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true,
+        "period": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010691200000000001,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3481,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 119,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3600
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.436328800045885,
+          "estimated_cost_usd": 0.0015828
+        }
+      ],
+      "latency_seconds": 2.44668339996133
+    },
+    {
+      "id": "H13",
+      "category": "not_report",
+      "question": "리포트 구독하면 언제 받아볼 수 있어?",
+      "expects_report": false,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "CONVERSATION",
+          "question": "리포트 구독 시 수령 시기를 알려줘",
+          "sources": [],
+          "trade_flow": null,
+          "countries": null,
+          "products": null,
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0106812,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3473,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 103,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3576
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.4658147000009194,
+          "estimated_cost_usd": 0.0005556000000000001
+        }
+      ],
+      "latency_seconds": 1.4770590999396518
+    },
+    {
+      "id": "H14",
+      "category": "not_report",
+      "question": "PDF랑 DOCX 중에 뭐가 나아?",
+      "expects_report": false,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "CONVERSATION",
+          "question": "PDF랑 DOCX 중에 뭐가 나아?",
+          "sources": [],
+          "trade_flow": null,
+          "countries": null,
+          "products": null,
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010674,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3472,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 101,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3573
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.7500124999787658,
+          "estimated_cost_usd": 0.000552
+        }
+      ],
+      "latency_seconds": 1.7606744999065995
+    },
+    {
+      "id": "H15",
+      "category": "not_report",
+      "question": "필리핀 라면 수출 상위 품목 순위만 보여줘, 보고서는 필요 없어",
+      "expects_report": false,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "RANKING",
+          "question": "필리핀 라면 수출 상위 품목 순위 보여줘",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "필리핀"
+          ],
+          "products": [
+            "라면"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010694799999999999,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3483,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 119,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3602
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.1194494999945164,
+          "estimated_cost_usd": 0.0015836000000000001
+        }
+      ],
+      "latency_seconds": 2.129674099967815
+    },
+    {
+      "id": "H16",
+      "category": "not_report",
+      "question": "FTA가 뭐야?",
+      "expects_report": false,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "CONVERSATION",
+          "question": "FTA가 뭐야?",
+          "sources": [],
+          "trade_flow": null,
+          "countries": null,
+          "products": null,
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010666400000000001,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3466,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 95,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3561
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.8703759999480098,
+          "estimated_cost_usd": 0.0015384
+        }
+      ],
+      "latency_seconds": 1.880785800050944
+    },
+    {
+      "id": "H17",
+      "category": "not_report",
+      "question": "대만 반도체 수출이 줄어든 이유 알려줘",
+      "expects_report": false,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "CAUSE",
+          "question": "대만 반도체 수출이 줄어든 이유 알려줘",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "대만"
+          ],
+          "products": [
+            "반도체"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010682,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3476,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 115,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3591
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.5561719000106677,
+          "estimated_cost_usd": 0.0015744
+        }
+      ],
+      "latency_seconds": 1.5660824000369757
+    },
+    {
+      "id": "H18",
+      "category": "mixed_request",
+      "question": "영국 위스키 수출 리포트 만들고 위스키 HS코드도 알려줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "영국 위스키 수출 리포트 만들어줘",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "영국"
+          ],
+          "products": [
+            "위스키"
+          ],
+          "recent_months": null,
+          "period": null
+        },
+        {
+          "intent": "HS_LOOKUP",
+          "question": "위스키 HS코드 알려줘",
+          "sources": [],
+          "trade_flow": null,
+          "countries": null,
+          "products": [
+            "위스키"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010690799999999999,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3483,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 206,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3689
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.58439490001183,
+          "estimated_cost_usd": 0.0007244
+        }
+      ],
+      "latency_seconds": 2.5946921999566257
+    },
+    {
+      "id": "H19",
+      "category": "mixed_request",
+      "question": "멕시코 화장품 수출액 알려 주고, 별도로 칠레 화장품 수출 리포트도 부탁해",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "STATISTICS",
+          "question": "멕시코 화장품 수출액 알려 줘",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "멕시코"
+          ],
+          "products": [
+            "화장품"
+          ],
+          "recent_months": null,
+          "period": null
+        },
+        {
+          "intent": "REPORT",
+          "question": "칠레 화장품 수출 리포트 부탁해",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "칠레"
+          ],
+          "products": [
+            "화장품"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010701200000000001,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3492,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 224,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3716
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.588262700010091,
+          "estimated_cost_usd": 0.0007568000000000001
+        }
+      ],
+      "latency_seconds": 2.5972078000195324
+    },
+    {
+      "id": "H20",
+      "category": "mixed_request",
+      "question": "인도 의약품 수출 리포트 만들어 주고 인도 관련 최근 기사도 같이 보여줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "인도 의약품 수출 리포트 만들어 주고",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "인도"
+          ],
+          "products": [
+            "의약품"
+          ],
+          "recent_months": null,
+          "period": null
+        },
+        {
+          "intent": "LOCAL_ISSUES",
+          "question": "인도 관련 최근 기사도 같이 보여줘",
+          "sources": [],
+          "trade_flow": null,
+          "countries": [
+            "인도"
+          ],
+          "products": null,
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0107,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3484,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 216,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3700
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.3185464999405667,
+          "estimated_cost_usd": 0.0007408000000000001
+        }
+      ],
+      "latency_seconds": 2.3323643999174237
+    },
+    {
+      "id": "H21",
+      "category": "follow_up",
+      "question": "지금 조건 그대로 리포트로 받아볼게",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "지금 조건 그대로 리포트로 받아볼게",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "호주"
+          ],
+          "products": [
+            "2204"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true,
+        "period": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010764400000000002,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3537,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 110,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3647
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.3860612999415025,
+          "estimated_cost_usd": 0.0005924000000000001
+        }
+      ],
+      "latency_seconds": 1.3969067999860272
+    },
+    {
+      "id": "H22",
+      "category": "follow_up",
+      "question": "국가만 일본으로 바꿔서 리포트 만들어줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "국가를 일본으로 바꿔서 2204 품목 수출에 대한 리포트를 만들어줘",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "일본"
+          ],
+          "products": [
+            "2204"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true,
+        "period": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0107668,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3541,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 124,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3665
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.77396989997942,
+          "estimated_cost_usd": 0.0016148000000000002
+        }
+      ],
+      "latency_seconds": 1.7843445000471547
+    },
+    {
+      "id": "H23",
+      "category": "follow_up",
+      "question": "2024년 전체 기간으로 다시 리포트 뽑아줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "2024년 전체 기간으로 3004 품목 인도 수출 리포트 생성",
+          "sources": [],
+          "trade_flow": "EXPORT",
+          "countries": [
+            "인도"
+          ],
+          "products": [
+            "3004"
+          ],
+          "recent_months": null,
+          "period": {
+            "start": "2024-01",
+            "end": "2024-12"
+          }
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true,
+        "period": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.0107664,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3541,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 0
+            },
+            "output_tokens": 135,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3676
+          },
+          "response_status": "completed",
+          "latency_seconds": 2.0187007000204176,
+          "estimated_cost_usd": 0.0016324
+        }
+      ],
+      "latency_seconds": 2.0304692999925464
+    },
+    {
+      "id": "H24",
+      "category": "follow_up",
+      "question": "같은 품목과 국가로 수입 리포트도 만들어 줘",
+      "expects_report": true,
+      "planner_failed": false,
+      "actual": [
+        {
+          "intent": "REPORT",
+          "question": "같은 품목과 국가로 수입 리포트를 만들어 줘",
+          "sources": [],
+          "trade_flow": "IMPORT",
+          "countries": [
+            "독일"
+          ],
+          "products": [
+            "8703"
+          ],
+          "recent_months": null,
+          "period": null
+        }
+      ],
+      "warnings": [],
+      "correct": true,
+      "marks": {
+        "intent": true,
+        "report_present": true,
+        "sources": true,
+        "trade_flow": true,
+        "countries": true,
+        "products": true,
+        "period": true
+      },
+      "calls": [
+        {
+          "requested_model": "gpt-4.1-mini",
+          "reserved_cost_usd": 0.010768799999999999,
+          "actual_model": "gpt-4.1-mini-2025-04-14",
+          "usage": {
+            "input_tokens": 3542,
+            "input_tokens_details": {
+              "cache_write_tokens": 0,
+              "cached_tokens": 3328
+            },
+            "output_tokens": 114,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 3656
+          },
+          "response_status": "completed",
+          "latency_seconds": 1.388526999973692,
+          "estimated_cost_usd": 0.0006008000000000001
+        }
+      ],
+      "latency_seconds": 1.3987519999500364
+    }
+  ],
+  "summary": {
+    "evaluated": 24,
+    "planned": 24,
+    "overall_accuracy": {
+      "passed": 21,
+      "total": 24,
+      "rate_pct": 87.5
+    },
+    "by_field": {
+      "intent": {
+        "passed": 24,
+        "total": 24,
+        "rate_pct": 100.0
+      },
+      "report_present": {
+        "passed": 24,
+        "total": 24,
+        "rate_pct": 100.0
+      },
+      "sources": {
+        "passed": 17,
+        "total": 19,
+        "rate_pct": 89.47
+      },
+      "trade_flow": {
+        "passed": 19,
+        "total": 19,
+        "rate_pct": 100.0
+      },
+      "countries": {
+        "passed": 17,
+        "total": 17,
+        "rate_pct": 100.0
+      },
+      "products": {
+        "passed": 19,
+        "total": 19,
+        "rate_pct": 100.0
+      },
+      "period": {
+        "passed": 7,
+        "total": 8,
+        "rate_pct": 87.5
+      }
+    },
+    "report_detection": {
+      "recall": {
+        "passed": 19,
+        "total": 19,
+        "rate_pct": 100.0
+      },
+      "false_positive_avoided": {
+        "passed": 5,
+        "total": 5,
+        "rate_pct": 100.0
+      }
+    },
+    "by_category": {
+      "condition_report": {
+        "passed": 4,
+        "total": 5,
+        "rate_pct": 80.0
+      },
+      "result_report": {
+        "passed": 2,
+        "total": 4,
+        "rate_pct": 50.0
+      },
+      "import_report": {
+        "passed": 3,
+        "total": 3,
+        "rate_pct": 100.0
+      },
+      "not_report": {
+        "passed": 5,
+        "total": 5,
+        "rate_pct": 100.0
+      },
+      "mixed_request": {
+        "passed": 3,
+        "total": 3,
+        "rate_pct": 100.0
+      },
+      "follow_up": {
+        "passed": 4,
+        "total": 4,
+        "rate_pct": 100.0
+      }
+    },
+    "planner_failures": 0,
+    "latency_seconds_mean": 2.3260824999888428,
+    "latency_seconds_median": 2.0512791500077583,
+    "input_tokens": 83767,
+    "output_tokens": 3519,
+    "estimated_cost_usd": 0.026158,
+    "calls_without_usage": 1
+  },
+  "questions_unchanged": true,
+  "completed_at_utc": "2026-11-09T07:49:39.803502+00:00"
+}

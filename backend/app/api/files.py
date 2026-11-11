@@ -82,7 +82,7 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False,info_rows=None):
                 v=row.get(c['key'])
                 if v is None and c.get('unit')=='%' and ('share' in c['key'] or '비중' in c['label']): v='-'
                 elif isinstance(v,dict) and 'hs_code' in v: v=v['hs_code']
-                elif isinstance(v,(dict,list)): v=str(v)
+                elif isinstance(v,(dict,list)): v=readable(v,c['key'])  # 일회성 판정·목록은 읽을 수 있는 글자로. 숫자는 셀 서식을 쓰도록 그대로 둔다
                 values.append(v)
             ws.append(values)
             for cell,fmt,column in zip(ws[ws.max_row],formats,columns):
@@ -117,7 +117,26 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False,info_rows=None):
     stream=BytesIO(); wb.save(stream); return stream.getvalue()
 
 
-def display(value):
+# 결과표의 상태 코드 → 사람이 읽는 말(리포트 DOCX·PDF). 값을 바꾸지 않고 표시만 바꾼다.
+# XLSX는 데이터 파일이라 사전·목록만 글자로 바꾸고 상태 코드는 원래 값을 둔다(xlsx_bytes).
+STATUS_LABELS={'NEW':'신규','UP':'상승','DOWN':'하락','SAME':'유지','NOT_APPLICABLE':'해당 없음','NORMAL':'일반','MAJOR':'큰 변화'}
+STATUS_KEYS={'rank_status','growth_status','severity'}
+
+
+def readable(value,key=None):
+    """사전·목록·상태 코드를 읽을 수 있는 글자로. 숫자·일반 글자·None은 그대로 돌려준다."""
+    if isinstance(value,dict) and 'suspected' in value:  # trade.anomaly_view 일회성 판정
+        if value.get('suspected'): return '일회성 의심' + (f" ({', '.join(value['rules'])})" if value.get('rules') else '')
+        return '판정 전' if value.get('status')=='NOT_EVALUATED' else '해당 없음'
+    if isinstance(value,dict) and 'hs_code' in value: return value['hs_code']
+    if isinstance(value,dict): return ', '.join(f'{k}: {readable(v)}' for k,v in value.items())
+    if isinstance(value,list): return ', '.join(str(readable(v)) for v in value)
+    if key in STATUS_KEYS and value in STATUS_LABELS: return STATUS_LABELS[value]
+    return value
+
+
+def display(value,key=None):
+    value=readable(value,key)
     if value is None: return '자료 없음'
     if isinstance(value,(int,float)): return f'{value:,.2f}'.rstrip('0').rstrip('.')
     return str(value)
@@ -193,7 +212,7 @@ def reportlab_pdf(document,settings):
         for table in s.get('tables',[]):
             columns=table['columns']; visible=[c for c in columns if c['type'] in ('number','string')][:6]
             data=[[p(c['label']) for c in visible]]
-            data.extend([[p(display(row.get(c['key']))) for c in visible] for row in table['rows']])
+            data.extend([[p(display(row.get(c['key']),c['key'])) for c in visible] for row in table['rows']])
             if visible:
                 grid=Table(data,colWidths=[483/len(visible)]*len(visible),repeatRows=1,hAlign='LEFT')
                 grid.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#EEEAE4')),('VALIGN',(0,0),(-1,-1),'TOP'),('LINEBELOW',(0,0),(-1,-1),0.4,colors.HexColor('#D9D4CC')),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
@@ -255,7 +274,7 @@ def report_docx(document,settings=None):
             for cell,col in zip(table.rows[0].cells,cols): cell.text=col['label']
             repeat=OxmlElement('w:tblHeader'); table.rows[0]._tr.get_or_add_trPr().append(repeat)
             for row in source['rows']:
-                for cell,col in zip(table.add_row().cells,cols): cell.text=display(row.get(col['key']))
+                for cell,col in zip(table.add_row().cells,cols): cell.text=display(row.get(col['key']),col['key'])
         for a in s.get('articles',[]):
             doc.add_heading(a['title'],2); doc.add_paragraph(a['summary']); doc.add_paragraph(f'{a["source_code"]} · {a["published_date"]}\n{a["source_url"]}')
         doc.add_page_break()

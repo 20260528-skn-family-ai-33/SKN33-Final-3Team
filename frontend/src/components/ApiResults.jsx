@@ -14,7 +14,8 @@ const PAGE_SIZE = 20
 const FLOW_KEYS = { EXPORT: ['amount_usd', 'export_amount_usd', 'previous_year_export_usd'], IMPORT: ['amount_usd', 'import_amount_usd', 'previous_year_import_usd'] }
 const ALL_KEYS = ['amount_usd', 'export_amount_usd', 'import_amount_usd', 'previous_year_export_usd', 'previous_year_import_usd']
 
-export default function ApiResults({ table, tableOnly = false, onDownload, flow }) {
+// fixedColumns: 저장된 리포트처럼 서버가 열과 순서를 확정한 표. 채팅 화면의 숨김 규칙을 다시 적용하지 않는다.
+export default function ApiResults({ table, tableOnly = false, fixedColumns = false, onDownload, flow }) {
   const { run } = useApp()
   const [showTable, setShowTable] = useState(false)
   // 응답에는 첫 페이지(20행)만 온다. 나머지는 저장 결과 API에서 페이지로 읽는다(차트는 전체 값을 따로 그린다).
@@ -26,7 +27,7 @@ export default function ApiResults({ table, tableOnly = false, onDownload, flow 
   const paged = loaded.id === table?.result_id ? loaded : { page: 1, rows: null }
   const shown = paged.rows || rows
   // 여러 페이지면 서버가 전체 행으로 정한 열을 그대로 쓴다(페이지마다 열이 바뀌지 않게). 라벨만 붙인다.
-  const columns = resultColumns(table?.columns || [], rows, { labelsOnly: pages > 1, meta: table?.meta })
+  const columns = resultColumns(table?.columns || [], rows, { labelsOnly: fixedColumns || pages > 1, meta: table?.meta })
   const go = page => run(async () => {
     const request = ++latest.current, id = table.result_id
     const data = page === 1 ? { table } : await api(`/results/${id}`, { query: { page, page_size: PAGE_SIZE } })
