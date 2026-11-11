@@ -1,6 +1,7 @@
 // Existing screens + real local API, MySQL, Redis and worker. No route mocks.
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
+const { checkSessionSync } = require('./session-sync.cjs')
 const fs = require('node:fs'), path = require('node:path')
 async function main() {
   const base = process.argv[2] || 'http://127.0.0.1:5173'
@@ -159,27 +160,7 @@ async function main() {
     await page.getByText(/^\d{4}-\d{2}-\d{2} 동의$/).nth(1).waitFor()
     assert.equal(await page.getByRole('switch').count(), 0)
     ok('회원정보에 가입 약관 동의 날짜 표시')
-    // 같은 프로필의 다른 탭에서 로그인하면 세션과 CSRF가 모두 새로 발급된다.
-    const second = await context.newPage()
-    await second.goto(base+'/#/login')
-    await second.locator('#login-email').fill(email)
-    await second.locator('#login-password').fill(password)
-    const synced = page.waitForResponse(r => r.url().endsWith('/users/me') && r.status() === 200)
-    await second.getByRole('button', { name: '로그인', exact: true }).click()
-    await synced
-    await page.getByRole('button', { name: '로그아웃', exact: true }).waitFor()
-    await second.close()
-    ok('다른 탭에서 재로그인하면 기존 탭이 현재 세션을 다시 읽음')
-    await page.getByRole('button', { name: '로그아웃', exact: true }).click(); await page.waitForURL('**/#/login')
-    await page.locator('#login-email').fill(email); await page.locator('#login-password').fill(password)
-    await page.getByRole('button', { name: '로그인', exact: true }).click(); await page.waitForURL('**/#/?view=interest')
-    ok('로그아웃·기존 로그인 화면 재로그인·관심 시작 화면')
-    await go('/account/password')
-    await page.locator('#pw-email').fill(email); await page.getByRole('button', { name: '이메일 확인' }).click()
-    // Chrome may populate the native input without dispatching a React change event.
-    await page.locator('#pw-current').evaluate((input, value) => { input.value = value }, password)
-    await page.locator('#pw-next').fill('Changed!456'); await page.locator('#pw-confirm').fill('Changed!456')
-    await page.getByRole('button', { name: '변경 저장' }).click(); await page.waitForURL('**/#/login')
+    await checkSessionSync(page, base, email, password, ok)
     await page.locator('#login-email').fill(email); await page.locator('#login-password').fill(password); await page.getByRole('button', { name: '로그인', exact: true }).click()
     await page.getByRole('alert').filter({ hasText: '일치하지 않습니다' }).waitFor()
     await page.locator('#login-password').fill('Changed!456'); await page.getByRole('button', { name: '로그인', exact: true }).click(); await page.waitForURL('**/#/?view=interest')
