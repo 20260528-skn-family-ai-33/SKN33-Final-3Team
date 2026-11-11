@@ -13,7 +13,7 @@ from backend.app.agents.charts import build_chart
 from backend.app.agents.bindings import resolve as resolve_bindings, source_versions
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
 from backend.app.agents.compose import (ARTICLE_PROMPT, COMPOSE_PROMPT, COMPOSE_TEXT_PROMPT, assemble, compose_input,
-                                        apply_claim_edits, cited_article_numbers, fallback_conclusion, numbered_articles, validate_citations, validate_rewrite)
+                                        apply_claim_edits, complete_article_only_conclusions, cited_article_numbers, fallback_conclusion, numbered_articles, validate_citations, validate_rewrite)
 from backend.app.agents.conditions import check_conditions
 from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT
@@ -483,11 +483,7 @@ class Services:
                        '새 통계 수치는 해당 tasks의 digests에 있는 근거만 사용하세요.')
         def assemble_response(value):
             draft = assemble(state,value,fixed,describe,articles=payload['articles'])
-            article_only = {task['task_id'] for task in payload['tasks']
-                            if task['intent'] == 'CAUSE' and task['digests'].keys() == {'news'}}
-            for conclusion in draft.conclusion:
-                if conclusion.task_id in article_only and not cited_article_numbers(' '.join(conclusion.sentences)):
-                    raise ValueError('기사만 남은 원인 질문의 결론에는 해당 기사의 출처가 필요합니다.')
+            complete_article_only_conclusions(state, draft, payload)
             return validate_rewrite(state,draft,payload) if correcting else draft
         revised=self.structured(state,'compose',prompt,payload,Draft,tokens,
                                 assemble_response,
@@ -495,10 +491,13 @@ class Services:
         if revised is None and state.draft is not None and state.verification.regeneration_count:
             # Pre-migration checkpoints can hold a draft that never passed citation validation.
             try:
-                validate_citations(state.draft, payload['articles'])
+                prior = state.draft.model_copy(deep=True)
+                validate_citations(prior, payload['articles'])
+                complete_article_only_conclusions(state, prior, payload)
             except ValueError:
                 pass
             else:
+                state.draft = prior
                 return
         state.draft=revised
         if state.draft is None:

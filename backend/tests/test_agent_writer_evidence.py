@@ -233,7 +233,7 @@ class WriterEvidenceTest(unittest.TestCase):
                 ]:
                     with self.subTest(text=text, section=section, replacement=replacement):
                         state = dev_state(DEV['02-zero-null'])
-                        state.plan.tasks[0].question = '미국 수출은 전년 동월 대비 어떻게 변했나요?'
+                        state.plan.tasks[0].question = '미국 수출은 작년 같은 달보다 어떻게 변했나요?'
                         state.results['t1.sql'].digest = {'kind':'TREND', 'trade_flow':'EXPORT',
                             'rows':[{'country_name':'미국', 'yoy_pct':3, 'mom_pct':-1.5}]}
                         body = old if section == 'conclusion' else '검증된 본문입니다.'
@@ -358,9 +358,46 @@ class WriterEvidenceTest(unittest.TestCase):
             elif step.tool == 'build_chart':
                 step.status = 'SKIPPED'
         task.answer_status = state.task_outcome(task.task_id)
-        invalid = Draft(conclusion=[{'task_id':'t1','sentences':['기사 목록을 확인하세요.']}], turn_summary='')
-        with self.assertLogs('backend.app.agents.runtime', 'WARNING'):
-            client = compose(state, invalid, invalid)
-        self.assertEqual(client.parse.call_count, 2)
-        self.assertIn('창고가 운영을 재개했습니다.[1]', state.draft.sentences()[0])
-        self.assertIn('인과관계는 판단할 수 없습니다', state.draft.sentences()[1])
+        for invalid_sentence in ('기사 목록을 확인하세요.', '기사 목록을 확인하세요.[1]',
+                                 '창고가 운영을 재개했습니다.[2]'):
+            with self.subTest(invalid_sentence=invalid_sentence):
+                current = state.model_copy(deep=True)
+                invalid = Draft(conclusion=[{'task_id':'t1','sentences':[invalid_sentence]}], turn_summary='')
+                with self.assertLogs('backend.app.agents.runtime', 'WARNING'):
+                    client = compose(current, invalid, invalid)
+                self.assertEqual(client.parse.call_count, 2)
+                self.assertEqual(current.draft.sentences()[0], '창고가 운영을 재개했습니다.[1]')
+                self.assertIn('통계 조회 실패', current.draft.sentences()[1])
+                self.assertIn('인과관계는 판단할 수 없습니다', current.draft.sentences()[1])
+
+        for text in (False, True):
+            current = state.model_copy(deep=True)
+            valid = Draft(conclusion=[{'task_id':'t1','sentences':['선박이 출항했습니다.[2]']}], turn_summary='')
+            client = compose(current, valid, text=text)
+            self.assertEqual(client.parse.call_count, 1)
+            self.assertEqual(current.draft.sentences()[0], '선박이 출항했습니다.[2]')
+            self.assertIn('통계 조회 실패', current.draft.sentences()[1])
+            self.assertIn('인과관계는 판단할 수 없습니다', current.draft.sentences()[1])
+
+    def test_yoy_synonym_survives_verify_compose_verify(self):
+        from backend.app.agents.state import WriterEdits
+        from backend.app.agents.verify import verify
+
+        for text, question in [(False, '미국 수출은 작년 같은 달보다 얼마나 늘었나요?'),
+                               (True, '미국 수출은 전년 동월 대비 얼마나 늘었나요?')]:
+            for replacement, accepted in [('전월 대비 1.5% 감소했습니다', False),
+                                          ('지난해 같은 달보다 3% 증가했습니다', True)]:
+                with self.subTest(text=text, replacement=replacement):
+                    state = dev_state(DEV['02-zero-null'])
+                    state.plan.tasks[0].question = state.input.question = question
+                    state.results['t1.sql'].digest = {'kind':'TREND', 'trade_flow':'EXPORT',
+                        'rows':[{'country_name':'미국', 'yoy_pct':3, 'mom_pct':-1.5}]}
+                    original = '미국 수출은 전년 동월 대비 1.5% 감소했습니다.'
+                    state.draft = Draft(conclusion=[{'task_id':'t1','sentences':[original]}],turn_summary='')
+                    verify(state)
+                    self.assertEqual(state.verification.feedback[0].reason, 'COMPARISON')
+                    state.verification.regeneration_count = 1
+                    compose(state, WriterEdits(edits=[{'feedback_index':0,'replacement':replacement}]), text=text)
+                    verify(state)
+                    self.assertEqual(state.verification.status, 'PASS' if accepted else 'NEEDS_REVIEW')
+                    self.assertEqual(state.draft.sentences(), ['미국 수출은 '+replacement+'.' if accepted else original])

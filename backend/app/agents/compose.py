@@ -3,7 +3,8 @@ from collections import Counter
 import re
 
 from backend.app.agents.digest import display_amounts, korean_usd
-from backend.app.agents.state import AgentState, Draft, TaskConclusion, draft_limit_error, is_text_task
+from backend.app.agents.state import (AgentState, Draft, TaskConclusion, MAX_TASK_SENTENCES,
+                                      MAX_TEXT_TASK_SENTENCES, draft_limit_error, is_text_task)
 
 # Shared by Writer validation, numeric verification and hidden-article redaction.
 ARTICLE_CITATION = re.compile(r'\[\s*([0-9]+(?:\s*,\s*[0-9]+)*)\s*\]')
@@ -57,6 +58,8 @@ unclassified는 근거 역할 미분류입니다. 기사 제목으로 인과관�
 reference_limitation과 요약 문장의 unverified_question_parts를 지키세요. news의 unverified_question_parts는
 그 하위 질문의 모든 기사 근거에서 미확인인 항목입니다. 답할 수 있는 사실과 확인할 수 없는 부분을 명시하세요.
 기사 검색을 요청했으나 쓸 근거가 없으면 확인된 수치와 해당 검색의 한계를 밝히세요. 기사만 있으면 같은 질문의 기사에서 확인된 사실을 인용하고, 통계와 인과관계를 확인할 수 없는 범위를 밝히세요.
+통계가 없고 기사만 남은 CAUSE 결론에는 해당 Task의 articles.summary에서 질문에 답하는 사실 문장을 그대로 선택하고
+각 문장 끝에 그 출처 [n]을 붙이세요. 이 경우 통계 한계 안내는 코드가 결론에 덧붙입니다.
 기사 사실을 쓴 결론과 설명에는 각각 출처를 붙이세요. 기사 발행일을 사건 발생일로 바꾸지 마세요.
 """
 
@@ -106,6 +109,14 @@ def _trade_fact(digest):
     return f'{subject}은 전체 기간 미집계입니다.'
 
 
+def missing_trade_notice(state, task):
+    reason = next((state.results[s.step_id].error for s in task.steps if s.tool == 'query_trade_data'
+                   and s.step_id in state.results and state.results[s.step_id].error), '')
+    limit = '통계를 확인할 수 없어 수출입 변화와의 인과관계는 판단할 수 없습니다.'
+    message = (reason + ' ' + limit).strip()
+    return message if len(message) <= 200 else limit
+
+
 def fallback_conclusion(state, task):
     """Build a conclusion from the same result handles used to render this task."""
     results = [(s.tool, state.results[s.step_id]) for s in task.steps if s.step_id in state.results]
@@ -130,9 +141,6 @@ def fallback_conclusion(state, task):
     resources = [name for name, present in [('결과표', tables), ('차트', chart), ('기사 목록', articles)] if present]
     reasons = [r.error for tool, r in results if r.status != 'OK' and r.error and tool != 'build_chart']
     if task.intent == 'CAUSE' and not tables:
-        reason = next((r.error for tool, r in results if tool == 'query_trade_data' and r.error), '')
-        limit = '통계를 확인할 수 없어 수출입 변화와의 인과관계는 판단할 수 없습니다.'
-        limitation = (reason + ' ' + limit).strip()
         for card in cards:
             if not card.get('evidence_sufficient'):
                 continue
@@ -142,7 +150,7 @@ def fallback_conclusion(state, task):
                 if fact_text and not cited_article_numbers(fact_text) and len(fact_text + citation) <= 200:
                     task.answer_status = 'PARTIAL'
                     return TaskConclusion(task_id=task.task_id, sentences=[
-                        fact_text + citation, limitation if len(limitation) <= 200 else limit])
+                        fact_text + citation, missing_trade_notice(state, task)])
     if task.intent == 'CAUSE' and not reasons:
         if not tables:
             reasons.append('요청한 통계 수치를 확인할 수 없습니다.')
@@ -270,6 +278,37 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
     return payload, fixed
 
 
+def complete_article_only_conclusions(state, draft, payload):
+    """Bind each selected fact to its own article and attach the tool's limitation once."""
+    for task, conclusion in zip(state.plan.tasks, draft.conclusion, strict=True):
+        inputs = next((t for t in payload['tasks'] if t['task_id'] == task.task_id), None)
+        if task.intent != 'CAUSE' or not inputs or inputs['digests'].keys() != {'news'}:
+            continue
+        supported = {(str(card['n']), item['text'].strip()) for card in payload['articles']
+                     if card['task_id'] == task.task_id for item in card['summary']}
+        notice = missing_trade_notice(state, task)
+        facts = []
+        for line in conclusion.sentences:
+            line = line.removesuffix(' ' + notice)
+            numbers = cited_article_numbers(line)
+            if not numbers:
+                continue  # The service supplies the notice using the actual tool result.
+            fact = ARTICLE_CITATION.sub('', line).strip()
+            if not fact or any((n, fact) not in supported for n in numbers):
+                raise ValueError('인용한 기사의 요약에서 확인할 수 없는 문장입니다.')
+            facts.append(line)
+        if not facts:
+            raise ValueError('기사에서 확인된 사실과 출처가 필요합니다.')
+        limit = MAX_TEXT_TASK_SENTENCES if is_text_task(task) else MAX_TASK_SENTENCES
+        if len(facts) < limit:
+            facts.append(notice)
+        elif len(facts[-1]) + 1 + len(notice) <= 200:
+            facts[-1] += ' ' + notice
+        else:
+            raise ValueError('기사 사실과 통계 한계를 함께 표시할 공간이 부족합니다.')
+        conclusion.sentences = facts
+
+
 def validate_citations(generated, articles):
     by_task = {}
     for a in articles:
@@ -365,6 +404,24 @@ def validate_rewrite(state, revised, payload):
     return revised
 
 
+def comparison_axes(text):
+    from backend.app.agents.verify_claims import MONTH_AGO, YEAR_AGO
+    patterns = {'YOY': YEAR_AGO, 'MOM': MONTH_AGO, 'QOQ': r'전분기|직전\s*분기|지난\s*분기'}
+    return {axis for axis, pattern in patterns.items() if re.search(pattern, text)}
+
+
+def requested_axis(task):
+    cond = task.conditions
+    if cond and cond.period and cond.compare_period:
+        current, previous = cond.period, cond.compare_period
+        def month_gap(a, b):
+            return (a.year - b.year) * 12 + a.month - b.month
+        start = month_gap(current.start, previous.start)
+        if start == month_gap(current.end, previous.end):
+            return {1: 'MOM', 3: 'QOQ', 12: 'YOY'}.get(start)
+    return None
+
+
 def apply_claim_edits(state, payload, edits):
     """Apply edits against one immutable draft. Locations use Verify's global sentence index."""
     from backend.app.agents.verify import inspect_sentence
@@ -417,10 +474,19 @@ def apply_claim_edits(state, payload, edits):
         owner = next((task for task in state.plan.tasks if f.step_id in visible[task.task_id]), None)
         if not owner or (task_id and task_id != owner.task_id):
             raise ValueError('NO_WRITER_EVIDENCE')
+        original_axes = comparison_axes(f.passage)
+        replacement_axes = comparison_axes(edit.replacement)
+        if f.reason != 'COMPARISON' and replacement_axes != original_axes:
+            raise ValueError('REQUESTED_COMPARISON_CHANGED')
         if f.reason == 'COMPARISON':
-            for period in ('전년', '전월', '전분기'):
-                if period in owner.question and period in f.passage and period not in edit.replacement:
-                    raise ValueError('REQUESTED_COMPARISON_CHANGED')
+            asked = comparison_axes(owner.question)
+            # Multiple comparisons in one question: preserve the axis of this claim.
+            required = asked if len(asked) == 1 else original_axes
+            if not asked:
+                resolved = requested_axis(owner)
+                required = {resolved} if resolved else original_axes
+            if required and replacement_axes != required:
+                raise ValueError('REQUESTED_COMPARISON_CHANGED')
         changes.setdefault(loc, []).append((left, right, edit.replacement, f.step_id, f.targets))
 
     for loc, patches in changes.items():
