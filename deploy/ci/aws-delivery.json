@@ -29,7 +29,7 @@
               "Condition": {
                 "StringEquals": {
                   "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-                  "token.actions.githubusercontent.com:sub": "repo:20260528-skn-family-ai-33/SKN33-Final-3Team:ref:refs/heads/main"
+                  "token.actions.githubusercontent.com:sub": "repo:20260528-skn-family-ai-33@288865373/SKN33-Final-3Team@1391546994:ref:refs/heads/main"
                 }
               }
             }
