@@ -56,7 +56,7 @@ evidence_role이 context_reference면 배경 자료입니다. mixed면 '참고(�
 unclassified는 근거 역할 미분류입니다. 기사 제목으로 인과관계를 추측하지 마세요.
 reference_limitation과 요약 문장의 unverified_question_parts를 지키세요. news의 unverified_question_parts는
 그 하위 질문의 모든 기사 근거에서 미확인인 항목입니다. 답할 수 있는 사실과 확인할 수 없는 부분을 명시하세요.
-기사 검색을 요청했으나 쓸 근거가 없으면 확인된 수치와 해당 검색의 한계를 밝히세요. 기사만 있으면 통계 수치를 만들지 마세요.
+기사 검색을 요청했으나 쓸 근거가 없으면 확인된 수치와 해당 검색의 한계를 밝히세요. 기사만 있으면 같은 질문의 기사에서 확인된 사실을 인용하고, 통계와 인과관계를 확인할 수 없는 범위를 밝히세요.
 기사 사실을 쓴 결론과 설명에는 각각 출처를 붙이세요. 기사 발행일을 사건 발생일로 바꾸지 마세요.
 """
 
@@ -123,11 +123,26 @@ def fallback_conclusion(state, task):
                 summary if len(summary) <= 200 else 'HS 코드 후보를 찾았으나 전체 목록을 답변 문장으로 만들지 못했습니다.'])
     tables = [r for tool, r in results if tool in ('query_trade_data', 'query_market_model') and r.status == 'OK' and r.result_id]
     chart = any(r.status == 'OK' and r.chart and r.result_id for _, r in results)
-    articles = any(a['task_id'] == task.task_id for a in numbered_articles(state))
+    cards = [a for a in numbered_articles(state) if a['task_id'] == task.task_id]
+    articles = bool(cards)
     facts = [_trade_fact(r.digest or {}) for r in tables]
     fact = next((value for value in facts if value), None)
     resources = [name for name, present in [('결과표', tables), ('차트', chart), ('기사 목록', articles)] if present]
     reasons = [r.error for tool, r in results if r.status != 'OK' and r.error and tool != 'build_chart']
+    if task.intent == 'CAUSE' and not tables:
+        reason = next((r.error for tool, r in results if tool == 'query_trade_data' and r.error), '')
+        limit = '통계를 확인할 수 없어 수출입 변화와의 인과관계는 판단할 수 없습니다.'
+        limitation = (reason + ' ' + limit).strip()
+        for card in cards:
+            if not card.get('evidence_sufficient'):
+                continue
+            for item in _citable_article(card)['summary']:
+                fact_text = item['text'].strip()
+                citation = f"[{card['n']}]"
+                if fact_text and not cited_article_numbers(fact_text) and len(fact_text + citation) <= 200:
+                    task.answer_status = 'PARTIAL'
+                    return TaskConclusion(task_id=task.task_id, sentences=[
+                        fact_text + citation, limitation if len(limitation) <= 200 else limit])
     if task.intent == 'CAUSE' and not reasons:
         if not tables:
             reasons.append('요청한 통계 수치를 확인할 수 없습니다.')
@@ -213,10 +228,16 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
         if not digests:
             fixed[task.task_id] = fallback_conclusion(state, task)
             continue
-        if digests.keys() == {'news'} and (
-                task.intent == 'CAUSE' or not any(a['task_id'] == task.task_id for a in allowed)):
-            fixed[task.task_id] = fallback_conclusion(state, task)
-            continue
+        if digests.keys() == {'news'}:
+            cards = [a for a in allowed if a['task_id'] == task.task_id]
+            if not cards:
+                fixed[task.task_id] = fallback_conclusion(state, task)
+                continue
+            if task.intent == 'CAUSE' and len(cards) == 1 and len(cards[0]['summary']) == 1:
+                partial = fallback_conclusion(state, task)
+                if cited_article_numbers(partial.sentences[0]):
+                    fixed[task.task_id] = partial
+                    continue
         search_planned = any(step.tool == 'search_articles' for step in task.steps)
         conditions = dict(describe_conditions(task.conditions))
         if not search_planned:
@@ -346,7 +367,7 @@ def validate_rewrite(state, revised, payload):
 
 def apply_claim_edits(state, payload, edits):
     """Apply edits against one immutable draft. Locations use Verify's global sentence index."""
-    from backend.app.agents.verify import check_sentence
+    from backend.app.agents.verify import inspect_sentence
 
     verification = state.verification
     original = Draft.model_validate(payload['regeneration']['draft'])
@@ -363,6 +384,16 @@ def apply_claim_edits(state, payload, edits):
     expected = {i for i, f in enumerate(verification.feedback) if f.action == 'CORRECT'}
     if {e.feedback_index for e in edits.edits} != expected or len(edits.edits) != len(expected):
         raise ValueError('EDIT_SET_MISMATCH')
+    visible = {}
+    for task in state.plan.tasks:
+        inputs = next((t['digests'] for t in payload['tasks'] if t['task_id'] == task.task_id), {})
+        by_key = {}
+        for step in task.steps:
+            key = step.step_id.rsplit('.', 1)[-1]
+            result = state.results.get(step.step_id)
+            if key in inputs and step.tool != 'search_articles' and result and result.status == 'OK' and result.digest:
+                by_key[key] = (step.step_id, result.digest)
+        visible[task.task_id] = dict(by_key.values())
     changes = {}
     for edit in edits.edits:
         f = verification.feedback[edit.feedback_index]
@@ -383,19 +414,14 @@ def apply_claim_edits(state, payload, edits):
                 continue
             if guard.span is None or max(left,guard.span[0]) < min(right,guard.span[1]):
                 raise ValueError('PROTECTED_CLAIM')
-        owner = next((task for task in state.plan.tasks
-                      if any(step.step_id == f.step_id and step.tool != 'search_articles'
-                             for step in task.steps)), None)
-        result = state.results.get(f.step_id)
-        inputs = next((t['digests'] for t in payload['tasks'] if owner and t['task_id']==owner.task_id), {})
-        if (not owner or (task_id and task_id != owner.task_id) or not result or not result.digest
-                or f.step_id.rsplit('.', 1)[-1] not in inputs):
+        owner = next((task for task in state.plan.tasks if f.step_id in visible[task.task_id]), None)
+        if not owner or (task_id and task_id != owner.task_id):
             raise ValueError('NO_WRITER_EVIDENCE')
         if f.reason == 'COMPARISON':
             for period in ('전년', '전월', '전분기'):
                 if period in owner.question and period in f.passage and period not in edit.replacement:
                     raise ValueError('REQUESTED_COMPARISON_CHANGED')
-        changes.setdefault(loc, []).append((left, right, edit.replacement, result.digest, f.targets))
+        changes.setdefault(loc, []).append((left, right, edit.replacement, f.step_id, f.targets))
 
     for loc, patches in changes.items():
         _, lines, i = locations[loc]
@@ -410,12 +436,27 @@ def apply_claim_edits(state, payload, edits):
         markers = r'\[\s*\d+(?:\s*,\s*\d+)*\s*\]|(?:\d{4}년\s*)?\d{1,2}월\s*\d{1,2}일|\d{4}-\d{2}-\d{2}'
         if re.findall(markers, original_line) != re.findall(markers, lines[i]):
             raise ValueError('PROTECTED_CITATION_OR_DATE')
-        # Validate each corrected statement against its own Writer-visible step.
-        for left, right, replacement, evidence, targets in patches:
+        task_id = locations[loc][0]
+        sources = (visible[task_id] if task_id else
+                   {step: digest for group in visible.values() for step, digest in group.items()})
+        names = {name for _, _, _, _, targets in patches for name in targets}
+        good, claims = inspect_sentence(lines[i], list(sources.values()), known_names=names)
+        if not good:
+            raise ValueError('UNSUPPORTED_CORRECTION')
+        # Map original offsets to the final text after all preceding edits.
+        offset = 0
+        for left, right, replacement, step_id, targets in sorted(patches, key=lambda p: p[0]):
             if re.search(r'\d', original_line[left:right]) and not re.search(r'\d', replacement):
                 raise ValueError('MISSING_CORRECTED_VALUE')
-            if not check_sentence(lines[i], [evidence], known_names=targets)[0]:
-                raise ValueError('UNSUPPORTED_CORRECTION')
+            start = left + offset
+            end = start + len(replacement)
+            offset += len(replacement) - (right - left)
+            if len(sources) > 1:
+                affected = [c for c in claims if c.claim.span and
+                            max(start, c.claim.span[0]) < min(end, c.claim.span[1])]
+                source_index = list(sources).index(step_id)
+                if not affected or any(not any(index == source_index for index, _ in c.matches) for c in affected):
+                    raise ValueError('UNSUPPORTED_CORRECTION')
     revised.turn_summary = summary[0]
     revised = Draft.model_validate(revised.model_dump())
     validate_citations(revised, payload['articles'])

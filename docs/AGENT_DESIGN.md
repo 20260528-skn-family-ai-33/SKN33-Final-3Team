@@ -696,7 +696,7 @@ Verify는 기사 발행일의 일자를 통계 수량에서 제외하며 같은 
   모든 Task가 고정 문구면 LLM을 부르지 않는다. 실패·미지원만 있으면 `turn_summary`는 빈 문자열이고 최근 조건·요약은 바꾸지 않는다. 리포트 성공은 D-93의 코드 작성 요약과 D-72의 조건 갱신 규칙을 적용한다.
 - **호출:** `client.responses.parse(model=compose_model, instructions=prompt, input=JSON, text_format=state.Draft, max_output_tokens=tokens, store=False)`, 시간 상한 `API_COMPOSE_TIMEOUT_SECONDS`(20초), SDK `max_retries=0`이다. 두 Luna 후보는 `reasoning.effort=low`를 쓰며, mini는 `temperature=0`을 쓴다. 추론과 답변에 쓰는 출력 상한은 일반 답변 3,000토큰, 문장형 답변(D-98) 6,000토큰이다. 초안과 재시도에 같은 상한을 적용한다. 워커 요청과 실행 기록은 모두 `API_COMPOSE_MODEL`에서 선택한 모델을 사용한다.
   - 최초 초안의 호출 실패·파싱 실패·`Draft` 검증 실패(일반 답변 D-50, 문장형 답변 D-98)는 1번만 다시 부른다(D-21). 수치 불일치로 이미 교정 호출을 한 경우에는 다시 호출하지 않는다. 교정 응답을 사용할 수 없으면 기사 인용 번호가 유효한 원래 초안을 유지하고 재검증해 불일치 문장에 “확인 필요”를 표시한다(FR-101-08).
-  - 그래도 실패하면 실제 자료로 대체 결론을 만든다. 원인 질문에서 통계만 남으면 확인된 수치와 기사 검색 실패 사유를, 기사만 남으면 기사 목록을 안내한다. 자료가 모두 없으면 원인과 함께 NO_DATA를 표시한다(D-67, D-72).
+  - 그래도 실패하면 실제 자료로 대체 결론을 만든다. 원인 질문에서 통계만 남으면 확인된 수치와 기사 검색 실패 사유를, 기사만 남으면 확인된 기사 사실과 출처 번호를 제시하고 통계·인과 판단의 한계를 밝힌다. 자료가 모두 없으면 원인과 함께 NO_DATA를 표시한다(D-67, D-72).
 - **입력 JSON** (LLM이 쓸 Task만):
   ```
   {"question": input.question,

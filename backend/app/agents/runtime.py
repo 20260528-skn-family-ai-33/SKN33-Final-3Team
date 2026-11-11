@@ -483,6 +483,11 @@ class Services:
                        '새 통계 수치는 해당 tasks의 digests에 있는 근거만 사용하세요.')
         def assemble_response(value):
             draft = assemble(state,value,fixed,describe,articles=payload['articles'])
+            article_only = {task['task_id'] for task in payload['tasks']
+                            if task['intent'] == 'CAUSE' and task['digests'].keys() == {'news'}}
+            for conclusion in draft.conclusion:
+                if conclusion.task_id in article_only and not cited_article_numbers(' '.join(conclusion.sentences)):
+                    raise ValueError('기사만 남은 원인 질문의 결론에는 해당 기사의 출처가 필요합니다.')
             return validate_rewrite(state,draft,payload) if correcting else draft
         revised=self.structured(state,'compose',prompt,payload,Draft,tokens,
                                 assemble_response,

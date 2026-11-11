@@ -173,7 +173,9 @@ class WriterEvidenceTest(unittest.TestCase):
                 self.assertEqual(task.answer_status, 'PARTIAL' if news_available else 'NO_DATA')
                 text = ' '.join(state.draft.sentences())
                 self.assertIn('미집계', text)
-                self.assertEqual('기사 목록' in text, news_available)
+                self.assertEqual('통관 신고서 양식 개정' in text, news_available)
+                self.assertEqual('[1]' in text, news_available)
+                self.assertEqual('인과관계는 판단할 수 없습니다' in text, news_available)
                 self.assertNotIn('결과표', text)
                 self.assertNotIn('차트', text)
 
@@ -293,3 +295,72 @@ class WriterEvidenceTest(unittest.TestCase):
                     self.assertEqual(client.parse.call_count, int(condition != 'review'))
                     self.assertEqual(state.writer_rewrite_result, expected)
                     self.assertEqual(state.draft, first)
+
+    def test_multi_source_rewrite_binds_each_changed_claim_to_its_requested_step(self):
+        from backend.app.agents.state import ClaimFeedback, WriterEdits
+
+        original = '미국 수출액은 100달러이고 일본 수출액은 199달러입니다.'
+        for text in (False, True):
+            for replacement, step_id, accepted in [('200', 't1.jp', True), ('200', 't1.sql', False),
+                                                    ('100', 't1.jp', False), ('201', 't1.jp', False)]:
+                with self.subTest(text=text, replacement=replacement, step_id=step_id):
+                    state = dev_state(DEV['01-large-export'])
+                    task = state.plan.tasks[0]
+                    sql = next(step for step in task.steps if step.tool == 'query_trade_data')
+                    task.steps.append(sql.model_copy(update={'step_id':'t1.jp'}))
+                    for key, country, amount in [('t1.sql','미국',100), ('t1.jp','일본',200)]:
+                        state.results[key] = ToolResult(status='OK', result_id=key, digest={
+                            'kind':'TREND', 'trade_flow':'EXPORT', 'rows':[{'country_name':country,'amount_usd':amount}]})
+                    state.draft = Draft(conclusion=[{'task_id':'t1','sentences':[original]}], turn_summary='')
+                    start = original.index('199')
+                    state.verification.regeneration_count = 1
+                    state.verification.feedback = [ClaimFeedback(section='conclusion', task_id='t1', index=0,
+                        action='CORRECT', reason='VALUE', span=(start,start+3), passage='199', step_id=step_id,
+                        targets=('일본',))]
+                    compose(state, WriterEdits(edits=[{'feedback_index':0,'replacement':replacement}]), text=text)
+                    self.assertEqual(state.draft.sentences(), [original.replace('199', replacement) if accepted else original])
+                    self.assertEqual(state.writer_rewrite_result, 'ACCEPTED_CORRECTION' if accepted else 'UNSUPPORTED_CORRECTION')
+
+    def test_partial_news_uses_task_owned_body_evidence_and_display_number(self):
+        rows = [
+            ('LOCAL_ISSUES', '다른 항구 소식은?', None, [article(11,'항구','선박이 출항했습니다.','direct_evidence')]),
+            ('CAUSE', '물동량 변화가 창고 재개 때문인가요?', statistic([500]), [
+                article(12,'창고 운영','창고가 운영을 재개했습니다.','direct_evidence')])]
+        for sufficient in (True, False):
+            state = dev_state(rows)
+            task = state.plan.tasks[1]
+            for step in task.steps:
+                if step.tool == 'query_trade_data':
+                    step.status = 'FAILED'
+                    state.results[step.step_id] = ToolResult(status='NO_DATA', error='통계 조회 실패')
+                elif step.tool == 'build_chart':
+                    step.status = 'SKIPPED'
+                elif step.tool == 'search_articles':
+                    state.results[step.step_id].digest['items'][0]['evidence_sufficient'] = sufficient
+            task.answer_status = state.task_outcome(task.task_id)
+            _, fixed = compose_input(state, lambda _: {}, numbered_articles(state))
+            answer = ' '.join(fixed[task.task_id].sentences)
+            self.assertEqual('창고가 운영을 재개했습니다.[2]' in answer, sufficient)
+            self.assertIn('통계 조회 실패', answer)
+            self.assertNotIn('[1]', answer)
+            self.assertNotIn('출항', answer)
+            self.assertNotIn('500', answer)
+
+    def test_multiple_article_partial_retries_uncited_answer_then_falls_back_to_evidence(self):
+        rows = [article(11,'창고','창고가 운영을 재개했습니다.','direct_evidence'),
+                article(12,'항구','선박이 출항했습니다.','context_reference')]
+        state = dev_state([('CAUSE','창고 재개로 수출이 늘었나요?',statistic([500]),rows)])
+        task = state.plan.tasks[0]
+        for step in task.steps:
+            if step.tool == 'query_trade_data':
+                step.status = 'FAILED'
+                state.results[step.step_id] = ToolResult(status='NO_DATA', error='통계 조회 실패')
+            elif step.tool == 'build_chart':
+                step.status = 'SKIPPED'
+        task.answer_status = state.task_outcome(task.task_id)
+        invalid = Draft(conclusion=[{'task_id':'t1','sentences':['기사 목록을 확인하세요.']}], turn_summary='')
+        with self.assertLogs('backend.app.agents.runtime', 'WARNING'):
+            client = compose(state, invalid, invalid)
+        self.assertEqual(client.parse.call_count, 2)
+        self.assertIn('창고가 운영을 재개했습니다.[1]', state.draft.sentences()[0])
+        self.assertIn('인과관계는 판단할 수 없습니다', state.draft.sentences()[1])
