@@ -271,9 +271,12 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
     </div></AiBlock>
 }
 
+const ARTICLE_ACTIONS_ENABLED = false  // 다시 쓰면 true로 바꾸고 Articles.jsx 버튼 주석을 푼다.
+
 export default function Analysis({ route }) {
   const { session, chats, refreshChats, refreshReports, addInterests, run, notify } = useApp()
-  const [articleId, setArticleId] = useState(() => route.query.get('new') === '1' ? route.query.get('article') : null)
+  // 기사 탭의 "AI에게 물어보기"는 사용 중지(2026-11-11). 주소로 직접 열어도 선택 기사 화면을 띄우지 않는다.
+  const [articleId, setArticleId] = useState(() => ARTICLE_ACTIONS_ENABLED && route.query.get('new') === '1' ? route.query.get('article') : null)
   const selectedArticle = useQuery(`/articles/${articleId}`, {}, !!articleId)
   const [activeId, setActiveId] = useState(articleId ? null : route.query.get('chat') || chats[0]?.id)
   const [input, setInput] = useState(route.query.get('new') === '1' ? '' : route.query.get('ask') || '')

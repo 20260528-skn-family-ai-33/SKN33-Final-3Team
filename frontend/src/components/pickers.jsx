@@ -94,7 +94,8 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
         {q && <button type="button" className="reset more" aria-label="품목 검색 지우기" onClick={() => { selection.current++; setQuery(''); onConfirm(null); setOpen(false) }}>지우기</button>}
         {confirmed && <span className="tag plum">HS4 확정</span>}
       </div>
-      {buttonLabel && <Btn kind="ink" size="md" disabled={!confirmed} onClick={onSelectAll} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(group)}</Btn>}
+      {/* HS6 세부품목 검색에서는 HS4를 고를 수 없으므로 HS4 전체 버튼은 HS4 단위 검색에서만 보인다. */}
+      {buttonLabel && (!hs6First || hs4Only) && <Btn kind="ink" size="md" disabled={!confirmed} onClick={onSelectAll} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(group)}</Btn>}
       {open && !confirmed && (
         <div role="listbox" id={listId} aria-label="품목 검색 결과" style={{ position: hs6First ? 'static' : 'absolute', flexBasis: hs6First ? '100%' : undefined, top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
           {results.map((h, i) => (

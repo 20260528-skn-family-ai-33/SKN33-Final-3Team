@@ -89,7 +89,8 @@ async function main() {
     await go('/articles')
     await page.locator('#ar-q').fill('검증')
     await page.getByRole('button', { name: '기사 검색' }).click()
-    // 기사 유형별로 검증한다: 일반·주요이슈는 원문 보기·AI 질문 버튼, 단신속보는 상세 펼치기(원문 버튼 없음).
+    // 기사 유형별로 검증한다: 일반·주요이슈는 원문 보기, 단신속보는 상세 펼치기(원문 버튼 없음).
+    // "AI에게 물어보기"는 사용하지 않기로 해 화면에 없어야 한다(2026-11-11).
     await page.locator('article').first().waitFor()
     const cards = page.locator('article')
     for (let i = 0; i < await cards.count(); i++) {
@@ -98,27 +99,14 @@ async function main() {
         await card.getByRole('link', { name: '상세 보기' }).click()
         await card.getByRole('link', { name: '접기' }).waitFor()
         assert.equal(await card.getByRole('button', { name: /원문 보기/ }).count(), 0)
-        await card.getByRole('link', { name: /AI에게 물어보기/ }).waitFor()
+        assert.equal(await card.getByRole('link', { name: /AI에게 물어보기/ }).count(), 0)
         await card.getByRole('link', { name: '접기' }).click()
       } else {
         await card.getByRole('button', { name: /원문 보기/ }).waitFor()
-        await card.getByRole('link', { name: /AI에게 물어보기/ }).waitFor()
+        assert.equal(await card.getByRole('link', { name: /AI에게 물어보기/ }).count(), 0)
       }
     }
-    const firstArticle = cards.first()
-    const askArticle = firstArticle.getByRole('link', { name: 'AI에게 물어보기' })
-    if (!(await askArticle.count())) {
-      await firstArticle.getByRole('link', { name: '상세 보기' }).click()
-    }
-    await askArticle.waitFor()
-    const articleChatUrl = new URL(await askArticle.getAttribute('href'), base)
-    assert.match(articleChatUrl.hash, /^#\/analysis\?new=1&article=[1-9]\d*$/)
-    await askArticle.click()
-    await page.getByRole('heading', { name: '새 채팅', exact: true }).waitFor()
-    for (const name of ['기사 요약', '유사 기사 검색', '요약과 유사 기사 검색']) {
-      await page.getByRole('button', { name, exact: true }).waitFor()
-    }
-    ok('기사 탭에서 새 채팅으로 이동해 선택한 기사의 작업 버튼 세 개 표시')
+    ok('기사 탭에 AI에게 물어보기 버튼 없음')
     await go('/account/settings')
     await page.getByRole('switch', { name: '전체 알림 수신' }).click()
     await page.getByRole('checkbox', { name: '위 알림 수신 약관을 확인했으며 동의합니다.' }).locator('..').click()
