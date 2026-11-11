@@ -69,7 +69,8 @@ export const GroupedBarChart = BarChart
  * 첫 조각은 12시 방향(수직)에서 시작해 시계 방향으로 이어 그린다. 조각 경로를 각도로 직접 계산하므로
  * 브라우저마다 원의 시작점이 달라 첫 조각이 수직선 왼쪽으로 넘어가는 일이 없다.
  * 비율 합이 반올림 때문에 100과 조금 달라도 합계 기준으로 나눠 원을 정확히 한 바퀴 채운다.
- * 조각에 마우스를 올리면 어느 항목인지 말풍선으로 보여 주고, 조각을 벗어나면(그래프 안 빈 곳 포함) 바로 지운다. 클릭 동작은 없어 커서는 기본 화살표로 둔다.
+ * 조각에 마우스를 올리면 어느 항목인지 말풍선으로 보여 주고, 조각을 벗어나면(그래프 안 빈 곳 포함) 바로 지운다.
+ * 브라우저 기본 툴팁(<title>)은 넣지 않는다(말풍선과 겹쳐 두 개가 뜬다). 화면 읽기용 설명은 svg의 aria-label에 있다. 클릭 동작은 없어 커서는 기본 화살표로 둔다.
  */
 export function Donut({ items, size = 132 }) {
   const [hover, setHover] = useState(null)
@@ -98,9 +99,9 @@ export function Donut({ items, size = 132 }) {
         {slices.map((s, i) => s.empty ? null : (
           s.d
             ? <path key={s.label} d={s.d} fill={s.color} stroke="#fff" strokeWidth="0" strokeLinejoin="round" opacity={hover && hover.i !== i ? 0.55 : 1}
-                onMouseMove={e => move(e, i)} onMouseEnter={e => move(e, i)} onMouseLeave={() => setHover(null)} style={{ cursor: 'default', transition: 'opacity .15s' }}><title>{s.text}</title></path>
+                onMouseMove={e => move(e, i)} onMouseEnter={e => move(e, i)} onMouseLeave={() => setHover(null)} style={{ cursor: 'default', transition: 'opacity .15s' }} />
             : <circle key={s.label} cx={CX} cy={CY} r={R} fill={s.color}
-                onMouseMove={e => move(e, i)} onMouseEnter={e => move(e, i)} onMouseLeave={() => setHover(null)} style={{ cursor: 'default' }}><title>{s.text}</title></circle>
+                onMouseMove={e => move(e, i)} onMouseEnter={e => move(e, i)} onMouseLeave={() => setHover(null)} style={{ cursor: 'default' }} />
         ))}
       </svg>
       {active && (
