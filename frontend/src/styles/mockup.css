@@ -9,22 +9,22 @@ body{background:#fff;color:var(--ink);font-family:'Gothic A1',system-ui,-apple-s
 a{color:var(--red-d);text-decoration:none}
 p{margin:0}
 h1,h2,h3{margin:0;letter-spacing:-.5px}
-.wrap{max-width:1240px;margin:0 auto;padding:0 24px}
+.wrap{max-width:1300px;margin:0 auto;padding:0 10px}
 /* header */
 .hd{background:#fff;border-bottom:1px solid var(--line)}
-.hd .wrap{height:72px;display:flex;align-items:center;gap:24px}
+.hd .wrap{height:62px;display:flex;align-items:center;gap:26px}
 .logo{flex:1 1 0;display:flex;align-items:center;gap:10px;color:var(--ink)!important;font-size:19px;font-weight:800;letter-spacing:.5px}
 .nav{display:flex;gap:52px;font-size:16px;font-weight:700}
-.nav a{color:var(--ink);position:relative;padding:24px 0}
+.nav a{color:var(--ink);position:relative;padding:19px 0}
 .nav a.on{color:var(--red)}
 .nav a.on::after{content:'';position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--red);border-radius:2px}
 .hd-r{flex:1 1 0;display:flex;justify-content:flex-end;align-items:center;gap:10px}
-.bell{position:relative;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink)}
+.bell{position:relative;width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center;color:var(--ink)}
 .bell b{position:absolute;top:7px;right:5px;min-width:17px;height:17px;border-radius:9px;background:var(--red);color:#fff;font-size:10px;display:inline-flex;align-items:center;justify-content:center}
 .bell.open{background:var(--lav);border-radius:22px}
-.pill-my{height:38px;padding:0 18px;border-radius:19px;background:var(--brown);color:#fff!important;font-size:14px;font-weight:700;display:inline-flex;align-items:center}
+.pill-my{height:34px;padding:0 16px;border-radius:17px;background:var(--brown);color:#fff!important;font-size:13px;font-weight:700;display:inline-flex;align-items:center}
 .pill-my.ghost{background:#fff;color:var(--ink)!important;border:1px solid #CDD1D8}
-.pill-admin{height:38px;padding:0 18px;border-radius:19px;background:var(--plum);color:#fff!important;font-size:14px;font-weight:700;display:inline-flex;align-items:center}
+.pill-admin{height:34px;padding:0 16px;border-radius:17px;background:var(--plum);color:#fff!important;font-size:13px;font-weight:700;display:inline-flex;align-items:center}
 /* bands */
 .band{position:relative;overflow:hidden;isolation:isolate;color:#fff;padding:46px 0 42px;background:#0B2533}
 .band>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:-2}

@@ -7,12 +7,12 @@ const CONTACT_EMAIL = 'BorderlessSellers1205@gmail.com'
 const NAV = [
   ['rank', '/rank', '수출입 순위'],
   ['articles', '/articles', '기사'],
-  ['analysis', '/analysis', 'AI챗봇'],
+  ['analysis', '/analysis', 'AI 챗봇'],
 ]
 
 export function Logo() {
   // 지구본·컨테이너선 로고. 좁은 화면에서는 글자가 숨고 로고만 남는다(.logo font-size:0).
-  return <Link to="/" className="logo"><img src={logoImage} alt="" width="34" height="34" />BORDERLESS</Link>
+  return <Link to="/" className="logo"><img src={logoImage} alt="" width="40" height="40" />BORDERLESS</Link>
 }
 
 /** 로그인 전 화면(로그인·회원가입·찾기·관심사 등록)의 머리글 */
@@ -47,14 +47,14 @@ export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admi
             type="button" className={'bell' + (bellOpen ? ' open' : '')} onClick={onBell}
             aria-label={`알림 ${unread}건`} aria-expanded={!!bellOpen} aria-haspopup="dialog"
           >
-            <Icon name="bell" size={22} stroke={1.8} />
+            <Icon name="bell" size={22} stroke={2} />
             {unread > 0 && <b>{unread}</b>}
           </button>
           {!(admin || isAdmin) && <Link className="pill-my" to="/account/profile">마이페이지</Link>}
           {(admin || isAdmin) && <Link className="pill-admin" to="/admin">관리자</Link>}
           {onLogout && (
             <button type="button" className="pill-logout" onClick={onLogout} aria-label="로그아웃">
-              <Icon name="logout" size={15} stroke={2} />로그아웃
+              <Icon name="logout" size={12} stroke={2} />로그아웃
             </button>
           )}
         </div>
