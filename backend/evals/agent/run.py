@@ -59,32 +59,41 @@ class Runner:
         self.model, self.timeout = model, timeout
         self.client = StructuredClient(self.settings)
 
-    def parse(self, node, prompt, payload, schema, tokens):
+    def parse(self, node, prompt, payload, schema, tokens, validate=lambda value: value):
         """runtime.Services.structured와 같이 최대 2번 시도한다. (값, 시도 수, 오류 종류)를 돌려준다."""
         key = 'COMPOSE' if node == 'compose' else 'INTENT'
         timeout = self.timeout or float(self.settings.get(f'API_{key}_TIMEOUT_SECONDS', 20 if key == 'COMPOSE' else 10))
         error = None
         for attempt in (1, 2):
             try:
-                return self.client.parse(model=self.model, timeout=timeout, prompt=prompt, payload=payload,
-                                         schema=schema, max_output_tokens=tokens), attempt, None
+                output = self.client.parse(model=self.model, timeout=timeout, prompt=prompt, payload=payload,
+                                           schema=schema, max_output_tokens=tokens)
+                return validate(output), attempt, None
             except Exception as exc:   # 평가 기록용. 실패 종류만 남기고 다음 시도로 간다
                 error = type(exc).__name__
+                if node == 'planner' and isinstance(exc, ValueError):
+                    from backend.app.agents.planner import PLANNER_RETRY_HINT
+                    prompt += PLANNER_RETRY_HINT
         return None, 2, error
 
     def plan(self, state):
         """runtime.Services.planner와 같은 순서: 정규식 → LLM → 코드 안전망 → build_plan."""
-        from backend.app.agents.planner import (PLANNER_PROMPT, build_plan, explicit_country_ranking,
-                                                planner_input, postprocess, trade_terms)
+        from backend.app.agents.planner import (PLANNER_PROMPT, build_plan, explicit_cause_followup, explicit_country_ranking, explicit_out_of_scope,
+                                                explicit_over_limit, planner_input, postprocess, trade_terms)
         from backend.app.agents.state import PlannerOutput
         from backend.app.api.common import ApiError
+        from backend.app.agents.planner import article_retry_plan
+        if retry := article_retry_plan(state):
+            return None,retry,{'attempts':0,'error':None,'error_code':None}
         question = state.input.question
-        output, attempts, error = explicit_country_ranking(question), 0, None
+        output = (explicit_over_limit(question) or explicit_out_of_scope(question) or explicit_country_ranking(question)
+                  or explicit_cause_followup(question, state.input.context))
+        attempts, error = 0, None
         if output is None:
-            output, attempts, error = self.parse('planner', PLANNER_PROMPT, planner_input(state), PlannerOutput, 2000)
-            if output is not None:
-                try: output = postprocess(output, question, trade_terms(self.settings))
-                except ValueError: output, error = None, 'ValidationError'
+            output, attempts, error = self.parse('planner', PLANNER_PROMPT, planner_input(state), PlannerOutput, 2000,
+                lambda value: postprocess(value, question, trade_terms(self.settings),
+                    previous_both_trade_flows=state.input.context.both_trade_flows,
+                    previous_conditions=state.input.context.conditions))
         plan, code = None, None
         if output is not None:
             try: plan, _ = build_plan(output)
@@ -156,6 +165,9 @@ def score_planner(case, output, plan, info):
                     selection['order_by'] = 'amount_usd'
         for key, default in (('custom_query', False), ('source_tasks', []), ('target_selections', [])):
             fields[f't{i+1}.{key}'] = got is not None and same(key, got.get(key), want.get(key, default))
+        if 'REPORT' in intents:
+            fields[f't{i+1}.previous_turn_result'] = (got is not None
+                and bool(got.get('previous_turn_result')) == want.get('previous_turn_result', False))
         if patterns := want.get('custom_query_patterns'):
             fields[f't{i+1}.custom_query_content'] = got is not None and all(
                 re.search(pattern, got.get('custom_query') or '', re.IGNORECASE) for pattern in patterns)
@@ -204,7 +216,10 @@ def score_conditions(expect, out):
                 any(code.startswith(prefix) for code in out['choices'][:5]) for prefix in prefixes)
             metrics['hs_candidate_recall'] = f['hs_candidates']
     if code := expect.get('country_candidate'):
-        metrics['country_candidate_recall'] = status == 'NEEDS_INPUT' and out['pending_kind'] == 'COUNTRY' and code in out['choices'][:5]
+        found = status == 'NEEDS_INPUT' and out['pending_kind'] == 'COUNTRY' and code in out['choices'][:5]
+        metrics['country_candidate_recall'] = found
+        if status == 'NEEDS_INPUT':
+            f['country_candidates'] = found
     if status == 'DONE':
         for key in ('country_codes', 'hs_codes'):
             if key in expect: f[key] = sorted(out[key]) == sorted(expect[key])
@@ -243,7 +258,8 @@ def conditions_case(runner, connect, case, chain):
     state = agent_state(case['question'], case.get('context'), first_question=case.get('first_question', False),
                         interests=case.get('interests'))
     if chain:
-        _, plan, info = runner.plan(state)
+        output, plan, info = runner.plan(state)
+        info = {**info, 'planner_output': output.model_dump(mode='json') if output else None}
         if plan is None: return {'pass': False, 'fields': {'plan': False}, 'wrong_confirm': False, 'unnecessary_ask': False}, info
     else:
         plan, _ = build_plan(PlannerOutput(tasks=[{'intent': case['intent'], 'question': case['question'],
@@ -255,6 +271,7 @@ def conditions_case(runner, connect, case, chain):
         out = outcome(state, task, step)
     score = score_conditions(case['expect'], out)
     if chain:
+        out['planner'] = info
         score['fields'].update(intent=task.intent == case['intent'], task_count=len(plan.tasks) == 1)
         score['pass'] = all(score['fields'].values())
         score['wrong_confirm'] = out['status'] == 'DONE' and not score['pass']
@@ -303,7 +320,11 @@ def compose_case(runner, case):
         task.answer_status = state.task_outcome(task.task_id)
     def describe(c):
         if not c: return {}
-        return {**c.model_dump(mode='json'), 'countries': [{'code': k, 'name': NAMES.get(k, k)} for k in c.country_codes],
+        from backend.app.agents.templates import api_conditions
+        display=c.model_dump(mode='json')
+        public=api_conditions(c)
+        display.update({key:public[key] for key in ('period','compare_period')})
+        return {**display, 'countries': [{'code': k, 'name': NAMES.get(k, k)} for k in c.country_codes],
                 'products': [{'code': p.hs_code, 'name': products.get(p.hs_code, p.hs_code)} for p in c.hs_items]}
     payload, fixed = compose_input(state, describe, [])
     draft, attempts, error = runner.parse('compose', COMPOSE_TEXT_PROMPT, payload, Draft, 3000)
@@ -313,7 +334,8 @@ def compose_case(runner, case):
     if draft is None:
         return {'pass': False, 'fields': {'format': False}, 'grounded': False}, {'error': error, 'attempts': attempts}
     state.draft = draft
-    verify(state, known_names=[*NAMES.values(), *products.values()], countries=list(NAMES.values()))
+    had_summary = bool(draft.turn_summary)
+    verify(state, known_names=[*NAMES.values(), *products.values()], countries=list(NAMES.values()), product_labels=products)
     sentences = draft.sentences()
     expect = case['expect']
     f = {'format': True, 'grounded': state.verification.status == 'PASS', **score_conclusions(expect, draft)}
@@ -321,6 +343,8 @@ def compose_case(runner, case):
     return ({'pass': all(f.values()), 'fields': f, 'grounded': f['grounded'],
              'number_sentences': len(checked), 'mismatch_sentences': sum(c.status == 'MISMATCH' for c in checked)},
              {'sentences': sentences, 'turn_summary': draft.turn_summary, 'attempts': attempts,
+              'summary_status': ('PASS' if draft.turn_summary else 'REJECTED') if had_summary else 'EMPTY',
+              'sentence_checks': [c.model_dump(mode='json') for c in state.verification.checks],
               'references': [rules['reference'] for rules in expect['conclusions']]})
 
 
@@ -412,8 +436,11 @@ def summarize(area, rows, elapsed_seconds=None):
         summary['model_pass_rate'] = rate(r['score']['pass'] for r in ok if r['detail'].get('attempts') != 0)
         summary['regex_pass_rate'] = rate(r['score']['pass'] for r in ok if r['detail'].get('attempts') == 0)
     if area == 'conditions':
+        summary['wrong_confirm_count'] = sum(r['score']['wrong_confirm'] for r in ok)
         summary['wrong_confirm_rate'] = rate(r['score']['wrong_confirm'] for r in ok)
         summary['unnecessary_ask_rate'] = rate(r['score']['unnecessary_ask'] for r in ok)
+        summary['quality_gate_pass'] = (bool(ok) and summary['wrong_confirm_count'] == 0
+                                        and 10 * sum(r['score']['pass'] for r in ok) >= 9 * len(ok))
         for metric in ('hs_candidate_recall', 'country_candidate_recall'):
             summary[f'{metric}_at_5'] = rate(r['score'][metric] for r in ok if metric in r['score'])
     if area == 'compose_text':
@@ -471,6 +498,7 @@ def flat_metrics(summary):
 
 def shown(key, value):
     if value is None: return '-'
+    if isinstance(value, bool): return 'PASS' if value else 'FAIL'
     if key.endswith(('_rate', '_at_5')) or key.startswith(('field_accuracy.', 'by_tag.')): return f'{value * 100:.1f}%'
     if isinstance(value, float): return f'{value:,.1f}'
     return f'{value:,}'

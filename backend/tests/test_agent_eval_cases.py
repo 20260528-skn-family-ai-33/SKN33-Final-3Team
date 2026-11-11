@@ -4,12 +4,24 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 from backend.evals.agent.run import (AREAS, agent_state, compose_case, load, score_conditions,
-                                     score_context_turn, score_planner)
+                                     score_context_turn, score_planner, summarize)
 from backend.app.agents.planner import build_plan
 from backend.app.agents.state import Draft, PlannerOutput
 
 
 class EvalCasesTest(unittest.TestCase):
+    def test_report_followup_scoring_distinguishes_result_and_conditions(self):
+        for case in load('planner'):
+            if case['id'] not in {'p042', 'p043', 'h030', 'h031'}:
+                continue
+            expected = case['expect']['tasks'][0]['previous_turn_result']
+            with self.subTest(case=case['id']):
+                for marked in (False, True):
+                    output = PlannerOutput(tasks=[{'intent': 'REPORT', 'question': case['question'],
+                                                   'previous_turn_result': marked}])
+                    self.assertEqual(score_planner(case, output, build_plan(output)[0], {})['pass'],
+                                     marked == expected)
+
     def test_every_area_has_unique_ids_and_both_splits(self):
         for area in AREAS:
             with self.subTest(area=area):
@@ -72,6 +84,27 @@ class EvalCasesTest(unittest.TestCase):
         silent = score_conditions({'status': 'NEEDS_INPUT', 'pending_kind': 'COUNTRY'}, base)
         self.assertTrue(silent['wrong_confirm'])
 
+    def test_country_clarification_requires_expected_candidate_in_top_five(self):
+        expect = {'status': 'NEEDS_INPUT', 'pending_kind': 'COUNTRY', 'country_candidate': 'US'}
+        out = {'status': 'NEEDS_INPUT', 'pending_kind': 'COUNTRY', 'choices': ['CN', 'JP', 'DE', 'VN', 'GB', 'US']}
+        missed = score_conditions(expect, out)
+        self.assertFalse(missed['pass'])
+        self.assertFalse(missed['country_candidate_recall'])
+        out['choices'] = ['US']
+        self.assertTrue(score_conditions(expect, out)['pass'])
+
+    def test_conditions_quality_gate_requires_ninety_percent_and_zero_wrong_confirmations(self):
+        passed = {'pass': True, 'fields': {}, 'wrong_confirm': False, 'unnecessary_ask': False}
+        failed = {**passed, 'pass': False}
+        rows = [{'id': str(i), 'ms': 1, 'score': passed if i < 9 else failed} for i in range(10)]
+        self.assertTrue(summarize('conditions', rows)['quality_gate_pass'])
+        rows[-1]['score'] = {**failed, 'wrong_confirm': True}
+        report = summarize('conditions', rows)
+        self.assertEqual(report['wrong_confirm_count'], 1)
+        self.assertFalse(report['quality_gate_pass'])
+        rows[-2]['score'] = rows[-1]['score'] = failed
+        self.assertFalse(summarize('conditions', rows)['quality_gate_pass'])
+
     def test_context_rejects_missing_step_for_analysis_turn(self):
         case = next(c for c in load('context') if c['id'] == 's002')
         expect = case['turns'][1]['expect']
@@ -102,10 +135,10 @@ class EvalCasesTest(unittest.TestCase):
             'k110': ['미국입니다.', '일본 라면 수출은 감소했습니다.'],
         }
         for case in load('compose_text'):
-            def score(sentences):
+            def score(sentences, summary=''):
                 draft = Draft(conclusion=[
                     {'task_id': f't{i}', 'sentences': [sentence]} for i, sentence in enumerate(sentences, 1)
-                ], turn_summary='')
+                ], turn_summary=summary)
                 runner = Mock()
                 runner.parse.return_value = draft, 1, None
                 return compose_case(runner, case)[0]
@@ -117,6 +150,30 @@ class EvalCasesTest(unittest.TestCase):
                 self.assertFalse(score(wrong[case['id']])['pass'])
                 if case['id'] == 'k010':
                     self.assertTrue(score(['12월 수출액은 2840만 달러였습니다.'])['pass'])
+                    self.assertTrue(score(['12월 수출액은 28,400,000달러였습니다.'], references[0])['pass'])
+                    self.assertFalse(score(references, '12월 수출액은 2,610만 달러였습니다.')['pass'])
+                if case['id'] == 'k005':
+                    self.assertTrue(score(references, 'HS2022 기준 코드는 8510과 851010입니다.')['pass'])
+                    self.assertFalse(score(references, 'HS2022 기준 코드는 851020입니다.')['pass'])
+                if case['id'] == 'k001':
+                    mixed = '베트남 기초화장품 수출은 전반적으로 증가했지만 10월만 감소했고 12월이 가장 컸습니다.'
+                    self.assertTrue(score([mixed])['pass'])
+                    # 기간 추세·월 증감·두 달 금액 비교 모두 허용하되, 방향이 틀리거나 근거가 모호하면 거부한다.
+                    for sentence, ok in [
+                        ('베트남 기초화장품 수출은 7월 2,100만 달러에서 12월 2,840만 달러로 늘었습니다.', True),
+                        ('베트남 기초화장품 수출은 7월 2,100만 달러에서 12월 2,840만 달러로 줄었습니다.', False),
+                        # 10월은 9월보다 줄었지만 7월보다는 늘었다. 두 달 금액이 있으면 그 비교로만 판정한다.
+                        ('베트남 기초화장품 수출은 7월 2,100만 달러에서 10월 2,380만 달러로 줄었습니다.', False),
+                        ('베트남 기초화장품 수출의 분모는 1억 4,580만 달러입니다.', False),
+                        ('베트남 기초화장품 수출은 전반적으로 감소했습니다.', False),
+                        ('베트남 기초화장품 수출은 증가했습니다.', False),
+                        ('베트남 기초화장품 수출은 10월에 증가했습니다.', False),
+                        ('베트남 기초화장품 수출은 7월에 증가했습니다.', False),
+                    ]:
+                        self.assertEqual(score([sentence])['grounded'], ok, sentence)
+                if case['id'] == 'k007':
+                    self.assertTrue(score(['2025년 1~12월 기준으로 ' + references[0]])['pass'])
+                    self.assertFalse(score(['2025년 1~13월 기준으로 ' + references[0]])['pass'])
 
 
 if __name__ == '__main__':

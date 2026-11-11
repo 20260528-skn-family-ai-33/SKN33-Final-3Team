@@ -27,7 +27,7 @@
 - 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초)이고, `--timeout`으로 바꿀 수 있다.
 
 ## 5. 테스트셋
-**파일**: `backend/evals/agent/cases/planner.jsonl` (68문항: dev 40 / holdout 28)
+**파일**: `backend/evals/agent/cases/planner.jsonl` (75문항: dev 44 / holdout 31)
 
 ### 5.1 문항 형식
 | 칸 | 내용 |
@@ -116,6 +116,10 @@
 | p038 | dev | 2025년 수출 순위 보여줘 | RANKING | 모호 → ranking_group=null |
 | p039 | dev | 2025년 베트남 화장품 수출 추이, 변화 원인, 관련 기사를 보여주고 리포트까지 만들어줘 | (거절) | 하위 질문 4개 → QUESTION_TOO_COMPLEX |
 | p040 | dev | 2025년 2분기 베트남 화장품 수출 추이 | STATISTICS | 분기 → 4~6월 |
+| p041 | dev | 태국 의류 수출 추이를 조회해서 그 결과를 리포트로 남겨줘 | STATISTICS → REPORT | REPORT의 `source_tasks=[1]` |
+| p042 | dev | 방금 그 표로 리포트 만들어줘 | REPORT | `previous_turn_result=true` |
+| p043 | dev | 방금 그 조건으로 리포트 만들어줘 | REPORT | 조건 이어받기 |
+| p044 | dev | 이전 미국 수입 조건에서 HS6 단위 코드 330499는? | STATISTICS | 품목 코드만 교체 |
 | h001 | holdout | 2024년 일본 라면 수출 흐름 알려줘 | STATISTICS | 연도 |
 | h002 | holdout | 최근 3개월 독일 자동차 부품 수입 추이 | STATISTICS | recent_months·수입 |
 | h003 | holdout | 2025년 미국 반도체 수출액을 2024년 같은 기간과 비교해줘 | STATISTICS | 비교, compare_period는 null 또는 2024년 |
@@ -144,6 +148,9 @@
 | h026 | holdout | 2025년 일본 라면 수출 추이, 수입 추이, 변화 원인, 관련 기사를 모두 알려줘 | (거절) | 하위 질문 4개 → QUESTION_TOO_COMPLEX |
 | h027 | holdout | 2025년 중국 반도체 수출 상위 품목 5개, 중국 유망 품목, 중국 반도체 관련 기사, 중국 반도체 수출이 늘어난 원인을 알려줘 | (거절) | 서로 다른 분석 4개 → QUESTION_TOO_COMPLEX |
 | h028 | holdout | 같은 기간을 모든 상대국과 모든 품목 합계로 다시 보여줘 (이전: 일본 라면 2024) | STATISTICS | countries=[]·products=[]로 초기화, 기간은 null로 이어받기 |
+| h029 | holdout | 와인의 유망 수출국을 예측한 다음 그 예측 결과로 보고서 작성해 주세요 | PROMISING_MARKET → REPORT | REPORT의 `source_tasks=[1]` |
+| h030 | holdout | 아까 조회한 결과표를 바탕으로 보고서 작성해 주세요 | REPORT | `previous_turn_result=true` |
+| h031 | holdout | 같은 조건으로 보고서 만들어 주세요 | REPORT | 조건 이어받기 |
 
 ## 6. 실행 방법
 ```bash

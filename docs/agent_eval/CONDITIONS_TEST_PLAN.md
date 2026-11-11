@@ -23,7 +23,7 @@
 
 `--chain` 모델은 planner 계획서와 같다(기준선 `gpt-4.1-mini`, 후보 `gpt-5.6-luna`·`gpt-6-luna`).
 
-**`unit_only` 문항**: 일부러 틀린 슬롯을 넣은 문항이다. 예를 들어 플래너가 다시 적은 이전 조건, 지어낸 국가·품목, 국가로 잘못 넣은 TV가 그렇다. 플래너 출력으로는 재현되지 않아 `--chain`에서 뺀다(dev c005·c017·c018·c019·c020, holdout c109·c110·c113·c114·c115). `--chain`은 dev 22문항·holdout 11문항으로 돈다.
+**`unit_only` 문항**: 일부러 틀린 슬롯을 넣은 문항이다. 예를 들어 플래너가 다시 적은 이전 조건, 지어낸 국가·품목, 국가로 잘못 넣은 TV가 그렇다. 플래너 출력으로는 재현되지 않아 `--chain`에서 뺀다(dev c005·c017·c018·c019·c020, holdout c109·c110·c113·c114·c115). `--chain`은 dev 23문항·holdout 11문항으로 돈다.
 
 ## 4. 환경·전제
 - `.env`의 RDS 접속 설정을 쓴다(`API_DB_TARGET`). 조회만 하고 질문마다 rollback한다.
@@ -36,7 +36,7 @@
   - 후보 정답(`hs_candidate_prefixes`): 8542·8703
 
 ## 5. 테스트셋
-**파일**: `backend/evals/agent/cases/conditions.jsonl` (43문항: dev 27 / holdout 16)
+**파일**: `backend/evals/agent/cases/conditions.jsonl` (45문항, dev 29 / holdout 16)
 
 ### 5.1 문항 형식
 | 칸 | 내용 |
@@ -57,7 +57,7 @@
 | NEEDS_INPUT일 때 | `pending_kind` | 되묻기 종류 |
 | NEEDS_INPUT일 때 | `choices_include` | 선택지에 들어 있어야 할 값 |
 | NEEDS_INPUT일 때 | `hs_candidate_prefixes` | HS_ITEM 후보 상위 5개에 정답 접두가 모두 있음 |
-| 항상(지표만) | `country_candidate` | COUNTRY 되묻기 후보 상위 5개에 정답 국가가 있음. 통과 판정에는 넣지 않는다 |
+| NEEDS_INPUT일 때 | `country_candidate` | COUNTRY 되묻기 후보 상위 5개에 정답 국가가 있어야 통과. 후보 적중률에도 반영 |
 | DONE일 때 | `country_codes`, `hs_codes` | 확정 코드 집합 일치 |
 | DONE일 때 | `period`, `trade_flow`, `article_period`, `ranking_group`, `ranking_limit`, `share_basis`, `sql_template` | 값 일치 |
 | DONE일 때 | `period_months` | 개월 수 + 끝이 최신 공개 월 |
@@ -67,7 +67,7 @@
 ### 5.2 유형 분포
 | 유형 | 태그 | dev | holdout |
 |---|---|---|---|
-| 국가 매칭 | country_exact·country_code·country_fuzzy(c28)·mismatch·country_multi | 5 | 4 |
+| 국가 매칭 | country_exact·country_code·country_typo·country_fuzzy(c28)·mismatch·country_multi | 6 | 4 |
 | 국가 아님·기준 국가 | abbreviation_not_country·korea_reporting | 2 | 2 |
 | 품목 확정 | hs_search·numeric_hs·invalid | 5 | 2 |
 | 이어받기 | inherit_echo·d22·new_country | 2 | 2 |
@@ -82,7 +82,7 @@
 | id | split | 질문 | intent | 기대 결과 | 확인점 |
 |---|---|---|---|---|---|
 | c001 | dev | 2025년 미국 기타 메이크업 및 기초화장품 수출액 | STATISTICS | DONE이면 US·330499·2025, 되물으면 HS_ITEM 후보에 330499 | DB 품목명과 같은 표현의 검색 |
-| c002 | dev | 2025년 미구 수출액 | STATISTICS | COUNTRY 되묻기(후보 US는 지표) | 오타 국가명(C-28) |
+| c002 | dev | 2025년 미구 수출액 | STATISTICS | DONE, US | 받침 누락이고 후보가 유일하면 자동 적용 |
 | c003 | dev | 2025년 US 수출액 | STATISTICS | DONE, US | 두 글자 코드 |
 | c004 | dev | 2025년 UK 수출액 | STATISTICS | COUNTRY 되묻기, 후보에 GB | 코드와 국가명 불일치 |
 | c005 | dev | 2025년 TV 수출액 | STATISTICS | DONE, 국가 없음 | 국가 아닌 약어 무시 (unit_only) |
@@ -108,9 +108,11 @@
 | c025 | dev | 2025년 미국, 중국, 일본 수출 추이 | STATISTICS | DONE, US·CN·JP | 여러 국가 |
 | c026 | dev | 2025년 베트남 전자집적회로 수출 | STATISTICS | HS_ITEM 되묻기, 후보에 8542 | 품목명 검색 후보 |
 | c027 | dev | 2025년 전동 면도기 수출 | STATISTICS | DONE이면 851010, 되물으면 후보에 851010 | 품목명 검색 |
+| c028 | dev | 2025년 베트낭 수출액 | STATISTICS | COUNTRY 되묻기, 상위 5개 후보에 VN | 받침이 다른 국가명(C-28) |
+| c029 | dev | HS6 단위 코드 330499는? | STATISTICS | DONE, 330499·US·수입·2025 | 품목만 교체, 나머지 조건 유지 |
 | c101 | holdout | 2025년 일본 즉석 라면 수출 | STATISTICS | DONE이면 JP·190230, 되물으면 후보에 190230 | 품목명 검색 |
 | c102 | holdout | 2025년 DE 승용차 수입 | STATISTICS | HS_ITEM 되묻기, 후보에 8703 | 코드 국가 + 품목 후보 |
-| c103 | holdout | 2025년 인도네시어 수출액 | STATISTICS | COUNTRY 되묻기(후보 ID는 지표) | 오타 국가명(C-28) |
+| c103 | holdout | 2025년 인도네시어 수출액 | STATISTICS | COUNTRY 되묻기, 상위 5개 후보에 ID | 오타 국가명(C-28) |
 | c104 | holdout | 2025년 베트남과 태국 수출 추이 | STATISTICS | DONE, VN·TH | 여러 국가 |
 | c105 | holdout | 최근 6개월 품목별 수출 순위 | RANKING | DONE, 6개월·HS6 | recent_months + 순위 기준 |
 | c106 | holdout | 2025년 미국 수출 품목별 비중 | MARKET_SHARE | DONE, US·HS6·KOREA_TRADE_PARTNER·LLM_SQL | 품목별 비중 → LLM SQL 전환 |
@@ -150,12 +152,12 @@
 | 유형별 통과율 | 태그별 | `summary.by_tag` | 약점 찾기용 |
 
 ## 8. 판정 규칙
-1. **잘못 확정이 1건이라도 있으면 불합격**이다. 원인(매칭 규칙·이어받기·정답 오류)을 고친 뒤 다시 돌린다.
+1. **문항 통과율 90% 이상과 잘못 확정 0건**을 모두 충족해야 `quality_gate_pass`가 PASS다. 95%는 개선 목표다.
 2. **C-28 임계값**: 0.5·0.6·0.7 중 잘못 확정 0건을 지키는 값 가운데 다음 순서로 고른다.
    - 불필요 되묻기가 가장 적은 값
    - 같으면 국가 후보 적중률이 높은 값
    - 그래도 같으면 현재값 0.6을 유지한다
-3. **`--chain` 모델 비교**: 잘못 확정이 나오는 모델은 플래너 후보에서 뺀다.
+3. **`--chain` 모델 비교**는 품질 기준을 충족한 모델끼리 한다. JSON의 `detail.planner.planner_output`에서 원문 슬롯과 최종 조건을 비교할 수 있다.
 4. 실패 문항은 먼저 정답 오류(특히 HS 정답·RDS 기간)인지 확인하고, 정답 오류면 테스트셋을 고친다.
 
 ## 9. 위험·주의

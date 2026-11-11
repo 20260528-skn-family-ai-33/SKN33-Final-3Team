@@ -30,8 +30,8 @@ planner · 조건분석(check_conditions) · compose_text · 컨텍스트 관리
 
 | 영역 | dev | holdout | LLM | DB | 무엇을 떼어 보나 |
 |---|---|---|---|---|---|
-| planner | 40 | 28 | O | X | 질문 → intent·슬롯·하위 질문 분해 |
-| conditions | 27 | 16 | X (`--chain`이면 O) | O (조회만) | 정답 슬롯 → 코드 확정·되묻기·실패 |
+| planner | 44 | 31 | O | X | 질문 → intent·슬롯·하위 질문 분해 |
+| conditions | 29 | 16 | X (`--chain`이면 O) | O (조회만) | 정답 슬롯 → 코드 확정·되묻기·실패 |
 | compose_text | 10 | 10 | O | X | 고정 digest·최근 대화 → 문장 답변 |
 | context | 10 (시나리오, 24턴) | 10 (시나리오, 24턴) | O | O (조회만) | 여러 턴 이어받기·초기화·전환 |
 
@@ -101,7 +101,8 @@ planner · 조건분석(check_conditions) · compose_text · 컨텍스트 관리
 | FAILED | 실패 문구(`error_contains`) |
 
 - 품목명 검색은 DB 품목명이 정확히 하나만 일치하면 확정하고, 아니면 후보로 되묻는다. 그래서 `hs_codes`와 `hs_candidate_prefixes`를 함께 적는다.
-- `country_candidate`는 국가 되묻기 후보 상위 5개에 정답 국가가 있는지 보는 지표다. C-28 비교용이라 통과 판정에는 넣지 않는다.
+- `country_candidate`를 지정한 문항에서는 국가 되묻기 후보 상위 5개에 정답 국가가 있어야 통과한다. 적중률도 별도로 집계한다.
+- 결과의 `quality_gate_pass`는 문항 통과율 90% 이상과 `wrong_confirm_count` 0건을 모두 요구한다. `--chain` JSON에는 플래너 출력을 함께 기록해 원문 슬롯과 최종 조건을 비교할 수 있다.
 
 | 지표 | 목표(제안) |
 |---|---|
@@ -170,7 +171,7 @@ planner · 조건분석(check_conditions) · compose_text · 컨텍스트 관리
 1. 영역마다 세 모델(기준선 + 후보 2개)로 **dev**를 `--repeat 3`으로 돌린다. 결과를 보고 개선할 점을 정한다.
 2. 개선을 마친 뒤 세 모델로 **holdout**을 한 번 돌린다.
 3. 선택 기준(순서대로):
-   - conditions `--chain`의 잘못 확정 0건을 깨는 모델은 뺀다.
+   - conditions `--chain`에서 `quality_gate_pass`를 충족한 모델을 비교한다.
    - holdout 질문 통과율이 높은 모델을 고른다. 차이가 3%p 미만이면 지연 p95와 비용이 낮은 쪽을 고른다.
    - 지연 p95가 현재 시간 상한(플래너 10초, compose 20초)을 넘으면, 상한을 늘리는 비용(실행 예산 180초 안의 몫, D-85)까지 함께 보고 정한다.
 4. 플래너와 compose는 따로 정해도 된다(`API_INTENT_MODEL`·`API_COMPOSE_MODEL`).
@@ -196,11 +197,11 @@ planner · 조건분석(check_conditions) · compose_text · 컨텍스트 관리
 
 모델을 쉼표로 나열하면 차례로 돌리고 영역마다 비교 리포트 하나(`<영역>_<split>_compare_<시각>.md`, 같은 이름의 `.json`)를 남긴다.
 
-호출 수(dev 기준, 모델 하나): planner 40×3, compose_text 10×3, context 24턴, conditions `--chain` 22(`unit_only` 5문항 제외). 재시도를 포함하면 최대 두 배다.
+호출 수(dev 기준, 모델 하나): planner 44×3, compose_text 10×3, context 24턴, conditions `--chain` 24(`unit_only` 5문항 제외). 재시도를 포함하면 최대 두 배다.
 
 ### 예상 비용 (2026-11-09 추정, 평가셋 확정 뒤 다시 계산)
 
-- **호출 수**: 모델 하나에 약 270번이다. dev(repeat 3)와 holdout(1회)을 합쳐 플래너형 호출 약 230번(planner 148·context 48·conditions chain 33), compose 40번이다.
+- **호출 수**: 모델 하나에 약 290번이다. dev(repeat 3)와 holdout(1회)을 합쳐 플래너형 호출 약 250번(planner 163·context 48·conditions chain 35), compose 40번이다.
 - **호출당 토큰(추정)**
   - 입력: 플래너는 프롬프트·스키마·질문을 합쳐 약 4,000토큰, compose_text는 약 3,000토큰이다. 모델 하나에 입력은 약 100만 토큰이 된다.
   - 출력: gpt-4.1-mini는 약 300토큰이다. GPT-5 계열은 추론 토큰을 포함해 약 1,500토큰으로 잡았다.
