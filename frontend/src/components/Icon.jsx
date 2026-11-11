@@ -28,14 +28,6 @@ const PATHS = {
 }
 
 export default function Icon({ name, size = 16, color = 'currentColor', stroke = 1.9, style, ...rest }) {
-  if (name === 'logo') {
-    return (
-      <svg width="28" height="30" viewBox="0 0 28 30" aria-hidden="true" {...rest}>
-        <path d="M14 1 27 8.5v13L14 29 1 21.5v-13z" fill="#15181E" />
-        <path d="M9 20V10l10 10V10" fill="none" stroke="#FFFFFF" strokeWidth="2.4" strokeLinejoin="round" />
-      </svg>
-    )
-  }
   if (name === 'flag') {
     return (
       <svg width={size === 16 ? 13 : size} height={size === 16 ? 13 : size} viewBox="0 0 24 24" aria-hidden="true" {...rest}>

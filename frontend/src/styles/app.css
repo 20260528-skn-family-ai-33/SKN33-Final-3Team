@@ -229,3 +229,6 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .hd-user{flex:none;max-width:min(160px, calc(100vw - 940px));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:#444B57;margin-left:6px}
 .hd-user b{color:var(--ink);font-weight:700}
 @media (max-width:980px){.hd-user{display:none}}
+
+/* 머리글 로고 이미지: 줄어들지 않게 고정 */
+.logo img{display:block;flex:none;object-fit:contain}

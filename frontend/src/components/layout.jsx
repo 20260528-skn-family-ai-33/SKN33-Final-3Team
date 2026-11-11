@@ -1,6 +1,7 @@
 // 머리글·띠 배너·바닥글 등 화면 공통 틀
 import { Link } from '../router'
 import Icon from './Icon'
+import logoImage from '../assets/logo-borderless.png'
 
 const CONTACT_EMAIL = 'BorderlessSellers1205@gmail.com'
 const NAV = [
@@ -10,7 +11,8 @@ const NAV = [
 ]
 
 export function Logo() {
-  return <Link to="/" className="logo"><Icon name="logo" />BORDERLESS</Link>
+  // 지구본·컨테이너선 로고. 좁은 화면에서는 글자가 숨고 로고만 남는다(.logo font-size:0).
+  return <Link to="/" className="logo"><img src={logoImage} alt="" width="34" height="34" />BORDERLESS</Link>
 }
 
 /** 로그인 전 화면(로그인·회원가입·찾기·관심사 등록)의 머리글 */
