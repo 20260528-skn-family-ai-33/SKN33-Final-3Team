@@ -740,6 +740,43 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(ids('GENERAL')|ids('BREAKING')|ids('MAJOR_ISSUE'),ids('ALL'))
         self.assertEqual(self.client.get('/api/v1/articles?tab=OTHER').status_code,400)
 
+    def test_interested_articles_match_breaking_and_major_issue_by_country(self):
+        self.signup(); m=self.meta.tables; url='/api/v1/users/me/interests'
+        version=self.client.get(url).json()['interests']['version']
+        body={'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}],'country_codes':['US'],'expected_version':version,'landing_page':'INTERESTED'}
+        self.assertEqual(self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf}).status_code,200)
+        # 1 주요이슈(US, HS 없음) 2 단신속보(US, HS 없음) 3 일반(US+관심 HS) 4 일반(US, HS 없음) 5 단신속보(CN) 6 단신속보(태그 없음)
+        rows=[(1,'KOTRA_MARKET','통상·규제',[('US',None)]),(2,'KOTRA_SHORT_NEWS','경제',[('US',None)]),
+              (3,'HANKYUNG',None,[('US',None),(None,'330499')]),(4,'HANKYUNG',None,[('US',None)]),
+              (5,'KOTRA_SHORT_NEWS','경제',[('CN',None)]),(6,'KOTRA_SHORT_NEWS','경제',[])]
+        with self.engine.begin() as c:
+            for i,source,category,tags in rows:
+                c.execute(m['article'].insert(),{'article_id':i,'source_code':source,'external_id':f'interest-{i}','title':'기사',
+                    'published_date':date(2025,12,i),'source_url':f'https://example.org/i{i}','body_masked':'본문','category':category,
+                    'visibility_status':'VISIBLE','admin_meta_json':{}})
+                for country,hs in tags:
+                    c.execute(m['article_tag'].insert(),{'article_id':i,'country_code':country,'hs_code':hs,'hs_ver':'HS2022' if hs else None})
+        def ids(tab,extra=''):
+            r=self.client.get(f'/api/v1/articles?scope=INTERESTED&tab={tab}{extra}'); self.assertEqual(r.status_code,200,r.text)
+            return {a['article_id'] for a in r.json()['items']}
+        # 단신속보·주요이슈는 관심 국가로만 맞추고, 일반기사는 국가와 품목이 모두 맞아야 한다.
+        self.assertEqual(ids('BREAKING'),{'2'})
+        self.assertEqual(ids('MAJOR_ISSUE'),{'1'})
+        self.assertEqual(ids('GENERAL'),{'3'})
+        self.assertEqual(ids('ALL'),{'1','2','3'})
+        self.assertEqual(ids('GENERAL')|ids('BREAKING')|ids('MAJOR_ISSUE'),ids('ALL'))
+        # 품목을 직접 지정하면 품목 태그가 있는 기사만 남는다. 관심 국가 밖 국가는 지금처럼 거절한다.
+        self.assertEqual(ids('ALL','&hs_code=330499&hs_ver=HS2022'),{'3'})
+        self.assertEqual(self.client.get('/api/v1/articles?scope=INTERESTED&tab=BREAKING&country_codes=CN').status_code,400)
+        items=self.client.get('/api/v1/articles?scope=INTERESTED&tab=ALL').json()['items']
+        self.assertTrue(all(a['matched_interest'] for a in items))
+        # 관심 국가 없이 품목만 등록하면 품목 태그가 없는 단신속보는 맞출 기준이 없어 나오지 않는다.
+        version=self.client.get(url).json()['interests']['version']
+        body.update(country_codes=[],expected_version=version)
+        self.assertEqual(self.client.put(url,json=body,headers={'X-CSRF-Token':self.csrf}).status_code,200)
+        self.assertEqual(ids('BREAKING'),set())
+        self.assertEqual(ids('ALL'),{'3'})
+
     def test_product_ranking_includes_hs_name_and_formatted_excel(self):
         self.signup()
         response=self.client.get('/api/v1/trade/rankings?period_start=2025-12&period_end=2025-12&group_by=HS6')
