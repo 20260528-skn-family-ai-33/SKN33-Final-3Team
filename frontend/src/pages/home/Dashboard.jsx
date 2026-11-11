@@ -132,7 +132,8 @@ function Ticker({ interest }) {
       <span style={{ width: 1, height: 16, background: 'rgba(255,255,255,.25)' }} />
       <span style={{ fontSize: 13, color: '#B8BEC8', whiteSpace: 'nowrap' }}>{current?.source || '기사 출처'}</span>
       {/* 제목이 길면 한 줄에 들어가는 만큼만 보여 주고 …로 줄인다. 전체 제목은 마우스를 올리면 보인다. */}
-      <Link to={`/articles?tab=${current?.kind}&id=${current?.id}`} title={current?.title} style={{ flex: '1 1 220px', minWidth: 0, color: '#fff', fontSize: 16, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current?.title || (result.error ? result.error.message : result.loading ? '기사를 불러오는 중…' : '조회된 기사가 없습니다.')}</Link>
+      {/* 지금 보고 있는 롤링 탭(전체기사 등)으로 기사 화면을 연다. 기사 종류로 탭을 정하면 전체기사에서 눌러도 일반기사 탭으로 갔다. */}
+      <Link to={`/articles?tab=${tab}&id=${current?.id}`} title={current?.title} style={{ flex: '1 1 220px', minWidth: 0, color: '#fff', fontSize: 16, fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{current?.title || (result.error ? result.error.message : result.loading ? '기사를 불러오는 중…' : '조회된 기사가 없습니다.')}</Link>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#B8BEC8', whiteSpace: 'nowrap' }}>
         <span style={{ marginRight: 6 }}>{items.length ? (index % items.length) + 1 : 0} / {items.length}</span>
         <button type="button" style={round} aria-label="이전 기사" onClick={() => setIndex(i => (i - 1 + items.length) % items.length)}><Icon name="chevronUp" size={13} color="#fff" stroke={2.2} /></button>
