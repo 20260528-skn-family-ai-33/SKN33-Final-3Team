@@ -391,9 +391,11 @@ class BackendApiTest(unittest.TestCase):
         db.agent_client.parse.side_effect = [plan, invalid, valid]
 
         def search(request, *, article_allowed=None, started=None):
-            item = article_payload(11 if request.query == questions[0] else 12)
+            # 기사 질의문은 조건 문맥 뒤에 하위 질문을 붙인다(article_query). 질문이 들어 있는지로 구분한다.
+            first = questions[0] in request.query
+            item = article_payload(11 if first else 12)
             items = [item]
-            if request.query == questions[0]:
+            if first:
                 items.insert(0, dict(article_payload(10), evidence=[], summary=[]))
             return RagResponse.model_validate(response_payload(request.model_dump(mode='json'),
                 status='insufficient_evidence' if len(items) == 2 else 'insufficient_results',
