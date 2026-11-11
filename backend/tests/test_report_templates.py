@@ -323,6 +323,18 @@ class OnDemandTest(unittest.TestCase):
         page = html[html.index('유망시장(증가·감소 예상)</h2>'):html.index('현지 이슈</h2>')]
         self.assertIn('비교 기간 → 분석 기간', page)
         self.assertIn('<th class="r">비교 기간</th><th class="r">분석 기간</th>', page)
+        # 연간이 아닌 기간(1~3월)은 축약 날짜(24.01~24.03)가 표 머리글·범례·소제목에 쓰였다. 날짜 대신 기간 이름을 쓰고 비교 수치는 유지한다.
+        quarter = rt.sample_context('ondemand')
+        quarter['conditions']['period'].update(short='25.01~25.03', label='2025.01 ~ 2025.03')
+        quarter['conditions']['compare'].update(short='24.01~24.03', period_label='2024.01 ~ 2024.03')
+        html = rt.render('RPT_ON_DEMAND', quarter)
+        for text in ('24.01~24.03', '2024.01 ~ 2024.03'):
+            self.assertNotIn(text, html)
+        self.assertIn('<th class="r">분석 기간 수출액</th>', html)          # 주요 수출국 표
+        self.assertIn('<th class="r">비교 기간 수출액</th>', html)
+        self.assertIn('국가별 수출액<small>분석 기간 vs 비교 기간', html)   # 주요 수출국 막대 소제목
+        self.assertIn('<th>월</th><th class="r">분석 기간</th><th class="r">비교 기간</th>', html)   # 월별 추이 표
+        self.assertIn('74.10', html)                                         # 비교 수치(전년 합계)는 그대로
 
     def test_long_country_names_keep_promising_page_above_footer(self):
         """#95 국가명이 좁은 증감 표에서 여러 줄로 바뀌어도 쪽 나눔이 이를 반영해, 실제 렌더링에서 내용이 꼬리말과 겹치지 않는다."""
@@ -408,7 +420,7 @@ class OnDemandTest(unittest.TestCase):
 
     def test_compare_modes(self):
         none = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='NONE'))
-        self.assertNotIn('2024 수출액', none)
+        self.assertNotIn('<th class="r">비교 기간 수출액</th>', none)
         self.assertNotIn('변동</th>', none)
         self.assertNotIn('<th>비교 기간</th><td>', none)   # 보고서 정보 표에 비교 기간 행을 싣지 않는다(#95)
         custom = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='CUSTOM',
@@ -416,7 +428,7 @@ class OnDemandTest(unittest.TestCase):
         self.assertIn('비교는 기간 합계만', custom)
         self.assertIn('월별로 짝짓지 않고', custom)
         self.assertNotIn('<th class="r">증감액</th>', custom)   # 월별 비교 열 없음
-        self.assertIn('2024 수출액', custom)                      # 기간 합계 비교는 표시
+        self.assertIn('<th class="r">비교 기간 수출액</th>', custom)   # 기간 합계 비교는 표시(날짜 대신 '비교 기간', #95)
         self.assertNotIn('<th>비교 기간</th><td>', custom)        # 비교가 있어도 보고서 정보 표에 비교 기간 날짜 행은 없음(#95)
 
     def test_missing_compare_data_differs_from_none(self):

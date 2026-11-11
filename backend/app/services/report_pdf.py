@@ -7,10 +7,29 @@ from pathlib import Path
 from backend.app.api.common import ApiError
 
 
+def browser_font(data):
+    """Chromium(OTS)이 거부하는 글꼴 테이블을 뺀다. 나눔고딕 TTF의 VTT 편집용 TSI* 테이블(예: 길이 0인 TSI3)이 있으면
+    글꼴 전체가 거부돼 한글이 빠진 PDF가 만들어진다. 화면 표시에 쓰이지 않는 테이블이라 빼도 글자 모양은 같다."""
+    try:
+        import io
+        from fontTools.ttLib import TTFont
+        font = TTFont(io.BytesIO(data), lazy=True)
+        tags = [tag for tag in font.keys() if tag.startswith('TSI')]
+        if not tags:
+            return data
+        for tag in tags:
+            del font[tag]
+        out = io.BytesIO()
+        font.save(out)
+        return out.getvalue()
+    except Exception:   # fontTools가 없거나 읽지 못하는 형식이면 원본을 쓰고, 로드 확인(template_pdf)에서 거른다
+        return data
+
+
 @lru_cache(maxsize=4)
 def font_css(path, mtime_ns, size):
     # The file signature invalidates the cache when the configured font is replaced.
-    encoded = base64.b64encode(Path(path).read_bytes()).decode('ascii')
+    encoded = base64.b64encode(browser_font(Path(path).read_bytes())).decode('ascii')
     return ("<style>@font-face{font-family:ReportKorean;src:url(data:font/ttf;base64,"
             + encoded + ")}body{font-family:ReportKorean,sans-serif}</style>")
 
@@ -45,6 +64,12 @@ def template_pdf(report_type, context, settings):
                 page.set_content(html, wait_until='load')
                 stage='FONT_LOAD'
                 page.evaluate('document.fonts.ready')
+                # 지정한 한글 글꼴을 브라우저가 거부하면 한글이 빠진 PDF가 조용히 만들어진다. 저장 전에 로드 결과를 확인한다.
+                states = page.evaluate("""() => [...document.fonts]
+                    .filter(f => f.family.replace(/["']/g, '') === 'ReportKorean').map(f => f.status)""")
+                if not states or any(s != 'loaded' for s in states):
+                    raise ApiError(503, 'REPORT_FONT_UNAVAILABLE',
+                                   'PDF 한글 글꼴을 브라우저가 읽지 못했습니다. API_REPORT_FONT의 글꼴 파일을 확인하세요.')
                 stage='PDF_RENDER'
                 return page.pdf(format='A4', prefer_css_page_size=True, print_background=True,
                                 display_header_footer=False,

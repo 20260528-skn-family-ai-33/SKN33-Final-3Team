@@ -13,9 +13,10 @@
 {% set pend = '비교 데이터 준비 중' %}  {# 비교를 골랐지만 비교 기간 통계가 아직 없음 (NONE과 구분) #}
 {% set paired = compare_ready and c.compare.monthly_paired %}
 {% set vs = {'YOY': '전년 동월 대비', 'YOY_PERIOD': '전년 대비', 'MOM': '전월 대비', 'CUSTOM': '비교 기간 대비', 'NONE': ''}[c.compare.mode] %}
-{% set cur = c.period.short %}
-{% set prev = c.compare.short if has_compare else '' %}
-{# 문장 속 비교 대상 (양식: “전년 74.1억 달러”·“전년 151개국”) — 표 머리글·범례는 prev(연도 등)를 씀 #}
+{# 표 머리글·범례·소제목의 기간 이름. 비교 기간 날짜(축약형 포함)는 본문에 싣지 않는다(#95) — 날짜 대신 '분석 기간'·'비교 기간'으로 구분 #}
+{% set cur = '분석 기간' %}
+{% set prev = '비교 기간' if has_compare else '' %}
+{# 문장 속 비교 대상 (양식: “전년 74.1억 달러”·“전년 151개국”) #}
 {% set prevw = {'YOY': '전년 동월', 'YOY_PERIOD': '전년', 'MOM': '전월', 'CUSTOM': '비교 기간', 'NONE': ''}[c.compare.mode] %}
 {# 결과 기반(result_mode): 채팅에서 승인한 분석 결과표 사본으로 만든 리포트. 핵심 요약 + 승인한 분석 결과만 그린다(D-90). #}
 {% set result_mode = c.get('result_mode', false) %}
@@ -161,10 +162,10 @@
 {% for r in scope_comparison.rows[b.start:b.end] %}<tr><td>{{ r.month }}</td><td>{{ r.name }}</td><td>{{ r.amount_usd | eok }}</td></tr>{% endfor %}
 </table>
 {% elif b.key == 'chart' %}
-{% set keys = [{'name': cur ~ ('년' if cur | length == 4 else ''), 'color': colors.accent, 'kind': 'line'}] %}
+{% set keys = [{'name': cur, 'color': colors.accent, 'kind': 'line'}] %}
 {% set lines = [{'values': mo.current, 'color': colors.accent, 'area': true}] %}
 {% if paired %}
-  {% set _ = keys.append({'name': prev ~ ('년' if prev | length == 4 else '') ~ ' (비교)', 'color': colors.previous, 'kind': 'dash'}) %}
+  {% set _ = keys.append({'name': prev, 'color': colors.previous, 'kind': 'dash'}) %}
   {% set _ = lines.append({'values': mo.previous, 'color': colors.previous, 'dashed': true}) %}
 {% endif %}
 {{ m.legend(keys) }}
