@@ -97,7 +97,6 @@ function ResultSections({ sections, onDownload }) {
 const PROMISING_COLS = '110px 1fr 1.6fr 100px 150px'
 const CHANGE_COLS = '1.3fr 1fr 1fr 1fr 1.1fr'
 const UP = '#0B7A4B', DOWN = '#C0392B'   // PDF(report_templates.UP·DOWN)와 같은 색
-const months = (start, end) => `${String(start).slice(0, 7).replace('-', '.')}~${String(end).slice(0, 7).replace('-', '.')}`
 const signedEok = value => (value > 0 ? '+' : value < 0 ? '−' : '') + reportEok(Math.abs(Number(value)) / 1e8)
 
 /** 유망시장 위쪽의 실제 수출 증감(PDF와 같은 기준): 성장률 상위·감소율 상위 표와 국가별 증감액 막대. 비교 기간이 없으면 안내만 한다. */
@@ -107,13 +106,13 @@ function CountryChanges({ changes }) {
     const text = changes?.status === 'NO_COMPARE' ? '비교 기간을 선택하면 국가별 증감을 표시합니다.' : '비교 기간 통계가 아직 준비되지 않았습니다.'
     return <><p style={{ fontSize: 15, fontWeight: 800 }}>실제 수출 증감</p><p className="muted" style={{ marginTop: 6 }}>{text}</p></>
   }
-  const prev = months(changes.previous.start, changes.previous.end), cur = months(changes.current.start, changes.current.end)
+  // 비교 기간 날짜는 표시하지 않는다(#95). 열·제목은 '비교 기간'·'분석 기간'으로 구분한다
   const peak = Math.max(1, ...changes.bars.map(r => Math.abs(r.change_usd)))
   const table = (title, items) => (
     <div style={{ minWidth: 0 }}>
-      <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>{title} {items.length}개국 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>{prev} → {cur}</span></p>
+      <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>{title} {items.length}개국 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>비교 기간 → 분석 기간</span></p>
       {items.length ? <>
-        <div className="th" style={{ gridTemplateColumns: CHANGE_COLS }}><span>국가</span><span className="r">{prev}</span><span className="r">{cur}</span><span className="r">증감액</span><span className="r">증감률</span></div>
+        <div className="th" style={{ gridTemplateColumns: CHANGE_COLS }}><span>국가</span><span className="r">비교 기간 수출액</span><span className="r">분석 기간 수출액</span><span className="r">증감액</span><span className="r">증감률</span></div>
         {items.map(r => (
           <div key={r.country_code} className="tr" style={{ gridTemplateColumns: CHANGE_COLS }}>
             <span className="b">{r.country}</span><span className="r">{amount(r.previous_usd)}</span><span className="r">{amount(r.amount_usd)}</span>
@@ -129,7 +128,7 @@ function CountryChanges({ changes }) {
       {table('성장률 상위', changes.growth)}{table('감소율 상위', changes.decline)}
     </div>
     {changes.bars.length > 0 && <div style={{ marginTop: 34 }}>
-      <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>국가별 증감액 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>{prev} → {cur} · 억 달러</span></p>
+      <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>국가별 증감액 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>비교 기간 → 분석 기간 · 억 달러</span></p>
       {changes.bars.map(r => {
         const width = `${Math.max(Math.abs(r.change_usd) / peak * 45, 0.5)}%`, up = r.change_usd > 0
         return (

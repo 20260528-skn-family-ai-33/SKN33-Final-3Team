@@ -511,8 +511,19 @@ def _table(key, rows, head=None, empty=ROW1_MM, **extra):
 # 유망시장 표 칸 너비(mm). ondemand.html의 th 너비와 같아야 한다. 글자 폭 = 칸 너비 − 좌우 여백 4.8mm.
 PROMISING_COLS = (24, 30, 50, 20, 24, 32)
 COMPACT_ROW_MM = 7.6   # table.compact 한 줄 행(7.9pt, 실측)
+CHANGE_NAME_MM = 20    # 유망시장 증감 표(두 칸 중 한 칸, 5열)의 국가명 글자 폭 추정(mm). 실측보다 좁게 잡아 줄 수를 넉넉히 센다
+                       # (긴 국가명 5행: 맑은 고딕 실측 75.9mm, 이 값의 추정 91.8mm — 글자가 넓은 Linux 글꼴 여유)
 DIVERGING_ROW = 22     # 유망시장 증감액 막대 한 줄 높이(SVG 단위). ondemand.html과 같아야 한다
 BOX_GAP_MIN, BOX_GAP_MAX = 6, 20   # 증감액 그래프와 ML 박스 사이 여백(mm). 남는 공간에 따라 이 범위에서 정한다
+
+
+def change_tables_height(changes):
+    """유망시장 성장률·감소율 상위 표(두 칸 나란히) 블록 높이(mm). 국가명이 좁은 칸에서 여러 줄로 바뀌면 행이 높아지므로
+    두 표 각각의 행 높이 합을 재고 더 높은 쪽을 쓴다."""
+    def rows(items):
+        return sum(COMPACT_ROW_MM + LINE[7.9] * (_lines(i.get('country') or '', 7.9, CHANGE_NAME_MM) - 1)
+                   for i in items) or COMPACT_ROW_MM
+    return H3_MM + TH_MM + max(rows(changes['growth']), rows(changes['decline'])) + 2
 
 
 def _promising_table(promising):
@@ -806,8 +817,7 @@ def _ondemand_layout(ctx, rest):
         blocks = []
         if changes['status'] == 'READY' and (changes['growth'] or changes['decline'] or changes['bars']):
             # 성장률 상위·감소율 상위 표를 두 칸으로 나란히(table.compact, 국가명 한 줄 기준)
-            rows = max(len(changes['growth']), len(changes['decline']), 1)
-            blocks.append({'key': 'ctables', 'height': H3_MM + TH_MM + rows * COMPACT_ROW_MM + 2})
+            blocks.append({'key': 'ctables', 'height': change_tables_height(changes)})
             if changes['bars']:  # 소제목 + 증감액 막대(ondemand.html의 diverging_chart row_height와 같은 값)
                 blocks.append({'key': 'cchart', 'height': H3_MM + 3.5 + _svg(DIVERGING_ROW * len(changes['bars']) + 4)})   # .cchart-head 위 여백
         else:

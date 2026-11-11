@@ -111,13 +111,17 @@ export default function Profile({ route }) {
             <p style={{ fontSize: 16, fontWeight: 700 }}>알림 수신 동의 <span className="tag">선택</span></p>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <button type="button" className="reset more" style={{ fontSize: 13 }} onClick={() => setTermsView({ key: 'notification', title: '알림 수신 동의' })}>내용 보기</button>
-              <Check checked={notificationAgreed} disabled={!notificationVersion || notificationSaving} onChange={toggleNotification}
-                aria-label="알림 수신 동의">{notificationAgreed ? '동의함' : '동의 안 함'}</Check>
+              {/* 현재 약관 버전을 받아야 동의 여부를 판단할 수 있다. 조회 중·실패를 '동의 안 함'으로 보이지 않는다 */}
+              {notificationVersion
+                ? <Check checked={notificationAgreed} disabled={notificationSaving} onChange={toggleNotification}
+                    aria-label="알림 수신 동의">{notificationAgreed ? '동의함' : '동의 안 함'}</Check>
+                : <span className="note">{notificationTerms.error ? '불러오지 못함' : '확인 중…'}</span>}
             </div>
           </div>
         </div>
         {/* 불러오기에 실패하면 '동의 기록 없음'으로 오해하지 않게 오류와 다시 불러오기를 보인다 */}
         <ErrorNotice error={me.error} retry={me.reload} />
+        <ErrorNotice error={notificationTerms.error} retry={notificationTerms.reload} />
         <div className="between" style={{ marginTop: 18 }}>
           <span className="note">알림 수신 동의를 해제하면 알림도 함께 꺼집니다. 알림 종류는 알림설정에서 고를 수 있습니다. 필수 약관의 동의 기록이 없으면 약관 도입 전에 가입한 계정입니다.</span>
         </div>

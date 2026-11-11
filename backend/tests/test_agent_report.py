@@ -414,6 +414,9 @@ class ReportAgentTest(unittest.TestCase):
             self.skipTest(f'PDF 렌더러 없음: {exc}')
         text = ''.join(page.extract_text() for page in PdfReader(BytesIO(pdf)).pages)
         self.assertIn('13,579', text)
+        # 한글 글꼴을 실제로 썼는지: 같은 행의 국가·품목명이 글자로 남아야 한다(글꼴이 거부되면 숫자만 남는다)
+        self.assertIn('미국', text)
+        self.assertIn('화장품', text)
 
     def test_same_named_products_get_separate_chart_series(self):
         """R25 이름이 같은 품목(0409·040900 모두 '천연꿀')은 HS 코드로 시리즈를 나누고 범례에 HS 코드를 붙인다."""

@@ -314,6 +314,54 @@ class OnDemandTest(unittest.TestCase):
         # 예전 문맥(changes 없음)도 오류 없이 안내만 한다
         self.assertIn('비교 기간 통계가 아직 준비되지 않았습니다.', self.render(update=lambda ctx: ctx.pop('changes')))
 
+    def test_body_has_no_comparison_dates(self):
+        """#95 비교 기간 날짜는 머리 정보뿐 아니라 본문(주요 지표 소제목·유망시장)에도 싣지 않는다. 분석 기간은 남긴다."""
+        context = rt.sample_context('ondemand')
+        html = rt.render('RPT_ON_DEMAND', context)
+        self.assertNotIn(context['conditions']['compare']['period_label'], html)   # 2024.01 ~ 2024.12
+        self.assertIn('분석 ' + context['conditions']['period']['label'], html)
+        page = html[html.index('유망시장(증가·감소 예상)</h2>'):html.index('현지 이슈</h2>')]
+        self.assertIn('비교 기간 → 분석 기간', page)
+        self.assertIn('<th class="r">비교 기간</th><th class="r">분석 기간</th>', page)
+
+    def test_long_country_names_keep_promising_page_above_footer(self):
+        """#95 국가명이 좁은 증감 표에서 여러 줄로 바뀌어도 쪽 나눔이 이를 반영해, 실제 렌더링에서 내용이 꼬리말과 겹치지 않는다."""
+        try:
+            from playwright.sync_api import sync_playwright, Error as PlaywrightError
+        except ImportError:
+            self.skipTest('Playwright 없음')
+        context = rt.sample_context('ondemand')
+        long = ['남조지아 & 남샌드위치 군도', '미국령 군소 제도(마이너 아우틀링 합중국 군도)', '세인트빈센트 그레나딘', '보스니아 헤르체고비나', '콩고 민주 공화국']
+        for items in (context['changes']['growth'], context['changes']['decline']):
+            for item, name in zip(items, long):
+                item['country'] = name
+        context['promising']['rows'] = context['promising']['rows'][:1]   # 리뷰 재현 조건: ML 예측 1행(남는 공간만큼 박스 위 여백이 커짐)
+        html = rt.render('RPT_ON_DEMAND', context)
+        try:
+            with sync_playwright() as runtime:
+                browser = runtime.chromium.launch()
+                page = browser.new_page()
+                page.set_content(html)
+                measured = page.evaluate("""() => {
+                  const pages = [...document.querySelectorAll('section.page')]
+                    .filter(p => p.innerText.includes('유망시장(증가·감소 예상)') && !p.querySelector('.toc'))
+                  const grid = pages[0].querySelector('.grid2')
+                  const h3 = grid.querySelector('h3'), style = getComputedStyle(h3)
+                  return {
+                    // 증감 표 블록 높이(mm): 소제목 위 여백부터 두 표 중 더 긴 쪽 끝까지
+                    tables: (grid.getBoundingClientRect().bottom - h3.getBoundingClientRect().top + parseFloat(style.marginTop)) * 25.4 / 96,
+                    overflow: pages.map(p => { const footer = p.querySelector('.ftr').getBoundingClientRect().top;
+                      const bottom = Math.max(...[...p.children].filter(e => !e.matches('.hdr,.ftr')).map(e => e.getBoundingClientRect().bottom));
+                      return bottom - footer }) } }""")
+                browser.close()
+        except PlaywrightError as exc:
+            self.skipTest(f'브라우저 없음: {exc}')
+        # 글꼴(OS)마다 줄바꿈이 달라 겹침 여부는 환경에 따라 다르다. 그래서 쪽 나눔 추정 높이가 실제 표 높이 이상인지 확인한다.
+        self.assertGreaterEqual(rt.change_tables_height(context['changes']), measured['tables'])
+        self.assertGreater(rt.change_tables_height(context['changes']),
+                           rt.change_tables_height(rt.sample_context('ondemand')['changes']))   # 긴 이름은 더 높게 잡는다
+        self.assertTrue(all(gap <= 0 for gap in measured['overflow']), measured['overflow'])   # 내용 끝이 꼬리말 위
+
     def test_country_changes_ranks_by_rate_with_minimum_size(self):
         """성장률 상위는 분석 기간, 감소율 상위는 비교 기간 수출액 1천만 달러 이상만. 막대는 증가 6·감소 4, 합계 행은 뺀다."""
         from types import SimpleNamespace
@@ -362,14 +410,14 @@ class OnDemandTest(unittest.TestCase):
         none = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='NONE'))
         self.assertNotIn('2024 수출액', none)
         self.assertNotIn('변동</th>', none)
-        self.assertNotIn('비교 기간</th>', none)   # 보고서 정보 표에 비교 기간 행을 싣지 않는다(#95)
+        self.assertNotIn('<th>비교 기간</th><td>', none)   # 보고서 정보 표에 비교 기간 행을 싣지 않는다(#95)
         custom = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='CUSTOM',
                                           monthly_paired=False))
         self.assertIn('비교는 기간 합계만', custom)
         self.assertIn('월별로 짝짓지 않고', custom)
         self.assertNotIn('<th class="r">증감액</th>', custom)   # 월별 비교 열 없음
         self.assertIn('2024 수출액', custom)                      # 기간 합계 비교는 표시
-        self.assertNotIn('비교 기간</th>', custom)                # 비교가 있어도 보고서 정보 표에 비교 기간 날짜 행은 없음(#95)
+        self.assertNotIn('<th>비교 기간</th><td>', custom)        # 비교가 있어도 보고서 정보 표에 비교 기간 날짜 행은 없음(#95)
 
     def test_missing_compare_data_differs_from_none(self):
         def clear(context):
