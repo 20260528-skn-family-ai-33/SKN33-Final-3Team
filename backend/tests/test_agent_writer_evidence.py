@@ -424,3 +424,70 @@ class WriterEvidenceTest(unittest.TestCase):
         self.assertNotIn('[1]', answer)
         self.assertIn('질문에 해당하는 사실을 확인하지 못했습니다', answer)
         self.assertIn('통계 조회 실패', answer)
+
+    def test_location_only_overlap_initial_and_fallback(self):
+        from backend.app.agents.compose import fallback_conclusion
+
+        related = '부산 냉동창고가 운영을 재개했습니다.'
+        unrelated = '부산 철도 상담회 일정을 공지했습니다.'
+        question = '부산 냉동창고 재개가 수출 증가의 원인인가요?'
+        def setup(with_related):
+            cards = [article(12,'부산 냉동창고',unrelated,'direct_evidence')]
+            if with_related:
+                cards.append(article(13,'공지',related,'context_reference'))
+            state = dev_state([('CAUSE',question,statistic([500]),cards)])
+            task = state.plan.tasks[0]
+            for step in task.steps:
+                if step.tool == 'query_trade_data':
+                    step.status = 'FAILED'
+                    state.results[step.step_id] = ToolResult(status='NO_DATA', error='수출 통계 미집계')
+                elif step.tool == 'build_chart':
+                    step.status = 'SKIPPED'
+            task.answer_status = state.task_outcome(task.task_id)
+            return state
+        def draft(body):
+            return Draft(conclusion=[{'task_id':'t1','sentences':[body]}],turn_summary='')
+        good, bad = draft(related+'[2]'), draft(unrelated+'[1]')
+        for text in (False, True):
+            for outputs, calls in [([good],1), ([bad,good],2), ([bad,bad],2)]:
+                state = setup(True)
+                client = compose(state, *outputs, text=text)
+                self.assertEqual(client.parse.call_count, calls)
+                self.assertEqual(state.draft.sentences()[0], related+'[2]')
+                self.assertIn('수출 통계 미집계', state.draft.sentences()[1])
+            state = setup(False)
+            fallback = fallback_conclusion(state, state.plan.tasks[0])
+            client = compose(state, text=text)
+            client.parse.assert_not_called()
+            self.assertEqual(state.draft.sentences(), fallback.sentences)
+            self.assertIn('질문에 해당하는 사실을 확인하지 못했습니다', fallback.sentences[0])
+            self.assertNotIn('철도', ' '.join(fallback.sentences))
+
+    def test_mixed_question_checks_statements_against_one_tasks_results(self):
+        news = [article(11,'창고','부산 냉동창고가 운영을 재개했습니다.','direct_evidence'),
+                article(12,'상담','부산 철도 상담회 일정을 공지했습니다.','context_reference')]
+        state = dev_state([('CAUSE','부산 냉동창고 재개가 수출 증가 원인인가요?',statistic([500]),news),
+                           ('STATISTICS','8월과 9월 수출액을 비교해 주세요.',statistic([100,200]),[]),
+                           ('STATISTICS','8월과 9월 수입액은 얼마인가요?',statistic([300,400],'IMPORT'),[])])
+        task = state.plan.tasks[0]
+        for step in task.steps:
+            if step.tool == 'query_trade_data':
+                step.status = 'FAILED'
+                state.results[step.step_id] = ToolResult(status='NO_DATA', error='부산 수출 통계 조회 실패')
+            elif step.tool == 'build_chart':
+                step.status = 'SKIPPED'
+        task.answer_status = state.task_outcome(task.task_id)
+        valid = Draft(conclusion=[
+            {'task_id':'t1','sentences':['부산 냉동창고가 운영을 재개했습니다.[1]']},
+            {'task_id':'t2','sentences':['9월 수출액은 200달러입니다.']},
+            {'task_id':'t3','sentences':['9월 수입액은 400달러입니다.']}],
+            explanation=['8월 수출액은 100달러입니다.', '8월 수입액은 300달러입니다.'],turn_summary='')
+        for text in (False,True):
+            for wrong in (None,'8월 수출액은 300달러입니다.','8월 수출액은 100달러이며 창고 재개 때문입니다.'):
+                with self.subTest(text=text, wrong=wrong):
+                    current = state.model_copy(deep=True)
+                    outputs = [valid] if wrong is None else [valid.model_copy(update={'explanation':[wrong]}), valid]
+                    client = compose(current, *outputs, text=text)
+                    self.assertEqual(client.parse.call_count, len(outputs))
+                    self.assertEqual(current.draft.explanation, valid.explanation)
+                    self.assertIn('부산 수출 통계 조회 실패',current.draft.conclusion[0].sentences[1])

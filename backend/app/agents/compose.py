@@ -121,8 +121,24 @@ def body_terms(text):
     return {word for word in terms if len(word) >= 2 and word not in _GENERIC_TOPIC}
 
 
-def relevant_article_facts(question, cards):
-    """Rank citable body sentences by lexical cosine similarity to the question."""
+# Domestic metropolitan cities and provinces (short and administrative forms).
+# The runtime also supplies the country names from the project's country table.
+_REGION_NAMES = frozenset("""
+서울 부산 대구 인천 광주 대전 울산 세종 경기 강원 충북 충남 전북 전남 경북 경남 제주
+경기도 강원도 충청북도 충청남도 전라북도 전라남도 경상북도 경상남도 제주도
+서울특별시 부산광역시 대구광역시 인천광역시 광주광역시 대전광역시 울산광역시
+세종특별자치시 강원특별자치도 전북특별자치도 제주특별자치도
+""".split())
+
+
+def relevant_article_facts(question, cards, country_names=()):
+    """Geography can qualify a subject, but cannot establish topical relevance alone."""
+    places = _REGION_NAMES.union(word.lower() for word in country_names)
+    places = places.union(name + '시' for name in ('서울', '부산', '대구', '인천', '광주', '대전', '울산', '세종'))
+    # Explicit place labels also work for localities absent from the dictionary.
+    # The particle '에서' on its own can denote a facility rather than a region.
+    places = places.union(re.findall(r'([가-힣a-z]+?)\s*(?:지역|도시)(?:에서|의|에)?(?=\s|$)', question.lower()))
+    places = places.union(name + suffix for name in places for suffix in ('행', '발', '산'))
     query = body_terms(question)
     ranked = []
     for card in cards:
@@ -130,7 +146,7 @@ def relevant_article_facts(question, cards):
             fact = item['text'].strip()
             terms = body_terms(fact)
             common = query & terms
-            if common and not cited_article_numbers(fact):
+            if common - places and not cited_article_numbers(fact):
                 score = len(common) / (len(query) * len(terms)) ** 0.5
                 ranked.append((score, str(card['n']), fact))
     ranked.sort(key=lambda row: -row[0])
@@ -145,7 +161,7 @@ def missing_trade_notice(state, task):
     return message if len(message) <= 200 else limit
 
 
-def fallback_conclusion(state, task):
+def fallback_conclusion(state, task, country_names=()):
     """Build a conclusion from the same result handles used to render this task."""
     results = [(s.tool, state.results[s.step_id]) for s in task.steps if s.step_id in state.results]
     if task.intent == 'CONVERSATION':
@@ -170,7 +186,7 @@ def fallback_conclusion(state, task):
     reasons = [r.error for tool, r in results if r.status != 'OK' and r.error and tool != 'build_chart']
     if task.intent == 'CAUSE' and not tables:
         citable = [_citable_article(card) for card in cards if card.get('evidence_sufficient')]
-        for number, fact_text in relevant_article_facts(task.question, citable):
+        for number, fact_text in relevant_article_facts(task.question, citable, country_names):
             cited = f'{fact_text}[{number}]'
             if len(cited) <= 200:
                 task.answer_status = 'PARTIAL'
@@ -232,7 +248,7 @@ def fixed_conclusion(state, task):
     return None
 
 
-def compose_input(state: AgentState, describe_conditions, articles: list[dict], *, news_warnings=None) -> tuple[dict, dict]:
+def compose_input(state: AgentState, describe_conditions, articles: list[dict], *, news_warnings=None, country_names=()) -> tuple[dict, dict]:
     news_warnings = news_warnings or {}
     common_warnings = [w for w in state.warnings if w not in news_warnings.values()]
     allowed = [_citable_article(a) for a in articles if a.get('evidence_sufficient') and a.get('summary')]
@@ -262,18 +278,18 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
                     digest = {k: v for k, v in digest.items() if k != 'items'}
                 digests[step.step_id.rsplit('.', 1)[-1]] = display_amounts(digest)
         if not digests:
-            fixed[task.task_id] = fallback_conclusion(state, task)
+            fixed[task.task_id] = fallback_conclusion(state, task, country_names)
             continue
         if digests.keys() == {'news'}:
             cards = [a for a in allowed if a['task_id'] == task.task_id]
             if not cards:
-                fixed[task.task_id] = fallback_conclusion(state, task)
+                fixed[task.task_id] = fallback_conclusion(state, task, country_names)
                 continue
-            if task.intent == 'CAUSE' and not relevant_article_facts(task.question, cards):
-                fixed[task.task_id] = fallback_conclusion(state, task)
+            if task.intent == 'CAUSE' and not relevant_article_facts(task.question, cards, country_names):
+                fixed[task.task_id] = fallback_conclusion(state, task, country_names)
                 continue
             if task.intent == 'CAUSE' and len(cards) == 1 and len(cards[0]['summary']) == 1:
-                partial = fallback_conclusion(state, task)
+                partial = fallback_conclusion(state, task, country_names)
                 if cited_article_numbers(partial.sentences[0]):
                     fixed[task.task_id] = partial
                     continue
@@ -309,7 +325,51 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
     return payload, fixed
 
 
-def complete_article_only_conclusions(state, draft, payload):
+# Shared explanation sentences have no task ID in Draft. Admit uncited prose
+# only for purely quantitative statements supported by one identifiable task.
+_STAT_WORDS = re.compile(
+    r'(?:[0-9.,%+−–~()\s-]|USD|달러|년|개월|월|일|억|만|천|조|수출입|수출|수입|금액|액|총|합계|'
+    r'월평균|평균|전체|품목|국가|기준|각각|전년|동월|전월|대비|보다|비중|점유율|증감률|증가|감소|순위|위|위로|%p|'
+    r'했으며|했고|했습니다|이며|이고|입니다|였습니다|이었습니다|에서|으로|은|는|이|가|의|와|과|로)',
+    re.IGNORECASE)
+
+
+def supported_stat_explanation(line, state, payload, country_names):
+    from backend.app.agents.verify import inspect_sentence
+
+    matched = 0
+    for task in state.plan.tasks:
+        if task.intent not in ('STATISTICS', 'RANKING', 'MARKET_SHARE'):
+            continue
+        inputs = next((row for row in payload['tasks'] if row['task_id'] == task.task_id), None)
+        if not inputs:
+            continue
+        sources = []
+        for step in task.steps:
+            if step.tool != 'query_trade_data' or step.step_id.rsplit('.', 1)[-1] not in inputs['digests']:
+                continue
+            result = state.results.get(step.step_id)
+            if result and result.status == 'OK' and result.digest:
+                source = dict(result.digest)
+                for key in ('period', 'compare_period'):
+                    if inputs['conditions'].get(key):
+                        source.setdefault(key, inputs['conditions'][key])
+                sources.append(source)
+        if not sources:
+            continue
+        good, claims = inspect_sentence(line, sources, known_names=country_names, countries=country_names)
+        if not good or not claims or not all(c.claim.quantity and c.matches for c in claims):
+            continue
+        # Strip only entities the parser bound to supported claims in this task.
+        remainder = line
+        for name in sorted({n for c in claims for n in c.claim.targets}, key=len, reverse=True):
+            remainder = remainder.replace(name, ' ')
+        if not _STAT_WORDS.sub('', remainder):
+            matched += 1
+    return matched == 1
+
+
+def complete_article_only_conclusions(state, draft, payload, country_names=()):
     """Bind each selected fact to its own article and attach the tool's limitation once."""
     limited = set()
     for task, conclusion in zip(state.plan.tasks, draft.conclusion, strict=True):
@@ -325,7 +385,7 @@ def complete_article_only_conclusions(state, draft, payload):
         if inputs['digests'].keys() != {'news'}:
             continue
         limited.add(task.task_id)
-        supported = set(relevant_article_facts(task.question, cards))
+        supported = set(relevant_article_facts(task.question, cards, country_names))
         notice = missing_trade_notice(state, task)
         facts = []
         for line in conclusion.sentences:
@@ -353,12 +413,15 @@ def complete_article_only_conclusions(state, draft, payload):
         # or an exact, relevant body sentence with all of its sources identified.
         accepted = {line for conclusion in draft.conclusion for line in conclusion.sentences}
         evidence = {pair for task in state.plan.tasks for pair in relevant_article_facts(
-            task.question, [card for card in payload['articles'] if card['task_id'] == task.task_id])}
+            task.question, [card for card in payload['articles'] if card['task_id'] == task.task_id], country_names)}
         for line in draft.explanation:
             numbers = cited_article_numbers(line)
             fact = ARTICLE_CITATION.sub('', line).strip()
-            if line not in accepted and (not numbers or any((n, fact) not in evidence for n in numbers)):
-                raise ValueError('부분 응답 설명의 주장을 확인된 결론이나 기사 근거에서 확인할 수 없습니다.')
+            if line in accepted or (numbers and all((n, fact) in evidence for n in numbers)):
+                continue
+            if not numbers and supported_stat_explanation(line, state, payload, country_names):
+                continue
+            raise ValueError('부분 응답 설명의 주장을 해당 질문의 근거에서 확인할 수 없습니다.')
 
 
 def validate_citations(generated, articles):

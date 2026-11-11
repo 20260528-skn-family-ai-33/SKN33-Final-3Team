@@ -442,7 +442,7 @@ class Services:
                 news_warnings[task.task_id] = warning
                 if warning not in state.warnings:
                     state.warnings.append(warning)
-        payload,fixed=compose_input(state,describe,articles,news_warnings=news_warnings)
+        payload,fixed=compose_input(state,describe,articles,news_warnings=news_warnings,country_names=countries.values())
         correcting = state.draft is not None and state.verification.regeneration_count == 1
         if not payload['tasks']:
             if correcting and (state.verification.feedback or state.verification.confirmed_claims):
@@ -483,7 +483,7 @@ class Services:
                        '새 통계 수치는 해당 tasks의 digests에 있는 근거만 사용하세요.')
         def assemble_response(value):
             draft = assemble(state,value,fixed,describe,articles=payload['articles'])
-            complete_article_only_conclusions(state, draft, payload)
+            complete_article_only_conclusions(state, draft, payload, countries.values())
             return validate_rewrite(state,draft,payload) if correcting else draft
         revised=self.structured(state,'compose',prompt,payload,Draft,tokens,
                                 assemble_response,
@@ -493,7 +493,7 @@ class Services:
             try:
                 prior = state.draft.model_copy(deep=True)
                 validate_citations(prior, payload['articles'])
-                complete_article_only_conclusions(state, prior, payload)
+                complete_article_only_conclusions(state, prior, payload, countries.values())
             except ValueError:
                 pass
             else:
@@ -505,7 +505,7 @@ class Services:
                 state.warnings.append('요약 문장을 만들지 못했습니다.')
             for task in state.plan.tasks:
                 if task.task_id not in fixed:
-                    fixed[task.task_id]=fallback_conclusion(state, task)
+                    fixed[task.task_id]=fallback_conclusion(state, task, countries.values())
             state.draft=assemble(state,None,fixed,describe)
         state.fixed_conclusion_ids=list(fixed)
 
