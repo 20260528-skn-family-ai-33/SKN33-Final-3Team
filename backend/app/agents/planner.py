@@ -329,6 +329,9 @@ HS_CODE_MENTION = re.compile(r'(?<![A-Za-z])HS(?:\s*[46](?!\d))?(?:\s*(?:단위|
 _HS_FOLLOWUP = re.compile(r'(?:' + HS_CODE_MENTION.pattern + r'|(\d{6}))'
                           r'\s*(?:은|는|도)(?:\s*(?:어때|어떤가요))?\s*[?？]?', re.I)
 
+# 6자리 연월(2015-01~2030-12). 이 범위의 앞 네 자리(2015~2030)는 HS4가 아니다(제20류 호는 2009까지).
+_YEAR_MONTH = re.compile(r'20(?:1[5-9]|2[0-9]|30)(?:0[1-9]|1[0-2])')
+
 # 관찰된 기업명이 HS 선택으로 넘어가지 않게 한다. 일반 영문 약어는 품목 검색 대상에 남긴다.
 _COMPANY_EXPRESSIONS = frozenset(('ymtc', 'tsmc', 'sk하이닉스', 'skhynix', '삼성전자', '엔비디아', 'nvidia'))
 
@@ -345,7 +348,10 @@ def _normalize_analysis(output, question, previous_conditions):
     for task in tasks:
         task.slots.products = product_expressions(task.slots.products,
             article_context=task.intent in ('CAUSE', 'LOCAL_ISSUES'))
-    if previous_conditions and len(tasks) == 1 and (followup := _HS_FOLLOWUP.fullmatch(question.strip())):
+    followup = _HS_FOLLOWUP.fullmatch(question.strip())
+    if followup and not followup[1] and _YEAR_MONTH.fullmatch(followup[2]):
+        followup = None  # "202401은?"은 연월이다. 2015~2030으로 시작하는 HS4(제20류는 2009까지)는 없다.
+    if previous_conditions and len(tasks) == 1 and followup:
         if tasks[0].intent in ('STATISTICS', 'HS_LOOKUP', 'CONVERSATION'):
             return PlannerOutput(tasks=[PlannedTask(intent='STATISTICS', question=question,
                 slots={'products': [followup[1] or followup[2]], 'answer_format': tasks[0].slots.answer_format})])
@@ -354,7 +360,8 @@ def _normalize_analysis(output, question, previous_conditions):
         codes = list(dict.fromkeys(HS_CODE_MENTION.findall(text)))
         if not codes and not task.slots.products and task.intent in ('STATISTICS', 'LOCAL_ISSUES'):
             bare = set(re.findall(r'(?<![\w.,])([0-9]{6})(?![0-9.,])', text))
-            if len(bare) == 1 and numeric_product_mentioned(text, code := next(iter(bare))):
+            if (len(bare) == 1 and numeric_product_mentioned(text, code := next(iter(bare)))
+                    and not _YEAR_MONTH.fullmatch(code)):
                 codes = [code]
         if codes and task.intent in ('HS_LOOKUP', 'STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES'):
             products = task.slots.products or []

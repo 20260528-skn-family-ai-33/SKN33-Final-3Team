@@ -178,3 +178,16 @@ class EvalCasesTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BareMonthAcrossYearsTest(unittest.TestCase):
+    def test_bare_month_in_two_year_trend_is_not_guessed(self):
+        from backend.app.agents.verify import inspect_sentence
+        monthly = [{'month': f'{y}-{m:02d}', 'amount_usd': v} for y, m, v in
+                   ((2024, 11, 10), (2024, 12, 20), (2025, 11, 30), (2025, 12, 5))]
+        source = {'kind': 'TREND', 'period': {'start': '2024-11', 'end': '2025-12'}, 'trade_flow': 'EXPORT',
+                  'unit': 'USD', 'targets': [{'name': '베트남', 'country_code': 'VN', 'monthly': monthly}]}
+        good = lambda sentence: inspect_sentence(sentence, [source], known_names=['베트남'], countries=['베트남'])[0]
+        self.assertFalse(good('베트남 수출은 12월에 증가했습니다.'))
+        self.assertTrue(good('베트남 수출은 2024년 12월에 증가했습니다.'))
+        self.assertTrue(good('베트남 수출은 2025년 12월에 감소했습니다.'))

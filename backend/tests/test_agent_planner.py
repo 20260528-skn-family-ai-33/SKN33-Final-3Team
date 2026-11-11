@@ -295,3 +295,14 @@ class MarketSourcePeriodTest(unittest.TestCase):
         ranking, market = postprocess(output, question).tasks
         self.assertEqual(ranking.slots.period.start.isoformat(), '2025-01-01')
         self.assertIsNone(market.slots.period)
+
+
+class YearMonthFollowupTest(unittest.TestCase):
+    def test_six_digit_year_month_is_not_an_hs6_followup(self):
+        from backend.app.agents.state import Conditions
+        previous = Conditions(country_codes=['VN'], hs_items=[{'hs_code': '330499', 'hs_ver': 'HS2022'}])
+        for question, product in [('202401은?', None), ('HS 190230은?', ['190230']), ('190230은?', ['190230'])]:
+            with self.subTest(question=question):
+                output = PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': question}])
+                task, = postprocess(output, question, previous_conditions=previous).tasks
+                self.assertEqual(task.slots.products, product)

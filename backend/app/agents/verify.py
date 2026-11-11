@@ -236,7 +236,10 @@ def _month_change_cells(claim, facts, sources):
         month, = claim.time.months
     else:
         bare, = claim.time.bare_months
-        month = next((m for m in sorted(by_month, reverse=True) if int(m[5:7]) == bare), None)
+        candidates = [m for m in by_month if int(m[5:7]) == bare]
+        if len(candidates) != 1:
+            return ()  # 여러 해에 같은 달이 있으면 연도 없는 "12월"이 어느 해인지 알 수 없다.
+        month, = candidates
     current = by_month.get(month)
     if current is None:
         return ()
