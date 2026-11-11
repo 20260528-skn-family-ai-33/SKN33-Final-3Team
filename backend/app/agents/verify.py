@@ -1,293 +1,272 @@
-"""Match generated claims to the same bounded evidence used by compose."""
+"""Verify immutable claims against typed facts from the same saved result.
+
+Parsing, evidence extraction and matching are separate stages. Numeric equality
+never determines how a sentence is parsed or which semantic attributes it carries.
+Public Draft/SentenceCheck/Verification contracts are unchanged.
+"""
+from decimal import Decimal, ROUND_HALF_UP, localcontext
+from dataclasses import dataclass, replace
 import re
-from functools import lru_cache
-from decimal import Decimal, ROUND_HALF_UP,localcontext
+
 from backend.app.agents.compose import fixed_conclusion
-from backend.app.agents.state import SentenceCheck, Verification
-
-# 앞이 영문이면 이름의 일부다('HS6'의 6, 'Q3'의 3).
-TOKEN = re.compile(r'(?<![\d.A-Za-z])(?P<value>[+-]?\d[\d,]*(?:\.\d+)?)\s*(?P<scale>[만억조])?\s*(?P<unit>%p|%|달러|USD|배|위|개|건|kg)?', re.I)
-DATE = re.compile(r'(?<!\d)(\d{4})\s*(?:년\s*(?:(\d{1,2})\s*월)?|-(\d{2})(?:-\d{2})?)|(\d{1,3})\s*(개월|월)')
-SCALE = {None:1,'만':10**4,'억':10**8,'조':10**12}
-PERIOD_AMOUNTS = {'total_usd','monthly_avg_usd','verified_subtotal_usd',
-                  'compare_total_usd','compare_monthly_avg_usd','compare_verified_subtotal_usd'}
-# 저장 행에는 월마다 같은 기간 값이 붙어 있다. change_pct도 두 기간 전체를 비교한 값이라 월에 묶지 않는다.
-PERIOD_KEYS = PERIOD_AMOUNTS | {'change_pct'}
-CHANGE_KEYS = {'change_pct','yoy_pct','mom_pct','growth_pct'}
-DIRECTION = re.compile(r'과거|지난|직전|최근|앞선|향후|앞으로|미래|다가올|다음|예측|예상|전망')
-PAST_WORDS = {'과거','지난','직전','최근','앞선'}
-# "1억 2,346만 달러"는 금액 하나다. 두 숫자로 나누지 않도록 만 단위 한 숫자(12346만)로 바꿔 대조한다.
-COMPOUND = re.compile(r'(?<![\d.])(?P<sign>[+-]?)(?P<eok>\d[\d,]*)\s*억\s*(?P<man>\d[\d,]*)\s*만')
-# 값 바로 뒤의 증감 표현. "5.2% 감소"·"5.2%의 감소"·"5.2% 낮은"은 -5.2%다. "~로 감소"는 바뀐 뒤의 값이라 방향으로 보지 않는다.
-DOWN_WORDS, UP_WORDS = r'감소|줄|하락|축소|떨어|낮|내려|내린', r'증가|늘|상승|확대|성장|올라|오르|높|올린'
-CHANGE = re.compile(r'\s*(?:가|이|만큼|나|이나|의|을|를)?\s*(?:(?P<down>'+DOWN_WORDS+r')|(?P<up>'+UP_WORDS+r'))')
-# 같은 주장 안의 증감 단어("감소율은 5.2%", "감소하여 5.2%"). 비율 값에만 쓰고, 한 방향만 있을 때만 본다.
-# 값과 떨어진 곳에서는 활용형까지 본다. '높'·'늘'만으로는 '가장 높은'·'오늘'도 방향으로 읽는다.
-DOWN = re.compile(r'감소|줄어|줄었|줄고|하락|축소|떨어|내려|내린')
-UP = re.compile(r'증가|늘어|늘었|늘고|상승|확대|성장|올라|오르|올린')
-# 한 문장 안의 주장 경계. 월평균·총액·비중 같은 지표 표현은 그 금액이 있는 주장에서만 본다.
-# 값 뒤의 '로'("총 1,410만 달러로 월평균 117.5만 달러")도 주장을 나눈다.
-SEPARATOR = re.compile(r'(?<!\d),|,(?!\d)|[;，]|이며|이고|하고|으며|(?:(?<=달러)|(?<=USD)|(?<=[%위배]))로(?=\s)')
-# 이름은 앞이 글자·숫자가 아닐 때만 찾는다('1위'의 '위'). 영문 이름(국가 코드)은 뒤도 본다('USD'의 'US').
-# 국가명만 '대중국'·'대미국'처럼 낱말 첫머리의 '대(對)' 뒤에서도 찾는다. 품목명에 넓히면 '대리석'·'대형'에 걸린다.
-NAME_EDGE = r'(?<![가-힣A-Za-z0-9])'
-COUNTRY_EDGE = r'(?:(?<![가-힣A-Za-z0-9])|(?<=(?<![가-힣])대))'
-# "상위 2개국", "3곳", "2개 품목"은 조회 대상 수이지 통계 수치가 아니다. TOKEN이 "개"까지 먹으므로 뒤는 "국"부터 본다.
-# 단위가 없거나 "개"인 값만 대상 수로 본다. "상위 10%"·"상위 3.5억 달러"는 그대로 검증한다.
-COUNT_BEFORE = re.compile(r'(?:상위|하위)\s*$')
-COUNT_AFTER = re.compile(r'\s*(?:곳|개국|국|개?\s*(?:국가|품목|시장))')
+from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
+from backend.app.agents.verify_claims import (
+    ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, quantities, mask_dates, quantity_text,
+    change_phrase_end, COMPARISON, DOWN, UP, TOKEN, DATE, HISTORY_DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift,
+)
+from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, period
 
 
-@lru_cache(maxsize=4096)
-def _name_pattern(name, country=False):
-    return re.compile((COUNTRY_EDGE if country else NAME_EDGE)+re.escape(name)+(r'(?![A-Za-z0-9])' if name.isascii() else ''))
+@dataclass(frozen=True)
+class ClaimCheck:
+    claim: Claim
+    reason: str
+    matches: tuple[tuple[int,tuple[str,...]],...] = ()
+    interpretation_valid: bool = True
 
 
-def _target_count(text, match):
-    if match['scale'] or match['unit'] not in (None, '개'): return False
-    return bool(COUNT_BEFORE.search(text,0,match.start()) or COUNT_AFTER.match(text,match.end()))
+def _source_supports(time: TimeClaim,source):
+    windows=[p for k in ('period','compare_period','article_period') if (p:=period(source.get(k)))]
+    if source.get('anchor'): windows.append((source['anchor'][:7],source['anchor'][:7]))
+    if time.years and not all(any(start[:4]<=year<=end[:4] for start,end in windows) for year in time.years): return False
+    if time.months and not all(any(start<=month<=end for start,end in windows) for month in time.months): return False
+    if time.bare_months and not all(any(any(int(shift(start,i)[5:])==month for i in range(min(12,months_between(start,end)+1)))
+                                       for start,end in windows) for month in time.bare_months): return False
+    if time.durations and not time.durations<={*(months_between(start,end)+1 for start,end in windows),
+                                             *([12] if source.get('kind')=='PREDICTION' else [])}: return False
+    return True
 
 
-def _shown(match):
-    """재생성 안내에 넘길 숫자 표기. 합친 억·만 금액(12346만)은 LLM이 쓴 모양(1억 2,346만)으로 되돌린다."""
-    text=match.group().strip()
-    raw=match['value'].replace(',','')
-    if match['scale']=='만' and raw.lstrip('+-').isdigit() and abs(int(raw))>=10**4:
-        eok,man=divmod(abs(int(raw)),10**4)
-        text=('-' if raw.startswith('-') else '')+f'{eok:,}억'+(f' {man:,}만' if man else '')+text[match.end('scale')-match.start():]
-    return text[:40]
+def _time_matches(claim:Claim,fact:Fact):
+    time=claim.time
+    periods=tuple(p for p in ((fact.compare_period,) if time.comparison_reference and fact.metric.family=='CHANGE'
+                              else (fact.period,)) if p)
+    months={fact.month} if fact.month else set()
+    if time.comparison_reference and fact.metric.family=='CHANGE':
+        months={fact.compare_period[0]} if fact.compare_period and fact.compare_period[0]==fact.compare_period[1] else set()
+    if time.cumulative and (not fact.period_value or not fact.period
+                            or fact.period[0] == fact.period[1]):
+        return False
+    if time.durations:
+        lengths={months_between(*p)+1 for p in periods}
+        if fact.horizon: lengths.add(fact.horizon)
+        if not time.durations<=lengths: return False
+    if time.period: return time.period in periods
+    if time.month_window:
+        return any(start[:4] == end[:4] and (int(start[5:]), int(end[5:])) == time.month_window
+                   and (not time.months or all(month[:4] == start[:4] for month in time.months))
+                   for start,end in periods)
+    if time.years:
+        if fact.prediction:
+            if not fact.anchor or time.years!={fact.anchor[:4]}: return False
+        elif not all((year+'-01',year+'-12') in periods for year in time.years): return False
+    if time.months or time.bare_months:
+        anchor_reference=fact.prediction and fact.horizon==12 and 12 in time.durations and time.anchor_reference
+        if anchor_reference:
+            months={fact.anchor} if fact.anchor else set()
+        if not months: return False
+        if not time.months<=months or not time.bare_months<={int(m[5:]) for m in months}: return False
+    return True
 
 
-def _merge_compound(text):
-    def merged(m):
-        total=int(m['eok'].replace(',',''))*10**4+int(m['man'].replace(',',''))
-        return f'{m["sign"]}{total}만'
-    return COMPOUND.sub(merged,text)
+def _comparison_matches(required,fact):
+    if not required: return True
+    if required=='FORECAST': return fact.prediction and fact.role=='FUTURE'
+    if fact.metric.comparison==required: return True
+    if fact.metric.comparison!='PERIOD' or not fact.period or not fact.compare_period: return False
+    return _windows_match(required,fact.period,fact.compare_period)
 
 
-def _clause(text, start, end):
-    left=max((m.end() for m in SEPARATOR.finditer(text,0,start)),default=0)
-    right=next((m.start() for m in SEPARATOR.finditer(text,end)),len(text))
-    return text[left:right]
+def _windows_match(required,current,previous):
+    if not current or not previous: return False
+    start,end=current;before,after=previous
+    if required=='YOY': return (before,after)==(shift(start,-12),shift(end,-12))
+    if required=='MOM': return start==end and before==after==shift(start,-1)
+    return False
 
 
-def _shift(month, offset):
-    index=int(month[:4])*12+int(month[5:7])-1+offset
-    return f'{index//12}-{index%12+1:02d}'
+def _level_period_matches(role, time, fact, source):
+    prior = fact.metric.key.startswith('compare_')
+    if role == 'AUTO':
+        if not prior:
+            return True  # Calendar constraints are checked by _time_matches.
+        current = period(source.get('period'))
+        if time.period:
+            return time.period != current
+        if current and time.durations and months_between(*current)+1 not in time.durations:
+            return True  # _time_matches must still confirm the comparison window's length.
+        dated = time.years or time.months or time.bare_months
+        return bool(dated and current and not _source_supports(time, {'period': source['period']}))
+    if role == 'CURRENT':
+        return not prior
+    if not prior:
+        return False
+    return role == 'COMPARE' or _windows_match(role, period(source.get('period')),
+                                                period(source.get('compare_period')))
 
 
-def _months_between(start, end):
-    return (int(end[:4])-int(start[:4]))*12+int(end[5:7])-int(start[5:7])
+def mismatch(claim:Claim,fact:Fact,source):
+    """Compare attributes before values. Return a diagnostic without changing meaning."""
+    q,m=claim.quantity,claim.metric
+    if not claim.valid or not fact.metric.valid: return 'AMBIGUOUS'
+    if not _source_supports(claim.time,source): return 'SOURCE_PERIOD'
+    if not claim.targets<=fact.targets: return 'TARGET'
+    if claim.target_scope=='GROUP':
+        if not fact.group_members or not fact.group_members<=claim.targets: return 'GROUP_SCOPE'
+    elif fact.group_members: return 'INDIVIDUAL_SCOPE'
+    if m.flow and fact.metric.flow and m.flow!=fact.metric.flow: return 'TRADE_FLOW'
+    if m.family == 'MONTH_STATE':
+        if not fact.month or fact.metric.key != 'amount_usd': return 'METRIC'
+        if not _time_matches(claim, fact): return 'PERIOD'
+        verified = fact.value is None if m.direction == 'MISSING' else fact.value == 0
+        return None if verified else 'MONTH_STATE'
+    if m.family == 'OUTLOOK' or fact.metric.family == 'OUTLOOK':
+        if m.family != fact.metric.family: return 'METRIC'
+        if not _time_matches(claim, fact): return 'PERIOD'
+        expected = {'증가':'증가 예상', '감소':'감소 예상', '미분류':None}[m.direction]
+        return None if fact.value == expected else 'OUTLOOK'
+    if q is None:
+        if not claim.targets and fact.targets: return 'TARGET'
+        if m.flow and m.flow!=fact.metric.flow: return 'TRADE_FLOW'
+        if m.family != 'SHARE_CHANGE' and (
+                re.search(r'(?:^|_)(?:price|volume|quantity|weight|margin|profit|share)(?:_|$)', fact.metric.key)
+                or re.search(r'단가|가격|물량|중량|수량|이익|비중|점유율', fact.metric.label)):
+            return 'METRIC'
+        if m.family=='SHARE_CHANGE':
+            compatible=fact.metric.family=='SHARE_CHANGE' and fact.unit=='%p'
+        else:
+            compatible=(fact.metric.family,fact.unit) in (('CHANGE','%'),('AMOUNT_CHANGE','USD'))
+        if not compatible: return 'METRIC'
+        if not _time_matches(claim,fact): return 'PERIOD'
+        if not _comparison_matches(m.comparison,fact): return 'COMPARISON'
+        correct=fact.value>0 if m.direction=='UP' else fact.value<0
+        return None if correct else 'DIRECTION'
+    if not q.unit or q.unit!=fact.unit: return 'UNIT'
+    expected_family=m.family
+    if m.direct_change and m.family=='SHARE' and q.unit=='%': expected_family='SHARE_CHANGE'
+    if expected_family and fact.metric.family!=expected_family: return 'METRIC'
+    if m.aggregate == 'SUBTOTAL' and 'verified_subtotal_usd' not in fact.metric.key:
+        monthly_level = fact.month and fact.metric.key == 'amount_usd' and (claim.time.months or claim.time.bare_months)
+        if not monthly_level: return 'AGGREGATION'
+    if m.aggregate=='DENOMINATOR' and fact.metric.key!='denominator_usd': return 'METRIC'
+    if m.aggregate=='AVERAGE' and fact.metric.aggregate!='AVERAGE': return 'AVERAGE'
+    if q.unit=='USD' and m.aggregate!='AVERAGE' and fact.metric.aggregate=='AVERAGE': return 'AVERAGE'
+    if m.aggregate=='TOTAL':
+        if fact.metric.aggregate=='AVERAGE' or 'verified_subtotal' in fact.metric.key: return 'AGGREGATION'
+        if not fact.period_value and not (claim.time.months or claim.time.bare_months): return 'AGGREGATION'
+    if m.amount_period and not _level_period_matches(m.amount_period,claim.time,fact,source):
+        return 'AMOUNT_PERIOD'
+    if not _time_matches(claim,fact): return 'PERIOD'
+    if not _comparison_matches(m.comparison,fact): return 'COMPARISON'
+    if fact.horizon and m.prediction_role and m.prediction_role!={fact.role}: return 'PREDICTION_HORIZON'
+    if m.rank_axis and fact.prediction and m.rank_axis!=fact.metric.key: return 'RANK_AXIS'
+    value,amount=q.value,fact.value
+    direction_applies=m.direction and (m.direct_change or fact.metric.family in ('CHANGE','SHARE_CHANGE'))
+    if m.direction and q.signed and (value<0)!=(m.direction=='DOWN'): return 'SIGN'
+    if direction_applies:
+        if amount==0 or (amount<0)!=(m.direction=='DOWN'): return 'DIRECTION'
+        amount,value=abs(amount),abs(value)
+    if m.relation!='EQ':
+        threshold=value*q.scale
+        comparison={'LT':amount<threshold,'GT':amount>threshold,'LE':amount<=threshold,'GE':amount>=threshold}
+        return None if comparison[m.relation] else 'VALUE'
+    granularity=Decimal(1).scaleb(value.as_tuple().exponent)
+    with localcontext() as context:
+        context.prec=max(32,len(amount.as_tuple().digits)+abs(granularity.as_tuple().exponent)+16)
+        if (amount/q.scale).quantize(granularity,rounding=ROUND_HALF_UP)!=value: return 'VALUE'
+    return None
 
 
-def _compare_month(digest, row):
-    """compare_month가 없는 예전 결과는 기간 차이로 비교 월을 구한다(두 기간 길이가 같을 때만)."""
-    if row.get('compare_month'): return str(row['compare_month'])
-    period,compare=digest.get('period') or {},digest.get('compare_period') or {}
-    month=str(row.get('month') or row.get('trade_month') or '')[:7]
-    bounds=[str(x.get(k,''))[:7] for x in (period,compare) for k in ('start','end')]
-    if not month or not all(bounds) or _months_between(*bounds[:2])!=_months_between(*bounds[2:]): return None
-    return _shift(bounds[2],_months_between(bounds[0],month))
+@dataclass(frozen=True)
+class PreparedEvidence:
+    sources: list
+    catalog: NameCatalog
+    facts: tuple[Fact, ...]
 
 
-def _period_scope(digest, key):
-    """기간 값의 근거: 해당 기간 표시. change_pct는 두 기간을 비교한 값이라 양쪽 기간을 모두 붙인다."""
-    names=['compare_period' if key.startswith('compare_') else 'period']
-    if key=='change_pct': names.append('compare_period')
-    scope=set()
-    for name in names:
-        period=digest.get(name) or {}
-        start,end=(str(period.get(k,''))[:7] for k in ('start','end'))
-        if start and end: scope.add(f'period:{start}:{end}')
-        if start and start==end: scope.add(start)
-    return scope
+def _prepare(sources, known_names, countries, *, mention_cache=None):
+    catalog = NameCatalog(sources, known_names, countries, mention_cache=mention_cache)
+    return PreparedEvidence(sources, catalog, build_facts(sources, catalog))
+
+
+def inspect_sentence(sentence,sources,*,known_names=(),countries=()):
+    """Internal audit API: immutable claims and the exact source cells proving them."""
+    return _inspect_prepared(sentence, _prepare(sources, known_names, countries))
+
+
+def _matching_cells(claim, facts, sources, catalog):
+    if claim.metric.family == 'OUTLOOK':
+        # An implicit market is identifiable only if one saved classification is in scope.
+        eligible = [f for f in facts if f.metric.family == 'OUTLOOK' and claim.targets <= f.targets
+                    and _source_supports(claim.time, sources[f.source]) and _time_matches(claim, f)]
+        if len(eligible) != 1:
+            return ()
+        fact, = eligible
+        return ((fact.source, fact.path),) if mismatch(claim, fact, sources[fact.source]) is None else ()
+    if claim.metric.family == 'MONTH_STATE':
+        eligible = [f for f in facts if f.metric.key == 'amount_usd' and f.month
+                    and claim.targets <= f.targets and _time_matches(claim, f)]
+        if len({f.stored_targets for f in eligible}) != 1:
+            return ()
+        if any(mismatch(claim, f, sources[f.source]) is not None for f in eligible):
+            return ()
+        return tuple((f.source, f.path) for f in eligible)
+    matches = []
+    inferred_axes = set()
+    check_dimensions = claim.quantity is None or (claim.targets and claim.metric.family == 'CHANGE')
+    def dimensions(targets):
+        named = targets - {'전체 국가', '전체 품목'}
+        return bool(named - catalog.countries), bool(named & catalog.countries)
+    required_dimensions = dimensions(claim.targets) if check_dimensions else None
+    for fact in facts:
+        if check_dimensions and dimensions(fact.stored_targets) != required_dimensions:
+            continue
+        reason = mismatch(claim, fact, sources[fact.source])
+        if claim.quantity is None and not claim.metric.comparison and reason in (None, 'DIRECTION'):
+            axes = [axis for axis in ('YOY', 'MOM') if _comparison_matches(axis, fact)]
+            if not axes:
+                continue
+            inferred_axes.update(axes)
+        if claim.metric.negated_change:
+            # Invert only an evidenced numeric predicate. A missing or
+            # incompatible cell proves neither the assertion nor its negation.
+            if reason is None:
+                return ()
+            supports = reason in ('DIRECTION', 'VALUE')
+        else:
+            if claim.quantity is None and reason == 'DIRECTION': return ()
+            supports = reason is None
+        if supports:
+            matches.append((fact.source, fact.path))
+    return tuple(matches) if len(inferred_axes) <= 1 else ()
+
+
+def _inspect_prepared(sentence, prepared):
+    catalog, facts, sources = prepared.catalog, prepared.facts, prepared.sources
+    parsed=parse_sentence(sentence,catalog)
+    checks=[]
+    for claim in parsed.claims:
+        matches=_matching_cells(claim,facts,sources,catalog)
+        checks.append(ClaimCheck(claim,'MATCH' if matches else 'NOT_CONFIRMED',matches,parsed.valid))
+    dates_ok=all(any(_source_supports(time,source) for source in sources) for time in parsed.date_only)
+    return parsed.valid and dates_ok and all(c.matches for c in checks),tuple(checks)
+
+
+def check_sentence(sentence,digests,*,known_names=(),countries=()):
+    return _check_prepared(sentence, _prepare(digests, known_names, countries))
+
+
+def _check_prepared(sentence, prepared):
+    good,checks=_inspect_prepared(sentence, prepared)
+    numbers=[check.claim.quantity.shown for check in checks if check.claim.quantity is not None]
+    if not checks and not good:
+        numbers=[q.shown for q in quantities(quantity_text(sentence,prepared.catalog))]
+    return good,numbers
 
 
 def evidence(digest):
-    """Keep row identities and monthly identities attached to each numeric cell."""
-    columns={c['key']:c.get('unit') for c in digest.get('columns', [])}
-    def walk(row, identities):
-        if isinstance(row,list):
-            for item in row: yield from walk(item, identities)
-        if not isinstance(row,dict): return
-        ids=identities | {str(row[k]) for k in ('name','label','code','product_name','country_name','country_code','hs_code','hs6','month','trade_month') if row.get(k)}
-        for key,value in row.items():
-            if isinstance(value,(dict,list)): yield from walk(value,ids)
-            elif isinstance(value,(float,int)) and not isinstance(value,bool):
-                unit=columns.get(key)
-                if key.endswith('_usd') or key=='exp_12m': unit='USD'
-                elif key.endswith('_pct'): unit='%'
-                elif key.endswith('_pp'): unit='%p'
-                elif key=='rank' or key.endswith('_rank'): unit='위'
-                if digest.get('kind')=='PREDICTION' and key in ('exp_12m','growth_pct'):
-                    yield key,Decimal(str(value)),unit,ids|{'duration:12'}
-                elif key=='compare_amount_usd':
-                    if not (month:=_compare_month(digest,row)): continue
-                    yield key,Decimal(str(value)),unit,(ids-{str(row.get('month')),str(row.get('trade_month'))})|{month}
-                elif unit and (key in PERIOD_KEYS or not any(
-                        re.fullmatch(r'\d{4}-\d{2}',identity) for identity in ids)):
-                    scoped=(ids-{str(row.get('month')),str(row.get('trade_month'))})|_period_scope(digest,key)
-                    yield key,Decimal(str(value)),unit,scoped
-                elif unit: yield key,Decimal(str(value)),unit,ids
-    return list(walk(digest,{'prediction'} if digest.get('kind')=='PREDICTION' else set()))
-
-
-def check_sentence(sentence, digests, *, known_names=(), countries=()):
-    """문장의 수치를 근거와 대조한다. 월·방향이 여럿인 문장은 주장 단위로 나눠 각각 검사한다."""
-    return _check_claim(sentence,digests,known_names,require_month=False,inherited_names=(),countries=frozenset(countries))
-
-
-def _check_claim(sentence, digests, known_names, *, require_month, inherited_names, countries=frozenset()):
-    _require_month,_inherited_names=require_month,inherited_names
-    text=_merge_compound(re.sub(r'\[\d+\]', '',sentence))
-    dates=list(DATE.finditer(text))
-    def names_in(value):
-        value=DATE.sub(' ',value)
-        # 1글자 이름('위'·'조'·'배')은 단위·조사와 구분할 수 없어 이름으로 보지 않는다.
-        names={name for name in known_names if len(name)>1 and name in value and _name_pattern(name,name in countries).search(value)}
-        return {name for name in names if not any(name!=other and name in other for other in names)}
-    def check_clauses(clauses, require_month):
-        inherited=_inherited_names
-        checks=[]
-        for clause in clauses:
-            inherited=names_in(clause) or inherited
-            checks.append(_check_claim(clause,digests,known_names,countries=countries,
-                                       require_month=require_month,inherited_names=inherited))
-        return all(good for good,_ in checks),[n for _,nums in checks for n in nums]
-    if any(d.get('kind')=='PREDICTION' for d in digests):
-        clauses=re.split(r'(?<!\d),|,(?!\d)|[;，]|(?:이고|이며|하고|됐고|었고|았고|였고|(?<=달러)고|(?<=%)고)\s+(?='+DIRECTION.pattern+r')',text)
-        if len(clauses)>1 and all(TOKEN.search(DATE.sub(' ',c)) for c in clauses):
-            return check_clauses(clauses,_require_month)
-    month_dates=[m for m in dates if m.group(2) or m.group(3) or m.group(5)=='월']
-    month_range=None
-    if len(dates)==len(month_dates)==2:
-        first,last=month_dates
-        if re.fullmatch(r'\s*(?:부터|[~～–])\s*',text[first.end():last.start()]):
-            if first.group(1) and (last.group(1) or last.group(5)=='월'):
-                month_range=tuple(f'{m.group(1) or first.group(1)}-{(m.group(2) or m.group(3) or m.group(4)).zfill(2)}'
-                                  for m in month_dates)
-    if len(month_dates)>1 and not month_range:
-        # Keep thousands separators intact and require an unambiguous month per claim.
-        clauses=re.split(r'(?<!\d),|,(?!\d)|[;，]',text)
-        if len(clauses)==1:  # 쉼표 없는 비교 문장: 각 월 표현부터 다음 월 표현 앞까지를 한 주장으로 본다.
-            cuts=[0,*(m.start() for m in month_dates[1:]),len(text)]
-            clauses=[text[a:b] for a,b in zip(cuts,cuts[1:])]
-        return check_clauses(clauses,True)
-    numbers=[]
-    ok=True
-    # Check each digest independently: an explanation may discuss multiple tasks,
-    # but a single claim must have a consistent metric, unit, period and target.
-    candidates=[]
-    explicit_months=set()
-    for d in digests:
-        dates_ok=True
-        windows=[d.get(k) for k in ('period','compare_period','article_period') if d.get(k)]
-        if d.get('anchor'): windows.append({'start':str(d['anchor']), 'end':str(d['anchor'])})
-        for m in dates:
-            year, month1, month2, count, kind=m.groups()
-            if year:
-                ym=year+('-'+(month1 or month2).zfill(2) if month1 or month2 else '')
-                if len(ym)==7: explicit_months.add(ym)
-                dates_ok &= any(str(p['start'])[:len(ym)]<=ym<=str(p['end'])[:len(ym)] for p in windows)
-            elif kind=='개월':
-                lengths=[(int(p['end'][:4])-int(p['start'][:4]))*12+int(p['end'][5:7])-int(p['start'][5:7])+1 for p in windows]
-                dates_ok &= int(count) in lengths or (int(count)==12 and d.get('kind')=='PREDICTION')
-            else:
-                dates_ok &= any(any((int(p['start'][5:7])-1+i)%12+1==int(count) for i in range(
-                    min(12,(int(p['end'][:4])-int(p['start'][:4]))*12+int(p['end'][5:7])-int(p['start'][5:7])+1))) for p in windows)
-        if dates_ok: candidates.append(d)
-    if dates and not candidates: ok=False
-    dated=text
-    text=DATE.sub(' ',text)
-    mentioned=names_in(text) or set(_inherited_names)
-    facts=[f for d in candidates for f in evidence(d) if mentioned<=f[3]
-           and not (('수입' in sentence and d.get('trade_flow')=='EXPORT') or
-                    ('수출' in sentence and d.get('trade_flow')=='IMPORT'))]
-    if len(mentioned)>1 and not facts and not _require_month:
-        # "미국은 3억 달러, 중국은 2억 달러": 한 행에 두 국가가 없으면 이름마다 주장을 나눠 대조한다.
-        # 날짜가 있는 원문에서 나누고, 날짜가 없는 조각에는 문장의 기간 표현을 붙여 조각마다 기간도 다시 본다.
-        starts=sorted({m.start() for name in mentioned for m in _name_pattern(name,name in countries).finditer(dated)})
-        if len(starts)>1:
-            cuts=[0,*starts[1:],len(dated)]
-            when=' '.join(m.group() for m in dates)
-            return check_clauses([(c if DATE.search(c) else when+' '+c) for c in (dated[a:b] for a,b in zip(cuts,cuts[1:]))],False)
-    for name in sorted(mentioned,key=len,reverse=True): text=text.replace(name,' ')
-    tokens=[m for m in TOKEN.finditer(text) if not _target_count(text,m)]
-    # 숫자 없는 문장("수출액은 모두 미국 달러(USD) 단위입니다")은 수치 검증 대상이 아니다. 기간 표현만 본다.
-    if mentioned and not facts and tokens: ok=False
-    for match in tokens:
-        raw,scale,unit=match.group('value','scale','unit')
-        value=Decimal(raw.replace(',',''))
-        unit={'달러':'USD','usd':'USD','개':'COUNT','건':'COUNT','kg':'KG','%p':'%p'}.get((unit or '').lower(),unit)
-        if scale and not unit: unit='USD'
-        numbers.append(_shown(match))
-        granularity=Decimal(1).scaleb(value.as_tuple().exponent)
-        claim=_clause(text,match.start(),match.end())
-        change=CHANGE.match(text,match.end()) if unit in ('%','%p','USD') else None
-        direction=('down' if change['down'] else 'up') if change else None
-        claim_direction=False   # 주장 안의 증감 단어에서 정한 방향은 증감률 지표에만 적용한다
-        if not direction and unit in ('%','%p'):
-            rest=claim.replace(match.group(),' ',1)
-            down,up=bool(DOWN.search(rest)),bool(UP.search(rest))
-            if down!=up: direction,claim_direction='down' if down else 'up',True
-        if direction and raw[0] in '+-' and (value<0)!=(direction=='down'):
-            ok=False  # "+5.2% 감소"처럼 부호와 증감 표현이 어긋난다
-            continue
-        def matches(fact):
-            key,amount,expected,identities=fact
-            if not unit or expected!=unit: return False
-            if 'duration:12' in identities:
-                subject=re.sub(r'(?:과거|지난|직전|최근|앞선)\s*(?:대비|기준월)\s*','',sentence)
-                directions={word in PAST_WORDS for word in DIRECTION.findall(subject)}
-                if directions and directions!={key=='exp_12m'}: return False
-            monthly={value for value in identities if re.fullmatch(r'\d{4}-\d{2}',value)}
-            periods=[tuple(i.split(':')[1:]) for i in identities if i.startswith('period:')]
-            years={m.group(1) for m in dates if m.group(1) and not (m.group(2) or m.group(3))}
-            durations={int(m.group(4)) for m in dates if m.group(5)=='개월'}
-            if durations and (periods or monthly or 'duration:12' in identities):
-                lengths={(int(end[:4])-int(start[:4]))*12+int(end[5:])-int(start[5:])+1
-                         for start,end in periods} if periods else {1}
-                if 'duration:12' in identities: lengths={12}
-                if not durations<=lengths: return False
-            if month_range:
-                if month_range not in periods: return False
-            elif key in PERIOD_AMOUNTS or periods:
-                if month_dates and not monthly: return False
-                if years and not any((f'{year}-01',f'{year}-12') in periods for year in years) and not (
-                        'prediction' in identities and all(any(start[:4]==year for start,_ in periods) for year in years)):
-                    return False  # 예측 결과는 기준월이 속한 연도 언급만 허용한다
-            elif years and monthly: return False
-            if _require_month:
-                if not month_dates or not monthly: return False
-            if not month_range and month_dates and monthly and month_dates[0].group(5)=='월':
-                if not any(int(month[5:])==int(month_dates[0].group(4)) for month in monthly): return False
-            if explicit_months and monthly and not monthly.intersection(explicit_months): return False
-            if expected=='USD' and '수출' in sentence and 'import' in key: return False
-            if expected=='USD' and '수입' in sentence and 'export' in key: return False
-            # 지표 표현은 그 금액이 있는 주장(claim)에서만 본다. "총 1,410만 달러이며, 월평균은 117.5만 달러"
-            if expected=='USD' and ('월평균' in claim)!=('monthly_avg' in key): return False
-            if expected=='USD' and any(word in claim for word in ('총액','합계')):
-                aggregate=key in ('total_usd','compare_total_usd') or ((periods or not monthly) and key in ('amount_usd','export_amount_usd','import_amount_usd'))
-                if not aggregate: return False
-            if expected=='%' and '비중' in claim and key!='share_pct': return False
-            if expected=='%' and '전년' in claim and key not in ('yoy_pct','change_pct'): return False
-            if expected=='%' and '전월' in claim and key not in ('mom_pct','change_pct'): return False
-            if expected=='위' and 'prediction' in identities:
-                directions={rank_key for label,rank_key in (('품목','country_rank'),('국가','product_rank'))
-                            if re.search(label+r'(?:별|\s*(?:중|내|안))?\s*순위',claim)}
-                if directions and directions!={key}: return False
-            # 증감 표현이 붙은 비율은 증감률이다. 비중을 근거로 "5% 증가"·"증가해 5%"를 통과시키지 않는다.
-            # 값과 떨어진 증감 단어는 그 주장이 비중을 말할 때만("비중은 증가해 40.0%") 비중 값을 허용한다.
-            if direction and key=='share_pct' and (not claim_direction or not re.search(r'비중|점유', claim)): return False
-            claimed=value
-            if direction and (not claim_direction or key in CHANGE_KEYS or key.endswith('_pp')):  # 증감 표현이 붙은 값은 근거의 부호와 같은 방향이어야 한다
-                if amount==0 or (amount<0)!=(direction=='down'): return False
-                amount,claimed=abs(amount),abs(value)
-            with localcontext() as context:
-                context.prec=max(32,len(amount.as_tuple().digits)+abs(granularity.as_tuple().exponent)+16)
-                return (amount/SCALE[scale]).quantize(granularity,rounding=ROUND_HALF_UP)==claimed
-        if not any(matches(f) for f in facts): ok=False
-    return ok,numbers
+    """Compatibility view; internal matching uses Fact objects, not these tuples."""
+    return [(f.metric.key,f.value,f.unit,set(f.targets)) for f in build_facts([digest],NameCatalog([digest])) if f.unit not in ('OUTLOOK', 'NULL')]
 
 
 def snapshot_evidence(payload):
@@ -304,7 +283,7 @@ def snapshot_evidence(payload):
 
 
 def _tokens(text):
-    text=_merge_compound(DATE.sub(' ',re.sub(r'\[\d+\]','',text)))
+    text=_merge_compound(HISTORY_DATE.sub(' ',ARTICLE_CITATION.sub('',text)))
     return [m for m in TOKEN.finditer(text) if not _target_count(text,m)]
 
 
@@ -342,7 +321,7 @@ def _dates(text):
     """문장 속 절대 날짜(연·월). 숫자 대조(_tokens)는 날짜를 지우므로 따로 읽는다.
     "최근 12개월"처럼 기간 길이는 날짜가 아니라서 대조하지 않는다(전처럼 통과)."""
     out=set()
-    for m in DATE.finditer(re.sub(r'\[\d+\]','',text)):
+    for m in HISTORY_DATE.finditer(ARTICLE_CITATION.sub('',text)):
         if m[1]: out|=_date_keys(m[1], m[2] or m[3])
         elif m[5]=='월': out.add(m[4]+'월')
     return out
@@ -369,78 +348,266 @@ def check_history(sentence, recent):
     return good,[_shown(m) for m in found]
 
 
+def generated_conclusion(state, task, has_evidence):
+    fixed_ids = getattr(state, 'fixed_conclusion_ids', None)
+    if fixed_ids is not None:
+        return task.task_id not in fixed_ids
+    return (has_evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
+
+
 def mark_unverified(state):
     """시간이 부족해 대조하지 못했을 때(§1·§13.4): verify가 대조할 LLM 문장마다 "확인 필요"(MISMATCH)를 붙인다.
-    고정 문구 결론은 verify처럼 건너뛴다. 숫자가 없는 문장("결과는 아래 표와 차트에서 확인하세요.")은 대조할 것이 없어 PASS다.
+    고정 문구 결론은 건너뛴다. 증감 주장은 수치가 없어도 확인 필요이며, 안내문은 PASS다.
     확인하지 않은 숫자를 다음 턴 요약에 남기지 않도록 turn_summary는 비운다(D-77)."""
     checks,index=[],0
-    def add(sentence):
-        text=_merge_compound(DATE.sub(' ',re.sub(r'\[\d+\]','',sentence)))
-        numbers=[_shown(m) for m in TOKEN.finditer(text) if not _target_count(text,m)]
-        checks.append(SentenceCheck(index=index,numbers=numbers,status='MISMATCH' if numbers else 'PASS',
-                                    reason='NOT_CONFIRMED' if numbers else 'MATCH'))
+    catalog=NameCatalog([result.digest for result in state.results.values() if result.digest])
+    feedback = []
+    def add(sentence, section, task_id=None):
+        text=quantity_text(sentence,catalog)
+        numbers=[q.shown for q in quantities(text)]
+        needs_check = bool(numbers) or any(c.quantity is None for c in parse_sentence(sentence,catalog).claims)
+        if needs_check:
+            feedback.append(ClaimFeedback(section=section, task_id=task_id, index=index,
+                                          passage=sentence, reason="NOT_CONFIRMED"))
+        checks.append(SentenceCheck(index=index,numbers=numbers,status='MISMATCH' if needs_check else 'PASS',
+                                    reason='NOT_CONFIRMED' if needs_check else 'MATCH'))
     for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
         evidence=any(s.step_id in state.results and state.results[s.step_id].digest for s in task.steps)
-        generated=(evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
+        generated=generated_conclusion(state,task,evidence)
         for sentence in conclusion.sentences:
-            if generated: add(sentence)
+            if generated: add(sentence, "conclusion", task.task_id)
             index+=1
     for sentence in state.draft.explanation:
-        add(sentence); index+=1
-    if fixed_conclusion(state,state.plan.tasks[0]) is None: state.draft.turn_summary=''
-    state.verification=Verification(checks=checks,regeneration_count=state.verification.regeneration_count,
-                                    status='NEEDS_REVIEW' if any(c.status=='MISMATCH' for c in checks) else 'PASS')
+        add(sentence, "explanation"); index+=1
+    failed_summary = state.draft.turn_summary if fixed_conclusion(state,state.plan.tasks[0]) is None else ''
+    if failed_summary:
+        state.draft.turn_summary = ''
+        feedback.append(ClaimFeedback(section='summary', task_id=state.plan.tasks[0].task_id,
+                                      passage=failed_summary, reason='NOT_CONFIRMED'))
+    state.verification = Verification(
+        checks=checks, feedback=feedback, failed_summary=failed_summary,
+        summary_status='MISMATCH' if failed_summary else None,
+        regeneration_count=state.verification.regeneration_count,
+        status='NEEDS_REVIEW' if feedback else 'PASS',
+    )
 
 
-def verify(state,known_names=(),*,snapshots=None,countries=()):
+def diagnose_claim(claim, prepared, group):
+    """Only identify an attribute when an otherwise compatible cell isolates it."""
+    if not claim.valid or not claim.metric.family or not claim.targets:
+        return 'NOT_CONFIRMED', None, None
+    if claim.metric.negated_change or claim.metric.family == 'OUTLOOK':
+        return 'NOT_CONFIRMED', None, None
+    candidates = []
+    contradicted_rows = set()
+    for fact in prepared.facts:
+        if claim.targets != fact.targets or claim.metric.family != fact.metric.family:
+            continue
+        source = prepared.sources[fact.source]
+        reason = mismatch(claim, fact, source)
+        if reason in ('VALUE', 'DIRECTION') and _comparison_matches(claim.metric.comparison, fact):
+            contradicted_rows.add((group[fact.source], fact.path[:-1]))
+        if reason == 'COMPARISON':
+            if not any(_comparison_matches(axis, fact) for axis in ('MOM', 'YOY')):
+                continue
+            relaxed = replace(claim, metric=replace(claim.metric, comparison=None))
+        elif reason == 'DIRECTION' and fact.value != 0:
+            relaxed = replace(claim, metric=replace(claim.metric, direction='UP' if fact.value>0 else 'DOWN'))
+        elif reason in ('PERIOD', 'SOURCE_PERIOD'):
+            if reason == 'SOURCE_PERIOD' and not (
+                    source.get('anchor') or any(period(source.get(key)) for key in ('period', 'compare_period', 'article_period'))):
+                continue
+            if not (fact.period or fact.month or fact.anchor):
+                continue
+            reason = 'PERIOD'
+            relaxed = replace(claim, time=TimeClaim())
+        elif reason == 'VALUE':
+            relaxed = None
+        else:
+            continue
+        if relaxed is None or mismatch(relaxed, fact, source) is None:
+            candidates.append((reason, group[fact.source], fact.path))
+    comparison = [c for c in candidates if c[0]=='COMPARISON']
+    if comparison:
+        candidates = [c for c in comparison if (c[1], c[2][:-1]) in contradicted_rows]
+    if len(candidates)==1:
+        return candidates[0]
+    return 'NOT_CONFIRMED', None, None
+
+
+def _correction_span(sentence, claim, reason):
+    """Locate the disputed attribute only when it is explicit in this claim."""
+    if reason == 'VALUE':
+        return claim.quantity_span
+    if not claim.span:
+        return None
+    start, end = claim.span
+    if reason == 'COMPARISON':
+        pattern = COMPARISON
+    elif reason == 'PERIOD':
+        pattern = DATE
+    elif reason == 'DIRECTION':
+        pattern = DOWN if claim.metric.direction == 'DOWN' else UP
+    else:
+        return None
+    matches = list(pattern.finditer(sentence, start, end))
+    if len(matches) != 1:
+        return None
+    if reason == 'COMPARISON' and claim.quantity_span:
+        # Keep the value and its predicate together so either comparison can be restated.
+        left = matches[0].start()
+        if left <= claim.quantity_span[0]:
+            return left, change_phrase_end(sentence, claim.quantity_span[1], end)
+    return matches[0].span()
+
+
+def judge_draft(state,known_names=(),*,snapshots=None,countries=()):
+    """Judge the saved draft and supplied evidence without mutating the turn."""
+    feedback = []
+    confirmed_claims = []
     snapshots=snapshots or {}
+    # A saved SQL task carries the resolved query window even when its compact digest omits it.
+    query_periods = {}
+    for task in state.plan.tasks:
+        conditions = getattr(task, 'conditions', None)
+        if conditions and conditions.period:
+            for step in task.steps:
+                if step.step_id not in snapshots and step.tool == 'query_trade_data':
+                    query_periods[step.step_id] = conditions.period
     def source(step_id):
         digest=state.results[step_id].digest or {}
-        if step_id not in snapshots: return digest
+        if step_id not in snapshots:
+            if digest and 'period' not in digest and step_id in query_periods:
+                return {**digest, 'period': query_periods[step_id].model_dump(mode='json')}
+            return digest
+        if snapshots[step_id].get('_source_unavailable'): return snapshots[step_id]
         # 저장 행에는 없는 결과 전체 합계(순위 total_usd·비중 분모)는 같은 결과로 만든 digest 값을 근거로 더한다
-        return {**snapshots[step_id],**{k:digest[k] for k in ('total_usd','denominator_usd') if k in digest}}
-    by_task={t.task_id:[source(s.step_id) for s in t.steps
-                       if s.step_id in state.results and (s.step_id in snapshots or state.results[s.step_id].digest)]
-             for t in state.plan.tasks}
+        return {**snapshots[step_id],**{k:digest[k] for k in ('total_usd','denominator_usd')
+                                     if k in digest and k not in snapshots[step_id]}}
+    by_task = {t.task_id: tuple(s.step_id for s in t.steps if s.step_id in state.results
+                                and (s.step_id in snapshots or state.results[s.step_id].digest))
+               for t in state.plan.tasks}
+    all_steps = tuple(step for group in by_task.values() for step in group)
     checks=[]
-    identities=set()
-    for group in by_task.values():
-        for digest in group:
-            for _,_,_,ids in evidence(digest): identities.update(ids)
-    # 사전 이름은 답변에 나온 것만 남긴다(약 1.5만 개 품목명을 문장마다 다시 훑지 않게). 결과 행 이름의 일부인 사전 이름
-    # ('전동축[캠샤프트…]' 안의 '전동축')은 그 결과를 줄여 부른 것이라 결과 밖 대상(D-77)으로 보지 않는다.
-    # 국가명은 빼지 않는다. '수단'은 '남수단'을 줄여 부른 것이 아니라 다른 국가다.
-    countries=frozenset(countries)
     text=' '.join([*(x for c in state.draft.conclusion for x in c.sentences),*state.draft.explanation,state.draft.turn_summary])
-    names={n for n in known_names if n and n in text
-           and (n in countries or not any(n!=i and n in i for i in identities))}|identities
+    known_names=frozenset(n for n in known_names if n and n in text)
+    countries = frozenset(countries)
+    # Numeric facts are extracted exactly once per step. Only grounded names
+    # join the request-wide dictionary, as in the original identity pass.
+    mention_cache = {}
+    steps = {step: _prepare([source(step)], known_names, countries, mention_cache=mention_cache)
+             for step in dict.fromkeys(all_steps)}
+    names = known_names.union(n for item in steps.values() for fact in item.facts for n in fact.targets if len(n)>1)
+    scopes = {}
+
+    def prepare_scope(group):
+        if group in scopes:
+            return scopes[group]
+        if len(group) == 1 and names <= steps[group[0]].catalog.names:
+            prepared = steps[group[0]]
+        else:
+            sources = [steps[step].sources[0] for step in group]
+            catalog = NameCatalog(sources, names, countries, mention_cache=mention_cache)
+            facts = []
+            for index, step in enumerate(group):
+                for fact in steps[step].facts:
+                    # A different scope can change alias ownership and group
+                    # membership. Preserve the cell, rebind its raw identifiers.
+                    targets, members = bind_targets(fact.stored_targets, catalog)
+                    facts.append(replace(fact, source=index, targets=targets, group_members=members))
+            prepared = PreparedEvidence(sources, catalog, tuple(facts))
+        scopes[group] = prepared
+        return prepared
+
+    def review_reason(claim, prepared, group, section, sentence):
+        if section == 'summary':
+            for task_group in by_task.values():
+                if task_group == group:
+                    continue
+                other = prepare_scope(task_group)
+                if _matching_cells(claim, other.facts, other.sources, other.catalog):
+                    return 'OUTSIDE_SUMMARY_SCOPE'
+            if state.plan.tasks[0].intent == 'CONVERSATION' and claim.quantity:
+                if check_history(sentence, state.input.context.recent)[0]:
+                    return 'HISTORY_ONLY'
+        if claim.metric.family == 'AMOUNT_CHANGE' and not any(
+                f.metric.family == 'AMOUNT_CHANGE' and claim.targets <= f.targets for f in prepared.facts):
+            return 'NO_DIRECT_CHANGE_CELL'
+        return 'NOT_CONFIRMED'
+
     index=0
-    def add(sentence,digests):
-        good,numbers=check_sentence(sentence,digests,known_names=names,countries=countries)
+    def inspect(sentence,group,section,task_id=None):
+        prepared = prepare_scope(group)
+        digests = prepared.sources
+        good,claims=_inspect_prepared(sentence,prepared)
+        numbers=[c.claim.quantity.shown for c in claims if c.claim.quantity]
+        if not good and not claims:
+            numbers=[q.shown for q in quantities(quantity_text(sentence,prepared.catalog))]
         source=any(d.get('_verification_source')=='SNAPSHOT' for d in digests)
         unavailable=any(d.get('_source_unavailable') for d in digests)
+        location = dict(section=section, task_id=task_id, index=None if section=='summary' else index)
+        if not good and any(not check.interpretation_valid for check in claims):
+            feedback.append(ClaimFeedback(**location, passage=sentence,
+                reason='SOURCE_UNAVAILABLE' if unavailable else 'NOT_CONFIRMED'))
+        elif not good:
+            confirmed_spans = [c.claim.span for c in claims if c.matches and c.claim.span]
+            for check in claims:
+                claim = check.claim
+                span = claim.span
+                if check.matches:
+                    # A representative supporting cell is sufficient; keep full matches in inspect_sentence.
+                    source_index, cell = check.matches[0]
+                    confirmed_claims.append(ClaimFeedback(**location, action='PRESERVE', reason='MATCH',
+                        passage=sentence[slice(*span)] if span else claim.text, span=span,
+                        step_id=group[source_index], cell=cell, targets=tuple(sorted(claim.targets))))
+                    continue
+                reason, step, cell = (('SOURCE_UNAVAILABLE', None, None) if unavailable
+                                      else diagnose_claim(claim, prepared, group))
+                if reason == 'NOT_CONFIRMED':
+                    reason = review_reason(claim, prepared, group, section, sentence)
+                correction = _correction_span(sentence, claim, reason)
+                if correction and any(left < correction[1] and correction[0] < right
+                                      for left, right in confirmed_spans):
+                    correction = None
+                span = correction or span
+                feedback.append(ClaimFeedback(**location, passage=sentence[slice(*span)] if span else claim.text,
+                    span=span, targets=tuple(sorted(claim.targets)), action='CORRECT' if correction else 'REVIEW', reason=reason, step_id=step, cell=cell))
+            if all(c.matches for c in claims):
+                feedback.append(ClaimFeedback(**location, passage=sentence,
+                    reason='SOURCE_UNAVAILABLE' if unavailable else 'NOT_CONFIRMED'))
+        if section=='summary':
+            return good
         checks.append(SentenceCheck(index=index,numbers=numbers,status='PASS' if good else 'MISMATCH',
             basis='SNAPSHOT' if source else 'DIGEST',
             reason='MATCH' if good else 'SOURCE_UNAVAILABLE' if unavailable else 'NOT_CONFIRMED'))
     for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
-        if task.intent in ('CONVERSATION','HS_LOOKUP') and fixed_conclusion(state,task) is None:
+        if task.intent in ('CONVERSATION','HS_LOOKUP') and generated_conclusion(state,task,True):
             for sentence in conclusion.sentences:
                 good,numbers=(check_history(sentence,state.input.context.recent) if task.intent=='CONVERSATION'
-                              else check_codes(sentence,by_task[task.task_id]))
+                              else check_codes(sentence,[source(step) for step in by_task[task.task_id]]))
+                if not good:
+                    feedback.append(ClaimFeedback(section="conclusion", task_id=task.task_id, index=index, passage=sentence, reason="NOT_CONFIRMED"))
                 checks.append(SentenceCheck(index=index,numbers=numbers,status='PASS' if good else 'MISMATCH',
                                             reason='MATCH' if good else 'NOT_CONFIRMED'))
                 index+=1
             continue
-        generated=bool(by_task[task.task_id]) and fixed_conclusion(state,task) is None
+        generated=generated_conclusion(state,task,bool(by_task[task.task_id]))
         for sentence in conclusion.sentences:
-            if generated: add(sentence,by_task[task.task_id])
+            if generated: inspect(sentence,by_task[task.task_id],'conclusion',task.task_id)
             index+=1
     for sentence in state.draft.explanation:
-        add(sentence,[d for group in by_task.values() for d in group]); index+=1
+        inspect(sentence,all_steps,'explanation'); index+=1
     primary=state.plan.tasks[0]
     summary_ok=True
     if state.draft.turn_summary and fixed_conclusion(state,primary) is None:
-        summary_ok,_=check_sentence(state.draft.turn_summary,by_task[primary.task_id],known_names=names,countries=countries)
-        if not summary_ok: state.draft.turn_summary=''
-    state.verification=Verification(checks=checks,regeneration_count=state.verification.regeneration_count,
+        summary_ok=inspect(state.draft.turn_summary,by_task[primary.task_id],'summary',primary.task_id)
+    return Verification(checks=checks,feedback=feedback,confirmed_claims=confirmed_claims,
+        summary_status=('PASS' if summary_ok else 'MISMATCH') if state.draft.turn_summary else None,
+        failed_summary='' if summary_ok else state.draft.turn_summary,regeneration_count=state.verification.regeneration_count,
         status='PASS' if summary_ok and all(c.status=='PASS' for c in checks) else 'NEEDS_REVIEW')
+
+
+def verify(state,known_names=(),*,snapshots=None,countries=()):
+    state.verification = judge_draft(state,known_names,snapshots=snapshots,countries=countries)
+    if state.verification.summary_status == 'MISMATCH':
+        state.draft.turn_summary = ''

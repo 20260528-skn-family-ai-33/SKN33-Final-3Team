@@ -79,14 +79,18 @@ def xlsx_bytes(tables,meta,sql,unit_headers=False,info_rows=None):
             values=[]
             for c in columns:
                 v=row.get(c['key'])
-                if isinstance(v,(dict,list)): v=readable(v,c['key'])  # 숫자는 셀 서식을 쓰도록 그대로 둔다
+                if v is None and c.get('unit')=='%' and ('share' in c['key'] or '비중' in c['label']): v='-'
+                elif isinstance(v,dict) and 'hs_code' in v: v=v['hs_code']
+                elif isinstance(v,(dict,list)): v=readable(v,c['key'])  # 일회성 판정·목록은 읽을 수 있는 글자로. 숫자는 셀 서식을 쓰도록 그대로 둔다
                 values.append(v)
             ws.append(values)
-            for cell,fmt in zip(ws[ws.max_row],formats):
+            for cell,fmt,column in zip(ws[ws.max_row],formats,columns):
                 if fmt and isinstance(cell.value,(int,float)) and not isinstance(cell.value,bool):
                     # USD는 정수면 #,##0, 센트가 있으면 #,##0.00으로 원본 값을 그대로 보이게 한다.
                     cents=fmt=='#,##0' and math.isfinite(cell.value) and cell.value!=int(cell.value)
-                    cell.number_format='#,##0.00' if cents else fmt
+                    small_share=(column.get('unit')=='%' and ('share' in column['key'] or '비중' in column['label'])
+                                 and 0<abs(cell.value)<0.1)
+                    cell.number_format='0.0000' if small_share else '#,##0.00' if cents else fmt
         # 수식으로 해석될 수 있는 원문도 문자열 셀로 강제한다.
         for row in ws:
             for cell in row:

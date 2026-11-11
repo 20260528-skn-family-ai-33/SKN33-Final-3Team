@@ -420,7 +420,7 @@ def attach_weekly_summary(doc):
 def report_xlsx(record,document):
     from backend.app.api.files import xlsx_bytes, user_xlsx_info
     tables=[table for section in document['sections'] for table in section['tables']]
-    # 정기 리포트만 정비한다. 요청형/에이전트가 선택한 결과표는 그대로 내보낸다.
+    # 정기 리포트만 열을 정비한다. 요청형/에이전트의 열은 유지하고 모든 리포트에 단위를 표시한다.
     periodic=record['report_type'] in PERIODIC_REPORT_TYPES
     # build_document는 원본 결과표를 재사용한 문서에 FROZEN을 기록한다.
     if periodic and document['meta'].get('freshness')!='FROZEN':
@@ -435,7 +435,7 @@ def report_xlsx(record,document):
             exported.append({**table,'columns':columns})
         return xlsx_bytes(exported,document['meta'],document.get('sql',[]),unit_headers=True,
                           info_rows=user_xlsx_info(document['meta'],conditions))
-    return xlsx_bytes(tables,document['meta'],document.get('sql',[]))
+    return xlsx_bytes(tables,document['meta'],document.get('sql',[]),unit_headers=True)
 
 
 def generate(store,job,settings):

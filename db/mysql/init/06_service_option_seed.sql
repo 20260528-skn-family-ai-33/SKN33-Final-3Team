@@ -21,7 +21,7 @@ INSERT IGNORE INTO service_option
     (option_code, option_type, label_ko, value_json, sort_order, enabled)
 VALUES
     -- CUSTOMS: backend/app/services/customs_reference.py의 CUSTOMS_SOURCE 코드·URL 유지.
-    -- 일정 근거: jobs/customs_monthly.py:register_jobs의 매월 10일 03:00(KST) 기본값.
+    -- 일정 근거: jobs/customs_monthly.py:register_jobs의 매월 18일 03:00(KST) 기본값.
     -- CUSTOMS_MONTHLY_DAY/HOUR/MINUTE 환경변수로 실제 일정이 달라질 수 있습니다.
     -- 시작 20초 후 및 월 실행 시 누락·미완료 월을 점검합니다. 실패/미공개는 재시도 가능할 때만
     -- 같은 대상 월로 1일 후 재시도하며 최대 30회입니다. SOURCE의 갱신 주기는 제공기관 기준이므로 null 유지.
@@ -37,7 +37,7 @@ VALUES
        "jobs":[
          {
            "job_name":"CUSTOMS_CSV_LOAD",
-           "schedule":{"type":"MONTHLY","day":10,"time":"03:00","timezone":"Asia/Seoul"},
+           "schedule":{"type":"MONTHLY","day":18,"time":"03:00","timezone":"Asia/Seoul"},
            "on_startup":{"delay_seconds":20},
            "retry":{"interval_days":1,"max_attempts":30,"retryable_only":true,"statuses":["FAILED","WAITING_FOR_PUBLICATION"]},
            "collects":["국가·HS10·판본별 월별 수출 금액(USD)과 중량(kg)","국가·HS10·판본별 월별 수입 금액(USD)과 중량(kg)","실적에서 확인한 유효한 미등록 HS10 품목명·판본 보완"],

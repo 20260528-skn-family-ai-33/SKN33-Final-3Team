@@ -72,7 +72,7 @@ export default function NotificationSettings({ route }) {
         <span><span className="muted">관심정보</span> <b style={{ marginLeft: 8 }}>{interestText}</b></span>
         <Link to="/account/interests" className="more">관심정보 수정 →</Link>
       </div>
-      <p className="note" style={{ marginTop: 12 }}>기본 꺼짐 또는 가입 동의 결과 적용 · 전체 켬 + 현재 약관 동의 시 수신 {termsOk ? `· 알림 약관 ${TERMS_VERSION} 동의 완료` : '· 알림 약관 미동의'}</p>
+      <p className="note" style={{ marginTop: 12 }}>기본 꺼짐 또는 가입 동의 결과 적용 · 전체 켬 + 현재 약관 동의 시 수신 {termsOk ? '· 알림 약관 동의 완료' : '· 알림 약관 미동의'}</p>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
         <Btn size="md" onClick={() => setDraft(settings)}>취소</Btn>
         <Btn kind="red" size="md" disabled={saving} onClick={save}>{saving ? '저장 중…' : '설정 저장'}</Btn>
@@ -84,7 +84,7 @@ export default function NotificationSettings({ route }) {
         <p className="muted" style={{ marginTop: 8, fontSize: 15 }}>알림을 받으려면 현재 버전의 알림 수신 약관에 동의해야 합니다.</p>
         <div style={{ marginTop: 18, border: '1px solid var(--line)', borderRadius: 14, overflow: 'hidden' }}>
           <div className="between" style={{ padding: '12px 18px', background: 'var(--bg)' }}>
-            <b style={{ fontSize: 14 }}>알림 수신 약관</b><span className="tag red">현재 적용 버전 {TERMS_VERSION}</span>
+            <b style={{ fontSize: 14 }}>알림 수신 약관</b>
           </div>
           <div style={{ padding: 18, height: 240, overflowY: 'auto' }}>
             <ErrorNotice error={terms.error} retry={terms.reload} />{terms.loading ? <span className="muted">약관을 불러오는 중…</span> : <TermsBody body={terms.data?.terms.body} />}
