@@ -159,6 +159,17 @@ async function main() {
     await page.getByText(/^\d{4}-\d{2}-\d{2} 동의$/).nth(1).waitFor()
     assert.equal(await page.getByRole('switch').count(), 0)
     ok('회원정보에 가입 약관 동의 날짜 표시')
+    // 같은 프로필의 다른 탭에서 로그인하면 세션과 CSRF가 모두 새로 발급된다.
+    const second = await context.newPage()
+    await second.goto(base+'/#/login')
+    await second.locator('#login-email').fill(email)
+    await second.locator('#login-password').fill(password)
+    const synced = page.waitForResponse(r => r.url().endsWith('/users/me') && r.status() === 200)
+    await second.getByRole('button', { name: '로그인', exact: true }).click()
+    await synced
+    await page.getByRole('button', { name: '로그아웃', exact: true }).waitFor()
+    await second.close()
+    ok('다른 탭에서 재로그인하면 기존 탭이 현재 세션을 다시 읽음')
     await page.getByRole('button', { name: '로그아웃', exact: true }).click(); await page.waitForURL('**/#/login')
     await page.locator('#login-email').fill(email); await page.locator('#login-password').fill(password)
     await page.getByRole('button', { name: '로그인', exact: true }).click(); await page.waitForURL('**/#/?view=interest')
