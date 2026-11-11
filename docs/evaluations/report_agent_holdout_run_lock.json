@@ -1,0 +1,10 @@
+{
+  "started_at_utc": "2026-11-09T07:48:43.688660+00:00",
+  "questions_sha256": "fda0c0bb4de09bf2c3fac0f5ba2cf9a2c4a0fcb996af13d5d6e586081dbecc90",
+  "code_revision": {
+    "revision": "edd27bc0ca5f214ff2d14ecbb7cac314c0b290e8",
+    "dirty": false,
+    "changes": []
+  },
+  "note": "이 파일이 있으면 holdout을 다시 실행하지 않는다"
+}
