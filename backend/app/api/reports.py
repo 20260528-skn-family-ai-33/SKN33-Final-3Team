@@ -192,6 +192,8 @@ def article_sources(articles):
     return source_entries(article['source_code'] for article in articles)
 
 
+# 승인한 채팅 결과표 종류 → 그 결과로 채우는 리포트 섹션(D-90). 웹·DOCX 문서와 PDF 템플릿이 같은 기준을 쓴다.
+RESULT_SECTIONS={'TREND':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES','PREDICTION':'GROWTH_RISK'}
 PROMISING_UNAVAILABLE='예측 모델 또는 기준월 스냅샷을 사용할 수 없어 유망시장 예측을 넣지 못했습니다.'
 
 
@@ -304,7 +306,6 @@ def build_document(store,uid,record):
     if source:
         meta={'sources':[],'period':p,'warnings':[],'freshness':'FROZEN'}
         sections=[section('SUMMARY','승인한 분석 결과표를 기준으로 작성했습니다.')]
-        kinds={'TREND':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES','PREDICTION':'GROWTH_RISK'}
         refs=record['content_json'].get('source_results') or []
         source=[dict(table) for table in source]
         for i,table in enumerate(source):
@@ -313,7 +314,7 @@ def build_document(store,uid,record):
                 group=prediction_group(refs[i].get('conditions') if i<len(refs) else None)
                 if group: table['meta']={**(table.get('meta') or {}),'kind':'PREDICTION','group_by':group}
         for code in c['sections']:
-            tables=[table for table in source if kinds.get(table['kind'])==code]
+            tables=[table for table in source if RESULT_SECTIONS.get(table['kind'])==code]
             sections.append(section(code,'승인한 분석 결과입니다.' if tables else '해당 분석 결과에 포함되지 않음',tables))
         for ref in record['content_json']['source_results']: meta['warnings'].extend(ref['limitations'])
     elif record['report_type']=='RPT_WEEKLY':
@@ -442,7 +443,9 @@ def generate(store,job,settings):
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
-    if not (record.get('content_json') or {}).get('source_tables') and record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
+    # 승인한 채팅 결과로 만든 요청형 리포트도 같은 템플릿을 쓴다. 이때 맥락은 결과표 사본만 쓴다(report_ondemand_context.populate_results).
+    frozen=bool((record.get('content_json') or {}).get('source_tables'))
+    if record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND') and (not frozen or record['report_type']=='RPT_ON_DEMAND'):
         from backend.app.services.report_context import build_context
         doc['template_pdf']={'version':1,'report_type':record['report_type'],
                              'context':build_context(store,uid,record,doc)}

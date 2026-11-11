@@ -57,7 +57,7 @@ export default function Articles({ route }) {
   return (
     <>
       <Band
-        image={bandArticles} imagePosition="center 55%" eyebrow="무역·경제 뉴스" title="기사"
+        image={bandArticles} imagePosition="center 55%"  title="기사"
         lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
         right={(
           <div className="chips">
@@ -68,7 +68,7 @@ export default function Articles({ route }) {
       <main className="page" style={{ position: 'relative', paddingBottom: 120 }}>
         <div className="wrap col" style={{ gap: 20 }}>
           <form className="card" onSubmit={search} noValidate>
-            <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr auto', gap: 14, alignItems: 'end' }} className="resp-stack">
+            <div className="article-search-fields">
               <div>
                 <label className="lbl" htmlFor="ar-q">검색 (선택)</label>
                 <TextField id="ar-q" placeholder="검색어 입력" icon="search" iconColor="#5C6370" value={form.keyword} onChange={v => setForm(f => ({ ...f, keyword: v }))} />

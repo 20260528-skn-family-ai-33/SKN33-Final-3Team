@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply verified team web release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/trade/delivery
+EnvironmentFile=-/etc/trade/release-runtime.env
+ExecStart=/opt/trade/venv/bin/python -I /opt/trade/delivery/receive.py web
+TimeoutStartSec=15min

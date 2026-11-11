@@ -69,6 +69,39 @@ def article_query(task, countries, products, *, question=None):
     return f'{scope}\n{question or task.question}'
 
 
+def _article_digest(articles, status, period):
+    """Keep each sentence with its evidence limits. Drop whole sentences to fit the checkpoint."""
+    from pydantic_core import to_json
+    from backend.app.agents.state import MAX_DIGEST_BYTES
+
+    items = []
+    for a in articles:
+        if not period.start <= a.published_date <= period.end:
+            raise ValueError('기사 날짜가 요청 범위 밖입니다.')
+        items.append({'article_id': a.article_id, 'title': a.title[:100], 'published_date': a.published_date.isoformat(),
+                      'source_code': a.source_code.value, 'evidence_role': a.evidence_role,
+                      'reference_limitation': a.reference_limitation, 'evidence_sufficient': False, 'summary': []})
+    digest = {'kind': 'ARTICLES', 'article_period': period.model_dump(mode='json'), 'rag_status': status,
+              'unverified_question_parts': list(RagResponse.common_unverified_parts(articles)), 'items': items,
+              'rows_total': len(items), 'truncated': False}
+    if len(to_json(digest)) > MAX_DIGEST_BYTES:
+        # Oversized caveats cannot be separated from the text they qualify. Retain the UI list only.
+        digest.update(unverified_question_parts=[], truncated=True)
+        for item in items:
+            item['reference_limitation'] = '기사 근거와 한계를 함께 전달할 수 없어 목록만 제공합니다.'
+        return digest
+    for a, item in zip(articles, items, strict=True):
+        for sentence in a.summary:
+            item['summary'].append({'text': sentence.text,
+                                    'unverified_question_parts': list(sentence.unverified_question_parts)})
+            if len(to_json(digest)) > MAX_DIGEST_BYTES:
+                item['summary'].pop()
+                digest['truncated'] = True
+            else:
+                item['evidence_sufficient'] = bool(a.evidence)
+    return digest
+
+
 CHAT_RETRY_HINT = '잠시 후 다시검색을 요청해 주세요.'
 
 
@@ -102,7 +135,7 @@ def article_result(state, task, step, *, article_allowed=None, keep_evidence=Non
         return ToolResult(status='FAILED',error='기사 검색에 실패했습니다.')
     if not response.articles:
         message=(f'기사 검색 또는 근거 검수 시간이 초과되었습니다. {retry_hint}' if timed_out
-                 else '질문을 뒷받침하는 기사 근거를 확인하지 못했습니다.' if response.status=='insufficient_evidence'
+                 else '기사 본문에서 질문에 쓸 근거를 확인하지 못했습니다.' if response.status=='insufficient_evidence'
                  else '조건에 맞는 기사가 없습니다.')
         return ToolResult(status='NO_DATA',error=message)
     limitation=('기사 검색 시간이 끝나 확인을 마친 결과만 표시합니다.' if timed_out
@@ -111,24 +144,18 @@ def article_result(state, task, step, *, article_allowed=None, keep_evidence=Non
 
 
 def article_evidence_result(conditions, articles, status, keep_evidence, limitation):
-    from backend.app.agents.digest import bounded
+    """검색 결과와 선택 기사 요약이 같은 digest 형식(main의 문장별 근거 한계 포함)을 쓴다."""
     from backend.app.agents.state import ToolResult
-    items=[]
-    for a in articles:
-        if not conditions.article_period.start<=a.published_date<=conditions.article_period.end:
-            raise ValueError('기사 날짜가 요청 범위 밖입니다.')
-        items.append({'article_id':a.article_id,'title':a.title[:100],'published_date':a.published_date.isoformat(),
-            'source_code':a.source_code.value,'evidence_sufficient':bool(a.summary and a.evidence),
-            'summary':[s.text[:200] for s in a.summary]})
-    partial=status!='ok' or any(not a['evidence_sufficient'] for a in items)
+    digest = _article_digest(articles, status, conditions.article_period)
+    items = digest['items']
+    partial=status!='ok' or digest['truncated'] or any(not a['evidence_sufficient'] for a in items)
     result_id=None
     if keep_evidence:
         from backend.app.api.chat_news import evidence_items
         result_id=keep_evidence(evidence_items(articles))
     return ToolResult(status='OK',result_id=result_id,article_ids=[a['article_id'] for a in items],article_period=conditions.article_period,
         completeness='PARTIAL' if partial else 'COMPLETE',limitations=[limitation] if partial else [],
-        digest=bounded({'kind':'ARTICLES','article_period':conditions.article_period.model_dump(mode='json'),
-                        'rag_status':status,'items':items,'rows_total':len(items)}))
+        digest=digest)
 
 
 HS_LOOKUP_LIMIT = 10   # 표현 하나의 후보 수(HS4·HS6 각 5개)

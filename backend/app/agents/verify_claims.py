@@ -30,8 +30,8 @@ SHORTHAND = re.compile(COMPOUND.pattern +
     r'|(?<![\d.])(?P<rank>\d+)(?=\s*·\s*\d+위)')
 SCALE = {None:1,'만':10**4,'억':10**8,'조':10**12}
 CHANGE_KEYS = frozenset({'change_pct','yoy_pct','mom_pct','growth_pct'})
-YEAR_AGO = r'(?:전년(?:도)?|작년|지난\s*해)'
-MONTH_AGO = r'(?:전월|지난\s*달)'
+YEAR_AGO = r'(?:전년(?:도)?|작년|지난\s*해|(?<!\d)1\s*년\s*전|한\s*해\s*전)'
+MONTH_AGO = r'(?:전월|지난\s*달|한\s*달\s*전|(?<!\d)1\s*개월\s*전)'
 COMPARE_LINK = r'(?:대비|보다|에\s*비(?:해|하여|하면)|(?:와|과|에)\s*비교(?:해|하여|하면|했을\s*때))'
 COMPARISON = re.compile(r'(?:(?P<yoy>'+YEAR_AGO+r')\s*(?:(?:동기|동월|같은\s*달)\s*)?|'
                         r'(?P<mom>'+MONTH_AGO+r')\s*)'+COMPARE_LINK)

@@ -53,7 +53,7 @@ button.reset{background:none;border:0;padding:0;margin:0;font:inherit;color:inhe
 .hd .wrap{position:relative;z-index:31}
 button.bell{background:transparent;border:0;cursor:pointer;border-radius:22px;padding:0}
 button.bell:hover{background:var(--line2)}
-.pill-logout{height:38px;padding:0 14px;border-radius:19px;background:#fff;border:1px solid #CDD1D8;color:var(--sub);font-size:13px;font-weight:700;display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:inherit}
+.pill-logout{height:34px;padding:0 8px;border-radius:17px;background:#fff;border:1px solid #CDD1D8;color:var(--sub);font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-family:inherit}
 .pill-logout:hover{color:var(--red-d);border-color:#F1A9B4;background:#FFFBFB}
 .alert-pop{position:absolute;top:66px;right:max(24px,calc((100vw - 1240px)/2 + 126px));width:400px;z-index:40;background:#fff;border-radius:18px;box-shadow:0 24px 60px rgba(21,24,30,.28);border:1px solid var(--line);overflow:hidden;color:var(--ink)}
 .alert-pop .item{padding:16px 20px;border-bottom:1px solid var(--line2);display:flex;gap:12px;width:100%;background:#fff;border-left:0;border-right:0;border-top:0;text-align:left;cursor:pointer;font:inherit;color:inherit}
@@ -140,7 +140,9 @@ body.modal-open{overflow:hidden}
 .api-results{margin-top:18px}
 /* 채팅 답변의 표는 차트와 같은 간격을 둔다 */
 .chat-flow .api-results{margin:28px 16px}
+.article-search-fields{display:grid;grid-template-columns:1.6fr 1fr auto;gap:14px;align-items:end}
 @media (max-width:760px){
+  .article-search-fields{grid-template-columns:minmax(0,1fr)}
   .wrap{padding:0 16px}
   .hd .wrap{gap:12px}
   .nav{gap:16px;font-size:14px}
@@ -169,14 +171,15 @@ body.modal-open{overflow:hidden}
 .seg button.on{background:var(--ink);color:#fff;font-weight:700}
 /* 메인 머리글의 전체↔내 관심 전환(알림 버튼 왼쪽) */
 .hd-view{margin:0 6px 0 16px;padding:3px;flex:none}
-.hd-view button{height:32px;padding:0 14px;white-space:nowrap}
+.hd-view button{height:20px;padding:0 10px;font-size:10px;white-space:nowrap}
 .hd-r .pill-my,.hd-r .pill-admin,.hd-r .pill-logout{white-space:nowrap;flex:none}
 /* 메인 대시보드의 링크 카드 */
 a.dash-card,.dash-card a{transition:background .15s}
 a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 /* 메인 상승 화살표: 좁은 화면에서는 제목을 가리므로 숨긴다. */
 @media (max-width:640px){.trend-arrow{display:none}}
-.on-dark .field-err{color:#FF8A9A}
+/* 761~1000px는 지표 카드 칸이 좁아 화살표가 제목·기간 글자와 겹친다(760px 이하는 한 줄로 쌓여 겹치지 않음). */
+@media (min-width:761px) and (max-width:1000px){.trend-arrow{display:none}}
 @media (max-width:760px){.hd-view button{padding:0 10px;font-size:13px}}
 
 /* Interest selection and report controls keep the full label available on narrow screens. */
@@ -211,3 +214,22 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 @media (max-width: 640px) {
   .article-actions { flex-basis: 100%; margin-left: 22px; }
 }
+
+/* 메인 품목별·교역국별 표: 모든 행을 두 줄 높이로 고정하고 내용은 세로 가운데. 두 줄을 넘는 글은 …로 줄인다(전체는 마우스를 올리면 보임). */
+.tr.row2{height:72px;padding-top:0;padding-bottom:0;line-height:22px;align-items:center}
+.tr.row2>span{min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:break-word}
+
+/* 메인 상단 기능 카드(링크): 마우스를 올리면 살짝 떠오른다. 키보드 초점도 같은 모양. */
+.feature-card{transition:transform .15s,box-shadow .15s}
+.feature-card:hover,.feature-card:focus-visible{transform:translateY(-3px);box-shadow:0 16px 36px rgba(0,0,0,.26)!important}
+
+/* 머리글의 회원 이름(토글과 알림 사이). 메뉴 가운데 정렬은 그대로 두고, 이름은 머리글에 남는 폭 안에서만 보인다.
+   최대 폭 = min(160px, 화면 폭 − 940px): 1000px에서 60px, 1100px 이상에서 160px. 넘치는 이름은 …로 줄인다(전체는 title).
+   980px 이하는 이름이 몇 글자 남지 않아 숨긴다. 알림 버튼은 줄어들지 않는다. */
+.hd-r>.bell{flex:none}
+.hd-user{flex:none;max-width:min(160px, calc(100vw - 940px));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;color:#444B57;margin-left:6px}
+.hd-user b{color:var(--ink);font-weight:700}
+@media (max-width:980px){.hd-user{display:none}}
+
+/* 머리글 로고 이미지: 줄어들지 않게 고정 */
+.logo img{display:block;flex:none;object-fit:contain}

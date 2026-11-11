@@ -76,8 +76,9 @@ class ArticleRetryTest(unittest.TestCase):
                 self.assertEqual(again.conditions, task.conditions)
                 self.assertIsNone(retry.pending)
                 article = SimpleNamespace(article_id=123, title='YMTC 증설', published_date=window.end,
-                    source_code=SimpleNamespace(value='HANKYUNG'), summary=[SimpleNamespace(text='증설 계획입니다.')],
-                    evidence=[object()])
+                    source_code=SimpleNamespace(value='HANKYUNG'),
+                    summary=[SimpleNamespace(text='증설 계획입니다.', unverified_question_parts=())],
+                    evidence=[object()], evidence_role='direct_evidence', reference_limitation=None)
                 def respond(request, **kwargs):
                     self.assertEqual(request.conditions.products[0].hs_code, '854232')
                     self.assertEqual(request.conditions.period, window)

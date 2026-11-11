@@ -36,6 +36,64 @@ function Section({ no, title, action, children }) {
   )
 }
 
+const SERIES_COLORS = ['#C8102E', '#2E6DB4', '#16877C', '#8E5BB5', '#E07B24']
+
+/** 월별 추이 결과표를 국가·품목별 선으로 나눈다(PDF 결과 기반 모드와 같은 기준: 시리즈 5개·월 60개 이하). 아니면 null. */
+function trendChart(table) {
+  // 월별 금액(amount_usd)만 쓴다. 기간 합계(total_usd)나 비교 기준월(compare_month)로 선을 만들거나 나누지 않는다.
+  const keys = table.columns.map(c => c.key), amount = 'amount_usd'
+  if (table.kind !== 'TREND' || !keys.includes(amount) || !keys.includes('month')) return null
+  const names = ['country_name', 'name'].filter(k => keys.includes(k))
+  const labels = [...new Set(table.rows.map(r => r.month).filter(Boolean))].sort()
+  // 선은 국가 코드·HS 코드·판본으로 나눈다(PDF와 같은 기준). 이름이 같은 품목(0409·040900 '천연꿀')을 한 선으로 합치지 않는다.
+  const groups = new Map()
+  for (const r of table.rows) {
+    const codes = [r.country_code || r.country_name, r.hs_code || r.name, r.hs_ver]   // 코드가 없는 예전 결과는 이름으로 대신
+    const key = JSON.stringify(codes)
+    if (!groups.has(key)) groups.set(key, { codes, name: names.map(k => r[k]).filter(Boolean).join(' · ') || '수출액', values: {} })
+    groups.get(key).values[r.month] = r[amount]
+  }
+  if (!labels.length || labels.length > 60 || groups.size > SERIES_COLORS.length) return null
+  const list = [...groups.values()], base = list.map(g => g.name)
+  // 이름이 겹치는 선만 HS 코드를 붙이고, 그래도 겹치면 판본·국가 코드까지 붙인다.
+  const label = detail => list.map((g, i) => base.filter(n => n === base[i]).length === 1 ? base[i]
+    : `${base[i]} (${detail.map(k => g.codes[k] && (k === 1 ? `HS ${g.codes[k]}` : g.codes[k])).filter(Boolean).join(' · ')})`)
+  let shown = label([1])
+  if (new Set(shown).size !== shown.length) shown = label([1, 2, 0])
+  const series = list.map((g, i) => ({ name: shown[i], color: SERIES_COLORS[i], values: labels.map(m => g.values[m] == null ? null : g.values[m] / 1e8) }))
+  return { labels, series, ticks: niceTicks(table.rows.map(r => r[amount]), 3, true).map(v => v / 1e8) }
+}
+
+const RESULT_ROW_LIMIT = 200   // PDF 결과 기반 모드(report_ondemand_context.RESULT_ROW_LIMIT)와 같은 값
+
+/** 승인한 채팅 결과로 만든 리포트(D-90). 결과표 사본을 그대로 보여 주고, 결과표에 없는 섹션은 저장된 안내('해당 분석 결과에 포함되지 않음')를 쓴다.
+ *  원본 결과는 만료될 수 있으므로 결과 API(페이지·엑셀)를 부르지 않고 이 리포트의 엑셀 파일로 내려받는다. */
+function ResultSections({ sections, onDownload }) {
+  return sections.map((section, index) => (
+    <Section key={section.section_code} no={index + 1} title={section.title}>
+      <p className="note" style={{ whiteSpace: 'pre-line' }}>{section.text}</p>
+      {(section.tables || []).map(table => {
+        const rows = table.rows || []
+        const chart = trendChart({ ...table, rows })   // 그래프는 PDF와 같이 결과표 전체 행으로 그린다
+        // 표는 PDF와 같은 상한(RESULT_ROW_LIMIT행)까지만 그리고, 나머지는 이 리포트의 엑셀로 안내한다.
+        const total = table.total_rows ?? rows.length
+        const shown = rows.slice(0, RESULT_ROW_LIMIT)
+        return (
+          <div key={table.result_id || table.kind}>
+            {chart && <div style={{ marginTop: 14 }}>
+              <p className="muted">월별 수출액 · 단위 억 USD</p>
+              <LineChart width={900} height={240} labels={chart.labels} yTicks={chart.ticks} formatValue={reportEok} series={chart.series} />
+              <div className="chips">{chart.series.map(s => <span key={s.name} className="lg"><i style={{ background: s.color }} />{s.name}</span>)}</div>
+            </div>}
+            <ApiResults table={{ ...table, rows: shown, total_rows: shown.length, result_id: undefined }} tableOnly fixedColumns onDownload={onDownload} />
+            <p className="note" style={{ marginTop: 8 }}>{`전체 ${total.toLocaleString()}행` + (total > shown.length ? ` 중 ${shown.length.toLocaleString()}행 표시 · 전체는 엑셀 파일` : '')}</p>
+          </div>
+        )
+      })}
+    </Section>
+  ))
+}
+
 const PROMISING_COLS = '110px 1fr 1.6fr 100px 150px'
 const OUTLOOK_COLOR = { '증가 예상': '#C8102E', '감소 예상': '#1F5FD1' }
 export default function ReportView({ route }) {
@@ -101,6 +159,7 @@ export default function ReportView({ route }) {
   }
   const kind = reportKinds[report.kind]
   const newsOnly = report.kind === 'weekly'
+  const frozen = content.data.meta?.freshness === 'FROZEN'   // 승인한 채팅 결과로 만든 리포트(D-90)
   const has = label => !!byCode[sectionCodes[label]]
   const promising = promisingView(byCode.GROWTH_RISK)
   const ticks = niceTicks(monthly.map(r => r.amount_usd), 3, true).map(value => value / 1e8)
@@ -126,13 +185,15 @@ export default function ReportView({ route }) {
               <p style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1, color: '#FF8A9A' }}>BORDERLESS SELLERS · {kind.eyebrow}</p>
               <h1 style={{ fontSize: 34, fontWeight: 800, marginTop: 10 }}>{report.title}</h1>
               <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{/* 주간은 기사만 싣는 리포트라 수출 분석 항목 수를 쓰지 않는다 */}
-                {!newsOnly && (o.sections.length === 4 ? '전체 항목 선택 · ' : `${o.sections.length}개 항목 선택 · `)}{o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
+                {frozen ? '승인한 분석 결과로 작성 · ' : !newsOnly && (o.sections.length === 4 ? '전체 항목 선택 · ' : `${o.sections.length}개 항목 선택 · `)}{o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
               <div style={{ display: 'flex', gap: 24, marginTop: 18, fontSize: 14, color: '#fff' }}>
                 <span>분석 {range(o.from, o.to)}</span><span>비교 {range(o.compareFrom, o.compareTo)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
               </div>
               <div style={{ position: 'absolute', right: 48, top: 36, width: 110, height: 6, background: '#C8102E' }} />
             </div>
             <div style={{ padding: '8px 48px 44px' }}>
+              {frozen && <ResultSections sections={sections} onDownload={() => downloadReport(id, 'XLSX')} />}
+              {!frozen && <>
               {byCode.SUMMARY && <Section no={no++} title="핵심 요약">
                 <ul style={{ margin: 0, paddingLeft: 20, fontSize: 16, lineHeight: 1.9, color: '#2E333C' }}>
                   <li>{byCode.SUMMARY.text}</li>
@@ -240,6 +301,7 @@ export default function ReportView({ route }) {
                   </div>
                 </Section>
               )}
+              </>}
 
               <div style={{ marginTop: 36, background: 'var(--bg)', borderRadius: 14, padding: '20px 22px' }}>
                 <p style={{ fontSize: 16, fontWeight: 800 }}>출처</p>

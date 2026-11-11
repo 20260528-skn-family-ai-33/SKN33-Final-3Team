@@ -214,13 +214,20 @@ const { chromium } = require('playwright')
       await page.setViewportSize({ width, height: 800 })
       for (const route of ['/analysis?chat=1', '/articles', '/account/password']) {
         await page.goto(base + '#' + route)
-        await page.locator('main').waitFor()
+        if (route === '/articles') {
+          await page.getByText('페이지 1 기사 5', { exact: true }).waitFor()
+        } else if (route === '/account/password') {
+          await page.getByLabel('변경할 계정').waitFor()
+        } else {
+          await page.getByText('후속 답변', { exact: true }).waitFor()
+        }
+        await page.evaluate(() => document.fonts.ready)
         const layout = await page.evaluate(() => ({
-          overflow: document.documentElement.scrollWidth > innerWidth,
+          pageWidth: document.documentElement.scrollWidth,
           wordBreak: getComputedStyle(document.body).wordBreak,
           brokenButtons: [...document.querySelectorAll('.btn,.chip')].filter(el => el.getBoundingClientRect().width && getComputedStyle(el).whiteSpace !== 'nowrap').map(el => el.textContent),
         }))
-        assert.equal(layout.overflow, false, `horizontal overflow ${width} ${route}`)
+        assert.ok(layout.pageWidth <= width, `${route}: page width ${layout.pageWidth}px exceeds viewport ${width}px`)
         assert.equal(layout.wordBreak, 'keep-all')
         assert.deepEqual(layout.brokenButtons, [])
       }

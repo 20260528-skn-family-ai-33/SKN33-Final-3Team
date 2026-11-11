@@ -153,6 +153,20 @@ python -m unittest backend/tests/test_report_templates.py
 | `articles[]`, `article_limit` | 정기와 같음 |
 | `sources[]` | `{label, provider, scope, used_in}` (데이터 기준 쪽 표, 「이 리포트에서 쓴 곳」 칸 포함) |
 
+### 요청형 · 결과 기반 모드 (`conditions.result_mode = true`)
+
+채팅에서 "이 결과로 리포트"처럼 **승인한 분석 결과표**로 만든 요청형 리포트입니다(설계 D-90, 이슈 #82).
+`report_ondemand_context.py::populate_results`가 저장된 결과표 사본(`content_json.source_tables`)만으로 채우며 통계를 다시 조회하지 않습니다.
+같은 `ondemand.html`에서 섹션만 **핵심 요약 + 승인한 분석 결과**로 바꿔 그립니다. 결과표에 없는 요청형 항목(주요 수출국·현지 이슈 등)은
+만들지 않고 핵심 요약에 「해당 분석 결과에 포함되지 않음」으로 알립니다. 조건으로 요청한 리포트는 기존 모드 그대로입니다.
+
+| 변수 | 내용 |
+|---|---|
+| `results[]` | `{result_id, title, columns[{key, label, numeric}], rows[[표시 글자]], note, chart}` — 결과표마다 최대 200행(전체는 XLSX), `note`는 전체·표시 행 수 |
+| `results[].chart` | 월별 추이(TREND) 결과의 꺾은선 `{labels[], series[{name, values[]}]}` — 기준월·USD 금액 열이 있고 시리즈 5개·월 60개 이하일 때만, 아니면 `null` |
+| `summary.check_points[]` | `{target, content, basis}` — 결과표 출처, 부분 결과(PARTIAL)의 누락 사유, 포함되지 않은 항목 |
+| `summary.kpi` | 집계 카드를 그리지 않으므로 값은 `null` |
+
 ## 기존 리포트 생성과의 관계
 
 `api/reports.py::generate`는 정기 3종과 요청형에 `services/report_context.py::build_context`를 호출합니다.

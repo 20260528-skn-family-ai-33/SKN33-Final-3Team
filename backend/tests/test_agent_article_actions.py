@@ -55,7 +55,7 @@ class ArticleActionTest(unittest.TestCase):
         summary.answer_status = 'ANSWERED'
         related.steps[-1].status = 'FAILED'
         related.answer_status = 'NO_DATA'
-        state.results['t1.news'] = ToolResult(status='OK', digest={'kind': 'ARTICLES', 'items': [{
+        state.results['t1.news'] = ToolResult(status='OK', article_ids=[11], digest={'kind': 'ARTICLES', 'items': [{
             'article_id': 11, 'title': '선택 기사', 'published_date': '2026-07-28',
             'evidence_sufficient': True, 'summary': ['메모리 반도체 수요가 증가했습니다.', '공급 부족이 이어졌습니다.'],
         }]})
@@ -158,6 +158,10 @@ class ArticleSummaryCitationTest(unittest.TestCase):
         data['input']['article_action'] = {'article_id': '11', 'mode': 'summary'}
         state = AgentState.model_validate(data)
         state.plan = article_actions.action_plan(state.input.article_action)
+        state.plan.tasks[0].steps[-1].status = 'DONE'
+        state.results['t1.news'] = ToolResult(status='OK', article_ids=[11], digest={'kind': 'ARTICLES', 'items': [{
+            'article_id': 11, 'title': '선택 기사', 'published_date': '2026-07-28',
+            'evidence_sufficient': True, 'summary': ['핵심 내용입니다.']}]})
         for sentences, ok in [(['핵심 내용입니다 [1].'], True), (['핵심 내용입니다. [1]'], True),
                               (['다른 기사 내용입니다 [2].'], False), (['출처가 없습니다.'], False)]:
             with self.subTest(sentences=sentences):

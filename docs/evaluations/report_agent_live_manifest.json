@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "frozen_at_utc": "2026-11-09T07:43:07.969748+00:00",
+  "questions_sha256": "519d235e927d1d4bbc1768500b244ce221c162ab1f28e36004404315536e015d",
+  "questions": 32,
+  "categories": {
+    "condition_report": 8,
+    "result_report": 6,
+    "import_report": 4,
+    "not_report": 6,
+    "mixed_request": 4,
+    "follow_up": 4
+  },
+  "prompt_sha256": "130b44de68797e479bde47316f775c90ed439d150757fe8f75e7ec3553624110",
+  "schema_sha256": "8fa3356185cedef8a2eb08d9ee3deac6dfdfa913eb15973047d6c7199f8a9d36",
+  "code_revision": {
+    "revision": "ef7aef420606bf09816802362141fcc7d199175f",
+    "dirty": true,
+    "changes": [
+      "?? backend/scripts/evaluate_report_agent_live.py"
+    ]
+  },
+  "gold_author": "AI 초안(Claude)",
+  "human_review": {
+    "status": "pending",
+    "reviewer": null,
+    "approved_questions_sha256": null
+  }
+}

@@ -252,7 +252,7 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
     {a.warnings?.filter(w => w !== a.text).map(w => <p className="note" key={w}>{w}</p>)}
     {!a.tasks?.length && a.tables.map((table, i) => <ApiResults key={i} table={table} flow={c?.trade_flow} />)}
-    {a.articles.map((article, index) => <div className="li" key={article.article_id}><div>
+    {a.articles.map((article, index) => <div className="li" key={`${article.task_id || ''}:${article.article_id}`}><div>
       <b>[{index + 1}] {article.title}</b>
       <p className="muted">{article.source_code} · {article.published_date}</p>
       {article.sentences?.length ? article.sentences.map((s, i) => <details key={i}>
@@ -501,7 +501,7 @@ export default function Analysis({ route }) {
 
   return (
     <>
-      <Band image={bandAnalysis} imagePosition="center 60%" eyebrow="AI CHATBOT" title="AI챗봇" lead="국가·품목·기간을 자연어로 질문하고, 대화 내용으로 분석 리포트를 생성합니다." />
+      <Band image={bandAnalysis} imagePosition="center 60%"  title="AI챗봇" lead="국가·품목·기간을 자연어로 질문하고, 대화 내용으로 분석 리포트를 생성합니다." />
       <main className="page">
         <div className="wrap chat-lay">
           {drawer && <div className="chat-scrim" aria-hidden="true" onClick={() => setDrawer(false)} />}

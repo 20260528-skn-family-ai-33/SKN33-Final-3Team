@@ -377,7 +377,8 @@ def _normalize_analysis(output, question, previous_conditions):
             if all(country.mention.strip() in ('한국', '대한민국', '우리나라')
                    for country in task.slots.countries or []):
                 task.slots.countries = []
-        if task.intent == 'RANKING' and re.fullmatch(
+        # 사용자 원문 자체가 기준 없는 "수출 순위"일 때만 되묻는다. 여러 작업에서 LLM이 쓴 하위 질문 문장은 보지 않는다.
+        if task.intent == 'RANKING' and len(tasks) == 1 and re.fullmatch(
                 r'\s*(?:\d{4}년\s*)?수(?:출|입)(?:액)?\s*순위(?:\s*(?:알려|보여)\s*(?:줘|주세요))?[.!?]?', text):
             task.slots.ranking_group = None
         if task.intent == 'MARKET_SHARE':
