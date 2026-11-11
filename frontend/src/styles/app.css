@@ -140,7 +140,9 @@ body.modal-open{overflow:hidden}
 .api-results{margin-top:18px}
 /* 채팅 답변의 표는 차트와 같은 간격을 둔다 */
 .chat-flow .api-results{margin:28px 16px}
+.article-search-fields{display:grid;grid-template-columns:1.6fr 1fr auto;gap:14px;align-items:end}
 @media (max-width:760px){
+  .article-search-fields{grid-template-columns:minmax(0,1fr)}
   .wrap{padding:0 16px}
   .hd .wrap{gap:12px}
   .nav{gap:16px;font-size:14px}
