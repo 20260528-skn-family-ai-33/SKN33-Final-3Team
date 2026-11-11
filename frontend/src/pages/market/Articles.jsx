@@ -4,7 +4,7 @@ import { Link, navigate, withQuery } from '../../router'
 import { Band, ChatFab } from '../../components/layout'
 import { Btn, Chip, Pager, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
-import { articleKinds, articleTabs } from '../../data/articles'
+import { articleKinds, articleTabs, articleParagraphs } from '../../data/articles'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { mapArticle } from '../../api/adapters'
 import bandArticles from '../../assets/band-articles.jpg'
@@ -14,9 +14,6 @@ const toDot = d => (d ? d.replaceAll('-', '.') : '')
 // 기사 탭의 "AI에게 물어보기"는 사용하지 않기로 했다(2026-11-11). 다시 쓰려면 아래 버튼 주석과 함께 되살린다.
 // const ask = a => `/analysis?new=1&article=${encodeURIComponent(a.id)}`
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
-
-// 단신속보 본문은 줄바꿈으로 문단이 구분돼 온다. 줄마다 문단으로 나누고, 줄 앞의 -·*·** 표시는 떼고 보여 준다.
-const paragraphs = text => String(text || '').split(/\r?\n/).map(line => line.trim().replace(/^[-*•]+\s*/, '')).filter(Boolean)
 
 export default function Articles({ route }) {
   const q = route.query
@@ -131,7 +128,7 @@ export default function Articles({ route }) {
                     <div style={{ flexBasis: '100%', marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
                       {detail.loading
                         ? <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>본문을 불러오는 중…</p>
-                        : paragraphs(detail.data?.body_masked || a.summary).map((line, i) => <p key={i} style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C', marginTop: i ? 10 : 0 }}>{line}</p>)}
+                        : articleParagraphs(detail.data?.body_masked || a.summary).map((line, i) => <p key={i} style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C', marginTop: i ? 10 : 0 }}>{line}</p>)}
                       {/* <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
                         <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn>
                       </div> */}

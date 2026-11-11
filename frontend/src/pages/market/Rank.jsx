@@ -68,7 +68,13 @@ function RankResults({ route }) {
     previousPage.current = page
     resultTop.current?.scrollIntoView({ block: 'start' })
   }, [page, result.loading])
-  const pages = pageInfo?.page_size ? Math.ceil((pageInfo.total ?? pageInfo.total_count ?? 0) / pageInfo.page_size) : 0
+  // 전체 쪽수는 마지막으로 성공한 응답 기준으로 기억한다. 다음 페이지를 불러오는 중이거나 요청이 실패해도
+  // 조회 조건·정렬 기준이 같으면 페이지 버튼을 그대로 두어 방금 본 페이지로 돌아갈 수 있게 한다.
+  const pagesKey = JSON.stringify([byMonth, query, rankingGroup, basis])
+  const freshPages = pageInfo?.page_size ? Math.ceil((pageInfo.total ?? pageInfo.total_count ?? 0) / pageInfo.page_size) : null
+  const [knownPages, setKnownPages] = useState({ key: null, pages: 0 })
+  if (freshPages != null && (knownPages.key !== pagesKey || knownPages.pages !== freshPages)) setKnownPages({ key: pagesKey, pages: freshPages })
+  const pages = freshPages ?? (knownPages.key === pagesKey ? knownPages.pages : 0)
   const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.has_data === false ? '—' : r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: noRecord(r, r.export_amount_usd) ? null : Number(r.export_amount_usd) / 1e8, imp: noRecord(r, r.import_amount_usd) ? null : Number(r.import_amount_usd) / 1e8 }))
   const pageEmpty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
   // 순위는 큰 금액부터 정렬되므로 1페이지에 실적이 없으면 전체 결과에도 없다. 다른 페이지는 1페이지 판단을 그대로 쓴다.

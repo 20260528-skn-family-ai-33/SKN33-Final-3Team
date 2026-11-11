@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { amount, percent, reportEok, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison, monthEndDate } from '../src/api/adapters.js'
 import { registerCountries, countryCode, countryName, registerProducts, productName, productChoiceLabel } from '../src/data/catalog.js'
 import { isStrongPassword } from '../src/utils/validate.js'
+import { articleParagraphs } from '../src/data/articles.js'
 import { promisingView } from '../src/pages/analysis/promising.js'
 test('월 단위 종료일은 윤년을 포함해 말일로 표시한다', () => {
   assert.equal(monthEndDate('2024-02-01'),'2024-02-29')
@@ -193,3 +194,10 @@ test('monthly trade result titles follow each saved result direction', async () 
   assert.equal(taskTitle({...task,conditions:{trade_flow:'IMPORT'}},tables),'미국에 대한 수입 추이 보여줘')
  }
 })
+test('단신속보 본문은 줄마다 문단으로 나누고 목록 기호만 떼며 음수 부호는 남긴다', () => {
+  const body = '- 수출 동향\n-3.2% (전년 대비)\n* 참고 설명\n\n** 원문 기사 출처\n•  항목\nhttps://example.com/a-b'
+  assert.deepEqual(articleParagraphs(body), ['수출 동향', '-3.2% (전년 대비)', '참고 설명', '원문 기사 출처', '항목', 'https://example.com/a-b'])
+  assert.deepEqual(articleParagraphs('- -1.5% 감소'), ['-1.5% 감소'])
+  assert.deepEqual(articleParagraphs(null), [])
+})
+

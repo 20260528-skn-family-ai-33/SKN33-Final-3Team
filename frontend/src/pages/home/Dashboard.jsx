@@ -179,7 +179,11 @@ export default function Dashboard({ route }) {
   // 관심 시장은 카드 수가 바뀔 수 있어, 불러오는 동안에는 직전 카드 수만큼 스켈레톤을 그린다.
   const [cardCount, setCardCount] = useState(5)
   if (!data.cardsLoading && cards.length && cards.length !== cardCount) setCardCount(cards.length)
-  const cardSlots = interest ? Math.min(Math.max(data.cardsLoading ? cardCount : cards.length, 2), 5) : 5
+  // 그리드 열 수(데스크톱 배치용, 최소 2열)와 스켈레톤 개수(직전 카드 수 그대로)는 따로 계산한다.
+  // 모바일에서는 카드가 한 열로 쌓여, 열 수만큼 스켈레톤을 그리면 품목 1개일 때 빈 카드가 한 줄 더 생긴다.
+  const shownCount = data.cardsLoading ? cardCount : cards.length
+  const cardColumns = interest ? Math.min(Math.max(shownCount, 2), 5) : 5
+  const skeletonCount = interest ? Math.min(Math.max(cardCount, 1), 5) : 5
   const [unRef, unHeight] = useUnVisibleHeight([data.un])
 
   return (
@@ -277,9 +281,9 @@ export default function Dashboard({ route }) {
             </div>
           </div>
           <RegionError label="수출 상위 품목" states={data.states.cards} />
-          <div aria-busy={data.cardsLoading} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardSlots},1fr)`, gap: 14 }} className="resp-stack">
+          <div aria-busy={data.cardsLoading} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
             {data.cardsLoading && <span role="status" className="sr-only">수출 상위 품목을 불러오는 중입니다</span>}
-            {data.cardsLoading && Array.from({ length: cardSlots }, (_, i) => <RankCardSkeleton key={i} />)}
+            {data.cardsLoading && Array.from({ length: skeletonCount }, (_, i) => <RankCardSkeleton key={i} />)}
             {!data.cardsLoading && cards.map(c => (
               <Link key={c.hs} to={data.cardLink('COUNTRY', c.hs)} className="dash-card" style={CARD_STYLE}>
                 <span style={{ display: 'flex', gap: 6 }}>

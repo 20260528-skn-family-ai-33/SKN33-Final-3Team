@@ -57,3 +57,8 @@ export function searchArticles({ tab = 'all', q = '', from = '', to = '' }) {
     (!from || norm(a.date) >= from) && (!to || norm(a.date) <= to),
   )
 }
+
+// 단신속보 본문은 줄바꿈으로 문단이 구분돼 온다. 줄마다 문단으로 나누고, 줄 앞의 목록 표시(-·*·**·•)는 떼고 보여 준다.
+// 기호 뒤에 공백이 있을 때만 목록 표시로 본다. '-3.2%'처럼 숫자 앞 음수 부호는 그대로 둔다.
+const LIST_MARK = /^(?:-|\*{1,2}|•)\s+/
+export const articleParagraphs = text => String(text || '').split(/\r?\n/).map(line => line.trim().replace(LIST_MARK, '')).filter(Boolean)
