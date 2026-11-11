@@ -36,7 +36,7 @@ export default function AccountPage({ route }) {
   const leadText = section === 'reports' && (route.query.get('tab') || 'chat') === 'chat' ? '리포트 종류별로 목록을 확인하고 저장된 PDF를 다시 다운로드합니다.' : lead
   return (
     <>
-      <Band image={bandMypage} imagePosition="center 70%" eyebrow="MY PAGE" title="마이페이지" lead={leadText} />
+      <Band image={bandMypage} imagePosition="center 70%"  title="마이페이지" lead={leadText} />
       <main className="page">
         <div className="wrap lay">
           <nav className="side" aria-label="마이페이지 메뉴">

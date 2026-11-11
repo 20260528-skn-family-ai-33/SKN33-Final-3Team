@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { previewExpired, rankLink, rankInitial, comparisonPeriod, mapLimited, reportComparisonInputs, reportConditions } from '../src/api/integration.js'
+import { previewExpired, rankLink, rankInitial, rankBasis, comparisonPeriod, mapLimited, reportComparisonInputs, reportConditions } from '../src/api/integration.js'
 
 test('preview renewal only handles expired snapshots', () => {
   assert.equal(previewExpired({status:409,code:'PREVIEW_EXPIRED'}), true)
@@ -16,6 +16,13 @@ test('dashboard detail round trip preserves period, countries, scope and group',
   assert.equal(global.country, '')
   assert.equal(global.period, '6')
   assert.equal(rankInitial(new URLSearchParams()).country, '중국')
+})
+
+test('dashboard import KPI opens the ranking on the import basis; export stays the default', () => {
+  const query = link => new URLSearchParams(link.split('?')[1])
+  assert.equal(rankBasis(query(rankLink({scope:'GLOBAL',months:3,group:'COUNTRY',flow:'IMPORT'}))), 'imp')
+  assert.equal(rankBasis(query(rankLink({scope:'GLOBAL',months:3,group:'COUNTRY',flow:'EXPORT'}))), 'exp')
+  assert.equal(rankBasis(query(rankLink({scope:'GLOBAL',months:3,group:'COUNTRY'}))), 'exp')
 })
 
 test('comparison label respects NONE, missing data, import and leap year', () => {
