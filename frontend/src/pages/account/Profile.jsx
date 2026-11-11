@@ -1,4 +1,4 @@
-// BS24 회원정보(비밀번호 수정 진입·동의 관리·회원탈퇴) · BS24-1 회원탈퇴 사유 선택
+// BS24 회원정보(비밀번호 변경 진입·동의 관리·회원탈퇴) · BS24-1 회원탈퇴 사유 선택
 import { useState } from 'react'
 import { navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
@@ -74,7 +74,7 @@ export default function Profile({ route }) {
   return (
     <>
       <section className="card">
-        <h2 className="t2" style={{ fontSize: 22 }}>비밀번호 수정</h2>
+        <h2 className="t2" style={{ fontSize: 22 }}>비밀번호 변경</h2>
         <p className="muted" style={{ marginTop: 6 }}>등록 이메일과 일치하면 비밀번호 변경 창을 엽니다. 불일치 시 오류를 표시합니다.</p>
         <label className="lbl" htmlFor="pf-email" style={{ marginTop: 18 }}>이메일</label>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>

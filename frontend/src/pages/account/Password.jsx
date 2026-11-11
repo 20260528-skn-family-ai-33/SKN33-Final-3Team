@@ -85,7 +85,7 @@ export default function Password() {
       </div>
       <div style={{ maxWidth: 620, marginTop: 22 }}>
         <label className="lbl" htmlFor="pw-account">변경할 계정</label>
-        <input id="pw-account" className="input" name="username" autoComplete="username" readOnly value={session.email} />
+        <input id="pw-account" className="input" name="username" autoComplete="username" readOnly value={session.email} style={{ width: '100%', marginBottom: 20 }} />
         {field('current', '현재 비밀번호')}
         <div className="sp20" />
         {field('next', '변경할 비밀번호')}

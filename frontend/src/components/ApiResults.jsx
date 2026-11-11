@@ -47,7 +47,7 @@ export default function ApiResults({ table, tableOnly = false, onDownload, flow 
       <div className="th" style={{ gridTemplateColumns: '1fr 2fr 1fr', marginTop: 16 }}><span>국가</span><span>수출액 (USD)</span><span className="r">비중</span></div>
       {rows.map(r => <div key={r.country} className="tr" style={{ gridTemplateColumns: '1fr 2fr 1fr' }}><b>{r.country}</b><span style={{ display: 'flex', gap: 12, alignItems: 'center' }}><span style={{ width: `${Math.max(1, r.amount_usd / maxAmount * 65)}%`, height: 12, borderRadius: 6, background: '#C8102E' }} /><b>{compact(r.amount_usd)}</b></span><span className="r">{r.share_pct == null ? '—' : `${Number(r.share_pct).toFixed(1)}%`}</span></div>)}
     </> : <div style={{overflowX:'auto',marginTop:16}}><div style={{minWidth:columns.length*140}}>
-      <div className="th" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))` }}>{columns.map(c => <span key={c.key} style={{overflowWrap:'anywhere'}}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>)}</div>
+      <div className="th" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))` }}>{columns.map(c => <span key={c.key}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>)}</div>
       {shown.map((row, i) => <div key={i} className="tr" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))` }}>{columns.map(c => <span key={c.key}><Value value={row[c.key]} /></span>)}</div>)}
       {!rows.length && <p className="muted">조회된 결과가 없습니다.</p>}
     </div>{pages > 1 && <><p className="muted" style={{ marginTop: 10 }}>전체 {total.toLocaleString()}행 중 {((paged.page - 1) * PAGE_SIZE + 1).toLocaleString()}~{Math.min(total, paged.page * PAGE_SIZE).toLocaleString()}행</p>

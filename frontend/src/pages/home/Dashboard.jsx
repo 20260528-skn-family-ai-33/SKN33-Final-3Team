@@ -260,7 +260,7 @@ export default function Dashboard({ route }) {
                   <span style={{ padding: '3px 8px', borderRadius: 6, background: '#2C313B', color: '#C9CED6', fontSize: 12 }}>{c.hs}</span>
                 </span>
                 {/* 품목명은 항상 두 줄 높이를 차지해 카드마다 아래 수치·그래프 위치가 같아진다. */}
-                <span title={c.name} style={{ fontSize: 18, fontWeight: 800, lineHeight: '24px', height: 48, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', overflowWrap: 'anywhere' }}>{c.name}</span>
+                <span title={c.name} style={{ fontSize: 18, fontWeight: 800, lineHeight: '24px', height: 48, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', overflowWrap: 'break-word' }}>{c.name}</span>
                 <span style={{ marginTop: 'auto', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 80px', gridTemplateRows: '18px 30px 18px', columnGap: 10, alignItems: 'center' }}>
                   <span style={{ fontSize: 12, lineHeight: '18px', color: '#A3AAB6' }}>수출액</span>
                   <span style={{ gridColumn: 2, gridRow: '1 / 4', alignSelf: 'center', display: 'flex', justifyContent: 'flex-end' }}><Sparkline values={c.values} color={c.color} /></span>
@@ -327,7 +327,7 @@ export default function Dashboard({ route }) {
                 <ul aria-label="수출액 비중 국가 목록" tabIndex={data.countryTable.pie.length > 10 ? 0 : undefined}
                   style={{ listStyle: 'none', margin: '15px 0 0', padding: 0, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '20px 14px', fontSize: 13, color: '#2E333C', maxHeight: 160, overflowY: 'auto', scrollbarGutter: 'stable' }}>
                   {data.countryTable.pie.map(([label, color]) => (
-                    <li key={label} style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 22, lineHeight: '20px', overflowWrap: 'anywhere' }}><span style={{ width: 10, height: 10, flexShrink: 0, borderRadius: 2, background: color }} /><span>{label}</span></li>
+                    <li key={label} style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 22, lineHeight: '20px', overflowWrap: 'break-word' }}><span style={{ width: 10, height: 10, flexShrink: 0, borderRadius: 2, background: color }} /><span>{label}</span></li>
                   ))}
                 </ul>
                 <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>{data.countryTable.pieNote}</p>
