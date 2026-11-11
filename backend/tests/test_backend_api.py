@@ -1305,8 +1305,10 @@ class BackendApiTest(unittest.TestCase):
         self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
         jid=self.post(f'chat/sessions/{sid}/messages',{'question':'2025년 12월 전체 품목 수출','client_message_id':'scheduler-failure'}).json()['job']['job_id']
         with patch('backend.app.api.subscriptions.enqueue_due',side_effect=RuntimeError('scheduler failure')) as schedule, \
-             patch('backend.app.api.worker.time.monotonic',side_effect=[0,0,1]), \
-             patch('backend.app.api.worker.time.sleep',side_effect=KeyboardInterrupt):
+             patch('backend.app.api.worker.time', autospec=True) as clock:
+            # Only the worker loop uses this clock; Redis measures its real commands independently.
+            clock.monotonic.side_effect = [0, 0, 1]
+            clock.sleep.side_effect = KeyboardInterrupt
             with self.assertRaises(KeyboardInterrupt): run_loop(self.app.state.database,self.settings)
         self.assertEqual(schedule.call_count,1)  # 5초 재시도 시각 전에는 예약만 건너뛴다.
         self.assertEqual(self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']['status'],'SUCCEEDED')
