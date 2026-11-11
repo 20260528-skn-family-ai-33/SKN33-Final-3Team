@@ -1,6 +1,20 @@
 from datetime import date
-from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, EmailStr, field_validator, model_validator
+from typing import Annotated, Literal
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.networks import validate_email
+
+
+def case_sensitive_email(value: str) -> str:
+    value = value.strip()
+    # EmailStr normalizes domain casing. Validate the address but retain the
+    # spelling used as the account identifier (including domain casing).
+    validate_email(value)
+    if '<' in value or '>' in value:
+        raise ValueError('이름 없이 이메일 주소만 입력하세요.')
+    return value
+
+
+AccountEmail = Annotated[str, AfterValidator(case_sensitive_email)]
 
 
 class Input(BaseModel):
@@ -39,7 +53,7 @@ class ReportConditions(Conditions):
 
 class Signup(Input):
     name: str = Field(min_length=1, max_length=120)
-    email: EmailStr
+    email: AccountEmail
     password: str
     password_confirm: str
     age_confirmed: bool
@@ -55,12 +69,12 @@ class Signup(Input):
 
 
 class Login(Input):
-    email: EmailStr
+    email: AccountEmail
     password: str
 
 
 class PasswordChange(Input):
-    email: EmailStr
+    email: AccountEmail
     current_password: str
     new_password: str
     new_password_confirm: str

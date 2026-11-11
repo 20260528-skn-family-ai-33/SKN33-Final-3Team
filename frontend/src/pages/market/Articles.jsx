@@ -1,5 +1,5 @@
-// BS09 기사 공통 진입(검색) · BS10 전체기사 · BS11 단신속보 · BS12 주요이슈(선택 기사 강조)
-import { useEffect, useState } from 'react'
+// BS09 기사 공통 진입(검색) · BS10 전체기사 · 일반기사 · BS11 단신속보 · BS12 주요이슈(선택 기사 강조)
+import { useEffect, useRef, useState } from 'react'
 import { Link, navigate, withQuery } from '../../router'
 import { Band, ChatFab } from '../../components/layout'
 import { Btn, Chip, Pager, TextField } from '../../components/ui'
@@ -25,7 +25,9 @@ export default function Articles({ route }) {
   const [form, setForm] = useState({ keyword, from, to })
   const [error, setError] = useState('')
   const page = Math.max(1, Number(q.get('page')) || 1)
-  const result = useQuery('/articles', { tab: ({ all: 'ALL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab] || 'ALL', q: keyword, mode: keyword ? 'SEARCH' : 'BROWSE', start_date: from, end_date: to, page, page_size: PAGE_SIZE })
+  const listTop = useRef(null)
+  const previousPage = useRef(page)
+  const result = useQuery('/articles', { tab: ({ all: 'ALL', general: 'GENERAL', short: 'BREAKING', major: 'MAJOR_ISSUE' })[tab] || 'ALL', q: keyword, mode: keyword ? 'SEARCH' : 'BROWSE', start_date: from, end_date: to, page, page_size: PAGE_SIZE })
   const detail = useQuery(`/articles/${selected}`, {}, !!selected)
   const list = (result.data?.items || []).map(mapArticle)
   const pages = Math.max(1, Math.ceil((result.data?.page.total || 0) / PAGE_SIZE))
@@ -33,6 +35,11 @@ export default function Articles({ route }) {
   const tabLabel = articleTabs.find(([k]) => k === tab)?.[1] || '전체기사'
   // 메인 등에서 기사를 골라 들어오면 검색칸 아래로 내려가 그 기사가 바로 보이게 한다.
   const selectedShown = !!selected && shown.some(a => a.id === selected)
+  useEffect(() => {
+    if (previousPage.current === page || result.loading) return
+    previousPage.current = page
+    if (!selected) listTop.current?.scrollIntoView({ block: 'start' })
+  }, [page, result.loading, selected])
   useEffect(() => {
     if (!selectedShown) return undefined
     // 화면 이동 직후 맨 위로 올리는 동작이 끝난 뒤에 내려가도록 한 박자 늦춘다.
@@ -51,7 +58,7 @@ export default function Articles({ route }) {
     <>
       <Band
         image={bandArticles} imagePosition="center 55%" eyebrow="무역·경제 뉴스" title="기사"
-        lead={keyword ? '전체기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
+        lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '통합 기사를 유형별로 확인합니다. 메인에서 선택한 기사를 바로 표시합니다.'}
         right={(
           <div className="chips">
             {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} to={withQuery(route, { tab: key, id: null, page: null })}>{label}</Chip>)}
@@ -80,7 +87,7 @@ export default function Articles({ route }) {
               ? <p className="field-err" role="alert" style={{ marginTop: 10 }}>{error}</p>
               : <p className="note" style={{ marginTop: 10 }}>검색어와 기간은 모두 선택 사항입니다 · 기간 미지정 시 전체 기간 · 탭을 바꿔도 검색 조건 유지</p>}
           </form>
-          <div className="sec-h" style={{ marginTop: 8 }}>
+          <div ref={listTop} className="sec-h" style={{ marginTop: 8, scrollMarginTop: 90 }}>
             <h2 className="t2">
               {keyword ? <>{tabLabel} · “{keyword}” 검색 결과 <span style={{ color: 'var(--red)' }}>{result.data?.page.total || 0}건</span></> : `${tabLabel} · 최신 기사`}
               {(from || to) && <span className="muted" style={{ marginLeft: 10, fontWeight: 500 }}>{toDot(from)} ~ {toDot(to)}</span>}

@@ -6,7 +6,7 @@ SET NAMES utf8mb4;
 
 CREATE TABLE users (
   user_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '회원 한 명을 구분하는 내부 번호다. 자동으로 부여한다.',
-  email VARCHAR(254) NOT NULL COMMENT '로그인에 사용하는 이메일 주소다. 같은 주소를 중복 등록하지 않는다.',
+  email VARCHAR(254) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL COMMENT '로그인에 사용하는 이메일 주소다. 대소문자를 구분하며 같은 주소를 중복 등록하지 않는다.',
   password_hash VARCHAR(255) NOT NULL COMMENT 'bcrypt로 계산한 비밀번호 해시 문자열이다. 평문 비밀번호는 저장하지 않는다.',
   landing_page ENUM('GLOBAL','INTERESTED') NOT NULL DEFAULT 'INTERESTED' COMMENT '로그인 후 첫 화면을 GLOBAL 전체 시장 또는 INTERESTED 관심 시장으로 선택한다.',
   PRIMARY KEY (user_id),

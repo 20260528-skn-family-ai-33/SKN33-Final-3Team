@@ -1,5 +1,5 @@
 {# 요청형 리포트 (RPT_ON_DEMAND). 변수 설명: templates/reports/README.md (요청형)
-   합의(#45): 선택 품목은 합산, 섹션은 고른 것만(SUMMARY는 항상), GROWTH_RISK는 기준 확정 전까지 숨김, 금액은 억 달러. #}
+   합의(#45): 선택 품목은 합산, 섹션은 고른 것만(SUMMARY는 항상), 금액은 억 달러. GROWTH_RISK = 유망시장(증가·감소 예상). #}
 {% import "_macros.html" as m %}
 {% set c = conditions %}
 {% set k = summary.kpi %}
@@ -17,11 +17,12 @@
 {% set prev = c.compare.short if has_compare else '' %}
 {# 문장 속 비교 대상 (양식: “전년 74.1억 달러”·“전년 151개국”) — 표 머리글·범례는 prev(연도 등)를 씀 #}
 {% set prevw = {'YOY': '전년 동월', 'YOY_PERIOD': '전년', 'MOM': '전월', 'CUSTOM': '비교 기간', 'NONE': ''}[c.compare.mode] %}
-{% set titles = {'SUMMARY': '핵심 요약', 'KPI': '월별 수출 추이', 'TOP_COUNTRIES': '주요 수출국', 'LOCAL_ISSUES': '현지 이슈'} %}
-{% set included = {'SUMMARY': '핵심 요약', 'KPI': '주요 지표 · 월별 수출 추이', 'TOP_COUNTRIES': '주요 수출국', 'LOCAL_ISSUES': '현지 이슈'} %}
+{% set titles = {'SUMMARY': '핵심 요약', 'KPI': '월별 수출 추이', 'TOP_COUNTRIES': '주요 수출국', 'GROWTH_RISK': '유망시장(증가·감소 예상)', 'LOCAL_ISSUES': '현지 이슈'} %}
+{% set included = {'SUMMARY': '핵심 요약', 'KPI': '주요 지표 · 월별 수출 추이', 'TOP_COUNTRIES': '주요 수출국', 'GROWTH_RISK': '유망시장(증가·감소 예상)', 'LOCAL_ISSUES': '현지 이슈'} %}
 {# ---------- 쪽 번호 (고른 섹션만, 쪽 나눔 결과대로) ---------- #}
 {% set page_count = {'SUMMARY': layout.summary | length, 'KPI': (layout.monthly | length) if 'KPI' in sections else 0,
                      'TOP_COUNTRIES': (layout.top | length) if 'TOP_COUNTRIES' in sections else 0,
+                     'GROWTH_RISK': (layout.promising | length) if 'GROWTH_RISK' in sections else 0,
                      'LOCAL_ISSUES': (layout.articles | length) if 'LOCAL_ISSUES' in sections else 0} %}
 {% set start = {} %}{% set no = {} %}
 {% set cursor = namespace(page=2 + layout.contents_count) %}
@@ -105,7 +106,7 @@
   {% set conc = ' · 집중도 완화' if k.top3_share_pct < k.prev_top3_share_pct else (' · 집중도 상승' if k.top3_share_pct > k.prev_top3_share_pct else '') %}
 {% endif %}
 {{ m.kpis([
-  {'label': '기간 수출액', 'value': k.amount_usd | eok, 'unit': '억 달러', 'sub': (prev_txt ~ (k.prev_amount_usd | eok) ~ '억 달러') if compare_ready else (pend if has_compare else '')},
+  {'label': '기간 수출액', 'value': k.amount_usd | eok, 'unit': '억 달러', 'sub': (prev_txt ~ (((k.prev_amount_usd | eok) ~ '억 달러') if k.prev_amount_usd else '실적 없음')) if compare_ready else (pend if has_compare else '')},
   {'label': (vs ~ ' 증감률') if has_compare else '증감률', 'value': k.change_pct | signed_pct if compare_ready else '—', 'sub': ('증감액 ' ~ (k.change_usd | signed_eok) ~ '억 달러') if compare_ready else (pend if has_compare else '비교 없음')},
   {'label': '수출국 수', 'value': k.country_count | num, 'unit': '개국', 'sub': (vs ~ ' ' ~ (k.country_count_diff | signed) ~ '개국') if compare_ready else (pend if has_compare else '')},
   {'label': '상위 1개국 비중', 'value': k.top1_share_pct | num(2), 'unit': '%', 'sub': (k.top1_name ~ ((' (' ~ prevw ~ ' 1위 ' ~ k.prev_top1_name ~ ' ' ~ (k.prev_top1_share_pct | pct) ~ ')') if compare_ready and k.prev_top1_name else '')) if k.top1_name else ''},
@@ -253,6 +254,39 @@
     {% if cc.get('note') %}<p class="reading" style="margin-top:3mm">{{ cc.note }} 비중 = 국가별 수출액 ÷ 전체 수출액 × 100.</p>{% endif %}
     {% endif %}</div>
 </div>
+{% endif %}
+{% endfor %}
+{% endcall %}
+{% endfor %}
+{% endif %}
+
+{# ---------- 유망시장 · 증가·감소 예상 (GROWTH_RISK 선택 시) ---------- #}
+{% if 'GROWTH_RISK' in sections %}
+{% set pm = promising %}
+{% for blocks in layout.promising %}
+{% call m.page(report_view, start.GROWTH_RISK + loop.index0, total) %}
+{% if loop.first %}
+{{ m.heading(no.GROWTH_RISK, '유망시장(증가·감소 예상)', ((pm.anchor ~ ' 기준 · ') if pm.anchor) ~ '모델 예측 순위 · 증가·감소 예상 · 단위 억 달러') }}
+{% else %}
+{{ m.heading(none, '유망시장(증가·감소 예상) (계속)') }}
+{% endif %}
+{% for b in blocks %}
+{% if b.key == 'pnote' %}
+<p class="reading" style="margin-bottom:3mm">{{ pm.text }}</p>
+{% elif b.key == 'ptable' %}
+{% if pm.rows %}
+<table style="table-layout:fixed">
+  {# 칸 너비는 report_templates.PROMISING_COLS와 같아야 한다(쪽 나눔 높이 계산). #}
+  <tr><th style="width:24mm">{{ pm.rank_label }}</th><th style="width:30mm">국가</th><th style="width:50mm">품목</th><th style="width:20mm">HS 코드</th><th style="width:24mm">증감 예상</th><th class="r" style="width:32mm">최근 12개월 수출액</th></tr>
+  {% for r in pm.rows[b.start:b.end] %}
+  <tr><td>{{ r.rank }}{% if r.size %} <span class="small">/ {{ r.size | num }}</span>{% endif %}</td><td class="b">{{ r.country }}</td><td>{{ r.product }}</td><td>{{ r.hs6 }}</td>
+    <td style="color:{{ colors.up if r.outlook == '증가 예상' else colors.down if r.outlook == '감소 예상' else colors.muted }}">{{ r.outlook or '—' }}</td>
+    <td class="r">{{ r.exp_12m_usd | eok(2) }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+{{ m.pending('표시할 예측 결과가 없습니다.') }}
+{% endif %}
 {% endif %}
 {% endfor %}
 {% endcall %}

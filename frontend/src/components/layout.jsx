@@ -26,7 +26,8 @@ export function AuthHeader() {
 }
 
 /** 서비스 머리글. admin=true면 관리자 화면용(관리자 버튼만 표시) */
-export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admin, onLogout, children }) {
+/** beforeBell: 알림 버튼 왼쪽에 둘 화면별 조작(메인의 전체↔내 관심 전환) */
+export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admin, onLogout, beforeBell, children }) {
   return (
     <header className="hd">
       <div className="wrap">
@@ -37,6 +38,7 @@ export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admi
           ))}
         </nav>
         <div className="hd-r">
+          {beforeBell}
           <button
             type="button" className={'bell' + (bellOpen ? ' open' : '')} onClick={onBell}
             aria-label={`알림 ${unread}건`} aria-expanded={!!bellOpen} aria-haspopup="dialog"

@@ -17,7 +17,7 @@
 | 7 | 프론트 빌드·배포 | 필수 |
 | 8 | 재시작 | 필수 |
 | 9 | 동작 확인 | 필수 |
-| 10 | 월별 학습(스케줄러) 켜기 | 선택 |
+| 10 | AWS ML 실행일 변경·다음 실행 확인 | 수집 일정 배포 후 |
 
 ---
 
@@ -108,7 +108,7 @@ sha256sum data/ml/monthly_models/*.joblib data/ml/monthly_models/*.registry.json
 
 | 키 | 값 |
 |---|---|
-| `CUSTOMS_ML_ENTRYPOINT` | `backend.app.ml.candidate_models:run` (비우면 월별 학습 안 함, 기본) |
+| `CUSTOMS_ML_ENTRYPOINT` | AWS 운영은 빈 값 유지. 기존 월 파이프라인 수동 실행에만 사용 |
 | `CUSTOMS_ML_GROWTH_RETRIES` | `3` (모델 B가 같은 달에 실패했을 때 자동 재학습 최대 횟수) |
 
 ## 5. DB
@@ -169,9 +169,9 @@ python -c "from backend.app.api.config import Settings; from backend.app.agents.
   - `agent_ml_timeout`: 유망시장 예측 시간 초과(30초) 경고
   - `agent_ml_stuck`: 예측이 5분 넘게 끝나지 않음 → **워커를 다시 시작한다**
 
-## 10. (선택) 월별 학습 켜기
+## 10. AWS 월별 학습 운영
 
-월별 수출입 작업(매월 10일 03:00 KST) 뒤 모델 A를, 이어서 모델 B를 학습한다. 모델 B가 실패해도 모델 A는 저장되고, 실패한 달은 스케줄러 복구 작업이 최대 3번 다시 학습한다.
+월별 수출입 작업은 매월 18일 03:00 KST에 수집·계산을 실행하고 ML은 AWS에서만 예약한다. 통합 스케줄러에는 ML 예약·복구 작업이 없으며 `CUSTOMS_ML_ENTRYPOINT`가 남아 있어도 수집·시작 복구·재시도에서는 학습하지 않는다. 운영 설정은 빈 값을 유지한다. **배포 담당자는 머지·수집 일정 배포 후 AWS ML 실행일을 11일에서 19일로 변경하고 기존 실행 시각·시간대 및 변경 후 다음 실행 일시를 확인한다. AWS 설정은 이번 코드 수정에서 변경하지 않았다.** 모델 B가 실패해도 모델 A는 저장되며, 재시도는 AWS 운영 작업 또는 기존 수동 명령으로 처리한다.
 
 - **월별 학습은 API·워커와 다른 서버에서 돌린다(2026-11-06 결정, C-23).** 같은 서버면 학습 시간대에 메모리가 모자라 채팅 응답이 느려진다.
 - **스케줄러는 API·워커와 다른 환경이어야 한다.** 월별 피처 캐시를 만든 runtime(Python 3.11.9, numpy **1.24.3**, pandas 2.2.3, scipy 1.10.1)과 버전이 정확히 같아야 읽힌다. API 환경(numpy 1.26.4)으로 돌리면 캐시 읽기를 거부한다. 버전은 `backend/requirements-ml-runtime-20261022.txt`·모델 레지스트리의 `data_info.runtime`을 따른다.

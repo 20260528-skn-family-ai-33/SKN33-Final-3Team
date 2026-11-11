@@ -12,7 +12,7 @@ const ROWS = [
   ['all', '전체 알림 수신', '끄면 팝업·새 알림함 등록 중단, 기존 내역 유지'],
   ['surge', '급증 기사', '관심 범위의 품목·키워드 급증 팝업'],
   ['major', '주요 이슈', '전체 주요 무역 이슈 팝업'],
-  ['report', '리포트 발행', '주간·월간·분기 구독 리포트 발행 팝업'],
+  ['report', '리포트 발행', '관심정보 등록과 리포트 구독을 완료하면 주간·월간·분기 리포트 발행을 알려드립니다.'],
 ]
 
 
@@ -53,6 +53,7 @@ export default function NotificationSettings({ route }) {
     <section className="card">
       <h2 className="t1" style={{ fontSize: 24 }}>알림설정</h2>
       <p className="muted" style={{ marginTop: 6 }}>받고 싶은 알림과 관심 조건을 관리합니다.</p>
+      <p className="note" style={{ marginTop: 10 }}>정기 리포트를 받으려면 <Link to="/account/interests" className="more">관심정보 등록</Link>과 <Link to="/account/subscription" className="more">리포트 구독 설정</Link>을 모두 완료해 주세요. 리포트 발행 알림은 전체 알림 수신과 리포트 발행 알림을 켜고 알림 수신 약관에 동의해야 받을 수 있습니다.</p>
       <TermsRenewalNotice onAgree={() => { setAgree(false); navigate(withQuery(route, { terms: 'open' }), { replace: true }) }} />
       <div style={{ marginTop: 10 }}>
         {ROWS.map(([key, title, desc]) => (
@@ -71,7 +72,7 @@ export default function NotificationSettings({ route }) {
         <span><span className="muted">관심정보</span> <b style={{ marginLeft: 8 }}>{interestText}</b></span>
         <Link to="/account/interests" className="more">관심정보 수정 →</Link>
       </div>
-      <p className="note" style={{ marginTop: 12 }}>기본 꺼짐 또는 가입 동의 결과 적용 · 전체 켬 + 현재 약관 동의 시 수신 {termsOk ? `· 알림 약관 ${TERMS_VERSION} 동의 완료` : '· 알림 약관 미동의'}</p>
+      <p className="note" style={{ marginTop: 12 }}>기본 꺼짐 또는 가입 동의 결과 적용 · 전체 켬 + 현재 약관 동의 시 수신 {termsOk ? '· 알림 약관 동의 완료' : '· 알림 약관 미동의'}</p>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
         <Btn size="md" onClick={() => setDraft(settings)}>취소</Btn>
         <Btn kind="red" size="md" disabled={saving} onClick={save}>{saving ? '저장 중…' : '설정 저장'}</Btn>
@@ -83,7 +84,7 @@ export default function NotificationSettings({ route }) {
         <p className="muted" style={{ marginTop: 8, fontSize: 15 }}>알림을 받으려면 현재 버전의 알림 수신 약관에 동의해야 합니다.</p>
         <div style={{ marginTop: 18, border: '1px solid var(--line)', borderRadius: 14, overflow: 'hidden' }}>
           <div className="between" style={{ padding: '12px 18px', background: 'var(--bg)' }}>
-            <b style={{ fontSize: 14 }}>알림 수신 약관</b><span className="tag red">현재 적용 버전 {TERMS_VERSION}</span>
+            <b style={{ fontSize: 14 }}>알림 수신 약관</b>
           </div>
           <div style={{ padding: 18, height: 240, overflowY: 'auto' }}>
             <ErrorNotice error={terms.error} retry={terms.reload} />{terms.loading ? <span className="muted">약관을 불러오는 중…</span> : <TermsBody body={terms.data?.terms.body} />}

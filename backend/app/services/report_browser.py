@@ -1,14 +1,30 @@
-"""Install the worker's browser once; ordinary restarts only check the files."""
+"""Use the same headless browser selection for startup checks and PDF rendering."""
 from pathlib import Path
 import subprocess
 import sys
 
 
+def launch_chromium(runtime):
+    from playwright.sync_api import Error
+    try:
+        return runtime.chromium.launch(headless=True, timeout=30000)
+    except Error as error:
+        # Preserve deployments which installed only full Chromium. Other launch
+        # failures are propagated rather than hidden by a different executable.
+        if "Executable doesn't exist" not in str(error) or not Path(runtime.chromium.executable_path).is_file():
+            raise
+        return runtime.chromium.launch(headless=True, executable_path=runtime.chromium.executable_path, timeout=30000)
+
+
 def ensure_chromium():
-    from playwright.sync_api import sync_playwright
+    from playwright.sync_api import sync_playwright, Error
     with sync_playwright() as runtime:
-        executable=Path(runtime.chromium.executable_path)
-    if not executable.is_file():
-        subprocess.run([sys.executable,'-m','playwright','install','chromium'],check=True)
-    # Use the installed full Chromium for both the check and PDF generation.
-    # This avoids relying on a separate headless-shell download.
+        try:
+            with launch_chromium(runtime):
+                return
+        except Error as error:
+            if "Executable doesn't exist" not in str(error):
+                raise
+        subprocess.run([sys.executable, '-m', 'playwright', 'install', 'chromium'], check=True)
+        with launch_chromium(runtime):
+            pass

@@ -86,7 +86,7 @@ export function FindPassword() {
         <label className="lbl" htmlFor="fp-email">이메일 (아이디)</label>
         <TextField id="fp-email" type="email" placeholder="name@example.com" value={form.email} onChange={v => { setForm(f => ({ ...f, email: v })); setError('') }} />
         {sp(16)}
-        {error ? <p className="field-err" role="alert">{error}</p> : <p className="note">카카오·네이버·구글로 가입한 계정은 비밀번호가 없습니다. 로그인 화면의 해당 소셜 버튼으로 로그인하세요.</p>}
+        {error && <p className="field-err" role="alert">{error}</p>}
         {sp(24)}
         <Btn type="submit" kind="red" size="lg" block disabled={busy}>{busy ? '발송 중…' : '임시 비밀번호 받기'}</Btn>
         {sp(12)}

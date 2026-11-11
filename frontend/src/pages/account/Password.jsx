@@ -23,7 +23,7 @@ export default function Password() {
   const set = key => v => { setForm(f => ({ ...f, [key]: v })); setError(e => ({ ...e, [key]: '' })) }
 
   const verify = () => {
-    if (email.trim().toLowerCase() !== (session?.email || '').toLowerCase()) return setError({ email: '등록된 이메일과 일치하지 않습니다.' })
+    if (email.trim() !== (session?.email || '')) return setError({ email: '등록된 이메일과 일치하지 않습니다.' })
     sessionStorage.setItem('bs2.pwVerified', session.email)
     setVerified(true)
   }
@@ -85,7 +85,7 @@ export default function Password() {
       </div>
       <div style={{ maxWidth: 620, marginTop: 22 }}>
         <label className="lbl" htmlFor="pw-account">변경할 계정</label>
-        <input id="pw-account" className="input" name="username" autoComplete="username" readOnly value={session.email} />
+        <input id="pw-account" className="input" name="username" autoComplete="username" readOnly value={session.email} style={{ width: '100%', marginBottom: 20 }} />
         {field('current', '현재 비밀번호')}
         <div className="sp20" />
         {field('next', '변경할 비밀번호')}

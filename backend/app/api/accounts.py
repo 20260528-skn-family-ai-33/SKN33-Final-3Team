@@ -1,4 +1,5 @@
 from sqlalchemy import select, delete, update
+from sqlalchemy.exc import IntegrityError
 from backend.app.api.common import ApiError, now, digest, require, unavailable
 from backend.app.api.security import password_hash, password_matches, issue_session, revoke_sessions
 from backend.app.api.terms import record_signup, signup_consents, signup_versions
@@ -42,22 +43,35 @@ def user_view(store, user):
 def get_user(store, user_id=None, email=None, lock=False):
     u=store.t('users')
     stmt=select(u)
+    # Keep the native UNIQUE email lookup indexable before and after migration.
+    # An old case-insensitive column can find a different spelling: reject it
+    # in Python without applying COLLATE to the indexed/locked SQL expression.
     stmt=stmt.where(u.c.user_id==user_id) if user_id is not None else stmt.where(u.c.email==email)
-    return store.one(stmt.with_for_update() if lock else stmt)
+    user=store.one(stmt.with_for_update() if lock else stmt)
+    return user if user_id is not None or not user or user['email']==email else None
 
 
 def signup(store, data, response, settings):
-    email=str(data.email).strip().lower()
-    require(email!='admin@example.com','사전 관리 계정은 공개 가입할 수 없습니다.','RESERVED_ACCOUNT',403)
+    email=str(data.email).strip()
+    require(email.casefold()!='admin@example.com','사전 관리 계정은 공개 가입할 수 없습니다.','RESERVED_ACCOUNT',403)
     hashed=password_hash(data.password,data.password_confirm)
     # 추가 저장소의 존재를 먼저 확인하여 가입이 일부만 기록되는 것을 방지한다.
     for name in ('users','notification_setting','user_consent'): store.t(name)
-    u=store.t('users')
-    if store.c.scalar(select(u.c.user_id).where(u.c.email==email)):
+    if get_user(store,email=email):
         raise ApiError(409,'EMAIL_ALREADY_EXISTS','이미 등록된 이메일입니다.')
     versions=signup_versions(store,data)
-    uid=store.insert('users',email=email,password_hash=hashed,landing_page='GLOBAL',
-        name=data.name,role='USER',account_status='ACTIVE',created_at=now())
+    try:
+        uid=store.insert('users',email=email,password_hash=hashed,landing_page='GLOBAL',
+            name=data.name,role='USER',account_status='ACTIVE',created_at=now())
+    except IntegrityError as error:
+        # users has one client-supplied UNIQUE key: email. Handle both an old
+        # case-insensitive index and a concurrent signup; other constraints
+        # keep their original error. The request transaction rolls back.
+        duplicate = ((store.c.dialect.name == 'mysql' and error.orig.args[:1] == (1062,))
+                     or getattr(error.orig,'sqlite_errorcode',None) == 2067)
+        if duplicate:
+            raise ApiError(409,'EMAIL_ALREADY_EXISTS','이미 등록된 이메일입니다.') from None
+        raise
     store.insert('notification_setting',user_id=uid,notifications_enabled=False,report_popup=True,major_issue_popup=True,spike_popup=True)
     record_signup(store,uid,versions)
     return {'user':user_view(store,get_user(store,uid)), 'next_screen':'BS03',
@@ -65,7 +79,7 @@ def signup(store, data, response, settings):
 
 
 def login(store, data, response, settings):
-    user=get_user(store,email=str(data.email).strip().lower(),lock=True)
+    user=get_user(store,email=str(data.email).strip(),lock=True)
     if not user or not password_matches(data.password,user['password_hash']):
         raise ApiError(401,'INVALID_CREDENTIALS','이메일 또는 비밀번호가 일치하지 않습니다.')
     require(user['account_status']=='ACTIVE','이용이 제한되거나 탈퇴한 계정입니다.','ACCOUNT_UNAVAILABLE',403)
@@ -94,7 +108,7 @@ def save_interests(store, uid, data):
 def change_password(store, user, data):
     # 임시 비밀번호 재발급과 같은 사용자 행 잠금을 사용한다.
     user=get_user(store,user_id=user['user_id'],lock=True)
-    require(str(data.email).lower()==user['email'].lower() and password_matches(data.current_password,user['password_hash']),
+    require(str(data.email).strip()==user['email'] and password_matches(data.current_password,user['password_hash']),
             '현재 비밀번호가 일치하지 않습니다.','CURRENT_PASSWORD_INVALID',403)
     hashed=password_hash(data.new_password,data.new_password_confirm)
     u=store.t('users')

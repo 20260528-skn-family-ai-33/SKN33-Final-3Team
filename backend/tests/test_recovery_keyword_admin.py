@@ -50,11 +50,27 @@ class RecoveryKeywordAdminTest(unittest.TestCase):
         redis.client.delete(redis.prefix+'recovery:{'+hash_token('alice@example.org')+'}:cooldown')
 
     def test_account_confirmation_exact_pair_and_no_candidate_leak(self):
-        for name, email, expected in [(' 홍길동 ', 'ALICE@example.org', True), ('다른이름', 'alice@example.org', False), ('홍길동', 'missing@example.org', False)]:
+        for name, email, expected in [(' 홍길동 ', 'alice@example.org', True), ('홍길동', 'ALICE@example.org', False), ('다른이름', 'alice@example.org', False), ('홍길동', 'missing@example.org', False)]:
             r = self.call('POST', 'auth/account-recovery/candidates', {'name': name, 'email': email})
             self.assertEqual(r.status_code, 200, r.text)
             self.assertEqual(r.json(), {'matches': expected, 'message': '가입된 계정입니다.' if expected else '해당정보로 가입된 계정이 없습니다'})
         self.assertEqual(self.call('POST', 'auth/account-recovery/candidates', {'name': '홍길동'}).status_code, 400)
+
+    def test_recovery_changes_only_the_case_exact_account(self):
+        response = self.call('POST', 'auth/signup', {'name': '홍길동', 'email': 'Alice@Example.org',
+            'password': 'Uppercase!123', 'password_confirm': 'Uppercase!123', **SIGNUP_CONSENTS})
+        self.assertEqual(response.status_code, 201, response.text)
+        upper_id = int(response.json()['user']['user_id'])
+        with patch('backend.app.api.recovery.send_temporary_password') as send:
+            response = self.reset(email='Alice@Example.org')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(send.call_args.args[1], 'Alice@Example.org')
+        with self.engine.connect() as connection:
+            users = self.meta.tables['users']
+            unchanged = connection.scalar(select(users.c.password_hash).where(users.c.user_id == self.uid))
+            changed = connection.scalar(select(users.c.password_hash).where(users.c.user_id == upper_id))
+        self.assertTrue(password_matches('Sample!123', unchanged))
+        self.assertTrue(password_matches(send.call_args.args[2], changed))
 
     def test_temporary_password_persists_reissues_and_changes(self):
         with patch('backend.app.api.recovery.send_temporary_password') as send:

@@ -95,7 +95,8 @@ def startup_job(scheduler, attempt=1, start_month=None, **options):
                 id="customs_startup_retry", replace_existing=True)
         return []
     results = [monthly_job(scheduler, month, **options) for month in months]
-    retry_ml(settings, options.get("env_path", ENV_PATH), skip=months)
+    if options.get('run_ml', True):
+        retry_ml(settings, options.get("env_path", ENV_PATH), skip=months)
     return results
 
 
@@ -132,11 +133,12 @@ def register_jobs(scheduler, *, env_path=ENV_PATH, start_month=None, **options):
     """공용 스케줄러에 월별 수출입 실행과 시작 시 누락 월 복구 작업을 등록한다."""
     from apscheduler.triggers.cron import CronTrigger
     settings = {**dotenv_values(env_path), **os.environ}
-    trigger = CronTrigger(day=int(settings.get("CUSTOMS_MONTHLY_DAY", 10)),
+    trigger = CronTrigger(day=int(settings.get("CUSTOMS_MONTHLY_DAY", 18)),
         hour=int(settings.get("CUSTOMS_MONTHLY_HOUR", 3)),
         minute=int(settings.get("CUSTOMS_MONTHLY_MINUTE", 0)), timezone=KST)
     # 판본은 실행 시 대상 월로 결정한다. 등록 시점의 판본을 과거·미래 월에 고정하지 않는다.
-    kwargs = {"env_path": env_path, "start_month": start_month, **options}
+    # 자동 ML은 AWS에서만 실행한다. 설정이 남아 있어도 수집·시작 복구·재시도에서 학습하지 않는다.
+    kwargs = {"env_path": env_path, "start_month": start_month, **options, "run_ml": False}
     scheduler.add_job(startup_job, trigger, args=[scheduler], kwargs=kwargs, id="customs_monthly",
         coalesce=True, max_instances=1, misfire_grace_time=24 * 3600, replace_existing=True)
     scheduler.add_job(startup_job, "date", run_date=datetime.now(KST) + timedelta(seconds=20),
@@ -333,11 +335,11 @@ def collect_month(month, directory, env_path, countries, confirmed_empty_countri
 
 @stored('raw/customs/monthly', lambda args: args['output'])
 def run_month(month, *, env_path=ENV_PATH, output=DEFAULT_OUTPUT, hs_ver=None,
-              ml_entrypoint=None, refresh=False, confirmed_empty_countries=None):
+              ml_entrypoint=None, refresh=False, confirmed_empty_countries=None, run_ml=True):
     try:
         return _run_month(month, env_path=env_path, output=output, hs_ver=hs_ver,
                           ml_entrypoint=ml_entrypoint, refresh=refresh,
-                          confirmed_empty_countries=confirmed_empty_countries)
+                          confirmed_empty_countries=confirmed_empty_countries, run_ml=run_ml)
     except Exception as exc:
         # 잠금·접근 실패에서는 다른 실행의 체크포인트를 덮어쓰지 않는다.
         error = safe_error(exc)
@@ -347,7 +349,7 @@ def run_month(month, *, env_path=ENV_PATH, output=DEFAULT_OUTPUT, hs_ver=None,
         return report
 
 
-def _run_month(month, *, env_path, output, hs_ver, ml_entrypoint, refresh, confirmed_empty_countries):
+def _run_month(month, *, env_path, output, hs_ver, ml_entrypoint, refresh, confirmed_empty_countries, run_ml):
     if not isinstance(month, str) or not re.fullmatch(r"[0-9]{4}(0[1-9]|1[0-2])", month) or not 2 <= int(month[:4]) <= 9997:
         raise ValidationError("대상 월은 YYYYMM, 연도는 2~9997이어야 함")
     env_path, output = Path(env_path), Path(output)
@@ -403,7 +405,7 @@ def _run_month(month, *, env_path, output, hs_ver, ml_entrypoint, refresh, confi
                     not raw_csv.exists() or file_digest(raw_csv) != state.get("csv_sha256")):
                 raise ValidationError("체크포인트의 CSV가 변경/삭제됨; --refresh로 원천 재수집 필요")
             # ML 모듈 설정이 바뀌면 이미 성공한 수집·적재·계산은 유지하고 ML만 다시 실행한다.
-            if state.get("ml_entrypoint") != ml_entrypoint:
+            if run_ml and state.get("ml_entrypoint") != ml_entrypoint:
                 state["completed"] = [s for s in state["completed"] if s != "ml"]
                 state["ml_entrypoint"] = ml_entrypoint
             state.pop("error", None)
@@ -454,7 +456,7 @@ def _run_month(month, *, env_path, output, hs_ver, ml_entrypoint, refresh, confi
                         state.update(status="WAITING_FOR_PUBLICATION", current_stage="collect", retryable=True)
                         write_state(state_path, state)
                         return state
-                    if not ml_entrypoint:
+                    if not run_ml or not ml_entrypoint:
                         state["status"] = "WAITING_FOR_ML"
                         write_state(state_path, state)
                         return state

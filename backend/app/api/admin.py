@@ -28,7 +28,7 @@ def users(store,q=None,status='ALL',page=1,size=20,by='all'):
     u=p=store.t('users')
     stmt=select(u.c.user_id)
     if q:
-        email,name=u.c.email.contains(q,autoescape=True),p.c.name.contains(q,autoescape=True)
+        email,name=func.lower(u.c.email).contains(q.lower(),autoescape=True),p.c.name.contains(q,autoescape=True)
         stmt=stmt.where(email if by=='id' else name if by=='name' else email | name)
     if status!='ALL': stmt=stmt.where(p.c.account_status==status)
     total=store.count(stmt)
@@ -137,7 +137,7 @@ def audit_list(store,page=1,size=20,target_type=None,q=None,sort='latest'):
     # 검색어는 대상 ID·처리 사유·작업 이름·처리자 이메일 중 하나에 들어 있으면 찾는다.
     if q and q.strip():
         word=q.strip()
-        actors=select(u.c.user_id).where(u.c.email.contains(word,autoescape=True))
+        actors=select(u.c.user_id).where(func.lower(u.c.email).contains(word.lower(),autoescape=True))
         labels=[code for code,label in AUDIT_ACTION_LABELS.items() if ''.join(word.split()) in label.replace(' ','')]
         conds=[*(c.contains(word,autoescape=True) for c in (t.c.target_id,t.c.reason,t.c.action)),t.c.actor_id.in_(actors)]
         if labels: conds.append(t.c.action.in_(labels))

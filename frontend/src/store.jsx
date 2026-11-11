@@ -29,7 +29,7 @@ export function AppProvider({ children }) {
   const [loadError, setLoadError] = useState(null)
   const [profile, updateProfile] = useState(emptyProfile)
   const [settings, updateSettings] = useState({ all: false, surge: false, major: false, report: false })
-  const [subscription, updateSubscription] = useState({ cycles: [], formats: ['PDF'], items: [] })
+  const [subscription, updateSubscription] = useState({ cycles: [], formats: [], items: [] })
   const [notifications, updateNotifications] = useState([])
   const [unread, setUnread] = useState(0)
   const [reports, setReports] = useState([])
@@ -56,7 +56,7 @@ export function AppProvider({ children }) {
   const clear = useCallback(() => {
     epoch.current++; setSession(null); setCsrf(null); updateProfile(emptyProfile); setChats([]); setReports([]); updateNotifications([]); setUnread(0); setAccounts([]); setMainView(null)
     updateSettings({ all: false, surge: false, major: false, report: false })
-    updateSubscription({ cycles: [], formats: ['PDF'], items: [] }); setLoadError(null)
+    updateSubscription({ cycles: [], formats: [], items: [] }); setLoadError(null)
   }, [])
   const refreshNotifications = useCallback(async (force = false) => {
     const current = epoch.current
@@ -93,7 +93,7 @@ export function AppProvider({ children }) {
     updateProfile({ ...emptyProfile, name: user.name, email: user.email, products: scope.hs_items.map(h => h.hs_code), countries: scope.country_codes.map(countryName), home: scope.landing_page === 'INTERESTED' ? 'interest' : 'all', version: scope.version })
     const s = pref.settings
     updateSettings({ all: s.notifications_enabled, surge: s.spike_popup, major: s.major_issue_popup, report: s.report_popup, termsAgreed: s.consent_current, termsVersion: s.terms_version, termsRequired: !!s.consent_required })
-    updateSubscription({ ...subs, cycles: subs.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: subs.items.find(s => s.enabled)?.formats || ['PDF'] })
+    updateSubscription({ ...subs, cycles: subs.items.filter(s => s.enabled).map(s => s.period_code.toLowerCase()), formats: subs.items.find(s => s.enabled)?.formats || [] })
     await Promise.all([refreshNotifications(), refreshReports(), refreshChats()])
   }, [refreshNotifications, refreshReports, refreshChats])
   const refresh = useCallback(async () => {
@@ -176,7 +176,7 @@ export function AppProvider({ children }) {
     const fresh = await api('/users/me/subscriptions')
     if (current !== epoch.current) return false
     const active = fresh.items.filter(item => item.enabled)
-    updateSubscription({ ...fresh, cycles: active.map(item => item.period_code.toLowerCase()), formats: active[0]?.formats || ['PDF'] })
+    updateSubscription({ ...fresh, cycles: active.map(item => item.period_code.toLowerCase()), formats: active[0]?.formats || [] })
     return true
   }, [])
   const setSubscription = useCallback(async next => run(async () => {
@@ -227,15 +227,14 @@ export function AppProvider({ children }) {
   const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`)), [run])
   const login = useCallback((email, password) => authenticate('/auth/login', { email, password }), [authenticate])
   const signup = useCallback(form => authenticate('/auth/signup', { name: form.name, email: form.email, password: form.password, password_confirm: form.confirm || form.password, age_confirmed: form.ageConfirmed, service_terms_version: form.serviceTermsVersion, privacy_terms_version: form.privacyTermsVersion }), [authenticate])
-  const socialSignIn = useCallback(() => ({ ok: false, message: '소셜 로그인은 서버 연동 준비 중입니다.' }), [])
   const withdraw = useCallback(() => notify('회원 탈퇴는 운영 정책 확정 후 제공됩니다.'), [notify])
   const value = useMemo(() => ({
     session, account: session, accounts, setAccounts, loading, loadError, refresh, options, countries,
-    login, signup, socialSignIn, logout, changePassword, withdraw,
+    login, signup, logout, changePassword, withdraw,
     profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
     chats, setChats, refreshChats, reports, refreshReports, downloadReport,
     mainView, setMainView, notify, run, fail,
-  }), [session, accounts, loading, loadError, refresh, options, countries, login, signup, socialSignIn,
+  }), [session, accounts, loading, loadError, refresh, options, countries, login, signup,
     logout, changePassword, withdraw, profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms,
     subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
     downloadReport, mainView, notify, run, fail])

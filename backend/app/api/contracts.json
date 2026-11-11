@@ -739,7 +739,7 @@
         "tab",
         "string",
         "선택",
-        "ALL / BREAKING / MAJOR_ISSUE. 기본 ALL."
+        "ALL / GENERAL / BREAKING / MAJOR_ISSUE. 기본 ALL. GENERAL은 단신속보·주요이슈가 아닌 일반기사."
       ],
       [
         "Query Parameters",

@@ -22,7 +22,7 @@ def create_test_app(settings=None, engine=None):
     return create_app(settings,engine,RedisState(settings,fakeredis.FakeRedis(decode_responses=True)))
 
 
-def test_engine():
+def test_engine(*, email_collation=None):
     engine = create_engine('sqlite://',poolclass=StaticPool,connect_args={'check_same_thread':False})
     schema = json.loads(Path(__file__).with_name('fixtures').joinpath('api_schema.json').read_text(encoding='utf-8'))
     meta = MetaData()
@@ -36,9 +36,11 @@ def test_engine():
             elif kind == 'date': typ = Date()
             elif kind.startswith(('datetime','timestamp')): typ = DateTime()
             elif kind == 'json': typ = JSON()
+            email_key = name == 'users' and c['name'] == 'email' and email_collation is not None
+            if email_key: typ = String(254, collation=email_collation)
             default = c['default']
             defs.append(Column(c['name'],typ,primary_key=c['pk'],nullable=c['nullable'],
-                autoincrement=c['auto'],server_default=text(default) if default else None))
+                unique=email_key, autoincrement=c['auto'],server_default=text(default) if default else None))
         Table(name,meta,*defs)
     for name, columns in EXTENSIONS.items():
         for column in columns: meta.tables[name].append_column(column._copy())

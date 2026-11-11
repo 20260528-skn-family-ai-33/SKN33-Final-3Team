@@ -8,12 +8,6 @@ import { usePendingAction } from '../../api/hooks'
 
 import { AuthFrame, CardHead } from './AuthFrame'
 
-const SOCIAL = [
-  ['kakao', 'K', '카카오', { background: '#FEE500', color: '#191919' }],
-  ['naver', 'N', '네이버', { background: '#03C75A', color: '#fff' }],
-  ['google', 'G', '구글', { background: '#fff', border: '1px solid #D5D9E0', color: '#3C4043' }],
-]
-
 export default function Login() {
   const { login } = useApp()
   const [email, setEmail] = useState('')
@@ -43,7 +37,7 @@ export default function Login() {
   return (
     <AuthFrame lead={<>품목·국가별 수출입 순위와 해외 시장 기사를 한곳에서 보고,<br />AI챗봇으로 리포트까지 만들어 보세요.</>}>
       <form onSubmit={submit} noValidate>
-        <CardHead eyebrow="로그인" title="다시 오신 걸 환영해요" desc="이메일 또는 소셜 계정으로 로그인하고 무역 분석을 시작하세요." />
+        <CardHead eyebrow="로그인" title="다시 오신 걸 환영해요" desc="이메일로 로그인하고 무역 분석을 시작하세요." />
         <div className="sp32" />
         <label className="lbl" htmlFor="login-email">이메일 (아이디)</label>
         <TextField id="login-email" type="email" autoComplete="username" placeholder="name@example.com" value={email} onChange={setEmail} invalid={!!error.email} />
@@ -59,29 +53,13 @@ export default function Login() {
           <Link to="/find-id" style={{ color: 'var(--sub)', fontWeight: 700 }}>가입 여부 확인</Link>
           <span style={{ width: 1, height: 12, background: '#CDD1D8' }} />
           <Link to="/find-password" style={{ color: 'var(--sub)', fontWeight: 700 }}>비밀번호 찾기</Link>
-        </div>
-        <div style={{ marginTop: 22 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
-            <span className="note" style={{ fontWeight: 700 }}>또는 소셜 계정으로 로그인</span>
-            <span style={{ flex: 1, height: 1, background: 'var(--line)' }} />
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'center', gap: 26, marginTop: 16 }}>
-            {SOCIAL.map(([key, letter, label, style]) => (
-              <button key={key} type="button" className="reset" aria-label={`${label}로 로그인`} onClick={() => navigate(`/login/${key}`)}
-                style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, color: 'var(--ink)' }}>
-                <span style={{ width: 52, height: 52, borderRadius: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 19, fontWeight: 800, ...style }}>{letter}</span>
-                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--sub)' }}>{label}</span>
-              </button>
-            ))}
-          </div>
+          <span style={{ width: 1, height: 12, background: '#CDD1D8' }} />
+          <Link to="/signup" style={{ color: 'var(--red-d)', fontWeight: 700 }}>회원가입</Link>
         </div>
         <p className="note" style={{ marginTop: 16 }}>로그인 후 서비스를 이용할 수 있습니다.</p>
-        <p style={{ marginTop: 10 }}>
-          <Link to="/signup" style={{ fontSize: 14, fontWeight: 700, color: 'var(--red-d)', textDecoration: 'underline', textUnderlineOffset: 3 }}>아직 계정이 없으신가요?</Link>
-        </p>
         <div style={{ marginTop: 28, background: 'var(--bg)', borderRadius: 12, padding: '14px 16px' }}>
-          <p className="note">가입한 이메일 계정으로 로그인하세요. 관리자 계정은 운영 담당자가 발급합니다.</p>
+          <p className="note">가입한 이메일의 대소문자를 정확히 입력해 주세요. 관리자 계정은 운영 담당자가 발급합니다.</p>
+          <p className="note" style={{ marginTop: 6 }}>이메일 대소문자 구분 적용 전에 가입한 계정은 이메일을 모두 소문자로 입력해 주세요. 브라우저 자동완성 주소도 확인해 주세요.</p>
         </div>
       </form>
     </AuthFrame>

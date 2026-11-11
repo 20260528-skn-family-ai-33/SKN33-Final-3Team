@@ -42,8 +42,12 @@ def preview(store,state,task):
         for binding,(snapshot,info) in zip(task.input_bindings,inputs,strict=True):
             refs.append({**info,'task_id':binding.source_task_id,'step_id':binding.source_step_id,
                          'conditions':snapshot['conditions']})
-            copies.append({'result_id':info['result_id'],'kind':snapshot['meta']['kind'],
-                'rows':snapshot['rows'],'columns':snapshot['columns'],'total_rows':snapshot['total_rows']})
+            copy={'result_id':info['result_id'],'kind':snapshot['meta']['kind'],
+                'rows':snapshot['rows'],'columns':snapshot['columns'],'total_rows':snapshot['total_rows']}
+            # 예측 표는 순위 기준(group_by)이 있어야 리포트가 채팅과 같은 순위를 보인다(행 모양으로 추측하지 않는다).
+            if snapshot['meta'].get('group_by'):
+                copy['meta']={k:snapshot['meta'][k] for k in ('kind','group_by','anchor') if k in snapshot['meta']}
+            copies.append(copy)
         if any(ref['conditions']!=refs[0]['conditions'] for ref in refs[1:]):
             raise SlotRepair('선행 결과의 분석 조건이 다릅니다. 같은 조건으로 다시 분석하세요.')
         table=store.t('api_snapshot')

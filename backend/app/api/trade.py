@@ -185,7 +185,7 @@ def kpis(store,uid,selected=None):
     return {'kpi':kpi,'result_id':table['result_id'],'meta':meta}
 
 
-def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='BOTH',save=True):
+def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='BOTH',save=True,screen_export=False):
     require(flow in ('EXPORT','IMPORT','BOTH'),'수출입 방향을 확인하세요.')
     start,end=resolve_period(store,start,end,months)
     ex={r['trade_month']:r['amount_usd'] for r in aggregate(store,'export_summary',start,end,hs,countries,'MONTH')}
@@ -204,12 +204,28 @@ def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='
     meta=metadata(store,start,end)
     out={'items':items,'meta':meta}
     if save:
-        table=result_table(store,uid,items,meta,{'period':period(start,end),'hs_items':hs or [],'country_codes':countries or [],'trade_flow':flow},store.queries)
+        columns=screen_export_columns('MONTH') if screen_export else None
+        export_meta={**meta,'export_profile':'TRADE_SCREEN'} if screen_export else meta
+        table=result_table(store,uid,items,export_meta,{'period':period(start,end),'hs_items':hs or [],'country_codes':countries or [],'trade_flow':flow},store.queries,columns=columns)
         out['result_id']=table['result_id']
     return out
 
 
-def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY',flow='EXPORT',page=1,size=5,save=True):
+def screen_export_columns(group,flow='EXPORT'):
+    """수출입 화면의 다운로드 양식. 에이전트·리포트의 결과 컬럼에는 적용하지 않는다."""
+    if group=='MONTH':
+        fields=[('month','기준월',None)]
+    elif group=='COUNTRY':
+        fields=[('rank','순위',None),('country_name','국가',None)]
+    else:
+        fields=[('rank','순위',None),('hs_code','HS 코드',None),('hs_name','품목명',None)]
+    fields.extend([('export_amount_usd','수출액','USD'),('import_amount_usd','수입액','USD')])
+    if group!='MONTH': fields.append(('share_pct','수입 비중' if flow=='IMPORT' else '수출 비중','%'))
+    return [{'key':key,'label':label,'type':'number' if unit or key=='rank' else 'string','unit':unit}
+            for key,label,unit in fields]
+
+
+def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY',flow='EXPORT',page=1,size=5,save=True,screen_export=False):
     require(group in ('COUNTRY','HS6') and flow in ('EXPORT','IMPORT'),'순위 기준을 확인하세요.')
     start,end=resolve_period(store,start,end,3)
     key=lambda r: r['country_code'] if group=='COUNTRY' else r['hs6_code']
@@ -258,7 +274,18 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
         # Display-only flags stay in the API; exports distinguish absent observations from zero.
         hidden={'has_data'} | ({'hs_name'} if group=='COUNTRY' else set())
         blank=lambda item:{} if item['has_data'] else {'export_amount_usd':None,'import_amount_usd':None,'rank':None,'share_pct':None}
-        table=result_table(store,uid,[{**{k:v for k,v in item.items() if k not in hidden},**blank(item)} for item in items[:1000]],meta,conditions,store.queries)
+        rows=[{**{k:v for k,v in item.items() if k not in hidden},**blank(item)} for item in items[:1000]]
+        if screen_export and group=='COUNTRY':
+            country_table=store.t('country')
+            codes=[row['country_code'] for row in rows]
+            names={r['country_code']:r['name_ko'] for r in store.rows(select(
+                country_table.c.country_code,country_table.c.name_ko).where(country_table.c.country_code.in_(codes)))} if codes else {}
+            rows=[{**row,'country_name':names.get(row['country_code']) or row['country_code']} for row in rows]
+        elif screen_export:
+            rows=[{**row,'hs_code':row['hs_item']['hs_code']} for row in rows]
+        columns=screen_export_columns(group,flow) if screen_export else None
+        export_meta={**meta,'export_profile':'TRADE_SCREEN'} if screen_export else meta
+        table=result_table(store,uid,rows,export_meta,conditions,store.queries,columns=columns)
         out['result_id']=table['result_id']
     return out
 
