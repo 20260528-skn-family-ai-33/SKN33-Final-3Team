@@ -164,7 +164,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if source is None:
             return ask(state, task, source_key, 'REPORT_SOURCE',
                 '직전 결과표로 리포트를 만들까요, 아니면 같은 조건으로 다시 조회할까요?',
-                [('PREVIOUS_RESULT', '직전 결과표로 리포트', {'report_source': 'PREVIOUS_RESULT'}),
+                # TODO: Report Agent의 직전 결과표 복사가 연결되면 '(준비 중)'을 뗀다. 지금은 선택하면 안내로 끝난다.
+                [('PREVIOUS_RESULT', '직전 결과표로 리포트(준비 중)', {'report_source': 'PREVIOUS_RESULT'}),
                  ('REQUERY', '같은 조건으로 다시 조회', {'report_source': 'REQUERY'})])
         task.previous_turn_result = source == 'PREVIOUS_RESULT'
     if task.previous_turn_result:
