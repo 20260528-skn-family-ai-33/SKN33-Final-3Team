@@ -127,7 +127,8 @@ function Ticker({ interest }) {
   const round = { width: 30, height: 30, borderRadius: 15, background: 'rgba(255,255,255,.12)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, cursor: 'pointer' }
   return (
     <div style={{ marginTop: 44, background: 'rgba(10,14,20,.74)', border: '1px solid rgba(255,255,255,.14)', borderRadius: 14, padding: '14px 20px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, color: '#fff' }} aria-live="polite">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 15, whiteSpace: 'nowrap' }}>
+      {/* 좁은 화면에서는 탭이 다음 줄로 넘어가 잘리지 않는다(각 탭 글자는 한 줄 유지). */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 14px', fontSize: 15, whiteSpace: 'nowrap', minWidth: 0 }}>
         <strong>{interest ? '내 관심 기사' : '기사'}</strong>
         {TICKER_TABS.map(([key, label]) => (
           <button key={key} type="button" className="reset" onClick={() => { setTab(key); setIndex(0) }} style={{ color: tab === key ? '#FF8A9A' : '#D5D9E0' }} aria-pressed={tab === key}>{label}</button>
@@ -289,7 +290,7 @@ export default function Dashboard({ route }) {
               <span>순위</span><span>HS6</span><span>품목</span><span className="r">수출액</span><span className="r">수입액</span>
             </div>
             {data.productTable.rows.map(([rank, hs, name, exp, imp]) => (
-              <div key={hs} className="tr row2" style={{ gridTemplateColumns: '22px 86px 1fr 64px 60px' }}>
+              <div key={hs} className="tr row2" style={{ gridTemplateColumns: '24px 86px 1fr 64px 60px' }}>
                 <span className="b">{rank}</span><span><span className="hs">{hs}</span></span><span className="b" title={name} style={{ fontWeight: 700 }}>{name}</span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
               </div>
             ))}
@@ -308,7 +309,7 @@ export default function Dashboard({ route }) {
                     <span>순위</span><span>교역국</span><span className="r">수출액</span><span className="r">수입액</span>
                   </div>
                   {data.countryTable.rows.map(([rank, name, exp, imp]) => (
-                    <div key={name} className="tr row2" style={{ gridTemplateColumns: '22px 1fr 64px 60px' }}>
+                    <div key={name} className="tr row2" style={{ gridTemplateColumns: '24px 1fr 64px 60px' }}>
                       <span className="b">{rank}</span><span title={name} style={{ fontWeight: 700 }}>{name}</span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
                     </div>
                   ))}

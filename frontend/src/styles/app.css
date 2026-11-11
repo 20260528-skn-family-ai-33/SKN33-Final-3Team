@@ -220,7 +220,10 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .feature-card{transition:transform .15s,box-shadow .15s}
 .feature-card:hover,.feature-card:focus-visible{transform:translateY(-3px);box-shadow:0 16px 36px rgba(0,0,0,.26)!important}
 
-/* 머리글의 회원 이름(토글과 알림 사이). 길면 …로 줄이고, 좁은 화면에서는 자리가 없어 숨긴다. */
-.hd-user{flex:none;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:#444B57;margin-left:6px}
+/* 머리글의 회원 이름(토글과 알림 사이). 메뉴 가운데 정렬은 그대로 두고, 이름은 머리글에 남는 폭 안에서만 보인다.
+   최대 폭 = min(160px, 화면 폭 − 940px): 1000px에서 60px, 1100px 이상에서 160px. 넘치는 이름은 …로 줄인다(전체는 title).
+   980px 이하는 이름이 몇 글자 남지 않아 숨긴다. 알림 버튼은 줄어들지 않는다. */
+.hd-r>.bell{flex:none}
+.hd-user{flex:none;max-width:min(160px, calc(100vw - 940px));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px;color:#444B57;margin-left:6px}
 .hd-user b{color:var(--ink);font-weight:700}
-@media (max-width:760px){.hd-user{display:none}}
+@media (max-width:980px){.hd-user{display:none}}
