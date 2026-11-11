@@ -277,43 +277,71 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(done['answer']['conditions']['country_codes'],[])
         self.assertEqual(self.post(url,{**body,'choice_ids':['APPLY']}).status_code,409)
 
-    def _run_numeric_review(self, correction):
+    def _assert_numeric_review(self, question, planned_task, wrong, expected_action, rewrite_failure=None):
         from langgraph.checkpoint.memory import InMemorySaver
-        from backend.app.agents.state import PlannerOutput, Draft
+        from backend.app.agents.state import Draft, PlannerOutput, WriterEdits
+        from backend.app.agents.verify import verify
         from unittest.mock import Mock
-        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
-        database=self.app.state.database
-        database.agent_checkpointer=InMemorySaver()
-        database.agent_client=Mock()
-        wrong='수출액은 98765432198765 USD입니다.'
-        intro='수출 통계를 조회했습니다.'
-        original=Draft(conclusion=[{'task_id':'t1','sentences':[intro]}],explanation=[wrong],turn_summary='')
-        revised=Draft(conclusion=[{'task_id':'t1','sentences':[wrong]}],turn_summary='')
-        database.agent_client.parse.side_effect=[
-            PlannerOutput(tasks=[{'intent':'STATISTICS','question':'수출 통계','slots':{'recent_months':3}}]),
-            original, revised if correction else ValueError('invalid draft')]
+
+        self.settings.values['API_CHAT_AGENT_ENABLED'] = 'true'
+        database = self.app.state.database
+        database.agent_checkpointer = InMemorySaver()
+        database.agent_client = Mock()
+        intro = '수출 통계를 조회했습니다.'
+        original = Draft(conclusion=[{'task_id':'t1', 'sentences':[intro]}],
+                         explanation=[wrong], turn_summary='')
+        responses = [PlannerOutput(tasks=[dict(planned_task, question=question)]), original]
+        if rewrite_failure is not None:
+            responses.append(rewrite_failure)
+        database.agent_client.parse.side_effect = responses
+        observations = []
+        original_draft = original.model_dump()
+
+        def observe_verify(state, **kwargs):
+            verify(state, **kwargs)
+            feedback = [(f.section, f.index, f.action) for f in state.verification.feedback]
+            observations.append((feedback, state.writer_rewrite_result, state.draft.model_dump()))
+
         self.signup()
-        sid=self.post('chat/sessions',{}).json()['session']['session_id']
-        jid=self.post(f'chat/sessions/{sid}/messages',{'question':'수출 통계','client_message_id':'numeric-review'}).json()['job']['job_id']
-        run_once(database,self.settings)
-        job=self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
-        self.assertEqual(job['status'],'SUCCEEDED',job)
-        answer=job['answer']
-        self.assertIn(wrong,answer['text'])
-        verification=answer['verification']
-        self.assertEqual((verification['status'],verification['regeneration_count']),('NEEDS_REVIEW',1))
-        self.assertEqual([(c['index'],c['sentence']) for c in verification['sentence_checks'] if c['status']=='MISMATCH'],
-                         [(1,wrong)])
-        # The shorter candidate drops a verified conclusion and keeps the unsupported number.
-        self.assertIn(intro, answer['text'])
-        self.assertEqual(verification['sentence_checks'][0]['status'],'PASS')
-        self.assertEqual(database.agent_client.parse.call_count,3)  # planner, draft, one correction
+        sid = self.post('chat/sessions', {}).json()['session']['session_id']
+        jid = self.post(f'chat/sessions/{sid}/messages', {
+            'question':question, 'client_message_id':'numeric-review'}).json()['job']['job_id']
+        with patch('backend.app.agents.runtime.verify', side_effect=observe_verify):
+            self.assertTrue(run_once(database, self.settings))
+        job = self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
+        self.assertEqual(job['status'], 'SUCCEEDED', job)
+        feedback = [('explanation', 1, expected_action)]
+        decision = 'PRESERVED_NO_CORRECTION' if expected_action == 'REVIEW' else 'MODEL_OR_SCHEMA_FAILURE'
+        self.assertEqual(observations, [(feedback, None, original_draft), (feedback, decision, original_draft)])
+        answer = job['answer']
+        self.assertEqual(answer['text'].splitlines(), [intro, wrong])
+        verification = answer['verification']
+        self.assertEqual((verification['status'], verification['regeneration_count']), ('NEEDS_REVIEW', 1))
+        self.assertEqual([(c['index'], c['sentence'], c['status']) for c in verification['sentence_checks']],
+                         [(0, intro, 'PASS'), (1, wrong, 'MISMATCH')])
+        expected_schemas = [PlannerOutput, Draft] if expected_action == 'REVIEW' else [PlannerOutput, Draft, WriterEdits]
+        self.assertEqual([call.kwargs['schema'] for call in database.agent_client.parse.call_args_list],
+                         expected_schemas)
+
+    def test_review_only_keeps_original_without_rewrite_call(self):
+        self._assert_numeric_review('수출 통계', {'intent':'STATISTICS', 'slots':{'recent_months':3}},
+                                    '수출액은 98765432198765 USD입니다.', 'REVIEW')
 
     def test_failed_numeric_correction_keeps_original_marked_sentence(self):
-        self._run_numeric_review(False)
+        from backend.app.agents.state import ToolResult
+        from backend.app.agents.templates import Analysis
 
-    def test_invalid_shorter_rewrite_preserves_original_sentence_indexes(self):
-        self._run_numeric_review(True)
+        # One target and one amount give Verify an unambiguous VALUE correction.
+        # The worker saves the fixture as an ordinary result snapshot, then Verify reads it.
+        rows = [{'country_name': '미국', 'amount_usd': 200}]
+        result = ToolResult(status='OK', digest={'kind': 'TREND', 'trade_flow': 'EXPORT', 'rows': rows})
+        analysis = Analysis(rows=rows, meta={'kind': 'TREND'}, result=result,
+                            conditions={'trade_flow': 'EXPORT'}, sql=[])
+        with patch('backend.app.agents.runtime.run_template', return_value=analysis):
+            self._assert_numeric_review('미국 수출액을 알려주세요.',
+                                        {'intent': 'STATISTICS', 'slots': {'recent_months': 1, 'answer_format': 'TEXT'}},
+                                        '미국 수출액은 199달러입니다.', 'CORRECT',
+                                        TimeoutError('simulated rewrite timeout'))
 
     def test_writer_citations_match_the_job_and_saved_message_article_order(self):
         from unittest.mock import Mock
