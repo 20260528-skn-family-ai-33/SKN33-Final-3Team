@@ -13,9 +13,10 @@
 {% set pend = '비교 데이터 준비 중' %}  {# 비교를 골랐지만 비교 기간 통계가 아직 없음 (NONE과 구분) #}
 {% set paired = compare_ready and c.compare.monthly_paired %}
 {% set vs = {'YOY': '전년 동월 대비', 'YOY_PERIOD': '전년 대비', 'MOM': '전월 대비', 'CUSTOM': '비교 기간 대비', 'NONE': ''}[c.compare.mode] %}
-{% set cur = c.period.short %}
-{% set prev = c.compare.short if has_compare else '' %}
-{# 문장 속 비교 대상 (양식: “전년 74.1억 달러”·“전년 151개국”) — 표 머리글·범례는 prev(연도 등)를 씀 #}
+{# 표 머리글·범례·소제목의 기간 이름. 비교 기간 날짜(축약형 포함)는 본문에 싣지 않는다(#95) — 날짜 대신 '분석 기간'·'비교 기간'으로 구분 #}
+{% set cur = '분석 기간' %}
+{% set prev = '비교 기간' if has_compare else '' %}
+{# 문장 속 비교 대상 (양식: “전년 74.1억 달러”·“전년 151개국”) #}
 {% set prevw = {'YOY': '전년 동월', 'YOY_PERIOD': '전년', 'MOM': '전월', 'CUSTOM': '비교 기간', 'NONE': ''}[c.compare.mode] %}
 {# 결과 기반(result_mode): 채팅에서 승인한 분석 결과표 사본으로 만든 리포트. 핵심 요약 + 승인한 분석 결과만 그린다(D-90). #}
 {% set result_mode = c.get('result_mode', false) %}
@@ -58,14 +59,12 @@
 {% set toc = [] %}
 {% for key in sections %}{% set _ = toc.append({'title': titles[key], 'page': start[key]}) %}{% endfor %}
 {% set _ = toc.append({'title': '데이터 기준 · 출처', 'page': p_sources}) %}
-{% set compare_text = '없음' if not has_compare else (c.compare.period_label ~ ' · ' ~ c.compare.basis_label) %}
 {% set included_names = [] %}
 {% for key in sections %}{% set _ = included_names.append(included[key]) %}{% endfor %}
 {% set info = [
   {'label': '품목', 'value': (items | map(attribute='display') | join(' · ')) if items else '전체 품목'},
   {'label': '국가', 'value': ((c.countries | map(attribute='name') | join(' · ')) if c.countries else '전체 국가') ~ (' (수출 대상 ' ~ (k.country_count | num) ~ '개국)' if k.country_count is not none else '')},
   {'label': '분석 기간', 'value': c.period.label ~ ' (' ~ c.period.months ~ '개월)'},
-  {'label': '비교 기간', 'value': compare_text ~ ('' if not has_compare or compare_ready else ' · 비교 데이터 준비 중')},
   {'label': '포함 항목', 'value': included_names | join(' · ')},
   {'label': '요청 경로', 'value': 'AI 분석 대화에서 요청' if c.request_channel == 'CHAT' else '리포트 요청 화면'},
   {'label': '요청 지표', 'value': c.metric.label ~ ' · 현재 계산·정렬 기준: 수출액'},
@@ -103,7 +102,7 @@
 {% elif b.key == 'sentences' %}
 {{ m.sentences(summary.sentences[b.start:b.end], b.start + 1) }}
 {% elif b.key == 'metrics' %}
-<h3>주요 지표<small>분석 {{ c.period.label }}{{ ' · 비교 ' ~ c.compare.period_label if has_compare }} · 단위 억 달러</small></h3>
+<h3>주요 지표<small>분석 {{ c.period.label }} · 단위 억 달러</small></h3>
 {% set prev_txt = (prevw ~ ' ') if has_compare else '' %}
 {% set conc = '' %}
 {% if compare_ready and k.top3_share_pct is not none and k.prev_top3_share_pct is not none %}
@@ -163,10 +162,10 @@
 {% for r in scope_comparison.rows[b.start:b.end] %}<tr><td>{{ r.month }}</td><td>{{ r.name }}</td><td>{{ r.amount_usd | eok }}</td></tr>{% endfor %}
 </table>
 {% elif b.key == 'chart' %}
-{% set keys = [{'name': cur ~ ('년' if cur | length == 4 else ''), 'color': colors.accent, 'kind': 'line'}] %}
+{% set keys = [{'name': cur, 'color': colors.accent, 'kind': 'line'}] %}
 {% set lines = [{'values': mo.current, 'color': colors.accent, 'area': true}] %}
 {% if paired %}
-  {% set _ = keys.append({'name': prev ~ ('년' if prev | length == 4 else '') ~ ' (비교)', 'color': colors.previous, 'kind': 'dash'}) %}
+  {% set _ = keys.append({'name': prev, 'color': colors.previous, 'kind': 'dash'}) %}
   {% set _ = lines.append({'values': mo.previous, 'color': colors.previous, 'dashed': true}) %}
 {% endif %}
 {{ m.legend(keys) }}
@@ -271,21 +270,49 @@
 {# ---------- 유망시장 · 증가·감소 예상 (GROWTH_RISK 선택 시) ---------- #}
 {% if 'GROWTH_RISK' in sections %}
 {% set pm = promising %}
+{% set ch = changes if changes is defined and changes else {'status': 'NOT_READY'} %}
 {% for blocks in layout.promising %}
 {% call m.page(report_view, start.GROWTH_RISK + loop.index0, total) %}
 {% if loop.first %}
-{{ m.heading(no.GROWTH_RISK, '유망시장(증가·감소 예상)', ((pm.anchor ~ ' 기준 · ') if pm.anchor) ~ '모델 예측 순위 · 증가·감소 예상 · 단위 억 달러') }}
+{{ m.heading(no.GROWTH_RISK, '유망시장(증가·감소 예상)', ('실제 수출 증감(비교 기간 → 분석 기간) · ' if ch.status == 'READY') ~ ((pm.anchor ~ ' 기준 모델 예측 · ') if pm.anchor) ~ '단위 억 달러') }}
 {% else %}
 {{ m.heading(none, '유망시장(증가·감소 예상) (계속)') }}
 {% endif %}
 {% for b in blocks %}
-{% if b.key == 'pnote' %}
-<p class="reading" style="margin-bottom:3mm">{{ pm.text }}</p>
+{% if b.key == 'ctables' %}
+{# 실제 수출 증감: 성장률 상위(분석 기간 수출액 기준 금액 이상)·감소율 상위(비교 기간 수출액 기준 금액 이상) #}
+<div class="grid2">
+  {% for title, items in [('성장률 상위', ch.growth), ('감소율 상위', ch.decline)] %}
+  <div><h3>{{ title }} {{ items | length }}개국<small>비교 기간 → 분석 기간</small></h3>
+    {% if items %}
+    <table class="compact">
+      <tr><th>국가</th><th class="r">비교 기간</th><th class="r">분석 기간</th><th class="r cg">증감액</th><th class="r cg">증감률</th></tr>
+      {% for r in items %}
+      <tr><td class="b">{{ r.country }}</td><td class="r">{{ r.previous_usd | eok(2) }}</td><td class="r">{{ r.amount_usd | eok(2) }}</td>
+        <td class="r">{{ r.change_usd | signed_eok(2) }}</td><td class="r">{{ r.change_pct | change }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}{{ m.pending('해당하는 국가가 없습니다.') }}{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% elif b.key == 'cchart' %}
+<h3 class="cchart-head">국가별 증감액<small>비교 기간 → 분석 기간 · 억 달러 · 증가 상위 {{ ch.bars | selectattr('change_usd', 'gt', 0) | list | length }} / 감소 {{ ch.bars | selectattr('change_usd', 'lt', 0) | list | length }}</small></h3>
+{% set bars = [] %}{% for r in ch.bars %}{% set _ = bars.append({'label': r.country, 'value': r.change_usd}) %}{% endfor %}
+{{ diverging_chart(bars, row_height=22) }}
+{% elif b.key == 'cnone' %}
+<h3>실제 수출 증감</h3>
+{{ m.pending('비교 기간을 선택하면 국가별 증감을 표시합니다.' if ch.status == 'NO_COMPARE' else '비교 기간 통계가 아직 준비되지 않았습니다.' if ch.status == 'NOT_READY' else '증감을 비교할 국가가 없습니다.') }}
+{% elif b.key == 'mlhead' %}
+<div class="mlbox top" style="margin-top:{{ b.gap }}mm"><h3 style="margin-top:0">ML 유망시장 분석<small>{{ (pm.anchor ~ ' 기준 · ') if pm.anchor }}모델 예측 순위 · 증가·감소 예상</small></h3></div>
+{% elif b.key == 'pnote' %}
+<div class="mlbox"><p class="reading" style="margin:0">{{ pm.text }}</p></div>
 {% elif b.key == 'ptable' %}
+<div class="mlbox bottom">
 {% if pm.rows %}
 <table style="table-layout:fixed">
-  {# 칸 너비는 report_templates.PROMISING_COLS와 같아야 한다(쪽 나눔 높이 계산). #}
-  <tr><th style="width:24mm">{{ pm.rank_label }}</th><th style="width:30mm">국가</th><th style="width:50mm">품목</th><th style="width:20mm">HS 코드</th><th style="width:24mm">증감 예상</th><th class="r" style="width:32mm">최근 12개월 수출액</th></tr>
+  {# 칸 너비 비율은 report_templates.PROMISING_COLS(mm, 합 180)와 같아야 한다(쪽 나눔 높이 계산). 박스 안이라 %로 준다. #}
+  <tr><th style="width:13.3%">{{ pm.rank_label }}</th><th style="width:16.7%">국가</th><th style="width:27.8%">품목</th><th style="width:11.1%">HS 코드</th><th style="width:13.3%">증감 예상</th><th class="r" style="width:17.8%">최근 12개월 수출액</th></tr>
   {% for r in pm.rows[b.start:b.end] %}
   <tr><td>{{ r.rank }}{% if r.size %} <span class="small">/ {{ r.size | num }}</span>{% endif %}</td><td class="b">{{ r.country }}</td><td>{{ r.product }}</td><td>{{ r.hs6 }}</td>
     <td style="color:{{ colors.up if r.outlook == '증가 예상' else colors.down if r.outlook == '감소 예상' else colors.muted }}">{{ r.outlook or '—' }}</td>
@@ -295,6 +322,9 @@
 {% else %}
 {{ m.pending('표시할 예측 결과가 없습니다.') }}
 {% endif %}
+</div>
+{% elif b.key == 'cformula' %}
+<p class="small" style="margin-top:3mm">성장률 = (분석 기간 − 비교 기간) ÷ 비교 기간 × 100 · 성장률 순위는 분석 기간, 감소율 순위는 비교 기간 수출액 {{ ((ch.get('min_usd') or 10000000) / 100000000) | num(1) }}억 달러 이상 국가만 · 모델 예측은 참고용이며 실제 결과와 다를 수 있습니다.</p>
 {% endif %}
 {% endfor %}
 {% endcall %}

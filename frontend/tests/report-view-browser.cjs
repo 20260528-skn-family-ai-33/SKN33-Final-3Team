@@ -58,7 +58,13 @@ const { chromium } = require('playwright')
     // 머리글의 항목 수: 주간(기사만 있는 NEWS 섹션)은 수출 분석 항목을 고르는 리포트가 아니라 개수를 쓰지 않는다.
     for (const [type, sections, expected] of [
       ['RPT_WEEKLY', [{ section_code: 'NEWS', articles: [] }], 'HS6 330499 · 국가: US'],
-      ['RPT_ON_DEMAND', ['KPI', 'TOP_COUNTRIES', 'GROWTH_RISK', 'LOCAL_ISSUES'].map(section_code => ({ section_code, kpi: {}, tables: [], articles: [] })),
+      ['RPT_ON_DEMAND', ['KPI', 'TOP_COUNTRIES', 'GROWTH_RISK', 'LOCAL_ISSUES'].map(section_code => ({ section_code, kpi: {}, tables: [], articles: [],
+        // 유망시장(#95): 실제 수출 증감(성장률·감소율 상위, 증감액 막대) 위, ML 박스 아래
+        ...(section_code === 'GROWTH_RISK' ? { text: 'ML 안내 문장', changes: { status: 'READY', min_usd: 10000000,
+          current: { start: '2025-01-01', end: '2025-12-31' }, previous: { start: '2024-01-01', end: '2024-12-31' },
+          growth: [{ country_code: 'PL', country: '폴란드', previous_usd: 102000000, amount_usd: 224000000, change_usd: 122000000, change_pct: 119.61 }],
+          decline: [{ country_code: 'CN', country: '중국', previous_usd: 1736000000, amount_usd: 1496000000, change_usd: -240000000, change_pct: -13.82 }],
+          bars: [{ country_code: 'PL', country: '폴란드', change_usd: 122000000 }, { country_code: 'CN', country: '중국', change_usd: -240000000 }] } } : {}) })),
         '전체 항목 선택 · HS6 330499 · 국가: US'],
       ['RPT_ON_DEMAND', [{ section_code: 'KPI', kpi: {}, tables: [] }], '1개 항목 선택 · HS6 330499 · 국가: US'],
     ]) {
@@ -92,6 +98,14 @@ const { chromium } = require('playwright')
       catch (error) { console.error({ errors, text: await page.locator('body').innerText() }); throw error }
       const line = (await title.locator('xpath=following-sibling::p[1]').innerText()).replace(/\s+/g, ' ').trim()
       assert.equal(line, expected, `${type} ${sections.length}: header line`)
+      if (sections.some(s => s.changes)) {
+        const body = (await page.locator('article').innerText()).replace(/\s+/g, ' ')
+        const order = ['성장률 상위 1개국', '감소율 상위 1개국', '국가별 증감액', 'ML 유망시장 분석', 'ML 안내 문장', '성장률 = '].map(t => body.indexOf(t))
+        assert.ok(order.every(i => i >= 0) && order.every((v, i) => !i || v > order[i - 1]), '유망시장 순서: ' + order.join(','))
+        for (const t of ['비교 기간 수출액', '분석 기간 수출액', '비교 기간 → 분석 기간', '1.02', '2.24', '+1.22', '▲ 119.61%', '▼ 13.82%', '−2.40']) assert.ok(body.includes(t), '유망시장 값 ' + t)
+        // 비교 기간 날짜(2024.01~2024.12)는 본문에도 싣지 않는다(#95)
+        assert.ok(!body.includes('2024.01') && !body.includes('2024-01'), '비교 기간 날짜가 남아 있다')
+      }
       assert.deepEqual(errors, [])
       console.log(`PASS header ${type} ${sections.length}: ${line}`)
       await page.close()

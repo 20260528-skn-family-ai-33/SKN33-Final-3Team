@@ -95,6 +95,57 @@ function ResultSections({ sections, onDownload }) {
 }
 
 const PROMISING_COLS = '110px 1fr 1.6fr 100px 150px'
+const CHANGE_COLS = '1.3fr 1fr 1fr 1fr 1.1fr'
+const UP = '#0B7A4B', DOWN = '#C0392B'   // PDF(report_templates.UP·DOWN)와 같은 색
+const signedEok = value => (value > 0 ? '+' : value < 0 ? '−' : '') + reportEok(Math.abs(Number(value)) / 1e8)
+
+/** 유망시장 위쪽의 실제 수출 증감(PDF와 같은 기준): 성장률 상위·감소율 상위 표와 국가별 증감액 막대. 비교 기간이 없으면 안내만 한다. */
+function CountryChanges({ changes }) {
+  if (!changes) return null   // 이 기능 전에 만든 리포트(저장 문서에 changes 없음)는 예전처럼 ML 박스만 보인다
+  if (changes.status !== 'READY') {
+    const text = changes?.status === 'NO_COMPARE' ? '비교 기간을 선택하면 국가별 증감을 표시합니다.' : '비교 기간 통계가 아직 준비되지 않았습니다.'
+    return <><p style={{ fontSize: 15, fontWeight: 800 }}>실제 수출 증감</p><p className="muted" style={{ marginTop: 6 }}>{text}</p></>
+  }
+  // 비교 기간 날짜는 표시하지 않는다(#95). 열·제목은 '비교 기간'·'분석 기간'으로 구분한다
+  const peak = Math.max(1, ...changes.bars.map(r => Math.abs(r.change_usd)))
+  const table = (title, items) => (
+    <div style={{ minWidth: 0 }}>
+      <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>{title} {items.length}개국 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>비교 기간 → 분석 기간</span></p>
+      {items.length ? <>
+        <div className="th" style={{ gridTemplateColumns: CHANGE_COLS }}><span>국가</span><span className="r">비교 기간 수출액</span><span className="r">분석 기간 수출액</span><span className="r">증감액</span><span className="r">증감률</span></div>
+        {items.map(r => (
+          <div key={r.country_code} className="tr" style={{ gridTemplateColumns: CHANGE_COLS }}>
+            <span className="b">{r.country}</span><span className="r">{amount(r.previous_usd)}</span><span className="r">{amount(r.amount_usd)}</span>
+            <span className="r">{signedEok(r.change_usd)}</span>
+            <span className="r b" style={{ color: r.change_pct > 0 ? UP : DOWN }}>{r.change_pct > 0 ? '▲' : '▼'} {Math.abs(r.change_pct).toFixed(2)}%</span>
+          </div>
+        ))}
+      </> : <p className="muted">해당하는 국가가 없습니다.</p>}
+    </div>
+  )
+  return <>
+    <div className="resp-stack" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+      {table('성장률 상위', changes.growth)}{table('감소율 상위', changes.decline)}
+    </div>
+    {changes.bars.length > 0 && <div style={{ marginTop: 34 }}>
+      <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>국가별 증감액 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>비교 기간 → 분석 기간 · 억 달러</span></p>
+      {changes.bars.map(r => {
+        const width = `${Math.max(Math.abs(r.change_usd) / peak * 45, 0.5)}%`, up = r.change_usd > 0
+        return (
+          <div key={r.country_code} aria-label={`${r.country} ${signedEok(r.change_usd)}`} style={{ display: 'flex', alignItems: 'center', height: 26, fontSize: 13 }}>
+            <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
+              {up ? <span>{r.country}</span> : <><b>{signedEok(r.change_usd)}</b><span style={{ width, height: 12, borderRadius: 2, background: DOWN }} /></>}
+            </div>
+            <div style={{ width: 1, alignSelf: 'stretch', background: '#2B2E33' }} />
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {up ? <><span style={{ width, height: 12, borderRadius: 2, background: UP }} /><b>{signedEok(r.change_usd)}</b></> : <span>{r.country}</span>}
+            </div>
+          </div>
+        )
+      })}
+    </div>}
+  </>
+}
 const OUTLOOK_COLOR = { '증가 예상': '#C8102E', '감소 예상': '#1F5FD1' }
 export default function ReportView({ route }) {
   const { downloadReport, refreshReports } = useApp()
@@ -148,7 +199,7 @@ export default function ReportView({ route }) {
   const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '유망시장(증가·감소 예상)': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
   const o = {
     country: [...(c.include_korea_total?['한국(대한민국) 전체']:[]),...(c.country_codes || []).map(countryName)].join(' · '), product: (c.hs_items || []).map(h => h.hs_code).join(', '),
-    from: c.period?.start, to: c.period?.end, compareFrom: c.compare_period?.start, compareTo: c.compare_period?.end,
+    from: c.period?.start, to: c.period?.end,
     sections: Object.keys(sectionCodes).filter(label => byCode[sectionCodes[label]]),
   }
   const f = {
@@ -187,7 +238,7 @@ export default function ReportView({ route }) {
               <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{/* 주간은 기사만 싣는 리포트라 수출 분석 항목 수를 쓰지 않는다 */}
                 {frozen ? '승인한 분석 결과로 작성 · ' : !newsOnly && (o.sections.length === 4 ? '전체 항목 선택 · ' : `${o.sections.length}개 항목 선택 · `)}{o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
               <div style={{ display: 'flex', gap: 24, marginTop: 18, fontSize: 14, color: '#fff' }}>
-                <span>분석 {range(o.from, o.to)}</span><span>비교 {range(o.compareFrom, o.compareTo)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
+                <span>분석 {range(o.from, o.to)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
               </div>
               <div style={{ position: 'absolute', right: 48, top: 36, width: 110, height: 6, background: '#C8102E' }} />
             </div>
@@ -266,6 +317,9 @@ export default function ReportView({ route }) {
 
               {has('유망시장(증가·감소 예상)') && (
                 <Section no={no++} title="유망시장(증가·감소 예상)">
+                  <CountryChanges changes={byCode.GROWTH_RISK?.changes} />
+                  <div style={{ marginTop: 64, padding: '18px 20px', borderRadius: 14, background: '#F5F3EE' }}>
+                  <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>ML 유망시장 분석 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>{promising.anchor ? `${promising.anchor} 기준 · ` : ''}모델 예측 순위 · 증가·감소 예상</span></p>
                   <p className="note" style={{ marginBottom: 10 }}>{byCode.GROWTH_RISK?.text}</p>
                   {promising.rows.length > 0 && <>
                     <div className="th" style={{ gridTemplateColumns: PROMISING_COLS }}><span>{promising.rankLabel}</span><span>국가</span><span>품목</span><span>증감 예상</span><span className="r">최근 12개월 수출액</span></div>
@@ -280,6 +334,8 @@ export default function ReportView({ route }) {
                     ))}
                     <p className="note" style={{ marginTop: 10 }}>{promising.anchor ? `${promising.anchor} 기준 · ` : ''}순위 옆 숫자는 전체 예측 대상 수입니다. 예측은 참고용이며 실제 결과와 다를 수 있습니다.</p>
                   </>}
+                  </div>
+                  {byCode.GROWTH_RISK?.changes?.status === 'READY' && <p className="note" style={{ marginTop: 10 }}>성장률 = (분석 기간 − 비교 기간) ÷ 비교 기간 × 100 · 성장률 순위는 분석 기간, 감소율 순위는 비교 기간 수출액 {(Number(byCode.GROWTH_RISK.changes.min_usd || 1e7) / 1e8).toFixed(1)}억 달러 이상 국가만</p>}
                 </Section>
               )}
 

@@ -174,7 +174,13 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
   const shown = variant === 'chips' && !query.trim()
     ? [...choices.filter(c => value.includes(c.name)), ...choices.filter(c => !value.includes(c.name)).slice(0, 3)]
     : (query.trim() ? list : choices.slice(0, Math.max(9, value.length)))
-  const addContinent = region => onChange([...new Set([...value, ...countries.filter(c => region.country_codes.includes(c.country_code)).map(c => c.name)])])
+  // 대륙 칩은 토글이다: 그 대륙 국가가 모두 선택돼 있으면 그 대륙 국가만 해제하고(다른 대륙·개별 선택은 유지), 아니면 모두 추가한다.
+  const continentNames = region => countries.filter(c => region.country_codes.includes(c.country_code)).map(c => c.name)
+  const continentOn = region => { const names = continentNames(region); return names.length > 0 && names.every(name => value.includes(name)) }
+  const toggleContinent = region => {
+    const names = continentNames(region)
+    onChange(continentOn(region) ? value.filter(name => !names.includes(name)) : [...new Set([...value, ...names])])
+  }
   return (
     <>
       <div className={'input' + (query ? ' val' : '')} style={{ marginTop: variant === 'grid' ? 20 : 12 }}>
@@ -182,10 +188,14 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
         <Icon name="search" size={18} color="#9AA0AA" />
       </div>
       <div className="chips" style={{ marginTop: variant === 'grid' ? 14 : 12 }}>
-        {continents.map(c => <button type="button" key={c.region_id} className="chip sm dash" onClick={() => addContinent(c)}>+ {c.name_ko}</button>)}
+        {continents.map(c => {
+          const on = continentOn(c)
+          return <button type="button" key={c.region_id} className={'chip sm' + (on ? ' on' : ' dash')} aria-pressed={on}
+            title={on ? `${c.name_ko} 국가 전체 해제` : `${c.name_ko} 국가 전체 추가`} onClick={() => toggleContinent(c)}>{on ? '✓' : '+'} {c.name_ko}</button>
+        })}
       </div>
       <p className="note" style={{ marginTop: 8 }}>
-        {regions.error ? '대륙 정보가 준비되지 않아 국가별 선택을 제공합니다.' : variant === 'grid' ? '대륙 추가 시 해당 대륙의 모든 국가가 자동 추가됩니다.' : '대륙 추가 → 해당 대륙의 모든 국가 자동 추가 · 중복 제외'}
+        {regions.error ? '대륙 정보가 준비되지 않아 국가별 선택을 제공합니다.' : variant === 'grid' ? '대륙을 누르면 해당 대륙의 모든 국가가 추가되고, 한 번 더 누르면 그 대륙 국가만 해제됩니다.' : '대륙 추가 → 해당 대륙의 모든 국가 자동 추가 · 중복 제외 · 다시 누르면 해제'}
       </p>
       {!showSelected && !!value.length && <Btn onClick={() => onChange([])}>선택 국가 전체 삭제</Btn>}
       {variant === 'grid' ? (

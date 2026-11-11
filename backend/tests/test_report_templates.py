@@ -293,6 +293,112 @@ class OnDemandTest(unittest.TestCase):
         html = self.render(update=lambda ctx: ctx.pop('promising'))
         self.assertEqual(self.toc(html)[3], ('현지 이슈', '6'))
 
+    def test_promising_section_shows_actual_changes_above_ml_box(self):
+        """#95 유망시장 쪽은 양식(급성장·리스크 시장)대로 실제 수출 증감(성장률·감소율 상위 표, 국가별 증감액 막대)을 먼저 싣고,
+        아래 박스에 ML 예측을 싣는다. 비교 기간이 없거나 통계가 준비되지 않으면 이유만 안내하고 ML 박스는 그대로 둔다."""
+        html = self.render()
+        page = html[html.index('유망시장(증가·감소 예상)</h2>'):html.index('현지 이슈</h2>')]
+        order = [page.index(t) for t in ('성장률 상위 5개국', '감소율 상위 4개국', '국가별 증감액', 'ML 유망시장 분석', '기초화장품', '성장률 = ')]
+        self.assertEqual(order, sorted(order))
+        self.assertIn('<td class="b">에스토니아</td><td class="r">0.15</td><td class="r">0.33</td>', page)
+        self.assertIn('+3.54', page)                                    # 증감액 막대(억 달러)
+        self.assertEqual(page.count('class="mlbox'), 3)                 # 박스: 소제목·문장·예측 표
+        self.assertEqual([t for t in self.toc(html)][3], ('유망시장(증가·감소 예상)', '6'))   # 한 쪽에 들어간다
+        for status, text in (('NO_COMPARE', '비교 기간을 선택하면 국가별 증감을 표시합니다.'),
+                             ('NOT_READY', '비교 기간 통계가 아직 준비되지 않았습니다.')):
+            with self.subTest(status):
+                html = self.render(update=lambda ctx: ctx.update(changes={'status': status}))
+                self.assertIn(text, html)
+                self.assertNotIn('국가별 증감액', html)
+                self.assertIn('ML 유망시장 분석', html)
+        # 예전 문맥(changes 없음)도 오류 없이 안내만 한다
+        self.assertIn('비교 기간 통계가 아직 준비되지 않았습니다.', self.render(update=lambda ctx: ctx.pop('changes')))
+
+    def test_body_has_no_comparison_dates(self):
+        """#95 비교 기간 날짜는 머리 정보뿐 아니라 본문(주요 지표 소제목·유망시장)에도 싣지 않는다. 분석 기간은 남긴다."""
+        context = rt.sample_context('ondemand')
+        html = rt.render('RPT_ON_DEMAND', context)
+        self.assertNotIn(context['conditions']['compare']['period_label'], html)   # 2024.01 ~ 2024.12
+        self.assertIn('분석 ' + context['conditions']['period']['label'], html)
+        page = html[html.index('유망시장(증가·감소 예상)</h2>'):html.index('현지 이슈</h2>')]
+        self.assertIn('비교 기간 → 분석 기간', page)
+        self.assertIn('<th class="r">비교 기간</th><th class="r">분석 기간</th>', page)
+        # 연간이 아닌 기간(1~3월)은 축약 날짜(24.01~24.03)가 표 머리글·범례·소제목에 쓰였다. 날짜 대신 기간 이름을 쓰고 비교 수치는 유지한다.
+        quarter = rt.sample_context('ondemand')
+        quarter['conditions']['period'].update(short='25.01~25.03', label='2025.01 ~ 2025.03')
+        quarter['conditions']['compare'].update(short='24.01~24.03', period_label='2024.01 ~ 2024.03')
+        html = rt.render('RPT_ON_DEMAND', quarter)
+        for text in ('24.01~24.03', '2024.01 ~ 2024.03'):
+            self.assertNotIn(text, html)
+        self.assertIn('<th class="r">분석 기간 수출액</th>', html)          # 주요 수출국 표
+        self.assertIn('<th class="r">비교 기간 수출액</th>', html)
+        self.assertIn('국가별 수출액<small>분석 기간 vs 비교 기간', html)   # 주요 수출국 막대 소제목
+        self.assertIn('<th>월</th><th class="r">분석 기간</th><th class="r">비교 기간</th>', html)   # 월별 추이 표
+        self.assertIn('74.10', html)                                         # 비교 수치(전년 합계)는 그대로
+
+    def test_long_country_names_keep_promising_page_above_footer(self):
+        """#95 국가명이 좁은 증감 표에서 여러 줄로 바뀌어도 쪽 나눔이 이를 반영해, 실제 렌더링에서 내용이 꼬리말과 겹치지 않는다."""
+        try:
+            from playwright.sync_api import sync_playwright, Error as PlaywrightError
+        except ImportError:
+            self.skipTest('Playwright 없음')
+        context = rt.sample_context('ondemand')
+        long = ['남조지아 & 남샌드위치 군도', '미국령 군소 제도(마이너 아우틀링 합중국 군도)', '세인트빈센트 그레나딘', '보스니아 헤르체고비나', '콩고 민주 공화국']
+        for items in (context['changes']['growth'], context['changes']['decline']):
+            for item, name in zip(items, long):
+                item['country'] = name
+        context['promising']['rows'] = context['promising']['rows'][:1]   # 리뷰 재현 조건: ML 예측 1행(남는 공간만큼 박스 위 여백이 커짐)
+        html = rt.render('RPT_ON_DEMAND', context)
+        try:
+            with sync_playwright() as runtime:
+                browser = runtime.chromium.launch()
+                page = browser.new_page()
+                page.set_content(html)
+                measured = page.evaluate("""() => {
+                  const pages = [...document.querySelectorAll('section.page')]
+                    .filter(p => p.innerText.includes('유망시장(증가·감소 예상)') && !p.querySelector('.toc'))
+                  const grid = pages[0].querySelector('.grid2')
+                  const h3 = grid.querySelector('h3'), style = getComputedStyle(h3)
+                  return {
+                    // 증감 표 블록 높이(mm): 소제목 위 여백부터 두 표 중 더 긴 쪽 끝까지
+                    tables: (grid.getBoundingClientRect().bottom - h3.getBoundingClientRect().top + parseFloat(style.marginTop)) * 25.4 / 96,
+                    overflow: pages.map(p => { const footer = p.querySelector('.ftr').getBoundingClientRect().top;
+                      const bottom = Math.max(...[...p.children].filter(e => !e.matches('.hdr,.ftr')).map(e => e.getBoundingClientRect().bottom));
+                      return bottom - footer }) } }""")
+                browser.close()
+        except PlaywrightError as exc:
+            self.skipTest(f'브라우저 없음: {exc}')
+        # 글꼴(OS)마다 줄바꿈이 달라 겹침 여부는 환경에 따라 다르다. 그래서 쪽 나눔 추정 높이가 실제 표 높이 이상인지 확인한다.
+        self.assertGreaterEqual(rt.change_tables_height(context['changes']), measured['tables'])
+        self.assertGreater(rt.change_tables_height(context['changes']),
+                           rt.change_tables_height(rt.sample_context('ondemand')['changes']))   # 긴 이름은 더 높게 잡는다
+        self.assertTrue(all(gap <= 0 for gap in measured['overflow']), measured['overflow'])   # 내용 끝이 꼬리말 위
+
+    def test_country_changes_ranks_by_rate_with_minimum_size(self):
+        """성장률 상위는 분석 기간, 감소율 상위는 비교 기간 수출액 1천만 달러 이상만. 막대는 증가 6·감소 4, 합계 행은 뺀다."""
+        from types import SimpleNamespace
+        from sqlalchemy import column, table
+        from backend.app.api.reports import country_changes
+        names = {c: c for c in 'ABCDEFGHIJKLM'}
+        store = SimpleNamespace(t=lambda name: table(name, column('country_code'), column('name_ko')),
+                                rows=lambda stmt: [{'country_code': k, 'name_ko': f'국가{v}'} for k, v in names.items()])
+        M = 10_000_000
+        current = {'A': 3 * M, 'B': 2 * M, 'C': 5 * M, 'D': 0.5 * M, 'E': 1 * M, 'F': 4 * M, 'TOTAL': 99 * M, 'G': 2 * M, 'H': 1 * M}
+        previous = {'A': 1 * M, 'B': 1 * M, 'C': 4 * M, 'D': 0.1 * M, 'E': 2 * M, 'F': 8 * M, 'TOTAL': 90 * M, 'G': 0, 'H': 0.5 * M}
+        rows = [{'country_code': k, 'amount_usd': v} for k, v in current.items()]
+        prev_rows = [{'country_code': k, 'amount_usd': v} for k, v in previous.items()]
+        period = {'start': '2025-01-01', 'end': '2025-12-31'}; compare = {'start': '2024-01-01', 'end': '2024-12-31'}
+        result = country_changes(store, rows, prev_rows, period, compare)
+        self.assertEqual(result['status'], 'READY')
+        # D(+400%)는 분석 기간 0.5천만이라 제외, G는 비교 기간 0이라 증감률 없음(순위 제외), H(+100%) 1천만 → 포함
+        self.assertEqual([i['country_code'] for i in result['growth']], ['A', 'B', 'H', 'C'])
+        self.assertEqual([i['country_code'] for i in result['decline']], ['F', 'E'])
+        self.assertNotIn('TOTAL', [i['country_code'] for i in result['bars']])
+        self.assertEqual([i['country_code'] for i in result['bars']], ['A', 'G', 'B', 'C', 'H', 'D', 'E', 'F'])
+        self.assertEqual(result['growth'][0]['country'], '국가A')
+        self.assertEqual(country_changes(store, rows, prev_rows, period, None), {'status': 'NO_COMPARE'})
+        self.assertEqual(country_changes(store, rows, None, period, compare), {'status': 'NOT_READY'})
+
     def test_title_follows_selected_items(self):
         item = rt.sample_context('ondemand')['conditions']['hs_items'][0]
         many = [item, dict(item, hs_code='330410', label='립', display='립 · HS 330410'),
@@ -314,15 +420,16 @@ class OnDemandTest(unittest.TestCase):
 
     def test_compare_modes(self):
         none = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='NONE'))
-        self.assertNotIn('2024 수출액', none)
+        self.assertNotIn('<th class="r">비교 기간 수출액</th>', none)
         self.assertNotIn('변동</th>', none)
-        self.assertIn('비교 기간</th><td>없음', none)
+        self.assertNotIn('<th>비교 기간</th><td>', none)   # 보고서 정보 표에 비교 기간 행을 싣지 않는다(#95)
         custom = self.render(compare=dict(rt.sample_context('ondemand')['conditions']['compare'], mode='CUSTOM',
                                           monthly_paired=False))
         self.assertIn('비교는 기간 합계만', custom)
         self.assertIn('월별로 짝짓지 않고', custom)
         self.assertNotIn('<th class="r">증감액</th>', custom)   # 월별 비교 열 없음
-        self.assertIn('2024 수출액', custom)                      # 기간 합계 비교는 표시
+        self.assertIn('<th class="r">비교 기간 수출액</th>', custom)   # 기간 합계 비교는 표시(날짜 대신 '비교 기간', #95)
+        self.assertNotIn('<th>비교 기간</th><td>', custom)        # 비교가 있어도 보고서 정보 표에 비교 기간 날짜 행은 없음(#95)
 
     def test_missing_compare_data_differs_from_none(self):
         def clear(context):

@@ -12,7 +12,7 @@ import Interests from './Interests'
 import Inbox from './Inbox'
 
 const MENU = [
-  ['profile', '회원정보'],
+  ['profile', '회원정보'],   // 마이페이지 기본 화면(/account)과 같은 첫 메뉴
   ['reports', '리포트 센터'],
   ['settings', '알림설정'],
   ['interests', '관심정보'],

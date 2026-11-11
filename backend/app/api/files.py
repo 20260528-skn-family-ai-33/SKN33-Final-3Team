@@ -16,7 +16,7 @@ def report_time(value):
     return datetime.fromisoformat(value.replace('Z','+00:00')).astimezone(ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d %H:%M KST')
 
 
-def user_xlsx_info(meta,conditions=None):
+def user_xlsx_info(meta,conditions=None,compare_period=True):
     """일반 화면/정기 리포트용 정보 시트. SQL·내부 상태 대신 조회 조건과 출처를 싣는다."""
     conditions=conditions or {}
     rows=[]
@@ -40,7 +40,8 @@ def user_xlsx_info(meta,conditions=None):
             rows.append(('비교 방식',{'NONE':'비교 없음','MOM':'전월 대비','YOY':'전년 동월 대비',
                 'YOY_PERIOD':'전년 동기 대비','CUSTOM':'지정 기간 비교'}.get(comparison,comparison)))
         previous=conditions.get('compare_period') or {}
-        if comparison!='NONE' and previous.get('start') and previous.get('end'):
+        # 리포트 파일은 머리 정보에 비교 기간 날짜를 싣지 않는다(#95, 비교 방식·비교 수치는 유지). 일반 화면 엑셀은 그대로.
+        if compare_period and comparison!='NONE' and previous.get('start') and previous.get('end'):
             rows.append(('비교 기간',f"{previous['start']} ~ {previous['end']}"))
     rows.append(('금액 단위','USD'))
     sources=[source.get('label') or source.get('code') if isinstance(source,dict) else str(source)
@@ -59,7 +60,7 @@ def user_xlsx_info(meta,conditions=None):
 
 def result_xlsx(payload):
     meta=payload['meta']
-    info=user_xlsx_info(meta,payload.get('conditions')) if meta.get('export_profile') in ('TRADE_SCREEN','PERIODIC_REPORT') else None
+    info=user_xlsx_info(meta,payload.get('conditions'),compare_period=meta.get('export_profile')!='PERIODIC_REPORT') if meta.get('export_profile') in ('TRADE_SCREEN','PERIODIC_REPORT') else None
     return xlsx_bytes([payload],meta,payload['sql'],unit_headers=True,info_rows=info)
 
 
