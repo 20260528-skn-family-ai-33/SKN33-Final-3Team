@@ -34,8 +34,7 @@ jobs:
           sudo apt-get install -y fonts-nanum libgomp1
           python -m pip install -r backend/requirements.txt -r backend/requirements-api-test.txt
           python -m playwright install --with-deps chromium
-          mkdir -p 'C:/Windows/Fonts'
-          ln -s "$API_REPORT_FONT" 'C:/Windows/Fonts/malgun.ttf'
+          test -r "$API_REPORT_FONT"
       - name: Run full suite and compare known failures
         env:
           PYTHONPATH: ${{ github.workspace }}/backend/app/scheduler/collectors/trade_news

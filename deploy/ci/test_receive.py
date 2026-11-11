@@ -2,7 +2,9 @@
 import hashlib
 import io
 import json
+import os
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -14,6 +16,7 @@ import receive
 
 class ReceiverTest(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.dict(os.environ, TRADE_API_PYTHON=sys.executable, TRADE_ML_PYTHON=sys.executable))
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         for key in ("APP", "STATIC", "STATE", "BACKUPS"):
             path = root / key
@@ -69,6 +72,79 @@ class ReceiverTest(unittest.TestCase):
         self.assertEqual(receive.read(receive.MARKER)["commit"], self.old["commit"])
         self.assertFalse(receive.JOURNAL.exists())
 
+    def test_failed_rollback_stops_timer_restarts_and_reports_original_error(self):
+        archive = self.release_archive()
+        req = dict(request="100-1", commit=self.new["commit"], sha256=receive.checksum(archive), expires=2**40)
+        s3 = Mock()
+        s3.download_file.side_effect = lambda bucket, key, path: Path(path).write_bytes(archive.read_bytes())
+        s3.list_objects_v2.return_value = {"Contents": [{"Key": "delivery/request.json"}]}
+        s3.get_object.side_effect = lambda **_: {"Body": io.BytesIO(json.dumps(req).encode())}
+        # Simulate losing the first failure receipt, then a newer pointer arriving.
+        s3.put_object.side_effect = [OSError("S3 unavailable"), None, None]
+        with patch.object(receive.boto3, "client", return_value=s3), \
+                patch.object(receive, "ready", side_effect=[RuntimeError("activation"), TimeoutError("rollback"), None]):
+            with self.assertRaisesRegex(OSError, "S3 unavailable"):
+                receive.receive(True)
+            calls = self.service.call_count
+            self.assertGreater(calls, 0)
+            req["request"] = "101-1"
+            receive.receive(True)
+            receive.receive(True)
+            with self.assertRaises(receive.RollbackPaused):
+                receive.receive(False)
+            self.assertEqual(self.service.call_count, calls)
+            s3.download_file.assert_called_once()
+            replies = [json.loads(c.kwargs["Body"]) for c in s3.put_object.call_args_list]
+            self.assertEqual([r["request"] for r in replies], ["100-1", "100-1", "101-1"])
+            for r in replies:
+                self.assertEqual((r["stage"], r["deploy_stage"], r["deploy_error"], r["rollback_error"], r["blocked_by"]),
+                                 ("rollback", "service readiness", "RuntimeError", "TimeoutError", "100-1"))
+            receive.recover(retry=True)
+            self.assertFalse(receive.JOURNAL.exists())
+
+    def test_interrupted_rollback_waits_for_operator(self):
+        receive.save(receive.JOURNAL, {"rollback_state": "in_progress"})
+        with patch.object(receive, "rollback") as restore, self.assertRaises(receive.RollbackPaused):
+            receive.recover()
+        restore.assert_not_called()
+
+    def test_missing_runtime_reports_config_before_touching_services(self):
+        status = [""]
+        with patch.dict(os.environ, TRADE_API_PYTHON="/missing/python"), self.assertRaisesRegex(RuntimeError, "TRADE_API_PYTHON"):
+            receive.deploy(self.stage, self.new, True, status, float("inf"))
+        self.assertIn("TRADE_API_PYTHON", status[0])
+        self.service.assert_not_called()
+
+    def test_static_assets_keep_one_build_and_rollback_pruning(self):
+        assets = receive.STATIC / "assets"
+        assets.mkdir()
+        (assets / "unmanaged.js").write_bytes(b"manual")
+        (self.stage / "web/assets").mkdir()
+        original_stage = self.stage
+        for i, name in enumerate(("one.js", "two.js", "three.js", "four.js")):
+            if i:
+                self.stage = original_stage.parent / name
+                (self.stage / "source").mkdir(parents=True)
+                (self.stage / "web/assets").mkdir(parents=True)
+                (self.stage / "web/index.html").write_text(name)
+            (self.stage / "web/assets" / name).write_text(name)
+            self.new["commit"] = str(i)*40
+            if i == 0:
+                (self.stage / "web/assets/edited.js").write_bytes(b"from build")
+            with patch.object(receive, "ready", side_effect=[RuntimeError("not ready"), None] if i == 2 else [None]):
+                if i == 2:
+                    with self.assertRaisesRegex(RuntimeError, "not ready"):
+                        self.deploy()
+                    self.assertFalse((assets / name).exists())
+                else:
+                    self.assertTrue(self.deploy())
+            if i == 0:
+                (assets / "edited.js").write_bytes(b"locally edited")
+            self.assertEqual((assets / "one.js").exists(), i < 3)
+        self.assertTrue((assets / "two.js").exists())
+        self.assertEqual((assets / "unmanaged.js").read_bytes(), b"manual")
+        self.assertEqual((assets / "edited.js").read_bytes(), b"locally edited")
+
     def test_ml_activation_updates_source_only(self):
         self.assertTrue(self.deploy(web=False))
         self.assertEqual((receive.APP / self.name).read_bytes(), b"new")
@@ -76,7 +152,7 @@ class ReceiverTest(unittest.TestCase):
         self.service.assert_not_called()
         self.assertEqual(receive.read(receive.BASE), self.new)
 
-    def test_ml_boot_consumes_only_the_web_approved_request(self):
+    def release_archive(self):
         archive = self.stage / "release.tgz"
         with tarfile.open(archive, "w:gz") as bundle:
             for folder, name in (("source", self.name), ("web", "index.html")):
@@ -84,6 +160,10 @@ class ReceiverTest(unittest.TestCase):
             manifest = self.stage / "manifest.json"
             receive.save(manifest, self.new)
             bundle.add(manifest, arcname="manifest.json")
+        return archive
+
+    def test_ml_boot_consumes_only_the_web_approved_request(self):
+        archive = self.release_archive()
         request = {"request": "100-1", "commit": self.new["commit"],
                    "sha256": receive.checksum(archive), "expires": 2000}
         objects = {"delivery/request.json": json.dumps(request).encode()}

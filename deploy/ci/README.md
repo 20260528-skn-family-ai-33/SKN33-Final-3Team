@@ -13,6 +13,19 @@
 
 [`known-failures.json`](known-failures.json)에 등록된 테스트도 매번 실행한다. 전체 테스트 ID, 예외 유형, 오류 메시지의 첫 줄, 실패한 검증문이 **모두** 기록과 일치할 때만 실패를 임시로 허용한다. 목록에 있는 테스트가 통과해도 CI는 정상 진행한다. 원인을 수정하면 해당 항목을 삭제한다. 목록이 빈 객체(`{}`)가 되면 테스트 실패가 한 건만 발생해도 배포를 차단한다.
 
+후속 작업(#99): HS 검색 4건(후보 없음·신뢰도·임베딩 재시도·HS4/HS6 노출)과 모델 A 순위 점수의 부동소수점 오차 1건을 각각 재현하고, 수정 PR에서 해당 예외를 함께 삭제한다. 파일에 없는 실패나 실패 내용의 변화는 계속 CI를 막는다.
+
+수신기 테스트(`test_receive.py`)는 Linux의 `fcntl` 잠금을 사용한다. Ubuntu CI·WSL에서 `python -m unittest discover -s deploy/ci -p 'test_*.py'`로 실행한다. 임시 디렉터리와 모의 S3·systemd만 사용하므로 운영 EC2는 필요 없다. CI의 PDF 테스트에는 `API_REPORT_FONT`로 설치된 한글 글꼴을 전달한다.
+
+## 수신기 설치 및 Python 환경 변경
+
+웹에서는 `trade-release.service`, ML에서는 학습 유닛의 드롭인 `20-release.conf`가 각 호스트의 `/etc/trade/release-runtime.env`를 읽는다. 설치 전 root 소유·일반 사용자 쓰기 금지로 파일을 만들고 **해당 서버의 실제 실행 파일 절대 경로**를 지정한다.
+
+- 웹: `TRADE_API_PYTHON=/실제/API/가상환경/bin/python` (운영 API 유닛과 같은 인터프리터)
+- ML: `TRADE_ML_PYTHON=/실제/ML/가상환경/bin/python` (운영 재학습과 같은 인터프리터)
+
+수신기와 유닛을 함께 설치하고 유닛 변경 후 `sudo systemctl daemon-reload`를 실행한다. 런타임을 교체할 때는 이 환경 파일도 갱신하고 `sudo -u trade /실제/경로/bin/python --version`으로 실행 권한을 확인한다. 경로만 바꿀 때는 수신기를 재설치할 필요가 없다. 경로 누락·오류는 서비스 전환 전에 `runtime configuration` 단계에서 보고된다. 수신기 자체와 수집기에는 기존 공용 경로 `/opt/trade/venv/bin/python`을 사용한다.
+
 ## 웹 EC2에 적용되는 순서
 
 1. GitHub Actions가 OIDC로 AWS 임시 자격 증명을 받아 비공개 S3 버킷의 `delivery/` 경로에 배포 압축 파일과 유효 시간 20분인 요청을 올린다.
@@ -20,6 +33,8 @@
 3. 진행 중인 채팅·리포트·수집 작업이 끝나면 변경할 파일을 백업하고 새 버전을 적용한 뒤 API·워커·스케줄러를 재시작한다. 하루가 지난 배치도 DB에 `RUNNING`으로 남아 있으면 배포를 보류한다. 요청이 만료되면 배치 상태를 확인한 뒤 다시 배포한다. Redis 데이터, 운영 데이터 디렉터리, 비밀값은 배포 패키지에서 제외한다.
 4. EC2의 준비 상태 확인 엔드포인트로 DB 스키마와 Redis 연결을 확인하고, API·워커·스케줄러·Nginx가 **각각** 실행 중인지 검사한다. 이 단계에서 실패하면 이전 소스와 프론트엔드를 복원한다.
 5. 웹 EC2가 성공을 보고하면 Actions가 공개 HTTPS 홈페이지를 내려받아 이번에 빌드한 `index.html`과 비교한다. 이 외부 점검은 서버 전환 후에 실행되며, 실패하면 Actions에 별도로 표시된다.
+
+웹 빌드의 `assets/` 파일은 현재 빌드와 직전 빌드까지 보존한다. 다음 전환에서 두 빌드 모두 참조하지 않고 기록한 체크섬과 일치하는 파일만 백업 후 삭제한다. 전환 실패 시 삭제한 파일과 자산 목록도 복원한다. 첫 설치 전부터 서버에 있던 미기록 파일, 운영자가 수정한 옛 파일, `assets/` 밖의 파일은 자동 청소 대상이 아니다.
 
 ## ML EC2에 적용되는 시점
 
@@ -29,4 +44,5 @@
 
 - **배포 실패 또는 시간 초과** — Actions에서 해당 커밋과 실패 단계를 확인한다. 시간 초과는 정해진 시간 안에 EC2의 결과를 받지 못했다는 뜻이다. 웹 EC2에서 `journalctl -u trade-release.service`로 수신기 로그를 보고, 배포 기록(`/opt/trade/deployed-main.json`)과 EC2가 보낸 결과를 대조한다.
 - **수신기 업데이트** — 관리자 권한으로 실행되는 수신기와 systemd 유닛은 애플리케이션과 별도로 설치한다. `deploy/ci` 변경 사항을 검토한 뒤 해당 서버에 검토한 버전을 설치한다.
+- **롤백까지 실패하거나 롤백 도중 수신기가 중단된 경우** — `transaction.json`이 남고 자동 복구는 멈춘다. 웹 Actions의 `rollback` 결과에는 원래 실패 단계와 오류 유형도 표시된다. ML은 복구 전 학습을 시작하지 않는다. 웹에서는 `sudo systemctl stop trade-release.timer`로 타이머를 일시 중지한다. 수신기 로그·트랜잭션의 백업 경로·서비스 상태를 확인하고 원인을 해결한 뒤 해당 서버에서 `sudo /opt/trade/venv/bin/python -I /opt/trade/delivery/receive.py retry-rollback`으로 복원을 한 번 실행한다. 실패하면 계속 보류되며, 성공하면 트랜잭션 파일이 자동으로 사라진다. 파일을 직접 삭제하지 않는다. 복원한 커밋과 웹 서비스 상태를 확인한 뒤 웹 타이머를 다시 시작하고 실패했던 웹 배포는 Actions에서 새 실행으로 요청한다.
 - **백업과 코드 복구** — 현재 소스 목록(`/opt/trade/delivery/baseline.json`), 같은 커밋의 배포 기록(`/opt/trade/deployed-main.json`), 복원용 파일을 함께 백업한다. Git에서 이전 코드로 되돌릴 때는 `git revert`로 되돌림 커밋을 만들고 `main`에 반영해 같은 검증과 배포 절차를 거친다.

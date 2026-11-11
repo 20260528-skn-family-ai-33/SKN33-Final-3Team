@@ -36,6 +36,9 @@ def main():
                 if result["request"] != request or result["commit"] != sha:
                     raise SystemExit("Incorrect release receipt")
                 message = f"Web EC2: {result['status']} ({result['stage']}) for {sha}"
+                if result['stage'] == 'rollback':
+                    message += (f"; original: {result['deploy_stage']} ({result['deploy_error']}), "
+                                f"rollback: {result['rollback_error']}; operator recovery required")
                 with open(env["GITHUB_STEP_SUMMARY"], "a") as stream:
                     print(message, file=stream)
                     for warning in result.get("warnings", []):

@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import traceback
 import urllib.request
 from pathlib import Path
 
@@ -22,9 +23,7 @@ BACKUPS = Path("/opt/trade/rollback")
 MARKER = Path("/opt/trade/deployed-main.json")
 BASE = STATE / "baseline.json"
 JOURNAL = STATE / "transaction.json"
-API = "/opt/trade/releases/c1af084/venv-api/bin/python"
 COLLECTOR = "/opt/trade/venv/bin/python"
-ML = "/opt/trade/venv-ml-c1af084/bin/python"
 UNITS = ("trade-api", "trade-worker", "trade-scheduler")
 BUCKET = "skn33-team3-trade-876143322800-ap-northeast-2"
 
@@ -108,6 +107,26 @@ def ready():
         time.sleep(2)
     raise RuntimeError("readiness failed")
 
+class RollbackPaused(RuntimeError):
+    pass
+
+
+def recover(*, retry=False):
+    """Attempt recovery once, including when the receiver is killed during rollback."""
+    tx = read(JOURNAL)
+    if tx.get("rollback_state") and not retry:
+        raise RollbackPaused("operator recovery required")
+    tx["rollback_state"] = "in_progress"
+    save(JOURNAL, tx)
+    try:
+        rollback()
+    except Exception as exc:
+        tx.update(rollback_state="failed", rollback_error=type(exc).__name__)
+        save(JOURNAL, tx)
+        traceback.print_exc()  # Both exceptions stay in the operator's local service log.
+        raise RollbackPaused("operator recovery required") from exc
+
+
 def rollback():
     tx = read(JOURNAL)
     backup = Path(tx["backup"])
@@ -128,16 +147,26 @@ def rollback():
         ready()
     JOURNAL.unlink()
 
-def deploy(stage, manifest, web, status, expires):
+def runtime(key):
+    path = Path(os.environ.get(key, ""))
+    if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+        raise RuntimeError(f"configure executable {key} in release-runtime.env")
+    return str(path)
+
+
+def deploy(stage, manifest, web, status, expires, *, request=None):
     source = stage / "source"
     old = read(BASE)
     if read(MARKER)["commit"] != old["commit"]:
         raise RuntimeError("deployment marker differs from inventory")
     for name in (".env", "data", "runtime", "chroma_data"):
         (source / name).symlink_to(APP / name)
+    key = "TRADE_API_PYTHON" if web else "TRADE_ML_PYTHON"
+    status[0] = "runtime configuration: " + key
+    python = runtime(key)
     status[0] = "production asset checks"
     if web:
-        code = trade(API, ["deploy/ci/check_assets.py"], source)
+        code = trade(python, ["deploy/ci/check_assets.py"], source)
         if code == 4:
             status.append("optional model B unavailable")
         elif code:
@@ -145,7 +174,7 @@ def deploy(stage, manifest, web, status, expires):
             raise RuntimeError("asset or schema check failed")
         if trade(COLLECTOR, ["-c", "from backend.app.scheduler.main import build_scheduler; build_scheduler()"], source):
             raise RuntimeError("scheduler import failed")
-    elif trade(ML, ["-c", "from backend.app.ml.candidate_models import run"], source):
+    elif trade(python, ["-c", "from backend.app.ml.candidate_models import run"], source):
         raise RuntimeError("training runtime import failed")
     if old["commit"] == manifest["commit"]:
         if web:
@@ -155,13 +184,26 @@ def deploy(stage, manifest, web, status, expires):
     changed = sorted(n for n in old["files"].keys() | manifest["files"].keys()
                      if old["files"].get(n) != manifest["files"].get(n))
     paths = ["source/" + n for n in changed]
+    baseline = {"commit": manifest["commit"], "files": manifest["files"]}
     if web:
+        assets = {}
         for f in (stage / "web").rglob("*"):
             if f.is_file():
                 name = f.relative_to(stage / "web").as_posix()
                 target = confined(STATIC, name)
-                if not target.exists() or checksum(target) != checksum(f):
+                digest = checksum(f)
+                if name.startswith("assets/"):
+                    assets[name] = digest
+                if not target.exists() or checksum(target) != digest:
                     paths.append("web/" + name)
+        # Keep the previous build for clients that have already opened its HTML.
+        previous = old.get("web_assets", {})
+        for name, digest in old.get("retired_assets", {}).items():
+            if name.startswith("assets/") and name not in assets and name not in previous:
+                target = confined(STATIC, name)
+                if target.is_file() and checksum(target) == digest:
+                    paths.append("web/" + name)
+        baseline.update(web_assets=assets, retired_assets={n: d for n, d in previous.items() if n not in assets})
     for name in changed:
         dest = confined(APP, name)
         if dest.exists() and name.startswith("backend/app/"):
@@ -170,7 +212,7 @@ def deploy(stage, manifest, web, status, expires):
                 raise RuntimeError("local source changes: " + name)
     if web:
         status[0] = "waiting for active jobs"
-        idle = trade(API, ["deploy/ci/idle.py"], source)
+        idle = trade(python, ["deploy/ci/idle.py"], source)
         if idle == 75:
             return False
         if idle:
@@ -188,14 +230,14 @@ def deploy(stage, manifest, web, status, expires):
             dest = backup / item
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(current, dest)
-    tx = {"backup": str(backup), "web": web, "paths": paths}
+    tx = {"backup": str(backup), "web": web, "paths": paths, "request": request, "commit": manifest["commit"]}
     if web and time.time() >= expires:
         raise RuntimeError("release request expired before activation")
     save(JOURNAL, tx)
     try:
         if web:
             service("stop", "trade-api")
-            idle = trade(API, ["deploy/ci/idle.py"], source)
+            idle = trade(python, ["deploy/ci/idle.py"], source)
             if idle:
                 service("start", "trade-api")
                 JOURNAL.unlink()
@@ -210,7 +252,7 @@ def deploy(stage, manifest, web, status, expires):
                 atomic_copy(stage / item, dest)
             else:
                 dest.unlink(missing_ok=True)
-        save(BASE, manifest)
+        save(BASE, baseline)
         save(MARKER, {"commit": manifest["commit"], "backup": str(backup)})
         if web:
             status[0] = "service readiness"
@@ -218,15 +260,35 @@ def deploy(stage, manifest, web, status, expires):
             ready()
         JOURNAL.unlink()
         return True
-    except BaseException:
+    except Exception as exc:
         if JOURNAL.exists():
-            rollback()
+            tx.update(deploy_stage=status[0], deploy_error=type(exc).__name__)
+            save(JOURNAL, tx)
+            recover()
         raise
 
+def report_paused(s3):
+    tx = read(JOURNAL)
+    result = dict(status="failed", stage="rollback", deploy_stage=tx.get("deploy_stage", "interrupted activation"),
+                  deploy_error=tx.get("deploy_error", "interrupted"), rollback_error=tx.get("rollback_error", "interrupted"),
+                  blocked_by=tx.get("request"))
+    if tx.get("request") and not tx.get("failure_reported"):
+        send_result(s3, dict(result, request=tx["request"], commit=tx["commit"]))
+        save(JOURNAL, dict(tx, failure_reported=True))
+    return result
+
 def receive(web):
+    paused = False
     if JOURNAL.exists():
-        rollback()
+        try:
+            recover()
+        except RollbackPaused:
+            if not web:
+                raise
+            paused = True
     s3 = boto3.client("s3", region_name="ap-northeast-2")
+    # Publish the interrupted request's failure even if the S3 pointer has since moved.
+    blocked = report_paused(s3) if paused else None
     pointer = "delivery/request.json" if web else "delivery/ml-approved.json"
     listing = s3.list_objects_v2(Bucket=BUCKET, Prefix=pointer, MaxKeys=1)
     if not any(item["Key"] == pointer for item in listing.get("Contents", [])):
@@ -244,6 +306,12 @@ def receive(web):
         return
     status = ["release validation"]
     reply = {"request": token, "commit": sha}
+    if blocked:
+        reply.update(blocked)
+        if blocked["blocked_by"] != token:
+            send_result(s3, reply)
+        save(done, reply)
+        return
     try:
         if web and time.time() > req["expires"] and read(MARKER)["commit"] != sha:
             raise RuntimeError("release request expired")
@@ -257,9 +325,15 @@ def receive(web):
             manifest = unpack(archive, stage)
             if manifest["commit"] != sha:
                 raise ValueError("wrong commit")
-            if not deploy(stage, manifest, web, status, req["expires"] if web else None):
+            if not deploy(stage, manifest, web, status, req["expires"] if web else None, request=token):
                 return
         reply.update(status="deployed", stage="ready", warnings=status[1:])
+    except RollbackPaused:
+        if not web:
+            raise
+        reply.update(report_paused(s3))
+        save(done, reply)
+        return
     except Exception as exc:
         print(f"Deployment failed in {status[0]}: {type(exc).__name__}", flush=True)
         reply.update(status="failed", stage=status[0])
@@ -268,13 +342,19 @@ def receive(web):
     if web:
         if reply["status"] == "deployed":
             s3.put_object(Bucket=BUCKET, Key="delivery/ml-approved.json", Body=json.dumps(req).encode())
-        s3.put_object(Bucket=BUCKET, Key=f"delivery/results/{token}.json", Body=json.dumps(reply).encode())
+        send_result(s3, reply)
     save(done, reply)
+
+def send_result(s3, reply):
+    s3.put_object(Bucket=BUCKET, Key=f"delivery/results/{reply['request']}.json", Body=json.dumps(reply).encode())
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("target", choices=["web","ml"])
+    parser.add_argument("target", choices=["web","ml","retry-rollback"])
     target = parser.parse_args().target
     with (STATE / "lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        receive(target == "web")
+        if target == "retry-rollback":
+            recover(retry=True)
+        else:
+            receive(target == "web")

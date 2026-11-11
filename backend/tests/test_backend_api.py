@@ -1,4 +1,5 @@
 import io
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -37,6 +38,8 @@ class BackendApiTest(unittest.TestCase):
         self.directory=tempfile.TemporaryDirectory(dir='tmp/backend_build',ignore_cleanup_errors=True)
         self.engine,self.meta=test_engine(); reference_data(self.engine,self.meta)
         self.settings=Settings(values={'API_COOKIE_SECURE':'false','API_REPORT_DIRECTORY':self.directory.name,'API_HS_VECTOR_ENABLED':'false'})
+        if os.environ.get('API_REPORT_FONT'):
+            self.settings.values['API_REPORT_FONT'] = os.environ['API_REPORT_FONT']
         self.app=create_app(self.settings,self.engine); self.client=TestClient(self.app)
         self.csrf=None
         from backend.tests.intent_fixtures import extracted_slots
