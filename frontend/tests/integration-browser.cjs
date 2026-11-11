@@ -140,6 +140,10 @@ async function main() {
     await page.getByRole('button', { name: '표로 보기', exact: true }).first().click()
     await page.getByRole('button', { name: '차트로 보기', exact: true }).first().waitFor()
     ok('실제 분석 작업·기존 답변 카드·차트/표 전환')
+    // 지금 열린 채팅방을 목록에서 다시 눌러도 대화가 사라지지 않는다.
+    await page.locator('.chat-list button[aria-current="true"]').first().click()
+    await page.getByRole('button', { name: '리포트로 저장', exact: true }).waitFor()
+    ok('열린 채팅방 다시 선택 시 대화 유지')
     await page.getByRole('button', { name: '리포트로 저장', exact: true }).click()
     await page.getByRole('button', { name: '리포트 조건 확인' }).click()
     await page.getByRole('button', { name: '확인한 조건으로 생성' }).click()

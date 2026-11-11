@@ -436,6 +436,12 @@ export default function Analysis({ route }) {
     if (saved===true) notify('선택한 국가·품목을 관심 목록에 추가했습니다.')
     setSavingInterest(false)
   }
+  // 지금 열린 방을 다시 누르면 내용을 비우지 않는다. 대화 다시 불러오기는 activeId가 바뀔 때만 돌기 때문이다.
+  const openChat = id => {
+    setDrawer(false)
+    if (id === activeId) return
+    clearArticle(); setActiveId(id); setMessages([]); setJob(null); setDraft(null)
+  }
   const removeChat = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') })
   const updateTitle = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'PATCH', body: { title: rename.trim() } }); await refreshChats(); setModal(null) })
   const clarify = async body => {
@@ -517,7 +523,7 @@ export default function Analysis({ route }) {
               const on = c.id === active?.id
               const tag = STATUS_TAG[c.status]
               return (
-                <button key={c.id} type="button" className="reset" onClick={() => { clearArticle(); setActiveId(c.id); setMessages([]); setJob(null); setDraft(null); setDrawer(false) }} aria-current={on}
+                <button key={c.id} type="button" className="reset" onClick={() => openChat(c.id)} aria-current={on}
                   style={{ padding: '14px 16px', borderRadius: 14, background: on ? 'var(--rose)' : '#fff', boxShadow: on ? 'inset 3px 0 0 var(--red)' : 'none', border: on ? 0 : '1px solid var(--line)' }}>
                   {tag && <span className={'tag ' + tag[0]}>{tag[0] === 'ok' && <span className="dot ok" style={{ marginRight: 5 }} />}{tag[1]}</span>}
                   <p style={{ fontSize: 15, fontWeight: 800, marginTop: tag ? 8 : 0 }}>{c.title}</p>
