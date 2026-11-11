@@ -14,6 +14,12 @@ export function displayTime(iso) {
 export function kstDateTimeText(iso) {
   return kstDateTime(iso) || '시각 미확인'
 }
+export function monthEndDate(value) {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])(?:-\d{2})?$/.exec(value || '')
+  if (!match) return value
+  const end = new Date(Date.UTC(Number(match[1]), Number(match[2]), 0))
+  return end.toISOString().slice(0, 10)
+}
 export function reportProduct(code, name = productName(code)) {
   if (!name || name === code) return 'HS ' + code
   return `${name.length > 32 ? name.slice(0,31) + '…' : name} (HS ${code})`
