@@ -1,4 +1,9 @@
-.chat-turn,.chat-step { display:grid; gap:12px; }
+/* 각 메시지는 내용 높이만큼 독립된 행을 차지한다. 긴 표는 자신의 영역 안에서 스크롤한다. */
+.col.chat-flow { display:grid; grid-template-columns:minmax(0,1fr); align-content:start; }
+.chat-turn,.chat-step { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; }
+.chat-flow > *,.chat-turn > *,.chat-ai { min-width:0; }
+.chat-ai > :last-child { display:flow-root; }
+.chat-user > div { min-width:0; }
 .chat-progress { width:100%; height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
 .chat-progress > span { display:block; height:100%; background:var(--red); transition:width .3s ease; }
 @media (prefers-reduced-motion:reduce) { .chat-progress > span { transition:none; } }

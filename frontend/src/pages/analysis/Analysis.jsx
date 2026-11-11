@@ -36,7 +36,7 @@ const optionsFor = (c, choices) => ({ conditions: c, country: c.country_codes.ma
 
 function AiBlock({ children, className, id }) {
   return (
-    <div className={className} id={id}>
+    <div className={['chat-ai', className].filter(Boolean).join(' ')} id={id}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
         <span style={{ width: 30, height: 30, borderRadius: 10, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="sparkle" color="#C8102E" stroke={2} /></span>
         <b style={{ fontSize: 14 }}>Borderless Sellers AI</b>
@@ -48,7 +48,7 @@ function AiBlock({ children, className, id }) {
 
 function UserBubble({ text }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+    <div className="chat-user" style={{ display: 'flex', justifyContent: 'flex-end' }}>
       <div style={{ maxWidth: '75%', background: 'var(--plum)', color: '#fff', borderRadius: '18px 18px 4px 18px', padding: '16px 20px', fontSize: 16, lineHeight: 1.6, whiteSpace: 'pre-line' }}>{text}</div>
     </div>
   )
@@ -183,7 +183,7 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
   )
 }
 
-function ReportGeneration({initial,onComplete}) {
+function ReportGeneration({initial,onComplete,onDismiss}) {
   const [job,setJob]=useState(initial)
   const [error,setError]=useState(null)
   const [retry,setRetry]=useState(0)
@@ -205,6 +205,7 @@ function ReportGeneration({initial,onComplete}) {
     {active && <span className="chat-loading-ring" aria-label="리포트 생성 진행 중"/>}</div>
     {active && <p className="note">채팅을 계속할 수 있습니다. 완료되면 여기에서 알려드립니다.</p>}
     <ErrorNotice error={error || job.error} retry={()=>setRetry(v=>v+1)}/>
+    {job.status==='FAILED' && <Btn onClick={onDismiss}>실패 안내 닫기</Btn>}
     {job.status==='READY' && <Btn to={`/report?id=${job.report_id}`}>리포트 센터에서 이 리포트 열기</Btn>}
   </AiBlock>
 }
@@ -277,6 +278,7 @@ export default function Analysis({ route }) {
   const [messages, setMessages] = useState([])
   const [job, setJob] = useState(null)
   const [error, setError] = useState(null)
+  const [statusError, setStatusError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState(null)
   const [sending, setSending] = useState(null)   // 접수 응답 전까지 보여 줄 질문(15번 로딩)
@@ -299,28 +301,42 @@ export default function Analysis({ route }) {
   const activeRef=useRef(activeId); activeRef.current=activeId
   const active = chats.find(c => c.id === activeId)
   useEffect(() => {
-    let cancelled = false, timer
+    let cancelled = false, timer, checkingStatus = false
+    const controller = new AbortController()
+    const alreadyAnswered = latest => latest?.status === 'NEEDS_INPUT' && acceptedClarifications.current.has(latest.clarification?.clarification_id)
+    const showMessages = (rows, latest) => {
+      setMessages(completedMessages(rows, latest))
+      // 대화는 표시하되 이미 답한 확인 요청은 오래된 목록으로 되살리지 않는다.
+      if (!alreadyAnswered(latest)) setJob(latest || null)
+    }
+    const checkStatus = async (rows, snapshot) => {
+      if (cancelled || checkingStatus) return
+      checkingStatus = true
+      setStatusError(null)
+      try {
+        const latest = (await api(`/chat/jobs/${snapshot.job_id}`, { signal: controller.signal })).job
+        if (cancelled) return
+        showMessages(rows, latest)
+        if (running(latest.status) || alreadyAnswered(latest)) timer = setTimeout(load, 2000)
+      } catch (e) {
+        if (!cancelled) setStatusError({ sessionId: activeId, revision: readRevision, error: e, retry: () => checkStatus(rows, snapshot) })
+      } finally { checkingStatus = false }
+    }
     const load = async () => {
       if (!activeId) return
       try {
         const rows = await allPages(`/chat/sessions/${activeId}/messages`)
         if (cancelled) return
-        setMessages(rows); setError(null)
-        let latest = [...rows].reverse().find(m => m.job)?.job
+        setError(null); setStatusError(null)
+        const latest = [...rows].reverse().find(m => m.job)?.job
+        // 상태 조회가 늦거나 실패해도 이미 받은 대화는 해당 작업과 함께 표시한다.
+        showMessages(rows, latest)
         // The job endpoint also checks whether a pending checkpoint has expired.
-        if (latest && (running(latest.status)||latest.status==='NEEDS_INPUT')) latest=(await api(`/chat/jobs/${latest.job_id}`)).job
-        if (cancelled) return
-        if (latest?.status==='NEEDS_INPUT' && acceptedClarifications.current.has(latest.clarification?.clarification_id)) {
-          timer=setTimeout(load,2000)
-          return
-        }
-        setMessages(completedMessages(rows,latest))
-        setJob(latest || null)
-        if (latest && running(latest.status)) timer = setTimeout(load, 2000)
+        if (latest && (running(latest.status)||latest.status==='NEEDS_INPUT')) await checkStatus(rows, latest)
       } catch (e) { if (!cancelled) setError(e) }
     }
     load()
-    return () => { cancelled = true; clearTimeout(timer) }
+    return () => { cancelled = true; clearTimeout(timer); controller.abort() }
   }, [activeId, readRevision])
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }, [messages.length])
   // 리포트 생성이 시작되면(채팅 승인 → WAITING_REPORT, 조건 폼 → 생성 접수) 생성 중 표시가 있는 곳으로 이동한다
@@ -365,7 +381,7 @@ export default function Analysis({ route }) {
       pending.current = null
       accepted = true
       if (activeRef.current!==id) { await refreshChats(); return }   // 응답 전에 방을 옮겼으면 그 방의 작업을 덮어쓰지 않는다
-      setJob(data.job); setDraft(null); setInput('')
+      setJob(data.job); setDraft(null); setInput(''); setSending(null)
       setReadRevision(v => v + 1); await refreshChats()
     })
     // 접수에 실패하면 질문을 입력창에 남겨 다시 보낼 수 있게 한다. 기사에서 온 질문은 주소에서 이미 지웠으므로 여기 말고는 남지 않는다
@@ -423,8 +439,9 @@ export default function Analysis({ route }) {
     } finally { clarificationRequest.current=null; setBusy(false) }
   }
   const renderMessage = m => {
+    // 새 작업이 목록 조회보다 먼저 끝나도 이전 답변 카드에 그 작업의 스트림을 연결하지 않는다.
     if (m.role !== 'USER') return m.answer
-      ? <AnswerCard key={m.message_id} message={m} streamJobId={m===messages.at(-1) && job?.status==='SUCCEEDED' ? job.job_id : undefined} onSaveReport={conditions => saveAsReport(conditions, turnOf.get(m.message_id))} onInterest={addInterest}/>
+      ? <AnswerCard key={m.message_id} message={m} streamJobId={m===messages.at(-1) && job?.status==='SUCCEEDED' && turnJobs.get(turnOf.get(m.message_id))===job.job_id ? job.job_id : undefined} onSaveReport={conditions => saveAsReport(conditions, turnOf.get(m.message_id))} onInterest={addInterest}/>
       : <AiBlock key={m.message_id}><p style={{ whiteSpace: 'pre-line' }}>{m.content_masked}</p></AiBlock>
     const turn = m.job?.job_id === job?.job_id ? job : m.job
     return <div className="chat-turn" key={m.message_id}>
@@ -433,13 +450,23 @@ export default function Analysis({ route }) {
       {turn?.clarification_history?.filter(h=>h.id!==job?.clarification?.clarification_id).map(h=><div className="chat-turn" key={h.id}>
         <AiBlock><p style={{ whiteSpace: 'pre-line' }}>{h.message}</p></AiBlock>{h.answer && <UserBubble text={h.answer}/>}
       </div>)}
+      {turn?.status === 'FAILED' && <AiBlock><ErrorNotice error={turn.error || new Error('분석에 실패했습니다.')} /></AiBlock>}
+      {turn?.status === 'EXPIRED' && <AiBlock><p>답변 시간이 지났습니다. 새 질문을 입력해 주세요.</p></AiBlock>}
+      {turn?.status === 'CANCELLED' && <AiBlock><p>질문을 중단했습니다. 새 질문을 입력할 수 있습니다.</p></AiBlock>}
     </div>
   }
   // 리포트 위치는 질문(USER 메시지 ID) 단위로 기억한다. 답변 직후 화면은 임시 답변 ID(completed-…)를 쓰므로
   // 답변 ID에 묶으면 다음 조회에서 위치를 잃는다. 리포트 칸은 그 질문 턴의 마지막 메시지 뒤에 둔다.
-  const turnOf = new Map(), lastOfTurn = new Map()
-  messages.reduce((turn, m) => { const t = m.role === 'USER' ? m.message_id : turn; turnOf.set(m.message_id, t); lastOfTurn.set(t, m.message_id); return t }, null)
+  const turnOf = new Map(), lastOfTurn = new Map(), turnJobs = new Map()
+  messages.reduce((turn, m) => {
+    const t = m.role === 'USER' ? m.message_id : turn
+    if (m.role === 'USER') turnJobs.set(t, m.job?.job_id)
+    turnOf.set(m.message_id, t); lastOfTurn.set(t, m.message_id)
+    return t
+  }, null)
   const reports = chatReports[activeId] || []
+  const dismissReport = id => setChatReports(previous => ({ ...previous, [activeId]: (previous[activeId] || []).filter(r => r.report_id !== id) }))
+  const reportCard = report => <ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports} onDismiss={() => dismissReport(report.report_id)}/>
   // 답이 필요한 칸: 직접 입력이 되면 입력창, 버튼으로만 답하면 되묻기 카드
   const waiting = job?.status === 'NEEDS_INPUT' && !busy
   const waitInput = waiting && job.clarification?.allow_text
@@ -506,23 +533,25 @@ export default function Analysis({ route }) {
                 </AiBlock>
               )}
               <ErrorNotice error={error} retry={() => setReadRevision(v => v + 1)} />
+              {statusError && statusError.sessionId === activeId && statusError.revision === readRevision && <div>
+                <p className="note">작업 상태를 확인하지 못했습니다. 표시된 대화 내역은 유지됩니다.</p>
+                <ErrorNotice error={statusError.error} />
+                <Btn onClick={statusError.retry}>작업 상태 다시 조회</Btn>
+              </div>}
+              {unplaced.map(reportCard)}
               {messages.map(m => <Fragment key={m.message_id}>{renderMessage(m)}
                 {placedDraft && lastOfTurn.get(draft.after) === m.message_id && conditionCard}
-                {reports.filter(r => r.after && lastOfTurn.get(r.after) === m.message_id).map(report => <ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports}/>)}
+                {reports.filter(r => r.after && lastOfTurn.get(r.after) === m.message_id).map(reportCard)}
               </Fragment>)}
               {sending && <div className="chat-turn"><UserBubble text={sending}/><AiBlock><p role="status">질문을 접수하고 있습니다 <span className="chat-loading-ring" aria-hidden="true"/></p></AiBlock></div>}
               {running(job?.status) && !messages.some(m=>m.job?.job_id===job.job_id) && <AiBlock id={`job-progress-${job.job_id}`}><Progress job={job}/></AiBlock>}
-              {job?.status === 'FAILED' && <ErrorNotice error={job.error || new Error('분석에 실패했습니다.')} />}
-              {job?.status === 'EXPIRED' && <AiBlock><p>답변 시간이 지났습니다. 새 질문을 입력해 주세요.</p></AiBlock>}
-              {job?.status === 'CANCELLED' && <AiBlock><p>질문을 중단했습니다. 새 질문을 입력할 수 있습니다.</p></AiBlock>}
               {job?.status === 'NEEDS_INPUT' && <AiBlock className={'chat-clarification' + (waiting && !waitInput ? ' chat-wait' : '')}><PromptActions key={job.clarification.clarification_id} prompt={job.clarification} busy={busy} reply={clarify} onDirectInput={()=>inputRef.current?.focus()}/></AiBlock>}
               {(running(job?.status)||job?.status==='NEEDS_INPUT') && <Btn size="sm" disabled={busy} onClick={()=>setModal('stop')}>이 질문 중단</Btn>}
               {draft && !placedDraft && conditionCard}
-              {unplaced.map(report=><ReportGeneration key={report.report_id} initial={report} onComplete={refreshReports}/>)}
               <div ref={endRef} />
               <form className={waitInput ? 'chat-wait' : undefined} onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
                 <input ref={inputRef} value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onChange={e => setInput(e.target.value)} aria-label="질문 입력" placeholder={job?.clarification?.kind==='COUNTRY'?'국가명 또는 국가 코드 입력':job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}
-                  style={{ flex: 1, fontSize: 15, border: 0, outline: 0, font: 'inherit', color: 'var(--ink)', background: 'transparent' }} />
+                  style={{ flex: 1, minWidth: 0, fontSize: 15, border: 0, outline: 0, font: 'inherit', color: 'var(--ink)', background: 'transparent' }} />
                 <Btn type="submit" kind="red" iconRight="arrowRight" disabled={!input.trim() || busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)}>전송</Btn>
               </form>
             </div>

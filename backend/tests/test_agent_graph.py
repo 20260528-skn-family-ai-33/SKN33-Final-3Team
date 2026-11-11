@@ -186,3 +186,33 @@ class AgentGraphTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'cancelled'):
             graph.invoke(initial(), graph_config('j'))
         self.assertEqual(services.saved, [])
+
+    def test_saved_draft_and_graph_verify_same_comparison_feedback(self):
+        from backend.app.agents.verify import judge_draft, verify
+
+        sentence = '미국 수출은 전년 동월 대비 1.5% 감소했다 [1, 2].'
+        snapshot = {'_verification_source': 'SNAPSHOT', 'rows': [
+            {'country_name': '미국', 'yoy_pct': 3, 'mom_pct': -1.5}]}
+
+        class SavedDraftServices(Services):
+            def compose(self, state):
+                state.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': [sentence]}],
+                                    turn_summary=sentence)
+
+            def verify(self, state):
+                evidence = {'t1.sql': snapshot}
+                self.before = state.model_dump()
+                self.standalone = judge_draft(state, snapshots=evidence, countries=['미국'])
+                verify(state, snapshots=evidence, countries=['미국'])
+
+        services = SavedDraftServices()
+        graph = build_graph(services, InMemorySaver())
+        result = graph.invoke(initial(), graph_config('j'))
+        self.assertEqual(result['verification'], services.standalone.model_dump())
+        self.assertEqual(services.before['draft']['turn_summary'], sentence)
+        self.assertEqual(result['draft']['turn_summary'], '')
+        self.assertEqual(services.standalone.failed_summary, sentence)
+        body, summary = services.standalone.feedback
+        self.assertEqual((body.index, summary.index), (0, None))
+        self.assertEqual((body.reason, body.cell), ('COMPARISON', ('rows', '0', 'mom_pct')))
+        self.assertEqual(services.standalone.checks[0].numbers, ['1.5%'])
