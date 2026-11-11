@@ -166,6 +166,17 @@ export function AppProvider({ children }) {
     updateSettings(previous => ({ ...previous, ...saved }))
     return saved
   }), [run])
+  // 알림 약관 철회: 동의를 거두면 서버가 알림도 함께 끈다(동의 없이 알림을 보내지 않음). 알림설정 화면과 같은 상태를 쓴다.
+  const revokeNotificationTerms = useCallback(version => run(async () => {
+    const current = epoch.current
+    const { consent } = await api('/users/me/consents', { method: 'POST', body: {
+      terms_type: 'NOTIFICATION', terms_version: version, action: 'REVOKE', enable_notifications: false,
+    } })
+    if (current !== epoch.current) return false
+    const saved = { all: consent.notifications_enabled, termsAgreed: false, termsVersion: consent.terms_version, termsRequired: false }
+    updateSettings(previous => ({ ...previous, ...saved }))
+    return saved
+  }), [run])
   const setSettings = useCallback(async next => run(async () => {
     const current = epoch.current
     await api('/users/me/notification-settings', { method: 'PATCH', body: { notifications_enabled: next.all, spike_popup: next.surge, major_issue_popup: next.major, report_popup: next.report } })
@@ -231,11 +242,11 @@ export function AppProvider({ children }) {
   const value = useMemo(() => ({
     session, account: session, accounts, setAccounts, loading, loadError, refresh, options, countries,
     login, signup, logout, changePassword, withdraw,
-    profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms, subscription, setSubscription, deleteSubscription,
+    profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms, revokeNotificationTerms, subscription, setSubscription, deleteSubscription,
     chats, setChats, refreshChats, reports, refreshReports, downloadReport,
     mainView, setMainView, notify, run, fail,
   }), [session, accounts, loading, loadError, refresh, options, countries, login, signup,
-    logout, changePassword, withdraw, profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms,
+    logout, changePassword, withdraw, profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms, revokeNotificationTerms,
     subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
     downloadReport, mainView, notify, run, fail])
   const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications }),

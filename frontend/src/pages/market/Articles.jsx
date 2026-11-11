@@ -71,7 +71,7 @@ export default function Articles({ route }) {
       <main className="page" style={{ position: 'relative', paddingBottom: 120 }}>
         <div className="wrap col" style={{ gap: 20 }}>
           <form className="card" onSubmit={search} noValidate>
-            <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr auto', gap: 14, alignItems: 'end' }} className="resp-stack">
+            <div className="article-search-fields">
               <div>
                 <label className="lbl" htmlFor="ar-q">검색 (선택)</label>
                 <TextField id="ar-q" placeholder="검색어 입력" icon="search" iconColor="#5C6370" value={form.keyword} onChange={v => setForm(f => ({ ...f, keyword: v }))} />

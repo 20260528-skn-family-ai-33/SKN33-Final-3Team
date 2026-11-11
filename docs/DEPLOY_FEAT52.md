@@ -87,10 +87,11 @@ sha256sum data/ml/monthly_models/*.joblib data/ml/monthly_models/*.registry.json
 
 ### API·워커 (`backend/.env.api.example` 기준)
 
+Writer의 최종 운영 모델은 `gpt-6-luna`다. `API_COMPOSE_MODEL`을 생략하면 이 모델을 사용한다. 배포 환경에서 값을 지정하면 지정한 모델로 호출하고 실행 기록에도 그 이름을 남긴다. [Dev 평가](evaluations/WRITER_DEV_EVALUATION.md) · [독립 Holdout 평가와 선정 근거](evaluations/WRITER_HOLDOUT_EVALUATION.md)
+
 | 키 | 값 | 변경 |
 |---|---|---|
 | `API_CHAT_AGENT_ENABLED` | `true` | 추가. 새 질문을 LangGraph 워커로 접수한다. 기존 미완료 작업은 원래 실행기로 마친다 |
-| `API_COMPOSE_MODEL` | `gpt-4.1-mini` | 추가 |
 | `API_COMPOSE_TIMEOUT_SECONDS` | `20` | 추가 |
 | `API_SQL_MODEL` | `gpt-4.1` | 추가 (C-30 미정, 임시값) |
 | `API_SQL_TIMEOUT_SECONDS` | `20` | 추가 |

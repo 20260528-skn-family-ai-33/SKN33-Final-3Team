@@ -511,5 +511,175 @@
         "exp_12m_usd": 640000000
       }
     ]
+  },
+  "changes": {
+    "status": "READY",
+    "min_usd": 10000000,
+    "current": {
+      "start": "2025-01-01",
+      "end": "2025-12-31"
+    },
+    "previous": {
+      "start": "2024-01-01",
+      "end": "2024-12-31"
+    },
+    "growth": [
+      {
+        "country_code": "EE",
+        "country": "에스토니아",
+        "previous_usd": 15000000,
+        "amount_usd": 33000000,
+        "change_usd": 18000000,
+        "change_pct": 120.0
+      },
+      {
+        "country_code": "PL",
+        "country": "폴란드",
+        "previous_usd": 102000000,
+        "amount_usd": 224000000,
+        "change_usd": 122000000,
+        "change_pct": 119.61
+      },
+      {
+        "country_code": "KZ",
+        "country": "카자흐스탄",
+        "previous_usd": 28000000,
+        "amount_usd": 61000000,
+        "change_usd": 33000000,
+        "change_pct": 117.86
+      },
+      {
+        "country_code": "MX",
+        "country": "멕시코",
+        "previous_usd": 46000000,
+        "amount_usd": 92000000,
+        "change_usd": 46000000,
+        "change_pct": 100.0
+      },
+      {
+        "country_code": "AE",
+        "country": "UAE",
+        "previous_usd": 170000000,
+        "amount_usd": 261000000,
+        "change_usd": 91000000,
+        "change_pct": 53.53
+      }
+    ],
+    "decline": [
+      {
+        "country_code": "CN",
+        "country": "중국",
+        "previous_usd": 1736000000,
+        "amount_usd": 1496000000,
+        "change_usd": -240000000,
+        "change_pct": -13.82
+      },
+      {
+        "country_code": "HK",
+        "country": "홍콩",
+        "previous_usd": 591000000,
+        "amount_usd": 541000000,
+        "change_usd": -50000000,
+        "change_pct": -8.46
+      },
+      {
+        "country_code": "SG",
+        "country": "싱가포르",
+        "previous_usd": 96000000,
+        "amount_usd": 88000000,
+        "change_usd": -8000000,
+        "change_pct": -8.33
+      },
+      {
+        "country_code": "AU",
+        "country": "호주",
+        "previous_usd": 75000000,
+        "amount_usd": 71000000,
+        "change_usd": -4000000,
+        "change_pct": -5.33
+      }
+    ],
+    "bars": [
+      {
+        "country_code": "US",
+        "country": "미국",
+        "previous_usd": 3000000000,
+        "amount_usd": 3354000000,
+        "change_usd": 354000000,
+        "change_pct": 11.8
+      },
+      {
+        "country_code": "PL",
+        "country": "폴란드",
+        "previous_usd": 102000000,
+        "amount_usd": 224000000,
+        "change_usd": 122000000,
+        "change_pct": 119.61
+      },
+      {
+        "country_code": "JP",
+        "country": "일본",
+        "previous_usd": 1200000000,
+        "amount_usd": 1309000000,
+        "change_usd": 109000000,
+        "change_pct": 9.08
+      },
+      {
+        "country_code": "AE",
+        "country": "UAE",
+        "previous_usd": 170000000,
+        "amount_usd": 261000000,
+        "change_usd": 91000000,
+        "change_pct": 53.53
+      },
+      {
+        "country_code": "TW",
+        "country": "대만",
+        "previous_usd": 300000000,
+        "amount_usd": 369000000,
+        "change_usd": 69000000,
+        "change_pct": 23.0
+      },
+      {
+        "country_code": "MX",
+        "country": "멕시코",
+        "previous_usd": 46000000,
+        "amount_usd": 92000000,
+        "change_usd": 46000000,
+        "change_pct": 100.0
+      },
+      {
+        "country_code": "AU",
+        "country": "호주",
+        "previous_usd": 75000000,
+        "amount_usd": 71000000,
+        "change_usd": -4000000,
+        "change_pct": -5.33
+      },
+      {
+        "country_code": "SG",
+        "country": "싱가포르",
+        "previous_usd": 96000000,
+        "amount_usd": 88000000,
+        "change_usd": -8000000,
+        "change_pct": -8.33
+      },
+      {
+        "country_code": "HK",
+        "country": "홍콩",
+        "previous_usd": 591000000,
+        "amount_usd": 541000000,
+        "change_usd": -50000000,
+        "change_pct": -8.46
+      },
+      {
+        "country_code": "CN",
+        "country": "중국",
+        "previous_usd": 1736000000,
+        "amount_usd": 1496000000,
+        "change_usd": -240000000,
+        "change_pct": -13.82
+      }
+    ]
   }
 }

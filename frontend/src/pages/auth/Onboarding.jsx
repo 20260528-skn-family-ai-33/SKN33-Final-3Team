@@ -86,7 +86,7 @@ export default function Onboarding({ route }) {
               <>
                 <h2 className="t2">관심 국가를 선택해 주세요</h2>
                 <p className="muted" style={{ marginTop: 6 }}>선택 사항 · 여러 국가를 선택할 수 있습니다.</p>
-                <CountryPicker value={countries} onChange={setCountries} />
+                <CountryPicker showSelected value={countries} onChange={setCountries} />
                 <p className="note" style={{ marginTop: 12 }}>대륙·개별 국가를 함께 선택해도 중복 국가는 한 번만 추가합니다. 이전 버튼으로 돌아가도 품목·국가의 선택값을 유지합니다.</p>
                 <div className="between" style={{ marginTop: 26 }}>
                   <div style={{ display: 'flex', gap: 10 }}>

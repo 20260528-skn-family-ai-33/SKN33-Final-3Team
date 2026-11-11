@@ -1,0 +1,156 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Main-only GitHub releases delivered through a private S3 prefix",
+  "Resources": {
+    "GitHubProvider": {
+      "Type": "AWS::IAM::OIDCProvider",
+      "Properties": {
+        "Url": "https://token.actions.githubusercontent.com",
+        "ClientIdList": [
+          "sts.amazonaws.com"
+        ]
+      }
+    },
+    "ReleaseRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "skn33-team3-actions-release",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Principal": {
+                "Federated": {
+                  "Ref": "GitHubProvider"
+                }
+              },
+              "Condition": {
+                "StringEquals": {
+                  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                  "token.actions.githubusercontent.com:sub": "repo:20260528-skn-family-ai-33@288865373/SKN33-Final-3Team@1391546994:ref:refs/heads/main"
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ReleaseDelivery",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:PutObject",
+                  "Resource": [
+                    "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2/delivery/incoming/*",
+                    "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2/delivery/request.json"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:GetObject",
+                  "Resource": "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2/delivery/results/*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "s3:ListBucket",
+                  "Resource": "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2",
+                  "Condition": {
+                    "StringLike": {
+                      "s3:prefix": "delivery/results/*"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "WebDelivery": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "MainReleaseDelivery",
+        "Roles": [
+          "skn33-team3-trade-WebRole-dY1aiRN42Sg4"
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "s3:GetObject",
+              "Resource": [
+                "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2/delivery/request.json",
+                "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2/delivery/incoming/*"
+              ]
+            },
+            {
+              "Effect": "Allow",
+              "Action": "s3:PutObject",
+              "Resource": [
+                "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2/delivery/results/*",
+                "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2/delivery/ml-approved.json"
+              ]
+            },
+            {
+              "Effect": "Allow",
+              "Action": "s3:ListBucket",
+              "Resource": "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2",
+              "Condition": {
+                "StringEquals": {
+                  "s3:prefix": "delivery/request.json"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "MlDelivery": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": "MainReleaseReader",
+        "Roles": [
+          "skn33-team3-trade-MlRole-jX9DoMIHErhQ"
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "s3:GetObject",
+              "Resource": [
+                "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2/delivery/ml-approved.json",
+                "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2/delivery/incoming/*"
+              ]
+            },
+            {
+              "Effect": "Allow",
+              "Action": "s3:ListBucket",
+              "Resource": "arn:aws:s3:::skn33-team3-trade-876143322800-ap-northeast-2",
+              "Condition": {
+                "StringEquals": {
+                  "s3:prefix": "delivery/ml-approved.json"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "RoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "ReleaseRole",
+          "Arn"
+        ]
+      }
+    }
+  }
+}

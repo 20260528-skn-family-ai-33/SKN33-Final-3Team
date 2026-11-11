@@ -192,6 +192,8 @@ def article_sources(articles):
     return source_entries(article['source_code'] for article in articles)
 
 
+# 승인한 채팅 결과표 종류 → 그 결과로 채우는 리포트 섹션(D-90). 웹·DOCX 문서와 PDF 템플릿이 같은 기준을 쓴다.
+RESULT_SECTIONS={'TREND':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES','PREDICTION':'GROWTH_RISK'}
 PROMISING_UNAVAILABLE='예측 모델 또는 기준월 스냅샷을 사용할 수 없어 유망시장 예측을 넣지 못했습니다.'
 
 
@@ -289,6 +291,41 @@ def promising_section(store,uid,c):
     return section('GROWTH_RISK',' '.join([text,*notes]),[table],status='READY' if not notes else 'NEEDS_REVIEW')
 
 
+CHANGE_MIN_USD=10_000_000   # 성장률·감소율 순위 대상 최소 규모(1천만 달러). 작은 국가의 큰 증감률이 순위를 차지하지 않게 한다
+CHANGE_TOP=5                 # 성장률 상위·감소율 상위 표의 국가 수
+CHANGE_BARS=(6,4)            # 증감액 그래프: 증가 상위·감소 상위 국가 수
+
+
+def country_changes(store,rows,previous_rows,period_value,compare_period):
+    """유망시장 섹션 위쪽의 실제 수출 증감(비교 기간 → 분석 기간). rows·previous_rows는 국가별 수출액 집계다.
+    성장률 상위는 분석 기간 수출액, 감소율 상위는 비교 기간 수출액이 CHANGE_MIN_USD 이상인 국가만 순위에 넣는다.
+    비교 기간이 없으면 NO_COMPARE, 비교 기간 통계가 아직 없으면 NOT_READY로 이유만 남긴다."""
+    if not compare_period:
+        return {'status':'NO_COMPARE'}
+    if previous_rows is None:
+        return {'status':'NOT_READY'}
+    names={r['country_code']:r['name_ko'] for r in store.rows(select(store.t('country')))}
+    current={r['country_code']:r['amount_usd'] for r in rows}
+    previous={r['country_code']:r['amount_usd'] for r in previous_rows}
+    items=[]
+    for code in sorted(set(current)|set(previous)):
+        if code in ('TOTAL','__KOREA_TOTAL__'): continue
+        now_usd,old_usd=current.get(code,0) or 0,previous.get(code,0) or 0
+        if not now_usd and not old_usd: continue
+        items.append({'country_code':code,'country':names.get(code,code),'previous_usd':old_usd,'amount_usd':now_usd,
+                      'change_usd':now_usd-old_usd,'change_pct':percentage(now_usd,old_usd) if old_usd else None})
+    growth=sorted((i for i in items if i['change_usd']>0 and i['change_pct'] is not None and i['amount_usd']>=CHANGE_MIN_USD),
+                  key=lambda i:(-i['change_pct'],-i['change_usd'],i['country_code']))[:CHANGE_TOP]
+    decline=sorted((i for i in items if i['change_usd']<0 and i['change_pct'] is not None and i['previous_usd']>=CHANGE_MIN_USD),
+                   key=lambda i:(i['change_pct'],i['change_usd'],i['country_code']))[:CHANGE_TOP]
+    up=sorted((i for i in items if i['change_usd']>0),key=lambda i:(-i['change_usd'],i['country_code']))[:CHANGE_BARS[0]]
+    down=sorted((i for i in items if i['change_usd']<0),key=lambda i:(i['change_usd'],i['country_code']))[:CHANGE_BARS[1]]
+    return {'status':'READY','min_usd':CHANGE_MIN_USD,
+            'current':{'start':period_value['start'],'end':period_value['end']},
+            'previous':{'start':compare_period['start'],'end':compare_period['end']},
+            'growth':growth,'decline':decline,'bars':sorted(up+down,key=lambda i:-i['change_usd'])}
+
+
 def prediction_group(conditions):
     """예측 결과의 순위 기준(group_by). market.predict와 같은 규칙: 국가·품목 둘 다 → PAIR, 국가만 → COUNTRY, 품목만 → HS6."""
     countries,items=(conditions or {}).get('country_codes') or [],(conditions or {}).get('hs_items') or []
@@ -304,7 +341,6 @@ def build_document(store,uid,record):
     if source:
         meta={'sources':[],'period':p,'warnings':[],'freshness':'FROZEN'}
         sections=[section('SUMMARY','승인한 분석 결과표를 기준으로 작성했습니다.')]
-        kinds={'TREND':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES','PREDICTION':'GROWTH_RISK'}
         refs=record['content_json'].get('source_results') or []
         source=[dict(table) for table in source]
         for i,table in enumerate(source):
@@ -313,7 +349,7 @@ def build_document(store,uid,record):
                 group=prediction_group(refs[i].get('conditions') if i<len(refs) else None)
                 if group: table['meta']={**(table.get('meta') or {}),'kind':'PREDICTION','group_by':group}
         for code in c['sections']:
-            tables=[table for table in source if kinds.get(table['kind'])==code]
+            tables=[table for table in source if RESULT_SECTIONS.get(table['kind'])==code]
             sections.append(section(code,'승인한 분석 결과입니다.' if tables else '해당 분석 결과에 포함되지 않음',tables))
         for ref in record['content_json']['source_results']: meta['warnings'].extend(ref['limitations'])
     elif record['report_type']=='RPT_WEEKLY':
@@ -328,11 +364,12 @@ def build_document(store,uid,record):
         # resolve_period가 검증한 월의 누락 거래는 미수집이 아니라 0이다.
         total=sum(r['amount_usd'] for r in rows)
         comparison=c.get('compare','YOY_PERIOD')
-        prev=c.get('compare_period') if comparison!='NONE' else None; old=None
+        prev=c.get('compare_period') if comparison!='NONE' else None; old=None; previous_rows=None
         if prev:
             try:
                 old_s,old_e=trade.resolve_period(store,prev['start'][:7],prev['end'][:7])
                 previous=trade.aggregate(store,'export_summary',old_s,old_e,hs,countries)
+                previous_rows=previous
                 old=sum(r['amount_usd'] for r in previous)
             except Exception as exc:
                 from backend.app.api.common import ApiError
@@ -396,7 +433,11 @@ def build_document(store,uid,record):
             block=section('TOP_COUNTRIES','분석 조건 내 수출액 상위 10개국입니다.',[table])
             block['charts']=[{'chart_type':'HORIZONTAL_BAR','result_id':table['result_id'],'x_key':'country','series_keys':['amount_usd'],'title':'주요 수출국 (USD)','positive_color':'#16A34A','negative_color':'#DC2626'}]
             sections.append(block)
-        if 'GROWTH_RISK' in selected: sections.append(promising_section(store,uid,c))
+        if 'GROWTH_RISK' in selected:
+            block=promising_section(store,uid,c)
+            # 유망시장 섹션 위쪽: 실제 수출 통계의 국가별 증감(성장률·감소율 상위, 증감액 그래프). 아래쪽은 ML 예측.
+            block['changes']=country_changes(store,rows,previous_rows,p,prev if comparison!='NONE' else None)
+            sections.append(block)
         if 'LOCAL_ISSUES' in selected:
             articles=news.articles(store,uid,start=start,end=month_end(end),hs=hs,countries=countries,size=5)['items']
             sections.append(section('LOCAL_ISSUES','분석 조건과 기간에 해당하는 기사 본문 발췌입니다. RAG 요약·인과 분석 모듈은 미연결 상태입니다.',articles=articles,status='POLICY_PENDING'))
@@ -433,7 +474,7 @@ def report_xlsx(record,document):
                      for column in table['columns'] if column['key'] not in hidden]
             exported.append({**table,'columns':columns})
         return xlsx_bytes(exported,document['meta'],document.get('sql',[]),unit_headers=True,
-                          info_rows=user_xlsx_info(document['meta'],conditions))
+                          info_rows=user_xlsx_info(document['meta'],conditions,compare_period=False))
     return xlsx_bytes(tables,document['meta'],document.get('sql',[]),unit_headers=True)
 
 
@@ -442,7 +483,9 @@ def generate(store,job,settings):
     uid=job['subject_user_id']; rid=job['payload_json']['report_id']
     record=store.owned('report','report_id',rid,uid,lock=True)
     doc=build_document(store,uid,record)
-    if not (record.get('content_json') or {}).get('source_tables') and record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND'):
+    # 승인한 채팅 결과로 만든 요청형 리포트도 같은 템플릿을 쓴다. 이때 맥락은 결과표 사본만 쓴다(report_ondemand_context.populate_results).
+    frozen=bool((record.get('content_json') or {}).get('source_tables'))
+    if record['report_type'] in ('RPT_MONTHLY','RPT_WEEKLY','RPT_QUARTERLY','RPT_ON_DEMAND') and (not frozen or record['report_type']=='RPT_ON_DEMAND'):
         from backend.app.services.report_context import build_context
         doc['template_pdf']={'version':1,'report_type':record['report_type'],
                              'context':build_context(store,uid,record,doc)}

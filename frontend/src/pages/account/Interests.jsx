@@ -35,7 +35,7 @@ export default function Interests() {
       <p className="muted" style={{ marginTop: 6 }}>저장된 선택값을 불러왔습니다. 여러 국가와 품목을 선택할 수 있습니다.</p>
       <div style={{ marginTop: 24 }}>
         <p style={{ fontSize: 16, fontWeight: 800 }}>관심 국가 <span className="tag red" style={{ marginLeft: 6 }}>{countries.length}개 선택</span></p>
-        <CountryPicker variant="chips" value={countries} onChange={setCountries} />
+        <CountryPicker showSelected value={countries} onChange={setCountries} />
       </div>
       <div style={{ marginTop: 26, paddingTop: 22, borderTop: '1px solid var(--line)' }}>
         <p style={{ fontSize: 16, fontWeight: 800 }}>관심 품목 / HS6</p>

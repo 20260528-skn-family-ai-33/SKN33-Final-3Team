@@ -1,4 +1,5 @@
 import io
+import os
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -37,6 +38,8 @@ class BackendApiTest(unittest.TestCase):
         self.directory=tempfile.TemporaryDirectory(dir='tmp/backend_build',ignore_cleanup_errors=True)
         self.engine,self.meta=test_engine(); reference_data(self.engine,self.meta)
         self.settings=Settings(values={'API_COOKIE_SECURE':'false','API_REPORT_DIRECTORY':self.directory.name,'API_HS_VECTOR_ENABLED':'false'})
+        if os.environ.get('API_REPORT_FONT'):
+            self.settings.values['API_REPORT_FONT'] = os.environ['API_REPORT_FONT']
         self.app=create_app(self.settings,self.engine); self.client=TestClient(self.app)
         self.csrf=None
         from backend.tests.intent_fixtures import extracted_slots
@@ -277,47 +280,137 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(done['answer']['conditions']['country_codes'],[])
         self.assertEqual(self.post(url,{**body,'choice_ids':['APPLY']}).status_code,409)
 
-    def _run_numeric_review(self, correction):
+    def _assert_numeric_review(self, question, planned_task, wrong, expected_action, rewrite_failure=None):
         from langgraph.checkpoint.memory import InMemorySaver
-        from backend.app.agents.state import PlannerOutput, Draft
+        from backend.app.agents.state import Draft, PlannerOutput, WriterEdits
+        from backend.app.agents.verify import verify
         from unittest.mock import Mock
-        self.settings.values['API_CHAT_AGENT_ENABLED']='true'
-        database=self.app.state.database
-        database.agent_checkpointer=InMemorySaver()
-        database.agent_client=Mock()
-        wrong='수출액은 98765432198765 USD입니다.'
-        intro='수출 통계를 조회했습니다.'
-        original=Draft(conclusion=[{'task_id':'t1','sentences':[intro]}],explanation=[wrong],turn_summary='')
-        revised=Draft(conclusion=[{'task_id':'t1','sentences':[wrong]}],turn_summary='')
-        database.agent_client.parse.side_effect=[
-            PlannerOutput(tasks=[{'intent':'STATISTICS','question':'수출 통계','slots':{'recent_months':3}}]),
-            original, revised if correction else ValueError('invalid draft')]
+
+        self.settings.values['API_CHAT_AGENT_ENABLED'] = 'true'
+        database = self.app.state.database
+        database.agent_checkpointer = InMemorySaver()
+        database.agent_client = Mock()
+        intro = '수출 통계를 조회했습니다.'
+        original = Draft(conclusion=[{'task_id':'t1', 'sentences':[intro]}],
+                         explanation=[wrong], turn_summary='')
+        responses = [PlannerOutput(tasks=[dict(planned_task, question=question)]), original]
+        if rewrite_failure is not None:
+            responses.append(rewrite_failure)
+        database.agent_client.parse.side_effect = responses
+        observations = []
+        original_draft = original.model_dump()
+
+        def observe_verify(state, **kwargs):
+            verify(state, **kwargs)
+            feedback = [(f.section, f.index, f.action) for f in state.verification.feedback]
+            observations.append((feedback, state.writer_rewrite_result, state.draft.model_dump()))
+
         self.signup()
-        sid=self.post('chat/sessions',{}).json()['session']['session_id']
-        jid=self.post(f'chat/sessions/{sid}/messages',{'question':'수출 통계','client_message_id':'numeric-review'}).json()['job']['job_id']
-        run_once(database,self.settings)
-        job=self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
-        self.assertEqual(job['status'],'SUCCEEDED',job)
-        answer=job['answer']
-        self.assertIn(wrong,answer['text'])
-        verification=answer['verification']
-        self.assertEqual((verification['status'],verification['regeneration_count']),('NEEDS_REVIEW',1))
-        self.assertEqual([(c['index'],c['sentence']) for c in verification['sentence_checks'] if c['status']=='MISMATCH'],
-                         [(0 if correction else 1,wrong)])
-        if not correction: self.assertEqual(verification['sentence_checks'][0]['status'],'PASS')
-        self.assertEqual(database.agent_client.parse.call_count,3)  # planner, draft, one correction
+        sid = self.post('chat/sessions', {}).json()['session']['session_id']
+        jid = self.post(f'chat/sessions/{sid}/messages', {
+            'question':question, 'client_message_id':'numeric-review'}).json()['job']['job_id']
+        with patch('backend.app.agents.runtime.verify', side_effect=observe_verify):
+            self.assertTrue(run_once(database, self.settings))
+        job = self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
+        self.assertEqual(job['status'], 'SUCCEEDED', job)
+        feedback = [('explanation', 1, expected_action)]
+        decision = 'PRESERVED_NO_CORRECTION' if expected_action == 'REVIEW' else 'MODEL_OR_SCHEMA_FAILURE'
+        self.assertEqual(observations, [(feedback, None, original_draft), (feedback, decision, original_draft)])
+        answer = job['answer']
+        self.assertEqual(answer['text'].splitlines(), [intro, wrong])
+        verification = answer['verification']
+        self.assertEqual((verification['status'], verification['regeneration_count']), ('NEEDS_REVIEW', 1))
+        self.assertEqual([(c['index'], c['sentence'], c['status']) for c in verification['sentence_checks']],
+                         [(0, intro, 'PASS'), (1, wrong, 'MISMATCH')])
+        expected_schemas = [PlannerOutput, Draft] if expected_action == 'REVIEW' else [PlannerOutput, Draft, WriterEdits]
+        self.assertEqual([call.kwargs['schema'] for call in database.agent_client.parse.call_args_list],
+                         expected_schemas)
+
+    def test_review_only_keeps_original_without_rewrite_call(self):
+        self._assert_numeric_review('수출 통계', {'intent':'STATISTICS', 'slots':{'recent_months':3}},
+                                    '수출액은 98765432198765 USD입니다.', 'REVIEW')
 
     def test_failed_numeric_correction_keeps_original_marked_sentence(self):
-        self._run_numeric_review(False)
+        from backend.app.agents.state import ToolResult
+        from backend.app.agents.templates import Analysis
 
-    def test_reverified_shorter_draft_marks_only_final_sentence_index(self):
-        self._run_numeric_review(True)
+        # One target and one amount give Verify an unambiguous VALUE correction.
+        # The worker saves the fixture as an ordinary result snapshot, then Verify reads it.
+        rows = [{'country_name': '미국', 'amount_usd': 200}]
+        result = ToolResult(status='OK', digest={'kind': 'TREND', 'trade_flow': 'EXPORT', 'rows': rows})
+        analysis = Analysis(rows=rows, meta={'kind': 'TREND'}, result=result,
+                            conditions={'trade_flow': 'EXPORT'}, sql=[])
+        with patch('backend.app.agents.runtime.run_template', return_value=analysis):
+            self._assert_numeric_review('미국 수출액을 알려주세요.',
+                                        {'intent': 'STATISTICS', 'slots': {'recent_months': 1, 'answer_format': 'TEXT'}},
+                                        '미국 수출액은 199달러입니다.', 'CORRECT',
+                                        TimeoutError('simulated rewrite timeout'))
+
+    def test_writer_citations_match_the_job_and_saved_message_article_order(self):
+        from unittest.mock import Mock
+        from langgraph.checkpoint.memory import InMemorySaver
+        from backend.app.agents.state import Draft, PlannerOutput
+        from backend.app.schemas.rag import RagResponse
+        from backend.tests.rag_fixtures import article_payload, response_payload
+
+        self.settings.values['API_CHAT_AGENT_ENABLED'] = 'true'
+        db = self.app.state.database
+        db.agent_checkpointer = InMemorySaver()
+        db.agent_client = Mock()
+        questions = ['포장 공지를 알려 주세요.', '창고 공지를 알려 주세요.']
+        period = {'start': '2026-09-01', 'end': '2026-09-30'}
+        plan = PlannerOutput(tasks=[{'intent': 'LOCAL_ISSUES', 'question': q, 'slots': {'article_period': period}}
+                                    for q in questions])
+        valid = Draft(conclusion=[{'task_id': 't1', 'sentences': ['포장 공지입니다.[2]']},
+                                  {'task_id': 't2', 'sentences': ['창고 공지입니다.[3]']}],
+                      explanation=['두 공지를 확인했습니다.[2, 3]'], turn_summary='포장 공지')
+        invalid = valid.model_copy(deep=True)
+        invalid.conclusion[0].sentences = ['포장 공지입니다.[3]']
+        db.agent_client.parse.side_effect = [plan, invalid, valid]
+
+        def search(request, *, article_allowed=None, started=None):
+            item = article_payload(11 if request.query == questions[0] else 12)
+            items = [item]
+            if request.query == questions[0]:
+                items.insert(0, dict(article_payload(10), evidence=[], summary=[]))
+            return RagResponse.model_validate(response_payload(request.model_dump(mode='json'),
+                status='insufficient_evidence' if len(items) == 2 else 'insufficient_results',
+                count=len(items), articles=items))
+
+        with self.engine.begin() as connection:
+            for number in (10, 11, 12):
+                item = article_payload(number)
+                row = {k: item[k] for k in ('article_id', 'source_code', 'external_id', 'title', 'source_url')}
+                connection.execute(self.meta.tables['article'].insert().values(**row,
+                    published_date=date.fromisoformat(item['published_date']), body_masked=item['evidence'][0]['quote'],
+                    category='경제·무역', visibility_status='VISIBLE', admin_meta_json={}))
+        self.signup()
+        sid = self.post('chat/sessions', {}).json()['session']['session_id']
+        job = self.post(f'chat/sessions/{sid}/messages', {'question': ' '.join(questions),
+                        'client_message_id': 'writer-citations'}).json()['job']
+        with patch('backend.app.agents.tools.search_news', side_effect=search):
+            self.assertTrue(run_once(db, self.settings))
+        job = self.client.get(f"/api/v1/chat/jobs/{job['job_id']}").json()['job']
+        self.assertEqual(job['status'], 'SUCCEEDED', job)
+        self.assertEqual(db.agent_client.parse.call_count, 3)
+        answer = job['answer']
+        self.assertEqual([a['article_id'] for a in answer['articles']], ['10', '11', '12'])
+        self.assertTrue(answer['articles'][1]['sentences'])
+        self.assertEqual([t['conclusion'] for t in answer['tasks']], [c.sentences for c in valid.conclusion])
+        table = self.meta.tables['chat_message']
+        with self.engine.connect() as connection:
+            saved = connection.scalar(select(table.c.result_json).where(table.c.role == 'ASSISTANT'))
+        self.assertEqual(saved['answer']['articles'], answer['articles'])
+        self.assertIn(valid.explanation[0], saved['answer']['text'])
+        check = next(c for c in answer['verification']['sentence_checks'] if c['sentence'] == valid.explanation[0])
+        self.assertEqual((check['status'], check['numbers']), ('PASS', []))
 
     def test_agent_worker_resumes_then_publishes_ranked_table(self):
         from langgraph.checkpoint.memory import InMemorySaver
         from backend.app.agents.state import Draft, PlannerOutput
         from unittest.mock import Mock
         self.settings.values['API_CHAT_AGENT_ENABLED']='true'
+        self.settings.values['API_COMPOSE_MODEL']='gpt-5.6-luna'
         db=self.app.state.database
         db.agent_checkpointer=InMemorySaver()
         db.agent_client=Mock()
@@ -349,6 +442,13 @@ class BackendApiTest(unittest.TestCase):
         self.assertTrue(all(s['status']=='DONE' for s in done['progress']['plan']))
         self.assertEqual(done['status'],'SUCCEEDED',done)
         self.assertEqual(done['answer']['answer_status'],'ANSWERED')
+        requested_models = [call.kwargs['model'] for call in db.agent_client.parse.call_args_list]
+        self.assertEqual(requested_models, ['gpt-4.1-mini', 'gpt-5.6-luna'])
+        message = self.meta.tables['chat_message']
+        with self.engine.connect() as connection:
+            saved = connection.execute(select(message.c.result_json).where(
+                message.c.session_id == int(sid), message.c.role == 'ASSISTANT')).scalar_one()
+        self.assertEqual(saved['trace']['models']['compose'], requested_models[-1])
         self.assertEqual(done['answer']['tables'][0]['rows'][0]['country_code'],'CN')
         table=done['answer']['tables'][0]
         self.assertNotIn('hs_item',[c['key'] for c in table['columns']])
@@ -1245,8 +1345,10 @@ class BackendApiTest(unittest.TestCase):
         self.signup(); sid=self.post('chat/sessions',{}).json()['session']['session_id']
         jid=self.post(f'chat/sessions/{sid}/messages',{'question':'2025년 12월 전체 품목 수출','client_message_id':'scheduler-failure'}).json()['job']['job_id']
         with patch('backend.app.api.subscriptions.enqueue_due',side_effect=RuntimeError('scheduler failure')) as schedule, \
-             patch('backend.app.api.worker.time.monotonic',side_effect=[0,0,1]), \
-             patch('backend.app.api.worker.time.sleep',side_effect=KeyboardInterrupt):
+             patch('backend.app.api.worker.time', autospec=True) as clock:
+            # Only the worker loop uses this clock; Redis measures its real commands independently.
+            clock.monotonic.side_effect = [0, 0, 1]
+            clock.sleep.side_effect = KeyboardInterrupt
             with self.assertRaises(KeyboardInterrupt): run_loop(self.app.state.database,self.settings)
         self.assertEqual(schedule.call_count,1)  # 5초 재시도 시각 전에는 예약만 건너뛴다.
         self.assertEqual(self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']['status'],'SUCCEEDED')

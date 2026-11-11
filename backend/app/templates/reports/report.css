@@ -112,6 +112,12 @@ tr.lead td { background: var(--accent-soft); }  /* 요청형 주요 수출국 1�
 .legend i.line { height: 2px; width: 12px; vertical-align: 2px; }
 .legend i.dash { height: 0; width: 12px; border-top: 2px dashed var(--faint); background: none; vertical-align: 2px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; align-items: start; }
+/* 유망시장 아래 ML 분석 박스(양식의 베이지 박스 자리). 소제목·문장·표 블록이 이어져 한 상자로 보인다 */
+.mlbox { background: var(--note); padding: 1.5mm 5mm; }
+.mlbox.top { border-radius: 2mm 2mm 0 0; padding-top: 3.5mm; }   /* 위 여백은 쪽 나눔 계산(gap)이 정한다 */
+.cchart-head { margin-top: 9mm; }   /* 증감 표와 증감액 그래프 사이 */
+.mlbox.bottom { border-radius: 0 0 2mm 2mm; padding-bottom: 4mm; }
+.mlbox table { background: #fff; }
 .grid-6-4 { display: grid; grid-template-columns: 1.15fr 1fr; gap: 6mm; align-items: start; }
 
 /* 기사 카드 */
