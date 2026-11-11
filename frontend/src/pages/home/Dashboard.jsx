@@ -30,12 +30,12 @@ const shareBarWidth = share => { const pct = Number.parseFloat(share); return Nu
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
 
 /** 영역별 오류 안내(I-2). 한 영역에서 실패한 요청을 묶어 한 번만 알리고, 다시 불러오기는 그 영역만 한다. */
-function RegionError({ label, states, dark }) {
+function RegionError({ label, states }) {
   const failed = [...new Set(states.filter(s => s.error))]
   if (!failed.length) return null
   const retry = () => failed.forEach(s => s.reload?.())
   const message = `${label} 정보를 불러오지 못했습니다. ${failed[0].error.message}`
-  return <div className={dark ? 'on-dark' : undefined}><ErrorNotice error={{ ...failed[0].error, message }} retry={retry} /></div>
+  return <div><ErrorNotice error={{ ...failed[0].error, message }} retry={retry} /></div>
 }
 
 // 메인 수출입 현황의 상승 화살표(디자인 SVG). 꼬리는 투명하게 시작해 머리 쪽으로 진해진다.
@@ -181,7 +181,8 @@ export default function Dashboard({ route }) {
         </div>
       </section>
 
-      <section style={{ background: '#F6F7F9', padding: '48px 0 52px' }}>
+      {/* 위 여백은 상승 화살표 머리가 위쪽 사진 띠에 붙지 않게 넉넉히 둔다(화살표 끝 ↔ 영역 위 끝 약 52px). */}
+      <section style={{ background: '#F6F7F9', padding: '88px 0 52px' }}>
         <div className="wrap resp-stack" style={{ display: 'flex', gap: 32 }}>
           <div style={{ flex: '2 1 600px', position: 'relative' }}>
             {/* 제목·기간 글자는 상승 화살표보다 위에 그려 화살표가 글자를 가리지 않게 한다. */}
@@ -236,41 +237,41 @@ export default function Dashboard({ route }) {
         </div>
       </section>
 
-      <section style={{ background: '#15181E', color: '#ECEEF1', padding: '48px 0 52px' }}>
+      <section style={{ background: '#fff', color: '#15181E', padding: '48px 0 52px', borderTop: '1px solid #E3E6EA', borderBottom: '1px solid #E3E6EA' }}>
         <div className="wrap">
           <div className="between" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
-              <h2 style={{ fontSize: 26, fontWeight: 800, color: '#fff' }}>{data.rankTitle}</h2>
-              <p style={{ marginTop: 8, fontSize: 13, color: '#A3AAB6' }}>{data.rankSub}</p>
+              <h2 style={{ fontSize: 26, fontWeight: 800, color: '#15181E' }}>{data.rankTitle}</h2>
+              <p style={{ marginTop: 8, fontSize: 13, color: '#5C6370' }}>{data.rankSub}</p>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
               {[3, 6, 12].map(m => (
                 <button key={m} type="button" className="reset" aria-pressed={months === m} onClick={() => setMonths(m)}
-                  style={{ height: 34, padding: '0 14px', borderRadius: 17, background: months === m ? '#fff' : '#262A33', color: months === m ? '#15181E' : '#C9CED6', fontSize: 13, fontWeight: months === m ? 800 : 400, display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}>{m}개월</button>
+                  style={{ height: 34, padding: '0 14px', borderRadius: 17, background: months === m ? '#15181E' : '#F1F2F5', color: months === m ? '#fff' : '#444B57', fontSize: 13, fontWeight: months === m ? 800 : 400, display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap', flexShrink: 0 }}>{m}개월</button>
               ))}
-              <Link to={data.cardLink('HS6')} style={{ marginLeft: 10, fontSize: 14, fontWeight: 700, color: '#FF8A9A', whiteSpace: 'nowrap', flexShrink: 0 }}>상세보기 →</Link>
+              <Link to={data.cardLink('HS6')} className="more" style={{ marginLeft: 10, whiteSpace: 'nowrap', flexShrink: 0 }}>상세보기 →</Link>
             </div>
           </div>
-          <RegionError label="수출 상위 품목" states={data.states.cards} dark />
+          <RegionError label="수출 상위 품목" states={data.states.cards} />
           <div style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${interest ? Math.min(Math.max(cards.length, 2), 5) : 5},1fr)`, gap: 14 }} className="resp-stack">
             {cards.map(c => (
-              <Link key={c.hs} to={data.cardLink('COUNTRY', c.hs)} style={{ background: '#1F232B', border: '1px solid #2C313B', borderRadius: 18, padding: 18, color: '#ECEEF1', display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <Link key={c.hs} to={data.cardLink('COUNTRY', c.hs)} className="dash-card" style={{ background: '#fff', border: '1px solid #E3E6EA', borderRadius: 18, padding: 18, color: '#15181E', display: 'flex', flexDirection: 'column', gap: 10, boxShadow: '0 4px 14px rgba(21,24,30,.05)' }}>
                 <span style={{ display: 'flex', gap: 6 }}>
-                  <span style={{ padding: '3px 8px', borderRadius: 6, background: '#3A3016', color: '#F2C14E', fontSize: 12, fontWeight: 800 }}>{c.rank}</span>
-                  <span style={{ padding: '3px 8px', borderRadius: 6, background: '#2C313B', color: '#C9CED6', fontSize: 12 }}>{c.hs}</span>
+                  <span style={{ padding: '3px 8px', borderRadius: 6, background: '#FCE8EB', color: '#B0102A', fontSize: 12, fontWeight: 800 }}>{c.rank}</span>
+                  <span style={{ padding: '3px 8px', borderRadius: 6, background: '#F1F2F5', color: '#444B57', fontSize: 12 }}>{c.hs}</span>
                 </span>
                 {/* 품목명은 항상 두 줄 높이를 차지해 카드마다 아래 수치·그래프 위치가 같아진다. */}
                 <span title={c.name} style={{ fontSize: 18, fontWeight: 800, lineHeight: '24px', height: 48, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', overflowWrap: 'break-word' }}>{c.name}</span>
                 <span style={{ marginTop: 'auto', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 80px', gridTemplateRows: '18px 30px 18px', columnGap: 10, alignItems: 'center' }}>
-                  <span style={{ fontSize: 12, lineHeight: '18px', color: '#A3AAB6' }}>수출액</span>
+                  <span style={{ fontSize: 12, lineHeight: '18px', color: '#5C6370' }}>수출액</span>
                   <span style={{ gridColumn: 2, gridRow: '1 / 4', alignSelf: 'center', display: 'flex', justifyContent: 'flex-end' }}><Sparkline values={c.values} color={c.color} /></span>
                   <span title={c.exp} style={{ gridColumn: 1, gridRow: 2, fontSize: 22, lineHeight: '30px', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.exp}</span>
-                  <span title={`수입 ${c.imp}`} style={{ gridColumn: 1, gridRow: 3, fontSize: 12, lineHeight: '18px', color: '#A3AAB6', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>수입 {c.imp}</span>
+                  <span title={`수입 ${c.imp}`} style={{ gridColumn: 1, gridRow: 3, fontSize: 12, lineHeight: '18px', color: '#5C6370', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>수입 {c.imp}</span>
                 </span>
               </Link>
             ))}
           </div>
-          {data.cardsEmpty && <p style={{ marginTop: 18, fontSize: 14, color: '#A3AAB6' }}>조회 기간에 집계된 수출 품목이 없습니다.</p>}
+          {data.cardsEmpty && <p style={{ marginTop: 18, fontSize: 14, color: '#5C6370' }}>조회 기간에 집계된 수출 품목이 없습니다.</p>}
         </div>
       </section>
 
