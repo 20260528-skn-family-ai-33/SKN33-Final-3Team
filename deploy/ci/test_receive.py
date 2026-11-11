@@ -8,6 +8,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -101,6 +102,13 @@ class ReceiverTest(unittest.TestCase):
                                  ("rollback", "service readiness", "RuntimeError", "TimeoutError", "100-1"))
             receive.recover(retry=True)
             self.assertFalse(receive.JOURNAL.exists())
+
+    def test_manual_retry_without_transaction_reports_nothing_to_recover(self):
+        with redirect_stdout(io.StringIO()) as output:
+            receive.recover(retry=True)
+        self.assertEqual(output.getvalue().strip(), "복구할 롤백이 없습니다.")
+        self.service.assert_not_called()
+        self.assertFalse(receive.JOURNAL.exists())
 
     def test_interrupted_rollback_waits_for_operator(self):
         receive.save(receive.JOURNAL, {"rollback_state": "in_progress"})

@@ -113,7 +113,13 @@ class RollbackPaused(RuntimeError):
 
 def recover(*, retry=False):
     """Attempt recovery once, including when the receiver is killed during rollback."""
-    tx = read(JOURNAL)
+    try:
+        tx = read(JOURNAL)
+    except FileNotFoundError:
+        if not retry:
+            raise
+        print("복구할 롤백이 없습니다.")
+        return
     if tx.get("rollback_state") and not retry:
         raise RollbackPaused("operator recovery required")
     tx["rollback_state"] = "in_progress"
