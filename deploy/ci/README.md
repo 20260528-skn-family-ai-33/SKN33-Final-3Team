@@ -26,6 +26,18 @@
 
 웹 수신기와 수집기는 기존 `/opt/trade/venv/bin/python`을 사용한다. ML에서는 두 Python의 역할이 다르다. `20-release.conf`의 `ExecStartPre`는 **수신기 전용 Python**으로 S3의 승인된 코드를 가져온다. `TRADE_ML_PYTHON`은 **학습용 Python**으로, 수신기가 새 코드를 실제 학습 환경에서 검사할 때 사용한다.
 
+웹 수신기(`trade-release.service`)는 root로 실행된다. 웹에 설치하거나 패키지를 갱신할 때는 가상환경과 내부 패키지, Python 실행 파일, 그 상위 경로를 root가 소유하고 일반 사용자가 수정할 수 없는지 확인한다. 운영 웹 EC2의 가상환경은 `root:trade 750`, 실제 Python 실행 파일은 `root:root 755`다. `trade`는 기존 환경에서 수집기를 실행하고, 패키지 설치·갱신은 관리자가 수행한다.
+
+```bash
+cd /
+sudo stat -Lc '%U:%G %a %n' /opt/trade/venv /opt/trade/venv/bin/python
+sudo namei -l /opt/trade/venv/bin/python
+sudo find -L /opt/trade/venv \( ! -user root -o -perm /022 \) -print -quit
+sudo -u trade find -L /opt/trade/venv -writable -print -quit
+```
+
+마지막 두 명령은 모두 오류나 출력 없이 끝나야 한다. 경로가 나오면 수신기를 활성화하기 전에 해당 파일·디렉터리의 소유권과 쓰기 권한을 바로잡는다.
+
 ML EC2를 처음 설치할 때는 Python 3.11과 `venv`를 준비하고, 드롭인을 설치하기 전에 아래 명령을 실행한다. 수신기는 관리자 권한으로 실행되므로 `/opt/trade/delivery`와 전용 가상환경은 root가 소유하고 일반 사용자가 수정할 수 없어야 한다.
 
 ```bash
