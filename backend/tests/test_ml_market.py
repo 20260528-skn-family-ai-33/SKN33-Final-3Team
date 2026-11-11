@@ -318,7 +318,8 @@ class ModelTest(unittest.TestCase):
         # 상위 20% = 2개. 추천 5개에 둘 다 들어 Recall 1, Precision 2/5
         self.assertEqual((c["groups"], c["hit_at_5"], c["top20_recall_at_5"], c["top20_precision_at_5"]), (1, 1., 1., .4))
         self.assertAlmostEqual(c["top20_f1_at_5"], 2 * .4 / 1.4)
-        self.assertEqual((c["grew_share_at_5"], c["ndcg_at_10"]), (1., 1.))
+        self.assertEqual(c["grew_share_at_5"], 1.)
+        self.assertAlmostEqual(c["ndcg_at_10"], 1., delta=1e-12)  # NDCG 나눗셈 반올림으로 1.0000000000000002가 나올 수 있음
         self.assertAlmostEqual(c["spearman"], 1.)
         self.assertEqual(d["product"], {"groups": 0})  # 품목당 국가 1개라 평가 안 함
         self.assertEqual({k: d["growth_direction"][k] for k in ("accuracy", "f1", "roc_auc", "actual_rate")},

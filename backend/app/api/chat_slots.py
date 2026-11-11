@@ -26,19 +26,21 @@ def resolve_country(name,rows):
     return next(iter(matches))
 
 
+def numeric_product_mentioned(question, expression):
+    for match in re.finditer(r'(?<![\d.,])'+re.escape(expression)+r'(?![\d.,])',question):
+        tail=question[match.end():].lstrip()
+        units=r'^(?:년|년도|만|억|천|달러|원|개|%|USD\b|KRW\b)'
+        year_context=1900<=int(expression)<=2100 and re.match(r'^(?:대비|[-/.]\s*\d)',tail)
+        if not (re.search(r'[$₩]\s*$',question[:match.start()]) or re.match(units,tail,re.I) or year_context):
+            return True
+    return False
+
+
 def numeric_product(store,question,expression,explicit_codes):
-    if not expression.isascii() or len(expression) not in (4,6):
+    if not expression.isascii() or not expression.isdigit() or len(expression) not in (4,6):
         raise SlotRepair('품목은 HS4/HS6 코드 또는 이름으로 입력해 주세요.')
-    if expression not in explicit_codes:
-        # Validate numeric source evidence without using numbers to classify the question.
-        mentions=list(re.finditer(r'(?<![\d.,])'+re.escape(expression)+r'(?![\d.,])',question))
-        def non_product(match):
-            tail=question[match.end():].lstrip()
-            units=r'^(?:년|년도|만|억|천|달러|원|개|%|USD\b|KRW\b)'
-            year_context=1900<=int(expression)<=2100 and re.match(r'^(?:대비|[-/.]\s*\d)',tail)
-            return re.search(r'[$₩]\s*$',question[:match.start()]) or re.match(units,tail,re.I) or year_context
-        if not mentions or all(non_product(match) for match in mentions):
-            raise SlotRepair('연도·금액 표현을 품목으로 사용할 수 없습니다. 품목명 또는 HS 코드를 입력해 주세요.')
+    if expression not in explicit_codes and not numeric_product_mentioned(question,expression):
+        raise SlotRepair('연도·금액 표현을 품목으로 사용할 수 없습니다. 품목명 또는 HS 코드를 입력해 주세요.')
     hs=store.t('hs_code')
     registered=store.c.scalar(select(hs.c.hs_code).where(hs.c.hs_code==expression,
         hs.c.hs_ver=='HS2022',hs.c.depth==len(expression)))

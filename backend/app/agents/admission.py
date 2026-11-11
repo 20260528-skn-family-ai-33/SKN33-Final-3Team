@@ -34,7 +34,7 @@ def request_transaction(db):
         raise
 
 
-def accept(store,uid,session,question,key):
+def accept(store,uid,session,question,key,*,article_action=None):
     sid=session['session_id']; table=store.t('chat_message')
     direct_key=digest([uid,key])
     sessions=store.t('chat_session')
@@ -57,6 +57,7 @@ def accept(store,uid,session,question,key):
         elif foreign:
             require(False,OTHER_QUEUE_MESSAGE,'JOB_IN_OTHER_ENVIRONMENT',409)
         elif current['status']=='NEEDS_INPUT':
+            require(article_action is None,'이 대화의 작업이 진행 중입니다.','JOB_IN_PROGRESS',409)
             prompt=current['result_json']['clarification']
             return resume(store,current,{'clarification_id':prompt['clarification_id'],'text':question},client_key=key)
         else: require(False,'이 대화의 작업이 진행 중입니다.','JOB_IN_PROGRESS',409)
@@ -65,10 +66,14 @@ def accept(store,uid,session,question,key):
     context=ChatContext(store.db.redis)
     cached=context.load(str(sid),session.get('context_json') or {},(latest['result_json'] or {}).get('job_id') if latest else None)
     saved=accounts.interests(store,uid)
-    job=jobs.enqueue(store,uid,'API_CHAT',sid,{'question':question},key)
+    payload = {'question': question}
+    if article_action is not None:
+        payload['article_action'] = article_action
+    job=jobs.enqueue(store,uid,'API_CHAT',sid,payload,key)
     jid=str(job['job_id'])
     job['payload_json']['input']=AgentInput(job_id=jid,session_id=str(sid),user_id=uid,question=question,context=cached,
-        interests={k:saved[k] for k in ('hs_items','country_codes')},first_question=latest is None,received_at=now()).model_dump(mode='json')
+        interests={k:saved[k] for k in ('hs_items','country_codes')},first_question=latest is None,received_at=now(),
+        article_action=article_action).model_dump(mode='json')
     job['agent']=budget.new_round(uuid4().hex,0)
     jobs.mark_agent(job,store.db)
     jobs._save_chat(store,job)
@@ -139,7 +144,7 @@ def resume(store,job,data,client_key=None):
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=409,content={'code':'CLARIFICATION_EXPIRED','message':'시간이 지나 다시 질문해 주세요.',
                             'details':[],'retryable':False,'request_id':str(job['job_id'])})
-    answer_patch(store,state,data)  # Validate requested mode and any server-owned selections.
+    patch=answer_patch(store,state,data)  # Validate requested mode and any server-owned selections.
     if state.pending.kind=='REPORT_CONFIRM' and 'text' in data:
         from backend.app.api.chat_slots import country_key
         if country_key(data['text']) in ('예','네','응','좋아','동의','확인','적용','생성','아니','아니오','아니요','싫어','거절','취소'):
@@ -149,7 +154,8 @@ def resume(store,job,data,client_key=None):
                 job['payload_json'].setdefault('direct_message_keys',{})[digest([job['subject_user_id'],client_key])]=digest(data['text'])
                 jobs._save_chat(store,job)
             return {'job':view_job(job)}
-    jobs.remember_prompt(job,job['result_json']['clarification'],data)
+    jobs.remember_prompt(job,job['result_json']['clarification'],data,store=store,
+                         hs_items=patch.get('hs_items',()) if state.pending.kind=='HS_ITEM' else ())
     ledger=budget.new_round(uuid4().hex,job['claim_token'])
     ledger['step_results']=job['agent']['step_results']
     if job['agent'].get('progress'):

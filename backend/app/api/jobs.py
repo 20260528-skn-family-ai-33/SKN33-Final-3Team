@@ -75,7 +75,7 @@ def mark_agent(job, db):
     job['queue']=queue_id(db)
 
 
-def remember_prompt(job, prompt, answer=None):
+def remember_prompt(job, prompt, answer=None, *, store=None, hs_items=()):
     history=job['payload_json'].setdefault('clarification_history',[])
     identity=prompt['clarification_id']
     entry=next((item for item in history if item['id']==identity),None)
@@ -83,7 +83,16 @@ def remember_prompt(job, prompt, answer=None):
         entry={'id':identity,'message':prompt['message']}
         history.append(entry)
     if answer is None: return
-    if 'text' in answer: label=answer['text']
+    if hs_items:
+        table=store.t('hs_code')
+        labels=[]
+        for item in hs_items:
+            code=item['hs_code']
+            name=store.c.scalar(select(table.c.name_ko).where(
+                table.c.hs_code==code,table.c.hs_ver==item['hs_ver']))
+            labels.append(f'{name} (HS {code})' if name else f'HS {code}')
+        label=', '.join(labels)
+    elif 'text' in answer: label=answer['text']
     elif 'choice_ids' in answer:
         labels={c['choice_id']:c['label'] for c in prompt['choices']}
         label=', '.join(labels[k] for k in answer['choice_ids'])

@@ -309,8 +309,10 @@ class RagService:
                 context.remaining()
         except Exception as exc:
             if isinstance(exc, RagDeadlineExceeded) or context.work_deadline <= context.clock():
-                context.event('global_deadline_exceeded')
+                context.event('global_deadline_exceeded',failed_stage=stage)
                 if not (regular_chat and articles):
+                    if isinstance(exc,RagDeadlineExceeded):
+                        raise
                     raise RagDeadlineExceeded('global_deadline_exceeded') from exc
                 failures.append(RagFailure(stage='timeout', code='global_deadline_exceeded'))
             else:

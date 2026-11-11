@@ -1,6 +1,8 @@
 """현재 모델 설정 재사용. 각 호출의 남은 시간과 사용량을 추적합니다."""
 import json
 import re
+from openai import APITimeoutError
+from backend.app.services.rag.runtime import query_call, query_limits, RagDeadlineExceeded
 
 from backend.app.services.rag.store import MODEL, DIMENSIONS
 from backend.app.services.shortnews_analysis import CHAT_MODEL
@@ -90,11 +92,18 @@ class ModelGateway:
         return response['format'], response['body_topic']
 
     def embed(self, texts, context):
+        seconds = min(context.remaining(), query_limits()[0])  # TODO(C-28) 임시 상한은 query_limits에 둔다
         context.model_calls += 1
-        response = self.api.with_options(timeout=context.remaining(), max_retries=0).embeddings.create(
-            model=MODEL, input=texts, dimensions=DIMENSIONS)
+        context.event('query_embedding_start')
+        try:
+            response = query_call(lambda: self.api.with_options(timeout=seconds,max_retries=0).embeddings.create(
+                model=MODEL,input=texts,dimensions=DIMENSIONS),seconds)
+        except (APITimeoutError,RagDeadlineExceeded) as exc:
+            context.event('query_embedding_timeout')
+            raise RagDeadlineExceeded('query_embedding_timeout') from exc
         context.tokens += response.usage.total_tokens
         context.remaining()
+        context.event('query_embedding_complete')
         return [r.embedding for r in sorted(response.data, key=lambda row: row.index)]
 
     def structured(self, instruction, payload, schema, context):

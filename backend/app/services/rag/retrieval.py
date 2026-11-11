@@ -91,9 +91,11 @@ def search(request, snapshot, vocabulary, gateway, context, *, candidate_limit=N
                                 and (article_allowed is None or article_allowed(unavailable))):
                             result.evidence_missing = True
                 n = min(window, total)
+                context.event('vector_search_start',collection=name)
                 page = col.query(query_embeddings=[vector], n_results=n, where=filter_where(request, sources=ready),
                                  include=['documents', 'metadatas', 'distances'])
                 context.remaining()
+                context.event('vector_search_complete',collection=name)
                 ids = page['ids'][0]
                 distances = page['distances'][0]
                 if any(not math.isfinite(float(d)) for d in distances):

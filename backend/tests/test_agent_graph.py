@@ -60,6 +60,19 @@ def initial():
 
 
 class AgentGraphTest(unittest.TestCase):
+    def test_article_query_clarifies_korean_trade_direction_and_confirmed_scope(self):
+        from backend.app.agents.tools import article_query
+        from backend.app.agents.state import Conditions
+        from backend.tests.test_agent_state import state
+        task = state().plan.tasks[0]
+        task.question = '이유 찾아줘'
+        task.conditions = Conditions(country_codes=['CN'],
+            hs_items=[{'hs_code':'854232','hs_ver':'HS2022'}],trade_flow='EXPORT')
+        names = {('854232','HS2022'):'메모리'}
+        self.assertIn('한국이 중국에 수출하는 메모리',article_query(task,{'CN':'중국'},names))
+        task.conditions.trade_flow='IMPORT'
+        self.assertIn('중국에서 한국으로 수입하는 메모리',article_query(task,{'CN':'중국'},names))
+
     def test_success_round_trip_and_node_order(self):
         services = Services()
         graph = build_graph(services, InMemorySaver())

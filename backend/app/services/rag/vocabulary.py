@@ -59,7 +59,9 @@ class Vocabulary:
         return tuple(dict.fromkeys(terms))
 
     def query(self, request):
-        terms = [request.query, *self.product_terms(request.conditions.products)]
+        products = request.conditions.products
+        terms = [request.query, *self.product_terms(products)]
+        terms.extend(p.hs_code for p in products if len(p.hs_code) == 6)
         terms.extend(self.countries.get(c, c) for c in request.conditions.geography.codes)
         normalized = kc.normalize(' '.join(terms))
         for alias, canonical in self.synonyms.items():

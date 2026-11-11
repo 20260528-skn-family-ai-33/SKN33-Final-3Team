@@ -6,7 +6,7 @@ LangGraph 그래프의 state이며, langgraph-checkpoint-redis가 Redis에 체�
 from datetime import date, datetime, timedelta
 from typing import Annotated, Literal
 
-from pydantic import (AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, field_validator,
+from pydantic import (AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, JsonValue, StringConstraints, field_validator,
                       model_validator)
 from pydantic_core import to_json
 
@@ -217,11 +217,27 @@ class TurnSummary(Model):
     answered_at: datetime
 
 
+class ArticleRetry(Model):
+    question: Annotated[str, _chars(1, 4000)]
+    conditions: Conditions
+    trade_context: bool = False
+    # 사용자가 기사 기간을 정하지 않은 기사 조회(기본 최근 3개월)면 다시검색 시점 기준으로 기간을 다시 계산한다.
+    default_period: bool = False
+
+    @model_validator(mode='after')
+    def requires_article_period(self):
+        if self.conditions.article_period is None:
+            raise ValueError('기사 재검색에는 확정된 기사 기간이 필요합니다')
+        return self
+
+
 class SessionContext(Model):
     """대화방 컨텍스트(Redis CONTEXT_KEY, Redis에만 둔다).
-    MySQL chat_session.context_json에는 conditions만 저장하므로 키가 사라지면 recent는 비어서 다시 시작한다."""
+    MySQL chat_session.context_json에는 확정 조건과 방향 선택을 저장한다. 키가 사라지면 recent는 비어서 다시 시작한다."""
     session_id: str
     conditions: Conditions | None = None   # 최근 검색 조건
+    both_trade_flows: bool = False  # 같은 검색 조건으로 수출과 수입을 모두 조회했는지
+    article_retry: ArticleRetry | None = None  # 검증된 답변 이력과 별도로 보관하는 마지막 기사 요청
     recent: list[TurnSummary] = Field(default_factory=list, max_length=HISTORY_TURNS)  # 오래된 것부터
     interest_action: Literal['NONE', 'APPLIED', 'DECLINED', 'CLEARED'] = 'NONE'
     # 이 컨텍스트를 마지막으로 쓴 답변의 job_id. MySQL 성공 답변과 다르면 오래된 컨텍스트로 보고 조건만 복구한다(D-77)
@@ -230,6 +246,18 @@ class SessionContext(Model):
     def remember(self, turn: TurnSummary) -> 'SessionContext':
         return self.model_copy(update={'conditions': turn.conditions or self.conditions,
                                        'recent': [*self.recent, turn][-HISTORY_TURNS:]})
+
+
+class ArticleAction(Model):
+    article_id: Annotated[str, StringConstraints(strict=True, pattern=r'^[1-9][0-9]{0,19}$')]
+    mode: Literal['summary', 'related', 'both']
+
+    @field_validator('article_id')
+    @classmethod
+    def check_article_id(cls, value):
+        if int(value) > 2**64 - 1:
+            raise ValueError('올바른 기사 ID가 필요합니다.')
+        return value
 
 
 class AgentInput(Model):
@@ -244,6 +272,7 @@ class AgentInput(Model):
     # Redis 컨텍스트가 비었는지로 판정하지 않는다(유실 뒤에도 비어 있음)
     first_question: bool = False
     received_at: datetime
+    article_action: ArticleAction | None = None
 
 
 class Step(Model):
@@ -350,6 +379,7 @@ class PlannedTask(Model):
     custom_query: Annotated[str, _truncate(MAX_TEXT_CHARS), _chars(1)] | None = None
     source_tasks: list[int] = Field(default_factory=list)  # 1부터 시작하는 선행 질문 번호. ID는 서버가 만든다.
     target_selections: list[PlannedTargetSelection] = Field(default_factory=list)
+    previous_turn_result: bool | None = None  # 이전 턴 결과표 사용 요청. 결과 ID는 서버가 찾는다.
 
 
 class PlannerOutput(Model):
@@ -370,6 +400,8 @@ class PlannerOutput(Model):
                     selections.setdefault(selection.source_task, selection)
             task.target_selections = list(selections.values())
             task.source_tasks.extend(s for s in selections if s not in task.source_tasks)
+            if task.previous_turn_result and (task.intent != 'REPORT' or task.source_tasks):
+                raise SafeError('이전 턴 결과표는 같은 턴의 선행 연결이 없는 리포트에서만 사용합니다')
             # 정식 국가명이 빈 표현: 선행 결과에서 대상을 받는 질문이면 그 대상("그 국가들")이므로 버리고,
             # 아니면 원문 표현으로 사전 검색해 못 찾으면 되묻는다(check_conditions).
             if task.slots.countries:
@@ -411,6 +443,7 @@ class Task(Model):
     slots: TaskSlots = Field(default_factory=TaskSlots)
     custom_query: Annotated[str, _truncate(MAX_TEXT_CHARS), _chars(1)] | None = None
     input_bindings: list[ResultBinding] = Field(default_factory=list, max_length=2)
+    previous_turn_result: bool = False
     answer_status: AnswerStatus | None = None  # 해당 하위 질문의 최종 결과. None은 미완료
     question: Annotated[str, _truncate(TASK_QUESTION_CHARS), Field(min_length=1)]   # 플래너가 나눈 하위 질문 문장
     steps: list[Step] = Field(default_factory=list, max_length=6)
@@ -423,6 +456,8 @@ class Task(Model):
 
     @model_validator(mode='after')
     def check_outcome(self):
+        if self.previous_turn_result and (self.intent != 'REPORT' or self.input_bindings):
+            raise ValueError('이전 턴 결과표와 같은 턴 선행 연결을 함께 사용할 수 없습니다')
         if _json_size(self.resolved) > MAX_RESOLVED_BYTES:
             raise ValueError('확정한 되묻기 답이 너무 큽니다')
         if self.report_request and (self.intent != 'REPORT' or self.conditions != self.report_request.conditions):
@@ -500,7 +535,7 @@ class Pending(Model):
     task_id: str
     # INTEREST_SELECT: 관심사가 조건 상한을 넘을 때 input.interests 안에서 품목 5개·국가 20개까지 골라 받는다(D-64).
     # 후보는 state에 이미 있으므로 choices에는 '전체 범위'만 둔다.
-    kind: Literal['HS_ITEM', 'COUNTRY', 'INTEREST_CONTEXT', 'INTEREST_SELECT', 'INTEREST_CHANGE', 'RANKING_GROUP', 'MODEL_PERIOD', 'REPORT_CONFIRM', 'SHARE_BASIS', 'INPUT_SELECTION']
+    kind: Literal['HS_ITEM', 'COUNTRY', 'INTEREST_CONTEXT', 'INTEREST_SELECT', 'INTEREST_CHANGE', 'RANKING_GROUP', 'MODEL_PERIOD', 'REPORT_CONFIRM', 'SHARE_BASIS', 'INPUT_SELECTION', 'REPORT_SOURCE']
     condition_key: ShortText   # 되묻기 횟수를 세는 단위. 예: 't1:hs:화장품', 't1:country:콩고'
     message: ShortText
     choices: list[Choice] = Field(max_length=5)

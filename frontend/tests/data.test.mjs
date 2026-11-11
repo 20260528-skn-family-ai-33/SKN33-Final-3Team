@@ -1,10 +1,22 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { amount, percent, reportEok, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison } from '../src/api/adapters.js'
-import { registerCountries, countryCode, countryName, registerProducts, productName } from '../src/data/catalog.js'
+import { amount, percent, reportEok, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison, monthEndDate } from '../src/api/adapters.js'
+import { registerCountries, countryCode, countryName, registerProducts, productName, productChoiceLabel } from '../src/data/catalog.js'
 import { isStrongPassword } from '../src/utils/validate.js'
 import { promisingView } from '../src/pages/analysis/promising.js'
+test('월 단위 종료일은 윤년을 포함해 말일로 표시한다', () => {
+  assert.equal(monthEndDate('2024-02-01'),'2024-02-29')
+  assert.equal(monthEndDate('2025-02-28'),'2025-02-28')
+  assert.equal(monthEndDate('2025-12'),'2025-12-31')
+})
+test('품목 선택에는 HS 코드를 한 번만 붙인다', () => {
+  for (const label of ['기초화장품', '기초화장품 (330499)', '기초화장품 (HS 330499)']) {
+    assert.equal(productChoiceLabel('330499', label), '기초화장품 (HS 330499)')
+  }
+  assert.equal(productChoiceLabel('330499', '330499'), 'HS 330499')
+  assert.equal(productChoiceLabel(null, '전체 범위'), '전체 범위')
+})
 test('미수집 값과 실제 0을 구분하고 USD를 억 USD로 표시한다', () => {
   assert.equal(amount(null), '—'); assert.equal(amount(0), '0'); assert.equal(amount(15720000000), '157.2')
   assert.equal(amount(2345678), '0.02'); assert.equal(amount(51234), '0.0005'); assert.equal(amount(1230), '0.00001')
@@ -171,4 +183,13 @@ test('유망시장 표는 저장된 순위 기준(group_by)을 행 모양보다 
   const view = promisingView({ tables: [{ meta: { group_by: 'HS6' }, rows: [row] }] })
   assert.equal(view.rankLabel, '품목 안 순위'); assert.equal(view.rows[0].rank, 7); assert.equal(view.rows[0].size, 90)
   assert.equal(promisingView({ tables: [{ meta: { group_by: 'COUNTRY' }, rows: [row] }] }).rows[0].rank, 3)
+})
+test('monthly trade result titles follow each saved result direction', async () => {
+ const {taskTitle}=await import('../src/pages/analysis/taskTitle.js')
+ const tables=[{meta:{kind:'TREND'}}]
+ for(const wording of ['수출', '수출입', '수출 및 수입']){
+  const task={intent:'STATISTICS',question:`미국에 대한 ${wording} 추이 보여줘`}
+  assert.equal(taskTitle({...task,conditions:{trade_flow:'EXPORT'}},tables),'미국에 대한 수출 추이 보여줘')
+  assert.equal(taskTitle({...task,conditions:{trade_flow:'IMPORT'}},tables),'미국에 대한 수입 추이 보여줘')
+ }
 })

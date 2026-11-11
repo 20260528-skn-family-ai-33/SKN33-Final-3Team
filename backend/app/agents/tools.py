@@ -51,20 +51,38 @@ def warm_article_index():
     return thread
 
 
-def _article_digest(response, period):
+def article_query(task, countries, products, *, question=None):
+    conditions=task.conditions
+    partners=', '.join(countries.get(code,code) for code in conditions.country_codes) or '전체 상대국'
+    items=', '.join(products.get((h.hs_code,h.hs_ver),h.hs_code) for h in conditions.hs_items) or '전체 품목'
+    trade_context=task.intent=='CAUSE' or any(s.args.get('trade_context') for s in task.steps)
+    if trade_context:
+        direction=(f'한국이 {partners}에 수출' if conditions.trade_flow=='EXPORT'
+                   else f'{partners}에서 한국으로 수입')
+        scope=f'{direction}하는 {items}'
+    else:
+        scope=f'기사의 분석 대상 품목: {items}'
+        if conditions.country_codes:
+            scope+=f'; 대상 국가: {partners}'
+    if trade_context and conditions.period:
+        scope+=f' ({conditions.period.start:%Y-%m}~{conditions.period.end:%Y-%m})'
+    return f'{scope}\n{question or task.question}'
+
+
+def _article_digest(articles, status, period):
     """Keep each sentence with its evidence limits. Drop whole sentences to fit the checkpoint."""
     from pydantic_core import to_json
     from backend.app.agents.state import MAX_DIGEST_BYTES
 
     items = []
-    for a in response.articles:
+    for a in articles:
         if not period.start <= a.published_date <= period.end:
             raise ValueError('기사 날짜가 요청 범위 밖입니다.')
         items.append({'article_id': a.article_id, 'title': a.title[:100], 'published_date': a.published_date.isoformat(),
                       'source_code': a.source_code.value, 'evidence_role': a.evidence_role,
                       'reference_limitation': a.reference_limitation, 'evidence_sufficient': False, 'summary': []})
-    digest = {'kind': 'ARTICLES', 'article_period': period.model_dump(mode='json'), 'rag_status': response.status,
-              'unverified_question_parts': list(response.unverified_question_parts), 'items': items,
+    digest = {'kind': 'ARTICLES', 'article_period': period.model_dump(mode='json'), 'rag_status': status,
+              'unverified_question_parts': list(RagResponse.common_unverified_parts(articles)), 'items': items,
               'rows_total': len(items), 'truncated': False}
     if len(to_json(digest)) > MAX_DIGEST_BYTES:
         # Oversized caveats cannot be separated from the text they qualify. Retain the UI list only.
@@ -72,7 +90,7 @@ def _article_digest(response, period):
         for item in items:
             item['reference_limitation'] = '기사 근거와 한계를 함께 전달할 수 없어 목록만 제공합니다.'
         return digest
-    for a, item in zip(response.articles, items, strict=True):
+    for a, item in zip(articles, items, strict=True):
         for sentence in a.summary:
             item['summary'].append({'text': sentence.text,
                                     'unverified_question_parts': list(sentence.unverified_question_parts)})
@@ -84,39 +102,57 @@ def _article_digest(response, period):
     return digest
 
 
-def article_result(state, task, step, *, article_allowed=None, keep_evidence=None, started=None):
+CHAT_RETRY_HINT = '잠시 후 다시검색을 요청해 주세요.'
+
+
+def article_result(state, task, step, *, article_allowed=None, keep_evidence=None, started=None, query=None,
+                   retry_hint=CHAT_RETRY_HINT):
     """그래프 기사 단계(§14.4). article_allowed는 공개·사용자 차단 필터(기존 채팅과 같음).
     keep_evidence(items)는 인용 근거를 결과 저장소에 두고 result_id를 돌려준다(D-102). 본문 인용은 digest에 넣지 않는다."""
     from backend.app.agents.state import ToolResult
     conditions=task.conditions
-    request=RagRequest(request_id=f'{state.input.job_id}:{step.step_id}',query=task.question,use_case='chat',
+    request=RagRequest(request_id=f'{state.input.job_id}:{step.step_id}',query=query or task.question,use_case='chat',
         conditions={'geography':{'mode':'selected' if conditions.country_codes else 'all','codes':conditions.country_codes},
                     'products':conditions.hs_items,'period':conditions.article_period,'blocked_topics':()},limit=5)
     try:
         response=search_news(request,article_allowed=article_allowed,started=started)
-    except RagDeadlineExceeded:
-        return ToolResult(status='NO_DATA',error='기사 검색 시간이 끝나 검수를 통과한 기사가 없습니다.')
+    except RagDeadlineExceeded as exc:
+        message=(f'기사 검색용 질의 처리 시간이 초과되었습니다. {retry_hint}'
+                 if str(exc)=='query_embedding_timeout'
+                 else f'기사 검색 또는 근거 검수 시간이 초과되었습니다. {retry_hint}')
+        return ToolResult(status='NO_DATA',error=message)
     if response.request_id!=request.request_id or response.applied_conditions!=request.conditions:
         raise ValueError('기사 검색 결과의 요청 조건이 다릅니다.')
     timed_out=any(f.stage=='timeout' for f in response.failures)
+    if response.failures:
+        import logging
+        logging.getLogger(__name__).warning('article_search_result job_id=%s status=%s articles=%s failures=%s',
+            state.input.job_id,response.status,len(response.articles),
+            [(failure.stage,failure.code) for failure in response.failures])
     if response.status=='failed':
         if timed_out:
-            return ToolResult(status='NO_DATA',error='기사 검색 시간이 끝나 검수를 통과한 기사가 없습니다.')
+            return ToolResult(status='NO_DATA',error=f'기사 검색 또는 근거 검수 시간이 초과되었습니다. {retry_hint}')
         return ToolResult(status='FAILED',error='기사 검색에 실패했습니다.')
     if not response.articles:
-        reason = ('기사 검색 시간이 끝나 검수를 통과한 기사가 없습니다.' if timed_out else
-                  '기사 본문에서 질문에 쓸 근거를 확인하지 못했습니다.' if response.status=='insufficient_evidence'
-                  else '조건에 맞는 기사가 없습니다.')
-        return ToolResult(status='NO_DATA',error=reason)
-    digest = _article_digest(response, conditions.article_period)
-    items = digest['items']
-    partial=response.status!='ok' or digest['truncated'] or any(not a['evidence_sufficient'] for a in items)
+        message=(f'기사 검색 또는 근거 검수 시간이 초과되었습니다. {retry_hint}' if timed_out
+                 else '기사 본문에서 질문에 쓸 근거를 확인하지 못했습니다.' if response.status=='insufficient_evidence'
+                 else '조건에 맞는 기사가 없습니다.')
+        return ToolResult(status='NO_DATA',error=message)
     limitation=('기사 검색 시간이 끝나 확인을 마친 결과만 표시합니다.' if timed_out
                 else '기사 근거 또는 검색 범위가 부족합니다.')
+    return article_evidence_result(conditions, response.articles, response.status, keep_evidence, limitation)
+
+
+def article_evidence_result(conditions, articles, status, keep_evidence, limitation):
+    """검색 결과와 선택 기사 요약이 같은 digest 형식(main의 문장별 근거 한계 포함)을 쓴다."""
+    from backend.app.agents.state import ToolResult
+    digest = _article_digest(articles, status, conditions.article_period)
+    items = digest['items']
+    partial=status!='ok' or digest['truncated'] or any(not a['evidence_sufficient'] for a in items)
     result_id=None
     if keep_evidence:
         from backend.app.api.chat_news import evidence_items
-        result_id=keep_evidence(evidence_items(response.articles))
+        result_id=keep_evidence(evidence_items(articles))
     return ToolResult(status='OK',result_id=result_id,article_ids=[a['article_id'] for a in items],article_period=conditions.article_period,
         completeness='PARTIAL' if partial else 'COMPLETE',limitations=[limitation] if partial else [],
         digest=digest)
@@ -128,6 +164,7 @@ HS_LOOKUP_LIMIT = 10   # 표현 하나의 후보 수(HS4·HS6 각 5개)
 def hs_lookup_result(store, task):
     """D-101: 품목 표현 → HS 코드, HS 코드 → 품목명. 조건을 확정하지 않고 HS2022 사전 검색 결과만 돌려준다."""
     from backend.app.agents.digest import bounded
+    from backend.app.agents.planner import HS_CODE_MENTION
     from backend.app.agents.state import ToolResult
     from backend.app.api.reference import _search_depth
     expressions = (task.slots.products if task.slots else None) or []
@@ -135,9 +172,13 @@ def hs_lookup_result(store, task):
         return ToolResult(status='NO_DATA', error='품목명이나 HS 코드를 함께 입력해 주세요.')
     items, missing = [], []
     for expr in expressions:
+        if match := HS_CODE_MENTION.fullmatch(expr.strip()):
+            expr = match[1]
         found = {}
-        for depth in (4, 6):
+        for depth in (len(expr),) if expr.isdigit() and len(expr) in (4, 6) else (4, 6):
             for row in _search_depth(store, expr, depth, 5)['items']:
+                if expr.isdigit() and row['hs_code'] != expr:
+                    continue
                 found.setdefault(row['hs_code'], {'query': expr, 'code': row['hs_code'], 'name': row['name_ko'],
                                                   'level': f'HS{depth}'})
         if found: items.extend(list(found.values())[:HS_LOOKUP_LIMIT])

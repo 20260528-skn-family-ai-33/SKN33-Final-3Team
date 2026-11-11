@@ -61,6 +61,9 @@ def validate_value(value, kind, name, query=False):
     elif kind == 'Conditions': return Conditions.model_validate(value).model_dump(mode='json')
     elif kind == 'ReportConditions': return ReportConditions.model_validate(value).model_dump(mode='json')
     elif kind == 'HsItem': return HsItem.model_validate(value).model_dump(mode='json')
+    elif kind == 'ArticleAction':
+        from backend.app.agents.state import ArticleAction
+        return ArticleAction.model_validate(value).model_dump(mode='json')
     elif kind in ('ArticleLinkInput', 'ConsentAcceptance'):
         require(isinstance(value, dict), f'{name}: 객체가 필요합니다.')
     return value

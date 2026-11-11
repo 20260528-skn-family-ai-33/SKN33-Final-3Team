@@ -2,7 +2,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import Icon from './Icon'
 import { Btn, Check } from './ui'
-import { countries, registerProducts, toggleValue, productName } from '../data/catalog'
+import { countries, registerProducts, toggleValue, productName, productChoiceLabel } from '../data/catalog'
 import { api } from '../api/client'
 import { useQuery, ErrorNotice, useDebouncedValue } from '../api/hooks'
 import { useApp } from '../store'
@@ -21,7 +21,7 @@ function FullHsName({ name, code }) {
 
 /** HS4 검색·확정 입력. 확정되면 onConfirm(group)을 부른다.
  * expandGroup: HS4 코드(4자리)를 정확히 넣으면 목록에 하위 HS6도 펼쳐, HS4 전체나 HS6 하나를 바로 고르게 한다(수출입 순위). */
-export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelectProduct, expandGroup }) {
+export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelectProduct, expandGroup, hs6First }) {
   const { run } = useApp()
   const [query, setQuery] = useState(group ? `${group.code} · ${group.name}` : '')
   const [open, setOpen] = useState(false)
@@ -32,15 +32,18 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const retry = load => () => { load(); inputRef.current?.focus() }
   const confirmed = group && query === `${group.code} · ${group.name}`
   const q = query.trim()
-  const searchQuery=confirmed ? '' : q
+  const searchText = hs6First ? q.replace(/^HS(?:\s*[46])?(?:\s*코드)?\s*[:\-]?\s*(\d{4}|\d{6})$/i, '$1') : q
+  const searchQuery=confirmed ? '' : searchText
   const settled = useDebouncedValue(searchQuery)
   const exactProduct = !!onSelectProduct && !hs4Only && /^\d{6}$/.test(settled)
-  const search = useQuery('/reference/hs-codes', { q: settled, depth: exactProduct ? 6 : 4, limit: 5 }, settled.length >= 1 && !confirmed)
-  const tryProducts = !!onSelectProduct && !hs4Only && settled.length>=1 && !confirmed && !/^\d+$/.test(settled)
+  const searchDepth = exactProduct || (hs6First && !hs4Only) ? 6 : 4
+  const search = useQuery('/reference/hs-codes', { q: settled, depth: searchDepth, limit: 5 }, settled.length >= 1 && !confirmed)
+  const tryProducts = !!onSelectProduct && !hs4Only && searchDepth === 4 && settled.length>=1 && !confirmed && !/^\d+$/.test(settled)
   const fallback = useQuery('/reference/hs-codes', { q: settled, depth: 6, limit: 5 }, tryProducts)
   const preferProducts = tryProducts && search.data?.match_type!=='EXACT' && !!fallback.data && (!search.data?.items.length || fallback.data.match_type === 'EXACT')
   const active = preferProducts ? fallback : search
-  const found = (settled === q ? active.data?.items || [] : []).filter(h => !exactProduct || h.hs_code === q)
+  const found = (settled === searchText ? active.data?.items || [] : [])
+    .filter(h => h.depth === (preferProducts ? 6 : searchDepth) && (!exactProduct || h.hs_code === searchText))
   const exactGroup = !hs4Only && expandGroup && onSelectProduct && /^\d{4}$/.test(q) ? found.find(h => h.hs_code === q && h.depth === 4) : null
   const children = useQuery(`/reference/hs-codes/${q}/children`, { hs_ver: 'HS2022' }, !!exactGroup && open && !confirmed)
   const results = exactGroup ? [exactGroup, ...(children.data?.items || [])] : found
@@ -74,10 +77,10 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   }
   return <>
     {onSelectProduct && <div className="chips" role="group" aria-label="품목 검색 단위">
-      <Btn aria-pressed={!hs4Only} kind={!hs4Only?'plum':'line'} onClick={()=>{selection.current++;setCursor(-1);setHs4Only(false);setOpen(true)}}>통합 검색</Btn>
+      <Btn aria-pressed={!hs4Only} kind={!hs4Only?'plum':'line'} onClick={()=>{selection.current++;setCursor(-1);setHs4Only(false);setOpen(true)}}>{hs6First ? 'HS6 세부품목 검색' : '통합 검색'}</Btn>
       <Btn aria-pressed={hs4Only} kind={hs4Only?'plum':'line'} onClick={()=>{selection.current++;setCursor(-1);setHs4Only(true);setOpen(true)}}>HS4 단위로 검색</Btn>
     </div>}
-    <div className="hs-picker" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false) }}>
+    <div className={'hs-picker' + (hs6First ? ' chat-hs-picker' : '')} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false) }}>
       <div className={'input' + (q ? ' val' : '') + (open ? ' focus' : '')}>
         <Icon name="search" size={18} color="#5C6370" />
         <input
@@ -91,21 +94,24 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
         {q && <button type="button" className="reset more" aria-label="품목 검색 지우기" onClick={() => { selection.current++; setQuery(''); onConfirm(null); setOpen(false) }}>지우기</button>}
         {confirmed && <span className="tag plum">HS4 확정</span>}
       </div>
-      {buttonLabel && <Btn kind="ink" size="md" disabled={!confirmed} onClick={onSelectAll} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(group)}</Btn>}
+      {/* HS6 세부품목 검색에서는 HS4를 고를 수 없으므로 HS4 전체 버튼은 HS4 단위 검색에서만 보인다. */}
+      {buttonLabel && (!hs6First || hs4Only) && <Btn kind="ink" size="md" disabled={!confirmed} onClick={onSelectAll} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(group)}</Btn>}
       {open && !confirmed && (
-        <div role="listbox" id={listId} aria-label="품목 검색 결과" style={{ position: 'absolute', top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
+        <div role="listbox" id={listId} aria-label="품목 검색 결과" style={{ position: hs6First ? 'static' : 'absolute', flexBasis: hs6First ? '100%' : undefined, top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
           {results.map((h, i) => (
             <button type="button" key={h.hs_code} id={`${listId}-${i}`} className="reset" role="option" aria-selected={i === cursor}
               onMouseDown={e => e.preventDefault()} onMouseEnter={() => setCursor(i)}
               onClick={() => run(() => select(h))}
               style={{ display: 'flex', width: '100%', gap: 10, alignItems: 'center', padding: '10px 12px', borderRadius: 8, background: i === cursor ? '#F1F2F5' : undefined }}>
-              <span className="hs">HS{h.depth} {h.hs_code}</span><b className="hs-label" title={h.name_ko}>{compactHsName(h.name_ko)}</b><span className="note">{h.depth === 6 ? (expandGroup ? '이 품목 선택' : '관심 품목 추가') : exactGroup ? 'HS4 전체로 선택' : '하위 품목 보기'}</span>
+              {!hs6First && <span className="hs">HS{h.depth} {h.hs_code}</span>}
+              <b className="hs-label" title={h.name_ko}>{hs6First ? productChoiceLabel(h.hs_code,compactHsName(h.name_ko)) : compactHsName(h.name_ko)}</b>
+              <span className="note">{h.depth === 6 ? (expandGroup || hs6First ? '이 품목 선택' : '관심 품목 추가') : exactGroup ? 'HS4 전체로 선택' : '하위 품목 보기'}</span>
             </button>
           ))}
           <ErrorNotice error={active.error} retry={retry(active.reload)} />
           {/* HS4 아래 하위 품목 목록을 못 불러오면 그 사실과 다시 시도를 보여 준다(HS4 전체만 남아 하위 품목이 없는 것처럼 보이지 않게). */}
           {exactGroup && <ErrorNotice error={children.error} retry={retry(children.reload)} />}
-          {!results.length && !active.error && <p className="muted" style={{ padding: '10px 12px' }}>{q.length < 1 ? '품목명 또는 HS 코드를 한 글자 이상 입력하세요.' : settled !== q || active.loading ? '검색 중…' : '검색 결과가 없습니다.'}</p>}
+          {!results.length && !active.error && <p className="muted" style={{ padding: '10px 12px' }}>{searchText.length < 1 ? '품목명 또는 HS 코드를 한 글자 이상 입력하세요.' : settled !== searchText || active.loading ? '검색 중…' : '검색 결과가 없습니다.'}</p>}
         </div>
       )}
     </div>
