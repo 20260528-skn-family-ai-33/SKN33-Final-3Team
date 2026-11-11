@@ -7,6 +7,31 @@ from backend.app.agents.state import PlannerOutput
 
 
 class StructuredClientTest(unittest.TestCase):
+    def test_planner_retry_keeps_all_tasks_and_recovers_the_report_dependency(self):
+        from backend.app.agents.planner import PLANNER_PROMPT, PLANNER_RETRY_HINT
+        from backend.app.agents.runtime import Services
+        from backend.app.api.config import Settings
+        from backend.tests.test_agent_state import state
+
+        current = state()
+        current.input.question = '독일 자동차 부품 수출을 보여주고 결과로 리포트 만든 다음 관련 기사도 찾아줘'
+        tasks = [{'intent': intent, 'question': intent} for intent in ('STATISTICS', 'REPORT', 'LOCAL_ISSUES')]
+        with self.assertRaises(ValidationError) as invalid:
+            PlannerOutput(tasks=[tasks[0], {**tasks[1], 'source_tasks': [2]}, tasks[2]])
+        execution = Mock()
+        execution.call.side_effect = lambda node, timeout, run, **options: run(None)
+        client = Mock()
+        client.parse.side_effect = [invalid.exception, PlannerOutput(tasks=tasks)]
+
+        with self.assertLogs('backend.app.agents.runtime', level='WARNING'):
+            Services(execution, Settings({}), client).planner(current)
+
+        self.assertEqual([call.kwargs['prompt'] for call in client.parse.call_args_list],
+                         [PLANNER_PROMPT, PLANNER_PROMPT + PLANNER_RETRY_HINT])
+        self.assertEqual([task.intent for task in current.plan.tasks], ['STATISTICS', 'REPORT', 'LOCAL_ISSUES'])
+        self.assertEqual(current.plan.tasks[1].steps[0].depends_on, ['t1.sql'])
+        self.assertEqual(current.plan.tasks[2].steps[0].depends_on, [])
+
     def test_validation_log_includes_safe_fields_reason_and_retry(self):
         import json
         from backend.app.agents.runtime import Services

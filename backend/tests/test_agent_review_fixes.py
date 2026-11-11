@@ -103,7 +103,7 @@ class SentenceCheckTest(unittest.TestCase):
                   'top': [{'rank': 1, 'name': '미국', 'amount_usd': 100_000_000}]}
         snapshot = {'period': {'start': '2025-01', 'end': '2025-12'}, '_verification_source': 'SNAPSHOT',
                     'columns': [], 'rows': [{'rank': 1, 'country_name': '미국', 'export_amount_usd': 100_000_000}]}
-        task = SimpleNamespace(task_id='t1', intent='RANKING', answer_status='ANSWERED', steps=[SimpleNamespace(step_id='t1.sql')])
+        task = SimpleNamespace(task_id='t1', intent='RANKING', answer_status='ANSWERED', steps=[SimpleNamespace(step_id='t1.sql', tool='query_trade_data', args={})])
         draft = SimpleNamespace(conclusion=[SimpleNamespace(sentences=['2025년 전체 수출 총액은 5억 달러입니다.'])],
                                 explanation=[], turn_summary='')
         state = SimpleNamespace(plan=SimpleNamespace(tasks=[task]), draft=draft, verification=Verification(),

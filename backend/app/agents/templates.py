@@ -44,6 +44,23 @@ def months(window):
     return result
 
 
+def condition_names(store, conditions_list):
+    """조건에 들어 있는 국가·품목의 표시명만 읽는다. 코드가 없으면 DB를 읽지 않는다."""
+    codes = {c for conditions in conditions_list if conditions for c in conditions.country_codes}
+    items = {(h.hs_code, h.hs_ver) for conditions in conditions_list if conditions for h in conditions.hs_items}
+    countries, products = {}, {}
+    if codes:
+        table = store.t('country')
+        countries = {r['country_code']: r['name_ko'] for r in store.rows(
+            select(table.c.country_code, table.c.name_ko).where(table.c.country_code.in_(sorted(codes))))}
+    if items:
+        table = store.t('hs_code')
+        products = {(r['hs_code'], r['hs_ver']): r['name_ko'] for r in store.rows(
+            select(table.c.hs_code, table.c.hs_ver, table.c.name_ko).where(
+                table.c.hs_code.in_(sorted({code for code, _ in items})))) if (r['hs_code'], r['hs_ver']) in items}
+    return countries, products
+
+
 def _names(store):
     countries = {r['country_code']: r['name_ko'] for r in store.rows(select(store.t('country')))}
     products = {(r['hs_code'], r['hs_ver']): r['name_ko'] for r in store.rows(select(store.t('hs_code')))}

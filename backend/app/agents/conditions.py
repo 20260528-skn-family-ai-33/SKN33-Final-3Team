@@ -1,14 +1,38 @@
 """Server-owned condition resolution and replayable clarifications (§14.1)."""
 from datetime import timedelta, timezone
 from difflib import SequenceMatcher
+import re
 from uuid import uuid4
 from sqlalchemy import select, func
 
+from backend.app.agents.planner import HS_CODE_MENTION, ambiguous_report_source, product_expressions
 from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period,
                                      MAX_ASKS_PER_CONDITION, MAX_TEXT_CHARS, MARKET_INTENTS, ToolResult)
 from backend.app.api import accounts, reference, trade
 from backend.app.api.chat_slots import country_key, numeric_product, SlotRepair
 from backend.app.api.common import ApiError, month_end, now, shift_month
+
+
+def recent_article_period(received):
+    end = received.replace(tzinfo=received.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9))).date()
+    month = shift_month(end, -3)
+    start = month.replace(day=min(end.day, month_end(month).day)) + timedelta(days=1)
+    return {'start': start, 'end': end}
+
+
+def _changed_hangul_syllable(key, label):
+    if len(key) != len(label) or not re.fullmatch('[가-힣]{2,}', key) or not re.fullmatch('[가-힣]{2,}', label):
+        return None
+    changed = [(ord(a) - ord('가'), ord(b) - ord('가')) for a, b in zip(key, label) if a != b]
+    return changed[0] if len(changed) == 1 else None
+
+
+def _final_consonant_differs(key, label, *, missing_only=False):
+    """한글 음절 하나의 받침 차이만 확인한다."""
+    if not (changed := _changed_hangul_syllable(key, label)):
+        return False
+    left, right = changed
+    return left // 28 == right // 28 and (not missing_only or left % 28 == 0)
 
 
 def country_matches(name, rows, threshold):
@@ -20,12 +44,50 @@ def country_matches(name, rows, threshold):
         exact = key in (label, country_key(row['country_code']))
         similarity = SequenceMatcher(None, key, label).ratio()
         contains = key in label or label in key
-        if exact or contains or similarity >= threshold:
-            matches.append((not exact, -similarity, row['country_code'], row, contains))
-    matches.sort(key=lambda m: m[:3])
+        close = _final_consonant_differs(key, label)
+        if exact or close or contains or similarity >= threshold:
+            matches.append((not exact, not close, -similarity, row['country_code'], row))
+    matches.sort(key=lambda m: m[:4])
     if matches and not matches[0][0]:
-        return matches[0][2], []
-    return None, [m[3] for m in matches[:5]]
+        return matches[0][3], []
+    return None, [m[4] for m in matches[:5]]
+
+
+def _match_country_mention(mention, name, rows, threshold):
+    """원문과 사전으로 확정하고, 모델의 정식 명칭은 별칭·후보 확인에 쓴다."""
+    raw_code, candidates = country_matches(mention, rows, threshold)
+    two_letter_code = mention.isascii() and len(mention) == 2
+    if raw_code and not two_letter_code:
+        return raw_code, [], None
+    raw = country_key(mention)
+    named_code, named_candidates = ((raw_code, candidates) if raw == country_key(name)
+                                    else country_matches(name, rows, threshold))
+    if two_letter_code:
+        if not named_code:  # TV 등 국가명이 아닌 약어
+            return None, None, None
+        if raw_code == named_code:
+            return raw_code, [], None
+        codes = dict.fromkeys(c for c in (named_code, raw_code) if c)
+        return None, [r for code in codes for r in rows if r['country_code'] == code], None
+    if not candidates:
+        if named_code:
+            named = next(r for r in rows if r['country_code'] == named_code)
+            if _changed_hangul_syllable(raw, country_key(named['name_ko'])):
+                return None, [named], None  # 임계값 미달인 오타를 별칭으로 확정하지 않는다.
+        return named_code, named_candidates, None
+
+    close = [r for r in candidates if _final_consonant_differs(raw, country_key(r['name_ko']))]
+    if len(candidates) == 1 and close:
+        row = close[0]
+        code, label = row['country_code'], row['name_ko']
+        if named_code in (None, code) and _final_consonant_differs(raw, country_key(label), missing_only=True):
+            return code, [], label
+    aliases = [r for r in candidates if raw in country_key(r['name_ko'])]
+    if not close and len(aliases) == 1 and aliases[0]['country_code'] == named_code:
+        return named_code, [], None  # 러시아 → 러시아 연방처럼 사전에서 확인된 별칭
+    if named_code and all(r['country_code'] != named_code for r in candidates):
+        candidates = [*candidates[:4], next(r for r in rows if r['country_code'] == named_code)]
+    return None, candidates, None
 
 
 def _bounded_bundle(store, loaded, message):
@@ -70,11 +132,52 @@ def check_conditions(store, state, step, *, resolve_bindings=None, confirm_repor
         state.skip_blocked()
 
 
+# 짧은 후속 질문에서 품목 자리에 오지만 품목이 아닌 기간·지표·지시어("최근 수출 추이", "수출액은?", "상반기는?").
+_NOT_PRODUCT_FOLLOWUP = re.compile(
+    r'(?:수출|수입|수출입)(?:액|량|률|율)?|금액|총액|합계|규모|비중|점유율|구성비|순위|추이|흐름|증감(?:률|액)?|증가(?:율|액)?|감소(?:율|액)?'
+    r'|전망|예측|원인|이유|배경|기사|뉴스|차트|그래프|표|결과|리포트|보고서|요약|설명|상세|자세히'
+    r'|상반기|하반기|[1-4일이삼사]?분기|연간|월간|누적|최근|최신|올해|작년|지난해|전년|내년|금년|이번\s*달|지난\s*달|전월|당월'
+    r'|이전|다음|그거|그것|이거|이것|저거|전체|국가|품목|상위|하위|[가-힣]{1,4}별',
+)
+
+
+def _product_key(expression):
+    match = HS_CODE_MENTION.fullmatch(expression.strip())
+    return match[1] if match else country_key(expression)
+
+
 def _resolve(store, state, task, step, resolve_bindings, confirm_report):
+    if step.args.get('article_retry'):
+        request=state.input.context.article_retry
+        if request is None or task.intent!='LOCAL_ISSUES':
+            raise SlotRepair('다시 검색할 기사 요청을 확인할 수 없습니다.')
+        task.conditions=request.conditions.model_copy(deep=True)
+        accounts.validate_scope(store,[h.model_dump() for h in task.conditions.hs_items],task.conditions.country_codes)
+        step.status='DONE'
+        return
+    source_key = f'{task.task_id}:report_source'
+    if (task.intent == 'REPORT' and not task.input_bindings and not task.previous_turn_result
+            and state.input.context.conditions and ambiguous_report_source(state.input.question)):
+        source = task.resolved.get(source_key, {}).get('report_source')
+        if source is None:
+            return ask(state, task, source_key, 'REPORT_SOURCE',
+                '직전 결과표로 리포트를 만들까요, 아니면 같은 조건으로 다시 조회할까요?',
+                [('PREVIOUS_RESULT', '직전 결과표로 리포트', {'report_source': 'PREVIOUS_RESULT'}),
+                 ('REQUERY', '같은 조건으로 다시 조회', {'report_source': 'REQUERY'})])
+        task.previous_turn_result = source == 'PREVIOUS_RESULT'
+    if task.previous_turn_result:
+        raise SlotRepair('이전 대화의 결과표는 아직 리포트에 바로 사용할 수 없습니다. 조회와 리포트 생성을 한 질문에서 요청해 주세요.')
     slots = task.slots
+    # 이미 품목을 선택한 뒤 재개하는 체크포인트에도 같은 기업명 제외 규칙을 적용한다.
+    slots.products = product_expressions(slots.products,article_context=task.intent in ('CAUSE','LOCAL_ISSUES'))
     report_answer=task.resolved.get(f'{task.task_id}:report_confirm',{})
     if report_answer.get('reject_input_change'): raise SlotRepair('선행 결과의 조건을 변경하려면 새 분석 질문을 입력해 주세요.')
     original=state.input.question+' '+report_answer.get('revision_text','')
+    if len(state.plan.tasks) == 1 and not task.resolved and task.intent in ('STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES'):
+        codes = list(dict.fromkeys(HS_CODE_MENTION.findall(original)))
+        grounded = [p for p in slots.products or [] if _product_key(p) in country_key(original)]
+        if codes and not any(not any(code in p for code in codes) for p in grounded):
+            slots.products = codes
     # Customs tables already describe Korea's trade. Korea is the reporting
     # country, not a partner to resolve against the country dictionary.
     reporting_names={'한국','대한민국','우리나라','kr','kor','south korea','republic of korea'}
@@ -84,6 +187,22 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             item.mention.strip().casefold() in reporting_names
             and item.mention.casefold() in original.casefold())]
     base = state.input.context.conditions or Conditions()
+    # 짧은 새 품목 질문을 생략 슬롯으로 받았을 때 직전 품목을 재사용하지 않는다.
+    if base.hs_items and not countries and task.intent in ('STATISTICS', 'RANKING', 'LOCAL_ISSUES', 'CAUSE'):
+        switch = re.fullmatch(
+            r'\s*(?:그럼\s*|그러면\s*)?([가-힣A-Za-z]{2,30})(?:은|는|도)\s*(?:어때|어떤가요)?[?？]?\s*'
+            r'|\s*([가-힣A-Za-z]{2,30})\s+수(?:출입|출|입)(?:액|량|\s*추이)?\s*(?:알려\s*줘|보여\s*줘)?[.!?？]?\s*',
+            original.strip())
+        if switch:
+            expression = switch[1] or switch[2]
+            if not _NOT_PRODUCT_FOLLOWUP.fullmatch(expression):
+                table = store.t('country')
+                rows = store.rows(select(table).where(table.c.country_role=='COUNTRY'))
+                reporting = country_key(expression) in {country_key(name) for name in reporting_names}
+                settings = getattr(store.db, 'settings', {})
+                threshold = float(settings.get('API_CHAT_COUNTRY_SIMILARITY', 0.6))
+                if not reporting and country_matches(expression, rows, threshold) == (None, []):
+                    slots.products = [expression]
     out = base.model_copy(deep=True)
     out.ranking_group, out.share_basis = slots.ranking_group, slots.share_basis
     out.compare_period, out.article_period = None, None
@@ -103,17 +222,28 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     share_key = f'{task.task_id}:share_basis'
     out.share_basis = task.resolved.get(share_key, {}).get('share_basis', slots.share_basis)
     if task.intent == 'MARKET_SHARE' and out.share_basis == 'FOREIGN_IMPORT_MARKET':
-        raise SlotRepair('해외 수입시장에서 한국 제품의 점유율은 아직 지원하지 않습니다.')
+        raise SlotRepair('해외 수입시장 점유율은 일부 HS6 품목·국가·기간에 한해 제공되며, 채팅에서는 아직 지원하지 않습니다.')
+    if task.intent == 'MARKET_SHARE' and not out.share_basis:
+        product = slots.ranking_group == 'HS6'
+        return ask(state, task, share_key, 'SHARE_BASIS', '어떤 시장 비중을 조회할까요?',
+            [(v, label, {'share_basis':v}) for v,label in [
+                ('KOREA_TRADE_PARTNER','한국 교역의 품목별 비중' if product else '한국 교역의 국가별 비중'),
+                ('FOREIGN_IMPORT_MARKET','해외 수입시장의 한국 비중')]])
     hs_table = store.t('hs_code')
     market_hs4 = []
+    original_key = country_key(original)
+    new_product = any(_product_key(expression) in original_key for expression in slots.products or [])
     for expression in slots.products or []:
         key = f'{task.task_id}:hs:{expression}'
         answer = task.resolved.get(key, {})
         if not answer:
             # 같은 계획의 다른 하위 질문에서 같은 품목 표현을 이미 확정했으면 다시 묻지 않는다(국가와 같은 규칙, 2026-11-06).
             # 예: "중국 면도기 수출 추이와 변화 원인" → 추이·원인 두 하위 질문이 "면도기"를 한 번만 묻는다
-            answer = next((t.resolved[f'{t.task_id}:hs:{expression}'] for t in state.plan.tasks if t is not task
-                           and t.resolved.get(f'{t.task_id}:hs:{expression}', {}).get('hs_items')), {})
+            answer = next((t.resolved[f'{t.task_id}:hs:{other}']
+                           for t in state.plan.tasks if t is not task and t.slots
+                           for other in (t.slots.products or [])
+                           if _product_key(other) == _product_key(expression)
+                           and t.resolved.get(f'{t.task_id}:hs:{other}', {}).get('hs_items')), {})
         # D-74: 유망시장 모델은 HS6 단위다. 되묻기 답이 HS4("이 HS4 전체로 분석"·4자리 입력)여도 HS6 후보로 다시 묻는다.
         hs4 = [h['hs_code'] for h in answer.get('hs_items', []) if len(h['hs_code']) == 4] \
             if task.intent in MARKET_INTENTS else []
@@ -123,18 +253,22 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         # 같은 답에 함께 고른 HS6는 다시 묻는 동안에도 남긴다(다음 답의 patch에 함께 넣는다)
         kept = [h for h in answer.get('hs_items', []) if len(h['hs_code']) != 4] if hs4 else []
         expr = hs4[0] if hs4 else answer.get('replace_expression', expression)
+        # "HS 3304"도 원문 숫자와 HS 사전을 대조하는 기존 코드 경로로 보낸다.
+        if explicit_hs := HS_CODE_MENTION.fullmatch(expr.strip()):
+            expr = explicit_hs[1]
         # D-22: 플래너가 질문에 없는 이전 조건을 그대로 다시 적으면 생략(이어받기)과 같다.
         # 코드가 같거나, 이전 조건을 만든 직전 질문의 표현이고 그 표현의 검색 결과에 이전 품목이 있을 때만 이어받는다.
-        if not answer and base.hs_items and expr.casefold() not in original.casefold():
+        if not answer and base.hs_items and country_key(expr) not in original_key:
             echoed = [h for h in base.hs_items if h.hs_code == expr]
             last = state.input.context.recent[-1].question.casefold() if state.input.context.recent else ''
             if not echoed and not expr.isdigit() and expr.casefold() in last:
                 found = {r['hs_code'] for r in reference._search_depth(store, expr, 6, 5)['items']}
                 echoed = [h for h in base.hs_items if h.hs_code in found]
             if echoed:
-                out.hs_items.extend({'hs_code': h.hs_code, 'hs_ver': h.hs_ver} for h in echoed)
+                if not new_product:
+                    out.hs_items.extend({'hs_code': h.hs_code, 'hs_ver': h.hs_ver} for h in echoed)
                 continue
-        if not answer and expr.casefold() not in original.casefold():
+        if not answer and country_key(expr) not in original_key:
             raise SlotRepair('질문에서 품목 표현을 확인하지 못했습니다.')
         if expr.isdigit():
             numeric_product(store, original if not answer else expr, expr, set())
@@ -188,9 +322,9 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         # 되묻기로 확정한 국가('미구' → 미국)도 새 국가다. 아래처럼 같은 계획의 앞 하위 질문에서 확정한 답도 쓴다.
         def confirmed(mention):
             return any(t.resolved.get(f'{t.task_id}:country:{mention}', {}).get('country_codes') for t in state.plan.tasks)
-        new_country = any(item.mention.casefold() in original.casefold()
-                          and (country_matches(item.name, rows, threshold)[0] or confirmed(item.mention))
-                          for item in countries)
+        current = {(item.mention, item.name): _match_country_mention(item.mention, item.name, rows, threshold)
+                   for item in countries if item.mention.casefold() in original.casefold()}
+        new_country = any(match[0] or confirmed(mention) for (mention, _), match in current.items())
         for item in countries:
             key = f'{task.task_id}:country:{item.mention}'
             answer = task.resolved.get(key, {})
@@ -212,22 +346,18 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
                     out.country_codes.append(echoed)
                     continue
                 raise SlotRepair('국가 표현을 질문에서 확인하지 못했습니다.')
-            if item.mention.isascii() and len(item.mention)==2:
-                code = next((r['country_code'] for r in rows
-                             if country_key(r['country_code']) == country_key(item.mention)), None)
-                named_code, _ = country_matches(answer.get('replace_expression', item.name), rows, threshold)
-                if code and named_code == code:
-                    out.country_codes.append(code)
-                    continue
-                if not named_code:  # 국가명이 아닌 약어(TV 등)는 국가 조건이 아니다
-                    continue
-                # 코드와 국가명이 어긋나거나(UK→영국=GB) 없는 코드면 빼지 말고 국가명·입력 코드 후보로 되묻는다.
-                return ask(state, task, key, 'COUNTRY', f'“{item.mention}”에 해당하는 국가를 선택하거나 직접 입력해 주세요.',
-                    [(r['country_code'], r['name_ko'], {'country_codes':[r['country_code']]})
-                     for c in dict.fromkeys(filter(None, (named_code, code))) for r in rows if r['country_code'] == c])
-            code, candidates = country_matches(answer.get('replace_expression', item.name), rows, threshold)
+            code, candidates, correction = current[item.mention, item.name]
+            if 'replace_expression' in answer:  # 이전 체크포인트의 직접 입력 패치
+                code, candidates = country_matches(answer['replace_expression'], rows, threshold)
+                correction = None
             if code:
                 out.country_codes.append(code)
+                if correction:
+                    note = f'“{item.mention}”을(를) {correction}({code})으로 해석했습니다.'[:MAX_TEXT_CHARS]
+                    if note not in task.applied_defaults:
+                        task.applied_defaults.append(note)
+                continue
+            if candidates is None:
                 continue
             return ask(state, task, key, 'COUNTRY', f'“{item.mention}”에 해당하는 국가를 선택하거나 직접 입력해 주세요.',
                 [(r['country_code'], r['name_ko'], {'country_codes':[r['country_code']]}) for r in candidates])
@@ -269,17 +399,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     if task.intent == 'CAUSE':
         out.article_period = {'start':shift_month(out.period.start,-1), 'end':month_end(shift_month(out.period.end,1))}
     if task.intent == 'LOCAL_ISSUES':
-        received=state.input.received_at
-        end=received.replace(tzinfo=received.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9))).date()
-        month = shift_month(end,-3)
-        start = month.replace(day=min(end.day, month_end(month).day)) + timedelta(days=1)
-        out.article_period = slots.article_period or {'start':start, 'end':end}
-    if task.intent == 'MARKET_SHARE' and not out.share_basis:
-        product = slots.ranking_group == 'HS6'
-        return ask(state, task, share_key, 'SHARE_BASIS', '어떤 시장 비중을 조회할까요?',
-            [(v, label, {'share_basis':v}) for v,label in [
-                ('KOREA_TRADE_PARTNER','한국 교역의 품목별 비중' if product else '한국 교역의 국가별 비중'),
-                ('FOREIGN_IMPORT_MARKET','해외 수입시장의 한국 비중')]])
+        out.article_period = slots.article_period or recent_article_period(state.input.received_at)
     if task.intent == 'MARKET_SHARE' and slots.ranking_group == 'HS6':
         # SHARE 템플릿은 국가별 비중만 지원한다(D-87). 분모가 한국 교역으로 확정된 품목별 비중은 LLM SQL로 조회한다
         # (§11.1 custom_query). 해외 수입시장 기준은 위에서 미지원으로 끝났다. 분모가 모호하면 위에서 먼저 되묻는다.

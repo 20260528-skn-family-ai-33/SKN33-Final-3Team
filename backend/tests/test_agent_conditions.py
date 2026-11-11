@@ -11,6 +11,115 @@ from backend.app.api.common import ApiError
 
 
 class ConditionTest(unittest.TestCase):
+    def test_bare_cause_keeps_both_confirmed_scopes_after_out_of_scope_turns(self):
+        from backend.app.agents.context import completed_context
+        from backend.app.agents.planner import build_plan, explicit_cause_followup
+        from backend.app.agents.state import Conditions, Plan, Task
+
+        previous = Conditions(country_codes=['US'], hs_items=[{'hs_code':'330499','hs_ver':'HS2022'}],
+            period={'start':'2025-01-01','end':'2025-12-01'},
+            compare_period={'start':'2024-01-01','end':'2024-12-01'})
+        self.state.input.context.conditions = previous
+        self.state.input.context.both_trade_flows = True
+        for question in ('오늘 날씨는?', '아무거나'):
+            self.state.plan = Plan(tasks=[Task(task_id='t1', intent='OUT_OF_SCOPE',
+                question=question, answer_status='OUT_OF_SCOPE')])
+            self.state.input.context = completed_context(self.state)
+
+        self.state.input.question = '이유가 뭐야?'
+        output = explicit_cause_followup(self.state.input.question, self.state.input.context)
+        self.state.plan, _ = build_plan(output)
+        self.assertEqual([t.slots.trade_flow for t in self.state.plan.tasks], ['EXPORT', 'IMPORT'])
+        for task in self.state.plan.tasks:
+            check_conditions(self.store, self.state, task.steps[0])
+            self.assertEqual(task.steps[0].status, 'DONE')
+            self.assertEqual(task.conditions.model_dump(exclude={'article_period', 'trade_flow'}),
+                             previous.model_dump(exclude={'article_period', 'trade_flow'}))
+        self.assertIsNone(self.state.pending)
+        self.assertIsNone(explicit_cause_followup('수입이 줄어든 이유가 뭐야?', self.state.input.context))
+
+    def test_selected_memory_is_reused_without_asking_for_article_company(self):
+        item = {'hs_code':'854232','hs_ver':'HS2022'}
+        hs = self.store.t('hs_code')
+        self.store.c.execute(hs.insert().values(**item,depth=6,name_ko='메모리',
+            source_edition='HS2022'))
+        self.state.input.question = '글로벌 메모리 반도체 수요 증가에…中 YMTC 역대 최대 규모 증설 관련 시장 영향을 알려줘'
+        for products in (['글로벌 메모리 반도체','YMTC'], ['YMTC','글로벌 메모리 반도체']):
+            with self.subTest(products=products):
+                self.task.slots = TaskSlots(products=products)
+                self.task.resolved['t1:hs:글로벌 메모리 반도체'] = {'hs_items':[item]}
+                with patch('backend.app.api.reference._search_depth', side_effect=AssertionError('already selected')):
+                    check_conditions(self.store,self.state,self.step)
+                self.assertIsNone(self.state.pending)
+                self.assertEqual(self.step.status,'DONE')
+                self.assertEqual([p.hs_code for p in self.task.conditions.hs_items],['854232'])
+
+    def test_product_acronym_is_still_resolved_as_hs_product(self):
+        self.state.input.question = 'NAND 증설 관련 시장 영향'
+        self.task.slots = TaskSlots(products=['NAND'])
+        with patch('backend.app.api.reference._search_depth',return_value={'items':[],'match_type':'NONE'}):
+            check_conditions(self.store,self.state,self.step)
+        self.assertEqual(self.state.pending.kind,'HS_ITEM')
+        self.assertIn('NAND',self.state.pending.message)
+
+    def test_new_named_product_does_not_reuse_previous_code(self):
+        from backend.app.agents.state import Conditions
+        self.state.input.context.conditions = Conditions(hs_items=[{'hs_code':'330499','hs_ver':'HS2022'}])
+        for question in ('면도 수출액 알려줘', '그럼 면도는?'):
+            with self.subTest(question=question):
+                self.state.pending = None
+                self.state.ask_counts = {}
+                self.state.input.question = question
+                self.task.slots = TaskSlots(products=None)
+                check_conditions(self.store,self.state,self.step)
+                self.assertEqual(self.state.pending.kind,'HS_ITEM')
+                self.assertIn('면도',self.state.pending.message)
+                self.assertEqual(self.task.slots.products,['면도'])
+
+    def test_period_and_metric_followups_keep_previous_product(self):
+        from backend.app.agents.state import Conditions
+        self.state.input.context.conditions = Conditions(hs_items=[{'hs_code':'330499','hs_ver':'HS2022'}])
+        for question in ('최근 수출 추이 보여줘', '수출액은?', '상반기는?', '월별 수출 추이 보여줘'):
+            with self.subTest(question=question):
+                self.state.pending = None
+                self.state.ask_counts = {}
+                self.state.input.question = question
+                self.task.slots = TaskSlots(products=None)
+                check_conditions(self.store,self.state,self.step)
+                self.assertIsNone(self.task.slots.products)
+                self.assertNotEqual(getattr(self.state.pending,'kind',None),'HS_ITEM')
+
+    def test_same_product_with_different_spacing_is_asked_only_once(self):
+        from backend.app.agents.planner import build_plan
+        from backend.app.agents.state import PlannerOutput
+        self.state.input.question = '기초 화장품 수출액과 수입액'
+        output = PlannerOutput(tasks=[{'intent':'STATISTICS','question':'q','slots':{
+            'products':[name],'trade_flow':flow}} for name,flow in
+            [('기초 화장품','EXPORT'),('기초화장품','IMPORT')]])
+        self.state.plan = build_plan(output)[0]
+        first, second = self.state.plan.tasks
+        first.resolved['t1:hs:기초 화장품'] = {'hs_items':[{'hs_code':'330499','hs_ver':'HS2022'}]}
+        check_conditions(self.store,self.state,second.steps[0])
+        self.assertIsNone(self.state.pending)
+        self.assertEqual(second.steps[0].status,'DONE')
+        self.assertEqual([p.hs_code for p in second.conditions.hs_items],['330499'])
+
+    def test_hs_clarification_history_uses_same_label_for_each_selection_method(self):
+        from backend.app.agents.conditions import ask
+        from backend.app.api.jobs import remember_prompt
+
+        item = {'hs_code': '330499', 'hs_ver': 'HS2022'}
+        ask(self.state, self.task, 't1:hs:화장품', 'HS_ITEM', '품목을 선택하세요.',
+            [('330499', '추천 후보 표시명', {'hs_items': [item]})])
+        prompt = self.state.pending.model_dump()
+        for selection in ({'choice_ids': ['330499']}, {'hs_item': item}, {'text': '330499'}):
+            with self.subTest(selection=selection):
+                answer = {'clarification_id': prompt['clarification_id'], **selection}
+                patch = answer_patch(self.store, self.state, answer)
+                job = {'payload_json': {}}
+                remember_prompt(job, prompt, answer, store=self.store, hs_items=patch['hs_items'])
+                self.assertEqual(job['payload_json']['clarification_history'][0]['answer'], '기초화장품 (HS 330499)')
+
     def test_market_model_load_in_check_is_time_bounded(self):
         self.state.input.question='미국 HS 3304 유망시장'
         self.task.intent='PROMISING_MARKET'
@@ -179,8 +288,8 @@ class ConditionTest(unittest.TestCase):
         self.step = self.task.steps[0]
 
     def test_direct_country_reply_outside_suggested_choices_resumes_once(self):
-        self.state.input.question='미구 수출액'
-        self.task.slots=TaskSlots(countries=[{'mention':'미구','name':'미구'}],recent_months=3)
+        self.state.input.question='미굳 수출액'
+        self.task.slots=TaskSlots(countries=[{'mention':'미굳','name':'미국'}],recent_months=3)
         self.store.db.settings.values['API_CHAT_COUNTRY_SIMILARITY']='0.4'
         check_conditions(self.store,self.state,self.step)
         prompt=self.state.pending
@@ -191,6 +300,79 @@ class ConditionTest(unittest.TestCase):
         self.assertIsNone(self.state.pending)
         self.assertEqual(self.task.conditions.country_codes,['CN'])
         self.assertEqual(self.step.status,'DONE')
+
+    def test_unique_missing_final_consonant_resolves_with_or_without_planner_correction(self):
+        for name in ('미구', '미국'):
+            with self.subTest(name=name):
+                self.state.input.question = '미구 수출액'
+                self.task.slots = TaskSlots(countries=[{'mention': '미구', 'name': name}])
+                check_conditions(self.store, self.state, self.step)
+                self.assertIsNone(self.state.pending)
+                self.assertEqual(self.step.status, 'DONE')
+                self.assertEqual(self.task.conditions.country_codes, ['US'])
+                self.assertTrue(any('미구' in note and '미국' in note for note in self.task.applied_defaults))
+
+    def test_conflicting_planner_name_keeps_missing_final_consonant_in_clarification(self):
+        self.state.input.question = '미구 수출액'
+        self.task.slots = TaskSlots(countries=[{'mention': '미구', 'name': '중국'}])
+        check_conditions(self.store, self.state, self.step)
+        self.assertEqual(self.state.pending.kind, 'COUNTRY')
+        self.assertEqual([c.choice_id for c in self.state.pending.choices], ['US', 'CN'])
+
+    def test_multiple_final_consonant_candidates_require_clarification(self):
+        country = self.store.t('country')
+        self.store.c.execute(country.insert().values(country_code='XX', name_ko='미굴', country_role='COUNTRY'))
+        self.state.input.question = '미구 수출액'
+        self.task.slots = TaskSlots(countries=[{'mention': '미구', 'name': '미국'}])
+        check_conditions(self.store, self.state, self.step)
+        self.assertEqual(self.state.pending.kind, 'COUNTRY')
+        self.assertEqual([c.choice_id for c in self.state.pending.choices], ['US', 'XX'])
+
+    def test_other_similar_candidate_prevents_missing_final_consonant_auto_resolution(self):
+        country = self.store.t('country')
+        self.store.c.execute(country.insert().values(country_code='XX', name_ko='미구령', country_role='COUNTRY'))
+        self.state.input.question = '미구 수출액'
+        self.task.slots = TaskSlots(countries=[{'mention': '미구', 'name': '미국'}])
+        check_conditions(self.store, self.state, self.step)
+        self.assertEqual(self.state.pending.kind, 'COUNTRY')
+        self.assertEqual([choice.choice_id for choice in self.state.pending.choices], ['US', 'XX'])
+
+    def test_similarity_threshold_cannot_turn_a_vowel_typo_into_a_confirmed_alias(self):
+        self.store.db.settings.values['API_CHAT_COUNTRY_SIMILARITY'] = '0.7'
+        self.state.input.question = '미곡 수출액'
+        self.task.slots = TaskSlots(countries=[{'mention': '미곡', 'name': '미국'}])
+        check_conditions(self.store, self.state, self.step)
+        self.assertEqual(self.state.pending.kind, 'COUNTRY')
+        self.assertEqual([c.choice_id for c in self.state.pending.choices], ['US'])
+
+    def test_hs_prefix_in_planner_slot_still_checks_number_and_dictionary(self):
+        self.state.input.question = '한국의 모든 상대국 대상 HS 3304 수출액'
+        self.task.slots = TaskSlots(products=['HS 3304'], countries=[])
+        check_conditions(self.store, self.state, self.step)
+        self.assertEqual(self.step.status, 'DONE')
+        self.assertEqual([h.hs_code for h in self.task.conditions.hs_items], ['3304'])
+        self.state.input.question = '2025년 수출액'
+        self.task.slots = TaskSlots(products=['HS 2025'])
+        check_conditions(self.store, self.state, self.step)
+        self.assertEqual(self.step.status, 'FAILED')
+        self.assertIn('연도·금액', self.state.results[self.step.step_id].error)
+
+    def test_new_hs6_replaces_echoed_product_without_changing_other_conditions(self):
+        from backend.app.agents.state import Conditions
+
+        self.state.input.context.conditions = Conditions(
+            country_codes=['US'], trade_flow='IMPORT',
+            hs_items=[{'hs_code': '330410', 'hs_ver': 'HS2022'}],
+            period={'start': '2025-01-01', 'end': '2025-12-01'})
+        self.state.input.question = 'HS6 단위 코드 330499는?'
+        self.task.slots = TaskSlots(products=['330410', 'HS6 단위 코드 330499'])
+        check_conditions(self.store, self.state, self.step)
+        self.assertEqual(self.step.status, 'DONE')
+        conditions = self.task.conditions
+        self.assertEqual([item.hs_code for item in conditions.hs_items], ['330499'])
+        self.assertEqual(conditions.country_codes, ['US'])
+        self.assertEqual(conditions.trade_flow, 'IMPORT')
+        self.assertEqual(conditions.period, self.state.input.context.conditions.period)
 
     def test_empty_country_list_allows_manual_code_without_second_question(self):
         self.state.input.question='가상나라 수출액'

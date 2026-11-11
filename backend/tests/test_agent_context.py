@@ -13,6 +13,48 @@ from backend.app.api.common import ApiError
 
 
 class ChatContextTest(unittest.TestCase):
+    def test_followup_keeps_paired_trade_flows_after_cache_round_trip(self):
+        from backend.app.agents.context import completed_context
+        from backend.app.agents.planner import build_plan, planner_input, postprocess
+        from backend.app.agents.state import Conditions, Draft, PlannerOutput
+        from backend.tests.test_agent_state import state
+
+        current = state()
+        question = '2025년 베트남 화장품 수출액과 수입액을 보여줘'
+        current.input.question = question
+        output = PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': question,
+            'slots': {'trade_flow': 'EXPORT'}}])
+        current.plan, _ = build_plan(postprocess(output, question))
+        self.assertEqual([task.slots.trade_flow for task in current.plan.tasks], ['EXPORT', 'IMPORT'])
+        for task in current.plan.tasks:
+            task.conditions = Conditions(country_codes=['VN'], trade_flow=task.slots.trade_flow,
+                period={'start': '2025-01-01', 'end': '2025-12-01'})
+            task.answer_status = 'ANSWERED'
+        current.draft = Draft(conclusion=[
+            {'task_id': task.task_id, 'sentences': ['조회했습니다.']} for task in current.plan.tasks
+        ], turn_summary='')
+        completed = completed_context(current)
+        self.redis.acquire_chat('3', '11')
+        self.context.publish(completed, '11')
+        cached = self.context.load('3', {}, '11')
+        durable = {'conditions': completed.conditions.model_dump(mode='json'), 'both_trade_flows': True}
+        restored = self.context.load('3', durable, '12')
+        for previous in (cached, restored):
+            self.assertTrue(previous.both_trade_flows)
+            self.assertEqual(previous.conditions.country_codes, ['VN'])
+            current.input.context = previous
+            self.assertTrue(planner_input(current)['previous_both_trade_flows'])
+            question = '2024년도 보여줘'
+            followup = PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': question,
+                'slots': {'period': {'start': '2024-01-01', 'end': '2024-12-01'}}}])
+            plan, _ = build_plan(postprocess(followup, question, previous_both_trade_flows=previous.both_trade_flows))
+            self.assertEqual([task.slots.trade_flow for task in plan.tasks], ['EXPORT', 'IMPORT'])
+            self.assertTrue(all(task.slots.period.start.year == 2024 for task in plan.tasks))
+            plan, _ = build_plan(postprocess(followup, '2024년 수입만 보여줘', previous_both_trade_flows=True))
+            self.assertEqual([task.slots.trade_flow for task in plan.tasks], ['IMPORT'])
+        current.plan.tasks[1].answer_status = 'NO_DATA'
+        self.assertFalse(completed_context(current).both_trade_flows)
+
     def test_rejected_summary_keeps_question_and_conditions_for_followup(self):
         from backend.app.agents.context import completed_context
         from backend.app.agents.planner import planner_input

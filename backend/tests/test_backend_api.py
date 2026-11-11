@@ -225,6 +225,28 @@ class BackendApiTest(unittest.TestCase):
         self.assertFalse(run_once(self.app.state.database, self.settings))
         self.assertEqual(self.post(path, {**body, 'client_message_id': 'next'}).status_code, 202)
 
+    def test_article_action_is_admitted_and_part_of_message_idempotency(self):
+        self.settings.values['API_CHAT_AGENT_ENABLED'] = 'true'
+        uid = self.signup()
+        sid = self.post('chat/sessions', {}).json()['session']['session_id']
+        path = f'chat/sessions/{sid}/messages'
+        action = {'article_id': '123', 'mode': 'both'}
+        body = {'question': '선택한 기사를 요약하고 관련 기사도 찾아줘.', 'client_message_id': 'article-action',
+                'article_action': action}
+        invalid = self.post(path, {**body, 'article_action': {**action, 'mode': 'invalid'}})
+        self.assertEqual(invalid.status_code, 400, invalid.text)
+        accepted = self.post(path, body)
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        job_id = accepted.json()['job']['job_id']
+        self.assertEqual(self.post(path, body).json()['job']['job_id'], job_id)
+        conflict = self.post(path, {**body, 'article_action': {**action, 'mode': 'summary'}})
+        self.assertEqual(conflict.json()['code'], 'IDEMPOTENCY_CONFLICT')
+        with self.engine.begin() as conn:
+            store = Store(self.app.state.database, conn)
+            payload = jobs.owned_job(store, uid, job_id)['payload_json']
+            self.assertEqual(payload['input']['article_action'], action)
+            self.assertEqual(payload['input']['question'], body['question'])
+
     def test_cancelling_queued_agent_job_deletes_checkpoint_after_commit(self):
         from unittest.mock import Mock
         self.settings.values['API_CHAT_AGENT_ENABLED']='true'

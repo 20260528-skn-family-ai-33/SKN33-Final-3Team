@@ -14,12 +14,12 @@ from backend.app.agents.charts import build_chart
 from backend.app.agents.bindings import resolve as resolve_bindings, source_versions
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
 from backend.app.agents.compose import COMPOSE_PROMPT, COMPOSE_TEXT_PROMPT, assemble, compose_input
-from backend.app.agents.conditions import check_conditions
+from backend.app.agents.conditions import check_conditions, recent_article_period
 from backend.app.agents.llm import StructuredClient, validation_details
-from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT
+from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT, PLANNER_RETRY_HINT
 from backend.app.agents.result_store import ResultStore, fingerprint, shared_result
 from backend.app.agents.sql import generated_analysis
-from backend.app.agents.state import AgentState, Draft, Plan, PlannerOutput, Task, TaskConclusion, ToolResult, is_text_task
+from backend.app.agents.state import AgentState, Draft, MAX_TEXT_CHARS, Plan, PlannerOutput, Task, TaskConclusion, ToolResult, is_text_task
 from backend.app.agents.templates import api_conditions, run_template
 from backend.app.agents.verify import verify, snapshot_evidence
 from backend.app.api import trade, results
@@ -185,6 +185,8 @@ class Services:
                     'agent_structured_failed job_id=%s node=%s error_type=%s attempt=%s/%s schema=%s validation=%s',
                     state.input.job_id,node,type(exc).__name__,attempt,max_attempts,schema.__name__,
                     json.dumps(details,ensure_ascii=False,separators=(',',':')))
+                if node=='planner' and isinstance(exc, ValueError):
+                    prompt += PLANNER_RETRY_HINT
                 continue
             except ApiError as exc:
                 if exc.code!='RUN_TIMEOUT': raise
@@ -192,12 +194,22 @@ class Services:
         return None
 
     def planner(self,state):
-        from backend.app.agents.planner import explicit_country_ranking
-        explicit=explicit_country_ranking(state.input.question)
+        if state.input.article_action:
+            from backend.app.agents.article_actions import action_plan
+            state.plan = action_plan(state.input.article_action)
+            return
+        from backend.app.agents.planner import article_retry_plan, explicit_cause_followup, explicit_country_ranking, explicit_out_of_scope, explicit_over_limit
+        if retry := article_retry_plan(state):
+            state.plan=retry
+            return
+        explicit=(explicit_over_limit(state.input.question) or explicit_out_of_scope(state.input.question) or explicit_country_ranking(state.input.question)
+                  or explicit_cause_followup(state.input.question,state.input.context))
         from backend.app.agents.planner import postprocess, trade_terms
         terms=trade_terms(self.settings)
         planned=build_plan(explicit) if explicit else self.structured(state,'planner',PLANNER_PROMPT,planner_input(state),PlannerOutput,2000,
-                                                                        lambda output:build_plan(postprocess(output,state.input.question,terms)))
+            lambda output:build_plan(postprocess(output,state.input.question,terms,
+                previous_both_trade_flows=state.input.context.both_trade_flows,
+                previous_conditions=state.input.context.conditions)))
         if planned is None:
             reason='질문을 해석하지 못했습니다. 국가·품목·기간을 명시해 다시 입력해 주세요.'
             state.plan=Plan(tasks=[Task(task_id='t1',intent='STATISTICS',question=state.input.question,
@@ -207,6 +219,12 @@ class Services:
         state.warnings.extend(warnings)
 
     def check(self,state,step):
+        if state.input.article_action:
+            from backend.app.agents.state import Conditions
+            task = next(task for task in state.plan.tasks if step in task.steps)
+            task.conditions = Conditions(article_period=recent_article_period(state.input.received_at))
+            step.status = 'DONE'
+            return
         def work(_):
             from backend.app.agents.report import preview
             def create_preview(_store,current,task):
@@ -282,18 +300,31 @@ class Services:
             return self.execution.call('report',budget.seconds(self.settings,'report'),lambda _:
                 self.execution.transaction(lambda store,job:submit(store,state,task,step),lock_user=True))
         if step.tool=='search_articles':
-            from backend.app.agents.tools import article_result
+            from backend.app.agents.tools import article_result, article_query
             from backend.app.api.chat_news import eligible_filter
             period=task.conditions.article_period
             def keep(items):   # 인용 근거는 state·LLM 입력 밖 결과 저장소에 둔다(D-102)
                 return self.execution.transaction(lambda store,job:results.save_snapshot(
                     store,state.input.user_id,'ARTICLES',{'articles':items}))
+            if step.args.get('article_mode'):
+                from backend.app.agents.article_actions import run_action
+                return self.execution.call('news', budget.seconds(self.settings, 'news'),
+                    lambda timeout: run_action(self, state, task, step, keep, timeout))
             def search(_):
                 # 공개·차단 필터 조회도 기사 예산 안에서 한다. 검색 마감은 필터 조회 시작부터 센다(넓은 기간이면 이 조회도 오래 걸린다)
                 from time import monotonic
                 started=monotonic()
-                with self.read_store() as store: _,allowed=eligible_filter(store,state.input.user_id,period.start,period.end)
-                return article_result(state,task,step,article_allowed=allowed,keep_evidence=keep,started=started)
+                with self.read_store() as store:
+                    _,allowed=eligible_filter(store,state.input.user_id,period.start,period.end)
+                    from backend.app.agents.templates import condition_names
+                    countries,products=condition_names(store,[task.conditions])
+                original=task.question
+                if state.input.context.article_retry and any(s.args.get('article_retry') for s in task.steps):
+                    original=state.input.context.article_retry.question
+                elif len(state.plan.tasks)==1:
+                    original=state.input.question
+                query=article_query(task,countries,products,question=original)
+                return article_result(state,task,step,article_allowed=allowed,keep_evidence=keep,started=started,query=query)
             return self.execution.call('news',budget.seconds(self.settings,'news'),search)
         if step.tool=='query_market_model':
             from backend.app.agents.market import DEFAULT_MARKET_TOP, growth, loaded, model_codes, predict
@@ -416,7 +447,11 @@ class Services:
             countries,products=_names(store)
         def describe(c):
             if not c:return {}
-            return {**c.model_dump(mode='json'),'countries':[{'code':k,'name':countries.get(k,k)} for k in c.country_codes],
+            from backend.app.agents.templates import api_conditions
+            display=c.model_dump(mode='json')
+            public=api_conditions(c)
+            display.update({key:public[key] for key in ('period','compare_period')})
+            return {**display,'countries':[{'code':k,'name':countries.get(k,k)} for k in c.country_codes],
                     'products':[{'code':p.hs_code,'name':products.get((p.hs_code,p.hs_ver),p.hs_code)} for p in c.hs_items]}
         articles=[]
         for t in state.plan.tasks:
@@ -440,8 +475,21 @@ class Services:
         if state.draft is None:
             for task in state.plan.tasks:
                 if task.task_id not in fixed:
+                    if state.input.article_action:
+                        article = next((a for a in payload['articles'] if a['task_id'] == task.task_id), None)
+                        if article and article['summary']:
+                            citation = f" [{article['n']}]"
+                            limit = MAX_TEXT_CHARS - len(citation)
+                            sentences = [
+                                (text if len(text) <= limit else text[:limit - 1].rstrip() + '…') + citation
+                                for text in article['summary']
+                            ]
+                            fixed[task.task_id] = TaskConclusion(task_id=task.task_id, sentences=sentences)
+                            continue
                     task.answer_status='PARTIAL'
-                    fixed[task.task_id]=TaskConclusion(task_id=task.task_id,sentences=['결과는 아래 표와 차트에서 확인하세요.'])
+                    fallback = ('선택한 기사의 요약 근거를 확인하지 못했습니다.' if state.input.article_action
+                                else '결과는 아래 표와 차트에서 확인하세요.')
+                    fixed[task.task_id]=TaskConclusion(task_id=task.task_id,sentences=[fallback])
             state.draft=assemble(state,None,fixed,describe)
 
     def verify(self,state):
@@ -453,6 +501,10 @@ class Services:
                 table=store.t('country')
                 countries=[r['name_ko'] for r in store.rows(select(table).where(table.c.country_role=='COUNTRY'))]
                 names=[*countries,*product_names(store)]
+                # compose가 본 품목 표시명과 같은 이름으로 순위 근거 범위를 대조한다. 조건에 있는 코드만 읽는다.
+                from backend.app.agents.templates import condition_names
+                _,products=condition_names(store,[task.conditions for task in state.plan.tasks])
+                labels={code:name for (code,_),name in products.items()}
                 snapshots={}
                 for task in state.plan.tasks:
                     for step in task.steps:
@@ -464,7 +516,7 @@ class Services:
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
-            verify(state,known_names=set(names),snapshots=snapshots,countries=countries)
+            verify(state,known_names=set(names),snapshots=snapshots,countries=countries,product_labels=labels)
         try:
             # finalize 몫은 남긴다(§13.4). compose가 예약보다 오래 걸려 시간이 모자라면 대조하지 못한 문장에
             # 바로 "확인 필요"를 붙이고 답변은 저장한다(§1 "시간이 부족하면 불일치 문장에 즉시 표시").
@@ -508,6 +560,7 @@ class Services:
             for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
                 tasks.append({'task_id':task.task_id,'intent':task.intent,'question':task.question,
                     'conditions':api_conditions(task.conditions) if task.conditions else None,
+                    'article_period':task.conditions.article_period.model_dump(mode='json') if task.conditions and task.conditions.article_period else None,
                     'conclusion':conclusion.sentences,'answer_status':task.answer_status,
                     'answer_format':'TEXT' if is_text_task(task) else None})
                 for step in task.steps:
@@ -540,7 +593,11 @@ class Services:
             checks=[{**c.model_dump(),'sentence':sentences[c.index],
                      **({'numbers':[]} if sentences[c.index]==HIDDEN_ARTICLE_SENTENCE else {})}
                     for c in state.verification.checks]
+            article_period = tasks[0]['article_period']
+            if action := state.input.article_action:
+                article_period = tasks[-1]['article_period'] if action.mode in ('related', 'both') else None
             answer={'intent':primary.intent,'answer_status':overall,'text':'\n'.join(sentences),'tasks':tasks,
+                'article_period':article_period,
                 'conditions':tasks[0]['conditions'],'tables':tables,'charts':charts,'articles':articles, 'actions':[],
                 'chart_selectors':[],'report_id':None,'verification':{'status':state.verification.status,
                 'sentence_checks':checks,'regeneration_count':state.verification.regeneration_count},'warnings':state.warnings}
@@ -562,8 +619,17 @@ class Services:
                 result_json=clean({'schema_version':2,'answer':answer,'job_id':state.input.job_id,'trace':trace}),created_at=now())
             session=store.owned('chat_session','session_id',state.input.session_id,state.input.user_id,lock=True)
             context=dict(session['context_json'])
+            from backend.app.agents.context import article_retry
+            retry=article_retry(state)
+            if retry:
+                context['article_retry']=retry.model_dump(mode='json')
             if primary.answer_status in ('PARTIAL','ANSWERED') and primary.conditions:
+                from backend.app.agents.context import both_trade_flows
                 context['conditions']=answer['conditions']
+                if both_trade_flows(state.plan):
+                    context['both_trade_flows']=True
+                else:
+                    context.pop('both_trade_flows',None)
                 for decision in primary.resolved.values():
                     if decision.get('interest') in ('APPLIED','GLOBAL'):
                         context['interest_action']='APPLIED' if decision['interest']=='APPLIED' else 'DECLINED'
