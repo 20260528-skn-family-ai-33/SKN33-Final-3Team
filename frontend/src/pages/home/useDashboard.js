@@ -4,6 +4,10 @@ import { countryCode, countryName, productName, registerProducts } from '../../d
 import useMarketSeries from './useMarketSeries'
 import { rankLink } from '../../api/integration'
 const colors = ['#C8102E', '#2B2350', '#9A95BF', '#DBA343', '#6C7989']
+// 수출액 비중 원그래프: 상위 10개국은 모두 다른 색. 이웃 조각끼리 색약(protan·deutan) ΔE≥14, 일반 시각 ΔE≥25로 구분되는 순서다.
+// '기타'(country_code 없음)는 순서와 관계없이 회색이라 나라 수가 적어도 다른 나라 색을 가져가지 않는다.
+const PIE_COLORS = ['#C8102E', '#0B6E99', '#EB6834', '#2A78D6', '#7CB342', '#A0522D', '#1BAF7A', '#6250D6', '#E87BA4', '#008300']
+const PIE_OTHER = '#9AA0A8'
 // 영역마다 기간을 따로 둔다. 순위 카드의 3·6·12개월 버튼은 카드 영역만 바꾼다.
 // 주요 지표는 기존 기본값(최근 3개월), 품목별·교역국별 표와 원그래프는 최근 12개월로 맞춘다(F-2).
 export const KPI_MONTHS = 3
@@ -60,7 +64,7 @@ export default function useDashboard(view, months, profile) {
   const productRows = (tableProducts.data?.items || []).map(r => [r.rank, r.hs_item.hs_code, productName(r.hs_item.hs_code), money(r.export_amount_usd), money(r.import_amount_usd)])
   // 선택 국가를 채우려고 서버가 넣은 실적 없는 행은 0이 아니라 결측(—)으로 보여 준다.
   const countryRows = (countries.data?.items || []).map(r => [r.rank, countryName(r.country_code), r.has_data === false ? '—' : money(r.export_amount_usd), r.has_data === false ? '—' : money(r.import_amount_usd)])
-  const link = n => (group, product, country) => rankLink({ scope, start: monthOffset(end, 1 - n), end, months: n, countries: country_codes, group, product, country })
+  const link = n => (group, product, country, flow) => rankLink({ scope, start: monthOffset(end, 1 - n), end, months: n, countries: country_codes, group, product, country, flow })
   const tablePeriod = periodText(countries.data || tableProducts.data)
   // 영역별 오류 안내: 기준 월 조회가 실패하면 모든 영역이 비므로 각 영역에 함께 넣는다.
   const states = {
@@ -71,8 +75,8 @@ export default function useDashboard(view, months, profile) {
     states, statMonth: end || '확인 중', title: scope === 'GLOBAL' ? '대한민국 수출입 현황' : '내 관심 시장 수출입 현황',
     period: `${kpiRange.period_start || '—'} ~ ${end || '—'} · 억 USD`, kpiLink: link(KPI_MONTHS),
     kpis: [
-      { label: '수출액', value: money(exp), unit: '억 USD', rows: [['전년 대비', percent(expYoy), direction(expYoy)]] },
-      { label: '수입액', value: money(imp), unit: '억 USD', rows: [['전년 대비', percent(impYoy), direction(impYoy)]] },
+      { label: '수출액', flow: 'EXPORT', value: money(exp), unit: '억 USD', rows: [['전년 대비', percent(expYoy), direction(expYoy)]] },
+      { label: '수입액', flow: 'IMPORT', value: money(imp), unit: '억 USD', rows: [['전년 대비', percent(impYoy), direction(impYoy)]] },
       { label: '무역수지', value: noTrade ? '—' : amount(exp - imp), unit: '억 USD', rows: [['전월 수출 증감', percent(mom), direction(mom)]] },
     ],
     fxTitle: scope === 'GLOBAL' ? '주요 통화 환율' : '관심 국가 환율', fxDate: fx.data?.items?.[0]?.base_date || '기준일 미제공',
@@ -80,7 +84,7 @@ export default function useDashboard(view, months, profile) {
     rankTitle: '수출 상위 품목', rankSub: periodText(cardProducts.data), rankCards: ranks, cardLink: link(months),
     cardsEmpty: !!cardProducts.data && !ranks.length, tableLink: link(TABLE_MONTHS),
     productTable: { title: '품목별 수출입', sub: periodText(tableProducts.data), rows: productRows, note: '공개된 관세청 집계 기준', empty: !!tableProducts.data && !productRows.length },
-    countryTable: { title: '교역국별 수출입', sub: tablePeriod, rows: countryRows, empty: !!countries.data && !(countries.data.items || []).some(r => r.has_data !== false), pieTitle: '수출액 비중', pie: (shares.data?.items || []).filter(r => r.share_pct != null).map((r, i) => [`${r.label} ${Number(r.share_pct).toFixed(1)}%`, colors[i % colors.length]]), pieNote: `${tableRange.period_start || '—'} ~ ${end || '—'} · 전체 수출국 분모 · 상위 10개국+기타` },
+    countryTable: { title: '교역국별 수출입', sub: tablePeriod, rows: countryRows, empty: !!countries.data && !(countries.data.items || []).some(r => r.has_data !== false), pieTitle: '수출액 비중', pie: (shares.data?.items || []).filter(r => r.share_pct != null).map((r, i) => [`${r.label} ${Number(r.share_pct).toFixed(1)}%`, r.country_code == null ? PIE_OTHER : PIE_COLORS[i % PIE_COLORS.length]]), pieNote: `${tableRange.period_start || '—'} ~ ${end || '—'} · 전체 수출국 분모 · 상위 10개국+기타` },
     un: [], unSub: '관심 HS6·국가의 UN 데이터 공개 여부를 확인합니다.',
     newsTitle: scope === 'GLOBAL' ? '최신 해외시장 기사' : '내 관심 기사', newsSub: '기사별 출처와 원문을 확인하세요.', newsCards: (news.data?.items || []).map(mapArticle),
   }

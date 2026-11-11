@@ -1,16 +1,18 @@
 // 머리글·띠 배너·바닥글 등 화면 공통 틀
 import { Link } from '../router'
 import Icon from './Icon'
+import logoImage from '../assets/logo-borderless.png'
 
 const CONTACT_EMAIL = 'BorderlessSellers1205@gmail.com'
 const NAV = [
   ['rank', '/rank', '수출입 순위'],
   ['articles', '/articles', '기사'],
-  ['analysis', '/analysis', 'AI챗봇'],
+  ['analysis', '/analysis', 'AI 챗봇'],
 ]
 
 export function Logo() {
-  return <Link to="/" className="logo"><Icon name="logo" />BORDERLESS</Link>
+  // 지구본·컨테이너선 로고. 좁은 화면에서는 글자가 숨고 로고만 남는다(.logo font-size:0).
+  return <Link to="/" className="logo"><img src={logoImage} alt="" width="40" height="40" />BORDERLESS</Link>
 }
 
 /** 로그인 전 화면(로그인·회원가입·찾기·관심사 등록)의 머리글 */
@@ -27,7 +29,7 @@ export function AuthHeader() {
 
 /** 서비스 머리글. admin=true면 관리자 화면용(관리자 버튼만 표시) */
 /** beforeBell: 알림 버튼 왼쪽에 둘 화면별 조작(메인의 전체↔내 관심 전환) */
-export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admin, onLogout, beforeBell, children }) {
+export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admin, onLogout, beforeBell, userName, children }) {
   return (
     <header className="hd">
       <div className="wrap">
@@ -39,18 +41,20 @@ export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admi
         </nav>
         <div className="hd-r">
           {beforeBell}
+          {/* 로그인한 회원 이름. 이름이 없는 계정(예전 회원)은 표시하지 않는다. */}
+          {userName && <span className="hd-user" title={`${userName} 님`}><b>{userName}</b> 님</span>}
           <button
             type="button" className={'bell' + (bellOpen ? ' open' : '')} onClick={onBell}
             aria-label={`알림 ${unread}건`} aria-expanded={!!bellOpen} aria-haspopup="dialog"
           >
-            <Icon name="bell" size={22} stroke={1.8} />
+            <Icon name="bell" size={22} stroke={2} />
             {unread > 0 && <b>{unread}</b>}
           </button>
           {!(admin || isAdmin) && <Link className="pill-my" to="/account/profile">마이페이지</Link>}
           {(admin || isAdmin) && <Link className="pill-admin" to="/admin">관리자</Link>}
           {onLogout && (
             <button type="button" className="pill-logout" onClick={onLogout} aria-label="로그아웃">
-              <Icon name="logout" size={15} stroke={2} />로그아웃
+              <Icon name="logout" size={12} stroke={2} />로그아웃
             </button>
           )}
         </div>
@@ -77,6 +81,10 @@ export function Band({ eyebrow, title, lead, image, imagePosition, tone, right, 
   )
 }
 
+// 푸터 데이터 출처: 출처 기관 사이트를 새 탭으로 연다.
+function SourceLink({ href, children }) {
+  return <a href={href} target="_blank" rel="noopener noreferrer" className="ft-link">{children}</a>
+}
 export function Footer() {
   return (
     <footer className="ft">
@@ -88,10 +96,10 @@ export function Footer() {
         </div>
         <div>
           <b>데이터 출처</b>
-          <p>수출입 통계 · 관세청</p>
-          <p>국가별 점유율 · UN Comtrade</p>
-          <p>환율 · 한국은행 ECOS</p>
-          <p>기사 · KOTRA · 한국경제 · 파이낸셜뉴스</p>
+          <p>수출입 통계 : <SourceLink href="https://tradedata.go.kr">관세청</SourceLink></p>
+          <p>국가별 점유율 : <SourceLink href="https://comtradeplus.un.org">UN Comtrade</SourceLink></p>
+          <p>환율 : <SourceLink href="https://ecos.bok.or.kr">한국은행 ECOS</SourceLink></p>
+          <p>기사 : <SourceLink href="https://dream.kotra.or.kr/kotranews/index.do">KOTRA</SourceLink> · <SourceLink href="https://www.hankyung.com">한국경제</SourceLink> · <SourceLink href="https://www.fnnews.com">파이낸셜뉴스</SourceLink></p>
         </div>
         <div>
           <b>약관 및 문의</b>

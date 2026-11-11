@@ -483,7 +483,7 @@ export default function Analysis({ route }) {
 
   return (
     <>
-      <Band image={bandAnalysis} imagePosition="center 60%" eyebrow="AI CHATBOT" title="AI챗봇" lead="국가·품목·기간을 자연어로 질문하고, 대화 내용으로 분석 리포트를 생성합니다." />
+      <Band image={bandAnalysis} imagePosition="center 60%"  title="AI챗봇" lead="국가·품목·기간을 자연어로 질문하고, 대화 내용으로 분석 리포트를 생성합니다." />
       <main className="page">
         <div className="wrap chat-lay">
           {drawer && <div className="chat-scrim" aria-hidden="true" onClick={() => setDrawer(false)} />}

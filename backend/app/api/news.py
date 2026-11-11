@@ -79,6 +79,7 @@ def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope=
     if mode=='SEARCH': require(q and q.strip(),'검색어를 입력하세요.')
     if start and end: require(start<=end,'기사 시작일·종료일을 확인하세요.')
     countries=list(countries or []); hs=list(hs or [])
+    explicit_hs=bool(hs)
     validate_scope(store,hs,countries)
     stmt=select(a).where(a.c.visibility_status=='VISIBLE')
     if scope=='INTERESTED':
@@ -92,8 +93,18 @@ def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope=
             require(hs,'관심 품목 밖의 조건입니다.')
         else: hs=saved['hs_items']
     if countries: stmt=stmt.where(exists(select(t.c.tag_id).where(t.c.article_id==a.c.article_id,t.c.country_code.in_(countries))))
-    if hs: stmt=stmt.where(exists(select(t.c.tag_id).where(t.c.article_id==a.c.article_id,
-        or_(*(and_(t.c.hs_code.startswith(x['hs_code']),t.c.hs_ver==x['hs_ver']) for x in hs)))))
+    if hs:
+        hs_match=exists(select(t.c.tag_id).where(t.c.article_id==a.c.article_id,
+            or_(*(and_(t.c.hs_code.startswith(x['hs_code']),t.c.hs_ver==x['hs_ver']) for x in hs))))
+        # 내 관심(저장된 관심 품목 기준): 단신속보는 적재 시 HS 태그를 넣지 않고 주요이슈도 HS 태그가 거의 없어
+        # 품목 조건을 걸면 항상 빠진다. 이 두 종류는 관심 국가가 맞으면 포함한다(위 국가 조건이 이미 걸려 있음).
+        # 관심 국가가 없거나 품목을 직접 지정한 조회는 지금처럼 품목이 맞아야 한다. 탭과 무관하게 같은 규칙이라
+        # 전체기사 = 일반기사 ∪ 단신속보 ∪ 주요이슈가 유지된다.
+        if scope=='INTERESTED' and not explicit_hs and countries:
+            no_hs_tags=or_(a.c.source_code=='KOTRA_SHORT_NEWS',func.coalesce(major_issue_condition(store),false()))
+            stmt=stmt.where(or_(hs_match,no_hs_tags))
+        else:
+            stmt=stmt.where(hs_match)
     blocked=blocked_topics(store,uid)
     if blocked: stmt=stmt.where(~blocked_article(store,blocked))
     if tab=='MARKET': stmt=stmt.where(a.c.source_code=='KOTRA_MARKET')
@@ -138,7 +149,11 @@ def article_views(store,rows,uid=None):
         ts=by_id[row['article_id']]
         countries=sorted({x['country_code'] for x in ts if x['country_code']})
         hs=[{'hs_code':c,'hs_ver':v} for c,v in sorted({(x['hs_code'],x['hs_ver']) for x in ts if x['hs_code']})]
-        matched=(not saved['country_codes'] or bool(set(countries)&set(saved['country_codes']))) and (not saved['hs_items'] or any(x in hs for x in saved['hs_items'])) and bool(saved['country_codes'] or saved['hs_items'])
+        country_ok=bool(set(countries)&set(saved['country_codes']))
+        # 목록(article_statement)과 같은 규칙: 단신속보·주요이슈는 HS 태그가 없어 관심 국가가 맞으면 일치로 본다.
+        no_hs_tags=row['source_code']=='KOTRA_SHORT_NEWS' or row['article_id'] in major_ids
+        hs_ok=not saved['hs_items'] or any(x in hs for x in saved['hs_items']) or (no_hs_tags and country_ok)
+        matched=(not saved['country_codes'] or country_ok) and hs_ok and bool(saved['country_codes'] or saved['hs_items'])
         result.append({'article_id':str(row['article_id']),'source_code':row['source_code'],'title':row['title'],
             'published_date':row['published_date'],'country_codes':countries,'hs_items':hs,
             'summary':mask_text(row['body_masked'])[:400],'source_url':row['source_url'],

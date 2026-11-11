@@ -44,15 +44,19 @@ export function comparisonPeriod(conditions, rows) {
   const last = new Date(Date.UTC(Number(end.slice(0, 4)), Number(end.slice(5, 7)), 0)).getUTCDate()
   return { start: `${start}-01`, end: `${end}-${last}` }
 }
-export function rankLink({ scope, start, end, months, countries = [], group, product, country }) {
+// flow: 'IMPORT'이면 순위 화면이 수입 기준으로 열린다. 없으면 기존처럼 수출 기준이다.
+export function rankLink({ scope, start, end, months, countries = [], group, product, country, flow }) {
   const q = new URLSearchParams({ scope, period: String(months), group_by: group })
   if (start) q.set('period_start', start)
   if (end) q.set('period_end', end)
   countries.forEach(c => q.append('country_codes', c))
   if (product) q.set('product', product)
   if (country) q.set('country', country)
+  if (flow === 'IMPORT') q.set('sort_flow', 'IMPORT')
   return `/rank?${q}`
 }
+/** 순위 화면의 처음 정렬 기준. 링크에 sort_flow=IMPORT가 있으면 수입 기준('imp'), 아니면 수출 기준('exp'). */
+export const rankBasis = query => query.get('sort_flow') === 'IMPORT' ? 'imp' : 'exp'
 export function rankInitial(query) {
   const inherited = query.has('scope')
   return {

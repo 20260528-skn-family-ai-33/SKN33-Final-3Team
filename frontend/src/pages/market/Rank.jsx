@@ -9,7 +9,7 @@ import { useQuery, ErrorNotice, Pagination } from '../../api/hooks'
 import { download } from '../../api/client'
 import { Hs4Search } from '../../components/pickers'
 import { monthOffset } from '../home/useDashboard'
-import { rankInitial } from '../../api/integration'
+import { rankInitial, rankBasis } from '../../api/integration'
 import { amount } from '../../api/adapters'
 
 const COLS = '60px 110px 1fr 1.4fr 110px'
@@ -42,7 +42,7 @@ function RankResults({ route }) {
   if (initial.start && initial.end) initial.period = 'custom'
   const [draft, setDraft] = useState(initial)
   const [applied, setApplied] = useState(initial)
-  const [basis, setBasis] = useState('exp')
+  const [basis, setBasis] = useState(() => rankBasis(route.query))
   const [error, setError] = useState('')
   const countryCodes = applied.country === '__inherited__' ? applied.countryCodes : applied.country ? [countryCode(applied.country)] : []
   const countryLabel = countryCodes.map(countryName).join(' · ')
@@ -114,7 +114,7 @@ function RankResults({ route }) {
 
   return (
     <>
-      <Band tone="lgbg" eyebrow="수출입 순위" title="국가 · 품목 · 시기별 수출입 순위" lead="국가 또는 품목 중 하나 이상 선택 · 시기 선택은 선택 사항" />
+      <Band tone="lgbg"  title="국가 · 품목 · 시기별 수출입 순위" lead="국가 또는 품목 중 하나 이상 선택 · 시기 선택은 선택 사항" />
       <main className="page" style={{ position: 'relative', paddingBottom: 120 }}>
         <div className="wrap col" style={{ gap: 20 }}>
           <div className="card">
