@@ -221,6 +221,8 @@ class ArticleRetry(Model):
     question: Annotated[str, _chars(1, 4000)]
     conditions: Conditions
     trade_context: bool = False
+    # 사용자가 기사 기간을 정하지 않은 기사 조회(기본 최근 3개월)면 다시검색 시점 기준으로 기간을 다시 계산한다.
+    default_period: bool = False
 
     @model_validator(mode='after')
     def requires_article_period(self):

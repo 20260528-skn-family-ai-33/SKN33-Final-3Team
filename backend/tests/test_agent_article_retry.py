@@ -109,6 +109,9 @@ class ArticleRetryTest(unittest.TestCase):
         api.with_options.return_value.embeddings.create.side_effect = slow_response
         context = ExecutionContext(time.monotonic()+2)
         try:
+            from backend.app.services.rag.runtime import query_limits
+            query_limits.cache_clear()
+            self.addCleanup(query_limits.cache_clear)
             with patch('backend.app.api.config.Settings', return_value=Settings({'API_RAG_QUERY_EMBED_SECONDS': '0.1'})):
                 started = time.monotonic()
                 with self.assertRaisesRegex(RagDeadlineExceeded, 'query_embedding_timeout'):
@@ -118,6 +121,51 @@ class ArticleRetryTest(unittest.TestCase):
         finally:
             release.set()
             self.assertTrue(finished.wait(1))
+
+    def test_retry_recomputes_default_window_but_keeps_requested_window(self):
+        from datetime import date, datetime, timezone
+        from unittest.mock import Mock
+        from backend.app.agents.conditions import recent_article_period
+        from backend.app.agents.state import ArticleRetry, Conditions
+        old = {'start': date(2026, 7, 2), 'end': date(2026, 10, 1)}
+        for default_period in (True, False):
+            with self.subTest(default_period=default_period):
+                request = ArticleRetry(question='반도체 기사', default_period=default_period,
+                                       conditions=Conditions(article_period=old))
+                retry = agent_state('다시검색', {'article_retry': request.model_dump(mode='json')})
+                retry.input.received_at = datetime(2026, 11, 11, 3, tzinfo=timezone.utc)
+                retry.plan = article_retry_plan(retry)
+                again = retry.plan.tasks[0]
+                with patch('backend.app.api.accounts.validate_scope'):
+                    check_conditions(Mock(), retry, again.steps[0])
+                expected = recent_article_period(retry.input.received_at) if default_period else old
+                self.assertEqual(again.conditions.article_period.model_dump(), dict(expected))
+
+    def test_full_query_slots_wait_within_the_same_deadline(self):
+        from threading import Event as Gate
+        from backend.app.services.rag import runtime as rag_runtime
+        gate = Gate()
+        original = rag_runtime._QUERY_POOL
+        executor = rag_runtime.ThreadPoolExecutor(max_workers=1)
+        rag_runtime._QUERY_POOL = (executor, rag_runtime.BoundedSemaphore(1))
+        try:
+            from threading import Thread
+            first = Thread(target=lambda: rag_runtime.query_call(lambda: gate.wait(1) or 'first', 2))
+            first.start()
+            time.sleep(0.05)
+            started = time.monotonic()
+            calls = []
+            with self.assertRaisesRegex(RagDeadlineExceeded, 'query_embedding_timeout'):
+                rag_runtime.query_call(lambda: calls.append('second'), 0.1)   # 자리를 기다리다 상한을 넘김
+            self.assertEqual(calls, [])   # 시간을 다 쓴 요청은 외부 호출을 보내지 않는다
+            self.assertGreaterEqual(time.monotonic() - started, 0.09)
+            gate.set()
+            self.assertEqual(rag_runtime.query_call(lambda: 'third', 1), 'third')   # 자리가 나면 실행
+            first.join(1)
+        finally:
+            gate.set()
+            rag_runtime._QUERY_POOL = original
+            executor.shutdown(wait=False)
 
 
 if __name__ == '__main__':

@@ -2,7 +2,7 @@
 import json
 import re
 from openai import APITimeoutError
-from backend.app.services.rag.runtime import query_call, RagDeadlineExceeded
+from backend.app.services.rag.runtime import query_call, query_limits, RagDeadlineExceeded
 
 from backend.app.services.rag.store import MODEL, DIMENSIONS
 from backend.app.services.shortnews_analysis import CHAT_MODEL
@@ -92,10 +92,7 @@ class ModelGateway:
         return response['format'], response['body_topic']
 
     def embed(self, texts, context):
-        from backend.app.api.config import Settings
-        # TODO(C-28): 검색 후 본문 검수 시간을 남기는 임시 호출 상한. 운영 지연으로 조정한다.
-        cap = max(0.1,float(Settings().get('API_RAG_QUERY_EMBED_SECONDS',10)))
-        seconds = min(context.remaining(),cap)
+        seconds = min(context.remaining(), query_limits()[0])  # TODO(C-28) 임시 상한은 query_limits에 둔다
         context.model_calls += 1
         context.event('query_embedding_start')
         try:

@@ -5,24 +5,51 @@ import math
 from uuid import uuid4
 from threading import Event
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
-from threading import BoundedSemaphore
+from functools import lru_cache
+from threading import BoundedSemaphore, Lock
 
-_QUERY_CALLS = ThreadPoolExecutor(max_workers=3, thread_name_prefix='rag-query')
-_QUERY_SLOTS = BoundedSemaphore(3)
+_QUERY_LOCK = Lock()
+_QUERY_POOL = None
+
+
+@lru_cache(maxsize=1)
+def query_limits():
+    """(검색 임베딩 호출 상한 초, 동시 호출 수). 프로세스에서 한 번만 읽는다.
+    TODO(C-28): 검색 후 본문 검수 시간을 남기는 임시 상한. 운영 지연·워커 수로 조정한다."""
+    from backend.app.api.config import Settings
+    settings = Settings()
+    return (max(0.1, float(settings.get('API_RAG_QUERY_EMBED_SECONDS', 10))),
+            max(1, int(settings.get('API_RAG_QUERY_SLOTS', 3))))
+
+
+def _query_pool():
+    global _QUERY_POOL
+    with _QUERY_LOCK:
+        if _QUERY_POOL is None:
+            slots = query_limits()[1]
+            _QUERY_POOL = (ThreadPoolExecutor(max_workers=slots, thread_name_prefix='rag-query'), BoundedSemaphore(slots))
+        return _QUERY_POOL
 
 
 def query_call(work, seconds):
-    """진행 중인 외부 질의는 제한된 스레드에서 끝내고 늦은 결과를 호출자에게 돌려주지 않는다."""
-    if not _QUERY_SLOTS.acquire(blocking=False):
-        raise RagInferenceUnavailable('query_inference_busy')
+    """진행 중인 외부 질의는 제한된 스레드에서 끝내고 늦은 결과를 호출자에게 돌려주지 않는다.
+    자리가 모두 차 있으면 같은 시간 상한 안에서 기다린다. 기다리다 상한을 넘기면 시간 초과로 처리한다."""
+    executor, slots = _query_pool()
+    started = time.monotonic()
+    if not slots.acquire(timeout=max(0.0, seconds)):
+        raise RagDeadlineExceeded('query_embedding_timeout')
+    remaining = seconds - (time.monotonic() - started)
+    if remaining <= 0:   # 자리를 기다리다 시간을 다 썼으면 버려질 외부 호출을 보내지 않는다.
+        slots.release()
+        raise RagDeadlineExceeded('query_embedding_timeout')
     try:
-        future = _QUERY_CALLS.submit(work)
+        future = executor.submit(work)
     except BaseException:
-        _QUERY_SLOTS.release()
+        slots.release()
         raise
-    future.add_done_callback(lambda _: _QUERY_SLOTS.release())
+    future.add_done_callback(lambda _: slots.release())
     try:
-        return future.result(timeout=seconds)
+        return future.result(timeout=max(0.0, seconds - (time.monotonic() - started)))
     except FutureTimeout as exc:
         future.cancel()
         raise RagDeadlineExceeded('query_embedding_timeout') from exc

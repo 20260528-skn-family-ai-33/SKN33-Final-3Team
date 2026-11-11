@@ -58,8 +58,11 @@ def article_retry(state):
             retrying=any(s.args.get('article_retry') for s in task.steps)
             question=(state.input.context.article_retry.question if retrying and state.input.context.article_retry
                       else state.input.question if len(state.plan.tasks)==1 else task.question)
+            previous=state.input.context.article_retry
+            default_period=(previous.default_period if retrying and previous else
+                            task.intent=='LOCAL_ISSUES' and not (task.slots and task.slots.article_period))
             return ArticleRetry(question=question,conditions=task.conditions.model_copy(deep=True),
-                                trade_context=trade_context)
+                                trade_context=trade_context,default_period=default_period)
     return state.input.context.article_retry
 
 

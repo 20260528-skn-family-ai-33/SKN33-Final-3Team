@@ -151,7 +151,9 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         request=state.input.context.article_retry
         if request is None or task.intent!='LOCAL_ISSUES':
             raise SlotRepair('다시 검색할 기사 요청을 확인할 수 없습니다.')
-        task.conditions=request.conditions.model_copy(deep=True)
+        task.conditions=(Conditions.model_validate({**request.conditions.model_dump(),
+                         'article_period':recent_article_period(state.input.received_at)})
+                         if request.default_period else request.conditions.model_copy(deep=True))
         accounts.validate_scope(store,[h.model_dump() for h in task.conditions.hs_items],task.conditions.country_codes)
         step.status='DONE'
         return
