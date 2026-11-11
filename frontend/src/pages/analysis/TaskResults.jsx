@@ -4,10 +4,11 @@ import { useQuery, ErrorNotice } from '../../api/hooks'
 import { BarChart, Donut, LineChart } from '../../components/charts'
 import ApiResults from '../../components/ApiResults'
 import { niceTicks, chartDisplay } from '../../utils/chart'
-import { countryName, productName } from '../../data/catalog'
+import { countryName, productChoiceLabel } from '../../data/catalog'
 import { useApp } from '../../store'
 import { comparisonCharts } from './comparisonCharts'
 import { comparisonGroups, comparisonChart } from './comparisonGroups'
+import { taskTitle } from './taskTitle'
 
 const colors=['#a71b39','#342954','#4b7578','#967348','#6e6198']
 const badges={PARTIAL:'일부 결과',NO_DATA:'결과 없음',OUT_OF_SCOPE:'범위 밖'}
@@ -43,10 +44,10 @@ function Chart({initial,selector,table}) {
         const pair=pairs.find(p=>pairKey(p.country_code,itemKey({hs_code:p.hs6,hs_ver:p.hs_ver||'HS2022'}))===e.target.value)
         if(pair) change(pair.country_code,itemKey({hs_code:pair.hs6,hs_ver:pair.hs_ver||'HS2022'}))
       }}>{pairs.map(p=>{const key=pairKey(p.country_code,itemKey({hs_code:p.hs6,hs_ver:p.hs_ver||'HS2022'}))
-        return <option key={key} value={key}>{countryName(p.country_code)} · {productName(p.hs6)}</option>})}</select>}
+        return <option key={key} value={key}>{countryName(p.country_code)} · {productChoiceLabel(p.hs6)}</option>})}</select>}
       {pairQuery.loading && <span role="status">차트 대상 불러오는 중…</span>}
       <ErrorNotice error={pairQuery.error} retry={pairQuery.reload}/>
-    </div> : selector && <div className="chips">{selector.country_codes.length>0 && <select aria-label="차트 국가" disabled={busy} value={country} onChange={e=>change(e.target.value,hs)}>{selector.country_codes.map(c=><option key={c} value={c}>{countryName(c)}</option>)}</select>}{selector.hs_items.length>0 && <select aria-label="차트 품목" disabled={busy} value={hs} onChange={e=>change(country,e.target.value)}>{selector.hs_items.map(h=><option key={itemKey(h)} value={itemKey(h)}>{productName(h.hs_code)}{selector.hs_items.some(o=>o!==h&&o.hs_code===h.hs_code)?` (${h.hs_ver})`:''}</option>)}</select>}</div>}
+    </div> : selector && <div className="chips">{selector.country_codes.length>0 && <select aria-label="차트 국가" disabled={busy} value={country} onChange={e=>change(e.target.value,hs)}>{selector.country_codes.map(c=><option key={c} value={c}>{countryName(c)}</option>)}</select>}{selector.hs_items.length>0 && <select aria-label="차트 품목" disabled={busy} value={hs} onChange={e=>change(country,e.target.value)}>{selector.hs_items.map(h=><option key={itemKey(h)} value={itemKey(h)}>{productChoiceLabel(h.hs_code,h.name_ko)}{selector.hs_items.some(o=>o!==h&&o.hs_code===h.hs_code)?` (${h.hs_ver})`:''}</option>)}</select>}</div>}
     {chart.type==='line'?<LineChart {...props} yTicks={niceTicks(series.flatMap(s=>s.values.filter(v=>v!=null)))}/>:chart.type==='donut'?<><Donut items={chart.labels.map((l,i)=>[l,series[0].values[i]||0,colors[i%colors.length]])}/><p>{chart.labels.map((l,i)=>l+' '+(series[0].values[i]??'—')+'%').join(' · ')}</p></>:<BarChart {...props}/>}
     {series.length>1 && <ul aria-label="그래프 범례" style={{display:'flex',flexWrap:'wrap',gap:'8px 18px',listStyle:'none',padding:0,margin:'12px 0 0'}}>
       {series.map((s,i)=><li key={i} style={{display:'flex',alignItems:'center',gap:8,fontSize:13}}>
@@ -70,7 +71,7 @@ function ComparisonResult({group,fallback,charts,selectors,tasks,tableOnly=false
     <ErrorNotice error={result.error} retry={result.reload}/>
     {[...new Set(group.tables.map(t=>t.task_id))].map(taskId=>{
       const index=tasks.findIndex(t=>t.task_id===taskId),own=group.tables.filter(t=>t.task_id===taskId)
-      return <div key={taskId}>{group.tables.length>own.length && <h4>{index+1}. {tasks[index]?.question}</h4>}
+      return <div key={taskId}>{group.tables.length>own.length && index>=0 && <h4>{index+1}. {taskTitle(tasks[index],own)}</h4>}
         {!tableOnly && charts.filter(c=>own.some(t=>t.result_id===c.result_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c}
           selector={selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)} table={own.find(t=>t.result_id===c.result_id)}/>)}
         {own.map(t=><ApiResults key={t.result_id} table={t} tableOnly/>)}</div>
@@ -95,14 +96,15 @@ export default function TaskResults({answer,hideText=false}) {
   const sections=answer.tasks.map((t,index)=>{
     const start=conclusionCount(answer.tasks.slice(0,index))
     const tables=answer.tables.filter(x=>x.task_id===t.task_id)
+    const title=taskTitle(t,tables)
     // 문장형 답변(D-98): 결론을 한 문단으로 읽게 하고, 근거 표는 접어 둔다. 차트 단계는 없다
-    if(t.answer_format==='TEXT')return <section key={t.task_id} className="chat-result"><h3>{index+1}. {t.question} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
+    if(t.answer_format==='TEXT')return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
       {!hideText && <div className="chat-paragraph">{t.conclusion.map((s,i)=>sentence(s,start+i))}</div>}
       {tables.length>0 && <details><summary>근거 표 보기</summary>
         {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}
           charts={answer.charts||[]} selectors={answer.chart_selectors} tasks={answer.tasks} tableOnly/>)}   {/* 비교는 시기별 한 줄(22번), 표만 */}
         {tables.filter(x=>!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</details>}</section>
-    return <section key={t.task_id} className="chat-result"><h3>{index+1}. {t.question} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
+    return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
       {!hideText && t.conclusion.map((s,i)=>sentence(s,start+i))}
       {charts.filter(c=>c.task_id===t.task_id&&!groupedTasks.has(c.task_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c} selector={answer.chart_selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)} table={answer.tables.find(x=>x.result_id===c.result_id)}/>)}
       {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}

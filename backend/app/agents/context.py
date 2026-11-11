@@ -6,7 +6,7 @@ lookup through enqueue, Redis SET NX and commit. No MySQL access is hidden here.
 from collections.abc import Callable
 from pydantic import ValidationError
 
-from backend.app.agents.state import Conditions, SessionContext, TurnSummary, MAX_HS_ITEMS, MAX_COUNTRIES
+from backend.app.agents.state import ArticleRetry, Conditions, SessionContext, TurnSummary, MAX_HS_ITEMS, MAX_COUNTRIES
 from backend.app.api.common import ApiError
 from backend.app.api.common import now
 from backend.app.api.redis_store import RedisState
@@ -14,9 +14,25 @@ from backend.app.api.redis_store import RedisState
 ACTIVE_STATUSES = frozenset({'QUEUED', 'RUNNING', 'NEEDS_INPUT', 'WAITING_REPORT'})
 
 
+def both_trade_flows(plan) -> bool:
+    """Only carry both directions when the primary scope was queried in both directions."""
+    primary, *others = plan.tasks
+    if primary.intent not in ('STATISTICS', 'RANKING', 'CAUSE') or not primary.conditions:
+        return False
+    return any(
+        task.intent == primary.intent and task.answer_status in ('ANSWERED', 'PARTIAL')
+        and task.conditions is not None
+        and task.conditions.trade_flow != primary.conditions.trade_flow
+        and task.conditions.model_dump(exclude={'trade_flow'}) ==
+        primary.conditions.model_dump(exclude={'trade_flow'})
+        for task in others
+    )
+
+
 def completed_context(state):
     context = state.input.context.model_copy(deep=True)
     primary = state.plan.tasks[0]
+    context.article_retry = article_retry(state)
     # 용어·대화(CONVERSATION)·HS 조회는 조회 조건이 없다. 조건 없이도 질문·요약은 최근 대화에 남긴다.
     # remember는 conditions가 None이면 이전 검색 조건을 그대로 둔다
     if primary.answer_status in ('PARTIAL', 'ANSWERED'):
@@ -26,7 +42,28 @@ def completed_context(state):
         # Keep confirmed question/conditions even if verifier removed its summary.
         context = context.remember(TurnSummary(question=state.input.question, intent=primary.intent,
             conditions=primary.conditions, summary=state.draft.turn_summary, answered_at=now()))
+        if primary.conditions:
+            context.both_trade_flows = both_trade_flows(state.plan)
     return context
+
+
+def article_retry(state):
+    if state.input.article_action:
+        return state.input.context.article_retry
+    for task in reversed(state.plan.tasks):
+        if (task.conditions and task.conditions.article_period
+                and any(s.tool=='check_conditions' and s.status=='DONE' for s in task.steps)
+                and any(s.tool=='search_articles' for s in task.steps)):
+            trade_context=task.intent=='CAUSE' or any(s.args.get('trade_context') for s in task.steps)
+            retrying=any(s.args.get('article_retry') for s in task.steps)
+            question=(state.input.context.article_retry.question if retrying and state.input.context.article_retry
+                      else state.input.question if len(state.plan.tasks)==1 else task.question)
+            previous=state.input.context.article_retry
+            default_period=(previous.default_period if retrying and previous else
+                            task.intent=='LOCAL_ISSUES' and not (task.slots and task.slots.article_period))
+            return ArticleRetry(question=question,conditions=task.conditions.model_copy(deep=True),
+                                trade_context=trade_context,default_period=default_period)
+    return state.input.context.article_retry
 
 
 def restore_conditions(context_json: dict) -> Conditions | None:
@@ -67,6 +104,8 @@ class ChatContext:
             except (ValidationError, ValueError):
                 pass
         return SessionContext(session_id=session_id, conditions=restore_conditions(context_json),
+            both_trade_flows=context_json.get('both_trade_flows') is True,
+            article_retry=context_json.get('article_retry'),
             interest_action=context_json.get('interest_action', 'NONE'), last_job_id=last_job_id)
 
     def acquire_locked(self, session_id: str, job_id: str,

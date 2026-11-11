@@ -11,8 +11,8 @@ import bandArticles from '../../assets/band-articles.jpg'
 
 const PAGE_SIZE = 5
 const toDot = d => (d ? d.replaceAll('-', '.') : '')
-// 새 채팅방을 만들어 이 질문을 바로 보낸다(Analysis의 new=1)
-const ask = a => `/analysis?new=1&ask=${encodeURIComponent(`${a.title} 관련 시장 영향을 알려줘`)}`
+// 기사 탭의 "AI에게 물어보기"는 사용하지 않기로 했다(2026-11-11). 다시 쓰려면 아래 버튼 주석과 함께 되살린다.
+// const ask = a => `/analysis?new=1&article=${encodeURIComponent(a.id)}`
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
 
 // 단신속보 본문은 줄바꿈으로 문단이 구분돼 온다. 줄마다 문단으로 나누고, 줄 앞의 -·*·** 표시는 떼고 보여 준다.
@@ -125,16 +125,16 @@ export default function Articles({ route }) {
                     </Link>
                     : <div className="article-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                       <Btn kind="ink" iconRight="external" disabled={!a.url} onClick={() => window.open(a.url, '_blank', 'noopener')}>원문 보기</Btn>
-                      <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn>
+                      {/* <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn> */}
                     </div>}
                   {short && on && (
                     <div style={{ flexBasis: '100%', marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
                       {detail.loading
                         ? <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>본문을 불러오는 중…</p>
                         : paragraphs(detail.data?.body_masked || a.summary).map((line, i) => <p key={i} style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C', marginTop: i ? 10 : 0 }}>{line}</p>)}
-                      <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+                      {/* <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
                         <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn>
-                      </div>
+                      </div> */}
                     </div>
                   )}
                 </article>

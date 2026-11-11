@@ -971,6 +971,13 @@
         "string",
         "필수",
         "클라이언트 생성 UUID. 중복 전송 방지."
+      ],
+      [
+        "Request Body",
+        "article_action",
+        "ArticleAction",
+        "선택",
+        "선택 기사 ID와 실행 모드(summary, related, both)."
       ]
     ]
   },

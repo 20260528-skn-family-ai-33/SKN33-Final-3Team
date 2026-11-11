@@ -80,14 +80,18 @@ def submit(store,uid,identity,data):
     question=mask_text(data['question'].strip())
     require(0<len(question)<=4000,'질문은 1~4,000자로 입력하세요.')
     require(bool(data.get('client_message_id')),'client_message_id가 필요합니다.')
+    article_action = data.get('article_action')
     old=jobs.find_chat(store,uid,data['client_message_id'])
     if old:
-        require(old['target_key']==str(identity) and old['payload_json']['question']==question,'다른 메시지에 사용한 client_message_id입니다.','IDEMPOTENCY_CONFLICT',409)
+        require(old['target_key']==str(identity) and old['payload_json']['question']==question
+                and old['payload_json'].get('article_action')==article_action,
+                '다른 메시지에 사용한 client_message_id입니다.','IDEMPOTENCY_CONFLICT',409)
         return {'job':view_job(old)}
     graph_enabled=store.db.settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true'
     if graph_enabled:
         from backend.app.agents.admission import accept
-        return accept(store,uid,session,question,data['client_message_id'])
+        return accept(store,uid,session,question,data['client_message_id'],article_action=article_action)
+    require(article_action is None, '기사 요약과 관련 기사 검색을 사용할 수 없습니다.', 'FEATURE_UNAVAILABLE', 503)
     payload={'question':question,'conditions':session['context_json'].get('conditions',{})}
     row=jobs.enqueue(store,uid,'API_CHAT',identity,payload,data['client_message_id'])
     return {'job':view_job(row)}
@@ -113,15 +117,17 @@ def clarification(store,uid,identity,data):
         require(prompt['type']=='HS_SELECTION' and not data.get('choice_ids'),'품목 되묻기에서 직접 선택만 제출하세요.')
         item=data['hs_item']; validate_scope(store,[item],[])
         conditions=select_hs(row,[item])
-        jobs.remember_prompt(row,prompt,data)
+        jobs.remember_prompt(row,prompt,data,store=store,hs_items=[item])
         return {'job':view_job(jobs.requeue_chat(store,row,conditions))}
     require(bool(data.get('choice_ids')),'선택지 또는 직접 선택한 품목이 필요합니다.')
     choices={x['choice_id']:x for x in prompt['choices']}
     require(len(data['choice_ids'])==1 and set(data['choice_ids'])<=set(choices),'허용된 선택지를 하나 선택하세요.')
     conditions=dict(row['payload_json'].get('conditions',{}))
+    hs_items=[]
     if prompt['type']=='INTEREST_CONFIRM': require(len(data['choice_ids'])==1,'관심 적용 여부는 하나만 선택하세요.')
     if prompt['type']=='HS_SELECTION':
-        conditions=select_hs(row,[x for key in data['choice_ids'] for x in choices[key]['value']['hs_items']])
+        hs_items=[x for key in data['choice_ids'] for x in choices[key]['value']['hs_items']]
+        conditions=select_hs(row,hs_items)
     else:
         for key in data['choice_ids']: conditions.update(choices[key]['value'])
     if mixed_interest:
@@ -132,7 +138,7 @@ def clarification(store,uid,identity,data):
         row.pop('agent')
         row.pop('finished_at',None)
         jobs.mark_agent(row,store.db)
-    jobs.remember_prompt(row,prompt,data)
+    jobs.remember_prompt(row,prompt,data,store=store,hs_items=hs_items)
     resumed=jobs.requeue_chat(store,row,conditions)
     if mixed_interest:
         store.db.redis.release_chat(str(row['target_key']),str(row['job_id']))

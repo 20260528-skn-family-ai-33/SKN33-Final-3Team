@@ -1,6 +1,7 @@
 // Existing screens + real local API, MySQL, Redis and worker. No route mocks.
 const { chromium } = require('playwright')
 const assert = require('node:assert/strict')
+const { checkSessionSync } = require('./session-sync.cjs')
 const fs = require('node:fs'), path = require('node:path')
 async function main() {
   const base = process.argv[2] || 'http://127.0.0.1:5173'
@@ -89,7 +90,8 @@ async function main() {
     await go('/articles')
     await page.locator('#ar-q').fill('검증')
     await page.getByRole('button', { name: '기사 검색' }).click()
-    // 기사 유형별로 검증한다: 일반·주요이슈는 원문 보기·AI 질문 버튼, 단신속보는 상세 펼치기(원문 버튼 없음).
+    // 기사 유형별로 검증한다: 일반·주요이슈는 원문 보기, 단신속보는 상세 펼치기(원문 버튼 없음).
+    // "AI에게 물어보기"는 사용하지 않기로 해 화면에 없어야 한다(2026-11-11).
     await page.locator('article').first().waitFor()
     const cards = page.locator('article')
     for (let i = 0; i < await cards.count(); i++) {
@@ -98,14 +100,14 @@ async function main() {
         await card.getByRole('link', { name: '상세 보기' }).click()
         await card.getByRole('link', { name: '접기' }).waitFor()
         assert.equal(await card.getByRole('button', { name: /원문 보기/ }).count(), 0)
-        await card.getByRole('link', { name: /AI에게 물어보기/ }).waitFor()
+        assert.equal(await card.getByRole('link', { name: /AI에게 물어보기/ }).count(), 0)
         await card.getByRole('link', { name: '접기' }).click()
       } else {
         await card.getByRole('button', { name: /원문 보기/ }).waitFor()
-        await card.getByRole('link', { name: /AI에게 물어보기/ }).waitFor()
+        assert.equal(await card.getByRole('link', { name: /AI에게 물어보기/ }).count(), 0)
       }
     }
-    ok('기존 기사 탭·검색·유형별 원문 보기·상세 펼침·AI 질문 버튼')
+    ok('기사 탭에 AI에게 물어보기 버튼 없음')
     await go('/account/settings')
     await page.getByRole('switch', { name: '전체 알림 수신' }).click()
     await page.getByRole('checkbox', { name: '위 알림 수신 약관을 확인했으며 동의합니다.' }).locator('..').click()
@@ -139,6 +141,10 @@ async function main() {
     await page.getByRole('button', { name: '표로 보기', exact: true }).first().click()
     await page.getByRole('button', { name: '차트로 보기', exact: true }).first().waitFor()
     ok('실제 분석 작업·기존 답변 카드·차트/표 전환')
+    // 지금 열린 채팅방을 목록에서 다시 눌러도 대화가 사라지지 않는다.
+    await page.locator('.chat-list button[aria-current="true"]').first().click()
+    await page.getByRole('button', { name: '리포트로 저장', exact: true }).waitFor()
+    ok('열린 채팅방 다시 선택 시 대화 유지')
     await page.getByRole('button', { name: '리포트로 저장', exact: true }).click()
     await page.getByRole('button', { name: '리포트 조건 확인' }).click()
     await page.getByRole('button', { name: '확인한 조건으로 생성' }).click()
@@ -159,16 +165,7 @@ async function main() {
     await page.getByText(/^\d{4}-\d{2}-\d{2} 동의$/).nth(1).waitFor()
     assert.equal(await page.getByRole('switch').count(), 0)
     ok('회원정보에 가입 약관 동의 날짜 표시')
-    await page.getByRole('button', { name: '로그아웃', exact: true }).click(); await page.waitForURL('**/#/login')
-    await page.locator('#login-email').fill(email); await page.locator('#login-password').fill(password)
-    await page.getByRole('button', { name: '로그인', exact: true }).click(); await page.waitForURL('**/#/?view=interest')
-    ok('로그아웃·기존 로그인 화면 재로그인·관심 시작 화면')
-    await go('/account/password')
-    await page.locator('#pw-email').fill(email); await page.getByRole('button', { name: '이메일 확인' }).click()
-    // Chrome may populate the native input without dispatching a React change event.
-    await page.locator('#pw-current').evaluate((input, value) => { input.value = value }, password)
-    await page.locator('#pw-next').fill('Changed!456'); await page.locator('#pw-confirm').fill('Changed!456')
-    await page.getByRole('button', { name: '변경 저장' }).click(); await page.waitForURL('**/#/login')
+    await checkSessionSync(page, base, email, password, ok)
     await page.locator('#login-email').fill(email); await page.locator('#login-password').fill(password); await page.getByRole('button', { name: '로그인', exact: true }).click()
     await page.getByRole('alert').filter({ hasText: '일치하지 않습니다' }).waitFor()
     await page.locator('#login-password').fill('Changed!456'); await page.getByRole('button', { name: '로그인', exact: true }).click(); await page.waitForURL('**/#/?view=interest')

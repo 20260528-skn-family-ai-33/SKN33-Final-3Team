@@ -275,12 +275,17 @@ class NameCatalog:
             if source.get('group')=='COUNTRY':
                 self.countries |= {name for key,name in source_names(source.get('top',[])) if key in ('name','code')}
         self.names=frozenset(n for n in known_names if n and len(n)>1)|{n for _,n in fields if len(n)>1}
+        # 근거 범위의 HS 코드와 그 표시명("HS 3304 화장품")은 품목 하나다. 묶음(GROUP) 판정에서 하나로 센다.
+        self._same_product = {str(source['hs_name']): str(source['hs_code']) for source in sources
+                              if isinstance(source, dict) and source.get('hs_code') and source.get('hs_name')}
         self._lengths = {len(name) for name in self.names}
         # Mention spans depend on the vocabulary and country roles. Alias
         # ownership and row bindings still belong to each individual catalog.
         self._mentions = ({} if mention_cache is None else
                           mention_cache.setdefault((self.names, self.countries), {}))
         stored = {name for _, name in fields}
+        self._stored = frozenset(stored)
+        self.ambiguous_countries = set()  # 여러 품목 행과 짝지어진 국가. 국가 이름만으로는 행을 고르지 못한다.
         products = {name for key, name in fields if key in ('product_name', 'hs_name', 'name', 'label')} - self.countries
         candidates = self.names - stored - self.countries
         self.aliases = {}
@@ -337,7 +342,8 @@ class NameCatalog:
         protected = [(a,b) for name,a,b in hits if (name,a,b) in explicit_codes or
                      (name not in self.countries and not name.isdigit())]
         outside = mask_spans(value, protected)
-        blocked = [m.span() for m in DATE.finditer(outside)]
+        # 날짜 패턴의 뒤 공백이 가려 둔 품목명·HS 코드까지 덮지 않게 한다("2025년 HS 3304", "2025년 화장품").
+        blocked = [(m.start(), m.start() + len(m.group().rstrip())) for m in DATE.finditer(outside)]
         outside_values = quantities(mask_dates(outside))
         each = re.search(r'각각|모두', outside)
         for q in outside_values:
@@ -369,7 +375,17 @@ class NameCatalog:
             parts = (self.names_in(name) if len(possible) >= 2 or HS_REFERENCE.search(name)
                      else frozenset())
             members = parts if self.grouped(parts) else frozenset()
-            self._row_bindings[name] = (self.aliases.get(name, ()), members)
+            aliases = set(self.aliases.get(name, ()))
+            # "베트남 기초화장품"처럼 국가 하나와 품목 하나로만 된 행 이름은 두 이름 모두 그 행의 대상이다.
+            if not members and len(parts & self.countries) == 1 and len(parts - self.countries) <= 1:
+                rest = mask_spans(name, [(a, b) for _, a, b in self.mentions(name)])
+                country, = parts & self.countries
+                # 같은 국가가 다른 품목과 짝지은 행이 근거에 또 있으면 국가 이름만으로는 행을 고를 수 없다.
+                if re.fullmatch(r'[\s·ㆍ/]*', rest):
+                    aliases |= parts
+                    if any(label != name and country in label and label != country for label in self._stored):
+                        self.ambiguous_countries.add(country)
+            self._row_bindings[name] = (frozenset(aliases), members)
         return self._row_bindings[name]
 
     def merge(self,inherited,mentioned):
@@ -377,7 +393,8 @@ class NameCatalog:
         return frozenset((country or inherited & self.countries)|(product or inherited-self.countries))
 
     def grouped(self,names):
-        return len(names & self.countries)>1 or len(names-self.countries)>1
+        products={self._same_product.get(name,name) for name in names-self.countries}
+        return len(names & self.countries)>1 or len(products)>1
 
 
 ARTICLE_CITATION = re.compile(r'\[\s*[0-9]+(?:\s*,\s*[0-9]+)*\s*\]')
@@ -470,7 +487,36 @@ class Context:
     metric: MetricClaim | None = None
 
 
+# "종료일 2025년 12월 31일", "2025년 12월 31일까지"처럼 월 단위 기간의 끝을 말일로 다시 적은 표현.
+# 그 달 하나의 기간으로 읽지 않는다(종료일은 말일로 표시한다는 답변 규칙).
+PERIOD_END_DAY = re.compile(r'(?:종료일\s*[:：]?\s*)?([12][0-9]{3})년\s*([0-9]{1,2})월\s*([0-9]{1,2})일(?:\s*(?:종료|까지))?')
+
+
+def period_end_months(text):
+    """기간 끝을 말일로 적은 표현의 (달, 날짜). 통계 기간의 마지막 달이나 기사 기간의 끝 날짜와 같아야 한다."""
+    from calendar import monthrange
+    months = []
+    for match in PERIOD_END_DAY.finditer(text):
+        year, month, day = (int(g) for g in match.groups())
+        labeled = match.group().startswith('종료일') or re.search(r'(?:종료|까지)$', match.group())
+        if labeled and 1 <= month <= 12 and day == monthrange(year, month)[1]:
+            months.append((f'{year}-{month:02d}', f'{year}-{month:02d}-{day:02d}'))
+    return months
+
+
+def _mask_period_end_days(text):
+    from calendar import monthrange
+    def mask(match):
+        year, month, day = (int(g) for g in match.groups())
+        labeled = match.group().startswith('종료일') or re.search(r'(?:종료|까지)$', match.group())
+        if labeled and 1 <= month <= 12 and day == monthrange(year, month)[1]:
+            return ' ' * len(match.group())
+        return match.group()
+    return PERIOD_END_DAY.sub(mask, text)
+
+
 def read_time(text, inherited_year=None):
+    text=_mask_period_end_days(text)
     dates=list(DATE.finditer(text)); years=set();months=set();bare=set();durations=set()
     current_year=inherited_year
     for date in dates:
@@ -525,6 +571,8 @@ def metric_claim(text,quantity,*,direct_suffix='',flow=None):
     share=bool(re.search(r'비중|점유율',text));change=bool(re.search(r'증감률|증가율|감소율|변동률',text))
     family='SHARE' if share else 'CHANGE' if change else None
     aggregate='AVERAGE' if '월평균' in text else 'TOTAL' if re.search(r'총액|합계',text) else None
+    if aggregate=='TOTAL' and quantity.unit in ('%','%p'):
+        aggregate=None  # "수출 총액 기준으로 중국 28.4%"의 총액은 비율의 분모 설명이다.
     if aggregate: family='AMOUNT'
     if re.search(r'수출액|수입액|교역액|금액',text) and quantity.unit=='USD': family='AMOUNT'
     comparison=None
@@ -741,12 +789,17 @@ def _trend_predicate(text):
     return match
 
 
+OVERALL_TREND = re.compile(r'전반적으로|전체적으로|대체로')
+
+
 def _trend_claim(syntax, targets, time, catalog, predicate, *, understood=True):
     prefix = syntax[:predicate.start()]
     article = list(ARTICLE_SUBJECT.finditer(prefix))
     if article and not TREND_METRIC.search(prefix, article[-1].end()):
         return None
     axes = {'YOY' if m['yoy'] else 'MOM' for m in COMPARISON.finditer(prefix)}
+    # "전반적으로 증가"는 조회 기간의 첫 달과 마지막 달을 비교하는 기간 추세다(PERIOD).
+    overall = not axes and bool(OVERALL_TREND.search(prefix))
     flow_words = set(re.findall(r'수출|수입', prefix))
     flow = {'수출': 'EXPORT', '수입': 'IMPORT'}.get(next(iter(flow_words), ''))
     share = bool(re.search(r'점유율|비중', prefix))
@@ -758,9 +811,11 @@ def _trend_claim(syntax, targets, time, catalog, predicate, *, understood=True):
         prefix = re.sub(r'보다\s*$', '', prefix)
     rest = TREND_METRIC.sub('', mask_dates(COMPARISON.sub('', prefix)))
     rest = re.sub(r'^\s*(?:기사|보도)에\s*따르면[,，]?\s*', '', rest)
+    rest = OVERALL_TREND.sub('', rest)
     rest = re.sub(r'소폭|큰\s*폭으로|대폭|다소|크게|조금|시장|전체|하여|에서|으로|[도의은는이가을를에와과액·,\s]', '', rest)
     valid = understood and not TREND_PATH.search(syntax) and len(axes) <= 1 and len(flow_words) <= 1 and not rest and not re.search(r'수출입|교역', prefix)
-    metric = MetricClaim(family='SHARE_CHANGE' if share else 'CHANGE', comparison=next(iter(axes), None),
+    metric = MetricClaim(family='SHARE_CHANGE' if share else 'CHANGE',
+                         comparison=next(iter(axes), None) or ('PERIOD' if overall else None),
                          flow=flow, direction='UP' if predicate['up'] else 'DOWN' if predicate['down'] else None,
                          negated_change=bool(understood and (predicate['negative'] or predicate['short'])))
     return Claim(None, targets, 'GROUP' if catalog.grouped(targets) else 'SINGLE', metric, time, syntax, valid)

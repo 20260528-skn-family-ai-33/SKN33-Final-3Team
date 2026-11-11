@@ -11,5 +11,14 @@ export function registerProducts(items) {
 export const countryCode = name => countries.find(c => c.name === name)?.country_code || name
 export const countryName = code => countries.find(c => c.country_code === code)?.name || code
 export const productName = id => products.find(p => p.id === id)?.name || id || '전체 품목'
+export function productChoiceLabel(code, name = productName(code)) {
+  if (!code) return name
+  const suffix = `(HS ${code})`
+  const title = name?.trim()
+  if (!title || title === code || title === `HS ${code}`) return `HS ${code}`
+  if (title.endsWith(suffix)) return title
+  if (title.endsWith(`(${code})`)) return `${title.slice(0, -(code.length + 2)).trimEnd()} ${suffix}`
+  return `${title} ${suffix}`
+}
 export const productKeyword = productName
 export const toggleValue = (list, value) => list.includes(value) ? list.filter(v => v !== value) : [...list, value]

@@ -212,3 +212,62 @@ class BoundaryCases(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+RANKING_SOURCE = {'kind': 'RANKING', 'group': 'COUNTRY', 'hs_code': '3304', 'hs_name': '화장품', 'period': PERIOD,
+              'trade_flow': 'EXPORT', 'unit': 'USD', 'total_usd': 1804000000,
+              'top': [{'rank': 1, 'code': 'CN', 'name': '중국', 'amount_usd': 512300000, 'share_pct': 28.4},
+                      {'rank': 2, 'code': 'US', 'name': '미국', 'amount_usd': 401200000, 'share_pct': 22.2}]}
+
+
+def ranking_check(sentence, source=RANKING_SOURCE):
+    from backend.app.agents.verify import inspect_sentence
+    good, _ = inspect_sentence(sentence, [source], known_names=['중국', '미국', '화장품', '반도체'], countries=['중국', '미국'])
+    return good
+
+
+class RankingProductScopeTest(unittest.TestCase):
+    """k007: 단일 품목 국가 순위의 품목명·HS 코드·기간 범위를 근거 범위로 대조한다."""
+    check = staticmethod(ranking_check)
+
+    def test_product_name_period_range_and_hs_code_are_scope_not_values(self):
+        for sentence in ['2025년 1월~12월 화장품 수출 상위 국가는 중국(5억 1,230만 달러, 28.4%), 미국(4억 120만 달러, 22.2%) 순입니다.',
+                         '같은 기간 화장품 수출 총액은 18억 400만 달러입니다.',
+                         '2025년 HS 3304 화장품 수출 상위 국가는 중국(5억 1,230만 달러), 미국(4억 120만 달러) 순입니다.']:
+            with self.subTest(sentence=sentence):
+                self.assertTrue(self.check(sentence))
+
+    def test_wrong_value_or_other_product_is_still_rejected(self):
+        self.assertFalse(self.check('2025년 화장품 수출 1위는 중국(6억 1,230만 달러)입니다.'))
+        self.assertFalse(self.check('2025년 반도체 수출 1위는 중국(5억 1,230만 달러)입니다.'))
+
+
+class PeriodEndDayTest(unittest.TestCase):
+    check = staticmethod(ranking_check)
+
+    def test_month_end_restatement_matches_only_the_source_end(self):
+        self.assertTrue(self.check('2025년 1월~12월(종료일 2025년 12월 31일) 화장품 수출 1위는 중국(5억 1,230만 달러)입니다.'))
+        self.assertTrue(self.check('2025년 12월 31일까지 화장품 수출 총액은 18억 400만 달러입니다.'))
+        self.assertFalse(self.check('2025년 1월~12월(종료일 2025년 11월 30일) 화장품 수출 1위는 중국(5억 1,230만 달러)입니다.'))
+        self.assertFalse(self.check('2025년 12월 화장품 수출 1위는 중국(5억 1,230만 달러)입니다.'))
+
+
+class ScopeBoundaryTest(unittest.TestCase):
+    def test_article_period_end_day_is_checked_against_article_period(self):
+        from backend.app.agents.verify import inspect_sentence
+        source = {'kind': 'ARTICLES', 'article_period': {'start': '2026-08-01', 'end': '2026-10-31'}, 'items': []}
+        good = lambda sentence: inspect_sentence(sentence, [source])[0]
+        self.assertTrue(good('2026년 10월 31일까지 발행된 기사를 찾았습니다.'))
+        self.assertFalse(good('2026년 9월 30일까지 발행된 기사를 찾았습니다.'))
+
+    def test_country_alone_does_not_pick_one_of_several_product_rows(self):
+        from backend.app.agents.verify import inspect_sentence
+        rows = [{'name': f'베트남 {product}', 'country_code': 'VN', 'hs_code': code,
+                 'monthly': [{'month': '2025-12', 'amount_usd': amount}]}
+                for product, code, amount in (('기초화장품', '330499', 28400000), ('라면', '190230', 5000000))]
+        source = {'kind': 'TREND', 'period': {'start': '2025-12', 'end': '2025-12'}, 'trade_flow': 'EXPORT',
+                  'unit': 'USD', 'targets': rows}
+        good = lambda sentence: inspect_sentence(sentence, [source], known_names=['베트남', '기초화장품', '라면'],
+                                                 countries=['베트남'])[0]
+        self.assertTrue(good('베트남 기초화장품 수출은 12월 2,840만 달러입니다.'))
+        self.assertFalse(good('베트남 수출은 12월 2,840만 달러입니다.'))

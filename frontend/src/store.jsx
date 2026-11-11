@@ -40,6 +40,7 @@ export function AppProvider({ children }) {
   const [mainView, setMainView] = useState(null)
   const [toast, setToast] = useState('')
   const epoch = useRef(0)
+  const sessionChannel = useRef(null)
   const notificationRequest = useRef(null)
   const notificationRevision = useRef(0)
   const notify = useCallback(message => setToast(message), [])
@@ -109,10 +110,21 @@ export function AppProvider({ children }) {
   }, [loadUser, clear])
   useEffect(() => {
     const generation = epoch
+    const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('bs-session')
+    sessionChannel.current = channel
+    // 다른 탭에서 세션 쿠키가 바뀌면 이전 계정의 화면과 진행 중인 작업을 함께 버린다.
+    if (channel) channel.onmessage = ({ data }) => {
+      if (data === 'changed') window.location.reload()
+    }
     void Promise.resolve().then(refresh)
     const expired = () => { clear(); setLoading(false); notify('로그인이 만료되었습니다. 다시 로그인해 주세요.') }
     window.addEventListener('session-expired', expired)
-    return () => { generation.current++; window.removeEventListener('session-expired', expired) }
+    return () => {
+      generation.current++
+      window.removeEventListener('session-expired', expired)
+      channel?.close()
+      sessionChannel.current = null
+    }
   }, [refresh, clear, notify])
   useEffect(() => { if (!toast) return; const timer = setTimeout(() => setToast(''), 5000); return () => clearTimeout(timer) }, [toast])
   useEffect(() => {
@@ -126,6 +138,7 @@ export function AppProvider({ children }) {
   const authenticate = useCallback(async (path, body) => {
     try {
       const data = await api(path, { method: 'POST', body }); const current = ++epoch.current
+      sessionChannel.current?.postMessage('changed')
       setCsrf(data.csrf_token); setSession(accountView(data.user)); setLoading(true); setLoadError(null)
       try { await loadUser(data.user, current) } catch (error) { setLoadError(error) } finally { setLoading(false) }
       return { ok: true, account: accountView(data.user), path: data.user.post_login_path }
@@ -230,9 +243,14 @@ export function AppProvider({ children }) {
     if (current !== epoch.current) return false
     await refreshNotifications(true); return true
   }), [notifications, refreshNotifications, run])
-  const logout = useCallback(() => run(async () => { await api('/auth/logout', { method: 'POST', body: {} }); clear(); navigate('/login'); return true }), [run, clear])
+  const logout = useCallback(() => run(async () => {
+    await api('/auth/logout', { method: 'POST', body: {} })
+    sessionChannel.current?.postMessage('changed')
+    clear(); navigate('/login'); return true
+  }), [run, clear])
   const changePassword = useCallback(async (current, next) => {
     await api('/users/me/password', { method: 'POST', body: { email: session.email, current_password: current, new_password: next, new_password_confirm: next } })
+    sessionChannel.current?.postMessage('changed')
     clear()
   }, [session, clear])
   const downloadReport = useCallback((id, format) => run(() => download(`/reports/${id}/files/${format.toLowerCase()}`)), [run])

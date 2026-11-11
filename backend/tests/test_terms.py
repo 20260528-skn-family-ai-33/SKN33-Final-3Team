@@ -83,7 +83,7 @@ class TermsTest(unittest.TestCase):
         self.assertEqual({r['option_type'] for r in rows()},
                          {'SERVICE_TERMS', 'PRIVACY_TERMS', 'PRIVACY_POLICY', 'NOTIFICATION_TERMS'})
         for row in rows():
-            self.assertTrue(row['value_json']['body'].strip())
+            self.assertIn('2026년 11월 11일부터 적용합니다.', row['value_json']['body'])
             self.assertNotIn('초안', row['value_json']['body'])
             self.assertNotIn('effective_at', row['value_json'])
 

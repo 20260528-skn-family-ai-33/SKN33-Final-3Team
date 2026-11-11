@@ -50,10 +50,15 @@ class StructuredClient:
         key = next((v for k, v in self.settings.values.items() if k.lower() == 'openai_api_key' and v), None)
         if not key:
             raise ValueError('LLM API key missing')
-        options = {'temperature': 0}
-        if model in ('gpt-5.6-luna', 'gpt-6-luna'):
-            # Writer의 출력 예산은 추론 토큰도 포함한다. 다른 노드는 기존 추론 설정을 유지한다.
-            options = {'reasoning': {'effort': 'low'}} if schema in (Draft, WriterEdits) else {}
+        # GPT-5·6 계열(gpt-5.6-luna·gpt-6-luna 등 추론 모델)은 temperature를 받지 않아 빼고 추론 강도만 넘긴다.
+        # Writer(Draft·WriterEdits)는 출력 예산에 추론 토큰도 포함되므로 low로 고정한다(main #87).
+        # TODO(C-35): 이슈 86 평가로 플래너·compose 모델과 추론 강도(API_LLM_REASONING_EFFORT)를 확정한다.
+        reasoning = model.startswith(('gpt-5', 'gpt-6'))
+        options = {} if reasoning else {'temperature': 0}
+        if reasoning:
+            effort = 'low' if schema in (Draft, WriterEdits) else self.settings.get('API_LLM_REASONING_EFFORT')
+            if effort:
+                options['reasoning'] = {'effort': effort}
         with factory(api_key=key, timeout=timeout, max_retries=0) as client:
             response = client.responses.parse(model=model, instructions=prompt,
                 input=json.dumps(payload, ensure_ascii=False, allow_nan=False), text_format=schema,

@@ -11,7 +11,7 @@ import re
 from backend.app.agents.compose import fixed_conclusion
 from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
-    ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, quantities, mask_dates, quantity_text,
+    ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
     change_phrase_end, COMPARISON, DOWN, UP, TOKEN, DATE, HISTORY_DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift,
 )
 from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, period
@@ -148,7 +148,9 @@ def mismatch(claim:Claim,fact:Fact,source):
     if m.aggregate == 'SUBTOTAL' and 'verified_subtotal_usd' not in fact.metric.key:
         monthly_level = fact.month and fact.metric.key == 'amount_usd' and (claim.time.months or claim.time.bare_months)
         if not monthly_level: return 'AGGREGATION'
-    if m.aggregate=='DENOMINATOR' and fact.metric.key!='denominator_usd': return 'METRIC'
+    # 국가 순위의 total_usd는 share_pct의 분모다("총액 18억 달러를 분모로 한 비중").
+    if m.aggregate=='DENOMINATOR' and not (fact.metric.key=='denominator_usd'
+                                           or (fact.metric.key=='total_usd' and source.get('kind')=='RANKING')): return 'METRIC'
     if m.aggregate=='AVERAGE' and fact.metric.aggregate!='AVERAGE': return 'AVERAGE'
     if q.unit=='USD' and m.aggregate!='AVERAGE' and fact.metric.aggregate=='AVERAGE': return 'AVERAGE'
     if m.aggregate=='TOTAL':
@@ -194,6 +196,87 @@ def inspect_sentence(sentence,sources,*,known_names=(),countries=()):
     return _inspect_prepared(sentence, _prepare(sources, known_names, countries))
 
 
+def _single_series(claim, facts, keep):
+    """한 대상의 월별 금액 칸. 대상이 둘 이상으로 갈리면 어느 행인지 알 수 없어 비운다."""
+    eligible = [f for f in facts if f.metric.key == 'amount_usd' and f.month and claim.targets <= f.targets and keep(f)]
+    return eligible if len({f.stored_targets for f in eligible}) == 1 else []
+
+
+def _monthly_amounts(claim, facts, sources):
+    return _single_series(claim, facts, lambda f: (
+        isinstance(f.value, Decimal) and not f.group_members
+        and (not claim.metric.flow or not f.metric.flow or claim.metric.flow == f.metric.flow)
+        and _source_supports(claim.time, sources[f.source])
+        and (not claim.time.period or claim.time.period[0] <= f.month <= claim.time.period[1])))
+
+
+def _direction_holds(direction, first, last):
+    return last > first if direction == 'UP' else last < first if direction == 'DOWN' else False
+
+
+def _period_trend_cells(claim, facts, sources):
+    """기간 추세("전반적으로 증가")는 한 대상의 월별 금액에서 첫 달과 마지막 달을 비교한다."""
+    if claim.metric.family != 'CHANGE' or claim.metric.negated_change:
+        return ()
+    months = sorted(_monthly_amounts(claim, facts, sources), key=lambda f: f.month)
+    if len(months) < 2 or months[0].month == months[-1].month:
+        return ()
+    first, last = months[0], months[-1]
+    if not _direction_holds(claim.metric.direction, first.value, last.value):
+        return ()
+    return ((first.source, first.path), (last.source, last.path))
+
+
+def _month_change_cells(claim, facts, sources):
+    """"10월에 감소했습니다": 비교 기준이 없는 특정 달의 증감은 월별 추이의 전월 대비로 판정한다."""
+    if claim.metric.negated_change or claim.metric.direction not in ('UP', 'DOWN'):
+        return ()
+    by_month = {f.month: f for f in _monthly_amounts(replace(claim, time=TimeClaim()), facts, sources)}
+    if claim.time.months:
+        month, = claim.time.months
+    else:
+        bare, = claim.time.bare_months
+        candidates = [m for m in by_month if int(m[5:7]) == bare]
+        if len(candidates) != 1:
+            return ()  # 여러 해에 같은 달이 있으면 연도 없는 "12월"이 어느 해인지 알 수 없다.
+        month, = candidates
+    current = by_month.get(month)
+    if current is None:
+        return ()
+    previous = by_month.get(shift(month, -1))
+    if previous is None or not _direction_holds(claim.metric.direction, previous.value, current.value):
+        return ()
+    return ((previous.source, previous.path), (current.source, current.path))
+
+
+def _implied_amount_direction(checks, prepared):
+    """"7월 2,100만 달러에서 12월 2,840만 달러로 늘었습니다": 같은 문장에서 확인한 두 달 금액으로 방향을 판정한다."""
+    cells = {(f.source, f.path): f for f in prepared.facts}
+    out = list(checks)
+    for index, check in enumerate(checks):
+        metric = check.claim.metric
+        if (check.claim.quantity is not None or metric.family != 'CHANGE' or metric.comparison
+                or metric.negated_change or metric.direction not in ('UP', 'DOWN')):
+            continue
+        points = {}
+        for other in checks:
+            if (other.claim.quantity is None or other.claim.quantity.unit != 'USD' or len(other.matches) != 1
+                    or other.claim.targets != check.claim.targets):
+                continue
+            fact = cells.get(other.matches[0])
+            if fact and fact.metric.key == 'amount_usd' and fact.month and isinstance(fact.value, Decimal):
+                points.setdefault(fact.month, (fact, other.matches[0]))
+        if len(points) != 2:
+            continue
+        # 두 달 금액이 있으면 그 비교만 근거로 쓴다. 마지막 달의 전월 대비 판정으로 대신 통과시키지 않는다.
+        (first, first_cell), (last, last_cell) = (points[m] for m in sorted(points))
+        if first.stored_targets == last.stored_targets and _direction_holds(metric.direction, first.value, last.value):
+            out[index] = ClaimCheck(check.claim, 'MATCH', (first_cell, last_cell), check.interpretation_valid)
+        else:
+            out[index] = ClaimCheck(check.claim, 'NOT_CONFIRMED', (), check.interpretation_valid)
+    return tuple(out)
+
+
 def _matching_cells(claim, facts, sources, catalog):
     if claim.metric.family == 'OUTLOOK':
         # An implicit market is identifiable only if one saved classification is in scope.
@@ -203,14 +286,20 @@ def _matching_cells(claim, facts, sources, catalog):
             return ()
         fact, = eligible
         return ((fact.source, fact.path),) if mismatch(claim, fact, sources[fact.source]) is None else ()
+    if claim.quantity is None and claim.metric.comparison == 'PERIOD':
+        return _period_trend_cells(claim, facts, sources)
+    if (claim.quantity is None and claim.metric.family == 'CHANGE' and claim.metric.comparison is None
+            and len(claim.time.months) + len(claim.time.bare_months) == 1):
+        return _month_change_cells(claim, facts, sources)
     if claim.metric.family == 'MONTH_STATE':
-        eligible = [f for f in facts if f.metric.key == 'amount_usd' and f.month
-                    and claim.targets <= f.targets and _time_matches(claim, f)]
-        if len({f.stored_targets for f in eligible}) != 1:
+        eligible = _single_series(claim, facts, lambda f: _time_matches(claim, f))
+        if not eligible:
             return ()
         if any(mismatch(claim, f, sources[f.source]) is not None for f in eligible):
             return ()
         return tuple((f.source, f.path) for f in eligible)
+    if claim.targets and claim.targets <= catalog.ambiguous_countries:
+        return ()  # "베트남 2,840만 달러": 베트남 기초화장품·베트남 라면 중 어느 행인지 알 수 없다.
     matches = []
     inferred_axes = set()
     check_dimensions = claim.quantity is None or (claim.targets and claim.metric.family == 'CHANGE')
@@ -248,7 +337,11 @@ def _inspect_prepared(sentence, prepared):
     for claim in parsed.claims:
         matches=_matching_cells(claim,facts,sources,catalog)
         checks.append(ClaimCheck(claim,'MATCH' if matches else 'NOT_CONFIRMED',matches,parsed.valid))
+    checks=list(_implied_amount_direction(checks, prepared))
     dates_ok=all(any(_source_supports(time,source) for source in sources) for time in parsed.date_only)
+    dates_ok=dates_ok and all(any(str((source.get('period') or {}).get('end') or '')[:7]==month
+                                  or str((source.get('article_period') or {}).get('end') or '')[:10]==day for source in sources)
+                              for month, day in period_end_months(sentence))
     return parsed.valid and dates_ok and all(c.matches for c in checks),tuple(checks)
 
 
@@ -307,6 +400,16 @@ def check_codes(sentence, digests):
     return good,([_shown(m) for m in found]+[f'HS{code}' for code in prefixed if code not in versions])[:10]
 
 
+_SCALES = {'': 1, '천': 10**3, '만': 10**4, '억': 10**8, '조': 10**12}
+
+
+def _amount(value, scale):
+    try:
+        return Decimal(value) * _SCALES.get(scale, 0) if scale in _SCALES else (value, scale)
+    except ArithmeticError:
+        return (value, scale)
+
+
 def _fact(match):
     """대조용 숫자 표기: 값·단위 배율(만·억·조)·단위(%·달러 등)."""
     return match['value'].replace(',',''), match['scale'] or '', (match['unit'] or '').casefold()
@@ -343,7 +446,8 @@ def check_history(sentence, recent):
     found=_tokens(sentence)
     def known(m):
         value,scale,unit=_fact(m)
-        return any(v==value and s==scale and (not unit or u==unit) for v,s,u in facts)
+        # 같은 금액의 다른 표기(28,400,000달러 = 2,840만 달러)는 같은 값이다. 단위(%·달러)는 따로 맞춘다.
+        return any(_amount(v,s)==_amount(value,scale) and (not unit or u==unit) for v,s,u in facts)
     good=all(known(m) for m in found) and _dates(sentence)<=dates
     return good,[_shown(m) for m in found]
 
@@ -461,28 +565,38 @@ def _correction_span(sentence, claim, reason):
     return matches[0].span()
 
 
-def judge_draft(state,known_names=(),*,snapshots=None,countries=()):
+def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_labels=None):
     """Judge the saved draft and supplied evidence without mutating the turn."""
     feedback = []
     confirmed_claims = []
     snapshots=snapshots or {}
     # A saved SQL task carries the resolved query window even when its compact digest omits it.
     query_periods = {}
+    ranking_products = {}
     for task in state.plan.tasks:
         conditions = getattr(task, 'conditions', None)
         if conditions and conditions.period:
             for step in task.steps:
                 if step.step_id not in snapshots and step.tool == 'query_trade_data':
                     query_periods[step.step_id] = conditions.period
+        if conditions and task.intent == 'RANKING' and conditions.ranking_group == 'COUNTRY' and len(conditions.hs_items) == 1:
+            ranking_products.update({step.step_id: conditions.hs_items[0].hs_code for step in task.steps
+                                     if step.tool == 'query_trade_data'})
     def source(step_id):
         digest=state.results[step_id].digest or {}
+        scope = {'hs_code': ranking_products[step_id]} if step_id in ranking_products else {}
+        # 순위 행에는 국가만 있다. 조회한 단일 품목의 표시명도 근거 범위에 넣어 "화장품 수출 상위 국가"를 대조한다.
+        if scope and (label := (product_labels or {}).get(scope['hs_code'])):
+            scope['hs_name'] = label
         if step_id not in snapshots:
+            if not digest:
+                return digest
             if digest and 'period' not in digest and step_id in query_periods:
-                return {**digest, 'period': query_periods[step_id].model_dump(mode='json')}
-            return digest
+                scope['period'] = query_periods[step_id].model_dump(mode='json')
+            return {**scope, **digest}
         if snapshots[step_id].get('_source_unavailable'): return snapshots[step_id]
         # 저장 행에는 없는 결과 전체 합계(순위 total_usd·비중 분모)는 같은 결과로 만든 digest 값을 근거로 더한다
-        return {**snapshots[step_id],**{k:digest[k] for k in ('total_usd','denominator_usd')
+        return {**scope, **snapshots[step_id],**{k:digest[k] for k in ('total_usd','denominator_usd')
                                      if k in digest and k not in snapshots[step_id]}}
     by_task = {t.task_id: tuple(s.step_id for s in t.steps if s.step_id in state.results
                                 and (s.step_id in snapshots or state.results[s.step_id].digest))
@@ -600,14 +714,18 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=()):
     primary=state.plan.tasks[0]
     summary_ok=True
     if state.draft.turn_summary and fixed_conclusion(state,primary) is None:
-        summary_ok=inspect(state.draft.turn_summary,by_task[primary.task_id],'summary',primary.task_id)
+        if primary.intent=='CONVERSATION':
+            # 이전 대화를 되짚는 답변의 요약은 본문과 같은 근거(최근 대화 이력)로 대조한다.
+            summary_ok=check_history(state.draft.turn_summary,state.input.context.recent)[0]
+        else:
+            summary_ok=inspect(state.draft.turn_summary,by_task[primary.task_id],'summary',primary.task_id)
     return Verification(checks=checks,feedback=feedback,confirmed_claims=confirmed_claims,
         summary_status=('PASS' if summary_ok else 'MISMATCH') if state.draft.turn_summary else None,
         failed_summary='' if summary_ok else state.draft.turn_summary,regeneration_count=state.verification.regeneration_count,
         status='PASS' if summary_ok and all(c.status=='PASS' for c in checks) else 'NEEDS_REVIEW')
 
 
-def verify(state,known_names=(),*,snapshots=None,countries=()):
-    state.verification = judge_draft(state,known_names,snapshots=snapshots,countries=countries)
+def verify(state,known_names=(),*,snapshots=None,countries=(),product_labels=None):
+    state.verification = judge_draft(state,known_names,snapshots=snapshots,countries=countries,product_labels=product_labels)
     if state.verification.summary_status == 'MISMATCH':
         state.draft.turn_summary = ''
