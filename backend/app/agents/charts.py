@@ -4,7 +4,7 @@ from datetime import date
 import re
 from backend.app.agents.state import (ChartSpec, ChartSelector, HsProduct, shorten_name,
     shorten_target_names, ToolResult, MAX_CHART_LABELS, MAX_CHART_SERIES, MAX_LABEL_CHARS)
-from backend.app.api.common import shift_month
+from backend.app.api.common import shift_month, period_label
 from backend.app.api.results import read_snapshot
 
 
@@ -92,14 +92,20 @@ def build_chart(store, uid, task, result_id, selection=None):
         full=[' · '.join(x for x in t[:2] if x) or '전체' for t in targets]
         names=[x or '전체' for x in _target_labels(targets)]
         comparison=bool(task.conditions.compare_period)
-        unequal=comparison and first[0]['requested_months']!=first[0]['compare_requested_months']
+        # (시리즈 이름, 열 접두어). 비교 기간이 여럿이면 이름을 기간으로 붙여 구분한다.
+        named=bool(task.conditions.extra_compare_periods)
+        period_name=lambda p: period_label(p.start,p.end)
+        compares=[(period_name(task.conditions.compare_period) if named else '비교 기간','compare_'),
+                  *((period_name(p),f'compare{n}_') for n,p in enumerate(task.conditions.extra_compare_periods,start=2))]
+        unequal=comparison and any(first[0]['requested_months']!=first[0].get(prefix+'requested_months')
+                                   for _,prefix in compares)
         if comparison and (len(selected)>1 or unequal):
             kindchart='grouped_bar'
             labels=names
             key='monthly_avg_usd' if unequal else 'total_usd'
             metric='월평균' if unequal else '합계'
-            series=[{'name':label+' '+metric,'values':[r[prefix+key] for r in first]}
-                    for label,prefix in [('비교 기간','compare_'),('조회 기간','')]]
+            series=[{'name':label+' '+metric,'values':[r.get(prefix+key) for r in first]}
+                    for label,prefix in [*compares,(period_name(task.conditions.period) if named else '조회 기간','')]]
             if unequal:
                 warnings.append('기간 길이가 달라 검증된 월의 월평균 금액으로 비교했습니다. '
                                 '실제 기간과 검증 월 수는 표에서 확인하세요.')
@@ -119,11 +125,13 @@ def build_chart(store, uid, task, result_id, selection=None):
                 calendar=sorted({r['month'] for target in selected for r in grouped[target]})
             for idx,target in enumerate(selected):
                 bucket=time_series(grouped[target],
-                    ['amount_usd','compare_amount_usd'] if comparison else ['amount_usd'], calendar)
+                    ['amount_usd',*(prefix+'amount_usd' for _,prefix in compares)] if comparison else ['amount_usd'], calendar)
                 if not bucket: return output, [], ['표시할 기간이 너무 깁니다.']
                 granularity, labels, values=bucket
-                series.append({'name':flow if len(selected)==1 else names[idx], 'values':values[0]})
-                if comparison: series.append({'name':'비교 기간','values':values[1]})
+                current=period_name(task.conditions.period) if named and len(selected)==1 else None
+                series.append({'name':current or (flow if len(selected)==1 else names[idx]), 'values':values[0]})
+                if comparison:
+                    series.extend({'name':label,'values':values[i]} for i,(label,_) in enumerate(compares,start=1))
             full=labels
             if granularity in ('QUARTER','YEAR'):
                 interval='분기' if granularity=='QUARTER' else '연도'

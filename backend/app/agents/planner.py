@@ -1,7 +1,8 @@
 """Structured planning and deterministic tool dependencies (§11.1, D-90/95)."""
 import re
+from datetime import date
 from backend.app.agents.state import (
-    AgentState, Plan, PlannedTask, PlannerOutput, Task, TaskSlots, Step, ResultBinding,
+    Period, AgentState, Plan, PlannedTask, PlannerOutput, Task, TaskSlots, Step, ResultBinding,
     TargetSelection, NO_STEP_INTENTS, task_count_error, DEFAULT_MARKET_TOP,
 )
 from backend.app.api.common import ApiError
@@ -51,6 +52,8 @@ NAND·DRAM·RAM·OLED처럼 실제 품목이나 기술을 가리키는 약어를
 상대 기간은 recent_months로만 쓰고 period는 null입니다. "최근 1년"은 recent_months=12입니다. 기사 기간은 일 단위입니다.
 comparison_requested는 비교 요청에만 true, 요청이 없으면 null입니다.
 이전 비교를 명시적으로 지칭한 경우에만 이전 compare_period를 명시하세요.
+비교 기간이 둘 이상이면 compare_period에 첫 비교 기간, extra_compare_periods에 나머지를 요청 순서대로 각각 씁니다.
+예: "2025년을 기준으로 2023년과 2024년 비교"는 period=2025년, compare_period=2023년, extra_compare_periods=[2024년]입니다. 떨어진 여러 해를 하나의 긴 비교 기간으로 합치지 마세요.
 ranking_group은 RANKING에 COUNTRY/HS6, 모호하면 null입니다.
 MARKET_SHARE에서는 품목별 비중에만 ranking_group=HS6를 쓰고 custom_query에 필요한 계산을 적습니다.
 국가별 교역 비중의 분모는 한국의 교역액입니다. 해외 국가의 전체 수입액 중 한국산 비중은 FOREIGN_IMPORT_MARKET이며 custom_query를 만들지 마세요.
@@ -60,6 +63,7 @@ ranking_limit은 금액 순위 또는 유망 품목·국가 조회에서 사용�
 예: "베트남 유망 품목 8개"는 PROMISING_MARKET이며 ranking_limit=8입니다. 개수를 생략하면 null입니다.
 한국의 수출액 상위 국가는 한국의 상대국 순위입니다. 한국을 상대국 필터에 넣지 마세요.
 모든 수출입 테이블은 한국 기준입니다. 한국·대한민국·우리나라는 기준 국가이며 상대국이 아닙니다.
+상대국이 주어인 "미국이 한국에서 수입하는 품목"은 한국의 대미국 수출(EXPORT), "미국이 한국에 수출하는 품목"은 한국의 대미국 수입(IMPORT)입니다.
 한국 전체 수출입을 요청하면 countries=[]로 이전 상대국 필터를 해제하세요.
 한국의 대중국 수출처럼 상대국이 명시되면 countries에는 중국만 넣으세요.
 share_basis는 한국 교역액을 분모로 하는 상대국별·품목별 비중이면 KOREA_TRADE_PARTNER,
@@ -322,8 +326,8 @@ def _normalize_report_requests(output: PlannerOutput, question: str) -> PlannerO
 
 
 _BOTH_TRADE_FLOWS = re.compile(
-    r'수출입|수출(?:액|량)?\s*(?:과|이랑|랑|및|[,·/])\s*수입'
-    r'|수입(?:액|량)?\s*(?:과|이랑|랑|및|[,·/])\s*수출'
+    r'수출입|수출(?:액|량)?\s*(?:과|이랑|랑|및|[,·/]|\s)\s*수입'   # "수입 수출"처럼 띄어 쓴 나열도 두 방향이다
+    r'|수입(?:액|량)?\s*(?:과|이랑|랑|및|[,·/]|\s)\s*수출'
 )
 HS_CODE_MENTION = re.compile(r'(?<![A-Za-z])HS(?:\s*[46](?!\d))?(?:\s*(?:단위|코드)){0,2}\s*[:\-]?\s*(\d{6}|\d{4})(?!\d)', re.I)
 _HS_FOLLOWUP = re.compile(r'(?:' + HS_CODE_MENTION.pattern + r'|(\d{6}))'
@@ -341,6 +345,60 @@ def product_expressions(expressions, *, article_context=False):
         return expressions
     products = [value for value in expressions if ''.join(value.split()).casefold() not in _COMPANY_EXPRESSIONS]
     return products or (None if article_context else expressions)
+
+
+_RANKING_DETAIL = re.compile(r'증감|증가|감소|변화|변동|대비|전월|전년|작년|성장|비중|점유|일회성|이상치|급등|급증|급감')
+_KOREA_AS_OBJECT = r'(?:한국|대한민국|우리나라)(?:에게서|에게|한테서|한테|으로부터|로부터|에서|에|산|으로|로)'
+
+
+def _partner_subject(text, countries):
+    """상대국이 주어인 수출입("미국이 한국에서 수입하는")이면 (국가명, 질문 속 방향 낱말 {'수입','수출'}). 아니면 None.
+    뒤 절에서 한국이 새 주어로 나오면("미국이 한국에 부과한 관세 이후 한국이 미국에 수출한") 그 뒤 동사는 한국이 주어다."""
+    for country in countries or []:
+        match = re.search(re.escape(country.mention.strip()) + r'\s*(?:이|가|은|는)\s.*?' + _KOREA_AS_OBJECT + r'(.*)', text)
+        if not match:
+            continue
+        tail = match[1]
+        if korea := re.search(r'(?:한국|대한민국|우리나라)\s*(?:이|가|은|는)(?=\s)', tail):
+            tail = tail[:korea.start()]
+        words = {m[0] for m in re.finditer(r'수출입|(?:수입|수출)(?!국|시장|대상)', tail)}
+        flows = {'수입', '수출'} if '수출입' in words else words
+        if flows:
+            return country.name, flows
+    return None
+
+
+def _partner_subject_flow(text, countries):
+    """상대국 주어 수출입의 (국가명, 한국 기준 방향). 수출·수입을 함께 말하면 None(두 방향 모두 조회한다)."""
+    found = _partner_subject(text, countries)
+    if found and len(found[1]) == 1:
+        return found[0], 'EXPORT' if found[1] == {'수입'} else 'IMPORT'
+    return None
+
+
+def _split_year_comparisons(slots, text):
+    """플래너가 "2023년과 2024년"을 2023-01~2024-12 비교 기간 하나로 합쳤으면 연도별 비교 기간으로 나눈다.
+    조회 기간이 12개월이고 비교 기간이 여러 해 전체이며 각 연도를 따로 적었을 때만이다. "2023~2024년"처럼 이어진 기간은 그대로 둔다."""
+    current, compare = slots.period, slots.compare_period
+    if not (slots.comparison_requested and current and compare) or slots.extra_compare_periods:
+        return
+    if (current.end.year - current.start.year) * 12 + current.end.month - current.start.month != 11:
+        return
+    if (compare.start.month, compare.end.month) != (1, 12) or compare.start.year == compare.end.year:
+        return
+    if re.search(r'(?<!\d)\d{2,4}\s*년?\s*(?:~|부터|-(?=\s*\d{2,4}\s*년))\s*\d{2,4}(?!\d)', text):
+        return
+    # "2023년"·"23년" 모두 그 연도다. 두 자리는 뒤에 '년'이 있을 때만 연도로 본다.
+    year = lambda y: rf'(?<!\d)(?:{y}|{y % 100:02d}(?=\s*년))(?!\d)'
+    if re.search(year(compare.end.year) + r'\s*년?\s*(?:사이|까지)', text):
+        return  # "2021년과 2024년 사이"는 이어진 기간이다.
+    mentions = {y: m for y in range(compare.start.year, compare.end.year + 1) if (m := re.search(year(y), text))}
+    # 양 끝 연도를 따로 적었으면 실제로 적은 연도만 비교한다("2021년과 2024년 각각" → 2022·2023년은 넣지 않는다).
+    if compare.start.year not in mentions or compare.end.year not in mentions:
+        return
+    periods = [Period(start=date(y, 1, 1), end=date(y, 12, 1))
+               for y in sorted(mentions, key=lambda y: mentions[y].start())]
+    slots.compare_period, slots.extra_compare_periods = periods[0], periods[1:]
 
 
 def _normalize_analysis(output, question, previous_conditions):
@@ -372,6 +430,14 @@ def _normalize_analysis(output, question, previous_conditions):
                     task.slots.products = list(dict.fromkeys([*(
                         match[1] if (match := HS_CODE_MENTION.fullmatch(product.strip())) else product
                         for product in products), *codes]))
+        if task.intent in ('STATISTICS', 'RANKING', 'CAUSE') and (flipped := _partner_subject_flow(text, task.slots.countries)):
+            # 수출입 표는 한국 기준이다. "미국이 한국에서 수입"은 한국의 대미국 수출이다. LLM이 이미 뒤집었어도 같은 값이 된다.
+            name, task.slots.trade_flow = flipped
+            label = f"한국의 대{name} {'수출' if task.slots.trade_flow == 'EXPORT' else '수입'}"
+            if label not in task.question:
+                task.question = f'{task.question} ({label})'
+        if task.intent == 'STATISTICS':
+            _split_year_comparisons(task.slots, text)
         if task.intent == 'RANKING' and len(tasks) == 1 and re.search(
                 r'(?:한국|대한민국|우리나라)의?\s*수(?:출|입)(?:액)?\s*상위\s*(?:국가|[0-9]+\s*(?:개국|개\s*국가))', text):
             if all(country.mention.strip() in ('한국', '대한민국', '우리나라')
@@ -423,6 +489,9 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
     task = output.tasks[0]
     if task.intent not in ('STATISTICS', 'RANKING', 'CAUSE') or task.custom_query:
         return output
+    # 상대국 주어 질문은 _normalize_analysis가 한국 기준 방향을 정했다. 아래의 수출/수입 낱말 규칙으로 되돌리지 않는다.
+    if _partner_subject_flow(question, task.slots.countries):
+        return output
     if re.search(r'수(?:출|입)(?:액|량)?\s*(?:말고|빼고|제외)', question):
         return output
     if previous_both_trade_flows and not _BOTH_TRADE_FLOWS.search(question):
@@ -438,8 +507,14 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
             task.model_copy(update={'slots': task.slots.model_copy(update={'trade_flow': flow})}),
         ]})
     if _BOTH_TRADE_FLOWS.search(question) or (previous_both_trade_flows and task.slots.trade_flow is None):
+        # 상대국 주어("미국이 한국에 수입 수출하는")면 두 작업 제목에 한국 기준 방향을 병기한다.
+        partner = _partner_subject(question, task.slots.countries)
+        def question_for(flow, label):
+            if partner:
+                return f'{task.question} (한국의 대{partner[0]} {label})'
+            return f'{label} · {task.question}' if task.intent == 'CAUSE' else task.question
         tasks = [task.model_copy(update={
-            'question': f'{label} · {task.question}' if task.intent == 'CAUSE' else task.question,
+            'question': question_for(flow, label),
             'slots': task.slots.model_copy(update={'trade_flow': flow}),
         }) for flow, label in (('EXPORT', '수출'), ('IMPORT', '수입'))]
         return output.model_copy(update={'tasks': tasks})
@@ -530,7 +605,10 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
                 args = {'template': template}
                 if template == 'RANKING':
                     args['top'] = item.slots.ranking_limit or 10
-                    if item.slots.ranking_limit and item.slots.ranking_group in ('COUNTRY','HS6') and not item.slots.comparison_requested:
+                    # 단순 금액 순위는 개수를 말하지 않아도("대표적으로 수출하는 품목") 코드·명칭·순위·금액만 보인다.
+                    # 증감·비중·순위 변화를 물으면 순위 화면 표(증감률·이상치 열 포함)를 쓴다.
+                    # 순위 기준(국가별·품목별)은 되묻기로 나중에 정해질 수 있어 여기서 보지 않는다. 템플릿이 확정 기준을 확인한다.
+                    if not item.slots.comparison_requested and not _RANKING_DETAIL.search(item.question):
                         args['amount_only'] = True
             elif name == 'ml': args = {'top': item.slots.ranking_limit or DEFAULT_MARKET_TOP}
             elif name == 'news': args = {'limit': 5}

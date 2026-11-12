@@ -217,7 +217,8 @@ class AgentPlannerTest(unittest.TestCase):
         self.assertEqual(plan.tasks[0].answer_status, 'NO_DATA')
         self.assertEqual(plan.tasks[0].steps, [])
         self.assertTrue(warnings)
-        self.assertEqual(plan.tasks[1].steps[1].args, {'template': 'RANKING', 'top': 10})
+        # 순위 기준이 비어 있어도 단순 금액 순위로 둔다. 기준은 되묻기로 정해지고 템플릿이 확인한다(이슈 113).
+        self.assertEqual(plan.tasks[1].steps[1].args, {'template': 'RANKING', 'top': 10, 'amount_only': True})
 
     def test_trade_term_out_of_scope_becomes_conversation(self):
         from backend.app.agents.planner import rescue_trade_terms

@@ -12,7 +12,7 @@ from sqlglot.optimizer.scope import traverse_scope
 
 from backend.app.agents.state import SqlDraft
 from backend.app.agents.digest import bounded, MAX_DIGEST_ROWS
-from backend.app.agents.templates import Analysis, api_conditions
+from backend.app.agents.templates import Analysis, api_conditions, extra_periods
 from backend.app.agents.state import ToolResult
 from backend.app.api.common import ApiError
 from sqlalchemy import inspect
@@ -39,10 +39,13 @@ ONLY_FULL_GROUP_BY가 켜져 있습니다. SELECT·ORDER BY의 집계하지 않�
 (예: SELECT QUARTER(trade_month) AS quarter ... GROUP BY QUARTER(trade_month) ORDER BY QUARTER(trade_month)).
 export_*·import_* 테이블에는 총계·특수 코드 행이 섞여 있습니다. 금액을 집계할 때는 country와 country_code로 조인해
 country.country_role = 'COUNTRY'인 행만 쓰고, hs_ver는 conditions의 품목 판본(품목이 없으면 'HS2022') 하나로 제한합니다.
+국가 조건이 없는 전체 국가 집계는 country 조인 대신 각 수출입 표 WHERE에
+별칭.country_code NOT IN (SELECT country_code FROM country WHERE country_role <> 'COUNTRY')를 AND로 겁니다(조인은 느려 시간 초과).
 conditions에 국가·품목이 있으면 수출입 표의 country_code·hs*_code를 그 값 리터럴로 직접 거르고 다른 국가·품목은 읽지 않습니다.
 수출입 표의 hs_ver·trade_month 조건은 JOIN ON이 아니라 각 SELECT의 WHERE에 AND로 겁니다.
 기간은 trade_month를 conditions 기간(비교 기간 포함) 안의 날짜로 BETWEEN 또는 >=·< 로 거릅니다.
-기간과 비교 기간이 떨어져 있으면 월을 IN으로 나열하거나 각 기간 조건을 괄호 안에서 OR로 연결합니다. 두 기간 사이의 미요청 월은 포함하지 않습니다.
+비교 기간 값의 열 별칭은 compare_로 시작합니다(예: compare_amount_usd). extra_compare_periods가 있으면 비교 기간이 여럿이며
+extra_compare_periods의 k번째(1부터) 기간 열은 compare{k+1}_(첫 추가 기간은 compare2_), 조회 기간의 그 기간 대비 증감률은 change{k+1}_pct입니다. 기간과 비교 기간이 떨어져 있으면 월을 IN으로 나열하거나 각 기간 조건을 괄호 안에서 OR로 연결합니다. 두 기간 사이의 미요청 월은 포함하지 않습니다.
 여러 HS6 품목은 hs6_code IN (...)으로 거릅니다. HS4는 hs4_code 또는 hs6_code LIKE '확정HS4%'를 사용하며 HS6를 hs10_code와 동일시하지 않습니다.
 월별 출력은 DATE_FORMAT(trade_month, '%Y-%m')으로 YYYY-MM 문자열을 반환하고 같은 식으로 GROUP BY·ORDER BY합니다.
 사용자가 지정한 결과 열·순서·단위·날짜 형식을 지킵니다. 날짜 조건의 원본 trade_month와 표시용 월 문자열을 구분합니다.
@@ -158,6 +161,30 @@ def _country_subquery(node):
             and bool(countries) and _filters(_conjuncts(select), 'country_role', countries, 'COUNTRY'))
 
 
+def _non_country_subquery(node):
+    """`country_code NOT IN (SELECT country_code FROM country WHERE country_role <> 'COUNTRY')` 형태인지.
+    국가 조건이 없는 전체 집계에서 country 조인은 국가별 반복 조회가 되어 느리다(1년 전 품목 수출 약 10초→2.5초).
+    제외할 집합이 줄면 총계 행이 섞이므로, 하위 쿼리 조건은 역할 조건 하나만 받는다."""
+    if not isinstance(node, exp.Not) or not isinstance(node.this, exp.In):
+        return False
+    query = node.this.args.get('query')
+    select = query.this if isinstance(query, exp.Subquery) else query
+    if (not isinstance(select, exp.Select) or len(select.selects) != 1
+            or any(select.args.get(k) for k in ('joins', 'group', 'having', 'limit', 'distinct'))):
+        return False
+    picked = select.selects[0].unalias()
+    tables = list(select.find_all(exp.Table))
+    terms = _and_terms(select.args['where'].this) if select.args.get('where') else []
+    if not (isinstance(picked, exp.Column) and picked.name.lower() == 'country_code' and len(tables) == 1
+            and tables[0].name.lower() == 'country' and len(terms) == 1 and isinstance(terms[0], exp.NEQ)):
+        return False
+    left, right = terms[0].this, terms[0].expression
+    if isinstance(left, exp.Literal):
+        left, right = right, left
+    return (_column(left, 'country_role', {tables[0].alias_or_name.lower()})
+            and isinstance(right, exp.Literal) and right.this == 'COUNTRY')
+
+
 def _column(node, column, aliases):
     return (isinstance(node, exp.Column) and node.name.lower() == column
             and (not node.table or node.table.lower() in aliases))
@@ -175,6 +202,9 @@ def _filters(predicates, column, aliases, value=None, *, single=False, subquery=
                     and (not single or len(set(values)) == 1)
                     and (value is None or all(v == value for v in values))):
                 return True
+        if (subquery and isinstance(node, exp.Not) and _column(node.this.this, column, aliases)
+                and _non_country_subquery(node)):
+            return True
         if not isinstance(node, (exp.EQ, exp.In)):
             continue
         left = node.this
@@ -249,8 +279,10 @@ def _check_trade_filters(query):
         for trade in trades:
             predicates = _conjuncts(scope.expression, trade)
             if len(trades) > 1:
-                predicates = [p for p in predicates if not any(isinstance(c, exp.Column) and not c.table
-                                                               for c in p.find_all(exp.Column))]
+                # 이 SELECT의 열만 본다. NOT IN·IN 하위 쿼리 안의 country 열은 그 하위 쿼리 범위라 모호하지 않다.
+                predicates = [p for p in predicates if not any(
+                    isinstance(c, exp.Column) and not c.table and c.find_ancestor(exp.Select) is scope.expression
+                    for c in p.find_all(exp.Column))]
             label = sources[trade].name
             if not _filters(predicates, 'hs_ver', {trade}, single=True):
                 raise ValueError(f"{label}에는 hs_ver 리터럴 조건 하나를 AND로 걸어야 합니다. "
@@ -422,7 +454,7 @@ def _check_conditions(query, conditions):
         raise ValueError('수출입 표를 확정한 국가 country_code로 거르세요.')
     if confirmed and 'hs' not in seen:
         raise ValueError('수출입 표를 확정한 HS 코드(hs*_code)로 거르세요.')
-    allowed_months = {n for p in (conditions.period, conditions.compare_period) if p
+    allowed_months = {n for p in (conditions.period, conditions.compare_period, *conditions.extra_compare_periods) if p
                       for n in range(_month_number(p.start), _month_number(p.end)+1)}
     for scope in traverse_scope(query):
         if not isinstance(scope.expression, exp.Select):
@@ -571,6 +603,8 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
     # 결과표 API의 공통 조건과 별도로, 확정된 비중 기준을 생성 입력과 근거에 보존한다.
     basis = {k: getattr(task.conditions, k) for k in ('share_basis', 'ranking_group') if getattr(task.conditions, k)}
     prompt_conditions = {**conditions, **basis}
+    if task.conditions.extra_compare_periods:
+        prompt_conditions['extra_compare_periods'] = extra_periods(task.conditions)
     product_share = basis.get('share_basis') == 'KOREA_TRADE_PARTNER' and basis.get('ranking_group') == 'HS6'
     timeout = float(settings.get('API_SQL_TIMEOUT_SECONDS', 20))
     query_timeout = float(settings.get('API_SQL_EXECUTION_SECONDS', 30))
@@ -601,7 +635,14 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
             'trade_flow': conditions['trade_flow'], 'unit': 'USD', 'source': '관세청',
             'latest_available_month': latest_month, 'rows_total': len(rows), 'truncated': len(rows)>MAX_DIGEST_ROWS,
             'columns': [{'key': col.key, 'unit': col.unit} for col in draft.columns],
-            'rows': rows[:MAX_DIGEST_ROWS], 'sql_summary': draft.summary, **basis})
+            'rows': rows[:MAX_DIGEST_ROWS], 'sql_summary': draft.summary, **basis,
+            # 검증은 compare_·compare{n}_ 열을 이 기간들로 대조한다(verify_evidence.compare_key).
+            **({'compare_period': {k: v[:7] for k, v in conditions['compare_period'].items()}}
+               if conditions.get('compare_period') else {}),
+            **({'extra_compare_periods': prompt_conditions['extra_compare_periods']}
+               if 'extra_compare_periods' in prompt_conditions else {})})
+        if 'extra_compare_periods' in prompt_conditions:
+            meta['extra_compare_periods'] = prompt_conditions['extra_compare_periods']
         return Analysis(rows, meta, ToolResult(status='OK', source='관세청', period=task.conditions.period,
                         digest=digest, checks=['읽기 전용 조회', '결과 열 검사']), conditions, [sql], columns)
     from openai import OpenAIError

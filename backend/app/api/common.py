@@ -61,6 +61,12 @@ def month_end(value):
     return value.replace(day=calendar.monthrange(value.year, value.month)[1])
 
 
+def period_label(start, end):
+    """표 열·차트 시리즈용 기간 이름. 한 해 전체면 '2023년', 아니면 '2023-01~2023-06'. date와 'YYYY-MM-DD' 문자열을 받는다."""
+    start, end = str(start)[:7], str(end)[:7]
+    return f'{start[:4]}년' if start[:4] == end[:4] and (start[5:], end[5:]) == ('01', '12') else f'{start}~{end}'
+
+
 def period(start, end):
     return {'start': start.isoformat(), 'end': month_end(end).isoformat()}
 

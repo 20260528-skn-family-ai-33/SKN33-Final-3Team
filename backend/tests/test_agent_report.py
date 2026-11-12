@@ -318,7 +318,8 @@ class ReportAgentTest(unittest.TestCase):
         from docx import Document
         from backend.app.api import files
         from backend.app.services.report_templates import render
-        tasks = [{'intent': 'RANKING', 'question': '수출 순위', 'slots': {'recent_months': 3, 'ranking_group': 'COUNTRY'}},
+        # 단순 순위("수출 순위")는 순위·코드·명칭·금액만 싣는다(이슈 113). 일회성·순위 상태 열이 있는 순위 화면 표를 쓰도록 증감을 묻는다.
+        tasks = [{'intent': 'RANKING', 'question': '수출 순위와 전년 대비 증감률', 'slots': {'recent_months': 3, 'ranking_group': 'COUNTRY'}},
                  {'intent': 'REPORT', 'question': '순위 결과로 리포트', 'source_tasks': [1]}]
         doc = self.generated(tasks, '수출 순위 조회 후 리포트')
         html = render('RPT_ON_DEMAND', doc['template_pdf']['context'])

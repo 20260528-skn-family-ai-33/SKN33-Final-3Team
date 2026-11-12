@@ -208,7 +208,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
                     slots.products = [expression]
     out = base.model_copy(deep=True)
     out.ranking_group, out.share_basis = slots.ranking_group, slots.share_basis
-    out.compare_period, out.article_period = None, None
+    out.compare_period, out.article_period, out.extra_compare_periods = None, None, []
     out.trade_flow = slots.trade_flow or base.trade_flow
     if task.input_bindings:
         if task.intent=='REPORT' and task.report_request and task.report_request.confirmed:
@@ -399,6 +399,11 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if slots.comparison_requested:
             out.compare_period = slots.compare_period or Period(start=shift_month(out.period.start,-12),
                                                                  end=shift_month(out.period.end,-12))
+            # 여러 비교 기간을 한 표에 두는 것은 통계(TREND·LLM SQL)만 지원한다. 다른 분석은 첫 비교 기간만 쓴다.
+            if slots.compare_period and task.intent == 'STATISTICS':
+                for extra in slots.extra_compare_periods or []:
+                    if extra not in (out.period, out.compare_period, *out.extra_compare_periods):
+                        out.extra_compare_periods.append(extra)
     if task.intent == 'CAUSE':
         out.article_period = {'start':shift_month(out.period.start,-1), 'end':month_end(shift_month(out.period.end,1))}
     if task.intent == 'LOCAL_ISSUES':

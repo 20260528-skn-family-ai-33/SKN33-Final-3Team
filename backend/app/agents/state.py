@@ -30,6 +30,8 @@ MAX_SLOT_CHARS = 120             # 플래너가 옮긴 국가·품목 표현 하
 MAX_RECENT_MONTHS = 240          # "최근 N개월" 상한. 넘으면 안내한다(D-73). 날짜 계산(shift_month)이 깨지지 않게 둔다
 MAX_CHART_LABELS = 60            # 차트 하나의 x축 값 수
 MAX_CHART_SERIES = 5
+# 기준 기간 하나와 비교 기간 여럿을 한 표·차트에 둔다(2026-11-12). 첫 비교 기간(compare_period)과 합쳐 차트 시리즈 상한에 맞춘다
+MAX_EXTRA_COMPARE_PERIODS = MAX_CHART_SERIES - 2
 # 칸 상한(D-62). 코드가 만드는 표시용 글자(HS4 품목명이 최대 347자)는 거부하지 않고 자른다.
 # LLM이 쓰는 Draft 문장만 넘으면 거부해 재시도한다.
 MAX_TEXT_CHARS = 200             # 문장 하나: 답변 문장, 되묻기 문구·선택지, 경고, 오류, 적용 조건
@@ -186,6 +188,9 @@ class Conditions(Model):
     period: Period | None = None            # 수출입 기간(기본 최근 12개월)
     # None은 비교 없음. 비교를 요청했는데 기간이 없으면 check가 전년 동기를 계산해 넣는다(D-29, D-73)
     compare_period: Period | None = None
+    # 두 번째 이후 비교 기간("2025년 기준 2023년·2024년"의 2024년). compare_period가 있을 때만 쓴다.
+    # 기존 API·리포트 조건(api_conditions)에는 넣지 않고 결과 digest·meta에만 싣는다
+    extra_compare_periods: list[Period] = Field(default_factory=list, max_length=MAX_EXTRA_COMPARE_PERIODS)
     article_period: ArticlePeriod | None = None   # 기사 발행일 기간, 일 단위(기본 최근 3개월)
     trade_flow: Literal['EXPORT', 'IMPORT'] = 'EXPORT'
     ranking_group: Literal['COUNTRY', 'HS6'] | None = None   # RANKING 또는 MARKET_SHARE의 품목별 비중(D-87)
@@ -196,6 +201,8 @@ class Conditions(Model):
         # RagRequest도 중복을 거부한다. 되묻기 답을 병합할 때 중복을 걸러야 한다.
         _unique([(p.hs_code, p.hs_ver) for p in self.hs_items], '품목·버전')
         _unique(self.country_codes, '국가')
+        if self.extra_compare_periods and not self.compare_period:
+            raise SafeError('추가 비교 기간에는 첫 비교 기간이 필요합니다')
         return self
 
 
@@ -308,6 +315,8 @@ class PlannerSlots(Model):
     # None은 False와 같다. 기본값 False는 strict 스키마에 "default"로 실려 None으로 둔다(LLM 출력 모델)
     comparison_requested: bool | None = None
     compare_period: Period | None = None
+    # 비교 기간이 여럿이면 첫 기간은 compare_period, 나머지는 여기에 요청 순서대로 둔다
+    extra_compare_periods: list[Period] | None = None
     ranking_group: Literal['COUNTRY', 'HS6'] | None = None
     share_basis: Literal['KOREA_TRADE_PARTNER', 'FOREIGN_IMPORT_MARKET'] | None = None
     article_period: ArticlePeriod | None = None
@@ -321,6 +330,8 @@ class PlannerSlots(Model):
             raise SafeError('절대 기간과 최근 개월 수를 동시에 지정할 수 없습니다')
         if self.compare_period is not None and not self.comparison_requested:
             raise SafeError('비교 기간에는 비교 요청이 필요합니다')
+        if self.extra_compare_periods and self.compare_period is None:
+            raise SafeError('추가 비교 기간에는 첫 비교 기간이 필요합니다')
         return self
 
     def limit_errors(self) -> list[str]:
@@ -338,6 +349,8 @@ class PlannerSlots(Model):
             errors.append('국가·품목 이름을 더 짧게 입력해 주세요.')
         if self.recent_months and self.recent_months > MAX_RECENT_MONTHS:
             errors.append(f'최근 {MAX_RECENT_MONTHS}개월까지 조회할 수 있습니다.')
+        if self.extra_compare_periods and len(self.extra_compare_periods) > MAX_EXTRA_COMPARE_PERIODS:
+            errors.append(f'비교 기간은 한 번에 {MAX_EXTRA_COMPARE_PERIODS + 1}개까지 비교할 수 있습니다.')
         return errors
 
 

@@ -2,7 +2,7 @@ import secrets
 from datetime import timedelta, timezone
 import re
 from sqlalchemy import select
-from backend.app.api.common import now, clean, ApiError, page_info, require
+from backend.app.api.common import now, clean, ApiError, page_info, require, period_label
 
 LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_usd':'수입액',
         'previous_amount_usd':'비교 기간 수출액','comparison_pct':'비교 증감률',
@@ -55,19 +55,41 @@ def display_columns(columns, rows, meta=None):
     if any(r.get('country_name') for r in rows): hidden.add('country_code')
     if any('hs_code' in r for r in rows) and not any(r.get('hs_code') for r in rows): hidden.update(('hs_code','name'))
     # Monthly rows also carry aggregate metadata for chart/digest consumers.
+    extras=len((meta or {}).get('extra_compare_periods') or [])
+    # 비교 기간이 여럿이면 기간 이름("2023년 금액")을 result_table이 먼저 넣은 기본 이름보다 우선한다.
+    periods=_period_labels(meta or {})
     if any('month' in r and 'verified_months' in r for r in rows):
-        monthly_compare=any(r.get('compare_amount_usd') is not None for r in rows)
-        # 길이가 다른 기간 비교(D-84)는 월별 비교 금액이 없고 양쪽 총액·월평균·검증 월 수가 비교 근거다. 그때는 숨기지 않는다.
-        period_compare=not monthly_compare and any(r.get('compare_requested_months')
-                                                   and r.get('compare_requested_months')!=r.get('requested_months') for r in rows)
-        if not period_compare:
-            hidden.update(('total_usd','compare_total_usd','change_pct','monthly_avg_usd',
-                'compare_monthly_avg_usd','verified_months','requested_months',
-                'compare_verified_months','compare_requested_months','verified_subtotal_usd',
-                'compare_verified_subtotal_usd'))
-        if not monthly_compare: hidden.update(('compare_amount_usd','compare_month'))
-    return [{**c,'label':labels.get(c['key'],c.get('label',c['key']))
-             if c.get('label',c['key'])==c['key'] else c['label']} for c in columns if c['key'] not in hidden]
+        # 비교 기간마다 따로 정한다. 길이가 같으면 월별 비교 금액을 보이고, 다르면(D-84) 월별 금액이 없으므로
+        # 총액·월평균·검증 월 수를 비교 근거로 보인다. 어느 기간이든 길이가 다르면 조회 기간의 총액 열도 보인다.
+        aggregate=('total_usd','monthly_avg_usd','verified_months','requested_months','verified_subtotal_usd')
+        any_period=False
+        for prefix,change in [('compare_','change_pct'),*((f'compare{n}_',f'change{n}_pct') for n in range(2,extras+2))]:
+            monthly=any(r.get(prefix+'amount_usd') is not None for r in rows)
+            by_period=not monthly and any(r.get(prefix+'requested_months')
+                                          and r.get(prefix+'requested_months')!=r.get('requested_months') for r in rows)
+            any_period|=by_period
+            if not by_period: hidden.update((change,*(prefix+field for field in aggregate)))
+            if not monthly: hidden.update((prefix+'amount_usd',prefix+'month'))
+        if not any_period: hidden.update(aggregate)
+    return [{**c,'label':periods.get(c['key']) or (labels.get(c['key'],c.get('label',c['key']))
+             if c.get('label',c['key'])==c['key'] else c['label'])} for c in columns if c['key'] not in hidden]
+
+
+def _period_labels(meta):
+    """비교 기간이 여럿이면(meta.extra_compare_periods) 비교 열 이름에 기간을 붙여 구분한다. 하나뿐이면 기존 이름을 쓴다."""
+    if not meta.get('extra_compare_periods'): return {}
+    windows=[(meta.get('compare_period'),'compare_','change_pct'),
+             *((w,f'compare{n}_',f'change{n}_pct') for n,w in enumerate(meta['extra_compare_periods'],start=2))]
+    out={}
+    if meta.get('period'): out['amount_usd']=period_label(meta['period']['start'],meta['period']['end'])+' 금액'
+    for window,prefix,change in windows:
+        if not window: continue
+        label=period_label(window['start'],window['end'])
+        out.update({prefix+'amount_usd':label+' 금액', prefix+'month':label+' 기준월', prefix+'total_usd':label+' 합계',
+            prefix+'monthly_avg_usd':label+' 월평균', prefix+'verified_months':label+' 집계 개월 수',
+            prefix+'requested_months':label+' 조회 개월 수', prefix+'verified_subtotal_usd':label+' 집계 금액',
+            change:label+' 대비 증감률'})
+    return out
 
 
 def prediction_columns(columns, group_by):
