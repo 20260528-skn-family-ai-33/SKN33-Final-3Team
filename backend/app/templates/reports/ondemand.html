@@ -51,7 +51,7 @@
 <div class="main">
   <div class="eyebrow">요청형 리포트 · {{ 'AI 분석 결과' if result_mode else 'ON-DEMAND' }}</div>
   <h1>{{ title }}</h1>
-  <div class="lead">{{ ('HS ' ~ (items | map(attribute='hs_code') | join(', ')) if items else '전체 품목') }} · {{ (c.countries | map(attribute='name') | join(' · ')) if c.countries else '전체 국가' }} · {{ c.period.title_label }}{{ ' (' ~ vs ~ ')' if has_compare }}</div>
+  <div class="lead">{{ cover_scope(c) }} · {{ c.period.title_label }}{{ ' (' ~ vs ~ ')' if has_compare }}</div>
   <div class="rule"></div>
 </div>
 {% endcall %}

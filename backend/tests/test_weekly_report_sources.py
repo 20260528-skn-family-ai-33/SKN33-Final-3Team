@@ -50,7 +50,8 @@ class WeeklyReportSourcesTest(unittest.TestCase):
         """(웹 상세 출처 라벨, DOCX 본문, PDF 출처 칸 문구)."""
         from docx import Document
         web = [s['label'] for s in doc['meta']['sources']]
-        docx = '\n'.join(p.text for p in Document(io.BytesIO(files.report_docx(doc, self.app.state.settings))).paragraphs)
+        word = Document(io.BytesIO(files.report_docx(doc, self.app.state.settings)))
+        docx = next(row.cells[1].text for table in word.tables for row in table.rows if row.cells[0].text == '기사')
         html = render('RPT_WEEKLY', doc['template_pdf']['context'])
         pdf = re.search(r'<td>기사</td><td>(.*?)</td>', html, re.S).group(1)
         return web, docx, pdf

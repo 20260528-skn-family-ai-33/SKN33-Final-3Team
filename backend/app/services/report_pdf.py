@@ -1,4 +1,5 @@
 """Render bundled report HTML templates in an isolated, offline Chromium page."""
+from contextlib import contextmanager
 import base64
 import logging
 from functools import lru_cache
@@ -34,7 +35,8 @@ def font_css(path, mtime_ns, size):
             + encoded + ")}body{font-family:ReportKorean,sans-serif}</style>")
 
 
-def template_pdf(report_type, context, settings):
+@contextmanager
+def print_page(report_type, context, settings, *, scale=1):
     try:
         from playwright.sync_api import sync_playwright, Error as PlaywrightError
         from backend.app.services.report_templates import render
@@ -56,7 +58,7 @@ def template_pdf(report_type, context, settings):
             from backend.app.services.report_browser import launch_chromium
             with launch_chromium(runtime) as browser:
                 stage='PAGE_SETUP'
-                page = browser.new_page(java_script_enabled=False, offline=True)
+                page = browser.new_page(java_script_enabled=False, offline=True, device_scale_factor=scale)
                 page.route('**/*', lambda route: route.abort())
                 page.set_default_timeout(30000)
                 page.emulate_media(media='print')
@@ -70,10 +72,8 @@ def template_pdf(report_type, context, settings):
                 if not states or any(s != 'loaded' for s in states):
                     raise ApiError(503, 'REPORT_FONT_UNAVAILABLE',
                                    'PDF 한글 글꼴을 브라우저가 읽지 못했습니다. API_REPORT_FONT의 글꼴 파일을 확인하세요.')
-                stage='PDF_RENDER'
-                return page.pdf(format='A4', prefer_css_page_size=True, print_background=True,
-                                display_header_footer=False,
-                                margin={'top':'0','bottom':'0','left':'0','right':'0'})
+                stage='DOCUMENT_RENDER'
+                yield page
     except PlaywrightError as exc:
         logging.getLogger(__name__).exception('report_pdf_failed stage=%s',stage)
         message={
@@ -81,7 +81,14 @@ def template_pdf(report_type, context, settings):
             'PAGE_SETUP':'PDF용 브라우저 페이지 준비에 실패했습니다.',
             'HTML_LOAD':'리포트 HTML을 PDF 브라우저에 불러오지 못했습니다.',
             'FONT_LOAD':'PDF 한글 글꼴 로딩에 실패했습니다.',
-            'PDF_RENDER':'리포트 PDF 변환에 실패했습니다.'}[stage]
+            'DOCUMENT_RENDER':'리포트 인쇄 양식을 파일로 변환하지 못했습니다.'}[stage]
         raise ApiError(503, 'REPORT_RENDERER_UNAVAILABLE',
                        message,
                        retryable=True) from exc
+
+
+def template_pdf(report_type, context, settings):
+    with print_page(report_type, context, settings) as page:
+        return page.pdf(format='A4', prefer_css_page_size=True, print_background=True,
+                        display_header_footer=False,
+                        margin={'top':'0','bottom':'0','left':'0','right':'0'})
