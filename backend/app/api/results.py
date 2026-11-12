@@ -56,7 +56,8 @@ def display_columns(columns, rows, meta=None):
     if any('hs_code' in r for r in rows) and not any(r.get('hs_code') for r in rows): hidden.update(('hs_code','name'))
     # Monthly rows also carry aggregate metadata for chart/digest consumers.
     extras=len((meta or {}).get('extra_compare_periods') or [])
-    labels.update(_period_labels(meta or {}))
+    # 비교 기간이 여럿이면 기간 이름("2023년 금액")을 result_table이 먼저 넣은 기본 이름보다 우선한다.
+    periods=_period_labels(meta or {})
     if any('month' in r and 'verified_months' in r for r in rows):
         # 비교 기간마다 따로 정한다. 길이가 같으면 월별 비교 금액을 보이고, 다르면(D-84) 월별 금액이 없으므로
         # 총액·월평균·검증 월 수를 비교 근거로 보인다. 어느 기간이든 길이가 다르면 조회 기간의 총액 열도 보인다.
@@ -70,8 +71,8 @@ def display_columns(columns, rows, meta=None):
             if not by_period: hidden.update((change,*(prefix+field for field in aggregate)))
             if not monthly: hidden.update((prefix+'amount_usd',prefix+'month'))
         if not any_period: hidden.update(aggregate)
-    return [{**c,'label':labels.get(c['key'],c.get('label',c['key']))
-             if c.get('label',c['key'])==c['key'] else c['label']} for c in columns if c['key'] not in hidden]
+    return [{**c,'label':periods.get(c['key']) or (labels.get(c['key'],c.get('label',c['key']))
+             if c.get('label',c['key'])==c['key'] else c['label'])} for c in columns if c['key'] not in hidden]
 
 
 def _period_labels(meta):

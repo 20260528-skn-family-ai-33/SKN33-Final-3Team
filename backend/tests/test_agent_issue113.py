@@ -205,6 +205,11 @@ class ExtraCompareTrendTest(unittest.TestCase):
         self.assertEqual(labels['compare2_amount_usd'], '2024-04~2024-06 금액')
         self.assertNotIn('compare2_total_usd', labels)  # 월별 비교가 있으면 기간 합계 열은 숨긴다(첫 비교 기간과 같다).
 
+        from backend.app.api.results import result_table
+        saved = result_table(self.store, 1, analysis.rows, analysis.meta, analysis.conditions)
+        self.assertEqual([c['label'] for c in saved['columns'] if c['key'].endswith('amount_usd')],
+                         ['2025-01~2025-03 금액', '2024-01~2024-03 금액', '2024-04~2024-06 금액'])
+
         task = SimpleNamespace(task_id='t1', conditions=conditions)
         with patch('backend.app.agents.charts.read_snapshot', return_value={'meta': analysis.meta, 'rows': analysis.rows}):
             result, _, _ = build_chart(None, 1, task, 'r')

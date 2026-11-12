@@ -201,3 +201,16 @@ test('단신속보 본문은 줄마다 문단으로 나누고 목록 기호만 �
   assert.deepEqual(articleParagraphs(null), [])
 })
 
+
+test('multi-period trend results keep their own table and server-chosen columns (#113)',async()=>{
+ const {comparisonGroups}=await import('../src/pages/analysis/comparisonGroups.js')
+ const {resultColumns}=await import('../src/components/resultColumns.js')
+ const conditions={period:{start:'2025-01-01',end:'2025-12-31'},trade_flow:'EXPORT',country_codes:['CN','US']}
+ const meta={kind:'TREND',extra_compare_periods:[{start:'2023-01-01',end:'2023-06-30'}]}
+ const rows=[{country_code:'CN',month:'2025-01',verified_months:12,amount_usd:1},{country_code:'US',month:'2025-01',verified_months:12,amount_usd:2}]
+ // 국가가 둘이어도 기준 기간 금액만 읽는 통합 비교 표로 묶지 않는다
+ assert.equal(comparisonGroups({tasks:[{task_id:'t1',intent:'STATISTICS',conditions}],tables:[{task_id:'t1',result_id:'r',meta,rows}]}).length,0)
+ // 길이가 다른 비교 기간(12개월 대 6개월)은 서버가 보인 기준 기간 합계·월평균을 화면에서도 숨기지 않는다
+ const columns=['month','amount_usd','total_usd','monthly_avg_usd','compare2_total_usd','compare2_monthly_avg_usd'].map(key=>({key,label:key}))
+ assert.deepEqual(resultColumns(columns,rows,{meta}).map(c=>c.key),columns.map(c=>c.key))
+})

@@ -21,7 +21,8 @@ export function resultColumns(columns,rows,{ labelsOnly=false, meta }={}) {
     }))
   }
   const titles={...labels,name:rows.some(r=>r.hs_code)?'품목':rows.some(r=>r.country_code)?'국가':'명칭'}
-  if(labelsOnly) return columns.map(c=>({...c,label:(!c.label||c.label===c.key)?titles[c.key]||c.key:c.label}))
+  // 비교 기간이 여럿인 추이 표는 서버가 전체 행을 보고 기간별로 고른 열을 그대로 쓴다(길이가 다른 기간의 합계·월평균 포함).
+  if(labelsOnly||meta?.extra_compare_periods?.length) return columns.map(c=>({...c,label:(!c.label||c.label===c.key)?titles[c.key]||c.key:c.label}))
   const hidden=new Set(['hs_ver'])
   if(!rows.some(r=>r.hs_item)) hidden.add('hs_item')
   if(rows.some(r=>r.country_name)) hidden.add('country_code')
