@@ -23,8 +23,8 @@ TEMPLATES = {'RPT_MONTHLY': 'monthly.html', 'RPT_WEEKLY': 'weekly.html', 'RPT_QU
              'RPT_ON_DEMAND': 'ondemand.html'}
 KINDS = {'monthly': 'RPT_MONTHLY', 'weekly': 'RPT_WEEKLY', 'quarterly': 'RPT_QUARTERLY', 'ondemand': 'RPT_ON_DEMAND'}
 
-ACCENT = '#006849'
-UP, DOWN, MUTED, GRID, PREVIOUS = '#0B7A4B', '#C0392B', '#8A8F98', '#E6E3DD', '#A8A39B'
+ACCENT = '#1e293a'
+UP, DOWN, MUTED, GRID, PREVIOUS = ACCENT, '#C0392B', '#8A8F98', '#d6dde9', '#A8A39B'
 # 관심 국가 선 색상. 같은 리포트 안의 모든 그래프에서 국가 순서대로 같은 색을 씁니다.
 SERIES_COLORS = ['#E07B24', '#2E6DB4', '#8E5BB5', '#16877C', '#C2477A', '#6B7A2A']
 MINUS = '−'
@@ -252,7 +252,7 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REP
             path = ' '.join(f'{px:.1f},{py:.1f}' for px, py in points)
             if s.get('area') and len(points) > 1:
                 base = y(low)
-                out.append(f'<polygon points="{points[0][0]:.1f},{base:.1f} {path} {points[-1][0]:.1f},{base:.1f}" fill="{color}" opacity="0.07"/>')
+                out.append(f'<polygon points="{points[0][0]:.1f},{base:.1f} {path} {points[-1][0]:.1f},{base:.1f}" fill="#a6b6d0"/>')
             if len(points) > 1:
                 out.append(f'<polyline points="{path}" fill="none" stroke="{color}" stroke-width="{width_px}"{dash}/>')
             else:

@@ -408,7 +408,7 @@ def build_document(store,uid,record):
                 cursor=shift_month(cursor,1)
             trend=result_table(store,uid,monthly,meta,c,store.queries)
             block=section('KPI',text,[table,trend],kpi=clean(kpi))
-            block['charts']=[{'chart_type':'LINE','result_id':trend['result_id'],'x_key':'month','series_keys':['amount_usd'],'title':'월별 수출 추이 (USD)','positive_color':'#16A34A','negative_color':'#DC2626'}]
+            block['charts']=[{'chart_type':'LINE','result_id':trend['result_id'],'x_key':'month','series_keys':['amount_usd'],'title':'월별 수출 추이 (USD)','positive_color':'#1e293a','negative_color':'#DC2626'}]
             if c.get('include_korea_total'):
                 from backend.app.services.report_scope_comparison import comparison_table
                 comparison_table_data=comparison_table(store,uid,c,start,end,
@@ -425,7 +425,7 @@ def build_document(store,uid,record):
             top=[{'country':names[r['country_code']],'amount_usd':r['amount_usd'],'share_pct':r['amount_usd']*100/total if total else None} for r in sorted(active_rows,key=lambda r:(-r['amount_usd'],r['country_code']))[:10]]
             table=result_table(store,uid,top,meta,c,store.queries)
             block=section('TOP_COUNTRIES','분석 조건 내 수출액 상위 10개국입니다.',[table])
-            block['charts']=[{'chart_type':'HORIZONTAL_BAR','result_id':table['result_id'],'x_key':'country','series_keys':['amount_usd'],'title':'주요 수출국 (USD)','positive_color':'#16A34A','negative_color':'#DC2626'}]
+            block['charts']=[{'chart_type':'HORIZONTAL_BAR','result_id':table['result_id'],'x_key':'country','series_keys':['amount_usd'],'title':'주요 수출국 (USD)','positive_color':'#1e293a','negative_color':'#DC2626'}]
             sections.append(block)
         if 'GROWTH_RISK' in selected:
             block=promising_section(store,uid,c)

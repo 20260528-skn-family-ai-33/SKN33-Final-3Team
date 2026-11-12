@@ -2,12 +2,12 @@
    글자 크기·여백은 양식 PDF에서 잰 값입니다. 바꾸면 report_templates.py의 쪽 나눔 높이 상수(LINE·ROW 등)도 함께 맞춰야 합니다. */
 @page { size: A4; margin: 0; }
 :root {
-  --accent: #006849; --accent-soft: #E7F1EC; --ink: #1E2126; --sub: #6B7079; --faint: #9AA0A8;
-  --line: #E3E0DA; --rule: #2B2E33; --head: #F3F1EC; --note: #F5F3EE; --up: #0B7A4B; --down: #C0392B;
+  --accent: #1e293a; --accent-soft: #d6dde9; --ink: #1E2126; --sub: #6B7079; --faint: #9AA0A8;
+  --line: #d6dde9; --rule: #2B2E33; --head: #d6dde9; --note: #d6dde9; --up: var(--accent); --down: #C0392B;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: #E9E7E2; }
-body { font-family: "Noto Sans KR", "Malgun Gothic", "맑은 고딕", "Apple SD Gothic Neo", sans-serif;
+body { font-family: "Malgun Gothic", "맑은 고딕", sans-serif;
        color: var(--ink); font-size: 9pt; line-height: 1.55; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
 .page { position: relative; width: 210mm; height: 297mm; margin: 8mm auto; padding: 25mm 15mm 18mm; background: #fff;
@@ -30,7 +30,7 @@ body { font-family: "Noto Sans KR", "Malgun Gothic", "맑은 고딕", "Apple SD 
 .cover .top .brand { font-size: 8.2pt; }
 .cover .main { position: absolute; top: 96mm; left: 20.5mm; right: 20.5mm; }
 .cover .eyebrow { color: var(--accent); font-weight: 700; font-size: 9.4pt; margin-bottom: 6mm; }
-.cover h1 { font-size: 28.5pt; line-height: 1.32; margin: 0 0 4mm; letter-spacing: -.02em; font-weight: 800; }
+.cover h1 { font-size: 28.5pt; line-height: 1.32; margin: 0 0 4mm; letter-spacing: -.02em; font-weight: 800; word-break: keep-all; overflow-wrap: anywhere; }
 .cover .lead { color: var(--sub); font-size: 12pt; }
 .cover .rule { width: 14mm; height: 2px; background: var(--rule); margin-top: 7mm; }
 .cover .ftr { left: 20.5mm; }
@@ -80,7 +80,6 @@ td.b, .b { font-weight: 700; }
 .small { font-size: 7.9pt; color: var(--sub); }
 tr.total td { background: var(--head); font-weight: 700; border-bottom: 1.5px solid var(--rule); }
 tr.other td { color: var(--sub); }
-tr.lead td { background: var(--accent-soft); }  /* 요청형 주요 수출국 1위 행 */
 .info th { width: 25mm; background: var(--head); border-top: 0; color: var(--sub); font-size: 9pt; }
 .info tr:first-child th, .info tr:first-child td { border-top: 1.5px solid var(--rule); }
 .chg { font-weight: 700; white-space: nowrap; }

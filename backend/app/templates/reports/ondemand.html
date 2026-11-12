@@ -228,7 +228,7 @@
   {% if r is none %}
   <tr><td colspan="{{ 7 if has_compare else 4 }}" class="small">{{ '수출 실적이 없습니다.' if k.amount_usd == 0 else '데이터 준비 중' }}</td></tr>
   {% elif r is mapping %}
-  <tr class="{{ 'lead' if r.rank == 1 }}"><td>{{ r.rank }}</td>{% if has_compare %}<td>{{ (r.get('rank_move') | rank_move) if compare_ready else '—' }}</td>{% endif %}<td class="b">{{ r.name }}</td>
+  <tr><td>{{ r.rank }}</td>{% if has_compare %}<td>{{ (r.get('rank_move') | rank_move) if compare_ready else '—' }}</td>{% endif %}<td class="b">{{ r.name }}</td>
     <td class="r">{{ r.amount_usd | eok(2) }}</td><td class="r">{{ r.share_pct | pct }}</td>
     {% if has_compare %}{% if compare_ready %}<td class="r">{{ r.prev_amount_usd | eok(2) }}</td><td class="r">{{ r.change_pct | change(new=r.get('is_new', false)) }}</td>{% else %}<td class="r">—</td><td class="r">—</td>{% endif %}{% endif %}</tr>
   {% elif r == 'others' %}

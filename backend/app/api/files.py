@@ -159,12 +159,15 @@ def chart_image(section, chart, settings):
         fig.tight_layout(); out=BytesIO(); fig.savefig(out,format='png'); return out.getvalue()
     labels=[str(r[x]) for r in rows]; values=[r[y] for r in rows]
     if chart['chart_type']=='HORIZONTAL_BAR':
-        ax.barh(labels,values,color='#006849'); ax.invert_yaxis()
+        ax.barh(labels,values,color='#1e293a'); ax.invert_yaxis()
     else:
-        colors=['#006849','#2E6DB4','#8E5BB5','#E07B24','#C2477A']
+        colors=['#1e293a','#2E6DB4','#8E5BB5','#E07B24','#C2477A']
         names={c['key']:c['label'] for c in table['columns']}
         for i,key in enumerate(chart['series_keys']):
             ax.plot(labels,[r.get(key) for r in rows],color=colors[i%len(colors)],marker='o',markersize=3,label=names.get(key,key))
+        if len(chart['series_keys']) == 1 and len(labels) > 1:
+            ax.fill_between(labels, [float(v) if v is not None else math.nan for v in values],
+                            ax.get_ylim()[0], color='#a6b6d0', zorder=0)
         if len(chart['series_keys'])>1: ax.legend(prop=font,fontsize=8)
         if len(labels)>12:
             positions=list(range(0,len(labels),max(1,len(labels)//6)))
@@ -200,7 +203,7 @@ def reportlab_pdf(document,settings):
     for key in styles.byName: styles[key].fontName='ReportKorean'
     styles.add(ParagraphStyle('KBody',fontName='ReportKorean',fontSize=9,leading=15,spaceAfter=8))
     styles.add(ParagraphStyle('KTitle',fontName='ReportKorean',fontSize=25,leading=36,spaceAfter=24))
-    styles.add(ParagraphStyle('KHead',fontName='ReportKorean',fontSize=16,leading=23,textColor=colors.HexColor('#006849'),spaceAfter=16))
+    styles.add(ParagraphStyle('KHead',fontName='ReportKorean',fontSize=16,leading=23,textColor=colors.HexColor('#1e293a'),spaceAfter=16))
     p=lambda text,style='KBody':Paragraph(escape(str(text)).replace('\n','<br/>'),styles[style])
     stream=BytesIO(); story=[Spacer(1,95),p('BORDERLESS SELLERS','KHead'),p(document['title'],'KTitle'),
         p(document['subtitle']),p('생성일 '+report_time(document['generated_at'])),PageBreak(),p('목차','KHead')]
@@ -215,7 +218,7 @@ def reportlab_pdf(document,settings):
             data.extend([[p(display(row.get(c['key']),c['key'])) for c in visible] for row in table['rows']])
             if visible:
                 grid=Table(data,colWidths=[483/len(visible)]*len(visible),repeatRows=1,hAlign='LEFT')
-                grid.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#EEEAE4')),('VALIGN',(0,0),(-1,-1),'TOP'),('LINEBELOW',(0,0),(-1,-1),0.4,colors.HexColor('#D9D4CC')),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+                grid.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#d6dde9')),('VALIGN',(0,0),(-1,-1),'TOP'),('LINEBELOW',(0,0),(-1,-1),0.4,colors.HexColor('#d6dde9')),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
                 story.extend([grid,Spacer(1,18)])
         for a in s.get('articles',[]): story.extend([p(a['title']),p(a['summary']),p(f'{a["source_code"]} · {a["published_date"]} · {a["source_url"]}')])
         story.append(PageBreak())
