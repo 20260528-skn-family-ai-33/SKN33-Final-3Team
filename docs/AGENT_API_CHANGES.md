@@ -204,7 +204,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 
 ### D-95: 선행 결과 대상 선택
 - clarification.kind에 REPORT_SOURCE를 추가한다(2026-11-11). 선택지는 `PREVIOUS_RESULT`(직전 결과표로 리포트)와 `REQUERY`(같은 조건으로 다시 조회)이며 choice_ids 또는 text로 답한다. 조건별 2회 제한이다.
-- clarification.kind에 REPORT_TABLE을 추가한다(2026-11-12, 이슈 #101). 직전 답변에 결과표가 여러 개일 때 "어느 결과표로 리포트를 만들까요?"를 묻는다. 선택지는 `T1`~`T5`(라벨은 표를 만든 조건: `1. 미국 · HS 3307 · 월별 추이`, 국가·품목이 3개 이상이면 `미국, 중국 외 1`)이며 choice_ids 또는 text로 답한다. 조건별 2회 제한이다. 화면은 다른 선택형 되묻기와 같이 그리면 되고 프론트 변경은 없다. REPORT_SOURCE의 `PREVIOUS_RESULT` 라벨에서 "(준비 중)"을 뺐다.
+- clarification.kind에 REPORT_TABLE을 추가한다(2026-11-12, 이슈 #101). 직전 답변에 결과표가 여러 개일 때 "어느 결과표로 리포트를 만들까요?"를 묻는다. 선택지는 `T1`~`T5`(라벨은 표를 만든 조건: `1. 미국 · HS 3307 · 월별 추이`, 국가·품목이 3개 이상이면 `미국, 중국 외 1`, 국가·품목·종류가 같으면 조회 기간 `· 25.10~25.12`를 붙임)이며 choice_ids 또는 text로 답한다. 표가 5개를 넘으면 한 화면에 표 4개(`T1`~`T4`)와 `NEXT`("다음 목록 (5~6번)")를 보이고, `NEXT`를 고르면 같은 kind의 새 되묻기로 다음 표(`T5`부터, 번호는 전체 기준)를 보인다. 수입 표는 선택지에 넣지 않는다. 조건별 2회 제한이다. 화면은 다른 선택형 되묻기와 같이 그리면 되고 프론트 변경은 없다. REPORT_SOURCE의 `PREVIOUS_RESULT` 라벨에서 "(준비 중)"을 뺐다.
 - clarification.kind에 INPUT_SELECTION을 추가한다. 선택지와 직접 입력을 지원하며 API-38은 choice_ids 또는 text만 허용한다. hs_item/interest_selection/report_confirmation은 거부한다. 조건별 2회 제한이다.
 - 사용자가 명시한 개수·기준이면 자동으로 후속 분석한다. 모호한 개수·기준·그룹만 확인한다. applied_defaults/warnings에 실제 선택 기준과 대상 부족을 표시한다. 리포트의 REPORT_CONFIRM은 생략하지 않는다.
 

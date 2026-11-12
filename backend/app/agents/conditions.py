@@ -143,7 +143,7 @@ _NOT_PRODUCT_FOLLOWUP = re.compile(
 
 # 직전 결과표 리포트에서 질문으로 바꿀 수 없는 조건(표를 만든 조건을 따른다)
 PREVIOUS_TABLE_FIXED = {'countries', 'products', 'period', 'recent_months', 'comparison_requested', 'compare_period',
-                        'ranking_group', 'share_basis'}
+                        'ranking_group', 'share_basis', 'ranking_limit'}   # '상위 1개만'도 표를 바꾸는 요청이다(행을 줄이지 않는다)
 PREVIOUS_TABLE_NOTE = '직전 결과표의 조건 그대로 만들었습니다. 조건을 바꾸려면 새로 조회해 주세요.'
 
 

@@ -107,6 +107,12 @@ GROUPS = [
          '누락 사유가 1KB를 넘어도 완성된 리포트를 실패로 끝내지 않고 요약한다.'),
         ('R42', '조건 상한', 'legacy_table_beyond_agent_limits_ends_with_guidance',
          '에이전트 조건 상한(국가 20개·품목 5개)을 넘는 기존 표는 작업 실패 대신 안내로 끝난다.'),
+        ('R43', '표 잘림', 'legacy_truncated_table_is_a_partial_report',
+         "기존 순위표의 잘림(meta.truncated)을 PARTIAL과 '전체 N개 중 상위 M개만' 사유로 바꿔 완료 답변까지 알린다."),
+        ('R44', '상위 N개', 'previous_table_report_notes_an_ignored_ranking_limit',
+         "'상위 1개만'(ranking_limit) 요청은 표를 바꾸지 않고 승인 화면에 미적용 안내를 보인다."),
+        ('R45', '다음 목록', 'more_than_five_previous_tables_are_paged',
+         "결과표가 5개를 넘으면 표 4개 + '다음 목록'으로 나눠 6번째 표도 고를 수 있다."),
     ]),
 ]
 CASES = [dict(id=identity, group=group, category=category, criterion=criterion, test=f'{test_class}.test_{method}')

@@ -54,11 +54,30 @@ def _load(store, state, table):
         raise
     conditions = snapshot['conditions']
     if table['legacy']: conditions = {**table['conditions'], **conditions}
-    return {**snapshot, 'conditions': conditions, 'meta': {**(snapshot.get('meta') or {}), 'kind': table['kind']}}
+    meta = {**(snapshot.get('meta') or {}), 'kind': table['kind']}
+    if table['legacy'] and meta.get('truncated') and meta.get('completeness') != 'PARTIAL':
+        # 기존 채팅 API는 잘린 표를 completeness 없이 meta.truncated·rows_total로만 남긴다(api/trade.py 순위표 1,000행).
+        # 리포트에는 저장된 행만 실리므로 부분 결과로 알린다. 에이전트 결과의 meta.truncated는 요약(digest) 행 상한이라
+        # 표 자체는 전부 저장돼 있고, 표가 잘리면 completeness·limitations로 따로 남긴다(templates.py). 그래서 기존 표만 본다.
+        total, kept = meta.get('rows_total'), len(snapshot.get('rows') or [])
+        reason = (f'전체 {total:,}개 중 상위 {kept:,}개만 포함했습니다.' if isinstance(total, int) and total > kept
+                  else f'결과표가 잘려 상위 {kept:,}개만 포함했습니다.')
+        meta.update(completeness='PARTIAL', limitations=[*(meta.get('limitations') or []), reason])
+    return {**snapshot, 'conditions': conditions, 'meta': meta}
 
 
 def _names(values, limit=2):
     return ', '.join(values[:limit]) + (f' 외 {len(values) - limit}' if len(values) > limit else '')
+
+
+def _table_pages(count):
+    """REPORT_TABLE 선택지 쪽 나누기. 한 화면 버튼은 PREVIOUS_TABLE_CHOICES(5)개다.
+    표가 더 남은 쪽은 표 4개 + '다음 목록', 마지막 쪽은 표 5개까지. 반환은 쪽마다 (시작, 끝) 범위."""
+    pages, start = [], 0
+    while start < count:
+        end = count if count - start <= PREVIOUS_TABLE_CHOICES else start + PREVIOUS_TABLE_CHOICES - 1
+        pages.append((start, end)); start = end
+    return pages
 
 
 def _table_labels(store, tables):
@@ -104,12 +123,23 @@ def previous_result(store, state, task):
         usable = [(t, s) for t, s in known if s['conditions'].get('trade_flow') != 'IMPORT']
         if not usable: raise SlotRepair(EXPORT_ONLY)
         if len(usable) > 1:
-            shown = [{**t, 'conditions': s['conditions']} for t, s in usable[:PREVIOUS_TABLE_CHOICES]]
-            ask(state, task, key, 'REPORT_TABLE', '어느 결과표로 리포트를 만들까요?',
-                [(f'T{i}', label, {'previous_result_id': t['result_id']})
-                 for i, (t, label) in enumerate(zip(shown, _table_labels(store, shown)), 1)])
-            return None
-        chosen = usable[0][0]['result_id']
+            # 표가 5개를 넘으면 '다음 목록'으로 나머지를 보인다. 쪽마다 따로 묻고(되묻기 횟수는 조건 키마다 센다) 답은 쪽 키에 남는다.
+            pages, page = _table_pages(len(usable)), 0
+            while (answer := task.resolved.get(key if page == 0 else f'{key}:page{page}', {})).get('previous_table_page'):
+                page = min(answer['previous_table_page'], len(pages) - 1)   # 그사이 만료로 후보가 줄어도 마지막 쪽까지만
+            chosen = answer.get('previous_result_id')
+            if chosen is None:
+                every = [{**t, 'conditions': s['conditions']} for t, s in usable]
+                labels = _table_labels(store, every)   # 번호·기간 표시는 전체 후보 기준
+                start, end = pages[page]
+                options = [(f'T{i + 1}', labels[i], {'previous_result_id': every[i]['result_id']}) for i in range(start, end)]
+                if page + 1 < len(pages):
+                    options.append(('NEXT', f'다음 목록 ({end + 1}~{len(usable)}번)', {'previous_table_page': page + 1}))
+                ask(state, task, key if page == 0 else f'{key}:page{page}', 'REPORT_TABLE',
+                    '어느 결과표로 리포트를 만들까요?', options)
+                return None
+        else:
+            chosen = usable[0][0]['result_id']
         task.resolved[key] = {'previous_result_id': chosen}
     table = next((t for t in tables if t['result_id'] == chosen), None)
     if table is None:

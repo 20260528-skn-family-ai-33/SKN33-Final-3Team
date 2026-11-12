@@ -4,7 +4,7 @@ LLM 플래너만 Mock으로 고정하고, 조건 확인·미리보기·승인·�
 설계 근거: docs/AGENT_DESIGN.md D-76·D-81·D-90·D-92·D-93·D-97, §14.6.
 """
 import unittest
-from datetime import timedelta
+from datetime import date, timedelta
 from unittest.mock import Mock
 
 from sqlalchemy import select, update
@@ -515,10 +515,73 @@ class ReportAgentTest(unittest.TestCase):
         self.assertIn('수출만 지원합니다', self.answer_text(done) + ' '.join(done['answer'].get('warnings', [])))
         self.assertEqual(self.reports(), [])
 
+    def test_legacy_truncated_table_is_a_partial_report(self):
+        """R43 기존 채팅 API의 순위표는 1,000행에서 잘리면 completeness 없이 meta.truncated·rows_total만 남긴다.
+        리포트는 이를 PARTIAL과 '전체 N개 중 상위 M개만' 사유로 바꿔, 실제 리포트 워커를 거친 완료 답변까지 알린다."""
+        sid, tables = self.answered(self.US)
+        self.legacy_answer(sid, tables)
+        self.edit_meta(tables[0], truncated=True, rows_total=1001)
+        done = self.partial_report(sid, tables, None, 'cut')
+        self.assertEqual(done['answer']['answer_status'], 'PARTIAL')
+        self.assertTrue(any(w.startswith('전체 1,001개 중 상위') for w in done['answer']['warnings']), done['answer']['warnings'])
+
+        # 에이전트 결과의 meta.truncated는 요약 행 상한이다(표는 전부 저장). 잘림으로 바꾸지 않는다
+        sid, tables = self.answered(self.US, key='second')
+        self.edit_meta(tables[0], truncated=True, rows_total=1001)
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'agent-cut')
+        source, = self.job(jid)['clarification']['report_preview']['source_results']
+        self.assertNotEqual(source['completeness'], 'PARTIAL')
+        self.assertEqual(source['limitations'], [])
+
+    def test_previous_table_report_notes_an_ignored_ranking_limit(self):
+        """R44 '상위 1개만 리포트로'(ranking_limit)도 표 조건 변경 요청이다. 원본 표를 그대로 싣고, 제한이 적용되지 않는다는 안내를 승인 전에 보인다."""
+        sid, tables = self.answered(self.US)
+        question = '아까 표에서 상위 1개만 리포트로 만들어줘'
+        jid = self.turn(sid, [{'intent': 'REPORT', 'question': question, 'previous_turn_result': True,
+                               'slots': {'ranking_limit': 1}}], question, 'top1')
+        self.assertEqual(self.source_of(jid), tables)
+        prompt = self.job(jid)['clarification']
+        self.assertIn('직전 결과표의 조건 그대로 만들었습니다. 조건을 바꾸려면 새로 조회해 주세요.', prompt['report_preview']['adjustments'])
+
+    def test_more_than_five_previous_tables_are_paged(self):
+        """R45 직전 답변의 결과표가 5개를 넘으면 한 화면 버튼 5개(표 4개 + '다음 목록')를 유지하고 다음 목록에서 나머지를 고른다."""
+        from backend.app.api import results
+        sid, tables = self.answered(self.US)
+        with self.engine.begin() as c:
+            store = Store(self.db, c)
+            source = results.read_snapshot(store, self.uid, tables[0], 'RESULT')
+            rids = [tables[0]]
+            first = date.fromisoformat(source['conditions']['period']['start'])
+            for months in range(1, 6):   # 시작 월만 당긴(데이터 범위 안) 같은 모양의 표 5개를 더 만든다
+                month = first.year * 12 + first.month - 1 - months
+                start = date(month // 12, month % 12 + 1, 1).isoformat()
+                conditions = {**source['conditions'], 'period': {**source['conditions']['period'], 'start': start}}
+                rids.append(results.result_table(store, self.uid, source['rows'], source['meta'], conditions)['result_id'])
+        self.edit_answer(sid, lambda answer: answer.update(tables=[{**answer['tables'][0], 'result_id': rid} for rid in rids]))
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'pages')
+        prompt = self.job(jid)['clarification']
+        self.assertEqual([c['choice_id'] for c in prompt['choices']], ['T1', 'T2', 'T3', 'T4', 'NEXT'])
+        self.assertEqual(prompt['choices'][-1]['label'], '다음 목록 (5~6번)')
+        response = self.post(f'chat/jobs/{jid}/clarifications', {'clarification_id': prompt['clarification_id'], 'choice_ids': ['NEXT']})
+        self.assertEqual(response.status_code, 202, response.text)
+        self.work()
+        prompt = self.job(jid)['clarification']
+        self.assertEqual(prompt['kind'], 'REPORT_TABLE')
+        self.assertEqual([c['choice_id'] for c in prompt['choices']], ['T5', 'T6'])
+        self.assertTrue(prompt['choices'][1]['label'].startswith('6. '))
+        response = self.post(f'chat/jobs/{jid}/clarifications', {'clarification_id': prompt['clarification_id'], 'choice_ids': ['T6']})
+        self.assertEqual(response.status_code, 202, response.text)
+        self.work()
+        self.assertIsNotNone(self.job(jid)['clarification'], self.job(jid))
+        self.assertEqual(self.source_of(jid), rids[5:])
+        self.confirm(jid); self.work()
+        self.assertEqual(self.reports()[0]['conditions_json']['chat_sources'], rids[5:])
+
     def partial_report(self, sid, tables, limitations, key):
         """직전 결과표를 PARTIAL로 만든 뒤 리포트를 승인하고, 실제 리포트 워커(문서 생성·READY 저장)를 거쳐 채팅을 끝낸다."""
         from unittest.mock import patch
-        self.edit_meta(tables[0], completeness='PARTIAL', limitations=limitations)
+        if limitations is not None:
+            self.edit_meta(tables[0], completeness='PARTIAL', limitations=limitations)
         jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', key)
         self.assertEqual(self.source_of(jid), tables)
         self.confirm(jid); self.work()
