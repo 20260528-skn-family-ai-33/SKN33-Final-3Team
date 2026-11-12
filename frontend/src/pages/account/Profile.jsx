@@ -102,7 +102,7 @@ export default function Profile({ route }) {
             <div key={key} className="between" style={{ padding: '16px 0', borderBottom: '1px solid var(--line2)' }}>
               <p style={{ fontSize: 16, fontWeight: 700 }}>{title} <span className="tag red">필수</span></p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                <button type="button" className="reset more" style={{ fontSize: 13 }} onClick={() => setTermsView({ key, title })}>내용 보기</button>
+                <button type="button" className="reset more" style={{ fontSize: 13 }} aria-label={`${title.replace(/ 동의$/, '')} 내용 보기`} onClick={() => setTermsView({ key, title })}>내용 보기</button>
                 <span className="note">{me.loading ? '확인 중…' : me.error ? '불러오지 못함' : consentOf(type) ? `${String(consentOf(type).acted_at).slice(0, 10)} 동의` : '동의 기록 없음'}</span>
               </div>
             </div>
@@ -110,7 +110,7 @@ export default function Profile({ route }) {
           <div className="between" style={{ padding: '16px 0', borderBottom: '1px solid var(--line2)' }}>
             <p style={{ fontSize: 16, fontWeight: 700 }}>알림 수신 동의 <span className="tag">선택</span></p>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              <button type="button" className="reset more" style={{ fontSize: 13 }} onClick={() => setTermsView({ key: 'notification', title: '알림 수신 동의' })}>내용 보기</button>
+              <button type="button" className="reset more" style={{ fontSize: 13 }} aria-label="알림 수신 동의 내용 보기" onClick={() => setTermsView({ key: 'notification', title: '알림 수신 동의' })}>내용 보기</button>
               {/* 현재 약관 버전을 받아야 동의 여부를 판단할 수 있다. 조회 중·실패를 '동의 안 함'으로 보이지 않는다 */}
               {notificationVersion
                 ? <Check checked={notificationAgreed} disabled={notificationSaving} onChange={toggleNotification}

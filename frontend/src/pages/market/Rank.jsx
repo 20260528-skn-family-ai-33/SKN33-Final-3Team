@@ -9,7 +9,7 @@ import { useQuery, ErrorNotice } from '../../api/hooks'
 import { download } from '../../api/client'
 import { Hs4Search } from '../../components/pickers'
 import { monthOffset } from '../home/useDashboard'
-import { rankInitial, rankBasis } from '../../api/integration'
+import { rankInitial, rankBasis, countryListLabel } from '../../api/integration'
 import { amount } from '../../api/adapters'
 
 const COLS = '60px 110px 1fr 1.4fr 110px'
@@ -45,7 +45,8 @@ function RankResults({ route }) {
   const [error, setError] = useState('')
   const countryCodes = selectedCodes(applied)
   const countryNames = countryCodes.map(countryName)
-  const countryLabel = compactList(countryNames, 3)
+  const countryLabel = countryListLabel(countryNames)
+  const countryFull = countryNames.join(' · ')
   const byMonth = !applied.group && countryCodes.length === 1 && applied.product
   const rankingGroup = applied.group || (countryCodes.length === 1 ? 'HS6' : 'COUNTRY')
   const query = { scope: applied.scope, period_start: applied.start || monthOffset(end, 1 - Number(applied.period)), period_end: applied.end || end, country_codes: countryCodes, hs_code: applied.product || undefined, hs_ver: applied.product ? 'HS2022' : undefined }
@@ -120,7 +121,7 @@ function RankResults({ route }) {
   const fileKind = byMonth ? '월별수출입' : rankingGroup === 'HS6' ? '품목순위' : '교역국순위'
   const productLabel = interestProducts.length ? compactList(interestProducts.map(code => 'HS' + code), 1) : applied.product ? `HS${applied.product}` : '전체품목'
   // AI 질문에는 '관심 국가·관심 품목' 같은 묶음 말 대신 실제 국가 이름과 HS 코드를 적어, 채팅이 같은 조건으로 분석하게 한다.
-  const askCountry = countryNames.join(', ') || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
+  const askCountry = countryFull || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
   // AI 질문에는 조회 종류와 수출·수입 기준도 넣어, 채팅이 화면과 같은 순위를 분석하게 한다.
   const askKind = byMonth ? '월별 수출입 추이' : `${basis === 'exp' ? '수출' : '수입'} 기준 ${rankingGroup === 'HS6' ? '교역 품목 순위' : '교역국 순위'}`
   // 지금 AI챗봇은 질문에서 국가·품목을 각각 20개까지만 읽는다(backend/app/api/intent.py IntentSlots).
@@ -189,7 +190,7 @@ function RankResults({ route }) {
           <div ref={resultTop} className="card" style={{ scrollMarginTop: 90 }}>
             <div className="between">
               <div>
-                <h2 className="t2">{title}</h2>
+                <h2 className="t2" title={countryLabel !== countryFull ? countryFull : undefined}>{title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{query.period_start} ~ {query.period_end} {byMonth ? '월별' : '누계'} · 억 USD · 관세청{!byMonth && total != null && ` · 총 ${total.toLocaleString('ko-KR')}건`}</p>
               </div>
               <div className="seg" role="group" aria-label="순위 기준">
@@ -238,7 +239,9 @@ function RankResults({ route }) {
 function CountrySearch({ value, replaceInitial, onChange }) {
   const options = [['', '전체 국가'], ...countries.map(c => [c.country_code, c.name])]
   const all = countries.length > 0 && countries.every(c => value.includes(c.country_code))
-  const label = all ? `전체 국가 (${value.length}개)` : compactList(value.map(countryName), 3)
+  const names = value.map(countryName)
+  const fullLabel = names.join(' · ')
+  const label = all ? `전체 국가 (${value.length}개)` : countryListLabel(names)
   const [text, setText] = useState(null)
   const typing = text !== null
   const shown = typing ? options.filter(([v, l]) => !v || l.includes(text.trim())) : options
@@ -271,7 +274,7 @@ function CountrySearch({ value, replaceInitial, onChange }) {
     <div style={{ flex: 1, position: 'relative', minWidth: 0 }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setText(null) }}>
       <div className={'input val' + (typing ? ' focus' : '')} style={{ gap: 8 }}>
         <span className="select-prefix">국가</span>
-        <input value={typing ? text : label} aria-label="국가" placeholder="국가명 입력"
+        <input value={typing ? text : label} title={!typing && label !== fullLabel ? fullLabel : undefined} aria-label="국가" placeholder="국가명 입력"
           role="combobox" aria-expanded={typing} aria-controls="country-listbox" aria-autocomplete="list"
           aria-activedescendant={typing && active >= 0 ? `country-option-${active}` : undefined}
           onFocus={() => setText('')} onClick={() => !typing && setText('')}
