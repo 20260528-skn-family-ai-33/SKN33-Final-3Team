@@ -24,13 +24,23 @@ export default function Articles({ route }) {
   const selected = q.get('id')
   const [form, setForm] = useState({ keyword, from, to })
   const [error, setError] = useState('')
-  // 주소의 검색 조건이 바뀌면(탭 클릭, 상단 메뉴로 전체 목록 복귀, 뒤로가기 등) 검색칸과 오류 문구도 주소 값으로 다시 맞춘다.
-  // 기사 펼치기(id)·페이지 이동(page)은 비교하지 않아, 입력해 둔 내용이 그대로 남는다.
-  // 탭은 주소에 적힌 값 그대로 비교한다. '#/articles?tab=all'에서 상단 메뉴로 '#/articles'에 돌아와도 같은 목록이지만 폼을 비운다.
+  // 주소가 바뀌면 검색칸과 오류 문구를 주소 값으로 다시 맞춘다.
+  // - 검색 조건(탭·검색어·기간)이 바뀐 경우: 탭 클릭, 검색, 뒤로가기 등. 탭은 주소에 적힌 값 그대로 비교한다.
+  // - 조건 없는 '#/articles'로 들어온 경우: 상단 메뉴 '기사'로 돌아온 것이므로 2페이지·펼친 기사에서 돌아와도 미적용 입력·오류를 비운다.
+  // 기사 펼치기(id)·페이지 이동(page)만 바뀐 경우에는 입력해 둔 내용을 그대로 둔다.
   const urlSearch = JSON.stringify([q.get('tab'), keyword, from, to])
-  const [formSource, setFormSource] = useState(urlSearch)
-  if (formSource !== urlSearch) { setFormSource(urlSearch); setForm({ keyword, from, to }); setError('') }
+  const [formSource, setFormSource] = useState({ urlSearch, raw: route.search })
+  if (formSource.urlSearch !== urlSearch || formSource.raw !== route.search) {
+    if (formSource.urlSearch !== urlSearch || !route.search) { setForm({ keyword, from, to }); setError('') }
+    setFormSource({ urlSearch, raw: route.search })
+  }
   const clearForm = () => { setForm({ keyword: '', from: '', to: '' }); setError('') }
+  // 이미 '#/articles'에 있을 때 상단 메뉴 '기사'를 다시 누르면 주소가 그대로라 위 비교로는 알 수 없다. 머리글이 보내는 신호로 비운다.
+  useEffect(() => {
+    const onReselect = e => { if (e.detail === '/articles') { setForm({ keyword: '', from: '', to: '' }); setError('') } }
+    window.addEventListener('nav:reselect', onReselect)
+    return () => window.removeEventListener('nav:reselect', onReselect)
+  }, [])
   const page = Math.max(1, Number(q.get('page')) || 1)
   const listTop = useRef(null)
   const previousPage = useRef(page)
