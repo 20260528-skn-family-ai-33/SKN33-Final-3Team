@@ -879,7 +879,7 @@ python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/e
   - 금액은 USD다. 비율은 SQL에서 금액으로 계산하고 소수 1자리로 반올림한다. 월별 비율을 평균하지 않는다(D-83).
   - `NOW()`·`CURDATE()` 대신 조건의 기간을 쓴다. 답할 수 없으면 `unsupported`에 이유를 쓴다.
   - ONLY_FULL_GROUP_BY: 집계하지 않은 SELECT·ORDER BY 식은 GROUP BY에 같은 식으로 넣는다(2026-11-04).
-  - 수출입 테이블 금액은 `country`와 조인해 `country_role='COUNTRY'`만 집계하고(총계 행 제외), `hs_ver`를 하나로 제한한다. 검사기도 수출입 테이블을 읽는 SELECT마다(UNION 각 쪽·하위 쿼리·CTE) WHERE·JOIN ON의 최상위 AND 조건으로 그 테이블의 `hs_ver` 리터럴 조건과 `country_role='COUNTRY'`(또는 `country_code` 리터럴 조건)를 요구한다. `OR` 아래 조건과 보존되는 쪽 외부 조인의 ON 조건은 인정하지 않고, 수출입 테이블이 여럿이면 테이블마다 따로 확인한다. 국가 역할 조건은 그 테이블과 `country_code`로 이어진 country에 걸려야 하고, 하위 쿼리 `country_code IN (SELECT country_code FROM country WHERE country_role='COUNTRY')`도 받는다(2026-11-04). 국가 역할만 담은 뷰는 제안 단계다.
+  - 수출입 테이블 금액은 `country`와 조인해 `country_role='COUNTRY'`만 집계하고(총계 행 제외), `hs_ver`를 하나로 제한한다. 검사기도 수출입 테이블을 읽는 SELECT마다(UNION 각 쪽·하위 쿼리·CTE) WHERE·JOIN ON의 최상위 AND 조건으로 그 테이블의 `hs_ver` 리터럴 조건과 `country_role='COUNTRY'`(또는 `country_code` 리터럴 조건)를 요구한다. `OR` 아래 조건과 보존되는 쪽 외부 조인의 ON 조건은 인정하지 않고, 수출입 테이블이 여럿이면 테이블마다 따로 확인한다. 국가 역할 조건은 그 테이블과 `country_code`로 이어진 country에 걸려야 하고, 하위 쿼리 `country_code IN (SELECT country_code FROM country WHERE country_role='COUNTRY')`도 받는다(2026-11-04). 국가 조건 없는 전체 집계는 country 조인이 국가별 반복 조회가 되어 1년 전 품목 집계가 30초를 넘으므로, `country_code NOT IN (SELECT country_code FROM country WHERE country_role <> 'COUNTRY')`도 받고 프롬프트도 이 형태를 쓰게 한다. 이때 하위 쿼리 조건은 역할 조건 하나만 허용한다(2026-11-12). 국가 역할만 담은 뷰는 제안 단계다.
 - **sqlglot 검사(`dialect="mysql"`):**
   - 문장은 하나뿐이고, 최상위는 `Select` 또는 `Union`이다(CTE 허용).
   - 참조 테이블(CTE 이름 제외)은 모두 D-65 허용 목록 안이어야 한다. `information_schema`·`mysql`·`performance_schema`·`sys` 스키마와 `article.body_masked` 컬럼은 거부한다.
@@ -1336,3 +1336,7 @@ Redis 컨텍스트·세션 잠금·체크포인터 연결과 채팅 API 변경 �
 - 위 결정들의 "후속 구현" 문구는 결정 당시 기록이다. 다음은 구현되어 있다: 차트 대상 전환 API(API-132 `GET /results/{result_id}/chart`)와 화면(`TaskResults.jsx`의 대상 선택), RANKING·SHARE·TREND의 `save=False` 저장 경계(`templates.py`), 그래프 기사 단계의 RAG 필터·근거 카드(D-102), 유망시장·시장 유형의 모델 A·B 연결(D-103).
 - 남은 것은 §9 미정 조정값(C-27 digest 행 수, C-28 노드 시간·유사도 기준)이다. 운영 로그·골든셋으로 정한다.
 - 로컬 PC(7.8GB)에서는 기사 색인(127,718건, 3072차원, 3.8GB)이 메모리에 다 올라가지 못해 검색 한 번에 5~10초, 첫 열기에 75초가 걸려 30초 검색 예산을 넘긴다(2026-11-06 측정, job 181·184). 메모리가 넉넉한 서버에서 다시 잰다(C-23).
+
+
+## 2026-11-12 이슈 113 보완
+- 국가 조건 없는 전체 집계는 country 조인 대신 NOT IN 하위 쿼리로 총계 행을 뺀다(위 수출입 테이블 금액 규칙의 2026-11-12 보완).

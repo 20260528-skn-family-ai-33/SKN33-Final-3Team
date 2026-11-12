@@ -39,6 +39,8 @@ ONLY_FULL_GROUP_BY가 켜져 있습니다. SELECT·ORDER BY의 집계하지 않�
 (예: SELECT QUARTER(trade_month) AS quarter ... GROUP BY QUARTER(trade_month) ORDER BY QUARTER(trade_month)).
 export_*·import_* 테이블에는 총계·특수 코드 행이 섞여 있습니다. 금액을 집계할 때는 country와 country_code로 조인해
 country.country_role = 'COUNTRY'인 행만 쓰고, hs_ver는 conditions의 품목 판본(품목이 없으면 'HS2022') 하나로 제한합니다.
+국가 조건이 없는 전체 국가 집계는 country 조인 대신 각 수출입 표 WHERE에
+별칭.country_code NOT IN (SELECT country_code FROM country WHERE country_role <> 'COUNTRY')를 AND로 겁니다(조인은 느려 시간 초과).
 conditions에 국가·품목이 있으면 수출입 표의 country_code·hs*_code를 그 값 리터럴로 직접 거르고 다른 국가·품목은 읽지 않습니다.
 수출입 표의 hs_ver·trade_month 조건은 JOIN ON이 아니라 각 SELECT의 WHERE에 AND로 겁니다.
 기간은 trade_month를 conditions 기간(비교 기간 포함) 안의 날짜로 BETWEEN 또는 >=·< 로 거릅니다.
@@ -158,6 +160,30 @@ def _country_subquery(node):
             and bool(countries) and _filters(_conjuncts(select), 'country_role', countries, 'COUNTRY'))
 
 
+def _non_country_subquery(node):
+    """`country_code NOT IN (SELECT country_code FROM country WHERE country_role <> 'COUNTRY')` 형태인지.
+    국가 조건이 없는 전체 집계에서 country 조인은 국가별 반복 조회가 되어 느리다(1년 전 품목 수출 약 10초→2.5초).
+    제외할 집합이 줄면 총계 행이 섞이므로, 하위 쿼리 조건은 역할 조건 하나만 받는다."""
+    if not isinstance(node, exp.Not) or not isinstance(node.this, exp.In):
+        return False
+    query = node.this.args.get('query')
+    select = query.this if isinstance(query, exp.Subquery) else query
+    if (not isinstance(select, exp.Select) or len(select.selects) != 1
+            or any(select.args.get(k) for k in ('joins', 'group', 'having', 'limit', 'distinct'))):
+        return False
+    picked = select.selects[0].unalias()
+    tables = list(select.find_all(exp.Table))
+    terms = _and_terms(select.args['where'].this) if select.args.get('where') else []
+    if not (isinstance(picked, exp.Column) and picked.name.lower() == 'country_code' and len(tables) == 1
+            and tables[0].name.lower() == 'country' and len(terms) == 1 and isinstance(terms[0], exp.NEQ)):
+        return False
+    left, right = terms[0].this, terms[0].expression
+    if isinstance(left, exp.Literal):
+        left, right = right, left
+    return (_column(left, 'country_role', {tables[0].alias_or_name.lower()})
+            and isinstance(right, exp.Literal) and right.this == 'COUNTRY')
+
+
 def _column(node, column, aliases):
     return (isinstance(node, exp.Column) and node.name.lower() == column
             and (not node.table or node.table.lower() in aliases))
@@ -175,6 +201,9 @@ def _filters(predicates, column, aliases, value=None, *, single=False, subquery=
                     and (not single or len(set(values)) == 1)
                     and (value is None or all(v == value for v in values))):
                 return True
+        if (subquery and isinstance(node, exp.Not) and _column(node.this.this, column, aliases)
+                and _non_country_subquery(node)):
+            return True
         if not isinstance(node, (exp.EQ, exp.In)):
             continue
         left = node.this

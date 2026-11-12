@@ -88,6 +88,23 @@ class SqlFilterBypassTest(unittest.TestCase):
         for sql in bad:
             with self.subTest(sql=sql), self.assertRaises(ValueError): validate_sql(draft(sql))
 
+    def test_not_in_non_country_subquery(self):
+        head = "SELECT SUM(e.amount_usd) AS value FROM export_summary e WHERE e.hs_ver = 'HS2022' AND e.country_code NOT IN "
+        ok = ["(SELECT country_code FROM country WHERE country_role <> 'COUNTRY')",
+              "(SELECT c.country_code FROM country c WHERE 'COUNTRY' != c.country_role)"]
+        bad = ["(SELECT country_code FROM country WHERE country_role <> 'COUNTRY' AND country_code = 'JG')",
+               "(SELECT country_code FROM country WHERE country_role = 'TOTAL')",
+               "(SELECT country_code FROM country)",
+               "(SELECT country_code FROM country WHERE country_role <> 'COUNTRY' LIMIT 1)",
+               "(SELECT region_id FROM country WHERE country_role <> 'COUNTRY')"]
+        for sql in ok:
+            with self.subTest(sql=sql): self.assertTrue(validate_sql(draft(head + sql)))
+        for sql in bad:
+            with self.subTest(sql=sql), self.assertRaises(ValueError): validate_sql(draft(head + sql))
+        with self.assertRaises(ValueError):  # NOT IN이 OR 아래에 있으면 행을 거르지 않는다.
+            validate_sql(draft(head.replace('AND e.country_code', 'AND (1=1 OR e.country_code') +
+                               "(SELECT country_code FROM country WHERE country_role <> 'COUNTRY'))"))
+
     def test_each_trade_table_needs_its_own_filters(self):
         ok = ["SELECT SUM(e.amount_usd) AS value FROM country c LEFT JOIN export_summary e ON e.country_code = c.country_code "
               "AND e.hs_ver = 'HS2022' WHERE c.country_role = 'COUNTRY'",
