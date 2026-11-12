@@ -307,6 +307,7 @@ class PlannerSlots(Model):
     trade_flow: Literal['EXPORT', 'IMPORT'] | None = None
     # None은 False와 같다. 기본값 False는 strict 스키마에 "default"로 실려 None으로 둔다(LLM 출력 모델)
     comparison_requested: bool | None = None
+    amount_difference_only: bool | None = None  # 두 기간의 합계·달러 차액만 요청한 통계 질문
     compare_period: Period | None = None
     ranking_group: Literal['COUNTRY', 'HS6'] | None = None
     share_basis: Literal['KOREA_TRADE_PARTNER', 'FOREIGN_IMPORT_MARKET'] | None = None

@@ -13,7 +13,7 @@ LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_
         'current_amount_usd':'현재 수출액','baseline_amount_usd':'비교 수출액','change_amount_usd':'증감액',
         'growth_status':'증감 상태','severity':'변화 수준','hs_item':'품목','hs_name':'품목명','one_off':'일회성 판정','label':'구분'}
 LABELS.update({'country_name':'국가','hs_code':'HS 코드','trade_month':'기준월',
-    'total_usd':'기간 합계','compare_total_usd':'비교 기간 합계','change_pct':'증감률',
+    'total_usd':'기간 합계','compare_total_usd':'비교 기간 합계','period_difference_usd':'기간 합계 차액','change_pct':'증감률',
     'monthly_avg_usd':'월평균 금액','compare_monthly_avg_usd':'비교 기간 월평균',
     'compare_amount_usd':'비교 기간 금액','compare_month':'비교 기준월','verified_months':'집계된 개월 수',
     'requested_months':'조회 개월 수','compare_verified_months':'비교 집계 개월 수',
@@ -61,7 +61,7 @@ def display_columns(columns, rows, meta=None):
         period_compare=not monthly_compare and any(r.get('compare_requested_months')
                                                    and r.get('compare_requested_months')!=r.get('requested_months') for r in rows)
         if not period_compare:
-            hidden.update(('total_usd','compare_total_usd','change_pct','monthly_avg_usd',
+            hidden.update(('total_usd','compare_total_usd','period_difference_usd','change_pct','monthly_avg_usd',
                 'compare_monthly_avg_usd','verified_months','requested_months',
                 'compare_verified_months','compare_requested_months','verified_subtotal_usd',
                 'compare_verified_subtotal_usd'))

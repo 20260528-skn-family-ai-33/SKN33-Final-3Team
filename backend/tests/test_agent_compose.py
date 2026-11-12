@@ -3,11 +3,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 import httpx
 from openai import OpenAI
-from backend.app.agents.compose import compose_input, assemble
+from backend.app.agents.compose import compose_input, assemble, period_difference_draft
 from backend.app.agents.llm import StructuredClient
 from backend.app.agents.planner import build_plan
 from backend.app.agents.runtime import Services
-from backend.app.agents.state import AgentState, PlannerOutput, ToolResult, Draft
+from backend.app.agents.state import AgentState, Conditions, PlannerOutput, ToolResult, Draft
 from backend.app.api.config import Settings
 from backend.tests.test_agent_graph import initial
 
@@ -21,6 +21,46 @@ class ComposeTest(unittest.TestCase):
         state = AgentState.model_validate(initial())
         state.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': i, 'question': 'q'} for i in intents]))
         return state
+
+    def test_period_difference_final_sentences_use_the_saved_amounts_and_roles(self):
+        state = self.state(['STATISTICS'])
+        task, = state.plan.tasks
+        task.answer_status = 'ANSWERED'
+        task.slots.amount_difference_only = True
+        task.conditions = Conditions(period={'start':'2025-01-01','end':'2025-12-01'},
+                                     compare_period={'start':'2024-01-01','end':'2024-12-01'})
+        step = next(s for s in task.steps if s.tool == 'query_trade_data')
+        for current, prior, delta, totals, difference in (
+            (708866112720, 683191981120, 25674131600,
+             '2025년 수출액은 7,088억 6,611만 달러, 2024년 수출액은 6,831억 9,198만 달러입니다.',
+             '2025년 수출액은 2024년보다 256억 7,413만 달러 많습니다.'),
+            (100, 125, -25, '2025년 수출액은 100달러, 2024년 수출액은 125달러입니다.',
+             '2025년 수출액은 2024년보다 25달러 적습니다.'),
+            (100, 100, 0, '2025년 수출액은 100달러, 2024년 수출액은 100달러입니다.',
+             '2025년과 2024년의 수출액 차액은 0달러입니다.'),
+        ):
+            with self.subTest(delta=delta):
+                state.results[step.step_id] = ToolResult(status='OK', digest={'kind':'TREND','targets':[
+                    dict(total_usd=current, compare_total_usd=prior, period_difference_usd=delta,
+                         requested_months=12, compare_requested_months=12)]})
+                Services(None, Settings({}), None).compose(state)
+                self.assertEqual(state.draft.sentences(), [totals, difference])
+                self.assertEqual(state.draft.turn_summary, difference)
+                self.assertEqual(state.fixed_conclusion_ids, [])
+        target = state.results[step.step_id].digest['targets'][0]
+        task.conditions.period, task.conditions.compare_period = task.conditions.compare_period, task.conditions.period
+        task.conditions.trade_flow = 'IMPORT'
+        target.update(total_usd=80, compare_total_usd=100, period_difference_usd=-20)
+        self.assertEqual(period_difference_draft(state).sentences()[-1],
+                         '2024년 수입액은 2025년보다 20달러 적습니다.')
+        task.slots.amount_difference_only = None
+        self.assertIsNone(period_difference_draft(state))
+        task.slots.amount_difference_only = True
+        target['compare_total_usd'] = None
+        self.assertIsNone(period_difference_draft(state))
+        target['compare_total_usd'] = 100
+        target.pop('period_difference_usd')
+        self.assertIsNone(period_difference_draft(state))
 
     def test_compose_model_selection_on_responses_api(self):
         for node, model in [('compose', None), ('compose_text', None), ('compose', 'gpt-4.1-mini'),

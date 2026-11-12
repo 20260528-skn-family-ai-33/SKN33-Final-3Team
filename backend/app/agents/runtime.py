@@ -13,7 +13,7 @@ from backend.app.agents.charts import build_chart
 from backend.app.agents.bindings import resolve as resolve_bindings, source_versions
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
 from backend.app.agents.compose import (ARTICLE_PROMPT, COMPOSE_PROMPT, COMPOSE_TEXT_PROMPT, assemble, compose_input,
-                                        apply_claim_edits, complete_article_only_conclusions, cited_article_numbers, fallback_conclusion, numbered_articles, validate_citations, validate_rewrite)
+                                        apply_claim_edits, complete_article_only_conclusions, cited_article_numbers, fallback_conclusion, numbered_articles, period_difference_draft, validate_citations, validate_rewrite)
 from backend.app.agents.conditions import check_conditions, recent_article_period
 from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT, PLANNER_RETRY_HINT
@@ -449,6 +449,11 @@ class Services:
         self.compose(state,prompt=COMPOSE_TEXT_PROMPT,model_role='compose_text')
 
     def compose(self,state,prompt=COMPOSE_PROMPT,model_role='compose'):
+        comparison = period_difference_draft(state)
+        if comparison is not None:
+            state.draft = comparison
+            state.fixed_conclusion_ids = []  # Numeric conclusions still go through snapshot verification.
+            return
         with self.read_store() as store:
             from backend.app.agents.templates import _names
             countries,products=_names(store)
