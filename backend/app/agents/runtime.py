@@ -599,10 +599,9 @@ class Services:
                 rid=state.report_wait.report_id
                 record=store.owned('report','report_id',rid,state.input.user_id)
                 if record['status']!='READY': return ToolResult(status='FAILED',error='리포트 파일 생성에 실패했습니다.')
-                # 직전 턴 결과표는 이번 계획의 depends_on에 없어 누락 사유가 전파되지 않는다. 승인 사본의 사유를 결과에 싣는다.
-                refs=(record.get('content_json') or {}).get('source_results') or []
-                from backend.app.agents.state import summarize_limitations
-                limits=summarize_limitations([l for r in refs if r.get('completeness')=='PARTIAL' for l in r.get('limitations') or []])
+                # 직전 턴 결과표는 이번 계획의 depends_on에 없어 누락 사유가 전파되지 않는다. 접수 때 conditions_json에 남긴
+                # 승인 사본의 사유를 결과에 싣는다(content_json은 워커가 완성 문서로 바꾼다).
+                limits=(record.get('conditions_json') or {}).get('chat_limitations') or []
                 return ToolResult(status='OK',report_id=rid,completeness='PARTIAL' if limits else 'COMPLETE',limitations=limits)
         # 리포트 파일은 이미 만들어졌고 상태만 읽는다. 앞 호출의 초과 시간 때문에 예약이 거부되면 완성된 리포트를 두고
         # 작업이 FAILED로 끝나므로 예산 검사 없이 예약·정산한다(finalize와 같은 규칙, §13.4).

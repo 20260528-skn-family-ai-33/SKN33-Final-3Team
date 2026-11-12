@@ -2,14 +2,14 @@
   "schema_version": 2,
   "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
   "evaluation": "Report Agent 오프라인 설계 계약 평가",
-  "evaluated_at_utc": "2026-11-12T05:02:26.841147+00:00",
+  "evaluated_at_utc": "2026-11-12T06:23:24.993203+00:00",
   "source_mode": "working_tree",
-  "source_revision": "bbff32f711428f4b7a6b2a567ee29b33f0c6196c",
+  "source_revision": "4596591393e4cb69fb88ac1a59ad53c93b6004c7",
   "source_dirty": true,
   "source_changes": [
     "M backend/app/agents/report.py"
   ],
-  "harness_revision": "bbff32f711428f4b7a6b2a567ee29b33f0c6196c",
+  "harness_revision": "4596591393e4cb69fb88ac1a59ad53c93b6004c7",
   "harness_dirty": true,
   "harness_changes": [
     "M backend/scripts/evaluate_report_agent.py",
@@ -21,19 +21,19 @@
     "backend/app/services/report_templates.py": "1a55bd02115d8c8beb82d186576b65167b988f2ff287946931c9959c32827377",
     "backend/app/services/report_context.py": "ef107fe826bbf9036c5d499cf986a3df5f13008e756147a629e433256bbf1b93",
     "backend/app/api/reports.py": "0e214beaa4496fe51298844d92dcbd51452bbd1ca99008ccf513a84b43840ce3",
-    "backend/app/agents/report.py": "7ce1c7f52b3426f7d0ed2716b7c18db049fb2610d4b645bc2ae42770843fbdf8"
+    "backend/app/agents/report.py": "1ed99eaa0065939f0785b99d9c3340ec629194b831d04c22b0ee90388747a53b"
   },
   "evidence_sha256": {
     "backend/tests/test_agent_graph.py": "42b48bf6f21af564468dd9d29db17a9ca55de121ff0c04449d5d2f5323477656",
     "backend/tests/test_agent_pr61_fixes.py": "73908cce2991f8adb09a702b204c7e30c7478d569e603eb4b037cd3f402e8d7f",
-    "backend/tests/test_agent_report.py": "98b98d2831d30cdeef6c870b759de2c52a706edc92f1597970d970d5c7ca2353",
+    "backend/tests/test_agent_report.py": "ad1be107c8b2465b2c447a3b3579f286ee190788f052fcdf449b237bb9d35711",
     "backend/tests/test_agent_state.py": "35c261bb9009c2f9dc9fbb635020d3fe9b1d1ae1e86b4fcf6a78427792ce25ba",
     "backend/tests/test_backend_api.py": "3f28e682f0e78edbea420b8502b1e2337eb5b87a2355433db6ab1c762773a25f",
-    "backend/scripts/evaluate_report_agent.py": "765aa31d5ad0354764a4bb90987ee357b378669acc6c20f032ccc48d0cb23e82",
+    "backend/scripts/evaluate_report_agent.py": "8faff0c76ce7401a883a4252986c817f1481db9ca3e430a2ce7edc582eac2668",
     "backend/tests/api_support.py": "e39e158e4840bb652d8e86db8d21991044c6cda1765c977db6482a2c75b48003",
     "backend/tests/intent_fixtures.py": "a34fed014fdd8532c8f89145bdd615a39418ab6d23e66c60280bc91865f3d4e5"
   },
-  "manifest_sha256": "203ea1e8729f5da9ef9f028d229cfd5d076522c9c5942841d8c58974d70666c6",
+  "manifest_sha256": "851f610351632570746193bf21006d9436248c15c8a788c044cdf5b56c543f3f",
   "environment": {
     "python": "3.12.13",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -89,8 +89,8 @@
       "pass_rate_pct": 100.0
     },
     "이전 턴 결과": {
-      "total": 11,
-      "pass": 11,
+      "total": 17,
+      "pass": 17,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -98,8 +98,8 @@
       "pass_rate_pct": 100.0
     },
     "합계": {
-      "total": 36,
-      "pass": 36,
+      "total": 42,
+      "pass": 42,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -400,8 +400,8 @@
       "id": "R33",
       "group": "이전 턴 결과",
       "category": "기존 대화 표",
-      "criterion": "기존 채팅 API 답변의 표(meta.kind 없음)도 답변 intent와 표 열로 종류를 되살리고, 모르면 사유를 안내한다.",
-      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_chat_table_kind_is_restored",
+      "criterion": "기존 채팅 API의 월별 추이 표로 리포트를 만들고, 답변에서 확정한 전년 비교 기간을 되살린다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_chat_trend_table_becomes_a_report_with_its_comparison",
       "status": "PASS",
       "details": []
     },
@@ -409,7 +409,7 @@
       "id": "R34",
       "group": "이전 턴 결과",
       "category": "부분 결과",
-      "criterion": "직전 결과표가 PARTIAL이면 리포트 완료 답변도 PARTIAL이고 누락 사유를 경고로 남긴다.",
+      "criterion": "직전 결과표가 PARTIAL이면 실제 리포트 워커를 거친 완료 답변도 PARTIAL이고 누락 사유를 경고로 남긴다.",
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_partial_table_keeps_partial_in_final_answer",
       "status": "PASS",
       "details": []
@@ -429,6 +429,60 @@
       "category": "기간 표시",
       "criterion": "국가·품목·종류가 같은 후보는 선택지에 조회 기간을 붙여 구별한다.",
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_same_looking_tables_show_their_period",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R37",
+      "group": "이전 턴 결과",
+      "category": "표 종류 판별",
+      "criterion": "기존 채팅 API 표(intent는 항상 STATISTICS)는 열(rank → share_pct → month 순)로 종류를 정한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_chat_table_kind_comes_from_its_columns",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R38",
+      "group": "이전 턴 결과",
+      "category": "종류 모름",
+      "criterion": "기존 채팅 API 표의 종류를 판별할 수 없으면 작업 실패 대신 사유를 안내한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_chat_table_of_unknown_kind_ends_with_guidance",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R39",
+      "group": "이전 턴 결과",
+      "category": "수입 표 제외",
+      "criterion": "수입 표는 후보에서 빼고, 수출 표가 하나면 바로 확인, 수입 표만 있으면 수출 전용 안내다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_import_tables_are_not_offered_for_a_report",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R40",
+      "group": "이전 턴 결과",
+      "category": "품목 표시",
+      "criterion": "기존 채팅 API의 다중 품목 표는 선택지에 표마다 그 품목을 표시한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_multi_item_tables_are_labelled_by_their_own_item",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R41",
+      "group": "이전 턴 결과",
+      "category": "긴 누락 사유",
+      "criterion": "누락 사유가 1KB를 넘어도 완성된 리포트를 실패로 끝내지 않고 요약한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_partial_table_with_long_reasons_still_completes",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R42",
+      "group": "이전 턴 결과",
+      "category": "조건 상한",
+      "criterion": "에이전트 조건 상한(국가 20개·품목 5개)을 넘는 기존 표는 작업 실패 대신 안내로 끝난다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_table_beyond_agent_limits_ends_with_guidance",
       "status": "PASS",
       "details": []
     }

@@ -106,9 +106,14 @@ def submit(store,state,task,step):
         content=dict(record.get('content_json') or {})
         if approved.get('source_tables'):
             content.update(source_results=approved['source_results'],source_tables=approved['source_tables'])
+        # 리포트 워커는 READY 저장 때 content_json을 완성 문서로 바꾼다. 완료 후 답변의 부분 결과(PARTIAL) 판단에 쓸
+        # 승인 사본의 누락 사유는 바뀌지 않는 conditions_json에 둔다(직전 턴 결과표는 depends_on 밖이라 따로 전파되지 않는다).
+        from backend.app.agents.state import summarize_limitations
+        limits=summarize_limitations([l for r in approved.get('source_results') or []
+                                      if r.get('completeness')=='PARTIAL' for l in r.get('limitations') or []])
         store.c.execute(update(table).where(table.c.report_id==rid).values(content_json=clean(content),conditions_json=clean({
             **record['conditions_json'],'chat_input_fingerprint':identity,'chat_approval':request.model_dump(mode='json'),
-            'chat_sources':source_ids(state,task)})))
+            'chat_sources':source_ids(state,task),'chat_limitations':limits})))
     return ReportWait(step_id=step.step_id,report_id=str(rid),started_at=now())
 
 

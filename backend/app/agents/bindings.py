@@ -1,5 +1,6 @@
 """D-90/95: select downstream inputs from owned, unexpired result rows."""
 import re
+from pydantic import ValidationError
 from sqlalchemy import select
 from backend.app.agents.conditions import ask
 from backend.app.agents.state import Conditions, HsProduct, MAX_COUNTRIES, MAX_HS_ITEMS, ToolResult
@@ -12,6 +13,7 @@ TABLE_KINDS = {'TREND': '월별 추이', 'RANKING': '순위', 'SHARE': '비중',
 NO_PREVIOUS_TABLE = '직전 답변에 리포트로 만들 결과표가 없습니다. 조회와 리포트 생성을 한 질문에서 요청해 주세요.'
 EXPIRED_PREVIOUS_TABLE = '직전 결과표의 보관 기간이 지났습니다. 같은 조건으로 다시 조회한 뒤 리포트를 요청해 주세요.'
 UNKNOWN_PREVIOUS_TABLE = '직전 결과표의 종류를 확인할 수 없어 리포트로 만들 수 없습니다. 같은 조건으로 다시 조회한 뒤 리포트를 요청해 주세요.'
+EXPORT_ONLY = '이 분석은 수출만 지원합니다.'   # conditions.py의 수입 거부와 같은 문구
 
 
 def previous_tables(store, state):
@@ -22,32 +24,37 @@ def previous_tables(store, state):
         table.c.message_id < int(state.input.job_id)).order_by(table.c.message_id.desc()).limit(1))
     answer = ((row or {}).get('result_json') or {}).get('answer') or {}
     conditions = {t.get('task_id'): t.get('conditions') or {} for t in answer.get('tasks') or []}
-    # 기존 채팅 API 답변은 tasks 없이 answer.conditions 하나와 intent만 남긴다.
-    return [{'result_id': t['result_id'], 'task_id': t.get('task_id'),
-             'conditions': conditions.get(t.get('task_id')) or answer.get('conditions') or {},
-             'kind': table_kind(t.get('meta'), answer.get('intent'), t.get('columns')), 'expired': bool(t.get('expired'))}
+    # 기존 채팅 API(api/chat.py) 답변은 tasks 없이 answer.conditions 하나만 남기고, 표 종류와 관계없이 intent='STATISTICS'다.
+    legacy = not answer.get('tasks')
+    return [{'result_id': t['result_id'], 'task_id': t.get('task_id'), 'legacy': legacy,
+             'conditions': (answer.get('conditions') if legacy else conditions.get(t.get('task_id'))) or {},
+             'kind': table_kind(t.get('meta'), t.get('columns')) if legacy else (t.get('meta') or {}).get('kind'),
+             'expired': bool(t.get('expired'))}
             for t in answer.get('tables') or [] if t.get('result_id')]
 
 
-# 기존 채팅 API(api/chat.py)의 답변 intent → 표 종류와 그 표에 반드시 있는 열.
-LEGACY_KINDS = {'STATISTICS': ('TREND', 'month'), 'RANKING': ('RANKING', 'rank'), 'MARKET_SHARE': ('SHARE', 'share_pct')}
+# 기존 채팅 API 표의 종류를 정하는 열. 순위표에도 share_pct가 있으므로 rank를 먼저 본다.
+LEGACY_KINDS = (('rank', 'RANKING'), ('share_pct', 'SHARE'), ('month', 'TREND'))
 
 
-def table_kind(meta, intent, columns):
-    """표 종류. 에이전트 결과는 meta.kind, 기존 채팅 API 결과는 답변 intent와 표 열로 복원한다. 모르면 None."""
+def table_kind(meta, columns):
+    """기존 채팅 API 표의 종류. meta.kind가 없으면 표 열 구성으로 복원한다. 모르면 None."""
     if kind := (meta or {}).get('kind'): return kind
-    kind, column = LEGACY_KINDS.get(intent, (None, None))
-    return kind if kind and column in {c.get('key') for c in columns or []} else None
+    keys = {c.get('key') for c in columns or []}
+    return next((kind for column, kind in LEGACY_KINDS if column in keys), None)
 
 
-def _usable(store, state, table):
-    """답변 저장 뒤 만료됐거나 다른 사용자 것인 결과표는 후보에서 뺀다."""
-    if table['expired']: return False
-    try: read_snapshot(store, state.input.user_id, table['result_id'], 'RESULT')
+def _load(store, state, table):
+    """후보 결과표의 현재 스냅샷(소유권·만료 확인). 쓸 수 없으면 None.
+    기존 채팅 API 표는 비교 기간 등을 표에 저장하지 않고 답변에서 확정했으므로 답변 조건으로 채운다. 기간·품목·국가는 표 그대로다."""
+    if table['expired']: return None
+    try: snapshot = read_snapshot(store, state.input.user_id, table['result_id'], 'RESULT')
     except ApiError as exc:
-        if exc.code in ('RESULT_EXPIRED', 'NOT_FOUND'): return False
+        if exc.code in ('RESULT_EXPIRED', 'NOT_FOUND'): return None
         raise
-    return True
+    conditions = snapshot['conditions']
+    if table['legacy']: conditions = {**table['conditions'], **conditions}
+    return {**snapshot, 'conditions': conditions, 'meta': {**(snapshot.get('meta') or {}), 'kind': table['kind']}}
 
 
 def _names(values, limit=2):
@@ -89,28 +96,33 @@ def previous_result(store, state, task):
     tables = previous_tables(store, state)
     if chosen is None:
         if not tables: raise SlotRepair(NO_PREVIOUS_TABLE)
-        alive = [t for t in tables if _usable(store, state, t)]
-        if not alive: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
-        usable = [t for t in alive if t['kind']]
-        if not usable: raise SlotRepair(UNKNOWN_PREVIOUS_TABLE)
+        loaded = [(t, s) for t in tables if (s := _load(store, state, t))]
+        if not loaded: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
+        known = [(t, s) for t, s in loaded if t['kind']]
+        if not known: raise SlotRepair(UNKNOWN_PREVIOUS_TABLE)
+        # 리포트는 수출만 지원한다(D-81). 수출입을 함께 조회한 답변의 수입 표는 후보에서 뺀다.
+        usable = [(t, s) for t, s in known if s['conditions'].get('trade_flow') != 'IMPORT']
+        if not usable: raise SlotRepair(EXPORT_ONLY)
         if len(usable) > 1:
-            shown = usable[:PREVIOUS_TABLE_CHOICES]
+            shown = [{**t, 'conditions': s['conditions']} for t, s in usable[:PREVIOUS_TABLE_CHOICES]]
             ask(state, task, key, 'REPORT_TABLE', '어느 결과표로 리포트를 만들까요?',
                 [(f'T{i}', label, {'previous_result_id': t['result_id']})
                  for i, (t, label) in enumerate(zip(shown, _table_labels(store, shown)), 1)])
             return None
-        chosen = usable[0]['result_id']
+        chosen = usable[0][0]['result_id']
         task.resolved[key] = {'previous_result_id': chosen}
-    elif chosen not in {t['result_id'] for t in tables}:
+    table = next((t for t in tables if t['result_id'] == chosen), None)
+    if table is None:
         raise SlotRepair('선택한 결과표가 직전 답변에 없습니다. 새 질문으로 다시 요청해 주세요.')
-    try:
-        snapshot = read_snapshot(store, state.input.user_id, chosen, 'RESULT')
-    except ApiError as exc:
-        if exc.code == 'RESULT_EXPIRED': raise SlotRepair(EXPIRED_PREVIOUS_TABLE) from exc
-        raise
-    kind = next(t['kind'] for t in tables if t['result_id'] == chosen)
-    if not kind: raise SlotRepair(UNKNOWN_PREVIOUS_TABLE)
-    meta = snapshot['meta'] = {**(snapshot.get('meta') or {}), 'kind': kind}
+    snapshot = _load(store, state, table)
+    if snapshot is None: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
+    if not table['kind']: raise SlotRepair(UNKNOWN_PREVIOUS_TABLE)
+    try: stored_conditions(snapshot)
+    except ValidationError as exc:
+        # 기존 채팅 API는 국가 250개·품목 100개까지 허용했다. 에이전트 조건 상한(D-24)을 넘는 표는 작업 실패 대신 안내한다.
+        raise SlotRepair(f'직전 결과표의 조건(국가 {MAX_COUNTRIES}개·품목 {MAX_HS_ITEMS}개 이내)을 리포트로 옮길 수 없습니다. '
+                         '범위를 줄여 다시 조회한 뒤 리포트를 요청해 주세요.') from exc
+    meta = snapshot['meta']
     return snapshot, {'result_id': chosen, 'version': meta.get('input_fingerprint'),
                       'completeness': meta.get('completeness'), 'limitations': meta.get('limitations') or []}
 
