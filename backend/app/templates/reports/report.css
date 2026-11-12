@@ -95,6 +95,7 @@ tr.other td { color: var(--sub); }
 .toc .row { display: flex; align-items: baseline; padding: 3mm 0; border-bottom: 1px solid var(--line); font-size: 11pt; font-weight: 700; }
 .toc .row .n { width: 13mm; color: var(--accent); font-size: 10.5pt; }
 .toc .row .t { flex: 1; }
+.toc [data-toc-page] > :last-child { min-width: 3ch; text-align: right; }
 .notes { color: var(--sub); font-size: 7.8pt; margin-top: 2mm; }
 .notes p { margin: .4mm 0; }
 

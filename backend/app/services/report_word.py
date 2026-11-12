@@ -3,6 +3,7 @@ from io import BytesIO
 from pathlib import Path
 
 from docx.enum.section import WD_SECTION
+from docx.enum.style import WD_STYLE_TYPE
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.oxml import OxmlElement
@@ -17,8 +18,8 @@ LAYOUT = Path(__file__).resolve().parents[1] / 'templates/reports/word_layout.js
 EDGES = ('top', 'left', 'bottom', 'right')
 
 
-def element(name, **attributes):
-    node = OxmlElement('w:' + name)
+def element(tag, **attributes):
+    node = OxmlElement('w:' + tag)
     for key, value in attributes.items():
         node.set(qn('w:' + key), str(value))
     return node
@@ -40,9 +41,28 @@ def paragraph(parent, line):
     return p
 
 
+def field_begin(p, instruction):
+    begin = p.add_run()
+    begin._r.append(element('fldChar', fldCharType='begin'))
+    code = element('instrText')
+    code.set(qn('xml:space'), 'preserve')
+    code.text = f' {instruction} '
+    command = p.add_run()
+    command._r.append(code)
+    p.add_run()._r.append(element('fldChar', fldCharType='separate'))
+
+
+def field_end(p):
+    p.add_run()._r.append(element('fldChar', fldCharType='end'))
+
+
 def write_text(p, block):
     p.alignment = {'right': WD_ALIGN_PARAGRAPH.RIGHT, 'center': WD_ALIGN_PARAGRAPH.CENTER}.get(
         block['align'], WD_ALIGN_PARAGRAPH.LEFT)
+    if 'toc_style' in block:
+        p.style = block['toc_style']
+        page = block['page']
+        p._p.append(element('bookmarkStart', id=page, name=f'ReportPage{page}'))
     for item in block['runs']:
         if not item['text']:
             continue
@@ -59,6 +79,8 @@ def write_text(p, block):
             link.set(qn('r:id'), p.part.relate_to(href, RT.HYPERLINK, is_external=True))
             link.append(run._r)
             p._p.append(link)
+    if 'toc_style' in block:
+        p._p.append(element('bookmarkEnd', id=page))
     if block.get('tag') in ('H1', 'H2', 'H3'):
         p._p.get_or_add_pPr().append(element('outlineLvl', val=int(block['tag'][1]) - 1))
 
@@ -124,9 +146,37 @@ def data_table(parent, block):
             position = end
 
 
+def write_contents(parent, block):
+    # A native TOC makes Word paginate before refreshing its nested PAGEREF fields.
+    # One field per print-template fragment keeps long contents lists independently updatable.
+    for i, row in enumerate(block['rows']):
+        p = paragraph(parent, row['line'])
+        fmt = p.paragraph_format
+        fmt.space_before = points(row['padding'][0])
+        fmt.space_after = points(row['padding'][2])
+        fmt.tab_stops.add_tab_stop(Mm(13))
+        fmt.tab_stops.add_tab_stop(points(block['width']), WD_TAB_ALIGNMENT.RIGHT)
+        border = element('pBdr')
+        border.append(element('bottom', val='single', sz=4, space=2, color='D6DDE9'))
+        p._p.get_or_add_pPr().append(border)
+        if i == 0:
+            field_begin(p, f'TOC \\t "{block["toc_style"]},1" \\h')
+        write_text(p, {'runs': row['number'], 'align': 'left'})
+        p.add_run().add_tab()
+        write_text(p, {'runs': row['title'], 'align': 'left'})
+        p.add_run().add_tab()
+        field_begin(p, f"PAGEREF ReportPage{row['page']} \\h")
+        p.add_run(str(row['page']))
+        field_end(p)
+    if block['rows']:
+        field_end(p)
+
+
 def write_block(parent, block, chart, *, inside_cell=False):
     kind = block['kind']
-    if kind == 'table':
+    if kind == 'toc':
+        write_contents(parent, block)
+    elif kind == 'table':
         data_table(parent, block)
     elif kind == 'chart':
         p = paragraph(parent, 1.4)
@@ -208,8 +258,23 @@ def page_caption(container, left, right='', *, footer=False, cover=False):
 
 
 def append_print_template(doc, saved, settings):
+    settings_xml = doc.settings.element
+    update = settings_xml.find(qn('w:updateFields'))
+    if update is None:
+        update = element('updateFields')
+        settings_xml.append(update)
+    update.set(qn('w:val'), 'true')
     with print_page(saved['report_type'], saved['context'], settings, scale=2) as page:
         pages = page.evaluate(LAYOUT.read_text(encoding='utf-8'))
+        headings = {b['page']: b for sheet in pages for b in sheet['children'] if 'page' in b}
+        for sheet in pages:
+            for toc in (b for b in sheet['children'] if b['kind'] == 'toc' and b['rows']):
+                rows = toc['rows']
+                style = doc.styles.add_style(f"Report Heading {rows[0]['page']}", WD_STYLE_TYPE.PARAGRAPH)
+                style.base_style = doc.styles['Normal']
+                toc['toc_style'] = style.name
+                for row in rows:
+                    headings[row['page']]['toc_style'] = style.name
         charts = page.locator('svg.chart')
         def chart(index):
             return charts.nth(index).screenshot(animations='disabled', timeout=30000)

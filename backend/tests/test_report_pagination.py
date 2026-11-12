@@ -89,6 +89,27 @@ class ContentsPaginationTest(unittest.TestCase):
             self.assertEqual(rt.render(rt.KINDS[kind], ctx), html)
 
     @unittest.skipUnless(os.environ.get('RUN_REPORT_PDF_TESTS') == '1', 'Requires Playwright Chromium')
+    def test_word_contents_references_headings_for_long_promising_table(self):
+        from docx import Document
+        from docx.oxml.ns import qn
+        from backend.app.api.config import Settings
+        from backend.app.services.report_word import append_print_template
+
+        doc = Document()
+        append_print_template(doc, {'report_type': 'RPT_ON_DEMAND', 'context': promising_context(25)}, Settings())
+        fields = [text.strip() for text in doc.element.xpath('.//w:instrText/text()')]
+        refs = [f.split()[1] for f in fields if f.startswith('PAGEREF ')]
+        bookmarks = doc.element.xpath('.//w:bookmarkStart/@w:name')
+        self.assertTrue(any(f.startswith('TOC ') for f in fields))
+        self.assertEqual(len(refs), 6)
+        self.assertEqual(len(set(refs)), len(refs))
+        for ref in refs:
+            self.assertIn(ref, bookmarks)
+        source_heading = next(p for p in doc.paragraphs if '데이터 기준 · 출처' in p.text and p._p.xpath('w:bookmarkStart'))
+        self.assertIn(refs[-1], source_heading._p.xpath('w:bookmarkStart/@w:name'))
+        self.assertEqual(doc.settings.element.find(qn('w:updateFields')).get(qn('w:val')), 'true')
+
+    @unittest.skipUnless(os.environ.get('RUN_REPORT_PDF_TESTS') == '1', 'Requires Playwright Chromium')
     def test_print_bounds_toc_destinations_and_pdf_page_count(self):
         from playwright.sync_api import sync_playwright
         from pypdf import PdfReader

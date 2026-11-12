@@ -52,6 +52,12 @@
   let chartIndex = 0
   function block(el) {
     const data = box(el), children = Array.from(el.children)
+    if (el.matches('.toc')) {
+      return { ...data, kind: 'toc', rows: children.map(row => ({
+        ...box(row), number: runs(row.querySelector('.n')), title: runs(row.querySelector('.t')),
+        page: Number(row.dataset.tocPage)
+      })) }
+    }
     if (el.tagName.toLowerCase() === 'svg') return { ...data, kind: 'chart', index: chartIndex++ }
     if (el.tagName === 'TABLE') {
       const rows = Array.from(el.rows, row => Array.from(row.cells, cell => ({
@@ -74,12 +80,14 @@
     }
     return { ...data, kind: 'text', runs: runs(el), tag: el.tagName }
   }
-  return Array.from(document.querySelectorAll('section.page'), el => {
+  return Array.from(document.querySelectorAll('section.page'), (el, index) => {
     const header = el.querySelector('.hdr, .top'), footer = el.querySelector('.ftr')
     const standard = header.classList.contains('hdr')
+    const children = Array.from(el.children).filter(child => child !== header && child !== footer).map(block)
+    const heading = children.find(child => child.tag === 'H2')
+    if (heading) heading.page = index + 1
     return { ...rect(el), header: runs(standard ? header.firstElementChild : header),
       headerRight: standard ? header.lastElementChild.innerText : '',
-      footer: footer.firstElementChild.innerText, children: Array.from(el.children)
-        .filter(child => child !== header && child !== footer).map(block) }
+      footer: footer.firstElementChild.innerText, children }
   })
 }

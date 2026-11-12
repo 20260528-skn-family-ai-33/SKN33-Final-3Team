@@ -44,7 +44,7 @@
 {% if b.key == 'toc' %}
 <div class="toc">
   {% for row in toc[b.start:b.end] %}
-  <div class="row"><span class="n">{{ '%02d' % (b.start + loop.index) }}</span><span class="t">{{ row.title }}</span><span>{{ row.page }}</span></div>
+  <div class="row" data-toc-page="{{ row.page }}"><span class="n">{{ '%02d' % (b.start + loop.index) }}</span><span class="t">{{ row.title }}</span><span>{{ row.page }}</span></div>
   {% endfor %}
 </div>
 {% elif b.key == 'info' %}
