@@ -389,9 +389,12 @@ def _split_year_comparisons(slots, text):
     if re.search(r'(?<!\d)\d{2,4}\s*년?\s*(?:~|부터|-(?=\s*\d{2,4}\s*년))\s*\d{2,4}(?!\d)', text):
         return
     # "2023년"·"23년" 모두 그 연도다. 두 자리는 뒤에 '년'이 있을 때만 연도로 본다.
-    mentions = {year: re.search(rf'(?<!\d)(?:{year}|{year % 100:02d}(?=\s*년))(?!\d)', text)
-                for year in range(compare.start.year, compare.end.year + 1)}
-    if not all(mentions.values()):
+    year = lambda y: rf'(?<!\d)(?:{y}|{y % 100:02d}(?=\s*년))(?!\d)'
+    if re.search(year(compare.end.year) + r'\s*년?\s*(?:사이|까지)', text):
+        return  # "2021년과 2024년 사이"는 이어진 기간이다.
+    mentions = {y: m for y in range(compare.start.year, compare.end.year + 1) if (m := re.search(year(y), text))}
+    # 양 끝 연도를 따로 적었으면 실제로 적은 연도만 비교한다("2021년과 2024년 각각" → 2022·2023년은 넣지 않는다).
+    if compare.start.year not in mentions or compare.end.year not in mentions:
         return
     periods = [Period(start=date(y, 1, 1), end=date(y, 12, 1))
                for y in sorted(mentions, key=lambda y: mentions[y].start())]

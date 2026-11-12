@@ -114,6 +114,12 @@ class CompareYearsSplitTest(unittest.TestCase):
         slots = self.slots('2025년에서 2024년과 2023년을 비교해줘', {'start': '2023-01-01', 'end': '2024-12-01'})
         self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]), (2024, [2023]))
 
+    def test_listed_years_with_gap_keep_only_named_years(self):
+        slots = self.slots('2025년 일본 수출을 2021년과 2024년 각각과 비교해 줘', {'start': '2021-01-01', 'end': '2024-12-01'})
+        self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]), (2021, [2024]))
+        slots = self.slots('2025년 일본 수출을 2021년과 2024년 사이 합계와 비교', {'start': '2021-01-01', 'end': '2024-12-01'})
+        self.assertIsNone(slots.extra_compare_periods)
+
     def test_continuous_range_is_kept(self):
         slots = self.slots('2025년 일본 수출을 2023~2024년 합계와 비교해줘', {'start': '2023-01-01', 'end': '2024-12-01'})
         self.assertEqual(slots.compare_period.end.year, 2024)
