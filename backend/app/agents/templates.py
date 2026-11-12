@@ -208,9 +208,10 @@ def run_template(store, uid, task, step, timeout=30):
             joined=joined.join(dimension,(table.c.hs6_code==dimension.c.hs_code)&(table.c.hs_ver==dimension.c.hs_ver))
         stmt=(select(code,dimension.c.name_ko.label('name'),amount)
               .select_from(joined)
-              .where(country.c.country_role=='COUNTRY',table.c.hs_ver=='HS2022',
+              .where(country.c.country_role=='COUNTRY',
                      table.c.trade_month.between(conditions.period.start,conditions.period.end)))
-        if common['hs']: stmt=stmt.where(trade.hs_filter(table,common['hs']))
+        # 품목이 있으면 품목마다 확정한 판본으로 거른다(HS2017 품목도 조회된다). 없으면 기본 판본 하나만 읽는다.
+        stmt=stmt.where(trade.hs_filter(table,common['hs']) if common['hs'] else table.c.hs_ver=='HS2022')
         if common['countries']: stmt=stmt.where(table.c.country_code.in_(common['countries']))
         stmt=(stmt.group_by(code,dimension.c.name_ko)
               .order_by(amount.desc(),code).limit(step.args['top']))

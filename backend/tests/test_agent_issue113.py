@@ -1,5 +1,6 @@
 """이슈 113: 상대국 주어 수출입 방향, 여러 비교 기간을 한 표·차트로."""
 import unittest
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -79,6 +80,11 @@ class SimpleRankingTableTest(unittest.TestCase):
         self.assertNotIn('amount_only', self.ranking_args('미국 수출 품목 순위와 전년 대비 증감률'))
         self.assertNotIn('amount_only', self.ranking_args('미국 수출 품목 순위 변화', comparison_requested=True))
 
+    def test_ranking_group_asked_later_still_uses_simple_table(self):
+        output = PlannerOutput.model_validate({'tasks': [{'intent': 'RANKING', 'question': '수출 순위', 'slots': {}}]})
+        plan_, _ = build_plan(output)
+        self.assertTrue(plan_.tasks[0].steps[1].args.get('amount_only'))
+
     def test_two_trade_tables_accept_unqualified_not_in_subquery(self):
         from backend.app.agents.sql import validate_sql
         from backend.app.agents.state import SqlDraft
@@ -156,6 +162,21 @@ class ExtraCompareTrendTest(unittest.TestCase):
         self.assertEqual([c['label'] for c in columns], ['순위', '국가', 'HS 코드', '품목', '수출액'])
         self.assertEqual(analysis.rows[0]['country_name'], '미국')
         self.assertNotIn('country_code', analysis.rows[0])
+
+    def test_simple_ranking_uses_item_edition(self):
+        # 품목을 HS2017로 확정하면 그 판본 행만 읽는다. 판본을 HS2022로 고정하면 결과가 빈다.
+        hs = self.meta.tables['hs_code']
+        row = dict(self.store.c.execute(hs.select().where(hs.c.hs_code == '330499')).mappings().first())
+        if hs.c.depth.computed is not None:
+            row.pop('depth')
+        self.store.c.execute(hs.insert().values({**row, 'hs_ver': 'HS2017'}))
+        self.store.c.execute(self.meta.tables['export_summary'].insert().values(
+            trade_month=date(2025, 1, 1), country_code='US', hs6_code='330499', hs_ver='HS2017', amount_usd=7))
+        conditions = Conditions(period={'start': '2025-01-01', 'end': '2025-03-01'}, ranking_group='COUNTRY',
+                                hs_items=[{'hs_code': '330499', 'hs_ver': 'HS2017'}])
+        analysis = run_template(self.store, 1, SimpleNamespace(conditions=conditions),
+                                SimpleNamespace(args={'template': 'RANKING', 'top': 10, 'amount_only': True}))
+        self.assertEqual([(r['country_code'], r['export_amount_usd']) for r in analysis.rows], [('US', 7)])
 
     def test_trend_puts_each_compare_period_side_by_side(self):
         conditions = Conditions(period={'start': '2025-01-01', 'end': '2025-03-01'}, country_codes=['US'],

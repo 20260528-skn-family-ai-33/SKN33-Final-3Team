@@ -607,8 +607,8 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
                     args['top'] = item.slots.ranking_limit or 10
                     # 단순 금액 순위는 개수를 말하지 않아도("대표적으로 수출하는 품목") 코드·명칭·순위·금액만 보인다.
                     # 증감·비중·순위 변화를 물으면 순위 화면 표(증감률·이상치 열 포함)를 쓴다.
-                    if (item.slots.ranking_group in ('COUNTRY','HS6') and not item.slots.comparison_requested
-                            and not _RANKING_DETAIL.search(item.question)):
+                    # 순위 기준(국가별·품목별)은 되묻기로 나중에 정해질 수 있어 여기서 보지 않는다. 템플릿이 확정 기준을 확인한다.
+                    if not item.slots.comparison_requested and not _RANKING_DETAIL.search(item.question):
                         args['amount_only'] = True
             elif name == 'ml': args = {'top': item.slots.ranking_limit or DEFAULT_MARKET_TOP}
             elif name == 'news': args = {'limit': 5}
