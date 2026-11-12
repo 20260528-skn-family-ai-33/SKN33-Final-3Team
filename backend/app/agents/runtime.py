@@ -453,10 +453,11 @@ class Services:
             countries,products=_names(store)
         def describe(c):
             if not c:return {}
-            from backend.app.agents.templates import api_conditions
+            from backend.app.agents.templates import api_conditions, extra_periods
             display=c.model_dump(mode='json')
             public=api_conditions(c)
             display.update({key:public[key] for key in ('period','compare_period')})
+            display['extra_compare_periods']=extra_periods(c)
             return {**display,'countries':[{'code':k,'name':countries.get(k,k)} for k in c.country_codes],
                     'products':[{'code':p.hs_code,'name':products.get((p.hs_code,p.hs_ver),p.hs_code)} for p in c.hs_items]}
         articles = numbered_articles(state)

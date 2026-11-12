@@ -23,7 +23,7 @@ class Analysis:
 
 
 def api_conditions(conditions):
-    output = conditions.model_dump(mode='json', exclude={'article_period', 'ranking_group', 'share_basis'})
+    output = conditions.model_dump(mode='json', exclude={'article_period', 'ranking_group', 'share_basis', 'extra_compare_periods'})
     for key in ('period', 'compare_period'):
         value = getattr(conditions, key)
         output[key] = period(value.start, value.end) if value else None
@@ -33,6 +33,11 @@ def api_conditions(conditions):
                        and compare.end==shift_month(p.end,-12) else 'CUSTOM')
     output['metric']='AMOUNT'
     return output
+
+
+def extra_periods(conditions):
+    """두 번째 이후 비교 기간의 공개 형식. 기존 API 조건(api_conditions)과 따로 digest·meta에만 싣는다."""
+    return [period(p.start, p.end) for p in conditions.extra_compare_periods]
 
 
 def months(window):
@@ -96,6 +101,7 @@ def run_template(store, uid, task, step, timeout=30):
         field = 'export_amount_usd' if conditions.trade_flow == 'EXPORT' else 'import_amount_usd'
         verified = set(trade.verified_months(store, source))
         requested, compared = months(conditions.period), months(conditions.compare_period)
+        extras = [months(p) for p in conditions.extra_compare_periods]
         multiple=len(conditions.hs_items or [None])*len(conditions.country_codes or [None])>1
         def collect(window):
             values=defaultdict(lambda:defaultdict(Decimal))
@@ -111,6 +117,7 @@ def run_template(store, uid, task, step, timeout=30):
                     values[code,row.get('country_code')][row['trade_month']]+=row['amount_usd']
             return values
         grouped,comparison=(collect(requested),collect(compared)) if multiple else ({},{})
+        extra_grouped=[collect(window) for window in extras] if multiple else []
         targets = []
         for hs, country in product(conditions.hs_items or [None], conditions.country_codes or [None]):
             guard()
@@ -137,6 +144,21 @@ def run_template(store, uid, task, step, timeout=30):
                 return total, subtotal / len(observed) if observed else None, len(observed), subtotal
             total, avg, count, subtotal = stats(values)
             compare_total, compare_avg, compare_count, compare_subtotal = stats(old)
+            # 추가 비교 기간 n(2부터)마다 첫 비교 기간과 같은 열을 compare{n}_·change{n}_pct로 둔다(한 표에 나란히).
+            extra_fields, extra_months = {}, []
+            for n, (window, extra) in enumerate(zip(extras, conditions.extra_compare_periods), start=2):
+                guard()
+                earlier = extra_grouped[n-2].get(target, {}) if multiple else {
+                    r['trade_month']: r['amount_usd'] for r in trade.aggregate(store, source, extra.start, extra.end,
+                                                                              scoped['hs'], scoped['countries'], 'MONTH')}
+                data = [earlier.get(m, Decimal(0)) if m in verified else None for m in window]
+                e_total, e_avg, e_count, e_subtotal = stats(data)
+                extra_fields.update({f'compare{n}_total_usd': e_total, f'change{n}_pct': percentage(total, e_total),
+                    f'compare{n}_monthly_avg_usd': e_avg, f'compare{n}_verified_months': e_count,
+                    f'compare{n}_requested_months': len(data), f'compare{n}_verified_subtotal_usd': e_subtotal})
+                extra_months.append((n, window, data))
+                if e_count != len(data):
+                    limitations.append('기간 내 미집계 월이 있습니다.')
             detail = {'hs_code': hs.hs_code if hs else None, 'hs_ver': hs.hs_ver if hs else None,
                 'name': product_names.get((hs.hs_code, hs.hs_ver), hs.hs_code) if hs else '전체 품목',
                 'country_code': country, 'country_name': country_names.get(country, country) if country else '전체 국가',
@@ -145,9 +167,13 @@ def run_template(store, uid, task, step, timeout=30):
                 'requested_months': len(values), 'monthly_avg_usd': avg, 'compare_monthly_avg_usd': compare_avg,
                 'compare_verified_months': compare_count, 'compare_requested_months': len(old),
                 'verified_subtotal_usd': subtotal, 'compare_verified_subtotal_usd': compare_subtotal,
+                **extra_fields,
                 'monthly': [{'month': m.strftime('%Y-%m'), 'amount_usd': value,
                     'compare_month': compared[i].strftime('%Y-%m') if len(old) == len(values) else None,
-                    'compare_amount_usd': old[i] if len(old) == len(values) else None}
+                    'compare_amount_usd': old[i] if len(old) == len(values) else None,
+                    **{k: v for n, window, data in extra_months for k, v in (
+                        (f'compare{n}_month', window[i].strftime('%Y-%m') if len(data) == len(values) else None),
+                        (f'compare{n}_amount_usd', data[i] if len(data) == len(values) else None))}}
                     for i, (m, value) in enumerate(zip(requested, values))]}
             targets.append(detail)
             if count != len(values) or (old and compare_count != len(old)):
@@ -159,12 +185,14 @@ def run_template(store, uid, task, step, timeout=30):
         meta = trade.metadata(store, conditions.period.start, conditions.period.end)
         meta.update(kind='TREND', targets=[{k: v for k, v in t.items() if k != 'monthly'} for t in kept],
                     truncated_targets=len(targets)-len(kept), compare_period=public['compare_period'])
+        if conditions.extra_compare_periods: meta['extra_compare_periods'] = extra_periods(conditions)
         if len(kept) < len(targets): limitations.append(f'표에는 금액 상위 {len(kept)}개 대상만 담았습니다.')
         selected = kept[:10]
         digest = {**_base('TREND', conditions, meta, len(rows)), 'compare_period': public['compare_period'],
                   'targets': [{**t, 'monthly': t['monthly'][-(MAX_DIGEST_ROWS // len(selected)):]}
                               for t in selected],
                   'truncated': len(selected) < len(targets) or len(requested)*len(selected) > MAX_DIGEST_ROWS}
+        if conditions.extra_compare_periods: digest['extra_compare_periods'] = extra_periods(conditions)
     elif simple_country_rank:
         flow=conditions.trade_flow
         source='export_summary' if flow=='EXPORT' else 'import_summary'

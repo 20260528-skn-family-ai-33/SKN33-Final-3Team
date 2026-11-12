@@ -14,7 +14,7 @@ from backend.app.agents.verify_claims import (
     ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
     change_phrase_end, COMPARISON, DOWN, UP, TOKEN, DATE, HISTORY_DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift,
 )
-from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, period
+from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, compare_key, period
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,7 @@ class ClaimCheck:
 
 def _source_supports(time: TimeClaim,source):
     windows=[p for k in ('period','compare_period','article_period') if (p:=period(source.get(k)))]
+    windows.extend(p for value in source.get('extra_compare_periods') or [] if (p:=period(value)))
     if source.get('anchor'): windows.append((source['anchor'][:7],source['anchor'][:7]))
     if time.years and not all(any(start[:4]<=year<=end[:4] for start,end in windows) for year in time.years): return False
     if time.months and not all(any(start<=month<=end for start,end in windows) for month in time.months): return False
@@ -102,7 +103,7 @@ def _level_period_matches(role, time, fact, source):
     if not prior:
         return False
     return role == 'COMPARE' or _windows_match(role, period(source.get('period')),
-                                                period(source.get('compare_period')))
+                                                compare_key(source, fact.path[-1])[1])
 
 
 def mismatch(claim:Claim,fact:Fact,source):
@@ -367,6 +368,7 @@ def snapshot_evidence(payload):
     conditions=payload.get('conditions') or {}
     meta=payload.get('meta') or {}
     scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
+    if meta.get('extra_compare_periods'): scope['extra_compare_periods']=meta['extra_compare_periods']
     if meta.get('kind')=='PREDICTION' and meta.get('anchor'):
         anchor=str(meta['anchor'])[:7]
         scope.update(kind='PREDICTION',anchor=anchor,period={'start':anchor,'end':anchor})

@@ -12,7 +12,7 @@ from sqlglot.optimizer.scope import traverse_scope
 
 from backend.app.agents.state import SqlDraft
 from backend.app.agents.digest import bounded, MAX_DIGEST_ROWS
-from backend.app.agents.templates import Analysis, api_conditions
+from backend.app.agents.templates import Analysis, api_conditions, extra_periods
 from backend.app.agents.state import ToolResult
 from backend.app.api.common import ApiError
 from sqlalchemy import inspect
@@ -44,7 +44,8 @@ country.country_role = 'COUNTRY'인 행만 쓰고, hs_ver는 conditions의 품�
 conditions에 국가·품목이 있으면 수출입 표의 country_code·hs*_code를 그 값 리터럴로 직접 거르고 다른 국가·품목은 읽지 않습니다.
 수출입 표의 hs_ver·trade_month 조건은 JOIN ON이 아니라 각 SELECT의 WHERE에 AND로 겁니다.
 기간은 trade_month를 conditions 기간(비교 기간 포함) 안의 날짜로 BETWEEN 또는 >=·< 로 거릅니다.
-기간과 비교 기간이 떨어져 있으면 월을 IN으로 나열하거나 각 기간 조건을 괄호 안에서 OR로 연결합니다. 두 기간 사이의 미요청 월은 포함하지 않습니다.
+비교 기간 값의 열 별칭은 compare_로 시작합니다(예: compare_amount_usd). extra_compare_periods가 있으면 비교 기간이 여럿이며
+extra_compare_periods의 k번째(1부터) 기간 열은 compare{k+1}_(첫 추가 기간은 compare2_), 조회 기간의 그 기간 대비 증감률은 change{k+1}_pct입니다. 기간과 비교 기간이 떨어져 있으면 월을 IN으로 나열하거나 각 기간 조건을 괄호 안에서 OR로 연결합니다. 두 기간 사이의 미요청 월은 포함하지 않습니다.
 여러 HS6 품목은 hs6_code IN (...)으로 거릅니다. HS4는 hs4_code 또는 hs6_code LIKE '확정HS4%'를 사용하며 HS6를 hs10_code와 동일시하지 않습니다.
 월별 출력은 DATE_FORMAT(trade_month, '%Y-%m')으로 YYYY-MM 문자열을 반환하고 같은 식으로 GROUP BY·ORDER BY합니다.
 사용자가 지정한 결과 열·순서·단위·날짜 형식을 지킵니다. 날짜 조건의 원본 trade_month와 표시용 월 문자열을 구분합니다.
@@ -451,7 +452,7 @@ def _check_conditions(query, conditions):
         raise ValueError('수출입 표를 확정한 국가 country_code로 거르세요.')
     if confirmed and 'hs' not in seen:
         raise ValueError('수출입 표를 확정한 HS 코드(hs*_code)로 거르세요.')
-    allowed_months = {n for p in (conditions.period, conditions.compare_period) if p
+    allowed_months = {n for p in (conditions.period, conditions.compare_period, *conditions.extra_compare_periods) if p
                       for n in range(_month_number(p.start), _month_number(p.end)+1)}
     for scope in traverse_scope(query):
         if not isinstance(scope.expression, exp.Select):
@@ -600,6 +601,8 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
     # 결과표 API의 공통 조건과 별도로, 확정된 비중 기준을 생성 입력과 근거에 보존한다.
     basis = {k: getattr(task.conditions, k) for k in ('share_basis', 'ranking_group') if getattr(task.conditions, k)}
     prompt_conditions = {**conditions, **basis}
+    if task.conditions.extra_compare_periods:
+        prompt_conditions['extra_compare_periods'] = extra_periods(task.conditions)
     product_share = basis.get('share_basis') == 'KOREA_TRADE_PARTNER' and basis.get('ranking_group') == 'HS6'
     timeout = float(settings.get('API_SQL_TIMEOUT_SECONDS', 20))
     query_timeout = float(settings.get('API_SQL_EXECUTION_SECONDS', 30))
@@ -630,7 +633,14 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
             'trade_flow': conditions['trade_flow'], 'unit': 'USD', 'source': '관세청',
             'latest_available_month': latest_month, 'rows_total': len(rows), 'truncated': len(rows)>MAX_DIGEST_ROWS,
             'columns': [{'key': col.key, 'unit': col.unit} for col in draft.columns],
-            'rows': rows[:MAX_DIGEST_ROWS], 'sql_summary': draft.summary, **basis})
+            'rows': rows[:MAX_DIGEST_ROWS], 'sql_summary': draft.summary, **basis,
+            # 검증은 compare_·compare{n}_ 열을 이 기간들로 대조한다(verify_evidence.compare_key).
+            **({'compare_period': {k: v[:7] for k, v in conditions['compare_period'].items()}}
+               if conditions.get('compare_period') else {}),
+            **({'extra_compare_periods': prompt_conditions['extra_compare_periods']}
+               if 'extra_compare_periods' in prompt_conditions else {})})
+        if 'extra_compare_periods' in prompt_conditions:
+            meta['extra_compare_periods'] = prompt_conditions['extra_compare_periods']
         return Analysis(rows, meta, ToolResult(status='OK', source='관세청', period=task.conditions.period,
                         digest=digest, checks=['읽기 전용 조회', '결과 열 검사']), conditions, [sql], columns)
     from openai import OpenAIError

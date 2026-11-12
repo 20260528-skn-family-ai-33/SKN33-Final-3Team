@@ -40,6 +40,21 @@ class Fact:
     stored_targets: frozenset[str]
 
 
+EXTRA_COMPARE_KEY=re.compile(r'compare([2-9])_(\w+)|change([2-9])_pct')
+
+
+def compare_key(source, key):
+    """(검사에 쓸 열 이름, 그 열의 비교 기간). 추가 비교 기간 열(compare2_total_usd·change2_pct)은 첫 비교 기간 열과
+    같은 이름으로 검사하고 기간만 extra_compare_periods의 해당 기간으로 바꾼다."""
+    compare=period(source.get('compare_period'))
+    match=EXTRA_COMPARE_KEY.fullmatch(key)
+    if not match: return key, compare
+    extras=source.get('extra_compare_periods') or []
+    n=int(match[1] or match[3])
+    if n-2>=len(extras) or not (window:=period(extras[n-2])): return key, compare
+    return ('compare_'+match[2] if match[1] else 'change_pct'), window
+
+
 def period(value):
     if not isinstance(value,dict): return None
     start,end=(str(value.get(k,''))[:7] for k in ('start','end'))
@@ -153,44 +168,46 @@ def build_facts(sources,catalog:NameCatalog):
                                       None, None, row_anchor or None, False, True, 12, 'FUTURE', row_anchor, stored))
                     continue
                 if not isinstance(value,(float,int,Decimal)) or isinstance(value,bool): continue
+                # 추가 비교 기간 열(compare2_·change2_pct)은 첫 비교 기간 열 이름(logic)으로 검사하고 기간(window)만 바꾼다.
+                logic,window=compare_key(source,key)
                 amount=Decimal(str(value))
                 if not amount.is_finite(): continue
                 column=columns.get(key,{})
                 unit=column.get('unit')
-                if key.endswith('_usd') or key=='exp_12m': unit='USD'
-                elif key.endswith('_pct'): unit='%'
-                elif key.endswith('_pp'): unit='%p'
-                elif key=='rank' or key.endswith('_rank'): unit='위'
+                if logic.endswith('_usd') or logic=='exp_12m': unit='USD'
+                elif logic.endswith('_pct'): unit='%'
+                elif logic.endswith('_pp'): unit='%p'
+                elif logic=='rank' or logic.endswith('_rank'): unit='위'
                 if not unit or (unit=='%p' and column.get('unit') not in (None,'','%p')): continue
-                descriptor=metric(key,column.get('label') or '',unit,source.get('trade_flow'))
+                descriptor=metric(logic,column.get('label') or '',unit,source.get('trade_flow'))
                 if unit=='%p' and month and not re.fullmatch(r'\d{4}-(?:0[1-9]|1[0-2])',month):
                     continue
-                fact_period=compare if key.startswith('compare_') else current
+                fact_period=window if logic.startswith('compare_') else current
                 fact_compare=None;fact_month=month;horizon=None;role=None
-                period_value=not month or key in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD'
-                if prediction and key in ('exp_12m','growth_pct'):
-                    fact_period=None;fact_month=None;horizon=12;role='PAST' if key=='exp_12m' else 'FUTURE'
-                elif key=='compare_amount_usd':
-                    fact_month=str(row.get('compare_month') or '')[:7] or None
-                    if not fact_month and month and current and compare and months_between(*current)==months_between(*compare):
-                        fact_month=shift(compare[0],months_between(current[0],month))
+                period_value=not month or logic in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD'
+                if prediction and logic in ('exp_12m','growth_pct'):
+                    fact_period=None;fact_month=None;horizon=12;role='PAST' if logic=='exp_12m' else 'FUTURE'
+                elif logic=='compare_amount_usd':
+                    fact_month=str(row.get(key.replace('amount_usd','month')) or '')[:7] or None
+                    if not fact_month and month and current and window and months_between(*current)==months_between(*window):
+                        fact_month=shift(window[0],months_between(current[0],month))
                     if not fact_month: continue
                     fact_period=(fact_month,fact_month)
                 elif month and (descriptor.family=='AMOUNT_CHANGE' or
                                 (unit=='%p' and descriptor.family=='SHARE_CHANGE' and descriptor.comparison=='PERIOD')):
                     fact_period=(month,month)
                     paired=None
-                    if current and compare and current[0]<=month<=current[1] and months_between(*current)==months_between(*compare):
-                        paired=shift(compare[0],months_between(current[0],month))
+                    if current and window and current[0]<=month<=current[1] and months_between(*current)==months_between(*window):
+                        paired=shift(window[0],months_between(current[0],month))
                     if unit=='%p' and row.get('compare_month') is not None:
                         # A row-level comparison month must agree with the saved windows, if both exist.
                         recorded=str(row['compare_month'])[:7]
-                        consistent=not (current and compare) or recorded==paired
+                        consistent=not (current and window) or recorded==paired
                         paired=recorded if consistent and re.fullmatch(r'\d{4}-(?:0[1-9]|1[0-2])',recorded) else None
                     if paired: fact_compare=(paired,paired)
-                elif key in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD':
+                elif logic in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD':
                     fact_month=None
-                    if descriptor.comparison=='PERIOD': fact_period=current;fact_compare=compare
+                    if descriptor.comparison=='PERIOD': fact_period=current;fact_compare=window
                 elif month: fact_period=(month,month)
                 if not fact_month and fact_period and fact_period[0]==fact_period[1]: fact_month=fact_period[0]
                 facts.append(Fact(index,path+(key,),descriptor,amount,unit,frozenset(identities),group,

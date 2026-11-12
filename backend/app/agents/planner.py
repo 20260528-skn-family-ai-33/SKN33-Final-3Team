@@ -1,7 +1,8 @@
 """Structured planning and deterministic tool dependencies (§11.1, D-90/95)."""
 import re
+from datetime import date
 from backend.app.agents.state import (
-    AgentState, Plan, PlannedTask, PlannerOutput, Task, TaskSlots, Step, ResultBinding,
+    Period, AgentState, Plan, PlannedTask, PlannerOutput, Task, TaskSlots, Step, ResultBinding,
     TargetSelection, NO_STEP_INTENTS, task_count_error, DEFAULT_MARKET_TOP,
 )
 from backend.app.api.common import ApiError
@@ -51,6 +52,8 @@ NAND·DRAM·RAM·OLED처럼 실제 품목이나 기술을 가리키는 약어를
 상대 기간은 recent_months로만 쓰고 period는 null입니다. "최근 1년"은 recent_months=12입니다. 기사 기간은 일 단위입니다.
 comparison_requested는 비교 요청에만 true, 요청이 없으면 null입니다.
 이전 비교를 명시적으로 지칭한 경우에만 이전 compare_period를 명시하세요.
+비교 기간이 둘 이상이면 compare_period에 첫 비교 기간, extra_compare_periods에 나머지를 요청 순서대로 각각 씁니다.
+예: "2025년을 기준으로 2023년과 2024년 비교"는 period=2025년, compare_period=2023년, extra_compare_periods=[2024년]입니다. 떨어진 여러 해를 하나의 긴 비교 기간으로 합치지 마세요.
 ranking_group은 RANKING에 COUNTRY/HS6, 모호하면 null입니다.
 MARKET_SHARE에서는 품목별 비중에만 ranking_group=HS6를 쓰고 custom_query에 필요한 계산을 적습니다.
 국가별 교역 비중의 분모는 한국의 교역액입니다. 해외 국가의 전체 수입액 중 한국산 비중은 FOREIGN_IMPORT_MARKET이며 custom_query를 만들지 마세요.
@@ -358,6 +361,28 @@ def _partner_subject_flow(text, countries):
     return None
 
 
+def _split_year_comparisons(slots, text):
+    """플래너가 "2023년과 2024년"을 2023-01~2024-12 비교 기간 하나로 합쳤으면 연도별 비교 기간으로 나눈다.
+    조회 기간이 12개월이고 비교 기간이 여러 해 전체이며 각 연도를 따로 적었을 때만이다. "2023~2024년"처럼 이어진 기간은 그대로 둔다."""
+    current, compare = slots.period, slots.compare_period
+    if not (slots.comparison_requested and current and compare) or slots.extra_compare_periods:
+        return
+    if (current.end.year - current.start.year) * 12 + current.end.month - current.start.month != 11:
+        return
+    if (compare.start.month, compare.end.month) != (1, 12) or compare.start.year == compare.end.year:
+        return
+    if re.search(r'(?<!\d)\d{2,4}\s*년?\s*(?:~|부터|-(?=\s*\d{2,4}\s*년))\s*\d{2,4}(?!\d)', text):
+        return
+    # "2023년"·"23년" 모두 그 연도다. 두 자리는 뒤에 '년'이 있을 때만 연도로 본다.
+    mentions = {year: re.search(rf'(?<!\d)(?:{year}|{year % 100:02d}(?=\s*년))(?!\d)', text)
+                for year in range(compare.start.year, compare.end.year + 1)}
+    if not all(mentions.values()):
+        return
+    periods = [Period(start=date(y, 1, 1), end=date(y, 12, 1))
+               for y in sorted(mentions, key=lambda y: mentions[y].start())]
+    slots.compare_period, slots.extra_compare_periods = periods[0], periods[1:]
+
+
 def _normalize_analysis(output, question, previous_conditions):
     tasks = output.tasks
     for task in tasks:
@@ -393,6 +418,8 @@ def _normalize_analysis(output, question, previous_conditions):
             label = f"한국의 대{name} {'수출' if task.slots.trade_flow == 'EXPORT' else '수입'}"
             if label not in task.question:
                 task.question = f'{task.question} ({label})'
+        if task.intent == 'STATISTICS':
+            _split_year_comparisons(task.slots, text)
         if task.intent == 'RANKING' and len(tasks) == 1 and re.search(
                 r'(?:한국|대한민국|우리나라)의?\s*수(?:출|입)(?:액)?\s*상위\s*(?:국가|[0-9]+\s*(?:개국|개\s*국가))', text):
             if all(country.mention.strip() in ('한국', '대한민국', '우리나라')
