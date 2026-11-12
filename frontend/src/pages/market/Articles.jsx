@@ -24,12 +24,13 @@ export default function Articles({ route }) {
   const selected = q.get('id')
   const [form, setForm] = useState({ keyword, from, to })
   const [error, setError] = useState('')
-  // 주소의 검색 조건이 바뀌면(상단 메뉴로 전체 목록 복귀, 뒤로가기 등) 검색칸도 주소 값으로 다시 맞춘다.
-  // 입력하는 동안에는 주소가 바뀌지 않으므로 타이핑한 내용은 그대로 남는다. 탭을 바꾸면 주소의 검색 조건을 지우므로 검색칸도 비워진다.
-  // 탭도 함께 비교해, 검색 버튼을 누르기 전에 입력만 해 둔 내용도 탭을 바꾸면 비운다.
-  const urlSearch = JSON.stringify([tab, keyword, from, to])
+  // 주소의 검색 조건이 바뀌면(탭 클릭, 상단 메뉴로 전체 목록 복귀, 뒤로가기 등) 검색칸과 오류 문구도 주소 값으로 다시 맞춘다.
+  // 기사 펼치기(id)·페이지 이동(page)은 비교하지 않아, 입력해 둔 내용이 그대로 남는다.
+  // 탭은 주소에 적힌 값 그대로 비교한다. '#/articles?tab=all'에서 상단 메뉴로 '#/articles'에 돌아와도 같은 목록이지만 폼을 비운다.
+  const urlSearch = JSON.stringify([q.get('tab'), keyword, from, to])
   const [formSource, setFormSource] = useState(urlSearch)
   if (formSource !== urlSearch) { setFormSource(urlSearch); setForm({ keyword, from, to }); setError('') }
+  const clearForm = () => { setForm({ keyword: '', from: '', to: '' }); setError('') }
   const page = Math.max(1, Number(q.get('page')) || 1)
   const listTop = useRef(null)
   const previousPage = useRef(page)
@@ -67,8 +68,9 @@ export default function Articles({ route }) {
         lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '유형별 무역·경제 기사 조회'}
         right={(
           <div className="chips">
-            {/* 탭을 바꾸면 검색어·발행 기간을 지우고 그 탭의 최신 기사부터 보여 준다. */}
-            {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} to={withQuery(route, { tab: key, id: null, page: null, q: null, from: null, to: null })}>{label}</Chip>)}
+            {/* 탭을 누르면(지금 보고 있는 탭을 다시 눌러도) 검색어·발행 기간을 지우고 그 탭의 최신 기사부터 보여 준다.
+                주소가 그대로인 경우(검색 전 입력만 해 둔 상태)도 있어 현재 탭은 클릭할 때 폼을 직접 비운다. */}
+            {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} onClick={tab === key ? clearForm : undefined} to={withQuery(route, { tab: key, id: null, page: null, q: null, from: null, to: null })}>{label}</Chip>)}
           </div>
         )}
       />
@@ -92,7 +94,7 @@ export default function Articles({ route }) {
             </div>
             {error
               ? <p className="field-err" role="alert" style={{ marginTop: 10 }}>{error}</p>
-              : <p className="note" style={{ marginTop: 10 }}>검색어와 기간은 모두 선택 사항입니다 · 기간 미지정 시 전체 기간 · 탭을 바꾸면 검색 조건 초기화</p>}
+              : <p className="note" style={{ marginTop: 10 }}>검색어와 기간은 모두 선택 사항입니다 · 기간 미지정 시 전체 기간 · 탭을 누르면 검색 조건 초기화</p>}
           </form>
           <div ref={listTop} className="sec-h" style={{ marginTop: 8, scrollMarginTop: 90 }}>
             <h2 className="t2">

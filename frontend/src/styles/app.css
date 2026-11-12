@@ -149,10 +149,13 @@ body.modal-open{overflow:hidden}
   .article-search-fields{grid-template-columns:minmax(0,1fr) auto}
   .article-search-fields>:first-child{grid-column:1/-1}
 }
-/* 휴대폰 폭: 기간 상자 좌우 여백·날짜 글자를 줄여 날짜 칸을 넓힌다 */
+/* 휴대폰 폭: 시작일·종료일을 나란히 두면 날짜 끝자리가 잘린다(320px에서 '2026. 10. 0') → 한 상자 안에서 두 줄로 쌓는다
+   1줄: 시작일 / 2줄: ~ 종료일 */
 @media (max-width:420px){
-  .article-search-fields .period-input{padding:0 12px;gap:4px}
-  .article-search-fields .period-input input{font-size:14px}
+  .article-search-fields .period-input{height:auto;padding:4px 14px;display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:8px;align-items:center}
+  .article-search-fields .period-input>input{grid-column:2;height:40px}
+  .article-search-fields .period-input>input:first-of-type{grid-row:1}
+  .article-search-fields .period-input>span{grid-column:1;grid-row:2}
 }
 @media (max-width:760px){
   .article-search-fields{grid-template-columns:minmax(0,1fr)}
