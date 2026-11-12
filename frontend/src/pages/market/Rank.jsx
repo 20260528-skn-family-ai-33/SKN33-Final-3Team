@@ -18,7 +18,6 @@ const COLS_NO_HS = '60px 1fr 1.4fr 110px'
 const noRecord = (row, value) => value == null || row.has_data === false || Number(value) === 0
 // 억 USD 값 표시. 메인 대시보드와 같은 규칙: 0.1억 미만은 유효숫자 1자리(0.02), 그 이상은 소수 첫째 자리까지(D-3).
 const eok = value => value == null ? '—' : amount(value * 1e8)
-const compactList = (items, limit) => items.slice(0, limit).join('-') + (items.length > limit ? ` 외 ${items.length - limit}개` : '')
 const selectedCodes = selection => selection.country ? [countryCode(selection.country)] : selection.countryCodes
 
 export default function Rank({ route }) {
@@ -119,7 +118,7 @@ function RankResults({ route }) {
   // 파일 이름: 국가_기간_내용.xlsx (파일명에 쓸 수 없는 글자는 뺀다)
   // 품목명은 길어서 코드로 적는다. 예) 미국_2025-10~2025-12_HS870332_월별수출입.xlsx
   const fileKind = byMonth ? '월별수출입' : rankingGroup === 'HS6' ? '품목순위' : '교역국순위'
-  const productLabel = interestProducts.length ? compactList(interestProducts.map(code => 'HS' + code), 1) : applied.product ? `HS${applied.product}` : '전체품목'
+  const productLabel = interestProducts.length ? countryListLabel(interestProducts.map(code => 'HS' + code), 1, '개') : applied.product ? `HS${applied.product}` : '전체품목'
   // AI 질문에는 '관심 국가·관심 품목' 같은 묶음 말 대신 실제 국가 이름과 HS 코드를 적어, 채팅이 같은 조건으로 분석하게 한다.
   const askCountry = countryFull || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
   // AI 질문에는 조회 종류와 수출·수입 기준도 넣어, 채팅이 화면과 같은 순위를 분석하게 한다.
@@ -132,7 +131,7 @@ function RankResults({ route }) {
   const chatBlocked = !result.data || result.loading || !!result.error || overChatLimit
   const chatReason = overChatLimit ? `AI챗봇은 국가·품목을 ${CHAT_MAX_ITEMS}개까지 받을 수 있습니다. 품목이나 국가를 골라 조회한 뒤 열어 주세요.` : '순위 조회가 끝나면 이 조건으로 AI챗봇을 열 수 있습니다.'
   const askProduct = interestProducts.length ? interestProducts.map(code => `${productName(code)}(HS ${code})`).join(', ') : applied.product ? `${productName(applied.product)}(HS ${applied.product})` : '전체 품목'
-  const fileCountry = compactList(countryNames.length ? countryNames : interestCountries, 1) || '전체국가'
+  const fileCountry = countryListLabel(countryNames.length ? countryNames : interestCountries, 1, '개') || '전체국가'
   const fileName = `${fileCountry}_${query.period_start}~${query.period_end}_${productLabel}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '') + '.xlsx'
   const exportExcel = () => run(() => download(`/results/${result.data.result_id}/file`, fileName))
 
@@ -241,7 +240,7 @@ function CountrySearch({ value, replaceDefault, onChange }) {
   const all = countries.length > 0 && countries.every(c => value.includes(c.country_code))
   const names = value.map(countryName)
   const fullLabel = names.join(' · ')
-  const label = all ? `전체 국가 (${value.length}개)` : countryListLabel(names)
+  const label = all ? `전체 국가 (${value.length}개)` : countryListLabel(names) || '전체 국가'
   const [text, setText] = useState(null)
   const typing = text !== null
   const shown = typing ? options.filter(([v, l]) => !v || l.includes(text.trim())) : options

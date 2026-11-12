@@ -20,7 +20,7 @@ from backend.app.api.common import ApiError, clean, require
 from backend.app.api.security import authenticate, administrator, limit_auth_request, limit_public, client_ip, hash_token
 from backend.app.api.routes import dispatch, PENDING
 from backend.app.api import recovery
-from backend.app.api.schemas import Conditions, ReportConditions, HsItem
+from backend.app.api.schemas import COUNTRY_CODE_CAPACITY, Conditions, ReportConditions, HsItem
 
 CONTRACTS = json.loads(Path(__file__).with_name('contracts.json').read_text(encoding='utf-8'))
 log = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ def validate_value(value, kind, name, query=False):
         return None
     kind = kind.split('|')[0]
     if kind.endswith('[]'):
-        limit = 250 if name == 'country_codes' else 200
+        limit = COUNTRY_CODE_CAPACITY if kind == 'CountryCode[]' else 200
         require(isinstance(value, list) and len(value) <= limit, f'{name}: 최대 {limit}개의 배열이 필요합니다.')
         return [validate_value(v, kind[:-2], name, query) for v in value]
     if kind == 'boolean':
@@ -47,10 +47,10 @@ def validate_value(value, kind, name, query=False):
             require(value > 0, f'{name}: 양수가 필요합니다.')
         if name == 'page_size': require(value <= 100, 'page_size는 100 이하입니다.')
         if name == 'months': require(value <= 120, 'months는 120 이하입니다.')
-    elif kind == 'string':
+    elif kind in ('string', 'CountryCode'):
         require(isinstance(value, str) and len(value) <= 10000, f'{name}: 문자열 길이를 확인하세요.')
         if name not in ('q', 'other_reason'): require(bool(value.strip()), f'{name}: 빈 값을 허용하지 않습니다.')
-        if name in ('country_codes', 'country_code'): require(bool(re.fullmatch(r'[A-Z]{2}', value)), '국가 코드는 대문자 두 자리입니다.')
+        if kind == 'CountryCode' or name == 'country_code': require(bool(re.fullmatch(r'[A-Z]{2}', value)), '국가 코드는 대문자 두 자리입니다.')
         if name in ('start_date', 'end_date', 'news_start_date', 'news_end_date'):
             try: date.fromisoformat(value)
             except ValueError: raise ApiError(400, 'VALIDATION_ERROR', f'{name}: 유효한 YYYY-MM-DD가 필요합니다.')
@@ -105,6 +105,8 @@ def openapi_fields(contract):
         if base.endswith('[]'):
             element = base[:-2]
             schema = {'type':'array','items':{'type':element if element in ('string','integer') else 'object'}}
+            if element == 'CountryCode':
+                schema.update(items={'type':'string', 'pattern':'^[A-Z]{2}$'}, maxItems=COUNTRY_CODE_CAPACITY)
         if location == 'Request Body':
             properties[name] = {**schema, 'description':description}
             if needed == '필수': required.append(name)

@@ -1220,12 +1220,12 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(deliver_event(Store(self.app.state.database,c),1),1)
             self.assertEqual(deliver_event(Store(self.app.state.database,c),1),0)
 
-    def test_rankings_accept_full_country_catalog_over_200(self):
+    def test_rankings_accept_full_country_catalog_over_250(self):
         from itertools import product
         from string import ascii_uppercase
 
         self.signup()
-        codes = [''.join(pair) for pair in product(ascii_uppercase, repeat=2)][:245]
+        codes = [''.join(pair) for pair in product(ascii_uppercase, repeat=2)][:260]
         with self.engine.begin() as connection:
             connection.execute(self.meta.tables['country'].insert(), [
                 {'country_code': code, 'name_ko': code, 'country_role': 'COUNTRY'}
