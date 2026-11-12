@@ -1220,6 +1220,22 @@ class BackendApiTest(unittest.TestCase):
             self.assertEqual(deliver_event(Store(self.app.state.database,c),1),1)
             self.assertEqual(deliver_event(Store(self.app.state.database,c),1),0)
 
+    def test_rankings_accept_full_country_catalog_over_200(self):
+        from itertools import product
+        from string import ascii_uppercase
+
+        self.signup()
+        codes = [''.join(pair) for pair in product(ascii_uppercase, repeat=2)][:245]
+        with self.engine.begin() as connection:
+            connection.execute(self.meta.tables['country'].insert(), [
+                {'country_code': code, 'name_ko': code, 'country_role': 'COUNTRY'}
+                for code in codes if code not in ('US', 'CN')])
+        response = self.client.get('/api/v1/trade/rankings', params={
+            'period_start': '2025-12', 'period_end': '2025-12', 'country_codes': codes})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['conditions']['country_codes'], codes)
+        self.assertEqual(response.json()['page']['total'], len(codes))
+
     def test_rankings_mark_selected_country_without_rows(self):
         self.signup()
         with self.engine.begin() as c:

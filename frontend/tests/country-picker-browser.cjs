@@ -16,7 +16,12 @@ const { chromium } = require('playwright')
     const errors = []
     page.on('pageerror', e => errors.push(e.message))
     await page.route('**/api/v1/**', route => {
-      const pathname = new URL(route.request().url()).pathname
+      const url = new URL(route.request().url())
+      const pathname = url.pathname
+      if (pathname.endsWith('/data/availability')) return route.fulfill({ json: { trade_end_month: '2025-12' } })
+      if (pathname.endsWith('/trade/rankings') || pathname.endsWith('/trade/trends')) {
+        return route.fulfill({ json: { items: [], page: { page_size: 20, total: 0 } } })
+      }
       if (pathname.endsWith('/reference/regions')) return route.fulfill({ json: { items: [
         { region_id: 1, parent_id: null, name_ko: '오세아니아', country_codes: ['AU', 'NZ'] },
         { region_id: 2, parent_id: null, name_ko: '아시아', country_codes: ['JP'] }] } })
@@ -61,7 +66,40 @@ const { chromium } = require('playwright')
     // 선택 국가 전체 삭제는 대륙과 상관없이 모두 비운다
     await page.locator('.interest-summary').getByRole('button', { name: '선택 국가 전체 삭제' }).click()
     assert.deepEqual(await value(), [])
+    const all = page.getByRole('button', { name: '전체 국가', exact: true })
+    await page.getByRole('textbox', { name: '국가명 검색' }).fill('일본')
+    await all.click()
+    assert.deepEqual(await value(), ['뉴질랜드', '미국', '일본', '호주'])
+    await page.getByRole('button', { name: '일본 선택 삭제' }).click()
+    assert.equal(await all.getAttribute('aria-pressed'), 'false')
+    await all.click()
+    assert.equal(await all.getAttribute('aria-pressed'), 'true')
+    await all.click()
+    assert.deepEqual(await value(), [])
+    await page.goto(page.url() + '#rank')
+    await page.reload()
+    const country = page.getByRole('combobox', { name: '국가', exact: true })
+    const pick = async name => {
+      await country.click()
+      await page.getByRole('option', { name, exact: true }).click()
+    }
+    const search = async () => {
+      const request = page.waitForRequest(r => {
+        const url = new URL(r.url())
+        return url.pathname.endsWith('/trade/rankings') && url.searchParams.getAll('country_codes').length === 4
+      })
+      await page.getByRole('button', { name: '순위 조회' }).click()
+      return new URL((await request).url()).searchParams.getAll('country_codes').sort()
+    }
+    await pick('전체 국가')
+    const bulk = await search()
+    assert.deepEqual(bulk, ['AU', 'JP', 'NZ', 'US'])
+    await country.click()
+    assert.equal(await page.getByRole('listbox', { name: '국가 목록' }).getByRole('option', { selected: true }).count(), 5)
+    await page.getByRole('option', { name: '전체 국가', exact: true }).click()
+    for (const name of ['호주', '미국', '일본', '뉴질랜드']) await pick(name)
+    assert.deepEqual(await search(), bulk)
     assert.deepEqual(errors, [])
-    console.log('PASS country picker: selected chips, continent toggle, clear all')
+    console.log('PASS country chips, continent toggle, select all, and identical ranking request for manual selection')
   } finally { if (browser) await browser.close(); await server.close() }
 })().catch(error => { console.error(error); process.exitCode = 1 })

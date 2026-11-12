@@ -32,7 +32,8 @@ def validate_value(value, kind, name, query=False):
         return None
     kind = kind.split('|')[0]
     if kind.endswith('[]'):
-        require(isinstance(value, list) and len(value) <= 200, f'{name}: 최대 200개의 배열이 필요합니다.')
+        limit = 250 if name == 'country_codes' else 200
+        require(isinstance(value, list) and len(value) <= limit, f'{name}: 최대 {limit}개의 배열이 필요합니다.')
         return [validate_value(v, kind[:-2], name, query) for v in value]
     if kind == 'boolean':
         if query and value in ('true', 'false'): return value == 'true'
