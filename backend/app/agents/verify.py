@@ -91,7 +91,8 @@ def _windows_match(required,current,previous):
 
 
 def _level_period_matches(role, time, fact, source):
-    prior = fact.metric.key.startswith('compare_')
+    prior = (fact.period == period(source.get('compare_period')) if fact.annual_sql_sum
+             else fact.metric.key.startswith('compare_'))
     if role == 'AUTO':
         if not prior:
             return True  # Calendar constraints are checked by _time_matches.
@@ -254,7 +255,38 @@ def _month_change_cells(claim, facts, sources):
     return ((previous.source, previous.path), (current.source, current.path))
 
 
-def _implied_amount_direction(checks, prepared):
+def _annual_direction_cells(sentence, amounts, trend, cells):
+    """Bind 'from A to B' to the two adjacent, independently verified annual totals."""
+    if not trend.valid or not trend.span or len(amounts) != 2:
+        return None
+    pair = []
+    for check in amounts:
+        claim = check.claim
+        if (not claim.quantity_span or not claim.quantity or claim.quantity.unit != 'USD'
+                or claim.metric.family != 'AMOUNT' or claim.targets != trend.targets
+                or len(check.matches) != 1):
+            return None
+        cell, = check.matches
+        fact = cells[cell]
+        if not fact.annual_sql_sum:
+            return None
+        pair.append(fact)
+    first, last = pair
+    if (first.source != last.source or first.path[:-1] != last.path[:-1] or first.period == last.period
+            or first.stored_targets != last.stored_targets or first.metric.flow != last.metric.flow):
+        return None
+    a, b = (check.claim.quantity_span for check in amounts)
+    if (not re.match(r'\s*에서(?=\s)', sentence[a[1]:b[0]])
+            or not re.fullmatch(r'\s*(?:으)?로\s*', sentence[b[1]:trend.span[0]])):
+        return None
+    if trend.time.years and trend.time.years != {last.period[0][:4]}:
+        return ()
+    if _direction_holds(trend.metric.direction, first.value, last.value):
+        return (amounts[0].matches[0], amounts[1].matches[0])
+    return ()
+
+
+def _implied_amount_direction(checks, prepared, sentence):
     """"7월 2,100만 달러에서 12월 2,840만 달러로 늘었습니다": 같은 문장에서 확인한 두 달 금액으로 방향을 판정한다."""
     cells = {(f.source, f.path): f for f in prepared.facts}
     out = list(checks)
@@ -262,6 +294,11 @@ def _implied_amount_direction(checks, prepared):
         metric = check.claim.metric
         if (check.claim.quantity is not None or metric.family != 'CHANGE' or metric.comparison
                 or metric.negated_change or metric.direction not in ('UP', 'DOWN')):
+            continue
+        annual = _annual_direction_cells(sentence, checks[max(0, index-2):index], check.claim, cells)
+        if annual is not None:
+            reason = 'MATCH' if annual else 'NOT_CONFIRMED'
+            out[index] = ClaimCheck(check.claim, reason, annual, check.interpretation_valid)
             continue
         points = {}
         for other in checks:
@@ -342,7 +379,7 @@ def _inspect_prepared(sentence, prepared):
     for claim in parsed.claims:
         matches=_matching_cells(claim,facts,sources,catalog)
         checks.append(ClaimCheck(claim,'MATCH' if matches else 'NOT_CONFIRMED',matches,parsed.valid))
-    checks=list(_implied_amount_direction(checks, prepared))
+    checks=list(_implied_amount_direction(checks, prepared, sentence))
     dates_ok=all(any(_source_supports(time,source) for source in sources) for time in parsed.date_only)
     dates_ok=dates_ok and all(any(str((source.get('period') or {}).get('end') or '')[:7]==month
                                   or str((source.get('article_period') or {}).get('end') or '')[:10]==day for source in sources)
@@ -367,11 +404,20 @@ def evidence(digest):
     return [(f.metric.key,f.value,f.unit,set(f.targets)) for f in build_facts([digest],NameCatalog([digest])) if f.unit not in ('OUTLOOK', 'NULL')]
 
 
-def snapshot_evidence(payload):
+def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
     """Full saved rows, never paginated or bounded for LLM input. No new SQL."""
     conditions=payload.get('conditions') or {}
     meta=payload.get('meta') or {}
     scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
+    if meta.get('kind') == 'LLM_SQL':
+        from backend.app.agents.sql import annual_sum_sources
+        cells = {}
+        for key, (year, country, hs, edition, flow) in annual_sum_sources(payload).items():
+            cells[key] = dict(year=year, flow=flow, country_code=country, hs_code=hs,
+                              country_name=(country_labels or {}).get(country),
+                              hs_name=(product_labels or {}).get((hs, edition)))
+        if cells:
+            scope['_annual_sums'] = cells
     if meta.get('kind')=='PREDICTION' and meta.get('anchor'):
         anchor=str(meta['anchor'])[:7]
         scope.update(kind='PREDICTION',anchor=anchor,period={'start':anchor,'end':anchor})
@@ -503,6 +549,8 @@ def mark_unverified(state):
 
 def diagnose_claim(claim, prepared, group):
     """Only identify an attribute when an otherwise compatible cell isolates it."""
+    if claim.metric.negated_change:
+        return 'NOT_CONFIRMED', None, None
     if claim.valid and claim.metric.family == 'CHANGE' and claim.time.subject_year and len(claim.time.years) == 2:
         # A TREND snapshot repeats the period total and change on every monthly row.
         # Identify the series before using its value to diagnose a role reversal.
@@ -520,7 +568,7 @@ def diagnose_claim(claim, prepared, group):
                 return 'REVERSED_PERIODS', group[fact.source], fact.path
     if not claim.valid or not claim.metric.family or not claim.targets:
         return 'NOT_CONFIRMED', None, None
-    if claim.metric.negated_change or claim.metric.family == 'OUTLOOK':
+    if claim.metric.family == 'OUTLOOK':
         return 'NOT_CONFIRMED', None, None
     candidates = []
     contradicted_rows = set()
@@ -642,6 +690,8 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
         codes = set(conditions.country_codes or ())
         rows = evidence.get('rows') or evidence.get('targets') or ()
         selected = {r.get('country_name') for r in rows if r.get('country_code') in codes}
+        selected.update(c['country_name'] for c in evidence.get('_annual_sums', {}).values()
+                        if c['country_code'] in codes)
         mentions = [(c.mention, c.name) for c in mentions_in_question
                     if c.mention in state.input.question and c.name in selected and c.mention != c.name]
         return {**evidence, '_country_mentions': mentions} if mentions else evidence

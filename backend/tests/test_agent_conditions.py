@@ -445,6 +445,46 @@ class ConditionTest(unittest.TestCase):
         self.assertEqual(self.task.conditions.period.start.year, 2024)
         self.assertEqual(self.task.conditions.compare_period.start.year, 2025)
 
+    def test_explicit_base_follows_either_year_even_with_reversed_slots(self):
+        from backend.app.agents.conditions import comparison_windows
+        from backend.app.agents.state import Period
+
+        early = Period(start='2021-01-01', end='2021-12-01')
+        late = Period(start='2022-01-01', end='2022-12-01')
+        for base, subject in [(early, late), (late, early)]:
+            question = f'{base.start.year}년 대비 {subject.start.year}년 수출액'
+            for slots in [(early, late), (late, early)]:
+                with self.subTest(question=question, slots=slots):
+                    self.assertEqual(comparison_windows(question, *slots), (subject, base))
+
+    def test_listed_annual_windows_choose_earlier_base_for_either_order(self):
+        from backend.app.agents.conditions import comparison_windows
+        from backend.app.agents.state import Period
+
+        early = Period(start='2021-01-01', end='2021-12-01')
+        late = Period(start='2022-01-01', end='2022-12-01')
+        for first, second in [(2021, 2022), (2022, 2021)]:
+            for question in [f'수출액을 {first}년과 {second}년으로 비교하고 변화율을 알려줘',
+                             f'{first}년·{second}년 대미 수출액 비교', f'비교할 기간은 {first}년과 {second}년',
+                             f'{first}년과 {second}년의 수출액 변화율을 알려줘']:
+                for slots in [(early, late), (late, early)]:
+                    with self.subTest(question=question, slots=slots):
+                        self.assertEqual(comparison_windows(question, *slots), (late, early))
+
+    def test_unresolved_annual_roles_preserve_planned_windows(self):
+        from backend.app.agents.conditions import comparison_windows
+        from backend.app.agents.state import Period
+
+        early = Period(start='2021-01-01', end='2021-12-01')
+        late = Period(start='2022-01-01', end='2022-12-01')
+        for question in ['2022년 기준으로 2021년과 비교한 수출액', '2022년 기준으로 2021년 수출액과 비교해줘',
+                         '2022년 기준으로 2021년에 견주어 본 수출액', '2022년을 기준으로 2021년 대비',
+                         '2021년부터 2022년까지 수출액', '2021년과 2022년 중 전자를 기준으로 비교',
+                         '2021년과 2022년 중 전자의 수출액 비교']:
+            for slots in [(early, late), (late, early)]:
+                with self.subTest(question=question, slots=slots):
+                    self.assertEqual(comparison_windows(question, *slots), slots)
+
     def test_exact_product_and_country_period_are_resolved_against_sqlite(self):
         self.state.input.question='미국 기초화장품 수출액'
         self.task.slots=TaskSlots(products=['기초화장품'],countries=[{'mention':'미국','name':'미국'}],recent_months=3)

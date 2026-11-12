@@ -578,7 +578,7 @@ class Services:
                 names=[*countries,*product_names(store)]
                 # compose가 본 품목 표시명과 같은 이름으로 순위 근거 범위를 대조한다. 조건에 있는 코드만 읽는다.
                 from backend.app.agents.templates import condition_names
-                _,products=condition_names(store,[task.conditions for task in state.plan.tasks])
+                country_labels,products=condition_names(store,[task.conditions for task in state.plan.tasks])
                 labels={code:name for (code,_),name in products.items()}
                 snapshots={}
                 for task in state.plan.tasks:
@@ -587,7 +587,7 @@ class Services:
                         if step.tool not in ('query_trade_data','query_market_model') or not result or not result.result_id: continue
                         try:
                             payload=results.read_snapshot(store,state.input.user_id,result.result_id,'RESULT')
-                            snapshots[step.step_id]=snapshot_evidence(payload)
+                            snapshots[step.step_id]=snapshot_evidence(payload, country_labels=country_labels, product_labels=products)
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}

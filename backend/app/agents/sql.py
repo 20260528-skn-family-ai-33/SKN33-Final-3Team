@@ -529,6 +529,95 @@ def normalize_rows(rows, columns):
     return result
 
 
+def _annual_sum_filters(scope, trade):
+    """Only the trade table and an optional one-to-one country lookup may feed the SUM."""
+    select = scope.expression
+    joins = select.args.get('joins') or []
+    if joins:
+        join = joins[0]
+        country = join.this
+        on = join.args.get('on')
+        if (len(joins) != 1 or not isinstance(country, exp.Table) or country.name != 'country'
+                or not isinstance(on, exp.EQ) or not all(isinstance(c, exp.Column) for c in (on.left, on.right))
+                or {(c.table, c.name) for c in (on.left, on.right)} !=
+                   {(country.alias_or_name, 'country_code'), (trade, 'country_code')}):
+            return {}
+    filters = {}
+    for term in _and_terms(select.args['where'].this):
+        item = _literal_filter(term)
+        if item is None:
+            return {}
+        column, op, values = item
+        if joins and column.table == country.alias_or_name and column.name == 'country_role' and op == 'eq' and values == ['COUNTRY']:
+            continue
+        if column.table != trade or column.name in filters:
+            return {}
+        if column.name == 'trade_month' and op == 'between':
+            filters[column.name] = tuple(values)
+        elif column.name in ('country_code', 'hs6_code', 'hs_ver') and op == 'eq':
+            filters[column.name] = values[0]
+        else:
+            return {}
+    return filters
+
+
+def annual_sum_sources(payload):
+    """Trace directly projected yearly SUM(amount_usd) cells to their saved SELECT filters."""
+    statements = payload.get('sql')
+    conditions = payload.get('conditions') or {}
+    if (not isinstance(statements, list) or len(statements) != 1 or not isinstance(statements[0], str)
+            or not conditions.get('compare_period') or len(conditions.get('hs_items') or []) != 1
+            or len(conditions.get('country_codes') or []) != 1):
+        return {}
+    try:
+        query = sqlglot.parse_one(statements[0], read='mysql')
+        if not isinstance(query, exp.Select):
+            return {}
+        scopes = traverse_scope(query)
+    except sqlglot.errors.SqlglotError:
+        return {}
+    if not scopes:
+        return {}
+    windows = {(w.get('start'), w.get('end')) for w in
+               (conditions.get('period'), conditions.get('compare_period')) if w}
+    sums = {}
+    for scope in scopes:
+        select = scope.expression
+        if not isinstance(select, exp.Select) or len(select.selects) != 1 or not select.args.get('where'):
+            continue
+        aggregate = select.selects[0].unalias()
+        if not isinstance(aggregate, exp.Sum) or not isinstance(aggregate.this, exp.Column):
+            continue
+        amount = aggregate.this
+        table = scope.sources.get(amount.table)
+        if not isinstance(table, exp.Table) or table.name not in TRADE_TABLES or amount.name != 'amount_usd':
+            continue
+        if select.args.get('group') or select.args.get('having'):
+            continue
+        filters = _annual_sum_filters(scope, amount.table)
+        window = filters.get('trade_month')
+        if not window or window not in windows:
+            continue
+        start, end = window
+        year = start[:4]
+        if start != year + '-01-01' or end != year + '-12-31':
+            continue
+        country, hs, edition = (filters.get(k) for k in ('country_code', 'hs6_code', 'hs_ver'))
+        flow = 'EXPORT' if table.name.startswith('export_') else 'IMPORT'
+        if (country and conditions.get('country_codes') == [country] and hs and edition
+                and conditions.get('hs_items') == [{'hs_code': hs, 'hs_ver': edition}]
+                and conditions.get('trade_flow') == flow):
+            sums[scope, select.selects[0].alias_or_name] = (year, country, hs, edition, flow)
+    projected = {}
+    for projection in query.selects:
+        column = projection.unalias()
+        if isinstance(column, exp.Column):
+            source = scopes[-1].sources.get(column.table)
+            if (source, column.name) in sums:
+                projected[projection.alias_or_name] = sums[source, column.name]
+    return projected
+
+
 def execute_readonly(engine, draft, timeout_seconds=30, conditions=None):
     sql = validate_sql(draft, conditions)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:

@@ -96,7 +96,7 @@ def comparison_windows(question, current, baseline):
     if current and baseline and all(w.start.month == 1 and w.end.month == 12 and w.start.year == w.end.year
                                     for w in (current, baseline)):
         roles = annual_comparison_roles(question)
-        if roles == (str(baseline.start.year), str(current.start.year)):
+        if roles.kind != 'undetermined' and (roles.subject, roles.baseline) == (str(baseline.start.year), str(current.start.year)):
             return baseline, current
     return current, baseline
 

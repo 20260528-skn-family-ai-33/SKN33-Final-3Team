@@ -261,6 +261,43 @@ class WriterEvidenceTest(unittest.TestCase):
         verify(state, snapshots=snapshots)
         self.assertEqual(state.verification.status, 'PASS')
 
+    def test_negated_change_never_requests_a_period_swap(self):
+        from backend.app.agents.verify import snapshot_evidence, verify
+
+        state = dev_state(DEV['02-zero-null'])
+        scope = dict(period={'start':'2021-01','end':'2021-12'},
+                     compare_period={'start':'2022-01','end':'2022-12'}, trade_flow='EXPORT')
+        rows = [dict(country_name='미국', total_usd=80, compare_total_usd=100, change_pct=-20)]
+        snapshots = {'t1.sql': snapshot_evidence(dict(conditions=scope, rows=rows))}
+        line = '2022년 수출액은 2021년 대비 20% 감소하지 않았습니다.'
+        state.draft = Draft(conclusion=[dict(task_id='t1', sentences=[line])], turn_summary='')
+        verify(state, snapshots=snapshots)
+        self.assertEqual([item.action for item in state.verification.feedback], ['REVIEW'])
+        state.verification.regeneration_count = 1
+        compose(state).parse.assert_not_called()
+        self.assertEqual(state.draft.sentences(), [line])
+        verify(state, snapshots=snapshots)
+        self.assertEqual(state.verification.status, 'NEEDS_REVIEW')
+
+    def test_competing_year_references_leave_original_sentence_for_review(self):
+        from backend.app.agents.verify import snapshot_evidence, verify
+
+        state = dev_state(DEV['02-zero-null'])
+        scope = dict(period={'start':'2022-01','end':'2022-12'},
+                     compare_period={'start':'2021-01','end':'2021-12'}, trade_flow='EXPORT')
+        rows = [dict(country_name='미국', total_usd=125, compare_total_usd=100, change_pct=25)]
+        state.results['t1.sql'].digest = dict(kind='TREND', rows=rows, **scope)
+        snapshots = {'t1.sql': snapshot_evidence(dict(conditions=scope, rows=rows))}
+        line = '2022년 기준으로 보면 수출액은 2021년과 비교한 결과 25% 증가했습니다.'
+        state.draft = Draft(conclusion=[dict(task_id='t1', sentences=[line])], turn_summary='')
+        verify(state, snapshots=snapshots)
+        self.assertEqual([f.action for f in state.verification.feedback], ['REVIEW'])
+        state.verification.regeneration_count = 1
+        compose(state).parse.assert_not_called()
+        self.assertEqual(state.draft.sentences(), [line])
+        verify(state, snapshots=snapshots)
+        self.assertEqual(state.verification.status, 'NEEDS_REVIEW')
+
     def test_action_rewrite_uses_only_addressed_span(self):
         from backend.app.agents.state import ClaimFeedback, WriterEdits
 

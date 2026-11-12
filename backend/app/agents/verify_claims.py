@@ -6,6 +6,7 @@ happens to exist in the result. It is private to verify; Draft/state stay unchan
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from functools import lru_cache
+from typing import Literal
 import re
 
 NUMBER = r'(?:(?<![\d.A-Za-z])|(?<=[A-Za-z]{3}))(?P<value>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)'
@@ -530,25 +531,61 @@ def _mask_period_end_days(text):
 DENOMINATOR_LINK = r'(?:를|을)?\s*분모로'
 AMOUNT_LABEL = r'수출액|수입액|교역액|금액'
 ANNUAL_BASE_LINK = re.compile(
-    r'\s*(?:' + COMPARE_LINK + r'|(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')\s*)?(?:' + DENOMINATOR_LINK +
-    r'|(?:을|를)?\s*(?:비교\s*)?기준으로)(?:\s+한(?=\s))?)'
+    r'\s*(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')\s*)?(?:' + COMPARE_LINK +
+    r'|(?:과|와)\s*비교(?:한|할\s*때)(?=\s|$)|(?:에|와|과)\s*견주(?:어|면)(?=\s|$)|(?:' +
+    DENOMINATOR_LINK + r'|(?:을|를)?\s*(?:비교\s*)?기준으로)(?:\s+한(?=\s))?)'
+)
+
+
+@dataclass(frozen=True)
+class AnnualComparison:
+    kind: Literal['explicit', 'listed', 'undetermined']
+    # For a simple list these roles are a query default, not a claim made by a sentence.
+    subject: str | None = None
+    baseline: str | None = None
+
+
+# Recognize the comparison attached to this date, including an intervening amount label.
+ANNUAL_COMPARATOR = re.compile(
+    r'\s*(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')\s*)?(?:(?:과|와)\s*비교|(?:에|와|과)\s*견주)'
+)
+YEAR_LIST_JOIN = re.compile(r'\s*(?:과|와|및|[,，·ㆍ])\s*')
+# Match the coordinated pair as the object of the comparison. Require the
+# remaining text to be a comparison request; an unparsed qualifier is ambiguous.
+YEAR_LIST_COMPARISON = re.compile(
+    r'\s*(?:을|를|으로|로|의)?\s*(?:(?:[가-힣A-Za-z0-9]+\s+)*(?:' + AMOUNT_LABEL + r')(?:을|를)?\s*)?'
+    r'(?:비교(?:해(?:\s*주(?:세요|실래요)|\s*줘)?|하(?:고|여)|해서)?'
+    r'(?:\s*(?:그\s*)?(?:변화율|증감률)(?:을|도)?\s*(?:알려\s*(?:줘|주세요))?)?|'
+    r'(?:변화율|증감률)(?:을|도)?\s*(?:알려\s*(?:줘|주세요))?)[.!?\s]*'
 )
 
 
 def annual_comparison_roles(text):
-    """Return subject and base years only when two full-year dates have a clear reference."""
     dates = list(DATE.finditer(text))
+    undetermined = AnnualComparison('undetermined')
     if len(dates) != 2 or any(not d[1] or any(d.groups()[1:]) for d in dates) or dates[0][1] == dates[1][1]:
-        return None
+        return undetermined
+    first, second = dates
+    if YEAR_LIST_JOIN.fullmatch(text[first.end():second.start()]):
+        tail = text[second.end():]
+        if not tail.strip(' .?!') or (
+                YEAR_LIST_COMPARISON.fullmatch(tail) and not ANNUAL_BASE_LINK.search(tail)
+                and not re.search(r'(?:^|\s)중(?:에서|의)?\s', tail)):
+            return AnnualComparison('listed', max(first[1], second[1]), min(first[1], second[1]))
+        return undetermined
     references = []
     for i, date in enumerate(dates):
-        end = dates[i+1].start() if i+1 < len(dates) else len(text)
+        end = second.start() if i == 0 else len(text)
         if ANNUAL_BASE_LINK.match(text, date.end(), end):
             references.append(i)
+        elif ANNUAL_COMPARATOR.match(text, date.end(), end):
+            # An additional comparison may compete with the explicit base.
+            # Its verb stem alone does not establish an affirmative reference.
+            return undetermined
     if len(references) == 1:
         index, = references
-        return dates[1-index][1], dates[index][1]
-    return None
+        return AnnualComparison('explicit', dates[1-index][1], dates[index][1])
+    return undetermined
 
 
 def read_time(text, inherited_year=None):
@@ -577,8 +614,8 @@ def read_time(text, inherited_year=None):
             if end_month: period=(f'{first.group(1)}-{int(first.group(2) or first.group(3)):02d}',f'{last.group(1) or first.group(1)}-{int(end_month):02d}')
     comparison_reference=any(re.match(r'\s*(?:대비|보다)',text[d.end():]) for d in dates)
     roles = annual_comparison_roles(text) if len(years) == 2 and not period else None
-    subject_year = roles[0] if roles else None
-    comparison_reference = comparison_reference or bool(roles)
+    subject_year = roles.subject if roles and roles.kind == 'explicit' else None
+    comparison_reference = comparison_reference or subject_year is not None
     return TimeClaim(frozenset(years),frozenset(months),frozenset(bare),frozenset(durations),period,'기준' in text,
                      comparison_reference,month_window=month_window,subject_year=subject_year),current_year
 

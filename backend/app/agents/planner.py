@@ -50,7 +50,7 @@ NAND·DRAM·RAM·OLED처럼 실제 품목이나 기술을 가리키는 약어를
 월 기간은 YYYY-MM-01 양끝 포함, 연도만 있으면 1월~12월입니다.
 상대 기간은 recent_months로만 쓰고 period는 null입니다. "최근 1년"은 recent_months=12입니다. 기사 기간은 일 단위입니다.
 comparison_requested는 비교 요청에만 true, 요청이 없으면 null입니다.
-두 기간의 변화율에서 period는 결과 기간, compare_period는 분모인 기준 기간입니다. 사용자가 기준을 지정하면 그 기간을 compare_period로 두세요. 두 기간을 단순 나열하면 어순과 무관하게 앞선 시기를 기준으로 두세요.
+두 기간의 변화율에서 period는 결과 기간, compare_period는 분모인 기준 기간입니다. 사용자가 기준을 지정하면 그 기간을 compare_period로 두세요. 두 기간만 단순 나열하면 어순과 무관하게 앞선 시기를 기준으로 두세요. 서로 다른 연도에 기준 표현과 비교 표현이 함께 걸리면 단순 나열 규칙을 적용하지 마세요.
 이전 비교를 명시적으로 지칭한 경우에만 이전 compare_period를 명시하세요.
 ranking_group은 RANKING에 COUNTRY/HS6, 모호하면 null입니다.
 MARKET_SHARE에서는 품목별 비중에만 ranking_group=HS6를 쓰고 custom_query에 필요한 계산을 적습니다.

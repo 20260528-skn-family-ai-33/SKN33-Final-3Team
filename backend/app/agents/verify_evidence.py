@@ -38,6 +38,7 @@ class Fact:
     role: str | None
     anchor: str | None
     stored_targets: frozenset[str]
+    annual_sql_sum: bool = False
 
 
 def period(value):
@@ -137,6 +138,7 @@ def build_facts(sources,catalog:NameCatalog):
             identities, group = bind_targets(stored, catalog)
             month=str(row.get('month') or row.get('trade_month') or inherited_month or '')[:7] or None
             for key,value in row.items():
+                if key == '_annual_sums': continue
                 if isinstance(value,(dict,list)):
                     walk(value,stored,month,path+(key,));continue
                 if value is None and key == 'amount_usd' and month:
@@ -193,6 +195,19 @@ def build_facts(sources,catalog:NameCatalog):
                     if descriptor.comparison=='PERIOD': fact_period=current;fact_compare=compare
                 elif month: fact_period=(month,month)
                 if not fact_month and fact_period and fact_period[0]==fact_period[1]: fact_month=fact_period[0]
+                cell = source.get('_annual_sums', {}).get(key) if path[:1] == ('rows',) and len(path) == 2 else None
+                if cell and unit == 'USD' and not stored:
+                    year = cell['year']
+                    years = set(re.findall(r'(?<!\d)\d{4}(?!\d)', key + ' ' + descriptor.label))
+                    if ((years and years != {year}) or descriptor.flow != cell['flow']
+                            or descriptor.family != 'AMOUNT' or descriptor.aggregate == 'AVERAGE'):
+                        continue
+                    scoped = frozenset(cell[k] for k in ('country_code','country_name','hs_code','hs_name') if cell[k])
+                    targets, members = bind_targets(scoped, catalog)
+                    window = (year + '-01', year + '-12')
+                    facts.append(Fact(index,path+(key,),descriptor,amount,unit,targets,members,
+                                      window,None,None,True,False,None,None,None,scoped, annual_sql_sum=True))
+                    continue
                 facts.append(Fact(index,path+(key,),descriptor,amount,unit,frozenset(identities),group,
                                   fact_period,fact_compare,fact_month,period_value,prediction,horizon,role,anchor,stored))
 
