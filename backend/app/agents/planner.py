@@ -60,6 +60,7 @@ ranking_limit은 금액 순위 또는 유망 품목·국가 조회에서 사용�
 예: "베트남 유망 품목 8개"는 PROMISING_MARKET이며 ranking_limit=8입니다. 개수를 생략하면 null입니다.
 한국의 수출액 상위 국가는 한국의 상대국 순위입니다. 한국을 상대국 필터에 넣지 마세요.
 모든 수출입 테이블은 한국 기준입니다. 한국·대한민국·우리나라는 기준 국가이며 상대국이 아닙니다.
+상대국이 주어인 "미국이 한국에서 수입하는 품목"은 한국의 대미국 수출(EXPORT), "미국이 한국에 수출하는 품목"은 한국의 대미국 수입(IMPORT)입니다.
 한국 전체 수출입을 요청하면 countries=[]로 이전 상대국 필터를 해제하세요.
 한국의 대중국 수출처럼 상대국이 명시되면 countries에는 중국만 넣으세요.
 share_basis는 한국 교역액을 분모로 하는 상대국별·품목별 비중이면 KOREA_TRADE_PARTNER,
@@ -343,6 +344,19 @@ def product_expressions(expressions, *, article_context=False):
     return products or (None if article_context else expressions)
 
 
+_KOREA_AS_OBJECT = r'(?:한국|대한민국|우리나라)(?:에게서|에게|한테서|한테|으로부터|로부터|에서|에|산|으로|로)'
+
+
+def _partner_subject_flow(text, countries):
+    """상대국이 주어인 수출입("미국이 한국에서 수입하는")이면 (국가명, 한국 기준 방향). 수출·수입을 함께 말하면 None."""
+    for country in countries or []:
+        match = re.search(re.escape(country.mention.strip()) + r'\s*(?:이|가|은|는)\s.*?' + _KOREA_AS_OBJECT + r'(.*)', text)
+        flows = set(re.findall(r'(수입|수출)(?!국|시장|대상)', match[1])) if match else set()
+        if len(flows) == 1:
+            return country.name, 'EXPORT' if flows == {'수입'} else 'IMPORT'
+    return None
+
+
 def _normalize_analysis(output, question, previous_conditions):
     tasks = output.tasks
     for task in tasks:
@@ -372,6 +386,12 @@ def _normalize_analysis(output, question, previous_conditions):
                     task.slots.products = list(dict.fromkeys([*(
                         match[1] if (match := HS_CODE_MENTION.fullmatch(product.strip())) else product
                         for product in products), *codes]))
+        if task.intent in ('STATISTICS', 'RANKING', 'CAUSE') and (flipped := _partner_subject_flow(text, task.slots.countries)):
+            # 수출입 표는 한국 기준이다. "미국이 한국에서 수입"은 한국의 대미국 수출이다. LLM이 이미 뒤집었어도 같은 값이 된다.
+            name, task.slots.trade_flow = flipped
+            label = f"한국의 대{name} {'수출' if task.slots.trade_flow == 'EXPORT' else '수입'}"
+            if label not in task.question:
+                task.question = f'{task.question} ({label})'
         if task.intent == 'RANKING' and len(tasks) == 1 and re.search(
                 r'(?:한국|대한민국|우리나라)의?\s*수(?:출|입)(?:액)?\s*상위\s*(?:국가|[0-9]+\s*(?:개국|개\s*국가))', text):
             if all(country.mention.strip() in ('한국', '대한민국', '우리나라')
@@ -422,6 +442,9 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
         return output
     task = output.tasks[0]
     if task.intent not in ('STATISTICS', 'RANKING', 'CAUSE') or task.custom_query:
+        return output
+    # 상대국 주어 질문은 _normalize_analysis가 한국 기준 방향을 정했다. 아래의 수출/수입 낱말 규칙으로 되돌리지 않는다.
+    if _partner_subject_flow(question, task.slots.countries):
         return output
     if re.search(r'수(?:출|입)(?:액|량)?\s*(?:말고|빼고|제외)', question):
         return output
