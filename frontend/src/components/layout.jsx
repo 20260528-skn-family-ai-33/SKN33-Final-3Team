@@ -36,7 +36,9 @@ export function SiteHeader({ active, unread = 0, bellOpen, onBell, isAdmin, admi
         <Logo />
         <nav className="nav" aria-label="주요 메뉴">
           {NAV.map(([key, to, label]) => (
-            <Link key={key} to={to} className={active === key ? 'on' : ''} aria-current={active === key ? 'page' : undefined}>{label}</Link>
+            // 지금 보고 있는 메뉴를 다시 누르면 화면에 알린다(기사 화면은 이 신호로 검색칸을 비운다).
+            <Link key={key} to={to} className={active === key ? 'on' : ''} aria-current={active === key ? 'page' : undefined}
+              onClick={() => { if (active === key) window.dispatchEvent(new CustomEvent('nav:reselect', { detail: to })) }}>{label}</Link>
           ))}
         </nav>
         <div className="hd-r">

@@ -31,10 +31,11 @@ export function Signup() {
   const ready = passwordReady && agreementReady
   const termsError = serviceTerms.error || privacyTerms.error
   const reloadTerms = () => { serviceTerms.reload(); privacyTerms.reload() }
-  const agreement = (key, label, terms) => (
+  // name: 스크린리더가 어떤 약관의 '내용 보기'인지 구분하도록 버튼 이름에 붙이는 약관 이름
+  const agreement = (key, label, terms, name) => (
     <div className="between" style={{ gap: 12 }}>
       <Check checked={agreed[key]} onChange={value => setAgreed(current => ({ ...current, [key]: value }))}>{label}</Check>
-      {terms && <button type="button" className="reset more" style={{ fontSize: 13, flexShrink: 0 }} disabled={!terms.data} onClick={() => setViewing(terms.data.terms)}>내용 보기</button>}
+      {terms && <button type="button" className="reset more" style={{ fontSize: 13, flexShrink: 0 }} disabled={!terms.data} aria-label={`${name} 내용 보기`} onClick={() => setViewing(terms.data.terms)}>내용 보기</button>}
     </div>
   )
 
@@ -103,8 +104,8 @@ export function Signup() {
         <p className="note" style={{ marginTop: 10 }}>이름은 필수 입력입니다. 이메일은 대소문자를 구분하며 형식·중복 여부와 비밀번호 일치 여부를 확인합니다.</p>
         <div className="col" role="group" aria-label="필수 약관 동의" style={{ gap: 10, marginTop: 22 }}>
           {agreement('age', '[필수] 만 14세 이상입니다.')}
-          {agreement('service', '[필수] 서비스 이용약관에 동의합니다.', serviceTerms)}
-          {agreement('privacy', '[필수] 개인정보 수집·이용에 동의합니다.', privacyTerms)}
+          {agreement('service', '[필수] 서비스 이용약관에 동의합니다.', serviceTerms, '서비스 이용약관')}
+          {agreement('privacy', '[필수] 개인정보 수집·이용에 동의합니다.', privacyTerms, '개인정보 수집·이용')}
         </div>
         <ErrorNotice error={termsError} retry={reloadTerms} />
         <div className="sp24" />

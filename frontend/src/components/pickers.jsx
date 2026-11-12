@@ -175,11 +175,13 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
   const [query, setQuery] = useState('')
   const regions = useQuery('/reference/regions')
   const continents = (regions.data?.items || []).filter(r => !r.parent_id)
+  const countryNames = countries.map(c => c.name)
+  const allCountriesSelected = countryNames.length > 0 && countryNames.every(name => value.includes(name))
   const choices=includeKorea?[{country_code:'__KOREA_TOTAL__',name:'한국(대한민국)'},...countries]:countries
   const list = choices.filter(c => !query.trim() || c.name.includes(query.trim()))
   const shown = variant === 'chips' && !query.trim()
     ? [...choices.filter(c => value.includes(c.name)), ...choices.filter(c => !value.includes(c.name)).slice(0, 3)]
-    : (query.trim() ? list : choices.slice(0, Math.max(9, value.length)))
+    : (query.trim() ? list : choices.filter((c, index) => index < 9 || value.includes(c.name)))
   // 대륙 칩은 토글이다: 그 대륙 국가가 모두 선택돼 있으면 그 대륙 국가만 해제하고(다른 대륙·개별 선택은 유지), 아니면 모두 추가한다.
   const continentNames = region => countries.filter(c => region.country_codes.includes(c.country_code)).map(c => c.name)
   const continentOn = region => { const names = continentNames(region); return names.length > 0 && names.every(name => value.includes(name)) }
@@ -194,6 +196,11 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
         <Icon name="search" size={18} color="#9AA0AA" />
       </div>
       <div className="chips" style={{ marginTop: variant === 'grid' ? 14 : 12 }}>
+        <button type="button" className={'chip sm' + (allCountriesSelected ? ' on' : ' dash')}
+          disabled={!countryNames.length} aria-pressed={allCountriesSelected}
+          onClick={() => onChange(allCountriesSelected ? value.filter(name => !countryNames.includes(name)) : [...new Set([...value, ...countryNames])])}>
+          전체 국가
+        </button>
         {continents.map(c => {
           const on = continentOn(c)
           return <button type="button" key={c.region_id} className={'chip sm' + (on ? ' on' : ' dash')} aria-pressed={on}

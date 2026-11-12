@@ -24,8 +24,10 @@ def validate_scope(store, hs_items, countries, depth=None):
         require(ver=='HS2022', '판본은 HS2022만 허용합니다.')
         require(code.isdigit() and len(code) in ([depth] if depth else [4,6]), '허용되지 않은 HS 단위입니다.', 'INVALID_HS_DEPTH')
         require(store.c.scalar(select(hs.c.hs_code).where(hs.c.hs_code==code,hs.c.hs_ver==ver)) is not None,'등록된 HS 코드가 아닙니다.','INVALID_HS_CODE')
-    for code in countries:
-        require(store.c.scalar(select(country.c.country_code).where(country.c.country_code==code,country.c.country_role=='COUNTRY')) is not None,'등록된 일반 국가 코드가 아닙니다.','INVALID_COUNTRY')
+    if countries:
+        registered = store.c.scalars(select(country.c.country_code).where(
+            country.c.country_code.in_(countries), country.c.country_role == 'COUNTRY'))
+        require(set(countries) == set(registered), '등록된 일반 국가 코드가 아닙니다.', 'INVALID_COUNTRY')
 
 
 def user_view(store, user):

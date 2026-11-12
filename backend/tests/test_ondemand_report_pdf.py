@@ -354,15 +354,21 @@ class OnDemandReportTest(unittest.TestCase):
 
     @unittest.skipUnless(os.environ.get('RUN_REPORT_PDF_TESTS') == '1', 'Requires Playwright Chromium')
     def test_api_worker_pdf_docx_xlsx_and_frozen_download(self):
+        from collections import Counter
+        from docx.oxml.ns import qn
+        from lxml import html
         from pypdf import PdfReader
         uid = self.signup()
-        preview = self.preview()
+        preview = self.preview(country_codes=['US', 'CN'])
         created = self.post('reports', {'preview_id':preview['preview_id'], 'confirm_conditions':True,
             'formats':['PDF','DOCX'], 'sections':['KPI','TOP_COUNTRIES','LOCAL_ISSUES']}, **{'Idempotency-Key':'ondemand-html'})
         self.assertEqual(created.status_code, 202, created.text)
         rid = created.json()['job']['report_id']
-        with patch('backend.app.api.files.reportlab_pdf', side_effect=AssertionError('no fallback')):
+        from backend.app.services.report_browser import launch_chromium
+        with patch('backend.app.api.files.reportlab_pdf', side_effect=AssertionError('no fallback')), \
+             patch('backend.app.services.report_browser.launch_chromium', wraps=launch_chromium) as launches:
             self.assertTrue(run_once(self.app.state.database, self.settings))
+        launches.assert_called_once()
         response = self.client.get(f'/api/v1/reports/{rid}/files/pdf')
         self.assertEqual(response.status_code, 200, response.text[:100] if response.status_code != 200 else '')
         pdf = PdfReader(io.BytesIO(response.content))
@@ -377,21 +383,36 @@ class OnDemandReportTest(unittest.TestCase):
         with self.engine.begin() as c:
             saved = c.scalar(select(self.meta.tables['report'].c.content_json).where(self.meta.tables['report'].c.report_id == int(rid)))
         self.assertEqual(saved['template_pdf']['report_type'], 'RPT_ON_DEMAND')
-        stripped = {k:v for k,v in saved.items() if k != 'template_pdf'}
-        # DOCX consumes the original sections, not template metrics or HTML.
         from docx import Document
-        plain = lambda payload: '\n'.join(p.text for p in Document(io.BytesIO(payload)).paragraphs)
-        self.assertEqual(plain(files.report_docx(saved, self.settings)), plain(files.report_docx(stripped, self.settings)))
         for fmt in ('docx', 'xlsx'):
             downloaded = self.client.get(f'/api/v1/reports/{rid}/files/{fmt}')
             self.assertEqual(downloaded.status_code, 200)
             if fmt == 'docx':
-                headers = [cell.text for t in Document(io.BytesIO(downloaded.content)).tables for cell in t.rows[0].cells]
+                word = Document(io.BytesIO(downloaded.content))
+                self.assertEqual(word.tables[0].cell(0, 0).text, '<제목(직접입력)>')
+                self.assertEqual({s.get(qn('w:fill')) for s in word.tables[1]._tbl.xpath('.//w:shd')}, {'ECECEC'})
+                self.assertIn('미국 외 1개', ''.join(word.tables[1]._tbl.xpath('.//w:t/text()')))
+                body = ' '.join(word.element.xpath('.//w:t/text()'))
+                for label in ('목차', '보고서 정보', '월별 수출 추이', '시장 집중도', '계산 방법'):
+                    self.assertIn(label, body)
+                # Compare editable cells, including tables inside two-column Word layouts.
+                def compact(text):
+                    return ''.join(text.split())
+                expected_tables = Counter(
+                    tuple(tuple(compact(cell.text_content()) for cell in row.xpath('./th|./td'))
+                          for row in table.xpath('.//tr'))
+                    for table in html.fromstring(render('RPT_ON_DEMAND', saved['template_pdf']['context'])).xpath('//table'))
+                actual_tables = Counter(
+                    tuple(tuple(compact(''.join(cell.xpath('./w:p//w:t/text()'))) for cell in row.xpath('./w:tc'))
+                          for row in table.xpath('./w:tr'))
+                    for table in word.element.xpath('.//w:tbl'))
+                self.assertFalse(expected_tables - actual_tables)
+                self.assertGreaterEqual(len(word.inline_shapes), 1)
             else:
                 from openpyxl import load_workbook
                 headers = [cell.value for cell in load_workbook(io.BytesIO(downloaded.content)).worksheets[0][1]]
-            for label in ('비교 기간 수출액', '비교 증감률', '최대 국가 비중'):
-                self.assertIn(label, headers)
+                for label in ('비교 기간 수출액 (USD)', '비교 증감률 (%)', '최대 국가 비중 (%)'):
+                    self.assertIn(label, headers)
         with patch('backend.app.api.reports.build_document', side_effect=AssertionError('no rebuild')):
             self.assertEqual(self.client.get(f'/api/v1/reports/{rid}/files/pdf').content, response.content)
         other = self.signup('other@example.org')

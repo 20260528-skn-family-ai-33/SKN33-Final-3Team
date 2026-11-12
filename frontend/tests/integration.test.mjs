@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { previewExpired, rankLink, rankInitial, rankBasis, comparisonPeriod, mapLimited, reportComparisonInputs, reportConditions } from '../src/api/integration.js'
+import { previewExpired, rankLink, rankInitial, rankBasis, countryListLabel, comparisonPeriod, mapLimited, reportComparisonInputs, reportConditions } from '../src/api/integration.js'
 
 test('preview renewal only handles expired snapshots', () => {
   assert.equal(previewExpired({status:409,code:'PREVIEW_EXPIRED'}), true)
@@ -89,4 +89,11 @@ test('report custom input is explicit and NONE is preserved', () => {
   const none=reportConditions({conditions:{compare:'NONE'},from:'2025-02',to:'2025-02',...reportComparisonInputs({compare:'NONE'})})
   assert.equal(none.compare,'NONE')
   assert.equal(none.compare_period,undefined)
+})
+
+test('국가가 많으면 순위 화면 제목·선택칸에서 첫 국가 외 N개국으로 줄인다', () => {
+  assert.equal(countryListLabel([]), '')
+  assert.equal(countryListLabel(['중국']), '중국')
+  assert.equal(countryListLabel(['중국', '일본', '베트남']), '중국 · 일본 · 베트남')
+  assert.equal(countryListLabel(['아랍에미리트 연합', '아프가니스탄', '아르메니아', '아제르바이잔']), '아랍에미리트 연합 외 3개국')
 })

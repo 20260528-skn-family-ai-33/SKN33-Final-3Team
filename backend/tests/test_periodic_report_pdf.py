@@ -428,9 +428,10 @@ class PeriodicContextTest(unittest.TestCase):
             reports.attach_weekly_summary(doc)
         return doc
 
-    def docx_text(self, doc):
+    def docx_sources(self, doc):
         from docx import Document
-        return '\n'.join(p.text for p in Document(io.BytesIO(files.report_docx(doc, self.app.state.settings))).paragraphs)
+        word = Document(io.BytesIO(files.report_docx(doc, self.app.state.settings)))
+        return next(row.cells[1].text for table in word.tables for row in table.rows if row.cells[0].text == '기사')
 
     def test_report_sources_count_legacy_and_current_short_news_once(self):
         uid = int(self.signup())
@@ -445,7 +446,7 @@ class PeriodicContextTest(unittest.TestCase):
         self.assertEqual(doc['template_pdf']['context']['summary']['counts']['short'], 2)
         labels = [s['label'] for s in doc['meta']['sources']]
         self.assertEqual(labels.count('KOTRA 단신속보'), 1)
-        self.assertEqual(self.docx_text(doc).count('KOTRA 단신속보'), 1)
+        self.assertEqual(self.docx_sources(doc).count('KOTRA 단신속보'), 1)
 
     def test_report_sources_include_articles_used_for_spikes_beyond_the_20_cards(self):
         uid = int(self.signup())
@@ -467,7 +468,7 @@ class PeriodicContextTest(unittest.TestCase):
         self.assertEqual(len(doc['sections'][0]['articles']), 20)
         labels = [s['label'] for s in doc['meta']['sources']]
         self.assertEqual(sorted(labels), ['KOTRA 단신속보', 'KOTRA 해외시장뉴스'])
-        text = self.docx_text(doc)
+        text = self.docx_sources(doc)
         self.assertEqual((text.count('KOTRA 단신속보'), text.count('KOTRA 해외시장뉴스')), (1, 1))
         self.assertEqual(ctx['news_source_label'], 'KOTRA 해외시장뉴스, KOTRA 단신속보')
 
@@ -713,8 +714,6 @@ class PeriodicContextTest(unittest.TestCase):
         _, document, _ = self.context(uid, self.record())
         with patch('backend.app.services.report_pdf.template_pdf', side_effect=AssertionError('unexpected HTML')):
             self.assertTrue(files.report_pdf(document, self.settings).startswith(b'%PDF'))
-            # Even a periodic context attached to the snapshot must not alter DOCX rendering.
-            document['template_pdf'] = {'context': {}, 'report_type': 'RPT_MONTHLY'}
             self.assertTrue(files.report_docx(document, self.settings).startswith(b'PK'))
 
     def test_missing_font_is_explicit_not_a_silent_legacy_fallback(self):

@@ -20,6 +20,9 @@ export function LineChart({ labels, series, yTicks, width = 760, height = 230, l
       {labels.map((l, i) => i % every === 0 && <text key={i} x={x(i)} y={height - 8} fontSize="11" fill="#8A919C" textAnchor="middle">{fullLabels?.[i] && <title>{fullLabels[i]}</title>}{l}</text>)}
       {series.map((s, si) => (
         <g key={si}>
+          {s.areaColor && s.values.map((v, i) => i > 0 && v != null && s.values[i - 1] != null && (
+            <polygon key={i} fill={s.areaColor} points={`${x(i-1)},${yBottom} ${x(i-1)},${y(s.values[i-1])} ${x(i)},${y(v)} ${x(i)},${yBottom}`} />
+          ))}
           <path d={path(s.values)} fill="none" stroke={s.color} strokeWidth="2.5" strokeLinejoin="round" />
           {s.values.map((v, i) => v != null && (
             <g key={i}>
