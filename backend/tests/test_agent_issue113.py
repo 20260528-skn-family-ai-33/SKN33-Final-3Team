@@ -39,6 +39,21 @@ class PartnerSubjectFlowTest(unittest.TestCase):
         [task] = postprocess(output, question, previous_both_trade_flows=True).tasks
         self.assertEqual(task.slots.trade_flow, 'EXPORT')
 
+    def test_partner_subject_with_both_flows_queries_both_directions(self):
+        for question in ('미국이 한국에게 대표적으로 수입 수출하는 항목이 뭐야?', '미국이 한국에 수출입하는 대표 품목은?'):
+            with self.subTest(question=question):
+                tasks = plan(question, [{'intent': 'RANKING', 'question': question,
+                                         'slots': {'countries': US, 'ranking_group': 'HS6'}}])
+                self.assertEqual([(t.slots.trade_flow, t.question.endswith(label)) for t, label in
+                                  zip(tasks, ('(한국의 대미국 수출)', '(한국의 대미국 수입)'))],
+                                 [('EXPORT', True), ('IMPORT', True)])
+
+    def test_korea_as_later_subject_keeps_llm_flow(self):
+        question = '미국이 한국에 부과한 관세 이후 한국이 미국에 수출한 품목은?'
+        [task] = plan(question, [{'intent': 'RANKING', 'question': question,
+                                  'slots': {'countries': US, 'ranking_group': 'HS6', 'trade_flow': 'EXPORT'}}])
+        self.assertEqual((task.question, task.slots.trade_flow), (question, 'EXPORT'))
+
     def test_already_flipped_by_llm_stays_and_korea_subject_unchanged(self):
         [task] = plan('미국은 한국산 화장품을 얼마나 수입해?', [{'intent': 'STATISTICS', 'question': '미국은 한국산 화장품을 얼마나 수입해?',
             'slots': {'countries': US, 'products': ['화장품'], 'trade_flow': 'EXPORT'}}])

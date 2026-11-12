@@ -326,8 +326,8 @@ def _normalize_report_requests(output: PlannerOutput, question: str) -> PlannerO
 
 
 _BOTH_TRADE_FLOWS = re.compile(
-    r'수출입|수출(?:액|량)?\s*(?:과|이랑|랑|및|[,·/])\s*수입'
-    r'|수입(?:액|량)?\s*(?:과|이랑|랑|및|[,·/])\s*수출'
+    r'수출입|수출(?:액|량)?\s*(?:과|이랑|랑|및|[,·/]|\s)\s*수입'   # "수입 수출"처럼 띄어 쓴 나열도 두 방향이다
+    r'|수입(?:액|량)?\s*(?:과|이랑|랑|및|[,·/]|\s)\s*수출'
 )
 HS_CODE_MENTION = re.compile(r'(?<![A-Za-z])HS(?:\s*[46](?!\d))?(?:\s*(?:단위|코드)){0,2}\s*[:\-]?\s*(\d{6}|\d{4})(?!\d)', re.I)
 _HS_FOLLOWUP = re.compile(r'(?:' + HS_CODE_MENTION.pattern + r'|(\d{6}))'
@@ -351,13 +351,28 @@ _RANKING_DETAIL = re.compile(r'증감|증가|감소|변화|변동|대비|전월|
 _KOREA_AS_OBJECT = r'(?:한국|대한민국|우리나라)(?:에게서|에게|한테서|한테|으로부터|로부터|에서|에|산|으로|로)'
 
 
-def _partner_subject_flow(text, countries):
-    """상대국이 주어인 수출입("미국이 한국에서 수입하는")이면 (국가명, 한국 기준 방향). 수출·수입을 함께 말하면 None."""
+def _partner_subject(text, countries):
+    """상대국이 주어인 수출입("미국이 한국에서 수입하는")이면 (국가명, 질문 속 방향 낱말 {'수입','수출'}). 아니면 None.
+    뒤 절에서 한국이 새 주어로 나오면("미국이 한국에 부과한 관세 이후 한국이 미국에 수출한") 그 뒤 동사는 한국이 주어다."""
     for country in countries or []:
         match = re.search(re.escape(country.mention.strip()) + r'\s*(?:이|가|은|는)\s.*?' + _KOREA_AS_OBJECT + r'(.*)', text)
-        flows = set(re.findall(r'(수입|수출)(?!국|시장|대상)', match[1])) if match else set()
-        if len(flows) == 1:
-            return country.name, 'EXPORT' if flows == {'수입'} else 'IMPORT'
+        if not match:
+            continue
+        tail = match[1]
+        if korea := re.search(r'(?:한국|대한민국|우리나라)\s*(?:이|가|은|는)(?=\s)', tail):
+            tail = tail[:korea.start()]
+        words = {m[0] for m in re.finditer(r'수출입|(?:수입|수출)(?!국|시장|대상)', tail)}
+        flows = {'수입', '수출'} if '수출입' in words else words
+        if flows:
+            return country.name, flows
+    return None
+
+
+def _partner_subject_flow(text, countries):
+    """상대국 주어 수출입의 (국가명, 한국 기준 방향). 수출·수입을 함께 말하면 None(두 방향 모두 조회한다)."""
+    found = _partner_subject(text, countries)
+    if found and len(found[1]) == 1:
+        return found[0], 'EXPORT' if found[1] == {'수입'} else 'IMPORT'
     return None
 
 
@@ -489,8 +504,14 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
             task.model_copy(update={'slots': task.slots.model_copy(update={'trade_flow': flow})}),
         ]})
     if _BOTH_TRADE_FLOWS.search(question) or (previous_both_trade_flows and task.slots.trade_flow is None):
+        # 상대국 주어("미국이 한국에 수입 수출하는")면 두 작업 제목에 한국 기준 방향을 병기한다.
+        partner = _partner_subject(question, task.slots.countries)
+        def question_for(flow, label):
+            if partner:
+                return f'{task.question} (한국의 대{partner[0]} {label})'
+            return f'{label} · {task.question}' if task.intent == 'CAUSE' else task.question
         tasks = [task.model_copy(update={
-            'question': f'{label} · {task.question}' if task.intent == 'CAUSE' else task.question,
+            'question': question_for(flow, label),
             'slots': task.slots.model_copy(update={'trade_flow': flow}),
         }) for flow, label in (('EXPORT', '수출'), ('IMPORT', '수입'))]
         return output.model_copy(update={'tasks': tasks})
