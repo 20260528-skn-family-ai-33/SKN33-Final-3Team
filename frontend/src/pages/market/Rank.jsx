@@ -118,7 +118,7 @@ function RankResults({ route }) {
   // 파일 이름: 국가_기간_내용.xlsx (파일명에 쓸 수 없는 글자는 뺀다)
   // 품목명은 길어서 코드로 적는다. 예) 미국_2025-10~2025-12_HS870332_월별수출입.xlsx
   const fileKind = byMonth ? '월별수출입' : rankingGroup === 'HS6' ? '품목순위' : '교역국순위'
-  const productLabel = interestProducts.length === 1 ? `HS${interestProducts[0]}` : interestProducts.length ? '관심품목' : applied.product ? `HS${applied.product}` : '전체품목'
+  const productLabel = interestProducts.length ? compactList(interestProducts.map(code => 'HS' + code), 1) : applied.product ? `HS${applied.product}` : '전체품목'
   // AI 질문에는 '관심 국가·관심 품목' 같은 묶음 말 대신 실제 국가 이름과 HS 코드를 적어, 채팅이 같은 조건으로 분석하게 한다.
   const askCountry = countryNames.join(', ') || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
   // AI 질문에는 조회 종류와 수출·수입 기준도 넣어, 채팅이 화면과 같은 순위를 분석하게 한다.
@@ -131,7 +131,8 @@ function RankResults({ route }) {
   const chatBlocked = !result.data || result.loading || !!result.error || overChatLimit
   const chatReason = overChatLimit ? `AI챗봇은 국가·품목을 ${CHAT_MAX_ITEMS}개까지 받을 수 있습니다. 품목이나 국가를 골라 조회한 뒤 열어 주세요.` : '순위 조회가 끝나면 이 조건으로 AI챗봇을 열 수 있습니다.'
   const askProduct = interestProducts.length ? interestProducts.map(code => `${productName(code)}(HS ${code})`).join(', ') : applied.product ? `${productName(applied.product)}(HS ${applied.product})` : '전체 품목'
-  const fileName = `${scopeCountry}_${query.period_start}~${query.period_end}_${productLabel}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '') + '.xlsx'
+  const fileCountry = compactList(countryNames.length ? countryNames : interestCountries, 1) || '전체국가'
+  const fileName = `${fileCountry}_${query.period_start}~${query.period_end}_${productLabel}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '') + '.xlsx'
   const exportExcel = () => run(() => download(`/results/${result.data.result_id}/file`, fileName))
 
   return (

@@ -1,6 +1,5 @@
 import hashlib
 import json
-import re
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import select, update, delete
@@ -9,6 +8,7 @@ from backend.app.api import trade, news, jobs
 from backend.app.api.accounts import interests, validate_scope
 from backend.app.api.results import read_snapshot, save_snapshot, result_table, analysis_conditions
 from backend.app.api.files import report_pdf, report_docx
+from backend.app.api.filenames import filename_part, selection_part
 
 TITLES=json.loads((Path(__file__).resolve().parents[1]/'templates/reports/layout.json').read_text(encoding='utf-8'))['sections']
 PERIODIC_REPORT_TYPES=frozenset(('RPT_WEEKLY','RPT_MONTHLY','RPT_QUARTERLY'))
@@ -27,14 +27,8 @@ def download_filename(store,record,fmt):
     names=dict(store.c.execute(select(country.c.country_code,country.c.name_ko)
                                .where(country.c.country_code.in_(codes))).all()) if codes else {}
     hs_names=report_hs_names(store,[record])
-    def joined(items,default):
-        return '-'.join(items[:3])+(f'-외{len(items)-3}개' if len(items)>3 else '') if items else default
-    def safe(value,limit=60):
-        value=re.sub(r'[\\/:*?"<>|\x00-\x1f]+','_',str(value))
-        value=re.sub(r'\s+','_',value).strip(' ._') or '전체'
-        return value.encode('utf-8')[:limit].decode('utf-8',errors='ignore').rstrip(' ._')
-    countries=joined((['한국전체'] if c.get('include_korea_total') else [])+[names.get(code,code) for code in codes],'전체국가')
-    products=joined([hs_names.get(h['hs_code'],'HS'+h['hs_code']) for h in c.get('hs_items',[])],'전체품목')
+    countries=selection_part((['한국전체'] if c.get('include_korea_total') else [])+[names.get(code,code) for code in codes],'전체국가')
+    products=selection_part([hs_names.get(h['hs_code']) or 'HS'+h['hs_code'] for h in c.get('hs_items',[])],'전체품목')
     p=c.get('period') or {}
     period_name=f"{p['start']}~{p['end']}" if p.get('start') and p.get('end') else '전체기간'
     flow='수입' if c.get('trade_flow')=='IMPORT' else '수출'
@@ -43,7 +37,7 @@ def download_filename(store,record,fmt):
     created=record.get('completed_at') or record['created_at']
     if isinstance(created,str): created=datetime.fromisoformat(created.replace('Z','+00:00'))
     local=created.replace(tzinfo=created.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9)))
-    return '_'.join(safe(v) for v in (countries,period_name,products,topic))+f'_리포트_{local:%Y%m%d_%H%M%S}.'+fmt
+    return '_'.join((countries,filename_part(period_name),products,filename_part(topic)))+f'_리포트_{local:%Y%m%d_%H%M%S}.'+fmt
 
 
 def resolve_comparison(conditions, adjustments):

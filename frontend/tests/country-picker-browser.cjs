@@ -20,8 +20,11 @@ const { chromium } = require('playwright')
       const pathname = url.pathname
       if (pathname.endsWith('/data/availability')) return route.fulfill({ json: { trade_end_month: '2025-12' } })
       if (pathname.endsWith('/trade/rankings') || pathname.endsWith('/trade/trends')) {
-        return route.fulfill({ json: { items: [], page: { page_size: 20, total: 0 } } })
+        return route.fulfill({ json: { result_id: 'rank-test', items: [
+          { country_code: 'US', rank: 1, export_amount_usd: 1000, import_amount_usd: 100 }
+        ], page: { page_size: 20, total: 1 } } })
       }
+      if (pathname.endsWith('/results/rank-test/file')) return route.fulfill({ body: Buffer.from('ranking fixture') })
       if (pathname.endsWith('/reference/regions')) return route.fulfill({ json: { items: [
         { region_id: 1, parent_id: null, name_ko: '오세아니아', country_codes: ['AU', 'NZ'] },
         { region_id: 2, parent_id: null, name_ko: '아시아', country_codes: ['JP'] }] } })
@@ -99,6 +102,9 @@ const { chromium } = require('playwright')
     await page.getByRole('option', { name: '전체 국가', exact: true }).click()
     for (const name of ['호주', '미국', '일본', '뉴질랜드']) await pick(name)
     assert.deepEqual(await search(), bulk)
+    const downloaded = page.waitForEvent('download')
+    await page.getByRole('button', { name: '엑셀 다운로드' }).click()
+    assert.equal((await downloaded).suggestedFilename(), '호주 외 3개_2025-10~2025-12_HS330499_교역국순위.xlsx')
     assert.deepEqual(errors, [])
     console.log('PASS country chips, continent toggle, select all, and identical ranking request for manual selection')
   } finally { if (browser) await browser.close(); await server.close() }
