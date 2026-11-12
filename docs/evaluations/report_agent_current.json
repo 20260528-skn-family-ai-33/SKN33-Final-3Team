@@ -2,33 +2,38 @@
   "schema_version": 2,
   "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
   "evaluation": "Report Agent 오프라인 설계 계약 평가",
-  "evaluated_at_utc": "2026-11-10T07:10:28.563540+00:00",
+  "evaluated_at_utc": "2026-11-12T01:39:44.558220+00:00",
   "source_mode": "working_tree",
-  "source_revision": "f941e640016a58ad8f1e34b816af04d0f97b3d90",
-  "source_dirty": false,
-  "source_changes": [],
-  "harness_revision": "f941e640016a58ad8f1e34b816af04d0f97b3d90",
-  "harness_dirty": false,
-  "harness_changes": [],
+  "source_revision": "2f65a5a8fb382aeb3f182a63fdef6ed29e9039fe",
+  "source_dirty": true,
+  "source_changes": [
+    "M backend/app/agents/report.py"
+  ],
+  "harness_revision": "2f65a5a8fb382aeb3f182a63fdef6ed29e9039fe",
+  "harness_dirty": true,
+  "harness_changes": [
+    "M backend/scripts/evaluate_report_agent.py",
+    " M backend/tests/test_agent_report.py"
+  ],
   "source_sha256": {
-    "backend/app/api/files.py": "97efb1ac1bd0f1ddd970b4551db6cab5845139936cdfff65dca58fd86127a280",
+    "backend/app/api/files.py": "77af09af907f7606f02a926d0f4729ad3cc76e5070952904a5ed4192e1655cfb",
     "backend/app/services/report_ondemand_context.py": "ceb2fc34804d910a5146f98839442446d27725b94f99ef4b503dd74e0c6bb289",
-    "backend/app/services/report_templates.py": "d7d41d967b4ab854d323f6874633375f76ea158a3f2921d5108efb90c1e0d9de",
-    "backend/app/services/report_context.py": "f9506efefe5662ae0d87fcd0be113ad550e58c982a6ed962784943d2e45ded7b",
-    "backend/app/api/reports.py": "621184e694cbcb9a1d5f093c79da036a2fdefb4fda0cd08205188c13a963bd72",
-    "backend/app/agents/report.py": "f265c00c5c2b6ccf7a0f8dc9b9aeb893995288d381a8cacf705343fe665aff88"
+    "backend/app/services/report_templates.py": "1a55bd02115d8c8beb82d186576b65167b988f2ff287946931c9959c32827377",
+    "backend/app/services/report_context.py": "ef107fe826bbf9036c5d499cf986a3df5f13008e756147a629e433256bbf1b93",
+    "backend/app/api/reports.py": "0e214beaa4496fe51298844d92dcbd51452bbd1ca99008ccf513a84b43840ce3",
+    "backend/app/agents/report.py": "00925508c1527e33d7aaa3ae6d0bc7990f0435702a26471eb954860b9e65bfc1"
   },
   "evidence_sha256": {
-    "backend/tests/test_agent_graph.py": "7d1b0e5780b5aad7f9b76f9e366aaf37a56dc0240dceb50a81e67c1f299b55dd",
+    "backend/tests/test_agent_graph.py": "42b48bf6f21af564468dd9d29db17a9ca55de121ff0c04449d5d2f5323477656",
     "backend/tests/test_agent_pr61_fixes.py": "73908cce2991f8adb09a702b204c7e30c7478d569e603eb4b037cd3f402e8d7f",
-    "backend/tests/test_agent_report.py": "97fab8e4f865bc459b3b23dd7fe379d95cf4f1d18195648dba4a170500ab278a",
+    "backend/tests/test_agent_report.py": "9ac7ce209d8b5fd74b98a17dbceed7f9539475fab60f3de305faa1c833cfebc9",
     "backend/tests/test_agent_state.py": "35c261bb9009c2f9dc9fbb635020d3fe9b1d1ae1e86b4fcf6a78427792ce25ba",
-    "backend/tests/test_backend_api.py": "cfe4e0f622f5665e0c4bf5b51494f88988fdf3988e860093cbb14a6493e2ca91",
-    "backend/scripts/evaluate_report_agent.py": "832510d9966b377ea61b7601c06f1cf28bad88380c725047fcd86bd8676ee4ed",
+    "backend/tests/test_backend_api.py": "3f28e682f0e78edbea420b8502b1e2337eb5b87a2355433db6ab1c762773a25f",
+    "backend/scripts/evaluate_report_agent.py": "6ccff3bf5b35a262a625230959fd3bb638ee11157e2bd5ad56dbd945978b4c2a",
     "backend/tests/api_support.py": "e39e158e4840bb652d8e86db8d21991044c6cda1765c977db6482a2c75b48003",
     "backend/tests/intent_fixtures.py": "a34fed014fdd8532c8f89145bdd615a39418ab6d23e66c60280bc91865f3d4e5"
   },
-  "manifest_sha256": "f6b67c81e430380a0e0634bbcfe0d05d836bcd57a7e014a0a7a9a498a8dc1bbf",
+  "manifest_sha256": "3de8efe78684aba408f56fd528fc483be9b8eeec747348b3721920bffaa3ea34",
   "environment": {
     "python": "3.12.13",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -83,9 +88,18 @@
       "xfail": 0,
       "pass_rate_pct": 100.0
     },
+    "이전 턴 결과": {
+      "total": 7,
+      "pass": 7,
+      "fail": 0,
+      "error": 0,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 100.0
+    },
     "합계": {
-      "total": 25,
-      "pass": 25,
+      "total": 32,
+      "pass": 32,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -316,6 +330,69 @@
       "category": "표시",
       "criterion": "이름이 같은 품목은 HS 코드(필요하면 판본·국가 코드)로 차트 시리즈를 나누고 범례에 표시한다.",
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_same_named_products_get_separate_chart_series",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R26",
+      "group": "이전 턴 결과",
+      "category": "결과표 그대로",
+      "criterion": "'방금 그 표로 리포트'는 직전 답변의 결과표를 그대로 미리보기·리포트에 싣고 다시 조회하지 않는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_table_report_copies_that_table_without_requery",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R27",
+      "group": "이전 턴 결과",
+      "category": "표 선택",
+      "criterion": "직전 답변에 결과표가 여러 개면 REPORT_TABLE로 묻고 고른 표만 싣는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_answer_with_several_tables_asks_which_one",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R28",
+      "group": "이전 턴 결과",
+      "category": "표 없음·만료",
+      "criterion": "직전 답변에 결과표가 없거나 보관 기간이 지났으면 미리보기 없이 안내로 끝난다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_table_missing_or_expired_ends_with_guidance",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R29",
+      "group": "이전 턴 결과",
+      "category": "애매한 요청",
+      "criterion": "'이걸로 리포트'는 REPORT_SOURCE로 묻고 결과표를 고르면 R26과 같은 경로로 간다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_ambiguous_report_request_can_use_the_previous_table",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R30",
+      "group": "이전 턴 결과",
+      "category": "예측 결과표",
+      "criterion": "직전 결과표가 유망시장 예측이면 순위 기준(group_by·anchor)까지 사본에 싣는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_prediction_table_keeps_ranking_basis",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R32",
+      "group": "이전 턴 결과",
+      "category": "조건 고정",
+      "criterion": "직전 결과표 리포트는 질문의 기간 등으로 표 조건을 바꾸지 않고 알리며, 확인 화면의 글 수정은 새 분석을 안내한다(D-92).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_table_report_keeps_the_table_conditions",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R31",
+      "group": "이전 턴 결과",
+      "category": "같은 턴 예측",
+      "criterion": "'유망 수출국 예측 → 그 결과로 리포트'(t1.ml 연결)는 예측 결과표를 순위 기준까지 그대로 리포트에 싣는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_same_turn_prediction_result_becomes_the_report_table",
       "status": "PASS",
       "details": []
     }

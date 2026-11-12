@@ -535,7 +535,7 @@ class Pending(Model):
     task_id: str
     # INTEREST_SELECT: 관심사가 조건 상한을 넘을 때 input.interests 안에서 품목 5개·국가 20개까지 골라 받는다(D-64).
     # 후보는 state에 이미 있으므로 choices에는 '전체 범위'만 둔다.
-    kind: Literal['HS_ITEM', 'COUNTRY', 'INTEREST_CONTEXT', 'INTEREST_SELECT', 'INTEREST_CHANGE', 'RANKING_GROUP', 'MODEL_PERIOD', 'REPORT_CONFIRM', 'SHARE_BASIS', 'INPUT_SELECTION', 'REPORT_SOURCE']
+    kind: Literal['HS_ITEM', 'COUNTRY', 'INTEREST_CONTEXT', 'INTEREST_SELECT', 'INTEREST_CHANGE', 'RANKING_GROUP', 'MODEL_PERIOD', 'REPORT_CONFIRM', 'SHARE_BASIS', 'INPUT_SELECTION', 'REPORT_SOURCE', 'REPORT_TABLE']
     condition_key: ShortText   # 되묻기 횟수를 세는 단위. 예: 't1:hs:화장품', 't1:country:콩고'
     message: ShortText
     choices: list[Choice] = Field(max_length=5)

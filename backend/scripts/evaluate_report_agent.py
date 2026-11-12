@@ -71,6 +71,23 @@ GROUPS = [
         ('R25', '표시', 'same_named_products_get_separate_chart_series',
          '이름이 같은 품목은 HS 코드(필요하면 판본·국가 코드)로 차트 시리즈를 나누고 범례에 표시한다.'),
     ]),
+    # 이슈 #101: 직전 답변의 결과표로 만드는 리포트(설계 '이전 턴 결과 참조'). SOURCES 교체 비교 대상이 아니다(README 참고).
+    ('이전 턴 결과', FLOW, [
+        ('R26', '결과표 그대로', 'previous_table_report_copies_that_table_without_requery',
+         "'방금 그 표로 리포트'는 직전 답변의 결과표를 그대로 미리보기·리포트에 싣고 다시 조회하지 않는다."),
+        ('R27', '표 선택', 'previous_answer_with_several_tables_asks_which_one',
+         '직전 답변에 결과표가 여러 개면 REPORT_TABLE로 묻고 고른 표만 싣는다.'),
+        ('R28', '표 없음·만료', 'previous_table_missing_or_expired_ends_with_guidance',
+         '직전 답변에 결과표가 없거나 보관 기간이 지났으면 미리보기 없이 안내로 끝난다.'),
+        ('R29', '애매한 요청', 'ambiguous_report_request_can_use_the_previous_table',
+         "'이걸로 리포트'는 REPORT_SOURCE로 묻고 결과표를 고르면 R26과 같은 경로로 간다."),
+        ('R30', '예측 결과표', 'previous_prediction_table_keeps_ranking_basis',
+         '직전 결과표가 유망시장 예측이면 순위 기준(group_by·anchor)까지 사본에 싣는다.'),
+        ('R32', '조건 고정', 'previous_table_report_keeps_the_table_conditions',
+         '직전 결과표 리포트는 질문의 기간 등으로 표 조건을 바꾸지 않고 알리며, 확인 화면의 글 수정은 새 분석을 안내한다(D-92).'),
+        ('R31', '같은 턴 예측', 'same_turn_prediction_result_becomes_the_report_table',
+         "'유망 수출국 예측 → 그 결과로 리포트'(t1.ml 연결)는 예측 결과표를 순위 기준까지 그대로 리포트에 싣는다."),
+    ]),
 ]
 CASES = [dict(id=identity, group=group, category=category, criterion=criterion, test=f'{test_class}.test_{method}')
          for group, test_class, entries in GROUPS for identity, category, method, criterion in entries]

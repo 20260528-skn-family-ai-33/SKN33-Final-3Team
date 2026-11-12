@@ -48,7 +48,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `status` | string | 기존 값 + `EXPIRED`(되묻기 30분 경과) + `CANCELLED`(사용자 중단) + `WAITING_REPORT`(리포트 완료 대기) |
 | `progress` | object \| null | 실행 중일 때 `{done, total, label}`. 완료 단계 수, 전체 단계 수, 현재 단계 문구(예: "데이터 조회 중"). 진행률 바에 사용 |
 | `round_started_at` | string(ISO 8601) \| null | 경과 초 기준 시각. 되묻기에 답하면 새 시각으로 바뀜. 프론트는 현재 시각 − 이 값으로 초를 표시 |
-| `clarification.kind` | string | 기존 `HS_ITEM`, `INTEREST_CONTEXT` + `COUNTRY`(비슷한 국가 확인), `INTEREST_SELECT`(관심사 골라 받기), `INTEREST_CHANGE`(관심사 변경 확인), `RANKING_GROUP`(국가/품목 순위 선택), `MODEL_PERIOD`(최신 기준 예측 확인), `REPORT_CONFIRM`(리포트 조건·형식 확인), `SHARE_BASIS`(점유율 분모 선택), `REPORT_SOURCE`(직전 결과표 사용·같은 조건 재조회 선택). 뒤 세 개는 아래 보완 절 참고 |
+| `clarification.kind` | string | 기존 `HS_ITEM`, `INTEREST_CONTEXT` + `COUNTRY`(비슷한 국가 확인), `INTEREST_SELECT`(관심사 골라 받기), `INTEREST_CHANGE`(관심사 변경 확인), `RANKING_GROUP`(국가/품목 순위 선택), `MODEL_PERIOD`(최신 기준 예측 확인), `REPORT_CONFIRM`(리포트 조건·형식 확인), `SHARE_BASIS`(점유율 분모 선택), `REPORT_SOURCE`(직전 결과표 사용·같은 조건 재조회 선택), `REPORT_TABLE`(직전 답변의 결과표 중 리포트에 쓸 표 선택). 뒤 네 개는 아래 보완 절 참고 |
 | `clarification.report_preview` | object \| null | `REPORT_CONFIRM`일 때만. `{preview_id, expires_at, conditions, adjustments, formats}` |
 | `clarification.interests` | object \| null | `INTEREST_SELECT`일 때만. `{hs_items: HsItem[], country_codes: string[]}`, 질문 시점 관심사(품목 최대 100개·국가 최대 250개). 프론트는 체크박스로 보여 주고 품목 5개·국가 20개까지 고르게 한다. 선택지(`choices`)에는 "전체 범위"만 있다 |
 | `clarification.allow_text` | boolean | 직접 입력 답을 받는지. 기본 true |
@@ -204,6 +204,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 
 ### D-95: 선행 결과 대상 선택
 - clarification.kind에 REPORT_SOURCE를 추가한다(2026-11-11). 선택지는 `PREVIOUS_RESULT`(직전 결과표로 리포트)와 `REQUERY`(같은 조건으로 다시 조회)이며 choice_ids 또는 text로 답한다. 조건별 2회 제한이다.
+- clarification.kind에 REPORT_TABLE을 추가한다(2026-11-12, 이슈 #101). 직전 답변에 결과표가 여러 개일 때 "어느 결과표로 리포트를 만들까요?"를 묻는다. 선택지는 `T1`~`T5`(라벨은 표를 만든 조건: `1. 미국 · HS 3307 · 월별 추이`, 국가·품목이 3개 이상이면 `미국, 중국 외 1`)이며 choice_ids 또는 text로 답한다. 조건별 2회 제한이다. 화면은 다른 선택형 되묻기와 같이 그리면 되고 프론트 변경은 없다. REPORT_SOURCE의 `PREVIOUS_RESULT` 라벨에서 "(준비 중)"을 뺐다.
 - clarification.kind에 INPUT_SELECTION을 추가한다. 선택지와 직접 입력을 지원하며 API-38은 choice_ids 또는 text만 허용한다. hs_item/interest_selection/report_confirmation은 거부한다. 조건별 2회 제한이다.
 - 사용자가 명시한 개수·기준이면 자동으로 후속 분석한다. 모호한 개수·기준·그룹만 확인한다. applied_defaults/warnings에 실제 선택 기준과 대상 부족을 표시한다. 리포트의 REPORT_CONFIRM은 생략하지 않는다.
 

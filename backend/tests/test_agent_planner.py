@@ -76,7 +76,7 @@ class AgentPlannerTest(unittest.TestCase):
         self.assertEqual(queries, [{'template': 'TREND'}] * 2)
 
     def test_previous_result_report_marks_table_reuse_but_not_condition_reuse(self):
-        from unittest.mock import Mock
+        from unittest.mock import Mock, patch
         from backend.app.agents.conditions import check_conditions
         from backend.tests.test_agent_state import state
 
@@ -88,18 +88,18 @@ class AgentPlannerTest(unittest.TestCase):
             self.assertEqual(task.previous_turn_result, reuse)
             self.assertEqual(task.input_bindings, [])
             self.assertEqual(type(plan).model_validate_json(plan.model_dump_json()), plan)
-            if reuse:
+            if reuse:   # 직전 답변이 없으면 다시 조회하지 않고 안내로 끝난다(결과표 사용 경로는 test_agent_report R26~R29)
                 current = state()
                 current.plan = plan
-                store, preview = Mock(), Mock()
-                check_conditions(store, current, task.steps[0], confirm_report=preview)
+                preview = Mock()
+                with patch('backend.app.agents.bindings.previous_tables', return_value=[]):
+                    check_conditions(Mock(), current, task.steps[0], confirm_report=preview)
                 self.assertEqual(task.steps[0].status, 'FAILED')
-                self.assertIn('이전 대화의 결과표', current.results[task.steps[0].step_id].error)
-                self.assertEqual(store.mock_calls, [])
+                self.assertIn('직전 답변에 리포트로 만들 결과표가 없습니다', current.results[task.steps[0].step_id].error)
                 preview.assert_not_called()
 
     def test_ambiguous_previous_report_asks_table_or_requery(self):
-        from unittest.mock import Mock
+        from unittest.mock import Mock, patch
         from backend.app.agents.clarification import apply_answer
         from backend.app.agents.conditions import check_conditions
         from backend.app.agents.state import Conditions
@@ -117,10 +117,12 @@ class AgentPlannerTest(unittest.TestCase):
         check_conditions(Mock(), current, task.steps[0], confirm_report=Mock())
         self.assertEqual(current.pending.kind, 'REPORT_SOURCE')
         self.assertEqual(current.pending.message, '직전 결과표로 리포트를 만들까요, 아니면 같은 조건으로 다시 조회할까요?')
+        self.assertEqual(current.pending.choices[0].label, '직전 결과표로 리포트')
         apply_answer(current, current.pending.choices[0].patch)
-        check_conditions(Mock(), current, task.steps[0], confirm_report=Mock())
+        with patch('backend.app.agents.bindings.previous_tables', return_value=[]):
+            check_conditions(Mock(), current, task.steps[0], confirm_report=Mock())
         self.assertTrue(task.previous_turn_result)
-        self.assertIn('이전 대화의 결과표', current.results[task.steps[0].step_id].error)
+        self.assertIn('직전 답변에 리포트로 만들 결과표가 없습니다', current.results[task.steps[0].step_id].error)
 
     def test_report_links_the_only_preceding_result(self):
         for question, intent, step in [

@@ -9,6 +9,23 @@ from backend.app.api.common import ApiError,clean,digest,now
 from backend.app.api.schemas import ReportCreate
 
 
+def source_ids(state,task):
+    """리포트에 들어가는 결과표 ID. 같은 턴 선행 결과 또는 직전 답변에서 고른 결과표(previous_turn_result)."""
+    if task.previous_turn_result:
+        return [task.resolved[f'{task.task_id}:previous_result']['previous_result_id']]
+    return [state.results[b.source_step_id].result_id for b in task.input_bindings]
+
+
+def _sources(store,state,task):
+    """(snapshot, info, 출처) 목록. 출처는 같은 턴이면 선행 단계, 직전 답변이면 previous_turn 표시다."""
+    from backend.app.agents.bindings import previous_result, source_versions
+    if task.previous_turn_result:
+        snapshot,info=previous_result(store,state,task)
+        return [(snapshot,info,{'previous_turn':True})]
+    return [(snapshot,info,{'task_id':b.source_task_id,'step_id':b.source_step_id})
+            for b,(snapshot,info) in zip(task.input_bindings,source_versions(store,state,task),strict=True)]
+
+
 def preview(store,state,task):
     key=f'{task.task_id}:report_confirm'
     request=task.report_request
@@ -21,7 +38,7 @@ def preview(store,state,task):
         approved=record['conditions_json'].get('chat_approval')
         if not approved: raise SlotRepair('기존 리포트의 승인 정보를 확인할 수 없습니다. 새 질문으로 다시 요청하세요.')
         previous=ReportRequest.model_validate(approved)
-        sources=[state.results[b.source_step_id].result_id for b in task.input_bindings]
+        sources=source_ids(state,task)
         if previous.conditions!=task.conditions or sources!=record['conditions_json'].get('chat_sources'):
             raise SlotRepair('이전 리포트 승인 조건과 다릅니다. 새 질문으로 다시 요청하세요.')
         task.report_request=previous
@@ -35,13 +52,10 @@ def preview(store,state,task):
         else: return
     public=api_conditions(task.conditions)
     created=reports.preview(store,state.input.user_id,{'conditions':public})
-    if task.input_bindings:
-        from backend.app.agents.bindings import source_versions
-        inputs=source_versions(store,state,task)
+    if task.input_bindings or task.previous_turn_result:
         refs=[]; copies=[]
-        for binding,(snapshot,info) in zip(task.input_bindings,inputs,strict=True):
-            refs.append({**info,'task_id':binding.source_task_id,'step_id':binding.source_step_id,
-                         'conditions':snapshot['conditions']})
+        for snapshot,info,origin in _sources(store,state,task):
+            refs.append({**info,**origin,'conditions':snapshot['conditions']})
             copy={'result_id':info['result_id'],'kind':snapshot['meta']['kind'],
                 'rows':snapshot['rows'],'columns':snapshot['columns'],'total_rows':snapshot['total_rows']}
             # 예측 표는 순위 기준(group_by)이 있어야 리포트가 채팅과 같은 순위를 보인다(행 모양으로 추측하지 않는다).
@@ -68,7 +82,7 @@ def submit(store,state,task,step):
     key=f'chat:{state.input.job_id}:{step.step_id}'
     identity=digest({'conditions':api_conditions(task.conditions),'preview_id':request.preview_id,
                      'formats':sorted(data.formats),'sections':data.sections,
-                     'sources':[state.results[b.source_step_id].result_id for b in task.input_bindings]})
+                     'sources':source_ids(state,task)})
     table=store.t('report')
     existing=store.one(select(table).where(table.c.user_id==state.input.user_id,
                               table.c.generation_key==digest([state.input.user_id,'REPORT',key])).with_for_update())
@@ -88,7 +102,7 @@ def submit(store,state,task,step):
             content.update(source_results=approved['source_results'],source_tables=approved['source_tables'])
         store.c.execute(update(table).where(table.c.report_id==rid).values(content_json=clean(content),conditions_json=clean({
             **record['conditions_json'],'chat_input_fingerprint':identity,'chat_approval':request.model_dump(mode='json'),
-            'chat_sources':[state.results[b.source_step_id].result_id for b in task.input_bindings]})))
+            'chat_sources':source_ids(state,task)})))
     return ReportWait(step_id=step.step_id,report_id=str(rid),started_at=now())
 
 

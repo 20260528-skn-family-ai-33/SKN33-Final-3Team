@@ -251,7 +251,7 @@ class Services:
         pending=state.pending
         task=next(t for t in state.plan.tasks if t.task_id==pending.task_id)
         if pending.kind=='REPORT_CONFIRM' and 'text' in answer:
-            if task.input_bindings:
+            if task.input_bindings or task.previous_turn_result:   # 결과표 기반 리포트는 글로 조건을 바꾸지 않는다(D-92)
                 apply_answer(state,{'reject_input_change':True})
                 return
             text=answer['text']

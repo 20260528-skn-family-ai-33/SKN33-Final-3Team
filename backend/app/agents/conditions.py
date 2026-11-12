@@ -6,7 +6,7 @@ from uuid import uuid4
 from sqlalchemy import select, func
 
 from backend.app.agents.planner import HS_CODE_MENTION, ambiguous_report_source, product_expressions
-from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period,
+from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period, TaskSlots,
                                      MAX_ASKS_PER_CONDITION, MAX_TEXT_CHARS, MARKET_INTENTS, ToolResult)
 from backend.app.api import accounts, reference, trade
 from backend.app.api.chat_slots import country_key, numeric_product, SlotRepair
@@ -141,6 +141,12 @@ _NOT_PRODUCT_FOLLOWUP = re.compile(
 )
 
 
+# 직전 결과표 리포트에서 질문으로 바꿀 수 없는 조건(표를 만든 조건을 따른다)
+PREVIOUS_TABLE_FIXED = {'countries', 'products', 'period', 'recent_months', 'comparison_requested', 'compare_period',
+                        'ranking_group', 'share_basis'}
+PREVIOUS_TABLE_NOTE = '직전 결과표의 조건 그대로 만들었습니다. 조건을 바꾸려면 새로 조회해 주세요.'
+
+
 def _product_key(expression):
     match = HS_CODE_MENTION.fullmatch(expression.strip())
     return match[1] if match else country_key(expression)
@@ -164,13 +170,17 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if source is None:
             return ask(state, task, source_key, 'REPORT_SOURCE',
                 '직전 결과표로 리포트를 만들까요, 아니면 같은 조건으로 다시 조회할까요?',
-                # TODO: Report Agent의 직전 결과표 복사가 연결되면 '(준비 중)'을 뗀다. 지금은 선택하면 안내로 끝난다.
-                [('PREVIOUS_RESULT', '직전 결과표로 리포트(준비 중)', {'report_source': 'PREVIOUS_RESULT'}),
+                [('PREVIOUS_RESULT', '직전 결과표로 리포트', {'report_source': 'PREVIOUS_RESULT'}),
                  ('REQUERY', '같은 조건으로 다시 조회', {'report_source': 'REQUERY'})])
         task.previous_turn_result = source == 'PREVIOUS_RESULT'
-    if task.previous_turn_result:
-        raise SlotRepair('이전 대화의 결과표는 아직 리포트에 바로 사용할 수 없습니다. 조회와 리포트 생성을 한 질문에서 요청해 주세요.')
     slots = task.slots
+    if task.previous_turn_result:
+        # 직전 결과표는 그 조건 그대로 싣는다. 질문에 기간·국가 등이 함께 와도 표 조건을 바꾸지 않는다
+        # (바꾸면 사본 표와 리포트 조건이 어긋난다). 바꾸려면 새로 조회하도록 적용 조건에 알린다.
+        asked = slots.model_dump(include=PREVIOUS_TABLE_FIXED, exclude_none=True)
+        slots = TaskSlots(trade_flow=slots.trade_flow) if slots.trade_flow == 'IMPORT' else TaskSlots()
+        if asked and PREVIOUS_TABLE_NOTE not in task.applied_defaults:
+            task.applied_defaults.append(PREVIOUS_TABLE_NOTE)
     # 이미 품목을 선택한 뒤 재개하는 체크포인트에도 같은 기업명 제외 규칙을 적용한다.
     slots.products = product_expressions(slots.products,article_context=task.intent in ('CAUSE','LOCAL_ISSUES'))
     report_answer=task.resolved.get(f'{task.task_id}:report_confirm',{})
@@ -210,9 +220,16 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     out.ranking_group, out.share_basis = slots.ranking_group, slots.share_basis
     out.compare_period, out.article_period = None, None
     out.trade_flow = slots.trade_flow or base.trade_flow
-    if task.input_bindings:
+    if task.input_bindings or task.previous_turn_result:
         if task.intent=='REPORT' and task.report_request and task.report_request.confirmed:
             out=task.report_request.conditions.model_copy(deep=True)
+        elif task.previous_turn_result:
+            # 직전 답변의 결과표 그대로 리포트를 만든다(설계 '이전 턴 결과 참조'). 조건은 표에 저장된 분석 조건이며
+            # 다시 조회하지 않는다. 표 사본은 미리보기(confirm_report)가 같은 표를 다시 읽어 붙인다.
+            from backend.app.agents.bindings import previous_result, stored_conditions
+            source = previous_result(store, state, task)
+            if source is None: return   # REPORT_TABLE로 어느 표인지 묻는 중
+            out = stored_conditions(source[0])
         else:
             if resolve_bindings is None: raise SlotRepair('선행 결과의 대상을 확인할 수 없습니다.')
             out = resolve_bindings(store, state, task, out)

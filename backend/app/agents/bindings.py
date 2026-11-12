@@ -1,9 +1,88 @@
 """D-90/95: select downstream inputs from owned, unexpired result rows."""
 import re
+from sqlalchemy import select
 from backend.app.agents.conditions import ask
 from backend.app.agents.state import Conditions, HsProduct, MAX_COUNTRIES, MAX_HS_ITEMS, ToolResult
 from backend.app.api.chat_slots import SlotRepair
+from backend.app.api.common import ApiError
 from backend.app.api.results import read_snapshot
+
+PREVIOUS_TABLE_CHOICES = 5   # REPORT_TABLE 선택지 상한(INPUT_SELECTION과 같다)
+TABLE_KINDS = {'TREND': '월별 추이', 'RANKING': '순위', 'SHARE': '비중', 'PREDICTION': '유망시장 예측'}
+NO_PREVIOUS_TABLE = '직전 답변에 리포트로 만들 결과표가 없습니다. 조회와 리포트 생성을 한 질문에서 요청해 주세요.'
+EXPIRED_PREVIOUS_TABLE = '직전 결과표의 보관 기간이 지났습니다. 같은 조건으로 다시 조회한 뒤 리포트를 요청해 주세요.'
+
+
+def previous_tables(store, state):
+    """같은 대화방에서 현재 질문 바로 앞 답변(ASSISTANT 메시지 하나)에 담긴 결과표. 더 앞 답변은 보지 않는다(설계 '이전 턴 결과 참조' 2)."""
+    table = store.t('chat_message')
+    row = store.one(select(table.c.result_json).where(
+        table.c.session_id == int(state.input.session_id), table.c.role == 'ASSISTANT',
+        table.c.message_id < int(state.input.job_id)).order_by(table.c.message_id.desc()).limit(1))
+    answer = ((row or {}).get('result_json') or {}).get('answer') or {}
+    conditions = {t.get('task_id'): t.get('conditions') or {} for t in answer.get('tasks') or []}
+    return [{'result_id': t['result_id'], 'task_id': t.get('task_id'), 'conditions': conditions.get(t.get('task_id'), {}),
+             'kind': (t.get('meta') or {}).get('kind'), 'expired': bool(t.get('expired'))}
+            for t in answer.get('tables') or [] if t.get('result_id')]
+
+
+def _names(values, limit=2):
+    return ', '.join(values[:limit]) + (f' 외 {len(values) - limit}' if len(values) > limit else '')
+
+
+def _table_labels(store, tables):
+    """버튼 문구: '1. 미국 · HS 3307 · 월별 추이'. 질문 문장 대신 표를 만든 조건(국가·품목·종류)으로 구분한다."""
+    codes = sorted({c for t in tables for c in t['conditions'].get('country_codes') or []})
+    names = {}
+    if codes:
+        country = store.t('country')
+        names = {r['country_code']: r['name_ko'] for r in store.rows(
+            select(country.c.country_code, country.c.name_ko).where(country.c.country_code.in_(codes)))}
+    labels = []
+    for index, table in enumerate(tables, 1):
+        conditions = table['conditions']
+        parts = [_names([names.get(c, c) for c in conditions.get('country_codes') or []]) or '전체 국가']
+        if items := [f"HS {h['hs_code']}" for h in conditions.get('hs_items') or [] if h.get('hs_code')]:
+            parts.append(_names(items))
+        parts.append(TABLE_KINDS.get(table['kind'], '결과표'))
+        labels.append(f'{index}. ' + ' · '.join(parts))
+    return [label[:40] for label in labels]
+
+
+def previous_result(store, state, task):
+    """previous_turn_result 리포트의 입력 결과표를 고른다. 여러 개면 REPORT_TABLE로 묻고 None을 돌려준다.
+    고른 result_id는 Task.resolved에 남겨 재개·승인 재진입에서 같은 표를 쓴다. 반환은 source_versions와 같은 (snapshot, info)."""
+    key = f'{task.task_id}:previous_result'
+    chosen = task.resolved.get(key, {}).get('previous_result_id')
+    tables = previous_tables(store, state)
+    if chosen is None:
+        if not tables: raise SlotRepair(NO_PREVIOUS_TABLE)
+        usable = [t for t in tables if not t['expired']]
+        if not usable: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
+        if len(usable) > 1:
+            shown = usable[:PREVIOUS_TABLE_CHOICES]
+            ask(state, task, key, 'REPORT_TABLE', '어느 결과표로 리포트를 만들까요?',
+                [(f'T{i}', label, {'previous_result_id': t['result_id']})
+                 for i, (t, label) in enumerate(zip(shown, _table_labels(store, shown)), 1)])
+            return None
+        chosen = usable[0]['result_id']
+        task.resolved[key] = {'previous_result_id': chosen}
+    elif chosen not in {t['result_id'] for t in tables}:
+        raise SlotRepair('선택한 결과표가 직전 답변에 없습니다. 새 질문으로 다시 요청해 주세요.')
+    try:
+        snapshot = read_snapshot(store, state.input.user_id, chosen, 'RESULT')
+    except ApiError as exc:
+        if exc.code == 'RESULT_EXPIRED': raise SlotRepair(EXPIRED_PREVIOUS_TABLE) from exc
+        raise
+    meta = snapshot['meta']
+    return snapshot, {'result_id': chosen, 'version': meta.get('input_fingerprint'),
+                      'completeness': meta.get('completeness'), 'limitations': meta.get('limitations') or []}
+
+
+def stored_conditions(snapshot):
+    """결과표에 저장된 분석 조건. 리포트는 표를 만든 조건 그대로 쓴다(재조회 없음)."""
+    stored = snapshot['conditions']
+    return Conditions.model_validate({k: v for k, v in stored.items() if k in Conditions.model_fields})
 
 
 def source_versions(store,state,task):
@@ -28,7 +107,7 @@ def resolve(store,state,task,out):
     for index,(binding,(snapshot,source)) in enumerate(zip(task.input_bindings,source_versions(store,state,task),strict=True)):
         if index==0:
             stored=snapshot['conditions']
-            out=Conditions.model_validate({k:v for k,v in stored.items() if k in Conditions.model_fields})
+            out=stored_conditions(snapshot)
         elif any(snapshot['conditions'].get(k)!=stored.get(k) for k in ('period','trade_flow')):
             # 뒤 선행 결과의 기간·수출입이 다르면 첫 결과 기준으로 분석하고 그 사실을 적용 조건에 남긴다
             p=out.period
