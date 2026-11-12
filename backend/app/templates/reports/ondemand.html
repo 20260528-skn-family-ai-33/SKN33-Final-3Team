@@ -6,7 +6,7 @@
 {% set sections = layout.sections %}
 {# ---------- 표시 문구 ---------- #}
 {% set items = c.hs_items %}
-{% set subject = '전체 품목' if not items else (items[0].label ~ (' 외 ' ~ (items | length - 1) ~ '개 품목' if items | length > 1 else '')) %}
+{% set subject = selection_part(items | map(attribute='label') | list, '전체 품목', filename=false, unit='개 품목') %}
 {% set title = subject ~ ' 수출 시장 분석' %}
 {% set has_compare = c.compare.mode != 'NONE' %}
 {% set compare_ready = has_compare and c.compare.status == 'READY' %}

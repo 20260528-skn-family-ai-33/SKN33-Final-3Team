@@ -17,6 +17,8 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, UndefinedError, select_autoescape
 from markupsafe import Markup, escape
 
+from backend.app.api.filenames import selection_part
+
 TEMPLATE_DIR = Path(__file__).resolve().parents[1] / 'templates' / 'reports'
 SAMPLE_DIR = TEMPLATE_DIR / 'samples'
 TEMPLATES = {'RPT_MONTHLY': 'monthly.html', 'RPT_WEEKLY': 'weekly.html', 'RPT_QUARTERLY': 'quarterly.html',
@@ -38,12 +40,9 @@ def cover_scope(conditions):
     """Keep the cover and one-page approval form short; the contents page lists every selection."""
     items = conditions['hs_items']
     countries = conditions['countries']
-    product = f"HS {items[0]['hs_code']}" if items and items[0]['hs_code'] != '전체' else '전체 품목'
-    country = countries[0]['name'] if countries else '전체 국가'
-    if len(items) > 1:
-        product += f' 외 {len(items) - 1}개'
-    if len(countries) > 1:
-        country += f' 외 {len(countries) - 1}개'
+    products = [f"HS {item['hs_code']}" if item['hs_code'] != '전체' else '전체 품목' for item in items]
+    product = selection_part(products, '전체 품목', filename=False)
+    country = selection_part([c['name'] for c in countries], '전체 국가', filename=False)
     return f'{product} · {country}'
 
 def _number(value, digits):
@@ -860,7 +859,7 @@ def environment():
     env.filters.update(musd=musd, num=num, pct=pct, signed_pct=signed_pct, signed=signed, change=change,
                        emph=emph, ymd=ymd, ymdhm=ymdhm, circled=circled, eok=eok, signed_eok=signed_eok,
                        rank_move=rank_move)
-    env.globals.update(cover_scope=cover_scope, line_chart=line_chart, bar_chart=bar_chart, hbar_chart=hbar_chart, diverging_chart=diverging_chart,
+    env.globals.update(selection_part=selection_part, cover_scope=cover_scope, line_chart=line_chart, bar_chart=bar_chart, hbar_chart=hbar_chart, diverging_chart=diverging_chart,
                        end_labels_fit=end_labels_fit, legend_value=legend_value, has_values=has_values,
                        full_period_label=full_period_label,
                        series_colors=SERIES_COLORS,

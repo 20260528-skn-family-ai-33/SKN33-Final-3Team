@@ -146,7 +146,7 @@ function CountryChanges({ changes }) {
     </div>}
   </>
 }
-const OUTLOOK_COLOR = { '증가 예상': '#C8102E', '감소 예상': '#1F5FD1' }
+const OUTLOOK_COLOR = { '증가 예상': UP, '감소 예상': DOWN }
 export default function ReportView({ route }) {
   const { downloadReport, refreshReports } = useApp()
   const id = route.query.get('id')
@@ -254,7 +254,7 @@ export default function ReportView({ route }) {
               {has('주요 지표(KPI)') && (
                 <Section no={no++} title="주요 지표">
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
-                    {[['기간 수출액', f.total, '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1'], ['수출국 수', `${kpi.export_country_count ?? '—'}개국`, '#15181E'], ['상위 1개국 비중', share(kpi.top_country_share_pct), '#15181E']].map(([l, v, c]) => (
+                    {[['기간 수출액', f.total, '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? UP : DOWN], ['수출국 수', `${kpi.export_country_count ?? '—'}개국`, '#15181E'], ['상위 1개국 비중', share(kpi.top_country_share_pct), '#15181E']].map(([l, v, c]) => (
                       <div key={l} style={{ background: 'var(--bg)', borderRadius: 14, padding: '18px 20px' }}>
                         <p className="muted">{l}</p>
                         <p style={{ fontSize: 26, fontWeight: 800, marginTop: 6, color: c }}>{v}</p>
@@ -271,7 +271,7 @@ export default function ReportView({ route }) {
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginTop: 14 }}>
-                      {[['분석 기간 합계', f.total, '#15181E'], ['비교 기간 합계', withUnit(comparison.previous, '억 USD'), '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1']].map(([l, v, c]) => (
+                      {[['분석 기간 합계', f.total, '#15181E'], ['비교 기간 합계', withUnit(comparison.previous, '억 USD'), '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? UP : DOWN]].map(([l, v, c]) => (
                         <div key={l} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '14px 16px' }}>
                           <p className="note">{l}</p><p style={{ fontSize: 18, fontWeight: 800, color: c }}>{v}</p>
                         </div>
@@ -307,7 +307,7 @@ export default function ReportView({ route }) {
                         ? <span className="b">{withUnit(r.exp, '억 USD')}</span>
                         : <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}><span style={{ width: `${Math.min(65, Math.max(0, (r.share || 0) * .65))}%`, height: 12, borderRadius: 6, background: '#1e293a' }} /><b style={{ whiteSpace: 'nowrap' }}>{withUnit(r.exp, '억')}</b></span>}
                       <span className="r b">{share(r.share)}</span>
-                      <span className="r b" style={{ color: r.growth >= 0 ? '#C8102E' : '#1F5FD1' }}>{percent(r.growth)}</span>
+                      <span className="r b" style={{ color: r.growth >= 0 ? UP : DOWN }}>{percent(r.growth)}</span>
                     </div>
                   ))}
                   {!f.countryRows.length && <p className="muted">조회된 국가별 실적이 없습니다.</p>}
