@@ -16,10 +16,20 @@ def browser_font(data):
         from fontTools.ttLib import TTFont
         font = TTFont(io.BytesIO(data), lazy=True)
         tags = [tag for tag in font.keys() if tag.startswith('TSI')]
-        if not tags:
-            return data
         for tag in tags:
             del font[tag]
+        changed = bool(tags)
+        for table in font['cmap'].tables:
+            if not table.isUnicode() or 32 not in table.cmap:
+                continue
+            # NanumGothic shares the space glyph with control characters.
+            # Chromium can otherwise emit U+0001 for spaces in the PDF's ToUnicode map.
+            for code in range(32):
+                if table.cmap.get(code) == table.cmap[32]:
+                    del table.cmap[code]
+                    changed = True
+        if not changed:
+            return data
         out = io.BytesIO()
         font.save(out)
         return out.getvalue()
@@ -89,6 +99,10 @@ def print_page(report_type, context, settings, *, scale=1):
 
 def template_pdf(report_type, context, settings):
     with print_page(report_type, context, settings) as page:
-        return page.pdf(format='A4', prefer_css_page_size=True, print_background=True,
-                        display_header_footer=False,
-                        margin={'top':'0','bottom':'0','left':'0','right':'0'})
+        return pdf_from_page(page)
+
+
+def pdf_from_page(page):
+    return page.pdf(format='A4', prefer_css_page_size=True, print_background=True,
+                    display_header_footer=False,
+                    margin={'top':'0','bottom':'0','left':'0','right':'0'})

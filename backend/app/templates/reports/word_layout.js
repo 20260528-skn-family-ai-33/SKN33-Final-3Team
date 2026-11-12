@@ -49,7 +49,7 @@
       borders: edges.map(edge => [px(style['border' + edge + 'Width']), rgb(style['border' + edge + 'Color'])]),
       line: px(style.lineHeight), align: style.textAlign }
   }
-  let chartIndex = 0
+  const charts = new Map(Array.from(document.querySelectorAll('svg.chart'), (svg, index) => [svg, index]))
   function block(el) {
     const data = box(el), children = Array.from(el.children)
     if (el.matches('.toc')) {
@@ -58,7 +58,7 @@
         page: Number(row.dataset.tocPage)
       })) }
     }
-    if (el.tagName.toLowerCase() === 'svg') return { ...data, kind: 'chart', index: chartIndex++ }
+    if (charts.has(el)) return { ...data, kind: 'chart', index: charts.get(el) }
     if (el.tagName === 'TABLE') {
       const rows = Array.from(el.rows, row => Array.from(row.cells, cell => ({
         ...box(cell), runs: runs(cell), span: cell.colSpan, head: cell.tagName === 'TH'
@@ -75,17 +75,15 @@
       return { ...data, kind: 'grid', columns, gap: px(getComputedStyle(el).columnGap),
         rowGap: px(getComputedStyle(el).rowGap), children: children.map(block) }
     }
-    if (children.some(child => !getComputedStyle(child).display.startsWith('inline') && child.tagName !== 'BR')) {
+    if (el.querySelector('svg.chart') || children.some(child => !getComputedStyle(child).display.startsWith('inline') && child.tagName !== 'BR')) {
       return { ...data, kind: 'stack', children: children.map(block) }
     }
     return { ...data, kind: 'text', runs: runs(el), tag: el.tagName }
   }
-  return Array.from(document.querySelectorAll('section.page'), (el, index) => {
+  return Array.from(document.querySelectorAll('section.page'), el => {
     const header = el.querySelector('.hdr, .top'), footer = el.querySelector('.ftr')
     const standard = header.classList.contains('hdr')
     const children = Array.from(el.children).filter(child => child !== header && child !== footer).map(block)
-    const heading = children.find(child => child.tag === 'H2')
-    if (heading) heading.page = index + 1
     return { ...rect(el), header: runs(standard ? header.firstElementChild : header),
       headerRight: standard ? header.lastElementChild.innerText : '',
       footer: footer.firstElementChild.innerText, children }

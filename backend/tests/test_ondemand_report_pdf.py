@@ -364,8 +364,11 @@ class OnDemandReportTest(unittest.TestCase):
             'formats':['PDF','DOCX'], 'sections':['KPI','TOP_COUNTRIES','LOCAL_ISSUES']}, **{'Idempotency-Key':'ondemand-html'})
         self.assertEqual(created.status_code, 202, created.text)
         rid = created.json()['job']['report_id']
-        with patch('backend.app.api.files.reportlab_pdf', side_effect=AssertionError('no fallback')):
+        from backend.app.services.report_browser import launch_chromium
+        with patch('backend.app.api.files.reportlab_pdf', side_effect=AssertionError('no fallback')), \
+             patch('backend.app.services.report_browser.launch_chromium', wraps=launch_chromium) as launches:
             self.assertTrue(run_once(self.app.state.database, self.settings))
+        launches.assert_called_once()
         response = self.client.get(f'/api/v1/reports/{rid}/files/pdf')
         self.assertEqual(response.status_code, 200, response.text[:100] if response.status_code != 200 else '')
         pdf = PdfReader(io.BytesIO(response.content))

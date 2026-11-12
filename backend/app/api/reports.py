@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import hashlib
 import json
 from pathlib import Path
@@ -8,6 +9,7 @@ from backend.app.api import trade, news, jobs
 from backend.app.api.accounts import interests, validate_scope
 from backend.app.api.results import read_snapshot, save_snapshot, result_table, analysis_conditions
 from backend.app.api.files import report_pdf, report_docx
+from backend.app.services.report_pdf import print_page
 from backend.app.api.filenames import filename_part, selection_part
 
 TITLES=json.loads((Path(__file__).resolve().parents[1]/'templates/reports/layout.json').read_text(encoding='utf-8'))['sections']
@@ -256,7 +258,7 @@ def promising_section(store,uid,c):
         bundle,provider,versions,anchor,(outlook,_,note)=bounded_ml(load,seconds)
     except model_errors():
         return section('GROWTH_RISK',PROMISING_UNAVAILABLE,status='NO_DATA')
-    # 선택 범위(리포트 한도 품목 100·국가 250)는 모델 장애가 아니다. 예측 한도에 맞추고 무엇을 계산했는지 알린다.
+    # 리포트 선택 범위가 예측 한도를 넘으면 계산 범위를 줄이고 무엇을 계산했는지 알린다.
     countries,hs,scope=promising_scope(bundle,countries,items,MAX_COUNTRIES,MAX_HS_ITEMS)
     # 품목을 골랐는데 예측할 HS6가 하나도 안 남았으면 멈춘다. 빈 품목 목록은 모델에서 '전체 품목'이라 국가만 남기면 엉뚱한 품목이 나온다.
     if (items and not hs) or (not countries and not hs):
@@ -490,13 +492,17 @@ def generate(store,job,settings):
     prefix=f'{uid}/{rid}/{job["claim_token"]}'
     selected=record['conditions_json'].get('formats',['PDF'])
     jobs.report_step(store,job,'PDF')
-    pdf=report_pdf(doc,settings)
-    archive=storage.write(prefix+'/report.pdf',pdf)
-    files={}
-    for fmt in selected:
-        jobs.report_step(store,job,fmt)
-        content=pdf if fmt=='PDF' else report_docx(doc,settings)
-        files[fmt]=archive if fmt=='PDF' else storage.write(prefix+'/report.'+fmt.lower(),content)
+    template = doc.get('template_pdf')
+    shared_page = (print_page(template['report_type'], template['context'], settings, scale=2)
+                   if template and 'DOCX' in selected else nullcontext())
+    with shared_page as page:
+        pdf=report_pdf(doc,settings,page=page)
+        archive=storage.write(prefix+'/report.pdf',pdf)
+        files={}
+        for fmt in selected:
+            jobs.report_step(store,job,fmt)
+            content=pdf if fmt=='PDF' else report_docx(doc,settings,page=page)
+            files[fmt]=archive if fmt=='PDF' else storage.write(prefix+'/report.'+fmt.lower(),content)
     files['XLSX']=storage.write(prefix+'/report.xlsx',report_xlsx(record,doc))
     t=store.t('report')
     store.c.execute(update(t).where(t.c.report_id==rid).values(status='READY',

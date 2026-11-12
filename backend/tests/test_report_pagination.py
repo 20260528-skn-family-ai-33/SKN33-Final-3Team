@@ -110,6 +110,43 @@ class ContentsPaginationTest(unittest.TestCase):
         self.assertEqual(doc.settings.element.find(qn('w:updateFields')).get(qn('w:val')), 'true')
 
     @unittest.skipUnless(os.environ.get('RUN_REPORT_PDF_TESTS') == '1', 'Requires Playwright Chromium')
+    def test_quarterly_word_keeps_nested_charts_and_resolvable_contents(self):
+        from docx import Document
+        from docx.oxml.ns import qn
+        from backend.app.api.config import Settings
+        from backend.app.services.report_pdf import print_page
+        from backend.app.services.report_word import append_print_template
+
+        saved = {'report_type': 'RPT_QUARTERLY', 'context': rt.sample_context('quarterly')}
+        settings = Settings()
+        doc = Document()
+        with print_page(saved['report_type'], saved['context'], settings, scale=2) as page:
+            charts = page.locator('svg.chart')
+            expected = [svg.screenshot(animations='disabled') for svg in charts.all()]
+            self.assertGreater(len(expected), 1)
+            target = page.evaluate("""() => {
+                const sheets = document.querySelectorAll('section.page')
+                const rows = document.querySelectorAll('.toc [data-toc-page]')
+                const page = Number(rows[0].dataset.tocPage)
+                const heading = sheets[page - 1].querySelector('h2')
+                const wrapper = document.createElement('div')
+                heading.replaceWith(wrapper)
+                wrapper.append(heading)
+                rows[1].dataset.tocPage = sheets.length + 1
+                return page
+            }""")
+            append_print_template(doc, saved, settings, page=page)
+        actual = [doc.part.related_parts[shape._inline.xpath('.//a:blip')[0].get(qn('r:embed'))].blob
+                  for shape in doc.inline_shapes]
+        self.assertEqual(len(actual), len(expected))
+        self.assertTrue(all(a == b for a, b in zip(actual, expected)))
+        bookmarks = set(doc.element.xpath('.//w:bookmarkStart/@w:name'))
+        self.assertIn(f'ReportPage{target}', bookmarks)
+        refs = [f.split()[1] for f in doc.element.xpath('.//w:instrText/text()') if 'PAGEREF ' in f]
+        self.assertIn(f'ReportPage{target}', refs)
+        self.assertTrue(set(refs) <= bookmarks)
+
+    @unittest.skipUnless(os.environ.get('RUN_REPORT_PDF_TESTS') == '1', 'Requires Playwright Chromium')
     def test_print_bounds_toc_destinations_and_pdf_page_count(self):
         from playwright.sync_api import sync_playwright
         from pypdf import PdfReader

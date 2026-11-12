@@ -181,7 +181,10 @@ def chart_image(section, chart, settings):
     fig.tight_layout(); out=BytesIO(); fig.savefig(out,format='png'); return out.getvalue()
 
 
-def report_pdf(document,settings):
+def report_pdf(document,settings, *, page=None):
+    if page is not None:
+        from backend.app.services.report_pdf import pdf_from_page
+        return pdf_from_page(page)
     if document.get('template_pdf'):
         from backend.app.services.report_pdf import template_pdf
         saved=document['template_pdf']
@@ -233,7 +236,7 @@ def reportlab_pdf(document,settings):
     return stream.getvalue()
 
 
-def report_docx(document,settings=None):
+def report_docx(document,settings=None, *, page=None):
     from backend.app.api.config import Settings
     settings=settings or Settings()
     from docx import Document
@@ -298,7 +301,7 @@ def report_docx(document,settings=None):
 
     if saved:
         from backend.app.services.report_word import append_print_template
-        append_print_template(doc, saved, settings)
+        append_print_template(doc, saved, settings, page=page)
         stream = BytesIO()
         doc.save(stream)
         return stream.getvalue()

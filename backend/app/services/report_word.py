@@ -1,4 +1,5 @@
 """Write the PDF print template as editable Word paragraphs and tables."""
+from contextlib import nullcontext
 from io import BytesIO
 from pathlib import Path
 
@@ -257,20 +258,35 @@ def page_caption(container, left, right='', *, footer=False, cover=False):
     p._p.get_or_add_pPr().append(border)
 
 
-def append_print_template(doc, saved, settings):
+def walk_blocks(blocks):
+    for block in blocks:
+        yield block
+        yield from walk_blocks(block.get('children', ()))
+
+
+def append_print_template(doc, saved, settings, *, page=None):
     settings_xml = doc.settings.element
     update = settings_xml.find(qn('w:updateFields'))
     if update is None:
         update = element('updateFields')
         settings_xml.append(update)
     update.set(qn('w:val'), 'true')
-    with print_page(saved['report_type'], saved['context'], settings, scale=2) as page:
+    with (nullcontext(page) if page is not None else print_page(saved['report_type'], saved['context'], settings, scale=2)) as page:
         pages = page.evaluate(LAYOUT.read_text(encoding='utf-8'))
-        headings = {b['page']: b for sheet in pages for b in sheet['children'] if 'page' in b}
-        for sheet in pages:
-            for toc in (b for b in sheet['children'] if b['kind'] == 'toc' and b['rows']):
-                rows = toc['rows']
-                style = doc.styles.add_style(f"Report Heading {rows[0]['page']}", WD_STYLE_TYPE.PARAGRAPH)
+        headings = {}
+        contents = []
+        for number, sheet in enumerate(pages, start=1):
+            for block in walk_blocks(sheet['children']):
+                if block.get('tag') == 'H2' and number not in headings:
+                    block['page'] = number
+                    headings[number] = block
+                elif block['kind'] == 'toc':
+                    contents.append(block)
+        for index, toc in enumerate(contents, start=1):
+            rows = [row for row in toc['rows'] if row['page'] in headings]
+            toc['rows'] = rows
+            if rows:
+                style = doc.styles.add_style(f'Report Heading {index}', WD_STYLE_TYPE.PARAGRAPH)
                 style.base_style = doc.styles['Normal']
                 toc['toc_style'] = style.name
                 for row in rows:
