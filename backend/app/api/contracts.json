@@ -318,7 +318,7 @@
       [
         "Request Body",
         "country_codes",
-        "string[]",
+        "CountryCode[]",
         "필수",
         "[]면 국가 관심 삭제."
       ],
@@ -398,7 +398,7 @@
       [
         "Query Parameters",
         "country_codes",
-        "string[]",
+        "CountryCode[]",
         "선택",
         "반복 query: country_codes=US&country_codes=VN. 생략 전체."
       ],
@@ -455,7 +455,7 @@
       [
         "Query Parameters",
         "country_codes",
-        "string[]",
+        "CountryCode[]",
         "선택",
         "반복 query: country_codes=US&country_codes=VN. 생략 전체."
       ],
@@ -634,7 +634,7 @@
       [
         "Request Body",
         "country_codes",
-        "string[]",
+        "CountryCode[]",
         "선택",
         "생략/[]는 전체."
       ],
@@ -772,7 +772,7 @@
       [
         "Query Parameters",
         "country_codes",
-        "string[]",
+        "CountryCode[]",
         "선택",
         "반복 query 국가 필터."
       ],
@@ -1880,7 +1880,7 @@
       [
         "Query Parameters",
         "country_codes",
-        "string[]",
+        "CountryCode[]",
         "선택",
         "반복 query. 생략은 검증된 국가 전체."
       ],
@@ -1916,7 +1916,7 @@
       [
         "Request Body",
         "country_codes",
-        "string[]",
+        "CountryCode[]",
         "필수",
         "조회할 대상 수입국 1개 이상."
       ],

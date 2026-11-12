@@ -78,7 +78,7 @@ async function main() {
     await page.getByText('330499', { exact: true }).first().waitFor()
     const interestExcel = page.waitForEvent('download')
     await page.getByRole('button', { name: '엑셀 다운로드' }).click()
-    assert.match((await interestExcel).suggestedFilename(), /^미국_.*_관심품목_품목순위\.xlsx$/)
+    assert.match((await interestExcel).suggestedFilename(), /^미국_.*_HS330(410|499) 외 1개_품목순위\.xlsx$/)
     // 상위 코드(HS4 3304)를 지정해도 서버는 그 아래 관심 HS6만 집계하므로 AI 질문에는 HS4가 아니라 실제 HS6 목록이 들어가야 한다.
     await go('/rank?scope=INTERESTED&group_by=COUNTRY&product=3304')
     await page.locator('a.fab[href*="analysis?ask"]').waitFor()

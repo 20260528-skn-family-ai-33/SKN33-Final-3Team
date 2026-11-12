@@ -6,7 +6,7 @@
 {% set sections = layout.sections %}
 {# ---------- 표시 문구 ---------- #}
 {% set items = c.hs_items %}
-{% set subject = '전체 품목' if not items else (items[0].label ~ (' 외 ' ~ (items | length - 1) ~ '개 품목' if items | length > 1 else '')) %}
+{% set subject = selection_part(items | map(attribute='label') | list, '전체 품목', filename=false, unit='개 품목') %}
 {% set title = subject ~ ' 수출 시장 분석' %}
 {% set has_compare = c.compare.mode != 'NONE' %}
 {% set compare_ready = has_compare and c.compare.status == 'READY' %}
@@ -51,7 +51,7 @@
 <div class="main">
   <div class="eyebrow">요청형 리포트 · {{ 'AI 분석 결과' if result_mode else 'ON-DEMAND' }}</div>
   <h1>{{ title }}</h1>
-  <div class="lead">{{ ('HS ' ~ (items | map(attribute='hs_code') | join(', ')) if items else '전체 품목') }} · {{ (c.countries | map(attribute='name') | join(' · ')) if c.countries else '전체 국가' }} · {{ c.period.title_label }}{{ ' (' ~ vs ~ ')' if has_compare }}</div>
+  <div class="lead">{{ cover_scope(c) }} · {{ c.period.title_label }}{{ ' (' ~ vs ~ ')' if has_compare }}</div>
   <div class="rule"></div>
 </div>
 {% endcall %}
@@ -228,7 +228,7 @@
   {% if r is none %}
   <tr><td colspan="{{ 7 if has_compare else 4 }}" class="small">{{ '수출 실적이 없습니다.' if k.amount_usd == 0 else '데이터 준비 중' }}</td></tr>
   {% elif r is mapping %}
-  <tr class="{{ 'lead' if r.rank == 1 }}"><td>{{ r.rank }}</td>{% if has_compare %}<td>{{ (r.get('rank_move') | rank_move) if compare_ready else '—' }}</td>{% endif %}<td class="b">{{ r.name }}</td>
+  <tr><td>{{ r.rank }}</td>{% if has_compare %}<td>{{ (r.get('rank_move') | rank_move) if compare_ready else '—' }}</td>{% endif %}<td class="b">{{ r.name }}</td>
     <td class="r">{{ r.amount_usd | eok(2) }}</td><td class="r">{{ r.share_pct | pct }}</td>
     {% if has_compare %}{% if compare_ready %}<td class="r">{{ r.prev_amount_usd | eok(2) }}</td><td class="r">{{ r.change_pct | change(new=r.get('is_new', false)) }}</td>{% else %}<td class="r">—</td><td class="r">—</td>{% endif %}{% endif %}</tr>
   {% elif r == 'others' %}

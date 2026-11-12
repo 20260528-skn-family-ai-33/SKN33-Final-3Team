@@ -39,6 +39,7 @@ class S3ReportIntegrationTests(unittest.TestCase):
         client = MemoryS3()
         storage = S3Objects(self.settings.values, client=client)
         with patch('backend.app.api.report_storage.S3Objects', return_value=storage), \
+             patch('backend.app.api.reports.print_page'), \
              patch('backend.app.api.reports.report_pdf', return_value=b'%PDF-test'), \
              patch('backend.app.api.reports.report_docx', return_value=b'PK-docx'):
             self.assertTrue(run_once(self.app.state.database, self.settings))
@@ -62,6 +63,7 @@ class S3ReportIntegrationTests(unittest.TestCase):
         client.fail = lambda key: 'report.xlsx.' in key
         storage = S3Objects(self.settings.values, client=client)
         with patch('backend.app.api.report_storage.S3Objects', return_value=storage), \
+             patch('backend.app.api.reports.print_page'), \
              patch('backend.app.api.reports.report_pdf', return_value=b'%PDF-test'), \
              patch('backend.app.api.reports.report_docx', return_value=b'PK-docx'):
             self.assertTrue(run_once(self.app.state.database, self.settings))

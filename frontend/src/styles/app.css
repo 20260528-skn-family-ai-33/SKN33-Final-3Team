@@ -255,3 +255,5 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .skel{background:linear-gradient(90deg,#ECEEF1 25%,#F6F7F9 50%,#ECEEF1 75%);background-size:200% 100%;animation:skel-shine 1.2s ease-in-out infinite}
 @keyframes skel-shine{from{background-position:100% 0}to{background-position:-100% 0}}
 @media (prefers-reduced-motion:reduce){.skel{animation:none}}
+.print-sheet { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; }
+.print-sheet .th { background: #d6dde9; color: #1e293a; }

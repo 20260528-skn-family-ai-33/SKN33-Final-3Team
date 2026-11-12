@@ -278,7 +278,7 @@ class ReportAgentTest(unittest.TestCase):
         self.assertEqual(self.job(jid)['status'], 'WAITING_REPORT')
         documents = []
         requery = AssertionError('승인한 결과 기반 리포트는 통계를 다시 조회하지 않습니다') if tasks[0]['intent'] != 'REPORT' else None
-        with patch('backend.app.api.reports.report_pdf', side_effect=lambda doc, settings: documents.append(doc) or b'%PDF-test'), \
+        with patch('backend.app.api.reports.report_pdf', side_effect=lambda doc, settings, **kwargs: documents.append(doc) or b'%PDF-test'), \
              patch('backend.app.api.trade.aggregate', side_effect=requery) if requery else nullcontext():
             self.work()
         self.assertEqual(self.reports()[0]['status'], 'READY')
