@@ -81,6 +81,19 @@ def _json_size(value) -> int:
     return len(to_json(value))
 
 
+def summarize_limitations(reasons: list[str]) -> list[str]:
+    """누락 사유를 ToolResult 상한(100개·1KB) 안으로 줄인다. 상세 원인은 선행 결과 meta에 유지하고,
+    state의 요약 상한 때문에 실행을 실패시키지 않는다."""
+    summary = []
+    omitted = '추가 누락 사유는 선행 결과의 상세 정보를 확인하세요.'
+    for reason in dict.fromkeys(reasons):
+        if len(summary) >= 99 or _json_size([*summary, reason, omitted]) > 1024:
+            summary.append(omitted)
+            break
+        summary.append(reason)
+    return summary
+
+
 def _unique(values, label):
     if len(values) != len(set(values)):
         raise SafeError(f'{label} 중복은 허용하지 않습니다')
@@ -910,16 +923,8 @@ class AgentState(Model):
 
         collect(step_id)
         reasons = list(dict.fromkeys(reasons))
-        # 상세 원인은 선행 결과 meta에 유지한다. state의 요약 상한 때문에 실행을 실패시키지 않는다.
-        summary = []
-        omitted = '추가 누락 사유는 선행 결과의 상세 정보를 확인하세요.'
-        for reason in reasons:
-            if len(summary) >= 99 or _json_size([*summary, reason, omitted]) > 1024:
-                summary.append(omitted)
-                break
-            summary.append(reason)
         data = result.model_dump()
-        data.update(completeness='PARTIAL' if reasons else 'COMPLETE', limitations=summary)
+        data.update(completeness='PARTIAL' if reasons else 'COMPLETE', limitations=summarize_limitations(reasons))
         return ToolResult.model_validate(data)
 
     def skip_blocked(self) -> list[str]:

@@ -87,6 +87,14 @@ GROUPS = [
          '직전 결과표 리포트는 질문의 기간 등으로 표 조건을 바꾸지 않고 알리며, 확인 화면의 글 수정은 새 분석을 안내한다(D-92).'),
         ('R31', '같은 턴 예측', 'same_turn_prediction_result_becomes_the_report_table',
          "'유망 수출국 예측 → 그 결과로 리포트'(t1.ml 연결)는 예측 결과표를 순위 기준까지 그대로 리포트에 싣는다."),
+        ('R33', '기존 대화 표', 'legacy_chat_table_kind_is_restored',
+         '기존 채팅 API 답변의 표(meta.kind 없음)도 답변 intent와 표 열로 종류를 되살리고, 모르면 사유를 안내한다.'),
+        ('R34', '부분 결과', 'previous_partial_table_keeps_partial_in_final_answer',
+         '직전 결과표가 PARTIAL이면 리포트 완료 답변도 PARTIAL이고 누락 사유를 경고로 남긴다.'),
+        ('R35', '저장 뒤 만료', 'tables_expired_after_the_answer_are_not_offered',
+         '답변 저장 뒤 만료된 표는 선택지에서 빼고, 하나 남으면 바로 확인, 없으면 만료 안내다.'),
+        ('R36', '기간 표시', 'same_looking_tables_show_their_period',
+         '국가·품목·종류가 같은 후보는 선택지에 조회 기간을 붙여 구별한다.'),
     ]),
 ]
 CASES = [dict(id=identity, group=group, category=category, criterion=criterion, test=f'{test_class}.test_{method}')

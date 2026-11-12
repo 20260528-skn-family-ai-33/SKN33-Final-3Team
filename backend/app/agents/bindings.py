@@ -11,6 +11,7 @@ PREVIOUS_TABLE_CHOICES = 5   # REPORT_TABLE 선택지 상한(INPUT_SELECTION과 
 TABLE_KINDS = {'TREND': '월별 추이', 'RANKING': '순위', 'SHARE': '비중', 'PREDICTION': '유망시장 예측'}
 NO_PREVIOUS_TABLE = '직전 답변에 리포트로 만들 결과표가 없습니다. 조회와 리포트 생성을 한 질문에서 요청해 주세요.'
 EXPIRED_PREVIOUS_TABLE = '직전 결과표의 보관 기간이 지났습니다. 같은 조건으로 다시 조회한 뒤 리포트를 요청해 주세요.'
+UNKNOWN_PREVIOUS_TABLE = '직전 결과표의 종류를 확인할 수 없어 리포트로 만들 수 없습니다. 같은 조건으로 다시 조회한 뒤 리포트를 요청해 주세요.'
 
 
 def previous_tables(store, state):
@@ -21,9 +22,32 @@ def previous_tables(store, state):
         table.c.message_id < int(state.input.job_id)).order_by(table.c.message_id.desc()).limit(1))
     answer = ((row or {}).get('result_json') or {}).get('answer') or {}
     conditions = {t.get('task_id'): t.get('conditions') or {} for t in answer.get('tasks') or []}
-    return [{'result_id': t['result_id'], 'task_id': t.get('task_id'), 'conditions': conditions.get(t.get('task_id'), {}),
-             'kind': (t.get('meta') or {}).get('kind'), 'expired': bool(t.get('expired'))}
+    # 기존 채팅 API 답변은 tasks 없이 answer.conditions 하나와 intent만 남긴다.
+    return [{'result_id': t['result_id'], 'task_id': t.get('task_id'),
+             'conditions': conditions.get(t.get('task_id')) or answer.get('conditions') or {},
+             'kind': table_kind(t.get('meta'), answer.get('intent'), t.get('columns')), 'expired': bool(t.get('expired'))}
             for t in answer.get('tables') or [] if t.get('result_id')]
+
+
+# 기존 채팅 API(api/chat.py)의 답변 intent → 표 종류와 그 표에 반드시 있는 열.
+LEGACY_KINDS = {'STATISTICS': ('TREND', 'month'), 'RANKING': ('RANKING', 'rank'), 'MARKET_SHARE': ('SHARE', 'share_pct')}
+
+
+def table_kind(meta, intent, columns):
+    """표 종류. 에이전트 결과는 meta.kind, 기존 채팅 API 결과는 답변 intent와 표 열로 복원한다. 모르면 None."""
+    if kind := (meta or {}).get('kind'): return kind
+    kind, column = LEGACY_KINDS.get(intent, (None, None))
+    return kind if kind and column in {c.get('key') for c in columns or []} else None
+
+
+def _usable(store, state, table):
+    """답변 저장 뒤 만료됐거나 다른 사용자 것인 결과표는 후보에서 뺀다."""
+    if table['expired']: return False
+    try: read_snapshot(store, state.input.user_id, table['result_id'], 'RESULT')
+    except ApiError as exc:
+        if exc.code in ('RESULT_EXPIRED', 'NOT_FOUND'): return False
+        raise
+    return True
 
 
 def _names(values, limit=2):
@@ -38,15 +62,23 @@ def _table_labels(store, tables):
         country = store.t('country')
         names = {r['country_code']: r['name_ko'] for r in store.rows(
             select(country.c.country_code, country.c.name_ko).where(country.c.country_code.in_(codes)))}
-    labels = []
-    for index, table in enumerate(tables, 1):
+    bases = []
+    for table in tables:
         conditions = table['conditions']
         parts = [_names([names.get(c, c) for c in conditions.get('country_codes') or []]) or '전체 국가']
         if items := [f"HS {h['hs_code']}" for h in conditions.get('hs_items') or [] if h.get('hs_code')]:
             parts.append(_names(items))
         parts.append(TABLE_KINDS.get(table['kind'], '결과표'))
-        labels.append(f'{index}. ' + ' · '.join(parts))
-    return [label[:40] for label in labels]
+        bases.append(' · '.join(parts))
+    labels = []
+    for index, (table, base) in enumerate(zip(tables, bases), 1):
+        # 국가·품목·종류가 같은 후보는 조회 기간으로 구별한다. 기간은 잘리지 않게 앞부분을 줄인다.
+        period = table['conditions'].get('period') or {}
+        suffix = (f" · {period['start'][2:7].replace('-', '.')}~{period['end'][2:7].replace('-', '.')}"
+                  if bases.count(base) > 1 and period.get('start') and period.get('end') else '')
+        prefix = f'{index}. '
+        labels.append(prefix + base[:40 - len(prefix) - len(suffix)] + suffix)
+    return labels
 
 
 def previous_result(store, state, task):
@@ -57,8 +89,10 @@ def previous_result(store, state, task):
     tables = previous_tables(store, state)
     if chosen is None:
         if not tables: raise SlotRepair(NO_PREVIOUS_TABLE)
-        usable = [t for t in tables if not t['expired']]
-        if not usable: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
+        alive = [t for t in tables if _usable(store, state, t)]
+        if not alive: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
+        usable = [t for t in alive if t['kind']]
+        if not usable: raise SlotRepair(UNKNOWN_PREVIOUS_TABLE)
         if len(usable) > 1:
             shown = usable[:PREVIOUS_TABLE_CHOICES]
             ask(state, task, key, 'REPORT_TABLE', '어느 결과표로 리포트를 만들까요?',
@@ -74,7 +108,9 @@ def previous_result(store, state, task):
     except ApiError as exc:
         if exc.code == 'RESULT_EXPIRED': raise SlotRepair(EXPIRED_PREVIOUS_TABLE) from exc
         raise
-    meta = snapshot['meta']
+    kind = next(t['kind'] for t in tables if t['result_id'] == chosen)
+    if not kind: raise SlotRepair(UNKNOWN_PREVIOUS_TABLE)
+    meta = snapshot['meta'] = {**(snapshot.get('meta') or {}), 'kind': kind}
     return snapshot, {'result_id': chosen, 'version': meta.get('input_fingerprint'),
                       'completeness': meta.get('completeness'), 'limitations': meta.get('limitations') or []}
 

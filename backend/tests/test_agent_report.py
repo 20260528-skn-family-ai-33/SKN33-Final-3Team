@@ -255,9 +255,9 @@ class ReportAgentTest(unittest.TestCase):
         self.work()
         return jid
 
-    def answered(self, tasks, question='미국 수출 조회'):
+    def answered(self, tasks, question='미국 수출 조회', key='first'):
         """첫 턴을 답변까지 끝내고 (대화방, 답변의 결과표 ID 목록)을 돌려준다."""
-        jid = self.ask(tasks, question, key='first')
+        jid = self.ask(tasks, question, key=key)
         done = self.job(jid)
         self.assertEqual(done['status'], 'SUCCEEDED', done)
         return done['session_id'], [t['result_id'] for t in done['answer']['tables']]
@@ -381,6 +381,8 @@ class ReportAgentTest(unittest.TestCase):
         self.assertEqual(api_conditions(task.conditions)['period'], stored['period'])   # 표의 3개월 그대로(6개월로 바뀌지 않음)
         self.assertIn('직전 결과표의 조건 그대로 만들었습니다. 조건을 바꾸려면 새로 조회해 주세요.', task.applied_defaults)
         prompt = self.job(jid)['clarification']
+        # 생성 전에 보이도록 승인 화면의 adjustments에도 같은 안내가 있다
+        self.assertIn('직전 결과표의 조건 그대로 만들었습니다. 조건을 바꾸려면 새로 조회해 주세요.', prompt['report_preview']['adjustments'])
         response = self.post(f'chat/jobs/{jid}/clarifications', {'clarification_id': prompt['clarification_id'], 'text': '기간을 6개월로 바꿔 줘'})
         self.assertEqual(response.status_code, 202, response.text)
         self.work()
@@ -389,6 +391,110 @@ class ReportAgentTest(unittest.TestCase):
         self.assertEqual(done['answer']['tasks'][-1]['answer_status'], 'NO_DATA')
         self.assertIn('새 분석', self.answer_text(done) + ' '.join(done['answer'].get('warnings', [])))
         self.assertEqual(self.reports(), [])
+
+    def edit_answer(self, sid, change):
+        """직전 ASSISTANT 답변(result_json.answer)을 change(answer)로 고친다."""
+        with self.engine.begin() as c:
+            t = self.meta.tables['chat_message']
+            row = c.execute(select(t).where(t.c.role == 'ASSISTANT', t.c.session_id == int(sid))).mappings().one()
+            data = dict(row['result_json']); answer = dict(data['answer'])
+            change(answer)
+            c.execute(update(t).where(t.c.message_id == row['message_id']).values(result_json={**data, 'answer': answer}))
+
+    def edit_meta(self, rid, **values):
+        """저장 결과표의 meta를 고친다(values 값이 None이면 그 키를 지운다)."""
+        with self.engine.begin() as c:
+            t = self.meta.tables['api_snapshot']
+            payload = dict(c.execute(select(t.c.payload_json).where(t.c.snapshot_id == rid)).scalar_one())
+            meta = {k: v for k, v in {**payload['meta'], **values}.items() if v is not None}
+            c.execute(update(t).where(t.c.snapshot_id == rid).values(payload_json={**payload, 'meta': meta}))
+
+    def expire(self, *rids):
+        with self.engine.begin() as c:
+            t = self.meta.tables['api_snapshot']
+            c.execute(update(t).where(t.c.snapshot_id.in_(rids)).values(expires_at=now() - timedelta(minutes=1)))
+
+    def test_legacy_chat_table_kind_is_restored(self):
+        """R33 기존 채팅 API가 저장한 답변(tasks 없음, 표 meta.kind 없음)도 답변 intent와 표 열로 종류를 되살려 리포트로 만든다.
+        종류를 알 수 없는 표는 작업 실패 대신 사유를 안내한다."""
+        sid, tables = self.answered(self.US)
+        with self.engine.connect() as c:
+            from backend.app.api.results import read_snapshot
+            stored = read_snapshot(Store(self.db, c), self.uid, tables[0], 'RESULT')['conditions']
+        self.edit_meta(tables[0], kind=None)
+
+        def legacy(answer):
+            answer.pop('tasks', None)
+            answer.update(intent='STATISTICS', conditions=stored,
+                          tables=[{**t, 'meta': {k: v for k, v in (t.get('meta') or {}).items() if k != 'kind'}} for t in answer['tables']])
+        self.edit_answer(sid, legacy)
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'legacy')
+        self.assertEqual(self.source_of(jid), tables)
+        self.confirm(jid); self.work()
+        self.assertEqual(self.job(jid)['status'], 'WAITING_REPORT')
+        self.assertEqual(self.reports()[0]['content_json']['source_tables'][0]['kind'], 'TREND')
+
+        sid, tables = self.answered(self.US, key='second')
+        self.edit_meta(tables[0], kind=None)
+        self.edit_answer(sid, lambda answer: (legacy(answer), answer.update(intent='RAG')))
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'unknown')
+        done = self.job(jid)
+        self.assertEqual(done['status'], 'SUCCEEDED', done)
+        self.assertIn('종류를 확인할 수 없어', self.answer_text(done) + ' '.join(done['answer'].get('warnings', [])))
+
+    def test_previous_partial_table_keeps_partial_in_final_answer(self):
+        """R34 직전 결과표가 PARTIAL이면 리포트 완료 답변도 PARTIAL이고 누락 사유가 경고로 남는다(직전 표는 depends_on 밖)."""
+        sid, tables = self.answered(self.US)
+        reason = '기간 내 미집계 월이 있습니다.'
+        self.edit_meta(tables[0], completeness='PARTIAL', limitations=[reason])
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'partial')
+        self.assertEqual(self.source_of(jid), tables)
+        self.confirm(jid); self.work()
+        self.finish_report('READY')
+        self.work()
+        done = self.job(jid)
+        self.assertEqual(done['status'], 'SUCCEEDED', done)
+        self.assertEqual(done['answer']['answer_status'], 'PARTIAL')
+        self.assertIn(reason, done['answer']['warnings'])
+
+        # 사유가 길어 ToolResult 상한(1KB)을 넘어도 완성된 리포트를 실패로 끝내지 않고 요약한다
+        sid, tables = self.answered(self.US, key='second')
+        self.edit_meta(tables[0], completeness='PARTIAL', limitations=[f'{i}월 미집계 ' + '가' * 150 for i in range(1, 9)])
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'long')
+        self.confirm(jid); self.work()
+        self.finish_report('READY')
+        self.work()
+        done = self.job(jid)
+        self.assertEqual((done['status'], done['answer']['answer_status']), ('SUCCEEDED', 'PARTIAL'), done)
+        self.assertIn('추가 누락 사유는 선행 결과의 상세 정보를 확인하세요.', done['answer']['warnings'])
+
+    def test_tables_expired_after_the_answer_are_not_offered(self):
+        """R35 답변 저장 뒤 만료된 결과표는 선택지에서 빠진다. 남은 표가 하나면 바로 확인 화면, 없으면 만료 안내다."""
+        sid, tables = self.answered([*self.US, *self.CN], '미국, 중국 수출 조회')
+        self.expire(tables[0])
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'one-left')
+        self.assertEqual(self.source_of(jid), tables[1:])
+        sid, tables = self.answered([*self.US, *self.CN], '미국, 중국 수출 조회', key='second')
+        self.expire(*tables)
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'none-left')
+        done = self.job(jid)
+        self.assertEqual(done['status'], 'SUCCEEDED', done)
+        self.assertIn('보관 기간이 지났습니다', self.answer_text(done) + ' '.join(done['answer'].get('warnings', [])))
+
+    def test_same_looking_tables_show_their_period(self):
+        """R36 국가·품목·종류가 같고 기간만 다른 표는 선택지에 조회 기간을 붙여 구별한다."""
+        two = [{**self.US[0], 'question': '미국 수출 2개월', 'slots': {**self.US[0]['slots'], 'recent_months': 2}}]
+        sid, tables = self.answered([*self.US, *two], '미국 수출 3개월, 2개월 조회')
+        self.assertEqual(len(tables), 2)
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'periods')
+        prompt = self.job(jid)['clarification']
+        self.assertEqual(prompt['kind'], 'REPORT_TABLE')
+        with self.engine.connect() as c:
+            from backend.app.api.results import read_snapshot
+            periods = [read_snapshot(Store(self.db, c), self.uid, r, 'RESULT')['conditions']['period'] for r in tables]
+        short = [f"{p['start'][2:7].replace('-', '.')}~{p['end'][2:7].replace('-', '.')}" for p in periods]
+        self.assertEqual([c['label'] for c in prompt['choices']],
+                         [f'{i}. 미국 · 월별 추이 · {s}' for i, s in enumerate(short, 1)])
 
     def test_same_turn_prediction_result_becomes_the_report_table(self):
         """R31 같은 질문에서 '유망 수출국 예측 → 그 결과로 리포트'(t1.ml 연결)는 예측 결과표를 순위 기준까지 그대로 리포트에 싣는다.

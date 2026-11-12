@@ -66,6 +66,12 @@ def preview(store,state,task):
             raise SlotRepair('선행 결과의 분석 조건이 다릅니다. 같은 조건으로 다시 분석하세요.')
         table=store.t('api_snapshot')
         data=results.read_snapshot(store,state.input.user_id,created['preview_id'],'PREVIEW')
+        if task.previous_turn_result:
+            # 질문의 조건 변경을 반영하지 않았다는 안내(D-92)는 승인 화면의 adjustments로 보여야 생성 전에 알 수 있다.
+            from backend.app.agents.conditions import PREVIOUS_TABLE_NOTE
+            if PREVIOUS_TABLE_NOTE in task.applied_defaults:
+                shown=data['conditions'].get('applied_defaults') or []
+                data['conditions']={**data['conditions'],'applied_defaults':[*shown,PREVIOUS_TABLE_NOTE]}
         store.c.execute(update(table).where(table.c.snapshot_id==created['preview_id']).values(
             payload_json=clean({**data,'source_results':refs,'source_tables':copies})))
     task.report_request=ReportRequest(preview_id=created['preview_id'],expires_at=created['expires_at'],
