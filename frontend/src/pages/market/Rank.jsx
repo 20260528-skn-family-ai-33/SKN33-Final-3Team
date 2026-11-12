@@ -9,7 +9,7 @@ import { useQuery, ErrorNotice } from '../../api/hooks'
 import { download } from '../../api/client'
 import { Hs4Search } from '../../components/pickers'
 import { monthOffset } from '../home/useDashboard'
-import { rankInitial, rankBasis } from '../../api/integration'
+import { rankInitial, rankBasis, countryListLabel } from '../../api/integration'
 import { amount } from '../../api/adapters'
 
 const COLS = '60px 110px 1fr 1.4fr 110px'
@@ -38,14 +38,19 @@ function RankResults({ route }) {
   const initial = rankInitial(route.query)
   const inheritedCountry = initial.countryCodes.length ? '__inherited__' : ''
   if (!initial.country && inheritedCountry) initial.country = inheritedCountry
-  if (inheritedCountry) rankingCountries.unshift([inheritedCountry, initial.countryCodes.map(countryName).join(' · ')])
+  // 메인에서 넘어온 국가 묶음(관심 국가 등)은 선택칸에 'OO 외 N개국'으로 줄여 보이고, 전체 이름은 마우스를 올리면 보인다.
+  const inheritedNames = initial.countryCodes.map(countryName)
+  if (inheritedCountry) rankingCountries.unshift([inheritedCountry, countryListLabel(inheritedNames), inheritedNames.join(' · ')])
   if (initial.start && initial.end) initial.period = 'custom'
   const [draft, setDraft] = useState(initial)
   const [applied, setApplied] = useState(initial)
   const [basis, setBasis] = useState(() => rankBasis(route.query))
   const [error, setError] = useState('')
   const countryCodes = applied.country === '__inherited__' ? applied.countryCodes : applied.country ? [countryCode(applied.country)] : []
-  const countryLabel = countryCodes.map(countryName).join(' · ')
+  // 제목·파일명은 줄인 이름(countryLabel), 마우스 오버와 AI 질문은 전체 이름(countryFull)을 쓴다.
+  const countryNames = countryCodes.map(countryName)
+  const countryLabel = countryListLabel(countryNames)
+  const countryFull = countryNames.join(' · ')
   const byMonth = !applied.group && countryCodes.length === 1 && applied.product
   const rankingGroup = applied.group || (countryCodes.length ? 'HS6' : 'COUNTRY')
   const query = { scope: applied.scope, period_start: applied.start || monthOffset(end, 1 - Number(applied.period)), period_end: applied.end || end, country_codes: countryCodes, hs_code: applied.product || undefined, hs_ver: applied.product ? 'HS2022' : undefined }
@@ -120,7 +125,7 @@ function RankResults({ route }) {
   const fileKind = byMonth ? '월별수출입' : rankingGroup === 'HS6' ? '품목순위' : '교역국순위'
   const productLabel = interestProducts.length === 1 ? `HS${interestProducts[0]}` : interestProducts.length ? '관심품목' : applied.product ? `HS${applied.product}` : '전체품목'
   // AI 질문에는 '관심 국가·관심 품목' 같은 묶음 말 대신 실제 국가 이름과 HS 코드를 적어, 채팅이 같은 조건으로 분석하게 한다.
-  const askCountry = countryLabel || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
+  const askCountry = countryFull || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
   // AI 질문에는 조회 종류와 수출·수입 기준도 넣어, 채팅이 화면과 같은 순위를 분석하게 한다.
   const askKind = byMonth ? '월별 수출입 추이' : `${basis === 'exp' ? '수출' : '수입'} 기준 ${rankingGroup === 'HS6' ? '교역 품목 순위' : '교역국 순위'}`
   // 지금 AI챗봇은 질문에서 국가·품목을 각각 20개까지만 읽는다(backend/app/api/intent.py IntentSlots).
@@ -188,7 +193,7 @@ function RankResults({ route }) {
           <div ref={resultTop} className="card" style={{ scrollMarginTop: 90 }}>
             <div className="between">
               <div>
-                <h2 className="t2">{title}</h2>
+                <h2 className="t2" title={countryLabel !== countryFull ? countryFull : undefined}>{title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{query.period_start} ~ {query.period_end} {byMonth ? '월별' : '누계'} · 억 USD · 관세청{!byMonth && total != null && ` · 총 ${total.toLocaleString('ko-KR')}건`}</p>
               </div>
               <div className="seg" role="group" aria-label="순위 기준">
@@ -235,7 +240,8 @@ function RankResults({ route }) {
 
 /** 국가 검색 선택: 국가명을 입력하면 목록이 좁혀진다. */
 function CountrySearch({ value, options, onChange }) {
-  const label = (options.find(([v]) => v === value) || options[0])[1]
+  // 선택지는 [값, 보이는 이름, (선택) 전체 이름]. 줄인 이름이면 전체 이름을 마우스 오버로 보여 준다.
+  const [, label, fullLabel] = options.find(([v]) => v === value) || options[0]
   const [text, setText] = useState(null)
   const typing = text !== null
   // '전체 국가'(값 '')는 검색어와 상관없이 맨 위에 두어 언제든 국가 조건을 풀 수 있게 한다.
@@ -263,7 +269,7 @@ function CountrySearch({ value, options, onChange }) {
     <div style={{ flex: 1, position: 'relative', minWidth: 0 }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setText(null) }}>
       <div className={'input val' + (typing ? ' focus' : '')} style={{ gap: 8 }}>
         <span className="select-prefix">국가</span>
-        <input value={typing ? text : label} aria-label="국가" placeholder="국가명 입력"
+        <input value={typing ? text : label} title={!typing && fullLabel ? fullLabel : undefined} aria-label="국가" placeholder="국가명 입력"
           role="combobox" aria-expanded={typing} aria-controls="country-listbox" aria-autocomplete="list"
           aria-activedescendant={typing && active >= 0 ? `country-option-${active}` : undefined}
           onFocus={() => setText('')} onClick={() => !typing && setText('')}
@@ -273,8 +279,8 @@ function CountrySearch({ value, options, onChange }) {
       </div>
       {typing && (
         <div role="listbox" id="country-listbox" aria-label="국가 목록" style={{ position: 'absolute', top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 280, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
-          {shown.map(([v, l], i) => (
-            <button type="button" key={v || 'all'} id={`country-option-${i}`} className="reset" role="option" aria-selected={i === active}
+          {shown.map(([v, l, full], i) => (
+            <button type="button" key={v || 'all'} id={`country-option-${i}`} className="reset" role="option" aria-selected={i === active} title={full}
               onMouseDown={e => e.preventDefault()} onClick={() => pick(v)} onMouseEnter={() => setActive(i)}
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, fontWeight: v === value ? 800 : 500, background: i === active ? '#F1F2F5' : undefined }}>{l}</button>
           ))}
