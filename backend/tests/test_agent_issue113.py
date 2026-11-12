@@ -51,6 +51,38 @@ class PartnerSubjectFlowTest(unittest.TestCase):
         self.assertEqual(task.question, '미국은 한국의 최대 수출국이야?')
 
 
+class SimpleRankingTableTest(unittest.TestCase):
+    def ranking_args(self, question, **slots):
+        output = PlannerOutput.model_validate({'tasks': [{'intent': 'RANKING', 'question': question,
+            'slots': {'countries': US, 'ranking_group': 'HS6', **slots}}]})
+        plan, _ = build_plan(output)
+        return plan.tasks[0].steps[1].args
+
+    def test_ranking_without_count_uses_simple_table(self):
+        self.assertEqual(self.ranking_args('미국이 한국에게 대표적으로 수입하는 품목 순위 (한국의 대미국 수출)'),
+                         {'template': 'RANKING', 'top': 10, 'amount_only': True})
+        self.assertNotIn('amount_only', self.ranking_args('미국 수출 품목 순위와 전년 대비 증감률'))
+        self.assertNotIn('amount_only', self.ranking_args('미국 수출 품목 순위 변화', comparison_requested=True))
+
+
+class ExtraCompareTrendTest(unittest.TestCase):
+    def setUp(self):
+        engine, self.meta = test_engine()
+        self.addCleanup(engine.dispose)
+        reference_data(engine, self.meta)
+        connection = engine.connect()
+        self.addCleanup(connection.close)
+        self.store = Store(Database(engine), connection)
+
+    def test_single_country_product_ranking_names_the_country(self):
+        conditions = Conditions(period={'start': '2025-01-01', 'end': '2025-03-01'}, country_codes=['US'], ranking_group='HS6')
+        analysis = run_template(self.store, 1, SimpleNamespace(conditions=conditions),
+                                SimpleNamespace(args={'template': 'RANKING', 'top': 10, 'amount_only': True}))
+        columns = display_columns([{'key': k, 'label': k} for k in analysis.rows[0]], analysis.rows, analysis.meta)
+        self.assertEqual([c['label'] for c in columns], ['순위', '국가', 'HS 코드', '품목', '수출액'])
+        self.assertEqual(analysis.rows[0]['country_name'], '미국')
+        self.assertNotIn('country_code', analysis.rows[0])
+
 
 if __name__ == '__main__':
     unittest.main()

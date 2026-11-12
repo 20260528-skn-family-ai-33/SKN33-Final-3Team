@@ -344,6 +344,7 @@ def product_expressions(expressions, *, article_context=False):
     return products or (None if article_context else expressions)
 
 
+_RANKING_DETAIL = re.compile(r'증감|증가|감소|변화|변동|대비|전월|전년|작년|성장|비중|점유|일회성|이상치|급등|급증|급감')
 _KOREA_AS_OBJECT = r'(?:한국|대한민국|우리나라)(?:에게서|에게|한테서|한테|으로부터|로부터|에서|에|산|으로|로)'
 
 
@@ -553,7 +554,10 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
                 args = {'template': template}
                 if template == 'RANKING':
                     args['top'] = item.slots.ranking_limit or 10
-                    if item.slots.ranking_limit and item.slots.ranking_group in ('COUNTRY','HS6') and not item.slots.comparison_requested:
+                    # 단순 금액 순위는 개수를 말하지 않아도("대표적으로 수출하는 품목") 코드·명칭·순위·금액만 보인다.
+                    # 증감·비중·순위 변화를 물으면 순위 화면 표(증감률·이상치 열 포함)를 쓴다.
+                    if (item.slots.ranking_group in ('COUNTRY','HS6') and not item.slots.comparison_requested
+                            and not _RANKING_DETAIL.search(item.question)):
                         args['amount_only'] = True
             elif name == 'ml': args = {'top': item.slots.ranking_limit or DEFAULT_MARKET_TOP}
             elif name == 'news': args = {'limit': 5}

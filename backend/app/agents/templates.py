@@ -186,8 +186,16 @@ def run_template(store, uid, task, step, timeout=30):
         if common['countries']: stmt=stmt.where(table.c.country_code.in_(common['countries']))
         stmt=(stmt.group_by(code,dimension.c.name_ko)
               .order_by(amount.desc(),code).limit(step.args['top']))
+        # 국가·품목 조건 없는 전국 순위는 country 조인이 국가별 반복 조회가 된다. 월 범위로 읽도록 PK를 쓴다.
+        stmt=trade.trade_plan(stmt,table,common['hs'],common['countries'])
         records=trade.query_rows(store,stmt,source)
-        rows=[{**r,'rank':i} for i,r in enumerate(records,1)]
+        # 품목 순위를 한 국가로 거르면 그 국가를 열로 밝힌다(여러 국가면 합계라 국가 열을 두지 않는다).
+        partner={}
+        if group=='HS6' and len(conditions.country_codes)==1:
+            code_=conditions.country_codes[0]
+            # country_code는 넣지 않는다. 차트는 country_code가 있는 행을 국가 순위로 읽는다.
+            partner={'country_name':condition_names(store,[conditions])[0].get(code_,code_)}
+        rows=[{'rank':i,**partner,**r} for i,r in enumerate(records,1)]
         meta=trade.metadata(store,conditions.period.start,conditions.period.end)
         meta.update(kind='RANKING',group=group,requested_top=step.args['top'])
         digest={**_base('RANKING',conditions,meta,len(rows)),'group':group,

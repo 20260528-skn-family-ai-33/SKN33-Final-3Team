@@ -16,6 +16,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | API-37 | 상태 추가 | `status`에 `EXPIRED`, `CANCELLED`, `WAITING_REPORT` | D-04, D-12 |
 | API-37 | answer 추가 | `answer.tasks[]`(복합 질문), `charts[]` 형식 확정 | D-59, D-60 |
 | API-37 | 응답 추가 | 되묻기 종류 `INTEREST_SELECT`와 `clarification.interests`(고를 관심사 후보) | D-64 |
+| API-37 | answer 변경 | 단순 금액 순위표는 개수를 말하지 않은 순위에도 `순위·(국가)·코드·명칭·금액` 열만 반환한다(상위 10개). 품목 순위를 국가 하나로 거르면 `country_name` 열이 붙는다. 증감·비교를 물으면 기존 순위 표를 반환한다 | 2026-11-12 이슈 113 |
 | API-38 되묻기 답 | 요청 추가 | `text`(직접 입력), `interest_selection`(관심사 골라 받기) | D-12, D-64 |
 | API-38 | 오류 추가 | 409 `CLARIFICATION_EXPIRED` (30분 경과) | D-04 |
 | API-131 (신규) 질문 중단 | 신설 | `POST /chat/jobs/{job_id}/cancel` | D-12 |
