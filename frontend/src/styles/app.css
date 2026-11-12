@@ -141,6 +141,19 @@ body.modal-open{overflow:hidden}
 /* 채팅 답변의 표는 차트와 같은 간격을 둔다 */
 .chat-flow .api-results{margin:28px 16px}
 .article-search-fields{display:grid;grid-template-columns:1.6fr 1fr auto;gap:14px;align-items:end}
+/* 기사 검색 폼: 칸이 내용 때문에 카드 밖으로 밀려나지 않게 한다. 브라우저마다 날짜 칸 폭이 달라도 기간 상자 안에서 잘린다 */
+.article-search-fields>*{min-width:0}
+.article-search-fields .period-input{gap:6px;min-width:0;overflow:hidden}
+/* 중간 폭에서는 한 줄에 다 넣으면 날짜 칸이 줄지 못해 버튼이 카드 밖으로 나간다 → 검색어 / 기간+버튼 두 줄 */
+@media (min-width:761px) and (max-width:980px){
+  .article-search-fields{grid-template-columns:minmax(0,1fr) auto}
+  .article-search-fields>:first-child{grid-column:1/-1}
+}
+/* 휴대폰 폭: 기간 상자 좌우 여백·날짜 글자를 줄여 날짜 칸을 넓힌다 */
+@media (max-width:420px){
+  .article-search-fields .period-input{padding:0 12px;gap:4px}
+  .article-search-fields .period-input input{font-size:14px}
+}
 @media (max-width:760px){
   .article-search-fields{grid-template-columns:minmax(0,1fr)}
   .wrap{padding:0 16px}

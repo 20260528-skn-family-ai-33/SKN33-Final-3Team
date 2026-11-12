@@ -24,6 +24,12 @@ export default function Articles({ route }) {
   const selected = q.get('id')
   const [form, setForm] = useState({ keyword, from, to })
   const [error, setError] = useState('')
+  // 주소의 검색 조건이 바뀌면(상단 메뉴로 전체 목록 복귀, 뒤로가기 등) 검색칸도 주소 값으로 다시 맞춘다.
+  // 입력하는 동안에는 주소가 바뀌지 않으므로 타이핑한 내용은 그대로 남는다. 탭을 바꾸면 주소의 검색 조건을 지우므로 검색칸도 비워진다.
+  // 탭도 함께 비교해, 검색 버튼을 누르기 전에 입력만 해 둔 내용도 탭을 바꾸면 비운다.
+  const urlSearch = JSON.stringify([tab, keyword, from, to])
+  const [formSource, setFormSource] = useState(urlSearch)
+  if (formSource !== urlSearch) { setFormSource(urlSearch); setForm({ keyword, from, to }); setError('') }
   const page = Math.max(1, Number(q.get('page')) || 1)
   const listTop = useRef(null)
   const previousPage = useRef(page)
@@ -61,7 +67,8 @@ export default function Articles({ route }) {
         lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '유형별 무역·경제 기사 조회'}
         right={(
           <div className="chips">
-            {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} to={withQuery(route, { tab: key, id: null, page: null })}>{label}</Chip>)}
+            {/* 탭을 바꾸면 검색어·발행 기간을 지우고 그 탭의 최신 기사부터 보여 준다. */}
+            {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} to={withQuery(route, { tab: key, id: null, page: null, q: null, from: null, to: null })}>{label}</Chip>)}
           </div>
         )}
       />
@@ -75,7 +82,7 @@ export default function Articles({ route }) {
               </div>
               <div>
                 <span className="lbl" id="ar-period">발행 기간 (선택)</span>
-                <div className={'input' + (form.from || form.to ? ' val' : '')} role="group" aria-labelledby="ar-period" style={{ gap: 6 }}>
+                <div className={'input period-input' + (form.from || form.to ? ' val' : '')} role="group" aria-labelledby="ar-period">
                   <input type="date" aria-label="시작일" value={form.from} onChange={e => setForm(f => ({ ...f, from: e.target.value }))} style={{ minWidth: 0 }} />
                   <span>~</span>
                   <input type="date" aria-label="종료일" value={form.to} onChange={e => setForm(f => ({ ...f, to: e.target.value }))} style={{ minWidth: 0 }} />
@@ -85,7 +92,7 @@ export default function Articles({ route }) {
             </div>
             {error
               ? <p className="field-err" role="alert" style={{ marginTop: 10 }}>{error}</p>
-              : <p className="note" style={{ marginTop: 10 }}>검색어와 기간은 모두 선택 사항입니다 · 기간 미지정 시 전체 기간 · 탭을 바꿔도 검색 조건 유지</p>}
+              : <p className="note" style={{ marginTop: 10 }}>검색어와 기간은 모두 선택 사항입니다 · 기간 미지정 시 전체 기간 · 탭을 바꾸면 검색 조건 초기화</p>}
           </form>
           <div ref={listTop} className="sec-h" style={{ marginTop: 8, scrollMarginTop: 90 }}>
             <h2 className="t2">
