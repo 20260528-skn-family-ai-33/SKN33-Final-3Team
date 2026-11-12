@@ -177,6 +177,30 @@ class ConditionTest(unittest.TestCase):
                 self.assertEqual(self.step.status,'DONE')
                 self.assertEqual(self.task.conditions.country_codes,['US'])
 
+    def test_us_trade_partner_keeps_original_mention_and_resolves_code(self):
+        self.state.input.question = '2024년·2025년 대미 수출액 비교'
+        for mention in ('미국', '대미', 'US'):
+            with self.subTest(mention=mention):
+                self.task.slots = TaskSlots(countries=[{'mention': mention, 'name': '미국'}])
+                check_conditions(self.store, self.state, self.step)
+                self.assertEqual(self.step.status, 'DONE')
+                self.assertEqual(self.task.conditions.country_codes, ['US'])
+                country, = self.task.slots.countries
+                self.assertEqual((country.mention, country.name), ('대미', '미국'))
+
+    def test_us_trade_partner_requires_original_expression_and_matching_country(self):
+        for question, mention, name in [
+            ('2024년·2025년 수출액 비교', '미국', '미국'),
+            ('대미지 수출액 비교', '미국', '미국'),
+            ('대미지 수출액 비교', '대미', '미국'),
+            ('대미 수출액 비교', '중국', '중국'),
+        ]:
+            with self.subTest(question=question, mention=mention):
+                self.state.input.question = question
+                self.task.slots = TaskSlots(countries=[{'mention': mention, 'name': name}])
+                check_conditions(self.store, self.state, self.step)
+                self.assertEqual(self.step.status, 'FAILED')
+
     def test_unknown_or_mismatched_country_code_asks_instead_of_dropping(self):
         for mention, choices in (('XX', ['US']), ('CN', ['US', 'CN'])):  # 없는 코드(UK→GB 같은 경우), 국가명과 어긋난 코드
             with self.subTest(mention=mention):

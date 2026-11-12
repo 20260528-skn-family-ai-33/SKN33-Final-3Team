@@ -47,7 +47,9 @@ DIRECTION = re.compile(r'과거|지난|직전|최근|앞선|향후|앞으로|미
 PAST_WORDS = frozenset({'과거','지난','직전','최근','앞선'})
 RANGE_JOIN = re.compile(r'\s*(?:부터|[~～–])\s*')
 SEPARATOR = re.compile(r'(?<!\d),|,(?!\d)|[;，]|이며|이고|하고|으며|(?:(?<=달러)|(?<=USD)|(?<=[%위배]))로(?=\s)|(?:(?<=%)|(?<=%p)|(?<=[율률중]))\s*(?:와|과|및|그리고)\s*')
-METRIC = re.compile(r'(?:수출|수입)\s*(?:점유율|비중|증감률|증가율|감소율|변동률)|월평균|총액|합계|점유율|비중|증감률|증가율|감소율|변동률|수출액|수입액|교역액|금액|수출입액|순위')
+CHANGE_RATE_LABEL = r'(?:증감률|증가율|감소율|변동률|변화율)'
+METRIC = re.compile(r'(?:수출|수입)\s*(?:점유율|비중|' + CHANGE_RATE_LABEL + r')|월평균|총액|합계|점유율|비중|'
+                    + CHANGE_RATE_LABEL + r'|수출액|수입액|교역액|금액|수출입액|순위')
 NAME_EDGE = r'(?<![가-힣A-Za-z0-9])'
 COUNTRY_EDGE = r'(?:(?<![가-힣A-Za-z0-9])|(?<=(?<![가-힣])대))'
 COUNT_BEFORE = re.compile(r'(?:상위|하위)\s*$')
@@ -469,6 +471,7 @@ class MetricClaim:
     relation: str = 'EQ'
     amount_period: str | None = None
     negated_change: bool = False
+    comparative_amount: bool = False
 
 
 @dataclass(frozen=True)
@@ -504,6 +507,28 @@ class Context:
 # 그 달 하나의 기간으로 읽지 않는다(종료일은 말일로 표시한다는 답변 규칙).
 PERIOD_END_DAY = re.compile(r'(?:종료일\s*[:：]?\s*)?([12][0-9]{3})년\s*([0-9]{1,2})월\s*([0-9]{1,2})일(?:\s*(?:종료|까지))?')
 
+_MONTH_DAY = r'(\d{1,2})월\s*(\d{1,2})일'
+_DAY_VALUE = r'(\d{4})년\s*' + _MONTH_DAY
+_LABELED_WINDOW = re.compile(r'(비교|대상)\s*기간(?:은|는|이란|이)?\s*' + _DAY_VALUE
+                             + r'\s*(?:부터|[~～–])\s*(?:(\d{4})년\s*)?' + _MONTH_DAY + r'(?:\s*까지)?')
+_YEAR_END = re.compile(r'(\d{4})년\s*(?:수출액|수입액|교역액)은\s*' + _DAY_VALUE + r'\s*까지')
+
+
+def stated_windows(text):
+    """Bind dates to the period they describe before checking generic end dates."""
+    def iso(parts):
+        year, month, day = map(int, parts)
+        return f'{year:04}-{month:02}-{day:02}'
+    windows, spans = [], []
+    for match in _LABELED_WINDOW.finditer(text):
+        role = 'compare_period' if match[1] == '비교' else 'period'
+        windows.append((role, None, iso(match.groups()[1:4]), iso((match[5] or match[2], match[6], match[7]))))
+        spans.append(match.span())
+    for match in _YEAR_END.finditer(text):
+        windows.append((None, match[1], None, iso(match.groups()[1:])))
+        spans.append(match.span())
+    return windows, mask_spans(text, spans)
+
 
 def period_end_months(text):
     """기간 끝을 말일로 적은 표현의 (달, 날짜). 통계 기간의 마지막 달이나 기사 기간의 끝 날짜와 같아야 한다."""
@@ -531,9 +556,9 @@ def _mask_period_end_days(text):
 DENOMINATOR_LINK = r'(?:를|을)?\s*분모로'
 AMOUNT_LABEL = r'수출액|수입액|교역액|금액'
 ANNUAL_BASE_LINK = re.compile(
-    r'\s*(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')\s*)?(?:' + COMPARE_LINK +
+    r'\s*(?:연간\s*)?(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')\s*)?(?:(?:비교\s*기간\s*)?' + COMPARE_LINK +
     r'|(?:과|와)\s*비교(?:한|할\s*때)(?=\s|$)|(?:에|와|과)\s*견주(?:어|면)(?=\s|$)|(?:' +
-    DENOMINATOR_LINK + r'|(?:을|를)?\s*(?:비교\s*)?기준으로)(?:\s+한(?=\s))?)'
+    DENOMINATOR_LINK + r'|(?:을|를)?\s*(?:비교\s*)?기준으로)(?:\s+한(?=\s))?|(?:을|를)\s*비교\s*기간으로\s+한(?=\s))'
 )
 
 
@@ -550,6 +575,11 @@ ANNUAL_COMPARATOR = re.compile(
     r'\s*(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')\s*)?(?:(?:과|와)\s*비교|(?:에|와|과)\s*견주)'
 )
 YEAR_LIST_JOIN = re.compile(r'\s*(?:과|와|및|[,，·ㆍ])\s*')
+# A coordinated assignment, e.g. "A년을 비교 기간, B년을 대상 기간으로 보면".
+# Bind each role to its own date before applying the comparison to a claim.
+YEAR_ROLE = r'\s*(?:을|를)\s*(비교|대상)\s*기간'
+FIRST_YEAR_ROLE = re.compile(YEAR_ROLE + r'\s*[,，]\s*')
+SECOND_YEAR_ROLE = re.compile(YEAR_ROLE + r'으로\s*(?:보면|두면|삼으면)(?=[\s,，]|$)')
 # Match the coordinated pair as the object of the comparison. Require the
 # remaining text to be a comparison request; an unparsed qualifier is ambiguous.
 YEAR_LIST_COMPARISON = re.compile(
@@ -566,6 +596,13 @@ def annual_comparison_roles(text):
     if len(dates) != 2 or any(not d[1] or any(d.groups()[1:]) for d in dates) or dates[0][1] == dates[1][1]:
         return undetermined
     first, second = dates
+    first_role = FIRST_YEAR_ROLE.fullmatch(text, first.end(), second.start())
+    if first_role:
+        second_role = SECOND_YEAR_ROLE.match(text, second.end())
+        if not second_role or first_role[1] == second_role[1]:
+            return undetermined
+        subject, baseline = (first, second) if first_role[1] == '대상' else (second, first)
+        return AnnualComparison('explicit', subject[1], baseline[1])
     if YEAR_LIST_JOIN.fullmatch(text[first.end():second.start()]):
         tail = text[second.end():]
         if not tail.strip(' .?!') or (
@@ -586,6 +623,77 @@ def annual_comparison_roles(text):
         index, = references
         return AnnualComparison('explicit', dates[1-index][1], dates[index][1])
     return undetermined
+
+
+# An annual dollar difference stated as "A년보다 B년이 X달러 많다" has a
+# grammatical subject and baseline even when the years are written in reverse
+# order. The amount is a difference only with that predicate and an explicit
+# annual comparator; a bare amount remains a level.
+ANNUAL_AMOUNT_BASE = re.compile(
+    r'\s*(?:연간\s*)?(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')(?:은|는|이|가|을|를)?\s*)?보다(?:도)?'
+)
+# After entity masking, the subject year can carry the reported amount noun
+# or just its case particle when the amount is already the sentence topic.
+ANNUAL_AMOUNT_SUBJECT = re.compile(
+    r'\s*(?:(?:에는|에서|의|에)\s*)?(?:(?:한국|대한민국)의\s*)?(?:(?:전체|연간)\s*)*'
+    r'(?:(?P<measure>' + AMOUNT_LABEL + r'|(?:수출|수입)\s*(?:총액|실적))\s*)?'
+    r'(?:은|는|이|가)?\s*'
+)
+ANNUAL_COMPARISON_TOPIC_END = re.compile(
+    r'\s*(?:의\s*)?(?:전체\s*)?(?:(?:' + AMOUNT_LABEL + r')\s*)?(?:을|를)?\s*'
+    r'비교(?:에서(?:는)?|한?\s*결과|하면|해\s*보면)\s*[,，]?\s*'
+)
+ANNUAL_AMOUNT_PREDICATE = re.compile(
+    r'\s*(?:\(\s*USD\s*\)\s*)?(?:만큼\s*)?(?:더\s*)?'
+    r'(?:(?P<up>많)|(?P<down>적))'
+    r'(?:습니다|았(?:습니다|다|어요)|었(?:습니다|다|어요)|다|아요|어요|음)'
+    r'\s*[.!?。]?(?:\s*)$'
+)
+
+
+def annual_amount_comparison(text, quantity):
+    """Return (subject year, baseline year, direction) for one explicit USD delta."""
+    if quantity.unit != 'USD':
+        return None
+    dates = list(DATE.finditer(text))
+    if any(not d[1] or any(d.groups()[1:]) for d in dates):
+        return None
+    role_text = text
+    topic = text[:dates[0].start()].strip() if dates else ''
+    if len(dates) == 4:
+        first, second, subject_or_base, other = dates
+        # A coordinated topic can introduce the pair in either order. Only the
+        # following clause assigns roles. Keep original offsets for the USD claim.
+        if not (YEAR_LIST_JOIN.fullmatch(text, first.end(), second.start())
+                and ANNUAL_COMPARISON_TOPIC_END.fullmatch(text, second.end(), subject_or_base.start())
+                and {first[1], second[1]} == {subject_or_base[1], other[1]}):
+            return None
+        dates = dates[2:]
+        role_text = text[dates[0].start():]
+        topic = ''  # The coordinated comparison topic has already been checked.
+    if len(dates) != 2 or dates[0][1] == dates[1][1] or quantity.start < dates[1].end():
+        return None
+    roles = annual_comparison_roles(role_text)
+    if roles.kind != 'explicit':
+        return None
+    for date, end in zip(dates, (dates[1].start(), quantity.start)):
+        operand = text[date.end():end].strip()
+        if end == quantity.start:
+            operand = re.sub(r'(?:^|\s)(?:약|대략|총)$', '', operand).rstrip()
+        if date[1] == roles.baseline:
+            if not ANNUAL_AMOUNT_BASE.fullmatch(operand):
+                return None
+        else:
+            subject = ANNUAL_AMOUNT_SUBJECT.fullmatch(operand)
+            if not subject:
+                return None
+            # With "수출액은 B년이 A년보다 …", the measured noun precedes both years.
+            if not subject['measure'] and topic and not ANNUAL_AMOUNT_SUBJECT.fullmatch(topic):
+                return None
+    predicate = ANNUAL_AMOUNT_PREDICATE.fullmatch(text, quantity.end)
+    if not predicate:
+        return None
+    return roles.subject, roles.baseline, 'UP' if predicate['up'] else 'DOWN'
 
 
 def read_time(text, inherited_year=None):
@@ -612,7 +720,7 @@ def read_time(text, inherited_year=None):
         elif first.group(1) and (first.group(2) or first.group(3)):
             end_month=last.group(2) or last.group(3) or (last.group(4) if last.group(5)=='월' else None)
             if end_month: period=(f'{first.group(1)}-{int(first.group(2) or first.group(3)):02d}',f'{last.group(1) or first.group(1)}-{int(end_month):02d}')
-    comparison_reference=any(re.match(r'\s*(?:대비|보다)',text[d.end():]) for d in dates)
+    comparison_reference=any(re.match(r'\s*(?:비교\s*기간\s*)?(?:대비|보다)',text[d.end():]) for d in dates)
     roles = annual_comparison_roles(text) if len(years) == 2 and not period else None
     subject_year = roles.subject if roles and roles.kind == 'explicit' else None
     comparison_reference = comparison_reference or subject_year is not None
@@ -644,7 +752,7 @@ def _change_predicate(suffix):
 
 
 def metric_claim(text,quantity,*,direct_suffix='',flow=None):
-    share=bool(re.search(r'비중|점유율',text));change=bool(re.search(r'증감률|증가율|감소율|변동률',text))
+    share=bool(re.search(r'비중|점유율',text));change=bool(re.search(CHANGE_RATE_LABEL,text))
     family='SHARE' if share else 'CHANGE' if change else None
     aggregate='AVERAGE' if '월평균' in text else 'TOTAL' if re.search(r'총액|합계',text) else None
     if aggregate=='TOTAL' and quantity.unit in ('%','%p'):
@@ -725,7 +833,8 @@ def _scope_measure(metric,quantity,prefix,suffix,label,*,shared,multiple):
         # A date or preceding numeric operand can be bound separately by read_time.
         for operator in COMPARE_OPERATOR.finditer(rest):
             operand = rest[:operator.start()].rstrip()
-            dated = any(date.end() == len(operand) for date in DATE.finditer(operand))
+            dated = any(re.fullmatch(r'\s*(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')|비교\s*기간)?', operand[date.end():])
+                        for date in DATE.finditer(operand))
             if re.search(r'(?:과거|직전|지난)\s*(?:\d+\s*개월)?$', operand) and metric.prediction_role == {'FUTURE'}:
                 axes.add('FORECAST')
                 continue
@@ -1301,11 +1410,18 @@ def parse_sentence(sentence,catalog):
             label=metric_override or (syntax[:values[0].start] if each else prefix)
             metric=_scope_measure(metric,quantity,prefix,suffix,label,shared=bool(each or metric_override),
                                   multiple=len(values)>1)
+            annual_difference = (annual_amount_comparison(syntax, quantity)
+                                 if len(values) == 1 else None)
+            if annual_difference:
+                metric = replace(metric, family='AMOUNT_CHANGE', direction=annual_difference[2],
+                                 direct_change=True, comparative_amount=True, amount_period=None)
             if quantity.unit == 'USD' and re.search(r'소계(?:는|은|가)?\s*$', prefix):
                 metric = replace(metric, aggregate='SUBTOTAL')
             if denominator:
                 metric = replace(metric, aggregate='DENOMINATOR')
             claim_time=ordered_times[variant_index] if ordered_times and not metric_list and not catalog.grouped(targets) else time
+            if annual_difference:
+                claim_time = replace(claim_time, subject_year=annual_difference[0], comparison_reference=True)
             if quantity.unit == 'USD' and metric.amount_period in ('MOM','YOY','COMPARE') and not DATE.search(prefix):
                 # An inherited current month is the reference point, not the date of the prior level.
                 if not DATE.search(syntax[:quantity.end]):
@@ -1315,7 +1431,7 @@ def parse_sentence(sentence,catalog):
             if metric.aggregate == 'TOTAL' and not DATE.search(syntax) and re.match(r'\s*(?:[,，]\s*)?(?:총액|합계)', syntax):
                 claim_time = TimeClaim()
             valid = quantity.valid and metric.valid
-            if metric.family == 'CHANGE':
+            if metric.family == 'CHANGE' or metric.comparative_amount:
                 subject_syntax = syntax
                 if claim_time.subject_year:
                     complements = [m.span() for date in DATE.finditer(syntax)

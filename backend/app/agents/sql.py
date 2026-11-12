@@ -1,5 +1,5 @@
 """Generated SQL validation and isolated read-only execution (§13.5)."""
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 import math
 import re
@@ -112,6 +112,7 @@ def validate_sql(draft: SqlDraft, conditions=None) -> str:
     _check_trade_filters(query)
     if conditions is not None:
         _check_conditions(query, conditions)
+        _plan_annual_totals(query, conditions)
     expressions = query.selects
     if [e.alias_or_name for e in expressions] != [c.key for c in draft.columns]:
         raise ValueError('SQL 열 이름·순서와 columns가 다릅니다.')
@@ -121,6 +122,32 @@ def validate_sql(draft: SqlDraft, conditions=None) -> str:
         raise ValueError('LIMIT은 0 이상의 정수여야 합니다.')
     query = query.limit(min(int(value.this), MAX_ROWS) if value is not None else MAX_ROWS)
     return query.sql(dialect='mysql', comments=False)
+
+
+def _plan_annual_totals(query, conditions):
+    """Use the month-leading PK for nationwide annual differences, as in trade.trade_plan."""
+    if conditions.country_codes or conditions.hs_items or not all(
+            p and p.start.month == 1 and p.end.month == 12 and p.start.year == p.end.year
+            for p in (conditions.period, conditions.compare_period)):
+        return
+    if not any(isinstance(column.unalias().unnest(), exp.Sub) for column in query.selects):
+        return
+    for scope in traverse_scope(query):
+        select = scope.expression
+        if not isinstance(select, exp.Select) or select.args.get('group'):
+            continue
+        table = select.args.get('from_')
+        table = table.this if table else None
+        if (not isinstance(table, exp.Table) or table.name not in TRADE_TABLES or table.args.get('hints')
+                or scope.sources.get(table.alias_or_name) is not table):
+            continue
+        if (any(c.name not in {'trade_month', 'hs_ver', 'country_code', 'country_role', 'amount_usd'}
+                for c in scope.columns)
+                or any(f and f[0].name == 'country_code' for f in map(_literal_filter, scope.walk()))
+                or not any(any(c.name == 'amount_usd' for c in agg.find_all(exp.Column))
+                           for agg in scope.find_all(exp.Sum))):
+            continue
+        table.set('hints', [exp.IndexTableHint(this='FORCE', expressions=[exp.to_identifier('PRIMARY')])])
 
 
 def _conjuncts(select, alias=None):
@@ -529,93 +556,244 @@ def normalize_rows(rows, columns):
     return result
 
 
-def _annual_sum_filters(scope, trade):
+def _annual_sum_filters(scope, trade, *, nationwide=False, window_set=None):
     """Only the trade table and an optional one-to-one country lookup may feed the SUM."""
     select = scope.expression
+    if not select.args.get('where'):
+        return {}
     joins = select.args.get('joins') or []
     if joins:
         join = joins[0]
         country = join.this
-        on = join.args.get('on')
-        if (len(joins) != 1 or not isinstance(country, exp.Table) or country.name != 'country'
-                or not isinstance(on, exp.EQ) or not all(isinstance(c, exp.Column) for c in (on.left, on.right))
-                or {(c.table, c.name) for c in (on.left, on.right)} !=
-                   {(country.alias_or_name, 'country_code'), (trade, 'country_code')}):
+        if (len(joins) != 1 or join.side or join.kind not in ('', 'INNER')
+                or not isinstance(country, exp.Table) or country.name != 'country'
+                or scope.sources.get(country.alias_or_name) is not country):
             return {}
+        linked = False
+        role = False
+        for term in _and_terms(join.args.get('on')):
+            if (isinstance(term, exp.EQ) and all(isinstance(c, exp.Column) for c in (term.left, term.right))
+                    and {(c.table, c.name) for c in (term.left, term.right)} ==
+                        {(country.alias_or_name, 'country_code'), (trade, 'country_code')}):
+                linked = True
+                continue
+            item = _literal_filter(term)
+            if join.side or join.kind not in ('', 'INNER') or not item:
+                return {}
+            column, op, values = item
+            if (column.table, column.name, op, values) != (country.alias_or_name, 'country_role', 'eq', ['COUNTRY']):
+                return {}
+            role = True
+        if not linked:
+            return {}
+    if nationwide and not joins:
+        return {}
     filters = {}
+    bounds = {}
     for term in _and_terms(select.args['where'].this):
+        if window_set is not None and isinstance(term, exp.Or):
+            parts = list(term.flatten())
+            items = [_literal_filter(part) for part in parts]
+            if (len(parts) != len(window_set) or any(item is None for item in items)
+                    or any(column.table != trade or column.name.lower() != 'trade_month' or op != 'between'
+                           for column, op, _ in items)
+                    or {tuple(values) for _, _, values in items} != window_set
+                    or 'trade_month' in filters):
+                return {}
+            filters['trade_month'] = frozenset(tuple(values) for _, _, values in items)
+            continue
         item = _literal_filter(term)
         if item is None:
             return {}
         column, op, values = item
         if joins and column.table == country.alias_or_name and column.name == 'country_role' and op == 'eq' and values == ['COUNTRY']:
+            role = True
             continue
         if column.table != trade or column.name in filters:
             return {}
         if column.name == 'trade_month' and op == 'between':
             filters[column.name] = tuple(values)
+        elif column.name == 'trade_month' and op in ('gte', 'lt') and op not in bounds:
+            bounds[op] = values[0]
         elif column.name in ('country_code', 'hs6_code', 'hs_ver') and op == 'eq':
             filters[column.name] = values[0]
         else:
             return {}
+    if bounds:
+        if set(bounds) != {'gte', 'lt'} or 'trade_month' in filters:
+            return {}
+        try:
+            end = date.fromisoformat(bounds['lt']) - timedelta(days=1)
+        except (ValueError, OverflowError):
+            return {}
+        filters['trade_month'] = (bounds['gte'], end.isoformat())
+    if window_set is not None and filters.get('trade_month') != frozenset(window_set):
+        return {}
+    if nationwide and not role:
+        return {}
     return filters
 
 
-def annual_sum_sources(payload):
-    """Trace directly projected yearly SUM(amount_usd) cells to their saved SELECT filters."""
+def _annual_windows(conditions):
+    windows = {}
+    for value in (conditions.get('period'), conditions.get('compare_period')):
+        if not isinstance(value, dict):
+            continue
+        start, end = value.get('start'), value.get('end')
+        if (isinstance(start, str) and isinstance(end, str)
+                and re.fullmatch(r'\d{4}-01-01', start) and end == start[:4] + '-12-31'):
+            windows[start[:4]] = (start, end)
+    return windows if conditions.get('compare_period') else {}
+
+
+def _annual_case_sum(node, scope, conditions, windows):
+    """Prove a conditional SUM's CASE arm and the shared source restriction."""
+    if not isinstance(node, exp.Sum) or not isinstance(node.this, exp.Case):
+        return None
+    case = node.this
+    if case.args.get('default') is not None or len(case.args.get('ifs') or []) != 1:
+        return None
+    arm = case.args['ifs'][0]
+    amount, condition = arm.args.get('true'), arm.args.get('this')
+    if not isinstance(amount, exp.Column) or amount.name.lower() != 'amount_usd':
+        return None
+    table = scope.sources.get(amount.table)
+    if not isinstance(table, exp.Table) or table.name.lower() not in TRADE_TABLES:
+        return None
+    item = _literal_filter(condition)
+    if not item or item[0].table != amount.table or item[0].name.lower() != 'trade_month' or item[1] != 'between':
+        return None
+    window = tuple(item[2])
+    year = next((year for year, bounds in windows.items() if bounds == window), None)
+    if year is None:
+        return None
+    select = scope.expression
+    if select.args.get('group') or select.args.get('having') or any(
+            isinstance(source, exp.Table) and source.name.lower() in TRADE_TABLES and alias != amount.table
+            for alias, source in scope.sources.items()):
+        return None
+    # The common WHERE may read exactly the two requested years; CASE alone
+    # does not prove the scan's scope or the HS edition/country population.
+    filters = _annual_sum_filters(scope, amount.table, nationwide=True,
+                                  window_set=set(windows.values()))
+    if (filters.get('trade_month') != frozenset(windows.values())
+            or filters.get('hs_ver') != 'HS2022' or set(filters) != {'trade_month', 'hs_ver'}):
+        return None
+    flow = 'EXPORT' if table.name.lower().startswith('export_') else 'IMPORT'
+    if conditions.get('country_codes') or conditions.get('hs_items') or conditions.get('trade_flow') != flow:
+        return None
+    return (year, None, None, 'HS2022', flow)
+
+
+def annual_sql_sources(payload):
+    """Trace annual totals and signed differences through immutable SQL projections.
+
+    The first result maps cells to (year, country, HS6, edition, flow).
+    The second maps subtraction cells to (left year, right year, country,
+    HS6, edition, flow). No output alias supplies a missing SQL year.
+    """
     statements = payload.get('sql')
     conditions = payload.get('conditions') or {}
+    windows = _annual_windows(conditions)
+    empty = ({}, {}, ())
     if (not isinstance(statements, list) or len(statements) != 1 or not isinstance(statements[0], str)
-            or not conditions.get('compare_period') or len(conditions.get('hs_items') or []) != 1
-            or len(conditions.get('country_codes') or []) != 1):
-        return {}
+            or not windows):
+        return empty
     try:
         query = sqlglot.parse_one(statements[0], read='mysql')
         if not isinstance(query, exp.Select):
-            return {}
+            return empty
         scopes = traverse_scope(query)
     except sqlglot.errors.SqlglotError:
-        return {}
+        return empty
     if not scopes:
-        return {}
-    windows = {(w.get('start'), w.get('end')) for w in
-               (conditions.get('period'), conditions.get('compare_period')) if w}
+        return empty
     sums = {}
+    signed = {}
+    aggregate_outputs = set()
+
+    def input_cell(column, scope):
+        source = scope.sources.get(column.table)
+        if not column.table and len(scope.selected_sources) == 1:
+            _, source = next(iter(scope.selected_sources.values()))
+        return source, column.name
+
+    def operand(node, scope):
+        node = node.unnest()
+        if isinstance(node, exp.Sum):
+            return _annual_case_sum(node, scope, conditions, windows)
+        if not isinstance(node, exp.Column):
+            return None
+        return sums.get(input_cell(node, scope))
+
     for scope in scopes:
         select = scope.expression
-        if not isinstance(select, exp.Select) or len(select.selects) != 1 or not select.args.get('where'):
+        if not isinstance(select, exp.Select):
             continue
-        aggregate = select.selects[0].unalias()
-        if not isinstance(aggregate, exp.Sum) or not isinstance(aggregate.this, exp.Column):
-            continue
-        amount = aggregate.this
-        table = scope.sources.get(amount.table)
-        if not isinstance(table, exp.Table) or table.name not in TRADE_TABLES or amount.name != 'amount_usd':
-            continue
-        if select.args.get('group') or select.args.get('having'):
-            continue
-        filters = _annual_sum_filters(scope, amount.table)
-        window = filters.get('trade_month')
-        if not window or window not in windows:
-            continue
-        start, end = window
-        year = start[:4]
-        if start != year + '-01-01' or end != year + '-12-31':
-            continue
-        country, hs, edition = (filters.get(k) for k in ('country_code', 'hs6_code', 'hs_ver'))
-        flow = 'EXPORT' if table.name.startswith('export_') else 'IMPORT'
-        if (country and conditions.get('country_codes') == [country] and hs and edition
-                and conditions.get('hs_items') == [{'hs_code': hs, 'hs_ver': edition}]
-                and conditions.get('trade_flow') == flow):
-            sums[scope, select.selects[0].alias_or_name] = (year, country, hs, edition, flow)
-    projected = {}
-    for projection in query.selects:
-        column = projection.unalias()
-        if isinstance(column, exp.Column):
-            source = scopes[-1].sources.get(column.table)
-            if (source, column.name) in sums:
-                projected[projection.alias_or_name] = sums[source, column.name]
-    return projected
+        for position, projection in enumerate(select.selects):
+            aggregate = projection.unalias().unnest()
+            name = scope.outer_columns[position] if position < len(scope.outer_columns) else projection.alias_or_name
+            output = (scope, name)
+            if not select.args.get('group'):
+                contains_sum = any(c.name.lower() == 'amount_usd' for total in aggregate.find_all(exp.Sum)
+                                   for c in total.find_all(exp.Column))
+                uses_sum = any(input_cell(c, scope) in aggregate_outputs
+                               for c in aggregate.find_all(exp.Column))
+                if contains_sum or uses_sum:
+                    aggregate_outputs.add(output)
+            if isinstance(aggregate, exp.Column):
+                source = input_cell(aggregate, scope)
+                if source in sums:
+                    sums[output] = sums[source]
+                elif source in signed:
+                    signed[output] = signed[source]
+                continue
+            if isinstance(aggregate, exp.Sub):
+                left, right = operand(aggregate.left, scope), operand(aggregate.right, scope)
+                if left and right and left[0] != right[0] and left[1:] == right[1:]:
+                    signed[output] = (left[0], right[0], *left[1:])
+                continue
+            if not isinstance(aggregate, exp.Sum):
+                continue
+            case = _annual_case_sum(aggregate, scope, conditions, windows) if len(windows) == 2 else None
+            if case is not None:
+                sums[output] = case
+                continue
+            if (len(select.selects) != 1 or not select.args.get('where') or
+                    not isinstance(aggregate.this, exp.Column)):
+                continue
+            amount = aggregate.this
+            table = scope.sources.get(amount.table)
+            if not isinstance(table, exp.Table) or table.name.lower() not in TRADE_TABLES or amount.name.lower() != 'amount_usd':
+                continue
+            if select.args.get('group') or select.args.get('having'):
+                continue
+            nationwide = not conditions.get('country_codes') and not conditions.get('hs_items')
+            if nationwide and len(windows) != 2:
+                continue
+            filters = _annual_sum_filters(scope, amount.table, nationwide=nationwide)
+            window = filters.get('trade_month')
+            year = next((year for year, bounds in windows.items() if bounds == window), None)
+            if year is None:
+                continue
+            country, hs, edition = (filters.get(k) for k in ('country_code', 'hs6_code', 'hs_ver'))
+            flow = 'EXPORT' if table.name.lower().startswith('export_') else 'IMPORT'
+            if (conditions.get('trade_flow') == flow and
+                    ((country and conditions.get('country_codes') == [country] and hs and
+                      conditions.get('hs_items') == [{'hs_code': hs, 'hs_ver': edition}]) or
+                     (nationwide and country is None and hs is None and edition == 'HS2022'))):
+                sums[output] = (year, country, hs, edition, flow)
+
+    outer = scopes[-1]
+    projected = {name: value for (scope, name), value in sums.items() if scope is outer}
+    differences = {name: value for (scope, name), value in signed.items() if scope is outer}
+    candidates = sorted(name for scope, name in aggregate_outputs if scope is outer)
+    return projected, differences, candidates
+
+
+def annual_sum_sources(payload):
+    """Compatibility view of directly projected, SQL-proved annual SUM cells."""
+    return annual_sql_sources(payload)[0]
 
 
 def execute_readonly(engine, draft, timeout_seconds=30, conditions=None):

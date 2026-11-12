@@ -1,0 +1,149 @@
+{
+  "post": {
+    "snapshot": {
+      "meta": {
+        "kind": "LLM_SQL"
+      },
+      "conditions": {
+        "period": {
+          "start": "2025-01-01",
+          "end": "2025-12-31"
+        },
+        "compare_period": {
+          "start": "2024-01-01",
+          "end": "2024-12-31"
+        },
+        "country_codes": [],
+        "hs_items": [],
+        "trade_flow": "EXPORT"
+      },
+      "sql": [
+        "WITH y2025 AS (SELECT SUM(e.amount_usd) AS amount_usd FROM export_monthly AS e FORCE INDEX (`PRIMARY`) JOIN country AS c ON c.country_code = e.country_code WHERE c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022' AND e.trade_month BETWEEN '2025-01-01' AND '2025-12-31'), y2024 AS (SELECT SUM(e.amount_usd) AS amount_usd FROM export_monthly AS e FORCE INDEX (`PRIMARY`) JOIN country AS c ON c.country_code = e.country_code WHERE c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022' AND e.trade_month BETWEEN '2024-01-01' AND '2024-12-31') SELECT y2025.amount_usd - y2024.amount_usd AS export_difference_usd FROM y2025 CROSS JOIN y2024 ORDER BY export_difference_usd DESC LIMIT 1000"
+      ],
+      "rows": [
+        {
+          "export_difference_usd": 25674131600
+        }
+      ],
+      "columns": [
+        {
+          "key": "export_difference_usd",
+          "label": "수출액 차이 (2025년-2024년)",
+          "unit": "USD"
+        }
+      ]
+    },
+    "conclusion": [
+      "2025년 연간 수출액은 2024년 연간 수출액보다 256억 7,413만 달러(USD) 많습니다."
+    ],
+    "explanation": []
+  },
+  "fixed-draft": {
+    "snapshot": {
+      "meta": {
+        "kind": "LLM_SQL"
+      },
+      "conditions": {
+        "period": {
+          "start": "2025-01-01",
+          "end": "2025-12-31"
+        },
+        "compare_period": {
+          "start": "2024-01-01",
+          "end": "2024-12-31"
+        },
+        "country_codes": [],
+        "hs_items": [],
+        "trade_flow": "EXPORT"
+      },
+      "sql": [
+        "WITH exports_2024 AS (SELECT SUM(e.amount_usd) AS amount_usd FROM export_monthly AS e FORCE INDEX (`PRIMARY`) JOIN country AS c ON c.country_code = e.country_code WHERE c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022' AND e.trade_month BETWEEN '2024-01-01' AND '2024-12-31'), exports_2025 AS (SELECT SUM(e.amount_usd) AS amount_usd FROM export_monthly AS e FORCE INDEX (`PRIMARY`) JOIN country AS c ON c.country_code = e.country_code WHERE c.country_role = 'COUNTRY' AND e.hs_ver = 'HS2022' AND e.trade_month BETWEEN '2025-01-01' AND '2025-12-31') SELECT y24.amount_usd AS amount_2024_usd, y25.amount_usd AS amount_2025_usd, y25.amount_usd - y24.amount_usd AS difference_usd FROM exports_2024 AS y24 CROSS JOIN exports_2025 AS y25 LIMIT 1000"
+      ],
+      "rows": [
+        {
+          "amount_2024_usd": 683191981120,
+          "amount_2025_usd": 708866112720,
+          "difference_usd": 25674131600
+        }
+      ],
+      "columns": [
+        {
+          "key": "amount_2024_usd",
+          "label": "2024년 수출액",
+          "unit": "USD"
+        },
+        {
+          "key": "amount_2025_usd",
+          "label": "2025년 수출액",
+          "unit": "USD"
+        },
+        {
+          "key": "difference_usd",
+          "label": "수출액 차이 (2025년 - 2024년)",
+          "unit": "USD"
+        }
+      ]
+    },
+    "conclusion": [
+      "2024년 수출액은 6,831억 9,198만 달러, 2025년 수출액은 7,088억 6,611만 달러입니다.",
+      "2025년 수출액은 2024년보다 256억 7,413만 달러 많습니다."
+    ],
+    "explanation": [
+      "수출액 기준은 USD입니다."
+    ]
+  },
+  "pre": {
+    "snapshot": {
+      "meta": {
+        "kind": "LLM_SQL"
+      },
+      "conditions": {
+        "period": {
+          "start": "2025-01-01",
+          "end": "2025-12-31"
+        },
+        "compare_period": {
+          "start": "2024-01-01",
+          "end": "2024-12-31"
+        },
+        "country_codes": [],
+        "hs_items": [],
+        "trade_flow": "EXPORT"
+      },
+      "sql": [
+        "SELECT SUM(CASE WHEN e.trade_month BETWEEN '2024-01-01' AND '2024-12-31' THEN e.amount_usd END) AS amount_2024_usd, SUM(CASE WHEN e.trade_month BETWEEN '2025-01-01' AND '2025-12-31' THEN e.amount_usd END) AS amount_2025_usd, SUM(CASE WHEN e.trade_month BETWEEN '2025-01-01' AND '2025-12-31' THEN e.amount_usd END) - SUM(CASE WHEN e.trade_month BETWEEN '2024-01-01' AND '2024-12-31' THEN e.amount_usd END) AS difference_usd FROM export_monthly AS e JOIN country AS c ON c.country_code = e.country_code AND c.country_role = 'COUNTRY' WHERE e.hs_ver = 'HS2022' AND (e.trade_month BETWEEN '2024-01-01' AND '2024-12-31' OR e.trade_month BETWEEN '2025-01-01' AND '2025-12-31') LIMIT 1000"
+      ],
+      "rows": [
+        {
+          "amount_2024_usd": 683191981120,
+          "amount_2025_usd": 708866112720,
+          "difference_usd": 25674131600
+        }
+      ],
+      "columns": [
+        {
+          "key": "amount_2024_usd",
+          "label": "2024년 수출액",
+          "unit": "USD"
+        },
+        {
+          "key": "amount_2025_usd",
+          "label": "2025년 수출액",
+          "unit": "USD"
+        },
+        {
+          "key": "difference_usd",
+          "label": "차이 (2025년 - 2024년)",
+          "unit": "USD"
+        }
+      ]
+    },
+    "conclusion": [
+      "2024년 수출액은 6,831억 9,198만 달러, 2025년 수출액은 7,088억 6,611만 달러입니다.",
+      "2025년 수출액은 2024년보다 256억 7,413만 달러 많습니다."
+    ],
+    "explanation": [
+      "수출액은 USD 기준이며, 2025년에서 2024년 수출액을 뺀 차이입니다."
+    ]
+  }
+}

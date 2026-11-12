@@ -36,6 +36,10 @@ class AnnualSqlEvidenceTest(unittest.TestCase):
         new = (0, ('rows', '0', 'new_usd'))
         self.assertTrue(ok)
         self.assertEqual([c.matches for c in checks], [(old,), (new,), (old, new)])
+        ok, checks = self.inspect(self.line.replace('로 증가', '로 20달러 증가'))
+        self.assertTrue(ok)
+        self.assertEqual(checks[-1].matches, (old, new))
+        self.assertFalse(self.inspect(self.line.replace('로 증가', '로 21달러 증가'))[0])
         reverse = '미국 부품 수출액은 2022년 100달러에서 2021년 80달러로 감소했습니다.'
         self.assertTrue(self.inspect(reverse)[0])
 

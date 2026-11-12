@@ -1,0 +1,147 @@
+{
+  "nationwide_question": "2024년과 2025년 수출액 차이",
+  "timed_out_draft": {
+    "sql": "WITH exports_2024 AS (\n  SELECT SUM(e.amount_usd) AS amount_usd\n  FROM export_monthly AS e\n  JOIN country AS c ON c.country_code = e.country_code\n  WHERE c.country_role = 'COUNTRY'\n    AND e.hs_ver = 'HS2022'\n    AND e.trade_month BETWEEN '2024-01-01' AND '2024-12-31'\n),\nexports_2025 AS (\n  SELECT SUM(e.amount_usd) AS amount_usd\n  FROM export_monthly AS e\n  JOIN country AS c ON c.country_code = e.country_code\n  WHERE c.country_role = 'COUNTRY'\n    AND e.hs_ver = 'HS2022'\n    AND e.trade_month BETWEEN '2025-01-01' AND '2025-12-31'\n)\nSELECT\n  y24.amount_usd AS amount_2024_usd,\n  y25.amount_usd AS amount_2025_usd,\n  y25.amount_usd - y24.amount_usd AS difference_usd\nFROM exports_2024 AS y24\nCROSS JOIN exports_2025 AS y25",
+    "columns": [
+      {
+        "key": "amount_2024_usd",
+        "label": "2024년 수출액",
+        "type": "number",
+        "unit": "USD"
+      },
+      {
+        "key": "amount_2025_usd",
+        "label": "2025년 수출액",
+        "type": "number",
+        "unit": "USD"
+      },
+      {
+        "key": "difference_usd",
+        "label": "수출액 차이 (2025년 - 2024년)",
+        "type": "number",
+        "unit": "USD"
+      }
+    ],
+    "summary": "일반 국가의 HS2022 기준 수출액을 연도별로 합산하고, 2025년 금액에서 2024년 금액을 뺍니다.",
+    "unsupported": null
+  },
+  "sql_payload": {
+    "meta": {
+      "kind": "LLM_SQL"
+    },
+    "conditions": {
+      "period": {
+        "start": "2025-01-01",
+        "end": "2025-12-31"
+      },
+      "compare_period": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+      },
+      "trade_flow": "EXPORT",
+      "hs_items": [
+        {
+          "hs_code": "854232",
+          "hs_ver": "HS2022"
+        }
+      ],
+      "country_codes": [
+        "US"
+      ]
+    },
+    "rows": [
+      {
+        "export_2024_usd": 305417685,
+        "export_2025_usd": 374661069,
+        "change_pct": 22.7
+      }
+    ],
+    "columns": [
+      {
+        "key": "export_2024_usd",
+        "label": "2024년 수출액",
+        "unit": "USD"
+      },
+      {
+        "key": "export_2025_usd",
+        "label": "2025년 수출액",
+        "unit": "USD"
+      },
+      {
+        "key": "change_pct",
+        "label": "2024년 대비 2025년 수출액 변화율",
+        "unit": "%"
+      }
+    ]
+  },
+  "sql_cases": [
+    {
+      "sql": "WITH export_2024 AS (SELECT SUM(e.amount_usd) AS amount_usd FROM export_monthly AS e JOIN country AS c ON c.country_code = e.country_code AND c.country_role = 'COUNTRY' WHERE e.country_code = 'US' AND e.hs6_code = '854232' AND e.hs_ver = 'HS2022' AND e.trade_month BETWEEN '2024-01-01' AND '2024-12-31'), export_2025 AS (SELECT SUM(e.amount_usd) AS amount_usd FROM export_monthly AS e JOIN country AS c ON c.country_code = e.country_code AND c.country_role = 'COUNTRY' WHERE e.country_code = 'US' AND e.hs6_code = '854232' AND e.hs_ver = 'HS2022' AND e.trade_month BETWEEN '2025-01-01' AND '2025-12-31') SELECT e24.amount_usd AS export_2024_usd, e25.amount_usd AS export_2025_usd, ROUND((e25.amount_usd - e24.amount_usd) / NULLIF(e24.amount_usd, 0) * 100, 1) AS change_pct FROM export_2024 AS e24 CROSS JOIN export_2025 AS e25 ORDER BY export_2024_usd LIMIT 1000",
+      "sentences": [
+        "한국의 대미 메모리 집적회로(HS 854232) 수출액은 비교 기간인 2024년에 3억 542만 달러, 대상 기간인 2025년에 3억 7,466만 달러입니다.",
+        "2024년을 비교 기간으로 한 2025년 수출액의 변화율은 22.7% 증가입니다."
+      ]
+    },
+    {
+      "sql": "WITH export_2024 AS (SELECT SUM(es.amount_usd) AS amount_usd FROM export_summary AS es JOIN country AS c ON c.country_code = es.country_code AND c.country_role = 'COUNTRY' WHERE es.country_code = 'US' AND es.hs6_code = '854232' AND es.hs_ver = 'HS2022' AND es.trade_month >= '2024-01-01' AND es.trade_month < '2025-01-01'), export_2025 AS (SELECT SUM(es.amount_usd) AS amount_usd FROM export_summary AS es JOIN country AS c ON c.country_code = es.country_code AND c.country_role = 'COUNTRY' WHERE es.country_code = 'US' AND es.hs6_code = '854232' AND es.hs_ver = 'HS2022' AND es.trade_month >= '2025-01-01' AND es.trade_month < '2026-01-01') SELECT e24.amount_usd AS export_2024_usd, e25.amount_usd AS export_2025_usd, ROUND((e25.amount_usd - e24.amount_usd) / NULLIF(e24.amount_usd, 0) * 100, 1) AS change_pct FROM export_2024 AS e24 CROSS JOIN export_2025 AS e25 ORDER BY export_2024_usd LIMIT 1",
+      "sentences": [
+        "2024년 비교 기간 한국의 대미 메모리 집적회로(HS 854232) 수출액은 3억 542만 달러(USD)입니다.",
+        "2025년 대상 기간 수출액은 3억 7,466만 달러(USD)로, 2024년 비교 기간 대비 22.7% 증가했습니다."
+      ]
+    }
+  ],
+  "monthly_sentence": "2024년 월별 수출액은 1월 102억 5,044만 달러, 2월 98억 699만 달러, 3월 108억 7,740만 달러, 4월 113억 9,654만 달러, 5월 109억 2,741만 달러, 6월 112억 9,226만 달러입니다.",
+  "monthly_rows": [
+    {
+      "country_name": "미국",
+      "country_code": "US",
+      "month": "2025-01",
+      "amount_usd": 9281718564,
+      "compare_month": "2024-01",
+      "compare_amount_usd": 10250440138
+    },
+    {
+      "country_name": "미국",
+      "country_code": "US",
+      "month": "2025-02",
+      "amount_usd": 9886414315,
+      "compare_month": "2024-02",
+      "compare_amount_usd": 9806988113
+    },
+    {
+      "country_name": "미국",
+      "country_code": "US",
+      "month": "2025-03",
+      "amount_usd": 11107504836,
+      "compare_month": "2024-03",
+      "compare_amount_usd": 10877402663
+    },
+    {
+      "country_name": "미국",
+      "country_code": "US",
+      "month": "2025-04",
+      "amount_usd": 10603473620,
+      "compare_month": "2024-04",
+      "compare_amount_usd": 11396540326
+    },
+    {
+      "country_name": "미국",
+      "country_code": "US",
+      "month": "2025-05",
+      "amount_usd": 10033860014,
+      "compare_month": "2024-05",
+      "compare_amount_usd": 10927405029
+    },
+    {
+      "country_name": "미국",
+      "country_code": "US",
+      "month": "2025-06",
+      "amount_usd": 11201962650,
+      "compare_month": "2024-06",
+      "compare_amount_usd": 11292256047
+    }
+  ],
+  "other_rate_sentence": "2025년 수출액은 비교 기간인 2024년 수출액보다 22.7% 증가했습니다.",
+  "range_sentence": "비교 기간은 2023년 1월 1일부터 2023년 12월 31일까지이며, 대상 기간은 2024년 1월 1일부터 2024년 12월 31일까지입니다.",
+  "end_sentence": "2025년 수출액은 2025년 12월 31일까지, 2024년 수출액은 2024년 12월 31일까지의 집계입니다."
+}

@@ -12,7 +12,7 @@ from backend.app.agents.compose import fixed_conclusion
 from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
     ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
-    change_phrase_end, COMPARISON, DOWN, UP, TOKEN, DATE, HISTORY_DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift,
+    change_phrase_end, COMPARISON, DOWN, UP, TOKEN, DATE, HISTORY_DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift, stated_windows,
 )
 from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, period
 
@@ -39,6 +39,16 @@ def _source_supports(time: TimeClaim,source):
 
 def _time_matches(claim:Claim,fact:Fact):
     time=claim.time
+    if claim.metric.comparative_amount:
+        if not fact.period_difference or not fact.period or not fact.compare_period:
+            return False
+        first, second = fact.period, fact.compare_period
+        if any(window != (window[0][:4] + '-01', window[0][:4] + '-12') for window in (first, second)):
+            return False
+        return (time.years == {first[0][:4], second[0][:4]}
+                and time.subject_year in time.years
+                and not (time.months or time.bare_months or time.period or time.month_window)
+                and time.durations <= {12})
     if time.subject_year and fact.metric.family == 'CHANGE':
         if fact.period != (time.subject_year + '-01', time.subject_year + '-12'):
             return False
@@ -64,6 +74,8 @@ def _time_matches(claim:Claim,fact:Fact):
             if not fact.anchor or time.years!={fact.anchor[:4]}: return False
         else:
             years = time.years - {time.subject_year} if fact.metric.family == 'CHANGE' else time.years
+            if fact.metric.key in ('amount_usd', 'compare_amount_usd') and fact.month in time.months:
+                years = years - {fact.month[:4]}
             if not all((year+'-01',year+'-12') in periods for year in years): return False
     if time.months or time.bare_months:
         anchor_reference=fact.prediction and fact.horizon==12 and 12 in time.durations and time.anchor_reference
@@ -169,6 +181,10 @@ def mismatch(claim:Claim,fact:Fact,source):
     if fact.horizon and m.prediction_role and m.prediction_role!={fact.role}: return 'PREDICTION_HORIZON'
     if m.rank_axis and fact.prediction and m.rank_axis!=fact.metric.key: return 'RANK_AXIS'
     value,amount=q.value,fact.value
+    if m.comparative_amount:
+        # The saved cell is left minus right. Reversing both the named years
+        # and the direction states the same difference with the opposite sign.
+        amount = fact.value if claim.time.subject_year == fact.period[0][:4] else -fact.value
     direction_applies=m.direction and (m.direct_change or fact.metric.family in ('CHANGE','SHARE_CHANGE'))
     if m.direction and q.signed and (value<0)!=(m.direction=='DOWN'): return 'SIGN'
     if direction_applies:
@@ -255,50 +271,119 @@ def _month_change_cells(claim, facts, sources):
     return ((previous.source, previous.path), (current.source, current.path))
 
 
-def _annual_direction_cells(sentence, amounts, trend, cells):
+def _trend_annual_cell(check, cells, prepared):
+    """Resolve an explicitly dated level to one consistent saved TREND total."""
+    year, = check.claim.time.years
+    window = (year + '-01', year + '-12')
+    representative = None
+    for index, source in enumerate(prepared.sources):
+        if source.get('kind') != 'TREND' or source.get('_verification_source') != 'SNAPSHOT':
+            continue
+        if period(source.get('period')) == window:
+            key = 'total_usd'
+        elif period(source.get('compare_period')) == window:
+            key = 'compare_total_usd'
+        else:
+            continue
+        # Select a series by target, never by value. Use codes when present so
+        # a duplicate row lacking a display name still participates in the check.
+        groups = {}
+        eligible = set()
+        for n, row in enumerate(source.get('rows', [])):
+            if not isinstance(row, dict):
+                return None
+            series = (row.get('country_code') or row.get('country_name'), row.get('hs_ver'),
+                      row.get('hs_code') or row.get('name'))
+            groups.setdefault(series, []).append((index, ('rows', str(n), key)))
+            names = frozenset(str(row[k]) for k in ('country_name','country_code','hs_code','name') if row.get(k))
+            targets, _ = bind_targets(names, prepared.catalog)
+            if check.claim.targets <= targets:
+                eligible.add(series)
+        if not eligible:
+            continue
+        if len(eligible) != 1 or representative is not None:
+            return None
+        series, = eligible
+        paths = groups[series]
+        saved_matches = set(check.matches)
+        matched = next((path for path in paths if path in saved_matches), None)
+        if matched is None:
+            return None
+        representative = cells[matched]
+        if any(path not in cells or cells[path].value != representative.value for path in paths):
+            return None
+    return representative
+
+
+def _annual_change_cells(sentence, amounts, trend, cells, prepared):
     """Bind 'from A to B' to the two adjacent, independently verified annual totals."""
     if not trend.valid or not trend.span or len(amounts) != 2:
         return None
-    pair = []
     for check in amounts:
         claim = check.claim
         if (not claim.quantity_span or not claim.quantity or claim.quantity.unit != 'USD'
-                or claim.metric.family != 'AMOUNT' or claim.targets != trend.targets
-                or len(check.matches) != 1):
+                or claim.metric.family != 'AMOUNT'):
             return None
-        cell, = check.matches
-        fact = cells[cell]
-        if not fact.annual_sql_sum:
-            return None
+    a, b = (check.claim.quantity_span for check in amounts)
+    change_start = (trend.quantity_span or trend.span)[0]
+    if (not re.match(r'\s*에서(?=\s)', sentence[a[1]:b[0]])
+            or not re.fullmatch(r'\s*(?:으)?로\s*', sentence[b[1]:change_start])):
+        return None
+
+    pair = []
+    has_trend_snapshot = any(s.get('kind') == 'TREND' and s.get('_verification_source') == 'SNAPSHOT'
+                             for s in prepared.sources)
+    for check in amounts:
+        fact = cells[check.matches[0]] if len(check.matches) == 1 else None
+        if not (fact and fact.annual_sql_sum):
+            time = check.claim.time
+            if not has_trend_snapshot or len(time.years) != 1 or time.months or time.bare_months:
+                return None
+            fact = _trend_annual_cell(check, cells, prepared)
+            if fact is None:
+                return ()
+        if check.claim.targets != trend.targets:
+            return () if has_trend_snapshot or trend.quantity is not None else None
         pair.append(fact)
     first, last = pair
     if (first.source != last.source or first.path[:-1] != last.path[:-1] or first.period == last.period
             or first.stored_targets != last.stored_targets or first.metric.flow != last.metric.flow):
-        return None
-    a, b = (check.claim.quantity_span for check in amounts)
-    if (not re.match(r'\s*에서(?=\s)', sentence[a[1]:b[0]])
-            or not re.fullmatch(r'\s*(?:으)?로\s*', sentence[b[1]:trend.span[0]])):
-        return None
+        return () if has_trend_snapshot or trend.quantity is not None else None
     if trend.time.years and trend.time.years != {last.period[0][:4]}:
         return ()
-    if _direction_holds(trend.metric.direction, first.value, last.value):
-        return (amounts[0].matches[0], amounts[1].matches[0])
-    return ()
+    if trend.quantity is not None:
+        # Use the unrounded source amounts. Apply the usual unit, sign and
+        # displayed precision checks, and return the two real operand cells.
+        metric = replace(last.metric, key='change_usd', label='증감액', family='AMOUNT_CHANGE',
+                         aggregate=None, comparison='PERIOD')
+        difference = replace(last, metric=metric, value=last.value-first.value,
+                             compare_period=first.period, month=None, annual_sql_sum=False)
+        if mismatch(trend, difference, prepared.sources[last.source]) is not None:
+            return ()
+    elif not _direction_holds(trend.metric.direction, first.value, last.value):
+        return ()
+    return ((first.source, first.path), (last.source, last.path))
 
 
-def _implied_amount_direction(checks, prepared, sentence):
-    """"7월 2,100만 달러에서 12월 2,840만 달러로 늘었습니다": 같은 문장에서 확인한 두 달 금액으로 방향을 판정한다."""
+def _implied_amount_change(checks, prepared, sentence):
+    """Use verified annual totals for a direction or dollar difference, and monthly amounts for direction."""
     cells = {(f.source, f.path): f for f in prepared.facts}
     out = list(checks)
     for index, check in enumerate(checks):
         metric = check.claim.metric
-        if (check.claim.quantity is not None or metric.family != 'CHANGE' or metric.comparison
-                or metric.negated_change or metric.direction not in ('UP', 'DOWN')):
+        quantity = check.claim.quantity
+        direction_only = quantity is None and metric.family == 'CHANGE'
+        dollar_change = (quantity is not None and quantity.unit == 'USD'
+                         and metric.family == 'AMOUNT_CHANGE' and metric.direct_change)
+        if (not (direction_only or dollar_change) or metric.comparison or metric.negated_change
+                or metric.direction not in ('UP', 'DOWN')):
             continue
-        annual = _annual_direction_cells(sentence, checks[max(0, index-2):index], check.claim, cells)
+        annual = _annual_change_cells(sentence, checks[max(0, index-2):index], check.claim, cells, prepared)
         if annual is not None:
             reason = 'MATCH' if annual else 'NOT_CONFIRMED'
             out[index] = ClaimCheck(check.claim, reason, annual, check.interpretation_valid)
+            continue
+        if dollar_change:
             continue
         points = {}
         for other in checks:
@@ -372,6 +457,23 @@ def _matching_cells(claim, facts, sources, catalog):
     return tuple(matches) if len(inferred_axes) <= 1 else ()
 
 
+def _supports_stated_window(source, role, year, start, end):
+    from calendar import monthrange
+    for key in ((role,) if role else ('period', 'compare_period')):
+        raw = source.get(key)
+        window = period(raw)
+        if not window or (year and any(month[:4] != year for month in window)):
+            continue
+        first, last = str(raw['start']), str(raw['end'])
+        if len(first) == 7:
+            first += '-01'
+        if len(last) == 7:
+            last += f'-{monthrange(int(last[:4]), int(last[5:7]))[1]:02}'
+        if (start is None or start == first) and end == last:
+            return True
+    return False
+
+
 def _inspect_prepared(sentence, prepared):
     catalog, facts, sources = prepared.catalog, prepared.facts, prepared.sources
     parsed=parse_sentence(sentence,catalog)
@@ -379,11 +481,18 @@ def _inspect_prepared(sentence, prepared):
     for claim in parsed.claims:
         matches=_matching_cells(claim,facts,sources,catalog)
         checks.append(ClaimCheck(claim,'MATCH' if matches else 'NOT_CONFIRMED',matches,parsed.valid))
-    checks=list(_implied_amount_direction(checks, prepared, sentence))
+    checks=list(_implied_amount_change(checks, prepared, sentence))
     dates_ok=all(any(_source_supports(time,source) for source in sources) for time in parsed.date_only)
+    remaining = sentence
+    statistic_sources = [s for s in sources if s.get('period')]
+    if statistic_sources:
+        windows, remaining = stated_windows(sentence)
+        if windows:
+            dates_ok = dates_ok and any(all(_supports_stated_window(source, *window) for window in windows)
+                                        for source in statistic_sources)
     dates_ok=dates_ok and all(any(str((source.get('period') or {}).get('end') or '')[:7]==month
                                   or str((source.get('article_period') or {}).get('end') or '')[:10]==day for source in sources)
-                              for month, day in period_end_months(sentence))
+                              for month, day in period_end_months(remaining))
     return parsed.valid and dates_ok and all(c.matches for c in checks),tuple(checks)
 
 
@@ -409,15 +518,27 @@ def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
     conditions=payload.get('conditions') or {}
     meta=payload.get('meta') or {}
     scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
+    if meta.get('kind') == 'TREND':
+        scope['kind'] = 'TREND'
     if meta.get('kind') == 'LLM_SQL':
-        from backend.app.agents.sql import annual_sum_sources
+        from backend.app.agents.sql import annual_sql_sources, _annual_windows
         cells = {}
-        for key, (year, country, hs, edition, flow) in annual_sum_sources(payload).items():
+        sums, differences, candidates = annual_sql_sources(payload)
+        if len(_annual_windows(conditions)) == 2:
+            scope['_annual_candidates'] = candidates
+        for key, (year, country, hs, edition, flow) in sums.items():
             cells[key] = dict(year=year, flow=flow, country_code=country, hs_code=hs,
                               country_name=(country_labels or {}).get(country),
                               hs_name=(product_labels or {}).get((hs, edition)))
         if cells:
             scope['_annual_sums'] = cells
+        if differences:
+            scope['_annual_differences'] = {
+                key: dict(left_year=left, right_year=right, flow=flow,
+                          country_code=country, hs_code=hs,
+                          country_name=(country_labels or {}).get(country),
+                          hs_name=(product_labels or {}).get((hs, edition)))
+                for key, (left, right, country, hs, edition, flow) in differences.items()}
     if meta.get('kind')=='PREDICTION' and meta.get('anchor'):
         anchor=str(meta['anchor'])[:7]
         scope.update(kind='PREDICTION',anchor=anchor,period={'start':anchor,'end':anchor})
@@ -691,6 +812,8 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
         rows = evidence.get('rows') or evidence.get('targets') or ()
         selected = {r.get('country_name') for r in rows if r.get('country_code') in codes}
         selected.update(c['country_name'] for c in evidence.get('_annual_sums', {}).values()
+                        if c['country_code'] in codes)
+        selected.update(c['country_name'] for c in evidence.get('_annual_differences', {}).values()
                         if c['country_code'] in codes)
         mentions = [(c.mention, c.name) for c in mentions_in_question
                     if c.mention in state.input.question and c.name in selected and c.mention != c.name]

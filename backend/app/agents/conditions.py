@@ -90,6 +90,32 @@ def _match_country_mention(mention, name, rows, threshold):
     return None, candidates, None
 
 
+TRADE_PARTNER_ALIASES = {'대미': 'US'}
+
+
+def _question_country_matches(question, countries, rows, threshold):
+    """Bind a planner country to its source spelling and catalog entry."""
+    text = question.casefold()
+    matches = {(item.mention, item.name): _match_country_mention(item.mention, item.name, rows, threshold)
+               for item in countries if item.mention not in TRADE_PARTNER_ALIASES and item.mention.casefold() in text}
+    for alias, code in TRADE_PARTNER_ALIASES.items():
+        if not re.search(r'(?<!\w)' + re.escape(alias) + r'(?=\W|$|수출|수입)', question):
+            continue
+        row = next((r for r in rows if r['country_code'] == code), None)
+        if row is None:
+            continue
+        canonical = {country_key(row['name_ko']), country_key(code)}
+        for item in countries:
+            if (item.mention, item.name) in matches:
+                continue
+            if item.mention != alias and not {country_key(item.mention), country_key(item.name)} <= canonical:
+                continue
+            # Preserve the source spelling on the task for later snapshot verification.
+            item.mention, item.name = alias, row['name_ko']
+            matches[alias, item.name] = (code, [], None)
+    return matches
+
+
 def comparison_windows(question, current, baseline):
     from backend.app.agents.verify_claims import annual_comparison_roles
 
@@ -336,8 +362,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         # 되묻기로 확정한 국가('미구' → 미국)도 새 국가다. 아래처럼 같은 계획의 앞 하위 질문에서 확정한 답도 쓴다.
         def confirmed(mention):
             return any(t.resolved.get(f'{t.task_id}:country:{mention}', {}).get('country_codes') for t in state.plan.tasks)
-        current = {(item.mention, item.name): _match_country_mention(item.mention, item.name, rows, threshold)
-                   for item in countries if item.mention.casefold() in original.casefold()}
+        current = _question_country_matches(original, countries, rows, threshold)
         new_country = any(match[0] or confirmed(mention) for (mention, _), match in current.items())
         for item in countries:
             key = f'{task.task_id}:country:{item.mention}'
@@ -351,7 +376,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             if 'country_codes' in answer:
                 out.country_codes.extend(answer['country_codes'])
                 continue
-            if item.mention.casefold() not in original.casefold():
+            if (item.mention, item.name) not in current:
                 # D-22: 질문에 없는 이전 조건 국가를 그대로 다시 적은 것은 생략(이어받기)과 같다.
                 echoed, _ = country_matches(item.name, rows, threshold)
                 if new_country and echoed in base.country_codes:
