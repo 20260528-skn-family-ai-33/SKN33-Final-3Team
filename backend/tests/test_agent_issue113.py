@@ -64,6 +64,19 @@ class SimpleRankingTableTest(unittest.TestCase):
         self.assertNotIn('amount_only', self.ranking_args('미국 수출 품목 순위와 전년 대비 증감률'))
         self.assertNotIn('amount_only', self.ranking_args('미국 수출 품목 순위 변화', comparison_requested=True))
 
+    def test_two_trade_tables_accept_unqualified_not_in_subquery(self):
+        from backend.app.agents.sql import validate_sql
+        from backend.app.agents.state import SqlDraft
+        sub = "NOT IN (SELECT country_code FROM country WHERE country_role <> 'COUNTRY')"
+        def draft(sql):
+            return SqlDraft(sql=sql, summary='s', unsupported=None,
+                            columns=[{'key': 'value', 'label': 'v', 'type': 'number', 'unit': 'USD'}])
+        head = ("SELECT SUM(e.amount_usd) AS value FROM export_summary e JOIN import_summary i "
+                "ON i.hs6_code = e.hs6_code AND i.trade_month = e.trade_month WHERE e.hs_ver = 'HS2022' AND i.hs_ver = 'HS2022' ")
+        self.assertTrue(validate_sql(draft(head + f"AND e.country_code {sub} AND i.country_code {sub}")))
+        with self.assertRaises(ValueError):  # 한쪽 표만 거르면 여전히 거부한다.
+            validate_sql(draft(head + f"AND e.country_code {sub}"))
+
 
 class CompareYearsSplitTest(unittest.TestCase):
     def slots(self, question, compare):

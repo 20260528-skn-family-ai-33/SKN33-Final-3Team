@@ -279,8 +279,10 @@ def _check_trade_filters(query):
         for trade in trades:
             predicates = _conjuncts(scope.expression, trade)
             if len(trades) > 1:
-                predicates = [p for p in predicates if not any(isinstance(c, exp.Column) and not c.table
-                                                               for c in p.find_all(exp.Column))]
+                # 이 SELECT의 열만 본다. NOT IN·IN 하위 쿼리 안의 country 열은 그 하위 쿼리 범위라 모호하지 않다.
+                predicates = [p for p in predicates if not any(
+                    isinstance(c, exp.Column) and not c.table and c.find_ancestor(exp.Select) is scope.expression
+                    for c in p.find_all(exp.Column))]
             label = sources[trade].name
             if not _filters(predicates, 'hs_ver', {trade}, single=True):
                 raise ValueError(f"{label}에는 hs_ver 리터럴 조건 하나를 AND로 걸어야 합니다. "
