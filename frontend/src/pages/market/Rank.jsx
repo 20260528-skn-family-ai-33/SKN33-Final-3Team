@@ -168,7 +168,7 @@ function RankResults({ route }) {
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, marginTop: 16 }} className="resp-stack">
-              <CountrySearch value={selectedCodes(draft)} replaceInitial={Boolean(draft.country)} onChange={countryCodes => setDraft(d => ({ ...d, country: '', countryCodes, group: null, scope: 'GLOBAL', inherited: false }))} />
+              <CountrySearch value={selectedCodes(draft)} replaceDefault={Boolean(draft.country) && !route.query.has('country')} onChange={countryCodes => setDraft(d => ({ ...d, country: '', countryCodes, group: null, scope: 'GLOBAL', inherited: false }))} />
               <Select prefix="기간" style={{ flex: 1 }} value={draft.period} onChange={v => setDraft(d => v === 'custom' ? { ...d, period: v, start: d.start || monthOffset(end, -2), end: d.end || end } : { ...d, period: v, start: "", end: "" })} options={PERIODS} aria-label="기간" />
               <Btn kind="red" size="md" onClick={search} disabled={result.loading} style={{ height: 50, borderRadius: 12, padding: '0 28px' }}><Icon name="search" size={17} />순위 조회</Btn>
             </div>
@@ -236,7 +236,7 @@ function RankResults({ route }) {
 }
 
 /** 국가 검색 선택: 국가명을 입력하면 목록이 좁혀진다. */
-function CountrySearch({ value, replaceInitial, onChange }) {
+function CountrySearch({ value, replaceDefault, onChange }) {
   const options = [['', '전체 국가'], ...countries.map(c => [c.country_code, c.name])]
   const all = countries.length > 0 && countries.every(c => value.includes(c.country_code))
   const names = value.map(countryName)
@@ -251,7 +251,7 @@ function CountrySearch({ value, replaceInitial, onChange }) {
   const pick = code => {
     if (!code) onChange(all ? [] : countries.map(c => c.country_code))
     else if (value.includes(code)) onChange(value.filter(c => c !== code))
-    else onChange(replaceInitial ? [code] : [...value, code])
+    else onChange(replaceDefault ? [code] : [...value, code])
     setText(null)
     setActive(-1)
   }

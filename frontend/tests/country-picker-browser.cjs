@@ -105,6 +105,18 @@ const { chromium } = require('playwright')
     const downloaded = page.waitForEvent('download')
     await page.getByRole('button', { name: '엑셀 다운로드' }).click()
     assert.equal((await downloaded).suggestedFilename(), '호주 외 3개_2025-10~2025-12_HS330499_교역국순위.xlsx')
+    await page.goto(page.url().split('#')[0] + '#rank?scope=GLOBAL&country=미국&product=330499')
+    await page.reload()
+    await pick('일본')
+    await country.click()
+    const list = page.getByRole('listbox', { name: '국가 목록' })
+    for (const name of ['미국', '일본']) {
+      assert.equal(await list.getByRole('option', { name, exact: true }).getAttribute('aria-selected'), 'true')
+    }
+    await country.press('Escape')
+    const submitted = page.waitForRequest(r => new URL(r.url()).pathname.endsWith('/trade/rankings'))
+    await page.getByRole('button', { name: '순위 조회' }).click()
+    assert.deepEqual(new URL((await submitted).url()).searchParams.getAll('country_codes'), ['US', 'JP'])
     assert.deepEqual(errors, [])
     console.log('PASS country chips, continent toggle, select all, and identical ranking request for manual selection')
   } finally { if (browser) await browser.close(); await server.close() }

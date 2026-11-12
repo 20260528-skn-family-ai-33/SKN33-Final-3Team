@@ -13,7 +13,8 @@ registerCountries([['US', '미국'], ['AU', '호주'], ['NZ', '뉴질랜드'], [
 
 function Demo() {
   const [value, setValue] = useState(['미국'])
-  if (location.hash === '#rank') return <Rank route={{ query: new URLSearchParams('product=330499') }} />
+  const [screen, query = 'product=330499'] = location.hash.split('?')
+  if (screen === '#rank') return <Rank route={{ query: new URLSearchParams(query) }} />
   return <div style={{ width: 760 }}>
     <CountryPicker showSelected value={value} onChange={setValue} />
     <output data-testid="value">{value.join(',')}</output>
