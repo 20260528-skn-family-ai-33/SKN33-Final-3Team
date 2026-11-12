@@ -332,6 +332,7 @@ class WriterEvidenceTest(unittest.TestCase):
                             'span':(0,2), 'passage':'미국', 'action':'PRESERVE', 'reason':'MATCH'})]
                         result = WriterEdits(edits=[{'feedback_index':0, 'replacement':replacement}])
                         client = compose(state, result, text=text)
+                        self.assertEqual(client.parse.call_args.kwargs['model'], 'gpt-6-luna')
                         sent = client.parse.call_args.kwargs['payload']['regeneration']
                         self.assertEqual(sent['confirmed_claims'][0]['span'], [0,2])
                         self.assertEqual(state.writer_rewrite_result, expected)

@@ -26,11 +26,25 @@ class StructuredClientTest(unittest.TestCase):
         with self.assertLogs('backend.app.agents.runtime', level='WARNING'):
             Services(execution, Settings({}), client).planner(current)
 
+        self.assertEqual([call.kwargs['model'] for call in client.parse.call_args_list], ['gpt-5.6-luna'] * 2)
         self.assertEqual([call.kwargs['prompt'] for call in client.parse.call_args_list],
                          [PLANNER_PROMPT, PLANNER_PROMPT + PLANNER_RETRY_HINT])
         self.assertEqual([task.intent for task in current.plan.tasks], ['STATISTICS', 'REPORT', 'LOCAL_ISSUES'])
         self.assertEqual(current.plan.tasks[1].steps[0].depends_on, ['t1.sql'])
         self.assertEqual(current.plan.tasks[2].steps[0].depends_on, [])
+
+    def test_direct_input_uses_intent_model_independently_of_planner(self):
+        from backend.app.agents.runtime import Services
+        from backend.app.api.config import Settings
+        from backend.tests.test_agent_state import state
+
+        execution, client = Mock(), Mock()
+        execution.call.side_effect = lambda node, timeout, run, **options: run(timeout)
+        services = Services(execution, Settings({'API_PLANNER_MODEL': 'planner-override'}), client)
+        for node in ('planner', 'direct_input'):
+            services.structured(state(), node, 'prompt', {}, PlannerOutput, 2000)
+        self.assertEqual([call.kwargs['model'] for call in client.parse.call_args_list],
+                         ['planner-override', 'gpt-6-luna'])
 
     def test_validation_log_includes_safe_fields_reason_and_retry(self):
         import json

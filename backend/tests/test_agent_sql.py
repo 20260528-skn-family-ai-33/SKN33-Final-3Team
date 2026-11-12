@@ -227,7 +227,7 @@ class SqlTest(unittest.TestCase):
         self.assertEqual(result.result.status,'OK')
         self.assertEqual(result.rows,[{'value':1}])
         self.assertEqual(ledger.call.call_count,2)
-        self.assertEqual(client.parse.call_args.kwargs['model'],'gpt-4.1')
+        self.assertEqual(client.parse.call_args.kwargs['model'],'gpt-6-luna')
         self.assertTrue(client.parse.call_args.kwargs['payload']['previous_error'])
         self.assertEqual(engine.connect.call_count,1)
 

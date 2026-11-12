@@ -23,10 +23,11 @@ class ComposeTest(unittest.TestCase):
         return state
 
     def test_compose_model_selection_on_responses_api(self):
-        for model in (None, 'gpt-4.1-mini', 'gpt-5.6-luna', 'gpt-6-luna'):
-            overrides = {'API_COMPOSE_MODEL': model} if model else {}
+        for node, model in [('compose', None), ('compose_text', None), ('compose', 'gpt-4.1-mini'),
+                            ('compose', 'gpt-5.6-luna'), ('compose_text', 'gpt-5.6-luna')]:
+            overrides = {'API_' + node.upper() + '_MODEL': model} if model else {}
             expected_model = model or 'gpt-6-luna'
-            with self.subTest(overrides=overrides):
+            with self.subTest(node=node, overrides=overrides):
                 state = self.state(['STATISTICS'])
                 task = state.plan.tasks[0]
                 task.answer_status = 'ANSWERED'
@@ -53,7 +54,7 @@ class ComposeTest(unittest.TestCase):
                 execution.call.side_effect = lambda node, timeout, call, **kwargs: call(timeout)
                 services = Services(execution, settings, StructuredClient(settings, client_factory))
                 with patch.object(services, 'read_store'), patch('backend.app.agents.templates._names', return_value=({}, {})):
-                    services.compose(state)
+                    getattr(services, node)(state)
 
                 self.assertEqual(state.draft, draft)
                 self.assertEqual(len(requests), 1)
@@ -62,7 +63,7 @@ class ComposeTest(unittest.TestCase):
                 self.assertEqual(body['model'], expected_model)
                 self.assertEqual(body['text']['format']['name'], 'Draft')
                 self.assertTrue(body['text']['format']['strict'])
-                self.assertEqual(body['max_output_tokens'], 3000)
+                self.assertEqual(body['max_output_tokens'], 6000 if node == 'compose_text' else 3000)
                 self.assertFalse(body['store'])
                 if expected_model == 'gpt-4.1-mini':
                     self.assertEqual(body['temperature'], 0)

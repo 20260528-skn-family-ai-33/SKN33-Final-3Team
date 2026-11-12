@@ -28,10 +28,10 @@ SETS = {
                 'review': DATA / 'report_agent_holdout_gold_review.md', 'result': DATA / 'report_agent_holdout_result.json',
                 'lock': DATA / 'report_agent_holdout_run_lock.json', 'role': 'holdout'},
 }
-MODEL = 'gpt-4.1-mini'   # 운영 플래너 모델(API_INTENT_MODEL 기본값·.env.api.example)
-PRICE = {'input_per_million_usd': 0.4, 'cached_input_per_million_usd': 0.1, 'output_per_million_usd': 1.6,
-         'source': 'https://developers.openai.com/api/docs/models/gpt-4.1-mini', 'checked_on': '2026-11-09',
-         'note': '모델 페이지에 Deprecated 표시(후속 GPT-5 mini 권장). 운영 설정값 그대로 평가한다.'}
+MODEL = 'gpt-5.6-luna'   # 운영 플래너 모델(API_PLANNER_MODEL 기본값·.env.api.example)
+PRICE = {'input_per_million_usd': 0.2, 'cached_input_per_million_usd': 0.02,
+         'cache_write_per_million_usd': 0.25, 'output_per_million_usd': 1.2,
+         'source': 'https://developers.openai.com/api/docs/models/gpt-5.6-luna', 'checked_on': '2026-11-09'}
 FIELDS = ('intent', 'report_present', 'sources', 'trade_flow', 'countries', 'products', 'period')
 HARNESS = ['backend/scripts/evaluate_report_agent_live.py', 'backend/app/agents/planner.py', 'backend/app/agents/runtime.py',
            'backend/app/agents/state.py', 'backend/app/agents/llm.py']
@@ -169,7 +169,7 @@ class Recorder:
 
             def parse(self, **request):
                 bound = len((request['input'] + request['instructions']).encode()) + 12000
-                reserve = (bound * PRICE['input_per_million_usd'] + request['max_output_tokens'] * PRICE['output_per_million_usd']) / 1_000_000
+                reserve = (bound * PRICE['cache_write_per_million_usd'] + request['max_output_tokens'] * PRICE['output_per_million_usd']) / 1_000_000
                 spent = sum(c.get('estimated_cost_usd', c.get('reserved_cost_usd', 0)) for c in recorder.calls)
                 if spent + reserve > recorder.max_cost:
                     raise EvaluationStopped('설정한 평가 비용 상한에 도달했습니다')
@@ -192,9 +192,11 @@ class Recorder:
                 entry.update(actual_model=response.model, usage=usage, response_status=response.status,
                              latency_seconds=time.perf_counter() - started)
                 if usage:
-                    cached = (usage.get('input_tokens_details') or {}).get('cached_tokens', 0)
-                    entry['estimated_cost_usd'] = ((usage['input_tokens'] - cached) * PRICE['input_per_million_usd'] +
-                                                   cached * PRICE['cached_input_per_million_usd'] +
+                    details = usage.get('input_tokens_details') or {}
+                    cached = details.get('cached_tokens', 0)
+                    writes = details.get('cache_write_tokens', 0)
+                    entry['estimated_cost_usd'] = ((usage['input_tokens'] - cached - writes) * PRICE['input_per_million_usd'] +
+                                                   writes * PRICE['cache_write_per_million_usd'] + cached * PRICE['cached_input_per_million_usd'] +
                                                    usage['output_tokens'] * PRICE['output_per_million_usd']) / 1_000_000
                 return response
         return Context()
@@ -277,7 +279,7 @@ def run(target, args):
     key = next((v for k, v in Settings().values.items() if k.lower() == 'openai_api_key' and v), None)
     if not key:
         raise ValueError('OPENAI_API_KEY가 없습니다')
-    settings = Settings({'OPENAI_API_KEY': key, 'API_INTENT_MODEL': MODEL})
+    settings = Settings({'OPENAI_API_KEY': key, 'API_PLANNER_MODEL': MODEL})
     recorder = Recorder(args.max_cost_usd)
     client = StructuredClient(settings, client_factory=recorder.factory)
     if target['lock']:

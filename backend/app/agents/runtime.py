@@ -27,7 +27,8 @@ from backend.app.api.common import ApiError, clean, now
 from backend.app.api.database import Store
 
 
-DEFAULT_MODELS = {'intent': 'gpt-4.1-mini', 'compose': 'gpt-6-luna', 'sql': 'gpt-4.1'}
+DEFAULT_MODELS = {'planner': 'gpt-5.6-luna', 'compose_text': 'gpt-6-luna',
+                  'intent': 'gpt-6-luna', 'compose': 'gpt-6-luna', 'sql': 'gpt-6-luna'}
 COMPOSE_OUTPUT_TOKENS = 3000
 COMPOSE_TEXT_OUTPUT_TOKENS = 6000
 PRODUCT_NAMES_TTL_SECONDS = 3600   # HS 사전은 판본 갱신 때만 바뀐다. 갱신 뒤 최대 1시간은 이전 이름으로 대조한다
@@ -171,11 +172,11 @@ class Services:
     def model_for(self, role):
         return self.settings.get('API_'+role.upper()+'_MODEL', DEFAULT_MODELS[role])
 
-    def structured(self, state, node, prompt, payload, schema, tokens, validate=lambda x:x, *, max_attempts=2):
+    def structured(self, state, node, prompt, payload, schema, tokens, validate=lambda x:x, *, model_role=None, max_attempts=2):
         role = 'compose' if node == 'compose' else 'intent'
         prefix = role.upper()
         timeout = float(self.settings.get('API_'+prefix+'_TIMEOUT_SECONDS',budget.DEFAULT_SECONDS[node]))
-        model = self.model_for(role)
+        model = self.model_for(model_role or ('planner' if node == 'planner' else role))
         reserve = budget.finishing_seconds(state,self.settings)
         if node=='compose': reserve -= budget.seconds(self.settings,'compose')
         def call(_):
@@ -444,10 +445,10 @@ class Services:
         return {t:store.cache['trade_revision',t] for t in ('export_summary','import_summary')}
 
     def compose_text(self,state):
-        """문장형 답변 노드(D-98). 같은 compose 예산·검증을 쓰고 프롬프트와 문장 상한만 다르다."""
-        self.compose(state,prompt=COMPOSE_TEXT_PROMPT)
+        """문장형 답변 노드(D-98). 같은 compose 예산·검증을 쓰고 별도 모델·프롬프트·문장 상한을 쓴다."""
+        self.compose(state,prompt=COMPOSE_TEXT_PROMPT,model_role='compose_text')
 
-    def compose(self,state,prompt=COMPOSE_PROMPT):
+    def compose(self,state,prompt=COMPOSE_PROMPT,model_role='compose'):
         with self.read_store() as store:
             from backend.app.agents.templates import _names
             countries,products=_names(store)
@@ -515,7 +516,7 @@ class Services:
                 else:
                     state.writer_rewrite_result = 'ACCEPTED_CORRECTION'
                     return
-            revised = self.structured(state, 'compose', instruction, payload, WriterEdits, tokens, apply_edits, max_attempts=1)
+            revised = self.structured(state, 'compose', instruction, payload, WriterEdits, tokens, apply_edits, model_role=model_role, max_attempts=1)
             if revised is not None:
                 state.draft = revised
             state.writer_rewrite_result = 'ACCEPTED_CORRECTION' if revised is not None else reason
@@ -529,7 +530,7 @@ class Services:
             complete_article_only_conclusions(state, draft, payload, countries.values())
             return validate_rewrite(state,draft,payload) if correcting else draft
         revised=self.structured(state,'compose',prompt,payload,Draft,tokens,
-                                assemble_response,
+                                assemble_response, model_role=model_role,
                                 max_attempts=1 if correcting else 2)
         if revised is None and state.draft is not None and state.verification.regeneration_count:
             # Pre-migration checkpoints can hold a draft that never passed citation validation.

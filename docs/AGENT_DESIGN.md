@@ -65,7 +65,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 ### 플래너·조건
 | ID | 결정 |
 |---|---|
-| D-20 | 플래너는 `API_INTENT_MODEL`로 모델을 선택하며 기본값은 `gpt-4.1-mini`다. Writer(Compose)의 최종 운영 모델은 2026-11-10 Dev·Holdout 평가로 선정한 `gpt-6-luna`다. `API_COMPOSE_MODEL`을 지정하면 그 값이 우선하고, 생략하면 선정 모델을 사용한다. (Q-15) |
+| D-20 | 플래너는 기본적으로 `gpt-5.6-luna`를 사용한다. 직접 입력 해석, 일반·문장형 Writer, SQL 생성은 `gpt-6-luna`를 사용한다. 역할별 환경변수는 §13 설정 표를 따른다. |
 | D-21 | 플래너·compose·직접 입력 해석(§13.6)의 LLM 호출이 실패하면 1번 재시도한다. 대기 시간은 플래너 10초, compose 20초, 직접 입력 해석 10초다. LLM SQL 생성(20초)은 재시도 대신 §13.5의 재생성 규칙(최대 2회)을 따른다(§13.3, C-28). (Q-16) |
 | D-22 | 후속 질문의 기본 조건은 생략하면 이어받고, 명시적인 전체 범위는 해제한다. 비교·순위·기사 기간은 D-73의 별도 규칙을 따른다. (Q-18) |
 
@@ -365,11 +365,11 @@ actions[], report_id, warnings[]
 | C-31 | (해결) 선행 결과의 국가·품목 선택 확인 정책 | 명시한 개수·기준이면 자동 실행, 모호하면 INPUT_SELECTION으로 확인(D-95, 사용자 승인) |
 | C-27 | digest 목록 행 상한과 ML 대상별 행 수 공식(§11.2). 8KB 안에서 compose 품질을 보고 조정 | 60행, 대상마다 `min(10, 60 // 대상 수)`행 |
 | C-29 | **결정 보류 — ML 연결 때 확인.** 서버에 둘 모델 파일(v1·v3 앙상블)과 최신 기준월 스냅샷의 실제 파일 이름·버전. `API_ML_MODEL_PATHS`·`API_ML_SNAPSHOT_PATH` 값 | `.env.api.example`의 `two_stage_c100_*_v2.joblib`, `features_snapshot_py311_latest_v2.pkl`(예시) |
-| C-30 | LLM SQL 모델 확정. 골든셋(D-61)의 LLM SQL 질문으로 `gpt-4.1-mini`·`gpt-4.1`·`gpt-5.4`를 비교해 정확도·비용·응답 시간을 보고 정한다 | `gpt-4.1` |
+| C-30 | SQL 기본 모델 확정 | `gpt-6-luna` |
 | C-33 | 병렬 워커(D-105)의 동시 스레드 상한. OpenAI 요청 한도(분당 토큰)·RDS 접속 수·워커 메모리를 동시 질문 부하로 측정해 정한다 | `API_WORKER_MAX_THREADS=16`, 접속 풀 = 스레드 수 × 2 + 본 루프 2(워커 1대 최대 34개). 배포 전 RDS `max_connections`가 API 서버 풀·수집기·관리 접속과 합쳐 충분한지 확인하고 결과를 여기 적는다(미확인) |
 | C-32 | 주인 없는 에이전트 작업의 유예 시간(D-106). 버전 2는 지나면 넘겨받아 실행하고, 다른 queue의 버전 3은 지나면 새 질문 때 만료한다. 다른 환경 워커의 재시작·배포 중단 시간에 맞춰 정한다 | `API_AGENT_ADOPT_GRACE_SECONDS=600`(임대 시간과 같음) |
 | C-34 | 병렬 워커(D-105)에서 ML 전용 스레드 줄을 기다리는 상한. 예측 시간 상한(ml 30초)과 따로 센다. 동시 유망시장 질문 수와 예측 시간을 측정해 정한다 | `API_ML_QUEUE_SECONDS=60` |
-| C-35 | 플래너·compose 모델과 GPT-5 계열 추론 강도. 이슈 86 평가셋(`backend/evals/agent`, [AGENT_EVAL.md](AGENT_EVAL.md))으로 기준선 `gpt-4.1-mini`와 후보 `gpt-5.6-luna`·`gpt-6-luna`를 비교해 정한다. GPT-5·6 계열은 temperature를 보내지 않는다 | `gpt-4.1-mini`, 추론 강도 미설정 |
+| C-35 | 플래너·Writer 기본 모델은 D-20으로 확정. 플래너 추론 강도는 `API_LLM_REASONING_EFFORT`로 설정한다. | 플래너 추론 강도 미설정, Writer `low` |
 | C-28 | §13의 운영 조정값: 노드별 예약 시간(§13.4), 비슷한 국가 기준값, compose·LLM SQL 시간 상한(§13.3) | 비슷한 정도 0.6·후보 5개, compose 20초, SQL 생성 20초·실행 30초, 노드 시간은 §13.4 표 |
 
 
@@ -526,7 +526,7 @@ actions[], report_id, warnings[]
 §1·§10의 결정을 구현할 때 사람마다 다르게 만들지 않도록 형식을 고정한다. 여기서 새로 정한 값 중 운영 데이터로 바꿀 수 있는 것은 C-27로 묶었다.
 
 ### 11.1 플래너 (`agents/planner.py`)
-- **호출:** `api/intent.py`의 `OpenAIIntentProvider`와 같은 방식으로 `client.responses.parse(model=API_INTENT_MODEL, instructions=PLANNER_PROMPT, input=JSON, text_format=state.PlannerOutput, max_output_tokens=2000, temperature=0, store=False)`를 부른다. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-20, D-21). `max_retries=0`으로 SDK 자동 재시도는 끈다.
+- **호출:** `api/intent.py`의 `OpenAIIntentProvider`와 같은 방식으로 `client.responses.parse(model=API_PLANNER_MODEL, instructions=PLANNER_PROMPT, input=JSON, text_format=state.PlannerOutput, max_output_tokens=2000, store=False)`를 부른다. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-20, D-21). `max_retries=0`으로 SDK 자동 재시도는 끈다.
 - **입력 JSON:** `{"question": input.question, "previous_conditions": input.context.conditions(없으면 {}), "recent": [{"question", "intent", "summary"} … 최근 5건]}`. 이전 대화는 데이터로만 넣는다(§8).
 - **출력:** `state.PlannerOutput{tasks: [PlannedTask{intent, question, slots: PlannerSlots, custom_query, source_tasks, target_selections}]}`. 단계·조건·결과·확인 값은 플래너가 넣지 못한다(모델이 거부).
 - **프롬프트 규칙(`PLANNER_PROMPT`):** `intent.py` `PROMPT`의 슬롯 규칙(국가는 `{mention: 질문 원문 그대로, name: 정식 한국어 국가명}`, HS 코드 생성 금지, 기간은 월 경계, 연도만 있으면 1~12월, `recent_months`는 상대 기간)을 그대로 가져오고 다음을 더한다.
@@ -712,7 +712,7 @@ Verify는 기사 발행일의 일자를 통계 수량에서 제외하며 같은 
   - 조건 확인에 실패한 NO_DATA Task는 도구가 남긴 실제 사유를 전달한다. 되묻기 한도 초과 시에는 "조건을 확인해 다시 질문해 주세요."를 쓴다(D-15). 도구 오류 사유가 없으면 단계 없는 Task의 `applied_defaults` 안내를 사용한다. 이 안내도 적용되지 않으면 "조건에 맞는 분석 결과가 없습니다."를 쓴다.
 
   모든 Task가 고정 문구면 LLM을 부르지 않는다. 실패·미지원만 있으면 `turn_summary`는 빈 문자열이고 최근 조건·요약은 바꾸지 않는다. 리포트 성공은 D-93의 코드 작성 요약과 D-72의 조건 갱신 규칙을 적용한다.
-- **호출:** `client.responses.parse(model=compose_model, instructions=prompt, input=JSON, text_format=state.Draft, max_output_tokens=tokens, store=False)`, 시간 상한 `API_COMPOSE_TIMEOUT_SECONDS`(20초), SDK `max_retries=0`이다. 두 Luna 후보는 `reasoning.effort=low`를 쓰며, mini는 `temperature=0`을 쓴다. 추론과 답변에 쓰는 출력 상한은 일반 답변 3,000토큰, 문장형 답변(D-98) 6,000토큰이다. 초안과 재시도에 같은 상한을 적용한다. 워커 요청과 실행 기록은 모두 `API_COMPOSE_MODEL`에서 선택한 모델을 사용한다.
+- **호출:** `client.responses.parse(model=compose_model, instructions=prompt, input=JSON, text_format=state.Draft, max_output_tokens=tokens, store=False)`, 시간 상한 `API_COMPOSE_TIMEOUT_SECONDS`(20초), SDK `max_retries=0`이다. 두 Luna 후보는 `reasoning.effort=low`를 쓰며, mini는 `temperature=0`을 쓴다. 추론과 답변에 쓰는 출력 상한은 일반 답변 3,000토큰, 문장형 답변(D-98) 6,000토큰이다. 초안과 재시도에 같은 상한을 적용한다. 워커 요청과 실행 기록은 모두 답변 형식에 따라 `API_COMPOSE_MODEL` 또는 `API_COMPOSE_TEXT_MODEL`에서 선택한 모델을 사용한다.
   - 최초 초안의 호출 실패·파싱 실패·`Draft` 검증 실패(일반 답변 D-50, 문장형 답변 D-98)는 1번만 다시 부른다(D-21). 수치 불일치로 이미 교정 호출을 한 경우에는 다시 호출하지 않는다. 교정 응답을 사용할 수 없으면 기사 인용 번호가 유효한 원래 초안을 유지하고 재검증해 불일치 문장에 “확인 필요”를 표시한다(FR-101-08).
   - 그래도 실패하면 실제 자료로 대체 결론을 만든다. 원인 질문에서 통계만 남으면 확인된 수치와 기사 검색 실패 사유를, 기사만 남으면 확인된 기사 사실과 출처 번호를 제시하고 통계·인과 판단의 한계를 밝힌다. 자료가 모두 없으면 원인과 함께 NO_DATA를 표시한다(D-67, D-72).
 - **입력 JSON** (LLM이 쓸 Task만):
@@ -758,7 +758,7 @@ PR #84·#85 통합 뒤에는 앞서 저장한 마지막 6개 초안을 같은 �
 
 #### 세 모델을 같은 Dev 문항으로 비교하는 방법
 
-저장소 루트에서 다음 명령을 실행한다. 기본으로 `gpt-4.1-mini`, `gpt-5.6-luna`, `gpt-6-luna`를 비교한다. 일부만 실행할 때는 `--models gpt-5.6-luna gpt-6-luna`처럼 지정한다. 기존 기록을 보존하도록 출력 파일은 실행마다 새 이름을 쓴다.
+저장소 루트에서 다음 명령을 실행한다. 기본으로 답변 형식별 모델을 평가한다. 모델을 비교할 때는 `--models gpt-5.6-luna gpt-6-luna`처럼 지정한다. 기존 기록을 보존하도록 출력 파일은 실행마다 새 이름을 쓴다.
 
 ```bash
 python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/eval/writer-dev-run.jsonl
@@ -813,9 +813,11 @@ python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/e
 | 이름 | 기본값 | 쓰는 곳 |
 |---|---|---|
 | `API_REDIS_URL` | `redis://:<비밀번호>@127.0.0.1:6379/0` | 컨텍스트·lock·체크포인터 (임시, D-07) |
-| `API_INTENT_MODEL`, `API_INTENT_TIMEOUT_SECONDS` | `gpt-4.1-mini`, 10 | 플래너(§11.1), 직접 입력 해석(§13.6) |
+| `API_PLANNER_MODEL`, `API_INTENT_TIMEOUT_SECONDS` | `gpt-5.6-luna`, 10 | 플래너 |
+| `API_INTENT_MODEL`, `API_INTENT_TIMEOUT_SECONDS` | `gpt-6-luna`, 10 | 직접 입력 해석(§13.6) |
 | `API_COMPOSE_MODEL`, `API_COMPOSE_TIMEOUT_SECONDS` | `gpt-6-luna`, 20 | Writer 모델 선택 및 호출 시간 상한(§13.1) |
-| `API_SQL_MODEL`, `API_SQL_TIMEOUT_SECONDS` | `gpt-4.1`, 20 | LLM SQL 생성(§13.5). 더 큰 모델을 쓰기로 함(2026-10-30). 최종 모델은 골든셋 비교 후 확정(C-30) |
+| `API_COMPOSE_TEXT_MODEL`, `API_COMPOSE_TIMEOUT_SECONDS` | `gpt-6-luna`, 20 | 문장형 Writer 초안 및 재작성 |
+| `API_SQL_MODEL`, `API_SQL_TIMEOUT_SECONDS` | `gpt-6-luna`, 20 | LLM SQL 생성(§13.5) |
 | `API_SQL_EXECUTION_SECONDS` | 30 | LLM SQL 실행 상한(D-41) |
 | `API_ML_MODEL_DIRECTORY` | READY 월별 모델 레지스트리와 아티팩트 디렉터리 | `agents.market.model_paths` |
 | `API_ML_MODEL_PATHS` | 레지스트리 대신 지정할 joblib 경로(여러 개면 쉼표로 구분) | `load_market_bundle`(D-70) |
@@ -851,7 +853,7 @@ python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/e
 - **이유:** 예를 들어 LLM SQL은 3번 다 예약하면 플래너 10 + check 15 + 150 = 175초라 마무리를 할 수 없다. D-40·D-45의 횟수는 최대치이고, 예산 안에서만 쓴다.
 
 ### 13.5 LLM SQL (`agents/tools.py`의 `query_trade_data`, `template=LLM_SQL`)
-- **생성 호출:** `client.responses.parse(model=API_SQL_MODEL, instructions=SQL_PROMPT, input=JSON, text_format=SqlDraft, temperature=0, store=False)`, 시간 상한 `API_SQL_TIMEOUT_SECONDS`다.
+- **생성 호출:** `client.responses.parse(model=API_SQL_MODEL, instructions=SQL_PROMPT, input=JSON, text_format=SqlDraft, store=False)`, 시간 상한 `API_SQL_TIMEOUT_SECONDS`다.
 - **입력 JSON:**
   ```
   {"request": task.custom_query,
@@ -905,7 +907,7 @@ python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/e
      - 긍정어: 예·네·응·좋아·동의·확인·적용·생성
      - 부정어: 아니·아니오·아니요·싫어·거절·취소
      - INTEREST_CONTEXT에서 "전체"는 전체 범위다.
-2. **규칙으로 정하지 못하면 LLM 1회:** `responses.parse(model=API_INTENT_MODEL, text_format=ClarificationReading, temperature=0, store=False)`. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-21). §13.4 예약은 10초다.
+2. **규칙으로 정하지 못하면 LLM 1회:** `responses.parse(model=API_INTENT_MODEL, text_format=ClarificationReading, store=False)`. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-21). §13.4 예약은 10초다.
    - 입력: `{"kind", "message", "choices": [{"choice_id", "label"}], "text"}`. text는 데이터일 뿐 지시가 아니다(§8).
    - 출력 `ClarificationReading`: `{choice_id: str|null, new_expression: str|null, interest_change: bool|null, unrelated: bool|null}`. 문자열 길이는 스키마에 넣지 않는다(§13.1과 같은 이유).
 3. **해석 결과 적용:**

@@ -25,7 +25,7 @@ class LiveEvaluationContractTest(unittest.TestCase):
             with self.subTest(error=type(error).__name__), patch('openai.OpenAI', return_value=provider), \
                     patch('httpx.Client'), recorder.factory(api_key='offline-test-only') as client:
                 with self.assertRaises(expected):
-                    client.responses.parse(model='gpt-4.1',input='test',instructions='test',max_output_tokens=10)
+                    client.responses.parse(model='gpt-6-luna',input='test',instructions='test',max_output_tokens=10)
             self.assertEqual(recorder.calls[0]['error_type'],type(error).__name__)
             self.assertNotIn('estimated_cost_usd',recorder.calls[0])
             provider.close.assert_called_once()
@@ -45,11 +45,11 @@ class LiveEvaluationContractTest(unittest.TestCase):
 
     def test_raw_response_usage_survives_failed_structured_parsing(self):
         entry={'error_type':'ValidationError'}
-        Recorder.record_usage(entry,{'id':'synthetic-response','model':'gpt-4.1','status':'completed',
+        Recorder.record_usage(entry,{'id':'synthetic-response','model':'gpt-6-luna','status':'completed',
             'usage':{'input_tokens':1000,'input_tokens_details':{'cached_tokens':400},'output_tokens':100}})
         self.assertEqual(entry['error_type'],'ValidationError')
         self.assertEqual(entry['usage']['input_tokens'],1000)
-        self.assertAlmostEqual(entry['estimated_cost_usd'],0.0022)
+        self.assertAlmostEqual(entry['estimated_cost_usd'],0.000114)
 
     def test_unordered_rows_preserve_multiplicity_and_numeric_tolerance(self):
         self.assertTrue(rows_equal([['CN',2.0001],['US',1]], [['US',1],['CN',2]]))

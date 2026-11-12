@@ -31,9 +31,9 @@ QUESTIONS = DATA / 'sql_questions.jsonl'
 MANIFEST = DATA / 'sql_questions_manifest.json'
 SNAPSHOT = DATA / 'sql_snapshot.sql'
 TABLES = ('country', 'hs_code', 'export_monthly', 'import_monthly', 'export_summary', 'import_summary')
-PRICE = {'input_per_million_usd': 2.0, 'cached_input_per_million_usd': 0.5,
-         'output_per_million_usd': 8.0,
-         'source': 'https://developers.openai.com/api/docs/models/gpt-4.1', 'checked_on': '2026-11-09'}
+PRICE = {'input_per_million_usd': 0.1, 'cached_input_per_million_usd': 0.01,
+         'cache_write_per_million_usd': 0.125, 'output_per_million_usd': 0.5,
+         'source': 'https://developers.openai.com/api/docs/models/gpt-6-luna', 'checked_on': '2026-11-09'}
 
 
 class EvaluationStopped(RuntimeError):
@@ -210,7 +210,7 @@ class Recorder:
                 nonlocal current_entry
                 # Reserve a conservative per-call bound (UTF-8 bytes plus schema overhead).
                 input_bound = len((request['input']+request['instructions']).encode()) + 12000
-                reserve = (input_bound*PRICE['input_per_million_usd'] +
+                reserve = (input_bound*PRICE['cache_write_per_million_usd'] +
                            request['max_output_tokens']*PRICE['output_per_million_usd'])/1_000_000
                 if sum(c.get('estimated_cost_usd', c.get('reserved_cost_usd',0)) for c in recorder.calls)+reserve > recorder.max_cost:
                     raise EvaluationStopped('Configured evaluation cost budget exhausted')
@@ -249,11 +249,13 @@ class Recorder:
         usage = raw.get('usage')
         if not usage:
             return
-        cached = (usage.get('input_tokens_details') or {}).get('cached_tokens', 0)
+        details = usage.get('input_tokens_details') or {}
+        cached = details.get('cached_tokens', 0)
+        writes = details.get('cache_write_tokens', 0)
         entry.update(usage=usage,actual_model=raw.get('model'),response_status=raw.get('status'),
                      response_id=raw.get('id',entry.get('response_id')),
-                     estimated_cost_usd=((usage['input_tokens']-cached)*PRICE['input_per_million_usd']+
-                         cached*PRICE['cached_input_per_million_usd']+usage['output_tokens']*PRICE['output_per_million_usd'])/1_000_000)
+                     estimated_cost_usd=((usage['input_tokens']-cached-writes)*PRICE['input_per_million_usd']+
+                         writes*PRICE['cache_write_per_million_usd']+cached*PRICE['cached_input_per_million_usd']+usage['output_tokens']*PRICE['output_per_million_usd'])/1_000_000)
 
 
 class DirectExecution:
@@ -375,8 +377,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.prepare_gold == args.run_live:
         parser.error('Choose exactly one of --prepare-gold or --run-live')
-    if args.model not in ('gpt-4.1','gpt-4.1-2025-04-14'):
-        parser.error('Pricing is configured only for gpt-4.1; explicitly add a reviewed rate card for other models')
+    if args.model != 'gpt-6-luna':
+        parser.error('Pricing is configured only for gpt-6-luna; explicitly add a reviewed rate card for other models')
     if not 0 < args.max_cost_usd <= 10:
         parser.error('Cost cap must be positive and no more than USD 10')
     cases = load_questions()
