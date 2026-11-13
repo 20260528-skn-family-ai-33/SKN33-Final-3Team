@@ -343,3 +343,75 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .welcome-guide b{display:block;font-size:14px;font-weight:800;color:var(--ink)}
 .welcome-guide li>span:last-child>span{display:block;margin-top:2px;font-size:13px;line-height:1.5;color:var(--sub)}
 @media (prefers-reduced-motion:reduce){.welcome-check{animation:none}}
+
+/* ── 메인 화면 구역 구분 ─────────────────────────────────────────────
+   구역 사이는 선 대신 바탕색 차이와 여백으로 나눈다.
+   수출입 현황(연회색 + 위도·경도 격자) → 수출 상위 품목(흰색) → 품목별·교역국별 표(옅은 남색)
+   → 세계시장 점유율(짙은 남색 띠) → 기사(흰색) */
+.zone{position:relative;isolation:isolate;overflow:hidden}
+.zone>.wrap{position:relative;z-index:1}
+
+/* 구역 제목 위 작은 영문 표시: 하늘색 선 + 넓은 자간. 선은 구역이 화면에 들어올 때 왼쪽에서 그어진다 */
+.sec-eyebrow{display:flex;align-items:center;gap:10px;margin:0 0 10px!important;font-size:11.5px;font-weight:800;letter-spacing:.24em;line-height:1;color:#1E6FA8;white-space:nowrap}
+.sec-eyebrow::before{content:'';flex:none;width:28px;height:2px;border-radius:2px;background:linear-gradient(90deg,#3B9BD8,#8FD0F5);transition:width .9s cubic-bezier(.2,.7,.2,1) .25s}
+[data-reveal]:not([data-in]) .sec-eyebrow::before{width:0}
+
+/* 1) 수출입 현황: 연회색 바탕 위에 옅은 지구본 격자(오른쪽)와 가는 바둑판 격자(가장자리로 갈수록 사라짐) */
+.zone-overview{background:#F3F5F8}
+.zone-overview::before{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;
+  background-image:linear-gradient(rgba(27,58,92,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(27,58,92,.045) 1px,transparent 1px);background-size:56px 56px;background-position:center top;
+  -webkit-mask-image:radial-gradient(ellipse 75% 90% at 60% 40%,#000 20%,transparent 75%);mask-image:radial-gradient(ellipse 75% 90% at 60% 40%,#000 20%,transparent 75%)}
+.zone-overview::after{content:'';position:absolute;z-index:0;pointer-events:none;right:-140px;top:-120px;width:820px;height:820px;opacity:.85;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 400' fill='none' stroke='%231B3A5C' stroke-opacity='.10' stroke-width='.8'%3E%3Ccircle cx='200' cy='200' r='190'/%3E%3Cellipse cx='200' cy='200' rx='142' ry='190'/%3E%3Cellipse cx='200' cy='200' rx='95' ry='190'/%3E%3Cellipse cx='200' cy='200' rx='47' ry='190'/%3E%3Cpath d='M200 10v380'/%3E%3Cellipse cx='200' cy='200' rx='190' ry='47'/%3E%3Cellipse cx='200' cy='105' rx='164' ry='22'/%3E%3Cellipse cx='200' cy='295' rx='164' ry='22'/%3E%3Cellipse cx='200' cy='48' rx='95' ry='9'/%3E%3Cellipse cx='200' cy='352' rx='95' ry='9'/%3E%3C/svg%3E") center/contain no-repeat}
+.zone-overview .fx-list{background:rgba(255,255,255,.72);border-radius:0 0 12px 12px;-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+
+/* 2) 수출 상위 품목: 흰 바탕. 카드 위쪽에 순위별 색 띠(--accent), 마우스를 올리면 살짝 떠오른다 */
+.zone-exports{background:#fff}
+.rank-card{position:relative;overflow:hidden;transition:transform .2s,box-shadow .2s,background .15s!important}
+.rank-card::before{content:'';position:absolute;left:0;right:0;top:0;height:4px;background:var(--accent,#C8102E)}
+.rank-card:hover,.rank-card:focus-visible{transform:translateY(-3px);box-shadow:0 14px 30px rgba(11,42,74,.12)!important}
+
+/* 3) 품목별·교역국별 표: 아주 옅은 남색 바탕, 흰 카드에 그림자를 더해 띄운다 */
+.zone-tables{background:linear-gradient(180deg,#EDF2F8 0%,#F1F5FA 100%)}
+.zone-tables .zone-card{border-color:#DDE5EF;box-shadow:0 10px 30px rgba(11,42,74,.06)}
+
+/* 4) 한국의 세계시장 점유율: 짙은 남색 띠. 점 격자와 항로 선을 옅게 깔고, 카드는 흰색 그대로 */
+.zone-share{color:#fff;background:radial-gradient(ellipse 60% 80% at 85% 0%,rgba(59,155,216,.22),transparent 60%),radial-gradient(ellipse 50% 70% at 0% 100%,rgba(200,16,46,.10),transparent 60%),linear-gradient(160deg,#0B1D33 0%,#0E2744 55%,#0A1A2E 100%)}
+.zone-share::before{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;background-image:radial-gradient(rgba(143,208,245,.16) 1px,transparent 1.4px);background-size:22px 22px;
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 45%,#000 70%,transparent 100%);mask-image:linear-gradient(90deg,transparent 0%,#000 45%,#000 70%,transparent 100%)}
+.zone-routes{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
+.zone-routes path{fill:none;stroke:rgba(143,208,245,.22);stroke-width:1.2;stroke-dasharray:2 9;stroke-linecap:round;animation:route-flow 40s linear infinite}
+.zone-routes path:nth-child(2){animation-duration:55s;stroke:rgba(143,208,245,.14)}
+.zone-routes path:nth-child(3){animation-duration:70s;stroke:rgba(255,138,154,.14)}
+.zone-routes circle{fill:#8FD0F5;opacity:.35}
+@keyframes route-flow{to{stroke-dashoffset:-660}}
+.zone-share .sec-eyebrow{color:#8FD0F5}
+.zone-share .sec-h{border-bottom-color:rgba(255,255,255,.22)}
+.zone-share .t1{color:#fff}
+.zone-share .sec-h .muted,.zone-share .share-legend,.zone-share .share-note{color:rgba(214,226,238,.74)}
+.zone-share .share-legend strong{color:#fff}
+.zone-share .more{color:#8FD0F5}
+.zone-share .field-err{color:#FF9AAA}
+.zone-share [role=region]{scrollbar-color:rgba(143,208,245,.45) transparent}
+.zone-share .un-card{background:#fff;color:var(--ink);box-shadow:0 14px 34px rgba(3,10,18,.28)}
+
+/* 5) 기사: 다시 밝은 바탕. 카드는 마우스를 올리면 테두리가 진해지고 살짝 떠오른다 */
+.zone-news{background:#fff}
+.news-card{background:#fff;transition:transform .2s,box-shadow .2s,border-color .2s}
+.news-card:hover,.news-card:focus-visible{transform:translateY(-3px);border-color:#C9D6E5!important;box-shadow:0 14px 30px rgba(11,42,74,.10)}
+
+@media (max-width:760px){
+  .zone-overview::after{width:520px;height:520px;right:-200px;top:-80px}
+  .zone-tables,.zone-news{padding-top:48px!important}
+  .zone-share{padding:56px 0 60px!important}
+}
+@media (prefers-reduced-motion:reduce){
+  .sec-eyebrow::before{transition:none}
+  [data-reveal]:not([data-in]) .sec-eyebrow::before{width:28px}
+  .zone-routes path{animation:none}
+  .rank-card,.news-card{transition:none!important}
+}
+@media print{
+  .zone-share{color:var(--ink);background:#fff}
+  .zone-routes,.zone-share::before,.zone-overview::before,.zone-overview::after{display:none}
+}

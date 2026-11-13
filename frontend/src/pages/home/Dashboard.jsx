@@ -24,6 +24,8 @@ const FEATURES = [
 const PRODUCT_TABLE_COLS = '24px 90px 1fr 64px 60px'
 const COUNTRY_TABLE_COLS = '24px 1fr 64px 60px'
 const TICKER_TABS = [['all', '전체기사'], ['general', '일반기사'], ['short', '단신속보'], ['major', '주요이슈']]
+// 수출 상위 품목 카드 위쪽 색 띠: 1위는 서비스 빨강, 2위부터 짙은 남색 → 하늘색으로 옅어진다.
+const RANK_ACCENTS = ['#C8102E', '#0B2A4A', '#1E5F96', '#3B8FCB', '#8DC3E8']
 const DIR_COLOR = { up: '#C8102E', down: '#1F5FD1', flat: '#5C6370' }
 const ARROW = { up: '▲', down: '▼', flat: '' }
 // 점유율 글자('7.3%')로 막대 너비를 정한다. 값이 없으면('—') 빈 막대, 숫자는 0~100%로 제한한다.
@@ -95,6 +97,23 @@ function useUnVisibleHeight(deps) {
     return () => ro.disconnect()
   }, deps) // eslint-disable-line react-hooks/exhaustive-deps
   return [ref, height]
+}
+
+/** 구역 제목 위의 작은 영문 표시. 앞의 하늘색 선은 구역이 화면에 들어올 때 그어진다(styles/app.css .sec-eyebrow). */
+function Eyebrow({ children }) {
+  return <p className="sec-eyebrow" aria-hidden="true">{children}</p>
+}
+
+/** 점유율 구역(짙은 남색 띠) 배경의 항로 선. 장식용이며 아주 느리게 흐른다. */
+function RouteLines() {
+  return (
+    <svg className="zone-routes" aria-hidden="true" viewBox="0 0 1200 420" preserveAspectRatio="xMidYMid slice">
+      <path d="M-40 330 C 220 170, 470 150, 700 230 S 1060 300, 1260 120" />
+      <path d="M-40 120 C 180 60, 420 90, 620 170 S 980 330, 1260 300" />
+      <path d="M120 440 C 300 300, 560 260, 820 300 S 1100 380, 1240 420" />
+      <circle cx="700" cy="230" r="3.5" /><circle cx="620" cy="170" r="3" /><circle cx="820" cy="300" r="3" />
+    </svg>
+  )
 }
 
 function FeatureCard([icon, title, text, tone, to]) {
@@ -219,11 +238,12 @@ export default function Dashboard({ route }) {
       </section>
 
       {/* 위 여백은 상승 화살표 머리가 위쪽 사진 띠에 붙지 않게 넉넉히 둔다(화살표 끝 ↔ 영역 위 끝 약 52px). */}
-      <section style={{ background: '#F6F7F9', padding: '88px 0 52px' }}>
+      <section className="zone zone-overview" style={{ padding: '88px 0 60px' }}>
         <div className="wrap resp-stack" style={{ display: 'flex', gap: 32 }}>
           <div style={{ flex: '2 1 600px', position: 'relative' }}>
             {/* 제목·기간 글자는 상승 화살표보다 위에 그려 화살표가 글자를 가리지 않게 한다. */}
             <div data-reveal="up" style={{ position: 'relative', zIndex: 2 }}>
+              <Eyebrow>TRADE OVERVIEW</Eyebrow>
               <RegionError label="주요 지표" states={data.states.kpi} />
               <p style={{ fontSize: 14, fontWeight: 700, color: '#B0102A' }}>통계 기준 월 {data.statMonth}</p>
               <h2 style={{ marginTop: 8, fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{data.title}</h2>
@@ -251,6 +271,7 @@ export default function Dashboard({ route }) {
             </div>
           </div>
           <div data-reveal="up" data-d="2" style={{ flex: '1 1 320px' }}>
+            <Eyebrow>EXCHANGE RATES</Eyebrow>
             <div className="between" style={{ alignItems: 'flex-end' }}>
               <div>
                 <h2 style={{ fontSize: 22, fontWeight: 800 }}>{data.fxTitle}</h2>
@@ -260,7 +281,7 @@ export default function Dashboard({ route }) {
             </div>
             <RegionError label="환율" states={data.states.fx} />
             <div role="region" aria-label={data.fxTitle} tabIndex={data.fx.length >= 5 ? 0 : undefined}
-              style={{ marginTop: 14, borderTop: '2px solid #15181E', ...(data.fx.length >= 5 ? { maxHeight: 242, overflowY: 'auto', scrollbarGutter: 'stable' } : {}) }}>
+              className="fx-list" style={{ marginTop: 14, borderTop: '2px solid #15181E', ...(data.fx.length >= 5 ? { maxHeight: 242, overflowY: 'auto', scrollbarGutter: 'stable' } : {}) }}>
               {data.fx.map(([cur, unit, rate, change, dir]) => (
                 <div key={cur} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 14, alignItems: 'center', minHeight: 48, lineHeight: '22px', padding: '12px 4px', borderBottom: '1px solid #E3E6EA', fontSize: 15 }}>
                   <span><strong>{cur}</strong> <span style={{ fontSize: 12, color: '#5C6370' }}>{unit}</span></span>
@@ -274,10 +295,11 @@ export default function Dashboard({ route }) {
         </div>
       </section>
 
-      <section style={{ background: '#fff', color: '#15181E', padding: '48px 0 52px' }}>
+      <section className="zone zone-exports" style={{ padding: '64px 0 68px' }}>
         <div className="wrap">
           <div data-reveal="up" className="between" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
+              <Eyebrow>TOP EXPORTS</Eyebrow>
               <h2 style={{ fontSize: 26, fontWeight: 800, color: '#15181E' }}>{data.rankTitle}</h2>
               {data.cardsLoading
                 ? <Bone w={170} h={13} style={{ marginTop: 11, marginBottom: 3 }} />
@@ -295,8 +317,8 @@ export default function Dashboard({ route }) {
           <div data-reveal="up" data-d="1" aria-busy={data.cardsLoading} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
             {data.cardsLoading && <span role="status" className="sr-only">수출 상위 품목을 불러오는 중입니다</span>}
             {data.cardsLoading && Array.from({ length: skeletonCount }, (_, i) => <RankCardSkeleton key={i} />)}
-            {!data.cardsLoading && cards.map(c => (
-              <Link key={c.hs} to={data.cardLink('COUNTRY', c.hs)} className="dash-card" style={CARD_STYLE}>
+            {!data.cardsLoading && cards.map((c, i) => (
+              <Link key={c.hs} to={data.cardLink('COUNTRY', c.hs)} className="dash-card rank-card" style={{ ...CARD_STYLE, '--accent': RANK_ACCENTS[i % RANK_ACCENTS.length] }}>
                 <span style={{ display: 'flex', gap: 6 }}>
                   <span style={{ padding: '3px 8px', borderRadius: 6, background: '#FCE8EB', color: '#B0102A', fontSize: 12, fontWeight: 800 }}>{c.rank}</span>
                   <span style={{ padding: '3px 8px', borderRadius: 6, background: '#F1F2F5', color: '#444B57', fontSize: 12 }}>{c.hs}</span>
@@ -317,11 +339,13 @@ export default function Dashboard({ route }) {
         </div>
       </section>
 
-      <main className="wrap" style={{ paddingTop: 56, display: 'flex', flexDirection: 'column', gap: 56 }}>
-        <section style={{ display: 'flex', gap: 20 }} className="resp-stack">
-          <div data-reveal="up" className="card" style={{ flex: '1 1 440px' }}>
+      <main className="home-zones">
+        <section className="zone zone-tables" style={{ padding: '64px 0' }}>
+        <div className="wrap resp-stack" style={{ display: 'flex', gap: 20 }}>
+          <div data-reveal="up" className="card zone-card" style={{ flex: '1 1 440px' }}>
             <div className="between" style={{ alignItems: 'flex-start' }}>
               <div>
+                <Eyebrow>BY PRODUCT</Eyebrow>
                 <h2 className="t2">{data.productTable.title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{data.productTable.sub}</p>
               </div>
@@ -339,10 +363,11 @@ export default function Dashboard({ route }) {
             {data.productTable.empty && <p className="muted" style={{ padding: '18px 4px' }}>조회 기간에 집계된 품목 실적이 없습니다.</p>}
             {data.productTable.note && <p className="note" style={{ marginTop: 12 }}>{data.productTable.note}</p>}
           </div>
-          <div data-reveal="up" data-d="1" className="card" style={{ flex: '1.3 1 540px' }}>
+          <div data-reveal="up" data-d="1" className="card zone-card" style={{ flex: '1.3 1 540px' }}>
             {/* 왼쪽: 교역국 표, 오른쪽: 수출액 비중. 두 제목을 같은 크기·같은 높이에 둔다. 상세보기는 카드 오른쪽 위를 유지한다. */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 26 }}>
               <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                <Eyebrow>BY PARTNER</Eyebrow>
                 <h2 className="t2">{data.countryTable.title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{data.countryTable.sub}</p>
                 <RegionError label="교역국별 수출입" states={data.states.countries} />
@@ -359,6 +384,7 @@ export default function Dashboard({ route }) {
                 </div>
               </div>
               <div style={{ flex: '1 1 220px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                <Eyebrow>EXPORT SHARE</Eyebrow>
                 <div className="between" style={{ alignItems: 'flex-start', gap: 12 }}>
                   <h2 className="t2">{data.countryTable.pieTitle}</h2>
                   <Link to={data.tableLink('COUNTRY')} className="more" style={{ flexShrink: 0 }}>상세보기 →</Link>
@@ -378,24 +404,29 @@ export default function Dashboard({ route }) {
               </div>
             </div>
           </div>
+        </div>
         </section>
 
-        <section data-reveal="up">
-          <div className="sec-h">
+        {/* 점유율 구역: 짙은 남색 띠로 페이지 가운데 강조점을 둔다. 띠 배경은 등장 효과 없이 처음부터 보이고, 안쪽 내용만 떠오른다. */}
+        <section className="zone zone-share" style={{ padding: '72px 0 76px' }}>
+        <RouteLines />
+        <div className="wrap">
+          <div data-reveal="up" className="sec-h">
             <div>
+              <Eyebrow>MARKET SHARE</Eyebrow>
               <h2 className="t1">한국의 세계시장 점유율</h2>
               <p className="muted" style={{ marginTop: 6 }}>{data.unSub}</p>
             </div>
             <Link to="/account/interests" className="more">관심정보 설정 →</Link>
           </div>
-          <div style={{ marginTop: 14, display: 'flex', gap: '6px 24px', fontSize: 13, color: '#5C6370', flexWrap: 'wrap' }}>
-            <span><strong style={{ color: '#15181E' }}>수출 점유율</strong> = 상대국 전체 수입 중 한국산 비중</span>
+          <div data-reveal="up" className="share-legend" style={{ marginTop: 14, display: 'flex', gap: '6px 24px', fontSize: 13, flexWrap: 'wrap' }}>
+            <span><strong>수출 점유율</strong> = 상대국 전체 수입 중 한국산 비중</span>
             <span>순위 = 상대국 공급국 중 한국 순위</span>
           </div>
-          <div ref={unRef} role="region" aria-label="한국의 세계시장 점유율 카드" tabIndex={unHeight ? 0 : undefined}
+          <div ref={unRef} data-reveal="up" data-d="1" role="region" aria-label="한국의 세계시장 점유율 카드" tabIndex={unHeight ? 0 : undefined}
             style={{ marginTop: 16, position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, ...(unHeight ? { maxHeight: unHeight, overflowY: 'auto', scrollbarGutter: 'stable', paddingRight: 4 } : {}) }} className="resp-stack">
             {data.un.map(u => (
-              <div key={u.country} style={{ border: '1px solid #E3E6EA', borderTop: '3px solid #C8102E', borderRadius: '4px 4px 16px 16px', padding: '16px 18px 6px' }}>
+              <div key={u.country} className="un-card" style={{ border: '1px solid #E3E6EA', borderTop: '3px solid #C8102E', borderRadius: '4px 4px 16px 16px', padding: '16px 18px 6px' }}>
                 <div className="between" style={{ alignItems: 'baseline' }}>
                   <span style={{ fontSize: 20, fontWeight: 800 }}>{u.country}</span><span className="muted" style={{ fontSize: 12 }}>{u.meta}</span>
                 </div>
@@ -416,23 +447,26 @@ export default function Dashboard({ route }) {
               </div>
             ))}
           </div>
-<RegionError label="한국의 세계시장 점유율" states={[un]} /><p className="muted" style={{ marginTop: 10, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
+          <RegionError label="한국의 세계시장 점유율" states={[un]} /><p className="muted share-note" style={{ marginTop: 14, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
+        </div>
         </section>
 
-        <section data-reveal="up">
-          <div className="sec-h">
+        <section className="zone zone-news" style={{ padding: '64px 0 88px' }}>
+        <div className="wrap">
+          <div data-reveal="up" className="sec-h">
             <div>
+              <Eyebrow>MARKET NEWS</Eyebrow>
               <h2 className="t1">{data.newsTitle}</h2>
               <p className="muted" style={{ marginTop: 6 }}>{data.newsSub}</p>
             </div>
             <Link to="/articles" className="more">기사홈 →</Link>
           </div>
           <RegionError label="기사" states={data.states.news} />
-          <div style={{ marginTop: 20, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 22 }} className="resp-stack">
+          <div data-reveal="up" data-d="1" style={{ marginTop: 20, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 22 }} className="resp-stack">
             {data.newsCards.map(n => {
               const found = n
               return (
-                <Link key={n.title} to={found ? `/articles?tab=${found.kind}&id=${found.id}` : '/articles'} style={{ color: '#15181E', display: 'flex', flexDirection: 'column', gap: 10, border: '1px solid #E3E6EA', borderRadius: 14, padding: '18px 18px 20px' }}>
+                <Link key={n.title} to={found ? `/articles?tab=${found.kind}&id=${found.id}` : '/articles'} className="news-card" style={{ color: '#15181E', display: 'flex', flexDirection: 'column', gap: 10, border: '1px solid #E3E6EA', borderRadius: 14, padding: '18px 18px 20px' }}>
                   <span style={{ fontSize: 12, fontWeight: 800, color: '#B0102A' }}>{({ major: '주요 이슈', short: '단신속보', general: '해외시장뉴스' })[n.kind]} <span style={{ fontWeight: 500, color: '#5C6370' }}>· {n.date}</span></span>
                   <span style={{ fontSize: 16, fontWeight: 800, lineHeight: 1.45 }}>{n.title}</span>
                   <span style={{ fontSize: 13, lineHeight: 1.6, color: '#5C6370' }}>{cut(n.summary, 50)}</span>
@@ -440,11 +474,11 @@ export default function Dashboard({ route }) {
               )
             })}
           </div>
+        </div>
         </section>
         {/* 다른 화면(기사·순위)과 같은 오른쪽 아래 고정 버튼 */}
         <ChatFab />
       </main>
-      <div style={{ height: 72 }} />
     </>
   )
 }
