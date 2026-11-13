@@ -237,8 +237,29 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .tr.row2>span{min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:break-word}
 
 /* 메인 상단 기능 카드(링크): 마우스를 올리면 살짝 떠오른다. 키보드 초점도 같은 모양. */
-.feature-card{transition:transform .15s,box-shadow .15s}
-.feature-card:hover,.feature-card:focus-visible{transform:translateY(-3px);box-shadow:0 16px 36px rgba(0,0,0,.26)!important}
+/* 메인 맨 위 사진 띠: 왼쪽 글자 뒤만 어둡게 하고 가운데·오른쪽은 밝게 두어 배가 보이게 한다 */
+.band.hero::before{background:linear-gradient(90deg,rgba(6,16,26,.80) 0%,rgba(6,16,26,.50) 34%,rgba(6,16,26,.20) 62%,rgba(6,16,26,.30) 100%)}
+/* 메인 사진 띠 왼쪽 문구: 유리판 느낌의 보기 표시 → 큰 제목(둘째 줄은 하늘빛으로 강조) → 가는 선 → 설명 */
+.hero-tag{display:inline-flex;align-items:center;gap:8px;margin:0 0 18px!important;padding:6px 14px 6px 12px;border-radius:999px;font-size:13px;font-weight:700;letter-spacing:.02em;color:#fff;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.hero-tag::before{content:'';width:7px;height:7px;border-radius:50%;background:#8FD0F5;box-shadow:0 0 0 3px rgba(143,208,245,.25)}
+.band .hero-title{font-size:48px;line-height:1.2;font-weight:800;letter-spacing:-1.6px;color:#fff;text-shadow:0 2px 24px rgba(3,10,18,.45)}
+.hero-title em{font-style:normal;background:linear-gradient(90deg,#fff 0%,#BFE4FA 55%,#8FD0F5 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.band .hero-lead{position:relative;margin-top:26px!important;padding-top:22px;font-size:16px;line-height:1.75;color:rgba(232,240,248,.86);text-shadow:0 1px 10px rgba(3,10,18,.5)}
+.hero-lead::before{content:'';position:absolute;left:0;top:0;width:44px;height:2px;border-radius:2px;background:linear-gradient(90deg,#8FD0F5,rgba(143,208,245,0))}
+@media (max-width:640px){.band .hero-title{font-size:34px;letter-spacing:-1px}}
+/* 기능 카드 묶음: 각 카드 폭을 원래의 2/3로 줄이고 오른쪽 끝에 맞춘다. 좁은 화면에서는 두 칸을 꽉 채운다 */
+.hero-cards{grid-template-columns:repeat(2,minmax(0,calc((100% - 18px) / 2.5)));justify-content:end}
+@media (max-width:1000px){.hero-cards{grid-template-columns:1fr 1fr}}
+/* 기능 카드: 뒤 사진이 비쳐 보이는 반투명 유리판(어두운 바탕 + 흰 글자) */
+.feature-card{position:relative;display:block;padding:22px 22px 24px;border-radius:18px;color:#fff;background:linear-gradient(160deg,rgba(255,255,255,.16),rgba(255,255,255,.05)),rgba(8,20,34,.34);border:1px solid rgba(255,255,255,.24);box-shadow:0 10px 30px rgba(3,10,18,.28);-webkit-backdrop-filter:blur(3px) saturate(120%);backdrop-filter:blur(3px) saturate(120%);transition:transform .2s,box-shadow .2s,border-color .2s,background .2s}
+.feature-card:hover,.feature-card:focus-visible{transform:translateY(-3px);border-color:rgba(255,255,255,.5);background:linear-gradient(160deg,rgba(255,255,255,.22),rgba(255,255,255,.08)),rgba(8,20,34,.40);box-shadow:0 16px 36px rgba(3,10,18,.38)}
+.feature-card .fc-icon{width:44px;height:44px;border-radius:13px;display:inline-flex;align-items:center;justify-content:center;color:#fff;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22)}
+.feature-card.rose .fc-icon{background:rgba(200,16,46,.72);border-color:rgba(255,255,255,.18)}
+.feature-card.lav .fc-icon{background:rgba(74,62,140,.75);border-color:rgba(255,255,255,.18)}
+.feature-card h3{margin:14px 0 6px;font-size:18px;font-weight:800;color:#fff;text-shadow:0 1px 8px rgba(3,10,18,.45)}
+.feature-card p{font-size:14px;line-height:1.6;color:rgba(236,242,248,.88);white-space:pre-line;text-shadow:0 1px 6px rgba(3,10,18,.5)}
+.feature-card .fc-go{position:absolute;top:22px;right:20px;display:inline-flex;color:rgba(255,255,255,.55);transition:transform .2s,color .2s}
+.feature-card:hover .fc-go,.feature-card:focus-visible .fc-go{color:#fff;transform:translateX(3px)}
 
 /* 머리글의 회원 이름(토글과 알림 사이). 메뉴 가운데 정렬은 그대로 두고, 이름은 머리글에 남는 폭 안에서만 보인다.
    최대 폭 = min(160px, 화면 폭 − 940px): 1000px에서 60px, 1100px 이상에서 160px. 넘치는 이름은 …로 줄인다(전체는 title).
@@ -255,3 +276,70 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .skel{background:linear-gradient(90deg,#ECEEF1 25%,#F6F7F9 50%,#ECEEF1 75%);background-size:200% 100%;animation:skel-shine 1.2s ease-in-out infinite}
 @keyframes skel-shine{from{background-position:100% 0}to{background-position:-100% 0}}
 @media (prefers-reduced-motion:reduce){.skel{animation:none}}
+
+/* 로그인·회원가입 상단 문구(AuthFrame) */
+.auth-eyebrow{display:inline-flex;align-items:center;gap:14px;margin:0 0 16px;font-size:13px;font-weight:700;letter-spacing:.32em;text-indent:.32em;color:#8FD0F5}
+.auth-eyebrow::before,.auth-eyebrow::after{content:'';width:28px;height:1px;background:linear-gradient(90deg,transparent,#8FD0F5)}
+.auth-eyebrow::after{transform:scaleX(-1)}
+.auth-title{font-size:40px;line-height:1.28;letter-spacing:-1.2px;font-weight:800;color:#fff;text-shadow:0 2px 24px rgba(6,16,26,.35)}
+.auth-lead{margin-top:16px;font-size:15px;line-height:1.75;color:rgba(232,240,248,.82)}
+@media (max-width:640px){.auth-title{font-size:30px}.auth-eyebrow{letter-spacing:.24em;font-size:12px}}
+
+/* 로그인·회원가입 첫 진입 애니메이션: 서비스 이름 → 제목 → 설명 → 카드 순서로 아래에서 부드럽게 떠오른다.
+   양옆 선은 가운데에서 바깥으로 펼쳐지고, 서비스 이름에는 빛이 한 번 천천히 지나간다. */
+@keyframes auth-rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes auth-line{from{width:0;opacity:0}to{width:28px;opacity:1}}
+@keyframes auth-shine{from{background-position:120% 0}to{background-position:-120% 0}}
+.auth-eyebrow,.auth-title,.auth-lead,.auth-card{animation:auth-rise .7s cubic-bezier(.2,.7,.2,1) both}
+.auth-title{animation-delay:.12s}
+.auth-lead{animation-delay:.24s}
+.auth-card{animation-delay:.34s}
+.auth-eyebrow::before,.auth-eyebrow::after{animation:auth-line .8s .45s cubic-bezier(.2,.7,.2,1) both}
+.auth-eyebrow{background:linear-gradient(100deg,#8FD0F5 40%,#fff 50%,#8FD0F5 60%) 120% 0/250% 100% no-repeat #8FD0F5;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:auth-rise .7s cubic-bezier(.2,.7,.2,1) both,auth-shine 2.4s 1s ease-in-out 1 both}
+@media (prefers-reduced-motion:reduce){.auth-eyebrow,.auth-title,.auth-lead,.auth-card,.auth-eyebrow::before,.auth-eyebrow::after{animation:none}}
+
+/* ── 메인 화면 등장 효과 ─────────────────────────────────────────────
+   data-reveal 요소는 화면에 들어오면 data-in이 붙는다(pages/home/useScrollReveal.js). 한 번만 재생된다. */
+/* 기본: 아래에서 살짝 떠오르며 나타남. data-d로 옆 요소와 시차를 둔다 */
+[data-reveal="up"]{opacity:0;transform:translateY(18px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+[data-reveal="up"][data-in]{opacity:1;transform:none}
+[data-reveal][data-d="1"]{transition-delay:.12s}
+[data-reveal][data-d="2"]{transition-delay:.24s}
+/* 상승 화살표: 왼쪽 아래 꼬리부터 오른쪽 위 머리까지 그려지며 위로 올라온다 */
+[data-reveal="arrow"]>g{clip-path:inset(100% 100% 0 0);transform:translate(-42px,50px);transition:clip-path 1.3s cubic-bezier(.3,.6,.2,1),transform 1.3s cubic-bezier(.2,.7,.2,1)}
+[data-reveal="arrow"][data-in]>g{clip-path:inset(0 0 0 0);transform:none}
+/* 원그래프: 한 바퀴 돌며 나타난 뒤, 아래 국가 목록과 기준 문구가 이어서 나타난다 */
+[data-reveal^="pie"]{opacity:0}
+[data-reveal="pie"][data-in]{opacity:1;animation:pie-spin 1.3s cubic-bezier(.2,.75,.2,1) backwards}
+@keyframes pie-spin{from{opacity:0;transform:rotate(-360deg) scale(.84)}30%{opacity:1}to{opacity:1;transform:none}}
+[data-reveal^="pie"]~ul,[data-reveal^="pie"]~p{opacity:0;transform:translateY(8px);transition:opacity .6s ease 1.05s,transform .6s ease 1.05s}
+[data-reveal="pie"][data-in]~ul,[data-reveal="pie"][data-in]~p{opacity:1;transform:none}
+/* 맨 위 사진 띠: 처음 열릴 때 왼쪽 문구만 떠오른다. 기능 카드는 처음부터 그대로 보인다 */
+@keyframes hero-rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+.hero-rise{animation:hero-rise .8s cubic-bezier(.2,.7,.2,1) backwards}
+/* 동작 줄이기 설정·인쇄에서는 효과 없이 바로 보인다 */
+@media (prefers-reduced-motion:reduce){
+  [data-reveal],[data-reveal="arrow"]>g,[data-reveal^="pie"]~ul,[data-reveal^="pie"]~p{opacity:1!important;transform:none!important;clip-path:none!important;transition:none!important;animation:none!important}
+  .hero-rise{animation:none}
+}
+@media print{[data-reveal],[data-reveal="arrow"]>g,[data-reveal^="pie"]~ul,[data-reveal^="pie"]~p{opacity:1!important;transform:none!important;clip-path:none!important}}
+
+/* 화면 안 보조 메뉴(기사 유형 탭): 머리글 메뉴(.nav)와 같은 글자·빨간 밑줄 모양, 가운데 정렬 */
+.subnav{display:flex;justify-content:center;gap:52px;background:#fff;border-bottom:1px solid var(--line);font-size:16px;font-weight:700}
+.subnav a{position:relative;padding:17px 0;color:var(--ink);white-space:nowrap;transition:color .15s}
+.subnav a:hover{color:var(--red)}
+.subnav a.on{color:var(--red)}
+.subnav a.on::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:3px;background:var(--red);border-radius:2px}
+@media (max-width:640px){.subnav{gap:0;justify-content:space-around;font-size:15px}.subnav a{padding:14px 0}}
+@media print{.subnav{display:none}}
+
+/* 회원가입 완료 안내(Welcome) */
+@keyframes welcome-pop{from{opacity:0;transform:scale(.6)}60%{transform:scale(1.08)}to{opacity:1;transform:none}}
+.welcome-check{width:64px;height:64px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:var(--red);box-shadow:0 0 0 8px var(--rose);animation:welcome-pop .6s .45s cubic-bezier(.2,.7,.2,1) backwards}
+.welcome-guide{list-style:none;margin:24px 0 0;padding:6px 16px;border:1px solid var(--line);border-radius:14px;background:var(--bg)}
+.welcome-guide li{display:flex;align-items:center;gap:12px;padding:12px 0}
+.welcome-guide li+li{border-top:1px solid var(--line2)}
+.welcome-guide-icon{width:36px;height:36px;flex:none;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;background:var(--lav);color:var(--plum)}
+.welcome-guide b{display:block;font-size:14px;font-weight:800;color:var(--ink)}
+.welcome-guide li>span:last-child>span{display:block;margin-top:2px;font-size:13px;line-height:1.5;color:var(--sub)}
+@media (prefers-reduced-motion:reduce){.welcome-check{animation:none}}

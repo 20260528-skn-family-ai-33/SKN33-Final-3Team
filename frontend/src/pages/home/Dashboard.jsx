@@ -10,6 +10,7 @@ import { mapArticle } from '../../api/adapters'
 import heroShip from '../../assets/hero-ship.jpg'
 import useDashboard from './useDashboard'
 import useMainView from './useMainView'
+import useScrollReveal from './useScrollReveal'
 import useUnData from './useUnData'
 
 // 메인 상단 기능 카드. 마지막 값은 누르면 이동할 화면이다(예전 '분석 · 리포트 바로가기' 띠의 링크를 옮겨 왔다).
@@ -43,7 +44,7 @@ function RegionError({ label, states }) {
 const ARROW_PATH = 'M210 639 C404 625 604 518 691 320 L623 294 L835 148 L881 395 L812 368 C660 550 478 634 210 639 Z'
 function TrendArrow() {
   return (
-    <svg className="trend-arrow" aria-hidden="true" width="388" height="194" viewBox="150 215 745 373"
+    <svg className="trend-arrow" data-reveal="arrow" aria-hidden="true" width="388" height="194" viewBox="150 215 745 373"
       style={{ position: 'absolute', right: 120, bottom: 'calc(100% - 14px)', pointerEvents: 'none' }}>
       <defs>
         <linearGradient id="trend-arrow-fill" x1="208" y1="639" x2="820" y2="190" gradientUnits="userSpaceOnUse">
@@ -53,7 +54,8 @@ function TrendArrow() {
           <stop offset="1" stopColor="#FF2424" />
         </linearGradient>
       </defs>
-      <path d={ARROW_PATH} fill="url(#trend-arrow-fill)" transform="rotate(14 545 393)" />
+      {/* 등장 효과는 안쪽 g에 건다(svg 자체를 가리면 화면에 들어왔는지 감지되지 않는다). */}
+      <g><path d={ARROW_PATH} fill="url(#trend-arrow-fill)" transform="rotate(14 545 393)" /></g>
     </svg>
   )
 }
@@ -96,12 +98,13 @@ function useUnVisibleHeight(deps) {
 }
 
 function FeatureCard([icon, title, text, tone, to]) {
-  const bg = tone === 'rose' ? ['#FCE8EB', '#C8102E'] : ['#ECEAF5', '#2B2350']
+  // 카드는 뒤 사진(배)이 비쳐 보이는 반투명 유리판. 모양은 styles/app.css의 .feature-card에서 정한다.
   return (
-    <Link key={title} to={to} className="feature-card" style={{ display: 'block', background: 'rgba(255,255,255,0.85)', borderRadius: 18, padding: 24, boxShadow: '0 12px 30px rgba(0,0,0,.18)' }}>
-      <span style={{ width: 48, height: 48, borderRadius: 14, background: bg[0], color: bg[1], display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name={icon} size={24} stroke={1.8} /></span>
-      <h3 style={{ margin: '16px 0 6px', fontSize: 18, fontWeight: 800, color: '#15181E' }}>{title}</h3>
-      <p style={{ fontSize: 14, lineHeight: 1.6, color: '#444B57', whiteSpace: 'pre-line' }}>{text}</p>
+    <Link key={title} to={to} className={'feature-card ' + tone}>
+      <span className="fc-icon"><Icon name={icon} size={22} stroke={1.8} /></span>
+      <h3>{title}</h3>
+      <p>{text}</p>
+      <span className="fc-go" aria-hidden="true"><Icon name="arrowRight" size={16} /></span>
     </Link>
   )
 }
@@ -190,20 +193,23 @@ export default function Dashboard({ route }) {
   const cardColumns = interest ? Math.min(Math.max(shownCount, 2), 5) : 5
   const skeletonCount = Math.min(cardCount, 5)
   const [unRef, unHeight] = useUnVisibleHeight([data.un])
+  // 스크롤 등장 효과(data-reveal). 원그래프는 자료를 받은 뒤에 관찰을 시작하도록 자료 수가 바뀌면 다시 살핀다.
+  useScrollReveal(data.countryTable.pie.length)
 
   return (
     <>
-      <section className="band" style={{ padding: '64px 0 28px' }}>
+      <section className="band hero" style={{ padding: '64px 0 28px' }}>
         {/* 배경 사진은 띠 전체를 덮는다. (예전 left:-30%·width:130%는 공통 img max-width:100%에 막혀 오른쪽 30%가 비었다) */}
         <img src={heroShip} alt="" style={{ objectPosition: 'center 45%' }} />
         <div className="wrap" style={{ display: 'block' }}>
           <div style={{ display: 'flex', gap: 40, alignItems: 'flex-start' }} className="resp-stack">
-            <div style={{ flex: '1 1 380px', paddingTop: 24 }}>
-              <p className="tag plum" style={{ marginBottom: 10 }}>{interest ? '내 관심 시장' : '전체 시장'}</p>
-              <h1 style={{ fontSize: 44, lineHeight: 1.22 }}>대화로 시작하는<br />무역 분석</h1>
-              <p className="lead" style={{ fontSize: 16, lineHeight: 1.7, marginTop: 18 }}>품목·국가·기간을 말로 묻고, 수치와 근거 기사를 확인한 뒤<br />그대로 PDF 리포트로 저장할 수 있습니다.</p>
+            <div className="hero-rise" style={{ flex: '1 1 380px', paddingTop: 24 }}>
+              <p className="hero-tag">{interest ? '내 관심 시장' : '전체 시장'}</p>
+              <h1 className="hero-title">대화로 시작하는<br /><em>무역 분석</em></h1>
+              <p className="lead hero-lead">품목·국가·기간을 말로 묻고, 수치와 근거 기사를 확인한 뒤<br />그대로 PDF 리포트로 저장할 수 있습니다.</p>
             </div>
-            <div style={{ flex: '1.2 1 480px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, alignItems: 'start' }}>
+            {/* 카드 폭을 2/3로 줄여 오른쪽에 붙인다 → 가운데 배가 카드에 가리지 않는다(.hero-cards, 좁은 화면에서는 원래 폭). */}
+            <div className="hero-cards" style={{ flex: '1.2 1 480px', display: 'grid', gap: 18, alignItems: 'start' }}>
               <div className="col" style={{ gap: 18 }}>{FEATURES.slice(0, 2).map(FeatureCard)}</div>
               <div className="col" style={{ gap: 18, marginTop: 52 }}>{FEATURES.slice(2).map(FeatureCard)}</div>
             </div>
@@ -217,7 +223,7 @@ export default function Dashboard({ route }) {
         <div className="wrap resp-stack" style={{ display: 'flex', gap: 32 }}>
           <div style={{ flex: '2 1 600px', position: 'relative' }}>
             {/* 제목·기간 글자는 상승 화살표보다 위에 그려 화살표가 글자를 가리지 않게 한다. */}
-            <div style={{ position: 'relative', zIndex: 2 }}>
+            <div data-reveal="up" style={{ position: 'relative', zIndex: 2 }}>
               <RegionError label="주요 지표" states={data.states.kpi} />
               <p style={{ fontSize: 14, fontWeight: 700, color: '#B0102A' }}>통계 기준 월 {data.statMonth}</p>
               <h2 style={{ marginTop: 8, fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{data.title}</h2>
@@ -226,7 +232,7 @@ export default function Dashboard({ route }) {
             {/* 화살표는 지표 카드 묶음 기준으로 놓아 화면 폭이 바뀌어도 카드와의 위치가 유지된다. 카드가 화살표 위에 그려진다. */}
             <div style={{ position: 'relative', marginTop: 24 }}>
             <TrendArrow />
-            <div style={{ position: 'relative', zIndex: 1, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
+            <div data-reveal="up" data-d="1" style={{ position: 'relative', zIndex: 1, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
               {data.kpis.map(k => {
                 // 수출액·수입액은 같은 기준의 순위 화면으로 연결한다. 무역수지는 연결할 화면이 없어 보여 주기만 한다.
                 const Box = k.flow ? Link : 'div'
@@ -244,7 +250,7 @@ export default function Dashboard({ route }) {
             </div>
             </div>
           </div>
-          <div style={{ flex: '1 1 320px' }}>
+          <div data-reveal="up" data-d="2" style={{ flex: '1 1 320px' }}>
             <div className="between" style={{ alignItems: 'flex-end' }}>
               <div>
                 <h2 style={{ fontSize: 22, fontWeight: 800 }}>{data.fxTitle}</h2>
@@ -268,9 +274,9 @@ export default function Dashboard({ route }) {
         </div>
       </section>
 
-      <section style={{ background: '#fff', color: '#15181E', padding: '48px 0 52px', borderTop: '1px solid #E3E6EA', borderBottom: '1px solid #E3E6EA' }}>
+      <section style={{ background: '#fff', color: '#15181E', padding: '48px 0 52px' }}>
         <div className="wrap">
-          <div className="between" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div data-reveal="up" className="between" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
               <h2 style={{ fontSize: 26, fontWeight: 800, color: '#15181E' }}>{data.rankTitle}</h2>
               {data.cardsLoading
@@ -286,7 +292,7 @@ export default function Dashboard({ route }) {
             </div>
           </div>
           <RegionError label="수출 상위 품목" states={data.states.cards} />
-          <div aria-busy={data.cardsLoading} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
+          <div data-reveal="up" data-d="1" aria-busy={data.cardsLoading} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
             {data.cardsLoading && <span role="status" className="sr-only">수출 상위 품목을 불러오는 중입니다</span>}
             {data.cardsLoading && Array.from({ length: skeletonCount }, (_, i) => <RankCardSkeleton key={i} />)}
             {!data.cardsLoading && cards.map(c => (
@@ -313,7 +319,7 @@ export default function Dashboard({ route }) {
 
       <main className="wrap" style={{ paddingTop: 56, display: 'flex', flexDirection: 'column', gap: 56 }}>
         <section style={{ display: 'flex', gap: 20 }} className="resp-stack">
-          <div className="card" style={{ flex: '1 1 440px' }}>
+          <div data-reveal="up" className="card" style={{ flex: '1 1 440px' }}>
             <div className="between" style={{ alignItems: 'flex-start' }}>
               <div>
                 <h2 className="t2">{data.productTable.title}</h2>
@@ -333,7 +339,7 @@ export default function Dashboard({ route }) {
             {data.productTable.empty && <p className="muted" style={{ padding: '18px 4px' }}>조회 기간에 집계된 품목 실적이 없습니다.</p>}
             {data.productTable.note && <p className="note" style={{ marginTop: 12 }}>{data.productTable.note}</p>}
           </div>
-          <div className="card" style={{ flex: '1.3 1 540px' }}>
+          <div data-reveal="up" data-d="1" className="card" style={{ flex: '1.3 1 540px' }}>
             {/* 왼쪽: 교역국 표, 오른쪽: 수출액 비중. 두 제목을 같은 크기·같은 높이에 둔다. 상세보기는 카드 오른쪽 위를 유지한다. */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 26 }}>
               <div style={{ flex: '1 1 260px', minWidth: 0 }}>
@@ -358,7 +364,8 @@ export default function Dashboard({ route }) {
                   <Link to={data.tableLink('COUNTRY')} className="more" style={{ flexShrink: 0 }}>상세보기 →</Link>
                 </div>
                 {/* 원그래프는 제목 바로 아래, 국가 목록은 그 아래. 목록이 길면 목록 안에서 스크롤한다. */}
-                <div style={{ marginTop: 15, display: 'flex', justifyContent: 'center' }}>
+                {/* 화면에 들어오면 원그래프가 한 바퀴 돌며 나타나고, 그 뒤에 국가 목록이 나타난다(자료를 받기 전에는 기다린다). */}
+                <div data-reveal={data.countryTable.pie.length ? 'pie' : 'pie-wait'} style={{ marginTop: 15, display: 'flex', justifyContent: 'center' }}>
                   <Donut size={240} items={data.countryTable.pie.map(([label, color]) => [label, parseFloat(label.split(' ').pop()), color])} />
                 </div>
                 <ul aria-label="수출액 비중 국가 목록" tabIndex={data.countryTable.pie.length > 10 ? 0 : undefined}
@@ -373,7 +380,7 @@ export default function Dashboard({ route }) {
           </div>
         </section>
 
-        <section>
+        <section data-reveal="up">
           <div className="sec-h">
             <div>
               <h2 className="t1">한국의 세계시장 점유율</h2>
@@ -412,7 +419,7 @@ export default function Dashboard({ route }) {
 <RegionError label="한국의 세계시장 점유율" states={[un]} /><p className="muted" style={{ marginTop: 10, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
         </section>
 
-        <section>
+        <section data-reveal="up">
           <div className="sec-h">
             <div>
               <h2 className="t1">{data.newsTitle}</h2>

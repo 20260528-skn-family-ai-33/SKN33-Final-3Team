@@ -108,7 +108,8 @@ const { chromium } = require('playwright')
     await page.getByRole('button', { name: '건너뛰기', exact: true }).click()
     await page.getByRole('dialog').waitFor()
     await page.getByRole('button', { name: '저장하지 않고 건너뛰기' }).click()
-    await page.getByRole('status').filter({ hasText: '환영합니다' }).waitFor()
+    // 회원가입 직후에는 알림 문구 대신 가입 완료 안내 화면(#/welcome)으로 이동한다.
+    await page.waitForFunction(() => location.hash === '#/welcome')
     assert.equal(await page.evaluate(() => sessionStorage.getItem('bs.onboarding.1')), null)
     console.log('PASS country selection prompts before skip and signup welcome is shown')
 
