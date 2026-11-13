@@ -243,9 +243,8 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .hero-tag{display:inline-flex;align-items:center;gap:8px;margin:0 0 18px!important;padding:6px 14px 6px 12px;border-radius:999px;font-size:13px;font-weight:700;letter-spacing:.02em;color:#fff;background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
 .hero-tag::before{content:'';width:7px;height:7px;border-radius:50%;background:#8FD0F5;box-shadow:0 0 0 3px rgba(143,208,245,.25)}
 .band .hero-title{font-size:48px;line-height:1.2;font-weight:800;letter-spacing:-1.6px;color:#fff;text-shadow:0 2px 24px rgba(3,10,18,.45)}
-.hero-title em{font-style:normal;background:linear-gradient(90deg,#fff 0%,#BFE4FA 55%,#8FD0F5 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-.band .hero-lead{position:relative;margin-top:26px!important;padding-top:22px;font-size:16px;line-height:1.75;color:rgba(232,240,248,.86);text-shadow:0 1px 10px rgba(3,10,18,.5)}
-.hero-lead::before{content:'';position:absolute;left:0;top:0;width:44px;height:2px;border-radius:2px;background:linear-gradient(90deg,#8FD0F5,rgba(143,208,245,0))}
+.hero-title em{font-style:normal;color:#8ED6FF;text-shadow:0 2px 6px rgba(3,10,18,.55),0 4px 28px rgba(3,10,18,.6)}
+.band .hero-lead{position:relative;margin-top:24px!important;font-size:16px;line-height:1.75;color:rgba(232,240,248,.86);text-shadow:0 1px 10px rgba(3,10,18,.5)}
 @media (max-width:640px){.band .hero-title{font-size:34px;letter-spacing:-1px}}
 /* 기능 카드 묶음: 각 카드 폭을 원래의 2/3로 줄이고 오른쪽 끝에 맞춘다. 좁은 화면에서는 두 칸을 꽉 채운다 */
 .hero-cards{grid-template-columns:repeat(2,minmax(0,calc((100% - 18px) / 2.5)));justify-content:end}

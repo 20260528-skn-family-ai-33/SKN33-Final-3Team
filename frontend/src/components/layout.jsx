@@ -10,9 +10,21 @@ const NAV = [
   ['analysis', '/analysis', 'AI 챗봇'],
 ]
 
+// 이미 메인 화면(#/ 또는 #/?view=…)에 있을 때 로고를 누르면 같은 주소라 아무 일도 일어나지 않는다.
+// 이때는 지금 보기(전체·내 관심)를 그대로 둔 채 페이지를 새로고침하고, 맨 위에서 다시 시작한다.
+function reloadIfMain(event) {
+  const path = (decodeURI(window.location.hash.slice(1)) || '/').split('?')[0] || '/'
+  if (path !== '/') return
+  // 새 탭 열기(⌘·Ctrl·Shift 클릭, 가운데 버튼)는 브라우저 기본 동작을 따른다.
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return
+  event.preventDefault()
+  if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'
+  window.location.reload()
+}
+
 export function Logo() {
   // 지구본·컨테이너선 로고. 좁은 화면에서는 글자가 숨고 로고만 남는다(.logo font-size:0).
-  return <Link to="/" className="logo"><img src={logoImage} alt="" width="40" height="40" />BORDERLESS</Link>
+  return <Link to="/" className="logo" onClick={reloadIfMain}><img src={logoImage} alt="" width="40" height="40" />BORDERLESS</Link>
 }
 
 /** 로그인 전 화면(로그인·회원가입·찾기·관심사 등록)의 머리글 */

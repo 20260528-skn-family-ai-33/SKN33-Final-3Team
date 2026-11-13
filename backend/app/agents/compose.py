@@ -21,6 +21,8 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 입력 tasks 순서대로 각 task_id의 결론을 1~2문장, 전체 설명은 4문장 이하로 씁니다.
 문장마다 200자 이내입니다. 숫자는 digest에 있는 값만 옮기고 계산하지 마세요.
 0과 null을 구분하고 null은 집계되지 않았다고 쓰세요. 수출·수입과 USD 단위를 밝히세요.
+수출·수입 금액은 모두 한국 기준입니다. 상대국이 있으면 '한국의 대미국 수출액', '한국의 대미국 수입액'처럼 한국과 상대국을 함께 쓰고, 상대국이 없으면 '한국의 전체 수출액'처럼 씁니다.
+'미국 수출액'·'미국의 수입액'처럼 상대국의 수출입으로 읽히는 표현은 쓰지 마세요.
 요청한 월들에 미집계가 섞여 있으면 제시된 각 월을 실제 금액(0 포함) 또는 미집계와 짝지어 설명하세요. 소계를 제시할 때에는 전체 기간 합계를 확인할 수 있는지도 밝히세요.
 금액은 digest에 적힌 표기(예: "2,610만 달러", "1억 2,346만 달러")를 글자 그대로 옮기세요.
 만·억 단위를 다시 바꾸거나 반올림·합산하지 마세요. 총액과 월평균, %와 %p를 구분하세요.
@@ -102,8 +104,10 @@ def _trade_fact(digest):
         return None
     targets = digest.get('targets') or []
     target = targets[0] if digest.get('kind') == 'TREND' and targets else digest
-    label = ' '.join(str(target[k])[:40] for k in ('country_name', 'name') if target.get(k))
-    subject = ' '.join(filter(None, (label, flow)))
+    # 수출입은 한국 기준이다. 상대국은 '대○○'로 붙여 상대국의 수출입으로 읽히지 않게 한다.
+    country = str(target['country_name'])[:40] if target.get('country_name') else None
+    name = str(target['name'])[:40] if target.get('name') else None
+    subject = ' '.join(filter(None, ('한국의', f'대{country}' if country else None, name, flow)))
     if 'total_usd' not in target:
         return None
     value = target['total_usd']
