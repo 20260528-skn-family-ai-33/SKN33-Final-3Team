@@ -80,6 +80,31 @@ def _table_pages(count):
     return pages
 
 
+def _page_key(key, page):
+    """쪽마다 다른 되묻기 키. 첫 쪽은 원래 키라 최종 선택도 같은 키에 남는다(report.source_ids가 읽는다)."""
+    return key if page == 0 else f'{key}:page{page}'
+
+
+def _picked(task, key):
+    """저장된 표 선택을 따라간다. (고른 result_id 또는 None, 지금 보일 쪽)을 돌려준다.
+    '다음 목록' 답은 다음 쪽 번호만 남기므로 쪽 키를 차례로 읽는다. 같은 쪽을 두 번 만나면 멈춘다(무한 반복 방지)."""
+    page, seen = 0, set()
+    while page not in seen:
+        seen.add(page)
+        answer = task.resolved.get(_page_key(key, page), {})
+        if answer.get('previous_result_id'): return answer['previous_result_id'], page
+        following = answer.get('previous_table_page')
+        if not isinstance(following, int) or following <= page: break
+        page = following
+    return None, page
+
+
+def _forget_pages(task, key):
+    """표 선택과 '다음 목록' 답을 지운다. 후보가 바뀌어 처음부터 다시 물을 때 쓴다."""
+    for name in [k for k in task.resolved if k == key or k.startswith(f'{key}:page')]:
+        task.resolved.pop(name)
+
+
 def _table_labels(store, tables):
     """버튼 문구: '1. 미국 · HS 3307 · 월별 추이'. 질문 문장 대신 표를 만든 조건(국가·품목·종류)으로 구분한다."""
     codes = sorted({c for t in tables for c in t['conditions'].get('country_codes') or []})
@@ -111,9 +136,11 @@ def previous_result(store, state, task):
     """previous_turn_result 리포트의 입력 결과표를 고른다. 여러 개면 REPORT_TABLE로 묻고 None을 돌려준다.
     고른 result_id는 Task.resolved에 남겨 재개·승인 재진입에서 같은 표를 쓴다. 반환은 source_versions와 같은 (snapshot, info)."""
     key = f'{task.task_id}:previous_result'
-    chosen = task.resolved.get(key, {}).get('previous_result_id')
     tables = previous_tables(store, state)
-    if chosen is None:
+    chosen, page = _picked(task, key)
+    # 미리보기 전에는 고른 표(또는 저장된 다음 쪽)가 아직 유효한지 현재 후보로 다시 확인한다.
+    # 미리보기를 만든 뒤에는 승인한 그 표만 쓴다(아래 검증에서 만료되면 안내로 끝난다).
+    if chosen is None or task.report_request is None:
         if not tables: raise SlotRepair(NO_PREVIOUS_TABLE)
         loaded = [(t, s) for t in tables if (s := _load(store, state, t))]
         if not loaded: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
@@ -122,24 +149,26 @@ def previous_result(store, state, task):
         # 리포트는 수출만 지원한다(D-81). 수출입을 함께 조회한 답변의 수입 표는 후보에서 뺀다.
         usable = [(t, s) for t, s in known if s['conditions'].get('trade_flow') != 'IMPORT']
         if not usable: raise SlotRepair(EXPORT_ONLY)
-        if len(usable) > 1:
-            # 표가 5개를 넘으면 '다음 목록'으로 나머지를 보인다. 쪽마다 따로 묻고(되묻기 횟수는 조건 키마다 센다) 답은 쪽 키에 남는다.
-            pages, page = _table_pages(len(usable)), 0
-            while (answer := task.resolved.get(key if page == 0 else f'{key}:page{page}', {})).get('previous_table_page'):
-                page = min(answer['previous_table_page'], len(pages) - 1)   # 그사이 만료로 후보가 줄어도 마지막 쪽까지만
-            chosen = answer.get('previous_result_id')
-            if chosen is None:
-                every = [{**t, 'conditions': s['conditions']} for t, s in usable]
-                labels = _table_labels(store, every)   # 번호·기간 표시는 전체 후보 기준
-                start, end = pages[page]
-                options = [(f'T{i + 1}', labels[i], {'previous_result_id': every[i]['result_id']}) for i in range(start, end)]
-                if page + 1 < len(pages):
-                    options.append(('NEXT', f'다음 목록 ({end + 1}~{len(usable)}번)', {'previous_table_page': page + 1}))
-                ask(state, task, key if page == 0 else f'{key}:page{page}', 'REPORT_TABLE',
-                    '어느 결과표로 리포트를 만들까요?', options)
-                return None
-        else:
+        pages = _table_pages(len(usable))
+        # 고른 표가 그사이 만료됐으면 남은 표로 다시 묻는다(후보가 하나여도 자동으로 바꾸지 않는다).
+        # 저장된 다음 쪽이 후보 감소로 사라졌으면 첫 쪽부터 다시 보인다.
+        expired_pick = chosen is not None and chosen not in {t['result_id'] for t, _ in usable}
+        if expired_pick or page >= len(pages):
+            _forget_pages(task, key)
+            chosen, page = None, 0
+        if chosen is None and len(usable) == 1 and not expired_pick:
             chosen = usable[0][0]['result_id']
+        if chosen is None:
+            every = [{**t, 'conditions': s['conditions']} for t, s in usable]
+            labels = _table_labels(store, every)   # 번호·기간 표시는 전체 후보 기준
+            start, end = pages[page]
+            options = [(f'T{i + 1}', labels[i], {'previous_result_id': every[i]['result_id']}) for i in range(start, end)]
+            if page + 1 < len(pages):
+                options.append(('NEXT', f'다음 목록 ({end + 1}~{len(usable)}번)', {'previous_table_page': page + 1}))
+            message = ('선택한 결과표의 보관 기간이 지났습니다. 남은 결과표 중에서 골라 주세요.' if expired_pick
+                       else '어느 결과표로 리포트를 만들까요?')
+            ask(state, task, _page_key(key, page), 'REPORT_TABLE', message, options)
+            return None
         task.resolved[key] = {'previous_result_id': chosen}
     table = next((t for t in tables if t['result_id'] == chosen), None)
     if table is None:

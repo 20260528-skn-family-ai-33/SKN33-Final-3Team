@@ -543,8 +543,8 @@ class ReportAgentTest(unittest.TestCase):
         prompt = self.job(jid)['clarification']
         self.assertIn('직전 결과표의 조건 그대로 만들었습니다. 조건을 바꾸려면 새로 조회해 주세요.', prompt['report_preview']['adjustments'])
 
-    def test_more_than_five_previous_tables_are_paged(self):
-        """R45 직전 답변의 결과표가 5개를 넘으면 한 화면 버튼 5개(표 4개 + '다음 목록')를 유지하고 다음 목록에서 나머지를 고른다."""
+    def six_tables(self):
+        """직전 답변에 같은 모양(기간만 다른)의 결과표 6개를 둔다. (대화방, 결과표 ID 6개)."""
         from backend.app.api import results
         sid, tables = self.answered(self.US)
         with self.engine.begin() as c:
@@ -558,6 +558,16 @@ class ReportAgentTest(unittest.TestCase):
                 conditions = {**source['conditions'], 'period': {**source['conditions']['period'], 'start': start}}
                 rids.append(results.result_table(store, self.uid, source['rows'], source['meta'], conditions)['result_id'])
         self.edit_answer(sid, lambda answer: answer.update(tables=[{**answer['tables'][0], 'result_id': rid} for rid in rids]))
+        return sid, rids
+
+    def choose(self, jid, choice_id):
+        prompt = self.job(jid)['clarification']
+        response = self.post(f'chat/jobs/{jid}/clarifications', {'clarification_id': prompt['clarification_id'], 'choice_ids': [choice_id]})
+        self.assertEqual(response.status_code, 202, response.text)
+
+    def test_more_than_five_previous_tables_are_paged(self):
+        """R45 직전 답변의 결과표가 5개를 넘으면 한 화면 버튼 5개(표 4개 + '다음 목록')를 유지하고 다음 목록에서 나머지를 고른다."""
+        sid, rids = self.six_tables()
         jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'pages')
         prompt = self.job(jid)['clarification']
         self.assertEqual([c['choice_id'] for c in prompt['choices']], ['T1', 'T2', 'T3', 'T4', 'NEXT'])
@@ -576,6 +586,35 @@ class ReportAgentTest(unittest.TestCase):
         self.assertEqual(self.source_of(jid), rids[5:])
         self.confirm(jid); self.work()
         self.assertEqual(self.reports()[0]['conditions_json']['chat_sources'], rids[5:])
+
+    def test_next_page_that_disappeared_restarts_the_list(self):
+        """R46 '다음 목록'을 고른 뒤 재개 전에 표 하나가 만료돼 후보가 5개가 되면, 사라진 다음 쪽을 반복해 읽지 않고
+        (무한 반복 없이) 지금 유효한 후보 5개를 첫 쪽으로 다시 보인다."""
+        sid, rids = self.six_tables()
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'shrink')
+        self.choose(jid, 'NEXT')
+        self.expire(rids[2])
+        self.work()
+        prompt = self.job(jid)['clarification']
+        self.assertEqual(prompt['kind'], 'REPORT_TABLE')
+        self.assertEqual([c['choice_id'] for c in prompt['choices']], ['T1', 'T2', 'T3', 'T4', 'T5'])
+        self.choose(jid, 'T5'); self.work()
+        self.assertEqual(self.source_of(jid), rids[5:])   # 남은 후보 기준 5번째 = 원래 6번째 표
+
+    def test_picked_table_that_expired_is_chosen_again(self):
+        """R47 두 번째 쪽에서 고른 표가 재개 전에 만료되면 다른 표로 자동으로 바꾸지 않고, 남은 표 중에서 다시 고르게 한다."""
+        sid, rids = self.six_tables()
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'gone')
+        self.choose(jid, 'NEXT'); self.work()
+        self.choose(jid, 'T6')
+        self.expire(*rids[1:])   # 고른 T6을 포함해 T1만 남긴다
+        self.work()
+        prompt = self.job(jid)['clarification']
+        self.assertEqual((prompt['kind'], prompt['message']),
+                         ('REPORT_TABLE', '선택한 결과표의 보관 기간이 지났습니다. 남은 결과표 중에서 골라 주세요.'))
+        self.assertEqual([c['choice_id'] for c in prompt['choices']], ['T1'])
+        self.choose(jid, 'T1'); self.work()
+        self.assertEqual(self.source_of(jid), rids[:1])
 
     def partial_report(self, sid, tables, limitations, key):
         """직전 결과표를 PARTIAL로 만든 뒤 리포트를 승인하고, 실제 리포트 워커(문서 생성·READY 저장)를 거쳐 채팅을 끝낸다."""

@@ -2,12 +2,12 @@
   "schema_version": 2,
   "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
   "evaluation": "Report Agent 오프라인 설계 계약 평가",
-  "evaluated_at_utc": "2026-11-12T07:37:10.640294+00:00",
+  "evaluated_at_utc": "2026-11-12T08:38:21.861645+00:00",
   "source_mode": "working_tree",
-  "source_revision": "29a0821d4a468f5d021445c68437e018a535c22c",
+  "source_revision": "f1203ccf5bdd0b942446461f1c8608546b6af7c7",
   "source_dirty": false,
   "source_changes": [],
-  "harness_revision": "29a0821d4a468f5d021445c68437e018a535c22c",
+  "harness_revision": "f1203ccf5bdd0b942446461f1c8608546b6af7c7",
   "harness_dirty": true,
   "harness_changes": [
     "M backend/scripts/evaluate_report_agent.py",
@@ -24,14 +24,14 @@
   "evidence_sha256": {
     "backend/tests/test_agent_graph.py": "42b48bf6f21af564468dd9d29db17a9ca55de121ff0c04449d5d2f5323477656",
     "backend/tests/test_agent_pr61_fixes.py": "73908cce2991f8adb09a702b204c7e30c7478d569e603eb4b037cd3f402e8d7f",
-    "backend/tests/test_agent_report.py": "773163bf2207c312e8f420b02bbe712dcd9f76fa826404b14a314593715ce545",
+    "backend/tests/test_agent_report.py": "e6d0da6f759117cc36e4f7f63f7df9adacd6cf204caf18e57b0a79317fa4c780",
     "backend/tests/test_agent_state.py": "35c261bb9009c2f9dc9fbb635020d3fe9b1d1ae1e86b4fcf6a78427792ce25ba",
     "backend/tests/test_backend_api.py": "3f28e682f0e78edbea420b8502b1e2337eb5b87a2355433db6ab1c762773a25f",
-    "backend/scripts/evaluate_report_agent.py": "36a2692954541d3073057751d12ec03769103df7b3fbd4456aa7cde54a3d3285",
+    "backend/scripts/evaluate_report_agent.py": "37edf236c567e7f2d63a2ce80df674344d082ce61d3f78c6cb7cee0d4b4c0253",
     "backend/tests/api_support.py": "e39e158e4840bb652d8e86db8d21991044c6cda1765c977db6482a2c75b48003",
     "backend/tests/intent_fixtures.py": "a34fed014fdd8532c8f89145bdd615a39418ab6d23e66c60280bc91865f3d4e5"
   },
-  "manifest_sha256": "527dcf3071fe5f97c085ceaa3e1d6c6dbd588c374ed411a7830fe5f03e927734",
+  "manifest_sha256": "fef381b34493ecfe29d7ed4cf65494db1bd63d22c9b4385c429e25e187368084",
   "environment": {
     "python": "3.12.13",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -87,8 +87,8 @@
       "pass_rate_pct": 100.0
     },
     "이전 턴 결과": {
-      "total": 20,
-      "pass": 20,
+      "total": 22,
+      "pass": 22,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -96,8 +96,8 @@
       "pass_rate_pct": 100.0
     },
     "합계": {
-      "total": 45,
-      "pass": 45,
+      "total": 47,
+      "pass": 47,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -508,6 +508,24 @@
       "category": "다음 목록",
       "criterion": "결과표가 5개를 넘으면 표 4개 + '다음 목록'으로 나눠 6번째 표도 고를 수 있다.",
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_more_than_five_previous_tables_are_paged",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R46",
+      "group": "이전 턴 결과",
+      "category": "쪽 사라짐",
+      "criterion": "'다음 목록' 뒤 후보가 줄어 다음 쪽이 사라지면 반복 없이 남은 후보를 첫 쪽부터 다시 보인다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_next_page_that_disappeared_restarts_the_list",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R47",
+      "group": "이전 턴 결과",
+      "category": "고른 표 만료",
+      "criterion": "고른 표가 재개 전에 만료되면 다른 표로 자동으로 바꾸지 않고 남은 표에서 다시 고르게 한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_picked_table_that_expired_is_chosen_again",
       "status": "PASS",
       "details": []
     }

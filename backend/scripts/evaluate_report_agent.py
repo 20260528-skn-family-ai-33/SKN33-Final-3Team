@@ -113,6 +113,10 @@ GROUPS = [
          "'상위 1개만'(ranking_limit) 요청은 표를 바꾸지 않고 승인 화면에 미적용 안내를 보인다."),
         ('R45', '다음 목록', 'more_than_five_previous_tables_are_paged',
          "결과표가 5개를 넘으면 표 4개 + '다음 목록'으로 나눠 6번째 표도 고를 수 있다."),
+        ('R46', '쪽 사라짐', 'next_page_that_disappeared_restarts_the_list',
+         "'다음 목록' 뒤 후보가 줄어 다음 쪽이 사라지면 반복 없이 남은 후보를 첫 쪽부터 다시 보인다."),
+        ('R47', '고른 표 만료', 'picked_table_that_expired_is_chosen_again',
+         '고른 표가 재개 전에 만료되면 다른 표로 자동으로 바꾸지 않고 남은 표에서 다시 고르게 한다.'),
     ]),
 ]
 CASES = [dict(id=identity, group=group, category=category, criterion=criterion, test=f'{test_class}.test_{method}')
