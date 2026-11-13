@@ -455,6 +455,8 @@ class TimeClaim:
     cumulative: bool = False
     month_window: tuple[int, int] | None = None
     subject_year: str | None = None
+    # Ordered operands of an explicit period-difference claim, in month precision.
+    difference_windows: tuple[tuple[str, str], tuple[str, str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -649,6 +651,54 @@ ANNUAL_AMOUNT_PREDICATE = re.compile(
     r'(?:습니다|았(?:습니다|다|어요)|었(?:습니다|다|어요)|다|아요|어요|음)'
     r'\s*[.!?。]?(?:\s*)$'
 )
+
+# Matches the period labels produced by TREND. Quarter shorthand has already
+# been expanded by prepare_sentence (e.g. "2025년 2분기" -> "2025년 4월~6월").
+_MONTH_NUMBER = r'(?:1[0-2]|0?[1-9])'
+_PERIOD_LABEL = re.compile(
+    r'(?<!\d)(?P<year>\d{4})년\s*(?:(?P<month>' + _MONTH_NUMBER + r')월'
+    r'(?:\s*[~～–]\s*(?:(?P<end_year>\d{4})년\s*)?(?P<end_month>' + _MONTH_NUMBER + r')월)?)?'
+)
+
+
+def _label_window(label):
+    year, month, end_year, end_month = label.groups()
+    if month is None:
+        return year + '-01', year + '-12'
+    return (f'{year}-{int(month):02}', f'{end_year or year}-{int(end_month or month):02}')
+
+
+def explicit_period_difference(text, quantity):
+    if quantity.unit != 'USD':
+        return None
+    labels = list(_PERIOD_LABEL.finditer(text, 0, quantity.start))
+    if len(labels) != 2 or text[:labels[0].start()].strip():
+        return None
+    first, second = labels
+    left, right = _label_window(first), _label_window(second)
+    if left == right or left[0] > left[1] or right[0] > right[1]:
+        return None
+    between = text[first.end():second.start()].strip()
+    tail = text[second.end():quantity.start].strip()
+    # A neutral zero has no larger side. Its claim still needs BOTH saved
+    # windows and the saved difference cell, including when both totals are zero.
+    if (quantity.value == 0 and YEAR_LIST_JOIN.fullmatch(between)
+            and re.fullmatch(r'(?:의\s*)?(?:' + AMOUNT_LABEL + r')\s*차액(?:은|이)?', tail)
+            and re.fullmatch(r'\s*입니다[.!?。]?\s*', text[quantity.end:])):
+        return (left, right), None
+    # Keep the existing annual parser's checks for ambiguous annual qualifiers.
+    if first['month'] is None or second['month'] is None:
+        return None
+    predicate = ANNUAL_AMOUNT_PREDICATE.fullmatch(text, quantity.end)
+    if not predicate:
+        return None
+    if ANNUAL_AMOUNT_SUBJECT.fullmatch(between) and ANNUAL_AMOUNT_BASE.fullmatch(tail):
+        windows = left, right
+    elif ANNUAL_AMOUNT_BASE.fullmatch(between) and ANNUAL_AMOUNT_SUBJECT.fullmatch(tail):
+        windows = right, left
+    else:
+        return None
+    return windows, 'UP' if predicate['up'] else 'DOWN'
 
 
 def annual_amount_comparison(text, quantity):
@@ -1412,8 +1462,13 @@ def parse_sentence(sentence,catalog):
                                   multiple=len(values)>1)
             annual_difference = (annual_amount_comparison(syntax, quantity)
                                  if len(values) == 1 else None)
+            period_difference = (explicit_period_difference(syntax, quantity)
+                                 if len(values) == 1 and not annual_difference else None)
             if annual_difference:
                 metric = replace(metric, family='AMOUNT_CHANGE', direction=annual_difference[2],
+                                 direct_change=True, comparative_amount=True, amount_period=None)
+            elif period_difference:
+                metric = replace(metric, family='AMOUNT_CHANGE', direction=period_difference[1],
                                  direct_change=True, comparative_amount=True, amount_period=None)
             if quantity.unit == 'USD' and re.search(r'소계(?:는|은|가)?\s*$', prefix):
                 metric = replace(metric, aggregate='SUBTOTAL')
@@ -1422,6 +1477,8 @@ def parse_sentence(sentence,catalog):
             claim_time=ordered_times[variant_index] if ordered_times and not metric_list and not catalog.grouped(targets) else time
             if annual_difference:
                 claim_time = replace(claim_time, subject_year=annual_difference[0], comparison_reference=True)
+            elif period_difference:
+                claim_time = replace(claim_time, difference_windows=period_difference[0])
             if quantity.unit == 'USD' and metric.amount_period in ('MOM','YOY','COMPARE') and not DATE.search(prefix):
                 # An inherited current month is the reference point, not the date of the prior level.
                 if not DATE.search(syntax[:quantity.end]):

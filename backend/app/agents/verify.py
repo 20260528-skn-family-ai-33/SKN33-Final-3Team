@@ -43,6 +43,8 @@ def _time_matches(claim:Claim,fact:Fact):
         if not fact.period_difference or not fact.period or not fact.compare_period:
             return False
         first, second = fact.period, fact.compare_period
+        if time.difference_windows:
+            return time.difference_windows in ((first, second), (second, first))
         if any(window != (window[0][:4] + '-01', window[0][:4] + '-12') for window in (first, second)):
             return False
         return (time.years == {first[0][:4], second[0][:4]}
@@ -182,9 +184,14 @@ def mismatch(claim:Claim,fact:Fact,source):
     if m.rank_axis and fact.prediction and m.rank_axis!=fact.metric.key: return 'RANK_AXIS'
     value,amount=q.value,fact.value
     if m.comparative_amount:
-        # The saved cell is left minus right. Reversing both the named years
-        # and the direction states the same difference with the opposite sign.
-        amount = fact.value if claim.time.subject_year == fact.period[0][:4] else -fact.value
+        if not m.direction:
+            return None if amount == 0 and value == 0 else 'VALUE'
+        # The saved cell is query period minus comparison period.
+        if claim.time.difference_windows:
+            forward = claim.time.difference_windows[0] == fact.period
+        else:
+            forward = claim.time.subject_year == fact.period[0][:4]
+        amount = fact.value if forward else -fact.value
     direction_applies=m.direction and (m.direct_change or fact.metric.family in ('CHANGE','SHARE_CHANGE'))
     if m.direction and q.signed and (value<0)!=(m.direction=='DOWN'): return 'SIGN'
     if direction_applies:
