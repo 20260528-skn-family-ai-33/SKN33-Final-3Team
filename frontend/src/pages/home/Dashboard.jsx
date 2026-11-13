@@ -63,12 +63,12 @@ function TrendArrow() {
 }
 
 /**
- * 점유율 카드 영역을 '카드 안 품목 두 개'까지만 보이게 할 높이를 잰다.
- * 첫 줄 카드마다 두 번째 품목(품목이 하나면 첫 품목)이 끝나는 위치를 재고, 그중 가장 낮은 곳에 카드 아래 여백을 더한다.
+ * 점유율 카드 영역을 '카드 안 품목 세 개'까지만 보이게 할 높이를 잰다.
+ * 첫 줄 카드마다 세 번째 품목(품목이 그보다 적으면 마지막 품목)이 끝나는 위치를 재고, 그중 가장 낮은 곳에 카드 아래 여백을 더한다.
  * 나머지 품목과 다음 줄 카드는 스크롤로 본다. 화면 폭이 바뀌어 열 수가 달라지거나 카드 높이가 바뀌어도 다시 잰다.
  * 내용이 그 높이 안에 다 들어가면 null(제한 없음).
  */
-const UN_VISIBLE_ITEMS = 2
+const UN_VISIBLE_ITEMS = 3
 function useUnVisibleHeight(deps) {
   const ref = useRef(null)
   const [height, setHeight] = useState(null)
@@ -97,11 +97,6 @@ function useUnVisibleHeight(deps) {
     return () => ro.disconnect()
   }, deps) // eslint-disable-line react-hooks/exhaustive-deps
   return [ref, height]
-}
-
-/** 구역 제목 위의 작은 영문 표시. 앞의 하늘색 선은 구역이 화면에 들어올 때 그어진다(styles/app.css .sec-eyebrow). */
-function Eyebrow({ children }) {
-  return <p className="sec-eyebrow" aria-hidden="true">{children}</p>
 }
 
 /** 점유율 구역(짙은 남색 띠) 배경의 항로 선. 장식용이며 아주 느리게 흐른다. */
@@ -243,7 +238,6 @@ export default function Dashboard({ route }) {
           <div style={{ flex: '2 1 600px', position: 'relative' }}>
             {/* 제목·기간 글자는 상승 화살표보다 위에 그려 화살표가 글자를 가리지 않게 한다. */}
             <div data-reveal="up" style={{ position: 'relative', zIndex: 2 }}>
-              <Eyebrow>TRADE OVERVIEW</Eyebrow>
               <RegionError label="주요 지표" states={data.states.kpi} />
               <p style={{ fontSize: 14, fontWeight: 700, color: '#B0102A' }}>통계 기준 월 {data.statMonth}</p>
               <h2 style={{ marginTop: 8, fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{data.title}</h2>
@@ -271,7 +265,6 @@ export default function Dashboard({ route }) {
             </div>
           </div>
           <div data-reveal="up" data-d="2" style={{ flex: '1 1 320px' }}>
-            <Eyebrow>EXCHANGE RATES</Eyebrow>
             <div className="between" style={{ alignItems: 'flex-end' }}>
               <div>
                 <h2 style={{ fontSize: 22, fontWeight: 800 }}>{data.fxTitle}</h2>
@@ -299,7 +292,6 @@ export default function Dashboard({ route }) {
         <div className="wrap">
           <div data-reveal="up" className="between" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
-              <Eyebrow>TOP EXPORTS</Eyebrow>
               <h2 style={{ fontSize: 26, fontWeight: 800, color: '#15181E' }}>{data.rankTitle}</h2>
               {data.cardsLoading
                 ? <Bone w={170} h={13} style={{ marginTop: 11, marginBottom: 3 }} />
@@ -345,7 +337,6 @@ export default function Dashboard({ route }) {
           <div data-reveal="up" className="card zone-card" style={{ flex: '1 1 440px' }}>
             <div className="between" style={{ alignItems: 'flex-start' }}>
               <div>
-                <Eyebrow>BY PRODUCT</Eyebrow>
                 <h2 className="t2">{data.productTable.title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{data.productTable.sub}</p>
               </div>
@@ -367,7 +358,6 @@ export default function Dashboard({ route }) {
             {/* 왼쪽: 교역국 표, 오른쪽: 수출액 비중. 두 제목을 같은 크기·같은 높이에 둔다. 상세보기는 카드 오른쪽 위를 유지한다. */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 26 }}>
               <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-                <Eyebrow>BY PARTNER</Eyebrow>
                 <h2 className="t2">{data.countryTable.title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{data.countryTable.sub}</p>
                 <RegionError label="교역국별 수출입" states={data.states.countries} />
@@ -384,7 +374,6 @@ export default function Dashboard({ route }) {
                 </div>
               </div>
               <div style={{ flex: '1 1 220px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-                <Eyebrow>EXPORT SHARE</Eyebrow>
                 <div className="between" style={{ alignItems: 'flex-start', gap: 12 }}>
                   <h2 className="t2">{data.countryTable.pieTitle}</h2>
                   <Link to={data.tableLink('COUNTRY')} className="more" style={{ flexShrink: 0 }}>상세보기 →</Link>
@@ -413,7 +402,6 @@ export default function Dashboard({ route }) {
         <div className="wrap">
           <div data-reveal="up" className="sec-h">
             <div>
-              <Eyebrow>MARKET SHARE</Eyebrow>
               <h2 className="t1">한국의 세계시장 점유율</h2>
               <p className="muted" style={{ marginTop: 6 }}>{data.unSub}</p>
             </div>
@@ -455,7 +443,6 @@ export default function Dashboard({ route }) {
         <div className="wrap">
           <div data-reveal="up" className="sec-h">
             <div>
-              <Eyebrow>MARKET NEWS</Eyebrow>
               <h2 className="t1">{data.newsTitle}</h2>
               <p className="muted" style={{ marginTop: 6 }}>{data.newsSub}</p>
             </div>

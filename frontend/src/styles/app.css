@@ -351,11 +351,6 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .zone{position:relative;isolation:isolate;overflow:hidden}
 .zone>.wrap{position:relative;z-index:1}
 
-/* 구역 제목 위 작은 영문 표시: 하늘색 선 + 넓은 자간. 선은 구역이 화면에 들어올 때 왼쪽에서 그어진다 */
-.sec-eyebrow{display:flex;align-items:center;gap:10px;margin:0 0 10px!important;font-size:11.5px;font-weight:800;letter-spacing:.24em;line-height:1;color:#1E6FA8;white-space:nowrap}
-.sec-eyebrow::before{content:'';flex:none;width:28px;height:2px;border-radius:2px;background:linear-gradient(90deg,#3B9BD8,#8FD0F5);transition:width .9s cubic-bezier(.2,.7,.2,1) .25s}
-[data-reveal]:not([data-in]) .sec-eyebrow::before{width:0}
-
 /* 1) 수출입 현황: 연회색 바탕 위에 옅은 지구본 격자(오른쪽)와 가는 바둑판 격자(가장자리로 갈수록 사라짐) */
 .zone-overview{background:#F3F5F8}
 .zone-overview::before{content:'';position:absolute;inset:0;z-index:0;pointer-events:none;
@@ -385,7 +380,6 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .zone-routes path:nth-child(3){animation-duration:70s;stroke:rgba(255,138,154,.14)}
 .zone-routes circle{fill:#8FD0F5;opacity:.35}
 @keyframes route-flow{to{stroke-dashoffset:-660}}
-.zone-share .sec-eyebrow{color:#8FD0F5}
 .zone-share .sec-h{border-bottom-color:rgba(255,255,255,.22)}
 .zone-share .t1{color:#fff}
 .zone-share .sec-h .muted,.zone-share .share-legend,.zone-share .share-note{color:rgba(214,226,238,.74)}
@@ -406,8 +400,6 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
   .zone-share{padding:56px 0 60px!important}
 }
 @media (prefers-reduced-motion:reduce){
-  .sec-eyebrow::before{transition:none}
-  [data-reveal]:not([data-in]) .sec-eyebrow::before{width:28px}
   .zone-routes path{animation:none}
   .rank-card,.news-card{transition:none!important}
 }
