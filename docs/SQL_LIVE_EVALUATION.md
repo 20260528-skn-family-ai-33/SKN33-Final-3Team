@@ -193,12 +193,12 @@ python -m backend.scripts.evaluate_sql_live --run-live --allow-unreviewed-gold -
 ```
 
 `OPENAI_API_KEY`는 기존 환경/.env에서 읽되 로그에 출력하지 않는다. API 요청은 OpenAI 공식 엔드포인트로 고정한다.
-모델 기본값은 기존 SQL Agent와 같은 `gpt-4.1`이며 실제 응답의 모델 버전도 저장한다.
+위 명령을 현재 코드에서 실행하면 SQL Agent와 평가기의 기본값인 `gpt-6-luna`를 사용한다. 이 문서의 평가 당시 기본값은 `gpt-4.1`이었고, 결과에 저장된 실제 모델은 `gpt-4.1-2025-04-14`였다.
 `--allow-unreviewed-gold`는 정답 미검토 상태의 **예비 실행을 명시적으로 선택**하는 옵션이다.
 사람 검토 완료 후에는 이 옵션 없이 실행한다.
 
-[공식 GPT-4.1 모델 안내](https://developers.openai.com/api/docs/models/gpt-4.1)의
-100만 토큰당 입력 $2, 캐시 입력 $0.50, 출력 $8을 기준으로 계산한다(2026-11-09 확인).
+당시 평가 비용은 [공식 GPT-4.1 모델 안내](https://developers.openai.com/api/docs/models/gpt-4.1)의
+100만 토큰당 입력 $2, 캐시 입력 $0.50, 출력 $8을 기준으로 계산했다(2026-11-09 확인). 현재 평가기는 `gpt-6-luna`용 단가를 적용한다.
 이는 API 청구서 금액이 아닌 추정 비용이다. 실행별 최대 비용은 기본 $2이며 호출 전 여유 예산을 확인한다.
 연결·인증·할당량 오류 또는 예산 소진 시 중단하고, 미완료 결과를 완료된 평가로 표시하지 않는다.
 호출 시간 초과는 운영 `generated_analysis`의 최대 2회 재생성 정책을 따른다. 시간 제한을 늘리지 않는다.

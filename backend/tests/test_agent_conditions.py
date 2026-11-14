@@ -177,6 +177,30 @@ class ConditionTest(unittest.TestCase):
                 self.assertEqual(self.step.status,'DONE')
                 self.assertEqual(self.task.conditions.country_codes,['US'])
 
+    def test_us_trade_partner_keeps_original_mention_and_resolves_code(self):
+        self.state.input.question = '2024년·2025년 대미 수출액 비교'
+        for mention in ('미국', '대미', 'US'):
+            with self.subTest(mention=mention):
+                self.task.slots = TaskSlots(countries=[{'mention': mention, 'name': '미국'}])
+                check_conditions(self.store, self.state, self.step)
+                self.assertEqual(self.step.status, 'DONE')
+                self.assertEqual(self.task.conditions.country_codes, ['US'])
+                country, = self.task.slots.countries
+                self.assertEqual((country.mention, country.name), ('대미', '미국'))
+
+    def test_us_trade_partner_requires_original_expression_and_matching_country(self):
+        for question, mention, name in [
+            ('2024년·2025년 수출액 비교', '미국', '미국'),
+            ('대미지 수출액 비교', '미국', '미국'),
+            ('대미지 수출액 비교', '대미', '미국'),
+            ('대미 수출액 비교', '중국', '중국'),
+        ]:
+            with self.subTest(question=question, mention=mention):
+                self.state.input.question = question
+                self.task.slots = TaskSlots(countries=[{'mention': mention, 'name': name}])
+                check_conditions(self.store, self.state, self.step)
+                self.assertEqual(self.step.status, 'FAILED')
+
     def test_unknown_or_mismatched_country_code_asks_instead_of_dropping(self):
         for mention, choices in (('XX', ['US']), ('CN', ['US', 'CN'])):  # 없는 코드(UK→GB 같은 경우), 국가명과 어긋난 코드
             with self.subTest(mention=mention):
@@ -430,6 +454,60 @@ class ConditionTest(unittest.TestCase):
         check_conditions(self.store,self.state,self.step)
         self.assertEqual(self.step.status,'FAILED')
         self.assertIsNone(self.state.pending)
+
+    def test_explicit_annual_base_overrides_reversed_planner_roles(self):
+        from backend.app.agents.state import Period
+
+        self.state.input.question = '2025년 대비 2024년 수출액 변화율'
+        self.task.slots = TaskSlots(
+            comparison_requested=True,
+            period=Period(start='2025-01-01', end='2025-12-01'),
+            compare_period=Period(start='2024-01-01', end='2024-12-01'),
+        )
+        with patch('backend.app.agents.conditions.trade.resolve_period'):
+            check_conditions(self.store, self.state, self.step)
+        self.assertEqual(self.task.conditions.period.start.year, 2024)
+        self.assertEqual(self.task.conditions.compare_period.start.year, 2025)
+
+    def test_explicit_base_follows_either_year_even_with_reversed_slots(self):
+        from backend.app.agents.conditions import comparison_windows
+        from backend.app.agents.state import Period
+
+        early = Period(start='2021-01-01', end='2021-12-01')
+        late = Period(start='2022-01-01', end='2022-12-01')
+        for base, subject in [(early, late), (late, early)]:
+            question = f'{base.start.year}년 대비 {subject.start.year}년 수출액'
+            for slots in [(early, late), (late, early)]:
+                with self.subTest(question=question, slots=slots):
+                    self.assertEqual(comparison_windows(question, *slots), (subject, base))
+
+    def test_listed_annual_windows_choose_earlier_base_for_either_order(self):
+        from backend.app.agents.conditions import comparison_windows
+        from backend.app.agents.state import Period
+
+        early = Period(start='2021-01-01', end='2021-12-01')
+        late = Period(start='2022-01-01', end='2022-12-01')
+        for first, second in [(2021, 2022), (2022, 2021)]:
+            for question in [f'수출액을 {first}년과 {second}년으로 비교하고 변화율을 알려줘',
+                             f'{first}년·{second}년 대미 수출액 비교', f'비교할 기간은 {first}년과 {second}년',
+                             f'{first}년과 {second}년의 수출액 변화율을 알려줘']:
+                for slots in [(early, late), (late, early)]:
+                    with self.subTest(question=question, slots=slots):
+                        self.assertEqual(comparison_windows(question, *slots), (late, early))
+
+    def test_unresolved_annual_roles_preserve_planned_windows(self):
+        from backend.app.agents.conditions import comparison_windows
+        from backend.app.agents.state import Period
+
+        early = Period(start='2021-01-01', end='2021-12-01')
+        late = Period(start='2022-01-01', end='2022-12-01')
+        for question in ['2022년 기준으로 2021년과 비교한 수출액', '2022년 기준으로 2021년 수출액과 비교해줘',
+                         '2022년 기준으로 2021년에 견주어 본 수출액', '2022년을 기준으로 2021년 대비',
+                         '2021년부터 2022년까지 수출액', '2021년과 2022년 중 전자를 기준으로 비교',
+                         '2021년과 2022년 중 전자의 수출액 비교']:
+            for slots in [(early, late), (late, early)]:
+                with self.subTest(question=question, slots=slots):
+                    self.assertEqual(comparison_windows(question, *slots), slots)
 
     def test_exact_product_and_country_period_are_resolved_against_sqlite(self):
         self.state.input.question='미국 기초화장품 수출액'

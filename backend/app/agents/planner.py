@@ -50,6 +50,7 @@ NAND·DRAM·RAM·OLED처럼 실제 품목이나 기술을 가리키는 약어를
 월 기간은 YYYY-MM-01 양끝 포함, 연도만 있으면 1월~12월입니다.
 상대 기간은 recent_months로만 쓰고 period는 null입니다. "최근 1년"은 recent_months=12입니다. 기사 기간은 일 단위입니다.
 comparison_requested는 비교 요청에만 true, 요청이 없으면 null입니다.
+두 기간의 변화율에서 period는 결과 기간, compare_period는 분모인 기준 기간입니다. 사용자가 기준을 지정하면 그 기간을 compare_period로 두세요. 두 기간만 단순 나열하면 어순과 무관하게 앞선 시기를 기준으로 두세요. 서로 다른 연도에 기준 표현과 비교 표현이 함께 걸리면 단순 나열 규칙을 적용하지 마세요.
 이전 비교를 명시적으로 지칭한 경우에만 이전 compare_period를 명시하세요.
 ranking_group은 RANKING에 COUNTRY/HS6, 모호하면 null입니다.
 MARKET_SHARE에서는 품목별 비중에만 ranking_group=HS6를 쓰고 custom_query에 필요한 계산을 적습니다.
@@ -68,7 +69,8 @@ custom_query는 월별 추이/국가·HS6 금액 순위/국가별 비중 템플�
 필요한 계산을 한국어 한 문장으로 씁니다. 물량·단가·품목별 비중 등이 해당합니다.
 분기별·반기별 합계, 전월·전분기 대비 증감액·증감률처럼 월별 값을 묶거나 서로 빼는 계산도
 템플릿에 없으므로 custom_query에 씁니다(예: "2025년 분기별 수출액 합계", "월별 수출액과 전월 대비 증감액").
-전년 동기 비교만 comparison_requested로 처리합니다.
+두 기간의 수출액·수입액 합계 차이(달러)와 변화율은 기간 비교 템플릿이 제공합니다. 이 비교만 요청하면 comparison_requested=true로 두고 custom_query는 null로 둡니다.
+두 기간의 수출액·수입액 차이를 묻고 두 합계와 달러 차액으로 질문 전체에 답할 수 있으면 amount_difference_only=true입니다. 단순 비교, 변화율, 추이, 원인 등 다른 내용도 요청하면 null입니다.
 앞 분석 결과를 사용하는 경우 source_tasks에 1부터 시작하는 앞 질문 번호를 씁니다.
 리포트만 요청하면 REPORT 하나로 반환합니다. 리포트에 들어갈 통계 때문에 STATISTICS를 추가하지 마세요.
 예: "미국 화장품 수출 추이 보여주고 이 결과로 보고서 작성해줘" → STATISTICS(source_tasks=[]), REPORT(source_tasks=[1]).

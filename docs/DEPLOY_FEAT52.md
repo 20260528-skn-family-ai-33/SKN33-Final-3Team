@@ -87,13 +87,16 @@ sha256sum data/ml/monthly_models/*.joblib data/ml/monthly_models/*.registry.json
 
 ### API·워커 (`backend/.env.api.example` 기준)
 
-Writer의 최종 운영 모델은 `gpt-6-luna`다. `API_COMPOSE_MODEL`을 생략하면 이 모델을 사용한다. 배포 환경에서 값을 지정하면 지정한 모델로 호출하고 실행 기록에도 그 이름을 남긴다. [Dev 평가](evaluations/WRITER_DEV_EVALUATION.md) · [독립 Holdout 평가와 선정 근거](evaluations/WRITER_HOLDOUT_EVALUATION.md)
+플래너의 기본값은 `gpt-5.6-luna`이고, 의도 분류·일반 및 문장형 Writer·SQL 생성의 기본값은 `gpt-6-luna`다. 배포 환경에서 값을 지정하면 지정한 모델로 호출하고 실행 기록에도 그 이름을 남긴다. 단신속보 분석·기사 RAG 요약·HS 코드 요약 생성도 기본 모델로 `gpt-6-luna`를 사용한다. [Dev 평가](evaluations/WRITER_DEV_EVALUATION.md) · [독립 Holdout 평가와 선정 근거](evaluations/WRITER_HOLDOUT_EVALUATION.md)
 
 | 키 | 값 | 변경 |
 |---|---|---|
 | `API_CHAT_AGENT_ENABLED` | `true` | 추가. 새 질문을 LangGraph 워커로 접수한다. 기존 미완료 작업은 원래 실행기로 마친다 |
 | `API_COMPOSE_TIMEOUT_SECONDS` | `20` | 추가 |
-| `API_SQL_MODEL` | `gpt-4.1` | 추가 (C-30 미정, 임시값) |
+| `API_PLANNER_MODEL` | `gpt-5.6-luna` | 플래너 |
+| `API_INTENT_MODEL` | `gpt-6-luna` | 직접 입력 해석 |
+| `API_COMPOSE_MODEL`, `API_COMPOSE_TEXT_MODEL` | `gpt-6-luna` | 일반·문장형 Writer |
+| `API_SQL_MODEL` | `gpt-6-luna` | SQL 생성 |
 | `API_SQL_TIMEOUT_SECONDS` | `20` | 추가 |
 | `API_SQL_EXECUTION_SECONDS` | `30` | 추가 |
 | `API_CHAT_MAX_RECOVERIES` | `2` | 추가 |
@@ -102,7 +105,8 @@ Writer의 최종 운영 모델은 `gpt-6-luna`다. `API_COMPOSE_MODEL`을 생략
 | `API_ML_GROWTH_MODEL_PATH` | (비움) | 추가. 비우면 위 폴더에서 모델 A와 같은 기준월 B 파일을 찾는다 |
 | `API_ML_SNAPSHOT_PATH` | - | **삭제** (더 이상 읽지 않음) |
 
-- 기존 `OPENAI_API_KEY`, `API_REDIS_URL`, `API_REDIS_PREFIX`, `API_INTENT_MODEL` 등은 그대로 쓴다.
+- 배포 전 API·워커가 읽는 운영 `.env`에서 기존 `API_INTENT_MODEL=gpt-4.1-mini`와 `API_SQL_MODEL=gpt-4.1`을 각각 `gpt-6-luna`로 바꾸거나 해당 설정 줄을 삭제해 코드 기본값을 적용한다. 플래너 모델은 `API_PLANNER_MODEL`로 지정하며 기본값은 `gpt-5.6-luna`다.
+- 기존 `OPENAI_API_KEY`, `API_REDIS_URL`, `API_REDIS_PREFIX` 등은 그대로 쓴다.
 - 자유 SQL(LLM SQL)은 지금 `.env`의 DB 계정으로 `READ ONLY` 트랜잭션에서 돈다. 배포 전에 읽기 전용 DB 계정으로 바꾸는 것이 설계 결정이다(`TODO(D-41)`).
 
 ### 스케줄러 (`.env.sample` 기준, 10번을 할 때만)
@@ -196,7 +200,7 @@ python -c "from backend.app.api.config import Settings; from backend.app.agents.
 
 ## 롤백
 
-1. 코드를 이전 `main`으로 되돌리고 API·워커를 재시작한다.
+1. 코드를 이전 `main`으로 되돌린다. 이전 플래너는 `API_INTENT_MODEL`을 읽으므로 배포 때 변경한 모델 설정을 배포 직전 값으로 복원한다. 이전에 없던 키는 해당 줄을 삭제한 뒤 API·워커를 재시작한다.
 2. `API_CHAT_AGENT_ENABLED=false`로 두면 새 질문은 기존 실행기로 돌아간다. 이미 접수된 에이전트 작업은 워커가 마친다.
 3. 모델 파일·DB 마이그레이션(`RPT_ON_DEMAND` 활성화)은 그대로 두어도 기존 코드에 영향이 없다.
 

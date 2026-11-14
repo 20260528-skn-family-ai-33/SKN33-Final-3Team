@@ -65,7 +65,7 @@ D-01~71은 별도 표기가 없으면 2026-10-29 결정이며, D-72~88은 2026-1
 ### 플래너·조건
 | ID | 결정 |
 |---|---|
-| D-20 | 플래너는 `API_INTENT_MODEL`로 모델을 선택하며 기본값은 `gpt-4.1-mini`다. Writer(Compose)의 최종 운영 모델은 2026-11-10 Dev·Holdout 평가로 선정한 `gpt-6-luna`다. `API_COMPOSE_MODEL`을 지정하면 그 값이 우선하고, 생략하면 선정 모델을 사용한다. (Q-15) |
+| D-20 | 플래너는 기본적으로 `gpt-5.6-luna`를 사용한다. 직접 입력 해석, 일반·문장형 Writer, SQL 생성은 `gpt-6-luna`를 사용한다. 역할별 환경변수는 §13 설정 표를 따른다. |
 | D-21 | 플래너·compose·직접 입력 해석(§13.6)의 LLM 호출이 실패하면 1번 재시도한다. 대기 시간은 플래너 10초, compose 20초, 직접 입력 해석 10초다. LLM SQL 생성(20초)은 재시도 대신 §13.5의 재생성 규칙(최대 2회)을 따른다(§13.3, C-28). (Q-16) |
 | D-22 | 후속 질문의 기본 조건은 생략하면 이어받고, 명시적인 전체 범위는 해제한다. 비교·순위·기사 기간은 D-73의 별도 규칙을 따른다. (Q-18) |
 
@@ -341,7 +341,7 @@ actions[], report_id, warnings[]
 
 **반드시**
 - 숫자(합계·증감률·비중·순위)는 SQL이나 코드가 계산한다. compose는 digest의 값만 옮긴다.
-- HS·국가 코드는 사전·국가 표에 있는 값만 쓴다. LLM 출력은 질문 속 표현을 그대로 옮긴 것만 받는다.
+- HS·국가 코드는 사전·국가 표에 있는 값만 쓴다. 플래너의 표현을 질문 원문과 대조한다. 질문에 ‘대미’가 있고 플래너가 이를 ‘미국’으로 풀어 썼으면, 조건 확인 단계에서 국가 표의 `US`를 확인하고 `mention=대미`, `name=미국`을 보존한다.
 - LLM SQL은 READ ONLY 세션 + sqlglot 검사(SELECT·허용 테이블·`article.body_masked` 차단·LIMIT) + 시간 상한으로 실행한다(D-41, D-65).
 - 생성 SQL은 확정 조건과 다른 데이터를 읽지 않는다: 국가·HS 코드를 리터럴로 거르는 곳은 확정 값만 쓰고(거르지 않은 전체 범위는 비중 분모로 허용, 쿼리 어딘가는 확정 값으로 걸러야 함), 수출입 표마다 WHERE에 확정 HS 판본 하나와 확정·비교 기간 안의 trade_month를 건다. 무역수지처럼 수출·수입 표를 함께 읽는 것은 허용한다(2026-11-05).
 - 질문·이전 대화·직접 입력 답은 신뢰할 수 없는 입력이다. 프롬프트에 데이터로 넣고 지시로 따르지 않는다.
@@ -365,11 +365,11 @@ actions[], report_id, warnings[]
 | C-31 | (해결) 선행 결과의 국가·품목 선택 확인 정책 | 명시한 개수·기준이면 자동 실행, 모호하면 INPUT_SELECTION으로 확인(D-95, 사용자 승인) |
 | C-27 | digest 목록 행 상한과 ML 대상별 행 수 공식(§11.2). 8KB 안에서 compose 품질을 보고 조정 | 60행, 대상마다 `min(10, 60 // 대상 수)`행 |
 | C-29 | **결정 보류 — ML 연결 때 확인.** 서버에 둘 모델 파일(v1·v3 앙상블)과 최신 기준월 스냅샷의 실제 파일 이름·버전. `API_ML_MODEL_PATHS`·`API_ML_SNAPSHOT_PATH` 값 | `.env.api.example`의 `two_stage_c100_*_v2.joblib`, `features_snapshot_py311_latest_v2.pkl`(예시) |
-| C-30 | LLM SQL 모델 확정. 골든셋(D-61)의 LLM SQL 질문으로 `gpt-4.1-mini`·`gpt-4.1`·`gpt-5.4`를 비교해 정확도·비용·응답 시간을 보고 정한다 | `gpt-4.1` |
+| C-30 | SQL 기본 모델 확정 | `gpt-6-luna` |
 | C-33 | 병렬 워커(D-105)의 동시 스레드 상한. OpenAI 요청 한도(분당 토큰)·RDS 접속 수·워커 메모리를 동시 질문 부하로 측정해 정한다 | `API_WORKER_MAX_THREADS=16`, 접속 풀 = 스레드 수 × 2 + 본 루프 2(워커 1대 최대 34개). 배포 전 RDS `max_connections`가 API 서버 풀·수집기·관리 접속과 합쳐 충분한지 확인하고 결과를 여기 적는다(미확인) |
 | C-32 | 주인 없는 에이전트 작업의 유예 시간(D-106). 버전 2는 지나면 넘겨받아 실행하고, 다른 queue의 버전 3은 지나면 새 질문 때 만료한다. 다른 환경 워커의 재시작·배포 중단 시간에 맞춰 정한다 | `API_AGENT_ADOPT_GRACE_SECONDS=600`(임대 시간과 같음) |
 | C-34 | 병렬 워커(D-105)에서 ML 전용 스레드 줄을 기다리는 상한. 예측 시간 상한(ml 30초)과 따로 센다. 동시 유망시장 질문 수와 예측 시간을 측정해 정한다 | `API_ML_QUEUE_SECONDS=60` |
-| C-35 | 플래너·compose 모델과 GPT-5 계열 추론 강도. 이슈 86 평가셋(`backend/evals/agent`, [AGENT_EVAL.md](AGENT_EVAL.md))으로 기준선 `gpt-4.1-mini`와 후보 `gpt-5.6-luna`·`gpt-6-luna`를 비교해 정한다. GPT-5·6 계열은 temperature를 보내지 않는다 | `gpt-4.1-mini`, 추론 강도 미설정 |
+| C-35 | 플래너·Writer 기본 모델은 D-20으로 확정. 플래너 추론 강도는 `API_LLM_REASONING_EFFORT`로 설정한다. | 플래너 추론 강도 미설정, Writer `low` |
 | C-28 | §13의 운영 조정값: 노드별 예약 시간(§13.4), 비슷한 국가 기준값, compose·LLM SQL 시간 상한(§13.3) | 비슷한 정도 0.6·후보 5개, compose 20초, SQL 생성 20초·실행 30초, 노드 시간은 §13.4 표 |
 
 
@@ -526,7 +526,7 @@ actions[], report_id, warnings[]
 §1·§10의 결정을 구현할 때 사람마다 다르게 만들지 않도록 형식을 고정한다. 여기서 새로 정한 값 중 운영 데이터로 바꿀 수 있는 것은 C-27로 묶었다.
 
 ### 11.1 플래너 (`agents/planner.py`)
-- **호출:** `api/intent.py`의 `OpenAIIntentProvider`와 같은 방식으로 `client.responses.parse(model=API_INTENT_MODEL, instructions=PLANNER_PROMPT, input=JSON, text_format=state.PlannerOutput, max_output_tokens=2000, temperature=0, store=False)`를 부른다. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-20, D-21). `max_retries=0`으로 SDK 자동 재시도는 끈다.
+- **호출:** `api/intent.py`의 `OpenAIIntentProvider`와 같은 방식으로 `client.responses.parse(model=API_PLANNER_MODEL, instructions=PLANNER_PROMPT, input=JSON, text_format=state.PlannerOutput, max_output_tokens=2000, store=False)`를 부른다. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-20, D-21). `max_retries=0`으로 SDK 자동 재시도는 끈다.
 - **입력 JSON:** `{"question": input.question, "previous_conditions": input.context.conditions(없으면 {}), "recent": [{"question", "intent", "summary"} … 최근 5건]}`. 이전 대화는 데이터로만 넣는다(§8).
 - **출력:** `state.PlannerOutput{tasks: [PlannedTask{intent, question, slots: PlannerSlots, custom_query, source_tasks, target_selections}]}`. 단계·조건·결과·확인 값은 플래너가 넣지 못한다(모델이 거부).
 - **프롬프트 규칙(`PLANNER_PROMPT`):** `intent.py` `PROMPT`의 슬롯 규칙(국가는 `{mention: 질문 원문 그대로, name: 정식 한국어 국가명}`, HS 코드 생성 금지, 기간은 월 경계, 연도만 있으면 1~12월, `recent_months`는 상대 기간)을 그대로 가져오고 다음을 더한다.
@@ -567,7 +567,7 @@ actions[], report_id, warnings[]
 
 | kind (tool·template) | 칸 | 60행을 넘을 때 |
 |---|---|---|
-| `TREND` (sql·TREND, `trade.trends`) | `targets: [{hs_code, hs_ver, name, country_code, country_name, total_usd, compare_total_usd, change_pct, verified_months, requested_months, monthly_avg_usd, compare_monthly_avg_usd, monthly: [{month, amount_usd, compare_amount_usd}]}]`. 대상은 품목×국가 조합이다(D-89). 품목이 없으면 `hs_code`가 null(전체 품목), 국가가 없으면 `country_code`가 null(전체 국가)이다. 대상이 하나여도 `targets`에 1개를 담는다(§14.2) | 대상은 결과표에 들어간 대상 중 조회 기간 금액 상위 10개까지만 담고(§14.2 자르기 순서), `monthly`는 담은 대상마다 최근 `60 // 담은 대상 수`개월만 담는다 |
+| `TREND` (sql·TREND, `trade.trends`) | `targets: [{hs_code, hs_ver, name, country_code, country_name, total_usd, compare_total_usd, period_difference_usd, change_pct, verified_months, requested_months, monthly_avg_usd, compare_monthly_avg_usd, monthly: [{month, amount_usd, compare_amount_usd}]}]`. 대상은 품목×국가 조합이다(D-89). 품목이 없으면 `hs_code`가 null(전체 품목), 국가가 없으면 `country_code`가 null(전체 국가)이다. 대상이 하나여도 `targets`에 1개를 담는다(§14.2) | 대상은 결과표에 들어간 대상 중 조회 기간 금액 상위 10개까지만 담고(§14.2 자르기 순서), `monthly`는 담은 대상마다 최근 `60 // 담은 대상 수`개월만 담는다 |
 | `RANKING` (sql·RANKING, `trade.rankings`) | `group`(COUNTRY·HS6), `total_usd`, `top: [{rank, code, name, amount_usd, share_pct, yoy_pct, mom_pct}]` | 상위 10행만(D-42) |
 | `SHARE` (sql·SHARE, `trade.market_shares`) | `share_basis`, `denominator_usd`, `items: [{code, name, amount_usd, share_pct}]`(상위 10 + 상위 10 밖의 지정 국가 + 기타, §14.2) | 해당 없음(최대 31행) |
 | `LLM_SQL` (sql·LLM_SQL) | `columns: [{key, unit}]`, `rows: [...]`(결과표 앞부분), `sql_summary` | 앞 60행 |
@@ -594,11 +594,15 @@ actions[], report_id, warnings[]
 
 ### 11.4 숫자 대조 (`agents/verify.py`)
 
+- “A년을 비교 기간으로 한 B년 수출액”은 A년을 분모, B년을 대상으로 대조한다. 연도를 월별 금액 앞에 한 번만 밝힌 경우에는 그 연도와 각 월을 함께 확인한다. 명시된 비교·대상 기간의 시작일과 종료일은 같은 스냅샷의 각 기간과 대조한다.
+- 생성 SQL의 연간 합계 열은 원본 집계식과 국가·품목·판본·기간 필터로 확인한다. 국가 코드로 연결한 내부 조인의 국가 역할 조건과, 다음 해 시작일을 제외하는 반개방 날짜 구간도 같은 연간 합계를 증명할 수 있다.
+- 전체 국가·전체 품목 수출액도 각 `SUM(amount_usd)`가 읽은 연도에 연결한다. 두 연간 합계를 뺀 열에는 SQL 왼쪽과 오른쪽 피연산자의 연도를 순서대로 연결한다. “B년 수출액은 A년보다 X달러 많다·적다”는 B년 합계에서 A년 합계를 뺀 값의 부호와 크기를 저장된 차액 셀에 대조한다.
+
 저장한 초안은 `judge_draft(state, known_names, snapshots=..., countries=...)`로 Writer 호출 없이 다시 판정할 수 있다. 같은 입력으로 그래프의 `verify`가 동일한 판정을 적용한다. 실패 피드백에는 결론·설명·요약 위치와 문제 구절을 담고, 근거를 특정하면 단계 ID와 셀 경로를 담는다. 요약 판정은 본문 문장 번호를 사용하지 않는다. 실패한 요약 원문은 내부 판정에 보관해 재작성할 때 복원하고, 최종 답변의 대화 요약에서는 제외한다.
 
 한 문장의 일부 주장만 실패하면 `confirmed_claims`에 확인된 주장과 이를 뒷받침하는 셀 하나를 남긴다. 결론·설명·요약의 원문에서 `span=(start,end)`는 Python 문자 단위의 반열린 범위다. `PRESERVE`는 확인된 사실, `CORRECT`는 근거와 불일치하는 구절, `REVIEW`는 교정을 특정할 수 없는 경우다. 근거 만료·불명확한 대조·보호 구절과 겹치는 위치는 교정 지시를 생성하지 않는다. 재작성 후보 판정과 공개 응답의 문장별 검증 형식은 기존 그래프 규칙을 따른다.
 
-Verify는 기사 발행일의 일자를 통계 수량에서 제외하며 같은 문장에 있는 실적·비교 방향은 따로 검사한다. 분기와 축약 월 범위는 저장 기간에 맞추며, 월별 금액이 0인 행과 금액이 null인 행을 구별한다. 전체 금액을 분모로 명시한 경우에는 저장된 `denominator_usd`를 확인한다. 시장의 증가·감소 예상과 분류 불가는 해당 시장의 `growth_outlook`으로 대조하고, 과거 수출액은 `exp_12m`으로 검사한다. 요약이 첫 Task에서 확인되지 않을 때 다른 Task에서 일치한 주장은 `OUTSIDE_SUMMARY_SCOPE`, 대화 이력에만 있는 수치는 `HISTORY_ONLY`로 표시한다. 저장된 차액 셀이 없는 경우에는 `NO_DIRECT_CHANGE_CELL`로 표시한다. 세 사유 모두 검토 요청이다.
+Verify는 기사 발행일의 일자를 통계 수량에서 제외하며 같은 문장에 있는 실적·비교 방향은 따로 검사한다. 분기와 축약 월 범위는 저장 기간에 맞추며, 월별 금액이 0인 행과 금액이 null인 행을 구별한다. 전체 금액을 분모로 명시한 경우에는 저장된 `denominator_usd`를 확인한다. 시장의 증가·감소 예상과 분류 불가는 해당 시장의 `growth_outlook`으로 대조하고, 과거 수출액은 `exp_12m`으로 검사한다. 요약이 첫 Task에서 확인되지 않을 때 다른 Task에서 일치한 주장은 `OUTSIDE_SUMMARY_SCOPE`, 대화 이력에만 있는 수치는 `HISTORY_ONLY`로 표시한다. 차액 주장이 검증되지 않고 저장된 차액 셀도 없으면 `NO_DIRECT_CHANGE_CELL`로 표시한다. 세 사유 모두 검토 요청이다.
 
 
 스냅샷 없이 저장된 SQL digest로 다시 판정할 때, 조회 기간 키가 빠져 있으면 그 단계를 소유한 Task의 확정 조회 기간을 사용한다. 원래 digest에 기록된 기간과 실행 스냅샷을 우선하고, 만료된 스냅샷의 근거를 복구하는 데에는 사용하지 않는다.
@@ -606,7 +610,7 @@ Verify는 기사 발행일의 일자를 통계 수량에서 제외하며 같은 
 
 - **대상:** `Draft.sentences()`의 문장마다 숫자 토큰을 뽑는다. 결론 문장은 해당 Task의 근거, 설명 문장은 모든 Task의 근거와 대조한다. `turn_summary`는 첫 Task의 근거로 검사한다. compose 입력은 작은 digest지만 **SQL·ML 검증 근거는 해당 실행에서 저장한 스냅샷**이다.
 - **내부 처리 단계:** `verify_claims.py`는 숫자를 근거 값과 비교하기 전에 불변 `Claim`으로 해석한다. 각 주장에 값·배수·단위, 지표·수출입·집계 방식, 대상과 개별/묶음 구분, 기간과 비교 기준을 함께 보존한다. 문장을 나눌 때는 앞 주장의 국가·품목·연도·기간·지표를 각각 상속하고 명시된 차원만 갱신한다. `verify_evidence.py`는 저장 컬럼의 원래 key·label과 소스/행 경로를 보존한 `Fact`를 만든다. 컬럼 label은 지표 메타데이터이며 국가·품목명이 아니다. `verify.py`는 **한 Fact가 해당 Claim의 모든 조건을 만족하는지** 확인한 뒤 수치를 대조한다. 여러 행의 값·대상·기간을 조합하거나 일치하는 숫자를 찾아 문장의 의미를 바꾸지 않는다. 내부 `inspect_sentence()`로 해석된 주장과 일치한 소스/행/컬럼 경로를 검사할 수 있으며, compose·state·SQL·runtime의 공개 계약은 바꾸지 않는다.
-- **금액과 증감의 귀속:** 수치마다 비교 표현과 증감 술어를 연결한다. ‘전년 동월 대비 5.2% 감소한 3억 달러’에서 증감률은 전년 비교 열, 3억 달러는 당기 금액 열을 사용한다. ‘전년 수출액’은 원본 비교 기간이 정확히 12개월 전인 비교기 금액 열에서 확인한다. 전월은 직전 한 달을 확인한다. 명시 날짜는 저장 기간과 별도로 대조한다. 달러 증감은 저장된 증감액 열에서만 확인하며, 일반 증감 열은 원본 두 기간이 주장한 비교 간격과 맞아야 한다. 열을 선택한 뒤 표시 자릿수로 반올림한다.
+- **금액과 증감의 귀속:** 수치마다 비교 표현과 증감 술어를 연결한다. ‘전년 동월 대비 5.2% 감소한 3억 달러’에서 증감률은 전년 비교 열, 3억 달러는 당기 금액 열을 사용한다. ‘전년 수출액’은 원본 비교 기간이 정확히 12개월 전인 비교기 금액 열에서 확인한다. 전월은 직전 한 달을 확인한다. 명시 날짜는 저장 기간과 별도로 대조한다. 달러 증감은 저장된 증감액 열로 확인한다. “A년 X달러에서 B년 Y달러로 Z달러 증가·감소”처럼 한 문장에 두 연간 합계가 있으면, 같은 스냅샷·대상·수출입 방향으로 검증된 두 합계의 원래 값으로 Y − X를 구해 Z의 크기와 방향을 대조하고 두 셀 경로를 근거로 남긴다. 일반 증감 열은 원본 두 기간이 주장한 비교 간격과 맞아야 한다. 열을 선택한 뒤 표시 자릿수로 반올림한다.
 - **비교 표현과 증감 부정:** 수치 앞의 전년·전월 기준과 비교 표현(대비, 보다, 에 비해, 과 비교해 등)을 함께 읽는다. 예를 들어 “전년 동월과 비교해”와 “지난해 같은 달에 비해”는 전년 열을 요구한다. 인식한 비교 표현의 기준을 해석할 수 없거나 서로 충돌하면 해당 수치는 확인 필요다. “20% 감소하지 않았다”는 대상·기간·지표가 맞는 셀에서 “20% 감소”의 참·거짓을 뒤집는다. 일치하는 긍정 근거가 하나라도 있으면 부정문은 통과하지 않으며, 사용할 근거가 없어도 확인 필요다.
 - **점유율 변화(%p):** 전년·전월 비교는 같은 대상의 점유율 변화 셀에서 확인한다. 열 이름·라벨이 비교 기준을 명시하면 그 기준을 사용한다. 일반 `share_change_pp`는 저장된 당기·비교기 구간 또는 행의 월과 비교 월이 해당 간격을 입증할 때만 전년·전월 주장의 근거가 된다. 같은 값의 다른 비교 열이나 % 열은 사용할 수 없다. 기준이 없거나 열 이름·라벨이 충돌하면 해당 비교 주장은 확인 필요다.
 - **근거 재사용:** 한 번의 verify 실행에서 단계별 원본 행을 Fact로 한 번 변환한다. 결론은 해당 Task의 단계, 설명은 전체 단계, 요약은 첫 Task의 단계를 순서대로 사용한다. 같은 단계 조합은 이름 사전과 근거를 재사용한다. 한 실행 안에서 후보 이름과 국가명 집합이 모두 같은 사전은 동일한 행 이름·답변 문장에서 찾은 이름 위치와 모호성 판정을 공유한다. 조합이 달라지면 원래 행의 식별자로 별칭·묶음과 근거의 소스 번호를 다시 정한다. 각 문장의 주장은 개별 해석하고 다음 실행에서는 스냅샷을 새로 준비한다.
@@ -712,7 +716,7 @@ Verify는 기사 발행일의 일자를 통계 수량에서 제외하며 같은 
   - 조건 확인에 실패한 NO_DATA Task는 도구가 남긴 실제 사유를 전달한다. 되묻기 한도 초과 시에는 "조건을 확인해 다시 질문해 주세요."를 쓴다(D-15). 도구 오류 사유가 없으면 단계 없는 Task의 `applied_defaults` 안내를 사용한다. 이 안내도 적용되지 않으면 "조건에 맞는 분석 결과가 없습니다."를 쓴다.
 
   모든 Task가 고정 문구면 LLM을 부르지 않는다. 실패·미지원만 있으면 `turn_summary`는 빈 문자열이고 최근 조건·요약은 바꾸지 않는다. 리포트 성공은 D-93의 코드 작성 요약과 D-72의 조건 갱신 규칙을 적용한다.
-- **호출:** `client.responses.parse(model=compose_model, instructions=prompt, input=JSON, text_format=state.Draft, max_output_tokens=tokens, store=False)`, 시간 상한 `API_COMPOSE_TIMEOUT_SECONDS`(20초), SDK `max_retries=0`이다. 두 Luna 후보는 `reasoning.effort=low`를 쓰며, mini는 `temperature=0`을 쓴다. 추론과 답변에 쓰는 출력 상한은 일반 답변 3,000토큰, 문장형 답변(D-98) 6,000토큰이다. 초안과 재시도에 같은 상한을 적용한다. 워커 요청과 실행 기록은 모두 `API_COMPOSE_MODEL`에서 선택한 모델을 사용한다.
+- **호출:** `client.responses.parse(model=compose_model, instructions=prompt, input=JSON, text_format=state.Draft, max_output_tokens=tokens, store=False)`, 시간 상한 `API_COMPOSE_TIMEOUT_SECONDS`(20초), SDK `max_retries=0`이다. 두 Luna 후보는 `reasoning.effort=low`를 쓰며, mini는 `temperature=0`을 쓴다. 추론과 답변에 쓰는 출력 상한은 일반 답변 3,000토큰, 문장형 답변(D-98) 6,000토큰이다. 초안과 재시도에 같은 상한을 적용한다. 워커 요청과 실행 기록은 모두 답변 형식에 따라 `API_COMPOSE_MODEL` 또는 `API_COMPOSE_TEXT_MODEL`에서 선택한 모델을 사용한다.
   - 최초 초안의 호출 실패·파싱 실패·`Draft` 검증 실패(일반 답변 D-50, 문장형 답변 D-98)는 1번만 다시 부른다(D-21). 수치 불일치로 이미 교정 호출을 한 경우에는 다시 호출하지 않는다. 교정 응답을 사용할 수 없으면 기사 인용 번호가 유효한 원래 초안을 유지하고 재검증해 불일치 문장에 “확인 필요”를 표시한다(FR-101-08).
   - 그래도 실패하면 실제 자료로 대체 결론을 만든다. 원인 질문에서 통계만 남으면 확인된 수치와 기사 검색 실패 사유를, 기사만 남으면 확인된 기사 사실과 출처 번호를 제시하고 통계·인과 판단의 한계를 밝힌다. 자료가 모두 없으면 원인과 함께 NO_DATA를 표시한다(D-67, D-72).
 - **입력 JSON** (LLM이 쓸 Task만):
@@ -758,7 +762,7 @@ PR #84·#85 통합 뒤에는 앞서 저장한 마지막 6개 초안을 같은 �
 
 #### 세 모델을 같은 Dev 문항으로 비교하는 방법
 
-저장소 루트에서 다음 명령을 실행한다. 기본으로 `gpt-4.1-mini`, `gpt-5.6-luna`, `gpt-6-luna`를 비교한다. 일부만 실행할 때는 `--models gpt-5.6-luna gpt-6-luna`처럼 지정한다. 기존 기록을 보존하도록 출력 파일은 실행마다 새 이름을 쓴다.
+저장소 루트에서 다음 명령을 실행한다. 기본으로 답변 형식별 모델을 평가한다. 모델을 비교할 때는 `--models gpt-5.6-luna gpt-6-luna`처럼 지정한다. 기존 기록을 보존하도록 출력 파일은 실행마다 새 이름을 쓴다.
 
 ```bash
 python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/eval/writer-dev-run.jsonl
@@ -813,9 +817,11 @@ python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/e
 | 이름 | 기본값 | 쓰는 곳 |
 |---|---|---|
 | `API_REDIS_URL` | `redis://:<비밀번호>@127.0.0.1:6379/0` | 컨텍스트·lock·체크포인터 (임시, D-07) |
-| `API_INTENT_MODEL`, `API_INTENT_TIMEOUT_SECONDS` | `gpt-4.1-mini`, 10 | 플래너(§11.1), 직접 입력 해석(§13.6) |
+| `API_PLANNER_MODEL`, `API_INTENT_TIMEOUT_SECONDS` | `gpt-5.6-luna`, 10 | 플래너 |
+| `API_INTENT_MODEL`, `API_INTENT_TIMEOUT_SECONDS` | `gpt-6-luna`, 10 | 직접 입력 해석(§13.6) |
 | `API_COMPOSE_MODEL`, `API_COMPOSE_TIMEOUT_SECONDS` | `gpt-6-luna`, 20 | Writer 모델 선택 및 호출 시간 상한(§13.1) |
-| `API_SQL_MODEL`, `API_SQL_TIMEOUT_SECONDS` | `gpt-4.1`, 20 | LLM SQL 생성(§13.5). 더 큰 모델을 쓰기로 함(2026-10-30). 최종 모델은 골든셋 비교 후 확정(C-30) |
+| `API_COMPOSE_TEXT_MODEL`, `API_COMPOSE_TIMEOUT_SECONDS` | `gpt-6-luna`, 20 | 문장형 Writer 초안 및 재작성 |
+| `API_SQL_MODEL`, `API_SQL_TIMEOUT_SECONDS` | `gpt-6-luna`, 20 | LLM SQL 생성(§13.5) |
 | `API_SQL_EXECUTION_SECONDS` | 30 | LLM SQL 실행 상한(D-41) |
 | `API_ML_MODEL_DIRECTORY` | READY 월별 모델 레지스트리와 아티팩트 디렉터리 | `agents.market.model_paths` |
 | `API_ML_MODEL_PATHS` | 레지스트리 대신 지정할 joblib 경로(여러 개면 쉼표로 구분) | `load_market_bundle`(D-70) |
@@ -851,7 +857,7 @@ python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/e
 - **이유:** 예를 들어 LLM SQL은 3번 다 예약하면 플래너 10 + check 15 + 150 = 175초라 마무리를 할 수 없다. D-40·D-45의 횟수는 최대치이고, 예산 안에서만 쓴다.
 
 ### 13.5 LLM SQL (`agents/tools.py`의 `query_trade_data`, `template=LLM_SQL`)
-- **생성 호출:** `client.responses.parse(model=API_SQL_MODEL, instructions=SQL_PROMPT, input=JSON, text_format=SqlDraft, temperature=0, store=False)`, 시간 상한 `API_SQL_TIMEOUT_SECONDS`다.
+- **생성 호출:** `client.responses.parse(model=API_SQL_MODEL, instructions=SQL_PROMPT, input=JSON, text_format=SqlDraft, store=False)`, 시간 상한 `API_SQL_TIMEOUT_SECONDS`다.
 - **입력 JSON:**
   ```
   {"request": task.custom_query,
@@ -888,6 +894,7 @@ python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/e
   - 최상위 SELECT 열 수와 `columns` 수가 같아야 한다.
 - **실행:**
   - 별도 연결에서 `SET SESSION MAX_EXECUTION_TIME = API_SQL_EXECUTION_SECONDS×1000` → `START TRANSACTION READ ONLY` → 실행 → `ROLLBACK` 순서로 돈다(D-41).
+  - 국가·품목을 제한하지 않은 두 연간 합계의 차액 조회는 해당 무역 집계의 월 범위 스캔에 월 선두 기본 키를 사용한다.
   - 결과의 Decimal은 숫자로, date는 `YYYY-MM-DD` 문자열로 바꾼다. `number` 열에 숫자가 아닌 값이 있으면 검증 실패다.
 - **재생성:** 파싱·검사·실행 오류나 시간 초과가 나면 오류 문구를 `previous_error`에 넣어 최대 2번 다시 만든다(D-40). 검사 오류와 모델이 쓴 SQL의 MySQL 오류(1052·1054·1055·1064·1111)는 코드와 요지를 넘기고, 그 밖의 드라이버·연결 오류와 DB 이름이 들어 있는 1146은 일반 문구로 바꾼다(`sql.SAFE_MYSQL_ERRORS`). 단, 남은 예산이 50초 + 마무리 몫(§13.4) 이상일 때만이다. 그래도 실패하면 그 단계를 FAILED로 두고 `skip_blocked()` 한다(D-72).
 - **저장:**
@@ -905,7 +912,7 @@ python -m backend.scripts.evaluate_writer_dev --env-file .env --output outputs/e
      - 긍정어: 예·네·응·좋아·동의·확인·적용·생성
      - 부정어: 아니·아니오·아니요·싫어·거절·취소
      - INTEREST_CONTEXT에서 "전체"는 전체 범위다.
-2. **규칙으로 정하지 못하면 LLM 1회:** `responses.parse(model=API_INTENT_MODEL, text_format=ClarificationReading, temperature=0, store=False)`. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-21). §13.4 예약은 10초다.
+2. **규칙으로 정하지 못하면 LLM 1회:** `responses.parse(model=API_INTENT_MODEL, text_format=ClarificationReading, store=False)`. 시간 상한은 `API_INTENT_TIMEOUT_SECONDS`(10초), 실패하면 1번 재시도한다(D-21). §13.4 예약은 10초다.
    - 입력: `{"kind", "message", "choices": [{"choice_id", "label"}], "text"}`. text는 데이터일 뿐 지시가 아니다(§8).
    - 출력 `ClarificationReading`: `{choice_id: str|null, new_expression: str|null, interest_change: bool|null, unrelated: bool|null}`. 문자열 길이는 스키마에 넣지 않는다(§13.1과 같은 이유).
 3. **해석 결과 적용:**
@@ -970,6 +977,9 @@ tool마다 입력 → 처리 → 자체 검증 → 출력 → 실패를 한곳�
     - `trade.market_shares(store, uid, conditions)`. `conditions.period`는 ISO 날짜 문자열 dict다.
     - state `Conditions`(1일 기준 `date`)에서 이 형식으로 바꾸는 변환 함수를 tool 안에 둔다.
   - **TREND:** `trade.trends(store, uid, start=..., end=..., hs=..., countries=..., flow=...)`. 품목·국가가 여러 개면 합계 하나로 더하지 않고 품목×국가 조합마다 나눈다(D-89).
+    - 두 기간의 금액 차이는 대상별로 `total_usd - compare_total_usd`를 계산해 스냅샷과 digest의 `period_difference_usd`에 저장한다. 어느 한 기간이라도 합계가 미집계면 차액은 null이다.
+    - Verify는 월·분기 차액 문장에 표시된 두 기간의 시작월과 종료월을 저장 셀의 두 기간과 각각 대조한다. 비교 순서를 바꾼 주장은 부호도 반대로 읽는다. 두 기간의 차액이 0달러라는 본문과 요약에는 대상·기간이 일치하고 값이 정확히 0인 차액 셀이 필요하다.
+    - 플래너는 두 기간의 금액과 달러 차액만으로 답할 수 있는 요청을 `amount_difference_only`로 표시한다. 단일 통계 질문에서 한 대상의 같은 길이 두 기간이 모두 집계되면 compose가 확정 기간, 두 합계, 부호 있는 차액으로 결론과 대화 요약을 만든다. 차액의 절댓값을 달러로 표시하고 부호에 따라 많음·적음·동일을 구분한다. 숫자 문장은 기존 스냅샷 검증을 거친다. 복합 요청, 부분 집계, 기간 길이가 다른 비교는 기존 Writer에서 설명한다.
     - 조합마다 `save=False`로 부르거나, 품목·국가로 묶은 한 번의 집계로 처리한다. 단계 전체가 §13.4의 30초 안에 들어야 한다.
     - 행마다 `hs_code`·`hs_ver`·`name`·`country_code`·`country_name`을 붙여 합친 뒤 `results.result_table`로 한 번만 저장한다.
     - **자르기 순서(1,000행, D-42):**
@@ -1330,7 +1340,7 @@ Redis 컨텍스트·세션 잠금·체크포인터 연결과 채팅 API 변경 �
 - 증상: "미국 면도 및 탈취 관련 상품의 수출 추이와 증가 이유"를 플래너가 products=["면도", "탈취 관련 상품"]으로 나눠 품목을 두 번 물었다(job 180).
 - 원인: 프롬프트에 "A 및 B 관련 상품"을 나눌지 정한 규칙이 없다. d7beef2(대화·용어·HS 조회 의도 추가) 전 프롬프트에서도 경계에 있던 질문이며, 문단이 늘면서 gpt-4.1-mini가 계속 나누는 쪽으로 넘어갔다(그 전 커밋 4/4 한 품목, 그 뒤 4/4 두 품목). 특정 문단 하나를 빼도 돌아오지 않았고, 명시 규칙·예시를 넣어도 이 질문은 계속 나눴다.
 - 처리: 플래너 출력 뒤 `planner.merge_product_phrases`가, 뒤 품목에 "관련 상품·제품·용품·품목"이 붙어 있고 원문에 "A 및(와·과·,) B 관련 상품"으로 이어 쓰였으면 원문 표현 한 개로 합친다. 바로 앞 품목부터 붙여 본다("반도체와 면도 및 탈취 관련 상품" → 반도체, 면도 및 탈취 관련 상품). 공통 꼬리말이 없는 "화장품 및 세제"는 그대로 나눈다.
-- 같은 프롬프트의 모델 비교(각 2회): gpt-4.1·gpt-5.4-mini는 이 질문을 한 품목으로 읽었다. "의료 및 미용 관련 제품"은 gpt-5.4-mini만 한 품목으로 읽었다. 플래너 모델(`API_INTENT_MODEL`, 기본 gpt-4.1-mini) 교체는 정하지 않았고, 위 처리는 모델과 상관없이 적용된다.
+- 같은 프롬프트의 모델 비교(각 2회): gpt-4.1·gpt-5.4-mini는 이 질문을 한 품목으로 읽었다. "의료 및 미용 관련 제품"은 gpt-5.4-mini만 한 품목으로 읽었다. 이 결정 당시 플래너 기본값은 `gpt-4.1-mini`(`API_INTENT_MODEL`)였다. 현재 플래너 기본값은 `gpt-5.6-luna`(`API_PLANNER_MODEL`)이며, 위 처리는 모델과 상관없이 적용된다.
 
 ### ML·RAG 연결 현황 (2026-11-09 코드 확인)
 - 위 결정들의 "후속 구현" 문구는 결정 당시 기록이다. 다음은 구현되어 있다: 차트 대상 전환 API(API-132 `GET /results/{result_id}/chart`)와 화면(`TaskResults.jsx`의 대상 선택), RANKING·SHARE·TREND의 `save=False` 저장 경계(`templates.py`), 그래프 기사 단계의 RAG 필터·근거 카드(D-102), 유망시장·시장 유형의 모델 A·B 연결(D-103).

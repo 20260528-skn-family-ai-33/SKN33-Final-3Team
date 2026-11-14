@@ -1,8 +1,8 @@
 """저장한 실제 호출 결과만 다시 채점한다. 모델 호출·DB 연결·고정 질문 수정은 하지 않는다(팀 score_sql_live_report.py와 같은 원칙).
 
 정답 수정은 report_agent_live_gold_corrections.json에 이유와 함께 따로 둔다. 원본 결과 파일은 덮어쓰지 않는다.
-  python -m backend.scripts.score_report_agent_live --input docs/evaluations/report_agent_live_result.json \
-      --output docs/evaluations/report_agent_live_result_rescored.json
+  python -m backend.scripts.score_report_agent_live --input tmp/report_agent_live_gpt-6-luna.json \
+      --output tmp/report_agent_live_gpt-6-luna_rescored.json
 """
 import argparse
 from datetime import datetime, timezone

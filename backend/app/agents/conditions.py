@@ -90,6 +90,43 @@ def _match_country_mention(mention, name, rows, threshold):
     return None, candidates, None
 
 
+TRADE_PARTNER_ALIASES = {'대미': 'US'}
+
+
+def _question_country_matches(question, countries, rows, threshold):
+    """Bind a planner country to its source spelling and catalog entry."""
+    text = question.casefold()
+    matches = {(item.mention, item.name): _match_country_mention(item.mention, item.name, rows, threshold)
+               for item in countries if item.mention not in TRADE_PARTNER_ALIASES and item.mention.casefold() in text}
+    for alias, code in TRADE_PARTNER_ALIASES.items():
+        if not re.search(r'(?<!\w)' + re.escape(alias) + r'(?=\W|$|수출|수입)', question):
+            continue
+        row = next((r for r in rows if r['country_code'] == code), None)
+        if row is None:
+            continue
+        canonical = {country_key(row['name_ko']), country_key(code)}
+        for item in countries:
+            if (item.mention, item.name) in matches:
+                continue
+            if item.mention != alias and not {country_key(item.mention), country_key(item.name)} <= canonical:
+                continue
+            # Preserve the source spelling on the task for later snapshot verification.
+            item.mention, item.name = alias, row['name_ko']
+            matches[alias, item.name] = (code, [], None)
+    return matches
+
+
+def comparison_windows(question, current, baseline):
+    from backend.app.agents.verify_claims import annual_comparison_roles
+
+    if current and baseline and all(w.start.month == 1 and w.end.month == 12 and w.start.year == w.end.year
+                                    for w in (current, baseline)):
+        roles = annual_comparison_roles(question)
+        if roles.kind != 'undetermined' and (roles.subject, roles.baseline) == (str(baseline.start.year), str(current.start.year)):
+            return baseline, current
+    return current, baseline
+
+
 def _bounded_bundle(store, loaded, message):
     """조건 확인에서 쓰는 모델 묶음(HS4 후보 순서·예측 기준월). ML 단계와 같은 전용 스레드·시간 제한으로 읽는다.
     캐시가 비어 첫 로드가 늦으면 워커를 붙잡지 않고 그 하위 질문만 다시 질문하도록 안내한다."""
@@ -325,8 +362,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         # 되묻기로 확정한 국가('미구' → 미국)도 새 국가다. 아래처럼 같은 계획의 앞 하위 질문에서 확정한 답도 쓴다.
         def confirmed(mention):
             return any(t.resolved.get(f'{t.task_id}:country:{mention}', {}).get('country_codes') for t in state.plan.tasks)
-        current = {(item.mention, item.name): _match_country_mention(item.mention, item.name, rows, threshold)
-                   for item in countries if item.mention.casefold() in original.casefold()}
+        current = _question_country_matches(original, countries, rows, threshold)
         new_country = any(match[0] or confirmed(mention) for (mention, _), match in current.items())
         for item in countries:
             key = f'{task.task_id}:country:{item.mention}'
@@ -340,7 +376,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             if 'country_codes' in answer:
                 out.country_codes.extend(answer['country_codes'])
                 continue
-            if item.mention.casefold() not in original.casefold():
+            if (item.mention, item.name) not in current:
                 # D-22: 질문에 없는 이전 조건 국가를 그대로 다시 적은 것은 생략(이어받기)과 같다.
                 echoed, _ = country_matches(item.name, rows, threshold)
                 if new_country and echoed in base.country_codes:
@@ -392,12 +428,16 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         out.period = slots.period or out.period
         if slots.recent_months or not out.period:
             out.period = Period(start=shift_month(bounds[-1], 1-(slots.recent_months or 12)), end=bounds[-1])
+        comparison = slots.compare_period
+        if slots.comparison_requested and slots.period:
+            question = original if len(state.plan.tasks) == 1 else task.question
+            out.period, comparison = comparison_windows(question, out.period, comparison)
         # 유망시장은 통계 기간을 조회하지 않는다. 공개 통계보다 오래된 기간을 물어도 여기서 끝내지 않고, 아래 MODEL_PERIOD로
         # 최신 기준월 예측을 제안한다.
         if task.intent not in MARKET_INTENTS:
             trade.resolve_period(store, out.period.start.strftime('%Y-%m'), out.period.end.strftime('%Y-%m'))
         if slots.comparison_requested:
-            out.compare_period = slots.compare_period or Period(start=shift_month(out.period.start,-12),
+            out.compare_period = comparison or Period(start=shift_month(out.period.start,-12),
                                                                  end=shift_month(out.period.end,-12))
     if task.intent == 'CAUSE':
         out.article_period = {'start':shift_month(out.period.start,-1), 'end':month_end(shift_month(out.period.end,1))}

@@ -24,6 +24,8 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 요청한 월들에 미집계가 섞여 있으면 제시된 각 월을 실제 금액(0 포함) 또는 미집계와 짝지어 설명하세요. 소계를 제시할 때에는 전체 기간 합계를 확인할 수 있는지도 밝히세요.
 금액은 digest에 적힌 표기(예: "2,610만 달러", "1억 2,346만 달러")를 글자 그대로 옮기세요.
 만·억 단위를 다시 바꾸거나 반올림·합산하지 마세요. 총액과 월평균, %와 %p를 구분하세요.
+기간 비교의 change_pct는 compare_period의 compare_total_usd를 분모로 한 period의 total_usd 변화율입니다. 문장에 두 기간의 역할을 그대로 쓰세요.
+두 기간의 수출액·수입액 차이를 물으면 결론에 달러 차액을 명시하세요. TREND의 period_difference_usd는 조회 기간 합계에서 비교 기간 합계를 뺀 금액입니다. 두 합계와 차액은 별도 문장에 쓰세요. 차액을 쓸 때는 두 기간, 실제 달러 차액, 어느 쪽이 더 큰지를 한 문장에 담으세요. 차액이 0이면 두 기간의 차액이 0달러라고 씁니다. turn_summary에 차액을 쓸 때도 같은 차액 문장을 그대로 사용하세요. 차액이 null이면 산출할 수 없다고 쓰세요. 변화율만 요청했다면 change_pct를 쓰세요.
 비교 기간 길이가 다르면 그 사실과 월평균을 명시하고 점유율 분모 의미를 밝히세요.
 예측은 기준월을 명시하며 exp_12m은 과거 12개월 수출액입니다.
 월 단위 통계·비교 기간의 종료일을 날짜로 쓸 때는 해당 월의 말일로 씁니다(예: 2025년 12월 31일). 기사 발행 기간의 날짜는 그대로 씁니다.
@@ -233,6 +235,52 @@ def _citable_article(article):
             'published_date': article['published_date'], 'summary': summary,
             'evidence_role': article.get('evidence_role', 'unclassified'),
             'reference_limitation': article.get('reference_limitation')}
+
+
+def _period_label(window):
+    start, end = window.start, window.end
+    if start.year == end.year and start.month == 1 and end.month == 12:
+        return f'{start.year}년'
+    first = f'{start.year}년 {start.month}월'
+    return first if start == end else f'{first}~{end.year}년 {end.month}월'
+
+
+def period_difference_draft(state):
+    """Render a single measured difference. Keep other questions on the normal Writer path."""
+    if len(state.plan.tasks) != 1:
+        return None
+    task, = state.plan.tasks
+    cond = task.conditions
+    if (task.intent != 'STATISTICS' or not task.slots.amount_difference_only or task.answer_status != 'ANSWERED'
+            or not cond or not cond.period or not cond.compare_period
+            or len(cond.country_codes) > 1 or len(cond.hs_items) > 1):
+        return None
+    result = next((state.results.get(step.step_id) for step in task.steps if step.tool == 'query_trade_data'), None)
+    if not result or result.status != 'OK' or result.completeness != 'COMPLETE':
+        return None
+    digest = result.digest or {}
+    targets = digest.get('targets') or []
+    if digest.get('kind') != 'TREND' or len(targets) != 1:
+        return None
+    target, = targets
+    # Unequal windows also require an explanation of their monthly averages.
+    if target.get('requested_months') != target.get('compare_requested_months'):
+        return None
+    total, baseline, delta = (target.get(key) for key in ('total_usd', 'compare_total_usd', 'period_difference_usd'))
+    if total is None or baseline is None or delta is None:
+        return None
+    measure = '수출액' if cond.trade_flow == 'EXPORT' else '수입액'
+    scope = ' '.join(filter(None, (target.get('country_name') if target.get('country_code') else None,
+                                   target.get('name') if target.get('hs_code') else None, measure)))
+    current, prior = _period_label(cond.period), _period_label(cond.compare_period)
+    totals = f'{current} {scope}은 {korean_usd(total)}, {prior} {measure}은 {korean_usd(baseline)}입니다.'
+    if delta == 0:
+        difference = f'{current}과 {prior}의 {scope} 차액은 0달러입니다.'
+    else:
+        direction = '많습니다' if delta > 0 else '적습니다'
+        difference = f'{current} {scope}은 {prior}보다 {korean_usd(abs(delta))} {direction}.'
+    return Draft(conclusion=[TaskConclusion(task_id=task.task_id, sentences=[totals, difference])],
+                 turn_summary=difference, title=task.question if state.input.first_question else None)
 
 
 def fixed_conclusion(state, task):
@@ -563,6 +611,26 @@ def requested_axis(task):
         if start == month_gap(current.end, previous.end):
             return {1: 'MOM', 3: 'QOQ', 12: 'YOY'}.get(start)
     return None
+
+
+def period_role_edits(feedback):
+    """Swap only the two year labels in a verified period-role reversal."""
+    from backend.app.agents.state import WriterEdits
+
+    edits = []
+    for index, item in enumerate(feedback):
+        if item.action != 'CORRECT':
+            continue
+        if item.reason != 'REVERSED_PERIODS':
+            return None
+        years = list(re.finditer(r'(?<!\d)\d{4}(?!\d)', item.passage))
+        if len(years) != 2:
+            return None
+        first, last = years
+        replacement = (item.passage[:first.start()] + last.group() + item.passage[first.end():last.start()]
+                       + first.group() + item.passage[last.end():])
+        edits.append(dict(feedback_index=index, replacement=replacement))
+    return WriterEdits(edits=edits) if edits else None
 
 
 def apply_claim_edits(state, payload, edits):

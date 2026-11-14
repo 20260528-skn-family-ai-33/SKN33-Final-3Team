@@ -12,11 +12,13 @@ planner · 조건분석(check_conditions) · compose_text · 컨텍스트 관리
   - [compose_text](agent_eval/COMPOSE_TEXT_TEST_PLAN.md)
   - [컨텍스트 관리](agent_eval/CONTEXT_TEST_PLAN.md)
 
-## 1. 비교할 모델
+## 1. 평가 당시 비교 모델
+
+아래 표와 선정 절차는 이슈 86 평가 당시 기준이다. 현재 플래너는 `API_PLANNER_MODEL=gpt-5.6-luna`, 일반·문장형 Writer는 각각 `API_COMPOSE_MODEL=gpt-6-luna`, `API_COMPOSE_TEXT_MODEL=gpt-6-luna`가 기본값이다.
 
 | 모델 | 구분 | 이유 |
 |---|---|---|
-| `gpt-4.1-mini` | 기준선(현재 기본값, D-20) | 개선·교체 효과를 재는 기준 |
+| `gpt-4.1-mini` | 기준선(평가 당시 기본값) | 개선·교체 효과를 재는 기준 |
 | `gpt-5.6-luna` | 후보 | GPT-5.6의 저비용·저지연 등급(추론 모델) |
 | `gpt-6-luna` | 후보 | GPT-6의 저비용 등급(추론 모델). 외부 가격표 기준 단가가 gpt-5.6-luna의 약 10분의 1 |
 
@@ -24,7 +26,6 @@ planner · 조건분석(check_conditions) · compose_text · 컨텍스트 관리
 - GPT-5·6 계열은 추론 모델이라 `temperature`를 받지 않는다. `StructuredClient`가 `gpt-5`·`gpt-6`으로 시작하는 모델에는 temperature를 보내지 않게 바꿨다. gpt-6 계열은 문서로 확인하지 못해, 첫 호출에서 오류가 없는지 본다. 추론 강도는 `API_LLM_REASONING_EFFORT`(예: `low`)로 줄 수 있고, 비워 두면 모델 기본값이다.
 - temperature 0이 없으므로 같은 질문도 답이 달라질 수 있다. 그래서 LLM 평가는 `--repeat 3`으로 돌려 일관성도 본다.
 - 추론 토큰도 `max_output_tokens`(플래너 2000, compose_text 3000)에 포함된다. 잘려서 `incomplete`가 나면 파싱 실패로 집계되니, 실패율이 높으면 상한부터 확인한다.
-- 운영 기본값은 바꾸지 않았다. 평가 결과를 보고 `.env`의 `API_INTENT_MODEL`·`API_COMPOSE_MODEL`을 바꾼다.
 
 ## 2. 평가셋
 
@@ -174,7 +175,7 @@ planner · 조건분석(check_conditions) · compose_text · 컨텍스트 관리
    - conditions `--chain`에서 `quality_gate_pass`를 충족한 모델을 비교한다.
    - holdout 질문 통과율이 높은 모델을 고른다. 차이가 3%p 미만이면 지연 p95와 비용이 낮은 쪽을 고른다.
    - 지연 p95가 현재 시간 상한(플래너 10초, compose 20초)을 넘으면, 상한을 늘리는 비용(실행 예산 180초 안의 몫, D-85)까지 함께 보고 정한다.
-4. 플래너와 compose는 따로 정해도 된다(`API_INTENT_MODEL`·`API_COMPOSE_MODEL`).
+4. 플래너와 compose 모델은 각각 선정한다.
 5. 결정한 내용은 AGENT_DESIGN.md C-35에 기록한다.
 
 ## 5. 실행 명령
