@@ -251,7 +251,7 @@ class Services:
         pending=state.pending
         task=next(t for t in state.plan.tasks if t.task_id==pending.task_id)
         if pending.kind=='REPORT_CONFIRM' and 'text' in answer:
-            if task.input_bindings:
+            if task.input_bindings or task.previous_turn_result:   # 결과표 기반 리포트는 글로 조건을 바꾸지 않는다(D-92)
                 apply_answer(state,{'reject_input_change':True})
                 return
             text=answer['text']
@@ -598,12 +598,18 @@ class Services:
             with self.read_store() as store:
                 rid=state.report_wait.report_id
                 record=store.owned('report','report_id',rid,state.input.user_id)
-                if record['status']=='READY': return ToolResult(status='OK',report_id=rid)
-                return ToolResult(status='FAILED',error='리포트 파일 생성에 실패했습니다.')
+                if record['status']!='READY': return ToolResult(status='FAILED',error='리포트 파일 생성에 실패했습니다.')
+                # 직전 턴 결과표는 이번 계획의 depends_on에 없어 누락 사유가 전파되지 않는다. 접수 때 conditions_json에 남긴
+                # 승인 사본의 사유를 결과에 싣는다(content_json은 워커가 완성 문서로 바꾼다).
+                limits=(record.get('conditions_json') or {}).get('chat_limitations') or []
+                return ToolResult(status='OK',report_id=rid,completeness='PARTIAL' if limits else 'COMPLETE',limitations=limits)
         # 리포트 파일은 이미 만들어졌고 상태만 읽는다. 앞 호출의 초과 시간 때문에 예약이 거부되면 완성된 리포트를 두고
         # 작업이 FAILED로 끝나므로 예산 검사 없이 예약·정산한다(finalize와 같은 규칙, §13.4).
-        return self.execution.call('report',budget.seconds(self.settings,'report'),read,
+        result=self.execution.call('report',budget.seconds(self.settings,'report'),read,
                                    finish_reserve=budget.finishing_seconds(state,self.settings),enforce=False)
+        for reason in result.limitations:
+            if reason not in state.warnings: state.warnings.append(reason)
+        return result
 
     def finalize(self,state):
         from time import monotonic

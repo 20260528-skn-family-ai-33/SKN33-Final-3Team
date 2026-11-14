@@ -2,33 +2,36 @@
   "schema_version": 2,
   "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
   "evaluation": "Report Agent 오프라인 설계 계약 평가",
-  "evaluated_at_utc": "2026-11-10T07:10:28.563540+00:00",
+  "evaluated_at_utc": "2026-11-14T14:07:47.783764+00:00",
   "source_mode": "working_tree",
-  "source_revision": "f941e640016a58ad8f1e34b816af04d0f97b3d90",
+  "source_revision": "e5de2e9fd7c97d48a99ba8310f6daec97ee520ec",
   "source_dirty": false,
   "source_changes": [],
-  "harness_revision": "f941e640016a58ad8f1e34b816af04d0f97b3d90",
-  "harness_dirty": false,
-  "harness_changes": [],
+  "harness_revision": "e5de2e9fd7c97d48a99ba8310f6daec97ee520ec",
+  "harness_dirty": true,
+  "harness_changes": [
+    "M backend/scripts/evaluate_report_agent.py",
+    " M backend/tests/test_agent_report.py"
+  ],
   "source_sha256": {
-    "backend/app/api/files.py": "97efb1ac1bd0f1ddd970b4551db6cab5845139936cdfff65dca58fd86127a280",
+    "backend/app/api/files.py": "368ca8120f27b1d89e04a32ef180d6fc8e82d534f67e2bdbaca56331150d2ab3",
     "backend/app/services/report_ondemand_context.py": "ceb2fc34804d910a5146f98839442446d27725b94f99ef4b503dd74e0c6bb289",
-    "backend/app/services/report_templates.py": "d7d41d967b4ab854d323f6874633375f76ea158a3f2921d5108efb90c1e0d9de",
-    "backend/app/services/report_context.py": "f9506efefe5662ae0d87fcd0be113ad550e58c982a6ed962784943d2e45ded7b",
-    "backend/app/api/reports.py": "621184e694cbcb9a1d5f093c79da036a2fdefb4fda0cd08205188c13a963bd72",
-    "backend/app/agents/report.py": "f265c00c5c2b6ccf7a0f8dc9b9aeb893995288d381a8cacf705343fe665aff88"
+    "backend/app/services/report_templates.py": "0d72fc06dc41e847428c129b52b98f1243944ca8b08b5e82cdf6ec42122d4cda",
+    "backend/app/services/report_context.py": "ef107fe826bbf9036c5d499cf986a3df5f13008e756147a629e433256bbf1b93",
+    "backend/app/api/reports.py": "a749e63147926ae1a17e0afb819a80535e50553156693eb6526c71da04e8978b",
+    "backend/app/agents/report.py": "6815da23f5fca9f87ef3c28c1fd96f70a7e531a6690f98eaf43ed72bc8b46ad4"
   },
   "evidence_sha256": {
-    "backend/tests/test_agent_graph.py": "7d1b0e5780b5aad7f9b76f9e366aaf37a56dc0240dceb50a81e67c1f299b55dd",
+    "backend/tests/test_agent_graph.py": "42b48bf6f21af564468dd9d29db17a9ca55de121ff0c04449d5d2f5323477656",
     "backend/tests/test_agent_pr61_fixes.py": "73908cce2991f8adb09a702b204c7e30c7478d569e603eb4b037cd3f402e8d7f",
-    "backend/tests/test_agent_report.py": "97fab8e4f865bc459b3b23dd7fe379d95cf4f1d18195648dba4a170500ab278a",
+    "backend/tests/test_agent_report.py": "2422629081f393ef2f5c910a84d36ae3c0d3c1108537e7fc71e54dd0bf656b8e",
     "backend/tests/test_agent_state.py": "35c261bb9009c2f9dc9fbb635020d3fe9b1d1ae1e86b4fcf6a78427792ce25ba",
-    "backend/tests/test_backend_api.py": "cfe4e0f622f5665e0c4bf5b51494f88988fdf3988e860093cbb14a6493e2ca91",
-    "backend/scripts/evaluate_report_agent.py": "832510d9966b377ea61b7601c06f1cf28bad88380c725047fcd86bd8676ee4ed",
+    "backend/tests/test_backend_api.py": "91a0165c4b58e6b09ec9b45ef9922972c1da63d248f7bb75acb772087a929090",
+    "backend/scripts/evaluate_report_agent.py": "f6fdc9193234510c614bdb5dd8c2b6dd80776f9c8d836463a440099f4c7a376d",
     "backend/tests/api_support.py": "e39e158e4840bb652d8e86db8d21991044c6cda1765c977db6482a2c75b48003",
     "backend/tests/intent_fixtures.py": "a34fed014fdd8532c8f89145bdd615a39418ab6d23e66c60280bc91865f3d4e5"
   },
-  "manifest_sha256": "f6b67c81e430380a0e0634bbcfe0d05d836bcd57a7e014a0a7a9a498a8dc1bbf",
+  "manifest_sha256": "c254c8e1c7ba09100dff49aebad609e1f8bde7d3edfdaf7692acd7cdafd81a80",
   "environment": {
     "python": "3.12.13",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -83,9 +86,18 @@
       "xfail": 0,
       "pass_rate_pct": 100.0
     },
+    "이전 턴 결과": {
+      "total": 26,
+      "pass": 26,
+      "fail": 0,
+      "error": 0,
+      "skip": 0,
+      "xfail": 0,
+      "pass_rate_pct": 100.0
+    },
     "합계": {
-      "total": 25,
-      "pass": 25,
+      "total": 51,
+      "pass": 51,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -316,6 +328,240 @@
       "category": "표시",
       "criterion": "이름이 같은 품목은 HS 코드(필요하면 판본·국가 코드)로 차트 시리즈를 나누고 범례에 표시한다.",
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_same_named_products_get_separate_chart_series",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R26",
+      "group": "이전 턴 결과",
+      "category": "결과표 그대로",
+      "criterion": "'방금 그 표로 리포트'는 직전 답변의 결과표를 그대로 미리보기·리포트에 싣고 다시 조회하지 않는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_table_report_copies_that_table_without_requery",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R27",
+      "group": "이전 턴 결과",
+      "category": "표 선택",
+      "criterion": "직전 답변에 결과표가 여러 개면 REPORT_TABLE로 묻고 고른 표만 싣는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_answer_with_several_tables_asks_which_one",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R28",
+      "group": "이전 턴 결과",
+      "category": "표 없음·만료",
+      "criterion": "직전 답변에 결과표가 없거나 보관 기간이 지났으면 미리보기 없이 안내로 끝난다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_table_missing_or_expired_ends_with_guidance",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R29",
+      "group": "이전 턴 결과",
+      "category": "애매한 요청",
+      "criterion": "'이걸로 리포트'는 REPORT_SOURCE로 묻고 결과표를 고르면 R26과 같은 경로로 간다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_ambiguous_report_request_can_use_the_previous_table",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R30",
+      "group": "이전 턴 결과",
+      "category": "예측 결과표",
+      "criterion": "직전 결과표가 유망시장 예측이면 순위 기준(group_by·anchor)까지 사본에 싣는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_prediction_table_keeps_ranking_basis",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R32",
+      "group": "이전 턴 결과",
+      "category": "조건 고정",
+      "criterion": "직전 결과표 리포트는 질문의 기간 등으로 표 조건을 바꾸지 않고 알리며, 확인 화면의 글 수정은 새 분석을 안내한다(D-92).",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_table_report_keeps_the_table_conditions",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R31",
+      "group": "이전 턴 결과",
+      "category": "같은 턴 예측",
+      "criterion": "'유망 수출국 예측 → 그 결과로 리포트'(t1.ml 연결)는 예측 결과표를 순위 기준까지 그대로 리포트에 싣는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_same_turn_prediction_result_becomes_the_report_table",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R33",
+      "group": "이전 턴 결과",
+      "category": "기존 대화 표",
+      "criterion": "기존 채팅 API의 월별 추이 표로 리포트를 만들고, 답변에서 확정한 전년 비교 기간을 되살린다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_chat_trend_table_becomes_a_report_with_its_comparison",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R34",
+      "group": "이전 턴 결과",
+      "category": "부분 결과",
+      "criterion": "직전 결과표가 PARTIAL이면 실제 리포트 워커를 거친 완료 답변도 PARTIAL이고 누락 사유를 경고로 남긴다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_partial_table_keeps_partial_in_final_answer",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R35",
+      "group": "이전 턴 결과",
+      "category": "저장 뒤 만료",
+      "criterion": "답변 저장 뒤 만료된 표는 선택지에서 빼고, 하나 남으면 바로 확인, 없으면 만료 안내다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_tables_expired_after_the_answer_are_not_offered",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R36",
+      "group": "이전 턴 결과",
+      "category": "기간 표시",
+      "criterion": "국가·품목·종류가 같은 후보는 선택지에 조회 기간을 붙여 구별한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_same_looking_tables_show_their_period",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R37",
+      "group": "이전 턴 결과",
+      "category": "표 종류 판별",
+      "criterion": "기존 채팅 API 표(intent는 항상 STATISTICS)는 열(rank → share_pct → month 순)로 종류를 정한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_chat_table_kind_comes_from_its_columns",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R38",
+      "group": "이전 턴 결과",
+      "category": "종류 모름",
+      "criterion": "기존 채팅 API 표의 종류를 판별할 수 없으면 작업 실패 대신 사유를 안내한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_chat_table_of_unknown_kind_ends_with_guidance",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R39",
+      "group": "이전 턴 결과",
+      "category": "수입 표 제외",
+      "criterion": "수입 표는 후보에서 빼고, 수출 표가 하나면 바로 확인, 수입 표만 있으면 수출 전용 안내다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_import_tables_are_not_offered_for_a_report",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R40",
+      "group": "이전 턴 결과",
+      "category": "품목 표시",
+      "criterion": "기존 채팅 API의 다중 품목 표는 선택지에 표마다 그 품목을 표시한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_multi_item_tables_are_labelled_by_their_own_item",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R41",
+      "group": "이전 턴 결과",
+      "category": "긴 누락 사유",
+      "criterion": "누락 사유가 1KB를 넘어도 완성된 리포트를 실패로 끝내지 않고 요약한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_partial_table_with_long_reasons_still_completes",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R42",
+      "group": "이전 턴 결과",
+      "category": "조건 상한",
+      "criterion": "에이전트 조건 상한(국가 20개·품목 5개)을 넘는 기존 표는 작업 실패 대신 안내로 끝난다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_table_beyond_agent_limits_ends_with_guidance",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R43",
+      "group": "이전 턴 결과",
+      "category": "표 잘림",
+      "criterion": "기존 순위표의 잘림(meta.truncated)을 PARTIAL과 '전체 N개 중 상위 M개만' 사유로 바꿔 완료 답변까지 알린다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_legacy_truncated_table_is_a_partial_report",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R44",
+      "group": "이전 턴 결과",
+      "category": "상위 N개",
+      "criterion": "'상위 1개만'(ranking_limit) 요청은 표를 바꾸지 않고 승인 화면에 미적용 안내를 보인다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_previous_table_report_notes_an_ignored_ranking_limit",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R45",
+      "group": "이전 턴 결과",
+      "category": "다음 목록",
+      "criterion": "결과표가 5개를 넘으면 표 4개 + '다음 목록'으로 나눠 6번째 표도 고를 수 있다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_more_than_five_previous_tables_are_paged",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R46",
+      "group": "이전 턴 결과",
+      "category": "쪽 사라짐",
+      "criterion": "'다음 목록' 뒤 후보가 줄어 다음 쪽이 사라지면 반복 없이 남은 후보를 첫 쪽부터 다시 보인다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_next_page_that_disappeared_restarts_the_list",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R47",
+      "group": "이전 턴 결과",
+      "category": "고른 표 만료",
+      "criterion": "고른 표가 재개 전에 만료되면 다른 표로 자동으로 바꾸지 않고 남은 표에서 다시 고르게 한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_picked_table_that_expired_is_chosen_again",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R48",
+      "group": "이전 턴 결과",
+      "category": "미리보기 전 만료",
+      "criterion": "조건 확인과 미리보기 사이에 고른 표가 만료되면 JOB_FAILED 없이 미리보기를 만들지 않고 다시 고르게 한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_table_expiring_before_the_preview_asks_again",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R49",
+      "group": "이전 턴 결과",
+      "category": "명시적 재선택",
+      "criterion": "다시 고르는 화면에서 선택지와 맞지 않는 글을 입력해도 남은 표를 자동으로 고르지 않고 다시 묻는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_reselection_waits_for_an_explicit_choice",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R50",
+      "group": "이전 턴 결과",
+      "category": "후보 확인 중 만료",
+      "criterion": "후보 확인과 최종 읽기 사이에 만료돼도 '보관 기간이 지났습니다'로 끝내지 않고 다시 고르게 한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_table_expiring_while_checking_candidates_asks_again",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R51",
+      "group": "이전 턴 결과",
+      "category": "후보 구성 변경",
+      "criterion": "'다음 목록' 뒤 앞쪽 표가 만료돼 후보 구성이 바뀌면 첫 쪽부터 다시 보여 어떤 유효한 표도 빠지지 않는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_next_page_restarts_when_earlier_candidates_change",
       "status": "PASS",
       "details": []
     }

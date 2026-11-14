@@ -1,9 +1,218 @@
 """D-90/95: select downstream inputs from owned, unexpired result rows."""
 import re
+from pydantic import ValidationError
+from sqlalchemy import select
 from backend.app.agents.conditions import ask
 from backend.app.agents.state import Conditions, HsProduct, MAX_COUNTRIES, MAX_HS_ITEMS, ToolResult
 from backend.app.api.chat_slots import SlotRepair
+from backend.app.api.common import ApiError, digest
 from backend.app.api.results import read_snapshot
+
+PREVIOUS_TABLE_CHOICES = 5   # REPORT_TABLE 선택지 상한(INPUT_SELECTION과 같다)
+TABLE_KINDS = {'TREND': '월별 추이', 'RANKING': '순위', 'SHARE': '비중', 'PREDICTION': '유망시장 예측'}
+NO_PREVIOUS_TABLE = '직전 답변에 리포트로 만들 결과표가 없습니다. 조회와 리포트 생성을 한 질문에서 요청해 주세요.'
+EXPIRED_PREVIOUS_TABLE = '직전 결과표의 보관 기간이 지났습니다. 같은 조건으로 다시 조회한 뒤 리포트를 요청해 주세요.'
+UNKNOWN_PREVIOUS_TABLE = '직전 결과표의 종류를 확인할 수 없어 리포트로 만들 수 없습니다. 같은 조건으로 다시 조회한 뒤 리포트를 요청해 주세요.'
+EXPORT_ONLY = '이 분석은 수출만 지원합니다.'   # conditions.py의 수입 거부와 같은 문구
+
+
+def previous_tables(store, state):
+    """같은 대화방에서 현재 질문 바로 앞 답변(ASSISTANT 메시지 하나)에 담긴 결과표. 더 앞 답변은 보지 않는다(설계 '이전 턴 결과 참조' 2)."""
+    table = store.t('chat_message')
+    row = store.one(select(table.c.result_json).where(
+        table.c.session_id == int(state.input.session_id), table.c.role == 'ASSISTANT',
+        table.c.message_id < int(state.input.job_id)).order_by(table.c.message_id.desc()).limit(1))
+    answer = ((row or {}).get('result_json') or {}).get('answer') or {}
+    conditions = {t.get('task_id'): t.get('conditions') or {} for t in answer.get('tasks') or []}
+    # 기존 채팅 API(api/chat.py) 답변은 tasks 없이 answer.conditions 하나만 남기고, 표 종류와 관계없이 intent='STATISTICS'다.
+    legacy = not answer.get('tasks')
+    return [{'result_id': t['result_id'], 'task_id': t.get('task_id'), 'legacy': legacy,
+             'conditions': (answer.get('conditions') if legacy else conditions.get(t.get('task_id'))) or {},
+             'kind': table_kind(t.get('meta'), t.get('columns')) if legacy else (t.get('meta') or {}).get('kind'),
+             'expired': bool(t.get('expired'))}
+            for t in answer.get('tables') or [] if t.get('result_id')]
+
+
+# 기존 채팅 API 표의 종류를 정하는 열. 순위표에도 share_pct가 있으므로 rank를 먼저 본다.
+LEGACY_KINDS = (('rank', 'RANKING'), ('share_pct', 'SHARE'), ('month', 'TREND'))
+
+
+def table_kind(meta, columns):
+    """기존 채팅 API 표의 종류. meta.kind가 없으면 표 열 구성으로 복원한다. 모르면 None."""
+    if kind := (meta or {}).get('kind'): return kind
+    keys = {c.get('key') for c in columns or []}
+    return next((kind for column, kind in LEGACY_KINDS if column in keys), None)
+
+
+def _load(store, state, table):
+    """후보 결과표의 현재 스냅샷(소유권·만료 확인). 쓸 수 없으면 None.
+    기존 채팅 API 표는 비교 기간 등을 표에 저장하지 않고 답변에서 확정했으므로 답변 조건으로 채운다. 기간·품목·국가는 표 그대로다."""
+    if table['expired']: return None
+    try: snapshot = read_snapshot(store, state.input.user_id, table['result_id'], 'RESULT')
+    except ApiError as exc:
+        if exc.code in ('RESULT_EXPIRED', 'NOT_FOUND'): return None
+        raise
+    conditions = snapshot['conditions']
+    if table['legacy']: conditions = {**table['conditions'], **conditions}
+    meta = {**(snapshot.get('meta') or {}), 'kind': table['kind']}
+    if table['legacy'] and meta.get('truncated') and meta.get('completeness') != 'PARTIAL':
+        # 기존 채팅 API는 잘린 표를 completeness 없이 meta.truncated·rows_total로만 남긴다(api/trade.py 순위표 1,000행).
+        # 리포트에는 저장된 행만 실리므로 부분 결과로 알린다. 에이전트 결과의 meta.truncated는 요약(digest) 행 상한이라
+        # 표 자체는 전부 저장돼 있고, 표가 잘리면 completeness·limitations로 따로 남긴다(templates.py). 그래서 기존 표만 본다.
+        total, kept = meta.get('rows_total'), len(snapshot.get('rows') or [])
+        reason = (f'전체 {total:,}개 중 상위 {kept:,}개만 포함했습니다.' if isinstance(total, int) and total > kept
+                  else f'결과표가 잘려 상위 {kept:,}개만 포함했습니다.')
+        meta.update(completeness='PARTIAL', limitations=[*(meta.get('limitations') or []), reason])
+    return {**snapshot, 'conditions': conditions, 'meta': meta}
+
+
+def _names(values, limit=2):
+    return ', '.join(values[:limit]) + (f' 외 {len(values) - limit}' if len(values) > limit else '')
+
+
+def _table_pages(count):
+    """REPORT_TABLE 선택지 쪽 나누기. 한 화면 버튼은 PREVIOUS_TABLE_CHOICES(5)개다.
+    표가 더 남은 쪽은 표 4개 + '다음 목록', 마지막 쪽은 표 5개까지. 반환은 쪽마다 (시작, 끝) 범위."""
+    pages, start = [], 0
+    while start < count:
+        end = count if count - start <= PREVIOUS_TABLE_CHOICES else start + PREVIOUS_TABLE_CHOICES - 1
+        pages.append((start, end)); start = end
+    return pages
+
+
+def _page_key(key, page):
+    """쪽마다 다른 되묻기 키. 첫 쪽은 원래 키라 최종 선택도 같은 키에 남는다(report.source_ids가 읽는다)."""
+    return key if page == 0 else f'{key}:page{page}'
+
+
+def _candidates_digest(usable):
+    """'다음 목록'을 누를 때의 후보 구성(결과표 ID 순서). 쪽은 위치로 나뉘므로 구성이 바뀌면 같은 쪽 번호가 다른 표를 가리킨다."""
+    return digest([t['result_id'] for t, _ in usable])[:16]
+
+
+def _picked(task, key):
+    """저장된 표 선택을 따라간다. (고른 result_id 또는 None, 지금 보일 쪽, 마지막 '다음 목록' 때의 후보 구성)을 돌려준다.
+    '다음 목록' 답은 다음 쪽 번호만 남기므로 쪽 키를 차례로 읽는다. 같은 쪽을 두 번 만나면 멈춘다(무한 반복 방지)."""
+    page, seen, candidates = 0, set(), None
+    while page not in seen:
+        seen.add(page)
+        answer = task.resolved.get(_page_key(key, page), {})
+        if answer.get('previous_result_id'): return answer['previous_result_id'], page, candidates
+        following = answer.get('previous_table_page')
+        if not isinstance(following, int) or following <= page: break
+        page, candidates = following, answer.get('previous_table_candidates')
+    return None, page, candidates
+
+
+def _forget_pages(task, key):
+    """표 선택과 '다음 목록' 답을 지운다. 후보가 바뀌어 처음부터 다시 물을 때 쓴다."""
+    for name in [k for k in task.resolved if k == key or k.startswith(f'{key}:page')]:
+        task.resolved.pop(name)
+
+
+def _table_labels(store, tables):
+    """버튼 문구: '1. 미국 · HS 3307 · 월별 추이'. 질문 문장 대신 표를 만든 조건(국가·품목·종류)으로 구분한다."""
+    codes = sorted({c for t in tables for c in t['conditions'].get('country_codes') or []})
+    names = {}
+    if codes:
+        country = store.t('country')
+        names = {r['country_code']: r['name_ko'] for r in store.rows(
+            select(country.c.country_code, country.c.name_ko).where(country.c.country_code.in_(codes)))}
+    bases = []
+    for table in tables:
+        conditions = table['conditions']
+        parts = [_names([names.get(c, c) for c in conditions.get('country_codes') or []]) or '전체 국가']
+        if items := [f"HS {h['hs_code']}" for h in conditions.get('hs_items') or [] if h.get('hs_code')]:
+            parts.append(_names(items))
+        parts.append(TABLE_KINDS.get(table['kind'], '결과표'))
+        bases.append(' · '.join(parts))
+    labels = []
+    for index, (table, base) in enumerate(zip(tables, bases), 1):
+        # 국가·품목·종류가 같은 후보는 조회 기간으로 구별한다. 기간은 잘리지 않게 앞부분을 줄인다.
+        period = table['conditions'].get('period') or {}
+        suffix = (f" · {period['start'][2:7].replace('-', '.')}~{period['end'][2:7].replace('-', '.')}"
+                  if bases.count(base) > 1 and period.get('start') and period.get('end') else '')
+        prefix = f'{index}. '
+        labels.append(prefix + base[:40 - len(prefix) - len(suffix)] + suffix)
+    return labels
+
+
+def previous_result(store, state, task):
+    """previous_turn_result 리포트의 입력 결과표를 고른다. 여러 개면 REPORT_TABLE로 묻고 None을 돌려준다.
+    고른 result_id는 Task.resolved에 남겨 재개·승인 재진입에서 같은 표를 쓴다. 반환은 source_versions와 같은 (snapshot, info)."""
+    key = f'{task.task_id}:previous_result'
+    tables = previous_tables(store, state)
+    chosen, page, shown = _picked(task, key)
+    checked = {}   # 이번 호출에서 후보로 확인한 스냅샷. 같은 표를 다시 읽는 사이에 만료되는 일을 막는다
+
+    # 미리보기 전에는 고른 표(또는 저장된 다음 쪽)가 아직 유효한지 현재 후보로 다시 확인한다.
+    # 미리보기를 만든 뒤에는 승인한 그 표만 쓴다(아래 검증에서 만료되면 안내로 끝난다).
+    if chosen is None or task.report_request is None:
+        if not tables: raise SlotRepair(NO_PREVIOUS_TABLE)
+        loaded = [(t, s) for t in tables if (s := _load(store, state, t))]
+        if not loaded: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
+        known = [(t, s) for t, s in loaded if t['kind']]
+        if not known: raise SlotRepair(UNKNOWN_PREVIOUS_TABLE)
+        # 리포트는 수출만 지원한다(D-81). 수출입을 함께 조회한 답변의 수입 표는 후보에서 뺀다.
+        usable = [(t, s) for t, s in known if s['conditions'].get('trade_flow') != 'IMPORT']
+        if not usable: raise SlotRepair(EXPORT_ONLY)
+        checked = {t['result_id']: s for t, s in usable}
+        pages = _table_pages(len(usable))
+        # 고른 표가 그사이 만료됐으면 남은 표로 다시 묻는다(후보가 하나여도 자동으로 바꾸지 않는다).
+        # '다음 목록' 뒤 후보 구성이 바뀌었으면(만료 등) 쪽 위치가 다른 표를 가리키므로 첫 쪽부터 다시 보인다.
+        # 구성 기록이 없는 이전 답은 쪽 자체가 사라졌을 때만 다시 시작한다.
+        expired_pick = chosen is not None and chosen not in {t['result_id'] for t, _ in usable}
+        changed = chosen is None and page > 0 and (page >= len(pages) or
+                                                   (shown is not None and shown != _candidates_digest(usable)))
+        if expired_pick or changed:
+            # 만료·후보 감소로 처음부터 다시 묻는 것은 사용자 답 때문이 아니므로 되묻기 횟수(조건별 2회)를 새로 센다.
+            # 대신 다시 고를 때까지 자동 선택을 막는 표시를 남긴다(만료면 안내 문구도 유지).
+            _forget_pages(task, key)
+            for name in [k for k in state.ask_counts if k == key or k.startswith(f'{key}:page')]:
+                state.ask_counts.pop(name)
+            reason = 'expired' if expired_pick else task.resolved.get(f'{key}:reselect', {}).get('reason', 'changed')
+            task.resolved[f'{key}:reselect'] = {'reason': reason}
+            chosen, page = None, 0
+        reselect = task.resolved.get(f'{key}:reselect', {}).get('reason')
+        # 표를 고르라고 한 번이라도 물었다면 사용자가 직접 고를 때까지 자동으로 고르지 않는다
+        # (선택이 만료됐거나, 다음 목록 뒤 후보가 줄었거나, 답이 선택지와 맞지 않은 경우 모두). 첫 쪽은 항상 먼저 묻는다.
+        asked = bool(state.ask_counts.get(key)) or reselect is not None
+        if chosen is None and len(usable) == 1 and not asked:
+            chosen = usable[0][0]['result_id']
+        if chosen is None:
+            every = [{**t, 'conditions': s['conditions']} for t, s in usable]
+            labels = _table_labels(store, every)   # 번호·기간 표시는 전체 후보 기준
+            start, end = pages[page]
+            options = [(f'T{i + 1}', labels[i], {'previous_result_id': every[i]['result_id']}) for i in range(start, end)]
+            if page + 1 < len(pages):
+                options.append(('NEXT', f'다음 목록 ({end + 1}~{len(usable)}번)',
+                                {'previous_table_page': page + 1, 'previous_table_candidates': _candidates_digest(usable)}))
+            message = ('선택한 결과표의 보관 기간이 지났습니다. 남은 결과표 중에서 골라 주세요.' if reselect == 'expired'
+                       else '어느 결과표로 리포트를 만들까요?')
+            ask(state, task, _page_key(key, page), 'REPORT_TABLE', message, options)
+            return None
+        task.resolved.pop(f'{key}:reselect', None)
+        task.resolved[key] = {'previous_result_id': chosen}
+    table = next((t for t in tables if t['result_id'] == chosen), None)
+    if table is None:
+        raise SlotRepair('선택한 결과표가 직전 답변에 없습니다. 새 질문으로 다시 요청해 주세요.')
+    snapshot = checked.get(chosen) or _load(store, state, table)
+    if snapshot is None: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
+    if not table['kind']: raise SlotRepair(UNKNOWN_PREVIOUS_TABLE)
+    try: stored_conditions(snapshot)
+    except ValidationError as exc:
+        # 기존 채팅 API는 국가 250개·품목 100개까지 허용했다. 에이전트 조건 상한(D-24)을 넘는 표는 작업 실패 대신 안내한다.
+        raise SlotRepair(f'직전 결과표의 조건(국가 {MAX_COUNTRIES}개·품목 {MAX_HS_ITEMS}개 이내)을 리포트로 옮길 수 없습니다. '
+                         '범위를 줄여 다시 조회한 뒤 리포트를 요청해 주세요.') from exc
+    meta = snapshot['meta']
+    return snapshot, {'result_id': chosen, 'version': meta.get('input_fingerprint'),
+                      'completeness': meta.get('completeness'), 'limitations': meta.get('limitations') or []}
+
+
+def stored_conditions(snapshot):
+    """결과표에 저장된 분석 조건. 리포트는 표를 만든 조건 그대로 쓴다(재조회 없음)."""
+    stored = snapshot['conditions']
+    return Conditions.model_validate({k: v for k, v in stored.items() if k in Conditions.model_fields})
 
 
 def source_versions(store,state,task):
@@ -28,7 +237,7 @@ def resolve(store,state,task,out):
     for index,(binding,(snapshot,source)) in enumerate(zip(task.input_bindings,source_versions(store,state,task),strict=True)):
         if index==0:
             stored=snapshot['conditions']
-            out=Conditions.model_validate({k:v for k,v in stored.items() if k in Conditions.model_fields})
+            out=stored_conditions(snapshot)
         elif any(snapshot['conditions'].get(k)!=stored.get(k) for k in ('period','trade_flow')):
             # 뒤 선행 결과의 기간·수출입이 다르면 첫 결과 기준으로 분석하고 그 사실을 적용 조건에 남긴다
             p=out.period
