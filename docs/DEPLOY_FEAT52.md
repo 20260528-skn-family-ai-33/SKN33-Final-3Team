@@ -105,6 +105,7 @@ sha256sum data/ml/monthly_models/*.joblib data/ml/monthly_models/*.registry.json
 | `API_ML_GROWTH_MODEL_PATH` | (비움) | 추가. 비우면 위 폴더에서 모델 A와 같은 기준월 B 파일을 찾는다 |
 | `API_ML_SNAPSHOT_PATH` | - | **삭제** (더 이상 읽지 않음) |
 
+- 배포 전 API·워커가 읽는 운영 `.env`에서 기존 `API_INTENT_MODEL=gpt-4.1-mini`와 `API_SQL_MODEL=gpt-4.1`을 각각 `gpt-6-luna`로 바꾸거나 해당 설정 줄을 삭제해 코드 기본값을 적용한다. 플래너 모델은 `API_PLANNER_MODEL`로 지정하며 기본값은 `gpt-5.6-luna`다.
 - 기존 `OPENAI_API_KEY`, `API_REDIS_URL`, `API_REDIS_PREFIX` 등은 그대로 쓴다.
 - 자유 SQL(LLM SQL)은 지금 `.env`의 DB 계정으로 `READ ONLY` 트랜잭션에서 돈다. 배포 전에 읽기 전용 DB 계정으로 바꾸는 것이 설계 결정이다(`TODO(D-41)`).
 
