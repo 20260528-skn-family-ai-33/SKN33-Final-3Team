@@ -122,7 +122,7 @@ python -m backend.app.scheduler.jobs.hs_code_refresh
 
 - `hs_code_refresh`는 DB에 올해 판 코드가 모두 있으면 `ALREADY_LOADED`로 끝나 CSV를 만들지 않습니다. CSV만 다시 만들 때는 ②를 실행합니다.
 
-- 요약은 `hscode_outputs/hs6_summary_cache_v2_<hs_ver>_<모델>.json`에 저장됩니다. 다시 실행하면 캐시에 없는 코드만 API로 요청합니다.
+- HS 코드 요약 생성의 기본 모델은 `gpt-6-luna`이며, `hs_code_build.py`의 `--model` 옵션으로 변경할 수 있습니다. 요약은 `hscode_outputs/hs6_summary_cache_v2_<hs_ver>_<모델>.json`에 저장됩니다. 같은 판과 모델로 다시 실행하면 해당 캐시에 없는 요약만 요청합니다.
   처음부터 다시 요약하려면 이 캐시 파일을 지웁니다. 수동 요약으로 바뀐 코드의 기존 LLM 요약도 캐시에 남겨 둡니다.
 - LLM 응답은 비어 있지 않은 문자열이고 `|`·HS코드가 없으며 20자 이하일 때만 캐시에 저장합니다. 끝의 영문자는 원문에 단독으로 있는 글자(예: 비타민 C)만 허용합니다. 캐시를 읽을 때도 같은 검사를 해서,
   유효하지 않은 값(이전 버전이 남긴 `None` 등)은 버리고 다시 요청합니다. 캐시 폴더는 API 호출 전에 만듭니다(`--cache-dir`).
@@ -339,7 +339,7 @@ python -m unittest discover backend/tests
 | `hs_code_load_<시각>.log` | 검증 오류, 적재 결과, DB 오류 traceback |
 
 자동 갱신으로 만든 CSV와 로그는 판별 폴더(`hscode_outputs/HS2028/` 등)에 저장되어 기존 판 결과를 덮어쓰지 않습니다.
-요약 캐시는 결과 폴더와 상관없이 항상 `hscode_outputs/`에 판별 파일명으로 두므로, 이미 요약한 코드는 다시 요청하지 않습니다.
+요약 캐시는 결과 폴더와 상관없이 항상 `hscode_outputs/`에 판과 모델별 파일명으로 두므로, 같은 판·모델의 유효한 요약은 재사용합니다.
 
 ## 주의
 

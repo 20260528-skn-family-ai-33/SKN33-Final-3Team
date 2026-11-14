@@ -87,13 +87,16 @@ sha256sum data/ml/monthly_models/*.joblib data/ml/monthly_models/*.registry.json
 
 ### API·워커 (`backend/.env.api.example` 기준)
 
-Writer의 최종 운영 모델은 `gpt-6-luna`다. `API_COMPOSE_MODEL`을 생략하면 이 모델을 사용한다. 배포 환경에서 값을 지정하면 지정한 모델로 호출하고 실행 기록에도 그 이름을 남긴다. [Dev 평가](evaluations/WRITER_DEV_EVALUATION.md) · [독립 Holdout 평가와 선정 근거](evaluations/WRITER_HOLDOUT_EVALUATION.md)
+플래너의 기본값은 `gpt-5.6-luna`이고, 의도 분류·일반 및 문장형 Writer·SQL 생성의 기본값은 `gpt-6-luna`다. 배포 환경에서 값을 지정하면 지정한 모델로 호출하고 실행 기록에도 그 이름을 남긴다. 단신속보 분석·기사 RAG 요약·HS 코드 요약 생성도 기본 모델로 `gpt-6-luna`를 사용한다. [Dev 평가](evaluations/WRITER_DEV_EVALUATION.md) · [독립 Holdout 평가와 선정 근거](evaluations/WRITER_HOLDOUT_EVALUATION.md)
 
 | 키 | 값 | 변경 |
 |---|---|---|
 | `API_CHAT_AGENT_ENABLED` | `true` | 추가. 새 질문을 LangGraph 워커로 접수한다. 기존 미완료 작업은 원래 실행기로 마친다 |
 | `API_COMPOSE_TIMEOUT_SECONDS` | `20` | 추가 |
-| `API_SQL_MODEL` | `gpt-4.1` | 추가 (C-30 미정, 임시값) |
+| `API_PLANNER_MODEL` | `gpt-5.6-luna` | 플래너 |
+| `API_INTENT_MODEL` | `gpt-6-luna` | 직접 입력 해석 |
+| `API_COMPOSE_MODEL`, `API_COMPOSE_TEXT_MODEL` | `gpt-6-luna` | 일반·문장형 Writer |
+| `API_SQL_MODEL` | `gpt-6-luna` | SQL 생성 |
 | `API_SQL_TIMEOUT_SECONDS` | `20` | 추가 |
 | `API_SQL_EXECUTION_SECONDS` | `30` | 추가 |
 | `API_CHAT_MAX_RECOVERIES` | `2` | 추가 |
@@ -102,7 +105,7 @@ Writer의 최종 운영 모델은 `gpt-6-luna`다. `API_COMPOSE_MODEL`을 생략
 | `API_ML_GROWTH_MODEL_PATH` | (비움) | 추가. 비우면 위 폴더에서 모델 A와 같은 기준월 B 파일을 찾는다 |
 | `API_ML_SNAPSHOT_PATH` | - | **삭제** (더 이상 읽지 않음) |
 
-- 기존 `OPENAI_API_KEY`, `API_REDIS_URL`, `API_REDIS_PREFIX`, `API_INTENT_MODEL` 등은 그대로 쓴다.
+- 기존 `OPENAI_API_KEY`, `API_REDIS_URL`, `API_REDIS_PREFIX` 등은 그대로 쓴다.
 - 자유 SQL(LLM SQL)은 지금 `.env`의 DB 계정으로 `READ ONLY` 트랜잭션에서 돈다. 배포 전에 읽기 전용 DB 계정으로 바꾸는 것이 설계 결정이다(`TODO(D-41)`).
 
 ### 스케줄러 (`.env.sample` 기준, 10번을 할 때만)

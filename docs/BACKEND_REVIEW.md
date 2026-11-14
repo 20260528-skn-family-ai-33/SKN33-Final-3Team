@@ -267,7 +267,7 @@ RDS에서는 읽기 전용 트랜잭션으로 새 채팅·리포트 후보 SELEC
 
 수정 파일과 이유:
 
-- `backend/app/api/intent.py` (신규): IntentProvider의 OpenAI Structured Outputs 구현. 기본 gpt-4.1-mini, store=False, temperature=0, timeout 10초, 자동 재시도 없음. intent/국가/품목 표현/기간/방향을 단일 호출로 추출한다.
+- `backend/app/api/intent.py` (신규): IntentProvider의 OpenAI Structured Outputs 구현. 리뷰 당시 기본값 `gpt-4.1-mini`, store=False, temperature=0, timeout 10초, 자동 재시도 없음. intent/국가/품목 표현/기간/방향을 단일 호출로 추출한다.
 - `backend/app/api/chat_slots.py` (신규): 슬롯의 원문 근거·국가 사전·공개 기간 검증. 모호한 두 글자 국가 약어는 버리고, 유효하지 않은 기간/품목은 재입력을 안내한다. HS 코드는 추론하지 않고 명시된 코드를 검증한다.
 - `backend/app/api/chat.py`: 정규식 의도 파서와 앞 세 단어 검색을 제거. 메시지 JSON의 추출 슬롯을 되묻기 후 재사용하고, 후보 없음/오추천 시 API-12 직접 선택으로 재개할 수 있게 했다.
 - `backend/app/api/search_cache.py` (신규), `database.py`, `hs_vectors.py`: 프로세스별 TTL/LRU 상한 및 동일 키 동시 요청 합치기. 검색 결과/질의 임베딩 캐시, 임베딩 timeout 축소.
