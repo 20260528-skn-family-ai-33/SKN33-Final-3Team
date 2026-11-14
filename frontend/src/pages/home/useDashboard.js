@@ -86,7 +86,8 @@ export default function useDashboard(view, months, profile) {
     // 기간(3·6·12개월)을 바꾸면 순위와 추이 그래프를 모두 받을 때까지 스켈레톤을 보여 준다.
     cardsLoading: availability.loading || cardProducts.loading || series.loading,
     productTable: { title: '품목별 수출입', sub: periodText(tableProducts.data), rows: productRows, note: '공개된 관세청 집계 기준', empty: !!tableProducts.data && !productRows.length },
-    countryTable: { title: '교역국별 수출입', sub: tablePeriod, rows: countryRows, empty: !!countries.data && !(countries.data.items || []).some(r => r.has_data !== false), pieTitle: '수출액 비중', pie: (shares.data?.items || []).filter(r => r.share_pct != null).map((r, i) => [`${r.label} ${Number(r.share_pct).toFixed(1)}%`, r.country_code == null ? PIE_OTHER : PIE_COLORS[i % PIE_COLORS.length]]), pieNote: `${tableRange.period_start || '—'} ~ ${end || '—'} · 전체 수출국 분모 · 상위 10개국+기타` },
+    // pieLoading: 비중 자료를 아직 받는 중인지. 조회가 끝났는데 0건인 경우와 구분해, 빈 결과여도 기준 문구는 보이게 한다.
+    countryTable: { pieLoading: availability.loading || shares.loading, title: '교역국별 수출입', sub: tablePeriod, rows: countryRows, empty: !!countries.data && !(countries.data.items || []).some(r => r.has_data !== false), pieTitle: '수출액 비중', pie: (shares.data?.items || []).filter(r => r.share_pct != null).map((r, i) => [`${r.label} ${Number(r.share_pct).toFixed(1)}%`, r.country_code == null ? PIE_OTHER : PIE_COLORS[i % PIE_COLORS.length]]), pieNote: `${tableRange.period_start || '—'} ~ ${end || '—'} · 전체 수출국 분모 · 상위 10개국+기타` },
     un: [], unSub: '관심 HS6·국가의 UN 데이터 공개 여부를 확인합니다.',
     newsTitle: scope === 'GLOBAL' ? '최신 해외시장 기사' : '내 관심 기사', newsSub: '기사별 출처와 원문을 확인하세요.', newsCards: (news.data?.items || []).map(mapArticle),
   }

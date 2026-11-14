@@ -208,7 +208,7 @@ export default function Dashboard({ route }) {
   const skeletonCount = Math.min(cardCount, 5)
   const [unRef, unHeight] = useUnVisibleHeight([data.un])
   // 스크롤 등장 효과(data-reveal). 원그래프는 자료를 받은 뒤에 관찰을 시작하도록 자료 수가 바뀌면 다시 살핀다.
-  useScrollReveal(data.countryTable.pie.length)
+  useScrollReveal(`${data.countryTable.pieLoading}|${data.countryTable.pie.length}`)
 
   return (
     <>
@@ -380,7 +380,7 @@ export default function Dashboard({ route }) {
                 </div>
                 {/* 원그래프는 제목 바로 아래, 국가 목록은 그 아래. 목록이 길면 목록 안에서 스크롤한다. */}
                 {/* 화면에 들어오면 원그래프가 한 바퀴 돌며 나타나고, 그 뒤에 국가 목록이 나타난다(자료를 받기 전에는 기다린다). */}
-                <div data-reveal={data.countryTable.pie.length ? 'pie' : 'pie-wait'} style={{ marginTop: 15, display: 'flex', justifyContent: 'center' }}>
+                <div data-reveal={data.countryTable.pieLoading ? 'pie-wait' : 'pie'} style={{ marginTop: 15, display: 'flex', justifyContent: 'center' }}>
                   <Donut size={240} items={data.countryTable.pie.map(([label, color]) => [label, parseFloat(label.split(' ').pop()), color])} />
                 </div>
                 <ul aria-label="수출액 비중 국가 목록" tabIndex={data.countryTable.pie.length > 10 ? 0 : undefined}

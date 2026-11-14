@@ -404,6 +404,13 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 }
 @media print{
   .zone-share{color:var(--ink);background:#fff}
+  /* 인쇄 배경이 흰색이므로 어두운 띠용 밝은 글자색을 어두운 색으로 되돌린다 */
+  .zone-share .t1,.zone-share .share-legend strong{color:var(--ink)}
+  .zone-share .sec-h .muted,.zone-share .share-legend,.zone-share .share-note{color:var(--sub)}
+  .zone-share .sec-h{border-bottom-color:var(--ink)}
+  .zone-share .more{color:var(--red-d)}
+  .zone-share .field-err{color:var(--red-d)}
+  .zone-share .un-card{box-shadow:none;border:1px solid var(--line)}
   .zone-routes,.zone-share::before,.zone-overview::before,.zone-overview::after{display:none}
 }
 

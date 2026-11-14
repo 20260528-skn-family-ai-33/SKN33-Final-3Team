@@ -83,7 +83,7 @@ const { chromium } = require('playwright')
     await page.goto(base + '#/login')
     await page.getByRole('link', { name: '회원가입', exact: true }).waitFor()
     assert.equal(await page.getByRole('link', { name: '회원가입', exact: true }).count(), 1)
-    await page.getByText(/구분 적용 전에 가입한 계정은 이메일을 모두 소문자/).waitFor()
+    await page.getByText('가입한 이메일의 대소문자를 정확히 입력해 주세요.').waitFor()
 
     await page.goto(base + '#/onboarding')
     await page.getByRole('combobox', { name: '품목 검색' }).fill('말')
