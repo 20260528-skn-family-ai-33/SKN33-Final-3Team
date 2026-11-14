@@ -37,9 +37,13 @@ class Period(Input):
         return self
 
 
+# Every catalog entry has a two-letter uppercase code.
+COUNTRY_CODE_CAPACITY = 26 ** 2
+
+
 class Conditions(Input):
     hs_items: list[HsItem] = Field(default_factory=list, max_length=100)
-    country_codes: list[str] = Field(default_factory=list, max_length=250)
+    country_codes: list[str] = Field(default_factory=list, max_length=COUNTRY_CODE_CAPACITY)
     period: Period
     compare_period: Period | None = None
     trade_flow: Literal['EXPORT', 'IMPORT'] = 'EXPORT'

@@ -24,6 +24,23 @@ export default function Articles({ route }) {
   const selected = q.get('id')
   const [form, setForm] = useState({ keyword, from, to })
   const [error, setError] = useState('')
+  // 주소가 바뀌면 검색칸과 오류 문구를 주소 값으로 다시 맞춘다.
+  // - 검색 조건(탭·검색어·기간)이 바뀐 경우: 탭 클릭, 검색, 뒤로가기 등. 탭은 주소에 적힌 값 그대로 비교한다.
+  // - 조건 없는 '#/articles'로 들어온 경우: 상단 메뉴 '기사'로 돌아온 것이므로 2페이지·펼친 기사에서 돌아와도 미적용 입력·오류를 비운다.
+  // 기사 펼치기(id)·페이지 이동(page)만 바뀐 경우에는 입력해 둔 내용을 그대로 둔다.
+  const urlSearch = JSON.stringify([q.get('tab'), keyword, from, to])
+  const [formSource, setFormSource] = useState({ urlSearch, raw: route.search })
+  if (formSource.urlSearch !== urlSearch || formSource.raw !== route.search) {
+    if (formSource.urlSearch !== urlSearch || !route.search) { setForm({ keyword, from, to }); setError('') }
+    setFormSource({ urlSearch, raw: route.search })
+  }
+  const clearForm = () => { setForm({ keyword: '', from: '', to: '' }); setError('') }
+  // 이미 '#/articles'에 있을 때 상단 메뉴 '기사'를 다시 누르면 주소가 그대로라 위 비교로는 알 수 없다. 머리글이 보내는 신호로 비운다.
+  useEffect(() => {
+    const onReselect = e => { if (e.detail === '/articles') { setForm({ keyword: '', from: '', to: '' }); setError('') } }
+    window.addEventListener('nav:reselect', onReselect)
+    return () => window.removeEventListener('nav:reselect', onReselect)
+  }, [])
   const page = Math.max(1, Number(q.get('page')) || 1)
   const listTop = useRef(null)
   const previousPage = useRef(page)
@@ -61,7 +78,9 @@ export default function Articles({ route }) {
         lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '유형별 무역·경제 기사 조회'}
         right={(
           <div className="chips">
-            {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} to={withQuery(route, { tab: key, id: null, page: null })}>{label}</Chip>)}
+            {/* 탭을 누르면(지금 보고 있는 탭을 다시 눌러도) 검색어·발행 기간을 지우고 그 탭의 최신 기사부터 보여 준다.
+                주소가 그대로인 경우(검색 전 입력만 해 둔 상태)도 있어 현재 탭은 클릭할 때 폼을 직접 비운다. */}
+            {articleTabs.map(([key, label]) => <Chip key={key} on={tab === key} onClick={tab === key ? clearForm : undefined} to={withQuery(route, { tab: key, id: null, page: null, q: null, from: null, to: null })}>{label}</Chip>)}
           </div>
         )}
       />
@@ -75,7 +94,7 @@ export default function Articles({ route }) {
               </div>
               <div>
                 <span className="lbl" id="ar-period">발행 기간 (선택)</span>
-                <div className={'input' + (form.from || form.to ? ' val' : '')} role="group" aria-labelledby="ar-period" style={{ gap: 6 }}>
+                <div className={'input period-input' + (form.from || form.to ? ' val' : '')} role="group" aria-labelledby="ar-period">
                   <input type="date" aria-label="시작일" value={form.from} onChange={e => setForm(f => ({ ...f, from: e.target.value }))} style={{ minWidth: 0 }} />
                   <span>~</span>
                   <input type="date" aria-label="종료일" value={form.to} onChange={e => setForm(f => ({ ...f, to: e.target.value }))} style={{ minWidth: 0 }} />
@@ -85,7 +104,7 @@ export default function Articles({ route }) {
             </div>
             {error
               ? <p className="field-err" role="alert" style={{ marginTop: 10 }}>{error}</p>
-              : <p className="note" style={{ marginTop: 10 }}>검색어와 기간은 모두 선택 사항입니다 · 기간 미지정 시 전체 기간 · 탭을 바꿔도 검색 조건 유지</p>}
+              : <p className="note" style={{ marginTop: 10 }}>검색어와 기간은 모두 선택 사항입니다 · 기간 미지정 시 전체 기간 · 탭을 누르면 검색 조건 초기화</p>}
           </form>
           <div ref={listTop} className="sec-h" style={{ marginTop: 8, scrollMarginTop: 90 }}>
             <h2 className="t2">

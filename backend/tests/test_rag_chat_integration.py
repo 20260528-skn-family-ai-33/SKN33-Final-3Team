@@ -1,5 +1,6 @@
 """SQLite, local Chroma and model doubles exercise the real chat/RAG connection."""
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 from unittest.mock import patch
 
@@ -166,6 +167,14 @@ class ChatRagIntegrationTest(unittest.TestCase):
                 summarize = service.gateway.summarize
                 attempted = []
 
+                class DeadlineTestExecutor(ThreadPoolExecutor):
+                    # Advance the fake clock only after the first cards are verified and published.
+                    def submit(self, fn, rank, *args):
+                        future = super().submit(fn, rank, *args)
+                        if rank < accepted:
+                            future.result(timeout=10)
+                        return future
+
                 def timed_summary(request, candidate, context):
                     attempted.append(candidate.article.article_id)
                     if len(attempted) > accepted:
@@ -180,6 +189,7 @@ class ChatRagIntegrationTest(unittest.TestCase):
 
                 # 검색 마감은 chat_news가 필터 조회 전에 잰 시각부터 센다. 두 곳 모두 같은 시험 시계를 쓴다
                 with patch('backend.app.agents.tools.time') as timer, \
+                     patch('backend.app.services.rag.parallel_review.ThreadPoolExecutor', DeadlineTestExecutor), \
                      patch('backend.app.api.chat_news.time', timer), \
                      patch('backend.app.agents.tools.ExecutionContext', side_effect=context_with_test_clock), \
                      patch.object(service.gateway, 'summarize', side_effect=timed_summary):

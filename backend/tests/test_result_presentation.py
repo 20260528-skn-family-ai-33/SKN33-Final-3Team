@@ -213,6 +213,20 @@ class ResultPresentationTest(unittest.TestCase):
         finally:
             engine.dispose()
 
+    def test_filename_limits_countries_and_products_separately(self):
+        from backend.app.api.filenames import selection_part
+
+        self.assertEqual(selection_part([], '전체국가'), '전체국가')
+        self.assertEqual(selection_part(['미국']), '미국')
+        self.assertEqual(selection_part(['미국', '중국']), '미국 외 1개')
+        long_names = selection_part(['하' * 50, '나' * 50, '다' * 50, '라', '마'])
+        self.assertRegex(long_names, '^하+ 외 4개$')
+        self.assertLessEqual(len(long_names.encode()), 60)
+        name = result_filename({'snapshot_created_at': datetime(2026, 11, 2), 'conditions': {
+            'country_codes': ['US', 'CN', 'JP', 'VN'], 'hs_items': [
+                {'hs_code': str(code)} for code in range(330410, 330415)]}})
+        self.assertIn('US 외 3개_330410 외 4개_', name)
+
 
     def test_report_formats_share_condition_filename_and_sanitize_topic(self):
         from backend.app.api.reports import download_filename

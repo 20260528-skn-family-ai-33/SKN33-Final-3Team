@@ -159,12 +159,15 @@ def chart_image(section, chart, settings):
         fig.tight_layout(); out=BytesIO(); fig.savefig(out,format='png'); return out.getvalue()
     labels=[str(r[x]) for r in rows]; values=[r[y] for r in rows]
     if chart['chart_type']=='HORIZONTAL_BAR':
-        ax.barh(labels,values,color='#006849'); ax.invert_yaxis()
+        ax.barh(labels,values,color='#1e293a'); ax.invert_yaxis()
     else:
-        colors=['#006849','#2E6DB4','#8E5BB5','#E07B24','#C2477A']
+        colors=['#1e293a','#2E6DB4','#8E5BB5','#E07B24','#C2477A']
         names={c['key']:c['label'] for c in table['columns']}
         for i,key in enumerate(chart['series_keys']):
             ax.plot(labels,[r.get(key) for r in rows],color=colors[i%len(colors)],marker='o',markersize=3,label=names.get(key,key))
+        if len(chart['series_keys']) == 1 and len(labels) > 1:
+            ax.fill_between(labels, [float(v) if v is not None else math.nan for v in values],
+                            ax.get_ylim()[0], color='#a6b6d0', zorder=0)
         if len(chart['series_keys'])>1: ax.legend(prop=font,fontsize=8)
         if len(labels)>12:
             positions=list(range(0,len(labels),max(1,len(labels)//6)))
@@ -178,7 +181,10 @@ def chart_image(section, chart, settings):
     fig.tight_layout(); out=BytesIO(); fig.savefig(out,format='png'); return out.getvalue()
 
 
-def report_pdf(document,settings):
+def report_pdf(document,settings, *, page=None):
+    if page is not None:
+        from backend.app.services.report_pdf import pdf_from_page
+        return pdf_from_page(page)
     if document.get('template_pdf'):
         from backend.app.services.report_pdf import template_pdf
         saved=document['template_pdf']
@@ -200,7 +206,7 @@ def reportlab_pdf(document,settings):
     for key in styles.byName: styles[key].fontName='ReportKorean'
     styles.add(ParagraphStyle('KBody',fontName='ReportKorean',fontSize=9,leading=15,spaceAfter=8))
     styles.add(ParagraphStyle('KTitle',fontName='ReportKorean',fontSize=25,leading=36,spaceAfter=24))
-    styles.add(ParagraphStyle('KHead',fontName='ReportKorean',fontSize=16,leading=23,textColor=colors.HexColor('#006849'),spaceAfter=16))
+    styles.add(ParagraphStyle('KHead',fontName='ReportKorean',fontSize=16,leading=23,textColor=colors.HexColor('#1e293a'),spaceAfter=16))
     p=lambda text,style='KBody':Paragraph(escape(str(text)).replace('\n','<br/>'),styles[style])
     stream=BytesIO(); story=[Spacer(1,95),p('BORDERLESS SELLERS','KHead'),p(document['title'],'KTitle'),
         p(document['subtitle']),p('생성일 '+report_time(document['generated_at'])),PageBreak(),p('목차','KHead')]
@@ -215,7 +221,7 @@ def reportlab_pdf(document,settings):
             data.extend([[p(display(row.get(c['key']),c['key'])) for c in visible] for row in table['rows']])
             if visible:
                 grid=Table(data,colWidths=[483/len(visible)]*len(visible),repeatRows=1,hAlign='LEFT')
-                grid.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#EEEAE4')),('VALIGN',(0,0),(-1,-1),'TOP'),('LINEBELOW',(0,0),(-1,-1),0.4,colors.HexColor('#D9D4CC')),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
+                grid.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#d6dde9')),('VALIGN',(0,0),(-1,-1),'TOP'),('LINEBELOW',(0,0),(-1,-1),0.4,colors.HexColor('#d6dde9')),('TOPPADDING',(0,0),(-1,-1),7),('BOTTOMPADDING',(0,0),(-1,-1),7)]))
                 story.extend([grid,Spacer(1,18)])
         for a in s.get('articles',[]): story.extend([p(a['title']),p(a['summary']),p(f'{a["source_code"]} · {a["published_date"]} · {a["source_url"]}')])
         story.append(PageBreak())
@@ -230,7 +236,7 @@ def reportlab_pdf(document,settings):
     return stream.getvalue()
 
 
-def report_docx(document,settings=None):
+def report_docx(document,settings=None, *, page=None):
     from backend.app.api.config import Settings
     settings=settings or Settings()
     from docx import Document
@@ -240,12 +246,39 @@ def report_docx(document,settings=None):
     # 사용자가 제공한 요약보고서의 결재란/행 구조를 보존한 템플릿이다.
     doc=Document(Path(__file__).resolve().parents[1]/'templates/reports/summary.docx'); section=doc.sections[0]
     section.top_margin=section.bottom_margin=Cm(2); section.left_margin=section.right_margin=Cm(2)
-    for name in ('Normal','Title','Heading 1','Heading 2'):
-        style=doc.styles[name]; style.font.name='맑은 고딕'; style.font.size=Pt(10 if name=='Normal' else 20)
-        style.element.rPr.rFonts.set(qn('w:eastAsia'),'맑은 고딕')
+    def malgun(font_owner):
+        font_owner.font.name = '맑은 고딕'
+        fonts = font_owner._element.get_or_add_rPr().rFonts
+        for attr in ('asciiTheme', 'hAnsiTheme', 'eastAsiaTheme', 'cstheme'):
+            fonts.attrib.pop(qn('w:' + attr), None)
+        fonts.set(qn('w:eastAsia'), '맑은 고딕')
+
+    for name, size in [('Normal', 10), ('Title', 26), ('Heading 1', 20), ('Heading 2', 14)]:
+        style = doc.styles[name]
+        malgun(style)
+        style.font.size = Pt(size)
+        # The supplied form fixes Normal at 13pt, which clips headings and inline charts.
+        style.paragraph_format.line_spacing = 1.15
+        if name != 'Normal':
+            style.font.color.rgb = RGBColor.from_string('1E293A')
+            style.paragraph_format.keep_with_next = True
+
+    # Leave room for wrapped text and the approval grid on a single A4 summary.
+    for row in doc.tables[1].rows:
+        if row.height and row.height > Cm(5):
+            row.height = Cm(5)
+    scope = document['subtitle']
+    saved = document.get('template_pdf')
+    if saved:
+        from backend.app.services.report_templates import cover_scope
+        context = saved['context']
+        period = document['meta'].get('period') or {}
+        period_label = (f"{period['start']} ~ {period['end']}" if period.get('start') and period.get('end')
+                        else context['report']['period_label'])
+        scope = f"{cover_scope(context['conditions'])} · {period_label} · USD"
     replacements={
         '{{report_date}}':report_time(document['generated_at'])[:10], '{{title}}':document['title'],
-        '{{scope}}':document['subtitle']+'\n출처: '+', '.join(s['label'] for s in document['meta']['sources']),
+        '{{scope}}':scope+'\n출처: '+', '.join(s['label'] for s in document['meta']['sources']),
         '{{summary}}':next((s['text'] for s in document['sections'] if s['section_code']=='SUMMARY'),document['sections'][0]['text']),
         '{{conclusion}}':'수치와 기사 목록은 첨부 상세 분석을 참조하세요. ML 시장 평가·RAG 원인 해석은 담당 모듈 연결 전까지 제공하지 않습니다.',
         '{{follow_up}}':'담당자가 통계 기준과 원문 기사를 확인한 뒤 시장 판단·담당·일정·예산을 기입합니다.'}
@@ -256,28 +289,56 @@ def report_docx(document,settings=None):
                 if cell._tc in seen: continue
                 seen.add(cell._tc)
                 for paragraph in cell.paragraphs:
+                    if paragraph.text == '보고서':
+                        paragraph.text = '<제목(직접입력)>'
+                        run = paragraph.runs[0]
+                        run.italic = True
+                        run.font.color.rgb = RGBColor.from_string('737373')
                     for key,value in replacements.items():
                         if key in paragraph.text: paragraph.text=paragraph.text.replace(key,value)
-    doc.add_page_break()
-    doc.add_paragraph('BORDERLESS SELLERS'); doc.add_heading(document['title'],0)
-    doc.add_paragraph(document['subtitle']); doc.add_paragraph('생성일 '+report_time(document['generated_at'])); doc.add_page_break()
-    doc.add_heading('목차',1)
+                    for run in paragraph.runs:
+                        malgun(run)
+
+    if saved:
+        from backend.app.services.report_word import append_print_template
+        append_print_template(doc, saved, settings, page=page)
+        stream = BytesIO()
+        doc.save(stream)
+        return stream.getvalue()
+
+    brand = doc.add_paragraph('BORDERLESS SELLERS')
+    brand.paragraph_format.page_break_before = True
+    brand.paragraph_format.space_before = Cm(4)
+    doc.add_heading(document['title'],0)
+    border = doc.styles['Title'].element.find('w:pPr/w:pBdr', doc.element.nsmap)
+    if border is not None:
+        border.getparent().remove(border)
+    doc.add_paragraph(document['subtitle']); doc.add_paragraph('생성일 '+report_time(document['generated_at']))
+    doc.add_heading('목차',1).paragraph_format.page_break_before = True
     for s in document['sections']: doc.add_paragraph(s['title'])
-    doc.add_page_break()
     for s in document['sections']:
-        doc.add_heading(s['title'],1); doc.add_paragraph(s['text'])
+        doc.add_heading(s['title'],1).paragraph_format.page_break_before = True
+        doc.add_paragraph(s['text'])
         for chart in s.get('charts',[]): doc.add_picture(BytesIO(chart_image(s,chart,settings)),width=Cm(16))
-        for source in s.get('tables',[]):
+        for index, source in enumerate(s.get('tables',[])):
             # Preserve every saved column, including the seven-column report KPI.
+            if index:
+                spacer = doc.add_paragraph()
+                spacer.paragraph_format.line_spacing = Pt(6)
             cols=source['columns']
-            table=doc.add_table(rows=1,cols=len(cols)); table.style='Light Shading Accent 1'
-            for cell,col in zip(table.rows[0].cells,cols): cell.text=col['label']
+            table=doc.add_table(rows=1,cols=len(cols)); table.style='Table Grid'
+            for cell,col in zip(table.rows[0].cells,cols):
+                cell.text=col['label']
+                cell.paragraphs[0].runs[0].bold = True
+                shade = OxmlElement('w:shd')
+                shade.set(qn('w:fill'), 'D6DDE9')
+                cell._tc.get_or_add_tcPr().append(shade)
             repeat=OxmlElement('w:tblHeader'); table.rows[0]._tr.get_or_add_trPr().append(repeat)
             for row in source['rows']:
                 for cell,col in zip(table.add_row().cells,cols): cell.text=display(row.get(col['key']),col['key'])
         for a in s.get('articles',[]):
             doc.add_heading(a['title'],2); doc.add_paragraph(a['summary']); doc.add_paragraph(f'{a["source_code"]} · {a["published_date"]}\n{a["source_url"]}')
-        doc.add_page_break()
-    doc.add_heading('데이터 기준 · 출처',1); doc.add_paragraph(document['subtitle'])
+    doc.add_heading('데이터 기준 · 출처',1).paragraph_format.page_break_before = True
+    doc.add_paragraph(document['subtitle'])
     for source in document['meta']['sources']: doc.add_paragraph(source['label']+' '+(source.get('url') or ''))
     stream=BytesIO(); doc.save(stream); return stream.getvalue()
