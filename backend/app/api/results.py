@@ -2,6 +2,7 @@ import secrets
 from datetime import timedelta, timezone
 import re
 from sqlalchemy import select
+from backend.app.api.filenames import selection_part
 from backend.app.api.common import now, clean, ApiError, page_info, require
 
 LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_usd':'수입액',
@@ -99,13 +100,14 @@ def result_filename(payload, store=None):
         country=store.t('country')
         names={r['country_code']:r['name_ko'] for r in store.rows(
             select(country.c.country_code,country.c.name_ko).where(country.c.country_code.in_(codes)))}
-    parts.extend([names.get(c,c) for c in codes] or ['전체국가'])
-    parts.extend(h['hs_code'] for h in conditions.get('hs_items',[]))
+    parts.append(selection_part([names.get(c,c) for c in codes], '전체국가'))
+    products = selection_part([h['hs_code'] for h in conditions.get('hs_items',[])])
+    if products: parts.append(products)
     flow={'EXPORT':'수출','IMPORT':'수입'}.get(conditions.get('trade_flow'))
     if flow: parts.append(flow)
     created=payload['snapshot_created_at']
     local=created.replace(tzinfo=created.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9)))
-    prefix=re.sub(r'[^\w~.-]+','_','_'.join(parts))[:140]
+    prefix=re.sub(r'[^\w ~.-]+','_','_'.join(parts))
     return f"{prefix}_{local:%Y%m%d_%H%M%S}.xlsx"
 
 

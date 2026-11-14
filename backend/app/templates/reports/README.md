@@ -11,9 +11,10 @@ SVG라 HTML → PDF 변환에서도 그대로 나옵니다.
 | `weekly.html` | 주간 (`RPT_WEEKLY`): 표지 · 목차 · 이번 주 요약 · 관심 품목·국가 기사 · 급증 키워드·기사 분포 (수출 통계 없음) |
 | `ondemand.html` | 요청형 (`RPT_ON_DEMAND`): 표지 · 목차 · 핵심 요약 · 월별 수출 추이 · 주요 수출국 · 현지 이슈 · 데이터 기준 (고른 섹션만, 아래 「요청형」) |
 | `_macros.html` | 공통 부품: 쪽 틀(머리말·꼬리말) · 표지 · 목차 · KPI 카드 · 요약 문장 · 기사 카드 · 출처 표 · 범례 |
-| `report.css` | 양식 디자인 (강조색 `#006849`, `layout.json`과 같음) |
+| `report.css` | PDF·Word 공통 인쇄 서식과 색상 |
 | `samples/*.json` | 양식 PDF 수치로 만든 예시 컨텍스트 (미리보기·테스트용) |
-| `layout.json`, `summary.docx` | 기존 리포트 생성(`api/reports.py`, `api/files.py`)이 쓰는 파일. 이 템플릿과 별개 |
+| `layout.json`, `summary.docx` | 공통 섹션 이름·강조색과 Word 첫 장의 회색 결재 양식 |
+| `word_layout.js` | 인쇄 화면의 글자 서식, 표 셀, 열 너비와 차트 위치를 읽어 Word 본문 생성에 전달 |
 
 렌더 코드: `backend/app/services/report_templates.py` (`render(report_type, context)`). 빠진 변수는 `StrictUndefined`로 오류가 납니다.
 
@@ -31,7 +32,7 @@ python -m unittest backend/tests/test_report_templates.py
 ## 표시 규칙
 
 - 금액은 결과표의 **USD 원값**을 그대로 넘깁니다. 템플릿이 `musd` 필터로 백만 달러로 바꿉니다 (879000000 → `879.0`).
-- 증감률은 % 숫자(18.5, −14.8)를 넘기면 `change` 필터가 `▲ 18.5%`(초록) / `▼ 14.8%`(빨강)으로, `null`이면 `—`로 표시합니다.
+- 증감률은 % 숫자(18.5, −14.8)를 넘기면 `change` 필터가 `▲ 18.5%`(남색) / `▼ 14.8%`(빨강)으로, `null`이면 `—`로 표시합니다.
   비교 값이 0이라 계산할 수 없는 국가는 행에 `is_new_mom`/`is_new_yoy: true`를 주면 “신규”로 표시합니다.
 - 요약 문장의 `**강조**`는 굵은 강조색이 됩니다. 그 밖의 문자열은 모두 HTML 이스케이프됩니다.
 - 날짜는 ISO 문자열(`2025-12-15`, `2026-01-16T06:00:00`)로 넘기면 `2025.12.15`, `2026.01.16 06:00`으로 표시합니다.
@@ -173,7 +174,8 @@ python -m unittest backend/tests/test_report_templates.py
 실제 조회 값으로 구성한 컨텍스트를 `report.content_json.template_pdf`에 버전과 함께 저장하고,
 `api/files.py::report_pdf` → `services/report_pdf.py::template_pdf`에서 이 HTML을 Chromium으로 PDF 변환합니다.
 요청형 PDF도 HTML 템플릿으로 생성하며, 템플릿 컨텍스트가 없는 과거 문서의 ReportLab 경로는 유지합니다.
-DOCX는 기존 `summary.docx`와 `sections[]` 경로를 그대로 사용합니다.
+DOCX의 첫 장은 `summary.docx`의 회색 결재 양식입니다. 이후 본문은 PDF와 같은 HTML 인쇄 템플릿에서 가져오며 글자·표·기사 링크는 Word에서 편집할 수 있습니다. SVG 그래프만 이미지로 넣습니다. 템플릿 컨텍스트가 없는 이전 스냅샷은 저장된 `sections[]`로 내보냅니다.
+여러 국가·품목을 선택하면 다운로드 파일명, 요청형 리포트 표지와 Word 결재 양식에는 각각 첫 항목과 나머지 개수를 표시합니다. 전체 선택 목록은 본문의 ‘보고서 정보’ 표에 표시합니다.
 다운로드는 저장된 파일을 읽으며 재조회·재생성하지 않습니다. XLSX는 기존 `sections[].tables` 내보내기 범위를 유지합니다.
 
 ### 실제 데이터 연결 범위

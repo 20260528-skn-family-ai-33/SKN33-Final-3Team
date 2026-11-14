@@ -406,3 +406,7 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
   .zone-share{color:var(--ink);background:#fff}
   .zone-routes,.zone-share::before,.zone-overview::before,.zone-overview::after{display:none}
 }
+
+/* 인쇄용 리포트 시트(main) */
+.print-sheet { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; }
+.print-sheet .th { background: #d6dde9; color: #1e293a; }

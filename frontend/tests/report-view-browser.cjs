@@ -30,7 +30,11 @@ const { chromium } = require('playwright')
           report: { report_id: '1', report_type: 'RPT_ON_DEMAND', status: 'READY', title: '비교 검수',
             created_at: '2026-10-29', available_formats: [], conditions: { compare: mode,
               hs_items: [], country_codes: [], period: { start: '2025-12-01', end: '2025-12-31' } } },
-          sections: [{ section_code: 'KPI', kpi: { amount_usd: 200000000, ...kpi }, tables: [] }],
+          sections: [{ section_code: 'KPI', kpi: { amount_usd: 200000000, ...kpi }, tables: [] },
+            { section_code: 'TOP_COUNTRIES', tables: [{ rows: [
+              { country: '미국', amount_usd: 100000000, share_pct: 60, yoy_pct: 12.5 },
+              { country: '일본', amount_usd: 70000000, share_pct: 40, yoy_pct: -5.5 },
+            ] }] }],
         } })
         if (pathname.endsWith('/reports')) return route.fulfill({ json: { items: [], page: { has_next: false } } })
         return route.fulfill({ status: 500, json: { message: 'Unexpected test API: ' + pathname } })
@@ -49,6 +53,9 @@ const { chromium } = require('playwright')
       const caption = page.locator('p.muted').filter({ hasText: new RegExp('^' + label + '$') })
       assert.equal(await caption.count(), 1, `${mode}: expected label ${label}`)
       assert.equal(await caption.locator('..').locator('p').nth(1).innerText(), expected)
+      for (const [text, color] of [['+12.50%', 'rgb(30, 41, 58)'], ['-5.50%', 'rgb(192, 57, 43)']]) {
+        assert.equal(await page.getByText(text, { exact: true }).evaluate(el => getComputedStyle(el).color), color)
+      }
       const previousCard = page.locator('p.note').filter({ hasText: /^비교 기간 합계$/ }).locator('..')
       assert.equal(await previousCard.locator('p').nth(1).innerText(), mode === 'MOM' ? '1.60억 USD' : '—')
       assert.deepEqual(errors, [])

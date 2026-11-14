@@ -36,7 +36,7 @@ function Section({ no, title, action, children }) {
   )
 }
 
-const SERIES_COLORS = ['#C8102E', '#2E6DB4', '#16877C', '#8E5BB5', '#E07B24']
+const SERIES_COLORS = ['#1e293a', '#2E6DB4', '#16877C', '#8E5BB5', '#E07B24']
 
 /** 월별 추이 결과표를 국가·품목별 선으로 나눈다(PDF 결과 기반 모드와 같은 기준: 시리즈 5개·월 60개 이하). 아니면 null. */
 function trendChart(table) {
@@ -96,7 +96,7 @@ function ResultSections({ sections, onDownload }) {
 
 const PROMISING_COLS = '110px 1fr 1.6fr 100px 150px'
 const CHANGE_COLS = '1.3fr 1fr 1fr 1fr 1.1fr'
-const UP = '#0B7A4B', DOWN = '#C0392B'   // PDF(report_templates.UP·DOWN)와 같은 색
+const UP = '#1e293a', DOWN = '#C0392B'   // PDF(report_templates.UP·DOWN)와 같은 색
 const signedEok = value => (value > 0 ? '+' : value < 0 ? '−' : '') + reportEok(Math.abs(Number(value)) / 1e8)
 
 /** 유망시장 위쪽의 실제 수출 증감(PDF와 같은 기준): 성장률 상위·감소율 상위 표와 국가별 증감액 막대. 비교 기간이 없으면 안내만 한다. */
@@ -146,7 +146,7 @@ function CountryChanges({ changes }) {
     </div>}
   </>
 }
-const OUTLOOK_COLOR = { '증가 예상': '#C8102E', '감소 예상': '#1F5FD1' }
+const OUTLOOK_COLOR = { '증가 예상': UP, '감소 예상': DOWN }
 export default function ReportView({ route }) {
   const { downloadReport, refreshReports } = useApp()
   const id = route.query.get('id')
@@ -194,7 +194,7 @@ export default function ReportView({ route }) {
   const monthly = byCode.KPI?.tables?.find(t => t.columns.some(col => col.key === 'month'))?.rows || []
   const scopeComparison=byCode.KPI?.tables?.find(t=>t.meta?.kind==='REPORT_SCOPE_COMPARISON')
   const scopeSeries=scopeComparison?.columns.filter(col=>col.key!=='month')||[]
-  const scopeColors=['#C8102E','#2E6DB4','#16877C','#8E5BB5','#E07B24']
+  const scopeColors=SERIES_COLORS
   const countryRows = byCode.TOP_COUNTRIES?.tables?.[0]?.rows || []
   const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '유망시장(증가·감소 예상)': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
   const o = {
@@ -232,15 +232,15 @@ export default function ReportView({ route }) {
         <div className="wrap">
           <Btn to={`/account/reports?tab=${report.kind}`} icon="arrowLeft" className="no-print" style={{ marginBottom: 20 }}>리포트 센터</Btn>
           <article className="print-sheet" style={{ background: '#fff', borderRadius: 6, boxShadow: '0 20px 50px rgba(21,24,30,.12)', maxWidth: 1000, margin: '0 auto', overflow: 'hidden' }}>
-            <div style={{ background: 'var(--plum)', color: '#fff', padding: '36px 48px 30px', position: 'relative' }}>
-              <p style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1, color: '#FF8A9A' }}>BORDERLESS SELLERS · {kind.eyebrow}</p>
+            <div style={{ background: '#1e293a', color: '#fff', padding: '36px 48px 30px', position: 'relative' }}>
+              <p style={{ fontSize: 13, fontWeight: 800, letterSpacing: 1, color: '#d6dde9' }}>BORDERLESS SELLERS · {kind.eyebrow}</p>
               <h1 style={{ fontSize: 34, fontWeight: 800, marginTop: 10 }}>{report.title}</h1>
-              <p style={{ marginTop: 10, color: '#D6D3E6', fontSize: 15 }}>{/* 주간은 기사만 싣는 리포트라 수출 분석 항목 수를 쓰지 않는다 */}
+              <p style={{ marginTop: 10, color: '#d6dde9', fontSize: 15 }}>{/* 주간은 기사만 싣는 리포트라 수출 분석 항목 수를 쓰지 않는다 */}
                 {frozen ? '승인한 분석 결과로 작성 · ' : !newsOnly && (o.sections.length === 4 ? '전체 항목 선택 · ' : `${o.sections.length}개 항목 선택 · `)}{o.product ? `HS6 ${o.product}` : '전체 품목'} · 국가: {o.country || '전체'}</p>
               <div style={{ display: 'flex', gap: 24, marginTop: 18, fontSize: 14, color: '#fff' }}>
                 <span>분석 {range(o.from, o.to)}</span><span>생성일 {kstDateTimeText(report.created)}</span>
               </div>
-              <div style={{ position: 'absolute', right: 48, top: 36, width: 110, height: 6, background: '#C8102E' }} />
+              <div style={{ position: 'absolute', right: 48, top: 36, width: 110, height: 6, background: '#a6b6d0' }} />
             </div>
             <div style={{ padding: '8px 48px 44px' }}>
               {frozen && <ResultSections sections={sections} onDownload={() => downloadReport(id, 'XLSX')} />}
@@ -254,7 +254,7 @@ export default function ReportView({ route }) {
               {has('주요 지표(KPI)') && (
                 <Section no={no++} title="주요 지표">
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12 }}>
-                    {[['기간 수출액', f.total, '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1'], ['수출국 수', `${kpi.export_country_count ?? '—'}개국`, '#15181E'], ['상위 1개국 비중', share(kpi.top_country_share_pct), '#15181E']].map(([l, v, c]) => (
+                    {[['기간 수출액', f.total, '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? UP : DOWN], ['수출국 수', `${kpi.export_country_count ?? '—'}개국`, '#15181E'], ['상위 1개국 비중', share(kpi.top_country_share_pct), '#15181E']].map(([l, v, c]) => (
                       <div key={l} style={{ background: 'var(--bg)', borderRadius: 14, padding: '18px 20px' }}>
                         <p className="muted">{l}</p>
                         <p style={{ fontSize: 26, fontWeight: 800, marginTop: 6, color: c }}>{v}</p>
@@ -266,12 +266,12 @@ export default function ReportView({ route }) {
                     <div className="between">
                       <b>월별 {f.labels.length}개월 수출 추이{report.kind === 'quarterly' ? ' · 분기 리포트' : ''}</b>
                       <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-                        <span className="lg"><i style={{ background: '#C8102E' }} />분석 기간</span>
+                        <span className="lg"><i style={{ background: '#1e293a' }} />분석 기간</span>
                         <Btn kind="lav" className="no-print" onClick={() => setTable(t => ({ ...t, trend: !t.trend }))}>{table.trend ? '차트로 보기' : '표로 보기'}</Btn>
                       </div>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginTop: 14 }}>
-                      {[['분석 기간 합계', f.total, '#15181E'], ['비교 기간 합계', withUnit(comparison.previous, '억 USD'), '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? '#C8102E' : '#1F5FD1']].map(([l, v, c]) => (
+                      {[['분석 기간 합계', f.total, '#15181E'], ['비교 기간 합계', withUnit(comparison.previous, '억 USD'), '#15181E'], [comparison.label, f.growthText, f.growth >= 0 ? UP : DOWN]].map(([l, v, c]) => (
                         <div key={l} style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '14px 16px' }}>
                           <p className="note">{l}</p><p style={{ fontSize: 18, fontWeight: 800, color: c }}>{v}</p>
                         </div>
@@ -283,7 +283,7 @@ export default function ReportView({ route }) {
                         {f.labels.map((l, i) => <div key={l} className="tr" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}><span className="b">{l}</span><span className="r b">{amount(monthly[i].amount_usd)}</span><span className="r s">—</span></div>)}
                       </div>
                     ) : f.labels.length ? (
-                      <LineChart width={900} height={240} labels={f.labels} yTicks={ticks} formatValue={reportEok} series={[{ color: '#C8102E', values: f.current }]} />
+                      <LineChart width={900} height={240} labels={f.labels} yTicks={ticks} formatValue={reportEok} series={[{ color: '#1e293a', areaColor: '#a6b6d0', values: f.current }]} />
                     ) : <p className="muted">조회된 월별 실적이 없습니다.</p>}
                     <p className="note">비교 기간의 월별 수출액은 현재 응답에 포함되지 않아 표시하지 않습니다. 비교 합계는 저장된 값이 있을 때 표시합니다.</p>
                   </div>
@@ -305,9 +305,9 @@ export default function ReportView({ route }) {
                       <span className="b">{r.name}</span>
                       {table.countries
                         ? <span className="b">{withUnit(r.exp, '억 USD')}</span>
-                        : <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}><span style={{ width: `${Math.min(65, Math.max(0, (r.share || 0) * .65))}%`, height: 12, borderRadius: 6, background: '#C8102E' }} /><b style={{ whiteSpace: 'nowrap' }}>{withUnit(r.exp, '억')}</b></span>}
+                        : <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}><span style={{ width: `${Math.min(65, Math.max(0, (r.share || 0) * .65))}%`, height: 12, borderRadius: 6, background: '#1e293a' }} /><b style={{ whiteSpace: 'nowrap' }}>{withUnit(r.exp, '억')}</b></span>}
                       <span className="r b">{share(r.share)}</span>
-                      <span className="r b" style={{ color: r.growth >= 0 ? '#C8102E' : '#1F5FD1' }}>{percent(r.growth)}</span>
+                      <span className="r b" style={{ color: r.growth >= 0 ? UP : DOWN }}>{percent(r.growth)}</span>
                     </div>
                   ))}
                   {!f.countryRows.length && <p className="muted">조회된 국가별 실적이 없습니다.</p>}
@@ -318,7 +318,7 @@ export default function ReportView({ route }) {
               {has('유망시장(증가·감소 예상)') && (
                 <Section no={no++} title="유망시장(증가·감소 예상)">
                   <CountryChanges changes={byCode.GROWTH_RISK?.changes} />
-                  <div style={{ marginTop: 64, padding: '18px 20px', borderRadius: 14, background: '#F5F3EE' }}>
+                  <div style={{ marginTop: 64, padding: '18px 20px', borderRadius: 14, background: '#d6dde9' }}>
                   <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>ML 유망시장 분석 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>{promising.anchor ? `${promising.anchor} 기준 · ` : ''}모델 예측 순위 · 증가·감소 예상</span></p>
                   <p className="note" style={{ marginBottom: 10 }}>{byCode.GROWTH_RISK?.text}</p>
                   {promising.rows.length > 0 && <>

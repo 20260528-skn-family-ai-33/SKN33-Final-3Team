@@ -18,6 +18,7 @@ const COLS_NO_HS = '60px 1fr 1.4fr 110px'
 const noRecord = (row, value) => value == null || row.has_data === false || Number(value) === 0
 // 억 USD 값 표시. 메인 대시보드와 같은 규칙: 0.1억 미만은 유효숫자 1자리(0.02), 그 이상은 소수 첫째 자리까지(D-3).
 const eok = value => value == null ? '—' : amount(value * 1e8)
+const selectedCodes = selection => selection.country ? [countryCode(selection.country)] : selection.countryCodes
 
 export default function Rank({ route }) {
   // Re-entering a detail link on the same route must apply its new conditions.
@@ -31,28 +32,22 @@ function RankResults({ route }) {
   const available = useQuery('/data/availability')
   const end = available.data?.trade_end_month
   const PERIODS = [...[3, 6, 12, 1].map(n => [String(n), n === 1 ? '최근 공개 월' : `최근 ${n}개월`]), ['custom', '연·월 직접 선택']]
-  const rankingCountries = countries.map(c => [c.name, c.name])
   const [group, setGroup] = useState(null)
   const [pickerKey, setPickerKey] = useState(0)
   const [page, setPage] = useState(1)
   const initial = rankInitial(route.query)
-  const inheritedCountry = initial.countryCodes.length ? '__inherited__' : ''
-  if (!initial.country && inheritedCountry) initial.country = inheritedCountry
-  // 메인에서 넘어온 국가 묶음(관심 국가 등)은 선택칸에 'OO 외 N개국'으로 줄여 보이고, 전체 이름은 마우스를 올리면 보인다.
-  const inheritedNames = initial.countryCodes.map(countryName)
-  if (inheritedCountry) rankingCountries.unshift([inheritedCountry, countryListLabel(inheritedNames), inheritedNames.join(' · ')])
+  if (initial.countryCodes.length && !route.query.get('country')) initial.country = ''
   if (initial.start && initial.end) initial.period = 'custom'
   const [draft, setDraft] = useState(initial)
   const [applied, setApplied] = useState(initial)
   const [basis, setBasis] = useState(() => rankBasis(route.query))
   const [error, setError] = useState('')
-  const countryCodes = applied.country === '__inherited__' ? applied.countryCodes : applied.country ? [countryCode(applied.country)] : []
-  // 제목·파일명은 줄인 이름(countryLabel), 마우스 오버와 AI 질문은 전체 이름(countryFull)을 쓴다.
+  const countryCodes = selectedCodes(applied)
   const countryNames = countryCodes.map(countryName)
   const countryLabel = countryListLabel(countryNames)
   const countryFull = countryNames.join(' · ')
   const byMonth = !applied.group && countryCodes.length === 1 && applied.product
-  const rankingGroup = applied.group || (countryCodes.length ? 'HS6' : 'COUNTRY')
+  const rankingGroup = applied.group || (countryCodes.length === 1 ? 'HS6' : 'COUNTRY')
   const query = { scope: applied.scope, period_start: applied.start || monthOffset(end, 1 - Number(applied.period)), period_end: applied.end || end, country_codes: countryCodes, hs_code: applied.product || undefined, hs_ver: applied.product ? 'HS2022' : undefined }
   const result = useQuery(byMonth ? '/trade/trends' : '/trade/rankings', byMonth ? query : { ...query, group_by: rankingGroup, sort_flow: basis === 'exp' ? 'EXPORT' : 'IMPORT', page, page_size: 20 }, !!end)
   // 관심 범위(INTERESTED)로 조회하면 서버가 국가·품목을 고르지 않은 부분을 최신 관심 국가·관심 품목으로 좁힌다.
@@ -108,7 +103,7 @@ function RankResults({ route }) {
   const search = () => {
     // 응답을 기다리는 동안 다시 누르면 같은 요청이 겹치므로 무시한다(연속 클릭 시 1회 조회).
     if (result.loading) return
-    if (!draft.inherited && !draft.country && !draft.product) return setError('국가 또는 품목 중 하나 이상 선택해 주세요.')
+    if (!draft.inherited && !selectedCodes(draft).length && !draft.product) return setError('국가 또는 품목 중 하나 이상 선택해 주세요.')
     if (draft.period === 'custom' && (!draft.start || !draft.end)) return setError('시작 월과 끝 월을 모두 골라 주세요.')
     if (draft.period === 'custom' && draft.start > draft.end) return setError('시작 월이 끝 월보다 늦습니다. 기간을 다시 골라 주세요.')
     const first = available.data?.trade_start_month
@@ -123,7 +118,7 @@ function RankResults({ route }) {
   // 파일 이름: 국가_기간_내용.xlsx (파일명에 쓸 수 없는 글자는 뺀다)
   // 품목명은 길어서 코드로 적는다. 예) 미국_2025-10~2025-12_HS870332_월별수출입.xlsx
   const fileKind = byMonth ? '월별수출입' : rankingGroup === 'HS6' ? '품목순위' : '교역국순위'
-  const productLabel = interestProducts.length === 1 ? `HS${interestProducts[0]}` : interestProducts.length ? '관심품목' : applied.product ? `HS${applied.product}` : '전체품목'
+  const productLabel = interestProducts.length ? countryListLabel(interestProducts.map(code => 'HS' + code), 1, '개') : applied.product ? `HS${applied.product}` : '전체품목'
   // AI 질문에는 '관심 국가·관심 품목' 같은 묶음 말 대신 실제 국가 이름과 HS 코드를 적어, 채팅이 같은 조건으로 분석하게 한다.
   const askCountry = countryFull || (interestCountries.length ? interestCountries.join(', ') : '전체 국가')
   // AI 질문에는 조회 종류와 수출·수입 기준도 넣어, 채팅이 화면과 같은 순위를 분석하게 한다.
@@ -136,7 +131,8 @@ function RankResults({ route }) {
   const chatBlocked = !result.data || result.loading || !!result.error || overChatLimit
   const chatReason = overChatLimit ? `AI챗봇은 국가·품목을 ${CHAT_MAX_ITEMS}개까지 받을 수 있습니다. 품목이나 국가를 골라 조회한 뒤 열어 주세요.` : '순위 조회가 끝나면 이 조건으로 AI챗봇을 열 수 있습니다.'
   const askProduct = interestProducts.length ? interestProducts.map(code => `${productName(code)}(HS ${code})`).join(', ') : applied.product ? `${productName(applied.product)}(HS ${applied.product})` : '전체 품목'
-  const fileName = `${scopeCountry}_${query.period_start}~${query.period_end}_${productLabel}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '') + '.xlsx'
+  const fileCountry = countryListLabel(countryNames.length ? countryNames : interestCountries, 1, '개') || '전체국가'
+  const fileName = `${fileCountry}_${query.period_start}~${query.period_end}_${productLabel}_${fileKind}`.replace(/[\\/:*?"<>|]/g, '') + '.xlsx'
   const exportExcel = () => run(() => download(`/results/${result.data.result_id}/file`, fileName))
 
   return (
@@ -171,7 +167,7 @@ function RankResults({ route }) {
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, marginTop: 16 }} className="resp-stack">
-              <CountrySearch value={draft.country} options={[['', '전체 국가'], ...rankingCountries]} onChange={v => setDraft(d => ({ ...d, country: v, group: null, scope: "GLOBAL", inherited: false }))} />
+              <CountrySearch value={selectedCodes(draft)} replaceDefault={Boolean(draft.country) && !route.query.has('country')} onChange={countryCodes => setDraft(d => ({ ...d, country: '', countryCodes, group: null, scope: 'GLOBAL', inherited: false }))} />
               <Select prefix="기간" style={{ flex: 1 }} value={draft.period} onChange={v => setDraft(d => v === 'custom' ? { ...d, period: v, start: d.start || monthOffset(end, -2), end: d.end || end } : { ...d, period: v, start: "", end: "" })} options={PERIODS} aria-label="기간" />
               <Btn kind="red" size="md" onClick={search} disabled={result.loading} style={{ height: 50, borderRadius: 12, padding: '0 28px' }}><Icon name="search" size={17} />순위 조회</Btn>
             </div>
@@ -239,17 +235,25 @@ function RankResults({ route }) {
 }
 
 /** 국가 검색 선택: 국가명을 입력하면 목록이 좁혀진다. */
-function CountrySearch({ value, options, onChange }) {
-  // 선택지는 [값, 보이는 이름, (선택) 전체 이름]. 줄인 이름이면 전체 이름을 마우스 오버로 보여 준다.
-  const [, label, fullLabel] = options.find(([v]) => v === value) || options[0]
+function CountrySearch({ value, replaceDefault, onChange }) {
+  const options = [['', '전체 국가'], ...countries.map(c => [c.country_code, c.name])]
+  const all = countries.length > 0 && countries.every(c => value.includes(c.country_code))
+  const names = value.map(countryName)
+  const fullLabel = names.join(' · ')
+  const label = all ? `전체 국가 (${value.length}개)` : countryListLabel(names) || '전체 국가'
   const [text, setText] = useState(null)
   const typing = text !== null
-  // '전체 국가'(값 '')는 검색어와 상관없이 맨 위에 두어 언제든 국가 조건을 풀 수 있게 한다.
   const shown = typing ? options.filter(([v, l]) => !v || l.includes(text.trim())) : options
   const matches = typing ? options.filter(([, l]) => text.trim() && l.includes(text.trim())) : []
   // 방향키로 고르는 중인 선택지(-1이면 없음). 입력이 바뀌면 처음부터 다시 고른다.
   const [active, setActive] = useState(-1)
-  const pick = v => { onChange(v); setText(null); setActive(-1) }
+  const pick = code => {
+    if (!code) onChange(all ? [] : countries.map(c => c.country_code))
+    else if (value.includes(code)) onChange(value.filter(c => c !== code))
+    else onChange(replaceDefault ? [code] : [...value, code])
+    setText(null)
+    setActive(-1)
+  }
   useEffect(() => { if (active >= 0) document.getElementById(`country-option-${active}`)?.scrollIntoView({ block: 'nearest' }) }, [active])
   const onKeyDown = e => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
@@ -269,7 +273,7 @@ function CountrySearch({ value, options, onChange }) {
     <div style={{ flex: 1, position: 'relative', minWidth: 0 }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setText(null) }}>
       <div className={'input val' + (typing ? ' focus' : '')} style={{ gap: 8 }}>
         <span className="select-prefix">국가</span>
-        <input value={typing ? text : label} title={!typing && fullLabel ? fullLabel : undefined} aria-label="국가" placeholder="국가명 입력"
+        <input value={typing ? text : label} title={!typing && label !== fullLabel ? fullLabel : undefined} aria-label="국가" placeholder="국가명 입력"
           role="combobox" aria-expanded={typing} aria-controls="country-listbox" aria-autocomplete="list"
           aria-activedescendant={typing && active >= 0 ? `country-option-${active}` : undefined}
           onFocus={() => setText('')} onClick={() => !typing && setText('')}
@@ -278,11 +282,11 @@ function CountrySearch({ value, options, onChange }) {
         <Icon name="search" size={16} color="#9AA0AA" />
       </div>
       {typing && (
-        <div role="listbox" id="country-listbox" aria-label="국가 목록" style={{ position: 'absolute', top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 280, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
-          {shown.map(([v, l, full], i) => (
-            <button type="button" key={v || 'all'} id={`country-option-${i}`} className="reset" role="option" aria-selected={i === active} title={full}
+        <div role="listbox" id="country-listbox" aria-label="국가 목록" aria-multiselectable="true" style={{ position: 'absolute', top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 280, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
+          {shown.map(([v, l], i) => (
+            <button type="button" key={v || 'all'} id={`country-option-${i}`} className="reset" role="option" aria-selected={v ? value.includes(v) : all}
               onMouseDown={e => e.preventDefault()} onClick={() => pick(v)} onMouseEnter={() => setActive(i)}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, fontWeight: v === value ? 800 : 500, background: i === active ? '#F1F2F5' : undefined }}>{l}</button>
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, background: i === active ? '#F1F2F5' : undefined }}>{l}{(v ? value.includes(v) : all) && <span aria-hidden="true"> ✓</span>}</button>
           ))}
           {typing && text.trim() && !matches.length && <p className="muted" style={{ padding: '10px 12px' }}>검색 결과가 없습니다.</p>}
         </div>

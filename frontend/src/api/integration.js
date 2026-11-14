@@ -57,7 +57,8 @@ export function rankLink({ scope, start, end, months, countries = [], group, pro
 }
 /** 국가 이름 목록을 제목·선택칸에 쓸 짧은 글로 만든다. 3개까지는 ' · '로 잇고, 그보다 많으면 '첫 국가 외 N개국'으로 줄인다.
  *  (관심 국가를 대륙 단위로 고르면 수십 개국이 한 줄에 이어져 제목이 화면을 덮던 문제) */
-export const countryListLabel = (names, max = 3) => names.length <= max ? names.join(' · ') : `${names[0]} 외 ${names.length - 1}개국`
+export const countryListLabel = (names, max = 3, unit = '개국', separator = ' · ') =>
+  names.length <= max ? names.join(separator) : `${names[0]} 외 ${names.length - 1}${unit}`
 /** 순위 화면의 처음 정렬 기준. 링크에 sort_flow=IMPORT가 있으면 수입 기준('imp'), 아니면 수출 기준('exp'). */
 export const rankBasis = query => query.get('sort_flow') === 'IMPORT' ? 'imp' : 'exp'
 export function rankInitial(query) {

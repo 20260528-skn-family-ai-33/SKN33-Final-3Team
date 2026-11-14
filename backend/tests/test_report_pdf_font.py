@@ -25,11 +25,15 @@ class ReportFontTest(unittest.TestCase):
             self.skipTest('fontTools 없음')
         # 나눔고딕 TTF처럼 길이 0인 TSI3(VTT 편집용) 테이블이 있는 글꼴을 만든다. Chromium(OTS)은 이 글꼴 전체를 거부한다.
         font = TTFont(str(self.font), lazy=True)
+        self.addCleanup(font.close)
         for tag in [t for t in font.keys() if t.startswith('TSI')]:   # CI의 나눔고딕처럼 원래 TSI*가 있으면 먼저 빼고 하나만 넣는다
             del font[tag]
         table = DefaultTable('TSI3')   # 해석하지 않고 바이트 그대로 저장(길이 0)
         table.data = b''
         font['TSI3'] = table
+        for cmap in font['cmap'].tables:
+            if cmap.isUnicode() and 32 in cmap.cmap:
+                cmap.cmap[1] = cmap.cmap[32]
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.broken = Path(self.directory.name) / 'with-tsi3.ttf'
@@ -53,12 +57,14 @@ class ReportFontTest(unittest.TestCase):
     def test_rejected_font_tables_are_removed_before_embedding(self):
         from fontTools.ttLib import TTFont
         from backend.app.services.report_pdf import browser_font
-        cleaned = TTFont(io.BytesIO(browser_font(self.broken.read_bytes())))
+        ready = browser_font(self.broken.read_bytes())
+        cleaned = TTFont(io.BytesIO(ready))
         self.assertNotIn('TSI3', cleaned.keys())
         self.assertIn('glyf', cleaned.keys())   # 글자 모양은 그대로
-        original = self.font.read_bytes()
-        if not any(tag.startswith('TSI') for tag in TTFont(io.BytesIO(original), lazy=True).keys()):
-            self.assertIs(browser_font(original), original)   # 뺄 테이블이 없으면 원본 그대로
+        for cmap in cleaned['cmap'].tables:
+            if cmap.isUnicode() and 32 in cmap.cmap:
+                self.assertNotEqual(cmap.cmap.get(1), cmap.cmap[32])
+        self.assertIs(browser_font(ready), ready)
 
     def font_status(self, data):
         """Chromium이 이 글꼴 바이트를 읽는지(loaded/error). 시스템 한글 글꼴 대체와 상관없이 지정 글꼴 자체를 본다."""

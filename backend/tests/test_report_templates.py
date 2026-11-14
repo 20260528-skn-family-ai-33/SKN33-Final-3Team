@@ -403,8 +403,11 @@ class OnDemandTest(unittest.TestCase):
         item = rt.sample_context('ondemand')['conditions']['hs_items'][0]
         many = [item, dict(item, hs_code='330410', label='립', display='립 · HS 330410'),
                 dict(item, hs_code='3305', label='모발', display='모발 · HS 3305')]
-        html = self.render(hs_items=many)
+        html = self.render(hs_items=many, countries=[
+            {'country_code': 'US', 'name': '미국'}, {'country_code': 'CN', 'name': '중국'}])
         self.assertIn('기초화장품 외 2개 품목 수출 시장 분석', html)
+        self.assertIn('<div class="lead">HS 330499 외 2개 · 미국 외 1개 · ', html)
+        self.assertIn('미국 · 중국', html)
         self.assertIn('기초화장품 등 · HS 330499 (6단위) · 립 · HS 330410 · 모발 · HS 3305', html)  # 실제 선택 목록
         self.assertIn('선택한 품목 3개의 수출액을 합산', html)
         self.assertIn('전체 품목 수출 시장 분석', self.render(hs_items=[]))
