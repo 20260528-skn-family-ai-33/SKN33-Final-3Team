@@ -123,6 +123,8 @@ GROUPS = [
          '다시 고르는 화면에서 선택지와 맞지 않는 글을 입력해도 남은 표를 자동으로 고르지 않고 다시 묻는다.'),
         ('R50', '후보 확인 중 만료', 'table_expiring_while_checking_candidates_asks_again',
          "후보 확인과 최종 읽기 사이에 만료돼도 '보관 기간이 지났습니다'로 끝내지 않고 다시 고르게 한다."),
+        ('R51', '후보 구성 변경', 'next_page_restarts_when_earlier_candidates_change',
+         "'다음 목록' 뒤 앞쪽 표가 만료돼 후보 구성이 바뀌면 첫 쪽부터 다시 보여 어떤 유효한 표도 빠지지 않는다."),
     ]),
 ]
 CASES = [dict(id=identity, group=group, category=category, criterion=criterion, test=f'{test_class}.test_{method}')

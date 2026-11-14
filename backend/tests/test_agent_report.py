@@ -545,8 +545,8 @@ class ReportAgentTest(unittest.TestCase):
         prompt = self.job(jid)['clarification']
         self.assertIn('직전 결과표의 조건 그대로 만들었습니다. 조건을 바꾸려면 새로 조회해 주세요.', prompt['report_preview']['adjustments'])
 
-    def six_tables(self):
-        """직전 답변에 같은 모양(기간만 다른)의 결과표 6개를 둔다. (대화방, 결과표 ID 6개)."""
+    def six_tables(self, count=6):
+        """직전 답변에 같은 모양(기간만 다른)의 결과표 count개(기본 6개)를 둔다. (대화방, 결과표 ID 목록)."""
         from backend.app.api import results
         sid, tables = self.answered(self.US)
         with self.engine.begin() as c:
@@ -554,7 +554,7 @@ class ReportAgentTest(unittest.TestCase):
             source = results.read_snapshot(store, self.uid, tables[0], 'RESULT')
             rids = [tables[0]]
             first = date.fromisoformat(source['conditions']['period']['start'])
-            for months in range(1, 6):   # 시작 월만 당긴(데이터 범위 안) 같은 모양의 표 5개를 더 만든다
+            for months in range(1, count):   # 시작 월만 당긴(데이터 범위 안) 같은 모양의 표를 더 만든다
                 month = first.year * 12 + first.month - 1 - months
                 start = date(month // 12, month % 12 + 1, 1).isoformat()
                 conditions = {**source['conditions'], 'period': {**source['conditions']['period'], 'start': start}}
@@ -602,6 +602,21 @@ class ReportAgentTest(unittest.TestCase):
         self.assertEqual([c['choice_id'] for c in prompt['choices']], ['T1', 'T2', 'T3', 'T4', 'T5'])
         self.choose(jid, 'T5'); self.work()
         self.assertEqual(self.source_of(jid), rids[5:])   # 남은 후보 기준 5번째 = 원래 6번째 표
+
+    def test_next_page_restarts_when_earlier_candidates_change(self):
+        """R51 표 10개에서 '다음 목록'을 고른 뒤 재개 전에 앞쪽 표가 만료되면, 쪽 번호가 그대로여도 후보 구성이 바뀌었으므로
+        첫 쪽부터 다시 보인다. 원래 5번째 표가 어느 화면에서도 빠지지 않고 고를 수 있어야 한다."""
+        sid, rids = self.six_tables(10)
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'front')
+        self.choose(jid, 'NEXT')
+        self.expire(rids[0])
+        self.work()
+        prompt = self.job(jid)['clarification']
+        self.assertEqual(prompt['kind'], 'REPORT_TABLE')
+        self.assertEqual([c['choice_id'] for c in prompt['choices']], ['T1', 'T2', 'T3', 'T4', 'NEXT'])
+        self.assertEqual(prompt['choices'][-1]['label'], '다음 목록 (5~9번)')
+        self.choose(jid, 'T4'); self.work()   # 남은 후보의 4번째 = 원래 5번째 표
+        self.assertEqual(self.source_of(jid), rids[4:5])
 
     def test_picked_table_that_expired_is_chosen_again(self):
         """R47 두 번째 쪽에서 고른 표가 재개 전에 만료되면 다른 표로 자동으로 바꾸지 않고, 남은 표 중에서 다시 고르게 한다."""

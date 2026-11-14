@@ -2,14 +2,12 @@
   "schema_version": 2,
   "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
   "evaluation": "Report Agent 오프라인 설계 계약 평가",
-  "evaluated_at_utc": "2026-11-14T05:15:28.028042+00:00",
+  "evaluated_at_utc": "2026-11-14T14:07:47.783764+00:00",
   "source_mode": "working_tree",
-  "source_revision": "20864e8696a9c69b178cc8313eea543d831b722c",
-  "source_dirty": true,
-  "source_changes": [
-    "M backend/app/agents/report.py"
-  ],
-  "harness_revision": "20864e8696a9c69b178cc8313eea543d831b722c",
+  "source_revision": "e5de2e9fd7c97d48a99ba8310f6daec97ee520ec",
+  "source_dirty": false,
+  "source_changes": [],
+  "harness_revision": "e5de2e9fd7c97d48a99ba8310f6daec97ee520ec",
   "harness_dirty": true,
   "harness_changes": [
     "M backend/scripts/evaluate_report_agent.py",
@@ -26,14 +24,14 @@
   "evidence_sha256": {
     "backend/tests/test_agent_graph.py": "42b48bf6f21af564468dd9d29db17a9ca55de121ff0c04449d5d2f5323477656",
     "backend/tests/test_agent_pr61_fixes.py": "73908cce2991f8adb09a702b204c7e30c7478d569e603eb4b037cd3f402e8d7f",
-    "backend/tests/test_agent_report.py": "ac1a06ba6b4d6b114d3ad84438bb7d865223754339bebee37ba7cf71f138347f",
+    "backend/tests/test_agent_report.py": "2422629081f393ef2f5c910a84d36ae3c0d3c1108537e7fc71e54dd0bf656b8e",
     "backend/tests/test_agent_state.py": "35c261bb9009c2f9dc9fbb635020d3fe9b1d1ae1e86b4fcf6a78427792ce25ba",
     "backend/tests/test_backend_api.py": "91a0165c4b58e6b09ec9b45ef9922972c1da63d248f7bb75acb772087a929090",
-    "backend/scripts/evaluate_report_agent.py": "8c0d35be7e935493d42429a30f183400e6ed4f0353c09e093e80928b4868ec74",
+    "backend/scripts/evaluate_report_agent.py": "f6fdc9193234510c614bdb5dd8c2b6dd80776f9c8d836463a440099f4c7a376d",
     "backend/tests/api_support.py": "e39e158e4840bb652d8e86db8d21991044c6cda1765c977db6482a2c75b48003",
     "backend/tests/intent_fixtures.py": "a34fed014fdd8532c8f89145bdd615a39418ab6d23e66c60280bc91865f3d4e5"
   },
-  "manifest_sha256": "5f2779335d81e09388aad6e2955a0b5bda69bf23260068ffbd4d6ddb21813080",
+  "manifest_sha256": "c254c8e1c7ba09100dff49aebad609e1f8bde7d3edfdaf7692acd7cdafd81a80",
   "environment": {
     "python": "3.12.13",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -89,8 +87,8 @@
       "pass_rate_pct": 100.0
     },
     "이전 턴 결과": {
-      "total": 25,
-      "pass": 25,
+      "total": 26,
+      "pass": 26,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -98,8 +96,8 @@
       "pass_rate_pct": 100.0
     },
     "합계": {
-      "total": 50,
-      "pass": 50,
+      "total": 51,
+      "pass": 51,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -555,6 +553,15 @@
       "category": "후보 확인 중 만료",
       "criterion": "후보 확인과 최종 읽기 사이에 만료돼도 '보관 기간이 지났습니다'로 끝내지 않고 다시 고르게 한다.",
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_table_expiring_while_checking_candidates_asks_again",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R51",
+      "group": "이전 턴 결과",
+      "category": "후보 구성 변경",
+      "criterion": "'다음 목록' 뒤 앞쪽 표가 만료돼 후보 구성이 바뀌면 첫 쪽부터 다시 보여 어떤 유효한 표도 빠지지 않는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_next_page_restarts_when_earlier_candidates_change",
       "status": "PASS",
       "details": []
     }
