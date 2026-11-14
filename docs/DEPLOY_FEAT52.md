@@ -200,7 +200,7 @@ python -c "from backend.app.api.config import Settings; from backend.app.agents.
 
 ## 롤백
 
-1. 코드를 이전 `main`으로 되돌리고 API·워커를 재시작한다.
+1. 코드를 이전 `main`으로 되돌린다. 이전 플래너는 `API_INTENT_MODEL`을 읽으므로 배포 때 변경한 모델 설정을 배포 직전 값으로 복원한다. 이전에 없던 키는 해당 줄을 삭제한 뒤 API·워커를 재시작한다.
 2. `API_CHAT_AGENT_ENABLED=false`로 두면 새 질문은 기존 실행기로 돌아간다. 이미 접수된 에이전트 작업은 워커가 마친다.
 3. 모델 파일·DB 마이그레이션(`RPT_ON_DEMAND` 활성화)은 그대로 두어도 기존 코드에 영향이 없다.
 

@@ -19,19 +19,19 @@ from types import SimpleNamespace
 
 from backend.scripts.evaluate_sql_visualization import ROOT, digest_bytes, revision_metadata
 
+MODEL = 'gpt-6-luna'  # 평가 실행에서만 플래너 모델을 지정한다.
 DATA = ROOT / 'docs/evaluations'
 SETS = {
     'live': {'questions': DATA / 'report_agent_live_questions.jsonl', 'manifest': DATA / 'report_agent_live_manifest.json',
-             'review': DATA / 'report_agent_live_gold_review.md', 'result': DATA / 'report_agent_live_result.json',
+             'review': DATA / 'report_agent_live_gold_review.md', 'result': ROOT / 'tmp' / f'report_agent_live_{MODEL}.json',
              'lock': None, 'role': 'development'},
     'holdout': {'questions': DATA / 'report_agent_holdout_questions.jsonl', 'manifest': DATA / 'report_agent_holdout_manifest.json',
                 'review': DATA / 'report_agent_holdout_gold_review.md', 'result': DATA / 'report_agent_holdout_result.json',
                 'lock': DATA / 'report_agent_holdout_run_lock.json', 'role': 'holdout'},
 }
-MODEL = 'gpt-5.6-luna'   # 운영 플래너 모델(API_PLANNER_MODEL 기본값·.env.api.example)
-PRICE = {'input_per_million_usd': 0.2, 'cached_input_per_million_usd': 0.02,
-         'cache_write_per_million_usd': 0.25, 'output_per_million_usd': 1.2,
-         'source': 'https://developers.openai.com/api/docs/models/gpt-5.6-luna', 'checked_on': '2026-11-09'}
+PRICE = {'input_per_million_usd': 0.1, 'cached_input_per_million_usd': 0.01,
+         'cache_write_per_million_usd': 0.125, 'output_per_million_usd': 0.5,
+         'source': 'https://developers.openai.com/api/docs/models/gpt-6-luna', 'checked_on': '2026-11-09'}
 FIELDS = ('intent', 'report_present', 'sources', 'trade_flow', 'countries', 'products', 'period')
 HARNESS = ['backend/scripts/evaluate_report_agent_live.py', 'backend/app/agents/planner.py', 'backend/app/agents/runtime.py',
            'backend/app/agents/state.py', 'backend/app/agents/llm.py']
