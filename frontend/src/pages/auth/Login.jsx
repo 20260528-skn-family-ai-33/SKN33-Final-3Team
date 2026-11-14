@@ -37,7 +37,7 @@ export default function Login() {
   return (
     <AuthFrame lead={<>품목·국가별 수출입 순위와 해외 시장 기사를 한곳에서 보고,<br />AI챗봇으로 리포트까지 만들어 보세요.</>}>
       <form onSubmit={submit} noValidate>
-        <CardHead eyebrow="로그인" title="다시 오신 걸 환영해요" desc="이메일로 로그인하고 무역 분석을 시작하세요." />
+        <CardHead  title="환영합니다" desc="로그인하고 무역 분석을 시작해보세요!" />
         <div className="sp32" />
         <label className="lbl" htmlFor="login-email">이메일 (아이디)</label>
         <TextField id="login-email" type="email" autoComplete="username" placeholder="name@example.com" value={email} onChange={setEmail} invalid={!!error.email} />
@@ -56,10 +56,10 @@ export default function Login() {
           <span style={{ width: 1, height: 12, background: '#CDD1D8' }} />
           <Link to="/signup" style={{ color: 'var(--red-d)', fontWeight: 700 }}>회원가입</Link>
         </div>
-        <p className="note" style={{ marginTop: 16 }}>로그인 후 서비스를 이용할 수 있습니다.</p>
+        <p className="note" style={{ marginTop: 16, textAlign: 'center' }}>로그인 후 서비스를 이용할 수 있습니다.</p>
         <div style={{ marginTop: 28, background: 'var(--bg)', borderRadius: 12, padding: '14px 16px' }}>
-          <p className="note">가입한 이메일의 대소문자를 정확히 입력해 주세요. 관리자 계정은 운영 담당자가 발급합니다.</p>
-          <p className="note" style={{ marginTop: 6 }}>이메일 대소문자 구분 적용 전에 가입한 계정은 이메일을 모두 소문자로 입력해 주세요. 브라우저 자동완성 주소도 확인해 주세요.</p>
+          <p className="note">가입한 이메일의 대소문자를 정확히 입력해 주세요.</p>
+
         </div>
       </form>
     </AuthFrame>

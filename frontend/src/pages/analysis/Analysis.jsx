@@ -235,7 +235,8 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
   const receiving=streamJobId && (stream?.id!==streamJobId||!stream.done)
   return <AiBlock>
     {c && <>
-      <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')} / ` : ''}{c.country_codes?.map(countryName).join(' · ') || '전체 국가'}</p>
+      {/* 수출입 수치는 모두 한국 기준이다. '미국 수출액'이 미국의 수출로 읽히지 않게 기준(한국)과 상대국을 함께 적는다. */}
+      <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · 한국 기준 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')} / ` : ''}상대국 {[...(c.include_korea_total ? ['전체(한국 총계)'] : []), ...(c.country_codes || []).map(countryName)].join(' · ') || '전체 교역국'}</p>
       {a.article_period && !c.period
         ? <p className="note">기사 검색 기간 {a.article_period.start} ~ {a.article_period.end}</p>
         : c.period && <p className="note">{range(c.period.start, c.period.end)}{comparison && ` / 비교 ${range(comparison.start, comparison.end)}`}</p>}
@@ -260,8 +261,10 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
         {s.quotes.map((quote, j) => <blockquote key={j}>{quote}</blockquote>)}
       </details>) : (article.summary || article.evidence_sufficient === false) && <p>{article.summary || (article.unavailable ? '답변 뒤 공개가 바뀌어 볼 수 없는 기사입니다.' : a.order_by === 'published_date_desc' ? '발행일 기준 최신 기사' : '본문 근거 부족')}</p>}
       {/* unavailable: 검색 뒤 숨겨진 기사. [n] 번호만 지키려고 남긴 자리라 상세로 가지 않는다(D-102) */}
-      {!article.unavailable && <Btn to={`/articles?id=${article.article_id}`}>기사 상세</Btn>}
-      {/^https?:\/\//i.test(article.source_url || '') && <a href={article.source_url} target="_blank" rel="noreferrer">원문 보기</a>}
+      {/* 기사 상세는 새 탭에서 연다. 같은 탭으로 가면 진행 중인 대화 화면을 벗어난다. */}
+      {!article.unavailable && <Btn to={`/articles?id=${article.article_id}`} target="_blank" rel="noopener">기사 상세</Btn>}
+      {/* 단신속보는 원문 주소로 본 기사를 볼 수 없어 원문 보기를 두지 않는다(기사 상세에서 내용을 본다). */}
+      {!SHORT_NEWS_SOURCES.has(article.source_code) && /^https?:\/\//i.test(article.source_url || '') && <a href={article.source_url} target="_blank" rel="noreferrer">원문 보기</a>}
     </div></div>)}
     <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
       {a.report_id && <><p role="status">리포트 생성 완료</p><Btn to={`/report?id=${a.report_id}`}>리포트 센터에서 이 리포트 열기</Btn></>}
@@ -271,6 +274,8 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
     </div></AiBlock>
 }
 
+// 단신속보 출처 코드(옛 코드 포함). backend/app/services/article_sources.py의 SHORT_NEWS_SOURCES와 같다.
+const SHORT_NEWS_SOURCES = new Set(['KOTRA_SHORT_NEWS', 'KOTRA_SHORTNEWS'])
 const ARTICLE_ACTIONS_ENABLED = false  // 다시 쓰면 true로 바꾸고 Articles.jsx 버튼 주석을 푼다.
 
 export default function Analysis({ route }) {
@@ -604,7 +609,12 @@ export default function Analysis({ route }) {
         </div>
       </main>
 
-      <Modal open={modal === 'stop'} onClose={()=>setModal(null)} width={420} label="질문 중단"><h2>이 질문을 중단할까요?</h2><p>이미 접수된 리포트는 계속 생성됩니다.</p><div className="chips"><Btn onClick={()=>setModal(null)}>계속 진행</Btn><Btn kind="red" onClick={async()=>{setModal(null);setBusy(true);const data=await run(()=>api(`/chat/jobs/${job.job_id}/cancel`,{method:'POST'}));if(data?.job)setJob(data.job);setReadRevision(v=>v+1);setBusy(false)}}>중단</Btn></div></Modal>
+      <Modal open={modal === 'stop'} onClose={()=>setModal(null)} width={420} label="질문 중단">
+        {/* 채팅방 삭제 확인창과 같은 간격: 제목 → 설명 10px, 설명 → 버튼 28px, 버튼은 오른쪽 정렬 */}
+        <h2 style={{ fontSize: 22, fontWeight: 800 }}>이 질문을 중단할까요?</h2>
+        <p className="muted" style={{ marginTop: 10, fontSize: 15, lineHeight: 1.7 }}>이미 접수된 리포트는 계속 생성됩니다.</p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 28 }}><Btn size="md" onClick={()=>setModal(null)}>계속 진행</Btn><Btn kind="red" size="md" onClick={async()=>{setModal(null);setBusy(true);const data=await run(()=>api(`/chat/jobs/${job.job_id}/cancel`,{method:'POST'}));if(data?.job)setJob(data.job);setReadRevision(v=>v+1);setBusy(false)}}>중단</Btn></div>
+      </Modal>
       <Modal open={!!interest} onClose={()=>!savingInterest&&setInterest(null)} width={480} label="관심 목록 추가">
         <h2>관심 목록에 추가할 항목</h2><p className="note">저장할 국가·품목을 선택하세요. 품목은 HS6 단위로 등록됩니다.</p>
         <div className="col" style={{gap:12,maxHeight:320,overflowY:'auto',margin:'16px 0'}}>

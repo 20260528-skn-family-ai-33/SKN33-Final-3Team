@@ -20,7 +20,7 @@ function readDraft(key, version) {
 }
 
 export default function Onboarding({ route }) {
-  const { session, profile, setProfile, setMainView, notify } = useApp()
+  const { session, profile, setProfile, setMainView } = useApp()
   const step = Math.min(3, Math.max(1, Number(route.query.get('step')) || 1))
   const key = 'bs.onboarding.' + session.id
   const [version] = useState(profile.version)
@@ -36,22 +36,23 @@ export default function Onboarding({ route }) {
   }, [key, products, countries, welcome, version])
   const endDraft = () => {
     try { sessionStorage.removeItem(key) } catch { /* Optional draft storage. */ }
-    if (welcome) notify('회원가입이 완료되었습니다. 환영합니다!')
   }
+  // 회원가입 직후(welcome)에는 메인으로 바로 가지 않고 가입 완료 안내를 먼저 보여 준다.
+  const leave = main => navigate(welcome ? '/welcome' + (main.includes('view=interest') ? '?view=interest' : '') : main)
   const hasInterest = products.length > 0 || countries.length > 0
 
   const skip = () => runOnce(async () => {
     if (!await setProfile(p => ({ ...p, home: 'all' }))) return
     endDraft()
     setMainView('all')
-    navigate('/')
+    leave('/')
   })
   const requestSkip = () => hasInterest ? setSkipOpen(true) : skip()
   const finish = () => runOnce(async () => {
     if (!await setProfile(p => ({ ...p, products, countries, home: hasInterest ? 'interest' : 'all' }))) return
     endDraft()
     setMainView(null)
-    navigate(hasInterest ? '/?view=interest' : '/')
+    leave(hasInterest ? '/?view=interest' : '/')
   })
 
   return (

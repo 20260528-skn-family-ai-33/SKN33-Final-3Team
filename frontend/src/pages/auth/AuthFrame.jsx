@@ -1,22 +1,16 @@
-// 로그인·회원가입·계정 찾기 화면의 공통 틀(항구 사진 배경 + 가운데 카드)
-const SOURCES = ['관세청 수출입 통계', 'KOTRA 해외시장뉴스', '한국은행 환율']
-
-export function AuthFrame({ lead, showSources = !!lead, children }) {
+// 로그인·회원가입·계정 찾기 화면의 공통 틀(배경 사진 + 가운데 카드)
+export function AuthFrame({ lead, children }) {
   return (
     <main style={{ position: 'relative', isolation: 'isolate', minHeight: 860, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '56px 24px', overflow: 'hidden' }}>
       <section className="band lgbg" style={{ position: 'absolute', inset: 0, padding: 0, zIndex: -1 }} aria-hidden="true" />
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 28, width: '100%' }}>
         <div style={{ textAlign: 'center', color: '#fff', maxWidth: 640 }}>
-          <p className="eyebrow">BORDERLESS SELLERS</p>
-          <h1 style={{ fontSize: 36, lineHeight: 1.25, letterSpacing: -1, fontWeight: 800, color: '#fff' }}>국경 너머 시장을<br />데이터로 먼저 읽다</h1>
-          {lead && <p style={{ marginTop: 10, fontSize: 15, lineHeight: 1.7, color: '#D9DEE6' }}>{lead}</p>}
-          {showSources && (
-            <div style={{ display: 'flex', gap: 10, marginTop: 18, justifyContent: 'center', flexWrap: 'wrap' }}>
-              {SOURCES.map(s => <span key={s} className="tag" style={{ background: 'rgba(255,255,255,.14)', color: '#fff' }}>{s}</span>)}
-            </div>
-          )}
+          {/* 서비스 이름: 하늘색 + 넓은 자간, 양옆 가는 선 */}
+          <p className="auth-eyebrow">BORDERLESS SELLERS</p>
+          <h1 className="auth-title">국경 너머 시장을<br />데이터로 먼저 읽다</h1>
+          {lead && <p className="auth-lead">{lead}</p>}
         </div>
-        <section style={{ background: '#fff', borderRadius: 20, boxShadow: '0 30px 80px rgba(6,16,26,.35)', padding: '40px 44px', maxWidth: '100%' }}>
+        <section className="auth-card" style={{ background: '#fff', borderRadius: 20, boxShadow: '0 30px 80px rgba(6,16,26,.35)', padding: '40px 44px', maxWidth: '100%' }}>
           <div style={{ width: 440, maxWidth: '100%' }}>{children}</div>
         </section>
       </div>

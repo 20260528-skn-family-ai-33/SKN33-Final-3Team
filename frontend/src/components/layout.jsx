@@ -1,5 +1,6 @@
 // 머리글·띠 배너·바닥글 등 화면 공통 틀
 import { Link } from '../router'
+import { useApp } from '../store'
 import Icon from './Icon'
 import logoImage from '../assets/logo-borderless.png'
 
@@ -10,9 +11,29 @@ const NAV = [
   ['analysis', '/analysis', 'AI 챗봇'],
 ]
 
+// 메인 주소. 사용자가 고른 보기(전체·내 관심, store의 mainView)가 있으면 주소의 view에 남긴다.
+// 고른 보기는 메모리에만 있어 새로고침하면 사라지므로, 주소에 적어 두어야 새로고침 뒤에도 유지된다.
+const mainHref = view => (view === 'interest' || view === 'all' ? `/?view=${view}` : '/')
+
+// 이미 메인 화면(#/ 또는 #/?view=…)에 있을 때 로고를 누르면 같은 주소라 아무 일도 일어나지 않는다.
+// 이때는 지금 보기(전체·내 관심)를 그대로 둔 채 페이지를 새로고침하고, 맨 위에서 다시 시작한다.
+function reloadIfMain(event, view) {
+  const [path, search = ''] = (decodeURI(window.location.hash.slice(1)) || '/').split('?')
+  if ((path || '/') !== '/') return
+  // 새 탭 열기(⌘·Ctrl·Shift 클릭, 가운데 버튼)는 브라우저 기본 동작을 따른다.
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return
+  event.preventDefault()
+  // 주소에 view가 없으면(예: 다른 화면에서 '#/'로 돌아온 경우) 고른 보기를 먼저 주소에 적은 뒤 새로고침한다.
+  if (!new URLSearchParams(search).get('view') && mainHref(view) !== '/') window.history.replaceState(null, '', '#' + mainHref(view))
+  if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual'
+  window.location.reload()
+}
+
 export function Logo() {
   // 지구본·컨테이너선 로고. 좁은 화면에서는 글자가 숨고 로고만 남는다(.logo font-size:0).
-  return <Link to="/" className="logo"><img src={logoImage} alt="" width="40" height="40" />BORDERLESS</Link>
+  // 다른 화면에서 누를 때도 고른 보기를 주소에 담아 메인으로 돌아간다.
+  const view = useApp()?.mainView
+  return <Link to={mainHref(view)} className="logo" onClick={event => reloadIfMain(event, view)}><img src={logoImage} alt="" width="40" height="40" />BORDERLESS</Link>
 }
 
 /** 로그인 전 화면(로그인·회원가입·찾기·관심사 등록)의 머리글 */

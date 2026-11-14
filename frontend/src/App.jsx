@@ -10,6 +10,7 @@ import Login from './pages/auth/Login'
 import { Signup } from './pages/auth/Signup'
 import { FindId, FindPassword } from './pages/auth/FindAccount'
 import Onboarding from './pages/auth/Onboarding'
+import Welcome from './pages/auth/Welcome'
 import Dashboard from './pages/home/Dashboard'
 import MainViewToggle from './pages/home/MainViewToggle'
 import Rank from './pages/market/Rank'
@@ -100,6 +101,8 @@ export default function App() {
     content = <PageLoader />  // 곧 다른 화면으로 이동한다. 빈 화면이 깜빡이지 않게 한다.
   } else if (path === '/onboarding') {
     content = <><AuthHeader /><div className="app-body" id="main"><Onboarding route={route} /></div><FooterSmall /></>
+  } else if (path === '/welcome') {
+    content = <><AuthHeader /><div className="app-body" id="main"><Welcome route={route} /></div><FooterSmall /></>
   } else if (path === '/admin' || path.startsWith('/admin/')) {
     content = <Suspense fallback={<PageLoader />}><AdminApp route={route} /></Suspense>
   } else if (path.startsWith('/account')) {
