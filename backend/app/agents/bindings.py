@@ -138,6 +138,8 @@ def previous_result(store, state, task):
     key = f'{task.task_id}:previous_result'
     tables = previous_tables(store, state)
     chosen, page = _picked(task, key)
+    checked = {}   # 이번 호출에서 후보로 확인한 스냅샷. 같은 표를 다시 읽는 사이에 만료되는 일을 막는다
+
     # 미리보기 전에는 고른 표(또는 저장된 다음 쪽)가 아직 유효한지 현재 후보로 다시 확인한다.
     # 미리보기를 만든 뒤에는 승인한 그 표만 쓴다(아래 검증에서 만료되면 안내로 끝난다).
     if chosen is None or task.report_request is None:
@@ -149,14 +151,25 @@ def previous_result(store, state, task):
         # 리포트는 수출만 지원한다(D-81). 수출입을 함께 조회한 답변의 수입 표는 후보에서 뺀다.
         usable = [(t, s) for t, s in known if s['conditions'].get('trade_flow') != 'IMPORT']
         if not usable: raise SlotRepair(EXPORT_ONLY)
+        checked = {t['result_id']: s for t, s in usable}
         pages = _table_pages(len(usable))
         # 고른 표가 그사이 만료됐으면 남은 표로 다시 묻는다(후보가 하나여도 자동으로 바꾸지 않는다).
         # 저장된 다음 쪽이 후보 감소로 사라졌으면 첫 쪽부터 다시 보인다.
         expired_pick = chosen is not None and chosen not in {t['result_id'] for t, _ in usable}
         if expired_pick or page >= len(pages):
+            # 만료·후보 감소로 처음부터 다시 묻는 것은 사용자 답 때문이 아니므로 되묻기 횟수(조건별 2회)를 새로 센다.
+            # 대신 다시 고를 때까지 자동 선택을 막는 표시를 남긴다(만료면 안내 문구도 유지).
             _forget_pages(task, key)
+            for name in [k for k in state.ask_counts if k == key or k.startswith(f'{key}:page')]:
+                state.ask_counts.pop(name)
+            reason = 'expired' if expired_pick else task.resolved.get(f'{key}:reselect', {}).get('reason', 'changed')
+            task.resolved[f'{key}:reselect'] = {'reason': reason}
             chosen, page = None, 0
-        if chosen is None and len(usable) == 1 and not expired_pick:
+        reselect = task.resolved.get(f'{key}:reselect', {}).get('reason')
+        # 표를 고르라고 한 번이라도 물었다면 사용자가 직접 고를 때까지 자동으로 고르지 않는다
+        # (선택이 만료됐거나, 다음 목록 뒤 후보가 줄었거나, 답이 선택지와 맞지 않은 경우 모두). 첫 쪽은 항상 먼저 묻는다.
+        asked = bool(state.ask_counts.get(key)) or reselect is not None
+        if chosen is None and len(usable) == 1 and not asked:
             chosen = usable[0][0]['result_id']
         if chosen is None:
             every = [{**t, 'conditions': s['conditions']} for t, s in usable]
@@ -165,15 +178,16 @@ def previous_result(store, state, task):
             options = [(f'T{i + 1}', labels[i], {'previous_result_id': every[i]['result_id']}) for i in range(start, end)]
             if page + 1 < len(pages):
                 options.append(('NEXT', f'다음 목록 ({end + 1}~{len(usable)}번)', {'previous_table_page': page + 1}))
-            message = ('선택한 결과표의 보관 기간이 지났습니다. 남은 결과표 중에서 골라 주세요.' if expired_pick
+            message = ('선택한 결과표의 보관 기간이 지났습니다. 남은 결과표 중에서 골라 주세요.' if reselect == 'expired'
                        else '어느 결과표로 리포트를 만들까요?')
             ask(state, task, _page_key(key, page), 'REPORT_TABLE', message, options)
             return None
+        task.resolved.pop(f'{key}:reselect', None)
         task.resolved[key] = {'previous_result_id': chosen}
     table = next((t for t in tables if t['result_id'] == chosen), None)
     if table is None:
         raise SlotRepair('선택한 결과표가 직전 답변에 없습니다. 새 질문으로 다시 요청해 주세요.')
-    snapshot = _load(store, state, table)
+    snapshot = checked.get(chosen) or _load(store, state, table)
     if snapshot is None: raise SlotRepair(EXPIRED_PREVIOUS_TABLE)
     if not table['kind']: raise SlotRepair(UNKNOWN_PREVIOUS_TABLE)
     try: stored_conditions(snapshot)

@@ -38,6 +38,8 @@ class ReportAgentTest(unittest.TestCase):
             if call['schema'] is Draft:
                 return Draft(conclusion=[{'task_id': t['task_id'], 'sentences': ['조회 결과를 확인했습니다.']} for t in call['payload']['tasks']],
                              turn_summary='', title='수출 분석')
+            if call['schema'].__name__ == 'ClarificationReading':   # 되묻기 직접 입력 해석: 선택지와 무관한 글로 본다
+                return call['schema'](choice_id=None, new_expression=None, interest_change=None, unrelated=True)
             return PlannerOutput(tasks=tasks)
         self.db.agent_client.parse.side_effect = parse
 
@@ -289,7 +291,7 @@ class ReportAgentTest(unittest.TestCase):
         # 문서도 같은 턴 결과 리포트(R19)와 같은 요청형 템플릿으로, 결과표 사본만으로 만든다(통계 재조회 없음)
         from backend.app.services.report_templates import render
         documents = []
-        with patch('backend.app.api.reports.report_pdf', side_effect=lambda doc, settings: documents.append(doc) or b'%PDF-test'), \
+        with patch('backend.app.api.reports.report_pdf', side_effect=lambda doc, settings, **kwargs: documents.append(doc) or b'%PDF-test'), \
              patch('backend.app.api.trade.aggregate', side_effect=AssertionError('직전 결과표 리포트는 다시 조회하지 않습니다')):
             self.work()
         self.assertEqual(self.reports()[0]['status'], 'READY')
@@ -613,6 +615,78 @@ class ReportAgentTest(unittest.TestCase):
         self.assertEqual((prompt['kind'], prompt['message']),
                          ('REPORT_TABLE', '선택한 결과표의 보관 기간이 지났습니다. 남은 결과표 중에서 골라 주세요.'))
         self.assertEqual([c['choice_id'] for c in prompt['choices']], ['T1'])
+        self.choose(jid, 'T1'); self.work()
+        self.assertEqual(self.source_of(jid), rids[:1])
+
+    def test_table_expiring_before_the_preview_asks_again(self):
+        """R48 조건 확인과 미리보기 사이(같은 표를 두 번 읽는 사이)에 고른 표가 만료되면 JOB_FAILED 없이
+        미리보기를 만들지 않고 남은 표에서 다시 고르게 한다. 다시 고른 표의 조건으로 처음부터 다시 계산한다."""
+        from unittest.mock import patch
+        from backend.app.agents import bindings
+        sid, tables = self.answered([*self.US, *self.CN], '미국, 중국 수출 조회')
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'race')
+        self.choose(jid, 'T1')   # 미국 표
+        original = bindings.stored_conditions
+
+        def expire_after_check(snapshot):
+            self.expire(tables[0])   # 조건 확인이 표를 읽은 직후, 미리보기가 다시 읽기 전에 만료
+            return original(snapshot)
+        with patch('backend.app.agents.bindings.stored_conditions', side_effect=expire_after_check):
+            self.work()
+        job = self.job(jid)
+        self.assertEqual(job['status'], 'NEEDS_INPUT', job)
+        prompt = job['clarification']
+        self.assertEqual((prompt['kind'], prompt['message']),
+                         ('REPORT_TABLE', '선택한 결과표의 보관 기간이 지났습니다. 남은 결과표 중에서 골라 주세요.'))
+        self.assertEqual([c['label'] for c in prompt['choices']], ['1. 중국 · 월별 추이'])
+        self.assertEqual(self.previews(), [])   # 쓰지 않을 미리보기를 만들지 않는다
+        self.choose(jid, 'T1'); self.work()
+        self.assertEqual(self.source_of(jid), tables[1:])
+        self.assertEqual(self.state(jid).plan.tasks[0].conditions.country_codes, ['CN'])
+
+    def test_table_expiring_while_checking_candidates_asks_again(self):
+        """R50 후보를 확인한 직후(같은 호출에서 고른 표를 최종으로 읽기 전)에 만료돼도 '보관 기간이 지났습니다'로 끝내지 않는다.
+        확인한 스냅샷을 그대로 쓰고, 미리보기 단계의 재확인에서 만료를 알아채 남은 표에서 다시 고르게 한다."""
+        from unittest.mock import patch
+        from backend.app.agents import bindings
+        sid, tables = self.answered([*self.US, *self.CN], '미국, 중국 수출 조회')
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'inner-race')
+        self.choose(jid, 'T1')   # 미국 표
+        original, calls = bindings._table_pages, []
+
+        def expire_after_candidates(count):
+            if not calls: self.expire(tables[0])   # 첫 후보 확인 직후 한 번만 만료
+            calls.append(count)
+            return original(count)
+        with patch('backend.app.agents.bindings._table_pages', side_effect=expire_after_candidates):
+            self.work()
+        job = self.job(jid)
+        self.assertEqual(job['status'], 'NEEDS_INPUT', job)
+        self.assertEqual((job['clarification']['kind'], job['clarification']['message']),
+                         ('REPORT_TABLE', '선택한 결과표의 보관 기간이 지났습니다. 남은 결과표 중에서 골라 주세요.'))
+        self.assertEqual(self.previews(), [])
+        self.choose(jid, 'T1'); self.work()
+        self.assertEqual(self.source_of(jid), tables[1:])
+
+    def test_reselection_waits_for_an_explicit_choice(self):
+        """R49 만료로 다시 고르는 화면에서 선택지와 맞지 않는 글을 입력해도 남은 표를 자동으로 고르지 않고 다시 묻는다.
+        만료 때문에 다시 묻는 것은 사용자 답 횟수(조건별 2회)에 세지 않는다."""
+        sid, rids = self.six_tables()
+        jid = self.turn(sid, REPORT, '방금 그 표로 리포트 만들어줘', 'unclear')
+        self.choose(jid, 'NEXT'); self.work()
+        self.choose(jid, 'T6')
+        self.expire(*rids[1:])
+        self.work()
+        prompt = self.job(jid)['clarification']
+        self.assertEqual([c['choice_id'] for c in prompt['choices']], ['T1'])
+        response = self.post(f'chat/jobs/{jid}/clarifications', {'clarification_id': prompt['clarification_id'], 'text': '무슨 뜻이에요?'})
+        self.assertEqual(response.status_code, 202, response.text)
+        self.work()
+        job = self.job(jid)
+        self.assertEqual(job['status'], 'NEEDS_INPUT', job)
+        self.assertEqual((job['clarification']['kind'], job['clarification']['message']),
+                         ('REPORT_TABLE', '선택한 결과표의 보관 기간이 지났습니다. 남은 결과표 중에서 골라 주세요.'))
+        self.assertEqual(self.previews(), [])
         self.choose(jid, 'T1'); self.work()
         self.assertEqual(self.source_of(jid), rids[:1])
 

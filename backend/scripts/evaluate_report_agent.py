@@ -117,6 +117,12 @@ GROUPS = [
          "'다음 목록' 뒤 후보가 줄어 다음 쪽이 사라지면 반복 없이 남은 후보를 첫 쪽부터 다시 보인다."),
         ('R47', '고른 표 만료', 'picked_table_that_expired_is_chosen_again',
          '고른 표가 재개 전에 만료되면 다른 표로 자동으로 바꾸지 않고 남은 표에서 다시 고르게 한다.'),
+        ('R48', '미리보기 전 만료', 'table_expiring_before_the_preview_asks_again',
+         '조건 확인과 미리보기 사이에 고른 표가 만료되면 JOB_FAILED 없이 미리보기를 만들지 않고 다시 고르게 한다.'),
+        ('R49', '명시적 재선택', 'reselection_waits_for_an_explicit_choice',
+         '다시 고르는 화면에서 선택지와 맞지 않는 글을 입력해도 남은 표를 자동으로 고르지 않고 다시 묻는다.'),
+        ('R50', '후보 확인 중 만료', 'table_expiring_while_checking_candidates_asks_again',
+         "후보 확인과 최종 읽기 사이에 만료돼도 '보관 기간이 지났습니다'로 끝내지 않고 다시 고르게 한다."),
     ]),
 ]
 CASES = [dict(id=identity, group=group, category=category, criterion=criterion, test=f'{test_class}.test_{method}')

@@ -17,10 +17,13 @@ def source_ids(state,task):
 
 
 def _sources(store,state,task):
-    """(snapshot, info, 출처) 목록. 출처는 같은 턴이면 선행 단계, 직전 답변이면 previous_turn 표시다."""
+    """(snapshot, info, 출처) 목록. 출처는 같은 턴이면 선행 단계, 직전 답변이면 previous_turn 표시다.
+    직전 결과표를 조건 확인 뒤 다시 읽는 사이에 만료돼 REPORT_TABLE로 다시 묻는 중이면 None이다."""
     from backend.app.agents.bindings import previous_result, source_versions
     if task.previous_turn_result:
-        snapshot,info=previous_result(store,state,task)
+        found=previous_result(store,state,task)
+        if found is None: return None
+        snapshot,info=found
         return [(snapshot,info,{'previous_turn':True})]
     return [(snapshot,info,{'task_id':b.source_task_id,'step_id':b.source_step_id})
             for b,(snapshot,info) in zip(task.input_bindings,source_versions(store,state,task),strict=True)]
@@ -50,11 +53,16 @@ def preview(store,state,task):
             if exc.code!='PREVIEW_EXPIRED': raise
             task.resolved.pop(key,None)
         else: return
+    # 입력 결과표를 미리보기보다 먼저 확인한다. 다시 고르는 중이면 쓰지 않을 미리보기를 만들지 않고 그 되묻기로 돌아간다.
+    sources=None
+    if task.input_bindings or task.previous_turn_result:
+        sources=_sources(store,state,task)
+        if sources is None: return
     public=api_conditions(task.conditions)
     created=reports.preview(store,state.input.user_id,{'conditions':public})
-    if task.input_bindings or task.previous_turn_result:
+    if sources is not None:
         refs=[]; copies=[]
-        for snapshot,info,origin in _sources(store,state,task):
+        for snapshot,info,origin in sources:
             refs.append({**info,**origin,'conditions':snapshot['conditions']})
             copy={'result_id':info['result_id'],'kind':snapshot['meta']['kind'],
                 'rows':snapshot['rows'],'columns':snapshot['columns'],'total_rows':snapshot['total_rows']}

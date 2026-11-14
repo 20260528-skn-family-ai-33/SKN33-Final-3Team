@@ -2,36 +2,38 @@
   "schema_version": 2,
   "hash_normalization": "UTF-8 file bytes with CRLF normalized to LF before SHA256",
   "evaluation": "Report Agent 오프라인 설계 계약 평가",
-  "evaluated_at_utc": "2026-11-12T08:38:21.861645+00:00",
+  "evaluated_at_utc": "2026-11-14T05:15:28.028042+00:00",
   "source_mode": "working_tree",
-  "source_revision": "f1203ccf5bdd0b942446461f1c8608546b6af7c7",
-  "source_dirty": false,
-  "source_changes": [],
-  "harness_revision": "f1203ccf5bdd0b942446461f1c8608546b6af7c7",
+  "source_revision": "20864e8696a9c69b178cc8313eea543d831b722c",
+  "source_dirty": true,
+  "source_changes": [
+    "M backend/app/agents/report.py"
+  ],
+  "harness_revision": "20864e8696a9c69b178cc8313eea543d831b722c",
   "harness_dirty": true,
   "harness_changes": [
     "M backend/scripts/evaluate_report_agent.py",
     " M backend/tests/test_agent_report.py"
   ],
   "source_sha256": {
-    "backend/app/api/files.py": "77af09af907f7606f02a926d0f4729ad3cc76e5070952904a5ed4192e1655cfb",
+    "backend/app/api/files.py": "368ca8120f27b1d89e04a32ef180d6fc8e82d534f67e2bdbaca56331150d2ab3",
     "backend/app/services/report_ondemand_context.py": "ceb2fc34804d910a5146f98839442446d27725b94f99ef4b503dd74e0c6bb289",
-    "backend/app/services/report_templates.py": "1a55bd02115d8c8beb82d186576b65167b988f2ff287946931c9959c32827377",
+    "backend/app/services/report_templates.py": "0d72fc06dc41e847428c129b52b98f1243944ca8b08b5e82cdf6ec42122d4cda",
     "backend/app/services/report_context.py": "ef107fe826bbf9036c5d499cf986a3df5f13008e756147a629e433256bbf1b93",
-    "backend/app/api/reports.py": "0e214beaa4496fe51298844d92dcbd51452bbd1ca99008ccf513a84b43840ce3",
-    "backend/app/agents/report.py": "1ed99eaa0065939f0785b99d9c3340ec629194b831d04c22b0ee90388747a53b"
+    "backend/app/api/reports.py": "a749e63147926ae1a17e0afb819a80535e50553156693eb6526c71da04e8978b",
+    "backend/app/agents/report.py": "6815da23f5fca9f87ef3c28c1fd96f70a7e531a6690f98eaf43ed72bc8b46ad4"
   },
   "evidence_sha256": {
     "backend/tests/test_agent_graph.py": "42b48bf6f21af564468dd9d29db17a9ca55de121ff0c04449d5d2f5323477656",
     "backend/tests/test_agent_pr61_fixes.py": "73908cce2991f8adb09a702b204c7e30c7478d569e603eb4b037cd3f402e8d7f",
-    "backend/tests/test_agent_report.py": "e6d0da6f759117cc36e4f7f63f7df9adacd6cf204caf18e57b0a79317fa4c780",
+    "backend/tests/test_agent_report.py": "ac1a06ba6b4d6b114d3ad84438bb7d865223754339bebee37ba7cf71f138347f",
     "backend/tests/test_agent_state.py": "35c261bb9009c2f9dc9fbb635020d3fe9b1d1ae1e86b4fcf6a78427792ce25ba",
-    "backend/tests/test_backend_api.py": "3f28e682f0e78edbea420b8502b1e2337eb5b87a2355433db6ab1c762773a25f",
-    "backend/scripts/evaluate_report_agent.py": "37edf236c567e7f2d63a2ce80df674344d082ce61d3f78c6cb7cee0d4b4c0253",
+    "backend/tests/test_backend_api.py": "91a0165c4b58e6b09ec9b45ef9922972c1da63d248f7bb75acb772087a929090",
+    "backend/scripts/evaluate_report_agent.py": "8c0d35be7e935493d42429a30f183400e6ed4f0353c09e093e80928b4868ec74",
     "backend/tests/api_support.py": "e39e158e4840bb652d8e86db8d21991044c6cda1765c977db6482a2c75b48003",
     "backend/tests/intent_fixtures.py": "a34fed014fdd8532c8f89145bdd615a39418ab6d23e66c60280bc91865f3d4e5"
   },
-  "manifest_sha256": "fef381b34493ecfe29d7ed4cf65494db1bd63d22c9b4385c429e25e187368084",
+  "manifest_sha256": "5f2779335d81e09388aad6e2955a0b5bda69bf23260068ffbd4d6ddb21813080",
   "environment": {
     "python": "3.12.13",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -87,8 +89,8 @@
       "pass_rate_pct": 100.0
     },
     "이전 턴 결과": {
-      "total": 22,
-      "pass": 22,
+      "total": 25,
+      "pass": 25,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -96,8 +98,8 @@
       "pass_rate_pct": 100.0
     },
     "합계": {
-      "total": 47,
-      "pass": 47,
+      "total": 50,
+      "pass": 50,
       "fail": 0,
       "error": 0,
       "skip": 0,
@@ -526,6 +528,33 @@
       "category": "고른 표 만료",
       "criterion": "고른 표가 재개 전에 만료되면 다른 표로 자동으로 바꾸지 않고 남은 표에서 다시 고르게 한다.",
       "test": "backend.tests.test_agent_report.ReportAgentTest.test_picked_table_that_expired_is_chosen_again",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R48",
+      "group": "이전 턴 결과",
+      "category": "미리보기 전 만료",
+      "criterion": "조건 확인과 미리보기 사이에 고른 표가 만료되면 JOB_FAILED 없이 미리보기를 만들지 않고 다시 고르게 한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_table_expiring_before_the_preview_asks_again",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R49",
+      "group": "이전 턴 결과",
+      "category": "명시적 재선택",
+      "criterion": "다시 고르는 화면에서 선택지와 맞지 않는 글을 입력해도 남은 표를 자동으로 고르지 않고 다시 묻는다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_reselection_waits_for_an_explicit_choice",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "id": "R50",
+      "group": "이전 턴 결과",
+      "category": "후보 확인 중 만료",
+      "criterion": "후보 확인과 최종 읽기 사이에 만료돼도 '보관 기간이 지났습니다'로 끝내지 않고 다시 고르게 한다.",
+      "test": "backend.tests.test_agent_report.ReportAgentTest.test_table_expiring_while_checking_candidates_asks_again",
       "status": "PASS",
       "details": []
     }
