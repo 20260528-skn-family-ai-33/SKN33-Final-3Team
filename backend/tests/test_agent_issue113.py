@@ -1261,6 +1261,13 @@ class AnnualSqlMergeTest(unittest.TestCase):
         self.assertNotIn('change_pct', written['rows'][0])
         self.assertIn('export_2025_usd', written['rows'][0])
         self.assertNotIn('change_pct', [c['key'] for c in written['columns']])
+        # 대체 결론도 증명한 칸만 옮긴다. 맞지 않는 change_pct나 증명하지 못한 별칭 열을 첫 값으로 쓰지 않는다.
+        from backend.app.agents.compose import _trade_fact
+        reordered = {**mismatched, 'columns': [{'key': 'change_pct', 'label': '변화율', 'unit': '%'},
+                                               {'key': 'other_usd', 'label': '기타', 'unit': 'USD'},
+                                               *digest['columns']],
+                     'rows': [{**wrong[0], 'other_usd': 1}]}
+        self.assertIn('export_2024_usd', _trade_fact(reordered))
         current.results[plan_task.steps[1].step_id] = ToolResult(status='OK', digest=mapped, result_id='r')
         current.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['2025년 수출액은 9억 달러입니다.']}],
                               explanation=[], turn_summary='')
