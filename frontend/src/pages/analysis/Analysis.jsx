@@ -10,7 +10,7 @@ import { api, streamAnswer } from '../../api/client'
 import { requestId } from '../../api/requestId'
 import { amount, percent, reportProduct, kstDateTimeText, monthEndDate } from '../../api/adapters'
 import { usePendingAction, useQuery, ErrorNotice } from '../../api/hooks'
-import { previewExpired, comparisonPeriod, reportComparisonInputs, reportConditions } from '../../api/integration'
+import { previewExpired, comparisonPeriod, reportPeriodInputs, reportConditions } from '../../api/integration'
 import { monthOffset } from '../home/useDashboard'
 import { countryName, productChoiceLabel } from '../../data/catalog'
 import { ALL_SECTIONS } from '../../data/seed'
@@ -32,7 +32,7 @@ const STATUS_TAG = {
   done: ['ok', '생성 완료'],
 }
 const sectionCodes = { '주요 지표(KPI)': 'KPI', '주요 수출국': 'TOP_COUNTRIES', '유망시장(증가·감소 예상)': 'GROWTH_RISK', '현지 이슈 기사': 'LOCAL_ISSUES' }
-const optionsFor = (c, choices) => ({ conditions: c, country: c.country_codes.map(countryName).join(' · '), product: c.hs_items.map(h => reportProduct(h.hs_code, choices?.find(choice => choice.hs_item?.hs_code === h.hs_code)?.label || h.name_ko)).join(', '), from: c.period.start.slice(0, 7), to: c.period.end.slice(0, 7), ...reportComparisonInputs(c), sections: ALL_SECTIONS })
+const optionsFor = (c, choices) => ({ conditions: c, country: c.country_codes.map(countryName).join(' · '), product: c.hs_items.map(h => reportProduct(h.hs_code, choices?.find(choice => choice.hs_item?.hs_code === h.hs_code)?.label || h.name_ko)).join(', '), ...reportPeriodInputs(c), sections: ALL_SECTIONS })
 
 function AiBlock({ children, className, id }) {
   return (
@@ -89,6 +89,8 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
   const years = start && end ? Array.from({ length: Number(end.slice(0, 4)) - Number(start.slice(0, 4)) + 1 }, (_, i) => String(Number(end.slice(0, 4)) - i)) : []
   const incompleteComparison = Boolean(o.compareFrom) !== Boolean(o.compareTo)
   const reversedComparison = o.compareFrom && o.compareTo && o.compareFrom > o.compareTo
+  // 직접 지정한 비교 기간은 분석 기간보다 앞서야 한다(서버 resolve_comparison과 같은 규칙, C-05)
+  const lateComparison = o.from && o.compareFrom && o.compareTo && !reversedComparison && o.compareTo >= o.from
   const set = patch => onChange({ ...message, options: { ...o, ...patch } })
   const setScope = patch => {
     const conditions={...o.conditions,...patch}
@@ -166,7 +168,7 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
       </div>
       <div className="between" style={{ marginTop: 18 }}>
         <span className="note">핵심 요약은 항상 포함 · 선택 응답이 없으면 전체 항목으로 생성</span>
-        <Btn kind="red" size="md" icon="file" onClick={confirm} disabled={busy || !o.from || !o.to || o.from > o.to || incompleteComparison || reversedComparison}>리포트 조건 확인</Btn>
+        <Btn kind="red" size="md" icon="file" onClick={confirm} disabled={busy || !o.from || !o.to || o.from > o.to || incompleteComparison || reversedComparison || lateComparison}>리포트 조건 확인</Btn>
       </div>
       <Modal open={!!preview && preview.signature === signature} onClose={() => { if (!busy) setPreview(null) }} label="리포트 생성 조건 확인" width={520}>
         <h2>이 조건으로 리포트를 생성할까요?</h2>
@@ -179,6 +181,7 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
       {o.from > o.to && <p className="field-err">시작 월이 종료 월보다 늦습니다.</p>}
       {incompleteComparison && <p className="field-err">비교 시작 월과 종료 월을 모두 선택해 주세요.</p>}
       {reversedComparison && <p className="field-err">비교 시작 월이 종료 월보다 늦습니다.</p>}
+      {lateComparison && <p className="field-err">비교 기간은 분석 기간보다 앞서야 합니다.</p>}
     </AiBlock>
   )
 }
