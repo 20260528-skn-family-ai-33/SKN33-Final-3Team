@@ -85,7 +85,7 @@ def _series_names(series):
 
 
 def _column_groups(columns):
-    """A4 본문에 들어가도록 열을 RESULT_COLUMN_LIMIT개 이하 묶음으로 나눈다. 순위·월·국가·품목 식별 열은 묶음마다 반복한다."""
+    """A4 본문에 들어가도록 열을 RESULT_COLUMN_LIMIT개 이하 묶음으로 나눈다. 순위·월·국가·품목·판본 식별 열은 묶음마다 반복한다."""
     keys = [c['key'] for c in columns]
     if len(keys) <= RESULT_COLUMN_LIMIT:
         return [list(range(len(keys)))]
