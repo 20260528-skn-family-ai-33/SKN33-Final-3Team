@@ -61,6 +61,10 @@ def month_end(value):
     return value.replace(day=calendar.monthrange(value.year, value.month)[1])
 
 
+# 생성 SQL 결과의 기간을 증명하지 못했을 때(agents.sql.period_covered) 채팅 답변과 리포트에 같은 안내를 붙인다.
+LLM_SQL_PERIOD_WARNING = '생성 SQL 결과는 집계 기간을 확인할 수 없어 답변 문장의 수치를 검증하지 않았습니다. 수치는 결과표에서 확인해 주세요.'
+
+
 def period_label(start, end):
     """표 열·차트 시리즈용 기간 이름. 한 해 전체면 '2023년', 아니면 '2023-01~2023-06'. date와 'YYYY-MM-DD' 문자열을 받는다."""
     start, end = str(start)[:7], str(end)[:7]

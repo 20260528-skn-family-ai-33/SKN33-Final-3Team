@@ -111,6 +111,10 @@ def mismatch(claim:Claim,fact:Fact,source):
     q,m=claim.quantity,claim.metric
     if not claim.valid or not fact.metric.valid: return 'AMBIGUOUS'
     if not _source_supports(claim.time,source): return 'SOURCE_PERIOD'
+    # 기간을 증명하지 못한 생성 SQL 수치(sql.period_covered가 아님)는 어떤 문장도 뒷받침하지 않는다. 기간 표현 목록으로
+    # 거르면("조회 기간"은 막고 "이번 분기"·기간 생략은 통과) 다른 표현으로 같은 오류가 생긴다. 이 값은 표로만 보인다.
+    if source.get('kind')=='LLM_SQL' and fact.period is None and not fact.prediction:
+        return 'PERIOD'
     if not claim.targets<=fact.targets: return 'TARGET'
     if claim.target_scope=='GROUP':
         if not fact.group_members or not fact.group_members<=claim.targets: return 'GROUP_SCOPE'
@@ -369,6 +373,8 @@ def snapshot_evidence(payload):
     meta=payload.get('meta') or {}
     scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
     if meta.get('extra_compare_periods'): scope['extra_compare_periods']=meta['extra_compare_periods']
+    if meta.get('kind')=='LLM_SQL':   # 별칭·월 표시로 기간을 정하지 않는다(compare_key·period_covered)
+        scope.update(kind='LLM_SQL', period_verified=meta.get('period_verified') is True)
     if meta.get('kind')=='PREDICTION' and meta.get('anchor'):
         anchor=str(meta['anchor'])[:7]
         scope.update(kind='PREDICTION',anchor=anchor,period={'start':anchor,'end':anchor})

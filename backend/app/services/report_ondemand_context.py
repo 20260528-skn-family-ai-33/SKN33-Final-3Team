@@ -129,6 +129,12 @@ def populate_results(saved, ctx, start, end, content):
         checks.append({'target': title, 'content': f"승인한 결과표 {total:,}행 · 결과 ID {table['result_id']}",
                        'basis': '승인 시점 사본 · ' + ('일부 누락' if ref.get('completeness') == 'PARTIAL' else '재조회 없음')})
         checks.extend({'target': title, 'content': text, 'basis': '누락·제한 사유'} for text in ref.get('limitations', []))
+        if table.get('kind') == 'LLM_SQL' and (table.get('meta') or {}).get('period_verified') is not True:
+            from backend.app.api.common import LLM_SQL_PERIOD_WARNING
+            checks.append({'target': title, 'content': LLM_SQL_PERIOD_WARNING, 'basis': '집계 기간 미확인'})
+            for result in results:
+                if result['result_id'] == table['result_id']:
+                    result['note'] += ' · 집계 기간 미확인(생성 SQL)'
     from backend.app.api.reports import RESULT_SECTIONS  # 웹·DOCX 문서와 같은 섹션 대응
     covered = {RESULT_SECTIONS.get(t.get('kind')) for t in content.get('source_tables', [])}
     missing = [SECTION_LABELS[s] for s in sections if s in SECTION_LABELS and s not in covered]

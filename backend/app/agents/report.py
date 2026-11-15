@@ -47,6 +47,9 @@ def preview(store,state,task):
             # 예측 표는 순위 기준(group_by)이 있어야 리포트가 채팅과 같은 순위를 보인다(행 모양으로 추측하지 않는다).
             if snapshot['meta'].get('group_by'):
                 copy['meta']={k:snapshot['meta'][k] for k in ('kind','group_by','anchor') if k in snapshot['meta']}
+            # 생성 SQL 결과의 기간 증명 여부를 리포트로 옮긴다. 증명이 없으면 리포트에도 채팅과 같은 제한을 밝힌다.
+            if snapshot['meta'].get('kind')=='LLM_SQL':
+                copy['meta']={'kind':'LLM_SQL','period_verified':snapshot['meta'].get('period_verified') is True}
             copies.append(copy)
         if any(ref['conditions']!=refs[0]['conditions'] for ref in refs[1:]):
             raise SlotRepair('선행 결과의 분석 조건이 다릅니다. 같은 조건으로 다시 분석하세요.')

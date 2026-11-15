@@ -45,10 +45,13 @@ EXTRA_COMPARE_KEY=re.compile(r'compare([2-9])_(\w+)|change([2-9])_pct')
 
 def compare_key(source, key):
     """(검사에 쓸 열 이름, 그 열의 비교 기간). 추가 비교 기간 열(compare2_total_usd·change2_pct)은 첫 비교 기간 열과
-    같은 이름으로 검사하고 기간만 extra_compare_periods의 해당 기간으로 바꾼다."""
-    compare=period(source.get('compare_period'))
+    같은 이름으로 검사하고 기간만 extra_compare_periods의 해당 기간으로 바꾼다.
+    생성 SQL(LLM_SQL)은 별칭만으로 그 열이 어느 기간을 집계했는지 알 수 없으므로 비교 기간을 붙이지 않는다.
+    (compare2_total_usd 별칭으로 2025년 금액을 내도 2024년 값으로 검증되면 안 된다.)"""
+    compare=None if source.get('kind')=='LLM_SQL' else period(source.get('compare_period'))
     match=EXTRA_COMPARE_KEY.fullmatch(key)
     if not match: return key, compare
+    if compare is None: return ('compare_'+match[2] if match[1] else 'change_pct'), None
     extras=source.get('extra_compare_periods') or []
     n=int(match[1] or match[3])
     if n-2>=len(extras) or not (window:=period(extras[n-2])): return key, compare
@@ -151,6 +154,13 @@ def build_facts(sources,catalog:NameCatalog):
             stored = stored.union(names)
             identities, group = bind_targets(stored, catalog)
             month=str(row.get('month') or row.get('trade_month') or inherited_month or '')[:7] or None
+            row_period=current
+            if source.get('kind')=='LLM_SQL':
+                # 생성 SQL의 월·연도 표시와 열 이름은 SQL이 만든 값이라 기간 근거가 아니다('2024-01' AS month로 2025년 금액을
+                # 낼 수 있다). 조회 기간 전체를 그대로 집계했다고 증명된 결과(sql.period_covered)만 조회 기간을 붙인다.
+                month=None
+                if source.get('period_verified') is not True:
+                    row_period=None
             for key,value in row.items():
                 if isinstance(value,(dict,list)):
                     walk(value,stored,month,path+(key,));continue
@@ -182,11 +192,13 @@ def build_facts(sources,catalog:NameCatalog):
                 descriptor=metric(logic,column.get('label') or '',unit,source.get('trade_flow'))
                 if unit=='%p' and month and not re.fullmatch(r'\d{4}-(?:0[1-9]|1[0-2])',month):
                     continue
-                fact_period=window if logic.startswith('compare_') else current
+                fact_period=window if logic.startswith('compare_') else row_period
                 fact_compare=None;fact_month=month;horizon=None;role=None
                 period_value=not month or logic in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD'
                 if prediction and logic in ('exp_12m','growth_pct'):
                     fact_period=None;fact_month=None;horizon=12;role='PAST' if logic=='exp_12m' else 'FUTURE'
+                elif logic=='compare_amount_usd' and window is None and source.get('kind')=='LLM_SQL':
+                    continue   # 생성 SQL의 비교 월(compare_month)은 SQL이 낸 값이라 그 금액의 기간 근거가 되지 않는다.
                 elif logic=='compare_amount_usd':
                     fact_month=str(row.get(key.replace('amount_usd','month')) or '')[:7] or None
                     if not fact_month and month and current and window and months_between(*current)==months_between(*window):
@@ -207,7 +219,7 @@ def build_facts(sources,catalog:NameCatalog):
                     if paired: fact_compare=(paired,paired)
                 elif logic in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD':
                     fact_month=None
-                    if descriptor.comparison=='PERIOD': fact_period=current;fact_compare=window
+                    if descriptor.comparison=='PERIOD': fact_period=row_period;fact_compare=window
                 elif month: fact_period=(month,month)
                 if not fact_month and fact_period and fact_period[0]==fact_period[1]: fact_month=fact_period[0]
                 facts.append(Fact(index,path+(key,),descriptor,amount,unit,frozenset(identities),group,
