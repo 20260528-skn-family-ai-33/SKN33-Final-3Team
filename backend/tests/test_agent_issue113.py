@@ -1099,6 +1099,11 @@ class UnverifiedLlmSqlOutputTest(unittest.TestCase):
         self.assertEqual(units('4개 동남아 국가'), ['COUNT'])
         # 나라 이름이 붙은 통화와 낱말 끝 통화는 그대로 통화다(USD가 아니므로 달러 근거와 대조하지 않는다).
         self.assertEqual(units('100만 베트남 동, 10만 홍콩달러, 2만 루피아, 1,000원짜리'), ['베트남동', '홍콩달러', '루피아', 'KRW'])
+        # 달러와 '불'은 같은 끝 규칙을 쓴다. 조사·어미(고·면·하고)와 붙여 쓴 남짓·안팎 뒤에서도 금액이다.
+        amount = {**source, 'targets': [{'country_name': '미국', 'total_usd': 1200}]}
+        for value in ('1,200달러고', '1,200불고', '1,200달러면', '천이백 달러면', '1,200달러하고', '1,200달러남짓', '1,200달러안팎'):
+            with self.subTest(value=value):
+                self.assertTrue(check_sentence(f'2025년 미국 수출 총액은 {value} 집계됐습니다.', [amount])[0])
 
     def test_edition_mention_matches_results_without_saved_edition(self):
         from backend.app.agents.verify import check_sentence
