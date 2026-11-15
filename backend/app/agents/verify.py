@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 import re
 
 from backend.app.agents.compose import fixed_conclusion
-from backend.app.api.common import sql_period_unproven
+from backend.app.api.common import sql_period_partial, sql_period_unproven
 from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
     ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
@@ -550,23 +550,24 @@ def evidence(digest):
 
 
 def _rate_source_key(row, sums, conditions):
-    """한 행의 change_pct가 SQL 식으로 증명한 조회·비교 연도 합계의 변화율과 표시 자릿수 안에서 같은지."""
+    """한 행의 change_pct가 SQL 식으로 증명한 조회·비교 연도 합계의 변화율과 표시 자릿수 안에서 같으면 조회 연도 합계 칸의
+    키(그 칸의 국가·품목·판본·방향이 변화율의 범위다), 아니면 None."""
     current, compare = (period(conditions.get(k)) for k in ('period', 'compare_period'))
     if not (current and compare) or row.get('change_pct') is None:
-        return False
+        return None
     by_year = {}
     for key, (year, *scope_) in sums.items():
         by_year.setdefault(year, []).append((key, tuple(scope_)))
     pair = [by_year.get(window[0][:4], []) for window in (current, compare)]
     if any(len(cells) != 1 for cells in pair) or pair[0][0][1] != pair[1][0][1]:
-        return False   # 연도마다 증명한 합계가 하나이고 같은 국가·품목·판본·방향이어야 한다.
+        return None   # 연도마다 증명한 합계가 하나이고 같은 국가·품목·판본·방향이어야 한다.
     try:
         target, base = (Decimal(str(row[cells[0][0]])) for cells in pair)
         shown = Decimal(str(row['change_pct']))
     except (KeyError, ArithmeticError, ValueError):
-        return False
+        return None
     if not base:
-        return False
+        return None
     exponent = min(shown.as_tuple().exponent, 0) if isinstance(shown.as_tuple().exponent, int) else 0
     if abs(shown - (target - base) / base * 100) <= Decimal(5).scaleb(exponent - 1):
         return pair[0][0][0]
@@ -716,8 +717,7 @@ def generated_conclusion(state, task, has_evidence):
 def unsupported_sql_prose(state):
     """Final publication guard for unsupported numbers in scopes with unverified SQL."""
     unverified_tasks = {task.task_id for task in state.plan.tasks if any(
-        (result := state.results.get(step.step_id)) and (digest := result.digest)
-        and digest.get('kind') == 'LLM_SQL' and digest.get('period_verified') is not True for step in task.steps)}
+        (result := state.results.get(step.step_id)) and sql_period_partial(result.digest) for step in task.steps)}
     if not unverified_tasks:
         return set(), False
     unverified_steps = {step.step_id for task in state.plan.tasks if task.task_id in unverified_tasks for step in task.steps}

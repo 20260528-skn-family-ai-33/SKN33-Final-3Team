@@ -66,11 +66,19 @@ LLM_SQL_PERIOD_WARNING = '생성 SQL 결과는 집계 기간을 확인할 수 �
 
 
 def sql_period_unproven(meta):
-    """기간을 증명하지 못한 생성 SQL 결과인지(digest·meta·리포트 사본 meta 공통). 조회 기간 전체(period_verified)나
-    연도별 합계·차액 칸(annual_verified)을 SQL 식으로 증명한 결과는 그 칸으로 검증하므로 숨기거나 경고하지 않는다."""
+    """작성 입력·경고·리포트에서 기간 미확인으로 다룰 생성 SQL 결과인지(digest·meta·리포트 사본 meta 공통).
+    조회 기간 전체(period_verified)나 연도별 합계·차액 칸(annual_verified)을 SQL 식으로 증명한 결과는 아니다.
+    최종 답변의 수치 문장 차단은 sql_period_partial로 판단한다."""
     meta = meta or {}
     return (meta.get('kind') == 'LLM_SQL' and meta.get('period_verified') is not True
             and meta.get('annual_verified') is not True)
+
+
+def sql_period_partial(meta):
+    """최종 답변에서 검증 실패 수치 문장을 결과표 안내로 바꿀 생성 SQL 결과인지. 조회 기간 전체를 증명하지 못했으면
+    연간 칸만 증명했어도(annual_verified) 해당한다. 증명한 칸으로 검증된 문장은 그대로 남는다."""
+    meta = meta or {}
+    return meta.get('kind') == 'LLM_SQL' and meta.get('period_verified') is not True
 
 
 def period_label(start, end):

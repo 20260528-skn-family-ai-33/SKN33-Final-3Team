@@ -180,7 +180,7 @@ def build_facts(sources,catalog:NameCatalog):
                 if source.get('period_verified') is not True:
                     row_period=None
             for key,value in row.items():
-                if key in ('_annual_sums', '_annual_differences', '_annual_candidates', '_annual_nationwide', '_annual_rate'): continue
+                if key in ('_annual_sums', '_annual_differences', '_annual_candidates', '_annual_nationwide', '_annual_rate', '_annual_rate_scope'): continue
                 if isinstance(value,(dict,list)):
                     walk(value,stored,month,path+(key,),edition);continue
                 if value is None and key == 'amount_usd' and month:
