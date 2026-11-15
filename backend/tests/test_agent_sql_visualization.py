@@ -195,12 +195,30 @@ class ChartContractTest(unittest.TestCase):
         for rows, schema in (
             ([{'month': str(i), 'value': i} for i in range(61)], columns),
             ([{'month': '2025-01', 'value': 1}, {'month': '2025-01', 'value': 2}], columns),
-            ([{'month': '2025-01', 'value': 1, 'ratio': 50}], columns + [
+            ([{'month': '2025-01', 'value': 1, 'ratio': 50}], [columns[0], {**columns[1], 'unit': 'COUNT'},
                 {'key': 'ratio', 'label': '비율', 'type': 'number', 'unit': '%'}]),
         ):
             with self.subTest(rows=len(rows), columns=len(schema)):
                 result, _, _ = chart('LLM_SQL', rows, columns=schema)
                 self.assertEqual((result.status, result.result_id, result.chart), ('OK', 'saved-result', None))
+
+    def test_freeform_mixed_amount_and_change_charts_the_usd_column(self):
+        columns = [{'key': 'month', 'label': '월', 'type': 'string', 'unit': None},
+                   {'key': 'value', 'label': '금액', 'type': 'number', 'unit': 'USD'},
+                   {'key': 'ratio', 'label': '증감률', 'type': 'number', 'unit': '%'}]
+        result, _, _ = chart('LLM_SQL', [{'month': '2025-01', 'value': 1, 'ratio': 50}], columns=columns)
+        self.assertEqual((result.chart.type, result.chart.unit, result.chart.labels), ('line', 'USD', ['2025-01']))
+        self.assertEqual([(s.name, s.values) for s in result.chart.series], [('금액', [1])])
+
+    def test_generated_share_chart_uses_the_ratio_instead_of_the_denominator(self):
+        columns = [{'key': 'hs_code', 'label': '품목', 'type': 'string', 'unit': None},
+                   {'key': 'share_pct', 'label': '비중', 'type': 'number', 'unit': '%'},
+                   {'key': 'denominator_usd', 'label': '한국 수출 총액', 'type': 'number', 'unit': 'USD'}]
+        rows = [{'hs_code': code, 'share_pct': share, 'denominator_usd': 1000}
+                for code, share in [('330410', 20), ('330499', 50)]]
+        result, _, _ = chart('LLM_SQL', rows, columns=columns)
+        self.assertEqual((result.chart.type, result.chart.unit), ('bar', '%'))
+        self.assertEqual([(s.name, s.values) for s in result.chart.series], [('비중', [20, 50])])
 
     def test_ml_selection_uses_saved_pairs_and_actual_exports(self):
         rows = [{'country_code': code, 'hs6': hs, 'hs_ver': 'HS2022', 'name': hs,

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { amount, percent, reportEok, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison, monthEndDate } from '../src/api/adapters.js'
+import { amount, percent, reportEok, mapReport, mapArticle, mapNotification, mapPopupGroup, notificationTarget, popupItemTag, reportComparison, monthEndDate, reportItemLabels } from '../src/api/adapters.js'
 import { registerCountries, countryCode, countryName, registerProducts, productName, productChoiceLabel } from '../src/data/catalog.js'
 import { isStrongPassword } from '../src/utils/validate.js'
 import { articleParagraphs } from '../src/data/articles.js'
@@ -10,6 +10,13 @@ test('월 단위 종료일은 윤년을 포함해 말일로 표시한다', () =>
   assert.equal(monthEndDate('2024-02-01'),'2024-02-29')
   assert.equal(monthEndDate('2025-02-28'),'2025-02-28')
   assert.equal(monthEndDate('2025-12'),'2025-12-31')
+})
+test('리포트 승인과 범위에 같은 코드의 두 HS 판본을 구분한다', () => {
+  const items = [{hs_code: '330499', hs_ver: 'HS2017'}, {hs_code: '330499', hs_ver: 'HS2022'}]
+  assert.deepEqual(reportItemLabels(items, {}, true), ['HS 330499 HS2017', 'HS 330499 HS2022'])
+  assert.deepEqual(reportItemLabels(items, {'HS2017:330499': '이전 품목', 330499: '현재 품목'}),
+    ['이전 품목 (HS 330499 HS2017)', '현재 품목 (HS 330499 HS2022)'])
+  assert.deepEqual(reportItemLabels(items.slice(0, 1), {330499: '현재 품목'}), ['HS 330499 HS2017'])
 })
 test('품목 선택에는 HS 코드를 한 번만 붙인다', () => {
   for (const label of ['기초화장품', '기초화장품 (330499)', '기초화장품 (HS 330499)']) {
@@ -213,6 +220,47 @@ test('multi-period trend results keep their own table and server-chosen columns 
  // 길이가 다른 비교 기간(12개월 대 6개월)은 서버가 보인 기준 기간 합계·월평균을 화면에서도 숨기지 않는다
  const columns=['month','amount_usd','total_usd','monthly_avg_usd','compare2_total_usd','compare2_monthly_avg_usd'].map(key=>({key,label:key}))
  assert.deepEqual(resultColumns(columns,rows,{meta}).map(c=>c.key),columns.map(c=>c.key))
+ // 추이 표는 서버가 고른 비교 열을 그대로 쓴다. 비교 월만 있고 집계된 금액이 없어도 열이 남는다(값은 미집계)
+ const empty=[{month:'2025-01',verified_months:1,amount_usd:1,compare_month:'2024-01',compare_amount_usd:null}]
+ const monthly=['month','amount_usd','compare_month','compare_amount_usd'].map(key=>({key,label:key}))
+ assert.deepEqual(resultColumns(monthly,empty,{meta:{kind:'TREND'}}).map(c=>c.key),monthly.map(c=>c.key))
+})
+
+test('a one-page trend keeps the server columns for a shorter comparison period (#113)', async () => {
+  const { resultColumns } = await import('../src/components/resultColumns.js')
+  const meta = { kind: 'TREND', period: { start: '2025-01-01', end: '2025-12-31' },
+    compare_period: { start: '2024-01-01', end: '2024-06-30' } }
+  const rows = [{ month: '2025-01', amount_usd: 1, total_usd: 12, monthly_avg_usd: 1,
+    verified_months: 12, requested_months: 12, compare_total_usd: 6, compare_monthly_avg_usd: 1,
+    compare_verified_months: 6, compare_requested_months: 6 }]
+  const keys = Object.keys(rows[0])
+  const columns = keys.map(key => ({ key, label: key }))
+  assert.deepEqual(resultColumns(columns, rows, { meta }).map(c => c.key), keys)
+})
+
+test('generated SQL keeps its comparison amount column without a comparison month (#113)', async () => {
+  const { resultColumns } = await import('../src/components/resultColumns.js')
+  const columns = [
+    { key: 'month', label: '기준월' }, { key: 'amount_usd', label: '2025년 금액' },
+    { key: 'compare_amount_usd', label: '2024년 금액' }, { key: 'verified_months', label: '집계 개월 수' },
+  ]
+  const rows = [{ month: '2025-01', amount_usd: 12, compare_amount_usd: 10, verified_months: 1 }]
+  assert.deepEqual(resultColumns(columns, rows, { meta: { kind: 'LLM_SQL' } }), columns)
+})
+
+test('country comparison keeps separate series and labels for two editions of the same code', async () => {
+  const { comparisonChart } = await import('../src/pages/analysis/comparisonGroups.js')
+  const { resultColumns } = await import('../src/components/resultColumns.js')
+  const columns = [{ key: 'hs_ver', label: 'HS 판본', type: 'string' },
+    { key: 'us', label: '미국 수출액', type: 'number' }]
+  const rows = [['HS2017', 7], ['HS2022', 1120000]].map(([hs_ver, us]) => ({
+    hs_code: '330499', name: '기초화장품', hs_ver, month: '2025-01', us,
+  }))
+  const chart = comparisonChart({ columns, rows }, { trade_flow: 'EXPORT' })
+  assert.deepEqual(chart.series.map(s => [s.name, s.values]), [
+    ['기초화장품 (HS2022) · 미국 수출액', [1120000]], ['기초화장품 (HS2017) · 미국 수출액', [7]],
+  ])
+  assert.deepEqual(resultColumns(columns, rows, { meta: { kind: 'COUNTRY_COMPARISON' } }), columns)
 })
 
 test('multi-period charts stay under their own task instead of merging (#113)',async()=>{

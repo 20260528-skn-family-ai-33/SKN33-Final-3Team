@@ -217,6 +217,86 @@ class ReportAgentTest(unittest.TestCase):
         self.assertEqual(self.db.agent_client.parse.call_count, 1)  # 결론·제목을 쓰려고 LLM을 다시 부르지 않는다
 
     # ── 선행 결과로 만드는 리포트 (D-90·D-92) ─────────────────────
+    def hs2017_report_tasks(self):
+        from datetime import date
+        with self.engine.begin() as c:
+            c.execute(self.meta.tables['hs_code'].insert().values(
+                hs_code='330499', hs_ver='HS2017', depth=6, name_ko='이전 판본 제품', source_edition='HS2017'))
+            c.execute(self.meta.tables['export_summary'].insert().values(
+                trade_month=date(2025, 1, 1), country_code='US', hs6_code='330499', hs_ver='HS2017', amount_usd=7))
+        trend = '2025년 1~3월 HS2017 330499 수출 추이'
+        tasks = [{'intent': 'STATISTICS', 'question': trend, 'slots': {
+            'period': {'start': '2025-01-01', 'end': '2025-03-01'}, 'products': ['330499']}},
+            {'intent': 'REPORT', 'question': '그 결과로 리포트', 'source_tasks': [1]}]
+        return tasks, trend
+
+    def test_report_approval_keeps_hs2017_from_the_source_result(self):
+        tasks, trend = self.hs2017_report_tasks()
+        product = {'hs_code': '330499', 'hs_ver': 'HS2017'}
+        jid = self.ask(tasks, trend + ' 보여주고 그 결과로 리포트 만들어줘')
+        job = self.job(jid)
+        self.assertEqual(job['status'], 'NEEDS_INPUT', job)
+        preview = job['clarification']['report_preview']
+        self.assertEqual(preview['conditions']['hs_items'], [product])
+        bypass = self.post('reports', {'preview_id': preview['preview_id'], 'confirm_conditions': True},
+                           **{'Idempotency-Key': 'use-chat-preview-through-public-api'})
+        self.assertEqual(bypass.status_code, 422, bypass.text)
+        self.assertEqual(self.reports(), [])
+        response = self.confirm(jid)
+        self.assertEqual(response.status_code, 202, response.text)
+        self.work()
+        [report] = self.reports()
+        self.assertEqual(report['conditions_json']['hs_items'], [product])
+        [source] = report['content_json']['source_tables']
+        self.assertEqual(source['rows'][0]['hs_ver'], 'HS2017')
+        from io import BytesIO
+        from openpyxl import load_workbook
+        from backend.app.api.reports import build_document, report_xlsx
+        with self.engine.connect() as c:
+            document = build_document(Store(self.db, c), self.uid, report)
+        self.assertEqual(document['meta']['freshness'], 'FROZEN')
+        [table] = [table for section in document['sections'] for table in section['tables']]
+        self.assertEqual(table['rows'][0]['hs_ver'], 'HS2017')
+        self.assertEqual(table['meta']['kind'], 'TREND')
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                if legacy:
+                    table.pop('meta')
+                workbook = load_workbook(BytesIO(report_xlsx(report, document)), read_only=True)
+                try:
+                    headings, values = list(workbook['결과표1'].values)[:2]
+                    self.assertEqual(values[headings.index('HS 판본')], 'HS2017')
+                finally:
+                    workbook.close()
+        [item] = self.client.get('/api/v1/reports').json()['items']
+        self.assertEqual(item['hs_names'], {'HS2017:330499': '이전 판본 제품'})
+
+    def test_report_cannot_approve_a_different_edition_from_the_frozen_source(self):
+        tasks, trend = self.hs2017_report_tasks()
+        tasks[1].update(question='앞의 결과표로 HS2022 HS 330499 리포트 생성', slots={'products': ['330499']})
+        jid = self.ask(tasks, trend + '와 ' + tasks[1]['question'])
+        done = self.job(jid)
+        self.assertEqual(done['status'], 'SUCCEEDED', done)
+        self.assertEqual([t['answer_status'] for t in done['answer']['tasks']], ['ANSWERED', 'NO_DATA'])
+        self.assertEqual(self.previews(), [])
+
+    def test_report_approval_shows_saved_extra_comparison_periods(self):
+        def year(y):
+            return {'start': f'{y}-01-01', 'end': f'{y}-12-01'}
+
+        tasks = [{'intent': 'STATISTICS', 'question': '2025년 수출 비교', 'slots': {
+            'period': year(2025), 'comparison_requested': True, 'compare_period': year(2023),
+            'extra_compare_periods': [year(2024)]}},
+            {'intent': 'REPORT', 'question': '결과로 리포트', 'source_tasks': [1]}]
+        jid = self.ask(tasks, '2025년 수출을 2023년·2024년과 비교해 보여주고 그 결과로 리포트 만들어줘')
+        prompt = self.job(jid)['clarification']
+        self.assertEqual(prompt['kind'], 'REPORT_CONFIRM')
+        preview = prompt['report_preview']
+        self.assertEqual(preview['conditions']['compare_period'], {'start': '2023-01-01', 'end': '2023-12-31'})
+        self.assertEqual(preview['extra_compare_periods'], [{'start': '2024-01-01', 'end': '2024-12-31'}])
+        self.assertNotIn('source_tables', preview)
+        self.assertEqual(self.reports(), [])
+
     def test_result_based_report_refuses_sources_with_different_conditions(self):
         """R12 선행 결과들의 분석 조건이 다르면 임의로 합치지 않고 리포트만 NO_DATA로 끝낸다."""
         tasks = [{'intent': 'STATISTICS', 'question': '미국 수출', 'slots': {'recent_months': 3, 'countries': [{'mention': '미국', 'name': '미국'}]}},
