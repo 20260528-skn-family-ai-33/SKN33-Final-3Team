@@ -64,12 +64,9 @@ def compare_key(source, key):
 
 
 def _annual_rate_proven(source):
-    """연간 비교 생성 SQL이 한 행에 조회 연도와 비교 연도 합계를 모두 SQL 식으로 증명했는지(snapshot_evidence의
-    _annual_sums). 그때만 같은 행의 change_pct를 두 기간의 변화율로 본다. 다른 별칭·월 표시는 기간 근거가 아니다."""
-    current, compare = period(source.get('period')), period(source.get('compare_period'))
-    years = {cell.get('year') for cell in (source.get('_annual_sums') or {}).values() if isinstance(cell, dict)}
-    return (source.get('kind') == 'LLM_SQL' and bool(current and compare) and len(source.get('rows') or []) == 1
-            and years >= {current[0][:4], compare[0][:4]})
+    """연간 비교 생성 SQL의 한 행 change_pct가 SQL 식으로 증명한 조회·비교 연도 합계의 변화율과 같은지
+    (verify.annual_sql_scope가 한 번 판정해 _annual_rate로 둔다). 그때만 두 기간의 변화율로 본다."""
+    return source.get('kind') == 'LLM_SQL' and source.get('_annual_rate') is True
 
 
 def period(value):
@@ -182,7 +179,7 @@ def build_facts(sources,catalog:NameCatalog):
                 if source.get('period_verified') is not True:
                     row_period=None
             for key,value in row.items():
-                if key in ('_annual_sums', '_annual_differences', '_annual_candidates', '_annual_nationwide'): continue
+                if key in ('_annual_sums', '_annual_differences', '_annual_candidates', '_annual_nationwide', '_annual_rate'): continue
                 if isinstance(value,(dict,list)):
                     walk(value,stored,month,path+(key,),edition);continue
                 if value is None and key == 'amount_usd' and month:

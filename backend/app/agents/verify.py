@@ -545,6 +545,58 @@ def evidence(digest):
     return [(f.metric.key,f.value,f.unit,set(f.targets)) for f in build_facts([digest],NameCatalog([digest])) if f.unit not in ('OUTLOOK', 'NULL')]
 
 
+def _rate_matches(row, sums, conditions):
+    """한 행의 change_pct가 SQL 식으로 증명한 조회·비교 연도 합계의 변화율과 표시 자릿수 안에서 같은지."""
+    current, compare = (period(conditions.get(k)) for k in ('period', 'compare_period'))
+    if not (current and compare) or row.get('change_pct') is None:
+        return False
+    by_year = {}
+    for key, (year, *scope_) in sums.items():
+        by_year.setdefault(year, []).append((key, tuple(scope_)))
+    pair = [by_year.get(window[0][:4], []) for window in (current, compare)]
+    if any(len(cells) != 1 for cells in pair) or pair[0][0][1] != pair[1][0][1]:
+        return False   # 연도마다 증명한 합계가 하나이고 같은 국가·품목·판본·방향이어야 한다.
+    try:
+        target, base = (Decimal(str(row[cells[0][0]])) for cells in pair)
+        shown = Decimal(str(row['change_pct']))
+    except (KeyError, ArithmeticError, ValueError):
+        return False
+    if not base:
+        return False
+    exponent = min(shown.as_tuple().exponent, 0) if isinstance(shown.as_tuple().exponent, int) else 0
+    return abs(shown - (target - base) / base * 100) <= Decimal(5).scaleb(exponent - 1)
+
+
+def annual_sql_scope(payload, *, country_labels=None, product_labels=None):
+    """연간 비교 생성 SQL에서 SQL 식으로 증명한 칸(저장본·digest 공통). 연도별 합계(_annual_sums), 차액
+    (_annual_differences), 증명하지 못한 연간 별칭 후보(_annual_candidates), 그 합계와 맞는 한 행의 change_pct(_annual_rate)."""
+    from backend.app.agents.sql import annual_sql_sources, _annual_windows
+    conditions = payload.get('conditions') or {}
+    scope = {}
+    sums, differences, candidates = annual_sql_sources(payload)
+    if len(_annual_windows(conditions)) == 2:
+        scope['_annual_candidates'] = list(candidates)
+        # digest에는 조회 기간만 있다. 연간 칸을 대조할 비교 기간도 같은 근거 범위에 둔다.
+        scope['compare_period'] = {k: str(conditions['compare_period'][k])[:7] for k in ('start', 'end')}
+    cells = {key: dict(year=year, flow=flow, country_code=country, hs_code=hs,
+                       country_name=(country_labels or {}).get(country),
+                       hs_name=(product_labels or {}).get((hs, edition)))
+             for key, (year, country, hs, edition, flow) in sums.items()}
+    if cells:
+        scope['_annual_sums'] = cells
+    if differences:
+        scope['_annual_differences'] = {
+            key: dict(left_year=left, right_year=right, flow=flow,
+                      country_code=country, hs_code=hs,
+                      country_name=(country_labels or {}).get(country),
+                      hs_name=(product_labels or {}).get((hs, edition)))
+            for key, (left, right, country, hs, edition, flow) in differences.items()}
+    rows = payload.get('rows') or []
+    if len(rows) == 1 and isinstance(rows[0], dict) and _rate_matches(rows[0], sums, conditions):
+        scope['_annual_rate'] = True
+    return scope
+
+
 def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
     """Full saved rows, never paginated or bounded for LLM input. No new SQL."""
     conditions=payload.get('conditions') or {}
@@ -561,24 +613,7 @@ def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
         scope['kind'] = 'TREND'
     if meta.get('kind')=='LLM_SQL':   # 별칭·월 표시로 기간을 정하지 않는다(compare_key·period_covered)
         scope.update(kind='LLM_SQL', period_verified=meta.get('period_verified') is True)
-        from backend.app.agents.sql import annual_sql_sources, _annual_windows
-        cells = {}
-        sums, differences, candidates = annual_sql_sources(payload)
-        if len(_annual_windows(conditions)) == 2:
-            scope['_annual_candidates'] = candidates
-        for key, (year, country, hs, edition, flow) in sums.items():
-            cells[key] = dict(year=year, flow=flow, country_code=country, hs_code=hs,
-                              country_name=(country_labels or {}).get(country),
-                              hs_name=(product_labels or {}).get((hs, edition)))
-        if cells:
-            scope['_annual_sums'] = cells
-        if differences:
-            scope['_annual_differences'] = {
-                key: dict(left_year=left, right_year=right, flow=flow,
-                          country_code=country, hs_code=hs,
-                          country_name=(country_labels or {}).get(country),
-                          hs_name=(product_labels or {}).get((hs, edition)))
-                for key, (left, right, country, hs, edition, flow) in differences.items()}
+        scope.update(annual_sql_scope(payload, country_labels=country_labels, product_labels=product_labels))
     if meta.get('kind')=='PREDICTION' and meta.get('anchor'):
         anchor=str(meta['anchor'])[:7]
         scope.update(kind='PREDICTION',anchor=anchor,period={'start':anchor,'end':anchor})
