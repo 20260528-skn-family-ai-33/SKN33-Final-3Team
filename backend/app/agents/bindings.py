@@ -78,19 +78,21 @@ def resolve(store,state,task,out):
         def code(row): return row.get('country_code') if dimension=='COUNTRY' else row.get('hs6') or row.get('hs_code') or (row.get('hs_item') or {}).get('hs_code')
         sorted_rows=sorted((r for r in rows if code(r) and r.get(field) is not None),
             key=lambda r:(-r[field] if order=='amount_usd' else r[field],code(r)))
-        codes=list(dict.fromkeys(code(r) for r in sorted_rows))[:n]
-        if not codes: raise SlotRepair('요청한 대상이 선행 결과표에 없습니다.')
+        if not sorted_rows: raise SlotRepair('요청한 대상이 선행 결과표에 없습니다.')
         if dimension=='COUNTRY':
+            codes=list(dict.fromkeys(code(r) for r in sorted_rows))[:n]
             chosen['COUNTRY']=list(dict.fromkeys([*chosen['COUNTRY'],*codes]))
             if len(chosen['COUNTRY'])>MAX_COUNTRIES: raise SlotRepair('선택한 국가 또는 품목이 조건 상한을 넘습니다.')
             out.country_codes=chosen['COUNTRY']
         else:
-            # 선행 결과 행의 판본을 따른다(예측 행의 hs_ver, 순위 행의 hs_item). 없으면 HS2022다.
-            editions={code(r):r.get('hs_ver') or (r.get('hs_item') or {}).get('hs_ver') or 'HS2022' for r in reversed(sorted_rows)}
-            items=[*chosen['HS6'],*((c,editions[c]) for c in codes)]
-            chosen['HS6']=list(dict.fromkeys(items))
+            # 같은 코드라도 판본이 다르면 순위표에서 다른 품목이며, 예전 저장 행의 기본 판본은 HS2022다.
+            def product(row):
+                return (code(row), row.get('hs_ver') or (row.get('hs_item') or {}).get('hs_ver') or 'HS2022')
+            items=list(dict.fromkeys(product(r) for r in sorted_rows))[:n]
+            chosen['HS6']=list(dict.fromkeys([*chosen['HS6'],*items]))
             if len(chosen['HS6'])>MAX_HS_ITEMS: raise SlotRepair('선택한 국가 또는 품목이 조건 상한을 넘습니다.')
             out.hs_items=[HsProduct(hs_code=c,hs_ver=v) for c,v in chosen['HS6']]
+            codes=[f'{c}({v})' if sum(item[0]==c for item in items)>1 else c for c,v in items]
         if len(codes)<n:
             state.results[task.steps[0].step_id]=ToolResult(status='OK',completeness='PARTIAL',
                 limitations=[f'요청한 {n}개 중 {len(codes)}개 대상만 있습니다.'])

@@ -574,7 +574,6 @@ class Services:
                 # compose가 본 품목 표시명과 같은 이름으로 순위 근거 범위를 대조한다. 조건에 있는 코드만 읽는다.
                 from backend.app.agents.templates import condition_names
                 _,products=condition_names(store,[task.conditions for task in state.plan.tasks])
-                labels={code:name for (code,_),name in products.items()}
                 snapshots={}
                 for task in state.plan.tasks:
                     for step in task.steps:
@@ -586,7 +585,7 @@ class Services:
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
-            verify(state,known_names=set(names),snapshots=snapshots,countries=countries,product_labels=labels)
+            verify(state,known_names=set(names),snapshots=snapshots,countries=countries,product_labels=products)
         try:
             # finalize 몫은 남긴다(§13.4). compose가 예약보다 오래 걸려 시간이 모자라면 대조하지 못한 문장에
             # 바로 "확인 필요"를 붙이고 답변은 저장한다(§1 "시간이 부족하면 불일치 문장에 즉시 표시").

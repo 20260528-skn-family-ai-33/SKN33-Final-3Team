@@ -70,10 +70,13 @@ def build_context(store, uid, record, document):
     labels = {(r['hs_code'], r['hs_ver']): r['name_ko'] for r in store.rows(
         select(table).where(table.c.hs_code.in_([h['hs_code'] for h in hs])))} if hs else {}
     items = []
+    legacy_codes = {item['hs_code'] for item in hs if item['hs_ver']=='HS2017'}
     for item in hs:
         name = labels.get((item['hs_code'], item['hs_ver']), item['hs_code'])
         short = name if len(name) <= 24 else name[:23] + '…'
-        items.append({**item, 'name': name, 'label': short, 'display': f"{short} (HS {item['hs_code']})"})
+        code, edition = item['hs_code'], item['hs_ver']
+        suffix = f' {edition}' if code in legacy_codes else ''
+        items.append({**item, 'name': name, 'label': short, 'display': f"{short} (HS {code}{suffix})"})
     if not items:
         items = [{'hs_code': '전체', 'hs_ver': 'HS2022', 'name': '전체 품목',
                   'label': '전체 품목', 'display': '전체 품목'}]

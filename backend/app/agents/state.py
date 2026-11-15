@@ -560,6 +560,7 @@ class Pending(Model):
     # 표시용(되묻기 문구의 "남은 품목 n개"). 확정한 값의 원본은 Task.resolved이고, check는 그것으로 재실행한다(§3-12)
     remaining: list[ShortText] = Field(default_factory=list, max_length=MAX_HS_ITEMS)   # 아직 못 정한 품목 표현
     selected: list[HsProduct] = Field(default_factory=list, max_length=MAX_HS_ITEMS)  # 앞 표현에서 고른 품목
+    hs_ver: Literal['HS2017'] | None = None   # 이전 판본의 품목 되묻기에서 코드 입력을 같은 판본으로 확인한다.
     asked_at: datetime
 
 

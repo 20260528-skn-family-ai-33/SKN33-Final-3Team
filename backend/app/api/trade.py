@@ -131,8 +131,8 @@ def aggregate(store,table,start,end,hs=None,countries=None,group='COUNTRY'):
             'MONTH_PAIR':[t.c.trade_month,t.c.country_code,t.c.hs6_code,t.c.hs_ver]}
     cols=groups[group]
     stmt=select(*cols,func.sum(t.c.amount_usd).label('amount_usd')).select_from(t.join(c,t.c.country_code==c.c.country_code))
-    stmt=stmt.where(c.c.country_role=='COUNTRY',t.c.hs_ver=='HS2022',t.c.trade_month>=start,t.c.trade_month<=end)
-    if hs: stmt=stmt.where(hs_filter(t,hs))
+    stmt=stmt.where(c.c.country_role=='COUNTRY',t.c.trade_month>=start,t.c.trade_month<=end)
+    stmt=stmt.where(hs_filter(t,hs) if hs else t.c.hs_ver=='HS2022')
     if countries: stmt=stmt.where(t.c.country_code.in_(countries))
     stmt=stmt.group_by(*cols).order_by(*cols)
     return query_rows(store,trade_plan(stmt,t,hs,countries),table)

@@ -33,10 +33,12 @@ def country_comparison(store,uid,result_ids):
     columns=[{'key':'hs_code','label':'HS 코드','type':'string','unit':None},
              {'key':'name','label':'품목','type':'string','unit':None},
              {'key':'month','label':'기준월','type':'string','unit':None}]
+    if any(version not in (None, 'HS2022') for _, version in products):
+        columns.insert(1, {'key':'hs_ver','label':'HS 판본','type':'string','unit':None})
     country_keys={code:f'country_{i}_amount_usd' for i,code in enumerate(countries)}
     columns.extend({'key':country_keys[code],'label':f'{name} {flow}','type':'number','unit':'USD'}
                    for code,name in countries.items())
-    rows=[{'hs_code':key[0],'name':products[key[:2]],'month':key[2],
+    rows=[{'hs_code':key[0],'hs_ver':key[1],'name':products[key[:2]],'month':key[2],
            **{country_keys[code]:values.get(code) for code in countries}}
           for key,values in sorted(matrix.items(),key=lambda pair:(pair[0][2],pair[0][0] or '',pair[0][1] or ''))]
     return {'columns':columns,'rows':rows,'total_rows':len(rows),

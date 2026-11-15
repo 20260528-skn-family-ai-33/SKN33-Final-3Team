@@ -3,7 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
-from sqlalchemy import select, update, delete
+from sqlalchemy import select, update, delete, tuple_
 from backend.app.api.common import require, unavailable, now, digest, period, percentage, clean, page_info, shift_month, month_end, LLM_SQL_PERIOD_WARNING
 from backend.app.api import trade, news, jobs
 from backend.app.api.accounts import interests, validate_scope
@@ -30,7 +30,7 @@ def download_filename(store,record,fmt):
                                .where(country.c.country_code.in_(codes))).all()) if codes else {}
     hs_names=report_hs_names(store,[record])
     countries=selection_part((['한국전체'] if c.get('include_korea_total') else [])+[names.get(code,code) for code in codes],'전체국가')
-    products=selection_part([hs_names.get(h['hs_code']) or 'HS'+h['hs_code'] for h in c.get('hs_items',[])],'전체품목')
+    products=selection_part([hs_names.get(report_item_key(h)) or 'HS'+h['hs_code'] for h in c.get('hs_items',[])],'전체품목')
     p=c.get('period') or {}
     period_name=f"{p['start']}~{p['end']}" if p.get('start') and p.get('end') else '전체기간'
     flow='수입' if c.get('trade_flow')=='IMPORT' else '수출'
@@ -69,7 +69,7 @@ def resolve_comparison(conditions, adjustments):
     return expected
 
 
-def preview(store,uid,data):
+def preview(store,uid,data,*,frozen=False):
     require(bool(data.get('conditions')) != bool(data.get('result_id')),'conditions와 result_id 중 하나만 지정하세요.')
     require(not data.get('period_preset'),'기간 프리셋 입력 예외 계약 DEC-28 확정이 필요합니다.','FEATURE_NOT_READY',503)
     if data.get('result_id'):
@@ -80,11 +80,13 @@ def preview(store,uid,data):
     else:
         conditions=data.get('conditions',{})
     require(bool(conditions),'분석 조건 또는 result_id가 필요합니다.')
-    from backend.app.api.schemas import ReportConditions
-    conditions=ReportConditions.model_validate(conditions).model_dump(mode='json')
+    from backend.app.api.schemas import FrozenReportConditions, ReportConditions
+    schema=FrozenReportConditions if frozen else ReportConditions
+    conditions=schema.model_validate(conditions).model_dump(mode='json')
     if not conditions['include_korea_total']: conditions.pop('include_korea_total')
     require(conditions['trade_flow']=='EXPORT','리포트는 현재 수출 분석만 지원합니다.','UNSUPPORTED_TRADE_FLOW',422)
-    validate_scope(store,conditions['hs_items'],conditions['country_codes'])
+    validate_scope(store,conditions['hs_items'],conditions['country_codes'],
+                   hs_versions=('HS2017', 'HS2022') if frozen else ('HS2022',))
     p=conditions['period']; latest=trade.bounds(store)[-1]
     adjustments=[]
     if date.fromisoformat(p['start']).day!=1 or date.fromisoformat(p['end'])!=month_end(date.fromisoformat(p['end'])):
@@ -139,19 +141,23 @@ def status_view(store,r):
         'error':info.get('error'),'available_formats':formats(store,r['report_id']) if r['status']=='READY' else []}
 
 
+def report_item_key(item):
+    code, edition = item['hs_code'], item.get('hs_ver','HS2022')
+    return code if edition == 'HS2022' else f'{edition}:{code}'
+
+
 def report_hs_names(store,rows):
-    codes={h['hs_code'] for row in rows for h in row['conditions_json'].get('hs_items',[])
-           if h.get('hs_ver','HS2022')=='HS2022'}
-    if not codes: return {}
+    items={(h['hs_code'],h.get('hs_ver','HS2022')):report_item_key(h)
+           for row in rows for h in row['conditions_json'].get('hs_items',[])}
+    if not items: return {}
     hs=store.t('hs_code')
-    return dict(store.c.execute(select(hs.c.hs_code,hs.c.name_ko).where(
-        hs.c.hs_ver=='HS2022',hs.c.hs_code.in_(codes))).all())
+    return {items[code,edition]:name for code,edition,name in store.c.execute(
+        select(hs.c.hs_code,hs.c.hs_ver,hs.c.name_ko).where(tuple_(hs.c.hs_code,hs.c.hs_ver).in_(list(items))))}
 
 
 def summary_view(store,r,names):
     c=r['conditions_json']
-    hs_names={h['hs_code']:names[h['hs_code']] for h in c.get('hs_items',[])
-              if h.get('hs_ver','HS2022')=='HS2022' and h['hs_code'] in names}
+    hs_names={key:names[key] for h in c.get('hs_items',[]) if (key:=report_item_key(h)) in names}
     return {'report_id':str(r['report_id']),'report_type':r['report_type'],
         'subscription_id':str(r['subscription_id']) if r['subscription_id'] else None,
         'title':display_title(r),'hs_names':hs_names,'conditions':{k:v for k,v in c.items() if k in ('hs_items','country_codes','include_korea_total','period','compare_period','trade_flow','compare','metric','applied_defaults','expanded_regions')},
@@ -458,6 +464,9 @@ def attach_weekly_summary(doc):
 def report_xlsx(record,document):
     from backend.app.api.files import xlsx_bytes, user_xlsx_info
     tables=[table for section in document['sections'] for table in section['tables']]
+    if document['meta'].get('freshness')=='FROZEN':
+        # 이전 사본도 최상위 kind를 사용해 판본·생성 SQL 열을 복원한다.
+        tables=[{**table,'meta':{'kind':table.get('kind'), **(table.get('meta') or {})}} for table in tables]
     # 정기 리포트만 열을 정비한다. 요청형/에이전트의 열은 유지하고 모든 리포트에 단위를 표시한다.
     periodic=record['report_type'] in PERIODIC_REPORT_TYPES
     # build_document는 원본 결과표를 재사용한 문서에 FROZEN을 기록한다.

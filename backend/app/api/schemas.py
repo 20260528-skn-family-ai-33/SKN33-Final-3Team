@@ -55,6 +55,14 @@ class ReportConditions(Conditions):
     include_korea_total: bool = False
 
 
+class FrozenHsItem(HsItem):
+    hs_ver: Literal['HS2017', 'HS2022']
+
+
+class FrozenReportConditions(ReportConditions):
+    hs_items: list[FrozenHsItem] = Field(default_factory=list, max_length=100)
+
+
 class Signup(Input):
     name: str = Field(min_length=1, max_length=120)
     email: AccountEmail

@@ -30,7 +30,12 @@ export function comparisonChart(table,conditions) {
     if(labels.length<=60)break
   }
   const products=new Map()
-  table.rows.forEach(row=>{if(!products.has(row.hs_code))products.set(row.hs_code,[]);products.get(row.hs_code).push(row)})
+  for(const row of table.rows){
+    const key=JSON.stringify([row.hs_code,row.hs_ver])
+    if(!products.has(key))products.set(key,[])
+    products.get(key).push(row)
+  }
+  const showEdition=table.columns.some(c=>c.key==='hs_ver')
   const columns=table.columns.filter(c=>c.type==='number')
   const series=[]
   for(const rows of products.values())for(const col of columns){
@@ -39,7 +44,9 @@ export function comparisonChart(table,conditions) {
       const data=months.filter(m=>periodKey(m,granularity)===label).map(m=>lookup.get(m)??null)
       return data.some(v=>v===null)?null:data.reduce((sum,v)=>sum+v,0)
     })
-    series.push({name:products.size>1?`${rows[0].name} · ${col.label}`:col.label,values})
+    const {name,hs_ver}=rows[0]
+    const product=showEdition && hs_ver?`${name} (${hs_ver})`:name
+    series.push({name:products.size>1?`${product} · ${col.label}`:col.label,values})
   }
   series.sort((a,b)=>b.values.reduce((s,v)=>s+(v||0),0)-a.values.reduce((s,v)=>s+(v||0),0))
   return {type:'line',title:(conditions.trade_flow==='IMPORT'?'수입액':'수출액')+' 비교',unit:'USD',source:'관세청',

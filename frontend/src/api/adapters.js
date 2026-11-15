@@ -20,14 +20,28 @@ export function monthEndDate(value) {
   const end = new Date(Date.UTC(Number(match[1]), Number(match[2]), 0))
   return end.toISOString().slice(0, 10)
 }
-export function reportProduct(code, name = productName(code)) {
-  if (!name || name === code) return 'HS ' + code
-  return `${name.length > 32 ? name.slice(0,31) + '…' : name} (HS ${code})`
+export function reportProduct(code, name = productName(code), edition) {
+  const identifier = edition ? `HS ${code} ${edition}` : `HS ${code}`
+  if (!name || name === code) return identifier
+  return `${name.length > 32 ? name.slice(0,31) + '…' : name} (${identifier})`
+}
+export function reportItemLabels(items = [], names = {}, codesOnly = false) {
+  items = items || []
+  const seen = new Set(), repeated = new Set()
+  for (const { hs_code: code } of items) {
+    if (seen.has(code)) repeated.add(code)
+    seen.add(code)
+  }
+  return items.map(({hs_code: code, hs_ver: edition = 'HS2022'}) => {
+    const legacy = edition !== 'HS2022'
+    const name = codesOnly ? code : legacy ? names[`${edition}:${code}`] || code : names[code]
+    return reportProduct(code, name, legacy || repeated.has(code) ? edition : undefined)
+  })
 }
 export function reportScope(c, names = {}) {
   if (!c) return '조건 미확인'
   const countries = [...(c.include_korea_total?['한국(대한민국) 전체']:[]),...(c.country_codes||[]).map(countryName)].join(', ') || '전체 국가'
-  const products = c.hs_items?.map(h => reportProduct(h.hs_code, names[h.hs_code])).join(', ') || '전체 품목'
+  const products = reportItemLabels(c.hs_items, names).join(', ') || '전체 품목'
   return `${countries} · ${products}`
 }
 export function mapNotification(n) {

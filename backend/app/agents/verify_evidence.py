@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import re
 
-from backend.app.agents.verify_claims import NameCatalog, months_between, shift, YEAR_AGO, MONTH_AGO
+from backend.app.agents.verify_claims import IDENTITY_FIELDS, NameCatalog, months_between, shift, YEAR_AGO, MONTH_AGO
 
 PERIOD_AMOUNTS=frozenset({'total_usd','monthly_avg_usd','verified_subtotal_usd',
                          'compare_total_usd','compare_monthly_avg_usd','compare_verified_subtotal_usd'})
@@ -38,6 +38,7 @@ class Fact:
     role: str | None
     anchor: str | None
     stored_targets: frozenset[str]
+    hs_ver: str | None = None
 
 
 EXTRA_COMPARE_KEY=re.compile(r'compare([2-9])_(\w+)|change([2-9])_pct')
@@ -145,12 +146,17 @@ def build_facts(sources,catalog:NameCatalog):
         prediction=source.get('kind')=='PREDICTION'
         anchor=str(source.get('anchor') or '')[:7] or None
 
-        def walk(row,stored=frozenset(),inherited_month=None,path=()):
+        def walk(row,stored=frozenset(),inherited_month=None,path=(),inherited_edition=None):
             if isinstance(row,list):
-                for i,item in enumerate(row): walk(item,stored,inherited_month,path+(str(i),))
+                for i,item in enumerate(row): walk(item,stored,inherited_month,path+(str(i),),inherited_edition)
                 return
             if not isinstance(row,dict): return
-            names={str(row[k]) for k in ('name','label','code','product_name','hs_name','country_name','country_code','hs_code','hs6') if row.get(k)}
+            names={str(row[key]) for key in IDENTITY_FIELDS if row.get(key)}
+            hs_item = row.get('hs_item')
+            hs_item = hs_item if isinstance(hs_item, dict) else {}
+            if hs_item.get('hs_code'): names.add(hs_item['hs_code'])
+            edition = row.get('hs_ver') or hs_item.get('hs_ver')
+            if edition not in ('HS2017', 'HS2022'): edition = inherited_edition
             stored = stored.union(names)
             identities, group = bind_targets(stored, catalog)
             month=str(row.get('month') or row.get('trade_month') or inherited_month or '')[:7] or None
@@ -163,11 +169,11 @@ def build_facts(sources,catalog:NameCatalog):
                     row_period=None
             for key,value in row.items():
                 if isinstance(value,(dict,list)):
-                    walk(value,stored,month,path+(key,));continue
+                    walk(value,stored,month,path+(key,),edition);continue
                 if value is None and key == 'amount_usd' and month:
                     descriptor = metric(key, '', 'USD', source.get('trade_flow'))
                     facts.append(Fact(index, path+(key,), descriptor, None, 'NULL', identities, group,
-                                      (month,month), None, month, False, prediction, None, None, anchor, stored))
+                                      (month,month), None, month, False, prediction, None, None, anchor, stored, edition))
                     continue
                 if prediction and key == 'growth_outlook' and value in ('증가 예상', '감소 예상', None):
                     row_anchor = str(row.get('anchor') or anchor or '')[:7]
@@ -175,7 +181,7 @@ def build_facts(sources,catalog:NameCatalog):
                         continue
                     descriptor = Metric(key, '시장 예상 방향', 'OUTLOOK', source.get('trade_flow'), None, None)
                     facts.append(Fact(index, path+(key,), descriptor, value, 'OUTLOOK', identities, group,
-                                      None, None, row_anchor or None, False, True, 12, 'FUTURE', row_anchor, stored))
+                                      None, None, row_anchor or None, False, True, 12, 'FUTURE', row_anchor, stored, edition))
                     continue
                 if not isinstance(value,(float,int,Decimal)) or isinstance(value,bool): continue
                 # 추가 비교 기간 열(compare2_·change2_pct)은 첫 비교 기간 열 이름(logic)으로 검사하고 기간(window)만 바꾼다.
@@ -223,7 +229,7 @@ def build_facts(sources,catalog:NameCatalog):
                 elif month: fact_period=(month,month)
                 if not fact_month and fact_period and fact_period[0]==fact_period[1]: fact_month=fact_period[0]
                 facts.append(Fact(index,path+(key,),descriptor,amount,unit,frozenset(identities),group,
-                                  fact_period,fact_compare,fact_month,period_value,prediction,horizon,role,anchor,stored))
+                                  fact_period,fact_compare,fact_month,period_value,prediction,horizon,role,anchor,stored,edition))
 
         walk(source)
     return tuple(facts)

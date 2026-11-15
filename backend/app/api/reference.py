@@ -23,7 +23,7 @@ def chat_hs_search(store,q):
     return result
 
 
-def _search_depth(store,q,depth,limit,*,for_picker=False):
+def _search_depth(store,q,depth,limit,*,for_picker=False,hs_ver='HS2022'):
     q=' '.join(unicodedata.normalize('NFKC',q).split()).casefold()
     require(len(q)<=120 and depth in (4,6) and 1<=limit<=5,'검색어 120자 이하·HS4/HS6·최대 5개 조건을 확인하세요.')
     minimum = 1 if for_picker else 2
@@ -31,9 +31,9 @@ def _search_depth(store,q,depth,limit,*,for_picker=False):
         return {'items':[],'match_type':'NONE','confidence':'LOW','message':f'{minimum}글자 이상 입력하세요.',**browse_hint()}
     from backend.app.api.config import Settings
     settings=getattr(store.db,'settings',None) or Settings()
-    key=(q,depth,limit,for_picker,*(settings.get(k) for k in ('API_HS_VECTOR_ENABLED','API_HS_CHROMA_PATH',
+    key=(q,depth,limit,for_picker,hs_ver,*(settings.get(k) for k in ('API_HS_VECTOR_ENABLED','API_HS_CHROMA_PATH',
         'API_HS_MAX_DISTANCE','API_HS_CONFIDENT_DISTANCE','API_HS_MIN_MARGIN','API_HS_CACHE_VERSION')))
-    return store.db.hs_search_cache.get_or_load(key,lambda:_hs_search(store,q,limit,settings,depth,for_picker),
+    return store.db.hs_search_cache.get_or_load(key,lambda:_hs_search(store,q,limit,settings,depth,for_picker,hs_ver),
         cache_if=lambda result:not result.get('warnings'))
 
 
@@ -42,7 +42,7 @@ def browse_hint():
         'url':'/api/v1/reference/hs-codes/ROOT/children?hs_ver=HS2022','levels':[2,4,6]}}
 
 
-def _hs_search(store,q,limit,settings,depth,for_picker):
+def _hs_search(store,q,limit,settings,depth,for_picker,hs_ver):
     store.require_data('hs_code')
     t=store.t('hs_code')
     compact=''.join(q.split())
@@ -54,7 +54,7 @@ def _hs_search(store,q,limit,settings,depth,for_picker):
         match=or_(t.c.hs_code.startswith(q,autoescape=True),match)
     elif not for_picker:
         match=name.contains(compact,autoescape=True)
-    base=select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth).where(t.c.hs_ver=='HS2022',t.c.depth==depth)
+    base=select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth).where(t.c.hs_ver==hs_ver,t.c.depth==depth)
     # HS10 정식 명칭(예: 소주)은 사용자가 저장할 수 있는 HS6 부모 품목으로 연결한다.
     if for_picker and depth == 6 and not q.isdigit():
         detail=t.alias('hs10')
@@ -87,7 +87,7 @@ def _hs_search(store,q,limit,settings,depth,for_picker):
             'message':'등록된 품목명·코드가 없습니다. 검색어를 확인하거나 분류에서 직접 선택하세요.',**browse_hint()}
     from backend.app.api.hs_vectors import candidates
     ranked=[]; warnings=[]
-    if settings.get('API_HS_VECTOR_ENABLED','true').lower()=='true':
+    if hs_ver=='HS2022' and settings.get('API_HS_VECTOR_ENABLED','true').lower()=='true':
         try:
             ranked=candidates(q,settings,limit+1,depth=depth)
         except Exception as error:

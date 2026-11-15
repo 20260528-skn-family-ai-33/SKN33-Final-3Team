@@ -13,7 +13,7 @@ LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_
         'rank_status':'순위 상태','previous_year_export_usd':'전년 수출액','previous_year_import_usd':'전년 수입액','growth_pct':'증감률',
         'current_amount_usd':'현재 수출액','baseline_amount_usd':'비교 수출액','change_amount_usd':'증감액',
         'growth_status':'증감 상태','severity':'변화 수준','hs_item':'품목','hs_name':'품목명','one_off':'일회성 판정','label':'구분'}
-LABELS.update({'country_name':'국가','hs_code':'HS 코드','trade_month':'기준월',
+LABELS.update({'country_name':'국가','hs_code':'HS 코드','hs_ver':'HS 판본','trade_month':'기준월',
     'total_usd':'기간 합계','compare_total_usd':'비교 기간 합계','change_pct':'증감률',
     'monthly_avg_usd':'월평균 금액','compare_monthly_avg_usd':'비교 기간 월평균',
     'compare_amount_usd':'비교 기간 금액','compare_month':'비교 기준월','verified_months':'집계된 개월 수',
@@ -50,7 +50,12 @@ def display_columns(columns, rows, meta=None):
     if (meta or {}).get('kind') == 'LLM_SQL':
         # 자유 SQL의 열은 요청에 맞춰 모델이 고른 결과다(판본별 품목 수의 hs_ver 등). 템플릿용 숨김 규칙을 쓰지 않는다.
         return [{**c,'label':c.get('label') or LABELS.get(c['key'],c['key'])} for c in columns]
-    hidden={'hs_ver'}
+    versioned = (meta or {}).get('kind') in ('TREND', 'RANKING', 'COUNTRY_COMPARISON') and any(
+        r.get('hs_ver') not in (None, 'HS2022') for r in rows)
+    hidden = set() if versioned else {'hs_ver'}
+    if versioned and not any(c['key'] == 'hs_ver' for c in columns):
+        # 이전 결과표는 행에 판본을 저장했어도 표시 열에서는 빼 두었다.
+        columns = [*columns, {'key': 'hs_ver', 'label': LABELS['hs_ver'], 'type': 'string', 'unit': None}]
     labels={**LABELS,'name':'품목' if any(r.get('hs_code') for r in rows) else '국가' if any(r.get('country_code') for r in rows) else '명칭'}
     if not any(r.get('hs_item') for r in rows): hidden.add('hs_item')
     if any(r.get('country_name') for r in rows): hidden.add('country_code')

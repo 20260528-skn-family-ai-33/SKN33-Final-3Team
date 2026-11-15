@@ -111,10 +111,10 @@ def run_template(store, uid, task, step, timeout=30):
             records=trade.aggregate(store,source,window[0],window[-1],common['hs'],common['countries'],group)
             for row in records:
                 guard()
-                hs_codes=[p.hs_code for p in conditions.hs_items if p.hs_ver==row.get('hs_ver')
-                          and row.get('hs6_code','').startswith(p.hs_code)] if conditions.hs_items else [None]
-                for code in hs_codes:
-                    values[code,row.get('country_code')][row['trade_month']]+=row['amount_usd']
+                items=[(p.hs_code,p.hs_ver) for p in conditions.hs_items if p.hs_ver==row.get('hs_ver')
+                       and row.get('hs6_code','').startswith(p.hs_code)] if conditions.hs_items else [None]
+                for item in items:
+                    values[item,row.get('country_code')][row['trade_month']]+=row['amount_usd']
             return values
         grouped,comparison=(collect(requested),collect(compared)) if multiple else ({},{})
         extra_grouped=[collect(window) for window in extras] if multiple else []
@@ -123,7 +123,7 @@ def run_template(store, uid, task, step, timeout=30):
             guard()
             scoped = {**common, 'hs': [hs.model_dump()] if hs else [], 'countries': [country] if country else []}
             if multiple:
-                target=(hs.hs_code if hs else None,country)
+                target=((hs.hs_code,hs.hs_ver) if hs else None,country)
                 amounts={m.strftime('%Y-%m'):v for m,v in grouped.get(target,{}).items()}
                 previous=comparison.get(target,{})
             else:
@@ -235,7 +235,8 @@ def run_template(store, uid, task, step, timeout=30):
         meta=trade.metadata(store,conditions.period.start,conditions.period.end)
         meta.update(kind='RANKING',group=group,requested_top=step.args['top'])
         digest={**_base('RANKING',conditions,meta,len(rows)),'group':group,
-                'top':[{'rank':r['rank'],'code':r['country_code' if group=='COUNTRY' else 'hs_code'],'name':r['name'],'amount_usd':r[amount_key]}
+                'top':[{'rank':r['rank'],'code':r['country_code' if group=='COUNTRY' else 'hs_code'],
+                        'name':r['name'],'amount_usd':r[amount_key],**({'hs_ver':r['hs_ver']} if group=='HS6' else {})}
                        for r in rows[:10]],'truncated':len(rows)>10}
     elif template == 'RANKING':
         group = conditions.ranking_group

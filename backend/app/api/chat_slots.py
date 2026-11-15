@@ -36,14 +36,14 @@ def numeric_product_mentioned(question, expression):
     return False
 
 
-def numeric_product(store,question,expression,explicit_codes):
+def numeric_product(store,question,expression,explicit_codes,*,hs_ver='HS2022'):
     if not expression.isascii() or not expression.isdigit() or len(expression) not in (4,6):
         raise SlotRepair('품목은 HS4/HS6 코드 또는 이름으로 입력해 주세요.')
     if expression not in explicit_codes and not numeric_product_mentioned(question,expression):
         raise SlotRepair('연도·금액 표현을 품목으로 사용할 수 없습니다. 품목명 또는 HS 코드를 입력해 주세요.')
     hs=store.t('hs_code')
     registered=store.c.scalar(select(hs.c.hs_code).where(hs.c.hs_code==expression,
-        hs.c.hs_ver=='HS2022',hs.c.depth==len(expression)))
+        hs.c.hs_ver==hs_ver,hs.c.depth==len(expression)))
     if registered is None:
         raise SlotRepair('숫자가 HS 사전에 없습니다. 연도라면 기간으로, 품목이라면 등록 코드나 품목명으로 다시 입력해 주세요.')
 

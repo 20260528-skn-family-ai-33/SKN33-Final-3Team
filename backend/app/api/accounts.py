@@ -17,11 +17,11 @@ def interests(store, user_id, *, lock=False):
     return result
 
 
-def validate_scope(store, hs_items, countries, depth=None):
+def validate_scope(store, hs_items, countries, depth=None, *, hs_versions=('HS2022',)):
     hs, country=store.t('hs_code'),store.t('country')
     for item in hs_items:
         code,ver=item['hs_code'],item['hs_ver']
-        require(ver=='HS2022', '판본은 HS2022만 허용합니다.')
+        require(ver in hs_versions, f'판본은 {", ".join(hs_versions)}만 허용합니다.')
         require(code.isdigit() and len(code) in ([depth] if depth else [4,6]), '허용되지 않은 HS 단위입니다.', 'INVALID_HS_DEPTH')
         require(store.c.scalar(select(hs.c.hs_code).where(hs.c.hs_code==code,hs.c.hs_ver==ver)) is not None,'등록된 HS 코드가 아닙니다.','INVALID_HS_CODE')
     if countries:

@@ -12,7 +12,8 @@ export function comparisonCharts(charts,tasks,tables=[]) {
       output.push(chart);continue
     }
     const key=JSON.stringify([chart.title,chart.unit,chart.source,chart.granularity,c.period,c.compare_period,c.trade_flow])
-    const target=[...(c.country_codes||[]).map(countryName),...(c.hs_items||[]).map(h=>productName(h.hs_code))].join(' · ')
+    const target=[...(c.country_codes||[]).map(countryName),...(c.hs_items||[]).map(h=>
+      h.hs_ver && h.hs_ver!=='HS2022'?`${h.hs_code} (${h.hs_ver})`:productName(h.hs_code))].join(' · ')
     const series=chart.series.map(s=>({...s,name:target?`${target} · ${s.name}`:s.name}))
     const previous=groups.get(key)
     if(previous && previous.series.length+series.length<=5 && !series.some(s=>previous.series.some(p=>p.name===s.name))){

@@ -52,6 +52,7 @@ COUNTRY_EDGE = r'(?:(?<![가-힣A-Za-z0-9])|(?<=(?<![가-힣])대))'
 COUNT_BEFORE = re.compile(r'(?:상위|하위)\s*$')
 COUNT_AFTER = re.compile(r'\s*(?:곳|개국|국|개?\s*(?:국가|품목|시장))')
 HS_REFERENCE = re.compile(r'(?<![A-Za-z0-9])HS\s*(?:코드\s*)?(\d{2,}[A-Za-z0-9]*(?:[-._][A-Za-z0-9]+)*)', re.I)
+HS_EDITION_REFERENCE = re.compile(r'(?<![A-Za-z0-9])HS\s*(2017|2022)(?![A-Za-z0-9])', re.I)
 MODEL_END = r'(?![A-Za-z0-9]|[-._]\w)'
 NAME_JOIN = re.compile(r'\s*(?:과|와|및|·|,)\s*')
 THRESHOLD = re.compile(r'\s*(?:을|를|은|는|이|가|의|에)?\s*(?:(?:다소|소폭|조금|크게)\s*)?'
@@ -184,13 +185,17 @@ def mask_dates(text):
     return DATE.sub(lambda m:' '*len(m.group()),text)
 
 
+IDENTITY_FIELDS = ('name', 'label', 'code', 'product_name', 'hs_name', 'country_name', 'country_code',
+                   'hs_code', 'hs6', 'hs2_code', 'hs4_code', 'hs6_code', 'hs10_code', 'name_ko', 'name_en')
+
+
 def source_names(value):
     if isinstance(value,list):
         for item in value: yield from source_names(item)
     elif isinstance(value,dict):
         for key,item in value.items():
             if key in ('columns','conditions','meta'): continue
-            if key in ('country_name','country_code','product_name','hs_name','name','label','code','hs_code','hs6') and item:
+            if key in IDENTITY_FIELDS and item:
                 yield key,str(item)
             elif isinstance(item,(dict,list)): yield from source_names(item)
 
@@ -324,7 +329,7 @@ class NameCatalog:
         explicit_codes = set()
         for match in HS_REFERENCE.finditer(text):
             code = match[1]
-            if match.group().upper() in ('HS2017', 'HS2022'):
+            if HS_EDITION_REFERENCE.fullmatch(match.group()):
                 continue  # Edition labels used by the trade data.
             if len(code) < 4 and code not in self.names:
                 continue  # For example, "HS10 기준" specifies a classification level.
@@ -426,7 +431,9 @@ def prepare_sentence(sentence, catalog, *, mentions=None, compounds=None):
 
 def quantity_text(sentence, catalog):
     text=prepare_sentence(sentence,catalog)
-    return mask_dates(mask_spans(text,[(a,b) for _,a,b in catalog.mentions(text)]))
+    spans = [(a,b) for _,a,b in catalog.mentions(text)]
+    spans.extend(m.span() for m in HS_EDITION_REFERENCE.finditer(text))
+    return mask_dates(mask_spans(text,spans))
 
 
 @dataclass(frozen=True)
@@ -469,6 +476,7 @@ class Claim:
     valid: bool = True
     span: tuple[int, int] | None = None
     quantity_span: tuple[int, int] | None = None
+    editions: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -485,6 +493,7 @@ class Context:
     flow: str | None = None
     time: TimeClaim = TimeClaim()
     metric: MetricClaim | None = None
+    editions: frozenset[str] = frozenset()
 
 
 # "종료일 2025년 12월 31일", "2025년 12월 31일까지"처럼 월 단위 기간의 끝을 말일로 다시 적은 표현.
@@ -1028,6 +1037,9 @@ def parse_sentence(sentence,catalog):
 
         mentions, ambiguous_name = catalog.resolve_mentions(text)
         mentions, syntax = _trade_subject(text, mentions, catalog)
+        edition_mentions = list(HS_EDITION_REFERENCE.finditer(text))
+        editions = frozenset(f'HS{m[1]}' for m in edition_mentions) or context.editions
+        syntax = mask_spans(syntax, [m.span() for m in edition_mentions])
         names=frozenset(n for n,_,_ in mentions)
         targets=catalog.merge(context.targets,names)
         clean=mask_dates(syntax)
@@ -1079,7 +1091,8 @@ def parse_sentence(sentence,catalog):
                 flow = {'수출':'EXPORT', '수입':'IMPORT'}.get(next(iter(lead_flows), '')) if len(lead_flows)==1 else context.flow
                 parsed, following = parse(tail, origins[local_start.end():], replace(
                     context, year=year, flow=flow, time=lead_time if DATE.search(lead) else context.time,
-                    targets=catalog.merge(context.targets, lead_names)))
+                    targets=catalog.merge(context.targets, lead_names),
+                    editions=frozenset(f'HS{m[1]}' for m in edition_mentions if m.end() <= local_start.start()) or context.editions))
                 return replace(parsed, date_only=(lead_time, *parsed.date_only)), following
         # A monthly list can start with its reporting window. Bind the first level to its own month.
         if values and time.month_window is None:
@@ -1115,9 +1128,9 @@ def parse_sentence(sentence,catalog):
             claim = _trend_claim(syntax, targets, time, catalog, marker, understood=bool(predicate)) if marker else None
             if claim and not claim.metric.flow and context.flow and (not context.metric or context.metric.family == 'AMOUNT'):
                 claim = replace(claim, metric=replace(claim.metric, flow=context.flow))
-            claims = (replace(claim, span=source_span(marker.start(), marker.end())),) if claim else ()
+            claims = (replace(claim, span=source_span(marker.start(), marker.end()), editions=editions),) if claim else ()
             return ParsedSentence(claims,(time,) if DATE.search(syntax) else (),not ambiguous_name),replace(
-                context,targets=targets,year=last_year,time=time)
+                context,targets=targets,year=last_year,time=time,editions=editions)
         flows=set(re.findall(r'수출|수입',syntax))
         common_flow=({'수출':'EXPORT','수입':'IMPORT'}[next(iter(flows))] if len(flows)==1 else context.flow)
         dates=list(DATE.finditer(syntax))
@@ -1141,6 +1154,19 @@ def parse_sentence(sentence,catalog):
             for boundary in re.finditer(r'(?:됐고|었고|았고|였고|(?<=달러)고)\s*(?='+DIRECTION.pattern+r')',syntax):
                 if any(q.end<=boundary.start() for q in values): cuts.append(boundary.end())
         if cuts:
+            # A date or code can follow the edition at the start of the next assertion.
+            for index, cut in enumerate(cuts):
+                previous = next((q for q in reversed(values) if q.end <= cut), None)
+                if previous is None:
+                    continue
+                for edition in edition_mentions:
+                    if not previous.end <= edition.start() < cut:
+                        continue
+                    boundary = max((m.end() for m in SEPARATOR.finditer(text, previous.end, edition.start())),
+                                   default=previous.end)
+                    if not text[boundary:edition.start()].strip():
+                        cuts[index] = edition.start()
+                        break
             cuts=sorted({0,*cuts,len(text)})
             # Context comes from the preceding assertion, not all later names/dates.
             collected=[];date_only=[];valid=not ambiguous_name
@@ -1183,6 +1209,16 @@ def parse_sentence(sentence,catalog):
                 variants.append((values[0] if len(values)==1 else values[i], member, 'EACH', None))
         else:
             variants=[(q,targets,'GROUP' if catalog.grouped(targets) else 'SINGLE',None) for q in values]
+
+        ordered_editions = []
+        if (each and len(edition_mentions) > 1 and len(editions) == len(edition_mentions)
+                and all(m.end() <= each.start() for m in edition_mentions)
+                and all(NAME_JOIN.fullmatch(text[a.end():b.start()]) for a, b in zip(edition_mentions, edition_mentions[1:]))):
+            if metric_list or ordered_times or catalog.grouped(targets) or len(values) not in (1, len(edition_mentions)):
+                return ParsedSentence((),valid=False),context
+            ordered_editions = [frozenset({f'HS{m[1]}'}) for m in edition_mentions]
+            if len(values) == 1:
+                variants *= len(ordered_editions)
 
         claims=[]
         for variant_index,(quantity,bound_targets,target_scope,metric_override) in enumerate(variants):
@@ -1251,7 +1287,8 @@ def parse_sentence(sentence,catalog):
                     end = change_phrase_end(syntax, quantity.end, right)
                     span = source_span(comparisons[0].start(), end)
             claims.append(Claim(quantity, frozenset(bound_targets), target_scope, metric, claim_time,
-                                local, valid, span or value_span, value_span))
+                                local, valid, span or value_span, value_span,
+                                ordered_editions[variant_index] if ordered_editions else editions))
         last_metric = claims[-1].metric
         predicate = _trend_predicate(clean)
         # For a numeric change the numeric claim already carries the direction.
@@ -1297,8 +1334,9 @@ def parse_sentence(sentence,catalog):
                     trend = replace(trend, metric=replace(trend.metric, flow=level.metric.flow))
                 # A second assertion in the same clause must not be marked as part of the level.
                 claims[-1] = replace(level, span=level.quantity_span)
-                claims.append(replace(trend, span=source_span(marker.start(), marker.end())))
-        return ParsedSentence(tuple(claims),valid=not ambiguous_name),Context(targets,last_year,common_flow,time,last_metric)
+                claims.append(replace(trend, span=source_span(marker.start(), marker.end()), editions=level.editions))
+        return ParsedSentence(tuple(claims),valid=not ambiguous_name),Context(
+            targets,last_year,common_flow,time,last_metric,editions)
 
     parsed, _ = parse(text, origins)
     claims = list(parsed.claims)
@@ -1320,4 +1358,9 @@ def parse_sentence(sentence,catalog):
                     span = last[1], ordering.end()
                     claims.append(Claim(None, own[0].targets, 'SINGLE', MetricClaim(family='RANK'),
                                         own[0].time, sentence[slice(*span)], False, span))
-    return replace(parsed, claims=(*claims, *outlook, *monthly), valid=parsed.valid and not ambiguous)
+    parsed_claims = []
+    for claim in (*claims, *outlook, *monthly):
+        passage = claim.text + ' ' + (sentence[slice(*claim.span)] if claim.span else '')
+        editions = claim.editions or frozenset(f'HS{version}' for version in HS_EDITION_REFERENCE.findall(passage))
+        parsed_claims.append(replace(claim, editions=editions) if editions != claim.editions else claim)
+    return replace(parsed, claims=tuple(parsed_claims), valid=parsed.valid and not ambiguous)

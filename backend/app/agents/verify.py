@@ -106,6 +106,12 @@ def _level_period_matches(role, time, fact, source):
                                                 compare_key(source, fact.path[-1])[1])
 
 
+def _edition_matches(claim, fact):
+    # 판본을 저장하지 않은 근거(전체 품목 비중 등)는 HS2022 조회 결과다. HS2017 결과는 행·근거 범위에 판본을 둔다.
+    # 기간을 증명하지 못한 생성 SQL은 판본보다 먼저 기간에서 걸러진다(mismatch의 PERIOD).
+    return not claim.editions or claim.editions == {fact.hs_ver or 'HS2022'}
+
+
 def mismatch(claim:Claim,fact:Fact,source):
     """Compare attributes before values. Return a diagnostic without changing meaning."""
     q,m=claim.quantity,claim.metric
@@ -115,7 +121,7 @@ def mismatch(claim:Claim,fact:Fact,source):
     # 거르면("조회 기간"은 막고 "이번 분기"·기간 생략은 통과) 다른 표현으로 같은 오류가 생긴다. 이 값은 표로만 보인다.
     if source.get('kind')=='LLM_SQL' and fact.period is None and not fact.prediction:
         return 'PERIOD'
-    if not claim.targets<=fact.targets: return 'TARGET'
+    if not claim.targets<=fact.targets or not _edition_matches(claim, fact): return 'TARGET'
     if claim.target_scope=='GROUP':
         if not fact.group_members or not fact.group_members<=claim.targets: return 'GROUP_SCOPE'
     elif fact.group_members: return 'INDIVIDUAL_SCOPE'
@@ -203,8 +209,9 @@ def inspect_sentence(sentence,sources,*,known_names=(),countries=()):
 
 def _single_series(claim, facts, keep):
     """한 대상의 월별 금액 칸. 대상이 둘 이상으로 갈리면 어느 행인지 알 수 없어 비운다."""
-    eligible = [f for f in facts if f.metric.key == 'amount_usd' and f.month and claim.targets <= f.targets and keep(f)]
-    return eligible if len({f.stored_targets for f in eligible}) == 1 else []
+    eligible = [f for f in facts if f.metric.key == 'amount_usd' and f.month and claim.targets <= f.targets
+                and _edition_matches(claim, f) and keep(f)]
+    return eligible if len({(f.stored_targets, f.hs_ver) for f in eligible}) == 1 else []
 
 
 def _monthly_amounts(claim, facts, sources):
@@ -285,7 +292,7 @@ def _implied_amount_direction(checks, prepared):
 def _matching_cells(claim, facts, sources, catalog):
     if claim.metric.family == 'OUTLOOK':
         # An implicit market is identifiable only if one saved classification is in scope.
-        eligible = [f for f in facts if f.metric.family == 'OUTLOOK' and claim.targets <= f.targets
+        eligible = [f for f in facts if f.metric.family == 'OUTLOOK' and claim.targets <= f.targets and _edition_matches(claim, f)
                     and _source_supports(claim.time, sources[f.source]) and _time_matches(claim, f)]
         if len(eligible) != 1:
             return ()
@@ -307,6 +314,7 @@ def _matching_cells(claim, facts, sources, catalog):
         return ()  # "베트남 2,840만 달러": 베트남 기초화장품·베트남 라면 중 어느 행인지 알 수 없다.
     matches = []
     inferred_axes = set()
+    editions = set()
     check_dimensions = claim.quantity is None or (claim.targets and claim.metric.family == 'CHANGE')
     def dimensions(targets):
         named = targets - {'전체 국가', '전체 품목'}
@@ -332,7 +340,7 @@ def _matching_cells(claim, facts, sources, catalog):
             supports = reason is None
         if supports:
             matches.append((fact.source, fact.path))
-    return tuple(matches) if len(inferred_axes) <= 1 else ()
+    return tuple(matches) if len(inferred_axes) <= 1 and len(editions) <= 1 else ()
 
 
 def _inspect_prepared(sentence, prepared):
@@ -372,6 +380,12 @@ def snapshot_evidence(payload):
     conditions=payload.get('conditions') or {}
     meta=payload.get('meta') or {}
     scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
+    editions = {item['hs_ver'] for item in conditions.get('hs_items', []) if item.get('hs_ver')}
+    kind = meta.get('kind')
+    if not editions and (kind in ('TREND', 'RANKING') or (kind=='LLM_SQL' and meta.get('period_verified') is True)):
+        editions.add('HS2022')
+    if len(editions) == 1:
+        scope['hs_ver'] = next(iter(editions))
     if meta.get('extra_compare_periods'): scope['extra_compare_periods']=meta['extra_compare_periods']
     if meta.get('kind')=='LLM_SQL':   # 별칭·월 표시로 기간을 정하지 않는다(compare_key·period_covered)
         scope.update(kind='LLM_SQL', period_verified=meta.get('period_verified') is True)
@@ -588,13 +602,14 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
                 if step.step_id not in snapshots and step.tool == 'query_trade_data':
                     query_periods[step.step_id] = conditions.period
         if conditions and task.intent == 'RANKING' and conditions.ranking_group == 'COUNTRY' and len(conditions.hs_items) == 1:
-            ranking_products.update({step.step_id: conditions.hs_items[0].hs_code for step in task.steps
+            ranking_products.update({step.step_id: conditions.hs_items[0] for step in task.steps
                                      if step.tool == 'query_trade_data'})
     def source(step_id):
         digest=state.results[step_id].digest or {}
-        scope = {'hs_code': ranking_products[step_id]} if step_id in ranking_products else {}
+        product = ranking_products.get(step_id)
+        scope = {'hs_code': product.hs_code, 'hs_ver': product.hs_ver} if product else {}
         # 순위 행에는 국가만 있다. 조회한 단일 품목의 표시명도 근거 범위에 넣어 "화장품 수출 상위 국가"를 대조한다.
-        if scope and (label := (product_labels or {}).get(scope['hs_code'])):
+        if product and (label := (product_labels or {}).get((product.hs_code, product.hs_ver))):
             scope['hs_name'] = label
         if step_id not in snapshots:
             if not digest:
@@ -604,7 +619,7 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
             return {**scope, **digest}
         if snapshots[step_id].get('_source_unavailable'): return snapshots[step_id]
         # 저장 행에는 없는 결과 전체 합계(순위 total_usd·비중 분모)는 같은 결과로 만든 digest 값을 근거로 더한다
-        return {**scope, **snapshots[step_id],**{k:digest[k] for k in ('total_usd','denominator_usd')
+        return {**snapshots[step_id], **scope, **{k:digest[k] for k in ('total_usd','denominator_usd')
                                      if k in digest and k not in snapshots[step_id]}}
     by_task = {t.task_id: tuple(s.step_id for s in t.steps if s.step_id in state.results
                                 and (s.step_id in snapshots or state.results[s.step_id].digest))
