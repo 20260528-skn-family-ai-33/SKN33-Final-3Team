@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { previewExpired, rankLink, rankInitial, rankBasis, countryListLabel, comparisonPeriod, mapLimited, reportComparisonInputs, reportConditions } from '../src/api/integration.js'
+import { previewExpired, rankLink, rankInitial, rankBasis, countryListLabel, comparisonPeriod, mapLimited, reportComparisonInputs, reportPeriodInputs, reportConditions } from '../src/api/integration.js'
 
 test('preview renewal only handles expired snapshots', () => {
   assert.equal(previewExpired({status:409,code:'PREVIEW_EXPIRED'}), true)
@@ -96,4 +96,32 @@ test('국가가 많으면 순위 화면 제목·선택칸에서 첫 국가 외 N
   assert.equal(countryListLabel(['중국']), '중국')
   assert.equal(countryListLabel(['중국', '일본', '베트남']), '중국 · 일본 · 베트남')
   assert.equal(countryListLabel(['아랍에미리트 연합', '아프가니스탄', '아르메니아', '아제르바이잔']), '아랍에미리트 연합 외 3개국')
+})
+
+test('C-05: report defaults put the later period in analysis and the earlier one in comparison', () => {
+  // 채팅 "2024년과 2025년 비교" → 분석 2024 / 비교 2025. 리포트 기본값은 분석 2025 / 비교 2024여야 저장된다.
+  const later={compare:'CUSTOM',period:{start:'2024-01-01',end:'2024-12-31'},compare_period:{start:'2025-01-01',end:'2025-12-31'}}
+  const fields=reportPeriodInputs(later)
+  assert.deepEqual(fields,{from:'2025-01',to:'2025-12',compareFrom:'2024-01',compareTo:'2024-12'})
+  const request=reportConditions({conditions:later,...fields})
+  assert.equal(request.compare,'CUSTOM')
+  assert.ok(request.compare_period.end<request.period.start)
+  // 같은 해 안에서 비교 구간이 뒤인 경우도 바꾼다.
+  const sameYear={compare:'CUSTOM',period:{start:'2025-01-01',end:'2025-03-31'},compare_period:{start:'2025-07-01',end:'2025-09-30'}}
+  assert.deepEqual(reportPeriodInputs(sameYear),{from:'2025-07',to:'2025-09',compareFrom:'2025-01',compareTo:'2025-03'})
+})
+
+test('C-05: valid, overlapping and automatic comparisons keep a savable default', () => {
+  const valid={compare:'CUSTOM',period:{start:'2025-01-01',end:'2025-12-31'},compare_period:{start:'2024-01-01',end:'2024-12-31'}}
+  assert.deepEqual(reportPeriodInputs(valid),{from:'2025-01',to:'2025-12',compareFrom:'2024-01',compareTo:'2024-12'})
+  // 겹치면 사용자 지정 비교를 비워 전년 같은 기간 비교를 쓴다.
+  const overlap={compare:'CUSTOM',period:{start:'2025-01-01',end:'2025-06-30'},compare_period:{start:'2025-04-01',end:'2025-09-30'}}
+  const fields=reportPeriodInputs(overlap)
+  assert.deepEqual(fields,{from:'2025-01',to:'2025-06',compareFrom:'',compareTo:''})
+  assert.equal(reportConditions({conditions:overlap,...fields}).compare,'YOY_PERIOD')
+  // 한 달만 있는 경우(같은 달 비교)도 겹침으로 본다.
+  const single={compare:'CUSTOM',period:{start:'2025-03-01',end:'2025-03-31'},compare_period:{start:'2025-03-01',end:'2025-03-31'}}
+  assert.deepEqual(reportPeriodInputs(single),{from:'2025-03',to:'2025-03',compareFrom:'',compareTo:''})
+  assert.deepEqual(reportPeriodInputs({compare:'NONE',period:{start:'2025-01-01',end:'2025-12-31'},compare_period:null}),{from:'2025-01',to:'2025-12',compareFrom:'',compareTo:''})
+  assert.deepEqual(reportPeriodInputs({compare:'YOY_PERIOD',period:{start:'2025-01-01',end:'2025-12-31'},compare_period:{start:'2024-01-01',end:'2024-12-31'}}),{from:'2025-01',to:'2025-12',compareFrom:'',compareTo:''})
 })

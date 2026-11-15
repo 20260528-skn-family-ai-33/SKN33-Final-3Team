@@ -8,6 +8,20 @@ export function reportComparisonInputs(conditions) {
     compareTo: conditions.compare === 'CUSTOM' ? conditions.compare_period?.end.slice(0, 7) || '' : '',
   }
 }
+/**
+ * 채팅 결과를 리포트 조건 화면의 기본값으로 옮긴다(C-05).
+ * 채팅은 "2024년과 2025년 비교"처럼 비교 기간이 분석 기간보다 뒤인 조건도 그대로 돌려주지만,
+ * 리포트의 사용자 지정 비교는 비교 기간이 분석 기간보다 앞서야 한다(reports.resolve_comparison).
+ * - 비교 기간이 분석 기간보다 완전히 뒤면 둘을 바꿔 최신 기간을 분석, 이전 기간을 비교로 둔다.
+ * - 두 기간이 겹치면 사용자 지정 비교를 비워 기본 비교(전년 같은 기간)를 쓴다.
+ */
+export function reportPeriodInputs(conditions) {
+  const from = conditions.period.start.slice(0, 7), to = conditions.period.end.slice(0, 7)
+  const { compareFrom, compareTo } = reportComparisonInputs(conditions)
+  if (!compareFrom || !compareTo || compareTo < from) return { from, to, compareFrom, compareTo }
+  if (compareFrom > to) return { from: compareFrom, to: compareTo, compareFrom: from, compareTo: to }
+  return { from, to, compareFrom: '', compareTo: '' }
+}
 export function reportConditions(options) {
   const monthEnd = value => {
     const [year, month] = value.split('-').map(Number)
