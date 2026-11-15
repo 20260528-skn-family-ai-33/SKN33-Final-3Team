@@ -1253,6 +1253,15 @@ class AnnualSqlMergeTest(unittest.TestCase):
         self.assertEqual(payload['tasks'][0]['digests']['sql']['rows'][0]['change_pct'], 22.7)
         # 연간 칸 지도는 검증용이라 작성 모델 입력에는 없다.
         self.assertFalse([k for k in payload['tasks'][0]['digests']['sql'] if k.startswith('_annual')])
+        # 증명한 두 연도 합계와 맞지 않는 change_pct는 작성 입력에 넘기지 않는다(합계는 그대로 쓴다).
+        mismatched = {**digest, 'rows': wrong, **annual_sql_scope(
+            {'sql': [sql], 'conditions': result.conditions, 'rows': wrong}, **LABELS)}
+        current.results[plan_task.steps[1].step_id] = ToolResult(status='OK', digest=mismatched, result_id='r')
+        written = compose_input(current, lambda _: {}, [])[0]['tasks'][0]['digests']['sql']
+        self.assertNotIn('change_pct', written['rows'][0])
+        self.assertIn('export_2025_usd', written['rows'][0])
+        self.assertNotIn('change_pct', [c['key'] for c in written['columns']])
+        current.results[plan_task.steps[1].step_id] = ToolResult(status='OK', digest=mapped, result_id='r')
         current.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['2025년 수출액은 9억 달러입니다.']}],
                               explanation=[], turn_summary='')
         verify(current, snapshots={plan_task.steps[1].step_id: source})
