@@ -51,8 +51,8 @@ def compare_key(source, key):
     같은 이름으로 검사하고 기간만 extra_compare_periods의 해당 기간으로 바꾼다.
     생성 SQL(LLM_SQL)은 별칭만으로 그 열이 어느 기간을 집계했는지 알 수 없으므로 비교 기간을 붙이지 않는다.
     (compare2_total_usd 별칭으로 2025년 금액을 내도 2024년 값으로 검증되면 안 된다.)
-    연도별 합계·차액을 SQL 식에서 증명한 연간 비교 결과(annual_verified)는 main의 연간 검증 규칙대로 비교 기간을 붙인다."""
-    unproved=source.get('kind')=='LLM_SQL' and source.get('annual_verified') is not True
+    예외는 조회·비교 연도 합계를 모두 SQL 식으로 증명한 연간 비교 결과의 change_pct 한 칸이다(_annual_rate_proven)."""
+    unproved=source.get('kind')=='LLM_SQL' and not (key=='change_pct' and _annual_rate_proven(source))
     compare=None if unproved else period(source.get('compare_period'))
     match=EXTRA_COMPARE_KEY.fullmatch(key)
     if not match: return key, compare
@@ -61,6 +61,15 @@ def compare_key(source, key):
     n=int(match[1] or match[3])
     if n-2>=len(extras) or not (window:=period(extras[n-2])): return key, compare
     return ('compare_'+match[2] if match[1] else 'change_pct'), window
+
+
+def _annual_rate_proven(source):
+    """연간 비교 생성 SQL이 한 행에 조회 연도와 비교 연도 합계를 모두 SQL 식으로 증명했는지(snapshot_evidence의
+    _annual_sums). 그때만 같은 행의 change_pct를 두 기간의 변화율로 본다. 다른 별칭·월 표시는 기간 근거가 아니다."""
+    current, compare = period(source.get('period')), period(source.get('compare_period'))
+    years = {cell.get('year') for cell in (source.get('_annual_sums') or {}).values() if isinstance(cell, dict)}
+    return (source.get('kind') == 'LLM_SQL' and bool(current and compare) and len(source.get('rows') or []) == 1
+            and years >= {current[0][:4], compare[0][:4]})
 
 
 def period(value):
@@ -165,10 +174,10 @@ def build_facts(sources,catalog:NameCatalog):
             identities, group = bind_targets(stored, catalog)
             month=str(row.get('month') or row.get('trade_month') or inherited_month or '')[:7] or None
             row_period=current
-            if source.get('kind')=='LLM_SQL' and source.get('annual_verified') is not True:
+            if source.get('kind')=='LLM_SQL':
                 # 생성 SQL의 월·연도 표시와 열 이름은 SQL이 만든 값이라 기간 근거가 아니다('2024-01' AS month로 2025년 금액을
                 # 낼 수 있다). 조회 기간 전체를 그대로 집계했다고 증명된 결과(sql.period_covered)만 조회 기간을 붙인다.
-                # 연도별 합계·차액 칸을 SQL 식에서 증명한 연간 비교 결과(annual_verified)는 main의 연간 검증 규칙을 따른다.
+                # 연간 비교 결과도 SQL 식으로 증명한 칸(연도별 합계·차액, 그 행의 change_pct)만 기간을 받는다(칸 단위).
                 month=None
                 if source.get('period_verified') is not True:
                     row_period=None
@@ -204,7 +213,10 @@ def build_facts(sources,catalog:NameCatalog):
                 descriptor=metric(logic,column.get('label') or '',unit,source.get('trade_flow'))
                 if unit=='%p' and month and not re.fullmatch(r'\d{4}-(?:0[1-9]|1[0-2])',month):
                     continue
-                fact_period=window if logic.startswith('compare_') else row_period
+                # 조회·비교 연도 합계를 SQL 식으로 증명한 행의 change_pct는 두 기간의 변화율이다(_annual_rate_proven).
+                cell_period=(current if key=='change_pct' and path[:1]==('rows',) and len(path)==2 and not stored
+                             and _annual_rate_proven(source) else row_period)
+                fact_period=window if logic.startswith('compare_') else cell_period
                 fact_compare=None;fact_month=month;horizon=None;role=None
                 period_value=not month or logic in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD'
                 trend_difference = (key == 'period_difference_usd' and source.get('kind') == 'TREND'
@@ -236,7 +248,7 @@ def build_facts(sources,catalog:NameCatalog):
                     if paired: fact_compare=(paired,paired)
                 elif logic in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD':
                     fact_month=None
-                    if descriptor.comparison=='PERIOD': fact_period=row_period;fact_compare=window
+                    if descriptor.comparison=='PERIOD': fact_period=cell_period;fact_compare=window
                 elif month: fact_period=(month,month)
                 if not fact_month and fact_period and fact_period[0]==fact_period[1]: fact_month=fact_period[0]
                 root_cell = path[:1] == ('rows',) and len(path) == 2

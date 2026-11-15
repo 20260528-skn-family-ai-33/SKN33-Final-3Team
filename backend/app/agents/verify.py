@@ -572,9 +572,6 @@ def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
                               hs_name=(product_labels or {}).get((hs, edition)))
         if cells:
             scope['_annual_sums'] = cells
-        if sums or differences:
-            # 연도별 합계·차액을 SQL 식에서 증명했다. 이 결과는 연간 검증 규칙으로 대조한다(sql.generated_analysis).
-            scope['annual_verified'] = True
         if differences:
             scope['_annual_differences'] = {
                 key: dict(left_year=left, right_year=right, flow=flow,

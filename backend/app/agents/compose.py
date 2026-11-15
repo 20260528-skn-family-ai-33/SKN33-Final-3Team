@@ -33,6 +33,7 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 extra_compare_periods가 있으면 비교 기간이 여럿입니다. compare_는 compare_period, compare{k+1}_(compare2_·compare3_·compare4_)는 extra_compare_periods의 k번째 기간이고
 change{k+1}_pct는 조회 기간의 그 기간 대비 증감률입니다. 기간마다 연도를 밝혀 따로 비교하고 여러 기간을 합치지 마세요.
 kind가 LLM_SQL이고 period_verified와 annual_verified가 모두 true가 아닌 digest의 수치는 집계 기간을 확인할 수 없어 검증되지 않습니다. 그 수치는 문장에 쓰지 말고, 무엇을 조회했는지와 수치는 결과표에서 확인하라고만 쓰세요.
+annual_verified만 true인 LLM_SQL digest는 연도별 합계·차액과 두 연도의 change_pct만 문장에 쓰고, 다른 열의 수치는 결과표에서 확인하라고 쓰세요.
 예측은 기준월을 명시하며 exp_12m은 과거 12개월 수출액입니다.
 월 단위 통계·비교 기간의 종료일을 날짜로 쓸 때는 해당 월의 말일로 씁니다(예: 2025년 12월 31일). 기사 발행 기간의 날짜는 그대로 씁니다.
 growth_outlook(증가 예상·감소 예상)은 모델의 방향 예상이므로 '예상'으로 쓰고 증감률 숫자를 만들지 마세요. null이면 언급하지 마세요.
