@@ -14,7 +14,7 @@ LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_
         'current_amount_usd':'현재 수출액','baseline_amount_usd':'비교 수출액','change_amount_usd':'증감액',
         'growth_status':'증감 상태','severity':'변화 수준','hs_item':'품목','hs_name':'품목명','one_off':'일회성 판정','label':'구분'}
 LABELS.update({'country_name':'국가','hs_code':'HS 코드','hs_ver':'HS 판본','trade_month':'기준월',
-    'total_usd':'기간 합계','compare_total_usd':'비교 기간 합계','change_pct':'증감률',
+    'total_usd':'기간 합계','compare_total_usd':'비교 기간 합계','period_difference_usd':'기간 합계 차액','change_pct':'증감률',
     'monthly_avg_usd':'월평균 금액','compare_monthly_avg_usd':'비교 기간 월평균',
     'compare_amount_usd':'비교 기간 금액','compare_month':'비교 기준월','verified_months':'집계된 개월 수',
     'requested_months':'조회 개월 수','compare_verified_months':'비교 집계 개월 수',
@@ -79,7 +79,8 @@ def display_columns(columns, rows, meta=None):
         for prefix,change in prefixes:
             if not any_period: hidden.update((change,*(prefix+field for field in aggregate)))
             if not monthly[prefix]: hidden.update((prefix+'amount_usd',prefix+'month'))
-        if not any_period: hidden.update(aggregate)
+        # 기간 합계 차액(조회 기간 − 첫 비교 기간)도 합계 열과 같이 길이가 다른 기간 비교에서만 보인다.
+        if not any_period: hidden.update((*aggregate,'period_difference_usd'))
     return [{**c,'label':periods.get(c['key']) or (labels.get(c['key'],c.get('label',c['key']))
              if c.get('label',c['key'])==c['key'] else c['label'])} for c in columns if c['key'] not in hidden]
 

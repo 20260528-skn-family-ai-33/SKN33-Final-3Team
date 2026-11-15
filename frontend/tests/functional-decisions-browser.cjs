@@ -83,7 +83,7 @@ const { chromium } = require('playwright')
     await page.goto(base + '#/login')
     await page.getByRole('link', { name: '회원가입', exact: true }).waitFor()
     assert.equal(await page.getByRole('link', { name: '회원가입', exact: true }).count(), 1)
-    await page.getByText(/구분 적용 전에 가입한 계정은 이메일을 모두 소문자/).waitFor()
+    await page.getByText('가입한 이메일의 대소문자를 정확히 입력해 주세요.').waitFor()
 
     await page.goto(base + '#/onboarding')
     await page.getByRole('combobox', { name: '품목 검색' }).fill('말')
@@ -108,7 +108,8 @@ const { chromium } = require('playwright')
     await page.getByRole('button', { name: '건너뛰기', exact: true }).click()
     await page.getByRole('dialog').waitFor()
     await page.getByRole('button', { name: '저장하지 않고 건너뛰기' }).click()
-    await page.getByRole('status').filter({ hasText: '환영합니다' }).waitFor()
+    // 회원가입 직후에는 알림 문구 대신 가입 완료 안내 화면(#/welcome)으로 이동한다.
+    await page.waitForFunction(() => location.hash === '#/welcome')
     assert.equal(await page.evaluate(() => sessionStorage.getItem('bs.onboarding.1')), null)
     console.log('PASS country selection prompts before skip and signup welcome is shown')
 

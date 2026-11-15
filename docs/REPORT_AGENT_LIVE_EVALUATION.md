@@ -1,6 +1,8 @@
 # Report Agent 실제 호출 평가
 
-평가일: 2026-11-09 · 이슈 #82
+이슈 #82 · 고정 Live 세트 32문항
+
+이 평가에서는 플래너 호출에 `gpt-6-luna`를 지정한다. 서비스에서 별도로 지정하지 않을 때의 플래너 기본값은 `gpt-5.6-luna`다.
 
 ## 기존 회귀 평가와의 차이
 
@@ -29,9 +31,10 @@
 정답에 적힌 항목이 모두 맞아야 정답이다. null은 채점하지 않는다. 수출입을 말하지 않으면 시스템 기본값(수출)으로 본다.
 결과 기반 리포트의 국가·품목·기간은 조건을 가진 앞 하위 질문에서 본다.
 
+<!-- 2026-11-09 gpt-4.1-mini 평가 기록. 아래 수치와 발견 사항은 당시 저장된 출력 기준이다.
 ## 결과
 
-모델 `gpt-4.1-mini`(운영 `API_INTENT_MODEL`), 총 비용 추정 **$0.045**, 플래너 해석 실패 1건.
+평가 당시 플래너 모델 `gpt-4.1-mini`(당시 설정 키 `API_INTENT_MODEL`), 총 비용 추정 **$0.045**, 플래너 해석 실패 1건.
 
 | 채점 | 정답 | 비고 |
 |---|---:|---|
@@ -68,12 +71,17 @@
 
 플래너 프롬프트·코드는 채팅 에이전트 담당 범위라 이 작업에서 바꾸지 않았다. 1·3번은 플래너 담당자에게 개선 후보로 전달한다.
 
-## 재현
+3번 실패는 1판에서 어느 칸이 틀렸는지 기록하지 못했다. 이후 실행(holdout)부터 오류 위치를 남긴다.
+당시 추정 비용은 [모델 페이지](https://developers.openai.com/api/docs/models/gpt-4.1-mini)의 2026-11-09 확인 단가(100만 토큰당 입력 $0.40·캐시 $0.10·출력 $1.60) 기준이다. 당시 페이지에 Deprecated 표시가 있었다.
+-->
+
+## 평가 실행
+
+고정한 Live 질문과 manifest를 사용한다. 새 원본과 재채점 결과는 각각 모델명이 들어간 파일에 저장한다.
 
 ```powershell
-python -m backend.scripts.evaluate_report_agent_live --freeze --set live          # 질문 고정(모델 호출 없음)
-python -m backend.scripts.evaluate_report_agent_live --run --set live --allow-unreviewed-gold --max-cost-usd 1
-python -m backend.scripts.score_report_agent_live --input docs/evaluations/report_agent_live_result.json --output docs/evaluations/report_agent_live_result_rescored.json
+python -m backend.scripts.evaluate_report_agent_live --run --set live --allow-unreviewed-gold --max-cost-usd 1 --output tmp/report_agent_live_gpt-6-luna.json
+python -m backend.scripts.score_report_agent_live --input tmp/report_agent_live_gpt-6-luna.json --output tmp/report_agent_live_gpt-6-luna_rescored.json
 python -m unittest backend.tests.test_agent_report_live_evaluation               # 채점·안전장치 검증(네트워크 없음)
 ```
 
@@ -85,6 +93,4 @@ python -m unittest backend.tests.test_agent_report_live_evaluation              
 
 - 플래너만 실제 호출한다. 조건 확정(HS·국가 사전), 미리보기, 승인, 접수, 완료는 오프라인 회귀 평가가 맡는다.
 - 정답은 AI 초안이며 사람 검토 전이다. 고정 질문 세트 결과이며 실제 사용자 질문 분포나 서비스 전체 정확도가 아니다.
-- 비용은 사용량 기반 추정이다. 가격은 [모델 페이지](https://developers.openai.com/api/docs/models/gpt-4.1-mini)(2026-11-09 확인,
-  입력 $0.40·캐시 $0.10·출력 $1.60 / 1M 토큰) 기준이며 페이지에 Deprecated 표시가 있다.
-- 3번 실패는 1판에서 어느 칸이 틀렸는지 기록하지 못했다. 이후 실행(holdout)부터 오류 위치를 남긴다.
+- 비용은 각 실행에서 기록한 `gpt-6-luna` 단가와 토큰 사용량을 기준으로 추정한다.

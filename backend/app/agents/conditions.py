@@ -6,7 +6,7 @@ from uuid import uuid4
 from sqlalchemy import select, func
 
 from backend.app.agents.planner import HS_CODE_MENTION, HS_EDITION_MENTION, ambiguous_report_source, product_expressions
-from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period,
+from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period, TaskSlots,
                                      MAX_ASKS_PER_CONDITION, MAX_TEXT_CHARS, MARKET_INTENTS, ToolResult)
 from backend.app.api import accounts, reference, trade
 from backend.app.api.chat_slots import country_key, numeric_product, SlotRepair
@@ -90,6 +90,43 @@ def _match_country_mention(mention, name, rows, threshold):
     return None, candidates, None
 
 
+TRADE_PARTNER_ALIASES = {'대미': 'US'}
+
+
+def _question_country_matches(question, countries, rows, threshold):
+    """Bind a planner country to its source spelling and catalog entry."""
+    text = question.casefold()
+    matches = {(item.mention, item.name): _match_country_mention(item.mention, item.name, rows, threshold)
+               for item in countries if item.mention not in TRADE_PARTNER_ALIASES and item.mention.casefold() in text}
+    for alias, code in TRADE_PARTNER_ALIASES.items():
+        if not re.search(r'(?<!\w)' + re.escape(alias) + r'(?=\W|$|수출|수입)', question):
+            continue
+        row = next((r for r in rows if r['country_code'] == code), None)
+        if row is None:
+            continue
+        canonical = {country_key(row['name_ko']), country_key(code)}
+        for item in countries:
+            if (item.mention, item.name) in matches:
+                continue
+            if item.mention != alias and not {country_key(item.mention), country_key(item.name)} <= canonical:
+                continue
+            # Preserve the source spelling on the task for later snapshot verification.
+            item.mention, item.name = alias, row['name_ko']
+            matches[alias, item.name] = (code, [], None)
+    return matches
+
+
+def comparison_windows(question, current, baseline):
+    from backend.app.agents.verify_claims import annual_comparison_roles
+
+    if current and baseline and all(w.start.month == 1 and w.end.month == 12 and w.start.year == w.end.year
+                                    for w in (current, baseline)):
+        roles = annual_comparison_roles(question)
+        if roles.kind != 'undetermined' and (roles.subject, roles.baseline) == (str(baseline.start.year), str(current.start.year)):
+            return baseline, current
+    return current, baseline
+
+
 def _bounded_bundle(store, loaded, message):
     """조건 확인에서 쓰는 모델 묶음(HS4 후보 순서·예측 기준월). ML 단계와 같은 전용 스레드·시간 제한으로 읽는다.
     캐시가 비어 첫 로드가 늦으면 워커를 붙잡지 않고 그 하위 질문만 다시 질문하도록 안내한다."""
@@ -141,6 +178,12 @@ _NOT_PRODUCT_FOLLOWUP = re.compile(
 )
 
 
+# 직전 결과표 리포트에서 질문으로 바꿀 수 없는 조건(표를 만든 조건을 따른다)
+PREVIOUS_TABLE_FIXED = {'countries', 'products', 'period', 'recent_months', 'comparison_requested', 'compare_period',
+                        'ranking_group', 'share_basis', 'ranking_limit'}   # '상위 1개만'도 표를 바꾸는 요청이다(행을 줄이지 않는다)
+PREVIOUS_TABLE_NOTE = '직전 결과표의 조건 그대로 만들었습니다. 조건을 바꾸려면 새로 조회해 주세요.'
+
+
 def _product_key(expression):
     match = HS_CODE_MENTION.fullmatch(expression.strip())
     return match[1] if match else country_key(expression)
@@ -175,20 +218,25 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if source is None:
             return ask(state, task, source_key, 'REPORT_SOURCE',
                 '직전 결과표로 리포트를 만들까요, 아니면 같은 조건으로 다시 조회할까요?',
-                # TODO: Report Agent의 직전 결과표 복사가 연결되면 '(준비 중)'을 뗀다. 지금은 선택하면 안내로 끝난다.
-                [('PREVIOUS_RESULT', '직전 결과표로 리포트(준비 중)', {'report_source': 'PREVIOUS_RESULT'}),
+                [('PREVIOUS_RESULT', '직전 결과표로 리포트', {'report_source': 'PREVIOUS_RESULT'}),
                  ('REQUERY', '같은 조건으로 다시 조회', {'report_source': 'REQUERY'})])
         task.previous_turn_result = source == 'PREVIOUS_RESULT'
-    if task.previous_turn_result:
-        raise SlotRepair('이전 대화의 결과표는 아직 리포트에 바로 사용할 수 없습니다. 조회와 리포트 생성을 한 질문에서 요청해 주세요.')
     slots = task.slots
+    if task.previous_turn_result:
+        # 직전 결과표는 그 조건 그대로 싣는다. 질문에 기간·국가 등이 함께 와도 표 조건을 바꾸지 않는다
+        # (바꾸면 사본 표와 리포트 조건이 어긋난다). 바꾸려면 새로 조회하도록 적용 조건에 알린다.
+        asked = slots.model_dump(include=PREVIOUS_TABLE_FIXED, exclude_none=True)
+        slots = TaskSlots(trade_flow=slots.trade_flow) if slots.trade_flow == 'IMPORT' else TaskSlots()
+        if asked and PREVIOUS_TABLE_NOTE not in task.applied_defaults:
+            task.applied_defaults.append(PREVIOUS_TABLE_NOTE)
     # 이미 품목을 선택한 뒤 재개하는 체크포인트에도 같은 기업명 제외 규칙을 적용한다.
     slots.products = product_expressions(slots.products,article_context=task.intent in ('CAUSE','LOCAL_ISSUES'))
     report_answer=task.resolved.get(f'{task.task_id}:report_confirm',{})
     if report_answer.get('reject_input_change'): raise SlotRepair('선행 결과의 조건을 변경하려면 새 분석 질문을 입력해 주세요.')
     original=state.input.question+' '+report_answer.get('revision_text','')
     uses_item_edition = _uses_item_edition(task)
-    frozen_report = task.intent == 'REPORT' and bool(task.input_bindings)
+    # 결과 사본으로 만드는 리포트(같은 턴 선행 결과·직전 결과표)는 원본 판본을 그대로 쓴다.
+    frozen_report = task.intent == 'REPORT' and bool(task.input_bindings or task.previous_turn_result)
     # 판본은 원문에 있는 값만 확정한다. 복합 질문의 판본은 해당 하위 질문에 적용한다.
     editions = set(HS_EDITION_MENTION.findall(original))
     if len(state.plan.tasks) > 1 and editions:
@@ -248,9 +296,16 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     out.ranking_group, out.share_basis = slots.ranking_group, slots.share_basis
     out.compare_period, out.article_period, out.extra_compare_periods = None, None, []
     out.trade_flow = slots.trade_flow or base.trade_flow
-    if task.input_bindings:
+    if task.input_bindings or task.previous_turn_result:
         if task.intent=='REPORT' and task.report_request and task.report_request.confirmed:
             out=task.report_request.conditions.model_copy(deep=True)
+        elif task.previous_turn_result:
+            # 직전 답변의 결과표 그대로 리포트를 만든다(설계 '이전 턴 결과 참조'). 조건은 표에 저장된 분석 조건이며
+            # 다시 조회하지 않는다. 표 사본은 미리보기(confirm_report)가 같은 표를 다시 읽어 붙인다.
+            from backend.app.agents.bindings import previous_result, stored_conditions
+            source = previous_result(store, state, task)
+            if source is None: return   # REPORT_TABLE로 어느 표인지 묻는 중
+            out = stored_conditions(source[0])
         else:
             if resolve_bindings is None: raise SlotRepair('선행 결과의 대상을 확인할 수 없습니다.')
             out = resolve_bindings(store, state, task, out)
@@ -365,8 +420,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         # 되묻기로 확정한 국가('미구' → 미국)도 새 국가다. 아래처럼 같은 계획의 앞 하위 질문에서 확정한 답도 쓴다.
         def confirmed(mention):
             return any(t.resolved.get(f'{t.task_id}:country:{mention}', {}).get('country_codes') for t in state.plan.tasks)
-        current = {(item.mention, item.name): _match_country_mention(item.mention, item.name, rows, threshold)
-                   for item in countries if item.mention.casefold() in original.casefold()}
+        current = _question_country_matches(original, countries, rows, threshold)
         new_country = any(match[0] or confirmed(mention) for (mention, _), match in current.items())
         for item in countries:
             key = f'{task.task_id}:country:{item.mention}'
@@ -380,7 +434,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             if 'country_codes' in answer:
                 out.country_codes.extend(answer['country_codes'])
                 continue
-            if item.mention.casefold() not in original.casefold():
+            if (item.mention, item.name) not in current:
                 # D-22: 질문에 없는 이전 조건 국가를 그대로 다시 적은 것은 생략(이어받기)과 같다.
                 echoed, _ = country_matches(item.name, rows, threshold)
                 if new_country and echoed in base.country_codes:
@@ -439,6 +493,10 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         out.period = slots.period or out.period
         if slots.recent_months or not out.period:
             out.period = Period(start=shift_month(bounds[-1], 1-(slots.recent_months or 12)), end=bounds[-1])
+        comparison = slots.compare_period
+        if slots.comparison_requested and slots.period:
+            question = original if len(state.plan.tasks) == 1 else task.question
+            out.period, comparison = comparison_windows(question, out.period, comparison)
         # 유망시장은 통계 기간을 조회하지 않는다. 공개 통계보다 오래된 기간을 물어도 여기서 끝내지 않고, 아래 MODEL_PERIOD로
         # 최신 기준월 예측을 제안한다.
         if task.intent not in MARKET_INTENTS:
@@ -453,7 +511,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             # 조회 기간과 같은 비교 기간("2025년 기준 2025년·2024년 비교")과 중복은 뺀다. 같은 기간이 두 번이면
             # 차트 시리즈 이름이 겹친다. 여러 비교 기간을 한 표에 두는 것은 통계(TREND·LLM SQL)만 지원한다.
             periods = []
-            for candidate in [slots.compare_period, *(slots.extra_compare_periods or [])]:
+            # 첫 비교 기간은 연간 비교의 기준·대상 연도를 맞춘 값(comparison_windows)을 쓴다.
+            for candidate in [comparison, *(slots.extra_compare_periods or [])]:
                 if candidate and candidate != out.period and candidate not in periods:
                     periods.append(candidate)
             # 여러 비교 기간을 한 표에 두는 것은 통계(TREND·LLM SQL)만 지원한다. 다른 분석은 중복을 뺀 뒤 첫 기간만 쓴다.
@@ -467,7 +526,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
                 task.applied_defaults.append(note)
             if kept:
                 out.compare_period, out.extra_compare_periods = kept[0], kept[1:]
-            elif not slots.compare_period:
+            elif not comparison:
                 # 비교 기간을 말하지 않았을 때만 전년 동기를 넣는다. 말한 기간이 모두 조회 기간과 같았으면 비교하지 않는다.
                 out.compare_period = Period(start=shift_month(out.period.start,-12), end=shift_month(out.period.end,-12))
     if task.intent == 'CAUSE':

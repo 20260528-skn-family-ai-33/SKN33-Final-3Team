@@ -175,6 +175,9 @@ def run_template(store, uid, task, step, timeout=30):
                         (f'compare{n}_month', window[i].strftime('%Y-%m') if len(data) == len(values) else None),
                         (f'compare{n}_amount_usd', data[i] if len(data) == len(values) else None))}}
                     for i, (m, value) in enumerate(zip(requested, values))]}
+            if compared:
+                detail['period_difference_usd'] = (total - compare_total
+                    if total is not None and compare_total is not None else None)
             targets.append(detail)
             if count != len(values) or (old and compare_count != len(old)):
                 limitations.append('기간 내 미집계 월이 있습니다.')

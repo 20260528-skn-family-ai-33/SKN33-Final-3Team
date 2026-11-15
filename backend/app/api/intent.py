@@ -71,9 +71,11 @@ class OpenAIIntentProvider:
         key=next((v for k,v in self.settings.values.items() if k.lower()=='openai_api_key' and v),None)
         if not key: raise ValueError('Intent API key missing')
         context={k:previous_conditions[k] for k in ('hs_items','country_codes','period','trade_flow','compare_period','ranking_group') if k in previous_conditions}
+        model = self.settings.get('API_INTENT_MODEL', 'gpt-6-luna')
+        options = {} if model.startswith(('gpt-5', 'gpt-6')) else {'temperature': 0}
         with OpenAI(api_key=key,timeout=float(self.settings.get('API_INTENT_TIMEOUT_SECONDS',10)),max_retries=0) as client:
-            response=client.responses.parse(model=self.settings.get('API_INTENT_MODEL','gpt-4.1-mini'),
+            response=client.responses.parse(model=model,
                 instructions=PROMPT,input=json.dumps({'question':question,'previous_conditions':context},ensure_ascii=False),
-                text_format=IntentSlots,max_output_tokens=2000,temperature=0,store=False)
+                text_format=IntentSlots,max_output_tokens=2000,store=False,**options)
         if response.output_parsed is None: raise ValueError('Intent refused or incomplete')
         return response.output_parsed.model_dump()

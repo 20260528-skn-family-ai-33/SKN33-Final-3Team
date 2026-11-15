@@ -42,7 +42,7 @@ UN_STATS = {"99": UN_STATS_NAME, "9999": UN_STATS_NAME, "999999": "Commodities n
 UN_STATS_SOURCE = "UN Comtrade 통계용 코드 (한국어 명칭은 팀 번역)"
 NAME_MAX = 500  # DB name_ko VARCHAR(500). 6단위는 요약 부분만 해당
 OUTPUT_DIR = BASE / "hscode_outputs"
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-6-luna"
 BATCH = 40
 SUMMARY_MAX = 20  # 공백과 문장부호 포함
 RETRIES = 3
@@ -216,6 +216,7 @@ def summarize(items, prompt, model, api_key, cache_path, label, stats=None, rese
     log.info(f"[{label}] 대상 {len(items):,}개 | 캐시 완료 {len(items) - len(todo):,}개 | 요청 {len(todo):,}개")
     cache_path.parent.mkdir(parents=True, exist_ok=True)  # API 비용을 쓴 뒤 저장 실패하지 않도록 먼저 만듦
     client = OpenAI(api_key=api_key)
+    options = {"reasoning_effort": "low"} if model.startswith(("gpt-5", "gpt-6")) else {"temperature": 0}
     started = time.time()
     for i in range(0, len(todo), BATCH):
         chunk = {c: items[c] for c in todo[i:i + BATCH]}
@@ -227,7 +228,7 @@ def summarize(items, prompt, model, api_key, cache_path, label, stats=None, rese
                 headings = {c[:4] for c in chunk}  # 같은 4단위만 보냄. 다른 4단위와의 중복은 응답 검사에서 거름
                 nearby = reserved | {v for c, v in cache.items() if c in items and c[:4] in headings}
                 res = client.chat.completions.create(
-                    model=model, temperature=0, response_format={"type": "json_object"},
+                    model=model, response_format={"type": "json_object"}, **options,
                     messages=[{"role": "system", "content": prompt + "\n관련 분류 및 수동 확정 요약(재사용 금지): " + json.dumps(sorted(nearby), ensure_ascii=False)},
                               {"role": "user", "content": json.dumps(chunk, ensure_ascii=False)}])
                 got = json.loads(res.choices[0].message.content)

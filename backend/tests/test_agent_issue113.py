@@ -1144,6 +1144,13 @@ class UnverifiedLlmSqlOutputTest(unittest.TestCase):
         verify(current, countries=('일본', '미국'))
         self.assertEqual(unsupported_sql_prose(current)[0], {2})
 
+    def test_annual_proven_sql_is_not_hidden(self):
+        from backend.app.agents.compose import unverified_sql_period
+        # 연도별 합계·차액을 SQL 식에서 증명한 연간 비교 결과는 작성 입력·최종 답변에서 숨기지 않는다(main 병합).
+        self.assertTrue(unverified_sql_period({'kind': 'LLM_SQL', 'period_verified': False}))
+        self.assertFalse(unverified_sql_period({'kind': 'LLM_SQL', 'period_verified': False, 'annual_verified': True}))
+        self.assertFalse(unverified_sql_period({'kind': 'LLM_SQL', 'period_verified': True}))
+
     def test_fallback_conclusion_does_not_quote_unverified_number(self):
         from backend.app.agents.compose import _trade_fact
         digest = {'kind': 'LLM_SQL', 'trade_flow': 'EXPORT', 'rows': [{'v': 1200}],
@@ -1233,7 +1240,7 @@ class ReviewFollowupTest(unittest.TestCase):
             binding = SimpleNamespace(source_task_id='t1', source_step_id='t1.sql')
             task = SimpleNamespace(task_id='t2', report_request=None, resolved={}, conditions=Conditions(period=Y(2025)),
                                    steps=[SimpleNamespace(tool='generate_report', step_id='t2.report')],
-                                   input_bindings=[binding] * len(inputs))
+                                   input_bindings=[binding] * len(inputs), previous_turn_result=False, applied_defaults=[])
             state = SimpleNamespace(input=SimpleNamespace(user_id=1, job_id='j'), results={})
             with patch.object(report, 'select'), patch.object(report, 'update') as update, patch.object(report, 'ask'), \
                     patch.object(report.reports, 'preview', return_value={'preview_id': 'p', 'expires_at': '2026-11-16T00:00:00'}), \

@@ -13,7 +13,7 @@ from backend.app.agents.charts import build_chart
 from backend.app.agents.bindings import resolve as resolve_bindings, source_versions
 from backend.app.agents.clarification import ClarificationReading, answer_patch, apply_answer
 from backend.app.agents.compose import (ARTICLE_PROMPT, COMPOSE_PROMPT, COMPOSE_TEXT_PROMPT, assemble, compose_input,
-                                        apply_claim_edits, complete_article_only_conclusions, cited_article_numbers, fallback_conclusion, numbered_articles, validate_citations, validate_rewrite)
+                                        apply_claim_edits, complete_article_only_conclusions, cited_article_numbers, fallback_conclusion, numbered_articles, period_difference_draft, validate_citations, validate_rewrite)
 from backend.app.agents.conditions import check_conditions, recent_article_period
 from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.api.common import LLM_SQL_PERIOD_WARNING   # 생성 SQL 기간 미증명 안내(채팅·리포트 공통)
@@ -28,7 +28,8 @@ from backend.app.api.common import ApiError, clean, now
 from backend.app.api.database import Store
 
 
-DEFAULT_MODELS = {'intent': 'gpt-4.1-mini', 'compose': 'gpt-6-luna', 'sql': 'gpt-4.1'}
+DEFAULT_MODELS = {'planner': 'gpt-5.6-luna', 'compose_text': 'gpt-6-luna',
+                  'intent': 'gpt-6-luna', 'compose': 'gpt-6-luna', 'sql': 'gpt-6-luna'}
 COMPOSE_OUTPUT_TOKENS = 3000
 COMPOSE_TEXT_OUTPUT_TOKENS = 6000
 PRODUCT_NAMES_TTL_SECONDS = 3600   # HS 사전은 판본 갱신 때만 바뀐다. 갱신 뒤 최대 1시간은 이전 이름으로 대조한다
@@ -173,11 +174,11 @@ class Services:
     def model_for(self, role):
         return self.settings.get('API_'+role.upper()+'_MODEL', DEFAULT_MODELS[role])
 
-    def structured(self, state, node, prompt, payload, schema, tokens, validate=lambda x:x, *, max_attempts=2):
+    def structured(self, state, node, prompt, payload, schema, tokens, validate=lambda x:x, *, model_role=None, max_attempts=2):
         role = 'compose' if node == 'compose' else 'intent'
         prefix = role.upper()
         timeout = float(self.settings.get('API_'+prefix+'_TIMEOUT_SECONDS',budget.DEFAULT_SECONDS[node]))
-        model = self.model_for(role)
+        model = self.model_for(model_role or ('planner' if node == 'planner' else role))
         reserve = budget.finishing_seconds(state,self.settings)
         if node=='compose': reserve -= budget.seconds(self.settings,'compose')
         def call(_):
@@ -253,7 +254,7 @@ class Services:
         pending=state.pending
         task=next(t for t in state.plan.tasks if t.task_id==pending.task_id)
         if pending.kind=='REPORT_CONFIRM' and 'text' in answer:
-            if task.input_bindings:
+            if task.input_bindings or task.previous_turn_result:   # 결과표 기반 리포트는 글로 조건을 바꾸지 않는다(D-92)
                 apply_answer(state,{'reject_input_change':True})
                 return
             text=answer['text']
@@ -437,6 +438,7 @@ class Services:
         for reason in data.result.limitations:
             if reason not in state.warnings: state.warnings.append(reason)
         if (data.result.status=='OK' and data.meta.get('kind')=='LLM_SQL' and data.meta.get('period_verified') is not True
+                and data.meta.get('annual_verified') is not True
                 and LLM_SQL_PERIOD_WARNING not in state.warnings):
             state.warnings.append(LLM_SQL_PERIOD_WARNING)
         if data.result.status!='OK': return data.result
@@ -449,10 +451,15 @@ class Services:
         return {t:store.cache['trade_revision',t] for t in ('export_summary','import_summary')}
 
     def compose_text(self,state):
-        """문장형 답변 노드(D-98). 같은 compose 예산·검증을 쓰고 프롬프트와 문장 상한만 다르다."""
-        self.compose(state,prompt=COMPOSE_TEXT_PROMPT)
+        """문장형 답변 노드(D-98). 같은 compose 예산·검증을 쓰고 별도 모델·프롬프트·문장 상한을 쓴다."""
+        self.compose(state,prompt=COMPOSE_TEXT_PROMPT,model_role='compose_text')
 
-    def compose(self,state,prompt=COMPOSE_PROMPT):
+    def compose(self,state,prompt=COMPOSE_PROMPT,model_role='compose'):
+        comparison = period_difference_draft(state)
+        if comparison is not None:
+            state.draft = comparison
+            state.fixed_conclusion_ids = []  # Numeric conclusions still go through snapshot verification.
+            return
         with self.read_store() as store:
             from backend.app.agents.templates import _names
             countries,products=_names(store)
@@ -511,7 +518,17 @@ class Services:
                            '0부터 시작하는 feedback_index와 passage를 대체할 정확한 문자열 replacement를 반환하세요. '
                            '원문의 조사·어미와 문장부호는 span 경계에 맞추세요. 질문의 비교 기준을 유지하고 '
                            '해당 task의 digests에서 수치와 방향을 확인하세요. REVIEW와 PRESERVE는 수정하지 마세요.')
-            revised = self.structured(state, 'compose', instruction, payload, WriterEdits, tokens, apply_edits, max_attempts=1)
+            from backend.app.agents.compose import period_role_edits
+            edits = period_role_edits(state.verification.feedback)
+            if edits:
+                try:
+                    state.draft = apply_edits(edits)
+                except ValueError:
+                    pass  # The normal correction path can still propose a valid edit.
+                else:
+                    state.writer_rewrite_result = 'ACCEPTED_CORRECTION'
+                    return
+            revised = self.structured(state, 'compose', instruction, payload, WriterEdits, tokens, apply_edits, model_role=model_role, max_attempts=1)
             if revised is not None:
                 state.draft = revised
             state.writer_rewrite_result = 'ACCEPTED_CORRECTION' if revised is not None else reason
@@ -525,7 +542,7 @@ class Services:
             complete_article_only_conclusions(state, draft, payload, countries.values())
             return validate_rewrite(state,draft,payload) if correcting else draft
         revised=self.structured(state,'compose',prompt,payload,Draft,tokens,
-                                assemble_response,
+                                assemble_response, model_role=model_role,
                                 max_attempts=1 if correcting else 2)
         if revised is None and state.draft is not None and state.verification.regeneration_count:
             # Pre-migration checkpoints can hold a draft that never passed citation validation.
@@ -574,7 +591,7 @@ class Services:
                 names=[*countries,*product_names(store)]
                 # compose가 본 품목 표시명과 같은 이름으로 순위 근거 범위를 대조한다. 조건에 있는 코드만 읽는다.
                 from backend.app.agents.templates import condition_names
-                _,products=condition_names(store,[task.conditions for task in state.plan.tasks])
+                country_labels,products=condition_names(store,[task.conditions for task in state.plan.tasks])
                 snapshots={}
                 for task in state.plan.tasks:
                     for step in task.steps:
@@ -582,7 +599,7 @@ class Services:
                         if step.tool not in ('query_trade_data','query_market_model') or not result or not result.result_id: continue
                         try:
                             payload=results.read_snapshot(store,state.input.user_id,result.result_id,'RESULT')
-                            snapshots[step.step_id]=snapshot_evidence(payload)
+                            snapshots[step.step_id]=snapshot_evidence(payload, country_labels=country_labels, product_labels=products)
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
@@ -603,12 +620,18 @@ class Services:
             with self.read_store() as store:
                 rid=state.report_wait.report_id
                 record=store.owned('report','report_id',rid,state.input.user_id)
-                if record['status']=='READY': return ToolResult(status='OK',report_id=rid)
-                return ToolResult(status='FAILED',error='리포트 파일 생성에 실패했습니다.')
+                if record['status']!='READY': return ToolResult(status='FAILED',error='리포트 파일 생성에 실패했습니다.')
+                # 직전 턴 결과표는 이번 계획의 depends_on에 없어 누락 사유가 전파되지 않는다. 접수 때 conditions_json에 남긴
+                # 승인 사본의 사유를 결과에 싣는다(content_json은 워커가 완성 문서로 바꾼다).
+                limits=(record.get('conditions_json') or {}).get('chat_limitations') or []
+                return ToolResult(status='OK',report_id=rid,completeness='PARTIAL' if limits else 'COMPLETE',limitations=limits)
         # 리포트 파일은 이미 만들어졌고 상태만 읽는다. 앞 호출의 초과 시간 때문에 예약이 거부되면 완성된 리포트를 두고
         # 작업이 FAILED로 끝나므로 예산 검사 없이 예약·정산한다(finalize와 같은 규칙, §13.4).
-        return self.execution.call('report',budget.seconds(self.settings,'report'),read,
+        result=self.execution.call('report',budget.seconds(self.settings,'report'),read,
                                    finish_reserve=budget.finishing_seconds(state,self.settings),enforce=False)
+        for reason in result.limitations:
+            if reason not in state.warnings: state.warnings.append(reason)
+        return result
 
     def finalize(self,state):
         from time import monotonic

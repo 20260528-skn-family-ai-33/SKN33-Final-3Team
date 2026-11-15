@@ -356,7 +356,8 @@ def build_document(store,uid,record):
             tables=[table for table in source if RESULT_SECTIONS.get(table['kind'])==code]
             sections.append(section(code,'승인한 분석 결과입니다.' if tables else '해당 분석 결과에 포함되지 않음',tables))
         for ref in record['content_json']['source_results']: meta['warnings'].extend(ref['limitations'])
-        if any(t['kind']=='LLM_SQL' and (t.get('meta') or {}).get('period_verified') is not True for t in source):
+        if any(t['kind']=='LLM_SQL' and not ({'period_verified','annual_verified'} & {k for k,v in (t.get('meta') or {}).items() if v is True})
+               for t in source):
             meta['warnings'].append(LLM_SQL_PERIOD_WARNING)   # 채팅과 같은 생성 SQL 기간 미확인 안내
     elif record['report_type']=='RPT_WEEKLY':
         meta=news.source_meta(store,'NEWS',date.fromisoformat(p['end']))

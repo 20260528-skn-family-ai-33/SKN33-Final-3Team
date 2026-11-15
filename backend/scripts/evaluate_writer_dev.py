@@ -15,7 +15,7 @@ from openai import OpenAI
 from backend.app.agents.graph import compose_node
 from backend.app.agents.llm import StructuredClient
 from backend.app.agents.planner import build_plan
-from backend.app.agents.runtime import Services
+from backend.app.agents.runtime import DEFAULT_MODELS, Services
 from backend.app.agents.state import AgentState, Conditions, PlannerOutput, ToolResult
 from backend.app.agents.tools import article_result
 from backend.app.api.config import Settings
@@ -173,7 +173,7 @@ def generate_case(case, model, key):
     for task in state.plan.tasks:
         task.answer_status = state.task_outcome(task.task_id)
     names = (case.country_names, {(code, 'HS2022'): label for code, label in case.product_names.items()})
-    settings = Settings({'OPENAI_API_KEY': key, 'API_COMPOSE_MODEL': model})
+    settings = Settings({'OPENAI_API_KEY': key, 'API_COMPOSE_MODEL': model, 'API_COMPOSE_TEXT_MODEL': model})
     meter = Meter()
     services = Services(meter, settings, StructuredClient(settings, meter.client))
     with patch.object(services, 'read_store', return_value=nullcontext()), \
@@ -189,14 +189,14 @@ def generate_case(case, model, key):
 
 
 def evaluate(models, key, out, dataset=None):
-    metrics = {model: [] for model in models}
+    metrics = {}
     if dataset is None:
         dataset = load_dataset()
     for case, gold in dataset:
-        for model in models:
+        for model in models or [DEFAULT_MODELS[compose_node(case.state)]]:
             state, record = generate_case(case, model, key)
             result = record['metrics']
-            metrics[model].append(result)
+            metrics.setdefault(model, []).append(result)
             record['evaluation'] = score(state, gold, fixed=result['fixed'])
             print(json.dumps(record, ensure_ascii=False), file=out, flush=True)
             print(case.case_id, model, len(record['attempts']), flush=True)
@@ -216,11 +216,11 @@ def main():
     parser.add_argument('--gold', type=Path, default=DATA / 'writer_dev_gold.jsonl')
     parser.add_argument('--validate-only', action='store_true', help='Validate the frozen inputs and gold without an API key.')
     parser.add_argument('--env-file', type=Path)
-    parser.add_argument('--models', nargs='+', choices=STANDARD_PRICES, default=list(STANDARD_PRICES),
-                        help='비교할 Writer 모델 목록. 생략하면 세 모델을 모두 평가합니다.')
+    parser.add_argument('--models', nargs='+', choices=STANDARD_PRICES,
+                        help='비교할 Writer 모델 목록. 생략하면 답변 형식별 기본 모델을 평가합니다.')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
-    if len(set(args.models)) != len(args.models):
+    if args.models and len(set(args.models)) != len(args.models):
         parser.error('동일한 모델을 두 번 지정할 수 없습니다.')
     dataset = load_dataset(args.cases, args.gold)
     if args.validate_only:
