@@ -72,7 +72,7 @@ SHORTNEWS_DAILY_ENABLED=true python -m backend.app.scheduler.main
   날짜 형식은 [공공데이터포털 단신속보 명세](https://www.data.go.kr/data/15122662/openapi.do)의 요청 예시를 따릅니다.
 - 실행 시작 시 KST 전날을 한 번 확정하며, 수집한 원본 CSV를 `shortnews_pipeline`으로 넘깁니다.
   본문 전체의 모든 구간으로 최신 DB 분류 후보를 조회하고, 본문 전체를 LLM에 전달합니다.
-  팀원과 같은 `gpt-4.1-mini`로 최대 3문장 요약·최대 5개 후보 대표어를 선택합니다.
+  팀원과 같은 `gpt-6-luna`로 최대 3문장 요약·최대 5개 후보 대표어를 선택합니다.
   후보 밖 단어·중복·잘린 응답은 실패 처리하며 기사를 제외하지 않습니다.
   요약은 분석 캐시와 실행별 JSON, 선택 키워드는 MySQL `article_tag` 및 공통 본문 Chroma 메타데이터에 저장합니다.
   분석 캐시는 본문·제목·분류 내용·모델·처리 규칙으로 구분하므로 원문이나 분류가 바뀌면 재분석합니다.

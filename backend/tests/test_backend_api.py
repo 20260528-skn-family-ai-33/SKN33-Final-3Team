@@ -467,7 +467,7 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(done['status'],'SUCCEEDED',done)
         self.assertEqual(done['answer']['answer_status'],'ANSWERED')
         requested_models = [call.kwargs['model'] for call in db.agent_client.parse.call_args_list]
-        self.assertEqual(requested_models, ['gpt-4.1-mini', 'gpt-5.6-luna'])
+        self.assertEqual(requested_models, ['gpt-5.6-luna', 'gpt-5.6-luna'])
         message = self.meta.tables['chat_message']
         with self.engine.connect() as connection:
             saved = connection.execute(select(message.c.result_json).where(

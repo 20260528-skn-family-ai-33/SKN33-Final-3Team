@@ -1,5 +1,5 @@
 """Typed, provenance-preserving evidence for verify. Never fetch or recompute data."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 import re
 
@@ -38,6 +38,8 @@ class Fact:
     role: str | None
     anchor: str | None
     stored_targets: frozenset[str]
+    annual_sql_sum: bool = False
+    period_difference: bool = False
 
 
 def period(value):
@@ -137,6 +139,7 @@ def build_facts(sources,catalog:NameCatalog):
             identities, group = bind_targets(stored, catalog)
             month=str(row.get('month') or row.get('trade_month') or inherited_month or '')[:7] or None
             for key,value in row.items():
+                if key in ('_annual_sums', '_annual_differences', '_annual_candidates', '_annual_nationwide'): continue
                 if isinstance(value,(dict,list)):
                     walk(value,stored,month,path+(key,));continue
                 if value is None and key == 'amount_usd' and month:
@@ -168,6 +171,9 @@ def build_facts(sources,catalog:NameCatalog):
                 fact_period=compare if key.startswith('compare_') else current
                 fact_compare=None;fact_month=month;horizon=None;role=None
                 period_value=not month or key in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD'
+                trend_difference = (key == 'period_difference_usd' and source.get('kind') == 'TREND'
+                                    and source.get('_verification_source') == 'SNAPSHOT'
+                                    and path[:1] == ('rows',) and len(path) == 2)
                 if prediction and key in ('exp_12m','growth_pct'):
                     fact_period=None;fact_month=None;horizon=12;role='PAST' if key=='exp_12m' else 'FUTURE'
                 elif key=='compare_amount_usd':
@@ -176,6 +182,8 @@ def build_facts(sources,catalog:NameCatalog):
                         fact_month=shift(compare[0],months_between(current[0],month))
                     if not fact_month: continue
                     fact_period=(fact_month,fact_month)
+                elif trend_difference:
+                    fact_month, fact_period, fact_compare = None, current, compare
                 elif month and (descriptor.family=='AMOUNT_CHANGE' or
                                 (unit=='%p' and descriptor.family=='SHARE_CHANGE' and descriptor.comparison=='PERIOD')):
                     fact_period=(month,month)
@@ -193,8 +201,50 @@ def build_facts(sources,catalog:NameCatalog):
                     if descriptor.comparison=='PERIOD': fact_period=current;fact_compare=compare
                 elif month: fact_period=(month,month)
                 if not fact_month and fact_period and fact_period[0]==fact_period[1]: fact_month=fact_period[0]
+                root_cell = path[:1] == ('rows',) and len(path) == 2
+                cell = source.get('_annual_sums', {}).get(key) if root_cell else None
+                if cell and unit == 'USD' and not stored:
+                    year = cell['year']
+                    years = set(re.findall(r'(?<!\d)\d{4}(?!\d)', key + ' ' + descriptor.label))
+                    if ((years and years != {year}) or descriptor.flow != cell['flow']
+                            or descriptor.family != 'AMOUNT' or descriptor.aggregate == 'AVERAGE'):
+                        continue
+                    scoped = frozenset(cell[k] for k in ('country_code','country_name','hs_code','hs_name') if cell[k])
+                    targets, members = bind_targets(scoped, catalog)
+                    window = (year + '-01', year + '-12')
+                    facts.append(Fact(index,path+(key,),descriptor,amount,unit,targets,members,
+                                      window,None,None,True,False,None,None,None,scoped, annual_sql_sum=True))
+                    continue
+                difference = source.get('_annual_differences', {}).get(key) if root_cell else None
+                if difference and unit == 'USD' and not stored:
+                    left, right = difference['left_year'], difference['right_year']
+                    years = set(re.findall(r'(?<!\d)\d{4}(?!\d)', key + ' ' + descriptor.label))
+                    ordered = re.search(r'(\d{4})년?\s*[-−]\s*(\d{4})년?', descriptor.label)
+                    if ((years and years != {left, right}) or
+                            (ordered and ordered.groups() != (left, right)) or
+                            not descriptor.valid or
+                            descriptor.flow != difference['flow']):
+                        continue
+                    scoped = frozenset(difference[k] for k in ('country_code','country_name','hs_code','hs_name')
+                                        if difference[k])
+                    targets, members = bind_targets(scoped, catalog)
+                    descriptor = replace(descriptor, family='AMOUNT_CHANGE', aggregate=None, comparison='PERIOD')
+                    facts.append(Fact(index,path+(key,),descriptor,amount,unit,targets,members,
+                                      (left+'-01',left+'-12'),(right+'-01',right+'-12'),None,
+                                      True,False,None,None,None,scoped,period_difference=True))
+                    continue
+                if (root_cell and not stored and not month and unit == 'USD' and descriptor.aggregate != 'AVERAGE' and
+                        descriptor.family in ('AMOUNT', 'AMOUNT_CHANGE') and
+                        (key in source.get('_annual_candidates', ()) or
+                         (source.get('_annual_candidates') is not None and
+                          re.search(r'(?<!\d)\d{4}(?!\d)', key + ' ' + descriptor.label)))):
+                    # A saved annual SQL cell has no year until its own SQL
+                    # projection and source filters prove one. Never inherit
+                    # the request's current year for an unproved alias.
+                    continue
                 facts.append(Fact(index,path+(key,),descriptor,amount,unit,frozenset(identities),group,
-                                  fact_period,fact_compare,fact_month,period_value,prediction,horizon,role,anchor,stored))
+                                  fact_period,fact_compare,fact_month,period_value,prediction,horizon,role,anchor,stored,
+                                  period_difference=trend_difference))
 
         walk(source)
     return tuple(facts)

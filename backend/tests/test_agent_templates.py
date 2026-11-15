@@ -33,9 +33,21 @@ class TemplateTest(unittest.TestCase):
         by_code = {t['country_code']: t for t in analysis.result.digest['targets']}
         us = by_code['US']
         self.assertIsNone(us['compare_total_usd'])
+        self.assertIsNone(us['period_difference_usd'])
         self.assertEqual(us['compare_verified_months'], 1)
         self.assertEqual(us['compare_monthly_avg_usd'], 1_000_000)
         self.assertEqual(us['monthly_avg_usd'], 1_130_000)
+
+    def test_period_difference_uses_same_target_and_raw_totals(self):
+        analysis = self.query('TREND', country_codes=['US', 'CN'],
+                              compare_period={'start': '2024-01-01', 'end': '2024-03-01'})
+        expected = {}
+        for target in analysis.result.digest['targets']:
+            difference = target['total_usd'] - target['compare_total_usd']
+            self.assertEqual(target['period_difference_usd'], difference)
+            expected[target['country_code']] = difference
+        for row in analysis.rows:
+            self.assertEqual(row['period_difference_usd'], expected[row['country_code']])
 
     def test_country_ranking_uses_full_total(self):
         result = self.query('RANKING', ranking_group='COUNTRY').result.digest

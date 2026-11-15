@@ -125,7 +125,7 @@ AWS 전용 운영 리뷰 반영 후: 수집·스케줄 등록·엑셀·S3 모의
 - 저장소는 PM 합의에 따라 기존 users/report/notification_setting 확장, api_snapshot/api_audit_event 신규, 인증 세션/요청 제한 Redis로 구현했다. 신규 테이블 2개와 기존 테이블 컬럼 11개를 명시적으로 적용한다. 036 SQL은 폐기된 제안이며 038 마이그레이션을 사용한다. 앱 시작/요청 시 자동 DDL은 없다.
 - **가입 약관**: API-01은 만 14세 확인과 현재 이용약관·개인정보 동의 버전을 필수로 받아 `user_consent`에 저장한다. 약관은 `migrate_integration`으로 `option_type`을 늘린 뒤 `python -m backend.scripts.register_terms --apply`로 등록한다. 등록 전에는 가입이 `503 FEATURE_NOT_READY`다. 가입·로그인·내 계정 조회의 `user`는 같은 형태이며 `terms_consents`(가입 약관 동의 기록, 최신순)를 포함한다. 알림 설정 응답의 `consent_required`는 알림을 켰지만 현재 알림 약관에 동의하지 않은 상태다. 배포 순서와 등록 규칙은 [docs/terms](terms/README.md)를 본다.
 - 활성 `REPORT_PERIOD`, `REPORT_TYPE` 및 승인된 `NOTIFICATION_TERMS`는 운영/데이터 담당자가 준비한다. 없는 옵션이나 약관을 가짜 값으로 생성하지 않는다. API-09에서 지원 주기를 확인한다. 요청형은 `RPT_ON_DEMAND`, 구독형은 `RPT_WEEKLY`, `RPT_MONTHLY`, `RPT_QUARTERLY` 옵션이 필요하다. 기존 DB에 요청형 옵션이 없거나 비활성이면 [요청형 리포트 옵션 SQL](../db/mysql/migrations/20261102_report_service_option.sql)을 수동 적용한다.
-- ML 학습/예측, RAG 검색·생성·문장 검증은 담당자에게 남겼다. 기사 `summary`는 마스킹한 본문의 앞부분 발췌다. 채팅 의도는 `IntentProvider`의 기본 구현 `OpenAIIntentProvider`가 구조화된 JSON 슬롯으로 추출한다. 규칙 기반 의도/국가/기간 파서와 앞 세 단어 품목 탐색은 제거했다. 기본 모델은 `API_INTENT_MODEL=gpt-4.1-mini`이며 HS 임베딩 모델과 별개다.
+- ML 학습/예측, RAG 검색·생성·문장 검증은 담당자에게 남겼다. 기사 `summary`는 마스킹한 본문의 앞부분 발췌다. 채팅 의도는 `IntentProvider`의 기본 구현 `OpenAIIntentProvider`가 구조화된 JSON 슬롯으로 추출한다. 규칙 기반 의도/국가/기간 파서와 앞 세 단어 품목 탐색은 제거했다. 기본 모델은 `API_INTENT_MODEL=gpt-6-luna`이며 HS 임베딩 모델과 별개다.
 - `async_job`은 사용하지 않는다. 채팅 실행은 기존 chat_message.result_json, 리포트 실행은 report.content_json의 내부 `_execution` 필드에 저장한다. 이번 PR 검수 반영으로 로컬 실행 상태 파일 의존성을 제거했다. 신규 테이블·컬럼 없이 JSON 규약을 확장하며, 다른 기능의 api_ 저장소 보완안과는 별개다.
 
 ## 설치와 실행
