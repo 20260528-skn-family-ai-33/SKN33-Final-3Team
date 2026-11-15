@@ -448,7 +448,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             note = '국가별 교역 비중은 조회 기간 기준으로만 계산했습니다.'
             if slots.comparison_requested and note not in task.applied_defaults:
                 task.applied_defaults.append(note)
-        elif slots.comparison_requested:
+        # 배포 전 저장된 결과 기반 리포트 계획도 선행 결과의 비교 기간을 유지한다(D-90).
+        elif slots.comparison_requested and not (task.intent == 'REPORT' and task.input_bindings):
             # 조회 기간과 같은 비교 기간("2025년 기준 2025년·2024년 비교")과 중복은 뺀다. 같은 기간이 두 번이면
             # 차트 시리즈 이름이 겹친다. 여러 비교 기간을 한 표에 두는 것은 통계(TREND·LLM SQL)만 지원한다.
             periods = []

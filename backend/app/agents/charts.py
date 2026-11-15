@@ -189,7 +189,12 @@ def build_chart(store, uid, task, result_id, selection=None):
     elif kind=='LLM_SQL':
         columns=snapshot['columns']
         text=[c for c in columns if c['type']=='string']
-        numeric=[c for c in columns if c['type']=='number']
+        numeric=[c for c in columns if c['type']=='number' and c['key']!='denominator_usd']
+        # 금액과 증감률을 함께 내면(기간별 금액 | change2_pct) 같은 단위의 금액 열만 그리고 증감률은 표에 둔다.
+        changes = [c for c in numeric if c['unit']!='USD']
+        if changes and len(changes)<len(numeric) and all(c['unit']=='%' and (re.fullmatch(r'(?:change\d*|yoy|mom|growth)_pct', c['key'])
+                or re.search(r'증감률|증가율|감소율', c['label'])) for c in changes):
+            numeric=[c for c in numeric if c['unit']=='USD']
         if len(rows)>MAX_CHART_LABELS or len(text)!=1 or not 1<=len(numeric)<=MAX_CHART_SERIES:
             return output, [], warnings
         full=[r[text[0]['key']] for r in rows]

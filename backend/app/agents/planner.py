@@ -293,8 +293,7 @@ def _normalize_report_requests(output: PlannerOutput, question: str) -> PlannerO
             producer = producers[0]
             report.source_tasks = [producer + 1]
             # 같은 슬롯을 다시 적용하면 이미 확정된 기간이나 HS 품목을 다시 해석할 수 있다.
-            for field in ('countries', 'products', 'period', 'recent_months', 'trade_flow',
-                          'comparison_requested', 'compare_period'):
+            for field in ('countries', 'products', 'period', 'recent_months', 'trade_flow'):
                 if getattr(report.slots, field) == getattr(tasks[producer].slots, field):
                     setattr(report.slots, field, None)
     elif [task.intent for task in tasks] == ['STATISTICS', 'REPORT'] and not tasks[1].source_tasks:
@@ -307,6 +306,11 @@ def _normalize_report_requests(output: PlannerOutput, question: str) -> PlannerO
                 tasks = [report]
             if standalone['yoy']:
                 report.slots.comparison_requested = True
+    for task in tasks:
+        if task.intent == 'REPORT' and task.source_tasks:
+            # 결과 기반 리포트의 비교 기간은 선행 결과의 확정 조건에서 가져온다(D-90).
+            slots = task.slots
+            slots.comparison_requested = slots.compare_period = slots.extra_compare_periods = None
     if len(tasks) == 1 and tasks[0].intent == 'REPORT':
         slots = tasks[0].slots
         followup = _FOLLOWUP_REPORT.fullmatch(question.strip())

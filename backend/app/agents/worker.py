@@ -87,14 +87,11 @@ def run(database,settings,job):
                 task=next(t for t in state.plan.tasks if t.task_id==pending.task_id)
                 prompt=current['result_json']['clarification']
                 jobs.remember_prompt(current,prompt)
+                if pending.kind=='HS_ITEM' and pending.hs_ver:
+                    prompt['hs_ver']=pending.hs_ver
                 if pending.kind=='REPORT_CONFIRM':
-                    req=task.report_request
-                    from backend.app.api.results import read_snapshot
-                    saved_preview=read_snapshot(store,state.input.user_id,req.preview_id,'PREVIEW')
-                    saved=saved_preview['conditions']
-                    prompt['report_preview']={'preview_id':req.preview_id,'expires_at':req.expires_at.isoformat(),
-                        'conditions':saved,'adjustments':saved.get('applied_defaults',[]),'formats':req.formats}
-                    if saved_preview.get('source_results'): prompt['report_preview']['source_results']=saved_preview['source_results']
+                    from backend.app.agents.report import preview_view
+                    prompt['report_preview']=preview_view(store,state.input.user_id,task.report_request)
                 if pending.kind=='INTEREST_SELECT': prompt['interests']=state.input.interests.model_dump()
             if state.report_wait:
                 current['agent']['report_wait']=state.report_wait.model_dump(mode='json')

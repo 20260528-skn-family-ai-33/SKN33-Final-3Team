@@ -34,7 +34,7 @@ def preview(store,state,task):
             task.resolved.pop(key,None)
         else: return
     public=api_conditions(task.conditions)
-    created=reports.preview(store,state.input.user_id,{'conditions':public})
+    frozen=False
     if task.input_bindings:
         from backend.app.agents.bindings import source_versions
         inputs=source_versions(store,state,task)
@@ -42,17 +42,25 @@ def preview(store,state,task):
         for binding,(snapshot,info) in zip(task.input_bindings,inputs,strict=True):
             refs.append({**info,'task_id':binding.source_task_id,'step_id':binding.source_step_id,
                          'conditions':snapshot['conditions']})
-            copy={'result_id':info['result_id'],'kind':snapshot['meta']['kind'],
-                'rows':snapshot['rows'],'columns':snapshot['columns'],'total_rows':snapshot['total_rows']}
-            # 예측 표는 순위 기준(group_by)이 있어야 리포트가 채팅과 같은 순위를 보인다(행 모양으로 추측하지 않는다).
-            if snapshot['meta'].get('group_by'):
-                copy['meta']={k:snapshot['meta'][k] for k in ('kind','group_by','anchor') if k in snapshot['meta']}
-            # 생성 SQL 결과의 기간 증명 여부를 리포트로 옮긴다. 증명이 없으면 리포트에도 채팅과 같은 제한을 밝힌다.
-            if snapshot['meta'].get('kind')=='LLM_SQL':
-                copy['meta']={'kind':'LLM_SQL','period_verified':snapshot['meta'].get('period_verified') is True}
-            copies.append(copy)
-        if any(ref['conditions']!=refs[0]['conditions'] for ref in refs[1:]):
+            # 표 종류·순위 기준·기간을 보존해 리포트와 채팅이 같은 열을 표시한다(results.display_columns).
+            meta=snapshot['meta']
+            copied_meta={k:meta[k] for k in ('kind','group_by','anchor','period','compare_period','extra_compare_periods')
+                         if k in meta}
+            if meta['kind']=='LLM_SQL':
+                copied_meta['period_verified'] = meta.get('period_verified') is True
+            copies.append({'result_id':info['result_id'],'kind':meta['kind'],'meta':copied_meta,
+                           'rows':snapshot['rows'],'columns':snapshot['columns'],'total_rows':snapshot['total_rows']})
+        # 추가 비교 기간은 conditions가 아니라 meta에 있다. 기간이 다른 원본을 한 리포트로 묶지 않는다.
+        extras=[snapshot['meta'].get('extra_compare_periods') or [] for snapshot,_ in inputs]
+        if (any(ref['conditions']!=refs[0]['conditions'] for ref in refs[1:])
+                or any(extra!=extras[0] for extra in extras[1:])):
             raise SlotRepair('선행 결과의 분석 조건이 다릅니다. 같은 조건으로 다시 분석하세요.')
+        source_items=refs[0]['conditions'].get('hs_items', [])
+        if public['hs_items']!=source_items:
+            raise SlotRepair('선행 결과의 품목과 판본을 변경하려면 새 분석 질문을 입력해 주세요.')
+        frozen=any(item['hs_ver']=='HS2017' for item in source_items)
+    created=reports.preview(store,state.input.user_id,{'conditions':public},frozen=frozen)
+    if task.input_bindings:
         table=store.t('api_snapshot')
         data=results.read_snapshot(store,state.input.user_id,created['preview_id'],'PREVIEW')
         store.c.execute(update(table).where(table.c.snapshot_id==created['preview_id']).values(
@@ -60,6 +68,20 @@ def preview(store,state,task):
     task.report_request=ReportRequest(preview_id=created['preview_id'],expires_at=created['expires_at'],
                                       conditions=task.conditions,formats=['PDF'])
     ask(state,task,key,'REPORT_CONFIRM','표시된 수출 분석 조건과 파일 형식을 확인한 뒤 리포트 생성을 선택하세요.',[])
+
+
+def preview_view(store, uid, request):
+    saved = results.read_snapshot(store, uid, request.preview_id, 'PREVIEW')
+    conditions = saved['conditions']
+    view = {'preview_id': request.preview_id, 'expires_at': request.expires_at.isoformat(), 'conditions': conditions,
+            'adjustments': conditions.get('applied_defaults', []), 'formats': request.formats}
+    if sources := saved.get('source_results'):
+        view['source_results'] = sources
+    if tables := saved.get('source_tables'):
+        # preview에서 원본들의 기간 일치를 확인했으므로 첫 사본이 가진 기간을 표시한다.
+        if periods := (tables[0].get('meta') or {}).get('extra_compare_periods'):
+            view['extra_compare_periods'] = periods
+    return view
 
 
 def submit(store,state,task,step):
@@ -84,7 +106,7 @@ def submit(store,state,task,step):
         public=api_conditions(task.conditions)
         if any(approved['conditions'].get(k)!=v for k,v in public.items()):
             return ToolResult(status='NO_DATA',error='미리보기와 분석 조건이 다릅니다. 새 질문에서 확인하세요.')
-        rid=reports.create(store,state.input.user_id,data,key)['job']['report_id']
+        rid=reports.create(store,state.input.user_id,data,key,chat_approval=True)['job']['report_id']
         record=store.owned('report','report_id',rid,state.input.user_id,lock=True)
         content=dict(record.get('content_json') or {})
         if approved.get('source_tables'):

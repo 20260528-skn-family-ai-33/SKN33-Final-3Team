@@ -105,7 +105,7 @@ def preview(store,uid,data,*,frozen=False):
             'suggested_sections':['KPI','TOP_COUNTRIES','GROWTH_RISK','LOCAL_ISSUES'], 'expires_at':(now()+timedelta(minutes=10)).isoformat()+'Z'}
 
 
-def create(store,uid,data,key):
+def create(store,uid,data,key,*,chat_approval=False):
     require(key and len(key)<=200,'Idempotency-Key가 필요합니다.')
     r,u=store.t('report'),store.t('users')
     store.c.execute(select(u.c.user_id).where(u.c.user_id==uid).with_for_update()).first()
@@ -115,6 +115,8 @@ def create(store,uid,data,key):
         require(existing['conditions_json'].get('request_hash')==digest(data.model_dump()),'멱등성 키의 요청 내용이 다릅니다.','IDEMPOTENCY_CONFLICT',409)
         return {'job':status_view(store,existing)}
     p=read_snapshot(store,uid,data.preview_id,'PREVIEW')
+    require(not p.get('source_tables') or chat_approval, '이 미리보기는 채팅에서 승인해 주세요.',
+            'CHAT_REPORT_APPROVAL_REQUIRED',422)
     if data.session_id: store.owned('chat_session','session_id',data.session_id,uid)
     opt=store.t('service_option')
     require(store.c.scalar(select(opt.c.option_code).where(opt.c.option_code=='RPT_ON_DEMAND',opt.c.enabled==True)) is not None,

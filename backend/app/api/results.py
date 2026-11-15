@@ -69,7 +69,8 @@ def display_columns(columns, rows, meta=None):
         # 총액·월평균·검증 월 수를 비교 근거로 보인다. 어느 기간이든 길이가 다르면 조회 기간의 총액 열도 보인다.
         aggregate=('total_usd','monthly_avg_usd','verified_months','requested_months','verified_subtotal_usd')
         prefixes=[('compare_','change_pct'),*((f'compare{n}_',f'change{n}_pct') for n in range(2,extras+2))]
-        monthly={prefix:any(r.get(prefix+'amount_usd') is not None for r in rows) for prefix,_ in prefixes}
+        # 월별 비교 열은 저장된 비교 월로 정한다. 금액으로 정하면 집계된 월이 없는 비교 기간의 열이 통째로 사라진다(값은 미집계로 둔다).
+        monthly={prefix:any(r.get(prefix+'month') is not None for r in rows) for prefix,_ in prefixes}
         by_period={prefix:not monthly[prefix] and any(r.get(prefix+'requested_months')
                    and r.get(prefix+'requested_months')!=r.get('requested_months') for r in rows) for prefix,_ in prefixes}
         # 한 기간이라도 길이가 다르면 차트는 모든 기간을 월평균으로 그린다(charts.build_chart). 그때는 모든 기간의

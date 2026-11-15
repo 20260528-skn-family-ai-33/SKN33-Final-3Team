@@ -58,8 +58,11 @@ export function PromptActions({prompt,busy,reply,onDirectInput}) {
       {prompt.interests?.country_codes?.map(c=><Btn key={c} aria-pressed={countries.includes(c)} kind={countries.includes(c)?'plum':'line'} disabled={busy||(!countries.includes(c)&&countries.length>=20)} onClick={()=>setCountries(toggle(countries,c))}>{countryName(c)}</Btn>)}
       {prompt.interests?.hs_items?.map(h=><Btn key={h.hs_ver+h.hs_code} aria-pressed={products.includes(h)} kind={products.includes(h)?'plum':'line'} disabled={busy||(!products.includes(h)&&products.length>=5)} onClick={()=>setProducts(toggle(products,h))}>{productChoiceLabel(h.hs_code,h.name_ko)}</Btn>)}</div>
       <Btn kind="red" disabled={busy||(!countries.length&&!products.length)} onClick={()=>reply({interest_selection:{country_codes:countries,hs_items:products}})}>선택 적용</Btn></>}
-    {preview && <><p>{preview.conditions.period.start} ~ {monthEndDate(preview.conditions.period.end)} · {preview.conditions.country_codes?.map(countryName).join(', ')||'전체 국가'}{preview.conditions.hs_items?.map(h=>' · HS '+h.hs_code)}</p>
+    {preview && <><p>{[preview.conditions.period.start + ' ~ ' + monthEndDate(preview.conditions.period.end),
+      preview.conditions.country_codes?.map(countryName).join(', ') || '전체 국가',
+      ...reportItemLabels(preview.conditions.hs_items, {}, true)].join(' · ')}</p>
       {preview.conditions.compare_period && <p>비교 기간 {preview.conditions.compare_period.start} ~ {monthEndDate(preview.conditions.compare_period.end)}</p>}
+      {preview.extra_compare_periods?.map(p=><p key={`${p.start}/${p.end}`}>추가 비교 기간 {p.start} ~ {monthEndDate(p.end)}</p>)}
       {preview.adjustments?.map(a=><p key={a}>{a}</p>)}
       <div className="chips">{['PDF','DOCX'].map(f=><Check key={f} checked={formats.includes(f)} onChange={()=>setFormats(toggle(formats,f))}>{f}</Check>)}</div>
       <div className="chips">{[true,false].map(on=><Btn key={String(on)} kind={on?'red':'line'} disabled={busy||(on&&!formats.length)} onClick={()=>reply({report_confirmation:{preview_id:preview.preview_id,formats:formats.length?formats:['PDF'],confirm:on}})}>{on?'확인하고 생성':'생성 취소'}</Btn>)}</div></>}
