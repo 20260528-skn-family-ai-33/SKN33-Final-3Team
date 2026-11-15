@@ -1018,6 +1018,9 @@ class UnverifiedLlmSqlOutputTest(unittest.TestCase):
                 self.assertTrue(check_sentence(f'2025년 수출 총액은 {text}.', [source])[0])
         self.assertFalse(check_sentence('2025년 수출 총액은 백만 달러입니다.', [source])[0])
         self.assertEqual(check_sentence('이 원인은 확인이 필요합니다.', [source]), (True, []))
+        # "원가"는 낱말이다. 받침 뒤에 붙지 않는 '가'는 금액 끝으로 받지 않고 "원가량"만 받는다.
+        self.assertEqual(check_sentence('이 원가 자료는 확인이 필요합니다.', [source]), (True, []))
+        self.assertEqual(check_sentence('2025년 수출 총액은 백이십오만 달러가량입니다.', [source]), (True, ['1250000 달러']))
         five_dollars = {**source, 'targets': [{'total_usd': 5}]}
         self.assertEqual(check_sentence('2025년 수출 총액은 십 점 오 달러입니다.', [five_dollars]), (False, ['10.5 달러']))
         self.assertTrue(check_sentence('2025년 수출 총액은 오달러입니다.', [five_dollars])[0])
