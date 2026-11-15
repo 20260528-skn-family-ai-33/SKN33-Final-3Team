@@ -1178,6 +1178,73 @@ class UnverifiedLlmSqlOutputTest(unittest.TestCase):
                                  not verified)
 
 
+class AnnualSqlMergeTest(unittest.TestCase):
+    """main 병합: 연간 비교 생성 SQL은 증명한 칸만 기간을 받고, 그 결과는 작성 입력·최종 답변에서 숨기지 않는다."""
+
+    def test_annual_sql_is_kept_and_only_proven_cells_carry_periods(self):
+        from unittest.mock import MagicMock
+        from backend.tests.test_agent_annual_comparison_replay import RECORDED, LABELS
+        from backend.app.agents.compose import compose_input
+        from backend.app.agents.sql import generated_analysis
+        from backend.app.agents.state import Draft, SqlDraft, ToolResult
+        from backend.app.agents.verify import check_sentence, snapshot_evidence, unsupported_sql_prose, verify
+        from backend.app.api.config import Settings
+        from backend.tests.test_agent_state import state
+
+        saved = RECORDED['sql_payload']
+        sql = RECORDED['sql_cases'][0]['sql']
+        conditions = Conditions(period=Y(2025), compare_period=Y(2024), country_codes=['US'],
+                                hs_items=[{'hs_code': '854232', 'hs_ver': 'HS2022'}])
+        draft = SqlDraft(sql=sql, summary='연간 비교', unsupported=None,
+                         columns=[{**c, 'type': 'number'} for c in saved['columns']])
+        client = MagicMock()
+        client.parse.return_value = draft
+        ledger = MagicMock()
+        ledger.call.side_effect = lambda node, timeout, fn, finish_reserve: fn(timeout)
+        task = SimpleNamespace(custom_query='2024년 대비 2025년 대미 메모리 수출', conditions=conditions)
+        with patch('backend.app.agents.sql.schema_for', return_value=[]), \
+             patch('backend.app.agents.sql.execute_readonly', return_value=(saved['rows'], sql)):
+            result = generated_analysis(object(), Settings({}), client, ledger, task, finish_reserve=40, latest_month='2025-12')
+        digest = result.result.digest
+        self.assertIs(result.meta['annual_verified'], True)
+        self.assertIs(digest['annual_verified'], True)
+        self.assertIs(digest['period_verified'], False)
+
+        # digest에는 연간 칸 지도가 없다. 별칭 열(export_2024_usd)에 조회 연도를 붙여 2025년 금액으로 받지 않는다.
+        self.assertFalse(check_sentence('2025년 수출액은 3억 542만 달러입니다.', [digest])[0])
+        # 저장본은 SQL 식으로 증명한 칸만 기간을 받는다. 같은 행의 change_pct는 두 연도의 변화율이다.
+        source = snapshot_evidence({'meta': result.meta, 'conditions': result.conditions, 'columns': saved['columns'],
+                                    'rows': saved['rows'], 'sql': [sql]}, **LABELS)
+        facts = {f.path[-1]: f for f in build_facts([source], NameCatalog([source]))}
+        self.assertEqual((facts['export_2024_usd'].period, facts['export_2024_usd'].annual_sql_sum),
+                         (('2024-01', '2024-12'), True))
+        self.assertEqual((facts['change_pct'].period, facts['change_pct'].compare_period),
+                         (('2025-01', '2025-12'), ('2024-01', '2024-12')))
+        # 월 표시 별칭이 있는 행은 연간 결과여도 기간 근거가 아니다.
+        monthly = snapshot_evidence({'meta': result.meta, 'conditions': result.conditions, 'sql': [sql],
+                                     'columns': [{'key': 'amount_usd', 'label': '월별 수출액', 'unit': 'USD'}],
+                                     'rows': [{'month': '2025-03', 'amount_usd': 7}, {'month': '2025-04', 'amount_usd': 8}]})
+        self.assertTrue(all(f.period is None and f.month is None
+                            for f in build_facts([monthly], NameCatalog([monthly]))))
+
+        # 작성 입력에 수치를 그대로 넘기고, 최종 저장 때 결과표 안내로 바꾸지 않는다.
+        current = state()
+        current.plan, _ = build_plan(PlannerOutput(tasks=[
+            {'intent': 'STATISTICS', 'question': '2024년 대비 2025년 대미 메모리 수출', 'custom_query': '연간 비교'}]))
+        [plan_task] = current.plan.tasks
+        for step in plan_task.steps:
+            step.status = 'DONE'
+        plan_task.answer_status = 'ANSWERED'
+        current.results[plan_task.steps[1].step_id] = ToolResult(status='OK', digest=digest, result_id='r')
+        payload, _ = compose_input(current, lambda _: {}, [])
+        self.assertEqual(payload['tasks'][0]['digests']['sql']['rows'][0]['change_pct'], 22.7)
+        current.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['2025년 수출액은 9억 달러입니다.']}],
+                              explanation=[], turn_summary='')
+        verify(current, snapshots={plan_task.steps[1].step_id: source})
+        self.assertEqual(current.verification.checks[0].status, 'MISMATCH')
+        self.assertEqual(unsupported_sql_prose(current), (set(), False))
+
+
 class ReviewFollowupTest(unittest.TestCase):
     """2026-11-15 리뷰: 출발 조사 뒤 수출, 리포트 슬롯·사본, 미집계 비교 기간 열, 생성 SQL 혼합 단위 차트."""
 

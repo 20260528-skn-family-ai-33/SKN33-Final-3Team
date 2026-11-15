@@ -123,13 +123,15 @@ class AnnualSqlProvenanceTest(unittest.TestCase):
         self.assertNotIn('signed_usd', found)
         self.assertIn('signed_usd', facts(CTE))
 
-    def test_dated_monthly_observation_survives_annual_request_windows(self):
+    def test_dated_monthly_alias_is_not_period_evidence_in_annual_results(self):
+        # 생성 SQL이 낸 월 표시('2025-03' AS month)는 연간 결과여도 기간 근거가 아니다(이슈 113, 칸 단위 연간 예외
+        # 2026-11-15 사용자 결정). 연도별 합계·차액처럼 SQL 식으로 증명한 칸만 기간을 받는다.
         saved = payload(CTE)
         saved['rows'] = [{'month': '2025-03', 'amount_usd': 7}]
         saved['columns'] = [{'key': 'amount_usd', 'label': '월별 수출액', 'unit': 'USD'}]
         source = snapshot_evidence(saved)
         found = {f.path[-1]: f for f in build_facts([source], NameCatalog([source]))}
-        self.assertEqual(found['amount_usd'].month, '2025-03')
+        self.assertTrue('amount_usd' not in found or (found['amount_usd'].month, found['amount_usd'].period) == (None, None))
 
     def test_scoped_single_year_and_direct_projection_remain_supported(self):
         scoped = payload("SELECT SUM(e.amount_usd) AS old_usd FROM export_monthly e "
