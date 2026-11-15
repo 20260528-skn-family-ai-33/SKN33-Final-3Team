@@ -192,6 +192,13 @@ def _product_key(expression):
 ARTICLE_INTENTS = frozenset(('CAUSE', 'LOCAL_ISSUES'))   # 금액을 조회하지 않고 기사 근거만 쓰는 하위 질문
 
 
+def _comparison_named(text, period):
+    """질문이 비교 기간을 직접 말했는지: 비교 기간 첫 연도("2023년"·"23년")나 상대 비교 표현(작년·전년·전월 등)."""
+    year = period.start.year
+    return bool(re.search(rf'(?<!\d)(?:{year}|{year % 100:02d}\s*년)(?!\d)|작년|재작년|지난\s*해|전년|전월|지난\s*달|동기',
+                          text))
+
+
 def _article_hs_items(store, state, task, items):
     hs = store.t('hs_code')
     try:
@@ -344,6 +351,10 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             out = resolve_bindings(store, state, task, out)
         if state.pending: return
         out.trade_flow=slots.trade_flow or out.trade_flow
+    # 이어받는 비교 기간: 같은 턴 선행 결과(out)나 이전 턴 조건(Redis 문맥, base). 아래에서 첫 비교 기간만 다시 적은 후속에 쓴다.
+    prior_compare, prior_extras = ((out.compare_period, out.extra_compare_periods)
+                                   if task.input_bindings or task.previous_turn_result
+                                   else (base.compare_period, base.extra_compare_periods))
     if slots.products is not None: out.hs_items = []
     if countries is not None: out.country_codes = []
     if task.intent in ('REPORT', *MARKET_INTENTS) and out.trade_flow == 'IMPORT':
@@ -547,10 +558,11 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             # 첫 비교 기간은 연간 비교의 기준·대상 연도를 맞춘 값(comparison_windows)을 쓴다.
             if comparison is None and not slots.extra_compare_periods:
                 comparison, extras = out.compare_period, out.extra_compare_periods
-            elif slots.extra_compare_periods is None and comparison == out.compare_period:
-                # 선행 결과를 이어받는 후속 분석에서 플래너가 첫 비교 기간만 다시 적으면(같은 조건으로 미국도),
-                # 선행 결과의 나머지 비교 기간도 유지한다. 다른 비교 기간을 말하면 그 기간만 쓴다.
-                extras = out.extra_compare_periods
+            elif (slots.extra_compare_periods is None and comparison == prior_compare
+                  and not _comparison_named(original if len(state.plan.tasks) == 1 else task.question, comparison)):
+                # 후속 분석·다음 턴에서 플래너가 질문에 없는 첫 비교 기간만 다시 적으면(같은 조건으로 미국도) 이어받기와
+                # 같아 나머지 비교 기간도 유지한다(D-22). 질문에 비교 기간을 적으면("2023년하고만") 적은 기간만 쓴다.
+                extras = prior_extras
             else:
                 extras = slots.extra_compare_periods or []
             for candidate in [comparison, *extras]:

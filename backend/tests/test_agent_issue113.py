@@ -546,6 +546,46 @@ class ExtraCompareTrendTest(unittest.TestCase):
                 table = self.save_source(current, target)
                 self.assertIn('compare2_amount_usd', {column['key'] for column in table['columns']})
 
+    def test_linked_followup_that_names_one_comparison_drops_the_others(self):
+        from backend.app.agents.bindings import resolve
+        from backend.app.agents.conditions import check_conditions
+        # 후속 질문이 비교 기간을 직접 적으면("2023년하고만") 선행 결과의 나머지 비교 기간(2024년)을 붙이지 않는다.
+        first = '중국의 2025년 수출액을 2023년·2024년과 비교'
+        followup = '미국은 2023년하고만 비교'
+        current = self.compound(f'{first}하고 {followup}해줘', [
+            {'intent': 'STATISTICS', 'question': first, 'slots': {
+                'countries': [{'mention': '중국', 'name': '중국'}], 'period': Y(2025),
+                'comparison_requested': True, 'compare_period': Y(2023), 'extra_compare_periods': [Y(2024)]}},
+            {'intent': 'STATISTICS', 'question': followup, 'source_tasks': [1], 'slots': {
+                'countries': [{'mention': '미국', 'name': '미국'}], 'comparison_requested': True, 'compare_period': Y(2023)}}])
+        source, target = current.plan.tasks
+        check_conditions(self.store, current, source.steps[0])
+        self.save_source(current, source)
+        check_conditions(self.store, current, target.steps[0], resolve_bindings=resolve)
+        self.assertEqual(target.steps[0].status, 'DONE')
+        self.assertEqual(target.conditions.compare_period.start.year, 2023)
+        self.assertEqual(target.conditions.extra_compare_periods, [])
+
+    def test_next_turn_keeps_extra_comparison_unless_the_question_narrows_it(self):
+        from backend.app.agents.conditions import check_conditions
+        from backend.tests.test_agent_state import state
+        # 다음 턴의 "같은 조건으로" 후속도 Redis 문맥 조건의 추가 비교 기간을 이어받는다. 직접 적은 비교 기간은 그 기간만 쓴다.
+        for question, expected in (('같은 조건으로 미국도 비교해줘', [2024]), ('미국은 2023년하고만 비교해줘', [])):
+            with self.subTest(question=question):
+                current = state()
+                current.input.question = question
+                current.input.context.conditions = Conditions(period=Y(2025), compare_period=Y(2023),
+                    extra_compare_periods=[Y(2024)], country_codes=['CN'])
+                current.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': question, 'slots': {
+                    'countries': [{'mention': '미국', 'name': '미국'}], 'period': Y(2025),
+                    'comparison_requested': True, 'compare_period': Y(2023)}}]))
+                [task] = current.plan.tasks
+                check_conditions(self.store, current, task.steps[0])
+                self.assertEqual(task.steps[0].status, 'DONE')
+                self.assertEqual(task.conditions.country_codes, ['US'])
+                self.assertEqual(task.conditions.compare_period.start.year, 2023)
+                self.assertEqual([p.start.year for p in task.conditions.extra_compare_periods], expected)
+
     def test_linked_amount_analysis_without_hs2017_support_explains_scope(self):
         from backend.app.agents.bindings import resolve
         from backend.app.agents.conditions import check_conditions
