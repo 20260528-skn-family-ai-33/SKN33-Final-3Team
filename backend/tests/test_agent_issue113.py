@@ -1260,6 +1260,42 @@ class AnnualSqlMergeTest(unittest.TestCase):
         self.assertEqual(unsupported_sql_prose(current), (set(), False))
 
 
+    def test_runtime_saves_annual_cell_map_in_digest(self):
+        from datetime import date
+        from unittest.mock import MagicMock
+        from backend.tests.test_agent_annual_comparison_replay import RECORDED, LABELS
+        from backend.app.agents.runtime import Services
+        from backend.app.agents.state import DataMeta, ToolResult
+        from backend.app.agents.templates import Analysis, api_conditions
+        from backend.app.api.config import Settings
+        from backend.tests.test_agent_state import state
+
+        saved, sql = RECORDED['sql_payload'], RECORDED['sql_cases'][0]['sql']
+        current = state()
+        current.plan, _ = build_plan(PlannerOutput(tasks=[
+            {'intent': 'STATISTICS', 'question': '2024년 대비 2025년 대미 메모리 수출', 'custom_query': '연간 비교'}]))
+        [task] = current.plan.tasks
+        task.conditions = Conditions(period=Y(2025), compare_period=Y(2024), country_codes=['US'],
+                                     hs_items=[{'hs_code': '854232', 'hs_ver': 'HS2022'}])
+        current.data_meta = DataMeta(trade_latest_month=date(2025, 12, 1))
+        step = task.steps[1]
+        meta = {'kind': 'LLM_SQL', 'period_verified': False, 'annual_verified': True}
+        analysis = Analysis(saved['rows'], meta, ToolResult(status='OK', digest={**meta, 'rows': saved['rows']}),
+                            api_conditions(task.conditions), [sql], saved['columns'])
+        services = Services(MagicMock(), Settings({}), client=MagicMock())
+        services.results = MagicMock()
+        services.results.reuse.return_value = None
+        with patch.object(services, 'read_store'), patch.object(Services, 'trade_versions', return_value={}), \
+                patch('backend.app.agents.runtime.generated_analysis', return_value=analysis), \
+                patch('backend.app.agents.templates.condition_names',
+                      return_value=(LABELS['country_labels'], LABELS['product_labels'])):
+            services._tool(current, step)
+        digest = services.results.save.call_args.args[2].digest
+        self.assertIs(digest['_annual_rate'], True)
+        self.assertEqual(digest['_annual_sums']['export_2024_usd']['country_name'], '미국')
+        self.assertEqual(digest['compare_period'], {'start': '2024-01', 'end': '2024-12'})
+
+
 class ReviewFollowupTest(unittest.TestCase):
     """2026-11-15 리뷰: 출발 조사 뒤 수출, 리포트 슬롯·사본, 미집계 비교 기간 열, 생성 SQL 혼합 단위 차트."""
 
