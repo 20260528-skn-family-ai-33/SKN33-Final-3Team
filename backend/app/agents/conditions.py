@@ -507,12 +507,20 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             if slots.comparison_requested and note not in task.applied_defaults:
                 task.applied_defaults.append(note)
         # 배포 전 저장된 결과 기반 리포트 계획도 선행 결과의 비교 기간을 유지한다(D-90).
-        elif slots.comparison_requested and not (task.intent == 'REPORT' and task.input_bindings):
+        elif (slots.comparison_requested or out.compare_period) and not frozen_report:
             # 조회 기간과 같은 비교 기간("2025년 기준 2025년·2024년 비교")과 중복은 뺀다. 같은 기간이 두 번이면
             # 차트 시리즈 이름이 겹친다. 여러 비교 기간을 한 표에 두는 것은 통계(TREND·LLM SQL)만 지원한다.
             periods = []
             # 첫 비교 기간은 연간 비교의 기준·대상 연도를 맞춘 값(comparison_windows)을 쓴다.
-            for candidate in [comparison, *(slots.extra_compare_periods or [])]:
+            if comparison is None and not slots.extra_compare_periods:
+                comparison, extras = out.compare_period, out.extra_compare_periods
+            elif slots.extra_compare_periods is None and comparison == out.compare_period:
+                # 선행 결과를 이어받는 후속 분석에서 플래너가 첫 비교 기간만 다시 적으면(같은 조건으로 미국도),
+                # 선행 결과의 나머지 비교 기간도 유지한다. 다른 비교 기간을 말하면 그 기간만 쓴다.
+                extras = out.extra_compare_periods
+            else:
+                extras = slots.extra_compare_periods or []
+            for candidate in [comparison, *extras]:
                 if candidate and candidate != out.period and candidate not in periods:
                     periods.append(candidate)
             # 여러 비교 기간을 한 표에 두는 것은 통계(TREND·LLM SQL)만 지원한다. 다른 분석은 중복을 뺀 뒤 첫 기간만 쓴다.
@@ -524,6 +532,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
                     if len(kept) < len(periods) else None)
             if note and note not in task.applied_defaults:
                 task.applied_defaults.append(note)
+            out.compare_period, out.extra_compare_periods = None, []
             if kept:
                 out.compare_period, out.extra_compare_periods = kept[0], kept[1:]
             elif not comparison:

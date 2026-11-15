@@ -212,7 +212,11 @@ def previous_result(store, state, task):
 def stored_conditions(snapshot):
     """결과표에 저장된 분석 조건. 리포트는 표를 만든 조건 그대로 쓴다(재조회 없음)."""
     stored = snapshot['conditions']
-    return Conditions.model_validate({k: v for k, v in stored.items() if k in Conditions.model_fields})
+    fields = {k: v for k, v in stored.items() if k in Conditions.model_fields}
+    meta = snapshot.get('meta') or {}
+    if 'extra_compare_periods' in meta:
+        fields['extra_compare_periods'] = meta['extra_compare_periods'] or []
+    return Conditions.model_validate(fields)
 
 
 def source_versions(store,state,task):
