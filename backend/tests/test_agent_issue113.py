@@ -215,6 +215,15 @@ class CompareYearsSplitTest(unittest.TestCase):
         slots = self.slots('2025년에서 2024년과 2023년을 비교해줘', {'start': '2023-01-01', 'end': '2024-12-01'})
         self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]), (2024, [2023]))
 
+    def test_decimal_numbers_are_not_two_digit_years(self):
+        # "23.5%"·"23.5배"는 2023년 언급이 아니다. 23.12.31처럼 월이 이어지면 연도다.
+        slots = self.slots('2025년을 2022년, 2024년과 비교하고 23.5% 이상 늘었는지 봐줘',
+                           {'start': '2022-01-01', 'end': '2024-12-01'})
+        self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]), (2022, [2024]))
+        slots = self.slots('2025년을 2022년, 2024년과 비교하고 23.12.31 기준도 봐줘',
+                           {'start': '2022-01-01', 'end': '2024-12-01'})
+        self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]), (2022, [2024, 2023]))
+
     def test_listed_years_with_gap_keep_only_named_years(self):
         slots = self.slots('2025년 일본 수출을 2021년과 2024년 각각과 비교해 줘', {'start': '2021-01-01', 'end': '2024-12-01'})
         self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]), (2021, [2024]))
@@ -1322,6 +1331,9 @@ class ReviewFollowupTest(unittest.TestCase):
         self.assertIsNone(_partner_subject('미국은 한국에서 수출한 반도체를 얼마나 사요?', us))
         self.assertEqual(_partner_subject('미국이 한국에서 수입하는 품목은?', us)[1], {'수입'})
         self.assertEqual(_partner_subject('미국이 한국에서 수출입하는 품목은?', us)[1], {'수입', '수출'})
+        # '~한다' 종결도 능동형 활용이다.
+        self.assertEqual(_partner_subject('미국은 한국산 반도체를 수입한다', us)[1], {'수입'})
+        self.assertIsNone(_partner_subject('미국은 한국에서 수입되는 품목', us))
         [task] = plan('미국은 한국에서 수출한 반도체를 얼마나 사요?', [{'intent': 'STATISTICS', 'question': '미국 반도체 수출',
             'slots': {'countries': US, 'products': ['반도체'], 'trade_flow': 'EXPORT'}}])
         self.assertEqual(task.slots.trade_flow, 'EXPORT')
