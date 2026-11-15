@@ -217,9 +217,12 @@ class CompareYearsSplitTest(unittest.TestCase):
 
     def test_decimal_numbers_are_not_two_digit_years(self):
         # "23.5%"·"23.5배"는 2023년 언급이 아니다. 23.12.31처럼 월이 이어지면 연도다.
-        slots = self.slots('2025년을 2022년, 2024년과 비교하고 23.5% 이상 늘었는지 봐줘',
-                           {'start': '2022-01-01', 'end': '2024-12-01'})
-        self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]), (2022, [2024]))
+        for amount in ('23.5% 이상 늘었는지', '23.5억 달러 이상인지', '23.1만 건 넘는지', '기준선 23.5 달러를'):
+            with self.subTest(amount=amount):
+                slots = self.slots(f'2025년을 2022년, 2024년과 비교하고 {amount} 봐줘',
+                                   {'start': '2022-01-01', 'end': '2024-12-01'})
+                self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]),
+                                 (2022, [2024]))
         slots = self.slots('2025년을 2022년, 2024년과 비교하고 23.12.31 기준도 봐줘',
                            {'start': '2022-01-01', 'end': '2024-12-01'})
         self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]), (2022, [2024, 2023]))
