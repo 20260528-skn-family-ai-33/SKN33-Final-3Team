@@ -1145,7 +1145,7 @@ class UnverifiedLlmSqlOutputTest(unittest.TestCase):
         self.assertEqual(unsupported_sql_prose(current)[0], {2})
 
     def test_annual_proven_sql_is_not_hidden(self):
-        from backend.app.agents.compose import unverified_sql_period
+        from backend.app.api.common import sql_period_unproven as unverified_sql_period
         # 연도별 합계·차액을 SQL 식에서 증명한 연간 비교 결과는 작성 입력·최종 답변에서 숨기지 않는다(main 병합).
         self.assertTrue(unverified_sql_period({'kind': 'LLM_SQL', 'period_verified': False}))
         self.assertFalse(unverified_sql_period({'kind': 'LLM_SQL', 'period_verified': False, 'annual_verified': True}))
@@ -1210,8 +1210,21 @@ class AnnualSqlMergeTest(unittest.TestCase):
         self.assertIs(digest['annual_verified'], True)
         self.assertIs(digest['period_verified'], False)
 
-        # digest에는 연간 칸 지도가 없다. 별칭 열(export_2024_usd)에 조회 연도를 붙여 2025년 금액으로 받지 않는다.
+        # 연간 칸 지도가 없는 digest는 별칭 열(export_2024_usd)에 조회 연도를 붙여 2025년 금액으로 받지 않는다.
+        rate = '2024년을 비교 기간으로 한 2025년 수출액의 변화율은 22.7% 증가입니다.'
         self.assertFalse(check_sentence('2025년 수출액은 3억 542만 달러입니다.', [digest])[0])
+        self.assertFalse(check_sentence(rate, [digest])[0])
+        # runtime이 digest에도 저장본과 같은 연간 칸 지도를 두면 재작성 검사도 증명한 칸으로 대조한다.
+        from backend.app.agents.verify import annual_sql_scope
+        mapped = {**digest, **annual_sql_scope({'sql': [sql], 'conditions': result.conditions, 'rows': saved['rows']},
+                                               **LABELS)}
+        self.assertTrue(check_sentence(rate, [mapped])[0])
+        self.assertFalse(check_sentence('2025년 수출액은 3억 542만 달러입니다.', [mapped])[0])
+        # change_pct가 증명한 두 연도 합계의 변화율과 다르면 두 기간 변화율로 보지 않는다.
+        wrong = [{**saved['rows'][0], 'change_pct': 99.9}]
+        self.assertNotIn('_annual_rate', annual_sql_scope({'sql': [sql], 'conditions': result.conditions, 'rows': wrong}))
+        self.assertFalse(check_sentence(rate.replace('22.7%', '99.9%'), [{**digest, 'rows': wrong, **annual_sql_scope(
+            {'sql': [sql], 'conditions': result.conditions, 'rows': wrong}, **LABELS)}])[0])
         # 저장본은 SQL 식으로 증명한 칸만 기간을 받는다. 같은 행의 change_pct는 두 연도의 변화율이다.
         source = snapshot_evidence({'meta': result.meta, 'conditions': result.conditions, 'columns': saved['columns'],
                                     'rows': saved['rows'], 'sql': [sql]}, **LABELS)
@@ -1235,9 +1248,11 @@ class AnnualSqlMergeTest(unittest.TestCase):
         for step in plan_task.steps:
             step.status = 'DONE'
         plan_task.answer_status = 'ANSWERED'
-        current.results[plan_task.steps[1].step_id] = ToolResult(status='OK', digest=digest, result_id='r')
+        current.results[plan_task.steps[1].step_id] = ToolResult(status='OK', digest=mapped, result_id='r')
         payload, _ = compose_input(current, lambda _: {}, [])
         self.assertEqual(payload['tasks'][0]['digests']['sql']['rows'][0]['change_pct'], 22.7)
+        # 연간 칸 지도는 검증용이라 작성 모델 입력에는 없다.
+        self.assertFalse([k for k in payload['tasks'][0]['digests']['sql'] if k.startswith('_annual')])
         current.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['2025년 수출액은 9억 달러입니다.']}],
                               explanation=[], turn_summary='')
         verify(current, snapshots={plan_task.steps[1].step_id: source})
