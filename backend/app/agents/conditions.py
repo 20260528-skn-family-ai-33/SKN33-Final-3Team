@@ -192,6 +192,41 @@ def _product_key(expression):
 ARTICLE_INTENTS = frozenset(('CAUSE', 'LOCAL_ISSUES'))   # 금액을 조회하지 않고 기사 근거만 쓰는 하위 질문
 
 
+def _article_hs_items(store, state, task, items):
+    hs = store.t('hs_code')
+    try:
+        mapping = store.t('hs_code_correlation')
+    except ApiError as exc:
+        if exc.code != 'FEATURE_NOT_READY':
+            raise
+        mapping = None
+    converted = []
+    for item in items:
+        if item['hs_ver'] == 'HS2022':
+            converted.append(item)
+            continue
+        code = item['hs_code']
+        key = f'{task.task_id}:article_hs:{code}'
+        if answer := task.resolved.get(key, {}).get('hs_items'):
+            converted.extend(answer)
+            continue
+        codes = {row['new_code'] for row in store.rows(select(mapping.c.new_code).where(
+            mapping.c.old_ver=='HS2017', mapping.c.new_ver=='HS2022',
+            mapping.c.old_code==code))} if mapping is not None else set()
+        codes = codes or {code}
+        rows = store.rows(select(hs.c.hs_code, hs.c.hs_ver, hs.c.name_ko).where(
+            hs.c.hs_ver=='HS2022', hs.c.hs_code.in_(codes)).order_by(hs.c.hs_code))
+        choices = [(row['hs_code'], row['name_ko'], {'hs_items': [
+            {k: row[k] for k in ('hs_code', 'hs_ver')}]}) for row in rows]
+        if len(codes)==len(choices)==1:
+            converted.extend(choices[0][2]['hs_items'])
+            continue
+        ask(state, task, key, 'HS_ITEM', f'HS2017 {code}에 대응하는 HS2022 품목을 선택하거나 코드를 입력하세요.',
+            choices[:5])
+        return None
+    return converted
+
+
 def _uses_item_edition(task):
     """명시한 HS 판본(HS2017 포함)으로 조회하는 하위 질문인지: 추이(TREND)와 단순 금액 순위."""
     sql = next((s for s in task.steps if s.tool == 'query_trade_data'), None)
@@ -239,15 +274,13 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     frozen_report = task.intent == 'REPORT' and bool(task.input_bindings or task.previous_turn_result)
     # 판본은 원문에 있는 값만 확정한다. 복합 질문의 판본은 해당 하위 질문에 적용한다.
     editions = set(HS_EDITION_MENTION.findall(original))
+    article_edition_requested = False
     if len(state.plan.tasks) > 1 and editions:
         if task.intent in ARTICLE_INTENTS:
             # 기사로 설명하는 하위 질문(원인·현지 이슈)은 공통 조건으로 옮겨 적은 판본 때문에 실패시키지 않고 HS2022
             # 품목으로 조회한다(기사 태그도 발행일 기준 HS2022, 2026-11-15 사용자 결정). 비중·유망시장처럼 금액만
             # 조회하는 하위 질문은 아래 규칙대로 판본을 지키고, 지원하지 않으면 안내한다.
-            note = ('지정한 HS 판본은 금액 추이·순위에만 적용하고 이 원인 분석은 HS2022 품목으로 조회했습니다.'
-                    if task.intent == 'CAUSE' else '지정한 HS 판본은 금액 추이·순위에만 적용하고 기사는 HS2022 품목으로 확인했습니다.')
-            if '2017' in editions and note not in task.applied_defaults:
-                task.applied_defaults.append(note)
+            article_edition_requested = '2017' in editions
             editions = set()
         elif len(editions) > 1 or any(HS_EDITION_MENTION.search(t.question) for t in state.plan.tasks
                                       if t.intent not in ARTICLE_INTENTS):
@@ -551,6 +584,13 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     # 같은 대상이 여러 경로(이어받기·코드·국가명)로 들어와도 하나만 남긴다. Conditions는 중복을 거부한다.
     data = out.model_dump(warnings=False)
     data['country_codes'] = list(dict.fromkeys(data['country_codes']))
+    article_edition_inherited = (task.intent in ARTICLE_INTENTS
+                                 and any(item['hs_ver']=='HS2017' for item in data['hs_items']))
+    if article_edition_inherited:
+        items = _article_hs_items(store, state, task, data['hs_items'])
+        if items is None:
+            return
+        data['hs_items'] = items
     data['hs_items'] = list({(h['hs_code'], h['hs_ver']): h for h in data['hs_items']}.values())
     if task.intent=='RANKING' and out.ranking_group=='COUNTRY' and uses_item_edition:
         if len({item['hs_ver'] for item in data['hs_items']})>1:
@@ -575,9 +615,17 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     if editions and (any(h.hs_ver != hs_ver for h in task.conditions.hs_items)
                      or (hs_ver == 'HS2017' and not task.conditions.hs_items)):
         raise SlotRepair(f'{hs_ver} 판본으로 조회할 등록 품목명이나 HS 코드를 지정해 주세요.')
+    if (not (uses_item_edition or frozen_report) and task.intent not in ARTICLE_INTENTS
+            and any(h.hs_ver == 'HS2017' for h in task.conditions.hs_items)):
+        # 선행 결과에서 이어받은 HS2017 품목도 질문에 적은 판본과 같은 지원 범위를 안내한다(비중·유망시장·순위 화면 표).
+        raise SlotRepair('HS2017은 채팅의 금액 순위와 추이에서 지원합니다.')
     hs_versions = ('HS2017', 'HS2022') if uses_item_edition or frozen_report else ('HS2022',)
     accounts.validate_scope(store, [x.model_dump() for x in task.conditions.hs_items], task.conditions.country_codes,
                             hs_versions=hs_versions)
+    if task.conditions.hs_items and (article_edition_requested or article_edition_inherited):
+        note = '지정한 HS 판본은 금액 추이·순위에만 적용하고 기사 분석 조건은 HS2022 품목으로 확정했습니다.'
+        if note not in task.applied_defaults:
+            task.applied_defaults.append(note)
     if task.intent == 'REPORT':
         if confirm_report is None: raise SlotRepair('리포트 조건을 확인하지 못했습니다.')
         confirm_report(store, state, task)
