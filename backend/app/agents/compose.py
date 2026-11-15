@@ -93,13 +93,8 @@ def numbered_articles(state):
     return articles
 
 
-def unverified_sql_period(digest):
-    from backend.app.api.common import sql_period_unproven
-    return sql_period_unproven(digest)
-
-
 def _trade_fact(digest):
-    if unverified_sql_period(digest):
+    if sql_period_unproven(digest):
         return None   # 기간을 증명하지 못한 생성 SQL 수치는 대체 결론에도 쓰지 않는다(결과표 안내만).
     if digest.get('kind') == 'LLM_SQL' and digest.get('rows'):
         row = digest['rows'][0]

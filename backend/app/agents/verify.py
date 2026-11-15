@@ -8,7 +8,7 @@ from decimal import Decimal, ROUND_HALF_UP, localcontext
 from dataclasses import dataclass, replace
 import re
 
-from backend.app.agents.compose import fixed_conclusion, unverified_sql_period
+from backend.app.agents.compose import fixed_conclusion
 from backend.app.api.common import sql_period_unproven
 from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
@@ -709,7 +709,7 @@ def generated_conclusion(state, task, has_evidence):
 def unsupported_sql_prose(state):
     """Final publication guard for unsupported numbers in scopes with unverified SQL."""
     unverified_tasks = {task.task_id for task in state.plan.tasks if any(
-        (result := state.results.get(step.step_id)) and unverified_sql_period(result.digest or {}) for step in task.steps)}
+        (result := state.results.get(step.step_id)) and sql_period_unproven(result.digest or {}) for step in task.steps)}
     if not unverified_tasks:
         return set(), False
     unverified_steps = {step.step_id for task in state.plan.tasks if task.task_id in unverified_tasks for step in task.steps}
