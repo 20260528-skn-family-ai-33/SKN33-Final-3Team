@@ -23,7 +23,9 @@ CURRENCY_END = (r'(?![가-힣])|(?=하고|남짓|안팎|'
 CURRENCY = (r'(?:(?!(?:' + CURRENCY_NAMES + r'|개|건)[가-힣]*\s*(?:' + CURRENCY_NAMES + r'))[가-힣]+\s*)?'
             r'(?:' + CURRENCY_NAMES + r')(?:' + CURRENCY_END + r')|(?:미국\s*|미\s*)?불(?:' + CURRENCY_END + r')')
 MONEY_UNIT = CURRENCY+r'|[A-Z]{3}(?![A-Za-z])|US\$|[$€£¥₩]'
-UNIT = r'%p|%|'+MONEY_UNIT+r'|배|위|개|건|kg'
+# 한글로 쓴 백분율·백분율포인트(25퍼센트·25프로·3퍼센트포인트·3%포인트)도 %·%p로 읽는다.
+PERCENT_WORDS = r'(?:%|퍼센트)\s*포인트(?:' + CURRENCY_END + r')|퍼센트(?:' + CURRENCY_END + r')|프로(?:' + CURRENCY_END + r')'
+UNIT = PERCENT_WORDS+r'|%p|%|'+MONEY_UNIT+r'|배|위|개|건|kg'
 TOKEN = re.compile(NUMBER+r'\s*(?P<scale>[만억조])?\s*(?P<unit>'+UNIT+r')?', re.I)
 # Dates in recalled history and HS lookups retain their original numeric-token rules.
 def _date_pattern(day='', bare_day=''):
@@ -188,7 +190,8 @@ def normalize_unit(unit):
             '원':'KRW','krw':'KRW','₩':'KRW','유로':'EUR','eur':'EUR','€':'EUR',
             '엔':'JPY','jpy':'JPY','¥':'JPY','위안':'CNY','cny':'CNY','£':'GBP','파운드':'GBP',
             '영국파운드':'GBP','호주달러':'AUD','캐나다달러':'CAD','스위스프랑':'CHF',
-            '개':'COUNT','건':'COUNT','kg':'KG','%p':'%p'}.get(raw,raw.upper() or None)
+            '개':'COUNT','건':'COUNT','kg':'KG','%p':'%p',
+            '퍼센트':'%','프로':'%','퍼센트포인트':'%p','%포인트':'%p'}.get(raw,raw.upper() or None)
 
 
 @dataclass(frozen=True)

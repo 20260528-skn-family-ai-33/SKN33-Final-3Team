@@ -444,7 +444,8 @@ def _split_year_comparisons(slots, text):
                             and (not re.fullmatch(r'[A-Z]{3}', q.unit or '') or q.unit in _CURRENCY_CODES)])
     unit = r'(?:(?:[만억조]\s*)?(?:건|개|톤|킬로그램|(?i:kg))|[만억조배])'
     unit_end = r'(?:입니다|이면|이고|이라고|이며|이었다|였다|으로|에서|까지|부터|가량|이상|이하|정도|보다|[은는이가을를의로도에와과면당])?(?![가-힣A-Za-z\d])'
-    numeric_unit = rf'(?!\s*(?:％|{unit}{unit_end}))'
+    # 한글 백분율(퍼센트·프로·포인트)과 pp도 % 단위다. "23.05퍼센트"·"23.05프로"·"23.05 pp"는 2023년 5월이 아니다.
+    numeric_unit = rf'(?!\s*(?:％|(?:퍼센트(?:\s*포인트)?|프로|포인트){unit_end}|(?i:pp)(?![A-Za-z])|{unit}{unit_end}))'
     year = lambda y: (rf'(?<![\dA-Za-z])(?:{y}|{y % 100:02d}(?=\s*년|[./-]\s*{month}\s*월'
                       rf'|[./-]\s*{month}[./-]\s*\d{{1,2}}(?!\d)|[./-]\s*0[1-9](?![\d.]){numeric_unit}))(?!\d)')
     # 비교 기간 자체의 두 연도가 붙은 경우만 연속 범위다. 기준 기간의 ISO 월 표시는 여기서 비교하지 않는다.
