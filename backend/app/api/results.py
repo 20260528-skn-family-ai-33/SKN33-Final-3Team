@@ -99,6 +99,9 @@ def _period_labels(meta):
             prefix+'monthly_avg_usd':label+' 월평균', prefix+'verified_months':label+' 집계 개월 수',
             prefix+'requested_months':label+' 조회 개월 수', prefix+'verified_subtotal_usd':label+' 집계 금액',
             change:label+' 대비 증감률'})
+    # 기간 합계 차액(period_difference_usd)은 조회 기간 − 첫 비교 기간이다. 여러 기간 표에서 어느 기간과의 차액인지 밝힌다.
+    if (first:=meta.get('compare_period')):
+        out['period_difference_usd']=period_label(first['start'],first['end'])+' 대비 합계 차액'
     return out
 
 
