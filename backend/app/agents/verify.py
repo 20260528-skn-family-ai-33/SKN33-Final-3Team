@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 import re
 
 from backend.app.agents.compose import fixed_conclusion, unverified_sql_period
+from backend.app.api.common import sql_period_unproven
 from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
     ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
@@ -551,8 +552,7 @@ def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
     scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
     editions = {item['hs_ver'] for item in conditions.get('hs_items', []) if item.get('hs_ver')}
     kind = meta.get('kind')
-    if not editions and (kind in ('TREND', 'RANKING') or (kind=='LLM_SQL' and (
-            meta.get('period_verified') is True or meta.get('annual_verified') is True))):
+    if not editions and (kind in ('TREND', 'RANKING') or (kind=='LLM_SQL' and not sql_period_unproven(meta))):
         editions.add('HS2022')
     if len(editions) == 1:
         scope['hs_ver'] = next(iter(editions))

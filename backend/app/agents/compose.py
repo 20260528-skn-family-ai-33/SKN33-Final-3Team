@@ -93,10 +93,8 @@ def numbered_articles(state):
 
 
 def unverified_sql_period(digest):
-    """기간을 증명하지 못한 생성 SQL 결과인지. 조회 기간 전체(period_verified)나 연도별 합계·차액 칸(annual_verified)을
-    증명한 결과는 그 칸으로 문장을 검증하므로 숨기지 않는다."""
-    return (digest.get('kind') == 'LLM_SQL' and digest.get('period_verified') is not True
-            and digest.get('annual_verified') is not True)
+    from backend.app.api.common import sql_period_unproven
+    return sql_period_unproven(digest)
 
 
 def _trade_fact(digest):

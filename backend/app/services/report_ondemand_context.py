@@ -129,9 +129,8 @@ def populate_results(saved, ctx, start, end, content):
         checks.append({'target': title, 'content': f"승인한 결과표 {total:,}행 · 결과 ID {table['result_id']}",
                        'basis': '승인 시점 사본 · ' + ('일부 누락' if ref.get('completeness') == 'PARTIAL' else '재조회 없음')})
         checks.extend({'target': title, 'content': text, 'basis': '누락·제한 사유'} for text in ref.get('limitations', []))
-        meta = table.get('meta') or {}
-        if table.get('kind') == 'LLM_SQL' and meta.get('period_verified') is not True and meta.get('annual_verified') is not True:
-            from backend.app.api.common import LLM_SQL_PERIOD_WARNING
+        from backend.app.api.common import LLM_SQL_PERIOD_WARNING, sql_period_unproven
+        if sql_period_unproven({**(table.get('meta') or {}), 'kind': table.get('kind')}):
             checks.append({'target': title, 'content': LLM_SQL_PERIOD_WARNING, 'basis': '집계 기간 미확인'})
             for result in results:
                 if result['result_id'] == table['result_id']:

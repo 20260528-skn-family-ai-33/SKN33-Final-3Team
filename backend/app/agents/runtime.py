@@ -16,7 +16,7 @@ from backend.app.agents.compose import (ARTICLE_PROMPT, COMPOSE_PROMPT, COMPOSE_
                                         apply_claim_edits, complete_article_only_conclusions, cited_article_numbers, fallback_conclusion, numbered_articles, period_difference_draft, validate_citations, validate_rewrite)
 from backend.app.agents.conditions import check_conditions, recent_article_period
 from backend.app.agents.llm import StructuredClient, validation_details
-from backend.app.api.common import LLM_SQL_PERIOD_WARNING   # 생성 SQL 기간 미증명 안내(채팅·리포트 공통)
+from backend.app.api.common import LLM_SQL_PERIOD_WARNING, sql_period_unproven   # 생성 SQL 기간 미증명 안내(채팅·리포트 공통)
 from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT, PLANNER_RETRY_HINT
 from backend.app.agents.result_store import ResultStore, fingerprint, shared_result
 from backend.app.agents.sql import generated_analysis
@@ -437,8 +437,7 @@ class Services:
             data,versions=self.execution.call('sql',budget.seconds(self.settings,'sql'),template,finish_reserve=reserve)
         for reason in data.result.limitations:
             if reason not in state.warnings: state.warnings.append(reason)
-        if (data.result.status=='OK' and data.meta.get('kind')=='LLM_SQL' and data.meta.get('period_verified') is not True
-                and data.meta.get('annual_verified') is not True
+        if (data.result.status=='OK' and sql_period_unproven(data.meta)
                 and LLM_SQL_PERIOD_WARNING not in state.warnings):
             state.warnings.append(LLM_SQL_PERIOD_WARNING)
         if data.result.status!='OK': return data.result

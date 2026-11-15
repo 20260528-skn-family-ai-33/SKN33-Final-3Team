@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 from sqlalchemy import select, update, delete, tuple_
-from backend.app.api.common import require, unavailable, now, digest, period, percentage, clean, page_info, shift_month, month_end, LLM_SQL_PERIOD_WARNING
+from backend.app.api.common import require, unavailable, now, digest, period, percentage, clean, page_info, shift_month, month_end, LLM_SQL_PERIOD_WARNING, sql_period_unproven
 from backend.app.api import trade, news, jobs
 from backend.app.api.accounts import interests, validate_scope
 from backend.app.api.results import read_snapshot, save_snapshot, result_table, analysis_conditions
@@ -356,8 +356,7 @@ def build_document(store,uid,record):
             tables=[table for table in source if RESULT_SECTIONS.get(table['kind'])==code]
             sections.append(section(code,'승인한 분석 결과입니다.' if tables else '해당 분석 결과에 포함되지 않음',tables))
         for ref in record['content_json']['source_results']: meta['warnings'].extend(ref['limitations'])
-        if any(t['kind']=='LLM_SQL' and not ({'period_verified','annual_verified'} & {k for k,v in (t.get('meta') or {}).items() if v is True})
-               for t in source):
+        if any(sql_period_unproven({**(t.get('meta') or {}),'kind':t['kind']}) for t in source):
             meta['warnings'].append(LLM_SQL_PERIOD_WARNING)   # 채팅과 같은 생성 SQL 기간 미확인 안내
     elif record['report_type']=='RPT_WEEKLY':
         meta=news.source_meta(store,'NEWS',date.fromisoformat(p['end']))
