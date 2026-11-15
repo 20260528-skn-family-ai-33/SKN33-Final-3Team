@@ -150,7 +150,9 @@ def build_chart(store, uid, task, result_id, selection=None):
             warnings.append(f'순위 상위 {MAX_CHART_LABELS}개만 차트에 표시했습니다. 전체는 표에서 확인하세요.')
         full=[r['name'] for r in top]
         def target(row):
-            hs=row.get('hs_item') or ({'hs_code':row['hs_code'],'hs_ver':'HS2022'} if row.get('hs_code') else None)
+            hs=row.get('hs_item')
+            if not hs and row.get('hs_code'):
+                hs={'hs_code':row['hs_code'],'hs_ver':row.get('hs_ver') or 'HS2022'}
             return (row['name'] if row.get('country_code') else None,
                 row['name'] if hs else None, HsProduct(**hs) if hs else None, row.get('country_code'))
         labels=_target_labels([target(r) for r in top])
@@ -201,9 +203,9 @@ def build_chart(store, uid, task, result_id, selection=None):
                 return output, [], warnings
             rows=sorted(rows,key=lambda row:row[text[0]['key']])
             full=[row[text[0]['key']] for row in rows]
-        if not dates and len(numeric)!=1: return output, [], warnings
         if len({c['unit'] for c in numeric})!=1: return output, [], warnings
-        kindchart='line' if dates else 'bar'
+        # 날짜가 아닌 대상별 결과에 같은 단위 열이 여럿이면("국가 | 2025년 합계 | 2023년 합계 | 2024년 합계") 묶은 막대로 그린다.
+        kindchart='line' if dates else 'bar' if len(numeric)==1 else 'grouped_bar'
         labels=[shorten_name(v) for v in full]
         if len(set(labels))!=len(labels): return output, [], warnings
         unit=numeric[0]['unit'] or '값'

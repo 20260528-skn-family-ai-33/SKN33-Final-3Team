@@ -86,7 +86,7 @@ function ComparisonResult({group,fallback,charts,selectors,tasks,tableOnly=false
 }
 
 export default function TaskResults({answer,hideText=false}) {
-  const charts=comparisonCharts(answer.charts||[],answer.tasks)
+  const charts=comparisonCharts(answer.charts||[],answer.tasks,answer.tables||[])
   const groups=comparisonGroups(answer)
   const groupedTables=new Set(groups.flatMap(g=>g.tables.map(t=>t.result_id)))
   const groupedTasks=new Set(groups.flatMap(g=>g.tables.map(t=>t.task_id)))

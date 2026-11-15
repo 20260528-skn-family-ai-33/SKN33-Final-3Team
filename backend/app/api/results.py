@@ -63,14 +63,16 @@ def display_columns(columns, rows, meta=None):
         # 비교 기간마다 따로 정한다. 길이가 같으면 월별 비교 금액을 보이고, 다르면(D-84) 월별 금액이 없으므로
         # 총액·월평균·검증 월 수를 비교 근거로 보인다. 어느 기간이든 길이가 다르면 조회 기간의 총액 열도 보인다.
         aggregate=('total_usd','monthly_avg_usd','verified_months','requested_months','verified_subtotal_usd')
-        any_period=False
-        for prefix,change in [('compare_','change_pct'),*((f'compare{n}_',f'change{n}_pct') for n in range(2,extras+2))]:
-            monthly=any(r.get(prefix+'amount_usd') is not None for r in rows)
-            by_period=not monthly and any(r.get(prefix+'requested_months')
-                                          and r.get(prefix+'requested_months')!=r.get('requested_months') for r in rows)
-            any_period|=by_period
-            if not by_period: hidden.update((change,*(prefix+field for field in aggregate)))
-            if not monthly: hidden.update((prefix+'amount_usd',prefix+'month'))
+        prefixes=[('compare_','change_pct'),*((f'compare{n}_',f'change{n}_pct') for n in range(2,extras+2))]
+        monthly={prefix:any(r.get(prefix+'amount_usd') is not None for r in rows) for prefix,_ in prefixes}
+        by_period={prefix:not monthly[prefix] and any(r.get(prefix+'requested_months')
+                   and r.get(prefix+'requested_months')!=r.get('requested_months') for r in rows) for prefix,_ in prefixes}
+        # 한 기간이라도 길이가 다르면 차트는 모든 기간을 월평균으로 그린다(charts.build_chart). 그때는 모든 기간의
+        # 합계·월평균·집계 개월 수를 보여 차트가 안내한 분모를 표에서 확인할 수 있게 한다.
+        any_period=any(by_period.values())
+        for prefix,change in prefixes:
+            if not any_period: hidden.update((change,*(prefix+field for field in aggregate)))
+            if not monthly[prefix]: hidden.update((prefix+'amount_usd',prefix+'month'))
         if not any_period: hidden.update(aggregate)
     return [{**c,'label':periods.get(c['key']) or (labels.get(c['key'],c.get('label',c['key']))
              if c.get('label',c['key'])==c['key'] else c['label'])} for c in columns if c['key'] not in hidden]

@@ -214,3 +214,14 @@ test('multi-period trend results keep their own table and server-chosen columns 
  const columns=['month','amount_usd','total_usd','monthly_avg_usd','compare2_total_usd','compare2_monthly_avg_usd'].map(key=>({key,label:key}))
  assert.deepEqual(resultColumns(columns,rows,{meta}).map(c=>c.key),columns.map(c=>c.key))
 })
+
+test('multi-period charts stay under their own task instead of merging (#113)',async()=>{
+ const {comparisonCharts}=await import('../src/pages/analysis/comparisonCharts.js')
+ const period={start:'2025-01-01',end:'2025-12-31'},compare_period={start:'2023-01-01',end:'2023-12-31'}
+ const tasks=['JP','US'].map((code,i)=>({task_id:'t'+i,intent:'STATISTICS',conditions:{country_codes:[code],hs_items:[],period,compare_period,trade_flow:'EXPORT'}}))
+ const charts=tasks.map((task,i)=>({chart_id:task.task_id,task_id:task.task_id,result_id:'r'+i,type:'line',title:'수출액',source:'관세청',unit:'USD',labels:['2025-01'],
+   series:i?[{name:'2025년',values:[3]},{name:'2023년',values:[1]},{name:'2024년',values:[2]}]:[{name:'수출액',values:[5]},{name:'비교 기간',values:[4]}]}))
+ const tables=[{result_id:'r0',meta:{kind:'TREND'}},{result_id:'r1',meta:{kind:'TREND',extra_compare_periods:[{start:'2024-01-01',end:'2024-12-31'}]}}]
+ const out=comparisonCharts(charts,tasks,tables)
+ assert.deepEqual(out.map(c=>[c.task_id,c.series.length]),[['t0',2],['t1',3]])
+})
