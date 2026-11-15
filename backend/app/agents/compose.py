@@ -98,9 +98,14 @@ def _trade_fact(digest):
         return None   # 기간을 증명하지 못한 생성 SQL 수치는 대체 결론에도 쓰지 않는다(결과표 안내만).
     if digest.get('kind') == 'LLM_SQL' and digest.get('rows'):
         row = digest['rows'][0]
+        proven = None
+        if digest.get('period_verified') is not True:
+            # 연간 비교 결과는 SQL 식으로 증명한 칸(연도별 합계·차액, 합계와 맞는 change_pct)만 옮긴다.
+            proven = {*(digest.get('_annual_sums') or {}), *(digest.get('_annual_differences') or {}),
+                      *(('change_pct',) if digest.get('_annual_rate') is True else ())}
         for column in digest.get('columns', []):
             key, unit = column['key'], column.get('unit')
-            if key not in row or unit not in ('USD', '%', 'KG', 'COUNT'):
+            if key not in row or unit not in ('USD', '%', 'KG', 'COUNT') or (proven is not None and key not in proven):
                 continue
             label = column.get('label') or key
             value = row[key]
