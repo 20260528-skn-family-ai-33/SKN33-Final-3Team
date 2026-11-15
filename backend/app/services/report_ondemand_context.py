@@ -47,7 +47,7 @@ def _cell(value, column):
 SERIES_KEYS = ('country_name', 'name')  # 추이 결과의 국가·품목 표시 열. 웹 ReportView.trendChart와 같은 기준
 RESULT_COLUMN_LIMIT = 8  # A4 본문(180mm)에 잘리지 않고 들어가는 결과표 열 수. 넘치면 열 묶음으로 나눈다
 ID_COLUMNS = (('rank', 'country_rank', 'product_rank'), ('month', 'trade_month'), ('country_name', 'country_code'),
-              ('name', 'product_name', 'hs_code', 'hs6'))  # 열 묶음마다 반복하는 식별 열(각 묶음에서 첫 번째로 있는 열)
+              ('name', 'product_name', 'hs_code', 'hs6'), ('hs_ver',))  # 열 묶음마다 반복하는 식별 열
 
 
 def _trend_chart(table):

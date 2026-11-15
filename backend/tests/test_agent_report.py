@@ -1005,6 +1005,21 @@ class ReportAgentTest(unittest.TestCase):
         populate_results({'sections': ['KPI'], 'compare': 'NONE', 'metric': 'AMOUNT'}, ctx, date(2025, 1, 1), date(2025, 6, 30), content)
         return ctx
 
+    def test_split_frozen_report_tables_repeat_hs_edition(self):
+        from backend.app.services.report_ondemand_context import RESULT_COLUMN_LIMIT
+        identity = {'country_name': '미국', 'name': '화장품', 'month': '2025-01', 'hs_ver': 'HS2017'}
+        measures = {key: 7 for key in ('amount_usd', 'compare_amount_usd', 'compare2_amount_usd',
+                                     'total_usd', 'monthly_avg_usd', 'verified_subtotal_usd')}
+        columns = [{'key': key, 'label': key, 'type': 'string' if key in identity else 'number',
+                    'unit': None if key in identity else 'USD'} for key in (*identity, *measures)]
+        rows = [{**identity, **measures}, {**identity, **measures, 'hs_ver': 'HS2022', 'compare2_amount_usd': 10}]
+        parts = self._result_ctx(columns, rows)['results']
+        self.assertGreater(len(parts), 1)
+        for part in parts:
+            keys = [column['key'] for column in part['columns']]
+            self.assertLessEqual(len(keys), RESULT_COLUMN_LIMIT)
+            self.assertEqual([row[keys.index('hs_ver')] for row in part['rows']], ['HS2017', 'HS2022'])
+
     def test_wide_result_table_is_split_into_column_groups_in_the_pdf(self):
         """R24 기간 길이가 다른 비교처럼 열이 많은 결과표(15열)는 A4에서 잘리지 않게 열 묶음으로 나눈다.
         월·국가·품목 식별 열은 묶음마다 반복하고, 실제 PDF에 마지막 열까지 보인다."""
