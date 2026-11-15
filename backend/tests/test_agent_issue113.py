@@ -586,6 +586,32 @@ class ExtraCompareTrendTest(unittest.TestCase):
                 self.assertEqual(task.conditions.compare_period.start.year, 2023)
                 self.assertEqual([p.start.year for p in task.conditions.extra_compare_periods], expected)
 
+    def test_restated_hs2017_code_in_article_followup_uses_correspondence(self):
+        from backend.app.agents.conditions import check_conditions
+        from backend.app.models.hs_code_correlation import HsCodeCorrelation
+        from backend.tests.test_agent_state import state
+        # 이어받은 HS2017 구코드(HS2022 사전에 없음)를 원인·현지 이슈 질문에 다시 적어도 대응표로 HS2022 품목을 확정한다.
+        hs = self.meta.tables['hs_code']
+        row = dict(self.store.c.execute(hs.select().where(hs.c.hs_code == '330499')).mappings().first())
+        if hs.c.depth.computed is not None:
+            row.pop('depth')
+        self.store.c.execute(hs.insert().values({**row, 'hs_code': '330488', 'hs_ver': 'HS2017'}))
+        HsCodeCorrelation.__table__.create(self.store.c)
+        self.store.c.execute(self.store.t('hs_code_correlation').insert().values(old_ver='HS2017', old_code='330488',
+            new_ver='HS2022', new_code='330499', relation='1:1', group_code='330499', source_edition='test'))
+        for intent, question in (('CAUSE', 'HS 330488은 왜 늘었어?'), ('LOCAL_ISSUES', 'HS 330488 현지 이슈 알려줘')):
+            with self.subTest(intent=intent):
+                current = state()
+                current.input.question = question
+                current.input.context.conditions = Conditions(period=Y(2025), country_codes=['US'],
+                    hs_items=[{'hs_code': '330488', 'hs_ver': 'HS2017'}])
+                current.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': intent, 'question': question,
+                    'slots': {'products': ['330488'], 'period': Y(2025)}}]))
+                [task] = current.plan.tasks
+                check_conditions(self.store, current, task.steps[0])
+                self.assertEqual(task.steps[0].status, 'DONE', current.results.get(task.steps[0].step_id))
+                self.assertEqual([(h.hs_code, h.hs_ver) for h in task.conditions.hs_items], [('330499', 'HS2022')])
+
     def test_linked_amount_analysis_without_hs2017_support_explains_scope(self):
         from backend.app.agents.bindings import resolve
         from backend.app.agents.conditions import check_conditions

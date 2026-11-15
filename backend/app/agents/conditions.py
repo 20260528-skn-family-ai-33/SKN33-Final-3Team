@@ -355,6 +355,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     prior_compare, prior_extras = ((out.compare_period, out.extra_compare_periods)
                                    if task.input_bindings or task.previous_turn_result
                                    else (base.compare_period, base.extra_compare_periods))
+    # 기사 분석이 이어받은 HS2017 구코드를 질문에 다시 적으면 그 판본으로 확인한 뒤 대응표 변환(_article_hs_items)을 거친다.
+    inherited_2017 = {h.hs_code for h in out.hs_items if h.hs_ver == 'HS2017'}
     if slots.products is not None: out.hs_items = []
     if countries is not None: out.country_codes = []
     if task.intent in ('REPORT', *MARKET_INTENTS) and out.trade_flow == 'IMPORT':
@@ -412,9 +414,10 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if not answer and country_key(expr) not in original_key:
             raise SlotRepair('질문에서 품목 표현을 확인하지 못했습니다.')
         if expr.isdigit():
-            numeric_product(store, original if not answer else expr, expr, set(), hs_ver=hs_ver)
+            ver = 'HS2017' if task.intent in ARTICLE_INTENTS and not editions and expr in inherited_2017 else hs_ver
+            numeric_product(store, original if not answer else expr, expr, set(), hs_ver=ver)
             if task.intent not in MARKET_INTENTS or len(expr) == 6:
-                out.hs_items.append({'hs_code': expr, 'hs_ver': hs_ver})
+                out.hs_items.append({'hs_code': expr, 'hs_ver': ver})
                 continue
             market_hs4.append((key, expr, kept))
             continue
