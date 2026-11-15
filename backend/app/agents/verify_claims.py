@@ -9,7 +9,14 @@ from functools import lru_cache
 import re
 
 NUMBER = r'(?:(?<![\d.A-Za-z])|(?<=[A-Za-z]{3}))(?P<value>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)'
-CURRENCY = r'(?:[가-힣]+\s*)?(?:달러|파운드|프랑|페소|리라|디나르|리얄|크로나|크로네|루피|루블|바트|랜드|동|유로|위안|엔|원)'
+MONEY_END = r'(?=$|[^\w]|(?:입니다|였다|라고|으로|[가이은는을를의로과와에]|짜리|어치|보다|만|씩))'
+CURRENCY_NAMES = r'달러|파운드|프랑|페소|리라|디나르|리얄|크로나|크로네|루피아|루피|루블|바트|랜드|동|유로|위안|엔|원'
+# 통화 이름은 낱말이 끝날 때만 받는다(동남아·원료·엔진·불공정은 통화가 아니다). 앞 낱말은 "홍콩달러"·"베트남 동"처럼
+# 나라 이름일 때만 붙인다. 통화 이름이나 개·건으로 시작하는 낱말("달러로 동기", "3건 동시")은 앞 낱말이 아니다.
+# 통화 이름 뒤에 바로 한글이 오면 조사·어미·수량 표현(달러고·달러였고·달러가량·달러대·달러선·달러 수준)의 첫 글자일 때만 받는다.
+CURRENCY_END = r'(?![가-힣])|(?=[이가은는을를의로으과와에만씩짜어보라고며였입인대도나까부지쯤뿐야요선규수정상미초내밖당])'
+CURRENCY = (r'(?:(?!(?:' + CURRENCY_NAMES + r'|개|건)[가-힣]*\s*(?:' + CURRENCY_NAMES + r'))[가-힣]+\s*)?'
+            r'(?:' + CURRENCY_NAMES + r')(?:' + CURRENCY_END + r')|(?:미국\s*|미\s*)?불' + MONEY_END)
 MONEY_UNIT = CURRENCY+r'|[A-Z]{3}(?![A-Za-z])|US\$|[$€£¥₩]'
 UNIT = r'%p|%|'+MONEY_UNIT+r'|배|위|개|건|kg'
 TOKEN = re.compile(NUMBER+r'\s*(?P<scale>[만억조])?\s*(?P<unit>'+UNIT+r')?', re.I)
@@ -23,8 +30,19 @@ HISTORY_DATE = _date_pattern()
 DAY = r'\s*(?:3[01]|[12]\d|0?[1-9])\s*일(?![간차])'
 DATE = _date_pattern('(?:'+DAY+')?', '(?:(?<!개월)'+DAY+')?')
 COMPOUND = re.compile(r'(?<![\d.])(?P<sign>[+-]?)(?P<eok>\d[\d,]*)\s*억\s*(?P<man>\d[\d,]*)\s*만')
+HANGUL_DIGITS = {char: value for value, char in enumerate('영일이삼사오육칠팔구')}
+HANGUL_SMALL = {'십': 10, '백': 100, '천': 1000}
+HANGUL_LARGE = {'만': 10**4, '억': 10**8, '조': 10**12}
+HANGUL_DIGIT = r'[영공일이삼사오육칠팔구]'
+HANGUL_NUMBER = r'[영공일이삼사오육칠팔구십백천만억조]'
+CLEAR_MONEY = r'(?:(?:미국\s*|미\s*)?달러|유로|파운드|(?i:USD|KRW|EUR|JPY|CNY|GBP)(?![A-Za-z])|US\$)'
+HANGUL_MONEY = (r'(?:' + CLEAR_MONEY + r'|(?:미국\s*|미\s*)?불' + MONEY_END +
+                r'|(?:원|엔|위안)' + MONEY_END + r')')
 # Expand abbreviated measures before parsing, retaining original draft offsets.
 SHORTHAND = re.compile(COMPOUND.pattern +
+    r'|(?<![\d가-힣])(?:(?P<hangul_sign>마이너스|플러스)\s*)?(?P<hangul>' + HANGUL_NUMBER + r'(?:\s*' + HANGUL_NUMBER +
+    r')*|[한두세네])(?P<hangul_decimal>\s*점\s*' + HANGUL_DIGIT + r'(?:\s*' + HANGUL_DIGIT +
+    r')*)?(?=\s*' + HANGUL_MONEY + r')'
     r'|(?<![\d.])(?P<quarter>[1-4])분기'
     r'|(?<![\d.])(?P<month>1[0-2]|0?[1-9])(?=\s*[~～–·]\s*(?:1[0-2]|0?[1-9])월)'
     r'|(?<![\d.])(?P<rank>\d+)(?=\s*·\s*\d+위)')
@@ -127,9 +145,39 @@ def _merge_compound(text):
     return COMPOUND.sub(lambda m:f'{m["sign"]}{int(m["eok"].replace(",",""))*10**4+int(m["man"].replace(",",""))}만',text)
 
 
+def _hangul_amount(text):
+    numeral = ''.join(text.split())
+    if numeral in ('영', '공'):
+        return 0
+    if len(numeral) == 1 and numeral in '한두세네':
+        return '한두세네'.index(numeral) + 1
+    total = group = digit = 0
+    small, large = 10**4, 10**16
+    for char in numeral:
+        if char in HANGUL_LARGE:
+            unit = HANGUL_LARGE[char]
+            if unit >= large:
+                return None
+            total += (group + digit or 1) * unit
+            group = digit = 0
+            small, large = 10**4, unit
+        elif char in HANGUL_SMALL:
+            unit = HANGUL_SMALL[char]
+            if unit >= small:
+                return None
+            group += (digit or 1) * unit
+            digit, small = 0, unit
+        else:
+            if digit or char in ('영', '공'):
+                return None
+            digit = HANGUL_DIGITS[char]
+    return total + group + digit
+
+
 def normalize_unit(unit):
     raw=re.sub(r'\s+','',unit or '').lower()
-    return {'달러':'USD','미국달러':'USD','미달러':'USD','usd':'USD','us$':'USD','$':'USD',
+    return {'달러':'USD','미국달러':'USD','미달러':'USD','불':'USD','미불':'USD','미국불':'USD',
+            'usd':'USD','us$':'USD','$':'USD',
             '원':'KRW','krw':'KRW','₩':'KRW','유로':'EUR','eur':'EUR','€':'EUR',
             '엔':'JPY','jpy':'JPY','¥':'JPY','위안':'CNY','cny':'CNY','£':'GBP','파운드':'GBP',
             '영국파운드':'GBP','호주달러':'AUD','캐나다달러':'CAD','스위스프랑':'CHF',
@@ -421,6 +469,22 @@ def prepare_sentence(sentence, catalog, *, mentions=None, compounds=None):
             normalized = match.group() + '월'
         elif match['rank']:
             normalized = match.group() + '위'
+        elif match['hangul']:
+            tail = text[match.end():]
+            fraction = match['hangul_decimal']
+            if len(match['hangul']) == 1 and not fraction and not re.match(r'\s|' + CLEAR_MONEY, tail):
+                # 사원·구원처럼 통화 기호 없는 한 글자 수사와 겹치는 낱말을 보존한다.
+                if match['hangul'] not in HANGUL_SMALL and match['hangul'] not in HANGUL_LARGE:
+                    return match.group()
+            amount = _hangul_amount(match['hangul'])
+            if amount is None:
+                return match.group()
+            normalized = str(amount)
+            if fraction:
+                normalized += '.' + ''.join(str(HANGUL_DIGITS.get(char, 0))
+                                            for char in fraction if not char.isspace() and char != '점')
+            if match['hangul_sign']:
+                normalized = ('-' if match['hangul_sign']=='마이너스' else '+') + normalized
         else:
             normalized = _merge_compound(match.group())
         if compounds is not None:
