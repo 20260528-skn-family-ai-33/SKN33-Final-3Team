@@ -203,21 +203,28 @@ def run_template(store, uid, task, step, timeout=30):
         group=conditions.ranking_group
         dimension=country if group=='COUNTRY' else hs_table
         code=country.c.country_code if group=='COUNTRY' else dimension.c.hs_code
+        edition=(table.c.hs_ver,) if group=='HS6' else ()
         joined=table.join(country,table.c.country_code==country.c.country_code)
         if group=='HS6':
             joined=joined.join(dimension,(table.c.hs6_code==dimension.c.hs_code)&(table.c.hs_ver==dimension.c.hs_ver))
-        stmt=(select(code,dimension.c.name_ko.label('name'),amount)
+        stmt=(select(code,dimension.c.name_ko.label('name'),amount,*edition)
               .select_from(joined)
               .where(country.c.country_role=='COUNTRY',
                      table.c.trade_month.between(conditions.period.start,conditions.period.end)))
         # 품목이 있으면 품목마다 확정한 판본으로 거른다(HS2017 품목도 조회된다). 없으면 기본 판본 하나만 읽는다.
         stmt=stmt.where(trade.hs_filter(table,common['hs']) if common['hs'] else table.c.hs_ver=='HS2022')
         if common['countries']: stmt=stmt.where(table.c.country_code.in_(common['countries']))
-        stmt=(stmt.group_by(code,dimension.c.name_ko)
-              .order_by(amount.desc(),code).limit(step.args['top']))
+        stmt=(stmt.group_by(code,dimension.c.name_ko,*edition)
+              .order_by(amount.desc(),code,*edition).limit(step.args['top']))
         # 국가·품목 조건 없는 전국 순위는 country 조인이 국가별 반복 조회가 된다. 월 범위로 읽도록 PK를 쓴다.
         stmt=trade.trade_plan(stmt,table,common['hs'],common['countries'])
-        records=trade.query_rows(store,stmt,source)
+        records=list(trade.query_rows(store,stmt,source))
+        if group=='COUNTRY' and common['countries']:
+            # 요청한 국가가 검증된 기간에 거래가 없으면 0달러 행으로 남긴다(기존 순위 경로와 같은 규칙). 빼면 NO_DATA가 된다.
+            names=condition_names(store,[conditions])[0]
+            found={r['country_code'] for r in records}
+            records+=[{'country_code':c,'name':names.get(c,c),amount_key:Decimal(0)}
+                      for c in common['countries'] if c not in found][:max(0,step.args['top']-len(records))]
         # 품목 순위를 한 국가로 거르면 그 국가를 열로 밝힌다(여러 국가면 합계라 국가 열을 두지 않는다).
         partner={}
         if group=='HS6' and len(conditions.country_codes)==1:

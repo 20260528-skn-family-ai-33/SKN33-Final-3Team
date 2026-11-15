@@ -326,12 +326,17 @@ class PlannerSlots(Model):
 
     @model_validator(mode='after')
     def check_periods(self):
+        # 비교 기간을 여럿 말하면 플래너 LLM이 모두 extra_compare_periods에 넣고 compare_period를 비우기 쉽다.
+        # 오류로 질문 전체를 끝내지 않고 첫 기간을 compare_period로 옮긴다. 기간을 말했으니 비교 요청이다.
+        if self.extra_compare_periods:
+            if self.compare_period is None:
+                self.compare_period, self.extra_compare_periods = (self.extra_compare_periods[0],
+                                                                   self.extra_compare_periods[1:] or None)
+            self.comparison_requested = True
         if self.period is not None and self.recent_months is not None:
             raise SafeError('절대 기간과 최근 개월 수를 동시에 지정할 수 없습니다')
         if self.compare_period is not None and not self.comparison_requested:
             raise SafeError('비교 기간에는 비교 요청이 필요합니다')
-        if self.extra_compare_periods and self.compare_period is None:
-            raise SafeError('추가 비교 기간에는 첫 비교 기간이 필요합니다')
         return self
 
     def limit_errors(self) -> list[str]:
@@ -568,7 +573,7 @@ class ChartSpec(Model):
     (LineChart는 yTicks·색 추가, Donut은 [label, 비율, 색], None 칸은 선을 끊음)."""
     chart_id: str
     task_id: str
-    type: Literal['line', 'bar', 'grouped_bar', 'donut']   # 추이 / 순위 / 두 시점 비교 / 비중
+    type: Literal['line', 'bar', 'grouped_bar', 'donut']   # 추이 / 순위 / 기간 비교(2~5개 기간) / 비중
     title: Label
     unit: Annotated[str, Field(max_length=20)]
     period: Period | None = None
@@ -587,8 +592,9 @@ class ChartSpec(Model):
         _unique([s.name for s in self.series], '시리즈 이름')
         if self.type == 'donut' and len(self.series) != 1:
             raise ValueError('donut은 시리즈 1개입니다')
-        if self.type == 'grouped_bar' and len(self.series) != 2:
-            raise ValueError('grouped_bar는 두 시점, 시리즈 2개입니다')
+        # 비교 기간이 여럿이면(2026-11-12, 이슈 113) 기간마다 시리즈 하나다. 시리즈 상한은 위 series 칸이 검사한다.
+        if self.type == 'grouped_bar' and len(self.series) < 2:
+            raise ValueError('grouped_bar는 비교할 시리즈가 2개 이상입니다')
         return self
 
 

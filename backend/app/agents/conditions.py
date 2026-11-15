@@ -388,6 +388,13 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     bounds = trade.bounds(store) if task.intent != 'LOCAL_ISSUES' else []
     state.data_meta = DataMeta(trade_first_month=bounds[0] if bounds else None,
         trade_latest_month=bounds[-1] if bounds else None, article_latest_date=latest_article)
+    share_sql = None
+    if task.intent == 'MARKET_SHARE':
+        share_sql = next((s for s in task.steps if s.tool == 'query_trade_data'), None)
+        if share_sql and share_sql.args.get('template') == 'SHARE' and slots.ranking_group == 'HS6':
+            # 분모가 한국 교역으로 확정된 품목별 비중은 LLM SQL로 조회한다(D-87).
+            share_sql.args = {'template': 'LLM_SQL'}
+            task.custom_query = task.custom_query or task.question[:MAX_TEXT_CHARS]
     if bounds:
         out.period = slots.period or out.period
         if slots.recent_months or not out.period:
@@ -396,25 +403,36 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         # 최신 기준월 예측을 제안한다.
         if task.intent not in MARKET_INTENTS:
             trade.resolve_period(store, out.period.start.strftime('%Y-%m'), out.period.end.strftime('%Y-%m'))
-        if slots.comparison_requested:
-            out.compare_period = slots.compare_period or Period(start=shift_month(out.period.start,-12),
-                                                                 end=shift_month(out.period.end,-12))
-            # 여러 비교 기간을 한 표에 두는 것은 통계(TREND·LLM SQL)만 지원한다. 다른 분석은 첫 비교 기간만 쓴다.
-            if slots.compare_period and task.intent == 'STATISTICS':
-                for extra in slots.extra_compare_periods or []:
-                    if extra not in (out.period, out.compare_period, *out.extra_compare_periods):
-                        out.extra_compare_periods.append(extra)
+        if share_sql and share_sql.args.get('template') == 'SHARE':
+            out.compare_period, out.extra_compare_periods = None, []
+            note = '국가별 교역 비중은 조회 기간 기준으로만 계산했습니다.'
+            if slots.comparison_requested and note not in task.applied_defaults:
+                task.applied_defaults.append(note)
+        elif slots.comparison_requested:
+            # 조회 기간과 같은 비교 기간("2025년 기준 2025년·2024년 비교")과 중복은 뺀다. 같은 기간이 두 번이면
+            # 차트 시리즈 이름이 겹친다. 여러 비교 기간을 한 표에 두는 것은 통계(TREND·LLM SQL)만 지원한다.
+            periods = []
+            for candidate in [slots.compare_period, *(slots.extra_compare_periods or [])]:
+                if candidate and candidate != out.period and candidate not in periods:
+                    periods.append(candidate)
+            # 여러 비교 기간을 한 표에 두는 것은 통계(TREND·LLM SQL)만 지원한다. 다른 분석은 중복을 뺀 뒤 첫 기간만 쓴다.
+            kept = periods if task.intent == 'STATISTICS' else periods[:1]
+            # 실제로 한 비교만 안내한다. 순위 템플릿(trade.rankings)은 지정 비교 기간을 쓰지 않는다(전년·전월 대비만 계산).
+            # 생성 SQL(custom_query)은 확정 비교 기간을 SQL 조건으로 쓰므로 해당하지 않는다.
+            note = ('순위는 지정한 비교 기간으로 비교하지 않습니다.' if task.intent == 'RANKING' and kept and not task.custom_query
+                    else '비교 기간 여러 개는 통계 조회에서만 함께 비교합니다. 첫 비교 기간만 비교했습니다.'
+                    if len(kept) < len(periods) else None)
+            if note and note not in task.applied_defaults:
+                task.applied_defaults.append(note)
+            if kept:
+                out.compare_period, out.extra_compare_periods = kept[0], kept[1:]
+            elif not slots.compare_period:
+                # 비교 기간을 말하지 않았을 때만 전년 동기를 넣는다. 말한 기간이 모두 조회 기간과 같았으면 비교하지 않는다.
+                out.compare_period = Period(start=shift_month(out.period.start,-12), end=shift_month(out.period.end,-12))
     if task.intent == 'CAUSE':
         out.article_period = {'start':shift_month(out.period.start,-1), 'end':month_end(shift_month(out.period.end,1))}
     if task.intent == 'LOCAL_ISSUES':
         out.article_period = slots.article_period or recent_article_period(state.input.received_at)
-    if task.intent == 'MARKET_SHARE' and slots.ranking_group == 'HS6':
-        # SHARE 템플릿은 국가별 비중만 지원한다(D-87). 분모가 한국 교역으로 확정된 품목별 비중은 LLM SQL로 조회한다
-        # (§11.1 custom_query). 해외 수입시장 기준은 위에서 미지원으로 끝났다. 분모가 모호하면 위에서 먼저 되묻는다.
-        sql = next((s for s in task.steps if s.tool == 'query_trade_data'), None)
-        if sql and sql.args.get('template') == 'SHARE':
-            sql.args = {'template': 'LLM_SQL'}
-            task.custom_query = task.custom_query or task.question[:MAX_TEXT_CHARS]
     if task.intent == 'RANKING':
         key = f'{task.task_id}:ranking_group'
         out.ranking_group = task.resolved.get(key, {}).get('ranking_group', slots.ranking_group)

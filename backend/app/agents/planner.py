@@ -326,8 +326,8 @@ def _normalize_report_requests(output: PlannerOutput, question: str) -> PlannerO
 
 
 _BOTH_TRADE_FLOWS = re.compile(
-    r'수출입|수출(?:액|량)?\s*(?:과|이랑|랑|및|[,·/]|\s)\s*수입'   # "수입 수출"처럼 띄어 쓴 나열도 두 방향이다
-    r'|수입(?:액|량)?\s*(?:과|이랑|랑|및|[,·/]|\s)\s*수출'
+    r'수출입|수출(?:액|량)?\s*(?:과|이랑|랑|및|[,·/])\s*수입'
+    r'|수입(?:액|량)?\s*(?:과|이랑|랑|및|[,·/])\s*수출'
 )
 HS_CODE_MENTION = re.compile(r'(?<![A-Za-z])HS(?:\s*[46](?!\d))?(?:\s*(?:단위|코드)){0,2}\s*[:\-]?\s*(\d{6}|\d{4})(?!\d)', re.I)
 _HS_FOLLOWUP = re.compile(r'(?:' + HS_CODE_MENTION.pattern + r'|(\d{6}))'
@@ -347,25 +347,50 @@ def product_expressions(expressions, *, article_context=False):
     return products or (None if article_context else expressions)
 
 
-_RANKING_DETAIL = re.compile(r'증감|증가|감소|변화|변동|대비|전월|전년|작년|성장|비중|점유|일회성|이상치|급등|급증|급감')
-_KOREA_AS_OBJECT = r'(?:한국|대한민국|우리나라)(?:에게서|에게|한테서|한테|으로부터|로부터|에서|에|산|으로|로)'
+# 상세 순위표(증감률·비중·이상치)가 필요한 요청. '작년·전년·전월'은 "작년 수출 상위 10개국"처럼 조회 시점일 수 있어
+# 낱말만으로는 보지 않고, 비교(대비·보다·늘어·줄어 등)와 함께 쓸 때 잡힌다.
+_RANKING_DETAIL = re.compile(r'증감|증가|감소|변화|변동|대비|보다|늘어|줄어|성장|비중|점유|일회성|이상치|급등|급증|급감')
+# 상대국이 주어인 수출입("미국이 한국에서 수입하는")은 아래 허용 모양에 정확히 맞을 때만 코드가 한국 기준 방향으로 고친다.
+# 그 밖의 문장(절이 바뀜·'수출 규제' 같은 명사구 등)은 플래너 LLM의 판단(프롬프트의 한국 기준 규칙)을 그대로 둔다.
+# 막는 목록이 아니라 허용 모양만 받는다(2026-11-12 사용자 결정).
+#   상대국 + 이/가/은/는 → (부사) → 한국에게/에게서/에서/에/으로부터/산 → (부사·짧은 목적어) → 수입/수출/수출입(나열) + 하다
+_ADVERBS = r'(?:[가-힣]+(?:으로|게|히|나)\s+){0,2}'     # 대표적으로·대중적으로·크게·얼마나 등 어미로 끝나는 부사
+_PLAIN_ADVERBS = r'(?:(?:주로|많이|가장|제일|특히|대체로|보통)\s+){0,2}'   # 어미로 알 수 없는 부사
+_KOREA_AS_OBJECT = r'(?:한국|대한민국|우리나라)(?:에게서|에게|한테서|한테|으로부터|로부터|에서|에|산)'
+_SHORT_OBJECT = r'(?:(?:[가-힣A-Za-z0-9]+\s+){0,2}[가-힣A-Za-z0-9]+(?:을|를)\s+)?'
+# 능동형 동사 활용만 받는다. "한국에서 수출되는 반도체"(피동형)·"수출한도"(명사)는 상대국이 수출 주체가 아니다.
+_FLOW_VERB = (r'(수출입|수입|수출)(?:\s*(?:[,·/]|과|와|및)?\s*(수입|수출))?'
+              r'(?:하(?:는|고|며|면|여|던|다|나|니|지|기)|합니|했|한(?=\s|[?.!,]|$)|해(?=\s|[?.!,]|$|요|서)|할(?=\s|[?.!,]|$))')
+_NEGATION = r'제외|말고|빼고|아니|않|없이'
+_PREFIX_BREAK = re.compile(rf'수출|수입|[.?!]|{_NEGATION}')
+_SUFFIX_BREAK = re.compile(rf'수출|수입|(?:한국|대한민국|우리나라)\s*(?:이|가|은|는)(?=\s)|[.?!]\s*\S|{_NEGATION}')
+
+
+def _partner_matches(text, countries):
+    """질문 안의 허용 모양 상대국 주어 수출입 구절마다 (국가, 일치). 질문 전체가 그 요청인지는 보지 않는다."""
+    adverbs = rf'(?:{_PLAIN_ADVERBS}{_ADVERBS})'
+    for country in countries or []:
+        pattern = (rf'(?<![가-힣]){re.escape(country.mention.strip())}\s*(?:이|가|은|는)\s+{adverbs}'
+                   rf'{_KOREA_AS_OBJECT}\s*{adverbs}{_SHORT_OBJECT}{adverbs}{_FLOW_VERB}')
+        if match := re.search(pattern, text):
+            yield country, match
 
 
 def _partner_subject(text, countries):
-    """상대국이 주어인 수출입("미국이 한국에서 수입하는")이면 (국가명, 질문 속 방향 낱말 {'수입','수출'}). 아니면 None.
-    뒤 절에서 한국이 새 주어로 나오면("미국이 한국에 부과한 관세 이후 한국이 미국에 수출한") 그 뒤 동사는 한국이 주어다."""
-    for country in countries or []:
-        match = re.search(re.escape(country.mention.strip()) + r'\s*(?:이|가|은|는)\s.*?' + _KOREA_AS_OBJECT + r'(.*)', text)
-        if not match:
-            continue
-        tail = match[1]
-        if korea := re.search(r'(?:한국|대한민국|우리나라)\s*(?:이|가|은|는)(?=\s)', tail):
-            tail = tail[:korea.start()]
-        words = {m[0] for m in re.finditer(r'수출입|(?:수입|수출)(?!국|시장|대상)', tail)}
-        flows = {'수입', '수출'} if '수출입' in words else words
-        if flows:
-            return country.name, flows
+    """허용 모양의 상대국 주어 수출입이면 (국가명, 질문 속 방향 낱말 {'수입','수출'}). 아니면 None."""
+    for country, match in _partner_matches(text, countries):
+        # 질문 전체가 그 거래 하나를 묻는 요청일 때만 고친다. 앞에 다른 수출입 낱말·문장이 있거나("한국의 대미 수출액만
+        # 알려줘. 미국이 한국에 수출하는 금액은 제외해 줘."), 뒤에 다른 수출입 절·새 한국 주어·다음 문장이 있거나,
+        # 그 거래를 빼라고 하면(제외·말고·빼고·아니·않) 플래너 LLM의 판단을 둔다.
+        if match and not _PREFIX_BREAK.search(text[:match.start()]) and not _SUFFIX_BREAK.search(text[match.end():]):
+            words = {w for w in match.groups() if w}
+            return country.name, {'수입', '수출'} if '수출입' in words else words
     return None
+
+
+def _korea_basis_label(name, countries, flow):
+    """제목에 붙이는 한국 기준 방향. 조회 국가가 여럿이면("미국과 중국이 한국에서 수입하는") 한 나라 이름만 붙이지 않는다."""
+    return f'한국의 대{name} {flow}' if len(countries or []) <= 1 else f'한국 기준 {flow}'
 
 
 def _partner_subject_flow(text, countries):
@@ -386,19 +411,25 @@ def _split_year_comparisons(slots, text):
         return
     if (compare.start.month, compare.end.month) != (1, 12) or compare.start.year == compare.end.year:
         return
-    if re.search(r'(?<!\d)\d{2,4}\s*년?\s*(?:~|부터|-(?=\s*\d{2,4}\s*년))\s*\d{2,4}(?!\d)', text):
+    # 이어진 기간: "2023~2024년", "2021년(도)부터 2024년(도)까지".
+    if re.search(r'(?<!\d)\d{2,4}\s*(?:년도?)?\s*(?:[~～]|부터|-(?=\s*\d{2,4}\s*년))\s*\d{2,4}(?!\d)', text):
         return
     # "2023년"·"23년" 모두 그 연도다. 두 자리는 뒤에 '년'이 있을 때만 연도로 본다.
     year = lambda y: rf'(?<!\d)(?:{y}|{y % 100:02d}(?=\s*년))(?!\d)'
-    if re.search(year(compare.end.year) + r'\s*년?\s*(?:사이|까지)', text):
-        return  # "2021년과 2024년 사이"는 이어진 기간이다.
+    # "2021년 1월~2024년 12월"은 양 끝 연도가 붙은 연속 범위다.
+    if re.search(year(compare.start.year) + r'\s*(?:년도?)?\s*\d{1,2}\s*월\s*(?:[~～-]|부터)\s*'
+                 + year(compare.end.year), text):
+        return
+    if re.search(year(compare.end.year) + r'\s*(?:년도?)?\s*(?:\d{1,2}\s*월\s*)?(?:의\s*)?(?:사이|까지)', text):
+        return
     mentions = {y: m for y in range(compare.start.year, compare.end.year + 1) if (m := re.search(year(y), text))}
     # 양 끝 연도를 따로 적었으면 실제로 적은 연도만 비교한다("2021년과 2024년 각각" → 2022·2023년은 넣지 않는다).
     if compare.start.year not in mentions or compare.end.year not in mentions:
         return
-    periods = [Period(start=date(y, 1, 1), end=date(y, 12, 1))
-               for y in sorted(mentions, key=lambda y: mentions[y].start())]
-    slots.compare_period, slots.extra_compare_periods = periods[0], periods[1:]
+    periods = [p for y in sorted(mentions, key=lambda y: mentions[y].start())
+               if (p := Period(start=date(y, 1, 1), end=date(y, 12, 1))) != current]   # 기준 연도는 비교 기간이 아니다
+    if periods:
+        slots.compare_period, slots.extra_compare_periods = periods[0], periods[1:]
 
 
 def _normalize_analysis(output, question, previous_conditions):
@@ -433,8 +464,9 @@ def _normalize_analysis(output, question, previous_conditions):
         if task.intent in ('STATISTICS', 'RANKING', 'CAUSE') and (flipped := _partner_subject_flow(text, task.slots.countries)):
             # 수출입 표는 한국 기준이다. "미국이 한국에서 수입"은 한국의 대미국 수출이다. LLM이 이미 뒤집었어도 같은 값이 된다.
             name, task.slots.trade_flow = flipped
-            label = f"한국의 대{name} {'수출' if task.slots.trade_flow == 'EXPORT' else '수입'}"
-            if label not in task.question:
+            label = _korea_basis_label(name, task.slots.countries, '수출' if task.slots.trade_flow == 'EXPORT' else '수입')
+            # 원인 분석은 질문 문장으로 기사 근거를 고르므로(compose.relevant_article_facts) 병기 낱말을 섞지 않는다.
+            if label not in task.question and task.intent != 'CAUSE':
                 task.question = f'{task.question} ({label})'
         if task.intent == 'STATISTICS':
             _split_year_comparisons(task.slots, text)
@@ -492,9 +524,14 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
     # 상대국 주어 질문은 _normalize_analysis가 한국 기준 방향을 정했다. 아래의 수출/수입 낱말 규칙으로 되돌리지 않는다.
     if _partner_subject_flow(question, task.slots.countries):
         return output
+    # 상대국 관점 구절("미국이 한국에서 수입 수출하는 품목 중 수출만")이 있으면 '수출만'·'수입'은 상대국 기준이다.
+    # 낱말 그대로 한국 기준 방향을 정하지 않고 플래너 LLM이 한국 기준으로 바꾼 방향을 둔다.
+    partner_view = any(_partner_matches(question, task.slots.countries))
+    if partner_view and re.search(r'(수출|수입)(?:액|량)?\s*만(?!큼)', question):
+        return output
     if re.search(r'수(?:출|입)(?:액|량)?\s*(?:말고|빼고|제외)', question):
         return output
-    if previous_both_trade_flows and not _BOTH_TRADE_FLOWS.search(question):
+    if previous_both_trade_flows and not _BOTH_TRADE_FLOWS.search(question) and not partner_view:
         explicit_flows = set(re.findall(r'수출|수입', question))
         if not explicit_flows:
             task.slots.trade_flow = None  # 이전 수출 슬롯을 복사한 국가·기간 변경도 두 방향을 유지한다.
@@ -506,12 +543,16 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
         return output.model_copy(update={'tasks': [
             task.model_copy(update={'slots': task.slots.model_copy(update={'trade_flow': flow})}),
         ]})
-    if _BOTH_TRADE_FLOWS.search(question) or (previous_both_trade_flows and task.slots.trade_flow is None):
+    # 띄어 쓴 나열("수입 수출")은 '수출 수입국'처럼 다른 낱말일 수 있어 일반 규칙으로는 두 방향으로 보지 않는다.
+    # 상대국 주어 허용 모양에서 두 방향이 잡힌 경우("미국이 한국에게 수입 수출하는 항목")만 두 작업으로 나눈다.
+    partner = _partner_subject(question, task.slots.countries)
+    partner_both = bool(partner) and len(partner[1]) == 2
+    if (_BOTH_TRADE_FLOWS.search(question) or partner_both
+            or (previous_both_trade_flows and task.slots.trade_flow is None)):
         # 상대국 주어("미국이 한국에 수입 수출하는")면 두 작업 제목에 한국 기준 방향을 병기한다.
-        partner = _partner_subject(question, task.slots.countries)
         def question_for(flow, label):
-            if partner:
-                return f'{task.question} (한국의 대{partner[0]} {label})'
+            if partner and task.intent != 'CAUSE':
+                return f'{task.question} ({_korea_basis_label(partner[0], task.slots.countries, label)})'
             return f'{label} · {task.question}' if task.intent == 'CAUSE' else task.question
         tasks = [task.model_copy(update={
             'question': question_for(flow, label),
