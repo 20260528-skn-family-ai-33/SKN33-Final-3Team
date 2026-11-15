@@ -22,7 +22,7 @@ from backend.app.agents.result_store import ResultStore, fingerprint, shared_res
 from backend.app.agents.sql import generated_analysis
 from backend.app.agents.state import AgentState, Draft, MAX_TASK_SENTENCES, MAX_TEXT_CHARS, MAX_TEXT_TASK_SENTENCES, Plan, PlannerOutput, Task, TaskConclusion, ToolResult, WriterEdits, is_text_task
 from backend.app.agents.templates import api_conditions, run_template
-from backend.app.agents.verify import verify, snapshot_evidence
+from backend.app.agents.verify import verify, snapshot_evidence, unsupported_sql_prose
 from backend.app.api import trade, results
 from backend.app.api.common import ApiError, clean, now
 from backend.app.api.database import Store
@@ -71,6 +71,7 @@ def ml_queue_seconds(settings):
 
 
 HIDDEN_ARTICLE_SENTENCE = '이 문장이 인용한 기사는 답변 뒤 공개 여부나 본문이 바뀌어 내용을 표시하지 않습니다.'
+UNVERIFIED_SQL_SENTENCE = '집계 기간을 확인할 수 없는 수치는 결과표에서 확인해 주세요.'
 
 
 def redact_hidden_citations(sentences, articles):
@@ -653,14 +654,26 @@ class Services:
             # 검색 뒤 숨겨진 기사(카드 unavailable)를 [n]으로 인용한 문장은 그 기사 내용을 옮긴 것이므로 보이지 않는다.
             # 문장 수·번호는 verify 대조(sentence_checks.index)와 맞춰야 해서 빼지 않고 안내 문구로 바꾼다
             sentences=redact_hidden_citations(sentences,articles)
-            for item in tasks: item['conclusion']=redact_hidden_citations(item['conclusion'],articles)
+            blocked_sql, blocked_title = unsupported_sql_prose(state)
+            for index in blocked_sql:
+                if sentences[index] != HIDDEN_ARTICLE_SENTENCE:
+                    sentences[index] = UNVERIFIED_SQL_SENTENCE
+            offset = 0
+            for item in tasks:
+                end = offset + len(item['conclusion'])
+                item['conclusion'] = sentences[offset:end]
+                offset = end
             if HIDDEN_ARTICLE_SENTENCE in sentences:
                 # 대화 요약·제목도 숨긴 기사 내용을 옮겼을 수 있다. 요약은 최근 대화(recent)로 다음 질문의 플래너와
                 # "아까 뭐라고 했지?" 답변(CONVERSATION)에 다시 쓰이므로 비운다. 최근 대화에는 질문과 조건만 남는다
                 state.draft=state.draft.model_copy(update={'turn_summary':'','title':None})
-            # 안내 문구로 바꾼 문장의 대조 결과에도 숨긴 기사에서 옮긴 숫자가 남지 않게 한다
+            elif blocked_sql or blocked_title:
+                # 요약도 다음 질문의 플래너와 CONVERSATION 답변에 다시 쓰이므로 감춘 수치를 옮겼을 수 있는 요약을 비운다.
+                state.draft=state.draft.model_copy(update={'turn_summary':'',
+                    **({'title':None} if blocked_title else {})})
+            # 안내 문구의 대조 결과에도 감춘 수치를 남기지 않는다.
             checks=[{**c.model_dump(),'sentence':sentences[c.index],
-                     **({'numbers':[]} if sentences[c.index]==HIDDEN_ARTICLE_SENTENCE else {})}
+                     **({'numbers':[]} if sentences[c.index] in (HIDDEN_ARTICLE_SENTENCE, UNVERIFIED_SQL_SENTENCE) else {})}
                     for c in state.verification.checks]
             article_period = tasks[0]['article_period']
             if action := state.input.article_action:

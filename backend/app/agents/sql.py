@@ -14,6 +14,7 @@ from backend.app.agents.state import SqlDraft
 from backend.app.agents.digest import bounded, MAX_DIGEST_ROWS
 from backend.app.agents.templates import Analysis, api_conditions, extra_periods
 from backend.app.agents.state import ToolResult
+from backend.app.agents.verify_claims import IDENTITY_FIELDS
 from backend.app.api.common import ApiError
 from sqlalchemy import inspect
 from sqlalchemy.exc import SQLAlchemyError
@@ -164,18 +165,22 @@ def _reads_country_table(select):
             and picked.table.lower() in ('', table.alias_or_name.lower()))
 
 
-def _country_subquery(node):
+def _country_subquery(node, *, role_only=False):
     """`country_code IN (SELECT country_code FROM country WHERE country_role = 'COUNTRY')` 형태인지."""
     query = node.args.get('query')
     select = query.this if isinstance(query, exp.Subquery) else query
     if not isinstance(select, exp.Select) or len(select.selects) != 1:
         return False
+    terms = _conjuncts(select)
+    if role_only and (len(terms) != 1 or not isinstance(terms[0], (exp.EQ, exp.In))
+                      or any(value for key, value in select.args.items() if key not in ('expressions', 'from', 'from_', 'where'))):
+        return False  # 기간을 증명할 때는 거래 행을 줄일 수 있는 추가 조건·LIMIT 등을 허용하지 않는다.
     picked = select.selects[0].unalias()
     tables = {t.alias_or_name.lower(): t for t in select.find_all(exp.Table)}
     countries = {alias for alias, t in tables.items() if t.name.lower() == 'country'}
     return (isinstance(picked, exp.Column) and picked.name.lower() == 'country_code' and len(tables) == 1
             and bool(countries) and _reads_country_table(select)
-            and _filters(_conjuncts(select), 'country_role', countries, 'COUNTRY'))
+            and _filters(terms, 'country_role', countries, 'COUNTRY'))
 
 
 def _non_country_subquery(node):
@@ -415,23 +420,57 @@ def _selected_months(filters):
     return set(range(low, high + 1))
 
 
-# depth는 넣지 않는다. hs_code 조인이 HS6 코드·판본 키로 정해지므로 depth 조건은 행을 버리기만 한다.
-SCOPE_COLUMNS = frozenset(('hs_ver', 'country_code', 'country_role', 'hs_code', 'hs2_code', 'hs4_code', 'hs6_code',
-                           'hs10_code'))
 # 기간 증명에서 수출입 표에 붙일 수 있는 사전 표와 그 조인 열(키로만 이으면 행이 늘거나 줄지 않는다).
 LOOKUP_JOINS = {'country': ({'country_code'}, {'country_code'}), 'hs_code': ({'hs_code', 'hs_ver'}, {'hs6_code', 'hs_ver'})}
+HS_DEPTHS = {'hs2_code': 2, 'hs4_code': 4, 'hs6_code': 6, 'hs10_code': 10}
+GROUP_IDENTITIES = {
+    'country_code': {'country_code', 'code'},
+    'hs_ver': {'hs_ver'},
+    'hs_code': {'hs_code', 'hs6', 'hs6_code', 'code'},
+    'hs6_code': {'hs_code', 'hs6', 'hs6_code', 'code'},
+    'hs2_code': {'hs2_code', 'hs_code', 'code'},
+    'hs4_code': {'hs4_code', 'hs_code', 'code'},
+    'hs10_code': {'hs10_code', 'hs_code', 'code'},
+}
+LOOKUP_NAMES = {'country': 'country_name', 'hs_code': 'hs_name'}
 
 
-def _keeps_rows(term):
-    """대상 범위(판본·국가·품목)만 정하는 조건인지. 금액·이름 조건 등은 일부 행을 버릴 수 있다."""
+def _exact_scope_filter(term, trade, lookups, conditions):
+    """확정 범위의 한 축을 그대로 적용한 조건 이름. 일부 국가·하위 품목만 고르는 조건은 증명하지 않는다."""
     found = _literal_filter(term)
     if found and not isinstance(term.unnest(), exp.Or):
-        return found[0].name.lower() in SCOPE_COLUMNS and found[1] in ('eq', 'in', 'like')
-    if isinstance(term, exp.In) and term.args.get('query') is not None:
-        return _country_subquery(term)
-    if isinstance(term, exp.Not) and isinstance(term.this, exp.In):
-        return _non_country_subquery(term)
-    return False
+        column, op, literals = found
+        name, qualifier = column.name.lower(), column.table.lower()
+        lookup = lookups.get(qualifier)
+        from_trade = qualifier in ('', trade)
+        exact = op in ('eq', 'in')
+        values = set(literals)
+        if name == 'country_code' and (from_trade or lookup == 'country'):
+            return name if exact and values == set(conditions.country_codes) else None
+        if name == 'country_role' and (lookup == 'country' or not qualifier and 'country' in lookups.values()):
+            return name if exact and values == {'COUNTRY'} else None
+        if name == 'hs_ver' and (from_trade or lookup == 'hs_code'):
+            editions = {item.hs_ver for item in conditions.hs_items} or {'HS2022'}
+            return name if exact and len(editions) == 1 and values == editions else None
+        depth = HS_DEPTHS.get(name) if from_trade else None
+        if name == 'hs_code' and lookup == 'hs_code':
+            depth = 6
+        if depth is not None:
+            codes = {item.hs_code for item in conditions.hs_items}
+            if exact and all(len(code) == depth for code in codes) and values == codes:
+                return 'hs_code'
+            if op == 'like' and len(codes) == 1 and all(len(code) <= depth for code in codes):
+                if values == {f'{code}%' if len(code) < depth else code for code in codes}:
+                    return 'hs_code'
+        return None
+    lookup = term.this if isinstance(term, exp.Not) else term
+    if (isinstance(lookup, exp.In) and lookup.args.get('query') is not None
+            and isinstance(lookup.this, exp.Column) and lookup.this.name.lower() == 'country_code'
+            and (lookup.this.table.lower() in ('', trade) or lookups.get(lookup.this.table.lower()) == 'country')):
+        valid = _non_country_subquery(term) if isinstance(term, exp.Not) else _country_subquery(term, role_only=True)
+        if valid:
+            return 'country_role'
+    return None
 
 
 def _key_join(join, trade):
@@ -493,12 +532,12 @@ def period_covered(sql, conditions):
     결과 수치는 기간을 모르는 값으로 본다(verify_evidence·verify.mismatch: 어떤 금액 문장도 검증하지 않는다).
     - 비교 기간이 없다. SELECT 하나이며 CTE·UNION·윈도 함수가 없다.
     - FROM은 수출입 표 하나이고, 조인은 country·hs_code에 키 열로만 잇는 내부 조인이다.
-    - WHERE는 AND로만 잇고, trade_month 리터럴 조건(고르는 월이 조회 기간과 정확히 같다)과 판본·국가·HS 조건,
-      국가 역할 하위 쿼리만 쓴다. trade_month는 WHERE 말고 어디에도 쓰지 않는다.
+    - WHERE는 AND로만 잇고, 확정한 월·판본·국가·품목 범위를 그대로 고른다. trade_month는 WHERE에서만 쓰고,
+      전체 국가는 국가 역할 조건으로 집계한다.
     - 결과는 집계다: SELECT의 각 식은 집계 함수를 담거나 GROUP BY 식이다(행 단위 금액은 한 달 값일 수 있다).
       집계 함수는 SUM·COUNT만(DISTINCT 없이) 쓰고 CASE·IF·FILTER를 쓰지 않는다(MAX는 한 달 값, 조건 집계는 일부 행이다).
-      GROUP BY는 국가·품목·판본 열이나 사전 표 열만 쓴다(금액으로 나누면 일부 행 합계다). 하위 쿼리는 WHERE의
-      국가 역할 조건에만 쓴다.
+      GROUP BY는 국가·품목·판본을 식별하는 열만 쓰고, 모든 그룹 키를 결과의 식별 열로 내보낸다.
+      하위 쿼리는 WHERE의 국가 역할 조건에만 쓴다.
     """
     if not conditions or not conditions.period or conditions.compare_period or conditions.extra_compare_periods:
         return False
@@ -513,23 +552,33 @@ def period_covered(sql, conditions):
         return False
     source = query.args.get('from_') or query.args.get('from')
     table = source.this if source else None
-    if not isinstance(table, exp.Table) or table.name.lower() not in TRADE_TABLES:
+    if (not isinstance(table, exp.Table) or table.name.lower() not in TRADE_TABLES
+            or not table.name.lower().startswith(f'{conditions.trade_flow.lower()}_')):
         return False
     trade = table.alias_or_name.lower()
     if any(t.name.lower() in TRADE_TABLES for t in query.find_all(exp.Table) if t is not table):
         return False
     if not all(_key_join(join, trade) for join in query.args.get('joins') or []):
         return False
+    lookups = {j.this.alias_or_name.lower(): j.this.name.lower() for j in query.args.get('joins') or []}
     where = query.args.get('where')
     dates = []
+    scope = set()
     for term in _and_terms(where.this if where else None):
         found = _literal_filter(term)
         if found and found[0].name.lower() == 'trade_month' and not isinstance(term.unnest(), exp.Or):
             if found[0].table.lower() not in ('', trade) or found[1] not in DATE_OPS:
                 return False
             dates.append(('trade_month', found[1], found[2]))
-        elif not _keeps_rows(term):
+        elif key := _exact_scope_filter(term, trade, lookups, conditions):
+            scope.add(key)
+        else:
             return False
+    required = {'hs_ver', 'country_code' if conditions.country_codes else 'country_role'}
+    if conditions.hs_items:
+        required.add('hs_code')
+    if not required <= scope:
+        return False
     want = set(range(_month_number(conditions.period.start), _month_number(conditions.period.end) + 1))
     if not dates or _selected_months(dates) != want:
         return False
@@ -538,16 +587,31 @@ def period_covered(sql, conditions):
             if c.name.lower() == 'trade_month' and _literal_filter(term)):
         return False   # SELECT·GROUP BY·ORDER BY·HAVING·조인에 trade_month를 쓰면 월을 나누거나 고를 수 있다.
     group = query.args.get('group')
-    keys = [g for g in group.expressions] if group else []
-    lookups = {j.this.alias_or_name.lower() for j in query.args.get('joins') or []}
-    def scope_key(key):   # 국가·품목·판본 열(수출입 표) 또는 사전 표(country·hs_code)의 열
-        if not isinstance(key, exp.Column) or key.name.lower() == 'trade_month':
-            return False
-        table_ = key.table.lower()
-        return table_ in lookups or key.name.lower() in SCOPE_COLUMNS or (not table_ and key.name.lower() in ('name_ko', 'name_en'))
-    if not all(scope_key(key) for key in keys):
+    keys = group.expressions if group else []
+    product_codes = {key.name.lower() for key in keys if isinstance(key, exp.Column)}
+    has_hs6_name = any(isinstance(key, exp.Column) and lookups.get(key.table.lower()) == 'hs_code'
+                      and key.name.lower() in ('name_ko', 'name_en') for key in keys)
+    if has_hs6_name and product_codes & {'hs2_code', 'hs4_code', 'hs10_code'}:
+        return False   # 이 조인의 품목명은 HS6다. 다른 깊이의 코드와 한 그룹에 있으면 표로만 제공한다.
+
+    def identity_aliases(key):
+        if not isinstance(key, exp.Column):
+            return ()
+        name, qualifier = key.name.lower(), key.table.lower()
+        lookup = lookups.get(qualifier)
+        if name in ('name_ko', 'name_en') and lookup:
+            allowed = {name, 'name', 'label', LOOKUP_NAMES[lookup]}
+            if lookup == 'hs_code':
+                allowed.add('product_name')
+            return allowed
+        return GROUP_IDENTITIES.get(name, ())
+    identities = [(key, identity_aliases(key)) for key in keys]
+    def exposes(expr, key, aliases):
+        return expr.unalias() == key and expr.alias_or_name in aliases
+    if not all(any(exposes(expr, key, aliases) for expr in query.selects) for key, aliases in identities):
         return False
-    return all(_aggregate_value(expr.unalias()) or any(expr.unalias() == key for key in keys)
+    return all((_aggregate_value(expr.unalias()) and expr.alias_or_name not in (*IDENTITY_FIELDS, 'hs_ver'))
+               or any(exposes(expr, key, aliases) for key, aliases in identities)
                for expr in query.selects)
 
 
@@ -813,6 +877,8 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
             return Analysis([], {}, ToolResult(status='NO_DATA', error='조건에 맞는 조회 결과가 없습니다.'), conditions, [sql])
         # 조회 기간 전체를 그대로 집계했다고 증명될 때만 결과 수치에 조회 기간을 붙인다(verify_evidence).
         covered = period_covered(sql, task.conditions)
+        items = task.conditions.hs_items
+        edition_scope = {'hs_ver': items[0].hs_ver if items else 'HS2022'} if covered else {}
         meta = {'kind': 'LLM_SQL', 'summary': draft.summary, 'source': '관세청', 'period': conditions['period'], **basis,
                 'period_verified': covered}
         columns = [col.model_dump() for col in draft.columns]
@@ -820,7 +886,7 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
             'trade_flow': conditions['trade_flow'], 'unit': 'USD', 'source': '관세청',
             'latest_available_month': latest_month, 'rows_total': len(rows), 'truncated': len(rows)>MAX_DIGEST_ROWS,
             'columns': [{'key': col.key, 'unit': col.unit} for col in draft.columns],
-            'rows': rows[:MAX_DIGEST_ROWS], 'sql_summary': draft.summary, **basis, 'period_verified': covered})
+            'rows': rows[:MAX_DIGEST_ROWS], 'sql_summary': draft.summary, **basis, **edition_scope, 'period_verified': covered})
         if 'extra_compare_periods' in prompt_conditions:
             meta['extra_compare_periods'] = prompt_conditions['extra_compare_periods']
         return Analysis(rows, meta, ToolResult(status='OK', source='관세청', period=task.conditions.period,

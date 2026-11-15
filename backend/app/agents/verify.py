@@ -8,7 +8,7 @@ from decimal import Decimal, ROUND_HALF_UP, localcontext
 from dataclasses import dataclass, replace
 import re
 
-from backend.app.agents.compose import fixed_conclusion
+from backend.app.agents.compose import fixed_conclusion, unverified_sql_period
 from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
     ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
@@ -319,11 +319,20 @@ def _matching_cells(claim, facts, sources, catalog):
     def dimensions(targets):
         named = targets - {'전체 국가', '전체 품목'}
         return bool(named - catalog.countries), bool(named & catalog.countries)
-    required_dimensions = dimensions(claim.targets) if check_dimensions else None
+    required_dimensions = dimensions(claim.targets)
     for fact in facts:
-        if check_dimensions and dimensions(fact.stored_targets) != required_dimensions:
+        source = sources[fact.source]
+        sql_group = source.get('kind') == 'LLM_SQL' and fact.stored_targets
+        if (check_dimensions or sql_group) and dimensions(fact.stored_targets) != required_dimensions:
             continue
-        reason = mismatch(claim, fact, sources[fact.source])
+        if sql_group:
+            codes = {name for name in fact.stored_targets if name.isascii() and name.isdigit()}
+            # An HS4 parent cannot stand in for the HS6 group even if the parent is also projected.
+            if any(child.startswith(parent) for parent in codes & claim.targets for child in codes - claim.targets):
+                continue
+        reason = mismatch(claim, fact, source)
+        if fact.hs_ver and reason in (None, 'VALUE', 'DIRECTION'):
+            editions.add(fact.hs_ver)
         if claim.quantity is None and not claim.metric.comparison and reason in (None, 'DIRECTION'):
             axes = [axis for axis in ('YOY', 'MOM') if _comparison_matches(axis, fact)]
             if not axes:
@@ -479,6 +488,35 @@ def generated_conclusion(state, task, has_evidence):
     if fixed_ids is not None:
         return task.task_id not in fixed_ids
     return (has_evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
+
+
+def unsupported_sql_prose(state):
+    """Final publication guard for unsupported numbers in scopes with unverified SQL."""
+    unverified_tasks = {task.task_id for task in state.plan.tasks if any(
+        (result := state.results.get(step.step_id)) and unverified_sql_period(result.digest or {}) for step in task.steps)}
+    if not unverified_tasks:
+        return set(), False
+    unverified_steps = {step.step_id for task in state.plan.tasks if task.task_id in unverified_tasks for step in task.steps}
+    # 기간이 확인된 결과의 칸과 값만 다른 문장(diagnose_claim이 그 칸을 찾음)은 그 결과의 수치 오류다.
+    # 결과표 안내로 바꾸지 않고 다른 불일치 문장처럼 "확인 필요"로 보인다.
+    # 한 문장에 다른 값(기간 미확인 SQL 수치 등)이 함께 틀렸으면 그 값도 감춰야 하므로 모든 지적이 확인된 칸일 때만 뺀다.
+    attributed = {}
+    for item in state.verification.feedback:
+        if item.index is not None:
+            attributed.setdefault(item.index, []).append(bool(item.step_id) and item.step_id not in unverified_steps)
+    verified_mistakes = {index for index, verified in attributed.items() if all(verified)}
+    failed = {check.index for check in state.verification.checks if check.status != 'PASS' and check.numbers
+              and check.index not in verified_mistakes}
+    blocked, offset = set(), 0
+    for conclusion in state.draft.conclusion:
+        end = offset + len(conclusion.sentences)
+        if conclusion.task_id in unverified_tasks:
+            blocked.update(failed.intersection(range(offset, end)))
+        offset = end
+    # 설명에는 작업 ID가 없으므로 전체 답변이 근거 범위다. 판정이 PASS인 문장과 확인된 결과의 수치 오류는 위에서 뺐다.
+    blocked.update(index for index in failed if index >= offset)
+    title = state.draft.title
+    return blocked, bool(title and quantities(quantity_text(title, NameCatalog([]))))
 
 
 def mark_unverified(state):

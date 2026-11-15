@@ -87,8 +87,12 @@ def numbered_articles(state):
     return articles
 
 
+def unverified_sql_period(digest):
+    return digest.get('kind') == 'LLM_SQL' and digest.get('period_verified') is not True
+
+
 def _trade_fact(digest):
-    if digest.get('kind') == 'LLM_SQL' and digest.get('period_verified') is not True:
+    if unverified_sql_period(digest):
         return None   # 기간을 증명하지 못한 생성 SQL 수치는 대체 결론에도 쓰지 않는다(결과표 안내만).
     if digest.get('kind') == 'LLM_SQL' and digest.get('rows'):
         row = digest['rows'][0]
@@ -289,6 +293,9 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
                 if step.tool == 'search_articles':
                     # The numbered, evidence-filtered articles are the only source of article text.
                     digest = {k: v for k, v in digest.items() if k != 'items'}
+                if unverified_sql_period(digest):
+                    # 집계 기간이 확인되지 않은 결과는 표 안내에 필요한 표시만 전달한다.
+                    digest = {'kind': 'LLM_SQL', 'period_verified': False}
                 digests[step.step_id.rsplit('.', 1)[-1]] = display_amounts(digest)
         if not digests:
             fixed[task.task_id] = fallback_conclusion(state, task, country_names)
