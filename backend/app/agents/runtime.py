@@ -441,6 +441,14 @@ class Services:
                 and LLM_SQL_PERIOD_WARNING not in state.warnings):
             state.warnings.append(LLM_SQL_PERIOD_WARNING)
         if data.result.status!='OK': return data.result
+        if generated and data.meta.get('annual_verified') is True and data.result.digest:
+            # 재작성 검사(compose.validate_rewrite)는 digest로 대조한다. 저장본과 같은 연간 칸 지도를 digest에도 둔다.
+            from backend.app.agents.templates import condition_names
+            from backend.app.agents.verify import annual_sql_scope
+            with self.read_store() as store: country_labels,products=condition_names(store,[task.conditions])
+            data.result.digest.update(annual_sql_scope(
+                {'sql':data.sql,'conditions':data.conditions,'rows':data.rows},
+                country_labels=country_labels,product_labels=products))
         return self.results.save(state,step,data.result,rows=data.rows,meta=data.meta,conditions=data.conditions,
             input_fingerprint=key(versions),source_results=parents,versions=versions,columns=data.columns,sql=data.sql)
 

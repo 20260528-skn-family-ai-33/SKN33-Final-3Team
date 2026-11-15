@@ -3,6 +3,7 @@ from collections import Counter
 import re
 
 from backend.app.agents.digest import display_amounts, korean_usd
+from backend.app.api.common import sql_period_unproven
 from backend.app.agents.state import (AgentState, Draft, TaskConclusion, MAX_TASK_SENTENCES,
                                       MAX_TEXT_TASK_SENTENCES, draft_limit_error, is_text_task)
 
@@ -347,9 +348,11 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
                 if step.tool == 'search_articles':
                     # The numbered, evidence-filtered articles are the only source of article text.
                     digest = {k: v for k, v in digest.items() if k != 'items'}
-                if unverified_sql_period(digest):
+                if sql_period_unproven(digest):
                     # 집계 기간이 확인되지 않은 결과는 표 안내에 필요한 표시만 전달한다.
                     digest = {'kind': 'LLM_SQL', 'period_verified': False}
+                # 연간 칸 지도는 검증용이다. 작성 모델에는 넘기지 않는다.
+                digest = {k: v for k, v in digest.items() if not k.startswith('_annual')}
                 digests[step.step_id.rsplit('.', 1)[-1]] = display_amounts(digest)
         if not digests:
             fixed[task.task_id] = fallback_conclusion(state, task, country_names)
