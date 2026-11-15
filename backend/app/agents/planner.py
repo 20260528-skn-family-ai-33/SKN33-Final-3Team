@@ -356,7 +356,10 @@ _RANKING_DETAIL = re.compile(r'증감|증가|감소|변화|변동|대비|보다|
 #   상대국 + 이/가/은/는 → (부사) → 한국에게/에게서/에서/에/으로부터/산 → (부사·짧은 목적어) → 수입/수출/수출입(나열) + 하다
 _ADVERBS = r'(?:[가-힣]+(?:으로|게|히|나)\s+){0,2}'     # 대표적으로·대중적으로·크게·얼마나 등 어미로 끝나는 부사
 _PLAIN_ADVERBS = r'(?:(?:주로|많이|가장|제일|특히|대체로|보통)\s+){0,2}'   # 어미로 알 수 없는 부사
-_KOREA_AS_OBJECT = r'(?:한국|대한민국|우리나라)(?:에게서|에게|한테서|한테|으로부터|로부터|에서|에|산)'
+_KOREA_AS_OBJECT = r'(?:한국|대한민국|우리나라)(?P<particle>에게서|에게|한테서|한테|으로부터|로부터|에서|에|산)'
+# "한국에서 수출한 반도체"는 한국이 수출한 것이다. 출발 조사 뒤의 수출 하나는 상대국이 수출 주체가 아니라 받지 않는다.
+_FROM_KOREA = frozenset(('에게서', '한테서', '으로부터', '로부터', '에서', '산'))
+_FLOW_WORDS = frozenset(('수입', '수출', '수출입'))
 _SHORT_OBJECT = r'(?:(?:[가-힣A-Za-z0-9]+\s+){0,2}[가-힣A-Za-z0-9]+(?:을|를)\s+)?'
 # 능동형 동사 활용만 받는다. "한국에서 수출되는 반도체"(피동형)·"수출한도"(명사)는 상대국이 수출 주체가 아니다.
 _FLOW_VERB = (r'(수출입|수입|수출)(?:\s*(?:[,·/]|과|와|및)?\s*(수입|수출))?'
@@ -372,8 +375,11 @@ def _partner_matches(text, countries):
     for country in countries or []:
         pattern = (rf'(?<![가-힣]){re.escape(country.mention.strip())}\s*(?:이|가|은|는)\s+{adverbs}'
                    rf'{_KOREA_AS_OBJECT}\s*{adverbs}{_SHORT_OBJECT}{adverbs}{_FLOW_VERB}')
-        if match := re.search(pattern, text):
+        for match in re.finditer(pattern, text):
+            if {w for w in match.groups() if w in _FLOW_WORDS} == {'수출'} and match['particle'] in _FROM_KOREA:
+                continue
             yield country, match
+            break
 
 
 def _partner_subject(text, countries):
@@ -383,7 +389,7 @@ def _partner_subject(text, countries):
         # 알려줘. 미국이 한국에 수출하는 금액은 제외해 줘."), 뒤에 다른 수출입 절·새 한국 주어·다음 문장이 있거나,
         # 그 거래를 빼라고 하면(제외·말고·빼고·아니·않) 플래너 LLM의 판단을 둔다.
         if match and not _PREFIX_BREAK.search(text[:match.start()]) and not _SUFFIX_BREAK.search(text[match.end():]):
-            words = {w for w in match.groups() if w}
+            words = {w for w in match.groups() if w in _FLOW_WORDS}
             return country.name, {'수입', '수출'} if '수출입' in words else words
     return None
 
@@ -411,16 +417,17 @@ def _split_year_comparisons(slots, text):
         return
     if (compare.start.month, compare.end.month) != (1, 12) or compare.start.year == compare.end.year:
         return
-    # 이어진 기간: "2023~2024년", "2021년(도)부터 2024년(도)까지".
-    if re.search(r'(?<!\d)\d{2,4}\s*(?:년도?)?\s*(?:[~～]|부터|-(?=\s*\d{2,4}\s*년))\s*\d{2,4}(?!\d)', text):
-        return
     # "2023년"·"23년" 모두 그 연도다. 두 자리는 뒤에 '년'이 있을 때만 연도로 본다.
-    year = lambda y: rf'(?<!\d)(?:{y}|{y % 100:02d}(?=\s*년))(?!\d)'
-    # "2021년 1월~2024년 12월"은 양 끝 연도가 붙은 연속 범위다.
-    if re.search(year(compare.start.year) + r'\s*(?:년도?)?\s*\d{1,2}\s*월\s*(?:[~～-]|부터)\s*'
+    year = lambda y: rf'(?<![\dA-Za-z])(?:{y}|{y % 100:02d}(?=\s*년|[./-]\s*\d{{1,2}}(?!\d)))(?!\d)'
+    # 비교 기간 자체의 두 연도가 붙은 경우만 연속 범위다. 기준 기간의 ISO 월 표시는 여기서 비교하지 않는다.
+    start_year = compare.start.year
+    start = rf'(?<![\dA-Za-z./-])(?:{start_year}|{start_year % 100:02d})(?!\d)'
+    date_suffix = (r'(?:\s*년도?(?:\s*\d{1,2}\s*월(?:\s*\d{1,2}\s*일)?)?'
+                   r'|[./-]\s*\d{1,2}(?:[./-]\s*\d{1,2}\.?)?)?')
+    if re.search(start + date_suffix + r'\s*(?:[~～–-]|부터|에서)\s*'
                  + year(compare.end.year), text):
         return
-    if re.search(year(compare.end.year) + r'\s*(?:년도?)?\s*(?:\d{1,2}\s*월\s*)?(?:의\s*)?(?:사이|까지)', text):
+    if re.search(year(compare.end.year) + date_suffix + r'\s*(?:의\s*)?(?:사이|까지)', text):
         return
     mentions = {y: m for y in range(compare.start.year, compare.end.year + 1) if (m := re.search(year(y), text))}
     # 양 끝 연도를 따로 적었으면 실제로 적은 연도만 비교한다("2021년과 2024년 각각" → 2022·2023년은 넣지 않는다).
