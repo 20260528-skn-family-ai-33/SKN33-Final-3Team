@@ -223,7 +223,8 @@ class CompareYearsSplitTest(unittest.TestCase):
                        '23.05달러보다 높은지', '23.05 홍콩달러를 넘는지', '23.05달러라고 가정해도 되는지',
                        '23.05달러였고', '23.05kg당 금액도', '23.05 CAD를 넘는지', '23.05 aud',
                        'US$23.05를 넘는지', '$23.05', 'CAD 23.05', '23.05 (USD)', '23.05톤이면', '23.05톤이고',
-                       '23.05킬로그램 이상인지'):
+                       '23.05킬로그램 이상인지', '23.05퍼센트 이상인지', '23.05 퍼센트포인트 이상인지',
+                       '23.05프로 이상인지', '23.05포인트 이상인지', '23.05 pp 이상인지'):
             with self.subTest(amount=amount):
                 slots = self.slots(f'2025년을 2022년, 2024년과 비교하고 {amount} 봐줘',
                                    {'start': '2022-01-01', 'end': '2024-12-01'})
@@ -507,6 +508,95 @@ class ExtraCompareTrendTest(unittest.TestCase):
         self.assertEqual(cause.steps[0].status, 'DONE')
         self.assertEqual(cause.conditions.hs_items[0].hs_ver, 'HS2022')
         self.assertTrue(any('금액 추이·순위에만' in note for note in cause.applied_defaults))
+
+    def save_source(self, current, task):
+        from backend.app.api.results import result_table
+        step = task.steps[1]
+        analysis = run_template(self.store, current.input.user_id, task, step)
+        meta = {**analysis.meta, 'completeness': analysis.result.completeness, 'limitations': analysis.result.limitations}
+        saved = result_table(self.store, current.input.user_id, analysis.rows, meta, analysis.conditions)
+        current.results[step.step_id] = analysis.result.model_copy(update={'result_id': saved['result_id']})
+        step.status = 'DONE'
+        return saved
+
+    def test_linked_statistics_carries_both_comparison_periods_into_the_table(self):
+        from backend.app.agents.bindings import resolve
+        from backend.app.agents.conditions import check_conditions
+
+        # 플래너가 후속 질문에 비교 요청만 적거나 첫 비교 기간(2023년)만 다시 적어도 2024년 비교를 유지한다.
+        for requested in ({}, {'comparison_requested': True}, {'comparison_requested': True, 'compare_period': Y(2023)}):
+            with self.subTest(slots=requested):
+                first = '중국의 2025년 수출액을 2023년·2024년과 비교'
+                followup = '같은 조건으로 미국도 비교'
+                current = self.compound(f'{first}하고 {followup}해줘', [
+                    {'intent': 'STATISTICS', 'question': first, 'slots': {
+                        'countries': [{'mention': '중국', 'name': '중국'}], 'period': Y(2025),
+                        'comparison_requested': True, 'compare_period': Y(2023), 'extra_compare_periods': [Y(2024)]}},
+                    {'intent': 'STATISTICS', 'question': followup, 'source_tasks': [1], 'slots': {
+                        'countries': [{'mention': '미국', 'name': '미국'}], **requested}}])
+                source, target = current.plan.tasks
+                check_conditions(self.store, current, source.steps[0])
+                self.assertEqual(source.steps[0].status, 'DONE')
+                self.save_source(current, source)
+                check_conditions(self.store, current, target.steps[0], resolve_bindings=resolve)
+                self.assertEqual(target.steps[0].status, 'DONE')
+                self.assertEqual(target.conditions.country_codes, ['US'])
+                self.assertEqual(target.conditions.compare_period.start.year, 2023)
+                self.assertEqual([period.start.year for period in target.conditions.extra_compare_periods], [2024])
+                table = self.save_source(current, target)
+                self.assertIn('compare2_amount_usd', {column['key'] for column in table['columns']})
+
+    def test_linked_amount_analysis_without_hs2017_support_explains_scope(self):
+        from backend.app.agents.bindings import resolve
+        from backend.app.agents.conditions import check_conditions
+        # 비중·순위 화면 표처럼 HS2017을 지원하지 않는 분석이 HS2017 품목을 이어받으면 원시 검증 오류 대신 지원 범위를 안내한다.
+        self.insert_hs2017_export()
+        for intent, slots in (('MARKET_SHARE', {'share_basis': 'KOREA_TRADE_PARTNER'}), ('RANKING', {'ranking_group': 'COUNTRY'})):
+            with self.subTest(intent=intent):
+                current = self.compound('2025년 HS2017 330499 수출 추이와 그 품목의 국가별 비중', [
+                    {'intent': 'STATISTICS', 'question': '2025년 HS2017 330499 수출 추이',
+                     'slots': {'products': ['330499'], 'period': Y(2025)}},
+                    {'intent': intent, 'question': '그 품목의 국가별 비중', 'source_tasks': [1],
+                     'slots': {'period': Y(2025), **slots}}])
+                source, target = current.plan.tasks
+                check_conditions(self.store, current, source.steps[0])
+                self.save_source(current, source)
+                check_conditions(self.store, current, target.steps[0], resolve_bindings=resolve)
+                self.assertEqual(target.steps[0].status, 'FAILED')
+                self.assertIn('HS2017은', current.results[target.steps[0].step_id].error)
+
+    def test_linked_article_uses_hs2022_and_confirms_missing_correspondence(self):
+        from backend.app.agents.bindings import resolve
+        from backend.app.agents.clarification import answer_patch, apply_answer
+        from backend.app.agents.conditions import check_conditions
+
+        self.insert_hs2017_export()
+        trend_question = '2025년 HS2017 330499 수출 추이'
+        for intent, registered in (('CAUSE', True), ('LOCAL_ISSUES', False)):
+            with self.subTest(intent=intent):
+                article_question = '그 변화 원인' if intent=='CAUSE' else '그 품목 현지 이슈'
+                current = self.compound(f'{trend_question}와 {article_question}', [
+                    {'intent': 'STATISTICS', 'question': trend_question, 'slots': {'products': ['330499'], 'period': Y(2025)}},
+                    {'intent': intent, 'question': article_question, 'source_tasks': [1]}])
+                source, target = current.plan.tasks
+                check_conditions(self.store, current, source.steps[0])
+                self.save_source(current, source)
+                if not registered:
+                    from backend.app.models.hs_code_correlation import HsCodeCorrelation
+                    HsCodeCorrelation.__table__.create(self.store.c)
+                    mapping = self.store.t('hs_code_correlation')
+                    self.store.c.execute(mapping.insert().values(old_ver='HS2017', old_code='330499',
+                        new_ver='HS2022', new_code='999999', relation='1:1', group_code='999999', source_edition='test'))
+                check_conditions(self.store, current, target.steps[0], resolve_bindings=resolve)
+                if not registered:
+                    self.assertEqual(current.pending.kind, 'HS_ITEM')
+                    self.assertFalse(any('HS2022 품목으로 확정' in note for note in target.applied_defaults))
+                    apply_answer(current, answer_patch(self.store, current, {
+                        'clarification_id': current.pending.clarification_id, 'text': '330499'}))
+                    check_conditions(self.store, current, target.steps[0], resolve_bindings=resolve)
+                self.assertEqual(target.steps[0].status, 'DONE')
+                self.assertEqual([(item.hs_code, item.hs_ver) for item in target.conditions.hs_items], [('330499', 'HS2022')])
+                self.assertTrue(any('HS2022 품목으로 확정' in note for note in target.applied_defaults))
 
     def test_compound_edition_is_kept_when_the_planner_drops_it(self):
         from backend.app.agents.conditions import check_conditions
@@ -1112,6 +1202,19 @@ class UnverifiedLlmSqlOutputTest(unittest.TestCase):
         for text in ('수출액은 백만 불이다.', '10만 불로 늘었다', '300만 미국불', '5불'):
             with self.subTest(text=text):
                 self.assertEqual(normalize_unit(units(text)[0]), 'USD')
+
+    def test_korean_percent_words_are_percent_units(self):
+        from backend.app.agents.verify import check_sentence
+        from backend.app.agents.verify_claims import TOKEN, normalize_unit, quantity_text
+        source = {'kind': 'TREND', 'period': Y(2025), 'compare_period': Y(2024),
+                  'targets': [{'country_name': '미국', 'total_usd': 2500, 'compare_total_usd': 2000, 'change_pct': 25.0}]}
+        for shown in ('25%', '25퍼센트', '25 퍼센트', '25프로'):
+            with self.subTest(shown=shown):
+                self.assertTrue(check_sentence(f'2025년 미국 수출은 전년 대비 {shown} 증가했습니다.', [source])[0])
+        self.assertFalse(check_sentence('2025년 미국 수출은 전년 대비 30퍼센트 증가했습니다.', [source])[0])
+        units = lambda text: [normalize_unit(m['unit']) for m in TOKEN.finditer(quantity_text(text, NameCatalog([])))]
+        self.assertEqual(units('3퍼센트포인트, 3 퍼센트 포인트, 3%포인트'), ['%p', '%p', '%p'])
+        self.assertEqual(units('5 프로젝트'), [None])
 
     def test_currency_names_end_the_word(self):
         from backend.app.agents.verify import check_sentence
