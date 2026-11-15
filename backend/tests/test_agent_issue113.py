@@ -217,7 +217,13 @@ class CompareYearsSplitTest(unittest.TestCase):
 
     def test_decimal_numbers_are_not_two_digit_years(self):
         # "23.5%"·"23.5배"는 2023년 언급이 아니다. 23.12.31처럼 월이 이어지면 연도다.
-        for amount in ('23.5% 이상 늘었는지', '23.5억 달러 이상인지', '23.1만 건 넘는지', '기준선 23.5 달러를'):
+        for amount in ('23.5% 이상 늘었는지', '23.5억 달러 이상인지', '23.1만 건 넘는지', '기준선 23.5 달러를',
+                       '23.05% 이상 늘었는지', '23.09억 달러 이상인지', '23.05 usd를 넘는지',
+                       '23.05 유로를 넘는지', '23.05달러면 충분한지', '23.05 US$보다 높은지',
+                       '23.05달러보다 높은지', '23.05 홍콩달러를 넘는지', '23.05달러라고 가정해도 되는지',
+                       '23.05달러였고', '23.05kg당 금액도', '23.05 CAD를 넘는지', '23.05 aud',
+                       'US$23.05를 넘는지', '$23.05', 'CAD 23.05', '23.05 (USD)', '23.05톤이면', '23.05톤이고',
+                       '23.05킬로그램 이상인지'):
             with self.subTest(amount=amount):
                 slots = self.slots(f'2025년을 2022년, 2024년과 비교하고 {amount} 봐줘',
                                    {'start': '2022-01-01', 'end': '2024-12-01'})
@@ -226,6 +232,13 @@ class CompareYearsSplitTest(unittest.TestCase):
         slots = self.slots('2025년을 2022년, 2024년과 비교하고 23.12.31 기준도 봐줘',
                            {'start': '2022-01-01', 'end': '2024-12-01'})
         self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]), (2022, [2024, 2023]))
+        for context in ('원자재 기준', 'FTA 발효 시점', '월 달러 환율 기준', '이후 달러 강세 시기',
+                        '당시 달러 환율 기준', '말 달러 환율 기준', '부터 달러 환율 기준', '기준 달러 환율'):
+            with self.subTest(context=context):
+                slots = self.slots(f'2025년을 2022년, 23.05 {context}, 2024년과 비교해 줘',
+                                   {'start': '2022-01-01', 'end': '2024-12-01'})
+                self.assertEqual((slots.compare_period.start.year, [p.start.year for p in slots.extra_compare_periods]),
+                                 (2022, [2023, 2024]))
 
     def test_listed_years_with_gap_keep_only_named_years(self):
         slots = self.slots('2025년 일본 수출을 2021년과 2024년 각각과 비교해 줘', {'start': '2021-01-01', 'end': '2024-12-01'})
@@ -1243,6 +1256,25 @@ class AnnualSqlMergeTest(unittest.TestCase):
         facts = {f.path[-1]: f for f in build_facts([source], NameCatalog([source]))}
         self.assertEqual((facts['export_2024_usd'].period, facts['export_2024_usd'].annual_sql_sum),
                          (('2024-01', '2024-12'), True))
+        legacy_conditions = {**result.conditions, 'hs_items': [{'hs_code': '854232', 'hs_ver': 'HS2017'}]}
+        legacy = snapshot_evidence({'meta': result.meta, 'conditions': legacy_conditions, 'columns': saved['columns'],
+                                    'rows': saved['rows'], 'sql': [sql.replace('HS2022', 'HS2017')]}, **LABELS)
+        for edition, expected in [('HS2017', True), ('HS2022', False)]:
+            self.assertIs(check_sentence(f'{edition} 기준 2024년 한국의 대미국 수출액은 3억 542만 달러입니다.',
+                                         [legacy])[0], expected)
+            legacy_map = annual_sql_scope({'sql': [sql.replace('HS2022', 'HS2017')], 'conditions': legacy_conditions,
+                                           'rows': saved['rows']}, **LABELS)
+            for evidence in (legacy, {**digest, **legacy_map}):
+                cited_rate = f'{edition} 기준 ' + rate.replace('수출액', '미국 수출액')
+                self.assertIs(check_sentence(cited_rate, [evidence], countries=('미국',))[0], expected)
+        wrong_direction = {**source, 'columns': [
+            {**column, 'label': '수입 증감률'} if column['key']=='change_pct' else column
+            for column in source['columns']]}
+        export_rate = rate.replace('수출액', '미국 수출액')
+        self.assertTrue(check_sentence(export_rate, [wrong_direction], countries=('미국',))[0])
+        self.assertFalse(check_sentence(export_rate.replace('수출액', '수입액'), [wrong_direction], countries=('미국',))[0])
+        for scope in ('미국 전체 수출액', '한국 전체 수출액'):
+            self.assertFalse(check_sentence(rate.replace('수출액', scope), [source], countries=('미국',))[0])
         self.assertEqual((facts['change_pct'].period, facts['change_pct'].compare_period),
                          (('2025-01', '2025-12'), ('2024-01', '2024-12')))
         # 월 표시 별칭이 있는 행은 연간 결과여도 기간 근거가 아니다.
@@ -1263,6 +1295,14 @@ class AnnualSqlMergeTest(unittest.TestCase):
         current.results[plan_task.steps[1].step_id] = ToolResult(status='OK', digest=mapped, result_id='r')
         payload, _ = compose_input(current, lambda _: {}, [])
         self.assertEqual(payload['tasks'][0]['digests']['sql']['rows'][0]['change_pct'], 22.7)
+        extra = {'key': 'first_quarter_usd', 'label': '1분기 수출액', 'unit': 'USD'}
+        current.results[plan_task.steps[1].step_id].digest = {**mapped, 'sql_summary': '1분기 339만 달러',
+            'columns': [*mapped['columns'], extra], 'rows': [{**mapped['rows'][0], extra['key']: 3_390_000}]}
+        written = compose_input(current, lambda _: {}, [])[0]['tasks'][0]['digests']['sql']
+        self.assertNotIn(extra['key'], written['rows'][0])
+        self.assertNotIn(extra['key'], [column['key'] for column in written['columns']])
+        self.assertNotIn('sql_summary', written)
+        self.assertEqual(written['rows'][0]['change_pct'], 22.7)
         # 연간 칸 지도는 검증용이라 작성 모델 입력에는 없다.
         self.assertFalse([k for k in payload['tasks'][0]['digests']['sql'] if k.startswith('_annual')])
         # 증명한 두 연도 합계와 맞지 않는 change_pct는 작성 입력에 넘기지 않는다(합계는 그대로 쓴다).
@@ -1281,11 +1321,11 @@ class AnnualSqlMergeTest(unittest.TestCase):
                      'rows': [{**wrong[0], 'other_usd': 1}]}
         self.assertIn('export_2024_usd', _trade_fact(reordered))
         current.results[plan_task.steps[1].step_id] = ToolResult(status='OK', digest=mapped, result_id='r')
-        current.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['2025년 수출액은 9억 달러입니다.']}],
-                              explanation=[], turn_summary='')
+        current.draft = Draft(conclusion=[{'task_id': 't1', 'sentences': ['2025년 수출액은 339만 달러입니다.', rate]}],
+                              turn_summary='', title='연 수출액 339만 달러')
         verify(current, snapshots={plan_task.steps[1].step_id: source})
-        self.assertEqual(current.verification.checks[0].status, 'MISMATCH')
-        self.assertEqual(unsupported_sql_prose(current), (set(), False))
+        self.assertEqual([check.status for check in current.verification.checks], ['MISMATCH', 'PASS'])
+        self.assertEqual(unsupported_sql_prose(current), ({0}, True))
 
 
     def test_runtime_saves_annual_cell_map_in_digest(self):

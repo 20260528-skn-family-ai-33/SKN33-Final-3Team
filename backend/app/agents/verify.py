@@ -460,7 +460,11 @@ def _matching_cells(claim, facts, sources, catalog):
         # 생성 SQL의 GROUP BY 행은 문장에도 그 대상을 써야 한다. 연간 합계·차액 칸은 WHERE 필터로 대상이 정해진 칸이라 제외한다.
         sql_group = (source.get('kind') == 'LLM_SQL' and fact.stored_targets
                      and not fact.annual_sql_sum and not fact.period_difference)
-        if (check_dimensions or sql_group) and dimensions(fact.stored_targets) != required_dimensions:
+        if fact.annual_sql_rate and re.search(r'전체|전\s*세계|모든', claim.text):
+            product_scoped, country_scoped = dimensions(fact.stored_targets)
+            if product_scoped or (country_scoped and not required_dimensions[1]):
+                continue
+        if not fact.annual_sql_rate and (check_dimensions or sql_group) and dimensions(fact.stored_targets) != required_dimensions:
             continue
         if sql_group:
             codes = {name for name in fact.stored_targets if name.isascii() and name.isdigit()}
@@ -545,7 +549,7 @@ def evidence(digest):
     return [(f.metric.key,f.value,f.unit,set(f.targets)) for f in build_facts([digest],NameCatalog([digest])) if f.unit not in ('OUTLOOK', 'NULL')]
 
 
-def _rate_matches(row, sums, conditions):
+def _rate_source_key(row, sums, conditions):
     """한 행의 change_pct가 SQL 식으로 증명한 조회·비교 연도 합계의 변화율과 표시 자릿수 안에서 같은지."""
     current, compare = (period(conditions.get(k)) for k in ('period', 'compare_period'))
     if not (current and compare) or row.get('change_pct') is None:
@@ -564,7 +568,9 @@ def _rate_matches(row, sums, conditions):
     if not base:
         return False
     exponent = min(shown.as_tuple().exponent, 0) if isinstance(shown.as_tuple().exponent, int) else 0
-    return abs(shown - (target - base) / base * 100) <= Decimal(5).scaleb(exponent - 1)
+    if abs(shown - (target - base) / base * 100) <= Decimal(5).scaleb(exponent - 1):
+        return pair[0][0][0]
+    return None
 
 
 def annual_sql_scope(payload, *, country_labels=None, product_labels=None):
@@ -578,7 +584,7 @@ def annual_sql_scope(payload, *, country_labels=None, product_labels=None):
         scope['_annual_candidates'] = list(candidates)
         # digest에는 조회 기간만 있다. 연간 칸을 대조할 비교 기간도 같은 근거 범위에 둔다.
         scope['compare_period'] = {k: str(conditions['compare_period'][k])[:7] for k in ('start', 'end')}
-    cells = {key: dict(year=year, flow=flow, country_code=country, hs_code=hs,
+    cells = {key: dict(year=year, flow=flow, country_code=country, hs_code=hs, hs_ver=edition,
                        country_name=(country_labels or {}).get(country),
                        hs_name=(product_labels or {}).get((hs, edition)))
              for key, (year, country, hs, edition, flow) in sums.items()}
@@ -586,14 +592,15 @@ def annual_sql_scope(payload, *, country_labels=None, product_labels=None):
         scope['_annual_sums'] = cells
     if differences:
         scope['_annual_differences'] = {
-            key: dict(left_year=left, right_year=right, flow=flow,
+            key: dict(left_year=left, right_year=right, flow=flow, hs_ver=edition,
                       country_code=country, hs_code=hs,
                       country_name=(country_labels or {}).get(country),
                       hs_name=(product_labels or {}).get((hs, edition)))
             for key, (left, right, country, hs, edition, flow) in differences.items()}
     rows = payload.get('rows') or []
-    if len(rows) == 1 and isinstance(rows[0], dict) and _rate_matches(rows[0], sums, conditions):
+    if len(rows) == 1 and isinstance(rows[0], dict) and (key := _rate_source_key(rows[0], sums, conditions)):
         scope['_annual_rate'] = True
+        scope['_annual_rate_scope'] = cells[key]
     return scope
 
 
@@ -709,7 +716,8 @@ def generated_conclusion(state, task, has_evidence):
 def unsupported_sql_prose(state):
     """Final publication guard for unsupported numbers in scopes with unverified SQL."""
     unverified_tasks = {task.task_id for task in state.plan.tasks if any(
-        (result := state.results.get(step.step_id)) and sql_period_unproven(result.digest or {}) for step in task.steps)}
+        (result := state.results.get(step.step_id)) and (digest := result.digest)
+        and digest.get('kind') == 'LLM_SQL' and digest.get('period_verified') is not True for step in task.steps)}
     if not unverified_tasks:
         return set(), False
     unverified_steps = {step.step_id for task in state.plan.tasks if task.task_id in unverified_tasks for step in task.steps}

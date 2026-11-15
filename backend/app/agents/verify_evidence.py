@@ -41,6 +41,7 @@ class Fact:
     hs_ver: str | None = None
     annual_sql_sum: bool = False
     period_difference: bool = False
+    annual_sql_rate: bool = False
 
 
 EXTRA_COMPARE_KEY=re.compile(r'compare([2-9])_(\w+)|change([2-9])_pct')
@@ -249,6 +250,15 @@ def build_facts(sources,catalog:NameCatalog):
                 elif month: fact_period=(month,month)
                 if not fact_month and fact_period and fact_period[0]==fact_period[1]: fact_month=fact_period[0]
                 root_cell = path[:1] == ('rows',) and len(path) == 2
+                rate = source.get('_annual_rate_scope') if root_cell and key=='change_pct' and not stored else None
+                if rate and _annual_rate_proven(source):
+                    scoped = frozenset(rate[k] for k in ('country_code','country_name','hs_code','hs_name') if rate[k])
+                    targets, members = bind_targets(scoped, catalog)
+                    descriptor = replace(descriptor, flow=rate['flow'])
+                    facts.append(Fact(index,path+(key,),descriptor,amount,unit,targets,members,
+                                      fact_period,fact_compare,fact_month,period_value,False,None,None,None,scoped,
+                                      rate.get('hs_ver') or edition,annual_sql_rate=True))
+                    continue
                 cell = source.get('_annual_sums', {}).get(key) if root_cell else None
                 if cell and unit == 'USD' and not stored:
                     year = cell['year']
@@ -260,7 +270,8 @@ def build_facts(sources,catalog:NameCatalog):
                     targets, members = bind_targets(scoped, catalog)
                     window = (year + '-01', year + '-12')
                     facts.append(Fact(index,path+(key,),descriptor,amount,unit,targets,members,
-                                      window,None,None,True,False,None,None,None,scoped, annual_sql_sum=True))
+                                      window,None,None,True,False,None,None,None,scoped,cell.get('hs_ver') or edition,
+                                      annual_sql_sum=True))
                     continue
                 difference = source.get('_annual_differences', {}).get(key) if root_cell else None
                 if difference and unit == 'USD' and not stored:
@@ -278,7 +289,8 @@ def build_facts(sources,catalog:NameCatalog):
                     descriptor = replace(descriptor, family='AMOUNT_CHANGE', aggregate=None, comparison='PERIOD')
                     facts.append(Fact(index,path+(key,),descriptor,amount,unit,targets,members,
                                       (left+'-01',left+'-12'),(right+'-01',right+'-12'),None,
-                                      True,False,None,None,None,scoped,period_difference=True))
+                                      True,False,None,None,None,scoped,difference.get('hs_ver') or edition,
+                                      period_difference=True))
                     continue
                 if (root_cell and not stored and not month and unit == 'USD' and descriptor.aggregate != 'AVERAGE' and
                         descriptor.family in ('AMOUNT', 'AMOUNT_CHANGE') and

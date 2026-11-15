@@ -93,6 +93,11 @@ def numbered_articles(state):
     return articles
 
 
+def _annual_writer_keys(digest):
+    return {*digest.get('_annual_sums', {}), *digest.get('_annual_differences', {}),
+            *(('change_pct',) if digest.get('_annual_rate') is True else ())}
+
+
 def _trade_fact(digest):
     if sql_period_unproven(digest):
         return None   # 기간을 증명하지 못한 생성 SQL 수치는 대체 결론에도 쓰지 않는다(결과표 안내만).
@@ -101,8 +106,7 @@ def _trade_fact(digest):
         proven = None
         if digest.get('period_verified') is not True:
             # 연간 비교 결과는 SQL 식으로 증명한 칸(연도별 합계·차액, 합계와 맞는 change_pct)만 옮긴다.
-            proven = {*(digest.get('_annual_sums') or {}), *(digest.get('_annual_differences') or {}),
-                      *(('change_pct',) if digest.get('_annual_rate') is True else ())}
+            proven = _annual_writer_keys(digest)
         for column in digest.get('columns', []):
             key, unit = column['key'], column.get('unit')
             if key not in row or unit not in ('USD', '%', 'KG', 'COUNT') or (proven is not None and key not in proven):
@@ -352,11 +356,12 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
                     # 집계 기간이 확인되지 않은 결과는 표 안내에 필요한 표시만 전달한다.
                     digest = {'kind': 'LLM_SQL', 'period_verified': False}
                 if (digest.get('kind') == 'LLM_SQL' and digest.get('annual_verified') is True
-                        and digest.get('period_verified') is not True and digest.get('_annual_rate') is not True):
-                    # 증명한 두 연도 합계와 맞지 않는 변화율은 검증되지 않으므로 작성 입력에서 뺀다(verify.annual_sql_scope).
-                    digest = {**digest, 'rows': [{k: v for k, v in row.items() if k != 'change_pct'}
-                                                 if isinstance(row, dict) else row for row in digest.get('rows') or []],
-                              'columns': [c for c in digest.get('columns') or [] if c.get('key') != 'change_pct']}
+                        and digest.get('period_verified') is not True):
+                    proven = _annual_writer_keys(digest)
+                    digest = {**digest, 'rows': [{k: v for k, v in row.items() if k in proven}
+                                                 for row in digest.get('rows') or [] if isinstance(row, dict)],
+                              'columns': [c for c in digest.get('columns') or [] if c['key'] in proven]}
+                    digest.pop('sql_summary', None)
                 # 연간 칸 지도는 검증용이다. 작성 모델에는 넘기지 않는다.
                 digest = {k: v for k, v in digest.items() if not k.startswith('_annual')}
                 digests[step.step_id.rsplit('.', 1)[-1]] = display_amounts(digest)

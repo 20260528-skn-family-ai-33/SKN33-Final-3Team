@@ -429,8 +429,22 @@ def _split_year_comparisons(slots, text):
     # "2023년"·"23년" 모두 그 연도다. 두 자리 연도는 날짜로 읽히는 모양일 때만 연도다: '년'(23년), 월(23.5월),
     # 날짜(23.12.31), 0을 채운 월(23.05). "23.5%"·"23.5억 달러"·"23.1만 건" 같은 소수는 연도가 아니다.
     month = r'(?:0?[1-9]|1[0-2])'
+    from backend.app.agents.verify_claims import mask_spans, quantities
+    # 통화 기호·코드가 앞이나 괄호에 있는 경우도 합계 검증과 같은 금액 토큰으로 읽는다.
+    # 통화 사전의 ISO 코드와 원화. FTA 같은 영문 약어는 단위로 보지 않는다.
+    currency_codes = set(('KRW USD JPY EUR CNY GBP CAD CHF HKD SEK AUD DKK NOK SAR KWD BHD AED SGD MYR NZD '
+                          'THB IDR TWD MNT KZT PHP VND BND INR PKR BDT MXN BRL ARS RUB HUF PLN CZK QAR ILS JOD TRY ZAR EGP').split())
+    explicit_dates = re.finditer(r'(?<![\d.])\d{2,4}[./-]\s*(?:0?[1-9]|1[0-2])'
+                                 r'(?:[./-]\s*\d{1,2}(?!\d)|\s*(?:월|이후|이전|시점|당시|말|부터|기준)(?![가-힣]))', text)
+    amount_text = mask_spans(text, [match.span() for match in explicit_dates])
+    text = mask_spans(text, [(q.start, q.end) for q in quantities(amount_text)
+                            if q.value.as_tuple().exponent < 0 and (q.explicit_unit or q.scale > 1)
+                            and (not re.fullmatch(r'[A-Z]{3}', q.unit or '') or q.unit in currency_codes)])
+    unit = r'(?:(?:[만억조]\s*)?(?:건|개|톤|킬로그램|(?i:kg))|[만억조배])'
+    unit_end = r'(?:입니다|이면|이고|이라고|이며|이었다|였다|으로|에서|까지|부터|가량|이상|이하|정도|보다|[은는이가을를의로도에와과면당])?(?![가-힣A-Za-z\d])'
+    numeric_unit = rf'(?!\s*(?:％|{unit}{unit_end}))'
     year = lambda y: (rf'(?<![\dA-Za-z])(?:{y}|{y % 100:02d}(?=\s*년|[./-]\s*{month}\s*월'
-                      rf'|[./-]\s*{month}[./-]\s*\d{{1,2}}(?!\d)|[./-]\s*0[1-9](?![\d.])))(?!\d)')
+                      rf'|[./-]\s*{month}[./-]\s*\d{{1,2}}(?!\d)|[./-]\s*0[1-9](?![\d.]){numeric_unit}))(?!\d)')
     # 비교 기간 자체의 두 연도가 붙은 경우만 연속 범위다. 기준 기간의 ISO 월 표시는 여기서 비교하지 않는다.
     start_year = compare.start.year
     start = rf'(?<![\dA-Za-z./-])(?:{start_year}|{start_year % 100:02d})(?!\d)'
