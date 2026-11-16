@@ -75,6 +75,7 @@ def _day(value):
 
 def dispatch(identity,store,user,body,query,path,request,response,settings):
     uid=user['user_id'] if user else None
+    if identity==135: return reports.remove(store,uid,path['report_id'])
     if identity==134:
         from backend.app.api.comparison_results import country_comparison
         table=country_comparison(store,uid,body['result_ids'])
@@ -215,12 +216,12 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         payload=read_snapshot(store,uid,path['result_id'],'RESULT'); return file_response(result_xlsx(payload),result_filename(payload,store),'xlsx')
     if identity==43: return reports.preview(store,uid,body)
     if identity==44: return reports.create(store,uid,ReportCreate.model_validate(body),request.headers.get('Idempotency-Key'))
-    if identity==45: return {'job':reports.status_view(store,store.owned('report','report_id',path['report_id'],uid))}
+    if identity==45: return {'job':reports.status_view(store,reports.visible_report(store,uid,path['report_id']))}
     if identity==46: return reports.listing(store,uid,query.get('q'),query.get('report_type'),query.get('status'),page,size)
     if identity==47: return reports.read_report(store,uid,path['report_id'])
     if identity==48:
         rid=path['report_id']; fmt=path['format'].lower(); require(fmt in MIMES,'지원하지 않는 파일 형식입니다.','UNSUPPORTED_FORMAT',422)
-        record=store.owned('report','report_id',rid,uid); require(record['status']=='READY','파일 생성 중입니다.','REPORT_NOT_READY',409)
+        record=reports.visible_report(store,uid,rid); require(record['status']=='READY','파일 생성 중입니다.','REPORT_NOT_READY',409)
         filename=reports.download_filename(store,record,fmt)
         file=(record.get('files_json') or {}).get(fmt.upper())
         from backend.app.api.report_storage import report_storage

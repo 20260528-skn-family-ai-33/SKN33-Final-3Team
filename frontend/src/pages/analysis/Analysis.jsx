@@ -286,7 +286,13 @@ export default function Analysis({ route }) {
   // 기사 탭의 "AI에게 물어보기"는 사용 중지(2026-11-11). 주소로 직접 열어도 선택 기사 화면을 띄우지 않는다.
   const [articleId, setArticleId] = useState(() => ARTICLE_ACTIONS_ENABLED && route.query.get('new') === '1' ? route.query.get('article') : null)
   const selectedArticle = useQuery(`/articles/${articleId}`, {}, !!articleId)
-  const [activeId, setActiveId] = useState(articleId ? null : route.query.get('chat') || chats[0]?.id)
+  const [activeId, setActiveId] = useState(route.query.get('new') === '1' ? null : route.query.get('chat') || chats[0]?.id)
+  // 새 대화 진입 표시는 한 번만 소비한다. 이후 새로고침도 방금 만든 대화를 연다.
+  useEffect(() => {
+    if (activeId && !articleId && route.query.get('new') === '1') {
+      navigate(`/analysis?chat=${encodeURIComponent(activeId)}`, { replace: true })
+    }
+  }, [activeId, articleId, route])
   const [input, setInput] = useState(route.query.get('new') === '1' ? '' : route.query.get('ask') || '')
   const [modal, setModal] = useState(null)
   const [rename, setRename] = useState('')

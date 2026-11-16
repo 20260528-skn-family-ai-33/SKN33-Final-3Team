@@ -1,19 +1,21 @@
 // BS16 채팅 생성 · BS17 주간 · BS18 월간 · BS31 분기 리포트 목록, BS20 구독 삭제 확인
 import { useEffect, useState } from 'react'
 import { navigate, withQuery } from '../../router'
-import { useApp } from '../../store'
+import { useApp, useNotifications } from '../../store'
 import { Btn, Chip, Modal, Select, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
 import { kstDateTimeText } from '../../api/adapters'
+import { api } from '../../api/client'
+import { usePendingAction } from '../../api/hooks'
 
 
-const TABS = ['weekly', 'monthly', 'chat', 'quarterly']
+const TABS = ['chat', 'weekly', 'monthly', 'quarterly']
 const CYCLE = { weekly: '주간', monthly: '월간', quarterly: '분기' }
 const SORTS = [['new', '최신 생성일순'], ['old', '오래된 순'], ['title', '제목순']]
 
-function ReportItem({ report }) {
+function ReportItem({ report, onDelete }) {
   const { downloadReport } = useApp()
   const ready = report.status === 'ready'
   const generating = report.status === 'generating'
@@ -40,18 +42,31 @@ function ReportItem({ report }) {
         {generating && <p style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>생성 중 · 완료되면 바로 열람할 수 있습니다.</p>}
       </div>
       {ready ? (
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           <Btn kind="ink" to={`/report?id=${report.id}`}>열람</Btn>
           <Btn icon="download" disabled={!report.available_formats?.includes('PDF')} onClick={() => downloadReport(report.id, 'PDF')}>PDF</Btn>
           <Btn icon="download" disabled={!report.available_formats?.includes('DOCX')} onClick={() => downloadReport(report.id, 'DOCX')}>DOCX</Btn>
         </div>
       ) : <span className={'tag ' + (generating ? 'red' : 'amber')}>{generating ? '생성 중' : '다운로드 불가'}</span>}
+      <Btn kind="danger" icon="trash" onClick={() => onDelete(report)} aria-label={`${report.title} 삭제`}>삭제</Btn>
     </div>
   )
 }
 
 export default function ReportCenter({ route }) {
-  const { reports, subscription, deleteSubscription, profile, notify, refreshReports, fail } = useApp()
+  const { reports, subscription, deleteSubscription, profile, notify, refreshReports, fail, run } = useApp()
+  const { refreshNotifications } = useNotifications()
+  const [deletingReport, setDeletingReport] = useState(null)
+  const [deleting, deleteOnce] = usePendingAction()
+  const [removedIds, setRemovedIds] = useState([])
+  const removeReport = () => deleteOnce(() => run(async () => {
+    const id = deletingReport.id
+    await api(`/reports/${id}`, { method: 'DELETE' })
+    setRemovedIds(ids => [...ids, id])
+    setDeletingReport(null)
+    notify('리포트를 삭제했습니다.')
+    await Promise.all([refreshReports(), refreshNotifications(true)])
+  }))
   const generating = reports.some(r => r.status === 'generating' || r.status === 'delayed')
   useEffect(() => {
     let stopped = false, timer
@@ -72,6 +87,7 @@ export default function ReportCenter({ route }) {
   const { query, status, from, to } = applied
   const target = `${productName(profile.products[0])} · ${profile.countries[0] || '전체 국가'}`
   const list = reports
+    .filter(r => !removedIds.includes(r.id))
     .filter(r => r.kind === tab && r.title.includes(query.trim()))
     .filter(r => !status || r.status===status)
     .filter(r => {
@@ -94,7 +110,7 @@ export default function ReportCenter({ route }) {
       <section className="card">
         <div className="between">
           <h2 className="t1" style={{ fontSize: 24 }}>리포트 센터{tab === 'quarterly' ? ' / 분기리포트' : ''}</h2>
-          <Btn kind="red" icon="plus" to="/analysis">새 리포트 만들기</Btn>
+          <Btn kind="red" icon="plus" to="/analysis?new=1">새 리포트 만들기</Btn>
         </div>
         <div style={{ marginTop: 18 }}>
           <div className="chips">
@@ -124,7 +140,7 @@ export default function ReportCenter({ route }) {
         {invalidRange && <p className="field-err" role="alert">생성일 시작이 종료보다 늦습니다.</p>}
         <p style={{ fontSize: 16, fontWeight: 800, marginTop: 22 }}>{reportKinds[tab].tab} · <span style={{ color: 'var(--red)' }}>{list.length}건</span></p>
         <div className="col" style={{ gap: 10, marginTop: 12 }}>
-          {list.map(r => <ReportItem key={r.id} report={r} />)}
+          {list.map(r => <ReportItem key={r.id} report={r} onDelete={setDeletingReport} />)}
           {!list.length && (
             <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '22px 18px', textAlign: 'center' }}>
               <p className="muted">{query ? '검색 결과가 없습니다.' : `조회할 ${reportKinds[tab].tab}가 없습니다.`}</p>
@@ -171,6 +187,16 @@ export default function ReportCenter({ route }) {
           </div>
         </section>
       )}
+
+      <Modal open={!!deletingReport} onClose={() => { if (!deleting) setDeletingReport(null) }} width={520} label="리포트 삭제 확인">
+        <h2 className="t2">이 리포트를 삭제할까요?</h2>
+        <p style={{ marginTop: 14, overflowWrap: 'anywhere' }}>{deletingReport?.title}</p>
+        <p className="muted" style={{ marginTop: 12 }}>삭제하면 목록에서 사라지며 다시 열람하거나 다운로드할 수 없습니다. 정기 구독 설정은 유지됩니다.</p>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
+          <Btn disabled={deleting} onClick={() => setDeletingReport(null)}>취소</Btn>
+          <Btn kind="red" disabled={deleting} onClick={removeReport}>{deleting ? '삭제 중…' : '리포트 삭제'}</Btn>
+        </div>
+      </Modal>
 
       <Modal open={confirm && !!deleteCycle && subscription.cycles.includes(deleteCycle)} onClose={() => navigate(withQuery(route, { confirm: null }))} width={520} label="구독 삭제 확인">
         <span style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="trash" size={24} color="#C8102E" /></span>
