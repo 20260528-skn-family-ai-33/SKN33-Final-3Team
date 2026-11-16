@@ -151,8 +151,8 @@ def _check_trade_join(scope):
     outputs = {alias: {e.alias_or_name.lower() for e in source.expression.selects}
                for alias, (_, source) in scope.selected_sources.items()
                if not isinstance(source, exp.Table) and isinstance(source.expression, exp.Select)}
-    joined = {}
-    by_alias = {alias.lower(): source for alias, (_, source) in scope.selected_sources.items()}
+    joined, pinned = {}, {}
+    by_alias ={alias.lower(): source for alias, (_, source) in scope.selected_sources.items()}
     for join in scope.expression.args.get('joins') or []:
         using = {u.name.lower() for u in join.args.get('using') or []}
         for alias in scope.selected_sources:
@@ -177,51 +177,98 @@ def _check_trade_join(scope):
             left, right = owned(sides[0]), owned(sides[1])
             if not left or not right:   # 한쪽에 열이 없으면(값) 그 열을 한 값으로 고정한다.
                 pairs = left or right
+                for owner, name in pairs:
+                    pinned.setdefault(owner, set()).add(name)
             else:
                 pairs = [(o, n) for o, n in left if any(o != other for other, _ in right)]
                 pairs += [(o, n) for o, n in right if any(o != other for other, _ in left)]
-            # 식으로 감싼 열(`MONTH(a.trade_month)`)은 값을 줄여 다른 해의 같은 달을 잇는다. 그 입력이 한 해 안의 기간만 읽을
-            # 때(올해 1~3월과 작년 1~3월 비교)만 키로 인정한다.
-            wrapped = {(o, n) for side, found in zip(sides, (left, right)) if not isinstance(side, exp.Column)
-                       for o, n in found}
+            # 식으로 감싼 열은 그 식이 월 값을 하나로 유지할 때만 키다: DATE_FORMAT(…, '%Y-%m')은 늘 유지하고, MONTH()·
+            # DATE_FORMAT(…, '%m')은 그 입력이 한 해 안의 기간만 읽을 때만 유지한다. YEAR()·QUARTER() 등은 여러 달을 한 값으로 묶는다.
+            kept = {}
+            for side, found in zip(sides, (left, right)):
+                for owner, name in found:
+                    kept[(owner, name)] = _keeps_key(side, by_alias.get(owner))
             for owner, name in pairs:
-                source = by_alias.get(owner)
-                if (owner, name) in wrapped and not (source is not None and not isinstance(source, exp.Table)
-                                                     and _single_year(source.expression)):
-                    continue
-                joined.setdefault(owner, set()).add(name)
+                if kept.get((owner, name), True):
+                    joined.setdefault(owner, set()).add(name)
+    if any(keys is None for keys in derived.values()):
+        raise ValueError('수출입 표끼리 조인할 때는 각 표를 GROUP BY로 같은 단위로 먼저 집계하세요. '
+                         '창 함수·UNION ALL·집계하지 않은 조회는 행을 하나로 묶지 않습니다.')
+    # 각 입력의 키가 조인 등식으로 모두 맞아야 다른 입력의 한 행에 그 입력 행이 하나만 붙는다. 다른 입력이 모두 더 굵은
+    # 단위(월별 결과에 붙인 전체 합계)이면 가장 잘게 나뉜 그 입력은 반복되지 않는다(굵은 쪽의 반복은 아래에서 따로 본다).
+    # 집계 단위는 값 하나로 고정한 키(`ex.country_code = 'US'`)를 뺀 키 수다.
+    grain = {alias: len(keys - pinned.get(alias, set())) for alias, keys in derived.items()}
+    finest = max(grain.values())
+    sole_finest = [alias for alias, size in grain.items() if size == finest]
     for alias, keys in derived.items():
-        if keys is None:
-            raise ValueError('수출입 표끼리 조인할 때는 각 표를 GROUP BY로 같은 단위로 먼저 집계하세요. '
-                             '창 함수·UNION ALL·집계하지 않은 조회는 행을 하나로 묶지 않습니다.')
+        if sole_finest == [alias]:
+            continue
         if not keys <= joined.get(alias, set()):
             raise ValueError('집계 단위가 다른 수출입 결과를 조인하면 금액이 반복 합산됩니다. '
                              '양쪽을 같은 단위로 집계하고 GROUP BY 키를 모두 조인 조건에 쓰세요.')
+    # 조인 단계마다 합계가 반복되는지: 가장 잘게 나뉜 입력보다 집계 단위가 굵은 입력(월별 결과에 붙인 전체 합계 등)은
+    # 결과 행마다 반복된다. 그 입력의 열을 바깥에서 다시 집계(SUM 등)하면 반복된 만큼 커지므로 거부한다.
+    coarse = {alias for alias, size in grain.items() if size < finest}
+    for agg in scope.expression.find_all(exp.AggFunc):
+        if agg.find_ancestor(exp.Select) is not scope.expression or agg.find_ancestor(exp.Window) is not None:
+            continue
+        for column in agg.find_all(exp.Column):
+            owners = ({column.table.lower()} if column.table else
+                      {a.lower() for a, cols in outputs.items() if column.name.lower() in cols})
+            if owners & coarse:
+                raise ValueError('집계 단위가 굵은 수출입 결과(전체 합계 등)를 더 잘게 나뉜 결과에 조인한 뒤 다시 집계하면 '
+                                 '금액이 행 수만큼 반복 합산됩니다. 같은 단위로 집계해 조인하거나 합계는 따로 구하세요.')
+
+
+def _keeps_key(side, source):
+    """조인 등식의 한쪽 식이 키 열의 월 값을 하나로 유지하는지(_check_trade_join 참고)."""
+    if isinstance(side, exp.Column):
+        return True
+    inner = side.this if isinstance(side, (exp.Month, exp.TimeToStr)) else None
+    while isinstance(inner, (exp.TsOrDsToDate, exp.Cast, exp.TsOrDsToTimestamp)):   # MySQL MONTH(x)는 날짜 변환으로 감싼다
+        inner = inner.this
+    if not isinstance(inner, exp.Column):
+        return False
+    fmt = side.args.get('format') if isinstance(side, exp.TimeToStr) else None
+    fmt = fmt.this if isinstance(fmt, exp.Literal) else None
+    if isinstance(side, exp.TimeToStr) and fmt and '%Y' in fmt and '%m' in fmt:
+        return True
+    month_only = isinstance(side, exp.Month) or (fmt is not None and '%m' in fmt and '%Y' not in fmt)
+    return (month_only and source is not None and not isinstance(source, exp.Table)
+            and _single_year(source.expression))
 
 
 def _single_year(select):
-    """파생 SELECT가 WHERE의 최상위 AND 기간 조건으로 trade_month를 한 해 안으로 거르는지(BETWEEN·>=·<·= 리터럴)."""
+    """파생 SELECT의 WHERE가 trade_month를 한 해 안으로 거르는지. 최상위 AND 조건에서 하한·상한을 모두 찾아 같은 해여야 한다.
+    trade_month를 건드리는 다른 조건(OR로 묶은 기간 등)이 있으면 실제 범위를 알 수 없어 한 해로 보지 않는다."""
     if not isinstance(select, exp.Select) or not select.args.get('where'):
         return False
-    years = set()
+    lows, highs = [], []
     for term in _and_terms(select.args['where'].this):
         column = term.this
         if not (isinstance(column, exp.Column) and column.name.lower() == 'trade_month'):
+            if any(c.name.lower() == 'trade_month' for c in term.find_all(exp.Column)):
+                return False
             continue
         if isinstance(term, exp.Between):
-            values = [(term.args.get('low'), False), (term.args.get('high'), False)]
-        elif isinstance(term, (exp.GTE, exp.GT, exp.LTE, exp.EQ)):
-            values = [(term.expression, False)]
+            bounds = [(term.args.get('low'), lows, False), (term.args.get('high'), highs, False)]
+        elif isinstance(term, exp.EQ):
+            bounds = [(term.expression, lows, False), (term.expression, highs, False)]
+        elif isinstance(term, (exp.GTE, exp.GT)):
+            bounds = [(term.expression, lows, False)]
+        elif isinstance(term, exp.LTE):
+            bounds = [(term.expression, highs, False)]
         elif isinstance(term, exp.LT):
-            values = [(term.expression, True)]   # `< '2026-01-01'`은 2025년까지다.
+            bounds = [(term.expression, highs, True)]   # `< '2026-01-01'`은 2025년까지다.
         else:
-            continue
-        for value, exclusive in values:
+            return False
+        for value, target, exclusive in bounds:
             if not (isinstance(value, exp.Literal) and value.is_string and len(value.this) >= 7):
                 return False
             year = int(value.this[:4])
-            years.add(year - 1 if exclusive and value.this[5:10] in ('01-01', '01') else year)
-    return len(years) == 1
+            target.append(year - 1 if exclusive and value.this[5:10] in ('01-01', '01') else year)
+    # 가장 좁은 하한(최대)과 상한(최소)이 같은 해여야 한다.
+    return bool(lows and highs) and max(lows) == min(highs)
 
 
 def _reads_trade(scope, seen=None):
