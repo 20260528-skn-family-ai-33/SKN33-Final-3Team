@@ -211,7 +211,8 @@ def _comparison_named(text, period):
                              r'(?:(?:하고|와|과|랑|을|를|에)?\s*(?:만(?:을|를)?\s*)?(?:비교|대비|보다|비해)'
                              r'|(?:와|과)\s*의\s*차이'
                              r'|(?:을|를)?\s*기준으로(?=[^.!?。]*비교))', text[match.end():])
-                    or re.search(r'비교\s*(?:기간|대상)(?:은|는|을|를)?\s*$', text[:match.start()]))
+                    # "비교 기간은 2023년", "비교는 2023년만"처럼 날짜 앞에서 비교 대상을 소개해도 그 기간을 지정한 것이다.
+                    or re.search(r'비교\s*(?:기간|대상|연도|기준)?\s*(?:은|는|을|를)?\s*$', text[:match.start()]))
     # "동기"는 낱말 첫머리이거나 "전년동기"처럼 '년' 뒤일 때만 기간이다. "전동기"·"원동기"·"발동기"는 품목명이다.
     relative = r'작년|재작년|지난\s*(?:해|달|분기|반기)|전\s*(?:년|월|분기|반기)|(?:(?<![가-힣])|(?<=년))동기'
     if any(map(is_target, re.finditer(relative, text))):
@@ -250,6 +251,14 @@ def _comparison_named(text, period):
     return any(map(is_target, re.finditer(pattern, comparison_date_text(text))))
 
 
+def _code_editions(text, code):
+    """문장에서 그 코드에 붙여 적은 판본: "HS2017 330488", "HS2017 기준으로 HS 330488", "330488(HS2017)"."""
+    prefix = re.findall(rf'(?<![A-Za-z\d])HS\s*(2017|2022)\s*(?:(?:기준|판본|버전)\s*)?(?:(?:으로|의|에서)\s*)?'
+                        rf'(?:HS\s*(?:[46](?!\d)\s*)?)?(?:코드\s*)?{code}(?![\d.,])', text, re.I)
+    postfix = re.findall(rf'(?<![\d.,]){code}\s*(?:\(\s*)?HS\s*(2017|2022)(?!\d)', text, re.I)
+    return set(postfix or prefix)
+
+
 def _article_hs_items(store, state, task, items):
     hs = store.t('hs_code')
     try:
@@ -268,9 +277,12 @@ def _article_hs_items(store, state, task, items):
         if answer := task.resolved.get(key, {}).get('hs_items'):
             converted.extend(answer)
             continue
-        codes = {row['new_code'] for row in store.rows(select(mapping.c.new_code).where(
+        # 대응표는 HS6 단위다. HS4는 그 아래 HS6들의 대응을 모아 HS2022 HS4로 줄인다. 하위 품목이 여러 HS4(3303·3304)로
+        # 갈라지면 하나로 확정하지 않고 묻는다.
+        codes = {row['new_code'][:len(code)] for row in store.rows(select(mapping.c.new_code).where(
             mapping.c.old_ver=='HS2017', mapping.c.new_ver=='HS2022',
-            mapping.c.old_code==code))} if mapping is not None else set()
+            mapping.c.old_code.startswith(code) if len(code) == 4 else mapping.c.old_code == code))
+                 } if mapping is not None else set()
         codes = codes or {code}
         rows = store.rows(select(hs.c.hs_code, hs.c.hs_ver, hs.c.name_ko).where(
             hs.c.hs_ver=='HS2022', hs.c.hs_code.in_(codes)).order_by(hs.c.hs_code))
@@ -340,7 +352,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         # 대응표로 바꾼다(기사 태그도 발행일 기준 HS2022, 2026-11-15 사용자 결정). 단일 질문도 복합 질문의 하위 질문과 같다.
         # 비중·유망시장처럼 금액만 조회하는 질문은 아래 규칙대로 판본을 지키고, 지원하지 않으면 안내한다.
         article_edition_requested = '2017' in editions
-        editions = set()
+        asked_editions, editions = set(editions), set()
     elif len(state.plan.tasks) > 1 and editions:
         if len(editions) > 1 or any(HS_EDITION_MENTION.search(t.question) for t in state.plan.tasks
                                       if t.intent not in ARTICLE_INTENTS):
@@ -469,10 +481,13 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if expr.isdigit():
             named_editions = set()
             if article_edition_requested:
-                prefix = set(re.findall(rf'(?<![A-Za-z\d])HS\s*(2017|2022)\s*(?:기준\s*)?'
-                                        rf'(?:HS\s*(?:[46](?!\d)\s*)?)?{expr}(?![\d.,])', original, re.I))
-                postfix = set(re.findall(rf'(?<![\d.,]){expr}\s*(?:\(\s*)?HS\s*(2017|2022)(?!\d)', original, re.I))
-                named_editions = postfix or prefix
+                # 복합 질문은 이 하위 질문 문장에 적은 판본을 먼저 쓰고(다른 하위 요청의 판본과 섞지 않는다), 없으면 원문에서
+                # 이 코드에 붙은 판본만 쓴다. 단일 질문은 코드에 붙은 판본, 없으면 질문의 유일한 판본이다.
+                if len(state.plan.tasks) > 1:
+                    named_editions = (_code_editions(task.question, expr) or set(HS_EDITION_MENTION.findall(task.question))
+                                      or _code_editions(original, expr))
+                else:
+                    named_editions = _code_editions(original, expr) or (asked_editions if len(asked_editions) == 1 else set())
             article_legacy = (task.intent in ARTICLE_INTENTS and not editions
                               and (named_editions=={'2017'} or (not named_editions and expr in inherited_2017)))
             ver = 'HS2017' if article_legacy else hs_ver
