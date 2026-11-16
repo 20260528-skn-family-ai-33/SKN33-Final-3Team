@@ -99,9 +99,13 @@ def run_template(store, uid, task, step, timeout=30):
     if template == 'TREND':
         source = 'export_summary' if conditions.trade_flow == 'EXPORT' else 'import_summary'
         field = 'export_amount_usd' if conditions.trade_flow == 'EXPORT' else 'import_amount_usd'
-        verified = set(trade.verified_months(store, source))
         requested, compared = months(conditions.period), months(conditions.compare_period)
         extras = [months(p) for p in conditions.extra_compare_periods]
+        # 조회 판본을 집계한 월만 0으로 채운다(trade.ready_months). HS2022만 집계된 월의 HS2017 조회는 0달러가 아니라 미집계다.
+        # 품목이 없으면 기본 판본(HS2022)을 본다.
+        spans = [m for window in (requested, compared, *extras) for m in window]
+        loaded = {v: trade.ready_months(store, source, spans, (v,))
+                  for v in {p.hs_ver for p in conditions.hs_items} or {'HS2022'}}
         multiple=len(conditions.hs_items or [None])*len(conditions.country_codes or [None])>1
         def collect(window):
             values=defaultdict(lambda:defaultdict(Decimal))
@@ -135,8 +139,9 @@ def run_template(store, uid, task, step, timeout=30):
                 previous = {r['trade_month']: r['amount_usd'] for r in trade.aggregate(store, source,
                     conditions.compare_period.start, conditions.compare_period.end,
                     scoped['hs'], scoped['countries'], 'MONTH')}
-            values = [amounts.get(m.strftime('%Y-%m'), Decimal(0)) if m in verified else None for m in requested]
-            old = [previous.get(m, Decimal(0)) if m in verified else None for m in compared]
+            ready = loaded[hs.hs_ver if hs else 'HS2022']
+            values = [amounts.get(m.strftime('%Y-%m'), Decimal(0)) if m in ready else None for m in requested]
+            old = [previous.get(m, Decimal(0)) if m in ready else None for m in compared]
             def stats(data):
                 observed = [v for v in data if v is not None]
                 subtotal = sum(observed, Decimal(0))
@@ -151,7 +156,7 @@ def run_template(store, uid, task, step, timeout=30):
                 earlier = extra_grouped[n-2].get(target, {}) if multiple else {
                     r['trade_month']: r['amount_usd'] for r in trade.aggregate(store, source, extra.start, extra.end,
                                                                               scoped['hs'], scoped['countries'], 'MONTH')}
-                data = [earlier.get(m, Decimal(0)) if m in verified else None for m in window]
+                data = [earlier.get(m, Decimal(0)) if m in ready else None for m in window]
                 e_total, e_avg, e_count, e_subtotal = stats(data)
                 extra_fields.update({f'compare{n}_total_usd': e_total, f'change{n}_pct': percentage(total, e_total),
                     f'compare{n}_monthly_avg_usd': e_avg, f'compare{n}_verified_months': e_count,
@@ -222,12 +227,18 @@ def run_template(store, uid, task, step, timeout=30):
         # 국가·품목 조건 없는 전국 순위는 country 조인이 국가별 반복 조회가 된다. 월 범위로 읽도록 PK를 쓴다.
         stmt=trade.trade_plan(stmt,table,common['hs'],common['countries'])
         records=list(trade.query_rows(store,stmt,source))
-        if group=='COUNTRY' and common['countries']:
+        # 조회 판본을 집계하지 않은 월이 있으면 부분 결과로 알린다. 집계한 월이 하나도 없으면 거래 없는 요청 국가를 0달러로
+        # 채우지 않는다(그 판본 금액을 확인한 월이 없다). 집계한 월이 있으면 그 월의 무거래는 확인된 0달러다.
+        window=months(conditions.period)
+        ready=trade.ready_months(store,source,window,{p.hs_ver for p in conditions.hs_items})
+        if group=='COUNTRY' and common['countries'] and ready:
             # 요청한 국가가 검증된 기간에 거래가 없으면 0달러 행으로 남긴다(기존 순위 경로와 같은 규칙). 빼면 NO_DATA가 된다.
             names=condition_names(store,[conditions])[0]
             found={r['country_code'] for r in records}
             records+=[{'country_code':c,'name':names.get(c,c),amount_key:Decimal(0)}
                       for c in common['countries'] if c not in found][:max(0,step.args['top']-len(records))]
+        if records and len(ready)<len(window):   # 행이 없으면 부분 결과가 아니라 NO_DATA다.
+            limitations.append(trade.UNLOADED_WARNING)
         # 품목 순위를 한 국가로 거르면 그 국가를 열로 밝힌다(여러 국가면 합계라 국가 열을 두지 않는다).
         partner={}
         if group=='HS6' and len(conditions.country_codes)==1:

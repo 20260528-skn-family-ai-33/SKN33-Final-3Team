@@ -2,7 +2,7 @@
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, union_all
 from backend.app.api.common import (require, unavailable, month, shift_month, month_end,
                                     period, percentage, digest, now, page_info, clean)
 from backend.app.api.accounts import interests, validate_scope
@@ -30,6 +30,40 @@ def verified_months(store, table):
         if latest and latest['status']=='SUCCESS': verified.append(m)
     store.cache[key]=sorted(verified)
     return store.cache[key]
+
+
+UNLOADED_WARNING='기간 내 미집계 월이 있습니다.'
+
+
+def ready_months(store, table, months, editions=('HS2022',)):
+    """완료 배치 월(verified_months) 가운데 조회 판본을 모두 집계한 월. batch_run에는 판본이 없어, 다른 판본 행만 있고 조회 판본
+    행이 없는 월은 무거래 0이 아니라 그 판본 미집계로 본다(HS2022만 적재된 월의 HS2017 조회 등). 행이 전혀 없는 월은 기존 규칙대로
+    완료 배치가 보장하는 0 거래 월이다(verified_months)."""
+    # ponytail: 판본 행 유무로 추정한다. 판본별 집계 기록(batch_run에 hs_ver)이 생기면 그것으로 바꾼다.
+    verified = set(verified_months(store, table))
+    t = store.t(table)
+    def present(candidates, edition=None):
+        """candidates 가운데 (그 판본) 행이 있는 월. 월마다 LIMIT 1 하위 쿼리를 UNION ALL로 묶어 한 번에 보낸다.
+        월이 PK 앞자리라 있는 판본은 바로 찾고, 없을 때만 그 월을 끝까지 읽는다. 결과는 요청 안에서 월별로 캐시한다."""
+        missing = [m for m in candidates if ('edition_month', table, edition, m) not in store.cache]
+        if missing:
+            parts = []
+            for m in missing:
+                part = select(t.c.trade_month).where(t.c.trade_month == m)
+                if edition: part = part.where(t.c.hs_ver == edition)
+                sub = part.limit(1).subquery()
+                parts.append(select(sub.c.trade_month))
+            hit = set(store.c.execute(union_all(*parts) if len(parts) > 1 else parts[0]).scalars())
+            for m in missing:
+                store.cache[('edition_month', table, edition, m)] = m in hit
+        return {m for m in candidates if store.cache[('edition_month', table, edition, m)]}
+    candidates = [m for m in dict.fromkeys(months) if m in verified]
+    loaded = set(candidates)
+    for edition in set(editions) or {'HS2022'}:
+        loaded &= present(candidates, edition)
+    # 조회 판본 행은 없어도 행이 전혀 없는 월은 완료 배치가 보장하는 0 거래 월이다.
+    rest = [m for m in candidates if m not in loaded]
+    return loaded | (set(rest) - present(rest)) if rest else loaded
 
 
 def bounds(store):
@@ -190,9 +224,14 @@ def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='
     start,end=resolve_period(store,start,end,months)
     ex={r['trade_month']:r['amount_usd'] for r in aggregate(store,'export_summary',start,end,hs,countries,'MONTH')}
     im={r['trade_month']:r['amount_usd'] for r in aggregate(store,'import_summary',start,end,hs,countries,'MONTH')}
-    verified=set(verified_months(store,'export_summary'))
+    # 전년 값은 그 판본을 집계한 월만 쓴다(미집계 월은 이미 null을 허용하는 전년 칸이 비어 있다).
+    # 조회 월의 금액 형식은 화면 합계 계약이라 바꾸지 않는다. ponytail: 화면에 미집계 월을 보이려면 월별 표시 칸이 필요하다.
+    editions={x['hs_ver'] for x in hs or []} or {'HS2022'}
+    prior_window=[]; cursor=shift_month(start,-12)
+    while cursor<=shift_month(end,-12): prior_window.append(cursor); cursor=shift_month(cursor,1)
+    verified=ready_months(store,'export_summary',prior_window,editions)
     old={r['trade_month']:r['amount_usd'] for r in aggregate(store,'export_summary',shift_month(start,-12),shift_month(end,-12),hs,countries,'MONTH') if r['trade_month'] in verified}
-    import_verified=set(verified_months(store,'import_summary'))
+    import_verified=ready_months(store,'import_summary',prior_window,editions)
     old_import={r['trade_month']:r['amount_usd'] for r in aggregate(store,'import_summary',shift_month(start,-12),shift_month(end,-12),hs,countries,'MONTH') if r['trade_month'] in import_verified}
     items=[]; cursor=start
     while cursor<=end:
@@ -237,8 +276,10 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
     total=sum(primary.values())
     previous={}; yoy={}; old_rank={}; rank_comparable=False
     if start==end:
+        # 전월·전년 비교는 그 판본을 집계한 월만 쓴다.
         source='export_summary' if flow=='EXPORT' else 'import_summary'
-        available=set(verified_months(store,source))
+        editions={x['hs_ver'] for x in hs or []} or {'HS2022'}
+        available=ready_months(store,source,[shift_month(start,-1),shift_month(start,-12)],editions)
         rank_comparable=shift_month(start,-1) in available
         for offset,target in ((-1,previous),(-12,yoy)):
             m=shift_month(start,offset)

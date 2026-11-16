@@ -226,6 +226,10 @@ class ReportAgentTest(unittest.TestCase):
                 hs_code='330499', hs_ver='HS2017', depth=6, name_ko='이전 판본 제품', source_edition='HS2017'))
             c.execute(self.meta.tables['export_summary'].insert().values(
                 trade_month=date(2025, 1, 1), country_code='US', hs6_code='330499', hs_ver='HS2017', amount_usd=7))
+            # 2~3월에도 HS2017 행이 있어야 그 판본을 집계한 월이다(행이 없는 월은 0달러가 아니라 미집계).
+            for month in (2, 3):
+                c.execute(self.meta.tables['export_summary'].insert().values(
+                    trade_month=date(2025, month, 1), country_code='CN', hs6_code='330499', hs_ver='HS2017', amount_usd=1))
         trend = '2025년 1~3월 HS2017 330499 수출 추이'
         tasks = [{'intent': 'STATISTICS', 'question': trend, 'slots': {
             'period': {'start': '2025-01-01', 'end': '2025-03-01'}, 'products': ['330499']}},
