@@ -36,7 +36,8 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const searchQuery=confirmed ? '' : searchText
   const settled = useDebouncedValue(searchQuery)
   const exactProduct = !!onSelectProduct && !hs4Only && /^\d{6}$/.test(settled)
-  const searchDepth = exactProduct || (hs6First && !hs4Only) ? 6 : 4
+  const chatGroupCode = hs6First && /^\d{4}$/.test(settled)
+  const searchDepth = exactProduct || (hs6First && !hs4Only && !chatGroupCode) ? 6 : 4
   const search = useQuery('/reference/hs-codes', { q: settled, depth: searchDepth, limit: 5 }, settled.length >= 1 && !confirmed)
   const tryProducts = !!onSelectProduct && !hs4Only && searchDepth === 4 && settled.length>=1 && !confirmed && !/^\d+$/.test(settled)
   const fallback = useQuery('/reference/hs-codes', { q: settled, depth: 6, limit: 5 }, tryProducts)
@@ -44,9 +45,12 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const active = preferProducts ? fallback : search
   const found = (settled === searchText ? active.data?.items || [] : [])
     .filter(h => h.depth === (preferProducts ? 6 : searchDepth) && (!exactProduct || h.hs_code === searchText))
-  const exactGroup = !hs4Only && expandGroup && onSelectProduct && /^\d{4}$/.test(q) ? found.find(h => h.hs_code === q && h.depth === 4) : null
-  const children = useQuery(`/reference/hs-codes/${q}/children`, { hs_ver: 'HS2022' }, !!exactGroup && open && !confirmed)
+  const exactGroup = (!hs4Only || hs6First) && (expandGroup || hs6First) && onSelectProduct && /^\d{4}$/.test(searchText)
+    ? found.find(h => h.hs_code === searchText && h.depth === 4) : null
+  const children = useQuery(`/reference/hs-codes/${exactGroup?.hs_code}/children`, { hs_ver: 'HS2022' }, !!exactGroup && open && !confirmed)
   const results = exactGroup ? [exactGroup, ...(children.data?.items || [])] : found
+  // 채팅의 정확한 HS4 검색은 하위 목록 로딩·선택과 무관하게 전체 범위를 확정할 수 있다.
+  const selectableGroup = confirmed ? group : hs6First && exactGroup ? { code: exactGroup.hs_code, name: exactGroup.name_ko } : null
   // 방향키로 고르는 중인 결과(-1이면 없음). Enter로 선택한다.
   const [cursor, setCursor] = useState(-1)
   const listId = useId()
@@ -94,8 +98,7 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
         {q && <button type="button" className="reset more" aria-label="품목 검색 지우기" onClick={() => { selection.current++; setQuery(''); onConfirm(null); setOpen(false) }}>지우기</button>}
         {confirmed && <span className="tag plum">HS4 확정</span>}
       </div>
-      {/* HS6 세부품목 검색에서는 HS4를 고를 수 없으므로 HS4 전체 버튼은 HS4 단위 검색에서만 보인다. */}
-      {buttonLabel && (!hs6First || hs4Only) && <Btn kind="ink" size="md" disabled={!confirmed} onClick={onSelectAll} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(group)}</Btn>}
+      {buttonLabel && (!hs6First || hs4Only || selectableGroup) && <Btn kind="ink" size="md" disabled={!selectableGroup} onClick={()=>onSelectAll(selectableGroup)} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(selectableGroup)}</Btn>}
       {open && !confirmed && (
         <div role="listbox" id={listId} aria-label="품목 검색 결과" style={{ position: hs6First ? 'static' : 'absolute', flexBasis: hs6First ? '100%' : undefined, top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
           {results.map((h, i) => (
