@@ -113,5 +113,30 @@ class ConcentrationTest(unittest.TestCase):
         self.assertNotIn('계산하지 않음', html)
 
 
+class WordBoxTest(unittest.TestCase):
+    """#120 리뷰: 실제 인쇄 템플릿(HTML → DOCX)에서 쪽 나눔으로 조각난 ML 유망시장 상자가 한 표의 여러 행으로 이어진다."""
+
+    def test_ml_box_fragments_become_one_table(self):
+        import copy
+        from docx import Document
+        from backend.app.api.common import ApiError
+        from backend.app.api.config import Settings
+        from backend.app.services.report_templates import sample_context
+        from backend.app.services.report_word import append_print_template
+        doc = Document()
+        try:
+            append_print_template(doc, {'report_type': 'RPT_ON_DEMAND', 'context': copy.deepcopy(sample_context('ondemand'))}, Settings())
+        except ApiError as exc:
+            self.skipTest(f'인쇄 레이아웃 브라우저 없음: {exc}')
+
+        def text(table):
+            return ' '.join(cell.text for row in table.rows for cell in row.cells)
+        boxes = [t for t in doc.tables if 'ML 유망시장 분석' in text(t)]
+        self.assertTrue(boxes)
+        box = boxes[-1]   # 가장 안쪽이 아닌, 제목을 담은 바깥 상자 표
+        self.assertGreaterEqual(len(box.rows), 2)          # 제목·문장·예측표 조각이 행으로 이어진다
+        self.assertIn('모델 예측입니다', text(box))          # 제목 다음 조각(안내 문장)이 같은 표 안에 있다
+
+
 if __name__ == '__main__':
     unittest.main()

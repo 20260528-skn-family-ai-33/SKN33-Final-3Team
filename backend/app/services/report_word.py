@@ -228,7 +228,8 @@ def write_block(parent, block, chart, *, inside_cell=False, into=None):
 def continues_box(previous, block):
     """쪽 나눔으로 조각난 한 상자(예: ML 유망시장)의 다음 조각인지. 앞 조각에 아래 테두리가 없고 이 조각에 위 테두리가 없으며
     너비가 같다. 이런 조각을 표마다 따로 쓰면 Word가 이음매마다 모서리를 그려 테두리가 끊겨 보인다(#120)."""
-    return (previous is not None and block['kind'] not in ('grid', 'table', 'chart', 'toc', 'stack')
+    # 인쇄 템플릿의 상자 조각(제목·문장·예측표)은 자식 블록을 담은 'stack'으로 변환된다. stack도 이어 써야 한다(#120 리뷰)
+    return (previous is not None and block['kind'] not in ('grid', 'table', 'chart', 'toc')
             and (block['fill'] or any(w for w, _ in block['borders'])) and abs(previous['width'] - block['width']) < 1
             and not previous['borders'][EDGES.index('bottom')][0] and not block['borders'][EDGES.index('top')][0])
 
