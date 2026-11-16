@@ -50,6 +50,13 @@ class LineChartTest(unittest.TestCase):
         three = [{'values': [1e8, 2e8, 3e8]}, {'values': [4e8, 5e8, 6e8]}, {'values': [7e8, 8e8, 9e8]}]
         self.assertEqual(self.values(line_chart(['1', '2', '3'], three, divisor=1e8)), ['3.00', '6.00', '9.00'])
 
+    def test_peak_value_stays_inside_the_chart(self):
+        """#120 리뷰: 1억 → 3억 → 2억에서 최고점 '3.00'이 SVG 위 경계를 넘지 않는다(DOCX 그림에서 잘림 방지)."""
+        svg = str(line_chart(['1', '2', '3'], [{'values': [1e8, 3e8, 2e8]}], divisor=1e8))
+        peak = re.search(r'<text x="[\d.]+" y="([\d.]+)"[^>]*>3\.00</text>', svg)
+        self.assertIsNotNone(peak)
+        self.assertGreaterEqual(float(peak[1]), 11)   # 글자 높이(10.5) 이상 아래에 기준선이 있어야 위가 잘리지 않는다
+
     def test_crowded_points_do_not_overlap(self):
         # 달이 많으면 겹치지 않는 위치에만 쓴다(전부 쓰지 않는다)
         shown = self.values(line_chart([str(i) for i in range(1, 37)], [{'values': [i * 1e8 for i in range(1, 37)]}], divisor=1e8))
@@ -84,6 +91,20 @@ class ConcentrationTest(unittest.TestCase):
         self.assertIn('<td>상위 1개국 비중</td>', html)
         self.assertNotIn('<td>상위 3개국 비중</td>', html)
         self.assertNotIn('<td>상위 10개국 비중</td>', html)
+
+    def test_comparison_value_stays_when_only_analysis_is_small(self):
+        """#120 리뷰: 분석 기간 2개국·비교 기간 12개국이면 상위 3개국 행은 남기고 분석 칸만 비운다(비교 25%는 보인다)."""
+        import copy
+        from backend.app.services.report_templates import render, sample_context
+        ctx = copy.deepcopy(sample_context('ondemand'))
+        ctx['concentration'] = {'top1': {'current': 70.0, 'previous': 10.0}, 'top3': {'current': None, 'previous': 25.0},
+                                'top10': {'current': None, 'previous': 80.0}, 'countries': {'current': 2, 'previous': 12},
+                                'single': False, 'note': None}
+        html = str(render('RPT_ON_DEMAND', ctx))
+        row = html[html.index('<td>상위 3개국 비중</td>'):]
+        row = row[:row.index('</tr>')]
+        self.assertIn('—', row)
+        self.assertIn('25.00%', row)
 
     def test_many_countries_keep_every_row(self):
         html = self.render(12)

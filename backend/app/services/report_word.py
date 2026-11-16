@@ -116,7 +116,9 @@ def decorate(cell, block, outer=None):
                 width, color = outer['borders'][i]
         margins.append(element(edge, w=round(pad * 15), type='dxa'))
         if width and color:
-            borders.append(element(edge, val='single', color=color, sz=max(2, round(width * 6))))
+            # 배경을 칠한 칸의 굵은 테두리는 Word 편집 화면에서 배경이 안쪽을 덮어 왼쪽·위만 얇아 보인다.
+            # 1pt(sz=8)로 상한을 둬 화면 두께 차이를 줄인다(ML 유망시장 상자, #120). 인쇄·PDF 모양은 거의 같다
+            borders.append(element(edge, val='single', color=color, sz=min(8, max(2, round(width * 6)))))
     props.append(margins)
     props.append(borders)
 
@@ -173,7 +175,8 @@ def write_contents(parent, block):
         field_end(p)
 
 
-def write_block(parent, block, chart, *, inside_cell=False):
+def write_block(parent, block, chart, *, inside_cell=False, into=None):
+    """블록을 쓴다. 배경·테두리 상자는 한 칸 표로 쓰고 그 표를 돌려준다. into가 있으면 그 표에 행으로 잇는다."""
     kind = block['kind']
     if kind == 'toc':
         write_contents(parent, block)
@@ -206,7 +209,8 @@ def write_block(parent, block, chart, *, inside_cell=False):
             if cell._tc[-1].tag != qn('w:p'):
                 paragraph(cell, 1.4)
     elif not inside_cell and (block['fill'] or any(w for w, _ in block['borders'])):
-        row = native_table(parent, [block['width']]).add_row()
+        table = into if into is not None else native_table(parent, [block['width']])
+        row = table.add_row()
         if kind == 'text' and not block['runs']:
             row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
             row.height = points(max(1.4, block['height']))
@@ -214,18 +218,30 @@ def write_block(parent, block, chart, *, inside_cell=False):
         cell._tc.clear_content()
         decorate(cell, block)
         write_block(cell, block, chart, inside_cell=True)
+        return table
     elif kind == 'stack':
         write_stack(parent, block['children'], block['y'] + block['padding'][0], chart)
     else:
         write_text(paragraph(parent, block['line']), block)
 
 
+def continues_box(previous, block):
+    """쪽 나눔으로 조각난 한 상자(예: ML 유망시장)의 다음 조각인지. 앞 조각에 아래 테두리가 없고 이 조각에 위 테두리가 없으며
+    너비가 같다. 이런 조각을 표마다 따로 쓰면 Word가 이음매마다 모서리를 그려 테두리가 끊겨 보인다(#120)."""
+    return (previous is not None and block['kind'] not in ('grid', 'table', 'chart', 'toc', 'stack')
+            and (block['fill'] or any(w for w, _ in block['borders'])) and abs(previous['width'] - block['width']) < 1
+            and not previous['borders'][EDGES.index('bottom')][0] and not block['borders'][EDGES.index('top')][0])
+
+
 def write_stack(parent, blocks, top, chart):
+    box = previous = None
     for block in blocks:
         gap = block['y'] - top
+        joined = box if gap <= 1 and continues_box(previous, block) else None
         if gap > 1:
             paragraph(parent, gap)
-        write_block(parent, block, chart)
+        box = write_block(parent, block, chart, into=joined)
+        previous = block if box is not None else None
         top = block['y'] + block['height']
 
 

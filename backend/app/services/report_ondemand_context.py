@@ -236,10 +236,13 @@ def populate(store, saved, ctx, names, start, end):
                                 for i, code in enumerate(active[:10], 1)]
         others = [code for code in codes if code not in active[:10]]
         ctx['others'] = metrics(others) if others else None
-        # 분석 기간 수출국 수보다 작은 상위 n만 행으로 둔다(국가 2개면 상위 1개국만). 수출국이 1개 이하면 표 대신 안내한다
-        ctx['concentration'] = {**{f'top{n}': {'current': top_share(n), 'previous': old_share(n)} for n in (1, 3, 10) if len(active) > n},
-                                'countries': {'current': len(active), 'previous': len(old_active) if ready else None},
-                                'single': len(active) <= 1, 'note': None}
+        # 상위 n 행은 분석·비교 기간 중 한쪽이라도 뜻 있는 값(수출국이 n개보다 많음)이 있으면 남기고,
+        # 뜻 없는 칸만 비운다(—). 분석 기간만 기준으로 행을 빼면 비교 기간의 정상 값까지 사라진다(#120 리뷰).
+        # 두 기간 모두 뜻 있는 행이 없으면 표 대신 안내한다
+        shares = {f'top{n}': {'current': top_share(n), 'previous': old_share(n)} for n in (1, 3, 10)}
+        shares = {key: value for key, value in shares.items() if value['current'] is not None or value['previous'] is not None}
+        ctx['concentration'] = {**shares, 'countries': {'current': len(active), 'previous': len(old_active) if ready else None},
+                                'single': not shares, 'note': None}
     scope = '선택 국가 내 집계' if saved.get('country_codes') else '전체 국가 집계'
     ctx['meta']['data_basis'] = f'관세청 수출입무역통계 · HS2022 · {scope}'
     ctx['sources'] = [{'label': '수출입 통계', 'provider': '관세청', 'scope': f'{scope} · 검증 완료 월',

@@ -162,6 +162,19 @@ class ResultPresentationTest(unittest.TestCase):
         self.assertEqual([c['label'] for c in display_columns(saved, [row], None, 'IMPORT')], ['수입액', '금액'])
         self.assertEqual([c['label'] for c in display_columns(saved, [row], {'kind': 'LLM_SQL'}, 'IMPORT')], ['수입액', '금액'])
 
+    def test_saved_chat_answers_get_import_labels(self):
+        """#120 리뷰: 수정 전에 저장된 수입 답변을 다시 열어도 결과표 열 이름이 '수입'이다(에이전트·기존 채팅 답변)."""
+        from backend.app.api.results import answer_labels
+        cols = [{'key': 'month', 'label': '기준월'}, {'key': 'amount_usd', 'label': '수출액'}]
+        agent = {'tasks': [{'task_id': 't1', 'conditions': {'trade_flow': 'IMPORT'}}, {'task_id': 't2', 'conditions': {'trade_flow': 'EXPORT'}}],
+                 'tables': [{'task_id': 't1', 'columns': cols}, {'task_id': 't2', 'columns': cols}]}
+        out = answer_labels(agent)
+        self.assertEqual([[c['label'] for c in t['columns']] for t in out['tables']], [['기준월', '수입액'], ['기준월', '수출액']])
+        legacy = {'conditions': {'trade_flow': 'IMPORT'}, 'tables': [{'columns': cols}]}
+        self.assertEqual([c['label'] for c in answer_labels(legacy)['tables'][0]['columns']], ['기준월', '수입액'])
+        self.assertIsNone(answer_labels(None))
+        self.assertEqual(answer_labels({'text': '표 없음'}), {'text': '표 없음'})
+
     def test_legacy_prediction_excel_uses_korean_labels_and_relevant_rank(self):
         row = {'anchor': '2026-09-01', 'country_name': '베트남', 'hs6': '330499',
                'product_name': '화장품', 'growth_pct': 2.1, 'exp_12m': 123456,

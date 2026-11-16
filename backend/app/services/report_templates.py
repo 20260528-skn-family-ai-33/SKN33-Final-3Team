@@ -236,7 +236,11 @@ def _axis_room(ticks, minimum):
 
 def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REPORT_DIGITS, zero=False):
     """series: [{values(USD 또는 원값, divisor로 나눠 표시), color?, dashed?, area?}]. 선 끝에 마지막 값 라벨."""
-    top, bottom = 10, 24
+    # 점 수치·꼭짓점은 선이 하나이거나 '분석 선 + 비교 기간 점선'일 때 첫 선에만 쓴다. 국가별처럼 같은 급의 선이 여럿이면
+    # 한 선에만 숫자가 붙어 어색하므로 기존처럼 끝 값만 쓴다(#120)
+    labelled = len(series) == 1 or (len(series) == 2 and bool(series[1].get('dashed')))
+    # 최고점 위에 숫자(10.5pt)가 들어갈 자리를 둔다. 없으면 SVG 위 경계를 넘어 DOCX 그림에서 잘린다(#120 리뷰)
+    top, bottom = (24 if labelled else 10), 24
     scaled = [[None if v is None else v / divisor for v in s['values']] for s in series]
     low, high, ticks = nice_scale([v for vals in scaled for v in vals], zero=zero)
     left = _axis_room(ticks, 44)
@@ -253,9 +257,6 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REP
         out.append(f'<text x="{left - 6}" y="{y(t) + 3:.1f}" text-anchor="end" class="axis">{_tick_label(t, _tick_digits(ticks))}</text>')
     for i in _visible_labels(labels, x):
         out.append(f'<text x="{x(i):.1f}" y="{height - 6}" text-anchor="middle" class="axis">{escape(labels[i])}</text>')
-    # 점 수치·꼭짓점은 선이 하나이거나 '분석 선 + 비교 기간 점선'일 때 첫 선에만 쓴다. 국가별처럼 같은 급의 선이 여럿이면
-    # 한 선에만 숫자가 붙어 어색하므로 기존처럼 끝 값만 쓴다(#120)
-    labelled = len(series) == 1 or (len(series) == 2 and bool(series[1].get('dashed')))
     ends = []
     for s, vals in zip(series, scaled):
         color = s.get('color', ACCENT)

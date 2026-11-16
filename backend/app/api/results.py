@@ -53,6 +53,17 @@ def flow_label(key, label, flow):
     return label
 
 
+def answer_labels(answer):
+    """저장된 채팅 답변의 결과표 열 이름을 조회 방향에 맞춘다. 수정 전에 저장된 수입 답변도 다시 열 때 '수입'으로 보인다(#120).
+    표의 방향은 그 표를 만든 하위 질문(tasks[].conditions), 없으면 답변 조건(기존 채팅 API)에서 읽는다."""
+    if not isinstance(answer, dict) or not answer.get('tables'): return answer
+    flows = {t.get('task_id'): (t.get('conditions') or {}).get('trade_flow') for t in answer.get('tasks') or []}
+    default = (answer.get('conditions') or {}).get('trade_flow')
+    tables = [{**table, 'columns': [{**c, 'label': flow_label(c['key'], c.get('label') or c['key'], flows.get(table.get('task_id')) or default)}
+                                    for c in table.get('columns') or []]} for table in answer['tables']]
+    return {**answer, 'tables': tables}
+
+
 def display_columns(columns, rows, meta=None, flow=None):
     if (meta or {}).get('kind') == 'PREDICTION':
         return prediction_columns(columns, meta.get('group_by'))
