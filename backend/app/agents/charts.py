@@ -79,7 +79,24 @@ def build_chart(store, uid, task, result_id, selection=None):
     if not rows: return output, [], warnings
     flow = '수입액' if task.conditions.trade_flow=='IMPORT' else '수출액'
     title, unit, granularity = flow, 'USD', None
-    if kind=='TREND':
+    if kind == 'MULTI_YEAR':
+        comparison = task.conditions.year_comparison
+        if not comparison:
+            return output, [], warnings
+        if comparison.monthly:
+            if len(comparison.years) > MAX_CHART_SERIES:
+                return output, [], warnings
+            full = labels = [row['month_label'] for row in rows]
+            kindchart, title = 'line', f'연도별 월간 {flow}'
+            series = [{'name': f'{year}년', 'values': [row[f'year_{year}_usd'] for row in rows]}
+                      for year in comparison.years]
+        else:
+            if len(rows) > MAX_CHART_LABELS:
+                return output, [], warnings
+            full = labels = [row['year_label'] for row in rows]
+            kindchart, title = 'bar', f'연도별 {flow}'
+            series = [{'name': flow, 'values': [row['amount_usd'] for row in rows]}]
+    elif kind=='TREND':
         grouped=defaultdict(list)
         for row in rows: grouped[(row['country_code'],row['hs_code'],row['hs_ver'])].append(row)
         selected = [identity for identity, _ in sorted(grouped.items(), key=_trend_order)][:MAX_CHART_SERIES]

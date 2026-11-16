@@ -3,6 +3,7 @@ from collections import Counter
 import re
 
 from backend.app.agents.digest import display_amounts, korean_usd
+from backend.app.agents.monthly_summary import fixed_monthly_sentences, reconcile_monthly_claims
 from backend.app.agents.state import (AgentState, Draft, TaskConclusion, MAX_TASK_SENTENCES,
                                       MAX_TEXT_TASK_SENTENCES, draft_limit_error, is_text_task)
 
@@ -26,6 +27,7 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 요청한 월들에 미집계가 섞여 있으면 제시된 각 월을 실제 금액(0 포함) 또는 미집계와 짝지어 설명하세요. 소계를 제시할 때에는 전체 기간 합계를 확인할 수 있는지도 밝히세요.
 금액은 digest에 적힌 표기(예: "2,610만 달러", "1억 2,346만 달러")를 글자 그대로 옮기세요.
 만·억 단위를 다시 바꾸거나 반올림·합산하지 마세요. 총액과 월평균, %와 %p를 구분하세요.
+월별 금액의 최저·최고는 TREND의 monthly_facts에서 월과 금액을 짝지어 쓰세요. 전년 동월보다 증가한 달도 monthly_facts의 increased_months를 보고, 목록이 increased_count보다 짧으면 개수만 쓰세요.
 기간 비교의 change_pct는 compare_period의 compare_total_usd를 분모로 한 period의 total_usd 변화율입니다. 문장에 두 기간의 역할을 그대로 쓰세요.
 두 기간의 수출액·수입액 차이를 물으면 결론에 달러 차액을 명시하세요. TREND의 period_difference_usd는 조회 기간 합계에서 비교 기간 합계를 뺀 금액입니다. 두 합계와 차액은 별도 문장에 쓰세요. 차액을 쓸 때는 두 기간, 실제 달러 차액, 어느 쪽이 더 큰지를 한 문장에 담으세요. 차액이 0이면 두 기간의 차액이 0달러라고 씁니다. turn_summary에 차액을 쓸 때도 같은 차액 문장을 그대로 사용하세요. 차액이 null이면 산출할 수 없다고 쓰세요. 변화율만 요청했다면 change_pct를 쓰세요.
 비교 기간 길이가 다르면 그 사실과 월평균을 명시하고 점유율 분모 의미를 밝히세요.
@@ -313,6 +315,10 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
     allowed = [_citable_article(a) for a in articles if a.get('evidence_sufficient') and a.get('summary')]
     fixed, tasks = {}, []
     for task in state.plan.tasks:
+        monthly = fixed_monthly_sentences(state, task)
+        if monthly:
+            fixed[task.task_id] = TaskConclusion(task_id=task.task_id, sentences=list(monthly))
+            continue
         conclusion = fixed_conclusion(state, task)
         if conclusion:
             fixed[task.task_id] = conclusion
@@ -543,6 +549,9 @@ def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_c
         if state.input.first_question: title = (label + ' 리포트')[:20]
     draft = Draft(conclusion=[by_id[t.task_id] for t in state.plan.tasks],
         explanation=generated.explanation if generated else [], turn_summary=summary, title=title)
+    reconcile_monthly_claims(state, draft, articles or ())
+    if not draft.title and state.input.first_question and fixed_monthly_sentences(state, primary):
+        draft.title = primary.question[:20]
     if error := draft_limit_error(state.plan, draft):
         raise ValueError(error)   # 재시도 대상(D-21·D-67)
     return draft

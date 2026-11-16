@@ -97,14 +97,15 @@ export default function TaskResults({answer,hideText=false}) {
     const start=conclusionCount(answer.tasks.slice(0,index))
     const tables=answer.tables.filter(x=>x.task_id===t.task_id)
     const title=taskTitle(t,tables)
+    const badge=t.query_status==='FAILED'?'조회 실패':badges[t.answer_status]
     // 문장형 답변(D-98): 결론을 한 문단으로 읽게 하고, 근거 표는 접어 둔다. 차트 단계는 없다
-    if(t.answer_format==='TEXT')return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
+    if(t.answer_format==='TEXT')return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badge&&<span className="tag amber">{badge}</span>}</h3>
       {!hideText && <div className="chat-paragraph">{t.conclusion.map((s,i)=>sentence(s,start+i))}</div>}
       {tables.length>0 && <details><summary>근거 표 보기</summary>
         {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}
           charts={answer.charts||[]} selectors={answer.chart_selectors} tasks={answer.tasks} tableOnly/>)}   {/* 비교는 시기별 한 줄(22번), 표만 */}
         {tables.filter(x=>!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</details>}</section>
-    return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
+    return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badge&&<span className="tag amber">{badge}</span>}</h3>
       {!hideText && t.conclusion.map((s,i)=>sentence(s,start+i))}
       {charts.filter(c=>c.task_id===t.task_id&&!groupedTasks.has(c.task_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c} selector={answer.chart_selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)} table={answer.tables.find(x=>x.result_id===c.result_id)}/>)}
       {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}

@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 import re
 
 from backend.app.agents.compose import fixed_conclusion
+from backend.app.agents.monthly_summary import fixed_monthly_sentences, task_series, snapshot_sentences
 from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
     ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
@@ -525,6 +526,9 @@ def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
     conditions=payload.get('conditions') or {}
     meta=payload.get('meta') or {}
     scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
+    if meta.get('kind') == 'MULTI_YEAR':
+        scope.update(kind='MULTI_YEAR', year_comparison=conditions.get('year_comparison'),
+                     country_codes=conditions.get('country_codes', []), hs_items=conditions.get('hs_items', []))
     if meta.get('kind') == 'TREND':
         scope['kind'] = 'TREND'
     if meta.get('kind') == 'LLM_SQL':
@@ -634,7 +638,7 @@ def check_history(sentence, recent):
 def generated_conclusion(state, task, has_evidence):
     fixed_ids = getattr(state, 'fixed_conclusion_ids', None)
     if fixed_ids is not None:
-        return task.task_id not in fixed_ids
+        return task.task_id not in fixed_ids or bool(fixed_monthly_sentences(state, task))
     return (has_evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
 
 
@@ -767,6 +771,10 @@ def _correction_span(sentence, claim, reason):
 
 def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_labels=None):
     """Judge the saved draft and supplied evidence without mutating the turn."""
+    from backend.app.agents.multi_year import verify_year_draft
+    year_check = verify_year_draft(state, snapshots or {})
+    if year_check is not None:
+        return year_check
     feedback = []
     confirmed_claims = []
     snapshots=snapshots or {}
@@ -866,8 +874,31 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
             return 'NO_DIRECT_CHANGE_CELL'
         return 'NOT_CONFIRMED'
 
+    # Writer-independent monthly sentences still need an independent match to the full saved rows.
+    monthly_checks = {}
+    for task in state.plan.tasks:
+        rendered = task_series(state, task)
+        if rendered:
+            saved = next((snapshots.get(s.step_id, {}) for s in task.steps if s.tool == 'query_trade_data'), {})
+            supported = snapshot_sentences(task, saved)
+            monthly_checks[task.task_id] = {line: line in supported for line in rendered}
+
     index=0
     def inspect(sentence,group,section,task_id=None):
+        table_match = monthly_checks.get(task_id, {}).get(sentence)
+        if task_id is None:
+            matches = [outcomes[sentence] for outcomes in monthly_checks.values() if sentence in outcomes]
+            table_match = all(matches) if matches else None
+        if table_match is not None:
+            if not table_match:
+                feedback.append(ClaimFeedback(section=section, task_id=task_id, index=None if section=='summary' else index,
+                                              passage=sentence, reason='NOT_CONFIRMED'))
+            if section == 'summary':
+                return table_match
+            checks.append(SentenceCheck(index=index, numbers=[q.shown for q in quantities(sentence)],
+                                        status='PASS' if table_match else 'MISMATCH', basis='SNAPSHOT',
+                                        reason='MATCH' if table_match else 'NOT_CONFIRMED'))
+            return
         prepared = prepare_scope(group)
         digests = prepared.sources
         good,claims=_inspect_prepared(sentence,prepared)

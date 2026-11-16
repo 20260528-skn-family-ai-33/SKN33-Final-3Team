@@ -7,6 +7,7 @@ from time import monotonic
 
 from sqlalchemy import select, func
 from backend.app.agents.digest import bounded, MAX_DIGEST_ROWS
+from backend.app.agents.monthly_summary import monthly_facts
 from backend.app.agents.state import ToolResult
 from backend.app.api import trade
 from backend.app.api.common import period, shift_month, percentage
@@ -24,6 +25,8 @@ class Analysis:
 
 def api_conditions(conditions):
     output = conditions.model_dump(mode='json', exclude={'article_period', 'ranking_group', 'share_basis'})
+    if conditions.year_comparison is None:
+        output.pop('year_comparison', None)
     for key in ('period', 'compare_period'):
         value = getattr(conditions, key)
         output[key] = period(value.start, value.end) if value else None
@@ -31,6 +34,8 @@ def api_conditions(conditions):
     p=conditions.period
     output['compare']=('NONE' if not compare else 'YOY_PERIOD' if p and compare.start==shift_month(p.start,-12)
                        and compare.end==shift_month(p.end,-12) else 'CUSTOM')
+    if conditions.year_comparison:
+        output['compare'] = 'CUSTOM'
     output['metric']='AMOUNT'
     return output
 
@@ -78,6 +83,9 @@ def run_template(store, uid, task, step, timeout=30):
     conditions = task.conditions
     if not conditions or not conditions.period:
         raise ValueError('SQL requires confirmed trade conditions')
+    if conditions.year_comparison and step.args.get('template') == 'TREND':
+        from backend.app.agents.multi_year import run_year_comparison
+        return run_year_comparison(store, conditions, timeout)
     started = monotonic()
     def guard():
         if monotonic() - started >= timeout: raise TimeoutError('SQL template time budget exhausted')
@@ -165,7 +173,8 @@ def run_template(store, uid, task, step, timeout=30):
         if len(kept) < len(targets): limitations.append(f'표에는 금액 상위 {len(kept)}개 대상만 담았습니다.')
         selected = kept[:10]
         digest = {**_base('TREND', conditions, meta, len(rows)), 'compare_period': public['compare_period'],
-                  'targets': [{**t, 'monthly': t['monthly'][-(MAX_DIGEST_ROWS // len(selected)):]}
+                  'targets': [{**t, 'monthly_facts': monthly_facts(t['monthly']),
+                               'monthly': t['monthly'][-(MAX_DIGEST_ROWS // len(selected)):]}
                               for t in selected],
                   'truncated': len(selected) < len(targets) or len(requested)*len(selected) > MAX_DIGEST_ROWS}
     elif simple_country_rank:

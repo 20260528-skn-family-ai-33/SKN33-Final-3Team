@@ -205,6 +205,13 @@ class Services:
             from backend.app.agents.article_actions import action_plan
             state.plan = action_plan(state.input.article_action)
             return
+        if base := state.input.year_over_year_base:
+            flows = ('EXPORT', 'IMPORT') if (base == state.input.context.conditions
+                    and state.input.context.both_trade_flows) else (base.trade_flow,)
+            state.plan, _ = build_plan(PlannerOutput(tasks=[
+                {'intent':'STATISTICS', 'question':state.input.question,
+                 'slots':{'trade_flow':flow, 'comparison_requested':True}} for flow in flows]))
+            return
         from backend.app.agents.planner import article_retry_plan, explicit_cause_followup, explicit_country_ranking, explicit_out_of_scope, explicit_over_limit
         if retry := article_retry_plan(state):
             state.plan=retry
@@ -238,6 +245,20 @@ class Services:
                 self.execution.transaction(lambda store,job:preview(store,current,task))
             with self.read_store() as store:
                 check_conditions(store,state,step,resolve_bindings=resolve_bindings,confirm_report=create_preview)
+            primary = state.plan.tasks[0]
+            if (primary.intent == 'STATISTICS' and step in primary.steps and step.status == 'DONE'
+                    and primary.conditions and primary.conditions.period):
+                # 조건 검증 직후에 저장한다. 조회·답변 작업의 실패도 사용자가 정한 범위를 지우지 않는다.
+                def remember_scope(store, job):
+                    session = store.owned('chat_session', 'session_id', state.input.session_id, state.input.user_id, lock=True)
+                    context = dict(session['context_json'] or {})
+                    scope = primary.conditions.model_dump(mode='json')
+                    if context.get('confirmed_trade_conditions') != scope:
+                        context['confirmed_trade_conditions'] = scope
+                        sessions = store.t('chat_session')
+                        store.c.execute(update(sessions).where(sessions.c.session_id == session['session_id'])
+                                        .values(context_json=context))
+                self.execution.transaction(remember_scope)
         try:
             self.execution.call('check',budget.seconds(self.settings,'check'),work,
                                 finish_reserve=budget.finishing_seconds(state,self.settings))
@@ -296,6 +317,8 @@ class Services:
                 if exc.code=='RUN_TIMEOUT' or not exc.retryable: return ToolResult(status='FAILED',error=exc.message)
             except SlotRepair as exc: return ToolResult(status='NO_DATA',error=str(exc))
             except (SQLAlchemyError,TimeoutError,ValueError): pass
+        if step.tool == 'query_trade_data':
+            return ToolResult(status='FAILED', error='무역 통계 조회에 실패했습니다. 같은 조건으로 다시 질문해 주세요.')
         return ToolResult(status='FAILED',error='분석을 완료하지 못했습니다. 조건을 확인해 다시 질문해 주세요.')
 
     def _tool(self,state,step):
@@ -449,7 +472,8 @@ class Services:
         self.compose(state,prompt=COMPOSE_TEXT_PROMPT,model_role='compose_text')
 
     def compose(self,state,prompt=COMPOSE_PROMPT,model_role='compose'):
-        comparison = period_difference_draft(state)
+        from backend.app.agents.multi_year import year_comparison_draft
+        comparison = year_comparison_draft(state) or period_difference_draft(state)
         if comparison is not None:
             state.draft = comparison
             state.fixed_conclusion_ids = []  # Numeric conclusions still go through snapshot verification.
@@ -650,6 +674,10 @@ class Services:
                     'article_period':task.conditions.article_period.model_dump(mode='json') if task.conditions and task.conditions.article_period else None,
                     'conclusion':conclusion.sentences,'answer_status':task.answer_status,
                     'answer_format':'TEXT' if is_text_task(task) else None})
+                if task.answer_status == 'NO_DATA' and any(
+                        step.tool in ('query_trade_data', 'check_conditions') and (result := state.results.get(step.step_id))
+                        and result.status == 'FAILED' for step in task.steps):
+                    tasks[-1]['query_status'] = 'FAILED'
                 for step in task.steps:
                     result=state.results.get(step.step_id)
                     if step.tool == 'search_articles' and result and result.status == 'OK' and result.article_ids and result.digest:
@@ -712,6 +740,7 @@ class Services:
             if primary.answer_status in ('PARTIAL','ANSWERED') and primary.conditions:
                 from backend.app.agents.context import both_trade_flows
                 context['conditions']=answer['conditions']
+                context.pop('confirmed_trade_conditions', None)
                 if both_trade_flows(state.plan):
                     context['both_trade_flows']=True
                 else:
