@@ -9,8 +9,8 @@ const colors = ['#C8102E', '#2B2350', '#9A95BF', '#DBA343', '#6C7989']
 const PIE_COLORS = ['#C8102E', '#0B6E99', '#EB6834', '#2A78D6', '#7CB342', '#A0522D', '#1BAF7A', '#6250D6', '#E87BA4', '#008300']
 const PIE_OTHER = '#9AA0A8'
 // 영역마다 기간을 따로 둔다. 순위 카드의 3·6·12개월 버튼은 카드 영역만 바꾼다.
-// 주요 지표는 기존 기본값(최근 3개월), 품목별·교역국별 표와 원그래프는 최근 12개월로 맞춘다(F-2).
-export const KPI_MONTHS = 3
+// 주요 지표와 품목별·교역국별 표는 최근 12개월, 비교는 전년 동일 기간이다.
+export const KPI_MONTHS = 12
 export const TABLE_MONTHS = 12
 export function monthOffset(value, delta) {
   if (!value) return ''
@@ -19,7 +19,7 @@ export function monthOffset(value, delta) {
   return date.toISOString().slice(0, 7)
 }
 const direction = value => value > 0 ? 'up' : value < 0 ? 'down' : 'flat'
-const growth = (now, before) => before ? (now / before - 1) * 100 : null
+const growth = (now, before) => now != null && before ? (now / before - 1) * 100 : null
 // 금액 0은 그 기간에 실적이 없다는 뜻이므로 0 대신 —로 보여 준다(D-3).
 export const money = value => value == null || Number(value) === 0 ? '—' : amount(value)
 const periodText = data => `${data?.meta?.period?.start || '—'} ~ ${data?.meta?.period?.end || '—'} · 억 USD`
@@ -32,14 +32,14 @@ export default function useDashboard(view, months, profile) {
   const country_codes = scope === 'INTERESTED' ? profile.countries.map(countryCode) : []
 
   // 주요 지표
-  const kpis = useQuery('/trade/kpis', {}, scope === 'GLOBAL')
   const trends = useMarketSeries(end ? [{ ...kpiRange }] : [])
   const latestRows = trends.data.flatMap(d => d.items)
   const sum = key => latestRows.length && latestRows.every(r => r[key] != null) ? latestRows.reduce((s, r) => s + Number(r[key]), 0) : null
   const latest = Object.fromEntries(['export_amount_usd', 'import_amount_usd', 'previous_year_export_usd', 'previous_year_import_usd'].map(k => [k, sum(k)]))
   const exp = latest.export_amount_usd, imp = latest.import_amount_usd
   const expYoy = growth(exp, latest.previous_year_export_usd), impYoy = growth(imp, latest.previous_year_import_usd)
-  const mom = scope === 'GLOBAL' ? kpis.data?.kpi.mom_pct ?? null : null
+  const balanceChange = exp != null && imp != null && latest.previous_year_export_usd != null && latest.previous_year_import_usd != null
+    ? exp - imp - (latest.previous_year_export_usd - latest.previous_year_import_usd) : null
   const noTrade = exp == null || imp == null || (Number(exp) === 0 && Number(imp) === 0)
 
   // 수출 상위 품목 카드
@@ -68,16 +68,16 @@ export default function useDashboard(view, months, profile) {
   const tablePeriod = periodText(countries.data || tableProducts.data)
   // 영역별 오류 안내: 기준 월 조회가 실패하면 모든 영역이 비므로 각 영역에 함께 넣는다.
   const states = {
-    kpi: [availability, kpis, trends], fx: [fx], cards: [availability, cardProducts, series],
+    kpi: [availability, trends], fx: [fx], cards: [availability, cardProducts, series],
     products: [availability, tableProducts], countries: [availability, countries, shares], news: [news],
   }
   return {
     states, statMonth: end || '확인 중', title: scope === 'GLOBAL' ? '대한민국 수출입 현황' : '내 관심 시장 수출입 현황',
-    period: `${kpiRange.period_start || '—'} ~ ${end || '—'} · 억 USD`, kpiLink: link(KPI_MONTHS),
+    period: `${kpiRange.period_start || '—'} ~ ${end || '—'} · 최근 12개월 · 억 USD · 비교: ${monthOffset(end, -23) || '—'} ~ ${monthOffset(end, -12) || '—'}`, kpiLink: link(KPI_MONTHS),
     kpis: [
       { label: '수출액', flow: 'EXPORT', value: money(exp), unit: '억 USD', rows: [['전년 대비', percent(expYoy), direction(expYoy)]] },
       { label: '수입액', flow: 'IMPORT', value: money(imp), unit: '억 USD', rows: [['전년 대비', percent(impYoy), direction(impYoy)]] },
-      { label: '무역수지', value: noTrade ? '—' : amount(exp - imp), unit: '억 USD', rows: [['전월 수출 증감', percent(mom), direction(mom)]] },
+      { label: '무역수지', value: noTrade ? '—' : amount(exp - imp), unit: '억 USD', rows: [['전년 대비', balanceChange == null ? '—' : `${balanceChange > 0 ? '+' : ''}${amount(balanceChange)}억 USD`, direction(balanceChange)]] },
     ],
     fxTitle: scope === 'GLOBAL' ? '주요 통화 환율' : '관심 국가 환율', fxDate: fx.data?.items?.[0]?.base_date || '기준일 미제공',
     fx: (fx.data?.items || []).map(r => [r.currency_code, `${r.quote_unit} 단위`, r.rate_krw == null ? '—' : Number(r.rate_krw).toLocaleString('ko-KR'), percent(r.change_pct), r.change_pct > 0 ? 'up' : r.change_pct < 0 ? 'down' : 'flat']),
