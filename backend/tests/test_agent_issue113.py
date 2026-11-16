@@ -336,6 +336,30 @@ class SimpleRankingTableTest(unittest.TestCase):
         ratio = (base.split(', im AS')[0] + ', ' + total
                  + " SELECT ex.amount AS export_usd, ex.amount / tot.amount AS import_usd FROM ex JOIN tot ON 1 = 1")
         self.assertTrue(months_check(ratio))
+        paired = "SELECT ex.amount AS fine, tot.amount AS repeated FROM ex JOIN tot ON 1 = 1"
+        prefix = base.split(', im AS')[0] + ', ' + total
+        through_ctes = (prefix + ", paired AS (" + paired + "), renamed(fine, value) AS "
+                        "(SELECT fine, repeated * 2 FROM paired)")
+        through_derived = prefix + " SELECT {aggregate} AS export_usd, 0 AS import_usd FROM (" + paired + ") p"
+        through_union = (prefix + ", combined AS (SELECT 1 AS fine, 2 AS other UNION ALL " + paired + ")"
+                         " SELECT SUM(other) AS export_usd, 0 AS import_usd FROM combined")
+        through_scalar = (prefix + ", paired AS (" + paired + ")"
+                          " SELECT SUM((SELECT p.repeated)) AS export_usd, 0 AS import_usd FROM paired p")
+        unsafe = [
+            (label, through_ctes + f" SELECT {label}(value) AS export_usd, 0 AS import_usd FROM renamed")
+            for label in ('SUM', 'AVG', 'COUNT')
+        ] + [
+            ('derived', through_derived.format(aggregate='SUM(p.repeated)')),
+            ('window', through_derived.format(aggregate='SUM(p.repeated) OVER ()')),
+            ('union', through_union),
+            ('correlated scalar', through_scalar),
+        ]
+        for label, statement in unsafe:
+            with self.subTest(lineage=label), self.assertRaisesRegex(ValueError, '반복 합산'):
+                months_check(statement)
+        self.assertTrue(months_check(through_ctes +
+                                     " SELECT SUM(fine) AS export_usd, 0 AS import_usd FROM renamed"))
+        self.assertTrue(months_check(through_derived.format(aggregate='p.fine / p.repeated')))
         self.assertRaises(ValueError, check, wrapped.replace('SELECT w.trade_month, w.amount FROM ex0 w',
                                                              'SELECT w.amount, w.amount * 2 AS twice FROM ex0 w'))
         # CTE를 한 단계 거쳐 수출입 표를 읽어도 같은 규칙이다(원본 행을 넘기는 CTE는 원본과 같다).
@@ -388,7 +412,7 @@ class SimpleRankingTableTest(unittest.TestCase):
         self.assertEqual([p.start.year for p in missing_periods(only.sql, conditions)], [2023, 2024])
         self.assertEqual(missing_periods(full.sql, conditions), [])
 
-        def run(drafts):
+        def run(drafts, rows=None):
             client = MagicMock()
             client.parse.side_effect = drafts
             execution = MagicMock()
@@ -396,7 +420,9 @@ class SimpleRankingTableTest(unittest.TestCase):
             step = SimpleNamespace(attempts=0)
             task = SimpleNamespace(custom_query='연도별 합계', conditions=conditions)
             with patch('backend.app.agents.sql.schema_for', return_value=[]), \
-                    patch('backend.app.agents.sql.execute_readonly', side_effect=lambda e, d, t, c: ([{'v': 1}], d.sql)):
+                    patch('backend.app.agents.sql.execute_readonly', side_effect=(
+                        zip(rows, (draft.sql for draft in drafts)) if rows is not None else
+                        lambda e, d, t, c: ([{'v': 1}], d.sql))):
                 result = generated_analysis(None, Settings({}), client, execution, task, finish_reserve=0,
                                             latest_month='2025-12', step=step)
             return step.attempts, result.result
@@ -405,6 +431,14 @@ class SimpleRankingTableTest(unittest.TestCase):
         attempts, result = run([only, only, only])
         self.assertEqual((attempts, result.status, result.completeness), (3, 'OK', 'PARTIAL'))
         self.assertIn('2023년, 2024년', result.limitations[0])
+
+        attempts, result = run([only, full], rows=[[], [{'y': 2024, 'total': 10}]])
+        self.assertEqual((attempts, result.status, result.completeness), (2, 'OK', 'COMPLETE'))
+        attempts, result = run([full], rows=[[]])
+        self.assertEqual((attempts, result.status), (1, 'NO_DATA'))
+        attempts, result = run([only, only, only], rows=[[], [], []])
+        self.assertEqual((attempts, result.status), (3, 'NO_DATA'))
+        self.assertIn('2023년, 2024년', result.error)
 
 
 class CompareYearsSplitTest(unittest.TestCase):

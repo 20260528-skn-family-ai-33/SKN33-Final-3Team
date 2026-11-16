@@ -108,12 +108,15 @@ def validate_sql(draft: SqlDraft, conditions=None) -> str:
                 raise ValueError('허용하지 않는 SQL 함수입니다.')
         if isinstance(node, (exp.Parameter, exp.SessionParameter)):
             raise ValueError('세션 변수는 허용하지 않습니다.')
-    for scope in traverse_scope(query):
+    scopes = traverse_scope(query)
+    repeated_inputs = {}
+    for scope in scopes:
         for _, source in scope.selected_sources.values():
             if isinstance(source, exp.Table):
                 if source.db or source.catalog or source.name.lower() not in ALLOWED_TABLES:
                     raise ValueError('허용 목록 밖의 테이블입니다.')
-        _check_trade_join(scope)
+        repeated_inputs[scope] = _check_trade_join(scope)
+    _check_repeated_trade_values(scopes, repeated_inputs)
     _check_trade_filters(query)
     if conditions is not None:
         _check_conditions(query, conditions)
@@ -145,7 +148,7 @@ def _check_trade_join(scope):
         raise ValueError('수출입 원본 표를 다른 수출입 표와 직접 조인하면 국가·품목 행이 중복 합산됩니다. '
                          '각 원본을 별도 CTE에서 필요한 단위로 먼저 집계한 뒤 조인하세요.')
     if len(derived) < 2 or not isinstance(scope.expression, exp.Select):
-        return
+        return set()
     # 먼저 집계한 수출입 CTE끼리 이을 때도 각 CTE의 GROUP BY 키가 모두 조인 조건에 있어야 한 행씩 대응한다.
     # 월·국가로 묶은 수출과 월로만 묶은 수입을 월로 이으면 수입 금액이 국가 수만큼 반복된다.
     outputs = {alias: {e.alias_or_name.lower() for e in source.expression.selects}
@@ -206,16 +209,61 @@ def _check_trade_join(scope):
         if not keys <= joined.get(alias, set()):
             raise ValueError('집계 단위가 다른 수출입 결과를 조인하면 금액이 반복 합산됩니다. '
                              '양쪽을 같은 단위로 집계하고 GROUP BY 키를 모두 조인 조건에 쓰세요.')
-    # 조인 단계마다 합계가 반복되는지: 가장 잘게 나뉜 입력보다 집계 단위가 굵은 입력(월별 결과에 붙인 전체 합계 등)은
-    # 결과 행마다 반복된다. 그 입력의 열을 바깥에서 다시 집계(SUM 등)하면 반복된 만큼 커지므로 거부한다.
-    coarse = {alias for alias, size in grain.items() if size < finest}
-    for agg in scope.expression.find_all(exp.AggFunc):
-        if agg.find_ancestor(exp.Select) is not scope.expression or agg.find_ancestor(exp.Window) is not None:
+    # 월별 결과에 붙인 전체 합계처럼, 더 굵은 입력은 잘게 나뉜 결과 행마다 반복된다.
+    return {alias for alias, size in grain.items() if size < finest}
+
+
+def _check_repeated_trade_values(scopes, repeated_inputs):
+    """조인에서 반복된 값이 중간 결과의 열 이름이나 위치를 바꿔도 그 출처를 추적한다."""
+    if not any(repeated_inputs.values()):
+        return
+    by_expression = {id(scope.expression): scope for scope in scopes}
+    sources = {scope: {alias.lower(): source for alias, (_, source) in scope.selected_sources.items()}
+               for scope in scopes}
+
+    @lru_cache(maxsize=None)
+    def output_names(scope):
+        aliases = scope.outer_columns
+        return tuple((aliases[i] if i < len(aliases) else item.alias_or_name).lower()
+                     for i, item in enumerate(scope.expression.selects))
+
+    @lru_cache(maxsize=None)
+    def repeated_positions(scope):
+        if isinstance(scope.expression, exp.Union):
+            return frozenset().union(*(repeated_positions(branch) for branch in scope.set_operation_scopes))
+        return frozenset(i for i, item in enumerate(scope.expression.selects)
+                         if uses_repeated_value(item, scope))
+
+    def uses_repeated_value(node, scope):
+        if isinstance(node, exp.Column):
+            name, owner = node.name.lower(), node.table.lower()
+            local = sources[scope]
+            bound_locally = owner in local
+            for alias, source in local.items():
+                if owner and owner != alias:
+                    continue
+                if isinstance(source, exp.Table):
+                    bound_locally = True
+                    continue
+                # SQLGlot represents a recursive CTE reference with a copy of its anchor scope.
+                source = by_expression.get(id(source.expression), source)
+                positions = [i for i, output in enumerate(output_names(source)) if output == name]
+                if positions:
+                    bound_locally = True
+                    if alias in repeated_inputs[scope] or not repeated_positions(source).isdisjoint(positions):
+                        return True
+            return (not bound_locally and scope.can_be_correlated and scope.parent is not None and
+                    uses_repeated_value(node, scope.parent))
+        if (nested := by_expression.get(id(node))) is not None:
+            return bool(repeated_positions(nested))
+        return any(uses_repeated_value(child, scope) for child in node.iter_expressions())
+
+    for scope in scopes:
+        if not isinstance(scope.expression, exp.Select):
             continue
-        for column in agg.find_all(exp.Column):
-            owners = ({column.table.lower()} if column.table else
-                      {a.lower() for a, cols in outputs.items() if column.name.lower() in cols})
-            if owners & coarse:
+        for aggregate in scope.find_all(exp.AggFunc):
+            if (aggregate.find_ancestor(exp.Query) is scope.expression and
+                    uses_repeated_value(aggregate, scope)):
                 raise ValueError('집계 단위가 굵은 수출입 결과(전체 합계 등)를 더 잘게 나뉜 결과에 조인한 뒤 다시 집계하면 '
                                  '금액이 행 수만큼 반복 합산됩니다. 같은 단위로 집계해 조인하거나 합계는 따로 구하세요.')
 
@@ -280,7 +328,7 @@ def _reads_trade(scope, seen=None):
     if any(t.name.lower() in TRADE_TABLES for t in scope.expression.find_all(exp.Table)):
         return True
     children = [source for _, source in scope.selected_sources.values() if not isinstance(source, exp.Table)]
-    return any(_reads_trade(child, seen) for child in [*children, *getattr(scope, 'union_scopes', [])])
+    return any(_reads_trade(child, seen) for child in [*children, *scope.set_operation_scopes])
 
 
 def _aggregate_keys(scope):
@@ -1361,8 +1409,6 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
                                      for col in draft.columns):
             raise ValueError('품목별 비중의 실제 분모 금액을 denominator_usd(USD) 결과 열에 포함하세요.')
         rows, sql = execute_readonly(engine, draft, query_timeout, task.conditions)
-        if not rows:
-            return Analysis([], {}, ToolResult(status='NO_DATA', error='조건에 맞는 조회 결과가 없습니다.'), conditions, [sql])
         # 요청한 기간의 집계가 SQL에 빠졌으면 다시 만든다. 마지막 시도에도 빠져 있으면 누락 기간을 밝힌 부분 결과로 둔다.
         from backend.app.api.common import period_label
         missing = [period_label(p.start, p.end) for p in missing_periods(sql, task.conditions)]
@@ -1370,6 +1416,11 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
             raise ValueError(f"요청한 기간({', '.join(missing)})의 집계가 SQL에 없습니다. "
                              '조회 기간과 모든 비교 기간을 각각 집계해 기간마다 결과 열(또는 행)로 반환하세요.')
         limitations = [f"요청한 기간 중 {', '.join(missing)}의 집계는 결과에 없습니다."[:MAX_TEXT_CHARS]] if missing else []
+        if not rows:
+            reason = '조건에 맞는 조회 결과가 없습니다.'
+            if limitations:
+                reason += ' ' + limitations[0]
+            return Analysis([], {}, ToolResult(status='NO_DATA', error=reason[:MAX_TEXT_CHARS]), conditions, [sql])
         # 조회 기간 전체를 그대로 집계했다고 증명될 때만 결과 수치에 조회 기간을 붙인다(verify_evidence).
         covered = period_covered(sql, task.conditions)
         # 연간 비교 SQL은 연도별 합계·차액 칸을 SQL 식에서 직접 증명한다(annual_sql_sources). 그런 칸이 있으면
