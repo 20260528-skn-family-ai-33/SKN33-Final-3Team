@@ -6,7 +6,7 @@ from uuid import uuid4
 from sqlalchemy import select, func
 
 from backend.app.agents.planner import (HS_CODE_MENTION, HS_EDITION_MENTION, ambiguous_report_source,
-                                        comparison_date_text, product_expressions)
+                                        coded_product, comparison_date_text, product_expressions)
 from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period, TaskSlots,
                                      MAX_ASKS_PER_CONDITION, MAX_TEXT_CHARS, MARKET_INTENTS, ToolResult)
 from backend.app.api import accounts, reference, trade
@@ -367,7 +367,9 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     if len(editions) > 1:
         raise SlotRepair('판본별 품목을 각각의 조회로 요청해 주세요.')
     hs_ver = 'HS2017' if '2017' in editions else 'HS2022'
-    if len(state.plan.tasks) == 1 and not task.resolved and task.intent in ('STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES'):
+    if (len(state.plan.tasks) == 1 and not task.resolved
+            and task.intent in ('STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES', 'REPORT')
+            and not task.input_bindings and not task.previous_turn_result):
         codes = list(dict.fromkeys(HS_CODE_MENTION.findall(original)))
         grounded = [p for p in slots.products or [] if _product_key(p) in country_key(original)]
         if codes and not any(not any(code in p for code in codes) for p in grounded):
@@ -461,9 +463,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         expr = hs4[0] if hs4 else answer.get('replace_expression', expression)
         if HS_EDITION_MENTION.search(expr):
             expr = re.sub(r'\(\s*\)', '', HS_EDITION_MENTION.sub('', expr)).strip()
-        # "HS 3304"도 원문 숫자와 HS 사전을 대조하는 기존 코드 경로로 보낸다.
-        if explicit_hs := HS_CODE_MENTION.fullmatch(expr.strip()):
-            expr = explicit_hs[1]
+        # 이름(HS 코드)도 숫자·HS 사전을 대조한다. 사용자가 이미 고른 답은 위에서 우선 적용한다.
+        expr = coded_product(expr, original if not answer else expr)
         # D-22: 플래너가 질문에 없는 이전 조건을 그대로 다시 적으면 생략(이어받기)과 같다.
         # 코드가 같거나, 이전 조건을 만든 직전 질문의 표현이고 그 표현의 검색 결과에 이전 품목이 있을 때만 이어받는다.
         if not answer and base.hs_items and country_key(expr) not in original_key:

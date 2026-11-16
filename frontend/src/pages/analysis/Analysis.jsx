@@ -286,7 +286,13 @@ export default function Analysis({ route }) {
   // 기사 탭의 "AI에게 물어보기"는 사용 중지(2026-11-11). 주소로 직접 열어도 선택 기사 화면을 띄우지 않는다.
   const [articleId, setArticleId] = useState(() => ARTICLE_ACTIONS_ENABLED && route.query.get('new') === '1' ? route.query.get('article') : null)
   const selectedArticle = useQuery(`/articles/${articleId}`, {}, !!articleId)
-  const [activeId, setActiveId] = useState(articleId ? null : route.query.get('chat') || chats[0]?.id)
+  const [activeId, setActiveId] = useState(route.query.get('new') === '1' ? null : route.query.get('chat') || chats[0]?.id)
+  // 새 대화 진입 표시는 한 번만 소비한다. 이후 새로고침도 방금 만든 대화를 연다.
+  useEffect(() => {
+    if (activeId && !articleId && route.query.get('new') === '1') {
+      navigate(`/analysis?chat=${encodeURIComponent(activeId)}`, { replace: true })
+    }
+  }, [activeId, articleId, route])
   const [input, setInput] = useState(route.query.get('new') === '1' ? '' : route.query.get('ask') || '')
   const [modal, setModal] = useState(null)
   const [rename, setRename] = useState('')
@@ -310,6 +316,8 @@ export default function Analysis({ route }) {
   const [readRevision, setReadRevision] = useState(0)
   const endRef = useRef(null), pending = useRef(null)
   const inputRef=useRef(null)
+  const autoFocusingInput=useRef(false)
+  const [acknowledgedClarification,setAcknowledgedClarification]=useState(null)
   const clarificationRequest=useRef(null), acceptedClarifications=useRef(new Set())
   // 지금 보고 있는 채팅방. 응답이 오기 전에 방을 바꿨으면 그 응답으로 이 방의 작업 상태를 덮어쓰지 않는다
   // (덮어쓰면 B방의 중단 버튼이 A방 작업을 취소한다).
@@ -370,11 +378,16 @@ export default function Analysis({ route }) {
     return () => cancelAnimationFrame(frame)
   }, [scrollTo, waitingReport, messages])
   const clarificationId=job?.status==='NEEDS_INPUT' ? job.clarification?.clarification_id : null
+  const acknowledgeInput=()=>{if(clarificationId) setAcknowledgedClarification(clarificationId)}
   useEffect(() => {
     if (!clarificationId) return
     const frame=requestAnimationFrame(()=>{
       inputRef.current?.closest('form')?.scrollIntoView({block:'end',behavior:'smooth'})
-      if (job.clarification?.allow_text) inputRef.current?.focus({preventScroll:true})
+      if (job.clarification?.allow_text) {
+        autoFocusingInput.current=true
+        try { inputRef.current?.focus({preventScroll:true}) }
+        finally { autoFocusingInput.current=false }
+      }
     })
     return ()=>cancelAnimationFrame(frame)
   },[clarificationId,job?.clarification?.allow_text])
@@ -598,8 +611,8 @@ export default function Analysis({ route }) {
               {(running(job?.status)||job?.status==='NEEDS_INPUT') && <Btn size="sm" disabled={busy} onClick={()=>setModal('stop')}>이 질문 중단</Btn>}
               {draft && !placedDraft && conditionCard}
               <div ref={endRef} />
-              <form className={waitInput ? 'chat-wait' : undefined} onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
-                <input ref={inputRef} value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onChange={e => setInput(e.target.value)} aria-label="질문 입력" placeholder={job?.clarification?.kind==='COUNTRY'?'국가명 또는 국가 코드 입력':job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}
+              <form className={waitInput ? acknowledgedClarification===clarificationId ? 'chat-wait-fixed' : 'chat-wait' : undefined} onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
+                <input ref={inputRef} value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onFocus={()=>{if(!autoFocusingInput.current) acknowledgeInput()}} onPointerDown={acknowledgeInput} onKeyDown={acknowledgeInput} onChange={e => {acknowledgeInput(); setInput(e.target.value)}} aria-label="질문 입력" placeholder={job?.clarification?.kind==='COUNTRY'?'국가명 또는 국가 코드 입력':job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}
                   style={{ flex: 1, minWidth: 0, fontSize: 15, border: 0, outline: 0, font: 'inherit', color: 'var(--ink)', background: 'transparent' }} />
                 <Btn type="submit" kind="red" iconRight="arrowRight" disabled={!input.trim() || busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)}>전송</Btn>
               </form>

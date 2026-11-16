@@ -15,8 +15,8 @@ import useUnData from './useUnData'
 
 // 메인 상단 기능 카드. 마지막 값은 누르면 이동할 화면이다(예전 '분석 · 리포트 바로가기' 띠의 링크를 옮겨 왔다).
 const FEATURES = [
-  ['chat', '추이·원인 질문', '“중국 메모리 수출이 왜 늘었어?”처럼 물으면\n표와 근거 기사로 답해요.', 'rose', '/analysis'],
-  ['bell', '급증 기사 알림', '관심 품목·국가 기사량이 평소보다 늘면\n알림으로 알려줘요.', 'rose', '/account/settings'],
+  ['chat', '추이·원인 질문', '“중국 메모리 수출이 왜 늘었어?”\n표와 근거 기사로 답해요.', 'rose', '/analysis'],
+  ['bell', '급증 기사 알림', '관심 품목·국가의 기사가 늘면\n알림으로 알려줘요.', 'rose', '/account/settings'],
   ['file', '리포트 센터', '주간·월간·분기 리포트를\n열람하고 내려받아요', 'lav', '/account/reports'],
   ['calendar', '정기 리포트 구독', '주간·월간·분기 리포트를\n정해진 날 자동으로 받아요.', 'lav', '/account/subscription'],
 ]
@@ -158,7 +158,6 @@ function Ticker({ interest }) {
         <button type="button" style={round} aria-label={paused ? '자동 넘김 재생' : '자동 넘김 일시정지'} onClick={() => setPaused(p => !p)}>
           {paused ? <svg width="13" height="13" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M7 4v16l13-8z" /></svg> : <Icon name="pause" size={13} color="#fff" stroke={2.2} />}
         </button>
-        <Link to={`/articles?tab=${tab}`} style={{ marginLeft: 10, color: '#FF8A9A' }}>전체보기</Link>
         <Link to="/articles" style={{ marginLeft: 8, color: '#D5D9E0' }}>기사홈</Link>
       </div>
     </div>
@@ -246,7 +245,7 @@ export default function Dashboard({ route }) {
             {/* 화살표는 지표 카드 묶음 기준으로 놓아 화면 폭이 바뀌어도 카드와의 위치가 유지된다. 카드가 화살표 위에 그려진다. */}
             <div style={{ position: 'relative', marginTop: 24 }}>
             <TrendArrow />
-            <div data-reveal="up" data-d="1" style={{ position: 'relative', zIndex: 1, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))' }}>
+            <div data-reveal="up" data-d="1" style={{ position: 'relative', zIndex: 1, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
               {data.kpis.map(k => {
                 // 수출액·수입액은 같은 기준의 순위 화면으로 연결한다. 무역수지는 연결할 화면이 없어 보여 주기만 한다.
                 const Box = k.flow ? Link : 'div'
@@ -409,7 +408,6 @@ export default function Dashboard({ route }) {
           </div>
           <div data-reveal="up" className="share-legend" style={{ marginTop: 14, display: 'flex', gap: '6px 24px', fontSize: 13, flexWrap: 'wrap' }}>
             <span><strong>수출 점유율</strong> = 상대국 전체 수입 중 한국산 비중</span>
-            <span>순위 = 상대국 공급국 중 한국 순위</span>
           </div>
           <div ref={unRef} data-reveal="up" data-d="1" role="region" aria-label="한국의 세계시장 점유율 카드" tabIndex={unHeight ? 0 : undefined}
             style={{ marginTop: 16, position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, ...(unHeight ? { maxHeight: unHeight, overflowY: 'auto', scrollbarGutter: 'stable', paddingRight: 4 } : {}) }} className="resp-stack">
@@ -421,7 +419,7 @@ export default function Dashboard({ route }) {
                 {u.items.map(it => (
                   <div key={it.hs} data-un-item style={{ marginTop: 12, padding: '12px 0 10px', borderTop: '1px solid #E3E6EA', display: 'flex', flexDirection: 'column', gap: 8, color: '#15181E' }}>
                     <div className="between" style={{ fontSize: 13 }}>
-                      <span style={{ fontWeight: 600 }}>{it.name} <span className="s" style={{ fontWeight: 400 }}>HS {it.hs}</span></span><span className="hs">{[it.rank, it.period && `${it.period} 기준`].filter(Boolean).join(' · ')}</span>
+                      <span style={{ fontWeight: 600 }}>{it.name} <span className="s" style={{ fontWeight: 400 }}>HS {it.hs}</span></span><span className="hs">{it.period && `${it.period} 기준`}</span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                       <span className="muted" style={{ fontSize: 12 }}>수출 점유율</span>

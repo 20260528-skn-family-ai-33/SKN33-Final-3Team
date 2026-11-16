@@ -112,6 +112,7 @@ def create(store,uid,data,key,*,chat_approval=False):
     generation=digest([uid,'REPORT',key])
     existing=store.one(select(r).where(r.c.generation_key==generation))
     if existing:
+        require(not existing['conditions_json'].get('deleted_at'),'삭제된 리포트입니다.','NOT_FOUND',404)
         require(existing['conditions_json'].get('request_hash')==digest(data.model_dump()),'멱등성 키의 요청 내용이 다릅니다.','IDEMPOTENCY_CONFLICT',409)
         return {'job':status_view(store,existing)}
     p=read_snapshot(store,uid,data.preview_id,'PREVIEW')
@@ -172,14 +173,35 @@ def listing(store,uid,q=None,kind=None,status=None,page=1,size=20):
     if kind: stmt=stmt.where(t.c.report_type==kind)
     if status: stmt=stmt.where(t.c.status==status)
     rows=store.rows(stmt.order_by(t.c.created_at.desc(),t.c.report_id.desc()))
+    rows=[r for r in rows if not r['conditions_json'].get('deleted_at')]
     if q: rows=[r for r in rows if q in display_title(r)]
     visible=rows[(page-1)*size:page*size]
     names=report_hs_names(store,visible)
     return {'items':[summary_view(store,r,names) for r in visible],'page':page_info(page,size,len(rows))}
 
 
+def visible_report(store,uid,rid):
+    record=store.owned('report','report_id',rid,uid)
+    require(not record['conditions_json'].get('deleted_at'),'리포트를 찾을 수 없습니다.','NOT_FOUND',404)
+    return record
+
+
+def remove(store,uid,rid):
+    # 발행 키를 보존해야 정기 배치가 같은 리포트를 다시 발행하지 않는다.
+    # 실행 상태(content_json)와 분리하여 생성 중 삭제도 워커 완료 후 유지한다.
+    record=store.owned('report','report_id',rid,uid,lock=True)
+    if record['conditions_json'].get('deleted_at'): return
+    t=store.t('report')
+    store.c.execute(update(t).where(t.c.report_id==rid,t.c.user_id==uid).values(
+        conditions_json={**record['conditions_json'],'deleted_at':now().isoformat()+'Z'}))
+    # 삭제한 리포트를 가리키는 알림도 제거한다. 다른 리포트·회원 알림은 유지한다.
+    alerts,events=store.t('user_alert'),store.t('alert_event')
+    store.c.execute(delete(alerts).where(alerts.c.user_id==uid,
+        alerts.c.event_id.in_(select(events.c.event_id).where(events.c.report_id==rid))))
+
+
 def read_report(store,uid,rid):
-    r=store.owned('report','report_id',rid,uid)
+    r=visible_report(store,uid,rid)
     require(r['status']=='READY','리포트가 아직 준비되지 않았습니다.','REPORT_NOT_READY',409)
     content=r['content_json']
     require(content.get('schema_version')==1,'이전 리포트 JSON 변환 계약 확인이 필요합니다.','FEATURE_NOT_READY',503)
@@ -520,7 +542,7 @@ def generate(store,job,settings):
     t=store.t('report')
     store.c.execute(update(t).where(t.c.report_id==rid).values(status='READY',
         content_json={**doc,jobs.EXECUTION:clean(job)},files_json=files,pdf_uri=archive['key'],completed_at=now()))
-    if record['subscription_id']:
+    if record['subscription_id'] and not record['conditions_json'].get('deleted_at'):
         from backend.app.api.notifications import settings as notification_settings
         conf=notification_settings(store,uid)
         if conf['notifications_enabled'] and conf['consent_current']:

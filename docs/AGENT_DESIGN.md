@@ -411,6 +411,7 @@ actions[], report_id, warnings[]
 - generate_report는 D-81의 조건·형식 확인을 마친 뒤 report 작업을 멱등하게 접수하고 ReportWait(step_id, report_id, started_at)를 기록한다. 해당 Step은 RUNNING, AgentState와 MySQL 실행 상태는 WAITING_REPORT다. 이 단계에서는 compose/finalize로 진행하거나 성공 답변을 반환하지 않는다.
 - 워커를 점유한 채 대기하지 않는다. report 완료 확인 직전의 전용 재개 지점에 체크포인트를 남기고 실행권을 반환한다. graph 구현은 이 지점에 정적 중단점(동적 interrupt()는 여전히 ask_user 전용)을 두고, 완료 감지 후 해당 체크포인트를 None으로 재개하는 통합 테스트를 작성한다. 일반 QUEUED claim과 분리하여 단일 워커에서도 report 작업을 처리할 수 있어야 한다.
 - 완료 확인기는 MySQL report가 READY면 채팅을 재개 가능하게 하고, 재개 노드가 report_wait를 비우고 결과를 저장한 뒤 Step을 DONE으로 만든다. FAILED면 해당 Step을 FAILED로 두고 D-72에 따라 나머지 질문을 처리한다. report의 DELAYED/QUEUED/RUNNING은 완료가 아니다. 채팅 노드에서 report 생성 재시도를 중복 수행하지 않는다.
+  - 개별 리포트 삭제(API-135, PR #122): `conditions_json.deleted_at`이 있으면 생성 상태와 무관하게 채팅을 재개해 해당 리포트 결과를 `NO_DATA`로 종료하고 `리포트가 삭제되었습니다.`를 안내한다. 완료 문구·리포트 링크는 만들지 않고, 다른 하위 질문의 결과는 D-72에 따라 유지한다. 이 처리는 파일 생성 작업의 취소가 아니다.
 - WAITING_REPORT 동안 같은 대화방은 잠겨 있고 프론트는 2초 폴링과 '리포트 만드는 중' 표시를 유지한다. 진행률은 생성 완료 전 100%로 만들지 않는다. 대기 확인기는 job 소유권을 확인하며 active·체크포인트 TTL을 연장한다. 확인기 중단이나 Redis 유실 시에도 MySQL의 job+step에 연결한 report_id를 찾고 D-97의 승인 입력 검사를 통과한 기존 리포트를 재사용한다.
 - 리포트 대기는 실행 예산에서 제외한다. 재개 시 round_started_at을 이동하지 않고 run_budget의 기존 차감 시간을 유지한다(D-85). 화면의 전체 경과 시간은 MySQL 라운드 접수 시각으로 계산한다. 리포트 대기의 별도 전체 상한은 TODO(C-24), state.REPORT_WAIT_TIMEOUT_SECONDS는 임시로 None이며 기존 리포트 재시도 한도·실패 상태를 따른다.
 - 사용자가 채팅을 중단하면 대기를 끝내고 답변을 저장하지 않는다. 이미 접수한 리포트는 기존 리포트 작업 정책으로 처리한다. 리포트 자체의 취소는 현재 지원 범위 밖이며 API 확인 문구로 이를 알린다.

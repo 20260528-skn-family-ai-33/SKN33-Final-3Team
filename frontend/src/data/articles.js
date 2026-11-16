@@ -58,7 +58,20 @@ export function searchArticles({ tab = 'all', q = '', from = '', to = '' }) {
   )
 }
 
-// 단신속보 본문은 줄바꿈으로 문단이 구분돼 온다. 줄마다 문단으로 나누고, 줄 앞의 목록 표시(-·*·**·•)는 떼고 보여 준다.
+// 빈 줄·목록·문장 끝은 문단 경계로 보존하고, 문장 중간의 수집 원문 줄바꿈은 이어 붙인다.
 // 기호 뒤에 공백이 있을 때만 목록 표시로 본다. '-3.2%'처럼 숫자 앞 음수 부호는 그대로 둔다.
 const LIST_MARK = /^(?:-|\*{1,2}|•)\s+/
-export const articleParagraphs = text => String(text || '').split(/\r?\n/).map(line => line.trim().replace(LIST_MARK, '')).filter(Boolean)
+export function articleParagraphs(text) {
+  const paragraphs = []
+  let boundary = true
+  for (const raw of String(text || '').split(/\r\n?|\n/)) {
+    const line = raw.trim()
+    if (!line) { boundary = true; continue }
+    const separate = boundary || LIST_MARK.test(line) || /^(?:https?:\/\/|[+-]?\d|[※□○▶])/.test(line)
+    const clean = line.replace(LIST_MARK, '')
+    if (separate || !paragraphs.length) paragraphs.push(clean)
+    else paragraphs[paragraphs.length - 1] += ' ' + clean
+    boundary = /[.!?。！？][”’"')\]]*$/.test(clean) || /^https?:\/\//.test(clean)
+  }
+  return paragraphs
+}

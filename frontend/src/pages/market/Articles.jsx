@@ -77,10 +77,10 @@ export default function Articles({ route }) {
         image={bandArticles} imagePosition="center 55%"  title="기사 조회"
         lead={keyword ? '전체기사·일반기사·단신속보·주요이슈 탭에서 기사를 확인하고 검색합니다.' : '유형별 무역·경제 기사 조회'}
       />
-      {/* 기사 유형 탭: 사진 띠와 검색 상자 사이 가운데에 두고, 머리글 메뉴와 같은 밑줄 모양으로 보여 준다.
+      {/* 기사 유형 탭: 기사 조회 제목 아래 왼쪽에 두고, 머리글 메뉴와 같은 밑줄 모양으로 보여 준다.
           탭을 누르면(지금 보고 있는 탭을 다시 눌러도) 검색어·발행 기간을 지우고 그 탭의 최신 기사부터 보여 준다.
           주소가 그대로인 경우(검색 전 입력만 해 둔 상태)도 있어 현재 탭은 클릭할 때 폼을 직접 비운다. */}
-      <nav className="subnav" aria-label="기사 유형">
+      <nav className="subnav article-tabs wrap" aria-label="기사 유형">
         {articleTabs.map(([key, label]) => (
           <Link key={key} className={tab === key ? 'on' : ''} aria-current={tab === key ? 'page' : undefined} onClick={tab === key ? clearForm : undefined}
             to={withQuery(route, { tab: key, id: null, page: null, q: null, from: null, to: null })}>{label}</Link>
@@ -125,7 +125,7 @@ export default function Articles({ route }) {
               // 단신속보만 펼쳐서 본문을 보고, 나머지 기사는 요약 200자와 원문 링크를 바로 보여 준다.
               const short = a.kind === 'short'
               return (
-                <article key={a.id} id={`article-${a.id}`} className={'li' + (on ? ' sel' : '')} style={{ color: 'var(--ink)', flexWrap: 'wrap', scrollMarginTop: 90 }}>
+                <article key={a.id} id={`article-${a.id}`} className={'li article-item' + (on ? ' sel' : '')} style={{ color: 'var(--ink)', flexWrap: 'wrap', scrollMarginTop: 90 }}>
                   <div style={{ width: 4 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
@@ -134,11 +134,13 @@ export default function Articles({ route }) {
                       {a.surge && <span className="tag amber">급증 {a.surge}</span>}
                     </div>
                     <p style={{ fontSize: 18, fontWeight: 800 }}>{a.title}</p>
-                    <p className="muted" style={{ marginTop: 6 }}>{a.country} · {a.date} · {a.source}</p>
+                    <p className="muted article-meta" style={{ marginTop: 6 }}>
+                      {a.country && <span>{a.country}</span>}<span>{a.date}</span><span>{a.source}</span>
+                    </p>
                     {!short && a.summary && <p style={{ fontSize: 15, lineHeight: 1.7, color: '#2E333C', marginTop: 10 }}>{cut(a.summary, 200)}</p>}
                   </div>
                   {short
-                    ? <Link to={withQuery(route, { id: on ? null : a.id, page: String(page) })} className="more" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} aria-expanded={on}>
+                    ? <Link to={withQuery(route, { id: on ? null : a.id, page: String(page) })} className="more" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }} aria-expanded={on}>
                       {on ? '접기' : '상세 보기'} <Icon name={on ? 'chevronUp' : 'chevronDown'} size={15} />
                     </Link>
                     : <div className="article-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -146,7 +148,7 @@ export default function Articles({ route }) {
                       {/* <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn> */}
                     </div>}
                   {short && on && (
-                    <div style={{ flexBasis: '100%', marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
+                    <div className="article-body" role="region" aria-label={`${a.title} 본문`} tabIndex={0} style={{ flexBasis: '100%', minWidth: 0, marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
                       {detail.loading
                         ? <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>본문을 불러오는 중…</p>
                         : articleParagraphs(detail.data?.body_masked || a.summary).map((line, i) => <p key={i} style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C', marginTop: i ? 10 : 0 }}>{line}</p>)}

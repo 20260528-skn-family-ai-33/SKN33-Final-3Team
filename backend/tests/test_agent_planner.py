@@ -5,6 +5,36 @@ from backend.app.api.common import ApiError
 
 
 class AgentPlannerTest(unittest.TestCase):
+    def test_report_uses_explicit_hs_code_instead_of_reasking_its_name(self):
+        question = '미국 화장품(HS 3304) 리포트 만들어줘'
+        for products in (None, [], ['화장품'], ['화장품(HS 3304)'], ['화장품', '3304']):
+            with self.subTest(products=products):
+                output = PlannerOutput(tasks=[{'intent': 'REPORT', 'question': question,
+                    'slots': {'products': products}}])
+                task, = postprocess(output, question).tasks
+                self.assertEqual(task.slots.products, ['3304'])
+
+    def test_report_code_normalization_preserves_other_products_and_result_bindings(self):
+        question = '화장품(HS 3304)과 맥주 리포트 만들어줘'
+        output = PlannerOutput(tasks=[{'intent': 'REPORT', 'question': question,
+            'slots': {'products': ['화장품', '맥주']}}])
+        task, = postprocess(output, question).tasks
+        self.assertEqual(task.slots.products, ['3304', '맥주'])
+        question = 'HS 3304 통계를 보고 그 결과로 리포트 만들어줘'
+        output = PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': 'HS 3304 통계'},
+            {'intent': 'REPORT', 'question': 'HS 3304 결과로 리포트', 'source_tasks': [1]}])
+        tasks = postprocess(output, question).tasks
+        self.assertEqual(tasks[0].slots.products, ['3304'])
+        self.assertIsNone(tasks[1].slots.products)
+        self.assertEqual(tasks[1].source_tasks, [1])
+
+    def test_report_bare_hs6_does_not_confuse_dates_or_amounts_with_codes(self):
+        for question, expected in [('330499 리포트 만들어줘', ['330499']),
+                                   ('202501 리포트 만들어줘', None),
+                                   ('330499달러 리포트 만들어줘', None)]:
+            output = PlannerOutput(tasks=[{'intent': 'REPORT', 'question': question}])
+            self.assertEqual(postprocess(output, question).tasks[0].slots.products, expected)
+
     def test_article_company_stays_in_question_but_not_hs_products(self):
         question = '글로벌 메모리 반도체 수요 증가에…中 YMTC 역대 최대 규모 증설 관련 시장 영향을 알려줘'
         output = PlannerOutput(tasks=[{'intent':'CAUSE','question':question,

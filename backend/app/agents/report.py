@@ -164,7 +164,7 @@ def wake_ready(store,size):
         job=jobs._chat_job(row)
         wait=job['agent']['report_wait']
         report=store.owned('report','report_id',wait['report_id'],job['subject_user_id'])
-        if report['status'] not in ('READY','FAILED'):
+        if report['status'] not in ('READY','FAILED') and not report['conditions_json'].get('deleted_at'):
             waiting.append(job)
             continue
         current=jobs.locked_current(store,job)

@@ -90,6 +90,36 @@ class ReportAgentTest(unittest.TestCase):
         return ' '.join(s for c in job['answer'].get('conclusion') or [] for s in c.get('sentences', [])) or job['answer'].get('text', '')
 
     # ── 승인 (D-81·D-92) ─────────────────────────────────────────
+    def test_explicit_hs_code_in_report_question_reaches_preview_without_product_prompt(self):
+        for code in ('3304', '330499'):
+            with self.subTest(code=code):
+                question = f'미국 화장품(HS {code}) 리포트 만들어줘'
+                jid = self.ask([{'intent': 'REPORT', 'question': question, 'slots': {
+                    'products': ['화장품'], 'countries': [{'mention': '미국', 'name': '미국'}]}}],
+                    question=question, key=f'explicit-{code}')
+                prompt = self.job(jid)['clarification']
+                self.assertEqual(prompt['kind'], 'REPORT_CONFIRM')
+                self.assertEqual(prompt['report_preview']['conditions']['hs_items'],
+                                 [{'hs_code': code, 'hs_ver': 'HS2022'}])
+                self.assertEqual(prompt['report_preview']['conditions']['country_codes'], ['US'])
+                self.assertEqual(self.reports(), [])  # 코드 인식은 생성 승인이 아니다.
+
+    def test_hs4_selected_from_product_prompt_is_preserved_in_report_preview(self):
+        question = '화장품 리포트 만들어줘'
+        jid = self.ask([{'intent': 'REPORT', 'question': question,
+                         'slots': {'products': ['화장품']}}], question=question)
+        prompt = self.job(jid)['clarification']
+        self.assertEqual(prompt['kind'], 'HS_ITEM')
+        response = self.post(f'chat/jobs/{jid}/clarifications', {
+            'clarification_id': prompt['clarification_id'],
+            'hs_item': {'hs_code': '3304', 'hs_ver': 'HS2022'}})
+        self.assertEqual(response.status_code, 202, response.text)
+        self.work()
+        prompt = self.job(jid)['clarification']
+        self.assertEqual(prompt['kind'], 'REPORT_CONFIRM')
+        self.assertEqual(prompt['report_preview']['conditions']['hs_items'],
+                         [{'hs_code': '3304', 'hs_ver': 'HS2022'}])
+
     def test_report_waits_for_explicit_button_approval(self):
         """R01 미리보기만 만들고 묻는다. 입력창의 '네'는 승인이 아니며 리포트를 만들지 않는다."""
         jid = self.ask()
@@ -174,6 +204,57 @@ class ReportAgentTest(unittest.TestCase):
         self.assertEqual(self.reports(), [])
 
     # ── 대기와 완료 (D-76·D-93) ─────────────────────────────────
+    def assert_deleted_report_ends_wait(self, status):
+        jid = self.ask()
+        self.confirm(jid); self.work()
+        self.assertEqual(self.job(jid)['status'], 'WAITING_REPORT')
+        self.settings.values['API_CHAT_AGENT_ENABLED'] = 'false'
+        rid = self.state(jid).report_wait.report_id
+        with self.engine.begin() as c:
+            t = self.meta.tables['report']
+            c.execute(update(t).where(t.c.report_id == int(rid)).values(status=status))
+        response = self.client.delete(f'/api/v1/reports/{rid}', headers={'X-CSRF-Token': self.csrf})
+        self.assertEqual(response.status_code, 204, response.text)
+        self.work()
+        done = self.job(jid)
+        self.assertEqual(done['status'], 'SUCCEEDED', done)
+        self.assertEqual(done['answer']['answer_status'], 'NO_DATA')
+        self.assertIn('리포트가 삭제되었습니다.', self.answer_text(done))
+        self.assertNotIn(DONE_TEXT, self.answer_text(done))
+        self.assertIsNone(done['answer'].get('report_id'))
+        self.assertFalse(any(a.get('report_id') for a in done['answer'].get('actions', [])))
+
+    def test_deleted_queued_report_ends_wait(self):
+        self.assert_deleted_report_ends_wait('QUEUED')
+
+    def test_deleted_running_report_ends_wait(self):
+        self.assert_deleted_report_ends_wait('RUNNING')
+
+    def test_deleted_delayed_report_ends_wait(self):
+        self.assert_deleted_report_ends_wait('DELAYED')
+
+    def test_deleted_ready_report_ends_wait_without_completion_link(self):
+        self.assert_deleted_report_ends_wait('READY')
+
+    def test_deleted_failed_report_ends_wait_with_deletion_message(self):
+        self.assert_deleted_report_ends_wait('FAILED')
+
+    def test_deleted_report_preserves_other_analysis_in_the_same_question(self):
+        jid = self.ask([{'intent': 'STATISTICS', 'question': '수출 통계', 'slots': {'recent_months': 3}}, *REPORT])
+        self.confirm(jid); self.work()
+        self.settings.values['API_CHAT_AGENT_ENABLED'] = 'false'
+        self.finish_report('READY')
+        rid = self.state(jid).report_wait.report_id
+        self.assertEqual(self.client.delete(f'/api/v1/reports/{rid}', headers={'X-CSRF-Token': self.csrf}).status_code, 204)
+        self.work()
+        done = self.job(jid)
+        self.assertEqual(done['status'], 'SUCCEEDED', done)
+        self.assertEqual(done['answer']['answer_status'], 'PARTIAL')
+        self.assertEqual([t['answer_status'] for t in done['answer']['tasks']], ['ANSWERED', 'NO_DATA'])
+        self.assertTrue(done['answer']['tables'])
+        self.assertIsNone(done['answer'].get('report_id'))
+        self.assertIn('리포트가 삭제되었습니다.', self.answer_text(done))
+
     def test_chat_waits_until_the_report_is_ready(self):
         """R07 리포트가 QUEUED·RUNNING·DELAYED이면 채팅은 대기한다. READY가 되면 리포트 번호와 완료 문구로 끝난다."""
         jid = self.ask()
