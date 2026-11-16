@@ -92,7 +92,14 @@ export default function TaskResults({answer,hideText=false}) {
   const groupedTasks=new Set(groups.flatMap(g=>g.tables.map(t=>t.task_id)))
   const conclusionCount=tasks=>tasks.reduce((count,task)=>count+task.conclusion.length,0)
   const mismatches=new Map((answer.verification?.sentence_checks||[]).filter(c=>c.status==='MISMATCH').map(c=>[c.index,c]))
-  const sentence=(s,i)=><p key={i} style={{whiteSpace:'pre-line'}}>{s} {mismatches.has(i)&&<span className="tag amber" title={mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?'저장된 조회 결과가 만료되어 원본을 확인할 수 없습니다.':'수치·대상·기간·단위를 검증 근거와 일치한다고 확인하지 못했습니다.'}>확인 필요{mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?' · 원본 확인 불가':''}</span>}</p>
+  const sentence=(text,index)=>{
+    const check=mismatches.get(index)
+    const unavailable=check?.reason==='SOURCE_UNAVAILABLE'
+    let note='수치·대상·기간·단위를 검증 근거와 일치한다고 확인하지 못했습니다.'
+    if(check?.basis==='ARTICLE') note=unavailable?'인용한 기사의 원문 근거를 확인할 수 없습니다.':'인용한 기사 또는 함께 제시한 통계로 이 문장 전체를 확인할 수 없습니다.'
+    else if(unavailable) note='저장된 조회 결과가 만료되어 원본을 확인할 수 없습니다.'
+    return <p key={index} style={{whiteSpace:'pre-line'}}>{text} {check&&<span className="tag amber" title={note}>확인 필요{unavailable?' · 원본 확인 불가':''}</span>}</p>
+  }
   const sections=answer.tasks.map((t,index)=>{
     const start=conclusionCount(answer.tasks.slice(0,index))
     const tables=answer.tables.filter(x=>x.task_id===t.task_id)

@@ -63,7 +63,8 @@ ARTICLE_PROMPT = """아래 기사 작성 지침은 article_search_planned가 tru
 false인 하위 질문의 결론에서는 기사·검색 상황을 언급하지 마세요. 전체 설명의 검색 한계도 검색 대상 질문에만 연결하세요.
 CAUSE는 기사와 통계의 시점 연관성을 설명하되 원인으로 단정하지 마세요.
 기사 내용은 articles에서만 가져오고 문장 끝에 [n]으로 인용하세요. 여러 기사는 [1][2] 또는 [1, 2]처럼 인용하세요.
-결론에는 같은 task_id의 번호만 쓰세요.
+기사의 금액·증감률·연도별 변화나 그 배경을 인용할 때에는 해당 articles.summary의 검수된 사실 문장 하나를 그대로 옮기고 [n]을 붙이세요.
+기사 사실과 이번 조회의 통계·인과 한계는 각각 별도의 문장으로 쓰세요. 결론에는 같은 task_id의 번호만 쓰세요.
 evidence_role이 context_reference면 배경 자료입니다. mixed면 '참고(직접 답변 아님)' 문장은 배경으로만 쓰세요.
 unclassified는 근거 역할 미분류입니다. 기사 제목으로 인과관계를 추측하지 마세요.
 reference_limitation과 요약 문장의 unverified_question_parts를 지키세요. news의 unverified_question_parts는
@@ -501,12 +502,22 @@ def complete_article_only_conclusions(state, draft, payload, country_names=()):
             raise ValueError('부분 응답 설명의 주장을 해당 질문의 근거에서 확인할 수 없습니다.')
 
 
+# A Writer may append a scope disclaimer after reporting an article's historical trend.
+# The historical assertion still needs its own source even if the following disclaimer is valid.
+_ARTICLE_ATTRIBUTION = re.compile(r'(?:기사|기고문|보도자료)(?:에\s*따르면|에서는?|는|의\s*(?:배경\s*)?설명은)')
+_REPORTED_TREND = re.compile(r'(?:수출|수입|매출|수요|시장|점유율).{0,45}(?:하락|상승|감소|증가|급증|급감)')
+
+
 def validate_citations(generated, articles):
     by_task = {}
     for a in articles:
         by_task.setdefault(a['task_id'], set()).add(str(a['n']))
     def check(sentences, allowed):
         for sentence in sentences:
+            if (allowed and not cited_article_numbers(sentence) and _ARTICLE_ATTRIBUTION.search(sentence)
+                    and _REPORTED_TREND.search(sentence)
+                    and not re.search(r'(?:감소|증가|하락|상승)\s*(?:여부|원인)[^.]*확인할 수 없', sentence)):
+                raise ValueError('기사에서 가져온 추이 문장에는 해당 기사 번호를 붙이세요.')
             for bracket in re.findall(r'\[[^\[\]]*\]', sentence):
                 if not re.search(r'\d', bracket) and bracket[1:-1].strip().lower() != 'n':
                     continue

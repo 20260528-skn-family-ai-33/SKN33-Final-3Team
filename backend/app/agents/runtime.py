@@ -100,6 +100,16 @@ def article_cards(store, state, result):
             for a in result.digest.get('items',[])]
 
 
+def answer_article_cards(store, state):
+    cards = []
+    for task in state.plan.tasks:
+        for step in task.steps:
+            result = state.results.get(step.step_id)
+            if step.tool == 'search_articles' and result and result.status == 'OK' and result.article_ids and result.digest:
+                cards.extend({**card, 'task_id': task.task_id} for card in article_cards(store, state, result))
+    return cards
+
+
 def warm_ml(work):
     """워커 시작 때 모델 로드(work)를 ML 전용 스레드에 미리 넣는다. 기다리지 않는다. 첫 유망시장 질문이 모델 로드
     (수십 초)로 ML 시간 상한을 넘지 않게 한다. 그 사이 들어온 ML 호출은 같은 스레드에서 로드 뒤에 줄을 선다."""
@@ -507,6 +517,11 @@ class Services:
                     state.warnings.append(warning)
         payload,fixed=compose_input(state,describe,articles,news_warnings=news_warnings,country_names=countries.values())
         correcting = state.draft is not None and state.verification.regeneration_count == 1
+        if correcting and any(f.reason == 'ARTICLE_PARAPHRASE' for f in state.verification.feedback):
+            from backend.app.agents.verify_articles import review_article_claims
+            with self.read_store() as store:
+                cards = answer_article_cards(store, state)
+            review_article_claims(self, state, cards, model_role)
         if not payload['tasks']:
             if correcting and (state.verification.feedback or state.verification.confirmed_claims):
                 state.writer_rewrite_result = 'PRESERVED_NO_WRITER_INPUT'
@@ -610,6 +625,8 @@ class Services:
                 from backend.app.agents.templates import condition_names
                 country_labels,products=condition_names(store,[task.conditions for task in state.plan.tasks])
                 labels={code:name for (code,_),name in products.items()}
+                cited = any(cited_article_numbers(s) for s in [*state.draft.sentences(), state.draft.turn_summary])
+                articles = answer_article_cards(store, state) if cited else []
                 snapshots={}
                 for task in state.plan.tasks:
                     for step in task.steps:
@@ -621,7 +638,7 @@ class Services:
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
-            verify(state,known_names=set(names),snapshots=snapshots,countries=countries,product_labels=labels)
+            verify(state,known_names=set(names),snapshots=snapshots,countries=countries,product_labels=labels,articles=articles)
         try:
             # finalize 몫은 남긴다(§13.4). compose가 예약보다 오래 걸려 시간이 모자라면 대조하지 못한 문장에
             # 바로 "확인 필요"를 붙이고 답변은 저장한다(§1 "시간이 부족하면 불일치 문장에 즉시 표시").
@@ -667,7 +684,8 @@ class Services:
             overall=('ANSWERED' if statuses=={'ANSWERED'} else 'OUT_OF_SCOPE' if statuses=={'OUT_OF_SCOPE'}
                      else 'PARTIAL' if statuses & {'ANSWERED','PARTIAL'} else 'NO_DATA')
             sentences=state.draft.sentences()
-            tasks=[]; tables=[]; charts=[]; articles=[]
+            tasks=[]; tables=[]; charts=[]
+            articles = answer_article_cards(store, state)
             for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
                 tasks.append({'task_id':task.task_id,'intent':task.intent,'question':task.question,
                     'conditions':api_conditions(task.conditions) if task.conditions else None,
@@ -680,8 +698,6 @@ class Services:
                     tasks[-1]['query_status'] = 'FAILED'
                 for step in task.steps:
                     result=state.results.get(step.step_id)
-                    if step.tool == 'search_articles' and result and result.status == 'OK' and result.article_ids and result.digest:
-                        articles.extend({**card,'task_id':task.task_id} for card in article_cards(store,state,result))
                     if not result or not result.result_id: continue
                     if step.tool in ('query_trade_data','query_market_model'):
                         if any(t['result_id']==result.result_id for t in tables): continue   # 공유한 조회(D-100)는 표 하나

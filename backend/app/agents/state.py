@@ -735,8 +735,17 @@ class SentenceCheck(Model):
     index: int = Field(ge=0)   # Draft.sentences()의 번호. 문장 원문은 draft에 있다
     numbers: list[Label] = Field(default_factory=list)   # 문장에서 찾은 숫자. 문장 200자 안이라 개수도 그 안에 묶인다
     status: Literal['PASS', 'MISMATCH']
-    basis: Literal['DIGEST', 'SNAPSHOT'] = 'DIGEST'
+    basis: Literal['DIGEST', 'SNAPSHOT', 'ARTICLE'] = 'DIGEST'
     reason: Literal['MATCH', 'NOT_CONFIRMED', 'SOURCE_UNAVAILABLE'] = 'NOT_CONFIRMED'
+
+
+class ArticleClaimVerdict(Model):
+    index: int = Field(ge=0)
+    supported: bool
+
+
+class ArticleReview(Model):
+    claims: list[ArticleClaimVerdict] = Field(max_length=MAX_CONCLUSION_SENTENCES + MAX_TEXT_EXPLANATION_SENTENCES + 1)
 
 
 class PassageEdit(Model):
@@ -802,6 +811,9 @@ class AgentState(Model):
     run_budget: RunBudget = Field(default_factory=RunBudget)
     results: dict[str, ToolResult] = Field(default_factory=dict)  # step_id → 결과
     fixed_conclusion_ids: list[str] | None = Field(default=None, max_length=MAX_TASKS)
+    # Only proofs for this exact draft sentence, citation scope and body-checked evidence can be reused.
+    verified_article_claims: list[Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]] = Field(
+        default_factory=list, max_length=MAX_CONCLUSION_SENTENCES + MAX_TEXT_EXPLANATION_SENTENCES + 1)
     writer_rewrite_result: str | None = None
     draft: Draft | None = None
     verification: Verification = Field(default_factory=Verification)

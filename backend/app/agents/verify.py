@@ -15,6 +15,7 @@ from backend.app.agents.verify_claims import (
     ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
     change_phrase_end, COMPARISON, DOWN, UP, TOKEN, DATE, HISTORY_DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift, stated_windows,
 )
+from backend.app.agents.verify_articles import article_claim, citation_clauses
 from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, period
 
 
@@ -769,12 +770,13 @@ def _correction_span(sentence, claim, reason):
     return matches[0].span()
 
 
-def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_labels=None):
+def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_labels=None,articles=None):
     """Judge the saved draft and supplied evidence without mutating the turn."""
     from backend.app.agents.multi_year import verify_year_draft
     year_check = verify_year_draft(state, snapshots or {})
     if year_check is not None:
         return year_check
+    article_map = {str(n): card for n, card in enumerate(articles or (), 1)}
     feedback = []
     confirmed_claims = []
     snapshots=snapshots or {}
@@ -885,6 +887,36 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
 
     index=0
     def inspect(sentence,group,section,task_id=None):
+        # Preserve ordinary non-statistical notices (e.g. two cited notices were listed).
+        # The article route handles numbers, trade claims and causal statements.
+        prose = ARTICLE_CITATION.sub('', sentence)
+        if (articles is not None and ARTICLE_CITATION.search(sentence)
+                and (re.search(r'\d|원인|때문|인과|요인|증가|감소|하락|상승|늘었|줄었', prose)
+                     or parse_sentence(prose, prepare_scope(group).catalog).claims)):
+            cited, trailing = citation_clauses(sentence)
+            failures = []
+            for passage in cited:
+                verdict, key, _ = article_claim(passage, task_id, article_map)
+                if verdict != 'MATCH' and not (key and key in state.verified_article_claims):
+                    failures.append(verdict)
+                    feedback.append(ClaimFeedback(section=section, task_id=task_id,
+                        index=None if section == 'summary' else index, passage=passage,
+                        reason='ARTICLE_PARAPHRASE' if key else verdict))
+            if trailing:
+                prepared = prepare_scope(group)
+                good, _ = _inspect_prepared(trailing, prepared)
+                if not good:
+                    reason = ('SOURCE_UNAVAILABLE' if any(s.get('_source_unavailable') for s in prepared.sources)
+                              else 'NOT_CONFIRMED')
+                    failures.append(reason)
+                    feedback.append(ClaimFeedback(section=section, task_id=task_id,
+                        index=None if section == 'summary' else index, passage=trailing, reason=reason))
+            if section == 'summary':
+                return not failures
+            reason = 'SOURCE_UNAVAILABLE' if 'SOURCE_UNAVAILABLE' in failures else 'NOT_CONFIRMED'
+            checks.append(SentenceCheck(index=index, numbers=[q.shown for q in quantities(ARTICLE_CITATION.sub('', sentence))],
+                status='MISMATCH' if failures else 'PASS', basis='ARTICLE', reason=reason if failures else 'MATCH'))
+            return
         table_match = monthly_checks.get(task_id, {}).get(sentence)
         if task_id is None:
             matches = [outcomes[sentence] for outcomes in monthly_checks.values() if sentence in outcomes]
@@ -973,7 +1005,7 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
         status='PASS' if summary_ok and all(c.status=='PASS' for c in checks) else 'NEEDS_REVIEW')
 
 
-def verify(state,known_names=(),*,snapshots=None,countries=(),product_labels=None):
-    state.verification = judge_draft(state,known_names,snapshots=snapshots,countries=countries,product_labels=product_labels)
+def verify(state,known_names=(),*,snapshots=None,countries=(),product_labels=None,articles=None):
+    state.verification = judge_draft(state,known_names,snapshots=snapshots,countries=countries,product_labels=product_labels,articles=articles)
     if state.verification.summary_status == 'MISMATCH':
         state.draft.turn_summary = ''

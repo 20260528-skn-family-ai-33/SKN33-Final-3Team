@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from backend.app.schemas.rag import HsProduct
 from backend.app.agents.state import (AgentState, ChartSpec, Conditions, Interests, MAX_TASK_SENTENCES, MAX_DIGEST_BYTES,
+                                      MAX_CONCLUSION_SENTENCES, MAX_TEXT_EXPLANATION_SENTENCES,
                                       MAX_EXPLANATION_SENTENCES, MAX_INTEREST_COUNTRIES, MAX_INTEREST_HS, MAX_LABEL_CHARS,
                                       MAX_LIST_ITEMS, MAX_RECENT_MONTHS, MAX_TEXT_CHARS, PlannerSlots, SessionContext,
                                       ToolResult, TurnSummary, TaskSlots, shorten_name, shorten_names, shorten_target_names)
@@ -344,6 +345,7 @@ class AgentStateTest(unittest.TestCase):
         # 숫자는 문장(200자) 안에서 찾으므로 한 문장에 한 글자 숫자 100개가 최대다
         checks = [{'index': n, 'numbers': ['1'] * (MAX_TEXT_CHARS // 2), 'status': 'PASS'} for n in range(n_sentences)]
         s = AgentState.model_validate({
+            'verified_article_claims': ['a' * 64] * (MAX_CONCLUSION_SENTENCES + MAX_TEXT_EXPLANATION_SENTENCES + 1),
             'input': {'job_id': '11', 'session_id': '3', 'user_id': 7, 'question': q,
                       'context': {'session_id': '3', 'conditions': full, 'recent': turns, 'last_job_id': '9' * 20},
                       'first_question': True,

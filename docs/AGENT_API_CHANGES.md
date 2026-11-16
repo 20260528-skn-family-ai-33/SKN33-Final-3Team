@@ -209,7 +209,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 - 사용자가 명시한 개수·기준이면 자동으로 후속 분석한다. 모호한 개수·기준·그룹만 확인한다. applied_defaults/warnings에 실제 선택 기준과 대상 부족을 표시한다. 리포트의 REPORT_CONFIRM은 생략하지 않는다.
 
 ### 저장 결과 기반 수치 검증
-- sentence_checks.basis는 DIGEST 또는 SNAPSHOT이며, 수치 조회는 저장된 결과표 전체 행을 기준으로 검증한다. reason은 MATCH(일치), NOT_CONFIRMED(대상·기간·지표·단위를 포함한 일치 확인 실패), SOURCE_UNAVAILABLE(저장 결과 만료)다. NOT_CONFIRMED는 실제 오답 확정이 아니다. SOURCE_UNAVAILABLE는 화면에 원본 확인 불가로 함께 표시한다. 재생성 최대 1회와 이후 확인 필요 표시는 유지한다.
+- sentence_checks.basis는 DIGEST, SNAPSHOT 또는 ARTICLE(인용 기사 근거를 포함한 문장)이며, 수치 조회는 저장된 결과표 전체 행을 기준으로 검증한다. reason은 MATCH(일치), NOT_CONFIRMED(대상·기간·지표·단위를 포함한 일치 확인 실패), SOURCE_UNAVAILABLE(저장 결과 만료 또는 기사 원문 근거 확인 불가)다. NOT_CONFIRMED는 실제 오답 확정이 아니다. SOURCE_UNAVAILABLE는 화면에 원본 확인 불가로 함께 표시한다. 재생성 최대 1회와 이후 확인 필요 표시는 유지한다.
 
 
 ## 2026-11-03 API-133 최종 답변 스트림
