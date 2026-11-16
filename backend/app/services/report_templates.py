@@ -253,6 +253,9 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REP
         out.append(f'<text x="{left - 6}" y="{y(t) + 3:.1f}" text-anchor="end" class="axis">{_tick_label(t, _tick_digits(ticks))}</text>')
     for i in _visible_labels(labels, x):
         out.append(f'<text x="{x(i):.1f}" y="{height - 6}" text-anchor="middle" class="axis">{escape(labels[i])}</text>')
+    # 점 수치·꼭짓점은 선이 하나이거나 '분석 선 + 비교 기간 점선'일 때 첫 선에만 쓴다. 국가별처럼 같은 급의 선이 여럿이면
+    # 한 선에만 숫자가 붙어 어색하므로 기존처럼 끝 값만 쓴다(#120)
+    labelled = len(series) == 1 or (len(series) == 2 and bool(series[1].get('dashed')))
     ends = []
     for s, vals in zip(series, scaled):
         color = s.get('color', ACCENT)
@@ -268,7 +271,7 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REP
                 out.append(f'<polygon points="{points[0][0]:.1f},{base:.1f} {path} {points[-1][0]:.1f},{base:.1f}" fill="#a6b6d0" fill-opacity="{AREA_OPACITY}"/>')
             if len(points) > 1:
                 out.append(f'<polyline points="{path}" fill="none" stroke="{color}" stroke-width="{width_px}"{dash}/>')
-                if s is series[0] and len(series) <= 2:
+                if s is series[0] and labelled:
                     # 값을 쓰는 첫 선은 꼭짓점도 표시해 어느 점의 값인지 보이게 한다(#120). 끝 점은 아래 끝 값 원이 맡는다
                     # 모양은 끝 점(아래 r=3 채운 원)과 똑같이 맞춘다
                     out.extend(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3" fill="{color}"/>' for px, py in points[:-1])
@@ -277,7 +280,7 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REP
         last = next(((i, v) for i, v in reversed(list(enumerate(vals))) if v is not None), None)
         if last:
             ends.append([x(last[0]), y(last[1]), last[1], color])
-        if s is series[0] and len(series) <= 2:
+        if s is series[0] and labelled:
             # 첫 선(분석 기간)은 점마다 값을 점 위에 쓴다(#120). 비교 선 하나가 함께 있어도 첫 선만 쓰고,
             # 국가별처럼 선이 셋 이상이면 숫자가 겹쳐 끝 값만 쓴다.
             # 가로축 라벨처럼 서로 겹치지 않는 위치만 쓰고, 마지막 점은 끝 값 라벨이 맡는다.

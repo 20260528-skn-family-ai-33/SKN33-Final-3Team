@@ -40,6 +40,11 @@ class LineChartTest(unittest.TestCase):
         self.assertEqual(self.values(line_chart(['1', '2', '3'], [{'values': [4e8, 5e8, 6e8]}, {'values': [1e8, 2e8, 3e8], 'dashed': True}], divisor=1e8)),
                          ['4.00', '5.00', '6.00', '3.00'])
 
+    def test_two_country_lines_keep_end_labels_only(self):
+        # 같은 급의 선 두 개(관심 국가 2개 등)는 한 선에만 숫자가 붙지 않게 끝 값만 쓴다
+        two = [{'values': [4e8, 5e8, 6e8]}, {'values': [1e8, 2e8, 3e8]}]
+        self.assertEqual(self.values(line_chart(['1', '2', '3'], two, divisor=1e8)), ['6.00', '3.00'])
+
     def test_several_series_keep_end_labels_only(self):
         # 국가별처럼 선이 셋 이상이면 숫자가 겹치므로 기존처럼 끝 값만 쓴다
         three = [{'values': [1e8, 2e8, 3e8]}, {'values': [4e8, 5e8, 6e8]}, {'values': [7e8, 8e8, 9e8]}]
