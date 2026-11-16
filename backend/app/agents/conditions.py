@@ -5,7 +5,8 @@ import re
 from uuid import uuid4
 from sqlalchemy import select, func
 
-from backend.app.agents.planner import HS_CODE_MENTION, HS_EDITION_MENTION, ambiguous_report_source, product_expressions
+from backend.app.agents.planner import (HS_CODE_MENTION, HS_EDITION_MENTION, ambiguous_report_source,
+                                        comparison_date_text, product_expressions)
 from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period, TaskSlots,
                                      MAX_ASKS_PER_CONDITION, MAX_TEXT_CHARS, MARKET_INTENTS, ToolResult)
 from backend.app.api import accounts, reference, trade
@@ -190,13 +191,63 @@ def _product_key(expression):
 
 
 ARTICLE_INTENTS = frozenset(('CAUSE', 'LOCAL_ISSUES'))   # 금액을 조회하지 않고 기사 근거만 쓰는 하위 질문
+SAME_COMPARISON_CONDITIONS = re.compile(r'(?:같은|동일한)\s*(?:비교\s*)?조건|비교\s*조건(?:은|도)?\s*그대로')
 
 
 def _comparison_named(text, period):
-    """질문이 비교 기간을 직접 말했는지: 비교 기간 첫 연도("2023년"·"23년")나 상대 비교 표현(작년·전년·전월 등)."""
+    """비교 기간의 연도·월이나 상대 기간을 질문에서 직접 지정했는지 확인한다."""
+    # "HS2022 품목"의 2022는 판본이지 비교 연도가 아니다. 위치를 유지하도록 같은 길이의 공백으로 가린다.
+    text = HS_EDITION_MENTION.sub(lambda m: ' ' * len(m[0]), text)
+    inherited = SAME_COMPARISON_CONDITIONS.search(text)
     year = period.start.year
-    return bool(re.search(rf'(?<!\d)(?:{year}|{year % 100:02d}\s*년)(?!\d)|작년|재작년|지난\s*해|전년|전월|지난\s*달|동기',
-                          text))
+    def is_target(match):
+        # 월 패턴이 다른 해의 "YYYY년 N월"에서 N월만 다시 잡는 것을 막는다.
+        preceding_year = re.search(r'(?<!\d)(\d{4}|\d{2})\s*년\s*$', text[:match.start()])
+        if preceding_year and int(preceding_year[1]) not in (year, year % 100):
+            return False
+        if not inherited:
+            return True
+        return bool(re.match(r'\s*(?:의\s*)?(?:수출입?액|수입액|교역액|금액|실적)?\s*'
+                             r'(?:(?:하고|와|과|랑|을|를|에)?\s*(?:만(?:을|를)?\s*)?(?:비교|대비|보다|비해)'
+                             r'|(?:와|과)\s*의\s*차이'
+                             r'|(?:을|를)?\s*기준으로(?=[^.!?。]*비교))', text[match.end():])
+                    or re.search(r'비교\s*(?:기간|대상)(?:은|는|을|를)?\s*$', text[:match.start()]))
+    # "동기"는 낱말 첫머리이거나 "전년동기"처럼 '년' 뒤일 때만 기간이다. "전동기"·"원동기"·"발동기"는 품목명이다.
+    relative = r'작년|재작년|지난\s*(?:해|달|분기|반기)|전\s*(?:년|월|분기|반기)|(?:(?<![가-힣])|(?<=년))동기'
+    if any(map(is_target, re.finditer(relative, text))):
+        return True
+    if (period.start.month, period.end.month) == (1, 12):
+        from backend.app.agents.verify_claims import annual_comparison_roles
+        roles = annual_comparison_roles(text)
+        if roles and roles.kind=='explicit' and roles.baseline==str(year):
+            return True
+        explicit_year = rf'(?<!\d)(?:{year}(?:\s*년)?|{year % 100:02d}\s*년)(?!\d|\s*년|\s*\d{{1,2}}\s*월)'
+        if any(map(is_target, re.finditer(explicit_year, text))):
+            return True
+    for match in re.finditer(r'(?<!\d)(?:(\d{4}|\d{2})\s*년\s*)?(?:([1-4])\s*분기|([상하12])\s*반기)', text):
+        if not is_target(match) or (match[1] and int(match[1]) not in (year, year % 100)):
+            continue
+        first = 3 * int(match[2]) - 2 if match[2] else 1 if match[3] in ('상', '1') else 7
+        last = first + (2 if match[2] else 5)
+        if period.end.year == year and (period.start.month, period.end.month) == (first, last):
+            return True
+    def month_tokens(point):
+        y, m = point.year, point.month
+        years = rf'(?:{y}|{y % 100:02d})'
+        digits = rf'(?:{m:02d}|{m})(?!\d)'
+        day = r'(?:\s*\d{1,2}\s*일)?'
+        spelled = rf'(?:{years}\s*년\s*)?{digits}\s*월(?!간){day}'
+        numeric = rf'{years}[./-]\s*(?:{m:02d}(?!\d)(?:[./-]\d{{1,2}}(?!\d))?|{digits}\s*월{day})'
+        return spelled, numeric
+    start_spelled, start_numeric = month_tokens(period.start)
+    end_spelled, end_numeric = month_tokens(period.end)
+    # "1~3월"은 첫 월의 단위를 생략할 수 있다.
+    abbreviated = rf'(?:(?:{year}|{year % 100:02d})\s*년\s*)?(?:{period.start.month:02d}|{period.start.month})(?!\d)'
+    joined = rf'(?:{start_spelled}|{start_numeric}|{abbreviated})\s*(?:[~～–-]|부터|에서)\s*(?:{end_spelled}|{end_numeric})(?:\s*(?:까지|사이))?'
+    pattern = rf'(?<![\d.]){joined}'
+    if period.start == period.end:
+        pattern = rf'(?<![\d.])(?:{joined}|{start_spelled}|{start_numeric})'
+    return any(map(is_target, re.finditer(pattern, comparison_date_text(text))))
 
 
 def _article_hs_items(store, state, task, items):
@@ -280,16 +331,18 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     # 결과 사본으로 만드는 리포트(같은 턴 선행 결과·직전 결과표)는 원본 판본을 그대로 쓴다.
     frozen_report = task.intent == 'REPORT' and bool(task.input_bindings or task.previous_turn_result)
     # 판본은 원문에 있는 값만 확정한다. 복합 질문의 판본은 해당 하위 질문에 적용한다.
-    editions = set(HS_EDITION_MENTION.findall(original))
+    # 결과 사본 리포트는 리포트 문장에 적은 판본만 본다. 생략하면 연결한 원본의 판본을 쓰고("HS2017 추이와 HS2022 추이 … 첫 결과로
+    # 리포트"), 원본과 다른 판본을 적으면 아래에서 거절한다.
+    editions = set(HS_EDITION_MENTION.findall(task.question if frozen_report and len(state.plan.tasks) > 1 else original))
     article_edition_requested = False
-    if len(state.plan.tasks) > 1 and editions:
-        if task.intent in ARTICLE_INTENTS:
-            # 기사로 설명하는 하위 질문(원인·현지 이슈)은 공통 조건으로 옮겨 적은 판본 때문에 실패시키지 않고 HS2022
-            # 품목으로 조회한다(기사 태그도 발행일 기준 HS2022, 2026-11-15 사용자 결정). 비중·유망시장처럼 금액만
-            # 조회하는 하위 질문은 아래 규칙대로 판본을 지키고, 지원하지 않으면 안내한다.
-            article_edition_requested = '2017' in editions
-            editions = set()
-        elif len(editions) > 1 or any(HS_EDITION_MENTION.search(t.question) for t in state.plan.tasks
+    if editions and task.intent in ARTICLE_INTENTS:
+        # 기사로 설명하는 질문(원인·현지 이슈)은 적은 판본 때문에 실패시키지 않고 HS2022 품목으로 조회한다. HS2017 코드는
+        # 대응표로 바꾼다(기사 태그도 발행일 기준 HS2022, 2026-11-15 사용자 결정). 단일 질문도 복합 질문의 하위 질문과 같다.
+        # 비중·유망시장처럼 금액만 조회하는 질문은 아래 규칙대로 판본을 지키고, 지원하지 않으면 안내한다.
+        article_edition_requested = '2017' in editions
+        editions = set()
+    elif len(state.plan.tasks) > 1 and editions:
+        if len(editions) > 1 or any(HS_EDITION_MENTION.search(t.question) for t in state.plan.tasks
                                       if t.intent not in ARTICLE_INTENTS):
             # 플래너가 판본을 하위 질문에 나눠 적었으면 그 배치를 따른다. 원문 판본이 하나인데 어느 하위 질문에도
             # 없으면 플래너가 빠뜨린 것이라 원문 판본을 쓴다. 판본이 여럿인데 이 문장에 없으면 HS2022로 추측하지 않는다.
@@ -414,7 +467,15 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if not answer and country_key(expr) not in original_key:
             raise SlotRepair('질문에서 품목 표현을 확인하지 못했습니다.')
         if expr.isdigit():
-            ver = 'HS2017' if task.intent in ARTICLE_INTENTS and not editions and expr in inherited_2017 else hs_ver
+            named_editions = set()
+            if article_edition_requested:
+                prefix = set(re.findall(rf'(?<![A-Za-z\d])HS\s*(2017|2022)\s*(?:기준\s*)?'
+                                        rf'(?:HS\s*(?:[46](?!\d)\s*)?)?{expr}(?![\d.,])', original, re.I))
+                postfix = set(re.findall(rf'(?<![\d.,]){expr}\s*(?:\(\s*)?HS\s*(2017|2022)(?!\d)', original, re.I))
+                named_editions = postfix or prefix
+            article_legacy = (task.intent in ARTICLE_INTENTS and not editions
+                              and (named_editions=={'2017'} or (not named_editions and expr in inherited_2017)))
+            ver = 'HS2017' if article_legacy else hs_ver
             numeric_product(store, original if not answer else expr, expr, set(), hs_ver=ver)
             if task.intent not in MARKET_INTENTS or len(expr) == 6:
                 out.hs_items.append({'hs_code': expr, 'hs_ver': ver})
@@ -541,8 +602,12 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if slots.recent_months or not out.period:
             out.period = Period(start=shift_month(bounds[-1], 1-(slots.recent_months or 12)), end=bounds[-1])
         comparison = slots.compare_period
+        question = original if len(state.plan.tasks) == 1 else task.question
+        if (prior_compare and comparison is None and slots.extra_compare_periods is None
+                and slots.comparison_requested is not False
+                and SAME_COMPARISON_CONDITIONS.search(question)):
+            out.compare_period, out.extra_compare_periods = prior_compare, prior_extras
         if slots.comparison_requested and slots.period:
-            question = original if len(state.plan.tasks) == 1 else task.question
             out.period, comparison = comparison_windows(question, out.period, comparison)
         # 유망시장은 통계 기간을 조회하지 않는다. 공개 통계보다 오래된 기간을 물어도 여기서 끝내지 않고, 아래 MODEL_PERIOD로
         # 최신 기준월 예측을 제안한다.
@@ -553,6 +618,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             note = '국가별 교역 비중은 조회 기간 기준으로만 계산했습니다.'
             if slots.comparison_requested and note not in task.applied_defaults:
                 task.applied_defaults.append(note)
+        elif slots.comparison_requested is False and not frozen_report:
+            out.compare_period, out.extra_compare_periods = None, []
         # 배포 전 저장된 결과 기반 리포트 계획도 선행 결과의 비교 기간을 유지한다(D-90).
         elif (slots.comparison_requested or out.compare_period) and not frozen_report:
             # 조회 기간과 같은 비교 기간("2025년 기준 2025년·2024년 비교")과 중복은 뺀다. 같은 기간이 두 번이면
@@ -638,7 +705,10 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     accounts.validate_scope(store, [x.model_dump() for x in task.conditions.hs_items], task.conditions.country_codes,
                             hs_versions=hs_versions)
     if task.conditions.hs_items and (article_edition_requested or article_edition_inherited):
-        note = '지정한 HS 판본은 금액 추이·순위에만 적용하고 기사 분석 조건은 HS2022 품목으로 확정했습니다.'
+        # 금액 하위 질문이 함께 있을 때만 판본을 금액 조회에 적용했다고 안내한다. 단일 기사 질문은 바꾼 사실만 알린다.
+        note = ('지정한 HS 판본은 금액 추이·순위에만 적용하고 기사 분석 조건은 HS2022 품목으로 확정했습니다.'
+                if any(t.intent not in ARTICLE_INTENTS for t in state.plan.tasks)
+                else 'HS2017 품목은 기사 분석에 쓰도록 대응하는 HS2022 품목으로 확정했습니다.')
         if note not in task.applied_defaults:
             task.applied_defaults.append(note)
     if task.intent == 'REPORT':

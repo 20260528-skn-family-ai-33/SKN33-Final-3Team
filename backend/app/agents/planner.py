@@ -422,6 +422,22 @@ _CURRENCY_CODES = frozenset(('KRW USD JPY EUR CNY GBP CAD CHF HKD SEK AUD DKK NO
                              'THB IDR TWD MNT KZT PHP VND BND INR PKR BDT MXN BRL ARS RUB HUF PLN CZK QAR ILS JOD TRY ZAR EGP').split())
 
 
+def comparison_date_text(text):
+    """공통 금액 파서가 확인한 소수만 가리고 명시적인 날짜와 원문 위치는 보존한다."""
+    explicit_dates = re.finditer(r'(?<![\d.])\d{2,4}[./-]\s*(?:0?[1-9]|1[0-2])'
+                                 r'(?:[./-]\s*\d{1,2}(?!\d)|\s*(?:월|이후|이전|시점|당시|말|부터|기준)(?![가-힣]))', text)
+    amount_text = mask_spans(text, [match.span() for match in explicit_dates])
+    spans = [(q.start, q.end) for q in quantities(amount_text)
+             if q.value.as_tuple().exponent < 0 and (q.explicit_unit or q.scale > 1)
+             and (not re.fullmatch(r'[A-Z]{3}', q.unit or '') or q.unit in _CURRENCY_CODES)]
+    # 수치 검증에서 단독 퍼센트포인트나 킬로그램 표현을 비교 주장의 단위로 쓰지 않아도 날짜에서는 제외한다.
+    unit = r'(?:(?:[만억조]\s*)?(?:건|개|톤|킬로그램|(?i:kg))|[만억조배]|퍼센트(?:\s*포인트)?|프로|포인트)'
+    ending = r'(?:입니다|이면|이고|이라고|이며|이었다|였다|으로|에서|까지|부터|가량|이상|이하|정도|보다|만큼|[은는이가을를의로도에와과면당만씩])?(?![가-힣A-Za-z\d])'
+    spans.extend(match.span() for match in re.finditer(
+        rf'(?<![\d.])\d+\.\d+(?![\d.])(?=\s*(?:％|(?i:pp)(?![A-Za-z])|{unit}{ending}))', amount_text))
+    return mask_spans(text, spans)
+
+
 def _split_year_comparisons(slots, text):
     """플래너가 "2023년과 2024년"을 2023-01~2024-12 비교 기간 하나로 합쳤으면 연도별 비교 기간으로 나눈다.
     조회 기간이 12개월이고 비교 기간이 여러 해 전체이며 각 연도를 따로 적었을 때만이다. "2023~2024년"처럼 이어진 기간은 그대로 둔다."""
@@ -435,19 +451,9 @@ def _split_year_comparisons(slots, text):
     # "2023년"·"23년" 모두 그 연도다. 두 자리 연도는 날짜로 읽히는 모양일 때만 연도다: '년'(23년), 월(23.5월),
     # 날짜(23.12.31), 0을 채운 월(23.05). "23.5%"·"23.5억 달러"·"23.1만 건" 같은 소수는 연도가 아니다.
     month = r'(?:0?[1-9]|1[0-2])'
-    # 통화 기호·코드가 앞이나 괄호에 있는 경우도 합계 검증과 같은 금액 토큰으로 읽는다(_CURRENCY_CODES).
-    explicit_dates = re.finditer(r'(?<![\d.])\d{2,4}[./-]\s*(?:0?[1-9]|1[0-2])'
-                                 r'(?:[./-]\s*\d{1,2}(?!\d)|\s*(?:월|이후|이전|시점|당시|말|부터|기준)(?![가-힣]))', text)
-    amount_text = mask_spans(text, [match.span() for match in explicit_dates])
-    text = mask_spans(text, [(q.start, q.end) for q in quantities(amount_text)
-                            if q.value.as_tuple().exponent < 0 and (q.explicit_unit or q.scale > 1)
-                            and (not re.fullmatch(r'[A-Z]{3}', q.unit or '') or q.unit in _CURRENCY_CODES)])
-    unit = r'(?:(?:[만억조]\s*)?(?:건|개|톤|킬로그램|(?i:kg))|[만억조배])'
-    unit_end = r'(?:입니다|이면|이고|이라고|이며|이었다|였다|으로|에서|까지|부터|가량|이상|이하|정도|보다|[은는이가을를의로도에와과면당])?(?![가-힣A-Za-z\d])'
-    # 한글 백분율(퍼센트·프로·포인트)과 pp도 % 단위다. "23.05퍼센트"·"23.05프로"·"23.05 pp"는 2023년 5월이 아니다.
-    numeric_unit = rf'(?!\s*(?:％|(?:퍼센트(?:\s*포인트)?|프로|포인트){unit_end}|(?i:pp)(?![A-Za-z])|{unit}{unit_end}))'
+    text = comparison_date_text(text)
     year = lambda y: (rf'(?<![\dA-Za-z])(?:{y}|{y % 100:02d}(?=\s*년|[./-]\s*{month}\s*월'
-                      rf'|[./-]\s*{month}[./-]\s*\d{{1,2}}(?!\d)|[./-]\s*0[1-9](?![\d.]){numeric_unit}))(?!\d)')
+                      rf'|[./-]\s*{month}[./-]\s*\d{{1,2}}(?!\d)|[./-]\s*0[1-9](?![\d.])))(?!\d)')
     # 비교 기간 자체의 두 연도가 붙은 경우만 연속 범위다. 기준 기간의 ISO 월 표시는 여기서 비교하지 않는다.
     start_year = compare.start.year
     start = rf'(?<![\dA-Za-z./-])(?:{start_year}|{start_year % 100:02d})(?!\d)'
