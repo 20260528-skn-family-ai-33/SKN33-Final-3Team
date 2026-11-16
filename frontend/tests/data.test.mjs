@@ -194,10 +194,22 @@ test('monthly trade result titles follow each saved result direction', async () 
   assert.equal(taskTitle({...task,conditions:{trade_flow:'IMPORT'}},tables),'미국에 대한 수입 추이 보여줘')
  }
 })
-test('단신속보 본문은 줄마다 문단으로 나누고 목록 기호만 떼며 음수 부호는 남긴다', () => {
+test('단신속보 본문은 목록 기호만 떼며 음수 부호와 출처는 남긴다', () => {
   const body = '- 수출 동향\n-3.2% (전년 대비)\n* 참고 설명\n\n** 원문 기사 출처\n•  항목\nhttps://example.com/a-b'
   assert.deepEqual(articleParagraphs(body), ['수출 동향', '-3.2% (전년 대비)', '참고 설명', '원문 기사 출처', '항목', 'https://example.com/a-b'])
   assert.deepEqual(articleParagraphs('- -1.5% 감소'), ['-1.5% 감소'])
   assert.deepEqual(articleParagraphs(null), [])
+})
+
+test('단신속보의 문장 중간 줄바꿈은 합치고 문단과 목록은 유지한다', () => {
+  assert.deepEqual(articleParagraphs('- 라오스 디지털 금융 서비스가\n확대되고 있다.\n\n- 베트남에서도\r\n도입을 검토하고 있다.\n추가 내용이다.'),
+    ['라오스 디지털 금융 서비스가 확대되고 있다.', '베트남에서도 도입을 검토하고 있다.', '추가 내용이다.'])
+})
+
+test('관심정보 요약은 표시하지 않은 개수만 세고 빈 목록은 안내한다', async () => {
+  const { summarizeItems } = await import('../src/utils/summary.js')
+  assert.equal(summarizeItems([], '국가 없음'), '국가 없음')
+  assert.equal(summarizeItems(['미국', '중국', '라오스'], '국가 없음'), '미국 · 중국 · 라오스')
+  assert.equal(summarizeItems(['미국', '중국', '라오스', '일본', '베트남'], '국가 없음'), '미국 · 중국 · 라오스 외 2개')
 })
 
