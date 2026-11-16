@@ -423,7 +423,11 @@ def _implied_amount_change(checks, prepared, sentence):
             continue
         # 두 달 금액이 있으면 그 비교만 근거로 쓴다. 마지막 달의 전월 대비 판정으로 대신 통과시키지 않는다.
         (first, first_cell), (last, last_cell) = (points[m] for m in sorted(points))
-        if first.stored_targets == last.stored_targets and _direction_holds(metric.direction, first.value, last.value):
+        # 두 금액은 같은 판본이어야 하고, 증감 문장이 판본을 지정하면 그 판본이어야 한다(HS2017 1월과 HS2022 2월을 잇지 않는다).
+        same_edition = ((first.hs_ver or 'HS2022') == (last.hs_ver or 'HS2022')
+                        and _edition_matches(check.claim, first))
+        if (same_edition and first.stored_targets == last.stored_targets
+                and _direction_holds(metric.direction, first.value, last.value)):
             out[index] = ClaimCheck(check.claim, 'MATCH', (first_cell, last_cell), check.interpretation_valid)
         else:
             out[index] = ClaimCheck(check.claim, 'NOT_CONFIRMED', (), check.interpretation_valid)
@@ -456,6 +460,7 @@ def _matching_cells(claim, facts, sources, catalog):
     matches = []
     inferred_axes = set()
     editions = set()
+    compare_windows = set()
     check_dimensions = claim.quantity is None or (claim.targets and claim.metric.family == 'CHANGE')
     def dimensions(targets):
         named = targets - {'전체 국가', '전체 품목'}
@@ -481,6 +486,12 @@ def _matching_cells(claim, facts, sources, catalog):
         reason = mismatch(claim, fact, source)
         if fact.hs_ver and reason in (None, 'VALUE', 'DIRECTION'):
             editions.add(fact.hs_ver)
+        # 증감 칸의 비교 기준(비교 기간·전년/전월 축)도 하나로 정해져야 한다. 문장이 기준을 생략했는데 기준이 여럿이면
+        # (2024년 대비 +20%와 2023년 대비 -20%, 순위 표의 전년 대비 +5%와 전월 대비 -5%) 수치·방향에 맞는 칸을 나중에 고르지 않는다.
+        if fact.metric.family in ('CHANGE', 'AMOUNT_CHANGE') and reason in (None, 'VALUE', 'DIRECTION'):
+            base = _comparison_base(fact)
+            if base:
+                compare_windows.add(base)
         if claim.quantity is None and not claim.metric.comparison and reason in (None, 'DIRECTION'):
             axes = [axis for axis in ('YOY', 'MOM') if _comparison_matches(axis, fact)]
             if not axes:
@@ -497,7 +508,18 @@ def _matching_cells(claim, facts, sources, catalog):
             supports = reason is None
         if supports:
             matches.append((fact.source, fact.path))
-    return tuple(matches) if len(inferred_axes) <= 1 and len(editions) <= 1 else ()
+    return tuple(matches) if len(inferred_axes) <= 1 and len(editions) <= 1 and len(compare_windows) <= 1 else ()
+
+
+def _comparison_base(fact):
+    """증감 칸의 실제 비교 기간. 비교 기간이 있으면 그것, 전년·전월 대비 칸은 그 칸의 기간을 12·1개월 앞당긴 기간이다.
+    그래서 추이표의 2024년 대비와 순위표의 2025년 전년 대비는 같은 기준이고, 순위표의 전년·전월 대비는 다른 기준이다."""
+    if fact.compare_period:
+        return fact.compare_period
+    offset = {'YOY': -12, 'MOM': -1}.get(fact.metric.comparison)
+    if offset and fact.period:
+        return tuple(shift(month, offset) for month in fact.period)
+    return (None, fact.metric.comparison) if fact.metric.comparison else None
 
 
 # 연간 증감률 칸보다 넓은 범위를 말하는 표현("전체", "총 수출액", "수출 총액", "합계"). 품목·국가로 거른 칸은 근거가 아니다.
