@@ -39,17 +39,37 @@ def read_snapshot(store, uid, identity, kind=None):
     payload=row['payload_json']
     # Legacy report previews can reference a RESULT containing only conditions.
     if row['kind']=='RESULT' and 'columns' in payload and 'rows' in payload:
-        payload={**payload,'columns':display_columns(payload['columns'],payload['rows'],payload.get('meta')),
+        flow=(payload.get('conditions') or {}).get('trade_flow')
+        payload={**payload,'columns':display_columns(payload['columns'],payload['rows'],payload.get('meta'),flow),
                  'snapshot_created_at':row['created_at']}
     return payload
 
 
-def display_columns(columns, rows, meta=None):
+def flow_label(key, label, flow):
+    """수입 조회 결과의 열 이름. LABELS의 기본 이름은 수출 기준이라, 방향이 키에 정해진 열(export_·import_·previous_year_)이
+    아니면 '수출'을 '수입'으로 바꾼다. 이미 저장된 표도 보여 줄 때 바뀌도록 기본 이름 그대로인 열만 바꾼다(#120)."""
+    if flow=='IMPORT' and label==LABELS.get(key) and not key.startswith(('export_','import_','previous_year_')):
+        return label.replace('수출','수입')
+    return label
+
+
+def answer_labels(answer):
+    """저장된 채팅 답변의 결과표 열 이름을 조회 방향에 맞춘다. 수정 전에 저장된 수입 답변도 다시 열 때 '수입'으로 보인다(#120).
+    표의 방향은 그 표를 만든 하위 질문(tasks[].conditions), 없으면 답변 조건(기존 채팅 API)에서 읽는다."""
+    if not isinstance(answer, dict) or not answer.get('tables'): return answer
+    flows = {t.get('task_id'): (t.get('conditions') or {}).get('trade_flow') for t in answer.get('tasks') or []}
+    default = (answer.get('conditions') or {}).get('trade_flow')
+    tables = [{**table, 'columns': [{**c, 'label': flow_label(c['key'], c.get('label') or c['key'], flows.get(table.get('task_id')) or default)}
+                                    for c in table.get('columns') or []]} for table in answer['tables']]
+    return {**answer, 'tables': tables}
+
+
+def display_columns(columns, rows, meta=None, flow=None):
     if (meta or {}).get('kind') == 'PREDICTION':
         return prediction_columns(columns, meta.get('group_by'))
     if (meta or {}).get('kind') == 'LLM_SQL':
         # 자유 SQL의 열은 요청에 맞춰 모델이 고른 결과다(판본별 품목 수의 hs_ver 등). 템플릿용 숨김 규칙을 쓰지 않는다.
-        return [{**c,'label':c.get('label') or LABELS.get(c['key'],c['key'])} for c in columns]
+        return [{**c,'label':flow_label(c['key'],c.get('label') or LABELS.get(c['key'],c['key']),flow)} for c in columns]
     versioned = (meta or {}).get('kind') in ('TREND', 'RANKING', 'COUNTRY_COMPARISON') and any(
         r.get('hs_ver') not in (None, 'HS2022') for r in rows)
     hidden = set() if versioned else {'hs_ver'}
@@ -81,8 +101,8 @@ def display_columns(columns, rows, meta=None):
             if not monthly[prefix]: hidden.update((prefix+'amount_usd',prefix+'month'))
         # 기간 합계 차액(조회 기간 − 첫 비교 기간)도 합계 열과 같이 길이가 다른 기간 비교에서만 보인다.
         if not any_period: hidden.update((*aggregate,'period_difference_usd'))
-    return [{**c,'label':periods.get(c['key']) or (labels.get(c['key'],c.get('label',c['key']))
-             if c.get('label',c['key'])==c['key'] else c['label'])} for c in columns if c['key'] not in hidden]
+    return [{**c,'label':periods.get(c['key']) or flow_label(c['key'],labels.get(c['key'],c.get('label',c['key']))
+             if c.get('label',c['key'])==c['key'] else c['label'],flow)} for c in columns if c['key'] not in hidden]
 
 
 def _period_labels(meta):
@@ -157,7 +177,7 @@ def result_table(store, uid, rows, meta, conditions=None, sql=None, columns=None
     keys=list(rows[0]) if rows else []
     columns=columns or [{'key':k,'label':LABELS.get(k,k),'type':'number' if isinstance(rows[0][k],(int,float)) or k.endswith(('_usd','_pct')) else 'string',
                         'unit':'USD' if k.endswith('_usd') else '%' if k.endswith('_pct') else None} for k in keys]
-    columns=display_columns(columns,rows,meta)
+    columns=display_columns(columns,rows,meta,(conditions or {}).get('trade_flow'))
     payload={'columns':columns,'rows':rows,'meta':clean(meta),'conditions':clean(analysis_conditions(conditions or {})),'sql':sql or [],'total_rows':len(rows)}
     identity=save_snapshot(store,uid,'RESULT',payload)
     return {'result_id':identity,'columns':columns,'rows':rows,'total_rows':len(rows),

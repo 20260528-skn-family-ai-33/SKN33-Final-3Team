@@ -27,6 +27,7 @@ KINDS = {'monthly': 'RPT_MONTHLY', 'weekly': 'RPT_WEEKLY', 'quarterly': 'RPT_QUA
 
 ACCENT = '#1e293a'
 UP, DOWN, MUTED, GRID, PREVIOUS = ACCENT, '#C0392B', '#8A8F98', '#d6dde9', '#A8A39B'
+AREA_OPACITY = 0.55   # 꺾은선 아래 채움 투명도(베타 피드백 50~60%, #120). 웹 components/charts.jsx와 같은 값
 # 관심 국가 선 색상. 같은 리포트 안의 모든 그래프에서 국가 순서대로 같은 색을 씁니다.
 SERIES_COLORS = ['#E07B24', '#2E6DB4', '#8E5BB5', '#16877C', '#C2477A', '#6B7A2A']
 MINUS = '−'
@@ -235,7 +236,11 @@ def _axis_room(ticks, minimum):
 
 def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REPORT_DIGITS, zero=False):
     """series: [{values(USD 또는 원값, divisor로 나눠 표시), color?, dashed?, area?}]. 선 끝에 마지막 값 라벨."""
-    top, bottom = 10, 24
+    # 점 수치·꼭짓점은 선이 하나이거나 '분석 선 + 비교 기간 점선'일 때 첫 선에만 쓴다. 국가별처럼 같은 급의 선이 여럿이면
+    # 한 선에만 숫자가 붙어 어색하므로 기존처럼 끝 값만 쓴다(#120)
+    labelled = len(series) == 1 or (len(series) == 2 and bool(series[1].get('dashed')))
+    # 최고점 위에 숫자(10.5pt)가 들어갈 자리를 둔다. 없으면 SVG 위 경계를 넘어 DOCX 그림에서 잘린다(#120 리뷰)
+    top, bottom = (24 if labelled else 10), 24
     scaled = [[None if v is None else v / divisor for v in s['values']] for s in series]
     low, high, ticks = nice_scale([v for vals in scaled for v in vals], zero=zero)
     left = _axis_room(ticks, 44)
@@ -263,14 +268,29 @@ def line_chart(labels, series, *, height=190, width=640, divisor=1e6, digits=REP
             path = ' '.join(f'{px:.1f},{py:.1f}' for px, py in points)
             if s.get('area') and len(points) > 1:
                 base = y(low)
-                out.append(f'<polygon points="{points[0][0]:.1f},{base:.1f} {path} {points[-1][0]:.1f},{base:.1f}" fill="#a6b6d0"/>')
+                # 채움은 반투명으로 그려 눈금선·선이 비쳐 보이게 한다(#120, 웹 LineChart와 같은 투명도)
+                out.append(f'<polygon points="{points[0][0]:.1f},{base:.1f} {path} {points[-1][0]:.1f},{base:.1f}" fill="#a6b6d0" fill-opacity="{AREA_OPACITY}"/>')
             if len(points) > 1:
                 out.append(f'<polyline points="{path}" fill="none" stroke="{color}" stroke-width="{width_px}"{dash}/>')
+                if s is series[0] and labelled:
+                    # 값을 쓰는 첫 선은 꼭짓점도 표시해 어느 점의 값인지 보이게 한다(#120). 끝 점은 아래 끝 값 원이 맡는다
+                    # 모양은 끝 점(아래 r=3 채운 원)과 똑같이 맞춘다
+                    out.extend(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3" fill="{color}"/>' for px, py in points[:-1])
             else:
                 out.append(f'<circle cx="{points[0][0]:.1f}" cy="{points[0][1]:.1f}" r="1.8" fill="{color}"/>')
         last = next(((i, v) for i, v in reversed(list(enumerate(vals))) if v is not None), None)
         if last:
             ends.append([x(last[0]), y(last[1]), last[1], color])
+        if s is series[0] and labelled:
+            # 첫 선(분석 기간)은 점마다 값을 점 위에 쓴다(#120). 비교 선 하나가 함께 있어도 첫 선만 쓰고,
+            # 국가별처럼 선이 셋 이상이면 숫자가 겹쳐 끝 값만 쓴다.
+            # 가로축 라벨처럼 서로 겹치지 않는 위치만 쓰고, 마지막 점은 끝 값 라벨이 맡는다.
+            shown = set(_visible_labels([label(v) if v is not None else '' for v in vals], x, font=10.5))   # 끝 값 라벨(.end)과 같은 글자 크기
+            for i, v in enumerate(vals):
+                if v is not None and i in shown and (not last or i != last[0]):
+                    # 선과 겹쳐도 읽히게 흰 테두리(paint-order)를 두른다
+                    out.append(f'<text x="{x(i):.1f}" y="{y(v) - 6:.1f}" text-anchor="middle" class="end point" fill="{color}" '
+                               f'stroke="#fff" stroke-width="3" paint-order="stroke">{label(v)}</text>')
     show_labels = end_labels_fit(len(ends), height)
     # 끝 값 라벨이 겹치지 않게 세로로 벌리되 그래프 영역(top ~ top+plot_h) 안에 둡니다.
     # 라벨이 다 들어갈 자리가 없으면 그리지 않고, 템플릿이 end_labels_fit()으로 확인해 범례에 끝 값을 붙입니다.

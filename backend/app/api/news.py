@@ -135,6 +135,15 @@ def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope=
     return stmt.order_by(a.c.published_date.desc(),a.c.article_id.desc())
 
 
+SUMMARY_CHARS=400   # 목록·리포트 카드에 싣는 본문 발췌 길이
+
+
+def excerpt(text, limit=SUMMARY_CHARS):
+    """본문 발췌. 잘렸으면 끝에 '…'를 붙여 원문이 더 있다는 것을 보인다(#120). 길이는 '…'까지 limit자 이내."""
+    text=(text or '').strip()
+    return text if len(text)<=limit else text[:limit-1].rstrip()+'…'
+
+
 def article_views(store,rows,uid=None):
     if not rows: return []
     t=store.t('article_tag'); ids=[r['article_id'] for r in rows]
@@ -156,7 +165,7 @@ def article_views(store,rows,uid=None):
         matched=(not saved['country_codes'] or country_ok) and hs_ok and bool(saved['country_codes'] or saved['hs_items'])
         result.append({'article_id':str(row['article_id']),'source_code':row['source_code'],'title':row['title'],
             'published_date':row['published_date'],'country_codes':countries,'hs_items':hs,
-            'summary':mask_text(row['body_masked'])[:400],'source_url':row['source_url'],
+            'summary':excerpt(mask_text(row['body_masked'])),'source_url':row['source_url'],
             'is_major_issue':row['article_id'] in major_ids, 'matched_interest':matched})
     return result
 

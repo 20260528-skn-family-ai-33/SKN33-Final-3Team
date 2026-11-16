@@ -99,7 +99,9 @@ export function Signup() {
           form.password.length > 72 ? '비밀번호는 72자 이하로 입력해 주세요.' : error.password)}
         <PasswordRules value={form.password} showErrors={!!error.password} />
         <div className="sp16" />
-        {field('confirm', '비밀번호 확인', { placeholder: '비밀번호를 다시 입력하세요', type: 'password', autoComplete: 'new-password' })}
+        {/* 가입 버튼은 불일치하면 꺼져 있어 제출 오류를 볼 수 없다. 비밀번호 변경 화면처럼 입력 중에 바로 알린다(#120) */}
+        {field('confirm', '비밀번호 확인', { placeholder: '비밀번호를 다시 입력하세요', type: 'password', autoComplete: 'new-password' },
+          error.confirm || (form.confirm && form.password !== form.confirm ? '비밀번호가 일치하지 않습니다.' : undefined))}
         {form.confirm && form.password === form.confirm && !error.confirm && <p className="field-ok">✓ 비밀번호가 일치합니다</p>}
         <p className="note" style={{ marginTop: 10 }}>이름은 필수 입력입니다. 이메일은 대소문자를 구분하며 형식·중복 여부와 비밀번호 일치 여부를 확인합니다.</p>
         <div className="col" role="group" aria-label="필수 약관 동의" style={{ gap: 10, marginTop: 22 }}>

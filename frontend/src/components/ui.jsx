@@ -36,7 +36,8 @@ export function TextField({ value, onChange, placeholder, type = 'text', icon, i
         {...rest}
       />
       {type === 'password' && <button type="button" className="reset more" aria-label={visible ? '비밀번호 숨기기' : '비밀번호 보기'} aria-controls={rest.id} aria-pressed={visible} onClick={() => setVisible(v => !v)}>{visible ? '숨기기' : '보기'}</button>}
-      {icon && <Icon name={icon} size={sm ? 16 : 18} color={iconColor} stroke={icon === 'lock' ? 1.8 : 1.9} />}
+      {/* 비밀번호 칸은 '보기/숨기기' 버튼만 둔다(자물쇠 아이콘과 겹쳐 보이지 않게, #120) */}
+      {icon && type !== 'password' && <Icon name={icon} size={sm ? 16 : 18} color={iconColor} stroke={icon === 'lock' ? 1.8 : 1.9} />}
     </div>
   )
 }

@@ -190,8 +190,10 @@ def populate(store, saved, ctx, names, start, end):
     total = amount(window)
     old_total = amount(previous_window) if ready else None
     monthly = [amount([m]) for m in window]
-    top_share = lambda n: sum(current[code] for code in active[:n]) * 100 / total if total else None
-    old_share = lambda n: sum(previous[code] for code in old_active[:n]) * 100 / old_total if old_total else None
+    # 상위 n개국 비중은 수출국이 n개보다 많을 때만 뜻이 있다. 수출국이 n개 이하면 계산상 항상 100%라
+    # '한 국가에 쏠림'처럼 잘못 읽히므로 값을 비운다(#120). 분석·비교 기간은 각 기간의 수출국 수로 따로 판단한다
+    top_share = lambda n: sum(current[code] for code in active[:n]) * 100 / total if total and len(active) > n else None
+    old_share = lambda n: sum(previous[code] for code in old_active[:n]) * 100 / old_total if old_total and len(old_active) > n else None
     imported = old_imported = None
     if 'KPI' in sections:
         imports = trade.aggregate(store, 'import_summary', first, end, saved.get('hs_items', []),
@@ -240,9 +242,13 @@ def populate(store, saved, ctx, names, start, end):
                                 for i, code in enumerate(active[:10], 1)]
         others = [code for code in codes if code not in active[:10]]
         ctx['others'] = metrics(others) if others else None
-        ctx['concentration'] = {**{f'top{n}': {'current': top_share(n), 'previous': old_share(n)} for n in (1, 3, 10)},
-                                'countries': {'current': len(active), 'previous': len(old_active) if ready else None},
-                                'note': None}
+        # 상위 n 행은 분석·비교 기간 중 한쪽이라도 뜻 있는 값(수출국이 n개보다 많음)이 있으면 남기고,
+        # 뜻 없는 칸만 비운다(—). 분석 기간만 기준으로 행을 빼면 비교 기간의 정상 값까지 사라진다(#120 리뷰).
+        # 두 기간 모두 뜻 있는 행이 없으면 표 대신 안내한다
+        shares = {f'top{n}': {'current': top_share(n), 'previous': old_share(n)} for n in (1, 3, 10)}
+        shares = {key: value for key, value in shares.items() if value['current'] is not None or value['previous'] is not None}
+        ctx['concentration'] = {**shares, 'countries': {'current': len(active), 'previous': len(old_active) if ready else None},
+                                'single': not shares, 'note': None}
     scope = '선택 국가 내 집계' if saved.get('country_codes') else '전체 국가 집계'
     ctx['meta']['data_basis'] = f'관세청 수출입무역통계 · HS2022 · {scope}'
     ctx['sources'] = [{'label': '수출입 통계', 'provider': '관세청', 'scope': f'{scope} · 검증 완료 월',
