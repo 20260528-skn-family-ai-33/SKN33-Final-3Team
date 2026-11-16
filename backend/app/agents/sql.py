@@ -151,12 +151,21 @@ def _check_trade_join(scope):
         return set()
     # 먼저 집계한 수출입 CTE끼리 이을 때도 각 CTE의 GROUP BY 키가 모두 조인 조건에 있어야 한 행씩 대응한다.
     # 월·국가로 묶은 수출과 월로만 묶은 수입을 월로 이으면 수입 금액이 국가 수만큼 반복된다.
-    outputs = {alias: {e.alias_or_name.lower() for e in source.expression.selects}
+    # 바깥에서 보이는 열 이름은 CTE 선언의 열 별칭(`ex(month, amount) AS (...)`)이 정한다.
+    outputs = {alias.lower(): set(_visible_names(source))
                for alias, (_, source) in scope.selected_sources.items()
-               if not isinstance(source, exp.Table) and isinstance(source.expression, exp.Select)}
+               if not isinstance(source, exp.Table) and isinstance(source.expression, (exp.Select, exp.Union))}
     joined, pinned = {}, {}
     by_alias ={alias.lower(): source for alias, (_, source) in scope.selected_sources.items()}
     for join in scope.expression.args.get('joins') or []:
+        # 조인 단계마다 그 ON·USING이 실제로 행을 제한하는 등식만 키로 본다. LEFT JOIN의 ON은 새로 붙는 표의 행만 고르고
+        # 이미 이어진 행은 지우지 않는다: 새로 붙는 표가 없는 등식(앞 조인의 두 입력끼리)과 앞 입력을 값 하나로 고정하는 조건은
+        # 앞 조인의 중복을 풀지 못한다. RIGHT·FULL JOIN의 조건은 키로 인정하지 않는다.
+        side = (join.side or '').upper()
+        if side in ('RIGHT', 'FULL'):
+            continue
+        joined_alias = join.this.alias_or_name.lower()
+        limited = (lambda owner: owner == joined_alias) if side == 'LEFT' else (lambda owner: True)
         using = {u.name.lower() for u in join.args.get('using') or []}
         for alias in scope.selected_sources:
             joined.setdefault(alias.lower(), set()).update(using)
@@ -179,18 +188,22 @@ def _check_trade_join(scope):
                 continue
             left, right = owned(sides[0]), owned(sides[1])
             if not left or not right:   # 한쪽에 열이 없으면(값) 그 열을 한 값으로 고정한다.
-                pairs = left or right
+                pairs = [(o, n) for o, n in left or right if limited(o)]
                 for owner, name in pairs:
                     pinned.setdefault(owner, set()).add(name)
             else:
                 pairs = [(o, n) for o, n in left if any(o != other for other, _ in right)]
                 pairs += [(o, n) for o, n in right if any(o != other for other, _ in left)]
+                # LEFT JOIN의 ON에서 새로 붙는 표가 없는 등식(앞서 이어진 두 입력끼리)은 행을 제한하지 않는다.
+                # 새로 붙는 표와 앞 입력을 잇는 등식은 양쪽 행을 맞춘다.
+                if side == 'LEFT' and not any(o == joined_alias for o, _ in left + right):
+                    pairs = []
             # 식으로 감싼 열은 그 식이 월 값을 하나로 유지할 때만 키다: DATE_FORMAT(…, '%Y-%m')은 늘 유지하고, MONTH()·
             # DATE_FORMAT(…, '%m')은 그 입력이 한 해 안의 기간만 읽을 때만 유지한다. YEAR()·QUARTER() 등은 여러 달을 한 값으로 묶는다.
             kept = {}
-            for side, found in zip(sides, (left, right)):
+            for operand, found in zip(sides, (left, right)):
                 for owner, name in found:
-                    kept[(owner, name)] = _keeps_key(side, by_alias.get(owner))
+                    kept[(owner, name)] = _keeps_key(operand, by_alias.get(owner))
             for owner, name in pairs:
                 if kept.get((owner, name), True):
                     joined.setdefault(owner, set()).add(name)
@@ -213,6 +226,13 @@ def _check_trade_join(scope):
     return {alias for alias, size in grain.items() if size < finest}
 
 
+def _visible_names(scope):
+    """파생 표(Scope)의 결과 열을 바깥에서 보이는 이름으로. CTE 선언의 열 별칭이 있으면 위치별로 그 이름이다."""
+    aliases = scope.outer_columns or []
+    return [(aliases[i] if i < len(aliases) else item.alias_or_name).lower()
+            for i, item in enumerate(scope.expression.selects)]
+
+
 def _check_repeated_trade_values(scopes, repeated_inputs):
     """조인에서 반복된 값이 중간 결과의 열 이름이나 위치를 바꿔도 그 출처를 추적한다."""
     if not any(repeated_inputs.values()):
@@ -223,9 +243,7 @@ def _check_repeated_trade_values(scopes, repeated_inputs):
 
     @lru_cache(maxsize=None)
     def output_names(scope):
-        aliases = scope.outer_columns
-        return tuple((aliases[i] if i < len(aliases) else item.alias_or_name).lower()
-                     for i, item in enumerate(scope.expression.selects))
+        return tuple(_visible_names(scope))
 
     @lru_cache(maxsize=None)
     def repeated_positions(scope):
@@ -238,12 +256,13 @@ def _check_repeated_trade_values(scopes, repeated_inputs):
         if isinstance(node, exp.Column):
             name, owner = node.name.lower(), node.table.lower()
             local = sources[scope]
-            bound_locally = owner in local
+            # 별칭 있는 열은 그 입력에 묶인다. 별칭 없는 열은 안쪽 물리 표의 열인지 알 수 없으므로(스키마를 보지 않는다),
+            # 안쪽 파생 표에서 못 찾으면 바깥 범위의 반복 금액도 확인한다(`SUM((SELECT repeated FROM country …))`).
+            bound_locally = bool(owner) and owner in local
             for alias, source in local.items():
                 if owner and owner != alias:
                     continue
                 if isinstance(source, exp.Table):
-                    bound_locally = True
                     continue
                 # SQLGlot represents a recursive CTE reference with a copy of its anchor scope.
                 source = by_expression.get(id(source.expression), source)
@@ -338,7 +357,8 @@ def _aggregate_keys(scope):
     DISTINCT와 UNION(중복 제거)은 결과 열 전체가 키다. UNION ALL은 같은 키의 행이 여러 갈래에서 와서 키가 없다.
     집계하지 않고 파생 표 하나만 그대로 읽는 SELECT(`SELECT m, amount FROM ex`)는 그 표의 키가 결과에 남으면 이어받는다."""
     select = scope.expression
-    outputs = [e.alias_or_name.lower() for e in select.selects] if isinstance(select, (exp.Select, exp.Union)) else []
+    # 키 이름은 바깥에서 보이는 이름이다. CTE가 열 별칭을 선언하면(`ex(month, amount)`) 위치별로 그 별칭이다.
+    outputs = _visible_names(scope) if isinstance(select, (exp.Select, exp.Union)) else []
     if isinstance(select, exp.Union):
         return set(outputs) if select.args.get('distinct') else None
     if not isinstance(select, exp.Select):
@@ -353,17 +373,17 @@ def _aggregate_keys(scope):
                 and not select.args.get('group')):
             inner = _aggregate_keys(sources[0][1])
             # 안쪽 키 열을 그대로 고른 결과 열은 이름을 바꿔도(`w.trade_month AS month`) 같은 키다.
-            renamed = {e.unalias().name.lower(): e.alias_or_name.lower() for e in select.selects
+            renamed = {e.unalias().name.lower(): outputs[i] for i, e in enumerate(select.selects)
                        if isinstance(e.unalias(), exp.Column)}
             if inner is not None and inner <= set(renamed):
                 return {renamed[key] for key in inner}
         return None
-    aliases = {e.alias.lower() for e in select.selects if e.alias}
+    aliases = {e.alias.lower(): i for i, e in enumerate(select.selects) if e.alias}
     keys = set()
     for group in (select.args.get('group').expressions if select.args.get('group') else []):
-        names = [e.alias_or_name.lower() for e in select.selects if e.unalias() == group]
+        names = [outputs[i] for i, e in enumerate(select.selects) if e.unalias() == group]
         if not names and isinstance(group, exp.Column) and not group.table and group.name.lower() in aliases:
-            names = [group.name.lower()]
+            names = [outputs[aliases[group.name.lower()]]]
         if not names and isinstance(group, exp.Literal) and group.is_int and 1 <= int(group.this) <= len(outputs):
             names = [outputs[int(group.this) - 1]]
         # 결과 열로 내지 않은 키는 조인 조건에 쓸 수 없다. 조인할 때만 거부되도록 맞출 수 없는 이름으로 남긴다.
@@ -999,12 +1019,29 @@ def _check_conditions(query, conditions):
     _check_output_rows(query, bool(countries), bool(confirmed))
 
 
+def _used_scopes(query):
+    """최종 쿼리가 실제로 읽는 범위들. 선언만 하고 참조하지 않은 CTE는 결과에 들어가지 않으므로 뺀다."""
+    scopes = traverse_scope(query)
+    if not scopes:
+        return []
+    used, stack = set(), [scopes[-1]]   # traverse_scope는 바깥(최종) 범위를 마지막에 낸다
+    while stack:
+        scope = stack.pop()
+        if id(scope.expression) in used:
+            continue
+        used.add(id(scope.expression))
+        stack.extend(source for _, source in scope.selected_sources.values() if not isinstance(source, exp.Table))
+        stack.extend(scope.subquery_scopes)
+        stack.extend(scope.set_operation_scopes)
+    return [scope for scope in scopes if id(scope.expression) in used]
+
+
 def missing_periods(sql, conditions):
     """요청한 기간(조회·비교·추가 비교) 가운데 생성 SQL이 수출입 행을 한 달도 읽지 않는 기간들.
     2025·2023·2024년을 요청했는데 2025년만 거른 SQL이면 2023·2024년이다. 수출입 표를 읽지 않는 SQL은 해당 없다."""
     query = sqlglot.parse_one(sql, read='mysql')
     read, reads_trade = set(), False
-    for scope in traverse_scope(query):
+    for scope in _used_scopes(query):
         if not isinstance(scope.expression, exp.Select):
             continue
         trades = [alias.lower() for alias, (_, source) in scope.selected_sources.items()
