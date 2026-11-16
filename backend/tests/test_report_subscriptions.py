@@ -344,6 +344,30 @@ class ReportSubscriptionTest(unittest.TestCase):
         self.assertEqual(len(second['items']), 1)
         self.assertTrue(second['items'][0]['created_at'].startswith('2026-01-14T00:00'))
 
+    def test_deleted_failed_report_is_excluded_before_admin_count_and_pagination(self):
+        self.register(); uid = int(self.signup())
+        subscription = self.subscribe(uid, 'MONTHLY')
+        m = self.meta.tables
+        with self.engine.begin() as c:
+            c.execute(update(m['users']).where(m['users'].c.user_id == uid).values(role='ADMIN'))
+            ids = []
+            for day in (13, 14, 15):
+                ids.append(c.execute(m['report'].insert().values(user_id=uid, subscription_id=subscription,
+                    report_type='RPT_MONTHLY', generation_key=str(day) * 32,
+                    conditions_json={'period': {'start': '2025-12-01', 'end': '2025-12-31'}},
+                    status='FAILED', retry_count=0, created_at=datetime(2026, 1, day))).inserted_primary_key[0])
+        response = self.client.delete(f'/api/v1/reports/{ids[-1]}', headers={'X-CSRF-Token': self.csrf})
+        self.assertEqual(response.status_code, 204, response.text)
+        for category in ('REPORT', 'ALL'):
+            seen = []
+            for page in (1, 2, 3):
+                response = self.client.get('/api/v1/admin/alerts', params={'category': category, 'page': page, 'page_size': 1})
+                self.assertEqual(response.status_code, 200, response.text)
+                value = response.json()
+                self.assertEqual(value['page']['total'], 2)
+                seen.extend(item['target_id'] for item in value['items'])
+            self.assertEqual(seen, [str(ids[1]), str(ids[0])])
+
     def test_admin_alerts_with_same_time_do_not_repeat_across_pages(self):
         self.register(); uid = int(self.signup())
         m = self.meta.tables

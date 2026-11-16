@@ -274,7 +274,8 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
                 'target_type':'BATCH','target_id':str(r['run_id']),'created_at':batch_time_utc(r['finished_at'])})
                 for r in store.rows(select(t).where(failed).order_by(t.c.finished_at.desc(),t.c.run_id.desc()).limit(newest))]
         if category in ('ALL','REPORT'):
-            t=store.t('report'); failed=and_(t.c.status=='FAILED',t.c.subscription_id.is_not(None))
+            t=store.t('report'); failed=and_(t.c.status=='FAILED',t.c.subscription_id.is_not(None),
+                                           t.c.conditions_json['deleted_at'].as_string().is_(None))
             # 실패 시각은 실행 기록(JSON)에 있고, 기록이 없는 옛 행은 생성 시각으로 정렬한다.
             failed_at=func.coalesce(t.c.content_json[jobs.EXECUTION]['finished_at'].as_string(),func.replace(cast(t.c.created_at,String),' ','T'))
             total+=store.count(select(t.c.report_id).where(failed))
