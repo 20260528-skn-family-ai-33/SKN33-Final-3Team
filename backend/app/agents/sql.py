@@ -139,7 +139,7 @@ def _check_trade_join(scope):
             if source.name.lower() in TRADE_TABLES:
                 raw.append(source)
         elif _reads_trade(source):
-            derived[alias.lower()] = _aggregate_keys(source.expression)
+            derived[alias.lower()] = _aggregate_keys(source)
     # 비중 분모 같은 한 행 합계는 스칼라 하위 쿼리로 쓴다(CROSS JOIN은 _check_trade_filters가 거부한다).
     if raw and len(raw) + len(derived) > 1:
         raise ValueError('수출입 원본 표를 다른 수출입 표와 직접 조인하면 국가·품목 행이 중복 합산됩니다. '
@@ -152,26 +152,76 @@ def _check_trade_join(scope):
                for alias, (_, source) in scope.selected_sources.items()
                if not isinstance(source, exp.Table) and isinstance(source.expression, exp.Select)}
     joined = {}
+    by_alias = {alias.lower(): source for alias, (_, source) in scope.selected_sources.items()}
     for join in scope.expression.args.get('joins') or []:
         using = {u.name.lower() for u in join.args.get('using') or []}
         for alias in scope.selected_sources:
             joined.setdefault(alias.lower(), set()).update(using)
-        # 키는 ON의 최상위 AND 등식(`=`, 또는 값 하나짜리 IN)에 있을 때만 맞춘 것으로 본다. `IS NOT NULL`·`IN (여러 값)`·`<>`는
-        # 그 키의 행을 하나로 정하지 못해 금액이 반복된다. `MONTH(a.m) = MONTH(b.m)`처럼 식끼리의 등식은 받는다.
-        terms = [t for t in _and_terms(join.args.get('on'))
-                 if isinstance(t, exp.EQ) or (isinstance(t, exp.In) and not t.args.get('query') and len(t.expressions) == 1)]
-        for column in (c for term in terms for c in term.find_all(exp.Column)):
-            name = column.name.lower()
-            # 별칭 없는 열은 그 이름을 내는 파생 표의 열로 본다.
-            owners = [column.table.lower()] if column.table else [a.lower() for a, cols in outputs.items() if name in cols]
-            for owner in owners:
+        # 키는 ON의 최상위 AND 등식으로 맞출 때만 인정한다: 서로 다른 조인 입력의 열끼리 `=`(식끼리 `MONTH(a.m) = MONTH(b.m)`
+        # 포함), 또는 값 하나와의 `=`·IN. 같은 입력끼리(`ex.c = ex.c`), `IS NOT NULL`·`IN (여러 값)`·`<>`는 행을 하나로 정하지 못한다.
+        def owned(node):
+            found = []
+            for column in node.find_all(exp.Column):
+                name = column.name.lower()
+                # 별칭 없는 열은 그 이름을 내는 파생 표의 열로 본다.
+                owners = [column.table.lower()] if column.table else [a.lower() for a, cols in outputs.items() if name in cols]
+                found.extend((owner, name) for owner in owners)
+            return found
+        for term in _and_terms(join.args.get('on')):
+            if isinstance(term, exp.In) and not term.args.get('query') and len(term.expressions) == 1:
+                sides = [term.this, term.expressions[0]]
+            elif isinstance(term, exp.EQ):
+                sides = [term.this, term.expression]
+            else:
+                continue
+            left, right = owned(sides[0]), owned(sides[1])
+            if not left or not right:   # 한쪽에 열이 없으면(값) 그 열을 한 값으로 고정한다.
+                pairs = left or right
+            else:
+                pairs = [(o, n) for o, n in left if any(o != other for other, _ in right)]
+                pairs += [(o, n) for o, n in right if any(o != other for other, _ in left)]
+            # 식으로 감싼 열(`MONTH(a.trade_month)`)은 값을 줄여 다른 해의 같은 달을 잇는다. 그 입력이 한 해 안의 기간만 읽을
+            # 때(올해 1~3월과 작년 1~3월 비교)만 키로 인정한다.
+            wrapped = {(o, n) for side, found in zip(sides, (left, right)) if not isinstance(side, exp.Column)
+                       for o, n in found}
+            for owner, name in pairs:
+                source = by_alias.get(owner)
+                if (owner, name) in wrapped and not (source is not None and not isinstance(source, exp.Table)
+                                                     and _single_year(source.expression)):
+                    continue
                 joined.setdefault(owner, set()).add(name)
     for alias, keys in derived.items():
         if keys is None:
-            raise ValueError('수출입 표끼리 조인할 때는 각 표를 같은 단위로 먼저 집계하세요(창 함수는 행을 묶지 않습니다).')
+            raise ValueError('수출입 표끼리 조인할 때는 각 표를 GROUP BY로 같은 단위로 먼저 집계하세요. '
+                             '창 함수·UNION ALL·집계하지 않은 조회는 행을 하나로 묶지 않습니다.')
         if not keys <= joined.get(alias, set()):
             raise ValueError('집계 단위가 다른 수출입 결과를 조인하면 금액이 반복 합산됩니다. '
                              '양쪽을 같은 단위로 집계하고 GROUP BY 키를 모두 조인 조건에 쓰세요.')
+
+
+def _single_year(select):
+    """파생 SELECT가 WHERE의 최상위 AND 기간 조건으로 trade_month를 한 해 안으로 거르는지(BETWEEN·>=·<·= 리터럴)."""
+    if not isinstance(select, exp.Select) or not select.args.get('where'):
+        return False
+    years = set()
+    for term in _and_terms(select.args['where'].this):
+        column = term.this
+        if not (isinstance(column, exp.Column) and column.name.lower() == 'trade_month'):
+            continue
+        if isinstance(term, exp.Between):
+            values = [(term.args.get('low'), False), (term.args.get('high'), False)]
+        elif isinstance(term, (exp.GTE, exp.GT, exp.LTE, exp.EQ)):
+            values = [(term.expression, False)]
+        elif isinstance(term, exp.LT):
+            values = [(term.expression, True)]   # `< '2026-01-01'`은 2025년까지다.
+        else:
+            continue
+        for value, exclusive in values:
+            if not (isinstance(value, exp.Literal) and value.is_string and len(value.this) >= 7):
+                return False
+            year = int(value.this[:4])
+            years.add(year - 1 if exclusive and value.this[5:10] in ('01-01', '01') else year)
+    return len(years) == 1
 
 
 def _reads_trade(scope, seen=None):
@@ -186,22 +236,41 @@ def _reads_trade(scope, seen=None):
     return any(_reads_trade(child, seen) for child in [*children, *getattr(scope, 'union_scopes', [])])
 
 
-def _aggregate_keys(select):
-    """파생 SELECT의 집계 키(결과 열 이름). 행을 묶지 않으면 None, GROUP BY 없이 집계만 하면 빈 집합(한 행)이다.
-    창 함수(SUM … OVER) 안의 집계는 행을 묶지 않아 세지 않는다. GROUP BY에 결과 별칭을 쓴 경우(`GROUP BY month`)도 받는다.
-    DISTINCT와 UNION(중복 제거)은 결과 열 전체가 키다. UNION ALL은 같은 키의 행이 여러 갈래에서 와서 키가 없다."""
+def _aggregate_keys(scope):
+    """파생 표(Scope)의 집계 키(결과 열 이름). 행을 묶지 않으면 None, GROUP BY 없이 집계만 하면 빈 집합(한 행)이다.
+    집계는 이 SELECT에 직접 속한 것만 센다(스칼라 하위 쿼리·창 함수 SUM … OVER 안의 집계는 이 행을 묶지 않는다).
+    GROUP BY에 결과 별칭(`GROUP BY month`)이나 위치 번호(`GROUP BY 1, 2`)를 쓴 경우도 받는다.
+    DISTINCT와 UNION(중복 제거)은 결과 열 전체가 키다. UNION ALL은 같은 키의 행이 여러 갈래에서 와서 키가 없다.
+    집계하지 않고 파생 표 하나만 그대로 읽는 SELECT(`SELECT m, amount FROM ex`)는 그 표의 키가 결과에 남으면 이어받는다."""
+    select = scope.expression
+    outputs = [e.alias_or_name.lower() for e in select.selects] if isinstance(select, (exp.Select, exp.Union)) else []
     if isinstance(select, exp.Union):
-        return {e.alias_or_name.lower() for e in select.selects} if select.args.get('distinct') else None
+        return set(outputs) if select.args.get('distinct') else None
     if not isinstance(select, exp.Select):
         return None
-    if not any(agg.find_ancestor(exp.Window) is None for e in select.selects for agg in e.find_all(exp.AggFunc)):
-        return {e.alias_or_name.lower() for e in select.selects} if select.args.get('distinct') else None
+    own = [agg for e in select.selects for agg in e.find_all(exp.AggFunc)
+           if agg.find_ancestor(exp.Window) is None and agg.find_ancestor(exp.Select) is select]
+    if not own:
+        if select.args.get('distinct'):
+            return set(outputs)
+        sources = list(scope.selected_sources.values())
+        if (len(sources) == 1 and not isinstance(sources[0][1], exp.Table) and not select.args.get('joins')
+                and not select.args.get('group')):
+            inner = _aggregate_keys(sources[0][1])
+            # 안쪽 키 열을 그대로 고른 결과 열은 이름을 바꿔도(`w.trade_month AS month`) 같은 키다.
+            renamed = {e.unalias().name.lower(): e.alias_or_name.lower() for e in select.selects
+                       if isinstance(e.unalias(), exp.Column)}
+            if inner is not None and inner <= set(renamed):
+                return {renamed[key] for key in inner}
+        return None
     aliases = {e.alias.lower() for e in select.selects if e.alias}
     keys = set()
     for group in (select.args.get('group').expressions if select.args.get('group') else []):
         names = [e.alias_or_name.lower() for e in select.selects if e.unalias() == group]
         if not names and isinstance(group, exp.Column) and not group.table and group.name.lower() in aliases:
             names = [group.name.lower()]
+        if not names and isinstance(group, exp.Literal) and group.is_int and 1 <= int(group.this) <= len(outputs):
+            names = [outputs[int(group.this) - 1]]
         # 결과 열로 내지 않은 키는 조인 조건에 쓸 수 없다. 조인할 때만 거부되도록 맞출 수 없는 이름으로 남긴다.
         keys.add(names[0] if names else '#group-key-not-projected')
     return keys
