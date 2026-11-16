@@ -224,7 +224,8 @@ class CompareYearsSplitTest(unittest.TestCase):
                        '23.05달러였고', '23.05kg당 금액도', '23.05 CAD를 넘는지', '23.05 aud',
                        'US$23.05를 넘는지', '$23.05', 'CAD 23.05', '23.05 (USD)', '23.05톤이면', '23.05톤이고',
                        '23.05킬로그램 이상인지', '23.05퍼센트 이상인지', '23.05 퍼센트포인트 이상인지',
-                       '23.05프로 이상인지', '23.05포인트 이상인지', '23.05 pp 이상인지'):
+                       '23.05프로 이상인지', '23.05포인트 이상인지', '23.05 pp 이상인지', '23.05포인트만 늘었는지',
+                       '23.05포인트씩 늘었는지', '23.05포인트만큼 늘었는지'):
             with self.subTest(amount=amount):
                 slots = self.slots(f'2025년을 2022년, 2024년과 비교하고 {amount} 봐줘',
                                    {'start': '2022-01-01', 'end': '2024-12-01'})
@@ -375,7 +376,7 @@ class ExtraCompareTrendTest(unittest.TestCase):
         check_conditions(self.store, current, followup.steps[0], resolve_bindings=resolve)
         self.assertEqual(followup.steps[0].status, 'DONE')
         trend = run_template(self.store, uid, followup, followup.steps[1])
-        self.assertEqual([(r['hs_ver'], r['amount_usd']) for r in trend.rows], [('HS2017', 7), ('HS2017', 0), ('HS2017', 0)])
+        self.assertEqual([(r['hs_ver'], r['amount_usd']) for r in trend.rows], [('HS2017', 7), ('HS2017', None), ('HS2017', None)])
 
         # 이전 판본에서 품목을 찾지 못해 직접 코드를 입력해도 HS2017로 확인한다.
         from backend.app.agents.clarification import answer_patch, apply_answer
@@ -524,11 +525,13 @@ class ExtraCompareTrendTest(unittest.TestCase):
         from backend.app.agents.conditions import check_conditions
 
         # 플래너가 후속 질문에 비교 요청만 적거나 첫 비교 기간(2023년)만 다시 적어도 2024년 비교를 유지한다.
-        for requested in ({}, {'comparison_requested': True}, {'comparison_requested': True, 'compare_period': Y(2023)}):
+        for requested in ({}, {'comparison_requested': True}, {'comparison_requested': True, 'compare_period': Y(2023)},
+                          {'comparison_requested': False}):
             with self.subTest(slots=requested):
                 first = '중국의 2025년 수출액을 2023년·2024년과 비교'
-                followup = '같은 조건으로 미국도 비교'
-                current = self.compound(f'{first}하고 {followup}해줘', [
+                no_comparison = requested.get('comparison_requested') is False
+                followup = '미국은 비교 없이 2025년 수출액만 보여줘' if no_comparison else '같은 조건으로 미국도 비교해줘'
+                current = self.compound(f'{first}하고 {followup}', [
                     {'intent': 'STATISTICS', 'question': first, 'slots': {
                         'countries': [{'mention': '중국', 'name': '중국'}], 'period': Y(2025),
                         'comparison_requested': True, 'compare_period': Y(2023), 'extra_compare_periods': [Y(2024)]}},
@@ -541,6 +544,11 @@ class ExtraCompareTrendTest(unittest.TestCase):
                 check_conditions(self.store, current, target.steps[0], resolve_bindings=resolve)
                 self.assertEqual(target.steps[0].status, 'DONE')
                 self.assertEqual(target.conditions.country_codes, ['US'])
+                if no_comparison:
+                    self.assertIsNone(target.conditions.compare_period)
+                    self.assertEqual(target.conditions.extra_compare_periods, [])
+                    self.assertNotIn('compare2_amount_usd', {c['key'] for c in self.save_source(current, target)['columns']})
+                    continue
                 self.assertEqual(target.conditions.compare_period.start.year, 2023)
                 self.assertEqual([period.start.year for period in target.conditions.extra_compare_periods], [2024])
                 table = self.save_source(current, target)
@@ -570,21 +578,123 @@ class ExtraCompareTrendTest(unittest.TestCase):
         from backend.app.agents.conditions import check_conditions
         from backend.tests.test_agent_state import state
         # 다음 턴의 "같은 조건으로" 후속도 Redis 문맥 조건의 추가 비교 기간을 이어받는다. 직접 적은 비교 기간은 그 기간만 쓴다.
-        for question, expected in (('같은 조건으로 미국도 비교해줘', [2024]), ('미국은 2023년하고만 비교해줘', [])):
-            with self.subTest(question=question):
+        for question, comparison, requested, expected in (
+            ('같은 조건으로 미국도 비교해줘', Y(2023), True, [2024]),
+            ('같은 비교 조건으로 미국도 보여줘', None, True, [2024]),
+            ('같은 비교 조건으로 미국도 보여줘', None, None, [2024]),
+            ('미국은 2023년하고만 비교해줘', Y(2023), True, []),
+            ('같은 조건으로 미국도 보되 2023년을 기준으로 2025년 수출액을 비교해줘', Y(2023), True, []),
+            ('2023년 수출액과의 차이만 같은 조건으로 미국도 보여줘', Y(2023), True, []),
+        ):
+            with self.subTest(question=question, comparison=comparison, requested=requested):
                 current = state()
                 current.input.question = question
                 current.input.context.conditions = Conditions(period=Y(2025), compare_period=Y(2023),
                     extra_compare_periods=[Y(2024)], country_codes=['CN'])
                 current.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': question, 'slots': {
                     'countries': [{'mention': '미국', 'name': '미국'}], 'period': Y(2025),
-                    'comparison_requested': True, 'compare_period': Y(2023)}}]))
+                    'comparison_requested': requested, 'compare_period': comparison}}]))
                 [task] = current.plan.tasks
                 check_conditions(self.store, current, task.steps[0])
                 self.assertEqual(task.steps[0].status, 'DONE')
                 self.assertEqual(task.conditions.country_codes, ['US'])
                 self.assertEqual(task.conditions.compare_period.start.year, 2023)
                 self.assertEqual([p.start.year for p in task.conditions.extra_compare_periods], expected)
+
+    def test_month_comparison_distinguishes_direct_dates_from_the_basis_month(self):
+        from backend.app.agents.conditions import check_conditions
+        from backend.tests.test_agent_state import state
+
+        months = [{'start': f'2025-0{month}-01', 'end': f'2025-0{month}-01'} for month in (3, 1, 2)]
+        for question, extras in [
+            ('미국은 1월하고만 비교해줘', []),
+            ('미국은 25.01하고만 비교해줘', []),
+            ('미국은 25.1월하고만 비교해줘', []),
+            ('같은 비교 조건으로 미국도 보되 2025-01-01을 기준으로 3월 수출액을 비교해줘', []),
+            ('2025년 3월 수출액을 같은 비교 조건으로 미국도 보여줘', [2]),
+            ('같은 조건으로 미국도 비교하고 25.01% 넘는지 봐줘', [2]),
+            ('같은 조건으로 미국도 비교하고 25.01포인트만큼 늘었는지 봐줘', [2]),
+        ]:
+            with self.subTest(question=question):
+                current = state()
+                current.input.question = question
+                current.input.context.conditions = Conditions(period=months[0], compare_period=months[1],
+                    extra_compare_periods=months[2:], country_codes=['CN'])
+                current.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': question, 'slots': {
+                    'countries': [{'mention': '미국', 'name': '미국'}], 'period': months[0],
+                    'comparison_requested': True, 'compare_period': months[1]}}]))
+                [task] = current.plan.tasks
+                check_conditions(self.store, current, task.steps[0])
+                self.assertEqual(task.steps[0].status, 'DONE')
+                self.assertEqual(task.conditions.compare_period.start.month, 1)
+                self.assertEqual([period.start.month for period in task.conditions.extra_compare_periods], extras)
+
+    def test_named_basis_quarter_keeps_the_same_comparison_periods(self):
+        from backend.app.agents.conditions import check_conditions
+        from backend.tests.test_agent_state import state
+
+        quarters = [{'start': f'{year}-01-01', 'end': f'{year}-03-01'} for year in (2025, 2024, 2023)]
+        for question, extras in [
+            ('1분기 수출액을 같은 비교 조건으로 미국도 보여줘', [2023]),
+            ('같은 비교 조건으로 지난 분기 미국 수출액도 보여줘', [2023]),
+            ('같은 비교 조건으로 미국도 보여주되 2024년 1분기하고만 비교해줘', []),
+            ('2024년 1분기하고만 비교해서 미국도 같은 조건으로 보여줘', []),
+            ('같은 비교 조건으로 미국도 보여주되 2024년 1분기 수출액하고만 비교해줘', []),
+            ('같은 비교 조건으로 미국도 보되 2024년 1분기를 기준으로 2025년 1분기 수출액을 비교해줘', []),
+            ('같은 비교 조건으로 미국도 보되 2024년 1~3월을 기준으로 2025년 1분기 수출액을 비교해줘', []),
+            ('같은 비교 조건으로 미국도 보되 2024년 1월부터 3월까지의 수출액하고만 비교해줘', []),
+            ('같은 비교 조건으로 미국도 보되 2024년 1분기만을 비교해줘', []),
+            ('같은 비교 조건으로 미국도 보되 2024년 1월에서 3월 사이하고만 비교해줘', []),
+            ('같은 비교 조건으로 미국도 보되 2024-01-01~2024-03-31을 기준으로 2025년 1분기 수출액을 비교해줘', []),
+        ]:
+            with self.subTest(question=question):
+                current = state()
+                current.input.question = question
+                current.input.context.conditions = Conditions(period=quarters[0], compare_period=quarters[1],
+                    extra_compare_periods=quarters[2:], country_codes=['CN'])
+                current.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': question, 'slots': {
+                    'countries': [{'mention': '미국', 'name': '미국'}], 'period': quarters[0],
+                    'comparison_requested': True, 'compare_period': quarters[1]}}]))
+                [task] = current.plan.tasks
+                check_conditions(self.store, current, task.steps[0])
+                self.assertEqual(task.steps[0].status, 'DONE')
+                self.assertEqual([period.start.year for period in task.conditions.extra_compare_periods], extras)
+
+    def test_quarter_and_half_year_override_inherited_comparisons(self):
+        from backend.app.agents.conditions import check_conditions
+        from backend.tests.test_agent_state import state
+
+        for label, months in [('2025년 1분기', (1, 3)), ('상반기', (1, 6)), ('지난 분기', (4, 6)), ('전분기', (4, 6))]:
+            with self.subTest(label=label):
+                current = state()
+                question = f'미국은 {label}하고만 비교해줘'
+                window = {'start': '2025-07-01', 'end': '2025-09-01'}
+                first = {'start': f'2025-{months[0]:02d}-01', 'end': f'2025-{months[1]:02d}-01'}
+                current.input.question = question
+                current.input.context.conditions = Conditions(period=window, compare_period=first,
+                    extra_compare_periods=[Y(2024)], country_codes=['CN'])
+                current.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'STATISTICS', 'question': question, 'slots': {
+                    'countries': [{'mention': '미국', 'name': '미국'}], 'period': window,
+                    'comparison_requested': True, 'compare_period': first}}]))
+                [task] = current.plan.tasks
+                check_conditions(self.store, current, task.steps[0])
+                self.assertEqual(task.steps[0].status, 'DONE')
+                self.assertEqual(task.conditions.compare_period.model_dump(mode='json'), first)
+                self.assertEqual(task.conditions.extra_compare_periods, [])
+
+    def test_separate_article_product_does_not_inherit_an_unrelated_edition(self):
+        from backend.app.agents.conditions import check_conditions
+
+        self.insert_hs2017_export()
+        first, second = '2025년 HS2017 330499 수출 추이', '미국의 HS 3304 현지 이슈'
+        current = self.compound(f'{first}와 별도로 {second}를 알려줘', [
+            {'intent': 'STATISTICS', 'question': first, 'slots': {'products': ['330499'], 'period': Y(2025)}},
+            {'intent': 'LOCAL_ISSUES', 'question': second, 'slots': {'products': ['3304']}}])
+        source, article = current.plan.tasks
+        check_conditions(self.store, current, source.steps[0])
+        check_conditions(self.store, current, article.steps[0])
+        self.assertEqual(article.steps[0].status, 'DONE')
+        self.assertEqual([(h.hs_code, h.hs_ver) for h in article.conditions.hs_items], [('3304', 'HS2022')])
 
     def test_restated_hs2017_code_in_article_followup_uses_correspondence(self):
         from backend.app.agents.conditions import check_conditions
@@ -599,7 +709,8 @@ class ExtraCompareTrendTest(unittest.TestCase):
         HsCodeCorrelation.__table__.create(self.store.c)
         self.store.c.execute(self.store.t('hs_code_correlation').insert().values(old_ver='HS2017', old_code='330488',
             new_ver='HS2022', new_code='330499', relation='1:1', group_code='330499', source_edition='test'))
-        for intent, question in (('CAUSE', 'HS 330488은 왜 늘었어?'), ('LOCAL_ISSUES', 'HS 330488 현지 이슈 알려줘')):
+        for intent, question in (('CAUSE', 'HS 330488은 왜 늘었어?'), ('LOCAL_ISSUES', 'HS 330488 현지 이슈 알려줘'),
+                                 ('CAUSE', 'HS2017 330488 수출은 왜 늘었어?')):
             with self.subTest(intent=intent):
                 current = state()
                 current.input.question = question
@@ -611,6 +722,118 @@ class ExtraCompareTrendTest(unittest.TestCase):
                 check_conditions(self.store, current, task.steps[0])
                 self.assertEqual(task.steps[0].status, 'DONE', current.results.get(task.steps[0].step_id))
                 self.assertEqual([(h.hs_code, h.hs_ver) for h in task.conditions.hs_items], [('330499', 'HS2022')])
+        for product_text in ('HS2017 330488', '330488 (HS2017)'):
+            with self.subTest(product=product_text):
+                source_text = f'2025년 {product_text} 수출 추이'
+                current = self.compound(f'{source_text}와 변화 원인', [
+                    {'intent': 'STATISTICS', 'question': source_text, 'slots': {'products': ['330488'], 'period': Y(2025)}},
+                    {'intent': 'CAUSE', 'question': '330488 변화 원인', 'slots': {'products': ['330488'], 'period': Y(2025)}}])
+                source, target = current.plan.tasks
+                check_conditions(self.store, current, source.steps[0])
+                check_conditions(self.store, current, target.steps[0])
+                self.assertEqual(source.conditions.hs_items[0].hs_ver, 'HS2017')
+                self.assertEqual(target.steps[0].status, 'DONE')
+                self.assertEqual([(h.hs_code, h.hs_ver) for h in target.conditions.hs_items], [('330499', 'HS2022')])
+
+    def test_unloaded_edition_months_are_not_zero(self):
+        from backend.app.agents.conditions import check_conditions
+        from backend.tests.test_agent_state import state
+        # HS2017 행이 하나도 없는 월(HS2022만 집계)은 무거래 0달러가 아니라 미집계다. 다른 국가라도 HS2017 행이 있는 월은 0으로 채운다.
+        self.insert_hs2017_export()
+        self.store.c.execute(self.meta.tables['export_summary'].insert().values(
+            trade_month=date(2025, 2, 1), country_code='CN', hs6_code='330499', hs_ver='HS2017', amount_usd=3))
+        window = {'start': '2025-01-01', 'end': '2025-03-01'}
+        for intent, slots in (('STATISTICS', {}), ('RANKING', {'ranking_group': 'COUNTRY', 'ranking_limit': 3})):
+            with self.subTest(intent=intent):
+                current = state()
+                question = '2025년 1~3월 HS2017 330499 미국 수출액' + (' 순위' if intent == 'RANKING' else ' 추이')
+                current.input.question = question
+                current.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': intent, 'question': question, 'slots': {
+                    'products': ['330499'], 'countries': [{'mention': '미국', 'name': '미국'}], 'period': window, **slots}}]))
+                [task] = current.plan.tasks
+                check_conditions(self.store, current, task.steps[0])
+                self.assertEqual(task.steps[0].status, 'DONE', current.results.get(task.steps[0].step_id))
+                result = run_template(self.store, current.input.user_id, task, task.steps[1])
+                self.assertIn('기간 내 미집계 월이 있습니다.', result.result.limitations)
+                if intent == 'STATISTICS':
+                    self.assertEqual([r['amount_usd'] for r in result.rows], [7, 0, None])
+                    self.assertIsNone(result.rows[0]['total_usd'])
+                else:
+                    self.assertEqual([(r['country_code'], r['export_amount_usd']) for r in result.rows], [('US', 7)])
+        current = state()
+        question = '2025년 3월 HS2017 330499 미국 수출액 순위'
+        current.input.question = question
+        current.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': 'RANKING', 'question': question, 'slots': {
+            'products': ['330499'], 'countries': [{'mention': '미국', 'name': '미국'}], 'ranking_group': 'COUNTRY',
+            'ranking_limit': 3, 'period': {'start': '2025-03-01', 'end': '2025-03-01'}}}]))
+        [task] = current.plan.tasks
+        check_conditions(self.store, current, task.steps[0])
+        self.assertEqual(run_template(self.store, current.input.user_id, task, task.steps[1]).rows, [])
+        # 2월은 HS2017을 집계한 월(CN 행)이라 미국의 무거래는 확인된 0달러다. 3월은 미집계라 부분 결과로 알린다.
+        from backend.app.agents.state import Period
+        task.conditions = task.conditions.model_copy(update={'period': Period(start=date(2025, 2, 1), end=date(2025, 3, 1))})
+        result = run_template(self.store, current.input.user_id, task, task.steps[1])
+        self.assertEqual([(r['country_code'], r['export_amount_usd']) for r in result.rows], [('US', 0)])
+        self.assertIn('기간 내 미집계 월이 있습니다.', result.result.limitations)
+        from backend.app.api import trade
+        screen = trade.trends(self.store, current.input.user_id, start='2025-01', end='2025-03',
+                              hs=[{'hs_code': '330499', 'hs_ver': 'HS2017'}], save=False)
+        # 화면 API는 금액 형식을 바꾸지 않고, 그 판본을 집계하지 않은 전년 월만 비운다(STALE 경고로 바꾸지 않는다).
+        self.assertEqual([r['previous_year_export_usd'] for r in screen['items']], [None, None, None])
+        self.assertEqual(screen['meta']['freshness'], 'FRESH')
+        # 화면 순위의 전월 비교도 그 판본을 집계한 전월만 쓴다. 2024-12는 HS2017 미집계, 2025-01은 집계 월이다.
+        hs2017 = [{'hs_code': '330499', 'hs_ver': 'HS2017'}]
+        january = trade.rankings(self.store, current.input.user_id, '2025-01', '2025-01', hs=hs2017, save=False)
+        self.assertEqual(january['items'][0]['rank_status'], 'NOT_APPLICABLE')
+        february = trade.rankings(self.store, current.input.user_id, '2025-02', '2025-02', hs=hs2017, save=False)
+        self.assertEqual(february['items'][0]['rank_status'], 'NEW')
+
+    def test_linked_report_uses_the_source_edition(self):
+        from backend.app.agents.bindings import resolve
+        from backend.app.agents.conditions import check_conditions
+        from backend.app.agents.report import preview
+        # 두 판본 추이를 조회한 뒤 첫 결과로 리포트를 만들면 리포트 문장에 판본이 없어도 원본 판본으로 미리보기를 연다.
+        self.insert_hs2017_export()
+        first, second = '2025년 HS2017 330499 수출 추이', '2025년 HS2022 330499 수출 추이'
+        current = self.compound(f'{first}와 {second}를 보여주고 첫 번째 결과로 리포트 만들어줘', [
+            {'intent': 'STATISTICS', 'question': first, 'slots': {'products': ['330499'], 'period': Y(2025)}},
+            {'intent': 'STATISTICS', 'question': second, 'slots': {'products': ['330499'], 'period': Y(2025)}},
+            {'intent': 'REPORT', 'question': '첫 번째 결과로 리포트 만들기', 'source_tasks': [1]}])
+        legacy, current_edition, report = current.plan.tasks
+        for task in (legacy, current_edition):
+            check_conditions(self.store, current, task.steps[0])
+            self.save_source(current, task)
+        check_conditions(self.store, current, report.steps[0], resolve_bindings=resolve, confirm_report=preview)
+        self.assertEqual(current.pending.kind if current.pending else None, 'REPORT_CONFIRM',
+                         current.results.get(report.steps[0].step_id))
+        self.assertEqual([(h.hs_code, h.hs_ver) for h in report.conditions.hs_items], [('330499', 'HS2017')])
+
+    def test_edition_label_is_not_a_comparison_year(self):
+        from backend.app.agents.conditions import _comparison_named
+        from backend.app.agents.state import Period
+        # "HS2022 품목"의 2022는 판본이다. 비교 기간(2022년)을 직접 말한 것으로 보지 않는다.
+        year = Period(**Y(2022))
+        self.assertFalse(_comparison_named('같은 조건으로 HS2022 330499도 비교해줘', year))
+        self.assertFalse(_comparison_named('미국 HS2022 330499도 비교해줘', year))
+        self.assertTrue(_comparison_named('HS2022 330499는 2022년하고만 비교해줘', year))
+        # 품목명 속 '동기'(전동기·원동기)는 기간이 아니다. '전년 동기'·'전년동기'는 비교 기간을 말한 것이다.
+        for text in ('미국 전동기도 비교해줘', '미국 원동기 수출도 비교해줘'):
+            self.assertFalse(_comparison_named(text, year), text)
+        for text in ('미국도 전년 동기와 비교해줘', '미국도 전년동기와 비교해줘', '미국도 동기 대비 비교해줘'):
+            self.assertTrue(_comparison_named(text, year), text)
+
+    def test_rate_rounds_half_up_at_the_displayed_precision(self):
+        from backend.app.agents.verify import _rate_source_key
+        # 8,000→9,000달러는 12.5%다. 정수 표시는 13%이고 절사한 12%는 그 변화율이 아니다.
+        sums = {'new_usd': ('2025', 'US', None, None, 'EXPORT'), 'old_usd': ('2024', 'US', None, None, 'EXPORT')}
+        conditions = {'period': {'start': '2025-01', 'end': '2025-12'},
+                      'compare_period': {'start': '2024-01', 'end': '2024-12'}}
+        for shown, expected in ((12, None), (13, 'new_usd'), (12.5, 'new_usd'), (12.4, None)):
+            with self.subTest(shown=shown):
+                row = {'new_usd': 9000, 'old_usd': 8000, 'change_pct': shown}
+                self.assertEqual(_rate_source_key(row, sums, conditions), expected)
+        huge = {'new_usd': 10**20, 'old_usd': 1, 'change_pct': '1.123456789012345'}
+        self.assertIsNone(_rate_source_key(huge, sums, conditions))
 
     def test_linked_amount_analysis_without_hs2017_support_explains_scope(self):
         from backend.app.agents.bindings import resolve
@@ -1442,8 +1665,10 @@ class AnnualSqlMergeTest(unittest.TestCase):
         export_rate = rate.replace('수출액', '미국 수출액')
         self.assertTrue(check_sentence(export_rate, [wrong_direction], countries=('미국',))[0])
         self.assertFalse(check_sentence(export_rate.replace('수출액', '수입액'), [wrong_direction], countries=('미국',))[0])
-        for scope in ('미국 전체 수출액', '한국 전체 수출액'):
+        for scope in ('미국 전체 수출액', '한국 전체 수출액', '대미국 총 수출액', '대미국 수출 총액'):
             self.assertFalse(check_sentence(rate.replace('수출액', scope), [source], countries=('미국',))[0])
+        self.assertTrue(check_sentence(rate.replace('수출액', '미국 메모리 집적회로 수출 합계'), [source],
+                                       countries=('미국',))[0])
         self.assertEqual((facts['change_pct'].period, facts['change_pct'].compare_period),
                          (('2025-01', '2025-12'), ('2024-01', '2024-12')))
         # 월 표시 별칭이 있는 행은 연간 결과여도 기간 근거가 아니다.
@@ -1531,6 +1756,19 @@ class AnnualSqlMergeTest(unittest.TestCase):
         self.assertIs(digest['_annual_rate'], True)
         self.assertEqual(digest['_annual_sums']['export_2024_usd']['country_name'], '미국')
         self.assertEqual(digest['compare_period'], {'start': '2024-01', 'end': '2024-12'})
+        scope_cell = digest['_annual_sums']['export_2024_usd']
+        wide_scope = {'_annual_sums': {f'column_{i:02d}'.ljust(40, '_'): {
+            **scope_cell, 'country_name': '나'*100, 'hs_name': '품'*100} for i in range(20)}}
+        analysis.result = ToolResult(status='OK', digest={**meta, 'rows': saved['rows']})
+        services.results.save.reset_mock()
+        with patch.object(services, 'read_store'), patch.object(Services, 'trade_versions', return_value={}), \
+                patch('backend.app.agents.runtime.generated_analysis', return_value=analysis), \
+                patch('backend.app.agents.templates.condition_names', return_value=({}, {})), \
+                patch('backend.app.agents.verify.annual_sql_scope', return_value=wide_scope):
+            services._tool(current, step)
+        stored = services.results.save.call_args
+        self.assertEqual(stored.kwargs['rows'], saved['rows'])
+        self.assertIs(ToolResult.model_validate(stored.args[2].model_dump()).digest['truncated'], True)
 
 
 class ReviewFollowupTest(unittest.TestCase):
