@@ -269,6 +269,43 @@ class SimpleRankingTableTest(unittest.TestCase):
         scalar = (f"SELECT SUM(e.amount_usd) AS export_usd, (SELECT SUM(i.amount_usd) FROM import_summary i WHERE {side('i')}) "
                   f"AS import_usd FROM export_summary e WHERE {side('e')}")
         self.assertTrue(check(scalar))
+        # 같은 입력의 열끼리 비교(ex.c = ex.c)는 키를 맞춘 것이 아니다. 스칼라 하위 쿼리의 SUM은 바깥 행을 묶지 않는다.
+        self.assertRaises(ValueError, check, by_country.format('ex.country_code = ex.country_code'))
+        scalar_rows = ("WITH ex AS (SELECT e.trade_month, e.country_code, (SELECT SUM(x.amount_usd) FROM export_summary x "
+                       f"WHERE {side('x')} AND x.trade_month = e.trade_month) AS amount FROM export_summary e WHERE {side('e')}), "
+                       + cte('im', 'i', 'import_summary', 'i.trade_month')
+                       + " SELECT SUM(ex.amount) AS export_usd, SUM(im.amount) AS import_usd FROM ex JOIN im "
+                         "ON im.trade_month = ex.trade_month")
+        self.assertRaises(ValueError, check, scalar_rows)
+        # GROUP BY 위치 번호와, 집계 CTE를 그대로 감싼 조회는 키를 이어받아 받는다.
+        self.assertTrue(check(same.replace('GROUP BY e.trade_month, e.country_code', 'GROUP BY 1, 2')))
+        wrapped = ("WITH ex0 AS (SELECT e.trade_month, SUM(e.amount_usd) AS amount FROM export_summary e "
+                   f"WHERE {side('e')} GROUP BY e.trade_month), ex AS (SELECT w.trade_month, w.amount FROM ex0 w), "
+                   + cte('im', 'i', 'import_summary', 'i.trade_month')
+                   + " SELECT SUM(ex.amount) AS export_usd, SUM(im.amount) AS import_usd FROM ex JOIN im "
+                     "ON im.trade_month = ex.trade_month")
+        self.assertTrue(check(wrapped))
+        # 감싼 조회가 키 열 이름을 바꿔도 같은 키다. 키를 빼고 감싸면(금액만) 월 행을 정하지 못해 거부한다.
+        renamed = wrapped.replace('SELECT w.trade_month, w.amount FROM ex0 w', 'SELECT w.trade_month AS month, w.amount FROM ex0 w'
+                                  ).replace('ON im.trade_month = ex.trade_month', 'ON im.trade_month = ex.month')
+        self.assertTrue(check(renamed))
+        # 월 번호(MONTH)로 잇는 등식은 양쪽이 한 해 안의 기간일 때만 키다. 여러 해면 2024년 1월과 2025년 1월이 이어진다.
+        def by_month_number(start, end):
+            def monthly(name, alias, table):
+                return (f"{name} AS (SELECT {alias}.trade_month, SUM({alias}.amount_usd) AS amount FROM {table} {alias} "
+                        f"WHERE {alias}.country_code IN ('US','CN') AND {alias}.hs6_code = '330499' AND {alias}.hs_ver = 'HS2022' "
+                        f"AND {alias}.trade_month BETWEEN '{start}' AND '{end}' GROUP BY {alias}.trade_month)")
+            return ("WITH " + monthly('ex', 'e', 'export_summary') + ", " + monthly('im', 'i', 'import_summary')
+                    + " SELECT SUM(ex.amount) AS export_usd, SUM(im.amount) AS import_usd FROM ex JOIN im "
+                      "ON MONTH(im.trade_month) = MONTH(ex.trade_month)")
+        wide = Conditions(country_codes=['US', 'CN'], hs_items=[{'hs_code': '330499', 'hs_ver': 'HS2022'}],
+                          period={'start': '2024-01-01', 'end': '2025-12-01'})
+        months_check = lambda sql: validate_sql(SqlDraft(sql=sql, columns=columns, summary='', unsupported=None), wide)
+        self.assertTrue(months_check(by_month_number('2025-01-01', '2025-12-31')))
+        with self.assertRaisesRegex(ValueError, '합산'):
+            months_check(by_month_number('2024-01-01', '2025-12-31'))
+        self.assertRaises(ValueError, check, wrapped.replace('SELECT w.trade_month, w.amount FROM ex0 w',
+                                                             'SELECT w.amount, w.amount * 2 AS twice FROM ex0 w'))
         # CTE를 한 단계 거쳐 수출입 표를 읽어도 같은 규칙이다(원본 행을 넘기는 CTE는 원본과 같다).
         im_view = ("WITH im_rows AS (SELECT i.trade_month, i.hs6_code, i.amount_usd FROM import_summary i "
                    f"WHERE {side('i')}), im_view AS (SELECT r.trade_month, r.hs6_code, r.amount_usd FROM im_rows r) "
@@ -316,6 +353,11 @@ class CompareYearsSplitTest(unittest.TestCase):
         self.assertEqual(slots.compare_period.model_dump(mode='json'), {'start': '2023-01-01', 'end': '2023-12-01'})
         self.assertEqual([p.model_dump(mode='json') for p in slots.extra_compare_periods],
                          [{'start': '2024-01-01', 'end': '2024-12-01'}])
+
+    def test_spaced_edition_is_not_a_comparison_year(self):
+        slots = self.slots('2025년 HS 2022 330499 일본 수출액을 2021년과 2024년 각각 비교해줘',
+                           {'start': '2021-01-01', 'end': '2024-12-01'})
+        self.assertEqual([p.start.year for p in [slots.compare_period, *slots.extra_compare_periods]], [2021, 2024])
 
     def test_two_digit_years_are_split(self):
         slots = self.slots('25년을 기준으로 23년 그리고 24년 총 3개년을 월별로 나란히 비교해보자.',
@@ -930,6 +972,129 @@ class ExtraCompareTrendTest(unittest.TestCase):
             self.assertFalse(_comparison_named(text, year), text)
         for text in ('미국도 전년 동기와 비교해줘', '미국도 전년동기와 비교해줘', '미국도 동기 대비 비교해줘'):
             self.assertTrue(_comparison_named(text, year), text)
+
+    def mapped_hs(self, rows, extra_hs=()):
+        from backend.app.models.hs_code_correlation import HsCodeCorrelation
+        hs = self.meta.tables['hs_code']
+        template = dict(self.store.c.execute(hs.select().where(hs.c.hs_code == '330499')).mappings().first())
+        if hs.c.depth.computed is not None:
+            template.pop('depth')
+        for code, ver in extra_hs:
+            self.store.c.execute(hs.insert().values({**template, 'hs_code': code, 'hs_ver': ver}))
+        HsCodeCorrelation.__table__.create(self.store.c)
+        self.store.c.execute(self.store.t('hs_code_correlation').insert(), [
+            dict(old_ver='HS2017', old_code=old, new_ver='HS2022', new_code=new, relation='1:1', group_code=new,
+                 source_edition='test') for old, new in rows])
+
+    def article(self, question, tasks=None, context=None):
+        from backend.app.agents.conditions import check_conditions
+        from backend.tests.test_agent_state import state
+        current = state()
+        current.input.question = question
+        if context:
+            current.input.context.conditions = Conditions(period=Y(2025), **context)
+        current.plan, _ = build_plan(PlannerOutput(tasks=tasks))
+        for task in current.plan.tasks:
+            check_conditions(self.store, current, task.steps[0])
+        return current
+
+    def test_hs4_article_conversion_collects_child_correspondences(self):
+        # 대응표는 HS6 단위다. HS2017 3304의 하위 품목이 HS2022 3303·3304로 갈라지면 3304로 확정하지 않고 묻는다.
+        self.mapped_hs([('330410', '330310'), ('330499', '330499')])
+        current = self.article('그 품목 변화 원인', [{'intent': 'CAUSE', 'question': '그 품목 변화 원인',
+                                                    'slots': {'period': Y(2025)}}],
+                               {'country_codes': ['US'], 'hs_items': [{'hs_code': '3304', 'hs_ver': 'HS2017'}]})
+        self.assertEqual(current.pending.kind if current.pending else None, 'HS_ITEM')
+        self.store.c.execute(self.store.t('hs_code_correlation').delete().where(
+            self.store.t('hs_code_correlation').c.old_code == '330410'))
+        current = self.article('그 품목 변화 원인', [{'intent': 'CAUSE', 'question': '그 품목 변화 원인',
+                                                    'slots': {'period': Y(2025)}}],
+                               {'country_codes': ['US'], 'hs_items': [{'hs_code': '3304', 'hs_ver': 'HS2017'}]})
+        [task] = current.plan.tasks
+        self.assertEqual([(h.hs_code, h.hs_ver) for h in task.conditions.hs_items], [('3304', 'HS2022')])
+
+    def test_spelled_out_and_per_subtask_hs2017_codes_use_correspondence(self):
+        self.mapped_hs([('330488', '330499'), ('330499', '330491')],
+                       extra_hs=[('330488', 'HS2017'), ('330499', 'HS2017'), ('330491', 'HS2022')])
+        # "HS2017 기준으로 HS 330488": 코드 앞에 풀어 쓴 판본도 그 코드의 판본이다.
+        question = 'HS2017 기준으로 HS 330488 현지 이슈 알려줘'
+        current = self.article(question, [{'intent': 'LOCAL_ISSUES', 'question': question,
+                                           'slots': {'products': ['330488'], 'period': Y(2025)}}])
+        [task] = current.plan.tasks
+        self.assertEqual(task.steps[0].status, 'DONE', current.results.get(task.steps[0].step_id))
+        self.assertEqual([(h.hs_code, h.hs_ver) for h in task.conditions.hs_items], [('330499', 'HS2022')])
+        # 복합 질문은 하위 질문에 적은 판본을 쓴다. 추이의 HS2022 330499와 현지 이슈의 HS2017 330499(→330491)를 섞지 않는다.
+        trend, issues = '2025년 HS2022 330499 수출 추이', 'HS2017 330499 현지 이슈'
+        current = self.article(f'{trend}와 {issues}', [
+            {'intent': 'STATISTICS', 'question': trend, 'slots': {'products': ['330499'], 'period': Y(2025)}},
+            {'intent': 'LOCAL_ISSUES', 'question': issues, 'slots': {'products': ['330499'], 'period': Y(2025)}}])
+        first, second = current.plan.tasks
+        self.assertEqual([(h.hs_code, h.hs_ver) for h in first.conditions.hs_items], [('330499', 'HS2022')])
+        self.assertEqual([(h.hs_code, h.hs_ver) for h in second.conditions.hs_items], [('330491', 'HS2022')])
+
+    def test_named_comparison_before_the_date_and_spaced_edition(self):
+        from backend.app.agents.conditions import _comparison_named
+        from backend.app.agents.state import Period
+        # "비교는 2023년만"처럼 날짜 앞에서 비교 대상을 소개해도 그 기간을 직접 지정한 것이다.
+        self.assertTrue(_comparison_named('같은 조건으로 미국도 보되 비교는 2023년만', Period(**Y(2023))))
+        self.assertTrue(_comparison_named('같은 조건으로 미국도 보되 비교 연도는 2023년', Period(**Y(2023))))
+
+    def test_comparison_base_must_be_fixed_before_checking_a_rate(self):
+        from backend.app.agents.verify import inspect_sentence, snapshot_evidence
+        # 2024년 대비 +20%, 2023년 대비 -20%인 결과에서 기준을 생략한 증감률은 어느 비교인지 몰라 검증하지 않는다.
+        rows = [dict(name='부품', country_name='미국', hs_code='123456', hs_ver='HS2022', country_code='US',
+                     month=f'2025-{m:02}', total_usd=120, compare_total_usd=100, change_pct=20,
+                     compare2_total_usd=150, change2_pct=-20) for m in range(1, 13)]
+        payload = dict(meta={'kind': 'TREND', 'extra_compare_periods': [{'start': '2023-01', 'end': '2023-12'}]},
+                       rows=rows, conditions={'trade_flow': 'EXPORT', 'period': {'start': '2025-01', 'end': '2025-12'},
+                                              'compare_period': {'start': '2024-01', 'end': '2024-12'}})
+        source = [snapshot_evidence(payload)]
+        check = lambda sentence: inspect_sentence(sentence, source, countries=['미국'])[0]
+        for sentence in ('미국 부품 수출은 20% 증가했습니다.', '미국 부품 수출은 20% 감소했습니다.'):
+            self.assertFalse(check(sentence), sentence)
+        self.assertTrue(check('미국 부품 수출은 2024년 대비 20% 증가했습니다.'))
+        self.assertTrue(check('미국 부품 수출은 2023년 대비 20% 감소했습니다.'))
+        # 순위 표의 전년 대비 +5%와 전월 대비 -5%도 비교 기준이 둘이다. 기준을 적은 문장만 검증한다.
+        ranking = [snapshot_evidence(dict(meta={'kind': 'RANKING', 'group': 'COUNTRY'}, conditions={
+            'trade_flow': 'EXPORT', 'period': {'start': '2025-03', 'end': '2025-03'}}, rows=[dict(
+                rank=1, country_code='US', country_name='미국', export_amount_usd=100, yoy_pct=5.0, mom_pct=-5.0)]))]
+        ranked = lambda sentence: inspect_sentence(sentence, ranking, countries=['미국'])[0]
+        for sentence in ('미국 수출은 5% 증가했습니다.', '미국 수출은 5% 감소했습니다.'):
+            self.assertFalse(ranked(sentence), sentence)
+        self.assertTrue(ranked('미국 수출은 전년 대비 5% 증가했습니다.'))
+        self.assertTrue(ranked('미국 수출은 전월 대비 5% 감소했습니다.'))
+        # 추이표의 2024년 대비와 순위표의 2025년 전년 대비는 같은 비교 기간이라, 두 표가 함께 뒷받침해도 검증한다.
+        trend = snapshot_evidence(dict(meta={'kind': 'TREND'}, rows=[dict(
+            country_name='미국', country_code='US', month=f'2025-{m:02}', amount_usd=10, total_usd=105,
+            compare_total_usd=100, change_pct=5.0) for m in range(1, 13)], conditions={
+                'trade_flow': 'EXPORT', 'period': {'start': '2025-01', 'end': '2025-12'},
+                'compare_period': {'start': '2024-01', 'end': '2024-12'}}))
+        annual_rank = snapshot_evidence(dict(meta={'kind': 'RANKING', 'group': 'COUNTRY'}, rows=[dict(
+            rank=1, country_code='US', country_name='미국', export_amount_usd=105, yoy_pct=5.0)], conditions={
+                'trade_flow': 'EXPORT', 'period': {'start': '2025-01', 'end': '2025-12'}}))
+        for sentence in ('미국 수출은 전년 대비 5% 증가했습니다.', '미국 수출은 5% 증가했습니다.'):
+            with self.subTest(sentence=sentence):
+                self.assertTrue(inspect_sentence(sentence, [trend, annual_rank], countries=['미국'])[0])
+
+    def test_monthly_change_does_not_mix_editions(self):
+        from backend.app.agents.verify import inspect_sentence, snapshot_evidence
+        # HS2017 1월 100달러와 HS2022 2월 200달러를 이어 "증가"로 검증하지 않는다(HS2022는 350→200 감소).
+        base = dict(name='부품', country_name='미국', hs_code='123456', country_code='US')
+        rows = [dict(base, hs_ver='HS2017', month='2025-01', amount_usd=100),
+                dict(base, hs_ver='HS2022', month='2025-01', amount_usd=350),
+                dict(base, hs_ver='HS2022', month='2025-02', amount_usd=200)]
+        payload = dict(meta={'kind': 'TREND'}, rows=rows, conditions={
+            'trade_flow': 'EXPORT', 'period': {'start': '2025-01', 'end': '2025-02'}})
+        source = [snapshot_evidence(payload)]
+        for sentence in ('미국 부품 수출은 HS2017 기준 1월 100달러, HS2022 기준 2월 200달러로 늘었습니다.',
+                         'HS2017 미국 부품 수출은 1월 100달러, HS2022 미국 부품 수출은 2월 200달러로 증가했습니다.'):
+            with self.subTest(sentence=sentence):
+                ok, checks = inspect_sentence(sentence, source, countries=['미국'])
+                self.assertTrue(all(c.matches for c in checks[:2]))   # 금액 자체는 각 판본에서 맞다.
+                self.assertFalse(ok)
+        # 같은 판본의 두 달은 그대로 대조한다(HS2022 350→200은 감소).
+        self.assertTrue(inspect_sentence('HS2022 기준 미국 부품 수출은 1월 350달러, 2월 200달러로 줄었습니다.',
+                                         source, countries=['미국'])[0])
 
     def test_rate_rounds_half_up_at_the_displayed_precision(self):
         from backend.app.agents.verify import _rate_source_key
