@@ -395,6 +395,55 @@ class SimpleRankingTableTest(unittest.TestCase):
             validate_sql(SqlDraft(sql=calendar(months('UNION ALL')), columns=calendar_columns, summary='',
                                   unsupported=None), conditions)
 
+    def test_join_keys_follow_cte_aliases_join_steps_and_correlated_references(self):
+        from backend.app.agents.sql import validate_sql, missing_periods
+        from backend.app.agents.state import SqlDraft
+        conditions = Conditions(country_codes=['US', 'CN'], hs_items=[{'hs_code': '330499', 'hs_ver': 'HS2022'}],
+                                period=Y(2025))
+        scope = ("{a}.country_code IN ('US','CN') AND {a}.hs6_code = '330499' AND {a}.hs_ver = 'HS2022' "
+                 "AND {a}.trade_month BETWEEN '2025-01-01' AND '2025-12-31'")
+        def check(sql, *keys):
+            columns = [{'key': k, 'label': k, 'type': 'number', 'unit': 'USD'} for k in keys]
+            return validate_sql(SqlDraft(sql=sql, columns=columns, summary='', unsupported=None), conditions)
+        # CTE 열 별칭: (month, trade_month)로 내면 바깥의 trade_month는 금액이다. 금액끼리 잇는 조인은 키가 아니다.
+        def aliased(name, a, table):
+            return (f"{name}(month, trade_month) AS (SELECT {a}.trade_month, SUM({a}.amount_usd) FROM {table} {a} "
+                    f"WHERE {scope.format(a=a)} GROUP BY {a}.trade_month)")
+        head = 'WITH ' + aliased('ex', 'e', 'export_summary') + ', ' + aliased('im', 'i', 'import_summary')
+        select = ' SELECT SUM(ex.trade_month) AS export_usd, SUM(im.trade_month) AS import_usd FROM ex JOIN im '
+        with self.assertRaisesRegex(ValueError, '합산'):
+            check(head + select + 'ON im.trade_month = ex.trade_month', 'export_usd', 'import_usd')
+        self.assertTrue(check(head + select + 'ON im.month = ex.month', 'export_usd', 'import_usd'))
+        # 국가 일치 조건을 다음 LEFT JOIN에 두면 앞 조인(월만)의 중복을 풀지 못한다. 같은 조인에 두면 받는다.
+        def by_country(name, a, table):
+            return (f"{name} AS (SELECT {a}.trade_month, {a}.country_code, SUM({a}.amount_usd) AS amount FROM {table} {a} "
+                    f"WHERE {scope.format(a=a)} GROUP BY {a}.trade_month, {a}.country_code)")
+        two = ('WITH ' + by_country('ex', 'e', 'export_summary') + ', ' + by_country('im', 'i', 'import_summary')
+               + ", cal AS (SELECT 'US' AS country_code UNION SELECT 'CN')"
+               + ' SELECT SUM(ex.amount) AS export_usd, SUM(im.amount) AS import_usd FROM ex JOIN im ON im.trade_month = ex.trade_month')
+        with self.assertRaisesRegex(ValueError, '합산'):
+            check(two + ' LEFT JOIN cal ON cal.country_code = ex.country_code AND im.country_code = ex.country_code',
+                  'export_usd', 'import_usd')
+        self.assertTrue(check(two + ' AND im.country_code = ex.country_code', 'export_usd', 'import_usd'))
+        # 상관 서브쿼리 안의 별칭 없는 열이 바깥의 반복 금액을 가리키면 그 SUM도 반복 합산이다.
+        monthly = ("ex AS (SELECT e.trade_month, SUM(e.amount_usd) AS amount FROM export_summary e WHERE "
+                   + scope.format(a='e') + " GROUP BY e.trade_month)")
+        total = "tot AS (SELECT SUM(t.amount_usd) AS repeated FROM import_summary t WHERE " + scope.format(a='t') + ")"
+        joined = "j AS (SELECT ex.trade_month, ex.amount, tot.repeated FROM ex JOIN tot ON 1 = 1)"
+        with self.assertRaisesRegex(ValueError, '반복 합산'):
+            check(f"WITH {monthly}, {total}, {joined} SELECT SUM((SELECT repeated FROM country c "
+                  "WHERE c.country_code = 'US')) AS import_usd FROM j", 'import_usd')
+        # 선언만 하고 참조하지 않은 CTE의 기간은 결과에 없다. 2023·2024년은 누락이다.
+        periods = Conditions(country_codes=['US'], period=Y(2025), compare_period=Y(2023), extra_compare_periods=[Y(2024)])
+        year = ("FROM export_summary e WHERE e.country_code = 'US' AND e.hs_ver = 'HS2022' "
+                "AND e.trade_month BETWEEN '{0}-01-01' AND '{0}-12-31'")
+        unused = (f"WITH y23 AS (SELECT SUM(e.amount_usd) AS v {year.format(2023)}), "
+                  f"y24 AS (SELECT SUM(e.amount_usd) AS v {year.format(2024)}) SELECT SUM(e.amount_usd) AS y2025 {year.format(2025)}")
+        self.assertEqual([p.start.year for p in missing_periods(unused, periods)], [2023, 2024])
+        used = unused.replace('SELECT SUM(e.amount_usd) AS y2025', 'SELECT (SELECT v FROM y23) AS a, (SELECT v FROM y24) AS b, '
+                                                                  'SUM(e.amount_usd) AS y2025')
+        self.assertEqual(missing_periods(used, periods), [])
+
     def test_generated_sql_missing_a_requested_period_is_regenerated_or_partial(self):
         from unittest.mock import MagicMock
         from backend.app.agents.sql import generated_analysis, missing_periods
