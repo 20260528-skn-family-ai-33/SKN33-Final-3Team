@@ -40,6 +40,8 @@ button.reset{background:none;border:0;padding:0;margin:0;font:inherit;color:inhe
 .input.select select{appearance:none;-webkit-appearance:none;cursor:pointer;font-weight:700;padding-right:24px}
 .input.select svg{position:absolute;right:16px;pointer-events:none}
 .select-prefix{font-size:13px;color:var(--sub2);flex:none}
+/* 비밀번호 칸은 화면의 '보기/숨기기' 버튼을 쓴다. Edge가 자체로 붙이는 눈 아이콘·지우기 버튼은 숨긴다(#120) */
+.input input[type=password]::-ms-reveal,.input input[type=password]::-ms-clear{display:none}
 .field-err{font-size:12px;font-weight:700;color:var(--red-d);margin-top:6px}
 .field-ok{font-size:12px;font-weight:700;color:var(--ok);margin-top:6px}
 .opt{cursor:pointer;user-select:none}

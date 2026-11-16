@@ -4,6 +4,7 @@ from datetime import date
 from sqlalchemy import select, update
 from backend.app.api.common import require, now, clean, mask_text, page_info, percentage, ApiError, digest
 from backend.app.api import jobs, trade
+from backend.app.api.results import answer_labels
 from backend.app.api.accounts import validate_scope, interests
 
 
@@ -31,7 +32,7 @@ def messages(store,uid,identity,page=1,size=20):
     t=store.t('chat_message'); stmt=select(t).where(t.c.session_id==identity)
     rows=store.rows(stmt.order_by(t.c.message_id).offset((page-1)*size).limit(size))
     return {'session':session_view(session),'items':[{'message_id':str(r['message_id']),'role':r['role'],
-        'content_masked':r['content_masked'],'answer':(r['result_json'] or {}).get('answer'),
+        'content_masked':r['content_masked'],'answer':answer_labels((r['result_json'] or {}).get('answer')),
         'job':view_job(j) if (j:=jobs._chat_job(r)) else None,'created_at':r['created_at']} for r in rows],
         'page':page_info(page,size,store.count(stmt))}
 
@@ -48,7 +49,7 @@ def view_job(row):
                         'action':'SELECT_ITEM' if prompt['type']=='HS_SELECTION' else 'USE_INTERESTS' if c['choice_id']=='APPLY' else 'DECLINE_INTERESTS'} for c in prompt['choices']]}
     return {'job_id':str(row['job_id']),'session_id':str(row['target_key']),
         'status':p.get('status',row['status']),'step':p.get('step','CONTEXT'),
-        'clarification':prompt,'answer':p.get('answer'),'error':p.get('error'),
+        'clarification':prompt,'answer':answer_labels(p.get('answer')),'error':p.get('error'),
         'clarification_history':row.get('payload_json',{}).get('clarification_history',[]),
         'progress':row.get('agent',{}).get('progress'),
         'round_started_at':row.get('agent',{}).get('round_received_at'),

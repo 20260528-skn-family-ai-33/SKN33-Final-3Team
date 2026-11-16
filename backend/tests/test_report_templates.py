@@ -333,7 +333,8 @@ class OnDemandTest(unittest.TestCase):
         self.assertIn('<th class="r">분석 기간 수출액</th>', html)          # 주요 수출국 표
         self.assertIn('<th class="r">비교 기간 수출액</th>', html)
         self.assertIn('국가별 수출액<small>분석 기간 vs 비교 기간', html)   # 주요 수출국 막대 소제목
-        self.assertIn('<th>월</th><th class="r">분석 기간</th><th class="r">비교 기간</th>', html)   # 월별 추이 표
+        # 월별 추이 표: 값이 금액이라 '수출액'까지 쓴다(#120). 반쪽 너비라 두 줄로 나눈다
+        self.assertIn('<th style="white-space:nowrap">월</th><th class="r">분석 기간<br>수출액</th><th class="r">비교 기간<br>수출액</th>', html)
         self.assertIn('74.10', html)                                         # 비교 수치(전년 합계)는 그대로
 
     def test_long_country_names_keep_promising_page_above_footer(self):
