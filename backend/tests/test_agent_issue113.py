@@ -304,6 +304,38 @@ class SimpleRankingTableTest(unittest.TestCase):
         self.assertTrue(months_check(by_month_number('2025-01-01', '2025-12-31')))
         with self.assertRaisesRegex(ValueError, '합산'):
             months_check(by_month_number('2024-01-01', '2025-12-31'))
+        one_year = by_month_number('2025-01-01', '2025-12-31')
+        on = 'ON MONTH(im.trade_month) = MONTH(ex.trade_month)'
+        # (1) YEAR()·QUARTER()는 한 해 안에서도 여러 달을 한 값으로 묶어 월별 결과를 서로 곱한다.
+        for fn in ('YEAR', 'QUARTER'):
+            with self.subTest(function=fn), self.assertRaisesRegex(ValueError, '합산'):
+                months_check(one_year.replace(on, f'ON {fn}(im.trade_month) = {fn}(ex.trade_month)'))
+        # 연·월을 모두 담은 DATE_FORMAT은 여러 해에서도 월을 하나로 정한다.
+        self.assertTrue(months_check(by_month_number('2024-01-01', '2025-12-31').replace(
+            on, "ON DATE_FORMAT(im.trade_month, '%Y-%m') = DATE_FORMAT(ex.trade_month, '%Y-%m')")))
+        # (2) 하한 조건에 OR 기간 조건을 더하면 실제로는 두 해를 읽는다. 한 해로 보지 않는다.
+        def or_period(alias):
+            return (f"{alias}.trade_month >= '2024-01-01' AND ({alias}.trade_month BETWEEN '2024-01-01' AND '2024-12-31' "
+                    f"OR {alias}.trade_month BETWEEN '2025-01-01' AND '2025-12-31')")
+        lower_or = one_year
+        for alias in ('e', 'i'):
+            lower_or = lower_or.replace(f"{alias}.trade_month BETWEEN '2025-01-01' AND '2025-12-31'", or_period(alias))
+        self.assertNotEqual(lower_or, one_year)
+        with self.assertRaisesRegex(ValueError, '합산'):
+            months_check(lower_or)
+        # (3) 월별 결과끼리 이은 뒤 전체 합계 CTE를 더 붙여 다시 SUM하면 합계가 월 수만큼 반복된다.
+        total = ("tot AS (SELECT SUM(t.amount_usd) AS amount FROM import_summary t WHERE t.country_code IN ('US','CN') "
+                 "AND t.hs6_code = '330499' AND t.hs_ver = 'HS2022' AND t.trade_month BETWEEN '2025-01-01' AND '2025-12-31')")
+        base = one_year.replace(on, 'ON im.trade_month = ex.trade_month')
+        three = base.replace(' SELECT SUM(ex.amount)', ', ' + total + ' SELECT SUM(ex.amount)').replace(
+            'SUM(im.amount) AS import_usd', 'SUM(tot.amount) AS import_usd')
+        for join in ('JOIN tot ON 1 = 1', 'JOIN tot ON tot.amount IS NOT NULL'):
+            with self.subTest(join=join), self.assertRaisesRegex(ValueError, '반복 합산'):
+                months_check(three + ' ' + join)
+        # 합계를 다시 집계하지 않고 행마다 나누기만 하면(월별 비중) 반복 합산이 아니다.
+        ratio = (base.split(', im AS')[0] + ', ' + total
+                 + " SELECT ex.amount AS export_usd, ex.amount / tot.amount AS import_usd FROM ex JOIN tot ON 1 = 1")
+        self.assertTrue(months_check(ratio))
         self.assertRaises(ValueError, check, wrapped.replace('SELECT w.trade_month, w.amount FROM ex0 w',
                                                              'SELECT w.amount, w.amount * 2 AS twice FROM ex0 w'))
         # CTE를 한 단계 거쳐 수출입 표를 읽어도 같은 규칙이다(원본 행을 넘기는 CTE는 원본과 같다).
@@ -338,6 +370,41 @@ class SimpleRankingTableTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '집계'):
             validate_sql(SqlDraft(sql=calendar(months('UNION ALL')), columns=calendar_columns, summary='',
                                   unsupported=None), conditions)
+
+    def test_generated_sql_missing_a_requested_period_is_regenerated_or_partial(self):
+        from unittest.mock import MagicMock
+        from backend.app.agents.sql import generated_analysis, missing_periods
+        from backend.app.agents.state import SqlDraft
+        from backend.app.api.config import Settings
+        # 2025·2023·2024년을 요청했는데 2025년만 거른 SQL은 완료로 두지 않는다: 다시 만들고, 끝까지 빠지면 누락 기간을 밝힌 부분 결과다.
+        conditions = Conditions(country_codes=['US'], period=Y(2025), compare_period=Y(2023), extra_compare_periods=[Y(2024)])
+        base = "FROM export_summary e WHERE e.country_code = 'US' AND e.hs_ver = 'HS2022' AND "
+        only = SqlDraft(sql="SELECT SUM(e.amount_usd) AS y2025 " + base + "e.trade_month BETWEEN '2025-01-01' AND '2025-12-31'",
+                        columns=[{'key': 'y2025', 'label': '2025년', 'type': 'number', 'unit': 'USD'}], summary='s', unsupported=None)
+        full = SqlDraft(sql="SELECT YEAR(e.trade_month) AS y, SUM(e.amount_usd) AS total " + base
+                            + "e.trade_month BETWEEN '2023-01-01' AND '2025-12-31' GROUP BY YEAR(e.trade_month) ORDER BY y",
+                        columns=[{'key': 'y', 'label': '연도', 'type': 'number', 'unit': None},
+                                 {'key': 'total', 'label': '합계', 'type': 'number', 'unit': 'USD'}], summary='s', unsupported=None)
+        self.assertEqual([p.start.year for p in missing_periods(only.sql, conditions)], [2023, 2024])
+        self.assertEqual(missing_periods(full.sql, conditions), [])
+
+        def run(drafts):
+            client = MagicMock()
+            client.parse.side_effect = drafts
+            execution = MagicMock()
+            execution.call.side_effect = lambda name, seconds, action, **kwargs: action(None)
+            step = SimpleNamespace(attempts=0)
+            task = SimpleNamespace(custom_query='연도별 합계', conditions=conditions)
+            with patch('backend.app.agents.sql.schema_for', return_value=[]), \
+                    patch('backend.app.agents.sql.execute_readonly', side_effect=lambda e, d, t, c: ([{'v': 1}], d.sql)):
+                result = generated_analysis(None, Settings({}), client, execution, task, finish_reserve=0,
+                                            latest_month='2025-12', step=step)
+            return step.attempts, result.result
+        attempts, result = run([only, full])
+        self.assertEqual((attempts, result.status, result.completeness, result.limitations), (2, 'OK', 'COMPLETE', []))
+        attempts, result = run([only, only, only])
+        self.assertEqual((attempts, result.status, result.completeness), (3, 'OK', 'PARTIAL'))
+        self.assertIn('2023년, 2024년', result.limitations[0])
 
 
 class CompareYearsSplitTest(unittest.TestCase):
