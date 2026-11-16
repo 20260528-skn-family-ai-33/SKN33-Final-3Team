@@ -840,6 +840,7 @@ def _annual_sum_filters(scope, trade, *, nationwide=False, window_set=None):
     if not select.args.get('where'):
         return {}
     joins = select.args.get('joins') or []
+    role = False
     if joins:
         join = joins[0]
         country = join.this
@@ -848,7 +849,6 @@ def _annual_sum_filters(scope, trade, *, nationwide=False, window_set=None):
                 or scope.sources.get(country.alias_or_name) is not country):
             return {}
         linked = False
-        role = False
         for term in _and_terms(join.args.get('on')):
             if (isinstance(term, exp.EQ) and all(isinstance(c, exp.Column) for c in (term.left, term.right))
                     and {(c.table, c.name) for c in (term.left, term.right)} ==
@@ -864,11 +864,13 @@ def _annual_sum_filters(scope, trade, *, nationwide=False, window_set=None):
             role = True
         if not linked:
             return {}
-    if nationwide and not joins:
-        return {}
     filters = {}
     bounds = {}
     for term in _and_terms(select.args['where'].this):
+        if (nationwide and not joins and not role and _non_country_subquery(term)
+                and _column(term.this.this, 'country_code', {trade})):
+            role = True
+            continue
         if window_set is not None and isinstance(term, exp.Or):
             parts = list(term.flatten())
             items = [_literal_filter(part) for part in parts]

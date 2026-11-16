@@ -304,7 +304,11 @@ def _trend_annual_cell(check, cells, prepared):
         elif period(source.get('compare_period')) == window:
             key = 'compare_total_usd'
         else:
-            continue
+            key = next((f'compare{n}_total_usd' for n, extra in
+                        enumerate(source.get('extra_compare_periods') or [], start=2)
+                        if period(extra) == window), None)
+            if key is None:
+                continue
         # Select a series by target, never by value. Use codes when present so
         # a duplicate row lacking a display name still participates in the check.
         groups = {}
@@ -317,7 +321,9 @@ def _trend_annual_cell(check, cells, prepared):
             groups.setdefault(series, []).append((index, ('rows', str(n), key)))
             names = frozenset(str(row[k]) for k in ('country_name','country_code','hs_code','name') if row.get(k))
             targets, _ = bind_targets(names, prepared.catalog)
-            if check.claim.targets <= targets:
+            # 문장이 판본을 지정하면(HS2022 기준) 같은 품목의 다른 판본 행은 후보가 아니다.
+            if check.claim.targets <= targets and (not check.claim.editions
+                                                   or check.claim.editions == {row.get('hs_ver') or 'HS2022'}):
                 eligible.add(series)
         if not eligible:
             continue
@@ -460,9 +466,10 @@ def _matching_cells(claim, facts, sources, catalog):
         # 생성 SQL의 GROUP BY 행은 문장에도 그 대상을 써야 한다. 연간 합계·차액 칸은 WHERE 필터로 대상이 정해진 칸이라 제외한다.
         sql_group = (source.get('kind') == 'LLM_SQL' and fact.stored_targets
                      and not fact.annual_sql_sum and not fact.period_difference)
-        if fact.annual_sql_rate and re.search(r'전체|전\s*세계|모든', claim.text):
+        if fact.annual_sql_rate and _WIDE_SCOPE.search(claim.text):
+            # 넓은 범위 표현이어도 문장이 그 칸의 품목·국가를 직접 밝히면("미국 메모리 반도체 수출 합계") 같은 범위다.
             product_scoped, country_scoped = dimensions(fact.stored_targets)
-            if product_scoped or (country_scoped and not required_dimensions[1]):
+            if (product_scoped and not required_dimensions[0]) or (country_scoped and not required_dimensions[1]):
                 continue
         if not fact.annual_sql_rate and (check_dimensions or sql_group) and dimensions(fact.stored_targets) != required_dimensions:
             continue
@@ -493,10 +500,16 @@ def _matching_cells(claim, facts, sources, catalog):
     return tuple(matches) if len(inferred_axes) <= 1 and len(editions) <= 1 else ()
 
 
+# 연간 증감률 칸보다 넓은 범위를 말하는 표현("전체", "총 수출액", "수출 총액", "합계"). 품목·국가로 거른 칸은 근거가 아니다.
+_WIDE_SCOPE = re.compile(r'전체|전\s*세계|모든|총\s*(?:수출|수입|교역|금액)|(?:수출|수입|교역)\s*총|총액|합계|통틀어')
+
+
 def _supports_stated_window(source, role, year, start, end):
     from calendar import monthrange
-    for key in ((role,) if role else ('period', 'compare_period')):
-        raw = source.get(key)
+    windows = [source.get(key) for key in ((role,) if role else ('period', 'compare_period'))]
+    if role in (None, 'compare_period'):
+        windows.extend(source.get('extra_compare_periods') or [])
+    for raw in windows:
         window = period(raw)
         if not window or (year and any(month[:4] != year for month in window)):
             continue
@@ -569,7 +582,12 @@ def _rate_source_key(row, sums, conditions):
     if not base:
         return None
     exponent = min(shown.as_tuple().exponent, 0) if isinstance(shown.as_tuple().exponent, int) else 0
-    if abs(shown - (target - base) / base * 100) <= Decimal(5).scaleb(exponent - 1):
+    # 서비스 반올림(ROUND_HALF_UP)으로 표시 자릿수에 맞춘 값과 같아야 한다. 12.5%를 절사한 12%는 13%가 아니라 통과하지 않는다.
+    try:
+        actual = ((target - base) / base * 100).quantize(Decimal(1).scaleb(exponent), rounding=ROUND_HALF_UP)
+    except ArithmeticError:   # 자릿수가 Decimal 정밀도를 넘으면 증명하지 않는다.
+        return None
+    if actual == shown:
         return pair[0][0][0]
     return None
 
@@ -581,7 +599,8 @@ def annual_sql_scope(payload, *, country_labels=None, product_labels=None):
     conditions = payload.get('conditions') or {}
     scope = {}
     sums, differences, candidates = annual_sql_sources(payload)
-    if len(_annual_windows(conditions)) == 2:
+    two_annual_windows = len(_annual_windows(conditions)) == 2
+    if two_annual_windows:
         scope['_annual_candidates'] = list(candidates)
         # digest에는 조회 기간만 있다. 연간 칸을 대조할 비교 기간도 같은 근거 범위에 둔다.
         scope['compare_period'] = {k: str(conditions['compare_period'][k])[:7] for k in ('start', 'end')}
@@ -599,7 +618,8 @@ def annual_sql_scope(payload, *, country_labels=None, product_labels=None):
                       hs_name=(product_labels or {}).get((hs, edition)))
             for key, (left, right, country, hs, edition, flow) in differences.items()}
     rows = payload.get('rows') or []
-    if len(rows) == 1 and isinstance(rows[0], dict) and (key := _rate_source_key(rows[0], sums, conditions)):
+    if (two_annual_windows and len(rows) == 1 and isinstance(rows[0], dict)
+            and (key := _rate_source_key(rows[0], sums, conditions))):
         scope['_annual_rate'] = True
         scope['_annual_rate_scope'] = cells[key]
     return scope

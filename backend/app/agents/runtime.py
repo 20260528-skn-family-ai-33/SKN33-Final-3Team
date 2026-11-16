@@ -443,12 +443,31 @@ class Services:
         if data.result.status!='OK': return data.result
         if generated and data.meta.get('annual_verified') is True and data.result.digest:
             # 재작성 검사(compose.validate_rewrite)는 digest로 대조한다. 저장본과 같은 연간 칸 지도를 digest에도 둔다.
+            from backend.app.agents.digest import bounded
             from backend.app.agents.templates import condition_names
             from backend.app.agents.verify import annual_sql_scope
             with self.read_store() as store: country_labels,products=condition_names(store,[task.conditions])
-            data.result.digest.update(annual_sql_scope(
+            scope = annual_sql_scope(
                 {'sql':data.sql,'conditions':data.conditions,'rows':data.rows},
-                country_labels=country_labels,product_labels=products))
+                country_labels=country_labels,product_labels=products)
+            try:
+                digest = bounded({**data.result.digest, **scope})
+            except ValueError:
+                digest = {}
+            if not digest.get('rows') and data.result.digest.get('rows'):
+                # 긴 표시명은 저장본 검증에서 사용한다. 요약 상한을 넘으면 코드와 판본으로만 칸을 식별한다.
+                labels = {'country_name', 'hs_name'}
+                cells = [*scope.get('_annual_sums', {}).values(), *scope.get('_annual_differences', {}).values(),
+                         scope.get('_annual_rate_scope', {})]
+                for cell in cells:
+                    for label in labels:
+                        cell[label] = None
+                try:
+                    digest = bounded({**data.result.digest, **scope, 'truncated': True})
+                except ValueError:
+                    # 코드만 남겨도 상한을 넘으면 칸 지도 없이 원래 digest를 둔다(재작성 검사에서 증명하지 않은 칸이 된다).
+                    digest = data.result.digest
+            data.result.digest = digest
         return self.results.save(state,step,data.result,rows=data.rows,meta=data.meta,conditions=data.conditions,
             input_fingerprint=key(versions),source_results=parents,versions=versions,columns=data.columns,sql=data.sql)
 
