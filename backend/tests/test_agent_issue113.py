@@ -187,11 +187,120 @@ class SimpleRankingTableTest(unittest.TestCase):
         def draft(sql):
             return SqlDraft(sql=sql, summary='s', unsupported=None,
                             columns=[{'key': 'value', 'label': 'v', 'type': 'number', 'unit': 'USD'}])
+        # 수출입 표끼리는 각자 거르고 같은 단위(월·품목)로 먼저 집계한 CTE를 잇는다. 원본끼리 직접 잇으면 중복 합산이라 거부한다.
+        def joined(export_filter, import_filter):
+            return ("WITH ex AS (SELECT e.trade_month, e.hs6_code, SUM(e.amount_usd) AS amount FROM export_summary e "
+                    f"WHERE e.hs_ver = 'HS2022' {export_filter} GROUP BY e.trade_month, e.hs6_code), "
+                    "im AS (SELECT i.trade_month, i.hs6_code, SUM(i.amount_usd) AS amount FROM import_summary i "
+                    f"WHERE i.hs_ver = 'HS2022' {import_filter} GROUP BY i.trade_month, i.hs6_code) "
+                    "SELECT SUM(ex.amount) AS value FROM ex JOIN im ON im.hs6_code = ex.hs6_code AND im.trade_month = ex.trade_month")
+        self.assertTrue(validate_sql(draft(joined(f"AND e.country_code {sub}", f"AND i.country_code {sub}"))))
+        with self.assertRaises(ValueError):  # 한쪽 표만 거르면 여전히 거부한다.
+            validate_sql(draft(joined(f"AND e.country_code {sub}", "")))
         head = ("SELECT SUM(e.amount_usd) AS value FROM export_summary e JOIN import_summary i "
                 "ON i.hs6_code = e.hs6_code AND i.trade_month = e.trade_month WHERE e.hs_ver = 'HS2022' AND i.hs_ver = 'HS2022' ")
-        self.assertTrue(validate_sql(draft(head + f"AND e.country_code {sub} AND i.country_code {sub}")))
-        with self.assertRaises(ValueError):  # 한쪽 표만 거르면 여전히 거부한다.
-            validate_sql(draft(head + f"AND e.country_code {sub}"))
+        with self.assertRaisesRegex(ValueError, '중복 합산'):
+            validate_sql(draft(head + f"AND e.country_code {sub} AND i.country_code {sub}"))
+
+    def test_trade_joins_must_not_duplicate_rows(self):
+        from backend.app.agents.sql import validate_sql
+        from backend.app.agents.state import SqlDraft
+        # 품목·월만으로 수출입 원본을 이으면 국가 행이 중복돼 금액이 배로 커진다(리뷰 P1). 원본 직접 조인, 원본과 집계 CTE의
+        # 조인, 집계 단위가 다른 CTE의 조인을 거부하고, 같은 단위로 먼저 집계한 CTE끼리의 조인만 받는다.
+        conditions = Conditions(country_codes=['US', 'CN'], hs_items=[{'hs_code': '330499', 'hs_ver': 'HS2022'}],
+                                period={'start': '2025-01-01', 'end': '2025-03-01'})
+        columns = [{'key': 'export_usd', 'label': '수출', 'type': 'number', 'unit': 'USD'},
+                   {'key': 'import_usd', 'label': '수입', 'type': 'number', 'unit': 'USD'}]
+        def side(a):
+            return (f"{a}.country_code IN ('US','CN') AND {a}.hs6_code = '330499' AND {a}.hs_ver = 'HS2022' "
+                    f"AND {a}.trade_month BETWEEN '2025-01-01' AND '2025-03-31'")
+        def cte(name, alias, table, keys):
+            return (f"{name} AS (SELECT {keys}, SUM({alias}.amount_usd) AS amount FROM {table} {alias} "
+                    f"WHERE {side(alias)} GROUP BY {keys})")
+        def check(sql):
+            return validate_sql(SqlDraft(sql=sql, columns=columns, summary='', unsupported=None), conditions)
+        same = ("WITH " + cte('ex', 'e', 'export_summary', 'e.trade_month, e.country_code') + ", "
+                + cte('im', 'i', 'import_summary', 'i.trade_month, i.country_code')
+                + " SELECT SUM(ex.amount) AS export_usd, SUM(im.amount) AS import_usd FROM ex JOIN im "
+                  "ON im.trade_month = ex.trade_month AND im.country_code = ex.country_code")
+        self.assertTrue(check(same))
+        # 키는 등식으로 맞춰야 한다. IS NOT NULL·여러 값 IN·<>는 한 행으로 정하지 못해 수입 금액이 국가 수만큼 반복된다.
+        by_country = same.replace('i.trade_month, i.country_code', 'i.trade_month').replace(
+            ' AND im.country_code = ex.country_code', ' AND {}')
+        for condition in ('ex.country_code IS NOT NULL', "ex.country_code IN ('US', 'CN')", "ex.country_code <> 'JP'"):
+            with self.subTest(condition=condition), self.assertRaisesRegex(ValueError, '합산'):
+                check(by_country.format(condition))
+        for condition in ("ex.country_code = 'US'", "ex.country_code IN ('US')"):
+            with self.subTest(condition=condition):
+                self.assertTrue(check(by_country.format(condition)))
+        raw = ("SELECT SUM(e.amount_usd) AS export_usd, SUM(i.amount_usd) AS import_usd FROM export_summary e "
+               "JOIN import_summary i ON i.trade_month = e.trade_month AND i.hs6_code = e.hs6_code "
+               f"WHERE {side('e')} AND {side('i')}")
+        mixed = ("WITH " + cte('im', 'i', 'import_summary', 'i.trade_month')
+                 + " SELECT SUM(e.amount_usd) AS export_usd, SUM(im.amount) AS import_usd FROM export_summary e "
+                   f"JOIN im ON im.trade_month = e.trade_month WHERE {side('e')}")
+        coarse = same.replace('i.trade_month, i.country_code', 'i.trade_month').replace(
+            ' AND im.country_code = ex.country_code', '')
+        window = same.replace('SUM(e.amount_usd) AS amount', 'SUM(e.amount_usd) OVER (PARTITION BY e.trade_month) AS amount'
+                              ).replace(' GROUP BY e.trade_month, e.country_code', '')
+        for name, sql in (('raw', raw), ('mixed', mixed), ('coarse', coarse), ('window', window)):
+            with self.subTest(shape=name), self.assertRaisesRegex(ValueError, '합산|집계'):
+                check(sql)
+        # 행을 늘리지 않는 흔한 형태는 받는다: 스칼라 하위 쿼리 분모, GROUP BY 결과 별칭, 별칭 없는 조인 열.
+        share_columns = [{'key': 'country_code', 'label': '국가', 'type': 'string', 'unit': None},
+                         {'key': 'amount_usd', 'label': '수출', 'type': 'number', 'unit': 'USD'},
+                         {'key': 'share_pct', 'label': '비중', 'type': 'number', 'unit': '%'},
+                         {'key': 'denominator_usd', 'label': '분모', 'type': 'number', 'unit': 'USD'}]
+        share = ("SELECT e.country_code AS country_code, SUM(e.amount_usd) AS amount_usd, "
+                 f"ROUND(SUM(e.amount_usd) * 100 / (SELECT SUM(x.amount_usd) FROM export_summary x WHERE {side('x')}), 1) "
+                 f"AS share_pct, (SELECT SUM(y.amount_usd) FROM export_summary y WHERE {side('y')}) AS denominator_usd "
+                 f"FROM export_summary e WHERE {side('e')} GROUP BY e.country_code ORDER BY amount_usd DESC")
+        self.assertTrue(validate_sql(SqlDraft(sql=share, columns=share_columns, summary='', unsupported=None), conditions))
+        monthly = [{'key': 'month', 'label': '월', 'type': 'string', 'unit': None}, *columns]
+        def by_month(name, alias, table):
+            return (f"{name} AS (SELECT DATE_FORMAT({alias}.trade_month, '%Y-%m') AS month, SUM({alias}.amount_usd) AS amount "
+                    f"FROM {table} {alias} WHERE {side(alias)} GROUP BY month)")
+        for on in ('im.month = ex.month', 'im.month = month'):
+            aliased = ("WITH " + by_month('ex', 'e', 'export_summary') + ", " + by_month('im', 'i', 'import_summary')
+                       + f" SELECT ex.month AS month, ex.amount AS export_usd, im.amount AS import_usd FROM ex JOIN im ON {on} "
+                         "ORDER BY ex.month")
+            with self.subTest(on=on):
+                self.assertTrue(validate_sql(SqlDraft(sql=aliased, columns=monthly, summary='', unsupported=None), conditions))
+        scalar = (f"SELECT SUM(e.amount_usd) AS export_usd, (SELECT SUM(i.amount_usd) FROM import_summary i WHERE {side('i')}) "
+                  f"AS import_usd FROM export_summary e WHERE {side('e')}")
+        self.assertTrue(check(scalar))
+        # CTE를 한 단계 거쳐 수출입 표를 읽어도 같은 규칙이다(원본 행을 넘기는 CTE는 원본과 같다).
+        im_view = ("WITH im_rows AS (SELECT i.trade_month, i.hs6_code, i.amount_usd FROM import_summary i "
+                   f"WHERE {side('i')}), im_view AS (SELECT r.trade_month, r.hs6_code, r.amount_usd FROM im_rows r) "
+                   "SELECT SUM(e.amount_usd) AS export_usd, SUM(v.amount_usd) AS import_usd FROM export_summary e "
+                   f"JOIN im_view v ON v.trade_month = e.trade_month AND v.hs6_code = e.hs6_code WHERE {side('e')}")
+        def via_rows(keys):
+            return (f"WITH ex_rows AS (SELECT e.trade_month, e.country_code, e.amount_usd FROM export_summary e WHERE {side('e')}), "
+                    f"ex AS (SELECT {keys}, SUM(r.amount_usd) AS amount FROM ex_rows r GROUP BY {keys}), "
+                    + cte('im', 'i', 'import_summary', 'i.trade_month')
+                    + " SELECT SUM(ex.amount) AS export_usd, SUM(im.amount) AS import_usd FROM ex JOIN im "
+                      "ON im.trade_month = ex.trade_month")
+        for name, sql in (('indirect raw', im_view), ('indirect coarse', via_rows('r.trade_month, r.country_code'))):
+            with self.subTest(shape=name), self.assertRaisesRegex(ValueError, '합산'):
+                check(sql)
+        self.assertTrue(check(via_rows('r.trade_month')))
+        # DISTINCT·UNION(중복 제거) 달력은 결과 열 전체가 키라 받는다. UNION ALL은 같은 월이 두 번 나와 거부한다.
+        calendar_columns = [{'key': 'month', 'label': '월', 'type': 'string', 'unit': None}, columns[1]]
+        def calendar(months):
+            return (f"WITH months AS ({months}), " + cte('im', 'i', 'import_summary', 'i.trade_month')
+                    + " SELECT DATE_FORMAT(m.trade_month, '%Y-%m') AS month, im.amount AS import_usd FROM months m "
+                      "LEFT JOIN im ON im.trade_month = m.trade_month ORDER BY m.trade_month")
+        def months(union):
+            return (f"SELECT e.trade_month FROM export_summary e WHERE {side('e')} {union} "
+                    f"SELECT i.trade_month FROM import_summary i WHERE {side('i')}")
+        for name, sql in (('distinct', f"SELECT DISTINCT e.trade_month FROM export_summary e WHERE {side('e')}"),
+                          ('union', months('UNION'))):
+            with self.subTest(calendar=name):
+                self.assertTrue(validate_sql(SqlDraft(sql=calendar(sql), columns=calendar_columns, summary='',
+                                                      unsupported=None), conditions))
+        with self.assertRaisesRegex(ValueError, '집계'):
+            validate_sql(SqlDraft(sql=calendar(months('UNION ALL')), columns=calendar_columns, summary='',
+                                  unsupported=None), conditions)
 
 
 class CompareYearsSplitTest(unittest.TestCase):
