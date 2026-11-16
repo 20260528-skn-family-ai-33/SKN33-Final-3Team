@@ -15,6 +15,7 @@
     "test:decisions": "node tests/functional-decisions-browser.cjs",
     "test:alpha": "node tests/alpha-fixes-browser.cjs",
     "test:beta": "node tests/beta-fixes-browser.cjs",
+    "test:chat-qa": "node tests/chat-qa-browser.cjs",
     "test:e2e": "node tests/integration-browser.cjs"
   },
   "dependencies": {
