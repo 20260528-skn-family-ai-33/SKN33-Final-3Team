@@ -13,7 +13,7 @@ from sqlglot.optimizer.scope import traverse_scope
 from backend.app.agents.state import SqlDraft
 from backend.app.agents.digest import bounded, MAX_DIGEST_ROWS
 from backend.app.agents.templates import Analysis, api_conditions, extra_periods
-from backend.app.agents.state import ToolResult
+from backend.app.agents.state import MAX_TEXT_CHARS, ToolResult
 from backend.app.agents.verify_claims import IDENTITY_FIELDS
 from backend.app.api.common import ApiError
 from sqlalchemy import inspect
@@ -951,6 +951,27 @@ def _check_conditions(query, conditions):
     _check_output_rows(query, bool(countries), bool(confirmed))
 
 
+def missing_periods(sql, conditions):
+    """요청한 기간(조회·비교·추가 비교) 가운데 생성 SQL이 수출입 행을 한 달도 읽지 않는 기간들.
+    2025·2023·2024년을 요청했는데 2025년만 거른 SQL이면 2023·2024년이다. 수출입 표를 읽지 않는 SQL은 해당 없다."""
+    query = sqlglot.parse_one(sql, read='mysql')
+    read, reads_trade = set(), False
+    for scope in traverse_scope(query):
+        if not isinstance(scope.expression, exp.Select):
+            continue
+        trades = [alias.lower() for alias, (_, source) in scope.selected_sources.items()
+                  if isinstance(source, exp.Table) and source.name.lower() in TRADE_TABLES]
+        where = scope.expression.args.get('where')
+        for trade in trades:
+            reads_trade = True
+            for branch in _date_filter_branches(where.this if where else None, trade, len(trades) == 1):
+                read |= _selected_months(branch) or set()
+    if not reads_trade:
+        return []
+    return [p for p in (conditions.period, conditions.compare_period, *conditions.extra_compare_periods)
+            if p and not read & set(range(_month_number(p.start), _month_number(p.end) + 1))]
+
+
 def _check_output_rows(query, countries, products):
     """최종 결과에 확정하지 않은 국가·품목 행이 나오지 않게 한다.
 
@@ -1321,9 +1342,11 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
     query_timeout = float(settings.get('API_SQL_EXECUTION_SECONDS', 30))
     model = settings.get('API_SQL_MODEL', DEFAULT_SQL_MODEL)
     error = None
+    tries = [0]
     if step is not None:
         step.attempts = 0
     def attempt(_):
+        tries[0] += 1
         # Budget refusal is not a generation attempt.
         schema = schema_for(engine)
         if step is not None:
@@ -1340,6 +1363,13 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
         rows, sql = execute_readonly(engine, draft, query_timeout, task.conditions)
         if not rows:
             return Analysis([], {}, ToolResult(status='NO_DATA', error='조건에 맞는 조회 결과가 없습니다.'), conditions, [sql])
+        # 요청한 기간의 집계가 SQL에 빠졌으면 다시 만든다. 마지막 시도에도 빠져 있으면 누락 기간을 밝힌 부분 결과로 둔다.
+        from backend.app.api.common import period_label
+        missing = [period_label(p.start, p.end) for p in missing_periods(sql, task.conditions)]
+        if missing and tries[0] <= MAX_SQL_REGENERATIONS:
+            raise ValueError(f"요청한 기간({', '.join(missing)})의 집계가 SQL에 없습니다. "
+                             '조회 기간과 모든 비교 기간을 각각 집계해 기간마다 결과 열(또는 행)로 반환하세요.')
+        limitations = [f"요청한 기간 중 {', '.join(missing)}의 집계는 결과에 없습니다."[:MAX_TEXT_CHARS]] if missing else []
         # 조회 기간 전체를 그대로 집계했다고 증명될 때만 결과 수치에 조회 기간을 붙인다(verify_evidence).
         covered = period_covered(sql, task.conditions)
         # 연간 비교 SQL은 연도별 합계·차액 칸을 SQL 식에서 직접 증명한다(annual_sql_sources). 그런 칸이 있으면
@@ -1360,7 +1390,9 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
         if 'extra_compare_periods' in prompt_conditions:
             meta['extra_compare_periods'] = prompt_conditions['extra_compare_periods']
         return Analysis(rows, meta, ToolResult(status='OK', source='관세청', period=task.conditions.period,
-                        digest=digest, checks=['읽기 전용 조회', '결과 열 검사']), conditions, [sql], columns)
+                        digest=digest, checks=['읽기 전용 조회', '결과 열 검사'],
+                        completeness='PARTIAL' if limitations else 'COMPLETE', limitations=limitations),
+                        conditions, [sql], columns)
     from openai import OpenAIError
     for _ in range(1 + MAX_SQL_REGENERATIONS):
         try:
