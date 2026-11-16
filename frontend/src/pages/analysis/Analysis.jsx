@@ -158,6 +158,10 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
         <span className="s" style={{ fontSize: 14, fontWeight: 700 }}>비교 기간</span>
         {monthInput('compareFrom')}<span className="c s">~</span>{monthInput('compareTo')}
       </div>
+      {/* 기간 오류는 입력 칸 바로 아래에 조금 크게 보인다(#120 베타 피드백: 버튼 아래에 있어 보이지 않았음) */}
+      {[[o.from > o.to, '시작 월이 종료 월보다 늦습니다.'], [incompleteComparison, '비교 시작 월과 종료 월을 모두 선택해 주세요.'],
+        [reversedComparison, '비교 시작 월이 종료 월보다 늦습니다.'], [lateComparison, '비교 기간은 분석 기간보다 앞서야 합니다.']]
+        .filter(([shown]) => shown).map(([, text]) => <p key={text} className="field-err" role="alert" style={{ fontSize: 14 }}>{text}</p>)}
       <ErrorNotice error={availability.error} retry={availability.reload} />
       <p className="note" style={{ marginTop: 8 }}>비교 기간을 비워 두면 전년 같은 기간과 비교합니다.</p>
       <p style={{ fontSize: 15, fontWeight: 800, marginTop: 18 }}>어떤 항목을 포함할까요? <span className="s" style={{ fontWeight: 500 }}>(기본: 전체)</span></p>
@@ -178,10 +182,6 @@ function ConditionCard({ id, message, onChange, onGenerate, onClose }) {
         <div className="chips"><Btn disabled={busy} onClick={() => setPreview(null)}>조건 수정</Btn>
           <Btn kind="red" disabled={busy} onClick={generate}>확인한 조건으로 생성</Btn></div>
       </Modal>
-      {o.from > o.to && <p className="field-err">시작 월이 종료 월보다 늦습니다.</p>}
-      {incompleteComparison && <p className="field-err">비교 시작 월과 종료 월을 모두 선택해 주세요.</p>}
-      {reversedComparison && <p className="field-err">비교 시작 월이 종료 월보다 늦습니다.</p>}
-      {lateComparison && <p className="field-err">비교 기간은 분석 기간보다 앞서야 합니다.</p>}
     </AiBlock>
   )
 }

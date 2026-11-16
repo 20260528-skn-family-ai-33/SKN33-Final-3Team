@@ -1,6 +1,9 @@
 // 목업과 같은 모양의 SVG 차트(선 그래프·도넛·스파크라인)
 import { useState } from 'react'
 
+// 꺾은선 아래 채움 투명도(베타 피드백 50~60%, #120). PDF(report_templates.AREA_OPACITY)와 같은 값
+const AREA_OPACITY = 0.55
+
 /** 월별 꺾은선. series: [{ color, values }] — 점 위에 값 표시, null 칸은 선을 끊는다 */
 export function LineChart({ labels, series, yTicks, width = 760, height = 230, label = '선 그래프', formatValue = String, fullLabels, showValues = true }) {
   const x0 = Math.max(40,Math.min(100,...yTicks.map(t=>String(formatValue(t)).length*7+12))), x1 = width - 20, yTop = 16, yBottom = height - 28
@@ -21,14 +24,15 @@ export function LineChart({ labels, series, yTicks, width = 760, height = 230, l
       {series.map((s, si) => (
         <g key={si}>
           {s.areaColor && s.values.map((v, i) => i > 0 && v != null && s.values[i - 1] != null && (
-            <polygon key={i} fill={s.areaColor} points={`${x(i-1)},${yBottom} ${x(i-1)},${y(s.values[i-1])} ${x(i)},${y(v)} ${x(i)},${yBottom}`} />
+            <polygon key={i} fill={s.areaColor} fillOpacity={AREA_OPACITY} points={`${x(i-1)},${yBottom} ${x(i-1)},${y(s.values[i-1])} ${x(i)},${y(v)} ${x(i)},${yBottom}`} />
           ))}
           <path d={path(s.values)} fill="none" stroke={s.color} strokeWidth="2.5" strokeLinejoin="round" />
           {s.values.map((v, i) => v != null && (
             <g key={i}>
               <circle cx={x(i)} cy={y(v)} r="4.5" fill="#fff" stroke={s.color} strokeWidth="2.5"><title>{s.name} · {labels[i]}: {formatValue(v)}</title></circle>
               {/* 비교(여러 선)도 값을 작은 글자로 쓴다. 겹치지 않게 짝수 선은 점 위, 홀수 선은 점 아래에 둔다(21번) */}
-              {showValues && labels.length<=12 && <text x={x(i)} y={series.length===1 || si%2===0 ? y(v) - (series.length===1?11:8) : y(v) + 16}
+              {/* 12개월을 넘으면 가로축 라벨과 같은 간격(every)과 마지막 점에만 값을 써 겹치지 않게 한다(#120) */}
+              {showValues && (labels.length<=12 || (i % every === 0 && s.values.length - 1 - i >= every) || i === s.values.length - 1) && <text x={x(i)} y={series.length===1 || si%2===0 ? y(v) - (series.length===1?11:8) : y(v) + 16}
                 fontSize={series.length===1 ? (String(formatValue(v)).length>8?10:12) : 9} fontWeight="700" fill={s.color}
                 textAnchor={i === 0 ? 'start' : i === s.values.length - 1 ? 'end' : 'middle'}>{formatValue(v)}</text>}
             </g>

@@ -150,6 +150,18 @@ class ResultPresentationTest(unittest.TestCase):
                         self.assertEqual(list(actual_sheet.values),list(expected_sheet.values))
                 self.assertEqual(document,original)
 
+    def test_import_results_use_import_labels(self):
+        ""#120 수입 조회 결과의 열 이름은 '수입'이다. 방향이 키에 정해진 열(export_·import_)은 그대로 둔다.""
+        columns = [{'key': k, 'label': k} for k in ('month', 'amount_usd', 'previous_amount_usd', 'current_amount_usd', 'export_amount_usd', 'import_amount_usd')]
+        row = {'month': '2025-10', 'amount_usd': 1, 'previous_amount_usd': 1, 'current_amount_usd': 1, 'export_amount_usd': 1, 'import_amount_usd': 1}
+        labels = lambda flow: [c['label'] for c in display_columns(columns, [row], None, flow)]
+        self.assertEqual(labels('IMPORT'), ['기준월', '수입액', '비교 기간 수입액', '현재 수입액', '수출액', '수입액'])
+        self.assertEqual(labels('EXPORT'), ['기준월', '수출액', '비교 기간 수출액', '현재 수출액', '수출액', '수입액'])
+        # 이미 '수출액'으로 저장된 수입 표도 다시 읽을 때 바뀐다. 사용자가 정한 다른 이름은 바꾸지 않는다
+        saved = [{'key': 'amount_usd', 'label': '수출액'}, {'key': 'amount_usd', 'label': '금액'}]
+        self.assertEqual([c['label'] for c in display_columns(saved, [row], None, 'IMPORT')], ['수입액', '금액'])
+        self.assertEqual([c['label'] for c in display_columns(saved, [row], {'kind': 'LLM_SQL'}, 'IMPORT')], ['수입액', '금액'])
+
     def test_legacy_prediction_excel_uses_korean_labels_and_relevant_rank(self):
         row = {'anchor': '2026-09-01', 'country_name': '베트남', 'hs6': '330499',
                'product_name': '화장품', 'growth_pct': 2.1, 'exp_12m': 123456,

@@ -39,17 +39,26 @@ def read_snapshot(store, uid, identity, kind=None):
     payload=row['payload_json']
     # Legacy report previews can reference a RESULT containing only conditions.
     if row['kind']=='RESULT' and 'columns' in payload and 'rows' in payload:
-        payload={**payload,'columns':display_columns(payload['columns'],payload['rows'],payload.get('meta')),
+        flow=(payload.get('conditions') or {}).get('trade_flow')
+        payload={**payload,'columns':display_columns(payload['columns'],payload['rows'],payload.get('meta'),flow),
                  'snapshot_created_at':row['created_at']}
     return payload
 
 
-def display_columns(columns, rows, meta=None):
+def flow_label(key, label, flow):
+    """수입 조회 결과의 열 이름. LABELS의 기본 이름은 수출 기준이라, 방향이 키에 정해진 열(export_·import_·previous_year_)이
+    아니면 '수출'을 '수입'으로 바꾼다. 이미 저장된 표도 보여 줄 때 바뀌도록 기본 이름 그대로인 열만 바꾼다(#120)."""
+    if flow=='IMPORT' and label==LABELS.get(key) and not key.startswith(('export_','import_','previous_year_')):
+        return label.replace('수출','수입')
+    return label
+
+
+def display_columns(columns, rows, meta=None, flow=None):
     if (meta or {}).get('kind') == 'PREDICTION':
         return prediction_columns(columns, meta.get('group_by'))
     if (meta or {}).get('kind') == 'LLM_SQL':
         # 자유 SQL의 열은 요청에 맞춰 모델이 고른 결과다(판본별 품목 수의 hs_ver 등). 템플릿용 숨김 규칙을 쓰지 않는다.
-        return [{**c,'label':c.get('label') or LABELS.get(c['key'],c['key'])} for c in columns]
+        return [{**c,'label':flow_label(c['key'],c.get('label') or LABELS.get(c['key'],c['key']),flow)} for c in columns]
     hidden={'hs_ver'}
     labels={**LABELS,'name':'품목' if any(r.get('hs_code') for r in rows) else '국가' if any(r.get('country_code') for r in rows) else '명칭'}
     if not any(r.get('hs_item') for r in rows): hidden.add('hs_item')
@@ -67,8 +76,8 @@ def display_columns(columns, rows, meta=None):
                 'compare_verified_months','compare_requested_months','verified_subtotal_usd',
                 'compare_verified_subtotal_usd'))
         if not monthly_compare: hidden.update(('compare_amount_usd','compare_month'))
-    return [{**c,'label':labels.get(c['key'],c.get('label',c['key']))
-             if c.get('label',c['key'])==c['key'] else c['label']} for c in columns if c['key'] not in hidden]
+    return [{**c,'label':flow_label(c['key'],labels.get(c['key'],c.get('label',c['key']))
+             if c.get('label',c['key'])==c['key'] else c['label'],flow)} for c in columns if c['key'] not in hidden]
 
 
 def prediction_columns(columns, group_by):
@@ -123,7 +132,7 @@ def result_table(store, uid, rows, meta, conditions=None, sql=None, columns=None
     keys=list(rows[0]) if rows else []
     columns=columns or [{'key':k,'label':LABELS.get(k,k),'type':'number' if isinstance(rows[0][k],(int,float)) or k.endswith(('_usd','_pct')) else 'string',
                         'unit':'USD' if k.endswith('_usd') else '%' if k.endswith('_pct') else None} for k in keys]
-    columns=display_columns(columns,rows,meta)
+    columns=display_columns(columns,rows,meta,(conditions or {}).get('trade_flow'))
     payload={'columns':columns,'rows':rows,'meta':clean(meta),'conditions':clean(analysis_conditions(conditions or {})),'sql':sql or [],'total_rows':len(rows)}
     identity=save_snapshot(store,uid,'RESULT',payload)
     return {'result_id':identity,'columns':columns,'rows':rows,'total_rows':len(rows),

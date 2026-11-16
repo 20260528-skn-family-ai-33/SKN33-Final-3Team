@@ -279,7 +279,7 @@ export default function ReportView({ route }) {
                     </div>
                     {table.trend ? (
                       <div style={{ marginTop: 14 }}>
-                        <div className="th" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}><span>월</span><span className="r">분석 기간</span><span className="r">비교 기간</span></div>
+                        <div className="th" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}><span>월</span><span className="r">분석 기간 수출액</span><span className="r">비교 기간 수출액</span></div>
                         {f.labels.map((l, i) => <div key={l} className="tr" style={{ gridTemplateColumns: '1fr 1fr 1fr' }}><span className="b">{l}</span><span className="r b">{amount(monthly[i].amount_usd)}</span><span className="r s">—</span></div>)}
                       </div>
                     ) : f.labels.length ? (
@@ -318,7 +318,8 @@ export default function ReportView({ route }) {
               {has('유망시장(증가·감소 예상)') && (
                 <Section no={no++} title="유망시장(증가·감소 예상)">
                   <CountryChanges changes={byCode.GROWTH_RISK?.changes} />
-                  <div style={{ marginTop: 64, padding: '18px 20px', borderRadius: 14, background: '#d6dde9' }}>
+                  {/* 옅은 배경만으로는 위 실제 증감 영역과 구분이 안 돼 진한 테두리를 둔다(#120 베타 피드백) */}
+                  <div style={{ marginTop: 64, padding: '18px 20px', borderRadius: 14, background: '#d6dde9', border: '1.5px solid #15181E' }}>
                   <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>ML 유망시장 분석 <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>{promising.anchor ? `${promising.anchor} 기준 · ` : ''}모델 예측 순위 · 증가·감소 예상</span></p>
                   <p className="note" style={{ marginBottom: 10 }}>{byCode.GROWTH_RISK?.text}</p>
                   {promising.rows.length > 0 && <>

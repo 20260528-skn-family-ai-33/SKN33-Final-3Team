@@ -45,7 +45,7 @@ export default function ApiResults({ table, tableOnly = false, fixedColumns = fa
       {(table.result_id || onDownload) && <Btn icon="download" onClick={() => run(() => onDownload ? onDownload() : download(`/results/${table.result_id}/file`))}>엑셀 다운로드</Btn>}
     </div></div>
     {chart && !showTable ? <LineChart formatValue={compact} labels={rows.map(r => r.month)} yTicks={niceTicks(rows.flatMap(r => numeric.map(k => r[k])))} series={numeric.map((key, i) => ({ color: colors[i], values: rows.map(r => r[key]) }))} /> : bars && !showTable ? <>
-      <div className="th" style={{ gridTemplateColumns: '1fr 2fr 1fr', marginTop: 16 }}><span>국가</span><span>수출액 (USD)</span><span className="r">비중</span></div>
+      <div className="th" style={{ gridTemplateColumns: '1fr 2fr 1fr', marginTop: 16 }}><span>국가</span><span>{flow === 'IMPORT' ? '수입액' : '수출액'} (USD)</span><span className="r">비중</span></div>
       {rows.map(r => <div key={r.country} className="tr" style={{ gridTemplateColumns: '1fr 2fr 1fr' }}><b>{r.country}</b><span style={{ display: 'flex', gap: 12, alignItems: 'center' }}><span style={{ width: `${Math.max(1, r.amount_usd / maxAmount * 65)}%`, height: 12, borderRadius: 6, background: '#C8102E' }} /><b>{compact(r.amount_usd)}</b></span><span className="r">{r.share_pct == null ? '—' : `${Number(r.share_pct).toFixed(1)}%`}</span></div>)}
     </> : <div style={{overflowX:'auto',marginTop:16}}><div style={{minWidth:columns.length*140}}>
       <div className="th" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))` }}>{columns.map(c => <span key={c.key}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>)}</div>
