@@ -41,7 +41,7 @@ export default function useUnData(profile) {
               const name = countryName(r.country_code)
               if (!cards.has(name)) cards.set(name, { country: name, meta: 'UN Comtrade · 월간', items: [] })
               const pp = roundPp(r.share_change_pp)
-              cards.get(name).items.push({ hs, name: productName(hs), rank: r.korea_rank ? `${r.korea_rank}위` : null, share: r.korea_share_pct == null ? '—' : `${Number(r.korea_share_pct).toFixed(1)}%`, change: pp == null ? '비교 자료 없음' : `${pp.toFixed(1)}%p`, dir: pp == null ? 'none' : pp > 0 ? 'up' : pp < 0 ? 'down' : 'flat', period })
+              cards.get(name).items.push({ hs, name: productName(hs), share: r.korea_share_pct == null ? '—' : `${Number(r.korea_share_pct).toFixed(1)}%`, change: pp == null ? '비교 자료 없음' : `${pp.toFixed(1)}%p`, dir: pp == null ? 'none' : pp > 0 ? 'up' : pp < 0 ? 'down' : 'flat', period })
             }
         }
         if (!controller.signal.aborted) setState({ key, items: [...cards.values()], error: null })

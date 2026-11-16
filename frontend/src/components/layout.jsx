@@ -127,7 +127,7 @@ export function Footer() {
         <div>
           <b>약관 및 문의</b>
           <p><Link to="/terms/service" className="ft-link">이용약관</Link></p>
-          <p><Link to="/terms/privacy-policy" className="ft-link" style={{ color: '#fff', fontWeight: 700 }}>개인정보처리방침</Link></p>
+          <p><Link to="/terms/privacy-policy" className="ft-link">개인정보처리방침</Link></p>
           <p><a href={`mailto:${CONTACT_EMAIL}`} className="ft-link">{CONTACT_EMAIL}</a></p>
         </div>
       </div>
@@ -139,7 +139,7 @@ export function Footer() {
 export function FooterSmall() {
   return (
     <footer className="ft-s">
-      <div className="wrap">© 2026 Borderless Sellers · <Link to="/terms/service" style={{ color: 'inherit' }}>이용약관</Link> · <Link to="/terms/privacy-policy" style={{ color: '#fff', fontWeight: 700 }}>개인정보처리방침</Link></div>
+      <div className="wrap">© 2026 Borderless Sellers · <Link to="/terms/service" style={{ color: 'inherit' }}>이용약관</Link> · <Link to="/terms/privacy-policy" style={{ color: 'inherit' }}>개인정보처리방침</Link></div>
     </footer>
   )
 }

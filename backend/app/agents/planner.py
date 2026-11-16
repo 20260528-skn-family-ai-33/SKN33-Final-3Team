@@ -345,6 +345,20 @@ def product_expressions(expressions, *, article_context=False):
     return products or (None if article_context else expressions)
 
 
+def coded_product(expression, text):
+    """원문에 명시된 '품목명(HS 코드)'는 이름과 코드를 별도 품목으로 묻지 않는다."""
+    expression = expression.strip()
+    explicit = HS_CODE_MENTION.fullmatch(expression)
+    if explicit: return explicit[1]
+    annotated = re.search(r'(?<!\w)' + re.escape(expression) + r'\s*[(（]\s*'
+                          + HS_CODE_MENTION.pattern + r'\s*[)）]', text, re.I)
+    if annotated: return annotated[1]
+    if expression in text:
+        annotated = re.fullmatch(r'.+?[(（]\s*' + HS_CODE_MENTION.pattern + r'\s*[)）]', expression, re.I)
+        if annotated: return annotated[1]
+    return expression
+
+
 def _normalize_analysis(output, question, previous_conditions):
     tasks = output.tasks
     for task in tasks:
@@ -360,19 +374,20 @@ def _normalize_analysis(output, question, previous_conditions):
     for index, task in enumerate(tasks):
         text = question if len(tasks) == 1 else task.question
         codes = list(dict.fromkeys(HS_CODE_MENTION.findall(text)))
-        if not codes and not task.slots.products and task.intent in ('STATISTICS', 'LOCAL_ISSUES'):
+        if not codes and not task.slots.products and task.intent in ('STATISTICS', 'LOCAL_ISSUES', 'REPORT'):
             bare = set(re.findall(r'(?<![\w.,])([0-9]{6})(?![0-9.,])', text))
             if (len(bare) == 1 and numeric_product_mentioned(text, code := next(iter(bare)))
                     and not _YEAR_MONTH.fullmatch(code)):
                 codes = [code]
-        if codes and task.intent in ('HS_LOOKUP', 'STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES'):
+        if (codes and task.intent in ('HS_LOOKUP', 'STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES', 'REPORT')
+                and not (task.intent == 'REPORT' and (task.source_tasks or task.previous_turn_result))):
             products = task.slots.products or []
             if all(code in question for code in codes):
                 if len(codes) == 1 and len(products) <= 1:
                     task.slots.products = codes
                 else:
                     task.slots.products = list(dict.fromkeys([*(
-                        match[1] if (match := HS_CODE_MENTION.fullmatch(product.strip())) else product
+                        coded_product(product, text)
                         for product in products), *codes]))
         if task.intent == 'RANKING' and len(tasks) == 1 and re.search(
                 r'(?:한국|대한민국|우리나라)의?\s*수(?:출|입)(?:액)?\s*상위\s*(?:국가|[0-9]+\s*(?:개국|개\s*국가))', text):

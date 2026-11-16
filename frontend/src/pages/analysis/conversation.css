@@ -21,9 +21,10 @@
 /* Keep the picker above later animated siblings without covering modal layers. */
 .chat-flow > .chat-clarification { position:relative; z-index:2; }
 
-/* 답이 필요한 칸은 사용자가 답할 때까지 테두리가 깜빡인다. */
+/* 답이 필요한 칸을 알리고, 입력창을 조작한 뒤에는 고정 테두리로 유지한다. */
 /* 입력창(form) 또는 되묻기 카드의 테두리 상자(마지막 자식)에 붙인다. */
 form.chat-wait,.chat-clarification.chat-wait > :last-child { animation:chat-blink 1.2s ease-in-out infinite; }
+form.chat-wait-fixed { border-color:var(--red)!important; box-shadow:0 0 0 3px rgba(200,16,46,.18); }
 @keyframes chat-blink { 50% { border-color:var(--red); box-shadow:0 0 0 3px rgba(200,16,46,.18); } }
 @media (prefers-reduced-motion:reduce) { form.chat-wait,.chat-clarification.chat-wait > :last-child { animation:none; border-color:var(--red)!important; } }
 

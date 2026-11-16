@@ -7,6 +7,7 @@ import { Btn, Check, Modal, Toggle } from '../../components/ui'
 import { productName } from '../../data/catalog'
 import TermsBody from '../../components/TermsBody'
 import TermsRenewalNotice from '../../components/TermsRenewalNotice'
+import { summarizeItems } from '../../utils/summary'
 
 const ROWS = [
   ['all', '전체 알림 수신', '끄면 팝업·새 알림함 등록 중단, 기존 내역 유지'],
@@ -47,7 +48,7 @@ export default function NotificationSettings({ route }) {
     if (!await setSettings(draft)) return
     notify(draft.all ? '알림 설정을 저장했습니다.' : '알림 설정을 저장했습니다. 전체 알림 수신이 꺼져 있어 새 알림이 등록되지 않습니다.')
   })
-  const interestText = `${profile.countries.join('·') || '국가 없음'} / ${profile.products.map(id => `${productName(id)}(HS ${id})`).join(', ') || '품목 없음'}`
+  const interestText = `${summarizeItems(profile.countries, '국가 없음')} / ${summarizeItems(profile.products.map(id => `${productName(id)}(HS ${id})`), '품목 없음')}`
 
   return (
     <section className="card">
@@ -57,10 +58,14 @@ export default function NotificationSettings({ route }) {
       <TermsRenewalNotice onAgree={() => { setAgree(false); navigate(withQuery(route, { terms: 'open' }), { replace: true }) }} />
       <div style={{ marginTop: 10 }}>
         {ROWS.map(([key, title, desc]) => (
-          <div key={key} className="between" style={{ padding: '18px 0', borderBottom: '1px solid var(--line2)', opacity: key !== 'all' && !draft.all ? 0.55 : 1 }}>
+          <div key={key} className="between" style={{ padding: '18px 0', borderBottom: '1px solid var(--line2)', opacity: key !== 'all' && key !== 'report' && !draft.all ? 0.55 : 1 }}>
             <div>
               <p style={{ fontSize: 17, fontWeight: 800 }}>{title}</p>
               <p className="muted" style={{ marginTop: 4 }}>{desc}</p>
+              {key === 'report' && <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 16px', marginTop: 10 }}>
+                {[['weekly', '주간'], ['monthly', '월간'], ['quarterly', '분기']].map(([cycle, label]) =>
+                  <Link key={cycle} to={`/account/subscription?cycle=${cycle}`} className="more">{label} 구독 설정 →</Link>)}
+              </div>}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <Toggle on={draft[key]} onChange={on => toggle(key, on)} label={title} disabled={key !== 'all' && !draft.all} />
@@ -68,9 +73,9 @@ export default function NotificationSettings({ route }) {
           </div>
         ))}
       </div>
-      <div className="between" style={{ marginTop: 18, border: '1px solid var(--line)', borderRadius: 14, padding: '16px 20px' }}>
-        <span><span className="muted">관심정보</span> <b style={{ marginLeft: 8 }}>{interestText}</b></span>
-        <Link to="/account/interests" className="more">관심정보 수정 →</Link>
+      <div className="between" style={{ marginTop: 18, border: '1px solid var(--line)', borderRadius: 14, padding: '16px 20px', flexWrap: 'wrap', gap: 12 }}>
+        <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}><span className="muted">관심정보</span> <b style={{ marginLeft: 8 }}>{interestText}</b></span>
+        <Link to="/account/interests" className="more" style={{ flexShrink: 0 }}>관심정보 수정 →</Link>
       </div>
       <p className="note" style={{ marginTop: 12 }}>기본 꺼짐 또는 가입 동의 결과 적용 · 전체 켬 + 현재 약관 동의 시 수신 {termsOk ? '· 알림 약관 동의 완료' : '· 알림 약관 미동의'}</p>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>

@@ -3230,5 +3230,14 @@
         "json 또는 xlsx. 기본 json."
       ]
     ]
+  },
+  {
+    "id": 135,
+    "title": "API-135 개별 리포트 삭제",
+    "route": "DELETE /api/v1/reports/{report_id}",
+    "auth": "필요",
+    "fields": [
+      ["Path Parameters", "report_id", "string", "필수", "본인 소유 리포트 ID. 삭제 후 목록·상태·열람·다운로드에서 제외. 반복 삭제는 204."]
+    ]
   }
 ]

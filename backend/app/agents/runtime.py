@@ -614,6 +614,8 @@ class Services:
             with self.read_store() as store:
                 rid=state.report_wait.report_id
                 record=store.owned('report','report_id',rid,state.input.user_id)
+                if (record.get('conditions_json') or {}).get('deleted_at'):
+                    return ToolResult(status='NO_DATA',error='리포트가 삭제되었습니다.')
                 if record['status']!='READY': return ToolResult(status='FAILED',error='리포트 파일 생성에 실패했습니다.')
                 # 직전 턴 결과표는 이번 계획의 depends_on에 없어 누락 사유가 전파되지 않는다. 접수 때 conditions_json에 남긴
                 # 승인 사본의 사유를 결과에 싣는다(content_json은 워커가 완성 문서로 바꾼다).

@@ -1,5 +1,5 @@
 // BS19 구독 설정 / 수정
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { navigate } from '../../router'
 import { useApp } from '../../store'
 import { Btn, Check } from '../../components/ui'
@@ -20,18 +20,25 @@ function OptionCard({ checked, onChange, title, desc, style }) {
   )
 }
 
-export default function Subscription() {
+export default function Subscription({ route }) {
   const { subscription } = useApp()
-  return <SubscriptionForm key={subscription.version} subscription={subscription} />
+  const cycle = route.query.get('cycle')
+  return <SubscriptionForm key={subscription.version} subscription={subscription} focusCycle={cycle} />
 }
 
-function SubscriptionForm({ subscription }) {
+function SubscriptionForm({ subscription, focusCycle }) {
   const { setSubscription, notify, options, profile } = useApp()
   const [cycles, setCycles] = useState(subscription.cycles)
   const [formats, setFormats] = useState(subscription.formats)
   const hasInterests = !!(profile.products.length || profile.countries.length)
   const valid = hasInterests && cycles.length > 0 && formats.length > 0
   const [pending, runOnce] = usePendingAction()
+  const cycleRef = useRef(null)
+  useEffect(() => {
+    if (!cycleRef.current) return
+    cycleRef.current.scrollIntoView({ block: 'center' })
+    cycleRef.current.querySelector('input')?.focus({ preventScroll: true })
+  }, [focusCycle])
   const save = () => runOnce(async () => {
     if (!valid) return
     if (!await setSubscription({ cycles, formats })) return
@@ -51,7 +58,9 @@ function SubscriptionForm({ subscription }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 12, marginTop: 14 }} className="resp-stack">
-          {CYCLES.map(([key, title, desc]) => <OptionCard key={key} checked={cycles.includes(key)} onChange={() => options.report_periods.some(p => p.option_code === key.toUpperCase()) ? setCycles(c => toggleValue(c, key)) : notify('이 구독 주기는 운영 설정 준비 중입니다.')} title={title} desc={desc} />)}
+          {CYCLES.map(([key, title, desc]) => <div key={key} ref={key === focusCycle ? cycleRef : undefined} style={{ flex: 1, minWidth: 0, borderRadius: 12, outline: key === focusCycle ? '2px solid var(--red)' : undefined, outlineOffset: 3 }}>
+            <OptionCard checked={cycles.includes(key)} onChange={() => options.report_periods.some(p => p.option_code === key.toUpperCase()) ? setCycles(c => toggleValue(c, key)) : notify('이 구독 주기는 운영 설정 준비 중입니다.')} title={title} desc={desc} style={{ height: '100%' }} />
+          </div>)}
         </div>
       </div>
       <div style={{ marginTop: 26 }}>

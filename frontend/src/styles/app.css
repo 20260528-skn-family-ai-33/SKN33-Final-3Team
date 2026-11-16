@@ -249,6 +249,10 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 /* 기능 카드 묶음: 각 카드 폭을 원래의 2/3로 줄이고 오른쪽 끝에 맞춘다. 좁은 화면에서는 두 칸을 꽉 채운다 */
 .hero-cards{grid-template-columns:repeat(2,minmax(0,calc((100% - 18px) / 2.5)));justify-content:end}
 @media (max-width:1000px){.hero-cards{grid-template-columns:1fr 1fr}}
+@media (max-width:480px){
+  .hero-cards{grid-template-columns:minmax(0,1fr);width:100%}
+  .hero-cards>.col{margin-top:0!important}
+}
 /* 기능 카드: 뒤 사진이 비쳐 보이는 반투명 유리판(어두운 바탕 + 흰 글자) */
 .feature-card{position:relative;display:block;padding:22px 22px 24px;border-radius:18px;color:#fff;background:linear-gradient(160deg,rgba(255,255,255,.16),rgba(255,255,255,.05)),rgba(8,20,34,.34);border:1px solid rgba(255,255,255,.24);box-shadow:0 10px 30px rgba(3,10,18,.28);-webkit-backdrop-filter:blur(3px) saturate(120%);backdrop-filter:blur(3px) saturate(120%);transition:transform .2s,box-shadow .2s,border-color .2s,background .2s}
 .feature-card:hover,.feature-card:focus-visible{transform:translateY(-3px);border-color:rgba(255,255,255,.5);background:linear-gradient(160deg,rgba(255,255,255,.22),rgba(255,255,255,.08)),rgba(8,20,34,.40);box-shadow:0 16px 36px rgba(3,10,18,.38)}
@@ -256,7 +260,7 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .feature-card.rose .fc-icon{background:rgba(200,16,46,.72);border-color:rgba(255,255,255,.18)}
 .feature-card.lav .fc-icon{background:rgba(74,62,140,.75);border-color:rgba(255,255,255,.18)}
 .feature-card h3{margin:14px 0 6px;font-size:18px;font-weight:800;color:#fff;text-shadow:0 1px 8px rgba(3,10,18,.45)}
-.feature-card p{font-size:14px;line-height:1.6;color:rgba(236,242,248,.88);white-space:pre-line;text-shadow:0 1px 6px rgba(3,10,18,.5)}
+.feature-card p{font-size:14px;line-height:1.7;color:rgba(236,242,248,.88);white-space:pre-line;word-break:keep-all;overflow-wrap:anywhere;text-wrap:pretty;text-shadow:0 1px 6px rgba(3,10,18,.5)}
 .feature-card .fc-go{position:absolute;top:22px;right:20px;display:inline-flex;color:rgba(255,255,255,.55);transition:transform .2s,color .2s}
 .feature-card:hover .fc-go,.feature-card:focus-visible .fc-go{color:#fff;transform:translateX(3px)}
 
@@ -331,6 +335,11 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .subnav a.on::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:3px;background:var(--red);border-radius:2px}
 @media (max-width:640px){.subnav{gap:0;justify-content:space-around;font-size:15px}.subnav a{padding:14px 0}}
 @media print{.subnav{display:none}}
+.subnav.article-tabs{justify-content:flex-start;gap:clamp(16px,4vw,52px);flex-wrap:wrap}
+.article-item{word-break:keep-all;overflow-wrap:anywhere}
+.article-meta{display:flex;flex-wrap:wrap;gap:4px 10px}
+.article-meta>span+span::before{content:'·';margin-right:10px}
+.article-body{max-height:32rem;overflow-y:auto;scrollbar-gutter:stable;padding-right:8px}
 
 /* 회원가입 완료 안내(Welcome) */
 @keyframes welcome-pop{from{opacity:0;transform:scale(.6)}60%{transform:scale(1.08)}to{opacity:1;transform:none}}
