@@ -11,6 +11,29 @@ from backend.app.api.common import ApiError
 
 
 class ConditionTest(unittest.TestCase):
+    def test_report_annotated_code_is_validated_and_selected_answer_takes_precedence(self):
+        self.state.input.question = '화장품(HS 3304) 리포트 만들어줘'
+        self.task.intent = 'REPORT'
+        self.task.slots = TaskSlots(products=['화장품'])
+        confirm = Mock()
+        check_conditions(self.store, self.state, self.step, confirm_report=confirm)
+        self.assertEqual(self.step.status, 'DONE')
+        self.assertEqual([h.hs_code for h in self.task.conditions.hs_items], ['3304'])
+        confirm.assert_called_once()
+        self.task.resolved['t1:hs:화장품'] = {'hs_items': [{'hs_code': '330499', 'hs_ver': 'HS2022'}]}
+        check_conditions(self.store, self.state, self.step, confirm_report=confirm)
+        self.assertEqual([h.hs_code for h in self.task.conditions.hs_items], ['330499'])
+
+    def test_report_explicit_unknown_code_does_not_bypass_dictionary_validation(self):
+        self.state.input.question = 'HS 9999 리포트 만들어줘'
+        self.task.intent = 'REPORT'
+        self.task.slots = TaskSlots(products=None)
+        confirm = Mock()
+        check_conditions(self.store, self.state, self.step, confirm_report=confirm)
+        self.assertEqual(self.step.status, 'FAILED')
+        self.assertIn('HS 사전에 없습니다', self.state.results[self.step.step_id].error)
+        confirm.assert_not_called()
+
     def test_bare_cause_keeps_both_confirmed_scopes_after_out_of_scope_turns(self):
         from backend.app.agents.context import completed_context
         from backend.app.agents.planner import build_plan, explicit_cause_followup

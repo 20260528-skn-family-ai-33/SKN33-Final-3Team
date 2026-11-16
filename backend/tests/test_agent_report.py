@@ -90,6 +90,36 @@ class ReportAgentTest(unittest.TestCase):
         return ' '.join(s for c in job['answer'].get('conclusion') or [] for s in c.get('sentences', [])) or job['answer'].get('text', '')
 
     # ── 승인 (D-81·D-92) ─────────────────────────────────────────
+    def test_explicit_hs_code_in_report_question_reaches_preview_without_product_prompt(self):
+        for code in ('3304', '330499'):
+            with self.subTest(code=code):
+                question = f'미국 화장품(HS {code}) 리포트 만들어줘'
+                jid = self.ask([{'intent': 'REPORT', 'question': question, 'slots': {
+                    'products': ['화장품'], 'countries': [{'mention': '미국', 'name': '미국'}]}}],
+                    question=question, key=f'explicit-{code}')
+                prompt = self.job(jid)['clarification']
+                self.assertEqual(prompt['kind'], 'REPORT_CONFIRM')
+                self.assertEqual(prompt['report_preview']['conditions']['hs_items'],
+                                 [{'hs_code': code, 'hs_ver': 'HS2022'}])
+                self.assertEqual(prompt['report_preview']['conditions']['country_codes'], ['US'])
+                self.assertEqual(self.reports(), [])  # 코드 인식은 생성 승인이 아니다.
+
+    def test_hs4_selected_from_product_prompt_is_preserved_in_report_preview(self):
+        question = '화장품 리포트 만들어줘'
+        jid = self.ask([{'intent': 'REPORT', 'question': question,
+                         'slots': {'products': ['화장품']}}], question=question)
+        prompt = self.job(jid)['clarification']
+        self.assertEqual(prompt['kind'], 'HS_ITEM')
+        response = self.post(f'chat/jobs/{jid}/clarifications', {
+            'clarification_id': prompt['clarification_id'],
+            'hs_item': {'hs_code': '3304', 'hs_ver': 'HS2022'}})
+        self.assertEqual(response.status_code, 202, response.text)
+        self.work()
+        prompt = self.job(jid)['clarification']
+        self.assertEqual(prompt['kind'], 'REPORT_CONFIRM')
+        self.assertEqual(prompt['report_preview']['conditions']['hs_items'],
+                         [{'hs_code': '3304', 'hs_ver': 'HS2022'}])
+
     def test_report_waits_for_explicit_button_approval(self):
         """R01 미리보기만 만들고 묻는다. 입력창의 '네'는 승인이 아니며 리포트를 만들지 않는다."""
         jid = self.ask()

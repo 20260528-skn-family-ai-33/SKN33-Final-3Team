@@ -5,7 +5,7 @@ import re
 from uuid import uuid4
 from sqlalchemy import select, func
 
-from backend.app.agents.planner import HS_CODE_MENTION, ambiguous_report_source, product_expressions
+from backend.app.agents.planner import HS_CODE_MENTION, ambiguous_report_source, coded_product, product_expressions
 from backend.app.agents.state import (Choice, Conditions, DataMeta, Pending, Period, TaskSlots,
                                      MAX_ASKS_PER_CONDITION, MAX_TEXT_CHARS, MARKET_INTENTS, ToolResult)
 from backend.app.api import accounts, reference, trade
@@ -223,7 +223,9 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     report_answer=task.resolved.get(f'{task.task_id}:report_confirm',{})
     if report_answer.get('reject_input_change'): raise SlotRepair('선행 결과의 조건을 변경하려면 새 분석 질문을 입력해 주세요.')
     original=state.input.question+' '+report_answer.get('revision_text','')
-    if len(state.plan.tasks) == 1 and not task.resolved and task.intent in ('STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES'):
+    if (len(state.plan.tasks) == 1 and not task.resolved
+            and task.intent in ('STATISTICS', 'RANKING', 'MARKET_SHARE', 'CAUSE', 'LOCAL_ISSUES', 'REPORT')
+            and not task.input_bindings and not task.previous_turn_result):
         codes = list(dict.fromkeys(HS_CODE_MENTION.findall(original)))
         grounded = [p for p in slots.products or [] if _product_key(p) in country_key(original)]
         if codes and not any(not any(code in p for code in codes) for p in grounded):
@@ -310,9 +312,8 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         # 같은 답에 함께 고른 HS6는 다시 묻는 동안에도 남긴다(다음 답의 patch에 함께 넣는다)
         kept = [h for h in answer.get('hs_items', []) if len(h['hs_code']) != 4] if hs4 else []
         expr = hs4[0] if hs4 else answer.get('replace_expression', expression)
-        # "HS 3304"도 원문 숫자와 HS 사전을 대조하는 기존 코드 경로로 보낸다.
-        if explicit_hs := HS_CODE_MENTION.fullmatch(expr.strip()):
-            expr = explicit_hs[1]
+        # 이름(HS 코드)도 숫자·HS 사전을 대조한다. 사용자가 이미 고른 답은 위에서 우선 적용한다.
+        expr = coded_product(expr, original if not answer else expr)
         # D-22: 플래너가 질문에 없는 이전 조건을 그대로 다시 적으면 생략(이어받기)과 같다.
         # 코드가 같거나, 이전 조건을 만든 직전 질문의 표현이고 그 표현의 검색 결과에 이전 품목이 있을 때만 이어받는다.
         if not answer and base.hs_items and country_key(expr) not in original_key:
