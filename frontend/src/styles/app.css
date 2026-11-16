@@ -335,6 +335,11 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .subnav a.on::after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:3px;background:var(--red);border-radius:2px}
 @media (max-width:640px){.subnav{gap:0;justify-content:space-around;font-size:15px}.subnav a{padding:14px 0}}
 @media print{.subnav{display:none}}
+.subnav.article-tabs{justify-content:flex-start;gap:clamp(16px,4vw,52px);flex-wrap:wrap}
+.article-item{word-break:keep-all;overflow-wrap:anywhere}
+.article-meta{display:flex;flex-wrap:wrap;gap:4px 10px}
+.article-meta>span+span::before{content:'·';margin-right:10px}
+.article-body{max-height:32rem;overflow-y:auto;scrollbar-gutter:stable;padding-right:8px}
 
 /* 회원가입 완료 안내(Welcome) */
 @keyframes welcome-pop{from{opacity:0;transform:scale(.6)}60%{transform:scale(1.08)}to{opacity:1;transform:none}}
