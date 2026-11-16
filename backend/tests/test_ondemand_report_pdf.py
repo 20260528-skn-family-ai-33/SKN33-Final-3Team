@@ -103,7 +103,10 @@ class OnDemandReportTest(unittest.TestCase):
         self.assertEqual(k['amount_usd'], 5230000)  # TOTAL rows must not contribute.
         self.assertEqual((k['top1_name'], k['prev_top1_name']), ('미국', '중국'))
         self.assertEqual([r['rank_move'] for r in ctx['top_countries']], [1, -1])
-        self.assertEqual(ctx['concentration']['top3']['current'], 100)
+        # 수출국 2개: 상위 1개국 비중만 뜻이 있다. 상위 3·10개국은 항상 100%라 행을 두지 않는다(#120)
+        self.assertEqual(set(ctx['concentration']) & {'top1', 'top3', 'top10'}, {'top1'})
+        self.assertFalse(ctx['concentration']['single'])
+        self.assertIsNone(k['top3_share_pct'])
 
     def test_explicit_zero_rows_have_same_rankings_in_pdf_and_original_tables(self):
         uid = self.signup()
@@ -188,7 +191,11 @@ class OnDemandReportTest(unittest.TestCase):
                     self.assertAlmostEqual(sum(r['amount_usd'] for r in ctx['top_countries']) + (ctx['others'] or {}).get('amount_usd',0), float(total), places=6)
                     positive = sorted((code for code in current if current[code]>0), key=lambda code:(-current[code],code))
                     self.assertEqual(k['country_count'], len(positive))
-                    self.assertAlmostEqual(k['top3_share_pct'], float(sum(current[code] for code in positive[:3])*100/total), places=6)
+                    # 상위 3개국 비중은 수출국이 3개보다 많을 때만 있다(이하면 항상 100%라 비움, #120)
+                    if len(positive) > 3:
+                        self.assertAlmostEqual(k['top3_share_pct'], float(sum(current[code] for code in positive[:3])*100/total), places=6)
+                    else:
+                        self.assertIsNone(k['top3_share_pct'])
                     self.assertAlmostEqual(doc['sections'][1]['kpi']['amount_usd'], k['amount_usd'], places=6)
                     original_top = next(s for s in doc['sections'] if s['section_code']=='TOP_COUNTRIES')['tables'][0]['rows']
                     self.assertEqual([(r['country'],r['amount_usd']) for r in original_top],

@@ -52,5 +52,40 @@ class LineChartTest(unittest.TestCase):
         self.assertIn('36.00', shown)
 
 
+class ConcentrationTest(unittest.TestCase):
+    """수출국이 n개 이하면 상위 n개국 비중은 항상 100%라 표·카드에서 뺀다(#120)."""
+
+    def render(self, countries):
+        import copy
+        from backend.app.services.report_templates import render, sample_context
+        ctx = copy.deepcopy(sample_context('ondemand'))
+        cc = ctx['concentration']
+        ctx['concentration'] = {**{k: cc[k] for k in ('top1', 'top3', 'top10') if countries > int(k[3:])},
+                                'countries': {'current': countries, 'previous': countries}, 'single': countries <= 1, 'note': None}
+        kpi = ctx['summary']['kpi']
+        kpi.update(country_count=countries, top1_share_pct=kpi['top1_share_pct'] if countries > 1 else None,
+                   top3_share_pct=kpi['top3_share_pct'] if countries > 3 else None)
+        return str(render('RPT_ON_DEMAND', ctx))
+
+    def test_single_country_shows_guidance_instead_of_table(self):
+        html = self.render(1)
+        self.assertIn('수출국이 1개라 시장 집중도(상위 국가 비중)는 계산하지 않습니다.', html)
+        self.assertNotIn('<td>상위 1개국 비중</td>', html)
+        self.assertIn('수출국 1개라 계산하지 않음', html)        # 주요 지표 카드
+        self.assertIn('수출국 3개 이하라 계산하지 않음', html)
+
+    def test_two_countries_keep_only_top1(self):
+        html = self.render(2)
+        self.assertIn('<td>상위 1개국 비중</td>', html)
+        self.assertNotIn('<td>상위 3개국 비중</td>', html)
+        self.assertNotIn('<td>상위 10개국 비중</td>', html)
+
+    def test_many_countries_keep_every_row(self):
+        html = self.render(12)
+        for label in ('상위 1개국 비중', '상위 3개국 비중', '상위 10개국 비중', '수출국 수'):
+            self.assertIn(f'<td>{label}</td>', html)
+        self.assertNotIn('계산하지 않음', html)
+
+
 if __name__ == '__main__':
     unittest.main()

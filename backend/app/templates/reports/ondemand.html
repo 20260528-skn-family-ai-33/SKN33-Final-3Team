@@ -96,7 +96,7 @@
 {% endif %}
 {{ m.kpis([
   {'label': c.period.title_label ~ ' 수출액', 'value': k.amount_usd | eok, 'unit': '억 달러', 'sub': (vs ~ ' ' ~ (k.change_pct | signed_pct)) if compare_ready else (pend if has_compare else '')},
-  {'label': '1위 수출국', 'value': (k.top1_name ~ ' ' ~ (k.top1_share_pct | pct)) if k.top1_name else '—', 'sub': top_sub},
+  {'label': '1위 수출국', 'value': (k.top1_name ~ ((' ' ~ (k.top1_share_pct | pct)) if k.top1_share_pct is not none else '')) if k.top1_name else '—', 'sub': top_sub},
   {'label': '수출국 수', 'value': k.country_count | num, 'unit': '개국', 'sub': (prevw ~ ' ' ~ (k.prev_country_count | num) ~ '개국 · ' ~ (k.country_count_diff | signed)) if compare_ready else (pend if has_compare else '')},
 ], 3) }}
 {% elif b.key == 'sentences' %}
@@ -105,6 +105,7 @@
 <h3>주요 지표<small>분석 {{ c.period.label }} · 단위 억 달러</small></h3>
 {% set prev_txt = (prevw ~ ' ') if has_compare else '' %}
 {% set conc = '' %}
+{# 수출국이 n개 이하면 상위 n개국 비중은 항상 100%라 컨텍스트가 값을 비운다(null). 카드는 —와 이유를 적는다(#120) #}
 {% if compare_ready and k.top3_share_pct is not none and k.prev_top3_share_pct is not none %}
   {% set conc = ' · 집중도 완화' if k.top3_share_pct < k.prev_top3_share_pct else (' · 집중도 상승' if k.top3_share_pct > k.prev_top3_share_pct else '') %}
 {% endif %}
@@ -112,10 +113,10 @@
   {'label': '기간 수출액', 'value': k.amount_usd | eok, 'unit': '억 달러', 'sub': (prev_txt ~ (((k.prev_amount_usd | eok) ~ '억 달러') if k.prev_amount_usd else '실적 없음')) if compare_ready else (pend if has_compare else '')},
   {'label': (vs ~ ' 증감률') if has_compare else '증감률', 'value': k.change_pct | signed_pct if compare_ready else '—', 'sub': ('증감액 ' ~ (k.change_usd | signed_eok) ~ '억 달러') if compare_ready else (pend if has_compare else '비교 없음')},
   {'label': '수출국 수', 'value': k.country_count | num, 'unit': '개국', 'sub': (vs ~ ' ' ~ (k.country_count_diff | signed) ~ '개국') if compare_ready else (pend if has_compare else '')},
-  {'label': '상위 1개국 비중', 'value': k.top1_share_pct | num(2), 'unit': '%', 'sub': (k.top1_name ~ ((' (' ~ prevw ~ ' 1위 ' ~ k.prev_top1_name ~ ' ' ~ (k.prev_top1_share_pct | pct) ~ ')') if compare_ready and k.prev_top1_name else '')) if k.top1_name else ''},
+  {'label': '상위 1개국 비중', 'value': k.top1_share_pct | num(2), 'unit': '%' if k.top1_share_pct is not none else '', 'sub': '수출국 1개라 계산하지 않음' if k.top1_share_pct is none and k.country_count <= 1 else (k.top1_name ~ ((' (' ~ prevw ~ ' 1위 ' ~ k.prev_top1_name ~ ' ' ~ (k.prev_top1_share_pct | pct) ~ ')') if compare_ready and k.prev_top1_name else '')) if k.top1_name else ''},
   {'label': '수입액 (참고)', 'value': k.import_usd | eok, 'unit': '억 달러', 'sub': (vs ~ ' ' ~ (k.import_change_pct | signed_pct)) if compare_ready else (pend if has_compare else '')},
   {'label': '무역수지', 'value': k.trade_balance_usd | signed_eok, 'unit': '억 달러', 'sub': '수출 − 수입'},
-  {'label': '상위 3개국 비중', 'value': k.top3_share_pct | num(2), 'unit': '%', 'sub': (prev_txt ~ (k.prev_top3_share_pct | pct) ~ conc) if compare_ready else (pend if has_compare else '')},
+  {'label': '상위 3개국 비중', 'value': k.top3_share_pct | num(2), 'unit': '%' if k.top3_share_pct is not none else '', 'sub': '수출국 3개 이하라 계산하지 않음' if k.top3_share_pct is none and k.country_count <= 3 else (prev_txt ~ (k.prev_top3_share_pct | pct) ~ conc) if compare_ready else (pend if has_compare else '')},
   {'label': '월평균 수출액', 'value': k.monthly_avg_usd | eok(2), 'unit': '억 달러', 'sub': ('최고 ' ~ k.peak_month_label ~ ' ' ~ (k.peak_month_usd | eok(2))) if k.peak_month_label else ''},
 ], 4) }}
 {% elif b.key == 'checks' %}
@@ -252,11 +253,14 @@
     {% if bars %}{{ hbar_chart(bars, [colors.accent, colors.previous] if compare_ready else [colors.accent], label_width=70, width=320, row_height=30, divisor=100000000, digits=2) }}{% else %}{{ m.pending('수출 실적이 없습니다.' if k.amount_usd == 0 else '데이터 준비 중') }}{% endif %}</div>
   <div><h3>시장 집중도</h3>
     {% set cc = concentration %}
-    {% if cc is none %}{{ m.pending() }}{% else %}
+    {% if cc is none %}{{ m.pending() }}{% elif cc.get('single') %}
+    {# 수출국이 1개면 상위 n개국 비중이 모두 100%라 뜻이 없다(#120) #}
+    {{ m.pending('수출국이 ' ~ (cc.countries.current | num) ~ '개라 시장 집중도(상위 국가 비중)는 계산하지 않습니다.') }}
+    {% else %}
     <table>
       {# 값은 비중(%)·국가 수라 기간 이름만 쓰면 '기간'이 나올 것처럼 읽힌다. 그 기간에 잰 값임을 '기준'으로 밝힌다(#120) #}
       <tr><th>지표</th><th class="r">{{ cur }} 기준</th>{% if has_compare %}<th class="r">{{ prev }} 기준</th>{% endif %}</tr>
-      {% for label, key, unit in [('상위 1개국 비중', 'top1', '%'), ('상위 3개국 비중', 'top3', '%'), ('상위 10개국 비중', 'top10', '%'), ('수출국 수', 'countries', '개국')] %}
+      {% for label, key, unit in [('상위 1개국 비중', 'top1', '%'), ('상위 3개국 비중', 'top3', '%'), ('상위 10개국 비중', 'top10', '%'), ('수출국 수', 'countries', '개국')] if key in cc %}
       {% set v = cc[key] %}
       <tr><td>{{ label }}</td><td class="r">{{ (v.current | pct) if unit == '%' else ((v.current | num) ~ unit if v.current is not none else '—') }}</td>{% if has_compare %}<td class="r">{{ '—' if not compare_ready else (v.previous | pct) if unit == '%' else ((v.previous | num) ~ unit if v.previous is not none else '—') }}</td>{% endif %}</tr>
       {% endfor %}

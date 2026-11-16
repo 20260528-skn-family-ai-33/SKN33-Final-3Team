@@ -150,7 +150,7 @@ python -m unittest backend/tests/test_report_templates.py
 | `summary.sentences[]`, `summary.check_points[{target, content, basis}]` | 요약 문장 · 검토 포인트 (null이면 생략) |
 | `monthly` | `{labels[], current[], previous[], rows[{label, amount_usd, prev_amount_usd, change_usd, change_pct}], quarters[{label, amount_usd, prev_amount_usd, change_pct}], notes[]}` — 월 수 자유(14행 넘으면 표를 쪽으로 나눔), `quarters`는 완전한 분기만 |
 | `top_countries[]` | `{rank, rank_move(정수·0·'NEW'·null), name, country_code, amount_usd, share_pct, prev_amount_usd, change_pct, is_new?}` (상위 10개) · `others` (없으면 `null`) |
-| `concentration` | `{top1, top3, top10, countries}` 각 `{current, previous}` + `note?` |
+| `concentration` | `{top1?, top3?, top10?, countries}` 각 `{current, previous}` + `single` + `note?`. 상위 n개국은 분석 기간 수출국이 n개보다 많을 때만 있다(이하면 항상 100%라 뺌). `single`(수출국 1개 이하)이면 표 대신 안내. `summary.kpi`의 상위 1·3개국 비중도 같은 기준으로 `null`(#120) |
 | `articles[]`, `article_limit` | 정기와 같음 |
 | `sources[]` | `{label, provider, scope, used_in}` (데이터 기준 쪽 표, 「이 리포트에서 쓴 곳」 칸 포함) |
 

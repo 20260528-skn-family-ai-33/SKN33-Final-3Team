@@ -184,8 +184,10 @@ def populate(store, saved, ctx, names, start, end):
     total = amount(window)
     old_total = amount(previous_window) if ready else None
     monthly = [amount([m]) for m in window]
-    top_share = lambda n: sum(current[code] for code in active[:n]) * 100 / total if total else None
-    old_share = lambda n: sum(previous[code] for code in old_active[:n]) * 100 / old_total if old_total else None
+    # 상위 n개국 비중은 수출국이 n개보다 많을 때만 뜻이 있다. 수출국이 n개 이하면 계산상 항상 100%라
+    # '한 국가에 쏠림'처럼 잘못 읽히므로 값을 비운다(#120). 분석·비교 기간은 각 기간의 수출국 수로 따로 판단한다
+    top_share = lambda n: sum(current[code] for code in active[:n]) * 100 / total if total and len(active) > n else None
+    old_share = lambda n: sum(previous[code] for code in old_active[:n]) * 100 / old_total if old_total and len(old_active) > n else None
     imported = old_imported = None
     if 'KPI' in sections:
         imports = trade.aggregate(store, 'import_summary', first, end, saved.get('hs_items', []),
@@ -234,9 +236,10 @@ def populate(store, saved, ctx, names, start, end):
                                 for i, code in enumerate(active[:10], 1)]
         others = [code for code in codes if code not in active[:10]]
         ctx['others'] = metrics(others) if others else None
-        ctx['concentration'] = {**{f'top{n}': {'current': top_share(n), 'previous': old_share(n)} for n in (1, 3, 10)},
+        # 분석 기간 수출국 수보다 작은 상위 n만 행으로 둔다(국가 2개면 상위 1개국만). 수출국이 1개 이하면 표 대신 안내한다
+        ctx['concentration'] = {**{f'top{n}': {'current': top_share(n), 'previous': old_share(n)} for n in (1, 3, 10) if len(active) > n},
                                 'countries': {'current': len(active), 'previous': len(old_active) if ready else None},
-                                'note': None}
+                                'single': len(active) <= 1, 'note': None}
     scope = '선택 국가 내 집계' if saved.get('country_codes') else '전체 국가 집계'
     ctx['meta']['data_basis'] = f'관세청 수출입무역통계 · HS2022 · {scope}'
     ctx['sources'] = [{'label': '수출입 통계', 'provider': '관세청', 'scope': f'{scope} · 검증 완료 월',
