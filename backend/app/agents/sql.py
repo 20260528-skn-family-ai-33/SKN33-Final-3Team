@@ -51,8 +51,9 @@ extra_compare_periods가 있으면 비교 기간이 여럿이며 기간마다 �
 사용자가 지정한 결과 열·순서·단위·날짜 형식을 지킵니다. 날짜 조건의 원본 trade_month와 표시용 월 문자열을 구분합니다.
 비교 열의 순서는 요청에 적힌 순서를 따릅니다. conditions의 period가 먼저라는 이유로 조회 기간 열을 앞에 놓지 않습니다.
 중량 미제공(NULL)은 SUM(weight_kg)에서도 NULL로 유지하며 0으로 채우지 않습니다. 단가는 SUM(amount_usd)/NULLIF(SUM(weight_kg),0)입니다.
-월 목록을 만들어 LEFT JOIN하거나 두 기간을 비교할 때는 수출입 원본끼리 직접 조인하지 않습니다.
-각 수출입 원본을 별도 CTE/파생 SELECT의 WHERE에서 국가·HS·판본·기간으로 제한하고 필요한 월/대상 단위로 먼저 집계한 뒤 조인합니다.
+수출·수입 비교, 월 목록 LEFT JOIN, 두 기간 비교 어디서든 수출입 원본끼리(또는 원본과 집계 결과를) 직접 조인하지 않습니다.
+각 수출입 원본을 별도 CTE/파생 SELECT의 WHERE에서 국가·HS·판본·기간으로 제한하고 양쪽을 같은 월/대상 단위로 먼저 집계한 뒤,
+GROUP BY 키를 모두 조인 조건에 써서 조인합니다(국가 행이 중복되면 금액이 배로 커집니다).
 원본의 필터를 LEFT JOIN ON에만 넣으면 범위 검사에서 거부됩니다. 달력은 집계된 CTE와 월로 조인하고 누락값을 0으로 바꾸지 않습니다.
 전년 동월 비교는 두 기간의 집계 결과를 월 번호/지정한 기간의 월 순서로 대응시키며, 연도가 다른 YYYY-MM 문자열의 동일 비교로 조인하지 않습니다.
 비중의 분모가 그 국가·기간 전체이면 분모 범위는 품목(또는 국가)으로 거르지 않아도 됩니다.
@@ -112,6 +113,7 @@ def validate_sql(draft: SqlDraft, conditions=None) -> str:
             if isinstance(source, exp.Table):
                 if source.db or source.catalog or source.name.lower() not in ALLOWED_TABLES:
                     raise ValueError('허용 목록 밖의 테이블입니다.')
+        _check_trade_join(scope)
     _check_trade_filters(query)
     if conditions is not None:
         _check_conditions(query, conditions)
@@ -125,6 +127,84 @@ def validate_sql(draft: SqlDraft, conditions=None) -> str:
         raise ValueError('LIMIT은 0 이상의 정수여야 합니다.')
     query = query.limit(min(int(value.this), MAX_ROWS) if value is not None else MAX_ROWS)
     return query.sql(dialect='mysql', comments=False)
+
+
+def _check_trade_join(scope):
+    """수출입 원본 표를 읽는 SELECT가 다른 수출입 원본이나 수출입을 읽은 CTE·파생 SELECT와 함께 조인하면 거부한다.
+    원본 행은 국가·품목·월마다 있어 품목·월만으로 이으면 행이 중복되고 SUM이 배로 커진다(수출 300만 달러 → 600만 달러).
+    각 원본을 따로 같은 단위로 먼저 집계한 CTE끼리 잇는 것은 허용한다(country 등 사전 표와의 조인도 허용)."""
+    raw, derived = [], {}
+    for alias, (_, source) in scope.selected_sources.items():
+        if isinstance(source, exp.Table):
+            if source.name.lower() in TRADE_TABLES:
+                raw.append(source)
+        elif _reads_trade(source):
+            derived[alias.lower()] = _aggregate_keys(source.expression)
+    # 비중 분모 같은 한 행 합계는 스칼라 하위 쿼리로 쓴다(CROSS JOIN은 _check_trade_filters가 거부한다).
+    if raw and len(raw) + len(derived) > 1:
+        raise ValueError('수출입 원본 표를 다른 수출입 표와 직접 조인하면 국가·품목 행이 중복 합산됩니다. '
+                         '각 원본을 별도 CTE에서 필요한 단위로 먼저 집계한 뒤 조인하세요.')
+    if len(derived) < 2 or not isinstance(scope.expression, exp.Select):
+        return
+    # 먼저 집계한 수출입 CTE끼리 이을 때도 각 CTE의 GROUP BY 키가 모두 조인 조건에 있어야 한 행씩 대응한다.
+    # 월·국가로 묶은 수출과 월로만 묶은 수입을 월로 이으면 수입 금액이 국가 수만큼 반복된다.
+    outputs = {alias: {e.alias_or_name.lower() for e in source.expression.selects}
+               for alias, (_, source) in scope.selected_sources.items()
+               if not isinstance(source, exp.Table) and isinstance(source.expression, exp.Select)}
+    joined = {}
+    for join in scope.expression.args.get('joins') or []:
+        using = {u.name.lower() for u in join.args.get('using') or []}
+        for alias in scope.selected_sources:
+            joined.setdefault(alias.lower(), set()).update(using)
+        # 키는 ON의 최상위 AND 등식(`=`, 또는 값 하나짜리 IN)에 있을 때만 맞춘 것으로 본다. `IS NOT NULL`·`IN (여러 값)`·`<>`는
+        # 그 키의 행을 하나로 정하지 못해 금액이 반복된다. `MONTH(a.m) = MONTH(b.m)`처럼 식끼리의 등식은 받는다.
+        terms = [t for t in _and_terms(join.args.get('on'))
+                 if isinstance(t, exp.EQ) or (isinstance(t, exp.In) and not t.args.get('query') and len(t.expressions) == 1)]
+        for column in (c for term in terms for c in term.find_all(exp.Column)):
+            name = column.name.lower()
+            # 별칭 없는 열은 그 이름을 내는 파생 표의 열로 본다.
+            owners = [column.table.lower()] if column.table else [a.lower() for a, cols in outputs.items() if name in cols]
+            for owner in owners:
+                joined.setdefault(owner, set()).add(name)
+    for alias, keys in derived.items():
+        if keys is None:
+            raise ValueError('수출입 표끼리 조인할 때는 각 표를 같은 단위로 먼저 집계하세요(창 함수는 행을 묶지 않습니다).')
+        if not keys <= joined.get(alias, set()):
+            raise ValueError('집계 단위가 다른 수출입 결과를 조인하면 금액이 반복 합산됩니다. '
+                             '양쪽을 같은 단위로 집계하고 GROUP BY 키를 모두 조인 조건에 쓰세요.')
+
+
+def _reads_trade(scope, seen=None):
+    """파생 표(Scope)가 수출입 표를 읽는지. 다른 CTE·파생 표를 거쳐 읽는 경우(`im_rows` → `im_view`)도 따라간다."""
+    seen = seen if seen is not None else set()
+    if id(scope) in seen:
+        return False
+    seen.add(id(scope))
+    if any(t.name.lower() in TRADE_TABLES for t in scope.expression.find_all(exp.Table)):
+        return True
+    children = [source for _, source in scope.selected_sources.values() if not isinstance(source, exp.Table)]
+    return any(_reads_trade(child, seen) for child in [*children, *getattr(scope, 'union_scopes', [])])
+
+
+def _aggregate_keys(select):
+    """파생 SELECT의 집계 키(결과 열 이름). 행을 묶지 않으면 None, GROUP BY 없이 집계만 하면 빈 집합(한 행)이다.
+    창 함수(SUM … OVER) 안의 집계는 행을 묶지 않아 세지 않는다. GROUP BY에 결과 별칭을 쓴 경우(`GROUP BY month`)도 받는다.
+    DISTINCT와 UNION(중복 제거)은 결과 열 전체가 키다. UNION ALL은 같은 키의 행이 여러 갈래에서 와서 키가 없다."""
+    if isinstance(select, exp.Union):
+        return {e.alias_or_name.lower() for e in select.selects} if select.args.get('distinct') else None
+    if not isinstance(select, exp.Select):
+        return None
+    if not any(agg.find_ancestor(exp.Window) is None for e in select.selects for agg in e.find_all(exp.AggFunc)):
+        return {e.alias_or_name.lower() for e in select.selects} if select.args.get('distinct') else None
+    aliases = {e.alias.lower() for e in select.selects if e.alias}
+    keys = set()
+    for group in (select.args.get('group').expressions if select.args.get('group') else []):
+        names = [e.alias_or_name.lower() for e in select.selects if e.unalias() == group]
+        if not names and isinstance(group, exp.Column) and not group.table and group.name.lower() in aliases:
+            names = [group.name.lower()]
+        # 결과 열로 내지 않은 키는 조인 조건에 쓸 수 없다. 조인할 때만 거부되도록 맞출 수 없는 이름으로 남긴다.
+        keys.add(names[0] if names else '#group-key-not-projected')
+    return keys
 
 
 def _plan_annual_totals(query, conditions):
