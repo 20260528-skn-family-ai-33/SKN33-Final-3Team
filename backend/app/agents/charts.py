@@ -94,8 +94,10 @@ def build_chart(store, uid, task, result_id, selection=None):
             if len(rows) > MAX_CHART_LABELS:
                 return output, [], warnings
             full = labels = [row['year_label'] for row in rows]
-            kindchart, title = 'bar', f'연도별 {flow}'
-            series = [{'name': flow, 'values': [row['amount_usd'] for row in rows]}]
+            measure = f'월평균 {flow}' if comparison.monthly_average else flow
+            key = 'monthly_average' if comparison.monthly_average else 'amount_usd'
+            kindchart, title = 'bar', f'연도별 {measure}'
+            series = [{'name': measure, 'values': [row[key] for row in rows]}]
     elif kind=='TREND':
         grouped=defaultdict(list)
         for row in rows: grouped[(row['country_code'],row['hs_code'],row['hs_ver'])].append(row)

@@ -45,6 +45,7 @@ class YearComparison(Input):
     years: list[int] = Field(min_length=3)
     baseline_year: int | None = None
     monthly: bool = False
+    monthly_average: bool = False
 
     @model_validator(mode='after')
     def distinct_years(self):

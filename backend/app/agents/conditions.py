@@ -447,7 +447,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             out.period = Period(start=shift_month(bounds[-1], 1-(slots.recent_months or 12)), end=bounds[-1])
         from backend.app.agents.multi_year import requested_years
         years = requested_years(task.question, base.year_comparison) if task.intent == 'STATISTICS' else None
-        if years and not task.custom_query and len(out.country_codes) <= 1 and len(out.hs_items) <= 1:
+        if years and len(out.country_codes) <= 1 and len(out.hs_items) <= 1:
             out.year_comparison = years
             out.period = Period(start=date(years.years[0], 1, 1), end=date(years.years[-1], 12, 1))
         comparison = slots.compare_period

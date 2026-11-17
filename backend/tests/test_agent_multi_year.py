@@ -90,3 +90,65 @@ class MultiYearTest(unittest.TestCase):
                 snapshots = {task.steps[1].step_id:snapshot_evidence(snapshot)}
                 self.assertEqual(judge_draft(s, snapshots=snapshots).status, 'NEEDS_REVIEW')
                 s.input.context.conditions = restore_conditions({'conditions':snapshot['conditions']})
+
+    def test_range_and_explicit_years_keep_the_requested_anchor(self):
+        for question in ('2022년부터 2025년까지 각 연도 수출액을 2024년 기준으로 비교해줘',
+                         '2024년 기준으로 2022~2025년 수출액을 비교해줘',
+                         '22년~25년 일본 수출액을 2024년 기준으로 비교해줘'):
+            with self.subTest(question=question):
+                parsed = requested_years(question)
+                self.assertEqual(parsed.years, [2022, 2023, 2024, 2025])
+                self.assertEqual(parsed.baseline_year, 2024)
+        self.assertEqual(requested_years('2021년, 2024년을 2025년과 비교해줘').years, [2021, 2024, 2025])
+        self.assertIsNone(requested_years('2024년부터 2025년까지 비교해줘'))
+
+    def test_four_year_monthly_average_in_text_uses_full_years(self):
+        engine, meta = test_engine()
+        self.addCleanup(engine.dispose)
+        reference_data(engine, meta)
+        conn = engine.connect()
+        self.addCleanup(conn.close)
+        db = Database(engine)
+        db.settings = Settings({'API_HS_VECTOR_ENABLED':'false'})
+        store = Store(db, conn)
+        store.insert('country', country_code='JP', name_ko='일본', country_role='COUNTRY')
+        for table in ['import_summary', 'export_summary']:
+            store.insert('batch_run', source_code='CUSTOMS', job_name='HS6_AGGREGATION', target_table=table,
+                         period_start=date(2022, 1, 1), period_end=date(2025, 12, 31),
+                         status='SUCCESS', detail_json={})
+        for year in range(2022, 2026):
+            for month in range(1, 13):
+                store.insert('export_summary', trade_month=date(year, month, 1), hs6_code='330499',
+                             hs_ver='HS2022', country_code='JP', amount_usd=(year-2020)*5 + (month == 12))
+        s = state()
+        q = '2022년부터 2025년까지 일본 수출액을 2025년 기준으로 비교해서 연도별 월평균을 글로만 알려줘'
+        s.input.question = q
+        planned = PlannerOutput(tasks=[dict(intent='STATISTICS', question=q, custom_query='연도별 월평균',
+                                            slots={'countries':[{'mention':'일본','name':'일본'}]})])
+        s.plan, _ = build_plan(postprocess(planned, q))
+        task, = s.plan.tasks
+        self.assertEqual(task.slots.answer_format, 'TEXT')
+        self.assertNotIn('build_chart', [step.tool for step in task.steps])
+        check_conditions(store, s, task.steps[0])
+        query = next(step for step in task.steps if step.tool == 'query_trade_data')
+        analysis = run_template(store, 7, task, query)
+        self.assertEqual([r['monthly_average'] for r in analysis.rows],
+                         [Decimal(x) for x in ('10.08', '15.08', '20.08', '25.08')])
+        self.assertEqual([r['amount_usd'] for r in analysis.rows], [121, 181, 241, 301])
+        task.answer_status = 'ANSWERED'
+        s.results[query.step_id] = analysis.result
+        s.draft = year_comparison_draft(s)
+        self.assertIn('월평균 수출액', s.draft.turn_summary)
+        self.assertIn('2022년 10.08달러', s.draft.turn_summary)
+        saved = results.result_table(store, 7, analysis.rows, analysis.meta, analysis.conditions, columns=analysis.columns)
+        source = results.read_snapshot(store, 7, saved['result_id'], 'RESULT')
+        self.assertEqual(judge_draft(s, snapshots={query.step_id:snapshot_evidence(source)}).status, 'PASS')
+        source['rows'][0]['monthly_average'] = 99
+        self.assertEqual(judge_draft(s, snapshots={query.step_id:snapshot_evidence(source)}).status, 'NEEDS_REVIEW')
+
+    def test_extra_calculation_is_not_folded_into_amount_comparison(self):
+        q = '2022년부터 2025년까지 일본 수출액의 연도별 표준편차를 2025년 기준으로 글로만 비교해줘'
+        planned = PlannerOutput(tasks=[dict(intent='STATISTICS', question=q, custom_query='연도별 표준편차',
+                                            slots={'countries':[{'mention':'일본','name':'일본'}]})])
+        task, = postprocess(planned, q).tasks
+        self.assertEqual((task.custom_query, task.slots.answer_format), ('연도별 표준편차', 'TEXT'))

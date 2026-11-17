@@ -97,3 +97,24 @@ class MonthlySummaryTest(unittest.TestCase):
         facts = monthly_facts(rows)
         self.assertEqual((facts['min_usd'],facts['min_month'],facts['min_count']), (0,'2025-02',2))
         self.assertEqual((facts['increased_months'],facts['yoy_months']), ([],1))
+
+    def test_cited_monthly_trade_claim_survives_assembly_then_uses_article_evidence(self):
+        rows = [dict(month='2025-01', amount_usd=20), dict(month='2025-02', amount_usd=40)]
+        state, snapshots = self.example(rows)
+        _, fixed = compose_input(state, lambda _: {}, [])
+        fact = '2024년 2월 화장품 수출액은 전년 동월보다 3% 감소했다.'
+        cards = [dict(n=1, task_id='t2', summary=[dict(text=fact)])]
+        evidence = [dict(article_id='1', task_id='t2', evidence_sufficient=True,
+                         sentences=[dict(text=fact, quotes=[fact])])]
+        quoted = '기사에 따르면 ' + fact.replace('감소했다.', '감소했습니다. [1]')
+        for line, status in [(quoted, 'PASS'), (quoted.replace('3%', '30%'), 'MISMATCH'),
+                             (quoted + ' 월별 수출액의 최저는 900달러입니다.', 'MISMATCH')]:
+            with self.subTest(line=line):
+                generated = Draft(conclusion=[dict(task_id='t2', sentences=[line])],
+                                  explanation=[line], turn_summary='')
+                state.draft = assemble(state, generated, fixed, lambda _: {}, articles=cards)
+                self.assertEqual(state.draft.conclusion[-1].sentences, [line])
+                self.assertEqual(state.draft.explanation, [line])
+                verdict = judge_draft(state, snapshots=snapshots, articles=evidence)
+                self.assertEqual([(c.basis, c.status) for c in verdict.checks[-2:]],
+                                 [('ARTICLE', status), ('ARTICLE', status)])

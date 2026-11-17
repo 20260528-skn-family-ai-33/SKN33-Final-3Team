@@ -3,8 +3,15 @@ import hashlib
 import json
 import re
 
-from backend.app.agents.compose import ARTICLE_CITATION, cited_article_numbers
 from backend.app.agents.state import ArticleReview
+
+
+# Shared by Writer validation, numeric verification and hidden-article redaction.
+ARTICLE_CITATION = re.compile(r'\[\s*([0-9]+(?:\s*,\s*[0-9]+)*)\s*\]')
+
+
+def cited_article_numbers(text):
+    return {number.strip() for group in ARTICLE_CITATION.findall(text) for number in group.split(',')}
 
 
 def _fact_text(text):

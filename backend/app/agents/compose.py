@@ -3,17 +3,10 @@ from collections import Counter
 import re
 
 from backend.app.agents.digest import display_amounts, korean_usd
+from backend.app.agents.verify_articles import ARTICLE_CITATION, cited_article_numbers
 from backend.app.agents.monthly_summary import fixed_monthly_sentences, reconcile_monthly_claims
 from backend.app.agents.state import (AgentState, Draft, TaskConclusion, MAX_TASK_SENTENCES,
                                       MAX_TEXT_TASK_SENTENCES, draft_limit_error, is_text_task)
-
-# Shared by Writer validation, numeric verification and hidden-article redaction.
-ARTICLE_CITATION = re.compile(r'\[\s*([0-9]+(?:\s*,\s*[0-9]+)*)\s*\]')
-
-
-def cited_article_numbers(text):
-    return {number.strip() for group in ARTICLE_CITATION.findall(text) for number in group.split(',')}
-
 
 UNSUPPORTED = {
     'OUT_OF_SCOPE': '수출입 통계·시장 비중·유망시장에 관한 질문을 입력해 주세요.',
@@ -560,7 +553,7 @@ def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_c
         if state.input.first_question: title = (label + ' 리포트')[:20]
     draft = Draft(conclusion=[by_id[t.task_id] for t in state.plan.tasks],
         explanation=generated.explanation if generated else [], turn_summary=summary, title=title)
-    reconcile_monthly_claims(state, draft, articles or ())
+    reconcile_monthly_claims(state, draft)
     if not draft.title and state.input.first_question and fixed_monthly_sentences(state, primary):
         draft.title = primary.question[:20]
     if error := draft_limit_error(state.plan, draft):

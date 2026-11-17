@@ -1,6 +1,7 @@
 """Monthly facts come from the same unrounded observations as the result table."""
 import re
 
+from backend.app.agents.verify_articles import ARTICLE_CITATION
 from backend.app.agents.digest import korean_usd, number
 from backend.app.agents.state import MAX_EXPLANATION_SENTENCES, MAX_TEXT_EXPLANATION_SENTENCES, is_text_task
 from backend.app.api.common import percentage
@@ -163,14 +164,17 @@ def fixed_monthly_sentences(state, task):
     return sentences if not _PLAIN_WORDS.sub('', question) else ()
 
 
-def _monthly_claim(line):
+def _uncited_monthly_claim(line):
+    # Verification binds each cited clause to its article and checks any following SQL claim.
+    if ARTICLE_CITATION.search(line):
+        return False
     amount = re.search(r'달러|USD|월별', line) or ('월' in line and re.search(r'수출|수입', line))
     trade = re.search(r'수출|수입|금액|달러|전년 동월', line)
     months_only = re.match(r'^\s*(?:\d{1,2}월(?:에만|에는|만|은|이|에)?[,·와과\s]*)+(?:증가|감소|상승|하락)', line)
     return bool((_EXTREME.search(line) and amount) or (_MONTH_DIRECTION.search(line) and (trade or months_only)))
 
 
-def reconcile_monthly_claims(state, draft, articles=()):
+def reconcile_monthly_claims(state, draft):
     """Retain article findings, replacing Writer restatements of monthly statistics across shared sections."""
     series = {task.task_id: task_series(state, task) for task in state.plan.tasks}
     shared = set(filter(None, series.values()))
@@ -181,31 +185,20 @@ def reconcile_monthly_claims(state, draft, articles=()):
         if not sentences or task.intent != 'CAUSE':
             continue
         conclusion.sentences = list(dict.fromkeys(
-            sentences[1] if _monthly_claim(line) and not _article_only(line, articles) else line
+            sentences[1] if _uncited_monthly_claim(line) else line
             for line in conclusion.sentences))
     # Shared text has no task identity. For a single scoped series, its monthly answer is already in the conclusion.
     primary = state.plan.tasks[0]
     fixed = fixed_monthly_sentences(state, primary)
-    if fixed:
+    if fixed and not ARTICLE_CITATION.search(draft.turn_summary):
         draft.turn_summary = fixed[1]
     plain = all(t.intent == 'CAUSE' or fixed_monthly_sentences(state, t) for t in state.plan.tasks)
     if len(shared) == 1 and all(series.values()) and plain:
         sentences, = shared
-        draft.explanation = [line for line in draft.explanation if not _monthly_claim(line) or _article_only(line, articles)]
-        if not fixed and _monthly_claim(draft.turn_summary):
+        draft.explanation = [line for line in draft.explanation if not _uncited_monthly_claim(line)]
+        if not fixed and _uncited_monthly_claim(draft.turn_summary):
             draft.turn_summary = sentences[1]
         if (len(state.plan.tasks) == 1 and primary.intent == 'CAUSE' and _TREND.search(primary.question)
                 and sentences[1] not in draft.conclusion[0].sentences):
             limit = MAX_TEXT_EXPLANATION_SENTENCES if is_text_task(primary) else MAX_EXPLANATION_SENTENCES
             draft.explanation = [sentences[1], *draft.explanation][:limit]
-
-
-def _article_only(line, articles):
-    cited = {int(n) for group in re.findall(r'\[([\d,\s]+)\]', line) for n in re.findall(r'\d+', group)}
-    if not cited:
-        return False
-    if not re.search(r'수출액|수입액|달러', line):
-        return True
-    prose = re.sub(r'\[[\d,\s]+\]', '', line).strip().rstrip('.').strip()
-    return any(prose and prose in (fact if isinstance(fact, str) else fact['text'])
-               for card in articles if card.get('n') in cited for fact in card.get('summary', []))
