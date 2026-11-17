@@ -1,7 +1,7 @@
 // BS26 관심정보(관심 국가·품목, 로그인 시작 화면)
 import { useState } from 'react'
 import { useApp } from '../../store'
-import { Btn } from '../../components/ui'
+import { Btn, Loading } from '../../components/ui'
 import { usePendingAction } from '../../api/hooks'
 import { CountryPicker, InterestProducts } from '../../components/pickers'
 
@@ -51,7 +51,7 @@ export default function Interests() {
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
         <Btn size="md" onClick={reset}>취소</Btn>
-        <Btn kind="red" size="md" disabled={saving} onClick={save}>{saving ? '저장 중…' : '관심정보·시작 화면 저장'}</Btn>
+        <Btn kind="red" size="md" disabled={saving} onClick={save}>{saving ? <Loading inline showLabel label="저장 중…" /> : '관심정보·시작 화면 저장'}</Btn>
       </div>
     </section>
   )

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { navigate } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Check } from '../../components/ui'
+import { Btn, Check, Loading } from '../../components/ui'
 import { toggleValue } from '../../data/catalog'
 import { usePendingAction } from '../../api/hooks'
 
@@ -80,7 +80,7 @@ function SubscriptionForm({ subscription, focusCycle }) {
       </div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
         <Btn size="md" onClick={() => window.history.back()}>취소</Btn>
-        <Btn kind="red" size="md" disabled={!valid || pending} onClick={save}>{pending ? '저장 중…' : '저장'}</Btn>
+        <Btn kind="red" size="md" disabled={!valid || pending} onClick={save}>{pending ? <Loading inline showLabel label="저장 중…" /> : '저장'}</Btn>
       </div>
     </section>
   )

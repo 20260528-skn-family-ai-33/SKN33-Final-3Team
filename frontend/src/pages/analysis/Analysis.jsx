@@ -3,7 +3,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { allPages, useApp } from '../../store'
 import { navigate } from '../../router'
 import { Band } from '../../components/layout'
-import { Btn, Check, Modal, TextField } from '../../components/ui'
+import { Btn, Check, Loading, Modal, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
 import { api, streamAnswer } from '../../api/client'
@@ -393,10 +393,12 @@ export default function Analysis({ route }) {
     })
     return ()=>cancelAnimationFrame(frame)
   },[clarificationId,job?.clarification?.allow_text])
-  const newChat = () => run(async () => {
+  // 새 채팅·이름 변경은 한 번만 실행하고 처리 중 표시를 보인다(두 번 눌러 방이 둘 생기거나 요청이 겹치지 않게).
+  const [creatingChat, createChatOnce] = usePendingAction()
+  const newChat = () => createChatOnce(() => run(async () => {
     const data = await api('/chat/sessions', { method: 'POST', body: {} })
     await refreshChats(); clearArticle(); setActiveId(data.session.session_id); setMessages([]); setJob(null); setDraft(null); setInput(''); setDrawer(false)
-  })
+  }))
   const clearArticle = () => {
     if (!articleId) return
     setArticleId(null)
@@ -465,8 +467,10 @@ export default function Analysis({ route }) {
     if (id === activeId) return
     clearArticle(); setActiveId(id); setMessages([]); setJob(null); setDraft(null)
   }
-  const removeChat = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') })
-  const updateTitle = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'PATCH', body: { title: rename.trim() } }); await refreshChats(); setModal(null) })
+  const [deletingChat, deleteChatOnce] = usePendingAction()
+  const removeChat = () => deleteChatOnce(() => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setInput(''); setModal(null); navigate('/analysis?new=1', { replace: true }); notify('채팅방을 삭제했습니다.') }))
+  const [renamingChat, renameChatOnce] = usePendingAction()
+  const updateTitle = () => renameChatOnce(() => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'PATCH', body: { title: rename.trim() } }); await refreshChats(); setModal(null) }))
   const clarify = async body => {
     const id=job?.clarification?.clarification_id
     if (!id || clarificationRequest.current || acceptedClarifications.current.has(id)) return
@@ -536,7 +540,7 @@ export default function Analysis({ route }) {
           {drawer && <div className="chat-scrim" aria-hidden="true" onClick={() => setDrawer(false)} />}
           <aside id="chat-rooms" className={'card col chat-side' + (drawer ? ' open' : '')} style={{ gap: 10, padding: 18 }} aria-label="내 채팅방"
             onKeyDown={e => { if (e.key === 'Escape') setDrawer(false) }}>
-            <Btn kind="red" block icon="plus" onClick={newChat}>새 채팅</Btn>
+            <Btn kind="red" block icon={creatingChat ? undefined : 'plus'} disabled={creatingChat} onClick={newChat}>{creatingChat ? <Loading inline showLabel label="만드는 중…" /> : '새 채팅'}</Btn>
             <div className="between" style={{ marginTop: 6 }}>
               <p style={{ fontSize: 15, fontWeight: 800 }}>내 채팅방</p>
               <span className="note">최근 대화 순 · 한국 시각(KST)</span>
@@ -588,7 +592,7 @@ export default function Analysis({ route }) {
                         {label}
                       </Btn>)}
                   </div>
-                </> : !selectedArticle.error && <p role="status">선택한 기사를 불러오고 있습니다.</p>}
+                </> : !selectedArticle.error && <p aria-busy={selectedArticle.loading}><Loading inline showLabel label="선택한 기사를 불러오고 있습니다." /></p>}
               </AiBlock> : !messages.length && (
                 <AiBlock>
                   <p style={{ fontSize: 17, fontWeight: 800 }}>무엇을 분석해 드릴까요?</p>
@@ -646,25 +650,25 @@ export default function Analysis({ route }) {
           {interest?.products.map(h=>{const saved=interest.savedProducts.has(h.hs_ver+h.hs_code);return <Check key={h.hs_ver+h.hs_code} disabled={savingInterest||saved} checked={saved||interest.hs_items.includes(h)} onChange={on=>setInterest({...interest,hs_items:on?[...interest.hs_items,h]:interest.hs_items.filter(v=>v!==h)})}>{productChoiceLabel(h.hs_code,h.name_ko)}{saved&&' · 이미 등록됨'}</Check>})}
           {interest&&!interest.countries.length&&!interest.products.length&&<p>추가할 국가·HS6 품목이 없습니다. 국가나 품목을 지정해 분석해 주세요.</p>}
           {interest&&(interest.countries.length>0||interest.products.length>0)&&!selectableInterest&&<p role="status">모두 이미 등록된 항목입니다.</p>}
-        </div><div className="chips"><Btn disabled={savingInterest} onClick={()=>setInterest(null)}>취소</Btn><Btn kind="red" disabled={savingInterest||!selectableInterest} onClick={saveInterest}>선택 항목 저장</Btn></div>
+        </div><div className="chips"><Btn disabled={savingInterest} onClick={()=>setInterest(null)}>취소</Btn><Btn kind="red" disabled={savingInterest||!selectableInterest} onClick={saveInterest}>{savingInterest ? <Loading inline showLabel label="저장 중…" /> : '선택 항목 저장'}</Btn></div>
       </Modal>
-      <Modal open={modal === 'rename'} onClose={() => setModal(null)} width={480} label="채팅방 이름 변경">
+      <Modal open={modal === 'rename'} onClose={() => { if (!renamingChat) setModal(null) }} width={480} label="채팅방 이름 변경">
         <p style={{ fontSize: 13, fontWeight: 800, color: 'var(--red-d)' }}>채팅방 관리</p>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 6 }}>채팅방 이름 변경</h2>
-        <div style={{ marginTop: 16 }}><TextField value={rename} onChange={setRename} onEnter={() => rename.trim() && updateTitle()} aria-label="새 이름" maxLength={40} /></div>
+        <div style={{ marginTop: 16 }}><TextField value={rename} onChange={setRename} onEnter={() => rename.trim() && !renamingChat && updateTitle()} aria-label="새 이름" maxLength={40} /></div>
         <p className="note" style={{ marginTop: 6, textAlign: 'right' }}>{rename.length} / 40자 · Enter로 저장</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
-          <Btn size="md" onClick={() => setModal(null)}>취소</Btn>
-          <Btn kind="red" size="md" disabled={!rename.trim()} onClick={updateTitle}>저장</Btn>
+          <Btn size="md" disabled={renamingChat} onClick={() => setModal(null)}>취소</Btn>
+          <Btn kind="red" size="md" disabled={!rename.trim() || renamingChat} onClick={updateTitle}>{renamingChat ? <Loading inline showLabel label="저장 중…" /> : '저장'}</Btn>
         </div>
       </Modal>
-      <Modal open={modal === 'delete'} onClose={() => setModal(null)} width={480} label="채팅방 삭제">
+      <Modal open={modal === 'delete'} onClose={() => { if (!deletingChat) setModal(null) }} width={480} label="채팅방 삭제">
         <span style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="trash" size={24} color="#C8102E" /></span>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 16 }}>‘{active?.title}’ 채팅방을 삭제할까요?</h2>
         <p className="muted" style={{ marginTop: 10, fontSize: 15, lineHeight: 1.7 }}>대화 내용이 삭제됩니다. 이 채팅에서 생성한 리포트는 리포트 센터에 그대로 남습니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
-          <Btn size="md" onClick={() => setModal(null)}>취소</Btn>
-          <Btn kind="red" size="md" onClick={removeChat}>삭제</Btn>
+          <Btn size="md" disabled={deletingChat} onClick={() => setModal(null)}>취소</Btn>
+          <Btn kind="red" size="md" disabled={deletingChat} onClick={removeChat}>{deletingChat ? <Loading inline showLabel label="삭제 중…" /> : '삭제'}</Btn>
         </div>
       </Modal>
     </>

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { navigate } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Modal, Steps } from '../../components/ui'
+import { Btn, Loading, Modal, Steps } from '../../components/ui'
 import { usePendingAction } from '../../api/hooks'
 import { CountryPicker, InterestProducts } from '../../components/pickers'
 import { productName, registerProducts } from '../../data/catalog'
@@ -141,7 +141,7 @@ export default function Onboarding({ route }) {
         <p className="muted" style={{ marginTop: 12 }}>이번 화면에서 변경한 품목과 국가는 저장되지 않습니다. 기존에 저장한 관심정보는 유지되며, 마이페이지에서 수정할 수 있습니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>
           <Btn size="md" disabled={pending} onClick={() => setSkipOpen(false)}>취소</Btn>
-          <Btn kind="red" size="md" disabled={pending} onClick={skip}>{pending ? '처리 중…' : '저장하지 않고 건너뛰기'}</Btn>
+          <Btn kind="red" size="md" disabled={pending} onClick={skip}>{pending ? <Loading inline showLabel label="처리 중…" /> : '저장하지 않고 건너뛰기'}</Btn>
         </div>
       </Modal>
     </>
