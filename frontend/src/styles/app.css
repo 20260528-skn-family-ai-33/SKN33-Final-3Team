@@ -428,3 +428,12 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 /* 인쇄용 리포트 시트(main) */
 .print-sheet { font-family: "Malgun Gothic", "맑은 고딕", sans-serif; }
 .print-sheet .th { background: #d6dde9; color: #1e293a; }
+/* 공통 로딩 스피너(components/ui.jsx Loading). 채팅의 .chat-loading-ring과 같은 모양 */
+.loading{display:flex;align-items:center;justify-content:center;padding:28px 0}
+.loading-inline{display:inline-flex;padding:0;vertical-align:middle}
+.loading-ring{width:28px;height:28px;border:3px solid var(--line);border-top-color:var(--red);border-radius:50%;animation:loading-spin .8s linear infinite}
+.loading-inline .loading-ring{width:14px;height:14px;border-width:2px}
+.loading-text{margin-left:8px}
+.page-loader{min-height:60vh}
+@keyframes loading-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.loading-ring{animation:none}}

@@ -1,7 +1,7 @@
 // 관리자 화면 데이터(screens.js)를 목업과 같은 마크업으로 그린다.
 import { useState } from 'react'
 import { navigate } from '../router'
-import { Btn, Chip, Modal } from '../components/ui'
+import { Btn, Chip, Loading, Modal } from '../components/ui'
 import Icon from '../components/Icon'
 import { useApp } from '../store'
 import { isAdmin } from '../auth/roles'
@@ -98,7 +98,8 @@ function OpsDashboard({ tab }) {
         <div className="chips" style={{ marginTop: 14 }}>
           {OPS_TABS.map(([label, id]) => <Chip key={label} sm on={tab === label} to={`/admin/ops/${id}`}>{label}</Chip>)}
         </div>
-        <div style={{ marginTop: 6 }}>
+        <div aria-busy={result.loading} style={{ marginTop: 6 }}>
+          {result.loading && <Loading label="알림을 불러오는 중" />}
           {alerts.map(([kind, title, meta, tone, to]) => (
             <div key={title} className="between" style={{ padding: '14px 0', borderBottom: '1px solid var(--line2)' }}>
               <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
@@ -109,7 +110,7 @@ function OpsDashboard({ tab }) {
             </div>
           ))}
         </div>
-        <p className="note" style={{ marginTop: 12 }}>{`조회된 알림 ${alerts.length}건`}</p>
+        {!result.loading && <p className="note" style={{ marginTop: 12 }}>{`조회된 알림 ${alerts.length}건`}</p>}
       </section>
     </>
   )

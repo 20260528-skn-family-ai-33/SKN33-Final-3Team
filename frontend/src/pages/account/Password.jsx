@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { navigate } from '../../router'
 import { useApp } from '../../store'
-import { Btn, TextField } from '../../components/ui'
+import { Btn, Loading, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { PASSWORD_HINT, isStrongPassword } from '../../utils/validate'
 import PasswordRules from '../../components/PasswordRules'
@@ -99,7 +99,7 @@ export default function Password() {
       {!ready && <p className="note" style={{ marginTop: 14, textAlign: 'right' }}>현재 비밀번호를 입력하고, 새 비밀번호가 조건을 모두 만족하며 확인값과 일치해야 저장할 수 있습니다.</p>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
         <Btn size="md" to="/account/profile">취소</Btn>
-        <Btn kind="red" size="md" type="submit" disabled={!ready || saving}>{saving ? '저장 중…' : '변경 저장'}</Btn>
+        <Btn kind="red" size="md" type="submit" disabled={!ready || saving}>{saving ? <Loading inline showLabel label="저장 중…" /> : '변경 저장'}</Btn>
       </div>
       {error.form && <p className="field-err" role="alert">{error.form}</p>}
     </form>

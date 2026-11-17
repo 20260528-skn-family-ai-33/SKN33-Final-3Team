@@ -3,6 +3,7 @@ import { Suspense, lazy, useEffect } from 'react'
 import { navigate, useRoute, withQuery } from './router'
 import { useApp, useNotifications, useToast } from './store'
 import { AuthHeader, Footer, FooterSmall, SiteHeader } from './components/layout'
+import { Loading } from './components/ui'
 import AlertPopover from './components/AlertPopover'
 import NotificationPopups from './components/NotificationPopups'
 import { useAdminAlertCount } from './admin/useAdminAlertCount'
@@ -60,7 +61,7 @@ function UserShell({ active, route, children }) {
   )
 }
 
-const PageLoader = () => <div className="page-loader" role="status" aria-label="불러오는 중"><div className="page-spinner" /></div>
+const PageLoader = () => <Loading className="page-loader" />
 
 function Toast() {
   const { toast, setToast } = useToast()

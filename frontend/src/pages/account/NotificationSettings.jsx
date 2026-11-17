@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, ErrorNotice, usePendingAction } from '../../api/hooks'
 import { Link, navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Check, Modal, Toggle } from '../../components/ui'
+import { Btn, Check, Loading, Modal, Toggle } from '../../components/ui'
 import { productName } from '../../data/catalog'
 import TermsBody from '../../components/TermsBody'
 import TermsRenewalNotice from '../../components/TermsRenewalNotice'
@@ -80,7 +80,7 @@ export default function NotificationSettings({ route }) {
       <p className="note" style={{ marginTop: 12 }}>기본 꺼짐 또는 가입 동의 결과 적용 · 전체 켬 + 현재 약관 동의 시 수신 {termsOk ? '· 알림 약관 동의 완료' : '· 알림 약관 미동의'}</p>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
         <Btn size="md" onClick={() => setDraft(settings)}>취소</Btn>
-        <Btn kind="red" size="md" disabled={saving} onClick={save}>{saving ? '저장 중…' : '설정 저장'}</Btn>
+        <Btn kind="red" size="md" disabled={saving} onClick={save}>{saving ? <Loading inline showLabel label="저장 중…" /> : '설정 저장'}</Btn>
       </div>
 
       <Modal open={termsOpen} onClose={closeTerms} width={640} label="알림 수신 약관 동의">
@@ -91,15 +91,15 @@ export default function NotificationSettings({ route }) {
           <div className="between" style={{ padding: '12px 18px', background: 'var(--bg)' }}>
             <b style={{ fontSize: 14 }}>알림 수신 약관</b>
           </div>
-          <div style={{ padding: 18, height: 240, overflowY: 'auto' }}>
-            <ErrorNotice error={terms.error} retry={terms.reload} />{terms.loading ? <span className="muted">약관을 불러오는 중…</span> : <TermsBody body={terms.data?.terms.body} />}
+          <div aria-busy={terms.loading} style={{ padding: 18, height: 240, overflowY: 'auto' }}>
+            <ErrorNotice error={terms.error} retry={terms.reload} />{terms.loading ? <Loading label="약관을 불러오는 중" /> : <TermsBody body={terms.data?.terms.body} />}
           </div>
         </div>
         <Check checked={agree} onChange={setAgree} style={{ marginTop: 16 }}>위 알림 수신 약관을 확인했으며 동의합니다.</Check>
         <p className="note" style={{ marginTop: 8 }}>동의 전에는 알림이 켜지지 않습니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
           <Btn size="md" onClick={closeTerms}>거부</Btn>
-          <Btn kind="red" size="md" disabled={!agree || !TERMS_VERSION || accepting} onClick={acceptTerms}>동의하고 켜기</Btn>
+          <Btn kind="red" size="md" disabled={!agree || !TERMS_VERSION || accepting} onClick={acceptTerms}>{accepting ? <Loading inline showLabel label="처리 중…" /> : '동의하고 켜기'}</Btn>
         </div>
       </Modal>
     </section>
