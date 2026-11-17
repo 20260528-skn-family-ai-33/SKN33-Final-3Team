@@ -185,10 +185,17 @@ def kpis(store,uid,selected=None):
     return {'kpi':kpi,'result_id':table['result_id'],'meta':meta}
 
 
-def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='BOTH',save=True,screen_export=False):
+def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='BOTH',save=True,screen_export=False,sparkline=False):
     require(flow in ('EXPORT','IMPORT','BOTH'),'수출입 방향을 확인하세요.')
     start,end=resolve_period(store,start,end,months)
     ex={r['trade_month']:r['amount_usd'] for r in aggregate(store,'export_summary',start,end,hs,countries,'MONTH')}
+    if sparkline:
+        # 메인 카드 그래프에는 당기 수출만 필요하며 다운로드용 결과표를 만들지 않는다.
+        items=[]; cursor=start
+        while cursor<=end:
+            items.append({'month':cursor.strftime('%Y-%m'),'export_amount_usd':ex.get(cursor,Decimal(0))})
+            cursor=shift_month(cursor,1)
+        return {'items':items,'meta':metadata(store,start,end)}
     im={r['trade_month']:r['amount_usd'] for r in aggregate(store,'import_summary',start,end,hs,countries,'MONTH')}
     verified=set(verified_months(store,'export_summary'))
     old={r['trade_month']:r['amount_usd'] for r in aggregate(store,'export_summary',shift_month(start,-12),shift_month(end,-12),hs,countries,'MONTH') if r['trade_month'] in verified}
@@ -225,7 +232,7 @@ def screen_export_columns(group,flow='EXPORT'):
             for key,label,unit in fields]
 
 
-def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY',flow='EXPORT',page=1,size=5,save=True,screen_export=False):
+def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY',flow='EXPORT',page=1,size=5,save=True,screen_export=False,details=True):
     require(group in ('COUNTRY','HS6') and flow in ('EXPORT','IMPORT'),'순위 기준을 확인하세요.')
     start,end=resolve_period(store,start,end,3)
     key=lambda r: r['country_code'] if group=='COUNTRY' else r['hs6_code']
@@ -236,7 +243,7 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
         for code in countries or []: primary.setdefault(code,Decimal(0))
     total=sum(primary.values())
     previous={}; yoy={}; old_rank={}; rank_comparable=False
-    if start==end:
+    if details and start==end:
         source='export_summary' if flow=='EXPORT' else 'import_summary'
         available=set(verified_months(store,source))
         rank_comparable=shift_month(start,-1) in available
@@ -245,16 +252,18 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
             if m in available:
                 target.update({key(r):r['amount_usd'] for r in aggregate(store,source,m,m,hs,countries,group)})
         old_rank={k:n for n,k in enumerate(sorted((k for k in previous if previous[k]>0),key=lambda k:(-previous[k],k)),1)}
-    flags=anomaly_map(store,start,end,hs,countries,group,flow)
+    flags=anomaly_map(store,start,end,hs,countries,group,flow) if details else {}
     hs_names={}
-    if group=='HS6' and primary:
+    ordered=sorted(primary,key=lambda k:(-primary[k],k not in ex and k not in im,k))
+    selected=ordered if details else ordered[(page-1)*size:page*size]
+    if group=='HS6' and selected:
         # 화면이 품목 코드 대신 품목명을 보여 주도록 이름을 같이 내려준다.
         code=store.t('hs_code')
-        hs_names={r['hs_code']:r['name_ko'] for r in store.c.execute(select(code.c.hs_code,code.c.name_ko).where(code.c.hs_ver=='HS2022',code.c.hs_code.in_(list(primary)))).mappings()}
+        hs_names={r['hs_code']:r['name_ko'] for r in store.c.execute(select(code.c.hs_code,code.c.name_ko).where(code.c.hs_ver=='HS2022',code.c.hs_code.in_(selected))).mappings()}
     items=[]
     # 금액이 같으면 실적(수출 또는 수입)이 있는 행을 먼저 둔다. 그래야 실적 없는 행이 앞 페이지를 채우지 않고,
     # 1페이지에 실적이 없으면 전체 결과에도 없다는 화면의 판단이 맞는다.
-    for rank,k in enumerate(sorted(primary,key=lambda k:(-primary[k],k not in ex and k not in im,k)),1):
+    for rank,k in enumerate(selected,1 if details else (page-1)*size+1):
         h=[{'hs_code':k,'hs_ver':'HS2022'}] if group=='HS6' else hs
         country=[k] if group=='COUNTRY' else countries
         items.append({'rank':rank,'country_code':k if group=='COUNTRY' else None,
@@ -267,8 +276,12 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
             'one_off':flags.get(k,anomaly_view(set()))})
     meta=metadata(store,start,end)
     conditions={'hs_items':hs or [],'country_codes':countries or [],'period':period(start,end),'trade_flow':flow}
-    meta.update(truncated=len(items)>1000, rows_total=len(items))
-    out={'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items)), 'meta':meta,
+    if not details:
+        for item in items:
+            for field in ('one_off','rank_change','rank_status','mom_pct','yoy_pct'):
+                item.pop(field)
+    meta.update(truncated=len(primary)>1000, rows_total=len(primary))
+    out={'items':items[(page-1)*size:page*size] if details else items,'page':page_info(page,size,len(primary)), 'meta':meta,
          'conditions':{'hs_items':hs or [],'country_codes':countries or []}}
     if save:
         # Display-only flags stay in the API; exports distinguish absent observations from zero.
