@@ -99,7 +99,7 @@ const { chromium } = require('playwright')
     for (const text of ['후속 질문', '리포트 요청', '다음 질문']) {
       await page.getByLabel('질문 입력').fill(text)
       await page.getByRole('button', { name: '전송', exact: true }).click()
-      await page.getByText(text, { exact: true }).waitFor()
+      await page.locator('.chat-user').getByText(text, { exact: true }).waitFor()
     }
     await page.getByText('후속 답변', { exact: true }).waitFor()
     const boxes = await page.locator('.chat-flow > div').evaluateAll(elements => elements.map(el => ({ text: el.textContent.slice(0, 45), top: el.getBoundingClientRect().top, bottom: el.getBoundingClientRect().bottom })))
