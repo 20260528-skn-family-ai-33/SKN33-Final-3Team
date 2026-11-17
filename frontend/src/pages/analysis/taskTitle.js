@@ -1,4 +1,5 @@
 export function taskTitle(task, tables) {
+  if (tables.some(table => table.meta?.trade_balance)) return task.question
   const flow = { EXPORT: '수출', IMPORT: '수입' }[task.conditions?.trade_flow]
   if (task.intent !== 'STATISTICS' || !flow || !tables.some(table => table.meta?.kind === 'TREND')) {
     return task.question

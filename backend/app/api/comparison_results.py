@@ -12,7 +12,11 @@ def country_comparison(store,uid,result_ids):
     # This view compares the current-month amount only. A source's optional
     # previous-period calculation must not split identical current data.
     signature=lambda c:[c.get('period'),c.get('trade_flow','EXPORT'),c.get('metric','AMOUNT')]
-    require(all(s['meta'].get('kind')=='TREND' and signature(s['conditions'])==signature(conditions) for s in sources),
+    # 화면(comparisonGroups.js)과 같은 대상만 받는다. 추가 비교 기간 열은 이 표에 담지 않으므로 그런 결과는 제외한다.
+    require(all(s['meta'].get('kind')=='TREND' and not s['meta'].get('trade_balance')
+                and not s['meta'].get('period_totals') and not s['meta'].get('extra_compare_periods')
+                and signature(s['conditions'])==signature(conditions)
+                for s in sources),
             '같은 기간·방향·지표의 추이 결과만 비교할 수 있습니다.')
     countries={};products={};matrix={};sql=[]
     for source in sources:

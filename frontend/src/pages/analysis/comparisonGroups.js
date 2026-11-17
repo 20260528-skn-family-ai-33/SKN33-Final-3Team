@@ -5,7 +5,7 @@ export function comparisonGroups(answer) {
     const task=answer.tasks.find(t=>t.task_id===table.task_id),c=task?.conditions
     if(!['STATISTICS','CAUSE'].includes(task?.intent)||!c||table.meta?.kind!=='TREND'||table.expired||!table.result_id)continue
     // 비교 기간이 여럿인 결과는 서버가 기간별 열·시리즈를 이미 만들었다. 통합 비교 표는 기준 기간 금액만 읽으므로 묶지 않는다.
-    if(table.meta?.extra_compare_periods?.length)continue
+    if(table.meta?.extra_compare_periods?.length||table.meta?.trade_balance||table.meta?.period_totals)continue
     const key=JSON.stringify([c.period?.start,c.period?.end,c.trade_flow||'EXPORT',c.metric||'AMOUNT'])
     if(!groups.has(key))groups.set(key,{task_id:task.task_id,conditions:c,tables:[]})
     groups.get(key).tables.push(table)

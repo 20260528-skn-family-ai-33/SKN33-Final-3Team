@@ -73,6 +73,9 @@ def display_columns(columns, rows, meta=None, flow=None):
     versioned = (meta or {}).get('kind') in ('TREND', 'RANKING', 'COUNTRY_COMPARISON') and any(
         r.get('hs_ver') not in (None, 'HS2022') for r in rows)
     hidden = set() if versioned else {'hs_ver'}
+    # 순위 결과표의 순위 상태(NEW·UP·…)는 채팅 표에서 대부분 '해당 없음'이라 열로 보이지 않는다(2026-11-17 사용자 결정).
+    # 행에는 남겨 순위 변화(rank_change)·검증 근거로 쓴다.
+    if (meta or {}).get('kind') == 'RANKING': hidden.add('rank_status')
     if versioned and not any(c['key'] == 'hs_ver' for c in columns):
         # 이전 결과표는 행에 판본을 저장했어도 표시 열에서는 빼 두었다.
         columns = [*columns, {'key': 'hs_ver', 'label': LABELS['hs_ver'], 'type': 'string', 'unit': None}]
@@ -84,6 +87,14 @@ def display_columns(columns, rows, meta=None, flow=None):
     extras=len((meta or {}).get('extra_compare_periods') or [])
     # 비교 기간이 여럿이면 기간 이름("2023년 금액")을 result_table이 먼저 넣은 기본 이름보다 우선한다.
     periods=_period_labels(meta or {})
+    if (meta or {}).get('trade_balance'):
+        balance_labels = {'amount_usd': '무역수지', 'total_usd': '기간 무역수지 합계',
+                          'monthly_avg_usd': '월평균 무역수지', 'compare_amount_usd': '비교 기간 무역수지'}
+        periods = {**balance_labels, **{key: label.replace('금액', '무역수지') if key.endswith('amount_usd')
+                                       else label for key, label in periods.items()}}
+    if (meta or {}).get('period_totals') and not (meta or {}).get('compare_period'):
+        hidden.update(('compare_total_usd','compare_monthly_avg_usd','compare_verified_months',
+                       'compare_requested_months','compare_verified_subtotal_usd','change_pct'))
     if any('month' in r and 'verified_months' in r for r in rows):
         # 비교 기간마다 따로 정한다. 길이가 같으면 월별 비교 금액을 보이고, 다르면(D-84) 월별 금액이 없으므로
         # 총액·월평균·검증 월 수를 비교 근거로 보인다. 어느 기간이든 길이가 다르면 조회 기간의 총액 열도 보인다.
@@ -95,9 +106,11 @@ def display_columns(columns, rows, meta=None, flow=None):
                    and r.get(prefix+'requested_months')!=r.get('requested_months') for r in rows) for prefix,_ in prefixes}
         # 한 기간이라도 길이가 다르면 차트는 모든 기간을 월평균으로 그린다(charts.build_chart). 그때는 모든 기간의
         # 합계·월평균·집계 개월 수를 보여 차트가 안내한 분모를 표에서 확인할 수 있게 한다.
-        any_period=any(by_period.values())
+        # 여러 비교 기간 표는 기간 합계·월평균·차액·증감률로 비교하는 결과다(설계 '여러 기간 동시 비교'). 길이가 같아도
+        # 계산한 요약 열을 숨기지 않는다.
+        any_period=any(by_period.values()) or extras>0
         for prefix,change in prefixes:
-            if not any_period: hidden.update((change,*(prefix+field for field in aggregate)))
+            if not any_period: hidden.update((change,*(prefix+field for field in aggregate),prefix+'period_difference_usd'))
             if not monthly[prefix]: hidden.update((prefix+'amount_usd',prefix+'month'))
         # 기간 합계 차액(조회 기간 − 첫 비교 기간)도 합계 열과 같이 길이가 다른 기간 비교에서만 보인다.
         if not any_period: hidden.update((*aggregate,'period_difference_usd'))
@@ -111,14 +124,16 @@ def _period_labels(meta):
     windows=[(meta.get('compare_period'),'compare_','change_pct'),
              *((w,f'compare{n}_',f'change{n}_pct') for n,w in enumerate(meta['extra_compare_periods'],start=2))]
     out={}
-    if meta.get('period'): out['amount_usd']=period_label(meta['period']['start'],meta['period']['end'])+' 금액'
+    if meta.get('period'):
+        current = period_label(meta['period']['start'],meta['period']['end'])
+        out.update(amount_usd=current+' 금액', total_usd=current+' 합계')
     for window,prefix,change in windows:
         if not window: continue
         label=period_label(window['start'],window['end'])
         out.update({prefix+'amount_usd':label+' 금액', prefix+'month':label+' 기준월', prefix+'total_usd':label+' 합계',
             prefix+'monthly_avg_usd':label+' 월평균', prefix+'verified_months':label+' 집계 개월 수',
             prefix+'requested_months':label+' 조회 개월 수', prefix+'verified_subtotal_usd':label+' 집계 금액',
-            change:label+' 대비 증감률'})
+            change:label+' 대비 증감률', prefix+'period_difference_usd':label+' 대비 합계 차액'})
     # 기간 합계 차액(period_difference_usd)은 조회 기간 − 첫 비교 기간이다. 여러 기간 표에서 어느 기간과의 차액인지 밝힌다.
     if (first:=meta.get('compare_period')):
         out['period_difference_usd']=period_label(first['start'],first['end'])+' 대비 합계 차액'
@@ -157,7 +172,9 @@ def result_filename(payload, store=None):
     parts.append(selection_part([names.get(c,c) for c in codes], '전체국가'))
     products = selection_part([h['hs_code'] for h in conditions.get('hs_items',[])])
     if products: parts.append(products)
-    flow={'EXPORT':'수출','IMPORT':'수입'}.get(conditions.get('trade_flow'))
+    # 무역수지 결과는 저장된 지표를 따른다(조회 방향 trade_flow는 수출 기본값이라 '수출'이 붙으면 안 된다).
+    flow=('무역수지' if (payload.get('meta') or {}).get('trade_balance')
+          else {'EXPORT':'수출','IMPORT':'수입'}.get(conditions.get('trade_flow')))
     if flow: parts.append(flow)
     created=payload['snapshot_created_at']
     local=created.replace(tzinfo=created.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9)))
