@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { Link } from '../../router'
 import { api } from '../../api/client'
-import { Btn, Modal, TextField } from '../../components/ui'
+import { Btn, Loading, Modal, TextField } from '../../components/ui'
 import { usePendingAction } from '../../api/hooks'
 import { isEmail } from '../../utils/validate'
 import { AuthFrame, CardHead } from './AuthFrame'
@@ -49,7 +49,7 @@ export function FindId() {
         <TextField id="fi-email" type="email" placeholder="name@example.com" value={email} onChange={v => { setEmail(v); setError('') }} />
         {error && <p className="field-err">{error}</p>}
         {sp(16)}{sp(8)}
-        <Btn type="submit" kind="red" size="lg" block disabled={busy}>{busy ? '확인 중…' : '가입 여부 확인'}</Btn>
+        <Btn type="submit" kind="red" size="lg" block disabled={busy}>{busy ? <Loading inline showLabel label="확인 중…" /> : '가입 여부 확인'}</Btn>
         {sp(12)}
         <Btn to="/login" size="lg" block>로그인 화면으로 돌아가기</Btn>
         <BottomLinks left={<Link to="/find-password" style={{ color: 'var(--sub)', fontWeight: 700 }}>비밀번호 찾기</Link>} />
@@ -88,7 +88,7 @@ export function FindPassword() {
         {sp(16)}
         {error && <p className="field-err" role="alert">{error}</p>}
         {sp(24)}
-        <Btn type="submit" kind="red" size="lg" block disabled={busy}>{busy ? '발송 중…' : '임시 비밀번호 받기'}</Btn>
+        <Btn type="submit" kind="red" size="lg" block disabled={busy}>{busy ? <Loading inline showLabel label="발송 중…" /> : '임시 비밀번호 받기'}</Btn>
         {sp(12)}
         <Btn to="/login" size="lg" block>로그인 화면으로 돌아가기</Btn>
         <BottomLinks left={<Link to="/find-id" style={{ color: 'var(--sub)', fontWeight: 700 }}>가입 여부 확인</Link>} />

@@ -105,11 +105,13 @@ export default function ReportCenter({ route }) {
   const subscribed = tab !== 'chat' && subscription.cycles.includes(tab)
   const deleteCycle = tab === 'chat' ? null : tab
 
-  const removeSubscription = async () => {
+  // 구독 삭제도 리포트 삭제와 같이 한 번만 실행하고, 처리 중에는 '삭제 중…'과 함께 창 닫기·취소를 막는다.
+  const [deletingSubscription, deleteSubscriptionOnce] = usePendingAction()
+  const removeSubscription = () => deleteSubscriptionOnce(async () => {
     if (!await deleteSubscription(deleteCycle)) return
     navigate(withQuery(route, { confirm: null }))
     notify(`${CYCLE[deleteCycle]} 구독을 삭제했습니다. 기존에 발행된 리포트는 계속 조회할 수 있습니다.`)
-  }
+  })
 
   return (
     <>
@@ -205,7 +207,7 @@ export default function ReportCenter({ route }) {
         </div>
       </Modal>
 
-      <Modal open={confirm && !!deleteCycle && subscription.cycles.includes(deleteCycle)} onClose={() => navigate(withQuery(route, { confirm: null }))} width={520} label="구독 삭제 확인">
+      <Modal open={confirm && !!deleteCycle && subscription.cycles.includes(deleteCycle)} onClose={() => { if (!deletingSubscription) navigate(withQuery(route, { confirm: null })) }} width={520} label="구독 삭제 확인">
         <span style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="trash" size={24} color="#C8102E" /></span>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 16 }}>구독을 삭제하고 다음 발행을 중단할까요?</h2>
         <div style={{ marginTop: 14, border: '1px solid var(--line)', borderRadius: 12, padding: '12px 16px', fontSize: 14 }}>
@@ -213,8 +215,8 @@ export default function ReportCenter({ route }) {
         </div>
         <p className="muted" style={{ marginTop: 14, fontSize: 15, lineHeight: 1.7 }}>삭제하면 이 구독의 향후 리포트 발행이 중단됩니다.<br />기존에 발행된 리포트는 목록에서 계속 조회할 수 있습니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
-          <Btn size="md" onClick={() => navigate(withQuery(route, { confirm: null }))}>취소</Btn>
-          <Btn kind="red" size="md" onClick={removeSubscription}>구독 삭제</Btn>
+          <Btn size="md" disabled={deletingSubscription} onClick={() => navigate(withQuery(route, { confirm: null }))}>취소</Btn>
+          <Btn kind="red" size="md" disabled={deletingSubscription} onClick={removeSubscription}>{deletingSubscription ? <Loading inline showLabel label="삭제 중…" /> : '구독 삭제'}</Btn>
         </div>
       </Modal>
     </>

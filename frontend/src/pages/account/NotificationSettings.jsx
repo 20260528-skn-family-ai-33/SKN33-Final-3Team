@@ -80,7 +80,7 @@ export default function NotificationSettings({ route }) {
       <p className="note" style={{ marginTop: 12 }}>기본 꺼짐 또는 가입 동의 결과 적용 · 전체 켬 + 현재 약관 동의 시 수신 {termsOk ? '· 알림 약관 동의 완료' : '· 알림 약관 미동의'}</p>
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20 }}>
         <Btn size="md" onClick={() => setDraft(settings)}>취소</Btn>
-        <Btn kind="red" size="md" disabled={saving} onClick={save}>{saving ? '저장 중…' : '설정 저장'}</Btn>
+        <Btn kind="red" size="md" disabled={saving} onClick={save}>{saving ? <Loading inline showLabel label="저장 중…" /> : '설정 저장'}</Btn>
       </div>
 
       <Modal open={termsOpen} onClose={closeTerms} width={640} label="알림 수신 약관 동의">
@@ -99,7 +99,7 @@ export default function NotificationSettings({ route }) {
         <p className="note" style={{ marginTop: 8 }}>동의 전에는 알림이 켜지지 않습니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
           <Btn size="md" onClick={closeTerms}>거부</Btn>
-          <Btn kind="red" size="md" disabled={!agree || !TERMS_VERSION || accepting} onClick={acceptTerms}>동의하고 켜기</Btn>
+          <Btn kind="red" size="md" disabled={!agree || !TERMS_VERSION || accepting} onClick={acceptTerms}>{accepting ? <Loading inline showLabel label="처리 중…" /> : '동의하고 켜기'}</Btn>
         </div>
       </Modal>
     </section>
