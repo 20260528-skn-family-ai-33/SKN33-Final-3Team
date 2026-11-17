@@ -41,11 +41,27 @@ class Period(Input):
 COUNTRY_CODE_CAPACITY = 26 ** 2
 
 
+class YearComparison(Input):
+    years: list[int] = Field(min_length=3)
+    baseline_year: int | None = None
+    monthly: bool = False
+    monthly_average: bool = False
+
+    @model_validator(mode='after')
+    def distinct_years(self):
+        if sorted(set(self.years)) != self.years or any(not 1 <= year <= 9998 for year in self.years):
+            raise ValueError('비교 연도는 중복 없이 시간순으로 지정해야 합니다.')
+        if self.baseline_year is not None and self.baseline_year not in self.years:
+            raise ValueError('기준연도가 비교 연도 목록에 없습니다.')
+        return self
+
+
 class Conditions(Input):
     hs_items: list[HsItem] = Field(default_factory=list, max_length=100)
     country_codes: list[str] = Field(default_factory=list, max_length=COUNTRY_CODE_CAPACITY)
     period: Period
     compare_period: Period | None = None
+    year_comparison: YearComparison | None = None
     trade_flow: Literal['EXPORT', 'IMPORT'] = 'EXPORT'
     compare: Literal['NONE', 'MOM', 'YOY', 'YOY_PERIOD', 'CUSTOM'] = 'YOY_PERIOD'
     metric: Literal['AMOUNT', 'GROWTH', 'SHARE', 'RANK'] = 'AMOUNT'

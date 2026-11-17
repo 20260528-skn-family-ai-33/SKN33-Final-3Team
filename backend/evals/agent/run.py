@@ -303,6 +303,19 @@ def score_conclusions(expect, draft):
     return fields
 
 
+def _monthly_fixture_snapshot(spec):
+    """The offline cases store their full table under each target's monthly list."""
+    from backend.app.agents.verify import snapshot_evidence
+    digest = spec.get('digest') or {}
+    if digest.get('kind') != 'TREND' or digest.get('truncated') is not False:
+        return None
+    rows = [{**{k: v for k, v in target.items() if k not in ('monthly', 'monthly_facts')}, **month}
+            for target in digest.get('targets', []) for month in target.get('monthly', [])]
+    if not rows or len(rows) != digest.get('rows_total'):
+        return None
+    return snapshot_evidence({'meta': {'kind': 'TREND'}, 'conditions': spec['conditions'], 'rows': rows})
+
+
 def compose_case(runner, case):
     from backend.app.agents.compose import COMPOSE_TEXT_PROMPT, assemble, compose_input
     from backend.app.agents.planner import build_plan
@@ -312,12 +325,15 @@ def compose_case(runner, case):
     state.plan, _ = build_plan(PlannerOutput(tasks=[{'intent': t['intent'], 'question': t['question'],
         'slots': {'answer_format': t.get('answer_format')}} for t in case['tasks']]))
     products = case.get('product_names', {})
+    snapshots = {}
     for task, spec in zip(state.plan.tasks, case['tasks']):
         task.conditions = Conditions.model_validate(spec['conditions']) if spec.get('conditions') else None
         for step in task.steps:
             step.status = 'DONE'
             if step.tool != 'check_conditions':
                 state.results[step.step_id] = ToolResult(status='OK', digest=spec.get('digest'))
+                if step.tool == 'query_trade_data' and (snapshot := _monthly_fixture_snapshot(spec)):
+                    snapshots[step.step_id] = snapshot
         task.answer_status = state.task_outcome(task.task_id)
     def describe(c):
         if not c: return {}
@@ -336,7 +352,8 @@ def compose_case(runner, case):
         return {'pass': False, 'fields': {'format': False}, 'grounded': False}, {'error': error, 'attempts': attempts}
     state.draft = draft
     had_summary = bool(draft.turn_summary)
-    verify(state, known_names=[*NAMES.values(), *products.values()], countries=list(NAMES.values()), product_labels=products)
+    verify(state, known_names=[*NAMES.values(), *products.values()], countries=list(NAMES.values()),
+           product_labels=products, snapshots=snapshots)
     sentences = draft.sentences()
     expect = case['expect']
     f = {'format': True, 'grounded': state.verification.status == 'PASS', **score_conclusions(expect, draft)}

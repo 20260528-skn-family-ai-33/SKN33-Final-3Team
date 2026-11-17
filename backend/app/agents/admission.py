@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from backend.app.agents import budget
 from backend.app.agents.clarification import answer_patch
-from backend.app.agents.context import ChatContext
+from backend.app.agents.context import ChatContext, year_over_year_base
 from backend.app.agents.execution import ExecutionStore
 from backend.app.agents.graph import build_graph,graph_config
 from backend.app.agents.runtime import Services
@@ -64,7 +64,13 @@ def accept(store,uid,session,question,key,*,article_action=None):
     latest=store.one(select(table.c.result_json).where(table.c.session_id==sid,table.c.role=='ASSISTANT')
                      .order_by(table.c.message_id.desc()).limit(1))
     context=ChatContext(store.db.redis)
-    cached=context.load(str(sid),session.get('context_json') or {},(latest['result_json'] or {}).get('job_id') if latest else None)
+    stored_context = session.get('context_json') or {}
+    latest_result = (latest or {}).get('result_json') or {}
+    cached=context.load(str(sid), stored_context, latest_result.get('job_id'))
+    # A bare year comparison of an existing ranking or market analysis should keep its own planning path.
+    last_intent = next((turn.intent for turn in reversed(cached.recent) if turn.conditions),
+                       (latest_result.get('answer') or {}).get('intent'))
+    verified_trade = cached.conditions if last_intent == 'STATISTICS' else None
     saved=accounts.interests(store,uid)
     payload = {'question': question}
     if article_action is not None:
@@ -72,6 +78,7 @@ def accept(store,uid,session,question,key,*,article_action=None):
     job=jobs.enqueue(store,uid,'API_CHAT',sid,payload,key)
     jid=str(job['job_id'])
     job['payload_json']['input']=AgentInput(job_id=jid,session_id=str(sid),user_id=uid,question=question,context=cached,
+        year_over_year_base=year_over_year_base(question, stored_context, verified_trade),
         interests={k:saved[k] for k in ('hs_items','country_codes')},first_question=latest is None,received_at=now(),
         article_action=article_action).model_dump(mode='json')
     job['agent']=budget.new_round(uuid4().hex,0)

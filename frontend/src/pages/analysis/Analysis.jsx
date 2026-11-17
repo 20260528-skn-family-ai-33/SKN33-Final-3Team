@@ -240,7 +240,9 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
     {c && <>
       {/* 수출입 수치는 모두 한국 기준이다. '미국 수출액'이 미국의 수출로 읽히지 않게 기준(한국)과 상대국을 함께 적는다. */}
       <p style={{ fontSize: 13, fontWeight: 700, color: 'var(--red-d)' }}>분석 조건 · 한국 기준 · {c.hs_items?.length ? `HS ${c.hs_items.map(h => h.hs_code).join(', ')} / ` : ''}상대국 {[...(c.include_korea_total ? ['전체(한국 총계)'] : []), ...(c.country_codes || []).map(countryName)].join(' · ') || '전체 교역국'}</p>
-      {a.article_period && !c.period
+      {c.year_comparison
+        ? <p className="note">비교 연도 {c.year_comparison.years.join(' · ')}년{c.year_comparison.baseline_year && ` / 기준 ${c.year_comparison.baseline_year}년`}</p>
+        : a.article_period && !c.period
         ? <p className="note">기사 검색 기간 {a.article_period.start} ~ {a.article_period.end}</p>
         : c.period && <p className="note">{range(c.period.start, c.period.end)}{comparison && ` / 비교 ${range(comparison.start, comparison.end)}`}</p>}
     </>}

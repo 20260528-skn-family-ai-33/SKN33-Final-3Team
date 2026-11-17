@@ -92,19 +92,27 @@ export default function TaskResults({answer,hideText=false}) {
   const groupedTasks=new Set(groups.flatMap(g=>g.tables.map(t=>t.task_id)))
   const conclusionCount=tasks=>tasks.reduce((count,task)=>count+task.conclusion.length,0)
   const mismatches=new Map((answer.verification?.sentence_checks||[]).filter(c=>c.status==='MISMATCH').map(c=>[c.index,c]))
-  const sentence=(s,i)=><p key={i} style={{whiteSpace:'pre-line'}}>{s} {mismatches.has(i)&&<span className="tag amber" title={mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?'저장된 조회 결과가 만료되어 원본을 확인할 수 없습니다.':'수치·대상·기간·단위를 검증 근거와 일치한다고 확인하지 못했습니다.'}>확인 필요{mismatches.get(i).reason==='SOURCE_UNAVAILABLE'?' · 원본 확인 불가':''}</span>}</p>
+  const sentence=(text,index)=>{
+    const check=mismatches.get(index)
+    const unavailable=check?.reason==='SOURCE_UNAVAILABLE'
+    let note='수치·대상·기간·단위를 검증 근거와 일치한다고 확인하지 못했습니다.'
+    if(check?.basis==='ARTICLE') note=unavailable?'인용한 기사의 원문 근거를 확인할 수 없습니다.':'인용한 기사 또는 함께 제시한 통계로 이 문장 전체를 확인할 수 없습니다.'
+    else if(unavailable) note='저장된 조회 결과가 만료되어 원본을 확인할 수 없습니다.'
+    return <p key={index} style={{whiteSpace:'pre-line'}}>{text} {check&&<span className="tag amber" title={note}>확인 필요{unavailable?' · 원본 확인 불가':''}</span>}</p>
+  }
   const sections=answer.tasks.map((t,index)=>{
     const start=conclusionCount(answer.tasks.slice(0,index))
     const tables=answer.tables.filter(x=>x.task_id===t.task_id)
     const title=taskTitle(t,tables)
+    const badge=t.query_status==='FAILED'?'조회 실패':badges[t.answer_status]
     // 문장형 답변(D-98): 결론을 한 문단으로 읽게 하고, 근거 표는 접어 둔다. 차트 단계는 없다
-    if(t.answer_format==='TEXT')return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
+    if(t.answer_format==='TEXT')return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badge&&<span className="tag amber">{badge}</span>}</h3>
       {!hideText && <div className="chat-paragraph">{t.conclusion.map((s,i)=>sentence(s,start+i))}</div>}
       {tables.length>0 && <details><summary>근거 표 보기</summary>
         {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}
           charts={answer.charts||[]} selectors={answer.chart_selectors} tasks={answer.tasks} tableOnly/>)}   {/* 비교는 시기별 한 줄(22번), 표만 */}
         {tables.filter(x=>!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</details>}</section>
-    return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badges[t.answer_status]&&<span className="tag amber">{badges[t.answer_status]}</span>}</h3>
+    return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badge&&<span className="tag amber">{badge}</span>}</h3>
       {!hideText && t.conclusion.map((s,i)=>sentence(s,start+i))}
       {charts.filter(c=>c.task_id===t.task_id&&!groupedTasks.has(c.task_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c} selector={answer.chart_selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)} table={answer.tables.find(x=>x.result_id===c.result_id)}/>)}
       {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}

@@ -1071,11 +1071,23 @@ class SimpleRankingTableTest(unittest.TestCase):
 
 
 class CompareYearsSplitTest(unittest.TestCase):
+    # 국가 하나의 세 해 이상 연도 비교는 main의 연도 비교(year_comparison)가 맡는다(2026-11-17 사용자 결정).
+    # 아래의 연도 나누기는 그 비교가 맡지 않는 경우(여러 국가 등)에 쓰므로 두 국가로 확인한다.
     def slots(self, question, compare):
         [task] = plan(question, [{'intent': 'STATISTICS', 'question': question, 'slots': {
-            'countries': [{'mention': '일본', 'name': '일본'}], 'trade_flow': 'EXPORT', 'period': Y(2025),
-            'comparison_requested': True, 'compare_period': compare}}])
+            'countries': [{'mention': '일본', 'name': '일본'}, {'mention': '미국', 'name': '미국'}],
+            'trade_flow': 'EXPORT', 'period': Y(2025), 'comparison_requested': True, 'compare_period': compare}}])
         return task.slots
+
+    def test_single_country_three_years_use_main_year_comparison(self):
+        from backend.app.agents.multi_year import requested_years
+        question = '2025년 일본 수출액을 기준으로 2023년과 2024년 을 비교해서 분석하고 싶어.'
+        [task] = plan(question, [{'intent': 'STATISTICS', 'question': question, 'slots': {
+            'countries': [{'mention': '일본', 'name': '일본'}], 'trade_flow': 'EXPORT', 'period': Y(2025),
+            'comparison_requested': True, 'compare_period': {'start': '2023-01-01', 'end': '2024-12-01'}}}])
+        self.assertIsNone(task.slots.compare_period)
+        self.assertFalse(task.slots.extra_compare_periods)
+        self.assertEqual(requested_years(question).years, [2023, 2024, 2025])
 
     def test_merged_years_are_split_in_mention_order(self):
         slots = self.slots('2025년 일본 수출액을 기준으로 2023년과 2024년 을 비교해서 분석하고 싶어.',
@@ -1202,7 +1214,8 @@ class ExtraCompareTrendTest(unittest.TestCase):
             self.assertIsNone(task.custom_query)
             sql = next(step for step in task.steps if step.tool == 'query_trade_data')
             self.assertEqual(sql.args, {'template': 'TREND', 'period_totals': True})
-            self.assertEqual(task.slots.extra_compare_periods[0].start.year, 2023)
+            # 세 해 비교는 main의 연도 비교가 맡는다(조건 확인에서 year_comparison으로 정한다, 2026-11-17 사용자 결정).
+            self.assertIsNone(task.slots.compare_period)
 
         combined = PlannerOutput(tasks=[
             {'intent': 'STATISTICS', 'question': question, 'slots': slots},
@@ -1501,7 +1514,7 @@ class ExtraCompareTrendTest(unittest.TestCase):
         for requested in ({}, {'comparison_requested': True}, {'comparison_requested': True, 'compare_period': Y(2023)},
                           {'comparison_requested': False}):
             with self.subTest(slots=requested):
-                first = '중국의 2025년 수출액을 2023년·2024년과 비교'
+                first = '중국의 2025년 1~12월 수출액을 2023년·2024년 같은 기간과 비교'   # 월 범위: 연도 비교(main) 밖
                 no_comparison = requested.get('comparison_requested') is False
                 followup = '미국은 비교 없이 2025년 수출액만 보여줘' if no_comparison else '같은 조건으로 미국도 비교해줘'
                 current = self.compound(f'{first}하고 {followup}', [
@@ -1531,7 +1544,7 @@ class ExtraCompareTrendTest(unittest.TestCase):
         from backend.app.agents.bindings import resolve
         from backend.app.agents.conditions import check_conditions
         # 후속 질문이 비교 기간을 직접 적으면("2023년하고만") 선행 결과의 나머지 비교 기간(2024년)을 붙이지 않는다.
-        first = '중국의 2025년 수출액을 2023년·2024년과 비교'
+        first = '중국의 2025년 1~12월 수출액을 2023년·2024년 같은 기간과 비교'   # 월 범위: 연도 비교(main) 밖
         followup = '미국은 2023년하고만 비교'
         current = self.compound(f'{first}하고 {followup}해줘', [
             {'intent': 'STATISTICS', 'question': first, 'slots': {
