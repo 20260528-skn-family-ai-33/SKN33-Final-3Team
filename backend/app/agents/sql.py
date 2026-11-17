@@ -25,6 +25,35 @@ ALLOWED_TABLES = frozenset(('export_monthly export_summary import_monthly import
 BLOCKED_FUNCTIONS = frozenset(('SLEEP BENCHMARK LOAD_FILE GET_LOCK RELEASE_LOCK').split())
 MAX_ROWS = 1000
 TRADE_TABLES = frozenset(('export_monthly', 'export_summary', 'import_monthly', 'import_summary'))
+# 상관 서브쿼리의 별칭 없는 열이 안쪽 표의 열인지 가리는 데 쓰는 열 목록(db/mysql/init/01_schema.sql).
+_SUMMARY_COLUMNS = frozenset(('trade_month', 'country_code', 'hs6_code', 'hs_ver', 'amount_usd'))
+_MONTHLY_COLUMNS = _SUMMARY_COLUMNS | {'hs10_code', 'hs4_code', 'weight_kg', 'history_months', 'baseline_amount_usd',
+                                        'median_unit_usd_kg', 'anomaly_code'}
+TABLE_COLUMNS = {'export_summary': _SUMMARY_COLUMNS, 'import_summary': _SUMMARY_COLUMNS,
+                 'export_monthly': _MONTHLY_COLUMNS, 'import_monthly': _MONTHLY_COLUMNS,
+                 'country': frozenset(('country_code', 'name_ko', 'country_role', 'region_id', 'currency_code')),
+                 'hs_code': frozenset(('hs_code', 'depth', 'hs_ver', 'name_ko', 'original_name_ko', 'source_edition')),
+                 # 그 밖의 허용 표(db/mysql/init·tests/fixtures/integration_schema.sql). ALLOWED_TABLES 전체를 덮는다.
+                 'market_region': frozenset(('region_id', 'parent_id', 'region_level', 'name_ko')),
+                 'currency': frozenset(('currency_code', 'name_ko', 'ecos_item_code', 'quote_unit')),
+                 'fx_daily': frozenset(('base_date', 'currency_code', 'rate_krw')),
+                 'hs_code_correlation': frozenset(('new_ver', 'new_code', 'old_ver', 'old_code', 'relation', 'group_code',
+                                                   'source_edition')),
+                 'un_data': frozenset(('freq_code', 'period_start', 'country_code', 'hs6_code', 'hs_ver', 'total_import_usd',
+                                       'korea_import_usd', 'korea_share_pct', 'valuation_basis')),
+                 'keyword_category': frozenset(('category_id', 'major_name', 'minor_name', 'updated_at', 'synced_at')),
+                 'keyword_topic': frozenset(('keyword_text', 'canonical_text', 'category_id', 'status', 'updated_at',
+                                             'synced_at')),
+                 'news_keyword_daily': frozenset(('metric_id', 'metric_date', 'keyword_text', 'country_code', 'country_key',
+                                                  'day_count')),
+                 'news_product_daily': frozenset(('metric_id', 'metric_date', 'hs_code', 'hs_ver', 'country_code',
+                                                  'country_key', 'day_count')),
+                 'article': frozenset(('article_id', 'source_code', 'external_id', 'title', 'published_date', 'source_url',
+                                       'body_masked', 'category', 'visibility_status', 'first_ingested_at', 'admin_meta_json')),
+                 'article_tag': frozenset(('tag_id', 'article_id', 'country_code', 'hs_code', 'hs_ver', 'keyword_text')),
+                 'article_classification': frozenset(('classification_id', 'article_id', 'category_id', 'source_kind',
+                                                      'keyword_text', 'basis_revision', 'representative_term', 'basis_key',
+                                                      'applied_at', 'job_id'))}
 # 재생성 때 모델에 그대로 돌려줘도 되는 MySQL 오류(모델이 쓴 SQL에 대한 것이다). 연결·권한 오류는 일반 문구로 바꾼다.
 SAFE_MYSQL_ERRORS = {1054: '없는 열', 1055: 'ONLY_FULL_GROUP_BY 위반', 1064: '구문 오류',
                      1052: '모호한 열 이름', 1111: '집계 함수 위치 오류'}
@@ -35,6 +64,7 @@ SQL_PROMPT = """MySQL 8 SELECT 하나(WITH 허용)로 요청을 조회합니다.
 schema에 제공한 테이블·컬럼만 쓰고 conditions의 국가·HS 코드·판본·기간·수출입을 반영합니다.
 열 별칭은 columns의 key와 순서가 같고 snake_case입니다. ORDER BY와 LIMIT 1000 이하를 씁니다.
 금액은 USD이며 비율은 금액으로 계산해 소수 1자리로 반올림합니다. 월별 비율을 평균하지 않습니다.
+한 조회에 수출 테이블과 수입 테이블을 함께 사용하지 않습니다. 수출·수입 금액 대조와 무역수지는 서버 템플릿에서 처리합니다.
 NOW/CURDATE 대신 조건 기간을 사용합니다. 기사 본문, 개인정보, 잠금·변경 SQL을 조회하지 않습니다.
 ONLY_FULL_GROUP_BY가 켜져 있습니다. SELECT·ORDER BY의 집계하지 않은 열·식은 GROUP BY에 같은 식으로 모두 넣습니다
 (예: SELECT QUARTER(trade_month) AS quarter ... GROUP BY QUARTER(trade_month) ORDER BY QUARTER(trade_month)).
@@ -81,7 +111,7 @@ class SqlGenerationDraft(SqlDraft):
         return super().unique_columns()
 
 
-def validate_sql(draft: SqlDraft, conditions=None) -> str:
+def validate_sql(draft: SqlDraft, conditions=None, *, single_trade_flow=False) -> str:
     """conditions(state.Conditions)를 주면 생성 SQL이 확정한 국가·품목·기간만 읽는지도 검사한다(_check_conditions)."""
     if draft.unsupported:
         raise ValueError('Unsupported requests must not execute SQL')
@@ -110,12 +140,23 @@ def validate_sql(draft: SqlDraft, conditions=None) -> str:
             raise ValueError('세션 변수는 허용하지 않습니다.')
     scopes = traverse_scope(query)
     repeated_inputs = {}
+    trade_flows = set()
     for scope in scopes:
         for _, source in scope.selected_sources.values():
             if isinstance(source, exp.Table):
                 if source.db or source.catalog or source.name.lower() not in ALLOWED_TABLES:
                     raise ValueError('허용 목록 밖의 테이블입니다.')
+                if source.name.lower() in TRADE_TABLES:
+                    trade_flows.add(source.name.lower().split('_', 1)[0])
         repeated_inputs[scope] = _check_trade_join(scope)
+    if single_trade_flow and len(trade_flows) > 1:
+        raise ValueError('수출입 대조는 서버 금액 템플릿으로만 조회할 수 있습니다.')
+    # 한 방향 조회(채팅 실행은 늘 single_trade_flow)는 확정한 방향의 표를 읽어야 한다. 수출로 확정한 조회가 import_*만
+    # 읽으면 결과에 EXPORT가 붙은 수입 값이 된다. 두 방향을 허용하는 호출(무역수지 조각)은 여기서 막지 않는다.
+    confirmed_flow = getattr(conditions, 'trade_flow', None) if conditions is not None else None
+    if single_trade_flow and trade_flows and confirmed_flow and confirmed_flow.lower() not in trade_flows:
+        label = '수출' if confirmed_flow == 'EXPORT' else '수입'
+        raise ValueError(f'확정한 조회 방향은 {label}입니다. {confirmed_flow.lower()}_monthly·{confirmed_flow.lower()}_summary 표를 읽으세요.')
     _check_repeated_trade_values(scopes, repeated_inputs)
     _check_trade_filters(query)
     if conditions is not None:
@@ -155,75 +196,103 @@ def _check_trade_join(scope):
     outputs = {alias.lower(): set(_visible_names(source))
                for alias, (_, source) in scope.selected_sources.items()
                if not isinstance(source, exp.Table) and isinstance(source.expression, (exp.Select, exp.Union))}
-    joined, pinned = {}, {}
-    by_alias ={alias.lower(): source for alias, (_, source) in scope.selected_sources.items()}
+    by_alias = {alias.lower(): source for alias, (_, source) in scope.selected_sources.items()}
+    # 키가 맞는지는 두 입력 사이의 관계다: 입력 Y의 키가 입력 X의 열(또는 값 하나)로 모두 정해지면 X 한 행에 Y 행이 하나만 붙는다.
+    # 내부 조인의 ON 등식은 이어진 모든 행을 거르므로 어떤 두 입력 사이에도(다른 입력을 거쳐도) 성립한다. LEFT JOIN의 ON은
+    # 새로 붙는 표의 행만 고르고 맞지 않는 행을 지우지 않으므로, 그 표와 상대 입력 사이에만 성립한다(cal을 거쳐 ex·im의
+    # 국가를 맞춘 것으로 보지 않는다). RIGHT·FULL JOIN의 조건은 인정하지 않는다.
+    parent = {}
+
+    def find(node):
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+    pinned, direct = set(), set()   # 값 하나로 고정한 (입력, 열), LEFT JOIN의 새 표와 상대 사이 등식 {(입력, 열), (입력, 열)}
+
+    def owned(node):
+        found = []
+        for column in node.find_all(exp.Column):
+            name = column.name.lower()
+            # 별칭 없는 열은 그 이름을 내는 파생 표의 열로 본다.
+            owners = [column.table.lower()] if column.table else [a.lower() for a, cols in outputs.items() if name in cols]
+            found.extend((owner, name) for owner in owners)
+        return found
+    steps = [(None, '', scope.expression.args.get('where').this if scope.expression.args.get('where') else None, ())]
     for join in scope.expression.args.get('joins') or []:
-        # 조인 단계마다 그 ON·USING이 실제로 행을 제한하는 등식만 키로 본다. LEFT JOIN의 ON은 새로 붙는 표의 행만 고르고
-        # 이미 이어진 행은 지우지 않는다: 새로 붙는 표가 없는 등식(앞 조인의 두 입력끼리)과 앞 입력을 값 하나로 고정하는 조건은
-        # 앞 조인의 중복을 풀지 못한다. RIGHT·FULL JOIN의 조건은 키로 인정하지 않는다.
-        side = (join.side or '').upper()
+        steps.append((join.this.alias_or_name.lower(), (join.side or '').upper(), join.args.get('on'),
+                      [u.name.lower() for u in join.args.get('using') or []]))
+    source = scope.expression.args.get('from_') or scope.expression.args.get('from')
+    earlier = [source.this.alias_or_name.lower()] if source is not None else []   # 이 단계 전에 이미 이어진 입력
+    for joined_alias, side, on, using in steps:
+        if joined_alias is not None and joined_alias not in earlier:
+            joined_before, _ = list(earlier), earlier.append(joined_alias)
+        else:
+            joined_before = list(earlier)
         if side in ('RIGHT', 'FULL'):
             continue
-        joined_alias = join.this.alias_or_name.lower()
-        limited = (lambda owner: owner == joined_alias) if side == 'LEFT' else (lambda owner: True)
-        using = {u.name.lower() for u in join.args.get('using') or []}
-        for alias in scope.selected_sources:
-            joined.setdefault(alias.lower(), set()).update(using)
-        # 키는 ON의 최상위 AND 등식으로 맞출 때만 인정한다: 서로 다른 조인 입력의 열끼리 `=`(식끼리 `MONTH(a.m) = MONTH(b.m)`
-        # 포함), 또는 값 하나와의 `=`·IN. 같은 입력끼리(`ex.c = ex.c`), `IS NOT NULL`·`IN (여러 값)`·`<>`는 행을 하나로 정하지 못한다.
-        def owned(node):
-            found = []
-            for column in node.find_all(exp.Column):
-                name = column.name.lower()
-                # 별칭 없는 열은 그 이름을 내는 파생 표의 열로 본다.
-                owners = [column.table.lower()] if column.table else [a.lower() for a, cols in outputs.items() if name in cols]
-                found.extend((owner, name) for owner in owners)
-            return found
-        for term in _and_terms(join.args.get('on')):
+        # USING(열)은 새 표와 이 단계 전에 이어진 입력의 같은 이름 열만 잇는다(아직 붙지 않은 뒤쪽 표는 아니다).
+        for name in using:
+            for alias in joined_before:
+                if alias != joined_alias and (alias not in outputs or name in outputs[alias]):
+                    if side == 'LEFT':
+                        direct.add(frozenset({(joined_alias, name), (alias, name)}))
+                    else:
+                        parent[find((joined_alias, name))] = find((alias, name))
+        # 키는 최상위 AND 등식으로 맞출 때만 인정한다: 서로 다른 입력의 열끼리 `=`(식끼리 `MONTH(a.m) = MONTH(b.m)` 포함), 또는 값
+        # 하나와의 `=`·IN. 같은 입력끼리(`ex.c = ex.c`), `IS NOT NULL`·`IN (여러 값)`·`<>`는 행을 하나로 정하지 못한다.
+        for term in _and_terms(on):
             if isinstance(term, exp.In) and not term.args.get('query') and len(term.expressions) == 1:
-                sides = [term.this, term.expressions[0]]
+                operands = [term.this, term.expressions[0]]
             elif isinstance(term, exp.EQ):
-                sides = [term.this, term.expression]
+                operands = [term.this, term.expression]
             else:
                 continue
-            left, right = owned(sides[0]), owned(sides[1])
-            if not left or not right:   # 한쪽에 열이 없으면(값) 그 열을 한 값으로 고정한다.
-                pairs = [(o, n) for o, n in left or right if limited(o)]
-                for owner, name in pairs:
-                    pinned.setdefault(owner, set()).add(name)
-            else:
-                pairs = [(o, n) for o, n in left if any(o != other for other, _ in right)]
-                pairs += [(o, n) for o, n in right if any(o != other for other, _ in left)]
-                # LEFT JOIN의 ON에서 새로 붙는 표가 없는 등식(앞서 이어진 두 입력끼리)은 행을 제한하지 않는다.
-                # 새로 붙는 표와 앞 입력을 잇는 등식은 양쪽 행을 맞춘다.
-                if side == 'LEFT' and not any(o == joined_alias for o, _ in left + right):
-                    pairs = []
-            # 식으로 감싼 열은 그 식이 월 값을 하나로 유지할 때만 키다: DATE_FORMAT(…, '%Y-%m')은 늘 유지하고, MONTH()·
-            # DATE_FORMAT(…, '%m')은 그 입력이 한 해 안의 기간만 읽을 때만 유지한다. YEAR()·QUARTER() 등은 여러 달을 한 값으로 묶는다.
-            kept = {}
-            for operand, found in zip(sides, (left, right)):
-                for owner, name in found:
-                    kept[(owner, name)] = _keeps_key(operand, by_alias.get(owner))
-            for owner, name in pairs:
-                if kept.get((owner, name), True):
-                    joined.setdefault(owner, set()).add(name)
+            # 식으로 감싼 열은 월 값을 하나로 유지할 때만 키다: DATE_FORMAT(…, '%Y-%m')은 늘, MONTH()·'%m'은 그 입력이 한 해 안의
+            # 기간만 읽을 때만. YEAR()·QUARTER() 등은 여러 달을 한 값으로 묶는다.
+            left, right = ([(o, n) for o, n in owned(operand) if _keeps_key(operand, by_alias.get(o))] for operand in operands)
+            raw_left, raw_right = owned(operands[0]), owned(operands[1])
+            if not raw_left or not raw_right:   # 한쪽이 값이면 그 열을 한 값으로 고정한다(LEFT JOIN은 새 표의 열만)
+                pinned.update((o, n) for o, n in left or right if side != 'LEFT' or o == joined_alias)
+                continue
+            for a in left:
+                for b in right:
+                    if a[0] == b[0]:
+                        continue
+                    if side == 'LEFT':
+                        if joined_alias in (a[0], b[0]):
+                            direct.add(frozenset({a, b}))
+                    else:
+                        parent[find(a)] = find(b)
     if any(keys is None for keys in derived.values()):
         raise ValueError('수출입 표끼리 조인할 때는 각 표를 GROUP BY로 같은 단위로 먼저 집계하세요. '
                          '창 함수·UNION ALL·집계하지 않은 조회는 행을 하나로 묶지 않습니다.')
-    # 각 입력의 키가 조인 등식으로 모두 맞아야 다른 입력의 한 행에 그 입력 행이 하나만 붙는다. 다른 입력이 모두 더 굵은
-    # 단위(월별 결과에 붙인 전체 합계)이면 가장 잘게 나뉜 그 입력은 반복되지 않는다(굵은 쪽의 반복은 아래에서 따로 본다).
-    # 집계 단위는 값 하나로 고정한 키(`ex.country_code = 'US'`)를 뺀 키 수다.
-    grain = {alias: len(keys - pinned.get(alias, set())) for alias, keys in derived.items()}
-    finest = max(grain.values())
-    sole_finest = [alias for alias, size in grain.items() if size == finest]
-    for alias, keys in derived.items():
-        if sole_finest == [alias]:
-            continue
-        if not keys <= joined.get(alias, set()):
-            raise ValueError('집계 단위가 다른 수출입 결과를 조인하면 금액이 반복 합산됩니다. '
-                             '양쪽을 같은 단위로 집계하고 GROUP BY 키를 모두 조인 조건에 쓰세요.')
-    # 월별 결과에 붙인 전체 합계처럼, 더 굵은 입력은 잘게 나뉜 결과 행마다 반복된다.
-    return {alias for alias, size in grain.items() if size < finest}
+
+    def fixed(y, key, x):
+        """y의 key가 x 한 행에서 정해지는지(값 하나로 고정, 내부 조인 등식으로 x 열과 연결, LEFT JOIN의 x·y 직접 등식)."""
+        node = (y, key)
+        if node in pinned:
+            return True
+        if any(o == x and find(node) == find((o, n)) for o, n in list(parent)):
+            return True
+        return any(node in edge and any(o == x for o, _ in edge - {node}) for edge in direct)
+
+    def covered(y, x):
+        return all(fixed(y, key, x) for key in derived[y])
+    repeated = set()
+    for x in derived:
+        for y in derived:
+            if x == y:
+                continue
+            if not covered(y, x) and not covered(x, y):
+                # 서로 상대 한 행에 여러 행이 붙는다(월만으로 이은 국가별 수출·수입).
+                raise ValueError('집계 단위가 다른 수출입 결과를 조인하면 금액이 반복 합산됩니다. '
+                                 '양쪽을 같은 단위로 집계하고 GROUP BY 키를 모두 조인 조건에 쓰세요.')
+            if not covered(y, x):
+                # x 한 행에 y 행이 여러 개 붙으면 x의 값이 그만큼 반복된다(월별 결과에 붙인 전체 합계 x).
+                repeated.add(x)
+    return repeated
 
 
 def _visible_names(scope):
@@ -256,13 +325,16 @@ def _check_repeated_trade_values(scopes, repeated_inputs):
         if isinstance(node, exp.Column):
             name, owner = node.name.lower(), node.table.lower()
             local = sources[scope]
-            # 별칭 있는 열은 그 입력에 묶인다. 별칭 없는 열은 안쪽 물리 표의 열인지 알 수 없으므로(스키마를 보지 않는다),
-            # 안쪽 파생 표에서 못 찾으면 바깥 범위의 반복 금액도 확인한다(`SUM((SELECT repeated FROM country …))`).
+            # 별칭 있는 열은 그 입력에 묶인다. 별칭 없는 열은 안쪽 물리 표에 그 열이 있으면 안쪽 열이다(MySQL이 안쪽부터
+            # 찾는다. `SUM(amount_usd) FROM export_summary q`). 열 목록을 아는 표에 없고 안쪽 파생 표에도 없을 때만 바깥 범위의
+            # 반복 금액을 확인한다(`SUM((SELECT repeated FROM country …))`). 열 목록을 모르는 표는 안쪽 열로 보지 않는다.
             bound_locally = bool(owner) and owner in local
             for alias, source in local.items():
                 if owner and owner != alias:
                     continue
                 if isinstance(source, exp.Table):
+                    if not owner and name in TABLE_COLUMNS.get(source.name.lower(), ()):
+                        bound_locally = True
                     continue
                 # SQLGlot represents a recursive CTE reference with a copy of its anchor scope.
                 source = by_expression.get(id(source.expression), source)
@@ -382,8 +454,24 @@ def _aggregate_keys(scope):
     keys = set()
     for group in (select.args.get('group').expressions if select.args.get('group') else []):
         names = [outputs[i] for i, e in enumerate(select.selects) if e.unalias() == group]
-        if not names and isinstance(group, exp.Column) and not group.table and group.name.lower() in aliases:
-            names = [outputs[aliases[group.name.lower()]]]
+        if not names and isinstance(group, exp.Column) and not group.table:
+            # MySQL은 GROUP BY의 별칭 없는 이름을 입력 열(FROM)에서 먼저 찾는다. 그 입력 열을 그대로 내보내는 결과 열이 키다
+            # (`e.trade_month AS actual_month … GROUP BY trade_month` → actual_month). 집계 결과에 붙은 같은 이름의 별칭
+            # (`SUM(…) AS trade_month`)은 묶는 키가 될 수 없다. 입력 열로 볼 수 없는 별칭만 결과 별칭으로 읽는다.
+            name = group.name.lower()
+            names = [outputs[i] for i, e in enumerate(select.selects)
+                     if isinstance(e.unalias(), exp.Column) and e.unalias().name.lower() == name]
+            alias_at = aliases.get(name)
+            # 입력에 그 이름의 열이 있으면(물리 표 열 목록·파생 표 결과 열) GROUP BY는 그 입력 열로 묶는다. 같은 이름의 결과 별칭
+            # (`'A' AS country_code`)은 그 키가 아니므로, 입력 열을 그대로 내보내지 않았으면 키가 결과에 없다.
+            # 허용 표는 모두 열 목록이 있다(TABLE_COLUMNS). 목록에 없는 표는 그 이름의 열이 있을 수 있다고 본다.
+            in_input = any((name in TABLE_COLUMNS[src.name.lower()] if src.name.lower() in TABLE_COLUMNS else True)
+                           if isinstance(src, exp.Table) else name in _visible_names(src)
+                           for _, src in scope.selected_sources.values())
+            if (not names and alias_at is not None and not in_input
+                    and not any(agg.find_ancestor(exp.Window) is None
+                                for agg in select.selects[alias_at].find_all(exp.AggFunc))):
+                names = [outputs[alias_at]]
         if not names and isinstance(group, exp.Literal) and group.is_int and 1 <= int(group.this) <= len(outputs):
             names = [outputs[int(group.this) - 1]]
         # 결과 열로 내지 않은 키는 조인 조건에 쓸 수 없다. 조인할 때만 거부되도록 맞출 수 없는 이름으로 남긴다.
@@ -685,9 +773,10 @@ def _dates_within(filters, allowed):
 DATE_OPS = ('eq', 'in', 'between', 'gte', 'gt', 'lte', 'lt')
 
 
-def _selected_months(filters):
+def _selected_months(filters, within=None):
     """AND로 이은 trade_month 리터럴 조건이 고르는 월 번호 집합. 증명할 수 없으면 None."""
-    low = high = selected = None
+    low = high = None
+    selected = within
     for _, op, values in filters:
         if op not in DATE_OPS or not all(re.fullmatch(r'\d{4}-\d{2}-\d{2}', v) for v in values):
             return None
@@ -1019,38 +1108,215 @@ def _check_conditions(query, conditions):
     _check_output_rows(query, bool(countries), bool(confirmed))
 
 
+def _filter_only(node, owner):
+    """owner 안의 서브쿼리 node가 값을 내지 않고 행을 거르는 데만 쓰이는지."""
+    while node is not None and node is not owner:
+        parent = node.parent
+        if isinstance(parent, (exp.Exists, exp.In, exp.Where, exp.Having)) or (
+                isinstance(parent, exp.Join) and node is parent.args.get('on')):
+            return True
+        node = parent
+    return False
+
+
+def _needed_selects(scope, needed):
+    """바깥이 쓰는 결과 식. needed는 결과 열 이름이나 위치(UNION 분기는 이름 없는 열이 있어 위치로 받는다), None이면 전부."""
+    selects = scope.expression.selects
+    if needed is None:
+        return list(selects)
+    return [e for i, (e, name) in enumerate(zip(selects, _visible_names(scope))) if name in needed or i in needed]
+
+
+def _counts_rows(count):
+    operand = count.this
+    if isinstance(operand, exp.Neg):
+        operand = operand.this
+    return isinstance(operand, (exp.Star, exp.Literal, exp.Boolean)) and not count.expressions
+
+
+def _value_columns(scope, needed):
+    """결과 값을 내는 입력(FROM·JOIN) 별칭 → 바깥이 그 입력에서 쓰는 열 이름(None이면 전부).
+    needed는 바깥이 이 범위에서 쓰는 결과 열 이름이다(None이면 전부, 최종 쿼리). 바깥이 쓰지 않는 결과 열(`unused`)과
+    조인 조건·WHERE에만 쓰인 입력은 값을 내지 않는다(`… LEFT JOIN prev p ON p.total > 0`에서 SELECT가 p를 쓰지 않으면
+    p의 기간은 결과에 없다). `*`·COUNT(*)는 모든 입력의 모든 열이다. 별칭 없는 열은 그 이름의 열이 있는 입력(모르면
+    모든 입력)으로 본다."""
+    sources = {alias.lower(): source for alias, (_, source) in scope.selected_sources.items()}
+    select = scope.expression
+    if not isinstance(select, exp.Select):
+        return {alias: None for alias in sources}
+    selects = _needed_selects(scope, needed)
+    found = {}
+    # 입력마다 열 이름 목록을 한 번만 만든다(별칭 없는 열마다 결과 열 목록을 다시 만들지 않는다).
+    columns_of = {alias: (TABLE_COLUMNS.get(source.name.lower()) if isinstance(source, exp.Table)
+                          else set(_visible_names(source))) for alias, source in sources.items()}
+    def add(alias, name):
+        if alias in sources and (alias not in found or found[alias] is not None):
+            found[alias] = None if name is None else {*found.get(alias, ()), name}
+    for expression in selects:
+        if any(count.find_ancestor(exp.Select) is select and _counts_rows(count)
+               for count in expression.find_all(exp.Count)):
+            for alias in sources:
+                add(alias, None)
+        for star in expression.find_all(exp.Star):
+            owner = star.parent.table.lower() if isinstance(star.parent, exp.Column) and star.parent.table else None
+            for alias in ([owner] if owner else sources):
+                add(alias, None)
+        for column in expression.find_all(exp.Column):
+            if isinstance(column.this, exp.Star):
+                continue
+            name = column.name.lower()
+            if column.table:
+                add(column.table.lower(), name)
+                continue
+            owners = {alias for alias, names in columns_of.items() if names is None or name in names}
+            for alias in owners or sources:
+                add(alias, name)
+    return found
+
+
+def _inside(node, roots, owner):
+    """node가 roots(이 범위의 결과 식) 가운데 하나 안에 있는지."""
+    while node is not None and node is not owner:
+        if any(node is root for root in roots):
+            return True
+        node = node.parent
+    return False
+
+
 def _used_scopes(query):
-    """최종 쿼리가 실제로 읽는 범위들. 선언만 하고 참조하지 않은 CTE는 결과에 들어가지 않으므로 뺀다."""
+    """최종 쿼리가 실제로 읽는 범위와 그 범위에서 바깥이 쓰는 결과 열(None이면 전부)의 목록.
+    선언만 하고 참조하지 않은 CTE, 바깥이 쓰지 않는 결과 열만 만드는 입력은 결과에 들어가지 않으므로 뺀다."""
     scopes = traverse_scope(query)
     if not scopes:
         return []
-    used, stack = set(), [scopes[-1]]   # traverse_scope는 바깥(최종) 범위를 마지막에 낸다
+    needs, stack = {}, [(scopes[-1], None)]   # traverse_scope는 바깥(최종) 범위를 마지막에 낸다
+    by_id = {}
     while stack:
-        scope = stack.pop()
-        if id(scope.expression) in used:
+        scope, needed = stack.pop()
+        key = id(scope.expression)
+        if key in needs:
+            known = needs[key]
+            merged = None if known is None or needed is None else known | needed
+            if merged == known:
+                continue
+            needed = merged
+        # LIMIT 0인 범위는 행을 내지 않으므로, 그 범위와 그 범위에서만 읽는 입력은 결과에 들어가지 않는다.
+        limit = scope.expression.args.get('limit')
+        value = limit.expression if limit is not None else None
+        if isinstance(value, exp.Literal) and value.is_int and int(value.this) == 0:
             continue
-        used.add(id(scope.expression))
-        stack.extend(source for _, source in scope.selected_sources.values() if not isinstance(source, exp.Table))
-        stack.extend(scope.subquery_scopes)
-        stack.extend(scope.set_operation_scopes)
-    return [scope for scope in scopes if id(scope.expression) in used]
+        needs[key], by_id[key] = needed, scope
+        values = _value_columns(scope, needed)
+        stack.extend((source, values[alias.lower()]) for alias, (_, source) in scope.selected_sources.items()
+                     if not isinstance(source, exp.Table) and alias.lower() in values)
+        # 조건(WHERE·HAVING·조인 ON)에만 쓰인 서브쿼리와 EXISTS·IN은 행을 거르기만 하고 값을 내지 않는다
+        # (`WHERE (SELECT SUM(…) … 2024) > 0`). 바깥이 쓰지 않는 결과 열 안의 서브쿼리도 값을 내지 않는다.
+        if isinstance(scope.expression, exp.Select):
+            roots = _needed_selects(scope, needed)
+            stack.extend((sub, None) for sub in scope.subquery_scopes
+                         if not _filter_only(sub.expression, scope.expression)
+                         and _inside(sub.expression, roots, scope.expression))
+        # UNION의 각 분기는 같은 위치의 열을 낸다. 바깥이 쓴 결과 열의 위치를 분기마다 그 분기의 열 이름으로 옮긴다
+        # (`SELECT cur FROM (SELECT 2025 합계 AS cur, 2024 합계 AS unused UNION ALL …)`의 unused는 쓰이지 않는다).
+        positions = None if needed is None else {i for i, name in enumerate(_visible_names(scope))
+                                                 if name in needed or i in needed}
+        stack.extend((branch, positions) for branch in scope.set_operation_scopes)
+    return [(scope, needs[id(scope.expression)]) for scope in scopes if id(scope.expression) in by_id]
+
+
+def _condition_months(node, trade, single, months):
+    """Return months on which a condition may be true or false, respectively."""
+    node = node.unnest()
+    if isinstance(node, exp.Not):
+        yes, no = _condition_months(node.this, trade, single, months)
+        return no, yes
+    if isinstance(node, (exp.And, exp.Or)):
+        left, not_left = _condition_months(node.this, trade, single, months)
+        right, not_right = _condition_months(node.expression, trade, single, months)
+        if isinstance(node, exp.And):
+            return left & right, not_left | not_right
+        return left | right, not_left & not_right
+    negated = isinstance(node, exp.NEQ)
+    if negated:
+        node = exp.EQ(this=node.this.copy(), expression=node.expression.copy())
+    if match := _literal_filter(node):
+        column, op, values = match
+        if column.name.lower() == 'trade_month' and (column.table.lower() == trade or (not column.table and single)):
+            yes = _selected_months([('trade_month', op, values)], within=months)
+            if yes is not None:
+                return (months - yes, yes) if negated else (yes, months - yes)
+    # A condition on another column may be true for some rows and false for others in any month.
+    return months, months
+
+
+def _value_months(select, expressions, trade, single, where_branches):
+    """Restrict each projected trade value to the months that can reach its CASE or IF branch."""
+    available = set().union(*(_selected_months(branch) or set() for branch in where_branches))
+    total, referenced = set(), False
+    # 집계한 범위에서는 집계 함수 안의 열만 더해지는 값이다. 결과에 함께 낸 그룹 키(e.country_code)는 값이 아니어서
+    # CASE가 고른 기간을 WHERE 전체 기간으로 넓히지 않는다.
+    def own_aggregate(node):
+        agg = node.find_ancestor(exp.AggFunc)
+        return agg if agg is not None and agg.find_ancestor(exp.Select) is select and agg.find_ancestor(exp.Window) is None else None
+    aggregated = bool(select.args.get('group')) or any(
+        own_aggregate(column) is not None for expression in expressions for column in expression.find_all(exp.Column))
+    for expression in expressions:
+        if any(count.find_ancestor(exp.Select) is select and _counts_rows(count)
+               for count in expression.find_all(exp.Count)):
+            return available
+        for column in expression.find_all(exp.Column):
+            if column.find_ancestor(exp.Select) is not select or not (
+                    column.table.lower() == trade or (not column.table and single)):
+                continue
+            if aggregated and own_aggregate(column) is None:
+                continue
+            possible, node = available, column
+            while node is not expression:
+                parent = node.parent
+                if isinstance(parent, exp.If):
+                    if node is parent.this:  # A WHEN condition is not itself a returned trade value.
+                        break
+                    if not isinstance(parent.parent, exp.Case):
+                        yes, no = _condition_months(parent.this, trade, single, available)
+                        possible = possible & (yes if node is parent.args.get('true') else no)
+                elif isinstance(parent, exp.Case):
+                    if node is parent.this:  # The lookup operand of a simple CASE is a condition too.
+                        break
+                    for arm in parent.args.get('ifs', ()):
+                        test = arm.this
+                        if parent.this is not None:
+                            test = exp.EQ(this=parent.this.copy(), expression=test.copy())
+                        yes, no = _condition_months(test, trade, single, available)
+                        possible = possible & (yes if node is arm else no)
+                        if node is arm:
+                            break
+                node = parent
+            else:
+                referenced = True
+                total |= possible
+    return total if referenced else available
 
 
 def missing_periods(sql, conditions):
     """요청한 기간(조회·비교·추가 비교) 가운데 생성 SQL이 수출입 행을 한 달도 읽지 않는 기간들.
     2025·2023·2024년을 요청했는데 2025년만 거른 SQL이면 2023·2024년이다. 수출입 표를 읽지 않는 SQL은 해당 없다."""
     query = sqlglot.parse_one(sql, read='mysql')
-    read, reads_trade = set(), False
-    for scope in _used_scopes(query):
+    # 수출입 조회인지는 SQL 어디서든 수출입 표를 참조하는지로, 실제로 읽은 기간은 결과에 기여하는 범위로 따로 판정한다
+    # (유일한 수출입 집계가 LIMIT 0이면 수출입 조회인데 읽은 기간이 없다).
+    read, reads_trade = set(), any(t.name.lower() in TRADE_TABLES for t in query.find_all(exp.Table))
+    for scope, needed in _used_scopes(query):
         if not isinstance(scope.expression, exp.Select):
             continue
         trades = [alias.lower() for alias, (_, source) in scope.selected_sources.items()
                   if isinstance(source, exp.Table) and source.name.lower() in TRADE_TABLES]
         where = scope.expression.args.get('where')
+        values = _value_columns(scope, needed)
         for trade in trades:
-            reads_trade = True
-            for branch in _date_filter_branches(where.this if where else None, trade, len(trades) == 1):
-                read |= _selected_months(branch) or set()
+            if trade not in values:
+                continue   # 조인 조건·WHERE에만 쓰인 수출입 표는 결과 값의 기간이 아니다
+            single = len(trades) == 1
+            where_branches = _date_filter_branches(where.this if where else None, trade, single)
+            read |= _value_months(scope.expression, _needed_selects(scope, needed), trade, single, where_branches)
     if not reads_trade:
         return []
     return [p for p in (conditions.period, conditions.compare_period, *conditions.extra_compare_periods)
@@ -1378,8 +1644,8 @@ def annual_sum_sources(payload):
     return annual_sql_sources(payload)[0]
 
 
-def execute_readonly(engine, draft, timeout_seconds=30, conditions=None):
-    sql = validate_sql(draft, conditions)
+def execute_readonly(engine, draft, timeout_seconds=30, conditions=None, *, single_trade_flow=False):
+    sql = validate_sql(draft, conditions, single_trade_flow=single_trade_flow)
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError('Invalid SQL timeout')
     # TODO(D-41): configure a dedicated read-only DB account before deployment.
@@ -1414,7 +1680,8 @@ def schema_for(engine):
 MAX_SQL_REGENERATIONS = 2
 
 
-def generated_analysis(engine, settings, client, execution, task, *, finish_reserve, latest_month, step=None):
+def generated_analysis(engine, settings, client, execution, task, *, finish_reserve, latest_month, step=None,
+                       single_trade_flow=False):
     """Generate/validate/execute each attempt inside its own durable time reservation."""
     conditions = api_conditions(task.conditions)
     # 결과표 API의 공통 조건과 별도로, 확정된 비중 기준을 생성 입력과 근거에 보존한다.
@@ -1445,7 +1712,8 @@ def generated_analysis(engine, settings, client, execution, task, *, finish_rese
         if product_share and not any(col.key=='denominator_usd' and col.type=='number' and col.unit=='USD'
                                      for col in draft.columns):
             raise ValueError('품목별 비중의 실제 분모 금액을 denominator_usd(USD) 결과 열에 포함하세요.')
-        rows, sql = execute_readonly(engine, draft, query_timeout, task.conditions)
+        options = {'single_trade_flow': True} if single_trade_flow else {}
+        rows, sql = execute_readonly(engine, draft, query_timeout, task.conditions, **options)
         # 요청한 기간의 집계가 SQL에 빠졌으면 다시 만든다. 마지막 시도에도 빠져 있으면 누락 기간을 밝힌 부분 결과로 둔다.
         from backend.app.api.common import period_label
         missing = [period_label(p.start, p.end) for p in missing_periods(sql, task.conditions)]
