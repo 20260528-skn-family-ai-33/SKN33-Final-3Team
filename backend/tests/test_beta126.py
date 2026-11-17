@@ -1,8 +1,8 @@
 """2차 베타: 첫 질문 제목과 출처명 검색. SQLite/FakeRedis만 사용한다."""
-from datetime import date
+from datetime import date, datetime
 import unittest
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from backend.tests import test_backend_api as base
 
@@ -116,3 +116,33 @@ class Beta126Test(unittest.TestCase):
         self.assertEqual([a['article_id'] for a in page['items']], ['1'])
         self.assertEqual([a['article_id'] for a in search('KOTRA', tab='BREAKING')['items']], ['5'])
         self.assertEqual(search('파이낸셜뉴스', start_date='2025-12-02', end_date='2025-12-02')['page']['total'], 1)
+        expected_names = {'1': '파이낸셜뉴스', '2': '파이낸셜뉴스', '3': '한국경제',
+                          '4': 'KOTRA 해외시장뉴스', '5': 'KOTRA 단신속보', '8': 'OTHER', '9': 'KOTRA 단신속보'}
+        self.assertEqual({a['article_id']: a['source_name'] for a in search('본문')['items']}, expected_names)
+        for identity, expected in expected_names.items():
+            with self.subTest(detail=identity):
+                response = self.client.get(f'/api/v1/articles/{identity}')
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()['article']['source_name'], expected)
+
+    def test_saved_report_gets_source_names_without_changing_saved_content(self):
+        uid = int(self.signup())
+        articles = [{'article_id': str(i), 'source_code': code, 'title': '저장 기사'}
+                    for i, code in enumerate(('FNNEWS', 'KOTRA_SHORTNEWS', 'OTHER', None), 1)]
+        content = {'schema_version': 1, 'sections': [
+            {'section_code': 'SUMMARY', 'text': '저장된 요약'},
+            {'section_code': 'NEWS', 'articles': articles}], 'meta': {'freshness': 'FROZEN'}}
+        table = self.meta.tables['report']
+        with self.engine.begin() as c:
+            rid = c.execute(table.insert().values(user_id=uid, report_type='RPT_WEEKLY',
+                generation_key='b' * 64, conditions_json={}, content_json=content,
+                status='READY', retry_count=0, created_at=datetime(2026, 11, 17))).inserted_primary_key[0]
+        response = self.client.get(f'/api/v1/reports/{rid}')
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual([a['source_name'] for a in body['sections'][1]['articles']],
+                         ['파이낸셜뉴스', 'KOTRA 단신속보', 'OTHER', '출처 미제공'])
+        self.assertEqual(body['sections'][0], content['sections'][0])
+        self.assertEqual(body['meta'], content['meta'])
+        with self.engine.connect() as c:
+            self.assertEqual(c.scalar(select(table.c.content_json).where(table.c.report_id == rid)), content)

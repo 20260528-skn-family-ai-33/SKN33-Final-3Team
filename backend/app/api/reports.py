@@ -11,6 +11,7 @@ from backend.app.api.results import read_snapshot, save_snapshot, result_table, 
 from backend.app.api.files import report_pdf, report_docx
 from backend.app.services.report_pdf import print_page
 from backend.app.api.filenames import filename_part, selection_part
+from backend.app.services.article_sources import article_source_name
 
 TITLES=json.loads((Path(__file__).resolve().parents[1]/'templates/reports/layout.json').read_text(encoding='utf-8'))['sections']
 PERIODIC_REPORT_TYPES=frozenset(('RPT_WEEKLY','RPT_MONTHLY','RPT_QUARTERLY'))
@@ -197,7 +198,11 @@ def read_report(store,uid,rid):
     require(r['status']=='READY','리포트가 아직 준비되지 않았습니다.','REPORT_NOT_READY',409)
     content=r['content_json']
     require(content.get('schema_version')==1,'이전 리포트 JSON 변환 계약 확인이 필요합니다.','FEATURE_NOT_READY',503)
-    return {'report':summary_view(store,r,report_hs_names(store,[r])),'sections':content['sections'],'meta':content['meta']}
+    # 이전에 저장한 기사에도 현재 표시명을 제공한다. 저장된 리포트 원문은 변경하지 않는다.
+    sections=[{**block,'articles':[{**article,'source_name':article_source_name(article.get('source_code'))}
+                                  for article in block.get('articles',[])]}
+              if 'articles' in block else block for block in content['sections']]
+    return {'report':summary_view(store,r,report_hs_names(store,[r])),'sections':sections,'meta':content['meta']}
 
 
 def section(code,text,tables=None,articles=None,status='READY',kpi=None):

@@ -3,7 +3,7 @@ import json
 from sqlalchemy import select, func, exists, or_, and_, delete, update, case, false
 from backend.app.api.common import require, unavailable, page_info, digest, now, mask_text, percentage
 from backend.app.api.accounts import interests, validate_scope
-from backend.app.services.article_sources import matching_source_codes
+from backend.app.services.article_sources import article_source_name, matching_source_codes
 
 
 def source_meta(store,source,latest=None):
@@ -167,6 +167,7 @@ def article_views(store,rows,uid=None):
         hs_ok=not saved['hs_items'] or any(x in hs for x in saved['hs_items']) or (no_hs_tags and country_ok)
         matched=(not saved['country_codes'] or country_ok) and hs_ok and bool(saved['country_codes'] or saved['hs_items'])
         result.append({'article_id':str(row['article_id']),'source_code':row['source_code'],'title':row['title'],
+            'source_name':article_source_name(row['source_code']),
             'published_date':row['published_date'],'country_codes':countries,'hs_items':hs,
             'summary':excerpt(mask_text(row['body_masked'])),'source_url':row['source_url'],
             'is_major_issue':row['article_id'] in major_ids, 'matched_interest':matched})

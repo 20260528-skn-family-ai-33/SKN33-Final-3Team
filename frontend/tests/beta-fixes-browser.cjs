@@ -24,7 +24,7 @@ const { chromium } = require('playwright')
     let deleteFails = true, created = 0
     const chats = [{ session_id: 'old', title: '기존 대화', updated_at: '2026-11-10T00:00:00Z' }]
     const messages = { old: [{ message_id: 'old1', role: 'USER', content_masked: '이전 질문' }] }
-    const articles = countries.map((c, i) => ({ article_id: String(i + 1), title: `${c.name_ko} 디지털 금융 서비스 확대`, source_code: 'KOTRA_SHORT_NEWS', country_codes: [c.country_code], published_date: '2026-11-10', summary: '현지 수출 동향', hs_items: [] }))
+    const articles = countries.map((c, i) => ({ article_id: String(i + 1), title: `${c.name_ko} 디지털 금융 서비스 확대`, source_code: 'KOTRA_SHORT_NEWS', source_name: 'KOTRA 단신속보', country_codes: [c.country_code], published_date: '2026-11-10', summary: '현지 수출 동향', hs_items: [] }))
     await page.route('**/api/v1/**', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname.replace('/api/v1', '')
       const reply = json => route.fulfill({ json })
@@ -160,6 +160,7 @@ const { chromium } = require('playwright')
     await page.getByRole('heading', { name: '새 리포트 질문 줄바꿈 확인', exact: true }).waitFor()
     assert.equal(created, 1, 'reload must reuse the new room instead of starting another')
     await page.goto(base + '/#/articles?page=13')
+    await page.getByText('KOTRA 단신속보', { exact: true }).first().waitFor()
     await page.getByPlaceholder('검색어 또는 언론사명 입력').fill('파이낸셜뉴스')
     await page.getByRole('button', { name: '기사 검색', exact: true }).click()
     await page.waitForURL('**/#/articles?q=*')

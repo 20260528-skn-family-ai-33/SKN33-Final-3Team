@@ -9,7 +9,7 @@ SHORT_NEWS_SOURCES = (SHORT_NEWS, LEGACY_SHORT_NEWS)
 KEYWORD_DAILY_SOURCES = (MARKET, *SHORT_NEWS_SOURCES)  # news_keyword_daily에 들어가는 출처
 PRODUCT_DAILY_SOURCES = (MARKET,)  # news_product_daily에 들어가는 출처
 
-# 기사 화면의 표시명(frontend/src/api/adapters.js)으로도 검색한다.
+# API가 내려주는 기사 표시명. 검색과 프론트 표시가 같은 이름을 사용한다.
 ARTICLE_SOURCE_NAMES = {
     MARKET: 'KOTRA 해외시장뉴스',
     SHORT_NEWS: 'KOTRA 단신속보',
@@ -20,6 +20,10 @@ ARTICLE_SOURCE_NAMES = {
 
 # 표시명과 별칭은 대소문자를 구분하지 않고 정확히 일치할 때만 출처로 검색한다.
 ARTICLE_SOURCE_ALIASES = {'kotra': (MARKET, *SHORT_NEWS_SOURCES)}
+
+
+def article_source_name(code):
+    return ARTICLE_SOURCE_NAMES.get(code, code or '출처 미제공')
 
 
 def matching_source_codes(query):
