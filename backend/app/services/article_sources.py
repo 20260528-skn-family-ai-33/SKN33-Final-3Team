@@ -17,3 +17,11 @@ ARTICLE_SOURCE_NAMES = {
     'HANKYUNG': '한국경제',
     'FNNEWS': '파이낸셜뉴스',
 }
+
+# 표시명과 별칭은 대소문자를 구분하지 않고 정확히 일치할 때만 출처로 검색한다.
+ARTICLE_SOURCE_ALIASES = {'kotra': (MARKET, *SHORT_NEWS_SOURCES)}
+
+
+def matching_source_codes(query):
+    name = query.strip().casefold()
+    return tuple(code for code, label in ARTICLE_SOURCE_NAMES.items() if name == label.casefold()) + ARTICLE_SOURCE_ALIASES.get(name, ())

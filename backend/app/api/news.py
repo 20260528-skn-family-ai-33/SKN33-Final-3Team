@@ -3,7 +3,7 @@ import json
 from sqlalchemy import select, func, exists, or_, and_, delete, update, case, false
 from backend.app.api.common import require, unavailable, page_info, digest, now, mask_text, percentage
 from backend.app.api.accounts import interests, validate_scope
-from backend.app.services.article_sources import ARTICLE_SOURCE_NAMES
+from backend.app.services.article_sources import matching_source_codes
 
 
 def source_meta(store,source,latest=None):
@@ -119,10 +119,10 @@ def article_statement(store,uid=None,tab='ALL',q=None,start=None,end=None,scope=
     if start: stmt=stmt.where(a.c.published_date>=start)
     if end: stmt=stmt.where(a.c.published_date<=end)
     if q:
-        source_codes=[code for code,label in ARTICLE_SOURCE_NAMES.items() if q.casefold() in label.casefold()]
+        source_codes=matching_source_codes(q)
         matched=select(k.c.keyword_text).where(or_(k.c.keyword_text.contains(q,autoescape=True),k.c.canonical_text.contains(q,autoescape=True)))
         stmt=stmt.where(or_(a.c.title.contains(q,autoescape=True),a.c.body_masked.contains(q,autoescape=True),
-            func.lower(a.c.source_code).contains(q.lower(),autoescape=True),a.c.source_code.in_(source_codes),
+            a.c.source_code.in_(source_codes),
             exists(select(t.c.tag_id).where(t.c.article_id==a.c.article_id,t.c.keyword_text.in_(matched)))))
     # 분야는 후보 필터가 아닌 정렬 보조로만 적용한다.
     if category_boost:

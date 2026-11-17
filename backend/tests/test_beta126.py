@@ -102,14 +102,17 @@ class Beta126Test(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             return response.json()
 
-        for q, ids in [('파이낸셜', ['8', '2', '1']), ('한국경제', ['3']), ('kOtRa', ['9', '5', '4']),
-                       ('fnnews', ['2', '1']), ('무역', ['9', '5', '4', '3', '2', '1']), ('%', []), ('_', ['9', '5', '4'])]:
+        for q, ids in [('파이낸셜뉴스', ['2', '1']), ('파이낸셜', ['8']), ('한국경제', ['3']),
+                       ('kOtRa', ['9', '5', '4']), (' KOTRA ', ['9', '5', '4']),
+                       ('KOTRA 해외시장뉴스', ['4']), ('KOTRA 단신속보', ['9', '5']),
+                       ('경제', []), ('한국', []), ('뉴스', []), ('kotr', []), ('fnnews', []),
+                       ('KOTRA_SHORT', []), ('무역', ['9', '5', '4', '3', '2', '1']), ('%', []), ('_', [])]:
             with self.subTest(query=q):
                 result = search(q)
                 self.assertEqual([a['article_id'] for a in result['items']], ids)
                 self.assertEqual(result['page']['total'], len(ids))
-        page = search('파이낸셜', page=3, page_size=1)
-        self.assertEqual(page['page']['total'], 3)
+        page = search('파이낸셜뉴스', page=2, page_size=1)
+        self.assertEqual(page['page']['total'], 2)
         self.assertEqual([a['article_id'] for a in page['items']], ['1'])
         self.assertEqual([a['article_id'] for a in search('KOTRA', tab='BREAKING')['items']], ['5'])
-        self.assertEqual(search('파이낸셜', start_date='2025-12-02', end_date='2025-12-02')['page']['total'], 1)
+        self.assertEqual(search('파이낸셜뉴스', start_date='2025-12-02', end_date='2025-12-02')['page']['total'], 1)
