@@ -3,7 +3,7 @@ from collections import Counter
 import re
 
 from backend.app.agents.digest import display_amounts, korean_usd
-from backend.app.agents.verify_articles import ARTICLE_CITATION, cited_article_numbers
+from backend.app.agents.verify_articles import ARTICLE_CITATION, citation_clauses, cited_article_numbers
 from backend.app.agents.monthly_summary import fixed_monthly_sentences, reconcile_monthly_claims
 from backend.app.agents.state import (AgentState, Draft, TaskConclusion, MAX_TASK_SENTENCES,
                                       MAX_TEXT_TASK_SENTENCES, draft_limit_error, is_text_task)
@@ -57,6 +57,10 @@ false인 하위 질문의 결론에서는 기사·검색 상황을 언급하지 
 CAUSE는 기사와 통계의 시점 연관성을 설명하되 원인으로 단정하지 마세요.
 기사 내용은 articles에서만 가져오고 문장 끝에 [n]으로 인용하세요. 여러 기사는 [1][2] 또는 [1, 2]처럼 인용하세요.
 기사의 금액·증감률·연도별 변화나 그 배경을 인용할 때에는 해당 articles.summary의 검수된 사실 문장 하나를 그대로 옮기고 [n]을 붙이세요.
+기사 사실을 선택할 때는 배열 원소 하나에 [기사 n 문장 k]만 써도 됩니다. n은 기사 번호이고 k는 그 summary의 1부터 시작하는 문장 번호입니다.
+서비스가 선택한 검수 문장 전체와 실제 인용 번호를 표시합니다. 가능한 경우 이 형식을 우선 사용하세요.
+각 원소에는 한 근거만 쓰세요. 조회 통계나 이번 조회의 인과 한계는 기사 번호 없이 별도 원소에 쓰세요.
+다음 원소에서 같은 기사의 기간·추이·배경을 다시 설명하려면 그 사실에도 출처가 필요합니다.
 기사 사실과 이번 조회의 통계·인과 한계는 각각 별도의 문장으로 쓰세요. 결론에는 같은 task_id의 번호만 쓰세요.
 evidence_role이 context_reference면 배경 자료입니다. mixed면 '참고(직접 답변 아님)' 문장은 배경으로만 쓰세요.
 unclassified는 근거 역할 미분류입니다. 기사 제목으로 인과관계를 추측하지 마세요.
@@ -501,12 +505,53 @@ _ARTICLE_ATTRIBUTION = re.compile(r'(?:기사|기고문|보도자료)(?:에\s*�
 _REPORTED_TREND = re.compile(r'(?:수출|수입|매출|수요|시장|점유율).{0,45}(?:하락|상승|감소|증가|급증|급감)')
 
 
-def validate_citations(generated, articles):
+_FACT_SELECTION = re.compile(r'\[기사 (\d+) 문장 (\d+)\]')
+# Attributions may introduce the trend before or after its historical time period.
+_HISTORICAL_BACKGROUND = re.compile(r'(?:기사|기고문|보도자료)에서?\s*(?:언급|제시|설명|다룬).{0,40}(?:감소|증가|하락|상승|배경).{0,30}\d{4}년')
+_QUERY_AND_NEWS = re.compile(r'통계(?:와|와의)\s*(?:기사|인과관계)')
+_STAT_THEN_ARTICLE = re.compile(r'(?:달러|USD|%)[^.。!?]*[.。!?]\s*(?:참고\s*)?(?:기사|기고문|보도자료)')
+
+
+def expand_article_selections(draft, articles):
+    """Render a selected reviewed fact with its own card number before public draft validation."""
+    if not any('[기사 ' in line for line in [*draft.sentences(), draft.turn_summary]):
+        return draft
+    facts = {}
+    for card in articles:
+        for index, fact in enumerate(card.get('summary', []), 1):
+            text = fact['text'] if isinstance(fact, dict) else fact
+            facts[str(card['n']), str(index)] = f"{text} [{card['n']}]"
+
+    def expand(line):
+        if '[기사 ' not in line:
+            return line
+        match = _FACT_SELECTION.fullmatch(line.strip())
+        if not match or match.groups() not in facts:
+            raise ValueError('기사 사실은 유효한 기사·문장 번호로 단독 선택하세요.')
+        return facts[match.groups()]
+
+    return Draft(conclusion=[TaskConclusion(task_id=c.task_id, sentences=[expand(s) for s in c.sentences])
+                             for c in draft.conclusion], explanation=[expand(s) for s in draft.explanation],
+                 turn_summary=expand(draft.turn_summary), title=draft.title)
+
+
+def validate_citations(generated, articles, *, summary_task_id=None):
     by_task = {}
     for a in articles:
         by_task.setdefault(a['task_id'], set()).add(str(a['n']))
+    exact = {(str(card['n']), (fact['text'] if isinstance(fact, dict) else fact).strip())
+             for card in articles for fact in card.get('summary', [])}
     def check(sentences, allowed):
         for sentence in sentences:
+            cited, trailing = citation_clauses(sentence)
+            for passage in cited:
+                prose = ARTICLE_CITATION.sub('', passage).strip()
+                if all((n, prose) in exact for n in cited_article_numbers(passage)):
+                    continue
+                if _STAT_THEN_ARTICLE.search(prose) or (_QUERY_AND_NEWS.search(prose) and '확인' in prose):
+                    raise ValueError('조회 통계와 기사 사실을 분리하고 기사 사실에만 번호를 붙이세요.')
+            if allowed and _HISTORICAL_BACKGROUND.search(trailing):
+                raise ValueError('기사에서 가져온 시기와 배경에는 해당 기사 번호를 붙이세요.')
             if (allowed and not cited_article_numbers(sentence) and _ARTICLE_ATTRIBUTION.search(sentence)
                     and _REPORTED_TREND.search(sentence)
                     and not re.search(r'(?:감소|증가|하락|상승)\s*(?:여부|원인)[^.]*확인할 수 없', sentence)):
@@ -520,6 +565,8 @@ def validate_citations(generated, articles):
     for conclusion in generated.conclusion:
         check(conclusion.sentences, by_task.get(conclusion.task_id, set()))
     check(generated.explanation, {str(a['n']) for a in articles})
+    if summary_task_id:
+        check([generated.turn_summary], by_task.get(summary_task_id, set()))
 
 
 def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_conditions, *, articles=None) -> Draft:
@@ -529,7 +576,8 @@ def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_c
     if generated:
         if articles is None:
             articles = [a for a in numbered_articles(state) if a.get('evidence_sufficient') and a.get('summary')]
-        validate_citations(generated, articles)
+        generated = expand_article_selections(generated, articles)
+        validate_citations(generated, articles, summary_task_id=state.plan.tasks[0].task_id)
     if state.input.article_action and generated and (
         # "…입니다 [1]." 처럼 번호 뒤 마침표도 허용한다. 선택 기사 하나만 인용했는지만 본다.
         generated.explanation or any(not re.search(r'\[1\]\s*[.!?。]?\s*$', sentence)

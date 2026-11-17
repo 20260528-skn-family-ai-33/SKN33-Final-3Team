@@ -2,7 +2,7 @@ import unittest
 from copy import deepcopy
 from unittest.mock import Mock
 
-from backend.app.agents.compose import validate_citations
+from backend.app.agents.compose import expand_article_selections, validate_citations
 from backend.app.agents.state import ArticleReview, Draft, ToolResult
 from backend.app.agents.verify import verify
 from backend.app.agents.verify_articles import review_article_claims
@@ -53,6 +53,34 @@ class ArticleVerificationTest(unittest.TestCase):
             validate_citations(self.state.draft, [{'task_id': 't1', 'n': 1}])
         self.check(line + '[1]')
         validate_citations(self.state.draft, [{'task_id': 't1', 'n': 1}])
+
+    def test_mixed_and_uncited_source_claims_rejected_before_publication(self):
+        lines = [
+            '2025년 한국의 대중국 수출액 통계와 기사 내용은 각각 확인된 사실이며, 기사 내용만으로 수출 변화의 원인을 단정할 수 없습니다[1].',
+            '월별 수출액은 11월 1억 122만 달러로 가장 적습니다. 기사에서는 시장 경쟁을 배경으로 들었습니다. [1]',
+            '기사에서 언급한 감소 배경은 2021년 이후 흐름에 관한 것이며 2025년 수출 변화의 원인으로 확인된 것은 아닙니다.',
+        ]
+        for line in lines:
+            with self.subTest(line=line):
+                self.check(line, explanation=True)
+                with self.assertRaises(ValueError):
+                    validate_citations(self.state.draft, [{'n': 1, 'task_id': 't1'}])
+
+    def test_selected_body_fact_binds_citation_without_changing_other_prose(self):
+        cards = [{'n': 1, 'task_id': 't1', 'summary': [{'text': self.fact}]}]
+        self.check('[기사 1 문장 1]')
+        self.state.draft.explanation = ['이번 조회에서는 수출 변화의 원인을 확인할 수 없습니다.']
+        draft = expand_article_selections(self.state.draft, cards)
+        self.assertEqual(draft.conclusion[0].sentences, [self.fact + ' [1]'])
+        self.assertEqual(self.check(draft.conclusion[0].sentences[0]).status, 'PASS')
+        self.assertEqual(draft.explanation, ['이번 조회에서는 수출 변화의 원인을 확인할 수 없습니다.'])
+        validate_citations(draft, cards)
+        with self.assertRaises(ValueError):
+            validate_citations(draft, [{**cards[0], 'task_id': 't2'}])
+        for marker in ['[기사 1 문장 2]', '조회 금액은 48달러입니다. [기사 1 문장 1]']:
+            self.check(marker)
+            with self.assertRaises(ValueError):
+                expand_article_selections(self.state.draft, cards)
 
     def test_missing_or_changed_body_cannot_certify_a_digest(self):
         for patch in [{'unavailable': True}, {'evidence_changed': True}, {'sentences': []},
