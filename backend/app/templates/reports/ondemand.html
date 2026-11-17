@@ -7,7 +7,8 @@
 {# ---------- 표시 문구 ---------- #}
 {% set items = c.hs_items %}
 {% set subject = selection_part(items | map(attribute='label') | list, '전체 품목', filename=false, unit='개 품목') %}
-{% set title = subject ~ ' 수출 시장 분석' %}
+{# 무역수지 결과표만 옮긴 리포트는 표지도 무역수지로 쓴다(report_ondemand_context.populate_results의 metric.basis). #}
+{% set title = subject ~ (' 무역수지 분석' if c.metric and c.metric.get('basis') == '무역수지' else ' 수출 시장 분석') %}
 {% set has_compare = c.compare.mode != 'NONE' %}
 {% set compare_ready = has_compare and c.compare.status == 'READY' %}
 {% set pend = '비교 데이터 준비 중' %}  {# 비교를 골랐지만 비교 기간 통계가 아직 없음 (NONE과 구분) #}
@@ -67,7 +68,7 @@
   {'label': '분석 기간', 'value': c.period.label ~ ' (' ~ c.period.months ~ '개월)'},
   {'label': '포함 항목', 'value': included_names | join(' · ')},
   {'label': '요청 경로', 'value': 'AI 분석 대화에서 요청' if c.request_channel == 'CHAT' else '리포트 요청 화면'},
-  {'label': '요청 지표', 'value': c.metric.label ~ ' · 현재 계산·정렬 기준: 수출액'},
+  {'label': '요청 지표', 'value': c.metric.label ~ ' · 현재 계산·정렬 기준: ' ~ (c.metric.get('basis') or '수출액')},
   {'label': '생성', 'value': (report.published_at | ymdhm) ~ ' · ' ~ report.report_id},
   {'label': '데이터 기준', 'value': meta.data_basis},
 ] %}
@@ -406,7 +407,7 @@
 {% if has_compare %}{% set _ = methods.append(('순위 변동', prevw ~ ' 같은 품목·조건의 수출액 순위와 비교 · ▲ 상승 ▼ 하락 – 유지')) %}{% endif %}
 {% if c.compare.mode == 'CUSTOM' %}{% set _ = methods.append(('비교 기간', '두 기간의 월 수가 다를 수 있어 월별로 짝짓지 않고 기간 합계로만 비교')) %}{% endif %}
 {% set _ = methods.append(('품목 합산', ('선택 품목 ' ~ items | length ~ '개 · ' if items | length > 1 else '') ~ 'HS 10단위를 6단위로 합산 · 같은 거래를 중복 합산하지 않음')) %}
-{% set _ = methods.append(('정렬 기준', '수출액 (요청 지표 ' ~ c.metric.label ~ ')')) %}
+{% set _ = methods.append(('정렬 기준', (c.metric.get('basis') or '수출액') ~ ' (요청 지표 ' ~ c.metric.label ~ ')')) %}
 {% endif %}
 <table>
   <tr><th style="width:36mm">지표</th><th>계산식</th></tr>

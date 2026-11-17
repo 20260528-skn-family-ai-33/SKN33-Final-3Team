@@ -66,7 +66,8 @@ def preview(store,state,task):
             refs.append({**info,**origin,'conditions':snapshot['conditions']})
             # 표 종류·순위 기준·기간을 보존해 리포트와 채팅이 같은 열을 표시한다(results.display_columns).
             meta=snapshot['meta']
-            copied_meta={k:meta[k] for k in ('kind','group_by','anchor','period','compare_period','extra_compare_periods')
+            copied_meta={k:meta[k] for k in ('kind','group_by','anchor','period','compare_period','extra_compare_periods',
+                                             'trade_balance','period_totals')
                          if k in meta}
             if meta['kind']=='LLM_SQL':
                 copied_meta['period_verified'] = meta.get('period_verified') is True
@@ -83,21 +84,28 @@ def preview(store,state,task):
         if public['hs_items']!=source_items:
             raise SlotRepair('선행 결과의 품목과 판본을 변경하려면 새 분석 질문을 입력해 주세요.')
         frozen=any(item['hs_ver']=='HS2017' for item in source_items)
-    created=reports.preview(store,state.input.user_id,{'conditions':public},frozen=frozen)
+    # 결과표 기반 리포트는 원본의 비교 기간을 순서 그대로 옮긴다. 신규 조회용 "비교 기간은 앞서야" 제한은 첫 비교 기간만
+    # 보므로(3월을 4월·2월과 비교하면 거절, 2월·4월이면 통과) 적용하지 않는다.
+    created=reports.preview(store,state.input.user_id,{'conditions':public},frozen=frozen,from_results=sources is not None)
     if sources is not None:
         table=store.t('api_snapshot')
         data=results.read_snapshot(store,state.input.user_id,created['preview_id'],'PREVIEW')
-        if task.previous_turn_result:
-            # 질문의 조건 변경을 반영하지 않았다는 안내(D-92)는 승인 화면의 adjustments로 보여야 생성 전에 알 수 있다.
-            from backend.app.agents.conditions import PREVIOUS_TABLE_NOTE
-            if PREVIOUS_TABLE_NOTE in task.applied_defaults:
-                shown=data['conditions'].get('applied_defaults') or []
-                data['conditions']={**data['conditions'],'applied_defaults':[*shown,PREVIOUS_TABLE_NOTE]}
+        # 조건 변경을 반영하지 않았다는 안내(D-92)·수입 결과를 넣지 않았다는 안내는 승인 화면의 adjustments로 보여야
+        # 생성 전에 알 수 있다.
+        from backend.app.agents.conditions import PREVIOUS_TABLE_NOTE
+        from backend.app.agents.planner import EXPORT_ONLY_REPORT_NOTE
+        notes=[n for n in (PREVIOUS_TABLE_NOTE if task.previous_turn_result else None,EXPORT_ONLY_REPORT_NOTE)
+               if n and n in task.applied_defaults]
+        if notes:
+            shown=data['conditions'].get('applied_defaults') or []
+            data['conditions']={**data['conditions'],'applied_defaults':[*shown,*(n for n in notes if n not in shown)]}
         store.c.execute(update(table).where(table.c.snapshot_id==created['preview_id']).values(
             payload_json=clean({**data,'source_results':refs,'source_tables':copies})))
     task.report_request=ReportRequest(preview_id=created['preview_id'],expires_at=created['expires_at'],
                                       conditions=task.conditions,formats=['PDF'])
-    ask(state,task,key,'REPORT_CONFIRM','표시된 수출 분석 조건과 파일 형식을 확인한 뒤 리포트 생성을 선택하세요.',[])
+    # 무역수지 결과표만 옮기는 리포트는 승인 문구도 실제 지표로 쓴다(PDF의 요청 지표·표지와 같다).
+    balance=reports.balance_copies([snapshot for snapshot,_,_ in sources or []])
+    ask(state,task,key,'REPORT_CONFIRM',f"표시된 {'무역수지' if balance else '수출'} 분석 조건과 파일 형식을 확인한 뒤 리포트 생성을 선택하세요.",[])
 
 
 def preview_view(store, uid, request):
@@ -146,9 +154,13 @@ def submit(store,state,task,step):
         from backend.app.agents.state import summarize_limitations
         limits=summarize_limitations([l for r in approved.get('source_results') or []
                                       if r.get('completeness')=='PARTIAL' for l in r.get('limitations') or []])
+        # 무역수지 결과표만 옮긴 리포트라는 표시도 conditions_json에 둔다(완료 뒤 파일 이름·제목이 수출로 돌아가지 않게).
+        tables=approved.get('source_tables') or []
+        balance=reports.balance_copies(tables)
         store.c.execute(update(table).where(table.c.report_id==rid).values(content_json=clean(content),conditions_json=clean({
             **record['conditions_json'],'chat_input_fingerprint':identity,'chat_approval':request.model_dump(mode='json'),
-            'chat_sources':source_ids(state,task),'chat_limitations':limits})))
+            'chat_sources':source_ids(state,task),'chat_limitations':limits,
+            **({'chat_metric':'BALANCE'} if balance else {})})))
     return ReportWait(step_id=step.step_id,report_id=str(rid),started_at=now())
 
 

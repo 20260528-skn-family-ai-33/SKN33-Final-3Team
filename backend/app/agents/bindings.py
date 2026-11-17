@@ -3,7 +3,8 @@ import re
 from pydantic import ValidationError
 from sqlalchemy import select
 from backend.app.agents.conditions import ask
-from backend.app.agents.state import Conditions, HsProduct, MAX_COUNTRIES, MAX_HS_ITEMS, ToolResult
+from backend.app.agents.state import (Conditions, HsProduct, MAX_COUNTRIES, MAX_HS_ITEMS, ToolResult, drop_report_sources,
+                                      import_source, report_drops_imports)
 from backend.app.api.chat_slots import SlotRepair
 from backend.app.api.common import ApiError, digest
 from backend.app.api.results import read_snapshot
@@ -231,6 +232,20 @@ def source_versions(store,state,task):
         sources.append((snapshot,{'result_id':result.result_id,'version':meta.get('input_fingerprint'),
                        'completeness':result.completeness,'limitations':result.limitations}))
     return sources
+
+
+def report_export_sources(store,state,task):
+    """방향을 수입으로 명시하지 않은 리포트는 저장 결과의 확정 방향으로 원본을 고른다. 플래너 슬롯이 비어 있어도 조회 때
+    수출로 확정된 표는 수출 원본이다. 수출 원본이 있으면 수입 원본은 빼고(두 방향을 묶으면 승인할 수 없다) 그 범위를 알린다.
+    무역수지 표(수출 기준 계산)는 수입 원본이 아니다."""
+    if not report_drops_imports(task.intent,task.slots.trade_flow) or len(task.input_bindings)<2:
+        return
+    sources=source_versions(store,state,task)
+    imported=[import_source(snapshot['conditions'].get('trade_flow'),snapshot['meta'].get('trade_balance'))
+              for snapshot,_ in sources]
+    if all(imported) or not any(imported):
+        return
+    drop_report_sources(task,{b.source_step_id for b,flag in zip(task.input_bindings,imported) if flag})
 
 
 def resolve(store,state,task,out):

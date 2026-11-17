@@ -63,10 +63,12 @@ def _trend_chart(table):
         return None
     # 시리즈는 국가 코드·HS 코드·판본으로 나눈다. 이름(예: 0409·040900 모두 '천연꿀')으로 나누면 다른 품목 값이 한 선에서 덮인다.
     series = {}
+    # 무역수지 결과의 기본 시리즈 이름은 저장된 지표를 따른다(조회 방향의 '수출액'이 아니다).
+    fallback = '무역수지' if (table.get('meta') or {}).get('trade_balance') else '수출액'
     for r in table['rows']:
         # 코드가 없는 예전 결과는 표시 이름으로 대신한다(국가 이름만 있는 표를 한 선으로 합치지 않게)
         key = (r.get('country_code') or r.get('country_name'), r.get('hs_code') or r.get('name'), r.get('hs_ver'))
-        entry = series.setdefault(key, {'name': ' · '.join(str(r.get(k)) for k in names if r.get(k)) or '수출액', 'values': {}})
+        entry = series.setdefault(key, {'name': ' · '.join(str(r.get(k)) for k in names if r.get(k)) or fallback, 'values': {}})
         entry['values'][r['month']] = r.get(amount)
     if len(series) > CHART_SERIES_LIMIT:
         return None
@@ -104,8 +106,13 @@ def populate_results(saved, ctx, start, end, content):
     mode = saved.get('compare', 'NONE') if saved.get('compare_period') else 'NONE'
     previous = [date.fromisoformat(saved['compare_period'][k]) for k in ('start', 'end')] if mode != 'NONE' else []
     c = ctx['conditions']
+    tables = content.get('source_tables', [])
+    # 무역수지 결과표만 옮긴 리포트는 요청 지표·계산 기준도 무역수지다(조회 방향의 수출액이 아니다).
+    from backend.app.api.reports import balance_copies
+    balance = balance_copies(tables)
+    label = '무역수지' if balance else METRICS[saved.get('metric', 'AMOUNT')]
     c.update(period=period_view(start, end), sections=sections, request_channel='CHAT', result_mode=True,
-             metric={'code': saved.get('metric', 'AMOUNT'), 'label': METRICS[saved.get('metric', 'AMOUNT')]},
+             metric={'code': saved.get('metric', 'AMOUNT'), 'label': label, 'basis': '무역수지' if balance else '수출액'},
              compare={'mode': mode, 'status': 'NONE' if mode == 'NONE' else 'READY', 'monthly_paired': False,
                       'period_label': period_view(*previous)['label'] if previous else '',
                       'short': period_view(*previous)['short'] if previous else '', 'basis_label': BASES[mode]})

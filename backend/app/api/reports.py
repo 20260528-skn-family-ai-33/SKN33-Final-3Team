@@ -22,6 +22,18 @@ def display_title(record):
     return f"{labels.get(record['report_type'],record['report_type'])} 리포트 · {p.get('start','')} ~ {p.get('end','')}"
 
 
+def balance_copies(tables):
+    """결과표(사본·스냅숏) 목록이 모두 무역수지인지. 리포트의 승인 문구·표지·요청 지표·제목·파일 이름이 이 판정 하나를 쓴다."""
+    return bool(tables) and all((t.get('meta') or {}).get('trade_balance') for t in tables)
+
+
+def balance_tables(record):
+    """승인한 결과표 사본이 모두 무역수지인 리포트인지(제목·파일 이름·PDF 지표를 무역수지로 쓴다).
+    완료(READY) 뒤에는 content_json이 완성 문서로 바뀌어 사본이 없으므로 승인 때 남긴 chat_metric을 본다."""
+    if (record.get('conditions_json') or {}).get('chat_metric')=='BALANCE': return True
+    return balance_copies((record.get('content_json') or {}).get('source_tables') or [])
+
+
 def download_filename(store,record,fmt):
     """User-facing name only; storage IDs/paths and document contents stay intact."""
     c=record['conditions_json'];codes=c.get('country_codes') or []
@@ -35,15 +47,17 @@ def download_filename(store,record,fmt):
     period_name=f"{p['start']}~{p['end']}" if p.get('start') and p.get('end') else '전체기간'
     flow='수입' if c.get('trade_flow')=='IMPORT' else '수출'
     metric={'AMOUNT':'액분석','GROWTH':'증감분석','SHARE':'비중분석','RANK':'순위분석'}.get(c.get('metric'),'분석')
-    topic=c.get('topic') or flow+metric
+    # 무역수지 결과표만 옮긴 리포트는 조회 방향(수출)이 아니라 저장된 지표 이름을 쓴다.
+    topic=c.get('topic') or ('무역수지분석' if balance_tables(record) else flow+metric)
     created=record.get('completed_at') or record['created_at']
     if isinstance(created,str): created=datetime.fromisoformat(created.replace('Z','+00:00'))
     local=created.replace(tzinfo=created.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9)))
     return '_'.join((countries,filename_part(period_name),products,filename_part(topic)))+f'_리포트_{local:%Y%m%d_%H%M%S}.'+fmt
 
 
-def resolve_comparison(conditions, adjustments):
-    """Validate comparison semantics against the final, month-aligned analysis period."""
+def resolve_comparison(conditions, adjustments, *, any_order=False):
+    """Validate comparison semantics against the final, month-aligned analysis period.
+    any_order: 저장 결과표를 옮기는 리포트. 원본이 이미 조회한 비교 기간이므로 앞뒤 순서를 다시 제한하지 않는다."""
     mode=conditions['compare']; supplied=conditions['compare_period']; p=conditions['period']
     if mode=='NONE':
         require(supplied is None,'비교 없음에는 비교 기간을 지정할 수 없습니다.')
@@ -54,7 +68,7 @@ def resolve_comparison(conditions, adjustments):
         supplied=aligned
     if mode=='CUSTOM':
         require(supplied is not None,'사용자 지정 비교에는 compare_period가 필요합니다.')
-        require(supplied['end']<p['start'],'사용자 지정 비교 기간은 분석 기간보다 앞서야 합니다.')
+        require(any_order or supplied['end']<p['start'],'사용자 지정 비교 기간은 분석 기간보다 앞서야 합니다.')
         return supplied
     start,end=date.fromisoformat(p['start']),date.fromisoformat(p['end'])
     if mode=='MOM':
@@ -69,7 +83,7 @@ def resolve_comparison(conditions, adjustments):
     return expected
 
 
-def preview(store,uid,data,*,frozen=False):
+def preview(store,uid,data,*,frozen=False,from_results=False):
     require(bool(data.get('conditions')) != bool(data.get('result_id')),'conditions와 result_id 중 하나만 지정하세요.')
     require(not data.get('period_preset'),'기간 프리셋 입력 예외 계약 DEC-28 확정이 필요합니다.','FEATURE_NOT_READY',503)
     if data.get('result_id'):
@@ -98,7 +112,7 @@ def preview(store,uid,data,*,frozen=False):
         adjustments.append('종료일을 최신 공개 월의 말일로 조정')
     require(p['start']<=p['end'],'현재 공개 데이터 범위로 조정할 수 없습니다.','PERIOD_NOT_AVAILABLE',422)
     trade.resolve_period(store,p['start'][:7],p['end'][:7])
-    conditions['compare_period']=resolve_comparison(conditions,adjustments)
+    conditions['compare_period']=resolve_comparison(conditions,adjustments,any_order=from_results)
     conditions['applied_defaults']=adjustments; conditions['expanded_regions']=[]
     identity=save_snapshot(store,uid,'PREVIEW',{'conditions':conditions},600)
     return {'preview_id':identity,'conditions':conditions,'needs_confirmation':True,
@@ -471,6 +485,7 @@ def build_document(store,uid,record):
             sections.append(section('LOCAL_ISSUES','분석 조건과 기간에 해당하는 기사 본문 발췌입니다. RAG 요약·인과 분석 모듈은 미연결 상태입니다.',articles=articles,status='POLICY_PENDING'))
             meta['sources'].extend(article_sources(articles))
     title='수출 시장 분석 리포트' if record['report_type']!='RPT_WEEKLY' else '주간 해외시장 뉴스 리포트'
+    if balance_tables(record): title='무역수지 분석 리포트'
     subtitle=f"HS {', '.join(x['hs_code'] for x in hs) or '전체'} · {', '.join(countries) or '전체 국가'} · {p['start']} ~ {p['end']} · USD"
     return clean({'schema_version':1,'title':title,'subtitle':subtitle,'generated_at':now().isoformat()+'Z','sections':sections,'meta':meta,'sql':store.queries})
 
