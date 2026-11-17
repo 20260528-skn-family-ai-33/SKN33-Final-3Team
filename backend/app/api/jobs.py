@@ -9,6 +9,7 @@ EXECUTION = '_execution'
 # Deployed v1 workers filter on version == 1 before claiming or reclaiming.
 # 3: 작업마다 만든 Redis의 queue_id를 붙인다(D-106). 2까지만 아는 배포 워커는 3을 가져가지 않는다.
 AGENT_QUEUE_VERSION = 3
+CHAT_TITLE_CHARS = 20
 _KNOWN_CHAT_VERSIONS = (1, 2, AGENT_QUEUE_VERSION)  # 2는 유예 시간 동안 아무 워커도 안 가져간 경우에만 넘겨받는다
 # TODO(C-32): 주인 없는 에이전트 작업의 유예 시간 임시값. 버전 2는 지나면 넘겨받아 실행하고, 다른 queue의 버전 3은
 # 지나면 새 질문 때 만료한다. 임대 시간(10분)과 같게 두었다. API_AGENT_ADOPT_GRACE_SECONDS로 바꾼다
@@ -165,8 +166,16 @@ def enqueue(store,uid,kind,target,payload,key):
             '같은 요청 키에 다른 내용이 전달되었습니다.','IDEMPOTENCY_CONFLICT',409)
         return old
     require(_active_chat(store,target) is None,'이 대화의 작업이 진행 중입니다.','JOB_IN_PROGRESS',409)
+    messages=store.t('chat_message')
+    first_question=store.c.scalar(select(messages.c.message_id).where(
+        messages.c.session_id==target,messages.c.role=='USER').limit(1)) is None
     identity=store.insert('chat_message',session_id=int(target),role='USER',content_masked=payload['question'],
         result_json=clean({'schema_version':1,EXECUTION:state}),created_at=now())
+    # 첫 질문과 같은 트랜잭션에서 저장한다. 되묻기·재시도·답변 완료는 제목을 바꾸지 않는다.
+    if first_question:
+        sessions=store.t('chat_session')
+        store.c.execute(update(sessions).where(sessions.c.session_id==target,sessions.c.user_id==uid,
+            sessions.c.title=='새 대화').values(title=' '.join(payload['question'].split())[:CHAT_TITLE_CHARS],updated_at=now()))
     return {**state,'job_id':identity}
 
 
