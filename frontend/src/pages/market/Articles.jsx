@@ -92,7 +92,7 @@ export default function Articles({ route }) {
             <div className="article-search-fields">
               <div>
                 <label className="lbl" htmlFor="ar-q">검색 (선택)</label>
-                <TextField id="ar-q" placeholder="검색어 입력" icon="search" iconColor="#5C6370" value={form.keyword} onChange={v => setForm(f => ({ ...f, keyword: v }))} />
+                <TextField id="ar-q" placeholder="검색어 또는 언론사명 입력" icon="search" iconColor="#5C6370" value={form.keyword} onChange={v => setForm(f => ({ ...f, keyword: v }))} />
               </div>
               <div>
                 <span className="lbl" id="ar-period">발행 기간 (선택)</span>

@@ -13,7 +13,7 @@ const { chromium } = require('playwright')
     browser = await chromium.launch({ headless: true, channel: 'chrome', args: ['--disable-features=LocalNetworkAccessChecks'] })
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' })
     page.setDefaultTimeout(10000)
-    const errors = [], unexpected = [], trends = [], sent = [], reads = [], questions = []
+    const errors = [], unexpected = [], trends = [], sent = [], reads = [], questions = [], articleSearches = []
     page.on('pageerror', e => errors.push(e.message))
     const shots = path.resolve(__dirname, '../../tmp/issue121-browser')
     fs.mkdirSync(shots, { recursive: true })
@@ -67,7 +67,10 @@ const { chromium } = require('playwright')
         reads.push(id)
         return reply({ items: messages[id], page: { total: messages[id].length } })
       }
-      if (p === '/articles') return reply({ items: articles, page: { total: 5 } })
+      if (p === '/articles') {
+        articleSearches.push(Object.fromEntries(url.searchParams))
+        return reply({ items: articles, page: { total: 5 } })
+      }
       if (/^\/articles\/\d+$/.test(p)) return reply({ article: articles.find(a => a.article_id === p.split('/')[2]), body_masked: '- 현지 금융 서비스가\n확대되고 있다.\n\n' + '- 상세 내용이다.\n'.repeat(60) + 'https://example.org/' + 'long-path-'.repeat(60) })
       if (p === '/data/availability') return reply({ trade_end_month: '2025-12' })
       if (p === '/trade/trends') {
@@ -156,9 +159,16 @@ const { chromium } = require('playwright')
     await page.reload()
     await page.getByRole('heading', { name: '새 리포트 질문 줄바꿈 확인', exact: true }).waitFor()
     assert.equal(created, 1, 'reload must reuse the new room instead of starting another')
+    await page.goto(base + '/#/articles?page=13')
+    await page.getByPlaceholder('검색어 또는 언론사명 입력').fill('파이낸셜')
+    await page.getByRole('button', { name: '기사 검색', exact: true }).click()
+    await page.waitForURL('**/#/articles?q=*')
+    await page.getByText(/“파이낸셜” 검색 결과/).waitFor()
+    assert.equal(articleSearches.at(-1).q, '파이낸셜')
+    assert.equal(articleSearches.at(-1).page, '1')
     assert.deepEqual(errors, [])
     assert.deepEqual(unexpected, [])
-    console.log('PASS issues #121/#126: beta regressions, multiline chat, IME, immediate title refresh')
+    console.log('PASS issues #121/#126: beta regressions, multiline chat, IME, immediate title refresh and search page reset')
   } finally {
     await browser?.close()
     await server.close()

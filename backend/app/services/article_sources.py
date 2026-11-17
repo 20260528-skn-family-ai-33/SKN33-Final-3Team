@@ -8,3 +8,12 @@ LEGACY_SHORT_NEWS = "KOTRA_SHORTNEWS"
 SHORT_NEWS_SOURCES = (SHORT_NEWS, LEGACY_SHORT_NEWS)
 KEYWORD_DAILY_SOURCES = (MARKET, *SHORT_NEWS_SOURCES)  # news_keyword_daily에 들어가는 출처
 PRODUCT_DAILY_SOURCES = (MARKET,)  # news_product_daily에 들어가는 출처
+
+# 기사 화면의 표시명(frontend/src/api/adapters.js)으로도 검색한다.
+ARTICLE_SOURCE_NAMES = {
+    MARKET: 'KOTRA 해외시장뉴스',
+    SHORT_NEWS: 'KOTRA 단신속보',
+    LEGACY_SHORT_NEWS: 'KOTRA 단신속보',
+    'HANKYUNG': '한국경제',
+    'FNNEWS': '파이낸셜뉴스',
+}

@@ -1,5 +1,8 @@
-"""2차 베타: 첫 질문 제목. SQLite/FakeRedis만 사용한다."""
+"""2차 베타: 첫 질문 제목과 출처명 검색. SQLite/FakeRedis만 사용한다."""
+from datetime import date
 import unittest
+
+from sqlalchemy import update
 
 from backend.tests import test_backend_api as base
 
@@ -76,3 +79,37 @@ class Beta126Test(unittest.TestCase):
         self.assertEqual(accepted.status_code, 202, accepted.text)
         self.assertEqual(self.title(sid), '[이메일] 수출 문의')
         self.assertEqual(self.client.get('/api/v1/' + path).json()['items'][0]['content_masked'], '[이메일]\n수출 문의')
+
+    def test_source_search_filters_all_rows_before_pagination_and_keeps_visibility(self):
+        uid = int(self.signup())
+        m = self.meta.tables
+        sources = ['FNNEWS', 'FNNEWS', 'HANKYUNG', 'KOTRA_MARKET', 'KOTRA_SHORT_NEWS',
+                   'FNNEWS', 'FNNEWS', 'OTHER', 'KOTRA_SHORTNEWS']
+        with self.engine.begin() as c:
+            for i, source in enumerate(sources, 1):
+                c.execute(m['article'].insert(), {'article_id': i, 'source_code': source,
+                    'external_id': f'beta126-{i}', 'title': '파이낸셜 관련 기사' if i == 8 else '무역 동향',
+                    'body_masked': '본문', 'published_date': date(2025, 12, i), 'category': '경제',
+                    'source_url': f'https://example.org/{i}', 'visibility_status': 'HIDDEN' if i == 6 else 'VISIBLE',
+                    'admin_meta_json': {}})
+            c.execute(m['keyword_topic'].insert(), {'keyword_text': 'blocked', 'status': 'UNCLASSIFIED'})
+            c.execute(m['article_tag'].insert(), {'article_id': 7, 'keyword_text': 'blocked'})
+            c.execute(update(m['notification_setting']).where(m['notification_setting'].c.user_id == uid)
+                      .values(keyword_blocks_json=[{'kw_topic': 'blocked', 'selected_terms': ['blocked']}]))
+
+        def search(q, **params):
+            response = self.client.get('/api/v1/articles', params={'q': q, 'mode': 'SEARCH', **params})
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+
+        for q, ids in [('파이낸셜', ['8', '2', '1']), ('한국경제', ['3']), ('kOtRa', ['9', '5', '4']),
+                       ('fnnews', ['2', '1']), ('무역', ['9', '5', '4', '3', '2', '1']), ('%', []), ('_', ['9', '5', '4'])]:
+            with self.subTest(query=q):
+                result = search(q)
+                self.assertEqual([a['article_id'] for a in result['items']], ids)
+                self.assertEqual(result['page']['total'], len(ids))
+        page = search('파이낸셜', page=3, page_size=1)
+        self.assertEqual(page['page']['total'], 3)
+        self.assertEqual([a['article_id'] for a in page['items']], ['1'])
+        self.assertEqual([a['article_id'] for a in search('KOTRA', tab='BREAKING')['items']], ['5'])
+        self.assertEqual(search('파이낸셜', start_date='2025-12-02', end_date='2025-12-02')['page']['total'], 1)
