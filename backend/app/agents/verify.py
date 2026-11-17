@@ -413,7 +413,85 @@ def _implied_amount_change(checks, prepared, sentence):
     return tuple(out)
 
 
+def _winners_for_claim(claim, observations, source, window):
+    start, end = window
+    month_count = months_between(start, end) + 1
+    if len(observations) != month_count or any(not isinstance(f.value, Decimal) for f in observations):
+        return ()
+    if {f.month for f in observations} != {shift(start, i) for i in range(month_count)}:
+        return ()
+    select = min if claim.metric.aggregate == 'MIN' else max
+    extreme = select(f.value for f in observations)
+    winners = [f for f in observations if f.value == extreme]
+    if ('공동' in claim.text and len(winners) == 1) or ('단독' in claim.text and len(winners) > 1):
+        return ()
+
+    # A date attached to the observation identifies the winner, not the comparison window.
+    time = claim.time
+    if time.period or time.month_window:
+        if time.period and time.period != window:
+            return ()
+        if time.month_window and time.month_window != (int(start[5:]), int(end[5:])):
+            return ()
+        time = replace(time, period=None, month_window=None, months=frozenset(), bare_months=frozenset())
+    if time.years - {m[:4] for m in time.months}:
+        if window != (start[:4] + '-01', start[:4] + '-12') or time.years != {start[:4]}:
+            return ()
+    dates = {f.month for f in winners}
+    if not time.months <= dates or not time.bare_months <= {int(m[5:]) for m in dates}:
+        return ()
+    level = replace(claim, time=replace(time, years=frozenset(), months=frozenset(),
+                                        bare_months=frozenset(), durations=frozenset()),
+                    metric=replace(claim.metric, aggregate=None, amount_period=None))
+    cells = []
+    for fact in winners:
+        if time.months or time.bare_months:
+            if fact.month not in time.months and int(fact.month[5:]) not in time.bare_months:
+                continue
+        if _time_matches(level, fact) and (not claim.quantity or mismatch(level, fact, source) is None):
+            cells.append((fact.source, fact.path))
+    return tuple(cells)
+
+
+def _monthly_extreme_cells(claim, facts, sources):
+    """Only complete monthly series from the saved table can establish an extremum."""
+    if not claim.valid or claim.metric.relation != 'EQ':
+        return ()
+    series = {}
+    for fact in facts:
+        source = sources[fact.source]
+        if (source.get('kind') != 'TREND' or source.get('_verification_source') != 'SNAPSHOT'
+                or fact.path[:1] != ('rows',) or len(fact.path) != 3
+                or fact.metric.key not in ('amount_usd', 'compare_amount_usd')
+                or not claim.targets <= fact.targets or (claim.metric.flow and claim.metric.flow != fact.metric.flow)):
+            continue
+        role = 'compare_period' if fact.metric.key == 'compare_amount_usd' else 'period'
+        window = period(source.get(role))
+        if not window or not _source_supports(claim.time, {'period': source[role]}):
+            continue
+        if not _level_period_matches(claim.metric.amount_period or 'AUTO', claim.time, fact, source):
+            continue
+        row = source['rows'][int(fact.path[1])]
+        identity = (fact.stored_targets, row.get('hs_ver'), fact.metric.flow, window)
+        series.setdefault(identity, {}).setdefault(fact.source, []).append(fact)
+
+    if len(series) != 1:
+        return ()
+    identity, by_source = next(iter(series.items()))
+    window = identity[-1]
+    # Two tasks can contribute copies of the same series to shared explanations.
+    matches = []
+    for index, observations in by_source.items():
+        cells = _winners_for_claim(claim, observations, sources[index], window)
+        if not cells:
+            return ()
+        matches.extend(cells)
+    return tuple(matches)
+
+
 def _matching_cells(claim, facts, sources, catalog):
+    if claim.metric.aggregate in ('MIN', 'MAX'):
+        return _monthly_extreme_cells(claim, facts, sources)
     if claim.metric.family == 'OUTLOOK':
         # An implicit market is identifiable only if one saved classification is in scope.
         eligible = [f for f in facts if f.metric.family == 'OUTLOOK' and claim.targets <= f.targets
@@ -485,7 +563,7 @@ def _supports_stated_window(source, role, year, start, end):
 
 def _inspect_prepared(sentence, prepared):
     catalog, facts, sources = prepared.catalog, prepared.facts, prepared.sources
-    parsed=parse_sentence(sentence,catalog)
+    parsed=parse_sentence(sentence,catalog, monthly_series=any(s.get('kind') == 'TREND' for s in sources))
     checks=[]
     for claim in parsed.claims:
         matches=_matching_cells(claim,facts,sources,catalog)
@@ -682,7 +760,7 @@ def mark_unverified(state):
 
 def diagnose_claim(claim, prepared, group):
     """Only identify an attribute when an otherwise compatible cell isolates it."""
-    if claim.metric.negated_change:
+    if claim.metric.negated_change or claim.metric.aggregate in ('MIN', 'MAX'):
         return 'NOT_CONFIRMED', None, None
     if claim.valid and claim.metric.family == 'CHANGE' and claim.time.subject_year and len(claim.time.years) == 2:
         # A TREND snapshot repeats the period total and change on every monthly row.

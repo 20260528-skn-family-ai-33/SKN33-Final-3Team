@@ -1229,7 +1229,77 @@ def _monthly_status_claims(text, catalog):
     return claims, spans
 
 
-def parse_sentence(sentence,catalog):
+_EXTREMUM = re.compile(r'(?P<low>최저|최소|최솟값|(?:가장|제일)\s*(?:낮|작|적))'
+                       r'|최고|최대|최댓값|(?:가장|제일)\s*(?:높|크|큰|컸|많)')
+_EXTREMA_CLAUSE = re.compile(r'(?<!\d),|,(?!\d)|[;，]|[.!?](?!\d)|이며|이고|였고|었고|았고|했고|했지만|(?<=[낮높적많])고|으며|그리고')
+
+
+def _is_amount_range(sentence, left, right, end):
+    if right.quantity.unit != 'USD' or left.quantity.unit not in (None, 'USD'):
+        return False
+    between = sentence[left.quantity_span[1]:right.quantity_span[0]].strip()
+    if between in ('~', '∼', '～', '–'):
+        return True
+    return between in ('에서', '부터') and bool(re.search(r'사이|범위', sentence[right.quantity_span[1]:end]))
+
+
+def _bind_monthly_extrema(sentence, claims, catalog, monthly_series):
+    """Attach min/max to the observation in its clause, preserving original quantity spans."""
+    boundaries = [0, *(m.end() for m in _EXTREMA_CLAUSE.finditer(sentence)), len(sentence)]
+    for start, end in zip(boundaries, boundaries[1:]):
+        clause = sentence[start:end]
+        time, _ = read_time(clause)
+        dated = bool(time.months or time.bare_months)
+        if not (dated or monthly_series or '월별' in sentence):
+            continue
+        labels = list(_EXTREMUM.finditer(clause))
+        roles = ['MIN' if m['low'] else 'MAX' for m in labels]
+        amounts = [i for i, c in enumerate(claims) if c.quantity_span
+                   and start <= c.quantity_span[0] < end and c.quantity.unit in ('USD', None)]
+        if not roles and len(amounts) == 2:
+            left, right = (claims[i] for i in amounts)
+            if _is_amount_range(sentence, left, right, end):
+                roles = ['MIN', 'MAX']
+                if left.quantity.unit is None and right.quantity.scale == 1:
+                    # In '20~40달러' the currency applies to both endpoints.
+                    claims[amounts[0]] = replace(left, quantity=replace(left.quantity, unit='USD'),
+                                                 metric=replace(left.metric, family='AMOUNT'))
+        if not roles or not (dated or amounts):
+            continue
+
+        valid = not re.search(r'아니|아닙|않|역대|사상', clause)
+        if amounts and len(roles) == len(amounts):
+            for i, role in zip(amounts, roles):
+                claim = claims[i]
+                # '6월 수출액은 최소 100달러 이상' is an ordinary threshold on June.
+                prefix = sentence[start:claim.quantity_span[0]]
+                if claim.metric.relation != 'EQ' and re.search(r'(?:최소|최대)\s*$', prefix):
+                    continue
+                claims[i] = replace(claim, metric=replace(claim.metric, aggregate=role), text=clause,
+                                    valid=claim.valid and valid and claim.metric.family == 'AMOUNT'
+                                    and claim.metric.aggregate in (None, 'TOTAL'))
+            continue
+
+        # A month on its own ("최저는 6월") still asserts a numerical ordering.
+        if not amounts and re.search(r'증감률|증가율|감소율|점유율|단가|중량|투자액', clause):
+            continue
+        names = catalog.merge(catalog.names_in(sentence[:start]), catalog.names_in(clause))
+        flows = set(re.findall(r'수출|수입', clause) or re.findall(r'수출|수입', sentence[:start]))
+        flow = {'수출': 'EXPORT', '수입': 'IMPORT'}.get(next(iter(flows), ''))
+        times = [time]
+        if len(roles) == 2 and '각각' in clause:
+            dates = list(DATE.finditer(clause))
+            if len(dates) == 2:
+                first, year = read_time(dates[0].group())
+                second, _ = read_time(dates[1].group(), year)
+                times = [first, second]
+        valid = valid and not amounts and len(roles) == len(times) and len(flows) <= 1
+        for role, observed in zip(roles, times):
+            metric = MetricClaim(family='AMOUNT', aggregate=role, flow=flow)
+            claims.append(Claim(None, names, 'SINGLE', metric, observed, clause, valid, (start, end)))
+
+
+def parse_sentence(sentence,catalog, *, monthly_series=False):
     original_mentions, ambiguous = catalog.resolve_mentions(sentence)
     outlook, outlook_spans = _outlook_claims(sentence, catalog) if OUTLOOK.search(sentence) else ([], [])
     monthly, monthly_spans = _monthly_status_claims(sentence, catalog) if MONTH_STATE.search(sentence) else ([], [])
@@ -1557,6 +1627,8 @@ def parse_sentence(sentence,catalog):
 
     parsed, _ = parse(text, origins)
     claims = list(parsed.claims)
+    if _EXTREMUM.search(sentence) or re.search(r'사이|범위|[~∼～–]', sentence):
+        _bind_monthly_extrema(sentence, claims, catalog, monthly_series)
     # The trailing subject in "A가 1위, B가 2위로 A가 앞선다" does not own B's rank.
     # Both stated ranks must also support the stated ordering.
     ordering = re.search(r'(앞섭|앞섰|앞선|뒤따)', sentence)
