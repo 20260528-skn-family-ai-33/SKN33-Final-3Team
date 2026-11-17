@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '../../api/hooks'
 import { createQueryCache } from '../../api/queryCache'
 import { amount, percent, mapArticle } from '../../api/adapters'
@@ -26,6 +26,15 @@ const growth = (now, before) => now != null && before ? (now / before - 1) * 100
 // 금액 0은 그 기간에 실적이 없다는 뜻이므로 0 대신 —로 보여 준다(D-3).
 export const money = value => value == null || Number(value) === 0 ? '—' : amount(value)
 const periodText = data => `${data?.meta?.period?.start || '—'} ~ ${data?.meta?.period?.end || '—'} · 억 USD`
+function useAvailability() {
+  const result = useQuery('/data/availability', {}, true, 60_000)
+  const [lastSuccess, setLastSuccess] = useState(null)
+  if (result.data && result.data !== lastSuccess) setLastSuccess(result.data)
+  // 일시적인 버전 확인 실패는 이미 표시 중인 통계의 조건을 무효화하지 않는다.
+  // 첫 조회 실패만 오류로 표시하며, 이후에도 useQuery의 1분 재시도는 계속된다.
+  const data = result.data || lastSuccess
+  return { ...result, data, loading: !data && result.loading, error: data ? null : result.error }
+}
 function useRanking(cache, range, group) {
   const result = useCachedQueries(cache, '/trade/rankings', range.period_end
     ? [{ ...range, group_by: group, page_size: 5, view: 'DASHBOARD' }] : [])
@@ -33,7 +42,7 @@ function useRanking(cache, range, group) {
 }
 export default function useDashboard(view, months, profile, accountId) {
   const scope = view === 'interest' ? 'INTERESTED' : 'GLOBAL'
-  const availability = useQuery('/data/availability', {}, true, 60_000)
+  const availability = useAvailability()
   const context = JSON.stringify([accountId, profile.version, profile.products, profile.countries, availability.data?.meta?.data_version])
   // context 변경은 캐시 객체 자체를 교체하여 이전 응답도 격리한다.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -82,7 +91,7 @@ export default function useDashboard(view, months, profile, accountId) {
   const countryRows = (countries.data?.items || []).map(r => [r.rank, countryName(r.country_code), r.has_data === false ? '—' : money(r.export_amount_usd), r.has_data === false ? '—' : money(r.import_amount_usd)])
   const link = n => (group, product, country, flow) => rankLink({ scope, start: monthOffset(end, 1 - n), end, months: n, countries: country_codes, group, product, country, flow })
   const tablePeriod = periodText(countries.data || tableProducts.data)
-  // 영역별 오류 안내: 기준 월 조회가 실패하면 모든 영역이 비므로 각 영역에 함께 넣는다.
+  // 영역별 오류 안내: 기준 월 첫 조회가 실패하면 모든 영역이 비므로 각 영역에 함께 넣는다.
   const states = {
     kpi: [availability, trends], fx: [fx], cards: [availability, cardProducts, series],
     products: [availability, tableProducts], countries: [availability, countries, shares], news: [news],

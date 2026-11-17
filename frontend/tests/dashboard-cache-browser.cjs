@@ -21,8 +21,9 @@ async function until(check) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
     page.setDefaultTimeout(10000)
     await page.clock.install()
-    const errors = [], calls = [], pendingGraphs = [], pendingRanks = []
+    const errors = [], calls = [], pendingGraphs = [], pendingRanks = [], pendingTrade = []
     let holdGraphs = true, holdSix = false, failGraph = false, failAnnual = false, account = '1', version = 'v1', interestsVersion = '1'
+    let availabilityMode = 'ok', availabilityCalls = 0, holdTrade = false, amountMultiplier = 1
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/api/v1/**', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname.replace('/api/v1', ''), q = url.searchParams
@@ -37,16 +38,22 @@ async function until(check) {
       if (p === '/users/me/notification-settings') return reply({ settings: { notifications_enabled: false } })
       if (p === '/users/me/subscriptions') return reply({ items: [] })
       if (p === '/notifications/unread-count') return reply({ count: 0 })
-      if (p === '/data/availability') return reply({ trade_end_month: '2025-12', meta: { data_version: version } })
+      if (p === '/data/availability') {
+        availabilityCalls++
+        if (availabilityMode === 'network') return route.abort('failed')
+        if (availabilityMode !== 'ok') return route.fulfill({ status: Number(availabilityMode), headers: { 'Retry-After': '30' }, json: { message: '기준월 오류 테스트' } })
+        return reply({ trade_end_month: '2025-12', meta: { data_version: version } })
+      }
       if (p === '/trade/rankings' || p === '/trade/trends') {
         calls.push({ p, q: Object.fromEntries(q) })
+        if (holdTrade) await new Promise(resolve => pendingTrade.push(resolve))
         const start = q.get('period_start'), months = start === '2025-10' ? 3 : start === '2025-07' ? 6 : 12
         const meta = { period: { start, end: '2025-12' }, data_version: version }
         if (p.endsWith('rankings')) {
           if (holdSix && months === 6) await new Promise(resolve => pendingRanks.push(resolve))
           await delay(100)
           if (failAnnual && months === 12 && q.get('group_by') === 'HS6') return route.fulfill({ status: 503, json: { message: '공유 순위 오류 테스트' } })
-          return reply({ items: Array.from({ length: 5 }, (_, i) => ({ rank: i + 1, hs_item: { hs_code: `330${String(months).padStart(2, '0')}${i}` }, hs_name: `${months}개월 품목 ${i}`, country_code: i ? 'CN' : 'US', export_amount_usd: months * 100000000, import_amount_usd: 100000000 })), meta,
+          return reply({ items: Array.from({ length: 5 }, (_, i) => ({ rank: i + 1, hs_item: { hs_code: `330${String(months).padStart(2, '0')}${i}` }, hs_name: `${months}개월 품목 ${i}`, country_code: i ? 'CN' : 'US', export_amount_usd: months * 100000000 * amountMultiplier, import_amount_usd: 100000000 })), meta,
             conditions: { hs_items: [], country_codes: q.get('scope') === 'INTERESTED' ? [interestsVersion === '1' ? 'US' : 'CN'] : [] } })
         }
         if (q.get('view') === 'SPARKLINE') {
@@ -91,8 +98,36 @@ async function until(check) {
     assert.equal(calls.filter(c => c.p.endsWith('rankings') && c.q.group_by === 'HS6' && c.q.period_start === '2025-01').length, 1)
     console.log('PASS 3/6/12 return visits issue zero trade requests; 12-month table and card share one ranking')
 
+    const regions = page.locator('.zone-overview, .zone-exports, .zone-tables')
+    const unchanged = await regions.allTextContents()
+    for (const mode of ['503', '429', 'network']) {
+      availabilityMode = mode
+      const beforePoll = availabilityCalls
+      await page.clock.fastForward(60100)
+      await until(() => availabilityCalls > beforePoll)
+      await delay(100)
+      assert.deepEqual(await regions.allTextContents(), unchanged)
+      assert.equal(await regions.locator('[role="alert"]').count(), 0)
+      assert.equal(tradeCount(), before, 'A failed version poll must not discard trade caches')
+    }
+    availabilityMode = 'ok'
+    const beforeRecovery = availabilityCalls
+    await page.clock.fastForward(60100)
+    await until(() => availabilityCalls > beforeRecovery)
+    await delay(100)
+    assert.equal(tradeCount(), before, 'Recovering the same version must not refetch trade data')
+    console.log('PASS 503, 429, network failure and same-version recovery preserve all four main regions')
+
+    holdTrade = true
     await page.clock.fastForward(300100)
-    await page.waitForFunction(() => document.querySelector('.zone-exports .rank-card') !== null)
+    await until(() => pendingTrade.length >= 4)
+    await delay(100)
+    assert.deepEqual(await regions.allTextContents(), unchanged)
+    assert.equal(await regions.locator('.skel').count(), 0)
+    assert.equal(await regions.locator('[aria-busy="true"]').count(), 0)
+    holdTrade = false; amountMultiplier = 2
+    pendingTrade.splice(0).forEach(resolve => resolve())
+    await cards.first().locator('[title="6"]').waitFor()
     await ready(3)
     assert.ok(tradeCount() > before)
     console.log('PASS active cache expires and refetches after five minutes')
@@ -162,5 +197,35 @@ async function until(check) {
     assert.equal(await tableError.count(), 0)
     assert.equal(annualCalls(), beforeSharedRetry + 2)
     console.log('PASS retrying a shared ranking clears errors in both the cards and table')
+
+    // A failed background refresh keeps the same-condition data and exposes retry.
+    failAnnual = true
+    await page.clock.fastForward(300100)
+    await section.getByRole('alert').waitFor()
+    await tableError.waitFor()
+    assert.equal(await cards.count(), 5)
+    assert.equal(await regions.locator('.skel').count(), 0)
+    failAnnual = false; holdTrade = true
+    await tableError.getByRole('button', { name: '다시 불러오기' }).click()
+    await until(() => pendingTrade.length > 0)
+    assert.equal(await cards.count(), 5)
+    assert.equal(await regions.locator('.skel').count(), 0)
+    holdTrade = false; amountMultiplier = 3
+    pendingTrade.splice(0).forEach(resolve => resolve())
+    await cards.first().locator('[title="36"]').waitFor()
+    await ready(12)
+    console.log('PASS failed background refresh and manual retry preserve data until fresh values arrive')
+
+    availabilityMode = '503'
+    const beforeInitialFailure = tradeCount()
+    await page.reload()
+    await section.getByRole('alert').waitFor()
+    assert.equal(await cards.count(), 0)
+    assert.equal(tradeCount(), beforeInitialFailure)
+    availabilityMode = 'ok'
+    await section.getByRole('button', { name: '다시 불러오기' }).click()
+    await ready(3)
+    assert.deepEqual(errors, [])
+    console.log('PASS first availability failure remains visible and can be retried')
   } finally { await browser?.close(); await server.close() }
 })().catch(error => { console.error(error); process.exitCode = 1 })
