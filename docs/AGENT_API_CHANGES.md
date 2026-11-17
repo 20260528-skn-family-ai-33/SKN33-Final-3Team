@@ -18,6 +18,8 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | API-37 | 응답 추가 | 되묻기 종류 `INTEREST_SELECT`와 `clarification.interests`(고를 관심사 후보) | D-64 |
 | API-37 | answer 추가 | 비교 기간이 여럿이면(예: 2025년 기준 2023년·2024년) `answer.tables[].meta.extra_compare_periods`(`[{start, end}]`, end는 말일)에 두 번째 이후 비교 기간을 요청 순서대로 싣는다. 표 행에는 기간마다 `compare{n}_month`·`compare{n}_amount_usd`(n=2부터)와 기간 합계·월평균·`change{n}_pct` 열이 붙고, 열 이름에는 "2023년 금액"처럼 기간을 쓴다. `conditions`·`compare_period` 형식은 그대로다. `charts[]`의 `grouped_bar`는 시리즈가 2개 이상이다(기간마다 하나) | 2026-11-12 이슈 113 |
 | API-37 | answer 변경 | 단순 금액 순위표는 개수를 말하지 않은 순위에도 `순위·(국가)·코드·명칭·금액` 열만 반환한다(상위 10개). 품목 순위를 국가 하나로 거르면 `country_name` 열이 붙는다. 증감·비교를 물으면 기존 순위 표를 반환한다 | 2026-11-12 이슈 113 |
+| API-37 | answer 변경 | 순위 결과표(`answer.tables[].meta.kind='RANKING'`)는 `rank_status`(순위 상태) 열을 보이지 않는다. 행 값은 남는다(결과 API·엑셀·리포트 표도 같다). 채팅 밖의 순위 API(API-20·42) 결과는 그대로다 | 2026-11-17 이슈 113 |
+| API-37 | answer 변경 | 비교 기간이 여럿인 TREND 표(`meta.extra_compare_periods`)는 기간 길이가 같아 월별 비교 열이 있어도 기간 합계·월평균·차액·`change{n}_pct` 열을 함께 보인다 | 2026-11-17 이슈 113 |
 | API-37 | answer 추가 | 생성 SQL 결과표의 `answer.tables[].meta.period_verified`(bool)는 수치가 조회 기간 전체를 그대로 집계했다고 증명됐는지다. `false`면 `answer.warnings`에 "생성 SQL 결과는 집계 기간을 확인할 수 없어 답변 문장의 수치를 검증하지 않았습니다…" 안내가 붙고, 그 결과의 수치는 기간 표현과 상관없이 답변 문장에 쓰지 않는다(결과표로만 보인다). 그 결과로 만든 리포트도 `meta.warnings`(웹·DOCX)와 결과표 안내·확인 항목(PDF)에 같은 제한을 싣는다 | 2026-11-12 이슈 113 |
 | API-38 되묻기 답 | 요청 추가 | `text`(직접 입력), `interest_selection`(관심사 골라 받기) | D-12, D-64 |
 | API-38 | 오류 추가 | 409 `CLARIFICATION_EXPIRED` (30분 경과) | D-04 |
