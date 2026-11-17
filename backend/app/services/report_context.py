@@ -15,12 +15,11 @@ from backend.app.api import news, trade
 from backend.app.api.common import clean, month_end, percentage, require, shift_month
 from backend.app.scheduler.jobs.major_issue_detect import (MARKET, MINIMUM_RATIO, SHORT_NEWS, keyword_counts, keyword_issues,
                                                            product_counts, product_issues, spike, trade_regulation_issues, windows)
-from backend.app.services.article_sources import KEYWORD_DAILY_SOURCES, PRODUCT_DAILY_SOURCES, SHORT_NEWS_SOURCES
+from backend.app.services.article_sources import (ARTICLE_SOURCE_NAMES as SOURCES, KEYWORD_DAILY_SOURCES,
+                                                 PRODUCT_DAILY_SOURCES, SHORT_NEWS_SOURCES)
 
 
 KINDS = {'RPT_MONTHLY': '월간', 'RPT_WEEKLY': '주간', 'RPT_QUARTERLY': '분기', 'RPT_ON_DEMAND': '요청형'}
-SOURCES = {MARKET: 'KOTRA 해외시장뉴스', **dict.fromkeys(SHORT_NEWS_SOURCES, 'KOTRA 단신속보'),
-           'HANKYUNG': '한국경제', 'FNNEWS': '파이낸셜뉴스'}
 WEEKLY_ISSUE_LIMIT = 10  # 주간 리포트에 싣는 급증 키워드·주요 이슈 최대 건수
 
 

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, download } from '../../api/client'
 import { useQuery, ErrorNotice } from '../../api/hooks'
+import { Loading } from '../../components/ui'
 import { BarChart, Donut, LineChart } from '../../components/charts'
 import ApiResults from '../../components/ApiResults'
 import { niceTicks, chartDisplay } from '../../utils/chart'
@@ -39,13 +40,13 @@ function Chart({initial,selector,table}) {
   const display=chartDisplay(series.flatMap(s=>s.values),chart.unit)
   const props={labels:chart.labels,fullLabels:chart.full_labels,series,label:chart.title,formatValue:display.format}
   return <figure style={{margin:'28px 16px'}}><figcaption><b>{chart.title}</b> · {display.unit} {({QUARTER:'· 분기별',YEAR:'· 연도별'})[chart.granularity]}</figcaption>
-    {pairMode ? <div className="chips">
+    {pairMode ? <div className="chips" aria-busy={pairQuery.loading}>
       {pairs.length>0 && <select aria-label="차트 국가·품목" disabled={busy} value={pairKey(country,hs)} onChange={e=>{
         const pair=pairs.find(p=>pairKey(p.country_code,itemKey({hs_code:p.hs6,hs_ver:p.hs_ver||'HS2022'}))===e.target.value)
         if(pair) change(pair.country_code,itemKey({hs_code:pair.hs6,hs_ver:pair.hs_ver||'HS2022'}))
       }}>{pairs.map(p=>{const key=pairKey(p.country_code,itemKey({hs_code:p.hs6,hs_ver:p.hs_ver||'HS2022'}))
         return <option key={key} value={key}>{countryName(p.country_code)} · {productChoiceLabel(p.hs6)}</option>})}</select>}
-      {pairQuery.loading && <span role="status">차트 대상 불러오는 중…</span>}
+      {pairQuery.loading && <Loading inline showLabel label="차트 대상 불러오는 중…" />}
       <ErrorNotice error={pairQuery.error} retry={pairQuery.reload}/>
     </div> : selector && <div className="chips">{selector.country_codes.length>0 && <select aria-label="차트 국가" disabled={busy} value={country} onChange={e=>change(e.target.value,hs)}>{selector.country_codes.map(c=><option key={c} value={c}>{countryName(c)}</option>)}</select>}{selector.hs_items.length>0 && <select aria-label="차트 품목" disabled={busy} value={hs} onChange={e=>change(country,e.target.value)}>{selector.hs_items.map(h=><option key={itemKey(h)} value={itemKey(h)}>{productChoiceLabel(h.hs_code,h.name_ko)}{selector.hs_items.some(o=>o!==h&&o.hs_code===h.hs_code)?` (${h.hs_ver})`:''}</option>)}</select>}</div>}
     {chart.type==='line'?<LineChart {...props} yTicks={niceTicks(series.flatMap(s=>s.values.filter(v=>v!=null)))}/>:chart.type==='donut'?<><Donut items={chart.labels.map((l,i)=>[l,series[0].values[i]||0,colors[i%colors.length]])}/><p>{chart.labels.map((l,i)=>l+' '+(series[0].values[i]??'—')+'%').join(' · ')}</p></>:<BarChart {...props}/>}
@@ -62,9 +63,9 @@ function Chart({initial,selector,table}) {
 function ComparisonResult({group,fallback,charts,selectors,tasks,tableOnly=false}) {
   const result_ids=group.tables.map(t=>t.result_id)
   const result=useQuery('/results/comparison',{result_ids},true,0,'POST')
-  if(result.loading)return <section aria-label="통합 비교 결과"><h3>비교 결과</h3>
+  if(result.loading)return <section aria-label="통합 비교 결과" aria-busy="true"><h3>비교 결과</h3>
     {fallback && !tableOnly && <Chart initial={fallback}/>}
-    <p role="status">비교 표를 구성하고 있습니다.</p>
+    <p><Loading inline showLabel label="비교 표를 구성하고 있습니다." /></p>
   </section>
   // 통합 비교가 실패해도(국가 20개 초과 등) 각 결과는 유효하다. 원래 차트와 표를 하위 질문별 제목 아래 그대로 보여 준다.
   if(result.error)return <section aria-label="통합 비교 결과"><h3>비교 결과</h3>

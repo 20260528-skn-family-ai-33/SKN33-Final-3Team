@@ -865,7 +865,7 @@ class Services:
                     if decision.get('interest') in ('APPLIED','GLOBAL'):
                         context['interest_action']='APPLIED' if decision['interest']=='APPLIED' else 'DECLINED'
             updates={'context_json':clean(context),'updated_at':now()}
-            if state.input.first_question and state.draft.title: updates['title']=state.draft.title
+            # 제목은 첫 질문 접수 시 저장한다. 생성된 제목이나 후속 답변으로 덮어쓰지 않는다.
             table=store.t('chat_session')
             store.c.execute(update(table).where(table.c.session_id==session['session_id']).values(**updates))
             job.update(status='SUCCEEDED',finished_at=now().isoformat(),result_json={'step':'DONE','answer':answer})

@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import { navigate } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Check, Modal, TextField } from '../../components/ui'
+import { Btn, Check, Loading, Modal, TextField } from '../../components/ui'
 import { PASSWORD_HINT, isEmail, isStrongPassword } from '../../utils/validate'
 import PasswordRules from '../../components/PasswordRules'
 import TermsBody from '../../components/TermsBody'
@@ -112,7 +112,7 @@ export function Signup() {
         <ErrorNotice error={termsError} retry={reloadTerms} />
         <div className="sp24" />
         {error.form && <p className="field-err" role="alert">{error.form}</p>}
-        <Btn type="submit" kind="red" size="lg" block disabled={!ready || pending}>{pending ? '가입 중…' : '회원가입하고 관심사 설정하기'}</Btn>
+        <Btn type="submit" kind="red" size="lg" block disabled={!ready || pending}>{pending ? <Loading inline showLabel label="가입 중…" /> : '회원가입하고 관심사 설정하기'}</Btn>
         {!passwordReady && <p className="note" style={{ marginTop: 8, textAlign: 'center' }}>비밀번호 조건을 모두 만족하고 비밀번호 확인이 일치해야 가입할 수 있습니다.</p>}
         {passwordReady && !agreementReady && <p className="note" style={{ marginTop: 8, textAlign: 'center' }}>필수 항목에 모두 동의해야 가입할 수 있습니다.</p>}
         <div className="sp12" />

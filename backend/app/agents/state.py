@@ -722,12 +722,12 @@ class TaskConclusion(Model):
 
 
 class Draft(Model):
-    """compose의 LLM 호출 1번으로 답변 문장, 대화 요약, (첫 답변이면) 대화방 제목을 같이 받는다.
+    """compose의 LLM 호출 1번으로 답변 문장과 대화 요약을 받는다. title은 이전 초안·체크포인트 호환용이다.
     결론은 하위 질문마다 1~2문장, 설명은 전체 4문장 이하. LLM이 문장을 나눠 주므로 verify는 문장 번호로 대조한다."""
     conclusion: list[TaskConclusion] = Field(min_length=1, max_length=MAX_TASKS)
     explanation: list[Sentence] = Field(default_factory=list, max_length=MAX_TEXT_EXPLANATION_SENTENCES)
     turn_summary: Annotated[str, _chars(0, 200)]
-    # 대화방 제목(D-54, 20자 이하). 넘으면 초안 전체를 거부하지 않고 자르고, 비어 있으면 없는 것(None)으로 둔다.
+    # 이전 초안·체크포인트 호환용 제목(20자 이하). D-54: 실제 대화방 제목은 첫 질문 접수 시 저장한다.
     # 제목은 선택 칸이라 제목 때문에 답변 문장까지 버리지 않는다.
     title: Annotated[str | None, BeforeValidator(lambda v: (v.strip()[:20] or None) if isinstance(v, str) else v)] = None
 

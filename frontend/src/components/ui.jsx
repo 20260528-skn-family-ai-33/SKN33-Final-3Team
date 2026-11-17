@@ -178,3 +178,17 @@ export function Pager({ page, pages, onChange, window = 5 }) {
     </nav>
   )
 }
+
+/**
+ * 데이터 영역의 공통 로딩 표시(동그라미 스피너). 메인 화면은 스켈레톤을 쓰고, 다른 화면의 목록·본문은 이것을 쓴다.
+ * 스크린리더에는 label을 읽어 주고, 동작 줄이기 설정이면 돌지 않는 고리로 보인다(styles/app.css .loading-ring).
+ * inline: 문장 안 값 자리에 작게 넣는다. showLabel: label을 화면에도 보여 준다(검색 중·챗봇 안내처럼 글이 필요한 곳).
+ * 버튼 처리 중 표시에는 쓰지 않는다.
+ */
+export function Loading({ label = '불러오는 중', inline, showLabel, className, style }) {
+  return (
+    <span role="status" className={cx('loading', inline && 'loading-inline', className)} style={style}>
+      <span className="loading-ring" aria-hidden="true" /><span className={showLabel ? 'loading-text' : 'sr-only'}>{label}</span>
+    </span>
+  )
+}

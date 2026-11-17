@@ -440,7 +440,7 @@ class BackendApiTest(unittest.TestCase):
         db.agent_client=Mock()
         db.agent_client.parse.side_effect=[PlannerOutput(tasks=[{'intent':'RANKING','question':'수출 순위',
             'slots':{'recent_months':3}}]), Draft(conclusion=[{'task_id':'t1','sentences':['중국이 1위입니다.']}],
-                                                   turn_summary='중국이 1위입니다.',title='수출 순위')]
+                                                   turn_summary='중국이 1위입니다.',title='생성 모델이 정한 제목')]
         self.signup()
         sid=self.post('chat/sessions',{}).json()['session']['session_id']
         path=f'chat/sessions/{sid}/messages'
@@ -490,6 +490,8 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(done['answer']['charts'][0]['labels'][0],'중국')
         self.assertEqual(done['answer']['verification']['status'],'PASS')
         self.assertIsNone(db.redis.chat_active(sid))
+        session=self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['session']
+        self.assertEqual(session['title'],'수출 순위')
 
     def test_agent_report_needs_explicit_approval_and_ready_before_completion(self):
         from langgraph.checkpoint.memory import InMemorySaver
@@ -504,6 +506,7 @@ class BackendApiTest(unittest.TestCase):
         sid=self.post('chat/sessions',{}).json()['session']['session_id']
         response=self.post(f'chat/sessions/{sid}/messages',{'question':'수출 리포트 생성','client_message_id':'report'})
         jid=response.json()['job']['job_id']
+        self.assertEqual(self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['session']['title'],'수출 리포트 생성')
         def poll(): return self.client.get(f'/api/v1/chat/jobs/{jid}').json()['job']
         self.assertTrue(run_once(db,self.settings))
         waiting=poll(); self.assertEqual(waiting['status'],'NEEDS_INPUT',waiting)
@@ -534,6 +537,7 @@ class BackendApiTest(unittest.TestCase):
         done=poll(); self.assertEqual(done['status'],'SUCCEEDED',done)
         self.assertEqual(done['answer']['report_id'],str(rid))
         self.assertEqual(db.agent_client.parse.call_count,1)
+        self.assertEqual(self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['session']['title'],'수출 리포트 생성')
 
     def test_agent_report_uses_approved_result_after_source_expires(self):
         from langgraph.checkpoint.memory import InMemorySaver

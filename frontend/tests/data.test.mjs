@@ -83,13 +83,14 @@ test('기사·알림의 실제 연결 대상과 읽음 상태를 보존한다', 
   assert.equal(notificationTarget({ id: '1', articleId: '7', reportId: null }), '/articles?id=7')
   assert.equal(notificationTarget({ id: '1', articleId: null, reportId: null }), '/account/notifications?id=1')
 })
-test('기사 출처는 기사 유형과 독립적으로 실제 제공자를 표시한다', () => {
+test('기사 출처는 기사 유형과 독립적으로 백엔드 표시명을 사용한다', () => {
   for (const [source_code, expected] of [
     ['KOTRA_MARKET', 'KOTRA 해외시장뉴스'], ['KOTRA_SHORT_NEWS', 'KOTRA 단신속보'],
-    ['HANKYUNG', '한국경제'], ['FNNEWS', '파이낸셜뉴스'],
+    ['HANKYUNG', '한국경제'], ['FNNEWS', '파이낸셜뉴스'], ['KOTRA_SHORTNEWS', 'KOTRA 단신속보'],
+    ['FNNEWS', '백엔드에서 변경한 표시명'], ['NEW_PROVIDER', '새 언론사'],
   ]) {
     for (const is_major_issue of [false, true]) {
-      const a = mapArticle({ article_id: '123', source_code, is_major_issue, source_url: 'https://example.com/article' })
+      const a = mapArticle({ article_id: '123', source_code, source_name: expected, is_major_issue, source_url: 'https://example.com/article' })
       assert.equal(a.source, expected)
       assert.equal(a.kind, is_major_issue ? 'major' : source_code === 'KOTRA_SHORT_NEWS' ? 'short' : 'general')
       assert.equal(a.url, 'https://example.com/article')

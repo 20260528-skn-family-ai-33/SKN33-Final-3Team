@@ -100,10 +100,4 @@ export function reportComparison(conditions, kpi) {
   const growth = mode === 'NONE' ? null : Object.hasOwn(kpi, 'comparison_pct') ? kpi.comparison_pct : fallback
   return { label: labels[mode] || '비교 기간 대비', growth, previous: mode === 'NONE' ? null : kpi.previous_amount_usd }
 }
-const ARTICLE_SOURCE_NAMES = new Map([
-  ['KOTRA_MARKET', 'KOTRA 해외시장뉴스'],
-  ['KOTRA_SHORT_NEWS', 'KOTRA 단신속보'],
-  ['HANKYUNG', '한국경제'],
-  ['FNNEWS', '파이낸셜뉴스'],
-])
-export const mapArticle = a => ({ ...a, id: a.article_id, kind: a.is_major_issue ? 'major' : a.source_code === 'KOTRA_SHORT_NEWS' ? 'short' : 'general', date: a.published_date, country: (a.country_codes || []).map(countryName).join(' · '), source: ARTICLE_SOURCE_NAMES.get(a.source_code) || a.source_code || '출처 미제공', tags: (a.hs_items || []).map(h => h.name_ko || h.hs_code), url: a.source_url })
+export const mapArticle = a => ({ ...a, id: a.article_id, kind: a.is_major_issue ? 'major' : a.source_code === 'KOTRA_SHORT_NEWS' ? 'short' : 'general', date: a.published_date, country: (a.country_codes || []).map(countryName).join(' · '), source: a.source_name || a.source_code || '출처 미제공', tags: (a.hs_items || []).map(h => h.name_ko || h.hs_code), url: a.source_url })

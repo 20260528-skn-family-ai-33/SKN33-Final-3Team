@@ -1,7 +1,7 @@
 // 관심 품목(HS4 → HS6)·관심 국가 선택 부품. 관심사 등록(BS03·BS04)과 관심정보(BS26)에서 함께 쓴다.
 import { useEffect, useId, useRef, useState } from 'react'
 import Icon from './Icon'
-import { Btn, Check } from './ui'
+import { Btn, Check, Loading } from './ui'
 import { countries, registerProducts, toggleValue, productName, productChoiceLabel } from '../data/catalog'
 import { api } from '../api/client'
 import { useQuery, ErrorNotice, useDebouncedValue } from '../api/hooks'
@@ -104,7 +104,7 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
       </div>
       {buttonLabel && (!hs6First || hs4Only || selectableGroup) && <Btn kind="ink" size="md" disabled={!selectableGroup} onClick={()=>onSelectAll(selectableGroup)} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(selectableGroup)}</Btn>}
       {open && !confirmed && (
-        <div role="listbox" id={listId} aria-label="품목 검색 결과" style={{ position: hs6First ? 'static' : 'absolute', flexBasis: hs6First ? '100%' : undefined, top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
+        <div role="listbox" id={listId} aria-busy={active.loading} aria-label="품목 검색 결과" style={{ position: hs6First ? 'static' : 'absolute', flexBasis: hs6First ? '100%' : undefined, top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
           {results.map((h, i) => (
             <button type="button" key={h.hs_code} id={`${listId}-${i}`} className="reset" role="option" aria-selected={i === cursor}
               onMouseDown={e => e.preventDefault()} onMouseEnter={() => setCursor(i)}
@@ -118,7 +118,7 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
           <ErrorNotice error={active.error} retry={retry(active.reload)} />
           {/* HS4 아래 하위 품목 목록을 못 불러오면 그 사실과 다시 시도를 보여 준다(HS4 전체만 남아 하위 품목이 없는 것처럼 보이지 않게). */}
           {exactGroup && <ErrorNotice error={children.error} retry={retry(children.reload)} />}
-          {!results.length && !active.error && <p className="muted" style={{ padding: '10px 12px' }}>{searchText.length < 1 ? '품목명 또는 HS 코드를 한 글자 이상 입력하세요.' : settled !== searchText || active.loading ? '검색 중…' : '검색 결과가 없습니다.'}</p>}
+          {!results.length && !active.error && <p className="muted" style={{ padding: '10px 12px' }}>{searchText.length < 1 ? '품목명 또는 HS 코드를 한 글자 이상 입력하세요.' : settled !== searchText || active.loading ? <Loading inline showLabel label="검색 중…" /> : '검색 결과가 없습니다.'}</p>}
         </div>
       )}
     </div>
@@ -202,7 +202,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="국가명 검색" aria-label="국가명 검색" />
         <Icon name="search" size={18} color="#9AA0AA" />
       </div>
-      <div className="chips" style={{ marginTop: variant === 'grid' ? 14 : 12 }}>
+      <div className="chips" aria-busy={regions.loading} style={{ marginTop: variant === 'grid' ? 14 : 12 }}>
         <button type="button" className={'chip sm' + (allCountriesSelected ? ' on' : ' dash')}
           disabled={!countryNames.length} aria-pressed={allCountriesSelected}
           onClick={() => onChange(allCountriesSelected ? value.filter(name => !countryNames.includes(name)) : [...new Set([...value, ...countryNames])])}>
@@ -213,6 +213,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
           return <button type="button" key={c.region_id} className={'chip sm' + (on ? ' on' : ' dash')} aria-pressed={on}
             title={on ? `${c.name_ko} 국가 전체 해제` : `${c.name_ko} 국가 전체 추가`} onClick={() => toggleContinent(c)}>{on ? '✓' : '+'} {c.name_ko}</button>
         })}
+        {regions.loading && <Loading inline label="대륙 목록을 불러오는 중" />}
       </div>
       <p className="note" style={{ marginTop: 8 }}>
         {regions.error ? '대륙 정보가 준비되지 않아 국가별 선택을 제공합니다.' : variant === 'grid' ? '대륙을 누르면 해당 대륙의 모든 국가가 추가되고, 한 번 더 누르면 그 대륙 국가만 해제됩니다.' : '대륙 추가 → 해당 대륙의 모든 국가 자동 추가 · 중복 제외 · 다시 누르면 해제'}

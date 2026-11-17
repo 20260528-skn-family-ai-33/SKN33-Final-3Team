@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, navigate, withQuery } from '../../router'
 import { Band, ChatFab } from '../../components/layout'
-import { Btn, Pager, TextField } from '../../components/ui'
+import { Btn, Loading, Pager, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { articleKinds, articleTabs, articleParagraphs } from '../../data/articles'
 import { useQuery, ErrorNotice } from '../../api/hooks'
@@ -92,7 +92,7 @@ export default function Articles({ route }) {
             <div className="article-search-fields">
               <div>
                 <label className="lbl" htmlFor="ar-q">검색 (선택)</label>
-                <TextField id="ar-q" placeholder="검색어 입력" icon="search" iconColor="#5C6370" value={form.keyword} onChange={v => setForm(f => ({ ...f, keyword: v }))} />
+                <TextField id="ar-q" placeholder="검색어 또는 언론사명 입력" icon="search" iconColor="#5C6370" value={form.keyword} onChange={v => setForm(f => ({ ...f, keyword: v }))} />
               </div>
               <div>
                 <span className="lbl" id="ar-period">발행 기간 (선택)</span>
@@ -117,8 +117,8 @@ export default function Articles({ route }) {
           </div>
           {/* 목록·기사 본문 중 실패한 요청을 한 번에 모두 다시 불러온다. */}
           <ErrorNotice error={result.error || detail.error} retry={() => { if (result.error) result.reload(); if (detail.error) detail.reload() }} />
-          {result.loading && <p role="status">기사를 불러오는 중…</p>}
-          <div className="col" style={{ gap: 12 }}>
+          {result.loading && <Loading label="기사를 불러오는 중" />}
+          <div className="col" aria-busy={result.loading} style={{ gap: 12 }}>
             {shown.map(a => {
               const on = a.id === selected
               const kind = articleKinds[a.kind]
@@ -148,9 +148,9 @@ export default function Articles({ route }) {
                       {/* <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn> */}
                     </div>}
                   {short && on && (
-                    <div className="article-body" role="region" aria-label={`${a.title} 본문`} tabIndex={0} style={{ flexBasis: '100%', minWidth: 0, marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
+                    <div className="article-body" role="region" aria-busy={detail.loading} aria-label={`${a.title} 본문`} tabIndex={0} style={{ flexBasis: '100%', minWidth: 0, marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
                       {detail.loading
-                        ? <p style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C' }}>본문을 불러오는 중…</p>
+                        ? <Loading label="본문을 불러오는 중" />
                         : articleParagraphs(detail.data?.body_masked || a.summary).map((line, i) => <p key={i} style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C', marginTop: i ? 10 : 0 }}>{line}</p>)}
                       {/* <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
                         <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn>

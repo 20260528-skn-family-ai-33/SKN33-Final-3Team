@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { navigate, withQuery } from '../../router'
 import { useApp, useNotifications } from '../../store'
-import { Btn, Chip, Modal, Select, TextField } from '../../components/ui'
+import { Btn, Chip, Loading, Modal, Select, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
@@ -68,9 +68,15 @@ export default function ReportCenter({ route }) {
     await Promise.all([refreshReports(), refreshNotifications(true)])
   }))
   const generating = reports.some(r => r.status === 'generating' || r.status === 'delayed')
+  // 목록은 공용 저장소(refreshReports)가 받아 loading 값이 없다. 화면에 들어온 뒤 첫 조회가 끝날 때까지만 스피너를 보이고,
+  // 생성 중 리포트를 3초마다 다시 받는 동안에는 목록을 그대로 둔다(화면이 깜빡이지 않게).
+  const [listLoading, setListLoading] = useState(true)
   useEffect(() => {
     let stopped = false, timer
-    const load = async () => { try { await refreshReports(); if (!stopped && generating) timer = setTimeout(load, 3000) } catch (e) { if (!stopped) fail(e) } }
+    const load = async () => {
+      try { await refreshReports(); setListLoading(false); if (!stopped && generating) timer = setTimeout(load, 3000) }
+      catch (e) { setListLoading(false); if (!stopped) fail(e) }
+    }
     load(); return () => { stopped = true; clearTimeout(timer) }
   }, [refreshReports, generating, fail])
   const tab = TABS.includes(route.query.get('tab')) ? route.query.get('tab') : 'chat'
@@ -99,11 +105,13 @@ export default function ReportCenter({ route }) {
   const subscribed = tab !== 'chat' && subscription.cycles.includes(tab)
   const deleteCycle = tab === 'chat' ? null : tab
 
-  const removeSubscription = async () => {
+  // 구독 삭제도 리포트 삭제와 같이 한 번만 실행하고, 처리 중에는 '삭제 중…'과 함께 창 닫기·취소를 막는다.
+  const [deletingSubscription, deleteSubscriptionOnce] = usePendingAction()
+  const removeSubscription = () => deleteSubscriptionOnce(async () => {
     if (!await deleteSubscription(deleteCycle)) return
     navigate(withQuery(route, { confirm: null }))
     notify(`${CYCLE[deleteCycle]} 구독을 삭제했습니다. 기존에 발행된 리포트는 계속 조회할 수 있습니다.`)
-  }
+  })
 
   return (
     <>
@@ -138,10 +146,11 @@ export default function ReportCenter({ route }) {
           </div>
         </form>
         {invalidRange && <p className="field-err" role="alert">생성일 시작이 종료보다 늦습니다.</p>}
-        <p style={{ fontSize: 16, fontWeight: 800, marginTop: 22 }}>{reportKinds[tab].tab} · <span style={{ color: 'var(--red)' }}>{list.length}건</span></p>
-        <div className="col" style={{ gap: 10, marginTop: 12 }}>
-          {list.map(r => <ReportItem key={r.id} report={r} onDelete={setDeletingReport} />)}
-          {!list.length && (
+        <p style={{ fontSize: 16, fontWeight: 800, marginTop: 22 }}>{reportKinds[tab].tab} · <span style={{ color: 'var(--red)' }}>{listLoading ? '—' : list.length}건</span></p>
+        <div className="col" aria-busy={listLoading} style={{ gap: 10, marginTop: 12 }}>
+          {listLoading && <Loading label="리포트 목록을 불러오는 중" />}
+          {!listLoading && list.map(r => <ReportItem key={r.id} report={r} onDelete={setDeletingReport} />)}
+          {!listLoading && !list.length && (
             <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '22px 18px', textAlign: 'center' }}>
               <p className="muted">{query ? '검색 결과가 없습니다.' : `조회할 ${reportKinds[tab].tab}가 없습니다.`}</p>
             </div>
@@ -194,11 +203,11 @@ export default function ReportCenter({ route }) {
         <p className="muted" style={{ marginTop: 12 }}>삭제하면 목록에서 사라지며 다시 열람하거나 다운로드할 수 없습니다. 정기 구독 설정은 유지됩니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
           <Btn disabled={deleting} onClick={() => setDeletingReport(null)}>취소</Btn>
-          <Btn kind="red" disabled={deleting} onClick={removeReport}>{deleting ? '삭제 중…' : '리포트 삭제'}</Btn>
+          <Btn kind="red" disabled={deleting} onClick={removeReport}>{deleting ? <Loading inline showLabel label="삭제 중…" /> : '리포트 삭제'}</Btn>
         </div>
       </Modal>
 
-      <Modal open={confirm && !!deleteCycle && subscription.cycles.includes(deleteCycle)} onClose={() => navigate(withQuery(route, { confirm: null }))} width={520} label="구독 삭제 확인">
+      <Modal open={confirm && !!deleteCycle && subscription.cycles.includes(deleteCycle)} onClose={() => { if (!deletingSubscription) navigate(withQuery(route, { confirm: null })) }} width={520} label="구독 삭제 확인">
         <span style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="trash" size={24} color="#C8102E" /></span>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 16 }}>구독을 삭제하고 다음 발행을 중단할까요?</h2>
         <div style={{ marginTop: 14, border: '1px solid var(--line)', borderRadius: 12, padding: '12px 16px', fontSize: 14 }}>
@@ -206,8 +215,8 @@ export default function ReportCenter({ route }) {
         </div>
         <p className="muted" style={{ marginTop: 14, fontSize: 15, lineHeight: 1.7 }}>삭제하면 이 구독의 향후 리포트 발행이 중단됩니다.<br />기존에 발행된 리포트는 목록에서 계속 조회할 수 있습니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
-          <Btn size="md" onClick={() => navigate(withQuery(route, { confirm: null }))}>취소</Btn>
-          <Btn kind="red" size="md" onClick={removeSubscription}>구독 삭제</Btn>
+          <Btn size="md" disabled={deletingSubscription} onClick={() => navigate(withQuery(route, { confirm: null }))}>취소</Btn>
+          <Btn kind="red" size="md" disabled={deletingSubscription} onClick={removeSubscription}>{deletingSubscription ? <Loading inline showLabel label="삭제 중…" /> : '구독 삭제'}</Btn>
         </div>
       </Modal>
     </>
