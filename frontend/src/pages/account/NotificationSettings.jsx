@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useQuery, ErrorNotice, usePendingAction } from '../../api/hooks'
 import { Link, navigate, withQuery } from '../../router'
 import { useApp } from '../../store'
-import { Btn, Check, Modal, Toggle } from '../../components/ui'
+import { Btn, Check, Loading, Modal, Toggle } from '../../components/ui'
 import { productName } from '../../data/catalog'
 import TermsBody from '../../components/TermsBody'
 import TermsRenewalNotice from '../../components/TermsRenewalNotice'
@@ -92,7 +92,7 @@ export default function NotificationSettings({ route }) {
             <b style={{ fontSize: 14 }}>알림 수신 약관</b>
           </div>
           <div style={{ padding: 18, height: 240, overflowY: 'auto' }}>
-            <ErrorNotice error={terms.error} retry={terms.reload} />{terms.loading ? <span className="muted">약관을 불러오는 중…</span> : <TermsBody body={terms.data?.terms.body} />}
+            <ErrorNotice error={terms.error} retry={terms.reload} />{terms.loading ? <Loading label="약관을 불러오는 중" /> : <TermsBody body={terms.data?.terms.body} />}
           </div>
         </div>
         <Check checked={agree} onChange={setAgree} style={{ marginTop: 16 }}>위 알림 수신 약관을 확인했으며 동의합니다.</Check>

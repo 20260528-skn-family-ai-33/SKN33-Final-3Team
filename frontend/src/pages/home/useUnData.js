@@ -49,5 +49,6 @@ export default function useUnData(profile) {
     }
     load(); return () => controller.abort()
   }, [key, round])
-  return { ...(state.key === key ? state : EMPTY), reload }
+  // loading: 지금 조건(key)의 결과를 아직 받지 못했다(조건이 바뀐 직후 포함). 메인 화면 스켈레톤에 쓴다.
+  return { ...(state.key === key ? state : EMPTY), loading: state.key !== key, reload }
 }

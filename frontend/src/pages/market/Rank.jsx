@@ -1,7 +1,7 @@
 // BS08 수출입 순위(국가·품목·시기별)
 import { useEffect, useRef, useState } from 'react'
 import { Band, ChatFab } from '../../components/layout'
-import { Btn, Pager, Select } from '../../components/ui'
+import { Btn, Loading, Pager, Select } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName, countries, countryCode, countryName, registerProducts } from '../../data/catalog'
 import { useApp } from '../../store'
@@ -198,11 +198,11 @@ function RankResults({ route }) {
               </div>
             </div>
             {/* 좁은 화면에서는 표만 가로로 스크롤한다. */}
-            <div style={{ overflowX: 'auto', marginTop: 18 }}><div style={{ minWidth: 520 }}>
+            <div style={{ overflowX: 'auto', marginTop: 18 }}><div aria-busy={available.loading || result.loading} style={{ minWidth: 520 }}>
             <div className="th" style={{ gridTemplateColumns: cols }}>
               <span>{byMonth ? '구분' : '순위'}</span>{showHs && <span>품목코드(HS6)</span>}<span>{firstCol}</span><span>{label[basis]} (억 USD)</span><span className="r">{label[other]} (억 USD)</span>
             </div>
-            {result.loading && <p className="muted" role="status" style={{ padding: '22px 4px', textAlign: 'center' }}>순위를 불러오는 중입니다…</p>}
+            {(available.loading || result.loading) && <Loading label="순위를 불러오는 중" />}
             {!result.loading && rows.map(r => (
               <div key={r.key} className="tr" style={{ gridTemplateColumns: cols }}>
                 <span className="b" style={{ fontSize: 17 }}>{r.rank}</span>

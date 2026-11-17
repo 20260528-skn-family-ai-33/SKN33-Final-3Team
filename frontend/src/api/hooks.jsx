@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
-import { Btn } from '../components/ui'
+import { Btn, Loading } from '../components/ui'
 
 export function usePendingAction() {
   const busy = useRef(false)
@@ -59,7 +59,7 @@ export function ErrorNotice({ error, retry }) {
     {retry && error.status !== 429 && <Btn onClick={retry}>다시 불러오기</Btn>}</div>
 }
 export function QueryState({ state, children }) {
-  if (state.loading) return <p role="status" className="muted">불러오는 중…</p>
+  if (state.loading) return <Loading />
   if (state.error) return <ErrorNotice error={state.error} retry={state.reload} />
   return children(state.data)
 }

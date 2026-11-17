@@ -2,7 +2,7 @@
 import { useApp } from '../store'
 import { Link, navigate } from '../router'
 import { SiteHeader, FooterSmall } from '../components/layout'
-import { Btn, Pager } from '../components/ui'
+import { Btn, Loading, Pager } from '../components/ui'
 import AdminScreen from './AdminScreen'
 import { useAdminAlertCount } from './useAdminAlertCount'
 import { useServerScreen } from './useServerScreen'
@@ -63,7 +63,7 @@ export default function AdminApp({ route }) {
           </nav>
           {isKeyword ? <KeywordAdmin route={route} /> : screen ? <div className="col" style={{ gap: 20, minWidth: 0 }}>
             <ErrorNotice error={binding.result.error} retry={binding.result.reload} />
-            {binding.result.loading && <p role="status">불러오는 중…</p>}
+            {binding.result.loading && <Loading />}
             {binding.user && <ServerDetail type="user" id={binding.user} key={binding.user} onChanged={binding.result.reload} />}
             {binding.article && <ServerDetail type="article" id={binding.article} key={binding.article} onChanged={binding.result.reload} />}
             <AdminScreen key={screenId} screen={screen} query={Object.fromEntries(route.query)} />

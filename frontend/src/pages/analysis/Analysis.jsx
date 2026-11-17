@@ -3,7 +3,7 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { allPages, useApp } from '../../store'
 import { navigate } from '../../router'
 import { Band } from '../../components/layout'
-import { Btn, Check, Modal, TextField } from '../../components/ui'
+import { Btn, Check, Loading, Modal, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import ApiResults from '../../components/ApiResults'
 import { api, streamAnswer } from '../../api/client'
@@ -588,7 +588,7 @@ export default function Analysis({ route }) {
                         {label}
                       </Btn>)}
                   </div>
-                </> : !selectedArticle.error && <p role="status">선택한 기사를 불러오고 있습니다.</p>}
+                </> : !selectedArticle.error && <p><Loading inline showLabel label="선택한 기사를 불러오고 있습니다." /></p>}
               </AiBlock> : !messages.length && (
                 <AiBlock>
                   <p style={{ fontSize: 17, fontWeight: 800 }}>무엇을 분석해 드릴까요?</p>

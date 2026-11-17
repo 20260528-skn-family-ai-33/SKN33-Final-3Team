@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Link } from '../../router'
 import { useApp } from '../../store'
 import { Band } from '../../components/layout'
-import { Btn } from '../../components/ui'
+import { Btn, Loading } from '../../components/ui'
 import { LineChart } from '../../components/charts'
 import ApiResults from '../../components/ApiResults'
 import { niceTicks } from '../../utils/chart'
@@ -178,7 +178,7 @@ export default function ReportView({ route }) {
     <main className="page"><div className="wrap">
       <div className="card" style={{ maxWidth: 640, margin: '0 auto', textAlign: 'center' }}>
         <ErrorNotice error={error || content.error || job?.error} retry={() => { setRetry(n => n + 1); content.reload() }} />
-        {!error && !content.error && <p className="t2" role="status">{status[job?.status] || '저장된 리포트를 불러오는 중…'}</p>}
+        {!error && !content.error && (status[job?.status] ? <p className="t2" role="status">{status[job.status]}</p> : <Loading label="저장된 리포트를 불러오는 중" />)}
         {/* 대기 안내는 아직 만드는 중일 때만, 실패면 재요청 안내, 완료(READY)된 뒤 본문을 불러오는 동안에는 추가 안내 없이 둔다. */}
         {!error && !content.error && job?.status === 'FAILED' && <p className="muted" style={{ marginTop: 8 }}>리포트를 만들지 못했습니다. AI챗봇에서 같은 조건으로 다시 요청해 주세요.</p>}
         {!error && !content.error && ['QUEUED', 'RUNNING', 'DELAYED'].includes(job?.status) && <p className="muted" style={{ marginTop: 8 }}>완료 전에는 열람·다운로드할 수 없습니다. 완료되면 리포트 센터에서 확인할 수 있습니다.</p>}
