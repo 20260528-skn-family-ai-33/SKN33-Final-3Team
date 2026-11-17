@@ -1481,6 +1481,107 @@ class ExtraCompareTrendTest(unittest.TestCase):
         current.plan, _ = build_plan(PlannerOutput(tasks=tasks))
         return current
 
+    def test_trade_balance_followups_and_year_comparison_reports(self):
+        from types import SimpleNamespace as NS
+        from backend.app.agents.conditions import check_conditions
+        from backend.app.agents.runtime import Services
+        from backend.app.agents.state import SessionContext
+        from backend.app.api.reports import RESULT_SECTIONS
+        from backend.app.services.report_ondemand_context import KINDS
+        # 무역수지 뒤 "그럼 2023년부터 2025년까지 비교해줘"는 연도 비교(한 방향 금액)로 묶지 않고 무역수지로 잇는다.
+        question = '그럼 2023년부터 2025년까지 비교해줘'
+        output = PlannerOutput.model_validate({'tasks': [{'intent': 'STATISTICS', 'question': question, 'slots': {
+            'period': Y(2025), 'comparison_requested': True, 'compare_period': Y(2023),
+            'extra_compare_periods': [Y(2024)]}}]})
+        [task] = postprocess(output, question, previous_trade_balance=True).tasks
+        self.assertTrue(task.slots.trade_balance)
+        self.assertIsNotNone(task.slots.period)
+        current = self.compound(question, [task.model_dump()])
+        [planned] = current.plan.tasks
+        check_conditions(self.store, current, planned.steps[0])
+        self.assertEqual(planned.steps[0].status, 'DONE')
+        self.assertIsNone(planned.conditions.year_comparison)
+        self.assertEqual([p.start.year for p in [planned.conditions.compare_period, *planned.conditions.extra_compare_periods]],
+                         [2023, 2024])
+        # 무역수지 뒤 "전년과 비교해줘"도 무역수지로 비교한다.
+        base = Conditions(country_codes=['US'], period=Y(2025))
+        state = NS(plan=None, input=NS(article_action=None, year_over_year_base=base, question='전년과 비교해줘',
+                                       context=SessionContext(session_id='1', conditions=base, trade_balance=True)))
+        Services.planner(None, state)
+        [followup] = state.plan.tasks
+        self.assertEqual((followup.slots.trade_balance, followup.slots.trade_flow), (True, 'EXPORT'))
+        # 연도 비교(MULTI_YEAR) 결과로 만든 리포트도 주요 지표 섹션에 표를 싣는다.
+        self.assertEqual((RESULT_SECTIONS['MULTI_YEAR'], KINDS['MULTI_YEAR']), ('KPI', '연도 비교'))
+        # 연도 비교 결과의 조건(compare=CUSTOM, 비교 기간 없음)은 리포트 미리보기의 비교 기간 검사를 통과한다.
+        from backend.app.api.reports import resolve_comparison
+        year_only = {'compare': 'CUSTOM', 'compare_period': None, 'period': Y(2025), 'year_comparison': {'years': [2023, 2024, 2025]}}
+        self.assertIsNone(resolve_comparison(dict(year_only), [], any_order=True))
+        from backend.app.api.common import ApiError
+        with self.assertRaises(ApiError):   # 리포트 요청 화면은 기존처럼 비교 기간을 요구한다
+            resolve_comparison(dict(year_only), [])
+        # 추가 비교 기간이 있던 수출·수입 조회 뒤 "전년과 비교"도 두 방향이다(확정 범위는 추가 기간 없이 저장한다).
+        previous = Conditions(country_codes=['US'], period=Y(2025), compare_period=Y(2024), extra_compare_periods=[Y(2023)])
+        base = previous.model_copy(update={'extra_compare_periods': []})
+        state = NS(plan=None, input=NS(article_action=None, year_over_year_base=base, question='전년과 비교해줘',
+                                       context=SessionContext(session_id='1', conditions=previous, both_trade_flows=True)))
+        Services.planner(None, state)
+        self.assertEqual([t.slots.trade_flow for t in state.plan.tasks], ['EXPORT', 'IMPORT'])
+        # 무역수지를 잇는 후속 판정은 계획과 실행(생성 SQL 안내)이 같은 함수를 쓴다.
+        from backend.app.agents.planner import continues_trade_balance
+        self.assertTrue(continues_trade_balance(True, '그럼 2023~2025년 분기별로 비교해줘'))
+        self.assertFalse(continues_trade_balance(True, '그럼 수출만 분기별로'))
+        self.assertFalse(continues_trade_balance(False, '그럼 분기별로'))
+        # 플래너가 이전 국가를 칸에 다시 옮겨 적어도 질문에 없으면 새 대상이 아니다.
+        restated = PlannerOutput.model_validate({'tasks': [{'intent': 'STATISTICS', 'question': '2024년', 'slots': {
+            'countries': US, 'period': Y(2024)}}]}).tasks[0].slots
+        self.assertTrue(continues_trade_balance(True, '그럼 2024년은?', [restated]))
+        # 직전 질문의 국가를 다시 적은 질문은 같은 대상이라 잇고, 직전 질문에 없던 국가는 새 대상이다.
+        self.assertTrue(continues_trade_balance(True, '그럼 미국 2024년은?', [restated], '2025년 미국 무역수지 보여줘'))
+        self.assertFalse(continues_trade_balance(True, '그럼 미국 2024년은?', [restated], '2025년 일본 무역수지 보여줘'))
+        # 직전 무역수지가 국가를 이어받아 질문에 적지 않았어도 확정 조건(이름·코드)과 같으면 같은 대상이다.
+        self.assertTrue(continues_trade_balance(True, '그럼 미국 2024년은?', [restated], '그 무역수지도 보여줘', ('US', '미국')))
+        # 짧은 이름이 직전 질문의 다른 낱말 안에 들어 있어도("차" ⊂ "자동차") 같은 대상으로 보지 않는다.
+        tea = PlannerOutput.model_validate({'tasks': [{'intent': 'STATISTICS', 'question': '차', 'slots': {
+            'products': ['차'], 'period': Y(2024)}}]}).tasks[0].slots
+        self.assertFalse(continues_trade_balance(True, '그럼 차 2024년은?', [tea], '미국 자동차 무역수지', ('870323', '승용자동차')))
+        # trade_balance를 정한 답변(조건이 있는 마지막 턴)의 질문과 대조한다. 그 뒤의 용어 질문은 보지 않는다.
+        from backend.app.agents.runtime import balance_question
+        from backend.app.agents.state import TurnSummary
+        from datetime import datetime
+        turns = [TurnSummary(question='2025년 미국 무역수지 보여줘', intent='STATISTICS', conditions=Conditions(period=Y(2025)),
+                             answered_at=datetime(2026, 1, 1)),
+                 TurnSummary(question='FTA가 뭐야?', intent='CONVERSATION', answered_at=datetime(2026, 1, 1))]
+        self.assertEqual(balance_question(SessionContext(session_id='1', recent=turns)), '2025년 미국 무역수지 보여줘')
+        # 평가 실행기(DB 없음)도 같은 함수로 대상 코드를 정한다. 무역수지 문맥이 아니면 비운다.
+        from backend.app.agents.runtime import balance_targets
+        balance_context = SessionContext(session_id='1', conditions=Conditions(country_codes=['US'], period=Y(2025)),
+                                         trade_balance=True)
+        self.assertEqual(balance_targets(balance_context), ('US',))
+        self.assertEqual(balance_targets(balance_context.model_copy(update={'trade_balance': False})), ())
+        # 국가·품목을 새로 적은 질문은 무역수지를 잇지 않는다(2026-11-17 사용자 결정).
+        output = PlannerOutput.model_validate({'tasks': [{'intent': 'STATISTICS', 'question': '일본 화장품 2025년 추이',
+                                                          'slots': {'countries': [{'mention': '일본', 'name': '일본'}],
+                                                                    'period': Y(2025)}}]})
+        [task] = postprocess(output, '일본 화장품 2025년 추이 보여줘', previous_trade_balance=True).tasks
+        self.assertFalse(task.slots.trade_balance)
+        # 실행 안내는 무역수지를 잇는 통계의 생성 SQL에만 쓴다. 품목별 비중(늘 생성 SQL)은 막지 않는다.
+        from contextlib import nullcontext
+        from backend.app.agents.state import Step, Task
+        def run(intent):
+            step = Step(step_id='t1.sql', tool='query_trade_data', args={'template': 'LLM_SQL'})
+            planned = Task(task_id='t1', intent=intent, question='그럼 분기별로', steps=[step],
+                           conditions=Conditions(period=Y(2025)))
+            state = NS(plan=NS(tasks=[planned]), input=NS(question='그럼 분기별로 보여줘',
+                                                          context=SessionContext(session_id='1', trade_balance=True)))
+            fake = NS(read_store=nullcontext, settings={}, balance_targets=lambda _: ())
+            try:
+                return Services._tool(fake, state, step)
+            except Exception as exc:   # 안내에서 멈추지 않으면 그다음(실제 조회) 단계로 넘어간다
+                return exc
+        blocked = run('STATISTICS')
+        self.assertEqual((blocked.status, blocked.error[:4]), ('NO_DATA', '무역수지'))
+        self.assertFalse(getattr(run('MARKET_SHARE'), 'error', '').startswith('무역수지'))
+
     def test_compound_edition_skips_subtasks_that_do_not_use_editions(self):
         from backend.app.agents.conditions import check_conditions
         # 플래너가 공통 조건으로 원인 하위 질문에도 HS2017을 옮겨 적어도 원인 분석을 실패시키지 않는다.
