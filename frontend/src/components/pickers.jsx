@@ -100,7 +100,7 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
       </div>
       {buttonLabel && (!hs6First || hs4Only || selectableGroup) && <Btn kind="ink" size="md" disabled={!selectableGroup} onClick={()=>onSelectAll(selectableGroup)} style={{ height: 50, borderRadius: 12 }}>{buttonLabel(selectableGroup)}</Btn>}
       {open && !confirmed && (
-        <div role="listbox" id={listId} aria-label="품목 검색 결과" style={{ position: hs6First ? 'static' : 'absolute', flexBasis: hs6First ? '100%' : undefined, top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
+        <div role="listbox" id={listId} aria-busy={active.loading} aria-label="품목 검색 결과" style={{ position: hs6First ? 'static' : 'absolute', flexBasis: hs6First ? '100%' : undefined, top: 56, left: 0, right: 0, zIndex: 20, maxHeight: 340, overflowY: 'auto', background: '#fff', border: '1px solid var(--line)', borderRadius: 12, boxShadow: '0 16px 40px rgba(21,24,30,.12)', padding: 6 }}>
           {results.map((h, i) => (
             <button type="button" key={h.hs_code} id={`${listId}-${i}`} className="reset" role="option" aria-selected={i === cursor}
               onMouseDown={e => e.preventDefault()} onMouseEnter={() => setCursor(i)}
@@ -198,7 +198,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="국가명 검색" aria-label="국가명 검색" />
         <Icon name="search" size={18} color="#9AA0AA" />
       </div>
-      <div className="chips" style={{ marginTop: variant === 'grid' ? 14 : 12 }}>
+      <div className="chips" aria-busy={regions.loading} style={{ marginTop: variant === 'grid' ? 14 : 12 }}>
         <button type="button" className={'chip sm' + (allCountriesSelected ? ' on' : ' dash')}
           disabled={!countryNames.length} aria-pressed={allCountriesSelected}
           onClick={() => onChange(allCountriesSelected ? value.filter(name => !countryNames.includes(name)) : [...new Set([...value, ...countryNames])])}>

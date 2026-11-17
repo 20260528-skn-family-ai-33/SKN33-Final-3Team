@@ -148,7 +148,7 @@ export default function Articles({ route }) {
                       {/* <Btn to={ask(a)} icon="chat">AI에게 물어보기</Btn> */}
                     </div>}
                   {short && on && (
-                    <div className="article-body" role="region" aria-label={`${a.title} 본문`} tabIndex={0} style={{ flexBasis: '100%', minWidth: 0, marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
+                    <div className="article-body" role="region" aria-busy={detail.loading} aria-label={`${a.title} 본문`} tabIndex={0} style={{ flexBasis: '100%', minWidth: 0, marginLeft: 22, paddingTop: 14, borderTop: '1px solid var(--line2)' }}>
                       {detail.loading
                         ? <Loading label="본문을 불러오는 중" />
                         : articleParagraphs(detail.data?.body_masked || a.summary).map((line, i) => <p key={i} style={{ fontSize: 15, lineHeight: 1.75, color: '#2E333C', marginTop: i ? 10 : 0 }}>{line}</p>)}

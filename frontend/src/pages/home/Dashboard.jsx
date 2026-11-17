@@ -195,11 +195,11 @@ const FX_ROW_STYLE = { display: 'grid', gridTemplateColumns: '1fr auto auto', ga
 const FxRowSkeleton = () => <div aria-hidden="true" style={FX_ROW_STYLE}><Bone w={92} h={15} /><Bone w={64} h={15} /><span style={{ minWidth: 108 }}><Bone w={62} h={13} style={{ marginLeft: 'auto' }} /></span></div>
 const UN_CARD_STYLE = { border: '1px solid #E3E6EA', borderTop: '3px solid #C8102E', borderRadius: '4px 4px 16px 16px', padding: '16px 18px 6px' }
 const UN_ITEM_STYLE = { marginTop: 12, padding: '12px 0 10px', borderTop: '1px solid #E3E6EA', display: 'flex', flexDirection: 'column', gap: 8, color: '#15181E' }
-function UnCardSkeleton() {
+function UnCardSkeleton({ items }) {
   return (
     <div className="un-card" aria-hidden="true" style={UN_CARD_STYLE}>
       <div className="between" style={{ alignItems: 'center', height: 30 }}><Bone w={72} h={20} /><Bone w={96} h={12} /></div>
-      {Array.from({ length: UN_VISIBLE_ITEMS }, (_, i) => (
+      {Array.from({ length: items }, (_, i) => (
         <div key={i} data-un-item style={UN_ITEM_STYLE}>
           <div className="between" style={{ height: 19 }}><Bone w="55%" h={13} /><Bone w={64} h={12} /></div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 36 }}><Bone w={60} h={12} /><Bone w={70} h={24} /></div>
@@ -245,8 +245,15 @@ export default function Dashboard({ route }) {
   const cardColumns = interest ? Math.min(Math.max(shownCount, 2), 5) : 5
   const skeletonCount = Math.min(cardCount, 5)
   const [unRef, unHeight] = useUnVisibleHeight([data.un, un.loading])
-  // 점유율 카드는 국가별 한 장. 관심 품목이 없으면 조회하지 않으므로 자리표시도 없다.
-  const unSkeletonCount = profile.products.length ? Math.min(profile.countries.length || 3, 3) : 0
+  // 자리표시 개수 어림: 전체 보기는 고정 개수, 내 관심 보기는 관심 품목·국가 수만큼 행이 나오므로 그 수(최대값 안)로 맞춘다.
+  // 실제 결과와 개수가 같아야 데이터가 들어올 때 영역 높이가 바뀌지 않는다.
+  const productCount = profile.products.length, countryCount = profile.countries.length
+  const guess = (n, max) => interest && n ? Math.min(n, max) : max
+  const tableSkeletonRows = { products: guess(productCount, 5), countries: guess(countryCount, 5) }
+  // 관심 국가가 없으면 환율 대신 '정보가 없습니다' 한 줄이 나오므로 한 줄만 둔다.
+  const fxSkeletonRows = interest ? Math.min(Math.max(countryCount, 1), 5) : 5
+  // 점유율 카드는 국가별 한 장, 카드 안 품목은 관심 품목 수(처음 보이는 3개까지). 관심 품목이 없으면 조회하지 않으므로 자리표시도 없다.
+  const unSkeleton = { cards: productCount ? Math.min(countryCount || 3, 3) : 0, items: Math.min(productCount, UN_VISIBLE_ITEMS) }
   const { productTable, countryTable } = data
   const anyLoading = data.kpiLoading || data.fxLoading || data.cardsLoading || productTable.loading || countryTable.loading || countryTable.pieLoading || un.loading || data.newsLoading
   // 스크롤 등장 효과(data-reveal). 원그래프는 자료를 받은 뒤에 관찰을 시작하도록 자료 수가 바뀌면 다시 살핀다.
@@ -319,7 +326,7 @@ export default function Dashboard({ route }) {
             <RegionError label="환율" states={data.states.fx} />
             <div role="region" aria-label={data.fxTitle} aria-busy={data.fxLoading} tabIndex={data.fx.length >= 5 ? 0 : undefined}
               className="fx-list" style={{ marginTop: 14, borderTop: '2px solid #15181E', ...(data.fx.length >= 5 ? { maxHeight: 242, overflowY: 'auto', scrollbarGutter: 'stable' } : data.fxLoading ? { maxHeight: 242, overflow: 'hidden' } : {}) }}>
-              {data.fxLoading && Array.from({ length: 5 }, (_, i) => <FxRowSkeleton key={i} />)}
+              {data.fxLoading && Array.from({ length: fxSkeletonRows }, (_, i) => <FxRowSkeleton key={i} />)}
               {data.fx.map(([cur, unit, rate, change, dir]) => (
                 <div key={cur} style={FX_ROW_STYLE}>
                   <span><strong>{cur}</strong> <span style={{ fontSize: 12, color: '#5C6370' }}>{unit}</span></span>
@@ -390,7 +397,7 @@ export default function Dashboard({ route }) {
             <div className="th" style={{ gridTemplateColumns: PRODUCT_TABLE_COLS, marginTop: 14 }}>
               <span>순위</span><span>품목코드(HS6)</span><span>품목</span><span className="r">수출액</span><span className="r">수입액</span>
             </div>
-            {productTable.loading && Array.from({ length: 5 }, (_, i) => <TableRowSkeleton key={i} cols={PRODUCT_TABLE_COLS} widths={[14, 64, '80%', 48, 44]} />)}
+            {productTable.loading && Array.from({ length: tableSkeletonRows.products }, (_, i) => <TableRowSkeleton key={i} cols={PRODUCT_TABLE_COLS} widths={[14, 64, '80%', 48, 44]} />)}
             {data.productTable.rows.map(([rank, hs, name, exp, imp]) => (
               <div key={hs} className="tr row2" style={{ gridTemplateColumns: PRODUCT_TABLE_COLS }}>
                 <span className="b">{rank}</span><span><span className="hs">{hs}</span></span><span className="b" title={name} style={{ fontWeight: 700 }}>{name}</span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
@@ -410,7 +417,7 @@ export default function Dashboard({ route }) {
                   <div className="th" style={{ gridTemplateColumns: COUNTRY_TABLE_COLS }}>
                     <span>순위</span><span>교역국</span><span className="r">수출액</span><span className="r">수입액</span>
                   </div>
-                  {countryTable.loading && Array.from({ length: 5 }, (_, i) => <TableRowSkeleton key={i} cols={COUNTRY_TABLE_COLS} widths={[14, '70%', 48, 44]} />)}
+                  {countryTable.loading && Array.from({ length: tableSkeletonRows.countries }, (_, i) => <TableRowSkeleton key={i} cols={COUNTRY_TABLE_COLS} widths={[14, '70%', 48, 44]} />)}
                   {data.countryTable.rows.map(([rank, name, exp, imp]) => (
                     <div key={name} className="tr row2" style={{ gridTemplateColumns: COUNTRY_TABLE_COLS }}>
                       <span className="b">{rank}</span><span title={name} style={{ fontWeight: 700 }}>{name}</span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
@@ -434,6 +441,7 @@ export default function Dashboard({ route }) {
                   </div>}
                 <ul aria-label="수출액 비중 국가 목록" tabIndex={data.countryTable.pie.length > 10 ? 0 : undefined}
                   style={{ listStyle: 'none', margin: '15px 0 0', padding: 0, display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '20px 14px', fontSize: 13, color: '#2E333C', maxHeight: 160, overflowY: 'auto', scrollbarGutter: 'stable' }}>
+                  {/* 비중 목록은 내 관심 보기에서도 전체 수출국 기준 상위 10개국+기타라 개수가 같다. */}
                   {countryTable.pieLoading && Array.from({ length: 10 }, (_, i) => <li key={i} aria-hidden="true" style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 22 }}><Bone w={10} h={10} r={2} /><Bone w="70%" h={12} /></li>)}
                   {data.countryTable.pie.map(([label, color]) => (
                     <li key={label} style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 22, lineHeight: '20px', overflowWrap: 'break-word' }}><span style={{ width: 10, height: 10, flexShrink: 0, borderRadius: 2, background: color }} /><span>{label}</span></li>
@@ -463,7 +471,7 @@ export default function Dashboard({ route }) {
           </div>
           <div ref={unRef} data-reveal="up" data-d="1" role="region" aria-label="한국의 세계시장 점유율 카드" aria-busy={un.loading} tabIndex={unHeight ? 0 : undefined}
             style={{ marginTop: 16, position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, ...(unHeight ? { maxHeight: unHeight, overflowY: 'auto', scrollbarGutter: 'stable', paddingRight: 4 } : {}) }} className="resp-stack">
-            {un.loading && Array.from({ length: unSkeletonCount }, (_, i) => <UnCardSkeleton key={i} />)}
+            {un.loading && Array.from({ length: unSkeleton.cards }, (_, i) => <UnCardSkeleton key={i} items={unSkeleton.items} />)}
             {data.un.map(u => (
               <div key={u.country} className="un-card" style={UN_CARD_STYLE}>
                 <div className="between" style={{ alignItems: 'baseline' }}>

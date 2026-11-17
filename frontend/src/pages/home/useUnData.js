@@ -44,11 +44,13 @@ export default function useUnData(profile) {
               cards.get(name).items.push({ hs, name: productName(hs), share: r.korea_share_pct == null ? '—' : `${Number(r.korea_share_pct).toFixed(1)}%`, change: pp == null ? '비교 자료 없음' : `${pp.toFixed(1)}%p`, dir: pp == null ? 'none' : pp > 0 ? 'up' : pp < 0 ? 'down' : 'flat', period })
             }
         }
-        if (!controller.signal.aborted) setState({ key, items: [...cards.values()], error: null })
-      } catch (error) { if (!controller.signal.aborted) setState({ key, items: [], error }) }
+        if (!controller.signal.aborted) setState({ key, round, items: [...cards.values()], error: null })
+      } catch (error) { if (!controller.signal.aborted) setState({ key, round, items: [], error }) }
     }
     load(); return () => controller.abort()
   }, [key, round])
-  // loading: 지금 조건(key)의 결과를 아직 받지 못했다(조건이 바뀐 직후 포함). 메인 화면 스켈레톤에 쓴다.
-  return { ...(state.key === key ? state : EMPTY), loading: state.key !== key, reload }
+  // loading: 지금 조건(key)·재시도 차수(round)의 결과를 아직 받지 못했다. 조건이 바뀐 직후와 '다시 불러오기' 중 모두 포함하며,
+  // 그동안은 이전 결과·오류 대신 빈 값을 돌려준다(useQuery와 같은 방식). 메인 화면 스켈레톤에 쓴다.
+  const current = state.key === key && state.round === round
+  return { ...(current ? state : EMPTY), loading: !current, reload }
 }

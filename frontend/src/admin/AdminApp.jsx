@@ -61,7 +61,7 @@ export default function AdminApp({ route }) {
             ))}
             <p>관리자 · 관리자 권한으로 접속</p>
           </nav>
-          {isKeyword ? <KeywordAdmin route={route} /> : screen ? <div className="col" style={{ gap: 20, minWidth: 0 }}>
+          {isKeyword ? <KeywordAdmin route={route} /> : screen ? <div className="col" aria-busy={binding.result.loading} style={{ gap: 20, minWidth: 0 }}>
             <ErrorNotice error={binding.result.error} retry={binding.result.reload} />
             {binding.result.loading && <Loading />}
             {binding.user && <ServerDetail type="user" id={binding.user} key={binding.user} onChanged={binding.result.reload} />}

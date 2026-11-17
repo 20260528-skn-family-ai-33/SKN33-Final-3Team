@@ -588,7 +588,7 @@ export default function Analysis({ route }) {
                         {label}
                       </Btn>)}
                   </div>
-                </> : !selectedArticle.error && <p><Loading inline showLabel label="선택한 기사를 불러오고 있습니다." /></p>}
+                </> : !selectedArticle.error && <p aria-busy={selectedArticle.loading}><Loading inline showLabel label="선택한 기사를 불러오고 있습니다." /></p>}
               </AiBlock> : !messages.length && (
                 <AiBlock>
                   <p style={{ fontSize: 17, fontWeight: 800 }}>무엇을 분석해 드릴까요?</p>

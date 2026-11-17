@@ -40,7 +40,7 @@ function Chart({initial,selector,table}) {
   const display=chartDisplay(series.flatMap(s=>s.values),chart.unit)
   const props={labels:chart.labels,fullLabels:chart.full_labels,series,label:chart.title,formatValue:display.format}
   return <figure style={{margin:'28px 16px'}}><figcaption><b>{chart.title}</b> · {display.unit} {({QUARTER:'· 분기별',YEAR:'· 연도별'})[chart.granularity]}</figcaption>
-    {pairMode ? <div className="chips">
+    {pairMode ? <div className="chips" aria-busy={pairQuery.loading}>
       {pairs.length>0 && <select aria-label="차트 국가·품목" disabled={busy} value={pairKey(country,hs)} onChange={e=>{
         const pair=pairs.find(p=>pairKey(p.country_code,itemKey({hs_code:p.hs6,hs_ver:p.hs_ver||'HS2022'}))===e.target.value)
         if(pair) change(pair.country_code,itemKey({hs_code:pair.hs6,hs_ver:pair.hs_ver||'HS2022'}))
@@ -63,7 +63,7 @@ function Chart({initial,selector,table}) {
 function ComparisonResult({group,fallback,charts,selectors,tasks,tableOnly=false}) {
   const result_ids=group.tables.map(t=>t.result_id)
   const result=useQuery('/results/comparison',{result_ids},true,0,'POST')
-  if(result.loading)return <section aria-label="통합 비교 결과"><h3>비교 결과</h3>
+  if(result.loading)return <section aria-label="통합 비교 결과" aria-busy="true"><h3>비교 결과</h3>
     {fallback && !tableOnly && <Chart initial={fallback}/>}
     <p><Loading inline showLabel label="비교 표를 구성하고 있습니다." /></p>
   </section>

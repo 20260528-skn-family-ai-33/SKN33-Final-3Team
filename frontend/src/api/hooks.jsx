@@ -58,10 +58,11 @@ export function ErrorNotice({ error, retry }) {
     {error.status === 429 && <p>{error.retryAfter || 60}초 후 다시 시도해 주세요.</p>}
     {retry && error.status !== 429 && <Btn onClick={retry}>다시 불러오기</Btn>}</div>
 }
+// 조회 영역을 div 하나로 감싸 aria-busy를 단다(약관·관리자 목록·상세 등 QueryState를 쓰는 모든 곳).
 export function QueryState({ state, children }) {
-  if (state.loading) return <Loading />
-  if (state.error) return <ErrorNotice error={state.error} retry={state.reload} />
-  return children(state.data)
+  return <div aria-busy={state.loading}>
+    {state.loading ? <Loading /> : state.error ? <ErrorNotice error={state.error} retry={state.reload} /> : children(state.data)}
+  </div>
 }
 export function Value({ value }) {
   if (value == null) return '—'

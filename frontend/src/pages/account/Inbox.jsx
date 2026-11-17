@@ -31,7 +31,7 @@ function Detail({ n }) {
       {n.type === 'report' && (
         <>
           <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '100px 1fr', gap: 8, fontSize: 15 }}>
-            <span className="s">국가 · 품목</span><b>{report ? reportScope(conditions, report.hs_names) : detail.loading ? <Loading inline label="리포트 조건을 불러오는 중" /> : '조건 미확인'}</b>
+            <span className="s">국가 · 품목</span><b aria-busy={detail.loading}>{report ? reportScope(conditions, report.hs_names) : detail.loading ? <Loading inline label="리포트 조건을 불러오는 중" /> : '조건 미확인'}</b>
             <span className="s">대상 기간</span><b>{conditions?.period ? `${conditions.period.start} ~ ${conditions.period.end}` : '기간 미확인'}</b>
             <span className="s">유형</span><b>{cycle || '유형 미확인'}</b>
           </div>

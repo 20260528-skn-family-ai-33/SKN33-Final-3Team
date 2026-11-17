@@ -91,7 +91,7 @@ export default function NotificationSettings({ route }) {
           <div className="between" style={{ padding: '12px 18px', background: 'var(--bg)' }}>
             <b style={{ fontSize: 14 }}>알림 수신 약관</b>
           </div>
-          <div style={{ padding: 18, height: 240, overflowY: 'auto' }}>
+          <div aria-busy={terms.loading} style={{ padding: 18, height: 240, overflowY: 'auto' }}>
             <ErrorNotice error={terms.error} retry={terms.reload} />{terms.loading ? <Loading label="약관을 불러오는 중" /> : <TermsBody body={terms.data?.terms.body} />}
           </div>
         </div>

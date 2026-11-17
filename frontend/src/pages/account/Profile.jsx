@@ -103,7 +103,7 @@ export default function Profile({ route }) {
               <p style={{ fontSize: 16, fontWeight: 700 }}>{title} <span className="tag red">필수</span></p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
                 <button type="button" className="reset more" style={{ fontSize: 13 }} aria-label={`${title.replace(/ 동의$/, '')} 내용 보기`} onClick={() => setTermsView({ key, title })}>내용 보기</button>
-                <span className="note">{me.loading ? <Loading inline label="동의 기록을 불러오는 중" /> : me.error ? '불러오지 못함' : consentOf(type) ? `${String(consentOf(type).acted_at).slice(0, 10)} 동의` : '동의 기록 없음'}</span>
+                <span className="note" aria-busy={me.loading}>{me.loading ? <Loading inline label="동의 기록을 불러오는 중" /> : me.error ? '불러오지 못함' : consentOf(type) ? `${String(consentOf(type).acted_at).slice(0, 10)} 동의` : '동의 기록 없음'}</span>
               </div>
             </div>
           ))}
@@ -115,7 +115,7 @@ export default function Profile({ route }) {
               {notificationVersion
                 ? <Check checked={notificationAgreed} disabled={notificationSaving} onChange={toggleNotification}
                     aria-label="알림 수신 동의">{notificationAgreed ? '동의함' : '동의 안 함'}</Check>
-                : <span className="note">{notificationTerms.error ? '불러오지 못함' : <Loading inline label="알림 약관을 불러오는 중" />}</span>}
+                : <span className="note" aria-busy={notificationTerms.loading}>{notificationTerms.error ? '불러오지 못함' : <Loading inline label="알림 약관을 불러오는 중" />}</span>}
             </div>
           </div>
         </div>

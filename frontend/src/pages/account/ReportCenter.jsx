@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react'
 import { navigate, withQuery } from '../../router'
 import { useApp, useNotifications } from '../../store'
-import { Btn, Chip, Modal, Select, TextField } from '../../components/ui'
+import { Btn, Chip, Loading, Modal, Select, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
@@ -68,9 +68,15 @@ export default function ReportCenter({ route }) {
     await Promise.all([refreshReports(), refreshNotifications(true)])
   }))
   const generating = reports.some(r => r.status === 'generating' || r.status === 'delayed')
+  // 목록은 공용 저장소(refreshReports)가 받아 loading 값이 없다. 화면에 들어온 뒤 첫 조회가 끝날 때까지만 스피너를 보이고,
+  // 생성 중 리포트를 3초마다 다시 받는 동안에는 목록을 그대로 둔다(화면이 깜빡이지 않게).
+  const [listLoading, setListLoading] = useState(true)
   useEffect(() => {
     let stopped = false, timer
-    const load = async () => { try { await refreshReports(); if (!stopped && generating) timer = setTimeout(load, 3000) } catch (e) { if (!stopped) fail(e) } }
+    const load = async () => {
+      try { await refreshReports(); setListLoading(false); if (!stopped && generating) timer = setTimeout(load, 3000) }
+      catch (e) { setListLoading(false); if (!stopped) fail(e) }
+    }
     load(); return () => { stopped = true; clearTimeout(timer) }
   }, [refreshReports, generating, fail])
   const tab = TABS.includes(route.query.get('tab')) ? route.query.get('tab') : 'chat'
@@ -138,10 +144,11 @@ export default function ReportCenter({ route }) {
           </div>
         </form>
         {invalidRange && <p className="field-err" role="alert">생성일 시작이 종료보다 늦습니다.</p>}
-        <p style={{ fontSize: 16, fontWeight: 800, marginTop: 22 }}>{reportKinds[tab].tab} · <span style={{ color: 'var(--red)' }}>{list.length}건</span></p>
-        <div className="col" style={{ gap: 10, marginTop: 12 }}>
-          {list.map(r => <ReportItem key={r.id} report={r} onDelete={setDeletingReport} />)}
-          {!list.length && (
+        <p style={{ fontSize: 16, fontWeight: 800, marginTop: 22 }}>{reportKinds[tab].tab} · <span style={{ color: 'var(--red)' }}>{listLoading ? '—' : list.length}건</span></p>
+        <div className="col" aria-busy={listLoading} style={{ gap: 10, marginTop: 12 }}>
+          {listLoading && <Loading label="리포트 목록을 불러오는 중" />}
+          {!listLoading && list.map(r => <ReportItem key={r.id} report={r} onDelete={setDeletingReport} />)}
+          {!listLoading && !list.length && (
             <div style={{ background: 'var(--bg)', borderRadius: 12, padding: '22px 18px', textAlign: 'center' }}>
               <p className="muted">{query ? '검색 결과가 없습니다.' : `조회할 ${reportKinds[tab].tab}가 없습니다.`}</p>
             </div>

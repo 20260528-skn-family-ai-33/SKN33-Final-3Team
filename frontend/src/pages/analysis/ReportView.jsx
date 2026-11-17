@@ -176,7 +176,7 @@ export default function ReportView({ route }) {
   if (!report) return <>
     <Band tone="plum" eyebrow="REPORT" title="리포트 열람" lead="저장된 결과를 열람하고 생성 당시의 PDF·DOCX 파일을 다운로드합니다. 재계산하지 않습니다." />
     <main className="page"><div className="wrap">
-      <div className="card" style={{ maxWidth: 640, margin: '0 auto', textAlign: 'center' }}>
+      <div className="card" aria-busy={!error && !content.error && !status[job?.status]} style={{ maxWidth: 640, margin: '0 auto', textAlign: 'center' }}>
         <ErrorNotice error={error || content.error || job?.error} retry={() => { setRetry(n => n + 1); content.reload() }} />
         {!error && !content.error && (status[job?.status] ? <p className="t2" role="status">{status[job.status]}</p> : <Loading label="저장된 리포트를 불러오는 중" />)}
         {/* 대기 안내는 아직 만드는 중일 때만, 실패면 재요청 안내, 완료(READY)된 뒤 본문을 불러오는 동안에는 추가 안내 없이 둔다. */}
