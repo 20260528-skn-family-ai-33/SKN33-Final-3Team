@@ -335,17 +335,6 @@ _HS_FOLLOWUP = re.compile(r'(?:' + HS_CODE_MENTION.pattern + r'|(\d{6}))'
 # 6자리 연월(2015-01~2030-12). 이 범위의 앞 네 자리(2015~2030)는 HS4가 아니다(제20류 호는 2009까지).
 _YEAR_MONTH = re.compile(r'20(?:1[5-9]|2[0-9]|30)(?:0[1-9]|1[0-2])')
 
-# 관찰된 기업명이 HS 선택으로 넘어가지 않게 한다. 일반 영문 약어는 품목 검색 대상에 남긴다.
-_COMPANY_EXPRESSIONS = frozenset(('ymtc', 'tsmc', 'sk하이닉스', 'skhynix', '삼성전자', '엔비디아', 'nvidia'))
-
-
-def product_expressions(expressions, *, article_context=False):
-    if expressions is None or not expressions:
-        return expressions
-    products = [value for value in expressions if ''.join(value.split()).casefold() not in _COMPANY_EXPRESSIONS]
-    return products or (None if article_context else expressions)
-
-
 def _use_monthly_trend_template(task, question):
     """A single year's plain monthly trade amounts are covered by the TREND template."""
     if task.intent != 'STATISTICS' or not task.custom_query or task.source_tasks:
@@ -373,6 +362,17 @@ def _use_monthly_trend_template(task, question):
     task.slots.trade_flow = 'EXPORT' if flow == '수출' else 'IMPORT'
     task.slots.compare_period = None
     task.slots.comparison_requested = None
+
+
+# 관찰된 기업명이 HS 선택으로 넘어가지 않게 한다. 일반 영문 약어는 품목 검색 대상에 남긴다.
+_COMPANY_EXPRESSIONS = frozenset(('ymtc', 'tsmc', 'sk하이닉스', 'skhynix', '삼성전자', '엔비디아', 'nvidia'))
+
+
+def product_expressions(expressions, *, article_context=False):
+    if expressions is None or not expressions:
+        return expressions
+    products = [value for value in expressions if ''.join(value.split()).casefold() not in _COMPANY_EXPRESSIONS]
+    return products or (None if article_context else expressions)
 
 
 def _normalize_analysis(output, question, previous_conditions):
