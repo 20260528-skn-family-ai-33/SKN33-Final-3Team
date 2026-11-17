@@ -100,6 +100,16 @@ def article_cards(store, state, result):
             for a in result.digest.get('items',[])]
 
 
+def answer_article_cards(store, state):
+    cards = []
+    for task in state.plan.tasks:
+        for step in task.steps:
+            result = state.results.get(step.step_id)
+            if step.tool == 'search_articles' and result and result.status == 'OK' and result.article_ids and result.digest:
+                cards.extend({**card, 'task_id': task.task_id} for card in article_cards(store, state, result))
+    return cards
+
+
 def warm_ml(work):
     """워커 시작 때 모델 로드(work)를 ML 전용 스레드에 미리 넣는다. 기다리지 않는다. 첫 유망시장 질문이 모델 로드
     (수십 초)로 ML 시간 상한을 넘지 않게 한다. 그 사이 들어온 ML 호출은 같은 스레드에서 로드 뒤에 줄을 선다."""
@@ -205,6 +215,13 @@ class Services:
             from backend.app.agents.article_actions import action_plan
             state.plan = action_plan(state.input.article_action)
             return
+        if base := state.input.year_over_year_base:
+            flows = ('EXPORT', 'IMPORT') if (base == state.input.context.conditions
+                    and state.input.context.both_trade_flows) else (base.trade_flow,)
+            state.plan, _ = build_plan(PlannerOutput(tasks=[
+                {'intent':'STATISTICS', 'question':state.input.question,
+                 'slots':{'trade_flow':flow, 'comparison_requested':True}} for flow in flows]))
+            return
         from backend.app.agents.planner import article_retry_plan, explicit_cause_followup, explicit_country_ranking, explicit_out_of_scope, explicit_over_limit
         if retry := article_retry_plan(state):
             state.plan=retry
@@ -238,6 +255,20 @@ class Services:
                 self.execution.transaction(lambda store,job:preview(store,current,task))
             with self.read_store() as store:
                 check_conditions(store,state,step,resolve_bindings=resolve_bindings,confirm_report=create_preview)
+            primary = state.plan.tasks[0]
+            if (primary.intent == 'STATISTICS' and step in primary.steps and step.status == 'DONE'
+                    and primary.conditions and primary.conditions.period):
+                # 조건 검증 직후에 저장한다. 조회·답변 작업의 실패도 사용자가 정한 범위를 지우지 않는다.
+                def remember_scope(store, job):
+                    session = store.owned('chat_session', 'session_id', state.input.session_id, state.input.user_id, lock=True)
+                    context = dict(session['context_json'] or {})
+                    scope = primary.conditions.model_dump(mode='json')
+                    if context.get('confirmed_trade_conditions') != scope:
+                        context['confirmed_trade_conditions'] = scope
+                        sessions = store.t('chat_session')
+                        store.c.execute(update(sessions).where(sessions.c.session_id == session['session_id'])
+                                        .values(context_json=context))
+                self.execution.transaction(remember_scope)
         try:
             self.execution.call('check',budget.seconds(self.settings,'check'),work,
                                 finish_reserve=budget.finishing_seconds(state,self.settings))
@@ -296,6 +327,8 @@ class Services:
                 if exc.code=='RUN_TIMEOUT' or not exc.retryable: return ToolResult(status='FAILED',error=exc.message)
             except SlotRepair as exc: return ToolResult(status='NO_DATA',error=str(exc))
             except (SQLAlchemyError,TimeoutError,ValueError): pass
+        if step.tool == 'query_trade_data':
+            return ToolResult(status='FAILED', error='무역 통계 조회에 실패했습니다. 같은 조건으로 다시 질문해 주세요.')
         return ToolResult(status='FAILED',error='분석을 완료하지 못했습니다. 조건을 확인해 다시 질문해 주세요.')
 
     def _tool(self,state,step):
@@ -449,7 +482,8 @@ class Services:
         self.compose(state,prompt=COMPOSE_TEXT_PROMPT,model_role='compose_text')
 
     def compose(self,state,prompt=COMPOSE_PROMPT,model_role='compose'):
-        comparison = period_difference_draft(state)
+        from backend.app.agents.multi_year import year_comparison_draft
+        comparison = year_comparison_draft(state) or period_difference_draft(state)
         if comparison is not None:
             state.draft = comparison
             state.fixed_conclusion_ids = []  # Numeric conclusions still go through snapshot verification.
@@ -483,6 +517,11 @@ class Services:
                     state.warnings.append(warning)
         payload,fixed=compose_input(state,describe,articles,news_warnings=news_warnings,country_names=countries.values())
         correcting = state.draft is not None and state.verification.regeneration_count == 1
+        if correcting and any(f.reason == 'ARTICLE_PARAPHRASE' for f in state.verification.feedback):
+            from backend.app.agents.verify_articles import review_article_claims
+            with self.read_store() as store:
+                cards = answer_article_cards(store, state)
+            review_article_claims(self, state, cards, model_role)
         if not payload['tasks']:
             if correcting and (state.verification.feedback or state.verification.confirmed_claims):
                 state.writer_rewrite_result = 'PRESERVED_NO_WRITER_INPUT'
@@ -586,6 +625,8 @@ class Services:
                 from backend.app.agents.templates import condition_names
                 country_labels,products=condition_names(store,[task.conditions for task in state.plan.tasks])
                 labels={code:name for (code,_),name in products.items()}
+                cited = any(cited_article_numbers(s) for s in [*state.draft.sentences(), state.draft.turn_summary])
+                articles = answer_article_cards(store, state) if cited else []
                 snapshots={}
                 for task in state.plan.tasks:
                     for step in task.steps:
@@ -597,7 +638,7 @@ class Services:
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
-            verify(state,known_names=set(names),snapshots=snapshots,countries=countries,product_labels=labels)
+            verify(state,known_names=set(names),snapshots=snapshots,countries=countries,product_labels=labels,articles=articles)
         try:
             # finalize 몫은 남긴다(§13.4). compose가 예약보다 오래 걸려 시간이 모자라면 대조하지 못한 문장에
             # 바로 "확인 필요"를 붙이고 답변은 저장한다(§1 "시간이 부족하면 불일치 문장에 즉시 표시").
@@ -645,17 +686,20 @@ class Services:
             overall=('ANSWERED' if statuses=={'ANSWERED'} else 'OUT_OF_SCOPE' if statuses=={'OUT_OF_SCOPE'}
                      else 'PARTIAL' if statuses & {'ANSWERED','PARTIAL'} else 'NO_DATA')
             sentences=state.draft.sentences()
-            tasks=[]; tables=[]; charts=[]; articles=[]
+            tasks=[]; tables=[]; charts=[]
+            articles = answer_article_cards(store, state)
             for task,conclusion in zip(state.plan.tasks,state.draft.conclusion,strict=True):
                 tasks.append({'task_id':task.task_id,'intent':task.intent,'question':task.question,
                     'conditions':api_conditions(task.conditions) if task.conditions else None,
                     'article_period':task.conditions.article_period.model_dump(mode='json') if task.conditions and task.conditions.article_period else None,
                     'conclusion':conclusion.sentences,'answer_status':task.answer_status,
                     'answer_format':'TEXT' if is_text_task(task) else None})
+                if task.answer_status == 'NO_DATA' and any(
+                        step.tool in ('query_trade_data', 'check_conditions') and (result := state.results.get(step.step_id))
+                        and result.status == 'FAILED' for step in task.steps):
+                    tasks[-1]['query_status'] = 'FAILED'
                 for step in task.steps:
                     result=state.results.get(step.step_id)
-                    if step.tool == 'search_articles' and result and result.status == 'OK' and result.article_ids and result.digest:
-                        articles.extend({**card,'task_id':task.task_id} for card in article_cards(store,state,result))
                     if not result or not result.result_id: continue
                     if step.tool in ('query_trade_data','query_market_model'):
                         if any(t['result_id']==result.result_id for t in tables): continue   # 공유한 조회(D-100)는 표 하나
@@ -714,6 +758,7 @@ class Services:
             if primary.answer_status in ('PARTIAL','ANSWERED') and primary.conditions:
                 from backend.app.agents.context import both_trade_flows
                 context['conditions']=answer['conditions']
+                context.pop('confirmed_trade_conditions', None)
                 if both_trade_flows(state.plan):
                     context['both_trade_flows']=True
                 else:

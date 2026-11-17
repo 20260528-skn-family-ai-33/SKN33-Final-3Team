@@ -3,16 +3,10 @@ from collections import Counter
 import re
 
 from backend.app.agents.digest import display_amounts, korean_usd
+from backend.app.agents.verify_articles import ARTICLE_CITATION, citation_clauses, cited_article_numbers
+from backend.app.agents.monthly_summary import fixed_monthly_sentences, reconcile_monthly_claims
 from backend.app.agents.state import (AgentState, Draft, TaskConclusion, MAX_TASK_SENTENCES,
                                       MAX_TEXT_TASK_SENTENCES, draft_limit_error, is_text_task)
-
-# Shared by Writer validation, numeric verification and hidden-article redaction.
-ARTICLE_CITATION = re.compile(r'\[\s*([0-9]+(?:\s*,\s*[0-9]+)*)\s*\]')
-
-
-def cited_article_numbers(text):
-    return {number.strip() for group in ARTICLE_CITATION.findall(text) for number in group.split(',')}
-
 
 UNSUPPORTED = {
     'OUT_OF_SCOPE': '수출입 통계·시장 비중·유망시장에 관한 질문을 입력해 주세요.',
@@ -26,6 +20,7 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 요청한 월들에 미집계가 섞여 있으면 제시된 각 월을 실제 금액(0 포함) 또는 미집계와 짝지어 설명하세요. 소계를 제시할 때에는 전체 기간 합계를 확인할 수 있는지도 밝히세요.
 금액은 digest에 적힌 표기(예: "2,610만 달러", "1억 2,346만 달러")를 글자 그대로 옮기세요.
 만·억 단위를 다시 바꾸거나 반올림·합산하지 마세요. 총액과 월평균, %와 %p를 구분하세요.
+월별 금액의 최저·최고는 TREND의 monthly_facts에서 월과 금액을 짝지어 쓰세요. 전년 동월보다 증가한 달도 monthly_facts의 increased_months를 보고, 목록이 increased_count보다 짧으면 개수만 쓰세요.
 기간 비교의 change_pct는 compare_period의 compare_total_usd를 분모로 한 period의 total_usd 변화율입니다. 문장에 두 기간의 역할을 그대로 쓰세요.
 두 기간의 수출액·수입액 차이를 물으면 결론에 달러 차액을 명시하세요. TREND의 period_difference_usd는 조회 기간 합계에서 비교 기간 합계를 뺀 금액입니다. 두 합계와 차액은 별도 문장에 쓰세요. 차액을 쓸 때는 두 기간, 실제 달러 차액, 어느 쪽이 더 큰지를 한 문장에 담으세요. 차액이 0이면 두 기간의 차액이 0달러라고 씁니다. turn_summary에 차액을 쓸 때도 같은 차액 문장을 그대로 사용하세요. 차액이 null이면 산출할 수 없다고 쓰세요. 변화율만 요청했다면 change_pct를 쓰세요.
 비교 기간 길이가 다르면 그 사실과 월평균을 명시하고 점유율 분모 의미를 밝히세요.
@@ -61,7 +56,12 @@ ARTICLE_PROMPT = """아래 기사 작성 지침은 article_search_planned가 tru
 false인 하위 질문의 결론에서는 기사·검색 상황을 언급하지 마세요. 전체 설명의 검색 한계도 검색 대상 질문에만 연결하세요.
 CAUSE는 기사와 통계의 시점 연관성을 설명하되 원인으로 단정하지 마세요.
 기사 내용은 articles에서만 가져오고 문장 끝에 [n]으로 인용하세요. 여러 기사는 [1][2] 또는 [1, 2]처럼 인용하세요.
-결론에는 같은 task_id의 번호만 쓰세요.
+기사의 금액·증감률·연도별 변화나 그 배경을 인용할 때에는 해당 articles.summary의 검수된 사실 문장 하나를 그대로 옮기고 [n]을 붙이세요.
+기사 사실을 선택할 때는 배열 원소 하나에 [기사 n 문장 k]만 써도 됩니다. n은 기사 번호이고 k는 그 summary의 1부터 시작하는 문장 번호입니다.
+서비스가 선택한 검수 문장 전체와 실제 인용 번호를 표시합니다. 가능한 경우 이 형식을 우선 사용하세요.
+각 원소에는 한 근거만 쓰세요. 조회 통계나 이번 조회의 인과 한계는 기사 번호 없이 별도 원소에 쓰세요.
+다음 원소에서 같은 기사의 기간·추이·배경을 다시 설명하려면 그 사실에도 출처가 필요합니다.
+기사 사실과 이번 조회의 통계·인과 한계는 각각 별도의 문장으로 쓰세요. 결론에는 같은 task_id의 번호만 쓰세요.
 evidence_role이 context_reference면 배경 자료입니다. mixed면 '참고(직접 답변 아님)' 문장은 배경으로만 쓰세요.
 unclassified는 근거 역할 미분류입니다. 기사 제목으로 인과관계를 추측하지 마세요.
 reference_limitation과 요약 문장의 unverified_question_parts를 지키세요. news의 unverified_question_parts는
@@ -313,6 +313,10 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
     allowed = [_citable_article(a) for a in articles if a.get('evidence_sufficient') and a.get('summary')]
     fixed, tasks = {}, []
     for task in state.plan.tasks:
+        monthly = fixed_monthly_sentences(state, task)
+        if monthly:
+            fixed[task.task_id] = TaskConclusion(task_id=task.task_id, sentences=list(monthly))
+            continue
         conclusion = fixed_conclusion(state, task)
         if conclusion:
             fixed[task.task_id] = conclusion
@@ -495,12 +499,63 @@ def complete_article_only_conclusions(state, draft, payload, country_names=()):
             raise ValueError('부분 응답 설명의 주장을 해당 질문의 근거에서 확인할 수 없습니다.')
 
 
-def validate_citations(generated, articles):
+# A Writer may append a scope disclaimer after reporting an article's historical trend.
+# The historical assertion still needs its own source even if the following disclaimer is valid.
+_ARTICLE_ATTRIBUTION = re.compile(r'(?:기사|기고문|보도자료)(?:에\s*따르면|에서는?|는|의\s*(?:배경\s*)?설명은)')
+_REPORTED_TREND = re.compile(r'(?:수출|수입|매출|수요|시장|점유율).{0,45}(?:하락|상승|감소|증가|급증|급감)')
+
+
+_FACT_SELECTION = re.compile(r'\[기사 (\d+) 문장 (\d+)\]')
+# Attributions may introduce the trend before or after its historical time period.
+_HISTORICAL_BACKGROUND = re.compile(r'(?:기사|기고문|보도자료)에서?\s*(?:언급|제시|설명|다룬).{0,40}(?:감소|증가|하락|상승|배경).{0,30}\d{4}년')
+_QUERY_AND_NEWS = re.compile(r'통계(?:와|와의)\s*(?:기사|인과관계)')
+_STAT_THEN_ARTICLE = re.compile(r'(?:달러|USD|%)[^.。!?]*[.。!?]\s*(?:참고\s*)?(?:기사|기고문|보도자료)')
+
+
+def expand_article_selections(draft, articles):
+    """Render a selected reviewed fact with its own card number before public draft validation."""
+    if not any('[기사 ' in line for line in [*draft.sentences(), draft.turn_summary]):
+        return draft
+    facts = {}
+    for card in articles:
+        for index, fact in enumerate(card.get('summary', []), 1):
+            text = fact['text'] if isinstance(fact, dict) else fact
+            facts[str(card['n']), str(index)] = f"{text} [{card['n']}]"
+
+    def expand(line):
+        if '[기사 ' not in line:
+            return line
+        match = _FACT_SELECTION.fullmatch(line.strip())
+        if not match or match.groups() not in facts:
+            raise ValueError('기사 사실은 유효한 기사·문장 번호로 단독 선택하세요.')
+        return facts[match.groups()]
+
+    return Draft(conclusion=[TaskConclusion(task_id=c.task_id, sentences=[expand(s) for s in c.sentences])
+                             for c in draft.conclusion], explanation=[expand(s) for s in draft.explanation],
+                 turn_summary=expand(draft.turn_summary), title=draft.title)
+
+
+def validate_citations(generated, articles, *, summary_task_id=None):
     by_task = {}
     for a in articles:
         by_task.setdefault(a['task_id'], set()).add(str(a['n']))
+    exact = {(str(card['n']), (fact['text'] if isinstance(fact, dict) else fact).strip())
+             for card in articles for fact in card.get('summary', [])}
     def check(sentences, allowed):
         for sentence in sentences:
+            cited, trailing = citation_clauses(sentence)
+            for passage in cited:
+                prose = ARTICLE_CITATION.sub('', passage).strip()
+                if all((n, prose) in exact for n in cited_article_numbers(passage)):
+                    continue
+                if _STAT_THEN_ARTICLE.search(prose) or (_QUERY_AND_NEWS.search(prose) and '확인' in prose):
+                    raise ValueError('조회 통계와 기사 사실을 분리하고 기사 사실에만 번호를 붙이세요.')
+            if allowed and _HISTORICAL_BACKGROUND.search(trailing):
+                raise ValueError('기사에서 가져온 시기와 배경에는 해당 기사 번호를 붙이세요.')
+            if (allowed and not cited_article_numbers(sentence) and _ARTICLE_ATTRIBUTION.search(sentence)
+                    and _REPORTED_TREND.search(sentence)
+                    and not re.search(r'(?:감소|증가|하락|상승)\s*(?:여부|원인)[^.]*확인할 수 없', sentence)):
+                raise ValueError('기사에서 가져온 추이 문장에는 해당 기사 번호를 붙이세요.')
             for bracket in re.findall(r'\[[^\[\]]*\]', sentence):
                 if not re.search(r'\d', bracket) and bracket[1:-1].strip().lower() != 'n':
                     continue
@@ -510,6 +565,8 @@ def validate_citations(generated, articles):
     for conclusion in generated.conclusion:
         check(conclusion.sentences, by_task.get(conclusion.task_id, set()))
     check(generated.explanation, {str(a['n']) for a in articles})
+    if summary_task_id:
+        check([generated.turn_summary], by_task.get(summary_task_id, set()))
 
 
 def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_conditions, *, articles=None) -> Draft:
@@ -519,7 +576,8 @@ def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_c
     if generated:
         if articles is None:
             articles = [a for a in numbered_articles(state) if a.get('evidence_sufficient') and a.get('summary')]
-        validate_citations(generated, articles)
+        generated = expand_article_selections(generated, articles)
+        validate_citations(generated, articles, summary_task_id=state.plan.tasks[0].task_id)
     if state.input.article_action and generated and (
         # "…입니다 [1]." 처럼 번호 뒤 마침표도 허용한다. 선택 기사 하나만 인용했는지만 본다.
         generated.explanation or any(not re.search(r'\[1\]\s*[.!?。]?\s*$', sentence)
@@ -543,6 +601,9 @@ def assemble(state: AgentState, generated: Draft | None, fixed: dict, describe_c
         if state.input.first_question: title = (label + ' 리포트')[:20]
     draft = Draft(conclusion=[by_id[t.task_id] for t in state.plan.tasks],
         explanation=generated.explanation if generated else [], turn_summary=summary, title=title)
+    reconcile_monthly_claims(state, draft)
+    if not draft.title and state.input.first_question and fixed_monthly_sentences(state, primary):
+        draft.title = primary.question[:20]
     if error := draft_limit_error(state.plan, draft):
         raise ValueError(error)   # 재시도 대상(D-21·D-67)
     return draft

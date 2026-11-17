@@ -3,6 +3,7 @@
 Admission callers must hold the MySQL chat_session row lock from the active-job
 lookup through enqueue, Redis SET NX and commit. No MySQL access is hidden here.
 """
+import re
 from collections.abc import Callable
 from pydantic import ValidationError
 
@@ -12,6 +13,17 @@ from backend.app.api.common import now
 from backend.app.api.redis_store import RedisState
 
 ACTIVE_STATUSES = frozenset({'QUEUED', 'RUNNING', 'NEEDS_INPUT', 'WAITING_REPORT'})
+
+
+def year_over_year_base(question, session_context, verified):
+    """다른 대상·기간을 명시한 새 질문은 정상 플래너로 보낸다."""
+    if not re.fullmatch(r'\s*(?:(?:그럼|그러면)\s*)?(?:전년|작년|지난해)(?:\s*동기)?'
+                        r'\s*(?:과|와|하고|이랑|랑|대비(?:해서)?)?\s*비교'
+                        r'\s*(?:해\s*(?:줘|주세요|보자)|해주세요|하자)?\s*[.!?？]*\s*', question):
+        return None
+    raw = session_context.get('confirmed_trade_conditions')
+    base = Conditions.model_validate(raw) if raw else verified
+    return base if base and base.period else None
 
 
 def both_trade_flows(plan) -> bool:

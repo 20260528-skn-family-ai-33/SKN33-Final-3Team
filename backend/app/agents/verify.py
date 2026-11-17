@@ -9,11 +9,13 @@ from dataclasses import dataclass, replace
 import re
 
 from backend.app.agents.compose import fixed_conclusion
+from backend.app.agents.monthly_summary import fixed_monthly_sentences, task_series, snapshot_sentences
 from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
     ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
     change_phrase_end, COMPARISON, DOWN, UP, TOKEN, DATE, HISTORY_DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift, stated_windows,
 )
+from backend.app.agents.verify_articles import article_claim, causal_antecedent, causal_assertion, citation_clauses
 from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, period
 
 
@@ -411,7 +413,85 @@ def _implied_amount_change(checks, prepared, sentence):
     return tuple(out)
 
 
+def _winners_for_claim(claim, observations, source, window):
+    start, end = window
+    month_count = months_between(start, end) + 1
+    if len(observations) != month_count or any(not isinstance(f.value, Decimal) for f in observations):
+        return ()
+    if {f.month for f in observations} != {shift(start, i) for i in range(month_count)}:
+        return ()
+    select = min if claim.metric.aggregate == 'MIN' else max
+    extreme = select(f.value for f in observations)
+    winners = [f for f in observations if f.value == extreme]
+    if ('공동' in claim.text and len(winners) == 1) or ('단독' in claim.text and len(winners) > 1):
+        return ()
+
+    # A date attached to the observation identifies the winner, not the comparison window.
+    time = claim.time
+    if time.period or time.month_window:
+        if time.period and time.period != window:
+            return ()
+        if time.month_window and time.month_window != (int(start[5:]), int(end[5:])):
+            return ()
+        time = replace(time, period=None, month_window=None, months=frozenset(), bare_months=frozenset())
+    if time.years - {m[:4] for m in time.months}:
+        if window != (start[:4] + '-01', start[:4] + '-12') or time.years != {start[:4]}:
+            return ()
+    dates = {f.month for f in winners}
+    if not time.months <= dates or not time.bare_months <= {int(m[5:]) for m in dates}:
+        return ()
+    level = replace(claim, time=replace(time, years=frozenset(), months=frozenset(),
+                                        bare_months=frozenset(), durations=frozenset()),
+                    metric=replace(claim.metric, aggregate=None, amount_period=None))
+    cells = []
+    for fact in winners:
+        if time.months or time.bare_months:
+            if fact.month not in time.months and int(fact.month[5:]) not in time.bare_months:
+                continue
+        if _time_matches(level, fact) and (not claim.quantity or mismatch(level, fact, source) is None):
+            cells.append((fact.source, fact.path))
+    return tuple(cells)
+
+
+def _monthly_extreme_cells(claim, facts, sources):
+    """Only complete monthly series from the saved table can establish an extremum."""
+    if not claim.valid or claim.metric.relation != 'EQ':
+        return ()
+    series = {}
+    for fact in facts:
+        source = sources[fact.source]
+        if (source.get('kind') != 'TREND' or source.get('_verification_source') != 'SNAPSHOT'
+                or fact.path[:1] != ('rows',) or len(fact.path) != 3
+                or fact.metric.key not in ('amount_usd', 'compare_amount_usd')
+                or not claim.targets <= fact.targets or (claim.metric.flow and claim.metric.flow != fact.metric.flow)):
+            continue
+        role = 'compare_period' if fact.metric.key == 'compare_amount_usd' else 'period'
+        window = period(source.get(role))
+        if not window or not _source_supports(claim.time, {'period': source[role]}):
+            continue
+        if not _level_period_matches(claim.metric.amount_period or 'AUTO', claim.time, fact, source):
+            continue
+        row = source['rows'][int(fact.path[1])]
+        identity = (fact.stored_targets, row.get('hs_ver'), fact.metric.flow, window)
+        series.setdefault(identity, {}).setdefault(fact.source, []).append(fact)
+
+    if len(series) != 1:
+        return ()
+    identity, by_source = next(iter(series.items()))
+    window = identity[-1]
+    # Two tasks can contribute copies of the same series to shared explanations.
+    matches = []
+    for index, observations in by_source.items():
+        cells = _winners_for_claim(claim, observations, sources[index], window)
+        if not cells:
+            return ()
+        matches.extend(cells)
+    return tuple(matches)
+
+
 def _matching_cells(claim, facts, sources, catalog):
+    if claim.metric.aggregate in ('MIN', 'MAX'):
+        return _monthly_extreme_cells(claim, facts, sources)
     if claim.metric.family == 'OUTLOOK':
         # An implicit market is identifiable only if one saved classification is in scope.
         eligible = [f for f in facts if f.metric.family == 'OUTLOOK' and claim.targets <= f.targets
@@ -483,7 +563,7 @@ def _supports_stated_window(source, role, year, start, end):
 
 def _inspect_prepared(sentence, prepared):
     catalog, facts, sources = prepared.catalog, prepared.facts, prepared.sources
-    parsed=parse_sentence(sentence,catalog)
+    parsed=parse_sentence(sentence,catalog, monthly_series=any(s.get('kind') == 'TREND' for s in sources))
     checks=[]
     for claim in parsed.claims:
         matches=_matching_cells(claim,facts,sources,catalog)
@@ -525,6 +605,9 @@ def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
     conditions=payload.get('conditions') or {}
     meta=payload.get('meta') or {}
     scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
+    if meta.get('kind') == 'MULTI_YEAR':
+        scope.update(kind='MULTI_YEAR', year_comparison=conditions.get('year_comparison'),
+                     country_codes=conditions.get('country_codes', []), hs_items=conditions.get('hs_items', []))
     if meta.get('kind') == 'TREND':
         scope['kind'] = 'TREND'
     if meta.get('kind') == 'LLM_SQL':
@@ -634,7 +717,7 @@ def check_history(sentence, recent):
 def generated_conclusion(state, task, has_evidence):
     fixed_ids = getattr(state, 'fixed_conclusion_ids', None)
     if fixed_ids is not None:
-        return task.task_id not in fixed_ids
+        return task.task_id not in fixed_ids or bool(fixed_monthly_sentences(state, task))
     return (has_evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
 
 
@@ -677,7 +760,7 @@ def mark_unverified(state):
 
 def diagnose_claim(claim, prepared, group):
     """Only identify an attribute when an otherwise compatible cell isolates it."""
-    if claim.metric.negated_change:
+    if claim.metric.negated_change or claim.metric.aggregate in ('MIN', 'MAX'):
         return 'NOT_CONFIRMED', None, None
     if claim.valid and claim.metric.family == 'CHANGE' and claim.time.subject_year and len(claim.time.years) == 2:
         # A TREND snapshot repeats the period total and change on every monthly row.
@@ -765,8 +848,13 @@ def _correction_span(sentence, claim, reason):
     return matches[0].span()
 
 
-def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_labels=None):
+def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_labels=None,articles=None):
     """Judge the saved draft and supplied evidence without mutating the turn."""
+    from backend.app.agents.multi_year import verify_year_draft
+    year_check = verify_year_draft(state, snapshots or {})
+    if year_check is not None:
+        return year_check
+    article_map = {str(n): card for n, card in enumerate(articles or (), 1)}
     feedback = []
     confirmed_claims = []
     snapshots=snapshots or {}
@@ -803,7 +891,8 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
                for t in state.plan.tasks}
     all_steps = tuple(step for group in by_task.values() for step in group)
     checks=[]
-    text=' '.join([*(x for c in state.draft.conclusion for x in c.sentences),*state.draft.explanation,state.draft.turn_summary])
+    draft_lines = [line for c in state.draft.conclusion for line in c.sentences] + list(state.draft.explanation)
+    text = ' '.join([*draft_lines, state.draft.turn_summary])
     known_names=frozenset(n for n in known_names if n and n in text)
     countries = frozenset(countries)
     # Numeric facts are extracted exactly once per step. Only grounded names
@@ -866,8 +955,81 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
             return 'NO_DIRECT_CHANGE_CELL'
         return 'NOT_CONFIRMED'
 
+    # Writer-independent monthly sentences still need an independent match to the full saved rows.
+    monthly_checks = {}
+    for task in state.plan.tasks:
+        rendered = task_series(state, task)
+        if rendered:
+            saved = next((snapshots.get(s.step_id, {}) for s in task.steps if s.tool == 'query_trade_data'), {})
+            supported = snapshot_sentences(task, saved)
+            monthly_checks[task.task_id] = {line: line in supported for line in rendered}
+
+    owners = [task.task_id for task, conclusion in zip(state.plan.tasks, state.draft.conclusion, strict=True)
+              for _ in conclusion.sentences]
+    article_tasks = {task.task_id for task in state.plan.tasks
+                     if any(step.tool == 'search_articles' for step in task.steps)}
+    article_tasks.update(card.get('task_id') for card in article_map.values())
     index=0
     def inspect(sentence,group,section,task_id=None):
+        # Preserve ordinary non-statistical notices (e.g. two cited notices were listed).
+        # The article route handles numbers, trade claims and causal statements.
+        prose = ARTICLE_CITATION.sub('', sentence)
+        cited, trailing = citation_clauses(sentence)
+        in_article_scope = bool(cited or (article_tasks if task_id is None else task_id in article_tasks))
+        causal_tail = in_article_scope and causal_assertion(trailing)
+        if causal_tail or (articles is not None and cited and (
+                re.search(r'\d|원인|때문|인과|요인|증가|감소|하락|상승|늘었|줄었', prose)
+                or causal_assertion(prose) or parse_sentence(prose, prepare_scope(group).catalog).claims)):
+            failures = []
+            continues = index > 0 and (section == 'explanation' or
+                                       (section == 'conclusion' and owners[index - 1] == task_id))
+            previous = draft_lines[index - 1] if continues else ''
+            passages = [(passage, True) for passage in cited]
+            if causal_tail:
+                # A separate SQL statement still needs its own table check.
+                passages.extend((part, causal_assertion(part)) for part in re.split(r'(?<=[.!?。])\s+', trailing))
+            elif trailing:
+                passages.append((trailing, False))
+            for passage, needs_article in passages:
+                if needs_article:
+                    antecedent = causal_antecedent(passage, previous)
+                    verdict, key, _ = article_claim(passage, task_id, article_map, antecedent)
+                    if verdict != 'MATCH' and not (key and key in state.verified_article_claims):
+                        reason = verdict or 'NOT_CONFIRMED'
+                        failures.append(reason)
+                        feedback.append(ClaimFeedback(section=section, task_id=task_id,
+                            index=None if section == 'summary' else index, passage=passage, article_antecedent=antecedent,
+                            reason='ARTICLE_PARAPHRASE' if key else reason))
+                else:
+                    prepared = prepare_scope(group)
+                    good, _ = _inspect_prepared(passage, prepared)
+                    if not good:
+                        reason = ('SOURCE_UNAVAILABLE' if any(s.get('_source_unavailable') for s in prepared.sources)
+                                  else 'NOT_CONFIRMED')
+                        failures.append(reason)
+                        feedback.append(ClaimFeedback(section=section, task_id=task_id,
+                            index=None if section == 'summary' else index, passage=passage, reason=reason))
+                previous = passage
+            if section == 'summary':
+                return not failures
+            reason = 'SOURCE_UNAVAILABLE' if 'SOURCE_UNAVAILABLE' in failures else 'NOT_CONFIRMED'
+            checks.append(SentenceCheck(index=index, numbers=[q.shown for q in quantities(ARTICLE_CITATION.sub('', sentence))],
+                status='MISMATCH' if failures else 'PASS', basis='ARTICLE', reason=reason if failures else 'MATCH'))
+            return
+        table_match = monthly_checks.get(task_id, {}).get(sentence)
+        if task_id is None:
+            matches = [outcomes[sentence] for outcomes in monthly_checks.values() if sentence in outcomes]
+            table_match = all(matches) if matches else None
+        if table_match is not None:
+            if not table_match:
+                feedback.append(ClaimFeedback(section=section, task_id=task_id, index=None if section=='summary' else index,
+                                              passage=sentence, reason='NOT_CONFIRMED'))
+            if section == 'summary':
+                return table_match
+            checks.append(SentenceCheck(index=index, numbers=[q.shown for q in quantities(sentence)],
+                                        status='PASS' if table_match else 'MISMATCH', basis='SNAPSHOT',
+                                        reason='MATCH' if table_match else 'NOT_CONFIRMED'))
+            return
         prepared = prepare_scope(group)
         digests = prepared.sources
         good,claims=_inspect_prepared(sentence,prepared)
@@ -942,7 +1104,7 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
         status='PASS' if summary_ok and all(c.status=='PASS' for c in checks) else 'NEEDS_REVIEW')
 
 
-def verify(state,known_names=(),*,snapshots=None,countries=(),product_labels=None):
-    state.verification = judge_draft(state,known_names,snapshots=snapshots,countries=countries,product_labels=product_labels)
+def verify(state,known_names=(),*,snapshots=None,countries=(),product_labels=None,articles=None):
+    state.verification = judge_draft(state,known_names,snapshots=snapshots,countries=countries,product_labels=product_labels,articles=articles)
     if state.verification.summary_status == 'MISMATCH':
         state.draft.turn_summary = ''

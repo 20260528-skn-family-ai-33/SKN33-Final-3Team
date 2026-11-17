@@ -1,5 +1,5 @@
 """Server-owned condition resolution and replayable clarifications (§14.1)."""
-from datetime import timedelta, timezone
+from datetime import date, timedelta, timezone
 from difflib import SequenceMatcher
 import re
 from uuid import uuid4
@@ -238,7 +238,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         countries=[item for item in countries if not (
             item.mention.strip().casefold() in reporting_names
             and item.mention.casefold() in original.casefold())]
-    base = state.input.context.conditions or Conditions()
+    base = state.input.year_over_year_base or state.input.context.conditions or Conditions()
     # 짧은 새 품목 질문을 생략 슬롯으로 받았을 때 직전 품목을 재사용하지 않는다.
     if base.hs_items and not countries and task.intent in ('STATISTICS', 'RANKING', 'LOCAL_ISSUES', 'CAUSE'):
         switch = re.fullmatch(
@@ -257,7 +257,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
                     slots.products = [expression]
     out = base.model_copy(deep=True)
     out.ranking_group, out.share_basis = slots.ranking_group, slots.share_basis
-    out.compare_period, out.article_period = None, None
+    out.compare_period, out.article_period, out.year_comparison = None, None, None
     out.trade_flow = slots.trade_flow or base.trade_flow
     if task.input_bindings or task.previous_turn_result:
         if task.intent=='REPORT' and task.report_request and task.report_request.confirmed:
@@ -347,7 +347,7 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
     interests = state.input.interests
     key = f'{task.task_id}:interest'
     answer = task.resolved.get(key, {})
-    if (state.input.first_question and not out.hs_items and not out.country_codes and slots.countries is None and slots.products is None
+    if (state.input.first_question and not state.input.year_over_year_base and not out.hs_items and not out.country_codes and slots.countries is None and slots.products is None
             and (interests.hs_items or interests.country_codes) and not answer):
         options = [('GLOBAL','전체 범위',{'interest':'GLOBAL'})]
         if interests.fits_conditions(): options.insert(0, ('APPLY','관심 범위 적용',{'interest':'APPLIED'}))
@@ -446,15 +446,23 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         out.period = slots.period or out.period
         if slots.recent_months or not out.period:
             out.period = Period(start=shift_month(bounds[-1], 1-(slots.recent_months or 12)), end=bounds[-1])
+        from backend.app.agents.multi_year import requested_years
+        years = requested_years(task.question, base.year_comparison) if task.intent == 'STATISTICS' else None
+        if years and len(out.country_codes) <= 1 and len(out.hs_items) <= 1:
+            out.year_comparison = years
+            out.period = Period(start=date(years.years[0], 1, 1), end=date(years.years[-1], 12, 1))
         comparison = slots.compare_period
-        if slots.comparison_requested and slots.period:
+        if slots.comparison_requested and slots.period and not out.year_comparison:
             question = original if len(state.plan.tasks) == 1 else task.question
             out.period, comparison = comparison_windows(question, out.period, comparison)
         # 유망시장은 통계 기간을 조회하지 않는다. 공개 통계보다 오래된 기간을 물어도 여기서 끝내지 않고, 아래 MODEL_PERIOD로
         # 최신 기준월 예측을 제안한다.
-        if task.intent not in MARKET_INTENTS:
+        if out.year_comparison:
+            for year in out.year_comparison.years:
+                trade.resolve_period(store, f'{year}-01', f'{year}-12')
+        elif task.intent not in MARKET_INTENTS:
             trade.resolve_period(store, out.period.start.strftime('%Y-%m'), out.period.end.strftime('%Y-%m'))
-        if slots.comparison_requested:
+        if slots.comparison_requested and not out.year_comparison:
             out.compare_period = comparison or Period(start=shift_month(out.period.start,-12),
                                                                  end=shift_month(out.period.end,-12))
     if task.intent == 'CAUSE':

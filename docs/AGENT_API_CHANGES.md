@@ -210,7 +210,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 - 사용자가 명시한 개수·기준이면 자동으로 후속 분석한다. 모호한 개수·기준·그룹만 확인한다. applied_defaults/warnings에 실제 선택 기준과 대상 부족을 표시한다. 리포트의 REPORT_CONFIRM은 생략하지 않는다.
 
 ### 저장 결과 기반 수치 검증
-- sentence_checks.basis는 DIGEST 또는 SNAPSHOT이며, 수치 조회는 저장된 결과표 전체 행을 기준으로 검증한다. reason은 MATCH(일치), NOT_CONFIRMED(대상·기간·지표·단위를 포함한 일치 확인 실패), SOURCE_UNAVAILABLE(저장 결과 만료)다. NOT_CONFIRMED는 실제 오답 확정이 아니다. SOURCE_UNAVAILABLE는 화면에 원본 확인 불가로 함께 표시한다. 재생성 최대 1회와 이후 확인 필요 표시는 유지한다.
+- sentence_checks.basis는 DIGEST, SNAPSHOT 또는 ARTICLE(인용 기사 근거를 포함한 문장)이며, 수치 조회는 저장된 결과표 전체 행을 기준으로 검증한다. reason은 MATCH(일치), NOT_CONFIRMED(대상·기간·지표·단위를 포함한 일치 확인 실패), SOURCE_UNAVAILABLE(저장 결과 만료 또는 기사 원문 근거 확인 불가)다. NOT_CONFIRMED는 실제 오답 확정이 아니다. SOURCE_UNAVAILABLE는 화면에 원본 확인 불가로 함께 표시한다. 재생성 최대 1회와 이후 확인 필요 표시는 유지한다.
 
 
 ## 2026-11-03 API-133 최종 답변 스트림
@@ -229,3 +229,11 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 # 리포트 한국 전체 비교 조건
 
 리포트 미리보기의 conditions에 선택 필드 `include_korea_total: boolean`을 추가한다(기본 false). true이면 한국 전체와 country_codes의 상대국을 독립된 범위로 비교한다. country_codes에 KR 등 가상 상대국 코드를 넣지 않는다. 미리보기 승인·저장·리포트 상세에 같은 값을 보존한다. 한국 전체는 상대국 필터 없는 COUNTRY 행 합산이며 선택한 상대국과 다시 합산하지 않는다. KPI 섹션의 REPORT_SCOPE_COMPARISON 표와 다중 시리즈 차트는 한국 전체 및 상대국별 월별 수출액을 담는다. 기존 미지정 요청의 의미는 유지한다.
+
+### 전년 동기 후속 질문과 통계 조회 상태 (2026-11-16)
+
+API-37의 `answer.tasks[].query_status`는 통계 조회 또는 조건 확인 실행에 실패하여 결과를 제공할 수 없으면 `FAILED`다. 기존 상태 집계와 호환되도록 `answer_status`는 유지한다. 화면은 `query_status=FAILED`인 항목에 “조회 실패”를 표시하며 정상 조회에서 결과가 비었을 때는 “결과 없음”을 표시한다. 과거 답변에는 이 선택 필드가 없을 수 있다.
+
+### 여러 연도의 연간·월간 수출입 비교 (2026-11-16)
+
+세 연도 이상을 구분해 비교하는 통계 답변과 저장된 결과표의 조건에 `year_comparison`을 제공한다. `years`는 실제 조회한 연도들의 목록이고, `baseline_year`는 사용자가 지정한 기준연도이며, `monthly`는 월별 비교 여부다. `period`는 첫 연도 1월부터 마지막 연도 12월까지의 외곽 기간이다. 건너뛴 연도는 집계하지 않는다. 연간 결과는 연도마다 합계 한 행과 기준연도 대비 차액·증감률을 제공한다. 월간 결과는 1~12월의 열두 행에 각 연도 금액을 별도 열로 제공한다.

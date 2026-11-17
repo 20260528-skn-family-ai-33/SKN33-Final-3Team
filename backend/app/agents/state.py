@@ -10,6 +10,7 @@ from pydantic import (AfterValidator, BaseModel, BeforeValidator, ConfigDict, Fi
                       model_validator)
 from pydantic_core import to_json
 
+from backend.app.api.schemas import YearComparison
 from backend.app.schemas.rag import ArticlePeriod, CountryCode, HsProduct
 
 SCHEMA_VERSION = 2
@@ -199,6 +200,7 @@ class Conditions(Model):
     period: Period | None = None            # 수출입 기간(기본 최근 12개월)
     # None은 비교 없음. 비교를 요청했는데 기간이 없으면 check가 전년 동기를 계산해 넣는다(D-29, D-73)
     compare_period: Period | None = None
+    year_comparison: YearComparison | None = None
     article_period: ArticlePeriod | None = None   # 기사 발행일 기간, 일 단위(기본 최근 3개월)
     trade_flow: Literal['EXPORT', 'IMPORT'] = 'EXPORT'
     ranking_group: Literal['COUNTRY', 'HS6'] | None = None   # RANKING 또는 MARKET_SHARE의 품목별 비중(D-87)
@@ -280,6 +282,8 @@ class AgentInput(Model):
     user_id: int
     question: Annotated[str, Field(min_length=1, max_length=4000)]
     context: SessionContext
+    # 생략형 전년 비교에서만 사용한다. 마지막 성공 답변의 조건·검증된 요약과 분리한다.
+    year_over_year_base: Conditions | None = None
     interests: Interests = Field(default_factory=Interests)
     # 접수 때 MySQL로 판정한 대화방 첫 질문 여부(그 방에 ASSISTANT 답변이 없음). 관심 되묻기(D-30)·제목(D-54) 기준.
     # Redis 컨텍스트가 비었는지로 판정하지 않는다(유실 뒤에도 비어 있음)
@@ -731,8 +735,17 @@ class SentenceCheck(Model):
     index: int = Field(ge=0)   # Draft.sentences()의 번호. 문장 원문은 draft에 있다
     numbers: list[Label] = Field(default_factory=list)   # 문장에서 찾은 숫자. 문장 200자 안이라 개수도 그 안에 묶인다
     status: Literal['PASS', 'MISMATCH']
-    basis: Literal['DIGEST', 'SNAPSHOT'] = 'DIGEST'
+    basis: Literal['DIGEST', 'SNAPSHOT', 'ARTICLE'] = 'DIGEST'
     reason: Literal['MATCH', 'NOT_CONFIRMED', 'SOURCE_UNAVAILABLE'] = 'NOT_CONFIRMED'
+
+
+class ArticleClaimVerdict(Model):
+    index: int = Field(ge=0)
+    supported: bool
+
+
+class ArticleReview(Model):
+    claims: list[ArticleClaimVerdict] = Field(max_length=MAX_CONCLUSION_SENTENCES + MAX_TEXT_EXPLANATION_SENTENCES + 1)
 
 
 class PassageEdit(Model):
@@ -753,6 +766,7 @@ class ClaimFeedback(Model):
     task_id: str | None = None
     index: int | None = None
     passage: str
+    article_antecedent: str | None = None  # 지시어의 뜻을 묶어 같은 기사 근거로 재검증한다.
     reason: str
     step_id: str | None = None
     cell: tuple[str, ...] | None = None
@@ -798,6 +812,9 @@ class AgentState(Model):
     run_budget: RunBudget = Field(default_factory=RunBudget)
     results: dict[str, ToolResult] = Field(default_factory=dict)  # step_id → 결과
     fixed_conclusion_ids: list[str] | None = Field(default=None, max_length=MAX_TASKS)
+    # Only proofs for this exact draft sentence, citation scope and body-checked evidence can be reused.
+    verified_article_claims: list[Annotated[str, Field(pattern=r'^[0-9a-f]{64}$')]] = Field(
+        default_factory=list, max_length=MAX_CONCLUSION_SENTENCES + MAX_TEXT_EXPLANATION_SENTENCES + 1)
     writer_rewrite_result: str | None = None
     draft: Draft | None = None
     verification: Verification = Field(default_factory=Verification)

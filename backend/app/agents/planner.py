@@ -50,6 +50,7 @@ NAND·DRAM·RAM·OLED처럼 실제 품목이나 기술을 가리키는 약어를
 월 기간은 YYYY-MM-01 양끝 포함, 연도만 있으면 1월~12월입니다.
 상대 기간은 recent_months로만 쓰고 period는 null입니다. "최근 1년"은 recent_months=12입니다. 기사 기간은 일 단위입니다.
 comparison_requested는 비교 요청에만 true, 요청이 없으면 null입니다.
+세 연도 이상을 같은 기준으로 비교하는 통계는 연도별 하위 질문으로 나누지 말고 STATISTICS 하나로 유지하세요. 국가나 품목을 생략한 월별 후속 질문은 이전 조건을 이어받습니다.
 두 기간의 변화율에서 period는 결과 기간, compare_period는 분모인 기준 기간입니다. 사용자가 기준을 지정하면 그 기간을 compare_period로 두세요. 두 기간만 단순 나열하면 어순과 무관하게 앞선 시기를 기준으로 두세요. 서로 다른 연도에 기준 표현과 비교 표현이 함께 걸리면 단순 나열 규칙을 적용하지 마세요.
 이전 비교를 명시적으로 지칭한 경우에만 이전 compare_period를 명시하세요.
 ranking_group은 RANKING에 COUNTRY/HS6, 모호하면 null입니다.
@@ -334,6 +335,35 @@ _HS_FOLLOWUP = re.compile(r'(?:' + HS_CODE_MENTION.pattern + r'|(\d{6}))'
 # 6자리 연월(2015-01~2030-12). 이 범위의 앞 네 자리(2015~2030)는 HS4가 아니다(제20류 호는 2009까지).
 _YEAR_MONTH = re.compile(r'20(?:1[5-9]|2[0-9]|30)(?:0[1-9]|1[0-2])')
 
+def _use_monthly_trend_template(task, question):
+    """A single year's plain monthly trade amounts are covered by the TREND template."""
+    if task.intent != 'STATISTICS' or not task.custom_query or task.source_tasks:
+        return
+    match = re.fullmatch(
+        r'\s*(\d{4})\s*년\s*(.*?)\s*(?:월별\s*)?(수출|수입)(?:액)?(?:의|을|이|은)?\s*'
+        r'(?:월별\s*)?추이(?:를|가|는)?\s*(?:(?:보여|알려)\s*(?:줘|주세요))?\s*[.!?？]*\s*', question)
+    if not match:
+        return
+    year, scope, flow = match.groups()
+    products = task.slots.products or []
+    countries = task.slots.countries or []
+    if len(products) > 1 or len(countries) > 1:
+        return
+    country = countries[0].mention if countries else ''
+    product = products[0] if products else ''
+    # Only the LLM's named scopes may precede the measure. Preserve custom requests for rankings,
+    # shares, totals across groups, unit prices or finer periods.
+    if ''.join(scope.split()) not in {''.join(s.split()) for s in (country + product, product + country)}:
+        return
+    from backend.app.agents.state import Period
+    task.custom_query = None
+    task.slots.recent_months = None
+    task.slots.period = Period(start=f'{year}-01-01', end=f'{year}-12-01')
+    task.slots.trade_flow = 'EXPORT' if flow == '수출' else 'IMPORT'
+    task.slots.compare_period = None
+    task.slots.comparison_requested = None
+
+
 # 관찰된 기업명이 HS 선택으로 넘어가지 않게 한다. 일반 영문 약어는 품목 검색 대상에 남긴다.
 _COMPANY_EXPRESSIONS = frozenset(('ymtc', 'tsmc', 'sk하이닉스', 'skhynix', '삼성전자', '엔비디아', 'nvidia'))
 
@@ -361,6 +391,15 @@ def coded_product(expression, text):
 
 def _normalize_analysis(output, question, previous_conditions):
     tasks = output.tasks
+    if len(tasks) == 1:
+        _use_monthly_trend_template(tasks[0], question)
+    elif tasks[0].intent == 'STATISTICS' and any(t.intent == 'CAUSE' for t in tasks[1:]):
+        # Ground the statistical part in the user's own words. A paraphrased subtask could
+        # omit an extra calculation the user actually requested.
+        parts = re.fullmatch(r'(.+?추이)(?:와|과)\s*(?:그\s*)?(?:변화\s*)?(?:원인|이유)(?:을|를)?\s*'
+                             r'(?:(?:알려|보여)\s*(?:줘|주세요))?\s*[.!?？]*\s*', question.strip())
+        if parts:
+            _use_monthly_trend_template(tasks[0], parts[1])
     for task in tasks:
         task.slots.products = product_expressions(task.slots.products,
             article_context=task.intent in ('CAUSE', 'LOCAL_ISSUES'))
@@ -435,6 +474,8 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
     output = merge_product_phrases(rescue_trade_terms(output, terms, question), question)
     output = _normalize_report_requests(output, question)
     output = _normalize_analysis(output, question, previous_conditions)
+    from backend.app.agents.multi_year import normalize_year_plan
+    output = normalize_year_plan(output, question, previous_conditions)
     if len(output.tasks) != 1:
         return output
     task = output.tasks[0]
