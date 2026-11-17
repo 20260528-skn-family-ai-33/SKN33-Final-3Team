@@ -102,6 +102,8 @@ class ComposeTest(unittest.TestCase):
                 body = json.loads(requests[0].content)
                 self.assertEqual(body['model'], expected_model)
                 self.assertEqual(body['text']['format']['name'], 'Draft')
+                self.assertNotIn('title', body['instructions'])
+                self.assertIn('title', body['text']['format']['schema']['properties'])
                 self.assertTrue(body['text']['format']['strict'])
                 self.assertEqual(body['max_output_tokens'], 6000 if node == 'compose_text' else 3000)
                 self.assertFalse(body['store'])
