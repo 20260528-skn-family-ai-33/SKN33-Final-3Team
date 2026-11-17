@@ -614,10 +614,16 @@ export default function Analysis({ route }) {
               {draft && !placedDraft && conditionCard}
               <div ref={endRef} />
               <form className={waitInput ? acknowledgedClarification===clarificationId ? 'chat-wait-fixed' : 'chat-wait' : undefined} onSubmit={e => { e.preventDefault(); if(job?.status==='NEEDS_INPUT') clarify({text:input.trim()}); else send() }} style={{ display: 'flex', gap: 10, alignItems: 'center', border: '1px solid #D5D9E0', borderRadius: 16, padding: '10px 10px 10px 18px', background: '#fff' }}>
-                <input ref={inputRef} value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onFocus={()=>{if(!autoFocusingInput.current) acknowledgeInput()}} onPointerDown={acknowledgeInput} onKeyDown={acknowledgeInput} onChange={e => {acknowledgeInput(); setInput(e.target.value)}} aria-label="질문 입력" placeholder={job?.clarification?.kind==='COUNTRY'?'국가명 또는 국가 코드 입력':job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}
-                  style={{ flex: 1, minWidth: 0, fontSize: 15, border: 0, outline: 0, font: 'inherit', color: 'var(--ink)', background: 'transparent' }} />
+                <textarea ref={inputRef} rows={2} value={input} disabled={busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)} onFocus={()=>{if(!autoFocusingInput.current) acknowledgeInput()}} onPointerDown={acknowledgeInput} onKeyDown={e => {
+                  acknowledgeInput()
+                  if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return
+                  e.preventDefault()
+                  if (!e.ctrlKey && !e.altKey && !e.metaKey && input.trim()) e.currentTarget.form.requestSubmit()
+                }} onChange={e => {acknowledgeInput(); setInput(e.target.value)}} aria-label="질문 입력" aria-describedby="chat-input-hint" placeholder={job?.clarification?.kind==='COUNTRY'?'국가명 또는 국가 코드 입력':job?.status==='NEEDS_INPUT' ? '선택지를 고르거나 답을 직접 입력하세요.' : '분석할 내용을 질문하세요.'}
+                  style={{ flex: 1, minWidth: 0, border: 0, outline: 0, font: 'inherit', fontSize: 15, lineHeight: 1.6, resize: 'vertical', maxHeight: 200, color: 'var(--ink)', background: 'transparent' }} />
                 <Btn type="submit" kind="red" iconRight="arrowRight" disabled={!input.trim() || busy || running(job?.status) || (job?.status==='NEEDS_INPUT' && !job.clarification?.allow_text)}>전송</Btn>
               </form>
+              <p id="chat-input-hint" className="note">Enter로 전송 · Shift+Enter로 줄바꿈</p>
             </div>
           </section>
           <div className="chat-jump" role="group" aria-label="대화 이동">

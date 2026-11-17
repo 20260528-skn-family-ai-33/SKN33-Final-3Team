@@ -298,6 +298,5 @@ def save_answer(store,uid,sid,question,answer,*,automatic_comparison=False):
             # Keep the displayed comparison in the saved answer, but recalculate an
             # automatic baseline for the next question instead of making it required.
             context['conditions']['compare_period']=None
-    store.c.execute(update(t).where(t.c.session_id==sid).values(title=question[:160] if row['title']=='새 대화' else row['title'],
-        updated_at=now(),context_json=context))
+    store.c.execute(update(t).where(t.c.session_id==sid).values(updated_at=now(),context_json=context))
     return {'status':'SUCCEEDED','step':'DONE','answer':answer,'clarification':None,'error':None}

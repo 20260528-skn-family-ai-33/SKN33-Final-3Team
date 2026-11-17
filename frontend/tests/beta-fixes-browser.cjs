@@ -1,4 +1,4 @@
-// Issue #121: real pages with offline synthetic API responses.
+// Issues #121, #126: real pages with offline synthetic API responses.
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
@@ -13,7 +13,7 @@ const { chromium } = require('playwright')
     browser = await chromium.launch({ headless: true, channel: 'chrome', args: ['--disable-features=LocalNetworkAccessChecks'] })
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' })
     page.setDefaultTimeout(10000)
-    const errors = [], unexpected = [], trends = [], sent = [], reads = []
+    const errors = [], unexpected = [], trends = [], sent = [], reads = [], questions = [], articleSearches = []
     page.on('pageerror', e => errors.push(e.message))
     const shots = path.resolve(__dirname, '../../tmp/issue121-browser')
     fs.mkdirSync(shots, { recursive: true })
@@ -24,7 +24,7 @@ const { chromium } = require('playwright')
     let deleteFails = true, created = 0
     const chats = [{ session_id: 'old', title: '기존 대화', updated_at: '2026-11-10T00:00:00Z' }]
     const messages = { old: [{ message_id: 'old1', role: 'USER', content_masked: '이전 질문' }] }
-    const articles = countries.map((c, i) => ({ article_id: String(i + 1), title: `${c.name_ko} 디지털 금융 서비스 확대`, source_code: 'KOTRA_SHORT_NEWS', country_codes: [c.country_code], published_date: '2026-11-10', summary: '현지 수출 동향', hs_items: [] }))
+    const articles = countries.map((c, i) => ({ article_id: String(i + 1), title: `${c.name_ko} 디지털 금융 서비스 확대`, source_code: 'KOTRA_SHORT_NEWS', source_name: 'KOTRA 단신속보', country_codes: [c.country_code], published_date: '2026-11-10', summary: '현지 수출 동향', hs_items: [] }))
     await page.route('**/api/v1/**', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname.replace('/api/v1', '')
       const reply = json => route.fulfill({ json })
@@ -57,6 +57,9 @@ const { chromium } = require('playwright')
         const id = p.split('/')[3]
         if (req.method() === 'POST') {
           sent.push(id)
+          const question = req.postDataJSON().question
+          questions.push(question)
+          if (!messages[id].length) chats.find(c => c.session_id === id).title = question.replace(/\s+/g, ' ').trim().slice(0, 20)
           const job = { job_id: 'j1', status: 'FAILED', error: { message: '오프라인 검수 종료' } }
           messages[id].push({ message_id: 'm1', role: 'USER', content_masked: req.postDataJSON().question, job })
           return reply({ job })
@@ -64,7 +67,10 @@ const { chromium } = require('playwright')
         reads.push(id)
         return reply({ items: messages[id], page: { total: messages[id].length } })
       }
-      if (p === '/articles') return reply({ items: articles, page: { total: 5 } })
+      if (p === '/articles') {
+        articleSearches.push(Object.fromEntries(url.searchParams))
+        return reply({ items: articles, page: { total: 5 } })
+      }
       if (/^\/articles\/\d+$/.test(p)) return reply({ article: articles.find(a => a.article_id === p.split('/')[2]), body_masked: '- 현지 금융 서비스가\n확대되고 있다.\n\n' + '- 상세 내용이다.\n'.repeat(60) + 'https://example.org/' + 'long-path-'.repeat(60) })
       if (p === '/data/availability') return reply({ trade_end_month: '2025-12' })
       if (p === '/trade/trends') {
@@ -132,18 +138,38 @@ const { chromium } = require('playwright')
     await page.getByRole('textbox', { name: '질문 입력' }).waitFor()
     assert.equal(await page.locator('.chat-user').count(), 0)
     assert.ok(!reads.includes('old'))
-    await page.getByRole('textbox', { name: '질문 입력' }).fill('새 리포트 질문')
-    await page.getByRole('button', { name: '전송', exact: true }).click()
+    const input = page.getByRole('textbox', { name: '질문 입력' })
+    await input.fill('새 리포트 질문')
+    await input.press('Shift+Enter')
+    await input.pressSequentially('줄바꿈 확인')
+    assert.equal(await input.inputValue(), '새 리포트 질문\n줄바꿈 확인')
+    assert.deepEqual(sent, [], 'Shift+Enter must not submit')
+    await input.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true })
+    await input.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 229 })
+    assert.deepEqual(sent, [], 'IME confirmation must not submit')
+    await input.press('Enter')
     await page.getByText('오프라인 검수 종료', { exact: true }).waitFor()
     assert.deepEqual(sent, ['new1'])
+    assert.deepEqual(questions, ['새 리포트 질문\n줄바꿈 확인'])
+    await page.getByRole('heading', { name: '새 리포트 질문 줄바꿈 확인', exact: true }).waitFor()
+    await page.locator('.chat-list').getByText('새 리포트 질문 줄바꿈 확인', { exact: true }).waitFor()
+    assert.equal(await page.locator('.chat-user').innerText(), '새 리포트 질문\n줄바꿈 확인')
     assert.equal(created, 1)
     await page.waitForURL('**/#/analysis?chat=new1')
     await page.reload()
-    await page.getByText('새 리포트 질문', { exact: true }).waitFor()
+    await page.getByRole('heading', { name: '새 리포트 질문 줄바꿈 확인', exact: true }).waitFor()
     assert.equal(created, 1, 'reload must reuse the new room instead of starting another')
+    await page.goto(base + '/#/articles?page=13')
+    await page.getByText('KOTRA 단신속보', { exact: true }).first().waitFor()
+    await page.getByPlaceholder('검색어 또는 언론사명 입력').fill('파이낸셜뉴스')
+    await page.getByRole('button', { name: '기사 검색', exact: true }).click()
+    await page.waitForURL('**/#/articles?q=*')
+    await page.getByText(/“파이낸셜뉴스” 검색 결과/).waitFor()
+    assert.equal(articleSearches.at(-1).q, '파이낸셜뉴스')
+    assert.equal(articleSearches.at(-1).page, '1')
     assert.deepEqual(errors, [])
     assert.deepEqual(unexpected, [])
-    console.log('PASS issue #121: annual KPIs, article layout, subscription links, summaries, report deletion and new chat')
+    console.log('PASS issues #121/#126: beta regressions, multiline chat, IME, immediate title refresh and search page reset')
   } finally {
     await browser?.close()
     await server.close()
