@@ -21,7 +21,7 @@ def period_view(start, end):
             'short': short}
 
 
-KINDS = {'TREND': '월별 추이', 'RANKING': '순위', 'SHARE': '비중', 'PREDICTION': '유망시장 예측', 'LLM_SQL': '사용자 지정 조회'}
+KINDS = {'TREND': '월별 추이', 'MULTI_YEAR': '연도 비교', 'RANKING': '순위', 'SHARE': '비중', 'PREDICTION': '유망시장 예측', 'LLM_SQL': '사용자 지정 조회'}
 SECTION_LABELS = {'KPI': '주요 지표·월별 추이', 'TOP_COUNTRIES': '주요 수출국', 'GROWTH_RISK': '수출 증가·감소 시장',
                   'LOCAL_ISSUES': '현지 이슈'}
 RESULT_ROW_LIMIT = 200   # PDF에 싣는 결과표 행 수. 전체 행은 함께 만드는 XLSX에 있다.

@@ -17,7 +17,7 @@ from backend.app.agents.compose import (ARTICLE_PROMPT, COMPOSE_PROMPT, COMPOSE_
 from backend.app.agents.conditions import check_conditions, recent_article_period
 from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.api.common import LLM_SQL_PERIOD_WARNING, sql_period_unproven   # 생성 SQL 기간 미증명 안내(채팅·리포트 공통)
-from backend.app.agents.planner import both_flow_request, build_plan, planner_input, PLANNER_PROMPT, PLANNER_RETRY_HINT
+from backend.app.agents.planner import both_flow_request, build_plan, continues_trade_balance, planner_input, PLANNER_PROMPT, PLANNER_RETRY_HINT
 from backend.app.agents.result_store import ResultStore, fingerprint, shared_result
 from backend.app.agents.sql import generated_analysis
 from backend.app.agents.state import AgentState, Draft, MAX_TASK_SENTENCES, MAX_TEXT_CHARS, MAX_TEXT_TASK_SENTENCES, Plan, PlannerOutput, Task, TaskConclusion, ToolResult, WriterEdits, is_text_task
@@ -163,6 +163,24 @@ def bounded_ml(work, seconds, queue_seconds=ML_QUEUE_SECONDS, waited=None):
         raise TimeoutError('ML 작업이 제한 시간을 넘었습니다.') from None
 
 
+def balance_question(context):
+    """trade_balance를 정한 답변(조건이 있는 마지막 턴)의 질문. 그 뒤의 용어·대화 질문은 대조하지 않는다."""
+    return next((turn.question for turn in reversed(context.recent) if turn.conditions), '')
+
+
+def balance_targets(context, store=None):
+    """직전 무역수지 답변이 확정한 국가·품목 코드와(store가 있으면) 표시명. 같은 대상 판정(continues_trade_balance)에 쓴다.
+    무역수지 문맥이 아니면 비운다. 평가 실행기(DB 없음)는 코드만 넘긴다."""
+    if not (context.trade_balance and context.conditions):
+        return ()
+    names = ()
+    if store is not None:
+        from backend.app.agents.templates import condition_names
+        countries, products = condition_names(store, [context.conditions])
+        names = (*countries.values(), *products.values())
+    return (*context.conditions.country_codes, *(h.hs_code for h in context.conditions.hs_items), *names)
+
+
 class Services:
     def __init__(self, execution, settings, client=None):
         self.execution = execution
@@ -212,17 +230,30 @@ class Services:
                 break
         return None
 
+    def balance_targets(self,state):
+        """직전 무역수지 답변의 확정 국가·품목(코드·표시명). 무역수지 문맥이 아니면 DB를 읽지 않는다."""
+        context=state.input.context
+        if not (context.trade_balance and context.conditions): return ()
+        with self.read_store() as store: return balance_targets(context,store)
+
     def planner(self,state):
         if state.input.article_action:
             from backend.app.agents.article_actions import action_plan
             state.plan = action_plan(state.input.article_action)
             return
         if base := state.input.year_over_year_base:
-            flows = ('EXPORT', 'IMPORT') if (base == state.input.context.conditions
-                    and state.input.context.both_trade_flows) else (base.trade_flow,)
+            # 직전이 무역수지면 무역수지로 전년과 비교한다(수출 기준 계산이라 방향은 EXPORT 하나).
+            # 확정 범위(confirmed_trade_conditions)는 추가 비교 기간 없이 저장하므로 그 칸을 빼고 직전 조건과 견준다.
+            previous = state.input.context.conditions
+            same = bool(previous) and (base.model_dump(exclude={'extra_compare_periods'})
+                                       == previous.model_dump(exclude={'extra_compare_periods'}))
+            balance = same and state.input.context.trade_balance
+            flows = ('EXPORT', 'IMPORT') if (same and state.input.context.both_trade_flows
+                                             and not balance) else (base.trade_flow,)
             state.plan, _ = build_plan(PlannerOutput(tasks=[
                 {'intent':'STATISTICS', 'question':state.input.question,
-                 'slots':{'trade_flow':flow, 'comparison_requested':True}} for flow in flows]))
+                 'slots':{'trade_flow':flow, 'comparison_requested':True, **({'trade_balance':True} if balance else {})}}
+                for flow in flows]))
             return
         from backend.app.agents.planner import article_retry_plan, explicit_cause_followup, explicit_country_ranking, explicit_out_of_scope, explicit_over_limit
         if retry := article_retry_plan(state):
@@ -232,10 +263,15 @@ class Services:
                   or explicit_cause_followup(state.input.question,state.input.context))
         from backend.app.agents.planner import postprocess, trade_terms
         terms=trade_terms(self.settings)
+        # 같은 대상 판정에 쓰는 직전 무역수지 대상은 플래너 호출 전에 한 번 읽는다. 출력 검증 함수 안에서 읽으면 재시도마다
+        # DB를 읽고, DB 오류가 플래너 출력 실패로 처리된다.
+        question,targets=(balance_question(state.input.context),self.balance_targets(state)) if not explicit else ('',())
         planned=build_plan(explicit) if explicit else self.structured(state,'planner',PLANNER_PROMPT,planner_input(state),PlannerOutput,2000,
             lambda output:build_plan(postprocess(output,state.input.question,terms,
                 previous_both_trade_flows=state.input.context.both_trade_flows,
                 previous_trade_balance=state.input.context.trade_balance,
+                previous_question=question,
+                previous_targets=targets,
                 previous_conditions=state.input.context.conditions)))
         if planned is None:
             reason='질문을 해석하지 못했습니다. 국가·품목·기간을 명시해 다시 입력해 주세요.'
@@ -265,7 +301,8 @@ class Services:
                 def remember_scope(store, job):
                     session = store.owned('chat_session', 'session_id', state.input.session_id, state.input.user_id, lock=True)
                     context = dict(session['context_json'] or {})
-                    scope = primary.conditions.model_dump(mode='json')
+                    # 추가 비교 기간은 결과 meta·digest에만 둔다(이슈 113: context_json 조건 형식은 바꾸지 않는다).
+                    scope = primary.conditions.model_dump(mode='json', exclude={'extra_compare_periods'})
                     if context.get('confirmed_trade_conditions') != scope:
                         context['confirmed_trade_conditions'] = scope
                         sessions = store.t('chat_session')
@@ -451,6 +488,13 @@ class Services:
             return ToolResult(status='NO_DATA',
                 error='수출입 대조와 여러 기간 비교는 월별 금액·기간 합계·차액·증감률로 조회할 수 있습니다. '
                       '순위·비중·중량·단가 등은 별도로 요청해 주세요.')
+        if (generated and task.intent == 'STATISTICS'
+                and continues_trade_balance(state.input.context.trade_balance, state.input.question, [task.slots],
+                                            balance_question(state.input.context), self.balance_targets(state))):
+            # 무역수지를 잇는 후속을 생성 SQL(한 방향)로 답하면 수출액을 무역수지처럼 보인다. 범위를 안내한다(2026-11-17 사용자 결정).
+            return ToolResult(status='NO_DATA',
+                error='무역수지는 월별 금액·기간 합계·차액·증감률로 조회할 수 있습니다. '
+                      '분기·순위 등은 수출과 수입을 나눠 요청해 주세요.')
         if shared:=shared_result(state,task,step): return shared   # 같은 조회는 한 번만 실행한다(D-100)
         def template(timeout):
             with self.read_store() as store:

@@ -622,7 +622,9 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
         if slots.recent_months or not out.period:
             out.period = Period(start=shift_month(bounds[-1], 1-(slots.recent_months or 12)), end=bounds[-1])
         from backend.app.agents.multi_year import requested_years
-        years = requested_years(task.question, base.year_comparison) if task.intent == 'STATISTICS' else None
+        # 무역수지(수출액 − 수입액)는 연도 비교(한 방향 금액)가 아니다. 서버 TREND의 여러 비교 기간으로 답한다.
+        years = (requested_years(task.question, base.year_comparison)
+                 if task.intent == 'STATISTICS' and not slots.trade_balance else None)
         if years and len(out.country_codes) <= 1 and len(out.hs_items) <= 1:
             out.year_comparison = years
             out.period = Period(start=date(years.years[0], 1, 1), end=date(years.years[-1], 12, 1))

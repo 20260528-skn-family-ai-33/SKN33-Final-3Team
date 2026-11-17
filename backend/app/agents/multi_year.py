@@ -106,6 +106,8 @@ def normalize_year_plan(output, question, previous_conditions):
     # Fold it only if the user's words describe a calculation this template can deliver.
     if any(t.source_tasks or t.target_selections for t in tasks):
         return output
+    if any(t.slots.trade_balance for t in tasks):
+        return output   # 무역수지는 한 방향 금액 연도 비교로 묶지 않는다(이슈 113 서버 TREND가 맡는다)
     if any(t.custom_query for t in tasks):
         remainder = _MONTHLY_AVERAGE.sub('', question)
         for name in sorted(products | {n for pair in countries for n in pair if n}, key=len, reverse=True):

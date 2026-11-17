@@ -67,7 +67,7 @@ def preview(store,state,task):
             # 표 종류·순위 기준·기간을 보존해 리포트와 채팅이 같은 열을 표시한다(results.display_columns).
             meta=snapshot['meta']
             copied_meta={k:meta[k] for k in ('kind','group_by','anchor','period','compare_period','extra_compare_periods',
-                                             'trade_balance','period_totals')
+                                             'trade_balance','period_totals','year_comparison')
                          if k in meta}
             if meta['kind']=='LLM_SQL':
                 copied_meta['period_verified'] = meta.get('period_verified') is True

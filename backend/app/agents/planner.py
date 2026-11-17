@@ -381,6 +381,25 @@ def single_flow(question):
     return None if not match else 'EXPORT' if match[1] == '수출' else 'IMPORT'
 
 
+def continues_trade_balance(previous_trade_balance, question, slots=(), previous_question='', previous_targets=()):
+    """직전이 무역수지 통계이고 이번 질문이 방향·지표·대상을 새로 말하지 않는 후속("그럼 2024년은?")인지.
+    국가·품목을 새로 적은 질문("일본 화장품 추이")은 잇지 않는다. 직전 질문의 국가·품목을 다시 적은 질문("그럼 미국
+    2024년은?")은 같은 대상이라 잇는다(2026-11-17 사용자 결정). slots는 그 질문의 플래너 슬롯들이다.
+    계획(연도 비교로 묶지 않기·무역수지 잇기)과 실행(무역수지로 답할 수 없는 생성 SQL 안내)이 함께 쓴다."""
+    # 플래너가 이전 조건의 국가·품목을 칸에 다시 옮겨 적을 수 있다. 그 이름이 이번 질문에 실제로 있고, 직전 무역수지
+    # 답변의 확정 국가·품목(previous_targets: 이름·코드, 이어받은 대상 포함)과 다를 때만 새 대상이다. 확정 이름과 다르게
+    # 적은 표현("화장품" ↔ 기초화장품)은 직전 무역수지 질문 문장에 두 글자 이상으로 있었으면 같은 대상으로 본다.
+    compact, before = ''.join(question.split()), ''.join((previous_question or '').split())
+    known = {''.join(str(t).split()) for t in previous_targets if t}
+    def named(text):
+        name = ''.join((text or '').split())
+        return (bool(name) and name in compact and name not in known
+                and not (len(name) >= 2 and name in before))
+    new_target = any(named(c.mention) for s in slots for c in (s.countries or [])) or any(
+        named(p) for s in slots for p in (s.products or []))
+    return bool(previous_trade_balance) and not re.search(r'수출|수입|무역\s*수지', question) and not new_target
+
+
 def both_flow_request(question):
     """수출·수입을 함께 대조해 달라는 요청인지. "수출과 수입 중 수출 중량만"처럼 한 방향만 달라고 하면 아니다."""
     return bool(BOTH_FLOW_REQUEST.search(question)) and not single_flow(question)
@@ -704,7 +723,8 @@ def _split_combined_amount_tasks(output):
 
 
 def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
-                previous_both_trade_flows=False, previous_trade_balance=False, previous_conditions=None) -> PlannerOutput:
+                previous_both_trade_flows=False, previous_trade_balance=False, previous_conditions=None,
+                previous_question='', previous_targets=()) -> PlannerOutput:
     """LLM 플래너 출력의 코드 안전망. 실행(runtime)과 평가(backend/evals/agent)가 같은 순서로 쓴다."""
     if blocked := explicit_out_of_scope(question):
         return blocked
@@ -712,13 +732,17 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
     output = _normalize_report_requests(output, question)
     output = _normalize_analysis(output, question, previous_conditions)
     from backend.app.agents.multi_year import normalize_year_plan
-    output = normalize_year_plan(output, question, previous_conditions)
+    # 직전 무역수지를 잇는 후속("그럼 2023년부터 2025년까지 비교해줘")은 연도 비교로 묶지 않는다(무역수지는 연도 비교가 아니다).
+    balance_followup = continues_trade_balance(previous_trade_balance, question, [t.slots for t in output.tasks],
+                                               previous_question, previous_targets)
+    if not balance_followup:
+        output = normalize_year_plan(output, question, previous_conditions)
     if len(output.tasks) != 1:
         return _split_combined_amount_tasks(output)
     task = output.tasks[0]
     # 직전이 무역수지 통계이고 이번 질문이 방향·지표를 새로 말하지 않으면("그럼 2024년은?") 무역수지를 잇는다.
     # 원인 분석은 두 방향을 본다(무역수지 변화는 수출·수입 어느 쪽에서도 온다).
-    if previous_trade_balance and not re.search(r'수출|수입|무역\s*수지', question):
+    if balance_followup:
         if task.intent == 'STATISTICS' and not task.custom_query:
             task.slots.trade_balance, task.slots.trade_flow = True, 'EXPORT'
             return output

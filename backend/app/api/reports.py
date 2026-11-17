@@ -59,6 +59,10 @@ def resolve_comparison(conditions, adjustments, *, any_order=False):
     """Validate comparison semantics against the final, month-aligned analysis period.
     any_order: 저장 결과표를 옮기는 리포트. 원본이 이미 조회한 비교 기간이므로 앞뒤 순서를 다시 제한하지 않는다."""
     mode=conditions['compare']; supplied=conditions['compare_period']; p=conditions['period']
+    if any_order and conditions.get('year_comparison') and supplied is None:
+        # 결과표 기반 리포트의 연도 비교(MULTI_YEAR) 결과는 연도들을 결과표에 나란히 둔다. 따로 고를 비교 기간이 없다.
+        # 리포트 요청 화면(API-43)은 이 예외 없이 기존처럼 CUSTOM에 비교 기간을 요구한다.
+        return None
     if mode=='NONE':
         require(supplied is None,'비교 없음에는 비교 기간을 지정할 수 없습니다.')
         return None
@@ -233,7 +237,8 @@ def article_sources(articles):
 
 
 # 승인한 채팅 결과표 종류 → 그 결과로 채우는 리포트 섹션(D-90). 웹·DOCX 문서와 PDF 템플릿이 같은 기준을 쓴다.
-RESULT_SECTIONS={'TREND':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES','PREDICTION':'GROWTH_RISK'}
+RESULT_SECTIONS={'TREND':'KPI','MULTI_YEAR':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES',
+                 'PREDICTION':'GROWTH_RISK'}
 PROMISING_UNAVAILABLE='예측 모델 또는 기준월 스냅샷을 사용할 수 없어 유망시장 예측을 넣지 못했습니다.'
 
 
