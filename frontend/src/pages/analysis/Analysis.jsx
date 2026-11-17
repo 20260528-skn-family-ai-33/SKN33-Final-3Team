@@ -465,7 +465,8 @@ export default function Analysis({ route }) {
     if (id === activeId) return
     clearArticle(); setActiveId(id); setMessages([]); setJob(null); setDraft(null)
   }
-  const removeChat = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') })
+  const [deletingChat, deleteChatOnce] = usePendingAction()
+  const removeChat = () => deleteChatOnce(() => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'DELETE' }); await refreshChats(); setActiveId(null); setMessages([]); setJob(null); setDraft(null); setModal(null); notify('채팅방을 삭제했습니다.') }))
   const updateTitle = () => run(async () => { await api(`/chat/sessions/${activeId}`, { method: 'PATCH', body: { title: rename.trim() } }); await refreshChats(); setModal(null) })
   const clarify = async body => {
     const id=job?.clarification?.clarification_id
@@ -652,13 +653,13 @@ export default function Analysis({ route }) {
           <Btn kind="red" size="md" disabled={!rename.trim()} onClick={updateTitle}>저장</Btn>
         </div>
       </Modal>
-      <Modal open={modal === 'delete'} onClose={() => setModal(null)} width={480} label="채팅방 삭제">
+      <Modal open={modal === 'delete'} onClose={() => { if (!deletingChat) setModal(null) }} width={480} label="채팅방 삭제">
         <span style={{ width: 52, height: 52, borderRadius: 16, background: 'var(--rose)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="trash" size={24} color="#C8102E" /></span>
         <h2 style={{ fontSize: 22, fontWeight: 800, marginTop: 16 }}>‘{active?.title}’ 채팅방을 삭제할까요?</h2>
         <p className="muted" style={{ marginTop: 10, fontSize: 15, lineHeight: 1.7 }}>대화 내용이 삭제됩니다. 이 채팅에서 생성한 리포트는 리포트 센터에 그대로 남습니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
-          <Btn size="md" onClick={() => setModal(null)}>취소</Btn>
-          <Btn kind="red" size="md" onClick={removeChat}>삭제</Btn>
+          <Btn size="md" disabled={deletingChat} onClick={() => setModal(null)}>취소</Btn>
+          <Btn kind="red" size="md" disabled={deletingChat} onClick={removeChat}>{deletingChat ? <Loading inline showLabel label="삭제 중…" /> : '삭제'}</Btn>
         </div>
       </Modal>
     </>

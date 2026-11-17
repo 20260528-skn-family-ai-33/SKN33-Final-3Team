@@ -7,6 +7,7 @@ import { ChatFab } from '../../components/layout'
 import { Donut, Sparkline } from '../../components/charts'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { mapArticle } from '../../api/adapters'
+import { countries } from '../../data/catalog'
 import heroShip from '../../assets/hero-ship.jpg'
 import useDashboard from './useDashboard'
 import useMainView from './useMainView'
@@ -209,14 +210,20 @@ function UnCardSkeleton({ items }) {
     </div>
   )
 }
+// 기사 카드: 분류 1줄·제목 3줄·요약 2줄 높이를 항상 차지한다(넘치면 …). 글 길이와 관계없이 카드 높이가 같아,
+// 자리표시와 실제 카드의 높이도 같다. 잘린 제목·요약은 마우스를 올리면 전체가 보인다.
 const NEWS_CARD_STYLE = { color: '#15181E', display: 'flex', flexDirection: 'column', gap: 10, border: '1px solid #E3E6EA', borderRadius: 14, padding: '18px 18px 20px' }
+const clampLines = (lines, lineHeight) => ({ lineHeight: `${lineHeight}px`, height: lines * lineHeight, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: lines, overflow: 'hidden', overflowWrap: 'break-word' })
+const NEWS_KIND_STYLE = { fontSize: 12, fontWeight: 800, color: '#B0102A', ...clampLines(1, 18) }
+const NEWS_TITLE_STYLE = { fontSize: 16, fontWeight: 800, ...clampLines(3, 23) }
+const NEWS_SUMMARY_STYLE = { fontSize: 13, color: '#5C6370', ...clampLines(2, 21) }
+const lineBones = (style, widths, h) => <span style={{ height: style.height, display: 'flex', flexDirection: 'column', justifyContent: 'space-around' }}>{widths.map((w, i) => <Bone key={i} w={w} h={h} />)}</span>
 function NewsCardSkeleton() {
   return (
     <div aria-hidden="true" style={{ ...NEWS_CARD_STYLE, background: '#fff' }}>
-      <Bone w="55%" h={12} style={{ margin: '3px 0' }} />
-      {/* 실제 카드는 제목 세 줄·요약 두 줄인 경우가 많아 그 높이에 맞춘다. */}
-      <span style={{ display: 'flex', flexDirection: 'column', gap: 7, padding: '4px 0' }}><Bone w="95%" h={16} /><Bone w="90%" h={16} /><Bone w="55%" h={16} /></span>
-      <span style={{ display: 'flex', flexDirection: 'column', gap: 7, padding: '3px 0' }}><Bone w="100%" h={13} /><Bone w="60%" h={13} /></span>
+      {lineBones(NEWS_KIND_STYLE, ['55%'], 12)}
+      {lineBones(NEWS_TITLE_STYLE, ['95%', '90%', '55%'], 15)}
+      {lineBones(NEWS_SUMMARY_STYLE, ['100%', '60%'], 12)}
     </div>
   )
 }
@@ -250,8 +257,10 @@ export default function Dashboard({ route }) {
   const productCount = profile.products.length, countryCount = profile.countries.length
   const guess = (n, max) => interest && n ? Math.min(n, max) : max
   const tableSkeletonRows = { products: guess(productCount, 5), countries: guess(countryCount, 5) }
-  // 관심 국가가 없으면 환율 대신 '정보가 없습니다' 한 줄이 나오므로 한 줄만 둔다.
-  const fxSkeletonRows = interest ? Math.min(Math.max(countryCount, 1), 5) : 5
+  // 환율은 통화별 한 줄이고 서버가 같은 통화를 합친다(독일·프랑스 → EUR 한 줄). 그래서 관심 국가의 통화 종류 수로 어림한다.
+  // 통화가 하나도 없으면 환율 대신 '정보가 없습니다' 한 줄이 나오므로 한 줄만 둔다.
+  const interestCurrencies = new Set(profile.countries.map(name => countries.find(c => c.name === name)?.currency).filter(Boolean)).size
+  const fxSkeletonRows = interest ? Math.min(Math.max(interestCurrencies, 1), 5) : 5
   // 점유율 카드는 국가별 한 장, 카드 안 품목은 관심 품목 수(처음 보이는 3개까지). 관심 품목이 없으면 조회하지 않으므로 자리표시도 없다.
   const unSkeleton = { cards: productCount ? Math.min(countryCount || 3, 3) : 0, items: Math.min(productCount, UN_VISIBLE_ITEMS) }
   const { productTable, countryTable } = data
@@ -514,9 +523,9 @@ export default function Dashboard({ route }) {
               const found = n
               return (
                 <Link key={n.title} to={found ? `/articles?tab=${found.kind}&id=${found.id}` : '/articles'} className="news-card" style={NEWS_CARD_STYLE}>
-                  <span style={{ fontSize: 12, fontWeight: 800, color: '#B0102A' }}>{({ major: '주요 이슈', short: '단신속보', general: '해외시장뉴스' })[n.kind]} <span style={{ fontWeight: 500, color: '#5C6370' }}>· {n.date}</span></span>
-                  <span style={{ fontSize: 16, fontWeight: 800, lineHeight: 1.45 }}>{n.title}</span>
-                  <span style={{ fontSize: 13, lineHeight: 1.6, color: '#5C6370' }}>{cut(n.summary, 50)}</span>
+                  <span style={NEWS_KIND_STYLE}>{({ major: '주요 이슈', short: '단신속보', general: '해외시장뉴스' })[n.kind]} <span style={{ fontWeight: 500, color: '#5C6370' }}>· {n.date}</span></span>
+                  <span title={n.title} style={NEWS_TITLE_STYLE}>{n.title}</span>
+                  <span title={n.summary} style={NEWS_SUMMARY_STYLE}>{cut(n.summary, 50)}</span>
                 </Link>
               )
             })}

@@ -201,7 +201,7 @@ export default function ReportCenter({ route }) {
         <p className="muted" style={{ marginTop: 12 }}>삭제하면 목록에서 사라지며 다시 열람하거나 다운로드할 수 없습니다. 정기 구독 설정은 유지됩니다.</p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 24 }}>
           <Btn disabled={deleting} onClick={() => setDeletingReport(null)}>취소</Btn>
-          <Btn kind="red" disabled={deleting} onClick={removeReport}>{deleting ? '삭제 중…' : '리포트 삭제'}</Btn>
+          <Btn kind="red" disabled={deleting} onClick={removeReport}>{deleting ? <Loading inline showLabel label="삭제 중…" /> : '리포트 삭제'}</Btn>
         </div>
       </Modal>
 
