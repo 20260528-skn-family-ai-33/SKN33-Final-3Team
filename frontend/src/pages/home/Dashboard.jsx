@@ -183,12 +183,12 @@ function RankCardSkeleton() {
 }
 
 export default function Dashboard({ route }) {
-  const { profile } = useApp()
+  const { profile, account } = useApp()
   // 전체↔내 관심 전환 버튼은 머리글(알림 왼쪽)에 있다. 여기서는 현재 보기만 읽는다.
   const { view } = useMainView(route)
   const interest = view === 'interest'
   const [months, setMonths] = useState(3)
-  const market = useDashboard(view, months, profile)
+  const market = useDashboard(view, months, profile, account?.id)
   const un = useUnData(profile)
   const data = { ...market, un: un.items }
   const cards = data.rankCards
@@ -318,7 +318,9 @@ export default function Dashboard({ route }) {
                 <span title={c.name} style={{ fontSize: 18, fontWeight: 800, lineHeight: '24px', height: 48, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', overflowWrap: 'break-word' }}>{c.name}</span>
                 <span style={{ marginTop: 'auto', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 80px', gridTemplateRows: '18px 30px 18px', columnGap: 10, alignItems: 'center' }}>
                   <span style={{ fontSize: 12, lineHeight: '18px', color: '#5C6370' }}>수출액</span>
-                  <span style={{ gridColumn: 2, gridRow: '1 / 4', alignSelf: 'center', display: 'flex', justifyContent: 'flex-end' }}><Sparkline values={c.values} color={c.color} /></span>
+                  <span aria-busy={data.seriesLoading} style={{ gridColumn: 2, gridRow: '1 / 4', alignSelf: 'center', display: 'flex', justifyContent: 'flex-end' }}>
+                    {data.seriesLoading ? <span role="status" aria-label="수출 추이 그래프를 불러오는 중입니다"><Bone w={80} h={38} /></span> : <Sparkline values={c.values} color={c.color} />}
+                  </span>
                   <span title={c.exp} style={{ gridColumn: 1, gridRow: 2, fontSize: 22, lineHeight: '30px', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.exp}</span>
                   <span title={`수입 ${c.imp}`} style={{ gridColumn: 1, gridRow: 3, fontSize: 12, lineHeight: '18px', color: '#5C6370', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>수입 {c.imp}</span>
                 </span>
