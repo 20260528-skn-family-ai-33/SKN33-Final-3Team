@@ -257,6 +257,7 @@ class SessionContext(Model):
     session_id: str
     conditions: Conditions | None = None   # 최근 검색 조건
     both_trade_flows: bool = False  # 같은 검색 조건으로 수출과 수입을 모두 조회했는지
+    trade_balance: bool = False  # 직전 답변이 무역수지(수출액 − 수입액) 통계였는지. 후속 통계는 무역수지, 원인은 두 방향으로 잇는다
     article_retry: ArticleRetry | None = None  # 검증된 답변 이력과 별도로 보관하는 마지막 기사 요청
     recent: list[TurnSummary] = Field(default_factory=list, max_length=HISTORY_TURNS)  # 오래된 것부터
     interest_action: Literal['NONE', 'APPLIED', 'DECLINED', 'CLEARED'] = 'NONE'
@@ -327,6 +328,8 @@ class PlannerSlots(Model):
     trade_flow: Literal['EXPORT', 'IMPORT'] | None = None
     # None은 False와 같다. 기본값 False는 strict 스키마에 "default"로 실려 None으로 둔다(LLM 출력 모델)
     comparison_requested: bool | None = None
+    amount_view: Literal['MONTHLY', 'TOTAL'] | None = None  # 서버의 수출입 금액 템플릿
+    trade_balance: bool | None = None  # 수출액 − 수입액을 요청한 통계
     amount_difference_only: bool | None = None  # 두 기간의 합계·달러 차액만 요청한 통계 질문
     compare_period: Period | None = None
     # 비교 기간이 여럿이면 첫 기간은 compare_period, 나머지는 여기에 요청 순서대로 둔다
@@ -708,10 +711,10 @@ class TaskConclusion(Model):
     sentences: list[Sentence] = Field(min_length=1, max_length=MAX_TEXT_TASK_SENTENCES)
 
     @classmethod
-    def report_completed(cls, task_id: str) -> 'TaskConclusion':
-        """워커가 READY를 확인한 뒤 compose가 사용하는 고정 결론(D-93)."""
+    def report_completed(cls, task_id: str, note: str | None = None) -> 'TaskConclusion':
+        """워커가 READY를 확인한 뒤 compose가 사용하는 고정 결론(D-93). note는 리포트 범위 안내(수입 결과 제외 등)다."""
         return cls(task_id=task_id, sentences=[
-            '요청하신 리포트가 완성되었습니다. 아래에서 확인하거나 다운로드할 수 있습니다.'])
+            '요청하신 리포트가 완성되었습니다. 아래에서 확인하거나 다운로드할 수 있습니다.', *([note] if note else [])])
 
 
 class Draft(Model):
@@ -802,6 +805,44 @@ class RunBudget(Model):
 
     def remaining_seconds(self) -> float:
         return max(0.0, RUN_TIMEOUT_SECONDS - self.charged_seconds)
+
+
+# 리포트는 수출만 지원한다. 수입을 명시하지 않은 리포트에 연결된 수입 원본은 빼고 그 범위를 알린다. 계획(planner._report_sources)·
+# 조건 확인(bindings.report_export_sources)·실패 전파(AgentState.skip_blocked)가 아래 규칙만 쓴다.
+EXPORT_ONLY_REPORT_NOTE = '리포트는 수출 결과로만 만듭니다. 함께 조회한 수입 결과는 리포트에 넣지 않았습니다.'
+
+
+def report_drops_imports(intent, trade_flow) -> bool:
+    """수입 원본을 빼는 리포트인지. 방향 생략과 EXPORT(플래너 기본값 포함)는 같고, 수입 리포트를 명시한 경우만 아니다."""
+    return intent == 'REPORT' and trade_flow != 'IMPORT'
+
+
+def import_source(trade_flow, trade_balance) -> bool:
+    """리포트에서 뺄 수입 원본인지. 무역수지 표(수출 기준 계산)는 수입 원본이 아니다."""
+    return trade_flow == 'IMPORT' and not trade_balance
+
+
+def drop_report_sources(task, step_ids) -> None:
+    """리포트 입력과 의존 경로에서 원본 단계들을 빼고 범위를 알린다. 의존 경로에 남기면 그 누락 사유가 전이된다(D-96)."""
+    task.input_bindings = [b for b in task.input_bindings if b.source_step_id not in step_ids]
+    for step in task.steps:
+        step.depends_on = [d for d in step.depends_on if d not in step_ids]
+    if EXPORT_ONLY_REPORT_NOTE not in task.applied_defaults:
+        task.applied_defaults.append(EXPORT_ONLY_REPORT_NOTE)
+
+
+def _drop_failed_import_sources(task, stopped, owners):
+    """실패한 수입 조회가 남은 수출 원본의 리포트까지 멈추게 하지 않는다(그 원본은 어차피 뺀다)."""
+    if (not report_drops_imports(task.intent, task.slots.trade_flow) or not task.input_bindings
+            or not task.steps or task.steps[0].status != 'PENDING'):
+        return
+    def imported(binding):
+        source = owners.get(binding.source_step_id)
+        return source is not None and import_source(
+            source.conditions.trade_flow if source.conditions else source.slots.trade_flow, source.slots.trade_balance)
+    failed = {b.source_step_id for b in task.input_bindings if b.source_step_id in stopped and imported(b)}
+    if failed and not all(b.source_step_id in failed for b in task.input_bindings):
+        drop_report_sources(task, failed)
 
 
 class AgentState(Model):
@@ -953,8 +994,11 @@ class AgentState(Model):
         단계는 계획 순서상 앞 단계에만 의존하므로 한 번 훑으면 하위 질문 간 전이 의존까지 처리된다."""
         if not self.plan: return []
         stopped = {s.step_id for s in self.plan.steps() if s.status in ('FAILED', 'SKIPPED')}
+        owners = {s.step_id: t for t in self.plan.tasks for s in t.steps}
         skipped = []
-        for s in self.plan.steps():
-            if s.status == 'PENDING' and stopped & set(s.depends_on):
-                s.status = 'SKIPPED'; stopped.add(s.step_id); skipped.append(s.step_id)
+        for task in self.plan.tasks:
+            _drop_failed_import_sources(task, stopped, owners)
+            for s in task.steps:
+                if s.status == 'PENDING' and stopped & set(s.depends_on):
+                    s.status = 'SKIPPED'; stopped.add(s.step_id); skipped.append(s.step_id)
         return skipped

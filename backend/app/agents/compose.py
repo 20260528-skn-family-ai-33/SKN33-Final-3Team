@@ -118,7 +118,7 @@ def _trade_fact(digest):
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 amount = korean_usd(value) if unit == 'USD' else f'{value:,}' + {'%': '%', 'KG': ' kg', 'COUNT': '건'}[unit]
                 return f'결과표 첫 행의 {label} 값은 {amount}입니다.'
-    flow = {'EXPORT': '수출액', 'IMPORT': '수입액'}.get(digest.get('trade_flow'))
+    flow = {'EXPORT': '수출액', 'IMPORT': '수입액', 'BALANCE': '무역수지'}.get(digest.get('trade_flow'))
     if not flow:
         return None
     targets = digest.get('targets') or []
@@ -272,7 +272,8 @@ def period_difference_draft(state):
         return None
     task, = state.plan.tasks
     cond = task.conditions
-    if (task.intent != 'STATISTICS' or not task.slots.amount_difference_only or task.answer_status != 'ANSWERED'
+    if (task.intent != 'STATISTICS' or not task.slots.amount_difference_only or task.slots.trade_balance
+            or task.answer_status != 'ANSWERED'
             or not cond or not cond.period or not cond.compare_period
             or len(cond.country_codes) > 1 or len(cond.hs_items) > 1):
         return None
@@ -308,7 +309,9 @@ def fixed_conclusion(state, task):
     if task.intent in UNSUPPORTED:
         return TaskConclusion(task_id=task.task_id, sentences=[UNSUPPORTED[task.intent]])
     if task.intent == 'REPORT' and task.answer_status in ('ANSWERED', 'PARTIAL'):
-        return TaskConclusion.report_completed(task.task_id)
+        from backend.app.agents.planner import EXPORT_ONLY_REPORT_NOTE
+        return TaskConclusion.report_completed(
+            task.task_id, EXPORT_ONLY_REPORT_NOTE if EXPORT_ONLY_REPORT_NOTE in task.applied_defaults else None)
     if task.answer_status == 'NO_DATA':
         reasons = list(dict.fromkeys(state.results[s.step_id].error for s in task.steps
                        if s.step_id in state.results and state.results[s.step_id].error

@@ -17,7 +17,7 @@ from backend.app.agents.compose import (ARTICLE_PROMPT, COMPOSE_PROMPT, COMPOSE_
 from backend.app.agents.conditions import check_conditions, recent_article_period
 from backend.app.agents.llm import StructuredClient, validation_details
 from backend.app.api.common import LLM_SQL_PERIOD_WARNING, sql_period_unproven   # 생성 SQL 기간 미증명 안내(채팅·리포트 공통)
-from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT, PLANNER_RETRY_HINT
+from backend.app.agents.planner import both_flow_request, build_plan, planner_input, PLANNER_PROMPT, PLANNER_RETRY_HINT
 from backend.app.agents.result_store import ResultStore, fingerprint, shared_result
 from backend.app.agents.sql import generated_analysis
 from backend.app.agents.state import AgentState, Draft, MAX_TASK_SENTENCES, MAX_TEXT_CHARS, MAX_TEXT_TASK_SENTENCES, Plan, PlannerOutput, Task, TaskConclusion, ToolResult, WriterEdits, is_text_task
@@ -218,6 +218,7 @@ class Services:
         planned=build_plan(explicit) if explicit else self.structured(state,'planner',PLANNER_PROMPT,planner_input(state),PlannerOutput,2000,
             lambda output:build_plan(postprocess(output,state.input.question,terms,
                 previous_both_trade_flows=state.input.context.both_trade_flows,
+                previous_trade_balance=state.input.context.trade_balance,
                 previous_conditions=state.input.context.conditions)))
         if planned is None:
             reason='질문을 해석하지 못했습니다. 국가·품목·기간을 명시해 다시 입력해 주세요.'
@@ -409,6 +410,14 @@ class Services:
             state.warnings.extend(warnings)
             return result
         if step.tool!='query_trade_data': return ToolResult(status='NO_DATA',error='요청한 분석 도구가 준비되지 않았습니다.')
+        generated=step.args['template']=='LLM_SQL'
+        if generated and (task.conditions.extra_compare_periods or
+                          # 자료 이름의 '수출입'("수출입 통계에서 … 수출만")·"수출과 수입 중 수출 중량만"은 대조 요청이 아니다.
+                          # 확정한 한 방향 조회는 막지 않고, 실제 표 혼용은 SQL 검증(single_trade_flow)이 막는다.
+                          both_flow_request(task.question)):
+            return ToolResult(status='NO_DATA',
+                error='수출입 대조와 여러 기간 비교는 월별 금액·기간 합계·차액·증감률로 조회할 수 있습니다. '
+                      '순위·비중·중량·단가 등은 별도로 요청해 주세요.')
         if shared:=shared_result(state,task,step): return shared   # 같은 조회는 한 번만 실행한다(D-100)
         def template(timeout):
             with self.read_store() as store:
@@ -421,7 +430,6 @@ class Services:
                     if mysql:
                         try: store.c.rollback()
                         finally: store.c.invalidate()
-        generated=step.args['template']=='LLM_SQL'
         with self.read_store() as store: versions=self.trade_versions(store)
         # Generated queries may depend on articles, FX or reference revisions. A
         # customs release alone is insufficient to authorize their reuse (D-97).
@@ -432,7 +440,8 @@ class Services:
         reserve=budget.finishing_seconds(state,self.settings)
         if generated:
             data=generated_analysis(self.execution.database.engine,self.settings,self.client,self.execution,task,
-                finish_reserve=reserve,latest_month=state.data_meta.trade_latest_month.strftime('%Y-%m'),step=step)
+                finish_reserve=reserve,latest_month=state.data_meta.trade_latest_month.strftime('%Y-%m'),
+                step=step, single_trade_flow=True)
         else:
             data,versions=self.execution.call('sql',budget.seconds(self.settings,'sql'),template,finish_reserve=reserve)
         for reason in data.result.limitations:
@@ -756,12 +765,13 @@ class Services:
             if retry:
                 context['article_retry']=retry.model_dump(mode='json')
             if primary.answer_status in ('PARTIAL','ANSWERED') and primary.conditions:
-                from backend.app.agents.context import both_trade_flows
+                from backend.app.agents.context import both_trade_flows, trade_balance
                 context['conditions']=answer['conditions']
-                if both_trade_flows(state.plan):
-                    context['both_trade_flows']=True
-                else:
-                    context.pop('both_trade_flows',None)
+                for name,flag in (('both_trade_flows',both_trade_flows),('trade_balance',trade_balance)):
+                    if flag(state.plan):
+                        context[name]=True
+                    else:
+                        context.pop(name,None)
                 for decision in primary.resolved.values():
                     if decision.get('interest') in ('APPLIED','GLOBAL'):
                         context['interest_action']='APPLIED' if decision['interest']=='APPLIED' else 'DECLINED'

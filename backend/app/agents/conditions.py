@@ -415,6 +415,10 @@ def _resolve(store, state, task, step, resolve_bindings, confirm_report):
             out = stored_conditions(source[0])
         else:
             if resolve_bindings is None: raise SlotRepair('선행 결과의 대상을 확인할 수 없습니다.')
+            if task.intent == 'REPORT':
+                # 리포트 원본은 저장 결과의 확정 방향으로 고른다(수출 원본이 있으면 수입 원본은 빼고 알린다).
+                from backend.app.agents.bindings import report_export_sources
+                report_export_sources(store, state, task)
             out = resolve_bindings(store, state, task, out)
         if state.pending: return
         out.trade_flow=slots.trade_flow or out.trade_flow

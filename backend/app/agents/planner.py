@@ -4,6 +4,7 @@ from datetime import date
 from backend.app.agents.state import (
     Period, AgentState, Plan, PlannedTask, PlannerOutput, Task, TaskSlots, Step, ResultBinding,
     TargetSelection, NO_STEP_INTENTS, task_count_error, DEFAULT_MARKET_TOP,
+    EXPORT_ONLY_REPORT_NOTE, import_source, report_drops_imports,
 )
 from backend.app.api.common import ApiError
 from backend.app.api.chat_slots import numeric_product_mentioned
@@ -52,7 +53,7 @@ HS2017·HS2022는 판본입니다. 사용자가 판본을 지정하면 해당 �
 질문 속 공통 조건은 관련 하위 질문 각각에 명시하세요. 앞 질문 조건을 암묵적으로 상속하지 마세요.
 월 기간은 YYYY-MM-01 양끝 포함, 연도만 있으면 1월~12월입니다.
 상대 기간은 recent_months로만 쓰고 period는 null입니다. "최근 1년"은 recent_months=12입니다. 기사 기간은 일 단위입니다.
-comparison_requested는 비교 요청에만 true, 요청이 없으면 null입니다.
+comparison_requested는 기간 비교에만 true입니다. 같은 기간의 수출액과 수입액을 대조할 때는 별도 기간을 요청하지 않았다면 null입니다.
 두 기간의 변화율에서 period는 결과 기간, compare_period는 분모인 기준 기간입니다. 사용자가 기준을 지정하면 그 기간을 compare_period로 두세요. 두 기간만 단순 나열하면 어순과 무관하게 앞선 시기를 기준으로 두세요. 서로 다른 연도에 기준 표현과 비교 표현이 함께 걸리면 단순 나열 규칙을 적용하지 마세요.
 이전 비교를 명시적으로 지칭한 경우에만 이전 compare_period를 명시하세요.
 비교 기간이 둘 이상이면 compare_period에 첫 비교 기간, extra_compare_periods에 나머지를 요청 순서대로 각각 씁니다.
@@ -71,6 +72,11 @@ ranking_limit은 금액 순위 또는 유망 품목·국가 조회에서 사용�
 한국의 대중국 수출처럼 상대국이 명시되면 countries에는 중국만 넣으세요.
 share_basis는 한국 교역액을 분모로 하는 상대국별·품목별 비중이면 KOREA_TRADE_PARTNER,
 해외 수입시장의 한국 비중이면 FOREIGN_IMPORT_MARKET, 불명확하면 null입니다.
+수출액·수입액의 월별 추이 또는 기간 합계·차액·증감률만 필요한 STATISTICS는 amount_view=MONTHLY 또는 TOTAL로 두고 custom_query=null로 둡니다.
+무역수지(수출액에서 수입액을 뺀 금액)는 STATISTICS, trade_balance=true로 두고 수출·수입 두 작업으로 나누지 않습니다.
+수출액과 수입액을 각각 보여 달라는 요청은 같은 조건의 수출·수입 STATISTICS로 나눕니다. 다중 기간은 각 작업에 모두 보존합니다.
+수출입을 한 하위 질문에 남기는 경우 trade_flow=null로 둡니다.
+분기·반기·중량·단가·순위·비중 등 별도 계산이 필요한 경우 amount_view와 trade_balance를 설정하지 않습니다.
 custom_query는 월별 추이/국가·HS6 금액 순위/국가별 비중 템플릿으로 답할 수 없을 때만
 필요한 계산을 한국어 한 문장으로 씁니다. 물량·단가·품목별 비중 등이 해당합니다.
 분기별·반기별 합계, 전월·전분기 대비 증감액·증감률처럼 월별 값을 묶거나 서로 빼는 계산도
@@ -333,9 +339,53 @@ def _normalize_report_requests(output: PlannerOutput, question: str) -> PlannerO
     return output.model_copy(update={'tasks': tasks})
 
 
+# 생성 SQL에서 수출·수입을 함께 대조해 달라는 요청. "수출입 통계에서 … 수출만"처럼 자료 이름의 "수출입"은 아니다.
+# 실제 수출·수입 표 혼용은 SQL 검증(single_trade_flow)이 막는다.
+# 무역수지를 빼 달라는 표현("무역수지 말고", "무역수지가 아닌", "무역수지는 필요 없고", "무역수지는 빼고", "무역수지를 제외한").
+# 포함 표현("무역수지 말고도", "무역수지 대신에도")은 아니다.
+# 두 방향을 잇는 말("수출과 수입", "수출이나 수입", "수출 또는 수입", "수출·수입"). 대조 요청·두 방향 판정이 함께 쓴다.
+_FLOW_JOIN = r'(?:과|와|이랑|랑|및|이나|또는|혹은|[,·ㆍ/])'
+_BALANCE_EXCLUDED = (r'\s*(?:는|은|가|이|를|을|도|만)?\s*(?:말고(?!도)|말아|빼(?!어)|제외|없이|대신(?!에도)|아니|아닌'
+                     r'|(?:필요|관심|상관)\s*(?:없|하지\s*않)|안\s*(?:봐|보|궁금|필요|해)|원하지\s*않|궁금하지\s*않)')
+BALANCE_EXCLUSION = re.compile(r'무역\s*수지' + _BALANCE_EXCLUDED)
+# 무역수지를 조회하라는 요청. 제외한 무역수지는 아니다.
+BALANCE_REQUEST = re.compile(r'무역\s*수지(?!' + _BALANCE_EXCLUDED + ')')
+# 한 방향만 달라는 표현("수출만", "수출 중량만", "수출 중량(kg)만", "수출 총 중량만", "수출 중량을 kg 단위로만", "수입액만").
+# 방향 뒤에는 꾸밈말 하나, 지표 낱말, 괄호 단위·조사·단위 구절("kg 단위로", "달러 기준으로")만 둔다.
+# "수입 증가 국가만"(대상 범위)·"만큼"·"300만 달러"·"수출과 수입만"(두 방향)은 아니다.
+_FLOW_METRIC = r'(?:중량|단가|금액|실적|물량|비중|규모|추이|증감률|증가율|감소율|수량|합계|총액|평균|액|량)'
+_METRIC_UNIT = (r'(?:\s*\([^()]{1,12}\))?(?:\s*(?:을|를|은|는|이|가|의))?'
+                r'(?:\s*(?:[A-Za-z%]{1,6}\s*(?:단위|기준)?|[가-힣]{1,3}\s*(?:단위|기준))\s*(?:으로|로)?)?')
+ONE_FLOW_ONLY = re.compile(r'(?<![과와및나,·ㆍ/])(?<![과와및나,·ㆍ/]\s)(수출|수입)(?:액|량)?'
+                           r'(?:\s*(?:(?!수출|수입|과|와|및)[가-힣]{1,3}\s*)??' + _FLOW_METRIC + _METRIC_UNIT + r')?'
+                           r'\s*만(?!큼)')
+BOTH_FLOW_REQUEST = re.compile(
+    r'수출(?:액|량)?\s*' + _FLOW_JOIN + r'\s*수입|수입(?:액|량)?\s*' + _FLOW_JOIN + r'\s*수출'
+    r'|수출입\s*(?:' + _FLOW_METRIC + r')?(?:\s*\([^()]{1,12}\))?\s*(?:을|를|의|은|는|이|가)?\s*'
+    r'(?:비교|대조|차이|격차|각각|모두|함께|동시|따로)'
+    # "수출입 중량"·"수출입액"처럼 수출입 바로 뒤의 지표는 두 방향 값이다("수출입 통계에서"의 자료 이름은 아니다).
+    r'|수출입\s*' + _FLOW_METRIC + r'(?:\s*\([^()]{1,12}\))?(?=[\s을를은는이가의,.?!]|$)|' + BALANCE_REQUEST.pattern
+)
+
+
+# 두 방향 가운데 하나를 고른 표현("수출과 수입 중 2025년 미국 수출 중량을 kg 단위로 보여줘"). '만'이 없어도 한 방향이다.
+# '중'과 방향 사이에는 기간·국가 같은 낱말 세 개까지 둔다.
+_PICKED_FLOW = re.compile(r'(?:수출입|수출|수입)(?:액|량)?\s*(?:중|가운데)(?:에서)?\s*'
+                          r'(?:(?!수출|수입)[^\s,.?!]{1,8}\s+){0,3}(수출|수입)(?!입)')
+
+
+def single_flow(question):
+    """질문이 수출·수입 중 한 방향만 달라고 했으면 그 방향. 계획(postprocess·작업 나누기)과 실행(생성 SQL 차단)이 함께 쓴다."""
+    match = ONE_FLOW_ONLY.search(question) or _PICKED_FLOW.search(question)
+    return None if not match else 'EXPORT' if match[1] == '수출' else 'IMPORT'
+
+
+def both_flow_request(question):
+    """수출·수입을 함께 대조해 달라는 요청인지. "수출과 수입 중 수출 중량만"처럼 한 방향만 달라고 하면 아니다."""
+    return bool(BOTH_FLOW_REQUEST.search(question)) and not single_flow(question)
 _BOTH_TRADE_FLOWS = re.compile(
-    r'수출입|수출(?:액|량)?\s*(?:과|이랑|랑|및|[,·/])\s*수입'
-    r'|수입(?:액|량)?\s*(?:과|이랑|랑|및|[,·/])\s*수출'
+    r'수출입|수출(?:액|량)?\s*' + _FLOW_JOIN + r'\s*수입'
+    r'|수입(?:액|량)?\s*' + _FLOW_JOIN + r'\s*수출'
 )
 HS_EDITION_MENTION = re.compile(r'(?<![A-Za-z0-9])HS\s*(2017|2022)(?![A-Za-z0-9])', re.I)
 HS_CODE_MENTION = re.compile(r'(?<![A-Za-z])HS(?!\s*(?:2017|2022)(?!\d))(?:\s*[46](?!\d))?'
@@ -528,6 +578,16 @@ def _normalize_analysis(output, question, previous_conditions):
                 task.question = f'{task.question} ({label})'
         if task.intent == 'STATISTICS':
             _split_year_comparisons(task.slots, text)
+            if BALANCE_EXCLUSION.search(text) and not BALANCE_REQUEST.search(text):
+                task.slots.trade_balance = None   # 무역수지를 빼 달라고 했으면 플래너가 고른 무역수지도 해제한다.
+            elif not task.custom_query and BALANCE_REQUEST.search(text):
+                task.slots.trade_balance = True
+            if task.slots.trade_balance:
+                # 무역수지는 수출 기준(수출액 − 수입액, 수출 집계 표)으로 조회·저장한다. 직전 수입 조회의 방향을 이어받으면
+                # 리포트 적격성(수출만)이 실제 지표와 달라진다.
+                task.slots.trade_flow = 'EXPORT'
+            if task.slots.trade_balance or task.slots.amount_view or task.slots.amount_difference_only:
+                task.custom_query = None
         if task.intent == 'RANKING' and len(tasks) == 1 and re.search(
                 r'(?:한국|대한민국|우리나라)의?\s*수(?:출|입)(?:액)?\s*상위\s*(?:국가|[0-9]+\s*(?:개국|개\s*국가))', text):
             if all(country.mention.strip() in ('한국', '대한민국', '우리나라')
@@ -566,8 +626,46 @@ def _normalize_analysis(output, question, previous_conditions):
     return output
 
 
+def _keeps_partner_direction(question, countries, selected_flow):
+    # A selected direction in a partner-perspective clause is already interpreted by the planner.
+    return bool(_partner_subject_flow(question, countries) or
+                (selected_flow and any(_partner_matches(question, countries))))
+
+
+def _split_combined_amount_tasks(output):
+    tasks, indexes = [], {}
+    for number, task in enumerate(output.tasks, start=1):
+        group = [task]
+        only = single_flow(task.question)
+        keep_direction = _keeps_partner_direction(task.question, task.slots.countries, only)
+        if (task.intent == 'STATISTICS' and not task.slots.trade_balance and only and not keep_direction
+                and _BOTH_TRADE_FLOWS.search(task.question)):
+            # "수출과 수입 중 수입 중량만": 말한 한 방향으로 정한다(방향 없음을 수출 기본값으로 두지 않고, 플래너가 고른
+            # 반대 방향도 고친다).
+            group = [task.model_copy(update={'slots': task.slots.model_copy(update={'trade_flow': only})})]
+        elif (task.intent == 'STATISTICS' and task.slots.trade_flow is None and not task.custom_query
+                and not task.slots.trade_balance and not keep_direction
+                and _BOTH_TRADE_FLOWS.search(task.question) and not only
+                and not re.search(r'수(?:출|입)(?:액|량)?\s*(?:말고|빼고|제외)', task.question)):
+            group = [task.model_copy(update={'slots': task.slots.model_copy(update={'trade_flow': flow})})
+                     for flow in ('EXPORT', 'IMPORT')]
+        indexes[number] = {}
+        for item in group:
+            flow = item.slots.trade_flow or 'EXPORT'
+            def source(index):
+                matches = indexes[index]
+                return matches.get(flow) or next(iter(matches.values()))
+            tasks.append(item.model_copy(update={
+                'source_tasks': [source(n) for n in item.source_tasks],
+                'target_selections': [selection.model_copy(update={'source_task': source(selection.source_task)})
+                                      for selection in item.target_selections],
+            }))
+            indexes[number][flow] = len(tasks)
+    return output.model_copy(update={'tasks': tasks})
+
+
 def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
-                previous_both_trade_flows=False, previous_conditions=None) -> PlannerOutput:
+                previous_both_trade_flows=False, previous_trade_balance=False, previous_conditions=None) -> PlannerOutput:
     """LLM 플래너 출력의 코드 안전망. 실행(runtime)과 평가(backend/evals/agent)가 같은 순서로 쓴다."""
     if blocked := explicit_out_of_scope(question):
         return blocked
@@ -575,32 +673,39 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
     output = _normalize_report_requests(output, question)
     output = _normalize_analysis(output, question, previous_conditions)
     if len(output.tasks) != 1:
-        return output
+        return _split_combined_amount_tasks(output)
     task = output.tasks[0]
-    if task.intent not in ('STATISTICS', 'RANKING', 'CAUSE') or task.custom_query:
+    # 직전이 무역수지 통계이고 이번 질문이 방향·지표를 새로 말하지 않으면("그럼 2024년은?") 무역수지를 잇는다.
+    # 원인 분석은 두 방향을 본다(무역수지 변화는 수출·수입 어느 쪽에서도 온다).
+    if previous_trade_balance and not re.search(r'수출|수입|무역\s*수지', question):
+        if task.intent == 'STATISTICS' and not task.custom_query:
+            task.slots.trade_balance, task.slots.trade_flow = True, 'EXPORT'
+            return output
+        if task.intent == 'CAUSE':
+            previous_both_trade_flows = True
+            task.slots.trade_flow = None
+    if task.intent not in ('STATISTICS', 'RANKING', 'CAUSE') or task.slots.trade_balance:
         return output
-    # 상대국 주어 질문은 _normalize_analysis가 한국 기준 방향을 정했다. 아래의 수출/수입 낱말 규칙으로 되돌리지 않는다.
-    if _partner_subject_flow(question, task.slots.countries):
+    flow = single_flow(question)
+    if _keeps_partner_direction(question, task.slots.countries, flow):
         return output
-    # 상대국 관점 구절("미국이 한국에서 수입 수출하는 품목 중 수출만")이 있으면 '수출만'·'수입'은 상대국 기준이다.
-    # 낱말 그대로 한국 기준 방향을 정하지 않고 플래너 LLM이 한국 기준으로 바꾼 방향을 둔다.
-    partner_view = any(_partner_matches(question, task.slots.countries))
-    if partner_view and re.search(r'(수출|수입)(?:액|량)?\s*만(?!큼)', question):
+    # 두 방향을 말한 질문에서 한 방향만 골랐으면 그 방향으로 정한다. 자유형 SQL(custom_query)도 같다
+    # (플래너가 반대 방향을 내도 실행 전에 고친다. 실행의 생성 SQL 차단도 같은 single_flow로 판정한다).
+    # 두 방향을 이어 말한 질문("수출과 수입", "수출이나 수입")에만 적용한다. 띄어 쓴 나열("한국과 수입 수출 중 수출만")은
+    # 상대국 기준일 수 있어 플래너 LLM이 한국 기준으로 정한 방향을 둔다.
+    if flow and (previous_both_trade_flows or _BOTH_TRADE_FLOWS.search(question)):
+        task.slots.trade_flow = flow
+        return output
+    if task.custom_query:
         return output
     if re.search(r'수(?:출|입)(?:액|량)?\s*(?:말고|빼고|제외)', question):
         return output
-    if previous_both_trade_flows and not _BOTH_TRADE_FLOWS.search(question) and not partner_view:
+    if previous_both_trade_flows and not _BOTH_TRADE_FLOWS.search(question) and not any(_partner_matches(question, task.slots.countries)):
         explicit_flows = set(re.findall(r'수출|수입', question))
         if not explicit_flows:
             task.slots.trade_flow = None  # 이전 수출 슬롯을 복사한 국가·기간 변경도 두 방향을 유지한다.
         elif len(explicit_flows) == 1:
             task.slots.trade_flow = 'EXPORT' if '수출' in explicit_flows else 'IMPORT'
-    only = re.search(r'(수출|수입)(?:액|량)?\s*만(?!큼)', question)
-    if only and (previous_both_trade_flows or _BOTH_TRADE_FLOWS.search(question)):
-        flow = 'EXPORT' if only[1] == '수출' else 'IMPORT'
-        return output.model_copy(update={'tasks': [
-            task.model_copy(update={'slots': task.slots.model_copy(update={'trade_flow': flow})}),
-        ]})
     # 띄어 쓴 나열("수입 수출")은 '수출 수입국'처럼 다른 낱말일 수 있어 일반 규칙으로는 두 방향으로 보지 않는다.
     # 상대국 주어 허용 모양에서 두 방향이 잡힌 경우("미국이 한국에게 수입 수출하는 항목")만 두 작업으로 나눈다.
     partner = _partner_subject(question, task.slots.countries)
@@ -642,7 +747,8 @@ def explicit_cause_followup(question, context):
     if not re.fullmatch(r'\s*(?:(?:그럼|그러면|그|그런)\s*)?(?:이유|원인)(?:가|은|는|을)?'
                         r'\s*(?:뭐(?:야|예요|에요|죠|지)?|무엇(?:이야|인가요)?|알려\s*(?:줘|주세요))?\s*[.!?？]*', question):
         return None
-    flows = ('EXPORT', 'IMPORT') if context.both_trade_flows else (previous.trade_flow,)
+    # 무역수지의 원인은 수출·수입 양쪽에 있다. 직전이 무역수지면 두 방향 원인을 본다.
+    flows = ('EXPORT', 'IMPORT') if context.both_trade_flows or context.trade_balance else (previous.trade_flow,)
     return PlannerOutput(tasks=[PlannedTask(intent='CAUSE',
         question=f'{label} 변화 원인' if len(flows) == 2 else question,
         slots={'trade_flow': flow, 'comparison_requested': True if previous.compare_period else None,
@@ -662,6 +768,28 @@ def article_retry_plan(state):
     return plan
 
 
+def _report_sources(item, output):
+    """방향 없는 리포트가 쓸 선행 작업 번호와 수입 결과를 뺐는지. 리포트는 수출만 지원하므로, 수출 결과가 있으면 함께 연결한
+    수입 통계는 빼고(두 표를 묶으면 방향이 달라 승인할 수 없다), 연결하지 않았어도 같은 조건의 수입 통계가 있으면 그 범위를 알린다.
+    하위 질문 제목이 달라도 방향을 뺀 조건이 같으면 같은 통계를 나눈 것이다."""
+    numbers = [n for n in item.source_tasks if 0 < n <= len(output.tasks)]
+    # 리포트는 수출만 지원하므로 방향 생략과 EXPORT(플래너가 기본값으로 채운 경우 포함)는 같게 다룬다. 수입 리포트를
+    # 명시한 경우만 그대로 두고 리포트 단계에서 수출만 지원한다고 알린다.
+    if not report_drops_imports(item.intent, item.slots.trade_flow):
+        return item.source_tasks, False
+    def imported(task):
+        return import_source(task.slots.trade_flow, task.slots.trade_balance)
+    exports = [n for n in numbers if output.tasks[n - 1].slots.trade_flow == 'EXPORT'
+               or output.tasks[n - 1].slots.trade_balance]
+    if not exports:
+        return item.source_tasks, False
+    kept = [n for n in item.source_tasks if not (0 < n <= len(output.tasks) and imported(output.tasks[n - 1]))]
+    scopes = {output.tasks[n - 1].slots.model_dump(exclude={'trade_flow'}).__repr__() for n in exports}
+    sibling = any(other.intent == 'STATISTICS' and imported(other)
+                  and other.slots.model_dump(exclude={'trade_flow'}).__repr__() in scopes for other in output.tasks)
+    return kept, len(kept) < len(item.source_tasks) or sibling
+
+
 def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
     error = task_count_error(len(output.tasks))
     if error:
@@ -671,9 +799,10 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
         task_id = f't{index}'
         errors = item.slots.limit_errors()
         bindings = []
+        source_tasks, import_dropped = _report_sources(item, output)
         if not errors and item.intent not in NO_STEP_INTENTS:
             selections = {s.source_task: s for s in item.target_selections}
-            for source_number in item.source_tasks:
+            for source_number in source_tasks:
                 producer = tasks[source_number - 1]
                 step = next((s for s in producer.steps if s.tool in
                              ('query_trade_data', 'query_market_model')), None)
@@ -691,17 +820,29 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
                               custom_query=item.custom_query, answer_status='NO_DATA',
                               applied_defaults=errors))
             continue
+        template_amounts = item.intent == 'STATISTICS' and (
+            item.slots.trade_balance or item.slots.amount_view or item.slots.amount_difference_only)
         task = Task(task_id=task_id, intent=item.intent, question=item.question,
-                    slots=TaskSlots.model_validate(item.slots.model_dump()), custom_query=item.custom_query,
+                    slots=TaskSlots.model_validate(item.slots.model_dump()),
+                    custom_query=None if template_amounts else item.custom_query,
                     input_bindings=bindings, previous_turn_result=bool(item.previous_turn_result))
+        # 수출입을 함께 물은 통계는 수출·수입 두 작업으로 나뉜다. 방향 없는 리포트는 그중 수출 결과로만 만든다(리포트는 수출만
+        # 지원). 수입 결과를 말없이 빼지 않도록 범위를 알린다.
+        if import_dropped:
+            task.applied_defaults.append(EXPORT_ONLY_REPORT_NOTE)
         for name, dependencies in STEPS.get(item.intent, []):
             if name == 'chart' and item.slots.answer_format == 'TEXT':
                 continue   # 문장형 답변은 차트를 만들지 않는다(D-98)
             args = {}
             if name == 'sql':
-                template = 'LLM_SQL' if item.custom_query else {
+                template = 'LLM_SQL' if task.custom_query else {
                     'RANKING': 'RANKING', 'MARKET_SHARE': 'SHARE'}.get(item.intent, 'TREND')
                 args = {'template': template}
+                if template == 'TREND' and item.intent == 'STATISTICS':
+                    if item.slots.amount_view == 'TOTAL' or item.slots.amount_difference_only:
+                        args['period_totals'] = True
+                    if item.slots.trade_balance:
+                        args['trade_balance'] = True
                 if template == 'RANKING':
                     args['top'] = item.slots.ranking_limit or 10
                     # 단순 금액 순위는 개수를 말하지 않아도("대표적으로 수출하는 품목") 코드·명칭·순위·금액만 보인다.
@@ -722,7 +863,7 @@ def build_plan(output: PlannerOutput) -> tuple[Plan, list[str]]:
 def planner_input(state: AgentState) -> dict:
     context = state.input.context
     conditions = context.conditions.model_dump(mode='json') if context.conditions else {}
-    if context.both_trade_flows:
+    if context.both_trade_flows or context.trade_balance:
         conditions.pop('trade_flow', None)
     return {'question': state.input.question,
             'previous_both_trade_flows': context.both_trade_flows,

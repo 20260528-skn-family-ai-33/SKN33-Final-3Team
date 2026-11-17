@@ -552,6 +552,7 @@ class MetricClaim:
     amount_period: str | None = None
     negated_change: bool = False
     comparative_amount: bool = False
+    balance_sign: str | None = None  # 'SURPLUS'(흑자, 양수) / 'DEFICIT'(적자, 음수) / 'BOTH'(둘 다 써서 판정 불가)
 
 
 @dataclass(frozen=True)
@@ -711,18 +712,20 @@ def annual_comparison_roles(text):
 # grammatical subject and baseline even when the years are written in reverse
 # order. The amount is a difference only with that predicate and an explicit
 # annual comparator; a bare amount remains a level.
+# 기간 차액 문법의 측정 대상. 무역수지(수출액 − 수입액)도 기간끼리 비교한다.
+DIFFERENCE_MEASURE = AMOUNT_LABEL + r'|무역\s*수지'
 ANNUAL_AMOUNT_BASE = re.compile(
-    r'\s*(?:연간\s*)?(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')(?:은|는|이|가|을|를)?\s*)?보다(?:도)?'
+    r'\s*(?:연간\s*)?(?:(?:의\s*)?(?:' + DIFFERENCE_MEASURE + r')(?:은|는|이|가|을|를)?\s*)?보다(?:도)?'
 )
 # After entity masking, the subject year can carry the reported amount noun
 # or just its case particle when the amount is already the sentence topic.
 ANNUAL_AMOUNT_SUBJECT = re.compile(
     r'\s*(?:(?:에는|에서|의|에)\s*)?(?:(?:한국|대한민국)의\s*)?(?:(?:전체|연간)\s*)*'
-    r'(?:(?P<measure>' + AMOUNT_LABEL + r'|(?:수출|수입)\s*(?:총액|실적))\s*)?'
+    r'(?:(?P<measure>' + DIFFERENCE_MEASURE + r'|(?:수출|수입)\s*(?:총액|실적))\s*)?'
     r'(?:은|는|이|가)?\s*'
 )
 ANNUAL_COMPARISON_TOPIC_END = re.compile(
-    r'\s*(?:의\s*)?(?:전체\s*)?(?:(?:' + AMOUNT_LABEL + r')\s*)?(?:을|를)?\s*'
+    r'\s*(?:의\s*)?(?:전체\s*)?(?:(?:' + DIFFERENCE_MEASURE + r')\s*)?(?:을|를)?\s*'
     r'비교(?:에서(?:는)?|한?\s*결과|하면|해\s*보면)\s*[,，]?\s*'
 )
 ANNUAL_AMOUNT_PREDICATE = re.compile(
@@ -881,7 +884,7 @@ def _change_predicate(suffix):
     return CHANGE.match(suffix, bound.end() if bound else 0)
 
 
-def metric_claim(text,quantity,*,direct_suffix='',flow=None):
+def metric_claim(text,quantity,*,direct_suffix='',flow=None,direct_prefix=''):
     share=bool(re.search(r'비중|점유율',text));change=bool(re.search(CHANGE_RATE_LABEL,text))
     family='SHARE' if share else 'CHANGE' if change else None
     aggregate='AVERAGE' if '월평균' in text else 'TOTAL' if re.search(r'총액|합계',text) else None
@@ -896,6 +899,9 @@ def metric_claim(text,quantity,*,direct_suffix='',flow=None):
         if re.search(YEAR_AGO,text): comparison='YOY'
         elif re.search(MONTH_AGO,text): comparison='MOM'
     flows={'EXPORT' for _ in re.finditer('수출',text)}|{'IMPORT' for _ in re.finditer('수입',text)}
+    if re.search(r'무역\s*수지', text) and not flows:
+        flows = {'BALANCE'}
+        if quantity.unit == 'USD': family = 'AMOUNT'
     direction=None;direct=False
     after=_change_predicate(direct_suffix) if quantity.unit in ('%','%p','USD') else None
     if after: direction='DOWN' if after['down'] else 'UP';direct=True
@@ -913,8 +919,16 @@ def metric_claim(text,quantity,*,direct_suffix='',flow=None):
         if re.search(label+r'(?:별|\s*(?:중|내|안))?\s*순위',text): rank_axis=axis
     relation, bound_valid = _threshold_relation(direct_suffix)
     valid = not (share and change) and len(flows) < 2 and bound_valid
+    balance_sign = None
+    if flows == {'BALANCE'}:
+        # "300달러 적자"·"흑자 300달러"의 흑자·적자는 금액의 부호다. 수치에 붙은 낱말을 먼저 읽고("적자에서 300달러 흑자로
+        # 전환"은 흑자), 붙은 낱말이 없을 때만 같은 구절의 낱말을 본다(둘 다 있으면 판정하지 않는다).
+        adjacent = (re.match(r'\s*(?:의\s*)?(흑자|적자)', direct_suffix)
+                    or re.search(r'(흑자|적자)\s*(?:폭|규모|액)?\s*(?:은|는|이|가)?\s*$', direct_prefix))
+        words = {adjacent[1]} if adjacent else set(re.findall(r'흑자|적자', text))
+        balance_sign = ('BOTH' if len(words) > 1 else {'흑자': 'SURPLUS', '적자': 'DEFICIT'}[words.pop()]) if words else None
     return MetricClaim(family,aggregate,comparison,next(iter(flows)) if len(flows)==1 else flow,
-                       direction,direct,roles,rank_axis,valid,relation)
+                       direction,direct,roles,rank_axis,valid,relation,balance_sign=balance_sign)
 
 
 def _scope_measure(metric,quantity,prefix,suffix,label,*,shared,multiple):
@@ -1547,7 +1561,8 @@ def parse_sentence(sentence,catalog):
                 if len(before) == 1 and re.search(r'앞서|앞섭|뒤따', syntax[quantity.end:]):
                     bound_targets = catalog.merge(context.targets, frozenset(before))
                     target_scope = 'GROUP' if catalog.grouped(bound_targets) else 'SINGLE'
-            metric=metric_claim(metric_local,quantity,direct_suffix=syntax[quantity.end:right],flow=common_flow)
+            metric=metric_claim(metric_local,quantity,direct_suffix=syntax[quantity.end:right],flow=common_flow,
+                                direct_prefix=syntax[left:quantity.start])
             if not metric.family and context.metric:
                 compatible={'%':{'SHARE','CHANGE','SHARE_CHANGE'},'%p':{'SHARE_CHANGE'},'USD':{'AMOUNT','AMOUNT_CHANGE'}}
                 if context.metric.family in compatible.get(quantity.unit,set()):

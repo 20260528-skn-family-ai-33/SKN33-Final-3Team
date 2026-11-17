@@ -93,6 +93,7 @@ class Runner:
             output, attempts, error = self.parse('planner', PLANNER_PROMPT, planner_input(state), PlannerOutput, 2000,
                 lambda value: postprocess(value, question, trade_terms(self.settings),
                     previous_both_trade_flows=state.input.context.both_trade_flows,
+                    previous_trade_balance=state.input.context.trade_balance,
                     previous_conditions=state.input.context.conditions))
         plan, code = None, None
         if output is not None:

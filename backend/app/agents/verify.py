@@ -146,6 +146,7 @@ def mismatch(claim:Claim,fact:Fact,source):
     if claim.target_scope=='GROUP':
         if not fact.group_members or not fact.group_members<=claim.targets: return 'GROUP_SCOPE'
     elif fact.group_members: return 'INDIVIDUAL_SCOPE'
+    if fact.metric.flow == 'BALANCE' and m.flow != 'BALANCE': return 'TRADE_FLOW'
     if m.flow and fact.metric.flow and m.flow!=fact.metric.flow: return 'TRADE_FLOW'
     if m.family == 'MONTH_STATE':
         if not fact.month or fact.metric.key != 'amount_usd': return 'METRIC'
@@ -204,6 +205,13 @@ def mismatch(claim:Claim,fact:Fact,source):
         else:
             forward = claim.time.subject_year == fact.period[0][:4]
         amount = fact.value if forward else -fact.value
+    if m.balance_sign:
+        # 흑자는 양수, 적자는 음수다. 증감·차액 문장의 흑자·적자("적자 폭 확대")는 부호로 읽을 수 없어 확인하지 않는다.
+        deficit = m.balance_sign == 'DEFICIT'
+        if (m.balance_sign == 'BOTH' or m.family != 'AMOUNT' or m.comparative_amount or m.direction
+                or (q.signed and (value < 0) != deficit) or amount == 0 or (amount < 0) != deficit):
+            return 'SIGN'
+        amount, value = abs(amount), abs(value)
     direction_applies=m.direction and (m.direct_change or fact.metric.family in ('CHANGE','SHARE_CHANGE'))
     if m.direction and q.signed and (value<0)!=(m.direction=='DOWN'): return 'SIGN'
     if direction_applies:
@@ -244,10 +252,16 @@ def _single_series(claim, facts, keep):
     return eligible if len({(f.stored_targets, f.hs_ver) for f in eligible}) == 1 else []
 
 
+def _flow_matches(claim, fact):
+    """무역수지 칸은 무역수지 문장만, 수출·수입 칸은 같은 방향(또는 방향 없는) 문장만 뒷받침한다."""
+    return ((fact.metric.flow != 'BALANCE' or claim.metric.flow == 'BALANCE')
+            and (not claim.metric.flow or not fact.metric.flow or claim.metric.flow == fact.metric.flow))
+
+
 def _monthly_amounts(claim, facts, sources):
     return _single_series(claim, facts, lambda f: (
         isinstance(f.value, Decimal) and not f.group_members
-        and (not claim.metric.flow or not f.metric.flow or claim.metric.flow == f.metric.flow)
+        and _flow_matches(claim, f)
         and _source_supports(claim.time, sources[f.source])
         and (not claim.time.period or claim.time.period[0] <= f.month <= claim.time.period[1])))
 
@@ -426,7 +440,9 @@ def _implied_amount_change(checks, prepared, sentence):
         # 두 금액은 같은 판본이어야 하고, 증감 문장이 판본을 지정하면 그 판본이어야 한다(HS2017 1월과 HS2022 2월을 잇지 않는다).
         same_edition = ((first.hs_ver or 'HS2022') == (last.hs_ver or 'HS2022')
                         and _edition_matches(check.claim, first))
-        if (same_edition and first.stored_targets == last.stored_targets
+        # 두 금액은 같은 지표여야 하고 증감 문장의 지표와도 맞아야 한다(무역수지 증가로 수출 증가를 증명하지 않는다).
+        same_metric = first.metric.flow == last.metric.flow and _flow_matches(check.claim, first)
+        if (same_edition and same_metric and first.stored_targets == last.stored_targets
                 and _direction_holds(metric.direction, first.value, last.value)):
             out[index] = ClaimCheck(check.claim, 'MATCH', (first_cell, last_cell), check.interpretation_valid)
         else:
@@ -659,8 +675,9 @@ def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
     if len(editions) == 1:
         scope['hs_ver'] = next(iter(editions))
     if meta.get('extra_compare_periods'): scope['extra_compare_periods']=meta['extra_compare_periods']
-    if meta.get('kind') == 'TREND':
+    if kind == 'TREND':
         scope['kind'] = 'TREND'
+        if meta.get('trade_balance'): scope['trade_flow'] = 'BALANCE'
     if meta.get('kind')=='LLM_SQL':   # 별칭·월 표시로 기간을 정하지 않는다(compare_key·period_covered)
         scope.update(kind='LLM_SQL', period_verified=meta.get('period_verified') is True)
         scope.update(annual_sql_scope(payload, country_labels=country_labels, product_labels=product_labels))

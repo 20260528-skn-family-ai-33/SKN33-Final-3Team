@@ -217,7 +217,8 @@ def build_facts(sources,catalog:NameCatalog):
                 fact_period=window if logic.startswith('compare_') else cell_period
                 fact_compare=None;fact_month=month;horizon=None;role=None
                 period_value=not month or logic in PERIOD_AMOUNTS or descriptor.comparison=='PERIOD'
-                trend_difference = (key == 'period_difference_usd' and source.get('kind') == 'TREND'
+                trend_difference = (logic in ('period_difference_usd', 'compare_period_difference_usd')
+                                    and source.get('kind') == 'TREND'
                                     and source.get('_verification_source') == 'SNAPSHOT'
                                     and path[:1] == ('rows',) and len(path) == 2)
                 if prediction and logic in ('exp_12m','growth_pct'):
@@ -231,7 +232,7 @@ def build_facts(sources,catalog:NameCatalog):
                     if not fact_month: continue
                     fact_period=(fact_month,fact_month)
                 elif trend_difference:
-                    fact_month, fact_period, fact_compare = None, current, compare
+                    fact_month, fact_period, fact_compare = None, current, window
                 elif month and (descriptor.family=='AMOUNT_CHANGE' or
                                 (unit=='%p' and descriptor.family=='SHARE_CHANGE' and descriptor.comparison=='PERIOD')):
                     fact_period=(month,month)

@@ -78,6 +78,8 @@ def build_chart(store, uid, task, result_id, selection=None):
     warnings = []
     if not rows: return output, [], warnings
     flow = '수입액' if task.conditions.trade_flow=='IMPORT' else '수출액'
+    meta = snapshot['meta']
+    if meta.get('trade_balance'): flow = '무역수지'
     title, unit, granularity = flow, 'USD', None
     if kind=='TREND':
         grouped=defaultdict(list)
@@ -99,13 +101,14 @@ def build_chart(store, uid, task, result_id, selection=None):
                   *((period_name(p),f'compare{n}_') for n,p in enumerate(task.conditions.extra_compare_periods,start=2))]
         unequal=comparison and any(first[0]['requested_months']!=first[0].get(prefix+'requested_months')
                                    for _,prefix in compares)
-        if comparison and (len(selected)>1 or unequal):
-            kindchart='grouped_bar'
+        if meta.get('period_totals') or (comparison and (len(selected)>1 or unequal)):
+            kindchart='grouped_bar' if comparison else 'bar'
             labels=names
             key='monthly_avg_usd' if unequal else 'total_usd'
             metric='월평균' if unequal else '합계'
             series=[{'name':label+' '+metric,'values':[r.get(prefix+key) for r in first]}
-                    for label,prefix in [*compares,(period_name(task.conditions.period) if named else '조회 기간','')]]
+                    for label,prefix in [*(compares if comparison else []),
+                                         (period_name(task.conditions.period) if named else '조회 기간','')]]
             if unequal:
                 warnings.append('기간 길이가 달라 검증된 월의 월평균 금액으로 비교했습니다. '
                                 '실제 기간과 검증 월 수는 표에서 확인하세요.')
