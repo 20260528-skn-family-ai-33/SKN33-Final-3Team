@@ -15,7 +15,7 @@ from backend.app.agents.verify_claims import (
     ARTICLE_CITATION, NameCatalog, Claim, TimeClaim, parse_sentence, period_end_months, quantities, mask_dates, quantity_text,
     change_phrase_end, COMPARISON, DOWN, UP, TOKEN, DATE, HISTORY_DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift, stated_windows,
 )
-from backend.app.agents.verify_articles import article_claim, citation_clauses
+from backend.app.agents.verify_articles import article_claim, causal_antecedent, causal_assertion, citation_clauses
 from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, period
 
 
@@ -891,7 +891,8 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
                for t in state.plan.tasks}
     all_steps = tuple(step for group in by_task.values() for step in group)
     checks=[]
-    text=' '.join([*(x for c in state.draft.conclusion for x in c.sentences),*state.draft.explanation,state.draft.turn_summary])
+    draft_lines = [line for c in state.draft.conclusion for line in c.sentences] + list(state.draft.explanation)
+    text = ' '.join([*draft_lines, state.draft.turn_summary])
     known_names=frozenset(n for n in known_names if n and n in text)
     countries = frozenset(countries)
     # Numeric facts are extracted exactly once per step. Only grounded names
@@ -963,32 +964,52 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
             supported = snapshot_sentences(task, saved)
             monthly_checks[task.task_id] = {line: line in supported for line in rendered}
 
+    owners = [task.task_id for task, conclusion in zip(state.plan.tasks, state.draft.conclusion, strict=True)
+              for _ in conclusion.sentences]
+    article_tasks = {task.task_id for task in state.plan.tasks
+                     if any(step.tool == 'search_articles' for step in task.steps)}
+    article_tasks.update(card.get('task_id') for card in article_map.values())
     index=0
     def inspect(sentence,group,section,task_id=None):
         # Preserve ordinary non-statistical notices (e.g. two cited notices were listed).
         # The article route handles numbers, trade claims and causal statements.
         prose = ARTICLE_CITATION.sub('', sentence)
-        if (articles is not None and ARTICLE_CITATION.search(sentence)
-                and (re.search(r'\d|원인|때문|인과|요인|증가|감소|하락|상승|늘었|줄었', prose)
-                     or parse_sentence(prose, prepare_scope(group).catalog).claims)):
-            cited, trailing = citation_clauses(sentence)
+        cited, trailing = citation_clauses(sentence)
+        in_article_scope = bool(cited or (article_tasks if task_id is None else task_id in article_tasks))
+        causal_tail = in_article_scope and causal_assertion(trailing)
+        if causal_tail or (articles is not None and cited and (
+                re.search(r'\d|원인|때문|인과|요인|증가|감소|하락|상승|늘었|줄었', prose)
+                or causal_assertion(prose) or parse_sentence(prose, prepare_scope(group).catalog).claims)):
             failures = []
-            for passage in cited:
-                verdict, key, _ = article_claim(passage, task_id, article_map)
-                if verdict != 'MATCH' and not (key and key in state.verified_article_claims):
-                    failures.append(verdict)
-                    feedback.append(ClaimFeedback(section=section, task_id=task_id,
-                        index=None if section == 'summary' else index, passage=passage,
-                        reason='ARTICLE_PARAPHRASE' if key else verdict))
-            if trailing:
-                prepared = prepare_scope(group)
-                good, _ = _inspect_prepared(trailing, prepared)
-                if not good:
-                    reason = ('SOURCE_UNAVAILABLE' if any(s.get('_source_unavailable') for s in prepared.sources)
-                              else 'NOT_CONFIRMED')
-                    failures.append(reason)
-                    feedback.append(ClaimFeedback(section=section, task_id=task_id,
-                        index=None if section == 'summary' else index, passage=trailing, reason=reason))
+            continues = index > 0 and (section == 'explanation' or
+                                       (section == 'conclusion' and owners[index - 1] == task_id))
+            previous = draft_lines[index - 1] if continues else ''
+            passages = [(passage, True) for passage in cited]
+            if causal_tail:
+                # A separate SQL statement still needs its own table check.
+                passages.extend((part, causal_assertion(part)) for part in re.split(r'(?<=[.!?。])\s+', trailing))
+            elif trailing:
+                passages.append((trailing, False))
+            for passage, needs_article in passages:
+                if needs_article:
+                    antecedent = causal_antecedent(passage, previous)
+                    verdict, key, _ = article_claim(passage, task_id, article_map, antecedent)
+                    if verdict != 'MATCH' and not (key and key in state.verified_article_claims):
+                        reason = verdict or 'NOT_CONFIRMED'
+                        failures.append(reason)
+                        feedback.append(ClaimFeedback(section=section, task_id=task_id,
+                            index=None if section == 'summary' else index, passage=passage, article_antecedent=antecedent,
+                            reason='ARTICLE_PARAPHRASE' if key else reason))
+                else:
+                    prepared = prepare_scope(group)
+                    good, _ = _inspect_prepared(passage, prepared)
+                    if not good:
+                        reason = ('SOURCE_UNAVAILABLE' if any(s.get('_source_unavailable') for s in prepared.sources)
+                                  else 'NOT_CONFIRMED')
+                        failures.append(reason)
+                        feedback.append(ClaimFeedback(section=section, task_id=task_id,
+                            index=None if section == 'summary' else index, passage=passage, reason=reason))
+                previous = passage
             if section == 'summary':
                 return not failures
             reason = 'SOURCE_UNAVAILABLE' if 'SOURCE_UNAVAILABLE' in failures else 'NOT_CONFIRMED'

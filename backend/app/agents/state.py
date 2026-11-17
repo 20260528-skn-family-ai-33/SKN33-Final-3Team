@@ -766,6 +766,7 @@ class ClaimFeedback(Model):
     task_id: str | None = None
     index: int | None = None
     passage: str
+    article_antecedent: str | None = None  # 지시어의 뜻을 묶어 같은 기사 근거로 재검증한다.
     reason: str
     step_id: str | None = None
     cell: tuple[str, ...] | None = None

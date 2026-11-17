@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 from backend.app.agents.compose import expand_article_selections, validate_citations
 from backend.app.agents.state import ArticleReview, Draft, ToolResult
-from backend.app.agents.verify import verify
+from backend.app.agents.verify import snapshot_evidence, verify
 from backend.app.agents.verify_articles import review_article_claims
 from backend.tests import test_agent_compose
 
@@ -30,7 +30,7 @@ class ArticleVerificationTest(unittest.TestCase):
             {'task_id': 't1', 'sentences': ['분석 결과입니다.' if explanation else line]},
             {'task_id': 't2', 'sentences': ['분석 결과입니다.']}],
             explanation=[line] if explanation else [], turn_summary='')
-        verify(self.state, articles=self.cards if cards is None else cards)
+        verify(self.state, articles=self.cards if cards is None else cards, snapshots=getattr(self, 'snapshots', None))
         return next(c for c in self.state.verification.checks if c.index == (2 if explanation else 0))
 
     def test_exact_reviewed_fact_with_attribution_and_register(self):
@@ -94,6 +94,68 @@ class ArticleVerificationTest(unittest.TestCase):
         self.assertEqual(self.check(line, explanation=True).status, 'PASS')
         self.assertEqual(self.check(line + ' 한국의 수출액은 999달러입니다.', explanation=True).status, 'MISMATCH')
         self.assertEqual(self.check('[1] ' + self.fact).status, 'PASS')
+
+    def test_confirmed_trade_decline_does_not_prove_its_cause(self):
+        self.state.results[self.step.step_id].digest = {
+            'kind': 'TREND', 'period': {'start': '2025-01-01', 'end': '2025-12-31'},
+            'trade_flow': 'EXPORT', 'rows': [
+                {'month': '2025-01', 'amount_usd': 120}, {'month': '2025-12', 'amount_usd': 80}]}
+        trade = self.state.results[self.step.step_id].digest
+        self.snapshots = {self.step.step_id: snapshot_evidence({'rows': trade['rows'],
+            'conditions': {'period': trade['period'], 'trade_flow': 'EXPORT', 'country_codes': ['CN']},
+            'meta': {'kind': 'TREND'}})}
+        self.assertEqual(self.check('2025년 12월 수출액은 80달러입니다.').status, 'PASS')
+        fact = self.fact + ' [1]'
+        claim = '이는 2025년 한국의 대중국 화장품 수출 감소의 원인입니다.'
+        limitation = '이 기사만으로는 2025년 한국 수출 변화의 원인을 확인할 수 없습니다.'
+        for tail in (claim, '그 결과 한국의 수출이 줄었습니다.', '이것이 수출 감소를 초래했습니다.',
+                     '이것이 수출 감소의 원인이라고 볼 수 있습니다.'):
+            with self.subTest(tail=tail):
+                self.assertEqual(self.check(fact + ' ' + tail).status, 'MISMATCH')
+                self.assertEqual([f.passage for f in self.state.verification.feedback], [tail])
+        self.assertEqual(self.check(fact + ' ' + limitation).status, 'PASS')
+        self.check(fact + ' ' + claim)
+        verify(self.state, snapshots=self.snapshots)
+        self.assertEqual(self.state.verification.checks[0].status, 'MISMATCH')
+        self.assertEqual(self.check(fact + ' ' + limitation + ' ' + claim).status, 'MISMATCH')
+        # Conclusion, shared explanation and private turn summary are distinct draft fields.
+        self.state.draft = Draft(conclusion=[{'task_id':'t1', 'sentences':[fact]},
+                {'task_id':'t2', 'sentences':['자료를 조회했습니다.']}],
+            explanation=[claim], turn_summary=claim)
+        verify(self.state, articles=self.cards)
+        checks = self.state.verification.checks
+        self.assertEqual((checks[0].status, checks[-1].status), ('PASS', 'MISMATCH'))
+        self.assertEqual(self.state.verification.summary_status, 'MISMATCH')
+        self.assertEqual(self.state.draft.conclusion[0].sentences, [fact])
+        self.assertEqual(self.state.draft.turn_summary, '')
+
+    def test_causal_review_requires_the_relation_not_just_a_matching_date(self):
+        cause = '중국의 화장품 소비 위축은 2025년 한국의 대중국 화장품 수출 감소의 원인입니다.'
+        direct = self.card('t1', cause)
+        direct.update(evidence_role='direct_evidence')
+        direct['sentences'][0]['unverified_question_parts'] = []
+        self.assertEqual(self.check(cause + ' [1]', cards=[direct]).status, 'PASS')
+        self.assertEqual(self.check(cause + ' [1]').status, 'MISMATCH')
+        # 2025 only occurs in the card's list of questions it cannot answer.
+        self.assertNotIn('ARTICLE_PARAPHRASE', [f.reason for f in self.state.verification.feedback])
+
+    def test_referential_claim_review_is_bound_to_its_antecedent(self):
+        cards = [self.card('t1', '중국 시장의 수요 감소가 한국 수출 감소의 원인입니다.')]
+        claim = '이는 한국 수출 감소의 원인입니다.'
+        previous = '중국 시장의 수요가 감소했습니다. [1]'
+        cards[0]['sentences'].append({'text': previous.split(' [')[0], 'quotes': [previous.split(' [')[0]]})
+        line = previous + ' ' + claim
+        self.assertEqual(self.check(line, cards=cards).status, 'MISMATCH')
+        def adjudicate(state, node, prompt, payload, schema, tokens, validate, **kwargs):
+            req, = payload['claims']
+            self.assertEqual((req['antecedent'], req['claim']), (previous, claim))
+            self.assertEqual(set(req['sources']), {'1'})
+            return validate(schema(claims=[{'index': 0, 'supported': True}]))
+        services = Mock()
+        services.structured.side_effect = adjudicate
+        review_article_claims(services, self.state, cards, 'compose')
+        self.assertEqual(self.check(line, cards=cards).status, 'PASS')
+        self.assertEqual(self.check(line.replace('수요가', '수입이'), cards=cards).status, 'MISMATCH')
 
     def test_paraphrase_requires_scoped_review_bound_to_unchanged_content(self):
         line = '기사는 2024년 중국의 화장품 매출이 전년 대비 3% 감소했다고 설명합니다.[1]'
