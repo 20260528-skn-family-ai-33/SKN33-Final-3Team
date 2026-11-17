@@ -4,8 +4,9 @@ import unicodedata
 from backend.app.api.common import require, unavailable, page_info
 
 
-def hs_search(store,q,depth=4,limit=5):
-    return _search_depth(store,q,depth,limit,for_picker=True)
+def hs_search(store,q,depth=4,limit=5,hs_ver='HS2022'):
+    require(hs_ver in ('HS2022','HS2017'),'hs_ver는 HS2022 또는 HS2017이어야 합니다.')
+    return _search_depth(store,q,depth,limit,for_picker=True,hs_ver=hs_ver)
 
 
 def chat_hs_search(store,q):
@@ -28,7 +29,7 @@ def _search_depth(store,q,depth,limit,*,for_picker=False,hs_ver='HS2022'):
     require(len(q)<=120 and depth in (4,6) and 1<=limit<=5,'검색어 120자 이하·HS4/HS6·최대 5개 조건을 확인하세요.')
     minimum = 1 if for_picker else 2
     if len(q)<minimum:
-        return {'items':[],'match_type':'NONE','confidence':'LOW','message':f'{minimum}글자 이상 입력하세요.',**browse_hint()}
+        return {'items':[],'match_type':'NONE','confidence':'LOW','message':f'{minimum}글자 이상 입력하세요.',**browse_hint(hs_ver)}
     from backend.app.api.config import Settings
     settings=getattr(store.db,'settings',None) or Settings()
     key=(q,depth,limit,for_picker,hs_ver,*(settings.get(k) for k in ('API_HS_VECTOR_ENABLED','API_HS_CHROMA_PATH',
@@ -37,9 +38,10 @@ def _search_depth(store,q,depth,limit,*,for_picker=False,hs_ver='HS2022'):
         cache_if=lambda result:not result.get('warnings'))
 
 
-def browse_hint():
+def browse_hint(hs_ver='HS2022'):
+    # 탐색 링크는 검색에 적용한 판본의 분류를 연다(HS2017 검색이 HS2022 분류로 이어지지 않게).
     return {'requires_selection':True,'browse':{'label':'분류에서 직접 선택',
-        'url':'/api/v1/reference/hs-codes/ROOT/children?hs_ver=HS2022','levels':[2,4,6]}}
+        'url':f'/api/v1/reference/hs-codes/ROOT/children?hs_ver={hs_ver}','levels':[2,4,6]}}
 
 
 def _hs_search(store,q,limit,settings,depth,for_picker,hs_ver):
@@ -59,32 +61,32 @@ def _hs_search(store,q,limit,settings,depth,for_picker,hs_ver):
     if for_picker and depth == 6 and not q.isdigit():
         detail=t.alias('hs10')
         parents=select(func.substr(detail.c.hs_code,1,6)).where(
-            detail.c.hs_ver=='HS2022',detail.c.depth==10,detail.c.name_ko==q)
+            detail.c.hs_ver==hs_ver,detail.c.depth==10,detail.c.name_ko==q)
         exact=or_(exact,t.c.hs_code.in_(parents))
     rows=store.rows(base.where(exact).order_by(t.c.hs_code).limit(limit))
-    if rows: return {'items':rows,'match_type':'EXACT','confidence':'EXACT',**browse_hint()}
+    if rows: return {'items':rows,'match_type':'EXACT','confidence':'EXACT',**browse_hint(hs_ver)}
     if for_picker:
         rows=store.rows(base.where(match).order_by(t.c.hs_code).limit(limit))
         # A picker only recommends registered matches; it never auto-confirms them.
         # Numeric prefixes have no semantic embedding interpretation.
         if rows or (q.isascii() and q.isdigit()):
             return {'items':rows,'match_type':'SIMILAR' if rows else 'NONE','confidence':'LOW',
-                'message':'등록된 품목명·코드 검색 결과입니다. 분류와 세부품목을 확인해 선택하세요.',**browse_hint()}
+                'message':'등록된 품목명·코드 검색 결과입니다. 분류와 세부품목을 확인해 선택하세요.',**browse_hint(hs_ver)}
         if depth == 4:
             # HS4 이름에는 일상어가 드물다(예: "메모리"는 HS6 854232에만 있고 HS4 8542는 "전자집적회로").
             # 하위 HS6·HS10 이름에 있는 말이면 그 부모 HS4를 후보로 낸다. 자동 확정하지 않는다.
             child=t.alias('child')
-            parents=select(func.substr(child.c.hs_code,1,4)).where(child.c.hs_ver=='HS2022',child.c.depth.in_((6,10)),
+            parents=select(func.substr(child.c.hs_code,1,4)).where(child.c.hs_ver==hs_ver,child.c.depth.in_((6,10)),
                 or_(child.c.name_ko.contains(q,autoescape=True),child.c.original_name_ko.contains(q,autoescape=True)))
             rows=store.rows(base.where(t.c.hs_code.in_(parents)).order_by(t.c.hs_code).limit(limit))
             if rows:
                 return {'items':rows,'match_type':'SIMILAR','confidence':'LOW',
-                    'message':'세부 품목명에서 찾은 분류입니다. 분류를 열어 세부품목을 확인해 선택하세요.',**browse_hint()}
+                    'message':'세부 품목명에서 찾은 분류입니다. 분류를 열어 세부품목을 확인해 선택하세요.',**browse_hint(hs_ver)}
         # B-14 admits complete one-character names such as 말/소. For every
         # picker query, unmatched text (e.g. 화자) must not suggest 화장품 via
         # embeddings or typo correction. Chat semantic search remains below.
         return {'items':[],'match_type':'NONE','confidence':'LOW',
-            'message':'등록된 품목명·코드가 없습니다. 검색어를 확인하거나 분류에서 직접 선택하세요.',**browse_hint()}
+            'message':'등록된 품목명·코드가 없습니다. 검색어를 확인하거나 분류에서 직접 선택하세요.',**browse_hint(hs_ver)}
     from backend.app.api.hs_vectors import candidates
     ranked=[]; warnings=[]
     if hs_ver=='HS2022' and settings.get('API_HS_VECTOR_ENABLED','true').lower()=='true':
@@ -113,14 +115,15 @@ def _hs_search(store,q,limit,settings,depth,for_picker,hs_ver):
     confident=best is not None and margin is not None and best<=float(settings.get('API_HS_CONFIDENT_DISTANCE',0.45)) and margin>=float(settings.get('API_HS_MIN_MARGIN',0.08))
     result={'items':rows[:limit],'match_type':'SIMILAR' if rows else 'NONE',
         'confidence':'MEDIUM' if confident and rows else 'LOW',
-        'message':'비슷한 후보입니다. 품목 설명을 확인하거나 분류에서 직접 선택하세요.',**browse_hint()}
+        'message':'비슷한 후보입니다. 품목 설명을 확인하거나 분류에서 직접 선택하세요.',**browse_hint(hs_ver)}
     if warnings: result['warnings']=warnings
     return result
 
 
 def children(store,code,version):
-    require(version=='HS2022' and (code=='ROOT' or (len(code) in (2,4) and code.isascii() and code.isdigit())),
-            'ROOT 또는 HS2/HS4와 HS2022가 필요합니다.')
+    # HS2017은 그 판본을 되묻는 채팅 품목 선택(조회 전용)에서 분류를 탐색할 때 쓴다.
+    require(version in ('HS2022','HS2017') and (code=='ROOT' or (len(code) in (2,4) and code.isascii() and code.isdigit())),
+            'ROOT 또는 HS2/HS4와 HS2022·HS2017 중 하나가 필요합니다.')
     t=store.t('hs_code')
     if code=='ROOT':
         return {'items':store.rows(select(t.c.hs_code,t.c.hs_ver,t.c.name_ko,t.c.depth)

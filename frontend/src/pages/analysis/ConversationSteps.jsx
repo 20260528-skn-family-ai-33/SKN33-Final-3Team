@@ -40,7 +40,8 @@ export function PromptActions({prompt,busy,reply,onDirectInput}) {
   const [countries,setCountries]=useState([])
   const [products,setProducts]=useState([])
   const toggle=(list,value)=>list.includes(value)?list.filter(v=>v!==value):[...list,value]
-  const selectHs=code=>!busy && reply({hs_item:{hs_code:code,hs_ver:'HS2022'}})
+  const hsVer=prompt.hs_ver==='HS2017'?'HS2017':'HS2022'
+  const selectHs=code=>!busy && reply({hs_item:{hs_code:code,hs_ver:hsVer}})
   const preview=prompt.report_preview
   return <div className="chat-step"><strong>{prompt.message}</strong>
     {prompt.choices?.length>0 && <div className="chips">{prompt.choices.map(c=>{
@@ -48,12 +49,11 @@ export function PromptActions({prompt,busy,reply,onDirectInput}) {
       return <Btn key={c.choice_id} disabled={busy} onClick={()=>reply({choice_ids:[c.choice_id]})}>{productChoiceLabel(code,c.label)}</Btn>
     })}</div>}
     {prompt.kind==='COUNTRY' && <div><Btn disabled={busy} onClick={onDirectInput}>목록에 없는 국가 직접 입력</Btn><p className="note">전체 국가명 또는 국가 코드로 입력하세요. 예: 중국, CN</p></div>}
-    {prompt.kind==='HS_ITEM' && (prompt.hs_ver==='HS2017' ?
-      <p className="note">등록된 HS2017의 4자리 또는 6자리 코드를 입력할 수 있습니다.</p> : <>
-    <p className="note">품목명이나 HS 코드로 검색하세요. 4자리 코드는 HS4 전체, 6자리 코드는 세부품목으로 선택할 수 있습니다.</p>
-    <Hs4Search hs6First group={group} onConfirm={setGroup} onSelectProduct={selectHs}
+    {prompt.kind==='HS_ITEM' && <>
+    <p className="note">{hsVer==='HS2017' ? '등록된 HS2017 품목명이나 코드로 검색하세요. ' : '품목명이나 HS 코드로 검색하세요. '}4자리 코드는 HS4 전체, 6자리 코드는 세부품목으로 선택할 수 있습니다.</p>
+    <Hs4Search hs6First hsVer={hsVer} group={group} onConfirm={setGroup} onSelectProduct={selectHs}
       buttonLabel={()=>'이 HS4 전체로 분석'} onSelectAll={selected=>selected && selectHs(selected.code)}/>
-    <div className="chips">{group?.items.map(([code,name])=><Btn key={code} disabled={busy} onClick={()=>selectHs(code)}>{productChoiceLabel(code,name)}</Btn>)}</div></>)}
+    <div className="chips">{group?.items.map(([code,name])=><Btn key={code} disabled={busy} onClick={()=>selectHs(code)}>{productChoiceLabel(code,name)}</Btn>)}</div></>}
     {prompt.kind==='INTEREST_SELECT' && <><p>국가 {countries.length}/20 · 품목 {products.length}/5</p><div className="chips">
       {prompt.interests?.country_codes?.map(c=><Btn key={c} aria-pressed={countries.includes(c)} kind={countries.includes(c)?'plum':'line'} disabled={busy||(!countries.includes(c)&&countries.length>=20)} onClick={()=>setCountries(toggle(countries,c))}>{countryName(c)}</Btn>)}
       {prompt.interests?.hs_items?.map(h=><Btn key={h.hs_ver+h.hs_code} aria-pressed={products.includes(h)} kind={products.includes(h)?'plum':'line'} disabled={busy||(!products.includes(h)&&products.length>=5)} onClick={()=>setProducts(toggle(products,h))}>{productChoiceLabel(h.hs_code,h.name_ko)}</Btn>)}</div>
