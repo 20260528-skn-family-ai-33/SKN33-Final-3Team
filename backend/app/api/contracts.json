@@ -390,10 +390,17 @@
       ],
       [
         "Query Parameters",
+        "hs_codes",
+        "string[]",
+        "선택",
+        "다중 품목 HS4·HS6 코드. 반복 파라미터, 최대 200개. hs_code와 동시 지정 불가. hs_ver=HS2022 필수. 겹치는 범위는 중복 집계하지 않음."
+      ],
+      [
+        "Query Parameters",
         "hs_ver",
         "string",
         "조건부",
-        "hs_code 사용 시 필수."
+        "hs_code 또는 hs_codes 사용 시 필수."
       ],
       [
         "Query Parameters",
@@ -454,10 +461,17 @@
       ],
       [
         "Query Parameters",
+        "hs_codes",
+        "string[]",
+        "선택",
+        "다중 품목 HS4·HS6 코드. 반복 파라미터, 최대 200개. hs_code와 동시 지정 불가. hs_ver=HS2022 필수. 겹치는 범위는 중복 집계하지 않음."
+      ],
+      [
+        "Query Parameters",
         "hs_ver",
         "string",
         "조건부",
-        "hs_code 사용 시 필수."
+        "hs_code 또는 hs_codes 사용 시 필수."
       ],
       [
         "Query Parameters",
