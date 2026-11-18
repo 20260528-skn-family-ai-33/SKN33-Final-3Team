@@ -243,7 +243,9 @@ function CountrySearch({ value, replaceDefault, onChange }) {
   const label = all ? `전체 국가 (${value.length}개)` : countryListLabel(names) || '전체 국가'
   const [text, setText] = useState(null)
   const typing = text !== null
-  const shown = typing ? options.filter(([v, l]) => !v || l.includes(text.trim())) : options
+  // 검색 중에는 일치하는 항목만 보여 준다. 전체 국가가 첫 항목으로 남으면
+  // 방향키/마우스로 활성화된 전체 국가를 Enter가 선택할 수 있다.
+  const shown = typing ? options.filter(([, l]) => l.includes(text.trim())) : options
   const matches = typing ? options.filter(([, l]) => text.trim() && l.includes(text.trim())) : []
   // 방향키로 고르는 중인 선택지(-1이면 없음). 입력이 바뀌면 처음부터 다시 고른다.
   const [active, setActive] = useState(-1)
@@ -263,20 +265,20 @@ function CountrySearch({ value, replaceDefault, onChange }) {
       setActive(i => e.key === 'ArrowDown' ? Math.min(i + 1, shown.length - 1) : Math.max(i - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      if (active >= 0 && shown[active]) pick(shown[active][0])
+      if (typing && active >= 0 && shown[active]) pick(shown[active][0])
       else if (matches.length) pick(matches[0][0])
       else setText(null)
     } else if (e.key === 'Escape') { setText(null); setActive(-1) }
   }
   return (
     // 포커스가 검색칸과 목록을 모두 벗어났을 때만 목록을 닫는다(Tab으로 선택지에 들어가도 열린 채 유지).
-    <div style={{ flex: 1, position: 'relative', minWidth: 0 }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setText(null) }}>
+    <div style={{ flex: 1, position: 'relative', minWidth: 0 }} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) { setText(null); setActive(-1) } }}>
       <div className={'input val' + (typing ? ' focus' : '')} style={{ gap: 8 }}>
         <span className="select-prefix">국가</span>
         <input value={typing ? text : label} title={!typing && label !== fullLabel ? fullLabel : undefined} aria-label="국가" placeholder="국가명 입력"
           role="combobox" aria-expanded={typing} aria-controls="country-listbox" aria-autocomplete="list"
           aria-activedescendant={typing && active >= 0 ? `country-option-${active}` : undefined}
-          onFocus={() => setText('')} onClick={() => !typing && setText('')}
+          onFocus={() => { setText(''); setActive(-1) }} onClick={() => { if (!typing) { setText(''); setActive(-1) } }}
           onChange={e => { setText(e.target.value); setActive(-1) }}
           onKeyDown={onKeyDown} />
         <Icon name="search" size={16} color="#9AA0AA" />
