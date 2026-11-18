@@ -99,14 +99,20 @@ async function until(check) {
     console.log('PASS 3/6/12 return visits issue zero trade requests; 12-month table and card share one ranking')
 
     const regions = page.locator('.zone-overview, .zone-exports, .zone-tables')
-    const unchanged = await regions.allTextContents()
+    // Compare the data independently of the small refresh status announcement.
+    const regionData = () => regions.evaluateAll(nodes => nodes.map(node => {
+      const copy = node.cloneNode(true)
+      copy.querySelectorAll('[role="status"]').forEach(status => status.remove())
+      return copy.textContent
+    }))
+    const unchanged = await regionData()
     for (const mode of ['503', '429', 'network']) {
       availabilityMode = mode
       const beforePoll = availabilityCalls
       await page.clock.fastForward(60100)
       await until(() => availabilityCalls > beforePoll)
       await delay(100)
-      assert.deepEqual(await regions.allTextContents(), unchanged)
+      assert.deepEqual(await regionData(), unchanged)
       assert.equal(await regions.locator('[role="alert"]').count(), 0)
       assert.equal(tradeCount(), before, 'A failed version poll must not discard trade caches')
     }
@@ -122,9 +128,10 @@ async function until(check) {
     await page.clock.fastForward(300100)
     await until(() => pendingTrade.length >= 4)
     await delay(100)
-    assert.deepEqual(await regions.allTextContents(), unchanged)
+    assert.deepEqual(await regionData(), unchanged)
     assert.equal(await regions.locator('.skel').count(), 0)
-    assert.equal(await regions.locator('[aria-busy="true"]').count(), 0)
+    await section.getByRole('status').filter({ hasText: '수출 상위 품목 정보를 갱신 중입니다.' }).waitFor()
+    assert.ok(await regions.locator('[aria-busy="true"]').count() > 0)
     holdTrade = false; amountMultiplier = 2
     pendingTrade.splice(0).forEach(resolve => resolve())
     await cards.first().locator('[title="6"]').waitFor()
@@ -196,6 +203,7 @@ async function until(check) {
     await ready(12)
     assert.equal(await tableError.count(), 0)
     assert.equal(annualCalls(), beforeSharedRetry + 2)
+    await section.getByRole('status').filter({ hasText: '수출 상위 품목 정보를 갱신 중입니다.' }).waitFor({ state: 'hidden' })
     console.log('PASS retrying a shared ranking clears errors in both the cards and table')
 
     // A failed background refresh keeps the same-condition data and exposes retry.
@@ -210,11 +218,18 @@ async function until(check) {
     await until(() => pendingTrade.length > 0)
     assert.equal(await cards.count(), 5)
     assert.equal(await regions.locator('.skel').count(), 0)
+    const cardRefresh = section.getByRole('status').filter({ hasText: '수출 상위 품목 정보를 갱신 중입니다.' })
+    const tableRefresh = page.locator('.zone-tables').getByRole('status').filter({ hasText: '품목별 수출입 정보를 갱신 중입니다.' })
+    await cardRefresh.waitFor()
+    await tableRefresh.waitFor()
+    assert.equal(await section.getByRole('alert').count(), 0)
     holdTrade = false; amountMultiplier = 3
     pendingTrade.splice(0).forEach(resolve => resolve())
     await cards.first().locator('[title="36"]').waitFor()
     await ready(12)
-    console.log('PASS failed background refresh and manual retry preserve data until fresh values arrive')
+    await cardRefresh.waitFor({ state: 'hidden' })
+    await tableRefresh.waitFor({ state: 'hidden' })
+    console.log('PASS manual retry preserves data and announces progress in both shared regions until completion')
 
     availabilityMode = '503'
     const beforeInitialFailure = tradeCount()

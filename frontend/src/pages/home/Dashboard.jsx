@@ -33,13 +33,17 @@ const ARROW = { up: '▲', down: '▼', flat: '' }
 const shareBarWidth = share => { const pct = Number.parseFloat(share); return Number.isFinite(pct) ? `${Math.min(100, Math.max(0, pct))}%` : 0 }
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
 
-/** 영역별 오류 안내(I-2). 한 영역에서 실패한 요청을 묶어 한 번만 알리고, 다시 불러오기는 그 영역만 한다. */
-function RegionError({ label, states }) {
+/** 영역별 갱신·오류 안내. 기존 데이터를 유지하는 동안에도 진행 상태를 알린다. */
+function RegionFeedback({ label, states }) {
   const failed = [...new Set(states.filter(s => s.error))]
-  if (!failed.length) return null
+  const refreshing = states.some(s => s.refreshing && !s.loading)
+  if (!failed.length && !refreshing) return null
   const retry = () => failed.forEach(s => s.reload?.())
-  const message = `${label} 정보를 불러오지 못했습니다. ${failed[0].error.message}`
-  return <div><ErrorNotice error={{ ...failed[0].error, message }} retry={retry} /></div>
+  const error = failed.length ? { ...failed[0].error, message: `${label} 정보를 불러오지 못했습니다. ${failed[0].error.message}` } : null
+  return <div>
+    {refreshing && <p role="status" aria-live="polite" aria-busy="true" className="muted" style={{ fontSize: 12 }}>{label} 정보를 갱신 중입니다.</p>}
+    <ErrorNotice error={error} retry={retry} />
+  </div>
 }
 
 // 메인 수출입 현황의 상승 화살표(디자인 SVG). 꼬리는 투명하게 시작해 머리 쪽으로 진해진다.
@@ -298,7 +302,7 @@ export default function Dashboard({ route }) {
           <div style={{ flex: '2 1 600px', position: 'relative' }}>
             {/* 제목·기간 글자는 상승 화살표보다 위에 그려 화살표가 글자를 가리지 않게 한다. */}
             <div data-reveal="up" style={{ position: 'relative', zIndex: 2 }}>
-              <RegionError label="주요 지표" states={data.states.kpi} />
+              <RegionFeedback label="주요 지표" states={data.states.kpi} />
               <p style={{ fontSize: 14, fontWeight: 700, color: '#B0102A' }}>통계 기준 월 {data.statLoading ? <Bone inline w={64} h={14} /> : data.statMonth}</p>
               <h2 style={{ marginTop: 8, fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{data.title}</h2>
               <p style={{ marginTop: 10, fontSize: 14, color: '#444B57' }}>{data.statLoading ? <Bone inline w={420} h={14} /> : data.period}</p>
@@ -332,7 +336,7 @@ export default function Dashboard({ route }) {
               </div>
               <span style={{ fontSize: 12, color: '#5C6370' }}>한국은행 ECOS</span>
             </div>
-            <RegionError label="환율" states={data.states.fx} />
+            <RegionFeedback label="환율" states={data.states.fx} />
             <div role="region" aria-label={data.fxTitle} aria-busy={data.fxLoading} tabIndex={data.fx.length >= 5 ? 0 : undefined}
               className="fx-list" style={{ marginTop: 14, borderTop: '2px solid #15181E', ...(data.fx.length >= 5 ? { maxHeight: 242, overflowY: 'auto', scrollbarGutter: 'stable' } : data.fxLoading ? { maxHeight: 242, overflow: 'hidden' } : {}) }}>
               {data.fxLoading && Array.from({ length: fxSkeletonRows }, (_, i) => <FxRowSkeleton key={i} />)}
@@ -366,7 +370,7 @@ export default function Dashboard({ route }) {
               <Link to={data.cardLink('HS6')} className="more" style={{ marginLeft: 10, whiteSpace: 'nowrap', flexShrink: 0 }}>상세보기 →</Link>
             </div>
           </div>
-          <RegionError label="수출 상위 품목" states={data.states.cards} />
+          <RegionFeedback label="수출 상위 품목" states={data.states.cards} />
           <div data-reveal="up" data-d="1" aria-busy={data.cardsLoading} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
             {data.cardsLoading && Array.from({ length: skeletonCount }, (_, i) => <RankCardSkeleton key={i} />)}
             {!data.cardsLoading && cards.map((c, i) => (
@@ -404,7 +408,7 @@ export default function Dashboard({ route }) {
               </div>
  <Link to={data.tableLink('HS6')} className="more">상세보기 →</Link>
             </div>
-            <RegionError label="품목별 수출입" states={data.states.products} />
+            <RegionFeedback label="품목별 수출입" states={data.states.products} />
             <div className="th" style={{ gridTemplateColumns: PRODUCT_TABLE_COLS, marginTop: 14 }}>
               <span>순위</span><span>품목코드(HS6)</span><span>품목</span><span className="r">수출액</span><span className="r">수입액</span>
             </div>
@@ -423,7 +427,7 @@ export default function Dashboard({ route }) {
               <div style={{ flex: '1 1 260px', minWidth: 0 }}>
                 <h2 className="t2">{data.countryTable.title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{countryTable.loading ? <Bone inline w={210} h={13} /> : countryTable.sub}</p>
-                <RegionError label="교역국별 수출입" states={data.states.countries} />
+                <RegionFeedback label="교역국별 수출입" states={data.states.countries} />
                 <div style={{ marginTop: 14 }}>
                   <div className="th" style={{ gridTemplateColumns: COUNTRY_TABLE_COLS }}>
                     <span>순위</span><span>교역국</span><span className="r">수출액</span><span className="r">수입액</span>
@@ -505,7 +509,7 @@ export default function Dashboard({ route }) {
               </div>
             ))}
           </div>
-          <RegionError label="한국의 세계시장 점유율" states={[un]} /><p className="muted share-note" style={{ marginTop: 14, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
+          <RegionFeedback label="한국의 세계시장 점유율" states={[un]} /><p className="muted share-note" style={{ marginTop: 14, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
         </div>
         </section>
 
@@ -518,7 +522,7 @@ export default function Dashboard({ route }) {
             </div>
             <Link to="/articles" className="more">기사홈 →</Link>
           </div>
-          <RegionError label="기사" states={data.states.news} />
+          <RegionFeedback label="기사" states={data.states.news} />
           <div data-reveal="up" data-d="1" aria-busy={data.newsLoading} style={{ marginTop: 20, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 22 }} className="resp-stack">
             {data.newsLoading && Array.from({ length: 4 }, (_, i) => <NewsCardSkeleton key={i} />)}
             {data.newsCards.map(n => {
