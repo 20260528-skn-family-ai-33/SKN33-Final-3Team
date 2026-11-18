@@ -1,7 +1,10 @@
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '../../api/hooks'
+import { createQueryCache } from '../../api/queryCache'
 import { amount, percent, mapArticle } from '../../api/adapters'
 import { countryCode, countryName, productName, registerProducts } from '../../data/catalog'
 import useMarketSeries from './useMarketSeries'
+import useCachedQueries from './useCachedQueries'
 import { rankLink } from '../../api/integration'
 const colors = ['#C8102E', '#2B2350', '#9A95BF', '#DBA343', '#6C7989']
 // 수출액 비중 원그래프: 상위 10개국은 모두 다른 색. 이웃 조각끼리 색약(protan·deutan) ΔE≥14, 일반 시각 ΔE≥25로 구분되는 순서다.
@@ -23,16 +26,35 @@ const growth = (now, before) => now != null && before ? (now / before - 1) * 100
 // 금액 0은 그 기간에 실적이 없다는 뜻이므로 0 대신 —로 보여 준다(D-3).
 export const money = value => value == null || Number(value) === 0 ? '—' : amount(value)
 const periodText = data => `${data?.meta?.period?.start || '—'} ~ ${data?.meta?.period?.end || '—'} · 억 USD`
-export default function useDashboard(view, months, profile) {
+function useAvailability() {
+  const result = useQuery('/data/availability', {}, true, 60_000)
+  const [lastSuccess, setLastSuccess] = useState(null)
+  if (result.data && result.data !== lastSuccess) setLastSuccess(result.data)
+  // 일시적인 버전 확인 실패는 이미 표시 중인 통계의 조건을 무효화하지 않는다.
+  // 첫 조회 실패만 오류로 표시하며, 이후에도 useQuery의 1분 재시도는 계속된다.
+  const data = result.data || lastSuccess
+  return { ...result, data, loading: !data && result.loading, error: data ? null : result.error }
+}
+function useRanking(cache, range, group) {
+  const result = useCachedQueries(cache, '/trade/rankings', range.period_end
+    ? [{ ...range, group_by: group, page_size: 5, view: 'DASHBOARD' }] : [])
+  return { ...result, data: result.data[0] || null }
+}
+export default function useDashboard(view, months, profile, accountId) {
   const scope = view === 'interest' ? 'INTERESTED' : 'GLOBAL'
-  const availability = useQuery('/data/availability')
+  const availability = useAvailability()
+  const context = JSON.stringify([accountId, profile.version, profile.products, profile.countries, availability.data?.meta?.data_version])
+  // context 변경은 캐시 객체 자체를 교체하여 이전 응답도 격리한다.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const cache = useMemo(() => createQueryCache(), [context])
+  useEffect(() => () => cache.clear(), [cache])
   const end = availability.data?.trade_end_month
   const rangeOf = n => ({ scope, period_start: monthOffset(end, 1 - n), period_end: end })
   const kpiRange = rangeOf(KPI_MONTHS), cardRange = rangeOf(months), tableRange = rangeOf(TABLE_MONTHS)
   const country_codes = scope === 'INTERESTED' ? profile.countries.map(countryCode) : []
 
   // 주요 지표
-  const trends = useMarketSeries(end ? [{ ...kpiRange }] : [])
+  const trends = useMarketSeries(cache, end ? [{ ...kpiRange, view: 'DASHBOARD' }] : [])
   const latestRows = trends.data.flatMap(d => d.items)
   const sum = key => latestRows.length && latestRows.every(r => r[key] != null) ? latestRows.reduce((s, r) => s + Number(r[key]), 0) : null
   const latest = Object.fromEntries(['export_amount_usd', 'import_amount_usd', 'previous_year_export_usd', 'previous_year_import_usd'].map(k => [k, sum(k)]))
@@ -43,17 +65,20 @@ export default function useDashboard(view, months, profile) {
   const noTrade = exp == null || imp == null || (Number(exp) === 0 && Number(imp) === 0)
 
   // 수출 상위 품목 카드
-  const cardProducts = useQuery('/trade/rankings', { ...cardRange, group_by: 'HS6', page_size: 5 }, !!end)
-  const series = useMarketSeries((cardProducts.data?.items || []).map(r => ({ hs_code: r.hs_item.hs_code, hs_ver: 'HS2022', country_codes, period_start: cardRange.period_start, period_end: end })))
+  const cardProducts = useRanking(cache, cardRange, 'HS6')
+  // 순위에 포함된 품목과 서버가 실제 적용한 국가로 조회한다. 국가만 관심 등록한
+  // 사용자도 있으므로 이 품목을 다시 '등록된 관심 품목'으로 제한하지 않는다.
+  const rankedCountries = cardProducts.data?.conditions?.country_codes || country_codes
+  const series = useMarketSeries(cache, (cardProducts.data?.items || []).map(r => ({ hs_code: r.hs_item.hs_code, hs_ver: 'HS2022', country_codes: rankedCountries, period_start: cardRange.period_start, period_end: end, view: 'SPARKLINE', trade_flow: 'EXPORT' })))
 
   // 품목별·교역국별 수출입(표·원그래프)
-  const tableProducts = useQuery('/trade/rankings', { ...tableRange, group_by: 'HS6', page_size: 5 }, !!end)
-  const countries = useQuery('/trade/rankings', { ...tableRange, group_by: 'COUNTRY', page_size: 5 }, !!end)
+  const tableProducts = useRanking(cache, tableRange, 'HS6')
+  const countries = useRanking(cache, tableRange, 'COUNTRY')
   const shareEnd = end ? new Date(Date.UTC(Number(end.slice(0, 4)), Number(end.slice(5, 7)), 0)).toISOString().slice(0, 10) : null
   const shares = useQuery('/analysis/market-shares', { conditions: {
     hs_items: scope === 'INTERESTED' ? profile.products.map(hs_code => ({ hs_code, hs_ver: 'HS2022' })) : [],
     country_codes, period: { start: tableRange.period_start ? `${tableRange.period_start}-01` : null, end: shareEnd }, trade_flow: 'EXPORT',
-  } }, !!end, 0, 'POST')
+  } }, !!end, 0, 'POST', false, context)
 
   const fx = useQuery('/exchange-rates', { scope })
   const news = useQuery('/articles', { scope, page_size: 4 })
@@ -66,7 +91,7 @@ export default function useDashboard(view, months, profile) {
   const countryRows = (countries.data?.items || []).map(r => [r.rank, countryName(r.country_code), r.has_data === false ? '—' : money(r.export_amount_usd), r.has_data === false ? '—' : money(r.import_amount_usd)])
   const link = n => (group, product, country, flow) => rankLink({ scope, start: monthOffset(end, 1 - n), end, months: n, countries: country_codes, group, product, country, flow })
   const tablePeriod = periodText(countries.data || tableProducts.data)
-  // 영역별 오류 안내: 기준 월 조회가 실패하면 모든 영역이 비므로 각 영역에 함께 넣는다.
+  // 영역별 오류 안내: 기준 월 첫 조회가 실패하면 모든 영역이 비므로 각 영역에 함께 넣는다.
   const states = {
     kpi: [availability, trends], fx: [fx], cards: [availability, cardProducts, series],
     products: [availability, tableProducts], countries: [availability, countries, shares], news: [news],
@@ -85,8 +110,9 @@ export default function useDashboard(view, months, profile) {
     fx: (fx.data?.items || []).map(r => [r.currency_code, `${r.quote_unit} 단위`, r.rate_krw == null ? '—' : Number(r.rate_krw).toLocaleString('ko-KR'), percent(r.change_pct), r.change_pct > 0 ? 'up' : r.change_pct < 0 ? 'down' : 'flat']),
     rankTitle: '수출 상위 품목', rankSub: periodText(cardProducts.data), rankCards: ranks, cardLink: link(months),
     cardsEmpty: !!cardProducts.data && !ranks.length, tableLink: link(TABLE_MONTHS),
-    // 기간(3·6·12개월)을 바꾸면 순위와 추이 그래프를 모두 받을 때까지 스켈레톤을 보여 준다.
-    cardsLoading: availability.loading || cardProducts.loading || series.loading,
+    // 순위·금액은 먼저 표시하고 그래프만 별도로 기다린다.
+    cardsLoading: availability.loading || cardProducts.loading,
+    seriesLoading: series.loading,
     productTable: { loading: availability.loading || tableProducts.loading, title: '품목별 수출입', sub: periodText(tableProducts.data), rows: productRows, note: '공개된 관세청 집계 기준', empty: !!tableProducts.data && !productRows.length },
     // pieLoading: 비중 자료를 아직 받는 중인지. 조회가 끝났는데 0건인 경우와 구분해, 빈 결과여도 기준 문구는 보이게 한다.
     countryTable: { loading: availability.loading || countries.loading, pieLoading: availability.loading || shares.loading, title: '교역국별 수출입', sub: tablePeriod, rows: countryRows, empty: !!countries.data && !(countries.data.items || []).some(r => r.has_data !== false), pieTitle: '수출액 비중', pie: (shares.data?.items || []).filter(r => r.share_pct != null).map((r, i) => [`${r.label} ${Number(r.share_pct).toFixed(1)}%`, r.country_code == null ? PIE_OTHER : PIE_COLORS[i % PIE_COLORS.length]]), pieNote: `${tableRange.period_start || '—'} ~ ${end || '—'} · 전체 수출국 분모 · 상위 10개국+기타` },
