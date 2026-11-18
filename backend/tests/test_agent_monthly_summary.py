@@ -10,6 +10,49 @@ from backend.tests.test_agent_graph import initial
 
 
 class MonthlySummaryTest(unittest.TestCase):
+    def test_percentage_prose_survives_direction_repair_and_is_still_verified(self):
+        lines = [
+            '수출액은 11월에 5.2% 증가한 뒤 12월에 3.1% 감소했습니다.',
+            '수출액은 11월에 5.2퍼센트 증가한 뒤 12월에 3.1프로 감소했습니다.',
+            '12월 수출액은 전월보다 3.1 % 감소했습니다.',
+            '12월 수출액 증가율은 0.5%p 하락했습니다.',
+            '12월 수출액 증가율은 0.5퍼센트포인트 하락했습니다.',
+            '12월 수출액 증가율은 0.5pp 하락했습니다.',
+            '12월 수출액은 3.1(%) 감소했습니다.',
+        ]
+        for fmt in (None, 'TEXT'):
+            for line in lines:
+                with self.subTest(fmt=fmt, line=line):
+                    state, sources = self.writer_example()
+                    task = state.plan.tasks[0]
+                    task.slots.answer_format = fmt
+                    task.question = '월별 수출액과 증감률을 설명해줘'
+                    state.draft = assemble(state, Draft(conclusion=[dict(task_id='t1', sentences=[line])],
+                        explanation=[line], turn_summary=line), {}, lambda _: {})
+                    self.assertEqual(state.draft.sentences(), [line, line])
+                    self.assertEqual(state.draft.turn_summary, line)
+                    if line == lines[0]:
+                        verify(state, snapshots=sources)
+                        self.assertTrue(all(c.status == 'MISMATCH' for c in state.verification.checks))
+                        self.assertEqual(state.draft.turn_summary, '')
+
+        # An explicitly recorded year-on-year rate can be verified even when
+        # the Writer omits the comparison word. Preservation must not approve it.
+        rows = [dict(month='2025-11', amount_usd=10520, compare_month='2024-11',
+                     compare_amount_usd=10000, yoy_pct=5.2),
+                dict(month='2025-12', amount_usd=9690, compare_month='2024-12',
+                     compare_amount_usd=10000, yoy_pct=-3.1)]
+        state, sources = self.example(rows, comparison=True)
+        state.plan.tasks = state.plan.tasks[:1]
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        state.draft = assemble(state, Draft(conclusion=[dict(task_id='t1', sentences=[lines[0]])],
+            explanation=[lines[0]], turn_summary=lines[0]), {}, lambda _: {})
+        self.assertEqual(state.draft.sentences(), [lines[0], lines[0]])
+        self.assertTrue(all(c.status == 'PASS' for c in judge_draft(state, snapshots=sources).checks))
+        for source in sources.values():
+            source['rows'][0]['yoy_pct'] = 52
+        self.assertTrue(all(c.status == 'MISMATCH' for c in judge_draft(state, snapshots=sources).checks))
+
     def test_endpoint_amounts_and_extrema_survive_monthly_direction_repair(self):
         lines = [
             '수출액은 10월 120만 달러, 12월 150만 달러로 증가했습니다.',
