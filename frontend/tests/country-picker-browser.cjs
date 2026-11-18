@@ -4,6 +4,24 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 const { chromium } = require('playwright')
 
+// 국기 칸에 CSS 배경 그림이 붙고, 그 SVG가 실제로 내려받아져 그려지는지 확인한다(클래스만 있고 그림이 없으면 실패).
+async function flagShown(locator, code) {
+  await locator.first().waitFor({ state: 'attached', timeout: 5000 })
+  assert.equal(await locator.count(), 1, `${code} flag count`)
+  const shown = await locator.evaluate(el => new Promise(resolve => {
+    const style = getComputedStyle(el), box = el.getBoundingClientRect()
+    const url = /url\("?(.*?)"?\)/.exec(style.backgroundImage)?.[1]
+    if (!url) return resolve({ url: null, width: 0, box: box.width })
+    const image = new Image()
+    image.onload = () => resolve({ url, width: image.naturalWidth, box: box.width, hidden: el.getAttribute('aria-hidden') })
+    image.onerror = () => resolve({ url, width: 0, box: box.width })
+    image.src = url
+  }))
+  assert.ok(shown.url && shown.url.endsWith(`/${code}.svg`), `${code} background: ${shown.url}`)
+  assert.ok(shown.width > 0 && shown.box > 0, `${code} flag image not drawn: ${JSON.stringify(shown)}`)
+  assert.equal(shown.hidden, 'true')
+}
+
 ;(async () => {
   const { createServer } = await import('vite')
   const server = await createServer({ root: path.resolve(__dirname, '..'),
@@ -47,9 +65,9 @@ const { chromium } = require('playwright')
 
     // 선택한 국가는 아래 칩으로 보인다
     assert.deepEqual(await chips(), ['미국'])
-    // 국기(#132): 목록과 선택 칩에 국가 코드의 국기가 붙는다. 국기는 장식이라 스크린리더 이름은 국가 이름 그대로다.
-    assert.equal(await page.locator('.interest-summary li .flag.fi-us[aria-hidden="true"]').count(), 1)
-    assert.ok(await page.locator('.flag.fi-jp[aria-hidden="true"]').count() >= 1)
+    // 국기(#132): 목록과 선택 칩에 국가 코드의 국기가 실제 그림으로 그려진다. 국기는 장식이라 스크린리더 이름은 국가 이름 그대로다.
+    await flagShown(page.locator('.interest-summary li .flag[aria-hidden="true"]'), 'us')
+    await flagShown(page.locator('.li .flag').filter({ hasNot: page.locator('xx') }).nth(3), 'jp')
     assert.equal(await page.getByRole('button', { name: '미국 선택 삭제', exact: true }).count(), 1)
     // 대륙을 누르면 그 대륙 국가 전체 추가, 칩이 선택 상태로 바뀐다
     await oceania.click()
@@ -122,6 +140,19 @@ const { chromium } = require('playwright')
     const submitted = page.waitForRequest(r => new URL(r.url()).pathname.endsWith('/trade/rankings'))
     await page.getByRole('button', { name: '순위 조회' }).click()
     assert.deepEqual(new URL((await submitted).url()).searchParams.getAll('country_codes'), ['US', 'JP'])
+    // 순위 표의 국가 행과 국가 검색 목록에도 국기가 그려진다(#132).
+    await flagShown(page.locator('.tr .flag'), 'us')
+    await country.click()
+    await flagShown(page.getByRole('option', { name: '일본', exact: true }).locator('.flag'), 'jp')
+    await country.press('Escape')
+    // 채팅 국가 후보·관심 대상 선택 버튼, 결과 표의 국가 칸(#132). 품목 칸에는 국기가 붙지 않는다.
+    await page.goto(page.url().split('#')[0] + '#flags')
+    await page.reload()
+    await flagShown(page.getByRole('button', { name: '미국', exact: true }).locator('.flag'), 'us')
+    await flagShown(page.getByRole('button', { name: '뉴질랜드', exact: true }).locator('.flag'), 'nz')
+    await flagShown(page.locator('.api-results').nth(0).locator('.flag'), 'au')
+    await flagShown(page.locator('.api-results').nth(1).locator('.flag'), 'us')
+    assert.equal(await page.locator('.api-results').nth(1).locator('.tr span').nth(1).locator('.flag').count(), 0)
     assert.deepEqual(errors, [])
     console.log('PASS country chips, continent toggle, select all, and identical ranking request for manual selection')
   } finally { if (browser) await browser.close(); await server.close() }

@@ -46,7 +46,7 @@ export function PromptActions({prompt,busy,reply,onDirectInput}) {
   return <div className="chat-step"><strong>{prompt.message}</strong>
     {prompt.choices?.length>0 && <div className="chips">{prompt.choices.map(c=>{
       const code=c.hs_item?.hs_code || (prompt.kind==='HS_ITEM' && /^(?:\d{4}|\d{6})$/.test(c.choice_id) ? c.choice_id : null)
-      return <Btn key={c.choice_id} disabled={busy} onClick={()=>reply({choice_ids:[c.choice_id]})}>{productChoiceLabel(code,c.label)}</Btn>
+      return <Btn key={c.choice_id} disabled={busy} onClick={()=>reply({choice_ids:[c.choice_id]})}>{prompt.kind==='COUNTRY'&&<Flag code={c.choice_id} blank={false} />}{productChoiceLabel(code,c.label)}</Btn>
     })}</div>}
     {prompt.kind==='COUNTRY' && <div><Btn disabled={busy} onClick={onDirectInput}>목록에 없는 국가 직접 입력</Btn><p className="note">전체 국가명 또는 국가 코드로 입력하세요. 예: 중국, CN</p></div>}
     {prompt.kind==='HS_ITEM' && <>

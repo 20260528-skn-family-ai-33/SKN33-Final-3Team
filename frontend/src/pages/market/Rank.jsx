@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Band, ChatFab } from '../../components/layout'
 import { Btn, Loading, Pager, Select } from '../../components/ui'
+import Flag from '../../components/Flag'
 import Icon from '../../components/Icon'
 import { productName, countries, countryCode, countryName, registerProducts } from '../../data/catalog'
 import { useApp } from '../../store'
@@ -82,7 +83,7 @@ function RankResults({ route }) {
   const total = freshTotal ?? (known ? knownPages.total : null)
   // 조회 사이에 결과가 줄어 지금 페이지가 마지막 페이지보다 뒤가 되면(예: 41건 → 7건) 마지막 유효 페이지를 다시 조회한다.
   if (freshPages != null && !result.loading && page > Math.max(freshPages, 1)) setPage(Math.max(freshPages, 1))
-  const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, rank: r.has_data === false ? '—' : r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: noRecord(r, r.export_amount_usd) ? null : Number(r.export_amount_usd) / 1e8, imp: noRecord(r, r.import_amount_usd) ? null : Number(r.import_amount_usd) / 1e8 }))
+  const rows = (result.data?.items || []).map((r, i) => ({ key: r.month || r.country_code || r.hs_item?.hs_code, country: r.month ? null : r.country_code, rank: r.has_data === false ? '—' : r.rank || i + 1, hs: r.hs_item?.hs_code, name: r.month || (r.country_code ? countryName(r.country_code) : productName(r.hs_item?.hs_code)), exp: noRecord(r, r.export_amount_usd) ? null : Number(r.export_amount_usd) / 1e8, imp: noRecord(r, r.import_amount_usd) ? null : Number(r.import_amount_usd) / 1e8 }))
   const pageEmpty = !!result.data && !result.loading && !rows.some(r => r.exp != null || r.imp != null)
   // 순위는 큰 금액부터 정렬되므로 1페이지에 실적이 없으면 전체 결과에도 없다. 다른 페이지는 1페이지 판단을 그대로 쓴다.
   const resultKey = JSON.stringify([byMonth, query, rankingGroup, basis])
@@ -207,7 +208,7 @@ function RankResults({ route }) {
               <div key={r.key} className="tr" style={{ gridTemplateColumns: cols }}>
                 <span className="b" style={{ fontSize: 17 }}>{r.rank}</span>
                 {showHs && <span><span className="hs">{r.hs}</span></span>}
-                <span className="b" style={{ fontWeight: 700 }}>{r.name}</span>
+                <span className="b" style={{ fontWeight: 700 }}><Flag code={r.country} blank={false} />{r.name}</span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <span style={{ flex: 1, height: 10, borderRadius: 5, background: '#F1F2F5', overflow: 'hidden' }}>
                     <span style={{ display: 'block', height: 10, background: basis === 'exp' ? '#C8102E' : '#2B2350', width: `${Math.round((r[basis] / max) * 100)}%` }} />
@@ -286,7 +287,7 @@ function CountrySearch({ value, replaceDefault, onChange }) {
           {shown.map(([v, l], i) => (
             <button type="button" key={v || 'all'} id={`country-option-${i}`} className="reset" role="option" aria-selected={v ? value.includes(v) : all}
               onMouseDown={e => e.preventDefault()} onClick={() => pick(v)} onMouseEnter={() => setActive(i)}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, background: i === active ? '#F1F2F5' : undefined }}>{l}{(v ? value.includes(v) : all) && <span aria-hidden="true"> ✓</span>}</button>
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 8, background: i === active ? '#F1F2F5' : undefined }}><Flag code={v} blank={false} />{l}{(v ? value.includes(v) : all) && <span aria-hidden="true"> ✓</span>}</button>
           ))}
           {typing && text.trim() && !matches.length && <p className="muted" style={{ padding: '10px 12px' }}>검색 결과가 없습니다.</p>}
         </div>
