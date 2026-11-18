@@ -531,6 +531,13 @@
     "auth": "필요",
     "fields": [
       [
+        "Query Parameters",
+        "view",
+        "string",
+        "선택",
+        "FULL만 허용. 기본 FULL. 기존 상세 응답과 결과표 저장을 유지하며 경량 조회는 지원하지 않는다."
+      ],
+      [
         "Path Parameters",
         "country_code",
         "string",

@@ -122,6 +122,25 @@ class DashboardPerformanceTest(unittest.TestCase):
             series=self.get('trends',**params,**row['hs_item'],country_codes=ranking['conditions']['country_codes'],view='SPARKLINE',trade_flow='EXPORT')
             self.assertEqual(sum(month['export_amount_usd'] for month in series['items']),row['export_amount_usd'])
 
+    def test_country_product_ranking_only_supports_full_view(self):
+        self.signup()
+        path='rankings/US/products'
+        params={'period_start':'2025-10','period_end':'2025-12'}
+        default=self.get(path,**params)
+        explicit=self.get(path,**params,view='FULL')
+        self.assertTrue(default['items'])
+        self.assertEqual(default['items'],explicit['items'])
+        self.assertTrue({'one_off','rank_change','rank_status','mom_pct','yoy_pct'} <= set(explicit['items'][0]))
+        with self.engine.connect() as c:
+            snapshots_before=c.scalar(select(func.count()).select_from(self.meta.tables['api_snapshot']))
+        self.assertEqual(snapshots_before,2)
+        for view in ('DASHBOARD','SPARKLINE','unknown'):
+            with self.subTest(view=view):
+                response=self.client.get('/api/v1/trade/'+path,params={**params,'view':view})
+                self.assertEqual(response.status_code,400,response.text)
+        with self.engine.connect() as c:
+            self.assertEqual(c.scalar(select(func.count()).select_from(self.meta.tables['api_snapshot'])),snapshots_before)
+
 
 if __name__=='__main__':
     unittest.main()

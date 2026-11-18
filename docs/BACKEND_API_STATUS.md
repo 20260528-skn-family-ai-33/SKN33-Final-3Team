@@ -24,7 +24,7 @@
 | 018 | `GET  /api/v1/trade/kpis` | 처리 코드 구현 |
 | 019 | `GET  /api/v1/trade/trends` | 처리 코드 구현; 응답 `conditions`(실제 적용된 hs_items·country_codes, 관심 범위 포함). 선택 `view=FULL`(기본)/`DASHBOARD`/`SPARKLINE`; FULL 이외 결과표 미저장·result_id 없음. SPARKLINE은 EXPORT 당기 월별 금액만 반환 |
 | 020 | `GET  /api/v1/trade/rankings` | 처리 코드 구현; 응답 항목 `hs_name`(HS6 순위 품목명), `has_data`(실적 유무, 결과표·엑셀에는 넣지 않고 실적 없는 행의 금액·순위·비중은 빈 값), 응답 `conditions`(실제 적용된 hs_items·country_codes, 관심 범위 포함), 같은 금액이면 실적 있는 행 우선. 선택 `view=DASHBOARD`는 이상치·증감 필드와 result_id 생략·결과표 미저장; 기본 FULL 유지 |
-| 021 | `GET  /api/v1/trade/rankings/{country_code}/products` | 처리 코드 구현 |
+| 021 | `GET  /api/v1/trade/rankings/{country_code}/products` | 처리 코드 구현; 선택 `view=FULL`만 허용(기본 FULL), 상세 필드·결과표 저장 유지, 경량 모드 미지원 |
 | 022 | `GET  /api/v1/trade/fast-growing-products` | 처리 코드 구현 |
 | 023 | `POST  /api/v1/analysis/promising-markets` | 보류: ML 담당 협의 보류 |
 | 024 | `POST  /api/v1/analysis/changes` | 처리 코드 구현 |

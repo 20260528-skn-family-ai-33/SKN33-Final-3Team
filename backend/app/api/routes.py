@@ -131,7 +131,8 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==18: return trade.kpis(store,uid,query.get('month'))
     if identity in (19,20,21):
         view=query.get('view','FULL')
-        require(view in (('FULL','DASHBOARD','SPARKLINE') if identity==19 else ('FULL','DASHBOARD')),'view를 확인하세요.')
+        allowed_views={19:('FULL','DASHBOARD','SPARKLINE'),20:('FULL','DASHBOARD'),21:('FULL',)}
+        require(view in allowed_views[identity],'view를 확인하세요.')
         hs,countries=trade.scope_filters(store,uid,query.get('scope','GLOBAL'),query.get('hs_code'),query.get('hs_ver'),query.get('country_codes'))
         start,end=query.get('period_start'),query.get('period_end')
         if identity==19:
