@@ -724,6 +724,11 @@ def _split_combined_amount_tasks(output):
     return output.model_copy(update={'tasks': tasks})
 
 
+_THRESHOLD_NUMBER = r'\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:조|억|천|백|십|만)(?:\s*\d+(?:\.\d+)?)?)*(?:\s*[KMB])?'
+_AMOUNT_THRESHOLD = re.compile(
+    rf'(?:{_THRESHOLD_NUMBER}\s*(?:달러|USD|불)|(?:USD|\$)\s*{_THRESHOLD_NUMBER})\s*(?:이상|이하|초과|미만)', re.I)
+
+
 def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
                 previous_both_trade_flows=False, previous_trade_balance=False, previous_conditions=None,
                 previous_question='', previous_targets=()) -> PlannerOutput:
@@ -736,17 +741,16 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
     # 그룹별 금액 조건은 합계 표시(amount_view)와 달리 HAVING이 필요하다.
     # 플래너가 단순 합계로 골라도 사용자가 명시한 임계값을 버리지 않는다.
     if len(output.tasks) == 1 and output.tasks[0].intent in ('STATISTICS', 'RANKING'):
-        if re.search(r'(?:품목|국가)별', question) and re.search(r'(?:달러|USD|불)\s*(?:이상|이하|초과|미만)', question, re.I):
+        if re.search(r'(?:품목|국가)별', question) and _AMOUNT_THRESHOLD.search(question):
             task = output.tasks[0]
             task.intent = 'STATISTICS'
             task.custom_query = question
             task.slots.amount_view = None
             task.slots.amount_difference_only = None
     # 명시한 출력 형식은 첫 질문에도 적용한다. 복합 질문의 개별 요청은 플래너 슬롯을 보존한다.
-    if len(output.tasks) == 1 and re.search(r'(?:글|텍스트|문장)(?:로|으로)\s*만', question):
-        if not re.search(r'(?:글|텍스트|문장)(?:로|으로)\s*만\s*(?:말고|아니)', question):
-            output.tasks[0].slots.answer_format = 'TEXT'
-    from backend.app.agents.multi_year import normalize_year_plan
+    from backend.app.agents.multi_year import normalize_year_plan, apply_requested_format
+    if len(output.tasks) == 1:
+        apply_requested_format(output.tasks, question)
     # 직전 무역수지를 잇는 후속("그럼 2023년부터 2025년까지 비교해줘")은 연도 비교로 묶지 않는다(무역수지는 연도 비교가 아니다).
     balance_followup = continues_trade_balance(previous_trade_balance, question, [t.slots for t in output.tasks],
                                                previous_question, previous_targets)

@@ -222,11 +222,6 @@ def run_template(store, uid, task, step, timeout=30):
         kept = targets[:1000 if totals else 1000 // len(requested)]
         rows = [{**{k: v for k, v in target.items() if k != 'monthly'}, **monthly}
                 for target in kept for monthly in ([{}] if totals else target['monthly'])]
-        if totals:
-            # 표시용 합계와 같은 조회에서 얻은 원본 월별 값을 별도로 저장한다. LLM digest에서 복원하지 않는다.
-            identities = ('hs_code', 'hs_ver', 'name', 'country_code', 'country_name')
-            verification_rows = [{**{k: target[k] for k in identities}, **month}
-                                 for target in kept for month in target['monthly']]
         meta = trade.metadata(store, conditions.period.start, conditions.period.end)
         meta.update(kind='TREND', targets=[{k: v for k, v in t.items() if k != 'monthly'} for t in kept],
                     truncated_targets=len(targets)-len(kept), compare_period=public['compare_period'])
@@ -330,4 +325,13 @@ def run_template(store, uid, task, step, timeout=30):
     limitations = list(dict.fromkeys(limitations))
     result = ToolResult(status='OK' if rows else 'NO_DATA', period=conditions.period, source='관세청',
         digest=bounded(digest), completeness='PARTIAL' if limitations else 'COMPLETE', limitations=limitations)
+    if meta.get('kind') == 'TREND' and meta.get('period_totals'):
+        # 최종 digest에 남은 대상(최대 10개)만 월별 검증 근거가 필요하다. 표의 나머지 합계는 유지한다.
+        # digest는 대상 선택에만 사용하고, 수치는 같은 조회의 반올림 전 원본에서 보존한다.
+        keys = ('hs_code', 'hs_ver', 'country_code')
+        selected = {tuple(t.get(k) for k in keys) for t in result.digest.get('targets', [])}
+        identities = (*keys, 'name', 'country_name')
+        verification_rows = [{**{k: target[k] for k in identities}, **month}
+                             for target in kept if tuple(target[k] for k in keys) in selected
+                             for month in target['monthly']]
     return Analysis(rows, meta, result, public, list(store.queries), verification_rows=verification_rows)
