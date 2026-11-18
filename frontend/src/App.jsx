@@ -43,14 +43,14 @@ const SITE = {
 
 function UserShell({ active, route, children }) {
   const { session, logout } = useApp()
-  const { unread } = useNotifications()
+  const { miniUnread } = useNotifications()
   const isAdmin = session?.role === 'admin'
   const alertCount = useAdminAlertCount(isAdmin)
   const open = !isAdmin && route.query.get('alerts') === 'open'
   const toggle = () => navigate(withQuery(route, { alerts: open ? null : 'open' }), { replace: true })
   return (
     <>
-      <SiteHeader active={active} unread={isAdmin ? alertCount : unread} bellOpen={open} onBell={isAdmin ? () => navigate('/admin/inbox/BS33') : toggle} isAdmin={isAdmin} onLogout={logout} userName={session?.name}
+      <SiteHeader active={active} unread={isAdmin ? alertCount : miniUnread} bellOpen={open} onBell={isAdmin ? () => navigate('/admin/inbox/BS33') : toggle} isAdmin={isAdmin} onLogout={logout} userName={session?.name}
         beforeBell={route.path === '/' ? <MainViewToggle route={route} /> : null}>
         {open && <AlertPopover onClose={toggle} />}
       </SiteHeader>

@@ -133,7 +133,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         view=query.get('view','FULL')
         allowed_views={19:('FULL','DASHBOARD','SPARKLINE'),20:('FULL','DASHBOARD'),21:('FULL',)}
         require(view in allowed_views[identity],'view를 확인하세요.')
-        hs,countries=trade.scope_filters(store,uid,query.get('scope','GLOBAL'),query.get('hs_code'),query.get('hs_ver'),query.get('country_codes'))
+        hs,countries=trade.scope_filters(store,uid,query.get('scope','GLOBAL'),query.get('hs_code'),query.get('hs_ver'),query.get('country_codes'),hs_codes=query.get('hs_codes'))
         start,end=query.get('period_start'),query.get('period_end')
         if identity==19:
             require(not ('months' in query and (start or end)),'months와 직접 기간은 함께 지정할 수 없습니다.')

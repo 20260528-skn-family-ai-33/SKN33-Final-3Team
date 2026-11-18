@@ -29,10 +29,11 @@ async function flagShown(locator, code) {
   await server.listen()
   let browser
   try {
-    browser = await chromium.launch({ headless: true })
+    browser = await chromium.launch({ headless: true, args: ['--disable-features=LocalNetworkAccessChecks'], ...(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {}) })
     const page = await browser.newPage()
     const errors = []
-    page.on('pageerror', e => errors.push(e.message))
+    page.on('pageerror', e => { errors.push(e.message); console.error(e.message) })
+    page.on('console', m => { if (m.type() === 'error') console.error(m.text()) })
     await page.route('**/api/v1/**', route => {
       const url = new URL(route.request().url())
       const pathname = url.pathname
@@ -108,6 +109,33 @@ async function flagShown(locator, code) {
       await country.click()
       await page.getByRole('option', { name, exact: true }).click()
     }
+    // 품목 선택 후 국가 검색: 첫 검색 결과를 방향키로 고른 뒤 Enter 해도 미국만 선택한다.
+    await country.fill('미국')
+    await country.press('ArrowDown')
+    await country.press('Enter')
+    assert.equal(await country.inputValue(), '미국')
+    await pick('미국')
+    // 일반 Enter, 검색 결과 hover + Enter, 한글 조합 중 Enter, 일치하지 않는 검색도 확인한다.
+    await country.fill('미국')
+    await country.press('Enter')
+    assert.equal(await country.inputValue(), '미국')
+    await pick('미국')
+    await country.fill('미국')
+    await page.getByRole('option', { name: '미국', exact: true }).hover()
+    await country.press('Enter')
+    assert.equal(await country.inputValue(), '미국')
+    await country.fill('일본')
+    await country.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true })
+    assert.equal(await country.inputValue(), '일본')
+    assert.equal(await country.getAttribute('aria-expanded'), 'true')
+    await country.press('Enter')
+    assert.equal(await country.inputValue(), '미국 · 일본')
+    await country.fill('없는국가')
+    await country.press('ArrowDown')
+    await country.press('Enter')
+    assert.equal(await country.inputValue(), '미국 · 일본')
+    await pick('미국')
+    await pick('일본')
     const search = async () => {
       const request = page.waitForRequest(r => {
         const url = new URL(r.url())

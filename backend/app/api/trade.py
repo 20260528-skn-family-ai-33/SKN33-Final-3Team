@@ -77,19 +77,23 @@ def metadata(store,start,end,source='CUSTOMS',warnings=None,latest_month=None):
         'freshness':'STALE' if warnings else 'FRESH','generated_at':now().isoformat()+'Z','warnings':warnings or []}
 
 
-def scope_filters(store,uid,scope='GLOBAL',hs_code=None,hs_ver=None,countries=None):
+def scope_filters(store,uid,scope='GLOBAL',hs_code=None,hs_ver=None,countries=None,hs_codes=None):
     require(scope in ('GLOBAL','INTERESTED'),'scope를 확인하세요.')
+    require(not (hs_code and hs_codes),'hs_code와 hs_codes는 함께 지정할 수 없습니다.')
+    codes=list(dict.fromkeys(hs_codes or ([hs_code] if hs_code else [])))
     hs=[]
-    if hs_code:
+    if codes:
         require(hs_ver=='HS2022','품목을 지정하면 hs_ver=HS2022가 필요합니다.')
-        hs=[{'hs_code':hs_code,'hs_ver':hs_ver}]
+        hs=[{'hs_code':code,'hs_ver':hs_ver} for code in codes]
     countries=list(countries or [])
     validate_scope(store,hs,countries)
     if scope=='INTERESTED':
         saved=interests(store,uid)
         require(saved['hs_items'] or saved['country_codes'],'등록한 관심이 없습니다.','INTERESTS_REQUIRED',409)
         if hs:
-            hs=[x for x in saved['hs_items'] if x['hs_code'].startswith(hs_code)]
+            require(all(any(x['hs_code'].startswith(code) for x in saved['hs_items']) for code in codes),
+                    '등록한 관심 품목 범위 밖입니다.')
+            hs=[x for x in saved['hs_items'] if any(x['hs_code'].startswith(code) for code in codes)]
             require(hs,'등록한 관심 품목 범위 밖입니다.')
         else: hs=saved['hs_items']
         if countries:
