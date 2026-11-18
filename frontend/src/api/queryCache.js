@@ -12,15 +12,17 @@ export function createQueryCache({ ttl = DASHBOARD_CACHE_TTL, maximum = 64, cloc
     const entry = entries.get(key)
     return entry?.data !== undefined && entry.expires > clock() ? entry : null
   }
-  const remove = (key, announce = true) => {
+  const remove = (key, announce = true, reason = 'invalidate') => {
     entries.get(key)?.controller?.abort()
     entries.delete(key)
-    if (announce) notify(key, 'invalidate')
+    if (announce) notify(key, reason)
   }
   return {
     peek,
     remaining: entry => Math.max(0, entry.expires - clock()),
     remove,
+    // Explicit retries notify every subscriber, including a shared table/card.
+    retry: key => remove(key, true, 'retry'),
     clear: () => { for (const key of entries.keys()) remove(key, false) },
     subscribe(keys, listener) {
       const subscription = { keys: new Set(keys), listener }

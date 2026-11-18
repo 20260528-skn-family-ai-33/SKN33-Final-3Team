@@ -56,3 +56,16 @@ test('shared subscribers see successful retries and explicit invalidation, but n
   cache.remove('shared')
   assert.equal(events.length, 2)
 })
+
+test('explicit retries notify all shared subscribers separately from eviction and success', async () => {
+  const cache = createQueryCache({ maximum: 1 }), card = [], table = []
+  cache.subscribe(['shared'], reason => card.push(reason))
+  cache.subscribe(['shared'], reason => table.push(reason))
+  await cache.load('shared', () => 1)
+  cache.retry('shared')
+  assert.equal(cache.peek('shared'), null)
+  await cache.load('shared', () => 2)
+  await cache.load('other', () => 3)
+  assert.deepEqual(card, ['success', 'retry', 'success', 'invalidate'])
+  assert.deepEqual(table, card)
+})

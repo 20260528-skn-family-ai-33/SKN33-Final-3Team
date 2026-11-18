@@ -86,6 +86,7 @@ async function until(check) {
     const ready = async months => {
       await cards.first().getByText(`${months}개월 품목 0`, { exact: true }).waitFor()
       await section.locator('[aria-label="수출 추이 그래프를 불러오는 중입니다"]').first().waitFor({ state: 'hidden' })
+      await section.locator('[aria-busy="true"]').first().waitFor({ state: 'hidden' })
       assert.equal(await cards.count(), 5)
       assert.equal(await section.getByRole('alert').count(), 0)
     }
@@ -133,20 +134,27 @@ async function until(check) {
     assert.equal(shareCalls.length, sharesBefore, 'Failed polls and same-version recovery must preserve the pie')
     console.log('PASS 503, 429, network failure and same-version recovery preserve all four main regions')
 
+    const layout = () => page.locator('.zone-overview h2, .zone-exports h2, .rank-card, .zone-tables .th, .zone-tables .tr').evaluateAll(nodes => nodes.map(node => {
+      const rect = node.getBoundingClientRect()
+      return { x: rect.x + window.scrollX, y: rect.y + window.scrollY, width: rect.width, height: rect.height }
+    }))
+    const beforeRefreshLayout = await layout()
     holdTrade = true
     await page.clock.fastForward(300100)
     await until(() => pendingTrade.length >= 4)
     await delay(100)
     assert.deepEqual(await regionData(), unchanged)
     assert.equal(await regions.locator('.skel').count(), 0)
-    await section.getByRole('status').filter({ hasText: '수출 상위 품목 정보를 갱신 중입니다.' }).waitFor()
+    assert.deepEqual(await layout(), beforeRefreshLayout, 'Automatic refresh must not move headings, cards or table rows')
+    assert.equal(await regions.getByRole('status').count(), 0, 'Automatic refresh must not insert live announcements')
     assert.ok(await regions.locator('[aria-busy="true"]').count() > 0)
     holdTrade = false; amountMultiplier = 2
     pendingTrade.splice(0).forEach(resolve => resolve())
     await cards.first().locator('[title="6"]').waitFor()
     await ready(3)
+    assert.deepEqual(await layout(), beforeRefreshLayout, 'Completing automatic refresh must also preserve the layout')
     assert.ok(tradeCount() > before)
-    console.log('PASS active cache expires and refetches after five minutes')
+    console.log('PASS five-minute refresh preserves layout without live announcements and clears busy state')
 
     holdSix = true
     await choose(6)
@@ -255,6 +263,17 @@ async function until(check) {
     await cardRefresh.waitFor({ state: 'hidden' })
     await tableRefresh.waitFor({ state: 'hidden' })
     console.log('PASS manual retry preserves data and announces progress in both shared regions until completion')
+
+    const afterRetryLayout = await layout()
+    holdTrade = true
+    await page.clock.fastForward(300100)
+    await until(() => pendingTrade.length >= 4)
+    assert.equal(await regions.getByRole('status').count(), 0, 'The next automatic refresh must not inherit the manual announcement')
+    assert.deepEqual(await layout(), afterRetryLayout)
+    holdTrade = false
+    pendingTrade.splice(0).forEach(resolve => resolve())
+    await ready(12)
+    console.log('PASS automatic refresh after a manual retry remains silent and does not shift content')
 
     availabilityMode = '503'
     const beforeInitialFailure = tradeCount()

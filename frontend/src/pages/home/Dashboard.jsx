@@ -32,16 +32,17 @@ const ARROW = { up: '▲', down: '▼', flat: '' }
 // 점유율 글자('7.3%')로 막대 너비를 정한다. 값이 없으면('—') 빈 막대, 숫자는 0~100%로 제한한다.
 const shareBarWidth = share => { const pct = Number.parseFloat(share); return Number.isFinite(pct) ? `${Math.min(100, Math.max(0, pct))}%` : 0 }
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
+const regionBusy = states => states.some(s => s.loading || s.refreshing)
 
-/** 영역별 갱신·오류 안내. 기존 데이터를 유지하는 동안에도 진행 상태를 알린다. */
+/** 수동 재시도·오류 안내. 자동 갱신은 본문 영역의 aria-busy만 갱신한다. */
 function RegionFeedback({ label, states }) {
   const failed = [...new Set(states.filter(s => s.error))]
-  const refreshing = states.some(s => s.refreshing && !s.loading)
-  if (!failed.length && !refreshing) return null
+  const retrying = states.some(s => s.retrying && !s.loading)
+  if (!failed.length && !retrying) return null
   const retry = () => failed.forEach(s => s.reload?.())
   const error = failed.length ? { ...failed[0].error, message: `${label} 정보를 불러오지 못했습니다. ${failed[0].error.message}` } : null
   return <div>
-    {refreshing && <p role="status" aria-live="polite" aria-busy="true" className="muted" style={{ fontSize: 12 }}>{label} 정보를 갱신 중입니다.</p>}
+    {retrying && <p role="status" aria-live="polite" className="muted" style={{ fontSize: 12 }}>{label} 정보를 갱신 중입니다.</p>}
     <ErrorNotice error={error} retry={retry} />
   </div>
 }
@@ -310,7 +311,7 @@ export default function Dashboard({ route }) {
             {/* 화살표는 지표 카드 묶음 기준으로 놓아 화면 폭이 바뀌어도 카드와의 위치가 유지된다. 카드가 화살표 위에 그려진다. */}
             <div style={{ position: 'relative', marginTop: 24 }}>
             <TrendArrow />
-            <div data-reveal="up" data-d="1" aria-busy={data.kpiLoading} style={{ position: 'relative', zIndex: 1, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
+            <div data-reveal="up" data-d="1" aria-busy={regionBusy(data.states.kpi)} style={{ position: 'relative', zIndex: 1, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
               {data.kpis.map(k => {
                 // 수출액·수입액은 같은 기준의 순위 화면으로 연결한다. 무역수지는 연결할 화면이 없어 보여 주기만 한다.
                 const Box = k.flow ? Link : 'div'
@@ -371,7 +372,7 @@ export default function Dashboard({ route }) {
             </div>
           </div>
           <RegionFeedback label="수출 상위 품목" states={data.states.cards} />
-          <div data-reveal="up" data-d="1" aria-busy={data.cardsLoading} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
+          <div data-reveal="up" data-d="1" aria-busy={regionBusy(data.states.cards)} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
             {data.cardsLoading && Array.from({ length: skeletonCount }, (_, i) => <RankCardSkeleton key={i} />)}
             {!data.cardsLoading && cards.map((c, i) => (
               <Link key={c.hs} to={data.cardLink('COUNTRY', c.hs)} className="dash-card rank-card" style={{ ...CARD_STYLE, '--accent': RANK_ACCENTS[i % RANK_ACCENTS.length] }}>
@@ -400,7 +401,7 @@ export default function Dashboard({ route }) {
       <main className="home-zones">
         <section className="zone zone-tables" style={{ padding: '64px 0' }}>
         <div className="wrap resp-stack" style={{ display: 'flex', gap: 20 }}>
-          <div data-reveal="up" className="card zone-card" aria-busy={productTable.loading} style={{ flex: '1 1 440px' }}>
+          <div data-reveal="up" className="card zone-card" aria-busy={regionBusy(data.states.products)} style={{ flex: '1 1 440px' }}>
             <div className="between" style={{ alignItems: 'flex-start' }}>
               <div>
                 <h2 className="t2">{data.productTable.title}</h2>
@@ -421,7 +422,7 @@ export default function Dashboard({ route }) {
             {data.productTable.empty && <p className="muted" style={{ padding: '18px 4px' }}>조회 기간에 집계된 품목 실적이 없습니다.</p>}
             {data.productTable.note && <p className="note" style={{ marginTop: 12 }}>{data.productTable.note}</p>}
           </div>
-          <div data-reveal="up" data-d="1" className="card zone-card" aria-busy={countryTable.loading || countryTable.pieLoading} style={{ flex: '1.3 1 540px' }}>
+          <div data-reveal="up" data-d="1" className="card zone-card" aria-busy={regionBusy(data.states.countries)} style={{ flex: '1.3 1 540px' }}>
             {/* 왼쪽: 교역국 표, 오른쪽: 수출액 비중. 두 제목을 같은 크기·같은 높이에 둔다. 상세보기는 카드 오른쪽 위를 유지한다. */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 26 }}>
               <div style={{ flex: '1 1 260px', minWidth: 0 }}>
