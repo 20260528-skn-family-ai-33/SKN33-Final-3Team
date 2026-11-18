@@ -38,8 +38,11 @@ class SqlFilterTest(unittest.TestCase):
         self.assertIn('GROUP BY', safe_error(group_by))
         self.assertNotIn('admin', safe_error(login))
 
-        task = SimpleNamespace(custom_query='2025년 미국 수출의 분기별 합계',
-                               conditions=Conditions(period={'start': '2025-01-01', 'end': '2025-12-01'}))
+        # Successful retry must match the confirmed scope; otherwise period validation
+        # correctly requests another generation, unrelated to the MySQL error under test.
+        task = SimpleNamespace(custom_query='2025년 미국 수출의 연간 합계',
+                               conditions=Conditions(country_codes=['US'],
+                                   period={'start': '2025-01-01', 'end': '2025-12-01'}))
         ok = ("SELECT SUM(amount_usd) AS value FROM export_summary WHERE country_code = 'US' AND hs_ver = 'HS2022' "
               "AND trade_month BETWEEN '2025-01-01' AND '2025-12-01'")
         client = MagicMock(); client.parse.side_effect = [draft(ok), draft(ok)]
@@ -53,7 +56,11 @@ class SqlFilterTest(unittest.TestCase):
              patch('backend.app.agents.sql.execute_readonly', side_effect=run):
             result = generated_analysis(object(), Settings({}), client, ledger, task, finish_reserve=40, latest_month='2025-12')
         self.assertEqual(result.result.status, 'OK')
+        self.assertTrue(result.meta['period_verified'])
+        self.assertEqual(client.parse.call_count, 2)
+        self.assertEqual(len(calls), 2)
         self.assertIn('1055', client.parse.call_args.kwargs['payload']['previous_error'])
+        self.assertIn('GROUP BY', client.parse.call_args.kwargs['payload']['previous_error'])
 
 
 class SqlFilterBypassTest(unittest.TestCase):
