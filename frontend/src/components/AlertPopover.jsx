@@ -7,9 +7,7 @@ import { Btn } from './ui'
 
 export default function AlertPopover({ onClose }) {
   const { run } = useApp()
-  const { notifications, setNotifications, unread, refreshNotifications, hiddenNotificationIds, hideNotifications } = useNotifications()
-  const hidden = new Set(hiddenNotificationIds)
-  const visible = notifications.filter(n => !hidden.has(String(n.id)))
+  const { setNotifications, miniUnread, refreshNotifications, miniNotifications: visible, hideNotifications } = useNotifications()
   useEffect(() => { void run(refreshNotifications) }, [refreshNotifications, run])
   const open = n => {
     setNotifications(list => list.map(x => (x.id === n.id ? { ...x, read: true } : x)))
@@ -22,7 +20,7 @@ export default function AlertPopover({ onClose }) {
       <div className="alert-pop" role="dialog" aria-label="최근 알림">
         <div className="between" style={{ padding: '18px 20px', gap: 10, flexWrap: 'wrap', borderBottom: '1px solid var(--line)' }}>
           <span style={{ fontSize: 18, fontWeight: 800 }}>
-            알림 {unread > 0 && <span className="tag red" style={{ marginLeft: 6 }}>미확인 {unread}건</span>}
+            알림 {miniUnread > 0 && <span className="tag red" style={{ marginLeft: 6 }}>미확인 {miniUnread}건</span>}
           </span>
           <div style={{ display: 'flex', gap: 12 }}>
             <button type="button" className="reset muted" onClick={() => setNotifications(list => list.map(x => ({ ...x, read: true })))}>모두 읽음</button>
@@ -47,6 +45,7 @@ export default function AlertPopover({ onClose }) {
         })}
         {!visible.length && <p className="muted" style={{ padding: '22px 20px' }}>새 알림이 없습니다.</p>}
         <div style={{ padding: '14px 20px', background: 'var(--bg)' }}>
+          <p className="note" style={{ marginBottom: 10 }}>여기서 삭제한 알림은 전체 알림함에 남아 있습니다.</p>
           <Btn block onClick={() => { onClose(); navigate('/account/notifications') }}>알림함 전체 보기</Btn>
         </div>
       </div>

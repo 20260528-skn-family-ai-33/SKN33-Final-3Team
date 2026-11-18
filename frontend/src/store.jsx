@@ -269,8 +269,13 @@ export function AppProvider({ children }) {
     logout, changePassword, withdraw, profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms, revokeNotificationTerms,
     subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
     downloadReport, mainView, notify, run, fail])
-  const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications, hiddenNotificationIds, hideNotifications }),
-    [notifications, setNotifications, unread, refreshNotifications, hiddenNotificationIds, hideNotifications])
+  const miniNotifications = useMemo(() => {
+    const hidden = new Set(hiddenNotificationIds)
+    return notifications.filter(n => !hidden.has(String(n.id)))
+  }, [notifications, hiddenNotificationIds])
+  const miniUnread = miniNotifications.filter(n => !n.read).length
+  const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications, hiddenNotificationIds, hideNotifications, miniNotifications, miniUnread }),
+    [notifications, setNotifications, unread, refreshNotifications, hiddenNotificationIds, hideNotifications, miniNotifications, miniUnread])
   const toastValue = useMemo(() => ({ toast, setToast }), [toast])
   return <AppContext.Provider value={value}><NotificationContext.Provider value={notificationValue}>
     <ToastContext.Provider value={toastValue}>{children}</ToastContext.Provider>
