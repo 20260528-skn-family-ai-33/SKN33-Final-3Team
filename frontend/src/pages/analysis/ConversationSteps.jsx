@@ -3,6 +3,7 @@ import Icon from '../../components/Icon'
 import { Btn, Check } from '../../components/ui'
 import { Hs4Search } from '../../components/pickers'
 import { countryName, productChoiceLabel } from '../../data/catalog'
+import Flag from '../../components/Flag'
 import { monthEndDate } from '../../api/adapters'
 
 export function Progress({job}) {
@@ -45,7 +46,7 @@ export function PromptActions({prompt,busy,reply,onDirectInput}) {
   return <div className="chat-step"><strong>{prompt.message}</strong>
     {prompt.choices?.length>0 && <div className="chips">{prompt.choices.map(c=>{
       const code=c.hs_item?.hs_code || (prompt.kind==='HS_ITEM' && /^(?:\d{4}|\d{6})$/.test(c.choice_id) ? c.choice_id : null)
-      return <Btn key={c.choice_id} disabled={busy} onClick={()=>reply({choice_ids:[c.choice_id]})}>{productChoiceLabel(code,c.label)}</Btn>
+      return <Btn key={c.choice_id} disabled={busy} onClick={()=>reply({choice_ids:[c.choice_id]})}>{prompt.kind==='COUNTRY'&&<Flag code={c.choice_id} blank={false} />}{productChoiceLabel(code,c.label)}</Btn>
     })}</div>}
     {prompt.kind==='COUNTRY' && <div><Btn disabled={busy} onClick={onDirectInput}>목록에 없는 국가 직접 입력</Btn><p className="note">전체 국가명 또는 국가 코드로 입력하세요. 예: 중국, CN</p></div>}
     {prompt.kind==='HS_ITEM' && <>
@@ -54,7 +55,7 @@ export function PromptActions({prompt,busy,reply,onDirectInput}) {
       buttonLabel={()=>'이 HS4 전체로 분석'} onSelectAll={selected=>selected && selectHs(selected.code)}/>
     <div className="chips">{group?.items.map(([code,name])=><Btn key={code} disabled={busy} onClick={()=>selectHs(code)}>{productChoiceLabel(code,name)}</Btn>)}</div></>}
     {prompt.kind==='INTEREST_SELECT' && <><p>국가 {countries.length}/20 · 품목 {products.length}/5</p><div className="chips">
-      {prompt.interests?.country_codes?.map(c=><Btn key={c} aria-pressed={countries.includes(c)} kind={countries.includes(c)?'plum':'line'} disabled={busy||(!countries.includes(c)&&countries.length>=20)} onClick={()=>setCountries(toggle(countries,c))}>{countryName(c)}</Btn>)}
+      {prompt.interests?.country_codes?.map(c=><Btn key={c} aria-pressed={countries.includes(c)} kind={countries.includes(c)?'plum':'line'} disabled={busy||(!countries.includes(c)&&countries.length>=20)} onClick={()=>setCountries(toggle(countries,c))}><Flag code={c} />{countryName(c)}</Btn>)}
       {prompt.interests?.hs_items?.map(h=><Btn key={h.hs_ver+h.hs_code} aria-pressed={products.includes(h)} kind={products.includes(h)?'plum':'line'} disabled={busy||(!products.includes(h)&&products.length>=5)} onClick={()=>setProducts(toggle(products,h))}>{productChoiceLabel(h.hs_code,h.name_ko)}</Btn>)}</div>
       <Btn kind="red" disabled={busy||(!countries.length&&!products.length)} onClick={()=>reply({interest_selection:{country_codes:countries,hs_items:products}})}>선택 적용</Btn></>}
     {preview && <><p>{preview.conditions.period.start} ~ {monthEndDate(preview.conditions.period.end)} · {preview.conditions.country_codes?.map(countryName).join(', ')||'전체 국가'}{preview.conditions.hs_items?.map(h=>' · HS '+h.hs_code)}</p>

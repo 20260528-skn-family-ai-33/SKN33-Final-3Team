@@ -437,3 +437,5 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 .page-loader{min-height:60vh}
 @keyframes loading-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.loading-ring{animation:none}}
+
+.flag { display: inline-block; width: 1.33em; height: 1em; flex-shrink: 0; margin-right: 6px; vertical-align: -0.125em; border-radius: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,.08); background-size: cover; }
