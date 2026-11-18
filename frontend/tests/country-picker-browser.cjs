@@ -47,6 +47,10 @@ const { chromium } = require('playwright')
 
     // 선택한 국가는 아래 칩으로 보인다
     assert.deepEqual(await chips(), ['미국'])
+    // 국기(#132): 목록과 선택 칩에 국가 코드의 국기가 붙는다. 국기는 장식이라 스크린리더 이름은 국가 이름 그대로다.
+    assert.equal(await page.locator('.interest-summary li .flag.fi-us[aria-hidden="true"]').count(), 1)
+    assert.ok(await page.locator('.flag.fi-jp[aria-hidden="true"]').count() >= 1)
+    assert.equal(await page.getByRole('button', { name: '미국 선택 삭제', exact: true }).count(), 1)
     // 대륙을 누르면 그 대륙 국가 전체 추가, 칩이 선택 상태로 바뀐다
     await oceania.click()
     assert.deepEqual(await value(), ['뉴질랜드', '미국', '호주'])
