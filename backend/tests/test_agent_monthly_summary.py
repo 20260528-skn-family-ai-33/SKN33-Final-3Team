@@ -12,6 +12,19 @@ from backend.tests.test_agent_graph import initial
 class MonthlySummaryTest(unittest.TestCase):
     def test_endpoint_amounts_and_extrema_survive_monthly_direction_repair(self):
         lines = [
+            '수출액은 10월 120만 달러, 12월 150만 달러로 증가했습니다.',
+            '10월 수출액은 120만 달러였고 12월에는 150만 달러로 늘었습니다.',
+            '10월 수출액은 120만, 12월에는 150만으로 증가했습니다.',
+            '10월 수출액은 1.2억 달러, 12월에는 1.5억 달러로 증가했습니다.',
+            '10월 수출액은 1,200,000 USD, 12월에는 1,500,000 USD로 증가했습니다.',
+            '10월 수출액은 USD 1,200,000, 12월에는 USD 1,500,000로 증가했습니다.',
+            '10월 수출액은 $1.2M, 12월에는 $1.5M로 증가했습니다.',
+            '10월 수출액은 1200000(USD), 12월에는 1500000(USD)로 증가했습니다.',
+            '12월 수출액은 150만 달러로 증가했습니다.',
+            '12월 수출액은 0달러로 감소했습니다.',
+            '12월 수출액은 1.5만으로 증가했습니다.',
+            '12월 수출액은 1조로 증가했습니다.',
+            '12월 수출액은 1500000usd로 증가했습니다.',
             '2025년 10월 120만 달러에서 12월 150만 달러로 수출액이 증가했습니다.',
             '월별 수출액은 10월이 최저(100만 달러)였고 12월에 최고로 증가했습니다.',
             '10월 수출액은 120만달러에서 12월 150만으로 증가했습니다.',
@@ -32,16 +45,35 @@ class MonthlySummaryTest(unittest.TestCase):
                     self.assertEqual(state.draft.sentences(), [line, line])
                     self.assertEqual(state.draft.turn_summary, line)
                     # Preserving prose is not approving it: invented amounts still fail.
-                    if line == lines[0]:
+                    if line in lines[:2]:
                         self.assertTrue(all(c.status == 'MISMATCH'
                                             for c in judge_draft(state, snapshots=sources).checks))
+                        verify(state, snapshots=sources)
+                        self.assertEqual(state.verification.summary_status, 'MISMATCH')
+                        self.assertEqual(state.draft.turn_summary, '')
+
+    def test_preserved_amounts_still_require_saved_numeric_evidence(self):
+        state, sources = self.writer_example()
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        line = '11월 수출액은 101,223,467달러였고 12월에는 122,387,836달러로 늘었습니다.'
+        state.draft = assemble(state, Draft(conclusion=[dict(task_id='t1', sentences=[line])],
+                                           explanation=[line], turn_summary=line), {}, lambda _: {})
+        self.assertEqual(state.draft.sentences(), [line, line])
+        verdict = judge_draft(state, snapshots=sources)
+        self.assertEqual([c.status for c in verdict.checks], ['PASS', 'PASS'])
+        self.assertEqual(verdict.summary_status, 'PASS')
+        # The preserved prose cannot pass on the Writer digest alone.
+        for snapshots in ({}, {key: {**value, 'rows': []} for key, value in sources.items()}):
+            verdict = judge_draft(state, snapshots=snapshots)
+            self.assertTrue(all(c.status == 'MISMATCH' for c in verdict.checks))
 
     def test_plain_month_ranges_still_use_computed_movement(self):
         from backend.app.agents.monthly_summary import reconcile_monthly_claims
         state, sources = self.writer_example()
         state.plan.tasks[0].slots.answer_format = 'TEXT'
         for line in ('월별 수출액은 1~5월 계속 증가했습니다.',
-                     '월별 수출액은 1월부터 5월까지 증가했습니다.'):
+                     '월별 수출액은 1월부터 5월까지 증가했습니다.',
+                     '2025년 11월에 수출액이 증가한 뒤 12월에 감소했습니다.'):
             state.draft = Draft(conclusion=[dict(task_id='t1', sentences=[line])], turn_summary=line)
             reconcile_monthly_claims(state, state.draft)
             self.assertNotIn(line, state.draft.sentences())

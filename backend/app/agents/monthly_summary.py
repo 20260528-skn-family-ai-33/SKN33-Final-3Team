@@ -10,6 +10,10 @@ _TREND = re.compile(r'추이|추세|월별|최저|최고|최소|최대|전년|�
 # Signed/quantified statements anchored to the monthly table belong to its numerical summary.
 _EXTREMUM = re.compile(r'최저|최고|최소|최대|가장\s*(?:낮|높|크|작|많|적)')
 _EXTREME = re.compile(_EXTREMUM.pattern + r'|사이|범위|[~∼]|달러에서')
+# Monetary prose must retain its amounts for the ordinary verifier, regardless
+# of how the Writer connects the dates. Dates/month counts alone do not match.
+_AMOUNT = re.compile(r'\d[\d,]*(?:\.\d+)?\s*[(（]?\s*(?:달러|USD|만|억|조)'
+                     r'|(?:USD|US\$|\$)\s*[+-]?\d', re.I)
 _MONTH_DIRECTION = re.compile(r'(?:\d+월|월별|매월|매달|모든 달|전년 동월).{0,30}(?:증가|감소|상승|하락|늘|줄|오르|내리)'
                               r'|(?:증가|감소|상승|하락)한 (?:달|월)')
 
@@ -211,10 +215,10 @@ def reconcile_monthly_claims(state, draft):
     def direction(line):
         comparison = re.sub(r'전월\s*(?:대비|보다)', '', line)
         return (_uncited_monthly_claim(line) and _MONTH_DIRECTION.search(line)
-                # Keep endpoint amounts/extrema for the ordinary verifier. A
-                # plain month range (1~5월 증가) still needs direction repair.
+                # Keep any amount/extremum claim, not just "달러에서" endpoints.
+                # A plain month range (1~5월 증가) still needs direction repair.
                 and not _EXTREMUM.search(line)
-                and not re.search(r'(?:달러|USD)\s*(?:에서|부터)', line, re.I)
+                and not _AMOUNT.search(line)
                 and not re.search(r'전년|작년|지난해|동월|대비|보다|차액|차이', comparison))
     movements = {task.task_id: task_series(state, task, movement=True) for task in state.plan.tasks}
     for task, conclusion in zip(state.plan.tasks, draft.conclusion, strict=True):
