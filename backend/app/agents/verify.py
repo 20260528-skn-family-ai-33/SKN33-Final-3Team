@@ -767,8 +767,12 @@ def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
     if meta.get('kind')=='PREDICTION' and meta.get('anchor'):
         anchor=str(meta['anchor'])[:7]
         scope.update(kind='PREDICTION',anchor=anchor,period={'start':anchor,'end':anchor})
+    rows = payload.get('rows', [])
+    saved = payload.get('verification') or {}
+    if kind == 'TREND' and meta.get('period_totals') and saved.get('kind') == 'TREND_MONTHLY_V1':
+        rows = [*rows, *saved.get('rows', [])]
     return {**scope,
-            'columns':payload.get('columns',[]),'rows':payload.get('rows',[]),
+            'columns':payload.get('columns',[]),'rows':rows,
             '_verification_source':'SNAPSHOT'}
 
 

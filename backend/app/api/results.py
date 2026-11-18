@@ -189,13 +189,15 @@ def analysis_conditions(conditions):
     return {key:value for key,value in conditions.items() if key in Conditions.model_fields}
 
 
-def result_table(store, uid, rows, meta, conditions=None, sql=None, columns=None):
+def result_table(store, uid, rows, meta, conditions=None, sql=None, columns=None, *, verification_rows=None):
     rows=clean(rows)
     keys=list(rows[0]) if rows else []
     columns=columns or [{'key':k,'label':LABELS.get(k,k),'type':'number' if isinstance(rows[0][k],(int,float)) or k.endswith(('_usd','_pct')) else 'string',
                         'unit':'USD' if k.endswith('_usd') else '%' if k.endswith('_pct') else None} for k in keys]
     columns=display_columns(columns,rows,meta,(conditions or {}).get('trade_flow'))
     payload={'columns':columns,'rows':rows,'meta':clean(meta),'conditions':clean(analysis_conditions(conditions or {})),'sql':sql or [],'total_rows':len(rows)}
+    if verification_rows is not None:
+        payload['verification']={'kind':'TREND_MONTHLY_V1','rows':clean(verification_rows)}
     identity=save_snapshot(store,uid,'RESULT',payload)
     return {'result_id':identity,'columns':columns,'rows':rows,'total_rows':len(rows),
             'page':page_info(1,max(1,len(rows)),len(rows)),'meta':meta}

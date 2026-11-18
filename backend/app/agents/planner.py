@@ -74,6 +74,7 @@ ranking_limit은 금액 순위 또는 유망 품목·국가 조회에서 사용�
 share_basis는 한국 교역액을 분모로 하는 상대국별·품목별 비중이면 KOREA_TRADE_PARTNER,
 해외 수입시장의 한국 비중이면 FOREIGN_IMPORT_MARKET, 불명확하면 null입니다.
 수출액·수입액의 월별 추이 또는 기간 합계·차액·증감률만 필요한 STATISTICS는 amount_view=MONTHLY 또는 TOTAL로 두고 custom_query=null로 둡니다.
+월별 수출액·수입액 중 가장 적은 달·많은 달과 각 금액만 묻는 질문도 STATISTICS, amount_view=MONTHLY, custom_query=null입니다. 월별 원본과 최저·최고 근거를 템플릿이 제공합니다.
 무역수지(수출액에서 수입액을 뺀 금액)는 STATISTICS, trade_balance=true로 두고 수출·수입 두 작업으로 나누지 않습니다.
 수출액과 수입액을 각각 보여 달라는 요청은 같은 조건의 수출·수입 STATISTICS로 나눕니다. 다중 기간은 각 작업에 모두 보존합니다.
 수출입을 한 하위 질문에 남기는 경우 trade_flow=null로 둡니다.
@@ -96,8 +97,9 @@ target_selections는 앞 하위 질문의 결과표에서 다음 대상을 고�
 order_by(country_rank/product_rank/amount_usd)를 씁니다. 모호한 기준은 null입니다.
 국가 안 품목 순위는 country_rank, 품목 안 국가 순위는 product_rank입니다.
 결과 자체를 리포트로 전달하면 대상 선택 규칙은 필요하지 않습니다.
-answer_format은 이전 질문·답변 내용을 묻거나 이전 대화를 이어 설명·정리해 달라는 질문
-(예: "아까 본 결과를 말로 다시 설명해줘", "앞에서 비교한 내용 정리해줘")이면 TEXT, 그 밖에는 null입니다.
+answer_format은 첫 질문이라도 표·차트 없이 글로만 설명해 달라고 요청하면 TEXT입니다.
+이전 질문·답변 내용을 묻거나 이전 대화를 이어 설명·정리해 달라는 질문
+(예: "아까 본 결과를 말로 다시 설명해줘", "앞에서 비교한 내용 정리해줘")도 TEXT, 그 밖에는 null입니다.
 TEXT여도 intent와 국가·품목·기간 슬롯은 같은 규칙으로 채웁니다.
 확인·승인 값, 실행 단계, result_id는 생성하지 마세요.
 """
@@ -731,6 +733,19 @@ def postprocess(output: PlannerOutput, question: str, terms=TRADE_TERMS, *,
     output = merge_product_phrases(rescue_trade_terms(output, terms, question), question)
     output = _normalize_report_requests(output, question)
     output = _normalize_analysis(output, question, previous_conditions)
+    # 그룹별 금액 조건은 합계 표시(amount_view)와 달리 HAVING이 필요하다.
+    # 플래너가 단순 합계로 골라도 사용자가 명시한 임계값을 버리지 않는다.
+    if len(output.tasks) == 1 and output.tasks[0].intent in ('STATISTICS', 'RANKING'):
+        if re.search(r'(?:품목|국가)별', question) and re.search(r'(?:달러|USD|불)\s*(?:이상|이하|초과|미만)', question, re.I):
+            task = output.tasks[0]
+            task.intent = 'STATISTICS'
+            task.custom_query = question
+            task.slots.amount_view = None
+            task.slots.amount_difference_only = None
+    # 명시한 출력 형식은 첫 질문에도 적용한다. 복합 질문의 개별 요청은 플래너 슬롯을 보존한다.
+    if len(output.tasks) == 1 and re.search(r'(?:글|텍스트|문장)(?:로|으로)\s*만', question):
+        if not re.search(r'(?:글|텍스트|문장)(?:로|으로)\s*만\s*(?:말고|아니)', question):
+            output.tasks[0].slots.answer_format = 'TEXT'
     from backend.app.agents.multi_year import normalize_year_plan
     # 직전 무역수지를 잇는 후속("그럼 2023년부터 2025년까지 비교해줘")은 연도 비교로 묶지 않는다(무역수지는 연도 비교가 아니다).
     balance_followup = continues_trade_balance(previous_trade_balance, question, [t.slots for t in output.tasks],

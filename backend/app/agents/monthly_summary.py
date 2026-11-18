@@ -48,7 +48,8 @@ def monthly_sentences(task, target, facts):
     cond = task.conditions
     if not facts or not cond or not cond.period or target.get('total_usd') is None:
         return ()
-    flow = '수입액' if cond.trade_flow == 'IMPORT' else '수출액'
+    flow = '무역수지' if task.slots.trade_balance else '수입액' if cond.trade_flow == 'IMPORT' else '수출액'
+    topic = '는' if flow == '무역수지' else '은'
     subject = ' '.join(filter(None, ('한국의', '대' + target['country_name'] if target.get('country_code') else None,
                                     target.get('name') if target.get('hs_code') else None, flow)))
     total = korean_usd(target['total_usd'])
@@ -64,7 +65,7 @@ def monthly_sentences(task, target, facts):
             change_text = '두 기간 금액이 같습니다'
         else:
             change_text = f"전년보다 {number(abs(change), 1):g}% {'증가' if change > 0 else '감소'}했습니다"
-        totals = f'{period} {subject}은 {total}, {_period_label(cond.compare_period)}은 {korean_usd(baseline)}이며 {change_text}.'
+        totals = f'{period} {subject}{topic} {total}, {_period_label(cond.compare_period)}은 {korean_usd(baseline)}이며 {change_text}.'
         count = facts['increased_count']
         items = facts.get('increased_months', [])
         if count == 0:
@@ -78,11 +79,11 @@ def monthly_sentences(task, target, facts):
     min_label = '공동 최저' if facts['min_count'] > 1 else '최저'
     max_label = '공동 최고' if facts['max_count'] > 1 else '최고'
     if facts['min_usd'] == facts['max_usd']:
-        extrema = f"모든 달의 {flow}이 {number(facts['min_usd']):,}달러로 같습니다."
+        extrema = f"모든 달의 {flow}{'가' if flow == '무역수지' else '이'} {number(facts['min_usd']):,}달러로 같습니다."
     else:
         extrema = (f"월별 {flow}의 {min_label}는 {_date(facts['min_month'])} {number(facts['min_usd']):,}달러, "
                    f"{max_label}는 {_date(facts['max_month'])} {number(facts['max_usd']):,}달러입니다.")
-    return (f'{period} {subject}은 {total}입니다.', extrema)
+    return (f'{period} {subject}{topic} {total}입니다.', extrema)
 
 
 def task_series(state, task):

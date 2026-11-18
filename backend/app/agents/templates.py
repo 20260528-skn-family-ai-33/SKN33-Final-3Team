@@ -21,6 +21,7 @@ class Analysis:
     conditions: dict
     sql: list
     columns: list | None = None
+    verification_rows: list | None = None
 
 
 def api_conditions(conditions):
@@ -104,6 +105,7 @@ def run_template(store, uid, task, step, timeout=30):
         country_names, product_names = _names(store)
     public = api_conditions(conditions)
     limitations = []
+    verification_rows = None
     if template == 'TREND':
         balance = bool(step.args.get('trade_balance'))
         source = 'export_summary' if balance or conditions.trade_flow == 'EXPORT' else 'import_summary'
@@ -220,6 +222,11 @@ def run_template(store, uid, task, step, timeout=30):
         kept = targets[:1000 if totals else 1000 // len(requested)]
         rows = [{**{k: v for k, v in target.items() if k != 'monthly'}, **monthly}
                 for target in kept for monthly in ([{}] if totals else target['monthly'])]
+        if totals:
+            # 표시용 합계와 같은 조회에서 얻은 원본 월별 값을 별도로 저장한다. LLM digest에서 복원하지 않는다.
+            identities = ('hs_code', 'hs_ver', 'name', 'country_code', 'country_name')
+            verification_rows = [{**{k: target[k] for k in identities}, **month}
+                                 for target in kept for month in target['monthly']]
         meta = trade.metadata(store, conditions.period.start, conditions.period.end)
         meta.update(kind='TREND', targets=[{k: v for k, v in t.items() if k != 'monthly'} for t in kept],
                     truncated_targets=len(targets)-len(kept), compare_period=public['compare_period'])
@@ -323,4 +330,4 @@ def run_template(store, uid, task, step, timeout=30):
     limitations = list(dict.fromkeys(limitations))
     result = ToolResult(status='OK' if rows else 'NO_DATA', period=conditions.period, source='관세청',
         digest=bounded(digest), completeness='PARTIAL' if limitations else 'COMPLETE', limitations=limitations)
-    return Analysis(rows, meta, result, public, list(store.queries))
+    return Analysis(rows, meta, result, public, list(store.queries), verification_rows=verification_rows)

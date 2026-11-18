@@ -339,8 +339,21 @@ class NameCatalog:
                 self.countries |= {name for key,name in source_names(source.get('top',[])) if key in ('name','code')}
         self.names=frozenset(n for n in known_names if n and len(n)>1)|{n for _,n in fields if len(n)>1}
         # 근거 범위의 HS 코드와 그 표시명("HS 3304 화장품")은 품목 하나다. 묶음(GROUP) 판정에서 하나로 센다.
-        self._same_product = {str(source['hs_name']): str(source['hs_code']) for source in sources
-                              if isinstance(source, dict) and source.get('hs_code') and source.get('hs_name')}
+        pairs = {}
+        def product_pairs(value):
+            if isinstance(value, (list, tuple)):
+                for item in value: product_pairs(item)
+            elif isinstance(value, dict):
+                code = value.get('hs_code') or value.get('hs6_code')
+                name = value.get('hs_name') or value.get('product_name') or value.get('name')
+                if code and name and re.fullmatch(r'(?:\d{2}|\d{4}|\d{6}|\d{10})', str(code)):
+                    pairs.setdefault(str(name), set()).add(str(code))
+                for key, item in value.items():
+                    if key not in ('columns', 'conditions', 'meta') and isinstance(item, (dict, list)):
+                        product_pairs(item)
+        product_pairs(sources)
+        # 같은 표시명이 여러 코드에 연결되면 같은 품목이라고 단정하지 않는다.
+        self._same_product = {name: next(iter(codes)) for name, codes in pairs.items() if len(codes) == 1}
         bindings = {}
         for source in sources:
             for mention, name in source.get('_country_mentions', ()):
@@ -1332,6 +1345,7 @@ def _is_amount_range(sentence, left, right, end):
     if right.quantity.unit != 'USD' or left.quantity.unit not in (None, 'USD'):
         return False
     between = sentence[left.quantity_span[1]:right.quantity_span[0]].strip()
+    between = re.sub(r'^\(\s*(?:\d{4}년\s*)?\d{1,2}월\s*\)\s*', '', between)
     if between in ('~', '∼', '～', '–'):
         return True
     return between in ('에서', '부터') and bool(re.search(r'사이|범위', sentence[right.quantity_span[1]:end]))
@@ -1369,7 +1383,11 @@ def _bind_monthly_extrema(sentence, claims, catalog, monthly_series):
                 prefix = sentence[start:claim.quantity_span[0]]
                 if claim.metric.relation != 'EQ' and re.search(r'(?:최소|최대)\s*$', prefix):
                     continue
-                claims[i] = replace(claim, metric=replace(claim.metric, aggregate=role), text=clause,
+                # 금액 뒤 괄호의 월은 그 금액에만 속한다. 앞 금액의 월을 상속하지 않는다.
+                postfix = re.match(r'\s*\(\s*((?:\d{4}년\s*)?\d{1,2}월)\s*\)',
+                                   sentence[claim.quantity_span[1]:end])
+                observed = read_time(postfix[1], next(iter(time.years)) if len(time.years) == 1 else None)[0] if postfix else claim.time
+                claims[i] = replace(claim, time=observed, metric=replace(claim.metric, aggregate=role), text=clause,
                                     valid=claim.valid and valid and claim.metric.family == 'AMOUNT'
                                     and claim.metric.aggregate in (None, 'TOTAL'))
             continue
