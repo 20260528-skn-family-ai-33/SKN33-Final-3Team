@@ -430,7 +430,9 @@ export default function Dashboard({ route }) {
                   {countryTable.loading && Array.from({ length: tableSkeletonRows.countries }, (_, i) => <TableRowSkeleton key={i} cols={COUNTRY_TABLE_COLS} widths={[14, '70%', 48, 44]} />)}
                   {data.countryTable.rows.map(([rank, name, exp, imp, code]) => (
                     <div key={name} className="tr row2" style={{ gridTemplateColumns: COUNTRY_TABLE_COLS }}>
-                      <span className="b">{rank}</span><span title={name} style={{ fontWeight: 700 }}><Flag code={code} blank={false} />{name}</span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
+                      <span className="b">{rank}</span>{/* 국기와 국가명을 나눠 국기가 한 줄을 혼자 차지하지 않게 하고, 줄 제한은 국가명에만 건다(#132).
+                          국기 폭만큼 좁아진 만큼 국가명은 세 줄까지 둔다(행 높이 72px 안에 22px×3줄). */}
+                      <span title={name} style={{ fontWeight: 700, display: 'flex', alignItems: 'center' }}><Flag code={code} blank={false} /><span style={{ minWidth: 0, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden', overflowWrap: 'break-word' }}>{name}</span></span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
                     </div>
                   ))}
                   {data.countryTable.empty && <p className="muted" style={{ padding: '18px 4px' }}>조회 기간에 집계된 교역국 실적이 없습니다. (— 는 실적 없음)</p>}

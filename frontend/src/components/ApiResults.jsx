@@ -7,12 +7,17 @@ import { api, download } from '../api/client'
 import { useApp } from '../store'
 import { resultColumns } from './resultColumns'
 import Flag from './Flag'
-import { countryCode } from '../data/catalog'
+import { countryCode, countryName } from '../data/catalog'
 
-// 국가 칸이면 국기용 코드를 돌려준다(#132). 품목 행의 '명칭' 칸은 국가가 아니다.
+// 국가 칸이면 국기용 코드를 돌려준다(#132).
+// '명칭(name)' 칸은 결과 형식에 따라 국가명일 수도, 품목명일 수도 있다(예: 이전 예측 결과는 hs6 + 품목명 name + country_code).
+// 그래서 열 이름만 보지 않고, 그 값이 행의 국가 코드에 해당하는 국가명과 같을 때만 국가 칸으로 본다.
 const COUNTRY_KEYS = new Set(['country', 'country_name', 'country_code'])
-const flagCodeOf = (row, key) => COUNTRY_KEYS.has(key) || (key === 'name' && row.country_code && !row.hs_code)
-  ? row.country_code || (key === 'country_code' ? row[key] : countryCode(row[key])) : null
+const flagCodeOf = (row, key) => {
+  if (key === 'name') return row.country_code && row.name === countryName(row.country_code) ? row.country_code : null
+  if (!COUNTRY_KEYS.has(key)) return null
+  return row.country_code || (key === 'country_code' ? row[key] : countryCode(row[key]))
+}
 
 const PAGE_SIZE = 20
 

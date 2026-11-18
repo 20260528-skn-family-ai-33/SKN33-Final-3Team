@@ -24,6 +24,10 @@ function Demo() {
     <PromptActions busy={false} reply={() => {}} prompt={{ kind: 'INTEREST_SELECT', message: '관심 대상', choices: [], interests: { country_codes: ['NZ'], hs_items: [] } }} />
     <ApiResults table={{ rows: [{ country: '호주', country_code: 'AU', amount_usd: 10, share_pct: 50 }] }} />
     <ApiResults tableOnly table={{ columns: [{ key: 'country_name' }, { key: 'hs_code' }], rows: [{ country_name: '미국', country_code: 'US', hs_code: '330499' }] }} />
+    {/* 이전 예측 결과 형식: 품목 코드는 hs6, 품목명은 name. 품목명에는 국기가 붙지 않는다. */}
+    <ApiResults tableOnly table={{ columns: [{ key: 'name' }, { key: 'hs6' }], rows: [{ country_code: 'JP', hs6: '330499', name: '화장품' }] }} />
+    {/* name이 그 행의 국가명이면 국가 칸이다. */}
+    <ApiResults tableOnly table={{ columns: [{ key: 'name' }], rows: [{ country_code: 'JP', name: '일본' }] }} />
   </div>
   return <div style={{ width: 760 }}>
     <CountryPicker showSelected value={value} onChange={setValue} />

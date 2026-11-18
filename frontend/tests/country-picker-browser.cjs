@@ -153,6 +153,9 @@ async function flagShown(locator, code) {
     await flagShown(page.locator('.api-results').nth(0).locator('.flag'), 'au')
     await flagShown(page.locator('.api-results').nth(1).locator('.flag'), 'us')
     assert.equal(await page.locator('.api-results').nth(1).locator('.tr span').nth(1).locator('.flag').count(), 0)
+    // 이전 예측 결과(hs6 + 품목명 name + country_code)의 품목명에는 국기가 없고, 국가명 name에는 있다.
+    assert.equal(await page.locator('.api-results').nth(2).locator('.flag').count(), 0)
+    await flagShown(page.locator('.api-results').nth(3).locator('.flag'), 'jp')
     assert.deepEqual(errors, [])
     console.log('PASS country chips, continent toggle, select all, and identical ranking request for manual selection')
   } finally { if (browser) await browser.close(); await server.close() }
