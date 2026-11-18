@@ -78,7 +78,7 @@ export default function useDashboard(view, months, profile, accountId) {
   const shares = useQuery('/analysis/market-shares', { conditions: {
     hs_items: scope === 'INTERESTED' ? profile.products.map(hs_code => ({ hs_code, hs_ver: 'HS2022' })) : [],
     country_codes, period: { start: tableRange.period_start ? `${tableRange.period_start}-01` : null, end: shareEnd }, trade_flow: 'EXPORT',
-  } }, !!end, 0, 'POST')
+  } }, !!end, 0, 'POST', false, context)
 
   const fx = useQuery('/exchange-rates', { scope })
   const news = useQuery('/articles', { scope, page_size: 4 })

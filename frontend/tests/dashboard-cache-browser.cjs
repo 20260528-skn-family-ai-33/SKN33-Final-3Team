@@ -21,9 +21,9 @@ async function until(check) {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' })
     page.setDefaultTimeout(10000)
     await page.clock.install()
-    const errors = [], calls = [], pendingGraphs = [], pendingRanks = [], pendingTrade = []
+    const errors = [], calls = [], shareCalls = [], pendingGraphs = [], pendingRanks = [], pendingTrade = [], pendingShares = []
     let holdGraphs = true, holdSix = false, failGraph = false, failAnnual = false, account = '1', version = 'v1', interestsVersion = '1'
-    let availabilityMode = 'ok', availabilityCalls = 0, holdTrade = false, amountMultiplier = 1
+    let availabilityMode = 'ok', availabilityCalls = 0, holdTrade = false, amountMultiplier = 1, holdShares = false
     page.on('pageerror', error => errors.push(error.message))
     await page.route('**/api/v1/**', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname.replace('/api/v1', ''), q = url.searchParams
@@ -65,7 +65,13 @@ async function until(check) {
         }
         return reply({ items: [{ month: start, export_amount_usd: 1, import_amount_usd: 1, previous_year_export_usd: 1, previous_year_import_usd: 1 }], meta })
       }
-      if (['/exchange-rates', '/articles', '/notifications', '/reports', '/chat/sessions', '/analysis/market-shares'].includes(p)) return reply({ items: [], page: { has_next: false } })
+      if (p === '/analysis/market-shares') {
+        const responseVersion = version
+        shareCalls.push({ body: req.postDataJSON(), version: responseVersion })
+        if (holdShares) await new Promise(resolve => pendingShares.push(resolve))
+        return reply({ items: [{ label: '미국', country_code: 'US', share_pct: responseVersion === 'v1' ? 40 : responseVersion === 'v2' ? 60 : 70 }] })
+      }
+      if (['/exchange-rates', '/articles', '/notifications', '/reports', '/chat/sessions'].includes(p)) return reply({ items: [], page: { has_next: false } })
       throw new Error(`Unexpected API ${p}`)
     })
     await page.route('**/dashboard-harness', route => route.fulfill({ contentType: 'text/html', body: `
@@ -92,9 +98,11 @@ async function until(check) {
     console.log('PASS cards show amounts while graphs are still pending')
     for (const months of [6, 12]) { await choose(months); await ready(months) }
     const before = tradeCount()
+    const sharesBefore = shareCalls.length
     for (const months of [3, 6, 12, 3]) { await choose(months); await ready(months) }
     await delay(150)
     assert.equal(tradeCount(), before)
+    assert.equal(shareCalls.length, sharesBefore, 'Card period changes must not refetch the annual pie')
     assert.equal(calls.filter(c => c.p.endsWith('rankings') && c.q.group_by === 'HS6' && c.q.period_start === '2025-01').length, 1)
     console.log('PASS 3/6/12 return visits issue zero trade requests; 12-month table and card share one ranking')
 
@@ -122,6 +130,7 @@ async function until(check) {
     await until(() => availabilityCalls > beforeRecovery)
     await delay(100)
     assert.equal(tradeCount(), before, 'Recovering the same version must not refetch trade data')
+    assert.equal(shareCalls.length, sharesBefore, 'Failed polls and same-version recovery must preserve the pie')
     console.log('PASS 503, 429, network failure and same-version recovery preserve all four main regions')
 
     holdTrade = true
@@ -168,13 +177,29 @@ async function until(check) {
     assert.ok(calls.some(c => c.q.view === 'SPARKLINE' && c.q.scope !== 'INTERESTED' && c.q.country_codes === 'CN'))
     console.log('PASS scope/profile invalidate results and failed graphs retry without hiding cards or refetching ranks')
 
-    const beforeVersion = tradeCount()
+    const beforeVersion = tradeCount(), sharesBeforeVersion = shareCalls.length
+    const pie = page.locator('.zone-tables')
+    await pie.getByText('미국 40.0%', { exact: true }).waitFor()
+    holdShares = true
     version = 'v2'
     await page.clock.fastForward(60100)
     await until(() => tradeCount() > beforeVersion)
     await ready(3)
-    await delay(300)
+    await until(() => pendingShares.length > 0)
     assert.ok(tradeCount() > beforeVersion)
+    assert.equal(shareCalls.length, sharesBeforeVersion + 1)
+    assert.deepEqual(shareCalls.at(-1).body, shareCalls.at(-2).body, 'Version is a local refresh key, not an unsupported API field')
+    assert.equal(await pie.getByText('미국 40.0%', { exact: true }).count(), 0, 'Do not show the old pie beside a new-version table')
+    // An older version response arriving late cannot replace the current pie.
+    holdShares = false
+    version = 'v3'
+    await page.clock.fastForward(60100)
+    await pie.getByText('미국 70.0%', { exact: true }).waitFor()
+    pendingShares.splice(0).forEach(resolve => resolve())
+    await delay(200)
+    assert.equal(await pie.getByText('미국 60.0%', { exact: true }).count(), 0)
+    await pie.getByText('미국 70.0%', { exact: true }).waitFor()
+    console.log('PASS same-month data corrections refresh the pie and ignore a late older-version response')
     account = '2'
     const beforeAccount = tradeCount()
     await page.getByRole('button', { name: '계정 갱신 테스트' }).click()
