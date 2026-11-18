@@ -13,6 +13,25 @@ from backend.tests import test_agent_templates
 
 
 class FormatAndThresholdTest(unittest.TestCase):
+    def test_attached_format_commands_keep_text_and_visual_requests(self):
+        cases = [('말로해줘', 'TEXT'), ('글로해 주세요', 'TEXT'), ('글로설명해줘', 'TEXT'),
+                 ('문장으로설명해주세요', 'TEXT'), ('텍스트로보여줘', 'TEXT'), ('말로알려주세요', 'TEXT'),
+                 ('표로보여줘', None), ('차트로보여주세요', None), ('그래프로정리해줘', None),
+                 ('글로말고 표로보여줘', None), ('글로만하지 말고 차트로보여줘', None)]
+        for suffix in (' 미국 수출', ' 2023년 2024년 2025년 미국 수출액 비교'):
+            for request, expected in cases:
+                with self.subTest(question=request + suffix):
+                    output = self.planned(request + suffix, answer_format=None if expected else 'TEXT')
+                    self.assertEqual(output.tasks[0].slots.answer_format, expected)
+                    plan, _ = build_plan(output)
+                    self.assertEqual(any(s.tool == 'build_chart' for s in plan.steps()), expected != 'TEXT')
+
+    def test_attached_command_prefixes_do_not_match_longer_words(self):
+        for question in ('글로벌 화장품 수출', '글로비스 관련 수출', '글로컬 수출', '말로니 수출',
+                         '글로해운 수출', '말로설명서 수출', '글로보여주기식 통계'):
+            with self.subTest(question=question):
+                self.assertIsNone(self.planned(question).tasks[0].slots.answer_format)
+
     def planned(self, question, **slots):
         return postprocess(PlannerOutput(tasks=[dict(intent='STATISTICS', question=question,
                                                      slots=slots)]), question)

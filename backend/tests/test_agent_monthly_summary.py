@@ -10,6 +10,43 @@ from backend.tests.test_agent_graph import initial
 
 
 class MonthlySummaryTest(unittest.TestCase):
+    def test_endpoint_amounts_and_extrema_survive_monthly_direction_repair(self):
+        lines = [
+            '2025년 10월 120만 달러에서 12월 150만 달러로 수출액이 증가했습니다.',
+            '월별 수출액은 10월이 최저(100만 달러)였고 12월에 최고로 증가했습니다.',
+            '10월 수출액은 120만달러에서 12월 150만으로 증가했습니다.',
+            '10월 수출액 1,200,000 USD에서 12월 1,500,000 USD로 증가했습니다.',
+            '10월 수출액 120만 달러부터 12월 150만 달러까지 증가했습니다.',
+            '월별 수출액은 10월에 가장 낮았고 12월에 가장 높은 수준으로 증가했습니다.',
+        ]
+        for fmt in (None, 'TEXT'):
+            for line in lines:
+                with self.subTest(fmt=fmt, line=line):
+                    state, sources = self.writer_example()
+                    task = state.plan.tasks[0]
+                    task.slots.answer_format = fmt
+                    task.question = '10월보다 12월 수출액이 얼마나 늘었나?'
+                    generated = Draft(conclusion=[dict(task_id='t1', sentences=[line])],
+                                      explanation=[line], turn_summary=line)
+                    state.draft = assemble(state, generated, {}, lambda _: {})
+                    self.assertEqual(state.draft.sentences(), [line, line])
+                    self.assertEqual(state.draft.turn_summary, line)
+                    # Preserving prose is not approving it: invented amounts still fail.
+                    if line == lines[0]:
+                        self.assertTrue(all(c.status == 'MISMATCH'
+                                            for c in judge_draft(state, snapshots=sources).checks))
+
+    def test_plain_month_ranges_still_use_computed_movement(self):
+        from backend.app.agents.monthly_summary import reconcile_monthly_claims
+        state, sources = self.writer_example()
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        for line in ('월별 수출액은 1~5월 계속 증가했습니다.',
+                     '월별 수출액은 1월부터 5월까지 증가했습니다.'):
+            state.draft = Draft(conclusion=[dict(task_id='t1', sentences=[line])], turn_summary=line)
+            reconcile_monthly_claims(state, state.draft)
+            self.assertNotIn(line, state.draft.sentences())
+            self.assertEqual(judge_draft(state, snapshots=sources).checks[0].status, 'PASS')
+
     def test_text_monthly_direction_is_rebuilt_and_checked_against_snapshot(self):
         state, sources = self.writer_example()
         task = state.plan.tasks[0]
