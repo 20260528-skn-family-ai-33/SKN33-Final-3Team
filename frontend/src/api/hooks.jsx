@@ -28,11 +28,12 @@ export function useDebouncedValue(value, delay = 300) {
 
 // keep: 다시 불러오는 동안 같은 경로의 이전 결과를 계속 보여 준다(목록이 비었다가 다시 차며 화면이 튀지 않게).
 // 문자열을 넘기면 그 값(예: 페이지를 뺀 조회 조건)이 같을 때만 이전 결과를 쓴다. 탭·분류가 바뀌면 이전 행을 바로 비운다.
-export function useQuery(path, query = {}, enabled = true, interval = 0, method = 'GET', keep = false) {
+// refreshKey: 서버에 보내지 않는 재조회 기준(예: 공개 데이터 버전).
+export function useQuery(path, query = {}, enabled = true, interval = 0, method = 'GET', keep = false, refreshKey = '') {
   const key = JSON.stringify(query)
   const [state, setState] = useState({ data: null, error: null, loading: true })
   const [revision, reload] = useState(0)
-  const requestKey = `${method}|${path}|${key}|${revision}|${enabled}`
+  const requestKey = `${method}|${path}|${key}|${revision}|${enabled}|${JSON.stringify(refreshKey)}`
   useEffect(() => {
     const controller = new AbortController(); let timer
     if (!enabled) return () => controller.abort()
