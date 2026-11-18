@@ -4,6 +4,7 @@ import { api, setCsrf, download } from './api/client'
 import { navigate } from './router'
 import { registerCountries, registerProducts, countryCode, countryName, productName } from './data/catalog'
 import { mapNotification, mapReport } from './api/adapters'
+import { useHiddenNotifications } from './useHiddenNotifications'
 const AppContext = createContext(null)
 const NotificationContext = createContext(null)
 const ToastContext = createContext(null)
@@ -31,6 +32,7 @@ export function AppProvider({ children }) {
   const [settings, updateSettings] = useState({ all: false, surge: false, major: false, report: false })
   const [subscription, updateSubscription] = useState({ cycles: [], formats: [], items: [] })
   const [notifications, updateNotifications] = useState([])
+  const [hiddenNotificationIds, hideNotifications] = useHiddenNotifications(session?.id)
   const [unread, setUnread] = useState(0)
   const [reports, setReports] = useState([])
   const [chats, setChats] = useState([])
@@ -267,8 +269,8 @@ export function AppProvider({ children }) {
     logout, changePassword, withdraw, profile, setProfile, addInterests, settings, setSettings, acceptNotificationTerms, revokeNotificationTerms,
     subscription, setSubscription, deleteSubscription, chats, refreshChats, reports, refreshReports,
     downloadReport, mainView, notify, run, fail])
-  const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications }),
-    [notifications, setNotifications, unread, refreshNotifications])
+  const notificationValue = useMemo(() => ({ notifications, setNotifications, unread, refreshNotifications, hiddenNotificationIds, hideNotifications }),
+    [notifications, setNotifications, unread, refreshNotifications, hiddenNotificationIds, hideNotifications])
   const toastValue = useMemo(() => ({ toast, setToast }), [toast])
   return <AppContext.Provider value={value}><NotificationContext.Provider value={notificationValue}>
     <ToastContext.Provider value={toastValue}>{children}</ToastContext.Provider>

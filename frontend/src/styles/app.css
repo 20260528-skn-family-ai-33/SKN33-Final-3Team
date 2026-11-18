@@ -60,6 +60,12 @@ button.bell:hover{background:var(--line2)}
 .alert-pop{position:absolute;top:66px;right:max(24px,calc((100vw - 1240px)/2 + 126px));width:400px;z-index:40;background:#fff;border-radius:18px;box-shadow:0 24px 60px rgba(21,24,30,.28);border:1px solid var(--line);overflow:hidden;color:var(--ink)}
 .alert-pop .item{padding:16px 20px;border-bottom:1px solid var(--line2);display:flex;gap:12px;width:100%;background:#fff;border-left:0;border-right:0;border-top:0;text-align:left;cursor:pointer;font:inherit;color:inherit}
 .alert-pop .item:hover{background:#FAFAFB}
+.alert-pop-row{display:flex;align-items:stretch;border-bottom:1px solid var(--line2)}
+.alert-pop-row .item{flex:1;min-width:0;border-bottom:0;padding-right:8px}
+.alert-pop-row .item .between{flex-wrap:wrap;gap:6px}
+.alert-pop-row .item p{overflow-wrap:anywhere}
+button.alert-pop-remove{flex:none;align-self:flex-start;width:32px;height:32px;margin:12px 8px 0 0;border-radius:8px;font-size:22px;color:var(--sub)}
+.alert-pop-remove:hover{background:var(--bg);color:var(--ink)}
 .pop-dismiss{position:fixed;inset:0;z-index:29}
 
 /* modal layer: 목업은 프레임 기준 absolute, 앱에서는 화면 기준 fixed */
