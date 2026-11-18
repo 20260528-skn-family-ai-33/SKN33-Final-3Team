@@ -28,6 +28,7 @@ turn_summary에도 같은 확정 품목명과 기간·수출입 방향을 사용
 반올림한 표시 금액이 같다는 이유로 실제 월별 금액이 '같았다', '동일했다', '변동이 없다'고 설명하지 마세요.
 그때는 '만 달러 단위로 표시하면 각 월 51만 달러입니다'처럼 표시 단위에 한정해 쓰세요.
 실제 금액이 모두 같다는 설명은 monthly_facts의 min_count와 max_count가 모두 requested_months와 같을 때만 가능합니다.
+월별 증가·감소는 monthly_facts.movement의 전월 대비 결과를 사용하세요. 시작·끝 금액만 보고 중간 달도 계속 증가·감소했다고 하지 마세요. movement는 조회 기간 내 연속한 두 달만 비교하며 첫 달의 전월은 포함하지 않습니다.
 월별 금액의 최저·최고는 TREND의 monthly_facts에서 월과 금액을 짝지어 쓰세요. 전년 동월보다 증가한 달도 monthly_facts의 increased_months를 보고, 목록이 increased_count보다 짧으면 개수만 쓰세요.
 기간 비교의 change_pct는 compare_period의 compare_total_usd를 분모로 한 period의 total_usd 변화율입니다. 문장에 두 기간의 역할을 그대로 쓰세요.
 두 기간의 수출액·수입액 차이를 물으면 결론에 달러 차액을 명시하세요. TREND의 period_difference_usd는 조회 기간 합계에서 비교 기간 합계를 뺀 금액입니다. 두 합계와 차액은 별도 문장에 쓰세요. 차액을 쓸 때는 두 기간, 실제 달러 차액, 어느 쪽이 더 큰지를 한 문장에 담으세요. 차액이 0이면 두 기간의 차액이 0달러라고 씁니다. turn_summary에 차액을 쓸 때도 같은 차액 문장을 그대로 사용하세요. 차액이 null이면 산출할 수 없다고 쓰세요. 변화율만 요청했다면 change_pct를 쓰세요.

@@ -138,9 +138,13 @@ def _save_report(store, job):
 
 
 def find_chat(store, uid, key):
+    # submit serializes this user's admissions before either lookup/enqueue.
+    # Do not lock the user's entire message/session history: another session's
+    # worker can already hold its primary row and need its secondary index.
+    # API-36 uses READ COMMITTED so a waiting duplicate sees the first commit.
     m,s=store.t('chat_message'),store.t('chat_session')
     row=store.one(select(m).join(s,s.c.session_id==m.c.session_id).where(s.c.user_id==uid,
-        m.c.role=='USER',m.c.result_json[EXECUTION]['request_key'].as_string()==digest([uid,'API_CHAT',key])).with_for_update())
+        m.c.role=='USER',m.c.result_json[EXECUTION]['request_key'].as_string()==digest([uid,'API_CHAT',key])))
     return _chat_job(row) if row else None
 
 

@@ -216,7 +216,7 @@ def create_app(settings=None, engine=None, redis_state=None):
                     # 제한된 요청은 DB 커넥션·사용자 행 잠금을 얻기 전에 거절한다.
                     recovery.limit_request(db, body, settings)
                     return recovery.issue_password(db, body, settings)
-                if identity==36 and settings.get('API_CHAT_AGENT_ENABLED','false').lower()=='true':
+                if identity==36:
                     from backend.app.agents.admission import request_transaction
                     transaction=request_transaction(db)
                 else: transaction=db.engine.begin()

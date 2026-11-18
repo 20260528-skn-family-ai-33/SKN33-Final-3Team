@@ -16,7 +16,9 @@ _YEAR = re.compile(r'(?<!\d)((?:19|20)\d\d|\d\d)\s*년')
 _RANGE_JOIN = re.compile(r'\s*(?:부터|에서|[~～∼–—-])\s*')
 _BARE_RANGE_START = re.compile(r'(?<!\d)((?:19|20)\d\d|\d\d)(?=\s*[~～∼–—-]\s*(?:\d{4}|\d{2})\s*년)')
 _MONTHLY_AVERAGE = re.compile(r'월\s*평균|월별\s*평균|한\s*달\s*평균')
-_FORMAT = re.compile(r'(?<![가-힣])(?P<medium>글|문장|텍스트|말|표|차트|그래프)(?:으로|로)(?:\s*만)?')
+# '글로벌/글로비스'의 '글로'는 형식이 아니다. 보조사와 붙여 쓴 부정 표현은 유지한다.
+_FORMAT = re.compile(r'(?<![가-힣])(?P<medium>글|문장|텍스트|말|표|차트|그래프)(?:으로|로)'
+                     r'(?=$|[^가-힣]|[만는도]|말고|아니|하지\s*말고)(?:\s*만)?')
 _FORMAT_NEGATION = re.compile(r'\s*(?:말고|는?\s*아니|하지\s*말고)')
 _MONTHLY = re.compile(r'월\s*별|매\s*월|월마다|월\s*단위')
 _YEAR_REFERENCE = re.compile(r'(?:그|세|각|이전|같은|앞서|\d+개)\s*(?:연도|년도|개년)|^\s*(?:그럼\s*)?월\s*별')

@@ -36,6 +36,36 @@ class FormatAndThresholdTest(unittest.TestCase):
             self.assertIsNone(self.planned(question).tasks[0].slots.answer_format)
             self.assertEqual(self.planned(question, answer_format='TEXT').tasks[0].slots.answer_format, 'TEXT')
 
+    def test_global_and_similar_words_do_not_disable_charts(self):
+        questions = ['글로벌 화장품 수출 추이 알려줘', '미국 글로벌 공급망 관련 품목별 수출',
+                     '글로비스 관련 수출 추이', '말로니 관련 수출 추이', '글로컬 시장 수출 추이',
+                     '지표로 본 수출 추이', '연말로 갈수록 수출이 어떻게 변해?']
+        for question in questions:
+            for suffix in ('', ' 2023년 2024년 2025년 수출액 비교해줘'):
+                with self.subTest(question=question + suffix):
+                    output = self.planned(question + suffix)
+                    self.assertIsNone(output.tasks[0].slots.answer_format)
+                    plan, _ = build_plan(output)
+                    self.assertTrue(any(s.tool == 'build_chart' for s in plan.steps()))
+                    self.assertEqual(self.planned(question + suffix, answer_format='TEXT')
+                                     .tasks[0].slots.answer_format, 'TEXT')
+
+    def test_global_can_still_have_an_explicit_format_request(self):
+        requests = [('글로만 알려줘', 'TEXT'), ('말로만 설명해줘', 'TEXT'),
+                    ('문장으로는 설명해줘', 'TEXT'), ('텍스트로도 알려줘', 'TEXT'),
+                    ('글로', 'TEXT'), ('글로, 설명해줘', 'TEXT'),
+                    ('글로만설명해줘', 'TEXT'), ('글로는 아니고 표로 보여줘', None),
+                    ('글로말고 표도 보여줘', None), ('글로하지 말고 표도 보여줘', None),
+                    ('글로만하지 말고 표도 보여줘', None), ('표로 보여줘', None),
+                    ('차트로만 보여줘', None), ('그래프로는 보여줘', None)]
+        for request, expected in requests:
+            question = '2025년 글로벌 화장품 수출액을 ' + request
+            with self.subTest(question=question):
+                output = self.planned(question, answer_format='TEXT')
+                self.assertEqual(output.tasks[0].slots.answer_format, expected)
+                plan, _ = build_plan(output)
+                self.assertEqual(any(s.tool == 'build_chart' for s in plan.steps()), expected != 'TEXT')
+
     def test_compound_tasks_keep_their_own_format(self):
         output = PlannerOutput(tasks=[
             dict(intent='STATISTICS', question='미국 수출액은 말로만', slots={'answer_format': 'TEXT'}),

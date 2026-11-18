@@ -23,7 +23,11 @@ OTHER_QUEUE_MESSAGE='이 질문은 다른 서버 환경에서 처리 중입니�
 def request_transaction(db):
     rollback_lock = []
     try:
-        with db.engine.begin() as connection:
+        # Authentication can establish a snapshot before submit waits for the user
+        # lock. A new read after that lock must see the preceding request's commit.
+        engine = (db.engine.execution_options(isolation_level='READ COMMITTED')
+                  if db.engine.dialect.name == 'mysql' else db.engine)
+        with engine.begin() as connection:
             connection.info['agent_rollback_lock'] = rollback_lock
             try: yield connection
             finally: connection.info.pop('agent_rollback_lock',None)

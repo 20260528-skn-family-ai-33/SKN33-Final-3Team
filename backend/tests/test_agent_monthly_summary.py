@@ -10,6 +10,65 @@ from backend.tests.test_agent_graph import initial
 
 
 class MonthlySummaryTest(unittest.TestCase):
+    def test_text_monthly_direction_is_rebuilt_and_checked_against_snapshot(self):
+        state, sources = self.writer_example()
+        task = state.plan.tasks[0]
+        task.slots.answer_format = 'TEXT'
+        task.question = '글로벌 화장품 월별 추이를 글로만 알려줘'
+        wrong = '월별 수출액은 1월부터 5월까지 증가한 뒤 6월에 감소했습니다.'
+        generated = Draft(conclusion=[dict(task_id='t1', sentences=[wrong])],
+                          explanation=[wrong], turn_summary=wrong)
+        state.draft = assemble(state, generated, {}, lambda _: {})
+        line = state.draft.conclusion[0].sentences[0]
+        self.assertNotIn(wrong, state.draft.sentences())
+        self.assertIn('증가 7개월(2월, 3월, 4월, 7월, 8월, 9월, 12월)', line)
+        self.assertIn('감소 4개월(5월, 6월, 10월, 11월)', line)
+        self.assertEqual(state.draft.turn_summary, line)
+        verdict = judge_draft(state, snapshots=sources)
+        self.assertEqual([c.status for c in verdict.checks], ['PASS', 'PASS'])
+        self.assertEqual(verdict.summary_status, 'PASS')
+        # The draft/digest cannot validate itself: a different saved direction fails.
+        next(iter(sources.values()))['rows'][4]['amount_usd'] = 200000000
+        self.assertTrue(all(c.status == 'MISMATCH' for c in judge_draft(state, snapshots=sources).checks))
+
+    def test_movement_uses_unrounded_adjacent_months_and_zero(self):
+        rows = [dict(month=m, amount_usd=a) for m,a in
+                [('2024-12', 511100), ('2025-01', 512100), ('2025-02', 513100),
+                 ('2025-03', 0), ('2025-04', 0), ('2025-06', 1), ('2025-07', None), ('2025-08', 2)]]
+        movement = monthly_facts(rows)['movement']
+        self.assertEqual(movement, {'up': {'count': 2, 'months': ['2025-01', '2025-02']},
+                                   'down': {'count': 1, 'months': ['2025-03']},
+                                   'equal': {'count': 1, 'months': ['2025-04']}})
+
+    def test_explicit_previous_month_direction_uses_the_same_saved_facts(self):
+        from backend.app.agents.monthly_summary import reconcile_monthly_claims
+        state, sources = self.writer_example()
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        for wrong in ('5월 수출액은 전월보다 증가했습니다.', '5월 수출액은 전월 대비 증가했습니다.',
+                      '월별 수출액은 계속 오르면서 5월까지 증가했습니다.'):
+            state.draft = Draft(conclusion=[dict(task_id='t1', sentences=[wrong])], turn_summary=wrong)
+            reconcile_monthly_claims(state, state.draft)
+            self.assertNotIn(wrong, state.draft.sentences())
+            self.assertEqual(judge_draft(state, snapshots=sources).checks[0].status, 'PASS')
+
+    def test_direction_repair_preserves_endpoint_comparisons_and_articles(self):
+        from backend.app.agents.monthly_summary import reconcile_monthly_claims
+        state, _ = self.writer_example()
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        for line in ('5월 수출액은 1월보다 증가했습니다.', '5월 수출액은 전년 동월 대비 감소했습니다.',
+                     '5월 수출액은 감소했습니다. [1]', '4월 수출액은 179,832,954달러입니다.'):
+            draft = Draft(conclusion=[dict(task_id='t1', sentences=[line])], explanation=[line], turn_summary=line)
+            reconcile_monthly_claims(state, draft)
+            self.assertEqual(draft.sentences(), [line, line])
+            self.assertEqual(draft.turn_summary, line)
+
+    def test_incomplete_months_do_not_get_a_complete_movement_summary(self):
+        from backend.app.agents.monthly_summary import task_series
+        state, _ = self.writer_example()
+        result = next(iter(state.results.values()))
+        result.digest['targets'][0]['monthly_facts']['movement']['up']['count'] -= 1
+        self.assertEqual(task_series(state, state.plan.tasks[0], movement=True), ())
+
     def example(self, rows, comparison=False):
         state = AgentState.model_validate(initial())
         state.plan, _ = build_plan(PlannerOutput(tasks=[

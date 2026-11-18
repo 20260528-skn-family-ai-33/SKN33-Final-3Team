@@ -511,7 +511,7 @@ class Services:
         # Generated queries may depend on articles, FX or reference revisions. A
         # customs release alone is insufficient to authorize their reuse (D-97).
         if generated: versions['generated_query_sources']=None
-        def key(v): return fingerprint(state,step,tool_version='3',versions=v,source_results=parents)
+        def key(v): return fingerprint(state,step,tool_version='4',versions=v,source_results=parents)
         cached=self.results.reuse(state,step,key(versions))
         if cached: return cached
         reserve=budget.finishing_seconds(state,self.settings)

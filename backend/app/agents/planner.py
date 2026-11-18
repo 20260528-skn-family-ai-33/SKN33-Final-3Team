@@ -75,6 +75,7 @@ share_basis는 한국 교역액을 분모로 하는 상대국별·품목별 비�
 해외 수입시장의 한국 비중이면 FOREIGN_IMPORT_MARKET, 불명확하면 null입니다.
 수출액·수입액의 월별 추이 또는 기간 합계·차액·증감률만 필요한 STATISTICS는 amount_view=MONTHLY 또는 TOTAL로 두고 custom_query=null로 둡니다.
 월별 수출액·수입액 중 가장 적은 달·많은 달과 각 금액만 묻는 질문도 STATISTICS, amount_view=MONTHLY, custom_query=null입니다. 월별 원본과 최저·최고 근거를 템플릿이 제공합니다.
+월별 추이에서 전월 대비 증가·감소·동일한 달이나 그 개수만 설명하는 요청도 STATISTICS, amount_view=MONTHLY, custom_query=null입니다. 템플릿의 monthly_facts.movement가 제공합니다. 전월 대비 증감액·증감률 계산이나 금액 조건에 따른 필터는 여전히 custom_query가 필요합니다.
 무역수지(수출액에서 수입액을 뺀 금액)는 STATISTICS, trade_balance=true로 두고 수출·수입 두 작업으로 나누지 않습니다.
 수출액과 수입액을 각각 보여 달라는 요청은 같은 조건의 수출·수입 STATISTICS로 나눕니다. 다중 기간은 각 작업에 모두 보존합니다.
 수출입을 한 하위 질문에 남기는 경우 trade_flow=null로 둡니다.

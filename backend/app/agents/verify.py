@@ -1127,10 +1127,10 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
     # Writer-independent monthly sentences still need an independent match to the full saved rows.
     monthly_checks = {}
     for task in state.plan.tasks:
-        rendered = task_series(state, task)
+        rendered = task_series(state, task) + task_series(state, task, movement=True)
         if rendered:
             saved = next((snapshots.get(s.step_id, {}) for s in task.steps if s.tool == 'query_trade_data'), {})
-            supported = snapshot_sentences(task, saved)
+            supported = snapshot_sentences(task, saved) + snapshot_sentences(task, saved, movement=True)
             monthly_checks[task.task_id] = {line: line in supported for line in rendered}
 
     owners = [task.task_id for task, conclusion in zip(state.plan.tasks, state.draft.conclusion, strict=True)

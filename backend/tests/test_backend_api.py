@@ -602,6 +602,23 @@ class BackendApiTest(unittest.TestCase):
         self.assertEqual(len(self.client.get(f'/api/v1/chat/sessions/{sid}/messages').json()['items']),2)
         self.signup('other@example.org'); self.assertEqual(self.client.get('/api/v1/chat/jobs/'+job).status_code,404)
 
+    def test_chat_key_reuse_across_sessions_or_content_still_conflicts(self):
+        self.signup()
+        first = self.post('chat/sessions', {}).json()['session']['session_id']
+        second = self.post('chat/sessions', {}).json()['session']['session_id']
+        body = {'question': '2025년 전체 품목 수출 추이', 'client_message_id': 'shared-key'}
+        job = self.post(f'chat/sessions/{first}/messages', body).json()['job']['job_id']
+        for sid, payload in ((second, body), (first, {**body, 'question': '다른 질문'})):
+            response = self.post(f'chat/sessions/{sid}/messages', payload)
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(response.json()['code'], 'IDEMPOTENCY_CONFLICT')
+        repeated = self.post(f'chat/sessions/{first}/messages', body)
+        self.assertEqual(repeated.json()['job']['job_id'], job)
+        run_once(self.app.state.database, self.settings)
+        repeated = self.post(f'chat/sessions/{first}/messages', body)
+        self.assertEqual(repeated.json()['job']['job_id'], job)
+        self.assertEqual(repeated.json()['job']['status'], 'SUCCEEDED')
+
     def chat_answer(self, question, key):
         sid=self.post('chat/sessions',{}).json()['session']['session_id']
         response=self.post(f'chat/sessions/{sid}/messages',{'question':question,'client_message_id':key})
