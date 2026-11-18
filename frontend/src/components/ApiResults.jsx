@@ -6,6 +6,18 @@ import { Value } from '../api/hooks'
 import { api, download } from '../api/client'
 import { useApp } from '../store'
 import { resultColumns } from './resultColumns'
+import Flag from './Flag'
+import { countryCode, countryName } from '../data/catalog'
+
+// 국가 칸이면 국기용 코드를 돌려준다(#132).
+// '명칭(name)' 칸은 결과 형식에 따라 국가명일 수도, 품목명일 수도 있다(예: 이전 예측 결과는 hs6 + 품목명 name + country_code).
+// 그래서 열 이름만 보지 않고, 그 값이 행의 국가 코드에 해당하는 국가명과 같을 때만 국가 칸으로 본다.
+const COUNTRY_KEYS = new Set(['country', 'country_name', 'country_code'])
+const flagCodeOf = (row, key) => {
+  if (key === 'name') return row.country_code && row.name === countryName(row.country_code) ? row.country_code : null
+  if (!COUNTRY_KEYS.has(key)) return null
+  return row.country_code || (key === 'country_code' ? row[key] : countryCode(row[key]))
+}
 
 const PAGE_SIZE = 20
 
@@ -46,10 +58,10 @@ export default function ApiResults({ table, tableOnly = false, fixedColumns = fa
     </div></div>
     {chart && !showTable ? <LineChart formatValue={compact} labels={rows.map(r => r.month)} yTicks={niceTicks(rows.flatMap(r => numeric.map(k => r[k])))} series={numeric.map((key, i) => ({ color: colors[i], values: rows.map(r => r[key]) }))} /> : bars && !showTable ? <>
       <div className="th" style={{ gridTemplateColumns: '1fr 2fr 1fr', marginTop: 16 }}><span>국가</span><span>{flow === 'IMPORT' ? '수입액' : '수출액'} (USD)</span><span className="r">비중</span></div>
-      {rows.map(r => <div key={r.country} className="tr" style={{ gridTemplateColumns: '1fr 2fr 1fr' }}><b>{r.country}</b><span style={{ display: 'flex', gap: 12, alignItems: 'center' }}><span style={{ width: `${Math.max(1, r.amount_usd / maxAmount * 65)}%`, height: 12, borderRadius: 6, background: '#C8102E' }} /><b>{compact(r.amount_usd)}</b></span><span className="r">{r.share_pct == null ? '—' : `${Number(r.share_pct).toFixed(1)}%`}</span></div>)}
+      {rows.map(r => <div key={r.country} className="tr" style={{ gridTemplateColumns: '1fr 2fr 1fr' }}><b><Flag code={r.country_code || countryCode(r.country)} blank={false} />{r.country}</b><span style={{ display: 'flex', gap: 12, alignItems: 'center' }}><span style={{ width: `${Math.max(1, r.amount_usd / maxAmount * 65)}%`, height: 12, borderRadius: 6, background: '#C8102E' }} /><b>{compact(r.amount_usd)}</b></span><span className="r">{r.share_pct == null ? '—' : `${Number(r.share_pct).toFixed(1)}%`}</span></div>)}
     </> : <div style={{overflowX:'auto',marginTop:16}}><div style={{minWidth:columns.length*140}}>
       <div className="th" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))` }}>{columns.map(c => <span key={c.key}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>)}</div>
-      {shown.map((row, i) => <div key={i} className="tr" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))` }}>{columns.map(c => <span key={c.key}><Value value={row[c.key]} /></span>)}</div>)}
+      {shown.map((row, i) => <div key={i} className="tr" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(100px, 1fr))` }}>{columns.map(c => <span key={c.key}><Flag code={flagCodeOf(row, c.key)} blank={false} /><Value value={row[c.key]} /></span>)}</div>)}
       {!rows.length && <p className="muted">조회된 결과가 없습니다.</p>}
     </div>{pages > 1 && <><p className="muted" style={{ marginTop: 10 }}>전체 {total.toLocaleString()}행 중 {((paged.page - 1) * PAGE_SIZE + 1).toLocaleString()}~{Math.min(total, paged.page * PAGE_SIZE).toLocaleString()}행</p>
       <Pager page={paged.page} pages={pages} onChange={go} /></>}</div>}

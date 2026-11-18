@@ -88,7 +88,8 @@ export default function useDashboard(view, months, profile, accountId) {
   const ranks = (cardProducts.data?.items || []).map((r, i) => ({ rank: r.rank, hs: r.hs_item.hs_code, name: productName(r.hs_item.hs_code), exp: money(r.export_amount_usd), imp: money(r.import_amount_usd), values: series.data[i]?.items.map(t => Number(t.export_amount_usd)), color: colors[0] }))
   const productRows = (tableProducts.data?.items || []).map(r => [r.rank, r.hs_item.hs_code, productName(r.hs_item.hs_code), money(r.export_amount_usd), money(r.import_amount_usd)])
   // 선택 국가를 채우려고 서버가 넣은 실적 없는 행은 0이 아니라 결측(—)으로 보여 준다.
-  const countryRows = (countries.data?.items || []).map(r => [r.rank, countryName(r.country_code), r.has_data === false ? '—' : money(r.export_amount_usd), r.has_data === false ? '—' : money(r.import_amount_usd)])
+  // 마지막 값은 국기용 국가 코드(#132)
+  const countryRows = (countries.data?.items || []).map(r => [r.rank, countryName(r.country_code), r.has_data === false ? '—' : money(r.export_amount_usd), r.has_data === false ? '—' : money(r.import_amount_usd), r.country_code])
   const link = n => (group, product, country, flow) => rankLink({ scope, start: monthOffset(end, 1 - n), end, months: n, countries: country_codes, group, product, country, flow })
   const tablePeriod = periodText(countries.data || tableProducts.data)
   // 영역별 오류 안내: 기준 월 첫 조회가 실패하면 모든 영역이 비므로 각 영역에 함께 넣는다.

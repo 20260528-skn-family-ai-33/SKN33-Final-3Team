@@ -2,11 +2,17 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import Icon from './Icon'
 import { Btn, Check, Loading } from './ui'
-import { countries, registerProducts, toggleValue, productName, productChoiceLabel } from '../data/catalog'
+import { countries, countryCode, registerProducts, toggleValue, productName, productChoiceLabel } from '../data/catalog'
 import { api } from '../api/client'
 import { useQuery, ErrorNotice, useDebouncedValue } from '../api/hooks'
 import { useApp } from '../store'
 import { mapLimited } from '../api/integration'
+import Flag from './Flag'
+
+// 국기용 국가 코드. 분석 조건의 '한국(대한민국)' 선택지는 대한민국 국기를 쓴다(#132).
+const KOREA_TOTAL = '__KOREA_TOTAL__', KOREA_LABEL = '한국(대한민국)'
+const flagOf = c => c.country_code === KOREA_TOTAL ? 'KR' : c.country_code
+const flagByName = name => name === KOREA_LABEL ? 'KR' : countryCode(name)
 
 const HS_PREVIEW_LENGTH = 52
 const compactHsName = name => name.length > HS_PREVIEW_LENGTH ? name.slice(0, HS_PREVIEW_LENGTH - 1) + '…' : name
@@ -184,7 +190,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
   const continents = (regions.data?.items || []).filter(r => !r.parent_id)
   const countryNames = countries.map(c => c.name)
   const allCountriesSelected = countryNames.length > 0 && countryNames.every(name => value.includes(name))
-  const choices=includeKorea?[{country_code:'__KOREA_TOTAL__',name:'한국(대한민국)'},...countries]:countries
+  const choices=includeKorea?[{country_code:KOREA_TOTAL,name:KOREA_LABEL},...countries]:countries
   const list = choices.filter(c => !query.trim() || c.name.includes(query.trim()))
   const shown = variant === 'chips' && !query.trim()
     ? [...choices.filter(c => value.includes(c.name)), ...choices.filter(c => !value.includes(c.name)).slice(0, 3)]
@@ -225,7 +231,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
             const on = value.includes(c.name)
             return (
               <Check key={c.name} checked={on} onChange={() => onChange(toggleValue(value, c.name))} className={'li' + (on ? ' sel' : '')} style={{ padding: '13px 16px', gap: 12 }}>
-                <span style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</span>
+                <span style={{ fontSize: 15, fontWeight: 700 }}><Flag code={flagOf(c)} />{c.name}</span>
               </Check>
             )
           })}
@@ -235,7 +241,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
         <div className="chips" style={{ marginTop: 10 }}>
           {shown.map(c => {
             const on = value.includes(c.name)
-            return <button type="button" key={c.name} className={'chip sm' + (on ? ' on' : '')} aria-pressed={on} onClick={() => onChange(toggleValue(value, c.name))}>{on ? '✓ ' : ''}{c.name}</button>
+            return <button type="button" key={c.name} className={'chip sm' + (on ? ' on' : '')} aria-pressed={on} onClick={() => onChange(toggleValue(value, c.name))}>{on ? '✓ ' : ''}<Flag code={flagOf(c)} />{c.name}</button>
           })}
         </div>
       )}
@@ -245,7 +251,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
         </div>
         {value.length ? <ul className="chips">{value.map(name=><li key={name}>
           <button type="button" className="chip sm" aria-label={`${name} 선택 삭제`}
-            onClick={()=>onChange(value.filter(item=>item!==name))}>{name} ×</button>
+            onClick={()=>onChange(value.filter(item=>item!==name))}><Flag code={flagByName(name)} />{name} ×</button>
         </li>)}</ul> : <p className="note">선택한 국가가 없습니다.</p>}
       </div>}
     </>
