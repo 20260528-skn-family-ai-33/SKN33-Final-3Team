@@ -1,8 +1,8 @@
 // BS27 알림함 전체 · BS28 리포트 발행 · BS29 주요이슈 · BS30 급증 기사
 import { useEffect } from 'react'
-import { navigate, withQuery } from '../../router'
+import { Link, navigate, withQuery } from '../../router'
 import { useApp, useNotifications } from '../../store'
-import { Btn, Check, Chip, Loading } from '../../components/ui'
+import { Btn, Check, Loading } from '../../components/ui'
 import { useQuery, ErrorNotice } from '../../api/hooks'
 import { reportScope } from '../../api/adapters'
 import { notificationTypes } from '../../data/seed'
@@ -76,7 +76,6 @@ export default function Inbox({ route }) {
   const unreadOnly = route.query.get('unread') === '1'
   const list = notifications.filter(n => (tab === 'all' || n.type === tab) && (!unreadOnly || !n.read || n.id === route.query.get('id')))
   const selected = list.find(n => n.id === route.query.get('id'))
-  const tabLabel = TABS.find(([k]) => k === tab)?.[1]
 
   useEffect(() => {
     if (selected && !selected.read) setNotifications(ns => ns.map(n => (n.id === selected.id ? { ...n, read: true } : n)))
@@ -86,26 +85,25 @@ export default function Inbox({ route }) {
     <>
       <section className="card" style={{ padding: '20px 24px' }}>
         <div className="between" style={{ flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-            <h2 className="t2" style={{ fontSize: 22 }}>알림함</h2>
-            <div className="chips">
-              {TABS.map(([key, label]) => {
-                // 전체 건수는 머리글 종과 왼쪽 메뉴에 이미 있으므로 유형 탭에만 표시한다.
-                const count = key === 'all' ? 0 : notifications.filter(n => !n.read && n.type === key).length
-                return (
-                  <Chip key={key} sm on={tab === key} to={withQuery(route, { tab: key === 'all' ? null : key, id: null })}>
-                    {label}{count > 0 && <span aria-label={`미확인 ${count}건`} style={{ marginLeft: 6, minWidth: 18, padding: '0 5px', borderRadius: 9, background: 'var(--red)', color: '#fff', fontSize: 11, fontWeight: 800, lineHeight: '18px', display: 'inline-block', textAlign: 'center' }}>{count}</span>}
-                  </Chip>
-                )
-              })}
-            </div>
-          </div>
+          <h2 className="t1" style={{ fontSize: 24 }}>알림함</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
             <Check checked={unreadOnly} onChange={on => navigate(withQuery(route, { unread: on ? '1' : null }), { replace: true })} className="muted" style={{ fontSize: 13 }}>미확인만</Check>
             <button type="button" className="reset more" style={{ fontSize: 13 }} onClick={() => setNotifications(ns => ns.map(n => ({ ...n, read: true })))}>모두 읽음</button>
           </div>
         </div>
-        <p className="muted" style={{ marginTop: 8 }}>선택한 유형: <b style={{ color: 'var(--red-d)' }}>{tabLabel}</b></p>
+        <div style={{ marginTop: 18 }}>
+            <nav className="subnav article-tabs" aria-label="알림 유형">
+              {TABS.map(([key, label]) => {
+                // 전체 건수는 머리글 종과 왼쪽 메뉴에 이미 있으므로 유형 탭에만 표시한다.
+                const count = key === 'all' ? 0 : notifications.filter(n => !n.read && n.type === key).length
+                return (
+                  <Link key={key} className={tab === key ? 'on' : ''} aria-current={tab === key ? 'page' : undefined} to={withQuery(route, { tab: key === 'all' ? null : key, id: null })}>
+                    {label}{count > 0 && <span aria-label={`미확인 ${count}건`} style={{ marginLeft: 6, minWidth: 18, padding: '0 5px', borderRadius: 9, background: 'var(--red)', color: '#fff', fontSize: 11, fontWeight: 800, lineHeight: '18px', display: 'inline-block', textAlign: 'center' }}>{count}</span>}
+                  </Link>
+                )
+              })}
+            </nav>
+        </div>
         <TermsRenewalNotice to="/account/settings?terms=open" />
       </section>
       <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', gap: 20, alignItems: 'stretch' }} className="resp-stack">

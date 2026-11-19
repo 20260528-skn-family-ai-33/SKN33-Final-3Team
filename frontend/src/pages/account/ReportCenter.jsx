@@ -1,8 +1,8 @@
 // BS16 채팅 생성 · BS17 주간 · BS18 월간 · BS31 분기 리포트 목록, BS20 구독 삭제 확인
 import { useEffect, useState } from 'react'
-import { navigate, withQuery } from '../../router'
+import { Link, navigate, withQuery } from '../../router'
 import { useApp, useNotifications } from '../../store'
-import { Btn, Chip, Loading, Modal, Select, TextField } from '../../components/ui'
+import { Btn, Loading, Modal, Select, TextField } from '../../components/ui'
 import Icon from '../../components/Icon'
 import { productName } from '../../data/catalog'
 import { reportKinds } from '../../data/seed'
@@ -117,13 +117,13 @@ export default function ReportCenter({ route }) {
     <>
       <section className="card">
         <div className="between">
-          <h2 className="t1" style={{ fontSize: 24 }}>리포트 센터{tab === 'quarterly' ? ' / 분기리포트' : ''}</h2>
+          <h2 className="t1" style={{ fontSize: 24 }}>리포트 센터</h2>
           <Btn kind="red" icon="plus" to="/analysis?new=1">새 리포트 만들기</Btn>
         </div>
         <div style={{ marginTop: 18 }}>
-          <div className="chips">
-            {TABS.map(t => <Chip key={t} sm on={tab === t} to={`/account/reports?tab=${t}`}>{reportKinds[t].tab}</Chip>)}
-          </div>
+          <nav className="subnav article-tabs" aria-label="리포트 유형">
+            {TABS.map(t => <Link key={t} className={tab === t ? 'on' : ''} aria-current={tab === t ? 'page' : undefined} to={`/account/reports?tab=${t}`}>{reportKinds[t].tab}</Link>)}
+          </nav>
         </div>
         <form onSubmit={search} noValidate>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
@@ -141,7 +141,7 @@ export default function ReportCenter({ route }) {
               {/* 목록의 생성일이 한국 시각(ab6c0c8)이므로 필터도 같은 날짜로 거른다. 기기 시간대로 바꾸면 표시와 어긋난다 */}
               <span className="note" aria-hidden="true">KST</span>
             </div>
-            <Btn type="submit" kind="red" icon="search" disabled={invalidRange}>검색</Btn>
+            <Btn type="submit" kind="plum" icon="search" disabled={invalidRange}>검색</Btn>
             <Btn onClick={reset}>필터 초기화</Btn>
           </div>
         </form>

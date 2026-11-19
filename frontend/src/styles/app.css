@@ -444,4 +444,18 @@ a.dash-card:hover,.dash-card a:hover{background:#F8F9FB}
 @keyframes loading-spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.loading-ring{animation:none}}
 
+/* Articles stay with their question; role badges replace inline role prefixes. */
+.chat-article-list:empty{display:none}
+.chat-article-list{display:grid;gap:12px;margin-top:16px;margin-bottom:24px}
+.chat-article-card{align-items:flex-start}
+.chat-article-card>div{min-width:0;width:100%}
+.chat-article-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 12px;margin-bottom:6px}
+.chat-article-badges{display:inline-flex;gap:6px;flex-shrink:0}
+.chat-article-card details{margin-top:10px;line-height:1.7}
+.chat-article-card .btn{margin-top:12px}
+
+.subnav.article-tabs.admin-tabs{flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;padding-bottom:1px;justify-content:flex-start;background:transparent;gap:clamp(20px,3vw,44px)}
+.admin-tabs a{flex-shrink:0}
+.admin-monthly-chart{margin:24px 0 12px;overflow-x:auto}
+.admin-monthly-chart svg{display:block;width:100%;min-width:440px}
 .flag { display: inline-block; width: 1.33em; height: 1em; flex-shrink: 0; margin-right: 6px; vertical-align: -0.125em; border-radius: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,.08); background-size: cover; }

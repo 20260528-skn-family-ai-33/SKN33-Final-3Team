@@ -42,3 +42,5 @@ tmp/
 runtime/
 
 /outputs/*
+
+/LIST.md

@@ -20,23 +20,22 @@ const MENU = [
 ]
 
 const PAGES = {
-  reports: [ReportCenter, 'reports', '리포트 목록에서 열람하거나 생성 당시 저장한 PDF·DOCX를 다운로드합니다.'],
-  subscription: [Subscription, 'reports', '리포트 종류별로 목록을 확인하고 저장된 PDF를 다시 다운로드합니다.'],
-  settings: [NotificationSettings, 'settings', '받고 싶은 알림과 관심 조건을 관리합니다.'],
-  profile: [Profile, 'profile', '이메일 확인 후 비밀번호를 변경하고, 동의 상태 및 회원탈퇴를 관리합니다.'],
-  password: [Password, 'profile', '등록 이메일 확인 후 비밀번호를 변경합니다.'],
-  interests: [Interests, 'interests', '관심 국가·품목을 수정하고 맞춤 조회와 알림에 적용합니다.'],
-  notifications: [Inbox, 'notifications', '알림 유형별 탭에서 목록을 확인하고, 선택한 알림의 상세 내용을 오른쪽에서 확인합니다.'],
+  reports: [ReportCenter, 'reports'],
+  subscription: [Subscription, 'reports'],
+  settings: [NotificationSettings, 'settings'],
+  profile: [Profile, 'profile'],
+  password: [Password, 'profile'],
+  interests: [Interests, 'interests'],
+  notifications: [Inbox, 'notifications'],
 }
 
 export default function AccountPage({ route }) {
   const { unread } = useNotifications()
   const section = route.path.split('/')[2] || 'profile'
-  const [Page, menu, lead] = PAGES[section] || PAGES.profile
-  const leadText = section === 'reports' && (route.query.get('tab') || 'chat') === 'chat' ? '리포트 종류별로 목록을 확인하고 저장된 PDF를 다시 다운로드합니다.' : lead
+  const [Page, menu] = PAGES[section] || PAGES.profile
   return (
     <>
-      <Band image={bandMypage} imagePosition="center 70%"  title="마이페이지" lead={leadText} />
+      <Band image={bandMypage} imagePosition="center 70%"  title="마이페이지" />
       <main className="page">
         <div className="wrap lay">
           <nav className="side" aria-label="마이페이지 메뉴">

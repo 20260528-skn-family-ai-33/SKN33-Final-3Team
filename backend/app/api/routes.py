@@ -24,7 +24,6 @@ PENDING={
   69:'DEC-34 소셜 계정 저장·연결 및 OAuth 제공자 설정',70:'DEC-34 소셜 계정 저장·연결 및 OAuth 제공자 설정',
   71:'DEC-34 소셜 신규 가입 저장 계약',72:'DEC-34 이메일 인증·메일 제공자 설정',73:'DEC-34 이메일 인증·메일 제공자 설정',74:'DEC-34 소셜 신규 가입·동의 저장 계약',
   75:'DEC-34 일반 동의 종류와 과거 약관 보존 계약',76:'DEC-34 일반 동의 종류와 과거 약관 보존 계약',
-  79:'DEC-37 과거 월말 회원·구독 스냅샷 저장 계약',
   88:'DEC-42 상세 로그·실패 범위 생산자 계약',89:'데이터 적재 담당자의 실패 범위 재수집 실행기 연결',
   90:'DEC-38 HS 판본 품질 판정 저장 계약',91:'DEC-41 버전 획득 및 데이터 담당 재검증 실행기 연결',
   94:'태그 변경 이후 집계·벡터 인덱스 반영 실행기 연결',
@@ -89,6 +88,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         from backend.app.api.answer_stream import final_answer_stream
         return final_answer_stream(jobs.owned_job(store,uid,path['job_id']))
     page=query.get('page',1); size=query.get('page_size',20)
+    if identity==79: return admin.overview(store)
     if identity in PENDING:
         raise ApiError(422 if identity in (23,27) else 503,'FEATURE_NOT_AVAILABLE' if identity in (23,27) else 'FEATURE_NOT_READY',PENDING[identity])
     if identity==1: return accounts.signup(store,Signup.model_validate(body),response,settings)
@@ -111,7 +111,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==9:
         t=store.t('service_option'); options=store.rows(select(t.c.option_code,t.c.label_ko).where(t.c.option_type=='REPORT_PERIOD',t.c.enabled==True).order_by(t.c.sort_order))
         return {'report_periods':options,'supported_formats':['PDF','DOCX','XLSX'],
-            'capabilities':[{'code':f'API-{i:02}','enabled':True} for i in range(1,131) if i not in PENDING and i not in range(106,117)],
+            'capabilities':[{'code':f'API-{i:02}','enabled':True} for i in (*range(1,131),136,137) if i not in PENDING and i not in range(106,117)],
             'password_policy':'영문·숫자·특수문자를 포함한 8자 이상, UTF-8 72바이트 이하, 확인값 일치'}
     if identity==10: return trade.availability(store)
     if identity==11: return reference.hs_search(store,query['q'],query.get('depth',4),query.get('limit',5),query.get('hs_ver','HS2022'))
@@ -310,6 +310,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==99: return keyword_admin.review(store,user,body)
     if identity==101: return keyword_admin.categories(store)
     if identity==102: return keyword_admin.category_change(store,user,body)
+    if identity in (136,137): return keyword_admin.major_change(store,user,body,removing=identity==137)
     if identity==103: return {'category':keyword_admin.category_row(store,path['category_id'])}
     if identity in (104,105): return keyword_admin.category_change(store,user,body,path['category_id'],identity==105)
     if identity==96:

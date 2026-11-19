@@ -182,7 +182,7 @@ function RankResults({ route }) {
             <div style={{ display: 'flex', gap: 12, marginTop: 16 }} className="resp-stack">
               <CountrySearch value={selectedCodes(draft)} replaceDefault={Boolean(draft.country) && !route.query.has('country')} onChange={countryCodes => setDraft(d => ({ ...d, country: '', countryCodes, group: null, scope: 'GLOBAL', inherited: false }))} />
               <Select prefix="기간" style={{ flex: 1 }} value={draft.period} onChange={v => setDraft(d => v === 'custom' ? { ...d, period: v, start: d.start || monthOffset(end, -2), end: d.end || end } : { ...d, period: v, start: "", end: "" })} options={PERIODS} aria-label="기간" />
-              <Btn kind="red" size="md" onClick={search} disabled={result.loading} style={{ height: 50, borderRadius: 12, padding: '0 28px' }}><Icon name="search" size={17} />순위 조회</Btn>
+              <Btn kind="plum" size="md" onClick={search} disabled={result.loading} style={{ height: 50, borderRadius: 12, padding: '0 28px' }}><Icon name="search" size={17} />순위 조회</Btn>
             </div>
             {draft.period === 'custom' && (
               <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>

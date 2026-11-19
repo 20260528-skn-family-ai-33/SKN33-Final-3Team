@@ -1,3 +1,5 @@
+#137 관리자 대분류 수정·삭제와 공통 이름 잠금의 요청/응답 정의는 [관리자 대분류 API 정의](ADMIN_KEYWORD_API.md)를 참고한다. 월별 집계의 날짜 미상 제외 건수는 [관리자 월별 집계](ADMIN_METRICS.md)에 정의한다.
+
 # 백엔드 실행 및 인계
 
 ## 2026-11-18 수출입 순위 품목 다중 선택 (#134)
@@ -344,7 +346,7 @@ API-24 변화 목록은 검증된 현재·비교 월의 거래 키 합집합을 
 | 요청 제한 | api_rate_limit은 현재 코드의 DB 기반 선택이다. Redis/게이트웨이를 사용하면 DB 테이블은 생략할 수 있으나 요청 제한 구현을 함께 교체해야 한다. |
 | 기존 구조 재사용 | chat_session/chat_message, report/report_subscription, notification_setting, user_consent, user_alert, article.visibility_status/admin_meta_json, article_classification, batch_run, service_option은 기존 구조를 사용한다. async_job은 사용하지 않는다. JSON 컬럼 존재만으로 과거 데이터/미기록 정보가 복원되지는 않는다. |
 
-전체 요구사항에는 추가 미확정 사항도 있다. 소셜 provider+subject 연결과 password_hash NOT NULL 정합성 및 일반 동의 종류(DEC-34), 탈퇴 사유·삭제 정책(DEC-46), 월말 회원 통계·당시 알림 전달 제외 사유(DEC-37), 범위별 실패·재처리 기록(DEC-42)은 별도 합의가 필요하다. 계정 복구와 새 기사부터 분류 적용은 상단 DEC-43/44/49 결정을 따른다. 분야 삭제·이관은 제공 범위에서 제외한다. ML/RAG 및 원천 적재 설계는 담당자 범위로 남긴다.
+전체 요구사항에는 추가 미확정 사항도 있다. 소셜 provider+subject 연결과 password_hash NOT NULL 정합성 및 일반 동의 종류(DEC-34), 탈퇴 사유·삭제 정책(DEC-46), 월말 회원 통계 스냅샷 보존·당시 알림 전달 제외 사유(DEC-37, API-79는 확정 전 임시 방식으로 현재 회원·활성 구독의 시작일을 거꾸로 누적해 제공하며 과거 수치 보존은 후속 과제), 범위별 실패·재처리 기록(DEC-42)은 별도 합의가 필요하다. 계정 복구와 새 기사부터 분류 적용은 상단 DEC-43/44/49 결정을 따른다. 분야 삭제·이관은 제공 범위에서 제외한다. ML/RAG 및 원천 적재 설계는 담당자 범위로 남긴다.
 
 ## 템플릿과 충돌 처리
 

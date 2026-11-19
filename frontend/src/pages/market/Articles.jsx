@@ -102,7 +102,7 @@ export default function Articles({ route }) {
                   <input type="date" aria-label="종료일" value={form.to} onChange={e => setForm(f => ({ ...f, to: e.target.value }))} style={{ minWidth: 0 }} />
                 </div>
               </div>
-              <Btn type="submit" kind="red" size="md" style={{ height: 50, borderRadius: 12, padding: '0 30px' }}>기사 검색</Btn>
+              <Btn type="submit" kind="plum" size="md" style={{ height: 50, borderRadius: 12, padding: '0 30px' }}>기사 검색</Btn>
             </div>
             {error
               ? <p className="field-err" role="alert" style={{ marginTop: 10 }}>{error}</p>

@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/data.test.mjs tests/roles.test.mjs tests/api-client.test.mjs tests/integration.test.mjs tests/request-id.test.mjs tests/query-cache.test.mjs",
+    "test": "node --test tests/data.test.mjs tests/roles.test.mjs tests/api-client.test.mjs tests/integration.test.mjs tests/request-id.test.mjs tests/query-cache.test.mjs tests/monthly-series.test.mjs tests/article-presentation.test.mjs",
     "test:dashboard": "node tests/dashboard-cache-browser.cjs",
     "test:rank-products": "node tests/rank-products-browser.cjs",
     "test:mini-alerts": "node tests/mini-alerts-browser.cjs",

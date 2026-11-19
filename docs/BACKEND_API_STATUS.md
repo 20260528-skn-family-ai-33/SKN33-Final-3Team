@@ -82,7 +82,7 @@
 | 076 | `POST  /api/v1/users/me/consents/general` | 보류: DEC-34 일반 동의 종류와 과거 약관 보존 계약 |
 | 077 | `GET  /api/v1/un/availability` | 처리 코드 구현 |
 | 078 | `POST  /api/v1/analysis/import-market-shares` | 처리 코드 구현 |
-| 079 | `GET  /api/v1/admin/overview` | 보류: DEC-37 과거 월말 회원·구독 스냅샷 저장 계약 |
+| 079 | `GET  /api/v1/admin/overview` | 기존 회원·활성 구독의 시작일 기준 최근 12개월 누적 제공. 날짜 미상·오류 행만 과거 집계에서 제외하고 excluded에 회원·구독 각각 건수 제공. 이번 달은 미상 포함 현재값. 추가 스키마 불필요. DEC-37(월말 스냅샷) 확정 전 임시 방식: 전체 회원은 탈퇴·이용 제한 계정 포함, 탈퇴·삭제·구독 해지 시 과거 수치가 달라질 수 있으며 보존은 후속 과제 |
 | 080 | `GET  /api/v1/admin/alerts` | 처리 코드 구현 |
 | 081 | `GET  /api/v1/admin/users` | 처리 코드 구현; `by`(all/id/name) 검색 기준 |
 | 082 | `GET  /api/v1/admin/users/{user_id}` | 처리 코드 구현 |
@@ -104,10 +104,10 @@
 | 098 | `GET  /api/v1/admin/keyword-topics/detail` | 실제 기사 근거 및 내용 해시 버전 조회 |
 | 099 | `PATCH  /api/v1/admin/keyword-topics/review` | 지정·보류·해제와 감사 이력 저장. NEW_ONLY: 최초 적재되는 새 기사부터 적용, 기존 기사 분류 보존; 재처리·재색인 미지원 |
 | 100 | `GET  /api/v1/admin/keyword-topics/export` | 처리 코드 구현 |
-| 101 | `GET  /api/v1/admin/keyword-categories` | 실제 분야 사전, 기본 대분류 8개 및 대표어 조회 |
-| 102 | `POST  /api/v1/admin/keyword-categories` | 관리자 분야 생성 및 출처 감사 기록 |
+| 101 | `GET  /api/v1/admin/keyword-categories` | 실제 분야 사전, 기본 대분류 8개 및 대표어 조회; editable_major_names·major_version 제공 |
+| 102 | `POST  /api/v1/admin/keyword-categories` | 대분류 독립/중분류 생성 및 감사 기록; 분류 공통 이름 잠금, 삭제된 대분류 하위 추가 409 |
 | 103 | `GET  /api/v1/admin/keyword-categories/{category_id}` | 실제 분야 상세·버전·편집 가능 여부 |
-| 104 | `PATCH  /api/v1/admin/keyword-categories/{category_id}` | 관리자 생성 분야 이름 변경, 기본 분야 보호 |
+| 104 | `PATCH  /api/v1/admin/keyword-categories/{category_id}` | 관리자 생성 분야 이름 변경, 기본 분야 보호; 공통 이름 잠금 및 삭제된 대분류 대상 변경 409 |
 | 105 | `DELETE  /api/v1/admin/keyword-categories/{category_id}` | 제공하지 않음: 분야 삭제·이관 제외 결정. 422 FEATURE_NOT_AVAILABLE |
 | 106 | `번호 예약·재사용 금지` | 삭제/예약: 등록하지 않음 |
 | 107 | `번호 예약·재사용 금지` | 삭제/예약: 등록하지 않음 |
@@ -134,3 +134,12 @@
 | 128 | `POST  /api/v1/auth/account-recovery/candidates` | 이름·이메일 가입 일치 여부만 확인; 후보 목록 미노출 |
 | 129 | `POST  /api/v1/auth/account-recovery/email` | 이름·이메일 일치 여부 확인으로 대체: 아이디 안내 메일은 사용하지 않음 |
 | 130 | `POST  /api/v1/auth/password-recovery/temporary-password` | DB 커밋 성공 후 임시 비밀번호 메일 발송, 실패 화면 안내. 이메일당 600초 1회·최근 24시간 5회. 계정 불가 사유는 동일 403; SMTP 전체 15초 상한 |
+
+## 미사용 대분류 관리 (#137)
+
+| 번호 | 경로 | 상태 |
+|---|---|---|
+| 136 | `PATCH /api/v1/admin/keyword-majors` | 미사용 관리자 대분류 이름 수정. 확인·사유·expected_version 및 사용 여부 재검증, CATEGORY_RENAME 이력 추가 |
+| 137 | `DELETE /api/v1/admin/keyword-majors` | 미사용 관리자 대분류 삭제. CATEGORY_DELETE 이력 추가, 중분류 삭제 API-105 제한 유지 |
+
+[API 정의 및 MySQL 동시성 검증](ADMIN_KEYWORD_API.md). main과 동일한 테이블·컬럼 구조를 사용한다.

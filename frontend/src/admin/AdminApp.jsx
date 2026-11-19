@@ -66,7 +66,7 @@ export default function AdminApp({ route }) {
             {binding.result.loading && <Loading />}
             {binding.user && <ServerDetail type="user" id={binding.user} key={binding.user} onChanged={binding.result.reload} />}
             {binding.article && <ServerDetail type="article" id={binding.article} key={binding.article} onChanged={binding.result.reload} />}
-            <AdminScreen key={screenId} screen={screen} query={Object.fromEntries(route.query)} />
+            <AdminScreen key={screenId} screen={screen} query={Object.fromEntries(route.query)} hideHead={!!binding.user} />
             {binding.audit && <AuditDetail id={binding.audit} key={binding.audit} actorEmail={binding.result.data?.items?.find(r => r.audit_id === binding.audit)?.actor_email} onClose={() => { const q = new URLSearchParams(route.query); q.delete('audit'); navigate(q.toString() ? `${route.path}?${q}` : route.path) }} />}
             {binding.result.data?.page?.total > 0 && <Pager page={Number(route.query.get('page')) || 1} pages={Math.ceil(binding.result.data.page.total / binding.result.data.page.page_size)} onChange={page => { const q = new URLSearchParams(route.query); q.set('page', page); navigate(`${route.path}?${q}`) }} />}
           </div> : <div className="card"><p className="t2">화면을 찾을 수 없습니다</p></div>}

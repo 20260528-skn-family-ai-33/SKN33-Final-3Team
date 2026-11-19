@@ -1,8 +1,10 @@
 // 관리자 화면 데이터(screens.js)를 목업과 같은 마크업으로 그린다.
 import { useState } from 'react'
 import { navigate } from '../router'
-import { Btn, Chip, Loading, Modal } from '../components/ui'
+import { Btn, Loading, Modal } from '../components/ui'
 import Icon from '../components/Icon'
+import AdminTabs from './AdminTabs'
+import MonthlyLine from './MonthlyLine'
 import { useApp } from '../store'
 import { isAdmin } from '../auth/roles'
 import { useQuery, ErrorNotice } from '../api/hooks'
@@ -39,33 +41,15 @@ function Cell({ c }) {
   return null
 }
 
-function Tabs({ items, sm }) {
-  return <div className="chips">{items.map(t => <Chip key={t.label} sm={sm} on={t.on} to={t.to}>{t.label}</Chip>)}</div>
-}
-
-/** 6개월 추이 미니 꺾은선(운영 현황) */
-function MiniLine({ values, max, ticks, color = '#C8102E', w = 520, h = 200 }) {
-  const xs = values.map((_, i) => 60 + (i * (w - 80)) / (values.length - 1))
-  const y = v => h - 30 - (v / max) * (h - 50)
-  return (
-    <svg width="100%" viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
-      {ticks.map(t => (
-        <g key={t}>
-          <line x1="50" y1={y(t)} x2={w - 10} y2={y(t)} stroke="#ECEEF1" />
-          <text x="44" y={y(t) + 4} textAnchor="end" fontSize="11" fill="#8A919C">{t.toLocaleString()}</text>
-        </g>
-      ))}
-      <polyline points={values.map((v, i) => `${xs[i].toFixed(0)},${y(v).toFixed(0)}`).join(' ')} fill="none" stroke={color} strokeWidth="2.5" />
-      {values.map((v, i) => <circle key={i} cx={xs[i]} cy={y(v)} r="3.5" fill={color} />)}
-      {xs.map((x, i) => <text key={i} x={x} y={h - 8} textAnchor="middle" fontSize="11" fill="#8A919C">{i + 1}월</text>)}
-    </svg>
-  )
-}
+const Tabs = AdminTabs
 
 const OPS_TABS = [['전체', 'BS32'], ['데이터', 'BS34'], ['리포트', 'BS36'], ['회원관리', 'BS38']]
 const OPS_DETAIL = { 전체: 'BS33', 데이터: 'BS35', 리포트: 'BS37', 회원관리: 'BS39' }
 const OPS_CATEGORY = { 전체: 'ALL', 데이터: 'DATA', 리포트: 'REPORT', 회원관리: 'MEMBER' }
 function OpsDashboard({ tab }) {
+  const overview = useQuery('/admin/overview')
+  const current = overview.data?.current
+  const countLabel = overview.loading ? '불러오는 중' : overview.error ? '조회 실패' : '현재 기준'
   // 탭 분류는 서버가 거른 뒤 최신 20건을 준다. 다른 분류가 첫 페이지를 채워도 선택한 탭의 알림이 빠지지 않는다.
   const result = useQuery('/admin/alerts', { page_size: 20, category: OPS_CATEGORY[tab] || 'ALL' })
   const alerts = (result.data?.items || []).map(a => [ALERT_CATEGORY[a.category] || a.category, a.message, a.created_at, 'red', a.target_type === 'BATCH' ? '/admin/inbox/collection' : '/admin/inbox/BS37'])
@@ -76,28 +60,31 @@ function OpsDashboard({ tab }) {
           <div className="between">
             <div>
               <p className="t3">전체 회원</p>
-              <p style={{ fontSize: 30, fontWeight: 800, color: 'var(--red)', marginTop: 4 }}>— <span className="note" style={{ fontWeight: 400 }}>집계 준비 중</span></p>
+              <p style={{ fontSize: 30, fontWeight: 800, color: 'var(--red)', marginTop: 4 }}>{current?.total_members?.toLocaleString() ?? '—'} <span className="note" style={{ fontWeight: 400 }}>명 · {countLabel}</span></p>
             </div>
             <Btn to="/admin/members/BS40">상세보기</Btn>
           </div>
-          <MiniLine values={[]} max={1600} ticks={[0, 400, 800, 1200, 1600]} />
+          <MonthlyLine rows={overview.data?.history || []} metric="total_members" label="월별 전체 회원" unit="명" color="#C8102E" />
+          <p className="note">현재 회원의 가입일 기준으로 월별 누적 집계합니다.</p>
+          {!!overview.data?.excluded?.total_members && <p className="note">가입일 미상·오류 {overview.data.excluded.total_members.toLocaleString()}명은 과거 월에서 제외합니다.</p>}
         </section>
         <section className="card">
           <div className="between">
             <div>
               <p className="t3">활성 구독</p>
-              <p style={{ fontSize: 30, fontWeight: 800, color: 'var(--plum)', marginTop: 4 }}>— <span className="note" style={{ fontWeight: 400 }}>집계 준비 중</span></p>
+              <p style={{ fontSize: 30, fontWeight: 800, color: 'var(--plum)', marginTop: 4 }}>{current?.active_subscriptions?.toLocaleString() ?? '—'} <span className="note" style={{ fontWeight: 400 }}>건 · {countLabel}</span></p>
             </div>
           </div>
-          <MiniLine values={[]} max={500} ticks={[0, 100, 200, 300, 400, 500]} color="#2B2350" />
+          <MonthlyLine rows={overview.data?.history || []} metric="active_subscriptions" label="월별 활성 구독" unit="건" color="#2B2350" />
+          <p className="note">현재 유지 중인 구독의 시작일 기준 누적입니다. 해지·재구독 이전 이력은 포함하지 않습니다.</p>
+          {!!overview.data?.excluded?.active_subscriptions && <p className="note">시작일 미상·오류 {overview.data.excluded.active_subscriptions.toLocaleString()}건은 과거 월에서 제외합니다.</p>}
         </section>
       </div>
-      <p className="note">회원·구독 월별 통계는 서버의 과거 스냅샷 저장 계약 확정 후 제공됩니다.</p>
+      <ErrorNotice error={overview.error} retry={overview.reload} />
+      <p className="note">최근 12개월 · 이번 달은 현재 값입니다. 과거는 현재 회원·구독의 시작일 기준으로 계산하며, 날짜 미상·오류 건은 과거 월에서 제외합니다. 이번 달에는 포함되어 증가폭이 커 보일 수 있습니다.</p>
       <section className="card">
         <ErrorNotice error={result.error} retry={result.reload} /><div className="between"><p className="t2">알림</p><Btn to={`/admin/inbox/${OPS_DETAIL[tab]}`}>상세보기</Btn></div>
-        <div className="chips" style={{ marginTop: 14 }}>
-          {OPS_TABS.map(([label, id]) => <Chip key={label} sm on={tab === label} to={`/admin/ops/${id}`}>{label}</Chip>)}
-        </div>
+        <AdminTabs label="운영 알림 유형" style={{ marginTop: 14 }} items={OPS_TABS.map(([label, id]) => ({ label, on: tab === label, to: `/admin/ops/${id}` }))} />
         <div aria-busy={result.loading} style={{ marginTop: 6 }}>
           {result.loading && <Loading label="알림을 불러오는 중" />}
           {alerts.map(([kind, title, meta, tone, to]) => (
@@ -355,12 +342,12 @@ function ReasonField({ label }) {
   )
 }
 
-export default function AdminScreen({ screen, query }) {
+export default function AdminScreen({ screen, query, hideHead = false }) {
   const { head, blocks, modal } = screen
   return (
     <>
       <div className="col" style={{ gap: 20, minWidth: 0 }}>
-        <section className="card">
+        {!hideHead && <section className="card">
           <div className="between" style={{ alignItems: 'flex-start' }}>
             <div>
               <p className="note">{head.crumb}</p>
@@ -370,7 +357,7 @@ export default function AdminScreen({ screen, query }) {
             {head.actions && <Buttons items={head.actions} />}
           </div>
           {head.tabs && <div style={{ marginTop: 18 }}><Tabs items={head.tabs} /></div>}
-        </section>
+        </section>}
         {blocks.map((b, i) => <Block key={i} b={b} query={query} />)}
       </div>
       {modal && <ScreenModal m={modal} />}

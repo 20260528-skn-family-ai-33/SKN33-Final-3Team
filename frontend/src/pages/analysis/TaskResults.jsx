@@ -10,6 +10,8 @@ import { useApp } from '../../store'
 import { comparisonCharts } from './comparisonCharts'
 import { comparisonGroups, comparisonChart } from './comparisonGroups'
 import { taskTitle } from './taskTitle'
+import ArticleCards from './ArticleCards.jsx'
+import ReferenceText from './ReferenceText'
 
 const colors=['#a71b39','#342954','#4b7578','#967348','#6e6198']
 const badges={PARTIAL:'일부 결과',NO_DATA:'결과 없음',OUT_OF_SCOPE:'범위 밖'}
@@ -99,7 +101,7 @@ export default function TaskResults({answer,hideText=false}) {
     let note='수치·대상·기간·단위를 검증 근거와 일치한다고 확인하지 못했습니다.'
     if(check?.basis==='ARTICLE') note=unavailable?'인용한 기사의 원문 근거를 확인할 수 없습니다.':'인용한 기사 또는 함께 제시한 통계로 이 문장 전체를 확인할 수 없습니다.'
     else if(unavailable) note='저장된 조회 결과가 만료되어 원본을 확인할 수 없습니다.'
-    return <p key={index} style={{whiteSpace:'pre-line'}}>{text} {check&&<span className="tag amber" title={note}>확인 필요{unavailable?' · 원본 확인 불가':''}</span>}</p>
+    return <p key={index} style={{whiteSpace:'pre-line'}}><ReferenceText text={text} /> {check&&<span className="tag amber" title={note}>확인 필요{unavailable?' · 원본 확인 불가':''}</span>}</p>
   }
   const sections=answer.tasks.map((t,index)=>{
     const start=conclusionCount(answer.tasks.slice(0,index))
@@ -112,14 +114,14 @@ export default function TaskResults({answer,hideText=false}) {
       {tables.length>0 && <details><summary>근거 표 보기</summary>
         {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}
           charts={answer.charts||[]} selectors={answer.chart_selectors} tasks={answer.tasks} tableOnly/>)}   {/* 비교는 시기별 한 줄(22번), 표만 */}
-        {tables.filter(x=>!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</details>}</section>
+        {tables.filter(x=>!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</details>}<ArticleCards articles={answer.articles} taskId={t.task_id} orderBy={answer.order_by}/></section>
     return <section key={t.task_id} className="chat-result"><h3>{index+1}. {title} {badge&&<span className="tag amber">{badge}</span>}</h3>
       {!hideText && t.conclusion.map((s,i)=>sentence(s,start+i))}
       {charts.filter(c=>c.task_id===t.task_id&&!groupedTasks.has(c.task_id)).map(c=><Chart key={c.result_id+':'+c.chart_id} initial={c} selector={answer.chart_selectors?.find(x=>x.task_id===c.task_id&&x.result_id===c.result_id)} table={answer.tables.find(x=>x.result_id===c.result_id)}/>)}
       {groups.filter(g=>g.task_id===t.task_id).map(g=><ComparisonResult key={g.tables.map(table=>table.result_id).join(',')} group={g}
         charts={answer.charts||[]} selectors={answer.chart_selectors} tasks={answer.tasks}  // 오류 시 원본 차트(합치기 전)를 보여 준다
         fallback={charts.filter(chart=>g.tables.some(table=>table.task_id===chart.task_id)).sort((a,b)=>(b.type==='line'?100:0)+b.series.length-(a.type==='line'?100:0)-a.series.length)[0]}/>)}
-      {answer.tables.filter(x=>x.task_id===t.task_id&&!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}</section>
+      {answer.tables.filter(x=>x.task_id===t.task_id&&!groupedTables.has(x.result_id)).map(x=><ApiResults key={x.result_id} table={x} tableOnly/>)}<ArticleCards articles={answer.articles} taskId={t.task_id} orderBy={answer.order_by}/></section>
   })
   const offset=conclusionCount(answer.tasks)
   return <>{sections}{!hideText && answer.text.split('\n').slice(offset).map((s,i)=>sentence(s,offset+i))}</>
