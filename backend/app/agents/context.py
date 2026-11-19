@@ -29,16 +29,25 @@ def year_over_year_base(question, session_context, verified):
 def both_trade_flows(plan) -> bool:
     """Only carry both directions when the primary scope was queried in both directions."""
     primary, *others = plan.tasks
-    if primary.intent not in ('STATISTICS', 'RANKING', 'CAUSE') or not primary.conditions:
+    # 무역수지 작업의 방향(EXPORT)은 수출 기준 계산일 뿐 수출액 조회가 아니다. 두 방향 판정에서 뺀다.
+    if (primary.intent not in ('STATISTICS', 'RANKING', 'CAUSE') or not primary.conditions
+            or primary.slots.trade_balance):
         return False
     return any(
         task.intent == primary.intent and task.answer_status in ('ANSWERED', 'PARTIAL')
-        and task.conditions is not None
+        and task.conditions is not None and not task.slots.trade_balance
         and task.conditions.trade_flow != primary.conditions.trade_flow
         and task.conditions.model_dump(exclude={'trade_flow'}) ==
         primary.conditions.model_dump(exclude={'trade_flow'})
         for task in others
     )
+
+
+def trade_balance(plan) -> bool:
+    """직전 답변의 주 작업이 무역수지 통계였는지(후속 질문이 무역수지를 잇는다)."""
+    primary = plan.tasks[0]
+    return bool(primary.intent == 'STATISTICS' and primary.answer_status in ('ANSWERED', 'PARTIAL')
+                and primary.slots.trade_balance)
 
 
 def completed_context(state):
@@ -56,6 +65,7 @@ def completed_context(state):
             conditions=primary.conditions, summary=state.draft.turn_summary, answered_at=now()))
         if primary.conditions:
             context.both_trade_flows = both_trade_flows(state.plan)
+            context.trade_balance = trade_balance(state.plan)
     return context
 
 
@@ -117,6 +127,7 @@ class ChatContext:
                 pass
         return SessionContext(session_id=session_id, conditions=restore_conditions(context_json),
             both_trade_flows=context_json.get('both_trade_flows') is True,
+            trade_balance=context_json.get('trade_balance') is True,
             article_retry=context_json.get('article_retry'),
             interest_action=context_json.get('interest_action', 'NONE'), last_job_id=last_job_id)
 

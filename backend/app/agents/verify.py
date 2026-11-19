@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 import re
 
 from backend.app.agents.compose import fixed_conclusion
+from backend.app.api.common import sql_period_partial, sql_period_unproven
 from backend.app.agents.monthly_summary import fixed_monthly_sentences, task_series, snapshot_sentences
 from backend.app.agents.state import ClaimFeedback, SentenceCheck, Verification
 from backend.app.agents.verify_claims import (
@@ -16,7 +17,7 @@ from backend.app.agents.verify_claims import (
     change_phrase_end, COMPARISON, DOWN, UP, TOKEN, DATE, HISTORY_DATE, _shown, _merge_compound, _target_count, _name_pattern, months_between, shift, stated_windows,
 )
 from backend.app.agents.verify_articles import article_claim, causal_antecedent, causal_assertion, citation_clauses
-from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, period
+from backend.app.agents.verify_evidence import Fact, bind_targets, build_facts, compare_key, period
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class ClaimCheck:
 
 def _source_supports(time: TimeClaim,source):
     windows=[p for k in ('period','compare_period','article_period') if (p:=period(source.get(k)))]
+    windows.extend(p for value in source.get('extra_compare_periods') or [] if (p:=period(value)))
     if source.get('anchor'): windows.append((source['anchor'][:7],source['anchor'][:7]))
     if time.years and not all(any(start[:4]<=year<=end[:4] for start,end in windows) for year in time.years): return False
     if time.months and not all(any(start<=month<=end for start,end in windows) for month in time.months): return False
@@ -124,7 +126,13 @@ def _level_period_matches(role, time, fact, source):
     if not prior:
         return False
     return role == 'COMPARE' or _windows_match(role, period(source.get('period')),
-                                                period(source.get('compare_period')))
+                                                compare_key(source, fact.path[-1])[1])
+
+
+def _edition_matches(claim, fact):
+    # 판본을 저장하지 않은 근거(전체 품목 비중 등)는 HS2022 조회 결과다. HS2017 결과는 행·근거 범위에 판본을 둔다.
+    # 기간을 증명하지 못한 생성 SQL은 판본보다 먼저 기간에서 걸러진다(mismatch의 PERIOD).
+    return not claim.editions or claim.editions == {fact.hs_ver or 'HS2022'}
 
 
 def mismatch(claim:Claim,fact:Fact,source):
@@ -132,10 +140,15 @@ def mismatch(claim:Claim,fact:Fact,source):
     q,m=claim.quantity,claim.metric
     if not claim.valid or not fact.metric.valid: return 'AMBIGUOUS'
     if not _source_supports(claim.time,source): return 'SOURCE_PERIOD'
-    if not claim.targets<=fact.targets: return 'TARGET'
+    # 기간을 증명하지 못한 생성 SQL 수치(sql.period_covered가 아님)는 어떤 문장도 뒷받침하지 않는다. 기간 표현 목록으로
+    # 거르면("조회 기간"은 막고 "이번 분기"·기간 생략은 통과) 다른 표현으로 같은 오류가 생긴다. 이 값은 표로만 보인다.
+    if source.get('kind')=='LLM_SQL' and fact.period is None and not fact.prediction:
+        return 'PERIOD'
+    if not claim.targets<=fact.targets or not _edition_matches(claim, fact): return 'TARGET'
     if claim.target_scope=='GROUP':
         if not fact.group_members or not fact.group_members<=claim.targets: return 'GROUP_SCOPE'
     elif fact.group_members: return 'INDIVIDUAL_SCOPE'
+    if fact.metric.flow == 'BALANCE' and m.flow != 'BALANCE': return 'TRADE_FLOW'
     if m.flow and fact.metric.flow and m.flow!=fact.metric.flow: return 'TRADE_FLOW'
     if m.family == 'MONTH_STATE':
         if not fact.month or fact.metric.key != 'amount_usd': return 'METRIC'
@@ -194,6 +207,13 @@ def mismatch(claim:Claim,fact:Fact,source):
         else:
             forward = claim.time.subject_year == fact.period[0][:4]
         amount = fact.value if forward else -fact.value
+    if m.balance_sign:
+        # 흑자는 양수, 적자는 음수다. 증감·차액 문장의 흑자·적자("적자 폭 확대")는 부호로 읽을 수 없어 확인하지 않는다.
+        deficit = m.balance_sign == 'DEFICIT'
+        if (m.balance_sign == 'BOTH' or m.family != 'AMOUNT' or m.comparative_amount or m.direction
+                or (q.signed and (value < 0) != deficit) or amount == 0 or (amount < 0) != deficit):
+            return 'SIGN'
+        amount, value = abs(amount), abs(value)
     direction_applies=m.direction and (m.direct_change or fact.metric.family in ('CHANGE','SHARE_CHANGE'))
     if m.direction and q.signed and (value<0)!=(m.direction=='DOWN'): return 'SIGN'
     if direction_applies:
@@ -229,14 +249,21 @@ def inspect_sentence(sentence,sources,*,known_names=(),countries=()):
 
 def _single_series(claim, facts, keep):
     """한 대상의 월별 금액 칸. 대상이 둘 이상으로 갈리면 어느 행인지 알 수 없어 비운다."""
-    eligible = [f for f in facts if f.metric.key == 'amount_usd' and f.month and claim.targets <= f.targets and keep(f)]
-    return eligible if len({f.stored_targets for f in eligible}) == 1 else []
+    eligible = [f for f in facts if f.metric.key == 'amount_usd' and f.month and claim.targets <= f.targets
+                and _edition_matches(claim, f) and keep(f)]
+    return eligible if len({(f.stored_targets, f.hs_ver) for f in eligible}) == 1 else []
+
+
+def _flow_matches(claim, fact):
+    """무역수지 칸은 무역수지 문장만, 수출·수입 칸은 같은 방향(또는 방향 없는) 문장만 뒷받침한다."""
+    return ((fact.metric.flow != 'BALANCE' or claim.metric.flow == 'BALANCE')
+            and (not claim.metric.flow or not fact.metric.flow or claim.metric.flow == fact.metric.flow))
 
 
 def _monthly_amounts(claim, facts, sources):
     return _single_series(claim, facts, lambda f: (
         isinstance(f.value, Decimal) and not f.group_members
-        and (not claim.metric.flow or not f.metric.flow or claim.metric.flow == f.metric.flow)
+        and _flow_matches(claim, f)
         and _source_supports(claim.time, sources[f.source])
         and (not claim.time.period or claim.time.period[0] <= f.month <= claim.time.period[1])))
 
@@ -293,7 +320,11 @@ def _trend_annual_cell(check, cells, prepared):
         elif period(source.get('compare_period')) == window:
             key = 'compare_total_usd'
         else:
-            continue
+            key = next((f'compare{n}_total_usd' for n, extra in
+                        enumerate(source.get('extra_compare_periods') or [], start=2)
+                        if period(extra) == window), None)
+            if key is None:
+                continue
         # Select a series by target, never by value. Use codes when present so
         # a duplicate row lacking a display name still participates in the check.
         groups = {}
@@ -306,7 +337,9 @@ def _trend_annual_cell(check, cells, prepared):
             groups.setdefault(series, []).append((index, ('rows', str(n), key)))
             names = frozenset(str(row[k]) for k in ('country_name','country_code','hs_code','name') if row.get(k))
             targets, _ = bind_targets(names, prepared.catalog)
-            if check.claim.targets <= targets:
+            # 문장이 판본을 지정하면(HS2022 기준) 같은 품목의 다른 판본 행은 후보가 아니다.
+            if check.claim.targets <= targets and (not check.claim.editions
+                                                   or check.claim.editions == {row.get('hs_ver') or 'HS2022'}):
                 eligible.add(series)
         if not eligible:
             continue
@@ -406,7 +439,13 @@ def _implied_amount_change(checks, prepared, sentence):
             continue
         # 두 달 금액이 있으면 그 비교만 근거로 쓴다. 마지막 달의 전월 대비 판정으로 대신 통과시키지 않는다.
         (first, first_cell), (last, last_cell) = (points[m] for m in sorted(points))
-        if first.stored_targets == last.stored_targets and _direction_holds(metric.direction, first.value, last.value):
+        # 두 금액은 같은 판본이어야 하고, 증감 문장이 판본을 지정하면 그 판본이어야 한다(HS2017 1월과 HS2022 2월을 잇지 않는다).
+        same_edition = ((first.hs_ver or 'HS2022') == (last.hs_ver or 'HS2022')
+                        and _edition_matches(check.claim, first))
+        # 두 금액은 같은 지표여야 하고 증감 문장의 지표와도 맞아야 한다(무역수지 증가로 수출 증가를 증명하지 않는다).
+        same_metric = first.metric.flow == last.metric.flow and _flow_matches(check.claim, first)
+        if (same_edition and same_metric and first.stored_targets == last.stored_targets
+                and _direction_holds(metric.direction, first.value, last.value)):
             out[index] = ClaimCheck(check.claim, 'MATCH', (first_cell, last_cell), check.interpretation_valid)
         else:
             out[index] = ClaimCheck(check.claim, 'NOT_CONFIRMED', (), check.interpretation_valid)
@@ -494,7 +533,7 @@ def _matching_cells(claim, facts, sources, catalog):
         return _monthly_extreme_cells(claim, facts, sources)
     if claim.metric.family == 'OUTLOOK':
         # An implicit market is identifiable only if one saved classification is in scope.
-        eligible = [f for f in facts if f.metric.family == 'OUTLOOK' and claim.targets <= f.targets
+        eligible = [f for f in facts if f.metric.family == 'OUTLOOK' and claim.targets <= f.targets and _edition_matches(claim, f)
                     and _source_supports(claim.time, sources[f.source]) and _time_matches(claim, f)]
         if len(eligible) != 1:
             return ()
@@ -516,15 +555,39 @@ def _matching_cells(claim, facts, sources, catalog):
         return ()  # "베트남 2,840만 달러": 베트남 기초화장품·베트남 라면 중 어느 행인지 알 수 없다.
     matches = []
     inferred_axes = set()
+    editions = set()
+    compare_windows = set()
     check_dimensions = claim.quantity is None or (claim.targets and claim.metric.family == 'CHANGE')
     def dimensions(targets):
         named = targets - {'전체 국가', '전체 품목'}
         return bool(named - catalog.countries), bool(named & catalog.countries)
-    required_dimensions = dimensions(claim.targets) if check_dimensions else None
+    required_dimensions = dimensions(claim.targets)
     for fact in facts:
-        if check_dimensions and dimensions(fact.stored_targets) != required_dimensions:
+        source = sources[fact.source]
+        # 생성 SQL의 GROUP BY 행은 문장에도 그 대상을 써야 한다. 연간 합계·차액 칸은 WHERE 필터로 대상이 정해진 칸이라 제외한다.
+        sql_group = (source.get('kind') == 'LLM_SQL' and fact.stored_targets
+                     and not fact.annual_sql_sum and not fact.period_difference)
+        if fact.annual_sql_rate and _WIDE_SCOPE.search(claim.text):
+            # 넓은 범위 표현이어도 문장이 그 칸의 품목·국가를 직접 밝히면("미국 메모리 반도체 수출 합계") 같은 범위다.
+            product_scoped, country_scoped = dimensions(fact.stored_targets)
+            if (product_scoped and not required_dimensions[0]) or (country_scoped and not required_dimensions[1]):
+                continue
+        if not fact.annual_sql_rate and (check_dimensions or sql_group) and dimensions(fact.stored_targets) != required_dimensions:
             continue
-        reason = mismatch(claim, fact, sources[fact.source])
+        if sql_group:
+            codes = {name for name in fact.stored_targets if name.isascii() and name.isdigit()}
+            # An HS4 parent cannot stand in for the HS6 group even if the parent is also projected.
+            if any(child.startswith(parent) for parent in codes & claim.targets for child in codes - claim.targets):
+                continue
+        reason = mismatch(claim, fact, source)
+        if fact.hs_ver and reason in (None, 'VALUE', 'DIRECTION'):
+            editions.add(fact.hs_ver)
+        # 증감 칸의 비교 기준(비교 기간·전년/전월 축)도 하나로 정해져야 한다. 문장이 기준을 생략했는데 기준이 여럿이면
+        # (2024년 대비 +20%와 2023년 대비 -20%, 순위 표의 전년 대비 +5%와 전월 대비 -5%) 수치·방향에 맞는 칸을 나중에 고르지 않는다.
+        if fact.metric.family in ('CHANGE', 'AMOUNT_CHANGE') and reason in (None, 'VALUE', 'DIRECTION'):
+            base = _comparison_base(fact)
+            if base:
+                compare_windows.add(base)
         if claim.quantity is None and not claim.metric.comparison and reason in (None, 'DIRECTION'):
             axes = [axis for axis in ('YOY', 'MOM') if _comparison_matches(axis, fact)]
             if not axes:
@@ -541,13 +604,30 @@ def _matching_cells(claim, facts, sources, catalog):
             supports = reason is None
         if supports:
             matches.append((fact.source, fact.path))
-    return tuple(matches) if len(inferred_axes) <= 1 else ()
+    return tuple(matches) if len(inferred_axes) <= 1 and len(editions) <= 1 and len(compare_windows) <= 1 else ()
+
+
+def _comparison_base(fact):
+    """증감 칸의 실제 비교 기간. 비교 기간이 있으면 그것, 전년·전월 대비 칸은 그 칸의 기간을 12·1개월 앞당긴 기간이다.
+    그래서 추이표의 2024년 대비와 순위표의 2025년 전년 대비는 같은 기준이고, 순위표의 전년·전월 대비는 다른 기준이다."""
+    if fact.compare_period:
+        return fact.compare_period
+    offset = {'YOY': -12, 'MOM': -1}.get(fact.metric.comparison)
+    if offset and fact.period:
+        return tuple(shift(month, offset) for month in fact.period)
+    return (None, fact.metric.comparison) if fact.metric.comparison else None
+
+
+# 연간 증감률 칸보다 넓은 범위를 말하는 표현("전체", "총 수출액", "수출 총액", "합계"). 품목·국가로 거른 칸은 근거가 아니다.
+_WIDE_SCOPE = re.compile(r'전체|전\s*세계|모든|총\s*(?:수출|수입|교역|금액)|(?:수출|수입|교역)\s*총|총액|합계|통틀어')
 
 
 def _supports_stated_window(source, role, year, start, end):
     from calendar import monthrange
-    for key in ((role,) if role else ('period', 'compare_period')):
-        raw = source.get(key)
+    windows = [source.get(key) for key in ((role,) if role else ('period', 'compare_period'))]
+    if role in (None, 'compare_period'):
+        windows.extend(source.get('extra_compare_periods') or [])
+    for raw in windows:
         window = period(raw)
         if not window or (year and any(month[:4] != year for month in window)):
             continue
@@ -600,40 +680,99 @@ def evidence(digest):
     return [(f.metric.key,f.value,f.unit,set(f.targets)) for f in build_facts([digest],NameCatalog([digest])) if f.unit not in ('OUTLOOK', 'NULL')]
 
 
+def _rate_source_key(row, sums, conditions):
+    """한 행의 change_pct가 SQL 식으로 증명한 조회·비교 연도 합계의 변화율과 표시 자릿수 안에서 같으면 조회 연도 합계 칸의
+    키(그 칸의 국가·품목·판본·방향이 변화율의 범위다), 아니면 None."""
+    current, compare = (period(conditions.get(k)) for k in ('period', 'compare_period'))
+    if not (current and compare) or row.get('change_pct') is None:
+        return None
+    by_year = {}
+    for key, (year, *scope_) in sums.items():
+        by_year.setdefault(year, []).append((key, tuple(scope_)))
+    pair = [by_year.get(window[0][:4], []) for window in (current, compare)]
+    if any(len(cells) != 1 for cells in pair) or pair[0][0][1] != pair[1][0][1]:
+        return None   # 연도마다 증명한 합계가 하나이고 같은 국가·품목·판본·방향이어야 한다.
+    try:
+        target, base = (Decimal(str(row[cells[0][0]])) for cells in pair)
+        shown = Decimal(str(row['change_pct']))
+    except (KeyError, ArithmeticError, ValueError):
+        return None
+    if not base:
+        return None
+    exponent = min(shown.as_tuple().exponent, 0) if isinstance(shown.as_tuple().exponent, int) else 0
+    # 서비스 반올림(ROUND_HALF_UP)으로 표시 자릿수에 맞춘 값과 같아야 한다. 12.5%를 절사한 12%는 13%가 아니라 통과하지 않는다.
+    try:
+        actual = ((target - base) / base * 100).quantize(Decimal(1).scaleb(exponent), rounding=ROUND_HALF_UP)
+    except ArithmeticError:   # 자릿수가 Decimal 정밀도를 넘으면 증명하지 않는다.
+        return None
+    if actual == shown:
+        return pair[0][0][0]
+    return None
+
+
+def annual_sql_scope(payload, *, country_labels=None, product_labels=None):
+    """연간 비교 생성 SQL에서 SQL 식으로 증명한 칸(저장본·digest 공통). 연도별 합계(_annual_sums), 차액
+    (_annual_differences), 증명하지 못한 연간 별칭 후보(_annual_candidates), 그 합계와 맞는 한 행의 change_pct(_annual_rate)."""
+    from backend.app.agents.sql import annual_sql_sources, _annual_windows
+    conditions = payload.get('conditions') or {}
+    scope = {}
+    sums, differences, candidates = annual_sql_sources(payload)
+    two_annual_windows = len(_annual_windows(conditions)) == 2
+    if two_annual_windows:
+        scope['_annual_candidates'] = list(candidates)
+        # digest에는 조회 기간만 있다. 연간 칸을 대조할 비교 기간도 같은 근거 범위에 둔다.
+        scope['compare_period'] = {k: str(conditions['compare_period'][k])[:7] for k in ('start', 'end')}
+    cells = {key: dict(year=year, flow=flow, country_code=country, hs_code=hs, hs_ver=edition,
+                       country_name=(country_labels or {}).get(country),
+                       hs_name=(product_labels or {}).get((hs, edition)))
+             for key, (year, country, hs, edition, flow) in sums.items()}
+    if cells:
+        scope['_annual_sums'] = cells
+    if differences:
+        scope['_annual_differences'] = {
+            key: dict(left_year=left, right_year=right, flow=flow, hs_ver=edition,
+                      country_code=country, hs_code=hs,
+                      country_name=(country_labels or {}).get(country),
+                      hs_name=(product_labels or {}).get((hs, edition)))
+            for key, (left, right, country, hs, edition, flow) in differences.items()}
+    rows = payload.get('rows') or []
+    if (two_annual_windows and len(rows) == 1 and isinstance(rows[0], dict)
+            and (key := _rate_source_key(rows[0], sums, conditions))):
+        scope['_annual_rate'] = True
+        scope['_annual_rate_scope'] = cells[key]
+    return scope
+
+
 def snapshot_evidence(payload, *, country_labels=None, product_labels=None):
     """Full saved rows, never paginated or bounded for LLM input. No new SQL."""
     conditions=payload.get('conditions') or {}
     meta=payload.get('meta') or {}
     scope={k:conditions[k] for k in ('period','compare_period','trade_flow') if k in conditions}
-    if meta.get('kind') == 'MULTI_YEAR':
+    editions = {item['hs_ver'] for item in conditions.get('hs_items', []) if item.get('hs_ver')}
+    kind = meta.get('kind')
+    if not editions and (kind in ('TREND', 'RANKING') or (kind=='LLM_SQL' and not sql_period_unproven(meta))):
+        editions.add('HS2022')
+    if len(editions) == 1:
+        scope['hs_ver'] = next(iter(editions))
+    if meta.get('extra_compare_periods'): scope['extra_compare_periods']=meta['extra_compare_periods']
+    if kind == 'MULTI_YEAR':
         scope.update(kind='MULTI_YEAR', year_comparison=conditions.get('year_comparison'),
                      country_codes=conditions.get('country_codes', []), hs_items=conditions.get('hs_items', []))
-    if meta.get('kind') == 'TREND':
+    if kind == 'TREND':
         scope['kind'] = 'TREND'
-    if meta.get('kind') == 'LLM_SQL':
-        from backend.app.agents.sql import annual_sql_sources, _annual_windows
-        cells = {}
-        sums, differences, candidates = annual_sql_sources(payload)
-        if len(_annual_windows(conditions)) == 2:
-            scope['_annual_candidates'] = candidates
-        for key, (year, country, hs, edition, flow) in sums.items():
-            cells[key] = dict(year=year, flow=flow, country_code=country, hs_code=hs,
-                              country_name=(country_labels or {}).get(country),
-                              hs_name=(product_labels or {}).get((hs, edition)))
-        if cells:
-            scope['_annual_sums'] = cells
-        if differences:
-            scope['_annual_differences'] = {
-                key: dict(left_year=left, right_year=right, flow=flow,
-                          country_code=country, hs_code=hs,
-                          country_name=(country_labels or {}).get(country),
-                          hs_name=(product_labels or {}).get((hs, edition)))
-                for key, (left, right, country, hs, edition, flow) in differences.items()}
+        if meta.get('trade_balance'): scope['trade_flow'] = 'BALANCE'
+    if meta.get('kind')=='LLM_SQL':   # 별칭·월 표시로 기간을 정하지 않는다(compare_key·period_covered)
+        scope.update(kind='LLM_SQL', period_verified=meta.get('period_verified') is True)
+        scope.update(annual_sql_scope(payload, country_labels=country_labels, product_labels=product_labels))
     if meta.get('kind')=='PREDICTION' and meta.get('anchor'):
         anchor=str(meta['anchor'])[:7]
         scope.update(kind='PREDICTION',anchor=anchor,period={'start':anchor,'end':anchor})
+    rows = payload.get('rows', [])
+    saved = payload.get('verification') or {}
+    if kind == 'TREND' and meta.get('period_totals') and saved.get('kind') == 'TREND_MONTHLY_V1':
+        rows = [*rows, *saved.get('rows', [])]
     return {**scope,
-            'columns':payload.get('columns',[]),'rows':payload.get('rows',[]),
+            'columns':payload.get('columns',[]),'rows':rows,
             '_verification_source':'SNAPSHOT'}
 
 
@@ -719,6 +858,35 @@ def generated_conclusion(state, task, has_evidence):
     if fixed_ids is not None:
         return task.task_id not in fixed_ids or bool(fixed_monthly_sentences(state, task))
     return (has_evidence or task.intent=='CONVERSATION') and fixed_conclusion(state,task) is None
+
+
+def unsupported_sql_prose(state):
+    """Final publication guard for unsupported numbers in scopes with unverified SQL."""
+    unverified_tasks = {task.task_id for task in state.plan.tasks if any(
+        (result := state.results.get(step.step_id)) and sql_period_partial(result.digest) for step in task.steps)}
+    if not unverified_tasks:
+        return set(), False
+    unverified_steps = {step.step_id for task in state.plan.tasks if task.task_id in unverified_tasks for step in task.steps}
+    # 기간이 확인된 결과의 칸과 값만 다른 문장(diagnose_claim이 그 칸을 찾음)은 그 결과의 수치 오류다.
+    # 결과표 안내로 바꾸지 않고 다른 불일치 문장처럼 "확인 필요"로 보인다.
+    # 한 문장에 다른 값(기간 미확인 SQL 수치 등)이 함께 틀렸으면 그 값도 감춰야 하므로 모든 지적이 확인된 칸일 때만 뺀다.
+    attributed = {}
+    for item in state.verification.feedback:
+        if item.index is not None:
+            attributed.setdefault(item.index, []).append(bool(item.step_id) and item.step_id not in unverified_steps)
+    verified_mistakes = {index for index, verified in attributed.items() if all(verified)}
+    failed = {check.index for check in state.verification.checks if check.status != 'PASS' and check.numbers
+              and check.index not in verified_mistakes}
+    blocked, offset = set(), 0
+    for conclusion in state.draft.conclusion:
+        end = offset + len(conclusion.sentences)
+        if conclusion.task_id in unverified_tasks:
+            blocked.update(failed.intersection(range(offset, end)))
+        offset = end
+    # 설명에는 작업 ID가 없으므로 전체 답변이 근거 범위다. 판정이 PASS인 문장과 확인된 결과의 수치 오류는 위에서 뺐다.
+    blocked.update(index for index in failed if index >= offset)
+    title = state.draft.title
+    return blocked, bool(title and quantities(quantity_text(title, NameCatalog([]))))
 
 
 def mark_unverified(state):
@@ -868,13 +1036,14 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
                 if step.step_id not in snapshots and step.tool == 'query_trade_data':
                     query_periods[step.step_id] = conditions.period
         if conditions and task.intent == 'RANKING' and conditions.ranking_group == 'COUNTRY' and len(conditions.hs_items) == 1:
-            ranking_products.update({step.step_id: conditions.hs_items[0].hs_code for step in task.steps
+            ranking_products.update({step.step_id: conditions.hs_items[0] for step in task.steps
                                      if step.tool == 'query_trade_data'})
     def source(step_id):
         digest=state.results[step_id].digest or {}
-        scope = {'hs_code': ranking_products[step_id]} if step_id in ranking_products else {}
+        product = ranking_products.get(step_id)
+        scope = {'hs_code': product.hs_code, 'hs_ver': product.hs_ver} if product else {}
         # 순위 행에는 국가만 있다. 조회한 단일 품목의 표시명도 근거 범위에 넣어 "화장품 수출 상위 국가"를 대조한다.
-        if scope and (label := (product_labels or {}).get(scope['hs_code'])):
+        if product and (label := (product_labels or {}).get((product.hs_code, product.hs_ver))):
             scope['hs_name'] = label
         if step_id not in snapshots:
             if not digest:
@@ -884,7 +1053,7 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
             return {**scope, **digest}
         if snapshots[step_id].get('_source_unavailable'): return snapshots[step_id]
         # 저장 행에는 없는 결과 전체 합계(순위 total_usd·비중 분모)는 같은 결과로 만든 digest 값을 근거로 더한다
-        return {**scope, **snapshots[step_id],**{k:digest[k] for k in ('total_usd','denominator_usd')
+        return {**snapshots[step_id], **scope, **{k:digest[k] for k in ('total_usd','denominator_usd')
                                      if k in digest and k not in snapshots[step_id]}}
     by_task = {t.task_id: tuple(s.step_id for s in t.steps if s.step_id in state.results
                                 and (s.step_id in snapshots or state.results[s.step_id].digest))
@@ -958,10 +1127,10 @@ def judge_draft(state,known_names=(),*,snapshots=None,countries=(),product_label
     # Writer-independent monthly sentences still need an independent match to the full saved rows.
     monthly_checks = {}
     for task in state.plan.tasks:
-        rendered = task_series(state, task)
+        rendered = task_series(state, task) + task_series(state, task, movement=True)
         if rendered:
             saved = next((snapshots.get(s.step_id, {}) for s in task.steps if s.tool == 'query_trade_data'), {})
-            supported = snapshot_sentences(task, saved)
+            supported = snapshot_sentences(task, saved) + snapshot_sentences(task, saved, movement=True)
             monthly_checks[task.task_id] = {line: line in supported for line in rendered}
 
     owners = [task.task_id for task, conclusion in zip(state.plan.tasks, state.draft.conclusion, strict=True)

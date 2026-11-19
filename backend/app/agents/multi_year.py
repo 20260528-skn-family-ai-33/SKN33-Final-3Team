@@ -16,8 +16,13 @@ _YEAR = re.compile(r'(?<!\d)((?:19|20)\d\d|\d\d)\s*년')
 _RANGE_JOIN = re.compile(r'\s*(?:부터|에서|[~～∼–—-])\s*')
 _BARE_RANGE_START = re.compile(r'(?<!\d)((?:19|20)\d\d|\d\d)(?=\s*[~～∼–—-]\s*(?:\d{4}|\d{2})\s*년)')
 _MONTHLY_AVERAGE = re.compile(r'월\s*평균|월별\s*평균|한\s*달\s*평균')
-_FORMAT = re.compile(r'(?<![가-힣])(?P<medium>글|문장|텍스트|말|표|차트|그래프)(?:으로|로)(?:만)?'
-                     r'(?!\s*(?:말고|는?\s*아니))')
+# Accept attached request verbs, but not longer nouns such as '해운/설명서'.
+_FORMAT_COMMAND = (r'(?:해(?:줘|주세요|주십시오|요)?|(?:설명|정리)(?:해(?:줘|주세요|주십시오|요)?)?'
+                   r'|(?:보여|알려)(?:줘|주세요|주십시오)?)(?![가-힣])')
+# '글로벌/글로비스'의 '글로'는 형식이 아니다. 보조사와 붙여 쓴 부정 표현은 유지한다.
+_FORMAT = re.compile(r'(?<![가-힣])(?P<medium>글|문장|텍스트|말|표|차트|그래프)(?:으로|로)'
+                     rf'(?=$|[^가-힣]|[만는도]|말고|아니|하지\s*말고|{_FORMAT_COMMAND})(?:\s*만)?')
+_FORMAT_NEGATION = re.compile(r'\s*(?:말고|는?\s*아니|하지\s*말고)')
 _MONTHLY = re.compile(r'월\s*별|매\s*월|월마다|월\s*단위')
 _YEAR_REFERENCE = re.compile(r'(?:그|세|각|이전|같은|앞서|\d+개)\s*(?:연도|년도|개년)|^\s*(?:그럼\s*)?월\s*별')
 # A full calendar pivot cannot answer narrower periods, combined totals, rankings or non-amount measures.
@@ -28,7 +33,7 @@ _BASE = re.compile(r'(?:기준(?:연도|년도)?|대비)')
 _PLAIN_COMPARISON = re.compile(
     r'[\s\d.,?!？·~～∼–—-]+|기준연도|기준년도|연도별|년도별|연도|년도|개년|연간|년간|년|월별|월간|'
     r'월|합계|총액|총|금액|수출액?|수입액?|기준|대비|차액|증감률|차이|비교|분석|나란히|'
-    r'부터|까지|각각|각|기간|그리고|모두|전체|한국|우리나라|글|문장|텍스트|표|차트|그래프|'
+    r'부터|까지|각각|각|기간|그리고|모두|전체|한국|우리나라|글|문장|텍스트|말|표|차트|그래프|'
     r'알려|보여|설명|정리|부탁|주세요|해줘|줘|싶어|해보자|해서|하고|해|으로|로|에서|만|을|를|은|는|의|과|와|이|가|에'
 )
 
@@ -79,6 +84,17 @@ def requested_years(question, previous=None):
     return YearComparison(years=distinct, baseline_year=baseline, monthly=monthly, monthly_average=average)
 
 
+def apply_requested_format(tasks, question):
+    """첫 질문과 연도 비교에 같은 형식 규칙을 적용한다. 부정한 TEXT 슬롯도 해제한다."""
+    for match in _FORMAT.finditer(question):
+        text = match['medium'] in ('글', '문장', '텍스트', '말')
+        negated = bool(_FORMAT_NEGATION.match(question, match.end()))
+        if negated and not text:
+            continue   # 표를 빼 달라는 것만으로 차트까지 빼지는 않는다.
+        for task in tasks:
+            task.slots.answer_format = 'TEXT' if text and not negated else None
+
+
 def normalize_year_plan(output, question, previous_conditions):
     previous = previous_conditions.year_comparison if previous_conditions else None
     choice = requested_years(question, previous)
@@ -98,14 +114,13 @@ def normalize_year_plan(output, question, previous_conditions):
     if previous_conditions and (len(previous_conditions.country_codes) > 1 and not countries
                                  or len(previous_conditions.hs_items) > 1 and not products):
         return output
-    for match in _FORMAT.finditer(question):
-        medium = match['medium']
-        for task in tasks:
-            task.slots.answer_format = 'TEXT' if medium in ('글', '문장', '텍스트', '말') else None
+    apply_requested_format(tasks, question)
     # A custom plan may ask for a calculation outside the amount comparison template.
     # Fold it only if the user's words describe a calculation this template can deliver.
     if any(t.source_tasks or t.target_selections for t in tasks):
         return output
+    if any(t.slots.trade_balance for t in tasks):
+        return output   # 무역수지는 한 방향 금액 연도 비교로 묶지 않는다(이슈 113 서버 TREND가 맡는다)
     if any(t.custom_query for t in tasks):
         remainder = _MONTHLY_AVERAGE.sub('', question)
         for name in sorted(products | {n for pair in countries for n in pair if n}, key=len, reverse=True):
@@ -116,6 +131,7 @@ def normalize_year_plan(output, question, previous_conditions):
     task.intent, task.question, task.custom_query = 'STATISTICS', question, None
     task.source_tasks, task.target_selections = [], []
     task.slots.period = task.slots.compare_period = task.slots.recent_months = None
+    task.slots.extra_compare_periods = None   # 여러 비교 기간 칸(이슈 113)도 연도 비교가 대신한다
     task.slots.comparison_requested = task.slots.amount_difference_only = None
     if any(t.slots.answer_format == 'TEXT' for t in tasks):
         task.slots.answer_format = 'TEXT'

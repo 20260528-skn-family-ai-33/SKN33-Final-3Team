@@ -8,8 +8,14 @@ from backend.app.api.common import percentage
 
 _TREND = re.compile(r'추이|추세|월별|최저|최고|최소|최대|전년|작년|지난해|동월|연도별|비교')
 # Signed/quantified statements anchored to the monthly table belong to its numerical summary.
-_EXTREME = re.compile(r'최저|최고|최소|최대|가장\s*(?:낮|높|크|작|많|적)|사이|범위|[~∼]|달러에서')
-_MONTH_DIRECTION = re.compile(r'(?:\d+월|매월|매달|모든 달|전년 동월).{0,30}(?:증가|감소|상승|하락|늘|줄)'
+_EXTREMUM = re.compile(r'최저|최고|최소|최대|가장\s*(?:낮|높|크|작|많|적)')
+_EXTREME = re.compile(_EXTREMUM.pattern + r'|사이|범위|[~∼]|달러에서')
+# Monetary prose must retain its amounts for the ordinary verifier, regardless
+# of how the Writer connects the dates. Dates/month counts alone do not match.
+_AMOUNT = re.compile(r'\d[\d,]*(?:\.\d+)?\s*[(（]?\s*(?:달러|USD|만|억|조)'
+                     r'|(?:USD|US\$|\$)\s*[+-]?\d', re.I)
+_RATE = re.compile(r'\d[\d,]*(?:\.\d+)?\s*[(（]?\s*(?:%|퍼센트|프로|pp(?![A-Za-z]))', re.I)
+_MONTH_DIRECTION = re.compile(r'(?:\d+월|월별|매월|매달|모든 달|전년 동월).{0,30}(?:증가|감소|상승|하락|늘|줄|오르|내리)'
                               r'|(?:증가|감소|상승|하락)한 (?:달|월)')
 
 
@@ -24,6 +30,16 @@ def monthly_facts(rows):
              'max_month': high['month'], 'max_usd': high['amount_usd'],
              'min_count': sum(r['amount_usd'] == low['amount_usd'] for r in observed),
              'max_count': sum(r['amount_usd'] == high['amount_usd'] for r in observed)}
+    movement = {key: [] for key in ('up', 'down', 'equal')}
+    ordered = sorted(rows, key=lambda r: r['month'])
+    for left, right in zip(ordered, ordered[1:]):
+        month_index = lambda r: int(r['month'][:4]) * 12 + int(r['month'][5:7])
+        if (month_index(right) - month_index(left) != 1 or left.get('amount_usd') is None
+                or right.get('amount_usd') is None):
+            continue
+        delta = right['amount_usd'] - left['amount_usd']
+        movement['up' if delta > 0 else 'down' if delta < 0 else 'equal'].append(right['month'])
+    facts['movement'] = {key: {'count': len(months), 'months': months} for key, months in movement.items()}
     paired = [r for r in observed if r.get('compare_amount_usd') is not None
               and r.get('compare_month') == f"{int(r['month'][:4])-1:04d}{r['month'][4:]}"]
     if paired:
@@ -43,16 +59,35 @@ def _period_label(window):
     return f'{start.year}년 {start.month}월~{end.year}년 {end.month}월'
 
 
-def monthly_sentences(task, target, facts):
+def monthly_sentences(task, target, facts, *, movement=False):
     """Render one verified series. An incomplete comparison keeps its existing missing-data description."""
     cond = task.conditions
     if not facts or not cond or not cond.period or target.get('total_usd') is None:
         return ()
-    flow = '수입액' if cond.trade_flow == 'IMPORT' else '수출액'
+    flow = '무역수지' if task.slots.trade_balance else '수입액' if cond.trade_flow == 'IMPORT' else '수출액'
+    topic = '는' if flow == '무역수지' else '은'
     subject = ' '.join(filter(None, ('한국의', '대' + target['country_name'] if target.get('country_code') else None,
                                     target.get('name') if target.get('hs_code') else None, flow)))
     total = korean_usd(target['total_usd'])
     period = _period_label(cond.period)
+    if movement:
+        groups = facts.get('movement', {})
+        if (set(groups) != {'up', 'down', 'equal'}
+                or sum(g['count'] for g in groups.values()) != target['requested_months'] - 1):
+            return ()
+        parts, counts = [], []
+        for key, label in (('up', '증가'), ('down', '감소'), ('equal', '동일')):
+            group = groups[key]
+            count = f"{label} {group['count']}개월"
+            labels = ', '.join(f'{int(m[5:])}월' if cond.period.start.year == cond.period.end.year
+                               else _date(m) for m in group['months'])
+            counts.append(count)
+            parts.append(count + (f'({labels})' if labels and len(group['months']) == group['count'] else ''))
+        prefix = f'{period} {subject}의 조회 기간 내 전월 대비 변화는 '
+        line = prefix + ', '.join(parts) + '입니다.'
+        if len(line) > 200:
+            line = prefix + ', '.join(counts) + '입니다.'
+        return (line,) if len(line) <= 200 else ()
     if cond.compare_period:
         baseline = target.get('compare_total_usd')
         if baseline is None or facts.get('yoy_months') != target.get('requested_months'):
@@ -64,7 +99,7 @@ def monthly_sentences(task, target, facts):
             change_text = '두 기간 금액이 같습니다'
         else:
             change_text = f"전년보다 {number(abs(change), 1):g}% {'증가' if change > 0 else '감소'}했습니다"
-        totals = f'{period} {subject}은 {total}, {_period_label(cond.compare_period)}은 {korean_usd(baseline)}이며 {change_text}.'
+        totals = f'{period} {subject}{topic} {total}, {_period_label(cond.compare_period)}은 {korean_usd(baseline)}이며 {change_text}.'
         count = facts['increased_count']
         items = facts.get('increased_months', [])
         if count == 0:
@@ -78,14 +113,14 @@ def monthly_sentences(task, target, facts):
     min_label = '공동 최저' if facts['min_count'] > 1 else '최저'
     max_label = '공동 최고' if facts['max_count'] > 1 else '최고'
     if facts['min_usd'] == facts['max_usd']:
-        extrema = f"모든 달의 {flow}이 {number(facts['min_usd']):,}달러로 같습니다."
+        extrema = f"모든 달의 {flow}{'가' if flow == '무역수지' else '이'} {number(facts['min_usd']):,}달러로 같습니다."
     else:
         extrema = (f"월별 {flow}의 {min_label}는 {_date(facts['min_month'])} {number(facts['min_usd']):,}달러, "
                    f"{max_label}는 {_date(facts['max_month'])} {number(facts['max_usd']):,}달러입니다.")
-    return (f'{period} {subject}은 {total}입니다.', extrema)
+    return (f'{period} {subject}{topic} {total}입니다.', extrema)
 
 
-def task_series(state, task):
+def task_series(state, task, *, movement=False):
     if (task.intent not in ('STATISTICS', 'CAUSE') or task.answer_status not in ('ANSWERED', 'PARTIAL')
             or not task.conditions or not task.conditions.period or getattr(task.slots, 'amount_difference_only', False)
             or len(task.conditions.country_codes) > 1 or len(task.conditions.hs_items) > 1):
@@ -104,10 +139,10 @@ def task_series(state, task):
     # Earlier result snapshots can still have a complete monthly series in their digest.
     if facts is None and len(target.get('monthly', ())) == target['requested_months']:
         facts = monthly_facts(target['monthly'])
-    return monthly_sentences(task, target, facts)
+    return monthly_sentences(task, target, facts, movement=movement)
 
 
-def snapshot_sentences(task, source):
+def snapshot_sentences(task, source, *, movement=False):
     """Rebuild the rendered facts independently from the saved table for numerical verification."""
     rows = source.get('rows') or []
     if source.get('kind') != 'TREND' or not rows or source.get('_verification_source') != 'SNAPSHOT':
@@ -131,7 +166,7 @@ def snapshot_sentences(task, source):
     previous = [r.get('compare_amount_usd') for r in rows]
     target = dict(rows[0], requested_months=count, total_usd=sum(r['amount_usd'] for r in rows),
                   compare_total_usd=sum(previous) if None not in previous else None)
-    return monthly_sentences(task, target, monthly_facts(sorted(rows, key=lambda r: r['month'])))
+    return monthly_sentences(task, target, monthly_facts(sorted(rows, key=lambda r: r['month'])), movement=movement)
 
 
 _PLAIN_WORDS = re.compile(
@@ -176,6 +211,29 @@ def _uncited_monthly_claim(line):
 
 def reconcile_monthly_claims(state, draft):
     """Retain article findings, replacing Writer restatements of monthly statistics across shared sections."""
+    # Monthly direction is computed before rounding. Keep this separate from
+    # year-on-year, endpoint differences and cited article claims.
+    def direction(line):
+        comparison = re.sub(r'전월\s*(?:대비|보다)', '', line)
+        return (_uncited_monthly_claim(line) and _MONTH_DIRECTION.search(line)
+                # Keep quantified/extremum claims for the ordinary verifier.
+                # A plain month range (1~5월 증가) still needs direction repair.
+                and not _EXTREMUM.search(line)
+                and not _AMOUNT.search(line)
+                and not _RATE.search(line)
+                and not re.search(r'전년|작년|지난해|동월|대비|보다|차액|차이', comparison))
+    movements = {task.task_id: task_series(state, task, movement=True) for task in state.plan.tasks}
+    for task, conclusion in zip(state.plan.tasks, draft.conclusion, strict=True):
+        replacement = movements[task.task_id]
+        if task.intent == 'STATISTICS' and replacement:
+            conclusion.sentences = list(dict.fromkeys(replacement[0] if direction(line) else line
+                                                      for line in conclusion.sentences))
+    primary = state.plan.tasks[0]
+    if len(state.plan.tasks) == 1 and primary.intent == 'STATISTICS' and movements[primary.task_id]:
+        replacement = movements[primary.task_id][0]
+        draft.explanation = list(dict.fromkeys(replacement if direction(line) else line for line in draft.explanation))
+        if direction(draft.turn_summary):
+            draft.turn_summary = replacement
     series = {task.task_id: task_series(state, task) for task in state.plan.tasks}
     shared = set(filter(None, series.values()))
     if not shared:

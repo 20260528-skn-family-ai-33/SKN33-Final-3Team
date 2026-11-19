@@ -111,7 +111,8 @@ class ReviewFollowupTest(unittest.TestCase):
         self.assertIsNone(_name_pattern('중국', True).search('확대중국'))
 
     def test_share_change_column_backs_change_claim(self):
-        digest = {'kind': 'LLM_SQL', 'period': PERIOD, 'trade_flow': 'EXPORT',
+        # 기간 증명(sql.period_covered)이 된 생성 SQL 결과다. 증명이 없으면 어떤 수치 문장도 뒷받침하지 않는다(이슈 113).
+        digest = {'kind': 'LLM_SQL', 'period': PERIOD, 'trade_flow': 'EXPORT', 'period_verified': True,
                   'columns': [{'key': 'country_name', 'unit': None}, {'key': 'share_change_pp', 'unit': '%p'}],
                   'rows': [{'country_name': '미국', 'share_change_pp': 2.1}]}
         self.assertTrue(check_sentence('미국 비중이 2.1%p 증가했습니다.', [digest], known_names={'미국'})[0])

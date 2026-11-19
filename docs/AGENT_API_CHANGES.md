@@ -16,6 +16,11 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | API-37 | 상태 추가 | `status`에 `EXPIRED`, `CANCELLED`, `WAITING_REPORT` | D-04, D-12 |
 | API-37 | answer 추가 | `answer.tasks[]`(복합 질문), `charts[]` 형식 확정 | D-59, D-60 |
 | API-37 | 응답 추가 | 되묻기 종류 `INTEREST_SELECT`와 `clarification.interests`(고를 관심사 후보) | D-64 |
+| API-37 | answer 추가 | 비교 기간이 여럿이면(예: 2025년 기준 2023년·2024년) `answer.tables[].meta.extra_compare_periods`(`[{start, end}]`, end는 말일)에 두 번째 이후 비교 기간을 요청 순서대로 싣는다. 표 행에는 기간마다 `compare{n}_month`·`compare{n}_amount_usd`(n=2부터)와 기간 합계·월평균·`change{n}_pct` 열이 붙고, 열 이름에는 "2023년 금액"처럼 기간을 쓴다. `conditions`·`compare_period` 형식은 그대로다. `charts[]`의 `grouped_bar`는 시리즈가 2개 이상이다(기간마다 하나) | 2026-11-12 이슈 113 |
+| API-37 | answer 변경 | 단순 금액 순위표는 개수를 말하지 않은 순위에도 `순위·(국가)·코드·명칭·금액` 열만 반환한다(상위 10개). 품목 순위를 국가 하나로 거르면 `country_name` 열이 붙는다. 증감·비교를 물으면 기존 순위 표를 반환한다 | 2026-11-12 이슈 113 |
+| API-37 | answer 변경 | 순위 결과표(`answer.tables[].meta.kind='RANKING'`)는 `rank_status`(순위 상태) 열을 보이지 않는다. 행 값은 남는다(결과 API·엑셀·리포트 표도 같다). 채팅 밖의 순위 API(API-20·42) 결과는 그대로다 | 2026-11-17 이슈 113 |
+| API-37 | answer 변경 | 비교 기간이 여럿인 TREND 표(`meta.extra_compare_periods`)는 기간 길이가 같아 월별 비교 열이 있어도 기간 합계·월평균·차액·`change{n}_pct` 열을 함께 보인다 | 2026-11-17 이슈 113 |
+| API-37 | answer 추가 | 생성 SQL 결과표의 `answer.tables[].meta.period_verified`(bool)는 수치가 조회 기간 전체를 그대로 집계했다고 증명됐는지다. `false`면 `answer.warnings`에 "생성 SQL 결과는 집계 기간을 확인할 수 없어 답변 문장의 수치를 검증하지 않았습니다…" 안내가 붙고, 그 결과의 수치는 기간 표현과 상관없이 답변 문장에 쓰지 않는다(결과표로만 보인다). 그 결과로 만든 리포트도 `meta.warnings`(웹·DOCX)와 결과표 안내·확인 항목(PDF)에 같은 제한을 싣는다 | 2026-11-12 이슈 113 |
 | API-38 되묻기 답 | 요청 추가 | `text`(직접 입력), `interest_selection`(관심사 골라 받기) | D-12, D-64 |
 | API-38 | 오류 추가 | 409 `CLARIFICATION_EXPIRED` (30분 경과) | D-04 |
 | API-131 (신규) 질문 중단 | 신설 | `POST /chat/jobs/{job_id}/cancel` | D-12 |
@@ -51,7 +56,8 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 | `progress` | object \| null | 실행 중일 때 `{done, total, label}`. 완료 단계 수, 전체 단계 수, 현재 단계 문구(예: "데이터 조회 중"). 진행률 바에 사용 |
 | `round_started_at` | string(ISO 8601) \| null | 경과 초 기준 시각. 되묻기에 답하면 새 시각으로 바뀜. 프론트는 현재 시각 − 이 값으로 초를 표시 |
 | `clarification.kind` | string | 기존 `HS_ITEM`, `INTEREST_CONTEXT` + `COUNTRY`(비슷한 국가 확인), `INTEREST_SELECT`(관심사 골라 받기), `INTEREST_CHANGE`(관심사 변경 확인), `RANKING_GROUP`(국가/품목 순위 선택), `MODEL_PERIOD`(최신 기준 예측 확인), `REPORT_CONFIRM`(리포트 조건·형식 확인), `SHARE_BASIS`(점유율 분모 선택), `REPORT_SOURCE`(직전 결과표 사용·같은 조건 재조회 선택), `REPORT_TABLE`(직전 답변의 결과표 중 리포트에 쓸 표 선택). 뒤 네 개는 아래 보완 절 참고 |
-| `clarification.report_preview` | object \| null | `REPORT_CONFIRM`일 때만. `{preview_id, expires_at, conditions, adjustments, formats}` |
+| `clarification.report_preview` | object \| null | `REPORT_CONFIRM`일 때만. `{preview_id, expires_at, conditions, adjustments, formats}`. 선행 결과가 있으면 `source_results`, 추가 비교 기간이 있으면 `extra_compare_periods: [{start, end}]`를 포함합니다. |
+| `clarification.hs_ver` | string (선택) | `HS_ITEM`에서 이전 판본을 확인할 때 `HS2017`을 보냅니다. 후보 선택과 직접 입력한 코드는 이 판본에서 확인합니다. |
 | `clarification.interests` | object \| null | `INTEREST_SELECT`일 때만. `{hs_items: HsItem[], country_codes: string[]}`, 질문 시점 관심사(품목 최대 100개·국가 최대 250개). 프론트는 체크박스로 보여 주고 품목 5개·국가 20개까지 고르게 한다. 선택지(`choices`)에는 "전체 범위"만 있다 |
 | `clarification.allow_text` | boolean | 직접 입력 답을 받는지. 기본 true |
 | `clarification.hint` | string | 작은 글씨 안내. "다른 질문은 새 채팅을 열거나 이 질문을 중단하세요." |
@@ -197,9 +203,10 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 
 - answer.tasks[]의 answer_status는 자체 tool과 선행 입력의 completeness를 반영한다. 일부 대상 누락·기사 근거 부족은 PARTIAL이며 경고 문구로 판정하지 않는다. 내부 completeness/limitations를 사용자 결과 상태와 warnings로 변환한다.
 - answer.articles[]에 evidence_sufficient(boolean)를 추가한다. false면 제목·발행일·원문 링크와 근거 부족 안내만 표시하고 summary는 비운다. 원인 설명·사실 주장의 인용 대상으로 쓰지 않는다. 기사 번호는 전체 카드 순서를 유지한다.
-- clarification.report_preview에 source_results([{task_id, step_id, result_id, conditions, completeness, limitations}])를 추가한다. 선행 분석의 조건·누락 사항을 확인 화면에 표시한다. 서버 내부 입력 사본은 노출하지 않는다.
+- clarification.report_preview에 source_results([{task_id, step_id, result_id, conditions, completeness, limitations}])를 추가한다. 선행 분석의 조건·누락 사항을 확인 화면에 표시한다. 추가 비교 기간은 원본 사본에서 읽어 `report_preview.extra_compare_periods`로 전달하고 첫 비교 기간과 함께 표시한다. 서버 내부 입력 사본은 노출하지 않는다.
 - 리포트 확인의 text는 생성·취소 승인이 아니다. '네/생성/취소'에는 버튼을 안내하며 기존 asked_at을 유지하고 확인 횟수를 추가 차감하지 않는다. 실제 승인·거절은 report_confirmation으로만 한다. 독립 리포트 조건 변경은 새 미리보기로 재확인하며, 선행 결과와 다른 조건은 새 분석을 안내한다.
 - 기존 reports.preview(result_id)는 조건만 복사한다. 후속 구현은 선행 결과를 서버 PREVIEW에 복사한 뒤 승인된 동일 사본을 리포트 작업으로 전달한다(D-90). 생성 중 원본 결과표가 만료되어도 승인된 사본으로 완성한다. 누락 섹션을 새 조회로 몰래 채우지 않는다.
+- 같은 질문에서 저장한 분석 결과를 리포트에 복사할 때는 원본의 HS 판본을 승인 화면과 결과표 사본에 표시한다. 이 미리보기는 채팅에서 승인한다. 직접 지정하는 요청형 리포트 조건의 판본은 HS2022다. 리포트 요약의 `hs_names`에서 HS2017 이름은 `HS2017:330499` 형식으로 제공한다.
 - 리포트 READY 후 해당 Task의 고정 완료 결론과 보기·다운로드 actions를 반환한다. 부분 입력이면 PARTIAL을 유지한다. 생성 전/실패 상태에는 완료 문구를 반환하지 않는다.
   - API-135로 삭제한 리포트는 생성 상태와 무관하게 대기를 종료한다(PR #122). 채팅 작업은 정상 종료(`SUCCEEDED`)하되 해당 Task는 `NO_DATA`, 결론은 `리포트가 삭제되었습니다.`이며 `report_id`와 리포트 actions를 제공하지 않는다. 다른 Task가 성공했다면 전체 답변은 기존 부분 성공 규칙을 따른다.
 - 이 절은 구현 계약이다. 실제 API·프론트·리포트 워커 변경은 후속 구현이며 현재 routes 동작은 그대로다.
@@ -223,7 +230,7 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 
 ## 2026-11-03 국가 비교 결과 표시
 일반 수출입 추이에서 동일 조회 기간·방향·지표의 여러 국가/품목을 비교할 때 그래프 1개와 표 1개로 묶어 표시한다. 표는 `HS 코드 | 품목 | 기준월 | 국가1 수출액 (USD) | 국가2 수출액 (USD)` 형식이며 수입은 수입액으로 표시한다. 여러 품목은 HS·품목별 행으로 구분한다. 원본 결과와 검증 근거는 바꾸지 않고 소유권·만료 검사를 통과한 저장 결과 전체 행을 서버에서 피벗한다. 같은 셀 값의 중복은 한 번만 쓰고 서로 다른 값은 오류로 안내한다. 누락은 null이며 0으로 바꾸지 않는다.
-`POST /results/comparison`(API-134)은 본인 소유 TREND result_ids 1~3개와 선택 format(json/xlsx)을 받는다. 기본 json은 비교 표를 반환하고 xlsx는 동일한 국가 열과 단위를 가진 엑셀을 반환한다. 원본 SQL·ML·LLM 재실행과 새 스냅샷 저장은 없다. 원본 전체 행을 사용하며 비교 표는 국가 20개·1,000행까지다. 그래프는 기존 정책대로 상위 5개 시리즈를 한 그래프에 표시하고 생략 안내를 제공한다. 단일 조회·서로 다른 지표/기간·ML 대상 선택은 기존 방식을 유지한다.
+`POST /results/comparison`(API-134)은 본인 소유 TREND result_ids 1~3개와 선택 format(json/xlsx)을 받는다. 기본 json은 비교 표를 반환하고 xlsx는 동일한 국가 열과 단위를 가진 엑셀을 반환한다. 품목 행은 `hs_code`와 `hs_ver`를 보존하며, 이전 판본이 포함되면 표와 엑셀에 HS 판본 열을 표시한다. 원본 SQL·ML·LLM 재실행과 새 스냅샷 저장은 없다. 원본 전체 행을 사용하며 비교 표는 국가 20개·1,000행까지다. 그래프는 기존 정책대로 상위 5개 시리즈를 한 그래프에 표시하고 생략 안내를 제공한다. 단일 조회·서로 다른 지표/기간·ML 대상 선택은 기존 방식을 유지한다.
 
 - 비교 뷰는 조회 기간의 월별 금액을 표시하므로 원본의 전년/전월 비교 설정만 다른 중복 결과도 하나로 묶는다. 동일 셀의 현재 금액이 다르면 기존 충돌 검사를 적용한다. 비교 API 로딩 중에는 저장된 기존 차트를 유지하고, 성공 시 통합 차트로 교체한다. 오류면 하위 질문별로 원래 차트와 표를 모두 보여 준다. 결과 3개·국가 20개를 넘는 묶음은 비교를 요청하지 않고 따로 표시한다(2026-11-04). 원본의 비교 기간 수치와 결론은 변경하지 않는다.
 
@@ -235,6 +242,10 @@ API 정의서 v0.18(2026-10-23)의 채팅 API(API-36~38)에 반영할 변경과 
 ### 전년 동기 후속 질문과 통계 조회 상태 (2026-11-16)
 
 API-37의 `answer.tasks[].query_status`는 통계 조회 또는 조건 확인 실행에 실패하여 결과를 제공할 수 없으면 `FAILED`다. 기존 상태 집계와 호환되도록 `answer_status`는 유지한다. 화면은 `query_status=FAILED`인 항목에 “조회 실패”를 표시하며 정상 조회에서 결과가 비었을 때는 “결과 없음”을 표시한다. 과거 답변에는 이 선택 필드가 없을 수 있다.
+
+### 채팅 접수의 중복 요청과 잠금 (2026-11-18)
+
+API-36의 요청·응답 계약과 사용자 단위 `client_message_id` 멱등성은 유지한다. MySQL의 접수 트랜잭션만 READ COMMITTED로 실행하고, 사용자 행 잠금으로 접수를 직렬화한 뒤 중복 키를 잠금 없이 조회한다. 인증 조회 뒤 잠금을 기다렸어도 앞 요청의 커밋을 읽으며, 같은 사용자의 다른 대화방에서 실행 중인 워커까지 중복 검사로 잠그지 않는다. 대상 대화방·작업의 기존 잠금과 롤백 시 Redis 잠금 해제는 유지한다. 에이전트 사용 여부와 관계없이 API-36에 적용하며 다른 API·워커 트랜잭션의 격리 수준은 바꾸지 않는다.
 
 ### 여러 연도의 연간·월간 수출입 비교 (2026-11-16)
 

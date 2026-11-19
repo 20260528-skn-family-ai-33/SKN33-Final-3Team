@@ -16,12 +16,13 @@ from backend.app.agents.compose import (ARTICLE_PROMPT, COMPOSE_PROMPT, COMPOSE_
                                         apply_claim_edits, complete_article_only_conclusions, cited_article_numbers, fallback_conclusion, numbered_articles, period_difference_draft, validate_citations, validate_rewrite)
 from backend.app.agents.conditions import check_conditions, recent_article_period
 from backend.app.agents.llm import StructuredClient, validation_details
-from backend.app.agents.planner import build_plan, planner_input, PLANNER_PROMPT, PLANNER_RETRY_HINT
+from backend.app.api.common import LLM_SQL_PERIOD_WARNING, sql_period_unproven   # 생성 SQL 기간 미증명 안내(채팅·리포트 공통)
+from backend.app.agents.planner import both_flow_request, build_plan, continues_trade_balance, planner_input, PLANNER_PROMPT, PLANNER_RETRY_HINT
 from backend.app.agents.result_store import ResultStore, fingerprint, shared_result
 from backend.app.agents.sql import generated_analysis
 from backend.app.agents.state import AgentState, Draft, MAX_TASK_SENTENCES, MAX_TEXT_CHARS, MAX_TEXT_TASK_SENTENCES, Plan, PlannerOutput, Task, TaskConclusion, ToolResult, WriterEdits, is_text_task
 from backend.app.agents.templates import api_conditions, run_template
-from backend.app.agents.verify import verify, snapshot_evidence
+from backend.app.agents.verify import verify, snapshot_evidence, unsupported_sql_prose
 from backend.app.api import trade, results
 from backend.app.api.common import ApiError, clean, now
 from backend.app.api.database import Store
@@ -71,6 +72,7 @@ def ml_queue_seconds(settings):
 
 
 HIDDEN_ARTICLE_SENTENCE = '이 문장이 인용한 기사는 답변 뒤 공개 여부나 본문이 바뀌어 내용을 표시하지 않습니다.'
+UNVERIFIED_SQL_SENTENCE = '집계 기간을 확인할 수 없는 수치는 결과표에서 확인해 주세요.'
 
 
 def redact_hidden_citations(sentences, articles):
@@ -161,6 +163,24 @@ def bounded_ml(work, seconds, queue_seconds=ML_QUEUE_SECONDS, waited=None):
         raise TimeoutError('ML 작업이 제한 시간을 넘었습니다.') from None
 
 
+def balance_question(context):
+    """trade_balance를 정한 답변(조건이 있는 마지막 턴)의 질문. 그 뒤의 용어·대화 질문은 대조하지 않는다."""
+    return next((turn.question for turn in reversed(context.recent) if turn.conditions), '')
+
+
+def balance_targets(context, store=None):
+    """직전 무역수지 답변이 확정한 국가·품목 코드와(store가 있으면) 표시명. 같은 대상 판정(continues_trade_balance)에 쓴다.
+    무역수지 문맥이 아니면 비운다. 평가 실행기(DB 없음)는 코드만 넘긴다."""
+    if not (context.trade_balance and context.conditions):
+        return ()
+    names = ()
+    if store is not None:
+        from backend.app.agents.templates import condition_names
+        countries, products = condition_names(store, [context.conditions])
+        names = (*countries.values(), *products.values())
+    return (*context.conditions.country_codes, *(h.hs_code for h in context.conditions.hs_items), *names)
+
+
 class Services:
     def __init__(self, execution, settings, client=None):
         self.execution = execution
@@ -210,17 +230,30 @@ class Services:
                 break
         return None
 
+    def balance_targets(self,state):
+        """직전 무역수지 답변의 확정 국가·품목(코드·표시명). 무역수지 문맥이 아니면 DB를 읽지 않는다."""
+        context=state.input.context
+        if not (context.trade_balance and context.conditions): return ()
+        with self.read_store() as store: return balance_targets(context,store)
+
     def planner(self,state):
         if state.input.article_action:
             from backend.app.agents.article_actions import action_plan
             state.plan = action_plan(state.input.article_action)
             return
         if base := state.input.year_over_year_base:
-            flows = ('EXPORT', 'IMPORT') if (base == state.input.context.conditions
-                    and state.input.context.both_trade_flows) else (base.trade_flow,)
+            # 직전이 무역수지면 무역수지로 전년과 비교한다(수출 기준 계산이라 방향은 EXPORT 하나).
+            # 확정 범위(confirmed_trade_conditions)는 추가 비교 기간 없이 저장하므로 그 칸을 빼고 직전 조건과 견준다.
+            previous = state.input.context.conditions
+            same = bool(previous) and (base.model_dump(exclude={'extra_compare_periods'})
+                                       == previous.model_dump(exclude={'extra_compare_periods'}))
+            balance = same and state.input.context.trade_balance
+            flows = ('EXPORT', 'IMPORT') if (same and state.input.context.both_trade_flows
+                                             and not balance) else (base.trade_flow,)
             state.plan, _ = build_plan(PlannerOutput(tasks=[
                 {'intent':'STATISTICS', 'question':state.input.question,
-                 'slots':{'trade_flow':flow, 'comparison_requested':True}} for flow in flows]))
+                 'slots':{'trade_flow':flow, 'comparison_requested':True, **({'trade_balance':True} if balance else {})}}
+                for flow in flows]))
             return
         from backend.app.agents.planner import article_retry_plan, explicit_cause_followup, explicit_country_ranking, explicit_out_of_scope, explicit_over_limit
         if retry := article_retry_plan(state):
@@ -230,9 +263,15 @@ class Services:
                   or explicit_cause_followup(state.input.question,state.input.context))
         from backend.app.agents.planner import postprocess, trade_terms
         terms=trade_terms(self.settings)
+        # 같은 대상 판정에 쓰는 직전 무역수지 대상은 플래너 호출 전에 한 번 읽는다. 출력 검증 함수 안에서 읽으면 재시도마다
+        # DB를 읽고, DB 오류가 플래너 출력 실패로 처리된다.
+        question,targets=(balance_question(state.input.context),self.balance_targets(state)) if not explicit else ('',())
         planned=build_plan(explicit) if explicit else self.structured(state,'planner',PLANNER_PROMPT,planner_input(state),PlannerOutput,2000,
             lambda output:build_plan(postprocess(output,state.input.question,terms,
                 previous_both_trade_flows=state.input.context.both_trade_flows,
+                previous_trade_balance=state.input.context.trade_balance,
+                previous_question=question,
+                previous_targets=targets,
                 previous_conditions=state.input.context.conditions)))
         if planned is None:
             reason='질문을 해석하지 못했습니다. 국가·품목·기간을 명시해 다시 입력해 주세요.'
@@ -262,7 +301,8 @@ class Services:
                 def remember_scope(store, job):
                     session = store.owned('chat_session', 'session_id', state.input.session_id, state.input.user_id, lock=True)
                     context = dict(session['context_json'] or {})
-                    scope = primary.conditions.model_dump(mode='json')
+                    # 추가 비교 기간은 결과 meta·digest에만 둔다(이슈 113: context_json 조건 형식은 바꾸지 않는다).
+                    scope = primary.conditions.model_dump(mode='json', exclude={'extra_compare_periods'})
                     if context.get('confirmed_trade_conditions') != scope:
                         context['confirmed_trade_conditions'] = scope
                         sessions = store.t('chat_session')
@@ -440,6 +480,21 @@ class Services:
             state.warnings.extend(warnings)
             return result
         if step.tool!='query_trade_data': return ToolResult(status='NO_DATA',error='요청한 분석 도구가 준비되지 않았습니다.')
+        generated=step.args['template']=='LLM_SQL'
+        if generated and (task.conditions.extra_compare_periods or
+                          # 자료 이름의 '수출입'("수출입 통계에서 … 수출만")·"수출과 수입 중 수출 중량만"은 대조 요청이 아니다.
+                          # 확정한 한 방향 조회는 막지 않고, 실제 표 혼용은 SQL 검증(single_trade_flow)이 막는다.
+                          both_flow_request(task.question)):
+            return ToolResult(status='NO_DATA',
+                error='수출입 대조와 여러 기간 비교는 월별 금액·기간 합계·차액·증감률로 조회할 수 있습니다. '
+                      '순위·비중·중량·단가 등은 별도로 요청해 주세요.')
+        if (generated and task.intent == 'STATISTICS'
+                and continues_trade_balance(state.input.context.trade_balance, state.input.question, [task.slots],
+                                            balance_question(state.input.context), self.balance_targets(state))):
+            # 무역수지를 잇는 후속을 생성 SQL(한 방향)로 답하면 수출액을 무역수지처럼 보인다. 범위를 안내한다(2026-11-17 사용자 결정).
+            return ToolResult(status='NO_DATA',
+                error='무역수지는 월별 금액·기간 합계·차액·증감률로 조회할 수 있습니다. '
+                      '분기·순위 등은 수출과 수입을 나눠 요청해 주세요.')
         if shared:=shared_result(state,task,step): return shared   # 같은 조회는 한 번만 실행한다(D-100)
         def template(timeout):
             with self.read_store() as store:
@@ -452,25 +507,56 @@ class Services:
                     if mysql:
                         try: store.c.rollback()
                         finally: store.c.invalidate()
-        generated=step.args['template']=='LLM_SQL'
         with self.read_store() as store: versions=self.trade_versions(store)
         # Generated queries may depend on articles, FX or reference revisions. A
         # customs release alone is insufficient to authorize their reuse (D-97).
         if generated: versions['generated_query_sources']=None
-        def key(v): return fingerprint(state,step,tool_version='1',versions=v,source_results=parents)
+        def key(v): return fingerprint(state,step,tool_version='4',versions=v,source_results=parents)
         cached=self.results.reuse(state,step,key(versions))
         if cached: return cached
         reserve=budget.finishing_seconds(state,self.settings)
         if generated:
             data=generated_analysis(self.execution.database.engine,self.settings,self.client,self.execution,task,
-                finish_reserve=reserve,latest_month=state.data_meta.trade_latest_month.strftime('%Y-%m'),step=step)
+                finish_reserve=reserve,latest_month=state.data_meta.trade_latest_month.strftime('%Y-%m'),
+                step=step, single_trade_flow=True)
         else:
             data,versions=self.execution.call('sql',budget.seconds(self.settings,'sql'),template,finish_reserve=reserve)
         for reason in data.result.limitations:
             if reason not in state.warnings: state.warnings.append(reason)
+        if (data.result.status=='OK' and sql_period_unproven(data.meta)
+                and LLM_SQL_PERIOD_WARNING not in state.warnings):
+            state.warnings.append(LLM_SQL_PERIOD_WARNING)
         if data.result.status!='OK': return data.result
+        if generated and data.meta.get('annual_verified') is True and data.result.digest:
+            # 재작성 검사(compose.validate_rewrite)는 digest로 대조한다. 저장본과 같은 연간 칸 지도를 digest에도 둔다.
+            from backend.app.agents.digest import bounded
+            from backend.app.agents.templates import condition_names
+            from backend.app.agents.verify import annual_sql_scope
+            with self.read_store() as store: country_labels,products=condition_names(store,[task.conditions])
+            scope = annual_sql_scope(
+                {'sql':data.sql,'conditions':data.conditions,'rows':data.rows},
+                country_labels=country_labels,product_labels=products)
+            try:
+                digest = bounded({**data.result.digest, **scope})
+            except ValueError:
+                digest = {}
+            if not digest.get('rows') and data.result.digest.get('rows'):
+                # 긴 표시명은 저장본 검증에서 사용한다. 요약 상한을 넘으면 코드와 판본으로만 칸을 식별한다.
+                labels = {'country_name', 'hs_name'}
+                cells = [*scope.get('_annual_sums', {}).values(), *scope.get('_annual_differences', {}).values(),
+                         scope.get('_annual_rate_scope', {})]
+                for cell in cells:
+                    for label in labels:
+                        cell[label] = None
+                try:
+                    digest = bounded({**data.result.digest, **scope, 'truncated': True})
+                except ValueError:
+                    # 코드만 남겨도 상한을 넘으면 칸 지도 없이 원래 digest를 둔다(재작성 검사에서 증명하지 않은 칸이 된다).
+                    digest = data.result.digest
+            data.result.digest = digest
         return self.results.save(state,step,data.result,rows=data.rows,meta=data.meta,conditions=data.conditions,
-            input_fingerprint=key(versions),source_results=parents,versions=versions,columns=data.columns,sql=data.sql)
+            input_fingerprint=key(versions),source_results=parents,versions=versions,columns=data.columns,sql=data.sql,
+            verification_rows=data.verification_rows)
 
     @staticmethod
     def trade_versions(store):
@@ -493,10 +579,11 @@ class Services:
             countries,products=_names(store)
         def describe(c):
             if not c:return {}
-            from backend.app.agents.templates import api_conditions
+            from backend.app.agents.templates import api_conditions, extra_periods
             display=c.model_dump(mode='json')
             public=api_conditions(c)
             display.update({key:public[key] for key in ('period','compare_period')})
+            display['extra_compare_periods']=extra_periods(c)
             return {**display,'countries':[{'code':k,'name':countries.get(k,k)} for k in c.country_codes],
                     'products':[{'code':p.hs_code,'name':products.get((p.hs_code,p.hs_ver),p.hs_code)} for p in c.hs_items]}
         articles = numbered_articles(state)
@@ -624,7 +711,6 @@ class Services:
                 # compose가 본 품목 표시명과 같은 이름으로 순위 근거 범위를 대조한다. 조건에 있는 코드만 읽는다.
                 from backend.app.agents.templates import condition_names
                 country_labels,products=condition_names(store,[task.conditions for task in state.plan.tasks])
-                labels={code:name for (code,_),name in products.items()}
                 cited = any(cited_article_numbers(s) for s in [*state.draft.sentences(), state.draft.turn_summary])
                 articles = answer_article_cards(store, state) if cited else []
                 snapshots={}
@@ -638,7 +724,7 @@ class Services:
                         except ApiError as exc:
                             if exc.code!='RESULT_EXPIRED': raise
                             snapshots[step.step_id]={'_verification_source':'SNAPSHOT','_source_unavailable':True,'rows':[]}
-            verify(state,known_names=set(names),snapshots=snapshots,countries=countries,product_labels=labels,articles=articles)
+            verify(state,known_names=set(names),snapshots=snapshots,countries=countries,product_labels=products,articles=articles)
         try:
             # finalize 몫은 남긴다(§13.4). compose가 예약보다 오래 걸려 시간이 모자라면 대조하지 못한 문장에
             # 바로 "확인 필요"를 붙이고 답변은 저장한다(§1 "시간이 부족하면 불일치 문장에 즉시 표시").
@@ -717,14 +803,26 @@ class Services:
             # 검색 뒤 숨겨진 기사(카드 unavailable)를 [n]으로 인용한 문장은 그 기사 내용을 옮긴 것이므로 보이지 않는다.
             # 문장 수·번호는 verify 대조(sentence_checks.index)와 맞춰야 해서 빼지 않고 안내 문구로 바꾼다
             sentences=redact_hidden_citations(sentences,articles)
-            for item in tasks: item['conclusion']=redact_hidden_citations(item['conclusion'],articles)
+            blocked_sql, blocked_title = unsupported_sql_prose(state)
+            for index in blocked_sql:
+                if sentences[index] != HIDDEN_ARTICLE_SENTENCE:
+                    sentences[index] = UNVERIFIED_SQL_SENTENCE
+            offset = 0
+            for item in tasks:
+                end = offset + len(item['conclusion'])
+                item['conclusion'] = sentences[offset:end]
+                offset = end
             if HIDDEN_ARTICLE_SENTENCE in sentences:
                 # 대화 요약·제목도 숨긴 기사 내용을 옮겼을 수 있다. 요약은 최근 대화(recent)로 다음 질문의 플래너와
                 # "아까 뭐라고 했지?" 답변(CONVERSATION)에 다시 쓰이므로 비운다. 최근 대화에는 질문과 조건만 남는다
                 state.draft=state.draft.model_copy(update={'turn_summary':'','title':None})
-            # 안내 문구로 바꾼 문장의 대조 결과에도 숨긴 기사에서 옮긴 숫자가 남지 않게 한다
+            elif blocked_sql or blocked_title:
+                # 요약도 다음 질문의 플래너와 CONVERSATION 답변에 다시 쓰이므로 감춘 수치를 옮겼을 수 있는 요약을 비운다.
+                state.draft=state.draft.model_copy(update={'turn_summary':'',
+                    **({'title':None} if blocked_title else {})})
+            # 안내 문구의 대조 결과에도 감춘 수치를 남기지 않는다.
             checks=[{**c.model_dump(),'sentence':sentences[c.index],
-                     **({'numbers':[]} if sentences[c.index]==HIDDEN_ARTICLE_SENTENCE else {})}
+                     **({'numbers':[]} if sentences[c.index] in (HIDDEN_ARTICLE_SENTENCE, UNVERIFIED_SQL_SENTENCE) else {})}
                     for c in state.verification.checks]
             article_period = tasks[0]['article_period']
             if action := state.input.article_action:
@@ -756,13 +854,14 @@ class Services:
             if retry:
                 context['article_retry']=retry.model_dump(mode='json')
             if primary.answer_status in ('PARTIAL','ANSWERED') and primary.conditions:
-                from backend.app.agents.context import both_trade_flows
+                from backend.app.agents.context import both_trade_flows, trade_balance
                 context['conditions']=answer['conditions']
                 context.pop('confirmed_trade_conditions', None)
-                if both_trade_flows(state.plan):
-                    context['both_trade_flows']=True
-                else:
-                    context.pop('both_trade_flows',None)
+                for name,flag in (('both_trade_flows',both_trade_flows),('trade_balance',trade_balance)):
+                    if flag(state.plan):
+                        context[name]=True
+                    else:
+                        context.pop(name,None)
                 for decision in primary.resolved.values():
                     if decision.get('interest') in ('APPLIED','GLOBAL'):
                         context['interest_action']='APPLIED' if decision['interest']=='APPLIED' else 'DECLINED'

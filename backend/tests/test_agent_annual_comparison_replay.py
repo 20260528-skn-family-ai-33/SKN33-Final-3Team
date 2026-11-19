@@ -80,9 +80,10 @@ class AnnualComparisonReplayTest(unittest.TestCase):
             cells = annual_sum_sources(self.payload)
             for year in ('2024','2025'):
                 self.assertEqual(cells['export_'+year+'_usd'], (year,'US','854232','HS2022','EXPORT'))
-            # The independent HS label + code group check still rejects the original.
+            # 저장 근거의 품목명과 그 HS 코드는 같은 대상이다(PR 116 경고 오탐 수정).
             line = case['sentences'][0]
-            self.assertFalse(inspect(line, self.payload)[0])
+            self.assertTrue(inspect(line, self.payload)[0])
+            self.assertFalse(inspect(line.replace('HS 854232', 'HS 330499'), self.payload)[0])
             single = line.replace('(HS 854232)', '')
             self.assertTrue(inspect(single, self.payload)[0])
             self.assertTrue(inspect(case['sentences'][1], self.payload)[0])

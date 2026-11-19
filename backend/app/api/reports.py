@@ -3,8 +3,8 @@ import hashlib
 import json
 from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
-from sqlalchemy import select, update, delete
-from backend.app.api.common import require, unavailable, now, digest, period, percentage, clean, page_info, shift_month, month_end
+from sqlalchemy import select, update, delete, tuple_
+from backend.app.api.common import require, unavailable, now, digest, period, percentage, clean, page_info, shift_month, month_end, LLM_SQL_PERIOD_WARNING, sql_period_unproven
 from backend.app.api import trade, news, jobs
 from backend.app.api.accounts import interests, validate_scope
 from backend.app.api.results import read_snapshot, save_snapshot, result_table, analysis_conditions
@@ -23,6 +23,18 @@ def display_title(record):
     return f"{labels.get(record['report_type'],record['report_type'])} 리포트 · {p.get('start','')} ~ {p.get('end','')}"
 
 
+def balance_copies(tables):
+    """결과표(사본·스냅숏) 목록이 모두 무역수지인지. 리포트의 승인 문구·표지·요청 지표·제목·파일 이름이 이 판정 하나를 쓴다."""
+    return bool(tables) and all((t.get('meta') or {}).get('trade_balance') for t in tables)
+
+
+def balance_tables(record):
+    """승인한 결과표 사본이 모두 무역수지인 리포트인지(제목·파일 이름·PDF 지표를 무역수지로 쓴다).
+    완료(READY) 뒤에는 content_json이 완성 문서로 바뀌어 사본이 없으므로 승인 때 남긴 chat_metric을 본다."""
+    if (record.get('conditions_json') or {}).get('chat_metric')=='BALANCE': return True
+    return balance_copies((record.get('content_json') or {}).get('source_tables') or [])
+
+
 def download_filename(store,record,fmt):
     """User-facing name only; storage IDs/paths and document contents stay intact."""
     c=record['conditions_json'];codes=c.get('country_codes') or []
@@ -31,21 +43,27 @@ def download_filename(store,record,fmt):
                                .where(country.c.country_code.in_(codes))).all()) if codes else {}
     hs_names=report_hs_names(store,[record])
     countries=selection_part((['한국전체'] if c.get('include_korea_total') else [])+[names.get(code,code) for code in codes],'전체국가')
-    products=selection_part([hs_names.get(h['hs_code']) or 'HS'+h['hs_code'] for h in c.get('hs_items',[])],'전체품목')
+    products=selection_part([hs_names.get(report_item_key(h)) or 'HS'+h['hs_code'] for h in c.get('hs_items',[])],'전체품목')
     p=c.get('period') or {}
     period_name=f"{p['start']}~{p['end']}" if p.get('start') and p.get('end') else '전체기간'
     flow='수입' if c.get('trade_flow')=='IMPORT' else '수출'
     metric={'AMOUNT':'액분석','GROWTH':'증감분석','SHARE':'비중분석','RANK':'순위분석'}.get(c.get('metric'),'분석')
-    topic=c.get('topic') or flow+metric
+    # 무역수지 결과표만 옮긴 리포트는 조회 방향(수출)이 아니라 저장된 지표 이름을 쓴다.
+    topic=c.get('topic') or ('무역수지분석' if balance_tables(record) else flow+metric)
     created=record.get('completed_at') or record['created_at']
     if isinstance(created,str): created=datetime.fromisoformat(created.replace('Z','+00:00'))
     local=created.replace(tzinfo=created.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9)))
     return '_'.join((countries,filename_part(period_name),products,filename_part(topic)))+f'_리포트_{local:%Y%m%d_%H%M%S}.'+fmt
 
 
-def resolve_comparison(conditions, adjustments):
-    """Validate comparison semantics against the final, month-aligned analysis period."""
+def resolve_comparison(conditions, adjustments, *, any_order=False):
+    """Validate comparison semantics against the final, month-aligned analysis period.
+    any_order: 저장 결과표를 옮기는 리포트. 원본이 이미 조회한 비교 기간이므로 앞뒤 순서를 다시 제한하지 않는다."""
     mode=conditions['compare']; supplied=conditions['compare_period']; p=conditions['period']
+    if any_order and conditions.get('year_comparison') and supplied is None:
+        # 결과표 기반 리포트의 연도 비교(MULTI_YEAR) 결과는 연도들을 결과표에 나란히 둔다. 따로 고를 비교 기간이 없다.
+        # 리포트 요청 화면(API-43)은 이 예외 없이 기존처럼 CUSTOM에 비교 기간을 요구한다.
+        return None
     if mode=='NONE':
         require(supplied is None,'비교 없음에는 비교 기간을 지정할 수 없습니다.')
         return None
@@ -55,7 +73,7 @@ def resolve_comparison(conditions, adjustments):
         supplied=aligned
     if mode=='CUSTOM':
         require(supplied is not None,'사용자 지정 비교에는 compare_period가 필요합니다.')
-        require(supplied['end']<p['start'],'사용자 지정 비교 기간은 분석 기간보다 앞서야 합니다.')
+        require(any_order or supplied['end']<p['start'],'사용자 지정 비교 기간은 분석 기간보다 앞서야 합니다.')
         return supplied
     start,end=date.fromisoformat(p['start']),date.fromisoformat(p['end'])
     if mode=='MOM':
@@ -70,7 +88,7 @@ def resolve_comparison(conditions, adjustments):
     return expected
 
 
-def preview(store,uid,data):
+def preview(store,uid,data,*,frozen=False,from_results=False):
     require(bool(data.get('conditions')) != bool(data.get('result_id')),'conditions와 result_id 중 하나만 지정하세요.')
     require(not data.get('period_preset'),'기간 프리셋 입력 예외 계약 DEC-28 확정이 필요합니다.','FEATURE_NOT_READY',503)
     if data.get('result_id'):
@@ -81,11 +99,13 @@ def preview(store,uid,data):
     else:
         conditions=data.get('conditions',{})
     require(bool(conditions),'분석 조건 또는 result_id가 필요합니다.')
-    from backend.app.api.schemas import ReportConditions
-    conditions=ReportConditions.model_validate(conditions).model_dump(mode='json')
+    from backend.app.api.schemas import FrozenReportConditions, ReportConditions
+    schema=FrozenReportConditions if frozen else ReportConditions
+    conditions=schema.model_validate(conditions).model_dump(mode='json')
     if not conditions['include_korea_total']: conditions.pop('include_korea_total')
     require(conditions['trade_flow']=='EXPORT','리포트는 현재 수출 분석만 지원합니다.','UNSUPPORTED_TRADE_FLOW',422)
-    validate_scope(store,conditions['hs_items'],conditions['country_codes'])
+    validate_scope(store,conditions['hs_items'],conditions['country_codes'],
+                   hs_versions=('HS2017', 'HS2022') if frozen else ('HS2022',))
     p=conditions['period']; latest=trade.bounds(store)[-1]
     adjustments=[]
     if date.fromisoformat(p['start']).day!=1 or date.fromisoformat(p['end'])!=month_end(date.fromisoformat(p['end'])):
@@ -97,14 +117,14 @@ def preview(store,uid,data):
         adjustments.append('종료일을 최신 공개 월의 말일로 조정')
     require(p['start']<=p['end'],'현재 공개 데이터 범위로 조정할 수 없습니다.','PERIOD_NOT_AVAILABLE',422)
     trade.resolve_period(store,p['start'][:7],p['end'][:7])
-    conditions['compare_period']=resolve_comparison(conditions,adjustments)
+    conditions['compare_period']=resolve_comparison(conditions,adjustments,any_order=from_results)
     conditions['applied_defaults']=adjustments; conditions['expanded_regions']=[]
     identity=save_snapshot(store,uid,'PREVIEW',{'conditions':conditions},600)
     return {'preview_id':identity,'conditions':conditions,'needs_confirmation':True,
             'suggested_sections':['KPI','TOP_COUNTRIES','GROWTH_RISK','LOCAL_ISSUES'], 'expires_at':(now()+timedelta(minutes=10)).isoformat()+'Z'}
 
 
-def create(store,uid,data,key):
+def create(store,uid,data,key,*,chat_approval=False):
     require(key and len(key)<=200,'Idempotency-Key가 필요합니다.')
     r,u=store.t('report'),store.t('users')
     store.c.execute(select(u.c.user_id).where(u.c.user_id==uid).with_for_update()).first()
@@ -115,6 +135,8 @@ def create(store,uid,data,key):
         require(existing['conditions_json'].get('request_hash')==digest(data.model_dump()),'멱등성 키의 요청 내용이 다릅니다.','IDEMPOTENCY_CONFLICT',409)
         return {'job':status_view(store,existing)}
     p=read_snapshot(store,uid,data.preview_id,'PREVIEW')
+    require(not p.get('source_tables') or chat_approval, '이 미리보기는 채팅에서 승인해 주세요.',
+            'CHAT_REPORT_APPROVAL_REQUIRED',422)
     if data.session_id: store.owned('chat_session','session_id',data.session_id,uid)
     opt=store.t('service_option')
     require(store.c.scalar(select(opt.c.option_code).where(opt.c.option_code=='RPT_ON_DEMAND',opt.c.enabled==True)) is not None,
@@ -141,19 +163,23 @@ def status_view(store,r):
         'error':info.get('error'),'available_formats':formats(store,r['report_id']) if r['status']=='READY' else []}
 
 
+def report_item_key(item):
+    code, edition = item['hs_code'], item.get('hs_ver','HS2022')
+    return code if edition == 'HS2022' else f'{edition}:{code}'
+
+
 def report_hs_names(store,rows):
-    codes={h['hs_code'] for row in rows for h in row['conditions_json'].get('hs_items',[])
-           if h.get('hs_ver','HS2022')=='HS2022'}
-    if not codes: return {}
+    items={(h['hs_code'],h.get('hs_ver','HS2022')):report_item_key(h)
+           for row in rows for h in row['conditions_json'].get('hs_items',[])}
+    if not items: return {}
     hs=store.t('hs_code')
-    return dict(store.c.execute(select(hs.c.hs_code,hs.c.name_ko).where(
-        hs.c.hs_ver=='HS2022',hs.c.hs_code.in_(codes))).all())
+    return {items[code,edition]:name for code,edition,name in store.c.execute(
+        select(hs.c.hs_code,hs.c.hs_ver,hs.c.name_ko).where(tuple_(hs.c.hs_code,hs.c.hs_ver).in_(list(items))))}
 
 
 def summary_view(store,r,names):
     c=r['conditions_json']
-    hs_names={h['hs_code']:names[h['hs_code']] for h in c.get('hs_items',[])
-              if h.get('hs_ver','HS2022')=='HS2022' and h['hs_code'] in names}
+    hs_names={key:names[key] for h in c.get('hs_items',[]) if (key:=report_item_key(h)) in names}
     return {'report_id':str(r['report_id']),'report_type':r['report_type'],
         'subscription_id':str(r['subscription_id']) if r['subscription_id'] else None,
         'title':display_title(r),'hs_names':hs_names,'conditions':{k:v for k,v in c.items() if k in ('hs_items','country_codes','include_korea_total','period','compare_period','trade_flow','compare','metric','applied_defaults','expanded_regions')},
@@ -216,7 +242,8 @@ def article_sources(articles):
 
 
 # 승인한 채팅 결과표 종류 → 그 결과로 채우는 리포트 섹션(D-90). 웹·DOCX 문서와 PDF 템플릿이 같은 기준을 쓴다.
-RESULT_SECTIONS={'TREND':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES','PREDICTION':'GROWTH_RISK'}
+RESULT_SECTIONS={'TREND':'KPI','MULTI_YEAR':'KPI','LLM_SQL':'KPI','RANKING':'TOP_COUNTRIES','SHARE':'TOP_COUNTRIES',
+                 'PREDICTION':'GROWTH_RISK'}
 PROMISING_UNAVAILABLE='예측 모델 또는 기준월 스냅샷을 사용할 수 없어 유망시장 예측을 넣지 못했습니다.'
 
 
@@ -375,6 +402,8 @@ def build_document(store,uid,record):
             tables=[table for table in source if RESULT_SECTIONS.get(table['kind'])==code]
             sections.append(section(code,'승인한 분석 결과입니다.' if tables else '해당 분석 결과에 포함되지 않음',tables))
         for ref in record['content_json']['source_results']: meta['warnings'].extend(ref['limitations'])
+        if any(sql_period_unproven({**(t.get('meta') or {}),'kind':t['kind']}) for t in source):
+            meta['warnings'].append(LLM_SQL_PERIOD_WARNING)   # 채팅과 같은 생성 SQL 기간 미확인 안내
     elif record['report_type']=='RPT_WEEKLY':
         meta=news.source_meta(store,'NEWS',date.fromisoformat(p['end']))
         articles=news.articles(store,uid,start=date.fromisoformat(p['start']),end=date.fromisoformat(p['end']),hs=hs,countries=countries,size=20)['items']
@@ -466,6 +495,7 @@ def build_document(store,uid,record):
             sections.append(section('LOCAL_ISSUES','분석 조건과 기간에 해당하는 기사 본문 발췌입니다. RAG 요약·인과 분석 모듈은 미연결 상태입니다.',articles=articles,status='POLICY_PENDING'))
             meta['sources'].extend(article_sources(articles))
     title='수출 시장 분석 리포트' if record['report_type']!='RPT_WEEKLY' else '주간 해외시장 뉴스 리포트'
+    if balance_tables(record): title='무역수지 분석 리포트'
     subtitle=f"HS {', '.join(x['hs_code'] for x in hs) or '전체'} · {', '.join(countries) or '전체 국가'} · {p['start']} ~ {p['end']} · USD"
     return clean({'schema_version':1,'title':title,'subtitle':subtitle,'generated_at':now().isoformat()+'Z','sections':sections,'meta':meta,'sql':store.queries})
 
@@ -483,6 +513,9 @@ def attach_weekly_summary(doc):
 def report_xlsx(record,document):
     from backend.app.api.files import xlsx_bytes, user_xlsx_info
     tables=[table for section in document['sections'] for table in section['tables']]
+    if document['meta'].get('freshness')=='FROZEN':
+        # 이전 사본도 최상위 kind를 사용해 판본·생성 SQL 열을 복원한다.
+        tables=[{**table,'meta':{'kind':table.get('kind'), **(table.get('meta') or {})}} for table in tables]
     # 정기 리포트만 열을 정비한다. 요청형/에이전트의 열은 유지하고 모든 리포트에 단위를 표시한다.
     periodic=record['report_type'] in PERIODIC_REPORT_TYPES
     # build_document는 원본 결과표를 재사용한 문서에 FROZEN을 기록한다.

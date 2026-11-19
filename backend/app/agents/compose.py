@@ -3,6 +3,7 @@ from collections import Counter
 import re
 
 from backend.app.agents.digest import display_amounts, korean_usd
+from backend.app.api.common import sql_period_unproven
 from backend.app.agents.verify_articles import ARTICLE_CITATION, citation_clauses, cited_article_numbers
 from backend.app.agents.monthly_summary import fixed_monthly_sentences, reconcile_monthly_claims
 from backend.app.agents.state import (AgentState, Draft, TaskConclusion, MAX_TASK_SENTENCES,
@@ -16,14 +17,30 @@ COMPOSE_PROMPT = """무역 분석 결과를 합니다체로 작성하세요. 입
 문장마다 200자 이내입니다. 숫자는 digest에 있는 값만 옮기고 계산하지 마세요.
 0과 null을 구분하고 null은 집계되지 않았다고 쓰세요. 수출·수입과 USD 단위를 밝히세요.
 수출·수입 금액은 모두 한국 기준입니다. 상대국이 있으면 '한국의 대미국 수출액', '한국의 대미국 수입액'처럼 한국과 상대국을 함께 쓰고, 상대국이 없으면 '한국의 전체 수출액'처럼 씁니다.
+trade_flow=BALANCE인 결과의 금액은 수출액에서 수입액을 뺀 무역수지입니다. 해당 금액·합계·월평균을 수출액이나 수입액이라고 부르지 마세요.
+질문이 '미국이 한국에서 수입하는 품목'처럼 상대국을 주어로 써도 수치 문장은 '한국의 대미국 수출'처럼 한국 기준으로 씁니다.
 '미국 수출액'·'미국의 수입액'처럼 상대국의 수출입으로 읽히는 표현은 쓰지 마세요.
 요청한 월들에 미집계가 섞여 있으면 제시된 각 월을 실제 금액(0 포함) 또는 미집계와 짝지어 설명하세요. 소계를 제시할 때에는 전체 기간 합계를 확인할 수 있는지도 밝히세요.
 금액은 digest에 적힌 표기(예: "2,610만 달러", "1억 2,346만 달러")를 글자 그대로 옮기세요.
+품목명도 digest의 확정 명칭을 그대로 쓰세요. 질문의 일반명(예: 기초화장품)을 확정 품목명(예: 기타 기초·미용 화장품) 대신 쓰지 마세요.
+turn_summary에도 같은 확정 품목명과 기간·수출입 방향을 사용하세요.
 만·억 단위를 다시 바꾸거나 반올림·합산하지 마세요. 총액과 월평균, %와 %p를 구분하세요.
+반올림한 표시 금액이 같다는 이유로 실제 월별 금액이 '같았다', '동일했다', '변동이 없다'고 설명하지 마세요.
+그때는 '만 달러 단위로 표시하면 각 월 51만 달러입니다'처럼 표시 단위에 한정해 쓰세요.
+실제 금액이 모두 같다는 설명은 monthly_facts의 min_count와 max_count가 모두 requested_months와 같을 때만 가능합니다.
+월별 증가·감소는 monthly_facts.movement의 전월 대비 결과를 사용하세요. 시작·끝 금액만 보고 중간 달도 계속 증가·감소했다고 하지 마세요. movement는 조회 기간 내 연속한 두 달만 비교하며 첫 달의 전월은 포함하지 않습니다.
 월별 금액의 최저·최고는 TREND의 monthly_facts에서 월과 금액을 짝지어 쓰세요. 전년 동월보다 증가한 달도 monthly_facts의 increased_months를 보고, 목록이 increased_count보다 짧으면 개수만 쓰세요.
 기간 비교의 change_pct는 compare_period의 compare_total_usd를 분모로 한 period의 total_usd 변화율입니다. 문장에 두 기간의 역할을 그대로 쓰세요.
 두 기간의 수출액·수입액 차이를 물으면 결론에 달러 차액을 명시하세요. TREND의 period_difference_usd는 조회 기간 합계에서 비교 기간 합계를 뺀 금액입니다. 두 합계와 차액은 별도 문장에 쓰세요. 차액을 쓸 때는 두 기간, 실제 달러 차액, 어느 쪽이 더 큰지를 한 문장에 담으세요. 차액이 0이면 두 기간의 차액이 0달러라고 씁니다. turn_summary에 차액을 쓸 때도 같은 차액 문장을 그대로 사용하세요. 차액이 null이면 산출할 수 없다고 쓰세요. 변화율만 요청했다면 change_pct를 쓰세요.
 비교 기간 길이가 다르면 그 사실과 월평균을 명시하고 점유율 분모 의미를 밝히세요.
+비교 기간의 월 범위가 다르면 '같은 기간', '전년 동기', '전년 동월'이라고 하지 마세요.
+대신 '2025년 1~3월과 2024년 1~2월'처럼 양쪽 기간을 정확히 쓰세요. 연도만 다른 같은 월 범위일 때만 '같은 기간'을 씁니다.
+extra_compare_periods가 있으면 비교 기간이 여럿입니다. compare_는 compare_period, compare{k+1}_(compare2_·compare3_·compare4_)는 extra_compare_periods의 k번째 기간이고
+change{k+1}_pct는 조회 기간의 그 기간 대비 증감률입니다. 기간마다 연도를 밝혀 따로 비교하고 여러 기간을 합치지 마세요.
+kind가 LLM_SQL이고 period_verified도 annual_verified도 true가 아닌 digest의 수치는 집계 기간을 확인할 수 없어 검증되지 않습니다. 그 수치는 문장에 쓰지 말고, 무엇을 조회했는지와 수치는 결과표에서 확인하라고만 쓰세요.
+annual_verified만 true인 LLM_SQL digest는 연도별 합계·차액과 입력에 있는 두 연도의 change_pct만 문장에 쓰고, 다른 열의 수치는 결과표에서 확인하라고 쓰세요.
+금액 기준으로 품목·국가를 고른 LLM_SQL 결과는 '요청한 금액 기준을 충족하는 품목은'처럼 설명하세요.
+질문의 임계값 숫자를 조회된 실적 금액들과 함께 나열하지 말고, 각 품목·국가의 실제 금액은 대상별로 문장을 나누세요.
 예측은 기준월을 명시하며 exp_12m은 과거 12개월 수출액입니다.
 월 단위 통계·비교 기간의 종료일을 날짜로 쓸 때는 해당 월의 말일로 씁니다(예: 2025년 12월 31일). 기사 발행 기간의 날짜는 그대로 씁니다.
 growth_outlook(증가 예상·감소 예상)은 모델의 방향 예상이므로 '예상'으로 쓰고 증감률 숫자를 만들지 마세요. null이면 언급하지 마세요.
@@ -87,12 +104,23 @@ def numbered_articles(state):
     return articles
 
 
+def _annual_writer_keys(digest):
+    return {*digest.get('_annual_sums', {}), *digest.get('_annual_differences', {}),
+            *(('change_pct',) if digest.get('_annual_rate') is True else ())}
+
+
 def _trade_fact(digest):
+    if sql_period_unproven(digest):
+        return None   # 기간을 증명하지 못한 생성 SQL 수치는 대체 결론에도 쓰지 않는다(결과표 안내만).
     if digest.get('kind') == 'LLM_SQL' and digest.get('rows'):
         row = digest['rows'][0]
+        proven = None
+        if digest.get('period_verified') is not True:
+            # 연간 비교 결과는 SQL 식으로 증명한 칸(연도별 합계·차액, 합계와 맞는 change_pct)만 옮긴다.
+            proven = _annual_writer_keys(digest)
         for column in digest.get('columns', []):
             key, unit = column['key'], column.get('unit')
-            if key not in row or unit not in ('USD', '%', 'KG', 'COUNT'):
+            if key not in row or unit not in ('USD', '%', 'KG', 'COUNT') or (proven is not None and key not in proven):
                 continue
             label = column.get('label') or key
             value = row[key]
@@ -101,7 +129,7 @@ def _trade_fact(digest):
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 amount = korean_usd(value) if unit == 'USD' else f'{value:,}' + {'%': '%', 'KG': ' kg', 'COUNT': '건'}[unit]
                 return f'결과표 첫 행의 {label} 값은 {amount}입니다.'
-    flow = {'EXPORT': '수출액', 'IMPORT': '수입액'}.get(digest.get('trade_flow'))
+    flow = {'EXPORT': '수출액', 'IMPORT': '수입액', 'BALANCE': '무역수지'}.get(digest.get('trade_flow'))
     if not flow:
         return None
     targets = digest.get('targets') or []
@@ -255,7 +283,8 @@ def period_difference_draft(state):
         return None
     task, = state.plan.tasks
     cond = task.conditions
-    if (task.intent != 'STATISTICS' or not task.slots.amount_difference_only or task.answer_status != 'ANSWERED'
+    if (task.intent != 'STATISTICS' or not task.slots.amount_difference_only or task.slots.trade_balance
+            or task.answer_status != 'ANSWERED'
             or not cond or not cond.period or not cond.compare_period
             or len(cond.country_codes) > 1 or len(cond.hs_items) > 1):
         return None
@@ -291,7 +320,9 @@ def fixed_conclusion(state, task):
     if task.intent in UNSUPPORTED:
         return TaskConclusion(task_id=task.task_id, sentences=[UNSUPPORTED[task.intent]])
     if task.intent == 'REPORT' and task.answer_status in ('ANSWERED', 'PARTIAL'):
-        return TaskConclusion.report_completed(task.task_id)
+        from backend.app.agents.planner import EXPORT_ONLY_REPORT_NOTE
+        return TaskConclusion.report_completed(
+            task.task_id, EXPORT_ONLY_REPORT_NOTE if EXPORT_ONLY_REPORT_NOTE in task.applied_defaults else None)
     if task.answer_status == 'NO_DATA':
         reasons = list(dict.fromkeys(state.results[s.step_id].error for s in task.steps
                        if s.step_id in state.results and state.results[s.step_id].error
@@ -339,6 +370,18 @@ def compose_input(state: AgentState, describe_conditions, articles: list[dict], 
                 if step.tool == 'search_articles':
                     # The numbered, evidence-filtered articles are the only source of article text.
                     digest = {k: v for k, v in digest.items() if k != 'items'}
+                if sql_period_unproven(digest):
+                    # 집계 기간이 확인되지 않은 결과는 표 안내에 필요한 표시만 전달한다.
+                    digest = {'kind': 'LLM_SQL', 'period_verified': False}
+                if (digest.get('kind') == 'LLM_SQL' and digest.get('annual_verified') is True
+                        and digest.get('period_verified') is not True):
+                    proven = _annual_writer_keys(digest)
+                    digest = {**digest, 'rows': [{k: v for k, v in row.items() if k in proven}
+                                                 for row in digest.get('rows') or [] if isinstance(row, dict)],
+                              'columns': [c for c in digest.get('columns') or [] if c['key'] in proven]}
+                    digest.pop('sql_summary', None)
+                # 연간 칸 지도는 검증용이다. 작성 모델에는 넘기지 않는다.
+                digest = {k: v for k, v in digest.items() if not k.startswith('_annual')}
                 digests[step.step_id.rsplit('.', 1)[-1]] = display_amounts(digest)
         if not digests:
             fixed[task.task_id] = fallback_conclusion(state, task, country_names)

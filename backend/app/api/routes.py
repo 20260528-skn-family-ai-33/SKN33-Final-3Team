@@ -114,7 +114,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
             'capabilities':[{'code':f'API-{i:02}','enabled':True} for i in range(1,131) if i not in PENDING and i not in range(106,117)],
             'password_policy':'영문·숫자·특수문자를 포함한 8자 이상, UTF-8 72바이트 이하, 확인값 일치'}
     if identity==10: return trade.availability(store)
-    if identity==11: return reference.hs_search(store,query['q'],query.get('depth',4),query.get('limit',5))
+    if identity==11: return reference.hs_search(store,query['q'],query.get('depth',4),query.get('limit',5),query.get('hs_ver','HS2022'))
     if identity==12: return reference.children(store,path['hs_code'],query['hs_ver'])
     if identity==13: return reference.countries(store,query.get('q'),query.get('region_id'))
     if identity==14: return reference.regions(store)

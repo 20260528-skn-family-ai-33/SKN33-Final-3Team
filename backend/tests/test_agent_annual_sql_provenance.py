@@ -3,7 +3,7 @@ import unittest
 from copy import deepcopy
 
 from backend.app.agents.sql import annual_sql_sources
-from backend.app.agents.verify import snapshot_evidence
+from backend.app.agents.verify import annual_sql_scope, snapshot_evidence
 from backend.app.agents.verify_claims import NameCatalog
 from backend.app.agents.verify_evidence import build_facts
 
@@ -49,6 +49,30 @@ def facts(sql):
 
 
 class AnnualSqlProvenanceTest(unittest.TestCase):
+    def test_same_year_partial_period_is_not_another_annual_sum_for_the_rate(self):
+        sql = """WITH summed AS (SELECT SUM(e.amount_usd) AS value FROM export_monthly e
+                  WHERE e.hs_ver='HS2022' AND e.country_code='US' AND e.hs6_code='330499'
+                    AND e.trade_month BETWEEN '2025-01-01' AND '2025-12-31')
+                 SELECT s.value AS new_usd, 0.0 AS change_pct FROM summed s"""
+        saved = payload(sql)
+        saved['conditions'].update(compare_period={'start': '2025-01-01', 'end': '2025-06-30'},
+                                   country_codes=['US'], hs_items=[{'hs_code': '330499', 'hs_ver': 'HS2022'}])
+        saved['rows'] = [{'new_usd': 100, 'change_pct': 0.0}]
+        scope = annual_sql_scope(saved)
+        self.assertIn('new_usd', scope['_annual_sums'])
+        self.assertNotIn('_annual_rate', scope)
+
+    def test_country_exclusion_subquery_proves_nationwide_years(self):
+        join = "JOIN country c\n      ON c.country_code = e.country_code AND c.country_role = 'COUNTRY'"
+        restriction = "e.country_code NOT IN (SELECT country_code FROM country WHERE country_role <> 'COUNTRY')"
+        sql = CASE.replace(join, '').replace('WHERE e.hs_ver', f'WHERE {restriction} AND e.hs_ver')
+        sums, differences, _ = annual_sql_sources(payload(sql))
+        expected_sums, expected_differences, _ = annual_sql_sources(payload(CASE))
+        self.assertEqual(sums, expected_sums)
+        self.assertEqual(differences, expected_differences)
+        self.assertFalse(annual_sql_sources(payload(sql.replace('e.country_code NOT IN', 'e.hs6_code NOT IN')))[0])
+        self.assertFalse(annual_sql_sources(payload(sql.replace("'COUNTRY')", "'COUNTRY' LIMIT 1)")))[0])
+
     def test_cte_and_conditional_sum_prove_each_year_and_signed_order(self):
         for sql in (CTE, CASE):
             with self.subTest(shape=sql[:10]):
@@ -123,13 +147,15 @@ class AnnualSqlProvenanceTest(unittest.TestCase):
         self.assertNotIn('signed_usd', found)
         self.assertIn('signed_usd', facts(CTE))
 
-    def test_dated_monthly_observation_survives_annual_request_windows(self):
+    def test_dated_monthly_alias_is_not_period_evidence_in_annual_results(self):
+        # 생성 SQL이 낸 월 표시('2025-03' AS month)는 연간 결과여도 기간 근거가 아니다(이슈 113, 칸 단위 연간 예외
+        # 2026-11-15 사용자 결정). 연도별 합계·차액처럼 SQL 식으로 증명한 칸만 기간을 받는다.
         saved = payload(CTE)
         saved['rows'] = [{'month': '2025-03', 'amount_usd': 7}]
         saved['columns'] = [{'key': 'amount_usd', 'label': '월별 수출액', 'unit': 'USD'}]
         source = snapshot_evidence(saved)
         found = {f.path[-1]: f for f in build_facts([source], NameCatalog([source]))}
-        self.assertEqual(found['amount_usd'].month, '2025-03')
+        self.assertTrue('amount_usd' not in found or (found['amount_usd'].month, found['amount_usd'].period) == (None, None))
 
     def test_scoped_single_year_and_direct_projection_remain_supported(self):
         scoped = payload("SELECT SUM(e.amount_usd) AS old_usd FROM export_monthly e "
