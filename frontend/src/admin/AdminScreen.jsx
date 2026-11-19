@@ -66,6 +66,7 @@ function OpsDashboard({ tab }) {
           </div>
           <MonthlyLine rows={overview.data?.history || []} metric="total_members" label="월별 전체 회원" unit="명" color="#C8102E" />
           <p className="note">현재 회원의 가입일 기준으로 월별 누적 집계합니다.</p>
+          {!!overview.data?.excluded?.total_members && <p className="note">가입일 미상·오류 {overview.data.excluded.total_members.toLocaleString()}명은 과거 월에서 제외합니다.</p>}
         </section>
         <section className="card">
           <div className="between">
@@ -76,10 +77,11 @@ function OpsDashboard({ tab }) {
           </div>
           <MonthlyLine rows={overview.data?.history || []} metric="active_subscriptions" label="월별 활성 구독" unit="건" color="#2B2350" />
           <p className="note">현재 유지 중인 구독의 시작일 기준 누적입니다. 해지·재구독 이전 이력은 포함하지 않습니다.</p>
+          {!!overview.data?.excluded?.active_subscriptions && <p className="note">시작일 미상·오류 {overview.data.excluded.active_subscriptions.toLocaleString()}건은 과거 월에서 제외합니다.</p>}
         </section>
       </div>
       <ErrorNotice error={overview.error} retry={overview.reload} />
-      <p className="note">최근 12개월 · 이번 달은 현재 값입니다. 과거는 현재 회원·구독의 시작일 기준으로 계산하며, 시작일이 불명확하면 빈칸으로 표시합니다.</p>
+      <p className="note">최근 12개월 · 이번 달은 현재 값입니다. 과거는 현재 회원·구독의 시작일 기준으로 계산하며, 날짜 미상·오류 건은 과거 월에서 제외합니다. 이번 달에는 포함되어 증가폭이 커 보일 수 있습니다.</p>
       <section className="card">
         <ErrorNotice error={result.error} retry={result.reload} /><div className="between"><p className="t2">알림</p><Btn to={`/admin/inbox/${OPS_DETAIL[tab]}`}>상세보기</Btn></div>
         <AdminTabs label="운영 알림 유형" style={{ marginTop: 14 }} items={OPS_TABS.map(([label, id]) => ({ label, on: tab === label, to: `/admin/ops/${id}` }))} />

@@ -1,7 +1,7 @@
 """월별 관리자 지표: 기존 회원·현재 활성 구독의 시작일 기준 누적."""
 from datetime import datetime, timezone, time
 from zoneinfo import ZoneInfo
-from sqlalchemy import select, func, case
+from sqlalchemy import select, func, cast, String
 from backend.app.api.common import now, shift_month
 
 KST = ZoneInfo('Asia/Seoul')
@@ -20,16 +20,29 @@ def utc_time(at=None):
     return value.replace(tzinfo=value.tzinfo or timezone.utc).astimezone(timezone.utc)
 
 
+def dated_totals(groups, months, naive_utc=False):
+    starts, unknown = [], 0
+    for group in groups:
+        try:
+            value = datetime.fromisoformat(group['start'].replace('Z', '+00:00'))
+            if value.tzinfo is None:
+                if not naive_utc: raise ValueError('Missing time zone')
+                value = value.replace(tzinfo=timezone.utc)
+            starts.append((value.astimezone(timezone.utc), group['count']))
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            unknown += group['count']
+    totals = {month: sum(count for start, count in starts
+        if start < datetime.combine(shift_month(month, 1), time.min, tzinfo=KST).astimezone(timezone.utc))
+        for month in months}
+    return totals, unknown
+
+
 def registration_totals(store, months):
     users = store.t('users')
-    columns = [func.count(case((users.c.created_at.is_(None), 1))).label('unknown')]
-    for index, month in enumerate(months):
-        boundary = datetime.combine(shift_month(month, 1), time.min, tzinfo=KST)
-        cutoff = boundary.astimezone(timezone.utc).replace(tzinfo=None)
-        columns.append(func.count(case((users.c.created_at < cutoff, 1))).label(f'm{index}'))
-    counts = store.one(select(*columns).select_from(users))
-    # Deleted users cannot be reconstructed from current rows.
-    return {month: None if counts['unknown'] else counts[f'm{index}'] for index, month in enumerate(months)}
+    # 잘못된 기존 날짜도 ORM DateTime 변환 오류 없이 제외한다. 정상 naive 값은 기존 UTC 규칙을 따른다.
+    start = cast(users.c.created_at, String)
+    groups = store.rows(select(start.label('start'), func.count().label('count')).group_by(start))
+    return dated_totals(groups, months, naive_utc=True)
 
 
 def subscription_start_totals(store, months):
@@ -37,25 +50,17 @@ def subscription_start_totals(store, months):
     start = subscriptions.c.filters_json['enabled_since'].as_string()
     groups = store.rows(select(start.label('start'), func.count().label('count'))
         .where(subscriptions.c.enabled == True).group_by(start))
-    starts = []
-    for group in groups:
-        try:
-            value = datetime.fromisoformat(group['start'].replace('Z', '+00:00'))
-            if value.tzinfo is None: raise ValueError('Missing time zone')
-        except (AttributeError, TypeError, ValueError):
-            return {month: None for month in months}
-        starts.append((value.astimezone(timezone.utc), group['count']))
-    # This is the current active cohort, not the full historical subscription population.
-    return {month: sum(count for start, count in starts
-        if start < datetime.combine(shift_month(month, 1), time.min, tzinfo=KST).astimezone(timezone.utc))
-        for month in months}
+    # 현재 활성 구독의 시작일 누적이며, 해지·재구독 이전 이력은 복원하지 않는다.
+    return dated_totals(groups, months)
 
 
-def monthly_history(store, current, at=None):
+def monthly_history(store, current, at=None, excluded=None):
     this_month = utc_time(at).astimezone(KST).date().replace(day=1)
     months = [shift_month(this_month, offset) for offset in range(-11, 1)]
-    registrations = registration_totals(store, months[:-1])
-    subscriptions = subscription_start_totals(store, months[:-1])
+    registrations, unknown_members = registration_totals(store, months[:-1])
+    subscriptions, unknown_subscriptions = subscription_start_totals(store, months[:-1])
+    if excluded is not None:
+        excluded.update(total_members=unknown_members, active_subscriptions=unknown_subscriptions)
     result = []
     for month in months:
         is_current = month == this_month

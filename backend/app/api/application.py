@@ -219,6 +219,9 @@ def create_app(settings=None, engine=None, redis_state=None):
                 if identity==36:
                     from backend.app.agents.admission import request_transaction
                     transaction=request_transaction(db)
+                elif identity in (102,104,136,137):
+                    from backend.app.api.category_transaction import category_transaction
+                    transaction=category_transaction(db)
                 else: transaction=db.engine.begin()
                 with transaction as connection:
                     store = Store(db,connection)

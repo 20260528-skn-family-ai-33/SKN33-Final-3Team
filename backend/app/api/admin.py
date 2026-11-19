@@ -10,7 +10,9 @@ def overview(store):
     from backend.app.api.admin_metrics import current_counts, monthly_history
     at=now()
     current=current_counts(store)
-    return {'current':current,'as_of':at,'history':monthly_history(store,current,at)}
+    excluded={}
+    history=monthly_history(store,current,at,excluded)
+    return {'current':current,'as_of':at,'history':history,'excluded':excluded}
 
 
 def member(store,row):

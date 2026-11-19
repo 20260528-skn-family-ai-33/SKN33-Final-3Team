@@ -111,7 +111,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==9:
         t=store.t('service_option'); options=store.rows(select(t.c.option_code,t.c.label_ko).where(t.c.option_type=='REPORT_PERIOD',t.c.enabled==True).order_by(t.c.sort_order))
         return {'report_periods':options,'supported_formats':['PDF','DOCX','XLSX'],
-            'capabilities':[{'code':f'API-{i:02}','enabled':True} for i in range(1,131) if i not in PENDING and i not in range(106,117)],
+            'capabilities':[{'code':f'API-{i:02}','enabled':True} for i in (*range(1,131),136,137) if i not in PENDING and i not in range(106,117)],
             'password_policy':'영문·숫자·특수문자를 포함한 8자 이상, UTF-8 72바이트 이하, 확인값 일치'}
     if identity==10: return trade.availability(store)
     if identity==11: return reference.hs_search(store,query['q'],query.get('depth',4),query.get('limit',5),query.get('hs_ver','HS2022'))
@@ -310,6 +310,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
     if identity==99: return keyword_admin.review(store,user,body)
     if identity==101: return keyword_admin.categories(store)
     if identity==102: return keyword_admin.category_change(store,user,body)
+    if identity in (136,137): return keyword_admin.major_change(store,user,body,removing=identity==137)
     if identity==103: return {'category':keyword_admin.category_row(store,path['category_id'])}
     if identity in (104,105): return keyword_admin.category_change(store,user,body,path['category_id'],identity==105)
     if identity==96:

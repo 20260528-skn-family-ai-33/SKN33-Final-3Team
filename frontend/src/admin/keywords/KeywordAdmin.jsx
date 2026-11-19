@@ -16,14 +16,10 @@ const stack = { display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }
 
 export default function KeywordAdmin({ route }) {
   const page = route.path.split('/')[3]
-  const [createdFields, setCreatedFields] = useState([])
-  const [createdMajors, setCreatedMajors] = useState([])
-  const onCreated = result => {
-    const field = result.category
-    if (field) setCreatedFields(previous => [...previous.filter(f => f.category_id !== field.category_id), field])
-    setCreatedMajors(previous => [...new Set([...previous, field?.major_name || result.major_name])])
-  }
+  const [savedCategories, setSavedCategories] = useState(null)
+  const onCreated = result => setSavedCategories(result.categories)
   const categories = useQuery('/admin/keyword-categories')
+  const reloadCategories = () => { setSavedCategories(null); categories.reload() }
   return <div className="col" style={{ gap: 20, minWidth: 0 }}>
     <AdminTabs label="키워드·분류 메뉴" items={[
       { label: '키워드 검수', to: '/admin/keywords', on: !['fields', 'history'].includes(page) },
@@ -31,11 +27,11 @@ export default function KeywordAdmin({ route }) {
       { label: '처리 이력', to: '/admin/keywords/history', on: page === 'history' },
     ]} />
     {page === 'history' ? <History key={`${route.query.get('target')}|${route.query.get('q')}`} route={route} /> : <QueryState state={categories}>{data => {
-      const items = [...data.items, ...createdFields.filter(created => !data.items.some(f => f.category_id === created.category_id))]
-      const majorNames = [...new Set([...(data.major_names || []), ...items.map(f => f.major_name), ...createdMajors])]
+      const current = savedCategories || data
       return page === 'fields'
-      ? <Fields key={route.path} route={route} data={{ ...data, items, major_names: majorNames }} reload={categories.reload} />
-      : <Keywords key={`${route.query.get('status')}|${route.query.get('q')}`} route={route} fields={items} majorNames={majorNames} onCreated={onCreated} />}}</QueryState>}
+      ? <Fields key={route.path} route={route} data={current} reload={reloadCategories} />
+      : <Keywords key={`${route.query.get('status')}|${route.query.get('q')}`} route={route} fields={current.items} majorNames={current.major_names || []} onCreated={onCreated} />}}</QueryState>}
+
   </div>
 }
 
@@ -130,7 +126,7 @@ function KeywordEditor({ data, fields, majorNames, onCreated, reload }) {
     <label className="lbl" htmlFor="keyword-reason" style={{ marginTop: 16 }}>처리 사유</label><TextField id="keyword-reason" value={reason} onChange={setReason} maxLength={1000} />
     <p className="note" style={{ marginTop: 12 }}>분류 변경은 새로 적재되는 기사부터 적용됩니다. 기존 기사·답변·리포트의 분류는 유지됩니다.</p>
     <div style={stack}>
-      <Btn kind="red" disabled={!category || newMajor || newMinor || !reason.trim() || busy} onClick={() => submit('ASSIGN')}>분야 지정·변경</Btn>
+      <Btn kind="red" disabled={!category || newMajor || newMinor || !reason.trim() || busy} onClick={() => setAction('ASSIGN')}>분야 지정·변경</Btn>
       {k.status !== 'CLASSIFIED' && k.review_status !== 'HELD' && <Btn disabled={!reason.trim() || busy} onClick={() => setAction('HOLD')}>보류</Btn>}
       {(k.status === 'CLASSIFIED' || k.review_status === 'HELD') && <Btn disabled={!reason.trim() || busy} onClick={() => setAction('RELEASE')}>지정·보류 해제</Btn>}
     </div>
@@ -145,7 +141,7 @@ function KeywordEditor({ data, fields, majorNames, onCreated, reload }) {
 
 function Fields({ route, data, reload }) {
   const selected = data.items.find(f => f.category_id === Number(route.path.split('/')[4]))
-  const [editing, setEditing] = useState(null)
+  const [editing, setEditing] = useState(null), [majorAction, setMajorAction] = useState(null)
   return <section className="card"><h2 className="t2">분류 기준 관리</h2>
     <p className="note">기본 대분류 {data.base_majors.length}개 · 서버에 저장된 중분류 {data.items.length}개</p>
     <div style={stack}><Btn onClick={() => setEditing({})}>새 분야 만들기</Btn>{selected && <Btn to="/admin/keywords/fields">분야 목록</Btn>}</div>
@@ -153,10 +149,37 @@ function Fields({ route, data, reload }) {
       <div><b>{fieldLabel(f)}</b><p className="note">{f.editable ? '관리자 생성' : '기본·기존 분야'}</p>{selected && <p className="note">대표 키워드: {f.representative_terms.join(', ') || '없음'}</p>}</div>
       <div style={stack}><Btn to={`/admin/keywords/fields/${f.category_id}`}>상세</Btn>{f.editable && <Btn onClick={() => setEditing(f)}>이름 수정</Btn>}</div>
     </div>)}
-    {!selected && data.major_names.filter(name => !data.items.some(f => f.major_name === name)).map(name => <div key={name} style={{ padding: '16px 0', borderBottom: '1px solid var(--line)' }}><b>{name}</b><p className="note">등록된 중분류 없음</p></div>)}
+    {!selected && data.major_names.filter(name => !data.items.some(f => f.major_name === name)).map(name => <div key={name} className="between" style={{ padding: '16px 0', borderBottom: '1px solid var(--line)' }}><div><b>{name}</b><p className="note">등록된 중분류 없음</p></div>
+      {data.editable_major_names?.includes(name) && <div style={stack}><Btn onClick={() => setMajorAction({ name, removing: false })}>이름 수정</Btn><Btn onClick={() => setMajorAction({ name, removing: true })}>삭제</Btn></div>}
+    </div>)}
     {!data.items.length && !data.major_names.length && <p className="muted">분류 사전 적재 후 표시됩니다.</p>}
+    {majorAction && <MajorEditor action={majorAction} version={data.major_version} onClose={() => setMajorAction(null)} reload={reload} />}
     {editing && <CategoryEditor key={editing.category_id || 'new'} category={editing} onClose={() => setEditing(null)} reload={reload} />}
   </section>
+}
+
+function MajorEditor({ action, version, onClose, reload }) {
+  const [name, setName] = useState(action.name), [reason, setReason] = useState(''), [error, setError] = useState(null)
+  const [busy, runOnce] = usePendingAction()
+  const save = () => runOnce(async () => {
+    setError(null)
+    try {
+      await api('/admin/keyword-majors', { method: action.removing ? 'DELETE' : 'PATCH', body: {
+        major_name: action.name, ...(!action.removing ? { new_major_name: name.trim() } : {}),
+        expected_version: version, reason: reason.trim(), confirmed: true,
+      } })
+      onClose(); reload()
+    } catch (e) { setError(e) }
+  })
+  return <Modal onClose={() => !busy && onClose()} label={action.removing ? '대분류 삭제 확인' : '대분류 이름 수정 확인'}>
+    <h2 className="t2">{action.removing ? '대분류를 삭제할까요?' : '대분류 이름을 수정할까요?'}</h2>
+    <p style={{ marginTop: 12 }}>{action.name} · 중분류가 없는 경우에만 처리할 수 있습니다.</p>
+    {!action.removing && <><label className="lbl" htmlFor="major-rename">새 대분류 이름</label><TextField id="major-rename" value={name} onChange={setName} maxLength={40} disabled={busy} /></>}
+    <label className="lbl" htmlFor="major-reason">처리 사유</label><TextField id="major-reason" value={reason} onChange={setReason} maxLength={1000} disabled={busy} />
+    <ErrorNotice error={error} />
+    <div style={stack}><Btn disabled={busy} onClick={onClose}>취소</Btn><Btn kind="red" disabled={busy || !reason.trim() || (!action.removing && (!name.trim() || name.trim() === action.name))} onClick={save}>확인하고 {action.removing ? '삭제' : '저장'}</Btn>
+      {error?.status === 409 && <Btn disabled={busy} onClick={() => { onClose(); reload() }}>최신 목록 불러오기</Btn>}</div>
+  </Modal>
 }
 
 function CategoryEditor({ category, onClose, reload }) {

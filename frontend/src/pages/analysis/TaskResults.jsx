@@ -11,7 +11,7 @@ import { comparisonCharts } from './comparisonCharts'
 import { comparisonGroups, comparisonChart } from './comparisonGroups'
 import { taskTitle } from './taskTitle'
 import ArticleCards from './ArticleCards.jsx'
-import { cleanReferenceMarker } from './articlePresentation'
+import ReferenceText from './ReferenceText'
 
 const colors=['#a71b39','#342954','#4b7578','#967348','#6e6198']
 const badges={PARTIAL:'일부 결과',NO_DATA:'결과 없음',OUT_OF_SCOPE:'범위 밖'}
@@ -101,7 +101,7 @@ export default function TaskResults({answer,hideText=false}) {
     let note='수치·대상·기간·단위를 검증 근거와 일치한다고 확인하지 못했습니다.'
     if(check?.basis==='ARTICLE') note=unavailable?'인용한 기사의 원문 근거를 확인할 수 없습니다.':'인용한 기사 또는 함께 제시한 통계로 이 문장 전체를 확인할 수 없습니다.'
     else if(unavailable) note='저장된 조회 결과가 만료되어 원본을 확인할 수 없습니다.'
-    return <p key={index} style={{whiteSpace:'pre-line'}}>{cleanReferenceMarker(text)} {check&&<span className="tag amber" title={note}>확인 필요{unavailable?' · 원본 확인 불가':''}</span>}</p>
+    return <p key={index} style={{whiteSpace:'pre-line'}}><ReferenceText text={text} /> {check&&<span className="tag amber" title={note}>확인 필요{unavailable?' · 원본 확인 불가':''}</span>}</p>
   }
   const sections=answer.tasks.map((t,index)=>{
     const start=conclusionCount(answer.tasks.slice(0,index))

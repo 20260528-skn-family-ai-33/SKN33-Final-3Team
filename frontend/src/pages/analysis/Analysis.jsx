@@ -23,6 +23,7 @@ import { PromptActions, Progress } from './ConversationSteps.jsx'
 import TaskResults from './TaskResults.jsx'
 import ArticleCards from './ArticleCards.jsx'
 import { cleanReferenceMarker } from './articlePresentation'
+import ReferenceText from './ReferenceText'
 import { completedMessages } from './completedMessages'
 import { CountryPicker, InterestProducts } from '../../components/pickers'
 import { countryCode } from '../../data/catalog'
@@ -257,7 +258,7 @@ function AnswerCard({ message, onSaveReport, onInterest, streamJobId }) {
       ))}
     </div>}
     {receiving && <><p role="status" className="note">검증 완료 · 답변 수신 중</p><p style={{whiteSpace:'pre-wrap',lineHeight:1.8}}>{cleanReferenceMarker(stream?.id===streamJobId?stream.text:'')}</p></>}
-    {a.tasks?.length ? <TaskResults answer={a} hideText={receiving}/> : !receiving && <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{cleanReferenceMarker(a.text)}</p>}
+    {a.tasks?.length ? <TaskResults answer={a} hideText={receiving}/> : !receiving && <p style={{ marginTop: 16, fontSize: 16, whiteSpace: 'pre-wrap', lineHeight: 1.8 }}><ReferenceText text={a.text} /></p>}
     {trend && <p className="note">월별 흐름은 조회된 첫 달과 마지막 달의 금액을 비교합니다.</p>}
     {a.warnings?.filter(w => w !== a.text).map(w => <p className="note" key={w}>{w}</p>)}
     {!a.tasks?.length && a.tables.map((table, i) => <ApiResults key={i} table={table} flow={c?.trade_flow} />)}

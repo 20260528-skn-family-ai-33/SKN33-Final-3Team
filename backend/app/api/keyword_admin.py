@@ -135,20 +135,70 @@ def category_row(store, identity, lock=False):
     return {**value, 'version': digest(value), 'editable': bool(created) and base is None, 'representative_terms': base or []}
 
 
+def major_state(store):
+    a, t = store.t('api_audit_event'), store.t('keyword_category')
+    events = store.rows(select(a.c.audit_id, a.c.action, a.c.before_json, a.c.after_json)
+        .where(a.c.target_type == 'CATEGORY', a.c.target_id.startswith('major:', autoescape=True),
+               a.c.action.in_(['CATEGORY_CREATE', 'CATEGORY_RENAME', 'CATEGORY_DELETE']))
+        .order_by(a.c.created_at, a.c.audit_id))
+    names, retired = set(), set()
+    base = {major for major, _, _ in TAX}
+    for event in events:
+        old = (event['before_json'] or {}).get('major_name')
+        new = (event['after_json'] or {}).get('major_name')
+        valid = isinstance(new, str) and 0 < len(new.strip()) <= 40 and new == new.strip()
+        if event['action'] == 'CATEGORY_CREATE':
+            if valid and new not in base:
+                names.add(new)
+                retired.discard(new)
+        elif old in names and event['action'] == 'CATEGORY_DELETE':
+            names.remove(old)
+            retired.add(old)
+        elif old in names and event['action'] == 'CATEGORY_RENAME':
+            if valid and new not in names and new not in base:
+                names.remove(old)
+                names.add(new)
+                retired.add(old)
+                retired.discard(new)
+    pairs = store.rows(select(t.c.category_id, t.c.major_name, t.c.minor_name).order_by(t.c.category_id))
+    used = {row['major_name'] for row in pairs}
+    return {'saved': names, 'retired': retired, 'used': used, 'base': base,
+            'version': digest({'events': [e['audit_id'] for e in events], 'pairs': pairs})}
+
+
 def saved_major_names(store):
-    # Standalone major creations already live in the existing CATEGORY audit history.
-    a = store.t('api_audit_event')
-    rows = store.rows(select(a.c.after_json).where(a.c.target_type == 'CATEGORY',
-        a.c.action == 'CATEGORY_CREATE', a.c.target_id.startswith('major:', autoescape=True)))
-    return {row['after_json']['major_name'] for row in rows
-            if isinstance(row['after_json'].get('major_name'), str) and row['after_json']['major_name']}
+    return major_state(store)['saved']
 
 
 def categories(store):
     t = store.t('keyword_category')
     rows = store.rows(select(t.c.category_id).order_by(t.c.category_id))
-    major_names = sorted(set(store.c.execute(select(t.c.major_name)).scalars()) | saved_major_names(store))
-    return {'items': [category_row(store, r['category_id']) for r in rows], 'major_names': major_names, 'base_majors': list(dict.fromkeys(major for major, _, _ in TAX))}
+    state = major_state(store)
+    names = sorted(state['used'] | state['saved'])
+    return {'items': [category_row(store, r['category_id']) for r in rows], 'major_names': names,
+            'editable_major_names': sorted(state['saved'] - state['used'] - state['base']),
+            'major_version': state['version'], 'base_majors': list(dict.fromkeys(major for major, _, _ in TAX))}
+
+
+def major_change(store, actor, data, removing=False):
+    # 호출자의 category_transaction이 생성·중분류 변경까지 같은 잠금으로 묶는다.
+    state = major_state(store)
+    confirm(data, state['version'])
+    old = data['major_name'].strip()
+    require(old in state['saved'], '대분류가 변경되었거나 삭제되었습니다.', 'VERSION_CONFLICT', 409)
+    t = store.t('keyword_category')
+    used = store.c.scalar(select(t.c.category_id).where(t.c.major_name == old).with_for_update().limit(1))
+    require(used is None and old not in state['base'], '중분류가 없는 관리자 대분류만 변경할 수 있습니다.', 'CATEGORY_IN_USE', 409)
+    after = {}
+    if not removing:
+        new = data['new_major_name'].strip()
+        require(0 < len(new) <= 40, '대분류는 1~40자로 입력하세요.')
+        duplicate = store.c.scalar(select(t.c.category_id).where(t.c.major_name == new).limit(1))
+        require(new not in state['saved'] | state['used'] | state['base'] and duplicate is None, '같은 대분류 또는 기본 분류 이름이 있습니다.', 'CATEGORY_EXISTS', 409)
+        after = {'major_name': new}
+    operation = audit(store, actor['user_id'], 'CATEGORY_DELETE' if removing else 'CATEGORY_RENAME',
+                      'CATEGORY', 'major:'+old, {'major_name': old}, after, data['reason'])
+    return {**operation, 'major_name': after.get('major_name'), 'categories': categories(store)}
 
 
 def category_change(store, actor, data, identity=None, removing=False):
@@ -160,10 +210,13 @@ def category_change(store, actor, data, identity=None, removing=False):
     major = data['major_name'].strip()
     if 'minor_name' not in data and before is None:
         require(0 < len(major) <= 40, '대분류는 1~40자로 입력하세요.')
-        require(major not in saved_major_names(store) and store.c.scalar(select(t.c.category_id).where(t.c.major_name == major).limit(1)) is None, '같은 대분류가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
+        state = major_state(store)
+        duplicate = store.c.scalar(select(t.c.category_id).where(t.c.major_name == major).limit(1))
+        require(major not in state['saved'] | state['used'] | state['base'] and duplicate is None, '같은 대분류가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
         operation = audit(store, actor['user_id'], 'CATEGORY_CREATE', 'CATEGORY', 'major:'+major, {}, {'major_name': major}, data['reason'])
-        return {**operation, 'major_name': major}
+        return {**operation, 'major_name': major, 'categories': categories(store)}
     require('minor_name' in data, '중분류 이름을 입력하세요.')
+    require(major not in major_state(store)['retired'], '삭제되거나 이름이 변경된 대분류입니다. 목록을 새로 확인하고, 같은 이름을 쓰려면 대분류를 먼저 다시 추가하세요.', 'CATEGORY_DELETED', 409)
     minor = data['minor_name'].strip()
     require(0 < len(major) <= 40 and 0 < len(minor) <= 60, '대분류는 40자, 중분류는 60자 이내입니다.')
     require((major, minor) not in {(a, b) for a, b, _ in TAX}, '기본 분류 이름은 관리자 분야로 사용할 수 없습니다.')
@@ -176,4 +229,4 @@ def category_change(store, actor, data, identity=None, removing=False):
     after, action = {'major_name': major, 'minor_name': minor}, 'CATEGORY_RENAME' if before else 'CATEGORY_CREATE'
     previous = {key: before[key] for key in ('major_name', 'minor_name')} if before else {}
     operation = audit(store, actor['user_id'], action, 'CATEGORY', identity, previous, after, data['reason'])
-    return {**operation, 'category_id': identity, 'category': category_row(store, identity)}
+    return {**operation, 'category_id': identity, 'category': category_row(store, identity), 'categories': categories(store)}

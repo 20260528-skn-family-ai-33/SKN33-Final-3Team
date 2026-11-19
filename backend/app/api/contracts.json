@@ -3281,5 +3281,84 @@
     "fields": [
       ["Path Parameters", "report_id", "string", "필수", "본인 소유 리포트 ID. 삭제 후 목록·상태·열람·다운로드에서 제외. 반복 삭제는 204."]
     ]
+  },
+  {
+    "id": 136,
+    "title": "API-136 관리자 미사용 대분류 이름 수정",
+    "route": "PATCH /api/v1/admin/keyword-majors",
+    "auth": "ADMIN",
+    "fields": [
+      [
+        "Request Body",
+        "major_name",
+        "string",
+        "필수",
+        "현재 대분류 이름."
+      ],
+      [
+        "Request Body",
+        "new_major_name",
+        "string",
+        "필수",
+        "trim 1~40자. 기존/기본 대분류 이름 중복 금지."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "API-101의 major_version. 잠금 획득 후 최신 버전과 비교, 불일치 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "trim 비공백 1~1000자."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인창 동의 true."
+      ]
+    ]
+  },
+  {
+    "id": 137,
+    "title": "API-137 관리자 미사용 대분류 삭제",
+    "route": "DELETE /api/v1/admin/keyword-majors",
+    "auth": "ADMIN",
+    "fields": [
+      [
+        "Request Body",
+        "major_name",
+        "string",
+        "필수",
+        "현재 대분류 이름."
+      ],
+      [
+        "Request Body",
+        "expected_version",
+        "string",
+        "필수",
+        "API-101의 major_version. 잠금 획득 후 최신 버전과 비교, 불일치 409."
+      ],
+      [
+        "Request Body",
+        "reason",
+        "string",
+        "필수",
+        "trim 비공백 1~1000자."
+      ],
+      [
+        "Request Body",
+        "confirmed",
+        "boolean",
+        "필수",
+        "확인창 동의 true."
+      ]
+    ]
   }
 ]

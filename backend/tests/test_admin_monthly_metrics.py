@@ -1,6 +1,6 @@
 import unittest
 from datetime import datetime
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, Boolean, DateTime, JSON, update
+from sqlalchemy import create_engine, MetaData, Table, Column, Integer, Boolean, DateTime, JSON, update, text
 from backend.app.api.database import Database, Store
 from backend.app.api.admin_metrics import current_counts, monthly_history
 
@@ -48,9 +48,9 @@ class MonthlyMetricsTest(unittest.TestCase):
             c.execute(self.users.insert(),{'user_id':1,'created_at':None})
             s=Store(self.db,c)
             rows=monthly_history(s,current_counts(s),datetime(2026,11,19))
-            self.assertIsNone(rows[-3]['total_members'])
-            self.assertIsNone(rows[-2]['total_members'])
-            self.assertIsNone(rows[-2]['member_source'])
+            self.assertEqual(rows[-3]['total_members'],0)
+            self.assertEqual(rows[-2]['total_members'],0)
+            self.assertEqual(rows[-2]['member_source'],'REGISTRATION')
             self.assertEqual(rows[-1]['total_members'],1)
 
     def test_active_cohort_start_dates_use_kst_boundary_and_exclude_cancelled(self):
@@ -70,12 +70,31 @@ class MonthlyMetricsTest(unittest.TestCase):
             self.assertEqual(rows[-2]['active_subscriptions'],0)
             self.assertEqual(rows[-2]['subscription_source'],'START_DATE')
 
-    def test_missing_or_invalid_active_start_dates_are_not_zero(self):
+    def test_missing_or_invalid_active_start_dates_are_excluded(self):
         for value in [None,'invalid','2026-10-01T12:00:00']:
             with self.subTest(value=value), self.engine.begin() as c:
                 c.execute(self.subs.delete())
                 c.execute(self.subs.insert(),{'enabled':True,'filters_json':{'enabled_since':value}})
                 s=Store(self.db,c)
                 rows=monthly_history(s,current_counts(s),datetime(2026,11,19))
-                self.assertIsNone(rows[-2]['active_subscriptions'])
+                self.assertEqual(rows[-2]['active_subscriptions'],0)
                 self.assertEqual(rows[-1]['active_subscriptions'],1)
+
+    def test_valid_rows_survive_unknown_dates_and_exclusions_are_reported(self):
+        from backend.app.api.admin import overview
+        with self.engine.begin() as c:
+            c.execute(self.users.insert(), [{'user_id':1,'created_at':datetime(2000,1,1)}, {'user_id':2,'created_at':None}])
+            c.execute(text("INSERT INTO users(user_id,created_at) VALUES (3,'invalid')"))
+            c.execute(self.subs.insert(), [
+                {'enabled': True, 'filters_json': {'enabled_since':'2000-01-01T00:00:00Z'}},
+                {'enabled': True, 'filters_json': {}},
+                {'enabled': True, 'filters_json': {'enabled_since':'2000-01-01T00:00:00'}},
+                {'enabled': True, 'filters_json': {'enabled_since':'invalid'}},
+                {'enabled': False, 'filters_json': {}},
+            ])
+            result=overview(Store(self.db,c))
+            self.assertEqual(result['excluded'], {'total_members':2,'active_subscriptions':3})
+            self.assertEqual(result['current'], {'total_members':3,'active_subscriptions':4})
+            for month in result['history'][:-1]:
+                self.assertEqual(month['total_members'],1)
+                self.assertEqual(month['active_subscriptions'],1)
