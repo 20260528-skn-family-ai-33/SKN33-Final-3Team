@@ -65,7 +65,7 @@ function OpsDashboard({ tab }) {
             <Btn to="/admin/members/BS40">상세보기</Btn>
           </div>
           <MonthlyLine rows={overview.data?.history || []} metric="total_members" label="월별 전체 회원" unit="명" color="#C8102E" />
-          <p className="note">월말 기록이 없는 달은 현재 회원의 가입일 기준으로 누적 집계합니다.</p>
+          <p className="note">현재 회원의 가입일 기준으로 월별 누적 집계합니다.</p>
         </section>
         <section className="card">
           <div className="between">
@@ -75,11 +75,11 @@ function OpsDashboard({ tab }) {
             </div>
           </div>
           <MonthlyLine rows={overview.data?.history || []} metric="active_subscriptions" label="월별 활성 구독" unit="건" color="#2B2350" />
-          <p className="note">월말 기록이 없는 달은 현재 유지 중인 구독의 시작일 기준 누적입니다. 해지·재구독 이전 이력은 포함하지 않습니다.</p>
+          <p className="note">현재 유지 중인 구독의 시작일 기준 누적입니다. 해지·재구독 이전 이력은 포함하지 않습니다.</p>
         </section>
       </div>
       <ErrorNotice error={overview.error} retry={overview.reload} />
-      <p className="note">최근 12개월 · 이번 달은 현재 값입니다. 저장된 월말 기록을 우선하고, 없는 달은 현재 회원·구독의 시작일로 보완합니다. 시작일이 불명확하면 빈칸으로 표시합니다.</p>
+      <p className="note">최근 12개월 · 이번 달은 현재 값입니다. 과거는 현재 회원·구독의 시작일 기준으로 계산하며, 시작일이 불명확하면 빈칸으로 표시합니다.</p>
       <section className="card">
         <ErrorNotice error={result.error} retry={result.reload} /><div className="between"><p className="t2">알림</p><Btn to={`/admin/inbox/${OPS_DETAIL[tab]}`}>상세보기</Btn></div>
         <AdminTabs label="운영 알림 유형" style={{ marginTop: 14 }} items={OPS_TABS.map(([label, id]) => ({ label, on: tab === label, to: `/admin/ops/${id}` }))} />

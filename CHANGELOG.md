@@ -2,12 +2,8 @@
 
 ## 2026-11-19
 
-### Fixed (Bug Fixes)
-- PATCH-001: Sync approved button colors, account tabs, and article role badges/placement into the running development checkout. Remove the duplicate member detail heading card and expose stored membership/subscription start dates. Monthly history aggregation remains pending. (commit: pending)
-- PATCH-001: Connect current member and enabled periodic subscription counts to the admin dashboard; remove empty historical charts. Monthly history remains unavailable. (commit: pending)
-- PATCH-001: Add up to 12 monthly member/subscription observations with gaps for missing records, a current-month point, and an idempotent KST month-boundary collector. Unify all admin subtabs as red underline navigation. (commit: pending)
-- PATCH-001: Fill missing historical member points from stored signup dates using KST month boundaries; preserve recorded snapshots and subscription gaps. (commit: pending)
-- PATCH-001: Backfill subscription chart gaps from start dates of currently active subscriptions, explicitly label this cohort basis, and prefer saved month-end totals. (commit: pending)
-- PATCH-001: Let keyword reviewers create a major category with its first subcategory, or add a subcategory under the selected major, and select the saved category immediately without losing the review reason. (commit: pending)
-- PATCH-001: Add independent inline major/minor creation in keyword review, including persistent standalone majors; reuse the review reason without category popups. (commit: pending)
-- PATCH-001: Allow major/minor category saves with a name alone; record an automatic category-addition audit description when the keyword review reason is empty. (commit: pending)
+### Changed
+- PATCH-001 (#106): Unify search button colors and account/admin subtabs; remove redundant account and member detail descriptions. Show article role badges beside cards under their corresponding answers. (commit: pending)
+- PATCH-001 (#106): Display member signup/subscription start dates and up to 12 monthly member/subscription totals using existing start dates. Historical totals may change with the current population; immutable history is deferred. (commit: pending)
+- PATCH-001 (#106): Add independent inline major/minor creation with automatic selection and name-only saves. Persist standalone majors in existing category audit events and minor categories in keyword_category. (commit: pending)
+- PATCH-001 (#106): Match the main DB schema without migrations: remove added table definitions, SQL files and the month-end collector. No database DDL or data deletion is performed. (commit: pending)

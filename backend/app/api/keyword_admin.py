@@ -135,11 +135,19 @@ def category_row(store, identity, lock=False):
     return {**value, 'version': digest(value), 'editable': bool(created) and base is None, 'representative_terms': base or []}
 
 
+def saved_major_names(store):
+    # Standalone major creations already live in the existing CATEGORY audit history.
+    a = store.t('api_audit_event')
+    rows = store.rows(select(a.c.after_json).where(a.c.target_type == 'CATEGORY',
+        a.c.action == 'CATEGORY_CREATE', a.c.target_id.startswith('major:', autoescape=True)))
+    return {row['after_json']['major_name'] for row in rows
+            if isinstance(row['after_json'].get('major_name'), str) and row['after_json']['major_name']}
+
+
 def categories(store):
     t = store.t('keyword_category')
     rows = store.rows(select(t.c.category_id).order_by(t.c.category_id))
-    saved = store.t('api_keyword_major')
-    major_names = store.c.execute(select(t.c.major_name).union(select(saved.c.major_name)).order_by('major_name')).scalars().all()
+    major_names = sorted(set(store.c.execute(select(t.c.major_name)).scalars()) | saved_major_names(store))
     return {'items': [category_row(store, r['category_id']) for r in rows], 'major_names': major_names, 'base_majors': list(dict.fromkeys(major for major, _, _ in TAX))}
 
 
@@ -152,10 +160,7 @@ def category_change(store, actor, data, identity=None, removing=False):
     major = data['major_name'].strip()
     if 'minor_name' not in data and before is None:
         require(0 < len(major) <= 40, '대분류는 1~40자로 입력하세요.')
-        majors = store.t('api_keyword_major')
-        duplicate = store.c.scalar(select(majors.c.major_name).where(majors.c.major_name == major))
-        require(duplicate is None and store.c.scalar(select(t.c.category_id).where(t.c.major_name == major).limit(1)) is None, '같은 대분류가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
-        store.c.execute(majors.insert().values(major_name=major, created_at=now()))
+        require(major not in saved_major_names(store) and store.c.scalar(select(t.c.category_id).where(t.c.major_name == major).limit(1)) is None, '같은 대분류가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
         operation = audit(store, actor['user_id'], 'CATEGORY_CREATE', 'CATEGORY', 'major:'+major, {}, {'major_name': major}, data['reason'])
         return {**operation, 'major_name': major}
     require('minor_name' in data, '중분류 이름을 입력하세요.')

@@ -66,3 +66,20 @@ class InlineCategoryTest(unittest.TestCase):
             self.assertEqual(self.call('POST','admin/keyword-categories',{**body,**patch}).status_code,400)
         major=self.client.get('/api/v1/admin/keyword-categories').json()['items'][0]['major_name']
         self.assertEqual(self.call('POST','admin/keyword-categories',{**body,'major_name':major}).status_code,409)
+
+    def test_existing_major_audit_is_used_without_added_tables(self):
+        from sqlalchemy import inspect
+        from backend.app.api.database import Store
+        from backend.app.api.admin import audit
+        self.seed_admin()
+        self.assertNotIn('api_keyword_major', inspect(self.engine).get_table_names())
+        self.assertNotIn('api_admin_monthly_snapshot', inspect(self.engine).get_table_names())
+        # Same shape as the major records saved by the previous implementation.
+        with self.engine.begin() as c:
+            audit(Store(self.app.state.database, c), self.uid, 'CATEGORY_CREATE', 'CATEGORY',
+                  'major:기존 추가 분야', {}, {'major_name':'기존 추가 분야'}, '대분류 추가')
+        listing = self.client.get('/api/v1/admin/keyword-categories').json()
+        self.assertIn('기존 추가 분야', listing['major_names'])
+        duplicate = self.call('POST','admin/keyword-categories',
+            {'major_name':'기존 추가 분야','reason':'중복','confirmed':True})
+        self.assertEqual(duplicate.status_code,409)

@@ -1,12 +1,10 @@
-"""Monthly admin totals. Never backfill unknown month ends from today's state."""
+"""월별 관리자 지표: 기존 회원·현재 활성 구독의 시작일 기준 누적."""
 from datetime import datetime, timezone, time
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, func, case
-from sqlalchemy.exc import IntegrityError
-from backend.app.api.common import ApiError, now, shift_month
+from backend.app.api.common import now, shift_month
 
 KST = ZoneInfo('Asia/Seoul')
-TABLE = 'api_admin_monthly_snapshot'
 
 
 def current_counts(store):
@@ -30,7 +28,7 @@ def registration_totals(store, months):
         cutoff = boundary.astimezone(timezone.utc).replace(tzinfo=None)
         columns.append(func.count(case((users.c.created_at < cutoff, 1))).label(f'm{index}'))
     counts = store.one(select(*columns).select_from(users))
-    # Stored month-end snapshots take priority; deleted users cannot be reconstructed from current rows.
+    # Deleted users cannot be reconstructed from current rows.
     return {month: None if counts['unknown'] else counts[f'm{index}'] for index, month in enumerate(months)}
 
 
@@ -56,47 +54,15 @@ def subscription_start_totals(store, months):
 def monthly_history(store, current, at=None):
     this_month = utc_time(at).astimezone(KST).date().replace(day=1)
     months = [shift_month(this_month, offset) for offset in range(-11, 1)]
-    try:
-        t = store.t(TABLE)
-    except ApiError as exc:
-        if exc.code != 'FEATURE_NOT_READY': raise
-        snapshots = []
-    else:
-        snapshots = store.rows(select(t).where(t.c.month >= months[0], t.c.month < this_month).order_by(t.c.month))
-    by_month = {row['month']: row for row in snapshots}
     registrations = registration_totals(store, months[:-1])
     subscriptions = subscription_start_totals(store, months[:-1])
     result = []
     for month in months:
         is_current = month == this_month
-        recorded = by_month.get(month)
-        source = current if is_current else recorded or {}
-        members = source.get('total_members') if is_current or recorded is not None else registrations[month]
-        active = source.get('active_subscriptions') if is_current or recorded is not None else subscriptions[month]
+        members = current['total_members'] if is_current else registrations[month]
+        active = current['active_subscriptions'] if is_current else subscriptions[month]
         result.append({'month': month.strftime('%Y-%m'), 'is_current': is_current,
             'total_members': members, 'active_subscriptions': active,
-            'subscription_source': 'CURRENT' if is_current else 'SNAPSHOT' if recorded is not None else 'START_DATE' if active is not None else None,
-            'member_source': 'CURRENT' if is_current else 'SNAPSHOT' if recorded is not None else 'REGISTRATION' if members is not None else None})
+            'subscription_source': 'CURRENT' if is_current else 'START_DATE' if active is not None else None,
+            'member_source': 'CURRENT' if is_current else 'REGISTRATION' if members is not None else None})
     return result
-
-
-
-def capture_month_end(store, at=None):
-    observed = utc_time(at)
-    local = observed.astimezone(KST)
-    # Month-boundary observation only. A restart later in the month cannot recreate history.
-    if local.day != 1 or local.hour != 0 or local.minute != 0:
-        return False
-    month = shift_month(local.date().replace(day=1), -1)
-    t = store.t(TABLE)
-    if store.one(select(t.c.month).where(t.c.month == month)):
-        return False
-    counts = current_counts(store)
-    try:
-        with store.c.begin_nested():
-            store.c.execute(t.insert().values(month=month, **counts, observed_at=observed.replace(tzinfo=None)))
-    except IntegrityError:
-        # A second worker may have saved this month while this worker was reading counts.
-        if not store.one(select(t.c.month).where(t.c.month == month)): raise
-        return False
-    return True

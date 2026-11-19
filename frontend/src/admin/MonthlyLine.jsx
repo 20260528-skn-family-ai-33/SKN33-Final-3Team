@@ -2,7 +2,7 @@ import { monthlySeries } from './monthlySeries'
 
 export default function MonthlyLine({ rows, metric, label, unit, color }) {
   const { points, segments, max, ticks } = monthlySeries(rows, metric)
-  const basis = point => point.is_current ? '현재' : metric === 'total_members' && point.member_source === 'REGISTRATION' ? '가입일 기준 누적' : metric === 'active_subscriptions' && point.subscription_source === 'START_DATE' ? '현재 구독 시작일 기준 누적' : '월말 기록'
+  const basis = point => point.is_current ? '현재' : metric === 'total_members' && point.member_source === 'REGISTRATION' ? '가입일 기준 누적' : metric === 'active_subscriptions' && point.subscription_source === 'START_DATE' ? '현재 구독 시작일 기준 누적' : '시작일 기준 누적'
   const w = 600, h = 250, left = 54, right = 20, top = 26, bottom = 38
   const x = index => left + index * (w - left - right) / Math.max(1, points.length - 1)
   const y = value => h - bottom - value / max * (h - top - bottom)

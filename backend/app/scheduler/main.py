@@ -251,8 +251,6 @@ def build_scheduler(un_state_dir=UN_STATE, un_scope=UN_SCOPE, un_api_env=UN_ENV,
     if str(values.get("SHORTNEWS_DAILY_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}:
         from backend.app.scheduler.jobs import shortnews_daily
         shortnews_daily.register_jobs(scheduler)
-    from backend.app.scheduler.jobs import admin_monthly_snapshot
-    admin_monthly_snapshot.register_jobs(scheduler, env_path=env_path)
     return scheduler
 
 

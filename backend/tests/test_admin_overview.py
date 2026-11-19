@@ -1,7 +1,7 @@
 """Current admin totals, without inventing historical monthly snapshots."""
 import unittest
 from types import SimpleNamespace
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, Boolean, String, Date, DateTime, JSON, update
+from sqlalchemy import create_engine, MetaData, Table, Column, Integer, Boolean, String, DateTime, JSON, update
 from backend.app.api import admin
 from backend.tests import test_backend_api as fixtures
 
@@ -12,7 +12,6 @@ class OverviewCountsTest(unittest.TestCase):
         meta=MetaData()
         self.users=Table('users',meta,Column('user_id',Integer,primary_key=True),Column('account_status',String),Column('created_at',DateTime))
         self.subs=Table('report_subscription',meta,Column('subscription_id',Integer,primary_key=True),Column('user_id',Integer),Column('enabled',Boolean),Column('filters_json',JSON))
-        Table('api_admin_monthly_snapshot', meta, Column('month', Date, primary_key=True), Column('total_members', Integer), Column('active_subscriptions', Integer), Column('observed_at', DateTime))
         meta.create_all(self.engine)
         self.tables=meta.tables
         self.addCleanup(self.engine.dispose)
