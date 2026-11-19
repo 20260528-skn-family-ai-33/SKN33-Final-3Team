@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import base64
 import logging
 from functools import lru_cache
+import math
 from pathlib import Path
 import time
 
@@ -12,6 +13,26 @@ FONT_FAMILY = 'ReportKorean'
 # 리포트 생성은 report 행 잠금을 잡은 트랜잭션 안에서 돈다(worker.py). 오래 기다리지 않고 실패해 잠금을 풀고 워커 재시도에 맡긴다.
 # 로컬 측정: 맑은 고딕 로드 0.005~0.042초. 서버(나눔고딕)는 재지 않은 임시값이라 API_REPORT_FONT_LOAD_SECONDS로 바꿀 수 있다.
 FONT_LOAD_SECONDS = 5
+FONT_LOAD_MAX_SECONDS = 30   # 페이지 기본 대기 시간(set_default_timeout)과 같다. 잠금을 잡고 이보다 오래 기다리지 않는다
+
+
+def font_load_seconds(settings):
+    """API_REPORT_FONT_LOAD_SECONDS. 숫자가 아니거나 음수·nan·inf면 기본값을 쓴다(nan이면 대기가 끝나지 않는다).
+    FONT_LOAD_MAX_SECONDS보다 크면 그 값으로 줄인다."""
+    value = settings.get('API_REPORT_FONT_LOAD_SECONDS', FONT_LOAD_SECONDS)
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        seconds = math.nan
+    if not math.isfinite(seconds) or seconds < 0:
+        logging.getLogger(__name__).warning('report_font_load_seconds_invalid value=%r default=%s', value, FONT_LOAD_SECONDS)
+        return FONT_LOAD_SECONDS
+    if seconds > FONT_LOAD_MAX_SECONDS:
+        logging.getLogger(__name__).warning('report_font_load_seconds_capped value=%r max=%s', value, FONT_LOAD_MAX_SECONDS)
+        return FONT_LOAD_MAX_SECONDS
+    return seconds
+
+
 FONT_STATES_JS = """() => [...document.fonts]
     .filter(f => f.family.replace(/["']/g, '') === '""" + FONT_FAMILY + """').map(f => f.status)"""
 
@@ -87,7 +108,7 @@ def print_page(report_type, context, settings, *, scale=1):
                 # fonts.ready는 레이아웃이 글꼴 로드를 시작하기 전이면 바로 끝나므로('unloaded'/'loading'에서 확인) 로드를 직접 시작한다.
                 # JS를 끈 페이지는 setTimeout이 돌지 않아 페이지 안에서 기다리면 상한을 둘 수 없다. 상태를 여기서 확인한다.
                 page.evaluate("() => { document.fonts.load('16px " + FONT_FAMILY + "', '가').catch(() => {}); }")
-                deadline = time.monotonic() + float(settings.get('API_REPORT_FONT_LOAD_SECONDS', FONT_LOAD_SECONDS))
+                deadline = time.monotonic() + font_load_seconds(settings)
                 while True:
                     states = page.evaluate(FONT_STATES_JS)
                     if (states and all(s == 'loaded' for s in states)) or 'error' in states or time.monotonic() > deadline:

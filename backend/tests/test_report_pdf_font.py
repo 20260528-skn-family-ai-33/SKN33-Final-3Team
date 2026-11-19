@@ -150,5 +150,19 @@ class ReportFontTest(unittest.TestCase):
         self.assertNotIn('API_REPORT_FONT', caught.exception.message)   # 글꼴 파일 탓으로 안내하지 않는다
 
 
+class FontLoadSecondsTest(unittest.TestCase):
+    def test_invalid_setting_falls_back_to_default(self):
+        # 숫자가 아니면 float()가 ValueError로 작업 전체를 실패시켰다. nan이면 대기가 끝나지 않는다.
+        from backend.app.services.report_pdf import FONT_LOAD_SECONDS, font_load_seconds
+        for value in ('abc', 'nan', 'inf', '-1'):
+            with self.subTest(value=value), self.assertLogs('backend.app.services.report_pdf', 'WARNING'):
+                self.assertEqual(font_load_seconds(Settings(values={'API_REPORT_FONT_LOAD_SECONDS': value})), FONT_LOAD_SECONDS)
+        self.assertEqual(font_load_seconds(Settings(values={'API_REPORT_FONT_LOAD_SECONDS': '12.5'})), 12.5)
+        with self.assertLogs('backend.app.services.report_pdf', 'WARNING'):   # report 행 잠금을 잡고 오래 기다리지 않는다
+            self.assertEqual(font_load_seconds(Settings(values={'API_REPORT_FONT_LOAD_SECONDS': '300'})), 30)
+        self.assertEqual(font_load_seconds(Settings(values={'API_REPORT_FONT_LOAD_SECONDS': ''})), FONT_LOAD_SECONDS)   # 빈 값은 기본값
+        self.assertEqual(font_load_seconds({}), FONT_LOAD_SECONDS)
+
+
 if __name__ == '__main__':
     unittest.main()

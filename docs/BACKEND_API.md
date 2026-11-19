@@ -200,7 +200,7 @@ python -m backend.app.api.worker
 
 채팅 에이전트가 붙으면 API·worker는 `API_REDIS_URL`(`redis://:<비밀번호>@127.0.0.1:6379/0`)로 Redis에 접속한다. Redis는 `deploy/redis/docker-compose.yml`로 띄우고, 같은 비밀번호를 git에 올리지 않는 `deploy/redis/redis-auth.conf`에도 둔다([채팅 에이전트 설계](AGENT_DESIGN.md) D-07). 인증 세션·요청 제한(`api/redis_store.py`)이 이미 이 값과 `API_REDIS_PREFIX`를 읽으며, 채팅 에이전트도 같은 Redis를 쓴다(D-01).
 
-로컬 HTTP 개발은 `API_COOKIE_SECURE=false`, HTTPS 배포는 `true`로 둔다. 프론트/백엔드의 호스트명을 localhost 또는 127.0.0.1 중 하나로 통일한다. 교차 사이트 배포는 같은 사이트 프록시 구성을 전제로 한다(SameSite=Lax). `API_CORS_ORIGINS`에 정확한 프론트 Origin을 지정한다. API/worker가 같은 파일 저장소에 접근해야 하며, Linux는 `API_REPORT_FONT`에 한글 TTF 글꼴을 지정한다.
+로컬 HTTP 개발은 `API_COOKIE_SECURE=false`, HTTPS 배포는 `true`로 둔다. 프론트/백엔드의 호스트명을 localhost 또는 127.0.0.1 중 하나로 통일한다. 교차 사이트 배포는 같은 사이트 프록시 구성을 전제로 한다(SameSite=Lax). `API_CORS_ORIGINS`에 정확한 프론트 Origin을 지정한다. API/worker가 같은 파일 저장소에 접근해야 하며, Linux는 `API_REPORT_FONT`에 한글 TTF 글꼴을 지정한다. `API_REPORT_FONT_LOAD_SECONDS`(기본 5초, 서버에서 재지 않은 임시값)는 PDF 글꼴 로드 대기 상한이다. 넘기면 재시도 가능한 오류로 워커가 다시 시도한다. 숫자가 아니거나 음수면 기본값을, 30초보다 크면 30초를 쓰고 경고 로그를 남긴다. 서버 로그에 `report_font_not_loaded states=['loading']`가 반복되면 늘린다.
 
 - `/docs`, `/openapi.json`: API 요청 필드·인증·보류 이유.
 - `/health/live`: 프로세스 확인.
