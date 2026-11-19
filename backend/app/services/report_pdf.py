@@ -4,8 +4,16 @@ import base64
 import logging
 from functools import lru_cache
 from pathlib import Path
+import time
 
 from backend.app.api.common import ApiError
+
+FONT_FAMILY = 'ReportKorean'
+# 리포트 생성은 report 행 잠금을 잡은 트랜잭션 안에서 돈다(worker.py). 오래 기다리지 않고 실패해 잠금을 풀고 워커 재시도에 맡긴다.
+# 로컬 측정: 맑은 고딕 로드 0.005~0.042초. 서버(나눔고딕)는 재지 않은 임시값이라 API_REPORT_FONT_LOAD_SECONDS로 바꿀 수 있다.
+FONT_LOAD_SECONDS = 5
+FONT_STATES_JS = """() => [...document.fonts]
+    .filter(f => f.family.replace(/["']/g, '') === '""" + FONT_FAMILY + """').map(f => f.status)"""
 
 
 def browser_font(data):
@@ -41,8 +49,8 @@ def browser_font(data):
 def font_css(path, mtime_ns, size):
     # The file signature invalidates the cache when the configured font is replaced.
     encoded = base64.b64encode(browser_font(Path(path).read_bytes())).decode('ascii')
-    return ("<style>@font-face{font-family:ReportKorean;src:url(data:font/ttf;base64,"
-            + encoded + ")}body{font-family:ReportKorean,sans-serif}</style>")
+    return ("<style>@font-face{font-family:" + FONT_FAMILY + ";src:url(data:font/ttf;base64,"
+            + encoded + ")}body{font-family:" + FONT_FAMILY + ",sans-serif}</style>")
 
 
 @contextmanager
@@ -75,11 +83,22 @@ def print_page(report_type, context, settings, *, scale=1):
                 stage='HTML_LOAD'
                 page.set_content(html, wait_until='load')
                 stage='FONT_LOAD'
-                page.evaluate('document.fonts.ready')
                 # 지정한 한글 글꼴을 브라우저가 거부하면 한글이 빠진 PDF가 조용히 만들어진다. 저장 전에 로드 결과를 확인한다.
-                states = page.evaluate("""() => [...document.fonts]
-                    .filter(f => f.family.replace(/["']/g, '') === 'ReportKorean').map(f => f.status)""")
+                # fonts.ready는 레이아웃이 글꼴 로드를 시작하기 전이면 바로 끝나므로('unloaded'/'loading'에서 확인) 로드를 직접 시작한다.
+                # JS를 끈 페이지는 setTimeout이 돌지 않아 페이지 안에서 기다리면 상한을 둘 수 없다. 상태를 여기서 확인한다.
+                page.evaluate("() => { document.fonts.load('16px " + FONT_FAMILY + "', '가').catch(() => {}); }")
+                deadline = time.monotonic() + float(settings.get('API_REPORT_FONT_LOAD_SECONDS', FONT_LOAD_SECONDS))
+                while True:
+                    states = page.evaluate(FONT_STATES_JS)
+                    if (states and all(s == 'loaded' for s in states)) or 'error' in states or time.monotonic() > deadline:
+                        break
+                    page.wait_for_timeout(100)   # time.sleep과 달리 기다리는 동안 route 등 Playwright 이벤트를 처리한다
                 if not states or any(s != 'loaded' for s in states):
+                    logging.getLogger(__name__).warning('report_font_not_loaded states=%s', states)
+                    # 'error'는 글꼴 파일을 고쳐야 하고, 로드가 끝나지 않은 경우는 다시 시도하면 될 수 있다.
+                    if states and 'error' not in states:
+                        raise ApiError(503, 'REPORT_FONT_UNAVAILABLE',
+                                       'PDF 한글 글꼴을 제시간에 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.', retryable=True)
                     raise ApiError(503, 'REPORT_FONT_UNAVAILABLE',
                                    'PDF 한글 글꼴을 브라우저가 읽지 못했습니다. API_REPORT_FONT의 글꼴 파일을 확인하세요.')
                 stage='DOCUMENT_RENDER'
