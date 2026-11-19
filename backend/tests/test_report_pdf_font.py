@@ -39,7 +39,7 @@ class ReportFontTest(unittest.TestCase):
         self.broken = Path(self.directory.name) / 'with-tsi3.ttf'
         font.save(str(self.broken))
 
-    def render(self, font_path, text='미국 화장품'):
+    def render(self, font_path, text='미국 화장품', **settings):
         from pypdf import PdfReader
         from backend.app.services import report_templates as rt
         from backend.app.services.report_pdf import font_css, template_pdf
@@ -47,7 +47,7 @@ class ReportFontTest(unittest.TestCase):
         context = rt.sample_context('ondemand')
         context['conditions']['hs_items'][0].update(label=text, display=text)
         try:
-            pdf = template_pdf('RPT_ON_DEMAND', context, {'API_REPORT_FONT': str(font_path)})
+            pdf = template_pdf('RPT_ON_DEMAND', context, {'API_REPORT_FONT': str(font_path), **settings})
         except ApiError as exc:
             if exc.code == 'REPORT_RENDERER_UNAVAILABLE':
                 self.skipTest(f'PDF 렌더러 없음: {exc}')
@@ -102,6 +102,66 @@ class ReportFontTest(unittest.TestCase):
         with self.assertRaises(ApiError) as caught:
             self.render(garbage)
         self.assertEqual(caught.exception.code, 'REPORT_FONT_UNAVAILABLE')
+        self.assertFalse(caught.exception.retryable)   # 글꼴 파일 문제는 다시 해도 같다
+
+    def test_font_not_yet_used_by_layout_is_loaded_before_check(self):
+        # 레이아웃이 글꼴 로드를 시작하기 전이면 fonts.ready가 바로 끝나 'unloaded'로 실패했다(간헐적 리포트 실패).
+        # 글자가 없는 문서로 그 상태를 고정해 재현한다.
+        from unittest.mock import patch
+        from backend.app.services.report_pdf import font_css, template_pdf
+        font_css.cache_clear()
+        with patch('backend.app.services.report_templates.render', return_value='<html><head></head><body></body></html>'):
+            try:
+                pdf = template_pdf('RPT_ON_DEMAND', {}, {'API_REPORT_FONT': str(self.font)})
+            except ApiError as exc:
+                if exc.code == 'REPORT_RENDERER_UNAVAILABLE':
+                    self.skipTest(f'PDF 렌더러 없음: {exc}')
+                raise
+        self.assertTrue(pdf.startswith(b'%PDF'))
+
+    def test_font_loading_at_first_check_waits_until_loaded(self):
+        # 첫 확인에서 'loading'이면 기다렸다가 다시 확인해 'loaded'로 통과해야 한다(서버에서 로드가 늦는 경우).
+        from unittest.mock import patch
+        try:
+            from playwright.sync_api import Page
+        except ImportError:
+            self.skipTest('Playwright 없음')
+        from backend.app.services import report_pdf
+        first_loading = ("() => { if (!window.__fontPolled) { window.__fontPolled = true; return ['loading']; }"
+                         " return (" + report_pdf.FONT_STATES_JS + ")(); }")
+        waits, original = [], Page.wait_for_timeout
+        def spy(page, timeout):
+            waits.append(timeout)
+            return original(page, timeout)
+        with patch.object(report_pdf, 'FONT_STATES_JS', first_loading), patch.object(Page, 'wait_for_timeout', spy):
+            text = self.render(self.font)
+        self.assertTrue(waits)            # 한 번 이상 기다린 뒤
+        self.assertIn('미국', text)        # 한글이 든 PDF로 끝난다
+
+    def test_font_still_loading_after_limit_is_retryable(self):
+        # 글꼴 파일이 아니라 로드 시간이 문제인 경우다. 워커가 리포트 작업을 다시 시도하도록 retryable로 올린다.
+        from unittest.mock import patch
+        from backend.app.services import report_pdf
+        with patch.object(report_pdf, 'FONT_STATES_JS', "() => ['loading']"), \
+                self.assertRaises(ApiError) as caught:
+            self.render(self.font, API_REPORT_FONT_LOAD_SECONDS='0.2')   # 설정값(문자열)으로 상한을 줄인다
+        self.assertEqual(caught.exception.code, 'REPORT_FONT_UNAVAILABLE')
+        self.assertTrue(caught.exception.retryable)
+        self.assertNotIn('API_REPORT_FONT', caught.exception.message)   # 글꼴 파일 탓으로 안내하지 않는다
+
+
+class FontLoadSecondsTest(unittest.TestCase):
+    def test_invalid_setting_falls_back_to_default(self):
+        # 숫자가 아니면 float()가 ValueError로 작업 전체를 실패시켰다. nan이면 대기가 끝나지 않는다.
+        from backend.app.services.report_pdf import FONT_LOAD_SECONDS, font_load_seconds
+        for value in ('abc', 'nan', 'inf', '-1'):
+            with self.subTest(value=value), self.assertLogs('backend.app.services.report_pdf', 'WARNING'):
+                self.assertEqual(font_load_seconds(Settings(values={'API_REPORT_FONT_LOAD_SECONDS': value})), FONT_LOAD_SECONDS)
+        self.assertEqual(font_load_seconds(Settings(values={'API_REPORT_FONT_LOAD_SECONDS': '12.5'})), 12.5)
+        with self.assertLogs('backend.app.services.report_pdf', 'WARNING'):   # report 행 잠금을 잡고 오래 기다리지 않는다
+            self.assertEqual(font_load_seconds(Settings(values={'API_REPORT_FONT_LOAD_SECONDS': '300'})), 30)
+        self.assertEqual(font_load_seconds(Settings(values={'API_REPORT_FONT_LOAD_SECONDS': ''})), FONT_LOAD_SECONDS)   # 빈 값은 기본값
+        self.assertEqual(font_load_seconds({}), FONT_LOAD_SECONDS)
 
 
 if __name__ == '__main__':

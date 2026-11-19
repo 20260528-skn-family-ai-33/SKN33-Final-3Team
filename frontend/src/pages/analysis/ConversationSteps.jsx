@@ -3,7 +3,8 @@ import Icon from '../../components/Icon'
 import { Btn, Check } from '../../components/ui'
 import { Hs4Search } from '../../components/pickers'
 import { countryName, productChoiceLabel } from '../../data/catalog'
-import { monthEndDate } from '../../api/adapters'
+import { monthEndDate, reportItemLabels } from '../../api/adapters'
+import Flag from '../../components/Flag'
 
 export function Progress({job}) {
   const [time,setTime]=useState(Date.now)
@@ -40,25 +41,29 @@ export function PromptActions({prompt,busy,reply,onDirectInput}) {
   const [countries,setCountries]=useState([])
   const [products,setProducts]=useState([])
   const toggle=(list,value)=>list.includes(value)?list.filter(v=>v!==value):[...list,value]
-  const selectHs=code=>!busy && reply({hs_item:{hs_code:code,hs_ver:'HS2022'}})
+  const hsVer=prompt.hs_ver==='HS2017'?'HS2017':'HS2022'
+  const selectHs=code=>!busy && reply({hs_item:{hs_code:code,hs_ver:hsVer}})
   const preview=prompt.report_preview
   return <div className="chat-step"><strong>{prompt.message}</strong>
     {prompt.choices?.length>0 && <div className="chips">{prompt.choices.map(c=>{
       const code=c.hs_item?.hs_code || (prompt.kind==='HS_ITEM' && /^(?:\d{4}|\d{6})$/.test(c.choice_id) ? c.choice_id : null)
-      return <Btn key={c.choice_id} disabled={busy} onClick={()=>reply({choice_ids:[c.choice_id]})}>{productChoiceLabel(code,c.label)}</Btn>
+      return <Btn key={c.choice_id} disabled={busy} onClick={()=>reply({choice_ids:[c.choice_id]})}>{prompt.kind==='COUNTRY'&&<Flag code={c.choice_id} blank={false} />}{productChoiceLabel(code,c.label)}</Btn>
     })}</div>}
     {prompt.kind==='COUNTRY' && <div><Btn disabled={busy} onClick={onDirectInput}>목록에 없는 국가 직접 입력</Btn><p className="note">전체 국가명 또는 국가 코드로 입력하세요. 예: 중국, CN</p></div>}
     {prompt.kind==='HS_ITEM' && <>
-    <p className="note">품목명이나 HS 코드로 검색하세요. 4자리 코드는 HS4 전체, 6자리 코드는 세부품목으로 선택할 수 있습니다.</p>
-    <Hs4Search hs6First group={group} onConfirm={setGroup} onSelectProduct={selectHs}
+    <p className="note">{hsVer==='HS2017' ? '등록된 HS2017 품목명이나 코드로 검색하세요. ' : '품목명이나 HS 코드로 검색하세요. '}4자리 코드는 HS4 전체, 6자리 코드는 세부품목으로 선택할 수 있습니다.</p>
+    <Hs4Search hs6First hsVer={hsVer} group={group} onConfirm={setGroup} onSelectProduct={selectHs}
       buttonLabel={()=>'이 HS4 전체로 분석'} onSelectAll={selected=>selected && selectHs(selected.code)}/>
     <div className="chips">{group?.items.map(([code,name])=><Btn key={code} disabled={busy} onClick={()=>selectHs(code)}>{productChoiceLabel(code,name)}</Btn>)}</div></>}
     {prompt.kind==='INTEREST_SELECT' && <><p>국가 {countries.length}/20 · 품목 {products.length}/5</p><div className="chips">
-      {prompt.interests?.country_codes?.map(c=><Btn key={c} aria-pressed={countries.includes(c)} kind={countries.includes(c)?'plum':'line'} disabled={busy||(!countries.includes(c)&&countries.length>=20)} onClick={()=>setCountries(toggle(countries,c))}>{countryName(c)}</Btn>)}
+      {prompt.interests?.country_codes?.map(c=><Btn key={c} aria-pressed={countries.includes(c)} kind={countries.includes(c)?'plum':'line'} disabled={busy||(!countries.includes(c)&&countries.length>=20)} onClick={()=>setCountries(toggle(countries,c))}><Flag code={c} />{countryName(c)}</Btn>)}
       {prompt.interests?.hs_items?.map(h=><Btn key={h.hs_ver+h.hs_code} aria-pressed={products.includes(h)} kind={products.includes(h)?'plum':'line'} disabled={busy||(!products.includes(h)&&products.length>=5)} onClick={()=>setProducts(toggle(products,h))}>{productChoiceLabel(h.hs_code,h.name_ko)}</Btn>)}</div>
       <Btn kind="red" disabled={busy||(!countries.length&&!products.length)} onClick={()=>reply({interest_selection:{country_codes:countries,hs_items:products}})}>선택 적용</Btn></>}
-    {preview && <><p>{preview.conditions.period.start} ~ {monthEndDate(preview.conditions.period.end)} · {preview.conditions.country_codes?.map(countryName).join(', ')||'전체 국가'}{preview.conditions.hs_items?.map(h=>' · HS '+h.hs_code)}</p>
+    {preview && <><p>{[preview.conditions.period.start + ' ~ ' + monthEndDate(preview.conditions.period.end),
+      preview.conditions.country_codes?.map(countryName).join(', ') || '전체 국가',
+      ...reportItemLabels(preview.conditions.hs_items, {}, true)].join(' · ')}</p>
       {preview.conditions.compare_period && <p>비교 기간 {preview.conditions.compare_period.start} ~ {monthEndDate(preview.conditions.compare_period.end)}</p>}
+      {preview.extra_compare_periods?.map(p=><p key={`${p.start}/${p.end}`}>추가 비교 기간 {p.start} ~ {monthEndDate(p.end)}</p>)}
       {preview.adjustments?.map(a=><p key={a}>{a}</p>)}
       <div className="chips">{['PDF','DOCX'].map(f=><Check key={f} checked={formats.includes(f)} onChange={()=>setFormats(toggle(formats,f))}>{f}</Check>)}</div>
       <div className="chips">{[true,false].map(on=><Btn key={String(on)} kind={on?'red':'line'} disabled={busy||(on&&!formats.length)} onClick={()=>reply({report_confirmation:{preview_id:preview.preview_id,formats:formats.length?formats:['PDF'],confirm:on}})}>{on?'확인하고 생성':'생성 취소'}</Btn>)}</div></>}

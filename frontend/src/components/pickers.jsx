@@ -2,11 +2,17 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import Icon from './Icon'
 import { Btn, Check, Loading } from './ui'
-import { countries, registerProducts, toggleValue, productName, productChoiceLabel } from '../data/catalog'
+import { countries, countryCode, registerProducts, toggleValue, productName, productChoiceLabel } from '../data/catalog'
 import { api } from '../api/client'
 import { useQuery, ErrorNotice, useDebouncedValue } from '../api/hooks'
 import { useApp } from '../store'
 import { mapLimited } from '../api/integration'
+import Flag from './Flag'
+
+// 국기용 국가 코드. 분석 조건의 '한국(대한민국)' 선택지는 대한민국 국기를 쓴다(#132).
+const KOREA_TOTAL = '__KOREA_TOTAL__', KOREA_LABEL = '한국(대한민국)'
+const flagOf = c => c.country_code === KOREA_TOTAL ? 'KR' : c.country_code
+const flagByName = name => name === KOREA_LABEL ? 'KR' : countryCode(name)
 
 const HS_PREVIEW_LENGTH = 52
 const compactHsName = name => name.length > HS_PREVIEW_LENGTH ? name.slice(0, HS_PREVIEW_LENGTH - 1) + '…' : name
@@ -21,7 +27,11 @@ function FullHsName({ name, code }) {
 
 /** HS4 검색·확정 입력. 확정되면 onConfirm(group)을 부른다.
  * expandGroup: HS4 코드(4자리)를 정확히 넣으면 목록에 하위 HS6도 펼쳐, HS4 전체나 HS6 하나를 바로 고르게 한다(수출입 순위). */
-export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelectProduct, expandGroup, hs6First }) {
+// hsVer: 검색·분류 판본. HS2017은 그 판본을 되묻는 채팅 품목 선택에서만 쓰며, 코드만으로 키를 잡는 품목명 목록(registerProducts)에는
+// HS2022 이름과 섞이지 않게 넣지 않는다.
+export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelectProduct, expandGroup, hs6First, hsVer = 'HS2022' }) {
+  const edition = hsVer === 'HS2022' ? {} : { hs_ver: hsVer }
+  const register = items => { if (hsVer === 'HS2022') registerProducts(items) }
   const { run } = useApp()
   const [query, setQuery] = useState(group ? `${group.code} · ${group.name}` : '')
   const [open, setOpen] = useState(false)
@@ -38,16 +48,16 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const exactProduct = !!onSelectProduct && !hs4Only && /^\d{6}$/.test(settled)
   const chatGroupCode = hs6First && /^\d{4}$/.test(settled)
   const searchDepth = exactProduct || (hs6First && !hs4Only && !chatGroupCode) ? 6 : 4
-  const search = useQuery('/reference/hs-codes', { q: settled, depth: searchDepth, limit: 5 }, settled.length >= 1 && !confirmed)
+  const search = useQuery('/reference/hs-codes', { q: settled, depth: searchDepth, limit: 5, ...edition }, settled.length >= 1 && !confirmed)
   const tryProducts = !!onSelectProduct && !hs4Only && searchDepth === 4 && settled.length>=1 && !confirmed && !/^\d+$/.test(settled)
-  const fallback = useQuery('/reference/hs-codes', { q: settled, depth: 6, limit: 5 }, tryProducts)
+  const fallback = useQuery('/reference/hs-codes', { q: settled, depth: 6, limit: 5, ...edition }, tryProducts)
   const preferProducts = tryProducts && search.data?.match_type!=='EXACT' && !!fallback.data && (!search.data?.items.length || fallback.data.match_type === 'EXACT')
   const active = preferProducts ? fallback : search
   const found = (settled === searchText ? active.data?.items || [] : [])
     .filter(h => h.depth === (preferProducts ? 6 : searchDepth) && (!exactProduct || h.hs_code === searchText))
   const exactGroup = (!hs4Only || hs6First) && (expandGroup || hs6First) && onSelectProduct && /^\d{4}$/.test(searchText)
     ? found.find(h => h.hs_code === searchText && h.depth === 4) : null
-  const children = useQuery(`/reference/hs-codes/${exactGroup?.hs_code}/children`, { hs_ver: 'HS2022' }, !!exactGroup && open && !confirmed)
+  const children = useQuery(`/reference/hs-codes/${exactGroup?.hs_code}/children`, { hs_ver: hsVer }, !!exactGroup && open && !confirmed)
   const results = exactGroup ? [exactGroup, ...(children.data?.items || [])] : found
   // 채팅의 정확한 HS4 검색은 하위 목록 로딩·선택과 무관하게 전체 범위를 확정할 수 있다.
   const selectableGroup = confirmed ? group : hs6First && exactGroup ? { code: exactGroup.hs_code, name: exactGroup.name_ko } : null
@@ -67,15 +77,15 @@ export function Hs4Search({ group, onConfirm, buttonLabel, onSelectAll, onSelect
   const select = async h => {
     const revision = ++selection.current
     setOpen(false)
-    registerProducts([h])
+    register([h])
     if (h.depth === 6) {
       onSelectProduct(h.hs_code)
       setQuery('')
       return
     }
-    const data = await api(`/reference/hs-codes/${h.hs_code}/children`, { query: { hs_ver: 'HS2022' } })
+    const data = await api(`/reference/hs-codes/${h.hs_code}/children`, { query: { hs_ver: hsVer } })
     if (revision !== selection.current) return
-    registerProducts(data.items)
+    register(data.items)
     setQuery(`${h.hs_code} · ${h.name_ko}`)
     onConfirm({ code: h.hs_code, name: h.name_ko, items: data.items.map(item => [item.hs_code, item.name_ko]) })
   }
@@ -180,7 +190,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
   const continents = (regions.data?.items || []).filter(r => !r.parent_id)
   const countryNames = countries.map(c => c.name)
   const allCountriesSelected = countryNames.length > 0 && countryNames.every(name => value.includes(name))
-  const choices=includeKorea?[{country_code:'__KOREA_TOTAL__',name:'한국(대한민국)'},...countries]:countries
+  const choices=includeKorea?[{country_code:KOREA_TOTAL,name:KOREA_LABEL},...countries]:countries
   const list = choices.filter(c => !query.trim() || c.name.includes(query.trim()))
   const shown = variant === 'chips' && !query.trim()
     ? [...choices.filter(c => value.includes(c.name)), ...choices.filter(c => !value.includes(c.name)).slice(0, 3)]
@@ -221,7 +231,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
             const on = value.includes(c.name)
             return (
               <Check key={c.name} checked={on} onChange={() => onChange(toggleValue(value, c.name))} className={'li' + (on ? ' sel' : '')} style={{ padding: '13px 16px', gap: 12 }}>
-                <span style={{ fontSize: 15, fontWeight: 700 }}>{c.name}</span>
+                <span style={{ fontSize: 15, fontWeight: 700 }}><Flag code={flagOf(c)} />{c.name}</span>
               </Check>
             )
           })}
@@ -231,7 +241,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
         <div className="chips" style={{ marginTop: 10 }}>
           {shown.map(c => {
             const on = value.includes(c.name)
-            return <button type="button" key={c.name} className={'chip sm' + (on ? ' on' : '')} aria-pressed={on} onClick={() => onChange(toggleValue(value, c.name))}>{on ? '✓ ' : ''}{c.name}</button>
+            return <button type="button" key={c.name} className={'chip sm' + (on ? ' on' : '')} aria-pressed={on} onClick={() => onChange(toggleValue(value, c.name))}>{on ? '✓ ' : ''}<Flag code={flagOf(c)} />{c.name}</button>
           })}
         </div>
       )}
@@ -241,7 +251,7 @@ export function CountryPicker({ value, onChange, variant = 'grid', includeKorea 
         </div>
         {value.length ? <ul className="chips">{value.map(name=><li key={name}>
           <button type="button" className="chip sm" aria-label={`${name} 선택 삭제`}
-            onClick={()=>onChange(value.filter(item=>item!==name))}>{name} ×</button>
+            onClick={()=>onChange(value.filter(item=>item!==name))}><Flag code={flagByName(name)} />{name} ×</button>
         </li>)}</ul> : <p className="note">선택한 국가가 없습니다.</p>}
       </div>}
     </>

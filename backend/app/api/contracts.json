@@ -241,6 +241,13 @@
         "integer",
         "선택",
         "기본 5, 최대 5."
+      ],
+      [
+        "Query Parameters",
+        "hs_ver",
+        "string",
+        "선택",
+        "HS2022(기본) 또는 HS2017. HS2017은 그 판본을 되묻는 채팅 품목 선택에서 쓴다."
       ]
     ]
   },
@@ -262,7 +269,7 @@
         "hs_ver",
         "string",
         "필수",
-        "HS2022. 선택한 상위 코드와 동일한 판본. 2022 축약 표기는 허용하지 않음."
+        "HS2022 또는 HS2017. 선택한 상위 코드와 동일한 판본. HS2017은 그 판본을 되묻는 채팅 품목 선택에서 쓴다. 2022 축약 표기는 허용하지 않음."
       ]
     ]
   },
@@ -390,10 +397,17 @@
       ],
       [
         "Query Parameters",
+        "hs_codes",
+        "string[]",
+        "선택",
+        "다중 품목 HS4·HS6 코드. 반복 파라미터, 최대 200개. hs_code와 동시 지정 불가. hs_ver=HS2022 필수. 겹치는 범위는 중복 집계하지 않음."
+      ],
+      [
+        "Query Parameters",
         "hs_ver",
         "string",
         "조건부",
-        "hs_code 사용 시 필수."
+        "hs_code 또는 hs_codes 사용 시 필수."
       ],
       [
         "Query Parameters",
@@ -429,6 +443,13 @@
         "integer",
         "선택",
         "기본 24. 최신 정상 공개월까지. 기간 직접 입력과 동시 사용 불가."
+      ],
+      [
+        "Query Parameters",
+        "view",
+        "string",
+        "선택",
+        "FULL(기본): 결과표 저장. DASHBOARD: 동일 추이를 결과표 저장 없이 반환. SPARKLINE: trade_flow=EXPORT 필수, 당기 month·export_amount_usd만 반환하며 결과표를 저장하지 않음. FULL 이외에는 result_id 없음."
       ]
     ]
   },
@@ -447,10 +468,17 @@
       ],
       [
         "Query Parameters",
+        "hs_codes",
+        "string[]",
+        "선택",
+        "다중 품목 HS4·HS6 코드. 반복 파라미터, 최대 200개. hs_code와 동시 지정 불가. hs_ver=HS2022 필수. 겹치는 범위는 중복 집계하지 않음."
+      ],
+      [
+        "Query Parameters",
         "hs_ver",
         "string",
         "조건부",
-        "hs_code 사용 시 필수."
+        "hs_code 또는 hs_codes 사용 시 필수."
       ],
       [
         "Query Parameters",
@@ -507,6 +535,13 @@
         "string",
         "선택",
         "GLOBAL / INTERESTED. 관심은 로그인 본인 저장 범위만."
+      ],
+      [
+        "Query Parameters",
+        "view",
+        "string",
+        "선택",
+        "FULL(기본): 기존 순위·이상치·증감 및 결과표 저장. DASHBOARD: 순위·금액·비중·품목명·실적 유무만 반환. one_off·rank_change·rank_status·mom_pct·yoy_pct 및 result_id를 생략하고 결과표를 저장하지 않음."
       ]
     ]
   },
@@ -516,6 +551,13 @@
     "route": "GET  /api/v1/trade/rankings/{country_code}/products",
     "auth": "필요",
     "fields": [
+      [
+        "Query Parameters",
+        "view",
+        "string",
+        "선택",
+        "FULL만 허용. 기본 FULL. 기존 상세 응답과 결과표 저장을 유지하며 경량 조회는 지원하지 않는다."
+      ],
       [
         "Path Parameters",
         "country_code",

@@ -8,7 +8,10 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node --test tests/data.test.mjs tests/roles.test.mjs tests/api-client.test.mjs tests/integration.test.mjs tests/request-id.test.mjs tests/monthly-series.test.mjs",
+    "test": "node --test tests/data.test.mjs tests/roles.test.mjs tests/api-client.test.mjs tests/integration.test.mjs tests/request-id.test.mjs tests/query-cache.test.mjs tests/monthly-series.test.mjs tests/article-presentation.test.mjs",
+    "test:dashboard": "node tests/dashboard-cache-browser.cjs",
+    "test:rank-products": "node tests/rank-products-browser.cjs",
+    "test:mini-alerts": "node tests/mini-alerts-browser.cjs",
     "test:integration": "node tests/integration-browser.cjs",
     "test:review": "node tests/review-browser.cjs",
     "test:store": "node tests/store-browser.cjs",
@@ -19,6 +22,7 @@
     "test:e2e": "node tests/integration-browser.cjs"
   },
   "dependencies": {
+    "flag-icons": "^7.6.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

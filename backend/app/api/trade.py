@@ -2,7 +2,7 @@
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, union_all
 from backend.app.api.common import (require, unavailable, month, shift_month, month_end,
                                     period, percentage, digest, now, page_info, clean)
 from backend.app.api.accounts import interests, validate_scope
@@ -30,6 +30,40 @@ def verified_months(store, table):
         if latest and latest['status']=='SUCCESS': verified.append(m)
     store.cache[key]=sorted(verified)
     return store.cache[key]
+
+
+UNLOADED_WARNING='기간 내 미집계 월이 있습니다.'
+
+
+def ready_months(store, table, months, editions=('HS2022',)):
+    """완료 배치 월(verified_months) 가운데 조회 판본을 모두 집계한 월. batch_run에는 판본이 없어, 다른 판본 행만 있고 조회 판본
+    행이 없는 월은 무거래 0이 아니라 그 판본 미집계로 본다(HS2022만 적재된 월의 HS2017 조회 등). 행이 전혀 없는 월은 기존 규칙대로
+    완료 배치가 보장하는 0 거래 월이다(verified_months)."""
+    # ponytail: 판본 행 유무로 추정한다. 판본별 집계 기록(batch_run에 hs_ver)이 생기면 그것으로 바꾼다.
+    verified = set(verified_months(store, table))
+    t = store.t(table)
+    def present(candidates, edition=None):
+        """candidates 가운데 (그 판본) 행이 있는 월. 월마다 LIMIT 1 하위 쿼리를 UNION ALL로 묶어 한 번에 보낸다.
+        월이 PK 앞자리라 있는 판본은 바로 찾고, 없을 때만 그 월을 끝까지 읽는다. 결과는 요청 안에서 월별로 캐시한다."""
+        missing = [m for m in candidates if ('edition_month', table, edition, m) not in store.cache]
+        if missing:
+            parts = []
+            for m in missing:
+                part = select(t.c.trade_month).where(t.c.trade_month == m)
+                if edition: part = part.where(t.c.hs_ver == edition)
+                sub = part.limit(1).subquery()
+                parts.append(select(sub.c.trade_month))
+            hit = set(store.c.execute(union_all(*parts) if len(parts) > 1 else parts[0]).scalars())
+            for m in missing:
+                store.cache[('edition_month', table, edition, m)] = m in hit
+        return {m for m in candidates if store.cache[('edition_month', table, edition, m)]}
+    candidates = [m for m in dict.fromkeys(months) if m in verified]
+    loaded = set(candidates)
+    for edition in set(editions) or {'HS2022'}:
+        loaded &= present(candidates, edition)
+    # 조회 판본 행은 없어도 행이 전혀 없는 월은 완료 배치가 보장하는 0 거래 월이다.
+    rest = [m for m in candidates if m not in loaded]
+    return loaded | (set(rest) - present(rest)) if rest else loaded
 
 
 def bounds(store):
@@ -77,19 +111,23 @@ def metadata(store,start,end,source='CUSTOMS',warnings=None,latest_month=None):
         'freshness':'STALE' if warnings else 'FRESH','generated_at':now().isoformat()+'Z','warnings':warnings or []}
 
 
-def scope_filters(store,uid,scope='GLOBAL',hs_code=None,hs_ver=None,countries=None):
+def scope_filters(store,uid,scope='GLOBAL',hs_code=None,hs_ver=None,countries=None,hs_codes=None):
     require(scope in ('GLOBAL','INTERESTED'),'scope를 확인하세요.')
+    require(not (hs_code and hs_codes),'hs_code와 hs_codes는 함께 지정할 수 없습니다.')
+    codes=list(dict.fromkeys(hs_codes or ([hs_code] if hs_code else [])))
     hs=[]
-    if hs_code:
+    if codes:
         require(hs_ver=='HS2022','품목을 지정하면 hs_ver=HS2022가 필요합니다.')
-        hs=[{'hs_code':hs_code,'hs_ver':hs_ver}]
+        hs=[{'hs_code':code,'hs_ver':hs_ver} for code in codes]
     countries=list(countries or [])
     validate_scope(store,hs,countries)
     if scope=='INTERESTED':
         saved=interests(store,uid)
         require(saved['hs_items'] or saved['country_codes'],'등록한 관심이 없습니다.','INTERESTS_REQUIRED',409)
         if hs:
-            hs=[x for x in saved['hs_items'] if x['hs_code'].startswith(hs_code)]
+            require(all(any(x['hs_code'].startswith(code) for x in saved['hs_items']) for code in codes),
+                    '등록한 관심 품목 범위 밖입니다.')
+            hs=[x for x in saved['hs_items'] if any(x['hs_code'].startswith(code) for code in codes)]
             require(hs,'등록한 관심 품목 범위 밖입니다.')
         else: hs=saved['hs_items']
         if countries:
@@ -131,8 +169,8 @@ def aggregate(store,table,start,end,hs=None,countries=None,group='COUNTRY'):
             'MONTH_PAIR':[t.c.trade_month,t.c.country_code,t.c.hs6_code,t.c.hs_ver]}
     cols=groups[group]
     stmt=select(*cols,func.sum(t.c.amount_usd).label('amount_usd')).select_from(t.join(c,t.c.country_code==c.c.country_code))
-    stmt=stmt.where(c.c.country_role=='COUNTRY',t.c.hs_ver=='HS2022',t.c.trade_month>=start,t.c.trade_month<=end)
-    if hs: stmt=stmt.where(hs_filter(t,hs))
+    stmt=stmt.where(c.c.country_role=='COUNTRY',t.c.trade_month>=start,t.c.trade_month<=end)
+    stmt=stmt.where(hs_filter(t,hs) if hs else t.c.hs_ver=='HS2022')
     if countries: stmt=stmt.where(t.c.country_code.in_(countries))
     stmt=stmt.group_by(*cols).order_by(*cols)
     return query_rows(store,trade_plan(stmt,t,hs,countries),table)
@@ -185,14 +223,26 @@ def kpis(store,uid,selected=None):
     return {'kpi':kpi,'result_id':table['result_id'],'meta':meta}
 
 
-def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='BOTH',save=True,screen_export=False):
+def trends(store,uid,start=None,end=None,months=24,hs=None,countries=None,flow='BOTH',save=True,screen_export=False,sparkline=False):
     require(flow in ('EXPORT','IMPORT','BOTH'),'수출입 방향을 확인하세요.')
     start,end=resolve_period(store,start,end,months)
     ex={r['trade_month']:r['amount_usd'] for r in aggregate(store,'export_summary',start,end,hs,countries,'MONTH')}
+    if sparkline:
+        # 메인 카드 그래프에는 당기 수출만 필요하며 다운로드용 결과표를 만들지 않는다.
+        items=[]; cursor=start
+        while cursor<=end:
+            items.append({'month':cursor.strftime('%Y-%m'),'export_amount_usd':ex.get(cursor,Decimal(0))})
+            cursor=shift_month(cursor,1)
+        return {'items':items,'meta':metadata(store,start,end)}
     im={r['trade_month']:r['amount_usd'] for r in aggregate(store,'import_summary',start,end,hs,countries,'MONTH')}
-    verified=set(verified_months(store,'export_summary'))
+    # 전년 값은 그 판본을 집계한 월만 쓴다(미집계 월은 이미 null을 허용하는 전년 칸이 비어 있다).
+    # 조회 월의 금액 형식은 화면 합계 계약이라 바꾸지 않는다. ponytail: 화면에 미집계 월을 보이려면 월별 표시 칸이 필요하다.
+    editions={x['hs_ver'] for x in hs or []} or {'HS2022'}
+    prior_window=[]; cursor=shift_month(start,-12)
+    while cursor<=shift_month(end,-12): prior_window.append(cursor); cursor=shift_month(cursor,1)
+    verified=ready_months(store,'export_summary',prior_window,editions)
     old={r['trade_month']:r['amount_usd'] for r in aggregate(store,'export_summary',shift_month(start,-12),shift_month(end,-12),hs,countries,'MONTH') if r['trade_month'] in verified}
-    import_verified=set(verified_months(store,'import_summary'))
+    import_verified=ready_months(store,'import_summary',prior_window,editions)
     old_import={r['trade_month']:r['amount_usd'] for r in aggregate(store,'import_summary',shift_month(start,-12),shift_month(end,-12),hs,countries,'MONTH') if r['trade_month'] in import_verified}
     items=[]; cursor=start
     while cursor<=end:
@@ -225,7 +275,7 @@ def screen_export_columns(group,flow='EXPORT'):
             for key,label,unit in fields]
 
 
-def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY',flow='EXPORT',page=1,size=5,save=True,screen_export=False):
+def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY',flow='EXPORT',page=1,size=5,save=True,screen_export=False,details=True):
     require(group in ('COUNTRY','HS6') and flow in ('EXPORT','IMPORT'),'순위 기준을 확인하세요.')
     start,end=resolve_period(store,start,end,3)
     key=lambda r: r['country_code'] if group=='COUNTRY' else r['hs6_code']
@@ -236,25 +286,29 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
         for code in countries or []: primary.setdefault(code,Decimal(0))
     total=sum(primary.values())
     previous={}; yoy={}; old_rank={}; rank_comparable=False
-    if start==end:
+    if details and start==end:
+        # 전월·전년 비교는 그 판본을 집계한 월만 쓴다.
         source='export_summary' if flow=='EXPORT' else 'import_summary'
-        available=set(verified_months(store,source))
+        editions={x['hs_ver'] for x in hs or []} or {'HS2022'}
+        available=ready_months(store,source,[shift_month(start,-1),shift_month(start,-12)],editions)
         rank_comparable=shift_month(start,-1) in available
         for offset,target in ((-1,previous),(-12,yoy)):
             m=shift_month(start,offset)
             if m in available:
                 target.update({key(r):r['amount_usd'] for r in aggregate(store,source,m,m,hs,countries,group)})
         old_rank={k:n for n,k in enumerate(sorted((k for k in previous if previous[k]>0),key=lambda k:(-previous[k],k)),1)}
-    flags=anomaly_map(store,start,end,hs,countries,group,flow)
+    flags=anomaly_map(store,start,end,hs,countries,group,flow) if details else {}
     hs_names={}
-    if group=='HS6' and primary:
+    ordered=sorted(primary,key=lambda k:(-primary[k],k not in ex and k not in im,k))
+    selected=ordered if details else ordered[(page-1)*size:page*size]
+    if group=='HS6' and selected:
         # 화면이 품목 코드 대신 품목명을 보여 주도록 이름을 같이 내려준다.
         code=store.t('hs_code')
-        hs_names={r['hs_code']:r['name_ko'] for r in store.c.execute(select(code.c.hs_code,code.c.name_ko).where(code.c.hs_ver=='HS2022',code.c.hs_code.in_(list(primary)))).mappings()}
+        hs_names={r['hs_code']:r['name_ko'] for r in store.c.execute(select(code.c.hs_code,code.c.name_ko).where(code.c.hs_ver=='HS2022',code.c.hs_code.in_(selected))).mappings()}
     items=[]
     # 금액이 같으면 실적(수출 또는 수입)이 있는 행을 먼저 둔다. 그래야 실적 없는 행이 앞 페이지를 채우지 않고,
     # 1페이지에 실적이 없으면 전체 결과에도 없다는 화면의 판단이 맞는다.
-    for rank,k in enumerate(sorted(primary,key=lambda k:(-primary[k],k not in ex and k not in im,k)),1):
+    for rank,k in enumerate(selected,1 if details else (page-1)*size+1):
         h=[{'hs_code':k,'hs_ver':'HS2022'}] if group=='HS6' else hs
         country=[k] if group=='COUNTRY' else countries
         items.append({'rank':rank,'country_code':k if group=='COUNTRY' else None,
@@ -267,8 +321,12 @@ def rankings(store,uid,start=None,end=None,hs=None,countries=None,group='COUNTRY
             'one_off':flags.get(k,anomaly_view(set()))})
     meta=metadata(store,start,end)
     conditions={'hs_items':hs or [],'country_codes':countries or [],'period':period(start,end),'trade_flow':flow}
-    meta.update(truncated=len(items)>1000, rows_total=len(items))
-    out={'items':items[(page-1)*size:page*size],'page':page_info(page,size,len(items)), 'meta':meta,
+    if not details:
+        for item in items:
+            for field in ('one_off','rank_change','rank_status','mom_pct','yoy_pct'):
+                item.pop(field)
+    meta.update(truncated=len(primary)>1000, rows_total=len(primary))
+    out={'items':items[(page-1)*size:page*size] if details else items,'page':page_info(page,size,len(primary)), 'meta':meta,
          'conditions':{'hs_items':hs or [],'country_codes':countries or []}}
     if save:
         # Display-only flags stay in the API; exports distinguish absent observations from zero.

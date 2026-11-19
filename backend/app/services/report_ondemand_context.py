@@ -21,7 +21,7 @@ def period_view(start, end):
             'short': short}
 
 
-KINDS = {'TREND': '월별 추이', 'RANKING': '순위', 'SHARE': '비중', 'PREDICTION': '유망시장 예측', 'LLM_SQL': '사용자 지정 조회'}
+KINDS = {'TREND': '월별 추이', 'MULTI_YEAR': '연도 비교', 'RANKING': '순위', 'SHARE': '비중', 'PREDICTION': '유망시장 예측', 'LLM_SQL': '사용자 지정 조회'}
 SECTION_LABELS = {'KPI': '주요 지표·월별 추이', 'TOP_COUNTRIES': '주요 수출국', 'GROWTH_RISK': '수출 증가·감소 시장',
                   'LOCAL_ISSUES': '현지 이슈'}
 RESULT_ROW_LIMIT = 200   # PDF에 싣는 결과표 행 수. 전체 행은 함께 만드는 XLSX에 있다.
@@ -47,7 +47,7 @@ def _cell(value, column):
 SERIES_KEYS = ('country_name', 'name')  # 추이 결과의 국가·품목 표시 열. 웹 ReportView.trendChart와 같은 기준
 RESULT_COLUMN_LIMIT = 8  # A4 본문(180mm)에 잘리지 않고 들어가는 결과표 열 수. 넘치면 열 묶음으로 나눈다
 ID_COLUMNS = (('rank', 'country_rank', 'product_rank'), ('month', 'trade_month'), ('country_name', 'country_code'),
-              ('name', 'product_name', 'hs_code', 'hs6'))  # 열 묶음마다 반복하는 식별 열(각 묶음에서 첫 번째로 있는 열)
+              ('name', 'product_name', 'hs_code', 'hs6'), ('hs_ver',))  # 열 묶음마다 반복하는 식별 열
 
 
 def _trend_chart(table):
@@ -63,10 +63,12 @@ def _trend_chart(table):
         return None
     # 시리즈는 국가 코드·HS 코드·판본으로 나눈다. 이름(예: 0409·040900 모두 '천연꿀')으로 나누면 다른 품목 값이 한 선에서 덮인다.
     series = {}
+    # 무역수지 결과의 기본 시리즈 이름은 저장된 지표를 따른다(조회 방향의 '수출액'이 아니다).
+    fallback = '무역수지' if (table.get('meta') or {}).get('trade_balance') else '수출액'
     for r in table['rows']:
         # 코드가 없는 예전 결과는 표시 이름으로 대신한다(국가 이름만 있는 표를 한 선으로 합치지 않게)
         key = (r.get('country_code') or r.get('country_name'), r.get('hs_code') or r.get('name'), r.get('hs_ver'))
-        entry = series.setdefault(key, {'name': ' · '.join(str(r.get(k)) for k in names if r.get(k)) or '수출액', 'values': {}})
+        entry = series.setdefault(key, {'name': ' · '.join(str(r.get(k)) for k in names if r.get(k)) or fallback, 'values': {}})
         entry['values'][r['month']] = r.get(amount)
     if len(series) > CHART_SERIES_LIMIT:
         return None
@@ -85,7 +87,7 @@ def _series_names(series):
 
 
 def _column_groups(columns):
-    """A4 본문에 들어가도록 열을 RESULT_COLUMN_LIMIT개 이하 묶음으로 나눈다. 순위·월·국가·품목 식별 열은 묶음마다 반복한다."""
+    """A4 본문에 들어가도록 열을 RESULT_COLUMN_LIMIT개 이하 묶음으로 나눈다. 순위·월·국가·품목·판본 식별 열은 묶음마다 반복한다."""
     keys = [c['key'] for c in columns]
     if len(keys) <= RESULT_COLUMN_LIMIT:
         return [list(range(len(keys)))]
@@ -104,8 +106,13 @@ def populate_results(saved, ctx, start, end, content):
     mode = saved.get('compare', 'NONE') if saved.get('compare_period') else 'NONE'
     previous = [date.fromisoformat(saved['compare_period'][k]) for k in ('start', 'end')] if mode != 'NONE' else []
     c = ctx['conditions']
+    tables = content.get('source_tables', [])
+    # 무역수지 결과표만 옮긴 리포트는 요청 지표·계산 기준도 무역수지다(조회 방향의 수출액이 아니다).
+    from backend.app.api.reports import balance_copies
+    balance = balance_copies(tables)
+    label = '무역수지' if balance else METRICS[saved.get('metric', 'AMOUNT')]
     c.update(period=period_view(start, end), sections=sections, request_channel='CHAT', result_mode=True,
-             metric={'code': saved.get('metric', 'AMOUNT'), 'label': METRICS[saved.get('metric', 'AMOUNT')]},
+             metric={'code': saved.get('metric', 'AMOUNT'), 'label': label, 'basis': '무역수지' if balance else '수출액'},
              compare={'mode': mode, 'status': 'NONE' if mode == 'NONE' else 'READY', 'monthly_paired': False,
                       'period_label': period_view(*previous)['label'] if previous else '',
                       'short': period_view(*previous)['short'] if previous else '', 'basis_label': BASES[mode]})
@@ -129,6 +136,12 @@ def populate_results(saved, ctx, start, end, content):
         checks.append({'target': title, 'content': f"승인한 결과표 {total:,}행 · 결과 ID {table['result_id']}",
                        'basis': '승인 시점 사본 · ' + ('일부 누락' if ref.get('completeness') == 'PARTIAL' else '재조회 없음')})
         checks.extend({'target': title, 'content': text, 'basis': '누락·제한 사유'} for text in ref.get('limitations', []))
+        from backend.app.api.common import LLM_SQL_PERIOD_WARNING, sql_period_unproven
+        if sql_period_unproven({**(table.get('meta') or {}), 'kind': table.get('kind')}):
+            checks.append({'target': title, 'content': LLM_SQL_PERIOD_WARNING, 'basis': '집계 기간 미확인'})
+            for result in results:
+                if result['result_id'] == table['result_id']:
+                    result['note'] += ' · 집계 기간 미확인(생성 SQL)'
     from backend.app.api.reports import RESULT_SECTIONS  # 웹·DOCX 문서와 같은 섹션 대응
     covered = {RESULT_SECTIONS.get(t.get('kind')) for t in content.get('source_tables', [])}
     missing = [SECTION_LABELS[s] for s in sections if s in SECTION_LABELS and s not in covered]

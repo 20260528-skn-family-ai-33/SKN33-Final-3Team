@@ -3,7 +3,8 @@ import re
 from pydantic import ValidationError
 from sqlalchemy import select
 from backend.app.agents.conditions import ask
-from backend.app.agents.state import Conditions, HsProduct, MAX_COUNTRIES, MAX_HS_ITEMS, ToolResult
+from backend.app.agents.state import (Conditions, HsProduct, MAX_COUNTRIES, MAX_HS_ITEMS, ToolResult, drop_report_sources,
+                                      import_source, report_drops_imports)
 from backend.app.api.chat_slots import SlotRepair
 from backend.app.api.common import ApiError, digest
 from backend.app.api.results import read_snapshot
@@ -212,7 +213,11 @@ def previous_result(store, state, task):
 def stored_conditions(snapshot):
     """결과표에 저장된 분석 조건. 리포트는 표를 만든 조건 그대로 쓴다(재조회 없음)."""
     stored = snapshot['conditions']
-    return Conditions.model_validate({k: v for k, v in stored.items() if k in Conditions.model_fields})
+    fields = {k: v for k, v in stored.items() if k in Conditions.model_fields}
+    meta = snapshot.get('meta') or {}
+    if 'extra_compare_periods' in meta:
+        fields['extra_compare_periods'] = meta['extra_compare_periods'] or []
+    return Conditions.model_validate(fields)
 
 
 def source_versions(store,state,task):
@@ -227,6 +232,20 @@ def source_versions(store,state,task):
         sources.append((snapshot,{'result_id':result.result_id,'version':meta.get('input_fingerprint'),
                        'completeness':result.completeness,'limitations':result.limitations}))
     return sources
+
+
+def report_export_sources(store,state,task):
+    """방향을 수입으로 명시하지 않은 리포트는 저장 결과의 확정 방향으로 원본을 고른다. 플래너 슬롯이 비어 있어도 조회 때
+    수출로 확정된 표는 수출 원본이다. 수출 원본이 있으면 수입 원본은 빼고(두 방향을 묶으면 승인할 수 없다) 그 범위를 알린다.
+    무역수지 표(수출 기준 계산)는 수입 원본이 아니다."""
+    if not report_drops_imports(task.intent,task.slots.trade_flow) or len(task.input_bindings)<2:
+        return
+    sources=source_versions(store,state,task)
+    imported=[import_source(snapshot['conditions'].get('trade_flow'),snapshot['meta'].get('trade_balance'))
+              for snapshot,_ in sources]
+    if all(imported) or not any(imported):
+        return
+    drop_report_sources(task,{b.source_step_id for b,flag in zip(task.input_bindings,imported) if flag})
 
 
 def resolve(store,state,task,out):
@@ -287,19 +306,21 @@ def resolve(store,state,task,out):
         def code(row): return row.get('country_code') if dimension=='COUNTRY' else row.get('hs6') or row.get('hs_code') or (row.get('hs_item') or {}).get('hs_code')
         sorted_rows=sorted((r for r in rows if code(r) and r.get(field) is not None),
             key=lambda r:(-r[field] if order=='amount_usd' else r[field],code(r)))
-        codes=list(dict.fromkeys(code(r) for r in sorted_rows))[:n]
-        if not codes: raise SlotRepair('요청한 대상이 선행 결과표에 없습니다.')
+        if not sorted_rows: raise SlotRepair('요청한 대상이 선행 결과표에 없습니다.')
         if dimension=='COUNTRY':
+            codes=list(dict.fromkeys(code(r) for r in sorted_rows))[:n]
             chosen['COUNTRY']=list(dict.fromkeys([*chosen['COUNTRY'],*codes]))
             if len(chosen['COUNTRY'])>MAX_COUNTRIES: raise SlotRepair('선택한 국가 또는 품목이 조건 상한을 넘습니다.')
             out.country_codes=chosen['COUNTRY']
         else:
-            # 선행 결과 행의 판본을 따른다(예측 행의 hs_ver, 순위 행의 hs_item). 없으면 HS2022다.
-            editions={code(r):r.get('hs_ver') or (r.get('hs_item') or {}).get('hs_ver') or 'HS2022' for r in reversed(sorted_rows)}
-            items=[*chosen['HS6'],*((c,editions[c]) for c in codes)]
-            chosen['HS6']=list(dict.fromkeys(items))
+            # 같은 코드라도 판본이 다르면 순위표에서 다른 품목이며, 예전 저장 행의 기본 판본은 HS2022다.
+            def product(row):
+                return (code(row), row.get('hs_ver') or (row.get('hs_item') or {}).get('hs_ver') or 'HS2022')
+            items=list(dict.fromkeys(product(r) for r in sorted_rows))[:n]
+            chosen['HS6']=list(dict.fromkeys([*chosen['HS6'],*items]))
             if len(chosen['HS6'])>MAX_HS_ITEMS: raise SlotRepair('선택한 국가 또는 품목이 조건 상한을 넘습니다.')
             out.hs_items=[HsProduct(hs_code=c,hs_ver=v) for c,v in chosen['HS6']]
+            codes=[f'{c}({v})' if sum(item[0]==c for item in items)>1 else c for c,v in items]
         if len(codes)<n:
             state.results[task.steps[0].step_id]=ToolResult(status='OK',completeness='PARTIAL',
                 limitations=[f'요청한 {n}개 중 {len(codes)}개 대상만 있습니다.'])

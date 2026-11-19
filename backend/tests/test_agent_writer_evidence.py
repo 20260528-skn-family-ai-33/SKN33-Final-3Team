@@ -181,8 +181,9 @@ class WriterEvidenceTest(unittest.TestCase):
 
     def test_explicit_zero_survives_custom_statistics_fallback(self):
         state = dev_state(DEV['06-partial'])
+        # 기간이 증명된 생성 SQL 결과다. 증명이 없으면 대체 결론도 수치를 옮기지 않는다(이슈 113).
         state.results['t1.sql'].digest = {'kind': 'LLM_SQL', 'columns': [{'key': '수출액', 'unit': 'USD'}],
-                                           'rows': [{'수출액': 0}]}
+                                           'rows': [{'수출액': 0}], 'period_verified': True}
         with self.assertLogs('backend.app.agents.runtime', 'WARNING'):
             compose(state, ValueError('draft'), ValueError('draft'))
         self.assertIn('0달러', state.draft.sentences()[0])

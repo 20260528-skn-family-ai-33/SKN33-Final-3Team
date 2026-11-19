@@ -114,7 +114,7 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
             'capabilities':[{'code':f'API-{i:02}','enabled':True} for i in range(1,131) if i not in PENDING and i not in range(106,117)],
             'password_policy':'영문·숫자·특수문자를 포함한 8자 이상, UTF-8 72바이트 이하, 확인값 일치'}
     if identity==10: return trade.availability(store)
-    if identity==11: return reference.hs_search(store,query['q'],query.get('depth',4),query.get('limit',5))
+    if identity==11: return reference.hs_search(store,query['q'],query.get('depth',4),query.get('limit',5),query.get('hs_ver','HS2022'))
     if identity==12: return reference.children(store,path['hs_code'],query['hs_ver'])
     if identity==13: return reference.countries(store,query.get('q'),query.get('region_id'))
     if identity==14: return reference.regions(store)
@@ -130,18 +130,22 @@ def dispatch(identity,store,user,body,query,path,request,response,settings):
         return {**result,'already_registered':already}
     if identity==18: return trade.kpis(store,uid,query.get('month'))
     if identity in (19,20,21):
-        hs,countries=trade.scope_filters(store,uid,query.get('scope','GLOBAL'),query.get('hs_code'),query.get('hs_ver'),query.get('country_codes'))
+        view=query.get('view','FULL')
+        allowed_views={19:('FULL','DASHBOARD','SPARKLINE'),20:('FULL','DASHBOARD'),21:('FULL',)}
+        require(view in allowed_views[identity],'view를 확인하세요.')
+        hs,countries=trade.scope_filters(store,uid,query.get('scope','GLOBAL'),query.get('hs_code'),query.get('hs_ver'),query.get('country_codes'),hs_codes=query.get('hs_codes'))
         start,end=query.get('period_start'),query.get('period_end')
         if identity==19:
             require(not ('months' in query and (start or end)),'months와 직접 기간은 함께 지정할 수 없습니다.')
+            require(view!='SPARKLINE' or query.get('trade_flow','BOTH')=='EXPORT','SPARKLINE은 trade_flow=EXPORT가 필요합니다.')
             # 순위 API와 같이 실제 적용된 품목·국가(관심 범위 포함)를 함께 돌려줘 화면 제목·AI 질문이 그 값을 쓰게 한다.
-            return {**trade.trends(store,uid,start,end,query.get('months',24),hs,countries,query.get('trade_flow','BOTH'),screen_export=True),
+            return {**trade.trends(store,uid,start,end,query.get('months',24),hs,countries,query.get('trade_flow','BOTH'),screen_export=True,save=view=='FULL',sparkline=view=='SPARKLINE'),
                     'conditions':{'hs_items':hs or [],'country_codes':countries or []}}
         if identity==21:
             countries=[path['country_code']]; accounts.validate_scope(store,hs,countries)
             if query.get('month'):
                 require(not start and not end,'month와 기간은 함께 지정할 수 없습니다.'); start=end=query['month']
-        result=trade.rankings(store,uid,start,end,hs,countries,'HS6' if identity==21 else query.get('group_by','COUNTRY'),query.get('sort_flow','EXPORT'),page,5 if identity==21 else query.get('page_size',5),screen_export=True)
+        result=trade.rankings(store,uid,start,end,hs,countries,'HS6' if identity==21 else query.get('group_by','COUNTRY'),query.get('sort_flow','EXPORT'),page,5 if identity==21 else query.get('page_size',5),screen_export=True,save=view=='FULL',details=view=='FULL')
         if identity==21: return {'items':result['items'],'meta':result['meta']}
         return result
     if identity in (22,24): return changes(store,uid,body if identity==24 else query,identity==22)

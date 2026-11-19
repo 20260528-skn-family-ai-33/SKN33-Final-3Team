@@ -89,7 +89,7 @@ class ResultStore:
         return self.execution.transaction(read)
 
     def save(self, state, step, raw_result, *, rows, meta, conditions, input_fingerprint,
-             source_results, versions, columns=None, sql=None):
+             source_results, versions, columns=None, sql=None, verification_rows=None):
         self.check_owner(state)
         propagated = state.result_for_storage(step.step_id, raw_result)
         if propagated.status != 'OK':
@@ -101,7 +101,7 @@ class ResultStore:
                 'versions': versions, 'completeness': propagated.completeness,
                 'limitations': propagated.limitations, 'tool_result': propagated.model_dump(mode='json')}
             table = results.result_table(store, state.input.user_id, rows, metadata,
-                                         conditions, sql=sql, columns=columns)
+                                         conditions, sql=sql, columns=columns, verification_rows=verification_rows)
             job['agent']['step_results'][step.step_id] = {
                 'result_id': table['result_id'], 'input_fingerprint': input_fingerprint,
                 'fingerprint_version': FINGERPRINT_VERSION}

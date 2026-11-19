@@ -4,6 +4,8 @@ export function comparisonGroups(answer) {
   for(const table of answer.tables){
     const task=answer.tasks.find(t=>t.task_id===table.task_id),c=task?.conditions
     if(!['STATISTICS','CAUSE'].includes(task?.intent)||!c||table.meta?.kind!=='TREND'||table.expired||!table.result_id)continue
+    // 비교 기간이 여럿인 결과는 서버가 기간별 열·시리즈를 이미 만들었다. 통합 비교 표는 기준 기간 금액만 읽으므로 묶지 않는다.
+    if(table.meta?.extra_compare_periods?.length||table.meta?.trade_balance||table.meta?.period_totals)continue
     const key=JSON.stringify([c.period?.start,c.period?.end,c.trade_flow||'EXPORT',c.metric||'AMOUNT'])
     if(!groups.has(key))groups.set(key,{task_id:task.task_id,conditions:c,tables:[]})
     groups.get(key).tables.push(table)
@@ -28,7 +30,12 @@ export function comparisonChart(table,conditions) {
     if(labels.length<=60)break
   }
   const products=new Map()
-  table.rows.forEach(row=>{if(!products.has(row.hs_code))products.set(row.hs_code,[]);products.get(row.hs_code).push(row)})
+  for(const row of table.rows){
+    const key=JSON.stringify([row.hs_code,row.hs_ver])
+    if(!products.has(key))products.set(key,[])
+    products.get(key).push(row)
+  }
+  const showEdition=table.columns.some(c=>c.key==='hs_ver')
   const columns=table.columns.filter(c=>c.type==='number')
   const series=[]
   for(const rows of products.values())for(const col of columns){
@@ -37,7 +44,9 @@ export function comparisonChart(table,conditions) {
       const data=months.filter(m=>periodKey(m,granularity)===label).map(m=>lookup.get(m)??null)
       return data.some(v=>v===null)?null:data.reduce((sum,v)=>sum+v,0)
     })
-    series.push({name:products.size>1?`${rows[0].name} · ${col.label}`:col.label,values})
+    const {name,hs_ver}=rows[0]
+    const product=showEdition && hs_ver?`${name} (${hs_ver})`:name
+    series.push({name:products.size>1?`${product} · ${col.label}`:col.label,values})
   }
   series.sort((a,b)=>b.values.reduce((s,v)=>s+(v||0),0)-a.values.reduce((s,v)=>s+(v||0),0))
   return {type:'line',title:(conditions.trade_flow==='IMPORT'?'수입액':'수출액')+' 비교',unit:'USD',source:'관세청',

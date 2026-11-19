@@ -10,9 +10,22 @@ from typing import Literal
 import re
 
 NUMBER = r'(?:(?<![\d.A-Za-z])|(?<=[A-Za-z]{3}))(?P<value>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)'
-CURRENCY = r'(?:[가-힣]+\s*)?(?:달러|파운드|프랑|페소|리라|디나르|리얄|크로나|크로네|루피|루블|바트|랜드|동|유로|위안|엔|원)'
+# 한글 수사 금액("이 원", "천이백불")의 끝. 수사 자체가 낱말과 겹쳐("이 원인"·"이 원가"·"이 불고기") 숫자 금액보다 좁게 받는다.
+# 원·엔·위안·불은 받침으로 끝나 주격 조사 '가'가 붙지 않는다. '가'는 "원가"처럼 낱말이므로 "가량"만 받는다.
+MONEY_END = r'(?=$|[^\w]|(?:입니다|였다|라고|으로|가량|[이은는을를의로과와에]|짜리|어치|보다|만|씩))'
+CURRENCY_NAMES = r'달러|파운드|프랑|페소|리라|디나르|리얄|크로나|크로네|루피아|루피|루블|바트|랜드|동|유로|위안|엔|원'
+# 숫자 금액의 통화 이름('불' 포함)은 낱말이 끝날 때만 받는다(동남아·원료·엔진·불공정은 통화가 아니다). 앞 낱말은
+# "홍콩달러"·"베트남 동"처럼 나라 이름일 때만 붙인다. 통화 이름이나 개·건으로 시작하는 낱말("달러로 동기", "3건 동시")은 앞 낱말이 아니다.
+# 통화 이름 뒤에 바로 한글이 오면 조사·어미·수량 표현(달러고·달러였고·달러면·달러가량·달러대·달러선·달러하고)일 때만 받는다.
+# 남짓·안팎은 동남아·동안과 겹치지 않게 낱말로 받는다.
+CURRENCY_END = (r'(?![가-힣])|(?=하고|남짓|안팎|'
+                r'[이가은는을를의로으과와에만씩짜어보라고며였입인대도나까부지쯤뿐야요선규수정상미초내밖당면던엔께치])')
+CURRENCY = (r'(?:(?!(?:' + CURRENCY_NAMES + r'|개|건)[가-힣]*\s*(?:' + CURRENCY_NAMES + r'))[가-힣]+\s*)?'
+            r'(?:' + CURRENCY_NAMES + r')(?:' + CURRENCY_END + r')|(?:미국\s*|미\s*)?불(?:' + CURRENCY_END + r')')
 MONEY_UNIT = CURRENCY+r'|[A-Z]{3}(?![A-Za-z])|US\$|[$€£¥₩]'
-UNIT = r'%p|%|'+MONEY_UNIT+r'|배|위|개|건|kg'
+# 한글로 쓴 백분율·백분율포인트(25퍼센트·25프로·3퍼센트포인트·3%포인트)도 %·%p로 읽는다.
+PERCENT_WORDS = r'(?:%|퍼센트)\s*포인트(?:' + CURRENCY_END + r')|퍼센트(?:' + CURRENCY_END + r')|프로(?:' + CURRENCY_END + r')'
+UNIT = PERCENT_WORDS+r'|%p|%|'+MONEY_UNIT+r'|배|위|개|건|kg'
 TOKEN = re.compile(NUMBER+r'\s*(?P<scale>[만억조])?\s*(?P<unit>'+UNIT+r')?', re.I)
 # Dates in recalled history and HS lookups retain their original numeric-token rules.
 def _date_pattern(day='', bare_day=''):
@@ -24,8 +37,19 @@ HISTORY_DATE = _date_pattern()
 DAY = r'\s*(?:3[01]|[12]\d|0?[1-9])\s*일(?![간차])'
 DATE = _date_pattern('(?:'+DAY+')?', '(?:(?<!개월)'+DAY+')?')
 COMPOUND = re.compile(r'(?<![\d.])(?P<sign>[+-]?)(?P<eok>\d[\d,]*)\s*억\s*(?P<man>\d[\d,]*)\s*만')
+HANGUL_DIGITS = {char: value for value, char in enumerate('영일이삼사오육칠팔구')}
+HANGUL_SMALL = {'십': 10, '백': 100, '천': 1000}
+HANGUL_LARGE = {'만': 10**4, '억': 10**8, '조': 10**12}
+HANGUL_DIGIT = r'[영공일이삼사오육칠팔구]'
+HANGUL_NUMBER = r'[영공일이삼사오육칠팔구십백천만억조]'
+CLEAR_MONEY = r'(?:(?:미국\s*|미\s*)?달러|유로|파운드|(?i:USD|KRW|EUR|JPY|CNY|GBP)(?![A-Za-z])|US\$)'
+HANGUL_MONEY = (r'(?:' + CLEAR_MONEY + r'|(?:미국\s*|미\s*)?불' + MONEY_END +
+                r'|(?:원|엔|위안)' + MONEY_END + r')')
 # Expand abbreviated measures before parsing, retaining original draft offsets.
 SHORTHAND = re.compile(COMPOUND.pattern +
+    r'|(?<![\d가-힣])(?:(?P<hangul_sign>마이너스|플러스)\s*)?(?P<hangul>' + HANGUL_NUMBER + r'(?:\s*' + HANGUL_NUMBER +
+    r')*|[한두세네])(?P<hangul_decimal>\s*점\s*' + HANGUL_DIGIT + r'(?:\s*' + HANGUL_DIGIT +
+    r')*)?(?=\s*' + HANGUL_MONEY + r')'
     r'|(?<![\d.])(?P<quarter>[1-4])분기'
     r'|(?<![\d.])(?P<month>1[0-2]|0?[1-9])(?=\s*[~～–·]\s*(?:1[0-2]|0?[1-9])월)'
     r'|(?<![\d.])(?P<rank>\d+)(?=\s*·\s*\d+위)')
@@ -55,6 +79,7 @@ COUNTRY_EDGE = r'(?:(?<![가-힣A-Za-z0-9])|(?<=(?<![가-힣])대))'
 COUNT_BEFORE = re.compile(r'(?:상위|하위)\s*$')
 COUNT_AFTER = re.compile(r'\s*(?:곳|개국|국|개?\s*(?:국가|품목|시장))')
 HS_REFERENCE = re.compile(r'(?<![A-Za-z0-9])HS\s*(?:코드\s*)?(\d{2,}[A-Za-z0-9]*(?:[-._][A-Za-z0-9]+)*)', re.I)
+HS_EDITION_REFERENCE = re.compile(r'(?<![A-Za-z0-9])HS\s*(2017|2022)(?![A-Za-z0-9])', re.I)
 MODEL_END = r'(?![A-Za-z0-9]|[-._]\w)'
 NAME_JOIN = re.compile(r'\s*(?:과|와|및|·|,)\s*')
 THRESHOLD = re.compile(r'\s*(?:을|를|은|는|이|가|의|에)?\s*(?:(?:다소|소폭|조금|크게)\s*)?'
@@ -129,13 +154,44 @@ def _merge_compound(text):
     return COMPOUND.sub(lambda m:f'{m["sign"]}{int(m["eok"].replace(",",""))*10**4+int(m["man"].replace(",",""))}만',text)
 
 
+def _hangul_amount(text):
+    numeral = ''.join(text.split())
+    if numeral in ('영', '공'):
+        return 0
+    if len(numeral) == 1 and numeral in '한두세네':
+        return '한두세네'.index(numeral) + 1
+    total = group = digit = 0
+    small, large = 10**4, 10**16
+    for char in numeral:
+        if char in HANGUL_LARGE:
+            unit = HANGUL_LARGE[char]
+            if unit >= large:
+                return None
+            total += (group + digit or 1) * unit
+            group = digit = 0
+            small, large = 10**4, unit
+        elif char in HANGUL_SMALL:
+            unit = HANGUL_SMALL[char]
+            if unit >= small:
+                return None
+            group += (digit or 1) * unit
+            digit, small = 0, unit
+        else:
+            if digit or char in ('영', '공'):
+                return None
+            digit = HANGUL_DIGITS[char]
+    return total + group + digit
+
+
 def normalize_unit(unit):
     raw=re.sub(r'\s+','',unit or '').lower()
-    return {'달러':'USD','미국달러':'USD','미달러':'USD','usd':'USD','us$':'USD','$':'USD',
+    return {'달러':'USD','미국달러':'USD','미달러':'USD','불':'USD','미불':'USD','미국불':'USD',
+            'usd':'USD','us$':'USD','$':'USD',
             '원':'KRW','krw':'KRW','₩':'KRW','유로':'EUR','eur':'EUR','€':'EUR',
             '엔':'JPY','jpy':'JPY','¥':'JPY','위안':'CNY','cny':'CNY','£':'GBP','파운드':'GBP',
             '영국파운드':'GBP','호주달러':'AUD','캐나다달러':'CAD','스위스프랑':'CHF',
-            '개':'COUNT','건':'COUNT','kg':'KG','%p':'%p'}.get(raw,raw.upper() or None)
+            '개':'COUNT','건':'COUNT','kg':'KG','%p':'%p',
+            '퍼센트':'%','프로':'%','퍼센트포인트':'%p','%포인트':'%p'}.get(raw,raw.upper() or None)
 
 
 @dataclass(frozen=True)
@@ -187,13 +243,17 @@ def mask_dates(text):
     return DATE.sub(lambda m:' '*len(m.group()),text)
 
 
+IDENTITY_FIELDS = ('name', 'label', 'code', 'product_name', 'hs_name', 'country_name', 'country_code',
+                   'hs_code', 'hs6', 'hs2_code', 'hs4_code', 'hs6_code', 'hs10_code', 'name_ko', 'name_en')
+
+
 def source_names(value):
     if isinstance(value,list):
         for item in value: yield from source_names(item)
     elif isinstance(value,dict):
         for key,item in value.items():
             if key in ('columns','conditions','meta'): continue
-            if key in ('country_name','country_code','product_name','hs_name','name','label','code','hs_code','hs6') and item:
+            if key in IDENTITY_FIELDS and item:
                 yield key,str(item)
             elif isinstance(item,(dict,list)): yield from source_names(item)
 
@@ -279,8 +339,21 @@ class NameCatalog:
                 self.countries |= {name for key,name in source_names(source.get('top',[])) if key in ('name','code')}
         self.names=frozenset(n for n in known_names if n and len(n)>1)|{n for _,n in fields if len(n)>1}
         # 근거 범위의 HS 코드와 그 표시명("HS 3304 화장품")은 품목 하나다. 묶음(GROUP) 판정에서 하나로 센다.
-        self._same_product = {str(source['hs_name']): str(source['hs_code']) for source in sources
-                              if isinstance(source, dict) and source.get('hs_code') and source.get('hs_name')}
+        pairs = {}
+        def product_pairs(value):
+            if isinstance(value, (list, tuple)):
+                for item in value: product_pairs(item)
+            elif isinstance(value, dict):
+                code = value.get('hs_code') or value.get('hs6_code')
+                name = value.get('hs_name') or value.get('product_name') or value.get('name')
+                if code and name and re.fullmatch(r'(?:\d{2}|\d{4}|\d{6}|\d{10})', str(code)):
+                    pairs.setdefault(str(name), set()).add(str(code))
+                for key, item in value.items():
+                    if key not in ('columns', 'conditions', 'meta') and isinstance(item, (dict, list)):
+                        product_pairs(item)
+        product_pairs(sources)
+        # 같은 표시명이 여러 코드에 연결되면 같은 품목이라고 단정하지 않는다.
+        self._same_product = {name: next(iter(codes)) for name, codes in pairs.items() if len(codes) == 1}
         bindings = {}
         for source in sources:
             for mention, name in source.get('_country_mentions', ()):
@@ -338,7 +411,7 @@ class NameCatalog:
         explicit_codes = set()
         for match in HS_REFERENCE.finditer(text):
             code = match[1]
-            if match.group().upper() in ('HS2017', 'HS2022'):
+            if HS_EDITION_REFERENCE.fullmatch(match.group()):
                 continue  # Edition labels used by the trade data.
             if len(code) < 4 and code not in self.names:
                 continue  # For example, "HS10 기준" specifies a classification level.
@@ -430,6 +503,22 @@ def prepare_sentence(sentence, catalog, *, mentions=None, compounds=None):
             normalized = match.group() + '월'
         elif match['rank']:
             normalized = match.group() + '위'
+        elif match['hangul']:
+            tail = text[match.end():]
+            fraction = match['hangul_decimal']
+            if len(match['hangul']) == 1 and not fraction and not re.match(r'\s|' + CLEAR_MONEY, tail):
+                # 사원·구원처럼 통화 기호 없는 한 글자 수사와 겹치는 낱말을 보존한다.
+                if match['hangul'] not in HANGUL_SMALL and match['hangul'] not in HANGUL_LARGE:
+                    return match.group()
+            amount = _hangul_amount(match['hangul'])
+            if amount is None:
+                return match.group()
+            normalized = str(amount)
+            if fraction:
+                normalized += '.' + ''.join(str(HANGUL_DIGITS.get(char, 0))
+                                            for char in fraction if not char.isspace() and char != '점')
+            if match['hangul_sign']:
+                normalized = ('-' if match['hangul_sign']=='마이너스' else '+') + normalized
         else:
             normalized = _merge_compound(match.group())
         if compounds is not None:
@@ -440,7 +529,9 @@ def prepare_sentence(sentence, catalog, *, mentions=None, compounds=None):
 
 def quantity_text(sentence, catalog):
     text=prepare_sentence(sentence,catalog)
-    return mask_dates(mask_spans(text,[(a,b) for _,a,b in catalog.mentions(text)]))
+    spans = [(a,b) for _,a,b in catalog.mentions(text)]
+    spans.extend(m.span() for m in HS_EDITION_REFERENCE.finditer(text))
+    return mask_dates(mask_spans(text,spans))
 
 
 @dataclass(frozen=True)
@@ -474,6 +565,7 @@ class MetricClaim:
     amount_period: str | None = None
     negated_change: bool = False
     comparative_amount: bool = False
+    balance_sign: str | None = None  # 'SURPLUS'(흑자, 양수) / 'DEFICIT'(적자, 음수) / 'BOTH'(둘 다 써서 판정 불가)
 
 
 @dataclass(frozen=True)
@@ -487,6 +579,7 @@ class Claim:
     valid: bool = True
     span: tuple[int, int] | None = None
     quantity_span: tuple[int, int] | None = None
+    editions: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -503,6 +596,7 @@ class Context:
     flow: str | None = None
     time: TimeClaim = TimeClaim()
     metric: MetricClaim | None = None
+    editions: frozenset[str] = frozenset()
 
 
 # "종료일 2025년 12월 31일", "2025년 12월 31일까지"처럼 월 단위 기간의 끝을 말일로 다시 적은 표현.
@@ -631,18 +725,20 @@ def annual_comparison_roles(text):
 # grammatical subject and baseline even when the years are written in reverse
 # order. The amount is a difference only with that predicate and an explicit
 # annual comparator; a bare amount remains a level.
+# 기간 차액 문법의 측정 대상. 무역수지(수출액 − 수입액)도 기간끼리 비교한다.
+DIFFERENCE_MEASURE = AMOUNT_LABEL + r'|무역\s*수지'
 ANNUAL_AMOUNT_BASE = re.compile(
-    r'\s*(?:연간\s*)?(?:(?:의\s*)?(?:' + AMOUNT_LABEL + r')(?:은|는|이|가|을|를)?\s*)?보다(?:도)?'
+    r'\s*(?:연간\s*)?(?:(?:의\s*)?(?:' + DIFFERENCE_MEASURE + r')(?:은|는|이|가|을|를)?\s*)?보다(?:도)?'
 )
 # After entity masking, the subject year can carry the reported amount noun
 # or just its case particle when the amount is already the sentence topic.
 ANNUAL_AMOUNT_SUBJECT = re.compile(
     r'\s*(?:(?:에는|에서|의|에)\s*)?(?:(?:한국|대한민국)의\s*)?(?:(?:전체|연간)\s*)*'
-    r'(?:(?P<measure>' + AMOUNT_LABEL + r'|(?:수출|수입)\s*(?:총액|실적))\s*)?'
+    r'(?:(?P<measure>' + DIFFERENCE_MEASURE + r'|(?:수출|수입)\s*(?:총액|실적))\s*)?'
     r'(?:은|는|이|가)?\s*'
 )
 ANNUAL_COMPARISON_TOPIC_END = re.compile(
-    r'\s*(?:의\s*)?(?:전체\s*)?(?:(?:' + AMOUNT_LABEL + r')\s*)?(?:을|를)?\s*'
+    r'\s*(?:의\s*)?(?:전체\s*)?(?:(?:' + DIFFERENCE_MEASURE + r')\s*)?(?:을|를)?\s*'
     r'비교(?:에서(?:는)?|한?\s*결과|하면|해\s*보면)\s*[,，]?\s*'
 )
 ANNUAL_AMOUNT_PREDICATE = re.compile(
@@ -801,7 +897,7 @@ def _change_predicate(suffix):
     return CHANGE.match(suffix, bound.end() if bound else 0)
 
 
-def metric_claim(text,quantity,*,direct_suffix='',flow=None):
+def metric_claim(text,quantity,*,direct_suffix='',flow=None,direct_prefix=''):
     share=bool(re.search(r'비중|점유율',text));change=bool(re.search(CHANGE_RATE_LABEL,text))
     family='SHARE' if share else 'CHANGE' if change else None
     aggregate='AVERAGE' if '월평균' in text else 'TOTAL' if re.search(r'총액|합계',text) else None
@@ -816,6 +912,9 @@ def metric_claim(text,quantity,*,direct_suffix='',flow=None):
         if re.search(YEAR_AGO,text): comparison='YOY'
         elif re.search(MONTH_AGO,text): comparison='MOM'
     flows={'EXPORT' for _ in re.finditer('수출',text)}|{'IMPORT' for _ in re.finditer('수입',text)}
+    if re.search(r'무역\s*수지', text) and not flows:
+        flows = {'BALANCE'}
+        if quantity.unit == 'USD': family = 'AMOUNT'
     direction=None;direct=False
     after=_change_predicate(direct_suffix) if quantity.unit in ('%','%p','USD') else None
     if after: direction='DOWN' if after['down'] else 'UP';direct=True
@@ -833,8 +932,16 @@ def metric_claim(text,quantity,*,direct_suffix='',flow=None):
         if re.search(label+r'(?:별|\s*(?:중|내|안))?\s*순위',text): rank_axis=axis
     relation, bound_valid = _threshold_relation(direct_suffix)
     valid = not (share and change) and len(flows) < 2 and bound_valid
+    balance_sign = None
+    if flows == {'BALANCE'}:
+        # "300달러 적자"·"흑자 300달러"의 흑자·적자는 금액의 부호다. 수치에 붙은 낱말을 먼저 읽고("적자에서 300달러 흑자로
+        # 전환"은 흑자), 붙은 낱말이 없을 때만 같은 구절의 낱말을 본다(둘 다 있으면 판정하지 않는다).
+        adjacent = (re.match(r'\s*(?:의\s*)?(흑자|적자)', direct_suffix)
+                    or re.search(r'(흑자|적자)\s*(?:폭|규모|액)?\s*(?:은|는|이|가)?\s*$', direct_prefix))
+        words = {adjacent[1]} if adjacent else set(re.findall(r'흑자|적자', text))
+        balance_sign = ('BOTH' if len(words) > 1 else {'흑자': 'SURPLUS', '적자': 'DEFICIT'}[words.pop()]) if words else None
     return MetricClaim(family,aggregate,comparison,next(iter(flows)) if len(flows)==1 else flow,
-                       direction,direct,roles,rank_axis,valid,relation)
+                       direction,direct,roles,rank_axis,valid,relation,balance_sign=balance_sign)
 
 
 def _scope_measure(metric,quantity,prefix,suffix,label,*,shared,multiple):
@@ -1238,6 +1345,7 @@ def _is_amount_range(sentence, left, right, end):
     if right.quantity.unit != 'USD' or left.quantity.unit not in (None, 'USD'):
         return False
     between = sentence[left.quantity_span[1]:right.quantity_span[0]].strip()
+    between = re.sub(r'^\(\s*(?:\d{4}년\s*)?\d{1,2}월\s*\)\s*', '', between)
     if between in ('~', '∼', '～', '–'):
         return True
     return between in ('에서', '부터') and bool(re.search(r'사이|범위', sentence[right.quantity_span[1]:end]))
@@ -1275,7 +1383,11 @@ def _bind_monthly_extrema(sentence, claims, catalog, monthly_series):
                 prefix = sentence[start:claim.quantity_span[0]]
                 if claim.metric.relation != 'EQ' and re.search(r'(?:최소|최대)\s*$', prefix):
                     continue
-                claims[i] = replace(claim, metric=replace(claim.metric, aggregate=role), text=clause,
+                # 금액 뒤 괄호의 월은 그 금액에만 속한다. 앞 금액의 월을 상속하지 않는다.
+                postfix = re.match(r'\s*\(\s*((?:\d{4}년\s*)?\d{1,2}월)\s*\)',
+                                   sentence[claim.quantity_span[1]:end])
+                observed = read_time(postfix[1], next(iter(time.years)) if len(time.years) == 1 else None)[0] if postfix else claim.time
+                claims[i] = replace(claim, time=observed, metric=replace(claim.metric, aggregate=role), text=clause,
                                     valid=claim.valid and valid and claim.metric.family == 'AMOUNT'
                                     and claim.metric.aggregate in (None, 'TOTAL'))
             continue
@@ -1333,6 +1445,9 @@ def parse_sentence(sentence,catalog, *, monthly_series=False):
 
         mentions, ambiguous_name = catalog.resolve_mentions(text)
         mentions, syntax = _trade_subject(text, mentions, catalog)
+        edition_mentions = list(HS_EDITION_REFERENCE.finditer(text))
+        editions = frozenset(f'HS{m[1]}' for m in edition_mentions) or context.editions
+        syntax = mask_spans(syntax, [m.span() for m in edition_mentions])
         names=frozenset(n for n,_,_ in mentions)
         targets=catalog.merge(context.targets,names)
         clean=mask_dates(syntax)
@@ -1384,7 +1499,8 @@ def parse_sentence(sentence,catalog, *, monthly_series=False):
                 flow = {'수출':'EXPORT', '수입':'IMPORT'}.get(next(iter(lead_flows), '')) if len(lead_flows)==1 else context.flow
                 parsed, following = parse(tail, origins[local_start.end():], replace(
                     context, year=year, flow=flow, time=lead_time if DATE.search(lead) else context.time,
-                    targets=catalog.merge(context.targets, lead_names)))
+                    targets=catalog.merge(context.targets, lead_names),
+                    editions=frozenset(f'HS{m[1]}' for m in edition_mentions if m.end() <= local_start.start()) or context.editions))
                 return replace(parsed, date_only=(lead_time, *parsed.date_only)), following
         # A monthly list can start with its reporting window. Bind the first level to its own month.
         if values and time.month_window is None:
@@ -1420,9 +1536,9 @@ def parse_sentence(sentence,catalog, *, monthly_series=False):
             claim = _trend_claim(syntax, targets, time, catalog, marker, understood=bool(predicate)) if marker else None
             if claim and not claim.metric.flow and context.flow and (not context.metric or context.metric.family == 'AMOUNT'):
                 claim = replace(claim, metric=replace(claim.metric, flow=context.flow))
-            claims = (replace(claim, span=source_span(marker.start(), marker.end())),) if claim else ()
+            claims = (replace(claim, span=source_span(marker.start(), marker.end()), editions=editions),) if claim else ()
             return ParsedSentence(claims,(time,) if DATE.search(syntax) else (),not ambiguous_name),replace(
-                context,targets=targets,year=last_year,time=time)
+                context,targets=targets,year=last_year,time=time,editions=editions)
         flows=set(re.findall(r'수출|수입',syntax))
         common_flow=({'수출':'EXPORT','수입':'IMPORT'}[next(iter(flows))] if len(flows)==1 else context.flow)
         dates=list(DATE.finditer(syntax))
@@ -1446,6 +1562,19 @@ def parse_sentence(sentence,catalog, *, monthly_series=False):
             for boundary in re.finditer(r'(?:됐고|었고|았고|였고|(?<=달러)고)\s*(?='+DIRECTION.pattern+r')',syntax):
                 if any(q.end<=boundary.start() for q in values): cuts.append(boundary.end())
         if cuts:
+            # A date or code can follow the edition at the start of the next assertion.
+            for index, cut in enumerate(cuts):
+                previous = next((q for q in reversed(values) if q.end <= cut), None)
+                if previous is None:
+                    continue
+                for edition in edition_mentions:
+                    if not previous.end <= edition.start() < cut:
+                        continue
+                    boundary = max((m.end() for m in SEPARATOR.finditer(text, previous.end, edition.start())),
+                                   default=previous.end)
+                    if not text[boundary:edition.start()].strip():
+                        cuts[index] = edition.start()
+                        break
             cuts=sorted({0,*cuts,len(text)})
             # Context comes from the preceding assertion, not all later names/dates.
             collected=[];date_only=[];valid=not ambiguous_name
@@ -1489,6 +1618,16 @@ def parse_sentence(sentence,catalog, *, monthly_series=False):
         else:
             variants=[(q,targets,'GROUP' if catalog.grouped(targets) else 'SINGLE',None) for q in values]
 
+        ordered_editions = []
+        if (each and len(edition_mentions) > 1 and len(editions) == len(edition_mentions)
+                and all(m.end() <= each.start() for m in edition_mentions)
+                and all(NAME_JOIN.fullmatch(text[a.end():b.start()]) for a, b in zip(edition_mentions, edition_mentions[1:]))):
+            if metric_list or ordered_times or catalog.grouped(targets) or len(values) not in (1, len(edition_mentions)):
+                return ParsedSentence((),valid=False),context
+            ordered_editions = [frozenset({f'HS{m[1]}'}) for m in edition_mentions]
+            if len(values) == 1:
+                variants *= len(ordered_editions)
+
         claims=[]
         for variant_index,(quantity,bound_targets,target_scope,metric_override) in enumerate(variants):
             left=max((m.end() for m in SEPARATOR.finditer(syntax,0,quantity.start)),default=0)
@@ -1510,7 +1649,8 @@ def parse_sentence(sentence,catalog, *, monthly_series=False):
                 if len(before) == 1 and re.search(r'앞서|앞섭|뒤따', syntax[quantity.end:]):
                     bound_targets = catalog.merge(context.targets, frozenset(before))
                     target_scope = 'GROUP' if catalog.grouped(bound_targets) else 'SINGLE'
-            metric=metric_claim(metric_local,quantity,direct_suffix=syntax[quantity.end:right],flow=common_flow)
+            metric=metric_claim(metric_local,quantity,direct_suffix=syntax[quantity.end:right],flow=common_flow,
+                                direct_prefix=syntax[left:quantity.start])
             if not metric.family and context.metric:
                 compatible={'%':{'SHARE','CHANGE','SHARE_CHANGE'},'%p':{'SHARE_CHANGE'},'USD':{'AMOUNT','AMOUNT_CHANGE'}}
                 if context.metric.family in compatible.get(quantity.unit,set()):
@@ -1576,7 +1716,8 @@ def parse_sentence(sentence,catalog, *, monthly_series=False):
                     end = change_phrase_end(syntax, quantity.end, right)
                     span = source_span(comparisons[0].start(), end)
             claims.append(Claim(quantity, frozenset(bound_targets), target_scope, metric, claim_time,
-                                local, valid, span or value_span, value_span))
+                                local, valid, span or value_span, value_span,
+                                ordered_editions[variant_index] if ordered_editions else editions))
         last_metric = claims[-1].metric
         predicate = _trend_predicate(clean)
         # For a numeric change the numeric claim already carries the direction.
@@ -1622,8 +1763,9 @@ def parse_sentence(sentence,catalog, *, monthly_series=False):
                     trend = replace(trend, metric=replace(trend.metric, flow=level.metric.flow))
                 # A second assertion in the same clause must not be marked as part of the level.
                 claims[-1] = replace(level, span=level.quantity_span)
-                claims.append(replace(trend, span=source_span(marker.start(), marker.end())))
-        return ParsedSentence(tuple(claims),valid=not ambiguous_name),Context(targets,last_year,common_flow,time,last_metric)
+                claims.append(replace(trend, span=source_span(marker.start(), marker.end()), editions=level.editions))
+        return ParsedSentence(tuple(claims),valid=not ambiguous_name),Context(
+            targets,last_year,common_flow,time,last_metric,editions)
 
     parsed, _ = parse(text, origins)
     claims = list(parsed.claims)
@@ -1647,4 +1789,9 @@ def parse_sentence(sentence,catalog, *, monthly_series=False):
                     span = last[1], ordering.end()
                     claims.append(Claim(None, own[0].targets, 'SINGLE', MetricClaim(family='RANK'),
                                         own[0].time, sentence[slice(*span)], False, span))
-    return replace(parsed, claims=(*claims, *outlook, *monthly), valid=parsed.valid and not ambiguous)
+    parsed_claims = []
+    for claim in (*claims, *outlook, *monthly):
+        passage = claim.text + ' ' + (sentence[slice(*claim.span)] if claim.span else '')
+        editions = claim.editions or frozenset(f'HS{version}' for version in HS_EDITION_REFERENCE.findall(passage))
+        parsed_claims.append(replace(claim, editions=editions) if editions != claim.editions else claim)
+    return replace(parsed, claims=tuple(parsed_claims), valid=parsed.valid and not ambiguous)

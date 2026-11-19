@@ -6,6 +6,7 @@ import Icon from '../../components/Icon'
 import { ChatFab } from '../../components/layout'
 import { Donut, Sparkline } from '../../components/charts'
 import { useQuery, ErrorNotice } from '../../api/hooks'
+import Flag from '../../components/Flag'
 import { mapArticle } from '../../api/adapters'
 import { countries } from '../../data/catalog'
 import heroShip from '../../assets/hero-ship.jpg'
@@ -32,14 +33,19 @@ const ARROW = { up: '▲', down: '▼', flat: '' }
 // 점유율 글자('7.3%')로 막대 너비를 정한다. 값이 없으면('—') 빈 막대, 숫자는 0~100%로 제한한다.
 const shareBarWidth = share => { const pct = Number.parseFloat(share); return Number.isFinite(pct) ? `${Math.min(100, Math.max(0, pct))}%` : 0 }
 const cut = (text, n) => !text || text.length <= n ? text : `${text.slice(0, n)}…`
+const regionBusy = states => states.some(s => s.loading || s.refreshing)
 
-/** 영역별 오류 안내(I-2). 한 영역에서 실패한 요청을 묶어 한 번만 알리고, 다시 불러오기는 그 영역만 한다. */
-function RegionError({ label, states }) {
+/** 수동 재시도·오류 안내. 자동 갱신은 본문 영역의 aria-busy만 갱신한다. */
+function RegionFeedback({ label, states }) {
   const failed = [...new Set(states.filter(s => s.error))]
-  if (!failed.length) return null
+  const retrying = states.some(s => s.retrying && !s.loading)
+  if (!failed.length && !retrying) return null
   const retry = () => failed.forEach(s => s.reload?.())
-  const message = `${label} 정보를 불러오지 못했습니다. ${failed[0].error.message}`
-  return <div><ErrorNotice error={{ ...failed[0].error, message }} retry={retry} /></div>
+  const error = failed.length ? { ...failed[0].error, message: `${label} 정보를 불러오지 못했습니다. ${failed[0].error.message}` } : null
+  return <div>
+    {retrying && <p role="status" aria-live="polite" className="muted" style={{ fontSize: 12 }}>{label} 정보를 갱신 중입니다.</p>}
+    <ErrorNotice error={error} retry={retry} />
+  </div>
 }
 
 // 메인 수출입 현황의 상승 화살표(디자인 SVG). 꼬리는 투명하게 시작해 머리 쪽으로 진해진다.
@@ -229,12 +235,12 @@ function NewsCardSkeleton() {
 }
 
 export default function Dashboard({ route }) {
-  const { profile } = useApp()
+  const { profile, account } = useApp()
   // 전체↔내 관심 전환 버튼은 머리글(알림 왼쪽)에 있다. 여기서는 현재 보기만 읽는다.
   const { view } = useMainView(route)
   const interest = view === 'interest'
   const [months, setMonths] = useState(3)
-  const market = useDashboard(view, months, profile)
+  const market = useDashboard(view, months, profile, account?.id)
   const un = useUnData(profile)
   const data = { ...market, un: un.items }
   const cards = data.rankCards
@@ -298,7 +304,7 @@ export default function Dashboard({ route }) {
           <div style={{ flex: '2 1 600px', position: 'relative' }}>
             {/* 제목·기간 글자는 상승 화살표보다 위에 그려 화살표가 글자를 가리지 않게 한다. */}
             <div data-reveal="up" style={{ position: 'relative', zIndex: 2 }}>
-              <RegionError label="주요 지표" states={data.states.kpi} />
+              <RegionFeedback label="주요 지표" states={data.states.kpi} />
               <p style={{ fontSize: 14, fontWeight: 700, color: '#B0102A' }}>통계 기준 월 {data.statLoading ? <Bone inline w={64} h={14} /> : data.statMonth}</p>
               <h2 style={{ marginTop: 8, fontSize: 36, fontWeight: 800, letterSpacing: -1 }}>{data.title}</h2>
               <p style={{ marginTop: 10, fontSize: 14, color: '#444B57' }}>{data.statLoading ? <Bone inline w={420} h={14} /> : data.period}</p>
@@ -306,7 +312,7 @@ export default function Dashboard({ route }) {
             {/* 화살표는 지표 카드 묶음 기준으로 놓아 화면 폭이 바뀌어도 카드와의 위치가 유지된다. 카드가 화살표 위에 그려진다. */}
             <div style={{ position: 'relative', marginTop: 24 }}>
             <TrendArrow />
-            <div data-reveal="up" data-d="1" aria-busy={data.kpiLoading} style={{ position: 'relative', zIndex: 1, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
+            <div data-reveal="up" data-d="1" aria-busy={regionBusy(data.states.kpi)} style={{ position: 'relative', zIndex: 1, background: '#fff', borderRadius: 16, boxShadow: '0 10px 30px rgba(21,24,30,.07)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))' }}>
               {data.kpis.map(k => {
                 // 수출액·수입액은 같은 기준의 순위 화면으로 연결한다. 무역수지는 연결할 화면이 없어 보여 주기만 한다.
                 const Box = k.flow ? Link : 'div'
@@ -332,7 +338,7 @@ export default function Dashboard({ route }) {
               </div>
               <span style={{ fontSize: 12, color: '#5C6370' }}>한국은행 ECOS</span>
             </div>
-            <RegionError label="환율" states={data.states.fx} />
+            <RegionFeedback label="환율" states={data.states.fx} />
             <div role="region" aria-label={data.fxTitle} aria-busy={data.fxLoading} tabIndex={data.fx.length >= 5 ? 0 : undefined}
               className="fx-list" style={{ marginTop: 14, borderTop: '2px solid #15181E', ...(data.fx.length >= 5 ? { maxHeight: 242, overflowY: 'auto', scrollbarGutter: 'stable' } : data.fxLoading ? { maxHeight: 242, overflow: 'hidden' } : {}) }}>
               {data.fxLoading && Array.from({ length: fxSkeletonRows }, (_, i) => <FxRowSkeleton key={i} />)}
@@ -366,8 +372,8 @@ export default function Dashboard({ route }) {
               <Link to={data.cardLink('HS6')} className="more" style={{ marginLeft: 10, whiteSpace: 'nowrap', flexShrink: 0 }}>상세보기 →</Link>
             </div>
           </div>
-          <RegionError label="수출 상위 품목" states={data.states.cards} />
-          <div data-reveal="up" data-d="1" aria-busy={data.cardsLoading} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
+          <RegionFeedback label="수출 상위 품목" states={data.states.cards} />
+          <div data-reveal="up" data-d="1" aria-busy={regionBusy(data.states.cards)} style={{ marginTop: 22, display: 'grid', gridTemplateColumns: `repeat(${cardColumns},1fr)`, gap: 14 }} className="resp-stack">
             {data.cardsLoading && Array.from({ length: skeletonCount }, (_, i) => <RankCardSkeleton key={i} />)}
             {!data.cardsLoading && cards.map((c, i) => (
               <Link key={c.hs} to={data.cardLink('COUNTRY', c.hs)} className="dash-card rank-card" style={{ ...CARD_STYLE, '--accent': RANK_ACCENTS[i % RANK_ACCENTS.length] }}>
@@ -379,7 +385,9 @@ export default function Dashboard({ route }) {
                 <span title={c.name} style={{ fontSize: 18, fontWeight: 800, lineHeight: '24px', height: 48, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2, overflow: 'hidden', overflowWrap: 'break-word' }}>{c.name}</span>
                 <span style={{ marginTop: 'auto', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 80px', gridTemplateRows: '18px 30px 18px', columnGap: 10, alignItems: 'center' }}>
                   <span style={{ fontSize: 12, lineHeight: '18px', color: '#5C6370' }}>수출액</span>
-                  <span style={{ gridColumn: 2, gridRow: '1 / 4', alignSelf: 'center', display: 'flex', justifyContent: 'flex-end' }}><Sparkline values={c.values} color={c.color} /></span>
+                  <span aria-busy={data.seriesLoading} style={{ gridColumn: 2, gridRow: '1 / 4', alignSelf: 'center', display: 'flex', justifyContent: 'flex-end' }}>
+                    {data.seriesLoading ? <span role="status" aria-label="수출 추이 그래프를 불러오는 중입니다"><Bone w={80} h={38} /></span> : <Sparkline values={c.values} color={c.color} />}
+                  </span>
                   <span title={c.exp} style={{ gridColumn: 1, gridRow: 2, fontSize: 22, lineHeight: '30px', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.exp}</span>
                   <span title={`수입 ${c.imp}`} style={{ gridColumn: 1, gridRow: 3, fontSize: 12, lineHeight: '18px', color: '#5C6370', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>수입 {c.imp}</span>
                 </span>
@@ -394,7 +402,7 @@ export default function Dashboard({ route }) {
       <main className="home-zones">
         <section className="zone zone-tables" style={{ padding: '64px 0' }}>
         <div className="wrap resp-stack" style={{ display: 'flex', gap: 20 }}>
-          <div data-reveal="up" className="card zone-card" aria-busy={productTable.loading} style={{ flex: '1 1 440px' }}>
+          <div data-reveal="up" className="card zone-card" aria-busy={regionBusy(data.states.products)} style={{ flex: '1 1 440px' }}>
             <div className="between" style={{ alignItems: 'flex-start' }}>
               <div>
                 <h2 className="t2">{data.productTable.title}</h2>
@@ -402,7 +410,7 @@ export default function Dashboard({ route }) {
               </div>
  <Link to={data.tableLink('HS6')} className="more">상세보기 →</Link>
             </div>
-            <RegionError label="품목별 수출입" states={data.states.products} />
+            <RegionFeedback label="품목별 수출입" states={data.states.products} />
             <div className="th" style={{ gridTemplateColumns: PRODUCT_TABLE_COLS, marginTop: 14 }}>
               <span>순위</span><span>품목코드(HS6)</span><span>품목</span><span className="r">수출액</span><span className="r">수입액</span>
             </div>
@@ -415,21 +423,23 @@ export default function Dashboard({ route }) {
             {data.productTable.empty && <p className="muted" style={{ padding: '18px 4px' }}>조회 기간에 집계된 품목 실적이 없습니다.</p>}
             {data.productTable.note && <p className="note" style={{ marginTop: 12 }}>{data.productTable.note}</p>}
           </div>
-          <div data-reveal="up" data-d="1" className="card zone-card" aria-busy={countryTable.loading || countryTable.pieLoading} style={{ flex: '1.3 1 540px' }}>
+          <div data-reveal="up" data-d="1" className="card zone-card" aria-busy={regionBusy(data.states.countries)} style={{ flex: '1.3 1 540px' }}>
             {/* 왼쪽: 교역국 표, 오른쪽: 수출액 비중. 두 제목을 같은 크기·같은 높이에 둔다. 상세보기는 카드 오른쪽 위를 유지한다. */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 26 }}>
               <div style={{ flex: '1 1 260px', minWidth: 0 }}>
                 <h2 className="t2">{data.countryTable.title}</h2>
                 <p className="muted" style={{ marginTop: 6 }}>{countryTable.loading ? <Bone inline w={210} h={13} /> : countryTable.sub}</p>
-                <RegionError label="교역국별 수출입" states={data.states.countries} />
+                <RegionFeedback label="교역국별 수출입" states={data.states.countries} />
                 <div style={{ marginTop: 14 }}>
                   <div className="th" style={{ gridTemplateColumns: COUNTRY_TABLE_COLS }}>
                     <span>순위</span><span>교역국</span><span className="r">수출액</span><span className="r">수입액</span>
                   </div>
                   {countryTable.loading && Array.from({ length: tableSkeletonRows.countries }, (_, i) => <TableRowSkeleton key={i} cols={COUNTRY_TABLE_COLS} widths={[14, '70%', 48, 44]} />)}
-                  {data.countryTable.rows.map(([rank, name, exp, imp]) => (
+                  {data.countryTable.rows.map(([rank, name, exp, imp, code]) => (
                     <div key={name} className="tr row2" style={{ gridTemplateColumns: COUNTRY_TABLE_COLS }}>
-                      <span className="b">{rank}</span><span title={name} style={{ fontWeight: 700 }}>{name}</span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
+                      <span className="b">{rank}</span>{/* 국기와 국가명을 나눠 국기가 한 줄을 혼자 차지하지 않게 하고, 줄 제한은 국가명에만 건다(#132).
+                          국기 폭만큼 좁아진 만큼 국가명은 세 줄까지 둔다(행 높이 72px 안에 22px×3줄). */}
+                      <span title={name} style={{ fontWeight: 700, display: 'flex', alignItems: 'center' }}><Flag code={code} blank={false} /><span style={{ minWidth: 0, display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden', overflowWrap: 'break-word' }}>{name}</span></span><span className="r b" title={exp}>{exp}</span><span className="r s" title={imp}>{imp}</span>
                     </div>
                   ))}
                   {data.countryTable.empty && <p className="muted" style={{ padding: '18px 4px' }}>조회 기간에 집계된 교역국 실적이 없습니다. (— 는 실적 없음)</p>}
@@ -503,7 +513,7 @@ export default function Dashboard({ route }) {
               </div>
             ))}
           </div>
-          <RegionError label="한국의 세계시장 점유율" states={[un]} /><p className="muted share-note" style={{ marginTop: 14, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
+          <RegionFeedback label="한국의 세계시장 점유율" states={[un]} /><p className="muted share-note" style={{ marginTop: 14, fontSize: 12 }}>{profile.products.length ? '조회 조건에 공개된 UN 관측값만 표시합니다. 빈 결과는 미수집 상태이며 0%를 뜻하지 않습니다.' : '관심 HS6 품목을 등록하면 공개된 UN 데이터를 조회합니다.'}</p>
         </div>
         </section>
 
@@ -516,7 +526,7 @@ export default function Dashboard({ route }) {
             </div>
             <Link to="/articles" className="more">기사홈 →</Link>
           </div>
-          <RegionError label="기사" states={data.states.news} />
+          <RegionFeedback label="기사" states={data.states.news} />
           <div data-reveal="up" data-d="1" aria-busy={data.newsLoading} style={{ marginTop: 20, display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 22 }} className="resp-stack">
             {data.newsLoading && Array.from({ length: 4 }, (_, i) => <NewsCardSkeleton key={i} />)}
             {data.newsCards.map(n => {

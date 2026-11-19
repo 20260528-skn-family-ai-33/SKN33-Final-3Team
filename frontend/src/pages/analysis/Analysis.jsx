@@ -13,6 +13,7 @@ import { usePendingAction, useQuery, ErrorNotice } from '../../api/hooks'
 import { previewExpired, comparisonPeriod, reportPeriodInputs, reportConditions } from '../../api/integration'
 import { monthOffset } from '../home/useDashboard'
 import { countryName, productChoiceLabel } from '../../data/catalog'
+import Flag from '../../components/Flag'
 import { ALL_SECTIONS } from '../../data/seed'
 const range = (from, to) => `${from || '—'} ~ ${monthEndDate(to) || '—'}`
 const PERIOD_PRESETS = [['3', '최근 3개월'], ['6', '최근 6개월'], ['12', '최근 12개월']]
@@ -634,7 +635,7 @@ export default function Analysis({ route }) {
       <Modal open={!!interest} onClose={()=>!savingInterest&&setInterest(null)} width={480} label="관심 목록 추가">
         <h2>관심 목록에 추가할 항목</h2><p className="note">저장할 국가·품목을 선택하세요. 품목은 HS6 단위로 등록됩니다.</p>
         <div className="col" style={{gap:12,maxHeight:320,overflowY:'auto',margin:'16px 0'}}>
-          {interest?.countries.map(c=>{const saved=interest.savedCountries.has(c);return <Check key={c} disabled={savingInterest||saved} checked={saved||interest.country_codes.includes(c)} onChange={on=>setInterest({...interest,country_codes:on?[...interest.country_codes,c]:interest.country_codes.filter(v=>v!==c)})}>{countryName(c)}{saved&&' · 이미 등록됨'}</Check>})}
+          {interest?.countries.map(c=>{const saved=interest.savedCountries.has(c);return <Check key={c} disabled={savingInterest||saved} checked={saved||interest.country_codes.includes(c)} onChange={on=>setInterest({...interest,country_codes:on?[...interest.country_codes,c]:interest.country_codes.filter(v=>v!==c)})}><Flag code={c} blank={false} />{countryName(c)}{saved&&' · 이미 등록됨'}</Check>})}
           {interest?.products.map(h=>{const saved=interest.savedProducts.has(h.hs_ver+h.hs_code);return <Check key={h.hs_ver+h.hs_code} disabled={savingInterest||saved} checked={saved||interest.hs_items.includes(h)} onChange={on=>setInterest({...interest,hs_items:on?[...interest.hs_items,h]:interest.hs_items.filter(v=>v!==h)})}>{productChoiceLabel(h.hs_code,h.name_ko)}{saved&&' · 이미 등록됨'}</Check>})}
           {interest&&!interest.countries.length&&!interest.products.length&&<p>추가할 국가·HS6 품목이 없습니다. 국가나 품목을 지정해 분석해 주세요.</p>}
           {interest&&(interest.countries.length>0||interest.products.length>0)&&!selectableInterest&&<p role="status">모두 이미 등록된 항목입니다.</p>}

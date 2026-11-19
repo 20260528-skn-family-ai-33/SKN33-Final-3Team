@@ -31,6 +31,8 @@ MAX_SLOT_CHARS = 120             # 플래너가 옮긴 국가·품목 표현 하
 MAX_RECENT_MONTHS = 240          # "최근 N개월" 상한. 넘으면 안내한다(D-73). 날짜 계산(shift_month)이 깨지지 않게 둔다
 MAX_CHART_LABELS = 60            # 차트 하나의 x축 값 수
 MAX_CHART_SERIES = 5
+# 기준 기간 하나와 비교 기간 여럿을 한 표·차트에 둔다(2026-11-12). 첫 비교 기간(compare_period)과 합쳐 차트 시리즈 상한에 맞춘다
+MAX_EXTRA_COMPARE_PERIODS = MAX_CHART_SERIES - 2
 # 칸 상한(D-62). 코드가 만드는 표시용 글자(HS4 품목명이 최대 347자)는 거부하지 않고 자른다.
 # LLM이 쓰는 Draft 문장만 넘으면 거부해 재시도한다.
 MAX_TEXT_CHARS = 200             # 문장 하나: 답변 문장, 되묻기 문구·선택지, 경고, 오류, 적용 조건
@@ -200,6 +202,9 @@ class Conditions(Model):
     period: Period | None = None            # 수출입 기간(기본 최근 12개월)
     # None은 비교 없음. 비교를 요청했는데 기간이 없으면 check가 전년 동기를 계산해 넣는다(D-29, D-73)
     compare_period: Period | None = None
+    # 두 번째 이후 비교 기간("2025년 기준 2023년·2024년"의 2024년). compare_period가 있을 때만 쓴다.
+    # 기존 API·리포트 조건(api_conditions)에는 넣지 않고 결과 digest·meta에만 싣는다
+    extra_compare_periods: list[Period] = Field(default_factory=list, max_length=MAX_EXTRA_COMPARE_PERIODS)
     year_comparison: YearComparison | None = None
     article_period: ArticlePeriod | None = None   # 기사 발행일 기간, 일 단위(기본 최근 3개월)
     trade_flow: Literal['EXPORT', 'IMPORT'] = 'EXPORT'
@@ -211,6 +216,8 @@ class Conditions(Model):
         # RagRequest도 중복을 거부한다. 되묻기 답을 병합할 때 중복을 걸러야 한다.
         _unique([(p.hs_code, p.hs_ver) for p in self.hs_items], '품목·버전')
         _unique(self.country_codes, '국가')
+        if self.extra_compare_periods and not self.compare_period:
+            raise SafeError('추가 비교 기간에는 첫 비교 기간이 필요합니다')
         return self
 
 
@@ -252,6 +259,7 @@ class SessionContext(Model):
     session_id: str
     conditions: Conditions | None = None   # 최근 검색 조건
     both_trade_flows: bool = False  # 같은 검색 조건으로 수출과 수입을 모두 조회했는지
+    trade_balance: bool = False  # 직전 답변이 무역수지(수출액 − 수입액) 통계였는지. 후속 통계는 무역수지, 원인은 두 방향으로 잇는다
     article_retry: ArticleRetry | None = None  # 검증된 답변 이력과 별도로 보관하는 마지막 기사 요청
     recent: list[TurnSummary] = Field(default_factory=list, max_length=HISTORY_TURNS)  # 오래된 것부터
     interest_action: Literal['NONE', 'APPLIED', 'DECLINED', 'CLEARED'] = 'NONE'
@@ -324,8 +332,12 @@ class PlannerSlots(Model):
     trade_flow: Literal['EXPORT', 'IMPORT'] | None = None
     # None은 False와 같다. 기본값 False는 strict 스키마에 "default"로 실려 None으로 둔다(LLM 출력 모델)
     comparison_requested: bool | None = None
+    amount_view: Literal['MONTHLY', 'TOTAL'] | None = None  # 서버의 수출입 금액 템플릿
+    trade_balance: bool | None = None  # 수출액 − 수입액을 요청한 통계
     amount_difference_only: bool | None = None  # 두 기간의 합계·달러 차액만 요청한 통계 질문
     compare_period: Period | None = None
+    # 비교 기간이 여럿이면 첫 기간은 compare_period, 나머지는 여기에 요청 순서대로 둔다
+    extra_compare_periods: list[Period] | None = None
     ranking_group: Literal['COUNTRY', 'HS6'] | None = None
     share_basis: Literal['KOREA_TRADE_PARTNER', 'FOREIGN_IMPORT_MARKET'] | None = None
     article_period: ArticlePeriod | None = None
@@ -335,6 +347,13 @@ class PlannerSlots(Model):
 
     @model_validator(mode='after')
     def check_periods(self):
+        # 비교 기간을 여럿 말하면 플래너 LLM이 모두 extra_compare_periods에 넣고 compare_period를 비우기 쉽다.
+        # 오류로 질문 전체를 끝내지 않고 첫 기간을 compare_period로 옮긴다. 기간을 말했으니 비교 요청이다.
+        if self.extra_compare_periods:
+            if self.compare_period is None:
+                self.compare_period, self.extra_compare_periods = (self.extra_compare_periods[0],
+                                                                   self.extra_compare_periods[1:] or None)
+            self.comparison_requested = True
         if self.period is not None and self.recent_months is not None:
             raise SafeError('절대 기간과 최근 개월 수를 동시에 지정할 수 없습니다')
         if self.compare_period is not None and not self.comparison_requested:
@@ -356,6 +375,8 @@ class PlannerSlots(Model):
             errors.append('국가·품목 이름을 더 짧게 입력해 주세요.')
         if self.recent_months and self.recent_months > MAX_RECENT_MONTHS:
             errors.append(f'최근 {MAX_RECENT_MONTHS}개월까지 조회할 수 있습니다.')
+        if self.extra_compare_periods and len(self.extra_compare_periods) > MAX_EXTRA_COMPARE_PERIODS:
+            errors.append(f'비교 기간은 한 번에 {MAX_EXTRA_COMPARE_PERIODS + 1}개까지 비교할 수 있습니다.')
         return errors
 
 
@@ -560,6 +581,7 @@ class Pending(Model):
     # 표시용(되묻기 문구의 "남은 품목 n개"). 확정한 값의 원본은 Task.resolved이고, check는 그것으로 재실행한다(§3-12)
     remaining: list[ShortText] = Field(default_factory=list, max_length=MAX_HS_ITEMS)   # 아직 못 정한 품목 표현
     selected: list[HsProduct] = Field(default_factory=list, max_length=MAX_HS_ITEMS)  # 앞 표현에서 고른 품목
+    hs_ver: Literal['HS2017'] | None = None   # 이전 판본의 품목 되묻기에서 코드 입력을 같은 판본으로 확인한다.
     asked_at: datetime
 
 
@@ -573,7 +595,7 @@ class ChartSpec(Model):
     (LineChart는 yTicks·색 추가, Donut은 [label, 비율, 색], None 칸은 선을 끊음)."""
     chart_id: str
     task_id: str
-    type: Literal['line', 'bar', 'grouped_bar', 'donut']   # 추이 / 순위 / 두 시점 비교 / 비중
+    type: Literal['line', 'bar', 'grouped_bar', 'donut']   # 추이 / 순위 / 기간 비교(2~5개 기간) / 비중
     title: Label
     unit: Annotated[str, Field(max_length=20)]
     period: Period | None = None
@@ -592,8 +614,9 @@ class ChartSpec(Model):
         _unique([s.name for s in self.series], '시리즈 이름')
         if self.type == 'donut' and len(self.series) != 1:
             raise ValueError('donut은 시리즈 1개입니다')
-        if self.type == 'grouped_bar' and len(self.series) != 2:
-            raise ValueError('grouped_bar는 두 시점, 시리즈 2개입니다')
+        # 비교 기간이 여럿이면(2026-11-12, 이슈 113) 기간마다 시리즈 하나다. 시리즈 상한은 위 series 칸이 검사한다.
+        if self.type == 'grouped_bar' and len(self.series) < 2:
+            raise ValueError('grouped_bar는 비교할 시리즈가 2개 이상입니다')
         return self
 
 
@@ -692,10 +715,10 @@ class TaskConclusion(Model):
     sentences: list[Sentence] = Field(min_length=1, max_length=MAX_TEXT_TASK_SENTENCES)
 
     @classmethod
-    def report_completed(cls, task_id: str) -> 'TaskConclusion':
-        """워커가 READY를 확인한 뒤 compose가 사용하는 고정 결론(D-93)."""
+    def report_completed(cls, task_id: str, note: str | None = None) -> 'TaskConclusion':
+        """워커가 READY를 확인한 뒤 compose가 사용하는 고정 결론(D-93). note는 리포트 범위 안내(수입 결과 제외 등)다."""
         return cls(task_id=task_id, sentences=[
-            '요청하신 리포트가 완성되었습니다. 아래에서 확인하거나 다운로드할 수 있습니다.'])
+            '요청하신 리포트가 완성되었습니다. 아래에서 확인하거나 다운로드할 수 있습니다.', *([note] if note else [])])
 
 
 class Draft(Model):
@@ -796,6 +819,44 @@ class RunBudget(Model):
 
     def remaining_seconds(self) -> float:
         return max(0.0, RUN_TIMEOUT_SECONDS - self.charged_seconds)
+
+
+# 리포트는 수출만 지원한다. 수입을 명시하지 않은 리포트에 연결된 수입 원본은 빼고 그 범위를 알린다. 계획(planner._report_sources)·
+# 조건 확인(bindings.report_export_sources)·실패 전파(AgentState.skip_blocked)가 아래 규칙만 쓴다.
+EXPORT_ONLY_REPORT_NOTE = '리포트는 수출 결과로만 만듭니다. 함께 조회한 수입 결과는 리포트에 넣지 않았습니다.'
+
+
+def report_drops_imports(intent, trade_flow) -> bool:
+    """수입 원본을 빼는 리포트인지. 방향 생략과 EXPORT(플래너 기본값 포함)는 같고, 수입 리포트를 명시한 경우만 아니다."""
+    return intent == 'REPORT' and trade_flow != 'IMPORT'
+
+
+def import_source(trade_flow, trade_balance) -> bool:
+    """리포트에서 뺄 수입 원본인지. 무역수지 표(수출 기준 계산)는 수입 원본이 아니다."""
+    return trade_flow == 'IMPORT' and not trade_balance
+
+
+def drop_report_sources(task, step_ids) -> None:
+    """리포트 입력과 의존 경로에서 원본 단계들을 빼고 범위를 알린다. 의존 경로에 남기면 그 누락 사유가 전이된다(D-96)."""
+    task.input_bindings = [b for b in task.input_bindings if b.source_step_id not in step_ids]
+    for step in task.steps:
+        step.depends_on = [d for d in step.depends_on if d not in step_ids]
+    if EXPORT_ONLY_REPORT_NOTE not in task.applied_defaults:
+        task.applied_defaults.append(EXPORT_ONLY_REPORT_NOTE)
+
+
+def _drop_failed_import_sources(task, stopped, owners):
+    """실패한 수입 조회가 남은 수출 원본의 리포트까지 멈추게 하지 않는다(그 원본은 어차피 뺀다)."""
+    if (not report_drops_imports(task.intent, task.slots.trade_flow) or not task.input_bindings
+            or not task.steps or task.steps[0].status != 'PENDING'):
+        return
+    def imported(binding):
+        source = owners.get(binding.source_step_id)
+        return source is not None and import_source(
+            source.conditions.trade_flow if source.conditions else source.slots.trade_flow, source.slots.trade_balance)
+    failed = {b.source_step_id for b in task.input_bindings if b.source_step_id in stopped and imported(b)}
+    if failed and not all(b.source_step_id in failed for b in task.input_bindings):
+        drop_report_sources(task, failed)
 
 
 class AgentState(Model):
@@ -950,8 +1011,11 @@ class AgentState(Model):
         단계는 계획 순서상 앞 단계에만 의존하므로 한 번 훑으면 하위 질문 간 전이 의존까지 처리된다."""
         if not self.plan: return []
         stopped = {s.step_id for s in self.plan.steps() if s.status in ('FAILED', 'SKIPPED')}
+        owners = {s.step_id: t for t in self.plan.tasks for s in t.steps}
         skipped = []
-        for s in self.plan.steps():
-            if s.status == 'PENDING' and stopped & set(s.depends_on):
-                s.status = 'SKIPPED'; stopped.add(s.step_id); skipped.append(s.step_id)
+        for task in self.plan.tasks:
+            _drop_failed_import_sources(task, stopped, owners)
+            for s in task.steps:
+                if s.status == 'PENDING' and stopped & set(s.depends_on):
+                    s.status = 'SKIPPED'; stopped.add(s.step_id); skipped.append(s.step_id)
         return skipped

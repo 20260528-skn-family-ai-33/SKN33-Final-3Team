@@ -90,9 +90,14 @@ class Runner:
                   or explicit_cause_followup(question, state.input.context))
         attempts, error = 0, None
         if output is None:
+            # 실행(runtime.Services.planner)과 같은 함수로 직전 무역수지 질문·대상을 정한다. 평가는 DB 없이 돌므로 대상은 코드만이다.
+            from backend.app.agents.runtime import balance_question, balance_targets
+            previous_question, targets = balance_question(state.input.context), balance_targets(state.input.context)
             output, attempts, error = self.parse('planner', PLANNER_PROMPT, planner_input(state), PlannerOutput, 2000,
                 lambda value: postprocess(value, question, trade_terms(self.settings),
                     previous_both_trade_flows=state.input.context.both_trade_flows,
+                    previous_trade_balance=state.input.context.trade_balance,
+                    previous_question=previous_question, previous_targets=targets,
                     previous_conditions=state.input.context.conditions))
         plan, code = None, None
         if output is not None:

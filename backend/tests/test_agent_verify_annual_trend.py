@@ -18,6 +18,21 @@ class AnnualTrendEvidenceTest(unittest.TestCase):
     def inspect(self, line):
         return inspect_sentence(line, [snapshot_evidence(self.payload)], countries=['미국','일본'])
 
+    def test_change_from_additional_comparison_year(self):
+        self.payload['meta']['extra_compare_periods'] = [{'start': '2023-01', 'end': '2023-12'}]
+        for row in self.rows:
+            row['compare2_total_usd'] = 75
+        prefix = '미국 부품 수출액은 2023년 75달러에서 2025년 125달러로 '
+        self.assertTrue(self.inspect(prefix + '50달러 증가했습니다.')[0])
+        self.assertTrue(self.inspect(prefix + '증가했습니다.')[0])
+        self.assertFalse(self.inspect(prefix + '25달러 증가했습니다.')[0])
+
+    def test_additional_comparison_year_supports_stated_day_boundaries(self):
+        self.payload['meta']['extra_compare_periods'] = [{'start': '2023-01', 'end': '2023-12'}]
+        statement = '비교 기간은 2023년 1월 1일부터 2023년 12월 31일까지입니다.'
+        self.assertTrue(self.inspect(statement)[0])
+        self.assertFalse(self.inspect(statement.replace('31일', '30일'))[0])
+
     def test_topic_years_do_not_assign_roles_to_the_dollar_difference(self):
         for row in self.rows:
             row['period_difference_usd'] = 25
@@ -164,3 +179,12 @@ class AnnualTrendEvidenceTest(unittest.TestCase):
                 self.rows.pop()
         self.payload['conditions']['period']['end'] = '2025-11'
         self.assertFalse(self.inspect(self.forward)[0])
+
+    def test_named_edition_selects_its_own_annual_totals(self):
+        # 같은 품목의 두 판본 행이 있으면 문장이 지정한 판본(HS2022)의 두 연도 합계로 증감액을 대조한다.
+        self.payload['rows'] = self.rows + [{**row, 'hs_ver': 'HS2017', 'total_usd': 9, 'compare_total_usd': 7}
+                                            for row in self.rows]
+        sentence = 'HS2022 기준 미국 부품 수출액은 2024년 100달러에서 2025년 125달러로 25달러 증가했습니다.'
+        self.assertTrue(self.inspect(sentence)[0])
+        self.assertFalse(self.inspect(sentence.replace('HS2022', 'HS2017'))[0])
+        self.assertFalse(self.inspect(sentence.replace('HS2022 기준 ', ''))[0])

@@ -81,7 +81,7 @@ function ResultSections({ sections, onDownload }) {
         return (
           <div key={table.result_id || table.kind}>
             {chart && <div style={{ marginTop: 14 }}>
-              <p className="muted">월별 수출액 · 단위 억 USD</p>
+              <p className="muted">{table.meta?.trade_balance ? '월별 무역수지' : '월별 수출액'} · 단위 억 USD</p>
               <LineChart width={900} height={240} labels={chart.labels} yTicks={chart.ticks} formatValue={reportEok} series={chart.series} />
               <div className="chips">{chart.series.map(s => <span key={s.name} className="lg"><i style={{ background: s.color }} />{s.name}</span>)}</div>
             </div>}

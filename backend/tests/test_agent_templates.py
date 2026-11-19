@@ -7,6 +7,7 @@ from backend.tests.api_support import reference_data, test_engine
 from backend.app.agents.templates import run_template
 from backend.app.agents.state import Conditions
 from backend.app.api.database import Store, Database
+from backend.app.api.results import display_columns
 
 
 class TemplateTest(unittest.TestCase):
@@ -128,8 +129,10 @@ class TemplateTest(unittest.TestCase):
                 self.assertEqual(len(chart.chart.series[0].values),len(analysis.rows))
                 if task.slots.ranking_group=='HS6':
                     self.assertEqual(len(analysis.rows),5)
-                    self.assertEqual(set(analysis.rows[0]),{'hs_code','name','rank',
+                    columns=display_columns([{'key':k} for k in analysis.rows[0]],analysis.rows,analysis.meta)
+                    self.assertEqual({c['key'] for c in columns},{'hs_code','name','rank',
                         'export_amount_usd' if flow=='EXPORT' else 'import_amount_usd'})
+                    self.assertEqual({r['hs_ver'] for r in analysis.rows},{'HS2022'})
                     self.assertEqual(analysis.result.digest['group'],'HS6')
 
     def test_selected_country_outside_top_ten_keeps_global_denominator(self):

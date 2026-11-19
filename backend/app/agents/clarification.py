@@ -22,6 +22,7 @@ def answer_patch(store, state, answer, interpret=None):
     pending = state.pending
     require(pending and answer.get('clarification_id') == pending.clarification_id,
             '현재 되묻기와 일치하지 않습니다.', 'CLARIFICATION_CONFLICT', 409)
+    hs_ver = pending.hs_ver or 'HS2022'
     fields = set(answer) - {'clarification_id'}
     require(len(fields)==1 and fields <= {'choice_ids', 'hs_item', 'interest_selection', 'report_confirmation', 'text'},
             '되묻기 답은 한 가지 방식으로 제출하세요.')
@@ -59,9 +60,10 @@ def answer_patch(store, state, answer, interpret=None):
         require(pending.kind=='HS_ITEM','품목 선택 요청이 아닙니다.')
         try:
             item = HsProduct.model_validate(answer['hs_item'])
-            numeric_product(store,item.hs_code,item.hs_code,{item.hs_code})
+            require(item.hs_ver==hs_ver,f'이 되묻기는 {hs_ver} 판본의 품목을 확인합니다.')
+            numeric_product(store,item.hs_code,item.hs_code,{item.hs_code},hs_ver=hs_ver)
             from backend.app.api.accounts import validate_scope
-            validate_scope(store,[item.model_dump()],[])
+            validate_scope(store,[item.model_dump()],[],hs_versions=(hs_ver,))
         except (ValueError,SlotRepair): require(False,'등록된 HS 품목과 판본을 선택하세요.')
         return {'hs_items':[item.model_dump()]}
     raw = answer.get('text')
@@ -79,9 +81,9 @@ def answer_patch(store, state, answer, interpret=None):
         require(len(exact)==1,'국가를 찾을 수 없습니다. 전체 국가명(예: 중국) 또는 국가 코드(예: CN)를 입력해 주세요.')
         return {'country_codes':list(exact)}
     if pending.kind=='HS_ITEM' and key.isdigit() and len(key) in (4,6):
-        try: numeric_product(store,key,key,{key})
+        try: numeric_product(store,key,key,{key},hs_ver=hs_ver)
         except SlotRepair: return {}
-        return {'hs_items':[{'hs_code':key,'hs_ver':'HS2022'}]}
+        return {'hs_items':[{'hs_code':key,'hs_ver':hs_ver}]}
     if pending.kind in ('MODEL_PERIOD','INTEREST_CONTEXT','INTEREST_CHANGE'):
         if key in ('예','네','응','좋아','동의','확인','적용','생성'): return pending.choices[0].patch
         if key in ('아니','아니오','아니요','싫어','거절','취소','전체'): return pending.choices[-1].patch

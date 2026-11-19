@@ -10,6 +10,177 @@ from backend.tests.test_agent_graph import initial
 
 
 class MonthlySummaryTest(unittest.TestCase):
+    def test_percentage_prose_survives_direction_repair_and_is_still_verified(self):
+        lines = [
+            '수출액은 11월에 5.2% 증가한 뒤 12월에 3.1% 감소했습니다.',
+            '수출액은 11월에 5.2퍼센트 증가한 뒤 12월에 3.1프로 감소했습니다.',
+            '12월 수출액은 전월보다 3.1 % 감소했습니다.',
+            '12월 수출액 증가율은 0.5%p 하락했습니다.',
+            '12월 수출액 증가율은 0.5퍼센트포인트 하락했습니다.',
+            '12월 수출액 증가율은 0.5pp 하락했습니다.',
+            '12월 수출액은 3.1(%) 감소했습니다.',
+        ]
+        for fmt in (None, 'TEXT'):
+            for line in lines:
+                with self.subTest(fmt=fmt, line=line):
+                    state, sources = self.writer_example()
+                    task = state.plan.tasks[0]
+                    task.slots.answer_format = fmt
+                    task.question = '월별 수출액과 증감률을 설명해줘'
+                    state.draft = assemble(state, Draft(conclusion=[dict(task_id='t1', sentences=[line])],
+                        explanation=[line], turn_summary=line), {}, lambda _: {})
+                    self.assertEqual(state.draft.sentences(), [line, line])
+                    self.assertEqual(state.draft.turn_summary, line)
+                    if line == lines[0]:
+                        verify(state, snapshots=sources)
+                        self.assertTrue(all(c.status == 'MISMATCH' for c in state.verification.checks))
+                        self.assertEqual(state.draft.turn_summary, '')
+
+        # An explicitly recorded year-on-year rate can be verified even when
+        # the Writer omits the comparison word. Preservation must not approve it.
+        rows = [dict(month='2025-11', amount_usd=10520, compare_month='2024-11',
+                     compare_amount_usd=10000, yoy_pct=5.2),
+                dict(month='2025-12', amount_usd=9690, compare_month='2024-12',
+                     compare_amount_usd=10000, yoy_pct=-3.1)]
+        state, sources = self.example(rows, comparison=True)
+        state.plan.tasks = state.plan.tasks[:1]
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        state.draft = assemble(state, Draft(conclusion=[dict(task_id='t1', sentences=[lines[0]])],
+            explanation=[lines[0]], turn_summary=lines[0]), {}, lambda _: {})
+        self.assertEqual(state.draft.sentences(), [lines[0], lines[0]])
+        self.assertTrue(all(c.status == 'PASS' for c in judge_draft(state, snapshots=sources).checks))
+        for source in sources.values():
+            source['rows'][0]['yoy_pct'] = 52
+        self.assertTrue(all(c.status == 'MISMATCH' for c in judge_draft(state, snapshots=sources).checks))
+
+    def test_endpoint_amounts_and_extrema_survive_monthly_direction_repair(self):
+        lines = [
+            '수출액은 10월 120만 달러, 12월 150만 달러로 증가했습니다.',
+            '10월 수출액은 120만 달러였고 12월에는 150만 달러로 늘었습니다.',
+            '10월 수출액은 120만, 12월에는 150만으로 증가했습니다.',
+            '10월 수출액은 1.2억 달러, 12월에는 1.5억 달러로 증가했습니다.',
+            '10월 수출액은 1,200,000 USD, 12월에는 1,500,000 USD로 증가했습니다.',
+            '10월 수출액은 USD 1,200,000, 12월에는 USD 1,500,000로 증가했습니다.',
+            '10월 수출액은 $1.2M, 12월에는 $1.5M로 증가했습니다.',
+            '10월 수출액은 1200000(USD), 12월에는 1500000(USD)로 증가했습니다.',
+            '12월 수출액은 150만 달러로 증가했습니다.',
+            '12월 수출액은 0달러로 감소했습니다.',
+            '12월 수출액은 1.5만으로 증가했습니다.',
+            '12월 수출액은 1조로 증가했습니다.',
+            '12월 수출액은 1500000usd로 증가했습니다.',
+            '2025년 10월 120만 달러에서 12월 150만 달러로 수출액이 증가했습니다.',
+            '월별 수출액은 10월이 최저(100만 달러)였고 12월에 최고로 증가했습니다.',
+            '10월 수출액은 120만달러에서 12월 150만으로 증가했습니다.',
+            '10월 수출액 1,200,000 USD에서 12월 1,500,000 USD로 증가했습니다.',
+            '10월 수출액 120만 달러부터 12월 150만 달러까지 증가했습니다.',
+            '월별 수출액은 10월에 가장 낮았고 12월에 가장 높은 수준으로 증가했습니다.',
+        ]
+        for fmt in (None, 'TEXT'):
+            for line in lines:
+                with self.subTest(fmt=fmt, line=line):
+                    state, sources = self.writer_example()
+                    task = state.plan.tasks[0]
+                    task.slots.answer_format = fmt
+                    task.question = '10월보다 12월 수출액이 얼마나 늘었나?'
+                    generated = Draft(conclusion=[dict(task_id='t1', sentences=[line])],
+                                      explanation=[line], turn_summary=line)
+                    state.draft = assemble(state, generated, {}, lambda _: {})
+                    self.assertEqual(state.draft.sentences(), [line, line])
+                    self.assertEqual(state.draft.turn_summary, line)
+                    # Preserving prose is not approving it: invented amounts still fail.
+                    if line in lines[:2]:
+                        self.assertTrue(all(c.status == 'MISMATCH'
+                                            for c in judge_draft(state, snapshots=sources).checks))
+                        verify(state, snapshots=sources)
+                        self.assertEqual(state.verification.summary_status, 'MISMATCH')
+                        self.assertEqual(state.draft.turn_summary, '')
+
+    def test_preserved_amounts_still_require_saved_numeric_evidence(self):
+        state, sources = self.writer_example()
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        line = '11월 수출액은 101,223,467달러였고 12월에는 122,387,836달러로 늘었습니다.'
+        state.draft = assemble(state, Draft(conclusion=[dict(task_id='t1', sentences=[line])],
+                                           explanation=[line], turn_summary=line), {}, lambda _: {})
+        self.assertEqual(state.draft.sentences(), [line, line])
+        verdict = judge_draft(state, snapshots=sources)
+        self.assertEqual([c.status for c in verdict.checks], ['PASS', 'PASS'])
+        self.assertEqual(verdict.summary_status, 'PASS')
+        # The preserved prose cannot pass on the Writer digest alone.
+        for snapshots in ({}, {key: {**value, 'rows': []} for key, value in sources.items()}):
+            verdict = judge_draft(state, snapshots=snapshots)
+            self.assertTrue(all(c.status == 'MISMATCH' for c in verdict.checks))
+
+    def test_plain_month_ranges_still_use_computed_movement(self):
+        from backend.app.agents.monthly_summary import reconcile_monthly_claims
+        state, sources = self.writer_example()
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        for line in ('월별 수출액은 1~5월 계속 증가했습니다.',
+                     '월별 수출액은 1월부터 5월까지 증가했습니다.',
+                     '2025년 11월에 수출액이 증가한 뒤 12월에 감소했습니다.'):
+            state.draft = Draft(conclusion=[dict(task_id='t1', sentences=[line])], turn_summary=line)
+            reconcile_monthly_claims(state, state.draft)
+            self.assertNotIn(line, state.draft.sentences())
+            self.assertEqual(judge_draft(state, snapshots=sources).checks[0].status, 'PASS')
+
+    def test_text_monthly_direction_is_rebuilt_and_checked_against_snapshot(self):
+        state, sources = self.writer_example()
+        task = state.plan.tasks[0]
+        task.slots.answer_format = 'TEXT'
+        task.question = '글로벌 화장품 월별 추이를 글로만 알려줘'
+        wrong = '월별 수출액은 1월부터 5월까지 증가한 뒤 6월에 감소했습니다.'
+        generated = Draft(conclusion=[dict(task_id='t1', sentences=[wrong])],
+                          explanation=[wrong], turn_summary=wrong)
+        state.draft = assemble(state, generated, {}, lambda _: {})
+        line = state.draft.conclusion[0].sentences[0]
+        self.assertNotIn(wrong, state.draft.sentences())
+        self.assertIn('증가 7개월(2월, 3월, 4월, 7월, 8월, 9월, 12월)', line)
+        self.assertIn('감소 4개월(5월, 6월, 10월, 11월)', line)
+        self.assertEqual(state.draft.turn_summary, line)
+        verdict = judge_draft(state, snapshots=sources)
+        self.assertEqual([c.status for c in verdict.checks], ['PASS', 'PASS'])
+        self.assertEqual(verdict.summary_status, 'PASS')
+        # The draft/digest cannot validate itself: a different saved direction fails.
+        next(iter(sources.values()))['rows'][4]['amount_usd'] = 200000000
+        self.assertTrue(all(c.status == 'MISMATCH' for c in judge_draft(state, snapshots=sources).checks))
+
+    def test_movement_uses_unrounded_adjacent_months_and_zero(self):
+        rows = [dict(month=m, amount_usd=a) for m,a in
+                [('2024-12', 511100), ('2025-01', 512100), ('2025-02', 513100),
+                 ('2025-03', 0), ('2025-04', 0), ('2025-06', 1), ('2025-07', None), ('2025-08', 2)]]
+        movement = monthly_facts(rows)['movement']
+        self.assertEqual(movement, {'up': {'count': 2, 'months': ['2025-01', '2025-02']},
+                                   'down': {'count': 1, 'months': ['2025-03']},
+                                   'equal': {'count': 1, 'months': ['2025-04']}})
+
+    def test_explicit_previous_month_direction_uses_the_same_saved_facts(self):
+        from backend.app.agents.monthly_summary import reconcile_monthly_claims
+        state, sources = self.writer_example()
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        for wrong in ('5월 수출액은 전월보다 증가했습니다.', '5월 수출액은 전월 대비 증가했습니다.',
+                      '월별 수출액은 계속 오르면서 5월까지 증가했습니다.'):
+            state.draft = Draft(conclusion=[dict(task_id='t1', sentences=[wrong])], turn_summary=wrong)
+            reconcile_monthly_claims(state, state.draft)
+            self.assertNotIn(wrong, state.draft.sentences())
+            self.assertEqual(judge_draft(state, snapshots=sources).checks[0].status, 'PASS')
+
+    def test_direction_repair_preserves_endpoint_comparisons_and_articles(self):
+        from backend.app.agents.monthly_summary import reconcile_monthly_claims
+        state, _ = self.writer_example()
+        state.plan.tasks[0].slots.answer_format = 'TEXT'
+        for line in ('5월 수출액은 1월보다 증가했습니다.', '5월 수출액은 전년 동월 대비 감소했습니다.',
+                     '5월 수출액은 감소했습니다. [1]', '4월 수출액은 179,832,954달러입니다.'):
+            draft = Draft(conclusion=[dict(task_id='t1', sentences=[line])], explanation=[line], turn_summary=line)
+            reconcile_monthly_claims(state, draft)
+            self.assertEqual(draft.sentences(), [line, line])
+            self.assertEqual(draft.turn_summary, line)
+
+    def test_incomplete_months_do_not_get_a_complete_movement_summary(self):
+        from backend.app.agents.monthly_summary import task_series
+        state, _ = self.writer_example()
+        result = next(iter(state.results.values()))
+        result.digest['targets'][0]['monthly_facts']['movement']['up']['count'] -= 1
+        self.assertEqual(task_series(state, state.plan.tasks[0], movement=True), ())
+
     def example(self, rows, comparison=False):
         state = AgentState.model_validate(initial())
         state.plan, _ = build_plan(PlannerOutput(tasks=[

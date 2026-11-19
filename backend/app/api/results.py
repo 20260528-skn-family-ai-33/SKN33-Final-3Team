@@ -3,7 +3,7 @@ from datetime import timedelta, timezone
 import re
 from sqlalchemy import select
 from backend.app.api.filenames import selection_part
-from backend.app.api.common import now, clean, ApiError, page_info, require
+from backend.app.api.common import now, clean, ApiError, page_info, require, period_label
 
 LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_usd':'수입액',
         'previous_amount_usd':'비교 기간 수출액','comparison_pct':'비교 증감률',
@@ -13,7 +13,7 @@ LABELS={'amount_usd':'수출액','export_amount_usd':'수출액','import_amount_
         'rank_status':'순위 상태','previous_year_export_usd':'전년 수출액','previous_year_import_usd':'전년 수입액','growth_pct':'증감률',
         'current_amount_usd':'현재 수출액','baseline_amount_usd':'비교 수출액','change_amount_usd':'증감액',
         'growth_status':'증감 상태','severity':'변화 수준','hs_item':'품목','hs_name':'품목명','one_off':'일회성 판정','label':'구분'}
-LABELS.update({'country_name':'국가','hs_code':'HS 코드','trade_month':'기준월',
+LABELS.update({'country_name':'국가','hs_code':'HS 코드','hs_ver':'HS 판본','trade_month':'기준월',
     'total_usd':'기간 합계','compare_total_usd':'비교 기간 합계','period_difference_usd':'기간 합계 차액','change_pct':'증감률',
     'monthly_avg_usd':'월평균 금액','compare_monthly_avg_usd':'비교 기간 월평균',
     'compare_amount_usd':'비교 기간 금액','compare_month':'비교 기준월','verified_months':'집계된 개월 수',
@@ -70,25 +70,74 @@ def display_columns(columns, rows, meta=None, flow=None):
     if (meta or {}).get('kind') == 'LLM_SQL':
         # 자유 SQL의 열은 요청에 맞춰 모델이 고른 결과다(판본별 품목 수의 hs_ver 등). 템플릿용 숨김 규칙을 쓰지 않는다.
         return [{**c,'label':flow_label(c['key'],c.get('label') or LABELS.get(c['key'],c['key']),flow)} for c in columns]
-    hidden={'hs_ver'}
+    versioned = (meta or {}).get('kind') in ('TREND', 'RANKING', 'COUNTRY_COMPARISON') and any(
+        r.get('hs_ver') not in (None, 'HS2022') for r in rows)
+    hidden = set() if versioned else {'hs_ver'}
+    # 순위 결과표의 순위 상태(NEW·UP·…)는 채팅 표에서 대부분 '해당 없음'이라 열로 보이지 않는다(2026-11-17 사용자 결정).
+    # 행에는 남겨 순위 변화(rank_change)·검증 근거로 쓴다.
+    if (meta or {}).get('kind') == 'RANKING': hidden.add('rank_status')
+    if versioned and not any(c['key'] == 'hs_ver' for c in columns):
+        # 이전 결과표는 행에 판본을 저장했어도 표시 열에서는 빼 두었다.
+        columns = [*columns, {'key': 'hs_ver', 'label': LABELS['hs_ver'], 'type': 'string', 'unit': None}]
     labels={**LABELS,'name':'품목' if any(r.get('hs_code') for r in rows) else '국가' if any(r.get('country_code') for r in rows) else '명칭'}
     if not any(r.get('hs_item') for r in rows): hidden.add('hs_item')
     if any(r.get('country_name') for r in rows): hidden.add('country_code')
     if any('hs_code' in r for r in rows) and not any(r.get('hs_code') for r in rows): hidden.update(('hs_code','name'))
     # Monthly rows also carry aggregate metadata for chart/digest consumers.
+    extras=len((meta or {}).get('extra_compare_periods') or [])
+    # 비교 기간이 여럿이면 기간 이름("2023년 금액")을 result_table이 먼저 넣은 기본 이름보다 우선한다.
+    periods=_period_labels(meta or {})
+    if (meta or {}).get('trade_balance'):
+        balance_labels = {'amount_usd': '무역수지', 'total_usd': '기간 무역수지 합계',
+                          'monthly_avg_usd': '월평균 무역수지', 'compare_amount_usd': '비교 기간 무역수지'}
+        periods = {**balance_labels, **{key: label.replace('금액', '무역수지') if key.endswith('amount_usd')
+                                       else label for key, label in periods.items()}}
+    if (meta or {}).get('period_totals') and not (meta or {}).get('compare_period'):
+        hidden.update(('compare_total_usd','compare_monthly_avg_usd','compare_verified_months',
+                       'compare_requested_months','compare_verified_subtotal_usd','change_pct'))
     if any('month' in r and 'verified_months' in r for r in rows):
-        monthly_compare=any(r.get('compare_amount_usd') is not None for r in rows)
-        # 길이가 다른 기간 비교(D-84)는 월별 비교 금액이 없고 양쪽 총액·월평균·검증 월 수가 비교 근거다. 그때는 숨기지 않는다.
-        period_compare=not monthly_compare and any(r.get('compare_requested_months')
-                                                   and r.get('compare_requested_months')!=r.get('requested_months') for r in rows)
-        if not period_compare:
-            hidden.update(('total_usd','compare_total_usd','period_difference_usd','change_pct','monthly_avg_usd',
-                'compare_monthly_avg_usd','verified_months','requested_months',
-                'compare_verified_months','compare_requested_months','verified_subtotal_usd',
-                'compare_verified_subtotal_usd'))
-        if not monthly_compare: hidden.update(('compare_amount_usd','compare_month'))
-    return [{**c,'label':flow_label(c['key'],labels.get(c['key'],c.get('label',c['key']))
+        # 비교 기간마다 따로 정한다. 길이가 같으면 월별 비교 금액을 보이고, 다르면(D-84) 월별 금액이 없으므로
+        # 총액·월평균·검증 월 수를 비교 근거로 보인다. 어느 기간이든 길이가 다르면 조회 기간의 총액 열도 보인다.
+        aggregate=('total_usd','monthly_avg_usd','verified_months','requested_months','verified_subtotal_usd')
+        prefixes=[('compare_','change_pct'),*((f'compare{n}_',f'change{n}_pct') for n in range(2,extras+2))]
+        # 월별 비교 열은 저장된 비교 월로 정한다. 금액으로 정하면 집계된 월이 없는 비교 기간의 열이 통째로 사라진다(값은 미집계로 둔다).
+        monthly={prefix:any(r.get(prefix+'month') is not None for r in rows) for prefix,_ in prefixes}
+        by_period={prefix:not monthly[prefix] and any(r.get(prefix+'requested_months')
+                   and r.get(prefix+'requested_months')!=r.get('requested_months') for r in rows) for prefix,_ in prefixes}
+        # 한 기간이라도 길이가 다르면 차트는 모든 기간을 월평균으로 그린다(charts.build_chart). 그때는 모든 기간의
+        # 합계·월평균·집계 개월 수를 보여 차트가 안내한 분모를 표에서 확인할 수 있게 한다.
+        # 여러 비교 기간 표는 기간 합계·월평균·차액·증감률로 비교하는 결과다(설계 '여러 기간 동시 비교'). 길이가 같아도
+        # 계산한 요약 열을 숨기지 않는다.
+        any_period=any(by_period.values()) or extras>0
+        for prefix,change in prefixes:
+            if not any_period: hidden.update((change,*(prefix+field for field in aggregate),prefix+'period_difference_usd'))
+            if not monthly[prefix]: hidden.update((prefix+'amount_usd',prefix+'month'))
+        # 기간 합계 차액(조회 기간 − 첫 비교 기간)도 합계 열과 같이 길이가 다른 기간 비교에서만 보인다.
+        if not any_period: hidden.update((*aggregate,'period_difference_usd'))
+    return [{**c,'label':periods.get(c['key']) or flow_label(c['key'],labels.get(c['key'],c.get('label',c['key']))
              if c.get('label',c['key'])==c['key'] else c['label'],flow)} for c in columns if c['key'] not in hidden]
+
+
+def _period_labels(meta):
+    """비교 기간이 여럿이면(meta.extra_compare_periods) 비교 열 이름에 기간을 붙여 구분한다. 하나뿐이면 기존 이름을 쓴다."""
+    if not meta.get('extra_compare_periods'): return {}
+    windows=[(meta.get('compare_period'),'compare_','change_pct'),
+             *((w,f'compare{n}_',f'change{n}_pct') for n,w in enumerate(meta['extra_compare_periods'],start=2))]
+    out={}
+    if meta.get('period'):
+        current = period_label(meta['period']['start'],meta['period']['end'])
+        out.update(amount_usd=current+' 금액', total_usd=current+' 합계')
+    for window,prefix,change in windows:
+        if not window: continue
+        label=period_label(window['start'],window['end'])
+        out.update({prefix+'amount_usd':label+' 금액', prefix+'month':label+' 기준월', prefix+'total_usd':label+' 합계',
+            prefix+'monthly_avg_usd':label+' 월평균', prefix+'verified_months':label+' 집계 개월 수',
+            prefix+'requested_months':label+' 조회 개월 수', prefix+'verified_subtotal_usd':label+' 집계 금액',
+            change:label+' 대비 증감률', prefix+'period_difference_usd':label+' 대비 합계 차액'})
+    # 기간 합계 차액(period_difference_usd)은 조회 기간 − 첫 비교 기간이다. 여러 기간 표에서 어느 기간과의 차액인지 밝힌다.
+    if (first:=meta.get('compare_period')):
+        out['period_difference_usd']=period_label(first['start'],first['end'])+' 대비 합계 차액'
+    return out
 
 
 def prediction_columns(columns, group_by):
@@ -123,7 +172,9 @@ def result_filename(payload, store=None):
     parts.append(selection_part([names.get(c,c) for c in codes], '전체국가'))
     products = selection_part([h['hs_code'] for h in conditions.get('hs_items',[])])
     if products: parts.append(products)
-    flow={'EXPORT':'수출','IMPORT':'수입'}.get(conditions.get('trade_flow'))
+    # 무역수지 결과는 저장된 지표를 따른다(조회 방향 trade_flow는 수출 기본값이라 '수출'이 붙으면 안 된다).
+    flow=('무역수지' if (payload.get('meta') or {}).get('trade_balance')
+          else {'EXPORT':'수출','IMPORT':'수입'}.get(conditions.get('trade_flow')))
     if flow: parts.append(flow)
     created=payload['snapshot_created_at']
     local=created.replace(tzinfo=created.tzinfo or timezone.utc).astimezone(timezone(timedelta(hours=9)))
@@ -138,13 +189,15 @@ def analysis_conditions(conditions):
     return {key:value for key,value in conditions.items() if key in Conditions.model_fields}
 
 
-def result_table(store, uid, rows, meta, conditions=None, sql=None, columns=None):
+def result_table(store, uid, rows, meta, conditions=None, sql=None, columns=None, *, verification_rows=None):
     rows=clean(rows)
     keys=list(rows[0]) if rows else []
     columns=columns or [{'key':k,'label':LABELS.get(k,k),'type':'number' if isinstance(rows[0][k],(int,float)) or k.endswith(('_usd','_pct')) else 'string',
                         'unit':'USD' if k.endswith('_usd') else '%' if k.endswith('_pct') else None} for k in keys]
     columns=display_columns(columns,rows,meta,(conditions or {}).get('trade_flow'))
     payload={'columns':columns,'rows':rows,'meta':clean(meta),'conditions':clean(analysis_conditions(conditions or {})),'sql':sql or [],'total_rows':len(rows)}
+    if verification_rows is not None:
+        payload['verification']={'kind':'TREND_MONTHLY_V1','rows':clean(verification_rows)}
     identity=save_snapshot(store,uid,'RESULT',payload)
     return {'result_id':identity,'columns':columns,'rows':rows,'total_rows':len(rows),
             'page':page_info(1,max(1,len(rows)),len(rows)),'meta':meta}

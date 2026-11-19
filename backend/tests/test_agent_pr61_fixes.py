@@ -38,8 +38,11 @@ class SqlFilterTest(unittest.TestCase):
         self.assertIn('GROUP BY', safe_error(group_by))
         self.assertNotIn('admin', safe_error(login))
 
-        task = SimpleNamespace(custom_query='2025년 미국 수출의 분기별 합계',
-                               conditions=Conditions(period={'start': '2025-01-01', 'end': '2025-12-01'}))
+        # Successful retry must match the confirmed scope; otherwise period validation
+        # correctly requests another generation, unrelated to the MySQL error under test.
+        task = SimpleNamespace(custom_query='2025년 미국 수출의 연간 합계',
+                               conditions=Conditions(country_codes=['US'],
+                                   period={'start': '2025-01-01', 'end': '2025-12-01'}))
         ok = ("SELECT SUM(amount_usd) AS value FROM export_summary WHERE country_code = 'US' AND hs_ver = 'HS2022' "
               "AND trade_month BETWEEN '2025-01-01' AND '2025-12-01'")
         client = MagicMock(); client.parse.side_effect = [draft(ok), draft(ok)]
@@ -53,7 +56,11 @@ class SqlFilterTest(unittest.TestCase):
              patch('backend.app.agents.sql.execute_readonly', side_effect=run):
             result = generated_analysis(object(), Settings({}), client, ledger, task, finish_reserve=40, latest_month='2025-12')
         self.assertEqual(result.result.status, 'OK')
+        self.assertTrue(result.meta['period_verified'])
+        self.assertEqual(client.parse.call_count, 2)
+        self.assertEqual(len(calls), 2)
         self.assertIn('1055', client.parse.call_args.kwargs['payload']['previous_error'])
+        self.assertIn('GROUP BY', client.parse.call_args.kwargs['payload']['previous_error'])
 
 
 class SqlFilterBypassTest(unittest.TestCase):
@@ -88,14 +95,39 @@ class SqlFilterBypassTest(unittest.TestCase):
         for sql in bad:
             with self.subTest(sql=sql), self.assertRaises(ValueError): validate_sql(draft(sql))
 
+    def test_not_in_non_country_subquery(self):
+        head = "SELECT SUM(e.amount_usd) AS value FROM export_summary e WHERE e.hs_ver = 'HS2022' AND e.country_code NOT IN "
+        ok = ["(SELECT country_code FROM country WHERE country_role <> 'COUNTRY')",
+              "(SELECT c.country_code FROM country c WHERE 'COUNTRY' != c.country_role)"]
+        bad = ["(SELECT country_code FROM country WHERE country_role <> 'COUNTRY' AND country_code = 'JG')",
+               "(SELECT country_code FROM country WHERE country_role = 'TOTAL')",
+               "(SELECT country_code FROM country)",
+               "(SELECT country_code FROM country WHERE country_role <> 'COUNTRY' LIMIT 1)",
+               "(SELECT region_id FROM country WHERE country_role <> 'COUNTRY')"]
+        for sql in ok:
+            with self.subTest(sql=sql): self.assertTrue(validate_sql(draft(head + sql)))
+        for sql in bad:
+            with self.subTest(sql=sql), self.assertRaises(ValueError): validate_sql(draft(head + sql))
+        with self.assertRaises(ValueError):  # NOT IN이 OR 아래에 있으면 행을 거르지 않는다.
+            validate_sql(draft(head.replace('AND e.country_code', 'AND (1=1 OR e.country_code') +
+                               "(SELECT country_code FROM country WHERE country_role <> 'COUNTRY'))"))
+
     def test_each_trade_table_needs_its_own_filters(self):
         ok = ["SELECT SUM(e.amount_usd) AS value FROM country c LEFT JOIN export_summary e ON e.country_code = c.country_code "
               "AND e.hs_ver = 'HS2022' WHERE c.country_role = 'COUNTRY'",
-              "SELECT SUM(e.amount_usd) AS value FROM export_summary e JOIN import_summary i ON i.country_code = e.country_code "
-              "AND i.trade_month = e.trade_month AND i.hs_ver = 'HS2022' AND i.country_code = 'US' "
-              "WHERE e.country_code = 'US' AND e.hs_ver = 'HS2022'"]
+              # 수출입 표끼리는 원본을 직접 잇지 않고 각자 거른 뒤 같은 단위로 집계한 CTE를 잇는다(중복 합산 방지).
+              "WITH ex AS (SELECT e.trade_month, SUM(e.amount_usd) AS amount FROM export_summary e "
+              "WHERE e.country_code = 'US' AND e.hs_ver = 'HS2022' GROUP BY e.trade_month), "
+              "im AS (SELECT i.trade_month, SUM(i.amount_usd) AS amount FROM import_summary i "
+              "WHERE i.country_code = 'US' AND i.hs_ver = 'HS2022' GROUP BY i.trade_month) "
+              "SELECT SUM(ex.amount) AS value FROM ex JOIN im ON im.trade_month = ex.trade_month"]
         bad = ["SELECT SUM(i.amount_usd) AS value FROM export_summary e JOIN import_summary i ON i.trade_month = e.trade_month "
                "WHERE e.country_code = 'US' AND e.hs_ver = 'HS2022'",
+               "WITH ex AS (SELECT e.trade_month, SUM(e.amount_usd) AS amount FROM export_summary e "
+               "WHERE e.country_code = 'US' AND e.hs_ver = 'HS2022' GROUP BY e.trade_month), "
+               "im AS (SELECT i.trade_month, SUM(i.amount_usd) AS amount FROM import_summary i "
+               "WHERE i.hs_ver = 'HS2022' GROUP BY i.trade_month) "
+               "SELECT SUM(ex.amount) AS value FROM ex JOIN im ON im.trade_month = ex.trade_month",
                "SELECT SUM(e.amount_usd) AS value FROM export_summary e WHERE e.hs_ver = 'HS2022' AND e.country_code IN "
                "(SELECT region_id FROM country WHERE country_role = 'COUNTRY')",
                "SELECT SUM(e.amount_usd) AS value FROM export_summary e JOIN country c ON c.region_id = 1 "
