@@ -111,3 +111,43 @@ class KeywordMajorMySQLTest(unittest.TestCase):
         self.db=Database(self.engine.execution_options(isolation_level='READ COMMITTED'))
         try: self.test_delete_and_minor_insert_cannot_both_commit()
         finally: self.db=original
+
+    def status(self,action):
+        try:
+            with category_transaction(self.db) as c: action(Store(self.db,c))
+            return 200
+        except ApiError as error: return error.status
+
+    def test_name_checks_use_the_column_collation(self):
+        # 실제 utf8mb4_0900_ai_ci에서 대소문자·악센트·전각만 다른 이름을 같은 대분류로 본다.
+        upper='AI_'+uuid4().hex[:8].upper()
+        self.create(upper)
+        for variant in (upper.lower(),upper.replace('A','Ａ',1)):
+            with self.subTest(variant=variant):
+                self.assertEqual(self.status(lambda s:category_change(s,self.actor,{'major_name':variant,'reason':'변형','confirmed':True})),409)
+                self.assertEqual(self.status(lambda s:category_change(s,self.actor,{'major_name':variant,'minor_name':'중','reason':'변형','confirmed':True})),409)
+        accent='cafe'+uuid4().hex[:6]
+        self.create(accent.replace('e','é',1))
+        self.assertEqual(self.status(lambda s:category_change(s,self.actor,{'major_name':accent,'reason':'변형','confirmed':True})),409)
+
+    def test_deleted_variant_cannot_resurrect_and_used_variant_is_not_editable(self):
+        version=self.version()
+        self.assertEqual(self.status(lambda s:self.edit(s,version,True)),200)
+        variant=self.name.swapcase() if self.name.swapcase()!=self.name else self.name.replace('_','＿')
+        self.assertEqual(self.status(lambda s:category_change(s,self.actor,{'major_name':variant,'minor_name':'유통','reason':'재등장','confirmed':True})),409)
+        used='B2B_'+uuid4().hex[:8].upper()
+        self.create(used,'중분류')
+        self.assertEqual(self.status(lambda s:category_change(s,self.actor,{'major_name':used.lower(),'reason':'변형','confirmed':True})),409)
+        with self.engine.connect() as c: data=categories(Store(self.db,c))
+        self.assertNotIn(used.lower(),data['major_names'])
+        self.assertNotIn(used,data['editable_major_names'])
+
+    def test_spelling_only_rename_is_allowed(self):
+        lower='fix_'+uuid4().hex[:8]
+        self.create(lower)
+        version=self.version()
+        self.assertEqual(self.status(lambda s:major_change(s,self.actor,{'major_name':lower,'new_major_name':lower.upper(),
+            'expected_version':version,'reason':'철자 수정','confirmed':True})),200)
+        with self.engine.connect() as c: names=categories(Store(self.db,c))['major_names']
+        self.assertIn(lower.upper(),names); self.assertNotIn(lower,names)
+        self.create(lower.upper(),'중분류')

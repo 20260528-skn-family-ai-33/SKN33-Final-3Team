@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import select
 from backend.tests import test_recovery_keyword_admin as fixtures
 from backend.app.api.database import Store
-from backend.app.api.keyword_admin import major_state
+from backend.app.api.keyword_admin import major_state, approximate_name_key as approximate
 
 
 class MajorManagementTest(unittest.TestCase):
@@ -84,5 +84,53 @@ class MajorManagementTest(unittest.TestCase):
                     before_json={'major_name':old} if old else {},after_json={'major_name':new} if new else {},
                     created_at=datetime(2026,11,19)))
             state=major_state(store)
-            self.assertEqual(state['saved'],{'B'})
-            self.assertEqual(state['retired'],{'A','C'})
+            self.assertEqual(set(state['saved'].values()),{'B'})
+            self.assertEqual(state['retired'],{state['key']('A'),state['key']('C')})
+
+    def test_names_follow_db_collation_for_case_accent_and_width(self):
+        # keyword_category는 utf8mb4_0900_ai_ci다. 대소문자·악센트·전각만 다른 이름은 같은 대분류다.
+        self.seed_admin()
+        self.assertEqual(self.create('AI산업').status_code,200)
+        for variant in ('ai산업','ＡＩ산업'):
+            with self.subTest(variant=variant):
+                response=self.create(variant)
+                self.assertEqual(response.status_code,409,response.text)
+                self.assertIn("'AI산업'",response.json()['message'])
+                self.assertEqual(self.create(variant,'반도체').status_code,409)
+        self.assertEqual(self.create('café').status_code,200)
+        self.assertEqual(self.create('cafe').status_code,409)
+        self.assertEqual(self.create('AI산업','반도체').status_code,200)
+        listing=self.listing()
+        self.assertEqual([n for n in listing['major_names'] if approximate('AI산업')==approximate(n)],['AI산업'])
+        self.assertNotIn('AI산업',listing['editable_major_names'])
+
+    def test_deleted_name_variants_cannot_resurrect_and_spelling_fix_is_allowed(self):
+        self.seed_admin()
+        self.create('B2B시장')
+        self.assertEqual(self.change('B2B시장').status_code,200)
+        for variant in ('b2b시장','B2B시장'):
+            with self.subTest(variant=variant):
+                response=self.create(variant,'유통')
+                self.assertEqual(response.status_code,409,response.text)
+                self.assertEqual(response.json()['code'],'CATEGORY_DELETED')
+        self.create('ai산업')
+        response=self.change('ai산업','AI산업')
+        self.assertEqual(response.status_code,200,response.text)
+        names=self.listing()['major_names']
+        self.assertIn('AI산업',names); self.assertNotIn('ai산업',names)
+        # 철자만 고친 것은 삭제가 아니므로 같은 키의 중분류 추가를 막지 않는다.
+        self.assertEqual(self.create('AI산업','반도체').status_code,200)
+        self.assertEqual(self.change('AI산업','AI산업').status_code,409)
+
+    def test_replay_keeps_one_spelling_for_legacy_variant_events(self):
+        self.seed_admin()
+        with self.engine.begin() as c:
+            a=self.meta.tables['api_audit_event']
+            for index,name in enumerate(['AI산업','ai산업']):
+                c.execute(a.insert().values(audit_id=f'audit_legacy_{index}',actor_id=self.uid,action='CATEGORY_CREATE',
+                    target_type='CATEGORY',target_id='major:'+name,reason='이전 저장',before_json={},
+                    after_json={'major_name':name},created_at=datetime(2026,11,19,index)))
+        listing=self.listing()
+        self.assertIn('AI산업',listing['major_names']); self.assertNotIn('ai산업',listing['major_names'])
+        self.assertEqual(self.change('ai산업').status_code,200)
+        self.assertNotIn('AI산업',self.listing()['major_names'])

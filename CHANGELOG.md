@@ -12,3 +12,4 @@
 - Allow confirmed rename/delete of unused standalone majors, with audit replay, version checks and a shared MySQL connection lock; preserve existing category restrictions. (#137)
 - Count known dates without discarding whole monthly series and show excluded member/subscription counts. Retain original evidence badges and replace long reference markers with inline reference tags. (#137)
 - Remove the local LIST.md from this PR and ignore it. (#137)
+- Compare major names with the keyword_category column collation (case, accent and width variants are the same major); report the registered spelling and allow spelling-only renames. (#137)

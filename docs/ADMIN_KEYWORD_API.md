@@ -28,6 +28,15 @@
 
 요청 본문은 API-136에서 `new_major_name`만 제외한다. 같은 사용 여부·확인·버전 검증을 거친다. CATEGORY_DELETE 이력에 이전 major_name과 빈 after_json을 기록한다. 기존 감사 기록은 삭제하지 않는다. 성공 200: `operation`, `major_name: null`, `categories`.
 
+## 대분류 이름 비교
+
+- `keyword_category.major_name`은 `utf8mb4_0900_ai_ci`라서 DB는 대소문자·악센트·전각/반각만 다른 이름(`AI산업`/`ai산업`/`ＡＩ산업`, `café`/`cafe`)을 같은 값으로 본다. 감사 이력 복원, 생성·수정 중복 검사, 삭제된 대분류 검사, 사용 여부, 기본 분류 비교도 같은 기준을 쓴다.
+- MySQL은 `information_schema.COLUMNS`에서 읽은 컬럼 collation의 `WEIGHT_STRING`을 비교 키로 쓴다. SQLite 단위 테스트는 NFKD 정규화·결합 문자 제거·casefold 근사 키를 쓰며, 정확한 동작은 MySQL 테스트로 확인한다.
+- 같은 키의 다른 철자로 대분류를 생성하거나 중분류를 추가·이동하면 409 `CATEGORY_EXISTS`이며, 메시지에 이미 등록된 철자를 알려 준다. 서버가 철자를 임의로 바꾸지 않는다.
+- 철자만 고치는 이름 수정(`ai산업` → `AI산업`)은 허용한다. 같은 철자로의 수정은 409다.
+- 이전 이력에 같은 키의 대분류가 여러 철자로 저장돼 있으면 먼저 생성된 철자 하나만 복원한다.
+- 운영 데이터에 이미 철자만 다른 대분류가 있는지 확인: `SELECT major_name, COUNT(DISTINCT CAST(major_name AS BINARY)) AS spellings FROM keyword_category GROUP BY major_name HAVING spellings > 1;`
+
 ## 오류와 동시성
 
 - 로그인 없음 401, 관리자 아님 403, 이름·사유·확인 입력 오류 400.
@@ -54,4 +63,4 @@ KEYWORD_MAJOR_MYSQL_URL='mysql+pymysql://root:local-root-only@127.0.0.1:3307/tra
   python -m unittest backend.tests.test_keyword_major_mysql -v
 ```
 
-두 연결의 동일 버전 수정·삭제, 삭제·중분류 추가 경쟁, 예외 롤백 후 다른 연결에서 즉시 재획득, READ COMMITTED 격리 수준을 확인한다. 환경변수가 없으면 이 테스트만 skip한다.
+두 연결의 동일 버전 수정·삭제, 삭제·중분류 추가 경쟁, 예외 롤백 후 다른 연결에서 즉시 재획득, READ COMMITTED 격리 수준, 컬럼 collation 기준 이름 비교(대소문자·악센트·전각 변형, 삭제된 이름의 변형 재등장, 철자만 고치는 수정)를 확인한다. 환경변수가 없으면 이 테스트만 skip한다.

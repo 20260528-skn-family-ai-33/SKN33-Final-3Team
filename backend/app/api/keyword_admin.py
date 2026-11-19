@@ -1,5 +1,7 @@
 """키워드 사전 편집. 검수 상태·수동 출처는 같은 트랜잭션의 감사 이력에 보존한다."""
-from sqlalchemy import select, update, func, case
+import re
+import unicodedata
+from sqlalchemy import select, update, func, case, text
 from backend.app.api.common import require, digest, now, page_info
 from backend.app.api.admin import audit
 from backend.app.services.news_keywords.category_rules import TAX
@@ -135,48 +137,106 @@ def category_row(store, identity, lock=False):
     return {**value, 'version': digest(value), 'editable': bool(created) and base is None, 'representative_terms': base or []}
 
 
+MAJOR_COLLATION_PATTERN = re.compile(r'^[A-Za-z0-9_]+$')
+
+
+def major_collation(store):
+    """keyword_category.major_name의 실제 collation. 대분류 이름 비교를 DB 고유 키와 맞춘다."""
+    if store.c.dialect.name != 'mysql': return None
+    if 'major_collation' not in store.cache:
+        name = store.c.scalar(text("SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+                                   "AND TABLE_NAME = 'keyword_category' AND COLUMN_NAME = 'major_name'"))
+        # 식별자로 SQL에 넣으므로 이름 형식을 검사한다. 찾지 못하면 스키마 기본값을 쓴다.
+        store.cache['major_collation'] = name if name and MAJOR_COLLATION_PATTERN.match(name) else 'utf8mb4_0900_ai_ci'
+    return store.cache['major_collation']
+
+
+def approximate_name_key(value):
+    # SQLite 단위 테스트용 근사값: utf8mb4_0900_ai_ci처럼 대소문자·악센트·전각을 구분하지 않는다.
+    folded = unicodedata.normalize('NFKD', value)
+    return ''.join(c for c in folded if not unicodedata.combining(c)).casefold()
+
+
+def name_keys(store, names):
+    """이름별 비교 키. MySQL은 컬럼 collation의 WEIGHT_STRING을 그대로 쓴다."""
+    cache = store.cache.setdefault('major_name_keys', {})
+    missing = [n for n in dict.fromkeys(names) if isinstance(n, str) and n not in cache]
+    collation = major_collation(store)
+    if collation is None:
+        cache.update({n: approximate_name_key(n) for n in missing})
+        missing = []
+    for offset in range(0, len(missing), 200):
+        chunk = missing[offset:offset + 200]
+        columns = ', '.join(f'WEIGHT_STRING(CONVERT(:n{i} USING utf8mb4) COLLATE {collation}) AS k{i}' for i in range(len(chunk)))
+        row = store.c.execute(text('SELECT ' + columns), {f'n{i}': n for i, n in enumerate(chunk)}).one()
+        cache.update({n: bytes(row[i]) for i, n in enumerate(chunk)})
+    return {n: cache[n] for n in names if isinstance(n, str)}
+
+
 def major_state(store):
     a, t = store.t('api_audit_event'), store.t('keyword_category')
     events = store.rows(select(a.c.audit_id, a.c.action, a.c.before_json, a.c.after_json)
         .where(a.c.target_type == 'CATEGORY', a.c.target_id.startswith('major:', autoescape=True),
                a.c.action.in_(['CATEGORY_CREATE', 'CATEGORY_RENAME', 'CATEGORY_DELETE']))
         .order_by(a.c.created_at, a.c.audit_id))
-    names, retired = set(), set()
-    base = {major for major, _, _ in TAX}
+    pairs = store.rows(select(t.c.category_id, t.c.major_name, t.c.minor_name).order_by(t.c.category_id))
+    base_names = list(dict.fromkeys(major for major, _, _ in TAX))
+    mentioned = [n for e in events for n in ((e['before_json'] or {}).get('major_name'), (e['after_json'] or {}).get('major_name'))]
+    keys = name_keys(store, [*mentioned, *(r['major_name'] for r in pairs), *base_names])
+    base = {keys[n]: n for n in base_names}
+    # 대분류는 DB 비교 키 하나에 철자 하나만 둔다. 같은 키의 뒤 이벤트는 이력 복원에서 무시한다.
+    saved, retired = {}, set()
     for event in events:
         old = (event['before_json'] or {}).get('major_name')
         new = (event['after_json'] or {}).get('major_name')
         valid = isinstance(new, str) and 0 < len(new.strip()) <= 40 and new == new.strip()
+        old_key, new_key = keys.get(old), keys.get(new)
         if event['action'] == 'CATEGORY_CREATE':
-            if valid and new not in base:
-                names.add(new)
-                retired.discard(new)
-        elif old in names and event['action'] == 'CATEGORY_DELETE':
-            names.remove(old)
-            retired.add(old)
-        elif old in names and event['action'] == 'CATEGORY_RENAME':
-            if valid and new not in names and new not in base:
-                names.remove(old)
-                names.add(new)
-                retired.add(old)
-                retired.discard(new)
-    pairs = store.rows(select(t.c.category_id, t.c.major_name, t.c.minor_name).order_by(t.c.category_id))
-    used = {row['major_name'] for row in pairs}
-    return {'saved': names, 'retired': retired, 'used': used, 'base': base,
+            if valid and new_key not in base and new_key not in saved:
+                saved[new_key] = new
+                retired.discard(new_key)
+        elif old_key in saved and event['action'] == 'CATEGORY_DELETE':
+            del saved[old_key]
+            retired.add(old_key)
+        elif old_key in saved and event['action'] == 'CATEGORY_RENAME':
+            if valid and new_key not in base and (new_key not in saved or new_key == old_key):
+                del saved[old_key]
+                saved[new_key] = new
+                if new_key != old_key: retired.add(old_key)
+                retired.discard(new_key)
+    used = {}
+    for row in pairs:
+        used.setdefault(keys[row['major_name']], set()).add(row['major_name'])
+    return {'saved': saved, 'retired': retired, 'used': used, 'base': base, 'pairs': pairs,
+            'key': lambda name: name_keys(store, [name])[name],
             'version': digest({'events': [e['audit_id'] for e in events], 'pairs': pairs})}
 
 
+def registered_spellings(state, key, exclude_category=None):
+    """같은 비교 키로 이미 쓰는 대분류 철자. 수정 중인 중분류 행 자신은 뺀다."""
+    spellings = {row['major_name'] for row in state['pairs']
+                 if row['category_id'] != exclude_category and state['key'](row['major_name']) == key}
+    if key in state['saved']: spellings.add(state['saved'][key])
+    if key in state['base']: spellings.add(state['base'][key])
+    return spellings
+
+
+def existing_name_message(spellings):
+    return f"이미 '{sorted(spellings)[0]}'(으)로 등록된 대분류가 있습니다. 같은 철자로 입력하세요."
+
+
 def saved_major_names(store):
-    return major_state(store)['saved']
+    return set(major_state(store)['saved'].values())
 
 
 def categories(store):
     t = store.t('keyword_category')
     rows = store.rows(select(t.c.category_id).order_by(t.c.category_id))
     state = major_state(store)
-    names = sorted(state['used'] | state['saved'])
-    return {'items': [category_row(store, r['category_id']) for r in rows], 'major_names': names,
-            'editable_major_names': sorted(state['saved'] - state['used'] - state['base']),
+    used_names = {name for names in state['used'].values() for name in names}
+    standalone = {name for key, name in state['saved'].items() if key not in state['used']}
+    return {'items': [category_row(store, r['category_id']) for r in rows], 'major_names': sorted(used_names | standalone),
+            'editable_major_names': sorted(name for key, name in state['saved'].items() if key not in state['used'] and key not in state['base']),
             'major_version': state['version'], 'base_majors': list(dict.fromkeys(major for major, _, _ in TAX))}
 
 
@@ -184,17 +244,24 @@ def major_change(store, actor, data, removing=False):
     # 호출자의 category_transaction이 생성·중분류 변경까지 같은 잠금으로 묶는다.
     state = major_state(store)
     confirm(data, state['version'])
-    old = data['major_name'].strip()
-    require(old in state['saved'], '대분류가 변경되었거나 삭제되었습니다.', 'VERSION_CONFLICT', 409)
+    requested = data['major_name'].strip()
+    old_key = state['key'](requested)
+    require(old_key in state['saved'], '대분류가 변경되었거나 삭제되었습니다.', 'VERSION_CONFLICT', 409)
+    old = state['saved'][old_key]
     t = store.t('keyword_category')
     used = store.c.scalar(select(t.c.category_id).where(t.c.major_name == old).with_for_update().limit(1))
-    require(used is None and old not in state['base'], '중분류가 없는 관리자 대분류만 변경할 수 있습니다.', 'CATEGORY_IN_USE', 409)
+    require(used is None and old_key not in state['used'] and old_key not in state['base'],
+            '중분류가 없는 관리자 대분류만 변경할 수 있습니다.', 'CATEGORY_IN_USE', 409)
     after = {}
     if not removing:
         new = data['new_major_name'].strip()
         require(0 < len(new) <= 40, '대분류는 1~40자로 입력하세요.')
-        duplicate = store.c.scalar(select(t.c.category_id).where(t.c.major_name == new).limit(1))
-        require(new not in state['saved'] | state['used'] | state['base'] and duplicate is None, '같은 대분류 또는 기본 분류 이름이 있습니다.', 'CATEGORY_EXISTS', 409)
+        require(new != old, '현재와 같은 이름입니다.', 'CATEGORY_EXISTS', 409)
+        new_key = state['key'](new)
+        # 같은 키 안의 철자 수정(예: ai산업 → AI산업)은 허용한다.
+        if new_key != old_key:
+            spellings = registered_spellings(state, new_key)
+            require(not spellings, existing_name_message(spellings) if spellings else '', 'CATEGORY_EXISTS', 409)
         after = {'major_name': new}
     operation = audit(store, actor['user_id'], 'CATEGORY_DELETE' if removing else 'CATEGORY_RENAME',
                       'CATEGORY', 'major:'+old, {'major_name': old}, after, data['reason'])
@@ -211,15 +278,22 @@ def category_change(store, actor, data, identity=None, removing=False):
     if 'minor_name' not in data and before is None:
         require(0 < len(major) <= 40, '대분류는 1~40자로 입력하세요.')
         state = major_state(store)
+        spellings = registered_spellings(state, state['key'](major))
         duplicate = store.c.scalar(select(t.c.category_id).where(t.c.major_name == major).limit(1))
-        require(major not in state['saved'] | state['used'] | state['base'] and duplicate is None, '같은 대분류가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
+        require(not spellings and duplicate is None, existing_name_message(spellings) if spellings else '같은 대분류가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
         operation = audit(store, actor['user_id'], 'CATEGORY_CREATE', 'CATEGORY', 'major:'+major, {}, {'major_name': major}, data['reason'])
         return {**operation, 'major_name': major, 'categories': categories(store)}
     require('minor_name' in data, '중분류 이름을 입력하세요.')
-    require(major not in major_state(store)['retired'], '삭제되거나 이름이 변경된 대분류입니다. 목록을 새로 확인하고, 같은 이름을 쓰려면 대분류를 먼저 다시 추가하세요.', 'CATEGORY_DELETED', 409)
     minor = data['minor_name'].strip()
     require(0 < len(major) <= 40 and 0 < len(minor) <= 60, '대분류는 40자, 중분류는 60자 이내입니다.')
-    require((major, minor) not in {(a, b) for a, b, _ in TAX}, '기본 분류 이름은 관리자 분야로 사용할 수 없습니다.')
+    state = major_state(store)
+    major_key = state['key'](major)
+    require(major_key not in state['retired'], '삭제되거나 이름이 변경된 대분류입니다. 목록을 새로 확인하고, 같은 이름을 쓰려면 대분류를 먼저 다시 추가하세요.', 'CATEGORY_DELETED', 409)
+    # DB는 철자가 달라도 같은 대분류로 본다(utf8mb4_0900_ai_ci). 다른 철자로 새 갈래를 만들지 않는다.
+    spellings = registered_spellings(state, major_key, exclude_category=identity)
+    require(not spellings or major in spellings, existing_name_message(spellings) if spellings else '', 'CATEGORY_EXISTS', 409)
+    base_pairs = name_keys(store, [n for pair in TAX for n in pair[:2]] + [minor])
+    require((major_key, base_pairs[minor]) not in {(base_pairs[a], base_pairs[b]) for a, b, _ in TAX}, '기본 분류 이름은 관리자 분야로 사용할 수 없습니다.')
     duplicate = select(t.c.category_id).where(t.c.major_name == major, t.c.minor_name == minor)
     if before: duplicate = duplicate.where(t.c.category_id != identity)
     require(store.c.scalar(duplicate) is None, '같은 분야가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
