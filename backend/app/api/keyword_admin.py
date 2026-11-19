@@ -138,7 +138,9 @@ def category_row(store, identity, lock=False):
 def categories(store):
     t = store.t('keyword_category')
     rows = store.rows(select(t.c.category_id).order_by(t.c.category_id))
-    return {'items': [category_row(store, r['category_id']) for r in rows], 'base_majors': list(dict.fromkeys(major for major, _, _ in TAX))}
+    saved = store.t('api_keyword_major')
+    major_names = store.c.execute(select(t.c.major_name).union(select(saved.c.major_name)).order_by('major_name')).scalars().all()
+    return {'items': [category_row(store, r['category_id']) for r in rows], 'major_names': major_names, 'base_majors': list(dict.fromkeys(major for major, _, _ in TAX))}
 
 
 def category_change(store, actor, data, identity=None, removing=False):
@@ -147,7 +149,17 @@ def category_change(store, actor, data, identity=None, removing=False):
     confirm(data, before['version'] if before else None)
     if before: require(before['editable'], '기본 분야 또는 출처 미확인 분야는 변경할 수 없습니다.', 'FORBIDDEN', 403)
     t = store.t('keyword_category')
-    major, minor = data['major_name'].strip(), data['minor_name'].strip()
+    major = data['major_name'].strip()
+    if 'minor_name' not in data and before is None:
+        require(0 < len(major) <= 40, '대분류는 1~40자로 입력하세요.')
+        majors = store.t('api_keyword_major')
+        duplicate = store.c.scalar(select(majors.c.major_name).where(majors.c.major_name == major))
+        require(duplicate is None and store.c.scalar(select(t.c.category_id).where(t.c.major_name == major).limit(1)) is None, '같은 대분류가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
+        store.c.execute(majors.insert().values(major_name=major, created_at=now()))
+        operation = audit(store, actor['user_id'], 'CATEGORY_CREATE', 'CATEGORY', 'major:'+major, {}, {'major_name': major}, data['reason'])
+        return {**operation, 'major_name': major}
+    require('minor_name' in data, '중분류 이름을 입력하세요.')
+    minor = data['minor_name'].strip()
     require(0 < len(major) <= 40 and 0 < len(minor) <= 60, '대분류는 40자, 중분류는 60자 이내입니다.')
     require((major, minor) not in {(a, b) for a, b, _ in TAX}, '기본 분류 이름은 관리자 분야로 사용할 수 없습니다.')
     duplicate = select(t.c.category_id).where(t.c.major_name == major, t.c.minor_name == minor)
@@ -158,4 +170,5 @@ def category_change(store, actor, data, identity=None, removing=False):
     else: identity = store.insert('keyword_category', **values)
     after, action = {'major_name': major, 'minor_name': minor}, 'CATEGORY_RENAME' if before else 'CATEGORY_CREATE'
     previous = {key: before[key] for key in ('major_name', 'minor_name')} if before else {}
-    return {**audit(store, actor['user_id'], action, 'CATEGORY', identity, previous, after, data['reason']), 'category_id': identity}
+    operation = audit(store, actor['user_id'], action, 'CATEGORY', identity, previous, after, data['reason'])
+    return {**operation, 'category_id': identity, 'category': category_row(store, identity)}

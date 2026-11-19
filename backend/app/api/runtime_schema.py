@@ -1,6 +1,6 @@
 """추가 앱 저장소 제안. 운영 자동 생성 금지; SQL 검토·적용 후 활성화."""
 from sqlalchemy import (MetaData, Table, Column, Integer, BigInteger, String, Text,
-                        DateTime, JSON, Boolean, ForeignKey, UniqueConstraint, Index)
+                        Date, DateTime, JSON, Boolean, ForeignKey, UniqueConstraint, Index)
 from sqlalchemy.dialects.mysql import BIGINT
 
 metadata = MetaData()
@@ -22,6 +22,16 @@ audit = Table('api_audit_event', metadata,
     Column('before_json', JSON, nullable=False), Column('after_json', JSON, nullable=False),
     Column('created_at', DateTime, nullable=False))
 Index('ix_api_audit_target_time', audit.c.target_type, audit.c.target_id, audit.c.created_at, audit.c.audit_id)
+
+admin_monthly_snapshot = Table('api_admin_monthly_snapshot', metadata,
+    Column('month', Date, primary_key=True),
+    Column('total_members', BigInteger, nullable=False),
+    Column('active_subscriptions', BigInteger, nullable=False),
+    Column('observed_at', DateTime, nullable=False))
+
+keyword_major = Table('api_keyword_major', metadata,
+    Column('major_name', String(40), primary_key=True),
+    Column('created_at', DateTime, nullable=False))
 
 RUNTIME_TABLES = [t for t in metadata.sorted_tables if t.name.startswith('api_')]
 

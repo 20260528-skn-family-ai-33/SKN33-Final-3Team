@@ -6,12 +6,19 @@ from backend.app.api.security import administrator, revoke_sessions
 from backend.app.api import accounts, notifications, reports, news
 
 
+def overview(store):
+    from backend.app.api.admin_metrics import current_counts, monthly_history
+    at=now()
+    current=current_counts(store)
+    return {'current':current,'as_of':at,'history':monthly_history(store,current,at)}
+
+
 def member(store,row):
     s=store.t('report_subscription')
     return {'user_id':str(row['user_id']),'email':row['email'],'name':row['name'],'role':row['role'],
         'account_status':row['account_status'],'login_methods':['EMAIL'],
         'active_subscription_count':store.c.scalar(select(func.count()).select_from(s).where(s.c.user_id==row['user_id'],s.c.enabled==True)),
-        'last_login_at':row['last_login_at'],'withdrawn_at':row['withdrawn_at']}
+        'created_at':row['created_at'],'last_login_at':row['last_login_at'],'withdrawn_at':row['withdrawn_at']}
 
 
 def user_row(store,identity,lock=False):
@@ -38,8 +45,12 @@ def users(store,q=None,status='ALL',page=1,size=20,by='all'):
 
 def detail(store,identity):
     row=user_row(store,identity)
+    subscription_rows=reports.subscription_rows(store,identity)
+    subscriptions=reports.subscription_view(subscription_rows)['items']
+    for item,source in zip(subscriptions,subscription_rows):
+        item['enabled_since']=source['filters_json'].get('enabled_since')
     return {'member':member(store,row),'interests':accounts.interests(store,identity),'settings':notifications.settings(store,identity),
-            'subscriptions':reports.subscription_list(store,identity)['items'],'version':digest(row)}
+            'subscriptions':subscriptions,'version':digest(row)}
 
 
 def audit(store,actor,action,target_type,target,before,after,reason):

@@ -82,7 +82,7 @@
 | 076 | `POST  /api/v1/users/me/consents/general` | 보류: DEC-34 일반 동의 종류와 과거 약관 보존 계약 |
 | 077 | `GET  /api/v1/un/availability` | 처리 코드 구현 |
 | 078 | `POST  /api/v1/analysis/import-market-shares` | 처리 코드 구현 |
-| 079 | `GET  /api/v1/admin/overview` | 보류: DEC-37 과거 월말 회원·구독 스냅샷 저장 계약 |
+| 079 | `GET  /api/v1/admin/overview` | 현재 회원·활성 구독 건수 및 최근 12개월 월말 기록 제공. 미기록 월은 null, 이번 달은 현재값 |
 | 080 | `GET  /api/v1/admin/alerts` | 처리 코드 구현 |
 | 081 | `GET  /api/v1/admin/users` | 처리 코드 구현; `by`(all/id/name) 검색 기준 |
 | 082 | `GET  /api/v1/admin/users/{user_id}` | 처리 코드 구현 |

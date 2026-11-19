@@ -35,7 +35,8 @@ export function useServerScreen(template, id, query) {
   const detailOpen = (endpoint === '/admin/users' && !!user) || (endpoint === '/admin/articles' && !!article)
   // 페이지만 바뀌거나 다시 불러올 때는 이전 행을 유지하고, 탭·분류·검색 조건이 바뀌면 이전 행을 바로 비운다.
   const { page: _page, ...group } = filters
-  const result = useQuery(endpoint, filters, !!endpoint && !detailOpen, 0, 'GET', JSON.stringify([endpoint, group]))
+  // 운영 현황 집계는 OpsDashboard에서 조회한다.
+  const result = useQuery(endpoint, filters, !!endpoint && endpoint !== '/admin/overview' && !detailOpen, 0, 'GET', JSON.stringify([endpoint, group]))
   if (!template) return { result, screen: null }
   const items = result.data?.items || result.data?.rules || []
   const blocks = []

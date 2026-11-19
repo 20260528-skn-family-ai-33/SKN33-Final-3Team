@@ -24,7 +24,7 @@ export default function ServerDetail({ type, id, onChanged }) {
   return <section className="card"><QueryState state={result}>{data => {
     const record = type === 'user' ? data.member : data.article
     return <><h2 className="t2">{type === 'user' ? '회원 상세' : '기사 내용·출처'}</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: 12, marginTop: 20 }}>{Object.entries(type === 'user' ? { 이메일: record.email, 이름: record.name, 권한: record.role, 상태: record.account_status, '최근 로그인(KST)': kstDateTime(record.last_login_at) } : { 제목: record.title, 출처: record.source_code, 발행일: record.published_date, 노출: data.moderation.visibility }).map(([label, value]) => <div key={label} style={{ display: 'contents' }}><span className="muted">{label}</span><b><Value value={value} /></b></div>)}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', gap: 12, marginTop: 20 }}>{Object.entries(type === 'user' ? { 이메일: record.email, 이름: record.name, 권한: record.role, 상태: record.account_status, '가입일(KST)': kstDateTime(record.created_at), '최근 로그인(KST)': kstDateTime(record.last_login_at) } : { 제목: record.title, 출처: record.source_code, 발행일: record.published_date, 노출: data.moderation.visibility }).map(([label, value]) => <div key={label} style={{ display: 'contents' }}><span className="muted">{label}</span><b><Value value={value} /></b></div>)}</div>
       {type === 'user' && <MemberSettings data={data} />}
       {data.body_masked && <p style={{ whiteSpace: 'pre-wrap', marginTop: 20 }}>{data.body_masked}</p>}
       <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
@@ -47,7 +47,7 @@ function MemberSettings({ data }) {
     <p>국가: {interests.country_codes?.map(countryName).join(', ') || '등록 없음'}</p>
     <p>품목: {interests.hs_items?.map(h => `${productName(h.hs_code)} (HS ${h.hs_code})`).join(', ') || '등록 없음'}</p>
     <h3 className="t3" style={{ marginTop: 20 }}>리포트 구독</h3>
-    {data.subscriptions?.length ? data.subscriptions.map(s => <p key={s.subscription_id}>{({ WEEKLY: '주간', MONTHLY: '월간', QUARTERLY: '분기' })[s.period_code] || s.period_code} · {s.enabled ? '구독 중' : '구독 해제'} · {s.formats.join(', ')}</p>) : <p className="muted">구독 없음</p>}
+    {data.subscriptions?.length ? data.subscriptions.map(s => <div key={s.subscription_id} style={{ marginTop: 8 }}><p>{({ WEEKLY: '주간', MONTHLY: '월간', QUARTERLY: '분기' })[s.period_code] || s.period_code} · {s.enabled ? '구독 중' : '구독 해제'} · {s.formats.join(', ')}</p><p className="note">{s.enabled ? '구독 시작일' : '최근 구독 시작일'}(KST): {kstDateTime(s.enabled_since) || '기록 없음'}</p></div>) : <p className="muted">구독 없음</p>}
     <h3 className="t3" style={{ marginTop: 20 }}>알림 설정</h3>
     {Object.entries(labels).map(([key, label]) => <p key={key}>{label}: {settings[key] == null ? '확인 불가' : settings[key] ? '예' : '아니오'}</p>)}
   </div>

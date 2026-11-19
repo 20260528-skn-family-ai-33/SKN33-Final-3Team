@@ -2666,8 +2666,8 @@
         "Request Body",
         "minor_name",
         "string",
-        "필수",
-        "신규 중분류. trim 비공백 ≤60자."
+        "선택",
+        "생략하면 대분류만 등록. 중분류 등록 시 trim 비공백 ≤60자."
       ],
       [
         "Request Body",
