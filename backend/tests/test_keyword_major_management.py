@@ -134,3 +134,19 @@ class MajorManagementTest(unittest.TestCase):
         self.assertIn('AI산업',listing['major_names']); self.assertNotIn('ai산업',listing['major_names'])
         self.assertEqual(self.change('ai산업').status_code,200)
         self.assertNotIn('AI산업',self.listing()['major_names'])
+
+    def test_duplicate_messages_match_what_the_admin_typed(self):
+        # 같은 철자를 다시 입력한 경우 "같은 철자로 입력하세요"라고 안내하지 않는다.
+        self.seed_admin(); self.create('AI산업'); self.create('다른'); self.create('사용','중')
+        same='같은 이름의 대분류 또는 기본 분류가 이미 있습니다.'
+        for response in (self.create('AI산업'),self.change('다른','AI산업'),self.create('사용'),
+                         self.create(self.listing()['base_majors'][0])):
+            with self.subTest(response=response.request.url):
+                self.assertEqual(response.status_code,409,response.text)
+                self.assertEqual(response.json()['message'],same)
+        for response in (self.create('ai산업'),self.change('다른','ai산업')):
+            message=response.json()['message']
+            self.assertIn("'AI산업'",message); self.assertNotIn('같은 철자로 입력하세요',message)
+        # 중분류 추가는 등록된 철자로 다시 입력하면 되므로 그렇게 안내한다.
+        message=self.create('ai산업','반도체').json()['message']
+        self.assertIn("'AI산업'",message); self.assertIn('같은 철자로 입력하세요',message)

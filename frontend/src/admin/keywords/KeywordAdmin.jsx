@@ -75,6 +75,10 @@ function KeywordEditor({ data, fields, majorNames, onCreated, reload }) {
   const k = data.keyword, current = fields.find(f => f.category_id === k.category_id)
   const [major, setMajor] = useState(current?.major_name || ''), [category, setCategory] = useState(String(k.category_id || ''))
   const [reason, setReason] = useState(''), [error, setError] = useState(null), [action, setAction] = useState(null)
+  // 인라인 분류 추가도 확인창에서 사유를 직접 받은 뒤 confirmed=true로 저장한다.
+  const [creating, setCreating] = useState(null), [createReason, setCreateReason] = useState('')
+  const openCreate = kind => { setError(null); setCreateReason(''); setCreating(kind) }
+  const closeCreate = () => { setCreating(null); setError(null) }
   const [busy, runOnce] = usePendingAction()
   const { notify } = useApp()
   const saveCategory = kind => runOnce(async () => {
@@ -83,9 +87,10 @@ function KeywordEditor({ data, fields, majorNames, onCreated, reload }) {
       const result = await api('/admin/keyword-categories', { method: 'POST', body: {
         major_name: kind === 'major' ? majorName.trim() : major,
         ...(kind === 'minor' ? { minor_name: minorName.trim() } : {}),
-        reason: reason.trim() || (kind === 'major' ? `대분류 추가: ${majorName.trim()}` : `중분류 추가: ${major} / ${minorName.trim()}`), confirmed: true,
+        reason: createReason.trim(), confirmed: true,
       } })
       onCreated(result)
+      setCreating(null); setCreateReason('')
       if (kind === 'major') {
         setMajor(result.major_name); setCategory(''); setNewMajor(false); setMajorName(''); setNewMinor(false); setMinorName('')
       } else {
@@ -111,7 +116,7 @@ function KeywordEditor({ data, fields, majorNames, onCreated, reload }) {
       {newMajor
         ? <TextField id="keyword-major" aria-label="새 대분류" placeholder="새 대분류 이름" style={{ flex: '1 1 200px' }} value={majorName} onChange={setMajorName} maxLength={40} disabled={busy} />
         : <Select id="keyword-major" style={{ flex: '1 1 200px' }} disabled={busy} value={major} onChange={v => { setMajor(v); setCategory(''); setNewMinor(false); setMinorName('') }} options={[[ '', '선택하세요' ], ...majorNames.map(v => [v, v])]} />}
-      <Btn disabled={busy || (newMajor && !majorName.trim())} onClick={() => newMajor ? saveCategory('major') : setNewMajor(true)}>{newMajor ? '대분류 저장' : '+ 대분류 추가'}</Btn>
+      <Btn disabled={busy || (newMajor && !majorName.trim())} onClick={() => newMajor ? openCreate('major') : setNewMajor(true)}>{newMajor ? '대분류 저장' : '+ 대분류 추가'}</Btn>
       {newMajor && <Btn disabled={busy} onClick={() => { setNewMajor(false); setMajorName('') }}>취소</Btn>}
     </div>
     <label className="lbl" htmlFor="keyword-minor" style={{ marginTop: 12 }}>중분류</label>
@@ -119,10 +124,10 @@ function KeywordEditor({ data, fields, majorNames, onCreated, reload }) {
       {newMinor
         ? <TextField id="keyword-minor" aria-label="새 중분류" placeholder="새 중분류 이름" style={{ flex: '1 1 200px' }} value={minorName} onChange={setMinorName} maxLength={60} disabled={busy} />
         : <Select id="keyword-minor" style={{ flex: '1 1 200px' }} disabled={busy || !major} value={category} onChange={setCategory} options={[[ '', '선택하세요' ], ...fields.filter(f => f.major_name === major).map(f => [String(f.category_id), f.minor_name])]} />}
-      <Btn disabled={!major || newMajor || busy || (newMinor && !minorName.trim())} onClick={() => newMinor ? saveCategory('minor') : setNewMinor(true)}>{newMinor ? '중분류 저장' : '+ 중분류 추가'}</Btn>
+      <Btn disabled={!major || newMajor || busy || (newMinor && !minorName.trim())} onClick={() => newMinor ? openCreate('minor') : setNewMinor(true)}>{newMinor ? '중분류 저장' : '+ 중분류 추가'}</Btn>
       {newMinor && <Btn disabled={busy} onClick={() => { setNewMinor(false); setMinorName('') }}>취소</Btn>}
     </div>
-    {(newMajor || newMinor) && <p className="note" style={{ marginTop: 12 }}>이름을 입력한 뒤 저장하세요. 처리 사유는 키워드 지정 시 입력합니다.</p>}
+    {(newMajor || newMinor) && <p className="note" style={{ marginTop: 12 }}>이름을 입력한 뒤 저장하면 확인창에서 추가 사유를 입력합니다.</p>}
     <label className="lbl" htmlFor="keyword-reason" style={{ marginTop: 16 }}>처리 사유</label><TextField id="keyword-reason" value={reason} onChange={setReason} maxLength={1000} />
     <p className="note" style={{ marginTop: 12 }}>분류 변경은 새로 적재되는 기사부터 적용됩니다. 기존 기사·답변·리포트의 분류는 유지됩니다.</p>
     <div style={stack}>
@@ -130,7 +135,15 @@ function KeywordEditor({ data, fields, majorNames, onCreated, reload }) {
       {k.status !== 'CLASSIFIED' && k.review_status !== 'HELD' && <Btn disabled={!reason.trim() || busy} onClick={() => setAction('HOLD')}>보류</Btn>}
       {(k.status === 'CLASSIFIED' || k.review_status === 'HELD') && <Btn disabled={!reason.trim() || busy} onClick={() => setAction('RELEASE')}>지정·보류 해제</Btn>}
     </div>
-    <ErrorNotice error={!action ? error : null} />
+    <ErrorNotice error={!action && !creating ? error : null} />
+    <Modal open={!!creating} onClose={() => !busy && closeCreate()} label={creating === 'major' ? '대분류 추가 확인' : '중분류 추가 확인'}>
+      <h2 className="t2">{creating === 'major' ? '대분류를 추가할까요?' : '중분류를 추가할까요?'}</h2>
+      <p style={{ marginTop: 12 }}>{creating === 'major' ? majorName.trim() : `${major} › ${minorName.trim()}`}</p>
+      <label className="lbl" htmlFor="category-create-reason">추가 사유</label>
+      <TextField id="category-create-reason" value={createReason} onChange={setCreateReason} maxLength={1000} disabled={busy} />
+      <ErrorNotice error={creating ? error : null} />
+      <div style={stack}><Btn disabled={busy} onClick={closeCreate}>취소</Btn><Btn kind="red" disabled={busy || !createReason.trim()} onClick={() => saveCategory(creating)}>확인하고 추가</Btn></div>
+    </Modal>
     <Modal open={!!action} onClose={() => !busy && setAction(null)} label="키워드 변경 확인">
       <h2 className="t2">{({ ASSIGN: '분야를 지정·변경', HOLD: '보류', RELEASE: '지정·보류를 해제' })[action]}할까요?</h2>
       <p style={{ marginTop: 12 }}>{reason}</p><ErrorNotice error={error} />

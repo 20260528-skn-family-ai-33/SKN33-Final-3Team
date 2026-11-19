@@ -26,13 +26,18 @@
 
 `DELETE /api/v1/admin/keyword-majors` (ADMIN)
 
-요청 본문은 API-136에서 `new_major_name`만 제외한다. 같은 사용 여부·확인·버전 검증을 거친다. CATEGORY_DELETE 이력에 이전 major_name과 빈 after_json을 기록한다. 기존 감사 기록은 삭제하지 않는다. 성공 200: `operation`, `major_name: null`, `categories`.
+요청 본문은 API-136에서 `new_major_name`만 제외한다. 같은 사용 여부·확인·버전 검증을 거친다. CATEGORY_DELETE 이력에 이전 major_name과 빈 after_json을 기록한다. 기존 감사 기록은 삭제하지 않는다.
+
+> 운영 주의: 중분류 없는 대분류는 `api_audit_event`(`target_type='CATEGORY'`, `target_id LIKE 'major:%'`)에서만 복원된다. 이 기록을 삭제·아카이브·정리하면 대분류가 목록에서 사라지므로 보존 정책에서 제외한다. 전용 저장소는 후속 검토 과제다. 성공 200: `operation`, `major_name: null`, `categories`.
 
 ## 대분류 이름 비교
 
 - `keyword_category.major_name`은 `utf8mb4_0900_ai_ci`라서 DB는 대소문자·악센트·전각/반각만 다른 이름(`AI산업`/`ai산업`/`ＡＩ산업`, `café`/`cafe`)을 같은 값으로 본다. 감사 이력 복원, 생성·수정 중복 검사, 삭제된 대분류 검사, 사용 여부, 기본 분류 비교도 같은 기준을 쓴다.
 - MySQL은 `information_schema.COLUMNS`에서 읽은 컬럼 collation의 `WEIGHT_STRING`을 비교 키로 쓴다. SQLite 단위 테스트는 NFKD 정규화·결합 문자 제거·casefold 근사 키를 쓰며, 정확한 동작은 MySQL 테스트로 확인한다.
 - 같은 키의 다른 철자로 대분류를 생성하거나 중분류를 추가·이동하면 409 `CATEGORY_EXISTS`이며, 메시지에 이미 등록된 철자를 알려 준다. 서버가 철자를 임의로 바꾸지 않는다.
+  - 등록된 철자와 똑같이 입력한 대분류 생성·이름 수정(기본 분류 포함): "같은 이름의 대분류 또는 기본 분류가 이미 있습니다."
+  - 철자만 다른 대분류 생성·이름 수정: "이미 'X'(으)로 등록된 대분류가 있습니다. 대소문자·악센트·전각/반각만 다른 이름은 같은 대분류로 봅니다."
+  - 철자만 다른 중분류 추가·이동: "이미 'X'(으)로 등록된 대분류가 있습니다. 같은 철자로 입력하세요." 등록된 철자로 다시 보내면 처리된다.
 - 철자만 고치는 이름 수정(`ai산업` → `AI산업`)은 허용한다. 같은 철자로의 수정은 409다.
 - 이전 이력에 같은 키의 대분류가 여러 철자로 저장돼 있으면 먼저 생성된 철자 하나만 복원한다.
 - 운영 데이터에 이미 철자만 다른 대분류가 있는지 확인: `SELECT major_name, COUNT(DISTINCT CAST(major_name AS BINARY)) AS spellings FROM keyword_category GROUP BY major_name HAVING spellings > 1;`

@@ -82,7 +82,7 @@
 | 076 | `POST  /api/v1/users/me/consents/general` | 보류: DEC-34 일반 동의 종류와 과거 약관 보존 계약 |
 | 077 | `GET  /api/v1/un/availability` | 처리 코드 구현 |
 | 078 | `POST  /api/v1/analysis/import-market-shares` | 처리 코드 구현 |
-| 079 | `GET  /api/v1/admin/overview` | 기존 회원·활성 구독의 시작일 기준 최근 12개월 누적 제공. 날짜 미상·오류 행만 과거 집계에서 제외하고 excluded에 회원·구독 각각 건수 제공. 이번 달은 미상 포함 현재값. 추가 스키마 불필요 |
+| 079 | `GET  /api/v1/admin/overview` | 기존 회원·활성 구독의 시작일 기준 최근 12개월 누적 제공. 날짜 미상·오류 행만 과거 집계에서 제외하고 excluded에 회원·구독 각각 건수 제공. 이번 달은 미상 포함 현재값. 추가 스키마 불필요. DEC-37(월말 스냅샷) 확정 전 임시 방식: 전체 회원은 탈퇴·이용 제한 계정 포함, 탈퇴·삭제·구독 해지 시 과거 수치가 달라질 수 있으며 보존은 후속 과제 |
 | 080 | `GET  /api/v1/admin/alerts` | 처리 코드 구현 |
 | 081 | `GET  /api/v1/admin/users` | 처리 코드 구현; `by`(all/id/name) 검색 기준 |
 | 082 | `GET  /api/v1/admin/users/{user_id}` | 처리 코드 구현 |

@@ -221,8 +221,12 @@ def registered_spellings(state, key, exclude_category=None):
     return spellings
 
 
-def existing_name_message(spellings):
-    return f"이미 '{sorted(spellings)[0]}'(으)로 등록된 대분류가 있습니다. 같은 철자로 입력하세요."
+def existing_name_message(spellings, requested, reuse=False):
+    """중복 안내. 같은 철자 입력과 철자만 다른 입력을 구분하고, 등록된 철자로 다시 입력하면 되는 경우(reuse)만 그렇게 안내한다."""
+    if requested in spellings: return '같은 이름의 대분류 또는 기본 분류가 이미 있습니다.'
+    registered = f"이미 '{sorted(spellings)[0]}'(으)로 등록된 대분류가 있습니다."
+    if reuse: return registered + ' 같은 철자로 입력하세요.'
+    return registered + ' 대소문자·악센트·전각/반각만 다른 이름은 같은 대분류로 봅니다.'
 
 
 def saved_major_names(store):
@@ -261,7 +265,7 @@ def major_change(store, actor, data, removing=False):
         # 같은 키 안의 철자 수정(예: ai산업 → AI산업)은 허용한다.
         if new_key != old_key:
             spellings = registered_spellings(state, new_key)
-            require(not spellings, existing_name_message(spellings) if spellings else '', 'CATEGORY_EXISTS', 409)
+            require(not spellings, existing_name_message(spellings, new) if spellings else '', 'CATEGORY_EXISTS', 409)
         after = {'major_name': new}
     operation = audit(store, actor['user_id'], 'CATEGORY_DELETE' if removing else 'CATEGORY_RENAME',
                       'CATEGORY', 'major:'+old, {'major_name': old}, after, data['reason'])
@@ -280,7 +284,7 @@ def category_change(store, actor, data, identity=None, removing=False):
         state = major_state(store)
         spellings = registered_spellings(state, state['key'](major))
         duplicate = store.c.scalar(select(t.c.category_id).where(t.c.major_name == major).limit(1))
-        require(not spellings and duplicate is None, existing_name_message(spellings) if spellings else '같은 대분류가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
+        require(not spellings and duplicate is None, existing_name_message(spellings, major) if spellings else '같은 대분류가 이미 있습니다.', 'CATEGORY_EXISTS', 409)
         operation = audit(store, actor['user_id'], 'CATEGORY_CREATE', 'CATEGORY', 'major:'+major, {}, {'major_name': major}, data['reason'])
         return {**operation, 'major_name': major, 'categories': categories(store)}
     require('minor_name' in data, '중분류 이름을 입력하세요.')
@@ -291,7 +295,7 @@ def category_change(store, actor, data, identity=None, removing=False):
     require(major_key not in state['retired'], '삭제되거나 이름이 변경된 대분류입니다. 목록을 새로 확인하고, 같은 이름을 쓰려면 대분류를 먼저 다시 추가하세요.', 'CATEGORY_DELETED', 409)
     # DB는 철자가 달라도 같은 대분류로 본다(utf8mb4_0900_ai_ci). 다른 철자로 새 갈래를 만들지 않는다.
     spellings = registered_spellings(state, major_key, exclude_category=identity)
-    require(not spellings or major in spellings, existing_name_message(spellings) if spellings else '', 'CATEGORY_EXISTS', 409)
+    require(not spellings or major in spellings, existing_name_message(spellings, major, reuse=True) if spellings else '', 'CATEGORY_EXISTS', 409)
     base_pairs = name_keys(store, [n for pair in TAX for n in pair[:2]] + [minor])
     require((major_key, base_pairs[minor]) not in {(base_pairs[a], base_pairs[b]) for a, b, _ in TAX}, '기본 분류 이름은 관리자 분야로 사용할 수 없습니다.')
     duplicate = select(t.c.category_id).where(t.c.major_name == major, t.c.minor_name == minor)

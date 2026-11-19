@@ -13,3 +13,4 @@
 - Count known dates without discarding whole monthly series and show excluded member/subscription counts. Retain original evidence badges and replace long reference markers with inline reference tags. (#137)
 - Remove the local LIST.md from this PR and ignore it. (#137)
 - Compare major names with the keyword_category column collation (case, accent and width variants are the same major); report the registered spelling and allow spelling-only renames. (#137)
+- Require a confirmation dialog with a typed reason for inline major/minor creation (no auto-filled reason). Only tell admins to retype the registered spelling when the input differs only by case/accent/width. Document DEC-37 provisional monthly totals and audit-event retention for standalone majors. (#137)

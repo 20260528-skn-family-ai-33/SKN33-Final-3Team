@@ -10,10 +10,11 @@ if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base)) throw new Error('local fixture se
   page.setDefaultTimeout(10000)
   const go = route => page.goto(`${base}/#${route}`)
   const name = `독립 분류 ${Date.now()}`, renamed = name+' 수정'
-  let assignments=0, mutations=0
+  let assignments=0, mutations=0, creations=0
   page.on('request',r=>{
     if(r.method()==='PATCH' && r.url().includes('/keyword-topics/review')) assignments++
     if(['PATCH','DELETE'].includes(r.method()) && r.url().includes('/keyword-majors')) mutations++
+    if(r.method()==='POST' && r.url().includes('/keyword-categories')) creations++
   })
   try {
     await go('/login')
@@ -39,7 +40,17 @@ if (!/^http:\/\/127\.0\.0\.1:\d+$/.test(base)) throw new Error('local fixture se
     await page.getByRole('button',{name:'+ 대분류 추가',exact:true}).click()
     await page.getByLabel('새 대분류',{exact:true}).fill(name)
     await page.getByRole('button',{name:'대분류 저장',exact:true}).click()
+    await page.getByRole('dialog',{name:'대분류 추가 확인'}).waitFor()
+    assert.equal(creations,0)
+    assert.equal(await page.getByRole('dialog').getByRole('button',{name:'확인하고 추가',exact:true}).isDisabled(),true)
+    await page.getByRole('dialog').getByRole('button',{name:'취소',exact:true}).click()
+    assert.equal(creations,0)
+    await page.getByRole('button',{name:'대분류 저장',exact:true}).click()
+    await page.locator('#category-create-reason').fill('신규 분야 필요')
+    await page.getByRole('dialog').getByRole('button',{name:'확인하고 추가',exact:true}).click()
     await page.getByLabel('새 대분류',{exact:true}).waitFor({state:'hidden'})
+    assert.equal(creations,1)
+    console.log('PASS 인라인 대분류 추가: 확인 전·취소 시 저장 없음, 사유 입력 후 저장')
     assert.equal(await page.locator('#keyword-major').inputValue(),name)
     await go('/admin/keywords/fields')
     const row = n => page.locator('.between').filter({has:page.getByText(n,{exact:true})})

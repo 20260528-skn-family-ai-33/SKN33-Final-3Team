@@ -21,6 +21,14 @@
 - 실제 JSX 렌더링에서 혼합 기사 근거 배지·참고 문장 태그 및 완료된 본문 표시 통과 (`frontend/tests/article-presentation-render.mjs`).
 - main 대비 db/·backend/migrations/·runtime_schema.py·models 변경 없음. 운영 DB DDL·실데이터 변경 없음.
 
+## 2차 리뷰 반영 (heoyuna0819-creator 코멘트, 3차 Claude 리뷰)
+
+- [P2-1] 키워드 화면 '+ 대분류/중분류 추가'의 저장 버튼이 확인창을 열고, 추가 사유를 직접 입력해야 저장한다. 사유 자동 입력(`대분류 추가: OO`)을 제거했다. 취소 시 요청 없음.
+- [P2-2] API-79 계산 방식은 바꾸지 않았다. DEC-37 확정 전 임시 방식임을 `BACKEND_API.md`·`BACKEND_API_STATUS.md`·`ADMIN_METRICS.md`에 맞춰 적고, 탈퇴·이용 제한 계정 포함과 탈퇴·삭제·해지 시 과거 수치 변동을 알려진 한계(후속 과제)로 명시했다. 방식 자체는 팀 합의 필요.
+- [P3-3] 대분류 복원에 쓰는 `api_audit_event` CATEGORY/major 기록의 삭제·아카이브 금지를 `ADMIN_METRICS.md`·`ADMIN_KEYWORD_API.md`에 운영 주의로 남겼다.
+- [3차 리뷰 P3] 대분류 중복 오류 문구를 구분했다. 같은 철자·기본 분류는 "같은 이름의 대분류 또는 기본 분류가 이미 있습니다.", 철자만 다른 대분류 생성·이름 수정은 등록 철자와 같은 대분류로 보는 이유, 철자만 다른 중분류 추가·이동만 "같은 철자로 입력하세요."
+- 검증: 대분류 관리 단위 테스트(문구 케이스 추가), MySQL 8.0.46 동시성·collation 테스트, Chrome 브라우저 테스트(인라인 추가 확인·취소 단계 추가), 프런트 npm test·build.
+
 ## main과 동일하게 남은 실패·오류
 
 외부 연결 차단, 로컬 실행 환경 및 기존 테스트 기대값과 관련된 결과다. 이번 수정으로 해결한 것으로 보지 않는다.
