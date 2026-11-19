@@ -209,6 +209,8 @@ python -m playwright install chromium
 Linux 배포 환경은 `python -m playwright install --with-deps chromium`으로 OS 의존성도 설치합니다.
 `API_REPORT_FONT`에 워커에서 읽을 수 있는 한글 TTF 경로를 설정합니다. Windows 기본값은
 `C:/Windows/Fonts/malgun.ttf`입니다. 폰트는 HTML 안에 삽입하며 외부 자원 요청과 JavaScript 실행은 차단합니다.
+`API_REPORT_FONT_LOAD_SECONDS`(기본 5초, 서버에서 재지 않은 임시값)는 브라우저가 이 글꼴을 다 불러올 때까지 기다리는 상한입니다.
+넘기면 재시도 가능한 오류로 워커가 다시 시도합니다. 숫자가 아니거나 음수면 기본값을, 30초보다 크면 30초를 쓰고 경고 로그를 남깁니다. 서버 로그에 `report_font_not_loaded states=['loading']`가 반복되면 늘립니다.
 폰트·라이브러리·Chromium이 없으면 명시적 오류가 나며 기존 PDF 디자인으로 몰래 대체하지 않습니다.
 설치와 코드 반영 후 워커를 재시작해야 합니다. DB 마이그레이션, Redis 변경, 프론트 수정은 필요하지 않습니다.
 
