@@ -900,11 +900,9 @@ feature 브랜치 → PR(main) → Backend tests · Frontend tests/build · Alph
 
 역할은 PR별 커밋 작성자와 현재 코드의 줄 단위 작성자(git blame)를 기준으로 정리했습니다.
 
-<!-- 팀 확인 필요: 이수연 GitHub 계정(커밋 기록에 GitHub 아이디가 남아 있지 않음) -->
-
 | 팀원 | 주요 역할 | 담당 범위 | GitHub |
 |---|---|---|---|
-| **이&#8288;수&#8288;연** | PM · AI Agent · ML | 채팅 분석 에이전트 설계 및 구현(LangGraph 전체 흐름·state·플래너·조건 확인·생성 SQL·실행 예산·worker)과 분석 채팅 화면, 유망시장 모델 A·모델 B 월별 학습 연결, HS 사전·외부 시장 자료 수집, 에이전트 노드 평가 | — |
+| **이&#8288;수&#8288;연** | PM · AI Agent · ML | 채팅 분석 에이전트 설계 및 구현(LangGraph 전체 흐름·state·플래너·조건 확인·생성 SQL·실행 예산·worker)과 분석 채팅 화면, 유망시장 모델 A·모델 B 월별 학습 연결, HS 사전·외부 시장 자료 수집, 에이전트 노드 평가 | [lesoo](https://github.com/lesoo) |
 | **김&#8288;혜&#8288;진** | Frontend · Data · ML | 사용자·관리자 화면 초기 구현, 메인 대시보드 구성·디자인(로고·로그인·가입 완료·기사 화면 포함), 마이페이지 UI·관리자 회원·구독 월별 통계·키워드 대분류 관리, 금액 표시 규칙 통일(메인·순위·채팅·리포트), 유망시장 리포트 섹션, 챗봇 근거 기사 표시, ECOS 환율 수집·적재(통화 사전), 증감 예상 모델 B 구현 | [Bella-Hez](https://github.com/Bella-Hez) |
 | **이&#8288;양&#8288;원** | Backend · Infra · Frontend | DB 스키마, FastAPI 업무 API·인증·계정 찾기·관리자, 관세청 실적 적재·월간 배치, 리포트 파일 생성(PDF·DOCX·XLSX)·S3 저장소, CI/CD·AWS 배포, 화면 API 연동·QA 수정, SQL·시각화 에이전트 보완·SQL 평가 | [t91004](https://github.com/t91004) |
 | **허&#8288;유&#8288;나** | Data · Report · Frontend | 관세청 원본 수집기, 해외시장뉴스 키워드 분류 사전·기사 적재, 주요 이슈 판정·알림, 리포트 템플릿·결과 기반 리포트·리포트 플래너 평가, 약관 동의·관심 국가·로딩 표시 화면, 관리자 화면 서버 연동 | [Heoyuna0819](https://github.com/Heoyuna0819) |
